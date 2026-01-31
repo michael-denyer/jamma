@@ -26,6 +26,7 @@ jobs:
         run: uv sync --all-extras
 
       - name: Run tests
+        # Includes: unit tests, kinship tests (compute, io, validation, benchmark)
         run: uv run pytest -v --cov=src/jamma --cov-report=term-missing
 
       - name: Lint with ruff

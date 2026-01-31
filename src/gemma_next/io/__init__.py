@@ -1,0 +1,6 @@
+"""I/O modules for GEMMA-Next.
+
+This package contains modules for reading and writing various file formats:
+- plink: PLINK binary format (.bed/.bim/.fam) I/O
+- output: GEMMA-compatible output file writers
+"""

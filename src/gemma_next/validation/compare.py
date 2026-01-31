@@ -110,7 +110,8 @@ def compare_arrays(
         max_abs_diff = float(np.max(abs_diff))
 
         # Find location of worst absolute difference
-        worst_idx = np.unravel_index(np.argmax(abs_diff), abs_diff.shape)
+        # Convert numpy int64 to plain int for cleaner display/serialization
+        worst_idx = tuple(int(i) for i in np.unravel_index(np.argmax(abs_diff), abs_diff.shape))
 
         # Relative difference at worst location
         with np.errstate(divide="ignore", invalid="ignore"):

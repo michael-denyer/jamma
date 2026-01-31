@@ -109,9 +109,29 @@ def test_cli_gk_custom_prefix(tmp_path: Path):
     assert (outdir / "myprefix.log.txt").exists()
 
 
-def test_cli_lmm_placeholder():
-    """Test that lmm command shows not implemented message."""
+def test_cli_lmm_requires_kinship():
+    """Test that lmm command requires -k (kinship) flag."""
     result = runner.invoke(app, ["lmm", "-bfile", str(EXAMPLE_BFILE)])
 
+    assert result.exit_code == 1
+    assert "-k" in result.output or "kinship" in result.output.lower()
+
+
+def test_cli_lmm_help():
+    """Test that lmm --help shows all required options."""
+    result = runner.invoke(app, ["lmm", "--help"])
+
     assert result.exit_code == 0
+    assert "-bfile" in result.output
+    assert "-k" in result.output
+    assert "-lmm" in result.output
+
+
+def test_cli_lmm_mode_2_not_implemented():
+    """Test that lmm mode 2 shows not implemented message."""
+    result = runner.invoke(
+        app, ["lmm", "-bfile", str(EXAMPLE_BFILE), "-k", "fake.txt", "-lmm", "2"]
+    )
+
+    assert result.exit_code == 1
     assert "not yet implemented" in result.output.lower()

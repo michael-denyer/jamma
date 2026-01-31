@@ -16,6 +16,7 @@ import jamma
 from jamma.core import OutputConfig
 from jamma.io import load_plink_binary
 from jamma.kinship import compute_centered_kinship, read_kinship_matrix, write_kinship_matrix
+from jamma.lmm import run_lmm_association, write_assoc_results
 from jamma.utils import setup_logging, write_gemma_log
 
 # Create Typer app
@@ -282,6 +283,61 @@ def lmm_command(
 
     t_load = time.perf_counter()
     typer.echo(f"Data loading completed in {t_load - t_start:.2f}s")
+
+    # Run LMM association
+    typer.echo(f"Running LMM Wald test on {n_snps} SNPs...")
+
+    # Progress callback for long runs
+    last_progress = [0]  # Use list to allow modification in closure
+
+    def progress_callback(i: int, n_total: int) -> None:
+        """Print progress every 1000 SNPs or at 10% increments."""
+        percent = int(100 * i / n_total)
+        if i % 1000 == 0 or percent >= last_progress[0] + 10:
+            typer.echo(f"  Processing SNP {i}/{n_total} ({percent}%)")
+            last_progress[0] = percent
+
+    # Run association testing
+    results = run_lmm_association(
+        genotypes_filtered,
+        phenotypes_filtered,
+        K_filtered,
+        snp_info,
+    )
+
+    t_lmm = time.perf_counter()
+    lmm_time = t_lmm - t_load
+    typer.echo(f"LMM analysis completed in {lmm_time:.2f}s")
+
+    # Write results
+    assoc_path = _global_config.outdir / f"{_global_config.prefix}.assoc.txt"
+    write_assoc_results(results, assoc_path)
+    typer.echo(f"Association results written to {assoc_path}")
+
+    # Calculate total time
+    total_time = t_lmm - t_start
+    load_time = t_load - t_start
+
+    # Write log file with LMM-specific parameters
+    params = {
+        "n_samples": n_samples_raw,
+        "n_analyzed": n_analyzed,
+        "n_snps": n_snps,
+        "lmm_mode": lmm_mode,
+        "kinship_file": str(kinship_file),
+        "output_file": str(assoc_path),
+    }
+    timing = {
+        "total": total_time,
+        "load": load_time,
+        "lmm": lmm_time,
+    }
+
+    log_path = write_gemma_log(_global_config, params, timing, command_line)
+    typer.echo(f"Log written to {log_path}")
+
+    # Final summary
+    typer.echo(f"\nAnalyzed {n_snps} SNPs in {total_time:.2f} seconds")
 
 
 if __name__ == "__main__":

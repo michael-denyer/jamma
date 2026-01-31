@@ -7,7 +7,7 @@ including -bfile, -o, -outdir flags for data loading and output configuration.
 import sys
 import time
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 
@@ -24,7 +24,7 @@ app = typer.Typer(
 )
 
 # Store global options set by callback
-_global_config: Optional[OutputConfig] = None
+_global_config: OutputConfig | None = None
 
 
 def version_callback(value: bool) -> None:
@@ -49,7 +49,7 @@ def main(
         typer.Option("-v", "--verbose", help="Verbose output"),
     ] = False,
     version: Annotated[
-        Optional[bool],
+        bool | None,
         typer.Option(
             "--version",
             callback=version_callback,
@@ -72,7 +72,7 @@ def main(
 def gk_command(
     bfile: Annotated[
         Path,
-        typer.Option("-bfile", help="PLINK binary file prefix (without .bed/.bim/.fam)"),
+        typer.Option("-bfile", help="PLINK binary file prefix"),
     ],
     mode: Annotated[
         int,
@@ -109,7 +109,7 @@ def gk_command(
         plink_data = load_plink_binary(bfile)
     except Exception as e:
         typer.echo(f"Error loading PLINK data: {e}", err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
     typer.echo(f"Loaded {plink_data.n_samples} samples, {plink_data.n_snps} SNPs")
 
@@ -136,7 +136,7 @@ def gk_command(
 def lmm_command(
     bfile: Annotated[
         Path,
-        typer.Option("-bfile", help="PLINK binary file prefix (without .bed/.bim/.fam)"),
+        typer.Option("-bfile", help="PLINK binary file prefix"),
     ],
     lmm_mode: Annotated[
         int,

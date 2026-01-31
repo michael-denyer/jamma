@@ -4,13 +4,19 @@ This module provides structured comparison functions that return detailed result
 rather than raising exceptions, enabling programmatic validation workflows.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.testing import assert_allclose
 
 from gemma_next.validation.tolerances import ToleranceConfig
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 @dataclass
@@ -75,7 +81,10 @@ def compare_arrays(
             max_abs_diff=np.inf,
             max_rel_diff=np.inf,
             worst_location=None,
-            message=f"{name} shape mismatch: actual {actual.shape} vs expected {expected.shape}",
+            message=(
+                f"{name} shape mismatch: "
+                f"actual {actual.shape} vs expected {expected.shape}"
+            ),
         )
 
     try:
@@ -101,17 +110,21 @@ def compare_arrays(
             max_abs_diff=max_abs_diff,
             max_rel_diff=max_rel_diff,
             worst_location=None,
-            message=f"{name} comparison passed (max abs diff: {max_abs_diff:.2e}, max rel diff: {max_rel_diff:.2e})",
+            message=(
+                f"{name} comparison passed "
+                f"(max abs diff: {max_abs_diff:.2e}, max rel diff: {max_rel_diff:.2e})"
+            ),
         )
 
-    except AssertionError as e:
+    except AssertionError:
         # Compute detailed diagnostics
         abs_diff = np.abs(actual - expected)
         max_abs_diff = float(np.max(abs_diff))
 
         # Find location of worst absolute difference
         # Convert numpy int64 to plain int for cleaner display/serialization
-        worst_idx = tuple(int(i) for i in np.unravel_index(np.argmax(abs_diff), abs_diff.shape))
+        worst_idx_raw = np.unravel_index(np.argmax(abs_diff), abs_diff.shape)
+        worst_idx = tuple(int(i) for i in worst_idx_raw)
 
         # Relative difference at worst location
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -192,7 +205,7 @@ def load_gemma_kinship(path: Path) -> np.ndarray:
     return np.loadtxt(path)
 
 
-def load_gemma_assoc(path: Path) -> "pd.DataFrame":
+def load_gemma_assoc(path: Path) -> pd.DataFrame:
     """Load GEMMA association results from .assoc.txt format.
 
     Note: This is a placeholder for Phase 3 implementation.
@@ -213,8 +226,8 @@ def load_gemma_assoc(path: Path) -> "pd.DataFrame":
 
 
 def compare_assoc_results(
-    actual: "pd.DataFrame",
-    expected: "pd.DataFrame",
+    actual: pd.DataFrame,
+    expected: pd.DataFrame,
     config: ToleranceConfig | None = None,
 ) -> dict[str, ComparisonResult]:
     """Compare association results with column-appropriate tolerances.

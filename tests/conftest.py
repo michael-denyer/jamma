@@ -1,8 +1,14 @@
 """Pytest fixtures for GEMMA-Next test suite."""
 
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from gemma_next.validation import ToleranceConfig
 
 
 @pytest.fixture
@@ -32,7 +38,7 @@ def output_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def tolerance_config() -> "ToleranceConfig":
+def tolerance_config() -> ToleranceConfig:
     """Default tolerance configuration for numerical comparisons.
 
     Returns:

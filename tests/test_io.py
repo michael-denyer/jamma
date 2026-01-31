@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from gemma_next.io import PlinkData, load_plink_binary
+from gemma_next.io import load_plink_binary
 
 
 class TestLoadPlinkBinary:

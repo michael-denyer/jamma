@@ -163,7 +163,8 @@ class TestCompareKinshipMatrices:
         assert result_default.passed is False
 
         # Relaxed config should pass (1e-7 < 1e-6 rtol)
-        result_relaxed = compare_kinship_matrices(K1, K2, config=ToleranceConfig.relaxed())
+        relaxed_config = ToleranceConfig.relaxed()
+        result_relaxed = compare_kinship_matrices(K1, K2, config=relaxed_config)
         assert result_relaxed.passed is True
 
 

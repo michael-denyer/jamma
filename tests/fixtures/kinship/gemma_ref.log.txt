@@ -1,0 +1,27 @@
+##
+## GEMMA Version    = 0.98.5 (2021-08-25)
+## Build profile    = /gnu/store/8rvid272yb53bgascf5c468z0jhsyflj-profile
+## GCC version      = 13.3.0
+## GSL Version      = 2.8
+## OpenBlas         = OpenBLAS 0.3.29  - OpenBLAS 0.3.29 DYNAMIC_ARCH NO_AFFINITY Nehalem MAX_THREADS=128
+##   arch           = Nehalem
+##   threads        = 8
+##   parallel type  = threaded
+##
+## Command Line Input = gemma -bfile /data/legacy/example/mouse_hs1940 -gk 1 -o gemma_ref -outdir /data/tests/fixtures/kinship 
+##
+## Date = Sat Jan 31 19:29:23 2026
+##
+## Summary Statistics:
+## number of total individuals = 1940
+## number of analyzed individuals = 1410
+## number of covariates = 1
+## number of phenotypes = 1
+## number of total SNPs/var = 12226
+## number of analyzed SNPs/var = 10768
+##
+## Computation Time:
+## total computation time = 0.732907 min 
+## computation time break down: 
+##      time on calculating relatedness matrix = 0.63038 min 
+##

@@ -1,13 +1,26 @@
 """Performance benchmarks for kinship computation.
 
-These benchmarks compare JAMMA's JAX implementation against a naive NumPy
-baseline to measure the performance improvement from JAX JIT compilation.
+These benchmarks compare JAMMA's JAX implementation against:
+1. GEMMA (the reference C++ implementation) - the target to beat
+2. Naive NumPy baseline - for understanding JAX JIT improvement
 
 Run with: uv run pytest tests/test_kinship_benchmark.py -v -n0 --benchmark-only
+
+For GEMMA comparison, requires Docker:
+  docker pull quay.io/biocontainers/gemma:0.98.5--ha36d3ea_0
 """
+
+import subprocess
+import tempfile
+import time
+from pathlib import Path
 
 import numpy as np
 import pytest
+
+
+GEMMA_DOCKER_IMAGE = "quay.io/biocontainers/gemma:0.98.5--ha36d3ea_0"
+EXAMPLE_DATA = Path("legacy/example/mouse_hs1940")
 
 
 @pytest.fixture
@@ -146,3 +159,84 @@ class TestKinshipScaling:
         benchmark.extra_info['size'] = 'small'
 
         assert result.shape == (100, 100)
+
+
+class TestJammaVsGemma:
+    """Compare JAMMA performance against GEMMA (the target to beat)."""
+
+    @pytest.fixture
+    def mouse_genotypes(self):
+        """Load mouse_hs1940 genotypes for real-world comparison."""
+        from jamma.io import load_plink_binary
+
+        plink_data = load_plink_binary(EXAMPLE_DATA)
+        return plink_data.genotypes
+
+    def _run_gemma_docker(self, tmpdir: Path) -> float:
+        """Run GEMMA via Docker and return execution time in seconds."""
+        cmd = [
+            "docker", "run", "--rm",
+            "-v", f"{Path.cwd()}:/data",
+            "-v", f"{tmpdir}:/output",
+            GEMMA_DOCKER_IMAGE,
+            "gemma",
+            "-bfile", "/data/legacy/example/mouse_hs1940",
+            "-gk", "1",
+            "-o", "bench",
+            "-outdir", "/output",
+        ]
+
+        start = time.perf_counter()
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        elapsed = time.perf_counter() - start
+
+        if result.returncode != 0:
+            pytest.skip(f"GEMMA Docker failed: {result.stderr}")
+
+        return elapsed
+
+    @pytest.mark.slow
+    def test_jamma_vs_gemma_mouse_hs1940(self, mouse_genotypes):
+        """Compare JAMMA and GEMMA on mouse_hs1940 dataset.
+
+        This is the critical benchmark - JAMMA must be faster than GEMMA.
+        """
+        from jamma.kinship import compute_centered_kinship
+
+        # Check Docker is available
+        docker_check = subprocess.run(
+            ["docker", "info"], capture_output=True, text=True
+        )
+        if docker_check.returncode != 0:
+            pytest.skip("Docker not available")
+
+        # Warm up JAMMA (JIT compilation)
+        _ = compute_centered_kinship(mouse_genotypes[:100, :1000])
+
+        # Time JAMMA
+        jamma_start = time.perf_counter()
+        jamma_result = compute_centered_kinship(mouse_genotypes)
+        jamma_time = time.perf_counter() - jamma_start
+
+        # Time GEMMA
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gemma_time = self._run_gemma_docker(Path(tmpdir))
+
+        # Report results
+        speedup = gemma_time / jamma_time
+        print(f"\n{'='*60}")
+        print("JAMMA vs GEMMA Performance Comparison")
+        print(f"{'='*60}")
+        print(f"Dataset: mouse_hs1940 (1940 samples, 12226 SNPs)")
+        print(f"GEMMA time:  {gemma_time:.3f}s")
+        print(f"JAMMA time:  {jamma_time:.3f}s")
+        print(f"Speedup:     {speedup:.2f}x {'FASTER' if speedup > 1 else 'SLOWER'}")
+        print(f"{'='*60}\n")
+
+        # Store for reporting
+        assert jamma_result.shape == (1940, 1940)
+
+        # CRITICAL: JAMMA must be faster than GEMMA
+        assert jamma_time < gemma_time, (
+            f"JAMMA ({jamma_time:.3f}s) must be faster than GEMMA ({gemma_time:.3f}s)"
+        )

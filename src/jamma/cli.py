@@ -9,12 +9,13 @@ import time
 from pathlib import Path
 from typing import Annotated
 
+import numpy as np
 import typer
 
 import jamma
 from jamma.core import OutputConfig
 from jamma.io import load_plink_binary
-from jamma.kinship import compute_centered_kinship, write_kinship_matrix
+from jamma.kinship import compute_centered_kinship, read_kinship_matrix, write_kinship_matrix
 from jamma.utils import setup_logging, write_gemma_log
 
 # Create Typer app
@@ -206,7 +207,81 @@ def lmm_command(
         typer.echo(f"Error: Kinship matrix file not found: {kinship_file}", err=True)
         raise typer.Exit(code=1)
 
-    typer.echo(f"Input validation passed: bfile={bfile}, kinship={kinship_file}, mode={lmm_mode}")
+    # Ensure output directory exists
+    _global_config.ensure_outdir()
+
+    # Record start time
+    t_start = time.perf_counter()
+    command_line = " ".join(sys.argv)
+
+    # Load PLINK data
+    typer.echo(f"Loading PLINK data from {bfile}...")
+    try:
+        plink_data = load_plink_binary(bfile)
+    except Exception as e:
+        typer.echo(f"Error loading PLINK data: {e}", err=True)
+        raise typer.Exit(code=1) from None
+
+    n_samples_raw = plink_data.n_samples
+    n_snps = plink_data.n_snps
+    typer.echo(f"Loaded {n_samples_raw} samples, {n_snps} SNPs")
+
+    # Load kinship matrix
+    typer.echo(f"Loading kinship matrix from {kinship_file}...")
+    try:
+        K = read_kinship_matrix(kinship_file, n_samples=n_samples_raw)
+    except Exception as e:
+        typer.echo(f"Error loading kinship matrix: {e}", err=True)
+        raise typer.Exit(code=1) from None
+
+    # Extract phenotypes from PLINK data (6th column of .fam file, iid[:,5] is phenotype)
+    # bed-reader reads phenotype as string, we need to handle -9 as missing
+    # Actually, phenotypes come from .fam file - bed-reader stores this separately
+    # We need to load the fam file directly to get phenotypes
+    fam_data = np.loadtxt(fam_path, dtype=str, usecols=(5,))
+    phenotypes = np.array([float(x) if x not in ("-9", "NA") else np.nan for x in fam_data])
+
+    # Create valid sample mask (filter missing phenotypes: -9 or NaN)
+    valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9)
+    n_analyzed = int(valid_mask.sum())
+
+    if n_analyzed == 0:
+        typer.echo("Error: No samples with valid phenotypes", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Analyzing {n_analyzed} samples with valid phenotypes (filtered {n_samples_raw - n_analyzed})")
+
+    # Apply mask consistently to genotypes, phenotypes, AND kinship
+    genotypes = plink_data.genotypes
+    genotypes_filtered = genotypes[valid_mask, :]
+    phenotypes_filtered = phenotypes[valid_mask]
+    K_filtered = K[np.ix_(valid_mask, valid_mask)]
+
+    # Validate dimensions after filtering
+    assert genotypes_filtered.shape[0] == phenotypes_filtered.shape[0] == K_filtered.shape[0], \
+        "Dimension mismatch after filtering"
+
+    # Build snp_info list from PLINK metadata
+    snp_info = []
+    for i in range(n_snps):
+        x = genotypes_filtered[:, i]
+        n_miss = int(np.isnan(x).sum())
+        # Minor allele frequency (using non-missing samples)
+        valid_geno = x[~np.isnan(x)]
+        maf = float(np.mean(valid_geno) / 2.0) if len(valid_geno) > 0 else 0.0
+
+        snp_info.append({
+            "chr": str(plink_data.chromosome[i]),
+            "rs": str(plink_data.sid[i]),
+            "pos": int(plink_data.bp_position[i]),
+            "a1": str(plink_data.allele_1[i]),
+            "a0": str(plink_data.allele_2[i]),
+            "maf": maf,
+            "n_miss": n_miss,
+        })
+
+    t_load = time.perf_counter()
+    typer.echo(f"Data loading completed in {t_load - t_start:.2f}s")
 
 
 if __name__ == "__main__":

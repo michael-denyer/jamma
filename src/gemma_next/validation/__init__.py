@@ -5,6 +5,22 @@ This package contains utilities for validating GEMMA-Next output:
 - compare: Numerical comparison utilities with tolerance configuration
 """
 
+from gemma_next.validation.compare import (
+    ComparisonResult,
+    compare_arrays,
+    compare_assoc_results,
+    compare_kinship_matrices,
+    load_gemma_assoc,
+    load_gemma_kinship,
+)
 from gemma_next.validation.tolerances import ToleranceConfig
 
-__all__ = ["ToleranceConfig"]
+__all__ = [
+    "ToleranceConfig",
+    "ComparisonResult",
+    "compare_arrays",
+    "compare_kinship_matrices",
+    "compare_assoc_results",
+    "load_gemma_kinship",
+    "load_gemma_assoc",
+]

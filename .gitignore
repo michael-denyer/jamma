@@ -1,14 +1,41 @@
+# Legacy GEMMA C++ build artifacts
 *.o
 *.tar.gz
-src/Eigen
-example/output
-test/output
+legacy/src/Eigen
+legacy/example/output
+legacy/test/output
+legacy/bin/gemma
+legacy/doc/manual.aux
+legacy/doc/manual.bbl
+legacy/doc/manual.blg
+legacy/doc/manual.log
+legacy/doc/manual.out
+legacy/doc/manual.toc
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Linting
+.ruff_cache/
+
+# Distribution / packaging
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+
+# General output
 ./output
-bin/
-doc/manual.aux
-doc/manual.bbl
-doc/manual.blg
-doc/manual.log
-doc/manual.out
-doc/manual.toc
-contrib/
+
+# Planning and claude config (dev-only)
+.planning/
+.claude/

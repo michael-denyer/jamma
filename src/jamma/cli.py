@@ -14,6 +14,7 @@ import typer
 import jamma
 from jamma.core import OutputConfig
 from jamma.io import load_plink_binary
+from jamma.kinship import compute_centered_kinship, write_kinship_matrix
 from jamma.utils import setup_logging, write_gemma_log
 
 # Create Typer app
@@ -82,7 +83,7 @@ def gk_command(
     """Compute kinship matrix from genotype data.
 
     Reads PLINK binary files and computes a genetic relatedness matrix.
-    Currently a placeholder - full implementation in Phase 2.
+    Writes output in GEMMA-compatible .cXX.txt format.
     """
     start_time = time.time()
 
@@ -113,8 +114,23 @@ def gk_command(
 
     typer.echo(f"Loaded {plink_data.n_samples} samples, {plink_data.n_snps} SNPs")
 
-    # Placeholder for kinship computation
-    typer.echo("Kinship computation not yet implemented (Phase 2)")
+    # Warn if mode 2 requested (standardized) - not yet implemented
+    if mode == 2:
+        typer.echo(
+            "Warning: Mode 2 (standardized) not yet implemented, using mode 1 (centered)"
+        )
+
+    # Compute kinship matrix
+    typer.echo(f"Computing centered kinship matrix (mode {mode})...")
+    kinship_start = time.time()
+    K = compute_centered_kinship(plink_data.genotypes)
+    kinship_time = time.time() - kinship_start
+    typer.echo(f"Kinship computation completed in {kinship_time:.2f}s")
+
+    # Write kinship matrix
+    kinship_path = _global_config.outdir / f"{_global_config.prefix}.cXX.txt"
+    write_kinship_matrix(K, kinship_path)
+    typer.echo(f"Kinship matrix written to {kinship_path}")
 
     # Calculate timing
     end_time = time.time()
@@ -125,8 +141,9 @@ def gk_command(
         "n_samples": plink_data.n_samples,
         "n_snps": plink_data.n_snps,
         "kinship_mode": mode,
+        "kinship_file": str(kinship_path),
     }
-    timing = {"total": elapsed}
+    timing = {"total": elapsed, "kinship": kinship_time}
 
     log_path = write_gemma_log(_global_config, params, timing, command_line)
     typer.echo(f"Log written to {log_path}")

@@ -7,7 +7,7 @@ Reference: Brent, R.P. (1973) "Algorithms for Minimization without Derivatives"
 """
 
 import warnings
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
 
@@ -34,7 +34,7 @@ def brent_minimize(
         maxiter: Maximum iterations (default: 500)
 
     Returns:
-        Tuple of (x_min, f_min) where x_min is the minimizer and f_min is the minimum value
+        Tuple of (x_min, f_min) - the minimizer and minimum value
     """
     # Golden ratio constant
     golden = 0.5 * (3.0 - np.sqrt(5.0))
@@ -157,14 +157,14 @@ def optimize_lambda(
     # Check for boundary optimum (within 1% of bounds)
     if lambda_opt <= l_min * 1.01:
         warnings.warn(
-            f"Lambda optimization converged at lower bound ({lambda_opt:.2e} ~ {l_min:.2e}). "
+            f"Lambda converged at lower bound ({lambda_opt:.2e} ~ {l_min:.2e}). "
             "True optimum may be below search range.",
             RuntimeWarning,
             stacklevel=2,
         )
     elif lambda_opt >= l_max * 0.99:
         warnings.warn(
-            f"Lambda optimization converged at upper bound ({lambda_opt:.2e} ~ {l_max:.2e}). "
+            f"Lambda converged at upper bound ({lambda_opt:.2e} ~ {l_max:.2e}). "
             "True optimum may be above search range.",
             RuntimeWarning,
             stacklevel=2,
@@ -196,7 +196,7 @@ def optimize_lambda_for_snp(
         Tuple of (lambda_opt, logl_H1)
     """
 
-    def reml_func(l: float) -> float:
-        return reml_log_likelihood(l, eigenvalues, Uab, n_cvt)
+    def reml_func(lam: float) -> float:
+        return reml_log_likelihood(lam, eigenvalues, Uab, n_cvt)
 
     return optimize_lambda(reml_func, l_min=l_min, l_max=l_max)

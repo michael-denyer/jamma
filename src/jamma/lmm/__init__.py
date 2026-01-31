@@ -16,7 +16,7 @@ import numpy as np
 
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.io import write_assoc_results
-from jamma.lmm.likelihood import compute_Uab, compute_pab
+from jamma.lmm.likelihood import compute_pab, compute_Uab
 from jamma.lmm.optimize import optimize_lambda_for_snp
 from jamma.lmm.stats import AssocResult, calc_wald_test, get_pab_index
 

@@ -4,7 +4,7 @@ Implements the restricted maximum likelihood (REML) function for
 variance component estimation in LMM. Uses JAX for vectorized computation.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 import jax.numpy as jnp
 import numpy as np

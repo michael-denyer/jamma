@@ -12,8 +12,8 @@ to per-SNP mean, and p is the number of SNPs.
 
 from __future__ import annotations
 
-import numpy as np
 import jax.numpy as jnp
+import numpy as np
 from jax import jit
 
 from jamma.core import configure_jax

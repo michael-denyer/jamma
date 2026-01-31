@@ -15,7 +15,11 @@ import typer
 import jamma
 from jamma.core import OutputConfig
 from jamma.io import load_plink_binary
-from jamma.kinship import compute_centered_kinship, read_kinship_matrix, write_kinship_matrix
+from jamma.kinship import (
+    compute_centered_kinship,
+    read_kinship_matrix,
+    write_kinship_matrix,
+)
 from jamma.lmm import run_lmm_association, write_assoc_results
 from jamma.utils import setup_logging, write_gemma_log
 
@@ -119,7 +123,8 @@ def gk_command(
     # Warn if mode 2 requested (standardized) - not yet implemented
     if mode == 2:
         typer.echo(
-            "Warning: Mode 2 (standardized) not yet implemented, using mode 1 (centered)"
+            "Warning: Mode 2 (standardized) not yet implemented, "
+            "using mode 1 (centered)"
         )
 
     # Compute kinship matrix
@@ -163,7 +168,9 @@ def lmm_command(
     ] = None,
     lmm_mode: Annotated[
         int,
-        typer.Option("-lmm", help="LMM analysis type (1=Wald, 2-4=not yet implemented)"),
+        typer.Option(
+            "-lmm", help="LMM analysis type (1=Wald, 2-4=not yet implemented)"
+        ),
     ] = 1,
 ) -> None:
     """Perform linear mixed model association testing.
@@ -182,7 +189,11 @@ def lmm_command(
         raise typer.Exit(code=1)
 
     if lmm_mode in (2, 3, 4):
-        typer.echo(f"Error: -lmm {lmm_mode} not yet implemented. Only -lmm 1 (Wald test) is currently supported.", err=True)
+        typer.echo(
+            f"Error: -lmm {lmm_mode} not yet implemented. "
+            "Only -lmm 1 (Wald test) is currently supported.",
+            err=True,
+        )
         raise typer.Exit(code=1)
 
     # Validate bfile exists
@@ -235,12 +246,12 @@ def lmm_command(
         typer.echo(f"Error loading kinship matrix: {e}", err=True)
         raise typer.Exit(code=1) from None
 
-    # Extract phenotypes from PLINK data (6th column of .fam file, iid[:,5] is phenotype)
-    # bed-reader reads phenotype as string, we need to handle -9 as missing
-    # Actually, phenotypes come from .fam file - bed-reader stores this separately
-    # We need to load the fam file directly to get phenotypes
+    # Extract phenotypes from .fam file (6th column)
+    # We load fam file directly to get phenotypes as bed-reader stores separately
     fam_data = np.loadtxt(fam_path, dtype=str, usecols=(5,))
-    phenotypes = np.array([float(x) if x not in ("-9", "NA") else np.nan for x in fam_data])
+    phenotypes = np.array(
+        [float(x) if x not in ("-9", "NA") else np.nan for x in fam_data]
+    )
 
     # Create valid sample mask (filter missing phenotypes: -9 or NaN)
     valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9)
@@ -250,7 +261,11 @@ def lmm_command(
         typer.echo("Error: No samples with valid phenotypes", err=True)
         raise typer.Exit(code=1)
 
-    typer.echo(f"Analyzing {n_analyzed} samples with valid phenotypes (filtered {n_samples_raw - n_analyzed})")
+    n_filtered = n_samples_raw - n_analyzed
+    typer.echo(
+        f"Analyzing {n_analyzed} samples with valid phenotypes "
+        f"(filtered {n_filtered})"
+    )
 
     # Apply mask consistently to genotypes, phenotypes, AND kinship
     genotypes = plink_data.genotypes
@@ -259,8 +274,11 @@ def lmm_command(
     K_filtered = K[np.ix_(valid_mask, valid_mask)]
 
     # Validate dimensions after filtering
-    assert genotypes_filtered.shape[0] == phenotypes_filtered.shape[0] == K_filtered.shape[0], \
-        "Dimension mismatch after filtering"
+    assert (
+        genotypes_filtered.shape[0]
+        == phenotypes_filtered.shape[0]
+        == K_filtered.shape[0]
+    ), "Dimension mismatch after filtering"
 
     # Build snp_info list from PLINK metadata
     snp_info = []
@@ -271,15 +289,17 @@ def lmm_command(
         valid_geno = x[~np.isnan(x)]
         maf = float(np.mean(valid_geno) / 2.0) if len(valid_geno) > 0 else 0.0
 
-        snp_info.append({
-            "chr": str(plink_data.chromosome[i]),
-            "rs": str(plink_data.sid[i]),
-            "pos": int(plink_data.bp_position[i]),
-            "a1": str(plink_data.allele_1[i]),
-            "a0": str(plink_data.allele_2[i]),
-            "maf": maf,
-            "n_miss": n_miss,
-        })
+        snp_info.append(
+            {
+                "chr": str(plink_data.chromosome[i]),
+                "rs": str(plink_data.sid[i]),
+                "pos": int(plink_data.bp_position[i]),
+                "a1": str(plink_data.allele_1[i]),
+                "a0": str(plink_data.allele_2[i]),
+                "maf": maf,
+                "n_miss": n_miss,
+            }
+        )
 
     t_load = time.perf_counter()
     typer.echo(f"Data loading completed in {t_load - t_start:.2f}s")

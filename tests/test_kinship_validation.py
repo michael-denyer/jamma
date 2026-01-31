@@ -4,18 +4,17 @@ These tests verify JAMMA produces numerically consistent kinship matrices
 that match the expected output format and properties.
 """
 
-import numpy as np
-import pytest
 from pathlib import Path
 
-from jamma.kinship import compute_centered_kinship
+import numpy as np
+import pytest
+
 from jamma.io import load_plink_binary
+from jamma.kinship import compute_centered_kinship
 from jamma.validation import (
-    ToleranceConfig,
     compare_kinship_matrices,
     load_gemma_kinship,
 )
-
 
 # Test data paths
 EXAMPLE_DATA = Path("legacy/example/mouse_hs1940")
@@ -69,14 +68,14 @@ class TestKinshipValidation:
         result = compare_kinship_matrices(jamma_kinship, reference_kinship)
 
         # This test always passes but reports the divergence for manual review
-        print(f"\n=== KINSHIP VALIDATION REPORT ===")
-        print(f"Dataset: mouse_hs1940 (1940 samples, 12226 SNPs)")
+        print("\n=== KINSHIP VALIDATION REPORT ===")
+        print("Dataset: mouse_hs1940 (1940 samples, 12226 SNPs)")
         print(f"Passed: {result.passed}")
         print(f"Max absolute difference: {result.max_abs_diff:.2e}")
         print(f"Max relative difference: {result.max_rel_diff:.2e}")
         if result.worst_location:
             print(f"Worst location: {result.worst_location}")
-        print(f"=================================\n")
+        print("=================================\n")
 
 
 class TestKinshipSmallScale:

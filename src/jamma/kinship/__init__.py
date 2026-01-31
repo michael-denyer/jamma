@@ -15,4 +15,9 @@ from jamma.kinship.compute import compute_centered_kinship
 from jamma.kinship.io import read_kinship_matrix, write_kinship_matrix
 from jamma.kinship.missing import impute_and_center
 
-__all__ = ["compute_centered_kinship", "impute_and_center", "read_kinship_matrix", "write_kinship_matrix"]
+__all__ = [
+    "compute_centered_kinship",
+    "impute_and_center",
+    "read_kinship_matrix",
+    "write_kinship_matrix",
+]

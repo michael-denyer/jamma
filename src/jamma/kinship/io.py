@@ -23,9 +23,7 @@ def read_kinship_matrix(path: Path, n_samples: int | None = None) -> np.ndarray:
 
     # Validate square
     if K.ndim != 2 or K.shape[0] != K.shape[1]:
-        raise ValueError(
-            f"Kinship matrix must be square, got shape {K.shape}"
-        )
+        raise ValueError(f"Kinship matrix must be square, got shape {K.shape}")
 
     # Validate dimension if n_samples provided
     if n_samples is not None and K.shape[0] != n_samples:

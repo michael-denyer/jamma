@@ -215,7 +215,9 @@ class TestCLIIntegration:
         first_line_values = lines[0].split("\t")
         assert len(first_line_values) == 1940, "Expected 1940 columns"
 
-    def test_cli_gk_log_contains_kinship_file(self, runner, tmp_path, example_plink_path):
+    def test_cli_gk_log_contains_kinship_file(
+        self, runner, tmp_path, example_plink_path
+    ):
         """Test that log file mentions kinship output."""
         result = runner.invoke(
             app,

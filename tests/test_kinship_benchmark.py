@@ -18,7 +18,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-
 GEMMA_DOCKER_IMAGE = "quay.io/biocontainers/gemma:0.98.5--ha36d3ea_0"
 EXAMPLE_DATA = Path("legacy/example/mouse_hs1940")
 
@@ -73,9 +72,9 @@ class TestKinshipBenchmarks:
         )
 
         # Store metadata for reporting
-        benchmark.extra_info['n_samples'] = medium_genotypes.shape[0]
-        benchmark.extra_info['n_snps'] = medium_genotypes.shape[1]
-        benchmark.extra_info['implementation'] = 'jax'
+        benchmark.extra_info["n_samples"] = medium_genotypes.shape[0]
+        benchmark.extra_info["n_snps"] = medium_genotypes.shape[1]
+        benchmark.extra_info["implementation"] = "jax"
 
         # Basic sanity check
         assert result.shape == (500, 500)
@@ -90,9 +89,9 @@ class TestKinshipBenchmarks:
             iterations=1,
         )
 
-        benchmark.extra_info['n_samples'] = medium_genotypes.shape[0]
-        benchmark.extra_info['n_snps'] = medium_genotypes.shape[1]
-        benchmark.extra_info['implementation'] = 'numpy'
+        benchmark.extra_info["n_samples"] = medium_genotypes.shape[0]
+        benchmark.extra_info["n_snps"] = medium_genotypes.shape[1]
+        benchmark.extra_info["implementation"] = "numpy"
 
         assert result.shape == (500, 500)
 
@@ -108,9 +107,9 @@ class TestKinshipBenchmarks:
             iterations=1,
         )
 
-        benchmark.extra_info['n_samples'] = genotypes_with_missing.shape[0]
-        benchmark.extra_info['n_snps'] = genotypes_with_missing.shape[1]
-        benchmark.extra_info['missing_rate'] = '5%'
+        benchmark.extra_info["n_samples"] = genotypes_with_missing.shape[0]
+        benchmark.extra_info["n_snps"] = genotypes_with_missing.shape[1]
+        benchmark.extra_info["missing_rate"] = "5%"
 
         assert result.shape == (500, 500)
 
@@ -136,10 +135,10 @@ class TestKinshipScaling:
             iterations=1,
         )
 
-        benchmark.extra_info['n_samples'] = small_genotypes.shape[0]
-        benchmark.extra_info['n_snps'] = small_genotypes.shape[1]
-        benchmark.extra_info['implementation'] = 'jax'
-        benchmark.extra_info['size'] = 'small'
+        benchmark.extra_info["n_samples"] = small_genotypes.shape[0]
+        benchmark.extra_info["n_snps"] = small_genotypes.shape[1]
+        benchmark.extra_info["implementation"] = "jax"
+        benchmark.extra_info["size"] = "small"
 
         assert result.shape == (100, 100)
 
@@ -153,10 +152,10 @@ class TestKinshipScaling:
             iterations=1,
         )
 
-        benchmark.extra_info['n_samples'] = small_genotypes.shape[0]
-        benchmark.extra_info['n_snps'] = small_genotypes.shape[1]
-        benchmark.extra_info['implementation'] = 'numpy'
-        benchmark.extra_info['size'] = 'small'
+        benchmark.extra_info["n_samples"] = small_genotypes.shape[0]
+        benchmark.extra_info["n_snps"] = small_genotypes.shape[1]
+        benchmark.extra_info["implementation"] = "numpy"
+        benchmark.extra_info["size"] = "small"
 
         assert result.shape == (100, 100)
 
@@ -175,15 +174,23 @@ class TestJammaVsGemma:
     def _run_gemma_docker(self, tmpdir: Path) -> float:
         """Run GEMMA via Docker and return execution time in seconds."""
         cmd = [
-            "docker", "run", "--rm",
-            "-v", f"{Path.cwd()}:/data",
-            "-v", f"{tmpdir}:/output",
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{Path.cwd()}:/data",
+            "-v",
+            f"{tmpdir}:/output",
             GEMMA_DOCKER_IMAGE,
             "gemma",
-            "-bfile", "/data/legacy/example/mouse_hs1940",
-            "-gk", "1",
-            "-o", "bench",
-            "-outdir", "/output",
+            "-bfile",
+            "/data/legacy/example/mouse_hs1940",
+            "-gk",
+            "1",
+            "-o",
+            "bench",
+            "-outdir",
+            "/output",
         ]
 
         start = time.perf_counter()
@@ -224,19 +231,19 @@ class TestJammaVsGemma:
 
         # Report results
         speedup = gemma_time / jamma_time
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("JAMMA vs GEMMA Performance Comparison")
-        print(f"{'='*60}")
-        print(f"Dataset: mouse_hs1940 (1940 samples, 12226 SNPs)")
+        print(f"{'=' * 60}")
+        print("Dataset: mouse_hs1940 (1940 samples, 12226 SNPs)")
         print(f"GEMMA time:  {gemma_time:.3f}s")
         print(f"JAMMA time:  {jamma_time:.3f}s")
         print(f"Speedup:     {speedup:.2f}x {'FASTER' if speedup > 1 else 'SLOWER'}")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
         # Store for reporting
         assert jamma_result.shape == (1940, 1940)
 
         # CRITICAL: JAMMA must be faster than GEMMA
-        assert jamma_time < gemma_time, (
-            f"JAMMA ({jamma_time:.3f}s) must be faster than GEMMA ({gemma_time:.3f}s)"
-        )
+        assert (
+            jamma_time < gemma_time
+        ), f"JAMMA ({jamma_time:.3f}s) must be faster than GEMMA ({gemma_time:.3f}s)"

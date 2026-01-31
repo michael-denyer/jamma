@@ -47,7 +47,7 @@ def write_assoc_results(results: list[AssocResult], path: Path) -> None:
 
     Output format matches GEMMA exactly:
     - Tab-separated columns
-    - Header: chr, rs, ps, n_miss, allele1, allele0, af, beta, se, logl_H1, l_remle, p_wald
+    - Header: chr, rs, ps, n_miss, allele1, allele0, af, beta, se, ...
     - Scientific notation for statistics (6 significant digits)
 
     Args:
@@ -59,7 +59,9 @@ def write_assoc_results(results: list[AssocResult], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     # GEMMA header (tab-separated)
-    header = "chr\trs\tps\tn_miss\tallele1\tallele0\taf\tbeta\tse\tlogl_H1\tl_remle\tp_wald"
+    header = (
+        "chr\trs\tps\tn_miss\tallele1\tallele0\taf\tbeta\tse\tlogl_H1\tl_remle\tp_wald"
+    )
 
     with open(path, "w") as f:
         f.write(header + "\n")

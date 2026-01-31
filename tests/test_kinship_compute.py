@@ -4,9 +4,9 @@ These tests verify the JAX-accelerated kinship matrix computation,
 including symmetry, scaling, missing data handling, and determinism.
 """
 
+import jax.numpy as jnp
 import numpy as np
 import pytest
-import jax.numpy as jnp
 
 from jamma.core import configure_jax
 from jamma.kinship import compute_centered_kinship, impute_and_center
@@ -57,7 +57,9 @@ class TestKinshipSymmetry:
     def test_kinship_symmetric_with_missing(self, genotypes_with_missing):
         """Symmetry should hold even with missing data."""
         K = compute_centered_kinship(genotypes_with_missing)
-        assert np.allclose(K, K.T), "Kinship matrix should be symmetric with missing data"
+        assert np.allclose(
+            K, K.T
+        ), "Kinship matrix should be symmetric with missing data"
 
 
 class TestKinshipShape:
@@ -199,8 +201,8 @@ class TestImputeAndCenter:
 
         X_centered = impute_and_center(X)
 
-        # Col 0: values [0, nan, 2], mean = 1.0, imputed = [0, 1, 2], centered = [-1, 0, 1]
-        # Col 1: values [nan, 2, 2], mean = 2.0, imputed = [2, 2, 2], centered = [0, 0, 0]
+        # Col 0: [0, nan, 2] -> mean=1.0, imputed=[0,1,2], centered=[-1,0,1]
+        # Col 1: [nan, 2, 2] -> mean=2.0, imputed=[2,2,2], centered=[0,0,0]
         expected = jnp.array([[-1.0, 0.0], [0.0, 0.0], [1.0, 0.0]])
         assert jnp.allclose(X_centered, expected)
 

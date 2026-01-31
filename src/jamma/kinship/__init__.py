@@ -8,9 +8,11 @@ mixed model association analysis.
 Key functions:
 - compute_centered_kinship: Compute K = X_c @ X_c.T / p (GEMMA -gk 1)
 - impute_and_center: Impute missing values to SNP mean and center
+- write_kinship_matrix: Write kinship matrix in GEMMA format
 """
 
 from jamma.kinship.compute import compute_centered_kinship
+from jamma.kinship.io import write_kinship_matrix
 from jamma.kinship.missing import impute_and_center
 
-__all__ = ["compute_centered_kinship", "impute_and_center"]
+__all__ = ["compute_centered_kinship", "impute_and_center", "write_kinship_matrix"]

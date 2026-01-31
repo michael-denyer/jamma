@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from gemma_next.core import configure_jax, get_jax_info, verify_jax_installation
+from jamma.core import configure_jax, get_jax_info, verify_jax_installation
 
 
 @pytest.fixture(autouse=True)

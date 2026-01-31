@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numpy.testing import assert_allclose
 
-from gemma_next.validation.tolerances import ToleranceConfig
+from jamma.validation.tolerances import ToleranceConfig
 
 if TYPE_CHECKING:
     import pandas as pd

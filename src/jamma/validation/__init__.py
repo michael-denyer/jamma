@@ -5,7 +5,7 @@ This package contains utilities for validating GEMMA-Next output:
 - compare: Numerical comparison utilities with tolerance configuration
 """
 
-from gemma_next.validation.compare import (
+from jamma.validation.compare import (
     ComparisonResult,
     compare_arrays,
     compare_assoc_results,
@@ -13,7 +13,7 @@ from gemma_next.validation.compare import (
     load_gemma_assoc,
     load_gemma_kinship,
 )
-from gemma_next.validation.tolerances import ToleranceConfig
+from jamma.validation.tolerances import ToleranceConfig
 
 __all__ = [
     "ToleranceConfig",

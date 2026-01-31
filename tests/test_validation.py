@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from gemma_next.validation import (
+from jamma.validation import (
     ComparisonResult,
     ToleranceConfig,
     compare_arrays,

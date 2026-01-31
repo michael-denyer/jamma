@@ -1,4 +1,4 @@
-"""GEMMA-Next command-line interface.
+"""JAMMA command-line interface.
 
 This module provides a Typer-based CLI matching GEMMA's command-line interface,
 including -bfile, -o, -outdir flags for data loading and output configuration.
@@ -11,15 +11,15 @@ from typing import Annotated
 
 import typer
 
-import gemma_next
-from gemma_next.core import OutputConfig
-from gemma_next.io import load_plink_binary
-from gemma_next.utils import setup_logging, write_gemma_log
+import jamma
+from jamma.core import OutputConfig
+from jamma.io import load_plink_binary
+from jamma.utils import setup_logging, write_gemma_log
 
 # Create Typer app
 app = typer.Typer(
-    name="gemma-next",
-    help="GEMMA-Next: Mixed Model Association for genome-wide association studies.",
+    name="jamma",
+    help="JAMMA: Mixed Model Association for genome-wide association studies.",
     add_completion=False,
 )
 
@@ -30,7 +30,7 @@ _global_config: OutputConfig | None = None
 def version_callback(value: bool) -> None:
     """Print version and exit."""
     if value:
-        typer.echo(f"GEMMA-Next version {gemma_next.__version__}")
+        typer.echo(f"JAMMA version {jamma.__version__}")
         raise typer.Exit()
 
 
@@ -58,7 +58,7 @@ def main(
         ),
     ] = None,
 ) -> None:
-    """GEMMA-Next: Mixed Model Association.
+    """JAMMA: Mixed Model Association.
 
     A modern Python reimplementation of GEMMA targeting exact numerical
     compatibility with the original C++ implementation.

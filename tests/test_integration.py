@@ -1,4 +1,4 @@
-"""Integration tests for GEMMA-Next.
+"""Integration tests for JAMMA.
 
 These tests verify that all components work together correctly:
 - CLI invokes I/O and logging properly
@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 from typer.testing import CliRunner
 
-from gemma_next.cli import app
+from jamma.cli import app
 
 runner = CliRunner()
 
@@ -52,7 +52,7 @@ class TestGkWorkflow:
 
         # Verify GEMMA-style format with ## prefixes
         assert log_content.startswith("##"), "Log should start with ## prefix"
-        assert "## GEMMA-Next Version" in log_content, "Log should contain version"
+        assert "## JAMMA Version" in log_content, "Log should contain version"
         assert "## Date" in log_content, "Log should contain date"
         assert "## Command Line Input" in log_content, "Log should contain command line"
         assert "## total time" in log_content, "Log should contain timing"
@@ -67,8 +67,8 @@ class TestPlinkToValidationRoundtrip:
         self, sample_plink_data: Path, tmp_path: Path
     ) -> None:
         """Load PLINK data, create kinship matrix, save/reload, and compare."""
-        from gemma_next.io import load_plink_binary
-        from gemma_next.validation import compare_kinship_matrices
+        from jamma.io import load_plink_binary
+        from jamma.validation import compare_kinship_matrices
 
         # Load PLINK data
         plink_data = load_plink_binary(sample_plink_data)
@@ -94,7 +94,7 @@ class TestPlinkToValidationRoundtrip:
         np.savetxt(kinship_path, K_original, fmt="%.15e")
 
         # Reload
-        from gemma_next.validation import load_gemma_kinship
+        from jamma.validation import load_gemma_kinship
 
         K_loaded = load_gemma_kinship(kinship_path)
 
@@ -106,23 +106,23 @@ class TestPlinkToValidationRoundtrip:
 class TestFullModuleImports:
     """Integration tests for module imports."""
 
-    def test_gemma_next_package_imports(self) -> None:
+    def test_jamma_package_imports(self) -> None:
         """Verify main package imports without errors."""
-        import gemma_next
+        import jamma
 
-        assert hasattr(gemma_next, "__version__")
-        assert gemma_next.__version__ == "0.1.0"
+        assert hasattr(jamma, "__version__")
+        assert jamma.__version__ == "0.1.0"
 
     def test_io_module_imports(self) -> None:
         """Verify I/O module imports without errors."""
-        from gemma_next.io import PlinkData, load_plink_binary
+        from jamma.io import PlinkData, load_plink_binary
 
         assert PlinkData is not None
         assert load_plink_binary is not None
 
     def test_core_module_imports(self) -> None:
         """Verify core module imports without errors."""
-        from gemma_next.core import (
+        from jamma.core import (
             OutputConfig,
             configure_jax,
             get_jax_info,
@@ -136,14 +136,14 @@ class TestFullModuleImports:
 
     def test_utils_module_imports(self) -> None:
         """Verify utils module imports without errors."""
-        from gemma_next.utils import setup_logging, write_gemma_log
+        from jamma.utils import setup_logging, write_gemma_log
 
         assert setup_logging is not None
         assert write_gemma_log is not None
 
     def test_validation_module_imports(self) -> None:
         """Verify validation module imports without errors."""
-        from gemma_next.validation import (
+        from jamma.validation import (
             ComparisonResult,
             ToleranceConfig,
             compare_arrays,
@@ -163,8 +163,8 @@ class TestJaxWithPlinkData:
 
     def test_jax_with_plink_genotypes(self, sample_plink_data: Path) -> None:
         """Load PLINK data, convert to JAX, and run computations."""
-        from gemma_next.core import configure_jax
-        from gemma_next.io import load_plink_binary
+        from jamma.core import configure_jax
+        from jamma.io import load_plink_binary
 
         # Ensure JAX is configured for 64-bit
         configure_jax(enable_x64=True)
@@ -198,8 +198,8 @@ class TestJaxWithPlinkData:
 
     def test_jax_matrix_operations_with_plink(self, sample_plink_data: Path) -> None:
         """Verify JAX matrix operations work correctly with real genotype data."""
-        from gemma_next.core import configure_jax
-        from gemma_next.io import load_plink_binary
+        from jamma.core import configure_jax
+        from jamma.io import load_plink_binary
 
         configure_jax(enable_x64=True)
 

@@ -1,4 +1,4 @@
-"""Logging utilities for GEMMA-Next.
+"""Logging utilities for JAMMA.
 
 This module provides loguru-based logging configuration and GEMMA-compatible
 log file output.
@@ -10,14 +10,14 @@ from pathlib import Path
 
 from loguru import logger
 
-import gemma_next
+import jamma
 
 
 def setup_logging(
     verbose: bool = False,
     log_file: Path | None = None,
 ) -> None:
-    """Configure loguru for GEMMA-Next.
+    """Configure loguru for JAMMA.
 
     Sets up console logging with INFO level (or DEBUG if verbose), and
     optional file logging with JSON serialization.
@@ -49,7 +49,7 @@ def setup_logging(
 
 
 def write_gemma_log(
-    output_config: "gemma_next.core.config.OutputConfig",
+    output_config: "jamma.core.config.OutputConfig",
     params: dict,
     timing: dict,
     command_line: str,
@@ -70,10 +70,10 @@ def write_gemma_log(
 
     Example output format:
         ##
-        ## GEMMA-Next Version = 0.1.0
+        ## JAMMA Version = 0.1.0
         ## Date = 2024-01-31T10:30:00
         ##
-        ## Command Line Input = gemma-next gk -bfile data
+        ## Command Line Input = jamma gk -bfile data
         ##
         ## Summary Statistics:
         ## n_samples = 1940
@@ -91,7 +91,7 @@ def write_gemma_log(
     with open(log_path, "w") as f:
         # Header
         f.write("##\n")
-        f.write(f"## GEMMA-Next Version = {gemma_next.__version__}\n")
+        f.write(f"## JAMMA Version = {jamma.__version__}\n")
         f.write(f"## Date = {datetime.now().isoformat()}\n")
         f.write("##\n")
 

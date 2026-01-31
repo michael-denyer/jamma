@@ -7,8 +7,8 @@ This package contains the core algorithms and data structures:
 - lmm: Linear mixed model fitting
 """
 
-from gemma_next.core.config import OutputConfig
-from gemma_next.core.jax_config import (
+from jamma.core.config import OutputConfig
+from jamma.core.jax_config import (
     configure_jax,
     get_jax_info,
     verify_jax_installation,

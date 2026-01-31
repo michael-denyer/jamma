@@ -1,10 +1,10 @@
-"""Tests for GEMMA-Next CLI."""
+"""Tests for JAMMA CLI."""
 
 from pathlib import Path
 
 from typer.testing import CliRunner
 
-from gemma_next.cli import app
+from jamma.cli import app
 
 runner = CliRunner()
 
@@ -64,7 +64,7 @@ def test_cli_gk_log_file(tmp_path: Path):
     assert log_path.exists()
 
     log_content = log_path.read_text()
-    assert "GEMMA-Next" in log_content
+    assert "JAMMA" in log_content
     assert "n_samples = 1940" in log_content
     assert "n_snps = 12226" in log_content
     assert "##" in log_content

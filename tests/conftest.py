@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 if TYPE_CHECKING:
-    from gemma_next.validation import ToleranceConfig
+    from jamma.validation import ToleranceConfig
 
 
 @pytest.fixture
@@ -44,6 +44,6 @@ def tolerance_config() -> ToleranceConfig:
     Returns:
         ToleranceConfig with default tolerance values for different comparison types
     """
-    from gemma_next.validation import ToleranceConfig
+    from jamma.validation import ToleranceConfig
 
     return ToleranceConfig()

@@ -32,16 +32,12 @@ def output_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def tolerance_config() -> dict:
+def tolerance_config() -> "ToleranceConfig":
     """Default tolerance configuration for numerical comparisons.
 
     Returns:
-        Dictionary with tolerance values for different comparison types
+        ToleranceConfig with default tolerance values for different comparison types
     """
-    return {
-        "beta_rtol": 1e-6,  # Effect size relative tolerance
-        "se_rtol": 1e-6,  # Standard error relative tolerance
-        "pvalue_rtol": 1e-5,  # P-value relative tolerance (looser due to CDF)
-        "kinship_rtol": 1e-8,  # Kinship matrix relative tolerance
-        "atol": 1e-12,  # Absolute tolerance for values near zero
-    }
+    from gemma_next.validation import ToleranceConfig
+
+    return ToleranceConfig()

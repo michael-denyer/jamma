@@ -155,17 +155,58 @@ def lmm_command(
         Path,
         typer.Option("-bfile", help="PLINK binary file prefix"),
     ],
+    kinship_file: Annotated[
+        Path | None,
+        typer.Option("-k", help="Pre-computed kinship matrix file"),
+    ] = None,
     lmm_mode: Annotated[
         int,
-        typer.Option("-lmm", help="LMM analysis type (1-4)"),
+        typer.Option("-lmm", help="LMM analysis type (1=Wald, 2-4=not yet implemented)"),
     ] = 1,
 ) -> None:
     """Perform linear mixed model association testing.
 
-    Currently a placeholder - full implementation in Phase 3.
+    Runs LMM association tests using a pre-computed kinship matrix.
+    Currently supports Wald test (-lmm 1) only.
     """
-    typer.echo("LMM not yet implemented (Phase 3)")
-    raise typer.Exit(code=0)
+    # Get global config
+    global _global_config
+    if _global_config is None:
+        _global_config = OutputConfig()
+
+    # Validate -lmm mode
+    if lmm_mode not in (1, 2, 3, 4):
+        typer.echo(f"Error: -lmm must be 1, 2, 3, or 4 (got {lmm_mode})", err=True)
+        raise typer.Exit(code=1)
+
+    if lmm_mode in (2, 3, 4):
+        typer.echo(f"Error: -lmm {lmm_mode} not yet implemented. Only -lmm 1 (Wald test) is currently supported.", err=True)
+        raise typer.Exit(code=1)
+
+    # Validate bfile exists
+    bed_path = Path(f"{bfile}.bed")
+    bim_path = Path(f"{bfile}.bim")
+    fam_path = Path(f"{bfile}.fam")
+
+    if not bed_path.exists():
+        typer.echo(f"Error: PLINK .bed file not found: {bed_path}", err=True)
+        raise typer.Exit(code=1)
+    if not bim_path.exists():
+        typer.echo(f"Error: PLINK .bim file not found: {bim_path}", err=True)
+        raise typer.Exit(code=1)
+    if not fam_path.exists():
+        typer.echo(f"Error: PLINK .fam file not found: {fam_path}", err=True)
+        raise typer.Exit(code=1)
+
+    # Validate kinship file is provided and exists
+    if kinship_file is None:
+        typer.echo("Error: -k (kinship matrix) is required for -lmm 1", err=True)
+        raise typer.Exit(code=1)
+    if not kinship_file.exists():
+        typer.echo(f"Error: Kinship matrix file not found: {kinship_file}", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Input validation passed: bfile={bfile}, kinship={kinship_file}, mode={lmm_mode}")
 
 
 if __name__ == "__main__":

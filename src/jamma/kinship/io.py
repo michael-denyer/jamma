@@ -5,6 +5,42 @@ from pathlib import Path
 import numpy as np
 
 
+def read_kinship_matrix(path: Path, n_samples: int | None = None) -> np.ndarray:
+    """Read kinship matrix from GEMMA .cXX.txt format.
+
+    Args:
+        path: Path to kinship matrix file (.cXX.txt format)
+        n_samples: Expected number of samples (optional validation)
+
+    Returns:
+        Kinship matrix as numpy array (n x n)
+
+    Raises:
+        ValueError: If matrix is not square, not symmetric, or dimension mismatch
+    """
+    # Load matrix - handles tab and space separated
+    K = np.loadtxt(path, dtype=np.float64)
+
+    # Validate square
+    if K.ndim != 2 or K.shape[0] != K.shape[1]:
+        raise ValueError(
+            f"Kinship matrix must be square, got shape {K.shape}"
+        )
+
+    # Validate dimension if n_samples provided
+    if n_samples is not None and K.shape[0] != n_samples:
+        raise ValueError(
+            f"Kinship matrix dimension {K.shape[0]} does not match "
+            f"expected n_samples={n_samples}"
+        )
+
+    # Validate symmetric
+    if not np.allclose(K, K.T, rtol=1e-10):
+        raise ValueError("Kinship matrix is not symmetric")
+
+    return K
+
+
 def write_kinship_matrix(K: np.ndarray, path: Path) -> None:
     """Write kinship matrix in GEMMA .cXX.txt format.
 

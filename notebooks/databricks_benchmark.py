@@ -295,12 +295,14 @@ def benchmark_lmm_cpu(
     genotypes: np.ndarray,
     phenotype: np.ndarray,
     kinship: np.ndarray,
+    snp_info: list,
     profiler: BenchmarkProfiler,
     n_snps: int | None = None,
 ):
     """Benchmark CPU LMM path."""
     if n_snps:
         genotypes = genotypes[:, :n_snps]
+        snp_info = snp_info[:n_snps]
 
     n_samples, actual_snps = genotypes.shape
 
@@ -311,6 +313,7 @@ def benchmark_lmm_cpu(
         genotypes=genotypes,
         phenotypes=phenotype,
         kinship=kinship,
+        snp_info=snp_info,
     )
 
     elapsed = profiler.end("lmm_cpu", "association")
@@ -324,21 +327,25 @@ def benchmark_lmm_jax(
     genotypes: np.ndarray,
     phenotype: np.ndarray,
     kinship: np.ndarray,
+    snp_info: list,
     profiler: BenchmarkProfiler,
     n_snps: int | None = None,
 ):
     """Benchmark JAX LMM path."""
     if n_snps:
         genotypes = genotypes[:, :n_snps]
+        snp_info = snp_info[:n_snps]
 
     n_samples, actual_snps = genotypes.shape
 
-    # Warmup
+    # Warmup (use subset of snp_info too)
+    warmup_snps = min(100, actual_snps)
     profiler.start("lmm_jax", "warmup")
     _ = run_lmm_association_jax(
-        genotypes=genotypes[:, : min(100, actual_snps)],
+        genotypes=genotypes[:, :warmup_snps],
         phenotypes=phenotype,
         kinship=kinship,
+        snp_info=snp_info[:warmup_snps],
     )
     profiler.end("lmm_jax", "warmup")
 
@@ -350,10 +357,11 @@ def benchmark_lmm_jax(
         genotypes=genotypes,
         phenotypes=phenotype,
         kinship=kinship,
+        snp_info=snp_info,
     )
 
-    if hasattr(results.get("beta"), "block_until_ready"):
-        results["beta"].block_until_ready()
+    # Results is a list[AssocResult], no need for block_until_ready
+    # JAX computation is already complete when run_lmm_association_jax returns
 
     elapsed = profiler.end("lmm_jax", "association", device=str(jax.default_backend()))
     throughput = actual_snps / elapsed if elapsed > 0 else 0
@@ -399,6 +407,12 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
         # Generate data
         genotypes, phenotype, _, _ = generate_synthetic_data(config, profiler)
 
+        # Generate SNP info (required by LMM functions)
+        snp_info = [
+            {"chr": "1", "rs": f"rs{j}", "pos": j * 1000, "a1": "A", "a0": "G"}
+            for j in range(config.n_snps)
+        ]
+
         # Kinship
         K, kinship_time = benchmark_kinship(genotypes, profiler)
         results["kinship_time"] = kinship_time
@@ -406,7 +420,7 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
         # LMM CPU
         try:
             _, cpu_time = benchmark_lmm_cpu(
-                genotypes, phenotype, K, profiler, n_snps=config.n_snps_lmm
+                genotypes, phenotype, K, snp_info, profiler, n_snps=config.n_snps_lmm
             )
             results["lmm_cpu_time"] = cpu_time
             results["lmm_cpu_snps_per_sec"] = config.n_snps_lmm / cpu_time
@@ -416,7 +430,7 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
         # LMM JAX
         try:
             _, jax_time = benchmark_lmm_jax(
-                genotypes, phenotype, K, profiler, n_snps=config.n_snps_lmm
+                genotypes, phenotype, K, snp_info, profiler, n_snps=config.n_snps_lmm
             )
             results["lmm_jax_time"] = jax_time
             results["lmm_jax_snps_per_sec"] = config.n_snps_lmm / jax_time
@@ -492,15 +506,29 @@ for config in results_df["config"].unique():
 # Save to Delta (Databricks) or CSV (local)
 try:
     # Databricks - spark is a built-in in Databricks notebooks
-    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {OUTPUT_CATALOG}.{OUTPUT_SCHEMA}")  # noqa: F821
+    # Detect Unity Catalog (three-level namespace) vs legacy Hive (one-level)
+    try:
+        # Try Unity Catalog three-level namespace (catalog.schema.table)
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {OUTPUT_CATALOG}.{OUTPUT_SCHEMA}")  # noqa: F821
+        table_prefix = f"{OUTPUT_CATALOG}.{OUTPUT_SCHEMA}"
+    except Exception as uc_error:
+        # Fall back to legacy Hive Metastore (schema.table only)
+        if "single-part namespace" in str(uc_error):
+            logger.info(
+                f"Unity Catalog not available, using legacy schema: {OUTPUT_SCHEMA}"
+            )
+            spark.sql(f"CREATE SCHEMA IF NOT EXISTS {OUTPUT_SCHEMA}")  # noqa: F821
+            table_prefix = OUTPUT_SCHEMA
+        else:
+            raise
 
     spark.createDataFrame(results_df).write.mode("append").saveAsTable(  # noqa: F821
-        f"{OUTPUT_CATALOG}.{OUTPUT_SCHEMA}.benchmark_results"
+        f"{table_prefix}.benchmark_results"
     )
     spark.createDataFrame(events_df).write.mode("append").saveAsTable(  # noqa: F821
-        f"{OUTPUT_CATALOG}.{OUTPUT_SCHEMA}.benchmark_events"
+        f"{table_prefix}.benchmark_events"
     )
-    logger.info(f"Results saved to {OUTPUT_CATALOG}.{OUTPUT_SCHEMA}")
+    logger.info(f"Results saved to {table_prefix}")
 except NameError:
     # Local
     output_dir = Path("benchmark_results")

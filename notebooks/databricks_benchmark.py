@@ -41,8 +41,7 @@ import jax  # noqa: E402
 
 # COMMAND ----------
 
-# Configuration
-OUTPUT_CATALOG = "main"
+# Configuration - Legacy Hive Metastore (single-level namespace)
 OUTPUT_SCHEMA = "jamma_benchmarks"
 
 # Setup logging
@@ -505,30 +504,16 @@ for config in results_df["config"].unique():
 
 # Save to Delta (Databricks) or CSV (local)
 try:
-    # Databricks - spark is a built-in in Databricks notebooks
-    # Detect Unity Catalog (three-level namespace) vs legacy Hive (one-level)
-    try:
-        # Try Unity Catalog three-level namespace (catalog.schema.table)
-        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {OUTPUT_CATALOG}.{OUTPUT_SCHEMA}")  # noqa: F821
-        table_prefix = f"{OUTPUT_CATALOG}.{OUTPUT_SCHEMA}"
-    except Exception as uc_error:
-        # Fall back to legacy Hive Metastore (schema.table only)
-        if "single-part namespace" in str(uc_error):
-            logger.info(
-                f"Unity Catalog not available, using legacy schema: {OUTPUT_SCHEMA}"
-            )
-            spark.sql(f"CREATE SCHEMA IF NOT EXISTS {OUTPUT_SCHEMA}")  # noqa: F821
-            table_prefix = OUTPUT_SCHEMA
-        else:
-            raise
+    # Databricks with legacy Hive Metastore (single-level namespace)
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {OUTPUT_SCHEMA}")  # noqa: F821
 
     spark.createDataFrame(results_df).write.mode("append").saveAsTable(  # noqa: F821
-        f"{table_prefix}.benchmark_results"
+        f"{OUTPUT_SCHEMA}.benchmark_results"
     )
     spark.createDataFrame(events_df).write.mode("append").saveAsTable(  # noqa: F821
-        f"{table_prefix}.benchmark_events"
+        f"{OUTPUT_SCHEMA}.benchmark_events"
     )
-    logger.info(f"Results saved to {table_prefix}")
+    logger.info(f"Results saved to {OUTPUT_SCHEMA}")
 except NameError:
     # Local
     output_dir = Path("benchmark_results")

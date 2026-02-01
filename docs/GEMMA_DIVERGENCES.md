@@ -118,7 +118,53 @@ Both use `log(abs(v))` to handle potential negative eigenvalues from non-PSD kin
 
 ---
 
-## 4. JAX Path: Intercept-Only Limitation
+## 4. Monomorphic SNP Detection
+
+### GEMMA (gemma.cpp:2377-2392)
+
+```c++
+// In PlinkKin() - count-based detection
+int n_total = 0;
+for (size_t i = 0; i < n_rows; i++) {
+    if (x[i] != MISSING) {
+        n_total++;
+        // ... accumulate sums
+    }
+}
+// Check for polymorphism via counts
+if (n_total == 0 || n_aa == n_total || n_bb == n_total) {
+    flag_poly = false;  // Monomorphic
+}
+```
+
+**Behavior**: Count genotype classes (AA, AB, BB) and flag as monomorphic if only one class exists.
+
+### JAMMA (kinship/compute.py, lmm/runner_jax.py)
+
+```python
+# Variance-based detection
+col_vars = np.nanvar(genotypes, axis=0)
+is_polymorphic = col_vars > 0
+```
+
+**Behavior**: Compute variance and flag as monomorphic if variance == 0.
+
+### Status: **Equivalent Results, Different Method**
+
+Both approaches correctly identify monomorphic SNPs:
+
+- GEMMA: Count-based (n_aa == n_total or n_bb == n_total)
+- JAMMA: Variance-based (var == 0)
+
+For biallelic SNPs with values {0, 1, 2}, both methods produce identical classification:
+
+- Variance == 0 ⟺ all values are equal ⟺ only one genotype class exists
+
+The variance-based approach is simpler and equally robust. A single-sample GWAS where this might differ is biologically meaningless anyway.
+
+---
+
+## 5. JAX Path: Intercept-Only Limitation
 
 ### GEMMA
 Supports arbitrary covariates (n_cvt ≥ 1).
@@ -139,6 +185,7 @@ The NumPy/Numba path supports n_cvt > 1. JAX path is optimized for the common ca
 | P_xx = 0 | inf/NaN mix | NaN | Degenerate SNPs |
 | Px_yy clamping | None | 1e-8 floor | Numerical stability |
 | logdet with neg eigenvalues | log(abs(v)) | log(abs(v)) | Aligned |
+| Monomorphic detection | Count-based | Variance-based | Aligned (equivalent) |
 | JAX covariates | n_cvt ≥ 1 | n_cvt = 1 only | Known limitation |
 
 ---

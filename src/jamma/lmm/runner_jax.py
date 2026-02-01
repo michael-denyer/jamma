@@ -136,7 +136,7 @@ def _compute_chunk_size(n_samples: int, n_snps: int, n_grid: int = 50) -> int:
     # Most restrictive constraint is typically Uab: (chunk_size, n_samples, 6)
     elements_per_snp = max(
         n_samples * 6,  # Uab: n_samples * 6 elements per SNP
-        n_grid * n_samples,  # Grid REML: (n_grid, chunk_size) intermediate
+        n_grid,  # Grid REML: (n_grid, chunk_size) intermediate → n_grid per SNP
         n_samples,  # UtG_chunk: n_samples elements per SNP
     )
 
@@ -756,7 +756,7 @@ def run_lmm_association_streaming(
     # Map filtered SNP indices to original indices for chunk extraction
     # Group filtered SNPs by which file chunk they belong to
     assoc_iterator = stream_genotype_chunks(
-        bed_path, chunk_size=chunk_size, dtype=np.float32, show_progress=False
+        bed_path, chunk_size=chunk_size, dtype=np.float64, show_progress=False
     )
     if show_progress:
         n_chunks = (n_snps + chunk_size - 1) // chunk_size

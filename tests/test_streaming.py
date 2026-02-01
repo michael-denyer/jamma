@@ -399,6 +399,105 @@ class TestComputeKinshipStreaming:
         with pytest.raises(FileNotFoundError, match="PLINK .bed file not found"):
             compute_kinship_streaming(nonexistent, show_progress=False)
 
+    def test_compute_kinship_streaming_with_filtering_matches_full_load(
+        self, sample_plink_data: Path
+    ) -> None:
+        """Verify streaming kinship WITH filtering matches full-load kinship."""
+        # Load genotypes for full computation
+        data = load_plink_binary(sample_plink_data)
+
+        # Test with various filtering thresholds
+        maf = 0.05
+        miss = 0.1
+
+        # Compute kinship via full-load method with filtering
+        K_full = compute_centered_kinship(
+            data.genotypes.astype(np.float64),
+            maf_threshold=maf,
+            miss_threshold=miss,
+            check_memory=False,
+        )
+
+        # Compute kinship via streaming with same filtering
+        K_stream = compute_kinship_streaming(
+            sample_plink_data,
+            maf_threshold=maf,
+            miss_threshold=miss,
+            chunk_size=5000,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        # Should match within numerical precision
+        np.testing.assert_allclose(
+            K_stream,
+            K_full,
+            rtol=1e-10,
+            atol=1e-14,
+            err_msg="Streaming kinship with filtering should match full-load",
+        )
+
+
+class TestFilteringBoundaryBehavior:
+    """Tests for MAF/missing threshold boundary behavior."""
+
+    def test_maf_boundary_inclusion(self) -> None:
+        """SNPs exactly at MAF threshold should be included."""
+        # Create synthetic genotypes with known MAF
+        # SNP with MAF = 0.05 exactly (1 minor allele in 10 samples)
+        # Values: 9x 0 + 1x 1 → freq = 0.1/2 = 0.05
+        n_samples = 10
+        genotypes = np.zeros((n_samples, 3), dtype=np.float64)
+        genotypes[0, 0] = 1  # MAF = 0.05 exactly
+        genotypes[0, 1] = 2  # MAF = 0.10
+        genotypes[:, 2] = 0  # Monomorphic (should be filtered)
+
+        # With MAF >= 0.05, first two SNPs should pass
+        K = compute_centered_kinship(genotypes, maf_threshold=0.05, check_memory=False)
+        # Should not raise - means some SNPs passed
+        assert K.shape == (n_samples, n_samples)
+
+        # With MAF >= 0.051, first SNP should be filtered
+        # Only one SNP left (MAF=0.10)
+        K_strict = compute_centered_kinship(
+            genotypes, maf_threshold=0.051, check_memory=False
+        )
+        assert K_strict.shape == (n_samples, n_samples)
+
+    def test_miss_boundary_inclusion(self) -> None:
+        """SNPs exactly at missing threshold should be included."""
+        # Create synthetic genotypes with known missing rate
+        n_samples = 10
+        genotypes = np.zeros((n_samples, 3), dtype=np.float64)
+        genotypes[0, 0] = 1  # Polymorphic
+        genotypes[0, 1] = 1  # Polymorphic
+        genotypes[0, 2] = 1  # Polymorphic
+        genotypes[1, 1] = np.nan  # 10% missing on SNP 1
+        genotypes[1, 2] = np.nan  # 10% missing on SNP 2
+        genotypes[2, 2] = np.nan  # 20% missing on SNP 2
+
+        # With miss <= 0.10, SNPs 0 and 1 should pass
+        K = compute_centered_kinship(genotypes, miss_threshold=0.10, check_memory=False)
+        assert K.shape == (n_samples, n_samples)
+
+        # With miss <= 0.05, only SNP 0 should pass
+        K_strict = compute_centered_kinship(
+            genotypes, miss_threshold=0.05, check_memory=False
+        )
+        assert K_strict.shape == (n_samples, n_samples)
+
+    def test_monomorphic_always_filtered(self) -> None:
+        """Monomorphic SNPs should always be filtered regardless of thresholds."""
+        n_samples = 10
+        # All SNPs are monomorphic (constant value)
+        genotypes = np.ones((n_samples, 5), dtype=np.float64)
+
+        # Even with permissive thresholds, all SNPs should be filtered
+        with pytest.raises(ValueError, match="No SNPs passed filtering"):
+            compute_centered_kinship(
+                genotypes, maf_threshold=0.0, miss_threshold=1.0, check_memory=False
+            )
+
 
 class TestRunLmmAssociationStreaming:
     """Tests for run_lmm_association_streaming function."""

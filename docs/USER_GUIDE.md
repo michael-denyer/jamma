@@ -28,7 +28,7 @@ pip install jax[cuda12]
 
 JAMMA uses PLINK binary format (`.bed`, `.bim`, `.fam` files):
 
-```
+```text
 my_study.bed   # Binary genotype data
 my_study.bim   # SNP information
 my_study.fam   # Sample information
@@ -45,12 +45,18 @@ jamma -o kinship -outdir output gk -bfile data/my_study -gk 1
 ```
 
 **Options:**
+
 - `-bfile PATH` — PLINK binary file prefix (required)
 - `-gk MODE` — Kinship type: 1 = centered (default), 2 = standardized
+- `-maf FLOAT` — MAF threshold (default: 0.0, no filter)
+- `-miss FLOAT` — Missing rate threshold (default: 1.0, no filter)
 - `-o PREFIX` — Output file prefix
 - `-outdir DIR` — Output directory
 
+**Note:** Monomorphic SNPs (variance = 0) are always filtered to match GEMMA behavior.
+
 **Output:**
+
 - `output/kinship.cXX.txt` — Kinship matrix (GEMMA format)
 - `output/kinship.log.txt` — Run log
 
@@ -66,13 +72,17 @@ jamma -o assoc -outdir output lmm \
 ```
 
 **Options:**
+
 - `-bfile PATH` — PLINK binary file prefix (required)
 - `-k PATH` — Kinship matrix file (required)
 - `-lmm MODE` — Test type: 1 = Wald test (default)
 - `-maf FLOAT` — MAF threshold (default: 0.01)
 - `-miss FLOAT` — Missing rate threshold (default: 0.05)
 
+**Note:** Monomorphic SNPs (variance = 0) are always filtered to match GEMMA behavior.
+
 **Output:**
+
 - `output/assoc.assoc.txt` — Association results
 - `output/assoc.log.txt` — Run log
 
@@ -83,7 +93,7 @@ jamma -o assoc -outdir output lmm \
 Tab-separated file with columns:
 
 | Column | Description |
-|--------|-------------|
+| ------ | ----------- |
 | `chr` | Chromosome |
 | `rs` | SNP identifier |
 | `ps` | Position |

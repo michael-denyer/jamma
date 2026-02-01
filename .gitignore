@@ -39,7 +39,14 @@ venv/
 # Planning and claude config (dev-only)
 .planning/
 .claude/
+CLAUDE.md
 
 # Beads issue tracker
 .beads/
 AGENTS.md
+
+# Legacy GEMMA C++ source (reference only, not used at runtime)
+legacy/src/
+legacy/doc/
+legacy/bin/
+legacy/test/

@@ -682,9 +682,8 @@ def run_lmm_association_streaming(
             geno_jax_chunk = geno_subset[:, jax_start:jax_end]
 
             # Pad last JAX chunk if needed for JIT consistency
-            needs_padding = (
-                actual_jax_len < jax_chunk_size and jax_chunk_size < n_subset
-            )
+            # JAX traces functions for each unique shape; padding keeps shapes constant
+            needs_padding = actual_jax_len < jax_chunk_size
             if needs_padding:
                 pad_width = jax_chunk_size - actual_jax_len
                 geno_jax_chunk = np.pad(

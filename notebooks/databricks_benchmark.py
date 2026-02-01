@@ -88,6 +88,10 @@ logger.info(f"JAX backend: {jax.default_backend()}")
 mem = psutil.virtual_memory()
 logger.info(f"RAM: {mem.total / 1e9:.1f} GB total, {mem.available / 1e9:.1f} GB avail")
 
+# GEMMA binary path - default is the Databricks micromamba environment
+# Must be defined before benchmark_gemma() which uses it as a default
+GEMMA_PATH = os.environ.get("GEMMA_PATH", "/opt/micromamba/envs/disco/bin/gemma")
+
 # COMMAND ----------
 
 
@@ -895,13 +899,7 @@ else:
 # MAGIC This validates numerical equivalence before trusting large-scale results.
 # MAGIC
 # MAGIC **GEMMA Binary:**
-# MAGIC Set `GEMMA_PATH` below if GEMMA is installed at a custom location.
-# MAGIC Otherwise, the notebook will search PATH.
-
-# COMMAND ----------
-
-# GEMMA binary path - default is the Databricks micromamba environment
-GEMMA_PATH = os.environ.get("GEMMA_PATH", "/opt/micromamba/envs/disco/bin/gemma")
+# MAGIC Set `GEMMA_PATH` env var or modify the value at the top of the notebook.
 
 # COMMAND ----------
 

@@ -625,3 +625,128 @@ class TestRunLmmAssociationStreaming:
             run_lmm_association_streaming(
                 nonexistent, phenotypes, kinship, show_progress=False
             )
+
+
+class TestChunkEquivalence:
+    """Tests verifying chunked processing produces identical results."""
+
+    def test_single_vs_multi_chunk_equivalence(self, sample_plink_data: Path) -> None:
+        """Verify single large chunk equals multiple small chunks.
+
+        This test proves that JAX chunking is purely a memory optimization
+        and does not affect numerical results.
+        """
+        np.random.seed(42)
+
+        # Load data and prepare
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = np.random.randn(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        # Build snp_info
+        snp_info = [
+            {
+                "chr": str(data.chromosome[i]) if data.chromosome is not None else "1",
+                "rs": data.sid[i] if data.sid is not None else f"snp{i}",
+                "pos": int(data.bp_position[i]) if data.bp_position is not None else i,
+                "a1": data.allele_1[i] if data.allele_1 is not None else "A",
+                "a0": data.allele_2[i] if data.allele_2 is not None else "G",
+            }
+            for i in range(data.n_snps)
+        ]
+
+        # Run with full-load JAX (single batch, no streaming)
+        results_single = run_lmm_association_jax(
+            data.genotypes,
+            phenotypes,
+            kinship,
+            snp_info,
+            check_memory=False,
+        )
+
+        # Run with streaming (multiple chunks)
+        results_multi = run_lmm_association_streaming(
+            sample_plink_data,
+            phenotypes,
+            kinship,
+            chunk_size=2000,  # Small chunks
+            check_memory=False,
+            show_progress=False,
+        )
+
+        # Both should produce same count of results
+        assert len(results_single) == len(results_multi)
+
+        # Results should be numerically identical within machine precision
+        # (rtol=1e-13 allows for floating-point accumulation differences)
+        for r1, r2 in zip(results_single, results_multi, strict=False):
+            assert r1.rs == r2.rs, f"SNP mismatch: {r1.rs} vs {r2.rs}"
+            np.testing.assert_allclose(
+                r1.beta,
+                r2.beta,
+                rtol=1e-13,
+                atol=0,
+                err_msg=f"Beta mismatch for {r1.rs}",
+            )
+            np.testing.assert_allclose(
+                r1.se, r2.se, rtol=1e-13, atol=0, err_msg=f"SE mismatch for {r1.rs}"
+            )
+            np.testing.assert_allclose(
+                r1.p_wald,
+                r2.p_wald,
+                rtol=1e-13,
+                atol=0,
+                err_msg=f"P-value mismatch for {r1.rs}",
+            )
+
+    def test_streaming_different_chunk_sizes_equivalent(
+        self, sample_plink_data: Path
+    ) -> None:
+        """Verify different chunk sizes in streaming produce identical results."""
+        np.random.seed(42)
+
+        # Load data
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = np.random.randn(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        # Test different chunk sizes (smaller for faster test)
+        chunk_sizes = [1000, 2500, 5000]
+        results_by_chunk: dict[int, list] = {}
+
+        for cs in chunk_sizes:
+            results = run_lmm_association_streaming(
+                sample_plink_data,
+                phenotypes,
+                kinship,
+                chunk_size=cs,
+                check_memory=False,
+                show_progress=False,
+            )
+            results_by_chunk[cs] = results
+
+        # All chunk sizes should produce identical results within machine precision
+        baseline = results_by_chunk[chunk_sizes[0]]
+        for cs in chunk_sizes[1:]:
+            results = results_by_chunk[cs]
+            assert len(results) == len(baseline)
+
+            for r1, r2 in zip(baseline, results, strict=False):
+                np.testing.assert_allclose(
+                    r1.beta,
+                    r2.beta,
+                    rtol=1e-13,
+                    atol=0,
+                    err_msg=f"Beta mismatch at chunk_size={cs}",
+                )
+                np.testing.assert_allclose(
+                    r1.p_wald,
+                    r2.p_wald,
+                    rtol=1e-13,
+                    atol=0,
+                    err_msg=f"P-value mismatch at chunk_size={cs}",
+                )

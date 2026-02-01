@@ -169,7 +169,7 @@ def reml_log_likelihood_jax(
 
     # P_yy after projecting out covariates and genotype
     # Use GEMMA's conditional clamping: only clamp if P_yy >= 0 and P_yy < 1e-8
-    # This matches lmm.cpp line 854: if (P_yy >= 0.0 && (P_yy < P_YY_MIN)) P_yy = P_YY_MIN
+    # Matches lmm.cpp:854: if (P_yy >= 0.0 && P_yy < P_YY_MIN) P_yy = P_YY_MIN
     P_yy = Pab[nc_total, _IDX_YY]
     P_yy = jnp.where((P_yy >= 0.0) & (P_yy < 1e-8), 1e-8, P_yy)
 
@@ -392,7 +392,7 @@ def calc_wald_stats_jax(
     Px_YY = Pab[n_cvt + 1, _IDX_YY]  # After projecting out W and X
 
     # Effect size and standard error
-    # Use GEMMA's safe_sqrt logic: if |d| < 0.001, use abs(d) to tolerate small negatives
+    # GEMMA safe_sqrt: if |d| < 0.001, use abs(d) to tolerate small negatives
     # This matches GEMMA mathfunc.cpp:122-131
     beta = P_XY / P_XX
     tau = df / Px_YY

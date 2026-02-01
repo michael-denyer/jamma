@@ -174,7 +174,7 @@ def calc_pab(
     """
     # Fast path for n_cvt=1 (most common case)
     if n_cvt == 1:
-        return _calc_pab_ncvt1(Hi_eval, Uab)
+        return _calc_pab_ncvt1_numba(Hi_eval, Uab)
 
     # General case
     return _calc_pab_general(n_cvt, Hi_eval, Uab)
@@ -228,14 +228,6 @@ def _calc_pab_ncvt1_numba(Hi_eval: np.ndarray, Uab: np.ndarray) -> np.ndarray:
     Pab[2, 5] = P2_YY
 
     return Pab
-
-
-def _calc_pab_ncvt1(Hi_eval: np.ndarray, Uab: np.ndarray) -> np.ndarray:
-    """Optimized Pab computation for n_cvt=1.
-
-    Delegates to Numba-compiled implementation.
-    """
-    return _calc_pab_ncvt1_numba(Hi_eval, Uab)
 
 
 def _calc_pab_general(n_cvt: int, Hi_eval: np.ndarray, Uab: np.ndarray) -> np.ndarray:
@@ -319,7 +311,8 @@ def _reml_log_likelihood_ncvt1_numba(
     for i in range(n):
         v = lambda_val * eigenvalues[i] + 1.0
         h = 1.0 / v
-        logdet_h += np.log(np.abs(v))  # Use abs() for non-PSD kinship (negative eigenvalues)
+        # Use abs() for non-PSD kinship (negative eigenvalues)
+        logdet_h += np.log(np.abs(v))
 
         # Pab row 0 (Hi-weighted)
         P0_WW += h * Uab[i, 0]

@@ -381,7 +381,8 @@ class TestEigendecompositionProperties:
         # Reconstruct
         K_reconstructed = U @ np.diag(eigenvalues) @ U.T
 
-        np.testing.assert_allclose(K, K_reconstructed, rtol=1e-8)
+        # Use atol for values near zero where rtol alone would be too strict
+        np.testing.assert_allclose(K, K_reconstructed, rtol=1e-8, atol=1e-14)
 
     @given(
         genotypes=genotype_matrix(
@@ -466,3 +467,231 @@ class TestNumericalStability:
         assert np.isfinite(
             logl
         ), f"Non-finite likelihood with {n_small} small eigenvalues"
+
+
+# -----------------------------------------------------------------------------
+# Degenerate SNP Edge Cases
+# -----------------------------------------------------------------------------
+
+
+class TestDegenerateSNPEdgeCases:
+    """Property tests for degenerate SNP scenarios (zero variance, constant, etc.)."""
+
+    def test_constant_genotype_returns_nan(self):
+        """SNP with zero variance (constant values) should return NaN stats.
+
+        When all genotypes are identical, P_xx = 0 after projection,
+        so beta and SE cannot be computed (division by zero).
+        """
+        rng = np.random.default_rng(42)
+        n_samples = 50
+        n_cvt = 1
+
+        # Generate valid inputs
+        eigenvalues = np.abs(rng.standard_normal(n_samples)) + 0.1
+        U = np.eye(n_samples)
+        y = rng.standard_normal(n_samples)
+        W = np.ones((n_samples, 1))
+
+        # Constant genotype (zero variance)
+        x = np.full(n_samples, 1.0)
+
+        Uab = compute_Uab(U.T @ W, U.T @ y, U.T @ x)
+        Hi_eval = 1.0 / (1.0 * eigenvalues + 1.0)
+        Pab = calc_pab(n_cvt, Hi_eval, Uab)
+
+        beta, se, p_wald = calc_wald_test(1.0, Pab, n_cvt, n_samples)
+
+        # All should be NaN for constant genotype
+        assert np.isnan(beta), f"Expected NaN beta for constant genotype, got {beta}"
+        assert np.isnan(se), f"Expected NaN SE for constant genotype, got {se}"
+        assert np.isnan(
+            p_wald
+        ), f"Expected NaN p-value for constant genotype, got {p_wald}"
+
+    def test_constant_genotype_jax_returns_nan(self):
+        """JAX path should also return NaN for constant genotypes."""
+        import jax.numpy as jnp
+
+        from jamma.lmm.likelihood_jax import calc_wald_stats_jax
+
+        rng = np.random.default_rng(42)
+        n_samples = 50
+
+        eigenvalues = np.abs(rng.standard_normal(n_samples)) + 0.1
+        U = np.eye(n_samples)
+        y = rng.standard_normal(n_samples)
+        W = np.ones((n_samples, 1))
+        x = np.full(n_samples, 1.0)  # Constant
+
+        Uab = compute_Uab(U.T @ W, U.T @ y, U.T @ x)
+
+        beta, se, p_wald = calc_wald_stats_jax(
+            1.0,
+            jnp.array(eigenvalues),
+            jnp.array(Uab),
+            n_samples,
+        )
+
+        assert np.isnan(float(beta)), f"JAX: Expected NaN beta, got {beta}"
+        assert np.isnan(float(se)), f"JAX: Expected NaN SE, got {se}"
+        assert np.isnan(float(p_wald)), f"JAX: Expected NaN p-value, got {p_wald}"
+
+    @given(data=valid_lmm_inputs())
+    @settings(
+        max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_cpu_jax_wald_equivalence_normal_case(self, data):
+        """CPU and JAX Wald stats should match for normal inputs."""
+        import jax.numpy as jnp
+
+        from jamma.lmm.likelihood_jax import calc_wald_stats_jax
+
+        eigenvalues, Uab, n_cvt, n_samples = data
+        lambda_val = 1.0
+
+        # CPU path
+        Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
+        Pab = calc_pab(n_cvt, Hi_eval, Uab)
+        beta_cpu, se_cpu, p_cpu = calc_wald_test(lambda_val, Pab, n_cvt, n_samples)
+
+        # JAX path
+        beta_jax, se_jax, p_jax = calc_wald_stats_jax(
+            lambda_val,
+            jnp.array(eigenvalues),
+            jnp.array(Uab),
+            n_samples,
+        )
+
+        np.testing.assert_allclose(
+            beta_cpu, float(beta_jax), rtol=1e-6, err_msg="beta CPU/JAX mismatch"
+        )
+        np.testing.assert_allclose(
+            se_cpu, float(se_jax), rtol=1e-6, err_msg="SE CPU/JAX mismatch"
+        )
+        np.testing.assert_allclose(
+            p_cpu, float(p_jax), rtol=1e-6, err_msg="p-value CPU/JAX mismatch"
+        )
+
+    def test_nearly_constant_genotype_produces_valid_or_nan(self):
+        """Near-constant genotype should produce valid stats or NaN, never inf.
+
+        When a SNP has very low variance, numerical issues can arise.
+        The result should be either valid finite values or NaN, but never inf.
+        """
+        rng = np.random.default_rng(123)
+        n_samples = 50
+        n_cvt = 1
+
+        eigenvalues = np.abs(rng.standard_normal(n_samples)) + 0.1
+        U = np.eye(n_samples)
+        y = rng.standard_normal(n_samples)
+        W = np.ones((n_samples, 1))
+
+        # Nearly constant genotype: one different value
+        x = np.full(n_samples, 1.0)
+        x[0] = 2.0  # One outlier
+
+        Uab = compute_Uab(U.T @ W, U.T @ y, U.T @ x)
+        Hi_eval = 1.0 / (1.0 * eigenvalues + 1.0)
+        Pab = calc_pab(n_cvt, Hi_eval, Uab)
+
+        beta, se, p_wald = calc_wald_test(1.0, Pab, n_cvt, n_samples)
+
+        # Should be finite or NaN, never inf
+        assert np.isfinite(beta) or np.isnan(beta), f"Unexpected inf beta: {beta}"
+        assert np.isfinite(se) or np.isnan(se), f"Unexpected inf SE: {se}"
+        assert np.isfinite(p_wald) or np.isnan(
+            p_wald
+        ), f"Unexpected inf p-value: {p_wald}"
+
+    @given(
+        n_samples=st.integers(min_value=30, max_value=50),
+        seed=st.integers(min_value=0, max_value=2**32 - 1),
+    )
+    @settings(
+        max_examples=15, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_wald_stats_never_inf(self, n_samples, seed):
+        """Wald stats should never be infinite (either finite or NaN)."""
+        rng = np.random.default_rng(seed)
+        n_cvt = 1
+
+        eigenvalues = np.abs(rng.standard_normal(n_samples)) + 0.01
+        U = np.eye(n_samples)
+        y = rng.standard_normal(n_samples)
+        W = np.ones((n_samples, 1))
+        x = rng.standard_normal(n_samples)
+
+        Uab = compute_Uab(U.T @ W, U.T @ y, U.T @ x)
+        Hi_eval = 1.0 / (1.0 * eigenvalues + 1.0)
+        Pab = calc_pab(n_cvt, Hi_eval, Uab)
+
+        beta, se, p_wald = calc_wald_test(1.0, Pab, n_cvt, n_samples)
+
+        assert not np.isinf(beta), f"Infinite beta: {beta}"
+        assert not np.isinf(se), f"Infinite SE: {se}"
+        assert not np.isinf(p_wald), f"Infinite p-value: {p_wald}"
+
+    def test_negative_eigenvalue_handling(self):
+        """REML should handle negative eigenvalues gracefully.
+
+        Non-PSD kinship matrices can have negative eigenvalues.
+        The code uses log(abs(v)) to handle this, so REML should still be finite.
+        """
+        rng = np.random.default_rng(999)
+        n_samples = 50
+        n_cvt = 1
+
+        # Include some negative eigenvalues (non-PSD kinship)
+        eigenvalues = rng.standard_normal(n_samples)  # Some negative
+        eigenvalues = np.sort(eigenvalues)  # Sort ascending
+
+        U = np.eye(n_samples)
+        y = rng.standard_normal(n_samples)
+        W = np.ones((n_samples, 1))
+        x = rng.standard_normal(n_samples)
+
+        Uab = compute_Uab(U.T @ W, U.T @ y, U.T @ x)
+
+        # REML should still be finite
+        logl = reml_log_likelihood(1.0, eigenvalues, Uab, n_cvt)
+
+        assert np.isfinite(logl), f"Non-finite REML with negative eigenvalues: {logl}"
+
+    def test_cpu_jax_equivalence_with_negative_eigenvalues(self):
+        """CPU and JAX paths should agree even with negative eigenvalues."""
+        import jax.numpy as jnp
+
+        from jamma.lmm.likelihood_jax import reml_log_likelihood_jax
+
+        rng = np.random.default_rng(888)
+        n_samples = 50
+        n_cvt = 1
+
+        # Include some negative eigenvalues
+        eigenvalues = rng.standard_normal(n_samples)
+
+        U = np.eye(n_samples)
+        y = rng.standard_normal(n_samples)
+        W = np.ones((n_samples, 1))
+        x = rng.standard_normal(n_samples)
+
+        Uab = compute_Uab(U.T @ W, U.T @ y, U.T @ x)
+
+        # CPU path
+        logl_cpu = reml_log_likelihood(1.0, eigenvalues, Uab, n_cvt)
+
+        # JAX path
+        logl_jax = reml_log_likelihood_jax(
+            1.0,
+            jnp.array(eigenvalues),
+            jnp.array(Uab),
+        )
+
+        np.testing.assert_allclose(
+            logl_cpu,
+            float(logl_jax),
+            rtol=1e-5,
+            err_msg="CPU/JAX divergence with negative eigenvalues",
+        )

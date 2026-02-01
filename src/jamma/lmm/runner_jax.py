@@ -233,41 +233,13 @@ def _grid_optimize_lambda_batched(
     n_grid: int,
     n_refine: int,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """Hybrid grid + golden section lambda optimization.
+    """Batch lambda optimization using grid search + golden section refinement.
 
-    Mathematical Equivalence to Brent's Method:
-    ============================================
-    Both methods solve the same optimization problem: find λ* that maximizes
-    the REML log-likelihood ℓ(λ).
-
-    The REML surface ℓ(λ) is:
-    1. Continuous and differentiable
-    2. Typically unimodal (single maximum) due to the convexity properties
-       of the variance component model
-    3. Smooth with bounded second derivatives
-
-    Golden section search achieves convergence rate O(0.618^n) per iteration.
-    With n_grid=50 and 25 golden section iterations, we achieve:
-    - Initial bracket: ±1 grid cell around maximum
-    - Final tolerance: 0.618^25 ≈ 5e-6 relative to bracket width
-
-    This matches or exceeds Brent's method accuracy while maintaining
-    full vectorization across SNPs.
-
-    Args:
-        eigenvalues: Eigenvalues (n_samples,)
-        Uab_batch: Uab matrices (n_snps, n_samples, 6)
-        l_min, l_max: Lambda bounds
-        n_grid: Coarse grid points
-        n_refine: Golden section iterations
-
-    Returns:
-        (optimal_lambdas, optimal_logls) for each SNP
+    Delegates to golden_section_optimize_lambda with at least 20 iterations
+    to achieve ~1e-5 relative tolerance.
     """
     from jamma.lmm.likelihood_jax import golden_section_optimize_lambda
 
-    # Use hybrid grid + golden section for both accuracy and speed
-    # 20 iterations gives ~1e-5 relative tolerance (0.618^20 ≈ 6.6e-5)
     return golden_section_optimize_lambda(
         eigenvalues,
         Uab_batch,

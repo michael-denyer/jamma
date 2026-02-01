@@ -10,6 +10,7 @@ Key components:
 - optimize_lambda: Brent's method optimization for variance ratio
 - calc_wald_test: Wald test statistics (beta, SE, p-value)
 - run_lmm_association: Full LMM workflow for association testing
+- run_lmm_association_jax: JAX-optimized batch processing (faster for large datasets)
 """
 
 import numpy as np
@@ -18,10 +19,12 @@ from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.io import write_assoc_results
 from jamma.lmm.likelihood import compute_Uab
 from jamma.lmm.optimize import optimize_lambda_for_snp
+from jamma.lmm.runner_jax import run_lmm_association_jax
 from jamma.lmm.stats import AssocResult, calc_wald_test_from_uab
 
 __all__ = [
     "run_lmm_association",
+    "run_lmm_association_jax",
     "AssocResult",
     "eigendecompose_kinship",
     "write_assoc_results",

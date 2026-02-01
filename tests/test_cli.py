@@ -23,9 +23,11 @@ def test_cli_help():
 
 def test_cli_version():
     """Test that --version shows version number."""
+    import jamma
+
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
-    assert "0.1.0" in result.output
+    assert jamma.__version__ in result.output
 
 
 def test_cli_gk_help():

@@ -55,6 +55,7 @@ def numpy_kinship(X):
     return K
 
 
+@pytest.mark.benchmark
 class TestKinshipBenchmarks:
     """Benchmark kinship computation performance."""
 
@@ -114,6 +115,7 @@ class TestKinshipBenchmarks:
         assert result.shape == (500, 500)
 
 
+@pytest.mark.benchmark
 class TestKinshipScaling:
     """Test kinship computation scaling with data size."""
 
@@ -160,6 +162,8 @@ class TestKinshipScaling:
         assert result.shape == (100, 100)
 
 
+@pytest.mark.benchmark
+@pytest.mark.slow
 class TestJammaVsGemma:
     """Compare JAMMA performance against GEMMA (the target to beat)."""
 
@@ -202,7 +206,6 @@ class TestJammaVsGemma:
 
         return elapsed
 
-    @pytest.mark.slow
     def test_jamma_vs_gemma_mouse_hs1940(self, mouse_genotypes):
         """Compare JAMMA and GEMMA on mouse_hs1940 dataset.
 

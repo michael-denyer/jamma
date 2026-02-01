@@ -260,6 +260,51 @@ class TestEstimateStreamingMemory:
         expected_grid_reml = 50 * 10_000 * 8 / 1e9
         assert abs(est.grid_reml_gb - expected_grid_reml) < 1e-6
 
+    def test_memory_budget_insufficient_for_large_samples(self) -> None:
+        """Verify memory estimation correctly reports insufficient for large datasets.
+
+        This test validates that the memory model accurately predicts when
+        available memory is insufficient, which is critical for preventing OOM.
+        """
+        from unittest.mock import patch
+
+        # Mock low available memory (8GB)
+        with patch("psutil.virtual_memory") as mock_mem:
+            mock_obj = mock_mem.return_value
+            mock_obj.available = 8 * 1e9  # 8GB
+
+            # Estimate for 100k samples - eigendecomp needs ~160GB
+            # (kinship + eigenvectors = 2 * 100k^2 * 8 bytes = 160GB)
+            est = estimate_streaming_memory(100_000, 95_000)
+
+            # Should report insufficient (160GB > 8GB)
+            assert est.sufficient is False, (
+                f"100k samples should require ~{est.total_peak_gb:.0f}GB, "
+                f"exceeding mocked 8GB available"
+            )
+
+            # Available should reflect mocked value
+            assert est.available_gb == 8.0
+
+    def test_memory_budget_sufficient_for_small_samples(self) -> None:
+        """Verify memory estimation correctly reports sufficient for small datasets."""
+        from unittest.mock import patch
+
+        # Mock moderate available memory (32GB)
+        with patch("psutil.virtual_memory") as mock_mem:
+            mock_obj = mock_mem.return_value
+            mock_obj.available = 32 * 1e9  # 32GB
+
+            # Estimate for 10k samples - eigendecomp needs ~1.6GB
+            # (kinship + eigenvectors = 2 * 10k^2 * 8 bytes = 1.6GB)
+            est = estimate_streaming_memory(10_000, 95_000)
+
+            # Should report sufficient (1.6GB < 32GB)
+            assert est.sufficient is True, (
+                f"10k samples should require ~{est.total_peak_gb:.1f}GB, "
+                f"fitting in mocked 32GB available"
+            )
+
 
 class TestComputeKinshipStreaming:
     """Tests for compute_kinship_streaming function."""

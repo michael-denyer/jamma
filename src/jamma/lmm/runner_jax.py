@@ -350,8 +350,8 @@ def run_lmm_association_jax(
     Uty_jax = jax.device_put(Uty, device)
 
     # Process in chunks if needed
+    n_chunks = (n_filtered + chunk_size - 1) // chunk_size
     if chunk_size < n_filtered:
-        n_chunks = (n_filtered + chunk_size - 1) // chunk_size
         logger.info(
             f"Processing {n_filtered:,} SNPs in {n_chunks} chunks "
             f"({chunk_size:,} SNPs/chunk) to avoid buffer overflow"
@@ -363,36 +363,48 @@ def run_lmm_association_jax(
     all_ses = []
     all_pwalds = []
 
-    for chunk_start in range(0, n_filtered, chunk_size):
-        chunk_end = min(chunk_start + chunk_size, n_filtered)
-        actual_chunk_len = chunk_end - chunk_start
+    def _prepare_chunk(start: int) -> tuple[jnp.ndarray, int, bool]:
+        """Prepare a chunk for device transfer (CPU work)."""
+        end = min(start + chunk_size, n_filtered)
+        actual_len = end - start
 
-        # Extract, impute, and rotate genotypes for this chunk only
-        # This avoids materializing the full (n_samples, n_filtered) matrix
-        chunk_indices = snp_indices[chunk_start:chunk_end]
-        geno_chunk = genotypes[:, chunk_indices]  # View - no copy needed
-        chunk_means = col_means[chunk_indices]
+        chunk_indices = snp_indices[start:end]
+        geno_chunk = genotypes[:, chunk_indices]
+        chunk_means_local = col_means[chunk_indices]
         missing_mask = np.isnan(geno_chunk)
-        geno_chunk = np.where(
-            missing_mask, chunk_means[None, :], geno_chunk
-        )  # Allocates new
+        geno_chunk = np.where(missing_mask, chunk_means_local[None, :], geno_chunk)
 
-        # Pad last chunk to fixed size to avoid JAX recompilation
-        # JAX traces functions for each unique shape; padding keeps shapes constant
-        needs_padding = actual_chunk_len < chunk_size
-        if needs_padding:
-            pad_width = chunk_size - actual_chunk_len
+        needs_pad = actual_len < chunk_size
+        if needs_pad:
+            pad_width = chunk_size - actual_len
             geno_chunk = np.pad(geno_chunk, ((0, 0), (0, pad_width)), mode="constant")
 
-        # Rotate genotypes for this chunk and ensure contiguity for efficient transfer
-        UtG_chunk = np.ascontiguousarray(U.T @ geno_chunk)  # (n_samples, chunk_size)
-        UtG_jax = jax.device_put(UtG_chunk, device)
+        UtG_chunk = np.ascontiguousarray(U.T @ geno_chunk)
+        return UtG_chunk, actual_len, needs_pad
 
-        # Free NumPy arrays to reduce memory pressure
-        del geno_chunk, UtG_chunk
+    # Double buffering: overlap device transfer with computation
+    # While GPU computes on buffer A, CPU prepares and transfers buffer B
+    chunk_starts = list(range(0, n_filtered, chunk_size))
+
+    # Prepare first chunk
+    UtG_np, actual_len, needs_pad = _prepare_chunk(chunk_starts[0])
+    UtG_jax = jax.device_put(UtG_np, device)
+    del UtG_np
+
+    for i, _chunk_start in enumerate(chunk_starts):
+        actual_chunk_len = actual_len
+        needs_padding = needs_pad
+        current_UtG = UtG_jax
+
+        # Start async transfer of next chunk while computing current
+        if i + 1 < len(chunk_starts):
+            next_UtG_np, actual_len, needs_pad = _prepare_chunk(chunk_starts[i + 1])
+            # device_put is async - transfer starts immediately, overlaps with compute
+            UtG_jax = jax.device_put(next_UtG_np, device)
+            del next_UtG_np
 
         # Batch compute Uab for this chunk
-        Uab_batch = batch_compute_uab(UtW_jax, Uty_jax, UtG_jax)
+        Uab_batch = batch_compute_uab(UtW_jax, Uty_jax, current_UtG)
 
         # Precompute Iab (identity-weighted) once per chunk - avoids ~70x redundant
         # calc_pab_jax calls during lambda optimization
@@ -773,30 +785,51 @@ def run_lmm_association_streaming(
                 geno_subset[missing_mask, j] = filtered_means[local_idx]
 
         # Process in JAX chunks if needed (for buffer limit compliance)
+        # Double buffering: overlap device transfer with computation
         n_subset = geno_subset.shape[1]
-        for jax_start in range(0, n_subset, jax_chunk_size):
-            jax_end = min(jax_start + jax_chunk_size, n_subset)
-            actual_jax_len = jax_end - jax_start
+        jax_starts = list(range(0, n_subset, jax_chunk_size))
 
-            geno_jax_chunk = geno_subset[:, jax_start:jax_end]
+        def _prepare_jax_chunk(
+            start: int, geno: np.ndarray, total: int
+        ) -> tuple[np.ndarray, int, bool]:
+            """Prepare a JAX chunk for device transfer (CPU work)."""
+            end = min(start + jax_chunk_size, total)
+            actual_len = end - start
 
-            # Pad last JAX chunk if needed for JIT consistency
-            # JAX traces functions for each unique shape; padding keeps shapes constant
-            needs_padding = actual_jax_len < jax_chunk_size
-            if needs_padding:
-                pad_width = jax_chunk_size - actual_jax_len
+            geno_jax_chunk = geno[:, start:end]
+
+            needs_pad = actual_len < jax_chunk_size
+            if needs_pad:
+                pad_width = jax_chunk_size - actual_len
                 geno_jax_chunk = np.pad(
                     geno_jax_chunk, ((0, 0), (0, pad_width)), mode="constant"
                 )
 
-            # Per-chunk device transfer - only UtG changes per JAX chunk
-            # Shared arrays (eigenvalues, UtW_jax, Uty_jax) remain device-resident
-            # Ensure contiguity for efficient transfer
             UtG_chunk = np.ascontiguousarray(U.T @ geno_jax_chunk)
-            UtG_jax = jax.device_put(UtG_chunk, device)
+            return UtG_chunk, actual_len, needs_pad
+
+        # Prepare first JAX chunk
+        UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
+            jax_starts[0], geno_subset, n_subset
+        )
+        UtG_jax = jax.device_put(UtG_np, device)
+        del UtG_np
+
+        for i, _jax_start in enumerate(jax_starts):
+            current_actual_len = actual_jax_len
+            current_needs_padding = needs_padding
+            current_UtG = UtG_jax
+
+            # Start async transfer of next JAX chunk while computing current
+            if i + 1 < len(jax_starts):
+                UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
+                    jax_starts[i + 1], geno_subset, n_subset
+                )
+                UtG_jax = jax.device_put(UtG_np, device)
+                del UtG_np
 
             # Batch compute Uab
-            Uab_batch = batch_compute_uab(UtW_jax, Uty_jax, UtG_jax)
+            Uab_batch = batch_compute_uab(UtW_jax, Uty_jax, current_UtG)
 
             # Precompute Iab (identity-weighted) once per chunk - avoids ~70x redundant
             # calc_pab_jax calls during lambda optimization
@@ -813,7 +846,9 @@ def run_lmm_association_streaming(
             )
 
             # Strip padding, keep as JAX arrays (avoids per-chunk host transfer)
-            slice_len = actual_jax_len if needs_padding else len(best_lambdas)
+            slice_len = (
+                current_actual_len if current_needs_padding else len(best_lambdas)
+            )
             all_lambdas.append(best_lambdas[:slice_len])
             all_logls.append(best_logls[:slice_len])
             all_betas.append(betas[:slice_len])

@@ -17,6 +17,7 @@ import numpy as np
 from jax import jit
 
 from jamma.core import configure_jax
+from jamma.core.memory import check_memory_available
 from jamma.kinship.missing import impute_and_center
 
 # Ensure 64-bit precision for GEMMA equivalence
@@ -40,6 +41,7 @@ def _accumulate_kinship(K: jnp.ndarray, X_centered: jnp.ndarray) -> jnp.ndarray:
 def compute_centered_kinship(
     genotypes: np.ndarray,
     batch_size: int = 10000,
+    check_memory: bool = True,
 ) -> np.ndarray:
     """Compute centered relatedness matrix (GEMMA -gk 1).
 
@@ -56,9 +58,14 @@ def compute_centered_kinship(
             Values are typically 0, 1, or 2 representing minor allele counts.
         batch_size: SNPs per batch (default 10000, matches GEMMA).
             Batching prevents memory issues with large SNP counts.
+        check_memory: If True (default), check available memory before allocation
+            and raise MemoryError if insufficient.
 
     Returns:
         Kinship matrix (n_samples, n_samples), symmetric, scaled by n_snps.
+
+    Raises:
+        MemoryError: If check_memory=True and insufficient memory available.
 
     Example:
         >>> import numpy as np
@@ -70,6 +77,15 @@ def compute_centered_kinship(
         True
     """
     n_samples, n_snps = genotypes.shape
+
+    # Memory check before allocation
+    if check_memory:
+        # Kinship matrix: n^2 * 8 bytes (float64)
+        kinship_gb = n_samples**2 * 8 / 1e9
+        # Genotypes already allocated, but batch needs workspace
+        batch_gb = n_samples * batch_size * 8 / 1e9
+        required_gb = kinship_gb + batch_gb
+        check_memory_available(required_gb, operation="kinship computation")
 
     # Convert to JAX array
     X = jnp.array(genotypes, dtype=jnp.float64)

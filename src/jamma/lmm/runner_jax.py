@@ -94,7 +94,9 @@ from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood_jax import (
     batch_calc_wald_stats,
+    batch_compute_iab,
     batch_compute_uab,
+    golden_section_optimize_lambda,
 )
 from jamma.lmm.stats import AssocResult
 
@@ -288,9 +290,10 @@ def run_lmm_association_jax(
     # - eigenvalues: Used in every lambda optimization and Wald stat calculation
     # - UtW_jax: Rotated covariates (constant across SNPs)
     # - Uty_jax: Rotated phenotypes (constant across SNPs)
-    eigenvalues = jax.device_put(jnp.array(eigenvalues_np), device)
-    UtW_jax = jax.device_put(jnp.array(UtW), device)
-    Uty_jax = jax.device_put(jnp.array(Uty), device)
+    # Direct device_put - JAX handles numpy conversion efficiently
+    eigenvalues = jax.device_put(eigenvalues_np, device)
+    UtW_jax = jax.device_put(UtW, device)
+    Uty_jax = jax.device_put(Uty, device)
 
     # Process in chunks if needed
     if chunk_size < n_filtered:
@@ -313,10 +316,12 @@ def run_lmm_association_jax(
         # Extract, impute, and rotate genotypes for this chunk only
         # This avoids materializing the full (n_samples, n_filtered) matrix
         chunk_indices = snp_indices[chunk_start:chunk_end]
-        geno_chunk = genotypes[:, chunk_indices].copy()
+        geno_chunk = genotypes[:, chunk_indices]  # View - no copy needed
         chunk_means = col_means[chunk_indices]
         missing_mask = np.isnan(geno_chunk)
-        geno_chunk = np.where(missing_mask, chunk_means[None, :], geno_chunk)
+        geno_chunk = np.where(
+            missing_mask, chunk_means[None, :], geno_chunk
+        )  # Allocates new
 
         # Pad last chunk to fixed size to avoid JAX recompilation
         # JAX traces functions for each unique shape; padding keeps shapes constant
@@ -325,9 +330,9 @@ def run_lmm_association_jax(
             pad_width = chunk_size - actual_chunk_len
             geno_chunk = np.pad(geno_chunk, ((0, 0), (0, pad_width)), mode="constant")
 
-        # Rotate genotypes for this chunk
-        UtG_chunk = U.T @ geno_chunk  # (n_samples, chunk_size)
-        UtG_jax = jax.device_put(jnp.array(UtG_chunk), device)
+        # Rotate genotypes for this chunk and ensure contiguity for efficient transfer
+        UtG_chunk = np.ascontiguousarray(U.T @ geno_chunk)  # (n_samples, chunk_size)
+        UtG_jax = jax.device_put(UtG_chunk, device)
 
         # Free NumPy arrays to reduce memory pressure
         del geno_chunk, UtG_chunk
@@ -335,9 +340,13 @@ def run_lmm_association_jax(
         # Batch compute Uab for this chunk
         Uab_batch = batch_compute_uab(UtW_jax, Uty_jax, UtG_jax)
 
+        # Precompute Iab (identity-weighted) once per chunk - avoids ~70x redundant
+        # calc_pab_jax calls during lambda optimization
+        Iab_batch = batch_compute_iab(Uab_batch)
+
         # Grid-based lambda optimization (donate_argnums recycles Uab_batch memory)
         best_lambdas, best_logls = _grid_optimize_lambda_batched(
-            eigenvalues, Uab_batch, l_min, l_max, n_grid, n_refine
+            eigenvalues, Uab_batch, Iab_batch, l_min, l_max, n_grid, n_refine
         )
 
         # Batch compute Wald statistics
@@ -345,20 +354,20 @@ def run_lmm_association_jax(
             best_lambdas, eigenvalues, Uab_batch, n_samples
         )
 
-        # Strip padding if needed, then collect results
+        # Strip padding if needed, keep as JAX arrays to avoid per-chunk host transfer
         slice_len = actual_chunk_len if needs_padding else len(best_lambdas)
-        all_lambdas.append(np.array(best_lambdas[:slice_len]))
-        all_logls.append(np.array(best_logls[:slice_len]))
-        all_betas.append(np.array(betas[:slice_len]))
-        all_ses.append(np.array(ses[:slice_len]))
-        all_pwalds.append(np.array(p_walds[:slice_len]))
+        all_lambdas.append(best_lambdas[:slice_len])
+        all_logls.append(best_logls[:slice_len])
+        all_betas.append(betas[:slice_len])
+        all_ses.append(ses[:slice_len])
+        all_pwalds.append(p_walds[:slice_len])
 
-    # Concatenate chunk results
-    best_lambdas_np = np.concatenate(all_lambdas)
-    best_logls_np = np.concatenate(all_logls)
-    betas_np = np.concatenate(all_betas)
-    ses_np = np.concatenate(all_ses)
-    p_walds_np = np.concatenate(all_pwalds)
+    # Concatenate on device, then single host transfer
+    best_lambdas_np = np.asarray(jnp.concatenate(all_lambdas))
+    best_logls_np = np.asarray(jnp.concatenate(all_logls))
+    betas_np = np.asarray(jnp.concatenate(all_betas))
+    ses_np = np.asarray(jnp.concatenate(all_ses))
+    p_walds_np = np.asarray(jnp.concatenate(all_pwalds))
 
     return _build_results(
         snp_indices,
@@ -424,6 +433,7 @@ def _build_results(
 def _grid_optimize_lambda_batched(
     eigenvalues: jnp.ndarray,
     Uab_batch: jnp.ndarray,
+    Iab_batch: jnp.ndarray,
     l_min: float,
     l_max: float,
     n_grid: int,
@@ -431,14 +441,21 @@ def _grid_optimize_lambda_batched(
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Batch lambda optimization using grid search + golden section refinement.
 
-    Delegates to golden_section_optimize_lambda with at least 20 iterations
-    to achieve ~1e-5 relative tolerance.
-    """
-    from jamma.lmm.likelihood_jax import golden_section_optimize_lambda
+    Delegates to golden_section_optimize_lambda with precomputed Iab and at
+    least 20 iterations to achieve ~1e-5 relative tolerance.
 
+    Args:
+        eigenvalues: Eigenvalues (n_samples,)
+        Uab_batch: Uab matrices (n_snps, n_samples, 6)
+        Iab_batch: Precomputed identity-weighted Pab (n_snps, 3, 6)
+        l_min, l_max: Lambda bounds
+        n_grid: Coarse grid points
+        n_refine: Golden section iterations
+    """
     return golden_section_optimize_lambda(
         eigenvalues,
         Uab_batch,
+        Iab_batch,
         l_min=l_min,
         l_max=l_max,
         n_grid=n_grid,
@@ -642,9 +659,10 @@ def run_lmm_association_streaming(
     # Device-resident shared arrays - placed on device ONCE before chunk loop
     # These are NOT re-transferred inside the file chunk or JAX chunk loops
     # Only UtG (rotated genotypes) is transferred per-chunk as it differs by SNP
-    eigenvalues = jax.device_put(jnp.array(eigenvalues_np), device)
-    UtW_jax = jax.device_put(jnp.array(UtW), device)
-    Uty_jax = jax.device_put(jnp.array(Uty), device)
+    # Direct device_put - JAX handles numpy conversion efficiently
+    eigenvalues = jax.device_put(eigenvalues_np, device)
+    UtW_jax = jax.device_put(UtW, device)
+    Uty_jax = jax.device_put(Uty, device)
 
     # Compute chunk size for JAX buffer limits
     jax_chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid)
@@ -719,15 +737,20 @@ def run_lmm_association_streaming(
 
             # Per-chunk device transfer - only UtG changes per JAX chunk
             # Shared arrays (eigenvalues, UtW_jax, Uty_jax) remain device-resident
-            UtG_chunk = U.T @ geno_jax_chunk
-            UtG_jax = jax.device_put(jnp.array(UtG_chunk), device)
+            # Ensure contiguity for efficient transfer
+            UtG_chunk = np.ascontiguousarray(U.T @ geno_jax_chunk)
+            UtG_jax = jax.device_put(UtG_chunk, device)
 
             # Batch compute Uab
             Uab_batch = batch_compute_uab(UtW_jax, Uty_jax, UtG_jax)
 
+            # Precompute Iab (identity-weighted) once per chunk - avoids ~70x redundant
+            # calc_pab_jax calls during lambda optimization
+            Iab_batch = batch_compute_iab(Uab_batch)
+
             # Grid-based lambda optimization
             best_lambdas, best_logls = _grid_optimize_lambda_batched(
-                eigenvalues, Uab_batch, l_min, l_max, n_grid, n_refine
+                eigenvalues, Uab_batch, Iab_batch, l_min, l_max, n_grid, n_refine
             )
 
             # Batch compute Wald statistics
@@ -735,20 +758,20 @@ def run_lmm_association_streaming(
                 best_lambdas, eigenvalues, Uab_batch, n_samples
             )
 
-            # Strip padding if needed, then collect results
+            # Strip padding, keep as JAX arrays (avoids per-chunk host transfer)
             slice_len = actual_jax_len if needs_padding else len(best_lambdas)
-            all_lambdas.append(np.array(best_lambdas[:slice_len]))
-            all_logls.append(np.array(best_logls[:slice_len]))
-            all_betas.append(np.array(betas[:slice_len]))
-            all_ses.append(np.array(ses[:slice_len]))
-            all_pwalds.append(np.array(p_walds[:slice_len]))
+            all_lambdas.append(best_lambdas[:slice_len])
+            all_logls.append(best_logls[:slice_len])
+            all_betas.append(betas[:slice_len])
+            all_ses.append(ses[:slice_len])
+            all_pwalds.append(p_walds[:slice_len])
 
-    # Concatenate all results
-    best_lambdas_np = np.concatenate(all_lambdas)
-    best_logls_np = np.concatenate(all_logls)
-    betas_np = np.concatenate(all_betas)
-    ses_np = np.concatenate(all_ses)
-    p_walds_np = np.concatenate(all_pwalds)
+    # Concatenate on device, then single host transfer
+    best_lambdas_np = np.asarray(jnp.concatenate(all_lambdas))
+    best_logls_np = np.asarray(jnp.concatenate(all_logls))
+    betas_np = np.asarray(jnp.concatenate(all_betas))
+    ses_np = np.asarray(jnp.concatenate(all_ses))
+    p_walds_np = np.asarray(jnp.concatenate(all_pwalds))
 
     # Build results
     results = _build_results(

@@ -145,6 +145,33 @@ def reml_log_likelihood_jax(
     Returns:
         Log-likelihood value (scalar)
     """
+    # Compute Iab inline (identity weighting for logdet correction)
+    ones = jnp.ones(eigenvalues.shape[0], dtype=jnp.float64)
+    Iab = calc_pab_jax(ones, Uab)
+    return _reml_with_precomputed_iab(lambda_val, eigenvalues, Uab, Iab)
+
+
+@jit
+def _reml_with_precomputed_iab(
+    lambda_val: Float[Array, ""],
+    eigenvalues: Float[Array, " n"],
+    Uab: Float[Array, "n 6"],
+    Iab: Float[Array, "3 6"],
+) -> Float[Array, ""]:
+    """REML log-likelihood with precomputed Iab (avoids redundant computation).
+
+    This is the optimized inner loop - Iab can be computed once per SNP
+    and reused across all lambda evaluations during optimization.
+
+    Args:
+        lambda_val: Variance component ratio (scalar)
+        eigenvalues: Eigenvalues of kinship matrix (n_samples,)
+        Uab: Matrix products (n_samples, 6)
+        Iab: Precomputed identity-weighted Pab (3, 6) - constant for given Uab
+
+    Returns:
+        Log-likelihood value (scalar)
+    """
     n = eigenvalues.shape[0]
     n_cvt = 1
     nc_total = n_cvt + 1  # = 2
@@ -159,10 +186,6 @@ def reml_log_likelihood_jax(
 
     # Compute Pab with H-inverse weighting
     Pab = calc_pab_jax(Hi_eval, Uab)
-
-    # Compute Iab (identity weighting) for logdet correction
-    ones = jnp.ones(n, dtype=jnp.float64)
-    Iab = calc_pab_jax(ones, Uab)
 
     # logdet_hiw = log|WHiW| - log|WW|
     # For n_cvt=1: sum over i=0,1 (W and X)
@@ -232,10 +255,32 @@ def batch_compute_uab(
     )
 
 
-@partial(jit, static_argnums=(2, 3, 4, 5), donate_argnums=(1,))
+@jit
+def batch_compute_iab(
+    Uab_batch: Float[Array, "p n 6"],
+) -> Float[Array, "p 3 6"]:
+    """Precompute identity-weighted Iab for all SNPs (lambda-independent).
+
+    Iab is used in the logdet correction term of REML and only depends on Uab,
+    not lambda. By precomputing it once per chunk, we avoid redundant
+    computation during lambda optimization (~70 evaluations per SNP).
+
+    Args:
+        Uab_batch: Uab matrices (n_snps, n_samples, 6)
+
+    Returns:
+        Iab matrices (n_snps, 3, 6) - identity-weighted projections
+    """
+    n_samples = Uab_batch.shape[1]
+    ones = jnp.ones(n_samples, dtype=jnp.float64)
+    return vmap(lambda Uab: calc_pab_jax(ones, Uab))(Uab_batch)
+
+
+@partial(jit, static_argnums=(3, 4, 5, 6), donate_argnums=(1,))
 def golden_section_optimize_lambda(
     eigenvalues: Float[Array, " n"],
     Uab_batch: Float[Array, "p n 6"],
+    Iab_batch: Float[Array, "p 3 6"],
     l_min: float = 1e-5,
     l_max: float = 1e5,
     n_grid: int = 50,
@@ -246,6 +291,11 @@ def golden_section_optimize_lambda(
     This hybrid approach:
     1. Grid search to find approximate region (vectorized across SNPs)
     2. Golden section for precise convergence (vectorized across SNPs)
+
+    Performance Optimization:
+    ========================
+    Iab (identity-weighted projection) is precomputed once per chunk and passed
+    in, avoiding ~70 redundant calc_pab_jax calls per SNP during optimization.
 
     Mathematical Equivalence to Brent's Method:
     ============================================
@@ -265,6 +315,7 @@ def golden_section_optimize_lambda(
     Args:
         eigenvalues: Eigenvalues (n_samples,)
         Uab_batch: Uab matrices (n_snps, n_samples, 6)
+        Iab_batch: Precomputed identity-weighted Pab (n_snps, 3, 6)
         l_min, l_max: Lambda bounds
         n_grid: Coarse grid points
         n_iter: Golden section iterations (20 gives ~1e-5 tolerance)
@@ -281,7 +332,7 @@ def golden_section_optimize_lambda(
     lambdas = jnp.exp(log_lambdas)
 
     # Evaluate all SNPs at all grid points using vmap (stays on device)
-    all_logls = _batch_grid_reml(lambdas, eigenvalues, Uab_batch)
+    all_logls = _batch_grid_reml_with_iab(lambdas, eigenvalues, Uab_batch, Iab_batch)
 
     # Find best index per SNP
     best_idx = jnp.argmax(all_logls, axis=0)
@@ -294,13 +345,15 @@ def golden_section_optimize_lambda(
     a = log_lambdas[idx_low]
     b = log_lambdas[idx_high]
 
-    # Helper to compute REML at log-scale lambdas (batch) - stays on device
+    # Helper to compute REML at log-scale lambdas (batch) - uses precomputed Iab
     def compute_reml_batch(log_lams):
         lams = jnp.exp(log_lams)
         return vmap(
-            lambda lam, Uab: reml_log_likelihood_jax(lam, eigenvalues, Uab),
-            in_axes=(0, 0),
-        )(lams, Uab_batch)
+            lambda lam, Uab, Iab: _reml_with_precomputed_iab(
+                lam, eigenvalues, Uab, Iab
+            ),
+            in_axes=(0, 0, 0),
+        )(lams, Uab_batch, Iab_batch)
 
     # Initial probe points (golden ratio positions)
     c = b - phi * (b - a)
@@ -369,6 +422,38 @@ def _batch_grid_reml(
         return vmap(
             lambda Uab: reml_log_likelihood_jax(lam, eigenvalues, Uab), in_axes=0
         )(Uab_batch)
+
+    return vmap(reml_for_lambda)(lambdas)
+
+
+def _batch_grid_reml_with_iab(
+    lambdas: Float[Array, " g"],
+    eigenvalues: Float[Array, " n"],
+    Uab_batch: Float[Array, "p n 6"],
+    Iab_batch: Float[Array, "p 3 6"],
+) -> Float[Array, "g p"]:
+    """Compute REML at all grid points using precomputed Iab (optimized).
+
+    Uses vmap over lambda values to avoid Python loops and host/device sync.
+    Iab is precomputed once per chunk, avoiding redundant identity-weighted
+    projection computations (~n_grid fewer calc_pab_jax calls per SNP).
+
+    Args:
+        lambdas: Grid of lambda values (n_grid,)
+        eigenvalues: Eigenvalues (n_samples,)
+        Uab_batch: Uab matrices (n_snps, n_samples, 6)
+        Iab_batch: Precomputed identity-weighted Pab (n_snps, 3, 6)
+
+    Returns:
+        Log-likelihoods (n_grid, n_snps)
+    """
+
+    # vmap over lambda values, then vmap over SNPs
+    def reml_for_lambda(lam):
+        return vmap(
+            lambda Uab, Iab: _reml_with_precomputed_iab(lam, eigenvalues, Uab, Iab),
+            in_axes=(0, 0),
+        )(Uab_batch, Iab_batch)
 
     return vmap(reml_for_lambda)(lambdas)
 

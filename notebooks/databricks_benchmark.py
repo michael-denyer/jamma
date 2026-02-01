@@ -186,18 +186,38 @@ class BenchmarkConfig:
 
     @property
     def memory_estimate_gb(self) -> float:
-        kinship = self.n_samples**2 * 8 / 1e9
-        genotypes = self.n_samples * self.n_snps * 4 / 1e9
-        working = 50
-        return kinship + genotypes + working
+        """Get total memory estimate using jamma.core.memory module."""
+        from jamma.core.memory import estimate_workflow_memory
+
+        est = estimate_workflow_memory(self.n_samples, self.n_snps)
+        return est.total_gb
+
+    def memory_breakdown(self):
+        """Get detailed memory breakdown."""
+        from jamma.core.memory import estimate_workflow_memory
+
+        return estimate_workflow_memory(self.n_samples, self.n_snps)
+
+    def validate_memory(self) -> None:
+        """Raise MemoryError if insufficient memory for this config."""
+        from jamma.core.memory import check_memory_available
+
+        check_memory_available(
+            self.memory_estimate_gb,
+            safety_margin=0.1,
+            operation=f"benchmark {self.name}",
+        )
 
 
+# Benchmark configurations - target is 200k x 95k (fits in 512GB VM)
 CONFIGS = {
     "small": BenchmarkConfig("small", 1_000, 10_000, 10_000),
     "medium": BenchmarkConfig("medium", 10_000, 100_000, 10_000),
-    "large": BenchmarkConfig("large", 50_000, 500_000, 5_000),
-    "xlarge": BenchmarkConfig("xlarge", 100_000, 500_000, 2_000),
-    "target": BenchmarkConfig("target", 200_000, 500_000, 1_000),
+    "large": BenchmarkConfig("large", 50_000, 95_000, 10_000),
+    "xlarge": BenchmarkConfig("xlarge", 100_000, 95_000, 10_000),
+    "target": BenchmarkConfig(
+        "target", 200_000, 95_000, 95_000
+    ),  # Full 95k SNPs for LMM
 }
 
 for name, cfg in CONFIGS.items():
@@ -354,16 +374,23 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
     logger.info(f"BENCHMARK: {config_name.upper()}")
     logger.info(f"{'=' * 60}")
     logger.info(f"Samples: {config.n_samples:,}, SNPs: {config.n_snps:,}")
-    logger.info(f"Estimated memory: {config.memory_estimate_gb:.0f} GB")
 
-    # Memory check
-    available_gb = psutil.virtual_memory().available / 1e9
-    if config.memory_estimate_gb > available_gb * 0.9:
-        logger.warning(
-            f"Insufficient memory: need {config.memory_estimate_gb:.0f}GB, "
-            f"have {available_gb:.0f}GB"
-        )
-        profiler.error("system", "memory_check", MemoryError("Insufficient memory"))
+    # Memory breakdown
+    breakdown = config.memory_breakdown()
+    logger.info(
+        f"Memory estimate: {breakdown.total_gb:.0f}GB (peak during eigendecomp)"
+    )
+    logger.info(f"  Kinship: {breakdown.kinship_gb:.0f}GB")
+    logger.info(f"  Eigenvectors: {breakdown.eigenvectors_gb:.0f}GB")
+    logger.info(f"  Genotypes: {breakdown.genotypes_gb:.0f}GB")
+    logger.info(f"  Available: {breakdown.available_gb:.0f}GB")
+
+    # Memory validation using jamma.core.memory
+    try:
+        config.validate_memory()
+    except MemoryError as e:
+        logger.warning(str(e))
+        profiler.error("system", "memory_check", e)
         return {"config": config_name, "error": "memory"}, profiler.to_dataframe()
 
     results = {"config": config_name, "run_id": run_id}

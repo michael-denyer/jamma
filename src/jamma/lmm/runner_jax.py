@@ -56,6 +56,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from jamma.core.memory import estimate_workflow_memory
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood_jax import (
     batch_calc_wald_stats,
@@ -77,6 +78,7 @@ def run_lmm_association_jax(
     n_grid: int = 50,
     n_refine: int = 10,
     use_gpu: bool = False,
+    check_memory: bool = True,
 ) -> list[AssocResult]:
     """Run LMM association tests using JAX-optimized batch processing.
 
@@ -108,12 +110,15 @@ def run_lmm_association_jax(
         n_grid: Grid search resolution for initial lambda bracketing
         n_refine: Golden section iterations for lambda refinement (min 20 for 1e-5 tol)
         use_gpu: Whether to use GPU acceleration (requires JAX GPU setup)
+        check_memory: If True (default), check available memory before workflow
+            and raise MemoryError if insufficient.
 
     Returns:
         List of AssocResult for each SNP that passes filtering
 
     Raises:
         NotImplementedError: If covariates are provided (not yet supported)
+        MemoryError: If check_memory=True and insufficient memory available.
     """
     # Guard: covariates not yet supported in JAX path
     if covariates is not None:
@@ -121,6 +126,20 @@ def run_lmm_association_jax(
             "JAX runner does not yet support covariates beyond intercept. "
             "Use run_lmm_association() for covariate support, or pass covariates=None."
         )
+
+    # Memory check before workflow
+    n_samples, n_snps = genotypes.shape
+    if check_memory:
+        est = estimate_workflow_memory(n_samples, n_snps)
+        if not est.sufficient:
+            raise MemoryError(
+                f"Insufficient memory for LMM workflow with {n_samples:,} samples × "
+                f"{n_snps:,} SNPs.\n"
+                f"Need: {est.total_gb:.1f}GB, Available: {est.available_gb:.1f}GB\n"
+                f"Breakdown: kinship={est.kinship_gb:.1f}GB, "
+                f"eigenvectors={est.eigenvectors_gb:.1f}GB, "
+                f"genotypes={est.genotypes_gb:.1f}GB"
+            )
 
     # Configure JAX device with safe GPU detection
     device = jax.devices("cpu")[0]

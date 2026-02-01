@@ -18,6 +18,8 @@ Usage:
     from jamma.lmm.likelihood_jax import batch_reml_log_likelihood
 """
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 from jax import jit, vmap
@@ -217,32 +219,7 @@ def batch_compute_uab(
     )
 
 
-@jit
-def batch_reml_at_lambda(
-    lambda_val: float,
-    eigenvalues: jnp.ndarray,
-    Uab_batch: jnp.ndarray,
-) -> jnp.ndarray:
-    """Evaluate REML log-likelihood for all SNPs at a fixed lambda.
-
-    This is the key function for grid-based optimization: evaluate
-    the likelihood at multiple lambda values for all SNPs in parallel.
-
-    Args:
-        lambda_val: Single lambda value to evaluate
-        eigenvalues: Eigenvalues (n_samples,)
-        Uab_batch: Uab matrices for all SNPs (n_snps, n_samples, 6)
-
-    Returns:
-        Log-likelihoods for all SNPs (n_snps,)
-    """
-    # vmap over SNPs (first axis of Uab_batch)
-    batch_fn = vmap(
-        lambda Uab: reml_log_likelihood_jax(lambda_val, eigenvalues, Uab), in_axes=0
-    )
-    return batch_fn(Uab_batch)
-
-
+@partial(jit, static_argnums=(2, 3, 4, 5))
 def golden_section_optimize_lambda(
     eigenvalues: jnp.ndarray,
     Uab_batch: jnp.ndarray,
@@ -412,18 +389,24 @@ def calc_wald_stats_jax(
     P_YY = Pab[n_cvt, _IDX_YY]
     Px_YY = Pab[n_cvt + 1, _IDX_YY]  # After projecting out W and X
 
+    # Guard against non-positive Px_YY (matches NumPy path guards)
+    Px_YY_safe = jnp.maximum(Px_YY, 1e-10)
+
     # Effect size and standard error
     beta = P_XY / P_XX
-    tau = df / Px_YY
+    tau = df / Px_YY_safe
     se = jnp.sqrt(1.0 / (tau * P_XX))
 
     # F-statistic and p-value
-    f_stat = (P_YY - Px_YY) * tau
+    f_stat = (P_YY - Px_YY_safe) * tau
 
-    # P-value using beta incomplete function
-    # F-dist SF = I_{df2/(df2+df1*x)}(df2/2, df1/2)
-    z = df / (df + f_stat)
+    # Guard: if f_stat <= 0, p-value = 1.0 (no evidence against null)
+    # Clamp z to [0, 1] to ensure betainc is well-defined
+    z = df / (df + jnp.maximum(f_stat, 1e-10))
+    z = jnp.clip(z, 0.0, 1.0)
     p_wald = jax.scipy.special.betainc(df / 2.0, 0.5, z)
+    # If f_stat was non-positive, return p=1.0
+    p_wald = jnp.where(f_stat <= 0, 1.0, p_wald)
 
     return beta, se, p_wald
 

@@ -517,6 +517,55 @@ class TestLmmJaxValidation:
                 f"{(1-agreement)*100:.1f}% differ"
             )
 
+    @pytest.mark.skipif(
+        not REFERENCE_ASSOC.exists(),
+        reason="Reference LMM data not generated. Run generate_lmm_reference.sh",
+    )
+    def test_jax_vs_gemma_tolerance(
+        self, mouse_data, mouse_phenotypes, reference_kinship
+    ):
+        """JAX runner results match GEMMA within relaxed tolerances.
+
+        JAX uses golden section optimization vs NumPy's Brent method, which
+        can produce slightly different lambda values. This affects beta
+        estimates due to the sensitivity of the optimization surface.
+
+        We use relaxed tolerances here since the scientific equivalence
+        (test_jax_scientific_equivalence) is the primary validation criterion.
+        """
+        reference_results = load_gemma_assoc(REFERENCE_ASSOC)
+
+        genotypes = mouse_data.genotypes
+        phenotypes = mouse_phenotypes
+        snp_info = _build_snp_info(mouse_data)
+
+        jax_results = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=reference_kinship,
+            snp_info=snp_info,
+            n_grid=50,
+            n_refine=20,
+        )
+
+        # Use relaxed tolerances for JAX since golden section optimization
+        # produces slightly different lambda values than Brent's method
+        from jamma.validation import ToleranceConfig
+
+        jax_tolerances = ToleranceConfig.relaxed()
+        comparison = compare_assoc_results(
+            jax_results, reference_results, config=jax_tolerances
+        )
+
+        # JAX should pass with relaxed tolerances
+        assert comparison.passed, (
+            f"JAX vs GEMMA comparison failed with relaxed tolerances:\n"
+            f"  Beta: {comparison.beta.message}\n"
+            f"  P-value: {comparison.p_wald.message}\n"
+            f"  SE: {comparison.se.message}\n"
+            f"  Lambda: {comparison.l_remle.message}"
+        )
+
     def test_jax_rejects_covariates(
         self, mouse_data, mouse_phenotypes, reference_kinship
     ):

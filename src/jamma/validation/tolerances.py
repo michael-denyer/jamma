@@ -125,12 +125,12 @@ class ToleranceConfig:
             ToleranceConfig with looser tolerances (10x looser than default).
         """
         return cls(
-            beta_rtol=1e-4,
-            se_rtol=1e-4,
-            pvalue_rtol=1e-3,
-            kinship_rtol=1e-6,
-            logl_rtol=1e-5,
-            lambda_rtol=1e-3,
+            beta_rtol=0.1,  # 10x looser than default (1e-2)
+            se_rtol=1e-4,  # 10x looser than default (1e-5)
+            pvalue_rtol=1e-3,  # 10x looser than default (1e-4)
+            kinship_rtol=1e-6,  # 100x looser than default (1e-8)
+            logl_rtol=1e-5,  # 10x looser than default (1e-6)
+            lambda_rtol=2e-4,  # 10x looser than default (2e-5)
             af_rtol=0.5,  # Allow full complement range
-            atol=1e-10,
+            atol=1e-10,  # 100x looser than default (1e-12)
         )

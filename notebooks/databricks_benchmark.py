@@ -14,12 +14,30 @@
 # MAGIC %md
 # MAGIC ### Install Dependencies
 # MAGIC
-# MAGIC JAX 0.8+ requires NumPy 2.0+. Install numpy first to ensure compatibility.
+# MAGIC JAX 0.8+ requires NumPy 2.0+. Force upgrade numpy before installing JAX.
+# MAGIC
+# MAGIC **IMPORTANT:** Run `dbutils.library.restartPython()` after pip installs.
 
 # COMMAND ----------
 
-# MAGIC %pip install numpy>=2.0 jax>=0.8 jaxlib>=0.8 psutil
-# MAGIC %pip install git+https://github.com/michael-denyer/jamma.git
+# MAGIC %pip install --upgrade --force-reinstall "numpy>=2.0"
+
+# COMMAND ----------
+
+# MAGIC %pip install "jax>=0.8" "jaxlib>=0.8" psutil
+
+# COMMAND ----------
+
+# MAGIC %pip install --no-deps git+https://github.com/michael-denyer/jamma.git
+
+# COMMAND ----------
+
+# MAGIC %pip install bed-reader jaxtyping numba typer loguru
+
+# COMMAND ----------
+
+# Restart Python kernel to load new numpy - MUST run this cell
+dbutils.library.restartPython()  # noqa: F821
 
 # COMMAND ----------
 
@@ -30,7 +48,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -106,7 +124,7 @@ class BenchmarkProfiler:
         self._start_memory[key] = self._get_memory_gb()
 
         event = ProfileEvent(
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             event_type="start",
             component=component,
             phase=phase,
@@ -125,7 +143,7 @@ class BenchmarkProfiler:
         memory_delta = end_memory - self._start_memory.get(key, end_memory)
 
         event = ProfileEvent(
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             event_type="end",
             component=component,
             phase=phase,
@@ -143,7 +161,7 @@ class BenchmarkProfiler:
 
     def error(self, component: str, phase: str, error: Exception):
         event = ProfileEvent(
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             event_type="error",
             component=component,
             phase=phase,
@@ -466,7 +484,7 @@ BENCHMARK_SCALES = ["small", "medium", "large", "xlarge", "target"]
 all_results = []
 all_events = []
 
-timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
 run_id = f"benchmark_{timestamp}"
 
 for scale in BENCHMARK_SCALES:

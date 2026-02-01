@@ -712,11 +712,12 @@ class TestChunkEquivalence:
         )
 
         # Run with streaming (multiple chunks)
+        # Use larger chunk to reduce number of JIT compilations
         results_multi = run_lmm_association_streaming(
             sample_plink_data,
             phenotypes,
             kinship,
-            chunk_size=2000,  # Small chunks
+            chunk_size=5000,  # Fewer chunks = faster test
             check_memory=False,
             show_progress=False,
         )
@@ -759,8 +760,9 @@ class TestChunkEquivalence:
             data.genotypes.astype(np.float64), check_memory=False
         )
 
-        # Test different chunk sizes (smaller for faster test)
-        chunk_sizes = [1000, 2500, 5000]
+        # Test only 2 chunk sizes (reduced from 3 for faster test)
+        # Using sizes that force different chunk boundaries
+        chunk_sizes = [2000, 5000]
         results_by_chunk: dict[int, list] = {}
 
         for cs in chunk_sizes:

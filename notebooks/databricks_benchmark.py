@@ -309,7 +309,7 @@ def benchmark_lmm_cpu(
 
     results = run_lmm_association(
         genotypes=genotypes,
-        phenotype=phenotype,
+        phenotypes=phenotype,
         kinship=kinship,
     )
 
@@ -337,7 +337,7 @@ def benchmark_lmm_jax(
     profiler.start("lmm_jax", "warmup")
     _ = run_lmm_association_jax(
         genotypes=genotypes[:, : min(100, actual_snps)],
-        phenotype=phenotype,
+        phenotypes=phenotype,
         kinship=kinship,
     )
     profiler.end("lmm_jax", "warmup")
@@ -348,7 +348,7 @@ def benchmark_lmm_jax(
 
     results = run_lmm_association_jax(
         genotypes=genotypes,
-        phenotype=phenotype,
+        phenotypes=phenotype,
         kinship=kinship,
     )
 
@@ -562,17 +562,15 @@ else:
 # MAGIC Compare JAMMA results against GEMMA reference at 10K samples.
 # MAGIC This validates numerical equivalence before trusting large-scale results.
 # MAGIC
-# MAGIC **Cluster Setup (if GEMMA not available):**
-# MAGIC ```bash
-# MAGIC # Option 1: Install via conda (recommended)
-# MAGIC conda install -c bioconda gemma
-# MAGIC
-# MAGIC # Option 2: Download binary
-# MAGIC wget https://github.com/genetics-statistics/GEMMA/releases/download/v0.98.5/gemma-0.98.5-linux-static-AMD64.gz
-# MAGIC gunzip gemma-0.98.5-linux-static-AMD64.gz
-# MAGIC chmod +x gemma-0.98.5-linux-static-AMD64
-# MAGIC mv gemma-0.98.5-linux-static-AMD64 /usr/local/bin/gemma
-# MAGIC ```
+# MAGIC **GEMMA Binary:**
+# MAGIC Set `GEMMA_PATH` below if GEMMA is installed at a custom location.
+# MAGIC Otherwise, the notebook will search PATH.
+
+# COMMAND ----------
+
+# GEMMA binary path - set this if GEMMA is at a custom location
+# On Databricks, you might use: "/Workspace/Users/your.name@company.com/gemma"
+GEMMA_PATH = os.environ.get("GEMMA_PATH", None)
 
 # COMMAND ----------
 
@@ -581,16 +579,18 @@ def validate_vs_gemma(
     n_samples: int = 10_000,
     n_snps: int = 1_000,
     seed: int = 42,
+    gemma_path: str | None = None,
 ) -> dict | None:
     """Validate JAMMA against GEMMA at small scale.
 
     Runs both tools on synthetic data and compares results.
-    Requires GEMMA binary in PATH.
+    Requires GEMMA binary in PATH or specified via gemma_path.
 
     Args:
         n_samples: Number of samples for validation.
         n_snps: Number of SNPs for validation.
         seed: Random seed for reproducibility.
+        gemma_path: Path to GEMMA binary. If None, searches PATH and GEMMA_PATH.
 
     Returns:
         Dict with comparison metrics, or None if GEMMA not available.
@@ -600,10 +600,11 @@ def validate_vs_gemma(
     import tempfile
     from pathlib import Path
 
-    # Check if GEMMA available
-    if not shutil.which("gemma"):
-        logger.warning("GEMMA not found in PATH - skipping validation")
-        logger.info("See cluster setup instructions above to install GEMMA")
+    # Find GEMMA binary
+    gemma_bin = gemma_path or GEMMA_PATH or shutil.which("gemma")
+    if not gemma_bin or not Path(gemma_bin).exists():
+        logger.warning("GEMMA not found - skipping validation")
+        logger.info("Set GEMMA_PATH variable or pass gemma_path argument")
         return None
 
     logger.info(f"Running GEMMA validation: {n_samples:,} samples x {n_snps:,} SNPs")
@@ -647,7 +648,7 @@ def validate_vs_gemma(
 
         try:
             subprocess.run(
-                ["gemma", "-bfile", str(prefix), "-gk", "1", "-o", "kinship"],
+                [gemma_bin, "-bfile", str(prefix), "-gk", "1", "-o", "kinship"],
                 cwd=str(output_dir),
                 capture_output=True,
                 check=True,
@@ -658,7 +659,7 @@ def validate_vs_gemma(
             kinship_file = output_dir / "output" / "kinship.cXX.txt"
             subprocess.run(
                 [
-                    "gemma",
+                    gemma_bin,
                     "-bfile",
                     str(prefix),
                     "-k",
@@ -695,7 +696,7 @@ def validate_vs_gemma(
 
     jamma_results = run_lmm_association(
         genotypes=genotypes,
-        phenotype=phenotype,
+        phenotypes=phenotype,
         kinship=jamma_kinship,
         snp_info=snp_info,
     )

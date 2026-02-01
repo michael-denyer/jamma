@@ -13,10 +13,18 @@ from jamma.core.jax_config import (
     get_jax_info,
     verify_jax_installation,
 )
+from jamma.core.memory import (
+    MemoryBreakdown,
+    check_memory_available,
+    estimate_workflow_memory,
+)
 
 __all__ = [
     "OutputConfig",
     "configure_jax",
     "get_jax_info",
     "verify_jax_installation",
+    "MemoryBreakdown",
+    "check_memory_available",
+    "estimate_workflow_memory",
 ]

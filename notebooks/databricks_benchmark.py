@@ -553,3 +553,249 @@ if recommendations:
         print(f"\n{i}. {rec}")
 else:
     print("\nNo critical issues detected.")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## GEMMA Validation (10K Scale)
+# MAGIC
+# MAGIC Compare JAMMA results against GEMMA reference at 10K samples.
+# MAGIC This validates numerical equivalence before trusting large-scale results.
+# MAGIC
+# MAGIC **Cluster Setup (if GEMMA not available):**
+# MAGIC ```bash
+# MAGIC # Option 1: Install via conda (recommended)
+# MAGIC conda install -c bioconda gemma
+# MAGIC
+# MAGIC # Option 2: Download binary
+# MAGIC wget https://github.com/genetics-statistics/GEMMA/releases/download/v0.98.5/gemma-0.98.5-linux-static-AMD64.gz
+# MAGIC gunzip gemma-0.98.5-linux-static-AMD64.gz
+# MAGIC chmod +x gemma-0.98.5-linux-static-AMD64
+# MAGIC mv gemma-0.98.5-linux-static-AMD64 /usr/local/bin/gemma
+# MAGIC ```
+
+# COMMAND ----------
+
+
+def validate_vs_gemma(
+    n_samples: int = 10_000,
+    n_snps: int = 1_000,
+    seed: int = 42,
+) -> dict | None:
+    """Validate JAMMA against GEMMA at small scale.
+
+    Runs both tools on synthetic data and compares results.
+    Requires GEMMA binary in PATH.
+
+    Args:
+        n_samples: Number of samples for validation.
+        n_snps: Number of SNPs for validation.
+        seed: Random seed for reproducibility.
+
+    Returns:
+        Dict with comparison metrics, or None if GEMMA not available.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    # Check if GEMMA available
+    if not shutil.which("gemma"):
+        logger.warning("GEMMA not found in PATH - skipping validation")
+        logger.info("See cluster setup instructions above to install GEMMA")
+        return None
+
+    logger.info(f"Running GEMMA validation: {n_samples:,} samples x {n_snps:,} SNPs")
+
+    # Generate synthetic data
+    rng = np.random.default_rng(seed)
+    maf = rng.uniform(0.05, 0.5, n_snps)
+
+    genotypes = np.zeros((n_samples, n_snps), dtype=np.float32)
+    for j in range(n_snps):
+        p = maf[j]
+        probs = [(1 - p) ** 2, 2 * p * (1 - p), p**2]
+        genotypes[:, j] = rng.choice([0, 1, 2], size=n_samples, p=probs)
+
+    # Simple phenotype
+    phenotype = rng.standard_normal(n_samples)
+    phenotype = (phenotype - phenotype.mean()) / phenotype.std()
+
+    # Create temp directory for PLINK files
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        prefix = tmpdir / "test"
+
+        # Write PLINK .fam file
+        with open(f"{prefix}.fam", "w") as f:
+            for i in range(n_samples):
+                f.write(f"FAM{i} IND{i} 0 0 0 {phenotype[i]:.6f}\n")
+
+        # Write PLINK .bim file
+        with open(f"{prefix}.bim", "w") as f:
+            for j in range(n_snps):
+                f.write(f"1 rs{j} 0 {j * 1000} A G\n")
+
+        # Write PLINK .bed file (simplified - proper binary format)
+        # This is a simplified version; production would use bed-reader
+        _write_bed_file(f"{prefix}.bed", genotypes)
+
+        # Run GEMMA kinship
+        output_dir = tmpdir / "output"
+        output_dir.mkdir()
+
+        try:
+            subprocess.run(
+                ["gemma", "-bfile", str(prefix), "-gk", "1", "-o", "kinship"],
+                cwd=str(output_dir),
+                capture_output=True,
+                check=True,
+                timeout=300,
+            )
+
+            # Run GEMMA LMM
+            kinship_file = output_dir / "output" / "kinship.cXX.txt"
+            subprocess.run(
+                [
+                    "gemma",
+                    "-bfile",
+                    str(prefix),
+                    "-k",
+                    str(kinship_file),
+                    "-lmm",
+                    "1",
+                    "-o",
+                    "assoc",
+                ],
+                cwd=str(output_dir),
+                capture_output=True,
+                check=True,
+                timeout=600,
+            )
+        except subprocess.TimeoutExpired:
+            logger.error("GEMMA timed out")
+            return None
+        except subprocess.CalledProcessError as e:
+            logger.error(f"GEMMA failed: {e.stderr.decode()}")
+            return None
+
+        # Load GEMMA results
+        gemma_kinship = np.loadtxt(output_dir / "output" / "kinship.cXX.txt")
+        gemma_assoc = pd.read_csv(output_dir / "output" / "assoc.assoc.txt", sep="\t")
+
+    # Run JAMMA
+    logger.info("Running JAMMA...")
+    snp_info = [
+        {"chr": "1", "rs": f"rs{j}", "pos": j * 1000, "a1": "A", "a0": "G"}
+        for j in range(n_snps)
+    ]
+
+    jamma_kinship = compute_centered_kinship(genotypes, check_memory=False)
+
+    jamma_results = run_lmm_association(
+        genotypes=genotypes,
+        phenotype=phenotype,
+        kinship=jamma_kinship,
+        snp_info=snp_info,
+    )
+
+    # Compare kinship
+    kinship_diff = np.abs(jamma_kinship - gemma_kinship)
+    kinship_max_diff = np.max(kinship_diff)
+    kinship_rel_diff = kinship_max_diff / (np.abs(gemma_kinship).max() + 1e-10)
+
+    # Compare association results
+    jamma_df = pd.DataFrame([vars(r) for r in jamma_results])
+
+    # Merge on rs ID
+    merged = pd.merge(
+        gemma_assoc,
+        jamma_df,
+        left_on="rs",
+        right_on="rs",
+        suffixes=("_gemma", "_jamma"),
+    )
+
+    beta_diff = np.abs(merged["beta_gemma"] - merged["beta_jamma"])
+    beta_rel_diff = beta_diff / (np.abs(merged["beta_gemma"]) + 1e-10)
+
+    pval_diff = np.abs(merged["p_wald_gemma"] - merged["p_wald_jamma"])
+    pval_rel_diff = pval_diff / (merged["p_wald_gemma"] + 1e-10)
+
+    results = {
+        "n_samples": n_samples,
+        "n_snps": n_snps,
+        "kinship_max_abs_diff": float(kinship_max_diff),
+        "kinship_max_rel_diff": float(kinship_rel_diff),
+        "beta_max_rel_diff": float(beta_rel_diff.max()),
+        "beta_mean_rel_diff": float(beta_rel_diff.mean()),
+        "pval_max_rel_diff": float(pval_rel_diff.max()),
+        "pval_mean_rel_diff": float(pval_rel_diff.mean()),
+        "kinship_pass": kinship_rel_diff < 1e-8,
+        "beta_pass": beta_rel_diff.max() < 1e-6,
+        "pval_pass": pval_rel_diff.max() < 1e-8,
+    }
+
+    results["overall_pass"] = all(
+        [results["kinship_pass"], results["beta_pass"], results["pval_pass"]]
+    )
+
+    # Log results
+    logger.info("=" * 60)
+    logger.info("GEMMA VALIDATION RESULTS")
+    logger.info("=" * 60)
+    logger.info(f"Kinship max rel diff: {results['kinship_max_rel_diff']:.2e}")
+    logger.info(f"Beta max rel diff:    {results['beta_max_rel_diff']:.2e}")
+    logger.info(f"P-value max rel diff: {results['pval_max_rel_diff']:.2e}")
+    logger.info(f"Overall: {'PASS' if results['overall_pass'] else 'FAIL'}")
+
+    return results
+
+
+def _write_bed_file(path: str, genotypes: np.ndarray) -> None:
+    """Write genotypes to PLINK .bed format.
+
+    Simplified version for validation - writes genotypes in proper binary format.
+    """
+    n_samples, n_snps = genotypes.shape
+
+    # BED file magic bytes
+    magic = bytes([0x6C, 0x1B, 0x01])  # PLINK 1.9 format, SNP-major
+
+    # Pack genotypes: 4 samples per byte, 00=hom ref, 01=het, 10=missing, 11=hom alt
+    # PLINK encoding: 00=hom A1, 01=het, 10=missing, 11=hom A2
+    # Our genotypes: 0=hom ref, 1=het, 2=hom alt, nan=missing
+    genotypes = genotypes.T  # SNP-major
+
+    bytes_per_snp = (n_samples + 3) // 4
+    data = bytearray(len(magic) + n_snps * bytes_per_snp)
+    data[:3] = magic
+
+    for j in range(n_snps):
+        for i in range(n_samples):
+            byte_idx = 3 + j * bytes_per_snp + i // 4
+            bit_idx = (i % 4) * 2
+
+            g = genotypes[j, i]
+            if np.isnan(g):
+                code = 0b01  # Missing in PLINK
+            elif g == 0:
+                code = 0b00  # Hom ref
+            elif g == 1:
+                code = 0b10  # Het (note: PLINK uses 10 for het)
+            else:
+                code = 0b11  # Hom alt
+
+            data[byte_idx] |= code << bit_idx
+
+    with open(path, "wb") as f:
+        f.write(data)
+
+
+# COMMAND ----------
+
+# Run GEMMA validation (uncomment to execute)
+# gemma_results = validate_vs_gemma(n_samples=10_000, n_snps=1_000)
+# if gemma_results:
+#     display(pd.DataFrame([gemma_results]))  # noqa: F821

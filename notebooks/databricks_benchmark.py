@@ -32,7 +32,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install bed-reader jaxtyping numba typer loguru
+# MAGIC %pip install bed-reader jaxtyping typer loguru tqdm
 
 # COMMAND ----------
 

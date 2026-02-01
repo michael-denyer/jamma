@@ -47,10 +47,11 @@ Chunked Processing
 ==================
 For large-scale analyses (>25K samples), SNPs are processed in chunks to:
 1. Avoid JAX int32 buffer index overflow (keeps elements below INT32_MAX)
-2. Reduce peak memory by streaming genotype rotation per chunk (like GEMMA)
+2. Avoid materializing full rotated genotype matrix UtG (n_samples × n_snps)
 
-This memory-bounded approach means JAMMA doesn't need to materialize the full
-rotated genotype matrix (n_samples × n_snps), matching GEMMA's streaming model.
+Note: The input genotypes array must still fit in memory. Chunking only reduces
+peak memory for intermediate arrays (UtG, Uab). For true streaming from disk,
+use run_lmm_association() (NumPy path) with external chunking of genotypes.
 
 Usage:
     from jamma.lmm.runner_jax import run_lmm_association_jax
@@ -134,13 +135,15 @@ def run_lmm_association_jax(
     If covariates are provided, a NotImplementedError is raised.
 
     Memory Scaling:
-        SNPs are processed in chunks to bound memory usage. Each chunk materializes:
+        SNPs are processed in chunks to bound intermediate array sizes:
         - Uab array: (chunk_size, n_samples, 6) for projection computation
         - Lambda grid: (n_grid, chunk_size) for optimization
+        - UtG_chunk: (n_samples, chunk_size) rotated genotypes per chunk
 
-        The chunk size is automatically computed to avoid JAX int32 overflow while
-        streaming genotype rotation per chunk (similar to GEMMA's memory model).
-        Peak memory is dominated by kinship eigendecomposition, not SNP count.
+        Chunk size is computed to avoid JAX int32 buffer overflow. Note that:
+        - Input genotypes array must still fit in memory (O(n_samples × n_snps))
+        - Kinship and eigenvectors require O(n_samples²) memory
+        - GPU mode transfers each chunk from CPU to device (rotation is CPU)
 
     Args:
         genotypes: Genotype matrix (n_samples, n_snps) with values 0, 1, 2
@@ -262,6 +265,7 @@ def run_lmm_association_jax(
 
     for chunk_start in range(0, n_filtered, chunk_size):
         chunk_end = min(chunk_start + chunk_size, n_filtered)
+        actual_chunk_len = chunk_end - chunk_start
 
         # Extract, impute, and rotate genotypes for this chunk only
         # This avoids materializing the full (n_samples, n_filtered) matrix
@@ -270,6 +274,13 @@ def run_lmm_association_jax(
         chunk_means = col_means[chunk_indices]
         missing_mask = np.isnan(geno_chunk)
         geno_chunk = np.where(missing_mask, chunk_means[None, :], geno_chunk)
+
+        # Pad last chunk to fixed size to avoid JAX recompilation
+        # JAX traces functions for each unique shape; padding keeps shapes constant
+        needs_padding = actual_chunk_len < chunk_size
+        if needs_padding:
+            pad_width = chunk_size - actual_chunk_len
+            geno_chunk = np.pad(geno_chunk, ((0, 0), (0, pad_width)), mode="constant")
 
         # Rotate genotypes for this chunk
         UtG_chunk = U.T @ geno_chunk  # (n_samples, chunk_size)
@@ -281,7 +292,7 @@ def run_lmm_association_jax(
         # Batch compute Uab for this chunk
         Uab_batch = batch_compute_uab(UtW_jax, Uty_jax, UtG_jax)
 
-        # Grid-based lambda optimization
+        # Grid-based lambda optimization (donate_argnums recycles Uab_batch memory)
         best_lambdas, best_logls = _grid_optimize_lambda_batched(
             eigenvalues, Uab_batch, l_min, l_max, n_grid, n_refine
         )
@@ -290,6 +301,14 @@ def run_lmm_association_jax(
         betas, ses, p_walds = batch_calc_wald_stats(
             best_lambdas, eigenvalues, Uab_batch, n_samples
         )
+
+        # Strip padding from results if needed
+        if needs_padding:
+            best_lambdas = best_lambdas[:actual_chunk_len]
+            best_logls = best_logls[:actual_chunk_len]
+            betas = betas[:actual_chunk_len]
+            ses = ses[:actual_chunk_len]
+            p_walds = p_walds[:actual_chunk_len]
 
         # Collect results
         all_lambdas.append(np.array(best_lambdas))

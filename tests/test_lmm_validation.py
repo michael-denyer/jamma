@@ -585,3 +585,107 @@ class TestLmmJaxValidation:
                 snp_info=snp_info,
                 covariates=covariates,
             )
+
+
+class TestJaxChunkingCorrectness:
+    """Tests verifying multi-chunk JAX processing matches single-chunk.
+
+    Chunking should be purely a memory/performance optimization that
+    produces identical results regardless of chunk boundaries.
+    """
+
+    @pytest.fixture
+    def chunk_test_data(self):
+        """Generate data with enough SNPs to force multiple chunks at small scale."""
+        rng = np.random.default_rng(42)
+        n_samples = 200
+        n_snps = 100  # Enough to test chunking at small chunk sizes
+
+        genotypes = rng.integers(0, 3, size=(n_samples, n_snps)).astype(np.float64)
+        phenotypes = rng.standard_normal(n_samples)
+        kinship = compute_centered_kinship(genotypes)
+
+        snp_info = [
+            {"chr": "1", "rs": f"rs{i}", "pos": i * 1000, "a1": "A", "a0": "G"}
+            for i in range(n_snps)
+        ]
+
+        return genotypes, phenotypes, kinship, snp_info
+
+    def test_multi_chunk_equals_single_chunk(self, chunk_test_data):
+        """Results are identical regardless of chunk size (multi vs single chunk).
+
+        This tests the chunking implementation by forcing different chunk sizes
+        and verifying the results match exactly.
+        """
+        from jamma.lmm import runner_jax
+
+        genotypes, phenotypes, kinship, snp_info = chunk_test_data
+
+        # Store original MAX_BUFFER_ELEMENTS
+        original_max = runner_jax._MAX_BUFFER_ELEMENTS
+
+        try:
+            # Run with large buffer (single chunk - no chunking)
+            runner_jax._MAX_BUFFER_ELEMENTS = 10**15  # Effectively no limit
+            single_chunk_results = run_lmm_association_jax(
+                genotypes=genotypes,
+                phenotypes=phenotypes,
+                kinship=kinship,
+                snp_info=snp_info,
+                check_memory=False,
+            )
+
+            # Run with small buffer (force ~4 chunks with 200 samples × 100 SNPs)
+            # Elements per SNP = 200 * 6 = 1200
+            # With buffer = 30000, chunk_size = 30000 // 1200 = 25 SNPs
+            runner_jax._MAX_BUFFER_ELEMENTS = 30_000
+            multi_chunk_results = run_lmm_association_jax(
+                genotypes=genotypes,
+                phenotypes=phenotypes,
+                kinship=kinship,
+                snp_info=snp_info,
+                check_memory=False,
+            )
+        finally:
+            # Restore original value
+            runner_jax._MAX_BUFFER_ELEMENTS = original_max
+
+        # Same number of results
+        assert len(single_chunk_results) == len(multi_chunk_results)
+
+        # Results should be numerically identical (not just close)
+        for single, multi in zip(
+            single_chunk_results, multi_chunk_results, strict=True
+        ):
+            assert (
+                single.rs == multi.rs
+            ), f"SNP order mismatch: {single.rs} vs {multi.rs}"
+            np.testing.assert_allclose(
+                single.beta,
+                multi.beta,
+                rtol=1e-10,
+                atol=1e-15,
+                err_msg=f"Beta mismatch for {single.rs}",
+            )
+            np.testing.assert_allclose(
+                single.se,
+                multi.se,
+                rtol=1e-10,
+                atol=1e-15,
+                err_msg=f"SE mismatch for {single.rs}",
+            )
+            np.testing.assert_allclose(
+                single.p_wald,
+                multi.p_wald,
+                rtol=1e-10,
+                atol=1e-15,
+                err_msg=f"P-value mismatch for {single.rs}",
+            )
+            np.testing.assert_allclose(
+                single.l_remle,
+                multi.l_remle,
+                rtol=1e-10,
+                atol=1e-15,
+                err_msg=f"Lambda mismatch for {single.rs}",
+            )

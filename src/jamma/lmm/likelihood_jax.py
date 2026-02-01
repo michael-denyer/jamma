@@ -232,7 +232,7 @@ def batch_compute_uab(
     )
 
 
-@partial(jit, static_argnums=(2, 3, 4, 5))
+@partial(jit, static_argnums=(2, 3, 4, 5), donate_argnums=(1,))
 def golden_section_optimize_lambda(
     eigenvalues: Float[Array, " n"],
     Uab_batch: Float[Array, "p n 6"],
@@ -259,6 +259,8 @@ def golden_section_optimize_lambda(
     - Golden section: O(n_iter) REML evaluations per SNP (vectorized)
     - Total: ~70 REML evaluations vs ~50 for Brent (similar cost)
     - All computations stay on device (no host/device sync in loops)
+    - Uses lax.fori_loop for golden section to avoid Python loop retracing
+    - donate_argnums=(1,) hints XLA to reuse Uab_batch memory (when possible)
 
     Args:
         eigenvalues: Eigenvalues (n_samples,)

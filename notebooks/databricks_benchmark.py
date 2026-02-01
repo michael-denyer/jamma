@@ -11,7 +11,15 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install git+https://github.com/michael-denyer/jamma.git psutil
+# MAGIC %md
+# MAGIC ### Install Dependencies
+# MAGIC
+# MAGIC JAX 0.8+ requires NumPy 2.0+. Install numpy first to ensure compatibility.
+
+# COMMAND ----------
+
+# MAGIC %pip install numpy>=2.0 jax>=0.8 jaxlib>=0.8 psutil
+# MAGIC %pip install git+https://github.com/michael-denyer/jamma.git
 
 # COMMAND ----------
 
@@ -53,6 +61,7 @@ logging.basicConfig(
 logger = logging.getLogger("jamma_benchmark")
 
 logger.info(f"Python: {sys.version}")
+logger.info(f"NumPy version: {np.__version__}")
 logger.info(f"JAX version: {jax.__version__}")
 logger.info(f"JAX devices: {jax.devices()}")
 logger.info(f"JAX backend: {jax.default_backend()}")

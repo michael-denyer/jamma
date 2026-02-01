@@ -36,10 +36,17 @@ def estimate_workflow_memory(
     Calculates memory for kinship computation, eigendecomposition, and LMM
     association testing. Returns the peak memory requirement.
 
+    Note: This is a conservative estimate based on a fixed batch size. The JAX
+    runner computes its own chunk size based on int32 buffer limits, which may
+    differ. This check ensures sufficient memory for the dominant costs (kinship
+    and eigenvector matrices at O(n_samples²)) but may underestimate memory for
+    very large SNP counts on small-memory systems.
+
     Args:
         n_samples: Number of samples (individuals).
         n_snps: Number of SNPs (variants).
-        lmm_batch_size: Batch size for LMM SNP processing.
+        lmm_batch_size: Batch size for LMM SNP processing (used for estimate,
+            actual JAX chunk size is computed from int32 limits).
 
     Returns:
         MemoryBreakdown with detailed component estimates and total.

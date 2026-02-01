@@ -1,4 +1,4 @@
-"""Utility modules for GEMMA-Next.
+"""Utility modules for JAMMA.
 
 This package contains supporting utilities:
 - logging: Loguru configuration and GEMMA-compatible log output

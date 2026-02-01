@@ -1,6 +1,6 @@
-"""Configuration dataclasses for GEMMA-Next.
+"""Configuration dataclasses for JAMMA.
 
-This module contains dataclasses that configure various aspects of GEMMA-Next
+This module contains dataclasses that configure various aspects of JAMMA
 execution, including output paths and logging settings.
 """
 

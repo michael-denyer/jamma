@@ -1,4 +1,4 @@
-"""Tests for GEMMA-Next validation framework."""
+"""Tests for JAMMA validation framework."""
 
 import numpy as np
 import pytest

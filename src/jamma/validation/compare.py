@@ -1,4 +1,4 @@
-"""Comparison utilities for validating GEMMA-Next output against reference GEMMA.
+"""Comparison utilities for validating JAMMA output against reference GEMMA.
 
 This module provides structured comparison functions that return detailed results
 rather than raising exceptions, enabling programmatic validation workflows.

@@ -1,7 +1,7 @@
 """Tests for JAX configuration and verification.
 
 These tests verify that JAX is properly installed and configured
-for GEMMA-Next numerical computations, including 64-bit precision,
+for JAMMA numerical computations, including 64-bit precision,
 JIT compilation, and linear algebra operations.
 """
 

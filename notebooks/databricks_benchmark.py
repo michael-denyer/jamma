@@ -7,7 +7,7 @@
 # MAGIC **Cluster Requirements:**
 # MAGIC - Memory-optimized instance (e.g., `Standard_E64s_v3` with 432GB RAM)
 # MAGIC - Or GPU instance for JAX acceleration
-# MAGIC - DBR 14.0+ (Python 3.10+)
+# MAGIC - DBR 15.4 LTS+ (Python 3.11+ required)
 
 # COMMAND ----------
 

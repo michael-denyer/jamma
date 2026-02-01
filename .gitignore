@@ -39,3 +39,7 @@ venv/
 # Planning and claude config (dev-only)
 .planning/
 .claude/
+
+# Beads issue tracker
+.beads/
+AGENTS.md

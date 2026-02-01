@@ -8,15 +8,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.testing import assert_allclose
 
+from jamma.lmm.stats import AssocResult
 from jamma.validation.tolerances import ToleranceConfig
-
-if TYPE_CHECKING:
-    import pandas as pd
 
 
 @dataclass
@@ -205,46 +202,250 @@ def load_gemma_kinship(path: Path) -> np.ndarray:
     return np.loadtxt(path)
 
 
-def load_gemma_assoc(path: Path) -> pd.DataFrame:
+def load_gemma_assoc(path: Path) -> list[AssocResult]:
     """Load GEMMA association results from .assoc.txt format.
 
-    Note: This is a placeholder for Phase 3 implementation.
+    Parses the tab-separated .assoc.txt format produced by GEMMA's -lmm 1 mode.
+    Returns a list of AssocResult dataclass instances for comparison.
 
     Args:
         path: Path to the association results file (.assoc.txt).
 
     Returns:
-        pandas DataFrame with association results.
+        List of AssocResult dataclass instances, one per SNP.
 
     Raises:
-        NotImplementedError: This function is not yet implemented.
+        FileNotFoundError: If the file does not exist.
+        ValueError: If the file format is invalid.
+
+    Example:
+        >>> results = load_gemma_assoc(Path("output/result.assoc.txt"))
+        >>> len(results)
+        12226
     """
-    raise NotImplementedError(
-        "load_gemma_assoc will be implemented in Phase 3 (LMM testing). "
-        f"Cannot load {path}"
-    )
+    results = []
+    with open(path) as f:
+        header = f.readline().strip()
+        # Validate header matches expected format
+        expected_cols = [
+            "chr",
+            "rs",
+            "ps",
+            "n_miss",
+            "allele1",
+            "allele0",
+            "af",
+            "beta",
+            "se",
+            "logl_H1",
+            "l_remle",
+            "p_wald",
+        ]
+        actual_cols = header.split("\t")
+        if actual_cols != expected_cols:
+            raise ValueError(
+                f"Unexpected header format. Expected: {expected_cols}, "
+                f"Got: {actual_cols}"
+            )
+
+        for line in f:
+            fields = line.strip().split("\t")
+            results.append(
+                AssocResult(
+                    chr=fields[0],
+                    rs=fields[1],
+                    ps=int(fields[2]),
+                    n_miss=int(fields[3]),
+                    allele1=fields[4],
+                    allele0=fields[5],
+                    af=float(fields[6]),
+                    beta=float(fields[7]),
+                    se=float(fields[8]),
+                    logl_H1=float(fields[9]),
+                    l_remle=float(fields[10]),
+                    p_wald=float(fields[11]),
+                )
+            )
+    return results
+
+
+@dataclass
+class AssocComparisonResult:
+    """Result of comparing two sets of association results.
+
+    Provides structured comparison results for each numeric column
+    (beta, se, p_wald, logl_H1, l_remle, af) and overall pass/fail status.
+
+    Attributes:
+        passed: Whether all column comparisons passed.
+        n_snps: Number of SNPs compared.
+        beta: Comparison result for effect sizes.
+        se: Comparison result for standard errors.
+        p_wald: Comparison result for p-values.
+        logl_H1: Comparison result for log-likelihoods.
+        l_remle: Comparison result for lambda REML values.
+        af: Comparison result for allele frequencies.
+        mismatched_snps: List of SNP rs IDs that don't match between files.
+    """
+
+    passed: bool
+    n_snps: int
+    beta: ComparisonResult
+    se: ComparisonResult
+    p_wald: ComparisonResult
+    logl_H1: ComparisonResult
+    l_remle: ComparisonResult
+    af: ComparisonResult
+    mismatched_snps: list[str]
 
 
 def compare_assoc_results(
-    actual: pd.DataFrame,
-    expected: pd.DataFrame,
+    actual: list[AssocResult],
+    expected: list[AssocResult],
     config: ToleranceConfig | None = None,
-) -> dict[str, ComparisonResult]:
+) -> AssocComparisonResult:
     """Compare association results with column-appropriate tolerances.
 
-    Note: This is a placeholder for Phase 3 implementation.
+    Compares lists of AssocResult objects from JAMMA and reference GEMMA output.
+    Uses appropriate tolerance thresholds for each statistic type:
+    - beta: beta_rtol (effect sizes from linear algebra)
+    - se: se_rtol (standard errors with sqrt operations)
+    - p_wald: pvalue_rtol (CDF computations may differ)
+    - logl_H1: logl_rtol (log-likelihood values)
+    - l_remle: lambda_rtol (variance ratio estimates)
+    - af: af_rtol (allele frequencies)
 
     Args:
-        actual: Computed association results DataFrame.
-        expected: Reference GEMMA association results DataFrame.
+        actual: Computed association results from JAMMA.
+        expected: Reference GEMMA association results.
         config: Tolerance configuration. Uses default if None.
 
     Returns:
-        Dictionary mapping column names to ComparisonResult objects.
+        AssocComparisonResult with per-column comparison details.
 
-    Raises:
-        NotImplementedError: This function is not yet implemented.
+    Example:
+        >>> jamma_results = load_gemma_assoc(Path("jamma_output.assoc.txt"))
+        >>> gemma_results = load_gemma_assoc(Path("gemma_output.assoc.txt"))
+        >>> comparison = compare_assoc_results(jamma_results, gemma_results)
+        >>> comparison.passed
+        True
     """
-    raise NotImplementedError(
-        "compare_assoc_results will be implemented in Phase 3 (LMM testing)."
+    if config is None:
+        config = ToleranceConfig()
+
+    # Check for SNP count mismatch
+    if len(actual) != len(expected):
+        return AssocComparisonResult(
+            passed=False,
+            n_snps=len(actual),
+            beta=ComparisonResult(
+                passed=False,
+                max_abs_diff=np.inf,
+                max_rel_diff=np.inf,
+                worst_location=None,
+                message=f"SNP count mismatch: {len(actual)} vs {len(expected)}",
+            ),
+            se=ComparisonResult(
+                passed=False,
+                max_abs_diff=0,
+                max_rel_diff=0,
+                worst_location=None,
+                message="Skipped due to SNP count mismatch",
+            ),
+            p_wald=ComparisonResult(
+                passed=False,
+                max_abs_diff=0,
+                max_rel_diff=0,
+                worst_location=None,
+                message="Skipped due to SNP count mismatch",
+            ),
+            logl_H1=ComparisonResult(
+                passed=False,
+                max_abs_diff=0,
+                max_rel_diff=0,
+                worst_location=None,
+                message="Skipped due to SNP count mismatch",
+            ),
+            l_remle=ComparisonResult(
+                passed=False,
+                max_abs_diff=0,
+                max_rel_diff=0,
+                worst_location=None,
+                message="Skipped due to SNP count mismatch",
+            ),
+            af=ComparisonResult(
+                passed=False,
+                max_abs_diff=0,
+                max_rel_diff=0,
+                worst_location=None,
+                message="Skipped due to SNP count mismatch",
+            ),
+            mismatched_snps=[],
+        )
+
+    # Check for mismatched SNP IDs
+    mismatched = []
+    for i, (a, e) in enumerate(zip(actual, expected, strict=True)):
+        if a.rs != e.rs:
+            mismatched.append(f"{i}:{a.rs}!={e.rs}")
+
+    # Extract arrays for comparison
+    actual_beta = np.array([r.beta for r in actual])
+    expected_beta = np.array([r.beta for r in expected])
+    actual_se = np.array([r.se for r in actual])
+    expected_se = np.array([r.se for r in expected])
+    actual_pwald = np.array([r.p_wald for r in actual])
+    expected_pwald = np.array([r.p_wald for r in expected])
+    actual_logl = np.array([r.logl_H1 for r in actual])
+    expected_logl = np.array([r.logl_H1 for r in expected])
+    actual_lambda = np.array([r.l_remle for r in actual])
+    expected_lambda = np.array([r.l_remle for r in expected])
+    # For AF comparison, normalize both to MAF (<=0.5) since GEMMA reports AF
+    # and JAMMA reports MAF. The values are complements (af vs 1-af).
+    actual_af = np.array([r.af for r in actual])
+    expected_af = np.array([r.af for r in expected])
+    # Normalize expected to MAF for comparison
+    expected_maf = np.minimum(expected_af, 1.0 - expected_af)
+
+    # Compare each column with appropriate tolerance
+    beta_result = compare_arrays(
+        actual_beta, expected_beta, config.beta_rtol, config.atol, "beta"
+    )
+    se_result = compare_arrays(
+        actual_se, expected_se, config.se_rtol, config.atol, "se"
+    )
+    pwald_result = compare_arrays(
+        actual_pwald, expected_pwald, config.pvalue_rtol, config.atol, "p_wald"
+    )
+    logl_result = compare_arrays(
+        actual_logl, expected_logl, config.logl_rtol, config.atol, "logl_H1"
+    )
+    lambda_result = compare_arrays(
+        actual_lambda, expected_lambda, config.lambda_rtol, config.atol, "l_remle"
+    )
+    af_result = compare_arrays(
+        actual_af, expected_maf, config.af_rtol, config.atol, "af"
+    )
+
+    # Overall pass if all columns pass and no mismatched SNPs
+    all_passed = (
+        beta_result.passed
+        and se_result.passed
+        and pwald_result.passed
+        and logl_result.passed
+        and lambda_result.passed
+        and af_result.passed
+        and len(mismatched) == 0
+    )
+
+    return AssocComparisonResult(
+        passed=all_passed,
+        n_snps=len(actual),
+        beta=beta_result,
+        se=se_result,
+        p_wald=pwald_result,
+        logl_H1=logl_result,
+        l_remle=lambda_result,
+        af=af_result,
+        mismatched_snps=mismatched,
     )

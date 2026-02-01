@@ -1,0 +1,16 @@
+##
+## JAMMA Version = 0.1.0
+## Date = 2026-01-31T19:19:24.304820
+##
+## Command Line Input = /Users/mdenyer/VSCode/GEMMA/.venv/bin/jamma -outdir output -o e2e_test gk -bfile legacy/example/mouse_hs1940
+##
+## Summary Statistics:
+## n_samples = 1940
+## n_snps = 12226
+## kinship_mode = 1
+## kinship_file = output/e2e_test.cXX.txt
+##
+## Computation Time:
+## total time = 2.91 seconds
+## kinship time = 0.92 seconds
+##

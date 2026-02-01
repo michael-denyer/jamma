@@ -1,0 +1,19 @@
+##
+## JAMMA Version = 0.1.0
+## Date = 2026-01-31T21:02:46.240202
+##
+## Command Line Input = /Users/mdenyer/VSCode/GEMMA/.venv/bin/jamma -o test_lmm -outdir output lmm -bfile legacy/example/mouse_hs1940 -k output/test_task2.cXX.txt -lmm 1
+##
+## Summary Statistics:
+## n_samples = 1940
+## n_analyzed = 1410
+## n_snps = 12226
+## lmm_mode = 1
+## kinship_file = output/test_task2.cXX.txt
+## output_file = output/test_lmm.assoc.txt
+##
+## Computation Time:
+## total time = 122.86 seconds
+## load time = 0.83 seconds
+## lmm time = 122.03 seconds
+##

@@ -1,0 +1,16 @@
+##
+## JAMMA Version = 0.1.0
+## Date = 2026-01-31T19:31:22.348032
+##
+## Command Line Input = /Users/mdenyer/VSCode/GEMMA/.venv/bin/jamma -outdir tests/fixtures/kinship -o mouse_hs1940 gk -bfile legacy/example/mouse_hs1940
+##
+## Summary Statistics:
+## n_samples = 1940
+## n_snps = 12226
+## kinship_mode = 1
+## kinship_file = tests/fixtures/kinship/mouse_hs1940.cXX.txt
+##
+## Computation Time:
+## total time = 3.84 seconds
+## kinship time = 1.81 seconds
+##

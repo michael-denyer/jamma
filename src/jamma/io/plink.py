@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 from bed_reader import open_bed
 from loguru import logger
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 
 @dataclass

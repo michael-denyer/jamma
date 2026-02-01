@@ -19,7 +19,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax import jit
 from loguru import logger
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from jamma.core import configure_jax
 from jamma.core.memory import check_memory_available, estimate_streaming_memory

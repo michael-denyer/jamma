@@ -1,6 +1,6 @@
-"""Tolerance configuration for numerical comparisons in GEMMA-Next validation.
+"""Tolerance configuration for numerical comparisons in JAMMA validation.
 
-This module provides configurable tolerance thresholds for comparing GEMMA-Next
+This module provides configurable tolerance thresholds for comparing JAMMA
 output to reference GEMMA output. Different value types require different
 tolerances due to how they are computed.
 

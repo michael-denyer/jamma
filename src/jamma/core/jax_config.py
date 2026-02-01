@@ -1,4 +1,4 @@
-"""JAX configuration utilities for GEMMA-Next.
+"""JAX configuration utilities for JAMMA.
 
 This module provides configuration and verification functions for JAX,
 ensuring proper setup for numerical computations. JAX is used for kinship
@@ -43,7 +43,7 @@ def configure_jax(
     platform: str | None = None,
     persistent_cache: bool = True,
 ) -> None:
-    """Configure JAX for GEMMA-Next computations.
+    """Configure JAX for JAMMA computations.
 
     This function should be called once at application startup before any
     JAX operations. It configures precision and optionally the compute platform.

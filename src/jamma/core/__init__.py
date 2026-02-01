@@ -1,4 +1,4 @@
-"""Core computational modules for GEMMA-Next.
+"""Core computational modules for JAMMA.
 
 This package contains the core algorithms and data structures:
 - config: Configuration dataclasses

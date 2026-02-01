@@ -1,4 +1,4 @@
-"""Pytest fixtures for GEMMA-Next test suite."""
+"""Pytest fixtures for JAMMA test suite."""
 
 from __future__ import annotations
 

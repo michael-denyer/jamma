@@ -1,1 +1,1 @@
-"""Test suite for GEMMA-Next."""
+"""Test suite for JAMMA."""

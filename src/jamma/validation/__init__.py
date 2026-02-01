@@ -1,6 +1,6 @@
-"""Validation modules for GEMMA-Next.
+"""Validation modules for JAMMA.
 
-This package contains utilities for validating GEMMA-Next output:
+This package contains utilities for validating JAMMA output:
 - tolerances: Configurable tolerance thresholds for different value types
 - compare: Numerical comparison utilities with tolerance configuration
 """

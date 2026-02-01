@@ -308,24 +308,20 @@ from jamma.lmm import run_lmm_association  # noqa: E402
 from jamma.lmm.runner_jax import run_lmm_association_jax  # noqa: E402
 
 
-def _write_plink_files(
-    prefix: str, genotypes: np.ndarray, phenotype: np.ndarray
-) -> None:
-    """Write genotypes and phenotypes to PLINK binary format."""
+def _write_bed_file(path: str, genotypes: np.ndarray) -> None:
+    """Write genotypes to PLINK .bed format.
+
+    Args:
+        path: Output path for .bed file.
+        genotypes: Genotype matrix (n_samples, n_snps) with values 0, 1, 2 or NaN.
+    """
     n_samples, n_snps = genotypes.shape
 
-    # Write .fam file
-    with open(f"{prefix}.fam", "w") as f:
-        for i in range(n_samples):
-            f.write(f"FAM{i} IND{i} 0 0 0 {phenotype[i]:.6f}\n")
+    # BED file magic bytes: PLINK 1.9 format, SNP-major
+    magic = bytes([0x6C, 0x1B, 0x01])
 
-    # Write .bim file
-    with open(f"{prefix}.bim", "w") as f:
-        for j in range(n_snps):
-            f.write(f"1 rs{j} 0 {j * 1000} A G\n")
-
-    # Write .bed file (PLINK binary format)
-    magic = bytes([0x6C, 0x1B, 0x01])  # PLINK 1.9, SNP-major
+    # Pack genotypes: 4 samples per byte
+    # PLINK encoding: 00=hom ref, 01=missing, 10=het, 11=hom alt
     geno_t = genotypes.T  # SNP-major
     bytes_per_snp = (n_samples + 3) // 4
     data = bytearray(len(magic) + n_snps * bytes_per_snp)
@@ -346,8 +342,31 @@ def _write_plink_files(
                 code = 0b11  # Hom alt
             data[byte_idx] |= code << bit_idx
 
-    with open(f"{prefix}.bed", "wb") as f:
+    with open(path, "wb") as f:
         f.write(data)
+
+
+def _write_plink_files(
+    prefix: str, genotypes: np.ndarray, phenotype: np.ndarray
+) -> None:
+    """Write genotypes and phenotypes to PLINK binary format.
+
+    Creates .fam, .bim, and .bed files at the given prefix.
+    """
+    n_samples, n_snps = genotypes.shape
+
+    # Write .fam file
+    with open(f"{prefix}.fam", "w") as f:
+        for i in range(n_samples):
+            f.write(f"FAM{i} IND{i} 0 0 0 {phenotype[i]:.6f}\n")
+
+    # Write .bim file
+    with open(f"{prefix}.bim", "w") as f:
+        for j in range(n_snps):
+            f.write(f"1 rs{j} 0 {j * 1000} A G\n")
+
+    # Write .bed file
+    _write_bed_file(f"{prefix}.bed", genotypes)
 
 
 @dataclass
@@ -907,11 +926,6 @@ def validate_vs_gemma(
     Returns:
         Dict with comparison metrics, or None if GEMMA not available.
     """
-    import shutil
-    import subprocess
-    import tempfile
-    from pathlib import Path
-
     # Find GEMMA binary
     gemma_bin = gemma_path or GEMMA_PATH or shutil.which("gemma")
     if not gemma_bin or not Path(gemma_bin).exists():
@@ -931,33 +945,19 @@ def validate_vs_gemma(
         probs = [(1 - p) ** 2, 2 * p * (1 - p), p**2]
         genotypes[:, j] = rng.choice([0, 1, 2], size=n_samples, p=probs)
 
-    # Simple phenotype
     phenotype = rng.standard_normal(n_samples)
     phenotype = (phenotype - phenotype.mean()) / phenotype.std()
 
-    # Create temp directory for PLINK files
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir = Path(tmpdir)
         prefix = tmpdir / "test"
-
-        # Write PLINK .fam file
-        with open(f"{prefix}.fam", "w") as f:
-            for i in range(n_samples):
-                f.write(f"FAM{i} IND{i} 0 0 0 {phenotype[i]:.6f}\n")
-
-        # Write PLINK .bim file
-        with open(f"{prefix}.bim", "w") as f:
-            for j in range(n_snps):
-                f.write(f"1 rs{j} 0 {j * 1000} A G\n")
-
-        # Write PLINK .bed file (simplified - proper binary format)
-        # This is a simplified version; production would use bed-reader
-        _write_bed_file(f"{prefix}.bed", genotypes)
-
-        # Run GEMMA kinship
         output_dir = tmpdir / "output"
         output_dir.mkdir()
 
+        # Write PLINK files using shared function
+        _write_plink_files(str(prefix), genotypes, phenotype)
+
+        # Run GEMMA kinship and LMM
         try:
             subprocess.run(
                 [gemma_bin, "-bfile", str(prefix), "-gk", "1", "-o", "kinship"],
@@ -967,7 +967,6 @@ def validate_vs_gemma(
                 timeout=300,
             )
 
-            # Run GEMMA LMM
             kinship_file = output_dir / "output" / "kinship.cXX.txt"
             subprocess.run(
                 [
@@ -1005,7 +1004,6 @@ def validate_vs_gemma(
     ]
 
     jamma_kinship = compute_centered_kinship(genotypes, check_memory=False)
-
     jamma_results = run_lmm_association(
         genotypes=genotypes,
         phenotypes=phenotype,
@@ -1014,42 +1012,25 @@ def validate_vs_gemma(
     )
 
     # Compare kinship
-    kinship_diff = np.abs(jamma_kinship - gemma_kinship)
-    kinship_max_diff = np.max(kinship_diff)
+    kinship_max_diff = np.max(np.abs(jamma_kinship - gemma_kinship))
     kinship_rel_diff = kinship_max_diff / (np.abs(gemma_kinship).max() + 1e-10)
 
-    # Compare association results
-    jamma_df = pd.DataFrame([vars(r) for r in jamma_results])
-
-    # Merge on rs ID
-    merged = pd.merge(
-        gemma_assoc,
-        jamma_df,
-        left_on="rs",
-        right_on="rs",
-        suffixes=("_gemma", "_jamma"),
-    )
-
-    beta_diff = np.abs(merged["beta_gemma"] - merged["beta_jamma"])
-    beta_rel_diff = beta_diff / (np.abs(merged["beta_gemma"]) + 1e-10)
-
-    pval_diff = np.abs(merged["p_wald_gemma"] - merged["p_wald_jamma"])
-    pval_rel_diff = pval_diff / (merged["p_wald_gemma"] + 1e-10)
+    # Compare association results using shared validation logic
+    validation = validate_jamma_vs_gemma(jamma_results, gemma_assoc)
 
     results = {
         "n_samples": n_samples,
         "n_snps": n_snps,
         "kinship_max_abs_diff": float(kinship_max_diff),
         "kinship_max_rel_diff": float(kinship_rel_diff),
-        "beta_max_rel_diff": float(beta_rel_diff.max()),
-        "beta_mean_rel_diff": float(beta_rel_diff.mean()),
-        "pval_max_rel_diff": float(pval_rel_diff.max()),
-        "pval_mean_rel_diff": float(pval_rel_diff.mean()),
+        "beta_max_rel_diff": validation.get("beta_max_rel_diff", float("nan")),
+        "beta_mean_rel_diff": validation.get("beta_mean_rel_diff", float("nan")),
+        "pval_max_rel_diff": validation.get("pval_max_rel_diff", float("nan")),
+        "pval_mean_rel_diff": validation.get("pval_mean_rel_diff", float("nan")),
         "kinship_pass": kinship_rel_diff < 1e-8,
-        "beta_pass": beta_rel_diff.max() < 1e-6,
-        "pval_pass": pval_rel_diff.max() < 1e-8,
+        "beta_pass": validation.get("beta_pass", False),
+        "pval_pass": validation.get("pval_pass", False),
     }
-
     results["overall_pass"] = all(
         [results["kinship_pass"], results["beta_pass"], results["pval_pass"]]
     )
@@ -1064,46 +1045,6 @@ def validate_vs_gemma(
     logger.info(f"Overall: {'PASS' if results['overall_pass'] else 'FAIL'}")
 
     return results
-
-
-def _write_bed_file(path: str, genotypes: np.ndarray) -> None:
-    """Write genotypes to PLINK .bed format.
-
-    Simplified version for validation - writes genotypes in proper binary format.
-    """
-    n_samples, n_snps = genotypes.shape
-
-    # BED file magic bytes
-    magic = bytes([0x6C, 0x1B, 0x01])  # PLINK 1.9 format, SNP-major
-
-    # Pack genotypes: 4 samples per byte, 00=hom ref, 01=het, 10=missing, 11=hom alt
-    # PLINK encoding: 00=hom A1, 01=het, 10=missing, 11=hom A2
-    # Our genotypes: 0=hom ref, 1=het, 2=hom alt, nan=missing
-    genotypes = genotypes.T  # SNP-major
-
-    bytes_per_snp = (n_samples + 3) // 4
-    data = bytearray(len(magic) + n_snps * bytes_per_snp)
-    data[:3] = magic
-
-    for j in range(n_snps):
-        for i in range(n_samples):
-            byte_idx = 3 + j * bytes_per_snp + i // 4
-            bit_idx = (i % 4) * 2
-
-            g = genotypes[j, i]
-            if np.isnan(g):
-                code = 0b01  # Missing in PLINK
-            elif g == 0:
-                code = 0b00  # Hom ref
-            elif g == 1:
-                code = 0b10  # Het (note: PLINK uses 10 for het)
-            else:
-                code = 0b11  # Hom alt
-
-            data[byte_idx] |= code << bit_idx
-
-    with open(path, "wb") as f:
-        f.write(data)
 
 
 # COMMAND ----------

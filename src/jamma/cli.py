@@ -85,6 +85,14 @@ def gk_command(
         int,
         typer.Option("-gk", help="Kinship matrix type (1=centered, 2=standardized)"),
     ] = 1,
+    maf: Annotated[
+        float,
+        typer.Option("-maf", help="MAF threshold for SNP filtering (default: 0.0)"),
+    ] = 0.0,
+    miss: Annotated[
+        float,
+        typer.Option("-miss", help="Missing rate threshold (default: 1.0)"),
+    ] = 1.0,
 ) -> None:
     """Compute kinship matrix from genotype data.
 
@@ -129,8 +137,12 @@ def gk_command(
 
     # Compute kinship matrix
     typer.echo(f"Computing centered kinship matrix (mode {mode})...")
+    if maf > 0.0 or miss < 1.0:
+        typer.echo(f"Filtering: MAF >= {maf}, missing rate <= {miss}")
     kinship_start = time.time()
-    K = compute_centered_kinship(plink_data.genotypes)
+    K = compute_centered_kinship(
+        plink_data.genotypes, maf_threshold=maf, miss_threshold=miss
+    )
     kinship_time = time.time() - kinship_start
     typer.echo(f"Kinship computation completed in {kinship_time:.2f}s")
 
@@ -149,6 +161,8 @@ def gk_command(
         "n_snps": plink_data.n_snps,
         "kinship_mode": mode,
         "kinship_file": str(kinship_path),
+        "maf_threshold": maf,
+        "miss_threshold": miss,
     }
     timing = {"total": elapsed, "kinship": kinship_time}
 
@@ -172,6 +186,14 @@ def lmm_command(
             "-lmm", help="LMM analysis type (1=Wald, 2-4=not yet implemented)"
         ),
     ] = 1,
+    maf: Annotated[
+        float,
+        typer.Option("-maf", help="MAF threshold for SNP filtering (default: 0.01)"),
+    ] = 0.01,
+    miss: Annotated[
+        float,
+        typer.Option("-miss", help="Missing rate threshold (default: 0.05)"),
+    ] = 0.05,
 ) -> None:
     """Perform linear mixed model association testing.
 
@@ -284,10 +306,10 @@ def lmm_command(
     snp_info = []
     for i in range(n_snps):
         x = genotypes_filtered[:, i]
-        n_miss = int(np.isnan(x).sum())
+        n_miss_snp = int(np.isnan(x).sum())
         # Minor allele frequency (using non-missing samples)
         valid_geno = x[~np.isnan(x)]
-        maf = float(np.mean(valid_geno) / 2.0) if len(valid_geno) > 0 else 0.0
+        snp_maf = float(np.mean(valid_geno) / 2.0) if len(valid_geno) > 0 else 0.0
 
         snp_info.append(
             {
@@ -296,8 +318,8 @@ def lmm_command(
                 "pos": int(plink_data.bp_position[i]),
                 "a1": str(plink_data.allele_1[i]),
                 "a0": str(plink_data.allele_2[i]),
-                "maf": maf,
-                "n_miss": n_miss,
+                "maf": snp_maf,
+                "n_miss": n_miss_snp,
             }
         )
 
@@ -323,6 +345,8 @@ def lmm_command(
         phenotypes_filtered,
         K_filtered,
         snp_info,
+        maf_threshold=maf,
+        miss_threshold=miss,
     )
 
     t_lmm = time.perf_counter()
@@ -346,6 +370,8 @@ def lmm_command(
         "lmm_mode": lmm_mode,
         "kinship_file": str(kinship_file),
         "output_file": str(assoc_path),
+        "maf_threshold": maf,
+        "miss_threshold": miss,
     }
     timing = {
         "total": total_time,

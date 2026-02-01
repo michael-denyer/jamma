@@ -137,3 +137,50 @@ def test_cli_lmm_mode_2_not_implemented():
 
     assert result.exit_code == 1
     assert "not yet implemented" in result.output.lower()
+
+
+def test_cli_gk_maf_miss_flags(tmp_path: Path):
+    """Test that gk command accepts -maf and -miss flags."""
+    outdir = tmp_path / "output"
+
+    # Run with MAF and missing filters
+    result = runner.invoke(
+        app,
+        [
+            "-outdir",
+            str(outdir),
+            "gk",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-maf",
+            "0.05",
+            "-miss",
+            "0.1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Filtering" in result.output
+    assert "MAF >= 0.05" in result.output
+
+    # Verify log file contains filter parameters
+    log_path = outdir / "result.log.txt"
+    log_content = log_path.read_text()
+    assert "maf_threshold = 0.05" in log_content
+    assert "miss_threshold = 0.1" in log_content
+
+
+def test_cli_gk_help_shows_filter_flags():
+    """Test that gk --help shows -maf and -miss options."""
+    result = runner.invoke(app, ["gk", "--help"])
+    assert result.exit_code == 0
+    assert "-maf" in result.output
+    assert "-miss" in result.output
+
+
+def test_cli_lmm_help_shows_filter_flags():
+    """Test that lmm --help shows -maf and -miss options."""
+    result = runner.invoke(app, ["lmm", "--help"])
+    assert result.exit_code == 0
+    assert "-maf" in result.output
+    assert "-miss" in result.output

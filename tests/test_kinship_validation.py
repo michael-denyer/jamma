@@ -65,12 +65,12 @@ class TestKinshipValidation:
         assert np.array_equal(K1, K2), "Kinship computation is not deterministic"
 
     def test_kinship_tolerance_report(self, mouse_genotypes, reference_kinship):
-        """Report achieved tolerance for decision gate."""
+        """Report achieved tolerance and assert on regression thresholds."""
         jamma_kinship = compute_centered_kinship(mouse_genotypes)
 
         result = compare_kinship_matrices(jamma_kinship, reference_kinship)
 
-        # This test always passes but reports the divergence for manual review
+        # Report for visibility
         print("\n=== KINSHIP VALIDATION REPORT ===")
         print("Dataset: mouse_hs1940 (1940 samples, 12226 SNPs)")
         print(f"Passed: {result.passed}")
@@ -79,6 +79,15 @@ class TestKinshipValidation:
         if result.worst_location:
             print(f"Worst location: {result.worst_location}")
         print("=================================\n")
+
+        # Assert on regression thresholds - fail if tolerance degrades
+        # These thresholds are based on observed behavior with current implementation
+        assert (
+            result.max_abs_diff < 1e-10
+        ), f"Absolute difference regression: {result.max_abs_diff:.2e} >= 1e-10"
+        assert (
+            result.max_rel_diff < 1e-10
+        ), f"Relative difference regression: {result.max_rel_diff:.2e} >= 1e-10"
 
 
 class TestKinshipSmallScale:

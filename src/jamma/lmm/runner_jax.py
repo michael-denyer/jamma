@@ -291,7 +291,11 @@ def run_lmm_association_jax(
     n_filtered = len(snp_indices)
     chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid)
 
-    # Move shared data to JAX arrays on target device
+    # Device-resident shared arrays - placed on device ONCE before chunk loop
+    # These arrays are used across all chunks and should not be re-transferred
+    # - eigenvalues: Used in every lambda optimization and Wald stat calculation
+    # - UtW_jax: Rotated covariates (constant across SNPs)
+    # - Uty_jax: Rotated phenotypes (constant across SNPs)
     eigenvalues = jax.device_put(jnp.array(eigenvalues_np), device)
     UtW_jax = jax.device_put(jnp.array(UtW), device)
     Uty_jax = jax.device_put(jnp.array(Uty), device)
@@ -614,7 +618,9 @@ def run_lmm_association_streaming(
     UtW = U.T @ W
     Uty = U.T @ phenotypes
 
-    # Move shared data to JAX arrays on target device
+    # Device-resident shared arrays - placed on device ONCE before chunk loop
+    # These are NOT re-transferred inside the file chunk or JAX chunk loops
+    # Only UtG (rotated genotypes) is transferred per-chunk as it differs by SNP
     eigenvalues = jax.device_put(jnp.array(eigenvalues_np), device)
     UtW_jax = jax.device_put(jnp.array(UtW), device)
     Uty_jax = jax.device_put(jnp.array(Uty), device)
@@ -690,7 +696,8 @@ def run_lmm_association_streaming(
                     geno_jax_chunk, ((0, 0), (0, pad_width)), mode="constant"
                 )
 
-            # Rotate genotypes
+            # Per-chunk device transfer - only UtG changes per JAX chunk
+            # Shared arrays (eigenvalues, UtW_jax, Uty_jax) remain device-resident
             UtG_chunk = U.T @ geno_jax_chunk
             UtG_jax = jax.device_put(jnp.array(UtG_chunk), device)
 

@@ -391,12 +391,22 @@ def calc_wald_stats_jax(
     P_YY = Pab[n_cvt, _IDX_YY]
     Px_YY = Pab[n_cvt + 1, _IDX_YY]  # After projecting out W and X
 
+    # Clamp Px_YY like NumPy path (GEMMA lmm.cpp:854)
+    # Only clamp if >= 0 and < 1e-8; leave negative values to produce NaN
+    Px_YY = jnp.where((Px_YY >= 0.0) & (Px_YY < 1e-8), 1e-8, Px_YY)
+
     # Effect size and standard error
+    # Guard P_XX <= 0: SNP has no variance, return NaN for all stats
     # GEMMA safe_sqrt: if |d| < 0.001, use abs(d) to tolerate small negatives
     # This matches GEMMA mathfunc.cpp:122-131
-    beta = P_XY / P_XX
+    is_valid = P_XX > 0
+
+    # Safe division avoiding divide-by-zero
+    beta = jnp.where(is_valid, P_XY / jnp.where(is_valid, P_XX, 1.0), jnp.nan)
     tau = df / Px_YY
-    variance_beta = 1.0 / (tau * P_XX)
+    variance_beta = jnp.where(
+        is_valid, 1.0 / (tau * jnp.where(is_valid, P_XX, 1.0)), jnp.nan
+    )
     # Apply safe_sqrt: for small negatives (|v| < 0.001), use abs; otherwise use as-is
     # In JAX, we handle this with jnp.where for the small negative case
     variance_safe = jnp.where(
@@ -405,7 +415,7 @@ def calc_wald_stats_jax(
         variance_beta,
     )
     # For large negatives, sqrt will produce NaN (matching GEMMA behavior)
-    se = jnp.sqrt(variance_safe)
+    se = jnp.where(is_valid, jnp.sqrt(variance_safe), jnp.nan)
 
     # F-statistic and p-value
     f_stat = (P_YY - Px_YY) * tau
@@ -415,8 +425,9 @@ def calc_wald_stats_jax(
     z = df / (df + jnp.maximum(f_stat, 1e-10))
     z = jnp.clip(z, 0.0, 1.0)
     p_wald = jax.scipy.special.betainc(df / 2.0, 0.5, z)
-    # If f_stat was non-positive, return p=1.0
+    # If f_stat was non-positive or P_XX invalid, return p=NaN
     p_wald = jnp.where(f_stat <= 0, 1.0, p_wald)
+    p_wald = jnp.where(is_valid, p_wald, jnp.nan)
 
     return beta, se, p_wald
 

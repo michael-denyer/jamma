@@ -105,8 +105,8 @@ def run_lmm_association_jax(
         miss_threshold: Maximum missing rate for SNP inclusion
         l_min: Minimum lambda for optimization
         l_max: Maximum lambda for optimization
-        n_grid: Number of grid points for lambda optimization
-        n_refine: Number of refinement steps per SNP
+        n_grid: Grid search resolution for initial lambda bracketing
+        n_refine: Golden section iterations for lambda refinement (min 20 for 1e-5 tol)
         use_gpu: Whether to use GPU acceleration (requires JAX GPU setup)
 
     Returns:

@@ -1,7 +1,7 @@
 """Wald test statistics computation for LMM association.
 
 Implements the Wald test formula from GEMMA's CalcRLWald function.
-Uses scipy for F-distribution survival function (CPU-native, no JAX overhead).
+Uses scipy's betainc for the F-distribution survival function.
 """
 
 from dataclasses import dataclass
@@ -57,25 +57,8 @@ class AssocResult:
     p_wald: float
 
 
-def get_pab_index(a: int, b: int) -> int:
-    """Legacy index function - wrapper for get_ab_index with n_cvt=1.
-
-    For backwards compatibility with code that assumes n_cvt=1.
-    New code should use get_ab_index directly.
-
-    Args:
-        a: First index (0-based, will be converted to 1-based)
-        b: Second index (0-based, will be converted to 1-based)
-
-    Returns:
-        Linear index into packed storage
-    """
-    # Convert from 0-based to 1-based for GEMMA convention
-    return get_ab_index(a + 1, b + 1, n_cvt=1)
-
-
 def f_sf(x: float, df1: float, df2: float) -> float:
-    """F-distribution survival function using JAX.
+    """F-distribution survival function using scipy.
 
     Computes P(F > x) for F-distributed random variable with df1 and df2
     degrees of freedom. Uses the regularized incomplete beta function
@@ -94,18 +77,12 @@ def f_sf(x: float, df1: float, df2: float) -> float:
     Returns:
         Survival function value (p-value for F-test)
     """
-    # Handle edge cases
     if x <= 0:
         return 1.0
     if not np.isfinite(x):
         return 0.0
 
-    # Compute beta function argument
-    # For F with df1, df2: SF = I_{df2/(df2 + df1*x)}(df2/2, df1/2)
     z = df2 / (df2 + df1 * x)
-
-    # Use JAX betainc (regularized incomplete beta function)
-    # betainc(a, b, x) = I_x(a, b)
     result = betainc(df2 / 2.0, df1 / 2.0, z)
 
     return float(result)
@@ -156,6 +133,17 @@ def calc_wald_test(
 
     # After projecting out covariates AND genotype (row index = n_cvt+1, 0-based)
     Px_yy = Pab[n_cvt + 1, index_yy]
+
+    # Guard against degenerate cases (matches JAX path behavior)
+    # P_xx <= 0 means SNP has no variance after projection
+    # Px_yy <= 0 means residual variance is zero or negative (numerical issue)
+    if P_xx <= 0.0:
+        return float("nan"), float("nan"), float("nan")
+
+    # Clamp Px_yy like JAX path does for P_yy (GEMMA lmm.cpp:854)
+    # Only clamp if >= 0 and < 1e-8; leave negative values to produce NaN
+    if Px_yy >= 0.0 and Px_yy < 1e-8:
+        Px_yy = 1e-8
 
     # Compute effect size and standard error
     # Use safe_sqrt to handle edge cases where 1/(tau*P_xx) could be slightly negative

@@ -151,6 +151,100 @@ def _compute_chunk_size(n_samples: int, n_snps: int, n_grid: int = 50) -> int:
     return max(100, max_snps_per_chunk)
 
 
+def auto_tune_chunk_size(
+    n_samples: int,
+    n_grid: int = 50,
+    target_snps: int = 1000,
+    max_chunk_size: int = 100_000,
+    use_gpu: bool = False,
+) -> int:
+    """Auto-tune chunk size by running timed micro-benchmarks.
+
+    Runs a few iterations with different chunk sizes on dummy data to find
+    the optimal throughput for the current hardware. Call this once at the
+    start of a large run to optimize performance.
+
+    Args:
+        n_samples: Number of samples (must match actual data).
+        n_grid: Grid points for lambda optimization (default 50).
+        target_snps: Number of dummy SNPs to test with (default 1000).
+        max_chunk_size: Maximum chunk size to test (default 100k).
+        use_gpu: Whether to use GPU (default False).
+
+    Returns:
+        Optimal chunk size for throughput on this hardware.
+
+    Example:
+        >>> optimal_chunk = auto_tune_chunk_size(n_samples=10000)
+        >>> results = run_lmm_association_streaming(..., chunk_size=optimal_chunk)
+    """
+    import time
+
+    # Candidate chunk sizes to test (powers of 2 roughly)
+    candidates = [1000, 2000, 5000, 10000, 20000, 50000]
+    candidates = [c for c in candidates if c <= max_chunk_size]
+
+    # Limit by int32 buffer constraint
+    buffer_limit = _compute_chunk_size(n_samples, max_chunk_size, n_grid)
+    candidates = [c for c in candidates if c <= buffer_limit]
+
+    if not candidates:
+        candidates = [buffer_limit]
+
+    # Generate dummy data for benchmarking
+    np.random.seed(0)
+    dummy_geno = np.random.randn(n_samples, target_snps).astype(np.float64)
+    dummy_eigenvalues = np.abs(np.random.randn(n_samples)) + 0.1
+    dummy_UtW = np.ones((n_samples, 1), dtype=np.float64)
+    dummy_Uty = np.random.randn(n_samples).astype(np.float64)
+
+    # Setup JAX device
+    device = jax.devices("gpu")[0] if use_gpu else jax.devices("cpu")[0]
+
+    # Transfer shared arrays once
+    eigenvalues = jax.device_put(dummy_eigenvalues, device)
+    UtW_jax = jax.device_put(dummy_UtW, device)
+    Uty_jax = jax.device_put(dummy_Uty, device)
+
+    results = {}
+    logger.info(f"Auto-tuning chunk size for {n_samples} samples...")
+
+    for chunk_size in candidates:
+        # Warmup + timed run
+        n_test = min(chunk_size, target_snps)
+        UtG_chunk = dummy_geno[:, :n_test]
+        UtG_jax = jax.device_put(np.ascontiguousarray(UtG_chunk), device)
+
+        # Warmup (JIT compilation)
+        Uab_batch = batch_compute_uab(UtW_jax, Uty_jax, UtG_jax)
+        Iab_batch = batch_compute_iab(Uab_batch)
+        _ = golden_section_optimize_lambda(
+            eigenvalues, Uab_batch, Iab_batch, n_grid=n_grid, n_iter=20
+        )
+
+        # Timed run
+        start = time.perf_counter()
+        Uab_batch = batch_compute_uab(UtW_jax, Uty_jax, UtG_jax)
+        Iab_batch = batch_compute_iab(Uab_batch)
+        _ = golden_section_optimize_lambda(
+            eigenvalues, Uab_batch, Iab_batch, n_grid=n_grid, n_iter=20
+        )
+        # Block until computation complete
+        jax.block_until_ready(_)
+        elapsed = time.perf_counter() - start
+
+        throughput = n_test / elapsed
+        results[chunk_size] = throughput
+        logger.debug(f"  chunk_size={chunk_size}: {throughput:.0f} SNPs/sec")
+
+    # Find best
+    best_chunk = max(results, key=results.get)
+    best_throughput = results[best_chunk]
+    logger.info(f"Optimal chunk_size={best_chunk} ({best_throughput:.0f} SNPs/sec)")
+
+    return best_chunk
+
+
 def run_lmm_association_jax(
     genotypes: np.ndarray,
     phenotypes: np.ndarray,

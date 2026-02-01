@@ -87,7 +87,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from loguru import logger
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from jamma.core.memory import estimate_streaming_memory, estimate_workflow_memory
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks

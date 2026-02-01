@@ -174,7 +174,7 @@ def estimate_streaming_memory(
     eigendecomp_workspace_gb = (26 * n_samples * 8 + 10 * n_samples * 4) / 1e9
 
     # Chunk memory (float64 for precision in kinship accumulation)
-    chunk_gb = n_samples * chunk_size * 8 / 1e9  # float64
+    chunk_gb = n_samples * chunk_size * 8 / 1e9
     rotation_buffer_gb = n_samples * chunk_size * 8 / 1e9  # UtG buffer
 
     # Grid REML intermediate: _batch_grid_reml creates (n_grid, chunk_size) arrays

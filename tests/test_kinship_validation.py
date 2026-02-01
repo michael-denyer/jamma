@@ -38,7 +38,10 @@ class TestKinshipValidation:
     """Tests validating JAMMA kinship against reference."""
 
     def test_kinship_matches_reference(self, mouse_genotypes, reference_kinship):
-        """JAMMA kinship matches reference within tolerance."""
+        """JAMMA kinship matches reference within tolerance.
+
+        Reference was regenerated with monomorphic filtering enabled (GEMMA behavior).
+        """
         jamma_kinship = compute_centered_kinship(mouse_genotypes)
 
         result = compare_kinship_matrices(jamma_kinship, reference_kinship)

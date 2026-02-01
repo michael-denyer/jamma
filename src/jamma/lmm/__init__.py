@@ -19,10 +19,15 @@ from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.io import write_assoc_results
 from jamma.lmm.likelihood import compute_Uab
 from jamma.lmm.optimize import optimize_lambda_for_snp
-from jamma.lmm.runner_jax import run_lmm_association_jax, run_lmm_association_streaming
+from jamma.lmm.runner_jax import (
+    auto_tune_chunk_size,
+    run_lmm_association_jax,
+    run_lmm_association_streaming,
+)
 from jamma.lmm.stats import AssocResult, calc_wald_test_from_uab
 
 __all__ = [
+    "auto_tune_chunk_size",
     "run_lmm_association",
     "run_lmm_association_jax",
     "run_lmm_association_streaming",

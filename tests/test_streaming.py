@@ -11,6 +11,7 @@ from jamma.io.plink import (
     load_plink_binary,
     stream_genotype_chunks,
 )
+from jamma.kinship.compute import compute_centered_kinship, compute_kinship_streaming
 
 
 class TestStreamGenotypeChunks:
@@ -234,3 +235,97 @@ class TestEstimateStreamingMemory:
         assert (
             est.sufficient is False
         ), "200k sample workflow should exceed available memory"
+
+
+class TestComputeKinshipStreaming:
+    """Tests for compute_kinship_streaming function."""
+
+    def test_compute_kinship_streaming_matches_full_load(
+        self, sample_plink_data: Path
+    ) -> None:
+        """Verify streaming kinship matches full-load kinship computation."""
+        # Load genotypes for full computation
+        data = load_plink_binary(sample_plink_data)
+
+        # Compute kinship via full-load method
+        K_full = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        # Compute kinship via streaming
+        K_stream = compute_kinship_streaming(
+            sample_plink_data, chunk_size=5000, check_memory=False, show_progress=False
+        )
+
+        # Should match within numerical precision
+        np.testing.assert_allclose(
+            K_stream,
+            K_full,
+            rtol=1e-10,
+            atol=1e-14,
+            err_msg="Streaming kinship should match full-load kinship",
+        )
+
+    def test_compute_kinship_streaming_is_symmetric(
+        self, sample_plink_data: Path
+    ) -> None:
+        """Verify streaming kinship produces symmetric matrix."""
+        K = compute_kinship_streaming(
+            sample_plink_data, chunk_size=4000, check_memory=False, show_progress=False
+        )
+
+        # Kinship matrix must be symmetric
+        np.testing.assert_allclose(K, K.T, err_msg="Kinship matrix should be symmetric")
+
+    def test_compute_kinship_streaming_different_chunk_sizes(
+        self, sample_plink_data: Path
+    ) -> None:
+        """Verify different chunk sizes produce identical results."""
+        chunk_sizes = [1000, 5000, 10000]
+
+        results = [
+            compute_kinship_streaming(
+                sample_plink_data,
+                chunk_size=cs,
+                check_memory=False,
+                show_progress=False,
+            )
+            for cs in chunk_sizes
+        ]
+
+        # All chunk sizes should produce identical kinship
+        for i in range(1, len(results)):
+            np.testing.assert_allclose(
+                results[i],
+                results[0],
+                rtol=1e-10,
+                atol=1e-14,
+                err_msg=f"Chunk size {chunk_sizes[i]} should match {chunk_sizes[0]}",
+            )
+
+    def test_compute_kinship_streaming_memory_check(
+        self, sample_plink_data: Path
+    ) -> None:
+        """Verify memory check behavior."""
+        # With check_memory=False, should always succeed
+        K = compute_kinship_streaming(
+            sample_plink_data, check_memory=False, show_progress=False
+        )
+        assert K.shape == (1940, 1940)
+
+        # Mock low available memory to test MemoryError
+        # For this small dataset, we don't actually expect MemoryError
+        # Just verify the function works with check_memory=True
+        K_checked = compute_kinship_streaming(
+            sample_plink_data, check_memory=True, show_progress=False
+        )
+        assert K_checked.shape == (1940, 1940)
+
+    def test_compute_kinship_streaming_missing_file_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """Verify FileNotFoundError for nonexistent file."""
+        nonexistent = tmp_path / "nonexistent"
+
+        with pytest.raises(FileNotFoundError, match="PLINK .bed file not found"):
+            compute_kinship_streaming(nonexistent, show_progress=False)

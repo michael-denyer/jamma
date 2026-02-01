@@ -98,28 +98,52 @@ from jamma.lmm.likelihood_jax import (
 )
 from jamma.lmm.stats import AssocResult
 
-# INT32_MAX with 20% headroom for JAX internal indexing overhead
-# Uab has shape (n_snps, n_samples, 6), so total elements = n_snps * n_samples * 6
-# At 50K samples: max ~5,700 SNPs/chunk (2 chunks for 10K SNPs)
-# At 100K samples: max ~2,800 SNPs/chunk (4 chunks for 10K SNPs)
+# INT32_MAX with headroom for JAX internal indexing overhead
+# Multiple arrays contribute to buffer sizing:
+# - Uab: (n_snps, n_samples, 6)
+# - Grid REML intermediate: (n_grid, n_snps) during vmap over lambdas
+# - UtG_chunk: (n_samples, n_snps)
+#
+# The bottleneck is _batch_grid_reml which creates (n_grid, n_snps) intermediate
+# tensors during vmap. Total elements must stay below INT32_MAX.
 _MAX_BUFFER_ELEMENTS = 1_700_000_000  # ~1.7B elements, 80% of INT32_MAX
 
 
-def _compute_chunk_size(n_samples: int, n_snps: int) -> int:
+def _compute_chunk_size(n_samples: int, n_snps: int, n_grid: int = 50) -> int:
     """Compute optimal chunk size to avoid int32 buffer overflow.
 
-    JAX uses int32 for buffer indexing by default. The Uab array has shape
-    (n_snps, n_samples, 6), so we need n_snps * n_samples * 6 < INT32_MAX.
+    JAX uses int32 for buffer indexing by default. Multiple arrays contribute:
+    1. Uab: (chunk_size, n_samples, 6) = chunk_size * n_samples * 6
+    2. Grid REML: (n_grid, chunk_size) intermediate = n_grid * chunk_size
+    3. UtG_chunk: (n_samples, chunk_size) = n_samples * chunk_size
+
+    The most restrictive constraint is typically Uab for large n_samples.
 
     Args:
         n_samples: Number of samples.
         n_snps: Total number of SNPs.
+        n_grid: Grid points for lambda optimization (default 50).
 
     Returns:
         Chunk size (number of SNPs per chunk). Returns n_snps if no chunking needed.
     """
-    # Elements per SNP in Uab: n_samples * 6
-    elements_per_snp = n_samples * 6
+    if n_samples == 0:
+        return n_snps
+
+    # Calculate elements per SNP for each array type
+    # Uab: n_samples * 6 elements per SNP
+    uab_per_snp = n_samples * 6
+
+    # Grid REML creates (n_grid, chunk_size) intermediates
+    # plus vmap overhead - conservative estimate
+    grid_per_snp = n_grid
+
+    # UtG_chunk: n_samples elements per SNP
+    utg_per_snp = n_samples
+
+    # Total elements per SNP (max of potential intermediates)
+    # Use the most restrictive constraint
+    elements_per_snp = max(uab_per_snp, grid_per_snp * n_samples, utg_per_snp)
 
     if elements_per_snp == 0:
         return n_snps
@@ -129,8 +153,8 @@ def _compute_chunk_size(n_samples: int, n_snps: int) -> int:
     if max_snps_per_chunk >= n_snps:
         return n_snps  # No chunking needed
 
-    # Use chunk size that divides work reasonably
-    return max(1, max_snps_per_chunk)
+    # Use chunk size that divides work reasonably, minimum 100 SNPs
+    return max(100, max_snps_per_chunk)
 
 
 def run_lmm_association_jax(
@@ -265,7 +289,7 @@ def run_lmm_association_jax(
 
     # Determine chunk size to avoid int32 buffer overflow
     n_filtered = len(snp_indices)
-    chunk_size = _compute_chunk_size(n_samples, n_filtered)
+    chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid)
 
     # Move shared data to JAX arrays on target device
     eigenvalues = jax.device_put(jnp.array(eigenvalues_np), device)
@@ -596,7 +620,7 @@ def run_lmm_association_streaming(
     Uty_jax = jax.device_put(jnp.array(Uty), device)
 
     # Compute chunk size for JAX buffer limits
-    jax_chunk_size = _compute_chunk_size(n_samples, n_filtered)
+    jax_chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid)
 
     # === PASS 2: Association ===
     all_lambdas = []

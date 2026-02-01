@@ -16,13 +16,22 @@ Usage:
 
     # For batch processing (uses JAX for GPU acceleration)
     from jamma.lmm.likelihood_jax import batch_reml_log_likelihood
+
+Type annotations use jaxtyping for shape documentation:
+    n = n_samples, p = n_snps, g = n_grid
 """
 
+from __future__ import annotations
+
 from functools import partial
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
 from jax import jit, vmap
+
+if TYPE_CHECKING:
+    from jaxtyping import Array, Float
 
 # Pre-compute index mappings for n_cvt=1 (most common case)
 # For n_cvt=1: indices are (1,1), (1,2), (1,3), (2,2), (2,3), (3,3)
@@ -37,8 +46,8 @@ _IDX_YY = 5  # phenotype-phenotype
 
 @jit
 def compute_uab_jax(
-    UtW: jnp.ndarray, Uty: jnp.ndarray, Utx: jnp.ndarray
-) -> jnp.ndarray:
+    UtW: Float[Array, "n 1"], Uty: Float[Array, " n"], Utx: Float[Array, " n"]
+) -> Float[Array, "n 6"]:
     """Compute Uab matrix for a single SNP using JAX.
 
     Optimized for n_cvt=1 (intercept only), which is the most common case.
@@ -67,7 +76,9 @@ def compute_uab_jax(
 
 
 @jit
-def calc_pab_jax(Hi_eval: jnp.ndarray, Uab: jnp.ndarray) -> jnp.ndarray:
+def calc_pab_jax(
+    Hi_eval: Float[Array, " n"], Uab: Float[Array, "n 6"]
+) -> Float[Array, "3 6"]:
     """Compute Pab matrix using JAX (optimized for n_cvt=1).
 
     This is the core projection computation. For n_cvt=1:
@@ -118,21 +129,21 @@ def calc_pab_jax(Hi_eval: jnp.ndarray, Uab: jnp.ndarray) -> jnp.ndarray:
 
 @jit
 def reml_log_likelihood_jax(
-    lambda_val: float,
-    eigenvalues: jnp.ndarray,
-    Uab: jnp.ndarray,
-) -> float:
+    lambda_val: Float[Array, ""],
+    eigenvalues: Float[Array, " n"],
+    Uab: Float[Array, "n 6"],
+) -> Float[Array, ""]:
     """Compute REML log-likelihood using JAX (optimized for n_cvt=1).
 
     JIT-compiled version for efficient repeated evaluation during optimization.
 
     Args:
-        lambda_val: Variance component ratio
+        lambda_val: Variance component ratio (scalar)
         eigenvalues: Eigenvalues of kinship matrix (n_samples,)
         Uab: Matrix products (n_samples, 6)
 
     Returns:
-        Log-likelihood value
+        Log-likelihood value (scalar)
     """
     n = eigenvalues.shape[0]
     n_cvt = 1
@@ -181,10 +192,10 @@ def reml_log_likelihood_jax(
 
 
 def batch_compute_uab(
-    UtW: jnp.ndarray,
-    Uty: jnp.ndarray,
-    UtG: jnp.ndarray,
-) -> jnp.ndarray:
+    UtW: Float[Array, "n 1"],
+    Uty: Float[Array, " n"],
+    UtG: Float[Array, "n p"],
+) -> Float[Array, "p n 6"]:
     """Compute Uab matrices for all SNPs at once.
 
     Args:
@@ -223,13 +234,13 @@ def batch_compute_uab(
 
 @partial(jit, static_argnums=(2, 3, 4, 5))
 def golden_section_optimize_lambda(
-    eigenvalues: jnp.ndarray,
-    Uab_batch: jnp.ndarray,
+    eigenvalues: Float[Array, " n"],
+    Uab_batch: Float[Array, "p n 6"],
     l_min: float = 1e-5,
     l_max: float = 1e5,
     n_grid: int = 50,
     n_iter: int = 20,
-) -> tuple[jnp.ndarray, jnp.ndarray]:
+) -> tuple[Float[Array, " p"], Float[Array, " p"]]:
     """Optimize lambda using grid search + golden section refinement.
 
     This hybrid approach:
@@ -334,10 +345,10 @@ def golden_section_optimize_lambda(
 
 
 def _batch_grid_reml(
-    lambdas: jnp.ndarray,
-    eigenvalues: jnp.ndarray,
-    Uab_batch: jnp.ndarray,
-) -> jnp.ndarray:
+    lambdas: Float[Array, " g"],
+    eigenvalues: Float[Array, " n"],
+    Uab_batch: Float[Array, "p n 6"],
+) -> Float[Array, "g p"]:
     """Compute REML at all grid points for all SNPs (fully on device).
 
     Uses vmap over lambda values to avoid Python loops and host/device sync.
@@ -362,21 +373,21 @@ def _batch_grid_reml(
 
 @jit
 def calc_wald_stats_jax(
-    lambda_val: float,
-    eigenvalues: jnp.ndarray,
-    Uab: jnp.ndarray,
+    lambda_val: Float[Array, ""],
+    eigenvalues: Float[Array, " n"],
+    Uab: Float[Array, "n 6"],
     n_samples: int,
-) -> tuple[float, float, float]:
+) -> tuple[Float[Array, ""], Float[Array, ""], Float[Array, ""]]:
     """Compute Wald test statistics using JAX (n_cvt=1).
 
     Args:
-        lambda_val: Optimized variance ratio
+        lambda_val: Optimized variance ratio (scalar)
         eigenvalues: Eigenvalues (n_samples,)
         Uab: Matrix products (n_samples, 6)
         n_samples: Number of samples
 
     Returns:
-        Tuple of (beta, se, p_wald)
+        Tuple of (beta, se, p_wald) - all scalars
     """
     n_cvt = 1
     df = n_samples - n_cvt - 1

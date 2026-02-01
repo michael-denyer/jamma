@@ -11,6 +11,7 @@ JAX computations to enable x64 mode.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import jax
@@ -18,7 +19,30 @@ import jax.numpy as jnp
 from loguru import logger
 
 
-def configure_jax(enable_x64: bool = True, platform: str | None = None) -> None:
+def _pin_blas_threads(n_threads: int = 1) -> None:
+    """Pin BLAS thread count to avoid oversubscription with JAX.
+
+    JAX manages its own parallelism; having BLAS libraries spawn additional
+    threads causes contention and slowdowns. This sets environment variables
+    for common BLAS implementations.
+
+    Must be called BEFORE importing numpy/scipy in the process.
+    """
+    os.environ.setdefault("OMP_NUM_THREADS", str(n_threads))
+    os.environ.setdefault("MKL_NUM_THREADS", str(n_threads))
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", str(n_threads))
+    os.environ.setdefault("VECLIB_MAXIMUM_THREADS", str(n_threads))  # macOS Accelerate
+
+
+# Pin threads on module import (before JAX does any work)
+_pin_blas_threads(1)
+
+
+def configure_jax(
+    enable_x64: bool = True,
+    platform: str | None = None,
+    persistent_cache: bool = True,
+) -> None:
     """Configure JAX for GEMMA-Next computations.
 
     This function should be called once at application startup before any
@@ -29,6 +53,8 @@ def configure_jax(enable_x64: bool = True, platform: str | None = None) -> None:
             numerical equivalence with GEMMA C++ implementation. Defaults to True.
         platform: Optional platform name ("cpu", "gpu", "tpu"). If None,
             JAX auto-selects the best available platform.
+        persistent_cache: Enable XLA compilation cache persistence. Speeds up
+            subsequent runs by reusing compiled kernels. Defaults to True.
 
     Example:
         >>> configure_jax()  # Enable x64, auto-select platform
@@ -41,6 +67,15 @@ def configure_jax(enable_x64: bool = True, platform: str | None = None) -> None:
     if platform is not None:
         jax.config.update("jax_platform_name", platform)
         logger.debug(f"JAX platform set to: {platform}")
+
+    if persistent_cache:
+        # Enable XLA compilation cache - reuses compiled kernels across runs
+        # Only cache compilations that take >1s to avoid cache bloat
+        cache_dir = os.path.expanduser("~/.cache/jax")
+        os.makedirs(cache_dir, exist_ok=True)
+        jax.config.update("jax_compilation_cache_dir", cache_dir)
+        jax.config.update("jax_persistent_cache_min_compile_time_secs", 1.0)
+        logger.debug(f"JAX compilation cache enabled: {cache_dir}")
 
     info = get_jax_info()
     logger.info(

@@ -299,9 +299,135 @@ def generate_synthetic_data(config: BenchmarkConfig, profiler: BenchmarkProfiler
 
 # COMMAND ----------
 
+import shutil
+import subprocess
+import tempfile
+
 from jamma.kinship import compute_centered_kinship  # noqa: E402
 from jamma.lmm import run_lmm_association  # noqa: E402
 from jamma.lmm.runner_jax import run_lmm_association_jax  # noqa: E402
+
+
+def _write_plink_files(
+    prefix: str, genotypes: np.ndarray, phenotype: np.ndarray
+) -> None:
+    """Write genotypes and phenotypes to PLINK binary format."""
+    n_samples, n_snps = genotypes.shape
+
+    # Write .fam file
+    with open(f"{prefix}.fam", "w") as f:
+        for i in range(n_samples):
+            f.write(f"FAM{i} IND{i} 0 0 0 {phenotype[i]:.6f}\n")
+
+    # Write .bim file
+    with open(f"{prefix}.bim", "w") as f:
+        for j in range(n_snps):
+            f.write(f"1 rs{j} 0 {j * 1000} A G\n")
+
+    # Write .bed file (PLINK binary format)
+    magic = bytes([0x6C, 0x1B, 0x01])  # PLINK 1.9, SNP-major
+    geno_t = genotypes.T  # SNP-major
+    bytes_per_snp = (n_samples + 3) // 4
+    data = bytearray(len(magic) + n_snps * bytes_per_snp)
+    data[:3] = magic
+
+    for j in range(n_snps):
+        for i in range(n_samples):
+            byte_idx = 3 + j * bytes_per_snp + i // 4
+            bit_idx = (i % 4) * 2
+            g = geno_t[j, i]
+            if np.isnan(g):
+                code = 0b01  # Missing
+            elif g == 0:
+                code = 0b00  # Hom ref
+            elif g == 1:
+                code = 0b10  # Het
+            else:
+                code = 0b11  # Hom alt
+            data[byte_idx] |= code << bit_idx
+
+    with open(f"{prefix}.bed", "wb") as f:
+        f.write(data)
+
+
+def benchmark_gemma(
+    genotypes: np.ndarray,
+    phenotype: np.ndarray,
+    profiler: BenchmarkProfiler,
+    n_snps_lmm: int,
+    gemma_path: str | None = None,
+) -> tuple[float | None, float | None]:
+    """Benchmark GEMMA for direct comparison.
+
+    Returns:
+        Tuple of (kinship_time, lmm_time) or (None, None) if GEMMA unavailable.
+    """
+    # Find GEMMA binary
+    gemma_bin = gemma_path or GEMMA_PATH or shutil.which("gemma")
+    if not gemma_bin or not Path(gemma_bin).exists():
+        logger.warning("GEMMA not found - skipping GEMMA benchmark")
+        return None, None
+
+    n_samples, n_snps = genotypes.shape
+
+    # Only benchmark smaller configs (GEMMA is slow at scale)
+    if n_samples > 20_000:
+        logger.info(f"Skipping GEMMA benchmark for {n_samples:,} samples (too large)")
+        return None, None
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        prefix = tmpdir / "bench"
+        output_dir = tmpdir / "output"
+        output_dir.mkdir()
+
+        # Write PLINK files (only n_snps_lmm SNPs for fair comparison)
+        _write_plink_files(str(prefix), genotypes[:, :n_snps_lmm], phenotype)
+
+        # Benchmark GEMMA kinship
+        profiler.start("gemma", "kinship", n_samples=n_samples, n_snps=n_snps_lmm)
+        try:
+            subprocess.run(
+                [gemma_bin, "-bfile", str(prefix), "-gk", "1", "-o", "kinship"],
+                cwd=str(output_dir),
+                capture_output=True,
+                check=True,
+                timeout=600,
+            )
+            kinship_time = profiler.end("gemma", "kinship")
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+            profiler.error("gemma", "kinship", e)
+            return None, None
+
+        # Benchmark GEMMA LMM
+        kinship_file = output_dir / "output" / "kinship.cXX.txt"
+        profiler.start("gemma", "lmm", n_samples=n_samples, n_snps=n_snps_lmm)
+        try:
+            subprocess.run(
+                [
+                    gemma_bin,
+                    "-bfile",
+                    str(prefix),
+                    "-k",
+                    str(kinship_file),
+                    "-lmm",
+                    "1",
+                    "-o",
+                    "assoc",
+                ],
+                cwd=str(output_dir),
+                capture_output=True,
+                check=True,
+                timeout=1200,
+            )
+            lmm_time = profiler.end("gemma", "lmm")
+            throughput = n_snps_lmm / lmm_time if lmm_time > 0 else 0
+            logger.info(f"GEMMA throughput: {throughput:.0f} SNPs/sec")
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+            profiler.error("gemma", "lmm", e)
+            return kinship_time, None
+
+    return kinship_time, lmm_time
 
 
 def benchmark_kinship(genotypes: np.ndarray, profiler: BenchmarkProfiler):
@@ -463,9 +589,25 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
         except Exception as e:
             profiler.error("lmm_jax", "association", e)
 
-        # Speedup
+        # GEMMA benchmark (for smaller configs only)
+        gemma_kinship_time, gemma_lmm_time = benchmark_gemma(
+            genotypes, phenotype, profiler, config.n_snps_lmm
+        )
+        if gemma_kinship_time is not None:
+            results["gemma_kinship_time"] = gemma_kinship_time
+        if gemma_lmm_time is not None:
+            results["gemma_lmm_time"] = gemma_lmm_time
+            results["gemma_snps_per_sec"] = config.n_snps_lmm / gemma_lmm_time
+
+        # Speedups
         if results.get("lmm_cpu_time") and results.get("lmm_jax_time"):
-            results["jax_speedup"] = results["lmm_cpu_time"] / results["lmm_jax_time"]
+            results["jax_vs_cpu"] = results["lmm_cpu_time"] / results["lmm_jax_time"]
+        if results.get("gemma_lmm_time") and results.get("lmm_jax_time"):
+            gemma_t = results["gemma_lmm_time"]
+            results["jax_vs_gemma"] = gemma_t / results["lmm_jax_time"]
+        if results.get("gemma_lmm_time") and results.get("lmm_cpu_time"):
+            gemma_t = results["gemma_lmm_time"]
+            results["cpu_vs_gemma"] = gemma_t / results["lmm_cpu_time"]
 
     except Exception as e:
         profiler.error("benchmark", "main", e)
@@ -506,6 +648,46 @@ logger.info(f"\nBenchmark complete. {len(results_df)} configurations tested.")
 # COMMAND ----------
 
 display(results_df)  # noqa: F821 - Databricks built-in
+
+# COMMAND ----------
+
+# Performance Comparison: JAMMA vs GEMMA
+print("\n" + "=" * 60)
+print("JAMMA vs GEMMA COMPARISON")
+print("=" * 60)
+
+for _, row in results_df.iterrows():
+    cfg = row["config"]
+    print(f"\n{cfg}:")
+
+    gemma_lmm = row.get("gemma_lmm_time")
+    cpu_lmm = row.get("lmm_cpu_time")
+    jax_lmm = row.get("lmm_jax_time")
+
+    if gemma_lmm:
+        print(f"  GEMMA:      {gemma_lmm:7.2f}s")
+    else:
+        print("  GEMMA:      (skipped - too large or unavailable)")
+
+    if cpu_lmm:
+        print(f"  JAMMA CPU:  {cpu_lmm:7.2f}s", end="")
+        if gemma_lmm:
+            ratio = gemma_lmm / cpu_lmm
+            print(f"  ({ratio:.2f}x vs GEMMA)")
+        else:
+            print()
+
+    if jax_lmm:
+        print(f"  JAMMA JAX:  {jax_lmm:7.2f}s", end="")
+        if gemma_lmm:
+            ratio = gemma_lmm / jax_lmm
+            print(f"  ({ratio:.2f}x vs GEMMA)")
+        else:
+            print()
+
+    if cpu_lmm and jax_lmm:
+        ratio = cpu_lmm / jax_lmm
+        print(f"  JAX speedup vs CPU: {ratio:.2f}x")
 
 # COMMAND ----------
 

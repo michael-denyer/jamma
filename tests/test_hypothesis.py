@@ -212,11 +212,14 @@ class TestRemlProperties:
         # Should have a clear maximum somewhere (not monotonic)
         max_idx = np.argmax(logls)
         # Maximum shouldn't be at the extreme ends (unless at boundary)
+        # Interior maximum: not at first or last position
+        is_interior = 0 < max_idx < len(lambdas) - 1
+        # Boundary maximum: at edge but local maximum (slope inward)
+        is_left_boundary_max = max_idx == 0 and logls[0] >= logls[1]
+        is_right_boundary_max = max_idx == len(lambdas) - 1 and logls[-1] >= logls[-2]
         assert (
-            max_idx > 0
-            or max_idx < len(lambdas) - 1
-            or (logls[0] >= logls[1] and logls[-1] >= logls[-2])
-        ), "REML appears monotonic - no clear maximum"
+            is_interior or is_left_boundary_max or is_right_boundary_max
+        ), f"REML appears monotonic - no clear maximum (max at idx {max_idx})"
 
 
 # -----------------------------------------------------------------------------

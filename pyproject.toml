@@ -39,7 +39,11 @@ jamma = "jamma.cli:app"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-n auto --randomly-seed=last"
+addopts = "-n auto --randomly-seed=last --benchmark-skip"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "benchmark: marks tests that require pytest-benchmark (run with '--benchmark-only')",
+]
 
 [tool.ruff]
 line-length = 88

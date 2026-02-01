@@ -12,8 +12,6 @@ Key data structures:
 Reference: Zhou & Stephens (2012) Nature Genetics, Supplementary Information
 """
 
-from collections.abc import Callable
-
 import numpy as np
 from jax import config
 
@@ -347,31 +345,3 @@ def reml_log_likelihood(
     f = c - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
 
     return f
-
-
-def compute_pab(
-    Hi_eval: np.ndarray, Uab: np.ndarray, ab_index_func: Callable[[int, int], int]
-) -> np.ndarray:
-    """Legacy wrapper for calc_pab - for backwards compatibility.
-
-    Note: This is a simplified interface used by the stats module.
-    For full REML, use calc_pab directly with n_cvt.
-
-    Args:
-        Hi_eval: 1 / (lambda * eigenvalues + 1) vector (n_samples,)
-        Uab: Matrix products from compute_Uab
-        ab_index_func: Index function (ignored, uses get_ab_index)
-
-    Returns:
-        Pab matrix
-    """
-    # Infer n_cvt from Uab dimensions
-    # n_index = (n_cvt + 3) * (n_cvt + 2) / 2
-    # Solving: n_index = (n_cvt + 3) * (n_cvt + 2) / 2
-    # For n_cvt = 1: n_index = 4 * 3 / 2 = 6
-    n_index = Uab.shape[1]
-    # Solve quadratic: n^2 + 5n + 6 = 2*n_index
-    # n = (-5 + sqrt(25 - 24 + 8*n_index)) / 2
-    n_cvt = int((-5 + np.sqrt(1 + 8 * n_index)) / 2)
-
-    return calc_pab(n_cvt, Hi_eval, Uab)

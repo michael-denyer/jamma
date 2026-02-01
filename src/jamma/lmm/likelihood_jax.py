@@ -192,35 +192,29 @@ def batch_compute_uab(
         Uab matrices (n_snps, n_samples, 6)
     """
     n_samples, n_snps = UtG.shape
-    w = UtW[:, 0]  # Intercept column
-
-    # Vectorized computation for all SNPs at once
-    # Each column of UtG is a SNP's rotated genotype
-    # Output shape: (n_snps, n_samples, 6)
-
-    # Pre-compute phenotype products (same for all SNPs)
-    ww = w * w  # (n_samples,)
-    wy = w * Uty  # (n_samples,)
-    yy = Uty * Uty  # (n_samples,)
-
-    # Genotype products vary per SNP - use broadcasting
-    # UtG: (n_samples, n_snps) -> transpose to (n_snps, n_samples)
+    w = UtW[:, 0]
     UtG_T = UtG.T  # (n_snps, n_samples)
 
-    wx = w[None, :] * UtG_T  # (n_snps, n_samples): W*X for each SNP
-    xx = UtG_T * UtG_T  # (n_snps, n_samples): X*X for each SNP
-    xy = UtG_T * Uty[None, :]  # (n_snps, n_samples): X*Y for each SNP
+    # Pre-compute all element-wise products
+    ww = w * w
+    wy = w * Uty
+    yy = Uty * Uty
+    wx = w[None, :] * UtG_T
+    xx = UtG_T * UtG_T
+    xy = UtG_T * Uty[None, :]
 
-    # Build Uab: (n_snps, n_samples, 6)
-    Uab = jnp.zeros((n_snps, n_samples, 6), dtype=jnp.float64)
-    Uab = Uab.at[:, :, _IDX_WW].set(jnp.broadcast_to(ww, (n_snps, n_samples)))
-    Uab = Uab.at[:, :, _IDX_WX].set(wx)
-    Uab = Uab.at[:, :, _IDX_WY].set(jnp.broadcast_to(wy, (n_snps, n_samples)))
-    Uab = Uab.at[:, :, _IDX_XX].set(xx)
-    Uab = Uab.at[:, :, _IDX_XY].set(xy)
-    Uab = Uab.at[:, :, _IDX_YY].set(jnp.broadcast_to(yy, (n_snps, n_samples)))
-
-    return Uab
+    # Stack into output array using jnp.stack for efficiency
+    return jnp.stack(
+        [
+            jnp.broadcast_to(ww, (n_snps, n_samples)),  # WW
+            wx,  # WX
+            jnp.broadcast_to(wy, (n_snps, n_samples)),  # WY
+            xx,  # XX
+            xy,  # XY
+            jnp.broadcast_to(yy, (n_snps, n_samples)),  # YY
+        ],
+        axis=-1,
+    )
 
 
 @jit
@@ -385,62 +379,6 @@ def _batch_grid_reml(
         )(Uab_batch)
 
     return vmap(reml_for_lambda)(lambdas)
-
-
-def grid_optimize_lambda(
-    eigenvalues: jnp.ndarray,
-    Uab_batch: jnp.ndarray,
-    l_min: float = 1e-5,
-    l_max: float = 1e5,
-    n_grid: int = 100,
-    n_refine: int = 20,
-) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """Optimize lambda for all SNPs using grid search with refinement.
-
-    DEPRECATED: Use golden_section_optimize_lambda for better accuracy.
-
-    Two-stage optimization:
-    1. Coarse grid search on log scale to find approximate optimum
-    2. Fine grid refinement around the best point
-
-    This is highly efficient on GPU because all SNPs are processed
-    in parallel at each grid point.
-
-    Args:
-        eigenvalues: Eigenvalues (n_samples,)
-        Uab_batch: Uab matrices for all SNPs (n_snps, n_samples, 6)
-        l_min: Minimum lambda
-        l_max: Maximum lambda
-        n_grid: Number of coarse grid points
-        n_refine: Number of refinement points
-
-    Returns:
-        Tuple of (optimal_lambdas, log_likelihoods) for all SNPs
-    """
-    # Stage 1: Coarse grid on log scale
-    log_lambdas = jnp.linspace(jnp.log(l_min), jnp.log(l_max), n_grid)
-    lambdas = jnp.exp(log_lambdas)
-
-    # Evaluate all SNPs at all grid points (stays on device)
-    all_logls = _batch_grid_reml(lambdas, eigenvalues, Uab_batch)
-
-    # Find best lambda index for each SNP
-    best_idx = jnp.argmax(all_logls, axis=0)  # (n_snps,)
-    best_lambdas_coarse = lambdas[best_idx]
-
-    # Stage 2: Refine around best point
-    # For GPU efficiency, we use a common refinement grid scaled per SNP
-    median_lambda = jnp.median(best_lambdas_coarse)
-    refine_lambdas = jnp.linspace(median_lambda / 2, median_lambda * 2, n_refine)
-
-    refine_logls = _batch_grid_reml(refine_lambdas, eigenvalues, Uab_batch)
-
-    # Find best refined lambda
-    best_refine_idx = jnp.argmax(refine_logls, axis=0)
-    best_lambdas = refine_lambdas[best_refine_idx]
-    best_logls = jnp.max(refine_logls, axis=0)
-
-    return best_lambdas, best_logls
 
 
 @jit

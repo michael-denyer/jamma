@@ -318,6 +318,7 @@ def _write_bed_file(path: str, genotypes: np.ndarray) -> None:
     Args:
         path: Output path for .bed file.
         genotypes: Genotype matrix (n_samples, n_snps) with values 0, 1, 2 or NaN.
+                   Values represent counts of A1 (BIM col5) allele.
     """
     n_samples, n_snps = genotypes.shape
 
@@ -325,7 +326,11 @@ def _write_bed_file(path: str, genotypes: np.ndarray) -> None:
     magic = bytes([0x6C, 0x1B, 0x01])
 
     # Pack genotypes: 4 samples per byte
-    # PLINK encoding: 00=hom ref, 01=missing, 10=het, 11=hom alt
+    # PLINK encoding (genotype = count of A1 allele):
+    #   00 = hom A1 (genotype 2)
+    #   01 = missing
+    #   10 = het (genotype 1)
+    #   11 = hom A2 (genotype 0)
     geno_t = genotypes.T  # SNP-major
     bytes_per_snp = (n_samples + 3) // 4
     data = bytearray(len(magic) + n_snps * bytes_per_snp)
@@ -339,11 +344,11 @@ def _write_bed_file(path: str, genotypes: np.ndarray) -> None:
             if np.isnan(g):
                 code = 0b01  # Missing
             elif g == 0:
-                code = 0b00  # Hom ref
+                code = 0b11  # Hom A2 (0 copies of A1)
             elif g == 1:
                 code = 0b10  # Het
             else:
-                code = 0b11  # Hom alt
+                code = 0b00  # Hom A1 (2 copies of A1)
             data[byte_idx] |= code << bit_idx
 
     with open(path, "wb") as f:
@@ -365,9 +370,11 @@ def _write_plink_files(
             f.write(f"FAM{i} IND{i} 0 0 0 {phenotype[i]:.6f}\n")
 
     # Write .bim file
+    # Genotype values count copies of A1 (BIM col5, minor allele)
+    # A1 (col5) = G = minor allele, A2 (col6) = A = major allele
     with open(f"{prefix}.bim", "w") as f:
         for j in range(n_snps):
-            f.write(f"1 rs{j} 0 {j * 1000} A G\n")
+            f.write(f"1 rs{j} 0 {j * 1000} G A\n")
 
     # Write .bed file
     _write_bed_file(f"{prefix}.bed", genotypes)
@@ -421,7 +428,7 @@ def benchmark_gemma(
         # Benchmark GEMMA kinship
         profiler.start("gemma", "kinship", n_samples=n_samples, n_snps=n_snps_lmm)
         try:
-            subprocess.run(
+            proc = subprocess.run(
                 [gemma_bin, "-bfile", str(prefix), "-gk", "1", "-o", "kinship"],
                 cwd=str(output_dir),
                 capture_output=True,
@@ -429,15 +436,21 @@ def benchmark_gemma(
                 timeout=600,
             )
             result.kinship_time = profiler.end("gemma", "kinship")
+            if proc.stdout:
+                logger.debug(f"GEMMA kinship stdout:\n{proc.stdout.decode()}")
+            if proc.stderr:
+                logger.debug(f"GEMMA kinship stderr:\n{proc.stderr.decode()}")
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
             profiler.error("gemma", "kinship", e)
+            if hasattr(e, "stderr") and e.stderr:
+                logger.error(f"GEMMA kinship failed: {e.stderr.decode()}")
             return result
 
         # Benchmark GEMMA LMM
         kinship_file = output_dir / "output" / "kinship.cXX.txt"
         profiler.start("gemma", "lmm", n_samples=n_samples, n_snps=n_snps_lmm)
         try:
-            subprocess.run(
+            proc = subprocess.run(
                 [
                     gemma_bin,
                     "-bfile",
@@ -457,6 +470,10 @@ def benchmark_gemma(
             result.lmm_time = profiler.end("gemma", "lmm")
             throughput = n_snps_lmm / result.lmm_time if result.lmm_time > 0 else 0
             logger.info(f"GEMMA throughput: {throughput:.0f} SNPs/sec")
+            if proc.stdout:
+                logger.debug(f"GEMMA LMM stdout:\n{proc.stdout.decode()}")
+            if proc.stderr:
+                logger.debug(f"GEMMA LMM stderr:\n{proc.stderr.decode()}")
 
             # Load GEMMA results for validation
             assoc_file = output_dir / "output" / "assoc.assoc.txt"

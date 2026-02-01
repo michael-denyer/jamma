@@ -105,6 +105,104 @@ def estimate_workflow_memory(
     )
 
 
+class StreamingMemoryBreakdown(NamedTuple):
+    """Detailed memory breakdown for streaming GWAS workflow.
+
+    All values in GB. Peak memory is the maximum across workflow phases:
+    1. Kinship accumulation: kinship + chunk
+    2. Eigendecomposition: kinship + eigenvectors + workspace (typically peak)
+    3. LMM: eigenvectors + chunk + rotation buffer
+
+    The key difference from full-load estimation is that genotypes are
+    O(n * chunk_size), not O(n * n_snps).
+    """
+
+    kinship_gb: float  # n^2 * 8 bytes (float64)
+    eigenvectors_gb: float  # n^2 * 8 bytes (float64)
+    eigendecomp_workspace_gb: float  # ~26*n*8 + 10*n*4 bytes for DSYEVR
+    chunk_gb: float  # n * chunk_size * 8 bytes (float64 for precision)
+    rotation_buffer_gb: float  # n * chunk_size * 8 bytes for UtG
+    total_peak_gb: float  # Max of phases (eigendecomp is typically peak)
+    available_gb: float  # Current available system memory
+    sufficient: bool  # Whether available >= total * 1.1
+
+
+def estimate_streaming_memory(
+    n_samples: int,
+    n_snps: int,  # Only for logging; not used in peak calculation
+    chunk_size: int = 10_000,
+) -> StreamingMemoryBreakdown:
+    """Estimate memory requirements for streaming GWAS workflow.
+
+    Calculates memory for streaming kinship computation, eigendecomposition,
+    and LMM association testing. Returns the peak memory requirement.
+
+    Key difference from full-load estimation:
+    - Genotypes: O(n * chunk_size) not O(n * n_snps)
+    - Peak is typically eigendecomposition (kinship + eigenvectors simultaneously)
+
+    For 200k samples, 95k SNPs, 10k chunk:
+    - Kinship accumulation: 320GB + 16GB = 336GB
+    - Eigendecomp: 320GB + 320GB + 0.04GB = 640GB (PEAK)
+    - LMM: 320GB + 16GB + 16GB = 352GB
+
+    Note: This reveals the true constraint - eigendecomposition cannot be
+    streamed and requires both kinship (input) and eigenvectors (output)
+    matrices simultaneously.
+
+    Args:
+        n_samples: Number of samples (individuals).
+        n_snps: Number of SNPs (for logging only, not used in peak calculation).
+        chunk_size: SNPs per chunk (default 10,000).
+
+    Returns:
+        StreamingMemoryBreakdown with detailed component estimates.
+
+    Example:
+        >>> est = estimate_streaming_memory(200_000, 95_000)
+        >>> print(f"Peak: {est.total_peak_gb:.0f}GB (eigendecomp)")
+    """
+    # Component sizes
+    kinship_gb = n_samples**2 * 8 / 1e9  # float64
+    eigenvectors_gb = n_samples**2 * 8 / 1e9  # float64
+
+    # Eigendecomp workspace: DSYEVR uses O(n) workspace
+    # Formula: LWORK=26*n doubles + LIWORK=10*n integers
+    eigendecomp_workspace_gb = (26 * n_samples * 8 + 10 * n_samples * 4) / 1e9
+
+    # Chunk memory (float64 for precision in kinship accumulation)
+    chunk_gb = n_samples * chunk_size * 8 / 1e9  # float64
+    rotation_buffer_gb = n_samples * chunk_size * 8 / 1e9  # UtG buffer
+
+    # Peak memory calculation by workflow phase
+    # Phase 1 (kinship accumulation): kinship + chunk
+    peak_kinship = kinship_gb + chunk_gb
+
+    # Phase 2 (eigendecomp): kinship (input) + eigenvectors (output) + workspace
+    peak_eigendecomp = kinship_gb + eigenvectors_gb + eigendecomp_workspace_gb
+
+    # Phase 3 (LMM): eigenvectors + chunk + rotation buffer
+    # (kinship can be freed after eigendecomp)
+    peak_lmm = eigenvectors_gb + chunk_gb + rotation_buffer_gb
+
+    total_peak_gb = max(peak_kinship, peak_eigendecomp, peak_lmm)
+
+    # Check available memory
+    available_gb = psutil.virtual_memory().available / 1e9
+    sufficient = total_peak_gb * 1.1 < available_gb  # 10% safety margin
+
+    return StreamingMemoryBreakdown(
+        kinship_gb=kinship_gb,
+        eigenvectors_gb=eigenvectors_gb,
+        eigendecomp_workspace_gb=eigendecomp_workspace_gb,
+        chunk_gb=chunk_gb,
+        rotation_buffer_gb=rotation_buffer_gb,
+        total_peak_gb=total_peak_gb,
+        available_gb=available_gb,
+        sufficient=sufficient,
+    )
+
+
 def check_memory_available(
     required_gb: float,
     safety_margin: float = 0.1,

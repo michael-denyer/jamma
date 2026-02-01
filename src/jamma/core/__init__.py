@@ -15,7 +15,9 @@ from jamma.core.jax_config import (
 )
 from jamma.core.memory import (
     MemoryBreakdown,
+    StreamingMemoryBreakdown,
     check_memory_available,
+    estimate_streaming_memory,
     estimate_workflow_memory,
 )
 
@@ -25,6 +27,8 @@ __all__ = [
     "get_jax_info",
     "verify_jax_installation",
     "MemoryBreakdown",
+    "StreamingMemoryBreakdown",
     "check_memory_available",
+    "estimate_streaming_memory",
     "estimate_workflow_memory",
 ]

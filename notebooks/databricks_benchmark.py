@@ -534,12 +534,14 @@ try:
     # Databricks with legacy Hive Metastore (single-level namespace)
     spark.sql(f"CREATE SCHEMA IF NOT EXISTS {OUTPUT_SCHEMA}")  # noqa: F821
 
-    spark.createDataFrame(results_df).write.mode("append").saveAsTable(  # noqa: F821
-        f"{OUTPUT_SCHEMA}.benchmark_results"
-    )
-    spark.createDataFrame(events_df).write.mode("append").saveAsTable(  # noqa: F821
-        f"{OUTPUT_SCHEMA}.benchmark_events"
-    )
+    # Use mergeSchema to handle evolving result columns
+    spark.createDataFrame(results_df).write.mode("append").option(  # noqa: F821
+        "mergeSchema", "true"
+    ).saveAsTable(f"{OUTPUT_SCHEMA}.benchmark_results")
+
+    spark.createDataFrame(events_df).write.mode("append").option(  # noqa: F821
+        "mergeSchema", "true"
+    ).saveAsTable(f"{OUTPUT_SCHEMA}.benchmark_events")
     logger.info(f"Results saved to {OUTPUT_SCHEMA}")
 except NameError:
     # Local

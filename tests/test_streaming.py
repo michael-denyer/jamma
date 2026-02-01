@@ -200,6 +200,11 @@ class TestEstimateStreamingMemory:
         # Chunk: 200k * 10k * 8 / 1e9 = 16GB
         assert 15 < est.chunk_gb < 17, f"Expected ~16GB chunk, got {est.chunk_gb}"
 
+        # Grid REML: 50 * 10k * 8 / 1e9 = 0.004GB (4MB with default n_grid=50)
+        assert (
+            0.003 < est.grid_reml_gb < 0.005
+        ), f"Expected ~0.004GB grid_reml, got {est.grid_reml_gb}"
+
         # Peak should be eigendecomp: ~640GB (kinship + eigenvectors)
         assert (
             600 < est.total_peak_gb < 700
@@ -236,6 +241,24 @@ class TestEstimateStreamingMemory:
         assert (
             est.sufficient is False
         ), "200k sample workflow should exceed available memory"
+
+    def test_n_grid_affects_lmm_memory(self) -> None:
+        """Verify n_grid parameter affects LMM phase memory estimate."""
+        est_default = estimate_streaming_memory(100_000, 95_000, n_grid=50)
+        est_large = estimate_streaming_memory(100_000, 95_000, n_grid=100)
+
+        # Larger n_grid should increase grid_reml_gb
+        assert est_large.grid_reml_gb > est_default.grid_reml_gb
+        # With default chunk_size=10_000, doubling n_grid should double grid_reml
+        assert abs(est_large.grid_reml_gb / est_default.grid_reml_gb - 2.0) < 0.01
+
+    def test_grid_reml_gb_in_breakdown(self) -> None:
+        """Verify grid_reml_gb is included in breakdown."""
+        est = estimate_streaming_memory(100_000, 95_000, chunk_size=10_000, n_grid=50)
+
+        # grid_reml: 50 * 10_000 * 8 / 1e9 = 0.004GB = 4MB
+        expected_grid_reml = 50 * 10_000 * 8 / 1e9
+        assert abs(est.grid_reml_gb - expected_grid_reml) < 1e-6
 
 
 class TestComputeKinshipStreaming:

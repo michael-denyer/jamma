@@ -43,6 +43,12 @@ On 1940 samples × 12K SNPs (CPU):
 
 GPU acceleration provides additional speedup for larger datasets.
 
+Chunked Processing
+==================
+For large-scale analyses (>25K samples), SNPs are processed in chunks to avoid
+JAX int32 buffer index overflow. The chunk size is automatically computed to
+keep total array elements below 2 billion (INT32_MAX).
+
 Usage:
     from jamma.lmm.runner_jax import run_lmm_association_jax
 
@@ -55,6 +61,7 @@ Usage:
 import jax
 import jax.numpy as jnp
 import numpy as np
+from loguru import logger
 
 from jamma.core.memory import estimate_workflow_memory
 from jamma.lmm.eigen import eigendecompose_kinship
@@ -63,6 +70,38 @@ from jamma.lmm.likelihood_jax import (
     batch_compute_uab,
 )
 from jamma.lmm.stats import AssocResult
+
+# INT32_MAX / 10 to leave headroom for JAX internal indexing
+# Uab has shape (n_snps, n_samples, 6), so total elements = n_snps * n_samples * 6
+_MAX_BUFFER_ELEMENTS = 200_000_000  # ~200M elements, well under int32 overflow
+
+
+def _compute_chunk_size(n_samples: int, n_snps: int) -> int:
+    """Compute optimal chunk size to avoid int32 buffer overflow.
+
+    JAX uses int32 for buffer indexing by default. The Uab array has shape
+    (n_snps, n_samples, 6), so we need n_snps * n_samples * 6 < INT32_MAX.
+
+    Args:
+        n_samples: Number of samples.
+        n_snps: Total number of SNPs.
+
+    Returns:
+        Chunk size (number of SNPs per chunk). Returns n_snps if no chunking needed.
+    """
+    # Elements per SNP in Uab: n_samples * 6
+    elements_per_snp = n_samples * 6
+
+    if elements_per_snp == 0:
+        return n_snps
+
+    max_snps_per_chunk = _MAX_BUFFER_ELEMENTS // elements_per_snp
+
+    if max_snps_per_chunk >= n_snps:
+        return n_snps  # No chunking needed
+
+    # Use chunk size that divides work reasonably
+    return max(1, max_snps_per_chunk)
 
 
 def run_lmm_association_jax(
@@ -199,33 +238,65 @@ def run_lmm_association_jax(
     # Broadcast column means to fill missing values
     geno_filtered = np.where(missing_mask, col_means_filtered[None, :], geno_filtered)
 
+    # Compute rotated genotypes
     UtG = U.T @ geno_filtered  # (n_samples, n_filtered)
 
-    # Move to JAX arrays on target device
+    # Determine chunk size to avoid int32 buffer overflow
+    n_filtered = len(snp_indices)
+    chunk_size = _compute_chunk_size(n_samples, n_filtered)
+
+    # Move shared data to JAX arrays on target device
     eigenvalues = jax.device_put(jnp.array(eigenvalues_np), device)
     UtW_jax = jax.device_put(jnp.array(UtW), device)
     Uty_jax = jax.device_put(jnp.array(Uty), device)
-    UtG_jax = jax.device_put(jnp.array(UtG), device)
 
-    # Batch compute Uab for all SNPs
-    Uab_batch = batch_compute_uab(UtW_jax, Uty_jax, UtG_jax)
+    # Process in chunks if needed
+    if chunk_size < n_filtered:
+        n_chunks = (n_filtered + chunk_size - 1) // chunk_size
+        logger.info(
+            f"Processing {n_filtered:,} SNPs in {n_chunks} chunks "
+            f"({chunk_size:,} SNPs/chunk) to avoid buffer overflow"
+        )
 
-    # Grid-based lambda optimization
-    best_lambdas, best_logls = _grid_optimize_lambda_batched(
-        eigenvalues, Uab_batch, l_min, l_max, n_grid, n_refine
-    )
+    all_lambdas = []
+    all_logls = []
+    all_betas = []
+    all_ses = []
+    all_pwalds = []
 
-    # Batch compute Wald statistics
-    betas, ses, p_walds = batch_calc_wald_stats(
-        best_lambdas, eigenvalues, Uab_batch, n_samples
-    )
+    for chunk_start in range(0, n_filtered, chunk_size):
+        chunk_end = min(chunk_start + chunk_size, n_filtered)
 
-    # Convert back to numpy for result construction
-    best_lambdas_np = np.array(best_lambdas)
-    best_logls_np = np.array(best_logls)
-    betas_np = np.array(betas)
-    ses_np = np.array(ses)
-    p_walds_np = np.array(p_walds)
+        # Get chunk of rotated genotypes
+        UtG_chunk = UtG[:, chunk_start:chunk_end]
+        UtG_jax = jax.device_put(jnp.array(UtG_chunk), device)
+
+        # Batch compute Uab for this chunk
+        Uab_batch = batch_compute_uab(UtW_jax, Uty_jax, UtG_jax)
+
+        # Grid-based lambda optimization
+        best_lambdas, best_logls = _grid_optimize_lambda_batched(
+            eigenvalues, Uab_batch, l_min, l_max, n_grid, n_refine
+        )
+
+        # Batch compute Wald statistics
+        betas, ses, p_walds = batch_calc_wald_stats(
+            best_lambdas, eigenvalues, Uab_batch, n_samples
+        )
+
+        # Collect results
+        all_lambdas.append(np.array(best_lambdas))
+        all_logls.append(np.array(best_logls))
+        all_betas.append(np.array(betas))
+        all_ses.append(np.array(ses))
+        all_pwalds.append(np.array(p_walds))
+
+    # Concatenate chunk results
+    best_lambdas_np = np.concatenate(all_lambdas)
+    best_logls_np = np.concatenate(all_logls)
+    betas_np = np.concatenate(all_betas)
+    ses_np = np.concatenate(all_ses)
+    p_walds_np = np.concatenate(all_pwalds)
 
     # Build results
     results = []

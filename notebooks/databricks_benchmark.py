@@ -20,7 +20,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install --upgrade --force-reinstall "numpy>=2.0"
+# MAGIC %pip install --upgrade --force-reinstall "numpy>=2.0,<2.4"
 
 # COMMAND ----------
 

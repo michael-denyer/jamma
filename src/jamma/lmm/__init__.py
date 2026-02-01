@@ -132,10 +132,16 @@ def run_lmm_association(
         maf, n_miss = snp_stats[j]
 
         # Step d: Rotate genotype (with imputation of missing to mean)
+        # For all-missing SNPs (shouldn't happen after filtering), impute to 0.0
+        # to match JAX path behavior and avoid NaN propagation
         x = genotypes[:, snp_idx].copy()
         missing = np.isnan(x)
         if np.any(missing):
-            x[missing] = np.nanmean(x)
+            mean_val = np.nanmean(x)
+            # Handle all-missing case: nanmean returns NaN, use 0.0 instead
+            if np.isnan(mean_val):
+                mean_val = 0.0
+            x[missing] = mean_val
         Utx = U.T @ x
 
         # Compute Uab with SNP genotype

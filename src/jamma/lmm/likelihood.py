@@ -319,7 +319,7 @@ def _reml_log_likelihood_ncvt1_numba(
     for i in range(n):
         v = lambda_val * eigenvalues[i] + 1.0
         h = 1.0 / v
-        logdet_h += np.log(v)
+        logdet_h += np.log(np.abs(v))  # Use abs() for non-PSD kinship (negative eigenvalues)
 
         # Pab row 0 (Hi-weighted)
         P0_WW += h * Uab[i, 0]

@@ -14,10 +14,24 @@ Reference: Zhou & Stephens (2012) Nature Genetics, Supplementary Information
 
 import numpy as np
 from jax import config
-from numba import njit
 
 # Ensure 64-bit precision
 config.update("jax_enable_x64", True)
+
+# Try to import numba for optimized CPU path; fall back to pure numpy if unavailable
+# (numba doesn't support numpy 2.x yet, but JAX requires it)
+try:
+    from numba import njit
+
+    HAS_NUMBA = True
+except ImportError:
+    HAS_NUMBA = False
+
+    def njit(func=None, **kwargs):
+        """No-op decorator when numba is unavailable."""
+        if func is not None:
+            return func
+        return lambda f: f
 
 
 def get_ab_index(a: int, b: int, n_cvt: int) -> int:

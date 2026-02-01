@@ -131,19 +131,12 @@ def _compute_chunk_size(n_samples: int, n_snps: int, n_grid: int = 50) -> int:
         return n_snps
 
     # Calculate elements per SNP for each array type
-    # Uab: n_samples * 6 elements per SNP
-    uab_per_snp = n_samples * 6
-
-    # Grid REML creates (n_grid, chunk_size) intermediates
-    # plus vmap overhead - conservative estimate
-    grid_per_snp = n_grid
-
-    # UtG_chunk: n_samples elements per SNP
-    utg_per_snp = n_samples
-
-    # Total elements per SNP (max of potential intermediates)
-    # Use the most restrictive constraint
-    elements_per_snp = max(uab_per_snp, grid_per_snp * n_samples, utg_per_snp)
+    # Most restrictive constraint is typically Uab: (chunk_size, n_samples, 6)
+    elements_per_snp = max(
+        n_samples * 6,  # Uab: n_samples * 6 elements per SNP
+        n_grid * n_samples,  # Grid REML: (n_grid, chunk_size) intermediate
+        n_samples,  # UtG_chunk: n_samples elements per SNP
+    )
 
     if elements_per_snp == 0:
         return n_snps
@@ -151,9 +144,8 @@ def _compute_chunk_size(n_samples: int, n_snps: int, n_grid: int = 50) -> int:
     max_snps_per_chunk = _MAX_BUFFER_ELEMENTS // elements_per_snp
 
     if max_snps_per_chunk >= n_snps:
-        return n_snps  # No chunking needed
+        return n_snps
 
-    # Use chunk size that divides work reasonably, minimum 100 SNPs
     return max(100, max_snps_per_chunk)
 
 
@@ -353,20 +345,13 @@ def run_lmm_association_jax(
             best_lambdas, eigenvalues, Uab_batch, n_samples
         )
 
-        # Strip padding from results if needed
-        if needs_padding:
-            best_lambdas = best_lambdas[:actual_chunk_len]
-            best_logls = best_logls[:actual_chunk_len]
-            betas = betas[:actual_chunk_len]
-            ses = ses[:actual_chunk_len]
-            p_walds = p_walds[:actual_chunk_len]
-
-        # Collect results
-        all_lambdas.append(np.array(best_lambdas))
-        all_logls.append(np.array(best_logls))
-        all_betas.append(np.array(betas))
-        all_ses.append(np.array(ses))
-        all_pwalds.append(np.array(p_walds))
+        # Strip padding if needed, then collect results
+        slice_len = actual_chunk_len if needs_padding else len(best_lambdas)
+        all_lambdas.append(np.array(best_lambdas[:slice_len]))
+        all_logls.append(np.array(best_logls[:slice_len]))
+        all_betas.append(np.array(betas[:slice_len]))
+        all_ses.append(np.array(ses[:slice_len]))
+        all_pwalds.append(np.array(p_walds[:slice_len]))
 
     # Concatenate chunk results
     best_lambdas_np = np.concatenate(all_lambdas)
@@ -375,7 +360,43 @@ def run_lmm_association_jax(
     ses_np = np.concatenate(all_ses)
     p_walds_np = np.concatenate(all_pwalds)
 
-    # Build results
+    return _build_results(
+        snp_indices,
+        snp_stats,
+        snp_info,
+        best_lambdas_np,
+        best_logls_np,
+        betas_np,
+        ses_np,
+        p_walds_np,
+    )
+
+
+def _build_results(
+    snp_indices: np.ndarray,
+    snp_stats: list[tuple[float, int]],
+    snp_info: list,
+    best_lambdas_np: np.ndarray,
+    best_logls_np: np.ndarray,
+    betas_np: np.ndarray,
+    ses_np: np.ndarray,
+    p_walds_np: np.ndarray,
+) -> list[AssocResult]:
+    """Build AssocResult objects from arrays of results.
+
+    Args:
+        snp_indices: Indices of SNPs that passed filtering.
+        snp_stats: List of (maf, n_miss) tuples for each filtered SNP.
+        snp_info: Full SNP metadata list.
+        best_lambdas_np: Optimal lambda values.
+        best_logls_np: Log-likelihoods at optimal lambda.
+        betas_np: Effect sizes.
+        ses_np: Standard errors.
+        p_walds_np: Wald test p-values.
+
+    Returns:
+        List of AssocResult objects.
+    """
     results = []
     for j, snp_idx in enumerate(snp_indices):
         maf, n_miss = snp_stats[j]
@@ -714,20 +735,13 @@ def run_lmm_association_streaming(
                 best_lambdas, eigenvalues, Uab_batch, n_samples
             )
 
-            # Strip padding from results if needed
-            if needs_padding:
-                best_lambdas = best_lambdas[:actual_jax_len]
-                best_logls = best_logls[:actual_jax_len]
-                betas = betas[:actual_jax_len]
-                ses = ses[:actual_jax_len]
-                p_walds = p_walds[:actual_jax_len]
-
-            # Collect results
-            all_lambdas.append(np.array(best_lambdas))
-            all_logls.append(np.array(best_logls))
-            all_betas.append(np.array(betas))
-            all_ses.append(np.array(ses))
-            all_pwalds.append(np.array(p_walds))
+            # Strip padding if needed, then collect results
+            slice_len = actual_jax_len if needs_padding else len(best_lambdas)
+            all_lambdas.append(np.array(best_lambdas[:slice_len]))
+            all_logls.append(np.array(best_logls[:slice_len]))
+            all_betas.append(np.array(betas[:slice_len]))
+            all_ses.append(np.array(ses[:slice_len]))
+            all_pwalds.append(np.array(p_walds[:slice_len]))
 
     # Concatenate all results
     best_lambdas_np = np.concatenate(all_lambdas)
@@ -737,26 +751,16 @@ def run_lmm_association_streaming(
     p_walds_np = np.concatenate(all_pwalds)
 
     # Build results
-    results = []
-    for j, snp_idx in enumerate(snp_indices):
-        maf, n_miss = snp_stats[j]
-        info = snp_info[snp_idx]
-
-        result = AssocResult(
-            chr=info["chr"],
-            rs=info["rs"],
-            ps=info.get("pos", info.get("ps", 0)),
-            n_miss=n_miss,
-            allele1=info.get("a1", info.get("allele1", "")),
-            allele0=info.get("a0", info.get("allele0", "")),
-            af=maf,
-            beta=float(betas_np[j]),
-            se=float(ses_np[j]),
-            logl_H1=float(best_logls_np[j]),
-            l_remle=float(best_lambdas_np[j]),
-            p_wald=float(p_walds_np[j]),
-        )
-        results.append(result)
+    results = _build_results(
+        snp_indices,
+        snp_stats,
+        snp_info,
+        best_lambdas_np,
+        best_logls_np,
+        betas_np,
+        ses_np,
+        p_walds_np,
+    )
 
     # GEMMA-style completion logging
     if show_progress:

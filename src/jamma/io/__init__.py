@@ -5,6 +5,16 @@ This package contains modules for reading and writing various file formats:
 - output: GEMMA-compatible output file writers
 """
 
-from jamma.io.plink import PlinkData, load_plink_binary
+from jamma.io.plink import (
+    PlinkData,
+    get_plink_metadata,
+    load_plink_binary,
+    stream_genotype_chunks,
+)
 
-__all__ = ["PlinkData", "load_plink_binary"]
+__all__ = [
+    "PlinkData",
+    "get_plink_metadata",
+    "load_plink_binary",
+    "stream_genotype_chunks",
+]

@@ -568,9 +568,8 @@ else:
 
 # COMMAND ----------
 
-# GEMMA binary path - set this if GEMMA is at a custom location
-# On Databricks, you might use: "/Workspace/Users/your.name@company.com/gemma"
-GEMMA_PATH = os.environ.get("GEMMA_PATH", None)
+# GEMMA binary path - default is the Databricks micromamba environment
+GEMMA_PATH = os.environ.get("GEMMA_PATH", "/opt/micromamba/envs/disco/bin/gemma")
 
 # COMMAND ----------
 

@@ -12,6 +12,30 @@ from scipy.special import betainc
 from jamma.lmm.likelihood import calc_pab, get_ab_index
 
 
+def _safe_sqrt(d: float) -> float:
+    """Safe square root following GEMMA's safe_sqrt behavior.
+
+    GEMMA's safe_sqrt (mathfunc.cpp:122-131):
+    - If |d| < 0.001, use abs(d) to tolerate small negative values from rounding
+    - If d < 0 after that check, return NaN
+    - Otherwise return sqrt(d)
+
+    This handles numerical edge cases where Px_yy becomes slightly negative
+    due to floating-point errors in the projection computation.
+
+    Args:
+        d: Value to take square root of
+
+    Returns:
+        sqrt(d) or sqrt(abs(d)) for small negatives, NaN for large negatives
+    """
+    if abs(d) < 0.001:
+        d = abs(d)
+    if d < 0.0:
+        return float("nan")
+    return np.sqrt(d)
+
+
 @dataclass
 class AssocResult:
     """Association test result for a single SNP.
@@ -134,9 +158,11 @@ def calc_wald_test(
     Px_yy = Pab[n_cvt + 1, index_yy]
 
     # Compute effect size and standard error
+    # Use safe_sqrt to handle edge cases where 1/(tau*P_xx) could be slightly negative
+    # due to numerical issues (matches GEMMA's safe_sqrt behavior)
     beta = P_xy / P_xx
     tau = float(df) / Px_yy
-    se = np.sqrt(1.0 / (tau * P_xx))
+    se = _safe_sqrt(1.0 / (tau * P_xx))
 
     # Compute F-statistic and p-value
     # F = (SSR_reduced - SSR_full) / (df_reduced - df_full) / (SSR_full / df_full)

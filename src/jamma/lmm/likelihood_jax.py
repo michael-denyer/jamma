@@ -168,8 +168,10 @@ def reml_log_likelihood_jax(
     logdet_hiw = logdet_hiw - jnp.where(d_iab_1 > 0, jnp.log(d_iab_1), 0.0)
 
     # P_yy after projecting out covariates and genotype
+    # Use GEMMA's conditional clamping: only clamp if P_yy >= 0 and P_yy < 1e-8
+    # This matches lmm.cpp line 854: if (P_yy >= 0.0 && (P_yy < P_YY_MIN)) P_yy = P_YY_MIN
     P_yy = Pab[nc_total, _IDX_YY]
-    P_yy = jnp.maximum(P_yy, 1e-8)  # Avoid log(0)
+    P_yy = jnp.where((P_yy >= 0.0) & (P_yy < 1e-8), 1e-8, P_yy)
 
     # REML log-likelihood
     c = 0.5 * df * (jnp.log(df) - jnp.log(2 * jnp.pi) - 1.0)
@@ -389,16 +391,24 @@ def calc_wald_stats_jax(
     P_YY = Pab[n_cvt, _IDX_YY]
     Px_YY = Pab[n_cvt + 1, _IDX_YY]  # After projecting out W and X
 
-    # Guard against non-positive Px_YY (matches NumPy path guards)
-    Px_YY_safe = jnp.maximum(Px_YY, 1e-10)
-
     # Effect size and standard error
+    # Use GEMMA's safe_sqrt logic: if |d| < 0.001, use abs(d) to tolerate small negatives
+    # This matches GEMMA mathfunc.cpp:122-131
     beta = P_XY / P_XX
-    tau = df / Px_YY_safe
-    se = jnp.sqrt(1.0 / (tau * P_XX))
+    tau = df / Px_YY
+    variance_beta = 1.0 / (tau * P_XX)
+    # Apply safe_sqrt: for small negatives (|v| < 0.001), use abs; otherwise use as-is
+    # In JAX, we handle this with jnp.where for the small negative case
+    variance_safe = jnp.where(
+        jnp.abs(variance_beta) < 0.001,
+        jnp.abs(variance_beta),
+        variance_beta,
+    )
+    # For large negatives, sqrt will produce NaN (matching GEMMA behavior)
+    se = jnp.sqrt(variance_safe)
 
     # F-statistic and p-value
-    f_stat = (P_YY - Px_YY_safe) * tau
+    f_stat = (P_YY - Px_YY) * tau
 
     # Guard: if f_stat <= 0, p-value = 1.0 (no evidence against null)
     # Clamp z to [0, 1] to ensure betainc is well-defined

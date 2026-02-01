@@ -238,7 +238,7 @@ class BenchmarkConfig:
 # Benchmark configurations - target is 200k x 95k (fits in 512GB VM)
 CONFIGS = {
     "small": BenchmarkConfig("small", 1_000, 10_000, 10_000),
-    "medium": BenchmarkConfig("medium", 10_000, 100_000, 10_000),
+    "medium": BenchmarkConfig("medium", 10_000, 100_000, 100_000),
     "large": BenchmarkConfig("large", 50_000, 95_000, 10_000),
     "xlarge": BenchmarkConfig("xlarge", 100_000, 95_000, 10_000),
     "target": BenchmarkConfig(

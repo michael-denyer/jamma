@@ -1,19 +1,15 @@
 """Wald test statistics computation for LMM association.
 
 Implements the Wald test formula from GEMMA's CalcRLWald function.
-Uses JAX for F-distribution survival function computation.
+Uses scipy for F-distribution survival function (CPU-native, no JAX overhead).
 """
 
 from dataclasses import dataclass
 
 import numpy as np
-from jax import config
-from jax.scipy.special import betainc
+from scipy.special import betainc
 
 from jamma.lmm.likelihood import calc_pab, get_ab_index
-
-# Ensure 64-bit precision
-config.update("jax_enable_x64", True)
 
 
 @dataclass

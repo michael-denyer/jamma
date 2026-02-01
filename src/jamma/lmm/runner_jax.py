@@ -87,6 +87,14 @@ def run_lmm_association_jax(
     Note: Currently only supports intercept-only model (no additional covariates).
     If covariates are provided, a NotImplementedError is raised.
 
+    Memory Scaling Warning:
+        This function materializes arrays of shape (n_snps, n_samples, 6) for
+        Uab computation and (n_grid, n_snps) for lambda optimization. For large
+        cohorts (e.g., 200K samples × 500K SNPs), this can require significant
+        memory (~4.8TB for Uab alone). For large-scale analyses:
+        - Use `run_lmm_association()` (NumPy path) which processes SNPs sequentially
+        - Or implement SNP chunking in your calling code and concatenate results
+
     Args:
         genotypes: Genotype matrix (n_samples, n_snps) with values 0, 1, 2
         phenotypes: Phenotype vector (n_samples,)

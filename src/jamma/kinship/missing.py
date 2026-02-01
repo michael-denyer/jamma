@@ -47,7 +47,11 @@ def impute_and_center(X: jnp.ndarray) -> jnp.ndarray:
     # nanmean ignores NaN when computing the mean
     snp_means = jnp.nanmean(X, axis=0, keepdims=True)
 
-    # Replace NaN with SNP mean
+    # Handle all-missing columns: nanmean returns NaN, replace with 0
+    # This ensures such SNPs contribute nothing to kinship (centered = 0)
+    snp_means = jnp.nan_to_num(snp_means, nan=0.0)
+
+    # Replace NaN with SNP mean (0 for all-missing columns)
     # where(condition, x, y) returns x where condition is True, else y
     X_imputed = jnp.where(jnp.isnan(X), snp_means, X)
 

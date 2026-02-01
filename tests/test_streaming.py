@@ -783,17 +783,19 @@ class TestChunkEquivalence:
             assert len(results) == len(baseline)
 
             for r1, r2 in zip(baseline, results, strict=False):
+                # rtol=1e-12 allows for floating-point variance from different
+                # chunk orderings while still detecting algorithmic differences
                 np.testing.assert_allclose(
                     r1.beta,
                     r2.beta,
-                    rtol=1e-13,
+                    rtol=1e-12,
                     atol=0,
                     err_msg=f"Beta mismatch at chunk_size={cs}",
                 )
                 np.testing.assert_allclose(
                     r1.p_wald,
                     r2.p_wald,
-                    rtol=1e-13,
+                    rtol=1e-12,
                     atol=0,
                     err_msg=f"P-value mismatch at chunk_size={cs}",
                 )

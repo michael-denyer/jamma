@@ -37,15 +37,17 @@ __all__ = [
 ]
 
 
-def _compute_snp_stats(genotypes: np.ndarray, snp_idx: int) -> tuple[float, float, int]:
-    """Compute MAF, missing rate, and missing count for a SNP.
+def _compute_snp_stats(
+    genotypes: np.ndarray, snp_idx: int
+) -> tuple[float, float, int, bool]:
+    """Compute MAF, missing rate, missing count, and polymorphism for a SNP.
 
     Args:
         genotypes: Genotype matrix (n_samples, n_snps)
         snp_idx: SNP index
 
     Returns:
-        Tuple of (maf, miss_rate, n_miss)
+        Tuple of (maf, miss_rate, n_miss, is_polymorphic)
     """
     x = genotypes[:, snp_idx]
     n_samples = len(x)
@@ -55,15 +57,18 @@ def _compute_snp_stats(genotypes: np.ndarray, snp_idx: int) -> tuple[float, floa
     n_miss = int(np.sum(missing_mask))
     miss_rate = n_miss / n_samples
 
-    # Compute allele frequency on non-missing samples
+    # Compute allele frequency and variance on non-missing samples
     valid_x = x[~missing_mask]
     if len(valid_x) > 0:
         af = np.mean(valid_x) / 2.0  # Divide by 2 because genotypes are 0, 1, 2
         maf = min(af, 1.0 - af)  # Minor allele frequency
+        variance = np.var(valid_x)
+        is_polymorphic = variance > 0
     else:
         maf = 0.0
+        is_polymorphic = False
 
-    return maf, miss_rate, n_miss
+    return maf, miss_rate, n_miss, is_polymorphic
 
 
 def run_lmm_association(
@@ -111,10 +116,10 @@ def run_lmm_association(
     snp_stats = []
     snp_indices = []
     for i in range(n_snps):
-        maf, miss_rate, n_miss = _compute_snp_stats(genotypes, i)
+        maf, miss_rate, n_miss, is_polymorphic = _compute_snp_stats(genotypes, i)
 
-        # Apply GEMMA-style filtering
-        if maf >= maf_threshold and miss_rate <= miss_threshold:
+        # Apply GEMMA-style filtering: MAF, missing rate, and monomorphism
+        if maf >= maf_threshold and miss_rate <= miss_threshold and is_polymorphic:
             snp_indices.append(i)
             snp_stats.append((maf, n_miss))
 

@@ -311,12 +311,17 @@ def run_lmm_association_jax(
     # Compute allele frequencies handling missing values
     with np.errstate(invalid="ignore"):  # Suppress warnings for all-NaN columns
         col_means = np.nanmean(genotypes, axis=0)  # Mean of non-missing
+        col_vars = np.nanvar(genotypes, axis=0)  # Variance for monomorphic detection
     col_means = np.nan_to_num(col_means, nan=0.0)  # Handle all-missing columns
+    col_vars = np.nan_to_num(col_vars, nan=0.0)
     allele_freqs = col_means / 2.0
     mafs = np.minimum(allele_freqs, 1.0 - allele_freqs)
 
-    # Filter SNPs by MAF and missing rate
-    snp_mask = (mafs >= maf_threshold) & (miss_rates <= miss_threshold)
+    # Detect monomorphic SNPs (variance == 0 means constant genotype)
+    is_polymorphic = col_vars > 0
+
+    # Filter SNPs by MAF, missing rate, and monomorphism
+    snp_mask = (mafs >= maf_threshold) & (miss_rates <= miss_threshold) & is_polymorphic
     snp_indices = np.where(snp_mask)[0]
 
     if len(snp_indices) == 0:
@@ -662,6 +667,7 @@ def run_lmm_association_streaming(
     # Compute per-SNP stats without loading all genotypes at once
     all_means = np.zeros(n_snps, dtype=np.float64)
     all_miss_counts = np.zeros(n_snps, dtype=np.int32)
+    all_vars = np.zeros(n_snps, dtype=np.float64)  # For monomorphic detection
 
     stats_iterator = stream_genotype_chunks(
         bed_path, chunk_size=chunk_size, dtype=np.float32, show_progress=False
@@ -684,17 +690,24 @@ def run_lmm_association_streaming(
         chunk_miss_counts = np.sum(np.isnan(chunk), axis=0)
         with np.errstate(invalid="ignore"):
             chunk_means = np.nanmean(chunk, axis=0)
+            chunk_vars = np.nanvar(chunk, axis=0)  # For monomorphic detection
         chunk_means = np.nan_to_num(chunk_means, nan=0.0)
+        chunk_vars = np.nan_to_num(chunk_vars, nan=0.0)
 
         all_means[start:end] = chunk_means
         all_miss_counts[start:end] = chunk_miss_counts
+        all_vars[start:end] = chunk_vars
 
     # Compute MAF and filter SNPs
     miss_rates = all_miss_counts / n_samples
     allele_freqs = all_means / 2.0
     mafs = np.minimum(allele_freqs, 1.0 - allele_freqs)
 
-    snp_mask = (mafs >= maf_threshold) & (miss_rates <= miss_threshold)
+    # Detect monomorphic SNPs (variance == 0 means constant genotype)
+    is_polymorphic = all_vars > 0
+
+    # Filter SNPs by MAF, missing rate, and monomorphism
+    snp_mask = (mafs >= maf_threshold) & (miss_rates <= miss_threshold) & is_polymorphic
     snp_indices = np.where(snp_mask)[0]
     n_filtered = len(snp_indices)
 

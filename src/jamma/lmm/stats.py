@@ -10,6 +10,8 @@ import numpy as np
 from jax import config
 from jax.scipy.special import betainc
 
+from jamma.lmm.likelihood import calc_pab, get_ab_index
+
 # Ensure 64-bit precision
 config.update("jax_enable_x64", True)
 
@@ -36,21 +38,20 @@ class AssocResult:
 
 
 def get_pab_index(a: int, b: int) -> int:
-    """Compute index into Pab array using GEMMA's GetabIndex formula.
+    """Legacy index function - wrapper for get_ab_index with n_cvt=1.
 
-    For symmetric matrix storage, uses lower triangular packing:
-    index = a*(a+1)/2 + b for a >= b
+    For backwards compatibility with code that assumes n_cvt=1.
+    New code should use get_ab_index directly.
 
     Args:
-        a: First index
-        b: Second index
+        a: First index (0-based, will be converted to 1-based)
+        b: Second index (0-based, will be converted to 1-based)
 
     Returns:
         Linear index into packed storage
     """
-    if a >= b:
-        return a * (a + 1) // 2 + b
-    return b * (b + 1) // 2 + a
+    # Convert from 0-based to 1-based for GEMMA convention
+    return get_ab_index(a + 1, b + 1, n_cvt=1)
 
 
 def f_sf(x: float, df1: float, df2: float) -> float:
@@ -96,18 +97,21 @@ def calc_wald_test(
     n_cvt: int,
     ni_test: int,
 ) -> tuple[float, float, float]:
-    """Compute Wald test statistics from optimized lambda and Pab matrix.
+    """Compute Wald test statistics following GEMMA's CalcRLWald exactly.
 
-    Implements GEMMA's CalcRLWald formula:
+    From GEMMA lmm.cpp CalcRLWald:
+    - P_yy = Pab[n_cvt, index_yy]      (y'Py after projecting out covariates)
+    - P_xx = Pab[n_cvt, index_xx]      (x'Px after projecting out covariates)
+    - P_xy = Pab[n_cvt, index_xy]      (x'Py after projecting out covariates)
+    - Px_yy = Pab[n_cvt+1, index_yy]   (y'Py after projecting out covariates AND X)
     - beta = P_xy / P_xx
     - tau = df / Px_yy
     - se = sqrt(1 / (tau * P_xx))
-    - f_stat = (P_yy - Px_yy) * tau
-    - p_wald = F-distribution survival function
+    - p_wald = F-distribution survival function((P_yy - Px_yy) * tau, 1, df)
 
     Args:
-        lambda_val: Optimized variance ratio
-        Pab: H_inv weighted products from compute_pab
+        lambda_val: Optimized variance ratio (unused here, kept for API compat)
+        Pab: Pab matrix from calc_pab (n_cvt+2, n_index)
         n_cvt: Number of covariates
         ni_test: Number of samples
 
@@ -116,28 +120,63 @@ def calc_wald_test(
     """
     df = ni_test - n_cvt - 1
 
-    # Extract Pab values using GEMMA's indexing convention
-    # n_cvt is 0-indexed position of intercept
-    # n_cvt + 1 is phenotype (y)
-    # n_cvt + 2 is genotype (x) - but in our 0-indexed scheme:
-    #   y index = n_cvt (since we have n_cvt covariates, y is next)
-    #   x index = n_cvt + 1 (x is after y)
-    # Pab indices:
-    P_yy = Pab[get_pab_index(n_cvt, n_cvt)]  # Phenotype-phenotype
-    P_xx = Pab[get_pab_index(n_cvt + 1, n_cvt + 1)]  # Genotype-genotype
-    P_xy = Pab[get_pab_index(n_cvt + 1, n_cvt)]  # Genotype-phenotype
+    # GEMMA indexing (1-based):
+    # - Covariates are indices 1..n_cvt
+    # - Genotype is index n_cvt+1
+    # - Phenotype is index n_cvt+2
+    index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
+    index_xx = get_ab_index(n_cvt + 1, n_cvt + 1, n_cvt)
+    index_xy = get_ab_index(n_cvt + 2, n_cvt + 1, n_cvt)
 
-    # Compute residual variance component
-    # Px_yy = P_yy - (P_xy^2 / P_xx)
-    Px_yy = P_yy - (P_xy * P_xy) / P_xx
+    # Extract Pab values at the appropriate projection level
+    # After projecting out n_cvt covariates (row index = n_cvt, 0-based)
+    P_yy = Pab[n_cvt, index_yy]
+    P_xx = Pab[n_cvt, index_xx]
+    P_xy = Pab[n_cvt, index_xy]
+
+    # After projecting out covariates AND genotype (row index = n_cvt+1, 0-based)
+    Px_yy = Pab[n_cvt + 1, index_yy]
 
     # Compute effect size and standard error
     beta = P_xy / P_xx
-    tau = df / Px_yy
+    tau = float(df) / Px_yy
     se = np.sqrt(1.0 / (tau * P_xx))
 
     # Compute F-statistic and p-value
+    # F = (SSR_reduced - SSR_full) / (df_reduced - df_full) / (SSR_full / df_full)
+    # For single SNP: F = (P_yy - Px_yy) * tau
     f_stat = (P_yy - Px_yy) * tau
     p_wald = f_sf(f_stat, 1.0, float(df))
 
     return beta, se, p_wald
+
+
+def calc_wald_test_from_uab(
+    lambda_val: float,
+    eigenvalues: np.ndarray,
+    Uab: np.ndarray,
+    n_cvt: int,
+    ni_test: int,
+) -> tuple[float, float, float]:
+    """Compute Wald test from Uab matrix directly.
+
+    This combines calc_pab and calc_wald_test for convenience.
+
+    Args:
+        lambda_val: Optimized variance ratio
+        eigenvalues: Eigenvalues of kinship matrix
+        Uab: Matrix products from compute_Uab
+        n_cvt: Number of covariates
+        ni_test: Number of samples
+
+    Returns:
+        Tuple of (beta, se, p_wald)
+    """
+    # Compute Hi_eval
+    Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
+
+    # Compute Pab
+    Pab = calc_pab(n_cvt, Hi_eval, Uab)
+
+    # Compute Wald test
+    return calc_wald_test(lambda_val, Pab, n_cvt, ni_test)

@@ -21,8 +21,11 @@ class TestToleranceConfig:
 
         assert config.beta_rtol == 1e-6
         assert config.se_rtol == 1e-6
-        assert config.pvalue_rtol == 1e-5
+        assert config.pvalue_rtol == 1e-8  # Tighter per Phase 3 requirements
         assert config.kinship_rtol == 1e-8
+        assert config.logl_rtol == 1e-6  # Log-likelihood tolerance
+        assert config.lambda_rtol == 1e-5  # Variance ratio tolerance
+        assert config.af_rtol == 1e-3  # Allele frequency tolerance
         assert config.atol == 1e-12
 
     def test_tolerance_config_strict(self):

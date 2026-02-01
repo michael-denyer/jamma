@@ -6,6 +6,7 @@ This package contains utilities for validating GEMMA-Next output:
 """
 
 from jamma.validation.compare import (
+    AssocComparisonResult,
     ComparisonResult,
     compare_arrays,
     compare_assoc_results,
@@ -18,6 +19,7 @@ from jamma.validation.tolerances import ToleranceConfig
 __all__ = [
     "ToleranceConfig",
     "ComparisonResult",
+    "AssocComparisonResult",
     "compare_arrays",
     "compare_kinship_matrices",
     "compare_assoc_results",

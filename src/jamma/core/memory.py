@@ -111,7 +111,7 @@ class StreamingMemoryBreakdown(NamedTuple):
     All values in GB. Peak memory is the maximum across workflow phases:
     1. Kinship accumulation: kinship + chunk
     2. Eigendecomposition: kinship + eigenvectors + workspace (typically peak)
-    3. LMM: eigenvectors + chunk + rotation buffer
+    3. LMM: eigenvectors + chunk + rotation buffer + grid REML
 
     The key difference from full-load estimation is that genotypes are
     O(n * chunk_size), not O(n * n_snps).
@@ -122,6 +122,7 @@ class StreamingMemoryBreakdown(NamedTuple):
     eigendecomp_workspace_gb: float  # ~26*n*8 + 10*n*4 bytes for DSYEVR
     chunk_gb: float  # n * chunk_size * 8 bytes (float64 for precision)
     rotation_buffer_gb: float  # n * chunk_size * 8 bytes for UtG
+    grid_reml_gb: float  # n_grid * chunk_size * 8 bytes for Grid REML intermediate
     total_peak_gb: float  # Max of phases (eigendecomp is typically peak)
     available_gb: float  # Current available system memory
     sufficient: bool  # Whether available >= total * 1.1
@@ -131,6 +132,7 @@ def estimate_streaming_memory(
     n_samples: int,
     n_snps: int,  # Only for logging; not used in peak calculation
     chunk_size: int = 10_000,
+    n_grid: int = 50,
 ) -> StreamingMemoryBreakdown:
     """Estimate memory requirements for streaming GWAS workflow.
 
@@ -141,10 +143,10 @@ def estimate_streaming_memory(
     - Genotypes: O(n * chunk_size) not O(n * n_snps)
     - Peak is typically eigendecomposition (kinship + eigenvectors simultaneously)
 
-    For 200k samples, 95k SNPs, 10k chunk:
+    For 200k samples, 95k SNPs, 10k chunk, n_grid=50:
     - Kinship accumulation: 320GB + 16GB = 336GB
     - Eigendecomp: 320GB + 320GB + 0.04GB = 640GB (PEAK)
-    - LMM: 320GB + 16GB + 16GB = 352GB
+    - LMM: 320GB + 16GB + 16GB + 4MB = 356GB (still not peak since eigendecomp is 640GB)
 
     Note: This reveals the true constraint - eigendecomposition cannot be
     streamed and requires both kinship (input) and eigenvectors (output)
@@ -154,6 +156,7 @@ def estimate_streaming_memory(
         n_samples: Number of samples (individuals).
         n_snps: Number of SNPs (for logging only, not used in peak calculation).
         chunk_size: SNPs per chunk (default 10,000).
+        n_grid: Grid points for lambda optimization (default 50).
 
     Returns:
         StreamingMemoryBreakdown with detailed component estimates.
@@ -174,6 +177,10 @@ def estimate_streaming_memory(
     chunk_gb = n_samples * chunk_size * 8 / 1e9  # float64
     rotation_buffer_gb = n_samples * chunk_size * 8 / 1e9  # UtG buffer
 
+    # Grid REML intermediate: _batch_grid_reml creates (n_grid, chunk_size) arrays
+    # during vmap over lambda values for log-likelihood evaluation
+    grid_reml_gb = n_grid * chunk_size * 8 / 1e9
+
     # Peak memory calculation by workflow phase
     # Phase 1 (kinship accumulation): kinship + chunk
     peak_kinship = kinship_gb + chunk_gb
@@ -181,9 +188,9 @@ def estimate_streaming_memory(
     # Phase 2 (eigendecomp): kinship (input) + eigenvectors (output) + workspace
     peak_eigendecomp = kinship_gb + eigenvectors_gb + eigendecomp_workspace_gb
 
-    # Phase 3 (LMM): eigenvectors + chunk + rotation buffer
+    # Phase 3 (LMM): eigenvectors + chunk + rotation buffer + grid REML
     # (kinship can be freed after eigendecomp)
-    peak_lmm = eigenvectors_gb + chunk_gb + rotation_buffer_gb
+    peak_lmm = eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb
 
     total_peak_gb = max(peak_kinship, peak_eigendecomp, peak_lmm)
 
@@ -197,6 +204,7 @@ def estimate_streaming_memory(
         eigendecomp_workspace_gb=eigendecomp_workspace_gb,
         chunk_gb=chunk_gb,
         rotation_buffer_gb=rotation_buffer_gb,
+        grid_reml_gb=grid_reml_gb,
         total_peak_gb=total_peak_gb,
         available_gb=available_gb,
         sufficient=sufficient,

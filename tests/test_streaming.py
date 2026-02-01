@@ -12,6 +12,7 @@ from jamma.io.plink import (
     stream_genotype_chunks,
 )
 from jamma.kinship.compute import compute_centered_kinship, compute_kinship_streaming
+from jamma.lmm import run_lmm_association_jax, run_lmm_association_streaming
 
 
 class TestStreamGenotypeChunks:
@@ -329,3 +330,275 @@ class TestComputeKinshipStreaming:
 
         with pytest.raises(FileNotFoundError, match="PLINK .bed file not found"):
             compute_kinship_streaming(nonexistent, show_progress=False)
+
+
+class TestRunLmmAssociationStreaming:
+    """Tests for run_lmm_association_streaming function."""
+
+    def test_run_lmm_streaming_matches_full_load(self, sample_plink_data: Path) -> None:
+        """Verify streaming LMM matches full-load LMM results."""
+        # Fixed seed for reproducible phenotypes
+        np.random.seed(42)
+
+        # Load genotypes and compute kinship
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = np.random.randn(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        # Build snp_info
+        snp_info = [
+            {
+                "chr": str(c),
+                "rs": s,
+                "pos": int(p),
+                "a1": a1,
+                "a0": a0,
+            }
+            for c, s, p, a1, a0 in zip(
+                data.chromosome,
+                data.sid,
+                data.bp_position,
+                data.allele_1,
+                data.allele_2,
+                strict=False,
+            )
+        ]
+
+        # Run full-load version
+        results_full = run_lmm_association_jax(
+            data.genotypes.astype(np.float32),
+            phenotypes,
+            kinship,
+            snp_info,
+            check_memory=False,
+        )
+
+        # Run streaming version
+        results_stream = run_lmm_association_streaming(
+            sample_plink_data,
+            phenotypes,
+            kinship,
+            snp_info,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        # Same number of results
+        assert len(results_full) == len(
+            results_stream
+        ), f"Count mismatch: full={len(results_full)}, stream={len(results_stream)}"
+
+        # Compare p-values and betas
+        for i, (r_full, r_stream) in enumerate(
+            zip(results_full, results_stream, strict=False)
+        ):
+            # P-values should match closely (rtol=1e-5)
+            np.testing.assert_allclose(
+                r_stream.p_wald,
+                r_full.p_wald,
+                rtol=1e-5,
+                atol=1e-15,
+                err_msg=f"SNP {i} p-value mismatch",
+            )
+            # Betas should match closely (rtol=1e-6)
+            np.testing.assert_allclose(
+                r_stream.beta,
+                r_full.beta,
+                rtol=1e-6,
+                atol=1e-15,
+                err_msg=f"SNP {i} beta mismatch",
+            )
+
+    def test_run_lmm_streaming_snp_info_from_metadata(
+        self, sample_plink_data: Path
+    ) -> None:
+        """Verify SNP info is extracted from PLINK metadata when not provided."""
+        np.random.seed(42)
+
+        # Get expected metadata
+        meta = get_plink_metadata(sample_plink_data)
+
+        # Compute kinship
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = np.random.randn(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        # Run streaming without snp_info
+        results = run_lmm_association_streaming(
+            sample_plink_data,
+            phenotypes,
+            kinship,
+            snp_info=None,  # Should build from metadata
+            check_memory=False,
+            show_progress=False,
+        )
+
+        # Verify results have correct metadata from first few SNPs
+        assert len(results) > 0
+        # Find a result that maps to first few SNPs by rs ID
+        first_result = results[0]
+        assert first_result.rs in meta["sid"], "rs should match PLINK metadata"
+        assert first_result.chr in [str(c) for c in meta["chromosome"]]
+
+    def test_run_lmm_streaming_filters_correctly(self, sample_plink_data: Path) -> None:
+        """Verify streaming applies same filtering as full-load version."""
+        np.random.seed(42)
+
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = np.random.randn(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        snp_info = [
+            {"chr": str(c), "rs": s, "pos": int(p), "a1": a1, "a0": a0}
+            for c, s, p, a1, a0 in zip(
+                data.chromosome,
+                data.sid,
+                data.bp_position,
+                data.allele_1,
+                data.allele_2,
+                strict=False,
+            )
+        ]
+
+        # Strict filtering thresholds
+        maf_threshold = 0.1
+        miss_threshold = 0.01
+
+        # Run both versions with same filtering
+        results_full = run_lmm_association_jax(
+            data.genotypes.astype(np.float32),
+            phenotypes,
+            kinship,
+            snp_info,
+            maf_threshold=maf_threshold,
+            miss_threshold=miss_threshold,
+            check_memory=False,
+        )
+
+        results_stream = run_lmm_association_streaming(
+            sample_plink_data,
+            phenotypes,
+            kinship,
+            snp_info,
+            maf_threshold=maf_threshold,
+            miss_threshold=miss_threshold,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        # Same number of results (filtering applied identically)
+        assert len(results_full) == len(results_stream), (
+            f"Filtering mismatch: full={len(results_full)}, "
+            f"stream={len(results_stream)}"
+        )
+
+    def test_run_lmm_streaming_handles_missing_phenotypes(
+        self, sample_plink_data: Path
+    ) -> None:
+        """Verify streaming handles missing phenotypes correctly."""
+        np.random.seed(42)
+
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = np.random.randn(data.n_samples)
+
+        # Set some phenotypes to missing
+        n_missing = 50
+        phenotypes[:n_missing] = -9.0  # GEMMA missing indicator
+
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        snp_info = [
+            {"chr": str(c), "rs": s, "pos": int(p), "a1": a1, "a0": a0}
+            for c, s, p, a1, a0 in zip(
+                data.chromosome,
+                data.sid,
+                data.bp_position,
+                data.allele_1,
+                data.allele_2,
+                strict=False,
+            )
+        ]
+
+        # Run full-load version (filters internally)
+        results_full = run_lmm_association_jax(
+            data.genotypes.astype(np.float32),
+            phenotypes,
+            kinship,
+            snp_info,
+            check_memory=False,
+        )
+
+        # Run streaming version
+        results_stream = run_lmm_association_streaming(
+            sample_plink_data,
+            phenotypes,
+            kinship,
+            snp_info,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        # Should produce same results
+        assert len(results_full) == len(results_stream)
+
+        # P-values should match
+        for r_full, r_stream in zip(results_full, results_stream, strict=False):
+            np.testing.assert_allclose(
+                r_stream.p_wald, r_full.p_wald, rtol=1e-5, atol=1e-15
+            )
+
+    def test_full_streaming_workflow(self, sample_plink_data: Path) -> None:
+        """Verify complete streaming workflow: kinship + LMM from disk.
+
+        This is the target use case: never loading full genotype matrix.
+        """
+        np.random.seed(42)
+
+        # Get metadata for phenotype generation
+        meta = get_plink_metadata(sample_plink_data)
+        phenotypes = np.random.randn(meta["n_samples"])
+
+        # Compute kinship via streaming (no genotype matrix loaded)
+        kinship = compute_kinship_streaming(
+            sample_plink_data, chunk_size=5000, check_memory=False, show_progress=False
+        )
+
+        # Run LMM via streaming (no genotype matrix loaded)
+        results = run_lmm_association_streaming(
+            sample_plink_data,
+            phenotypes,
+            kinship,
+            snp_info=None,  # Build from metadata
+            check_memory=False,
+            show_progress=False,
+        )
+
+        # Should produce valid results
+        assert len(results) > 0, "Should have results after filtering"
+
+        # Results should have valid statistics
+        for r in results[:10]:  # Check first 10
+            assert np.isfinite(r.p_wald), f"p-value should be finite: {r.p_wald}"
+            assert 0 <= r.p_wald <= 1, f"p-value should be in [0,1]: {r.p_wald}"
+            assert np.isfinite(r.beta), f"beta should be finite: {r.beta}"
+            assert np.isfinite(r.se), f"se should be finite: {r.se}"
+            assert r.se >= 0, f"se should be non-negative: {r.se}"
+
+    def test_run_lmm_streaming_missing_file_raises(self, tmp_path: Path) -> None:
+        """Verify FileNotFoundError for nonexistent file."""
+        nonexistent = tmp_path / "nonexistent"
+        phenotypes = np.random.randn(100)
+        kinship = np.eye(100)
+
+        with pytest.raises(FileNotFoundError, match="PLINK .bed file not found"):
+            run_lmm_association_streaming(
+                nonexistent, phenotypes, kinship, show_progress=False
+            )

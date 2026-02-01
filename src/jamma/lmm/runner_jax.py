@@ -45,9 +45,12 @@ GPU acceleration provides additional speedup for larger datasets.
 
 Chunked Processing
 ==================
-For large-scale analyses (>25K samples), SNPs are processed in chunks to avoid
-JAX int32 buffer index overflow. The chunk size is automatically computed to
-keep total array elements below 2 billion (INT32_MAX).
+For large-scale analyses (>25K samples), SNPs are processed in chunks to:
+1. Avoid JAX int32 buffer index overflow (keeps elements below INT32_MAX)
+2. Reduce peak memory by streaming genotype rotation per chunk (like GEMMA)
+
+This memory-bounded approach means JAMMA doesn't need to materialize the full
+rotated genotype matrix (n_samples × n_snps), matching GEMMA's streaming model.
 
 Usage:
     from jamma.lmm.runner_jax import run_lmm_association_jax
@@ -130,13 +133,14 @@ def run_lmm_association_jax(
     Note: Currently only supports intercept-only model (no additional covariates).
     If covariates are provided, a NotImplementedError is raised.
 
-    Memory Scaling Warning:
-        This function materializes arrays of shape (n_snps, n_samples, 6) for
-        Uab computation and (n_grid, n_snps) for lambda optimization. For large
-        cohorts (e.g., 200K samples × 500K SNPs), this can require significant
-        memory (~4.8TB for Uab alone). For large-scale analyses:
-        - Use `run_lmm_association()` (NumPy path) which processes SNPs sequentially
-        - Or implement SNP chunking in your calling code and concatenate results
+    Memory Scaling:
+        SNPs are processed in chunks to bound memory usage. Each chunk materializes:
+        - Uab array: (chunk_size, n_samples, 6) for projection computation
+        - Lambda grid: (n_grid, chunk_size) for optimization
+
+        The chunk size is automatically computed to avoid JAX int32 overflow while
+        streaming genotype rotation per chunk (similar to GEMMA's memory model).
+        Peak memory is dominated by kinship eigendecomposition, not SNP count.
 
     Args:
         genotypes: Genotype matrix (n_samples, n_snps) with values 0, 1, 2
@@ -233,16 +237,6 @@ def run_lmm_association_jax(
     UtW = U.T @ W
     Uty = U.T @ phenotypes
 
-    # Vectorized missing genotype imputation
-    geno_filtered = genotypes[:, snp_indices].copy()
-    col_means_filtered = col_means[snp_indices]
-    missing_mask = np.isnan(geno_filtered)
-    # Broadcast column means to fill missing values
-    geno_filtered = np.where(missing_mask, col_means_filtered[None, :], geno_filtered)
-
-    # Compute rotated genotypes
-    UtG = U.T @ geno_filtered  # (n_samples, n_filtered)
-
     # Determine chunk size to avoid int32 buffer overflow
     n_filtered = len(snp_indices)
     chunk_size = _compute_chunk_size(n_samples, n_filtered)
@@ -269,9 +263,20 @@ def run_lmm_association_jax(
     for chunk_start in range(0, n_filtered, chunk_size):
         chunk_end = min(chunk_start + chunk_size, n_filtered)
 
-        # Get chunk of rotated genotypes
-        UtG_chunk = UtG[:, chunk_start:chunk_end]
+        # Extract, impute, and rotate genotypes for this chunk only
+        # This avoids materializing the full (n_samples, n_filtered) matrix
+        chunk_indices = snp_indices[chunk_start:chunk_end]
+        geno_chunk = genotypes[:, chunk_indices].copy()
+        chunk_means = col_means[chunk_indices]
+        missing_mask = np.isnan(geno_chunk)
+        geno_chunk = np.where(missing_mask, chunk_means[None, :], geno_chunk)
+
+        # Rotate genotypes for this chunk
+        UtG_chunk = U.T @ geno_chunk  # (n_samples, chunk_size)
         UtG_jax = jax.device_put(jnp.array(UtG_chunk), device)
+
+        # Free NumPy arrays to reduce memory pressure
+        del geno_chunk, UtG_chunk
 
         # Batch compute Uab for this chunk
         Uab_batch = batch_compute_uab(UtW_jax, Uty_jax, UtG_jax)

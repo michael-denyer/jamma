@@ -350,30 +350,41 @@ def _write_plink_files(
         f.write(data)
 
 
+@dataclass
+class GemmaResult:
+    """GEMMA benchmark result with timing and output for validation."""
+
+    kinship_time: float | None = None
+    lmm_time: float | None = None
+    assoc_df: pd.DataFrame | None = None  # GEMMA association results
+
+
 def benchmark_gemma(
     genotypes: np.ndarray,
     phenotype: np.ndarray,
     profiler: BenchmarkProfiler,
     n_snps_lmm: int,
     gemma_path: str | None = None,
-) -> tuple[float | None, float | None]:
+) -> GemmaResult:
     """Benchmark GEMMA for direct comparison.
 
     Returns:
-        Tuple of (kinship_time, lmm_time) or (None, None) if GEMMA unavailable.
+        GemmaResult with timing and association results for validation.
     """
+    result = GemmaResult()
+
     # Find GEMMA binary
     gemma_bin = gemma_path or GEMMA_PATH or shutil.which("gemma")
     if not gemma_bin or not Path(gemma_bin).exists():
         logger.warning("GEMMA not found - skipping GEMMA benchmark")
-        return None, None
+        return result
 
     n_samples, n_snps = genotypes.shape
 
     # Only benchmark smaller configs (GEMMA is slow at scale)
     if n_samples > 20_000:
         logger.info(f"Skipping GEMMA benchmark for {n_samples:,} samples (too large)")
-        return None, None
+        return result
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir = Path(tmpdir)
@@ -394,10 +405,10 @@ def benchmark_gemma(
                 check=True,
                 timeout=600,
             )
-            kinship_time = profiler.end("gemma", "kinship")
+            result.kinship_time = profiler.end("gemma", "kinship")
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
             profiler.error("gemma", "kinship", e)
-            return None, None
+            return result
 
         # Benchmark GEMMA LMM
         kinship_file = output_dir / "output" / "kinship.cXX.txt"
@@ -420,14 +431,76 @@ def benchmark_gemma(
                 check=True,
                 timeout=1200,
             )
-            lmm_time = profiler.end("gemma", "lmm")
-            throughput = n_snps_lmm / lmm_time if lmm_time > 0 else 0
+            result.lmm_time = profiler.end("gemma", "lmm")
+            throughput = n_snps_lmm / result.lmm_time if result.lmm_time > 0 else 0
             logger.info(f"GEMMA throughput: {throughput:.0f} SNPs/sec")
+
+            # Load GEMMA results for validation
+            assoc_file = output_dir / "output" / "assoc.assoc.txt"
+            if assoc_file.exists():
+                result.assoc_df = pd.read_csv(assoc_file, sep="\t")
+
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
             profiler.error("gemma", "lmm", e)
-            return kinship_time, None
 
-    return kinship_time, lmm_time
+    return result
+
+
+def validate_jamma_vs_gemma(
+    jamma_results: list, gemma_df: pd.DataFrame
+) -> dict[str, float]:
+    """Validate JAMMA results against GEMMA reference.
+
+    Args:
+        jamma_results: List of AssocResult from JAMMA
+        gemma_df: DataFrame from GEMMA assoc.txt
+
+    Returns:
+        Dict with validation metrics (max relative differences, pass/fail flags)
+    """
+    # Convert JAMMA results to DataFrame
+    jamma_df = pd.DataFrame([vars(r) for r in jamma_results])
+
+    # Merge on rs ID
+    merged = pd.merge(
+        gemma_df, jamma_df, left_on="rs", right_on="rs", suffixes=("_gemma", "_jamma")
+    )
+
+    if len(merged) == 0:
+        logger.warning("No matching SNPs between JAMMA and GEMMA results")
+        return {"error": "no_matches"}
+
+    # Compute relative differences
+    beta_diff = np.abs(merged["beta_gemma"] - merged["beta_jamma"])
+    beta_rel = beta_diff / (np.abs(merged["beta_gemma"]) + 1e-10)
+
+    pval_diff = np.abs(merged["p_wald_gemma"] - merged["p_wald_jamma"])
+    pval_rel = pval_diff / (merged["p_wald_gemma"] + 1e-10)
+
+    # Tolerances from CLAUDE.md
+    beta_tol = 1e-6
+    pval_tol = 1e-8
+
+    validation = {
+        "n_snps_compared": len(merged),
+        "beta_max_rel_diff": float(beta_rel.max()),
+        "beta_mean_rel_diff": float(beta_rel.mean()),
+        "pval_max_rel_diff": float(pval_rel.max()),
+        "pval_mean_rel_diff": float(pval_rel.mean()),
+        "beta_pass": bool(beta_rel.max() < beta_tol),
+        "pval_pass": bool(pval_rel.max() < pval_tol),
+    }
+    validation["overall_pass"] = validation["beta_pass"] and validation["pval_pass"]
+
+    # Log results
+    status = "PASS" if validation["overall_pass"] else "FAIL"
+    logger.info(
+        f"GEMMA validation: {status} | "
+        f"beta_max_rel={validation['beta_max_rel_diff']:.2e} | "
+        f"pval_max_rel={validation['pval_max_rel_diff']:.2e}"
+    )
+
+    return validation
 
 
 def benchmark_kinship(genotypes: np.ndarray, profiler: BenchmarkProfiler):
@@ -579,9 +652,10 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
         except Exception as e:
             profiler.error("lmm_cpu", "association", e)
 
-        # LMM JAX
+        # LMM JAX - store results for validation
+        jax_assoc_results = None
         try:
-            _, jax_time = benchmark_lmm_jax(
+            jax_assoc_results, jax_time = benchmark_lmm_jax(
                 genotypes, phenotype, K, snp_info, profiler, n_snps=config.n_snps_lmm
             )
             results["lmm_jax_time"] = jax_time
@@ -590,14 +664,22 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
             profiler.error("lmm_jax", "association", e)
 
         # GEMMA benchmark (for smaller configs only)
-        gemma_kinship_time, gemma_lmm_time = benchmark_gemma(
+        gemma_result = benchmark_gemma(
             genotypes, phenotype, profiler, config.n_snps_lmm
         )
-        if gemma_kinship_time is not None:
-            results["gemma_kinship_time"] = gemma_kinship_time
-        if gemma_lmm_time is not None:
-            results["gemma_lmm_time"] = gemma_lmm_time
-            results["gemma_snps_per_sec"] = config.n_snps_lmm / gemma_lmm_time
+        if gemma_result.kinship_time is not None:
+            results["gemma_kinship_time"] = gemma_result.kinship_time
+        if gemma_result.lmm_time is not None:
+            results["gemma_lmm_time"] = gemma_result.lmm_time
+            results["gemma_snps_per_sec"] = config.n_snps_lmm / gemma_result.lmm_time
+
+        # Validate JAMMA results against GEMMA
+        if gemma_result.assoc_df is not None and jax_assoc_results is not None:
+            gemma_df = gemma_result.assoc_df
+            validation = validate_jamma_vs_gemma(jax_assoc_results, gemma_df)
+            results["gemma_validation_pass"] = validation.get("overall_pass", False)
+            results["gemma_beta_max_rel_diff"] = validation.get("beta_max_rel_diff")
+            results["gemma_pval_max_rel_diff"] = validation.get("pval_max_rel_diff")
 
         # Speedups
         if results.get("lmm_cpu_time") and results.get("lmm_jax_time"):
@@ -663,9 +745,16 @@ for _, row in results_df.iterrows():
     gemma_lmm = row.get("gemma_lmm_time")
     cpu_lmm = row.get("lmm_cpu_time")
     jax_lmm = row.get("lmm_jax_time")
+    validation_pass = row.get("gemma_validation_pass")
 
     if gemma_lmm:
         print(f"  GEMMA:      {gemma_lmm:7.2f}s")
+        # Show validation status
+        if validation_pass is not None:
+            status = "PASS" if validation_pass else "FAIL"
+            beta_diff = row.get("gemma_beta_max_rel_diff", 0)
+            pval_diff = row.get("gemma_pval_max_rel_diff", 0)
+            print(f"  Validation: {status} (β={beta_diff:.2e}, p={pval_diff:.2e})")
     else:
         print("  GEMMA:      (skipped - too large or unavailable)")
 

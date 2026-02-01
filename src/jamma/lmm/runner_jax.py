@@ -71,9 +71,11 @@ from jamma.lmm.likelihood_jax import (
 )
 from jamma.lmm.stats import AssocResult
 
-# INT32_MAX / 10 to leave headroom for JAX internal indexing
+# INT32_MAX with 20% headroom for JAX internal indexing overhead
 # Uab has shape (n_snps, n_samples, 6), so total elements = n_snps * n_samples * 6
-_MAX_BUFFER_ELEMENTS = 200_000_000  # ~200M elements, well under int32 overflow
+# At 50K samples: max ~5,700 SNPs/chunk (2 chunks for 10K SNPs)
+# At 100K samples: max ~2,800 SNPs/chunk (4 chunks for 10K SNPs)
+_MAX_BUFFER_ELEMENTS = 1_700_000_000  # ~1.7B elements, 80% of INT32_MAX
 
 
 def _compute_chunk_size(n_samples: int, n_snps: int) -> int:

@@ -14,6 +14,7 @@ Reference: Zhou & Stephens (2012) Nature Genetics, Supplementary Information
 
 import numpy as np
 from jax import config
+from numba import njit
 
 # Ensure 64-bit precision
 config.update("jax_enable_x64", True)
@@ -179,50 +180,62 @@ def calc_pab(
     return _calc_pab_general(n_cvt, Hi_eval, Uab)
 
 
-def _calc_pab_ncvt1(Hi_eval: np.ndarray, Uab: np.ndarray) -> np.ndarray:
-    """Optimized Pab computation for n_cvt=1.
+@njit(cache=True)
+def _calc_pab_ncvt1_numba(Hi_eval: np.ndarray, Uab: np.ndarray) -> np.ndarray:
+    """Numba-optimized Pab computation for n_cvt=1.
 
-    For n_cvt=1, we have 3 projection levels (p=0,1,2) and 6 Uab columns.
-    Index mapping:
-    - (1,1)=0: WW, (1,2)=1: WX, (1,3)=2: WY
-    - (2,2)=3: XX, (2,3)=4: XY
-    - (3,3)=5: YY
-
-    This vectorized version computes row 0 with a single matrix-vector product,
-    then uses direct formulas for rows 1 and 2.
+    JIT-compiled for maximum performance in the REML optimization loop.
     """
-    # Row 0: Base case - weighted dot products (vectorized)
-    Pab_0 = Hi_eval @ Uab  # Shape: (6,)
+    n = Hi_eval.shape[0]
 
-    # Extract values for clarity
-    P0_WW = Pab_0[0]  # (1,1)
-    P0_WX = Pab_0[1]  # (1,2)
-    P0_WY = Pab_0[2]  # (1,3)
-    P0_XX = Pab_0[3]  # (2,2)
-    P0_XY = Pab_0[4]  # (2,3)
-    P0_YY = Pab_0[5]  # (3,3)
+    # Row 0: Weighted dot products (manual loop for Numba)
+    P0_WW = 0.0
+    P0_WX = 0.0
+    P0_WY = 0.0
+    P0_XX = 0.0
+    P0_XY = 0.0
+    P0_YY = 0.0
+    for i in range(n):
+        h = Hi_eval[i]
+        P0_WW += h * Uab[i, 0]
+        P0_WX += h * Uab[i, 1]
+        P0_WY += h * Uab[i, 2]
+        P0_XX += h * Uab[i, 3]
+        P0_XY += h * Uab[i, 4]
+        P0_YY += h * Uab[i, 5]
 
-    # Row 1: Project out W (covariate 1)
-    # P1[ab] = P0[ab] - P0[aW] * P0[bW] / P0[WW]
-    inv_P0_WW = 1.0 / P0_WW if P0_WW != 0 else 0.0
+    # Row 1: Project out W
+    inv_P0_WW = 1.0 / P0_WW if P0_WW != 0.0 else 0.0
     P1_XX = P0_XX - P0_WX * P0_WX * inv_P0_WW
     P1_XY = P0_XY - P0_WX * P0_WY * inv_P0_WW
     P1_YY = P0_YY - P0_WY * P0_WY * inv_P0_WW
 
-    # Row 2: Project out X (genotype)
-    # P2[YY] = P1[YY] - P1[XY] * P1[XY] / P1[XX]
-    inv_P1_XX = 1.0 / P1_XX if P1_XX != 0 else 0.0
+    # Row 2: Project out X
+    inv_P1_XX = 1.0 / P1_XX if P1_XX != 0.0 else 0.0
     P2_YY = P1_YY - P1_XY * P1_XY * inv_P1_XX
 
-    # Build output matrix (3 rows, 6 columns)
+    # Build output matrix
     Pab = np.zeros((3, 6), dtype=np.float64)
-    Pab[0, :] = Pab_0
+    Pab[0, 0] = P0_WW
+    Pab[0, 1] = P0_WX
+    Pab[0, 2] = P0_WY
+    Pab[0, 3] = P0_XX
+    Pab[0, 4] = P0_XY
+    Pab[0, 5] = P0_YY
     Pab[1, 3] = P1_XX
     Pab[1, 4] = P1_XY
     Pab[1, 5] = P1_YY
     Pab[2, 5] = P2_YY
 
     return Pab
+
+
+def _calc_pab_ncvt1(Hi_eval: np.ndarray, Uab: np.ndarray) -> np.ndarray:
+    """Optimized Pab computation for n_cvt=1.
+
+    Delegates to Numba-compiled implementation.
+    """
+    return _calc_pab_ncvt1_numba(Hi_eval, Uab)
 
 
 def _calc_pab_general(n_cvt: int, Hi_eval: np.ndarray, Uab: np.ndarray) -> np.ndarray:
@@ -279,6 +292,86 @@ def calc_iab(
     return calc_pab(n_cvt, ones, Uab)
 
 
+@njit(cache=True)
+def _reml_log_likelihood_ncvt1_numba(
+    lambda_val: float, eigenvalues: np.ndarray, Uab: np.ndarray
+) -> float:
+    """Numba-optimized REML log-likelihood for n_cvt=1.
+
+    This is the hot path - called ~50 times per SNP during Brent optimization.
+    Inlines all computations to avoid function call overhead.
+    """
+    n = eigenvalues.shape[0]
+    df = n - 2  # n - n_cvt - 1 = n - 1 - 1 = n - 2 for n_cvt=1
+    P_YY_MIN = 1e-8
+
+    # Compute Hi_eval and logdet_h in single pass
+    logdet_h = 0.0
+    P0_WW = 0.0
+    P0_WX = 0.0
+    P0_WY = 0.0
+    P0_XX = 0.0
+    P0_XY = 0.0
+    P0_YY = 0.0
+    I0_WW = 0.0
+    I0_XX = 0.0
+
+    for i in range(n):
+        v = lambda_val * eigenvalues[i] + 1.0
+        h = 1.0 / v
+        logdet_h += np.log(v)
+
+        # Pab row 0 (Hi-weighted)
+        P0_WW += h * Uab[i, 0]
+        P0_WX += h * Uab[i, 1]
+        P0_WY += h * Uab[i, 2]
+        P0_XX += h * Uab[i, 3]
+        P0_XY += h * Uab[i, 4]
+        P0_YY += h * Uab[i, 5]
+
+        # Iab row 0 (identity-weighted, only need WW and XX for logdet)
+        I0_WW += Uab[i, 0]
+        I0_XX += Uab[i, 3]
+
+    # Pab row 1: project out W
+    inv_P0_WW = 1.0 / P0_WW if P0_WW != 0.0 else 0.0
+    P1_XX = P0_XX - P0_WX * P0_WX * inv_P0_WW
+    P1_XY = P0_XY - P0_WX * P0_WY * inv_P0_WW
+    P1_YY = P0_YY - P0_WY * P0_WY * inv_P0_WW
+
+    # Iab row 1: project out W (only need XX)
+    inv_I0_WW = 1.0 / I0_WW if I0_WW != 0.0 else 0.0
+    I0_WX = 0.0  # Uab[:, 1] summed with weight 1
+    for i in range(n):
+        I0_WX += Uab[i, 1]
+    I1_XX = I0_XX - I0_WX * I0_WX * inv_I0_WW
+
+    # Pab row 2: project out X -> get P_yy
+    inv_P1_XX = 1.0 / P1_XX if P1_XX != 0.0 else 0.0
+    P_yy = P1_YY - P1_XY * P1_XY * inv_P1_XX
+
+    # Clamp P_yy
+    if P_yy >= 0.0 and P_yy < P_YY_MIN:
+        P_yy = P_YY_MIN
+
+    # logdet_hiw for n_cvt=1: log(P0_WW) + log(P1_XX) - log(I0_WW) - log(I1_XX)
+    logdet_hiw = 0.0
+    if P0_WW > 0.0:
+        logdet_hiw += np.log(P0_WW)
+    if P1_XX > 0.0:
+        logdet_hiw += np.log(P1_XX)
+    if I0_WW > 0.0:
+        logdet_hiw -= np.log(I0_WW)
+    if I1_XX > 0.0:
+        logdet_hiw -= np.log(I1_XX)
+
+    # REML log-likelihood
+    c = 0.5 * df * (np.log(df) - np.log(2.0 * np.pi) - 1.0)
+    f = c - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
+
+    return f
+
+
 def reml_log_likelihood(
     lambda_val: float, eigenvalues: np.ndarray, Uab: np.ndarray, n_cvt: int
 ) -> float:
@@ -303,24 +396,22 @@ def reml_log_likelihood(
     Returns:
         Log-likelihood value (positive for maximization)
     """
-    n = len(eigenvalues)
+    # Fast path for n_cvt=1 (most common case)
+    if n_cvt == 1:
+        return _reml_log_likelihood_ncvt1_numba(lambda_val, eigenvalues, Uab)
 
-    # Degrees of freedom for alternative model (with SNP)
-    nc_total = n_cvt + 1  # Covariates + genotype
+    # General case
+    n = len(eigenvalues)
+    nc_total = n_cvt + 1
     df = n - n_cvt - 1
 
-    # H_inv = 1 / (lambda * eigenvalues + 1)
     v_temp = lambda_val * eigenvalues + 1.0
     Hi_eval = 1.0 / v_temp
-
-    # Log determinant of H
     logdet_h = np.sum(np.log(np.abs(v_temp)))
 
-    # Compute Pab and Iab
     Pab = calc_pab(n_cvt, Hi_eval, Uab)
     Iab = calc_iab(n_cvt, Uab)
 
-    # Calculate logdet_hiw = log|WHiW| - log|WW|
     logdet_hiw = 0.0
     for i in range(nc_total):
         index_ww = get_ab_index(i + 1, i + 1, n_cvt)
@@ -331,16 +422,13 @@ def reml_log_likelihood(
         if d_iab > 0:
             logdet_hiw -= np.log(d_iab)
 
-    # Get P_yy (phenotype-phenotype after projecting out covariates and genotype)
     index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
     P_yy = Pab[nc_total, index_yy]
 
-    # Minimum P_yy to avoid numerical issues (matches GEMMA's P_YY_MIN)
     P_YY_MIN = 1e-8
     if P_yy >= 0.0 and P_yy < P_YY_MIN:
         P_yy = P_YY_MIN
 
-    # REML log-likelihood
     c = 0.5 * df * (np.log(df) - np.log(2 * np.pi) - 1.0)
     f = c - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
 

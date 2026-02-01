@@ -54,6 +54,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import psutil
+from loguru import logger as loguru_logger
 
 # JAX configuration - must be before import
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -70,13 +71,22 @@ import jax  # noqa: E402
 # Configuration - Legacy Hive Metastore (single-level namespace)
 OUTPUT_SCHEMA = "jamma_benchmarks"
 
-# Setup logging
+# Setup logging - configure both standard logging and loguru for JAMMA output
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("jamma_benchmark")
+
+# Configure loguru to show JAMMA logs (JAMMA uses loguru internally)
+# Remove default handler and add one with INFO level to stdout
+loguru_logger.remove()
+loguru_logger.add(
+    sys.stdout,
+    level="INFO",
+    format="{time:HH:mm:ss} | <level>{level: <8}</level> | {message}",
+)
 
 logger.info(f"Python: {sys.version}")
 logger.info(f"NumPy version: {np.__version__}")

@@ -50,3 +50,4 @@ legacy/src/
 legacy/doc/
 legacy/bin/
 legacy/test/
+.hypothesis/

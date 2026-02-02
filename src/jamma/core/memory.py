@@ -8,6 +8,33 @@ from typing import NamedTuple
 import psutil
 
 
+def estimate_eigendecomp_memory(n_samples: int) -> float:
+    """Estimate peak memory (GB) for eigendecomposition of kinship matrix.
+
+    Peak memory during eigendecomposition includes:
+    - K (input kinship matrix): n^2 * 8 bytes
+    - U (output eigenvectors): n^2 * 8 bytes
+    - workspace (DSYEVR LAPACK routine): ~26*n*8 + 10*n*4 bytes
+
+    For 200k samples: 320GB + 320GB + 0.04GB = ~640GB
+    For 100k samples: 80GB + 80GB + 0.02GB = ~160GB
+
+    Args:
+        n_samples: Number of samples (individuals).
+
+    Returns:
+        Estimated peak memory in GB.
+
+    Example:
+        >>> estimate_eigendecomp_memory(200_000)
+        640.04
+    """
+    kinship_gb = n_samples**2 * 8 / 1e9  # K input matrix
+    eigenvectors_gb = n_samples**2 * 8 / 1e9  # U output eigenvectors
+    workspace_gb = (26 * n_samples * 8 + 10 * n_samples * 4) / 1e9  # DSYEVR
+    return kinship_gb + eigenvectors_gb + workspace_gb
+
+
 class MemoryBreakdown(NamedTuple):
     """Detailed memory breakdown for GWAS workflow.
 

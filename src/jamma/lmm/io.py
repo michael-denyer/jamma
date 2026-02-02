@@ -10,7 +10,7 @@ from jamma.lmm.stats import AssocResult
 
 
 def format_assoc_line(result: AssocResult) -> str:
-    """Format a single association result as tab-separated line.
+    """Format a single Wald test result as tab-separated line.
 
     Matches GEMMA's WriteFiles formatting:
     - af: .3f (3 decimal places, fixed)
@@ -42,6 +42,41 @@ def format_assoc_line(result: AssocResult) -> str:
     )
 
 
+def format_assoc_line_score(result: AssocResult) -> str:
+    """Format Score test result as tab-separated line.
+
+    GEMMA -lmm 3 format:
+    chr  rs  ps  n_miss  allele1  allele0  af  beta  se  p_score
+
+    Args:
+        result: AssocResult dataclass instance
+
+    Returns:
+        Tab-separated string (no newline)
+    """
+    return "\t".join(
+        [
+            result.chr,
+            result.rs,
+            str(result.ps),
+            str(result.n_miss),
+            result.allele1,
+            result.allele0,
+            f"{result.af:.3f}",
+            f"{result.beta:.6e}",
+            f"{result.se:.6e}",
+            f"{result.p_score:.6e}",
+        ]
+    )
+
+
+# GEMMA headers
+HEADER_WALD = (
+    "chr\trs\tps\tn_miss\tallele1\tallele0\taf\tbeta\tse\tlogl_H1\tl_remle\tp_wald"
+)
+HEADER_SCORE = "chr\trs\tps\tn_miss\tallele1\tallele0\taf\tbeta\tse\tp_score"
+
+
 def write_assoc_results(results: list[AssocResult], path: Path) -> None:
     """Write association results in GEMMA .assoc.txt format.
 
@@ -58,13 +93,8 @@ def write_assoc_results(results: list[AssocResult], path: Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # GEMMA header (tab-separated)
-    header = (
-        "chr\trs\tps\tn_miss\tallele1\tallele0\taf\tbeta\tse\tlogl_H1\tl_remle\tp_wald"
-    )
-
     with open(path, "w") as f:
-        f.write(header + "\n")
+        f.write(HEADER_WALD + "\n")
         for result in results:
             f.write(format_assoc_line(result) + "\n")
 
@@ -81,21 +111,23 @@ class IncrementalAssocWriter:
             for result in compute_results():
                 writer.write(result)
         print(f"Wrote {writer.count} results")
+
+        # For Score test:
+        with IncrementalAssocWriter(
+            Path("output.assoc.txt"), test_type="score"
+        ) as writer:
+            ...
     """
 
-    # GEMMA header (matches write_assoc_results)
-    HEADER = (
-        "chr\trs\tps\tn_miss\tallele1\tallele0\t"
-        "af\tbeta\tse\tlogl_H1\tl_remle\tp_wald"
-    )
-
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, test_type: str = "wald"):
         """Initialize writer with output path.
 
         Args:
             path: Output file path. Parent directories created if needed.
+            test_type: Test type for formatting ("wald" or "score")
         """
         self.path = Path(path)
+        self.test_type = test_type
         self._file = None
         self._count = 0
 
@@ -103,7 +135,8 @@ class IncrementalAssocWriter:
         """Open file and write header."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = open(self.path, "w")
-        self._file.write(self.HEADER + "\n")
+        header = HEADER_SCORE if self.test_type == "score" else HEADER_WALD
+        self._file.write(header + "\n")
         return self
 
     def write(self, result: AssocResult) -> None:
@@ -114,7 +147,11 @@ class IncrementalAssocWriter:
         """
         if self._file is None:
             raise RuntimeError("Writer not opened. Use as context manager.")
-        self._file.write(format_assoc_line(result) + "\n")
+        if self.test_type == "score":
+            line = format_assoc_line_score(result)
+        else:
+            line = format_assoc_line(result)
+        self._file.write(line + "\n")
         self._count += 1
 
     def write_batch(self, results: list[AssocResult]) -> None:

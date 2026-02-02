@@ -330,11 +330,12 @@ def lmm_command(
         f"(filtered {n_filtered})"
     )
 
-    # Apply mask consistently to genotypes, phenotypes, AND kinship
+    # Apply mask consistently to genotypes, phenotypes, kinship, and covariates
     genotypes = plink_data.genotypes
     genotypes_filtered = genotypes[valid_mask, :]
     phenotypes_filtered = phenotypes[valid_mask]
     K_filtered = K[np.ix_(valid_mask, valid_mask)]
+    covariates_filtered = covariates[valid_mask, :] if covariates is not None else None
 
     # Validate dimensions after filtering
     assert (
@@ -386,6 +387,7 @@ def lmm_command(
         phenotypes_filtered,
         K_filtered,
         snp_info,
+        covariates=covariates_filtered,
         maf_threshold=maf,
         miss_threshold=miss,
     )
@@ -410,6 +412,8 @@ def lmm_command(
         "n_snps": n_snps,
         "lmm_mode": lmm_mode,
         "kinship_file": str(kinship_file),
+        "covariate_file": str(covariate_file) if covariate_file else None,
+        "n_covariates": covariates.shape[1] if covariates is not None else 1,
         "output_file": str(assoc_path),
         "maf_threshold": maf,
         "miss_threshold": miss,

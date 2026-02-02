@@ -93,20 +93,18 @@ from loguru import logger
 from jamma.core.memory import estimate_streaming_memory, estimate_workflow_memory
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
 from jamma.lmm.eigen import eigendecompose_kinship
-from jamma.utils.logging import log_rss_memory
+from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.likelihood_jax import (
     batch_calc_wald_stats,
     batch_compute_iab,
     batch_compute_uab,
     golden_section_optimize_lambda,
 )
-from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.stats import AssocResult
+from jamma.utils.logging import log_rss_memory
 
 
-def _progress_iterator(
-    iterable: Iterator, total: int, desc: str = ""
-) -> Iterator:
+def _progress_iterator(iterable: Iterator, total: int, desc: str = "") -> Iterator:
     """Wrap iterator with progressbar2 progress display.
 
     Works in both Databricks interactive notebooks and workflow notebooks,
@@ -128,6 +126,11 @@ def _progress_iterator(
         yield item
         bar.update(i + 1)
     bar.finish()
+
+
+# Maximum safe chunk size to prevent int32 overflow and excessive memory allocation
+# 50k SNPs per chunk is safe for most sample sizes while maintaining good throughput
+MAX_SAFE_CHUNK = 50_000
 
 # INT32_MAX with headroom for JAX internal indexing overhead
 # Multiple arrays contribute to buffer sizing:
@@ -186,6 +189,7 @@ def auto_tune_chunk_size(
     n_grid: int = 50,
     mem_budget_gb: float = 4.0,
     min_chunk: int = 1000,
+    max_chunk: int = MAX_SAFE_CHUNK,
 ) -> int:
     """Compute optimal chunk size based on memory budget heuristic.
 
@@ -204,6 +208,8 @@ def auto_tune_chunk_size(
         n_grid: Grid points for lambda optimization (default 50).
         mem_budget_gb: Memory budget in GB (default 4.0).
         min_chunk: Minimum chunk size (default 1000).
+        max_chunk: Maximum chunk size cap (default MAX_SAFE_CHUNK=50000).
+            Prevents excessive memory allocation on high-memory systems.
 
     Returns:
         Optimal chunk size that fits within memory budget.
@@ -223,12 +229,12 @@ def auto_tune_chunk_size(
     # Apply int32 buffer limit constraint
     buffer_limit = _compute_chunk_size(n_samples, chunk_from_memory, n_grid)
 
-    # Clamp to valid range
-    chunk_size = max(min_chunk, min(buffer_limit, n_filtered))
+    # Clamp to valid range INCLUDING max_chunk cap
+    chunk_size = max(min_chunk, min(buffer_limit, n_filtered, max_chunk))
 
     logger.debug(
         f"auto_tune_chunk_size: n_samples={n_samples}, n_filtered={n_filtered}, "
-        f"bytes_per_snp={bytes_per_snp}, chunk_size={chunk_size}"
+        f"bytes_per_snp={bytes_per_snp}, chunk_size={chunk_size}, max_chunk={max_chunk}"
     )
 
     return chunk_size

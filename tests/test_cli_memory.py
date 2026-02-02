@@ -6,8 +6,14 @@ memory sizes.
 
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
+from typer.testing import CliRunner
+
+from jamma.cli import app
+
+runner = CliRunner()
 
 # Test fixture path
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "gemma_synthetic"
@@ -177,3 +183,38 @@ class TestCliMemoryCheckUnit:
         assert "n_snps" in meta
         assert meta["n_samples"] == 100
         assert meta["n_snps"] == 500
+
+
+@pytest.mark.tier0
+class TestCliIncrementalWriting:
+    """Tests for CLI lmm command incremental writing."""
+
+    def test_cli_uses_output_path_for_incremental_writing(self, tmp_path):
+        """Verify CLI passes output_path to run_lmm_association for streaming writes."""
+        # Run LMM with mocked run_lmm_association to capture output_path
+        with patch("jamma.cli.run_lmm_association") as mock_run:
+            mock_run.return_value = []  # Simulates incremental write mode
+
+            runner.invoke(
+                app,
+                [
+                    "-outdir",
+                    str(tmp_path),
+                    "-o",
+                    "lmm_test",
+                    "lmm",
+                    "-bfile",
+                    str(PLINK_PREFIX),
+                    "-k",
+                    str(KINSHIP_FILE),
+                    "--no-check-memory",
+                ],
+            )
+
+            # Command may fail due to mock, but we just care that output_path was passed
+            # Verify output_path was passed
+            assert mock_run.called
+            call_kwargs = mock_run.call_args.kwargs
+            assert "output_path" in call_kwargs
+            assert call_kwargs["output_path"] is not None
+            assert str(call_kwargs["output_path"]).endswith(".assoc.txt")

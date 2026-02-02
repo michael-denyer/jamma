@@ -557,6 +557,13 @@ def run_lmm_association_jax(
     ses_np = np.asarray(jnp.concatenate(all_ses))
     p_walds_np = np.asarray(jnp.concatenate(all_pwalds))
 
+    # Explicit cleanup of JAX arrays before returning to prevent SIGSEGV
+    # from race conditions between Python GC and JAX background threads
+    del all_lambdas, all_logls, all_betas, all_ses, all_pwalds
+    del eigenvalues, UtW_jax, Uty_jax
+    # Force synchronization - ensures all JAX operations complete before returning
+    jax.block_until_ready(betas_np)
+
     # Log completion
     elapsed = time.perf_counter() - start_time
     if show_progress:
@@ -1085,11 +1092,19 @@ def run_lmm_association_streaming(
         if show_progress:
             log_rss_memory("lmm_streaming", "after_association")
 
+        # Explicit cleanup of JAX device-resident arrays before returning
+        # to prevent SIGSEGV from race conditions between Python GC and JAX threads
+        del eigenvalues, UtW_jax, Uty_jax
+
     finally:
         if writer is not None:
             writer.__exit__(None, None, None)
             if show_progress:
                 logger.info(f"Wrote {writer.count:,} results to {output_path}")
+
+    # Force synchronization - ensures all JAX operations complete before returning
+    # This prevents SIGSEGV from background threads accessing freed memory
+    jax.clear_caches()
 
     # Return results
     if output_path is not None:

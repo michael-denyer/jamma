@@ -177,6 +177,42 @@ The NumPy/Numba path supports n_cvt > 1. JAX path is optimized for the common ca
 
 ---
 
+## 6. Lambda Optimization Bounds
+
+Both GEMMA and JAMMA use Brent's method with bounds [1e-5, 1e5] for lambda (variance ratio) optimization. JAMMA adds a warning when the optimum converges at the lower bound:
+
+```text
+RuntimeWarning: Lambda converged at lower bound (1.00e-05 ~ 1.00e-05).
+True optimum may be below search range.
+```
+
+**When this matters:**
+
+- SNPs with very weak genetic signal may have lambda < 1e-5
+- The lower bound prevents numerical instability but masks the true minimum
+- Results at the boundary are valid but the lambda value is artificially clamped
+
+**Validation note:** Lambda values at the boundary (≤ 1e-4) are excluded from tolerance comparisons since relative error is inflated when dividing by small numbers. This is why you may see "excluding N boundary values" in validation output.
+
+---
+
+## 7. Eigendecomposition Implementation
+
+GEMMA uses GSL (GNU Scientific Library) for eigendecomposition. JAMMA uses `scipy.linalg.eigh` (LAPACK) instead of JAX's `jnp.linalg.eigh`.
+
+**Rationale:** JAX uses int32 buffer indexing internally, which overflows at ~2.1 billion elements (~46k × 46k matrix). For 200k+ sample GWAS, the kinship matrix has 40+ billion elements, causing:
+
+```text
+JaxRuntimeError: INVALID_ARGUMENT: Buffer Definition Event:
+Value (=5000300001) exceeds the maximum representable value of the desired type
+```
+
+scipy's LAPACK binding uses int64 indexing and supports matrices up to ~3 billion rows.
+
+**Performance:** scipy's LAPACK-based eigh is highly optimized (multi-threaded, vectorized). The eigendecomposition is O(n³) and runs once per dataset, so it's not the performance bottleneck. The JAX-accelerated SNP processing dominates runtime for large datasets.
+
+---
+
 ## Summary Table
 
 | Feature | GEMMA Behavior | JAMMA Behavior | Impact |
@@ -187,6 +223,8 @@ The NumPy/Numba path supports n_cvt > 1. JAX path is optimized for the common ca
 | logdet with neg eigenvalues | log(abs(v)) | log(abs(v)) | Aligned |
 | Monomorphic detection | Count-based | Variance-based | Aligned (equivalent) |
 | JAX covariates | n_cvt ≥ 1 | n_cvt = 1 only | Known limitation |
+| Lambda at lower bound | Silent | Warning + valid result | Better visibility |
+| Eigendecomp library | GSL | scipy LAPACK | 200k+ sample support |
 
 ---
 
@@ -198,4 +236,4 @@ The NumPy/Numba path supports n_cvt > 1. JAX path is optimized for the common ca
 
 ---
 
-*Last updated: 2026-02-01*
+*Last updated: 2026-02-02*

@@ -24,7 +24,9 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install --upgrade "numpy>=2.0,<2.4"
+# Install numpy/scipy with MKL for stable eigendecomposition at scale
+# OpenBLAS has threading bugs causing SIGSEGV at 100k+ samples
+# MAGIC %pip install "numpy>=2.0" scipy --extra-index-url https://urob.github.io/numpy-mkl
 
 # COMMAND ----------
 

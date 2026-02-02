@@ -32,6 +32,11 @@
 
 # COMMAND ----------
 
+# Install MKL for stable eigendecomposition at scale (OpenBLAS has threading bugs)
+# MAGIC %pip install mkl
+
+# COMMAND ----------
+
 # MAGIC %pip install --no-deps --force-reinstall git+https://github.com/michael-denyer/jamma.git
 
 # COMMAND ----------

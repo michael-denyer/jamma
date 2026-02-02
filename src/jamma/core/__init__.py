@@ -15,10 +15,15 @@ from jamma.core.jax_config import (
 )
 from jamma.core.memory import (
     MemoryBreakdown,
+    MemorySnapshot,
     StreamingMemoryBreakdown,
     check_memory_available,
+    check_memory_before_run,
+    cleanup_memory,
     estimate_streaming_memory,
     estimate_workflow_memory,
+    get_memory_snapshot,
+    log_memory_snapshot,
 )
 
 __all__ = [
@@ -27,8 +32,13 @@ __all__ = [
     "get_jax_info",
     "verify_jax_installation",
     "MemoryBreakdown",
+    "MemorySnapshot",
     "StreamingMemoryBreakdown",
     "check_memory_available",
+    "check_memory_before_run",
+    "cleanup_memory",
     "estimate_streaming_memory",
     "estimate_workflow_memory",
+    "get_memory_snapshot",
+    "log_memory_snapshot",
 ]

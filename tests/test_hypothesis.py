@@ -118,8 +118,8 @@ class TestKinshipProperties:
 
         K = compute_centered_kinship(genotypes)
 
-        # Check symmetry
-        np.testing.assert_allclose(K, K.T, rtol=1e-10)
+        # Check symmetry (atol handles floating-point noise for values near zero)
+        np.testing.assert_allclose(K, K.T, rtol=1e-10, atol=1e-14)
 
     @given(
         genotypes=genotype_matrix(

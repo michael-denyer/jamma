@@ -14,6 +14,7 @@ Key components:
 """
 
 import numpy as np
+from loguru import logger
 
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.io import write_assoc_results
@@ -130,10 +131,20 @@ def run_lmm_association(
     Uty = U.T @ phenotypes
 
     # Step c: Rotate covariates (intercept if None)
+    # CRITICAL: Match GEMMA behavior - do NOT auto-prepend intercept
+    # User must include intercept column if desired (GEMMA -c flag behavior)
     if covariates is None:
         W = np.ones((n_samples, 1))
     else:
-        W = np.column_stack([np.ones(n_samples), covariates])
+        W = covariates.astype(np.float64)
+        # Warn if first column is not all 1s (missing intercept)
+        first_col = W[:, 0]
+        if not np.allclose(first_col, 1.0):
+            logger.warning(
+                "Covariate matrix does not have intercept column "
+                "(first column is not all 1s). "
+                "Model will NOT include an intercept term."
+            )
     UtW = U.T @ W
     n_cvt = W.shape[1]
 

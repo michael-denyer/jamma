@@ -93,6 +93,7 @@ from loguru import logger
 from jamma.core.memory import estimate_streaming_memory, estimate_workflow_memory
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
 from jamma.lmm.eigen import eigendecompose_kinship
+from jamma.utils.logging import log_rss_memory
 from jamma.lmm.likelihood_jax import (
     batch_calc_wald_stats,
     batch_compute_iab,
@@ -395,7 +396,11 @@ def run_lmm_association_jax(
         if show_progress:
             logger.debug("Using pre-computed eigendecomposition")
     else:
+        if show_progress:
+            log_rss_memory("lmm_jax", "before_eigendecomp")
         eigenvalues_np, U = eigendecompose_kinship(kinship)
+        if show_progress:
+            log_rss_memory("lmm_jax", "after_eigendecomp")
 
     # Prepare rotated matrices (intercept-only model)
     W = np.ones((n_samples, 1))
@@ -526,6 +531,10 @@ def run_lmm_association_jax(
         all_betas.append(betas[:slice_len])
         all_ses.append(ses[:slice_len])
         all_pwalds.append(p_walds[:slice_len])
+
+    # Log memory after all chunks processed
+    if show_progress:
+        log_rss_memory("lmm_jax", "after_all_chunks")
 
     # Concatenate on device, then single host transfer
     best_lambdas_np = np.asarray(jnp.concatenate(all_lambdas))
@@ -848,7 +857,11 @@ def run_lmm_association_streaming(
         if show_progress:
             logger.debug("Using pre-computed eigendecomposition")
     else:
+        if show_progress:
+            log_rss_memory("lmm_streaming", "before_eigendecomp")
         eigenvalues_np, U = eigendecompose_kinship(kinship)
+        if show_progress:
+            log_rss_memory("lmm_streaming", "after_eigendecomp")
 
     # Prepare rotated matrices (intercept-only model)
     W = np.ones((n_samples, 1))
@@ -984,6 +997,10 @@ def run_lmm_association_streaming(
             all_betas.append(betas[:slice_len])
             all_ses.append(ses[:slice_len])
             all_pwalds.append(p_walds[:slice_len])
+
+    # Log memory after association pass completes
+    if show_progress:
+        log_rss_memory("lmm_streaming", "after_association")
 
     # Concatenate on device, then single host transfer
     best_lambdas_np = np.asarray(jnp.concatenate(all_lambdas))

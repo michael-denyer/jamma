@@ -13,11 +13,13 @@ Key components:
 - run_lmm_association_jax: JAX-optimized batch processing (faster for large datasets)
 """
 
+from pathlib import Path
+
 import numpy as np
 from loguru import logger
 
 from jamma.lmm.eigen import eigendecompose_kinship
-from jamma.lmm.io import write_assoc_results
+from jamma.lmm.io import IncrementalAssocWriter, write_assoc_results
 from jamma.lmm.likelihood import compute_Uab
 from jamma.lmm.optimize import optimize_lambda_for_snp
 from jamma.lmm.runner_jax import (
@@ -80,6 +82,7 @@ def run_lmm_association(
     covariates: np.ndarray | None = None,
     maf_threshold: float = 0.01,
     miss_threshold: float = 0.05,
+    output_path: Path | None = None,
 ) -> list[AssocResult]:
     """Run LMM association tests for all SNPs.
 
@@ -98,9 +101,13 @@ def run_lmm_association(
         covariates: Optional covariate matrix (n_samples, n_covariates)
         maf_threshold: Minimum MAF for SNP inclusion (default: 0.01)
         miss_threshold: Maximum missing rate for SNP inclusion (default: 0.05)
+        output_path: If provided, write results incrementally to this file.
+            Returns empty list when output_path is set (results are on disk).
+            If None (default), accumulate results in memory and return list.
 
     Returns:
-        List of AssocResult for each SNP that passes filtering
+        List of AssocResult for each SNP that passes filtering.
+        Empty list if output_path was provided (results written to disk).
     """
     # Step 0: Filter samples with missing phenotypes (-9 or NaN) or missing covariates
     valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
@@ -157,50 +164,66 @@ def run_lmm_association(
     n_cvt = W.shape[1]
 
     results = []
-    for j, snp_idx in enumerate(snp_indices):
-        # Get pre-computed stats
-        maf, n_miss = snp_stats[j]
+    writer = None
+    if output_path is not None:
+        writer = IncrementalAssocWriter(output_path)
+        writer.__enter__()
 
-        # Step d: Rotate genotype (with imputation of missing to mean)
-        # For all-missing SNPs (shouldn't happen after filtering), impute to 0.0
-        # to match JAX path behavior and avoid NaN propagation
-        x = genotypes[:, snp_idx].copy()
-        missing = np.isnan(x)
-        if np.any(missing):
-            mean_val = np.nanmean(x)
-            # Handle all-missing case: nanmean returns NaN, use 0.0 instead
-            if np.isnan(mean_val):
-                mean_val = 0.0
-            x[missing] = mean_val
-        Utx = U.T @ x
+    try:
+        for j, snp_idx in enumerate(snp_indices):
+            # Get pre-computed stats
+            maf, n_miss = snp_stats[j]
 
-        # Compute Uab with SNP genotype
-        Uab = compute_Uab(UtW, Uty, Utx)
+            # Step d: Rotate genotype (with imputation of missing to mean)
+            # For all-missing SNPs (shouldn't happen after filtering), impute to 0.0
+            # to match JAX path behavior and avoid NaN propagation
+            x = genotypes[:, snp_idx].copy()
+            missing = np.isnan(x)
+            if np.any(missing):
+                mean_val = np.nanmean(x)
+                # Handle all-missing case: nanmean returns NaN, use 0.0 instead
+                if np.isnan(mean_val):
+                    mean_val = 0.0
+                x[missing] = mean_val
+            Utx = U.T @ x
 
-        # Optimize lambda via REML (using Brent minimization for speed)
-        lambda_opt, logl_H1 = optimize_lambda_for_snp(eigenvalues, Uab, n_cvt)
+            # Compute Uab with SNP genotype
+            Uab = compute_Uab(UtW, Uty, Utx)
 
-        # Compute Wald statistics using new function
-        beta, se, p_wald = calc_wald_test_from_uab(
-            lambda_opt, eigenvalues, Uab, n_cvt, n_samples
-        )
+            # Optimize lambda via REML (using Brent minimization for speed)
+            lambda_opt, logl_H1 = optimize_lambda_for_snp(eigenvalues, Uab, n_cvt)
 
-        # Build result
-        info = snp_info[snp_idx]
-        result = AssocResult(
-            chr=info["chr"],
-            rs=info["rs"],
-            ps=info.get("pos", info.get("ps", 0)),
-            n_miss=n_miss,
-            allele1=info.get("a1", info.get("allele1", "")),
-            allele0=info.get("a0", info.get("allele0", "")),
-            af=maf,
-            beta=beta,
-            se=se,
-            logl_H1=logl_H1,
-            l_remle=lambda_opt,
-            p_wald=p_wald,
-        )
-        results.append(result)
+            # Compute Wald statistics using new function
+            beta, se, p_wald = calc_wald_test_from_uab(
+                lambda_opt, eigenvalues, Uab, n_cvt, n_samples
+            )
 
+            # Build result
+            info = snp_info[snp_idx]
+            result = AssocResult(
+                chr=info["chr"],
+                rs=info["rs"],
+                ps=info.get("pos", info.get("ps", 0)),
+                n_miss=n_miss,
+                allele1=info.get("a1", info.get("allele1", "")),
+                allele0=info.get("a0", info.get("allele0", "")),
+                af=maf,
+                beta=beta,
+                se=se,
+                logl_H1=logl_H1,
+                l_remle=lambda_opt,
+                p_wald=p_wald,
+            )
+
+            if writer is not None:
+                writer.write(result)
+            else:
+                results.append(result)
+    finally:
+        if writer is not None:
+            writer.__exit__(None, None, None)
+            logger.info(f"Wrote {writer.count} results to {output_path}")
+
+    if output_path is not None:
+        return []
     return results

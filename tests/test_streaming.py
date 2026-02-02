@@ -27,13 +27,13 @@ class TestStreamGenotypeChunks:
             )
         )
 
-        # First chunk should be full size
-        assert chunks[0][0].shape == (1940, 5000)
+        # First chunk should be full size (100 samples from gemma_synthetic)
+        assert chunks[0][0].shape == (100, min(chunk_size, 500))
 
         # All chunks except possibly last should have chunk_size SNPs
         for chunk, _start, _end in chunks[:-1]:
             assert chunk.shape[1] == chunk_size
-            assert chunk.shape[0] == 1940
+            assert chunk.shape[0] == 100
 
     def test_covers_all_snps(self, sample_plink_data: Path) -> None:
         """Verify no SNPs are missed - indices cover full range."""
@@ -44,9 +44,9 @@ class TestStreamGenotypeChunks:
             )
         )
 
-        # Total SNPs from indices should match known count
+        # Total SNPs from indices should match known count (500 for gemma_synthetic)
         total_snps = sum(end - start for _, start, end in chunks)
-        assert total_snps == 12226
+        assert total_snps == 500
 
         # Verify contiguous coverage
         expected_start = 0
@@ -55,7 +55,7 @@ class TestStreamGenotypeChunks:
             expected_start = end
 
         # Final end should be total SNP count
-        assert chunks[-1][2] == 12226
+        assert chunks[-1][2] == 500
 
     def test_matches_full_load(self, sample_plink_data: Path) -> None:
         """Verify streamed data matches PlinkData full load."""
@@ -83,13 +83,13 @@ class TestStreamGenotypeChunks:
         """Verify dtype parameter is honored."""
         # Default float32
         for chunk, _, _ in stream_genotype_chunks(
-            sample_plink_data, chunk_size=12226, show_progress=False
+            sample_plink_data, chunk_size=500, show_progress=False
         ):
             assert chunk.dtype == np.float32
 
         # Explicit float64
         for chunk, _, _ in stream_genotype_chunks(
-            sample_plink_data, chunk_size=12226, dtype=np.float64, show_progress=False
+            sample_plink_data, chunk_size=500, dtype=np.float64, show_progress=False
         ):
             assert chunk.dtype == np.float64
 
@@ -108,8 +108,8 @@ class TestGetPlinkMetadata:
         """Verify n_samples and n_snps match known values."""
         meta = get_plink_metadata(sample_plink_data)
 
-        assert meta["n_samples"] == 1940
-        assert meta["n_snps"] == 12226
+        assert meta["n_samples"] == 100
+        assert meta["n_snps"] == 500
 
     def test_returns_all_fields(self, sample_plink_data: Path) -> None:
         """Verify all expected metadata fields are present."""
@@ -380,7 +380,7 @@ class TestComputeKinshipStreaming:
         K = compute_kinship_streaming(
             sample_plink_data, check_memory=False, show_progress=False
         )
-        assert K.shape == (1940, 1940)
+        assert K.shape == (100, 100)
 
         # Mock low available memory to test MemoryError
         # For this small dataset, we don't actually expect MemoryError
@@ -388,7 +388,7 @@ class TestComputeKinshipStreaming:
         K_checked = compute_kinship_streaming(
             sample_plink_data, check_memory=True, show_progress=False
         )
-        assert K_checked.shape == (1940, 1940)
+        assert K_checked.shape == (100, 100)
 
     def test_compute_kinship_streaming_missing_file_raises(
         self, tmp_path: Path

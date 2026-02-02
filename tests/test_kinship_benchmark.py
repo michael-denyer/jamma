@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 
 GEMMA_DOCKER_IMAGE = "quay.io/biocontainers/gemma:0.98.5--ha36d3ea_0"
-EXAMPLE_DATA = Path("legacy/example/mouse_hs1940")
+EXAMPLE_DATA = Path("tests/fixtures/gemma_synthetic/test")
 
 
 @pytest.fixture
@@ -188,7 +188,7 @@ class TestJammaVsGemma:
             GEMMA_DOCKER_IMAGE,
             "gemma",
             "-bfile",
-            "/data/legacy/example/mouse_hs1940",
+            "/data/tests/fixtures/gemma_synthetic/test",
             "-gk",
             "1",
             "-o",

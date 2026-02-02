@@ -16,14 +16,14 @@ from jamma.validation import (
     load_gemma_kinship,
 )
 
-# Test data paths
-EXAMPLE_DATA = Path("legacy/example/mouse_hs1940")
-REFERENCE_KINSHIP = Path("tests/fixtures/kinship/mouse_hs1940.cXX.txt")
+# Test data paths - use gemma_synthetic which has matching PLINK + reference outputs
+EXAMPLE_DATA = Path("tests/fixtures/gemma_synthetic/test")
+REFERENCE_KINSHIP = Path("tests/fixtures/gemma_synthetic/gemma_kinship.cXX.txt")
 
 
 @pytest.fixture
 def mouse_genotypes():
-    """Load mouse_hs1940 genotypes."""
+    """Load gemma_synthetic genotypes."""
     plink_data = load_plink_binary(EXAMPLE_DATA)
     return plink_data.genotypes
 
@@ -72,7 +72,7 @@ class TestKinshipValidation:
 
         # Report for visibility
         print("\n=== KINSHIP VALIDATION REPORT ===")
-        print("Dataset: mouse_hs1940 (1940 samples, 12226 SNPs)")
+        print("Dataset: gemma_synthetic (100 samples, 500 SNPs)")
         print(f"Passed: {result.passed}")
         print(f"Max absolute difference: {result.max_abs_diff:.2e}")
         print(f"Max relative difference: {result.max_rel_diff:.2e}")

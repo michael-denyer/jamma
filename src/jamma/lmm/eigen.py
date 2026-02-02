@@ -1,17 +1,14 @@
-"""Eigendecomposition of kinship matrix using JAX.
+"""Eigendecomposition of kinship matrix.
 
 Provides GEMMA-compatible eigendecomposition with small eigenvalue thresholding.
-Uses JAX's XLA-compiled eigh for performance (6-7x faster than SciPy/LAPACK).
+Uses scipy.linalg.eigh (LAPACK) to support large matrices (200k+ samples) that
+exceed JAX's int32 buffer limits.
 """
 
 import warnings
 
-import jax.numpy as jnp
 import numpy as np
-from jax import config
-
-# Ensure 64-bit precision for numerical equivalence
-config.update("jax_enable_x64", True)
+from scipy import linalg
 
 
 def eigendecompose_kinship(
@@ -24,6 +21,9 @@ def eigendecompose_kinship(
     - Warning if >1 zero eigenvalue
     - Warning if negative eigenvalues remain after thresholding
 
+    Note: Uses scipy.linalg.eigh (LAPACK) instead of JAX to support matrices
+    larger than 46k x 46k samples (JAX hits int32 overflow at ~2.1B elements).
+
     Args:
         K: Symmetric kinship matrix (n_samples, n_samples)
         threshold: Eigenvalues below this are zeroed (default: 1e-10)
@@ -33,15 +33,10 @@ def eigendecompose_kinship(
         - eigenvalues: (n_samples,) sorted ascending
         - eigenvectors: (n_samples, n_samples) columns are eigenvectors
     """
-    # Convert to JAX array for computation
-    K_jax = jnp.array(K, dtype=jnp.float64)
-
-    # JAX eigh returns eigenvalues in ascending order (same as LAPACK)
-    eigenvalues, eigenvectors = jnp.linalg.eigh(K_jax)
-
-    # Convert back to numpy for thresholding with warnings
-    eigenvalues = np.array(eigenvalues)
-    eigenvectors = np.array(eigenvectors)
+    # Use scipy.linalg.eigh which uses LAPACK with int64 indexing
+    # This supports matrices up to sqrt(int64_max) ≈ 3 billion rows
+    # JAX's jnp.linalg.eigh hits int32 overflow at ~46k x 46k (2.1B elements)
+    eigenvalues, eigenvectors = linalg.eigh(K)
 
     # Count negative eigenvalues before thresholding
     n_negative = np.sum(eigenvalues < -threshold)

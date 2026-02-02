@@ -13,13 +13,12 @@ if TYPE_CHECKING:
 
 @pytest.fixture
 def sample_plink_data() -> Path:
-    """Return path prefix for sample PLINK data from legacy examples.
+    """Return path prefix for sample PLINK data from test fixtures.
 
     Returns:
-        Path prefix for mouse_hs1940 PLINK files (without .bed/.bim/.fam extension)
+        Path prefix for gemma_synthetic PLINK files (without .bed/.bim/.fam extension)
     """
-    example_dir = Path(__file__).parent.parent / "legacy" / "example"
-    return example_dir / "mouse_hs1940"
+    return Path(__file__).parent / "fixtures" / "gemma_synthetic" / "test"
 
 
 @pytest.fixture

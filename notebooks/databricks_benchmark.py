@@ -102,6 +102,21 @@ logger.info(f"JAX backend: {jax.default_backend()}")
 mem = psutil.virtual_memory()
 logger.info(f"RAM: {mem.total / 1e9:.1f} GB total, {mem.available / 1e9:.1f} GB avail")
 
+# BLAS backend detection - MKL is preferred (faster, no threading bugs)
+try:
+    from threadpoolctl import threadpool_info
+
+    blas_info = [lib for lib in threadpool_info() if lib.get("user_api") == "blas"]
+    if blas_info:
+        for lib in blas_info:
+            backend = lib.get("internal_api", "unknown")
+            num_threads = lib.get("num_threads", "?")
+            logger.info(f"BLAS: {backend} ({num_threads} threads)")
+    else:
+        logger.warning("BLAS backend not detected - threadpoolctl found no BLAS libs")
+except ImportError:
+    logger.warning("threadpoolctl not installed - cannot detect BLAS backend")
+
 # GEMMA binary path - default is the Databricks micromamba environment
 # Must be defined before benchmark_gemma() which uses it as a default
 GEMMA_PATH = os.environ.get("GEMMA_PATH", "/opt/micromamba/envs/disco/bin/gemma")

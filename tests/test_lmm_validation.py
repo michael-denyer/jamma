@@ -677,3 +677,169 @@ class TestJaxChunkingCorrectness:
                 atol=1e-15,
                 err_msg=f"Lambda mismatch for {single.rs}",
             )
+
+
+class TestLmmCovariateIntegration:
+    """Tests for covariate integration in LMM association."""
+
+    @pytest.fixture
+    def covariate_test_data(self):
+        """Generate test data for covariate tests."""
+        rng = np.random.default_rng(42)
+        n_samples = 100
+        n_snps = 30
+
+        genotypes = rng.integers(0, 3, size=(n_samples, n_snps)).astype(np.float64)
+        phenotypes = rng.standard_normal(n_samples)
+        kinship = compute_centered_kinship(genotypes)
+
+        snp_info = [
+            {"chr": "1", "rs": f"rs{i}", "pos": i * 1000, "a1": "A", "a0": "G"}
+            for i in range(n_snps)
+        ]
+
+        return genotypes, phenotypes, kinship, snp_info
+
+    def test_intercept_only_unchanged(self, covariate_test_data):
+        """Intercept-only (covariates=None) matches explicit intercept column.
+
+        This verifies that the default behavior (no covariates) is unchanged
+        when explicitly providing an intercept-only covariate matrix.
+        """
+        genotypes, phenotypes, kinship, snp_info = covariate_test_data
+        n_samples = len(phenotypes)
+
+        # Run with covariates=None (default intercept-only)
+        results_none = run_lmm_association(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=kinship,
+            snp_info=snp_info,
+            covariates=None,
+        )
+
+        # Run with explicit intercept column
+        intercept_only = np.ones((n_samples, 1))
+        results_explicit = run_lmm_association(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=kinship,
+            snp_info=snp_info,
+            covariates=intercept_only,
+        )
+
+        # Should have same number of results
+        assert len(results_none) == len(results_explicit)
+
+        # Results should be numerically identical
+        for r_none, r_explicit in zip(results_none, results_explicit, strict=True):
+            assert r_none.rs == r_explicit.rs
+            np.testing.assert_allclose(
+                r_none.beta,
+                r_explicit.beta,
+                rtol=1e-10,
+                atol=1e-14,
+                err_msg=f"Beta mismatch for {r_none.rs}",
+            )
+            np.testing.assert_allclose(
+                r_none.se,
+                r_explicit.se,
+                rtol=1e-10,
+                atol=1e-14,
+                err_msg=f"SE mismatch for {r_none.rs}",
+            )
+            np.testing.assert_allclose(
+                r_none.p_wald,
+                r_explicit.p_wald,
+                rtol=1e-10,
+                atol=1e-14,
+                err_msg=f"P-value mismatch for {r_none.rs}",
+            )
+            np.testing.assert_allclose(
+                r_none.l_remle,
+                r_explicit.l_remle,
+                rtol=1e-10,
+                atol=1e-14,
+                err_msg=f"Lambda mismatch for {r_none.rs}",
+            )
+
+    def test_with_covariate_different_from_intercept_only(self, covariate_test_data):
+        """Adding a non-trivial covariate changes results.
+
+        This verifies that covariates actually affect the model. Without this
+        test, a bug that ignores covariates would go undetected.
+        """
+        genotypes, phenotypes, kinship, snp_info = covariate_test_data
+        n_samples = len(phenotypes)
+        rng = np.random.default_rng(123)
+
+        # Run with intercept only
+        results_intercept = run_lmm_association(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=kinship,
+            snp_info=snp_info,
+            covariates=None,
+        )
+
+        # Run with intercept + a covariate correlated with phenotype
+        # (to ensure it has a real effect on the model)
+        covariate_col = phenotypes + rng.standard_normal(n_samples) * 0.5
+        covariates_with_cov = np.column_stack([
+            np.ones(n_samples),  # Intercept
+            covariate_col,  # Non-trivial covariate
+        ])
+        results_with_cov = run_lmm_association(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=kinship,
+            snp_info=snp_info,
+            covariates=covariates_with_cov,
+        )
+
+        # Should have same number of results
+        assert len(results_intercept) == len(results_with_cov)
+
+        # At least some results should differ
+        beta_diffs = [
+            abs(r1.beta - r2.beta)
+            for r1, r2 in zip(results_intercept, results_with_cov, strict=True)
+        ]
+        pval_diffs = [
+            abs(r1.p_wald - r2.p_wald)
+            for r1, r2 in zip(results_intercept, results_with_cov, strict=True)
+        ]
+
+        # Check that at least some betas and p-values differ
+        assert max(beta_diffs) > 1e-6, "All betas are identical - covariate may not be used"
+        assert max(pval_diffs) > 1e-6, "All p-values are identical - covariate may not be used"
+
+    def test_missing_covariate_excluded(self, covariate_test_data):
+        """Samples with missing covariate values are excluded from analysis."""
+        genotypes, phenotypes, kinship, snp_info = covariate_test_data
+        n_samples = len(phenotypes)
+
+        # Create covariates with some missing values
+        covariates = np.column_stack([
+            np.ones(n_samples),
+            np.random.randn(n_samples),
+        ])
+        # Set 5 samples to have missing covariates
+        covariates[10:15, 1] = np.nan
+
+        # Run should not error - missing samples excluded
+        results = run_lmm_association(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=kinship,
+            snp_info=snp_info,
+            covariates=covariates,
+        )
+
+        # Should produce results (samples with missing covariates excluded)
+        assert len(results) > 0
+        # All results should have finite values
+        for r in results:
+            assert np.isfinite(r.beta), f"NaN beta for {r.rs}"
+            assert np.isfinite(r.se), f"NaN SE for {r.rs}"
+            assert np.isfinite(r.p_wald), f"NaN p-value for {r.rs}"

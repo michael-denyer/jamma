@@ -664,6 +664,8 @@ def benchmark_lmm_jax(
 
 def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
     """Run complete benchmark for a configuration."""
+    from jamma.core import log_memory_snapshot
+
     config = CONFIGS[config_name]
     profiler = BenchmarkProfiler(run_id, config_name)
 
@@ -671,6 +673,9 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
     logger.info(f"BENCHMARK: {config_name.upper()}")
     logger.info(f"{'=' * 60}")
     logger.info(f"Samples: {config.n_samples:,}, SNPs: {config.n_snps:,}")
+
+    # Log memory at start of each benchmark run
+    log_memory_snapshot(f"start_{config_name}")
 
     # Memory breakdown
     breakdown = config.memory_breakdown()
@@ -754,8 +759,52 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
     except Exception as e:
         profiler.error("benchmark", "main", e)
         logger.exception(f"Benchmark failed: {e}")
-    finally:
-        gc.collect()
+
+    # Clean up memory after each benchmark run to prevent accumulation
+    # This is critical for sequential runs - without cleanup, memory from
+    # previous runs causes OOM/SIGSEGV on larger configs
+    #
+    # IMPORTANT: Must explicitly delete large arrays before cleanup_memory()
+    # because Python keeps local variables alive until function returns.
+    profiler.start("cleanup", "memory")
+    from jamma.core import cleanup_memory
+
+    # Delete large arrays explicitly - these hold 90%+ of memory
+    # genotypes: n_samples × n_snps × 4 bytes (e.g., 100k × 95k = 38GB)
+    # K: n_samples² × 8 bytes (e.g., 100k² = 80GB)
+    # eigenvalues: n_samples × 8 bytes (negligible)
+    # eigenvectors: n_samples² × 8 bytes (e.g., 100k² = 80GB)
+    try:
+        del genotypes
+    except NameError:
+        pass
+    try:
+        del K
+    except NameError:
+        pass
+    try:
+        del eigenvalues
+    except NameError:
+        pass
+    try:
+        del eigenvectors
+    except NameError:
+        pass
+    try:
+        del jax_assoc_results
+    except NameError:
+        pass
+    try:
+        del phenotype
+    except NameError:
+        pass
+    try:
+        del snp_info
+    except NameError:
+        pass
+
+    cleanup_memory(clear_jax=True, verbose=True)
+    profiler.end("cleanup", "memory")
 
     return results, profiler.to_dataframe()
 

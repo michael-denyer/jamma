@@ -28,7 +28,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install --no-deps --force-reinstall git+https://github.com/michael-denyer/jamma.git
+# MAGIC %pip install --no-deps --force-reinstall git+https://github.com/michael-denyer/jamma.git@v0.2.1
 
 # COMMAND ----------
 

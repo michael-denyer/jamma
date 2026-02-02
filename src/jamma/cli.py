@@ -21,7 +21,7 @@ from jamma.kinship import (
     read_kinship_matrix,
     write_kinship_matrix,
 )
-from jamma.lmm import run_lmm_association, write_assoc_results
+from jamma.lmm import run_lmm_association
 from jamma.utils import setup_logging, write_gemma_log
 
 # Create Typer app
@@ -437,8 +437,12 @@ def lmm_command(
             typer.echo(f"  Processing SNP {i}/{n_total} ({percent}%)")
             last_progress[0] = percent
 
-    # Run association testing
-    results = run_lmm_association(
+    # Define output path for incremental writing (avoids list accumulation)
+    assoc_path = _global_config.outdir / f"{_global_config.prefix}.assoc.txt"
+
+    # Run association testing with incremental disk writes
+    # output_path enables per-SNP writes, returns empty list
+    run_lmm_association(
         genotypes_filtered,
         phenotypes_filtered,
         K_filtered,
@@ -446,15 +450,14 @@ def lmm_command(
         covariates=covariates_filtered,
         maf_threshold=maf,
         miss_threshold=miss,
+        output_path=assoc_path,  # Enable per-SNP disk writes
     )
 
     t_lmm = time.perf_counter()
     lmm_time = t_lmm - t_load
     typer.echo(f"LMM analysis completed in {lmm_time:.2f}s")
 
-    # Write results
-    assoc_path = _global_config.outdir / f"{_global_config.prefix}.assoc.txt"
-    write_assoc_results(results, assoc_path)
+    # Results written incrementally via output_path (results list is empty)
     typer.echo(f"Association results written to {assoc_path}")
 
     # Calculate total time

@@ -1259,3 +1259,97 @@ class TestLmmScoreValidation:
             f"Score test ({score_time:.3f}s) should be faster than "
             f"Wald test ({wald_time:.3f}s)"
         )
+
+
+class TestScoreTestProperties:
+    """Tests for Score test mathematical properties.
+
+    These tests verify that the Score test implementation follows expected
+    statistical properties, independent of GEMMA reference matching.
+    """
+
+    @pytest.fixture
+    def score_test_data(self):
+        """Generate test data for Score test properties."""
+        rng = np.random.default_rng(42)
+        n_samples = 150
+        n_snps = 30
+
+        genotypes = rng.integers(0, 3, size=(n_samples, n_snps)).astype(np.float64)
+        phenotypes = rng.standard_normal(n_samples)
+        kinship = compute_centered_kinship(genotypes)
+
+        snp_info = [
+            {"chr": "1", "rs": f"rs{i}", "pos": i * 1000, "a1": "A", "a0": "G"}
+            for i in range(n_snps)
+        ]
+
+        return genotypes, phenotypes, kinship, snp_info
+
+    def test_score_uses_constant_lambda(self, score_test_data):
+        """Score test uses same null model lambda for all SNPs.
+
+        Unlike Wald test which optimizes lambda per-SNP, Score test
+        computes lambda once under the null model.
+        """
+        genotypes, phenotypes, kinship, snp_info = score_test_data
+
+        # Run Score test
+        results = run_lmm_association(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=kinship,
+            snp_info=snp_info,
+            lmm_mode=3,
+        )
+
+        # All results should have l_remle=None (Score doesn't report per-SNP lambda)
+        for r in results:
+            assert r.l_remle is None, "Score test should not have per-SNP lambda"
+
+    def test_score_pvalues_valid(self, score_test_data):
+        """All Score p-values are in valid range [0, 1]."""
+        genotypes, phenotypes, kinship, snp_info = score_test_data
+
+        results = run_lmm_association(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=kinship,
+            snp_info=snp_info,
+            lmm_mode=3,
+        )
+
+        for r in results:
+            assert 0.0 <= r.p_score <= 1.0, f"Invalid p_score: {r.p_score}"
+
+    def test_score_no_logl_per_snp(self, score_test_data):
+        """Score test does not compute per-SNP log-likelihood."""
+        genotypes, phenotypes, kinship, snp_info = score_test_data
+
+        results = run_lmm_association(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=kinship,
+            snp_info=snp_info,
+            lmm_mode=3,
+        )
+
+        for r in results:
+            assert r.logl_H1 is None, "Score test should not have per-SNP logl_H1"
+            assert r.p_wald is None, "Score test should not have p_wald"
+
+    def test_score_produces_p_score(self, score_test_data):
+        """Score test produces p_score field, not p_wald."""
+        genotypes, phenotypes, kinship, snp_info = score_test_data
+
+        results = run_lmm_association(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=kinship,
+            snp_info=snp_info,
+            lmm_mode=3,
+        )
+
+        for r in results:
+            assert r.p_score is not None, "Score test should produce p_score"
+            assert r.p_wald is None, "Score test should not produce p_wald"

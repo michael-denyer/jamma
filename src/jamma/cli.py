@@ -277,6 +277,38 @@ def lmm_command(
         typer.echo(f"Error loading kinship matrix: {e}", err=True)
         raise typer.Exit(code=1) from None
 
+    # Load covariate file if provided
+    covariates = None
+    if covariate_file is not None:
+        typer.echo(f"Loading covariates from {covariate_file}...")
+        try:
+            covariates, indicator_cvt = read_covariate_file(covariate_file)
+        except Exception as e:
+            typer.echo(f"Error loading covariate file: {e}", err=True)
+            raise typer.Exit(code=1) from None
+
+        # Validate sample count matches
+        if covariates.shape[0] != n_samples_raw:
+            typer.echo(
+                f"Error: Covariate file has {covariates.shape[0]} rows "
+                f"but PLINK data has {n_samples_raw} samples. "
+                f"Covariate rows must match sample count exactly.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        typer.echo(f"Loaded {covariates.shape[1]} covariates")
+
+        # Check for intercept column and warn if missing
+        first_col = covariates[:, 0]
+        valid_first = first_col[~np.isnan(first_col)]
+        if not np.allclose(valid_first, 1.0):
+            typer.echo(
+                "Warning: Covariate file does not have intercept column "
+                "(first column is not all 1s). Model will NOT include intercept.",
+                err=True,
+            )
+
     # Extract phenotypes from .fam file (6th column)
     # We load fam file directly to get phenotypes as bed-reader stores separately
     fam_data = np.loadtxt(fam_path, dtype=str, usecols=(5,))

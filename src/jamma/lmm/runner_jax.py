@@ -893,175 +893,194 @@ def run_lmm_association_streaming(
     jax_chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid)
 
     # === PASS 2: Association ===
-    all_lambdas = []
-    all_logls = []
-    all_betas = []
-    all_ses = []
-    all_pwalds = []
-
-    # Map filtered SNP indices to original indices for chunk extraction
-    # Group filtered SNPs by which file chunk they belong to
-    assoc_iterator = stream_genotype_chunks(
-        bed_path, chunk_size=chunk_size, dtype=np.float64, show_progress=False
-    )
-    if show_progress:
-        n_chunks = (n_snps + chunk_size - 1) // chunk_size
-        assoc_iterator = _progress_iterator(
-            assoc_iterator, total=n_chunks, desc="Running LMM association"
-        )
-
-    for chunk, file_start, file_end in assoc_iterator:
-        # Apply sample filtering
-        if not np.all(valid_mask):
-            chunk = chunk[valid_mask, :]
-
-        # Find filtered SNPs in this file chunk
-        chunk_filtered_indices = []
-        chunk_filtered_local_idx = []  # Index within filtered SNPs
-        chunk_filtered_col_idx = []  # Column index within this chunk
-
-        # Scan filtered SNPs that fall in this chunk range
-        for i, snp_idx in enumerate(snp_indices):
-            if file_start <= snp_idx < file_end:
-                chunk_filtered_indices.append(snp_idx)
-                chunk_filtered_local_idx.append(i)
-                chunk_filtered_col_idx.append(snp_idx - file_start)
-
-        if len(chunk_filtered_indices) == 0:
-            continue
-
-        # Extract columns for filtered SNPs in this chunk
-        chunk_filtered_col_idx = np.array(chunk_filtered_col_idx)
-        geno_subset = chunk[:, chunk_filtered_col_idx].copy()
-
-        # Impute missing to mean
-        for j, local_idx in enumerate(chunk_filtered_local_idx):
-            missing_mask = np.isnan(geno_subset[:, j])
-            if np.any(missing_mask):
-                geno_subset[missing_mask, j] = filtered_means[local_idx]
-
-        # Process in JAX chunks if needed (for buffer limit compliance)
-        # Double buffering: overlap device transfer with computation
-        n_subset = geno_subset.shape[1]
-        jax_starts = list(range(0, n_subset, jax_chunk_size))
-
-        def _prepare_jax_chunk(
-            start: int, geno: np.ndarray, total: int
-        ) -> tuple[np.ndarray, int, bool]:
-            """Prepare a JAX chunk for device transfer (CPU work)."""
-            end = min(start + jax_chunk_size, total)
-            actual_len = end - start
-
-            geno_jax_chunk = geno[:, start:end]
-
-            needs_pad = actual_len < jax_chunk_size
-            if needs_pad:
-                pad_width = jax_chunk_size - actual_len
-                geno_jax_chunk = np.pad(
-                    geno_jax_chunk, ((0, 0), (0, pad_width)), mode="constant"
-                )
-
-            UtG_chunk = np.ascontiguousarray(U.T @ geno_jax_chunk)
-            return UtG_chunk, actual_len, needs_pad
-
-        # Prepare first JAX chunk
-        UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
-            jax_starts[0], geno_subset, n_subset
-        )
-        UtG_jax = jax.device_put(UtG_np, device)
-        del UtG_np
-
-        for i, _jax_start in enumerate(jax_starts):
-            current_actual_len = actual_jax_len
-            current_needs_padding = needs_padding
-            current_UtG = UtG_jax
-
-            # Start async transfer of next JAX chunk while computing current
-            if i + 1 < len(jax_starts):
-                UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
-                    jax_starts[i + 1], geno_subset, n_subset
-                )
-                UtG_jax = jax.device_put(UtG_np, device)
-                del UtG_np
-
-            # Batch compute Uab
-            Uab_batch = batch_compute_uab(UtW_jax, Uty_jax, current_UtG)
-
-            # Precompute Iab (identity-weighted) once per chunk - avoids ~70x redundant
-            # calc_pab_jax calls during lambda optimization
-            Iab_batch = batch_compute_iab(Uab_batch)
-
-            # Grid-based lambda optimization
-            best_lambdas, best_logls = _grid_optimize_lambda_batched(
-                eigenvalues, Uab_batch, Iab_batch, l_min, l_max, n_grid, n_refine
-            )
-
-            # Batch compute Wald statistics
-            betas, ses, p_walds = batch_calc_wald_stats(
-                best_lambdas, eigenvalues, Uab_batch, n_samples
-            )
-
-            # Strip padding, keep as JAX arrays (avoids per-chunk host transfer)
-            slice_len = (
-                current_actual_len if current_needs_padding else len(best_lambdas)
-            )
-            all_lambdas.append(best_lambdas[:slice_len])
-            all_logls.append(best_logls[:slice_len])
-            all_betas.append(betas[:slice_len])
-            all_ses.append(ses[:slice_len])
-            all_pwalds.append(p_walds[:slice_len])
-
-    # Log memory after association pass completes
-    if show_progress:
-        log_rss_memory("lmm_streaming", "after_association")
-
-    # Concatenate on device, then single host transfer
-    best_lambdas_np = np.asarray(jnp.concatenate(all_lambdas))
-    best_logls_np = np.asarray(jnp.concatenate(all_logls))
-    betas_np = np.asarray(jnp.concatenate(all_betas))
-    ses_np = np.asarray(jnp.concatenate(all_ses))
-    p_walds_np = np.asarray(jnp.concatenate(all_pwalds))
-
-    # Build results or write incrementally
+    # Open writer at start if output_path provided (per-chunk writing)
+    writer = None
     if output_path is not None:
-        # Incremental write mode - write results as we build them
-        with IncrementalAssocWriter(output_path) as writer:
-            for j, snp_idx in enumerate(snp_indices):
-                maf, n_miss = snp_stats[j]
-                info = snp_info[snp_idx]
+        writer = IncrementalAssocWriter(output_path)
+        writer.__enter__()
 
-                result = AssocResult(
-                    chr=info["chr"],
-                    rs=info["rs"],
-                    ps=info.get("pos", info.get("ps", 0)),
-                    n_miss=n_miss,
-                    allele1=info.get("a1", info.get("allele1", "")),
-                    allele0=info.get("a0", info.get("allele0", "")),
-                    af=maf,
-                    beta=float(betas_np[j]),
-                    se=float(ses_np[j]),
-                    logl_H1=float(best_logls_np[j]),
-                    l_remle=float(best_lambdas_np[j]),
-                    p_wald=float(p_walds_np[j]),
-                )
-                writer.write(result)
+    # Track results for in-memory mode (when output_path is None)
+    all_results: list[AssocResult] = [] if output_path is None else []
 
-        if show_progress:
-            logger.info(f"Wrote {writer.count:,} results to {output_path}")
-
-        results = []  # Return empty list - results are on disk
-    else:
-        # In-memory mode (original behavior)
-        results = _build_results(
-            snp_indices,
-            snp_stats,
-            snp_info,
-            best_lambdas_np,
-            best_logls_np,
-            betas_np,
-            ses_np,
-            p_walds_np,
+    try:
+        # Map filtered SNP indices to original indices for chunk extraction
+        # Group filtered SNPs by which file chunk they belong to
+        assoc_iterator = stream_genotype_chunks(
+            bed_path, chunk_size=chunk_size, dtype=np.float64, show_progress=False
         )
+        if show_progress:
+            n_chunks = (n_snps + chunk_size - 1) // chunk_size
+            assoc_iterator = _progress_iterator(
+                assoc_iterator, total=n_chunks, desc="Running LMM association"
+            )
+
+        for chunk, file_start, file_end in assoc_iterator:
+            # Apply sample filtering
+            if not np.all(valid_mask):
+                chunk = chunk[valid_mask, :]
+
+            # Find filtered SNPs in this file chunk
+            chunk_filtered_indices = []
+            chunk_filtered_local_idx = []  # Index within filtered SNPs
+            chunk_filtered_col_idx = []  # Column index within this chunk
+
+            # Scan filtered SNPs that fall in this chunk range
+            for i, snp_idx in enumerate(snp_indices):
+                if file_start <= snp_idx < file_end:
+                    chunk_filtered_indices.append(snp_idx)
+                    chunk_filtered_local_idx.append(i)
+                    chunk_filtered_col_idx.append(snp_idx - file_start)
+
+            if len(chunk_filtered_indices) == 0:
+                continue
+
+            # Extract columns for filtered SNPs in this chunk
+            chunk_filtered_col_idx_arr = np.array(chunk_filtered_col_idx)
+            geno_subset = chunk[:, chunk_filtered_col_idx_arr].copy()
+
+            # Impute missing to mean
+            for j, local_idx in enumerate(chunk_filtered_local_idx):
+                missing_mask = np.isnan(geno_subset[:, j])
+                if np.any(missing_mask):
+                    geno_subset[missing_mask, j] = filtered_means[local_idx]
+
+            # Process in JAX chunks if needed (for buffer limit compliance)
+            # Double buffering: overlap device transfer with computation
+            n_subset = geno_subset.shape[1]
+            jax_starts = list(range(0, n_subset, jax_chunk_size))
+
+            def _prepare_jax_chunk(
+                start: int, geno: np.ndarray, total: int
+            ) -> tuple[np.ndarray, int, bool]:
+                """Prepare a JAX chunk for device transfer (CPU work)."""
+                end = min(start + jax_chunk_size, total)
+                actual_len = end - start
+
+                geno_jax_chunk = geno[:, start:end]
+
+                needs_pad = actual_len < jax_chunk_size
+                if needs_pad:
+                    pad_width = jax_chunk_size - actual_len
+                    geno_jax_chunk = np.pad(
+                        geno_jax_chunk, ((0, 0), (0, pad_width)), mode="constant"
+                    )
+
+                UtG_chunk = np.ascontiguousarray(U.T @ geno_jax_chunk)
+                return UtG_chunk, actual_len, needs_pad
+
+            # Collect results for this FILE chunk (not global accumulation)
+            file_chunk_lambdas = []
+            file_chunk_logls = []
+            file_chunk_betas = []
+            file_chunk_ses = []
+            file_chunk_pwalds = []
+            file_chunk_jax_offsets = []  # Track JAX chunk boundaries for index mapping
+
+            # Prepare first JAX chunk
+            UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
+                jax_starts[0], geno_subset, n_subset
+            )
+            UtG_jax = jax.device_put(UtG_np, device)
+            del UtG_np
+
+            cumulative_offset = 0
+            for i, _jax_start in enumerate(jax_starts):
+                current_actual_len = actual_jax_len
+                current_needs_padding = needs_padding
+                current_UtG = UtG_jax
+
+                # Start async transfer of next JAX chunk while computing current
+                if i + 1 < len(jax_starts):
+                    UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
+                        jax_starts[i + 1], geno_subset, n_subset
+                    )
+                    UtG_jax = jax.device_put(UtG_np, device)
+                    del UtG_np
+
+                # Batch compute Uab
+                Uab_batch = batch_compute_uab(UtW_jax, Uty_jax, current_UtG)
+
+                # Precompute Iab (identity-weighted) once per chunk
+                Iab_batch = batch_compute_iab(Uab_batch)
+
+                # Grid-based lambda optimization
+                best_lambdas, best_logls = _grid_optimize_lambda_batched(
+                    eigenvalues, Uab_batch, Iab_batch, l_min, l_max, n_grid, n_refine
+                )
+
+                # Batch compute Wald statistics
+                betas, ses, p_walds = batch_calc_wald_stats(
+                    best_lambdas, eigenvalues, Uab_batch, n_samples
+                )
+
+                # Strip padding, keep as JAX arrays for file chunk concatenation
+                slice_len = (
+                    current_actual_len if current_needs_padding else len(best_lambdas)
+                )
+                file_chunk_lambdas.append(best_lambdas[:slice_len])
+                file_chunk_logls.append(best_logls[:slice_len])
+                file_chunk_betas.append(betas[:slice_len])
+                file_chunk_ses.append(ses[:slice_len])
+                file_chunk_pwalds.append(p_walds[:slice_len])
+                file_chunk_jax_offsets.append(cumulative_offset)
+                cumulative_offset += slice_len
+
+            # After ALL JAX chunks in this file chunk are processed:
+            # Concatenate file chunk results and transfer to host
+            if file_chunk_lambdas:
+                chunk_lambdas_np = np.asarray(jnp.concatenate(file_chunk_lambdas))
+                chunk_logls_np = np.asarray(jnp.concatenate(file_chunk_logls))
+                chunk_betas_np = np.asarray(jnp.concatenate(file_chunk_betas))
+                chunk_ses_np = np.asarray(jnp.concatenate(file_chunk_ses))
+                chunk_pwalds_np = np.asarray(jnp.concatenate(file_chunk_pwalds))
+
+                # Build and write/accumulate results for this file chunk
+                for j, local_idx in enumerate(chunk_filtered_local_idx):
+                    snp_idx = snp_indices[local_idx]
+                    maf, n_miss = snp_stats[local_idx]
+                    info = snp_info[snp_idx]
+
+                    result = AssocResult(
+                        chr=info["chr"],
+                        rs=info["rs"],
+                        ps=info.get("pos", info.get("ps", 0)),
+                        n_miss=n_miss,
+                        allele1=info.get("a1", info.get("allele1", "")),
+                        allele0=info.get("a0", info.get("allele0", "")),
+                        af=maf,
+                        beta=float(chunk_betas_np[j]),
+                        se=float(chunk_ses_np[j]),
+                        logl_H1=float(chunk_logls_np[j]),
+                        l_remle=float(chunk_lambdas_np[j]),
+                        p_wald=float(chunk_pwalds_np[j]),
+                    )
+
+                    if writer is not None:
+                        writer.write(result)
+                    else:
+                        all_results.append(result)
+
+                # Clear file chunk arrays to free memory
+                del chunk_lambdas_np, chunk_logls_np, chunk_betas_np
+                del chunk_ses_np, chunk_pwalds_np
+                del file_chunk_lambdas, file_chunk_logls, file_chunk_betas
+                del file_chunk_ses, file_chunk_pwalds
+
+        # Log memory after association pass completes
+        if show_progress:
+            log_rss_memory("lmm_streaming", "after_association")
+
+    finally:
+        if writer is not None:
+            writer.__exit__(None, None, None)
+            if show_progress:
+                logger.info(f"Wrote {writer.count:,} results to {output_path}")
+
+    # Return results
+    if output_path is not None:
+        results: list[AssocResult] = []  # Results are on disk
+    else:
+        results = all_results
 
     # GEMMA-style completion logging
     if show_progress:

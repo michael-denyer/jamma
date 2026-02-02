@@ -90,7 +90,10 @@ import numpy as np
 import progressbar
 from loguru import logger
 
-from jamma.core.memory import estimate_streaming_memory, estimate_workflow_memory
+from jamma.core.memory import (
+    estimate_streaming_memory,
+    estimate_workflow_memory,
+)
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.io import IncrementalAssocWriter

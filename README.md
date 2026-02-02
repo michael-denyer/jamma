@@ -145,6 +145,7 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs):
 
 ## Documentation
 
+- [Why JAMMA?](docs/WHY_JAMMA.md) — Key differentiators from GEMMA
 - [User Guide](docs/USER_GUIDE.md) — Installation, usage examples, CLI reference
 - [Mathematical Equivalence](docs/MATHEMATICAL_EQUIVALENCE.md) — Validation against GEMMA
 - [GEMMA Divergences](docs/GEMMA_DIVERGENCES.md) — Known differences from GEMMA

@@ -71,13 +71,26 @@ jamma -o assoc -outdir output lmm \
   -lmm 1
 ```
 
+**With covariates:**
+
+```bash
+jamma -o assoc -outdir output lmm \
+  -bfile data/my_study \
+  -k output/kinship.cXX.txt \
+  -c covariates.txt \
+  -lmm 1
+```
+
 **Options:**
 
 - `-bfile PATH` — PLINK binary file prefix (required)
 - `-k PATH` — Kinship matrix file (required)
 - `-lmm MODE` — Test type: 1 = Wald test (default)
+- `-c PATH` — Covariate file (GEMMA format: whitespace-delimited, first column should be intercept)
 - `-maf FLOAT` — MAF threshold (default: 0.01)
 - `-miss FLOAT` — Missing rate threshold (default: 0.05)
+- `--mem-budget GB` — Memory budget in GB (default: available - 10%)
+- `--no-check-memory` — Disable pre-flight memory checks
 
 **Note:** Monomorphic SNPs (variance = 0) are always filtered to match GEMMA behavior.
 
@@ -167,6 +180,53 @@ JAMMA results match GEMMA within floating-point tolerance:
 
 See [MATHEMATICAL_EQUIVALENCE.md](MATHEMATICAL_EQUIVALENCE.md) for details.
 
+## Memory Safety
+
+JAMMA includes pre-flight memory checks that fail fast before OOM instead of crashing silently.
+
+### Pre-flight Checks
+
+By default, JAMMA estimates memory requirements before large allocations:
+
+```bash
+# Check memory estimate without running
+jamma lmm -bfile data/large_study -k kinship.cXX.txt --mem-budget 64
+```
+
+If the estimate exceeds available memory, you'll get a clear error:
+
+```
+MemoryError: LMM requires ~128.5GB but only 64.0GB available
+  Breakdown: kinship=74.5GB, eigendecomp=37.0GB, association=17.0GB
+```
+
+### Controlling Memory Behavior
+
+```bash
+# Set explicit memory budget (GB)
+jamma lmm ... --mem-budget 128
+
+# Disable checks (use at your own risk)
+jamma lmm ... --no-check-memory
+```
+
+### Programmatic Memory Estimation
+
+```python
+from jamma.lmm.memory import estimate_lmm_memory
+
+estimate = estimate_lmm_memory(
+    n_samples=200_000,
+    n_snps=95_000,
+    n_covariates=5,
+    has_kinship=True,  # Using pre-computed kinship
+)
+
+print(f"Peak memory: {estimate.peak_gb:.1f}GB")
+print(f"Eigendecomp: {estimate.eigendecomp_gb:.1f}GB")
+print(f"Association: {estimate.association_gb:.1f}GB")
+```
+
 ## Troubleshooting
 
 ### JAX not using GPU
@@ -180,13 +240,31 @@ print(jax.devices())  # Should show GPU if available
 
 ### Memory errors on large datasets
 
-Reduce batch size or use sample subsetting:
+JAMMA's pre-flight checks should catch most OOM issues. If you still hit memory limits:
 
-```python
-# Process in chunks
-for chunk in np.array_split(range(n_snps), 10):
-    results.extend(run_lmm_association(..., snp_indices=chunk))
-```
+1. **Check the estimate first:**
+   ```bash
+   jamma lmm ... --mem-budget 999  # Will show actual requirement
+   ```
+
+2. **Use streaming for very large datasets:**
+   ```python
+   from jamma.lmm import run_lmm_association_streaming
+
+   results = run_lmm_association_streaming(
+       bed_path="data/large_study",
+       phenotypes=phenotypes,
+       kinship=kinship,
+       chunk_size=5000,  # Process 5000 SNPs at a time
+       output_path="results.assoc.txt",  # Write incrementally
+   )
+   ```
+
+3. **Reduce chunk size** if memory is tight:
+   ```bash
+   # Smaller chunks use less memory but are slower
+   jamma lmm ... --chunk-size 1000
+   ```
 
 ### Results differ from GEMMA
 

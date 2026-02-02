@@ -12,6 +12,8 @@ Key data structures:
 Reference: Zhou & Stephens (2012) Nature Genetics, Supplementary Information
 """
 
+from __future__ import annotations
+
 import numpy as np
 from jax import config
 
@@ -440,3 +442,43 @@ def reml_log_likelihood(
     f = c - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
 
     return f
+
+
+def compute_null_model_lambda(
+    eigenvalues: np.ndarray,
+    UtW: np.ndarray,
+    Uty: np.ndarray,
+    n_cvt: int,
+    l_min: float = 1e-5,
+    l_max: float = 1e5,
+) -> tuple[float, float]:
+    """Compute lambda under null model (no genotype effect).
+
+    Used by Score test (-lmm 3) which reuses null model lambda for all SNPs
+    instead of re-optimizing per SNP (as Wald does).
+
+    Args:
+        eigenvalues: Kinship eigenvalues (n_samples,)
+        UtW: Rotated covariates (n_samples, n_cvt)
+        Uty: Rotated phenotype (n_samples,)
+        n_cvt: Number of covariates
+        l_min, l_max: Lambda bounds for optimization
+
+    Returns:
+        (lambda_null, logl_null) - Null model lambda and log-likelihood
+    """
+    # Import here to avoid circular dependency at module load time
+    from jamma.lmm.optimize import optimize_lambda_for_snp
+
+    # Compute Uab without genotype (Utx=None)
+    # This sets genotype-related columns to zero via placeholder
+    Uab = compute_Uab(UtW, Uty, Utx=None)
+
+    # Optimize lambda under the null model
+    # The Uab structure retains shape (n_samples, n_index) even without genotype
+    # reml_log_likelihood uses n_cvt to access only valid covariate indices
+    lambda_null, logl_null = optimize_lambda_for_snp(
+        eigenvalues, Uab, n_cvt, l_min=l_min, l_max=l_max
+    )
+
+    return lambda_null, logl_null

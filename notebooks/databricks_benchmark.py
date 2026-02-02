@@ -2,10 +2,14 @@
 # MAGIC %md
 # MAGIC # JAMMA Large-Scale Benchmark - Databricks Edition
 # MAGIC
-# MAGIC Benchmark JAMMA performance at scale (up to 200K samples) on Databricks.
+# MAGIC Benchmark JAMMA performance at scale (up to 160K samples) on Databricks.
+# MAGIC
+# MAGIC **Memory Constraint:** Eigendecomp needs K + U simultaneously:
+# MAGIC - 160K samples: ~410GB peak (fits 512GB node)
+# MAGIC - 200K samples: ~640GB peak (requires 768GB+ node)
 # MAGIC
 # MAGIC **Cluster Requirements:**
-# MAGIC - Memory-optimized instance (e.g., `Standard_E64s_v3` with 432GB RAM)
+# MAGIC - Memory-optimized instance with 512GB+ RAM (e.g., `Standard_M64s`)
 # MAGIC - Or GPU instance for JAX acceleration
 # MAGIC - DBR 15.4 LTS+ (Python 3.11+ required)
 
@@ -249,15 +253,21 @@ class BenchmarkConfig:
         )
 
 
-# Benchmark configurations - target is 200k x 95k (fits in 512GB VM)
+# Benchmark configurations for 512GB VM
+#
+# Memory constraint: Eigendecomposition requires K + U simultaneously
+#   Peak = 2 * n_samples^2 * 8 bytes
+#   512GB node (~460GB usable) supports max ~160k samples safely
+#
+# Original target was 200k but that requires ~640GB (eigendecomp bottleneck)
 CONFIGS = {
     "small": BenchmarkConfig("small", 1_000, 10_000, 10_000),
     "medium": BenchmarkConfig("medium", 10_000, 100_000, 100_000),
     "large": BenchmarkConfig("large", 50_000, 95_000, 10_000),
     "xlarge": BenchmarkConfig("xlarge", 100_000, 95_000, 10_000),
     "target": BenchmarkConfig(
-        "target", 200_000, 95_000, 95_000
-    ),  # Full 95k SNPs for LMM
+        "target", 160_000, 95_000, 95_000
+    ),  # Max for 512GB node (~410GB peak during eigendecomp)
 }
 
 for name, cfg in CONFIGS.items():

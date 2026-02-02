@@ -12,7 +12,11 @@ import numpy as np
 from loguru import logger
 from scipy import linalg
 
-from jamma.core.memory import check_memory_available, estimate_eigendecomp_memory
+from jamma.core.memory import (
+    check_memory_available,
+    estimate_eigendecomp_memory,
+    log_memory_snapshot,
+)
 
 
 def eigendecompose_kinship(
@@ -65,6 +69,10 @@ def eigendecompose_kinship(
     # Use scipy.linalg.eigh which uses LAPACK with int64 indexing
     # This supports matrices up to sqrt(int64_max) ≈ 3 billion rows
     # JAX's jnp.linalg.eigh hits int32 overflow at ~46k x 46k (2.1B elements)
+    #
+    # Log memory state right before allocation for debugging OOM crashes
+    log_memory_snapshot(f"before_eigendecomp_{n_samples}samples")
+
     start_time = time.perf_counter()
     try:
         eigenvalues, eigenvectors = linalg.eigh(K)
@@ -82,6 +90,9 @@ def eigendecompose_kinship(
 
     elapsed = time.perf_counter() - start_time
     logger.info(f"Eigendecomposition completed in {elapsed:.2f} seconds")
+
+    # Log memory after eigendecomp - shows peak allocation
+    log_memory_snapshot(f"after_eigendecomp_{n_samples}samples")
 
     # Count negative eigenvalues before thresholding
     n_negative = np.sum(eigenvalues < -threshold)

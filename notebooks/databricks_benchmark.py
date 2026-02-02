@@ -434,32 +434,34 @@ def benchmark_gemma(
         # Write PLINK files (only n_snps_lmm SNPs for fair comparison)
         _write_plink_files(str(prefix), genotypes[:, :n_snps_lmm], phenotype)
 
-        # Benchmark GEMMA kinship
+        # Benchmark GEMMA kinship - stream output in real-time (like lab_disco)
         profiler.start("gemma", "kinship", n_samples=n_samples, n_snps=n_snps_lmm)
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 [gemma_bin, "-bfile", str(prefix), "-gk", "1", "-o", "kinship"],
                 cwd=str(output_dir),
-                capture_output=True,
-                check=True,
-                timeout=600,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
             )
+            while True:
+                output = proc.stdout.readline()
+                if output == "" and proc.poll() is not None:
+                    break
+                if output:
+                    print(output.strip())
+            if proc.returncode != 0:
+                raise subprocess.CalledProcessError(proc.returncode, "gemma -gk")
             result.kinship_time = profiler.end("gemma", "kinship")
-            if proc.stdout:
-                logger.debug(f"GEMMA kinship stdout:\n{proc.stdout.decode()}")
-            if proc.stderr:
-                logger.debug(f"GEMMA kinship stderr:\n{proc.stderr.decode()}")
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
             profiler.error("gemma", "kinship", e)
-            if hasattr(e, "stderr") and e.stderr:
-                logger.error(f"GEMMA kinship failed: {e.stderr.decode()}")
             return result
 
-        # Benchmark GEMMA LMM
+        # Benchmark GEMMA LMM - stream output in real-time (like lab_disco)
         kinship_file = output_dir / "output" / "kinship.cXX.txt"
         profiler.start("gemma", "lmm", n_samples=n_samples, n_snps=n_snps_lmm)
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 [
                     gemma_bin,
                     "-bfile",
@@ -472,17 +474,21 @@ def benchmark_gemma(
                     "assoc",
                 ],
                 cwd=str(output_dir),
-                capture_output=True,
-                check=True,
-                timeout=1200,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
             )
+            while True:
+                output = proc.stdout.readline()
+                if output == "" and proc.poll() is not None:
+                    break
+                if output:
+                    print(output.strip())
+            if proc.returncode != 0:
+                raise subprocess.CalledProcessError(proc.returncode, "gemma -lmm")
             result.lmm_time = profiler.end("gemma", "lmm")
             throughput = n_snps_lmm / result.lmm_time if result.lmm_time > 0 else 0
             logger.info(f"GEMMA throughput: {throughput:.0f} SNPs/sec")
-            if proc.stdout:
-                logger.debug(f"GEMMA LMM stdout:\n{proc.stdout.decode()}")
-            if proc.stderr:
-                logger.debug(f"GEMMA LMM stderr:\n{proc.stderr.decode()}")
 
             # Load GEMMA results for validation
             assoc_file = output_dir / "output" / "assoc.assoc.txt"
@@ -923,18 +929,33 @@ def validate_vs_gemma(
         # Write PLINK files using shared function
         _write_plink_files(str(prefix), genotypes, phenotype)
 
-        # Run GEMMA kinship and LMM
+        # Run GEMMA kinship and LMM - stream output in real-time
+        def run_gemma_streaming(cmd, cwd, timeout=300):
+            """Run GEMMA with real-time output streaming."""
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(cwd),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+            )
+            while True:
+                output = proc.stdout.readline()
+                if output == "" and proc.poll() is not None:
+                    break
+                if output:
+                    print(output.strip())
+            if proc.returncode != 0:
+                raise subprocess.CalledProcessError(proc.returncode, cmd[0])
+
         try:
-            subprocess.run(
+            run_gemma_streaming(
                 [gemma_bin, "-bfile", str(prefix), "-gk", "1", "-o", "kinship"],
-                cwd=str(output_dir),
-                capture_output=True,
-                check=True,
-                timeout=300,
+                output_dir,
             )
 
             kinship_file = output_dir / "output" / "kinship.cXX.txt"
-            subprocess.run(
+            run_gemma_streaming(
                 [
                     gemma_bin,
                     "-bfile",
@@ -946,16 +967,13 @@ def validate_vs_gemma(
                     "-o",
                     "assoc",
                 ],
-                cwd=str(output_dir),
-                capture_output=True,
-                check=True,
-                timeout=600,
+                output_dir,
             )
         except subprocess.TimeoutExpired:
             logger.error("GEMMA timed out")
             return None
         except subprocess.CalledProcessError as e:
-            logger.error(f"GEMMA failed: {e.stderr.decode()}")
+            logger.error(f"GEMMA failed with return code {e.returncode}")
             return None
 
         # Load GEMMA results

@@ -184,3 +184,163 @@ def test_cli_lmm_help_shows_filter_flags():
     assert result.exit_code == 0
     assert "-maf" in result.output
     assert "-miss" in result.output
+
+
+def test_cli_lmm_help_shows_covariate_flag():
+    """Test that lmm --help shows -c option."""
+    result = runner.invoke(app, ["lmm", "--help"])
+    assert result.exit_code == 0
+    assert "-c" in result.output
+    assert "Covariate" in result.output
+
+
+def test_lmm_with_covariate_file(tmp_path: Path):
+    """Test that lmm command accepts -c option and runs with covariates."""
+    outdir = tmp_path / "output"
+    kinship_dir = tmp_path / "kinship_out"
+
+    # First, create kinship matrix
+    result = runner.invoke(
+        app, ["-outdir", str(kinship_dir), "gk", "-bfile", str(EXAMPLE_BFILE)]
+    )
+    assert result.exit_code == 0
+    kinship_file = kinship_dir / "result.cXX.txt"
+    assert kinship_file.exists()
+
+    # Create covariate file with correct sample count (100 samples)
+    cov_file = tmp_path / "covariates.txt"
+    with open(cov_file, "w") as f:
+        for _ in range(100):
+            f.write("1 0.5\n")  # Intercept + one covariate
+
+    # Run LMM with covariates
+    result = runner.invoke(
+        app,
+        [
+            "-outdir",
+            str(outdir),
+            "lmm",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-k",
+            str(kinship_file),
+            "-c",
+            str(cov_file),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Loading covariates" in result.output
+    assert "Loaded 2 covariates" in result.output
+
+
+def test_lmm_covariate_file_not_found(tmp_path: Path):
+    """Test that lmm command fails gracefully when covariate file not found."""
+    outdir = tmp_path / "output"
+    kinship_dir = tmp_path / "kinship_out"
+
+    # First, create kinship matrix
+    result = runner.invoke(
+        app, ["-outdir", str(kinship_dir), "gk", "-bfile", str(EXAMPLE_BFILE)]
+    )
+    assert result.exit_code == 0
+    kinship_file = kinship_dir / "result.cXX.txt"
+
+    # Run LMM with nonexistent covariate file
+    fake_cov = tmp_path / "nonexistent_covariates.txt"
+    result = runner.invoke(
+        app,
+        [
+            "-outdir",
+            str(outdir),
+            "lmm",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-k",
+            str(kinship_file),
+            "-c",
+            str(fake_cov),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Covariate file not found" in result.output
+
+
+def test_lmm_covariate_sample_mismatch(tmp_path: Path):
+    """Test that lmm command fails when covariate row count mismatches samples."""
+    outdir = tmp_path / "output"
+    kinship_dir = tmp_path / "kinship_out"
+
+    # First, create kinship matrix
+    result = runner.invoke(
+        app, ["-outdir", str(kinship_dir), "gk", "-bfile", str(EXAMPLE_BFILE)]
+    )
+    assert result.exit_code == 0
+    kinship_file = kinship_dir / "result.cXX.txt"
+
+    # Create covariate file with WRONG sample count (50 instead of 100)
+    cov_file = tmp_path / "bad_covariates.txt"
+    with open(cov_file, "w") as f:
+        for _ in range(50):  # Wrong number of rows
+            f.write("1 0.5\n")
+
+    # Run LMM with mismatched covariates
+    result = runner.invoke(
+        app,
+        [
+            "-outdir",
+            str(outdir),
+            "lmm",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-k",
+            str(kinship_file),
+            "-c",
+            str(cov_file),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "50 rows" in result.output
+    assert "100 samples" in result.output
+
+
+def test_lmm_covariate_intercept_warning(tmp_path: Path):
+    """Test that lmm command warns when covariate file lacks intercept column."""
+    outdir = tmp_path / "output"
+    kinship_dir = tmp_path / "kinship_out"
+
+    # First, create kinship matrix
+    result = runner.invoke(
+        app, ["-outdir", str(kinship_dir), "gk", "-bfile", str(EXAMPLE_BFILE)]
+    )
+    assert result.exit_code == 0
+    kinship_file = kinship_dir / "result.cXX.txt"
+
+    # Create covariate file WITHOUT intercept (first column not all 1s)
+    cov_file = tmp_path / "no_intercept.txt"
+    with open(cov_file, "w") as f:
+        for i in range(100):
+            # First column varies (age), NOT intercept
+            f.write(f"{20 + i % 50} 0.5\n")
+
+    # Run LMM - should succeed but warn
+    result = runner.invoke(
+        app,
+        [
+            "-outdir",
+            str(outdir),
+            "lmm",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-k",
+            str(kinship_file),
+            "-c",
+            str(cov_file),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Warning" in result.output
+    assert "intercept" in result.output.lower()

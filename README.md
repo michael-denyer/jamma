@@ -13,6 +13,7 @@
 - **Numerical equivalence**: Results match GEMMA within floating-point tolerance (beta 1e-6, p-values 1e-8)
 - **Fast**: 7x faster than GEMMA on kinship, 4x faster on LMM association
 - **Scalable**: Streaming I/O handles 200k+ samples without OOM
+- **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
 - **Pure Python**: JAX + NumPy stack, no C++ compilation required
 
 ## Installation
@@ -87,6 +88,29 @@ results = run_lmm_association_streaming(
 )
 ```
 
+## Memory Safety
+
+Unlike GEMMA, JAMMA includes pre-flight memory checks that prevent out-of-memory crashes:
+
+```python
+from jamma.core.memory import estimate_workflow_memory
+
+# Check memory requirements BEFORE loading data
+estimate = estimate_workflow_memory(n_samples=200_000, n_snps=95_000)
+print(f"Peak memory: {estimate.peak_gb:.1f}GB")
+print(f"Available: {estimate.available_gb:.1f}GB")
+print(f"Sufficient: {estimate.sufficient}")
+```
+
+**Key features:**
+
+- Pre-flight checks before large allocations (eigendecomposition, genotype loading)
+- RSS memory logging at workflow boundaries
+- Incremental result writing (no memory accumulation)
+- Safe chunk size defaults with hard caps
+
+GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear error messages.
+
 ## Performance
 
 Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs):
@@ -99,20 +123,23 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs):
 
 ## Supported Features
 
-### v0.2.0 (Current)
+### v1.1 (Current)
 
 - [x] Kinship matrix computation (`-gk 1`)
 - [x] Univariate LMM Wald test (`-lmm 1`)
 - [x] Pre-computed kinship input (`-k`)
+- [x] Covariate support (`-c`)
 - [x] PLINK binary format (`.bed/.bim/.fam`)
 - [x] Streaming I/O for 200k+ samples
 - [x] JAX acceleration (CPU/GPU)
+- [x] Pre-flight memory checks (fail-fast before OOM)
+- [x] RSS memory logging at workflow boundaries
+- [x] Incremental result writing
 
 ### Planned
 
-- [ ] Covariate support (`-c`)
-- [ ] Likelihood ratio test (`-lmm 2`)
 - [ ] Score test (`-lmm 3`)
+- [ ] Likelihood ratio test (`-lmm 2`)
 - [ ] All tests mode (`-lmm 4`)
 - [ ] Multivariate LMM (mvLMM)
 

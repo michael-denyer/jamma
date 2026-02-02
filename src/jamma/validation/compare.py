@@ -205,8 +205,9 @@ def load_gemma_kinship(path: Path) -> np.ndarray:
 def load_gemma_assoc(path: Path) -> list[AssocResult]:
     """Load GEMMA association results from .assoc.txt format.
 
-    Parses the tab-separated .assoc.txt format produced by GEMMA's -lmm 1 mode.
-    Returns a list of AssocResult dataclass instances for comparison.
+    Parses the tab-separated .assoc.txt format produced by GEMMA's LMM modes:
+    - Wald test (-lmm 1): Has logl_H1, l_remle, p_wald columns
+    - Score test (-lmm 3): Has p_score column (no logl_H1, l_remle, p_wald)
 
     Args:
         path: Path to the association results file (.assoc.txt).
@@ -228,9 +229,9 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
         header = f.readline().strip()
         actual_cols = header.split("\t")
 
-        # Support two GEMMA output formats:
-        # Format 1: With logl_H1 (full output)
-        expected_cols_full = [
+        # Support multiple GEMMA output formats:
+        # Format 1: Wald test with logl_H1 (full output)
+        expected_cols_wald_full = [
             "chr",
             "rs",
             "ps",
@@ -244,8 +245,8 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
             "l_remle",
             "p_wald",
         ]
-        # Format 2: Without logl_H1 (some GEMMA versions)
-        expected_cols_short = [
+        # Format 2: Wald test without logl_H1 (some GEMMA versions)
+        expected_cols_wald_short = [
             "chr",
             "rs",
             "ps",
@@ -258,22 +259,38 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
             "l_remle",
             "p_wald",
         ]
+        # Format 3: Score test (-lmm 3)
+        expected_cols_score = [
+            "chr",
+            "rs",
+            "ps",
+            "n_miss",
+            "allele1",
+            "allele0",
+            "af",
+            "beta",
+            "se",
+            "p_score",
+        ]
 
-        if actual_cols == expected_cols_full:
-            has_logl = True
-        elif actual_cols == expected_cols_short:
-            has_logl = False
+        if actual_cols == expected_cols_wald_full:
+            format_type = "wald_full"
+        elif actual_cols == expected_cols_wald_short:
+            format_type = "wald_short"
+        elif actual_cols == expected_cols_score:
+            format_type = "score"
         else:
             raise ValueError(
                 f"Unexpected header format. Expected one of:\n"
-                f"  {expected_cols_full}\n"
-                f"  {expected_cols_short}\n"
+                f"  {expected_cols_wald_full}\n"
+                f"  {expected_cols_wald_short}\n"
+                f"  {expected_cols_score}\n"
                 f"Got: {actual_cols}"
             )
 
         for line in f:
             fields = line.strip().split("\t")
-            if has_logl:
+            if format_type == "wald_full":
                 results.append(
                     AssocResult(
                         chr=fields[0],
@@ -290,7 +307,7 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
                         p_wald=float(fields[11]),
                     )
                 )
-            else:
+            elif format_type == "wald_short":
                 results.append(
                     AssocResult(
                         chr=fields[0],
@@ -302,9 +319,27 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
                         af=float(fields[6]),
                         beta=float(fields[7]),
                         se=float(fields[8]),
-                        logl_H1=0.0,  # Not provided in short format
+                        logl_H1=None,
                         l_remle=float(fields[9]),
                         p_wald=float(fields[10]),
+                    )
+                )
+            else:  # score
+                results.append(
+                    AssocResult(
+                        chr=fields[0],
+                        rs=fields[1],
+                        ps=int(fields[2]),
+                        n_miss=int(fields[3]),
+                        allele1=fields[4],
+                        allele0=fields[5],
+                        af=float(fields[6]),
+                        beta=float(fields[7]),
+                        se=float(fields[8]),
+                        logl_H1=None,
+                        l_remle=None,
+                        p_wald=None,
+                        p_score=float(fields[9]),
                     )
                 )
     return results
@@ -327,6 +362,7 @@ class AssocComparisonResult:
         l_remle: Comparison result for lambda REML values.
         af: Comparison result for allele frequencies.
         mismatched_snps: List of SNP rs IDs that don't match between files.
+        p_score: Comparison result for Score test p-values (only for lmm_mode=3).
     """
 
     passed: bool
@@ -338,6 +374,7 @@ class AssocComparisonResult:
     l_remle: ComparisonResult
     af: ComparisonResult
     mismatched_snps: list[str]
+    p_score: ComparisonResult | None = None  # Only for Score test (-lmm 3)
 
 
 def compare_assoc_results(
@@ -351,9 +388,10 @@ def compare_assoc_results(
     Uses appropriate tolerance thresholds for each statistic type:
     - beta: beta_rtol (effect sizes from linear algebra)
     - se: se_rtol (standard errors with sqrt operations)
-    - p_wald: pvalue_rtol (CDF computations may differ)
-    - logl_H1: logl_rtol (log-likelihood values)
-    - l_remle: lambda_rtol (variance ratio estimates)
+    - p_wald: pvalue_rtol (CDF computations may differ) - Wald test only
+    - p_score: pvalue_rtol (CDF computations may differ) - Score test only
+    - logl_H1: logl_rtol (log-likelihood values) - Wald test only
+    - l_remle: lambda_rtol (variance ratio estimates) - Wald test only
     - af: af_rtol (allele frequency of counted allele, BIM A1)
 
     Args:
@@ -374,54 +412,44 @@ def compare_assoc_results(
     if config is None:
         config = ToleranceConfig()
 
+    # Detect test type from reference data (Score test has p_score, not p_wald)
+    is_score_test = (
+        len(expected) > 0
+        and expected[0].p_score is not None
+        and expected[0].p_wald is None
+    )
+
+    # Helper to create skipped comparison result
+    def _skipped_result(msg: str) -> ComparisonResult:
+        return ComparisonResult(
+            passed=True,
+            max_abs_diff=0.0,
+            max_rel_diff=0.0,
+            worst_location=None,
+            message=msg,
+        )
+
     # Check for SNP count mismatch
     if len(actual) != len(expected):
+        mismatch_result = ComparisonResult(
+            passed=False,
+            max_abs_diff=np.inf,
+            max_rel_diff=np.inf,
+            worst_location=None,
+            message=f"SNP count mismatch: {len(actual)} vs {len(expected)}",
+        )
+        skip_result = _skipped_result("Skipped due to SNP count mismatch")
         return AssocComparisonResult(
             passed=False,
             n_snps=len(actual),
-            beta=ComparisonResult(
-                passed=False,
-                max_abs_diff=np.inf,
-                max_rel_diff=np.inf,
-                worst_location=None,
-                message=f"SNP count mismatch: {len(actual)} vs {len(expected)}",
-            ),
-            se=ComparisonResult(
-                passed=False,
-                max_abs_diff=0,
-                max_rel_diff=0,
-                worst_location=None,
-                message="Skipped due to SNP count mismatch",
-            ),
-            p_wald=ComparisonResult(
-                passed=False,
-                max_abs_diff=0,
-                max_rel_diff=0,
-                worst_location=None,
-                message="Skipped due to SNP count mismatch",
-            ),
-            logl_H1=ComparisonResult(
-                passed=False,
-                max_abs_diff=0,
-                max_rel_diff=0,
-                worst_location=None,
-                message="Skipped due to SNP count mismatch",
-            ),
-            l_remle=ComparisonResult(
-                passed=False,
-                max_abs_diff=0,
-                max_rel_diff=0,
-                worst_location=None,
-                message="Skipped due to SNP count mismatch",
-            ),
-            af=ComparisonResult(
-                passed=False,
-                max_abs_diff=0,
-                max_rel_diff=0,
-                worst_location=None,
-                message="Skipped due to SNP count mismatch",
-            ),
+            beta=mismatch_result,
+            se=skip_result,
+            p_wald=skip_result,
+            logl_H1=skip_result,
+            l_remle=skip_result,
+            af=skip_result,
             mismatched_snps=[],
+            p_score=skip_result if is_score_test else None,
         )
 
     # Check for mismatched SNP IDs
@@ -430,93 +458,119 @@ def compare_assoc_results(
         if a.rs != e.rs:
             mismatched.append(f"{i}:{a.rs}!={e.rs}")
 
-    # Extract arrays for comparison
+    # Extract arrays for comparison (always present)
     actual_beta = np.array([r.beta for r in actual])
     expected_beta = np.array([r.beta for r in expected])
     actual_se = np.array([r.se for r in actual])
     expected_se = np.array([r.se for r in expected])
-    actual_pwald = np.array([r.p_wald for r in actual])
-    expected_pwald = np.array([r.p_wald for r in expected])
-    actual_logl = np.array([r.logl_H1 for r in actual])
-    expected_logl = np.array([r.logl_H1 for r in expected])
-    actual_lambda = np.array([r.l_remle for r in actual])
-    expected_lambda = np.array([r.l_remle for r in expected])
-    # AF comparison: Both JAMMA and GEMMA now report raw AF of counted allele (BIM A1)
     actual_af = np.array([r.af for r in actual])
     expected_af = np.array([r.af for r in expected])
 
-    # Compare each column with appropriate tolerance
+    # Compare always-present columns
     beta_result = compare_arrays(
         actual_beta, expected_beta, config.beta_rtol, config.atol, "beta"
     )
     se_result = compare_arrays(
         actual_se, expected_se, config.se_rtol, config.atol, "se"
     )
-    pwald_result = compare_arrays(
-        actual_pwald, expected_pwald, config.pvalue_rtol, config.atol, "p_wald"
-    )
-
-    # Skip logl_H1 comparison if reference is all zeros (short format without logl_H1)
-    if np.allclose(expected_logl, 0.0):
-        logl_result = ComparisonResult(
-            passed=True,
-            max_abs_diff=0.0,
-            max_rel_diff=0.0,
-            worst_location=None,
-            message="logl_H1 skipped (reference missing logl_H1 column)",
-        )
-    else:
-        logl_result = compare_arrays(
-            actual_logl, expected_logl, config.logl_rtol, config.atol, "logl_H1"
-        )
-
-    # Lambda comparison with boundary handling: when lambda is at the lower bound
-    # (typically 1e-5), relative error is inflated because we're dividing by a tiny
-    # number. Exclude these boundary values from the comparison.
-    lambda_lower_bound = 1e-4  # Consider anything <= 1e-4 as "boundary" value
-    boundary_mask = (expected_lambda <= lambda_lower_bound) | (
-        actual_lambda <= lambda_lower_bound
-    )
-
-    if np.all(boundary_mask):
-        # All values are at boundary - skip comparison
-        lambda_result = ComparisonResult(
-            passed=True,
-            max_abs_diff=0.0,
-            max_rel_diff=0.0,
-            worst_location=None,
-            message="l_remle comparison skipped (all values at optimization boundary)",
-        )
-    elif np.any(boundary_mask):
-        # Mix of boundary and non-boundary: compare only non-boundary values
-        non_boundary_actual = actual_lambda[~boundary_mask]
-        non_boundary_expected = expected_lambda[~boundary_mask]
-        lambda_result = compare_arrays(
-            non_boundary_actual,
-            non_boundary_expected,
-            config.lambda_rtol,
-            config.atol,
-            f"l_remle (excluding {np.sum(boundary_mask)} boundary values)",
-        )
-    else:
-        # No boundary values - standard comparison
-        lambda_result = compare_arrays(
-            actual_lambda, expected_lambda, config.lambda_rtol, config.atol, "l_remle"
-        )
     af_result = compare_arrays(
         actual_af, expected_af, config.af_rtol, config.atol, "af"
     )
 
-    # Overall pass if all columns pass and no mismatched SNPs
+    # Handle test-type specific columns
+    p_score_result = None
+    if is_score_test:
+        # Score test: compare p_score, skip Wald-specific columns
+        actual_pscore = np.array([r.p_score for r in actual])
+        expected_pscore = np.array([r.p_score for r in expected])
+        p_score_result = compare_arrays(
+            actual_pscore, expected_pscore, config.pvalue_rtol, config.atol, "p_score"
+        )
+        pwald_result = _skipped_result("p_wald skipped (Score test)")
+        logl_result = _skipped_result("logl_H1 skipped (Score test)")
+        lambda_result = _skipped_result("l_remle skipped (Score test)")
+    else:
+        # Wald test: compare Wald-specific columns
+        actual_pwald = np.array(
+            [r.p_wald if r.p_wald is not None else np.nan for r in actual]
+        )
+        expected_pwald = np.array(
+            [r.p_wald if r.p_wald is not None else np.nan for r in expected]
+        )
+        pwald_result = compare_arrays(
+            actual_pwald, expected_pwald, config.pvalue_rtol, config.atol, "p_wald"
+        )
+
+        actual_logl = np.array(
+            [r.logl_H1 if r.logl_H1 is not None else 0.0 for r in actual]
+        )
+        expected_logl = np.array(
+            [r.logl_H1 if r.logl_H1 is not None else 0.0 for r in expected]
+        )
+
+        # Skip logl_H1 comparison if reference is all zeros (short format)
+        if np.allclose(expected_logl, 0.0):
+            logl_result = _skipped_result(
+                "logl_H1 skipped (reference missing logl_H1 column)"
+            )
+        else:
+            logl_result = compare_arrays(
+                actual_logl, expected_logl, config.logl_rtol, config.atol, "logl_H1"
+            )
+
+        actual_lambda = np.array(
+            [r.l_remle if r.l_remle is not None else np.nan for r in actual]
+        )
+        expected_lambda = np.array(
+            [r.l_remle if r.l_remle is not None else np.nan for r in expected]
+        )
+
+        # Lambda comparison with boundary handling
+        lambda_lower_bound = 1e-4
+        boundary_mask = (expected_lambda <= lambda_lower_bound) | (
+            actual_lambda <= lambda_lower_bound
+        )
+
+        if np.all(boundary_mask):
+            lambda_result = _skipped_result(
+                "l_remle comparison skipped (all values at optimization boundary)"
+            )
+        elif np.any(boundary_mask):
+            non_boundary_actual = actual_lambda[~boundary_mask]
+            non_boundary_expected = expected_lambda[~boundary_mask]
+            lambda_result = compare_arrays(
+                non_boundary_actual,
+                non_boundary_expected,
+                config.lambda_rtol,
+                config.atol,
+                f"l_remle (excluding {np.sum(boundary_mask)} boundary values)",
+            )
+        else:
+            lambda_result = compare_arrays(
+                actual_lambda,
+                expected_lambda,
+                config.lambda_rtol,
+                config.atol,
+                "l_remle",
+            )
+
+    # Overall pass if all relevant columns pass and no mismatched SNPs
     all_passed = (
         beta_result.passed
         and se_result.passed
-        and pwald_result.passed
-        and logl_result.passed
-        and lambda_result.passed
         and af_result.passed
         and len(mismatched) == 0
     )
+    # Add test-type specific checks
+    if is_score_test:
+        all_passed = all_passed and p_score_result.passed
+    else:
+        all_passed = (
+            all_passed
+            and pwald_result.passed
+            and logl_result.passed
+            and lambda_result.passed
+        )
 
     return AssocComparisonResult(
         passed=all_passed,
@@ -528,4 +582,5 @@ def compare_assoc_results(
         l_remle=lambda_result,
         af=af_result,
         mismatched_snps=mismatched,
+        p_score=p_score_result,
     )

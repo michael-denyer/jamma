@@ -31,6 +31,11 @@ EXAMPLE_DATA = Path("tests/fixtures/gemma_synthetic/test")
 REFERENCE_KINSHIP = Path("tests/fixtures/gemma_synthetic/gemma_kinship.cXX.txt")
 REFERENCE_ASSOC = Path("tests/fixtures/gemma_synthetic/gemma_assoc.assoc.txt")
 
+# Covariate validation paths
+COVARIATE_FIXTURE_DIR = Path("tests/fixtures/gemma_covariate")
+COVARIATE_FILE = COVARIATE_FIXTURE_DIR / "covariates.txt"
+COVARIATE_REFERENCE_ASSOC = COVARIATE_FIXTURE_DIR / "gemma_covariate.assoc.txt"
+
 
 @pytest.fixture(autouse=True)
 def setup_jax():
@@ -843,3 +848,86 @@ class TestLmmCovariateIntegration:
             assert np.isfinite(r.beta), f"NaN beta for {r.rs}"
             assert np.isfinite(r.se), f"NaN SE for {r.rs}"
             assert np.isfinite(r.p_wald), f"NaN p-value for {r.rs}"
+
+
+class TestLmmCovariateValidation:
+    """Tests validating JAMMA LMM with covariates against GEMMA reference.
+
+    These tests verify that JAMMA produces GEMMA-identical output when covariates
+    are included in the model (beyond just the intercept).
+    """
+
+    @pytest.fixture
+    def covariate_data(self):
+        """Load covariates from fixture."""
+        if not COVARIATE_FILE.exists():
+            pytest.skip("Covariate fixture not generated")
+        covariates = np.loadtxt(COVARIATE_FILE)
+        return covariates
+
+    @pytest.mark.skipif(
+        not COVARIATE_REFERENCE_ASSOC.exists(),
+        reason="Covariate reference data not generated. Run generate_covariate_reference.sh",
+    )
+    def test_lmm_with_covariates_matches_gemma(
+        self, mouse_data, mouse_phenotypes, reference_kinship, covariate_data
+    ):
+        """JAMMA LMM with covariates matches GEMMA reference within tolerance."""
+        reference_results = load_gemma_assoc(COVARIATE_REFERENCE_ASSOC)
+
+        jamma_results = run_lmm_association(
+            genotypes=mouse_data.genotypes,
+            phenotypes=mouse_phenotypes,
+            kinship=reference_kinship,
+            snp_info=_build_snp_info(mouse_data),
+            covariates=covariate_data,
+        )
+
+        comparison = compare_assoc_results(jamma_results, reference_results)
+        assert comparison.passed, _format_comparison_failure(comparison)
+
+    @pytest.mark.skipif(
+        not COVARIATE_REFERENCE_ASSOC.exists(),
+        reason="Covariate reference data not generated",
+    )
+    def test_covariate_beta_tolerance(
+        self, mouse_data, mouse_phenotypes, reference_kinship, covariate_data
+    ):
+        """Beta values with covariates match within tolerance."""
+        reference_results = load_gemma_assoc(COVARIATE_REFERENCE_ASSOC)
+
+        jamma_results = run_lmm_association(
+            genotypes=mouse_data.genotypes,
+            phenotypes=mouse_phenotypes,
+            kinship=reference_kinship,
+            snp_info=_build_snp_info(mouse_data),
+            covariates=covariate_data,
+        )
+
+        comparison = compare_assoc_results(jamma_results, reference_results)
+        assert comparison.beta.passed, (
+            f"Beta with covariates failed: {comparison.beta.message}"
+        )
+
+    @pytest.mark.skipif(
+        not COVARIATE_REFERENCE_ASSOC.exists(),
+        reason="Covariate reference data not generated",
+    )
+    def test_covariate_pvalue_tolerance(
+        self, mouse_data, mouse_phenotypes, reference_kinship, covariate_data
+    ):
+        """P-values with covariates match within tolerance."""
+        reference_results = load_gemma_assoc(COVARIATE_REFERENCE_ASSOC)
+
+        jamma_results = run_lmm_association(
+            genotypes=mouse_data.genotypes,
+            phenotypes=mouse_phenotypes,
+            kinship=reference_kinship,
+            snp_info=_build_snp_info(mouse_data),
+            covariates=covariate_data,
+        )
+
+        comparison = compare_assoc_results(jamma_results, reference_results)
+        assert comparison.p_wald.passed, (
+            f"P-value with covariates failed: {comparison.p_wald.message}"
+        )

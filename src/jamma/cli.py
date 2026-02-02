@@ -14,7 +14,7 @@ import typer
 
 import jamma
 from jamma.core import OutputConfig
-from jamma.io import load_plink_binary
+from jamma.io import load_plink_binary, read_covariate_file
 from jamma.kinship import (
     compute_centered_kinship,
     read_kinship_matrix,
@@ -180,6 +180,10 @@ def lmm_command(
         Path | None,
         typer.Option("-k", help="Pre-computed kinship matrix file"),
     ] = None,
+    covariate_file: Annotated[
+        Path | None,
+        typer.Option("-c", help="Covariate file (whitespace-delimited, no header)"),
+    ] = None,
     lmm_mode: Annotated[
         int,
         typer.Option(
@@ -239,6 +243,11 @@ def lmm_command(
         raise typer.Exit(code=1)
     if not kinship_file.exists():
         typer.echo(f"Error: Kinship matrix file not found: {kinship_file}", err=True)
+        raise typer.Exit(code=1)
+
+    # Validate covariate file exists if provided
+    if covariate_file is not None and not covariate_file.exists():
+        typer.echo(f"Error: Covariate file not found: {covariate_file}", err=True)
         raise typer.Exit(code=1)
 
     # Ensure output directory exists

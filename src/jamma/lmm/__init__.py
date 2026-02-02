@@ -20,14 +20,14 @@ from loguru import logger
 
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.io import IncrementalAssocWriter, write_assoc_results
-from jamma.lmm.likelihood import compute_Uab
+from jamma.lmm.likelihood import calc_pab, compute_null_model_lambda, compute_Uab
 from jamma.lmm.optimize import optimize_lambda_for_snp
 from jamma.lmm.runner_jax import (
     auto_tune_chunk_size,
     run_lmm_association_jax,
     run_lmm_association_streaming,
 )
-from jamma.lmm.stats import AssocResult, calc_wald_test_from_uab
+from jamma.lmm.stats import AssocResult, calc_score_test, calc_wald_test_from_uab
 
 __all__ = [
     "auto_tune_chunk_size",
@@ -89,6 +89,7 @@ def run_lmm_association(
     maf_threshold: float = 0.01,
     miss_threshold: float = 0.05,
     output_path: Path | None = None,
+    lmm_mode: int = 1,
 ) -> list[AssocResult]:
     """Run LMM association tests for all SNPs.
 
@@ -97,7 +98,7 @@ def run_lmm_association(
     2. Filter SNPs based on MAF and missing rate thresholds
     3. Eigendecompose kinship matrix
     4. Rotate phenotype and covariates
-    5. For each SNP: optimize lambda, compute Wald statistics
+    5. For each SNP: compute test statistics based on lmm_mode
 
     Args:
         genotypes: Genotype matrix (n_samples, n_snps) with values 0, 1, 2
@@ -110,10 +111,17 @@ def run_lmm_association(
         output_path: If provided, write results incrementally to this file.
             Returns empty list when output_path is set (results are on disk).
             If None (default), accumulate results in memory and return list.
+        lmm_mode: Test type (1=Wald, 3=Score). Default is 1 (Wald).
+            Score test (3) computes null model lambda once and reuses it for
+            all SNPs, making it faster than Wald. Output includes p_score
+            instead of logl_H1/l_remle/p_wald.
 
     Returns:
         List of AssocResult for each SNP that passes filtering.
         Empty list if output_path was provided (results written to disk).
+        Fields in AssocResult depend on lmm_mode:
+        - lmm_mode=1: logl_H1, l_remle, p_wald populated
+        - lmm_mode=3: p_score populated (logl_H1/l_remle/p_wald are None)
     """
     # Step 0: Filter samples with missing phenotypes (-9 or NaN) or missing covariates
     valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
@@ -169,10 +177,17 @@ def run_lmm_association(
     UtW = U.T @ W
     n_cvt = W.shape[1]
 
+    # For Score test: compute null model lambda once before SNP loop
+    lambda_null = None
+    if lmm_mode == 3:
+        lambda_null, logl_null = compute_null_model_lambda(eigenvalues, UtW, Uty, n_cvt)
+        logger.info(f"Null model lambda: {lambda_null:.6f}, logl: {logl_null:.6f}")
+
     results = []
     writer = None
     if output_path is not None:
-        writer = IncrementalAssocWriter(output_path)
+        test_type = "score" if lmm_mode == 3 else "wald"
+        writer = IncrementalAssocWriter(output_path, test_type=test_type)
         writer.__enter__()
 
     try:
@@ -196,30 +211,55 @@ def run_lmm_association(
             # Compute Uab with SNP genotype
             Uab = compute_Uab(UtW, Uty, Utx)
 
-            # Optimize lambda via REML (using Brent minimization for speed)
-            lambda_opt, logl_H1 = optimize_lambda_for_snp(eigenvalues, Uab, n_cvt)
-
-            # Compute Wald statistics using new function
-            beta, se, p_wald = calc_wald_test_from_uab(
-                lambda_opt, eigenvalues, Uab, n_cvt, n_samples
-            )
-
-            # Build result
+            # Build result based on test type
             info = snp_info[snp_idx]
-            result = AssocResult(
-                chr=info["chr"],
-                rs=info["rs"],
-                ps=info.get("pos", info.get("ps", 0)),
-                n_miss=n_miss,
-                allele1=info.get("a1", info.get("allele1", "")),
-                allele0=info.get("a0", info.get("allele0", "")),
-                af=af,
-                beta=beta,
-                se=se,
-                logl_H1=logl_H1,
-                l_remle=lambda_opt,
-                p_wald=p_wald,
-            )
+
+            if lmm_mode == 1:  # Wald test
+                # Optimize lambda via REML (using Brent minimization for speed)
+                lambda_opt, logl_H1 = optimize_lambda_for_snp(eigenvalues, Uab, n_cvt)
+
+                # Compute Wald statistics
+                beta, se, p_wald = calc_wald_test_from_uab(
+                    lambda_opt, eigenvalues, Uab, n_cvt, n_samples
+                )
+
+                result = AssocResult(
+                    chr=info["chr"],
+                    rs=info["rs"],
+                    ps=info.get("pos", info.get("ps", 0)),
+                    n_miss=n_miss,
+                    allele1=info.get("a1", info.get("allele1", "")),
+                    allele0=info.get("a0", info.get("allele0", "")),
+                    af=af,
+                    beta=beta,
+                    se=se,
+                    logl_H1=logl_H1,
+                    l_remle=lambda_opt,
+                    p_wald=p_wald,
+                )
+
+            elif lmm_mode == 3:  # Score test
+                # Use null model lambda (fixed, computed once before loop)
+                Hi_eval = 1.0 / (lambda_null * eigenvalues + 1.0)
+                # calc_pab signature: (n_cvt, Hi_eval, Uab)
+                Pab = calc_pab(n_cvt, Hi_eval, Uab)
+                beta, se, p_score = calc_score_test(lambda_null, Pab, n_cvt, n_samples)
+
+                result = AssocResult(
+                    chr=info["chr"],
+                    rs=info["rs"],
+                    ps=info.get("pos", info.get("ps", 0)),
+                    n_miss=n_miss,
+                    allele1=info.get("a1", info.get("allele1", "")),
+                    allele0=info.get("a0", info.get("allele0", "")),
+                    af=af,
+                    beta=beta,
+                    se=se,
+                    p_score=p_score,
+                )
+
+            else:
+                raise ValueError(f"Unsupported lmm_mode: {lmm_mode}. Use 1 or 3.")
 
             if writer is not None:
                 writer.write(result)

@@ -132,19 +132,3 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs):
 
 GPL-3.0 (same as GEMMA)
 
-## Citation
-
-If you use JAMMA in your research, please cite both JAMMA and the original GEMMA paper:
-
-```bibtex
-@article{zhou2012genome,
-  title={Genome-wide efficient mixed-model analysis for association studies},
-  author={Zhou, Xiang and Stephens, Matthew},
-  journal={Nature genetics},
-  volume={44},
-  number={7},
-  pages={821--824},
-  year={2012},
-  publisher={Nature Publishing Group}
-}
-```

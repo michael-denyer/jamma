@@ -10,9 +10,29 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import progressbar
 from bed_reader import open_bed
 from loguru import logger
-from tqdm.auto import tqdm
+
+
+def _progress_iterator(iterable: Iterator, total: int, desc: str = "") -> Iterator:
+    """Wrap iterator with progressbar2 progress display."""
+    widgets = [
+        f"{desc}: " if desc else "",
+        progressbar.Counter(),
+        f"/{total} ",
+        progressbar.Percentage(),
+        " ",
+        progressbar.Bar(),
+        " ",
+        progressbar.ETA(),
+    ]
+    bar = progressbar.ProgressBar(max_value=total, widgets=widgets)
+    bar.start()
+    for i, item in enumerate(iterable):
+        yield item
+        bar.update(i + 1)
+    bar.finish()
 
 
 @dataclass
@@ -153,7 +173,7 @@ def stream_genotype_chunks(
         bed_path: Path prefix for PLINK files (without .bed/.bim/.fam extension).
         chunk_size: Number of SNPs per chunk (default 10,000).
         dtype: Output dtype for genotypes (default float32 for memory efficiency).
-        show_progress: Whether to show tqdm progress bar (default True).
+        show_progress: Whether to show progress bar (default True).
 
     Yields:
         Tuple of (genotypes_chunk, start_idx, end_idx):
@@ -188,11 +208,8 @@ def stream_genotype_chunks(
 
         iterator = range(0, n_snps, chunk_size)
         if show_progress:
-            iterator = tqdm(
-                iterator,
-                desc="Reading genotypes",
-                total=n_chunks,
-                unit="chunk",
+            iterator = _progress_iterator(
+                iterator, total=n_chunks, desc="Reading genotypes"
             )
 
         for start in iterator:

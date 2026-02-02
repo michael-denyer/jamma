@@ -81,13 +81,14 @@ Usage:
 """
 
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import progressbar
 from loguru import logger
-from tqdm.auto import tqdm
 
 from jamma.core.memory import estimate_streaming_memory, estimate_workflow_memory
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
@@ -99,6 +100,32 @@ from jamma.lmm.likelihood_jax import (
     golden_section_optimize_lambda,
 )
 from jamma.lmm.stats import AssocResult
+
+
+def _progress_iterator(
+    iterable: Iterator, total: int, desc: str = ""
+) -> Iterator:
+    """Wrap iterator with progressbar2 progress display.
+
+    Works in both Databricks interactive notebooks and workflow notebooks,
+    unlike tqdm which only works in interactive mode.
+    """
+    widgets = [
+        f"{desc}: " if desc else "",
+        progressbar.Counter(),
+        f"/{total} ",
+        progressbar.Percentage(),
+        " ",
+        progressbar.Bar(),
+        " ",
+        progressbar.ETA(),
+    ]
+    bar = progressbar.ProgressBar(max_value=total, widgets=widgets)
+    bar.start()
+    for i, item in enumerate(iterable):
+        yield item
+        bar.update(i + 1)
+    bar.finish()
 
 # INT32_MAX with headroom for JAX internal indexing overhead
 # Multiple arrays contribute to buffer sizing:
@@ -413,11 +440,8 @@ def run_lmm_association_jax(
 
     # Create progress bar iterator
     if show_progress and n_chunks > 1:
-        chunk_iterator = tqdm(
-            enumerate(chunk_starts),
-            total=n_chunks,
-            desc="LMM association",
-            unit="chunk",
+        chunk_iterator = _progress_iterator(
+            enumerate(chunk_starts), total=n_chunks, desc="LMM association"
         )
     else:
         chunk_iterator = enumerate(chunk_starts)
@@ -727,11 +751,8 @@ def run_lmm_association_streaming(
     )
     if show_progress:
         n_chunks = (n_snps + chunk_size - 1) // chunk_size
-        stats_iterator = tqdm(
-            stats_iterator,
-            desc="Computing SNP statistics",
-            total=n_chunks,
-            unit="chunk",
+        stats_iterator = _progress_iterator(
+            stats_iterator, total=n_chunks, desc="Computing SNP statistics"
         )
 
     for chunk, start, end in stats_iterator:
@@ -813,11 +834,8 @@ def run_lmm_association_streaming(
     )
     if show_progress:
         n_chunks = (n_snps + chunk_size - 1) // chunk_size
-        assoc_iterator = tqdm(
-            assoc_iterator,
-            desc="Running LMM association",
-            total=n_chunks,
-            unit="chunk",
+        assoc_iterator = _progress_iterator(
+            assoc_iterator, total=n_chunks, desc="Running LMM association"
         )
 
     for chunk, file_start, file_end in assoc_iterator:

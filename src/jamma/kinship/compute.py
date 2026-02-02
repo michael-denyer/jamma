@@ -13,18 +13,39 @@ to per-SNP mean, and p is the number of SNPs.
 from __future__ import annotations
 
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
+import progressbar
 from jax import jit
 from loguru import logger
-from tqdm.auto import tqdm
 
 from jamma.core import configure_jax
 from jamma.core.memory import check_memory_available, estimate_streaming_memory
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
 from jamma.kinship.missing import impute_and_center
+
+
+def _progress_iterator(iterable: Iterator, total: int, desc: str = "") -> Iterator:
+    """Wrap iterator with progressbar2 progress display."""
+    widgets = [
+        f"{desc}: " if desc else "",
+        progressbar.Counter(),
+        f"/{total} ",
+        progressbar.Percentage(),
+        " ",
+        progressbar.Bar(),
+        " ",
+        progressbar.ETA(),
+    ]
+    bar = progressbar.ProgressBar(max_value=total, widgets=widgets)
+    bar.start()
+    for i, item in enumerate(iterable):
+        yield item
+        bar.update(i + 1)
+    bar.finish()
 
 # Ensure 64-bit precision for GEMMA equivalence
 configure_jax()
@@ -230,7 +251,7 @@ def compute_kinship_streaming(
         miss_threshold: Maximum missing rate (default 1.0 = no filter).
         check_memory: If True (default), check available memory before allocation
             and raise MemoryError if insufficient.
-        show_progress: If True (default), show tqdm progress bar during iteration.
+        show_progress: If True (default), show progress bar during iteration.
 
     Returns:
         Kinship matrix (n_samples, n_samples), symmetric, scaled by n_filtered_snps.
@@ -278,11 +299,8 @@ def compute_kinship_streaming(
     )
     if show_progress:
         n_chunks = (n_snps + chunk_size - 1) // chunk_size
-        stats_iterator = tqdm(
-            stats_iterator,
-            desc="Computing SNP statistics",
-            total=n_chunks,
-            unit="chunk",
+        stats_iterator = _progress_iterator(
+            stats_iterator, total=n_chunks, desc="Computing SNP statistics"
         )
 
     for chunk, start, end in stats_iterator:
@@ -337,11 +355,8 @@ def compute_kinship_streaming(
     )
 
     if show_progress:
-        chunk_iter = tqdm(
-            chunk_iter,
-            desc="Computing kinship",
-            total=n_chunks,
-            unit="chunk",
+        chunk_iter = _progress_iterator(
+            chunk_iter, total=n_chunks, desc="Computing kinship"
         )
 
     for chunk, file_start, file_end in chunk_iter:

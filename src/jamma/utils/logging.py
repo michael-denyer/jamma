@@ -115,3 +115,29 @@ def write_gemma_log(
         f.write("##\n")
 
     return log_path
+
+
+def log_rss_memory(phase: str, checkpoint: str) -> float:
+    """Log current RSS memory usage with phase context.
+
+    Uses loguru's bind() for structured logging so memory readings
+    can be filtered/searched by phase and checkpoint.
+
+    Args:
+        phase: Workflow phase name (e.g., "eigendecomp", "lmm", "kinship")
+        checkpoint: Checkpoint within phase (e.g., "start", "end", "chunk_1")
+
+    Returns:
+        Current RSS in GB (for chaining/testing).
+
+    Example:
+        >>> log_rss_memory("eigendecomp", "before")
+        INFO     | RSS memory: 12.34GB (phase=eigendecomp, checkpoint=before)
+    """
+    import psutil
+
+    rss_gb = psutil.Process().memory_info().rss / 1e9
+    logger.bind(phase=phase, checkpoint=checkpoint).info(
+        f"RSS memory: {rss_gb:.2f}GB (phase={phase}, checkpoint={checkpoint})"
+    )
+    return rss_gb

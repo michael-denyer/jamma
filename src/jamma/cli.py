@@ -187,9 +187,7 @@ def lmm_command(
     ] = None,
     lmm_mode: Annotated[
         int,
-        typer.Option(
-            "-lmm", help="LMM analysis type (1=Wald, 2-4=not yet implemented)"
-        ),
+        typer.Option("-lmm", help="LMM analysis type (1=Wald, 3=Score)"),
     ] = 1,
     maf: Annotated[
         float,
@@ -217,7 +215,7 @@ def lmm_command(
     """Perform linear mixed model association testing.
 
     Runs LMM association tests using a pre-computed kinship matrix.
-    Currently supports Wald test (-lmm 1) only.
+    Supports Wald test (-lmm 1) and Score test (-lmm 3).
     """
     # Get global config
     global _global_config
@@ -229,10 +227,10 @@ def lmm_command(
         typer.echo(f"Error: -lmm must be 1, 2, 3, or 4 (got {lmm_mode})", err=True)
         raise typer.Exit(code=1)
 
-    if lmm_mode in (2, 3, 4):
+    if lmm_mode in (2, 4):
         typer.echo(
             f"Error: -lmm {lmm_mode} not yet implemented. "
-            "Only -lmm 1 (Wald test) is currently supported.",
+            "Only -lmm 1 (Wald) and -lmm 3 (Score) are supported.",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -425,7 +423,8 @@ def lmm_command(
     typer.echo(f"Data loading completed in {t_load - t_start:.2f}s")
 
     # Run LMM association
-    typer.echo(f"Running LMM Wald test on {n_snps} SNPs...")
+    test_name = {1: "Wald", 3: "Score"}[lmm_mode]
+    typer.echo(f"Running LMM {test_name} test on {n_snps} SNPs...")
 
     # Progress callback for long runs
     last_progress = [0]  # Use list to allow modification in closure
@@ -450,7 +449,8 @@ def lmm_command(
         covariates=covariates_filtered,
         maf_threshold=maf,
         miss_threshold=miss,
-        output_path=assoc_path,  # Enable per-SNP disk writes
+        output_path=assoc_path,
+        lmm_mode=lmm_mode,
     )
 
     t_lmm = time.perf_counter()

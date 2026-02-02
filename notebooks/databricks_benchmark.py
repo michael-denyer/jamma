@@ -733,6 +733,11 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
         except Exception as e:
             profiler.error("lmm_jax", "association", e)
 
+        # JAMMA total = kinship + eigendecomp + lmm (end-to-end)
+        jamma_total = kinship_time + eigen_time + (results.get("lmm_jax_time") or 0)
+        results["jamma_total_time"] = jamma_total
+        logger.info(f"JAMMA total time: {jamma_total:.1f}s")
+
         # GEMMA benchmark (for smaller configs only)
         gemma_result = benchmark_gemma(
             genotypes, phenotype, profiler, config.n_snps_lmm
@@ -742,6 +747,10 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
         if gemma_result.lmm_time is not None:
             results["gemma_lmm_time"] = gemma_result.lmm_time
             results["gemma_snps_per_sec"] = config.n_snps_lmm / gemma_result.lmm_time
+            # GEMMA total = kinship + lmm (end-to-end)
+            gemma_total = gemma_result.kinship_time + gemma_result.lmm_time
+            results["gemma_total_time"] = gemma_total
+            logger.info(f"GEMMA total time: {gemma_total:.1f}s")
 
         # Validate JAMMA results against GEMMA
         if gemma_result.assoc_df is not None and jax_assoc_results is not None:
@@ -751,10 +760,15 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
             results["gemma_beta_max_rel_diff"] = validation.get("beta_max_rel_diff")
             results["gemma_pval_max_rel_diff"] = validation.get("pval_max_rel_diff")
 
-        # Speedups (JAMMA JAX vs GEMMA only)
-        if results.get("gemma_lmm_time") and results.get("lmm_jax_time"):
-            gemma_t = results["gemma_lmm_time"]
-            results["jax_vs_gemma"] = gemma_t / results["lmm_jax_time"]
+        # Speedups (JAMMA vs GEMMA - total end-to-end time)
+        if results.get("gemma_total_time") and results.get("jamma_total_time"):
+            results["jamma_vs_gemma_total"] = (
+                results["gemma_total_time"] / results["jamma_total_time"]
+            )
+            logger.info(
+                f"Speedup: JAMMA {results['jamma_vs_gemma_total']:.2f}x faster "
+                f"than GEMMA (total time)"
+            )
 
     except Exception as e:
         profiler.error("benchmark", "main", e)
@@ -820,16 +834,29 @@ all_events = []
 timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
 run_id = f"benchmark_{timestamp}"
 
+# Track total benchmark suite time
+benchmark_start_time = time.time()
+logger.info(f"Starting benchmark suite at {datetime.now(UTC).isoformat()}")
+
 for scale in BENCHMARK_SCALES:
+    scale_start = time.time()
     results, events_df = run_benchmark(scale, run_id)
+    scale_elapsed = time.time() - scale_start
+
+    # Add total time to results
+    results["total_time"] = scale_elapsed
     all_results.append(results)
     all_events.append(events_df)
-    logger.info(f"Completed {scale}: {results}")
+    logger.info(f"Completed {scale} in {scale_elapsed:.1f}s: {results}")
 
 results_df = pd.DataFrame(all_results)
 events_df = pd.concat(all_events, ignore_index=True)
 
-logger.info(f"\nBenchmark complete. {len(results_df)} configurations tested.")
+benchmark_total_time = time.time() - benchmark_start_time
+logger.info(f"\nBenchmark suite complete at {datetime.now(UTC).isoformat()}")
+total_min = benchmark_total_time / 60
+logger.info(f"Total benchmark time: {benchmark_total_time:.1f}s ({total_min:.1f} min)")
+logger.info(f"{len(results_df)} configurations tested.")
 
 # COMMAND ----------
 

@@ -23,7 +23,11 @@ from jax import jit
 from loguru import logger
 
 from jamma.core import configure_jax
-from jamma.core.memory import check_memory_available, estimate_streaming_memory
+from jamma.core.memory import (
+    check_memory_available,
+    estimate_streaming_memory,
+    log_memory_snapshot,
+)
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
 from jamma.kinship.missing import impute_and_center
 
@@ -46,6 +50,7 @@ def _progress_iterator(iterable: Iterator, total: int, desc: str = "") -> Iterat
         yield item
         bar.update(i + 1)
     bar.finish()
+
 
 # Ensure 64-bit precision for GEMMA equivalence
 configure_jax()
@@ -185,6 +190,9 @@ def compute_centered_kinship(
         required_gb = kinship_gb + batch_gb
         check_memory_available(required_gb, operation="kinship computation")
 
+    # Log memory state before kinship allocation for debugging OOM
+    log_memory_snapshot(f"before_kinship_{n_samples}samples")
+
     # Convert to JAX array
     X = jnp.array(genotypes_filtered, dtype=jnp.float64)
 
@@ -204,6 +212,9 @@ def compute_centered_kinship(
 
     # Scale by number of filtered SNPs
     K = K / n_snps
+
+    # Log memory after kinship computation
+    log_memory_snapshot(f"after_kinship_{n_samples}samples")
 
     # Return as numpy array for downstream compatibility
     return np.array(K)

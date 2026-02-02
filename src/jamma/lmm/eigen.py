@@ -3,6 +3,11 @@
 Provides GEMMA-compatible eigendecomposition with small eigenvalue thresholding.
 Uses scipy.linalg.eigh (LAPACK) to support large matrices (200k+ samples) that
 exceed JAX's int32 buffer limits.
+
+Note on threading: OpenBLAS can segfault with multi-threaded eigendecomposition
+on large matrices (>50k) due to memory allocation races. We use threadpoolctl
+to limit BLAS threads to 1 for matrices above a size threshold.
+See: https://github.com/scipy/scipy/issues/8741
 """
 
 import time
@@ -12,11 +17,23 @@ import numpy as np
 from loguru import logger
 from scipy import linalg
 
+try:
+    from threadpoolctl import threadpool_limits
+
+    HAVE_THREADPOOLCTL = True
+except ImportError:
+    HAVE_THREADPOOLCTL = False
+
 from jamma.core.memory import (
     check_memory_available,
     estimate_eigendecomp_memory,
     log_memory_snapshot,
 )
+
+# Threshold above which we limit BLAS threads to prevent SIGSEGV
+# 50k samples = 2.5B elements, empirically safe with threading
+# 100k samples = 10B elements, crashes with OpenBLAS multi-threading
+SINGLE_THREAD_THRESHOLD = 50_000
 
 
 def eigendecompose_kinship(
@@ -73,9 +90,32 @@ def eigendecompose_kinship(
     # Log memory state right before allocation for debugging OOM crashes
     log_memory_snapshot(f"before_eigendecomp_{n_samples}samples")
 
+    # For large matrices, limit BLAS threads to 1 to prevent SIGSEGV
+    # OpenBLAS has threading bugs with large eigendecompositions
+    # See: https://github.com/scipy/scipy/issues/8741
+    use_single_thread = n_samples >= SINGLE_THREAD_THRESHOLD
+
+    if use_single_thread:
+        if HAVE_THREADPOOLCTL:
+            logger.info(
+                f"Using single-threaded BLAS for {n_samples:,}x{n_samples:,} matrix "
+                "(prevents OpenBLAS SIGSEGV)"
+            )
+        else:
+            logger.warning(
+                f"threadpoolctl not installed - cannot limit BLAS threads for "
+                f"{n_samples:,}x{n_samples:,} matrix. "
+                "Install with: pip install threadpoolctl"
+            )
+
     start_time = time.perf_counter()
     try:
-        eigenvalues, eigenvectors = linalg.eigh(K)
+        if use_single_thread and HAVE_THREADPOOLCTL:
+            # Limit all BLAS/LAPACK libraries to single thread
+            with threadpool_limits(limits=1, user_api="blas"):
+                eigenvalues, eigenvectors = linalg.eigh(K)
+        else:
+            eigenvalues, eigenvectors = linalg.eigh(K)
     except MemoryError:
         mem_gb = n_elements * 8 * 3 / 1e9
         logger.error(

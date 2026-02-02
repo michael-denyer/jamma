@@ -22,7 +22,7 @@ def runner():
 @pytest.fixture
 def example_plink_path() -> Path:
     """Path prefix for example PLINK files."""
-    return Path(__file__).parent.parent / "legacy" / "example" / "mouse_hs1940"
+    return Path(__file__).parent / "fixtures" / "gemma_synthetic" / "test"
 
 
 class TestWriteKinshipFormat:
@@ -207,13 +207,13 @@ class TestCLIIntegration:
         assert result.exit_code == 0
         kinship_file = tmp_path / "test.cXX.txt"
 
-        # Check file has expected number of lines (1940 samples)
+        # Check file has expected number of lines (100 samples)
         lines = kinship_file.read_text().strip().split("\n")
-        assert len(lines) == 1940, f"Expected 1940 lines, got {len(lines)}"
+        assert len(lines) == 100, f"Expected 100 lines, got {len(lines)}"
 
         # Check first line has expected number of columns
         first_line_values = lines[0].split("\t")
-        assert len(first_line_values) == 1940, "Expected 1940 columns"
+        assert len(first_line_values) == 100, "Expected 100 columns"
 
     def test_cli_gk_log_contains_kinship_file(
         self, runner, tmp_path, example_plink_path

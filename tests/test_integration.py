@@ -19,7 +19,7 @@ from jamma.cli import app
 runner = CliRunner()
 
 # Path to example PLINK data
-EXAMPLE_BFILE = Path(__file__).parent.parent / "legacy" / "example" / "mouse_hs1940"
+EXAMPLE_BFILE = Path(__file__).parent / "fixtures" / "gemma_synthetic" / "test"
 
 
 class TestGkWorkflow:
@@ -56,8 +56,8 @@ class TestGkWorkflow:
         assert "## Date" in log_content, "Log should contain date"
         assert "## Command Line Input" in log_content, "Log should contain command line"
         assert "## total time" in log_content, "Log should contain timing"
-        assert "n_samples = 1940" in log_content, "Log should contain sample count"
-        assert "n_snps = 12226" in log_content, "Log should contain SNP count"
+        assert "n_samples = 100" in log_content, "Log should contain sample count"
+        assert "n_snps = 500" in log_content, "Log should contain SNP count"
 
 
 class TestPlinkToValidationRoundtrip:

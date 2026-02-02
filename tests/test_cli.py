@@ -9,7 +9,7 @@ from jamma.cli import app
 runner = CliRunner()
 
 # Path to example PLINK data
-EXAMPLE_BFILE = Path(__file__).parent.parent / "legacy" / "example" / "mouse_hs1940"
+EXAMPLE_BFILE = Path(__file__).parent / "fixtures" / "gemma_synthetic" / "test"
 
 
 def test_cli_help():
@@ -48,8 +48,8 @@ def test_cli_gk_loads_data(tmp_path: Path):
 
     assert result.exit_code == 0
     assert outdir.exists()
-    assert "1940 samples" in result.output
-    assert "12226 SNPs" in result.output
+    assert "100 samples" in result.output
+    assert "500 SNPs" in result.output
 
 
 def test_cli_gk_log_file(tmp_path: Path):
@@ -67,8 +67,8 @@ def test_cli_gk_log_file(tmp_path: Path):
 
     log_content = log_path.read_text()
     assert "JAMMA" in log_content
-    assert "n_samples = 1940" in log_content
-    assert "n_snps = 12226" in log_content
+    assert "n_samples = 100" in log_content
+    assert "n_snps = 500" in log_content
     assert "##" in log_content
 
 

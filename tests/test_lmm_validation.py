@@ -26,33 +26,10 @@ from jamma.validation import (
     load_gemma_assoc,
 )
 
-# Test data paths
-EXAMPLE_DATA = Path("legacy/example/mouse_hs1940")
-PHENOTYPE_FILE = Path("legacy/example/mouse_hs1940.pheno.txt")
-REFERENCE_KINSHIP = Path("tests/fixtures/kinship/mouse_hs1940.cXX.txt")
-REFERENCE_ASSOC = Path("tests/fixtures/lmm/mouse_hs1940.assoc.txt")
-
-
-def load_phenotypes(path: Path, pheno_col: int = 0) -> np.ndarray:
-    """Load phenotypes from GEMMA phenotype file.
-
-    Args:
-        path: Path to phenotype file (tab-separated, one row per sample)
-        pheno_col: Column index for phenotype (0-indexed)
-
-    Returns:
-        Phenotype array with -9.0 for missing values
-    """
-    phenotypes = []
-    with open(path) as f:
-        for line in f:
-            fields = line.strip().split("\t")
-            value = fields[pheno_col] if pheno_col < len(fields) else "NA"
-            if value == "NA" or value == "":
-                phenotypes.append(-9.0)
-            else:
-                phenotypes.append(float(value))
-    return np.array(phenotypes)
+# Test data paths - use gemma_synthetic which has matching PLINK + reference outputs
+EXAMPLE_DATA = Path("tests/fixtures/gemma_synthetic/test")
+REFERENCE_KINSHIP = Path("tests/fixtures/gemma_synthetic/gemma_kinship.cXX.txt")
+REFERENCE_ASSOC = Path("tests/fixtures/gemma_synthetic/gemma_assoc.assoc.txt")
 
 
 @pytest.fixture(autouse=True)
@@ -63,14 +40,25 @@ def setup_jax():
 
 @pytest.fixture
 def mouse_data():
-    """Load mouse_hs1940 PLINK data."""
+    """Load gemma_synthetic PLINK data."""
     return load_plink_binary(EXAMPLE_DATA)
 
 
 @pytest.fixture
 def mouse_phenotypes():
-    """Load mouse_hs1940 phenotypes."""
-    return load_phenotypes(PHENOTYPE_FILE, pheno_col=0)
+    """Load phenotypes from PLINK .fam file (column 6)."""
+    fam_path = EXAMPLE_DATA.with_suffix(".fam")
+    phenotypes = []
+    with open(fam_path) as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) >= 6:
+                val = parts[5]
+                if val == "-9" or val == "NA":
+                    phenotypes.append(np.nan)
+                else:
+                    phenotypes.append(float(val))
+    return np.array(phenotypes)
 
 
 @pytest.fixture

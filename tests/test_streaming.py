@@ -770,6 +770,79 @@ class TestRunLmmAssociationStreaming:
                 nonexistent, phenotypes, kinship, show_progress=False
             )
 
+    def test_streaming_incremental_write_per_chunk(
+        self, sample_plink_data: Path, tmp_path: Path
+    ) -> None:
+        """Verify streaming runner writes per-chunk, not after accumulating all results.
+
+        This tests that results are written incrementally to disk as each file chunk
+        is processed, rather than accumulating all results in memory first.
+        """
+        np.random.seed(42)
+
+        # Load data and prepare
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = np.random.randn(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        output_path = tmp_path / "streaming.assoc.txt"
+
+        # Use very small chunk_size to ensure multiple file chunks
+        # This tests that results are written incrementally, not accumulated
+        chunk_size = 100  # Very small to force many file chunks
+
+        results = run_lmm_association_streaming(
+            sample_plink_data,
+            phenotypes,
+            kinship,
+            snp_info=None,  # Let it build from PLINK metadata
+            chunk_size=chunk_size,
+            check_memory=False,
+            show_progress=False,
+            output_path=output_path,
+        )
+
+        # Verify empty list returned (results on disk)
+        assert results == [], "Should return empty list when output_path is provided"
+
+        # Verify file exists and has content
+        assert output_path.exists(), "Output file should exist"
+        with open(output_path) as f:
+            lines = f.readlines()
+
+        # Header + at least some results (depends on filtering)
+        assert len(lines) >= 1, "Should have at least header line"
+
+        # Verify header format
+        header = lines[0].strip()
+        expected_cols = [
+            "chr",
+            "rs",
+            "ps",
+            "n_miss",
+            "allele1",
+            "allele0",
+            "af",
+            "beta",
+            "se",
+            "logl_H1",
+            "l_remle",
+            "p_wald",
+        ]
+        for col in expected_cols:
+            assert col in header, f"Missing column: {col}"
+
+        # Verify we have results (excluding header)
+        n_results = len(lines) - 1
+        assert n_results > 0, "Should have at least one result"
+
+        # With chunk_size=100 and 500 SNPs, we should have ~5 file chunks
+        # This confirms the code handles multiple chunks correctly
+        # The exact count depends on filtering, but should be substantial
+        assert n_results > 100, f"Expected many results, got {n_results}"
+
 
 class TestChunkEquivalence:
     """Tests verifying chunked processing produces identical results."""

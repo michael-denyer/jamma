@@ -12,6 +12,8 @@ import numpy as np
 from loguru import logger
 from scipy import linalg
 
+from jamma.core.memory import check_memory_available, estimate_eigendecomp_memory
+
 
 def eigendecompose_kinship(
     K: np.ndarray, threshold: float = 1e-10
@@ -49,6 +51,15 @@ def eigendecompose_kinship(
     logger.info(f"## Eigendecomposing kinship matrix ({n_samples:,} x {n_samples:,})")
     logger.debug(
         f"Matrix elements: {n_elements:,}, memory: ~{n_elements * 8 / 1e9:.1f} GB"
+    )
+
+    # Pre-flight memory check - fail fast before scipy allocates
+    # This prevents silent OOM crashes on Linux where OOM killer sends SIGKILL
+    required_gb = estimate_eigendecomp_memory(n_samples)
+    check_memory_available(
+        required_gb,
+        safety_margin=0.1,
+        operation=f"eigendecomposition of {n_samples:,}x{n_samples:,} kinship matrix",
     )
 
     # Use scipy.linalg.eigh which uses LAPACK with int64 indexing

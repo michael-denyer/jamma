@@ -238,6 +238,106 @@ def estimate_streaming_memory(
     )
 
 
+class LmmMemoryBreakdown(NamedTuple):
+    """Detailed memory breakdown for LMM association testing.
+
+    All values in GB. Peak memory is max of eigendecomp phase and LMM phase.
+    """
+
+    genotypes_gb: float  # n_samples * n_snps * 4 bytes (float32 input)
+    kinship_gb: float  # n_samples^2 * 8 bytes (if computing kinship)
+    eigenvectors_gb: float  # n_samples^2 * 8 bytes
+    eigendecomp_workspace_gb: float  # DSYEVR workspace
+    chunk_gb: float  # n_samples * chunk_size * 8 bytes
+    rotation_buffer_gb: float  # UtG rotation buffer
+    total_peak_gb: float  # Max across phases
+    available_gb: float  # Current system memory
+    sufficient: bool  # Whether available >= total * 1.1
+
+
+def estimate_lmm_memory(
+    n_samples: int,
+    n_snps: int,
+    has_kinship: bool = False,
+    chunk_size: int = 10_000,
+) -> LmmMemoryBreakdown:
+    """Estimate memory requirements for LMM association testing.
+
+    Call this before running analysis to verify sufficient memory.
+
+    Args:
+        n_samples: Number of samples (individuals).
+        n_snps: Number of SNPs (variants).
+        has_kinship: If True, assume kinship is pre-computed (skip kinship computation).
+            Note: kinship_gb still reflects memory needed to hold the loaded matrix.
+        chunk_size: SNPs per chunk for streaming mode.
+
+    Returns:
+        LmmMemoryBreakdown with detailed component estimates.
+
+    Example:
+        >>> est = estimate_lmm_memory(200_000, 95_000)
+        >>> print(f"Need {est.total_peak_gb:.0f}GB, have {est.available_gb:.0f}GB")
+        >>> if not est.sufficient:
+        ...     raise MemoryError("Insufficient memory")
+    """
+    # Component sizes
+    genotypes_gb = n_samples * n_snps * 4 / 1e9  # float32 loading
+    kinship_gb = n_samples**2 * 8 / 1e9  # float64, always needed to hold matrix
+    eigenvectors_gb = n_samples**2 * 8 / 1e9  # float64
+
+    # Eigendecomp workspace: DSYEVR uses O(n) workspace
+    # Formula: LWORK=26*n doubles + LIWORK=10*n integers
+    eigendecomp_workspace_gb = (26 * n_samples * 8 + 10 * n_samples * 4) / 1e9
+
+    # Chunk memory for streaming LMM
+    chunk_gb = n_samples * chunk_size * 8 / 1e9  # float64
+    rotation_buffer_gb = n_samples * chunk_size * 8 / 1e9  # UtG buffer
+
+    # Peak memory calculation by workflow phase
+    if has_kinship:
+        # Has pre-computed kinship: load kinship from file instead of computing
+        # Phase 1 (load kinship): kinship + genotypes (loading for LMM)
+        peak_phase1 = kinship_gb + genotypes_gb
+
+        # Phase 2 (eigendecomp): kinship (input) + eigenvectors (output) + workspace
+        peak_eigendecomp = kinship_gb + eigenvectors_gb + eigendecomp_workspace_gb
+
+        # Phase 3 (LMM): eigenvectors + chunk + rotation buffer
+        peak_lmm = eigenvectors_gb + chunk_gb + rotation_buffer_gb
+
+        total_peak_gb = max(peak_phase1, peak_eigendecomp, peak_lmm)
+    else:
+        # Computing kinship from genotypes
+        # Phase 1 (kinship): genotypes + kinship (building kinship from genotypes)
+        peak_kinship = genotypes_gb + kinship_gb
+
+        # Phase 2 (eigendecomp): kinship (input) + eigenvectors (output) + workspace
+        peak_eigendecomp = kinship_gb + eigenvectors_gb + eigendecomp_workspace_gb
+
+        # Phase 3 (LMM): eigenvectors + chunk + rotation buffer
+        # (kinship freed, genotypes can be reloaded in chunks)
+        peak_lmm = eigenvectors_gb + chunk_gb + rotation_buffer_gb
+
+        total_peak_gb = max(peak_kinship, peak_eigendecomp, peak_lmm)
+
+    # Check available memory
+    available_gb = psutil.virtual_memory().available / 1e9
+    sufficient = total_peak_gb * 1.1 < available_gb  # 10% safety margin
+
+    return LmmMemoryBreakdown(
+        genotypes_gb=genotypes_gb,
+        kinship_gb=kinship_gb,
+        eigenvectors_gb=eigenvectors_gb,
+        eigendecomp_workspace_gb=eigendecomp_workspace_gb,
+        chunk_gb=chunk_gb,
+        rotation_buffer_gb=rotation_buffer_gb,
+        total_peak_gb=total_peak_gb,
+        available_gb=available_gb,
+        sufficient=sufficient,
+    )
+
+
 def check_memory_available(
     required_gb: float,
     safety_margin: float = 0.1,

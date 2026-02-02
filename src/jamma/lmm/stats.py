@@ -40,7 +40,10 @@ def _safe_sqrt(d: float) -> float:
 class AssocResult:
     """Association test result for a single SNP.
 
-    Matches GEMMA's output format for -lmm 1 (Wald test).
+    Matches GEMMA's output format. Fields present depend on test type:
+    - Wald (-lmm 1): logl_H1, l_remle, p_wald
+    - Score (-lmm 3): p_score only (no per-SNP logl_H1/l_remle)
+    - All (-lmm 4): All fields
     """
 
     chr: str
@@ -52,9 +55,10 @@ class AssocResult:
     af: float  # allele frequency
     beta: float
     se: float
-    logl_H1: float
-    l_remle: float  # lambda REMLE
-    p_wald: float
+    logl_H1: float | None = None  # Not present for Score-only
+    l_remle: float | None = None  # Not present for Score-only
+    p_wald: float | None = None  # Only for Wald/-lmm 1
+    p_score: float | None = None  # Only for Score/-lmm 3
 
 
 def f_sf(x: float, df1: float, df2: float) -> float:

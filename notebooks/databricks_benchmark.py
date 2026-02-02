@@ -580,7 +580,7 @@ def benchmark_lmm_jax(
 
     n_samples, actual_snps = genotypes.shape
 
-    # Warmup (use subset of snp_info too)
+    # Warmup (use subset of snp_info too, disable progress output)
     warmup_snps = min(100, actual_snps)
     profiler.start("lmm_jax", "warmup")
     _ = run_lmm_association_jax(
@@ -588,10 +588,11 @@ def benchmark_lmm_jax(
         phenotypes=phenotype,
         kinship=kinship,
         snp_info=snp_info[:warmup_snps],
+        show_progress=False,
     )
     profiler.end("lmm_jax", "warmup")
 
-    # Run
+    # Run with progress output enabled
     profiler.start("lmm_jax", "association", n_samples=n_samples, n_snps=actual_snps)
     gc.collect()
 
@@ -600,6 +601,7 @@ def benchmark_lmm_jax(
         phenotypes=phenotype,
         kinship=kinship,
         snp_info=snp_info,
+        show_progress=True,
     )
 
     # Results is a list[AssocResult], no need for block_until_ready
@@ -973,7 +975,7 @@ def validate_vs_gemma(
         phenotypes=phenotype,
         kinship=jamma_kinship,
         snp_info=snp_info,
-        show_progress=False,
+        show_progress=True,
     )
 
     # Compare kinship

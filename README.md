@@ -123,7 +123,7 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs):
 
 ## Supported Features
 
-### v1.1 (Current)
+### Current
 
 - [x] Kinship matrix computation (`-gk 1`)
 - [x] Univariate LMM Wald test (`-lmm 1`)
@@ -152,8 +152,8 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs):
 ## Requirements
 
 - Python 3.11+
-- JAX 0.4.30+
-- NumPy 1.26+
+- JAX 0.8.0+
+- NumPy 2.0+ (< 2.4)
 
 ## License
 

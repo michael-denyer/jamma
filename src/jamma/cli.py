@@ -14,7 +14,8 @@ import typer
 
 import jamma
 from jamma.core import OutputConfig
-from jamma.io import load_plink_binary, read_covariate_file
+from jamma.core.memory import estimate_lmm_memory
+from jamma.io import get_plink_metadata, load_plink_binary, read_covariate_file
 from jamma.kinship import (
     compute_centered_kinship,
     read_kinship_matrix,
@@ -198,6 +199,20 @@ def lmm_command(
         float,
         typer.Option("-miss", help="Missing rate threshold (default: 0.05)"),
     ] = 0.05,
+    check_memory: Annotated[
+        bool,
+        typer.Option(
+            "--check-memory/--no-check-memory",
+            help="Enable/disable pre-flight memory check (default: enabled)",
+        ),
+    ] = True,
+    mem_budget: Annotated[
+        float | None,
+        typer.Option(
+            "--mem-budget",
+            help="Hard memory budget in GB. Fail if estimate exceeds this.",
+        ),
+    ] = None,
 ) -> None:
     """Perform linear mixed model association testing.
 
@@ -249,6 +264,47 @@ def lmm_command(
     if covariate_file is not None and not covariate_file.exists():
         typer.echo(f"Error: Covariate file not found: {covariate_file}", err=True)
         raise typer.Exit(code=1)
+
+    # Pre-flight memory check (before any large allocations)
+    if check_memory:
+        typer.echo("Checking memory requirements...")
+        meta = get_plink_metadata(bfile)
+        n_samples_meta = meta["n_samples"]
+        n_snps_meta = meta["n_snps"]
+
+        # has_kinship=True because -k flag requires pre-computed kinship
+        est = estimate_lmm_memory(
+            n_samples=n_samples_meta,
+            n_snps=n_snps_meta,
+            has_kinship=True,  # CLI requires -k flag
+        )
+
+        typer.echo(
+            f"Memory estimate: {est.total_peak_gb:.1f}GB required, "
+            f"{est.available_gb:.1f}GB available"
+        )
+
+        # Check hard budget if specified
+        if mem_budget is not None and est.total_peak_gb > mem_budget:
+            typer.echo(
+                f"Error: Estimated memory ({est.total_peak_gb:.1f}GB) exceeds "
+                f"budget ({mem_budget}GB). Use --no-check-memory to override.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        # Check available memory
+        if not est.sufficient:
+            typer.echo(
+                f"Error: Insufficient memory. "
+                f"Need {est.total_peak_gb:.1f}GB (with 10% margin), "
+                f"have {est.available_gb:.1f}GB. "
+                f"Use --no-check-memory to override.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        typer.echo("Memory check passed.")
 
     # Ensure output directory exists
     _global_config.ensure_outdir()
@@ -417,6 +473,8 @@ def lmm_command(
         "output_file": str(assoc_path),
         "maf_threshold": maf,
         "miss_threshold": miss,
+        "check_memory": check_memory,
+        "mem_budget": mem_budget,
     }
     timing = {
         "total": total_time,

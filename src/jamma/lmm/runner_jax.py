@@ -100,6 +100,7 @@ from jamma.lmm.likelihood_jax import (
     batch_compute_uab,
     golden_section_optimize_lambda,
 )
+from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.stats import AssocResult
 
 
@@ -661,6 +662,7 @@ def run_lmm_association_streaming(
     use_gpu: bool = False,
     check_memory: bool = True,
     show_progress: bool = True,
+    output_path: Path | None = None,
 ) -> list[AssocResult]:
     """Run LMM association tests by streaming genotypes from disk.
 
@@ -702,9 +704,14 @@ def run_lmm_association_streaming(
         use_gpu: Whether to use GPU acceleration.
         check_memory: If True (default), check available memory before workflow.
         show_progress: If True (default), show progress bars and GEMMA-style logging.
+        output_path: Optional path for incremental result writing. If provided,
+            results are written to disk as computed instead of being accumulated
+            in memory. Returns empty list when output_path is set (results are
+            on disk). If None (default), returns list of AssocResult as before.
 
     Returns:
-        List of AssocResult for each SNP that passes filtering.
+        List of AssocResult for each SNP that passes filtering. Empty list if
+        output_path is provided (results are written to disk instead).
 
     Raises:
         NotImplementedError: If covariates are provided.
@@ -1009,17 +1016,46 @@ def run_lmm_association_streaming(
     ses_np = np.asarray(jnp.concatenate(all_ses))
     p_walds_np = np.asarray(jnp.concatenate(all_pwalds))
 
-    # Build results
-    results = _build_results(
-        snp_indices,
-        snp_stats,
-        snp_info,
-        best_lambdas_np,
-        best_logls_np,
-        betas_np,
-        ses_np,
-        p_walds_np,
-    )
+    # Build results or write incrementally
+    if output_path is not None:
+        # Incremental write mode - write results as we build them
+        with IncrementalAssocWriter(output_path) as writer:
+            for j, snp_idx in enumerate(snp_indices):
+                maf, n_miss = snp_stats[j]
+                info = snp_info[snp_idx]
+
+                result = AssocResult(
+                    chr=info["chr"],
+                    rs=info["rs"],
+                    ps=info.get("pos", info.get("ps", 0)),
+                    n_miss=n_miss,
+                    allele1=info.get("a1", info.get("allele1", "")),
+                    allele0=info.get("a0", info.get("allele0", "")),
+                    af=maf,
+                    beta=float(betas_np[j]),
+                    se=float(ses_np[j]),
+                    logl_H1=float(best_logls_np[j]),
+                    l_remle=float(best_lambdas_np[j]),
+                    p_wald=float(p_walds_np[j]),
+                )
+                writer.write(result)
+
+        if show_progress:
+            logger.info(f"Wrote {writer.count:,} results to {output_path}")
+
+        results = []  # Return empty list - results are on disk
+    else:
+        # In-memory mode (original behavior)
+        results = _build_results(
+            snp_indices,
+            snp_stats,
+            snp_info,
+            best_lambdas_np,
+            best_logls_np,
+            betas_np,
+            ses_np,
+            p_walds_np,
+        )
 
     # GEMMA-style completion logging
     if show_progress:

@@ -880,19 +880,51 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
 # COMMAND ----------
 
 # Execute benchmarks
+# To skip scales that already completed, set SKIP_SCALES (e.g., ["small", "medium"])
+# To resume a previous run, set RESUME_RUN_ID to the previous run_id
 BENCHMARK_SCALES = ["small", "medium", "large", "xlarge", "target"]
+SKIP_SCALES: list[
+    str
+] = []  # Add scales to skip here, e.g., ["small", "medium", "large"]
+RESUME_RUN_ID: str | None = None  # Set to previous run_id to append results
 
 all_results = []
 all_events = []
 
-timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-run_id = f"benchmark_{timestamp}"
+# Use existing run_id if resuming, otherwise create new
+if RESUME_RUN_ID:
+    run_id = RESUME_RUN_ID
+    # Try to load existing results
+    try:
+        existing_results = pd.read_parquet(
+            f"/dbfs/tmp/jamma_benchmark_{run_id}_results.parquet"
+        )
+        existing_events = pd.read_parquet(
+            f"/dbfs/tmp/jamma_benchmark_{run_id}_events.parquet"
+        )
+        all_results = existing_results.to_dict("records")
+        all_events = [existing_events]
+        completed_scales = set(existing_results["config"].tolist())
+        SKIP_SCALES = list(completed_scales)
+        logger.info(f"Resumed run {run_id}, skipping completed: {SKIP_SCALES}")
+    except Exception as e:
+        logger.warning(f"Could not load existing results for {run_id}: {e}")
+else:
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    run_id = f"benchmark_{timestamp}"
+
+logger.info(f"Run ID: {run_id}")
+logger.info(f"Scales to run: {[s for s in BENCHMARK_SCALES if s not in SKIP_SCALES]}")
 
 # Track total benchmark suite time
 benchmark_start_time = time.time()
 logger.info(f"Starting benchmark suite at {datetime.now(UTC).isoformat()}")
 
 for scale in BENCHMARK_SCALES:
+    if scale in SKIP_SCALES:
+        logger.info(f"Skipping {scale} (already completed or in SKIP_SCALES)")
+        continue
+
     scale_start = time.time()
     results, events_df = run_benchmark(scale, run_id)
     scale_elapsed = time.time() - scale_start
@@ -902,6 +934,29 @@ for scale in BENCHMARK_SCALES:
     all_results.append(results)
     all_events.append(events_df)
     logger.info(f"Completed {scale} in {scale_elapsed:.1f}s: {results}")
+
+    # === INCREMENTAL SAVE after each scale ===
+    # Save results immediately so we don't lose data if later scales crash
+    results_df = pd.DataFrame(all_results)
+    events_df_combined = pd.concat(all_events, ignore_index=True)
+
+    # Save to Delta tables (overwrites each time with cumulative results)
+    try:
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {OUTPUT_SCHEMA}")  # noqa: F821
+        results_df.to_parquet(f"/dbfs/tmp/jamma_benchmark_{run_id}_results.parquet")
+        events_df_combined.to_parquet(
+            f"/dbfs/tmp/jamma_benchmark_{run_id}_events.parquet"
+        )
+        logger.info(
+            f"Saved checkpoint after {scale}: "
+            f"/dbfs/tmp/jamma_benchmark_{run_id}_*.parquet"
+        )
+    except Exception as e:
+        logger.warning(f"Could not save checkpoint: {e}")
+
+    # Also display incremental results
+    print(f"\n=== Results after {scale} ===")
+    display(results_df)  # noqa: F821
 
 results_df = pd.DataFrame(all_results)
 events_df = pd.concat(all_events, ignore_index=True)

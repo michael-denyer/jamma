@@ -4,9 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jamma"
-version = "0.1.0"
+version = "0.2.0"
 description = "JAMMA: JAX-Accelerated Mixed Model Association"
-readme = "legacy/README.md"
+readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "JAMMA Contributors" }]

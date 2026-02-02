@@ -318,7 +318,6 @@ import subprocess
 import tempfile
 
 from jamma.kinship import compute_centered_kinship  # noqa: E402
-from jamma.lmm import run_lmm_association  # noqa: E402
 from jamma.lmm.runner_jax import run_lmm_association_jax  # noqa: E402
 
 
@@ -566,38 +565,6 @@ def benchmark_kinship(genotypes: np.ndarray, profiler: BenchmarkProfiler):
     return K, elapsed
 
 
-def benchmark_lmm_cpu(
-    genotypes: np.ndarray,
-    phenotype: np.ndarray,
-    kinship: np.ndarray,
-    snp_info: list,
-    profiler: BenchmarkProfiler,
-    n_snps: int | None = None,
-):
-    """Benchmark CPU LMM path."""
-    if n_snps:
-        genotypes = genotypes[:, :n_snps]
-        snp_info = snp_info[:n_snps]
-
-    n_samples, actual_snps = genotypes.shape
-
-    profiler.start("lmm_cpu", "association", n_samples=n_samples, n_snps=actual_snps)
-    gc.collect()
-
-    results = run_lmm_association(
-        genotypes=genotypes,
-        phenotypes=phenotype,
-        kinship=kinship,
-        snp_info=snp_info,
-    )
-
-    elapsed = profiler.end("lmm_cpu", "association")
-    throughput = actual_snps / elapsed if elapsed > 0 else 0
-    logger.info(f"CPU throughput: {throughput:.0f} SNPs/sec")
-
-    return results, elapsed
-
-
 def benchmark_lmm_jax(
     genotypes: np.ndarray,
     phenotype: np.ndarray,
@@ -692,16 +659,6 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
         K, kinship_time = benchmark_kinship(genotypes, profiler)
         results["kinship_time"] = kinship_time
 
-        # LMM CPU
-        try:
-            _, cpu_time = benchmark_lmm_cpu(
-                genotypes, phenotype, K, snp_info, profiler, n_snps=config.n_snps_lmm
-            )
-            results["lmm_cpu_time"] = cpu_time
-            results["lmm_cpu_snps_per_sec"] = config.n_snps_lmm / cpu_time
-        except Exception as e:
-            profiler.error("lmm_cpu", "association", e)
-
         # LMM JAX - store results for validation
         jax_assoc_results = None
         try:
@@ -731,15 +688,10 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
             results["gemma_beta_max_rel_diff"] = validation.get("beta_max_rel_diff")
             results["gemma_pval_max_rel_diff"] = validation.get("pval_max_rel_diff")
 
-        # Speedups
-        if results.get("lmm_cpu_time") and results.get("lmm_jax_time"):
-            results["jax_vs_cpu"] = results["lmm_cpu_time"] / results["lmm_jax_time"]
+        # Speedups (JAMMA JAX vs GEMMA only)
         if results.get("gemma_lmm_time") and results.get("lmm_jax_time"):
             gemma_t = results["gemma_lmm_time"]
             results["jax_vs_gemma"] = gemma_t / results["lmm_jax_time"]
-        if results.get("gemma_lmm_time") and results.get("lmm_cpu_time"):
-            gemma_t = results["gemma_lmm_time"]
-            results["cpu_vs_gemma"] = gemma_t / results["lmm_cpu_time"]
 
     except Exception as e:
         profiler.error("benchmark", "main", e)
@@ -793,7 +745,6 @@ for _, row in results_df.iterrows():
     print(f"\n{cfg}:")
 
     gemma_lmm = row.get("gemma_lmm_time")
-    cpu_lmm = row.get("lmm_cpu_time")
     jax_lmm = row.get("lmm_jax_time")
     validation_pass = row.get("gemma_validation_pass")
 
@@ -808,14 +759,6 @@ for _, row in results_df.iterrows():
     else:
         print("  GEMMA:      (skipped - too large or unavailable)")
 
-    if cpu_lmm:
-        print(f"  JAMMA CPU:  {cpu_lmm:7.2f}s", end="")
-        if gemma_lmm:
-            ratio = gemma_lmm / cpu_lmm
-            print(f"  ({ratio:.2f}x vs GEMMA)")
-        else:
-            print()
-
     if jax_lmm:
         print(f"  JAMMA JAX:  {jax_lmm:7.2f}s", end="")
         if gemma_lmm:
@@ -823,10 +766,6 @@ for _, row in results_df.iterrows():
             print(f"  ({ratio:.2f}x vs GEMMA)")
         else:
             print()
-
-    if cpu_lmm and jax_lmm:
-        ratio = cpu_lmm / jax_lmm
-        print(f"  JAX speedup vs CPU: {ratio:.2f}x")
 
 # COMMAND ----------
 
@@ -1029,11 +968,12 @@ def validate_vs_gemma(
     ]
 
     jamma_kinship = compute_centered_kinship(genotypes, check_memory=False)
-    jamma_results = run_lmm_association(
+    jamma_results = run_lmm_association_jax(
         genotypes=genotypes,
         phenotypes=phenotype,
         kinship=jamma_kinship,
         snp_info=snp_info,
+        show_progress=False,
     )
 
     # Compare kinship

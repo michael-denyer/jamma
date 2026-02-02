@@ -219,6 +219,7 @@ def run_lmm_association_jax(
     n_refine: int = 10,
     use_gpu: bool = False,
     check_memory: bool = True,
+    show_progress: bool = True,
 ) -> list[AssocResult]:
     """Run LMM association tests using JAX-optimized batch processing.
 
@@ -255,6 +256,7 @@ def run_lmm_association_jax(
         use_gpu: Whether to use GPU acceleration (requires JAX GPU setup)
         check_memory: If True (default), check available memory before workflow
             and raise MemoryError if insufficient.
+        show_progress: If True (default), show progress bars and GEMMA-style logging.
 
     Returns:
         List of AssocResult for each SNP that passes filtering
@@ -272,6 +274,16 @@ def run_lmm_association_jax(
 
     # Memory check before workflow
     n_samples, n_snps = genotypes.shape
+    start_time = time.perf_counter()
+
+    if show_progress:
+        logger.info("## Performing LMM Association Test (JAX)")
+        logger.info(f"number of total individuals = {n_samples:,}")
+        logger.info(f"number of total SNPs/variants = {n_snps:,}")
+        logger.debug(
+            f"MAF threshold = {maf_threshold}, missing threshold = {miss_threshold}"
+        )
+
     if check_memory:
         est = estimate_workflow_memory(n_samples, n_snps)
         if not est.sufficient:
@@ -356,11 +368,14 @@ def run_lmm_association_jax(
 
     # Process in chunks if needed
     n_chunks = (n_filtered + chunk_size - 1) // chunk_size
-    if chunk_size < n_filtered:
-        logger.info(
-            f"Processing {n_filtered:,} SNPs in {n_chunks} chunks "
-            f"({chunk_size:,} SNPs/chunk) to avoid buffer overflow"
-        )
+    if show_progress:
+        logger.info(f"number of analyzed individuals = {n_samples:,}")
+        logger.info(f"number of analyzed SNPs = {n_filtered:,}")
+        if chunk_size < n_filtered:
+            logger.info(
+                f"Processing in {n_chunks} chunks "
+                f"({chunk_size:,} SNPs/chunk) to avoid buffer overflow"
+            )
 
     all_lambdas = []
     all_logls = []
@@ -396,7 +411,18 @@ def run_lmm_association_jax(
     UtG_jax = jax.device_put(UtG_np, device)
     del UtG_np
 
-    for i, _chunk_start in enumerate(chunk_starts):
+    # Create progress bar iterator
+    if show_progress and n_chunks > 1:
+        chunk_iterator = tqdm(
+            enumerate(chunk_starts),
+            total=n_chunks,
+            desc="LMM association",
+            unit="chunk",
+        )
+    else:
+        chunk_iterator = enumerate(chunk_starts)
+
+    for i, _chunk_start in chunk_iterator:
         actual_chunk_len = actual_len
         needs_padding = needs_pad
         current_UtG = UtG_jax
@@ -408,22 +434,43 @@ def run_lmm_association_jax(
             UtG_jax = jax.device_put(next_UtG_np, device)
             del next_UtG_np
 
-        # Batch compute Uab for this chunk
-        Uab_batch = batch_compute_uab(UtW_jax, Uty_jax, current_UtG)
+        try:
+            # Batch compute Uab for this chunk
+            Uab_batch = batch_compute_uab(UtW_jax, Uty_jax, current_UtG)
 
-        # Precompute Iab (identity-weighted) once per chunk - avoids ~70x redundant
-        # calc_pab_jax calls during lambda optimization
-        Iab_batch = batch_compute_iab(Uab_batch)
+            # Precompute Iab (identity-weighted) once per chunk - avoids ~70x redundant
+            # calc_pab_jax calls during lambda optimization
+            Iab_batch = batch_compute_iab(Uab_batch)
 
-        # Grid-based lambda optimization (donate_argnums recycles Uab_batch memory)
-        best_lambdas, best_logls = _grid_optimize_lambda_batched(
-            eigenvalues, Uab_batch, Iab_batch, l_min, l_max, n_grid, n_refine
-        )
+            # Grid-based lambda optimization (donate_argnums recycles Uab_batch memory)
+            best_lambdas, best_logls = _grid_optimize_lambda_batched(
+                eigenvalues, Uab_batch, Iab_batch, l_min, l_max, n_grid, n_refine
+            )
 
-        # Batch compute Wald statistics
-        betas, ses, p_walds = batch_calc_wald_stats(
-            best_lambdas, eigenvalues, Uab_batch, n_samples
-        )
+            # Batch compute Wald statistics
+            betas, ses, p_walds = batch_calc_wald_stats(
+                best_lambdas, eigenvalues, Uab_batch, n_samples
+            )
+        except Exception as e:
+            error_msg = str(e)
+            # Check for int32 overflow error
+            if "exceeds the maximum representable value" in error_msg:
+                buffer_elements = n_samples * chunk_size * 6
+                logger.error(
+                    f"JAX int32 buffer overflow during LMM computation.\n"
+                    f"  Chunk {i+1}/{n_chunks}: {chunk_size:,} SNPs x "
+                    f"{n_samples:,} samples\n"
+                    f"  Buffer elements: {buffer_elements:,} (limit: ~2.1B)\n"
+                    f"  This should not happen with automatic chunking.\n"
+                    f"  Please report this issue with your dataset dimensions."
+                )
+            else:
+                logger.error(
+                    f"JAX computation failed on chunk {i+1}/{n_chunks}:\n"
+                    f"  {type(e).__name__}: {error_msg}\n"
+                    f"  Chunk size: {chunk_size:,} SNPs, Samples: {n_samples:,}"
+                )
+            raise
 
         # Strip padding if needed, keep as JAX arrays to avoid per-chunk host transfer
         slice_len = actual_chunk_len if needs_padding else len(best_lambdas)
@@ -439,6 +486,12 @@ def run_lmm_association_jax(
     betas_np = np.asarray(jnp.concatenate(all_betas))
     ses_np = np.asarray(jnp.concatenate(all_ses))
     p_walds_np = np.asarray(jnp.concatenate(all_pwalds))
+
+    # Log completion
+    elapsed = time.perf_counter() - start_time
+    if show_progress:
+        logger.info("## LMM Association completed")
+        logger.info(f"time elapsed = {elapsed:.2f} seconds")
 
     return _build_results(
         snp_indices,

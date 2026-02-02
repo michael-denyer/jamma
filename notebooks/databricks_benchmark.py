@@ -24,14 +24,11 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install "jax>=0.8" "jaxlib>=0.8" psutil
+# MAGIC %pip install --upgrade "numpy>=2.0,<2.4"
 
 # COMMAND ----------
 
-# Install scipy with MKL for stable eigendecomposition at scale
-# OpenBLAS has threading bugs causing SIGSEGV at 100k+ samples
-# MAGIC %pip uninstall numpy scipy -y
-# MAGIC %pip install intel-scipy
+# MAGIC %pip install "jax>=0.8" "jaxlib>=0.8" psutil threadpoolctl
 
 # COMMAND ----------
 

@@ -354,7 +354,7 @@ def compare_assoc_results(
     - p_wald: pvalue_rtol (CDF computations may differ)
     - logl_H1: logl_rtol (log-likelihood values)
     - l_remle: lambda_rtol (variance ratio estimates)
-    - af: af_rtol (allele frequencies)
+    - af: af_rtol (allele frequency of counted allele, BIM A1)
 
     Args:
         actual: Computed association results from JAMMA.
@@ -441,12 +441,9 @@ def compare_assoc_results(
     expected_logl = np.array([r.logl_H1 for r in expected])
     actual_lambda = np.array([r.l_remle for r in actual])
     expected_lambda = np.array([r.l_remle for r in expected])
-    # For AF comparison, normalize both to MAF (<=0.5) since GEMMA reports AF
-    # and JAMMA reports MAF. The values are complements (af vs 1-af).
+    # AF comparison: Both JAMMA and GEMMA now report raw AF of counted allele (BIM A1)
     actual_af = np.array([r.af for r in actual])
     expected_af = np.array([r.af for r in expected])
-    # Normalize expected to MAF for comparison
-    expected_maf = np.minimum(expected_af, 1.0 - expected_af)
 
     # Compare each column with appropriate tolerance
     beta_result = compare_arrays(
@@ -507,7 +504,7 @@ def compare_assoc_results(
             actual_lambda, expected_lambda, config.lambda_rtol, config.atol, "l_remle"
         )
     af_result = compare_arrays(
-        actual_af, expected_maf, config.af_rtol, config.atol, "af"
+        actual_af, expected_af, config.af_rtol, config.atol, "af"
     )
 
     # Overall pass if all columns pass and no mismatched SNPs

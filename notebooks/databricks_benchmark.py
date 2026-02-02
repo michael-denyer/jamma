@@ -707,7 +707,9 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
             for j in range(config.n_snps)
         ]
 
-        # Kinship and eigendecomposition (computed once, reused by LMM)
+        # JAMMA: Kinship + eigendecomposition + LMM (wall clock time)
+        jamma_start = time.time()
+
         K, eigenvalues, eigenvectors, kinship_time, eigen_time = benchmark_kinship(
             genotypes, profiler
         )
@@ -733,24 +735,26 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
         except Exception as e:
             profiler.error("lmm_jax", "association", e)
 
-        # JAMMA total = kinship + eigendecomp + lmm (end-to-end)
-        jamma_total = kinship_time + eigen_time + (results.get("lmm_jax_time") or 0)
+        # JAMMA total = wall clock from start to end (not sum of components)
+        jamma_total = time.time() - jamma_start
         results["jamma_total_time"] = jamma_total
-        logger.info(f"JAMMA total time: {jamma_total:.1f}s")
+        logger.info(f"JAMMA total time: {jamma_total:.1f}s (wall clock)")
 
-        # GEMMA benchmark (for smaller configs only)
+        # GEMMA benchmark (for smaller configs only) - also wall clock
+        gemma_start = time.time()
         gemma_result = benchmark_gemma(
             genotypes, phenotype, profiler, config.n_snps_lmm
         )
+        gemma_total = time.time() - gemma_start
+
         if gemma_result.kinship_time is not None:
             results["gemma_kinship_time"] = gemma_result.kinship_time
         if gemma_result.lmm_time is not None:
             results["gemma_lmm_time"] = gemma_result.lmm_time
             results["gemma_snps_per_sec"] = config.n_snps_lmm / gemma_result.lmm_time
-            # GEMMA total = kinship + lmm (end-to-end)
-            gemma_total = gemma_result.kinship_time + gemma_result.lmm_time
+            # GEMMA total = wall clock from start to end
             results["gemma_total_time"] = gemma_total
-            logger.info(f"GEMMA total time: {gemma_total:.1f}s")
+            logger.info(f"GEMMA total time: {gemma_total:.1f}s (wall clock)")
 
         # Validate JAMMA results against GEMMA
         if gemma_result.assoc_df is not None and jax_assoc_results is not None:

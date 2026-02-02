@@ -1,11 +1,14 @@
 """Memory estimation and checking for large-scale GWAS operations.
 
 Provides pre-allocation memory checks to prevent OOM errors at 200k sample scale.
+Also provides cleanup utilities for freeing memory between benchmark runs.
 """
 
+import gc
 from typing import NamedTuple
 
 import psutil
+from loguru import logger
 
 
 def estimate_eigendecomp_memory(n_samples: int) -> float:
@@ -366,5 +369,227 @@ def check_memory_available(
             f"{required_with_margin:.1f}GB), but only {available_gb:.1f}GB available. "
             f"Consider using a machine with more RAM or reducing dataset size."
         )
+
+    return True
+
+
+class MemorySnapshot(NamedTuple):
+    """Snapshot of current memory state for debugging.
+
+    All values in GB.
+    """
+
+    rss_gb: float  # Resident Set Size (actual RAM used by process)
+    vms_gb: float  # Virtual Memory Size (total address space)
+    available_gb: float  # Available system memory
+    total_gb: float  # Total system memory
+    percent_used: float  # Percentage of system memory used by process
+
+
+def get_memory_snapshot() -> MemorySnapshot:
+    """Get current memory usage snapshot.
+
+    Returns:
+        MemorySnapshot with RSS, VMS, available, and total memory.
+
+    Example:
+        >>> snap = get_memory_snapshot()
+        >>> print(f"Using {snap.rss_gb:.1f}GB of {snap.total_gb:.1f}GB")
+    """
+    process = psutil.Process()
+    mem_info = process.memory_info()
+    vm = psutil.virtual_memory()
+
+    return MemorySnapshot(
+        rss_gb=mem_info.rss / 1e9,
+        vms_gb=mem_info.vms / 1e9,
+        available_gb=vm.available / 1e9,
+        total_gb=vm.total / 1e9,
+        percent_used=(mem_info.rss / vm.total) * 100,
+    )
+
+
+def log_memory_snapshot(label: str = "", level: str = "INFO") -> MemorySnapshot:
+    """Log current memory state with optional label.
+
+    Useful for debugging memory issues in Databricks notebooks or
+    tracking memory across benchmark runs.
+
+    Args:
+        label: Optional label for this snapshot (e.g., "after_eigendecomp").
+        level: Log level ("DEBUG", "INFO", "WARNING").
+
+    Returns:
+        MemorySnapshot for chaining/assertions.
+
+    Example:
+        >>> log_memory_snapshot("before_100k_run")
+        INFO | Memory [before_100k_run]: RSS=89.5GB, Available=160.2GB (35.0% used)
+    """
+    snap = get_memory_snapshot()
+    label_str = f" [{label}]" if label else ""
+    msg = (
+        f"Memory{label_str}: RSS={snap.rss_gb:.1f}GB, "
+        f"Available={snap.available_gb:.1f}GB/{snap.total_gb:.1f}GB "
+        f"({snap.percent_used:.1f}% used)"
+    )
+
+    if level == "DEBUG":
+        logger.debug(msg)
+    elif level == "WARNING":
+        logger.warning(msg)
+    else:
+        logger.info(msg)
+
+    return snap
+
+
+def cleanup_memory(clear_jax: bool = True, verbose: bool = True) -> MemorySnapshot:
+    """Free memory after a computation run.
+
+    Call this between benchmark runs or after large computations to
+    prevent memory accumulation that can cause OOM/SIGSEGV errors.
+
+    This function:
+    1. Runs Python garbage collection (multiple passes)
+    2. Clears JAX compilation caches (optional, enabled by default)
+    3. Logs memory before/after cleanup if verbose
+
+    Args:
+        clear_jax: If True (default), clear JAX caches. Set False if JAX
+            not imported or if you want to preserve JIT-compiled functions.
+        verbose: If True (default), log memory before and after cleanup.
+
+    Returns:
+        MemorySnapshot after cleanup.
+
+    Example:
+        >>> # After a benchmark run
+        >>> del kinship, eigenvectors, results
+        >>> cleanup_memory()
+        INFO | Memory [before_cleanup]: RSS=89.5GB, Available=160.2GB/256.0GB
+        INFO | Memory [after_cleanup]: RSS=12.3GB, Available=237.4GB/256.0GB
+        INFO | Freed 77.2GB (RSS reduced from 89.5GB to 12.3GB)
+
+    Note:
+        For best results, explicitly `del` large arrays before calling
+        this function. Python's reference counting means arrays won't
+        be freed if references still exist.
+    """
+    if verbose:
+        before = log_memory_snapshot("before_cleanup")
+    else:
+        before = get_memory_snapshot()
+
+    # Multiple GC passes to handle reference cycles
+    gc.collect()
+    gc.collect()
+    gc.collect()
+
+    # Clear JAX caches if requested
+    if clear_jax:
+        try:
+            import jax
+
+            jax.clear_caches()
+            # Note: jax.clear_backends() would also clear device memory
+            # but reinitializes backends on next use - more aggressive
+        except ImportError:
+            pass  # JAX not installed, skip
+
+    # Final GC pass after clearing caches
+    gc.collect()
+
+    if verbose:
+        after = log_memory_snapshot("after_cleanup")
+        freed_gb = before.rss_gb - after.rss_gb
+        if freed_gb > 0.1:  # Only log if meaningful change
+            logger.info(
+                f"Freed {freed_gb:.1f}GB (RSS reduced from "
+                f"{before.rss_gb:.1f}GB to {after.rss_gb:.1f}GB)"
+            )
+        elif freed_gb < -0.1:
+            logger.warning(
+                f"Memory increased by {-freed_gb:.1f}GB during cleanup "
+                f"(RSS: {before.rss_gb:.1f}GB → {after.rss_gb:.1f}GB)"
+            )
+    else:
+        after = get_memory_snapshot()
+
+    return after
+
+
+def check_memory_before_run(
+    n_samples: int,
+    n_snps: int,
+    operation: str = "GWAS",
+    has_kinship: bool = False,
+) -> bool:
+    """Pre-flight memory check with helpful diagnostics.
+
+    Call this before starting a large computation to verify sufficient
+    memory is available. Provides actionable suggestions if memory is
+    insufficient.
+
+    Args:
+        n_samples: Number of samples in the dataset.
+        n_snps: Number of SNPs in the dataset.
+        operation: Description for error messages.
+        has_kinship: If True, assume kinship is pre-computed.
+
+    Returns:
+        True if sufficient memory available.
+
+    Raises:
+        MemoryError: If insufficient memory with suggestions.
+
+    Example:
+        >>> check_memory_before_run(100_000, 100_000)
+        INFO | Memory check for GWAS (100,000 samples × 100,000 SNPs):
+        INFO |   Estimated peak: 160.0GB (eigendecomp phase)
+        INFO |   Available: 237.4GB
+        INFO |   Status: OK (47.6GB headroom)
+    """
+    est = estimate_lmm_memory(n_samples, n_snps, has_kinship=has_kinship)
+    snap = get_memory_snapshot()
+
+    logger.info(
+        f"Memory check for {operation} ({n_samples:,} samples × {n_snps:,} SNPs):"
+    )
+    logger.info(f"  Estimated peak: {est.total_peak_gb:.1f}GB (eigendecomp phase)")
+    logger.info(f"  Current RSS: {snap.rss_gb:.1f}GB")
+    logger.info(f"  Available: {snap.available_gb:.1f}GB")
+
+    # Check if estimated peak exceeds available
+    headroom = snap.available_gb - est.total_peak_gb
+
+    if headroom < est.total_peak_gb * 0.1:  # Less than 10% headroom
+        logger.warning(
+            f"  Status: RISKY ({headroom:.1f}GB headroom, recommend cleanup first)"
+        )
+        logger.warning("  Suggestion: Run cleanup_memory() before this computation")
+
+        if snap.rss_gb > 10:  # Significant existing memory usage
+            raise MemoryError(
+                f"Insufficient memory for {operation}.\n"
+                f"  Current RSS: {snap.rss_gb:.1f}GB (from previous runs?)\n"
+                f"  Estimated peak: {est.total_peak_gb:.1f}GB\n"
+                f"  Available: {snap.available_gb:.1f}GB\n\n"
+                f"Suggestions:\n"
+                f"  1. Run cleanup_memory() to free memory from previous runs\n"
+                f"  2. Delete large variables: del kinship, eigenvectors, results\n"
+                f"  3. Restart the Python kernel for a clean state"
+            )
+        else:
+            raise MemoryError(
+                f"Insufficient memory for {operation}.\n"
+                f"  Estimated peak: {est.total_peak_gb:.1f}GB\n"
+                f"  Available: {snap.available_gb:.1f}GB\n\n"
+                f"Suggestions:\n"
+                f"  1. Use a larger machine (need ~{est.total_peak_gb * 1.2:.0f}GB+)\n"
+                f"  2. Reduce dataset size"
+            )
+    else:
+        logger.info(f"  Status: OK ({headroom:.1f}GB headroom)")
 
     return True

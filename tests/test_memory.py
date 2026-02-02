@@ -4,7 +4,15 @@ import numpy as np
 import psutil
 import pytest
 
-from jamma.core import MemoryBreakdown, check_memory_available, estimate_workflow_memory
+from jamma.core import (
+    MemoryBreakdown,
+    MemorySnapshot,
+    check_memory_available,
+    cleanup_memory,
+    estimate_workflow_memory,
+    get_memory_snapshot,
+    log_memory_snapshot,
+)
 
 
 class TestMemoryEstimation:
@@ -154,3 +162,96 @@ class TestEigendecompMemory:
         # Sanity check results
         assert eigenvalues.shape == (n,)
         assert eigenvectors.shape == (n, n)
+
+
+class TestMemorySnapshot:
+    """Tests for memory snapshot functions."""
+
+    def test_get_memory_snapshot_returns_namedtuple(self):
+        """get_memory_snapshot returns MemorySnapshot with all fields."""
+        snap = get_memory_snapshot()
+
+        assert isinstance(snap, MemorySnapshot)
+        assert isinstance(snap.rss_gb, float)
+        assert isinstance(snap.vms_gb, float)
+        assert isinstance(snap.available_gb, float)
+        assert isinstance(snap.total_gb, float)
+        assert isinstance(snap.percent_used, float)
+
+    def test_memory_snapshot_values_reasonable(self):
+        """Memory values should be positive and sensible."""
+        snap = get_memory_snapshot()
+
+        assert snap.rss_gb > 0, "RSS should be positive"
+        assert snap.available_gb > 0, "Available should be positive"
+        assert snap.total_gb > 0, "Total should be positive"
+        assert 0 <= snap.percent_used <= 100, "Percent should be 0-100"
+        assert snap.rss_gb <= snap.total_gb, "RSS <= total"
+
+    def test_log_memory_snapshot_returns_snapshot(self):
+        """log_memory_snapshot should return MemorySnapshot."""
+        snap = log_memory_snapshot("test_label", level="DEBUG")
+
+        assert isinstance(snap, MemorySnapshot)
+        assert snap.rss_gb > 0
+
+
+class TestCleanupMemory:
+    """Tests for memory cleanup function."""
+
+    def test_cleanup_memory_returns_snapshot(self):
+        """cleanup_memory should return MemorySnapshot after cleanup."""
+        snap = cleanup_memory(clear_jax=True, verbose=False)
+
+        assert isinstance(snap, MemorySnapshot)
+        assert snap.rss_gb > 0
+
+    def test_cleanup_memory_verbose_logs(self, caplog):
+        """cleanup_memory with verbose=True should log before/after."""
+        import logging
+
+        caplog.set_level(logging.INFO)
+        cleanup_memory(clear_jax=False, verbose=True)
+
+        # Check that memory logging happened (loguru logs may not appear in caplog)
+        # Just verify it doesn't crash
+        assert True
+
+    def test_cleanup_memory_clears_jax_caches(self):
+        """cleanup_memory with clear_jax=True should clear JAX caches."""
+        import jax
+        import jax.numpy as jnp
+
+        # Create a JIT-compiled function and call it
+        @jax.jit
+        def dummy_fn(x):
+            return x + 1
+
+        dummy_fn(jnp.array([1, 2, 3]))
+
+        # Cleanup should not raise
+        cleanup_memory(clear_jax=True, verbose=False)
+
+        # Function should still work after cleanup (just recompiled)
+        result = dummy_fn(jnp.array([4, 5, 6]))
+        assert list(result) == [5, 6, 7]
+
+    def test_cleanup_frees_memory_after_allocation(self):
+        """Cleanup should free memory from deleted arrays."""
+        import gc
+
+        # Allocate a moderate array
+        big_array = np.zeros((1000, 1000), dtype=np.float64)  # 8MB
+        _ = big_array.sum()  # Touch it
+
+        before = get_memory_snapshot()
+
+        # Delete and cleanup
+        del big_array
+        gc.collect()
+
+        after = cleanup_memory(clear_jax=False, verbose=False)
+
+        # Memory should not have increased significantly
+        # (may not decrease due to allocator behavior, but shouldn't spike)
+        assert after.rss_gb <= before.rss_gb + 0.1

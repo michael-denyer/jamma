@@ -517,6 +517,11 @@ def validate_jamma_vs_gemma(
 ) -> dict[str, float]:
     """Validate JAMMA results against GEMMA reference.
 
+    Compares beta, SE, and p-values against GEMMA with tolerances from CLAUDE.md:
+    - beta: 1e-6 relative tolerance
+    - SE: 1e-6 relative tolerance (same as beta)
+    - p-values: 1e-8 relative tolerance
+
     Args:
         jamma_results: List of AssocResult from JAMMA
         gemma_df: DataFrame from GEMMA assoc.txt
@@ -536,34 +541,70 @@ def validate_jamma_vs_gemma(
         logger.warning("No matching SNPs between JAMMA and GEMMA results")
         return {"error": "no_matches"}
 
-    # Compute relative differences
+    # Tolerances from CLAUDE.md
+    beta_tol = 1e-6
+    se_tol = 1e-6  # Same as beta
+    pval_tol = 1e-8
+
+    # Beta comparison
     beta_diff = np.abs(merged["beta_gemma"] - merged["beta_jamma"])
     beta_rel = beta_diff / (np.abs(merged["beta_gemma"]) + 1e-10)
 
-    pval_diff = np.abs(merged["p_wald_gemma"] - merged["p_wald_jamma"])
-    pval_rel = pval_diff / (merged["p_wald_gemma"] + 1e-10)
+    # SE comparison
+    se_diff = np.abs(merged["se_gemma"] - merged["se_jamma"])
+    se_rel = se_diff / (np.abs(merged["se_gemma"]) + 1e-10)
 
-    # Tolerances from CLAUDE.md
-    beta_tol = 1e-6
-    pval_tol = 1e-8
+    # P-value comparison (handle both p_wald and p_score)
+    # GEMMA uses p_wald for -lmm 1, p_score for -lmm 3/4
+    pval_col_gemma = "p_wald" if "p_wald" in gemma_df.columns else "p_score"
+    if "p_wald_jamma" in merged.columns:
+        pval_col_jamma = "p_wald_jamma"
+    else:
+        pval_col_jamma = "p_score_jamma"
+    pval_col_gemma_merged = f"{pval_col_gemma}_gemma"
+    if pval_col_gemma_merged not in merged.columns:
+        pval_col_gemma_merged = pval_col_gemma
 
+    pval_diff = np.abs(merged[pval_col_gemma_merged] - merged[pval_col_jamma])
+    pval_rel = pval_diff / (merged[pval_col_gemma_merged] + 1e-10)
+
+    # Build validation results
     validation = {
         "n_snps_compared": len(merged),
+        # Beta metrics
         "beta_max_rel_diff": float(beta_rel.max()),
         "beta_mean_rel_diff": float(beta_rel.mean()),
+        "beta_max_abs_diff": float(beta_diff.max()),
+        "beta_pass": bool(beta_rel.max() < beta_tol),
+        # SE metrics
+        "se_max_rel_diff": float(se_rel.max()),
+        "se_mean_rel_diff": float(se_rel.mean()),
+        "se_max_abs_diff": float(se_diff.max()),
+        "se_pass": bool(se_rel.max() < se_tol),
+        # P-value metrics
         "pval_max_rel_diff": float(pval_rel.max()),
         "pval_mean_rel_diff": float(pval_rel.mean()),
-        "beta_pass": bool(beta_rel.max() < beta_tol),
+        "pval_max_abs_diff": float(pval_diff.max()),
         "pval_pass": bool(pval_rel.max() < pval_tol),
     }
-    validation["overall_pass"] = validation["beta_pass"] and validation["pval_pass"]
+    validation["overall_pass"] = (
+        validation["beta_pass"] and validation["se_pass"] and validation["pval_pass"]
+    )
 
-    # Log results
+    # Log detailed results
     status = "PASS" if validation["overall_pass"] else "FAIL"
+    logger.info(f"GEMMA validation: {status} ({len(merged)} SNPs compared)")
     logger.info(
-        f"GEMMA validation: {status} | "
-        f"beta_max_rel={validation['beta_max_rel_diff']:.2e} | "
-        f"pval_max_rel={validation['pval_max_rel_diff']:.2e}"
+        f"  beta:   max_rel={validation['beta_max_rel_diff']:.2e} "
+        f"(tol={beta_tol:.0e}) {'PASS' if validation['beta_pass'] else 'FAIL'}"
+    )
+    logger.info(
+        f"  SE:     max_rel={validation['se_max_rel_diff']:.2e} "
+        f"(tol={se_tol:.0e}) {'PASS' if validation['se_pass'] else 'FAIL'}"
+    )
+    logger.info(
+        f"  p-val:  max_rel={validation['pval_max_rel_diff']:.2e} "
+        f"(tol={pval_tol:.0e}) {'PASS' if validation['pval_pass'] else 'FAIL'}"
     )
 
     return validation
@@ -760,9 +801,18 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
         if gemma_result.assoc_df is not None and jax_assoc_results is not None:
             gemma_df = gemma_result.assoc_df
             validation = validate_jamma_vs_gemma(jax_assoc_results, gemma_df)
+            # Capture all validation metrics for detailed reporting
             results["gemma_validation_pass"] = validation.get("overall_pass", False)
+            results["gemma_n_snps_compared"] = validation.get("n_snps_compared")
+            # Beta metrics
             results["gemma_beta_max_rel_diff"] = validation.get("beta_max_rel_diff")
+            results["gemma_beta_pass"] = validation.get("beta_pass")
+            # SE metrics
+            results["gemma_se_max_rel_diff"] = validation.get("se_max_rel_diff")
+            results["gemma_se_pass"] = validation.get("se_pass")
+            # P-value metrics
             results["gemma_pval_max_rel_diff"] = validation.get("pval_max_rel_diff")
+            results["gemma_pval_pass"] = validation.get("pval_pass")
 
         # Speedups (JAMMA vs GEMMA - total end-to-end time)
         if results.get("gemma_total_time") and results.get("jamma_total_time"):
@@ -892,8 +942,12 @@ for _, row in results_df.iterrows():
         if validation_pass is not None:
             status = "PASS" if validation_pass else "FAIL"
             beta_diff = row.get("gemma_beta_max_rel_diff", 0)
+            se_diff = row.get("gemma_se_max_rel_diff", 0)
             pval_diff = row.get("gemma_pval_max_rel_diff", 0)
-            print(f"  Validation: {status} (β={beta_diff:.2e}, p={pval_diff:.2e})")
+            print(
+                f"  Validation: {status} "
+                f"(β={beta_diff:.2e}, SE={se_diff:.2e}, p={pval_diff:.2e})"
+            )
     else:
         print("  GEMMA:      (skipped - too large or unavailable)")
 
@@ -904,6 +958,43 @@ for _, row in results_df.iterrows():
             print(f"  ({ratio:.2f}x vs GEMMA)")
         else:
             print()
+
+# COMMAND ----------
+
+# Validation Summary - JAMMA vs GEMMA accuracy
+print("\n" + "=" * 60)
+print("VALIDATION SUMMARY: JAMMA vs GEMMA")
+print("=" * 60)
+print("\nTolerances from CLAUDE.md:")
+print("  beta:   1e-6 relative")
+print("  SE:     1e-6 relative")
+print("  p-val:  1e-8 relative")
+
+validation_rows = results_df[results_df["gemma_validation_pass"].notna()]
+if len(validation_rows) > 0:
+    header = (
+        f"{'Config':<10} {'Status':<6} {'β max_rel':<12} "
+        f"{'SE max_rel':<12} {'p max_rel':<12} {'SNPs':<8}"
+    )
+    print(f"\n{header}")
+    print("-" * 70)
+    for _, row in validation_rows.iterrows():
+        cfg = row["config"]
+        status = "PASS" if row.get("gemma_validation_pass") else "FAIL"
+        beta = row.get("gemma_beta_max_rel_diff", float("nan"))
+        se = row.get("gemma_se_max_rel_diff", float("nan"))
+        pval = row.get("gemma_pval_max_rel_diff", float("nan"))
+        n_snps = row.get("gemma_n_snps_compared", 0)
+        print(
+            f"{cfg:<10} {status:<6} {beta:<12.2e} "
+            f"{se:<12.2e} {pval:<12.2e} {n_snps:<8}"
+        )
+
+    # Overall summary
+    all_pass = validation_rows["gemma_validation_pass"].all()
+    print(f"\nOverall: {'ALL PASS' if all_pass else 'SOME FAILED'}")
+else:
+    print("\nNo validation data available (GEMMA not run or no results)")
 
 # COMMAND ----------
 

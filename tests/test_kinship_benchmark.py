@@ -168,8 +168,8 @@ class TestJammaVsGemma:
     """Compare JAMMA performance against GEMMA (the target to beat)."""
 
     @pytest.fixture
-    def mouse_genotypes(self):
-        """Load mouse_hs1940 genotypes for real-world comparison."""
+    def test_genotypes(self):
+        """Load synthetic test genotypes for comparison."""
         from jamma.io import load_plink_binary
 
         plink_data = load_plink_binary(EXAMPLE_DATA)
@@ -206,10 +206,10 @@ class TestJammaVsGemma:
 
         return elapsed
 
-    def test_jamma_vs_gemma_mouse_hs1940(self, mouse_genotypes):
-        """Compare JAMMA and GEMMA on mouse_hs1940 dataset.
+    def test_jamma_vs_gemma_synthetic(self, test_genotypes):
+        """Compare JAMMA and GEMMA on synthetic test dataset.
 
-        This is the critical benchmark - JAMMA must be faster than GEMMA.
+        This is a quick benchmark - JAMMA must be faster than GEMMA.
         """
         from jamma.kinship import compute_centered_kinship
 
@@ -221,11 +221,11 @@ class TestJammaVsGemma:
             pytest.skip("Docker not available")
 
         # Warm up JAMMA (JIT compilation)
-        _ = compute_centered_kinship(mouse_genotypes[:100, :1000])
+        _ = compute_centered_kinship(test_genotypes[:100, :1000])
 
         # Time JAMMA
         jamma_start = time.perf_counter()
-        jamma_result = compute_centered_kinship(mouse_genotypes)
+        jamma_result = compute_centered_kinship(test_genotypes)
         jamma_time = time.perf_counter() - jamma_start
 
         # Time GEMMA
@@ -233,18 +233,20 @@ class TestJammaVsGemma:
             gemma_time = self._run_gemma_docker(Path(tmpdir))
 
         # Report results
+        n_samples = test_genotypes.shape[0]
+        n_snps = test_genotypes.shape[1]
         speedup = gemma_time / jamma_time
         print(f"\n{'=' * 60}")
         print("JAMMA vs GEMMA Performance Comparison")
         print(f"{'=' * 60}")
-        print("Dataset: mouse_hs1940 (1940 samples, 12226 SNPs)")
+        print(f"Dataset: gemma_synthetic ({n_samples} samples, {n_snps} SNPs)")
         print(f"GEMMA time:  {gemma_time:.3f}s")
         print(f"JAMMA time:  {jamma_time:.3f}s")
         print(f"Speedup:     {speedup:.2f}x {'FASTER' if speedup > 1 else 'SLOWER'}")
         print(f"{'=' * 60}\n")
 
         # Store for reporting
-        assert jamma_result.shape == (1940, 1940)
+        assert jamma_result.shape == (n_samples, n_samples)
 
         # CRITICAL: JAMMA must be faster than GEMMA
         assert (

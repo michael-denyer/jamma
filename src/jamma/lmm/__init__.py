@@ -102,8 +102,16 @@ def run_lmm_association(
     Returns:
         List of AssocResult for each SNP that passes filtering
     """
-    # Step 0: Filter samples with missing phenotypes (-9 or NaN)
+    # Step 0: Filter samples with missing phenotypes (-9 or NaN) or missing covariates
     valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
+
+    # Also filter samples with any missing covariate value
+    if covariates is not None:
+        # Sample is invalid if ANY covariate is NaN
+        valid_covariate = np.all(~np.isnan(covariates), axis=1)
+        valid_mask = valid_mask & valid_covariate
+
+    # Apply filtering if any samples are invalid
     if not np.all(valid_mask):
         genotypes = genotypes[valid_mask, :]
         phenotypes = phenotypes[valid_mask]

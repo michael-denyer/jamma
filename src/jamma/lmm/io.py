@@ -67,3 +67,69 @@ def write_assoc_results(results: list[AssocResult], path: Path) -> None:
         f.write(header + "\n")
         for result in results:
             f.write(format_assoc_line(result) + "\n")
+
+
+class IncrementalAssocWriter:
+    """Write association results incrementally to disk.
+
+    Context manager that writes results immediately as they are produced,
+    avoiding memory accumulation for large GWAS. Output format matches
+    write_assoc_results exactly for byte-identical output.
+
+    Example:
+        with IncrementalAssocWriter(Path("output.assoc.txt")) as writer:
+            for result in compute_results():
+                writer.write(result)
+        print(f"Wrote {writer.count} results")
+    """
+
+    # GEMMA header (matches write_assoc_results)
+    HEADER = "chr\trs\tps\tn_miss\tallele1\tallele0\taf\tbeta\tse\tlogl_H1\tl_remle\tp_wald"
+
+    def __init__(self, path: Path):
+        """Initialize writer with output path.
+
+        Args:
+            path: Output file path. Parent directories created if needed.
+        """
+        self.path = Path(path)
+        self._file = None
+        self._count = 0
+
+    def __enter__(self) -> "IncrementalAssocWriter":
+        """Open file and write header."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._file = open(self.path, "w")
+        self._file.write(self.HEADER + "\n")
+        return self
+
+    def write(self, result: AssocResult) -> None:
+        """Write single result immediately to disk.
+
+        Args:
+            result: AssocResult to write.
+        """
+        if self._file is None:
+            raise RuntimeError("Writer not opened. Use as context manager.")
+        self._file.write(format_assoc_line(result) + "\n")
+        self._count += 1
+
+    def write_batch(self, results: list[AssocResult]) -> None:
+        """Write multiple results at once (convenience method).
+
+        Args:
+            results: List of AssocResult to write.
+        """
+        for result in results:
+            self.write(result)
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Close file."""
+        if self._file:
+            self._file.close()
+            self._file = None
+
+    @property
+    def count(self) -> int:
+        """Number of results written."""
+        return self._count

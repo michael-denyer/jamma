@@ -390,9 +390,13 @@ def run_lmm_association_jax(
     if len(snp_indices) == 0:
         return []
 
-    # Extract filtered stats
+    # Extract filtered stats (use allele_freqs for output, not mafs)
     snp_stats = list(
-        zip(mafs[snp_indices], missing_counts[snp_indices].astype(int), strict=False)
+        zip(
+            allele_freqs[snp_indices],
+            missing_counts[snp_indices].astype(int),
+            strict=False,
+        )
     )
 
     # Eigendecompose kinship (one-time, uses NumPy/LAPACK)
@@ -582,7 +586,8 @@ def _build_results(
 
     Args:
         snp_indices: Indices of SNPs that passed filtering.
-        snp_stats: List of (maf, n_miss) tuples for each filtered SNP.
+        snp_stats: List of (af, n_miss) tuples for each filtered SNP.
+            af is raw allele frequency of counted allele (BIM A1), can be > 0.5.
         snp_info: Full SNP metadata list.
         best_lambdas_np: Optimal lambda values.
         best_logls_np: Log-likelihoods at optimal lambda.
@@ -595,7 +600,7 @@ def _build_results(
     """
     results = []
     for j, snp_idx in enumerate(snp_indices):
-        maf, n_miss = snp_stats[j]
+        af, n_miss = snp_stats[j]  # af is raw allele frequency for output
         info = snp_info[snp_idx]
 
         result = AssocResult(
@@ -605,7 +610,7 @@ def _build_results(
             n_miss=n_miss,
             allele1=info.get("a1", info.get("allele1", "")),
             allele0=info.get("a0", info.get("allele0", "")),
-            af=maf,
+            af=af,
             beta=float(betas_np[j]),
             se=float(ses_np[j]),
             logl_H1=float(best_logls_np[j]),
@@ -857,8 +862,13 @@ def run_lmm_association_streaming(
         return []
 
     # Precompute filtered stats for result building
+    # Use allele_freqs (not mafs) for output to match GEMMA format
     snp_stats = list(
-        zip(mafs[snp_indices], all_miss_counts[snp_indices].astype(int), strict=False)
+        zip(
+            allele_freqs[snp_indices],
+            all_miss_counts[snp_indices].astype(int),
+            strict=False,
+        )
     )
     filtered_means = all_means[snp_indices]
 
@@ -1037,7 +1047,9 @@ def run_lmm_association_streaming(
                 # Build and write/accumulate results for this file chunk
                 for j, local_idx in enumerate(chunk_filtered_local_idx):
                     snp_idx = snp_indices[local_idx]
-                    maf, n_miss = snp_stats[local_idx]
+                    af, n_miss = snp_stats[
+                        local_idx
+                    ]  # af is raw allele frequency for output
                     info = snp_info[snp_idx]
 
                     result = AssocResult(
@@ -1047,7 +1059,7 @@ def run_lmm_association_streaming(
                         n_miss=n_miss,
                         allele1=info.get("a1", info.get("allele1", "")),
                         allele0=info.get("a0", info.get("allele0", "")),
-                        af=maf,
+                        af=af,
                         beta=float(chunk_betas_np[j]),
                         se=float(chunk_ses_np[j]),
                         logl_H1=float(chunk_logls_np[j]),

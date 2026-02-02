@@ -213,7 +213,7 @@ def run_lmm_association(
                 n_miss=n_miss,
                 allele1=info.get("a1", info.get("allele1", "")),
                 allele0=info.get("a0", info.get("allele0", "")),
-                af=maf,
+                af=af,
                 beta=beta,
                 se=se,
                 logl_H1=logl_H1,

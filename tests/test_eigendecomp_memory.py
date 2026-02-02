@@ -45,8 +45,14 @@ class TestEigendecompPreflightCheck:
 
         # 100x100 matrix needs ~0.0002GB, mock available memory well below that
         # With 10% safety margin, need < required_gb * 1.1 = 0.0002 * 1.1 = 0.00022GB
-        with patch("jamma.core.memory.psutil.virtual_memory") as mock_vm:
+        with (
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_process,
+        ):
             mock_vm.return_value.available = 100  # 100 bytes (way too small)
+            mock_vm.return_value.total = 100
+            mock_process.return_value.memory_info.return_value.rss = 10
+            mock_process.return_value.memory_info.return_value.vms = 20
 
             with pytest.raises(MemoryError) as exc_info:
                 eigendecompose_kinship(K)
@@ -62,8 +68,15 @@ class TestEigendecompPreflightCheck:
         K = np.eye(100, dtype=np.float64)
 
         # Mock psutil to report ample memory (1TB)
-        with patch("jamma.core.memory.psutil.virtual_memory") as mock_vm:
+        # Need to mock both virtual_memory and Process for log_memory_snapshot
+        with (
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_process,
+        ):
             mock_vm.return_value.available = 1e12  # 1TB
+            mock_vm.return_value.total = 1e12
+            mock_process.return_value.memory_info.return_value.rss = 1e9  # 1GB
+            mock_process.return_value.memory_info.return_value.vms = 2e9  # 2GB
 
             eigenvalues, eigenvectors = eigendecompose_kinship(K)
 
@@ -74,8 +87,14 @@ class TestEigendecompPreflightCheck:
         """Error message should include required GB, available GB."""
         K = np.eye(1000, dtype=np.float64)
 
-        with patch("jamma.core.memory.psutil.virtual_memory") as mock_vm:
+        with (
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_process,
+        ):
             mock_vm.return_value.available = 1e6  # 1MB (way too small)
+            mock_vm.return_value.total = 1e6
+            mock_process.return_value.memory_info.return_value.rss = 1e5
+            mock_process.return_value.memory_info.return_value.vms = 2e5
 
             with pytest.raises(MemoryError) as exc_info:
                 eigendecompose_kinship(K)

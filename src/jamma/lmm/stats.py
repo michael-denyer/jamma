@@ -190,3 +190,70 @@ def calc_wald_test_from_uab(
 
     # Compute Wald test
     return calc_wald_test(lambda_val, Pab, n_cvt, ni_test)
+
+
+def calc_score_test(
+    lambda_null: float,
+    Pab: np.ndarray,
+    n_cvt: int,
+    ni_test: int,
+) -> tuple[float, float, float]:
+    """Compute Score test statistics following GEMMA's CalcRLScore.
+
+    The Score test uses fixed null model lambda (computed once, reused for all SNPs)
+    rather than per-SNP optimization. This makes it faster than Wald test.
+
+    Key difference from Wald: extracts P_xx, P_xy, P_yy at projection level n_cvt
+    (after covariates only), not n_cvt+1 (after covariates AND genotype).
+
+    Args:
+        lambda_null: Null model lambda (fixed, same for all SNPs)
+        Pab: Pab matrix from calc_pab (n_cvt+2, n_index)
+        n_cvt: Number of covariates
+        ni_test: Number of samples
+
+    Returns:
+        Tuple of (beta, se, p_score) where beta/se are informational only
+        (computed under null model, not used in hypothesis testing)
+    """
+    df = ni_test - n_cvt - 1
+
+    # GEMMA indexing (1-based):
+    # - Covariates are indices 1..n_cvt
+    # - Genotype is index n_cvt+1
+    # - Phenotype is index n_cvt+2
+    index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
+    index_xx = get_ab_index(n_cvt + 1, n_cvt + 1, n_cvt)
+    index_xy = get_ab_index(n_cvt + 2, n_cvt + 1, n_cvt)
+
+    # KEY DIFFERENCE FROM WALD: Extract at projection level n_cvt (NOT n_cvt+1)
+    # Score test extracts values BEFORE projecting out genotype
+    # This is the fundamental difference between Score and Wald tests
+    P_yy = Pab[n_cvt, index_yy]  # y'Py after projecting out covariates only
+    P_xx = Pab[n_cvt, index_xx]  # x'Px after projecting out covariates only
+    P_xy = Pab[n_cvt, index_xy]  # x'Py after projecting out covariates only
+
+    # Px_yy for beta/se computation (after projecting out covariates AND genotype)
+    Px_yy = Pab[n_cvt + 1, index_yy]
+
+    # Guard against degenerate cases
+    # P_xx <= 0 means SNP has no variance after projection (constant genotype)
+    if P_xx <= 0.0:
+        return float("nan"), float("nan"), float("nan")
+
+    # Clamp Px_yy like Wald test does (GEMMA lmm.cpp:854)
+    if Px_yy >= 0.0 and Px_yy < 1e-8:
+        Px_yy = 1e-8
+
+    # Compute beta and se (informational only for Score test)
+    beta = P_xy / P_xx
+    tau = float(df) / Px_yy
+    se = _safe_sqrt(1.0 / (tau * P_xx))
+
+    # Score test statistic: F = n * P_xy^2 / (P_yy * P_xx)
+    # This is derived from the Score statistic: U^2 / Var(U)
+    # where U = x'(y - Xb_0) is the score under null hypothesis
+    f_stat = float(ni_test) * (P_xy * P_xy) / (P_yy * P_xx)
+    p_score = f_sf(f_stat, 1.0, float(df))
+
+    return beta, se, p_score

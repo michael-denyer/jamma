@@ -238,6 +238,8 @@ def run_lmm_association_jax(
     kinship: np.ndarray,
     snp_info: list,
     covariates: np.ndarray | None = None,
+    eigenvalues: np.ndarray | None = None,
+    eigenvectors: np.ndarray | None = None,
     maf_threshold: float = 0.01,
     miss_threshold: float = 0.05,
     l_min: float = 1e-5,
@@ -274,6 +276,11 @@ def run_lmm_association_jax(
         kinship: Kinship matrix (n_samples, n_samples)
         snp_info: List of dicts with keys: chr, rs, pos, a1, a0
         covariates: Optional covariate matrix - NOT YET SUPPORTED, will raise error
+        eigenvalues: Pre-computed eigenvalues from kinship decomposition. If provided
+            along with eigenvectors, skips eigendecomposition (saves significant time
+            for large matrices). Must be sorted ascending.
+        eigenvectors: Pre-computed eigenvectors from kinship decomposition. Columns
+            are eigenvectors corresponding to eigenvalues.
         maf_threshold: Minimum MAF for SNP inclusion
         miss_threshold: Maximum missing rate for SNP inclusion
         l_min: Minimum lambda for optimization
@@ -291,12 +298,21 @@ def run_lmm_association_jax(
     Raises:
         NotImplementedError: If covariates are provided (not yet supported)
         MemoryError: If check_memory=True and insufficient memory available.
+        ValueError: If only one of eigenvalues/eigenvectors is provided.
     """
     # Guard: covariates not yet supported in JAX path
     if covariates is not None:
         raise NotImplementedError(
             "JAX runner does not yet support covariates beyond intercept. "
             "Use run_lmm_association() for covariate support, or pass covariates=None."
+        )
+
+    # Validate eigendecomposition params - must provide both or neither
+    if (eigenvalues is None) != (eigenvectors is None):
+        raise ValueError(
+            "Must provide both eigenvalues and eigenvectors, or neither. "
+            f"Got eigenvalues={eigenvalues is not None}, "
+            f"eigenvectors={eigenvectors is not None}"
         )
 
     # Memory check before workflow
@@ -372,7 +388,14 @@ def run_lmm_association_jax(
     )
 
     # Eigendecompose kinship (one-time, uses NumPy/LAPACK)
-    eigenvalues_np, U = eigendecompose_kinship(kinship)
+    # Skip if pre-computed eigendecomposition provided
+    if eigenvalues is not None and eigenvectors is not None:
+        eigenvalues_np = eigenvalues
+        U = eigenvectors
+        if show_progress:
+            logger.debug("Using pre-computed eigendecomposition")
+    else:
+        eigenvalues_np, U = eigendecompose_kinship(kinship)
 
     # Prepare rotated matrices (intercept-only model)
     W = np.ones((n_samples, 1))
@@ -617,6 +640,8 @@ def run_lmm_association_streaming(
     kinship: np.ndarray,
     snp_info: list | None = None,
     covariates: np.ndarray | None = None,
+    eigenvalues: np.ndarray | None = None,
+    eigenvectors: np.ndarray | None = None,
     maf_threshold: float = 0.01,
     miss_threshold: float = 0.05,
     l_min: float = 1e-5,
@@ -653,6 +678,11 @@ def run_lmm_association_streaming(
         snp_info: Optional list of dicts with keys: chr, rs, pos, a1, a0.
             If None, builds from PLINK metadata.
         covariates: Optional covariate matrix - NOT YET SUPPORTED.
+        eigenvalues: Pre-computed eigenvalues from kinship decomposition. If provided
+            along with eigenvectors, skips eigendecomposition (saves significant time
+            for large matrices). Must be sorted ascending.
+        eigenvectors: Pre-computed eigenvectors from kinship decomposition. Columns
+            are eigenvectors corresponding to eigenvalues.
         maf_threshold: Minimum MAF for SNP inclusion (default: 0.01).
         miss_threshold: Maximum missing rate for SNP inclusion (default: 0.05).
         l_min: Minimum lambda for optimization.
@@ -671,6 +701,7 @@ def run_lmm_association_streaming(
         NotImplementedError: If covariates are provided.
         MemoryError: If check_memory=True and insufficient memory available.
         FileNotFoundError: If the .bed file does not exist.
+        ValueError: If only one of eigenvalues/eigenvectors is provided.
     """
     start_time = time.perf_counter()
 
@@ -679,6 +710,14 @@ def run_lmm_association_streaming(
         raise NotImplementedError(
             "Streaming LMM does not yet support covariates beyond intercept. "
             "Use run_lmm_association() for covariate support, or pass covariates=None."
+        )
+
+    # Validate eigendecomposition params - must provide both or neither
+    if (eigenvalues is None) != (eigenvectors is None):
+        raise ValueError(
+            "Must provide both eigenvalues and eigenvectors, or neither. "
+            f"Got eigenvalues={eigenvalues is not None}, "
+            f"eigenvectors={eigenvectors is not None}"
         )
 
     # Get metadata without loading genotypes
@@ -802,7 +841,14 @@ def run_lmm_association_streaming(
     filtered_means = all_means[snp_indices]
 
     # === SETUP: Eigendecomposition ===
-    eigenvalues_np, U = eigendecompose_kinship(kinship)
+    # Skip if pre-computed eigendecomposition provided
+    if eigenvalues is not None and eigenvectors is not None:
+        eigenvalues_np = eigenvalues
+        U = eigenvectors
+        if show_progress:
+            logger.debug("Using pre-computed eigendecomposition")
+    else:
+        eigenvalues_np, U = eigendecompose_kinship(kinship)
 
     # Prepare rotated matrices (intercept-only model)
     W = np.ones((n_samples, 1))

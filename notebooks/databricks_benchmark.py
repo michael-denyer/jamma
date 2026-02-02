@@ -318,6 +318,7 @@ import subprocess
 import tempfile
 
 from jamma.kinship import compute_centered_kinship  # noqa: E402
+from jamma.lmm.eigen import eigendecompose_kinship  # noqa: E402
 from jamma.lmm.runner_jax import run_lmm_association_jax  # noqa: E402
 
 
@@ -559,27 +560,49 @@ def validate_jamma_vs_gemma(
 
 
 def benchmark_kinship(genotypes: np.ndarray, profiler: BenchmarkProfiler):
-    """Benchmark kinship computation."""
+    """Benchmark kinship computation and eigendecomposition.
+
+    Returns:
+        Tuple of (K, eigenvalues, eigenvectors, kinship_time, eigen_time)
+    """
     n_samples, n_snps = genotypes.shape
 
     profiler.start("kinship", "compute", n_samples=n_samples, n_snps=n_snps)
     gc.collect()
 
     K = compute_centered_kinship(genotypes)
-    elapsed = profiler.end("kinship", "compute", output_shape=K.shape)
+    kinship_elapsed = profiler.end("kinship", "compute", output_shape=K.shape)
 
-    return K, elapsed
+    # Eigendecompose once here - reused by warmup and main LMM runs
+    profiler.start("kinship", "eigendecomp", n_samples=n_samples)
+    eigenvalues, eigenvectors = eigendecompose_kinship(K)
+    eigen_elapsed = profiler.end("kinship", "eigendecomp")
+
+    return K, eigenvalues, eigenvectors, kinship_elapsed, eigen_elapsed
 
 
 def benchmark_lmm_jax(
     genotypes: np.ndarray,
     phenotype: np.ndarray,
     kinship: np.ndarray,
+    eigenvalues: np.ndarray,
+    eigenvectors: np.ndarray,
     snp_info: list,
     profiler: BenchmarkProfiler,
     n_snps: int | None = None,
 ):
-    """Benchmark JAX LMM path."""
+    """Benchmark JAX LMM path.
+
+    Args:
+        genotypes: Genotype matrix (n_samples, n_snps)
+        phenotype: Phenotype vector (n_samples,)
+        kinship: Kinship matrix (n_samples, n_samples)
+        eigenvalues: Pre-computed eigenvalues from kinship decomposition
+        eigenvectors: Pre-computed eigenvectors from kinship decomposition
+        snp_info: SNP metadata list
+        profiler: Benchmark profiler
+        n_snps: Optional limit on number of SNPs to test
+    """
     if n_snps:
         genotypes = genotypes[:, :n_snps]
         snp_info = snp_info[:n_snps]
@@ -587,6 +610,7 @@ def benchmark_lmm_jax(
     n_samples, actual_snps = genotypes.shape
 
     # Warmup (use subset of snp_info too, disable progress output)
+    # Pass pre-computed eigendecomposition to avoid redundant 35-min computation
     warmup_snps = min(100, actual_snps)
     profiler.start("lmm_jax", "warmup")
     _ = run_lmm_association_jax(
@@ -594,11 +618,14 @@ def benchmark_lmm_jax(
         phenotypes=phenotype,
         kinship=kinship,
         snp_info=snp_info[:warmup_snps],
+        eigenvalues=eigenvalues,
+        eigenvectors=eigenvectors,
         show_progress=False,
     )
     profiler.end("lmm_jax", "warmup")
 
     # Run with progress output enabled
+    # Pass pre-computed eigendecomposition to avoid redundant computation
     profiler.start("lmm_jax", "association", n_samples=n_samples, n_snps=actual_snps)
     gc.collect()
 
@@ -607,6 +634,8 @@ def benchmark_lmm_jax(
         phenotypes=phenotype,
         kinship=kinship,
         snp_info=snp_info,
+        eigenvalues=eigenvalues,
+        eigenvectors=eigenvectors,
         show_progress=True,
     )
 
@@ -663,15 +692,26 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
             for j in range(config.n_snps)
         ]
 
-        # Kinship
-        K, kinship_time = benchmark_kinship(genotypes, profiler)
+        # Kinship and eigendecomposition (computed once, reused by LMM)
+        K, eigenvalues, eigenvectors, kinship_time, eigen_time = benchmark_kinship(
+            genotypes, profiler
+        )
         results["kinship_time"] = kinship_time
+        results["eigendecomp_time"] = eigen_time
 
         # LMM JAX - store results for validation
+        # Pass pre-computed eigendecomposition to avoid redundant computation
         jax_assoc_results = None
         try:
             jax_assoc_results, jax_time = benchmark_lmm_jax(
-                genotypes, phenotype, K, snp_info, profiler, n_snps=config.n_snps_lmm
+                genotypes,
+                phenotype,
+                K,
+                eigenvalues,
+                eigenvectors,
+                snp_info,
+                profiler,
+                n_snps=config.n_snps_lmm,
             )
             results["lmm_jax_time"] = jax_time
             results["lmm_jax_snps_per_sec"] = config.n_snps_lmm / jax_time

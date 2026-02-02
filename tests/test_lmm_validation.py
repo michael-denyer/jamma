@@ -935,3 +935,192 @@ class TestLmmCovariateValidation:
         assert (
             comparison.p_wald.passed
         ), f"P-value with covariates failed: {comparison.p_wald.message}"
+
+
+class TestAFSemantics:
+    """Tests verifying allele frequency semantics and orientation behavior.
+
+    These tests ensure:
+    1. AF > 0.5 values pass through unchanged (no min transform to MAF)
+    2. Flipping genotypes flips beta sign while preserving SE and p-value
+    3. GEMMA fixture comparison uses direct AF match
+    """
+
+    def test_af_greater_than_half_not_transformed(self):
+        """Verify that SNPs with af > 0.5 output af > 0.5 (no min transform)."""
+        from jamma.lmm import _compute_snp_stats
+
+        # Create genotype with high A1 frequency (~0.8)
+        # Probabilities: 64% hom A1 (2), 32% het (1), 4% hom A2 (0)
+        n_samples = 100
+        rng = np.random.default_rng(42)
+        genotypes = rng.choice(
+            [0, 1, 2], size=(n_samples, 1), p=[0.04, 0.32, 0.64]
+        ).astype(np.float64)
+
+        # Compute expected AF
+        expected_af = np.mean(genotypes[:, 0]) / 2.0
+        assert (
+            expected_af > 0.5
+        ), f"Test setup error: expected AF > 0.5, got {expected_af}"
+
+        # Run through _compute_snp_stats
+        af, maf, _, _, _ = _compute_snp_stats(genotypes, 0)
+
+        # AF should match expected (> 0.5)
+        assert abs(af - expected_af) < 1e-10, f"AF mismatch: {af} vs {expected_af}"
+        # MAF should be 1 - af (< 0.5)
+        assert maf < 0.5, f"MAF should be < 0.5, got {maf}"
+        assert abs(maf - (1.0 - af)) < 1e-10, "MAF should be 1-AF"
+
+    def test_genotype_flip_inverts_beta_sign(self):
+        """Verify that flipping genotypes (2-G) flips beta sign but not SE/p-value.
+
+        This is a sanity check for allele orientation: when you flip the counted
+        allele, the effect direction flips but the magnitude doesn't change.
+        """
+        rng = np.random.default_rng(42)
+        n_samples = 150
+        n_snps = 10
+
+        # Generate genotypes with variation
+        genotypes = rng.integers(0, 3, size=(n_samples, n_snps)).astype(np.float64)
+
+        # Create phenotype with genetic component
+        true_beta = rng.standard_normal(n_snps) * 0.5
+        genetic_value = genotypes @ true_beta
+        phenotypes = genetic_value + rng.standard_normal(n_samples)
+
+        # Compute kinship for both orientations
+        kinship_original = compute_centered_kinship(genotypes)
+
+        # Flip genotypes: 2 - G (switches counted allele)
+        genotypes_flipped = 2.0 - genotypes
+        kinship_flipped = compute_centered_kinship(genotypes_flipped)
+
+        # SNP info
+        snp_info = [
+            {"chr": "1", "rs": f"rs{i}", "pos": i * 1000, "a1": "A", "a0": "G"}
+            for i in range(n_snps)
+        ]
+
+        # Run LMM on both orientations
+        results_original = run_lmm_association(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=kinship_original,
+            snp_info=snp_info,
+        )
+        results_flipped = run_lmm_association(
+            genotypes=genotypes_flipped,
+            phenotypes=phenotypes,
+            kinship=kinship_flipped,
+            snp_info=snp_info,
+        )
+
+        # Both should produce results for all SNPs
+        assert len(results_original) == len(results_flipped)
+
+        # For each SNP, beta should approximately flip sign
+        # (kinship changes slightly affect exact values)
+        for orig, flip in zip(results_original, results_flipped, strict=True):
+            # Beta sign should flip (allow 10% tolerance for kinship effect)
+            if abs(orig.beta) > 1e-6:  # Skip near-zero betas
+                assert abs(orig.beta + flip.beta) < 0.2 * max(
+                    abs(orig.beta), abs(flip.beta)
+                ), f"Beta sign flip expected for {orig.rs}: {orig.beta} vs {flip.beta}"
+
+            # SE should be very similar (doesn't depend on direction)
+            if orig.se > 1e-8:
+                se_ratio = flip.se / orig.se
+                assert (
+                    0.9 < se_ratio < 1.1
+                ), f"SE should be similar for {orig.rs}: {orig.se} vs {flip.se}"
+
+            # p-value should be very similar (Wald uses beta^2)
+            if orig.p_wald < 0.99 and flip.p_wald < 0.99:  # Skip uninformative
+                # Log scale comparison for p-values
+                log_ratio = abs(np.log10(orig.p_wald) - np.log10(flip.p_wald))
+                assert log_ratio < 0.5, (
+                    f"p-value should be similar for {orig.rs}: "
+                    f"{orig.p_wald} vs {flip.p_wald}"
+                )
+
+    @pytest.mark.skipif(
+        not REFERENCE_ASSOC.exists(),
+        reason="Reference LMM data not generated. Run generate_lmm_reference.sh",
+    )
+    def test_gemma_fixture_has_af_above_half(self):
+        """Confirm GEMMA fixture includes SNPs with AF > 0.5 for proper coverage.
+
+        This test verifies that our reference data adequately tests the AF > 0.5
+        case, ensuring the direct AF comparison (not MAF normalization) is
+        actually being exercised.
+        """
+        gemma_results = load_gemma_assoc(REFERENCE_ASSOC)
+        af_values = [r.af for r in gemma_results]
+
+        # Check that we have SNPs above and below 0.5
+        n_above = sum(1 for af in af_values if af > 0.5)
+        n_below = sum(1 for af in af_values if af <= 0.5)
+
+        assert n_above > 0, (
+            f"GEMMA fixture should include SNPs with AF > 0.5 for coverage "
+            f"(max AF: {max(af_values):.3f})"
+        )
+        assert n_below > 0, (
+            f"GEMMA fixture should include SNPs with AF <= 0.5 for coverage "
+            f"(min AF: {min(af_values):.3f})"
+        )
+
+    def test_af_output_in_lmm_results(self):
+        """Verify that run_lmm_association outputs raw AF (not MAF)."""
+        rng = np.random.default_rng(42)
+        n_samples = 100
+        n_snps = 20
+
+        # Create genotypes with some high-frequency alleles
+        genotypes = np.zeros((n_samples, n_snps), dtype=np.float64)
+        for i in range(n_snps):
+            # Alternate between low and high frequency
+            if i % 2 == 0:
+                # Low frequency: mostly 0s, some 1s and 2s
+                genotypes[:, i] = rng.choice(
+                    [0, 1, 2], size=n_samples, p=[0.8, 0.15, 0.05]
+                )
+            else:
+                # High frequency: mostly 2s, some 1s and 0s (AF > 0.5)
+                genotypes[:, i] = rng.choice(
+                    [0, 1, 2], size=n_samples, p=[0.05, 0.15, 0.8]
+                )
+
+        phenotypes = rng.standard_normal(n_samples)
+        kinship = compute_centered_kinship(genotypes)
+        snp_info = [
+            {"chr": "1", "rs": f"rs{i}", "pos": i * 1000, "a1": "A", "a0": "G"}
+            for i in range(n_snps)
+        ]
+
+        results = run_lmm_association(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=kinship,
+            snp_info=snp_info,
+            maf_threshold=0.01,  # Low threshold to keep high-AF SNPs
+        )
+
+        # Check that we have both AF > 0.5 and AF <= 0.5 in output
+        af_values = [r.af for r in results]
+
+        n_above_half = sum(1 for af in af_values if af > 0.5)
+        n_at_or_below_half = sum(1 for af in af_values if af <= 0.5)
+
+        # Expect roughly half above and half below due to our setup
+        assert n_above_half > 0, (
+            f"Expected some SNPs with AF > 0.5 in output, got none. "
+            f"Max AF: {max(af_values):.3f}"
+        )
+        assert n_at_or_below_half > 0, (
+            f"Expected some SNPs with AF <= 0.5 in output, got none. "
+            f"Min AF: {min(af_values):.3f}"
+        )

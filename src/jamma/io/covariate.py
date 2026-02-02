@@ -86,10 +86,10 @@ def read_covariate_file(path: Path) -> tuple[np.ndarray, np.ndarray]:
             else:
                 try:
                     covariates[i, j] = float(val)
-                except ValueError:
+                except ValueError as e:
                     raise ValueError(
                         f"Covariate file row {i + 1}, column {j + 1}: "
-                        f"cannot parse '{val}' as numeric (use 'NA' for missing values)"
-                    )
+                        f"cannot parse '{val}' as numeric (use 'NA' for missing)"
+                    ) from e
 
     return covariates, indicator_cvt

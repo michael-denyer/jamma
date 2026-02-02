@@ -82,4 +82,5 @@ class TestEigendecompPreflightCheck:
 
             error_msg = str(exc_info.value)
             assert "GB" in error_msg  # Should mention GB
-            assert "Need" in error_msg or "Need:" in error_msg or "required" in error_msg.lower()
+            has_need = "Need" in error_msg or "required" in error_msg.lower()
+            assert has_need

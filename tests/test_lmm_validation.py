@@ -790,10 +790,12 @@ class TestLmmCovariateIntegration:
         # Run with intercept + a covariate correlated with phenotype
         # (to ensure it has a real effect on the model)
         covariate_col = phenotypes + rng.standard_normal(n_samples) * 0.5
-        covariates_with_cov = np.column_stack([
-            np.ones(n_samples),  # Intercept
-            covariate_col,  # Non-trivial covariate
-        ])
+        covariates_with_cov = np.column_stack(
+            [
+                np.ones(n_samples),  # Intercept
+                covariate_col,  # Non-trivial covariate
+            ]
+        )
         results_with_cov = run_lmm_association(
             genotypes=genotypes,
             phenotypes=phenotypes,
@@ -816,8 +818,8 @@ class TestLmmCovariateIntegration:
         ]
 
         # Check that at least some betas and p-values differ
-        assert max(beta_diffs) > 1e-6, "All betas are identical - covariate may not be used"
-        assert max(pval_diffs) > 1e-6, "All p-values are identical - covariate may not be used"
+        assert max(beta_diffs) > 1e-6, "All betas identical - covariate unused"
+        assert max(pval_diffs) > 1e-6, "All p-values identical - covariate unused"
 
     def test_missing_covariate_excluded(self, covariate_test_data):
         """Samples with missing covariate values are excluded from analysis."""
@@ -825,10 +827,12 @@ class TestLmmCovariateIntegration:
         n_samples = len(phenotypes)
 
         # Create covariates with some missing values
-        covariates = np.column_stack([
-            np.ones(n_samples),
-            np.random.randn(n_samples),
-        ])
+        covariates = np.column_stack(
+            [
+                np.ones(n_samples),
+                np.random.randn(n_samples),
+            ]
+        )
         # Set 5 samples to have missing covariates
         covariates[10:15, 1] = np.nan
 
@@ -867,7 +871,7 @@ class TestLmmCovariateValidation:
 
     @pytest.mark.skipif(
         not COVARIATE_REFERENCE_ASSOC.exists(),
-        reason="Covariate reference data not generated. Run generate_covariate_reference.sh",
+        reason="Covariate ref not generated. Run generate_covariate_reference.sh",
     )
     def test_lmm_with_covariates_matches_gemma(
         self, mouse_data, mouse_phenotypes, reference_kinship, covariate_data
@@ -905,9 +909,9 @@ class TestLmmCovariateValidation:
         )
 
         comparison = compare_assoc_results(jamma_results, reference_results)
-        assert comparison.beta.passed, (
-            f"Beta with covariates failed: {comparison.beta.message}"
-        )
+        assert (
+            comparison.beta.passed
+        ), f"Beta with covariates failed: {comparison.beta.message}"
 
     @pytest.mark.skipif(
         not COVARIATE_REFERENCE_ASSOC.exists(),
@@ -928,6 +932,6 @@ class TestLmmCovariateValidation:
         )
 
         comparison = compare_assoc_results(jamma_results, reference_results)
-        assert comparison.p_wald.passed, (
-            f"P-value with covariates failed: {comparison.p_wald.message}"
-        )
+        assert (
+            comparison.p_wald.passed
+        ), f"P-value with covariates failed: {comparison.p_wald.message}"

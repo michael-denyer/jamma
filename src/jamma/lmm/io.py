@@ -84,7 +84,10 @@ class IncrementalAssocWriter:
     """
 
     # GEMMA header (matches write_assoc_results)
-    HEADER = "chr\trs\tps\tn_miss\tallele1\tallele0\taf\tbeta\tse\tlogl_H1\tl_remle\tp_wald"
+    HEADER = (
+        "chr\trs\tps\tn_miss\tallele1\tallele0\t"
+        "af\tbeta\tse\tlogl_H1\tl_remle\tp_wald"
+    )
 
     def __init__(self, path: Path):
         """Initialize writer with output path.

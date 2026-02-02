@@ -2,8 +2,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from jamma.utils.logging import log_rss_memory
 
 

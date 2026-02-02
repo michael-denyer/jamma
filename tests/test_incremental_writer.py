@@ -58,7 +58,7 @@ class TestIncrementalAssocWriter:
         """Should write GEMMA-compatible header on open."""
         output_path = tmp_path / "test.assoc.txt"
 
-        with IncrementalAssocWriter(output_path) as writer:
+        with IncrementalAssocWriter(output_path):
             pass  # Just open and close
 
         content = output_path.read_text()

@@ -8,6 +8,7 @@ This package contains the core algorithms and data structures:
 """
 
 from jamma.core.backend import (
+    BACKEND_ALIASES,
     get_backend_info,
     get_compute_backend,
     is_rust_available,
@@ -32,6 +33,7 @@ from jamma.core.memory import (
 )
 
 __all__ = [
+    "BACKEND_ALIASES",
     "get_backend_info",
     "get_compute_backend",
     "is_rust_available",

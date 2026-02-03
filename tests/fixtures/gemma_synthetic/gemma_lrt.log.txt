@@ -1,0 +1,30 @@
+##
+## GEMMA Version = 0.96
+##
+## Command Line Input = gemma -bfile test -k gemma_kinship.cXX.txt -lmm 2 -o gemma_lrt 
+##
+## Date = Tue Feb  3 17:04:30 2026
+##
+## Summary Statistics:
+## number of total individuals = 100
+## number of analyzed individuals = 100
+## number of covariates = 1
+## number of phenotypes = 1
+## number of total SNPs = 500
+## number of analyzed SNPs = 500
+## REMLE log-likelihood in the null model = -140.636
+## MLE log-likelihood in the null model = -139.281
+## pve estimate in the null model = 0.293439
+## se(pve) in the null model = 0.353149
+## vg estimate in the null model = 0.749773
+## ve estimate in the null model = 0.713061
+## beta estimate in the null model =   -2e-08
+## se(beta) =   0.0844429
+##
+## Computation Time:
+## total computation time = 0.00167402 min 
+## computation time break down: 
+##      time on eigen-decomposition = 9.32333e-05 min 
+##      time on calculating UtX = 2.985e-05 min 
+##      time on optimization = 0.00133382 min 
+##

@@ -1,13 +1,17 @@
 """Eigendecomposition of kinship matrix.
 
 Provides GEMMA-compatible eigendecomposition with small eigenvalue thresholding.
-Uses scipy.linalg.eigh (LAPACK) to support large matrices (200k+ samples) that
-exceed JAX's int32 buffer limits.
 
-Note on threading: OpenBLAS can segfault with multi-threaded eigendecomposition
-on large matrices (>50k) due to memory allocation races. We detect the BLAS
-backend at runtime and only limit threads for OpenBLAS (MKL is stable).
-See: https://github.com/scipy/scipy/issues/8741
+Backend dispatch:
+- jax.scipy: Uses scipy.linalg.eigh (LAPACK) with system BLAS. Requires proper
+  BLAS configuration (OpenBLAS can SIGSEGV at 100k+ samples without thread limiting).
+- jax.rust: Uses faer via jamma_core. More stable at scale (100k+ samples) as faer
+  manages its own memory and threading.
+
+Note on threading (jax.scipy only): OpenBLAS can segfault with multi-threaded
+eigendecomposition on large matrices (>50k) due to memory allocation races.
+We detect the BLAS backend at runtime and only limit threads for OpenBLAS
+(MKL is stable). See: https://github.com/scipy/scipy/issues/8741
 """
 
 import time
@@ -118,16 +122,16 @@ def eigendecompose_kinship(
         ValueError: If kinship matrix is not square or has invalid shape.
         MemoryError: If matrix is too large to decompose.
     """
-    # Backend dispatch: Rust backend doesn't have pre-flight memory check
+    # Backend dispatch: jax.rust backend doesn't have pre-flight memory check
     # or thread limiting (faer handles this internally)
     backend = get_compute_backend()
-    if backend == "rust":
+    if backend == "jax.rust":
         try:
             from jamma_core import eigendecompose_kinship as rust_eigendecompose
 
             n = K.shape[0]
             logger.info(
-                f"## Eigendecomposing kinship matrix ({n:,} x {n:,}) [Rust/faer]"
+                f"## Eigendecomposing kinship matrix ({n:,} x {n:,}) [jax.rust backend]"
             )
             start_time = time.perf_counter()
             eigenvalues, eigenvectors = rust_eigendecompose(K, threshold)
@@ -136,10 +140,10 @@ def eigendecompose_kinship(
             return eigenvalues, eigenvectors
         except ImportError:
             logger.warning(
-                "Rust backend selected but jamma_core not installed, "
-                "falling back to scipy"
+                "jax.rust backend selected but jamma_core not installed, "
+                "falling back to jax.scipy"
             )
-            # Fall through to scipy path
+            # Fall through to jax.scipy path
 
     n_samples = K.shape[0]
     n_elements = n_samples * n_samples

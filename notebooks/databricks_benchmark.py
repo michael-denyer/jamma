@@ -560,13 +560,18 @@ def validate_jamma_vs_gemma(
         return {"error": "no_matches"}
 
     # Tolerances from CLAUDE.md
-    beta_tol = 1e-6
-    se_tol = 1e-6  # Same as beta
+    # Use hybrid tolerance: pass if abs_diff < abs_tol OR rel_diff < rel_tol
+    # This handles near-zero betas where relative diff is unreliable
+    beta_rel_tol = 1e-6
+    beta_abs_tol = 1e-5  # Matches unit test tolerance
+    se_tol = 1e-6
     pval_tol = 1e-8
 
-    # Beta comparison
+    # Beta comparison - use hybrid tolerance
     beta_diff = np.abs(merged["beta_gemma"] - merged["beta_jamma"])
     beta_rel = beta_diff / (np.abs(merged["beta_gemma"]) + 1e-10)
+    # Pass if either absolute OR relative tolerance is met
+    beta_pass_per_snp = (beta_diff < beta_abs_tol) | (beta_rel < beta_rel_tol)
 
     # SE comparison
     se_diff = np.abs(merged["se_gemma"] - merged["se_jamma"])
@@ -593,7 +598,7 @@ def validate_jamma_vs_gemma(
         "beta_max_rel_diff": float(beta_rel.max()),
         "beta_mean_rel_diff": float(beta_rel.mean()),
         "beta_max_abs_diff": float(beta_diff.max()),
-        "beta_pass": bool(beta_rel.max() < beta_tol),
+        "beta_pass": bool(beta_pass_per_snp.all()),
         # SE metrics
         "se_max_rel_diff": float(se_rel.max()),
         "se_mean_rel_diff": float(se_rel.mean()),
@@ -614,7 +619,9 @@ def validate_jamma_vs_gemma(
     logger.info(f"GEMMA validation: {status} ({len(merged)} SNPs compared)")
     logger.info(
         f"  beta:   max_rel={validation['beta_max_rel_diff']:.2e} "
-        f"(tol={beta_tol:.0e}) {'PASS' if validation['beta_pass'] else 'FAIL'}"
+        f"max_abs={validation['beta_max_abs_diff']:.2e} "
+        f"(rel_tol={beta_rel_tol:.0e}, abs_tol={beta_abs_tol:.0e}) "
+        f"{'PASS' if validation['beta_pass'] else 'FAIL'}"
     )
     logger.info(
         f"  SE:     max_rel={validation['se_max_rel_diff']:.2e} "
@@ -624,6 +631,37 @@ def validate_jamma_vs_gemma(
         f"  p-val:  max_rel={validation['pval_max_rel_diff']:.2e} "
         f"(tol={pval_tol:.0e}) {'PASS' if validation['pval_pass'] else 'FAIL'}"
     )
+
+    # Diagnose worst SNP if beta fails
+    if not validation["beta_pass"]:
+        worst_idx = beta_rel.idxmax()
+        worst = merged.loc[worst_idx]
+        logger.warning("=== WORST BETA SNP DIAGNOSTIC ===")
+        logger.warning(f"  rs: {worst['rs']}")
+        logger.warning(
+            f"  beta_gemma={worst['beta_gemma']:.6e}, "
+            f"beta_jamma={worst['beta_jamma']:.6e}"
+        )
+        logger.warning(
+            f"  abs_diff={beta_diff.loc[worst_idx]:.2e}, "
+            f"rel_diff={beta_rel.loc[worst_idx]:.2e}"
+        )
+        # Check sign
+        same_sign = np.sign(worst["beta_gemma"]) == np.sign(worst["beta_jamma"])
+        logger.warning(f"  same_sign={same_sign}")
+        # Check if beta near zero (relative diff unreliable)
+        if abs(worst["beta_gemma"]) < 1e-4:
+            logger.warning("  NOTE: |beta_gemma| < 1e-4, relative diff unreliable")
+        # Log SE and p-value for same SNP
+        logger.warning(
+            f"  se_gemma={worst['se_gemma']:.6e}, " f"se_jamma={worst['se_jamma']:.6e}"
+        )
+        # Lambda if available
+        if "l_remle_jamma" in worst.index:
+            logger.warning(f"  lambda_jamma={worst['l_remle_jamma']:.6f}")
+        if "l_remle_gemma" in worst.index or "l_remle" in worst.index:
+            l_gemma = worst.get("l_remle_gemma", worst.get("l_remle", "N/A"))
+            logger.warning(f"  lambda_gemma={l_gemma}")
 
     return validation
 

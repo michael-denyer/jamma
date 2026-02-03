@@ -64,8 +64,27 @@
 # MAGIC
 # MAGIC cd /tmp/jamma/rust/jamma-core
 # MAGIC
+# MAGIC # ============================================================
+# MAGIC # FAER VERSION SELECTION
+# MAGIC # ============================================================
+# MAGIC # 0.24 is SLOW (15x slower than scipy on 1k test)
+# MAGIC # Test 0.21, 0.22, 0.23 to find the best version
+# MAGIC #
+# MAGIC # CHANGE THIS LINE to test different versions:
+# MAGIC FAER_VERSION="0.21"
+# MAGIC # ============================================================
+# MAGIC
+# MAGIC echo "=== Setting faer version to ${FAER_VERSION} ==="
+# MAGIC SED_PAT='s/faer = { version = "[0-9.]*"/faer = { version = "'
+# MAGIC sed -i "${SED_PAT}${FAER_VERSION}\"/" Cargo.toml
+# MAGIC grep faer Cargo.toml
+# MAGIC
+# MAGIC # Clean previous build to ensure fresh compilation
+# MAGIC cargo clean
+# MAGIC
 # MAGIC # Build with maturin (will use .cargo/config.toml settings)
-# MAGIC echo "Building jamma_core with target-cpu=native..."
+# MAGIC echo ""
+# MAGIC echo "Building jamma_core with faer ${FAER_VERSION} + target-cpu=native..."
 # MAGIC maturin build --release
 # MAGIC
 # MAGIC # Show the built wheel

@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.23", features = ["extension-module"] }
 numpy = "0.23"
 ndarray = "0.16"
-faer = { version = "0.24", features = ["rayon"] }
+faer = { version = "0.21", features = ["rayon"] }
 
 [profile.release]
 lto = "fat"

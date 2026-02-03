@@ -1,6 +1,6 @@
 [package]
 name = "jamma-core"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "JAMMA native extensions for high-performance linear algebra"
 license = "GPL-3.0-or-later"
@@ -17,7 +17,7 @@ faer = { version = "0.22", features = ["rayon"] }
 
 # Pure-Rust BLAS/LAPACK stack
 # Pin scirs2-linalg; oxiblas is pulled transitively
-scirs2-linalg = { version = "0.1.2", features = ["linalg", "simd"] }
+scirs2-linalg = { version = "0.1.2", features = ["linalg", "simd", "parallel"] }
 
 [profile.release]
 lto = "fat"

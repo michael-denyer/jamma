@@ -20,14 +20,32 @@
 # MAGIC
 # MAGIC JAX 0.8+ requires NumPy 2.0+. Force upgrade numpy before installing JAX.
 # MAGIC
+# MAGIC **MKL Installation:** OpenBLAS has threading bugs causing SIGSEGV at 100k+
+# MAGIC samples. We install MKL-linked numpy/scipy via micromamba to fix this.
+# MAGIC
 # MAGIC **IMPORTANT:** Run `dbutils.library.restartPython()` after pip installs.
 
 # COMMAND ----------
 
-# Install numpy/scipy with MKL for stable eigendecomposition at scale
-# OpenBLAS has threading bugs causing SIGSEGV at 100k+ samples
-# IMPORTANT: --force-reinstall ensures scipy comes from urob index, not system
-# MAGIC %pip install --force-reinstall "numpy>=2.0" scipy --extra-index-url https://urob.github.io/numpy-mkl
+# MAGIC %md
+# MAGIC #### Step 1: Install MKL-linked numpy/scipy via micromamba
+# MAGIC
+# MAGIC This replaces OpenBLAS with Intel MKL for stable multi-threaded
+# MAGIC eigendecomposition at 100k+ scale.
+
+# COMMAND ----------
+
+# MAGIC %sh
+# MAGIC # Install MKL-linked numpy/scipy in the disco environment
+# MAGIC # libblas=*=*mkl forces MKL as the BLAS backend
+# MAGIC source /etc/profile.d/mamba.sh && micromamba install -n disco \
+# MAGIC     "numpy>=2.0,<2.4" scipy "libblas=*=*mkl" \
+# MAGIC     -c conda-forge -y --force-reinstall
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC #### Step 2: Install pip packages (JAX, jamma, etc.)
 
 # COMMAND ----------
 
@@ -43,7 +61,7 @@
 
 # COMMAND ----------
 
-# Restart Python kernel to load new numpy - MUST run this cell
+# Restart Python kernel to load new numpy/MKL - MUST run this cell
 dbutils.library.restartPython()  # noqa: F821
 
 # COMMAND ----------

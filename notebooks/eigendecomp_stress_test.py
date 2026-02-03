@@ -18,13 +18,12 @@
 
 # COMMAND ----------
 
-# Install MKL from conda-forge
-# This replaces OpenBLAS as the BLAS/LAPACK backend for numpy/scipy
-# fmt: off
-# ruff: noqa
-import subprocess
-subprocess.run(["pip", "install", "mkl", "mkl-service"], check=True)
-# fmt: on
+# MAGIC %sh
+# MAGIC # Install MKL-linked numpy/scipy in the disco environment
+# MAGIC # libblas=*=*mkl forces MKL as the BLAS backend
+# MAGIC source /etc/profile.d/mamba.sh && micromamba install -n disco \
+# MAGIC     "numpy>=2.0,<2.4" scipy "libblas=*=*mkl" \
+# MAGIC     -c conda-forge -y --force-reinstall
 
 # COMMAND ----------
 
@@ -60,8 +59,9 @@ except Exception as e:
 
 # Verify with threadpoolctl
 try:
-    from threadpoolctl import threadpool_info
     import json
+
+    from threadpoolctl import threadpool_info
 
     info = threadpool_info()
     print("\n=== Threadpool Info ===")
@@ -90,8 +90,8 @@ except ImportError:
 
 # COMMAND ----------
 
-import time
 import gc
+import time
 
 
 def test_eigendecomp(

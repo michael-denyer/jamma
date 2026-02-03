@@ -47,7 +47,7 @@ fn eigendecompose_kinship<'py>(
 
     // Copy to contiguous vec (required for py.allow_threads)
     // NumPy is row-major, we'll handle conversion in compute_eigen_internal
-    let k_vec: Vec<f64> = k_array.iter().cloned().collect();
+    let k_vec: Vec<f64> = k_array.iter().copied().collect();
 
     // Release GIL during heavy computation
     let (eigenvalues, eigenvectors_flat) =
@@ -78,22 +78,15 @@ fn compute_eigen_internal(k_flat: &[f64], n: usize, threshold: f64) -> (Vec<f64>
     let s = eigen.S().column_vector(); // eigenvalues as column vector
     let u = eigen.U(); // eigenvectors as MatRef (columns)
 
-    // Extract eigenvalues and apply threshold (GEMMA compatibility)
-    let mut eigenvalues: Vec<f64> = (0..n).map(|i| s[i]).collect();
-    for v in &mut eigenvalues {
-        if v.abs() < threshold {
-            *v = 0.0;
-        }
-    }
+    // Extract eigenvalues, zeroing values below threshold (GEMMA compatibility)
+    let eigenvalues: Vec<f64> = (0..n)
+        .map(|i| if s[i].abs() < threshold { 0.0 } else { s[i] })
+        .collect();
 
     // Convert eigenvectors to row-major for NumPy
-    // u[(i, j)] gives element at row i, column j
-    let mut eigenvectors = Vec::with_capacity(n * n);
-    for i in 0..n {
-        for j in 0..n {
-            eigenvectors.push(u[(i, j)]);
-        }
-    }
+    let eigenvectors: Vec<f64> = (0..n)
+        .flat_map(|i| (0..n).map(move |j| u[(i, j)]))
+        .collect();
 
     (eigenvalues, eigenvectors)
 }
@@ -111,12 +104,10 @@ mod tests {
 
     #[test]
     fn test_identity_eigendecomp() {
-        // Identity matrix should have all eigenvalues = 1
         let n = 3;
-        let mut k_flat = vec![0.0; n * n];
-        for i in 0..n {
-            k_flat[i * n + i] = 1.0;
-        }
+        let k_flat: Vec<f64> = (0..n * n)
+            .map(|idx| if idx / n == idx % n { 1.0 } else { 0.0 })
+            .collect();
 
         let (eigenvalues, eigenvectors) = compute_eigen_internal(&k_flat, n, 1e-10);
 

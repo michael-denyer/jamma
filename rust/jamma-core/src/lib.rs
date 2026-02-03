@@ -25,6 +25,7 @@ use pyo3::prelude::*;
 /// * `ValueError` if matrix is not square or is empty
 #[pyfunction]
 #[pyo3(signature = (k, threshold = 1e-10))]
+#[allow(clippy::type_complexity)]
 fn eigendecompose_kinship<'py>(
     py: Python<'py>,
     k: PyReadonlyArray2<'py, f64>,

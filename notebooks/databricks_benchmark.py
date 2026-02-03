@@ -34,7 +34,12 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install --no-deps --force-reinstall "jamma[rust] @ git+https://github.com/michael-denyer/jamma.git"
+# Install jamma_core (Rust extension) from GitHub releases
+# MAGIC %pip install https://github.com/michael-denyer/jamma/releases/latest/download/jamma_core-0.1.0-cp311-cp311-manylinux_2_34_x86_64.whl
+
+# COMMAND ----------
+
+# MAGIC %pip install --force-reinstall git+https://github.com/michael-denyer/jamma.git
 
 # COMMAND ----------
 

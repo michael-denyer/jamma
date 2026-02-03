@@ -22,7 +22,12 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install --force-reinstall "jamma[rust] @ git+https://github.com/michael-denyer/jamma.git"
+# Install jamma_core (Rust extension) from GitHub releases
+# MAGIC %pip install https://github.com/michael-denyer/jamma/releases/latest/download/jamma_core-0.1.0-cp311-cp311-manylinux_2_34_x86_64.whl
+
+# COMMAND ----------
+
+# MAGIC %pip install --force-reinstall git+https://github.com/michael-denyer/jamma.git
 
 # COMMAND ----------
 
@@ -101,44 +106,22 @@ except ImportError:
 # COMMAND ----------
 
 import gc
-import os
 import time
 
 from jamma.lmm.eigen import eigendecompose_kinship
 
 
-def test_eigendecomp(
-    n_samples: int,
-    use_rust: bool = True,
-    use_thread_limit: bool = False,
-    thread_limit: int = 1,
-):
-    """Test eigendecomposition at given scale.
+def test_eigendecomp(n_samples: int):
+    """Test eigendecomposition at given scale using Rust backend.
 
     Args:
         n_samples: Matrix dimension (n_samples x n_samples)
-        use_rust: Use Rust/faer backend (recommended). If False, uses scipy.
-        use_thread_limit: Limit BLAS threads (only relevant for scipy path)
-        thread_limit: Number of threads if limiting (only relevant for scipy path)
     """
     print(f"\n{'='*60}")
     print(f"Testing eigendecomp: {n_samples:,} x {n_samples:,}")
     print(f"Matrix memory: {n_samples * n_samples * 8 / 1e9:.1f} GB")
-    print(f"Backend: {'Rust/faer' if use_rust else 'scipy'}")
-    if not use_rust:
-        print(f"Thread limiting: {use_thread_limit} (limit={thread_limit})")
+    print("Backend: Rust/faer")
     print(f"{'='*60}")
-
-    # Set backend preference
-    if use_rust:
-        os.environ["JAMMA_BACKEND"] = "rust"
-    else:
-        os.environ["JAMMA_BACKEND"] = "jax"
-
-    # Clear backend cache to pick up new setting
-    from jamma.core.backend import get_compute_backend
-
-    get_compute_backend.cache_clear()
 
     # Generate random symmetric matrix
     print("Generating random symmetric matrix...")
@@ -161,10 +144,8 @@ def test_eigendecomp(
         pass
 
     # Run eigendecomp using JAMMA's eigendecompose_kinship
-    # This automatically uses Rust or scipy based on JAMMA_BACKEND
-    print(
-        f"\nStarting eigendecomposition ({os.environ.get('JAMMA_BACKEND', 'auto')})..."
-    )
+    # JAMMA auto-selects backend and handles thread limiting
+    print("\nStarting eigendecomposition...")
     start = time.time()
 
     try:
@@ -188,7 +169,7 @@ def test_eigendecomp(
 # COMMAND ----------
 
 # Quick sanity check with 1k
-test_eigendecomp(1_000, use_rust=True)
+test_eigendecomp(1_000)
 
 # COMMAND ----------
 
@@ -200,12 +181,12 @@ test_eigendecomp(1_000, use_rust=True)
 # COMMAND ----------
 
 # 10k - should be fast
-test_eigendecomp(10_000, use_rust=True)
+test_eigendecomp(10_000)
 
 # COMMAND ----------
 
 # 50k - Rust backend handles this without BLAS threading issues
-test_eigendecomp(50_000, use_rust=True)
+test_eigendecomp(50_000)
 
 # COMMAND ----------
 
@@ -218,28 +199,7 @@ test_eigendecomp(50_000, use_rust=True)
 
 # 100k - the crash scale for OpenBLAS
 # Rust backend should complete without issues
-success, elapsed = test_eigendecomp(100_000, use_rust=True)
-
-if not success:
-    print("\n\nRust failed - trying scipy with thread limiting...")
-    test_eigendecomp(100_000, use_rust=False, use_thread_limit=True, thread_limit=1)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 6. Backend Comparison (Optional)
-# MAGIC
-# MAGIC Compare Rust vs scipy performance at smaller scales.
-
-# COMMAND ----------
-
-# Uncomment to compare backends at 10k scale
-
-# print("=== Rust Backend ===")
-# test_eigendecomp(10_000, use_rust=True)
-
-# print("\n=== Scipy Backend ===")
-# test_eigendecomp(10_000, use_rust=False)
+test_eigendecomp(100_000)
 
 # COMMAND ----------
 
@@ -247,5 +207,4 @@ if not success:
 # MAGIC ## Results Summary
 # MAGIC
 # MAGIC - **Rust backend**: Stable at 100k+ scale, no BLAS threading issues
-# MAGIC - **Scipy/OpenBLAS**: May crash at 100k+ without thread limiting
-# MAGIC - **Scipy with thread limit=1**: Works but slower than Rust
+# MAGIC - **Scipy/OpenBLAS**: Would crash at 100k+ without thread limiting

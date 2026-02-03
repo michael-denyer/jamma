@@ -129,14 +129,16 @@ def test_cli_lmm_help():
     assert "-lmm" in result.output
 
 
-def test_cli_lmm_mode_2_not_implemented():
-    """Test that lmm mode 2 shows not implemented message."""
+def test_cli_lmm_mode_2_accepted():
+    """Test that lmm mode 2 (LRT) is accepted and doesn't show 'not implemented'."""
     result = runner.invoke(
         app, ["lmm", "-bfile", str(EXAMPLE_BFILE), "-k", "fake.txt", "-lmm", "2"]
     )
 
+    # Mode 2 is now implemented - fails on kinship file, not 'not implemented'
     assert result.exit_code == 1
-    assert "not yet implemented" in result.output.lower()
+    assert "not yet implemented" not in result.output.lower()
+    assert "kinship matrix file not found" in result.output.lower()
 
 
 def test_cli_gk_maf_miss_flags(tmp_path: Path):

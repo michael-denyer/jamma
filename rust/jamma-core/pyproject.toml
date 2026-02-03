@@ -1,0 +1,20 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "jamma-core"
+requires-python = ">=3.11"
+description = "JAMMA native extensions for high-performance linear algebra"
+license = { text = "GPL-3.0-or-later" }
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = false
+module-name = "jamma_core"

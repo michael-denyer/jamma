@@ -444,6 +444,109 @@ def reml_log_likelihood(
     return f
 
 
+def reml_log_likelihood_null(
+    lambda_val: float, eigenvalues: np.ndarray, Uab: np.ndarray, n_cvt: int
+) -> float:
+    """Compute REML log-likelihood for NULL model (no genotype effect).
+
+    Key differences from alternative model (reml_log_likelihood):
+    - nc_total = n_cvt (not n_cvt + 1) - no genotype column
+    - df = n - n_cvt (not n - n_cvt - 1) - different degrees of freedom
+    - logdet_hiw loop iterates to n_cvt (not n_cvt + 1)
+
+    This matches GEMMA's LogRL_f with calc_null=true.
+
+    Args:
+        lambda_val: Variance component ratio (sigma_g^2 / sigma_e^2)
+        eigenvalues: Eigenvalues of kinship matrix (n_samples,)
+        Uab: Matrix products from compute_Uab (n_samples, n_index)
+        n_cvt: Number of covariates
+
+    Returns:
+        Log-likelihood value (positive for maximization)
+    """
+    n = len(eigenvalues)
+    nc_total = n_cvt  # NULL MODEL: no genotype column
+    df = n - n_cvt  # NULL MODEL: different degrees of freedom
+
+    v_temp = lambda_val * eigenvalues + 1.0
+    Hi_eval = 1.0 / v_temp
+    logdet_h = np.sum(np.log(np.abs(v_temp)))
+
+    Pab = calc_pab(n_cvt, Hi_eval, Uab)
+    Iab = calc_iab(n_cvt, Uab)
+
+    # logdet_hiw: iterate to nc_total (n_cvt for null, not n_cvt+1)
+    logdet_hiw = 0.0
+    for i in range(nc_total):
+        index_ww = get_ab_index(i + 1, i + 1, n_cvt)
+        d_pab = Pab[i, index_ww]
+        d_iab = Iab[i, index_ww]
+        if d_pab > 0:
+            logdet_hiw += np.log(d_pab)
+        if d_iab > 0:
+            logdet_hiw -= np.log(d_iab)
+
+    # P_yy at level nc_total (n_cvt for null model)
+    index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
+    P_yy = Pab[nc_total, index_yy]
+
+    P_YY_MIN = 1e-8
+    if P_yy >= 0.0 and P_yy < P_YY_MIN:
+        P_yy = P_YY_MIN
+
+    c = 0.5 * df * (np.log(df) - np.log(2 * np.pi) - 1.0)
+    f = c - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
+
+    return f
+
+
+def mle_log_likelihood_null(
+    lambda_val: float, eigenvalues: np.ndarray, Uab: np.ndarray, n_cvt: int
+) -> float:
+    """Compute MLE log-likelihood for NULL model (no genotype effect).
+
+    Key differences from alternative model (mle_log_likelihood):
+    - nc_total = n_cvt (not n_cvt + 1) - no genotype column
+    - P_yy extracted at Pab[n_cvt, index_yy]
+
+    No logdet_hiw term (same as alternative MLE).
+
+    This matches GEMMA's LogL_f with calc_null=true.
+
+    Args:
+        lambda_val: Variance component ratio (sigma_g^2 / sigma_e^2)
+        eigenvalues: Eigenvalues of kinship matrix (n_samples,)
+        Uab: Matrix products from compute_Uab (n_samples, n_index)
+        n_cvt: Number of covariates
+
+    Returns:
+        Log-likelihood value (positive for maximization)
+    """
+    n = len(eigenvalues)
+    nc_total = n_cvt  # NULL MODEL: no genotype column
+
+    v_temp = lambda_val * eigenvalues + 1.0
+    Hi_eval = 1.0 / v_temp
+    logdet_h = np.sum(np.log(np.abs(v_temp)))
+
+    Pab = calc_pab(n_cvt, Hi_eval, Uab)
+
+    # P_yy at level nc_total (n_cvt for null model)
+    index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
+    P_yy = Pab[nc_total, index_yy]
+
+    P_YY_MIN = 1e-8
+    if P_yy >= 0.0 and P_yy < P_YY_MIN:
+        P_yy = P_YY_MIN
+
+    # MLE formula (uses n, not df; no logdet_hiw)
+    c = 0.5 * n * (np.log(n) - np.log(2 * np.pi) - 1.0)
+    f = c - 0.5 * logdet_h - 0.5 * n * np.log(P_yy)
+
+    return f
+
+
 def compute_null_model_lambda(
     eigenvalues: np.ndarray,
     UtW: np.ndarray,
@@ -457,6 +560,9 @@ def compute_null_model_lambda(
     Used by Score test (-lmm 3) which reuses null model lambda for all SNPs
     instead of re-optimizing per SNP (as Wald does).
 
+    Uses reml_log_likelihood_null() which implements GEMMA's LogRL_f with
+    calc_null=true (nc_total = n_cvt, df = n - n_cvt).
+
     Args:
         eigenvalues: Kinship eigenvalues (n_samples,)
         UtW: Rotated covariates (n_samples, n_cvt)
@@ -468,18 +574,18 @@ def compute_null_model_lambda(
         (lambda_null, logl_null) - Null model lambda and log-likelihood
     """
     # Import here to avoid circular dependency at module load time
-    from jamma.lmm.optimize import optimize_lambda_for_snp
+    from jamma.lmm.optimize import optimize_lambda
 
     # Compute Uab without genotype (Utx=None)
     # This sets genotype-related columns to zero via placeholder
     Uab = compute_Uab(UtW, Uty, Utx=None)
 
+    # Create closure for null model REML optimization
+    def neg_reml_null(lam: float) -> float:
+        return -reml_log_likelihood_null(lam, eigenvalues, Uab, n_cvt)
+
     # Optimize lambda under the null model
-    # The Uab structure retains shape (n_samples, n_index) even without genotype
-    # reml_log_likelihood uses n_cvt to access only valid covariate indices
-    lambda_null, logl_null = optimize_lambda_for_snp(
-        eigenvalues, Uab, n_cvt, l_min=l_min, l_max=l_max
-    )
+    lambda_null, logl_null = optimize_lambda(neg_reml_null, l_min=l_min, l_max=l_max)
 
     return lambda_null, logl_null
 
@@ -615,6 +721,9 @@ def compute_null_model_mle(
     Used by LRT (-lmm 2) which requires MLE (not REML) likelihood.
     The null model MLE is computed once and reused for all SNPs.
 
+    Uses mle_log_likelihood_null() which implements GEMMA's LogL_f with
+    calc_null=true (nc_total = n_cvt).
+
     Args:
         eigenvalues: Kinship eigenvalues (n_samples,)
         UtW: Rotated covariates (n_samples, n_cvt)
@@ -626,14 +735,16 @@ def compute_null_model_mle(
         (lambda_null_mle, logl_H0) - Null model MLE lambda and log-likelihood
     """
     # Import here to avoid circular dependency at module load time
-    from jamma.lmm.optimize import optimize_lambda_mle_for_snp
+    from jamma.lmm.optimize import optimize_lambda
 
     # Compute Uab without genotype (Utx=None)
     Uab = compute_Uab(UtW, Uty, Utx=None)
 
+    # Create closure for null model MLE optimization
+    def neg_mle_null(lam: float) -> float:
+        return -mle_log_likelihood_null(lam, eigenvalues, Uab, n_cvt)
+
     # Optimize lambda under the null model using MLE
-    lambda_null_mle, logl_H0 = optimize_lambda_mle_for_snp(
-        eigenvalues, Uab, n_cvt, l_min=l_min, l_max=l_max
-    )
+    lambda_null_mle, logl_H0 = optimize_lambda(neg_mle_null, l_min=l_min, l_max=l_max)
 
     return lambda_null_mle, logl_H0

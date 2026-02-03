@@ -17,7 +17,7 @@ Key components:
 Test modes:
 - lmm_mode=1: Wald test (default) - per-SNP REML optimization
 - lmm_mode=2: LRT - null MLE once, per-SNP alternative MLE
-- lmm_mode=3: Score test - null REML once, no per-SNP optimization
+- lmm_mode=3: Score test - null MLE once, no per-SNP optimization
 """
 
 from pathlib import Path
@@ -29,7 +29,6 @@ from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.io import IncrementalAssocWriter, write_assoc_results
 from jamma.lmm.likelihood import (
     calc_pab,
-    compute_null_model_lambda,
     compute_null_model_mle,
     compute_Uab,
 )
@@ -132,7 +131,7 @@ def run_lmm_association(
             - Wald test (1): Per-SNP REML optimization, full statistics.
             - LRT (2): Null MLE once, per-SNP alternative MLE. Output has
               l_mle and p_lrt (no beta/se in GEMMA -lmm 2 format).
-            - Score test (3): Null model lambda once, no per-SNP optimization.
+            - Score test (3): Null model MLE lambda once, no per-SNP optimization.
               Faster than Wald. Output has p_score.
 
     Returns:
@@ -197,11 +196,12 @@ def run_lmm_association(
     UtW = U.T @ W
     n_cvt = W.shape[1]
 
-    # For Score test: compute null model lambda once before SNP loop
+    # For Score test: compute null model MLE lambda once before SNP loop
+    # GEMMA uses MLE (not REML) for Score test null model
     lambda_null = None
     if lmm_mode == 3:
-        lambda_null, logl_null = compute_null_model_lambda(eigenvalues, UtW, Uty, n_cvt)
-        logger.info(f"Null model lambda: {lambda_null:.6f}, logl: {logl_null:.6f}")
+        lambda_null, logl_null = compute_null_model_mle(eigenvalues, UtW, Uty, n_cvt)
+        logger.info(f"Null model MLE lambda: {lambda_null:.6f}, logl: {logl_null:.6f}")
 
     # For LRT: compute null model MLE once before SNP loop
     lambda_null_mle = None

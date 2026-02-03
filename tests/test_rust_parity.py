@@ -1,9 +1,9 @@
-"""End-to-end parity tests: Rust backend vs scipy backend.
+"""End-to-end parity tests: jax.rust backend vs jax.scipy backend.
 
 These tests verify that the full LMM workflow produces identical
 statistical results regardless of which backend is used for
-eigendecomposition. This is critical for validating that the Rust
-implementation can replace scipy without changing GWAS results.
+eigendecomposition. This is critical for validating that the jax.rust
+implementation can replace jax.scipy without changing GWAS results.
 """
 
 import os
@@ -14,14 +14,14 @@ import pytest
 
 from jamma.core.backend import get_compute_backend, is_rust_available
 
-# Skip all tests if Rust backend not available
+# Skip all tests if jax.rust backend not available
 pytestmark = pytest.mark.skipif(
-    not is_rust_available(), reason="Rust backend (jamma_core) not installed"
+    not is_rust_available(), reason="jax.rust backend (jamma_core) not installed"
 )
 
 
 class TestEigendecompParity:
-    """Tests comparing Rust vs scipy eigendecomposition directly."""
+    """Tests comparing jax.rust vs jax.scipy eigendecomposition directly."""
 
     def setup_method(self):
         get_compute_backend.cache_clear()
@@ -31,7 +31,7 @@ class TestEigendecompParity:
         get_compute_backend.cache_clear()
 
     def test_eigenvalues_match(self):
-        """Eigenvalues from Rust should match scipy exactly."""
+        """Eigenvalues from jax.rust should match scipy exactly."""
         from scipy import linalg
 
         np.random.seed(12345)
@@ -42,8 +42,8 @@ class TestEigendecompParity:
         # scipy reference
         scipy_eigenvalues, _ = linalg.eigh(K.copy())
 
-        # Rust (via jamma)
-        os.environ["JAMMA_BACKEND"] = "rust"
+        # jax.rust (via jamma)
+        os.environ["JAMMA_BACKEND"] = "jax.rust"
         get_compute_backend.cache_clear()
         from jamma.lmm.eigen import eigendecompose_kinship
 
@@ -55,17 +55,17 @@ class TestEigendecompParity:
             scipy_eigenvalues,
             rtol=1e-10,
             atol=1e-14,
-            err_msg="Eigenvalues differ between Rust and scipy",
+            err_msg="Eigenvalues differ between jax.rust and scipy",
         )
 
     def test_eigenvectors_reconstruct_matrix(self):
-        """Eigenvectors from Rust should reconstruct the original matrix."""
+        """Eigenvectors from jax.rust should reconstruct the original matrix."""
         np.random.seed(67890)
         n = 300
         A = np.random.randn(n, n)
         K = (A + A.T) / 2
 
-        os.environ["JAMMA_BACKEND"] = "rust"
+        os.environ["JAMMA_BACKEND"] = "jax.rust"
         get_compute_backend.cache_clear()
         from jamma.lmm.eigen import eigendecompose_kinship
 
@@ -83,7 +83,7 @@ class TestEigendecompParity:
         )
 
     def test_threshold_behavior_matches(self):
-        """Threshold zeroing should behave identically between Rust and scipy."""
+        """Threshold zeroing should behave identically between backends."""
         # Create a matrix with a known small eigenvalue using diagonal construction
         # Diagonal matrix eigenvalues are the diagonal elements
         n = 100
@@ -94,7 +94,7 @@ class TestEigendecompParity:
         # Create diagonal matrix
         K = np.diag(eigenvalues_true)
 
-        os.environ["JAMMA_BACKEND"] = "rust"
+        os.environ["JAMMA_BACKEND"] = "jax.rust"
         get_compute_backend.cache_clear()
         from jamma.lmm.eigen import eigendecompose_kinship
 
@@ -138,8 +138,8 @@ class TestKinshipParity:
         # scipy reference (direct)
         scipy_eigenvalues, scipy_eigenvectors = linalg.eigh(K.copy())
 
-        # Rust (via jamma)
-        os.environ["JAMMA_BACKEND"] = "rust"
+        # jax.rust (via jamma)
+        os.environ["JAMMA_BACKEND"] = "jax.rust"
         get_compute_backend.cache_clear()
         from jamma.lmm.eigen import eigendecompose_kinship
 
@@ -174,10 +174,10 @@ class TestLMMWorkflowParity:
         get_compute_backend.cache_clear()
 
     def test_synthetic_lmm_parity(self):
-        """Full LMM workflow on synthetic data should match between backends.
+        """Full LMM workflow should match between jax.scipy and jax.rust.
 
         This is the critical end-to-end test: run full LMM association with both
-        scipy and Rust backends and verify identical statistical results.
+        backends and verify identical statistical results.
         """
         from jamma.kinship import compute_centered_kinship
         from jamma.lmm import run_lmm_association
@@ -203,8 +203,8 @@ class TestLMMWorkflowParity:
             for i in range(n_snps)
         ]
 
-        # Run with JAX/scipy backend (force no Rust)
-        os.environ["JAMMA_BACKEND"] = "jax"
+        # Run with jax.scipy backend
+        os.environ["JAMMA_BACKEND"] = "jax.scipy"
         get_compute_backend.cache_clear()
 
         scipy_results = run_lmm_association(
@@ -214,8 +214,8 @@ class TestLMMWorkflowParity:
             snp_info=snp_info,
         )
 
-        # Run with Rust backend
-        os.environ["JAMMA_BACKEND"] = "rust"
+        # Run with jax.rust backend
+        os.environ["JAMMA_BACKEND"] = "jax.rust"
         get_compute_backend.cache_clear()
 
         rust_results = run_lmm_association(
@@ -267,7 +267,7 @@ class TestLMMWorkflowParity:
 
 
 class TestGEMMAReferenceWithRust:
-    """Tests verifying Rust backend still matches GEMMA reference."""
+    """Tests verifying jax.rust backend still matches GEMMA reference."""
 
     @pytest.fixture
     def fixture_path(self):
@@ -282,7 +282,7 @@ class TestGEMMAReferenceWithRust:
 
     @pytest.mark.tier1
     def test_gemma_eigenvalues_parity(self, fixture_path):
-        """Eigenvalues should match GEMMA reference when using Rust backend."""
+        """Eigenvalues should match GEMMA reference when using jax.rust."""
         eigenvalue_file = fixture_path / "eigenvalues.txt"
         if not eigenvalue_file.exists():
             pytest.skip("GEMMA eigenvalue reference not available")
@@ -297,8 +297,8 @@ class TestGEMMAReferenceWithRust:
 
         K = np.loadtxt(kinship_file)
 
-        # Eigendecomp with Rust
-        os.environ["JAMMA_BACKEND"] = "rust"
+        # Eigendecomp with jax.rust
+        os.environ["JAMMA_BACKEND"] = "jax.rust"
         get_compute_backend.cache_clear()
         from jamma.lmm.eigen import eigendecompose_kinship
 
@@ -309,7 +309,7 @@ class TestGEMMAReferenceWithRust:
             rust_eigenvalues,
             gemma_eigenvalues,
             rtol=1e-8,  # JAMMA's kinship tolerance
-            err_msg="Rust eigenvalues don't match GEMMA reference",
+            err_msg="jax.rust eigenvalues don't match GEMMA reference",
         )
 
 
@@ -325,7 +325,7 @@ class TestPerformanceBaseline:
 
     @pytest.mark.benchmark
     def test_rust_not_dramatically_slower(self):
-        """Rust should not be dramatically slower than scipy.
+        """jax.rust should not be dramatically slower than scipy.
 
         This test compares raw eigendecomp performance, calling jamma_core
         directly to avoid Python wrapper overhead and logging.
@@ -352,7 +352,7 @@ class TestPerformanceBaseline:
             scipy_times.append(time.perf_counter() - start)
         scipy_time = min(scipy_times)  # Use min to reduce noise
 
-        # Time Rust (average of 3 runs)
+        # Time jax.rust (average of 3 runs)
         rust_times = []
         for _ in range(3):
             start = time.perf_counter()
@@ -360,9 +360,9 @@ class TestPerformanceBaseline:
             rust_times.append(time.perf_counter() - start)
         rust_time = min(rust_times)  # Use min to reduce noise
 
-        # Rust should not be more than 5x slower
+        # jax.rust should not be more than 5x slower
         # (faer is typically comparable to or faster than OpenBLAS)
         assert rust_time < scipy_time * 5, (
-            f"Rust ({rust_time:.2f}s) is more than 5x slower than "
+            f"jax.rust ({rust_time:.2f}s) is more than 5x slower than "
             f"scipy ({scipy_time:.2f}s)"
         )

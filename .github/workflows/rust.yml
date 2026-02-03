@@ -47,14 +47,22 @@ jobs:
         working-directory: rust/jamma-core
         run: cargo test
 
-      - name: Install maturin and build
+      - name: Create virtualenv and install dependencies
         run: |
+          python -m venv .venv
+          source .venv/bin/activate
           pip install maturin numpy scipy pytest
+
+      - name: Build and install with maturin
+        run: |
+          source .venv/bin/activate
           cd rust/jamma-core
           maturin develop --release
 
       - name: Run Python integration tests
-        run: pytest rust/jamma-core/tests/ -v
+        run: |
+          source .venv/bin/activate
+          pytest rust/jamma-core/tests/ -v
 
   lint:
     name: Lint

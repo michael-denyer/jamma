@@ -1222,43 +1222,60 @@ class TestLmmScoreValidation:
             f"Max rel diff: {comparison.p_score.max_rel_diff:.2e}"
         )
 
-    def test_score_faster_than_wald(
+    def test_score_has_no_per_snp_optimization(
         self, mouse_data, mouse_phenotypes, reference_kinship
     ):
-        """Score test is faster than Wald test (no per-SNP optimization)."""
-        import time
+        """Score test uses fixed lambda (no per-SNP optimization).
 
+        This test verifies the algorithmic difference between Score and Wald:
+        - Wald: optimizes lambda independently for each SNP
+        - Score: computes null model lambda once, reuses for all SNPs
+
+        Rather than timing (which is noisy on small datasets where eigendecomp
+        dominates), we verify that Score results use a single lambda value
+        while Wald results have varying lambda per SNP.
+        """
         genotypes = mouse_data.genotypes
         phenotypes = mouse_phenotypes
         snp_info = _build_snp_info(mouse_data)
 
-        # Time Wald test
-        start = time.perf_counter()
-        _ = run_lmm_association(
+        # Run Wald test
+        wald_results = run_lmm_association(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=reference_kinship,
             snp_info=snp_info,
             lmm_mode=1,  # Wald
         )
-        wald_time = time.perf_counter() - start
 
-        # Time Score test
-        start = time.perf_counter()
-        _ = run_lmm_association(
+        # Run Score test
+        score_results = run_lmm_association(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=reference_kinship,
             snp_info=snp_info,
             lmm_mode=3,  # Score
         )
-        score_time = time.perf_counter() - start
 
-        # Score should be faster (no per-SNP optimization)
-        assert score_time < wald_time, (
-            f"Score test ({score_time:.3f}s) should be faster than "
-            f"Wald test ({wald_time:.3f}s)"
-        )
+        # Wald should have varying l_remle values (per-SNP optimization)
+        wald_lambdas = [r.l_remle for r in wald_results if r.l_remle is not None]
+        assert (
+            len(set(wald_lambdas)) > 1
+        ), "Wald test should have varying lambda values per SNP"
+
+        # Score should have no l_remle (uses fixed null model lambda)
+        score_lambdas = [r.l_remle for r in score_results]
+        assert all(
+            lam is None for lam in score_lambdas
+        ), "Score test should not have per-SNP l_remle values"
+
+        # Score should have p_score, Wald should have p_wald
+        assert all(
+            r.p_score is not None for r in score_results
+        ), "Score test results should have p_score"
+        assert all(
+            r.p_wald is not None for r in wald_results
+        ), "Wald test results should have p_wald"
 
 
 class TestScoreTestProperties:

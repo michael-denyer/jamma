@@ -325,9 +325,14 @@ class TestPerformanceBaseline:
 
     @pytest.mark.benchmark
     def test_rust_not_dramatically_slower(self):
-        """Rust should not be dramatically slower than scipy."""
+        """Rust should not be dramatically slower than scipy.
+
+        This test compares raw eigendecomp performance, calling jamma_core
+        directly to avoid Python wrapper overhead and logging.
+        """
         import time
 
+        import jamma_core
         from scipy import linalg
 
         np.random.seed(44444)
@@ -335,22 +340,28 @@ class TestPerformanceBaseline:
         A = np.random.randn(n, n)
         K = (A + A.T) / 2
 
-        # Time scipy
-        start = time.perf_counter()
-        linalg.eigh(K.copy())
-        scipy_time = time.perf_counter() - start
+        # Warmup both implementations (JIT, cache effects)
+        _ = linalg.eigh(K.copy())
+        _ = jamma_core.eigendecompose_kinship(K.copy(), threshold=0.0)
 
-        # Time Rust
-        os.environ["JAMMA_BACKEND"] = "rust"
-        get_compute_backend.cache_clear()
-        from jamma.lmm.eigen import eigendecompose_kinship
+        # Time scipy (average of 3 runs)
+        scipy_times = []
+        for _ in range(3):
+            start = time.perf_counter()
+            linalg.eigh(K.copy())
+            scipy_times.append(time.perf_counter() - start)
+        scipy_time = min(scipy_times)  # Use min to reduce noise
 
-        start = time.perf_counter()
-        eigendecompose_kinship(K.copy())
-        rust_time = time.perf_counter() - start
+        # Time Rust (average of 3 runs)
+        rust_times = []
+        for _ in range(3):
+            start = time.perf_counter()
+            jamma_core.eigendecompose_kinship(K.copy(), threshold=0.0)
+            rust_times.append(time.perf_counter() - start)
+        rust_time = min(rust_times)  # Use min to reduce noise
 
         # Rust should not be more than 5x slower
-        # (faer is typically comparable to OpenBLAS)
+        # (faer is typically comparable to or faster than OpenBLAS)
         assert rust_time < scipy_time * 5, (
             f"Rust ({rust_time:.2f}s) is more than 5x slower than "
             f"scipy ({scipy_time:.2f}s)"

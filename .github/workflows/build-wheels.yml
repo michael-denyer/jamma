@@ -29,15 +29,20 @@ jobs:
 
   build-macos-x86:
     name: Build macOS x86_64 wheels
-    runs-on: macos-13
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           working-directory: rust/jamma-core
-          target: x86_64
+          target: x86_64-apple-darwin
           args: --release --strip --out dist
 
       - name: Upload wheels
@@ -52,11 +57,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           working-directory: rust/jamma-core
-          target: aarch64
+          target: aarch64-apple-darwin
           args: --release --strip --out dist
 
       - name: Upload wheels

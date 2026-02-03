@@ -1,8 +1,14 @@
-"""Compute backend detection and dispatch.
+"""Eigendecomposition backend detection and dispatch.
 
-JAMMA supports two compute backends:
-- JAX: GPU/TPU acceleration (preferred when available)
-- Rust: CPU-only, no external dependencies (fallback)
+JAMMA supports two eigendecomp backends:
+- jax: Uses scipy with system BLAS; preferred when GPU available for other ops
+- rust: Uses faer (pure Rust); preferred for CPU-only workloads at 100k+ scale
+
+The "jax" backend still uses scipy for eigendecomp (JAX's eigh has int32 limits),
+but is preferred when a GPU is available for other JAX operations.
+
+The "rust" backend uses faer via jamma_core, which avoids OpenBLAS threading
+bugs that cause SIGSEGV at 100k+ samples.
 
 Backend selection is automatic based on hardware but can be overridden
 via the JAMMA_BACKEND environment variable.

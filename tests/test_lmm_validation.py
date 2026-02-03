@@ -1145,24 +1145,8 @@ class TestLmmScoreValidation:
     NOTE: These tests require GEMMA reference data which must be generated
     manually using scripts/generate_score_reference.sh. Tests are skipped
     in CI if reference data is not committed to the repository.
-
-    KNOWN ISSUE: JAMMA's null model lambda computation differs from GEMMA's,
-    resulting in different p_score values. GEMMA uses a specific pve estimation
-    method (CalcPVEnull in param.cpp) that produces lambda values different from
-    standard REML optimization. This requires further investigation to match
-    GEMMA's exact algorithm. The Score test formula itself is correct, but the
-    input lambda affects all downstream statistics.
     """
 
-    @pytest.mark.xfail(
-        reason=(
-            "JAMMA null model lambda differs from GEMMA. "
-            "GEMMA uses CalcPVEnull method that produces different lambda values "
-            "than standard REML optimization. Requires investigation of GEMMA's "
-            "exact pve estimation algorithm."
-        ),
-        strict=False,  # Allow unexpected passes during investigation
-    )
     @pytest.mark.skipif(
         not _score_reference_exists(),
         reason=(
@@ -1187,13 +1171,6 @@ class TestLmmScoreValidation:
         comparison = compare_assoc_results(jamma_results, reference_results)
         assert comparison.passed, _format_comparison_failure(comparison)
 
-    @pytest.mark.xfail(
-        reason=(
-            "JAMMA null model lambda differs from GEMMA. "
-            "See test_score_test_matches_gemma docstring for details."
-        ),
-        strict=False,
-    )
     @pytest.mark.skipif(
         not _score_reference_exists(),
         reason=(

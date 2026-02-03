@@ -5,3 +5,12 @@ repos:
       - id: ruff
         args: [--fix]
       - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: rustfmt
+        name: rustfmt
+        entry: cargo fmt --manifest-path rust/jamma-core/Cargo.toml --
+        language: system
+        types: [rust]
+        pass_filenames: true

@@ -207,6 +207,7 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
 
     Parses the tab-separated .assoc.txt format produced by GEMMA's LMM modes:
     - Wald test (-lmm 1): Has logl_H1, l_remle, p_wald columns
+    - LRT (-lmm 2): Has l_mle, p_lrt columns (no beta/se)
     - Score test (-lmm 3): Has p_score column (no logl_H1, l_remle, p_wald)
 
     Args:
@@ -272,6 +273,18 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
             "se",
             "p_score",
         ]
+        # Format 4: LRT (-lmm 2)
+        expected_cols_lrt = [
+            "chr",
+            "rs",
+            "ps",
+            "n_miss",
+            "allele1",
+            "allele0",
+            "af",
+            "l_mle",
+            "p_lrt",
+        ]
 
         if actual_cols == expected_cols_wald_full:
             format_type = "wald_full"
@@ -279,12 +292,15 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
             format_type = "wald_short"
         elif actual_cols == expected_cols_score:
             format_type = "score"
+        elif actual_cols == expected_cols_lrt:
+            format_type = "lrt"
         else:
             raise ValueError(
                 f"Unexpected header format. Expected one of:\n"
                 f"  {expected_cols_wald_full}\n"
                 f"  {expected_cols_wald_short}\n"
                 f"  {expected_cols_score}\n"
+                f"  {expected_cols_lrt}\n"
                 f"Got: {actual_cols}"
             )
 
@@ -324,7 +340,7 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
                         p_wald=float(fields[10]),
                     )
                 )
-            else:  # score
+            elif format_type == "score":
                 results.append(
                     AssocResult(
                         chr=fields[0],
@@ -342,6 +358,25 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
                         p_score=float(fields[9]),
                     )
                 )
+            else:  # lrt
+                results.append(
+                    AssocResult(
+                        chr=fields[0],
+                        rs=fields[1],
+                        ps=int(fields[2]),
+                        n_miss=int(fields[3]),
+                        allele1=fields[4],
+                        allele0=fields[5],
+                        af=float(fields[6]),
+                        beta=float("nan"),  # LRT format has no beta
+                        se=float("nan"),  # LRT format has no se
+                        logl_H1=None,
+                        l_remle=None,
+                        p_wald=None,
+                        l_mle=float(fields[7]),
+                        p_lrt=float(fields[8]),
+                    )
+                )
     return results
 
 
@@ -357,12 +392,14 @@ class AssocComparisonResult:
         n_snps: Number of SNPs compared.
         beta: Comparison result for effect sizes.
         se: Comparison result for standard errors.
-        p_wald: Comparison result for p-values.
+        p_wald: Comparison result for p-values (Wald test).
         logl_H1: Comparison result for log-likelihoods.
         l_remle: Comparison result for lambda REML values.
         af: Comparison result for allele frequencies.
         mismatched_snps: List of SNP rs IDs that don't match between files.
         p_score: Comparison result for Score test p-values (only for lmm_mode=3).
+        p_lrt: Comparison result for LRT p-values (only for lmm_mode=2).
+        l_mle: Comparison result for MLE lambda values (only for lmm_mode=2).
     """
 
     passed: bool
@@ -375,6 +412,8 @@ class AssocComparisonResult:
     af: ComparisonResult
     mismatched_snps: list[str]
     p_score: ComparisonResult | None = None  # Only for Score test (-lmm 3)
+    p_lrt: ComparisonResult | None = None  # Only for LRT (-lmm 2)
+    l_mle: ComparisonResult | None = None  # Only for LRT (-lmm 2)
 
 
 def compare_assoc_results(
@@ -390,8 +429,10 @@ def compare_assoc_results(
     - se: se_rtol (standard errors with sqrt operations)
     - p_wald: pvalue_rtol (CDF computations may differ) - Wald test only
     - p_score: pvalue_rtol (CDF computations may differ) - Score test only
+    - p_lrt: pvalue_rtol (CDF computations may differ) - LRT only
     - logl_H1: logl_rtol (log-likelihood values) - Wald test only
     - l_remle: lambda_rtol (variance ratio estimates) - Wald test only
+    - l_mle: lambda_rtol (MLE lambda values) - LRT only
     - af: af_rtol (allele frequency of counted allele, BIM A1)
 
     Args:
@@ -412,10 +453,16 @@ def compare_assoc_results(
     if config is None:
         config = ToleranceConfig()
 
-    # Detect test type from reference data (Score test has p_score, not p_wald)
+    # Detect test type from reference data
+    # Score test has p_score; LRT has p_lrt; Wald has p_wald
     is_score_test = (
         len(expected) > 0
         and expected[0].p_score is not None
+        and expected[0].p_wald is None
+    )
+    is_lrt_test = (
+        len(expected) > 0
+        and expected[0].p_lrt is not None
         and expected[0].p_wald is None
     )
 
@@ -450,6 +497,8 @@ def compare_assoc_results(
             af=skip_result,
             mismatched_snps=[],
             p_score=skip_result if is_score_test else None,
+            p_lrt=skip_result if is_lrt_test else None,
+            l_mle=skip_result if is_lrt_test else None,
         )
 
     # Check for mismatched SNP IDs
@@ -479,6 +528,8 @@ def compare_assoc_results(
 
     # Handle test-type specific columns
     p_score_result = None
+    p_lrt_result = None
+    l_mle_result = None
     if is_score_test:
         # Score test: compare p_score, skip Wald-specific columns
         actual_pscore = np.array([r.p_score for r in actual])
@@ -489,6 +540,57 @@ def compare_assoc_results(
         pwald_result = _skipped_result("p_wald skipped (Score test)")
         logl_result = _skipped_result("logl_H1 skipped (Score test)")
         lambda_result = _skipped_result("l_remle skipped (Score test)")
+    elif is_lrt_test:
+        # LRT: compare p_lrt and l_mle, skip Wald-specific columns
+        actual_plrt = np.array([r.p_lrt for r in actual])
+        expected_plrt = np.array([r.p_lrt for r in expected])
+        p_lrt_result = compare_arrays(
+            actual_plrt, expected_plrt, config.pvalue_rtol, config.atol, "p_lrt"
+        )
+
+        actual_lmle = np.array(
+            [r.l_mle if r.l_mle is not None else np.nan for r in actual]
+        )
+        expected_lmle = np.array(
+            [r.l_mle if r.l_mle is not None else np.nan for r in expected]
+        )
+
+        # Lambda MLE comparison with boundary handling (same as REML)
+        lambda_lower_bound = 1e-4
+        lambda_upper_bound = 1e4  # Also check upper bound for MLE
+        boundary_mask = (
+            (expected_lmle <= lambda_lower_bound)
+            | (actual_lmle <= lambda_lower_bound)
+            | (expected_lmle >= lambda_upper_bound)
+            | (actual_lmle >= lambda_upper_bound)
+        )
+
+        if np.all(boundary_mask):
+            l_mle_result = _skipped_result(
+                "l_mle comparison skipped (all values at optimization boundary)"
+            )
+        elif np.any(boundary_mask):
+            non_boundary_actual = actual_lmle[~boundary_mask]
+            non_boundary_expected = expected_lmle[~boundary_mask]
+            l_mle_result = compare_arrays(
+                non_boundary_actual,
+                non_boundary_expected,
+                config.lambda_rtol,
+                config.atol,
+                f"l_mle (excluding {np.sum(boundary_mask)} boundary values)",
+            )
+        else:
+            l_mle_result = compare_arrays(
+                actual_lmle,
+                expected_lmle,
+                config.lambda_rtol,
+                config.atol,
+                "l_mle",
+            )
+
+        pwald_result = _skipped_result("p_wald skipped (LRT)")
+        logl_result = _skipped_result("logl_H1 skipped (LRT)")
+        lambda_result = _skipped_result("l_remle skipped (LRT)")
     else:
         # Wald test: compare Wald-specific columns
         actual_pwald = np.array(
@@ -555,22 +657,28 @@ def compare_assoc_results(
             )
 
     # Overall pass if all relevant columns pass and no mismatched SNPs
-    all_passed = (
-        beta_result.passed
-        and se_result.passed
-        and af_result.passed
-        and len(mismatched) == 0
-    )
-    # Add test-type specific checks
-    if is_score_test:
-        all_passed = all_passed and p_score_result.passed
+    # Note: For LRT, beta/se are NaN so we skip those checks
+    if is_lrt_test:
+        # LRT has no beta/se, only check AF and LRT-specific columns
+        all_passed = af_result.passed and len(mismatched) == 0
+        all_passed = all_passed and p_lrt_result.passed and l_mle_result.passed
     else:
         all_passed = (
-            all_passed
-            and pwald_result.passed
-            and logl_result.passed
-            and lambda_result.passed
+            beta_result.passed
+            and se_result.passed
+            and af_result.passed
+            and len(mismatched) == 0
         )
+        # Add test-type specific checks
+        if is_score_test:
+            all_passed = all_passed and p_score_result.passed
+        else:
+            all_passed = (
+                all_passed
+                and pwald_result.passed
+                and logl_result.passed
+                and lambda_result.passed
+            )
 
     return AssocComparisonResult(
         passed=all_passed,
@@ -583,4 +691,6 @@ def compare_assoc_results(
         af=af_result,
         mismatched_snps=mismatched,
         p_score=p_score_result,
+        p_lrt=p_lrt_result,
+        l_mle=l_mle_result,
     )

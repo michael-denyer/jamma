@@ -128,6 +128,68 @@ def calc_pab_jax(
 
 
 @jit
+def mle_log_likelihood_jax(
+    lambda_val: Float[Array, ""],
+    eigenvalues: Float[Array, " n"],
+    Uab: Float[Array, "n 6"],
+) -> Float[Array, ""]:
+    """MLE log-likelihood (not REML) for n_cvt=1.
+
+    Key difference from REML: no logdet_hiw term, uses n instead of df.
+
+    Args:
+        lambda_val: Variance ratio to evaluate
+        eigenvalues: Kinship eigenvalues
+        Uab: Pre-computed Uab matrix
+
+    Returns:
+        MLE log-likelihood value
+    """
+    n = eigenvalues.shape[0]
+
+    v_temp = lambda_val * eigenvalues + 1.0
+    Hi_eval = 1.0 / v_temp
+    logdet_h = jnp.sum(jnp.log(jnp.abs(v_temp)))
+
+    # Compute Pab using existing calc_pab_jax
+    Pab = calc_pab_jax(Hi_eval, Uab)
+
+    # P_yy after projecting out covariates and genotype
+    # For n_cvt=1: nc_total = 2, so Pab[2, _IDX_YY]
+    P_yy = Pab[2, _IDX_YY]
+    P_yy = jnp.where((P_yy >= 0.0) & (P_yy < 1e-8), 1e-8, P_yy)
+
+    # MLE formula (NO logdet_hiw, uses n not df)
+    c = 0.5 * n * (jnp.log(n) - jnp.log(2 * jnp.pi) - 1.0)
+    f = c - 0.5 * logdet_h - 0.5 * n * jnp.log(P_yy)
+
+    return f
+
+
+@jit
+def calc_lrt_pvalue_jax(
+    logl_H1: Float[Array, ""],
+    logl_H0: Float[Array, ""],
+) -> Float[Array, ""]:
+    """Compute LRT p-value with numerical guards.
+
+    LRT statistic: 2 * (logl_H1 - logl_H0)
+    Under H0, follows chi-squared with df=1.
+
+    Args:
+        logl_H1: MLE log-likelihood under alternative
+        logl_H0: MLE log-likelihood under null
+
+    Returns:
+        LRT p-value from chi2.sf(stat, df=1)
+    """
+    lrt_stat = 2.0 * (logl_H1 - logl_H0)
+    lrt_stat = jnp.maximum(lrt_stat, 0.0)
+    p_lrt = jax.scipy.stats.chi2.sf(lrt_stat, df=1)
+    return p_lrt
+
+
+@jit
 def reml_log_likelihood_jax(
     lambda_val: Float[Array, ""],
     eigenvalues: Float[Array, " n"],

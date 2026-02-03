@@ -193,3 +193,54 @@ class TestEigendecompEdgeCases:
         reconstructed = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
         K_c = np.ascontiguousarray(K)
         np.testing.assert_allclose(reconstructed, K_c, rtol=1e-10, atol=1e-10)
+
+    def test_nan_input_raises_error(self):
+        """Matrix containing NaN should raise ValueError."""
+        n = 10
+        K = np.eye(n, dtype=np.float64)
+        K[5, 5] = np.nan
+
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            jamma_core.eigendecompose_kinship(K)
+
+    def test_inf_input_raises_error(self):
+        """Matrix containing Inf should raise ValueError."""
+        n = 10
+        K = np.eye(n, dtype=np.float64)
+        K[3, 3] = np.inf
+
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            jamma_core.eigendecompose_kinship(K)
+
+    def test_negative_inf_input_raises_error(self):
+        """Matrix containing -Inf should raise ValueError."""
+        n = 10
+        K = np.eye(n, dtype=np.float64)
+        K[0, 0] = -np.inf
+
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            jamma_core.eigendecompose_kinship(K)
+
+    def test_negative_threshold_raises_error(self):
+        """Negative threshold should raise ValueError."""
+        n = 10
+        K = np.eye(n, dtype=np.float64)
+
+        with pytest.raises(ValueError, match="non-negative"):
+            jamma_core.eigendecompose_kinship(K, threshold=-1e-5)
+
+    def test_nan_threshold_raises_error(self):
+        """NaN threshold should raise ValueError."""
+        n = 10
+        K = np.eye(n, dtype=np.float64)
+
+        with pytest.raises(ValueError, match="finite"):
+            jamma_core.eigendecompose_kinship(K, threshold=np.nan)
+
+    def test_inf_threshold_raises_error(self):
+        """Inf threshold should raise ValueError."""
+        n = 10
+        K = np.eye(n, dtype=np.float64)
+
+        with pytest.raises(ValueError, match="finite"):
+            jamma_core.eigendecompose_kinship(K, threshold=np.inf)

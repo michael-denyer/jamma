@@ -146,7 +146,10 @@ def _has_gpu() -> bool:
 
 
 def is_rust_available() -> bool:
-    """Check if the Rust backend (jamma_core) is available.
+    """Check if jamma_core is available (enables jax.rust backend).
+
+    The jax.rust backend uses faer (via jamma_core) for eigendecomposition
+    instead of scipy. This provides better stability at 100k+ samples.
 
     Returns:
         True if jamma_core can be imported, False otherwise.
@@ -163,11 +166,18 @@ def get_backend_info() -> dict:
     """Get information about available backends.
 
     Returns:
-        Dictionary with backend availability and selection info.
+        Dictionary with backend availability and selection info:
+        - selected: Currently selected backend ('jax.scipy' or 'jax.rust')
+        - rust_available: True if jamma_core is installed (legacy field name)
+        - jax_rust_available: True if jamma_core is installed (clearer name)
+        - gpu_available: True if JAX can access a GPU
+        - override: Value of JAMMA_BACKEND env var, or None
     """
+    rust_avail = is_rust_available()
     return {
         "selected": get_compute_backend(),
-        "rust_available": is_rust_available(),
+        "rust_available": rust_avail,
+        "jax_rust_available": rust_avail,
         "gpu_available": _has_gpu(),
         "override": os.environ.get("JAMMA_BACKEND", None),
     }

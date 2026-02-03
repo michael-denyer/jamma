@@ -36,7 +36,7 @@
 
 # Install jamma_core (Rust extension) from GitHub releases
 # Update the wheel filename to match the latest release
-# MAGIC %pip install https://github.com/michael-denyer/jamma/releases/download/v0.1.0/jamma_core-0.1.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+# MAGIC %pip install https://github.com/michael-denyer/jamma/releases/download/v0.1.0/jamma_core-0.1.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
 
 # COMMAND ----------
 

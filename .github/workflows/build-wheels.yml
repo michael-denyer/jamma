@@ -10,21 +10,29 @@ jobs:
   build-linux:
     name: Build Linux wheels
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           working-directory: rust/jamma-core
           target: x86_64
-          args: --release --strip --out dist
+          args: --release --strip --out dist -i python${{ matrix.python }}
           manylinux: auto
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-linux-x86_64
+          name: wheels-linux-x86_64-py${{ matrix.python }}
           path: rust/jamma-core/dist/*.whl
 
   build-macos-x86:

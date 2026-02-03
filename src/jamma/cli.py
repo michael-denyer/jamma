@@ -4,16 +4,18 @@ This module provides a Typer-based CLI matching GEMMA's command-line interface,
 including -bfile, -o, -outdir flags for data loading and output configuration.
 """
 
+import os
 import sys
 import time
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import numpy as np
 import typer
 
 import jamma
 from jamma.core import OutputConfig
+from jamma.core.backend import get_compute_backend, is_rust_available
 from jamma.core.memory import estimate_lmm_memory
 from jamma.io import get_plink_metadata, load_plink_binary, read_covariate_file
 from jamma.kinship import (
@@ -66,6 +68,13 @@ def main(
         bool,
         typer.Option("-v", "--verbose", help="Verbose output"),
     ] = False,
+    backend: Annotated[
+        Literal["auto", "jax.scipy", "jax.rust"] | None,
+        typer.Option(
+            "-be",
+            help="Compute backend (auto, jax.scipy, jax.rust)",
+        ),
+    ] = None,
     version: Annotated[
         bool | None,
         typer.Option(
@@ -84,6 +93,33 @@ def main(
     global _global_config
     _global_config = OutputConfig(outdir=outdir, prefix=output, verbose=verbose)
     setup_logging(verbose=verbose)
+
+    # Handle backend selection via -be flag
+    if backend is not None:
+        # Check if env var is also set - warn about override
+        env_backend = os.environ.get("JAMMA_BACKEND", "").strip()
+        if env_backend and env_backend.lower() != "auto":
+            typer.echo(
+                f"Warning: CLI -be '{backend}' overrides JAMMA_BACKEND='{env_backend}'",
+                err=True,
+            )
+
+        # Fail-fast validation for jax.rust
+        if backend == "jax.rust" and not is_rust_available():
+            typer.echo(
+                "Error: Backend 'jax.rust' requires jamma_core. "
+                "Install with: pip install jamma[rust]",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        # Set env var and clear cache so subsequent calls use new backend
+        if backend != "auto":
+            os.environ["JAMMA_BACKEND"] = backend
+        else:
+            # auto = clear override and let auto-detection run
+            os.environ.pop("JAMMA_BACKEND", None)
+        get_compute_backend.cache_clear()
 
 
 @app.command("gk")

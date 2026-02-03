@@ -47,7 +47,11 @@ def version_callback(value: bool) -> None:
         # Show backend information for debugging
         info = get_backend_info()
         typer.echo(f"Backend: {info['selected']}")
-        typer.echo(f"Rust available: {info['rust_available']}")
+        if info["selected"] == "jax.scipy":
+            typer.echo("  (JAX pipeline + scipy/LAPACK eigendecomp)")
+        elif info["selected"] == "jax.rust":
+            typer.echo("  (JAX pipeline + faer/Rust eigendecomp)")
+        typer.echo(f"jax.rust available: {info['rust_available']}")
         typer.echo(f"GPU available: {info['gpu_available']}")
         if info["override"]:
             typer.echo(f"Override: JAMMA_BACKEND={info['override']}")

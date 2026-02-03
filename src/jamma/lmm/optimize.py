@@ -223,6 +223,11 @@ def optimize_lambda_mle_for_snp(
     Creates the MLE function closure and optimizes lambda for a given SNP.
     Used by LRT (-lmm 2) which requires MLE (not REML) likelihood.
 
+    The MLE surface can be multi-modal (unlike REML which is typically unimodal).
+    To handle this, we evaluate at both boundaries in addition to Brent optimization
+    and return the global optimum. This matches GEMMA's approach of checking
+    boundary values.
+
     Args:
         eigenvalues: Kinship matrix eigenvalues (n_samples,)
         Uab: Matrix products from compute_Uab
@@ -239,7 +244,39 @@ def optimize_lambda_mle_for_snp(
         # but we minimize (so minimize negative = maximize positive)
         return -mle_log_likelihood(lam, eigenvalues, Uab, n_cvt)
 
-    return optimize_lambda(neg_mle_func, l_min=l_min, l_max=l_max)
+    # Run Brent optimization
+    lambda_opt, neg_logl_opt = brent_minimize(neg_mle_func, l_min, l_max)
+
+    # Check boundary values - MLE can have optima at boundaries
+    # (unlike REML which is typically interior)
+    neg_logl_min = neg_mle_func(l_min)
+    neg_logl_max = neg_mle_func(l_max)
+
+    # Find global minimum (maximum likelihood)
+    candidates = [
+        (l_min, neg_logl_min),
+        (l_max, neg_logl_max),
+        (lambda_opt, neg_logl_opt),
+    ]
+    best_lambda, best_neg_logl = min(candidates, key=lambda x: x[1])
+
+    # Emit warning if at boundary
+    if best_lambda <= l_min * 1.01:
+        warnings.warn(
+            f"Lambda converged at lower bound ({best_lambda:.2e} ~ {l_min:.2e}). "
+            "True optimum may be below search range.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    elif best_lambda >= l_max * 0.99:
+        warnings.warn(
+            f"Lambda converged at upper bound ({best_lambda:.2e} ~ {l_max:.2e}). "
+            "True optimum may be above search range.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    return best_lambda, -best_neg_logl
 
 
 # =============================================================================

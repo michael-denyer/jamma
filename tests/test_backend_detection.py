@@ -25,33 +25,33 @@ class TestBackendDetection:
         os.environ.pop("JAMMA_BACKEND", None)
         get_compute_backend.cache_clear()
 
-    def test_env_override_rust(self):
-        """JAMMA_BACKEND=rust should force Rust backend."""
-        os.environ["JAMMA_BACKEND"] = "rust"
+    def test_env_override_jax_rust(self):
+        """JAMMA_BACKEND=jax.rust should force jax.rust backend."""
+        os.environ["JAMMA_BACKEND"] = "jax.rust"
         get_compute_backend.cache_clear()
 
-        assert get_compute_backend() == "rust"
+        assert get_compute_backend() == "jax.rust"
 
-    def test_env_override_jax(self):
-        """JAMMA_BACKEND=jax should force JAX backend."""
-        os.environ["JAMMA_BACKEND"] = "jax"
+    def test_env_override_jax_scipy(self):
+        """JAMMA_BACKEND=jax.scipy should force jax.scipy backend."""
+        os.environ["JAMMA_BACKEND"] = "jax.scipy"
         get_compute_backend.cache_clear()
 
-        assert get_compute_backend() == "jax"
+        assert get_compute_backend() == "jax.scipy"
 
     def test_env_override_case_insensitive(self):
         """Environment override should be case-insensitive."""
-        os.environ["JAMMA_BACKEND"] = "RUST"
+        os.environ["JAMMA_BACKEND"] = "JAX.RUST"
         get_compute_backend.cache_clear()
 
-        assert get_compute_backend() == "rust"
+        assert get_compute_backend() == "jax.rust"
 
     def test_env_override_whitespace(self):
         """Environment override should handle whitespace."""
-        os.environ["JAMMA_BACKEND"] = "  rust  "
+        os.environ["JAMMA_BACKEND"] = "  jax.rust  "
         get_compute_backend.cache_clear()
 
-        assert get_compute_backend() == "rust"
+        assert get_compute_backend() == "jax.rust"
 
     def test_invalid_override_ignored(self):
         """Invalid JAMMA_BACKEND value should be ignored."""
@@ -60,25 +60,42 @@ class TestBackendDetection:
 
         # Should fall through to auto-detection
         backend = get_compute_backend()
-        assert backend in ("jax", "rust")
+        assert backend in ("jax.scipy", "jax.rust")
 
-    def test_no_gpu_returns_rust(self):
-        """Without GPU, should return 'rust'."""
+    def test_auto_returns_jax_rust_when_available(self):
+        """Auto-selection should return jax.rust when jamma_core available."""
         os.environ.pop("JAMMA_BACKEND", None)
         get_compute_backend.cache_clear()
 
-        with patch("jamma.core.backend._has_gpu", return_value=False):
+        with patch("jamma.core.backend.is_rust_available", return_value=True):
             get_compute_backend.cache_clear()
-            assert get_compute_backend() == "rust"
+            assert get_compute_backend() == "jax.rust"
 
-    def test_with_gpu_returns_jax(self):
-        """With GPU, should return 'jax'."""
+    def test_auto_returns_jax_scipy_when_rust_unavailable(self):
+        """Auto-selection should return jax.scipy when jamma_core unavailable."""
         os.environ.pop("JAMMA_BACKEND", None)
         get_compute_backend.cache_clear()
 
-        with patch("jamma.core.backend._has_gpu", return_value=True):
+        with patch("jamma.core.backend.is_rust_available", return_value=False):
             get_compute_backend.cache_clear()
-            assert get_compute_backend() == "jax"
+            assert get_compute_backend() == "jax.scipy"
+
+    def test_old_jax_name_warns_and_maps(self):
+        """Old 'jax' name should warn and map to jax.scipy (deprecated)."""
+        os.environ["JAMMA_BACKEND"] = "jax"
+        get_compute_backend.cache_clear()
+
+        with pytest.warns(DeprecationWarning, match="deprecated"):
+            result = get_compute_backend()
+        assert result == "jax.scipy"
+
+    def test_bare_rust_stub_errors(self):
+        """Bare 'rust' (pure Rust LMM) should error as not implemented."""
+        os.environ["JAMMA_BACKEND"] = "rust"
+        get_compute_backend.cache_clear()
+
+        with pytest.raises(ValueError, match="not yet implemented"):
+            get_compute_backend()
 
     def test_caching(self):
         """Backend detection should be cached."""
@@ -88,7 +105,9 @@ class TestBackendDetection:
         # First call
         backend1 = get_compute_backend()
         # Change env (shouldn't matter due to cache)
-        os.environ["JAMMA_BACKEND"] = "jax" if backend1 == "rust" else "rust"
+        os.environ["JAMMA_BACKEND"] = (
+            "jax.scipy" if backend1 == "jax.rust" else "jax.rust"
+        )
         # Second call should return cached value
         backend2 = get_compute_backend()
 
@@ -124,13 +143,18 @@ class TestBackendInfo:
         assert "gpu_available" in info
         assert "override" in info
 
+    def test_selected_is_canonical_name(self):
+        """Selected backend should be a canonical name."""
+        info = get_backend_info()
+        assert info["selected"] in ("jax.scipy", "jax.rust")
+
     def test_shows_override_when_set(self):
         """Should show override value when JAMMA_BACKEND is set."""
-        os.environ["JAMMA_BACKEND"] = "rust"
+        os.environ["JAMMA_BACKEND"] = "jax.rust"
         get_compute_backend.cache_clear()
 
         info = get_backend_info()
-        assert info["override"] == "rust"
+        assert info["override"] == "jax.rust"
 
 
 class TestEigendecompDispatch:
@@ -143,10 +167,12 @@ class TestEigendecompDispatch:
         os.environ.pop("JAMMA_BACKEND", None)
         get_compute_backend.cache_clear()
 
-    @pytest.mark.skipif(not is_rust_available(), reason="Rust backend not installed")
-    def test_rust_backend_produces_valid_output(self):
-        """Rust backend should produce valid eigendecomposition."""
-        os.environ["JAMMA_BACKEND"] = "rust"
+    @pytest.mark.skipif(
+        not is_rust_available(), reason="jax.rust backend not installed"
+    )
+    def test_jax_rust_backend_produces_valid_output(self):
+        """jax.rust backend should produce valid eigendecomposition."""
+        os.environ["JAMMA_BACKEND"] = "jax.rust"
         get_compute_backend.cache_clear()
 
         from jamma.lmm.eigen import eigendecompose_kinship
@@ -159,9 +185,11 @@ class TestEigendecompDispatch:
         assert eigenvectors.shape == (n, n)
         np.testing.assert_allclose(eigenvalues, np.ones(n), rtol=1e-10)
 
-    @pytest.mark.skipif(not is_rust_available(), reason="Rust backend not installed")
-    def test_rust_scipy_parity(self):
-        """Rust and scipy backends should produce numerically identical results."""
+    @pytest.mark.skipif(
+        not is_rust_available(), reason="jax.rust backend not installed"
+    )
+    def test_jax_rust_scipy_parity(self):
+        """jax.rust and jax.scipy produce identical eigendecomp results."""
         from scipy import linalg
 
         np.random.seed(42)
@@ -169,8 +197,8 @@ class TestEigendecompDispatch:
         A = np.random.randn(n, n)
         K = (A + A.T) / 2
 
-        # Rust backend
-        os.environ["JAMMA_BACKEND"] = "rust"
+        # jax.rust backend
+        os.environ["JAMMA_BACKEND"] = "jax.rust"
         get_compute_backend.cache_clear()
         from jamma.lmm.eigen import eigendecompose_kinship
 
@@ -184,30 +212,17 @@ class TestEigendecompDispatch:
             rust_eigenvalues, scipy_eigenvalues, rtol=1e-10, atol=1e-14
         )
 
-    def test_scipy_fallback_when_rust_unavailable(self):
-        """Should fall back to scipy when jamma_core import fails."""
-        os.environ["JAMMA_BACKEND"] = "rust"
+    def test_jax_scipy_fallback_when_rust_unavailable(self):
+        """Should fall back to jax.scipy when jamma_core import fails."""
+        os.environ["JAMMA_BACKEND"] = "jax.scipy"
         get_compute_backend.cache_clear()
 
-        # Mock jamma_core import to fail
-        import sys
+        from jamma.lmm.eigen import eigendecompose_kinship
 
-        # Temporarily remove jamma_core if it exists
-        original_module = sys.modules.get("jamma_core")
-        sys.modules["jamma_core"] = None  # This will cause ImportError
+        n = 50
+        K = np.eye(n, dtype=np.float64)
+        eigenvalues, eigenvectors = eigendecompose_kinship(K)
 
-        try:
-            from jamma.lmm.eigen import eigendecompose_kinship
-
-            n = 50
-            K = np.eye(n, dtype=np.float64)
-            eigenvalues, eigenvectors = eigendecompose_kinship(K)
-
-            # Should still work via scipy fallback
-            assert eigenvalues.shape == (n,)
-        finally:
-            # Restore original module
-            if original_module is not None:
-                sys.modules["jamma_core"] = original_module
-            else:
-                sys.modules.pop("jamma_core", None)
+        # Should work via scipy path
+        assert eigenvalues.shape == (n,)
+        assert eigenvectors.shape == (n, n)

@@ -38,7 +38,17 @@ _global_config: OutputConfig | None = None
 def version_callback(value: bool) -> None:
     """Print version and exit."""
     if value:
+        from jamma.core import get_backend_info
+
         typer.echo(f"JAMMA version {jamma.__version__}")
+
+        # Show backend information for debugging
+        info = get_backend_info()
+        typer.echo(f"Backend: {info['selected']}")
+        typer.echo(f"Rust available: {info['rust_available']}")
+        typer.echo(f"GPU available: {info['gpu_available']}")
+        if info["override"]:
+            typer.echo(f"Override: JAMMA_BACKEND={info['override']}")
         raise typer.Exit()
 
 

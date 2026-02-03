@@ -482,3 +482,158 @@ def compute_null_model_lambda(
     )
 
     return lambda_null, logl_null
+
+
+@njit(cache=True)
+def _mle_log_likelihood_ncvt1_numba(
+    lambda_val: float, eigenvalues: np.ndarray, Uab: np.ndarray
+) -> float:
+    """Numba-optimized MLE log-likelihood for n_cvt=1.
+
+    Key differences from REML:
+    - Uses n (sample size) instead of df = n - n_cvt - 1
+    - Does NOT compute logdet_hiw (MLE formula excludes it)
+    - MLE constant: c = 0.5 * n * (log(n) - log(2*pi) - 1)
+
+    This is the hot path - called ~50 times per SNP during Brent optimization.
+    """
+    n = eigenvalues.shape[0]
+    P_YY_MIN = 1e-8
+
+    # Compute Hi_eval and logdet_h in single pass
+    logdet_h = 0.0
+    P0_WW = 0.0
+    P0_WX = 0.0
+    P0_WY = 0.0
+    P0_XX = 0.0
+    P0_XY = 0.0
+    P0_YY = 0.0
+
+    for i in range(n):
+        v = lambda_val * eigenvalues[i] + 1.0
+        h = 1.0 / v
+        logdet_h += np.log(np.abs(v))
+
+        # Pab row 0 (Hi-weighted)
+        P0_WW += h * Uab[i, 0]
+        P0_WX += h * Uab[i, 1]
+        P0_WY += h * Uab[i, 2]
+        P0_XX += h * Uab[i, 3]
+        P0_XY += h * Uab[i, 4]
+        P0_YY += h * Uab[i, 5]
+
+    # Pab row 1: project out W
+    inv_P0_WW = 1.0 / P0_WW if P0_WW != 0.0 else 0.0
+    P1_XX = P0_XX - P0_WX * P0_WX * inv_P0_WW
+    P1_XY = P0_XY - P0_WX * P0_WY * inv_P0_WW
+    P1_YY = P0_YY - P0_WY * P0_WY * inv_P0_WW
+
+    # Pab row 2: project out X -> get P_yy
+    inv_P1_XX = 1.0 / P1_XX if P1_XX != 0.0 else 0.0
+    P_yy = P1_YY - P1_XY * P1_XY * inv_P1_XX
+
+    # Clamp P_yy
+    if P_yy >= 0.0 and P_yy < P_YY_MIN:
+        P_yy = P_YY_MIN
+
+    # MLE log-likelihood (NO logdet_hiw, uses n not df)
+    c = 0.5 * n * (np.log(n) - np.log(2.0 * np.pi) - 1.0)
+    f = c - 0.5 * logdet_h - 0.5 * n * np.log(P_yy)
+
+    return f
+
+
+def mle_log_likelihood(
+    lambda_val: float, eigenvalues: np.ndarray, Uab: np.ndarray, n_cvt: int
+) -> float:
+    """Compute MLE log-likelihood (NOT REML) for LRT.
+
+    Key differences from REML:
+    - Uses n (sample size) instead of df = n - n_cvt - 1
+    - Does NOT include logdet_hiw term
+    - MLE constant: c = 0.5 * n * (log(n) - log(2*pi) - 1)
+
+    The MLE log-likelihood is:
+    f = c - 0.5 * logdet_h - 0.5 * n * log(P_yy)
+
+    where:
+    - c = 0.5 * n * (log(n) - log(2*pi) - 1)
+    - logdet_h = sum(log(lambda * eval + 1))
+    - P_yy = Pab[nc_total, index_yy]
+
+    Used by LRT (-lmm 2) which requires MLE likelihood.
+
+    Args:
+        lambda_val: Variance component ratio (sigma_g^2 / sigma_e^2)
+        eigenvalues: Eigenvalues of kinship matrix (n_samples,)
+        Uab: Matrix products from compute_Uab (n_samples, n_index)
+        n_cvt: Number of covariates
+
+    Returns:
+        Log-likelihood value (positive for maximization)
+    """
+    # Fast path for n_cvt=1 (most common case)
+    if n_cvt == 1:
+        return _mle_log_likelihood_ncvt1_numba(lambda_val, eigenvalues, Uab)
+
+    # General case
+    n = len(eigenvalues)
+    nc_total = n_cvt + 1
+
+    v_temp = lambda_val * eigenvalues + 1.0
+    Hi_eval = 1.0 / v_temp
+    logdet_h = np.sum(np.log(np.abs(v_temp)))
+
+    Pab = calc_pab(n_cvt, Hi_eval, Uab)
+
+    # NO logdet_hiw computation for MLE (key difference from REML)
+
+    index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
+    P_yy = Pab[nc_total, index_yy]
+
+    P_YY_MIN = 1e-8
+    if P_yy >= 0.0 and P_yy < P_YY_MIN:
+        P_yy = P_YY_MIN
+
+    # MLE formula (uses n, not df; no logdet_hiw)
+    c = 0.5 * n * (np.log(n) - np.log(2 * np.pi) - 1.0)
+    f = c - 0.5 * logdet_h - 0.5 * n * np.log(P_yy)
+
+    return f
+
+
+def compute_null_model_mle(
+    eigenvalues: np.ndarray,
+    UtW: np.ndarray,
+    Uty: np.ndarray,
+    n_cvt: int,
+    l_min: float = 1e-5,
+    l_max: float = 1e5,
+) -> tuple[float, float]:
+    """Compute MLE lambda under null model (no genotype effect).
+
+    Used by LRT (-lmm 2) which requires MLE (not REML) likelihood.
+    The null model MLE is computed once and reused for all SNPs.
+
+    Args:
+        eigenvalues: Kinship eigenvalues (n_samples,)
+        UtW: Rotated covariates (n_samples, n_cvt)
+        Uty: Rotated phenotype (n_samples,)
+        n_cvt: Number of covariates
+        l_min, l_max: Lambda bounds for optimization
+
+    Returns:
+        (lambda_null_mle, logl_H0) - Null model MLE lambda and log-likelihood
+    """
+    # Import here to avoid circular dependency at module load time
+    from jamma.lmm.optimize import optimize_lambda_mle_for_snp
+
+    # Compute Uab without genotype (Utx=None)
+    Uab = compute_Uab(UtW, Uty, Utx=None)
+
+    # Optimize lambda under the null model using MLE
+    lambda_null_mle, logl_H0 = optimize_lambda_mle_for_snp(
+        eigenvalues, Uab, n_cvt, l_min=l_min, l_max=l_max
+    )
+
+    return lambda_null_mle, logl_H0

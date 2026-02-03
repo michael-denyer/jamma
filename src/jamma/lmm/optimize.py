@@ -14,7 +14,7 @@ from collections.abc import Callable
 
 import numpy as np
 
-from jamma.lmm.likelihood import reml_log_likelihood
+from jamma.lmm.likelihood import mle_log_likelihood, reml_log_likelihood
 
 # =============================================================================
 # BRENT MINIMIZATION (Current working version - keep for potential revert)
@@ -209,6 +209,37 @@ def optimize_lambda_for_snp(
         return -reml_log_likelihood(lam, eigenvalues, Uab, n_cvt)
 
     return optimize_lambda(neg_reml_func, l_min=l_min, l_max=l_max)
+
+
+def optimize_lambda_mle_for_snp(
+    eigenvalues: np.ndarray,
+    Uab: np.ndarray,
+    n_cvt: int,
+    l_min: float = 1e-5,
+    l_max: float = 1e5,
+) -> tuple[float, float]:
+    """Convenience wrapper for MLE lambda optimization.
+
+    Creates the MLE function closure and optimizes lambda for a given SNP.
+    Used by LRT (-lmm 2) which requires MLE (not REML) likelihood.
+
+    Args:
+        eigenvalues: Kinship matrix eigenvalues (n_samples,)
+        Uab: Matrix products from compute_Uab
+        n_cvt: Number of covariates
+        l_min: Lower bound for lambda search
+        l_max: Upper bound for lambda search
+
+    Returns:
+        Tuple of (lambda_opt, logl_H1) where logl_H1 is MLE log-likelihood
+    """
+
+    def neg_mle_func(lam: float) -> float:
+        # Negate because mle_log_likelihood returns positive log-likelihood
+        # but we minimize (so minimize negative = maximize positive)
+        return -mle_log_likelihood(lam, eigenvalues, Uab, n_cvt)
+
+    return optimize_lambda(neg_mle_func, l_min=l_min, l_max=l_max)
 
 
 # =============================================================================

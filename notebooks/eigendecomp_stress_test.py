@@ -18,11 +18,11 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install psutil threadpoolctl
+# MAGIC %pip install psutil threadpoolctl loguru scipy numpy "jax>=0.8" "jaxlib>=0.8"
 
 # COMMAND ----------
 
-# MAGIC %pip install --no-deps --force-reinstall "jamma[rust] @ git+https://github.com/michael-denyer/jamma.git"
+# MAGIC %pip install --force-reinstall "jamma[rust] @ git+https://github.com/michael-denyer/jamma.git"
 
 # COMMAND ----------
 

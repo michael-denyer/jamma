@@ -17,7 +17,7 @@ faer = { version = "0.22", features = ["rayon"] }
 
 # Pure-Rust BLAS/LAPACK stack
 # Pin scirs2-linalg; oxiblas is pulled transitively
-scirs2-linalg = { version = "0.1", features = ["linalg", "simd"] }
+scirs2-linalg = { version = "0.1.2", features = ["linalg", "simd"] }
 
 [profile.release]
 lto = "fat"

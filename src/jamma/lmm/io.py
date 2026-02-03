@@ -70,11 +70,41 @@ def format_assoc_line_score(result: AssocResult) -> str:
     )
 
 
+def format_assoc_line_lrt(result: AssocResult) -> str:
+    """Format LRT result as tab-separated line.
+
+    GEMMA -lmm 2 format:
+    chr  rs  ps  n_miss  allele1  allele0  af  l_mle  p_lrt
+
+    Note: beta and se are NOT included in pure LRT output.
+
+    Args:
+        result: AssocResult dataclass instance
+
+    Returns:
+        Tab-separated string (no newline)
+    """
+    return "\t".join(
+        [
+            result.chr,
+            result.rs,
+            str(result.ps),
+            str(result.n_miss),
+            result.allele1,
+            result.allele0,
+            f"{result.af:.3f}",
+            f"{result.l_mle:.6e}",
+            f"{result.p_lrt:.6e}",
+        ]
+    )
+
+
 # GEMMA headers
 HEADER_WALD = (
     "chr\trs\tps\tn_miss\tallele1\tallele0\taf\tbeta\tse\tlogl_H1\tl_remle\tp_wald"
 )
 HEADER_SCORE = "chr\trs\tps\tn_miss\tallele1\tallele0\taf\tbeta\tse\tp_score"
+HEADER_LRT = "chr\trs\tps\tn_miss\tallele1\tallele0\taf\tl_mle\tp_lrt"
 
 
 def write_assoc_results(results: list[AssocResult], path: Path) -> None:
@@ -117,6 +147,12 @@ class IncrementalAssocWriter:
             Path("output.assoc.txt"), test_type="score"
         ) as writer:
             ...
+
+        # For LRT:
+        with IncrementalAssocWriter(
+            Path("output.assoc.txt"), test_type="lrt"
+        ) as writer:
+            ...
     """
 
     def __init__(self, path: Path, test_type: str = "wald"):
@@ -124,7 +160,7 @@ class IncrementalAssocWriter:
 
         Args:
             path: Output file path. Parent directories created if needed.
-            test_type: Test type for formatting ("wald" or "score")
+            test_type: Test type for formatting ("wald", "score", or "lrt")
         """
         self.path = Path(path)
         self.test_type = test_type
@@ -135,7 +171,12 @@ class IncrementalAssocWriter:
         """Open file and write header."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = open(self.path, "w")
-        header = HEADER_SCORE if self.test_type == "score" else HEADER_WALD
+        if self.test_type == "score":
+            header = HEADER_SCORE
+        elif self.test_type == "lrt":
+            header = HEADER_LRT
+        else:
+            header = HEADER_WALD
         self._file.write(header + "\n")
         return self
 
@@ -149,6 +190,8 @@ class IncrementalAssocWriter:
             raise RuntimeError("Writer not opened. Use as context manager.")
         if self.test_type == "score":
             line = format_assoc_line_score(result)
+        elif self.test_type == "lrt":
+            line = format_assoc_line_lrt(result)
         else:
             line = format_assoc_line(result)
         self._file.write(line + "\n")

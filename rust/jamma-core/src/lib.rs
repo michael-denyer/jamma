@@ -76,7 +76,7 @@ fn eigendecompose_kinship<'py>(
     }
 
     // Release GIL during heavy computation
-    let result = py.allow_threads(|| compute_eigen_internal(&k_vec, nrows, threshold));
+    let result = py.detach(|| compute_eigen_internal(&k_vec, nrows, threshold));
 
     // Handle computation errors
     let (eigenvalues, eigenvectors_flat) = result.map_err(PyValueError::new_err)?;
@@ -90,10 +90,10 @@ fn eigendecompose_kinship<'py>(
     Ok((eigenvalues_arr, eigenvectors_arr))
 }
 
-/// Internal computation (runs without GIL).
+/// Internal computation using faer (runs without GIL).
 ///
 /// Returns `Ok((eigenvalues, eigenvectors))` on success, or `Err(message)` on failure.
-fn compute_eigen_internal(
+fn compute_eigen_faer(
     k_flat: &[f64],
     n: usize,
     threshold: f64,
@@ -126,10 +126,116 @@ fn compute_eigen_internal(
     Ok((eigenvalues, eigenvectors))
 }
 
+/// Internal computation using scirs2-linalg/OxiBLAS (runs without GIL).
+///
+/// Returns `Ok((eigenvalues, eigenvectors))` on success, or `Err(message)` on failure.
+fn compute_eigen_scirs2(
+    k_flat: &[f64],
+    n: usize,
+    threshold: f64,
+) -> Result<(Vec<f64>, Vec<f64>), String> {
+    use ndarray::Array2;
+    use scirs2_linalg::eigh;
+
+    // Convert row-major flat array to ndarray Array2
+    let k_array: Array2<f64> = Array2::from_shape_vec((n, n), k_flat.to_vec())
+        .map_err(|e| format!("array conversion failed: {}", e))?;
+
+    // Compute symmetric eigendecomposition
+    let (eigenvalues_arr, eigenvectors_arr): (ndarray::Array1<f64>, Array2<f64>) =
+        eigh(&k_array.view(), None).map_err(|e| format!("eigendecomposition failed: {:?}", e))?;
+
+    // Apply threshold zeroing (GEMMA compatibility)
+    let eigenvalues: Vec<f64> = eigenvalues_arr
+        .iter()
+        .map(|&v: &f64| if v.abs() < threshold { 0.0 } else { v })
+        .collect();
+
+    // Convert eigenvectors to row-major flat vec for NumPy
+    let eigenvectors: Vec<f64> = eigenvectors_arr.iter().cloned().collect();
+
+    Ok((eigenvalues, eigenvectors))
+}
+
+/// Wrapper that calls the default backend (faer).
+fn compute_eigen_internal(
+    k_flat: &[f64],
+    n: usize,
+    threshold: f64,
+) -> Result<(Vec<f64>, Vec<f64>), String> {
+    compute_eigen_faer(k_flat, n, threshold)
+}
+
+/// Eigendecompose using scirs2-linalg/OxiBLAS backend.
+///
+/// Same interface as eigendecompose_kinship but uses OxiBLAS instead of faer.
+#[pyfunction]
+#[pyo3(signature = (k, threshold = 1e-10))]
+#[allow(clippy::type_complexity)]
+fn eigendecompose_kinship_scirs2<'py>(
+    py: Python<'py>,
+    k: PyReadonlyArray2<'py, f64>,
+    threshold: f64,
+) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray2<f64>>)> {
+    let k_array = k.as_array();
+    let (nrows, ncols) = k_array.dim();
+
+    // Validate input dimensions
+    if nrows != ncols {
+        return Err(PyValueError::new_err(format!(
+            "Kinship matrix must be square, got {}x{}",
+            nrows, ncols
+        )));
+    }
+    if nrows == 0 {
+        return Err(PyValueError::new_err("Kinship matrix cannot be empty"));
+    }
+
+    // Validate threshold
+    if threshold < 0.0 {
+        return Err(PyValueError::new_err(format!(
+            "threshold must be non-negative, got {}",
+            threshold
+        )));
+    }
+    if !threshold.is_finite() {
+        return Err(PyValueError::new_err(format!(
+            "threshold must be finite, got {}",
+            threshold
+        )));
+    }
+
+    // Copy to contiguous vec and check for NaN/Inf
+    let mut k_vec: Vec<f64> = Vec::with_capacity(nrows * ncols);
+    for &val in k_array.iter() {
+        if !val.is_finite() {
+            return Err(PyValueError::new_err(
+                "Kinship matrix contains NaN or Inf values",
+            ));
+        }
+        k_vec.push(val);
+    }
+
+    // Release GIL during heavy computation - use scirs2 backend
+    let result = py.detach(|| compute_eigen_scirs2(&k_vec, nrows, threshold));
+
+    // Handle computation errors
+    let (eigenvalues, eigenvectors_flat) = result.map_err(PyValueError::new_err)?;
+
+    // Convert results to NumPy arrays
+    let eigenvalues_arr = eigenvalues.into_pyarray(py);
+    let eigenvectors_arr = Array2::from_shape_vec((nrows, ncols), eigenvectors_flat)
+        .map_err(|e| PyValueError::new_err(format!("eigenvector reshape failed: {}", e)))?
+        .into_pyarray(py);
+
+    Ok((eigenvalues_arr, eigenvectors_arr))
+}
+
 /// JAMMA native extensions module.
 #[pymodule]
 fn jamma_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(eigendecompose_kinship, m)?)?;
+    m.add_function(wrap_pyfunction!(eigendecompose_kinship_scirs2, m)?)?;
     Ok(())
 }
 

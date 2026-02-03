@@ -45,13 +45,15 @@ dbutils.library.restartPython()  # noqa: F821
 import numpy as np
 
 # Check JAMMA backend configuration
-print("=== JAMMA Backend Configuration ===")
+print("=== JAMMA Eigendecomp Backend ===")
 from jamma.core import get_backend_info, is_rust_available
 
 info = get_backend_info()
 print(f"Selected backend: {info['selected']}")
 print(f"Rust available: {info['rust_available']}")
-print(f"JAX backend: {info.get('jax_backend', 'N/A')}")
+print(f"GPU available: {info['gpu_available']}")
+if info.get("override"):
+    print(f"Override: JAMMA_BACKEND={info['override']}")
 
 # COMMAND ----------
 

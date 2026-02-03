@@ -104,18 +104,20 @@ logger.info(f"Python: {sys.version}")
 logger.info(f"NumPy version: {np.__version__}")
 logger.info(f"JAX version: {jax.__version__}")
 logger.info(f"JAX devices: {jax.devices()}")
-logger.info(f"JAX backend: {jax.default_backend()}")
+logger.info(f"JAX device type: {jax.default_backend()}")
 
 # System memory
 mem = psutil.virtual_memory()
 logger.info(f"RAM: {mem.total / 1e9:.1f} GB total, {mem.available / 1e9:.1f} GB avail")
 
-# JAMMA backend detection - Rust is preferred (stable, no threading bugs)
+# JAMMA eigendecomp backend - Rust (faer) or scipy
+# Rust is preferred: stable at 100k+, no BLAS threading bugs
 from jamma.core import get_backend_info, is_rust_available
 
 backend_info = get_backend_info()
-logger.info(f"JAMMA backend: {backend_info['selected']}")
-logger.info(f"Rust available: {backend_info['rust_available']}")
+logger.info(f"Eigendecomp backend: {backend_info['selected']}")
+logger.info(f"Rust/faer available: {backend_info['rust_available']}")
+logger.info(f"GPU available: {backend_info['gpu_available']}")
 
 if not is_rust_available():
     logger.warning("Rust backend not available - will use scipy with BLAS")

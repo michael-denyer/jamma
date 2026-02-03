@@ -1,26 +1,73 @@
 """Eigendecomposition backend detection and dispatch.
 
-JAMMA supports two eigendecomp backends:
-- jax: Uses scipy with system BLAS; preferred when GPU available for other ops
-- rust: Uses faer (pure Rust); preferred for CPU-only workloads at 100k+ scale
+JAMMA supports three backends:
 
-The "jax" backend still uses scipy for eigendecomp (JAX's eigh has int32 limits),
-but is preferred when a GPU is available for other JAX operations.
+- jax.scipy: JAX pipeline + scipy/LAPACK eigendecomposition.
+  Uses scipy.linalg.eigh for eigendecomp, JAX for other operations.
+  Requires properly configured BLAS (OpenBLAS can SIGSEGV at 100k+ samples).
 
-The "rust" backend uses faer via jamma_core, which avoids OpenBLAS threading
-bugs that cause SIGSEGV at 100k+ samples.
+- jax.rust: JAX pipeline + faer/Rust eigendecomposition.
+  Uses jamma_core (faer) for eigendecomp, JAX for other operations.
+  Preferred for 100k+ samples due to stability.
 
-Backend selection is automatic based on hardware but can be overridden
-via the JAMMA_BACKEND environment variable.
+- rust: Pure Rust LMM (NOT YET IMPLEMENTED).
+  Future backend for complete Rust-based LMM computation.
+  Selecting this backend will error until implemented.
+
+Backend selection is automatic (preferring jax.rust when jamma_core is available)
+but can be overridden via the JAMMA_BACKEND environment variable.
 """
 
 import os
+import warnings
 from functools import cache
 from typing import Literal
 
 from loguru import logger
 
-Backend = Literal["jax", "rust"]
+# Canonical backend names (excludes "rust" which is a stub)
+Backend = Literal["jax.scipy", "jax.rust"]
+
+# Backward compatibility aliases (old name -> canonical name)
+# NOTE: "rust" is NOT here because bare "rust" now means pure Rust LMM (future)
+BACKEND_ALIASES: dict[str, str] = {
+    "jax": "jax.scipy",  # Old "jax" -> new "jax.scipy"
+}
+
+
+def normalize_backend_name(value: str) -> str:
+    """Normalize backend name to canonical form.
+
+    Handles case-insensitivity, whitespace, and backward compatibility aliases.
+    Emits deprecation warnings for old backend names.
+
+    Args:
+        value: Backend name from user input or environment.
+
+    Returns:
+        Normalized backend name. Note that "rust" passes through unchanged
+        (the stub error is handled in get_compute_backend).
+
+    Examples:
+        >>> normalize_backend_name("jax.scipy")
+        'jax.scipy'
+        >>> normalize_backend_name("JAX.RUST")
+        'jax.rust'
+    """
+    normalized = value.lower().strip()
+
+    # Check for deprecated aliases
+    if normalized in BACKEND_ALIASES:
+        canonical = BACKEND_ALIASES[normalized]
+        warnings.warn(
+            f"Backend name '{normalized}' is deprecated. Use '{canonical}' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return canonical
+
+    # Return as-is (including "rust" which will error in get_compute_backend)
+    return normalized
 
 
 @cache

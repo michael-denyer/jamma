@@ -51,7 +51,7 @@ jobs:
         run: |
           python -m venv .venv
           source .venv/bin/activate
-          pip install maturin numpy scipy pytest pytest-xdist pytest-randomly
+          pip install maturin numpy scipy pytest pytest-xdist pytest-randomly pytest-benchmark
 
       - name: Build and install with maturin
         run: |

@@ -18,34 +18,15 @@
 # MAGIC %md
 # MAGIC ### Install Dependencies
 # MAGIC
-# MAGIC JAX 0.8+ requires NumPy 2.0+. Force upgrade numpy before installing JAX.
-# MAGIC
-# MAGIC **MKL Installation:** OpenBLAS has threading bugs causing SIGSEGV at 100k+
-# MAGIC samples. We install MKL-linked numpy/scipy via micromamba to fix this.
+# MAGIC JAX 0.8+ requires NumPy 2.0+. The Rust backend provides stable
+# MAGIC eigendecomposition at 100k+ scale without BLAS threading issues.
 # MAGIC
 # MAGIC **IMPORTANT:** Run `dbutils.library.restartPython()` after pip installs.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC #### Step 1: Install MKL-linked numpy/scipy via micromamba
-# MAGIC
-# MAGIC This replaces OpenBLAS with Intel MKL for stable multi-threaded
-# MAGIC eigendecomposition at 100k+ scale.
-
-# COMMAND ----------
-
-# MAGIC %sh
-# MAGIC # Install MKL-linked numpy/scipy in the disco environment
-# MAGIC # libblas=*=*mkl forces MKL as the BLAS backend
-# MAGIC source /etc/profile.d/mamba.sh && micromamba install -n disco \
-# MAGIC     "numpy>=2.0,<2.4" scipy "libblas=*=*mkl" \
-# MAGIC     -c conda-forge -y --force-reinstall
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC #### Step 2: Install pip packages (JAX, jamma, etc.)
+# MAGIC #### Step 1: Install pip packages (JAX, jamma with Rust backend, etc.)
 
 # COMMAND ----------
 
@@ -53,7 +34,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install --no-deps --force-reinstall git+https://github.com/michael-denyer/jamma.git
+# MAGIC %pip install --no-deps --force-reinstall "jamma[rust] @ git+https://github.com/michael-denyer/jamma.git"
 
 # COMMAND ----------
 
@@ -61,7 +42,7 @@
 
 # COMMAND ----------
 
-# Restart Python kernel to load new numpy/MKL - MUST run this cell
+# Restart Python kernel to load new packages - MUST run this cell
 dbutils.library.restartPython()  # noqa: F821
 
 # COMMAND ----------
@@ -123,20 +104,29 @@ logger.info(f"JAX backend: {jax.default_backend()}")
 mem = psutil.virtual_memory()
 logger.info(f"RAM: {mem.total / 1e9:.1f} GB total, {mem.available / 1e9:.1f} GB avail")
 
-# BLAS backend detection - MKL is preferred (faster, no threading bugs)
-try:
-    from threadpoolctl import threadpool_info
+# JAMMA backend detection - Rust is preferred (stable, no threading bugs)
+from jamma.core import get_backend_info, is_rust_available
 
-    blas_info = [lib for lib in threadpool_info() if lib.get("user_api") == "blas"]
-    if blas_info:
-        for lib in blas_info:
-            backend = lib.get("internal_api", "unknown")
-            num_threads = lib.get("num_threads", "?")
-            logger.info(f"BLAS: {backend} ({num_threads} threads)")
-    else:
-        logger.warning("BLAS backend not detected - threadpoolctl found no BLAS libs")
-except ImportError:
-    logger.warning("threadpoolctl not installed - cannot detect BLAS backend")
+backend_info = get_backend_info()
+logger.info(f"JAMMA backend: {backend_info['selected']}")
+logger.info(f"Rust available: {backend_info['rust_available']}")
+
+if not is_rust_available():
+    logger.warning("Rust backend not available - will use scipy with BLAS")
+    # Log BLAS info for scipy fallback path
+    try:
+        from threadpoolctl import threadpool_info
+
+        blas_info = [lib for lib in threadpool_info() if lib.get("user_api") == "blas"]
+        if blas_info:
+            for lib in blas_info:
+                blas_backend = lib.get("internal_api", "unknown")
+                num_threads = lib.get("num_threads", "?")
+                logger.info(f"BLAS: {blas_backend} ({num_threads} threads)")
+        else:
+            logger.warning("BLAS backend not detected")
+    except ImportError:
+        logger.warning("threadpoolctl not installed")
 
 # GEMMA binary path - default is the Databricks micromamba environment
 # Must be defined before benchmark_gemma() which uses it as a default

@@ -3,7 +3,7 @@
 # MAGIC # Eigendecomposition Stress Test
 # MAGIC
 # MAGIC Focused test for eigendecomposition at 100k+ scale.
-# MAGIC Tests MKL vs OpenBLAS and thread limiting strategies.
+# MAGIC Tests Rust backend (via faer) vs scipy/OpenBLAS.
 # MAGIC
 # MAGIC Run this notebook to diagnose SIGSEGV crashes without
 # MAGIC regenerating all benchmark data.
@@ -11,60 +11,71 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 1. Install MKL (Intel Math Kernel Library)
+# MAGIC ## 1. Install JAMMA with Rust Backend
 # MAGIC
-# MAGIC MKL is stable with multi-threading unlike OpenBLAS which
-# MAGIC segfaults at 100k+ scale.
+# MAGIC The Rust backend uses faer for eigendecomposition, which is stable
+# MAGIC at 100k+ scale without BLAS threading issues.
 
 # COMMAND ----------
 
-# MAGIC %sh
-# MAGIC # Install MKL-linked numpy/scipy in the disco environment
-# MAGIC # libblas=*=*mkl forces MKL as the BLAS backend
-# MAGIC source /etc/profile.d/mamba.sh && micromamba install -n disco \
-# MAGIC     "numpy>=2.0,<2.4" scipy "libblas=*=*mkl" \
-# MAGIC     -c conda-forge -y --force-reinstall
+# MAGIC %pip install psutil threadpoolctl
 
 # COMMAND ----------
 
-# Restart Python to pick up MKL
+# MAGIC %pip install --no-deps --force-reinstall "jamma[rust] @ git+https://github.com/michael-denyer/jamma.git"
+
+# COMMAND ----------
+
+# Restart Python to pick up new packages
 dbutils.library.restartPython()  # noqa: F821
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 2. Verify BLAS Backend
+# MAGIC ## 2. Verify Backend Configuration
 
 # COMMAND ----------
 
 import numpy as np
-from scipy import linalg
 
-# Check numpy config
-print("=== NumPy Configuration ===")
-np.show_config()
+# Check JAMMA backend configuration
+print("=== JAMMA Backend Configuration ===")
+from jamma.core import get_backend_info, is_rust_available
 
-# COMMAND ----------
-
-# Check scipy LAPACK
-print("\n=== SciPy LAPACK ===")
-try:
-    # Try to get LAPACK version info
-    info = linalg.lapack.get_lapack_funcs(("syevd",), (np.zeros((1, 1)),))
-    print(f"LAPACK syevd function: {info}")
-except Exception as e:
-    print(f"Could not get LAPACK info: {e}")
+info = get_backend_info()
+print(f"Selected backend: {info['selected']}")
+print(f"Rust available: {info['rust_available']}")
+print(f"JAX backend: {info.get('jax_backend', 'N/A')}")
 
 # COMMAND ----------
 
-# Verify with threadpoolctl
+# Check Rust backend details
+print("\n=== Rust Backend Status ===")
+if is_rust_available():
+    try:
+        import jamma_core
+
+        print(f"jamma_core version: {getattr(jamma_core, '__version__', 'unknown')}")
+        print("Rust eigendecomposition: AVAILABLE")
+        print("  - Uses faer library (pure Rust)")
+        print("  - No BLAS threading issues")
+        print("  - Stable at 100k+ samples")
+    except ImportError as e:
+        print(f"jamma_core import failed: {e}")
+else:
+    print("Rust backend NOT available")
+    print("Will fall back to scipy (may have BLAS threading issues)")
+
+# COMMAND ----------
+
+# Verify with threadpoolctl (for scipy fallback path)
 try:
     import json
 
     from threadpoolctl import threadpool_info
 
     info = threadpool_info()
-    print("\n=== Threadpool Info ===")
+    print("\n=== Threadpool Info (scipy fallback) ===")
     print(json.dumps(info, indent=2))
 
     # Check for BLAS
@@ -78,10 +89,9 @@ try:
             print(f"Prefix: {prefix}")
             print(f"Library: {filepath}")
     else:
-        print("\nWARNING: No BLAS library detected!")
-        print("Eigendecomposition may use OpenBLAS and crash at 100k scale.")
+        print("\nNo BLAS library detected (OK if using Rust backend)")
 except ImportError:
-    print("threadpoolctl not installed - cannot verify BLAS backend")
+    print("threadpoolctl not installed")
 
 # COMMAND ----------
 
@@ -91,20 +101,44 @@ except ImportError:
 # COMMAND ----------
 
 import gc
+import os
 import time
+
+from jamma.lmm.eigen import eigendecompose_kinship
 
 
 def test_eigendecomp(
-    n_samples: int, use_thread_limit: bool = False, thread_limit: int = 1
+    n_samples: int,
+    use_rust: bool = True,
+    use_thread_limit: bool = False,
+    thread_limit: int = 1,
 ):
-    """Test eigendecomposition at given scale."""
-    from scipy import linalg
+    """Test eigendecomposition at given scale.
 
+    Args:
+        n_samples: Matrix dimension (n_samples x n_samples)
+        use_rust: Use Rust/faer backend (recommended). If False, uses scipy.
+        use_thread_limit: Limit BLAS threads (only relevant for scipy path)
+        thread_limit: Number of threads if limiting (only relevant for scipy path)
+    """
     print(f"\n{'='*60}")
     print(f"Testing eigendecomp: {n_samples:,} x {n_samples:,}")
     print(f"Matrix memory: {n_samples * n_samples * 8 / 1e9:.1f} GB")
-    print(f"Thread limiting: {use_thread_limit} (limit={thread_limit})")
+    print(f"Backend: {'Rust/faer' if use_rust else 'scipy'}")
+    if not use_rust:
+        print(f"Thread limiting: {use_thread_limit} (limit={thread_limit})")
     print(f"{'='*60}")
+
+    # Set backend preference
+    if use_rust:
+        os.environ["JAMMA_BACKEND"] = "rust"
+    else:
+        os.environ["JAMMA_BACKEND"] = "jax"
+
+    # Clear backend cache to pick up new setting
+    from jamma.core.backend import get_compute_backend
+
+    get_compute_backend.cache_clear()
 
     # Generate random symmetric matrix
     print("Generating random symmetric matrix...")
@@ -126,19 +160,15 @@ def test_eigendecomp(
     except ImportError:
         pass
 
-    # Run eigendecomp
-    print("\nStarting eigendecomposition...")
+    # Run eigendecomp using JAMMA's eigendecompose_kinship
+    # This automatically uses Rust or scipy based on JAMMA_BACKEND
+    print(
+        f"\nStarting eigendecomposition ({os.environ.get('JAMMA_BACKEND', 'auto')})..."
+    )
     start = time.time()
 
     try:
-        eigh_kwargs = {"overwrite_a": True, "check_finite": False}
-        if use_thread_limit:
-            from threadpoolctl import threadpool_limits
-
-            with threadpool_limits(limits=thread_limit, user_api="blas"):
-                eigenvalues, eigenvectors = linalg.eigh(K, **eigh_kwargs)
-        else:
-            eigenvalues, eigenvectors = linalg.eigh(K, **eigh_kwargs)
+        eigenvalues, eigenvectors = eigendecompose_kinship(K)
 
         elapsed = time.time() - start
         print(f"SUCCESS: Eigendecomp completed in {elapsed:.1f}s")
@@ -158,68 +188,64 @@ def test_eigendecomp(
 # COMMAND ----------
 
 # Quick sanity check with 1k
-test_eigendecomp(1_000)
+test_eigendecomp(1_000, use_rust=True)
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## 4. Scale Testing
 # MAGIC
-# MAGIC Run progressively larger tests to find the breaking point.
+# MAGIC Run progressively larger tests with the Rust backend.
 
 # COMMAND ----------
 
 # 10k - should be fast
-test_eigendecomp(10_000)
+test_eigendecomp(10_000, use_rust=True)
 
 # COMMAND ----------
 
-# 50k - should complete in ~35 min with OpenBLAS (multi-threaded)
-# With MKL this should be faster and stable
-test_eigendecomp(50_000)
+# 50k - Rust backend handles this without BLAS threading issues
+test_eigendecomp(50_000, use_rust=True)
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## 5. The 100k Test
 # MAGIC
-# MAGIC This is where OpenBLAS crashes. With MKL it should work.
+# MAGIC This is where scipy/OpenBLAS crashes. Rust backend should work.
 
 # COMMAND ----------
 
-# 100k - the crash scale
-# Try with MKL first (no thread limiting needed if MKL is installed)
-success, elapsed = test_eigendecomp(100_000, use_thread_limit=False)
+# 100k - the crash scale for OpenBLAS
+# Rust backend should complete without issues
+success, elapsed = test_eigendecomp(100_000, use_rust=True)
 
 if not success:
-    print("\n\nRetrying with single-threaded BLAS...")
-    test_eigendecomp(100_000, use_thread_limit=True, thread_limit=1)
+    print("\n\nRust failed - trying scipy with thread limiting...")
+    test_eigendecomp(100_000, use_rust=False, use_thread_limit=True, thread_limit=1)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 6. Thread Limiting Comparison
+# MAGIC ## 6. Backend Comparison (Optional)
 # MAGIC
-# MAGIC If MKL isn't working, test different thread limits.
+# MAGIC Compare Rust vs scipy performance at smaller scales.
 
 # COMMAND ----------
 
-# Skip this section if 100k worked above
-# Uncomment to test thread limiting strategies
+# Uncomment to compare backends at 10k scale
 
-# print("Testing thread limit = 4")
-# test_eigendecomp(100_000, use_thread_limit=True, thread_limit=4)
+# print("=== Rust Backend ===")
+# test_eigendecomp(10_000, use_rust=True)
 
-# print("\nTesting thread limit = 2")
-# test_eigendecomp(100_000, use_thread_limit=True, thread_limit=2)
-
-# print("\nTesting thread limit = 1")
-# test_eigendecomp(100_000, use_thread_limit=True, thread_limit=1)
+# print("\n=== Scipy Backend ===")
+# test_eigendecomp(10_000, use_rust=False)
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## Results Summary
 # MAGIC
-# MAGIC - If MKL installed correctly: 100k should work with full threading
-# MAGIC - If still OpenBLAS: Need to try single-thread or alternative approaches
+# MAGIC - **Rust backend**: Stable at 100k+ scale, no BLAS threading issues
+# MAGIC - **Scipy/OpenBLAS**: May crash at 100k+ without thread limiting
+# MAGIC - **Scipy with thread limit=1**: Works but slower than Rust

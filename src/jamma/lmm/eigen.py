@@ -17,6 +17,8 @@ import numpy as np
 from loguru import logger
 from scipy import linalg
 
+from jamma.core.backend import get_compute_backend
+
 try:
     from threadpoolctl import threadpool_info, threadpool_limits
 
@@ -116,6 +118,29 @@ def eigendecompose_kinship(
         ValueError: If kinship matrix is not square or has invalid shape.
         MemoryError: If matrix is too large to decompose.
     """
+    # Backend dispatch: Rust backend doesn't have pre-flight memory check
+    # or thread limiting (faer handles this internally)
+    backend = get_compute_backend()
+    if backend == "rust":
+        try:
+            from jamma_core import eigendecompose_kinship as rust_eigendecompose
+
+            n = K.shape[0]
+            logger.info(
+                f"## Eigendecomposing kinship matrix ({n:,} x {n:,}) [Rust/faer]"
+            )
+            start_time = time.perf_counter()
+            eigenvalues, eigenvectors = rust_eigendecompose(K, threshold)
+            elapsed = time.perf_counter() - start_time
+            logger.info(f"Eigendecomposition completed in {elapsed:.2f} seconds")
+            return eigenvalues, eigenvectors
+        except ImportError:
+            logger.warning(
+                "Rust backend selected but jamma_core not installed, "
+                "falling back to scipy"
+            )
+            # Fall through to scipy path
+
     n_samples = K.shape[0]
     n_elements = n_samples * n_samples
 

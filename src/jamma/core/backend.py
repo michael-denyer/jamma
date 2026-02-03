@@ -75,34 +75,55 @@ def get_compute_backend() -> Backend:
     """Detect the best available compute backend.
 
     Priority:
-    1. JAMMA_BACKEND environment variable (if set to 'jax' or 'rust')
-    2. GPU available -> JAX
-    3. Otherwise -> Rust
+    1. JAMMA_BACKEND environment variable override
+       - Valid values: 'jax.scipy', 'jax.rust', 'auto'
+       - Old name 'jax' maps to 'jax.scipy' with deprecation warning
+       - Bare 'rust' errors (pure Rust LMM not yet implemented)
+    2. Auto-selection: jax.rust if jamma_core available, else jax.scipy
 
     Returns:
-        Backend identifier ('jax' or 'rust').
+        Backend identifier ('jax.scipy' or 'jax.rust').
+
+    Raises:
+        ValueError: If 'rust' (pure Rust LMM) is selected but not implemented.
 
     Examples:
         >>> import os
-        >>> os.environ["JAMMA_BACKEND"] = "rust"
+        >>> os.environ["JAMMA_BACKEND"] = "jax.rust"
         >>> get_compute_backend.cache_clear()
         >>> get_compute_backend()
-        'rust'
+        'jax.rust'
     """
     # Check for environment override
-    override = os.environ.get("JAMMA_BACKEND", "").lower().strip()
-    if override in ("jax", "rust"):
-        logger.debug(f"Backend override via JAMMA_BACKEND={override}")
-        return override
+    override = os.environ.get("JAMMA_BACKEND", "").strip()
+    if override:
+        override = normalize_backend_name(override)
 
-    # Check for GPU via JAX
-    if _has_gpu():
-        logger.debug("GPU detected, using JAX backend")
-        return "jax"
+        # Handle pure Rust LMM stub (not yet implemented)
+        if override == "rust":
+            raise ValueError(
+                "Backend 'rust' (pure Rust LMM) is not yet implemented. "
+                "Use 'jax.scipy' or 'jax.rust' instead."
+            )
 
-    # Fall back to Rust
-    logger.debug("No GPU detected, using Rust backend")
-    return "rust"
+        # Handle explicit backend selection
+        if override in ("jax.scipy", "jax.rust"):
+            logger.debug(f"Backend override via JAMMA_BACKEND={override}")
+            return override
+
+        # "auto" falls through to auto-selection below
+
+    # Auto-selection: prefer jax.rust when jamma_core available
+    if is_rust_available():
+        logger.debug("jamma_core available, using jax.rust backend")
+        return "jax.rust"
+
+    # Fall back to jax.scipy with warning
+    logger.warning(
+        "jamma_core not installed. Using jax.scipy backend. "
+        "For better stability at scale, install jamma_core."
+    )
+    return "jax.scipy"
 
 
 def _has_gpu() -> bool:

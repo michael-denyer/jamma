@@ -42,6 +42,7 @@ class AssocResult:
 
     Matches GEMMA's output format. Fields present depend on test type:
     - Wald (-lmm 1): logl_H1, l_remle, p_wald
+    - LRT (-lmm 2): l_mle, p_lrt (no beta/se in GEMMA output, but kept for consistency)
     - Score (-lmm 3): p_score only (no per-SNP logl_H1/l_remle)
     - All (-lmm 4): All fields
     """
@@ -59,6 +60,8 @@ class AssocResult:
     l_remle: float | None = None  # Not present for Score-only
     p_wald: float | None = None  # Only for Wald/-lmm 1
     p_score: float | None = None  # Only for Score/-lmm 3
+    l_mle: float | None = None  # MLE lambda (for LRT/-lmm 2)
+    p_lrt: float | None = None  # LRT p-value (for LRT/-lmm 2)
 
 
 def f_sf(x: float, df1: float, df2: float) -> float:
@@ -194,6 +197,36 @@ def calc_wald_test_from_uab(
 
     # Compute Wald test
     return calc_wald_test(lambda_val, Pab, n_cvt, ni_test)
+
+
+def calc_lrt_test(
+    logl_H1: float,
+    logl_H0: float,
+) -> float:
+    """Compute LRT p-value using chi-squared distribution.
+
+    LRT statistic: 2 * (logl_H1 - logl_H0)
+    Under H0, follows chi-squared with df=1.
+
+    Args:
+        logl_H1: MLE log-likelihood under alternative (SNP has effect)
+        logl_H0: MLE log-likelihood under null (no SNP effect)
+
+    Returns:
+        p_lrt: LRT p-value from chi2.sf(stat, df=1)
+    """
+    lrt_stat = 2.0 * (logl_H1 - logl_H0)
+
+    # Guard against negative statistic (numerical artifact)
+    if lrt_stat < 0:
+        return 1.0
+
+    # Chi-squared survival function with df=1
+    from scipy.stats import chi2
+
+    p_lrt = chi2.sf(lrt_stat, df=1)
+
+    return float(p_lrt)
 
 
 def calc_score_test(

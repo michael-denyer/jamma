@@ -4,7 +4,7 @@
 //! operations, starting with eigendecomposition of kinship matrices.
 
 use ndarray::Array2;
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray2};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -67,16 +67,18 @@ fn compute_eigen_internal(k_flat: &[f64], n: usize, threshold: f64) -> (Vec<f64>
 
     // Convert row-major input to faer column-major Mat
     // k_flat[i * n + j] is element (i, j) in row-major
-    let k_mat = Mat::from_fn(n, n, |i, j| k_flat[i * n + j]);
+    let k_mat: Mat<f64> = Mat::from_fn(n, n, |i, j| k_flat[i * n + j]);
 
     // Compute self-adjoint eigendecomposition
-    // faer returns eigenvalues sorted ascending
-    let eigen = k_mat.selfadjoint_eigendecomposition(faer::Side::Lower);
-    let s = eigen.s().column_vector(); // eigenvalues as column vector
-    let u = eigen.u(); // eigenvectors as columns
+    // faer returns eigenvalues sorted ascending (nondecreasing order)
+    let eigen = k_mat
+        .self_adjoint_eigen(faer::Side::Lower)
+        .expect("eigendecomposition failed");
+    let s = eigen.S().column_vector(); // eigenvalues as column vector
+    let u = eigen.U(); // eigenvectors as MatRef (columns)
 
     // Extract eigenvalues and apply threshold (GEMMA compatibility)
-    let mut eigenvalues: Vec<f64> = (0..n).map(|i| s.read(i)).collect();
+    let mut eigenvalues: Vec<f64> = (0..n).map(|i| s[i]).collect();
     for v in &mut eigenvalues {
         if v.abs() < threshold {
             *v = 0.0;
@@ -88,7 +90,7 @@ fn compute_eigen_internal(k_flat: &[f64], n: usize, threshold: f64) -> (Vec<f64>
     let mut eigenvectors = Vec::with_capacity(n * n);
     for i in 0..n {
         for j in 0..n {
-            eigenvectors.push(u.read(i, j));
+            eigenvectors.push(u[(i, j)]);
         }
     }
 

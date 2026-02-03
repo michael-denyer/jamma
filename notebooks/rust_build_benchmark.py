@@ -16,6 +16,9 @@
 # COMMAND ----------
 
 # MAGIC %sh
+# MAGIC # Install C toolchain (needed for Rust linker)
+# MAGIC apt-get update && apt-get install -y build-essential
+# MAGIC
 # MAGIC # Install Rust if not present
 # MAGIC if ! command -v rustc &> /dev/null; then
 # MAGIC     echo "Installing Rust..."

@@ -1,0 +1,11 @@
+# Build optimization for jamma_core
+#
+# target-cpu=native enables CPU-specific SIMD instructions (AVX2, AVX-512)
+# for maximum performance on the build machine.
+#
+# WARNING: Wheels built with target-cpu=native may crash on machines
+# with different CPUs. For distributed wheels, use explicit feature
+# flags instead: ["-C", "target-feature=+avx2,+fma"]
+
+[build]
+rustflags = ["-C", "target-cpu=native"]

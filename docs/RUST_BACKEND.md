@@ -1,16 +1,31 @@
 # Rust Backend for JAMMA
 
-JAMMA includes an optional Rust-based eigendecomposition backend that provides
-CPU-optimized performance without requiring MKL or external BLAS libraries.
+JAMMA includes a Rust-based eigendecomposition backend that provides:
+
+- **Stable 100k+ scale**: No BLAS threading bugs that cause SIGSEGV crashes
+- **Zero configuration**: Works out of the box, no MKL or BLAS setup needed
+- **Competitive performance**: Pure Rust via faer, comparable to scipy/OpenBLAS
 
 ## When to Use
 
-The Rust backend is automatically selected when:
+The Rust backend is **recommended for CPU-only workloads**, especially at scale.
+It is automatically selected when:
+
 - No GPU is available (JAX cannot detect CUDA/ROCm devices)
 - You explicitly set `JAMMA_BACKEND=rust`
 
 The JAX backend is preferred when a GPU is available, as GPU-accelerated
 eigendecomposition is faster for large matrices.
+
+### Why Rust over scipy/OpenBLAS?
+
+OpenBLAS has known threading bugs that cause SIGSEGV crashes during
+eigendecomposition at 100k+ samples. Previous workarounds included:
+
+- Installing MKL (complex, licensing concerns)
+- Thread limiting (works but slower)
+
+The Rust backend eliminates these issues entirely.
 
 ## Building the Rust Extension
 
@@ -68,12 +83,12 @@ export JAMMA_BACKEND=jax   # Force JAX backend
 ## Performance Characteristics
 
 - **Rust/faer**: Uses faer library with rayon parallelism. No external BLAS required.
-  Good CPU performance without MKL configuration complexity.
-- **JAX/scipy**: Uses system BLAS (OpenBLAS or MKL). Can be faster with MKL but
-  requires proper configuration.
+  Stable at all scales with good CPU performance.
+- **JAX/scipy**: Uses system BLAS (typically OpenBLAS). May require thread limiting
+  at 100k+ samples to avoid crashes.
 
-For most CPU-only workloads, the Rust backend provides comparable performance
-with simpler setup.
+For CPU-only workloads, the Rust backend is recommended for its stability and
+simplicity.
 
 ## Numerical Parity
 

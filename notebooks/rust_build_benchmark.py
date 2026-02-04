@@ -16,12 +16,17 @@
 
 # MAGIC %sh
 # MAGIC apt-get update -y
-# MAGIC apt-get purge openblas* -y
+# MAGIC apt-get purge openblas* libopenblas* -y
 # MAGIC apt-get install intel-mkl -y
+# MAGIC # Set MKL as default BLAS
+# MAGIC MKL=/usr/lib/x86_64-linux-gnu/libmkl_rt.so
+# MAGIC update-alternatives --set libblas.so.3-x86_64-linux-gnu $MKL
+# MAGIC update-alternatives --set liblapack.so.3-x86_64-linux-gnu $MKL
 
 # COMMAND ----------
 
-# MAGIC %pip install psutil numpy loguru
+# Reinstall numpy to link against MKL (must come after MKL install)
+# MAGIC %pip install --force-reinstall numpy psutil loguru
 
 # COMMAND ----------
 
@@ -120,12 +125,15 @@ def benchmark_numpy(n_samples: int):
         print(f"  Eigenvalue range: [{vals.min():.6f}, {vals.max():.6f}]")
         result = {"time": elapsed, "n_samples": n_samples, "success": True}
     except Exception as e:
-        print(f"  FAILED: {e}")
+        import traceback
+
+        print(f"  FAILED: {type(e).__name__}: {e}")
+        print(f"  Traceback: {traceback.format_exc()}")
         result = {
             "time": None,
             "n_samples": n_samples,
             "success": False,
-            "error": str(e),
+            "error": f"{type(e).__name__}: {e}",
         }
 
     del K

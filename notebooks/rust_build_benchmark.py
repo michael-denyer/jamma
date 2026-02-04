@@ -1,11 +1,12 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Rust Backend Build & Benchmark: faer Performance
+# MAGIC # Eigendecomposition Benchmark: NumPy/MKL vs faer
 # MAGIC
-# MAGIC Builds jamma_core from source ON Databricks to benchmark:
-# MAGIC - **faer 0.22** - Pure Rust eigendecomposition with rayon parallelism
+# MAGIC Compares eigendecomposition backends:
+# MAGIC - **NumPy/MKL** - Direct LAPACK via numpy.linalg.eigh (no copy overhead)
+# MAGIC - **faer 0.22** - Pure Rust with rayon parallelism (requires data copy)
 # MAGIC
-# MAGIC Uses target-cpu=native for CPU-specific SIMD optimization (AVX2/AVX-512).
+# MAGIC NumPy/MKL should be more memory-efficient at large scale.
 
 # COMMAND ----------
 
@@ -99,35 +100,42 @@ dbutils.library.restartPython()  # noqa: F821
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 3. Verify faer Backend
+# MAGIC ## 3. Verify Backends
 
 # COMMAND ----------
 
 import numpy as np
 
-print("=== JAMMA Backend Verification ===")
+print("=== Backend Verification ===")
 
+# Check NumPy BLAS config
+print("\nNumPy BLAS configuration:")
+np.show_config()
+
+# Check faer
 import jamma_core
 
-print(f"jamma_core version: {getattr(jamma_core, '__version__', 'unknown')}")
-
-# Check faer function exists
+print(f"\njamma_core version: {getattr(jamma_core, '__version__', 'unknown')}")
 has_faer = hasattr(jamma_core, "eigendecompose_kinship")
-print(f"faer backend: eigendecompose_kinship = {has_faer}")
+print(f"faer backend available: {has_faer}")
 
 # Quick sanity check with tiny matrix
 test_k = np.array([[2.0, 1.0], [1.0, 2.0]], dtype=np.float64)
+
+print("\nTesting numpy.linalg.eigh...")
+vals_np, vecs_np = np.linalg.eigh(test_k)
+print(f"  eigenvalues: {vals_np}")
 
 print("\nTesting faer backend...")
 vals_faer, vecs_faer = jamma_core.eigendecompose_kinship(test_k, 0.0)
 print(f"  eigenvalues: {vals_faer}")
 
-print("\nfaer backend working!")
+print("\nBoth backends working!")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 4. Benchmark: faer Performance
+# MAGIC ## 4. Benchmark Functions
 
 # COMMAND ----------
 
@@ -137,43 +145,95 @@ import time
 import psutil
 
 
-def benchmark_faer(n_samples: int):
-    """Benchmark faer eigendecomposition at given scale.
+def benchmark_numpy(n_samples: int):
+    """Benchmark numpy.linalg.eigh (uses MKL if available).
 
     Args:
         n_samples: Matrix dimension
     """
     print(f"\n{'='*60}")
-    print(f"Benchmark: {n_samples:,} x {n_samples:,}")
+    print(f"NumPy/MKL Benchmark: {n_samples:,} x {n_samples:,}")
     print(f"Matrix memory: {n_samples * n_samples * 8 / 1e9:.1f} GB")
     print(f"{'='*60}")
 
-    # Generate random symmetric positive semi-definite matrix
     np.random.seed(42)
     A = np.random.randn(n_samples, n_samples).astype(np.float64)
     K = A @ A.T / n_samples
     del A
     gc.collect()
 
-    mem_gb = psutil.Process().memory_info().rss / 1e9
-    print(f"RSS after matrix gen: {mem_gb:.1f} GB")
+    mem_before = psutil.Process().memory_info().rss / 1e9
+    print(f"RSS before eigendecomp: {mem_before:.1f} GB")
 
-    # Run faer eigendecomposition
+    print("\nRunning numpy.linalg.eigh...")
+    start = time.perf_counter()
+    try:
+        vals, vecs = np.linalg.eigh(K)
+        elapsed = time.perf_counter() - start
+        mem_after = psutil.Process().memory_info().rss / 1e9
+        print(f"  Time: {elapsed:.2f}s")
+        print(
+            f"  RSS after: {mem_after:.1f} GB (delta: {mem_after - mem_before:.1f} GB)"
+        )
+        print(f"  Eigenvalue range: [{vals.min():.6f}, {vals.max():.6f}]")
+        result = {"time": elapsed, "n_samples": n_samples, "backend": "numpy"}
+    except Exception as e:
+        print(f"  FAILED: {e}")
+        result = {
+            "time": None,
+            "n_samples": n_samples,
+            "backend": "numpy",
+            "error": str(e),
+        }
+
+    del K, vals, vecs
+    gc.collect()
+    return result
+
+
+def benchmark_faer(n_samples: int):
+    """Benchmark faer eigendecomposition.
+
+    Args:
+        n_samples: Matrix dimension
+    """
+    print(f"\n{'='*60}")
+    print(f"faer Benchmark: {n_samples:,} x {n_samples:,}")
+    print(f"Matrix memory: {n_samples * n_samples * 8 / 1e9:.1f} GB")
+    print(f"{'='*60}")
+
+    np.random.seed(42)
+    A = np.random.randn(n_samples, n_samples).astype(np.float64)
+    K = A @ A.T / n_samples
+    del A
+    gc.collect()
+
+    mem_before = psutil.Process().memory_info().rss / 1e9
+    print(f"RSS before eigendecomp: {mem_before:.1f} GB")
+
     print("\nRunning faer eigendecomposition...")
     start = time.perf_counter()
     try:
         vals, vecs = jamma_core.eigendecompose_kinship(K, 0.0)
         elapsed = time.perf_counter() - start
+        mem_after = psutil.Process().memory_info().rss / 1e9
         print(f"  Time: {elapsed:.2f}s")
+        print(
+            f"  RSS after: {mem_after:.1f} GB (delta: {mem_after - mem_before:.1f} GB)"
+        )
         print(f"  Eigenvalue range: [{vals.min():.6f}, {vals.max():.6f}]")
-        result = {"time": elapsed, "n_samples": n_samples}
+        result = {"time": elapsed, "n_samples": n_samples, "backend": "faer"}
     except Exception as e:
         print(f"  FAILED: {e}")
-        result = {"time": None, "n_samples": n_samples, "error": str(e)}
+        result = {
+            "time": None,
+            "n_samples": n_samples,
+            "backend": "faer",
+            "error": str(e),
+        }
 
-    del K
+    del K, vals, vecs
     gc.collect()
-
     return result
 
 
@@ -184,35 +244,47 @@ def benchmark_faer(n_samples: int):
 
 # COMMAND ----------
 
-# 1k warmup / verification
-results_1k = benchmark_faer(1_000)
+# 10k warmup - compare both backends
+print("=" * 60)
+print("10k COMPARISON: NumPy/MKL vs faer")
+print("=" * 60)
+results_10k_numpy = benchmark_numpy(10_000)
+results_10k_faer = benchmark_faer(10_000)
 
 # COMMAND ----------
 
-# 10k - key performance test
-results_10k = benchmark_faer(10_000)
+# 50k - production scale comparison
+print("=" * 60)
+print("50k COMPARISON: NumPy/MKL vs faer")
+print("=" * 60)
+results_50k_numpy = benchmark_numpy(50_000)
+results_50k_faer = benchmark_faer(50_000)
 
 # COMMAND ----------
 
-# 50k - production scale
-results_50k = benchmark_faer(50_000)
-
-# COMMAND ----------
-
-# 100k - target scale (if memory allows)
-# Peak memory: K + k_vec_copy + faer_mat + U + workspace ≈ 5x matrix size
+# 100k - NumPy/MKL only (faer needs too much memory due to copies)
+# NumPy peak: K + U + workspace ≈ 3x matrix size (~240 GB)
+# faer peak: K + k_vec + faer_mat + U + workspace ≈ 5x matrix size (~400 GB)
 available_gb = psutil.virtual_memory().available / 1e9
 matrix_gb = (100_000**2) * 8 / 1e9
-required_gb = 5 * matrix_gb  # ~400 GB peak
+numpy_peak = 3 * matrix_gb  # ~240 GB
+faer_peak = 5 * matrix_gb  # ~400 GB
 
-print(f"100k: matrix={matrix_gb:.0f}GB, peak≈{required_gb:.0f}GB", end="")
-print(f", available={available_gb:.0f}GB")
+print(f"100k: matrix={matrix_gb:.0f}GB, available={available_gb:.0f}GB")
+print(f"  NumPy peak ≈ {numpy_peak:.0f}GB, faer peak ≈ {faer_peak:.0f}GB")
 
-if available_gb > required_gb * 1.1:
-    results_100k = benchmark_faer(100_000)
+results_100k_numpy = None
+results_100k_faer = None
+
+if available_gb > numpy_peak * 1.1:
+    results_100k_numpy = benchmark_numpy(100_000)
 else:
-    print("Skipping 100k - insufficient memory for peak usage")
-    results_100k = None
+    print("Skipping 100k NumPy - insufficient memory")
+
+if available_gb > faer_peak * 1.1:
+    results_100k_faer = benchmark_faer(100_000)
+else:
+    print("Skipping 100k faer - insufficient memory for copy overhead")
 
 # COMMAND ----------
 
@@ -222,35 +294,42 @@ else:
 # COMMAND ----------
 
 print("\n" + "=" * 60)
-print("BENCHMARK SUMMARY: faer Performance")
+print("BENCHMARK SUMMARY: NumPy/MKL vs faer")
 print("=" * 60)
 
+# Collect results
 all_results = []
-for name, res in [("1k", results_1k), ("10k", results_10k), ("50k", results_50k)]:
-    if res and res.get("time"):
-        all_results.append((name, res["n_samples"], res["time"]))
-
-if results_100k and results_100k.get("time"):
-    all_results.append(("100k", results_100k["n_samples"], results_100k["time"]))
+for scale, np_res, faer_res in [
+    ("10k", results_10k_numpy, results_10k_faer),
+    ("50k", results_50k_numpy, results_50k_faer),
+    ("100k", results_100k_numpy, results_100k_faer),
+]:
+    np_time = np_res.get("time") if np_res else None
+    faer_time = faer_res.get("time") if faer_res else None
+    if np_time or faer_time:
+        n = np_res.get("n_samples") if np_res else faer_res.get("n_samples")
+        all_results.append((scale, n, np_time, faer_time))
 
 if all_results:
-    print(f"\n{'Scale':<8} {'Samples':<12} {'Time (s)':<12} {'Matrix GB':<12}")
-    print("-" * 46)
-    for scale, n, elapsed in all_results:
-        matrix_gb = n * n * 8 / 1e9
-        print(f"{scale:<8} {n:<12,} {elapsed:<12.2f} {matrix_gb:<12.1f}")
+    print(f"\n{'Scale':<8} {'Samples':<12} {'NumPy':<12} {'faer':<12} {'Winner':<10}")
+    print("-" * 56)
+    for scale, n, np_time, faer_time in all_results:
+        np_str = f"{np_time:.2f}" if np_time else "N/A"
+        faer_str = f"{faer_time:.2f}" if faer_time else "N/A"
+        if np_time and faer_time:
+            winner = "NumPy" if np_time < faer_time else "faer"
+            ratio = max(np_time, faer_time) / min(np_time, faer_time)
+            winner = f"{winner} ({ratio:.1f}x)"
+        elif np_time:
+            winner = "NumPy (only)"
+        elif faer_time:
+            winner = "faer (only)"
+        else:
+            winner = "N/A"
+        print(f"{scale:<8} {n:<12,} {np_str:<12} {faer_str:<12} {winner:<10}")
 
-    # Performance scaling
-    if len(all_results) >= 2:
-        print("\nScaling analysis:")
-        for i in range(1, len(all_results)):
-            prev_scale, prev_n, prev_t = all_results[i - 1]
-            curr_scale, curr_n, curr_t = all_results[i]
-            n_ratio = curr_n / prev_n
-            t_ratio = curr_t / prev_t
-            # O(n^3) would give t_ratio = n_ratio^3
-            expected_cubic = n_ratio**3
-            print(f"  {prev_scale} → {curr_scale}: {t_ratio:.1f}x slower", end="")
-            print(f" (O(n³) predicts {expected_cubic:.1f}x)")
+    print("\nConclusion:")
+    print("- NumPy/MKL: Lower memory overhead, can handle larger matrices")
+    print("- faer: Pure Rust, but copy overhead limits scale")
 else:
     print("No results to summarize")

@@ -126,19 +126,42 @@ def benchmark_numpy(n_samples: int):
 
 # COMMAND ----------
 
-# 10k warmup
+# 10k warmup - always runs (only ~2.4GB peak)
+available_gb = psutil.virtual_memory().available / 1e9
+matrix_gb = (10_000**2) * 8 / 1e9
+numpy_peak = 3 * matrix_gb  # K + U + workspace ≈ 2.4 GB
+
 print("=" * 60)
 print("10k BENCHMARK")
 print("=" * 60)
+print(f"10k: matrix={matrix_gb:.1f}GB, available={available_gb:.0f}GB")
+print(f"  NumPy peak ≈ {numpy_peak:.1f}GB")
+
 results_10k = benchmark_numpy(10_000)
 
 # COMMAND ----------
 
-# 50k
+# 50k - check memory first
+available_gb = psutil.virtual_memory().available / 1e9
+matrix_gb = (50_000**2) * 8 / 1e9
+numpy_peak = 3 * matrix_gb  # K + U + workspace ≈ 60 GB
+
 print("=" * 60)
 print("50k BENCHMARK")
 print("=" * 60)
-results_50k = benchmark_numpy(50_000)
+print(f"50k: matrix={matrix_gb:.0f}GB, available={available_gb:.0f}GB")
+print(f"  NumPy peak ≈ {numpy_peak:.0f}GB")
+
+results_50k = None
+if available_gb > numpy_peak * 1.1:
+    results_50k = benchmark_numpy(50_000)
+else:
+    print("Skipping 50k - insufficient memory")
+    results_50k = {
+        "n_samples": 50_000,
+        "success": False,
+        "error": f"Insufficient memory: need {numpy_peak:.0f}GB, have {available_gb:.0f}GB",  # noqa: E501
+    }
 
 # COMMAND ----------
 
@@ -155,6 +178,11 @@ if available_gb > numpy_peak * 1.1:
     results_100k = benchmark_numpy(100_000)
 else:
     print("Skipping 100k - insufficient memory")
+    results_100k = {
+        "n_samples": 100_000,
+        "success": False,
+        "error": f"Insufficient memory: need {numpy_peak:.0f}GB, have {available_gb:.0f}GB",  # noqa: E501
+    }
 
 # COMMAND ----------
 
@@ -181,7 +209,9 @@ for scale, res in all_results:
     elif res.get("success"):
         print(f"{scale:<8} {res['n_samples']:<12,} {res['time']:<12.2f} {'OK':<10}")
     else:
+        error_msg = res.get("error", "unknown error")
         print(f"{scale:<8} {res['n_samples']:<12,} {'N/A':<12} {'FAILED':<10}")
+        print(f"         Error: {error_msg}")
 
 print("\nConclusion:")
 print("- NumPy/MKL eigendecomposition via numpy.linalg.eigh")

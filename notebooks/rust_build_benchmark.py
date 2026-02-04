@@ -1,24 +1,27 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # NumPy/MKL Eigendecomposition Benchmark
+# MAGIC # NumPy/MKL ILP64 Eigendecomposition Benchmark
 # MAGIC
 # MAGIC Tests numpy.linalg.eigh at scale (10k, 50k, 100k samples).
-# MAGIC NumPy uses LAPACK via MKL on Databricks.
+# MAGIC NumPy uses LAPACK via MKL ILP64 (64-bit integers) for matrices >46k x 46k.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 0. Install NumPy with MKL
+# MAGIC ## 0. Install NumPy with MKL ILP64
 # MAGIC
-# MAGIC Databricks uses OpenBLAS by default. MKL is needed for stable eigendecomp at scale.
-# MAGIC OpenBLAS can segfault on large matrices (50k+) due to threading/memory issues.
+# MAGIC Databricks uses OpenBLAS by default. MKL needed for stable eigendecomp.
+# MAGIC - OpenBLAS segfaults on large matrices (50k+)
+# MAGIC - MKL LP64 (urob) hits int32 overflow at ~46k samples
+# MAGIC - **MKL ILP64** uses 64-bit integers - no practical limit
 # MAGIC
-# MAGIC **Approach**: Use pre-built MKL wheels from urob/numpy-mkl repository.
+# MAGIC **Approach**: Use ILP64 MKL wheels from michael-denyer/numpy-mkl fork.
 
 # COMMAND ----------
 
-# Install pre-built numpy/scipy with MKL from urob's wheel repository
-# MAGIC %pip install numpy scipy --extra-index-url https://urob.github.io/numpy-mkl --force-reinstall --upgrade
+# Install numpy/scipy with MKL ILP64 from forked wheel repository
+# ILP64 uses 64-bit integers, supporting matrices >46k x 46k
+# MAGIC %pip install numpy scipy --extra-index-url https://michael-denyer.github.io/numpy-mkl --force-reinstall --upgrade
 
 # COMMAND ----------
 
@@ -243,7 +246,7 @@ else:
 # COMMAND ----------
 
 print("\n" + "=" * 60)
-print("BENCHMARK SUMMARY: NumPy/MKL Eigendecomposition")
+print("BENCHMARK SUMMARY: NumPy/MKL ILP64 Eigendecomposition")
 print("=" * 60)
 
 all_results = [
@@ -265,6 +268,7 @@ for scale, res in all_results:
         print(f"         Error: {error_msg}")
 
 print("\nConclusion:")
-print("- NumPy/MKL eigendecomposition via numpy.linalg.eigh")
+print("- NumPy/MKL ILP64 eigendecomposition via numpy.linalg.eigh")
+print("- ILP64 uses 64-bit integers - no 46k sample limit like LP64")
 print("- Memory: ~3x matrix size (K + U + workspace)")
 print("- 100k samples needs ~240 GB RAM")

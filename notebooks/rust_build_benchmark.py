@@ -20,14 +20,30 @@
 # MAGIC %sh
 # MAGIC set -ex
 # MAGIC
-# MAGIC # Install Intel MKL development libraries
+# MAGIC # Install Intel MKL runtime (not devel - smaller, just the libs we need)
 # MAGIC wget -qO - https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | apt-key add -
 # MAGIC echo "deb https://apt.repos.intel.com/oneapi all main" > /etc/apt/sources.list.d/oneAPI.list
 # MAGIC apt-get update -y
-# MAGIC apt-get install -y intel-oneapi-mkl-devel pkg-config
+# MAGIC apt-get install -y intel-oneapi-mkl intel-oneapi-compiler-shared-runtime
 # MAGIC
-# MAGIC # Set up MKL environment and build numpy wheel
+# MAGIC # Symlink ALL MKL libs to standard path so they're found after Python restart
+# MAGIC for f in /opt/intel/oneapi/mkl/latest/lib/*.so*; do
+# MAGIC     ln -sf "$f" /usr/lib/x86_64-linux-gnu/
+# MAGIC done
+# MAGIC for f in /opt/intel/oneapi/compiler/latest/lib/*.so*; do
+# MAGIC     ln -sf "$f" /usr/lib/x86_64-linux-gnu/
+# MAGIC done
+# MAGIC ldconfig
+# MAGIC echo "MKL runtime installed"
+
+# COMMAND ----------
+
+# MAGIC %sh
+# MAGIC set -ex
 # MAGIC . /opt/intel/oneapi/setvars.sh
+# MAGIC
+# MAGIC # Now install MKL devel for building
+# MAGIC apt-get install -y intel-oneapi-mkl-devel pkg-config
 # MAGIC
 # MAGIC cd /tmp
 # MAGIC rm -rf numpy-build numpy-wheel
@@ -35,22 +51,12 @@
 # MAGIC git clone --depth 1 --branch v2.0.2 --recurse-submodules https://github.com/numpy/numpy.git numpy-build
 # MAGIC cd numpy-build
 # MAGIC
-# MAGIC # Install build dependencies
 # MAGIC pip install cython meson-python meson ninja pybind11 build
 # MAGIC
-# MAGIC # Build wheel with MKL
 # MAGIC python -m build --wheel --no-isolation \
 # MAGIC     -Csetup-args=-Dblas=mkl \
 # MAGIC     -Csetup-args=-Dlapack=mkl \
 # MAGIC     -o /tmp/numpy-wheel
-# MAGIC
-# MAGIC # Symlink MKL libs to standard path
-# MAGIC for lib in libmkl_rt libmkl_core libmkl_intel_lp64 libmkl_intel_thread libmkl_sequential; do
-# MAGIC     ln -sf /opt/intel/oneapi/mkl/latest/lib/$lib.so.2 /usr/lib/x86_64-linux-gnu/ || true
-# MAGIC     ln -sf /opt/intel/oneapi/mkl/latest/lib/$lib.so /usr/lib/x86_64-linux-gnu/ || true
-# MAGIC done
-# MAGIC ln -sf /opt/intel/oneapi/compiler/latest/lib/libiomp5.so /usr/lib/x86_64-linux-gnu/ || true
-# MAGIC ldconfig
 # MAGIC
 # MAGIC ls -la /tmp/numpy-wheel/
 

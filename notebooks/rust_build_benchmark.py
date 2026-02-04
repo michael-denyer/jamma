@@ -113,6 +113,9 @@ def benchmark_numpy(n_samples: int):
     print(f"RSS before eigendecomp: {mem_before:.1f} GB")
 
     print("\nRunning numpy.linalg.eigh...")
+    print(
+        f"  Available memory before: {psutil.virtual_memory().available / 1e9:.1f} GB"
+    )
     start = time.perf_counter()
     try:
         vals, vecs = np.linalg.eigh(K)
@@ -123,17 +126,23 @@ def benchmark_numpy(n_samples: int):
             f"  RSS after: {mem_after:.1f} GB (delta: {mem_after - mem_before:.1f} GB)"
         )
         print(f"  Eigenvalue range: [{vals.min():.6f}, {vals.max():.6f}]")
+        print(f"  Eigenvector shape: {vecs.shape}")
         result = {"time": elapsed, "n_samples": n_samples, "success": True}
     except Exception as e:
         import traceback
 
-        print(f"  FAILED: {type(e).__name__}: {e}")
-        print(f"  Traceback: {traceback.format_exc()}")
+        elapsed = time.perf_counter() - start
+        print(f"  FAILED after {elapsed:.2f}s: {type(e).__name__}: {e}")
+        print(f"  Traceback:\n{traceback.format_exc()}")
+        avail_after = psutil.virtual_memory().available / 1e9
+        print(f"  Available memory after: {avail_after:.1f} GB")
         result = {
             "time": None,
             "n_samples": n_samples,
             "success": False,
-            "error": f"{type(e).__name__}: {e}",
+            "error": f"{type(e).__name__}: {e}"
+            if str(e)
+            else f"{type(e).__name__} (no message)",
         }
 
     del K

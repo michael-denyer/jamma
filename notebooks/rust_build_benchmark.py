@@ -17,9 +17,8 @@
 
 # COMMAND ----------
 
-# Install Intel's numpy with MKL from their PyPI channel
-# This package bundles MKL libraries so no separate MKL install needed
-# MAGIC %pip install intel-numpy psutil loguru threadpoolctl
+# Install numpy with MKL backend (bundles MKL libraries)
+# MAGIC %pip install mkl-numpy psutil loguru threadpoolctl
 
 # COMMAND ----------
 

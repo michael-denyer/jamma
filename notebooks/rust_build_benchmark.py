@@ -19,18 +19,20 @@
 
 # COMMAND ----------
 
-# Install numpy/scipy with MKL ILP64 from forked wheel repository
+# Install numpy with MKL ILP64 from forked wheel repository
 # ILP64 uses 64-bit integers, supporting matrices >46k x 46k
-# MAGIC %pip install numpy scipy --extra-index-url https://michael-denyer.github.io/numpy-mkl --force-reinstall --upgrade
+# Note: scipy not needed for this benchmark (numpy.linalg.eigh only)
+# MAGIC %pip install numpy --extra-index-url https://michael-denyer.github.io/numpy-mkl --force-reinstall --upgrade
 
 # COMMAND ----------
 
-# MAGIC %pip install psutil loguru threadpoolctl
+# Install jamma dependencies (except numpy/scipy which are ILP64 above)
+# MAGIC %pip install psutil loguru threadpoolctl jax jaxlib jaxtyping typer progressbar2 bed-reader
 
 # COMMAND ----------
 
-# Install jamma and dependencies
-# MAGIC %pip install git+https://github.com/michael-denyer/jamma.git
+# Install jamma WITHOUT dependencies (numpy/scipy already installed with ILP64)
+# MAGIC %pip install git+https://github.com/michael-denyer/jamma.git --no-deps
 
 # COMMAND ----------
 

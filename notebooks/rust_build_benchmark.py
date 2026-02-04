@@ -7,6 +7,20 @@
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ## 0. Install MKL (Required)
+# MAGIC
+# MAGIC Databricks uses OpenBLAS by default. MKL is needed for stable eigendecomp.
+
+# COMMAND ----------
+
+# MAGIC %sh
+# MAGIC apt-get update -y
+# MAGIC apt-get purge openblas* -y
+# MAGIC apt-get install intel-mkl -y
+
+# COMMAND ----------
+
 # MAGIC %pip install psutil numpy loguru
 
 # COMMAND ----------

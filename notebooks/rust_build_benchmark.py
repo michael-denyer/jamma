@@ -21,50 +21,23 @@
 # MAGIC %sh
 # MAGIC set -ex
 # MAGIC
-# MAGIC echo "=== Step 1: Install Intel MKL development libraries ==="
+# MAGIC echo "=== Step 1: Install Intel MKL runtime libraries ==="
 # MAGIC # Add Intel oneAPI repository
 # MAGIC wget -qO - https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | apt-key add -
 # MAGIC echo "deb https://apt.repos.intel.com/oneapi all main" > /etc/apt/sources.list.d/oneAPI.list
 # MAGIC apt-get update -y
 # MAGIC
-# MAGIC # Install MKL (runtime + dev headers) and pkg-config
-# MAGIC apt-get install -y intel-oneapi-mkl-devel pkg-config
+# MAGIC # Install MKL runtime (not full dev - smaller, faster to install)
+# MAGIC apt-get install -y intel-oneapi-mkl
 # MAGIC
-# MAGIC echo "=== Step 2: Set up MKL environment ==="
-# MAGIC # Source the setvars script to set all env vars including PKG_CONFIG_PATH
-# MAGIC . /opt/intel/oneapi/setvars.sh
-# MAGIC
-# MAGIC # Verify MKL is installed
-# MAGIC echo "MKL libraries:"
-# MAGIC ls -la /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_rt.so*
-# MAGIC
-# MAGIC echo "=== Step 3: Uninstall existing numpy ==="
+# MAGIC echo "=== Step 2: Install NumPy from Intel channel ==="
+# MAGIC # Uninstall existing numpy
 # MAGIC pip uninstall numpy -y || true
 # MAGIC
-# MAGIC echo "=== Step 4: Build NumPy from source with MKL ==="
-# MAGIC # Verify pkg-config can find MKL (setvars.sh should have set PKG_CONFIG_PATH)
-# MAGIC echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
-# MAGIC pkg-config --list-all | grep -i mkl || echo "No MKL pkg-config found"
-# MAGIC pkg-config --libs mkl-dynamic-lp64-seq || echo "mkl-dynamic-lp64-seq not found"
+# MAGIC # Install numpy from Intel's PyPI index (pre-built with MKL)
+# MAGIC pip install -i https://pypi.anaconda.org/intel/simple numpy
 # MAGIC
-# MAGIC # Clone numpy
-# MAGIC cd /tmp
-# MAGIC rm -rf numpy-build
-# MAGIC git clone --depth 1 --branch v2.4.2 https://github.com/numpy/numpy.git numpy-build
-# MAGIC cd numpy-build
-# MAGIC
-# MAGIC # Install build dependencies
-# MAGIC pip install cython "meson>=1.1.0" meson-python ninja pybind11
-# MAGIC
-# MAGIC # Build with meson, forcing MKL as BLAS/LAPACK
-# MAGIC # Use blas-order to prioritize MKL (more reliable than blas=mkl)
-# MAGIC # Ref: https://numpy.org/doc/stable/building/blas_lapack.html
-# MAGIC pip install . -v \
-# MAGIC     -Csetup-args=-Dblas-order=mkl \
-# MAGIC     -Csetup-args=-Dlapack-order=mkl \
-# MAGIC     --no-build-isolation
-# MAGIC
-# MAGIC echo "=== NumPy with MKL build complete ==="
+# MAGIC echo "=== NumPy with MKL install complete ==="
 
 # COMMAND ----------
 

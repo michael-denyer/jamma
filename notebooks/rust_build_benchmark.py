@@ -35,12 +35,14 @@
 # MAGIC . /opt/intel/oneapi/setvars.sh
 # MAGIC
 # MAGIC # Symlink MKL libs to standard path (idempotent)
+# MAGIC shopt -s nullglob
 # MAGIC for f in /opt/intel/oneapi/mkl/latest/lib/*.so*; do
 # MAGIC     ln -sf "$f" /usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
 # MAGIC done
-# MAGIC for f in /opt/intel/oneapi/compiler/latest/lib/*.so* 2>/dev/null; do
+# MAGIC for f in /opt/intel/oneapi/compiler/latest/lib/*.so*; do
 # MAGIC     ln -sf "$f" /usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
 # MAGIC done
+# MAGIC shopt -u nullglob
 # MAGIC ldconfig
 # MAGIC
 # MAGIC # Build numpy wheel if not already built

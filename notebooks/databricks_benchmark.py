@@ -10,7 +10,6 @@
 # MAGIC
 # MAGIC **Cluster Requirements:**
 # MAGIC - Memory-optimized instance with 512GB+ RAM (e.g., `Standard_M64s`)
-# MAGIC - Or GPU instance for JAX acceleration
 # MAGIC - DBR 15.4 LTS+ (Python 3.11+ required)
 
 # COMMAND ----------
@@ -18,33 +17,28 @@
 # MAGIC %md
 # MAGIC ### Install Dependencies
 # MAGIC
-# MAGIC JAX 0.8+ requires NumPy 2.0+. The Rust backend provides stable
-# MAGIC eigendecomposition at 100k+ scale without BLAS threading issues.
+# MAGIC NumPy with MKL ILP64 (64-bit integers) for stable eigendecomp at 100k+ scale.
+# MAGIC - OpenBLAS segfaults on large matrices (50k+)
+# MAGIC - MKL LP64 hits int32 overflow at ~46k samples
+# MAGIC - **MKL ILP64** uses 64-bit integers - no practical limit
 # MAGIC
 # MAGIC **IMPORTANT:** Run `dbutils.library.restartPython()` after pip installs.
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC #### Step 1: Install pip packages (JAX, jamma with Rust backend, etc.)
+# Install numpy with MKL ILP64 from forked wheel repository
+# ILP64 uses 64-bit integers, supporting matrices >46k x 46k
+# MAGIC %pip install numpy --extra-index-url https://michael-denyer.github.io/numpy-mkl --force-reinstall --upgrade
 
 # COMMAND ----------
 
-# MAGIC %pip install "jax>=0.8" "jaxlib>=0.8" psutil threadpoolctl
+# Install jamma dependencies (except numpy which is ILP64 above)
+# MAGIC %pip install psutil loguru threadpoolctl jax jaxlib jaxtyping typer progressbar2 bed-reader
 
 # COMMAND ----------
 
-# Install jamma_core (Rust extension) from GitHub releases
-# Update the wheel filename to match the latest release
-# MAGIC %pip install https://github.com/michael-denyer/jamma/releases/download/v0.1.0/jamma_core-0.1.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-
-# COMMAND ----------
-
-# MAGIC %pip install --force-reinstall git+https://github.com/michael-denyer/jamma.git
-
-# COMMAND ----------
-
-# MAGIC %pip install bed-reader jaxtyping typer loguru progressbar2
+# Install jamma WITHOUT dependencies (numpy already installed with ILP64)
+# MAGIC %pip install git+https://github.com/michael-denyer/jamma.git --no-deps
 
 # COMMAND ----------
 
@@ -67,6 +61,7 @@ import numpy as np
 import pandas as pd
 import psutil
 from loguru import logger as loguru_logger
+from threadpoolctl import threadpool_info
 
 # JAX configuration - must be before import
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -80,10 +75,118 @@ import jax  # noqa: E402
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Verify NumPy ILP64 + MKL Backend
+
+# COMMAND ----------
+
+print("=== NumPy ILP64 Backend Verification ===")
+print(f"NumPy version: {np.__version__}")
+print(f"NumPy location: {np.__file__}")
+
+# --- Step 1: Check build config for ILP64 ---
+ilp64_ok = False
+try:
+    config = np.show_config(mode="dicts")
+    blas_info = config.get("Build Dependencies", {}).get("blas", {})
+    lapack_info = config.get("Build Dependencies", {}).get("lapack", {})
+    blas_name = blas_info.get("name", "unknown")
+    lapack_name = lapack_info.get("name", "unknown")
+    print(f"  BLAS:   {blas_name}")
+    print(f"  LAPACK: {lapack_name}")
+
+    blas_ilp64 = "ilp64" in blas_name.lower()
+    lapack_ilp64 = "ilp64" in lapack_name.lower()
+    ilp64_ok = blas_ilp64 and lapack_ilp64
+
+    if ilp64_ok:
+        print("  ILP64:  CONFIRMED (both BLAS and LAPACK)")
+    else:
+        print(f"  ILP64:  NOT DETECTED (BLAS={blas_ilp64}, LAPACK={lapack_ilp64})")
+        print("  WARNING: Eigendecomp WILL FAIL at >46k samples without ILP64.")
+        print("  Troubleshooting:")
+        print("    1. Check pip install output above for errors")
+        print(
+            "    2. Verify wheel was fetched from michael-denyer.github.io (not PyPI)"
+        )
+        print("    3. Run: pip show numpy | grep Location")
+        print("    4. Confirm the fork index has wheels for this Python version")
+except Exception as e:
+    print(f"  ERROR reading build config: {e}")
+    np.show_config()
+
+# --- Step 2: Check runtime BLAS via threadpoolctl ---
+print("\nBLAS runtime (threadpoolctl):")
+blas_libs = [lib for lib in threadpool_info() if lib.get("user_api") == "blas"]
+detected_mkl = False
+if blas_libs:
+    for lib in blas_libs:
+        internal_api = lib.get("internal_api", "unknown")
+        filepath = lib.get("filepath", "unknown")
+        num_threads = lib.get("num_threads", "?")
+        threading_layer = lib.get("threading_layer", "unknown")
+        print(f"  Backend: {internal_api}")
+        print(f"  Library: {filepath}")
+        print(f"  Threads: {num_threads}")
+        print(f"  Threading: {threading_layer}")
+        if "mkl" in internal_api.lower() or "mkl" in filepath.lower():
+            detected_mkl = True
+else:
+    print("  No BLAS libraries detected by threadpoolctl!")
+    print(
+        "  This usually means numpy was built without BLAS or the library failed to load."
+    )
+    print("  Check: python -c 'import numpy; numpy.show_config()'")
+
+if detected_mkl:
+    print("\nMKL runtime: DETECTED")
+else:
+    print("\nMKL runtime: NOT DETECTED")
+    print("  Eigendecomp may segfault at 50k+ samples with OpenBLAS.")
+    print("  If ILP64 build config was confirmed above but MKL isn't loading,")
+    print("  check if mkl-service is installed: pip show mkl-service")
+
+# --- Step 3: Numerical sanity check ---
+# This catches LP64 mismatch: garbage eigenvalues when ILP64 header but LP64 runtime
+print("\nNumerical sanity check:")
+test_k = np.array([[2.0, 1.0], [1.0, 2.0]], dtype=np.float64)
+vals, vecs = np.linalg.eigh(test_k)
+expected = np.array([1.0, 3.0])
+eigenval_error = np.abs(vals - expected).max()
+print(f"  Eigenvalues: {vals} (expected {expected})")
+print(f"  Error: {eigenval_error:.2e}")
+assert eigenval_error < 1e-10, f"Basic eigendecomp FAILED: error={eigenval_error:.2e}"
+
+# Reconstruction error catches the LP64/ILP64 mismatch that gave error=6.54e+01
+M = np.random.default_rng(42).standard_normal((100, 100))
+M = M @ M.T
+evals, evecs = np.linalg.eigh(M)
+reconstructed = evecs @ np.diag(evals) @ evecs.T
+recon_error = np.abs(M - reconstructed).max()
+print(f"  100x100 reconstruction error: {recon_error:.2e}")
+assert recon_error < 1e-8, (
+    f"Eigendecomp reconstruction error {recon_error:.2e} too large. "
+    "This usually means ILP64 headers but LP64 runtime (symbol suffix mismatch). "
+    "See: https://github.com/michael-denyer/numpy-mkl build notes."
+)
+print("  Sanity checks: PASSED")
+
+# --- Summary ---
+print(f"\n{'='*40}")
+if ilp64_ok and detected_mkl and recon_error < 1e-8:
+    print("ILP64 + MKL: READY for large-scale eigendecomp")
+elif not ilp64_ok:
+    print("WARNING: ILP64 NOT confirmed - 46k sample limit applies")
+elif not detected_mkl:
+    print("WARNING: MKL not detected at runtime - stability risk at 50k+")
+print(f"{'='*40}")
+
+# COMMAND ----------
+
 # Configuration - Legacy Hive Metastore (single-level namespace)
 OUTPUT_SCHEMA = "jamma_benchmarks"
 
-# Setup logging - configure both standard logging and loguru for JAMMA output
+# Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -91,8 +194,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("jamma_benchmark")
 
-# Configure loguru to show JAMMA logs (JAMMA uses loguru internally)
-# Remove default handler and add one with INFO level to stdout
 loguru_logger.remove()
 loguru_logger.add(
     sys.stdout,
@@ -106,38 +207,13 @@ logger.info(f"JAX version: {jax.__version__}")
 logger.info(f"JAX devices: {jax.devices()}")
 logger.info(f"JAX device type: {jax.default_backend()}")
 
-# System memory
 mem = psutil.virtual_memory()
 logger.info(f"RAM: {mem.total / 1e9:.1f} GB total, {mem.available / 1e9:.1f} GB avail")
-
-# JAMMA eigendecomp backend - Rust (faer) or scipy
-# Rust is preferred: stable at 100k+, no BLAS threading bugs
-from jamma.core import get_backend_info, is_rust_available
-
-backend_info = get_backend_info()
-logger.info(f"Eigendecomp backend: {backend_info['selected']}")
-logger.info(f"Rust/faer available: {backend_info['rust_available']}")
-logger.info(f"GPU available: {backend_info['gpu_available']}")
-
-if not is_rust_available():
-    logger.warning("Rust backend not available - will use scipy with BLAS")
-    # Log BLAS info for scipy fallback path
-    try:
-        from threadpoolctl import threadpool_info
-
-        blas_info = [lib for lib in threadpool_info() if lib.get("user_api") == "blas"]
-        if blas_info:
-            for lib in blas_info:
-                blas_backend = lib.get("internal_api", "unknown")
-                num_threads = lib.get("num_threads", "?")
-                logger.info(f"BLAS: {blas_backend} ({num_threads} threads)")
-        else:
-            logger.warning("BLAS backend not detected")
-    except ImportError:
-        logger.warning("threadpoolctl not installed")
+logger.info(
+    f"BLAS: {'MKL ILP64' if (detected_mkl and ilp64_ok) else 'OpenBLAS (limited)'}"
+)
 
 # GEMMA binary path - default is the Databricks micromamba environment
-# Must be defined before benchmark_gemma() which uses it as a default
 GEMMA_PATH = os.environ.get("GEMMA_PATH", "/opt/micromamba/envs/disco/bin/gemma")
 
 # COMMAND ----------
@@ -317,6 +393,12 @@ def generate_synthetic_data(config: BenchmarkConfig, profiler: BenchmarkProfiler
 
     rng = np.random.default_rng(config.seed)
     mafs = rng.uniform(config.maf_min, config.maf_max, config.n_snps)
+
+    geno_gb = config.n_samples * config.n_snps * 4 / 1e9  # float32
+    logger.info(
+        f"Allocating genotype matrix: {config.n_samples:,} x {config.n_snps:,} "
+        f"({geno_gb:.1f}GB, float32)"
+    )
 
     profiler.start("data_gen", "genotypes")
     chunk_size = 10_000
@@ -696,10 +778,49 @@ def benchmark_kinship(genotypes: np.ndarray, profiler: BenchmarkProfiler):
     K = compute_centered_kinship(genotypes)
     kinship_elapsed = profiler.end("kinship", "compute", output_shape=K.shape)
 
-    # Eigendecompose once here - reused by warmup and main LMM runs
+    # Eigendecomposition — the most likely crash point.
+    # Segfaults (OpenBLAS >50k) and OOM kills bypass Python exceptions,
+    # so log memory state before entering to help diagnose silent restarts.
+    mem = psutil.virtual_memory()
+    matrix_gb = n_samples * n_samples * 8 / 1e9
+    eigen_peak_gb = 3 * matrix_gb  # K + U + LAPACK workspace
+    logger.info(
+        f"Eigendecomp: {n_samples:,}x{n_samples:,} "
+        f"(matrix={matrix_gb:.1f}GB, peak~{eigen_peak_gb:.0f}GB, "
+        f"avail={mem.available / 1e9:.0f}GB, "
+        f"RSS={psutil.Process().memory_info().rss / 1e9:.1f}GB)"
+    )
+    if mem.available < eigen_peak_gb * 1e9 * 1.1:
+        logger.warning(
+            f"Tight memory: need ~{eigen_peak_gb:.0f}GB, "
+            f"only {mem.available / 1e9:.0f}GB available. OOM kill likely."
+        )
+
     profiler.start("kinship", "eigendecomp", n_samples=n_samples)
     eigenvalues, eigenvectors = eigendecompose_kinship(K)
     eigen_elapsed = profiler.end("kinship", "eigendecomp")
+
+    # Validate eigendecomposition results — catches LP64/ILP64 mismatch
+    # which produces garbage eigenvalues without crashing (error ~1e+1 vs ~1e-14)
+    logger.info(
+        f"Eigenvalues: min={eigenvalues.min():.6g}, max={eigenvalues.max():.6g}, "
+        f"n_negative={int((eigenvalues < -1e-6).sum())}"
+    )
+    # Spot-check reconstruction on a small submatrix.
+    # Use broadcasting instead of np.diag() to avoid allocating a full n×n matrix.
+    k = min(50, n_samples)
+    K_sub = K[:k, :k]
+    recon = (eigenvectors[:k, :] * eigenvalues) @ eigenvectors[:k, :].T
+    recon_error = np.abs(K_sub - recon).max()
+    logger.info(
+        f"Eigendecomp reconstruction check ({k}x{k} submatrix): error={recon_error:.2e}"
+    )
+    if recon_error > 1e-6:
+        logger.error(
+            f"Reconstruction error {recon_error:.2e} is suspiciously large. "
+            "Possible LP64/ILP64 mismatch — eigenvalues may be garbage. "
+            "Check numpy ILP64 verification cell output above."
+        )
 
     return K, eigenvalues, eigenvectors, kinship_elapsed, eigen_elapsed
 
@@ -736,16 +857,21 @@ def benchmark_lmm_jax(
     # Pass pre-computed eigendecomposition to avoid redundant 35-min computation
     warmup_snps = min(100, actual_snps)
     profiler.start("lmm_jax", "warmup")
-    _ = run_lmm_association_jax(
-        genotypes=genotypes[:, :warmup_snps],
-        phenotypes=phenotype,
-        kinship=kinship,
-        snp_info=snp_info[:warmup_snps],
-        eigenvalues=eigenvalues,
-        eigenvectors=eigenvectors,
-        show_progress=False,
-    )
-    profiler.end("lmm_jax", "warmup")
+    try:
+        _ = run_lmm_association_jax(
+            genotypes=genotypes[:, :warmup_snps],
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info[:warmup_snps],
+            eigenvalues=eigenvalues,
+            eigenvectors=eigenvectors,
+            show_progress=False,
+        )
+        profiler.end("lmm_jax", "warmup")
+    except Exception as e:
+        profiler.error("lmm_jax", "warmup", e)
+        logger.error(f"JAX warmup failed: {type(e).__name__}: {e}")
+        raise
 
     # Run with progress output enabled
     # Pass pre-computed eigendecomposition to avoid redundant computation
@@ -846,7 +972,16 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
             results["lmm_jax_time"] = jax_time
             results["lmm_jax_snps_per_sec"] = config.n_snps_lmm / jax_time
         except Exception as e:
+            import traceback
+
             profiler.error("lmm_jax", "association", e)
+            logger.error(
+                f"LMM JAX failed: {type(e).__name__}: {e}\n"
+                f"  n_samples={config.n_samples:,}, n_snps_lmm={config.n_snps_lmm:,}\n"
+                f"  RSS={psutil.Process().memory_info().rss / 1e9:.1f}GB\n"
+                f"  Traceback:\n{traceback.format_exc()}"
+            )
+            results["error"] = f"lmm_jax: {type(e).__name__}: {e}"
 
         # JAMMA total = wall clock from start to end (not sum of components)
         jamma_total = time.time() - jamma_start
@@ -898,7 +1033,15 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
 
     except Exception as e:
         profiler.error("benchmark", "main", e)
-        logger.exception(f"Benchmark failed: {e}")
+        mem = psutil.virtual_memory()
+        logger.exception(
+            f"Benchmark {config_name} FAILED: {type(e).__name__}: {e}\n"
+            f"  RAM: {mem.available / 1e9:.0f}GB avail / {mem.total / 1e9:.0f}GB total\n"
+            f"  RSS: {psutil.Process().memory_info().rss / 1e9:.1f}GB\n"
+            f"  If this was a MemoryError, try: reduce config or use larger VM.\n"
+            f"  If 'Killed' or no message, it was OOM-killed by the OS — check driver logs."
+        )
+        results["error"] = f"{type(e).__name__}: {e}"
 
     # Clean up memory after each benchmark run to prevent accumulation
     # This is critical for sequential runs - without cleanup, memory from
@@ -997,15 +1140,33 @@ for scale in BENCHMARK_SCALES:
         logger.info(f"Skipping {scale} (already completed or in SKIP_SCALES)")
         continue
 
+    # Crash marker: if the kernel dies (OOM kill / segfault), this persists.
+    # On Databricks, silent restart means the cell appears to complete but
+    # variables from before the crash are gone. This marker survives if saved
+    # in the incremental checkpoint before the crash.
+    crash_marker = {
+        "config": scale,
+        "run_id": run_id,
+        "error": f"Kernel crashed during {scale} (OOM kill or segfault). "
+        "Check Databricks driver logs for SIGKILL/SIGSEGV.",
+    }
+
+    mem = psutil.virtual_memory()
+    logger.info(
+        f"\n--- Starting {scale} | "
+        f"RAM: {mem.available / 1e9:.0f}GB avail / {mem.total / 1e9:.0f}GB total | "
+        f"RSS: {psutil.Process().memory_info().rss / 1e9:.1f}GB ---"
+    )
+
     scale_start = time.time()
     results, events_df = run_benchmark(scale, run_id)
     scale_elapsed = time.time() - scale_start
 
-    # Add total time to results
+    # If we get here, no crash — overwrite the marker
     results["total_time"] = scale_elapsed
     all_results.append(results)
     all_events.append(events_df)
-    logger.info(f"Completed {scale} in {scale_elapsed:.1f}s: {results}")
+    logger.info(f"Completed {scale} in {scale_elapsed:.1f}s")
 
     # === INCREMENTAL SAVE after each scale ===
     # Save results immediately so we don't lose data if later scales crash

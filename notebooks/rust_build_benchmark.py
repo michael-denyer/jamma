@@ -63,9 +63,20 @@
 # COMMAND ----------
 
 # MAGIC %sh
-# MAGIC # Set MKL runtime environment (needed for subsequent cells)
-# MAGIC echo 'source /opt/intel/oneapi/setvars.sh 2>/dev/null || true' >> /etc/profile.d/mkl.sh
-# MAGIC echo 'export LD_LIBRARY_PATH=/opt/intel/oneapi/mkl/latest/lib/intel64:$LD_LIBRARY_PATH' >> /etc/profile.d/mkl.sh
+# MAGIC # Create symlinks so MKL libs are found in standard paths (survives Python restart)
+# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_rt.so.2 /usr/lib/x86_64-linux-gnu/
+# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_rt.so /usr/lib/x86_64-linux-gnu/
+# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_core.so.2 /usr/lib/x86_64-linux-gnu/
+# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_core.so /usr/lib/x86_64-linux-gnu/
+# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_intel_lp64.so.2 /usr/lib/x86_64-linux-gnu/
+# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_intel_lp64.so /usr/lib/x86_64-linux-gnu/
+# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_intel_thread.so.2 /usr/lib/x86_64-linux-gnu/
+# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_intel_thread.so /usr/lib/x86_64-linux-gnu/
+# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_sequential.so.2 /usr/lib/x86_64-linux-gnu/
+# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_sequential.so /usr/lib/x86_64-linux-gnu/
+# MAGIC ln -sf /opt/intel/oneapi/compiler/latest/lib/libiomp5.so /usr/lib/x86_64-linux-gnu/
+# MAGIC ldconfig
+# MAGIC echo "MKL libraries symlinked to /usr/lib/x86_64-linux-gnu/"
 
 # COMMAND ----------
 
@@ -84,16 +95,8 @@
 # COMMAND ----------
 
 # Restart to pick up new packages
+# MKL libs are symlinked to /usr/lib so they'll be found after restart
 dbutils.library.restartPython()  # noqa: F821
-
-# COMMAND ----------
-
-# Set MKL library path (must be done before importing numpy)
-import os
-
-os.environ["LD_LIBRARY_PATH"] = (
-    "/opt/intel/oneapi/mkl/latest/lib/intel64:" + os.environ.get("LD_LIBRARY_PATH", "")
-)
 
 # COMMAND ----------
 

@@ -1,13 +1,13 @@
 """Wald test statistics computation for LMM association.
 
 Implements the Wald test formula from GEMMA's CalcRLWald function.
-Uses scipy's betainc for the F-distribution survival function.
+Uses JAX's betainc for the F-distribution survival function.
 """
 
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.special import betainc
+from jax.scipy.special import betainc
 
 from jamma.lmm.likelihood import calc_pab, get_ab_index
 
@@ -222,7 +222,7 @@ def calc_lrt_test(
         return 1.0
 
     # Chi-squared survival function with df=1
-    from scipy.stats import chi2
+    from jax.scipy.stats import chi2
 
     p_lrt = chi2.sf(lrt_stat, df=1)
 

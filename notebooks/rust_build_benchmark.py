@@ -4,7 +4,6 @@
 # MAGIC
 # MAGIC Builds jamma_core from source ON Databricks to benchmark:
 # MAGIC - **faer 0.22** - Pure Rust eigendecomposition with rayon parallelism
-# MAGIC - Compared against **scipy.linalg.eigh** baseline
 # MAGIC
 # MAGIC Uses target-cpu=native for CPU-specific SIMD optimization (AVX2/AVX-512).
 
@@ -105,7 +104,6 @@ dbutils.library.restartPython()  # noqa: F821
 # COMMAND ----------
 
 import numpy as np
-from scipy import linalg as scipy_linalg
 
 print("=== JAMMA Backend Verification ===")
 
@@ -124,16 +122,12 @@ print("\nTesting faer backend...")
 vals_faer, vecs_faer = jamma_core.eigendecompose_kinship(test_k, 0.0)
 print(f"  eigenvalues: {vals_faer}")
 
-print("\nTesting scipy baseline...")
-vals_scipy, vecs_scipy = scipy_linalg.eigh(test_k)
-print(f"  eigenvalues: {vals_scipy}")
-
-print("\nBoth backends working!")
+print("\nfaer backend working!")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 4. Benchmark: faer vs scipy
+# MAGIC ## 4. Benchmark: faer Performance
 
 # COMMAND ----------
 
@@ -143,8 +137,8 @@ import time
 import psutil
 
 
-def benchmark_faer_vs_scipy(n_samples: int):
-    """Benchmark faer vs scipy eigendecomposition.
+def benchmark_faer(n_samples: int):
+    """Benchmark faer eigendecomposition at given scale.
 
     Args:
         n_samples: Matrix dimension
@@ -164,51 +158,23 @@ def benchmark_faer_vs_scipy(n_samples: int):
     mem_gb = psutil.Process().memory_info().rss / 1e9
     print(f"RSS after matrix gen: {mem_gb:.1f} GB")
 
-    results = {}
-
-    # Test scipy (baseline)
-    print("\nRunning scipy baseline...")
-    start = time.perf_counter()
-    try:
-        vals, vecs = scipy_linalg.eigh(K)
-        elapsed = time.perf_counter() - start
-        print(f"  scipy: {elapsed:.2f}s")
-        print(f"  eigenvalue range: [{vals.min():.6f}, {vals.max():.6f}]")
-        results["scipy"] = elapsed
-    except Exception as e:
-        print(f"  scipy FAILED: {e}")
-        results["scipy"] = None
-
-    gc.collect()
-
-    # Test faer
-    print("\nRunning faer backend...")
+    # Run faer eigendecomposition
+    print("\nRunning faer eigendecomposition...")
     start = time.perf_counter()
     try:
         vals, vecs = jamma_core.eigendecompose_kinship(K, 0.0)
         elapsed = time.perf_counter() - start
-        print(f"  faer: {elapsed:.2f}s")
-        print(f"  eigenvalue range: [{vals.min():.6f}, {vals.max():.6f}]")
-        results["faer"] = elapsed
+        print(f"  Time: {elapsed:.2f}s")
+        print(f"  Eigenvalue range: [{vals.min():.6f}, {vals.max():.6f}]")
+        result = {"time": elapsed, "n_samples": n_samples}
     except Exception as e:
-        print(f"  faer FAILED: {e}")
-        results["faer"] = None
+        print(f"  FAILED: {e}")
+        result = {"time": None, "n_samples": n_samples, "error": str(e)}
 
     del K
     gc.collect()
 
-    # Summary
-    if results.get("scipy") and results.get("faer"):
-        ratio = results["scipy"] / results["faer"]
-        scale = n_samples // 1000
-        scipy_t, faer_t = results["scipy"], results["faer"]
-        print(f"\n{scale}k Summary: scipy={scipy_t:.2f}s, faer={faer_t:.2f}s")
-        if ratio > 1:
-            print(f"  faer is {ratio:.2f}x FASTER than scipy")
-        else:
-            print(f"  scipy is {1/ratio:.2f}x faster than faer")
-
-    return results
+    return result
 
 
 # COMMAND ----------
@@ -219,17 +185,17 @@ def benchmark_faer_vs_scipy(n_samples: int):
 # COMMAND ----------
 
 # 1k warmup / verification
-results_1k = benchmark_faer_vs_scipy(1_000)
+results_1k = benchmark_faer(1_000)
 
 # COMMAND ----------
 
 # 10k - key performance test
-results_10k = benchmark_faer_vs_scipy(10_000)
+results_10k = benchmark_faer(10_000)
 
 # COMMAND ----------
 
 # 50k - production scale
-results_50k = benchmark_faer_vs_scipy(50_000)
+results_50k = benchmark_faer(50_000)
 
 # COMMAND ----------
 
@@ -241,7 +207,7 @@ required_gb = 2 * (100_000**2) * 8 / 1e9  # K + U
 print(f"100k requires ~{required_gb:.0f}GB, available: {available_gb:.0f}GB")
 
 if available_gb > required_gb * 1.1:
-    results_100k = benchmark_faer_vs_scipy(100_000)
+    results_100k = benchmark_faer(100_000)
 else:
     print("Skipping 100k - insufficient memory")
     results_100k = None
@@ -254,33 +220,35 @@ else:
 # COMMAND ----------
 
 print("\n" + "=" * 60)
-print("BENCHMARK SUMMARY: faer vs scipy")
+print("BENCHMARK SUMMARY: faer Performance")
 print("=" * 60)
 
 all_results = []
 for name, res in [("1k", results_1k), ("10k", results_10k), ("50k", results_50k)]:
-    if res and res.get("scipy") and res.get("faer"):
-        all_results.append((name, res["scipy"], res["faer"]))
+    if res and res.get("time"):
+        all_results.append((name, res["n_samples"], res["time"]))
 
-if results_100k and results_100k.get("scipy") and results_100k.get("faer"):
-    all_results.append(("100k", results_100k["scipy"], results_100k["faer"]))
+if results_100k and results_100k.get("time"):
+    all_results.append(("100k", results_100k["n_samples"], results_100k["time"]))
 
 if all_results:
-    print(f"\n{'Scale':<8} {'scipy':<12} {'faer':<12} {'Speedup':<10} {'Winner':<10}")
-    print("-" * 54)
-    for scale, scipy_time, faer_time in all_results:
-        ratio = scipy_time / faer_time
-        winner = "faer" if ratio > 1 else "scipy"
-        speedup = ratio if ratio > 1 else 1 / ratio
-        row = f"{scale:<8} {scipy_time:<12.2f} {faer_time:<12.2f} {speedup:<10.2f}x"
-        print(f"{row} {winner:<10}")
+    print(f"\n{'Scale':<8} {'Samples':<12} {'Time (s)':<12} {'Matrix GB':<12}")
+    print("-" * 46)
+    for scale, n, elapsed in all_results:
+        matrix_gb = n * n * 8 / 1e9
+        print(f"{scale:<8} {n:<12,} {elapsed:<12.2f} {matrix_gb:<12.1f}")
 
-    # Overall summary
-    avg_ratio = sum(s / f for _, s, f in all_results) / len(all_results)
-    print(f"\nAverage speedup: {avg_ratio:.2f}x")
-    if avg_ratio > 1:
-        print(f"RESULT: faer is {avg_ratio:.1f}x FASTER than scipy on average")
-    else:
-        print(f"RESULT: scipy is {1/avg_ratio:.1f}x faster than faer on average")
+    # Performance scaling
+    if len(all_results) >= 2:
+        print("\nScaling analysis:")
+        for i in range(1, len(all_results)):
+            prev_scale, prev_n, prev_t = all_results[i - 1]
+            curr_scale, curr_n, curr_t = all_results[i]
+            n_ratio = curr_n / prev_n
+            t_ratio = curr_t / prev_t
+            # O(n^3) would give t_ratio = n_ratio^3
+            expected_cubic = n_ratio**3
+            print(f"  {prev_scale} → {curr_scale}: {t_ratio:.1f}x slower", end="")
+            print(f" (O(n³) predicts {expected_cubic:.1f}x)")
 else:
-    print("No comparable results to summarize")
+    print("No results to summarize")

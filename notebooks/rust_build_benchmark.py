@@ -8,25 +8,78 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 0. Install MKL (Required)
+# MAGIC ## 0. Build NumPy from Source with MKL
 # MAGIC
-# MAGIC Databricks uses OpenBLAS by default. MKL is needed for stable eigendecomp.
+# MAGIC Databricks uses OpenBLAS by default. MKL is needed for stable eigendecomp at scale.
+# MAGIC OpenBLAS can segfault on large matrices (50k+) due to threading/memory issues.
+# MAGIC
+# MAGIC **Approach**: Install Intel MKL dev libraries, then build NumPy from source linked to MKL.
+# MAGIC This follows Intel's official instructions: https://www.intel.com/content/www/us/en/developer/articles/technical/numpyscipy-with-intel-mkl.html
 
 # COMMAND ----------
 
 # MAGIC %sh
+# MAGIC set -e
+# MAGIC
+# MAGIC echo "=== Step 1: Install Intel MKL development libraries ==="
+# MAGIC # Add Intel oneAPI repository
+# MAGIC wget -qO - https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | apt-key add -
+# MAGIC echo "deb https://apt.repos.intel.com/oneapi all main" > /etc/apt/sources.list.d/oneAPI.list
 # MAGIC apt-get update -y
-# MAGIC apt-get purge openblas* libopenblas* -y
-# MAGIC apt-get install intel-mkl -y
-# MAGIC # Set MKL as default BLAS
-# MAGIC MKL=/usr/lib/x86_64-linux-gnu/libmkl_rt.so
-# MAGIC update-alternatives --set libblas.so.3-x86_64-linux-gnu $MKL
-# MAGIC update-alternatives --set liblapack.so.3-x86_64-linux-gnu $MKL
+# MAGIC
+# MAGIC # Install MKL (runtime + dev headers) and pkg-config
+# MAGIC apt-get install -y intel-oneapi-mkl-devel pkg-config
+# MAGIC
+# MAGIC echo "=== Step 2: Set up MKL environment ==="
+# MAGIC source /opt/intel/oneapi/setvars.sh
+# MAGIC
+# MAGIC # Verify MKL is installed
+# MAGIC echo "MKL libraries:"
+# MAGIC ls -la /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_rt.so* || echo "MKL not found!"
+# MAGIC
+# MAGIC echo "=== Step 3: Uninstall existing numpy ==="
+# MAGIC pip uninstall numpy -y || true
+# MAGIC
+# MAGIC echo "=== Step 4: Build NumPy from source with MKL ==="
+# MAGIC # Set environment for NumPy build (meson uses pkg-config)
+# MAGIC export MKLROOT=/opt/intel/oneapi/mkl/latest
+# MAGIC export PKG_CONFIG_PATH=$MKLROOT/lib/pkgconfig:$PKG_CONFIG_PATH
+# MAGIC export LD_LIBRARY_PATH=$MKLROOT/lib/intel64:$LD_LIBRARY_PATH
+# MAGIC export LIBRARY_PATH=$MKLROOT/lib/intel64:$LIBRARY_PATH
+# MAGIC export CPATH=$MKLROOT/include:$CPATH
+# MAGIC
+# MAGIC # Verify pkg-config can find MKL
+# MAGIC echo "pkg-config mkl:"
+# MAGIC pkg-config --libs mkl-dynamic-lp64-seq || echo "MKL pkg-config not found"
+# MAGIC
+# MAGIC # Clone numpy
+# MAGIC cd /tmp
+# MAGIC rm -rf numpy-build
+# MAGIC git clone --depth 1 --branch v2.0.2 https://github.com/numpy/numpy.git numpy-build
+# MAGIC cd numpy-build
+# MAGIC
+# MAGIC # Install build dependencies
+# MAGIC pip install cython meson meson-python ninja pybind11
+# MAGIC
+# MAGIC # Build with meson, forcing MKL as BLAS/LAPACK
+# MAGIC # NumPy 2.0+ uses meson build system; set blas/lapack via -C options
+# MAGIC pip install . -v \
+# MAGIC     -Csetup-args=-Dblas=mkl \
+# MAGIC     -Csetup-args=-Dlapack=mkl \
+# MAGIC     --no-build-isolation
+# MAGIC
+# MAGIC echo "=== NumPy with MKL build complete ==="
 
 # COMMAND ----------
 
-# Reinstall numpy to link against MKL (must come after MKL install)
-# MAGIC %pip install --force-reinstall numpy psutil loguru
+# MAGIC %sh
+# MAGIC # Set MKL runtime environment (needed for subsequent cells)
+# MAGIC echo 'source /opt/intel/oneapi/setvars.sh 2>/dev/null || true' >> /etc/profile.d/mkl.sh
+# MAGIC echo 'export LD_LIBRARY_PATH=/opt/intel/oneapi/mkl/latest/lib/intel64:$LD_LIBRARY_PATH' >> /etc/profile.d/mkl.sh
+
+# COMMAND ----------
+
+# MAGIC %pip install psutil loguru threadpoolctl
 
 # COMMAND ----------
 
@@ -39,37 +92,56 @@ dbutils.library.restartPython()  # noqa: F821
 
 # COMMAND ----------
 
+# Set MKL library path (must be done before importing numpy)
+import os
+
+os.environ["LD_LIBRARY_PATH"] = (
+    "/opt/intel/oneapi/mkl/latest/lib/intel64:" + os.environ.get("LD_LIBRARY_PATH", "")
+)
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## 1. Verify NumPy Backend
 
 # COMMAND ----------
 
 import numpy as np
+from threadpoolctl import threadpool_info
 
 print("=== NumPy Backend Verification ===")
 print(f"NumPy version: {np.__version__}")
 
-# Check BLAS config - verify MKL is being used
-print("\nBLAS configuration:")
+# Check BLAS config via threadpoolctl (most reliable method)
+print("\nBLAS configuration (threadpoolctl):")
+blas_info = [lib for lib in threadpool_info() if lib.get("user_api") == "blas"]
+detected_mkl = False
+if blas_info:
+    for lib in blas_info:
+        internal_api = lib.get("internal_api", "unknown")
+        filepath = lib.get("filepath", "unknown")
+        num_threads = lib.get("num_threads", "?")
+        print(f"  Backend: {internal_api}")
+        print(f"  Library: {filepath}")
+        print(f"  Threads: {num_threads}")
+        if "mkl" in internal_api.lower() or "mkl" in filepath.lower():
+            detected_mkl = True
+
+if detected_mkl:
+    print("\n✓ MKL detected - 64-bit safe, multi-threaded")
+else:
+    print("\n⚠ MKL NOT detected - eigendecomp may be unstable at scale")
+    print("  Check build output above for errors")
+
+# Also show numpy's built-in config
+print("\nNumPy build config:")
 try:
     config = np.show_config(mode="dicts")
     blas_info = config.get("Build Dependencies", {}).get("blas", {})
     lapack_info = config.get("Build Dependencies", {}).get("lapack", {})
     print(f"  BLAS: {blas_info.get('name', 'unknown')}")
     print(f"  LAPACK: {lapack_info.get('name', 'unknown')}")
-
-    # Verify MKL
-    blas_name = blas_info.get("name", "").lower()
-    if "mkl" in blas_name:
-        print("\n✓ MKL detected - 64-bit safe, multi-threaded")
-    elif "openblas" in blas_name:
-        print("\n⚠ OpenBLAS detected - may need thread limiting for large matrices")
-    elif "accelerate" in blas_name:
-        print("\n✓ Accelerate detected (macOS) - 64-bit safe")
-    else:
-        print(f"\n? Unknown BLAS: {blas_name}")
 except Exception:
-    # Fallback for older numpy
     np.show_config()
 
 # Quick sanity check

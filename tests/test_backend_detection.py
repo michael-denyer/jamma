@@ -1,7 +1,6 @@
 """Tests for compute backend detection and dispatch."""
 
 import os
-from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -32,12 +31,12 @@ class TestBackendDetection:
 
         assert get_compute_backend() == "jax.rust"
 
-    def test_env_override_jax_scipy(self):
-        """JAMMA_BACKEND=jax.scipy should force jax.scipy backend."""
-        os.environ["JAMMA_BACKEND"] = "jax.scipy"
+    def test_env_override_jax_numpy(self):
+        """JAMMA_BACKEND=jax.numpy should force jax.numpy backend."""
+        os.environ["JAMMA_BACKEND"] = "jax.numpy"
         get_compute_backend.cache_clear()
 
-        assert get_compute_backend() == "jax.scipy"
+        assert get_compute_backend() == "jax.numpy"
 
     def test_env_override_case_insensitive(self):
         """Environment override should be case-insensitive."""
@@ -58,36 +57,35 @@ class TestBackendDetection:
         os.environ["JAMMA_BACKEND"] = "invalid"
         get_compute_backend.cache_clear()
 
-        # Should fall through to auto-detection
+        # Should fall through to auto-detection (jax.numpy is default)
         backend = get_compute_backend()
-        assert backend in ("jax.scipy", "jax.rust")
+        assert backend in ("jax.numpy", "jax.rust")
 
-    def test_auto_returns_jax_rust_when_available(self):
-        """Auto-selection should return jax.rust when jamma_core available."""
+    def test_auto_returns_jax_numpy_default(self):
+        """Auto-selection should return jax.numpy by default."""
         os.environ.pop("JAMMA_BACKEND", None)
         get_compute_backend.cache_clear()
 
-        with patch("jamma.core.backend.is_rust_available", return_value=True):
-            get_compute_backend.cache_clear()
-            assert get_compute_backend() == "jax.rust"
-
-    def test_auto_returns_jax_scipy_when_rust_unavailable(self):
-        """Auto-selection should return jax.scipy when jamma_core unavailable."""
-        os.environ.pop("JAMMA_BACKEND", None)
-        get_compute_backend.cache_clear()
-
-        with patch("jamma.core.backend.is_rust_available", return_value=False):
-            get_compute_backend.cache_clear()
-            assert get_compute_backend() == "jax.scipy"
+        # jax.numpy is now the default (lower memory overhead)
+        assert get_compute_backend() == "jax.numpy"
 
     def test_old_jax_name_warns_and_maps(self):
-        """Old 'jax' name should warn and map to jax.scipy (deprecated)."""
+        """Old 'jax' name should warn and map to jax.numpy (deprecated)."""
         os.environ["JAMMA_BACKEND"] = "jax"
         get_compute_backend.cache_clear()
 
         with pytest.warns(DeprecationWarning, match="deprecated"):
             result = get_compute_backend()
-        assert result == "jax.scipy"
+        assert result == "jax.numpy"
+
+    def test_old_jax_scipy_name_warns_and_maps(self):
+        """Old 'jax.scipy' name should warn and map to jax.numpy (deprecated)."""
+        os.environ["JAMMA_BACKEND"] = "jax.scipy"
+        get_compute_backend.cache_clear()
+
+        with pytest.warns(DeprecationWarning, match="deprecated"):
+            result = get_compute_backend()
+        assert result == "jax.numpy"
 
     def test_bare_rust_stub_errors(self):
         """Bare 'rust' (pure Rust LMM) should error as not implemented."""
@@ -106,7 +104,7 @@ class TestBackendDetection:
         backend1 = get_compute_backend()
         # Change env (shouldn't matter due to cache)
         os.environ["JAMMA_BACKEND"] = (
-            "jax.scipy" if backend1 == "jax.rust" else "jax.rust"
+            "jax.numpy" if backend1 == "jax.rust" else "jax.rust"
         )
         # Second call should return cached value
         backend2 = get_compute_backend()
@@ -146,7 +144,7 @@ class TestBackendInfo:
     def test_selected_is_canonical_name(self):
         """Selected backend should be a canonical name."""
         info = get_backend_info()
-        assert info["selected"] in ("jax.scipy", "jax.rust")
+        assert info["selected"] in ("jax.numpy", "jax.rust")
 
     def test_shows_override_when_set(self):
         """Should show override value when JAMMA_BACKEND is set."""
@@ -188,10 +186,8 @@ class TestEigendecompDispatch:
     @pytest.mark.skipif(
         not is_rust_available(), reason="jax.rust backend not installed"
     )
-    def test_jax_rust_scipy_parity(self):
-        """jax.rust and jax.scipy produce identical eigendecomp results."""
-        from scipy import linalg
-
+    def test_jax_rust_numpy_parity(self):
+        """jax.rust and jax.numpy produce identical eigendecomp results."""
         np.random.seed(42)
         n = 100
         A = np.random.randn(n, n)
@@ -204,17 +200,17 @@ class TestEigendecompDispatch:
 
         rust_eigenvalues, _ = eigendecompose_kinship(K.copy())
 
-        # scipy reference (direct call, not through jamma)
-        scipy_eigenvalues, _ = linalg.eigh(K.copy())
+        # numpy reference (direct call, not through jamma)
+        numpy_eigenvalues, _ = np.linalg.eigh(K.copy())
 
         # Eigenvalues should match within tolerance
         np.testing.assert_allclose(
-            rust_eigenvalues, scipy_eigenvalues, rtol=1e-10, atol=1e-14
+            rust_eigenvalues, numpy_eigenvalues, rtol=1e-10, atol=1e-14
         )
 
-    def test_jax_scipy_fallback_when_rust_unavailable(self):
-        """Should fall back to jax.scipy when jamma_core import fails."""
-        os.environ["JAMMA_BACKEND"] = "jax.scipy"
+    def test_jax_numpy_fallback_when_rust_unavailable(self):
+        """Should fall back to jax.numpy when jamma_core import fails."""
+        os.environ["JAMMA_BACKEND"] = "jax.numpy"
         get_compute_backend.cache_clear()
 
         from jamma.lmm.eigen import eigendecompose_kinship
@@ -223,6 +219,6 @@ class TestEigendecompDispatch:
         K = np.eye(n, dtype=np.float64)
         eigenvalues, eigenvectors = eigendecompose_kinship(K)
 
-        # Should work via scipy path
+        # Should work via numpy path
         assert eigenvalues.shape == (n,)
         assert eigenvectors.shape == (n, n)

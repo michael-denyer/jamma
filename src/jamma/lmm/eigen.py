@@ -3,15 +3,14 @@
 Provides GEMMA-compatible eigendecomposition with small eigenvalue thresholding.
 
 Backend dispatch:
-- jax.scipy: Uses scipy.linalg.eigh (LAPACK) with system BLAS. Requires proper
-  BLAS configuration (OpenBLAS can SIGSEGV at 100k+ samples without thread limiting).
-- jax.rust: Uses faer via jamma_core. More stable at scale (100k+ samples) as faer
-  manages its own memory and threading.
+- jax.numpy: Uses numpy.linalg.eigh (LAPACK) with system BLAS. When linked to
+  MKL, this is stable and efficient at 100k+ samples with lower memory overhead.
+- jax.rust: Uses faer via jamma_core. Pure Rust alternative but has copy overhead.
 
-Note on threading (jax.scipy only): OpenBLAS can segfault with multi-threaded
-eigendecomposition on large matrices (>50k) due to memory allocation races.
-We detect the BLAS backend at runtime and only limit threads for OpenBLAS
-(MKL is stable). See: https://github.com/scipy/scipy/issues/8741
+Note on threading: OpenBLAS can segfault with multi-threaded eigendecomposition
+on large matrices (>50k) due to memory allocation races. We detect the BLAS
+backend at runtime and only limit threads for OpenBLAS (MKL is stable).
+See: https://github.com/scipy/scipy/issues/8741
 """
 
 import time
@@ -19,7 +18,6 @@ import warnings
 
 import numpy as np
 from loguru import logger
-from scipy import linalg
 
 from jamma.core.backend import get_compute_backend
 
@@ -106,7 +104,7 @@ def eigendecompose_kinship(
     - Warning if >1 zero eigenvalue
     - Warning if negative eigenvalues remain after thresholding
 
-    Note: Uses scipy.linalg.eigh (LAPACK) instead of JAX to support matrices
+    Note: Uses numpy.linalg.eigh (LAPACK) instead of JAX to support matrices
     larger than 46k x 46k samples (JAX hits int32 overflow at ~2.1B elements).
 
     Args:
@@ -141,9 +139,9 @@ def eigendecompose_kinship(
         except ImportError:
             logger.warning(
                 "jax.rust backend selected but jamma_core not installed, "
-                "falling back to jax.scipy"
+                "falling back to numpy"
             )
-            # Fall through to jax.scipy path
+            # Fall through to numpy path
 
     n_samples = K.shape[0]
     n_elements = n_samples * n_samples
@@ -157,7 +155,7 @@ def eigendecompose_kinship(
         f"Matrix elements: {n_elements:,}, memory: ~{n_elements * 8 / 1e9:.1f} GB"
     )
 
-    # Pre-flight memory check - fail fast before scipy allocates
+    # Pre-flight memory check - fail fast before numpy allocates
     # This prevents silent OOM crashes on Linux where OOM killer sends SIGKILL
     required_gb = estimate_eigendecomp_memory(n_samples)
     check_memory_available(
@@ -166,7 +164,7 @@ def eigendecompose_kinship(
         operation=f"eigendecomposition of {n_samples:,}x{n_samples:,} kinship matrix",
     )
 
-    # Use scipy.linalg.eigh which uses LAPACK with int64 indexing
+    # Use numpy.linalg.eigh which uses LAPACK (via MKL when available)
     # This supports matrices up to sqrt(int64_max) ≈ 3 billion rows
     # JAX's jnp.linalg.eigh hits int32 overflow at ~46k x 46k (2.1B elements)
     #
@@ -196,16 +194,13 @@ def eigendecompose_kinship(
 
     start_time = time.perf_counter()
     try:
-        # Performance options:
-        # - overwrite_a=True: reuse K's memory (saves ~80GB at 100k samples)
-        # - check_finite=False: skip NaN/Inf check (we validated input)
-        eigh_kwargs = {"overwrite_a": True, "check_finite": False}
-
+        # numpy.linalg.eigh doesn't have overwrite_a option like scipy
+        # but it's more memory efficient when linked to MKL
         if should_limit and HAVE_THREADPOOLCTL:
             with threadpool_limits(limits=thread_cap, user_api="blas"):
-                eigenvalues, eigenvectors = linalg.eigh(K, **eigh_kwargs)
+                eigenvalues, eigenvectors = np.linalg.eigh(K)
         else:
-            eigenvalues, eigenvectors = linalg.eigh(K, **eigh_kwargs)
+            eigenvalues, eigenvectors = np.linalg.eigh(K)
     except MemoryError:
         mem_gb = n_elements * 8 * 3 / 1e9
         logger.error(

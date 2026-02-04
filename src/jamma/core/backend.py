@@ -2,20 +2,20 @@
 
 JAMMA supports three backends:
 
-- jax.scipy: JAX pipeline + scipy/LAPACK eigendecomposition.
-  Uses scipy.linalg.eigh for eigendecomp, JAX for other operations.
-  Requires properly configured BLAS (OpenBLAS can SIGSEGV at 100k+ samples).
+- jax.numpy: JAX pipeline + numpy/LAPACK eigendecomposition.
+  Uses numpy.linalg.eigh for eigendecomp (via MKL when available), JAX for other
+  operations. Preferred for 100k+ samples due to lower memory overhead vs faer.
 
 - jax.rust: JAX pipeline + faer/Rust eigendecomposition.
   Uses jamma_core (faer) for eigendecomp, JAX for other operations.
-  Preferred for 100k+ samples due to stability.
+  Pure Rust alternative, but has copy overhead limiting max scale.
 
 - rust: Pure Rust LMM (NOT YET IMPLEMENTED).
   Future backend for complete Rust-based LMM computation.
   Selecting this backend will error until implemented.
 
-Backend selection is automatic (preferring jax.rust when jamma_core is available)
-but can be overridden via the JAMMA_BACKEND environment variable.
+Backend selection is automatic (preferring jax.numpy) but can be overridden
+via the JAMMA_BACKEND environment variable.
 """
 
 import os
@@ -26,12 +26,13 @@ from typing import Literal
 from loguru import logger
 
 # Canonical backend names (excludes "rust" which is a stub)
-Backend = Literal["jax.scipy", "jax.rust"]
+Backend = Literal["jax.numpy", "jax.rust"]
 
 # Backward compatibility aliases (old name -> canonical name)
 # NOTE: "rust" is NOT here because bare "rust" now means pure Rust LMM (future)
 BACKEND_ALIASES: dict[str, str] = {
-    "jax": "jax.scipy",  # Old "jax" -> new "jax.scipy"
+    "jax": "jax.numpy",  # Old "jax" -> new "jax.numpy"
+    "jax.scipy": "jax.numpy",  # Old "jax.scipy" -> new "jax.numpy"
 }
 
 
@@ -49,8 +50,8 @@ def normalize_backend_name(value: str) -> str:
         (the stub error is handled in get_compute_backend).
 
     Examples:
-        >>> normalize_backend_name("jax.scipy")
-        'jax.scipy'
+        >>> normalize_backend_name("jax.numpy")
+        'jax.numpy'
         >>> normalize_backend_name("JAX.RUST")
         'jax.rust'
     """
@@ -76,13 +77,13 @@ def get_compute_backend() -> Backend:
 
     Priority:
     1. JAMMA_BACKEND environment variable override
-       - Valid values: 'jax.scipy', 'jax.rust', 'auto'
-       - Old name 'jax' maps to 'jax.scipy' with deprecation warning
+       - Valid values: 'jax.numpy', 'jax.rust', 'auto'
+       - Old names 'jax' and 'jax.scipy' map to 'jax.numpy' with deprecation warning
        - Bare 'rust' errors (pure Rust LMM not yet implemented)
-    2. Auto-selection: jax.rust if jamma_core available, else jax.scipy
+    2. Auto-selection: jax.numpy (preferred due to lower memory overhead)
 
     Returns:
-        Backend identifier ('jax.scipy' or 'jax.rust').
+        Backend identifier ('jax.numpy' or 'jax.rust').
 
     Raises:
         ValueError: If 'rust' (pure Rust LMM) is selected but not implemented.
@@ -103,27 +104,21 @@ def get_compute_backend() -> Backend:
         if override == "rust":
             raise ValueError(
                 "Backend 'rust' (pure Rust LMM) is not yet implemented. "
-                "Use 'jax.scipy' or 'jax.rust' instead."
+                "Use 'jax.numpy' or 'jax.rust' instead."
             )
 
         # Handle explicit backend selection
-        if override in ("jax.scipy", "jax.rust"):
+        if override in ("jax.numpy", "jax.rust"):
             logger.debug(f"Backend override via JAMMA_BACKEND={override}")
             return override
 
         # "auto" falls through to auto-selection below
 
-    # Auto-selection: prefer jax.rust when jamma_core available
-    if is_rust_available():
-        logger.debug("jamma_core available, using jax.rust backend")
-        return "jax.rust"
-
-    # Fall back to jax.scipy with warning
-    logger.warning(
-        "jamma_core not installed. Using jax.scipy backend. "
-        "For better stability at scale, install jamma_core."
-    )
-    return "jax.scipy"
+    # Auto-selection: prefer jax.numpy (lower memory overhead than faer)
+    # jax.rust requires extra copies: K -> k_vec -> faer_mat -> U
+    # jax.numpy operates directly on the numpy array
+    logger.debug("Using jax.numpy backend (default)")
+    return "jax.numpy"
 
 
 def _has_gpu() -> bool:
@@ -167,7 +162,7 @@ def get_backend_info() -> dict:
 
     Returns:
         Dictionary with backend availability and selection info:
-        - selected: Currently selected backend ('jax.scipy' or 'jax.rust')
+        - selected: Currently selected backend ('jax.numpy' or 'jax.rust')
         - rust_available: True if jamma_core is installed (legacy field name)
         - jax_rust_available: True if jamma_core is installed (clearer name)
         - gpu_available: True if JAX can access a GPU

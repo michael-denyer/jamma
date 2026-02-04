@@ -6,29 +6,29 @@ JAMMA supports multiple compute backends for different hardware configurations a
 
 | Backend | Eigendecomp | LMM Runtime | Status | Best For |
 |---------|-------------|-------------|--------|----------|
-| `jax.scipy` | scipy/LAPACK | JAX | Stable | GPU systems, small-medium scale |
+| `jax.numpy` | numpy/LAPACK | JAX | Stable | MKL-backed systems, large scale |
 | `jax.rust` | faer/Rust | JAX | Stable | CPU-only, 100k+ samples |
 | `rust` | faer/Rust | Pure Rust | Planned | Future: memory-constrained systems |
 
 ## Backend Details
 
-### jax.scipy (JAX pipeline + scipy eigendecomp)
+### jax.numpy (JAX pipeline + numpy eigendecomp)
 
 The fallback backend when `jamma_core` is not installed. Uses:
 
-- **Eigendecomposition**: scipy.linalg.eigh (LAPACK)
+- **Eigendecomposition**: numpy.linalg.eigh (LAPACK via MKL or OpenBLAS)
 - **LMM computation**: JAX with XLA compilation
 
 **Best for:**
 
-- Systems with GPU acceleration
-- Small to medium scale (< 50k samples)
-- When scipy/OpenBLAS/MKL is well-configured
+- Systems with MKL-backed numpy (stable at all scales)
+- GPU acceleration via JAX
+- Large scale when MKL is available
 
 **Potential issues:**
 
 - OpenBLAS can crash at 100k+ samples due to threading bugs
-- Requires thread limiting workarounds for large matrices
+- Requires MKL for stable large-scale eigendecomp (use urob/numpy-mkl wheels)
 
 ### jax.rust (JAX pipeline + Rust eigendecomp)
 

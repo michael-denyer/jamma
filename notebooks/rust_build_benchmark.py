@@ -17,8 +17,10 @@
 
 # COMMAND ----------
 
-# Install numpy with MKL via conda (conda-forge has MKL-linked builds)
-# MAGIC %conda install -c conda-forge numpy "libblas=*=*mkl" -y
+# MAGIC %sh
+# MAGIC # Install numpy with MKL via micromamba (available on Databricks)
+# MAGIC source /etc/profile.d/mamba.sh
+# MAGIC micromamba install -c conda-forge numpy "libblas=*=*mkl" -y
 
 # COMMAND ----------
 

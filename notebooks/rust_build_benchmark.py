@@ -18,9 +18,46 @@
 # COMMAND ----------
 
 # MAGIC %sh
-# MAGIC # Install numpy with MKL via micromamba (available on Databricks)
-# MAGIC source /etc/profile.d/mamba.sh
-# MAGIC micromamba install -c conda-forge numpy "libblas=*=*mkl" -y
+# MAGIC set -ex
+# MAGIC
+# MAGIC # Install Intel MKL development libraries
+# MAGIC wget -qO - https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | apt-key add -
+# MAGIC echo "deb https://apt.repos.intel.com/oneapi all main" > /etc/apt/sources.list.d/oneAPI.list
+# MAGIC apt-get update -y
+# MAGIC apt-get install -y intel-oneapi-mkl-devel pkg-config
+# MAGIC
+# MAGIC # Set up MKL environment and build numpy wheel
+# MAGIC . /opt/intel/oneapi/setvars.sh
+# MAGIC
+# MAGIC cd /tmp
+# MAGIC rm -rf numpy-build numpy-wheel
+# MAGIC mkdir -p numpy-wheel
+# MAGIC git clone --depth 1 --branch v2.0.2 --recurse-submodules https://github.com/numpy/numpy.git numpy-build
+# MAGIC cd numpy-build
+# MAGIC
+# MAGIC # Install build dependencies
+# MAGIC pip install cython meson-python meson ninja pybind11 build
+# MAGIC
+# MAGIC # Build wheel with MKL
+# MAGIC python -m build --wheel --no-isolation \
+# MAGIC     -Csetup-args=-Dblas=mkl \
+# MAGIC     -Csetup-args=-Dlapack=mkl \
+# MAGIC     -o /tmp/numpy-wheel
+# MAGIC
+# MAGIC # Symlink MKL libs to standard path
+# MAGIC for lib in libmkl_rt libmkl_core libmkl_intel_lp64 libmkl_intel_thread libmkl_sequential; do
+# MAGIC     ln -sf /opt/intel/oneapi/mkl/latest/lib/$lib.so.2 /usr/lib/x86_64-linux-gnu/ || true
+# MAGIC     ln -sf /opt/intel/oneapi/mkl/latest/lib/$lib.so /usr/lib/x86_64-linux-gnu/ || true
+# MAGIC done
+# MAGIC ln -sf /opt/intel/oneapi/compiler/latest/lib/libiomp5.so /usr/lib/x86_64-linux-gnu/ || true
+# MAGIC ldconfig
+# MAGIC
+# MAGIC ls -la /tmp/numpy-wheel/
+
+# COMMAND ----------
+
+# Install numpy wheel with MKL
+# MAGIC %pip install /tmp/numpy-wheel/numpy-*.whl --force-reinstall
 
 # COMMAND ----------
 

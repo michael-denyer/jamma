@@ -8,96 +8,23 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 0. Build NumPy from Source with MKL
+# MAGIC ## 0. Install NumPy with MKL
 # MAGIC
 # MAGIC Databricks uses OpenBLAS by default. MKL is needed for stable eigendecomp at scale.
 # MAGIC OpenBLAS can segfault on large matrices (50k+) due to threading/memory issues.
 # MAGIC
-# MAGIC **Approach**: Install Intel MKL dev libraries, then build NumPy from source linked to MKL.
-# MAGIC This follows Intel's official instructions: https://www.intel.com/content/www/us/en/developer/articles/technical/numpyscipy-with-intel-mkl.html
+# MAGIC **Approach**: Install Intel MKL runtime, then install numpy-mkl from Intel's PyPI channel.
 
 # COMMAND ----------
 
-# MAGIC %sh
-# MAGIC set -ex
-# MAGIC
-# MAGIC echo "=== Step 1: Install Intel MKL development libraries ==="
-# MAGIC # Add Intel oneAPI repository
-# MAGIC wget -qO - https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | apt-key add -
-# MAGIC echo "deb https://apt.repos.intel.com/oneapi all main" > /etc/apt/sources.list.d/oneAPI.list
-# MAGIC apt-get update -y
-# MAGIC
-# MAGIC # Install MKL (runtime + dev headers) and pkg-config
-# MAGIC apt-get install -y intel-oneapi-mkl-devel pkg-config
-# MAGIC
-# MAGIC echo "=== Step 2: Set up MKL environment ==="
-# MAGIC . /opt/intel/oneapi/setvars.sh
-# MAGIC
-# MAGIC # Verify MKL is installed
-# MAGIC echo "MKL libraries:"
-# MAGIC ls -la /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_rt.so*
-# MAGIC
-# MAGIC echo "=== Step 3: Build NumPy wheel with MKL ==="
-# MAGIC # Verify pkg-config can find MKL
-# MAGIC echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
-# MAGIC pkg-config --libs mkl-dynamic-lp64-seq
-# MAGIC
-# MAGIC # Clone numpy with submodules (vendored meson is a submodule)
-# MAGIC cd /tmp
-# MAGIC rm -rf numpy-build numpy-wheel
-# MAGIC mkdir -p numpy-wheel
-# MAGIC git clone --depth 1 --branch v2.4.2 --recurse-submodules https://github.com/numpy/numpy.git numpy-build
-# MAGIC cd numpy-build
-# MAGIC
-# MAGIC # Install build dependencies to system pip (for building only)
-# MAGIC pip install cython meson-python ninja pybind11 build
-# MAGIC
-# MAGIC # Build wheel with meson, forcing MKL as BLAS/LAPACK
-# MAGIC # Ref: https://numpy.org/doc/stable/building/blas_lapack.html
-# MAGIC python -m build --wheel --no-isolation \
-# MAGIC     -Csetup-args=-Dblas-order=mkl \
-# MAGIC     -Csetup-args=-Dlapack-order=mkl \
-# MAGIC     -o /tmp/numpy-wheel
-# MAGIC
-# MAGIC echo "=== NumPy wheel built ==="
-# MAGIC ls -la /tmp/numpy-wheel/
+# Install Intel's numpy with MKL from their PyPI channel
+# This package bundles MKL libraries so no separate MKL install needed
+# MAGIC %pip install intel-numpy psutil loguru threadpoolctl
 
 # COMMAND ----------
 
-# MAGIC %sh
-# MAGIC # Create symlinks so MKL libs are found in standard paths (survives Python restart)
-# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_rt.so.2 /usr/lib/x86_64-linux-gnu/
-# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_rt.so /usr/lib/x86_64-linux-gnu/
-# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_core.so.2 /usr/lib/x86_64-linux-gnu/
-# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_core.so /usr/lib/x86_64-linux-gnu/
-# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_intel_lp64.so.2 /usr/lib/x86_64-linux-gnu/
-# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_intel_lp64.so /usr/lib/x86_64-linux-gnu/
-# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_intel_thread.so.2 /usr/lib/x86_64-linux-gnu/
-# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_intel_thread.so /usr/lib/x86_64-linux-gnu/
-# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_sequential.so.2 /usr/lib/x86_64-linux-gnu/
-# MAGIC ln -sf /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_sequential.so /usr/lib/x86_64-linux-gnu/
-# MAGIC ln -sf /opt/intel/oneapi/compiler/latest/lib/libiomp5.so /usr/lib/x86_64-linux-gnu/
-# MAGIC ldconfig
-# MAGIC echo "MKL libraries symlinked to /usr/lib/x86_64-linux-gnu/"
-
-# COMMAND ----------
-
-# Install NumPy wheel built with MKL (must use %pip to install to notebook environment)
-# MAGIC %pip install /tmp/numpy-wheel/numpy-*.whl --force-reinstall
-
-# COMMAND ----------
-
-# MAGIC %pip install psutil loguru threadpoolctl
-
-# COMMAND ----------
-
-# Install jamma without reinstalling numpy (preserve MKL build)
-# MAGIC %pip install --no-deps git+https://github.com/michael-denyer/jamma.git
-
-# COMMAND ----------
-
-# Install jamma's other dependencies (excluding numpy which we built with MKL)
-# MAGIC %pip install --no-deps jaxtyping typer loguru progressbar2 bed-reader "jax>=0.4" "jaxlib>=0.4"
+# Install jamma and dependencies
+# MAGIC %pip install git+https://github.com/michael-denyer/jamma.git
 
 # COMMAND ----------
 

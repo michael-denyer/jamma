@@ -132,17 +132,18 @@ def benchmark_numpy(n_samples: int):
         import traceback
 
         elapsed = time.perf_counter() - start
-        print(f"  FAILED after {elapsed:.2f}s: {type(e).__name__}: {e}")
-        print(f"  Traceback:\n{traceback.format_exc()}")
+        error_str = str(e) if str(e) else "(no message)"
+        print(f"  FAILED after {elapsed:.2f}s")
+        print(f"  Exception type: {type(e).__name__}")
+        print(f"  Exception message: {error_str}")
+        print(f"  Full traceback:\n{traceback.format_exc()}")
         avail_after = psutil.virtual_memory().available / 1e9
         print(f"  Available memory after: {avail_after:.1f} GB")
         result = {
             "time": None,
             "n_samples": n_samples,
             "success": False,
-            "error": f"{type(e).__name__}: {e}"
-            if str(e)
-            else f"{type(e).__name__} (no message)",
+            "error": f"{type(e).__name__}: {error_str}",
         }
 
     del K
@@ -183,7 +184,13 @@ print("=" * 60)
 print(f"50k: matrix={matrix_gb:.0f}GB, available={available_gb:.0f}GB")
 print(f"  NumPy peak ≈ {numpy_peak:.0f}GB")
 
-results_50k = None
+# Initialize with crash marker - if this persists, cell crashed before completing
+results_50k = {
+    "n_samples": 50_000,
+    "success": False,
+    "error": "Cell crashed (OOM kill or segfault) - check driver logs",
+}
+
 if available_gb > numpy_peak * 1.1:
     results_50k = benchmark_numpy(50_000)
 else:
@@ -204,7 +211,13 @@ numpy_peak = 3 * matrix_gb  # K + U + workspace ≈ 240 GB
 print(f"100k: matrix={matrix_gb:.0f}GB, available={available_gb:.0f}GB")
 print(f"  NumPy peak ≈ {numpy_peak:.0f}GB")
 
-results_100k = None
+# Initialize with crash marker
+results_100k = {
+    "n_samples": 100_000,
+    "success": False,
+    "error": "Cell crashed (OOM kill or segfault) - check driver logs",
+}
+
 if available_gb > numpy_peak * 1.1:
     results_100k = benchmark_numpy(100_000)
 else:

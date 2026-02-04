@@ -13,61 +13,12 @@
 # MAGIC Databricks uses OpenBLAS by default. MKL is needed for stable eigendecomp at scale.
 # MAGIC OpenBLAS can segfault on large matrices (50k+) due to threading/memory issues.
 # MAGIC
-# MAGIC **Approach**: Install Intel MKL runtime, then install numpy-mkl from Intel's PyPI channel.
+# MAGIC **Approach**: Use pre-built MKL wheels from urob/numpy-mkl repository.
 
 # COMMAND ----------
 
-# MAGIC %sh
-# MAGIC set -e
-# MAGIC
-# MAGIC # Install Intel MKL if not already present
-# MAGIC if [ ! -d /opt/intel/oneapi/mkl ]; then
-# MAGIC     echo "Installing Intel MKL..."
-# MAGIC     wget -qO - https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | apt-key add -
-# MAGIC     echo "deb https://apt.repos.intel.com/oneapi all main" > /etc/apt/sources.list.d/oneAPI.list
-# MAGIC     apt-get update -y
-# MAGIC     apt-get install -y intel-oneapi-mkl-devel pkg-config
-# MAGIC else
-# MAGIC     echo "MKL already installed"
-# MAGIC fi
-# MAGIC
-# MAGIC # Source MKL environment
-# MAGIC . /opt/intel/oneapi/setvars.sh
-# MAGIC
-# MAGIC # Symlink MKL libs to standard path (idempotent)
-# MAGIC shopt -s nullglob
-# MAGIC for f in /opt/intel/oneapi/mkl/latest/lib/*.so*; do
-# MAGIC     ln -sf "$f" /usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
-# MAGIC done
-# MAGIC for f in /opt/intel/oneapi/compiler/latest/lib/*.so*; do
-# MAGIC     ln -sf "$f" /usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
-# MAGIC done
-# MAGIC shopt -u nullglob
-# MAGIC ldconfig
-# MAGIC
-# MAGIC # Build numpy wheel if not already built
-# MAGIC if [ ! -f /tmp/numpy-wheel/numpy-*.whl ]; then
-# MAGIC     echo "Building NumPy wheel with MKL..."
-# MAGIC     cd /tmp
-# MAGIC     rm -rf numpy-build numpy-wheel
-# MAGIC     mkdir -p numpy-wheel
-# MAGIC     git clone --depth 1 --branch v2.0.2 --recurse-submodules https://github.com/numpy/numpy.git numpy-build
-# MAGIC     cd numpy-build
-# MAGIC     pip install cython meson-python meson ninja pybind11 build
-# MAGIC     python -m build --wheel --no-isolation \
-# MAGIC         -Csetup-args=-Dblas=mkl \
-# MAGIC         -Csetup-args=-Dlapack=mkl \
-# MAGIC         -o /tmp/numpy-wheel
-# MAGIC else
-# MAGIC     echo "NumPy wheel already built"
-# MAGIC fi
-# MAGIC
-# MAGIC ls -la /tmp/numpy-wheel/
-
-# COMMAND ----------
-
-# Install numpy wheel with MKL
-# MAGIC %pip install /tmp/numpy-wheel/numpy-*.whl --force-reinstall
+# Install pre-built numpy/scipy with MKL from urob's wheel repository
+# MAGIC %pip install numpy scipy --extra-index-url https://urob.github.io/numpy-mkl --force-reinstall
 
 # COMMAND ----------
 
@@ -81,7 +32,6 @@
 # COMMAND ----------
 
 # Restart to pick up new packages
-# MKL libs are symlinked to /usr/lib so they'll be found after restart
 dbutils.library.restartPython()  # noqa: F821
 
 # COMMAND ----------

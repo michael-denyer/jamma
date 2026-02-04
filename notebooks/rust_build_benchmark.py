@@ -83,7 +83,13 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install --force-reinstall git+https://github.com/michael-denyer/jamma.git
+# Install jamma without reinstalling numpy (preserve MKL build)
+# MAGIC %pip install --no-deps git+https://github.com/michael-denyer/jamma.git
+
+# COMMAND ----------
+
+# Install jamma's other dependencies (excluding numpy which we built with MKL)
+# MAGIC %pip install jaxtyping typer loguru progressbar2 bed-reader "jax>=0.4" "jaxlib>=0.4"
 
 # COMMAND ----------
 

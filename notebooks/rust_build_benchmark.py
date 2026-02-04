@@ -200,16 +200,18 @@ results_50k = benchmark_faer(50_000)
 # COMMAND ----------
 
 # 100k - target scale (if memory allows)
-
+# Peak memory: K + k_vec_copy + faer_mat + U + workspace ≈ 5x matrix size
 available_gb = psutil.virtual_memory().available / 1e9
-required_gb = 2 * (100_000**2) * 8 / 1e9  # K + U
+matrix_gb = (100_000**2) * 8 / 1e9
+required_gb = 5 * matrix_gb  # ~400 GB peak
 
-print(f"100k requires ~{required_gb:.0f}GB, available: {available_gb:.0f}GB")
+print(f"100k: matrix={matrix_gb:.0f}GB, peak≈{required_gb:.0f}GB", end="")
+print(f", available={available_gb:.0f}GB")
 
 if available_gb > required_gb * 1.1:
     results_100k = benchmark_faer(100_000)
 else:
-    print("Skipping 100k - insufficient memory")
+    print("Skipping 100k - insufficient memory for peak usage")
     results_100k = None
 
 # COMMAND ----------

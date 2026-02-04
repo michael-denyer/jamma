@@ -18,45 +18,47 @@
 # COMMAND ----------
 
 # MAGIC %sh
-# MAGIC set -ex
+# MAGIC set -e
 # MAGIC
-# MAGIC # Install Intel MKL runtime (not devel - smaller, just the libs we need)
-# MAGIC wget -qO - https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | apt-key add -
-# MAGIC echo "deb https://apt.repos.intel.com/oneapi all main" > /etc/apt/sources.list.d/oneAPI.list
-# MAGIC apt-get update -y
-# MAGIC apt-get install -y intel-oneapi-mkl intel-oneapi-compiler-shared-runtime
+# MAGIC # Install Intel MKL if not already present
+# MAGIC if [ ! -d /opt/intel/oneapi/mkl ]; then
+# MAGIC     echo "Installing Intel MKL..."
+# MAGIC     wget -qO - https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | apt-key add -
+# MAGIC     echo "deb https://apt.repos.intel.com/oneapi all main" > /etc/apt/sources.list.d/oneAPI.list
+# MAGIC     apt-get update -y
+# MAGIC     apt-get install -y intel-oneapi-mkl-devel pkg-config
+# MAGIC else
+# MAGIC     echo "MKL already installed"
+# MAGIC fi
 # MAGIC
-# MAGIC # Symlink ALL MKL libs to standard path so they're found after Python restart
-# MAGIC for f in /opt/intel/oneapi/mkl/latest/lib/*.so*; do
-# MAGIC     ln -sf "$f" /usr/lib/x86_64-linux-gnu/
-# MAGIC done
-# MAGIC for f in /opt/intel/oneapi/compiler/latest/lib/*.so*; do
-# MAGIC     ln -sf "$f" /usr/lib/x86_64-linux-gnu/
-# MAGIC done
-# MAGIC ldconfig
-# MAGIC echo "MKL runtime installed"
-
-# COMMAND ----------
-
-# MAGIC %sh
-# MAGIC set -ex
+# MAGIC # Source MKL environment
 # MAGIC . /opt/intel/oneapi/setvars.sh
 # MAGIC
-# MAGIC # Now install MKL devel for building
-# MAGIC apt-get install -y intel-oneapi-mkl-devel pkg-config
+# MAGIC # Symlink MKL libs to standard path (idempotent)
+# MAGIC for f in /opt/intel/oneapi/mkl/latest/lib/*.so*; do
+# MAGIC     ln -sf "$f" /usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
+# MAGIC done
+# MAGIC for f in /opt/intel/oneapi/compiler/latest/lib/*.so* 2>/dev/null; do
+# MAGIC     ln -sf "$f" /usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
+# MAGIC done
+# MAGIC ldconfig
 # MAGIC
-# MAGIC cd /tmp
-# MAGIC rm -rf numpy-build numpy-wheel
-# MAGIC mkdir -p numpy-wheel
-# MAGIC git clone --depth 1 --branch v2.0.2 --recurse-submodules https://github.com/numpy/numpy.git numpy-build
-# MAGIC cd numpy-build
-# MAGIC
-# MAGIC pip install cython meson-python meson ninja pybind11 build
-# MAGIC
-# MAGIC python -m build --wheel --no-isolation \
-# MAGIC     -Csetup-args=-Dblas=mkl \
-# MAGIC     -Csetup-args=-Dlapack=mkl \
-# MAGIC     -o /tmp/numpy-wheel
+# MAGIC # Build numpy wheel if not already built
+# MAGIC if [ ! -f /tmp/numpy-wheel/numpy-*.whl ]; then
+# MAGIC     echo "Building NumPy wheel with MKL..."
+# MAGIC     cd /tmp
+# MAGIC     rm -rf numpy-build numpy-wheel
+# MAGIC     mkdir -p numpy-wheel
+# MAGIC     git clone --depth 1 --branch v2.0.2 --recurse-submodules https://github.com/numpy/numpy.git numpy-build
+# MAGIC     cd numpy-build
+# MAGIC     pip install cython meson-python meson ninja pybind11 build
+# MAGIC     python -m build --wheel --no-isolation \
+# MAGIC         -Csetup-args=-Dblas=mkl \
+# MAGIC         -Csetup-args=-Dlapack=mkl \
+# MAGIC         -o /tmp/numpy-wheel
+# MAGIC else
+# MAGIC     echo "NumPy wheel already built"
+# MAGIC fi
 # MAGIC
 # MAGIC ls -la /tmp/numpy-wheel/
 

@@ -40,14 +40,14 @@ class TestEigendecompMemoryEstimate:
 class TestEigendecompPreflightCheck:
     """Tests for pre-flight memory check in eigendecompose_kinship.
 
-    Note: These tests require the jax.scipy backend since the jax.rust backend
+    Note: These tests require the jax.numpy backend since the jax.rust backend
     doesn't use pre-flight memory checks (faer handles memory internally).
     """
 
     def setup_method(self):
-        """Force jax.scipy backend for scipy memory checks."""
+        """Force jax.numpy backend for numpy memory checks."""
         get_compute_backend.cache_clear()
-        os.environ["JAMMA_BACKEND"] = "jax.scipy"
+        os.environ["JAMMA_BACKEND"] = "jax.numpy"
         get_compute_backend.cache_clear()
 
     def teardown_method(self):

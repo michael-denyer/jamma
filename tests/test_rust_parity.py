@@ -1,9 +1,9 @@
-"""End-to-end parity tests: jax.rust backend vs jax.scipy backend.
+"""End-to-end parity tests: jax.rust backend vs jax.numpy backend.
 
 These tests verify that the full LMM workflow produces identical
 statistical results regardless of which backend is used for
 eigendecomposition. This is critical for validating that the jax.rust
-implementation can replace jax.scipy without changing GWAS results.
+implementation can replace jax.numpy without changing GWAS results.
 """
 
 import os
@@ -21,7 +21,7 @@ pytestmark = pytest.mark.skipif(
 
 
 class TestEigendecompParity:
-    """Tests comparing jax.rust vs jax.scipy eigendecomposition directly."""
+    """Tests comparing jax.rust vs jax.numpy eigendecomposition directly."""
 
     def setup_method(self):
         get_compute_backend.cache_clear()
@@ -31,16 +31,16 @@ class TestEigendecompParity:
         get_compute_backend.cache_clear()
 
     def test_eigenvalues_match(self):
-        """Eigenvalues from jax.rust should match scipy exactly."""
-        from scipy import linalg
+        """Eigenvalues from jax.rust should match numpy exactly."""
+        import numpy as np
 
         np.random.seed(12345)
         n = 500
         A = np.random.randn(n, n)
         K = (A + A.T) / 2  # Symmetric
 
-        # scipy reference
-        scipy_eigenvalues, _ = linalg.eigh(K.copy())
+        # numpy reference
+        numpy_eigenvalues, _ = np.linalg.eigh(K.copy())
 
         # jax.rust (via jamma)
         os.environ["JAMMA_BACKEND"] = "jax.rust"
@@ -52,10 +52,10 @@ class TestEigendecompParity:
         # Compare within JAMMA's standard tolerance
         np.testing.assert_allclose(
             rust_eigenvalues,
-            scipy_eigenvalues,
+            numpy_eigenvalues,
             rtol=1e-10,
             atol=1e-14,
-            err_msg="Eigenvalues differ between jax.rust and scipy",
+            err_msg="Eigenvalues differ between jax.rust and numpy",
         )
 
     def test_eigenvectors_reconstruct_matrix(self):
@@ -122,8 +122,6 @@ class TestKinshipParity:
 
     def test_kinship_eigendecomp_parity(self):
         """Kinship eigendecomposition should be identical across backends."""
-        from scipy import linalg
-
         from jamma.kinship import compute_centered_kinship
 
         # Create synthetic genotype data
@@ -135,8 +133,8 @@ class TestKinshipParity:
         # Compute kinship
         K = compute_centered_kinship(G)
 
-        # scipy reference (direct)
-        scipy_eigenvalues, scipy_eigenvectors = linalg.eigh(K.copy())
+        # numpy reference (direct)
+        numpy_eigenvalues, numpy_eigenvectors = np.linalg.eigh(K.copy())
 
         # jax.rust (via jamma)
         os.environ["JAMMA_BACKEND"] = "jax.rust"
@@ -150,7 +148,7 @@ class TestKinshipParity:
         # Eigenvalues must match
         np.testing.assert_allclose(
             rust_eigenvalues,
-            scipy_eigenvalues,
+            numpy_eigenvalues,
             rtol=1e-10,
             atol=1e-14,
             err_msg="Kinship eigenvalues differ",
@@ -174,7 +172,7 @@ class TestLMMWorkflowParity:
         get_compute_backend.cache_clear()
 
     def test_synthetic_lmm_parity(self):
-        """Full LMM workflow should match between jax.scipy and jax.rust.
+        """Full LMM workflow should match between jax.numpy and jax.rust.
 
         This is the critical end-to-end test: run full LMM association with both
         backends and verify identical statistical results.
@@ -203,8 +201,8 @@ class TestLMMWorkflowParity:
             for i in range(n_snps)
         ]
 
-        # Run with jax.scipy backend
-        os.environ["JAMMA_BACKEND"] = "jax.scipy"
+        # Run with jax.numpy backend
+        os.environ["JAMMA_BACKEND"] = "jax.numpy"
         get_compute_backend.cache_clear()
 
         scipy_results = run_lmm_association(
@@ -325,7 +323,7 @@ class TestPerformanceBaseline:
 
     @pytest.mark.benchmark
     def test_rust_not_dramatically_slower(self):
-        """jax.rust should not be dramatically slower than scipy.
+        """jax.rust should not be dramatically slower than numpy.
 
         This test compares raw eigendecomp performance, calling jamma_core
         directly to avoid Python wrapper overhead and logging.
@@ -333,7 +331,6 @@ class TestPerformanceBaseline:
         import time
 
         import jamma_core
-        from scipy import linalg
 
         np.random.seed(44444)
         n = 1000
@@ -341,16 +338,16 @@ class TestPerformanceBaseline:
         K = (A + A.T) / 2
 
         # Warmup both implementations (JIT, cache effects)
-        _ = linalg.eigh(K.copy())
+        _ = np.linalg.eigh(K.copy())
         _ = jamma_core.eigendecompose_kinship(K.copy(), threshold=0.0)
 
-        # Time scipy (average of 3 runs)
-        scipy_times = []
+        # Time numpy (average of 3 runs)
+        numpy_times = []
         for _ in range(3):
             start = time.perf_counter()
-            linalg.eigh(K.copy())
-            scipy_times.append(time.perf_counter() - start)
-        scipy_time = min(scipy_times)  # Use min to reduce noise
+            np.linalg.eigh(K.copy())
+            numpy_times.append(time.perf_counter() - start)
+        numpy_time = min(numpy_times)  # Use min to reduce noise
 
         # Time jax.rust (average of 3 runs)
         rust_times = []
@@ -362,7 +359,7 @@ class TestPerformanceBaseline:
 
         # jax.rust should not be more than 5x slower
         # (faer is typically comparable to or faster than OpenBLAS)
-        assert rust_time < scipy_time * 5, (
+        assert rust_time < numpy_time * 5, (
             f"jax.rust ({rust_time:.2f}s) is more than 5x slower than "
-            f"scipy ({scipy_time:.2f}s)"
+            f"numpy ({numpy_time:.2f}s)"
         )

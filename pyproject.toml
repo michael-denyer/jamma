@@ -7,7 +7,7 @@ name = "jamma"
 version = "0.3.2"
 description = "JAMMA: JAX-Accelerated Mixed Model Association"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "JAMMA Contributors" }]
 dependencies = [

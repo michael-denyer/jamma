@@ -43,7 +43,7 @@ def benchmark_eigendecomp_memory(
 
     Args:
         n_samples: Matrix size (n x n).
-        backend: Either "scipy" or "rust".
+        backend: Either "numpy" or "rust".
 
     Returns:
         BenchmarkResult with actual vs estimated memory.
@@ -68,7 +68,7 @@ def benchmark_eigendecomp_memory(
 
     # Set backend
     os.environ["JAMMA_BACKEND"] = (
-        f"jax.{backend}" if backend != "scipy" else "jax.scipy"
+        f"jax.{backend}" if backend != "numpy" else "jax.numpy"
     )
 
     # Import after setting backend
@@ -78,10 +78,8 @@ def benchmark_eigendecomp_memory(
 
     start_time = time.perf_counter()
 
-    if backend == "scipy":
-        from scipy import linalg
-
-        eigenvalues, eigenvectors = linalg.eigh(K)
+    if backend == "numpy":
+        eigenvalues, eigenvectors = np.linalg.eigh(K)
     else:
         import jamma_core
 
@@ -121,7 +119,7 @@ def run_benchmarks(
     if sample_sizes is None:
         sample_sizes = SAMPLE_SIZES
     if backends is None:
-        backends = ["scipy", "rust"]
+        backends = ["numpy", "rust"]
 
     results = []
 
@@ -161,11 +159,11 @@ def main():
     print(f"Available: {psutil.virtual_memory().available / 1e9:.1f}GB")
     print(f"Rust available: {is_rust_available()}")
 
-    backends = ["scipy"]
+    backends = ["numpy"]
     if is_rust_available():
         backends.append("rust")
     else:
-        print("\nWARNING: Rust backend not available, scipy-only benchmark")
+        print("\nWARNING: Rust backend not available, numpy-only benchmark")
 
     results = run_benchmarks(backends=backends)
 

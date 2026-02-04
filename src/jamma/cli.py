@@ -47,8 +47,8 @@ def version_callback(value: bool) -> None:
         # Show backend information for debugging
         info = get_backend_info()
         typer.echo(f"Backend: {info['selected']}")
-        if info["selected"] == "jax.scipy":
-            typer.echo("  (JAX pipeline + scipy/LAPACK eigendecomp)")
+        if info["selected"] == "jax.numpy":
+            typer.echo("  (JAX pipeline + numpy/LAPACK eigendecomp)")
         elif info["selected"] == "jax.rust":
             typer.echo("  (JAX pipeline + faer/Rust eigendecomp)")
         typer.echo(f"jax.rust available: {info['rust_available']}")
@@ -73,10 +73,10 @@ def main(
         typer.Option("-v", "--verbose", help="Verbose output"),
     ] = False,
     backend: Annotated[
-        Literal["auto", "jax.scipy", "jax.rust"] | None,
+        Literal["auto", "jax.numpy", "jax.rust"] | None,
         typer.Option(
             "-be",
-            help="Compute backend (auto, jax.scipy, jax.rust)",
+            help="Compute backend (auto, jax.numpy, jax.rust)",
         ),
     ] = None,
     version: Annotated[

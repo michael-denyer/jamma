@@ -18,7 +18,7 @@
 # COMMAND ----------
 
 # Install pre-built numpy/scipy with MKL from urob's wheel repository
-# MAGIC %pip install numpy scipy --extra-index-url https://urob.github.io/numpy-mkl --force-reinstall
+# MAGIC %pip install numpy scipy --extra-index-url https://urob.github.io/numpy-mkl --force-reinstall --upgrade
 
 # COMMAND ----------
 

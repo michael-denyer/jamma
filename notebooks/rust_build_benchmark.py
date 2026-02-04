@@ -1,12 +1,12 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Rust Backend Build & Benchmark: faer vs OxiBLAS
+# MAGIC # Rust Backend Build & Benchmark: faer Performance
 # MAGIC
-# MAGIC Builds jamma_core from source ON Databricks to compare:
-# MAGIC - **faer 0.22** - Pure Rust eigendecomposition
-# MAGIC - **scirs2-linalg/OxiBLAS** - Pure Rust BLAS with SIMD
+# MAGIC Builds jamma_core from source ON Databricks to benchmark:
+# MAGIC - **faer 0.22** - Pure Rust eigendecomposition with rayon parallelism
+# MAGIC - Compared against **scipy.linalg.eigh** baseline
 # MAGIC
-# MAGIC Both use target-cpu=native for CPU-specific SIMD optimization.
+# MAGIC Uses target-cpu=native for CPU-specific SIMD optimization (AVX2/AVX-512).
 
 # COMMAND ----------
 
@@ -100,11 +100,12 @@ dbutils.library.restartPython()  # noqa: F821
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 3. Verify Both Backends Available
+# MAGIC ## 3. Verify faer Backend
 
 # COMMAND ----------
 
 import numpy as np
+from scipy import linalg as scipy_linalg
 
 print("=== JAMMA Backend Verification ===")
 
@@ -112,11 +113,9 @@ import jamma_core
 
 print(f"jamma_core version: {getattr(jamma_core, '__version__', 'unknown')}")
 
-# Check both functions exist
+# Check faer function exists
 has_faer = hasattr(jamma_core, "eigendecompose_kinship")
 print(f"faer backend: eigendecompose_kinship = {has_faer}")
-has_scirs2 = hasattr(jamma_core, "eigendecompose_kinship_scirs2")
-print(f"OxiBLAS backend: eigendecompose_kinship_scirs2 = {has_scirs2}")
 
 # Quick sanity check with tiny matrix
 test_k = np.array([[2.0, 1.0], [1.0, 2.0]], dtype=np.float64)
@@ -125,16 +124,16 @@ print("\nTesting faer backend...")
 vals_faer, vecs_faer = jamma_core.eigendecompose_kinship(test_k, 0.0)
 print(f"  eigenvalues: {vals_faer}")
 
-print("\nTesting OxiBLAS backend...")
-vals_oxi, vecs_oxi = jamma_core.eigendecompose_kinship_scirs2(test_k, 0.0)
-print(f"  eigenvalues: {vals_oxi}")
+print("\nTesting scipy baseline...")
+vals_scipy, vecs_scipy = scipy_linalg.eigh(test_k)
+print(f"  eigenvalues: {vals_scipy}")
 
 print("\nBoth backends working!")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 4. Benchmark: faer vs OxiBLAS (Head-to-Head)
+# MAGIC ## 4. Benchmark: faer vs scipy
 
 # COMMAND ----------
 
@@ -144,8 +143,8 @@ import time
 import psutil
 
 
-def benchmark_rust_backends(n_samples: int):
-    """Benchmark faer vs OxiBLAS eigendecomposition.
+def benchmark_faer_vs_scipy(n_samples: int):
+    """Benchmark faer vs scipy eigendecomposition.
 
     Args:
         n_samples: Matrix dimension
@@ -167,6 +166,21 @@ def benchmark_rust_backends(n_samples: int):
 
     results = {}
 
+    # Test scipy (baseline)
+    print("\nRunning scipy baseline...")
+    start = time.perf_counter()
+    try:
+        vals, vecs = scipy_linalg.eigh(K)
+        elapsed = time.perf_counter() - start
+        print(f"  scipy: {elapsed:.2f}s")
+        print(f"  eigenvalue range: [{vals.min():.6f}, {vals.max():.6f}]")
+        results["scipy"] = elapsed
+    except Exception as e:
+        print(f"  scipy FAILED: {e}")
+        results["scipy"] = None
+
+    gc.collect()
+
     # Test faer
     print("\nRunning faer backend...")
     start = time.perf_counter()
@@ -180,32 +194,19 @@ def benchmark_rust_backends(n_samples: int):
         print(f"  faer FAILED: {e}")
         results["faer"] = None
 
-    gc.collect()
-
-    # Test OxiBLAS
-    print("\nRunning OxiBLAS backend...")
-    start = time.perf_counter()
-    try:
-        vals, vecs = jamma_core.eigendecompose_kinship_scirs2(K, 0.0)
-        elapsed = time.perf_counter() - start
-        print(f"  OxiBLAS: {elapsed:.2f}s")
-        print(f"  eigenvalue range: [{vals.min():.6f}, {vals.max():.6f}]")
-        results["oxiblas"] = elapsed
-    except Exception as e:
-        print(f"  OxiBLAS FAILED: {e}")
-        results["oxiblas"] = None
-
     del K
     gc.collect()
 
     # Summary
-    if results.get("faer") and results.get("oxiblas"):
-        ratio = results["faer"] / results["oxiblas"]
-        faster = "OxiBLAS" if ratio > 1 else "faer"
+    if results.get("scipy") and results.get("faer"):
+        ratio = results["scipy"] / results["faer"]
         scale = n_samples // 1000
-        faer_t, oxi_t = results["faer"], results["oxiblas"]
-        print(f"\n{scale}k Summary: faer={faer_t:.2f}s, OxiBLAS={oxi_t:.2f}s")
-        print(f"  ratio: {ratio:.2f}x ({faster} is faster)")
+        scipy_t, faer_t = results["scipy"], results["faer"]
+        print(f"\n{scale}k Summary: scipy={scipy_t:.2f}s, faer={faer_t:.2f}s")
+        if ratio > 1:
+            print(f"  faer is {ratio:.2f}x FASTER than scipy")
+        else:
+            print(f"  scipy is {1/ratio:.2f}x faster than faer")
 
     return results
 
@@ -218,17 +219,17 @@ def benchmark_rust_backends(n_samples: int):
 # COMMAND ----------
 
 # 1k warmup / verification
-results_1k = benchmark_rust_backends(1_000)
+results_1k = benchmark_faer_vs_scipy(1_000)
 
 # COMMAND ----------
 
 # 10k - key performance test
-results_10k = benchmark_rust_backends(10_000)
+results_10k = benchmark_faer_vs_scipy(10_000)
 
 # COMMAND ----------
 
 # 50k - production scale
-results_50k = benchmark_rust_backends(50_000)
+results_50k = benchmark_faer_vs_scipy(50_000)
 
 # COMMAND ----------
 
@@ -240,7 +241,7 @@ required_gb = 2 * (100_000**2) * 8 / 1e9  # K + U
 print(f"100k requires ~{required_gb:.0f}GB, available: {available_gb:.0f}GB")
 
 if available_gb > required_gb * 1.1:
-    results_100k = benchmark_rust_backends(100_000)
+    results_100k = benchmark_faer_vs_scipy(100_000)
 else:
     print("Skipping 100k - insufficient memory")
     results_100k = None
@@ -253,33 +254,33 @@ else:
 # COMMAND ----------
 
 print("\n" + "=" * 60)
-print("BENCHMARK SUMMARY: faer vs OxiBLAS")
+print("BENCHMARK SUMMARY: faer vs scipy")
 print("=" * 60)
 
 all_results = []
 for name, res in [("1k", results_1k), ("10k", results_10k), ("50k", results_50k)]:
-    if res and res.get("faer") and res.get("oxiblas"):
-        all_results.append((name, res["faer"], res["oxiblas"]))
+    if res and res.get("scipy") and res.get("faer"):
+        all_results.append((name, res["scipy"], res["faer"]))
 
-if results_100k and results_100k.get("faer") and results_100k.get("oxiblas"):
-    all_results.append(("100k", results_100k["faer"], results_100k["oxiblas"]))
+if results_100k and results_100k.get("scipy") and results_100k.get("faer"):
+    all_results.append(("100k", results_100k["scipy"], results_100k["faer"]))
 
 if all_results:
-    print(f"\n{'Scale':<8} {'faer':<12} {'OxiBLAS':<12} {'Ratio':<10} {'Faster':<10}")
+    print(f"\n{'Scale':<8} {'scipy':<12} {'faer':<12} {'Speedup':<10} {'Winner':<10}")
     print("-" * 54)
-    for scale, faer_time, oxi_time in all_results:
-        ratio = faer_time / oxi_time
-        faster = "OxiBLAS" if ratio > 1 else "faer"
+    for scale, scipy_time, faer_time in all_results:
+        ratio = scipy_time / faer_time
+        winner = "faer" if ratio > 1 else "scipy"
         speedup = ratio if ratio > 1 else 1 / ratio
-        row = f"{scale:<8} {faer_time:<12.2f} {oxi_time:<12.2f} {speedup:<10.2f}"
-        print(f"{row} {faster:<10}")
+        row = f"{scale:<8} {scipy_time:<12.2f} {faer_time:<12.2f} {speedup:<10.2f}x"
+        print(f"{row} {winner:<10}")
 
-    # Overall winner
-    avg_ratio = sum(f / o for _, f, o in all_results) / len(all_results)
-    print(f"\nAverage ratio: {avg_ratio:.2f}x")
+    # Overall summary
+    avg_ratio = sum(s / f for _, s, f in all_results) / len(all_results)
+    print(f"\nAverage speedup: {avg_ratio:.2f}x")
     if avg_ratio > 1:
-        print(f"WINNER: OxiBLAS is {avg_ratio:.1f}x faster on average")
+        print(f"RESULT: faer is {avg_ratio:.1f}x FASTER than scipy on average")
     else:
-        print(f"WINNER: faer is {1/avg_ratio:.1f}x faster on average")
+        print(f"RESULT: scipy is {1/avg_ratio:.1f}x faster than faer on average")
 else:
     print("No comparable results to summarize")

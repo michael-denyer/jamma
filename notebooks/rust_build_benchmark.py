@@ -17,8 +17,12 @@
 
 # COMMAND ----------
 
-# Install numpy with MKL backend (bundles MKL libraries)
-# MAGIC %pip install mkl-numpy psutil loguru threadpoolctl
+# Install numpy with MKL via conda (conda-forge has MKL-linked builds)
+# MAGIC %conda install -c conda-forge numpy "libblas=*=*mkl" -y
+
+# COMMAND ----------
+
+# MAGIC %pip install psutil loguru threadpoolctl
 
 # COMMAND ----------
 

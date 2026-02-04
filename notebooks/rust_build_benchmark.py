@@ -37,28 +37,30 @@
 # MAGIC echo "MKL libraries:"
 # MAGIC ls -la /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_rt.so*
 # MAGIC
-# MAGIC echo "=== Step 3: Build NumPy from source with MKL ==="
+# MAGIC echo "=== Step 3: Build NumPy wheel with MKL ==="
 # MAGIC # Verify pkg-config can find MKL
 # MAGIC echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
 # MAGIC pkg-config --libs mkl-dynamic-lp64-seq
 # MAGIC
 # MAGIC # Clone numpy with submodules (vendored meson is a submodule)
 # MAGIC cd /tmp
-# MAGIC rm -rf numpy-build
+# MAGIC rm -rf numpy-build numpy-wheel
+# MAGIC mkdir -p numpy-wheel
 # MAGIC git clone --depth 1 --branch v2.4.2 --recurse-submodules https://github.com/numpy/numpy.git numpy-build
 # MAGIC cd numpy-build
 # MAGIC
-# MAGIC # Install build dependencies
-# MAGIC pip install cython meson-python ninja pybind11
+# MAGIC # Install build dependencies to system pip (for building only)
+# MAGIC pip install cython meson-python ninja pybind11 build
 # MAGIC
-# MAGIC # Build with meson, forcing MKL as BLAS/LAPACK
+# MAGIC # Build wheel with meson, forcing MKL as BLAS/LAPACK
 # MAGIC # Ref: https://numpy.org/doc/stable/building/blas_lapack.html
-# MAGIC pip install . -v \
+# MAGIC python -m build --wheel --no-isolation \
 # MAGIC     -Csetup-args=-Dblas-order=mkl \
 # MAGIC     -Csetup-args=-Dlapack-order=mkl \
-# MAGIC     --no-build-isolation
+# MAGIC     -o /tmp/numpy-wheel
 # MAGIC
-# MAGIC echo "=== NumPy with MKL build complete ==="
+# MAGIC echo "=== NumPy wheel built ==="
+# MAGIC ls -la /tmp/numpy-wheel/
 
 # COMMAND ----------
 
@@ -80,6 +82,11 @@
 
 # COMMAND ----------
 
+# Install NumPy wheel built with MKL (must use %pip to install to notebook environment)
+# MAGIC %pip install /tmp/numpy-wheel/numpy-*.whl --force-reinstall
+
+# COMMAND ----------
+
 # MAGIC %pip install psutil loguru threadpoolctl
 
 # COMMAND ----------
@@ -90,7 +97,7 @@
 # COMMAND ----------
 
 # Install jamma's other dependencies (excluding numpy which we built with MKL)
-# MAGIC %pip install jaxtyping typer loguru progressbar2 bed-reader "jax>=0.4" "jaxlib>=0.4"
+# MAGIC %pip install --no-deps jaxtyping typer loguru progressbar2 bed-reader "jax>=0.4" "jaxlib>=0.4"
 
 # COMMAND ----------
 

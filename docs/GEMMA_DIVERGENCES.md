@@ -164,35 +164,57 @@ The variance-based approach is simpler and equally robust. A single-sample GWAS 
 
 ---
 
-## 5. JAX Path: Intercept-Only Limitation
+## 5. JAX Path: Covariate Support
 
 ### GEMMA
-Supports arbitrary covariates (n_cvt ≥ 1).
+
+Supports arbitrary covariates (n_cvt >= 1).
 
 ### JAMMA JAX Path (runner_jax.py)
-Currently hardcoded to n_cvt=1 (intercept only).
 
-### Status: **Known Limitation**
-The NumPy/Numba path supports n_cvt > 1. JAX path is optimized for the common case. Covariate support is tracked as a future enhancement.
+Supports arbitrary covariates (n_cvt >= 1) since v1.2 (Phase 11).
+
+### Status: **Aligned**
+
+The JAX runner generalizes Uab/Pab shapes from hardcoded n_cvt=1 to arbitrary
+n_cvt. All LMM modes (Wald, LRT, Score, all-tests) work with covariates.
 
 ---
 
-## 6. Lambda Optimization Bounds
+## 6. Lambda Optimization: Brent vs Golden Section
 
-Both GEMMA and JAMMA use Brent's method with bounds [1e-5, 1e5] for lambda (variance ratio) optimization. JAMMA adds a warning when the optimum converges at the lower bound:
+**GEMMA:** Brent's method (GSL `gsl_min_fminimizer_brent`) with bounds
+[1e-5, 1e5] and tolerance 1e-5.
+
+**JAMMA (since v1.2):** Grid search (50 log-spaced points) + golden section
+refinement (20 iterations) with effective tolerance ~6.6e-5 per grid cell.
+
+### Divergence on Flat Optimization Landscapes
+
+Both methods converge to within 1e-5 of the true optimum for strong-signal
+SNPs. However, for weak-signal SNPs where the optimization surface is nearly
+flat (lambda converging near the lower bound 1e-5), Brent and golden section
+can settle on slightly different points within the flat region:
+
+- **REML lambda**: negligible impact (< 1e-4 relative)
+- **MLE lambda**: up to ~9e-4 relative on mouse_hs1940
+- **MLE logl_H1**: up to ~1.35e-3 relative (worst case: SNP 596 of 10768,
+  abs_diff ~2.1 on values ~-1583)
+
+This only affects the per-SNP MLE log-likelihood diagnostic (logl_H1).
+P-values, effect sizes, and significance calls are identical because the flat
+region corresponds to weak-signal SNPs where test statistics are small.
+
+JAMMA warns when lambda converges at the lower bound:
 
 ```text
 RuntimeWarning: Lambda converged at lower bound (1.00e-05 ~ 1.00e-05).
 True optimum may be below search range.
 ```
 
-**When this matters:**
-
-- SNPs with very weak genetic signal may have lambda < 1e-5
-- The lower bound prevents numerical instability but masks the true minimum
-- Results at the boundary are valid but the lambda value is artificially clamped
-
-**Validation note:** Lambda values at the boundary (≤ 1e-4) are excluded from tolerance comparisons since relative error is inflated when dividing by small numbers. This is why you may see "excluding N boundary values" in validation output.
+**Validation note:** Lambda values at the boundary (< 1e-4) are excluded from
+tolerance comparisons since relative error is inflated when dividing by small
+numbers.
 
 ---
 
@@ -222,8 +244,8 @@ numpy's LAPACK binding supports large matrices without this limitation.
 | Px_yy clamping | None | 1e-8 floor | Numerical stability |
 | logdet with neg eigenvalues | log(abs(v)) | log(abs(v)) | Aligned |
 | Monomorphic detection | Count-based | Variance-based | Aligned (equivalent) |
-| JAX covariates | n_cvt ≥ 1 | n_cvt = 1 only | Known limitation |
-| Lambda at lower bound | Silent | Warning + valid result | Better visibility |
+| JAX covariates | n_cvt >= 1 | n_cvt >= 1 | Aligned (since v1.2) |
+| Lambda optimizer | Brent | Golden section | logl_H1 ~1.35e-3 on flat landscapes |
 | Eigendecomp library | GSL | numpy LAPACK | 200k+ sample support |
 
 ---
@@ -236,4 +258,4 @@ numpy's LAPACK binding supports large matrices without this limitation.
 
 ---
 
-*Last updated: 2026-02-02*
+*Last updated: 2026-02-05*

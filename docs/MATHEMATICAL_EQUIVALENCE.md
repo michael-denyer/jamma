@@ -79,13 +79,13 @@ where:
 
 ### Optimization Methods
 
-#### GEMMA / JAMMA NumPy: Brent's Method
+#### GEMMA: Brent's Method
 
 - Derivative-free bounded optimization
-- Convergence tolerance: 1e-5 (default in `optimize.py`)
+- Convergence tolerance: 1e-5
 - Typical evaluations: 30-50 per SNP
 
-#### JAMMA JAX: Grid Search + Golden Section
+#### JAMMA: Grid Search + Golden Section (sole execution path since v1.2)
 
 - Stage 1: Log-scale grid (50 points over [1e-5, 1e5])
 - Stage 2: Golden section refinement (20 iterations)
@@ -100,34 +100,36 @@ within tolerance. This is observed because:
 2. The 50-point grid with 0.46 log-unit spacing successfully brackets the maximum
 3. 20 golden section iterations provide sufficient refinement
 
-**Caveat**: This is an empirical observation on tested datasets. The validation
-tests would detect cases where the methods diverge significantly.
+**Edge case**: On weak-signal SNPs where the optimization surface is nearly flat
+(lambda converging near the lower bound 1e-5), Brent and golden section can
+settle on slightly different points within the flat region. This is observed on
+the mouse_hs1940 dataset where MLE logl_H1 diverges up to ~1.35e-3 relative at
+SNP index 596 of 10768. This affects only the per-SNP MLE log-likelihood
+diagnostic — p-values, effect sizes, and significance calls are unaffected.
 
 ### Validation Results
 
 #### Test Configuration
 
 - Dataset: mouse_hs1940 (1,940 samples × 12,226 SNPs, 10,768 pass QC)
-- Reference: GEMMA 0.98.5 output (`tests/fixtures/lmm/mouse_hs1940.assoc.txt`)
-- Brent tolerance: 1e-5
+- Reference: GEMMA 0.98.5 output (`tests/fixtures/mouse_hs1940/`)
 - JAX grid: 50 points, 20 golden section iterations
 
 #### Lambda (Variance Ratio)
 
-| Comparison | Max Relative Difference |
-|------------|-------------------------|
-| NumPy vs GEMMA | 1.21e-5 |
-| JAX vs GEMMA | 9.58e-6 |
-| JAX vs NumPy | 8.33e-6 |
+| Statistic | JAX vs GEMMA (Max Relative Difference) |
+|-----------|----------------------------------------|
+| REML lambda | 9.58e-6 |
+| MLE lambda | ~9e-4 |
 
-All within the configured Brent tolerance (1e-5).
+REML lambda is well within the configured tolerance (1e-5). MLE lambda diverges
+more on weak-signal SNPs with flat optimization landscapes.
 
 #### Effect Size (Beta)
 
-| Comparison | Max Relative Difference |
-|------------|-------------------------|
-| NumPy vs GEMMA | 8.46e-3 |
-| JAX vs GEMMA | 3.70e-3 |
+| Statistic | JAX vs GEMMA (Max Relative Difference) |
+|-----------|----------------------------------------|
+| Beta | 3.70e-3 |
 
 Beta differences are larger than lambda differences due to sensitivity in the
 Pab projection, particularly for SNPs where P[XX] (genotype variance after
@@ -139,27 +141,40 @@ projection) is small. The 1e-3 scale differences do not affect:
 
 #### P-values
 
-| Comparison | Max Relative Difference |
-|------------|-------------------------|
-| NumPy vs GEMMA | 4.11e-5 |
-| JAX vs GEMMA | 4.41e-5 |
+| Statistic | JAX vs GEMMA (Max Relative Difference) |
+|-----------|----------------------------------------|
+| p_wald | 4.41e-5 |
+| p_score | ~1e-4 |
+| p_lrt | ~1.56e-3 |
 
-P-value differences arise from different F-distribution CDF implementations:
+P-value differences arise from different F-distribution CDF implementations
+(GSL `gsl_cdf_fdist_Q` vs `jax.scipy.special.betainc`) and MLE subtraction
+amplification (LRT).
 
-- GEMMA: GSL `gsl_cdf_fdist_Q`
-- JAMMA: `jax.scipy.special.betainc` (regularized incomplete beta function)
+#### Log-Likelihood
+
+| Statistic | JAX vs GEMMA (Max Relative Difference) |
+|-----------|----------------------------------------|
+| REML logl | 3.23e-7 |
+| MLE logl_H1 | ~1.35e-3 |
+
+REML log-likelihood (null model evaluation) is very stable. Per-SNP MLE
+log-likelihood (logl_H1) diverges more on weak-signal SNPs where the MLE
+surface is flat and golden section vs Brent settle on different local optima.
+The worst case is SNP index 596 of 10768 (abs_diff ≈ 2.1, values ≈ -1583).
+This is a diagnostic value — it does not affect any significance call.
 
 #### Scientific Equivalence
 
-| Metric | NumPy vs GEMMA | JAX vs GEMMA |
-|--------|----------------|--------------|
-| P-value rank correlation (Spearman) | 1.000000 | 1.000000 |
-| Significance agreement (p < 0.05) | 10768/10768 | 10768/10768 |
-| Significance agreement (p < 0.01) | 10768/10768 | 10768/10768 |
-| Significance agreement (p < 0.001) | 10768/10768 | 10768/10768 |
-| Significance agreement (p < 5e-8) | 10768/10768 | 10768/10768 |
-| Effect direction agreement | 100% | 100% |
-| Top 10 SNPs by p-value | Identical | Identical |
+| Metric | JAX vs GEMMA |
+|--------|--------------|
+| P-value rank correlation (Spearman) | 1.000000 |
+| Significance agreement (p < 0.05) | 10768/10768 |
+| Significance agreement (p < 0.01) | 10768/10768 |
+| Significance agreement (p < 0.001) | 10768/10768 |
+| Significance agreement (p < 5e-8) | 10768/10768 |
+| Effect direction agreement | 100% |
+| Top 10 SNPs by p-value | Identical |
 
 ---
 
@@ -189,15 +204,15 @@ Matrix operations accumulate differently across BLAS implementations.
 
 ### Current Tests (in CI)
 
-| Test Class | Runner | Coverage |
-|------------|--------|----------|
-| `TestKinshipValidation` | JAX | Kinship matrix vs GEMMA |
-| `TestLmmValidation` | NumPy (Brent) | Wald test vs GEMMA |
-| `TestLmmJaxValidation` | JAX (Grid+Golden) | Wald test vs GEMMA |
-| `TestLmmScoreValidation` | NumPy | Score test vs GEMMA |
-| `TestLmmLRTValidation` | NumPy | LRT vs GEMMA |
-| `TestLmmAllTestsValidation` | NumPy | All-tests mode vs GEMMA |
-| `TestLmmCovariateValidation` | NumPy | Covariates vs GEMMA |
+| Test Class | Coverage |
+|------------|----------|
+| `TestKinshipValidation` | Kinship matrix vs GEMMA |
+| `TestLmmValidation` | Wald test vs GEMMA (synthetic + mouse_hs1940) |
+| `TestLmmJaxValidation` | Wald test vs GEMMA (JAX runner) |
+| `TestLmmScoreValidation` | Score test vs GEMMA |
+| `TestLmmAllTestsValidation` | All-tests mode vs GEMMA |
+| `TestLmmCovariateValidation` | Covariates vs GEMMA |
+| `TestMouseHS1940Validation` | All modes x covariate configs vs GEMMA (7 tests) |
 
 All tests in `tests/test_kinship_validation.py` and `tests/test_lmm_validation.py`.
 

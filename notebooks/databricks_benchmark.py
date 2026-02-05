@@ -26,8 +26,8 @@
 
 # COMMAND ----------
 
-# Purge OpenBLAS — segfaults on matrices >50k and conflicts with MKL
-# MAGIC %sh apt-get purge -y libopenblas* libblas* 2>/dev/null; echo "OpenBLAS purged"
+# Purge all non-MKL BLAS/LAPACK providers and system numpy
+# MAGIC %sh apt-get purge -y libopenblas* libblas* libatlas* liblapack* python3-numpy 2>/dev/null; echo "Non-MKL BLAS purged"
 
 # COMMAND ----------
 

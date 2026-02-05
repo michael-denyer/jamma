@@ -240,29 +240,37 @@ print(jax.devices())  # Should show GPU if available
 
 ### Memory errors on large datasets
 
-JAMMA's pre-flight checks should catch most OOM issues. If you still hit memory limits:
+JAMMA runs a pre-flight memory check before kinship and eigendecomposition. The
+check estimates peak memory (dominated by eigendecomposition: K + U + workspace)
+and applies a 50% safety margin to account for JAX temporary arrays.
 
-1. **Check the estimate first:**
+**Approximate sample limits by machine size:**
+
+| Machine RAM | ~Available | Max samples |
+|-------------|------------|-------------|
+| 512GB       | 490GB      | ~142k       |
+| 256GB       | 240GB      | ~100k       |
+| 128GB       | 120GB      | ~70k        |
+| 64GB        | 58GB       | ~49k        |
+| 32GB        | 28GB       | ~34k        |
+| 16GB        | 14GB       | ~24k        |
+
+These limits assume the streaming pipeline (CLI default). Actual limits depend on
+available memory at runtime — other processes reduce headroom.
+
+**If the pre-flight check rejects your run:**
+
+1. **Free memory** from other processes or previous runs
+2. **Use `--no-check-memory`** to bypass the check (at your own risk):
+
    ```bash
-   jamma lmm ... --mem-budget 999  # Will show actual requirement
+   jamma gk --no-check-memory -g data/study
+   jamma lmm --no-check-memory -g data/study -p pheno.txt -k kinship.txt
    ```
 
-2. **Use streaming for very large datasets:**
-   ```python
-   from jamma.lmm import run_lmm_association_streaming
+3. **Reduce chunk size** for lower per-batch memory:
 
-   results = run_lmm_association_streaming(
-       bed_path="data/large_study",
-       phenotypes=phenotypes,
-       kinship=kinship,
-       chunk_size=5000,  # Process 5000 SNPs at a time
-       output_path="results.assoc.txt",  # Write incrementally
-   )
-   ```
-
-3. **Reduce chunk size** if memory is tight:
    ```bash
-   # Smaller chunks use less memory but are slower
    jamma lmm ... --chunk-size 1000
    ```
 

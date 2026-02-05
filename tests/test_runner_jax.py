@@ -405,3 +405,236 @@ class TestJaxScoreMode:
             f"\nScore+covariates parity: {len(common_rs)} SNPs, "
             f"max p_score diff: {max_p_diff:.2e}"
         )
+
+
+class TestJaxLrtMode:
+    """Validation tests for JAX LRT mode (lmm_mode=2) against NumPy runner."""
+
+    @pytest.fixture
+    def synthetic_data(self):
+        """Generate synthetic GWAS data with population structure for LRT.
+
+        Creates 4 subpopulations with differentiated allele frequencies
+        so kinship captures real structure. Phenotype has a strong
+        polygenic component (h2 ~ 0.5) keeping null lambda in the
+        interior of [l_min, l_max]. Boundary lambda causes Brent vs
+        golden section to diverge on flat likelihood surfaces.
+        """
+        rng = np.random.default_rng(200)
+        n_per_pop = 75
+        n_pops = 4
+        n_samples = n_per_pop * n_pops
+        n_snps = 500
+
+        # Generate allele freqs differentiated by population (Fst ~ 0.05)
+        ancestral_freqs = rng.uniform(0.15, 0.45, n_snps)
+        genotypes = np.zeros((n_samples, n_snps), dtype=np.float64)
+        for pop in range(n_pops):
+            start = pop * n_per_pop
+            end = (pop + 1) * n_per_pop
+            drift = rng.normal(0, 0.05, n_snps)
+            pop_freqs = np.clip(ancestral_freqs + drift, 0.05, 0.95)
+            for j in range(n_snps):
+                p = pop_freqs[j]
+                genotypes[start:end, j] = rng.choice(
+                    [0, 1, 2],
+                    size=n_per_pop,
+                    p=[(1 - p) ** 2, 2 * p * (1 - p), p**2],
+                )
+
+        # Polygenic phenotype: many causal SNPs + kinship-correlated noise
+        K = compute_centered_kinship(genotypes)
+        L = np.linalg.cholesky(K + 1e-6 * np.eye(n_samples))
+
+        # Polygenic signal through kinship (h2 ~ 0.5)
+        genetic = L @ rng.standard_normal(n_samples)
+        genetic = genetic / genetic.std()
+
+        # Add fixed effects from a few causal SNPs
+        causal_idx = rng.choice(n_snps, 5, replace=False)
+        G_causal = genotypes[:, causal_idx]
+        G_std = (G_causal - G_causal.mean(0)) / (G_causal.std(0) + 1e-8)
+        fixed_effects = G_std @ rng.normal(0, 0.3, 5)
+
+        noise = rng.standard_normal(n_samples)
+        phenotype = genetic + fixed_effects + noise
+        phenotype = (phenotype - phenotype.mean()) / phenotype.std()
+
+        snp_info = [
+            {
+                "chr": "1",
+                "rs": f"rs{j}",
+                "pos": j * 1000,
+                "a1": "A",
+                "a0": "G",
+            }
+            for j in range(n_snps)
+        ]
+
+        return genotypes, phenotype, snp_info
+
+    def test_lrt_returns_correct_fields(self, synthetic_data):
+        """LRT mode sets p_lrt/l_mle, beta/se are NaN, p_wald is None."""
+        genotypes, phenotype, snp_info = synthetic_data
+        kinship = compute_centered_kinship(genotypes)
+
+        results = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            lmm_mode=2,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        assert len(results) > 0
+
+        for r in results:
+            # LRT-specific fields must be set
+            assert r.p_lrt is not None, f"p_lrt is None for {r.rs}"
+            assert r.l_mle is not None, f"l_mle is None for {r.rs}"
+
+            # beta/se are NaN in pure LRT mode (matching GEMMA -lmm 2)
+            assert np.isnan(r.beta), f"beta should be NaN in LRT mode for {r.rs}"
+            assert np.isnan(r.se), f"se should be NaN in LRT mode for {r.rs}"
+
+            # Wald-specific fields must NOT be set
+            assert r.p_wald is None, f"p_wald should be None in LRT mode for {r.rs}"
+            assert r.l_remle is None, f"l_remle should be None in LRT mode for {r.rs}"
+
+    def test_lrt_matches_numpy_runner(self, synthetic_data):
+        """JAX LRT p-values match NumPy LRT p-values within 2e-3."""
+        genotypes, phenotype, snp_info = synthetic_data
+        kinship = compute_centered_kinship(genotypes)
+
+        results_jax = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            lmm_mode=2,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        results_np = run_lmm_association(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            lmm_mode=2,
+        )
+
+        np_by_rs = {r.rs: r for r in results_np}
+        jax_by_rs = {r.rs: r for r in results_jax}
+        common_rs = sorted(set(np_by_rs) & set(jax_by_rs))
+
+        assert len(common_rs) > 0
+
+        max_p_diff = 0.0
+        median_diffs = []
+        outliers = []
+        for rs in common_rs:
+            j = jax_by_rs[rs]
+            n = np_by_rs[rs]
+
+            p_diff = abs(j.p_lrt - n.p_lrt)
+            max_p_diff = max(max_p_diff, p_diff)
+            median_diffs.append(p_diff)
+
+            if p_diff > 1e-3:
+                outliers.append((rs, p_diff, j.p_lrt, n.p_lrt))
+
+            assert p_diff < 2e-3, (
+                f"p_lrt diff {p_diff:.2e} > 2e-3 for {rs} "
+                f"(JAX={j.p_lrt:.10e}, NumPy={n.p_lrt:.10e})"
+            )
+
+        median_diff = float(np.median(median_diffs))
+        print(f"\nLRT parity: {len(common_rs)} SNPs compared")
+        print(f"  max |p_lrt diff|: {max_p_diff:.2e}")
+        print(f"  median |p_lrt diff|: {median_diff:.2e}")
+        if outliers:
+            print(f"  outliers > 1e-3: {len(outliers)}")
+            for rs, d, jv, nv in outliers[:5]:
+                print(f"    {rs}: diff={d:.2e} JAX={jv:.6e} NP={nv:.6e}")
+
+    def test_lrt_with_covariates(self, synthetic_data):
+        """LRT mode with n_cvt=2 covariates matches NumPy runner."""
+        genotypes, phenotype, snp_info = synthetic_data
+        kinship = compute_centered_kinship(genotypes)
+
+        rng = np.random.default_rng(201)
+        n_samples = genotypes.shape[0]
+        covariates = np.column_stack(
+            [
+                np.ones(n_samples),
+                rng.standard_normal(n_samples),
+            ]
+        )
+
+        results_jax = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            covariates=covariates,
+            lmm_mode=2,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        results_np = run_lmm_association(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            covariates=covariates,
+            lmm_mode=2,
+        )
+
+        assert len(results_jax) > 0, "JAX LRT with covariates returned no results"
+
+        np_by_rs = {r.rs: r for r in results_np}
+        jax_by_rs = {r.rs: r for r in results_jax}
+        common_rs = sorted(set(np_by_rs) & set(jax_by_rs))
+
+        assert len(common_rs) > 0
+
+        max_p_diff = 0.0
+        for rs in common_rs:
+            j = jax_by_rs[rs]
+            n = np_by_rs[rs]
+
+            p_diff = abs(j.p_lrt - n.p_lrt)
+            max_p_diff = max(max_p_diff, p_diff)
+            assert p_diff < 2e-3, (
+                f"p_lrt diff {p_diff:.2e} > 2e-3 for {rs} " f"with covariates"
+            )
+
+        print(
+            f"\nLRT+covariates parity: {len(common_rs)} SNPs, "
+            f"max p_lrt diff: {max_p_diff:.2e}"
+        )
+
+    def test_lrt_pvalues_bounded(self, synthetic_data):
+        """All LRT p-values in [0,1] and l_mle values positive."""
+        genotypes, phenotype, snp_info = synthetic_data
+        kinship = compute_centered_kinship(genotypes)
+
+        results = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            lmm_mode=2,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        assert len(results) > 0
+
+        for r in results:
+            assert 0 <= r.p_lrt <= 1, f"p_lrt={r.p_lrt} out of [0,1] for {r.rs}"
+            assert r.l_mle > 0, f"l_mle={r.l_mle} not positive for {r.rs}"

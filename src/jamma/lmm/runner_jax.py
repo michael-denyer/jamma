@@ -97,11 +97,15 @@ from jamma.core.memory import (
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.io import IncrementalAssocWriter
+from jamma.lmm.likelihood import compute_null_model_mle
 from jamma.lmm.likelihood_jax import (
+    batch_calc_score_stats,
     batch_calc_wald_stats,
     batch_compute_iab,
     batch_compute_uab,
+    calc_lrt_pvalue_jax,
     golden_section_optimize_lambda,
+    golden_section_optimize_lambda_mle,
 )
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
@@ -354,6 +358,7 @@ def run_lmm_association_jax(
     use_gpu: bool = False,
     check_memory: bool = True,
     show_progress: bool = True,
+    lmm_mode: int = 1,
 ) -> list[AssocResult]:
     """Run LMM association tests using JAX-optimized batch processing.
 
@@ -401,6 +406,10 @@ def run_lmm_association_jax(
         check_memory: If True (default), check available memory before workflow
             and raise MemoryError if insufficient.
         show_progress: If True (default), show progress bars and GEMMA-style logging.
+        lmm_mode: Test type (default 1).
+            - 1 (Wald): Per-SNP REML optimization, full statistics.
+            - 2 (LRT): Null MLE once, per-SNP MLE optimization, LRT p-values.
+            - 3 (Score): Null MLE once, no per-SNP optimization (fastest).
 
     Returns:
         List of AssocResult for each SNP that passes filtering
@@ -499,6 +508,23 @@ def run_lmm_association_jax(
     UtW = U.T @ W
     Uty = U.T @ phenotypes
 
+    # Pre-loop null model computation for Score and LRT
+    lambda_null_mle = None
+    logl_H0 = None
+    Hi_eval_null_jax = None
+    if lmm_mode in (2, 3):
+        lambda_null_mle, logl_H0 = compute_null_model_mle(
+            eigenvalues_np, UtW, Uty, n_cvt
+        )
+        if show_progress:
+            logger.info(
+                f"Null model MLE: lambda={lambda_null_mle:.6f}, logl_H0={logl_H0:.6f}"
+            )
+        if lmm_mode == 3:
+            # Score test: precompute Hi_eval at null lambda (constant for all SNPs)
+            Hi_eval_null = 1.0 / (lambda_null_mle * eigenvalues_np + 1.0)
+            Hi_eval_null_jax = jax.device_put(Hi_eval_null, device)
+
     # Determine chunk size to avoid int32 buffer overflow
     n_filtered = len(snp_indices)
     chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid, n_cvt)
@@ -524,11 +550,21 @@ def run_lmm_association_jax(
                 f"({chunk_size:,} SNPs/chunk) to avoid buffer overflow"
             )
 
-    all_lambdas = []
-    all_logls = []
-    all_betas = []
-    all_ses = []
-    all_pwalds = []
+    # Mode-aware accumulators
+    if lmm_mode == 1:  # Wald
+        all_lambdas = []
+        all_logls = []
+        all_betas = []
+        all_ses = []
+        all_pwalds = []
+    elif lmm_mode == 3:  # Score
+        all_betas = []
+        all_ses = []
+        all_p_scores = []
+    elif lmm_mode == 2:  # LRT
+        all_lambdas_mle = []
+        all_logls_mle = []
+        all_p_lrts = []
 
     def _prepare_chunk(start: int) -> tuple[jnp.ndarray, int, bool]:
         """Prepare a chunk for device transfer (CPU work)."""
@@ -579,22 +615,44 @@ def run_lmm_association_jax(
             del next_UtG_np
 
         try:
-            # Batch compute Uab for this chunk
+            # Batch compute Uab for this chunk (shared across all modes)
             Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
 
-            # Precompute Iab (identity-weighted) once per chunk - avoids ~70x redundant
-            # calc_pab_jax calls during lambda optimization
-            Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
+            if lmm_mode == 1:  # Wald (existing, unchanged)
+                Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
+                best_lambdas, best_logls = _grid_optimize_lambda_batched(
+                    n_cvt,
+                    eigenvalues,
+                    Uab_batch,
+                    Iab_batch,
+                    l_min,
+                    l_max,
+                    n_grid,
+                    n_refine,
+                )
+                betas, ses, p_walds = batch_calc_wald_stats(
+                    n_cvt, best_lambdas, eigenvalues, Uab_batch, n_samples
+                )
 
-            # Grid-based lambda optimization (donate_argnums recycles Uab_batch memory)
-            best_lambdas, best_logls = _grid_optimize_lambda_batched(
-                n_cvt, eigenvalues, Uab_batch, Iab_batch, l_min, l_max, n_grid, n_refine
-            )
+            elif lmm_mode == 3:  # Score
+                betas, ses, p_scores = batch_calc_score_stats(
+                    n_cvt, Hi_eval_null_jax, Uab_batch, n_samples
+                )
 
-            # Batch compute Wald statistics
-            betas, ses, p_walds = batch_calc_wald_stats(
-                n_cvt, best_lambdas, eigenvalues, Uab_batch, n_samples
-            )
+            elif lmm_mode == 2:  # LRT
+                best_lambdas_mle, best_logls_mle = golden_section_optimize_lambda_mle(
+                    n_cvt,
+                    eigenvalues,
+                    Uab_batch,
+                    l_min=l_min,
+                    l_max=l_max,
+                    n_grid=n_grid,
+                    n_iter=max(n_refine, 20),
+                )
+                p_lrts = jax.vmap(calc_lrt_pvalue_jax)(
+                    best_logls_mle, jnp.full_like(best_logls_mle, logl_H0)
+                )
+
         except Exception as e:
             error_msg = str(e)
             # Check for int32 overflow error
@@ -618,30 +676,56 @@ def run_lmm_association_jax(
             raise
 
         # Strip padding if needed, keep as JAX arrays to avoid per-chunk host transfer
-        slice_len = actual_chunk_len if needs_padding else len(best_lambdas)
-        all_lambdas.append(best_lambdas[:slice_len])
-        all_logls.append(best_logls[:slice_len])
-        all_betas.append(betas[:slice_len])
-        all_ses.append(ses[:slice_len])
-        all_pwalds.append(p_walds[:slice_len])
+        if lmm_mode == 1:
+            slice_len = actual_chunk_len if needs_padding else len(best_lambdas)
+            all_lambdas.append(best_lambdas[:slice_len])
+            all_logls.append(best_logls[:slice_len])
+            all_betas.append(betas[:slice_len])
+            all_ses.append(ses[:slice_len])
+            all_pwalds.append(p_walds[:slice_len])
+        elif lmm_mode == 3:
+            slice_len = actual_chunk_len if needs_padding else len(betas)
+            all_betas.append(betas[:slice_len])
+            all_ses.append(ses[:slice_len])
+            all_p_scores.append(p_scores[:slice_len])
+        elif lmm_mode == 2:
+            slice_len = actual_chunk_len if needs_padding else len(best_lambdas_mle)
+            all_lambdas_mle.append(best_lambdas_mle[:slice_len])
+            all_logls_mle.append(best_logls_mle[:slice_len])
+            all_p_lrts.append(p_lrts[:slice_len])
 
     # Log memory after all chunks processed
     if show_progress:
         log_rss_memory("lmm_jax", "after_all_chunks")
 
-    # Concatenate on device, then single host transfer
-    best_lambdas_np = np.asarray(jnp.concatenate(all_lambdas))
-    best_logls_np = np.asarray(jnp.concatenate(all_logls))
-    betas_np = np.asarray(jnp.concatenate(all_betas))
-    ses_np = np.asarray(jnp.concatenate(all_ses))
-    p_walds_np = np.asarray(jnp.concatenate(all_pwalds))
+    # Concatenate on device, then single host transfer (mode-aware)
+    if lmm_mode == 1:
+        best_lambdas_np = np.asarray(jnp.concatenate(all_lambdas))
+        best_logls_np = np.asarray(jnp.concatenate(all_logls))
+        betas_np = np.asarray(jnp.concatenate(all_betas))
+        ses_np = np.asarray(jnp.concatenate(all_ses))
+        p_walds_np = np.asarray(jnp.concatenate(all_pwalds))
+        del all_lambdas, all_logls, all_betas, all_ses, all_pwalds
+    elif lmm_mode == 3:
+        betas_np = np.asarray(jnp.concatenate(all_betas))
+        ses_np = np.asarray(jnp.concatenate(all_ses))
+        p_scores_np = np.asarray(jnp.concatenate(all_p_scores))
+        del all_betas, all_ses, all_p_scores
+    elif lmm_mode == 2:
+        lambdas_mle_np = np.asarray(jnp.concatenate(all_lambdas_mle))
+        p_lrts_np = np.asarray(jnp.concatenate(all_p_lrts))
+        del all_lambdas_mle, all_logls_mle, all_p_lrts
 
     # Explicit cleanup of JAX arrays before returning to prevent SIGSEGV
     # from race conditions between Python GC and JAX background threads
-    del all_lambdas, all_logls, all_betas, all_ses, all_pwalds
     del eigenvalues, UtW_jax, Uty_jax
     # Force synchronization - ensures all JAX operations complete before returning
-    jax.block_until_ready(betas_np)
+    if lmm_mode == 1:
+        jax.block_until_ready(betas_np)
+    elif lmm_mode == 3:
+        jax.block_until_ready(p_scores_np)
+    elif lmm_mode == 2:
+        jax.block_until_ready(p_lrts_np)
 
     # Log completion
     elapsed = time.perf_counter() - start_time
@@ -649,16 +733,36 @@ def run_lmm_association_jax(
         logger.info("## LMM Association completed")
         logger.info(f"time elapsed = {elapsed:.2f} seconds")
 
-    return _build_results(
-        snp_indices,
-        snp_stats,
-        snp_info,
-        best_lambdas_np,
-        best_logls_np,
-        betas_np,
-        ses_np,
-        p_walds_np,
-    )
+    if lmm_mode == 1:
+        return _build_results(
+            snp_indices,
+            snp_stats,
+            snp_info,
+            best_lambdas_np,
+            best_logls_np,
+            betas_np,
+            ses_np,
+            p_walds_np,
+        )
+    elif lmm_mode == 3:
+        return _build_results_score(
+            snp_indices,
+            snp_stats,
+            snp_info,
+            betas_np,
+            ses_np,
+            p_scores_np,
+        )
+    elif lmm_mode == 2:
+        return _build_results_lrt(
+            snp_indices,
+            snp_stats,
+            snp_info,
+            lambdas_mle_np,
+            p_lrts_np,
+        )
+    else:
+        raise ValueError(f"Unsupported lmm_mode: {lmm_mode}. Use 1, 2, or 3.")
 
 
 def _build_results(
@@ -705,6 +809,95 @@ def _build_results(
             logl_H1=float(best_logls_np[j]),
             l_remle=float(best_lambdas_np[j]),
             p_wald=float(p_walds_np[j]),
+        )
+        results.append(result)
+
+    return results
+
+
+def _build_results_score(
+    snp_indices: np.ndarray,
+    snp_stats: list[tuple[float, int]],
+    snp_info: list,
+    betas_np: np.ndarray,
+    ses_np: np.ndarray,
+    p_scores_np: np.ndarray,
+) -> list[AssocResult]:
+    """Build AssocResult objects for Score test mode.
+
+    Score test does not compute per-SNP logl_H1 or l_remle.
+
+    Args:
+        snp_indices: Indices of SNPs that passed filtering.
+        snp_stats: List of (af, n_miss) tuples for each filtered SNP.
+        snp_info: Full SNP metadata list.
+        betas_np: Effect sizes (informational only).
+        ses_np: Standard errors (informational only).
+        p_scores_np: Score test p-values.
+
+    Returns:
+        List of AssocResult objects with p_score set.
+    """
+    results = []
+    for j, snp_idx in enumerate(snp_indices):
+        af, n_miss = snp_stats[j]
+        info = snp_info[snp_idx]
+
+        result = AssocResult(
+            chr=info["chr"],
+            rs=info["rs"],
+            ps=info.get("pos", info.get("ps", 0)),
+            n_miss=n_miss,
+            allele1=info.get("a1", info.get("allele1", "")),
+            allele0=info.get("a0", info.get("allele0", "")),
+            af=af,
+            beta=float(betas_np[j]),
+            se=float(ses_np[j]),
+            p_score=float(p_scores_np[j]),
+        )
+        results.append(result)
+
+    return results
+
+
+def _build_results_lrt(
+    snp_indices: np.ndarray,
+    snp_stats: list[tuple[float, int]],
+    snp_info: list,
+    lambdas_mle_np: np.ndarray,
+    p_lrts_np: np.ndarray,
+) -> list[AssocResult]:
+    """Build AssocResult objects for LRT mode.
+
+    LRT does not compute beta/se (matching GEMMA -lmm 2 output format).
+
+    Args:
+        snp_indices: Indices of SNPs that passed filtering.
+        snp_stats: List of (af, n_miss) tuples for each filtered SNP.
+        snp_info: Full SNP metadata list.
+        lambdas_mle_np: MLE lambda values per SNP.
+        p_lrts_np: LRT p-values.
+
+    Returns:
+        List of AssocResult objects with l_mle and p_lrt set.
+    """
+    results = []
+    for j, snp_idx in enumerate(snp_indices):
+        af, n_miss = snp_stats[j]
+        info = snp_info[snp_idx]
+
+        result = AssocResult(
+            chr=info["chr"],
+            rs=info["rs"],
+            ps=info.get("pos", info.get("ps", 0)),
+            n_miss=n_miss,
+            allele1=info.get("a1", info.get("allele1", "")),
+            allele0=info.get("a0", info.get("allele0", "")),
+            af=af,
+            beta=float("nan"),
+            se=float("nan"),
+            l_mle=float(lambdas_mle_np[j]),
+            p_lrt=float(p_lrts_np[j]),
         )
         results.append(result)
 

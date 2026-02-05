@@ -26,8 +26,8 @@
 
 # COMMAND ----------
 
-# MAGIC %sh # Purge non-MKL BLAS providers
-# MAGIC apt-get purge -y libopenblas* libblas* libatlas* liblapack* python3-numpy 2>/dev/null; echo "Non-MKL BLAS purged"
+# MAGIC %sh # Purge non-MKL BLAS providers (ignore missing packages)
+# MAGIC apt-get purge -y libopenblas* libblas* libatlas* liblapack* 2>/dev/null || true; echo "Non-MKL BLAS purged"
 
 # COMMAND ----------
 

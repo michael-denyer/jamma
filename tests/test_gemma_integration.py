@@ -24,7 +24,7 @@ from scipy.stats import spearmanr
 
 from jamma.io import load_plink_binary
 from jamma.kinship import compute_centered_kinship
-from jamma.lmm import run_lmm_association
+from jamma.lmm.runner_jax import run_lmm_association_jax
 from jamma.validation import load_gemma_kinship
 
 # Fixture paths
@@ -124,13 +124,15 @@ class TestGemmaLmmValidation:
             for i in range(n_snps)
         ]
 
-        results = run_lmm_association(
+        results = run_lmm_association_jax(
             genotypes,
             phenotypes,
             gemma_kinship,
             snp_info,
             maf_threshold=0.0,
             miss_threshold=1.0,
+            show_progress=False,
+            check_memory=False,
         )
 
         return pd.DataFrame(

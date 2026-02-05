@@ -17,7 +17,6 @@ import pytest
 from jamma.core import configure_jax
 from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
-from jamma.lmm import run_lmm_association
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood import (
     compute_null_model_lambda,
@@ -28,6 +27,7 @@ from jamma.lmm.likelihood import (
     reml_log_likelihood,
     reml_log_likelihood_null,
 )
+from jamma.lmm.runner_jax import run_lmm_association_jax
 
 # GEMMA reference values from gemma_lrt.log.txt
 GEMMA_REML_NULL_LOGL = -140.636
@@ -276,12 +276,14 @@ class TestWaldTestUnchanged:
         ]
 
         # Run Wald test (lmm_mode=1)
-        results = run_lmm_association(
+        results = run_lmm_association_jax(
             data["genotypes"],
             data["phenotypes"],
             data["kinship"],
             snp_info,
             lmm_mode=1,
+            show_progress=False,
+            check_memory=False,
         )
 
         assert len(results) > 0, "Should produce results"
@@ -295,9 +297,15 @@ class TestWaldTestUnchanged:
         """Wald test results should match GEMMA reference.
 
         This is a regression test to ensure we didn't accidentally change
-        the alternative model functions.
+        the alternative model functions. Uses relaxed tolerances because
+        the JAX runner uses golden section optimization (vs GEMMA's Brent)
+        which produces slightly different lambda values.
         """
-        from jamma.validation import compare_assoc_results, load_gemma_assoc
+        from jamma.validation import (
+            ToleranceConfig,
+            compare_assoc_results,
+            load_gemma_assoc,
+        )
 
         ref_path = FIXTURE_DIR / "gemma_assoc.assoc.txt"
         if not ref_path.exists():
@@ -317,20 +325,27 @@ class TestWaldTestUnchanged:
             for i in range(data["plink"].n_snps)
         ]
 
-        jamma_results = run_lmm_association(
+        jamma_results = run_lmm_association_jax(
             data["genotypes"],
             data["phenotypes"],
             data["kinship"],
             snp_info,
             lmm_mode=1,
+            show_progress=False,
+            check_memory=False,
         )
 
-        comparison = compare_assoc_results(jamma_results, reference_results)
+        # Relaxed tolerances: golden section vs Brent lambda difference
+        config = ToleranceConfig.relaxed()
+        comparison = compare_assoc_results(
+            jamma_results, reference_results, config=config
+        )
         assert comparison.passed, (
             f"Wald test regression:\n"
             f"  Beta: {comparison.beta.message}\n"
             f"  SE: {comparison.se.message}\n"
-            f"  P-value: {comparison.p_wald.message}"
+            f"  P-value: {comparison.p_wald.message}\n"
+            f"  Lambda: {comparison.l_remle.message}"
         )
 
 

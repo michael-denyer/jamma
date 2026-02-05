@@ -13,7 +13,6 @@ import numpy as np
 import pytest
 
 from jamma.core import configure_jax
-from jamma.lmm import run_lmm_association
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood import (
     compute_null_model_lambda,
@@ -22,6 +21,7 @@ from jamma.lmm.likelihood import (
     mle_log_likelihood,
     reml_log_likelihood,
 )
+from jamma.lmm.runner_jax import run_lmm_association_jax
 from jamma.lmm.stats import calc_lrt_test
 
 
@@ -191,7 +191,7 @@ class TestCalcLRTTest:
 
 
 class TestLRTIntegration:
-    """Integration tests for LRT via run_lmm_association."""
+    """Integration tests for LRT via run_lmm_association_jax."""
 
     def test_lrt_mode_produces_results(self):
         """LRT mode should produce valid results."""
@@ -206,7 +206,9 @@ class TestLRTIntegration:
             for i in range(p)
         ]
 
-        results = run_lmm_association(G, y, K, snp_info, lmm_mode=2)
+        results = run_lmm_association_jax(
+            G, y, K, snp_info, lmm_mode=2, show_progress=False, check_memory=False
+        )
 
         assert len(results) > 0, "Should produce results"
         for r in results:
@@ -227,8 +229,12 @@ class TestLRTIntegration:
             for i in range(p)
         ]
 
-        results_wald = run_lmm_association(G, y, K, snp_info, lmm_mode=1)
-        results_lrt = run_lmm_association(G, y, K, snp_info, lmm_mode=2)
+        results_wald = run_lmm_association_jax(
+            G, y, K, snp_info, lmm_mode=1, show_progress=False, check_memory=False
+        )
+        results_lrt = run_lmm_association_jax(
+            G, y, K, snp_info, lmm_mode=2, show_progress=False, check_memory=False
+        )
 
         p_wald = np.array([r.p_wald for r in results_wald])
         p_lrt = np.array([r.p_lrt for r in results_lrt])
@@ -289,8 +295,14 @@ class TestGEMMALRTValidation:
         ]
 
         # Run JAMMA LRT
-        jamma_results = run_lmm_association(
-            plink.genotypes, phenotypes, K, snp_info, lmm_mode=2
+        jamma_results = run_lmm_association_jax(
+            plink.genotypes,
+            phenotypes,
+            K,
+            snp_info,
+            lmm_mode=2,
+            show_progress=False,
+            check_memory=False,
         )
 
         # Load GEMMA reference (need custom loader for LRT format)

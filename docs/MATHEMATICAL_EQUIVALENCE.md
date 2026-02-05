@@ -13,6 +13,8 @@ JAMMA reimplements GEMMA's core algorithms in Python using JAX for acceleration:
 | Kinship matrix | C++/GSL | JAX | < 1e-8 relative |
 | Lambda (REML) | Brent (GSL) | Grid + golden section | < 1e-5 relative |
 | Wald statistics | GSL | JAX/NumPy | < 1e-5 relative |
+| Score test | GSL | JAX/NumPy | < 1e-5 relative |
+| LRT | GSL chi2 CDF | JAX chi2 CDF | < 1e-5 relative |
 | F-test p-values | gsl_cdf_fdist_Q | jax.scipy.special.betainc | < 5e-5 relative |
 
 **Key result**: Despite numerical differences, JAMMA produces identical
@@ -187,14 +189,17 @@ Matrix operations accumulate differently across BLAS implementations.
 
 ### Current Tests (in CI)
 
-| Test | Runner | Reference |
-|------|--------|-----------|
-| `test_lmm_validation.py` | NumPy (Brent) | GEMMA output |
-| `test_kinship_validation.py` | JAX | GEMMA output |
+| Test Class | Runner | Coverage |
+|------------|--------|----------|
+| `TestKinshipValidation` | JAX | Kinship matrix vs GEMMA |
+| `TestLmmValidation` | NumPy (Brent) | Wald test vs GEMMA |
+| `TestLmmJaxValidation` | JAX (Grid+Golden) | Wald test vs GEMMA |
+| `TestLmmScoreValidation` | NumPy | Score test vs GEMMA |
+| `TestLmmLRTValidation` | NumPy | LRT vs GEMMA |
+| `TestLmmAllTestsValidation` | NumPy | All-tests mode vs GEMMA |
+| `TestLmmCovariateValidation` | NumPy | Covariates vs GEMMA |
 
-### Manual Validation
-
-JAX runner validation script: `scratchpad/test_jax_accuracy.py`
+All tests in `tests/test_kinship_validation.py` and `tests/test_lmm_validation.py`.
 
 ---
 
@@ -225,11 +230,8 @@ These differences do not affect scientific conclusions from GWAS analysis.
 # Kinship validation
 uv run pytest tests/test_kinship_validation.py -v
 
-# LMM validation (NumPy runner)
+# LMM validation (all test types: Wald, LRT, Score, All-tests, Covariates)
 uv run pytest tests/test_lmm_validation.py -v
-
-# JAX accuracy comparison (manual)
-uv run python scratchpad/test_jax_accuracy.py
 ```
 
 Reference data: `tests/fixtures/`

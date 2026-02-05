@@ -184,19 +184,19 @@ The goal is a **drop-in replacement**: same CLI, same output format, same scient
 # RSS logging at workflow boundaries
 from jamma.utils.logging import log_rss_memory
 
-log_rss_memory("before kinship")  # Logs current RSS in GB
+log_rss_memory("kinship", "before")  # Logs current RSS in GB
 kinship = compute_kinship(genotypes)
-log_rss_memory("after kinship")
+log_rss_memory("kinship", "after")
 ```
 
 ### Memory Estimation API
 
 ```python
-from jamma.core.memory import estimate_workflow_memory, estimate_lmm_memory
+from jamma.core.memory import estimate_workflow_memory
 
 # Before starting a big job
 estimate = estimate_workflow_memory(n_samples=200_000, n_snps=95_000)
-print(f"Peak: {estimate.peak_gb:.1f} GB")
+print(f"Peak: {estimate.total_gb:.1f} GB")
 print(f"Available: {estimate.available_gb:.1f} GB")
 print(f"Will fit: {estimate.sufficient}")
 ```
@@ -283,16 +283,18 @@ line-length = 88
 Every long-running operation can be monitored:
 
 ```python
-# Progress logging
-results = run_lmm_association(
-    genotypes, phenotypes, kinship, snp_info,
-    show_progress=True,  # RSS logging at boundaries
+# Progress logging (streaming runners)
+results = run_lmm_association_streaming(
+    bed_path, phenotypes, kinship,
+    show_progress=True,  # Progress bar + RSS logging
 )
 
 # Memory estimation before commitment
-estimate = estimate_lmm_memory(n_samples, n_snps, chunk_size)
+from jamma.core.memory import estimate_lmm_memory
+
+estimate = estimate_lmm_memory(n_samples, n_snps)
 if not estimate.sufficient:
-    raise MemoryError(estimate.error_message)
+    raise MemoryError(f"Need {estimate.total_peak_gb:.1f}GB")
 ```
 
 ---
@@ -302,9 +304,8 @@ if not estimate.sufficient:
 JAMMA is not always the right choice:
 
 1. **Multivariate LMM (mvLMM)**: GEMMA-only for now (planned for JAMMA v2)
-2. **Score/LRT tests**: GEMMA-only for now (planned for JAMMA v1.1)
-3. **Extreme validation requirements**: When you need bit-exact GEMMA output
-4. **Air-gapped systems**: Where pip install isn't an option
+2. **Extreme validation requirements**: When you need bit-exact GEMMA output
+3. **Air-gapped systems**: Where pip install isn't an option
 
 ---
 

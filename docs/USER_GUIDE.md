@@ -85,7 +85,7 @@ jamma -o assoc -outdir output lmm \
 
 - `-bfile PATH` — PLINK binary file prefix (required)
 - `-k PATH` — Kinship matrix file (required)
-- `-lmm MODE` — Test type: 1 = Wald test (default)
+- `-lmm MODE` — Test type: 1 = Wald (default), 2 = LRT, 3 = Score, 4 = All
 - `-c PATH` — Covariate file (GEMMA format: whitespace-delimited, first column should be intercept)
 - `-maf FLOAT` — MAF threshold (default: 0.01)
 - `-miss FLOAT` — Missing rate threshold (default: 0.05)
@@ -195,7 +195,7 @@ jamma lmm -bfile data/large_study -k kinship.cXX.txt --mem-budget 64
 
 If the estimate exceeds available memory, you'll get a clear error:
 
-```
+```text
 MemoryError: LMM requires ~128.5GB but only 64.0GB available
   Breakdown: kinship=74.5GB, eigendecomp=37.0GB, association=17.0GB
 ```
@@ -213,18 +213,18 @@ jamma lmm ... --no-check-memory
 ### Programmatic Memory Estimation
 
 ```python
-from jamma.lmm.memory import estimate_lmm_memory
+from jamma.core.memory import estimate_lmm_memory
 
 estimate = estimate_lmm_memory(
     n_samples=200_000,
     n_snps=95_000,
-    n_covariates=5,
     has_kinship=True,  # Using pre-computed kinship
 )
 
-print(f"Peak memory: {estimate.peak_gb:.1f}GB")
-print(f"Eigendecomp: {estimate.eigendecomp_gb:.1f}GB")
-print(f"Association: {estimate.association_gb:.1f}GB")
+print(f"Peak memory: {estimate.total_peak_gb:.1f}GB")
+print(f"Eigendecomp workspace: {estimate.eigendecomp_workspace_gb:.1f}GB")
+print(f"Available: {estimate.available_gb:.1f}GB")
+print(f"Sufficient: {estimate.sufficient}")
 ```
 
 ## Troubleshooting

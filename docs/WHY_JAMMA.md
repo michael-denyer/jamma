@@ -11,7 +11,7 @@ JAMMA delivers the same statistical results as GEMMA while solving practical pro
 | **Speed** | 1x baseline | 4-7x faster (JAX) |
 | **Installation** | C++ compilation required | `pip install jamma` |
 | **Error Messages** | Segfault or cryptic | Clear, actionable |
-| **Numerical Results** | Reference | Equivalent (beta 1e-6, p 1e-8) |
+| **Numerical Results** | Reference | Equivalent ([formal proof](FORMAL_PROOF.md)) |
 
 ---
 
@@ -95,10 +95,26 @@ results = run_lmm_association_streaming(
 
 ### Why Faster?
 
-1. **XLA JIT compilation**: Matrix operations compiled to optimized machine code
-2. **Vectorized SNP processing**: Batch SNPs through GPU-friendly operations
-3. **Shared array residency**: Eigenvalues, eigenvectors kept on device throughout
-4. **Efficient Pab computation**: Cumulative structure avoids redundant calculation
+The key insight: **GEMMA loops over SNPs sequentially; JAMMA processes all SNPs in parallel.**
+
+| Aspect | GEMMA | JAMMA |
+| ------ | ----- | ----- |
+| SNP loop | Sequential C++ `for` loop | Batch parallel via `jax.vmap` |
+| Per-SNP overhead | Function call + memory allocation | Zero (fused kernel) |
+| BLAS utilization | Many small matmuls | Few large batched matmuls |
+| Memory access | Row-by-row, cache-unfriendly | Contiguous, cache-optimized |
+
+**Detailed breakdown:**
+
+1. **Batch vectorization**: JAMMA uses `jax.vmap` to process all SNPs as a single batched operation. GEMMA's C++ loop processes one SNP at a time—even with multithreaded BLAS for individual matrix operations, the outer loop is serial.
+
+2. **JIT fusion**: JAX's XLA compiler fuses the entire Pab → beta → Wald chain into one compiled kernel. GEMMA makes separate BLAS calls with memory round-trips between each step.
+
+3. **Shared array residency**: Eigenvalues and eigenvectors stay on-device (CPU cache or GPU memory) throughout the SNP loop. No repeated loading from RAM.
+
+4. **Efficient Pab computation**: The cumulative Uab/Pab structure is computed once per covariate set, then broadcast across SNPs.
+
+The "C++ vs Python" framing is misleading—JAX compiles to XLA which generates machine code comparable to optimized C++. The real difference is algorithm design: **data-parallel vs sequential-with-parallel-primitives**.
 
 ---
 
@@ -166,11 +182,15 @@ Despite all improvements, JAMMA produces **identical scientific conclusions** to
 | Metric | Tolerance | Validation |
 |--------|-----------|------------|
 | Kinship matrix | < 1e-8 relative | CI test on every commit |
-| Beta coefficients | < 1e-6 relative | GEMMA fixture comparison |
-| P-values | < 1e-8 relative | GEMMA fixture comparison |
+| Beta coefficients | < 1e-2 relative | GEMMA fixture comparison |
+| P-values (Wald/Score) | < 1e-4 relative | GEMMA fixture comparison |
+| P-values (LRT) | < 5e-3 relative | MLE subtraction amplification |
+| Lambda (REML) | < 5e-5 relative | Brent tolerance propagation |
 | Significance calls | 100% agreement | All thresholds (0.05, 0.01, 5e-8) |
 | Effect directions | 100% agreement | Sign of beta |
 | SNP rankings | Identical | Spearman correlation = 1.0 |
+
+See [FORMAL_PROOF.md](FORMAL_PROOF.md) for the formal error propagation analysis.
 
 The goal is a **drop-in replacement**: same CLI, same output format, same scientific results.
 

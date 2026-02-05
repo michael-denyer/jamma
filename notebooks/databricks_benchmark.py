@@ -26,6 +26,17 @@
 
 # COMMAND ----------
 
+# Purge OpenBLAS — segfaults on matrices >50k and conflicts with MKL
+# MAGIC %sh apt-get purge -y libopenblas* libblas* 2>/dev/null; echo "OpenBLAS purged"
+
+# COMMAND ----------
+
+# Install MKL runtime — provides libmkl_def.so.2 and other computational kernels
+# that auditwheel can't bundle (loaded via dlopen, not ELF NEEDED)
+# MAGIC %pip install mkl
+
+# COMMAND ----------
+
 # Install numpy with MKL ILP64 from forked wheel repository
 # ILP64 uses 64-bit integers, supporting matrices >46k x 46k
 # MAGIC %pip install numpy --extra-index-url https://michael-denyer.github.io/numpy-mkl --force-reinstall --upgrade
@@ -212,9 +223,6 @@ logger.info(f"RAM: {mem.total / 1e9:.1f} GB total, {mem.available / 1e9:.1f} GB 
 logger.info(
     f"BLAS: {'MKL ILP64' if (detected_mkl and ilp64_ok) else 'OpenBLAS (limited)'}"
 )
-
-# GEMMA binary path - default is the Databricks micromamba environment
-GEMMA_PATH = os.environ.get("GEMMA_PATH", "/opt/micromamba/envs/disco/bin/gemma")
 
 # COMMAND ----------
 
@@ -439,329 +447,9 @@ def generate_synthetic_data(config: BenchmarkConfig, profiler: BenchmarkProfiler
 
 # COMMAND ----------
 
-import shutil
-import subprocess
-import tempfile
-
 from jamma.kinship import compute_centered_kinship  # noqa: E402
 from jamma.lmm.eigen import eigendecompose_kinship  # noqa: E402
 from jamma.lmm.runner_jax import run_lmm_association_jax  # noqa: E402
-
-
-def _write_bed_file(path: str, genotypes: np.ndarray) -> None:
-    """Write genotypes to PLINK .bed format.
-
-    Args:
-        path: Output path for .bed file.
-        genotypes: Genotype matrix (n_samples, n_snps) with values 0, 1, 2 or NaN.
-                   Values represent counts of A1 (BIM col5) allele.
-    """
-    n_samples, n_snps = genotypes.shape
-
-    # BED file magic bytes: PLINK 1.9 format, SNP-major
-    magic = bytes([0x6C, 0x1B, 0x01])
-
-    # Pack genotypes: 4 samples per byte
-    # PLINK encoding (genotype = count of A1 allele):
-    #   00 = hom A1 (genotype 2)
-    #   01 = missing
-    #   10 = het (genotype 1)
-    #   11 = hom A2 (genotype 0)
-    geno_t = genotypes.T  # SNP-major
-    bytes_per_snp = (n_samples + 3) // 4
-    data = bytearray(len(magic) + n_snps * bytes_per_snp)
-    data[:3] = magic
-
-    for j in range(n_snps):
-        for i in range(n_samples):
-            byte_idx = 3 + j * bytes_per_snp + i // 4
-            bit_idx = (i % 4) * 2
-            g = geno_t[j, i]
-            if np.isnan(g):
-                code = 0b01  # Missing
-            elif g == 0:
-                code = 0b11  # Hom A2 (0 copies of A1)
-            elif g == 1:
-                code = 0b10  # Het
-            else:
-                code = 0b00  # Hom A1 (2 copies of A1)
-            data[byte_idx] |= code << bit_idx
-
-    with open(path, "wb") as f:
-        f.write(data)
-
-
-def _write_plink_files(
-    prefix: str, genotypes: np.ndarray, phenotype: np.ndarray
-) -> None:
-    """Write genotypes and phenotypes to PLINK binary format.
-
-    Creates .fam, .bim, and .bed files at the given prefix.
-    """
-    n_samples, n_snps = genotypes.shape
-
-    # Write .fam file
-    with open(f"{prefix}.fam", "w") as f:
-        for i in range(n_samples):
-            f.write(f"FAM{i} IND{i} 0 0 0 {phenotype[i]:.6f}\n")
-
-    # Write .bim file
-    # Genotype values count copies of A1 (BIM col5, minor allele)
-    # A1 (col5) = G = minor allele, A2 (col6) = A = major allele
-    with open(f"{prefix}.bim", "w") as f:
-        for j in range(n_snps):
-            f.write(f"1 rs{j} 0 {j * 1000} G A\n")
-
-    # Write .bed file
-    _write_bed_file(f"{prefix}.bed", genotypes)
-
-
-@dataclass
-class GemmaResult:
-    """GEMMA benchmark result with timing and output for validation."""
-
-    kinship_time: float | None = None
-    lmm_time: float | None = None
-    assoc_df: pd.DataFrame | None = None  # GEMMA association results
-
-
-def benchmark_gemma(
-    genotypes: np.ndarray,
-    phenotype: np.ndarray,
-    profiler: BenchmarkProfiler,
-    n_snps_lmm: int,
-    gemma_path: str | None = None,
-) -> GemmaResult:
-    """Benchmark GEMMA for direct comparison.
-
-    Returns:
-        GemmaResult with timing and association results for validation.
-    """
-    result = GemmaResult()
-
-    # Find GEMMA binary
-    gemma_bin = gemma_path or GEMMA_PATH or shutil.which("gemma")
-    if not gemma_bin or not Path(gemma_bin).exists():
-        logger.warning("GEMMA not found - skipping GEMMA benchmark")
-        return result
-
-    n_samples, n_snps = genotypes.shape
-
-    # Only benchmark smaller configs (GEMMA is slow at scale)
-    if n_samples > 20_000:
-        logger.info(f"Skipping GEMMA benchmark for {n_samples:,} samples (too large)")
-        return result
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmpdir = Path(tmpdir)
-        prefix = tmpdir / "bench"
-        output_dir = tmpdir / "output"
-        output_dir.mkdir()
-
-        # Write PLINK files (only n_snps_lmm SNPs for fair comparison)
-        _write_plink_files(str(prefix), genotypes[:, :n_snps_lmm], phenotype)
-
-        # Benchmark GEMMA kinship - stream output in real-time (like lab_disco)
-        profiler.start("gemma", "kinship", n_samples=n_samples, n_snps=n_snps_lmm)
-        try:
-            proc = subprocess.Popen(
-                [gemma_bin, "-bfile", str(prefix), "-gk", "1", "-o", "kinship"],
-                cwd=str(output_dir),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True,
-            )
-            while True:
-                output = proc.stdout.readline()
-                if output == "" and proc.poll() is not None:
-                    break
-                if output:
-                    print(output.strip())
-            if proc.returncode != 0:
-                raise subprocess.CalledProcessError(proc.returncode, "gemma -gk")
-            result.kinship_time = profiler.end("gemma", "kinship")
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
-            profiler.error("gemma", "kinship", e)
-            return result
-
-        # Benchmark GEMMA LMM - stream output in real-time (like lab_disco)
-        kinship_file = output_dir / "output" / "kinship.cXX.txt"
-        profiler.start("gemma", "lmm", n_samples=n_samples, n_snps=n_snps_lmm)
-        try:
-            proc = subprocess.Popen(
-                [
-                    gemma_bin,
-                    "-bfile",
-                    str(prefix),
-                    "-k",
-                    str(kinship_file),
-                    "-lmm",
-                    "1",
-                    "-o",
-                    "assoc",
-                ],
-                cwd=str(output_dir),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True,
-            )
-            while True:
-                output = proc.stdout.readline()
-                if output == "" and proc.poll() is not None:
-                    break
-                if output:
-                    print(output.strip())
-            if proc.returncode != 0:
-                raise subprocess.CalledProcessError(proc.returncode, "gemma -lmm")
-            result.lmm_time = profiler.end("gemma", "lmm")
-            throughput = n_snps_lmm / result.lmm_time if result.lmm_time > 0 else 0
-            logger.info(f"GEMMA throughput: {throughput:.0f} SNPs/sec")
-
-            # Load GEMMA results for validation
-            assoc_file = output_dir / "output" / "assoc.assoc.txt"
-            if assoc_file.exists():
-                result.assoc_df = pd.read_csv(assoc_file, sep="\t")
-
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
-            profiler.error("gemma", "lmm", e)
-
-    return result
-
-
-def validate_jamma_vs_gemma(
-    jamma_results: list, gemma_df: pd.DataFrame
-) -> dict[str, float]:
-    """Validate JAMMA results against GEMMA reference.
-
-    Compares beta, SE, and p-values against GEMMA with tolerances from CLAUDE.md:
-    - beta: 1e-6 relative tolerance
-    - SE: 1e-6 relative tolerance (same as beta)
-    - p-values: 1e-8 relative tolerance
-
-    Args:
-        jamma_results: List of AssocResult from JAMMA
-        gemma_df: DataFrame from GEMMA assoc.txt
-
-    Returns:
-        Dict with validation metrics (max relative differences, pass/fail flags)
-    """
-    # Convert JAMMA results to DataFrame
-    jamma_df = pd.DataFrame([vars(r) for r in jamma_results])
-
-    # Merge on rs ID
-    merged = pd.merge(
-        gemma_df, jamma_df, left_on="rs", right_on="rs", suffixes=("_gemma", "_jamma")
-    )
-
-    if len(merged) == 0:
-        logger.warning("No matching SNPs between JAMMA and GEMMA results")
-        return {"error": "no_matches"}
-
-    # Tolerances from CLAUDE.md
-    # Use hybrid tolerance: pass if abs_diff < abs_tol OR rel_diff < rel_tol
-    # This handles near-zero betas where relative diff is unreliable
-    beta_rel_tol = 1e-6
-    beta_abs_tol = 1e-5  # Matches unit test tolerance
-    se_tol = 1e-6
-    pval_tol = 1e-8
-
-    # Beta comparison - use hybrid tolerance
-    beta_diff = np.abs(merged["beta_gemma"] - merged["beta_jamma"])
-    beta_rel = beta_diff / (np.abs(merged["beta_gemma"]) + 1e-10)
-    # Pass if either absolute OR relative tolerance is met
-    beta_pass_per_snp = (beta_diff < beta_abs_tol) | (beta_rel < beta_rel_tol)
-
-    # SE comparison
-    se_diff = np.abs(merged["se_gemma"] - merged["se_jamma"])
-    se_rel = se_diff / (np.abs(merged["se_gemma"]) + 1e-10)
-
-    # P-value comparison (handle both p_wald and p_score)
-    # GEMMA uses p_wald for -lmm 1, p_score for -lmm 3/4
-    pval_col_gemma = "p_wald" if "p_wald" in gemma_df.columns else "p_score"
-    if "p_wald_jamma" in merged.columns:
-        pval_col_jamma = "p_wald_jamma"
-    else:
-        pval_col_jamma = "p_score_jamma"
-    pval_col_gemma_merged = f"{pval_col_gemma}_gemma"
-    if pval_col_gemma_merged not in merged.columns:
-        pval_col_gemma_merged = pval_col_gemma
-
-    pval_diff = np.abs(merged[pval_col_gemma_merged] - merged[pval_col_jamma])
-    pval_rel = pval_diff / (merged[pval_col_gemma_merged] + 1e-10)
-
-    # Build validation results
-    validation = {
-        "n_snps_compared": len(merged),
-        # Beta metrics
-        "beta_max_rel_diff": float(beta_rel.max()),
-        "beta_mean_rel_diff": float(beta_rel.mean()),
-        "beta_max_abs_diff": float(beta_diff.max()),
-        "beta_pass": bool(beta_pass_per_snp.all()),
-        # SE metrics
-        "se_max_rel_diff": float(se_rel.max()),
-        "se_mean_rel_diff": float(se_rel.mean()),
-        "se_max_abs_diff": float(se_diff.max()),
-        "se_pass": bool(se_rel.max() < se_tol),
-        # P-value metrics
-        "pval_max_rel_diff": float(pval_rel.max()),
-        "pval_mean_rel_diff": float(pval_rel.mean()),
-        "pval_max_abs_diff": float(pval_diff.max()),
-        "pval_pass": bool(pval_rel.max() < pval_tol),
-    }
-    validation["overall_pass"] = (
-        validation["beta_pass"] and validation["se_pass"] and validation["pval_pass"]
-    )
-
-    # Log detailed results
-    status = "PASS" if validation["overall_pass"] else "FAIL"
-    logger.info(f"GEMMA validation: {status} ({len(merged)} SNPs compared)")
-    logger.info(
-        f"  beta:   max_rel={validation['beta_max_rel_diff']:.2e} "
-        f"max_abs={validation['beta_max_abs_diff']:.2e} "
-        f"(rel_tol={beta_rel_tol:.0e}, abs_tol={beta_abs_tol:.0e}) "
-        f"{'PASS' if validation['beta_pass'] else 'FAIL'}"
-    )
-    logger.info(
-        f"  SE:     max_rel={validation['se_max_rel_diff']:.2e} "
-        f"(tol={se_tol:.0e}) {'PASS' if validation['se_pass'] else 'FAIL'}"
-    )
-    logger.info(
-        f"  p-val:  max_rel={validation['pval_max_rel_diff']:.2e} "
-        f"(tol={pval_tol:.0e}) {'PASS' if validation['pval_pass'] else 'FAIL'}"
-    )
-
-    # Diagnose worst SNP if beta fails
-    if not validation["beta_pass"]:
-        worst_idx = beta_rel.idxmax()
-        worst = merged.loc[worst_idx]
-        logger.warning("=== WORST BETA SNP DIAGNOSTIC ===")
-        logger.warning(f"  rs: {worst['rs']}")
-        logger.warning(
-            f"  beta_gemma={worst['beta_gemma']:.6e}, "
-            f"beta_jamma={worst['beta_jamma']:.6e}"
-        )
-        logger.warning(
-            f"  abs_diff={beta_diff.loc[worst_idx]:.2e}, "
-            f"rel_diff={beta_rel.loc[worst_idx]:.2e}"
-        )
-        # Check sign
-        same_sign = np.sign(worst["beta_gemma"]) == np.sign(worst["beta_jamma"])
-        logger.warning(f"  same_sign={same_sign}")
-        # Check if beta near zero (relative diff unreliable)
-        if abs(worst["beta_gemma"]) < 1e-4:
-            logger.warning("  NOTE: |beta_gemma| < 1e-4, relative diff unreliable")
-        # Log SE and p-value for same SNP
-        logger.warning(
-            f"  se_gemma={worst['se_gemma']:.6e}, " f"se_jamma={worst['se_jamma']:.6e}"
-        )
-        # Lambda if available
-        if "l_remle_jamma" in worst.index:
-            logger.warning(f"  lambda_jamma={worst['l_remle_jamma']:.6f}")
-        if "l_remle_gemma" in worst.index or "l_remle" in worst.index:
-            l_gemma = worst.get("l_remle_gemma", worst.get("l_remle", "N/A"))
-            logger.warning(f"  lambda_gemma={l_gemma}")
-
-    return validation
 
 
 def benchmark_kinship(genotypes: np.ndarray, profiler: BenchmarkProfiler):
@@ -988,49 +676,6 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
         results["jamma_total_time"] = jamma_total
         logger.info(f"JAMMA total time: {jamma_total:.1f}s (wall clock)")
 
-        # GEMMA benchmark (for smaller configs only) - also wall clock
-        gemma_start = time.time()
-        gemma_result = benchmark_gemma(
-            genotypes, phenotype, profiler, config.n_snps_lmm
-        )
-        gemma_total = time.time() - gemma_start
-
-        if gemma_result.kinship_time is not None:
-            results["gemma_kinship_time"] = gemma_result.kinship_time
-        if gemma_result.lmm_time is not None:
-            results["gemma_lmm_time"] = gemma_result.lmm_time
-            results["gemma_snps_per_sec"] = config.n_snps_lmm / gemma_result.lmm_time
-            # GEMMA total = wall clock from start to end
-            results["gemma_total_time"] = gemma_total
-            logger.info(f"GEMMA total time: {gemma_total:.1f}s (wall clock)")
-
-        # Validate JAMMA results against GEMMA
-        if gemma_result.assoc_df is not None and jax_assoc_results is not None:
-            gemma_df = gemma_result.assoc_df
-            validation = validate_jamma_vs_gemma(jax_assoc_results, gemma_df)
-            # Capture all validation metrics for detailed reporting
-            results["gemma_validation_pass"] = validation.get("overall_pass", False)
-            results["gemma_n_snps_compared"] = validation.get("n_snps_compared")
-            # Beta metrics
-            results["gemma_beta_max_rel_diff"] = validation.get("beta_max_rel_diff")
-            results["gemma_beta_pass"] = validation.get("beta_pass")
-            # SE metrics
-            results["gemma_se_max_rel_diff"] = validation.get("se_max_rel_diff")
-            results["gemma_se_pass"] = validation.get("se_pass")
-            # P-value metrics
-            results["gemma_pval_max_rel_diff"] = validation.get("pval_max_rel_diff")
-            results["gemma_pval_pass"] = validation.get("pval_pass")
-
-        # Speedups (JAMMA vs GEMMA - total end-to-end time)
-        if results.get("gemma_total_time") and results.get("jamma_total_time"):
-            results["jamma_vs_gemma_total"] = (
-                results["gemma_total_time"] / results["jamma_total_time"]
-            )
-            logger.info(
-                f"Speedup: JAMMA {results['jamma_vs_gemma_total']:.2f}x faster "
-                f"than GEMMA (total time)"
-            )
-
     except Exception as e:
         profiler.error("benchmark", "main", e)
         mem = psutil.virtual_memory()
@@ -1211,78 +856,21 @@ display(results_df)  # noqa: F821 - Databricks built-in
 
 # COMMAND ----------
 
-# Performance Comparison: JAMMA vs GEMMA
+# Performance Summary
 print("\n" + "=" * 60)
-print("JAMMA vs GEMMA COMPARISON")
+print("JAMMA PERFORMANCE SUMMARY")
 print("=" * 60)
 
 for _, row in results_df.iterrows():
     cfg = row["config"]
     print(f"\n{cfg}:")
 
-    gemma_lmm = row.get("gemma_lmm_time")
     jax_lmm = row.get("lmm_jax_time")
-    validation_pass = row.get("gemma_validation_pass")
-
-    if gemma_lmm:
-        print(f"  GEMMA:      {gemma_lmm:7.2f}s")
-        # Show validation status
-        if validation_pass is not None:
-            status = "PASS" if validation_pass else "FAIL"
-            beta_diff = row.get("gemma_beta_max_rel_diff", 0)
-            se_diff = row.get("gemma_se_max_rel_diff", 0)
-            pval_diff = row.get("gemma_pval_max_rel_diff", 0)
-            print(
-                f"  Validation: {status} "
-                f"(β={beta_diff:.2e}, SE={se_diff:.2e}, p={pval_diff:.2e})"
-            )
-    else:
-        print("  GEMMA:      (skipped - too large or unavailable)")
-
     if jax_lmm:
-        print(f"  JAMMA JAX:  {jax_lmm:7.2f}s", end="")
-        if gemma_lmm:
-            ratio = gemma_lmm / jax_lmm
-            print(f"  ({ratio:.2f}x vs GEMMA)")
-        else:
-            print()
-
-# COMMAND ----------
-
-# Validation Summary - JAMMA vs GEMMA accuracy
-print("\n" + "=" * 60)
-print("VALIDATION SUMMARY: JAMMA vs GEMMA")
-print("=" * 60)
-print("\nTolerances from CLAUDE.md:")
-print("  beta:   1e-6 relative")
-print("  SE:     1e-6 relative")
-print("  p-val:  1e-8 relative")
-
-validation_rows = results_df[results_df["gemma_validation_pass"].notna()]
-if len(validation_rows) > 0:
-    header = (
-        f"{'Config':<10} {'Status':<6} {'β max_rel':<12} "
-        f"{'SE max_rel':<12} {'p max_rel':<12} {'SNPs':<8}"
-    )
-    print(f"\n{header}")
-    print("-" * 70)
-    for _, row in validation_rows.iterrows():
-        cfg = row["config"]
-        status = "PASS" if row.get("gemma_validation_pass") else "FAIL"
-        beta = row.get("gemma_beta_max_rel_diff", float("nan"))
-        se = row.get("gemma_se_max_rel_diff", float("nan"))
-        pval = row.get("gemma_pval_max_rel_diff", float("nan"))
-        n_snps = row.get("gemma_n_snps_compared", 0)
-        print(
-            f"{cfg:<10} {status:<6} {beta:<12.2e} "
-            f"{se:<12.2e} {pval:<12.2e} {n_snps:<8}"
-        )
-
-    # Overall summary
-    all_pass = validation_rows["gemma_validation_pass"].all()
-    print(f"\nOverall: {'ALL PASS' if all_pass else 'SOME FAILED'}")
-else:
-    print("\nNo validation data available (GEMMA not run or no results)")
+        print(f"  JAMMA JAX:  {jax_lmm:7.2f}s")
+        snps_per_sec = row.get("jax_snps_per_sec")
+        if snps_per_sec:
+            print(f"  Throughput: {snps_per_sec:,.0f} SNPs/sec")
 
 # COMMAND ----------
 
@@ -1372,178 +960,3 @@ if recommendations:
         print(f"\n{i}. {rec}")
 else:
     print("\nNo critical issues detected.")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## GEMMA Validation (10K Scale)
-# MAGIC
-# MAGIC Compare JAMMA results against GEMMA reference at 10K samples.
-# MAGIC This validates numerical equivalence before trusting large-scale results.
-# MAGIC
-# MAGIC **GEMMA Binary:**
-# MAGIC Set `GEMMA_PATH` env var or modify the value at the top of the notebook.
-
-# COMMAND ----------
-
-
-def validate_vs_gemma(
-    n_samples: int = 10_000,
-    n_snps: int = 1_000,
-    seed: int = 42,
-    gemma_path: str | None = None,
-) -> dict | None:
-    """Validate JAMMA against GEMMA at small scale.
-
-    Runs both tools on synthetic data and compares results.
-    Requires GEMMA binary in PATH or specified via gemma_path.
-
-    Args:
-        n_samples: Number of samples for validation.
-        n_snps: Number of SNPs for validation.
-        seed: Random seed for reproducibility.
-        gemma_path: Path to GEMMA binary. If None, searches PATH and GEMMA_PATH.
-
-    Returns:
-        Dict with comparison metrics, or None if GEMMA not available.
-    """
-    # Find GEMMA binary
-    gemma_bin = gemma_path or GEMMA_PATH or shutil.which("gemma")
-    if not gemma_bin or not Path(gemma_bin).exists():
-        logger.warning("GEMMA not found - skipping validation")
-        logger.info("Set GEMMA_PATH variable or pass gemma_path argument")
-        return None
-
-    logger.info(f"Running GEMMA validation: {n_samples:,} samples x {n_snps:,} SNPs")
-
-    # Generate synthetic data
-    rng = np.random.default_rng(seed)
-    maf = rng.uniform(0.05, 0.5, n_snps)
-
-    genotypes = np.zeros((n_samples, n_snps), dtype=np.float32)
-    for j in range(n_snps):
-        p = maf[j]
-        probs = [(1 - p) ** 2, 2 * p * (1 - p), p**2]
-        genotypes[:, j] = rng.choice([0, 1, 2], size=n_samples, p=probs)
-
-    phenotype = rng.standard_normal(n_samples)
-    phenotype = (phenotype - phenotype.mean()) / phenotype.std()
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmpdir = Path(tmpdir)
-        prefix = tmpdir / "test"
-        output_dir = tmpdir / "output"
-        output_dir.mkdir()
-
-        # Write PLINK files using shared function
-        _write_plink_files(str(prefix), genotypes, phenotype)
-
-        # Run GEMMA kinship and LMM - stream output in real-time
-        def run_gemma_streaming(cmd, cwd, timeout=300):
-            """Run GEMMA with real-time output streaming."""
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(cwd),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True,
-            )
-            while True:
-                output = proc.stdout.readline()
-                if output == "" and proc.poll() is not None:
-                    break
-                if output:
-                    print(output.strip())
-            if proc.returncode != 0:
-                raise subprocess.CalledProcessError(proc.returncode, cmd[0])
-
-        try:
-            run_gemma_streaming(
-                [gemma_bin, "-bfile", str(prefix), "-gk", "1", "-o", "kinship"],
-                output_dir,
-            )
-
-            kinship_file = output_dir / "output" / "kinship.cXX.txt"
-            run_gemma_streaming(
-                [
-                    gemma_bin,
-                    "-bfile",
-                    str(prefix),
-                    "-k",
-                    str(kinship_file),
-                    "-lmm",
-                    "1",
-                    "-o",
-                    "assoc",
-                ],
-                output_dir,
-            )
-        except subprocess.TimeoutExpired:
-            logger.error("GEMMA timed out")
-            return None
-        except subprocess.CalledProcessError as e:
-            logger.error(f"GEMMA failed with return code {e.returncode}")
-            return None
-
-        # Load GEMMA results
-        gemma_kinship = np.loadtxt(output_dir / "output" / "kinship.cXX.txt")
-        gemma_assoc = pd.read_csv(output_dir / "output" / "assoc.assoc.txt", sep="\t")
-
-    # Run JAMMA
-    logger.info("Running JAMMA...")
-    snp_info = [
-        {"chr": "1", "rs": f"rs{j}", "pos": j * 1000, "a1": "A", "a0": "G"}
-        for j in range(n_snps)
-    ]
-
-    jamma_kinship = compute_centered_kinship(genotypes, check_memory=False)
-    jamma_results = run_lmm_association_jax(
-        genotypes=genotypes,
-        phenotypes=phenotype,
-        kinship=jamma_kinship,
-        snp_info=snp_info,
-        show_progress=True,
-    )
-
-    # Compare kinship
-    kinship_max_diff = np.max(np.abs(jamma_kinship - gemma_kinship))
-    kinship_rel_diff = kinship_max_diff / (np.abs(gemma_kinship).max() + 1e-10)
-
-    # Compare association results using shared validation logic
-    validation = validate_jamma_vs_gemma(jamma_results, gemma_assoc)
-
-    results = {
-        "n_samples": n_samples,
-        "n_snps": n_snps,
-        "kinship_max_abs_diff": float(kinship_max_diff),
-        "kinship_max_rel_diff": float(kinship_rel_diff),
-        "beta_max_rel_diff": validation.get("beta_max_rel_diff", float("nan")),
-        "beta_mean_rel_diff": validation.get("beta_mean_rel_diff", float("nan")),
-        "pval_max_rel_diff": validation.get("pval_max_rel_diff", float("nan")),
-        "pval_mean_rel_diff": validation.get("pval_mean_rel_diff", float("nan")),
-        "kinship_pass": kinship_rel_diff < 1e-8,
-        "beta_pass": validation.get("beta_pass", False),
-        "pval_pass": validation.get("pval_pass", False),
-    }
-    results["overall_pass"] = all(
-        [results["kinship_pass"], results["beta_pass"], results["pval_pass"]]
-    )
-
-    # Log results
-    logger.info("=" * 60)
-    logger.info("GEMMA VALIDATION RESULTS")
-    logger.info("=" * 60)
-    logger.info(f"Kinship max rel diff: {results['kinship_max_rel_diff']:.2e}")
-    logger.info(f"Beta max rel diff:    {results['beta_max_rel_diff']:.2e}")
-    logger.info(f"P-value max rel diff: {results['pval_max_rel_diff']:.2e}")
-    logger.info(f"Overall: {'PASS' if results['overall_pass'] else 'FAIL'}")
-
-    return results
-
-
-# COMMAND ----------
-
-# Run GEMMA validation (uncomment to execute)
-# gemma_results = validate_vs_gemma(n_samples=10_000, n_snps=1_000)
-# if gemma_results:
-#     display(pd.DataFrame([gemma_results]))  # noqa: F821

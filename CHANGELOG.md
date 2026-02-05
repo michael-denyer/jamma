@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-02-05
+
+### Added
+- **Databricks benchmark notebook** (`notebooks/databricks_jamma_vs_gemma.py`):
+  Widget-parameterized notebook comparing JAMMA vs GEMMA runtime and accuracy
+- **Kinship matrix comparison**: Spearman rho, Frobenius norm, max/mean absolute/relative diff
+- **CPU pinning for GEMMA**: `taskset --cpu-list 0-23` for eigendecomp in benchmark notebook
+
+### Changed
+- Skip JIT warmup for large datasets (>10k samples) to avoid double eigendecomp
+- Expanded WHY_JAMMA.md with detailed GEMMA vs JAMMA speed comparison
+
+### Fixed
+- Double eigendecomposition in benchmark notebook (warmup was running full pipeline)
+
 ## [1.1.0] - 2026-02-05
 
 ### Added
@@ -49,13 +64,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Streaming I/O**: Handle 200k+ samples without loading full matrix
 - **JAX acceleration**: CPU/GPU support via JAX backend
 - **GEMMA-compatible output**: Identical `.assoc.txt` and `.cXX.txt` formats
-- **Numerical equivalence**: Results match GEMMA (beta 1e-6, p-values 1e-8)
+- **Numerical equivalence**: Results match GEMMA (identical significance calls, rankings, directions)
 
 ### Performance
 - 7x faster than GEMMA on kinship computation
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
-[Unreleased]: https://github.com/michael-denyer/jamma/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/michael-denyer/jamma/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/michael-denyer/jamma/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/michael-denyer/jamma/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/michael-denyer/jamma/releases/tag/v1.0.0

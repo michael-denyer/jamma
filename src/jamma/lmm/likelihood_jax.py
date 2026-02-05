@@ -777,3 +777,140 @@ def batch_calc_score_stats(
     """
     Pab_batch = vmap(lambda Uab: calc_pab_jax(n_cvt, Hi_eval_null, Uab))(Uab_batch)
     return vmap(lambda Pab: calc_score_stats_jax(n_cvt, Pab, n_samples))(Pab_batch)
+
+
+def _batch_grid_mle(
+    n_cvt: int,
+    lambdas: Float[Array, " g"],
+    eigenvalues: Float[Array, " n"],
+    Uab_batch: Float[Array, "p n ni"],
+) -> Float[Array, "g p"]:
+    """Compute MLE log-likelihood at all grid points for all SNPs.
+
+    MLE counterpart of _batch_grid_reml_with_iab. Key difference: no Iab
+    argument needed because MLE has no logdet_hiw term.
+
+    Args:
+        n_cvt: Number of covariates (passed through to mle_log_likelihood_jax).
+        lambdas: Grid of lambda values (n_grid,).
+        eigenvalues: Eigenvalues (n_samples,).
+        Uab_batch: Uab matrices (n_snps, n_samples, n_index).
+
+    Returns:
+        Log-likelihoods (n_grid, n_snps).
+    """
+
+    def mle_for_lambda(lam):
+        return vmap(lambda Uab: mle_log_likelihood_jax(n_cvt, lam, eigenvalues, Uab))(
+            Uab_batch
+        )
+
+    return vmap(mle_for_lambda)(lambdas)
+
+
+@partial(jit, static_argnums=(0, 3, 4, 5, 6), donate_argnums=(2,))
+def golden_section_optimize_lambda_mle(
+    n_cvt: int,
+    eigenvalues: Float[Array, " n"],
+    Uab_batch: Float[Array, "p n ni"],
+    l_min: float = 1e-5,
+    l_max: float = 1e5,
+    n_grid: int = 50,
+    n_iter: int = 20,
+) -> tuple[Float[Array, " p"], Float[Array, " p"]]:
+    """Optimize MLE lambda using grid search + golden section refinement.
+
+    MLE counterpart of golden_section_optimize_lambda (REML). Used by
+    LRT (-lmm 2) which requires per-SNP MLE lambda optimization.
+
+    Key differences from the REML optimizer:
+    - Uses mle_log_likelihood_jax instead of _reml_with_precomputed_iab
+    - No Iab_batch argument (MLE has no logdet_hiw term)
+    - Returns MLE log-likelihoods (not REML)
+
+    The grid search covers boundaries (l_min and l_max are linspace
+    endpoints), handling MLE boundary optima naturally.
+
+    Args:
+        n_cvt: Number of covariates (static, triggers recompilation).
+        eigenvalues: Eigenvalues (n_samples,).
+        Uab_batch: Uab matrices (n_snps, n_samples, n_index).
+        l_min, l_max: Lambda bounds.
+        n_grid: Coarse grid points.
+        n_iter: Golden section iterations (20 gives ~1e-5 tolerance).
+
+    Returns:
+        (optimal_lambdas, optimal_logls) - MLE log-likelihoods for each SNP.
+    """
+    phi = 0.6180339887498949  # Golden ratio - 1
+
+    # Stage 1: Coarse grid search on log scale (fully on device)
+    log_l_min = jnp.log(l_min)
+    log_l_max = jnp.log(l_max)
+    log_lambdas = jnp.linspace(log_l_min, log_l_max, n_grid)
+    lambdas = jnp.exp(log_lambdas)
+
+    # Evaluate all SNPs at all grid points
+    all_logls = _batch_grid_mle(n_cvt, lambdas, eigenvalues, Uab_batch)
+
+    # Find best index per SNP
+    best_idx = jnp.argmax(all_logls, axis=0)
+
+    # Set up bounds for golden section (one grid cell on each side)
+    idx_low = jnp.maximum(best_idx - 1, 0)
+    idx_high = jnp.minimum(best_idx + 1, n_grid - 1)
+
+    # Initial bounds (log scale)
+    a = log_lambdas[idx_low]
+    b = log_lambdas[idx_high]
+
+    # Helper to compute MLE at log-scale lambdas (batch)
+    def compute_mle_batch(log_lams):
+        lams = jnp.exp(log_lams)
+        return vmap(
+            lambda lam, Uab: mle_log_likelihood_jax(n_cvt, lam, eigenvalues, Uab),
+            in_axes=(0, 0),
+        )(lams, Uab_batch)
+
+    # Initial probe points (golden ratio positions)
+    c = b - phi * (b - a)
+    d = a + phi * (b - a)
+    fc = compute_mle_batch(c)
+    fd = compute_mle_batch(d)
+
+    # Stage 2: Golden section iterations using lax.fori_loop (stays on device)
+    def golden_step(_, state):
+        a, b, c, d, fc, fd = state
+
+        # Where fc > fd, maximum is in [a, d], otherwise in [c, b]
+        keep_left = fc > fd
+
+        # Update bounds
+        new_a = jnp.where(keep_left, a, c)
+        new_b = jnp.where(keep_left, d, b)
+
+        # Compute new interior points
+        new_c = new_b - phi * (new_b - new_a)
+        new_d = new_a + phi * (new_b - new_a)
+
+        # Compute MLE at the new position only
+        new_logl = compute_mle_batch(jnp.where(keep_left, new_c, new_d))
+
+        # Reuse function values where possible
+        new_fc = jnp.where(keep_left, new_logl, fd)
+        new_fd = jnp.where(keep_left, fc, new_logl)
+
+        return (new_a, new_b, new_c, new_d, new_fc, new_fd)
+
+    init_state = (a, b, c, d, fc, fd)
+    final_state = jax.lax.fori_loop(0, n_iter, golden_step, init_state)
+    a, b, c, d, fc, fd = final_state
+
+    # Return midpoint as optimal (log scale)
+    log_opt = (a + b) / 2
+    best_lambdas = jnp.exp(log_opt)
+
+    # Final likelihood at optimal point
+    best_logls = compute_mle_batch(log_opt)
+
+    return best_lambdas, best_logls

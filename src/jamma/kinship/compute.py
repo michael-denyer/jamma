@@ -183,12 +183,22 @@ def compute_centered_kinship(
         )
 
     # Memory check before allocation
-    # Check against full pipeline peak (eigendecomp) since it always follows kinship
+    # Check against the larger of:
+    # 1. Kinship phase: K (n²×8) + X JAX copy (n×p×8) + batch temps
+    # 2. Eigendecomp phase: K (n²×8) + U (n²×8) + LAPACK workspace
+    # When 2*p > n (typical GWAS), kinship phase with JAX genotype copy is the peak.
+    # Use 50% safety margin: JAX creates temporary arrays ~1.5x naive estimate.
     if check_memory:
         eigendecomp_peak_gb = estimate_eigendecomp_memory(n_samples)
+        kinship_peak_gb = (
+            n_samples**2 * 8 / 1e9  # K accumulator
+            + n_samples * n_snps * 8 / 1e9  # X JAX copy of genotypes
+        )
+        required_gb = max(eigendecomp_peak_gb, kinship_peak_gb)
         check_memory_available(
-            eigendecomp_peak_gb,
-            operation=f"GWAS pipeline (eigendecomp peak: {eigendecomp_peak_gb:.1f}GB)",
+            required_gb,
+            safety_margin=0.5,
+            operation=f"GWAS pipeline (peak: {required_gb:.1f}GB)",
         )
 
     # Log memory state before kinship allocation for debugging OOM
@@ -292,11 +302,14 @@ def compute_kinship_streaming(
     logger.info(f"chunk size = {chunk_size}")
 
     # Memory check before allocation
-    # Check against full pipeline peak (eigendecomp) since it always follows kinship
+    # Check against full pipeline peak (eigendecomp) since it always follows kinship.
+    # Use 50% safety margin: JAX kinship creates temporary arrays (centered batches,
+    # batch products) that ~1.5x the naive estimate per empirical benchmarks.
     if check_memory:
         est = estimate_streaming_memory(n_samples, n_snps, chunk_size)
         check_memory_available(
             est.total_peak_gb,
+            safety_margin=0.5,
             operation=f"GWAS pipeline (eigendecomp peak: {est.total_peak_gb:.1f}GB)",
         )
 

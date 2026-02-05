@@ -7,12 +7,7 @@ This package contains the core algorithms and data structures:
 - lmm: Linear mixed model fitting
 """
 
-from jamma.core.backend import (
-    BACKEND_ALIASES,
-    get_backend_info,
-    get_compute_backend,
-    is_rust_available,
-)
+from jamma.core.backend import get_backend_info
 from jamma.core.config import OutputConfig
 from jamma.core.jax_config import (
     configure_jax,
@@ -33,10 +28,7 @@ from jamma.core.memory import (
 )
 
 __all__ = [
-    "BACKEND_ALIASES",
     "get_backend_info",
-    "get_compute_backend",
-    "is_rust_available",
     "OutputConfig",
     "configure_jax",
     "get_jax_info",

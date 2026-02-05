@@ -7,21 +7,21 @@ including -bfile, -o, -outdir flags for data loading and output configuration.
 import sys
 import time
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import numpy as np
 import typer
 
 import jamma
 from jamma.core import OutputConfig
-from jamma.core.memory import estimate_lmm_memory
+from jamma.core.memory import estimate_lmm_memory, estimate_streaming_memory
 from jamma.io import get_plink_metadata, load_plink_binary, read_covariate_file
 from jamma.kinship import (
     compute_centered_kinship,
     read_kinship_matrix,
     write_kinship_matrix,
 )
-from jamma.lmm import run_lmm_association
+from jamma.lmm import run_lmm_association, run_lmm_association_streaming
 from jamma.utils import setup_logging, write_gemma_log
 
 # Create Typer app
@@ -229,6 +229,16 @@ def lmm_command(
             help="Hard memory budget in GB. Fail if estimate exceeds this.",
         ),
     ] = None,
+    backend: Annotated[
+        Literal["jax", "numpy"],
+        typer.Option(
+            "--backend",
+            help=(
+                "Compute backend: jax (default, streaming)"
+                " or numpy (sequential fallback)"
+            ),
+        ),
+    ] = "jax",
 ) -> None:
     """Perform linear mixed model association testing.
 
@@ -274,19 +284,27 @@ def lmm_command(
         typer.echo(f"Error: Covariate file not found: {covariate_file}", err=True)
         raise typer.Exit(code=1)
 
+    # Always fetch PLINK metadata (needed for memory check AND progress message)
+    meta = get_plink_metadata(bfile)
+    n_samples_meta = meta["n_samples"]
+    n_snps_meta = meta["n_snps"]
+
     # Pre-flight memory check (before any large allocations)
     if check_memory:
         typer.echo("Checking memory requirements...")
-        meta = get_plink_metadata(bfile)
-        n_samples_meta = meta["n_samples"]
-        n_snps_meta = meta["n_snps"]
 
-        # has_kinship=True because -k flag requires pre-computed kinship
-        est = estimate_lmm_memory(
-            n_samples=n_samples_meta,
-            n_snps=n_snps_meta,
-            has_kinship=True,  # CLI requires -k flag
-        )
+        if backend == "jax":
+            est = estimate_streaming_memory(
+                n_samples=n_samples_meta,
+                n_snps=n_snps_meta,
+                chunk_size=10_000,
+            )
+        else:
+            est = estimate_lmm_memory(
+                n_samples=n_samples_meta,
+                n_snps=n_snps_meta,
+                has_kinship=True,
+            )
 
         typer.echo(
             f"Memory estimate: {est.total_peak_gb:.1f}GB required, "
@@ -322,17 +340,28 @@ def lmm_command(
     t_start = time.perf_counter()
     command_line = " ".join(sys.argv)
 
-    # Load PLINK data
-    typer.echo(f"Loading PLINK data from {bfile}...")
-    try:
-        plink_data = load_plink_binary(bfile)
-    except Exception as e:
-        typer.echo(f"Error loading PLINK data: {e}", err=True)
-        raise typer.Exit(code=1) from None
+    # === Shared data loading (both backends need these) ===
 
-    n_samples_raw = plink_data.n_samples
-    n_snps = plink_data.n_snps
-    typer.echo(f"Loaded {n_samples_raw} samples, {n_snps} SNPs")
+    # Parse phenotypes from .fam file (both backends need raw phenotypes)
+    fam_data = np.loadtxt(fam_path, dtype=str, usecols=(5,))
+    phenotypes = np.array(
+        [float(x) if x not in ("-9", "NA") else np.nan for x in fam_data]
+    )
+    n_samples_raw = len(phenotypes)
+
+    # Count valid samples for logging (before any filtering)
+    valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9)
+    n_analyzed = int(valid_mask.sum())
+
+    if n_analyzed == 0:
+        typer.echo("Error: No samples with valid phenotypes", err=True)
+        raise typer.Exit(code=1)
+
+    n_filtered = n_samples_raw - n_analyzed
+    typer.echo(
+        f"Analyzing {n_analyzed} samples with valid phenotypes "
+        f"(filtered {n_filtered})"
+    )
 
     # Load kinship matrix
     typer.echo(f"Loading kinship matrix from {kinship_file}...")
@@ -352,7 +381,6 @@ def lmm_command(
             typer.echo(f"Error loading covariate file: {e}", err=True)
             raise typer.Exit(code=1) from None
 
-        # Validate sample count matches
         if covariates.shape[0] != n_samples_raw:
             typer.echo(
                 f"Error: Covariate file has {covariates.shape[0]} rows "
@@ -364,7 +392,6 @@ def lmm_command(
 
         typer.echo(f"Loaded {covariates.shape[1]} covariates")
 
-        # Check for intercept column and warn if missing
         first_col = covariates[:, 0]
         valid_first = first_col[~np.isnan(first_col)]
         if not np.allclose(valid_first, 1.0):
@@ -374,91 +401,87 @@ def lmm_command(
                 err=True,
             )
 
-    # Extract phenotypes from .fam file (6th column)
-    # We load fam file directly to get phenotypes as bed-reader stores separately
-    fam_data = np.loadtxt(fam_path, dtype=str, usecols=(5,))
-    phenotypes = np.array(
-        [float(x) if x not in ("-9", "NA") else np.nan for x in fam_data]
-    )
-
-    # Create valid sample mask (filter missing phenotypes: -9 or NaN)
-    valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9)
-    n_analyzed = int(valid_mask.sum())
-
-    if n_analyzed == 0:
-        typer.echo("Error: No samples with valid phenotypes", err=True)
-        raise typer.Exit(code=1)
-
-    n_filtered = n_samples_raw - n_analyzed
-    typer.echo(
-        f"Analyzing {n_analyzed} samples with valid phenotypes "
-        f"(filtered {n_filtered})"
-    )
-
-    # Apply mask consistently to genotypes, phenotypes, kinship, and covariates
-    genotypes = plink_data.genotypes
-    genotypes_filtered = genotypes[valid_mask, :]
-    phenotypes_filtered = phenotypes[valid_mask]
-    K_filtered = K[np.ix_(valid_mask, valid_mask)]
-    covariates_filtered = covariates[valid_mask, :] if covariates is not None else None
-
-    # Validate dimensions after filtering
-    assert (
-        genotypes_filtered.shape[0]
-        == phenotypes_filtered.shape[0]
-        == K_filtered.shape[0]
-    ), "Dimension mismatch after filtering"
-
-    # Build snp_info list from PLINK metadata
-    snp_info = []
-    for i in range(n_snps):
-        x = genotypes_filtered[:, i]
-        n_miss_snp = int(np.isnan(x).sum())
-        # Minor allele frequency (using non-missing samples)
-        valid_geno = x[~np.isnan(x)]
-        snp_maf = float(np.mean(valid_geno) / 2.0) if len(valid_geno) > 0 else 0.0
-
-        snp_info.append(
-            {
-                "chr": str(plink_data.chromosome[i]),
-                "rs": str(plink_data.sid[i]),
-                "pos": int(plink_data.bp_position[i]),
-                "a1": str(plink_data.allele_1[i]),
-                "a0": str(plink_data.allele_2[i]),
-                "maf": snp_maf,
-                "n_miss": n_miss_snp,
-            }
-        )
-
     t_load = time.perf_counter()
     typer.echo(f"Data loading completed in {t_load - t_start:.2f}s")
 
-    # Run LMM association
+    # === Run LMM association (backend-specific) ===
     test_name = {1: "Wald", 2: "LRT", 3: "Score", 4: "All tests"}[lmm_mode]
-    typer.echo(f"Running LMM {test_name} test on {n_snps} SNPs...")
+    typer.echo(f"Running LMM {test_name} test on {n_snps_meta} SNPs...")
 
-    # Define output path for incremental writing (avoids list accumulation)
     assoc_path = _global_config.outdir / f"{_global_config.prefix}.assoc.txt"
 
-    # Run association testing with incremental disk writes
-    # output_path enables per-SNP writes, returns empty list
-    run_lmm_association(
-        genotypes_filtered,
-        phenotypes_filtered,
-        K_filtered,
-        snp_info,
-        covariates=covariates_filtered,
-        maf_threshold=maf,
-        miss_threshold=miss,
-        output_path=assoc_path,
-        lmm_mode=lmm_mode,
-    )
+    if backend == "jax":
+        # JAX streaming: pass raw data, runner handles filtering/streaming
+        # bfile is the --bfile CLI argument (Path to PLINK prefix, e.g. "data/test")
+        # which maps directly to the streaming runner's bed_path parameter
+        run_lmm_association_streaming(
+            bed_path=bfile,
+            phenotypes=phenotypes,
+            kinship=K,
+            snp_info=None,
+            covariates=covariates,
+            maf_threshold=maf,
+            miss_threshold=miss,
+            output_path=assoc_path,
+            lmm_mode=lmm_mode,
+            check_memory=False,  # Already checked above
+            show_progress=True,
+        )
+    else:
+        # NumPy fallback: load full genotypes + filter + run sequential
+        typer.echo(f"Loading PLINK data from {bfile}...")
+        try:
+            plink_data = load_plink_binary(bfile)
+        except Exception as e:
+            typer.echo(f"Error loading PLINK data: {e}", err=True)
+            raise typer.Exit(code=1) from None
+
+        genotypes = plink_data.genotypes
+        n_snps = plink_data.n_snps
+
+        # Apply mask to genotypes, phenotypes, kinship, covariates
+        genotypes_filtered = genotypes[valid_mask, :]
+        phenotypes_filtered = phenotypes[valid_mask]
+        K_filtered = K[np.ix_(valid_mask, valid_mask)]
+        covariates_filtered = (
+            covariates[valid_mask, :] if covariates is not None else None
+        )
+
+        # Build snp_info list from PLINK metadata
+        snp_info = []
+        for i in range(n_snps):
+            x = genotypes_filtered[:, i]
+            n_miss_snp = int(np.isnan(x).sum())
+            valid_geno = x[~np.isnan(x)]
+            snp_maf = float(np.mean(valid_geno) / 2.0) if len(valid_geno) > 0 else 0.0
+            snp_info.append(
+                {
+                    "chr": str(plink_data.chromosome[i]),
+                    "rs": str(plink_data.sid[i]),
+                    "pos": int(plink_data.bp_position[i]),
+                    "a1": str(plink_data.allele_1[i]),
+                    "a0": str(plink_data.allele_2[i]),
+                    "maf": snp_maf,
+                    "n_miss": n_miss_snp,
+                }
+            )
+
+        run_lmm_association(
+            genotypes_filtered,
+            phenotypes_filtered,
+            K_filtered,
+            snp_info,
+            covariates=covariates_filtered,
+            maf_threshold=maf,
+            miss_threshold=miss,
+            output_path=assoc_path,
+            lmm_mode=lmm_mode,
+        )
 
     t_lmm = time.perf_counter()
     lmm_time = t_lmm - t_load
     typer.echo(f"LMM analysis completed in {lmm_time:.2f}s")
 
-    # Results written incrementally via output_path (results list is empty)
     typer.echo(f"Association results written to {assoc_path}")
 
     # Calculate total time
@@ -469,7 +492,8 @@ def lmm_command(
     params = {
         "n_samples": n_samples_raw,
         "n_analyzed": n_analyzed,
-        "n_snps": n_snps,
+        "n_snps": n_snps_meta,
+        "backend": backend,
         "lmm_mode": lmm_mode,
         "kinship_file": str(kinship_file),
         "covariate_file": str(covariate_file) if covariate_file else None,
@@ -490,7 +514,7 @@ def lmm_command(
     typer.echo(f"Log written to {log_path}")
 
     # Final summary
-    typer.echo(f"\nAnalyzed {n_snps} SNPs in {total_time:.2f} seconds")
+    typer.echo(f"\nAnalyzed {n_snps_meta} SNPs in {total_time:.2f} seconds")
 
 
 if __name__ == "__main__":

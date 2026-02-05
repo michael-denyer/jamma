@@ -383,7 +383,7 @@ class MemorySnapshot(NamedTuple):
     vms_gb: float  # Virtual Memory Size (total address space)
     available_gb: float  # Available system memory
     total_gb: float  # Total system memory
-    percent_used: float  # Percentage of system memory used by process
+    percent_used: float  # Percentage of total system memory in use
 
 
 def get_memory_snapshot() -> MemorySnapshot:
@@ -405,7 +405,7 @@ def get_memory_snapshot() -> MemorySnapshot:
         vms_gb=mem_info.vms / 1e9,
         available_gb=vm.available / 1e9,
         total_gb=vm.total / 1e9,
-        percent_used=(mem_info.rss / vm.total) * 100,
+        percent_used=((vm.total - vm.available) / vm.total) * 100,
     )
 
 

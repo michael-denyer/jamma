@@ -190,10 +190,41 @@ class TestCliIncrementalWriting:
     """Tests for CLI lmm command incremental writing."""
 
     def test_cli_uses_output_path_for_incremental_writing(self, tmp_path):
-        """Verify CLI passes output_path to run_lmm_association for streaming writes."""
+        """Verify CLI passes output_path to run_lmm_association (numpy backend)."""
         # Run LMM with mocked run_lmm_association to capture output_path
+        # Must use --backend numpy since default is now jax streaming
         with patch("jamma.cli.run_lmm_association") as mock_run:
             mock_run.return_value = []  # Simulates incremental write mode
+
+            runner.invoke(
+                app,
+                [
+                    "-outdir",
+                    str(tmp_path),
+                    "-o",
+                    "lmm_test",
+                    "lmm",
+                    "-bfile",
+                    str(PLINK_PREFIX),
+                    "-k",
+                    str(KINSHIP_FILE),
+                    "--no-check-memory",
+                    "--backend",
+                    "numpy",
+                ],
+            )
+
+            # Verify output_path was passed
+            assert mock_run.called
+            call_kwargs = mock_run.call_args.kwargs
+            assert "output_path" in call_kwargs
+            assert call_kwargs["output_path"] is not None
+            assert str(call_kwargs["output_path"]).endswith(".assoc.txt")
+
+    def test_cli_jax_default_uses_streaming_runner(self, tmp_path):
+        """Verify CLI default (jax) calls run_lmm_association_streaming."""
+        with patch("jamma.cli.run_lmm_association_streaming") as mock_stream:
+            mock_stream.return_value = []
 
             runner.invoke(
                 app,
@@ -211,10 +242,11 @@ class TestCliIncrementalWriting:
                 ],
             )
 
-            # Command may fail due to mock, but we just care that output_path was passed
-            # Verify output_path was passed
-            assert mock_run.called
-            call_kwargs = mock_run.call_args.kwargs
+            assert mock_stream.called
+            call_kwargs = mock_stream.call_args.kwargs
             assert "output_path" in call_kwargs
             assert call_kwargs["output_path"] is not None
             assert str(call_kwargs["output_path"]).endswith(".assoc.txt")
+            # JAX path should pass raw data, not filtered
+            assert call_kwargs["check_memory"] is False
+            assert call_kwargs["snp_info"] is None

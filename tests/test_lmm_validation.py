@@ -269,6 +269,129 @@ class TestLmmOutputFormat:
         )
         assert header == expected
 
+    def test_all_tests_output_roundtrip(self, tmp_path):
+        """All-tests output can be written and read back correctly.
+
+        JAMMA -lmm 4 writes 15 columns (includes logl_H1), while GEMMA
+        -lmm 4 writes 14 columns (no logl_H1). The roundtrip test verifies
+        JAMMA's 15-column format by direct file parsing, since
+        load_gemma_assoc only handles the 14-column GEMMA format.
+        """
+        from jamma.lmm.io import IncrementalAssocWriter
+
+        results = [
+            AssocResult(
+                chr="1",
+                rs="rs100",
+                ps=10000,
+                n_miss=0,
+                allele1="A",
+                allele0="G",
+                af=0.350,
+                beta=1.234567e-3,
+                se=5.678901e-4,
+                logl_H1=-1234.567890,
+                l_remle=2.345678,
+                l_mle=2.456789,
+                p_wald=1.234567e-8,
+                p_lrt=2.345678e-7,
+                p_score=3.456789e-6,
+            ),
+            AssocResult(
+                chr="2",
+                rs="rs200",
+                ps=20000,
+                n_miss=3,
+                allele1="T",
+                allele0="C",
+                af=0.123,
+                beta=-2.345678e-2,
+                se=1.234567e-3,
+                logl_H1=-2345.678901,
+                l_remle=0.987654,
+                l_mle=1.012345,
+                p_wald=5.678901e-5,
+                p_lrt=6.789012e-4,
+                p_score=7.890123e-3,
+            ),
+        ]
+
+        # Write using IncrementalAssocWriter in all-tests mode
+        output_path = tmp_path / "all_tests.assoc.txt"
+        with IncrementalAssocWriter(output_path, test_type="all") as writer:
+            for r in results:
+                writer.write(r)
+
+        # Read back and verify by direct parsing (15-column format)
+        with open(output_path) as f:
+            header = f.readline().strip()
+            cols = header.split("\t")
+            assert len(cols) == 15, f"Expected 15 columns, got {len(cols)}"
+
+            lines = f.readlines()
+            assert len(lines) == 2, f"Expected 2 data lines, got {len(lines)}"
+
+        # Verify each line can be parsed back
+        with open(output_path) as f:
+            f.readline()  # skip header
+            for i, line in enumerate(f):
+                fields = line.strip().split("\t")
+                assert (
+                    len(fields) == 15
+                ), f"Line {i} has {len(fields)} fields, expected 15"
+                orig = results[i]
+                assert fields[0] == orig.chr
+                assert fields[1] == orig.rs
+                assert int(fields[2]) == orig.ps
+                assert int(fields[3]) == orig.n_miss
+                assert fields[4] == orig.allele1
+                assert fields[5] == orig.allele0
+                assert np.isclose(float(fields[6]), orig.af, rtol=1e-3)
+                assert np.isclose(float(fields[7]), orig.beta, rtol=1e-6)
+                assert np.isclose(float(fields[8]), orig.se, rtol=1e-6)
+                assert np.isclose(float(fields[9]), orig.logl_H1, rtol=1e-6)
+                assert np.isclose(float(fields[10]), orig.l_remle, rtol=1e-6)
+                assert np.isclose(float(fields[11]), orig.l_mle, rtol=1e-6)
+                assert np.isclose(float(fields[12]), orig.p_wald, rtol=1e-6)
+                assert np.isclose(float(fields[13]), orig.p_lrt, rtol=1e-6)
+                assert np.isclose(float(fields[14]), orig.p_score, rtol=1e-6)
+
+    def test_all_tests_output_header(self, tmp_path):
+        """All-tests output has correct 15-column JAMMA header."""
+        from jamma.lmm.io import IncrementalAssocWriter
+
+        result = AssocResult(
+            chr="1",
+            rs="rs1",
+            ps=1,
+            n_miss=0,
+            allele1="A",
+            allele0="T",
+            af=0.5,
+            beta=0.0,
+            se=0.1,
+            logl_H1=-50.0,
+            l_remle=1.0,
+            l_mle=1.1,
+            p_wald=0.5,
+            p_lrt=0.6,
+            p_score=0.7,
+        )
+
+        output_path = tmp_path / "all_tests_header.assoc.txt"
+        with IncrementalAssocWriter(output_path, test_type="all") as writer:
+            writer.write(result)
+
+        with open(output_path) as f:
+            header = f.readline().strip()
+
+        expected = (
+            "chr\trs\tps\tn_miss\tallele1\tallele0\taf\t"
+            "beta\tse\tlogl_H1\tl_remle\tl_mle\t"
+            "p_wald\tp_lrt\tp_score"
+        )
+        assert header == expected
+
 
 class TestLmmSmallScale:
     """Tests with smaller synthetic data for faster CI."""

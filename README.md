@@ -32,13 +32,14 @@ uv add jamma
 
 ```bash
 # Compute kinship matrix (centered relatedness)
-jamma -bfile data/my_study -gk 1 -o output
+jamma -o output gk -bfile data/my_study -gk 1
 
 # Run LMM association (Wald test)
-jamma -bfile data/my_study -k output.cXX.txt -lmm 1 -o results
+jamma -o results lmm -bfile data/my_study -k output/output.cXX.txt -lmm 1
 ```
 
 Output files match GEMMA format exactly:
+
 - `output.cXX.txt` — Kinship matrix
 - `results.assoc.txt` — Association results (chr, rs, ps, n_miss, allele1, allele0, af, beta, se, logl_H1, l_remle, p_wald)
 - `results.log.txt` — Run log
@@ -115,11 +116,11 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 
 Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs):
 
-| Operation | GEMMA | JAMMA | Speedup |
-|-----------|-------|-------|---------|
-| Kinship (`-gk 1`) | 6.5s | 0.9s | **7.1x** |
-| LMM (`-lmm 1`) | 19.5s | 4.7s | **4.2x** |
-| **Total** | 26.0s | 5.6s | **4.6x** |
+| Operation          | GEMMA | JAMMA | Speedup  |
+|--------------------|-------|-------|----------|
+| Kinship (`-gk 1`)  | 6.5s  | 0.9s  | **7.1x** |
+| LMM (`-lmm 1`)     | 19.5s | 4.7s  | **4.2x** |
+| **Total**          | 26.0s | 5.6s  | **4.6x** |
 
 ## Supported Features
 
@@ -127,6 +128,9 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs):
 
 - [x] Kinship matrix computation (`-gk 1`)
 - [x] Univariate LMM Wald test (`-lmm 1`)
+- [x] Likelihood ratio test (`-lmm 2`)
+- [x] Score test (`-lmm 3`)
+- [x] All tests mode (`-lmm 4`)
 - [x] Pre-computed kinship input (`-k`)
 - [x] Covariate support (`-c`)
 - [x] PLINK binary format (`.bed/.bim/.fam`)
@@ -138,9 +142,6 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs):
 
 ### Planned
 
-- [ ] Score test (`-lmm 3`)
-- [ ] Likelihood ratio test (`-lmm 2`)
-- [ ] All tests mode (`-lmm 4`)
 - [ ] Multivariate LMM (mvLMM)
 
 ## Documentation
@@ -159,4 +160,3 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs):
 ## License
 
 GPL-3.0 (same as GEMMA)
-

@@ -198,7 +198,7 @@ True optimum may be below search range.
 
 ## 7. Eigendecomposition Implementation
 
-GEMMA uses GSL (GNU Scientific Library) for eigendecomposition. JAMMA uses `scipy.linalg.eigh` (LAPACK) instead of JAX's `jnp.linalg.eigh`.
+GEMMA uses GSL (GNU Scientific Library) for eigendecomposition. JAMMA uses `numpy.linalg.eigh` (LAPACK) instead of JAX's `jnp.linalg.eigh`.
 
 **Rationale:** JAX uses int32 buffer indexing internally, which overflows at ~2.1 billion elements (~46k × 46k matrix). For 200k+ sample GWAS, the kinship matrix has 40+ billion elements, causing:
 
@@ -207,9 +207,9 @@ JaxRuntimeError: INVALID_ARGUMENT: Buffer Definition Event:
 Value (=5000300001) exceeds the maximum representable value of the desired type
 ```
 
-scipy's LAPACK binding uses int64 indexing and supports matrices up to ~3 billion rows.
+numpy's LAPACK binding supports large matrices without this limitation.
 
-**Performance:** scipy's LAPACK-based eigh is highly optimized (multi-threaded, vectorized). The eigendecomposition is O(n³) and runs once per dataset, so it's not the performance bottleneck. The JAX-accelerated SNP processing dominates runtime for large datasets.
+**Performance:** numpy's LAPACK-based eigh is highly optimized (multi-threaded, vectorized). The eigendecomposition is O(n³) and runs once per dataset, so it's not the performance bottleneck. The JAX-accelerated SNP processing dominates runtime for large datasets.
 
 ---
 
@@ -224,7 +224,7 @@ scipy's LAPACK binding uses int64 indexing and supports matrices up to ~3 billio
 | Monomorphic detection | Count-based | Variance-based | Aligned (equivalent) |
 | JAX covariates | n_cvt ≥ 1 | n_cvt = 1 only | Known limitation |
 | Lambda at lower bound | Silent | Warning + valid result | Better visibility |
-| Eigendecomp library | GSL | scipy LAPACK | 200k+ sample support |
+| Eigendecomp library | GSL | numpy LAPACK | 200k+ sample support |
 
 ---
 

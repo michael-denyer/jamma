@@ -7,19 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- Score test (`-lmm 3`) - planned
-- Likelihood ratio test (`-lmm 2`) - planned
-- All tests mode (`-lmm 4`) - planned
-
-## [1.1.0] - 2026-02-02
+## [1.1.0] - 2026-02-05
 
 ### Added
+- **Score test** (`-lmm 3`): Efficient screening test using null model lambda
+- **Likelihood ratio test** (`-lmm 2`): MLE-based chi-square test
+- **All tests mode** (`-lmm 4`): Combined Wald, LRT, and Score output
 - **Covariate support**: `-c <file>` flag for covariate file input (GEMMA format)
 - **Memory pre-flight checks**: Fail fast before OOM instead of silent crash
-  - `--mem-budget <GB>` to set memory limit
-  - `--no-check-memory` to disable checks
+  - `--no-check-memory` to disable checks on both `gk` and `lmm` commands
   - `estimate_lmm_memory()` API for programmatic memory estimation
+  - 50% safety margin based on empirical JAX overhead benchmarks
 - **RSS memory logging**: Track memory usage at workflow boundaries
 - **Incremental result writing**: Results written per-SNP/per-chunk to disk
   - `output_path` parameter in `run_lmm_association()`
@@ -30,10 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Memory now bounded by chunk size, not total SNP count
 - CLI lmm command uses incremental writing by default
+- Eigendecomposition uses numpy LAPACK (not scipy) for large matrix support
+
+### Removed
+- Rust/faer eigendecomposition backend (unreliable at scale, higher memory overhead)
+- Multi-backend infrastructure (Backend type, `JAMMA_BACKEND` env var, `-be` CLI flag)
 
 ### Fixed
-- Eigendecomposition memory check prevents scipy OOM
-- Genotype loading memory check prevents full matrix OOM
+- Pre-flight memory check now accounts for full pipeline peak (eigendecomp), not just kinship
+- Pre-flight check accounts for SNP count in non-streaming path (JAX genotype copy)
+- Eigendecomposition memory check prevents OOM
 
 ## [1.0.0] - 2026-02-01
 

@@ -13,7 +13,7 @@ import pytest
 
 from jamma.core.memory import estimate_workflow_memory
 from jamma.kinship import compute_centered_kinship
-from jamma.lmm import run_lmm_association
+from jamma.lmm.runner_jax import run_lmm_association_jax
 
 
 def generate_synthetic_gwas_data(
@@ -96,11 +96,13 @@ class TestScaleWorkflow:
         assert K.shape == (n_samples, n_samples)
 
         # Run LMM
-        results = run_lmm_association(
+        results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
             kinship=K,
             snp_info=snp_info,
+            show_progress=False,
+            check_memory=False,
         )
 
         # Basic validations
@@ -136,11 +138,21 @@ class TestScaleWorkflow:
         np.testing.assert_array_equal(K1, K2)
 
         # LMM results should be identical
-        results1 = run_lmm_association(
-            genotypes=genotypes1, phenotypes=phenotype1, kinship=K1, snp_info=snp_info1
+        results1 = run_lmm_association_jax(
+            genotypes=genotypes1,
+            phenotypes=phenotype1,
+            kinship=K1,
+            snp_info=snp_info1,
+            show_progress=False,
+            check_memory=False,
         )
-        results2 = run_lmm_association(
-            genotypes=genotypes2, phenotypes=phenotype2, kinship=K2, snp_info=snp_info2
+        results2 = run_lmm_association_jax(
+            genotypes=genotypes2,
+            phenotypes=phenotype2,
+            kinship=K2,
+            snp_info=snp_info2,
+            show_progress=False,
+            check_memory=False,
         )
 
         assert len(results1) == len(results2)

@@ -152,54 +152,43 @@ def compute_uab_jax(
     return Uab
 
 
-@jit
+@partial(jit, static_argnums=(0,))
 def calc_pab_jax(
-    Hi_eval: Float[Array, " n"], Uab: Float[Array, "n 6"]
-) -> Float[Array, "3 6"]:
-    """Compute Pab matrix using JAX (optimized for n_cvt=1).
+    n_cvt: int,
+    Hi_eval: Float[Array, " n"],
+    Uab: Float[Array, "n ni"],
+) -> Float[Array, "nr ni"]:
+    """Compute Pab matrix using JAX for arbitrary n_cvt.
 
-    This is the core projection computation. For n_cvt=1:
-    - Row 0: weighted dot products (base case)
-    - Row 1: project out covariate (intercept)
-    - Row 2: project out genotype
+    Recursive projection computation matching GEMMA's CalcPab exactly.
+    Since n_cvt is static, all loops are fully unrolled by JIT.
 
     Args:
-        Hi_eval: 1 / (lambda * eigenvalues + 1) vector (n_samples,)
-        Uab: Matrix products (n_samples, 6)
+        n_cvt: Number of covariates (static, triggers recompilation).
+        Hi_eval: 1 / (lambda * eigenvalues + 1) vector (n_samples,).
+        Uab: Matrix products (n_samples, n_index).
 
     Returns:
-        Pab matrix (3, 6) for n_cvt=1
+        Pab matrix (n_cvt+2, n_index).
     """
-    # Base case (p=0): weighted dot products for all (a,b) pairs
-    Pab_0 = jnp.dot(Hi_eval, Uab)  # Shape: (6,)
+    table = build_index_table(n_cvt)
+    n_index = table["n_index"]
 
-    # p=1: project out covariate W (index 1)
-    # Formula: Pab[1,ab] = Pab[0,ab] - Pab[0,aW]*Pab[0,bW]/Pab[0,WW]
-    P0_WW = Pab_0[_IDX_WW]
-    P0_WX = Pab_0[_IDX_WX]
-    P0_WY = Pab_0[_IDX_WY]
-    P0_XX = Pab_0[_IDX_XX]
-    P0_XY = Pab_0[_IDX_XY]
-    P0_YY = Pab_0[_IDX_YY]
+    Pab = jnp.zeros((n_cvt + 2, n_index), dtype=jnp.float64)
 
-    # Projection: P1[ab] = P0[ab] - P0[aW] * P0[bW] / P0[WW]
-    inv_P0_WW = jnp.where(P0_WW != 0, 1.0 / P0_WW, 0.0)
-    P1_XX = P0_XX - P0_WX * P0_WX * inv_P0_WW
-    P1_XY = P0_XY - P0_WX * P0_WY * inv_P0_WW
-    P1_YY = P0_YY - P0_WY * P0_WY * inv_P0_WW
+    # Row 0: weighted dot products for all (a,b) pairs
+    Pab = Pab.at[0, :].set(jnp.dot(Hi_eval, Uab))
 
-    # p=2: project out genotype X (index 2)
-    # P2[YY] = P1[YY] - P1[XY] * P1[XY] / P1[XX]
-    inv_P1_XX = jnp.where(P1_XX != 0, 1.0 / P1_XX, 0.0)
-    P2_YY = P1_YY - P1_XY * P1_XY * inv_P1_XX
-
-    # Build Pab matrix
-    Pab = jnp.zeros((3, 6), dtype=jnp.float64)
-    Pab = Pab.at[0, :].set(Pab_0)
-    Pab = Pab.at[1, _IDX_XX].set(P1_XX)
-    Pab = Pab.at[1, _IDX_XY].set(P1_XY)
-    Pab = Pab.at[1, _IDX_YY].set(P1_YY)
-    Pab = Pab.at[2, _IDX_YY].set(P2_YY)
+    # Rows 1..n_cvt+1: recursive projection (fully unrolled since n_cvt is static)
+    for p in range(1, n_cvt + 2):
+        for _a, _b, index_ab, index_aw, index_bw, index_ww in table["pab_recursion"][p]:
+            ps_ww = Pab[p - 1, index_ww]
+            inv_ps_ww = jnp.where(ps_ww != 0, 1.0 / ps_ww, 0.0)
+            val = (
+                Pab[p - 1, index_ab]
+                - Pab[p - 1, index_aw] * Pab[p - 1, index_bw] * inv_ps_ww
+            )
+            Pab = Pab.at[p, index_ab].set(val)
 
     return Pab
 
@@ -228,8 +217,8 @@ def mle_log_likelihood_jax(
     Hi_eval = 1.0 / v_temp
     logdet_h = jnp.sum(jnp.log(jnp.abs(v_temp)))
 
-    # Compute Pab using existing calc_pab_jax
-    Pab = calc_pab_jax(Hi_eval, Uab)
+    # Compute Pab using calc_pab_jax (n_cvt=1 for this function)
+    Pab = calc_pab_jax(1, Hi_eval, Uab)
 
     # P_yy after projecting out covariates and genotype
     # For n_cvt=1: nc_total = 2, so Pab[2, _IDX_YY]
@@ -286,7 +275,7 @@ def reml_log_likelihood_jax(
     """
     # Compute Iab inline (identity weighting for logdet correction)
     ones = jnp.ones(eigenvalues.shape[0], dtype=jnp.float64)
-    Iab = calc_pab_jax(ones, Uab)
+    Iab = calc_pab_jax(1, ones, Uab)
     return _reml_with_precomputed_iab(lambda_val, eigenvalues, Uab, Iab)
 
 
@@ -323,8 +312,8 @@ def _reml_with_precomputed_iab(
     # Log determinant of H
     logdet_h = jnp.sum(jnp.log(jnp.abs(v_temp)))
 
-    # Compute Pab with H-inverse weighting
-    Pab = calc_pab_jax(Hi_eval, Uab)
+    # Compute Pab with H-inverse weighting (n_cvt=1 for this function)
+    Pab = calc_pab_jax(1, Hi_eval, Uab)
 
     # logdet_hiw = log|WHiW| - log|WW|
     # For n_cvt=1: sum over i=0,1 (W and X)
@@ -353,51 +342,65 @@ def _reml_with_precomputed_iab(
     return f
 
 
+@partial(jit, static_argnums=(0,))
 def batch_compute_uab(
-    UtW: Float[Array, "n 1"],
+    n_cvt: int,
+    UtW: Float[Array, "n nc"],
     Uty: Float[Array, " n"],
     UtG: Float[Array, "n p"],
-) -> Float[Array, "p n 6"]:
+) -> Float[Array, "p n ni"]:
     """Compute Uab matrices for all SNPs at once.
 
+    Generalized for arbitrary n_cvt. Uses vmap over SNPs to produce
+    one Uab matrix per genotype column.
+
+    For n_cvt=1, keeps the explicit broadcasting fast path to avoid
+    vmap overhead (the n_cvt==1 branch is resolved at trace time
+    since n_cvt is static).
+
     Args:
-        UtW: Rotated covariates (n_samples, 1)
-        Uty: Rotated phenotype (n_samples,)
-        UtG: Rotated genotypes for all SNPs (n_samples, n_snps)
+        n_cvt: Number of covariates (static, triggers recompilation).
+        UtW: Rotated covariates (n_samples, n_cvt).
+        Uty: Rotated phenotype (n_samples,).
+        UtG: Rotated genotypes for all SNPs (n_samples, n_snps).
 
     Returns:
-        Uab matrices (n_snps, n_samples, 6)
+        Uab matrices (n_snps, n_samples, n_index).
     """
-    n_samples, n_snps = UtG.shape
-    w = UtW[:, 0]
-    UtG_T = UtG.T  # (n_snps, n_samples)
+    if n_cvt == 1:
+        # Fast path: explicit broadcasting avoids vmap overhead
+        n_samples, n_snps = UtG.shape
+        w = UtW[:, 0]
+        UtG_T = UtG.T  # (n_snps, n_samples)
 
-    # Pre-compute all element-wise products
-    ww = w * w
-    wy = w * Uty
-    yy = Uty * Uty
-    wx = w[None, :] * UtG_T
-    xx = UtG_T * UtG_T
-    xy = UtG_T * Uty[None, :]
+        ww = w * w
+        wy = w * Uty
+        yy = Uty * Uty
+        wx = w[None, :] * UtG_T
+        xx = UtG_T * UtG_T
+        xy = UtG_T * Uty[None, :]
 
-    # Stack into output array using jnp.stack for efficiency
-    return jnp.stack(
-        [
-            jnp.broadcast_to(ww, (n_snps, n_samples)),  # WW
-            wx,  # WX
-            jnp.broadcast_to(wy, (n_snps, n_samples)),  # WY
-            xx,  # XX
-            xy,  # XY
-            jnp.broadcast_to(yy, (n_snps, n_samples)),  # YY
-        ],
-        axis=-1,
-    )
+        return jnp.stack(
+            [
+                jnp.broadcast_to(ww, (n_snps, n_samples)),
+                wx,
+                jnp.broadcast_to(wy, (n_snps, n_samples)),
+                xx,
+                xy,
+                jnp.broadcast_to(yy, (n_snps, n_samples)),
+            ],
+            axis=-1,
+        )
+
+    # General path: vmap over SNPs
+    return vmap(lambda utx: compute_uab_jax(n_cvt, UtW, Uty, utx))(UtG.T)
 
 
-@jit
+@partial(jit, static_argnums=(0,))
 def batch_compute_iab(
-    Uab_batch: Float[Array, "p n 6"],
-) -> Float[Array, "p 3 6"]:
+    n_cvt: int,
+    Uab_batch: Float[Array, "p n ni"],
+) -> Float[Array, "p nr ni"]:
     """Precompute identity-weighted Iab for all SNPs (lambda-independent).
 
     Iab is used in the logdet correction term of REML and only depends on Uab,
@@ -405,14 +408,15 @@ def batch_compute_iab(
     computation during lambda optimization (~70 evaluations per SNP).
 
     Args:
-        Uab_batch: Uab matrices (n_snps, n_samples, 6)
+        n_cvt: Number of covariates (static, triggers recompilation).
+        Uab_batch: Uab matrices (n_snps, n_samples, n_index).
 
     Returns:
-        Iab matrices (n_snps, 3, 6) - identity-weighted projections
+        Iab matrices (n_snps, n_cvt+2, n_index) - identity-weighted projections.
     """
     n_samples = Uab_batch.shape[1]
     ones = jnp.ones(n_samples, dtype=jnp.float64)
-    return vmap(lambda Uab: calc_pab_jax(ones, Uab))(Uab_batch)
+    return vmap(lambda Uab: calc_pab_jax(n_cvt, ones, Uab))(Uab_batch)
 
 
 @partial(jit, static_argnums=(3, 4, 5, 6), donate_argnums=(1,))
@@ -618,9 +622,9 @@ def calc_wald_stats_jax(
     n_cvt = 1
     df = n_samples - n_cvt - 1
 
-    # Compute Pab
+    # Compute Pab (n_cvt=1 for this function)
     Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
-    Pab = calc_pab_jax(Hi_eval, Uab)
+    Pab = calc_pab_jax(1, Hi_eval, Uab)
 
     # Extract values (using n_cvt=1 indices)
     P_XX = Pab[n_cvt, _IDX_XX]  # After projecting out W

@@ -502,11 +502,11 @@ def run_lmm_association_jax(
 
         try:
             # Batch compute Uab for this chunk
-            Uab_batch = batch_compute_uab(UtW_jax, Uty_jax, current_UtG)
+            Uab_batch = batch_compute_uab(1, UtW_jax, Uty_jax, current_UtG)
 
             # Precompute Iab (identity-weighted) once per chunk - avoids ~70x redundant
             # calc_pab_jax calls during lambda optimization
-            Iab_batch = batch_compute_iab(Uab_batch)
+            Iab_batch = batch_compute_iab(1, Uab_batch)
 
             # Grid-based lambda optimization (donate_argnums recycles Uab_batch memory)
             best_lambdas, best_logls = _grid_optimize_lambda_batched(
@@ -1018,10 +1018,10 @@ def run_lmm_association_streaming(
                     del UtG_np
 
                 # Batch compute Uab
-                Uab_batch = batch_compute_uab(UtW_jax, Uty_jax, current_UtG)
+                Uab_batch = batch_compute_uab(1, UtW_jax, Uty_jax, current_UtG)
 
                 # Precompute Iab (identity-weighted) once per chunk
-                Iab_batch = batch_compute_iab(Uab_batch)
+                Iab_batch = batch_compute_iab(1, Uab_batch)
 
                 # Grid-based lambda optimization
                 best_lambdas, best_logls = _grid_optimize_lambda_batched(

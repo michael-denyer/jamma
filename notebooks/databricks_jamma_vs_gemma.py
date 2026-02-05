@@ -330,6 +330,10 @@ if RUN_GEMMA:
             else:
                 gemma_kin_path = str(Path(tmpdir) / "kinship.cXX.txt")
                 print(f"  GEMMA kinship: {gemma_kinship_time:.2f}s")
+                # Copy to output dir for comparison
+                gemma_kin_save = OUTPUT_DIR / "gemma_kinship.cXX.txt"
+                shutil.copy2(gemma_kin_path, gemma_kin_save)
+                print(f"  Saved to {gemma_kin_save}")
 
         # Step 2: Run LMM with GEMMA's own (or user-provided) kinship
         if not RUN_GEMMA:
@@ -382,6 +386,70 @@ if RUN_GEMMA:
                     print(f"  Files in tmpdir: {os.listdir(tmpdir)}")
 else:
     print("GEMMA comparison skipped")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Kinship Matrix Comparison
+
+# COMMAND ----------
+
+kinship_comparison = None
+
+# Compare kinship only when both tools computed it (no pre-computed file)
+if not KINSHIP_FILE and gemma_kinship_time is not None:
+    gemma_kin_save = OUTPUT_DIR / "gemma_kinship.cXX.txt"
+    if gemma_kin_save.exists():
+        print("Comparing kinship matrices...")
+        gemma_kinship = read_kinship_matrix(gemma_kin_save)
+
+        # Flatten upper triangles for comparison (kinship is symmetric)
+        triu_idx = np.triu_indices(kinship.shape[0])
+        jamma_triu = kinship[triu_idx]
+        gemma_triu = gemma_kinship[triu_idx]
+
+        # Spearman correlation
+        kin_rho, _ = spearmanr(jamma_triu, gemma_triu)
+
+        # Max absolute and relative differences
+        abs_diff = np.abs(jamma_triu - gemma_triu)
+        max_abs = float(np.max(abs_diff))
+        mean_abs = float(np.mean(abs_diff))
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            rel_diff = abs_diff / np.abs(gemma_triu)
+            rel_diff = np.where(np.isfinite(rel_diff), rel_diff, 0.0)
+        max_rel = float(np.max(rel_diff))
+
+        # Frobenius norm of difference
+        frob_diff = float(np.linalg.norm(kinship - gemma_kinship, "fro"))
+        frob_gemma = float(np.linalg.norm(gemma_kinship, "fro"))
+        frob_rel = frob_diff / frob_gemma if frob_gemma > 0 else 0.0
+
+        kinship_comparison = {
+            "spearman_rho": round(kin_rho, 8),
+            "max_abs_diff": f"{max_abs:.2e}",
+            "mean_abs_diff": f"{mean_abs:.2e}",
+            "max_rel_diff": f"{max_rel:.2e}",
+            "frobenius_rel_diff": f"{frob_rel:.2e}",
+        }
+
+        print("=" * 70)
+        print("  KINSHIP: JAMMA vs GEMMA")
+        print("=" * 70)
+        print(f"  Matrix size:              {kinship.shape[0]} x {kinship.shape[1]}")
+        print(f"  Spearman rho:             {kin_rho:.8f}")
+        print(f"  Max absolute difference:  {max_abs:.2e}")
+        print(f"  Mean absolute difference: {mean_abs:.2e}")
+        print(f"  Max relative difference:  {max_rel:.2e}")
+        print(f"  Frobenius norm (rel):     {frob_rel:.2e}")
+        print("=" * 70)
+    else:
+        print(f"GEMMA kinship file not found at {gemma_kin_save} — comparison skipped")
+elif KINSHIP_FILE:
+    print("Using pre-computed kinship — no JAMMA vs GEMMA kinship comparison")
+else:
+    print("GEMMA kinship not computed — comparison skipped")
 
 # COMMAND ----------
 
@@ -507,6 +575,8 @@ if not KINSHIP_FILE:
 if gemma_time is not None:
     summary["gemma_lmm_time_s"] = round(gemma_time, 3)
     summary["lmm_speedup"] = round(gemma_time / jamma_time, 2)
+if kinship_comparison is not None:
+    summary["kinship_comparison"] = kinship_comparison
 if gemma_results is not None:
     summary["accuracy"] = {
         "spearman_rho": round(rho, 6),

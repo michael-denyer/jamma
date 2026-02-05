@@ -715,24 +715,153 @@ class TestLmmJaxValidation:
             f"  Lambda: {comparison.l_remle.message}"
         )
 
-    def test_jax_rejects_covariates(
+    def test_jax_accepts_covariates(
         self, mouse_data, mouse_phenotypes, reference_kinship
     ):
-        """JAX runner raises NotImplementedError when covariates provided."""
+        """JAX runner accepts covariates and produces valid results."""
         genotypes = mouse_data.genotypes
         phenotypes = mouse_phenotypes
         snp_info = _build_snp_info(mouse_data)
+        n_samples = len(phenotypes)
 
-        # Create dummy covariates
-        covariates = np.random.randn(len(phenotypes), 2)
+        # Create covariates: intercept + random covariate
+        rng = np.random.default_rng(42)
+        covariates = np.column_stack(
+            [
+                np.ones(n_samples),
+                rng.standard_normal(n_samples),
+            ]
+        )
 
-        with pytest.raises(NotImplementedError, match="covariates"):
-            run_lmm_association_jax(
-                genotypes=genotypes,
-                phenotypes=phenotypes,
-                kinship=reference_kinship,
-                snp_info=snp_info,
-                covariates=covariates,
+        results = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=reference_kinship,
+            snp_info=snp_info,
+            covariates=covariates,
+            show_progress=False,
+        )
+
+        # Should produce results
+        assert len(results) > 0, "No results with covariates"
+
+        # All results should be finite
+        for r in results[:50]:
+            assert np.isfinite(r.beta), f"NaN beta for {r.rs}"
+            assert np.isfinite(r.se), f"NaN SE for {r.rs}"
+            assert np.isfinite(r.p_wald), f"NaN p_wald for {r.rs}"
+            assert 0 <= r.p_wald <= 1, f"p_wald out of range for {r.rs}"
+
+    @pytest.mark.skipif(
+        not REFERENCE_ASSOC.exists(),
+        reason="Reference LMM data not generated. Run generate_lmm_reference.sh",
+    )
+    def test_jax_covariate_matches_numpy(
+        self, mouse_data, mouse_phenotypes, reference_kinship
+    ):
+        """JAX runner with covariates matches NumPy runner within tolerance."""
+        genotypes = mouse_data.genotypes
+        phenotypes = mouse_phenotypes
+        snp_info = _build_snp_info(mouse_data)
+        n_samples = len(phenotypes)
+
+        # Create covariates
+        rng = np.random.default_rng(42)
+        covariates = np.column_stack(
+            [
+                np.ones(n_samples),
+                rng.standard_normal(n_samples),
+            ]
+        )
+
+        # Run JAX path
+        jax_results = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=reference_kinship,
+            snp_info=snp_info,
+            covariates=covariates,
+            n_grid=50,
+            n_refine=20,
+            show_progress=False,
+        )
+
+        # Run NumPy path
+        numpy_results = run_lmm_association(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=reference_kinship,
+            snp_info=snp_info,
+            covariates=covariates,
+        )
+
+        # Build lookup
+        jax_by_rs = {r.rs: r for r in jax_results}
+        np_by_rs = {r.rs: r for r in numpy_results}
+        common_rs = sorted(set(jax_by_rs) & set(np_by_rs))
+
+        assert len(common_rs) > 0, "No common SNPs between JAX and NumPy"
+
+        # Compare results within tolerance
+        beta_diffs = []
+        p_diffs = []
+        for rs in common_rs:
+            j, n = jax_by_rs[rs], np_by_rs[rs]
+            if np.isfinite(j.beta) and np.isfinite(n.beta):
+                beta_diffs.append(abs(j.beta - n.beta) / max(abs(n.beta), 1e-10))
+            if np.isfinite(j.p_wald) and np.isfinite(n.p_wald):
+                p_diffs.append(abs(j.p_wald - n.p_wald))
+
+        max_rel_beta = max(beta_diffs) if beta_diffs else 0
+        max_abs_p = max(p_diffs) if p_diffs else 0
+
+        assert max_rel_beta < 1e-2, f"Beta relative diff too large: {max_rel_beta:.2e}"
+        assert max_abs_p < 1e-4, f"P-value absolute diff too large: {max_abs_p:.2e}"
+
+    def test_jax_intercept_only_unchanged(
+        self, mouse_data, mouse_phenotypes, reference_kinship
+    ):
+        """JAX runner with covariates=None matches explicit intercept column."""
+        genotypes = mouse_data.genotypes
+        phenotypes = mouse_phenotypes
+        snp_info = _build_snp_info(mouse_data)
+        n_samples = len(phenotypes)
+
+        results_none = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=reference_kinship,
+            snp_info=snp_info,
+            covariates=None,
+            show_progress=False,
+        )
+
+        results_intercept = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=reference_kinship,
+            snp_info=snp_info,
+            covariates=np.ones((n_samples, 1)),
+            show_progress=False,
+        )
+
+        assert len(results_none) == len(results_intercept)
+
+        for r_none, r_int in zip(results_none, results_intercept, strict=True):
+            assert r_none.rs == r_int.rs
+            np.testing.assert_allclose(
+                r_none.beta,
+                r_int.beta,
+                rtol=1e-10,
+                atol=1e-14,
+                err_msg=f"Beta mismatch for {r_none.rs}",
+            )
+            np.testing.assert_allclose(
+                r_none.p_wald,
+                r_int.p_wald,
+                rtol=1e-10,
+                atol=1e-14,
+                err_msg=f"P-value mismatch for {r_none.rs}",
             )
 
 

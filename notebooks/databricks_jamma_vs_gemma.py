@@ -307,12 +307,7 @@ if RUN_GEMMA:
             gemma_kin_path = KINSHIP_FILE
         else:
             print("Computing kinship with GEMMA (-gk 1)...")
-            # Pin to physical cores for better eigendecomp performance
-            n_cores = os.cpu_count() or 24
             gk_cmd = [
-                "taskset",
-                "--cpu-list",
-                f"0-{n_cores - 1}",
                 str(GEMMA_BIN),
                 "-bfile",
                 BFILE,
@@ -344,7 +339,11 @@ if RUN_GEMMA:
         if not RUN_GEMMA:
             print("Skipping GEMMA LMM (kinship step failed)")
         else:
+            # Pin to physical cores for better eigendecomp performance
             cmd = [
+                "taskset",
+                "--cpu-list",
+                "0-23",
                 str(GEMMA_BIN),
                 "-bfile",
                 BFILE,

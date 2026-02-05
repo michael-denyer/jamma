@@ -299,7 +299,7 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
             "l_mle",
             "p_lrt",
         ]
-        # Format 5: All tests (-lmm 4)
+        # Format 5: All tests (-lmm 4) without logl_H1
         expected_cols_all = [
             "chr",
             "rs",
@@ -310,6 +310,24 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
             "af",
             "beta",
             "se",
+            "l_remle",
+            "l_mle",
+            "p_wald",
+            "p_lrt",
+            "p_score",
+        ]
+        # Format 5b: All tests (-lmm 4) with logl_H1 (some GEMMA versions)
+        expected_cols_all_full = [
+            "chr",
+            "rs",
+            "ps",
+            "n_miss",
+            "allele1",
+            "allele0",
+            "af",
+            "beta",
+            "se",
+            "logl_H1",
             "l_remle",
             "l_mle",
             "p_wald",
@@ -329,6 +347,8 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
             format_type = "lrt_full"
         elif actual_cols == expected_cols_all:
             format_type = "all_tests"
+        elif actual_cols == expected_cols_all_full:
+            format_type = "all_tests_full"
         else:
             raise ValueError(
                 f"Unexpected header format. Expected one of:\n"
@@ -338,6 +358,7 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
                 f"  {expected_cols_lrt}\n"
                 f"  {expected_cols_lrt_full}\n"
                 f"  {expected_cols_all}\n"
+                f"  {expected_cols_all_full}\n"
                 f"Got: {actual_cols}"
             )
 
@@ -413,6 +434,26 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
                         p_wald=float(fields[11]),
                         p_lrt=float(fields[12]),
                         p_score=float(fields[13]),
+                    )
+                )
+            elif format_type == "all_tests_full":
+                results.append(
+                    AssocResult(
+                        chr=fields[0],
+                        rs=fields[1],
+                        ps=int(fields[2]),
+                        n_miss=int(fields[3]),
+                        allele1=fields[4],
+                        allele0=fields[5],
+                        af=float(fields[6]),
+                        beta=float(fields[7]),
+                        se=float(fields[8]),
+                        logl_H1=float(fields[9]),
+                        l_remle=float(fields[10]),
+                        l_mle=float(fields[11]),
+                        p_wald=float(fields[12]),
+                        p_lrt=float(fields[13]),
+                        p_score=float(fields[14]),
                     )
                 )
             elif format_type == "lrt_full":
@@ -651,8 +692,27 @@ def compare_assoc_results(
             actual_plrt, expected_plrt, lrt_pvalue_rtol, config.atol, "p_lrt"
         )
 
-        # logl_H1: not present in GEMMA -lmm 4 output, skip
-        logl_result = _skipped_result("logl_H1 skipped (not in GEMMA -lmm 4 format)")
+        # logl_H1: compare if present in reference (all_tests_full format)
+        expected_logl_all = np.array(
+            [r.logl_H1 if r.logl_H1 is not None else 0.0 for r in expected]
+        )
+        if np.allclose(expected_logl_all, 0.0) or all(
+            r.logl_H1 is None for r in expected
+        ):
+            logl_result = _skipped_result(
+                "logl_H1 skipped (not in GEMMA -lmm 4 format)"
+            )
+        else:
+            actual_logl_all = np.array(
+                [r.logl_H1 if r.logl_H1 is not None else 0.0 for r in actual]
+            )
+            logl_result = compare_arrays(
+                actual_logl_all,
+                expected_logl_all,
+                config.logl_rtol,
+                config.atol,
+                "logl_H1",
+            )
 
         # l_remle with boundary handling
         actual_lambda = np.array(

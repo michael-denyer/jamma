@@ -26,8 +26,8 @@
 
 # COMMAND ----------
 
-# Purge non-MKL BLAS providers
-# MAGIC %sh apt-get purge -y libopenblas* libblas* libatlas* liblapack* python3-numpy 2>/dev/null; echo "Non-MKL BLAS purged"
+# MAGIC %sh # Purge non-MKL BLAS providers
+# MAGIC apt-get purge -y libopenblas* libblas* libatlas* liblapack* python3-numpy 2>/dev/null; echo "Non-MKL BLAS purged"
 
 # COMMAND ----------
 
@@ -39,7 +39,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install psutil loguru threadpoolctl jax jaxlib jaxtyping typer progressbar2 bed-reader scipy
+# MAGIC %pip install psutil loguru threadpoolctl jax jaxlib jaxtyping typer progressbar2 bed-reader
 
 # COMMAND ----------
 

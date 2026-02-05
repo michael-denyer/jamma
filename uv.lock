@@ -288,7 +288,7 @@ requires-dist = [
     { name = "threadpoolctl", specifier = ">=3.0.0" },
     { name = "typer", specifier = ">=0.12.0" },
 ]
-provides-extras = ["cpu", "rust", "dev"]
+provides-extras = ["cpu", "dev"]
 
 [package.metadata.requires-dev]
 dev = [

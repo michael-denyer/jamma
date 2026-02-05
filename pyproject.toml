@@ -27,10 +27,6 @@ dependencies = [
 # Numba accelerates CPU path but conflicts with JAX's numpy 2.x requirement
 # Install with: pip install jamma[cpu] (requires numpy<2.0)
 cpu = ["numba>=0.60.0"]
-# Native Rust extension for CPU-optimized eigendecomposition
-# Build from rust/jamma-core: cd rust/jamma-core && maturin develop --release
-# The jamma_core wheel is built separately via maturin, not installed via pip
-rust = []  # Placeholder - jamma-core is built separately via maturin
 dev = [
     "pytest>=8.0.0",
     "pytest-xdist>=3.5.0",

@@ -7,21 +7,21 @@ including -bfile, -o, -outdir flags for data loading and output configuration.
 import sys
 import time
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated
 
 import numpy as np
 import typer
 
 import jamma
 from jamma.core import OutputConfig
-from jamma.core.memory import estimate_lmm_memory, estimate_streaming_memory
+from jamma.core.memory import estimate_streaming_memory
 from jamma.io import get_plink_metadata, load_plink_binary, read_covariate_file
 from jamma.kinship import (
     compute_centered_kinship,
     read_kinship_matrix,
     write_kinship_matrix,
 )
-from jamma.lmm import run_lmm_association, run_lmm_association_streaming
+from jamma.lmm import run_lmm_association_streaming
 from jamma.utils import setup_logging, write_gemma_log
 
 # Create Typer app
@@ -229,16 +229,6 @@ def lmm_command(
             help="Hard memory budget in GB. Fail if estimate exceeds this.",
         ),
     ] = None,
-    backend: Annotated[
-        Literal["jax", "numpy"],
-        typer.Option(
-            "--backend",
-            help=(
-                "Compute backend: jax (default, streaming)"
-                " or numpy (sequential fallback)"
-            ),
-        ),
-    ] = "jax",
 ) -> None:
     """Perform linear mixed model association testing.
 
@@ -293,18 +283,11 @@ def lmm_command(
     if check_memory:
         typer.echo("Checking memory requirements...")
 
-        if backend == "jax":
-            est = estimate_streaming_memory(
-                n_samples=n_samples_meta,
-                n_snps=n_snps_meta,
-                chunk_size=10_000,
-            )
-        else:
-            est = estimate_lmm_memory(
-                n_samples=n_samples_meta,
-                n_snps=n_snps_meta,
-                has_kinship=True,
-            )
+        est = estimate_streaming_memory(
+            n_samples=n_samples_meta,
+            n_snps=n_snps_meta,
+            chunk_size=10_000,
+        )
 
         typer.echo(
             f"Memory estimate: {est.total_peak_gb:.1f}GB required, "
@@ -340,9 +323,9 @@ def lmm_command(
     t_start = time.perf_counter()
     command_line = " ".join(sys.argv)
 
-    # === Shared data loading (both backends need these) ===
+    # === Data loading ===
 
-    # Parse phenotypes from .fam file (both backends need raw phenotypes)
+    # Parse phenotypes from .fam file
     fam_data = np.loadtxt(fam_path, dtype=str, usecols=(5,))
     phenotypes = np.array(
         [float(x) if x not in ("-9", "NA") else np.nan for x in fam_data]
@@ -404,79 +387,25 @@ def lmm_command(
     t_load = time.perf_counter()
     typer.echo(f"Data loading completed in {t_load - t_start:.2f}s")
 
-    # === Run LMM association (backend-specific) ===
+    # === Run LMM association (JAX streaming) ===
     test_name = {1: "Wald", 2: "LRT", 3: "Score", 4: "All tests"}[lmm_mode]
     typer.echo(f"Running LMM {test_name} test on {n_snps_meta} SNPs...")
 
     assoc_path = _global_config.outdir / f"{_global_config.prefix}.assoc.txt"
 
-    if backend == "jax":
-        # JAX streaming: pass raw data, runner handles filtering/streaming
-        # bfile is the --bfile CLI argument (Path to PLINK prefix, e.g. "data/test")
-        # which maps directly to the streaming runner's bed_path parameter
-        run_lmm_association_streaming(
-            bed_path=bfile,
-            phenotypes=phenotypes,
-            kinship=K,
-            snp_info=None,
-            covariates=covariates,
-            maf_threshold=maf,
-            miss_threshold=miss,
-            output_path=assoc_path,
-            lmm_mode=lmm_mode,
-            check_memory=False,  # Already checked above
-            show_progress=True,
-        )
-    else:
-        # NumPy fallback: load full genotypes + filter + run sequential
-        typer.echo(f"Loading PLINK data from {bfile}...")
-        try:
-            plink_data = load_plink_binary(bfile)
-        except Exception as e:
-            typer.echo(f"Error loading PLINK data: {e}", err=True)
-            raise typer.Exit(code=1) from None
-
-        genotypes = plink_data.genotypes
-        n_snps = plink_data.n_snps
-
-        # Apply mask to genotypes, phenotypes, kinship, covariates
-        genotypes_filtered = genotypes[valid_mask, :]
-        phenotypes_filtered = phenotypes[valid_mask]
-        K_filtered = K[np.ix_(valid_mask, valid_mask)]
-        covariates_filtered = (
-            covariates[valid_mask, :] if covariates is not None else None
-        )
-
-        # Build snp_info list from PLINK metadata
-        snp_info = []
-        for i in range(n_snps):
-            x = genotypes_filtered[:, i]
-            n_miss_snp = int(np.isnan(x).sum())
-            valid_geno = x[~np.isnan(x)]
-            snp_maf = float(np.mean(valid_geno) / 2.0) if len(valid_geno) > 0 else 0.0
-            snp_info.append(
-                {
-                    "chr": str(plink_data.chromosome[i]),
-                    "rs": str(plink_data.sid[i]),
-                    "pos": int(plink_data.bp_position[i]),
-                    "a1": str(plink_data.allele_1[i]),
-                    "a0": str(plink_data.allele_2[i]),
-                    "maf": snp_maf,
-                    "n_miss": n_miss_snp,
-                }
-            )
-
-        run_lmm_association(
-            genotypes_filtered,
-            phenotypes_filtered,
-            K_filtered,
-            snp_info,
-            covariates=covariates_filtered,
-            maf_threshold=maf,
-            miss_threshold=miss,
-            output_path=assoc_path,
-            lmm_mode=lmm_mode,
-        )
+    run_lmm_association_streaming(
+        bed_path=bfile,
+        phenotypes=phenotypes,
+        kinship=K,
+        snp_info=None,
+        covariates=covariates,
+        maf_threshold=maf,
+        miss_threshold=miss,
+        output_path=assoc_path,
+        lmm_mode=lmm_mode,
+        check_memory=False,  # Already checked above
+        show_progress=True,
+    )
 
     t_lmm = time.perf_counter()
     lmm_time = t_lmm - t_load
@@ -493,7 +422,7 @@ def lmm_command(
         "n_samples": n_samples_raw,
         "n_analyzed": n_analyzed,
         "n_snps": n_snps_meta,
-        "backend": backend,
+        "backend": "jax",
         "lmm_mode": lmm_mode,
         "kinship_file": str(kinship_file),
         "covariate_file": str(covariate_file) if covariate_file else None,

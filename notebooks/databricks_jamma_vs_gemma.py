@@ -247,20 +247,29 @@ if COVARIATE_FILE:
 
 # COMMAND ----------
 
-# JIT warmup on small subset
-print("Warming up JAX JIT...", flush=True)
-_ = run_lmm_association_jax(
-    genotypes=plink_data.genotypes,
-    phenotypes=phenotypes,
-    kinship=kinship,
-    snp_info=snp_info,
-    covariates=None,
-    lmm_mode=1,
-    n_grid=50,
-    n_refine=20,
-    show_progress=False,
-    check_memory=False,
-)
+# JIT warmup - skip for large datasets where eigendecomp dominates
+# (warmup would run eigendecomp twice, wasting ~50 min for 85k samples)
+WARMUP_THRESHOLD = 10_000  # samples
+
+if plink_data.n_samples <= WARMUP_THRESHOLD:
+    print("Warming up JAX JIT...", flush=True)
+    _ = run_lmm_association_jax(
+        genotypes=plink_data.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        covariates=None,
+        lmm_mode=1,
+        n_grid=50,
+        n_refine=20,
+        show_progress=False,
+        check_memory=False,
+    )
+else:
+    print(
+        f"Skipping JIT warmup (n_samples={plink_data.n_samples:,} > {WARMUP_THRESHOLD:,})"
+    )
+    print("  Eigendecomp dominates; JIT overhead is negligible.")
 
 # Timed JAMMA run
 print(f"\nRunning JAMMA (mode={LMM_MODE})...", flush=True)

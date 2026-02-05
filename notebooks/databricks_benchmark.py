@@ -26,8 +26,8 @@
 
 # COMMAND ----------
 
-# Purge all non-MKL BLAS/LAPACK providers and system numpy
-# MAGIC %sh apt-get purge -y libopenblas* libblas* libatlas* liblapack* python3-numpy 2>/dev/null; echo "Non-MKL BLAS purged"
+# MAGIC %sh # Purge all non-MKL BLAS/LAPACK providers and system numpy
+# MAGIC apt-get purge -y libopenblas* libblas* libatlas* liblapack* python3-numpy 2>/dev/null; echo "Non-MKL BLAS purged"
 
 # COMMAND ----------
 
@@ -183,14 +183,14 @@ assert recon_error < 1e-8, (
 print("  Sanity checks: PASSED")
 
 # --- Summary ---
-print(f"\n{'='*40}")
+print(f"\n{'=' * 40}")
 if ilp64_ok and detected_mkl and recon_error < 1e-8:
     print("ILP64 + MKL: READY for large-scale eigendecomp")
 elif not ilp64_ok:
     print("WARNING: ILP64 NOT confirmed - 46k sample limit applies")
 elif not detected_mkl:
     print("WARNING: MKL not detected at runtime - stability risk at 50k+")
-print(f"{'='*40}")
+print(f"{'=' * 40}")
 
 # COMMAND ----------
 

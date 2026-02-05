@@ -1,7 +1,10 @@
 """Numerical equivalence and performance report: JAMMA vs GEMMA.
 
-Runs JAMMA's JAX runner on gemma_synthetic reference data across all LMM modes
-and produces per-field max difference tables, scientific equivalence metrics,
+Runs JAMMA's JAX runner against GEMMA reference data on two datasets:
+  1. gemma_synthetic (100 samples, 500 SNPs) — tight tolerances
+  2. mouse_hs1940 (1940 samples, 12226 SNPs) — real data, wider tolerances
+
+Produces per-field max difference tables, scientific equivalence metrics,
 and per-section performance timing.
 
 Usage:
@@ -12,7 +15,7 @@ from __future__ import annotations
 
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -32,40 +35,146 @@ from jamma.validation import (  # noqa: E402
     load_gemma_kinship,
 )
 
-# Configure JAX for float64
 configure_jax(enable_x64=True)
 
-# --- Paths ---
-PLINK_PREFIX = ROOT / "tests/fixtures/gemma_synthetic/test"
-GEMMA_KINSHIP = ROOT / "tests/fixtures/gemma_synthetic/gemma_kinship.cXX.txt"
-GEMMA_WALD = ROOT / "tests/fixtures/gemma_synthetic/gemma_assoc.assoc.txt"
-GEMMA_SCORE = ROOT / "tests/fixtures/gemma_score/gemma_score.assoc.txt"
-GEMMA_LRT = ROOT / "tests/fixtures/gemma_synthetic/gemma_lrt.assoc.txt"
-GEMMA_ALL = ROOT / "tests/fixtures/gemma_all_tests/gemma_all.assoc.txt"
-GEMMA_COVAR = ROOT / "tests/fixtures/gemma_covariate/gemma_covariate.assoc.txt"
-GEMMA_ALL_COVAR = ROOT / "tests/fixtures/gemma_all_tests/gemma_all_covar.assoc.txt"
-COVARIATE_FILE = ROOT / "tests/fixtures/gemma_covariate/covariates.txt"
-
-# --- Validated tolerances (calibrated from empirical GEMMA comparison) ---
-TOLERANCES = {
-    "kinship": 1e-8,  # observed: 4.66e-10
-    "beta": 1e-2,  # observed: 7e-5 (large values from Pab projection sensitivity)
-    "se": 1e-5,  # observed: ~2e-6
-    "p_wald": 1e-4,  # observed: 2.2e-6
-    "p_score": 1e-4,  # observed: 4.1e-7
-    "p_lrt": 5e-3,  # observed: 1.6e-3 (chi2 CDF magnifies logl diffs)
-    "logl": 1e-6,  # observed: 3.2e-7
-    "lambda": 5e-5,  # observed: 3.8e-5
-}
-
-# Common JAX runner kwargs (suppress progress bars in report)
+# Common JAX runner kwargs
 JAX_KWARGS = dict(n_grid=50, n_refine=20, show_progress=False, check_memory=False)
 
 
+# --- Dataset configurations ---
+@dataclass
+class DatasetConfig:
+    """Configuration for one dataset's equivalence test."""
+
+    name: str
+    plink_prefix: Path
+    kinship_path: Path
+    covariate_path: Path | None
+    tolerances: dict[str, float]
+    compare_kinship: bool = True
+    prepend_intercept: bool = False
+    tests: list[TestSpec] = field(default_factory=list)
+
+
+@dataclass
+class TestSpec:
+    """One LMM mode test to run."""
+
+    name: str
+    ref_path: Path
+    lmm_mode: int
+    use_covariates: bool = False
+
+
+# Synthetic dataset
+SYNTHETIC = DatasetConfig(
+    name="gemma_synthetic (100 samples, 500 SNPs)",
+    plink_prefix=ROOT / "tests/fixtures/gemma_synthetic/test",
+    kinship_path=ROOT / "tests/fixtures/gemma_synthetic/gemma_kinship.cXX.txt",
+    covariate_path=ROOT / "tests/fixtures/gemma_covariate/covariates.txt",
+    tolerances={
+        "kinship": 1e-8,
+        "beta": 1e-2,
+        "se": 1e-5,
+        "p_wald": 1e-4,
+        "p_score": 1e-4,
+        "p_lrt": 5e-3,
+        "logl": 1e-6,
+        "lambda": 5e-5,
+        "atol": 1e-12,
+    },
+    tests=[
+        TestSpec(
+            "Wald (-lmm 1)",
+            ROOT / "tests/fixtures/gemma_synthetic/gemma_assoc.assoc.txt",
+            1,
+        ),
+        TestSpec(
+            "Score (-lmm 3)",
+            ROOT / "tests/fixtures/gemma_score/gemma_score.assoc.txt",
+            3,
+        ),
+        TestSpec(
+            "LRT (-lmm 2)",
+            ROOT / "tests/fixtures/gemma_synthetic/gemma_lrt.assoc.txt",
+            2,
+        ),
+        TestSpec(
+            "All tests (-lmm 4)",
+            ROOT / "tests/fixtures/gemma_all_tests/gemma_all.assoc.txt",
+            4,
+        ),
+        TestSpec(
+            "Wald+covar (-lmm 1 -c)",
+            ROOT / "tests/fixtures/gemma_covariate/gemma_covariate.assoc.txt",
+            1,
+            use_covariates=True,
+        ),
+        TestSpec(
+            "All+covar (-lmm 4 -c)",
+            ROOT / "tests/fixtures/gemma_all_tests/gemma_all_covar.assoc.txt",
+            4,
+            use_covariates=True,
+        ),
+    ],
+)
+
+# Mouse HS1940 dataset (wider tolerances for real data)
+MOUSE_DIR = ROOT / "tests/fixtures/mouse_hs1940"
+MOUSE_HS1940 = DatasetConfig(
+    name="mouse_hs1940 (1940 samples, 12226 SNPs)",
+    plink_prefix=MOUSE_DIR / "mouse_hs1940",
+    kinship_path=MOUSE_DIR / "mouse_hs1940_kinship.cXX.txt",
+    covariate_path=MOUSE_DIR / "covariates.txt",
+    compare_kinship=False,  # GEMMA kinship used as input, not compared
+    # covariates.txt lacks intercept column; CI tests prepend it
+    prepend_intercept=True,
+    tolerances={
+        "kinship": 1e-8,
+        "beta": 1e-2,
+        "se": 5e-4,
+        "p_wald": 1e-2,
+        "p_score": 1e-2,
+        "p_lrt": 1e-2,
+        "logl": 5e-3,
+        "lambda": 1e-3,
+        "atol": 1e-4,
+    },
+    tests=[
+        TestSpec("LRT (-lmm 2)", MOUSE_DIR / "mouse_hs1940_lrt.assoc.txt", 2),
+        TestSpec("Score (-lmm 3)", MOUSE_DIR / "mouse_hs1940_score.assoc.txt", 3),
+        TestSpec("All tests (-lmm 4)", MOUSE_DIR / "mouse_hs1940_all.assoc.txt", 4),
+        TestSpec(
+            "Wald+covar (-lmm 1 -c)",
+            MOUSE_DIR / "mouse_hs1940_covar_wald.assoc.txt",
+            1,
+            use_covariates=True,
+        ),
+        TestSpec(
+            "LRT+covar (-lmm 2 -c)",
+            MOUSE_DIR / "mouse_hs1940_covar_lrt.assoc.txt",
+            2,
+            use_covariates=True,
+        ),
+        TestSpec(
+            "Score+covar (-lmm 3 -c)",
+            MOUSE_DIR / "mouse_hs1940_covar_score.assoc.txt",
+            3,
+            use_covariates=True,
+        ),
+        TestSpec(
+            "All+covar (-lmm 4 -c)",
+            MOUSE_DIR / "mouse_hs1940_covar_all.assoc.txt",
+            4,
+            use_covariates=True,
+        ),
+    ],
+)
+
+
+# --- Data classes ---
 @dataclass
 class FieldResult:
-    """Per-field comparison result."""
-
     field: str
     n_values: int
     max_abs_diff: float
@@ -76,34 +185,34 @@ class FieldResult:
 
 @dataclass
 class ScientificEquivalence:
-    """Scientific equivalence metrics."""
-
     n_snps: int
     spearman_rho: float
-    sig_05: tuple[int, int]  # (agree, total)
+    sig_05: tuple[int, int]
     sig_01: tuple[int, int]
     sig_001: tuple[int, int]
     sig_5e8: tuple[int, int]
-    effect_direction_agree: float  # fraction
+    effect_direction_agree: float
 
 
 @dataclass
 class SectionTiming:
-    """Per-section timing result."""
-
     name: str
     elapsed: float
     n_snps: int
 
 
+# --- Computation helpers ---
 def _compute_field_diffs(
-    actual: np.ndarray, expected: np.ndarray, field: str, tolerance: float
+    actual: np.ndarray,
+    expected: np.ndarray,
+    field_name: str,
+    rtol: float,
+    atol: float = 0.0,
 ) -> FieldResult:
-    """Compute per-field max diffs."""
     mask = np.isfinite(actual) & np.isfinite(expected)
     a, e = actual[mask], expected[mask]
     if len(a) == 0:
-        return FieldResult(field, 0, 0.0, 0.0, tolerance, True)
+        return FieldResult(field_name, 0, 0.0, 0.0, rtol, True)
 
     abs_diff = np.abs(a - e)
     max_abs = float(np.max(abs_diff))
@@ -113,13 +222,15 @@ def _compute_field_diffs(
         rel_diff = np.where(np.isfinite(rel_diff), rel_diff, 0.0)
     max_rel = float(np.max(rel_diff))
 
-    return FieldResult(field, len(a), max_abs, max_rel, tolerance, max_rel <= tolerance)
+    # Match numpy.testing.assert_allclose: |a-e| <= atol + rtol * |e|
+    passed = bool(np.all(abs_diff <= atol + rtol * np.abs(e)))
+
+    return FieldResult(field_name, len(a), max_abs, max_rel, rtol, passed)
 
 
 def _scientific_equivalence(
     jamma: list, gemma: list, p_field: str
 ) -> ScientificEquivalence:
-    """Compute scientific equivalence metrics."""
     j_by_rs = {r.rs: r for r in jamma}
     g_by_rs = {r.rs: r for r in gemma}
     common = sorted(set(j_by_rs) & set(g_by_rs))
@@ -139,12 +250,11 @@ def _scientific_equivalence(
     j_beta = np.array([j_by_rs[rs].beta for rs in common])
     g_beta = np.array([g_by_rs[rs].beta for rs in common])
     beta_mask = np.isfinite(j_beta) & np.isfinite(g_beta) & (np.abs(g_beta) > 1e-10)
-    if np.sum(beta_mask) > 0:
-        dir_agree = float(
-            np.mean(np.sign(j_beta[beta_mask]) == np.sign(g_beta[beta_mask]))
-        )
-    else:
-        dir_agree = 1.0
+    dir_agree = (
+        float(np.mean(np.sign(j_beta[beta_mask]) == np.sign(g_beta[beta_mask])))
+        if np.sum(beta_mask) > 0
+        else 1.0
+    )
 
     return ScientificEquivalence(
         n_snps=len(j_p),
@@ -157,8 +267,14 @@ def _scientific_equivalence(
     )
 
 
+def _extract(results, field_name):
+    """Extract a field as numpy array, NaN for missing."""
+    return np.array(
+        [getattr(r, field_name) if getattr(r, field_name) else np.nan for r in results]
+    )
+
+
 def _build_snp_info(plink_data):
-    """Build SNP info from PlinkData."""
     snp_info = []
     for i in range(plink_data.n_snps):
         snp_info.append(
@@ -175,22 +291,30 @@ def _build_snp_info(plink_data):
     return snp_info
 
 
+def _load_phenotypes(fam_path: Path) -> np.ndarray:
+    phenotypes = []
+    with open(fam_path) as f:
+        for line in f:
+            parts = line.strip().split()
+            val = parts[5] if len(parts) >= 6 else "-9"
+            phenotypes.append(np.nan if val in ("-9", "NA") else float(val))
+    return np.array(phenotypes)
+
+
+# --- Output helpers ---
 def _fmt_sci(val: float) -> str:
-    """Format scientific notation."""
     if val == 0.0:
         return "0"
     return f"{val:.2e}"
 
 
 def print_section(title: str):
-    """Print a section header."""
     print(f"\n{'=' * 70}")
     print(f"  {title}")
     print(f"{'=' * 70}")
 
 
 def print_field_table(fields: list[FieldResult]):
-    """Print field comparison table."""
     print(
         f"  {'Field':<14} {'N':>6}  {'Max Abs Diff':>14}  "
         f"{'Max Rel Diff':>14}  {'Tolerance':>12}  {'Result':>6}"
@@ -205,7 +329,6 @@ def print_field_table(fields: list[FieldResult]):
 
 
 def print_scientific(se: ScientificEquivalence, p_label: str):
-    """Print scientific equivalence metrics."""
     print(f"\n  Scientific Equivalence ({p_label}):")
     print(f"    SNPs compared:              {se.n_snps}")
     print(f"    P-value rank correlation:   {se.spearman_rho:.6f}")
@@ -216,404 +339,279 @@ def print_scientific(se: ScientificEquivalence, p_label: str):
     print(f"    Effect direction agreement: {se.effect_direction_agree * 100:.1f}%")
 
 
-def _extract_fields(results, field_name):
-    """Extract a field from results as numpy array, using NaN for missing."""
-    return np.array(
-        [getattr(r, field_name) if getattr(r, field_name) else np.nan for r in results]
-    )
+def print_performance_summary(timings: list[SectionTiming], total: float):
+    print(f"\n{'=' * 70}")
+    print("  Performance Summary")
+    print(f"{'=' * 70}")
+    print(f"  {'Section':<32} {'SNPs':>6}  {'Time (s)':>10}  {'SNPs/sec':>10}")
+    print(f"  {'-'*32} {'-'*6}  {'-'*10}  {'-'*10}")
+    for t in timings:
+        snps_per_sec = t.n_snps / t.elapsed if t.elapsed > 0 else 0
+        print(
+            f"  {t.name:<32} {t.n_snps:>6}  {t.elapsed:>10.3f}  {snps_per_sec:>10.0f}"
+        )
+    print(f"  {'-'*32} {'-'*6}  {'-'*10}  {'-'*10}")
+    print(f"  {'Total':<32} {'':>6}  {total:>10.3f}")
+
+
+# --- Per-mode field comparisons ---
+def _compare_fields(
+    lmm_mode: int, jamma: list, gemma: list, tol: dict
+) -> list[FieldResult]:
+    """Build field comparison list based on LMM mode."""
+    fields = []
+    atol = tol.get("atol", 0.0)
+
+    # Wald fields (modes 1, 4)
+    if lmm_mode in (1, 4):
+        fields.append(
+            _compute_field_diffs(
+                np.array([r.beta for r in jamma]),
+                np.array([r.beta for r in gemma]),
+                "beta",
+                tol["beta"],
+                atol,
+            )
+        )
+        fields.append(
+            _compute_field_diffs(
+                np.array([r.p_wald for r in jamma]),
+                np.array([r.p_wald for r in gemma]),
+                "p_wald",
+                tol["p_wald"],
+                atol,
+            )
+        )
+
+    # SE (mode 1 only — mode 4 doesn't need separate check)
+    if lmm_mode == 1:
+        fields.append(
+            _compute_field_diffs(
+                np.array([r.se for r in jamma]),
+                np.array([r.se for r in gemma]),
+                "se",
+                tol["se"],
+                atol,
+            )
+        )
+
+    # LRT fields (modes 2, 4)
+    if lmm_mode in (2, 4):
+        fields.append(
+            _compute_field_diffs(
+                _extract(jamma, "p_lrt"),
+                _extract(gemma, "p_lrt"),
+                "p_lrt",
+                tol["p_lrt"],
+                atol,
+            )
+        )
+
+    # Score fields (modes 3, 4)
+    if lmm_mode in (3, 4):
+        fields.append(
+            _compute_field_diffs(
+                _extract(jamma, "p_score"),
+                _extract(gemma, "p_score"),
+                "p_score",
+                tol["p_score"],
+                atol,
+            )
+        )
+
+    # Lambda REML (modes 1, 4)
+    if lmm_mode in (1, 4):
+        fields.append(
+            _compute_field_diffs(
+                _extract(jamma, "l_remle"),
+                _extract(gemma, "l_remle"),
+                "l_remle",
+                tol["lambda"],
+                atol,
+            )
+        )
+
+    # Lambda MLE (modes 2, 4)
+    if lmm_mode in (2, 4):
+        fields.append(
+            _compute_field_diffs(
+                _extract(jamma, "l_mle"),
+                _extract(gemma, "l_mle"),
+                "l_mle",
+                tol["lambda"],
+                atol,
+            )
+        )
+
+    # logl_H1 (mode 1 — the Wald reference sometimes includes it)
+    if lmm_mode == 1:
+        fields.append(
+            _compute_field_diffs(
+                _extract(jamma, "logl_H1"),
+                _extract(gemma, "logl_H1"),
+                "logl_H1",
+                tol["logl"],
+                atol,
+            )
+        )
+
+    return fields
+
+
+def _primary_p_field(lmm_mode: int) -> str:
+    """Which p-value field to use for scientific equivalence."""
+    if lmm_mode == 2:
+        return "p_lrt"
+    if lmm_mode == 3:
+        return "p_score"
+    return "p_wald"
+
+
+# --- Main ---
+def run_dataset(
+    config: DatasetConfig, section_offset: int
+) -> tuple[bool, list[SectionTiming]]:
+    """Run equivalence tests for one dataset. Returns (all_passed, timings)."""
+    all_passed = True
+    timings: list[SectionTiming] = []
+
+    # Check if dataset exists
+    bed_path = config.plink_prefix.with_suffix(".bed")
+    if not bed_path.exists():
+        print(
+            f"\n  [SKIPPED] {config.name} — "
+            f"PLINK files not found at {config.plink_prefix}"
+        )
+        return True, []
+
+    print(f"\n{'#' * 70}")
+    print(f"  DATASET: {config.name}")
+    print(f"{'#' * 70}")
+
+    # Load data
+    plink_data = load_plink_binary(config.plink_prefix)
+    phenotypes = _load_phenotypes(config.plink_prefix.with_suffix(".fam"))
+    snp_info = _build_snp_info(plink_data)
+    ref_kinship = read_kinship_matrix(config.kinship_path)
+    n_samples = plink_data.genotypes.shape[0]
+    n_snps = plink_data.genotypes.shape[1]
+    print(f"  Samples: {n_samples}, SNPs: {n_snps}")
+
+    covariates = None
+    if config.covariate_path and config.covariate_path.exists():
+        covariates = np.loadtxt(config.covariate_path)
+        if config.prepend_intercept:
+            covariates = np.hstack([np.ones((covariates.shape[0], 1)), covariates])
+
+    # Kinship comparison (only for datasets where we validated it)
+    section_num = section_offset + 1
+    if config.compare_kinship:
+        print_section(f"{section_num}. Kinship Matrix")
+
+        t0 = time.perf_counter()
+        gemma_K = load_gemma_kinship(config.kinship_path)
+        jamma_K = compute_centered_kinship(plink_data.genotypes)
+        t_kinship = time.perf_counter() - t0
+        timings.append(SectionTiming(f"[{config.name[:8]}] Kinship", t_kinship, n_snps))
+
+        abs_diff = np.abs(jamma_K - gemma_K)
+        max_abs = float(np.max(abs_diff))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            rel_diff = abs_diff / np.abs(gemma_K)
+            rel_diff = np.where(np.isfinite(rel_diff), rel_diff, 0.0)
+        max_rel = float(np.max(rel_diff))
+
+        k_tol = config.tolerances["kinship"]
+        fields = [
+            FieldResult(
+                "kinship",
+                n_samples * n_samples,
+                max_abs,
+                max_rel,
+                k_tol,
+                max_rel <= k_tol,
+            )
+        ]
+        print_field_table(fields)
+        print(f"\n  Time: {t_kinship:.3f}s")
+        if not fields[0].passed:
+            all_passed = False
+
+    # LMM mode tests
+    # Note: eigendecomp is NOT pre-computed because the runner filters samples
+    # (removing missing phenotypes) before eigendecomposing. Passing pre-computed
+    # eigenvalues from the full kinship causes dimension mismatches.
+    for i, spec in enumerate(config.tests):
+        section_num = section_offset + 2 + i
+
+        if not spec.ref_path.exists():
+            print(f"\n  [{section_num}. {spec.name}] SKIPPED — fixture not found")
+            continue
+
+        print_section(f"{section_num}. {spec.name}")
+
+        gemma_ref = load_gemma_assoc(spec.ref_path)
+        covar = covariates if spec.use_covariates else None
+
+        t0 = time.perf_counter()
+        jamma_results = run_lmm_association_jax(
+            genotypes=plink_data.genotypes,
+            phenotypes=phenotypes,
+            kinship=ref_kinship,
+            snp_info=snp_info,
+            covariates=covar,
+            lmm_mode=spec.lmm_mode,
+            **JAX_KWARGS,
+        )
+        t_elapsed = time.perf_counter() - t0
+        timings.append(
+            SectionTiming(
+                f"[{config.name[:8]}] {spec.name[:20]}", t_elapsed, len(jamma_results)
+            )
+        )
+
+        fields = _compare_fields(
+            spec.lmm_mode, jamma_results, gemma_ref, config.tolerances
+        )
+        print_field_table(fields)
+        print(f"\n  Time: {t_elapsed:.3f}s ({len(jamma_results)} SNPs)")
+
+        for f in fields:
+            if not f.passed:
+                all_passed = False
+
+        p_field = _primary_p_field(spec.lmm_mode)
+        se = _scientific_equivalence(jamma_results, gemma_ref, p_field)
+        print_scientific(se, f"{p_field}")
+
+    return all_passed, timings
 
 
 def main():
     total_start = time.perf_counter()
-    timings: list[SectionTiming] = []
 
     print("=" * 70)
     print("  JAMMA vs GEMMA: Numerical Equivalence & Performance Report")
     print("=" * 70)
     print(f"  Date: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"  Dataset: gemma_synthetic (PLINK prefix: {PLINK_PREFIX.name})")
     print("  Runner: JAX (grid search + golden section)")
 
-    # Load shared data
-    plink_data = load_plink_binary(PLINK_PREFIX)
-    fam_path = PLINK_PREFIX.with_suffix(".fam")
-    phenotypes = []
-    with open(fam_path) as f:
-        for line in f:
-            parts = line.strip().split()
-            val = parts[5] if len(parts) >= 6 else "-9"
-            phenotypes.append(np.nan if val in ("-9", "NA") else float(val))
-    phenotypes = np.array(phenotypes)
-    snp_info = _build_snp_info(plink_data)
-    ref_kinship = read_kinship_matrix(GEMMA_KINSHIP)
-
-    n_samples = plink_data.genotypes.shape[0]
-    n_snps = plink_data.genotypes.shape[1]
-    print(f"  Samples: {n_samples}, SNPs: {n_snps}")
-
+    all_timings: list[SectionTiming] = []
     all_passed = True
 
-    # ===== 1. KINSHIP =====
-    print_section("1. Kinship Matrix (K = XX'/p)")
-
-    t0 = time.perf_counter()
-    gemma_K = load_gemma_kinship(GEMMA_KINSHIP)
-    jamma_K = compute_centered_kinship(plink_data.genotypes)
-    t_kinship = time.perf_counter() - t0
-    timings.append(SectionTiming("Kinship", t_kinship, n_snps))
-
-    abs_diff = np.abs(jamma_K - gemma_K)
-    max_abs = float(np.max(abs_diff))
-    with np.errstate(divide="ignore", invalid="ignore"):
-        rel_diff = abs_diff / np.abs(gemma_K)
-        rel_diff = np.where(np.isfinite(rel_diff), rel_diff, 0.0)
-    max_rel = float(np.max(rel_diff))
-
-    fields = [
-        FieldResult(
-            "kinship",
-            n_samples * n_samples,
-            max_abs,
-            max_rel,
-            TOLERANCES["kinship"],
-            max_rel <= TOLERANCES["kinship"],
-        )
-    ]
-    print_field_table(fields)
-    print(f"\n  Symmetric: {np.allclose(jamma_K, jamma_K.T)}")
-    print(f"  PSD: {np.all(np.linalg.eigvalsh(jamma_K) >= -1e-10)}")
-    print(f"  Time: {t_kinship:.3f}s")
-    if not fields[0].passed:
-        all_passed = False
-
-    # ===== 2. WALD TEST (-lmm 1) =====
-    print_section("2. Wald Test (-lmm 1)")
-
-    gemma_wald = load_gemma_assoc(GEMMA_WALD)
-
-    t0 = time.perf_counter()
-    jamma_wald = run_lmm_association_jax(
-        genotypes=plink_data.genotypes,
-        phenotypes=phenotypes,
-        kinship=ref_kinship,
-        snp_info=snp_info,
-        lmm_mode=1,
-        **JAX_KWARGS,
-    )
-    t_wald = time.perf_counter() - t0
-    timings.append(SectionTiming("Wald (-lmm 1)", t_wald, len(jamma_wald)))
-
-    g_beta = np.array([r.beta for r in gemma_wald])
-    g_se = np.array([r.se for r in gemma_wald])
-    g_pwald = np.array([r.p_wald for r in gemma_wald])
-    g_logl = _extract_fields(gemma_wald, "logl_H1")
-    g_lam = _extract_fields(gemma_wald, "l_remle")
-
-    fields = [
-        _compute_field_diffs(
-            np.array([r.beta for r in jamma_wald]), g_beta, "beta", TOLERANCES["beta"]
-        ),
-        _compute_field_diffs(
-            np.array([r.se for r in jamma_wald]), g_se, "se", TOLERANCES["se"]
-        ),
-        _compute_field_diffs(
-            np.array([r.p_wald for r in jamma_wald]),
-            g_pwald,
-            "p_wald",
-            TOLERANCES["p_wald"],
-        ),
-        _compute_field_diffs(
-            _extract_fields(jamma_wald, "logl_H1"),
-            g_logl,
-            "logl_H1",
-            TOLERANCES["logl"],
-        ),
-        _compute_field_diffs(
-            _extract_fields(jamma_wald, "l_remle"),
-            g_lam,
-            "l_remle",
-            TOLERANCES["lambda"],
-        ),
-    ]
-    print_field_table(fields)
-    print(f"\n  Time: {t_wald:.3f}s ({len(jamma_wald)} SNPs)")
-    for f in fields:
-        if not f.passed:
+    # Run both datasets
+    for i, config in enumerate([SYNTHETIC, MOUSE_HS1940]):
+        offset = sum(1 + len(c.tests) for c in [SYNTHETIC, MOUSE_HS1940][:i])
+        passed, timings = run_dataset(config, offset)
+        all_timings.extend(timings)
+        if not passed:
             all_passed = False
 
-    se = _scientific_equivalence(jamma_wald, gemma_wald, "p_wald")
-    print_scientific(se, "Wald p-value")
-
-    # ===== 3. SCORE TEST (-lmm 3) =====
-    if GEMMA_SCORE.exists():
-        print_section("3. Score Test (-lmm 3)")
-
-        gemma_score = load_gemma_assoc(GEMMA_SCORE)
-
-        t0 = time.perf_counter()
-        jamma_score = run_lmm_association_jax(
-            genotypes=plink_data.genotypes,
-            phenotypes=phenotypes,
-            kinship=ref_kinship,
-            snp_info=snp_info,
-            lmm_mode=3,
-            **JAX_KWARGS,
-        )
-        t_score = time.perf_counter() - t0
-        timings.append(SectionTiming("Score (-lmm 3)", t_score, len(jamma_score)))
-
-        fields = [
-            _compute_field_diffs(
-                np.array([r.p_score for r in jamma_score]),
-                np.array([r.p_score for r in gemma_score]),
-                "p_score",
-                TOLERANCES["p_score"],
-            ),
-        ]
-        print_field_table(fields)
-        print(f"\n  Time: {t_score:.3f}s ({len(jamma_score)} SNPs)")
-        for f in fields:
-            if not f.passed:
-                all_passed = False
-
-        se_score = _scientific_equivalence(jamma_score, gemma_score, "p_score")
-        print_scientific(se_score, "Score p-value")
-    else:
-        print("\n  [SKIPPED] Score test reference not found")
-
-    # ===== 4. LRT (-lmm 2) =====
-    if GEMMA_LRT.exists():
-        print_section("4. Likelihood Ratio Test (-lmm 2)")
-
-        gemma_lrt = load_gemma_assoc(GEMMA_LRT)
-
-        t0 = time.perf_counter()
-        jamma_lrt = run_lmm_association_jax(
-            genotypes=plink_data.genotypes,
-            phenotypes=phenotypes,
-            kinship=ref_kinship,
-            snp_info=snp_info,
-            lmm_mode=2,
-            **JAX_KWARGS,
-        )
-        t_lrt = time.perf_counter() - t0
-        timings.append(SectionTiming("LRT (-lmm 2)", t_lrt, len(jamma_lrt)))
-
-        fields = [
-            _compute_field_diffs(
-                np.array([r.p_lrt for r in jamma_lrt]),
-                np.array([r.p_lrt for r in gemma_lrt]),
-                "p_lrt",
-                TOLERANCES["p_lrt"],
-            ),
-            _compute_field_diffs(
-                _extract_fields(jamma_lrt, "l_mle"),
-                _extract_fields(gemma_lrt, "l_mle"),
-                "l_mle",
-                TOLERANCES["lambda"],
-            ),
-        ]
-        print_field_table(fields)
-        print(f"\n  Time: {t_lrt:.3f}s ({len(jamma_lrt)} SNPs)")
-        for f in fields:
-            if not f.passed:
-                all_passed = False
-
-        se_lrt = _scientific_equivalence(jamma_lrt, gemma_lrt, "p_lrt")
-        print_scientific(se_lrt, "LRT p-value")
-    else:
-        print("\n  [SKIPPED] LRT reference not found")
-
-    # ===== 5. ALL TESTS (-lmm 4) =====
-    if GEMMA_ALL.exists():
-        print_section("5. All Tests Mode (-lmm 4)")
-
-        gemma_all = load_gemma_assoc(GEMMA_ALL)
-
-        t0 = time.perf_counter()
-        jamma_all = run_lmm_association_jax(
-            genotypes=plink_data.genotypes,
-            phenotypes=phenotypes,
-            kinship=ref_kinship,
-            snp_info=snp_info,
-            lmm_mode=4,
-            **JAX_KWARGS,
-        )
-        t_all = time.perf_counter() - t0
-        timings.append(SectionTiming("All tests (-lmm 4)", t_all, len(jamma_all)))
-
-        fields = [
-            _compute_field_diffs(
-                np.array([r.beta for r in jamma_all]),
-                np.array([r.beta for r in gemma_all]),
-                "beta",
-                TOLERANCES["beta"],
-            ),
-            _compute_field_diffs(
-                np.array([r.p_wald for r in jamma_all]),
-                np.array([r.p_wald for r in gemma_all]),
-                "p_wald",
-                TOLERANCES["p_wald"],
-            ),
-            _compute_field_diffs(
-                _extract_fields(jamma_all, "p_lrt"),
-                _extract_fields(gemma_all, "p_lrt"),
-                "p_lrt",
-                TOLERANCES["p_lrt"],
-            ),
-            _compute_field_diffs(
-                _extract_fields(jamma_all, "p_score"),
-                _extract_fields(gemma_all, "p_score"),
-                "p_score",
-                TOLERANCES["p_score"],
-            ),
-            _compute_field_diffs(
-                _extract_fields(jamma_all, "l_remle"),
-                _extract_fields(gemma_all, "l_remle"),
-                "l_remle",
-                TOLERANCES["lambda"],
-            ),
-            _compute_field_diffs(
-                _extract_fields(jamma_all, "l_mle"),
-                _extract_fields(gemma_all, "l_mle"),
-                "l_mle",
-                TOLERANCES["lambda"],
-            ),
-        ]
-        print_field_table(fields)
-        print(f"\n  Time: {t_all:.3f}s ({len(jamma_all)} SNPs)")
-        for f in fields:
-            if not f.passed:
-                all_passed = False
-
-        se_all = _scientific_equivalence(jamma_all, gemma_all, "p_wald")
-        print_scientific(se_all, "All-tests Wald p-value")
-
-    # ===== 6. COVARIATES (-lmm 1 -c) =====
-    if GEMMA_COVAR.exists() and COVARIATE_FILE.exists():
-        print_section("6. Wald Test with Covariates (-lmm 1 -c)")
-
-        covariates = np.loadtxt(COVARIATE_FILE)
-        gemma_covar = load_gemma_assoc(GEMMA_COVAR)
-
-        t0 = time.perf_counter()
-        jamma_covar = run_lmm_association_jax(
-            genotypes=plink_data.genotypes,
-            phenotypes=phenotypes,
-            kinship=ref_kinship,
-            snp_info=snp_info,
-            covariates=covariates,
-            lmm_mode=1,
-            **JAX_KWARGS,
-        )
-        t_covar = time.perf_counter() - t0
-        timings.append(
-            SectionTiming("Wald+covar (-lmm 1 -c)", t_covar, len(jamma_covar))
-        )
-
-        fields = [
-            _compute_field_diffs(
-                np.array([r.beta for r in jamma_covar]),
-                np.array([r.beta for r in gemma_covar]),
-                "beta",
-                TOLERANCES["beta"],
-            ),
-            _compute_field_diffs(
-                np.array([r.p_wald for r in jamma_covar]),
-                np.array([r.p_wald for r in gemma_covar]),
-                "p_wald",
-                TOLERANCES["p_wald"],
-            ),
-            _compute_field_diffs(
-                _extract_fields(jamma_covar, "l_remle"),
-                _extract_fields(gemma_covar, "l_remle"),
-                "l_remle",
-                TOLERANCES["lambda"],
-            ),
-        ]
-        print_field_table(fields)
-        print(f"\n  Time: {t_covar:.3f}s ({len(jamma_covar)} SNPs)")
-        for f in fields:
-            if not f.passed:
-                all_passed = False
-
-        se_covar = _scientific_equivalence(jamma_covar, gemma_covar, "p_wald")
-        print_scientific(se_covar, "Wald p-value (with covariates)")
-
-    # ===== 7. ALL TESTS + COVARIATES (-lmm 4 -c) =====
-    if GEMMA_ALL_COVAR.exists() and COVARIATE_FILE.exists():
-        print_section("7. All Tests with Covariates (-lmm 4 -c)")
-
-        covariates = np.loadtxt(COVARIATE_FILE)
-        gemma_all_covar = load_gemma_assoc(GEMMA_ALL_COVAR)
-
-        t0 = time.perf_counter()
-        jamma_all_covar = run_lmm_association_jax(
-            genotypes=plink_data.genotypes,
-            phenotypes=phenotypes,
-            kinship=ref_kinship,
-            snp_info=snp_info,
-            covariates=covariates,
-            lmm_mode=4,
-            **JAX_KWARGS,
-        )
-        t_allc = time.perf_counter() - t0
-        timings.append(
-            SectionTiming("All+covar (-lmm 4 -c)", t_allc, len(jamma_all_covar))
-        )
-
-        fields = [
-            _compute_field_diffs(
-                np.array([r.beta for r in jamma_all_covar]),
-                np.array([r.beta for r in gemma_all_covar]),
-                "beta",
-                TOLERANCES["beta"],
-            ),
-            _compute_field_diffs(
-                np.array([r.p_wald for r in jamma_all_covar]),
-                np.array([r.p_wald for r in gemma_all_covar]),
-                "p_wald",
-                TOLERANCES["p_wald"],
-            ),
-            _compute_field_diffs(
-                _extract_fields(jamma_all_covar, "p_lrt"),
-                _extract_fields(gemma_all_covar, "p_lrt"),
-                "p_lrt",
-                TOLERANCES["p_lrt"],
-            ),
-            _compute_field_diffs(
-                _extract_fields(jamma_all_covar, "p_score"),
-                _extract_fields(gemma_all_covar, "p_score"),
-                "p_score",
-                TOLERANCES["p_score"],
-            ),
-        ]
-        print_field_table(fields)
-        print(f"\n  Time: {t_allc:.3f}s ({len(jamma_all_covar)} SNPs)")
-        for f in fields:
-            if not f.passed:
-                all_passed = False
-
-        se_allc = _scientific_equivalence(jamma_all_covar, gemma_all_covar, "p_wald")
-        print_scientific(se_allc, "All-tests Wald (covariates)")
-
-    # ===== PERFORMANCE SUMMARY =====
+    # Performance summary
     total_elapsed = time.perf_counter() - total_start
+    print_performance_summary(all_timings, total_elapsed)
 
-    print(f"\n{'=' * 70}")
-    print("  Performance Summary")
-    print(f"{'=' * 70}")
-    print(f"  {'Section':<28} {'SNPs':>6}  {'Time (s)':>10}  {'SNPs/sec':>10}")
-    print(f"  {'-'*28} {'-'*6}  {'-'*10}  {'-'*10}")
-    for t in timings:
-        snps_per_sec = t.n_snps / t.elapsed if t.elapsed > 0 else 0
-        print(
-            f"  {t.name:<28} {t.n_snps:>6}  {t.elapsed:>10.3f}  {snps_per_sec:>10.0f}"
-        )
-    print(f"  {'-'*28} {'-'*6}  {'-'*10}  {'-'*10}")
-    print(f"  {'Total':<28} {'':>6}  {total_elapsed:>10.3f}")
-
-    # ===== VERDICT =====
+    # Verdict
     print(f"\n{'=' * 70}")
     if all_passed:
         print("  VERDICT: ALL FIELDS PASS TOLERANCES")

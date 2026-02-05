@@ -6,8 +6,9 @@
 ARG DBR_VERSION=15.4-LTS
 FROM databricksruntime/standard:${DBR_VERSION}
 
-# Purge OpenBLAS — segfaults on matrices >50k and conflicts with MKL
-RUN apt-get purge -y libopenblas* libblas* 2>/dev/null || true
+# Purge all non-MKL BLAS/LAPACK providers and system numpy — prevents
+# symbol conflicts and ensures MKL ILP64 is the only BLAS at runtime
+RUN apt-get purge -y libopenblas* libblas* libatlas* liblapack* python3-numpy 2>/dev/null || true
 
 # MKL runtime — provides libmkl_def.so.2 and other computational kernels
 # that auditwheel can't bundle (loaded via dlopen, not ELF NEEDED)

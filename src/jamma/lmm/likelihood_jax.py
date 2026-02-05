@@ -416,6 +416,78 @@ def batch_compute_iab(
     return vmap(lambda Uab: calc_pab_jax(n_cvt, ones, Uab))(Uab_batch)
 
 
+def _golden_section_refine(
+    compute_batch,
+    all_logls: Float[Array, "g p"],
+    log_lambdas: Float[Array, " g"],
+    n_grid: int,
+    n_iter: int,
+) -> tuple[Float[Array, " p"], Float[Array, " p"]]:
+    """Grid-to-golden-section refinement for lambda optimization.
+
+    Given grid log-likelihoods, brackets the optimum per SNP and runs
+    golden section iterations using lax.fori_loop (stays on device).
+
+    This is the shared core of both REML and MLE lambda optimizers.
+    The only difference is the compute_batch function:
+    - REML: evaluates _reml_with_precomputed_iab
+    - MLE: evaluates mle_log_likelihood_jax
+
+    Convergence: 0.618^20 ~ 6.6e-5 relative tolerance after 20 iterations.
+
+    Args:
+        compute_batch: Function (log_lambdas_per_snp,) -> (logls_per_snp,).
+            Evaluates the likelihood at one log-lambda value per SNP.
+        all_logls: Grid log-likelihoods (n_grid, n_snps).
+        log_lambdas: Log-scale grid points (n_grid,).
+        n_grid: Number of grid points.
+        n_iter: Golden section iterations.
+
+    Returns:
+        (optimal_lambdas, optimal_logls) for each SNP.
+    """
+    phi = 0.6180339887498949  # Golden ratio - 1
+
+    # Find best grid point per SNP and bracket
+    best_idx = jnp.argmax(all_logls, axis=0)
+    idx_low = jnp.maximum(best_idx - 1, 0)
+    idx_high = jnp.minimum(best_idx + 1, n_grid - 1)
+
+    a = log_lambdas[idx_low]
+    b = log_lambdas[idx_high]
+
+    # Initial probe points
+    c = b - phi * (b - a)
+    d = a + phi * (b - a)
+    fc = compute_batch(c)
+    fd = compute_batch(d)
+
+    # Golden section iterations via lax.fori_loop (stays on device)
+    def golden_step(_, state):
+        a, b, c, d, fc, fd = state
+        keep_left = fc > fd
+
+        new_a = jnp.where(keep_left, a, c)
+        new_b = jnp.where(keep_left, d, b)
+        new_c = new_b - phi * (new_b - new_a)
+        new_d = new_a + phi * (new_b - new_a)
+
+        new_logl = compute_batch(jnp.where(keep_left, new_c, new_d))
+        new_fc = jnp.where(keep_left, new_logl, fd)
+        new_fd = jnp.where(keep_left, fc, new_logl)
+
+        return (new_a, new_b, new_c, new_d, new_fc, new_fd)
+
+    final_state = jax.lax.fori_loop(0, n_iter, golden_step, (a, b, c, d, fc, fd))
+    a, b = final_state[0], final_state[1]
+
+    log_opt = (a + b) / 2
+    best_lambdas = jnp.exp(log_opt)
+    best_logls = compute_batch(log_opt)
+
+    return best_lambdas, best_logls
+
+
 @partial(jit, static_argnums=(0, 4, 5, 6, 7), donate_argnums=(2,))
 def golden_section_optimize_lambda(
     n_cvt: int,
@@ -427,7 +499,7 @@ def golden_section_optimize_lambda(
     n_grid: int = 50,
     n_iter: int = 20,
 ) -> tuple[Float[Array, " p"], Float[Array, " p"]]:
-    """Optimize lambda using grid search + golden section refinement.
+    """Optimize REML lambda using grid search + golden section refinement.
 
     This hybrid approach:
     1. Grid search to find approximate region (vectorized across SNPs)
@@ -446,11 +518,10 @@ def golden_section_optimize_lambda(
     0.618^20 ~ 6.6e-5, giving relative tolerance < 1e-5 for typical lambda.
 
     Performance:
-    - Grid search: O(n_grid) REML evaluations (shared across SNPs)
-    - Golden section: O(n_iter) REML evaluations per SNP (vectorized)
-    - Total: ~70 REML evaluations vs ~50 for Brent (similar cost)
+    - Grid search: O(n_grid) likelihood evaluations (shared across SNPs)
+    - Golden section: O(n_iter) likelihood evaluations per SNP (vectorized)
+    - Total: ~70 evaluations vs ~50 for Brent (similar cost)
     - All computations stay on device (no host/device sync in loops)
-    - Uses lax.fori_loop for golden section to avoid Python loop retracing
     - donate_argnums=(2,) hints XLA to reuse Uab_batch memory (when possible)
 
     Args:
@@ -465,31 +536,17 @@ def golden_section_optimize_lambda(
     Returns:
         (optimal_lambdas, optimal_logls) for each SNP.
     """
-    phi = 0.6180339887498949  # Golden ratio - 1
-
-    # Stage 1: Coarse grid search on log scale (fully on device)
+    # Stage 1: Coarse grid search on log scale
     log_l_min = jnp.log(l_min)
     log_l_max = jnp.log(l_max)
     log_lambdas = jnp.linspace(log_l_min, log_l_max, n_grid)
     lambdas = jnp.exp(log_lambdas)
 
-    # Evaluate all SNPs at all grid points using vmap (stays on device)
     all_logls = _batch_grid_reml_with_iab(
         n_cvt, lambdas, eigenvalues, Uab_batch, Iab_batch
     )
 
-    # Find best index per SNP
-    best_idx = jnp.argmax(all_logls, axis=0)
-
-    # Set up bounds for golden section (one grid cell on each side)
-    idx_low = jnp.maximum(best_idx - 1, 0)
-    idx_high = jnp.minimum(best_idx + 1, n_grid - 1)
-
-    # Initial bounds (log scale)
-    a = log_lambdas[idx_low]
-    b = log_lambdas[idx_high]
-
-    # Helper to compute REML at log-scale lambdas (batch) - uses precomputed Iab
+    # REML batch evaluator (closure over precomputed Iab)
     def compute_reml_batch(log_lams):
         lams = jnp.exp(log_lams)
         return vmap(
@@ -499,48 +556,10 @@ def golden_section_optimize_lambda(
             in_axes=(0, 0, 0),
         )(lams, Uab_batch, Iab_batch)
 
-    # Initial probe points (golden ratio positions)
-    c = b - phi * (b - a)
-    d = a + phi * (b - a)
-    fc = compute_reml_batch(c)
-    fd = compute_reml_batch(d)
-
-    # Stage 2: Golden section iterations using lax.fori_loop (stays on device)
-    def golden_step(_, state):
-        a, b, c, d, fc, fd = state
-
-        # Where fc > fd, maximum is in [a, d], otherwise in [c, b]
-        keep_left = fc > fd
-
-        # Update bounds
-        new_a = jnp.where(keep_left, a, c)
-        new_b = jnp.where(keep_left, d, b)
-
-        # Compute new interior points
-        new_c = new_b - phi * (new_b - new_a)
-        new_d = new_a + phi * (new_b - new_a)
-
-        # Compute REML at the new position only
-        new_logl = compute_reml_batch(jnp.where(keep_left, new_c, new_d))
-
-        # Reuse function values where possible
-        new_fc = jnp.where(keep_left, new_logl, fd)
-        new_fd = jnp.where(keep_left, fc, new_logl)
-
-        return (new_a, new_b, new_c, new_d, new_fc, new_fd)
-
-    init_state = (a, b, c, d, fc, fd)
-    final_state = jax.lax.fori_loop(0, n_iter, golden_step, init_state)
-    a, b, c, d, fc, fd = final_state
-
-    # Return midpoint as optimal (log scale)
-    log_opt = (a + b) / 2
-    best_lambdas = jnp.exp(log_opt)
-
-    # Final likelihood at optimal point
-    best_logls = compute_reml_batch(log_opt)
-
-    return best_lambdas, best_logls
+    # Stage 2: Golden section refinement
+    return _golden_section_refine(
+        compute_reml_batch, all_logls, log_lambdas, n_grid, n_iter
+    )
 
 
 def _batch_grid_reml_with_iab(
@@ -842,29 +861,15 @@ def golden_section_optimize_lambda_mle(
     Returns:
         (optimal_lambdas, optimal_logls) - MLE log-likelihoods for each SNP.
     """
-    phi = 0.6180339887498949  # Golden ratio - 1
-
-    # Stage 1: Coarse grid search on log scale (fully on device)
+    # Stage 1: Coarse grid search on log scale
     log_l_min = jnp.log(l_min)
     log_l_max = jnp.log(l_max)
     log_lambdas = jnp.linspace(log_l_min, log_l_max, n_grid)
     lambdas = jnp.exp(log_lambdas)
 
-    # Evaluate all SNPs at all grid points
     all_logls = _batch_grid_mle(n_cvt, lambdas, eigenvalues, Uab_batch)
 
-    # Find best index per SNP
-    best_idx = jnp.argmax(all_logls, axis=0)
-
-    # Set up bounds for golden section (one grid cell on each side)
-    idx_low = jnp.maximum(best_idx - 1, 0)
-    idx_high = jnp.minimum(best_idx + 1, n_grid - 1)
-
-    # Initial bounds (log scale)
-    a = log_lambdas[idx_low]
-    b = log_lambdas[idx_high]
-
-    # Helper to compute MLE at log-scale lambdas (batch)
+    # MLE batch evaluator (no Iab needed)
     def compute_mle_batch(log_lams):
         lams = jnp.exp(log_lams)
         return vmap(
@@ -872,45 +877,7 @@ def golden_section_optimize_lambda_mle(
             in_axes=(0, 0),
         )(lams, Uab_batch)
 
-    # Initial probe points (golden ratio positions)
-    c = b - phi * (b - a)
-    d = a + phi * (b - a)
-    fc = compute_mle_batch(c)
-    fd = compute_mle_batch(d)
-
-    # Stage 2: Golden section iterations using lax.fori_loop (stays on device)
-    def golden_step(_, state):
-        a, b, c, d, fc, fd = state
-
-        # Where fc > fd, maximum is in [a, d], otherwise in [c, b]
-        keep_left = fc > fd
-
-        # Update bounds
-        new_a = jnp.where(keep_left, a, c)
-        new_b = jnp.where(keep_left, d, b)
-
-        # Compute new interior points
-        new_c = new_b - phi * (new_b - new_a)
-        new_d = new_a + phi * (new_b - new_a)
-
-        # Compute MLE at the new position only
-        new_logl = compute_mle_batch(jnp.where(keep_left, new_c, new_d))
-
-        # Reuse function values where possible
-        new_fc = jnp.where(keep_left, new_logl, fd)
-        new_fd = jnp.where(keep_left, fc, new_logl)
-
-        return (new_a, new_b, new_c, new_d, new_fc, new_fd)
-
-    init_state = (a, b, c, d, fc, fd)
-    final_state = jax.lax.fori_loop(0, n_iter, golden_step, init_state)
-    a, b, c, d, fc, fd = final_state
-
-    # Return midpoint as optimal (log scale)
-    log_opt = (a + b) / 2
-    best_lambdas = jnp.exp(log_opt)
-
-    # Final likelihood at optimal point
-    best_logls = compute_mle_batch(log_opt)
-
-    return best_lambdas, best_logls
+    # Stage 2: Golden section refinement
+    return _golden_section_refine(
+        compute_mle_batch, all_logls, log_lambdas, n_grid, n_iter
+    )

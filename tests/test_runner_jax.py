@@ -13,6 +13,46 @@ from jamma.lmm.runner_jax import (
 )
 
 
+def _make_synthetic_gwas_data(
+    seed: int, n_samples: int = 200, n_snps: int = 500
+) -> tuple[np.ndarray, np.ndarray, list[dict]]:
+    """Generate synthetic GWAS data with simple genetic component.
+
+    Args:
+        seed: Random seed for reproducibility.
+        n_samples: Number of individuals.
+        n_snps: Number of SNPs.
+
+    Returns:
+        Tuple of (genotypes, phenotype, snp_info).
+    """
+    rng = np.random.default_rng(seed)
+
+    mafs = rng.uniform(0.1, 0.4, n_snps)
+    genotypes = np.zeros((n_samples, n_snps), dtype=np.float64)
+    for j in range(n_snps):
+        p = mafs[j]
+        genotypes[:, j] = rng.choice(
+            [0, 1, 2], size=n_samples, p=[(1 - p) ** 2, 2 * p * (1 - p), p**2]
+        )
+
+    causal_idx = rng.choice(n_snps, 10, replace=False)
+    betas = rng.standard_normal(10)
+    G = genotypes[:, causal_idx]
+    G_std = (G - G.mean(axis=0)) / (G.std(axis=0) + 1e-8)
+    genetic = G_std @ betas
+    noise = rng.standard_normal(n_samples)
+    phenotype = genetic + noise
+    phenotype = (phenotype - phenotype.mean()) / phenotype.std()
+
+    snp_info = [
+        {"chr": "1", "rs": f"rs{j}", "pos": j * 1000, "a1": "A", "a0": "G"}
+        for j in range(n_snps)
+    ]
+
+    return genotypes, phenotype, snp_info
+
+
 class TestChunkSizeComputation:
     """Tests for chunk size calculation to avoid int32 overflow."""
 
@@ -57,36 +97,7 @@ class TestJaxRunnerBasic:
     @pytest.fixture
     def synthetic_data(self):
         """Generate synthetic GWAS data."""
-        rng = np.random.default_rng(42)
-        n_samples = 200
-        n_snps = 500
-
-        # Generate genotypes
-        mafs = rng.uniform(0.1, 0.4, n_snps)
-        genotypes = np.zeros((n_samples, n_snps), dtype=np.float64)
-        for j in range(n_snps):
-            p = mafs[j]
-            genotypes[:, j] = rng.choice(
-                [0, 1, 2], size=n_samples, p=[(1 - p) ** 2, 2 * p * (1 - p), p**2]
-            )
-
-        # Generate phenotype with genetic component
-        causal_idx = rng.choice(n_snps, 10, replace=False)
-        betas = rng.standard_normal(10)
-        G = genotypes[:, causal_idx]
-        G_std = (G - G.mean(axis=0)) / (G.std(axis=0) + 1e-8)
-        genetic = G_std @ betas
-        noise = rng.standard_normal(n_samples)
-        phenotype = genetic + noise
-        phenotype = (phenotype - phenotype.mean()) / phenotype.std()
-
-        # SNP info
-        snp_info = [
-            {"chr": "1", "rs": f"rs{j}", "pos": j * 1000, "a1": "A", "a0": "G"}
-            for j in range(n_snps)
-        ]
-
-        return genotypes, phenotype, snp_info
+        return _make_synthetic_gwas_data(seed=42)
 
     def test_returns_results(self, synthetic_data):
         """JAX runner should return list of AssocResult."""
@@ -227,33 +238,7 @@ class TestJaxScoreMode:
     @pytest.fixture
     def synthetic_data(self):
         """Generate synthetic GWAS data for Score tests."""
-        rng = np.random.default_rng(100)
-        n_samples = 200
-        n_snps = 500
-
-        mafs = rng.uniform(0.1, 0.4, n_snps)
-        genotypes = np.zeros((n_samples, n_snps), dtype=np.float64)
-        for j in range(n_snps):
-            p = mafs[j]
-            genotypes[:, j] = rng.choice(
-                [0, 1, 2], size=n_samples, p=[(1 - p) ** 2, 2 * p * (1 - p), p**2]
-            )
-
-        causal_idx = rng.choice(n_snps, 10, replace=False)
-        betas = rng.standard_normal(10)
-        G = genotypes[:, causal_idx]
-        G_std = (G - G.mean(axis=0)) / (G.std(axis=0) + 1e-8)
-        genetic = G_std @ betas
-        noise = rng.standard_normal(n_samples)
-        phenotype = genetic + noise
-        phenotype = (phenotype - phenotype.mean()) / phenotype.std()
-
-        snp_info = [
-            {"chr": "1", "rs": f"rs{j}", "pos": j * 1000, "a1": "A", "a0": "G"}
-            for j in range(n_snps)
-        ]
-
-        return genotypes, phenotype, snp_info
+        return _make_synthetic_gwas_data(seed=100)
 
     def test_score_returns_correct_fields(self, synthetic_data):
         """Score mode sets p_score and leaves p_wald/l_remle as None."""

@@ -508,22 +508,9 @@ def run_lmm_association_jax(
     UtW = U.T @ W
     Uty = U.T @ phenotypes
 
-    # Pre-loop null model computation for Score and LRT
-    lambda_null_mle = None
-    logl_H0 = None
-    Hi_eval_null_jax = None
-    if lmm_mode in (2, 3):
-        lambda_null_mle, logl_H0 = compute_null_model_mle(
-            eigenvalues_np, UtW, Uty, n_cvt
-        )
-        if show_progress:
-            logger.info(
-                f"Null model MLE: lambda={lambda_null_mle:.6f}, logl_H0={logl_H0:.6f}"
-            )
-        if lmm_mode == 3:
-            # Score test: precompute Hi_eval at null lambda (constant for all SNPs)
-            Hi_eval_null = 1.0 / (lambda_null_mle * eigenvalues_np + 1.0)
-            Hi_eval_null_jax = jax.device_put(Hi_eval_null, device)
+    logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
+        lmm_mode, eigenvalues_np, UtW, Uty, n_cvt, device, show_progress
+    )
 
     # Determine chunk size to avoid int32 buffer overflow
     n_filtered = len(snp_indices)
@@ -734,7 +721,7 @@ def run_lmm_association_jax(
         logger.info(f"time elapsed = {elapsed:.2f} seconds")
 
     if lmm_mode == 1:
-        return _build_results(
+        return _build_results_wald(
             snp_indices,
             snp_stats,
             snp_info,
@@ -765,7 +752,73 @@ def run_lmm_association_jax(
         raise ValueError(f"Unsupported lmm_mode: {lmm_mode}. Use 1, 2, or 3.")
 
 
-def _build_results(
+def _compute_null_model(
+    lmm_mode: int,
+    eigenvalues_np: np.ndarray,
+    UtW: np.ndarray,
+    Uty: np.ndarray,
+    n_cvt: int,
+    device: jax.Device,
+    show_progress: bool,
+) -> tuple[float | None, float | None, jnp.ndarray | None]:
+    """Compute null model MLE for Score and LRT modes.
+
+    Score test (mode 3) additionally precomputes Hi_eval at the null lambda.
+    Wald (mode 1) skips this entirely.
+
+    Args:
+        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score).
+        eigenvalues_np: Kinship eigenvalues as numpy array.
+        UtW: Rotated covariates.
+        Uty: Rotated phenotype.
+        n_cvt: Number of covariates.
+        device: JAX device for Hi_eval placement.
+        show_progress: Whether to log results.
+
+    Returns:
+        Tuple of (logl_H0, lambda_null_mle, Hi_eval_null_jax).
+        All None for Wald mode.
+    """
+    if lmm_mode not in (2, 3):
+        return None, None, None
+
+    lambda_null_mle, logl_H0 = compute_null_model_mle(eigenvalues_np, UtW, Uty, n_cvt)
+    if show_progress:
+        logger.info(
+            f"Null model MLE: lambda={lambda_null_mle:.6f}, logl_H0={logl_H0:.6f}"
+        )
+
+    Hi_eval_null_jax = None
+    if lmm_mode == 3:
+        Hi_eval_null = 1.0 / (lambda_null_mle * eigenvalues_np + 1.0)
+        Hi_eval_null_jax = jax.device_put(Hi_eval_null, device)
+
+    return logl_H0, lambda_null_mle, Hi_eval_null_jax
+
+
+def _snp_metadata(snp_info: dict, af: float, n_miss: int) -> dict:
+    """Extract common SNP metadata fields for AssocResult construction.
+
+    Args:
+        snp_info: SNP metadata dict with keys: chr, rs, pos/ps, a1/allele1, a0/allele0.
+        af: Allele frequency of counted allele (BIM A1), can be > 0.5.
+        n_miss: Missing genotype count.
+
+    Returns:
+        Dict of shared AssocResult fields.
+    """
+    return {
+        "chr": snp_info["chr"],
+        "rs": snp_info["rs"],
+        "ps": snp_info.get("pos", snp_info.get("ps", 0)),
+        "n_miss": n_miss,
+        "allele1": snp_info.get("a1", snp_info.get("allele1", "")),
+        "allele0": snp_info.get("a0", snp_info.get("allele0", "")),
+        "af": af,
+    }
+
+
+def _build_results_wald(
     snp_indices: np.ndarray,
     snp_stats: list[tuple[float, int]],
     snp_info: list,
@@ -775,14 +828,13 @@ def _build_results(
     ses_np: np.ndarray,
     p_walds_np: np.ndarray,
 ) -> list[AssocResult]:
-    """Build AssocResult objects from arrays of results.
+    """Build AssocResult objects for Wald test mode.
 
     Args:
         snp_indices: Indices of SNPs that passed filtering.
         snp_stats: List of (af, n_miss) tuples for each filtered SNP.
-            af is raw allele frequency of counted allele (BIM A1), can be > 0.5.
         snp_info: Full SNP metadata list.
-        best_lambdas_np: Optimal lambda values.
+        best_lambdas_np: Optimal REML lambda values.
         best_logls_np: Log-likelihoods at optimal lambda.
         betas_np: Effect sizes.
         ses_np: Standard errors.
@@ -793,25 +845,18 @@ def _build_results(
     """
     results = []
     for j, snp_idx in enumerate(snp_indices):
-        af, n_miss = snp_stats[j]  # af is raw allele frequency for output
-        info = snp_info[snp_idx]
-
-        result = AssocResult(
-            chr=info["chr"],
-            rs=info["rs"],
-            ps=info.get("pos", info.get("ps", 0)),
-            n_miss=n_miss,
-            allele1=info.get("a1", info.get("allele1", "")),
-            allele0=info.get("a0", info.get("allele0", "")),
-            af=af,
-            beta=float(betas_np[j]),
-            se=float(ses_np[j]),
-            logl_H1=float(best_logls_np[j]),
-            l_remle=float(best_lambdas_np[j]),
-            p_wald=float(p_walds_np[j]),
+        af, n_miss = snp_stats[j]
+        meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
+        results.append(
+            AssocResult(
+                **meta,
+                beta=float(betas_np[j]),
+                se=float(ses_np[j]),
+                logl_H1=float(best_logls_np[j]),
+                l_remle=float(best_lambdas_np[j]),
+                p_wald=float(p_walds_np[j]),
+            )
         )
-        results.append(result)
-
     return results
 
 
@@ -824,8 +869,6 @@ def _build_results_score(
     p_scores_np: np.ndarray,
 ) -> list[AssocResult]:
     """Build AssocResult objects for Score test mode.
-
-    Score test does not compute per-SNP logl_H1 or l_remle.
 
     Args:
         snp_indices: Indices of SNPs that passed filtering.
@@ -841,22 +884,15 @@ def _build_results_score(
     results = []
     for j, snp_idx in enumerate(snp_indices):
         af, n_miss = snp_stats[j]
-        info = snp_info[snp_idx]
-
-        result = AssocResult(
-            chr=info["chr"],
-            rs=info["rs"],
-            ps=info.get("pos", info.get("ps", 0)),
-            n_miss=n_miss,
-            allele1=info.get("a1", info.get("allele1", "")),
-            allele0=info.get("a0", info.get("allele0", "")),
-            af=af,
-            beta=float(betas_np[j]),
-            se=float(ses_np[j]),
-            p_score=float(p_scores_np[j]),
+        meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
+        results.append(
+            AssocResult(
+                **meta,
+                beta=float(betas_np[j]),
+                se=float(ses_np[j]),
+                p_score=float(p_scores_np[j]),
+            )
         )
-        results.append(result)
-
     return results
 
 
@@ -884,23 +920,16 @@ def _build_results_lrt(
     results = []
     for j, snp_idx in enumerate(snp_indices):
         af, n_miss = snp_stats[j]
-        info = snp_info[snp_idx]
-
-        result = AssocResult(
-            chr=info["chr"],
-            rs=info["rs"],
-            ps=info.get("pos", info.get("ps", 0)),
-            n_miss=n_miss,
-            allele1=info.get("a1", info.get("allele1", "")),
-            allele0=info.get("a0", info.get("allele0", "")),
-            af=af,
-            beta=float("nan"),
-            se=float("nan"),
-            l_mle=float(lambdas_mle_np[j]),
-            p_lrt=float(p_lrts_np[j]),
+        meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
+        results.append(
+            AssocResult(
+                **meta,
+                beta=float("nan"),
+                se=float("nan"),
+                l_mle=float(lambdas_mle_np[j]),
+                p_lrt=float(p_lrts_np[j]),
+            )
         )
-        results.append(result)
-
     return results
 
 
@@ -1167,21 +1196,9 @@ def run_lmm_association_streaming(
     UtW = U.T @ W
     Uty = U.T @ phenotypes
 
-    # Pre-loop null model computation for Score and LRT
-    lambda_null_mle = None
-    logl_H0 = None
-    Hi_eval_null_jax = None
-    if lmm_mode in (2, 3):
-        lambda_null_mle, logl_H0 = compute_null_model_mle(
-            eigenvalues_np, UtW, Uty, n_cvt
-        )
-        if show_progress:
-            logger.info(
-                f"Null model MLE: lambda={lambda_null_mle:.6f}, logl_H0={logl_H0:.6f}"
-            )
-        if lmm_mode == 3:
-            Hi_eval_null = 1.0 / (lambda_null_mle * eigenvalues_np + 1.0)
-            Hi_eval_null_jax = jax.device_put(Hi_eval_null, device)
+    logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
+        lmm_mode, eigenvalues_np, UtW, Uty, n_cvt, device, show_progress
+    )
 
     # Device-resident shared arrays - placed on device ONCE before chunk loop
     # These are NOT re-transferred inside the file chunk or JAX chunk loops
@@ -1407,15 +1424,10 @@ def run_lmm_association_streaming(
                     af, n_miss = snp_stats[local_idx]
                     info = snp_info[snp_idx]
 
+                    meta = _snp_metadata(info, af, n_miss)
                     if lmm_mode == 1:
                         result = AssocResult(
-                            chr=info["chr"],
-                            rs=info["rs"],
-                            ps=info.get("pos", info.get("ps", 0)),
-                            n_miss=n_miss,
-                            allele1=info.get("a1", info.get("allele1", "")),
-                            allele0=info.get("a0", info.get("allele0", "")),
-                            af=af,
+                            **meta,
                             beta=float(chunk_betas_np[j]),
                             se=float(chunk_ses_np[j]),
                             logl_H1=float(chunk_logls_np[j]),
@@ -1424,26 +1436,14 @@ def run_lmm_association_streaming(
                         )
                     elif lmm_mode == 3:
                         result = AssocResult(
-                            chr=info["chr"],
-                            rs=info["rs"],
-                            ps=info.get("pos", info.get("ps", 0)),
-                            n_miss=n_miss,
-                            allele1=info.get("a1", info.get("allele1", "")),
-                            allele0=info.get("a0", info.get("allele0", "")),
-                            af=af,
+                            **meta,
                             beta=float(chunk_betas_np[j]),
                             se=float(chunk_ses_np[j]),
                             p_score=float(chunk_p_scores_np[j]),
                         )
                     elif lmm_mode == 2:
                         result = AssocResult(
-                            chr=info["chr"],
-                            rs=info["rs"],
-                            ps=info.get("pos", info.get("ps", 0)),
-                            n_miss=n_miss,
-                            allele1=info.get("a1", info.get("allele1", "")),
-                            allele0=info.get("a0", info.get("allele0", "")),
-                            af=af,
+                            **meta,
                             beta=float("nan"),
                             se=float("nan"),
                             l_mle=float(chunk_lambdas_mle_np[j]),

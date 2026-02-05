@@ -623,3 +623,374 @@ class TestJaxLrtMode:
         for r in results:
             assert 0 <= r.p_lrt <= 1, f"p_lrt={r.p_lrt} out of [0,1] for {r.rs}"
             assert r.l_mle > 0, f"l_mle={r.l_mle} not positive for {r.rs}"
+
+
+class TestJaxAllTestsMode:
+    """Validation tests for JAX all-tests mode (lmm_mode=4) against NumPy runner."""
+
+    @pytest.fixture
+    def synthetic_data(self):
+        """Generate synthetic GWAS data with population structure for all-tests.
+
+        Uses the same 4-subpopulation design as TestJaxLrtMode: differentiated
+        allele frequencies (Fst~0.05) and polygenic phenotype (h2~0.5) keep
+        null lambda in the interior of [l_min, l_max], which is required for
+        well-conditioned MLE optimization in both LRT and all-tests modes.
+        """
+        rng = np.random.default_rng(300)
+        n_per_pop = 75
+        n_pops = 4
+        n_samples = n_per_pop * n_pops
+        n_snps = 500
+
+        # Generate allele freqs differentiated by population (Fst ~ 0.05)
+        ancestral_freqs = rng.uniform(0.15, 0.45, n_snps)
+        genotypes = np.zeros((n_samples, n_snps), dtype=np.float64)
+        for pop in range(n_pops):
+            start = pop * n_per_pop
+            end = (pop + 1) * n_per_pop
+            drift = rng.normal(0, 0.05, n_snps)
+            pop_freqs = np.clip(ancestral_freqs + drift, 0.05, 0.95)
+            for j in range(n_snps):
+                p = pop_freqs[j]
+                genotypes[start:end, j] = rng.choice(
+                    [0, 1, 2],
+                    size=n_per_pop,
+                    p=[(1 - p) ** 2, 2 * p * (1 - p), p**2],
+                )
+
+        # Polygenic phenotype: many causal SNPs + kinship-correlated noise
+        K = compute_centered_kinship(genotypes)
+        L = np.linalg.cholesky(K + 1e-6 * np.eye(n_samples))
+
+        # Polygenic signal through kinship (h2 ~ 0.5)
+        genetic = L @ rng.standard_normal(n_samples)
+        genetic = genetic / genetic.std()
+
+        # Add fixed effects from a few causal SNPs
+        causal_idx = rng.choice(n_snps, 5, replace=False)
+        G_causal = genotypes[:, causal_idx]
+        G_std = (G_causal - G_causal.mean(0)) / (G_causal.std(0) + 1e-8)
+        fixed_effects = G_std @ rng.normal(0, 0.3, 5)
+
+        noise = rng.standard_normal(n_samples)
+        phenotype = genetic + fixed_effects + noise
+        phenotype = (phenotype - phenotype.mean()) / phenotype.std()
+
+        snp_info = [
+            {
+                "chr": "1",
+                "rs": f"rs{j}",
+                "pos": j * 1000,
+                "a1": "A",
+                "a0": "G",
+            }
+            for j in range(n_snps)
+        ]
+
+        return genotypes, phenotype, snp_info
+
+    def test_all_tests_returns_correct_fields(self, synthetic_data):
+        """Mode 4 populates ALL fields: p_wald, p_lrt, p_score, etc."""
+        genotypes, phenotype, snp_info = synthetic_data
+        kinship = compute_centered_kinship(genotypes)
+
+        results = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            lmm_mode=4,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        assert len(results) > 0
+
+        for r in results:
+            # All fields must be populated (not None)
+            assert r.p_wald is not None, f"p_wald is None for {r.rs}"
+            assert r.p_lrt is not None, f"p_lrt is None for {r.rs}"
+            assert r.p_score is not None, f"p_score is None for {r.rs}"
+            assert r.l_remle is not None, f"l_remle is None for {r.rs}"
+            assert r.l_mle is not None, f"l_mle is None for {r.rs}"
+            assert r.logl_H1 is not None, f"logl_H1 is None for {r.rs}"
+
+            # Beta/se must be finite (Wald-derived, not NaN like pure LRT)
+            assert np.isfinite(r.beta), f"beta not finite for {r.rs}"
+            assert np.isfinite(r.se), f"se not finite for {r.rs}"
+
+            # Metadata must be populated
+            assert r.chr == "1"
+            assert r.rs.startswith("rs")
+            assert r.ps >= 0
+            assert r.n_miss >= 0
+            assert r.allele1 == "A"
+            assert r.allele0 == "G"
+            assert 0 <= r.af <= 1
+
+            # Wald-specific bounds
+            assert r.l_remle > 0, f"l_remle={r.l_remle} not positive for {r.rs}"
+            assert 0 <= r.p_wald <= 1, f"p_wald={r.p_wald} out of [0,1] for {r.rs}"
+
+            # LRT-specific bounds
+            assert r.l_mle > 0, f"l_mle={r.l_mle} not positive for {r.rs}"
+            assert 0 <= r.p_lrt <= 1, f"p_lrt={r.p_lrt} out of [0,1] for {r.rs}"
+
+            # Score-specific bounds
+            assert 0 <= r.p_score <= 1, f"p_score={r.p_score} out of [0,1] for {r.rs}"
+
+    def test_all_tests_matches_numpy_runner(self, synthetic_data):
+        """JAX mode 4 matches NumPy mode 4 within calibrated tolerances."""
+        genotypes, phenotype, snp_info = synthetic_data
+        kinship = compute_centered_kinship(genotypes)
+
+        results_jax = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            lmm_mode=4,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        results_np = run_lmm_association(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            lmm_mode=4,
+        )
+
+        # Build lookup by rs name
+        np_by_rs = {r.rs: r for r in results_np}
+        jax_by_rs = {r.rs: r for r in results_jax}
+        common_rs = sorted(set(np_by_rs) & set(jax_by_rs))
+
+        assert len(common_rs) > 0, "No common SNPs between JAX and NumPy results"
+
+        max_p_wald_diff = 0.0
+        max_p_score_diff = 0.0
+        max_p_lrt_diff = 0.0
+        max_beta_reldiff = 0.0
+        max_se_reldiff = 0.0
+        for rs in common_rs:
+            j = jax_by_rs[rs]
+            n = np_by_rs[rs]
+
+            # p_wald parity
+            p_wald_diff = abs(j.p_wald - n.p_wald)
+            max_p_wald_diff = max(max_p_wald_diff, p_wald_diff)
+            assert p_wald_diff < 1e-4, (
+                f"p_wald diff {p_wald_diff:.2e} > 1e-4 for {rs} "
+                f"(JAX={j.p_wald:.10e}, NumPy={n.p_wald:.10e})"
+            )
+
+            # p_score parity
+            p_score_diff = abs(j.p_score - n.p_score)
+            max_p_score_diff = max(max_p_score_diff, p_score_diff)
+            assert p_score_diff < 1e-8, (
+                f"p_score diff {p_score_diff:.2e} > 1e-8 for {rs} "
+                f"(JAX={j.p_score:.10e}, NumPy={n.p_score:.10e})"
+            )
+
+            # p_lrt parity
+            p_lrt_diff = abs(j.p_lrt - n.p_lrt)
+            max_p_lrt_diff = max(max_p_lrt_diff, p_lrt_diff)
+            assert p_lrt_diff < 2e-3, (
+                f"p_lrt diff {p_lrt_diff:.2e} > 2e-3 for {rs} "
+                f"(JAX={j.p_lrt:.10e}, NumPy={n.p_lrt:.10e})"
+            )
+
+            # beta relative parity (calibrated bound 1e-2; golden section vs
+            # Brent lambda difference propagates through Pab, use 5e-3)
+            beta_reldiff = abs(j.beta - n.beta) / max(abs(n.beta), 1e-10)
+            max_beta_reldiff = max(max_beta_reldiff, beta_reldiff)
+            assert (
+                beta_reldiff < 5e-3
+            ), f"beta relative diff {beta_reldiff:.2e} > 5e-3 for {rs}"
+
+            # se relative parity (same lambda propagation applies)
+            se_reldiff = abs(j.se - n.se) / max(abs(n.se), 1e-10)
+            max_se_reldiff = max(max_se_reldiff, se_reldiff)
+            assert (
+                se_reldiff < 5e-3
+            ), f"se relative diff {se_reldiff:.2e} > 5e-3 for {rs}"
+
+        print(f"\nAll-tests parity: {len(common_rs)} SNPs compared")
+        print(f"  max |p_wald diff|:  {max_p_wald_diff:.2e}")
+        print(f"  max |p_score diff|: {max_p_score_diff:.2e}")
+        print(f"  max |p_lrt diff|:   {max_p_lrt_diff:.2e}")
+        print(f"  max |beta rel diff|: {max_beta_reldiff:.2e}")
+        print(f"  max |se rel diff|:   {max_se_reldiff:.2e}")
+
+    def test_all_tests_with_covariates(self, synthetic_data):
+        """Mode 4 with n_cvt=2 covariates matches NumPy runner."""
+        genotypes, phenotype, snp_info = synthetic_data
+        kinship = compute_centered_kinship(genotypes)
+
+        rng = np.random.default_rng(301)
+        n_samples = genotypes.shape[0]
+        covariates = np.column_stack(
+            [
+                np.ones(n_samples),
+                rng.standard_normal(n_samples),
+            ]
+        )
+
+        results_jax = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            covariates=covariates,
+            lmm_mode=4,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        results_np = run_lmm_association(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            covariates=covariates,
+            lmm_mode=4,
+        )
+
+        assert len(results_jax) > 0, "JAX mode 4 with covariates returned no results"
+
+        np_by_rs = {r.rs: r for r in results_np}
+        jax_by_rs = {r.rs: r for r in results_jax}
+        common_rs = sorted(set(np_by_rs) & set(jax_by_rs))
+
+        assert (
+            len(common_rs) > 0
+        ), "No common SNPs between JAX and NumPy covariate results"
+
+        max_p_wald_diff = 0.0
+        max_p_score_diff = 0.0
+        max_p_lrt_diff = 0.0
+        for rs in common_rs:
+            j = jax_by_rs[rs]
+            n = np_by_rs[rs]
+
+            p_wald_diff = abs(j.p_wald - n.p_wald)
+            max_p_wald_diff = max(max_p_wald_diff, p_wald_diff)
+            assert (
+                p_wald_diff < 1e-4
+            ), f"p_wald diff {p_wald_diff:.2e} > 1e-4 for {rs} with covariates"
+
+            p_score_diff = abs(j.p_score - n.p_score)
+            max_p_score_diff = max(max_p_score_diff, p_score_diff)
+            assert (
+                p_score_diff < 1e-8
+            ), f"p_score diff {p_score_diff:.2e} > 1e-8 for {rs} with covariates"
+
+            p_lrt_diff = abs(j.p_lrt - n.p_lrt)
+            max_p_lrt_diff = max(max_p_lrt_diff, p_lrt_diff)
+            assert (
+                p_lrt_diff < 2e-3
+            ), f"p_lrt diff {p_lrt_diff:.2e} > 2e-3 for {rs} with covariates"
+
+        print(
+            f"\nAll-tests+covariates parity: {len(common_rs)} SNPs, "
+            f"max p_wald diff: {max_p_wald_diff:.2e}, "
+            f"max p_score diff: {max_p_score_diff:.2e}, "
+            f"max p_lrt diff: {max_p_lrt_diff:.2e}"
+        )
+
+    def test_all_tests_pvalues_bounded(self, synthetic_data):
+        """All mode 4 values in valid ranges: p in [0,1], lambdas > 0."""
+        genotypes, phenotype, snp_info = synthetic_data
+        kinship = compute_centered_kinship(genotypes)
+
+        results = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            lmm_mode=4,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        assert len(results) > 0
+
+        for r in results:
+            assert 0 <= r.p_wald <= 1, f"p_wald={r.p_wald} out of [0,1] for {r.rs}"
+            assert 0 <= r.p_lrt <= 1, f"p_lrt={r.p_lrt} out of [0,1] for {r.rs}"
+            assert 0 <= r.p_score <= 1, f"p_score={r.p_score} out of [0,1] for {r.rs}"
+            assert r.l_remle > 0, f"l_remle={r.l_remle} not positive for {r.rs}"
+            assert r.l_mle > 0, f"l_mle={r.l_mle} not positive for {r.rs}"
+            assert np.isfinite(r.beta), f"beta not finite for {r.rs}"
+            assert np.isfinite(r.se), f"se not finite for {r.rs}"
+            assert np.isfinite(r.logl_H1), f"logl_H1 not finite for {r.rs}"
+
+    def test_all_tests_wald_matches_mode1(self, synthetic_data):
+        """Mode 4 Wald component is identical to mode 1 (same code path)."""
+        genotypes, phenotype, snp_info = synthetic_data
+        kinship = compute_centered_kinship(genotypes)
+
+        results_mode4 = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            lmm_mode=4,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        results_mode1 = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            lmm_mode=1,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        m4_by_rs = {r.rs: r for r in results_mode4}
+        m1_by_rs = {r.rs: r for r in results_mode1}
+        common_rs = sorted(set(m4_by_rs) & set(m1_by_rs))
+
+        assert len(common_rs) > 0, "No common SNPs between mode 4 and mode 1"
+
+        for rs in common_rs:
+            m4 = m4_by_rs[rs]
+            m1 = m1_by_rs[rs]
+
+            # Wald fields should be near-identical (same REML code path)
+            np.testing.assert_allclose(
+                m4.p_wald,
+                m1.p_wald,
+                rtol=1e-10,
+                err_msg=f"p_wald mismatch for {rs}",
+            )
+            np.testing.assert_allclose(
+                m4.beta,
+                m1.beta,
+                rtol=1e-10,
+                err_msg=f"beta mismatch for {rs}",
+            )
+            np.testing.assert_allclose(
+                m4.se,
+                m1.se,
+                rtol=1e-10,
+                err_msg=f"se mismatch for {rs}",
+            )
+            np.testing.assert_allclose(
+                m4.l_remle,
+                m1.l_remle,
+                rtol=1e-10,
+                err_msg=f"l_remle mismatch for {rs}",
+            )
+            np.testing.assert_allclose(
+                m4.logl_H1,
+                m1.logl_H1,
+                rtol=1e-10,
+                err_msg=f"logl_H1 mismatch for {rs}",
+            )

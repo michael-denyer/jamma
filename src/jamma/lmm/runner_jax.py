@@ -410,6 +410,7 @@ def run_lmm_association_jax(
             - 1 (Wald): Per-SNP REML optimization, full statistics.
             - 2 (LRT): Null MLE once, per-SNP MLE optimization, LRT p-values.
             - 3 (Score): Null MLE once, no per-SNP optimization (fastest).
+            - 4 (All): All three tests in a single pass (~2x mode 1 cost).
 
     Returns:
         List of AssocResult for each SNP that passes filtering
@@ -749,7 +750,7 @@ def run_lmm_association_jax(
             p_lrts_np,
         )
     else:
-        raise ValueError(f"Unsupported lmm_mode: {lmm_mode}. Use 1, 2, or 3.")
+        raise ValueError(f"Unsupported lmm_mode: {lmm_mode}. Use 1, 2, 3, or 4.")
 
 
 def _compute_null_model(
@@ -761,13 +762,13 @@ def _compute_null_model(
     device: jax.Device,
     show_progress: bool,
 ) -> tuple[float | None, float | None, jnp.ndarray | None]:
-    """Compute null model MLE for Score and LRT modes.
+    """Compute null model MLE for Score, LRT, and All-tests modes.
 
-    Score test (mode 3) additionally precomputes Hi_eval at the null lambda.
-    Wald (mode 1) skips this entirely.
+    Score test (mode 3) and All-tests (mode 4) additionally precompute Hi_eval
+    at the null lambda. Wald (mode 1) skips this entirely.
 
     Args:
-        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score).
+        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
         eigenvalues_np: Kinship eigenvalues as numpy array.
         UtW: Rotated covariates.
         Uty: Rotated phenotype.
@@ -779,7 +780,7 @@ def _compute_null_model(
         Tuple of (logl_H0, lambda_null_mle, Hi_eval_null_jax).
         All None for Wald mode.
     """
-    if lmm_mode not in (2, 3):
+    if lmm_mode not in (2, 3, 4):
         return None, None, None
 
     lambda_null_mle, logl_H0 = compute_null_model_mle(eigenvalues_np, UtW, Uty, n_cvt)
@@ -789,7 +790,7 @@ def _compute_null_model(
         )
 
     Hi_eval_null_jax = None
-    if lmm_mode == 3:
+    if lmm_mode in (3, 4):
         Hi_eval_null = 1.0 / (lambda_null_mle * eigenvalues_np + 1.0)
         Hi_eval_null_jax = jax.device_put(Hi_eval_null, device)
 
@@ -933,6 +934,60 @@ def _build_results_lrt(
     return results
 
 
+def _build_results_all(
+    snp_indices: np.ndarray,
+    snp_stats: list[tuple[float, int]],
+    snp_info: list,
+    best_lambdas_np: np.ndarray,
+    best_logls_np: np.ndarray,
+    betas_np: np.ndarray,
+    ses_np: np.ndarray,
+    p_walds_np: np.ndarray,
+    lambdas_mle_np: np.ndarray,
+    p_lrts_np: np.ndarray,
+    p_scores_np: np.ndarray,
+) -> list[AssocResult]:
+    """Build AssocResult objects for All-tests mode (Wald + LRT + Score).
+
+    Uses Wald beta/se (not Score beta/se) and REML logl_H1 (not MLE),
+    matching the NumPy runner output at __init__.py:331-347.
+
+    Args:
+        snp_indices: Indices of SNPs that passed filtering.
+        snp_stats: List of (af, n_miss) tuples for each filtered SNP.
+        snp_info: Full SNP metadata list.
+        best_lambdas_np: Optimal REML lambda values (Wald).
+        best_logls_np: REML log-likelihoods at optimal lambda.
+        betas_np: Effect sizes from Wald test.
+        ses_np: Standard errors from Wald test.
+        p_walds_np: Wald test p-values.
+        lambdas_mle_np: MLE lambda values per SNP (LRT).
+        p_lrts_np: LRT p-values.
+        p_scores_np: Score test p-values.
+
+    Returns:
+        List of AssocResult objects with all fields populated.
+    """
+    results = []
+    for j, snp_idx in enumerate(snp_indices):
+        af, n_miss = snp_stats[j]
+        meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
+        results.append(
+            AssocResult(
+                **meta,
+                beta=float(betas_np[j]),
+                se=float(ses_np[j]),
+                logl_H1=float(best_logls_np[j]),
+                l_remle=float(best_lambdas_np[j]),
+                l_mle=float(lambdas_mle_np[j]),
+                p_wald=float(p_walds_np[j]),
+                p_lrt=float(p_lrts_np[j]),
+                p_score=float(p_scores_np[j]),
+            )
+        )
+    return results
+
+
 def _grid_optimize_lambda_batched(
     n_cvt: int,
     eigenvalues: jnp.ndarray,
@@ -1043,6 +1098,7 @@ def run_lmm_association_streaming(
             - 1 (Wald): Per-SNP REML optimization, full statistics.
             - 2 (LRT): Null MLE once, per-SNP MLE optimization, LRT p-values.
             - 3 (Score): Null MLE once, no per-SNP optimization (fastest).
+            - 4 (All): All three tests in a single pass (~2x mode 1 cost).
 
     Returns:
         List of AssocResult for each SNP that passes filtering. Empty list if

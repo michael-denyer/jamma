@@ -415,11 +415,12 @@ def batch_compute_iab(
     return vmap(lambda Uab: calc_pab_jax(n_cvt, ones, Uab))(Uab_batch)
 
 
-@partial(jit, static_argnums=(3, 4, 5, 6), donate_argnums=(1,))
+@partial(jit, static_argnums=(0, 4, 5, 6, 7), donate_argnums=(2,))
 def golden_section_optimize_lambda(
+    n_cvt: int,
     eigenvalues: Float[Array, " n"],
-    Uab_batch: Float[Array, "p n 6"],
-    Iab_batch: Float[Array, "p 3 6"],
+    Uab_batch: Float[Array, "p n ni"],
+    Iab_batch: Float[Array, "p nr ni"],
     l_min: float = 1e-5,
     l_max: float = 1e5,
     n_grid: int = 50,
@@ -440,8 +441,8 @@ def golden_section_optimize_lambda(
     ============================================
     Both find the maximum of a unimodal function. Golden section achieves
     convergence rate O(0.618^n) per iteration. After grid search brackets
-    the optimum to ±1 grid cell, 20 iterations reduce uncertainty by
-    0.618^20 ≈ 6.6e-5, giving relative tolerance < 1e-5 for typical lambda.
+    the optimum to +/-1 grid cell, 20 iterations reduce uncertainty by
+    0.618^20 ~ 6.6e-5, giving relative tolerance < 1e-5 for typical lambda.
 
     Performance:
     - Grid search: O(n_grid) REML evaluations (shared across SNPs)
@@ -449,18 +450,19 @@ def golden_section_optimize_lambda(
     - Total: ~70 REML evaluations vs ~50 for Brent (similar cost)
     - All computations stay on device (no host/device sync in loops)
     - Uses lax.fori_loop for golden section to avoid Python loop retracing
-    - donate_argnums=(1,) hints XLA to reuse Uab_batch memory (when possible)
+    - donate_argnums=(2,) hints XLA to reuse Uab_batch memory (when possible)
 
     Args:
-        eigenvalues: Eigenvalues (n_samples,)
-        Uab_batch: Uab matrices (n_snps, n_samples, 6)
-        Iab_batch: Precomputed identity-weighted Pab (n_snps, 3, 6)
-        l_min, l_max: Lambda bounds
-        n_grid: Coarse grid points
-        n_iter: Golden section iterations (20 gives ~1e-5 tolerance)
+        n_cvt: Number of covariates (static, triggers recompilation).
+        eigenvalues: Eigenvalues (n_samples,).
+        Uab_batch: Uab matrices (n_snps, n_samples, n_index).
+        Iab_batch: Precomputed identity-weighted Pab (n_snps, n_cvt+2, n_index).
+        l_min, l_max: Lambda bounds.
+        n_grid: Coarse grid points.
+        n_iter: Golden section iterations (20 gives ~1e-5 tolerance).
 
     Returns:
-        (optimal_lambdas, optimal_logls) for each SNP
+        (optimal_lambdas, optimal_logls) for each SNP.
     """
     phi = 0.6180339887498949  # Golden ratio - 1
 
@@ -471,7 +473,9 @@ def golden_section_optimize_lambda(
     lambdas = jnp.exp(log_lambdas)
 
     # Evaluate all SNPs at all grid points using vmap (stays on device)
-    all_logls = _batch_grid_reml_with_iab(lambdas, eigenvalues, Uab_batch, Iab_batch)
+    all_logls = _batch_grid_reml_with_iab(
+        n_cvt, lambdas, eigenvalues, Uab_batch, Iab_batch
+    )
 
     # Find best index per SNP
     best_idx = jnp.argmax(all_logls, axis=0)
@@ -489,7 +493,7 @@ def golden_section_optimize_lambda(
         lams = jnp.exp(log_lams)
         return vmap(
             lambda lam, Uab, Iab: _reml_with_precomputed_iab(
-                lam, eigenvalues, Uab, Iab
+                n_cvt, lam, eigenvalues, Uab, Iab
             ),
             in_axes=(0, 0, 0),
         )(lams, Uab_batch, Iab_batch)
@@ -539,37 +543,41 @@ def golden_section_optimize_lambda(
 
 
 def _batch_grid_reml(
+    n_cvt: int,
     lambdas: Float[Array, " g"],
     eigenvalues: Float[Array, " n"],
-    Uab_batch: Float[Array, "p n 6"],
+    Uab_batch: Float[Array, "p n ni"],
 ) -> Float[Array, "g p"]:
     """Compute REML at all grid points for all SNPs (fully on device).
 
     Uses vmap over lambda values to avoid Python loops and host/device sync.
 
     Args:
-        lambdas: Grid of lambda values (n_grid,)
-        eigenvalues: Eigenvalues (n_samples,)
-        Uab_batch: Uab matrices (n_snps, n_samples, 6)
+        n_cvt: Number of covariates (passed through to reml_log_likelihood_jax).
+        lambdas: Grid of lambda values (n_grid,).
+        eigenvalues: Eigenvalues (n_samples,).
+        Uab_batch: Uab matrices (n_snps, n_samples, n_index).
 
     Returns:
-        Log-likelihoods (n_grid, n_snps)
+        Log-likelihoods (n_grid, n_snps).
     """
 
     # vmap over lambda values, then vmap over SNPs
     def reml_for_lambda(lam):
         return vmap(
-            lambda Uab: reml_log_likelihood_jax(lam, eigenvalues, Uab), in_axes=0
+            lambda Uab: reml_log_likelihood_jax(n_cvt, lam, eigenvalues, Uab),
+            in_axes=0,
         )(Uab_batch)
 
     return vmap(reml_for_lambda)(lambdas)
 
 
 def _batch_grid_reml_with_iab(
+    n_cvt: int,
     lambdas: Float[Array, " g"],
     eigenvalues: Float[Array, " n"],
-    Uab_batch: Float[Array, "p n 6"],
-    Iab_batch: Float[Array, "p 3 6"],
+    Uab_batch: Float[Array, "p n ni"],
+    Iab_batch: Float[Array, "p nr ni"],
 ) -> Float[Array, "g p"]:
     """Compute REML at all grid points using precomputed Iab (optimized).
 
@@ -578,19 +586,22 @@ def _batch_grid_reml_with_iab(
     projection computations (~n_grid fewer calc_pab_jax calls per SNP).
 
     Args:
-        lambdas: Grid of lambda values (n_grid,)
-        eigenvalues: Eigenvalues (n_samples,)
-        Uab_batch: Uab matrices (n_snps, n_samples, 6)
-        Iab_batch: Precomputed identity-weighted Pab (n_snps, 3, 6)
+        n_cvt: Number of covariates (passed through to _reml_with_precomputed_iab).
+        lambdas: Grid of lambda values (n_grid,).
+        eigenvalues: Eigenvalues (n_samples,).
+        Uab_batch: Uab matrices (n_snps, n_samples, n_index).
+        Iab_batch: Precomputed identity-weighted Pab (n_snps, n_cvt+2, n_index).
 
     Returns:
-        Log-likelihoods (n_grid, n_snps)
+        Log-likelihoods (n_grid, n_snps).
     """
 
     # vmap over lambda values, then vmap over SNPs
     def reml_for_lambda(lam):
         return vmap(
-            lambda Uab, Iab: _reml_with_precomputed_iab(lam, eigenvalues, Uab, Iab),
+            lambda Uab, Iab: _reml_with_precomputed_iab(
+                n_cvt, lam, eigenvalues, Uab, Iab
+            ),
             in_axes=(0, 0),
         )(Uab_batch, Iab_batch)
 

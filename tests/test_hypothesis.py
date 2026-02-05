@@ -310,6 +310,7 @@ class TestCpuJaxEquivalence:
 
         # JAX path
         logl_jax = reml_log_likelihood_jax(
+            n_cvt,
             lambda_val,
             jnp.array(eigenvalues),
             jnp.array(Uab),
@@ -340,6 +341,7 @@ class TestCpuJaxEquivalence:
 
         logl_cpu = reml_log_likelihood(lambda_val, eigenvalues, Uab, n_cvt)
         logl_jax = reml_log_likelihood_jax(
+            n_cvt,
             lambda_val,
             jnp.array(eigenvalues),
             jnp.array(Uab),
@@ -530,6 +532,7 @@ class TestDegenerateSNPEdgeCases:
         Uab = compute_Uab(U.T @ W, U.T @ y, U.T @ x)
 
         beta, se, p_wald = calc_wald_stats_jax(
+            1,
             1.0,
             jnp.array(eigenvalues),
             jnp.array(Uab),
@@ -560,6 +563,7 @@ class TestDegenerateSNPEdgeCases:
 
         # JAX path
         beta_jax, se_jax, p_jax = calc_wald_stats_jax(
+            n_cvt,
             lambda_val,
             jnp.array(eigenvalues),
             jnp.array(Uab),
@@ -687,6 +691,7 @@ class TestDegenerateSNPEdgeCases:
 
         # JAX path
         logl_jax = reml_log_likelihood_jax(
+            n_cvt,
             1.0,
             jnp.array(eigenvalues),
             jnp.array(Uab),

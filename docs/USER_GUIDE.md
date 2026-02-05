@@ -163,6 +163,76 @@ results = run_lmm_association_jax(
 )
 ```
 
+## Large-Scale Eigendecomposition (>46k samples)
+
+JAMMA's LMM requires eigendecomposition of the N×N kinship matrix. The default
+numpy/scipy stack uses LP64 BLAS (32-bit integers), which overflows at ~46k samples
+(46k × 46k = 2.1 billion elements > int32 max).
+
+### NumPy with MKL ILP64 (Linux)
+
+For datasets with >46k samples on Linux, install numpy and scipy built against
+Intel MKL with 64-bit integer support (ILP64):
+
+```bash
+# Install ILP64 numpy and scipy wheels
+pip install numpy scipy \
+  --extra-index-url https://michael-denyer.github.io/numpy-mkl \
+  --force-reinstall --upgrade
+
+# CRITICAL: Install jamma without dependencies to avoid overwriting ILP64 builds
+pip install jamma --no-deps
+```
+
+**Verify ILP64 is active:**
+
+```python
+import numpy as np
+cfg = np.show_config(mode="dicts")
+blas = cfg["Build Dependencies"]["blas"]
+print(f"BLAS: {blas['name']}")           # Should show: mkl
+print(f"Symbol suffix: {blas.get('symbol suffix', 'none')}")  # Should show: _64
+```
+
+**Testing the ILP64 build:**
+
+```bash
+# Run JAMMA's validation suite to confirm equivalence
+uv run pytest tests/test_kinship_validation.py tests/test_lmm_validation.py -v
+
+# Quick eigendecomposition sanity check
+python -c "
+import numpy as np
+n = 50000  # Exceeds LP64 limit
+K = np.random.randn(n, 100) @ np.random.randn(100, n)
+K = (K + K.T) / 2
+vals, vecs = np.linalg.eigh(K)
+print(f'Eigendecomposition of {n}x{n} matrix: OK')
+print(f'Top eigenvalue: {vals[-1]:.2f}')
+"
+```
+
+### MKL License Note
+
+MKL is distributed under the [Intel Simplified Software License (ISSL)](https://www.intel.com/content/www/us/en/developer/articles/tool/onemkl-license-faq.html),
+which permits free redistribution with no royalty fees. However, the ISSL is **not
+an open source license** — it restricts reverse engineering and decompilation, and
+is not GPL-compatible.
+
+This does not affect JAMMA itself (GPL-3.0). JAMMA calls numpy/scipy APIs (BSD
+licensed) and has no direct dependency on MKL. Users who install MKL-backed numpy
+wheels do so as a separate, optional runtime choice. Users requiring a pure
+GPL/FOSS stack can use standard numpy with OpenBLAS (the default), which works
+for datasets up to ~46k samples.
+
+### Alternative Approaches for >46k Samples
+
+If MKL ILP64 is not available:
+
+1. **GPU eigendecomposition**: cuSOLVER on NVIDIA GPUs uses different integer interfaces
+2. **Approximate methods**: Randomized SVD or truncated eigendecomposition
+3. **Sample subsetting**: Use ~40k representative samples for kinship computation
+
 ## Performance Tips
 
 1. **Use JAX runner** for large datasets (>1000 samples)
@@ -172,13 +242,30 @@ results = run_lmm_association_jax(
 
 ## Validation
 
-JAMMA results match GEMMA within floating-point tolerance:
+JAMMA results match GEMMA within validated tolerances:
 
 - Kinship matrices: < 1e-8 relative difference
-- P-values: < 5e-5 relative difference
+- P-values (Wald/Score): < 1e-4 relative difference
+- P-values (LRT): < 5e-3 relative difference (MLE subtraction amplification)
+- Beta coefficients: < 1e-2 relative difference (lambda propagation)
+- Log-likelihood (REML): < 1e-6 relative difference
+- Log-likelihood (MLE/logl_H1): < 5e-3 relative difference on real data
 - Significance calls: 100% agreement at all thresholds
+- Effect directions and SNP rankings: identical
 
-See [MATHEMATICAL_EQUIVALENCE.md](MATHEMATICAL_EQUIVALENCE.md) for details.
+### Optimizer Divergence on Weak-Signal SNPs
+
+GEMMA uses Brent's method for lambda optimization; JAMMA uses grid search followed by
+golden section refinement. Both converge to within 1e-5 of the true optimum for
+strong-signal SNPs. However, weak-signal SNPs — where the optimization landscape is
+flat and lambda converges near the lower bound (1e-5) — can produce slightly different
+optima between the two methods. This propagates to per-SNP MLE log-likelihood (logl_H1)
+with up to ~0.14% relative difference on real datasets (observed on mouse_hs1940 at
+SNP index 596 of 10768). The quantities that drive scientific conclusions (p-values,
+effect directions, significance rankings) are unaffected.
+
+See [MATHEMATICAL_EQUIVALENCE.md](MATHEMATICAL_EQUIVALENCE.md) for empirical validation
+and [FORMAL_PROOF.md](FORMAL_PROOF.md) for the formal error propagation analysis.
 
 ## Memory Safety
 

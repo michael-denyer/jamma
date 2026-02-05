@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from jamma.kinship import compute_centered_kinship
+from jamma.lmm import run_lmm_association
 from jamma.lmm.runner_jax import (
     MAX_SAFE_CHUNK,
     _compute_chunk_size,
@@ -218,3 +219,189 @@ class TestJaxRunnerCleanup:
 
         # Allow some variance, but should not grow significantly
         assert delta_mb < 100, f"Memory grew by {delta_mb:.0f}MB over 5 runs"
+
+
+class TestJaxScoreMode:
+    """Validation tests for JAX Score mode (lmm_mode=3) against NumPy runner."""
+
+    @pytest.fixture
+    def synthetic_data(self):
+        """Generate synthetic GWAS data for Score tests."""
+        rng = np.random.default_rng(100)
+        n_samples = 200
+        n_snps = 500
+
+        mafs = rng.uniform(0.1, 0.4, n_snps)
+        genotypes = np.zeros((n_samples, n_snps), dtype=np.float64)
+        for j in range(n_snps):
+            p = mafs[j]
+            genotypes[:, j] = rng.choice(
+                [0, 1, 2], size=n_samples, p=[(1 - p) ** 2, 2 * p * (1 - p), p**2]
+            )
+
+        causal_idx = rng.choice(n_snps, 10, replace=False)
+        betas = rng.standard_normal(10)
+        G = genotypes[:, causal_idx]
+        G_std = (G - G.mean(axis=0)) / (G.std(axis=0) + 1e-8)
+        genetic = G_std @ betas
+        noise = rng.standard_normal(n_samples)
+        phenotype = genetic + noise
+        phenotype = (phenotype - phenotype.mean()) / phenotype.std()
+
+        snp_info = [
+            {"chr": "1", "rs": f"rs{j}", "pos": j * 1000, "a1": "A", "a0": "G"}
+            for j in range(n_snps)
+        ]
+
+        return genotypes, phenotype, snp_info
+
+    def test_score_returns_correct_fields(self, synthetic_data):
+        """Score mode sets p_score and leaves p_wald/l_remle as None."""
+        genotypes, phenotype, snp_info = synthetic_data
+        kinship = compute_centered_kinship(genotypes)
+
+        results = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            lmm_mode=3,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        assert len(results) > 0
+
+        for r in results:
+            # Score-specific field must be set
+            assert r.p_score is not None, f"p_score is None for {r.rs}"
+
+            # Wald-specific fields must NOT be set
+            assert r.p_wald is None, f"p_wald should be None in Score mode for {r.rs}"
+            assert r.l_remle is None, f"l_remle should be None in Score mode for {r.rs}"
+
+            # Beta/se are informational but should be finite
+            assert np.isfinite(r.beta), f"beta not finite for {r.rs}"
+            assert np.isfinite(r.se), f"se not finite for {r.rs}"
+
+            # Metadata must be populated
+            assert r.chr == "1"
+            assert r.rs.startswith("rs")
+            assert r.ps >= 0
+            assert r.n_miss >= 0
+            assert r.allele1 == "A"
+            assert r.allele0 == "G"
+            assert 0 <= r.af <= 1
+
+    def test_score_matches_numpy_runner(self, synthetic_data):
+        """JAX Score p-values match NumPy Score p-values within 1e-8."""
+        genotypes, phenotype, snp_info = synthetic_data
+        kinship = compute_centered_kinship(genotypes)
+
+        results_jax = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            lmm_mode=3,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        results_np = run_lmm_association(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            lmm_mode=3,
+        )
+
+        # Build lookup by rs name
+        np_by_rs = {r.rs: r for r in results_np}
+        jax_by_rs = {r.rs: r for r in results_jax}
+        common_rs = sorted(set(np_by_rs) & set(jax_by_rs))
+
+        assert len(common_rs) > 0, "No common SNPs between JAX and NumPy results"
+
+        max_p_diff = 0.0
+        max_beta_reldiff = 0.0
+        for rs in common_rs:
+            j = jax_by_rs[rs]
+            n = np_by_rs[rs]
+
+            p_diff = abs(j.p_score - n.p_score)
+            max_p_diff = max(max_p_diff, p_diff)
+            assert p_diff < 1e-8, (
+                f"p_score diff {p_diff:.2e} > 1e-8 for {rs} "
+                f"(JAX={j.p_score:.10e}, NumPy={n.p_score:.10e})"
+            )
+
+            beta_reldiff = abs(j.beta - n.beta) / max(abs(n.beta), 1e-10)
+            max_beta_reldiff = max(max_beta_reldiff, beta_reldiff)
+            assert (
+                beta_reldiff < 1e-4
+            ), f"beta relative diff {beta_reldiff:.2e} > 1e-4 for {rs}"
+
+        print(f"\nScore parity: {len(common_rs)} SNPs compared")
+        print(f"  max |p_score diff|: {max_p_diff:.2e}")
+        print(f"  max |beta rel diff|: {max_beta_reldiff:.2e}")
+
+    def test_score_with_covariates(self, synthetic_data):
+        """Score mode with n_cvt=2 covariates matches NumPy runner."""
+        genotypes, phenotype, snp_info = synthetic_data
+        kinship = compute_centered_kinship(genotypes)
+
+        rng = np.random.default_rng(101)
+        n_samples = genotypes.shape[0]
+        covariates = np.column_stack(
+            [
+                np.ones(n_samples),
+                rng.standard_normal(n_samples),
+            ]
+        )
+
+        results_jax = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            covariates=covariates,
+            lmm_mode=3,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        results_np = run_lmm_association(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            covariates=covariates,
+            lmm_mode=3,
+        )
+
+        assert len(results_jax) > 0, "JAX Score with covariates returned no results"
+
+        np_by_rs = {r.rs: r for r in results_np}
+        jax_by_rs = {r.rs: r for r in results_jax}
+        common_rs = sorted(set(np_by_rs) & set(jax_by_rs))
+
+        assert (
+            len(common_rs) > 0
+        ), "No common SNPs between JAX and NumPy covariate results"
+
+        max_p_diff = 0.0
+        for rs in common_rs:
+            j = jax_by_rs[rs]
+            n = np_by_rs[rs]
+
+            p_diff = abs(j.p_score - n.p_score)
+            max_p_diff = max(max_p_diff, p_diff)
+            assert (
+                p_diff < 1e-8
+            ), f"p_score diff {p_diff:.2e} > 1e-8 for {rs} with covariates"
+
+        print(
+            f"\nScore+covariates parity: {len(common_rs)} SNPs, "
+            f"max p_score diff: {max_p_diff:.2e}"
+        )

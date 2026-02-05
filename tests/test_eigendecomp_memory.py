@@ -1,12 +1,10 @@
 """Tests for eigendecomposition memory pre-flight check."""
 
-import os
 from unittest.mock import patch
 
 import numpy as np
 import pytest
 
-from jamma.core.backend import get_compute_backend
 from jamma.core.memory import estimate_eigendecomp_memory
 from jamma.lmm.eigen import eigendecompose_kinship
 
@@ -38,22 +36,7 @@ class TestEigendecompMemoryEstimate:
 
 
 class TestEigendecompPreflightCheck:
-    """Tests for pre-flight memory check in eigendecompose_kinship.
-
-    Note: These tests require the jax.numpy backend since the jax.rust backend
-    doesn't use pre-flight memory checks (faer handles memory internally).
-    """
-
-    def setup_method(self):
-        """Force jax.numpy backend for numpy memory checks."""
-        get_compute_backend.cache_clear()
-        os.environ["JAMMA_BACKEND"] = "jax.numpy"
-        get_compute_backend.cache_clear()
-
-    def teardown_method(self):
-        """Clean up environment."""
-        os.environ.pop("JAMMA_BACKEND", None)
-        get_compute_backend.cache_clear()
+    """Tests for pre-flight memory check in eigendecompose_kinship."""
 
     def test_raises_memory_error_when_insufficient(self):
         """Should raise MemoryError before scipy call when memory insufficient."""

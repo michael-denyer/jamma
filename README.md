@@ -10,7 +10,7 @@
 ## Features
 
 - **GEMMA-compatible**: Drop-in replacement with identical CLI flags and output formats
-- **Numerical equivalence**: Results match GEMMA within floating-point tolerance (beta 1e-6, p-values 1e-8)
+- **Numerical equivalence**: Results match GEMMA — identical significance calls, effect directions, and SNP rankings
 - **Fast**: 7x faster than GEMMA on kinship, 4x faster on LMM association
 - **Scalable**: Streaming I/O handles 200k+ samples without OOM
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
@@ -148,7 +148,9 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs):
 
 - [Why JAMMA?](docs/WHY_JAMMA.md) — Key differentiators from GEMMA
 - [User Guide](docs/USER_GUIDE.md) — Installation, usage examples, CLI reference
+- [Code Map](docs/CODEMAP.md) — Architecture diagrams and source navigation
 - [Mathematical Equivalence](docs/MATHEMATICAL_EQUIVALENCE.md) — Validation against GEMMA
+- [Formal Proof](docs/FORMAL_PROOF.md) — Mathematical proof of algorithmic equivalence
 - [GEMMA Divergences](docs/GEMMA_DIVERGENCES.md) — Known differences from GEMMA
 
 ## Requirements

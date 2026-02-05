@@ -237,7 +237,7 @@ def lmm_command(
     ] = None,
     lmm_mode: Annotated[
         int,
-        typer.Option("-lmm", help="LMM analysis type (1=Wald, 2=LRT, 3=Score)"),
+        typer.Option("-lmm", help="LMM analysis type (1=Wald, 2=LRT, 3=Score, 4=All)"),
     ] = 1,
     maf: Annotated[
         float,
@@ -265,7 +265,8 @@ def lmm_command(
     """Perform linear mixed model association testing.
 
     Runs LMM association tests using a pre-computed kinship matrix.
-    Supports Wald test (-lmm 1), LRT (-lmm 2), and Score test (-lmm 3).
+    Supports Wald test (-lmm 1), LRT (-lmm 2), Score test (-lmm 3),
+    and all tests combined (-lmm 4).
     """
     # Get global config
     global _global_config
@@ -275,14 +276,6 @@ def lmm_command(
     # Validate -lmm mode
     if lmm_mode not in (1, 2, 3, 4):
         typer.echo(f"Error: -lmm must be 1, 2, 3, or 4 (got {lmm_mode})", err=True)
-        raise typer.Exit(code=1)
-
-    if lmm_mode == 4:
-        typer.echo(
-            f"Error: -lmm {lmm_mode} not yet implemented. "
-            "Only -lmm 1 (Wald), -lmm 2 (LRT), and -lmm 3 (Score) are supported.",
-            err=True,
-        )
         raise typer.Exit(code=1)
 
     # Validate bfile exists
@@ -473,7 +466,7 @@ def lmm_command(
     typer.echo(f"Data loading completed in {t_load - t_start:.2f}s")
 
     # Run LMM association
-    test_name = {1: "Wald", 2: "LRT", 3: "Score"}[lmm_mode]
+    test_name = {1: "Wald", 2: "LRT", 3: "Score", 4: "All tests"}[lmm_mode]
     typer.echo(f"Running LMM {test_name} test on {n_snps} SNPs...")
 
     # Progress callback for long runs

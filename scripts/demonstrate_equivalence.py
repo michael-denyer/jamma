@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +43,16 @@ JAX_KWARGS = dict(n_grid=50, n_refine=20, show_progress=False, check_memory=Fals
 
 # --- Dataset configurations ---
 @dataclass
+class TestSpec:
+    """One LMM mode test to run."""
+
+    name: str
+    ref_path: Path
+    lmm_mode: int
+    use_covariates: bool = False
+
+
+@dataclass
 class DatasetConfig:
     """Configuration for one dataset's equivalence test."""
 
@@ -51,19 +61,9 @@ class DatasetConfig:
     kinship_path: Path
     covariate_path: Path | None
     tolerances: dict[str, float]
+    tests: list[TestSpec]
     compare_kinship: bool = True
     prepend_intercept: bool = False
-    tests: list[TestSpec] = field(default_factory=list)
-
-
-@dataclass
-class TestSpec:
-    """One LMM mode test to run."""
-
-    name: str
-    ref_path: Path
-    lmm_mode: int
-    use_covariates: bool = False
 
 
 # Synthetic dataset
@@ -172,7 +172,6 @@ MOUSE_HS1940 = DatasetConfig(
 )
 
 
-# --- Data classes ---
 @dataclass
 class FieldResult:
     field: str
@@ -184,24 +183,12 @@ class FieldResult:
 
 
 @dataclass
-class ScientificEquivalence:
-    n_snps: int
-    spearman_rho: float
-    sig_05: tuple[int, int]
-    sig_01: tuple[int, int]
-    sig_001: tuple[int, int]
-    sig_5e8: tuple[int, int]
-    effect_direction_agree: float
-
-
-@dataclass
 class SectionTiming:
     name: str
     elapsed: float
     n_snps: int
 
 
-# --- Computation helpers ---
 def _compute_field_diffs(
     actual: np.ndarray,
     expected: np.ndarray,
@@ -228,9 +215,8 @@ def _compute_field_diffs(
     return FieldResult(field_name, len(a), max_abs, max_rel, rtol, passed)
 
 
-def _scientific_equivalence(
-    jamma: list, gemma: list, p_field: str
-) -> ScientificEquivalence:
+def _print_scientific_equivalence(jamma: list, gemma: list, p_field: str) -> None:
+    """Compute and print scientific equivalence metrics."""
     j_by_rs = {r.rs: r for r in jamma}
     g_by_rs = {r.rs: r for r in gemma}
     common = sorted(set(j_by_rs) & set(g_by_rs))
@@ -243,9 +229,9 @@ def _scientific_equivalence(
 
     rho, _ = spearmanr(-np.log10(j_p), -np.log10(g_p))
 
-    def _sig_agree(thresh):
+    def sig_agree(thresh):
         agree = int(np.sum((j_p < thresh) == (g_p < thresh)))
-        return (agree, len(j_p))
+        return f"{agree}/{len(j_p)}"
 
     j_beta = np.array([j_by_rs[rs].beta for rs in common])
     g_beta = np.array([g_by_rs[rs].beta for rs in common])
@@ -256,52 +242,45 @@ def _scientific_equivalence(
         else 1.0
     )
 
-    return ScientificEquivalence(
-        n_snps=len(j_p),
-        spearman_rho=rho,
-        sig_05=_sig_agree(0.05),
-        sig_01=_sig_agree(0.01),
-        sig_001=_sig_agree(0.001),
-        sig_5e8=_sig_agree(5e-8),
-        effect_direction_agree=dir_agree,
-    )
+    print(f"\n  Scientific Equivalence ({p_field}):")
+    print(f"    SNPs compared:              {len(j_p)}")
+    print(f"    P-value rank correlation:   {rho:.6f}")
+    print(f"    Significance (p < 0.05):    {sig_agree(0.05)}")
+    print(f"    Significance (p < 0.01):    {sig_agree(0.01)}")
+    print(f"    Significance (p < 0.001):   {sig_agree(0.001)}")
+    print(f"    Significance (p < 5e-8):    {sig_agree(5e-8)}")
+    print(f"    Effect direction agreement: {dir_agree * 100:.1f}%")
 
 
 def _extract(results, field_name):
-    """Extract a field as numpy array, NaN for missing."""
     return np.array(
         [getattr(r, field_name) if getattr(r, field_name) else np.nan for r in results]
     )
 
 
 def _build_snp_info(plink_data):
-    snp_info = []
-    for i in range(plink_data.n_snps):
-        snp_info.append(
-            {
-                "chr": str(plink_data.chromosome[i]),
-                "rs": plink_data.sid[i],
-                "pos": plink_data.bp_position[i],
-                "a1": plink_data.allele_1[i],
-                "a0": plink_data.allele_2[i],
-                "maf": 0.0,
-                "n_miss": 0,
-            }
-        )
-    return snp_info
+    return [
+        {
+            "chr": str(plink_data.chromosome[i]),
+            "rs": plink_data.sid[i],
+            "pos": plink_data.bp_position[i],
+            "a1": plink_data.allele_1[i],
+            "a0": plink_data.allele_2[i],
+            "maf": 0.0,
+            "n_miss": 0,
+        }
+        for i in range(plink_data.n_snps)
+    ]
 
 
 def _load_phenotypes(fam_path: Path) -> np.ndarray:
-    phenotypes = []
+    """Load phenotypes from column 6 of a .fam file (NaN for missing)."""
     with open(fam_path) as f:
-        for line in f:
-            parts = line.strip().split()
-            val = parts[5] if len(parts) >= 6 else "-9"
-            phenotypes.append(np.nan if val in ("-9", "NA") else float(val))
-    return np.array(phenotypes)
+        parts = [line.strip().split() for line in f]
+    vals = [p[5] if len(p) >= 6 else "-9" for p in parts]
+    return np.array([np.nan if v in ("-9", "NA") else float(v) for v in vals])
 
 
-# --- Output helpers ---
 def _fmt_sci(val: float) -> str:
     if val == 0.0:
         return "0"
@@ -328,17 +307,6 @@ def print_field_table(fields: list[FieldResult]):
         )
 
 
-def print_scientific(se: ScientificEquivalence, p_label: str):
-    print(f"\n  Scientific Equivalence ({p_label}):")
-    print(f"    SNPs compared:              {se.n_snps}")
-    print(f"    P-value rank correlation:   {se.spearman_rho:.6f}")
-    print(f"    Significance (p < 0.05):    {se.sig_05[0]}/{se.sig_05[1]}")
-    print(f"    Significance (p < 0.01):    {se.sig_01[0]}/{se.sig_01[1]}")
-    print(f"    Significance (p < 0.001):   {se.sig_001[0]}/{se.sig_001[1]}")
-    print(f"    Significance (p < 5e-8):    {se.sig_5e8[0]}/{se.sig_5e8[1]}")
-    print(f"    Effect direction agreement: {se.effect_direction_agree * 100:.1f}%")
-
-
 def print_performance_summary(timings: list[SectionTiming], total: float):
     print(f"\n{'=' * 70}")
     print("  Performance Summary")
@@ -354,108 +322,31 @@ def print_performance_summary(timings: list[SectionTiming], total: float):
     print(f"  {'Total':<32} {'':>6}  {total:>10.3f}")
 
 
-# --- Per-mode field comparisons ---
+# (field_name, tolerance_key, modes) — which fields to compare for each LMM mode
+_FIELD_SPECS = [
+    ("beta", "beta", {1, 4}),
+    ("p_wald", "p_wald", {1, 4}),
+    ("se", "se", {1}),  # mode 4 doesn't need separate SE check
+    ("p_lrt", "p_lrt", {2, 4}),
+    ("p_score", "p_score", {3, 4}),
+    ("l_remle", "lambda", {1, 4}),
+    ("l_mle", "lambda", {2, 4}),
+    ("logl_H1", "logl", {1}),
+]
+
+
 def _compare_fields(
     lmm_mode: int, jamma: list, gemma: list, tol: dict
 ) -> list[FieldResult]:
     """Build field comparison list based on LMM mode."""
-    fields = []
     atol = tol.get("atol", 0.0)
-
-    # Wald fields (modes 1, 4)
-    if lmm_mode in (1, 4):
-        fields.append(
-            _compute_field_diffs(
-                np.array([r.beta for r in jamma]),
-                np.array([r.beta for r in gemma]),
-                "beta",
-                tol["beta"],
-                atol,
-            )
+    return [
+        _compute_field_diffs(
+            _extract(jamma, name), _extract(gemma, name), name, tol[tol_key], atol
         )
-        fields.append(
-            _compute_field_diffs(
-                np.array([r.p_wald for r in jamma]),
-                np.array([r.p_wald for r in gemma]),
-                "p_wald",
-                tol["p_wald"],
-                atol,
-            )
-        )
-
-    # SE (mode 1 only — mode 4 doesn't need separate check)
-    if lmm_mode == 1:
-        fields.append(
-            _compute_field_diffs(
-                np.array([r.se for r in jamma]),
-                np.array([r.se for r in gemma]),
-                "se",
-                tol["se"],
-                atol,
-            )
-        )
-
-    # LRT fields (modes 2, 4)
-    if lmm_mode in (2, 4):
-        fields.append(
-            _compute_field_diffs(
-                _extract(jamma, "p_lrt"),
-                _extract(gemma, "p_lrt"),
-                "p_lrt",
-                tol["p_lrt"],
-                atol,
-            )
-        )
-
-    # Score fields (modes 3, 4)
-    if lmm_mode in (3, 4):
-        fields.append(
-            _compute_field_diffs(
-                _extract(jamma, "p_score"),
-                _extract(gemma, "p_score"),
-                "p_score",
-                tol["p_score"],
-                atol,
-            )
-        )
-
-    # Lambda REML (modes 1, 4)
-    if lmm_mode in (1, 4):
-        fields.append(
-            _compute_field_diffs(
-                _extract(jamma, "l_remle"),
-                _extract(gemma, "l_remle"),
-                "l_remle",
-                tol["lambda"],
-                atol,
-            )
-        )
-
-    # Lambda MLE (modes 2, 4)
-    if lmm_mode in (2, 4):
-        fields.append(
-            _compute_field_diffs(
-                _extract(jamma, "l_mle"),
-                _extract(gemma, "l_mle"),
-                "l_mle",
-                tol["lambda"],
-                atol,
-            )
-        )
-
-    # logl_H1 (mode 1 — the Wald reference sometimes includes it)
-    if lmm_mode == 1:
-        fields.append(
-            _compute_field_diffs(
-                _extract(jamma, "logl_H1"),
-                _extract(gemma, "logl_H1"),
-                "logl_H1",
-                tol["logl"],
-                atol,
-            )
-        )
-
-    return fields
+        for name, tol_key, modes in _FIELD_SPECS
+        if lmm_mode in modes
+    ]
 
 
 def _primary_p_field(lmm_mode: int) -> str:
@@ -467,7 +358,6 @@ def _primary_p_field(lmm_mode: int) -> str:
     return "p_wald"
 
 
-# --- Main ---
 def run_dataset(
     config: DatasetConfig, section_offset: int
 ) -> tuple[bool, list[SectionTiming]]:
@@ -576,13 +466,12 @@ def run_dataset(
         print_field_table(fields)
         print(f"\n  Time: {t_elapsed:.3f}s ({len(jamma_results)} SNPs)")
 
-        for f in fields:
-            if not f.passed:
-                all_passed = False
+        if any(not f.passed for f in fields):
+            all_passed = False
 
-        p_field = _primary_p_field(spec.lmm_mode)
-        se = _scientific_equivalence(jamma_results, gemma_ref, p_field)
-        print_scientific(se, f"{p_field}")
+        _print_scientific_equivalence(
+            jamma_results, gemma_ref, _primary_p_field(spec.lmm_mode)
+        )
 
     return all_passed, timings
 

@@ -158,15 +158,14 @@ class TestCliMemoryCheckUnit:
 
     def test_estimate_called_before_load(self):
         """Memory estimate should be computable from metadata alone."""
-        from jamma.core.memory import estimate_lmm_memory
+        from jamma.core.memory import estimate_streaming_memory
         from jamma.io import get_plink_metadata
 
         # This simulates what CLI does: get dimensions, then estimate
         meta = get_plink_metadata(PLINK_PREFIX)
-        est = estimate_lmm_memory(
+        est = estimate_streaming_memory(
             n_samples=meta["n_samples"],
             n_snps=meta["n_snps"],
-            has_kinship=True,
         )
 
         assert est.total_peak_gb >= 0
@@ -186,72 +185,11 @@ class TestCliMemoryCheckUnit:
 
 
 @pytest.mark.tier0
-class TestCliIncrementalWriting:
-    """Tests for CLI lmm command incremental writing."""
-
-    def test_cli_uses_output_path_for_incremental_writing(self, tmp_path):
-        """Verify CLI passes output_path to run_lmm_association (numpy backend)."""
-        # Run LMM with mocked run_lmm_association to capture output_path
-        # Must use --backend numpy since default is now jax streaming
-        with patch("jamma.cli.run_lmm_association") as mock_run:
-            mock_run.return_value = []  # Simulates incremental write mode
-
-            runner.invoke(
-                app,
-                [
-                    "-outdir",
-                    str(tmp_path),
-                    "-o",
-                    "lmm_test",
-                    "lmm",
-                    "-bfile",
-                    str(PLINK_PREFIX),
-                    "-k",
-                    str(KINSHIP_FILE),
-                    "--no-check-memory",
-                    "--backend",
-                    "numpy",
-                ],
-            )
-
-            # Verify output_path was passed
-            assert mock_run.called
-            call_kwargs = mock_run.call_args.kwargs
-            assert "output_path" in call_kwargs
-            assert call_kwargs["output_path"] is not None
-            assert str(call_kwargs["output_path"]).endswith(".assoc.txt")
-
-    def test_cli_numpy_backend_uses_output_path(self, tmp_path):
-        """Verify NumPy backend passes output_path to run_lmm_association."""
-        with patch("jamma.cli.run_lmm_association") as mock_run:
-            mock_run.return_value = []
-
-            runner.invoke(
-                app,
-                [
-                    "-outdir",
-                    str(tmp_path),
-                    "-o",
-                    "lmm_test",
-                    "lmm",
-                    "-bfile",
-                    str(PLINK_PREFIX),
-                    "-k",
-                    str(KINSHIP_FILE),
-                    "--no-check-memory",
-                    "--backend",
-                    "numpy",
-                ],
-            )
-
-            assert mock_run.called
-            call_kwargs = mock_run.call_args.kwargs
-            assert "output_path" in call_kwargs
-            assert call_kwargs["output_path"] is not None
-            assert str(call_kwargs["output_path"]).endswith(".assoc.txt")
+class TestCliStreamingRunner:
+    """Tests for CLI lmm command JAX streaming runner integration."""
 
     def test_cli_jax_default_uses_streaming_runner(self, tmp_path):
-        """Verify CLI default (jax) calls run_lmm_association_streaming."""
+        """Verify CLI calls run_lmm_association_streaming."""
         with patch("jamma.cli.run_lmm_association_streaming") as mock_stream:
             mock_stream.return_value = []
 

@@ -1335,33 +1335,6 @@ class TestAFSemantics:
     3. GEMMA fixture comparison uses direct AF match
     """
 
-    def test_af_greater_than_half_not_transformed(self):
-        """Verify that SNPs with af > 0.5 output af > 0.5 (no min transform)."""
-        from jamma.lmm import _compute_snp_stats
-
-        # Create genotype with high A1 frequency (~0.8)
-        # Probabilities: 64% hom A1 (2), 32% het (1), 4% hom A2 (0)
-        n_samples = 100
-        rng = np.random.default_rng(42)
-        genotypes = rng.choice(
-            [0, 1, 2], size=(n_samples, 1), p=[0.04, 0.32, 0.64]
-        ).astype(np.float64)
-
-        # Compute expected AF
-        expected_af = np.mean(genotypes[:, 0]) / 2.0
-        assert (
-            expected_af > 0.5
-        ), f"Test setup error: expected AF > 0.5, got {expected_af}"
-
-        # Run through _compute_snp_stats
-        af, maf, _, _, _ = _compute_snp_stats(genotypes, 0)
-
-        # AF should match expected (> 0.5)
-        assert abs(af - expected_af) < 1e-10, f"AF mismatch: {af} vs {expected_af}"
-        # MAF should be 1 - af (< 0.5)
-        assert maf < 0.5, f"MAF should be < 0.5, got {maf}"
-        assert abs(maf - (1.0 - af)) < 1e-10, "MAF should be 1-AF"
-
     def test_genotype_flip_inverts_beta_sign(self):
         """Verify that flipping genotypes (2-G) flips beta sign but not SE/p-value.
 

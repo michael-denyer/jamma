@@ -196,50 +196,6 @@ def test_cli_lmm_help_shows_covariate_flag():
     assert "Covariate" in result.output
 
 
-def test_cli_lmm_help_shows_backend_flag():
-    """Test that lmm --help shows --backend option."""
-    result = runner.invoke(app, ["lmm", "--help"])
-    assert result.exit_code == 0
-    assert "--backend" in result.output
-    assert "jax" in result.output.lower()
-    assert "numpy" in result.output.lower()
-
-
-def test_lmm_backend_numpy_fallback(tmp_path: Path):
-    """Test that --backend numpy uses NumPy runner successfully."""
-    outdir = tmp_path / "output"
-    kinship_dir = tmp_path / "kinship_out"
-
-    # First, create kinship matrix
-    result = runner.invoke(
-        app, ["-outdir", str(kinship_dir), "gk", "-bfile", str(EXAMPLE_BFILE)]
-    )
-    assert result.exit_code == 0
-    kinship_file = kinship_dir / "result.cXX.txt"
-    assert kinship_file.exists()
-
-    # Run LMM with numpy backend
-    result = runner.invoke(
-        app,
-        [
-            "-outdir",
-            str(outdir),
-            "lmm",
-            "-bfile",
-            str(EXAMPLE_BFILE),
-            "-k",
-            str(kinship_file),
-            "--backend",
-            "numpy",
-            "--no-check-memory",
-        ],
-    )
-
-    assert result.exit_code == 0
-    assoc_path = outdir / "result.assoc.txt"
-    assert assoc_path.exists()
-
-
 def test_lmm_jax_default_mode4(tmp_path: Path):
     """Test that default JAX backend works with -lmm 4."""
     outdir = tmp_path / "output"

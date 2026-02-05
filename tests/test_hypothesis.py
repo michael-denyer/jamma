@@ -944,14 +944,14 @@ class TestFilteringEquivalence:
     @settings(
         max_examples=10, deadline=None, suppress_health_check=[HealthCheck.too_slow]
     )
-    def test_lmm_cpu_jax_filter_equivalence(self, n_samples, seed):
-        """CPU and JAX LMM paths should apply identical filtering."""
+    def test_lmm_jax_chunk_invariance(self, n_samples, seed):
+        """Different chunk sizes should produce identical JAX results."""
+        from unittest.mock import patch
+
         from jamma.kinship import compute_centered_kinship
-        from jamma.lmm import run_lmm_association, run_lmm_association_jax
+        from jamma.lmm.runner_jax import run_lmm_association_jax
 
         rng = np.random.default_rng(seed)
-
-        # Generate small dataset
         n_snps = 30
         genotypes = np.zeros((n_samples, n_snps), dtype=np.float64)
         for j in range(n_snps):
@@ -960,12 +960,10 @@ class TestFilteringEquivalence:
             probs = [(1 - p) ** 2, 2 * p * (1 - p), p**2]
             genotypes[:, j] = rng.choice([0.0, 1.0, 2.0], size=n_samples, p=probs)
 
-        # Make one SNP monomorphic
-        genotypes[:, 0] = 1.0
+        genotypes[:, 0] = 1.0  # monomorphic SNP
 
         phenotypes = rng.standard_normal(n_samples)
         kinship = compute_centered_kinship(genotypes, check_memory=False)
-
         snp_info = [
             {"chr": "1", "rs": f"rs{i}", "pos": i * 1000, "a1": "A", "a0": "G"}
             for i in range(n_snps)
@@ -974,32 +972,34 @@ class TestFilteringEquivalence:
         maf_threshold = 0.05
         miss_threshold = 0.1
 
-        # Run both paths
-        results_cpu = run_lmm_association(
-            genotypes,
-            phenotypes,
-            kinship,
-            snp_info,
-            maf_threshold=maf_threshold,
-            miss_threshold=miss_threshold,
-        )
+        # Run with small chunk size (forces multiple chunks)
+        with patch("jamma.lmm.runner_jax._compute_chunk_size", return_value=5):
+            results_small = run_lmm_association_jax(
+                genotypes.astype(np.float32),
+                phenotypes,
+                kinship,
+                snp_info,
+                maf_threshold=maf_threshold,
+                miss_threshold=miss_threshold,
+                check_memory=False,
+                show_progress=False,
+            )
 
-        results_jax = run_lmm_association_jax(
-            genotypes.astype(np.float32),
-            phenotypes,
-            kinship,
-            snp_info,
-            maf_threshold=maf_threshold,
-            miss_threshold=miss_threshold,
-            check_memory=False,
-        )
+        # Run with large chunk size (single chunk)
+        with patch("jamma.lmm.runner_jax._compute_chunk_size", return_value=50000):
+            results_large = run_lmm_association_jax(
+                genotypes.astype(np.float32),
+                phenotypes,
+                kinship,
+                snp_info,
+                maf_threshold=maf_threshold,
+                miss_threshold=miss_threshold,
+                check_memory=False,
+                show_progress=False,
+            )
 
-        # Same number of results (same filtering)
-        assert len(results_cpu) == len(
-            results_jax
-        ), f"CPU returned {len(results_cpu)} results, JAX returned {len(results_jax)}"
-
-        # Same SNPs tested (by rs ID)
-        rs_cpu = {r.rs for r in results_cpu}
-        rs_jax = {r.rs for r in results_jax}
-        assert rs_cpu == rs_jax, f"Different SNPs tested: {rs_cpu ^ rs_jax}"
+        assert len(results_small) == len(results_large), "Same filtering applied"
+        for r_s, r_l in zip(results_small, results_large, strict=True):
+            assert r_s.rs == r_l.rs
+            np.testing.assert_allclose(r_s.beta, r_l.beta, rtol=1e-10)
+            np.testing.assert_allclose(r_s.p_wald, r_l.p_wald, rtol=1e-10)

@@ -102,6 +102,13 @@ def gk_command(
         float,
         typer.Option("-miss", help="Missing rate threshold (default: 1.0)"),
     ] = 1.0,
+    check_memory: Annotated[
+        bool,
+        typer.Option(
+            "--check-memory/--no-check-memory",
+            help="Enable/disable pre-flight memory check (default: enabled)",
+        ),
+    ] = True,
 ) -> None:
     """Compute kinship matrix from genotype data.
 
@@ -150,7 +157,10 @@ def gk_command(
         typer.echo(f"Filtering: MAF >= {maf}, missing rate <= {miss}")
     kinship_start = time.time()
     K = compute_centered_kinship(
-        plink_data.genotypes, maf_threshold=maf, miss_threshold=miss
+        plink_data.genotypes,
+        maf_threshold=maf,
+        miss_threshold=miss,
+        check_memory=check_memory,
     )
     kinship_time = time.time() - kinship_start
     typer.echo(f"Kinship computation completed in {kinship_time:.2f}s")

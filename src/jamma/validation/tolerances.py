@@ -13,7 +13,10 @@ statistically identical results:
 
 Numerical differences arise from:
 - **GEMMA output precision**: 6 significant figures in scientific notation
-- **Optimization convergence**: Brent minimization vs derivative-based methods
+- **Optimization convergence**: GEMMA uses Brent's method; JAMMA JAX uses grid search +
+  golden section. Both converge to within 1e-5 of the true optimum, but on flat
+  optimization landscapes (weak-signal SNPs where lambda hits the lower bound 1e-5),
+  the two methods can land on slightly different local optima.
 - **CDF implementations**: JAX betainc vs GSL gsl_cdf_fdist_Q
 - **Lambda sensitivity**: ~0.35x amplification to beta (1e-5 lambda → 3.5e-6 beta)
 
@@ -22,7 +25,10 @@ Value types and tolerances:
 - **Effect sizes (beta)**: Lambda-sensitive, moderate tolerance (1e-2)
 - **Standard errors**: Lambda-sensitive, moderate tolerance (1e-5)
 - **P-values**: CDF differences, moderate tolerance (1e-4)
-- **Log-likelihood**: Direct computation, tight tolerance (1e-6)
+- **Log-likelihood (REML)**: Direct computation, tight tolerance (1e-6)
+- **Log-likelihood (MLE/logl_H1)**: Per-SNP MLE evaluation; on real datasets the golden
+  section vs Brent divergence on weak-signal SNPs produces larger differences (up to
+  ~1.35e-3 relative on mouse_hs1940). Use wider tolerance for dataset-specific configs.
 - **Lambda (variance ratio)**: Brent convergence, moderate tolerance (2e-5)
 - **Allele frequency**: JAMMA reports MAF (<=0.5), GEMMA reports AF (may be >0.5)
 """
@@ -57,7 +63,11 @@ class ToleranceConfig:
         kinship_rtol: Relative tolerance for kinship matrix elements.
             Tightest tolerance - direct matrix computation.
         logl_rtol: Relative tolerance for log-likelihood values.
-            Max observed: 3.2e-7. Very stable.
+            For REML logl (null model): max observed 3.2e-7, very stable.
+            For per-SNP MLE logl_H1: max observed ~1.35e-3 on mouse_hs1940
+            due to golden section vs Brent optimizer divergence on weak-signal
+            SNPs with flat optimization landscapes. Override with wider tolerance
+            in dataset-specific ToleranceConfig when comparing logl_H1.
         lambda_rtol: Relative tolerance for lambda (variance ratio).
             Max observed: 1.2e-5 from Brent convergence differences.
         af_rtol: Relative tolerance for allele frequency.
@@ -84,7 +94,9 @@ class ToleranceConfig:
     pvalue_rtol: float = 1e-4
     # Kinship: direct matrix computation, tightest tolerance
     kinship_rtol: float = 1e-8
-    # Log-likelihood: direct computation, tight tolerance. Max observed: 3.2e-7
+    # Log-likelihood: REML logl max observed 3.2e-7. Per-SNP MLE logl_H1 can be
+    # wider (~1.35e-3 on mouse_hs1940) due to optimizer divergence on weak-signal
+    # SNPs. Override in dataset-specific configs when comparing logl_H1.
     logl_rtol: float = 1e-6
     # Lambda: Brent optimization convergence. Max observed: 1.2e-5
     lambda_rtol: float = 2e-5

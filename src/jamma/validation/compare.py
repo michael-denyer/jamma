@@ -209,6 +209,7 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
     - Wald test (-lmm 1): Has logl_H1, l_remle, p_wald columns
     - LRT (-lmm 2): Has l_mle, p_lrt columns (no beta/se)
     - Score test (-lmm 3): Has p_score column (no logl_H1, l_remle, p_wald)
+    - All tests (-lmm 4): Has l_remle, l_mle, p_wald, p_lrt, p_score columns
 
     Args:
         path: Path to the association results file (.assoc.txt).
@@ -285,6 +286,23 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
             "l_mle",
             "p_lrt",
         ]
+        # Format 5: All tests (-lmm 4)
+        expected_cols_all = [
+            "chr",
+            "rs",
+            "ps",
+            "n_miss",
+            "allele1",
+            "allele0",
+            "af",
+            "beta",
+            "se",
+            "l_remle",
+            "l_mle",
+            "p_wald",
+            "p_lrt",
+            "p_score",
+        ]
 
         if actual_cols == expected_cols_wald_full:
             format_type = "wald_full"
@@ -294,6 +312,8 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
             format_type = "score"
         elif actual_cols == expected_cols_lrt:
             format_type = "lrt"
+        elif actual_cols == expected_cols_all:
+            format_type = "all_tests"
         else:
             raise ValueError(
                 f"Unexpected header format. Expected one of:\n"
@@ -301,6 +321,7 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
                 f"  {expected_cols_wald_short}\n"
                 f"  {expected_cols_score}\n"
                 f"  {expected_cols_lrt}\n"
+                f"  {expected_cols_all}\n"
                 f"Got: {actual_cols}"
             )
 
@@ -356,6 +377,26 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
                         l_remle=None,
                         p_wald=None,
                         p_score=float(fields[9]),
+                    )
+                )
+            elif format_type == "all_tests":
+                results.append(
+                    AssocResult(
+                        chr=fields[0],
+                        rs=fields[1],
+                        ps=int(fields[2]),
+                        n_miss=int(fields[3]),
+                        allele1=fields[4],
+                        allele0=fields[5],
+                        af=float(fields[6]),
+                        beta=float(fields[7]),
+                        se=float(fields[8]),
+                        logl_H1=None,
+                        l_remle=float(fields[9]),
+                        l_mle=float(fields[10]),
+                        p_wald=float(fields[11]),
+                        p_lrt=float(fields[12]),
+                        p_score=float(fields[13]),
                     )
                 )
             else:  # lrt
@@ -454,7 +495,15 @@ def compare_assoc_results(
         config = ToleranceConfig()
 
     # Detect test type from reference data
-    # Score test has p_score; LRT has p_lrt; Wald has p_wald
+    # All-tests has ALL of p_wald, p_lrt, p_score populated
+    # Must check before individual test type checks (all-tests has p_wald set)
+    is_all_tests = (
+        len(expected) > 0
+        and expected[0].p_wald is not None
+        and expected[0].p_lrt is not None
+        and expected[0].p_score is not None
+    )
+    # Score test has p_score only; LRT has p_lrt only; Wald has p_wald only
     is_score_test = (
         len(expected) > 0
         and expected[0].p_score is not None
@@ -496,9 +545,9 @@ def compare_assoc_results(
             l_remle=skip_result,
             af=skip_result,
             mismatched_snps=[],
-            p_score=skip_result if is_score_test else None,
-            p_lrt=skip_result if is_lrt_test else None,
-            l_mle=skip_result if is_lrt_test else None,
+            p_score=skip_result if (is_score_test or is_all_tests) else None,
+            p_lrt=skip_result if (is_lrt_test or is_all_tests) else None,
+            l_mle=skip_result if (is_lrt_test or is_all_tests) else None,
         )
 
     # Check for mismatched SNP IDs
@@ -530,7 +579,117 @@ def compare_assoc_results(
     p_score_result = None
     p_lrt_result = None
     l_mle_result = None
-    if is_score_test:
+    if is_all_tests:
+        # All-tests mode: compare ALL columns with per-column tolerances
+        actual_pwald = np.array(
+            [r.p_wald if r.p_wald is not None else np.nan for r in actual]
+        )
+        expected_pwald = np.array(
+            [r.p_wald if r.p_wald is not None else np.nan for r in expected]
+        )
+        pwald_result = compare_arrays(
+            actual_pwald, expected_pwald, config.pvalue_rtol, config.atol, "p_wald"
+        )
+
+        # Score test p-values
+        actual_pscore = np.array(
+            [r.p_score if r.p_score is not None else np.nan for r in actual]
+        )
+        expected_pscore = np.array(
+            [r.p_score if r.p_score is not None else np.nan for r in expected]
+        )
+        p_score_result = compare_arrays(
+            actual_pscore, expected_pscore, config.pvalue_rtol, config.atol, "p_score"
+        )
+
+        # LRT p-values: RELAXED tolerance (rtol=2e-3) per Phase 7.1 decision [07.1-02]
+        # Chi-squared distribution magnifies small log-likelihood differences
+        lrt_pvalue_rtol = 2e-3
+        actual_plrt = np.array(
+            [r.p_lrt if r.p_lrt is not None else np.nan for r in actual]
+        )
+        expected_plrt = np.array(
+            [r.p_lrt if r.p_lrt is not None else np.nan for r in expected]
+        )
+        p_lrt_result = compare_arrays(
+            actual_plrt, expected_plrt, lrt_pvalue_rtol, config.atol, "p_lrt"
+        )
+
+        # logl_H1: not present in GEMMA -lmm 4 output, skip
+        logl_result = _skipped_result("logl_H1 skipped (not in GEMMA -lmm 4 format)")
+
+        # l_remle with boundary handling
+        actual_lambda = np.array(
+            [r.l_remle if r.l_remle is not None else np.nan for r in actual]
+        )
+        expected_lambda = np.array(
+            [r.l_remle if r.l_remle is not None else np.nan for r in expected]
+        )
+        lambda_lower_bound = 1e-4
+        boundary_mask = (expected_lambda <= lambda_lower_bound) | (
+            actual_lambda <= lambda_lower_bound
+        )
+        if np.all(boundary_mask):
+            lambda_result = _skipped_result(
+                "l_remle comparison skipped (all values at optimization boundary)"
+            )
+        elif np.any(boundary_mask):
+            non_boundary_actual = actual_lambda[~boundary_mask]
+            non_boundary_expected = expected_lambda[~boundary_mask]
+            lambda_result = compare_arrays(
+                non_boundary_actual,
+                non_boundary_expected,
+                config.lambda_rtol,
+                config.atol,
+                f"l_remle (excluding {np.sum(boundary_mask)} boundary values)",
+            )
+        else:
+            lambda_result = compare_arrays(
+                actual_lambda,
+                expected_lambda,
+                config.lambda_rtol,
+                config.atol,
+                "l_remle",
+            )
+
+        # l_mle with boundary handling
+        actual_lmle = np.array(
+            [r.l_mle if r.l_mle is not None else np.nan for r in actual]
+        )
+        expected_lmle = np.array(
+            [r.l_mle if r.l_mle is not None else np.nan for r in expected]
+        )
+        lambda_upper_bound = 1e4
+        boundary_mask_mle = (
+            (expected_lmle <= lambda_lower_bound)
+            | (actual_lmle <= lambda_lower_bound)
+            | (expected_lmle >= lambda_upper_bound)
+            | (actual_lmle >= lambda_upper_bound)
+        )
+        if np.all(boundary_mask_mle):
+            l_mle_result = _skipped_result(
+                "l_mle comparison skipped (all values at optimization boundary)"
+            )
+        elif np.any(boundary_mask_mle):
+            non_boundary_actual_mle = actual_lmle[~boundary_mask_mle]
+            non_boundary_expected_mle = expected_lmle[~boundary_mask_mle]
+            l_mle_result = compare_arrays(
+                non_boundary_actual_mle,
+                non_boundary_expected_mle,
+                config.lambda_rtol,
+                config.atol,
+                f"l_mle (excluding {np.sum(boundary_mask_mle)} boundary values)",
+            )
+        else:
+            l_mle_result = compare_arrays(
+                actual_lmle,
+                expected_lmle,
+                config.lambda_rtol,
+                config.atol,
+                "l_mle",
+            )
+
+    elif is_score_test:
         # Score test: compare p_score, skip Wald-specific columns
         actual_pscore = np.array([r.p_score for r in actual])
         expected_pscore = np.array([r.p_score for r in expected])
@@ -658,7 +817,21 @@ def compare_assoc_results(
 
     # Overall pass if all relevant columns pass and no mismatched SNPs
     # Note: For LRT, beta/se are NaN so we skip those checks
-    if is_lrt_test:
+    if is_all_tests:
+        # All-tests: ALL column comparisons must pass
+        all_passed = (
+            beta_result.passed
+            and se_result.passed
+            and af_result.passed
+            and pwald_result.passed
+            and logl_result.passed
+            and lambda_result.passed
+            and p_score_result.passed
+            and p_lrt_result.passed
+            and l_mle_result.passed
+            and len(mismatched) == 0
+        )
+    elif is_lrt_test:
         # LRT has no beta/se, only check AF and LRT-specific columns
         all_passed = af_result.passed and len(mismatched) == 0
         all_passed = all_passed and p_lrt_result.passed and l_mle_result.passed

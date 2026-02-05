@@ -146,13 +146,18 @@ MAX_SAFE_CHUNK = 50_000
 _MAX_BUFFER_ELEMENTS = 1_700_000_000  # ~1.7B elements, 80% of INT32_MAX
 
 
-def _compute_chunk_size(n_samples: int, n_snps: int, n_grid: int = 50) -> int:
+def _compute_chunk_size(
+    n_samples: int, n_snps: int, n_grid: int = 50, n_cvt: int = 1
+) -> int:
     """Compute optimal chunk size to avoid int32 buffer overflow.
 
     JAX uses int32 for buffer indexing by default. Multiple arrays contribute:
-    1. Uab: (chunk_size, n_samples, 6) = chunk_size * n_samples * 6
+    1. Uab: (chunk_size, n_samples, n_index) = chunk_size * n_samples * n_index
     2. Grid REML: (n_grid, chunk_size) intermediate = n_grid * chunk_size
     3. UtG_chunk: (n_samples, chunk_size) = n_samples * chunk_size
+
+    n_index depends on n_cvt: n_index = (n_cvt+3)*(n_cvt+2)//2.
+    For n_cvt=1: n_index=6, for n_cvt=2: n_index=10.
 
     The most restrictive constraint is typically Uab for large n_samples.
 
@@ -160,6 +165,7 @@ def _compute_chunk_size(n_samples: int, n_snps: int, n_grid: int = 50) -> int:
         n_samples: Number of samples.
         n_snps: Total number of SNPs.
         n_grid: Grid points for lambda optimization (default 50).
+        n_cvt: Number of covariates (default 1).
 
     Returns:
         Chunk size (number of SNPs per chunk). Returns n_snps if no chunking needed.
@@ -167,10 +173,12 @@ def _compute_chunk_size(n_samples: int, n_snps: int, n_grid: int = 50) -> int:
     if n_samples == 0:
         return n_snps
 
+    n_index = (n_cvt + 3) * (n_cvt + 2) // 2
+
     # Calculate elements per SNP for each array type
-    # Most restrictive constraint is typically Uab: (chunk_size, n_samples, 6)
+    # Most restrictive constraint is typically Uab: (chunk_size, n_samples, n_index)
     elements_per_snp = max(
-        n_samples * 6,  # Uab: n_samples * 6 elements per SNP
+        n_samples * n_index,  # Uab: n_samples * n_index elements per SNP
         n_grid,  # Grid REML: (n_grid, chunk_size) intermediate → n_grid per SNP
         n_samples,  # UtG_chunk: n_samples elements per SNP
     )
@@ -193,6 +201,7 @@ def auto_tune_chunk_size(
     mem_budget_gb: float = 4.0,
     min_chunk: int = 1000,
     max_chunk: int = MAX_SAFE_CHUNK,
+    n_cvt: int = 1,
 ) -> int:
     """Compute optimal chunk size based on memory budget heuristic.
 
@@ -200,10 +209,10 @@ def auto_tune_chunk_size(
     memory budget. No benchmarking required - fast and predictable.
 
     Memory per SNP (float64):
-      - Uab: n_samples * 6 elements
+      - Uab: n_samples * n_index elements (n_index depends on n_cvt)
       - UtG_chunk: n_samples elements
       - Grid evaluations: n_grid elements
-      - Total: 8 * (n_samples*6 + n_samples + n_grid) bytes
+      - Total: 8 * (n_samples*n_index + n_samples + n_grid) bytes
 
     Args:
         n_samples: Number of samples in the dataset.
@@ -213,6 +222,7 @@ def auto_tune_chunk_size(
         min_chunk: Minimum chunk size (default 1000).
         max_chunk: Maximum chunk size cap (default MAX_SAFE_CHUNK=50000).
             Prevents excessive memory allocation on high-memory systems.
+        n_cvt: Number of covariates (default 1). Affects Uab array size.
 
     Returns:
         Optimal chunk size that fits within memory budget.
@@ -221,16 +231,18 @@ def auto_tune_chunk_size(
         >>> chunk = auto_tune_chunk_size(n_samples=10000, n_filtered=50000)
         >>> results = run_lmm_association_streaming(..., chunk_size=chunk)
     """
+    n_index = (n_cvt + 3) * (n_cvt + 2) // 2
+
     # Memory per SNP in bytes (float64 = 8 bytes)
-    # Uab: (n_samples, 6), UtG: (n_samples,), grid workspace: (n_grid,)
-    bytes_per_snp = 8 * (n_samples * 6 + n_samples + n_grid)
+    # Uab: (n_samples, n_index), UtG: (n_samples,), grid workspace: (n_grid,)
+    bytes_per_snp = 8 * (n_samples * n_index + n_samples + n_grid)
 
     # Compute chunk size with 70% safety margin for JAX overhead
     mem_budget_bytes = mem_budget_gb * 0.7 * 1e9
     chunk_from_memory = int(mem_budget_bytes / bytes_per_snp)
 
     # Apply int32 buffer limit constraint
-    buffer_limit = _compute_chunk_size(n_samples, chunk_from_memory, n_grid)
+    buffer_limit = _compute_chunk_size(n_samples, chunk_from_memory, n_grid, n_cvt)
 
     # Clamp to valid range INCLUDING max_chunk cap
     chunk_size = max(min_chunk, min(buffer_limit, n_filtered, max_chunk))
@@ -267,18 +279,20 @@ def run_lmm_association_jax(
     and JIT compilation. Significantly faster than sequential NumPy version
     for large datasets, especially on GPU.
 
-    Note: Currently only supports intercept-only model (no additional covariates).
-    If covariates are provided, a NotImplementedError is raised.
+    Supports arbitrary covariates. If covariates=None, uses intercept-only
+    model (n_cvt=1). Covariate matrix should include an intercept column
+    (first column all 1s) if desired, matching GEMMA -c flag behavior.
 
     Memory Scaling:
         SNPs are processed in chunks to bound intermediate array sizes:
-        - Uab array: (chunk_size, n_samples, 6) for projection computation
+        - Uab array: (chunk_size, n_samples, n_index) for projection computation
+          where n_index = (n_cvt+3)*(n_cvt+2)//2
         - Lambda grid: (n_grid, chunk_size) for optimization
         - UtG_chunk: (n_samples, chunk_size) rotated genotypes per chunk
 
         Chunk size is computed to avoid JAX int32 buffer overflow. Note that:
-        - Input genotypes array must still fit in memory (O(n_samples × n_snps))
-        - Kinship and eigenvectors require O(n_samples²) memory
+        - Input genotypes array must still fit in memory (O(n_samples x n_snps))
+        - Kinship and eigenvectors require O(n_samples^2) memory
         - GPU mode transfers each chunk from CPU to device (rotation is CPU)
 
     Args:
@@ -286,7 +300,10 @@ def run_lmm_association_jax(
         phenotypes: Phenotype vector (n_samples,)
         kinship: Kinship matrix (n_samples, n_samples)
         snp_info: List of dicts with keys: chr, rs, pos, a1, a0
-        covariates: Optional covariate matrix - NOT YET SUPPORTED, will raise error
+        covariates: Optional covariate matrix (n_samples, n_covariates).
+            If None, uses intercept-only model. If provided, should include
+            intercept column if desired (GEMMA -c flag behavior).
+            Samples with NaN covariates are excluded from analysis.
         eigenvalues: Pre-computed eigenvalues from kinship decomposition. If provided
             along with eigenvectors, skips eigendecomposition (saves significant time
             for large matrices). Must be sorted ascending.
@@ -307,17 +324,9 @@ def run_lmm_association_jax(
         List of AssocResult for each SNP that passes filtering
 
     Raises:
-        NotImplementedError: If covariates are provided (not yet supported)
         MemoryError: If check_memory=True and insufficient memory available.
         ValueError: If only one of eigenvalues/eigenvectors is provided.
     """
-    # Guard: covariates not yet supported in JAX path
-    if covariates is not None:
-        raise NotImplementedError(
-            "JAX runner does not yet support covariates beyond intercept. "
-            "Use run_lmm_association() for covariate support, or pass covariates=None."
-        )
-
     # Validate eigendecomposition params - must provide both or neither
     if (eigenvalues is None) != (eigenvectors is None):
         raise ValueError(
@@ -361,14 +370,34 @@ def run_lmm_association_jax(
             # No GPU backend available, fall back to CPU
             pass
 
-    # Filter samples with missing phenotypes
+    # Filter samples with missing phenotypes or missing covariates
     valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
+    if covariates is not None:
+        valid_covariate = np.all(~np.isnan(covariates), axis=1)
+        valid_mask = valid_mask & valid_covariate
     if not np.all(valid_mask):
         genotypes = genotypes[valid_mask, :]
         phenotypes = phenotypes[valid_mask]
         kinship = kinship[np.ix_(valid_mask, valid_mask)]
+        if covariates is not None:
+            covariates = covariates[valid_mask, :]
 
     n_samples, n_snps = genotypes.shape
+
+    # Construct covariate matrix W
+    if covariates is None:
+        W = np.ones((n_samples, 1))
+    else:
+        W = covariates.astype(np.float64)
+        # Warn if first column is not all 1s (missing intercept)
+        first_col = W[:, 0]
+        if not np.allclose(first_col, 1.0):
+            logger.warning(
+                "Covariate matrix does not have intercept column "
+                "(first column is not all 1s). "
+                "Model will NOT include an intercept term."
+            )
+    n_cvt = W.shape[1]
 
     # Vectorized SNP stats computation (replaces per-SNP Python loop)
     missing_counts = np.sum(np.isnan(genotypes), axis=0)  # (n_snps,)
@@ -416,14 +445,13 @@ def run_lmm_association_jax(
         if show_progress:
             log_rss_memory("lmm_jax", "after_eigendecomp")
 
-    # Prepare rotated matrices (intercept-only model)
-    W = np.ones((n_samples, 1))
+    # Prepare rotated matrices
     UtW = U.T @ W
     Uty = U.T @ phenotypes
 
     # Determine chunk size to avoid int32 buffer overflow
     n_filtered = len(snp_indices)
-    chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid)
+    chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid, n_cvt)
 
     # Device-resident shared arrays - placed on device ONCE before chunk loop
     # These arrays are used across all chunks and should not be re-transferred
@@ -502,26 +530,27 @@ def run_lmm_association_jax(
 
         try:
             # Batch compute Uab for this chunk
-            Uab_batch = batch_compute_uab(1, UtW_jax, Uty_jax, current_UtG)
+            Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
 
             # Precompute Iab (identity-weighted) once per chunk - avoids ~70x redundant
             # calc_pab_jax calls during lambda optimization
-            Iab_batch = batch_compute_iab(1, Uab_batch)
+            Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
 
             # Grid-based lambda optimization (donate_argnums recycles Uab_batch memory)
             best_lambdas, best_logls = _grid_optimize_lambda_batched(
-                eigenvalues, Uab_batch, Iab_batch, l_min, l_max, n_grid, n_refine
+                n_cvt, eigenvalues, Uab_batch, Iab_batch, l_min, l_max, n_grid, n_refine
             )
 
             # Batch compute Wald statistics
             betas, ses, p_walds = batch_calc_wald_stats(
-                1, best_lambdas, eigenvalues, Uab_batch, n_samples
+                n_cvt, best_lambdas, eigenvalues, Uab_batch, n_samples
             )
         except Exception as e:
             error_msg = str(e)
             # Check for int32 overflow error
             if "exceeds the maximum representable value" in error_msg:
-                buffer_elements = n_samples * chunk_size * 6
+                n_index = (n_cvt + 3) * (n_cvt + 2) // 2
+                buffer_elements = n_samples * chunk_size * n_index
                 logger.error(
                     f"JAX int32 buffer overflow during LMM computation.\n"
                     f"  Chunk {i+1}/{n_chunks}: {chunk_size:,} SNPs x "
@@ -633,6 +662,7 @@ def _build_results(
 
 
 def _grid_optimize_lambda_batched(
+    n_cvt: int,
     eigenvalues: jnp.ndarray,
     Uab_batch: jnp.ndarray,
     Iab_batch: jnp.ndarray,
@@ -647,15 +677,16 @@ def _grid_optimize_lambda_batched(
     least 20 iterations to achieve ~1e-5 relative tolerance.
 
     Args:
+        n_cvt: Number of covariates.
         eigenvalues: Eigenvalues (n_samples,)
-        Uab_batch: Uab matrices (n_snps, n_samples, 6)
-        Iab_batch: Precomputed identity-weighted Pab (n_snps, 3, 6)
+        Uab_batch: Uab matrices (n_snps, n_samples, n_index)
+        Iab_batch: Precomputed identity-weighted Pab (n_snps, n_cvt+2, n_index)
         l_min, l_max: Lambda bounds
         n_grid: Coarse grid points
         n_refine: Golden section iterations
     """
     return golden_section_optimize_lambda(
-        1,
+        n_cvt,
         eigenvalues,
         Uab_batch,
         Iab_batch,

@@ -515,7 +515,7 @@ def run_lmm_association_jax(
 
             # Batch compute Wald statistics
             betas, ses, p_walds = batch_calc_wald_stats(
-                best_lambdas, eigenvalues, Uab_batch, n_samples
+                1, best_lambdas, eigenvalues, Uab_batch, n_samples
             )
         except Exception as e:
             error_msg = str(e)
@@ -655,6 +655,7 @@ def _grid_optimize_lambda_batched(
         n_refine: Golden section iterations
     """
     return golden_section_optimize_lambda(
+        1,
         eigenvalues,
         Uab_batch,
         Iab_batch,
@@ -1030,7 +1031,7 @@ def run_lmm_association_streaming(
 
                 # Batch compute Wald statistics
                 betas, ses, p_walds = batch_calc_wald_stats(
-                    best_lambdas, eigenvalues, Uab_batch, n_samples
+                    1, best_lambdas, eigenvalues, Uab_batch, n_samples
                 )
 
                 # Strip padding, keep as JAX arrays for file chunk concatenation

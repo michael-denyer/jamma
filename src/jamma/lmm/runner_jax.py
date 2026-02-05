@@ -553,6 +553,18 @@ def run_lmm_association_jax(
         all_lambdas_mle = []
         all_logls_mle = []
         all_p_lrts = []
+    elif lmm_mode == 4:  # All tests
+        # Wald accumulators
+        all_lambdas = []
+        all_logls = []
+        all_betas = []
+        all_ses = []
+        all_pwalds = []
+        # LRT accumulators
+        all_lambdas_mle = []
+        all_p_lrts = []
+        # Score accumulator
+        all_p_scores = []
 
     def _prepare_chunk(start: int) -> tuple[jnp.ndarray, int, bool]:
         """Prepare a chunk for device transfer (CPU work)."""
@@ -641,6 +653,42 @@ def run_lmm_association_jax(
                     best_logls_mle, jnp.full_like(best_logls_mle, logl_H0)
                 )
 
+            elif lmm_mode == 4:  # All tests
+                # Score test (cheapest, no optimization, reads Uab_batch)
+                _, _, p_scores = batch_calc_score_stats(
+                    n_cvt, Hi_eval_null_jax, Uab_batch, n_samples
+                )
+
+                # MLE optimization for LRT
+                best_lambdas_mle, best_logls_mle = golden_section_optimize_lambda_mle(
+                    n_cvt,
+                    eigenvalues,
+                    Uab_batch,
+                    l_min=l_min,
+                    l_max=l_max,
+                    n_grid=n_grid,
+                    n_iter=max(n_refine, 20),
+                )
+                p_lrts = jax.vmap(calc_lrt_pvalue_jax)(
+                    best_logls_mle, jnp.full_like(best_logls_mle, logl_H0)
+                )
+
+                # REML optimization for Wald
+                Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
+                best_lambdas, best_logls = _grid_optimize_lambda_batched(
+                    n_cvt,
+                    eigenvalues,
+                    Uab_batch,
+                    Iab_batch,
+                    l_min,
+                    l_max,
+                    n_grid,
+                    n_refine,
+                )
+                betas, ses, p_walds = batch_calc_wald_stats(
+                    n_cvt, best_lambdas, eigenvalues, Uab_batch, n_samples
+                )
+
         except Exception as e:
             error_msg = str(e)
             # Check for int32 overflow error
@@ -681,6 +729,19 @@ def run_lmm_association_jax(
             all_lambdas_mle.append(best_lambdas_mle[:slice_len])
             all_logls_mle.append(best_logls_mle[:slice_len])
             all_p_lrts.append(p_lrts[:slice_len])
+        elif lmm_mode == 4:
+            slice_len = actual_chunk_len if needs_padding else len(best_lambdas)
+            # Wald
+            all_lambdas.append(best_lambdas[:slice_len])
+            all_logls.append(best_logls[:slice_len])
+            all_betas.append(betas[:slice_len])
+            all_ses.append(ses[:slice_len])
+            all_pwalds.append(p_walds[:slice_len])
+            # LRT
+            all_lambdas_mle.append(best_lambdas_mle[:slice_len])
+            all_p_lrts.append(p_lrts[:slice_len])
+            # Score
+            all_p_scores.append(p_scores[:slice_len])
 
     # Log memory after all chunks processed
     if show_progress:
@@ -703,6 +764,17 @@ def run_lmm_association_jax(
         lambdas_mle_np = np.asarray(jnp.concatenate(all_lambdas_mle))
         p_lrts_np = np.asarray(jnp.concatenate(all_p_lrts))
         del all_lambdas_mle, all_logls_mle, all_p_lrts
+    elif lmm_mode == 4:
+        best_lambdas_np = np.asarray(jnp.concatenate(all_lambdas))
+        best_logls_np = np.asarray(jnp.concatenate(all_logls))
+        betas_np = np.asarray(jnp.concatenate(all_betas))
+        ses_np = np.asarray(jnp.concatenate(all_ses))
+        p_walds_np = np.asarray(jnp.concatenate(all_pwalds))
+        lambdas_mle_np = np.asarray(jnp.concatenate(all_lambdas_mle))
+        p_lrts_np = np.asarray(jnp.concatenate(all_p_lrts))
+        p_scores_np = np.asarray(jnp.concatenate(all_p_scores))
+        del all_lambdas, all_logls, all_betas, all_ses, all_pwalds
+        del all_lambdas_mle, all_p_lrts, all_p_scores
 
     # Explicit cleanup of JAX arrays before returning to prevent SIGSEGV
     # from race conditions between Python GC and JAX background threads
@@ -714,6 +786,8 @@ def run_lmm_association_jax(
         jax.block_until_ready(p_scores_np)
     elif lmm_mode == 2:
         jax.block_until_ready(p_lrts_np)
+    elif lmm_mode == 4:
+        jax.block_until_ready(betas_np)
 
     # Log completion
     elapsed = time.perf_counter() - start_time
@@ -748,6 +822,20 @@ def run_lmm_association_jax(
             snp_info,
             lambdas_mle_np,
             p_lrts_np,
+        )
+    elif lmm_mode == 4:
+        return _build_results_all(
+            snp_indices,
+            snp_stats,
+            snp_info,
+            best_lambdas_np,
+            best_logls_np,
+            betas_np,
+            ses_np,
+            p_walds_np,
+            lambdas_mle_np,
+            p_lrts_np,
+            p_scores_np,
         )
     else:
         raise ValueError(f"Unsupported lmm_mode: {lmm_mode}. Use 1, 2, 3, or 4.")

@@ -723,6 +723,10 @@ def run_lmm_association_streaming(
     (n_samples, n_snps) genotype matrix. Combined with compute_kinship_streaming(),
     enables full GWAS workflow without ever loading the complete genotype matrix.
 
+    Supports arbitrary covariates. If covariates=None, uses intercept-only
+    model (n_cvt=1). Covariate matrix should include an intercept column
+    (first column all 1s) if desired, matching GEMMA -c flag behavior.
+
     Two-pass approach:
     1. SNP statistics pass: Compute MAF and missing rate for filtering
     2. Association pass: For each chunk, rotate genotypes and compute Wald stats
@@ -733,15 +737,16 @@ def run_lmm_association_streaming(
         - Chunk buffer: n_samples * chunk_size * 8 bytes
         - Never allocates full genotype matrix
 
-    Note: Currently only supports intercept-only model (no additional covariates).
-
     Args:
         bed_path: Path prefix for PLINK files (without .bed/.bim/.fam extension).
         phenotypes: Phenotype vector (n_samples,).
         kinship: Kinship matrix (n_samples, n_samples).
         snp_info: Optional list of dicts with keys: chr, rs, pos, a1, a0.
             If None, builds from PLINK metadata.
-        covariates: Optional covariate matrix - NOT YET SUPPORTED.
+        covariates: Optional covariate matrix (n_samples, n_covariates).
+            If None, uses intercept-only model. If provided, should include
+            intercept column if desired (GEMMA -c flag behavior).
+            Samples with NaN covariates are excluded from analysis.
         eigenvalues: Pre-computed eigenvalues from kinship decomposition. If provided
             along with eigenvectors, skips eigendecomposition (saves significant time
             for large matrices). Must be sorted ascending.
@@ -767,19 +772,11 @@ def run_lmm_association_streaming(
         output_path is provided (results are written to disk instead).
 
     Raises:
-        NotImplementedError: If covariates are provided.
         MemoryError: If check_memory=True and insufficient memory available.
         FileNotFoundError: If the .bed file does not exist.
         ValueError: If only one of eigenvalues/eigenvectors is provided.
     """
     start_time = time.perf_counter()
-
-    # Guard: covariates not yet supported in JAX path
-    if covariates is not None:
-        raise NotImplementedError(
-            "Streaming LMM does not yet support covariates beyond intercept. "
-            "Use run_lmm_association() for covariate support, or pass covariates=None."
-        )
 
     # Validate eigendecomposition params - must provide both or neither
     if (eigenvalues is None) != (eigenvectors is None):
@@ -807,12 +804,17 @@ def run_lmm_association_streaming(
             for i in range(n_snps)
         ]
 
-    # Filter samples with missing phenotypes
+    # Filter samples with missing phenotypes or missing covariates
     valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
+    if covariates is not None:
+        valid_covariate = np.all(~np.isnan(covariates), axis=1)
+        valid_mask = valid_mask & valid_covariate
     n_valid = int(np.sum(valid_mask))
     if not np.all(valid_mask):
         phenotypes = phenotypes[valid_mask]
         kinship = kinship[np.ix_(valid_mask, valid_mask)]
+        if covariates is not None:
+            covariates = covariates[valid_mask, :]
 
     n_samples = phenotypes.shape[0]
 
@@ -928,8 +930,22 @@ def run_lmm_association_streaming(
         if show_progress:
             log_rss_memory("lmm_streaming", "after_eigendecomp")
 
-    # Prepare rotated matrices (intercept-only model)
-    W = np.ones((n_samples, 1))
+    # Construct covariate matrix W
+    if covariates is None:
+        W = np.ones((n_samples, 1))
+    else:
+        W = covariates.astype(np.float64)
+        # Warn if first column is not all 1s (missing intercept)
+        first_col = W[:, 0]
+        if not np.allclose(first_col, 1.0):
+            logger.warning(
+                "Covariate matrix does not have intercept column "
+                "(first column is not all 1s). "
+                "Model will NOT include an intercept term."
+            )
+    n_cvt = W.shape[1]
+
+    # Prepare rotated matrices
     UtW = U.T @ W
     Uty = U.T @ phenotypes
 
@@ -942,7 +958,7 @@ def run_lmm_association_streaming(
     Uty_jax = jax.device_put(Uty, device)
 
     # Compute chunk size for JAX buffer limits
-    jax_chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid)
+    jax_chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid, n_cvt)
 
     # === PASS 2: Association ===
     # Open writer at start if output_path provided (per-chunk writing)
@@ -1050,19 +1066,26 @@ def run_lmm_association_streaming(
                     del UtG_np
 
                 # Batch compute Uab
-                Uab_batch = batch_compute_uab(1, UtW_jax, Uty_jax, current_UtG)
+                Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
 
                 # Precompute Iab (identity-weighted) once per chunk
-                Iab_batch = batch_compute_iab(1, Uab_batch)
+                Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
 
                 # Grid-based lambda optimization
                 best_lambdas, best_logls = _grid_optimize_lambda_batched(
-                    eigenvalues, Uab_batch, Iab_batch, l_min, l_max, n_grid, n_refine
+                    n_cvt,
+                    eigenvalues,
+                    Uab_batch,
+                    Iab_batch,
+                    l_min,
+                    l_max,
+                    n_grid,
+                    n_refine,
                 )
 
                 # Batch compute Wald statistics
                 betas, ses, p_walds = batch_calc_wald_stats(
-                    1, best_lambdas, eigenvalues, Uab_batch, n_samples
+                    n_cvt, best_lambdas, eigenvalues, Uab_batch, n_samples
                 )
 
                 # Strip padding, keep as JAX arrays for file chunk concatenation

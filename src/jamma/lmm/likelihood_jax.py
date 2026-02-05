@@ -682,3 +682,98 @@ def batch_calc_wald_stats(
         lambda lam, uab: calc_wald_stats_jax(n_cvt, lam, eigenvalues, uab, n_samples),
         in_axes=(0, 0),
     )(lambdas, Uab_batch)
+
+
+@partial(jit, static_argnums=(0,))
+def calc_score_stats_jax(
+    n_cvt: int,
+    Pab: Float[Array, "nr ni"],
+    n_samples: int,
+) -> tuple[Float[Array, ""], Float[Array, ""], Float[Array, ""]]:
+    """Compute Score test statistics from Pab using JAX.
+
+    Follows stats.py:calc_score_test EXACTLY. Key difference from Wald:
+    P_xx, P_xy, P_yy are extracted at Pab level n_cvt (after projecting
+    out covariates only), NOT n_cvt+1 (after projecting out genotype).
+
+    The Score F-statistic uses n_samples (not df) in the numerator:
+        F = n_samples * P_xy^2 / (P_yy * P_xx)
+
+    Args:
+        n_cvt: Number of covariates (static, triggers recompilation).
+        Pab: Pab matrix (n_cvt+2, n_index).
+        n_samples: Number of samples.
+
+    Returns:
+        Tuple of (beta, se, p_score) - all scalars.
+    """
+    df = n_samples - n_cvt - 1
+    table = build_index_table(n_cvt)
+    idx_xx = table["idx_xx"]
+    idx_xy = table["idx_xy"]
+    idx_yy = table["idx_yy"]
+
+    # Score test: extract at level n_cvt (covariates only, NOT genotype)
+    P_yy = Pab[n_cvt, idx_yy]
+    P_xx = Pab[n_cvt, idx_xx]
+    P_xy = Pab[n_cvt, idx_xy]
+
+    # Px_yy for beta/se computation (after projecting out covariates AND genotype)
+    Px_yy = Pab[n_cvt + 1, idx_yy]
+    Px_yy = jnp.where((Px_yy >= 0.0) & (Px_yy < 1e-8), 1e-8, Px_yy)
+
+    # Guard degenerate SNPs
+    is_valid = P_xx > 0
+
+    # Beta and SE (informational only for Score test)
+    beta = jnp.where(is_valid, P_xy / jnp.where(is_valid, P_xx, 1.0), jnp.nan)
+    tau = df / Px_yy
+    variance_beta = jnp.where(
+        is_valid, 1.0 / (tau * jnp.where(is_valid, P_xx, 1.0)), jnp.nan
+    )
+    variance_safe = jnp.where(
+        jnp.abs(variance_beta) < 0.001,
+        jnp.abs(variance_beta),
+        variance_beta,
+    )
+    se = jnp.where(is_valid, jnp.sqrt(variance_safe), jnp.nan)
+
+    # Score F-statistic: F = n * P_xy^2 / (P_yy * P_xx)
+    # NOTE: uses n_samples (not df), and P_yy * P_xx (not Px_yy)
+    f_stat = n_samples * (P_xy * P_xy) / (P_yy * jnp.where(is_valid, P_xx, 1.0))
+
+    # p_score via betainc (F-distribution survival function)
+    z = df / (df + jnp.maximum(f_stat, 1e-10))
+    z = jnp.clip(z, 0.0, 1.0)
+    p_score = jax.scipy.special.betainc(df / 2.0, 0.5, z)
+
+    # Guard f_stat <= 0 and invalid SNPs
+    p_score = jnp.where(f_stat <= 0, 1.0, p_score)
+    p_score = jnp.where(is_valid, p_score, jnp.nan)
+
+    return beta, se, p_score
+
+
+def batch_calc_score_stats(
+    n_cvt: int,
+    Hi_eval_null: Float[Array, " n"],
+    Uab_batch: Float[Array, "p n ni"],
+    n_samples: int,
+) -> tuple[Float[Array, " p"], Float[Array, " p"], Float[Array, " p"]]:
+    """Batch Score test: compute Pab with fixed null Hi_eval, extract stats.
+
+    Score test uses a single null-model lambda for all SNPs, so Hi_eval
+    is constant across the batch. This is cheaper than Wald because no
+    per-SNP lambda optimization is needed.
+
+    Args:
+        n_cvt: Number of covariates (static).
+        Hi_eval_null: 1 / (lambda_null * eigenvalues + 1) vector (n_samples,).
+        Uab_batch: Uab matrices per SNP (n_snps, n_samples, n_index).
+        n_samples: Number of samples.
+
+    Returns:
+        Tuple of (betas, ses, p_scores) - each (n_snps,).
+    """
+    Pab_batch = vmap(lambda Uab: calc_pab_jax(n_cvt, Hi_eval_null, Uab))(Uab_batch)
+    return vmap(lambda Pab: calc_score_stats_jax(n_cvt, Pab, n_samples))(Pab_batch)

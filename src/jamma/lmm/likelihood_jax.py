@@ -14,8 +14,9 @@ Usage:
     # For single SNP (falls back to NumPy version for CPU efficiency)
     from jamma.lmm.likelihood import reml_log_likelihood
 
-    # For batch processing (uses JAX for GPU acceleration)
-    from jamma.lmm.likelihood_jax import batch_reml_log_likelihood
+    # For batch processing (JAX GPU acceleration)
+    from jamma.lmm.likelihood_jax import (
+        batch_compute_uab, golden_section_optimize_lambda)
 
 Type annotations use jaxtyping for shape documentation:
     n = n_samples, p = n_snps, g = n_grid
@@ -540,36 +541,6 @@ def golden_section_optimize_lambda(
     best_logls = compute_reml_batch(log_opt)
 
     return best_lambdas, best_logls
-
-
-def _batch_grid_reml(
-    n_cvt: int,
-    lambdas: Float[Array, " g"],
-    eigenvalues: Float[Array, " n"],
-    Uab_batch: Float[Array, "p n ni"],
-) -> Float[Array, "g p"]:
-    """Compute REML at all grid points for all SNPs (fully on device).
-
-    Uses vmap over lambda values to avoid Python loops and host/device sync.
-
-    Args:
-        n_cvt: Number of covariates (passed through to reml_log_likelihood_jax).
-        lambdas: Grid of lambda values (n_grid,).
-        eigenvalues: Eigenvalues (n_samples,).
-        Uab_batch: Uab matrices (n_snps, n_samples, n_index).
-
-    Returns:
-        Log-likelihoods (n_grid, n_snps).
-    """
-
-    # vmap over lambda values, then vmap over SNPs
-    def reml_for_lambda(lam):
-        return vmap(
-            lambda Uab: reml_log_likelihood_jax(n_cvt, lam, eigenvalues, Uab),
-            in_axes=0,
-        )(Uab_batch)
-
-    return vmap(reml_for_lambda)(lambdas)
 
 
 def _batch_grid_reml_with_iab(

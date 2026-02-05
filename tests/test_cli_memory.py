@@ -221,6 +221,35 @@ class TestCliIncrementalWriting:
             assert call_kwargs["output_path"] is not None
             assert str(call_kwargs["output_path"]).endswith(".assoc.txt")
 
+    def test_cli_numpy_backend_uses_output_path(self, tmp_path):
+        """Verify NumPy backend passes output_path to run_lmm_association."""
+        with patch("jamma.cli.run_lmm_association") as mock_run:
+            mock_run.return_value = []
+
+            runner.invoke(
+                app,
+                [
+                    "-outdir",
+                    str(tmp_path),
+                    "-o",
+                    "lmm_test",
+                    "lmm",
+                    "-bfile",
+                    str(PLINK_PREFIX),
+                    "-k",
+                    str(KINSHIP_FILE),
+                    "--no-check-memory",
+                    "--backend",
+                    "numpy",
+                ],
+            )
+
+            assert mock_run.called
+            call_kwargs = mock_run.call_args.kwargs
+            assert "output_path" in call_kwargs
+            assert call_kwargs["output_path"] is not None
+            assert str(call_kwargs["output_path"]).endswith(".assoc.txt")
+
     def test_cli_jax_default_uses_streaming_runner(self, tmp_path):
         """Verify CLI default (jax) calls run_lmm_association_streaming."""
         with patch("jamma.cli.run_lmm_association_streaming") as mock_stream:

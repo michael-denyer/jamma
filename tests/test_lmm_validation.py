@@ -551,20 +551,18 @@ class TestLmmWithMissingPhenotypes:
 
 def _build_snp_info(plink_data):
     """Build SNP info list from PLINK data."""
-    snp_info = []
-    for i in range(plink_data.n_snps):
-        snp_info.append(
-            {
-                "chr": str(plink_data.chromosome[i]),
-                "rs": plink_data.sid[i],
-                "pos": plink_data.bp_position[i],
-                "a1": plink_data.allele_1[i],
-                "a0": plink_data.allele_2[i],
-                "maf": 0.0,  # Will be computed during association
-                "n_miss": 0,  # Will be computed during association
-            }
-        )
-    return snp_info
+    return [
+        {
+            "chr": str(plink_data.chromosome[i]),
+            "rs": plink_data.sid[i],
+            "pos": plink_data.bp_position[i],
+            "a1": plink_data.allele_1[i],
+            "a0": plink_data.allele_2[i],
+            "maf": 0.0,  # Will be computed during association
+            "n_miss": 0,  # Will be computed during association
+        }
+        for i in range(plink_data.n_snps)
+    ]
 
 
 def _format_comparison_failure(comparison: AssocComparisonResult) -> str:

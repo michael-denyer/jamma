@@ -207,8 +207,8 @@ def estimate_streaming_memory(
     chunk_gb = n_samples * chunk_size * 8 / 1e9
     rotation_buffer_gb = n_samples * chunk_size * 8 / 1e9  # UtG buffer
 
-    # Grid REML intermediate: _batch_grid_reml creates (n_grid, chunk_size) arrays
-    # during vmap over lambda values for log-likelihood evaluation
+    # Grid REML intermediate: vmap over lambda values creates
+    # (n_grid, chunk_size) arrays during log-likelihood evaluation
     grid_reml_gb = n_grid * chunk_size * 8 / 1e9
 
     # Peak memory calculation by workflow phase

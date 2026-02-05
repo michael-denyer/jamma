@@ -137,12 +137,12 @@ MAX_SAFE_CHUNK = 50_000
 
 # INT32_MAX with headroom for JAX internal indexing overhead
 # Multiple arrays contribute to buffer sizing:
-# - Uab: (n_snps, n_samples, 6)
+# - Uab: (n_snps, n_samples, n_index) where n_index = (n_cvt+3)*(n_cvt+2)//2
 # - Grid REML intermediate: (n_grid, n_snps) during vmap over lambdas
 # - UtG_chunk: (n_samples, n_snps)
 #
-# The bottleneck is _batch_grid_reml which creates (n_grid, n_snps) intermediate
-# tensors during vmap. Total elements must stay below INT32_MAX.
+# The bottleneck is the grid REML vmap which creates (n_grid, n_snps) intermediate
+# tensors. Total elements must stay below INT32_MAX.
 _MAX_BUFFER_ELEMENTS = 1_700_000_000  # ~1.7B elements, 80% of INT32_MAX
 
 
@@ -255,6 +255,88 @@ def auto_tune_chunk_size(
     return chunk_size
 
 
+def _select_jax_device(use_gpu: bool) -> jax.Device:
+    """Select JAX compute device with safe GPU detection.
+
+    Falls back to CPU if GPU backend is unavailable.
+
+    Args:
+        use_gpu: Whether to attempt GPU selection.
+
+    Returns:
+        JAX device to use for computation.
+    """
+    device = jax.devices("cpu")[0]
+    if use_gpu:
+        try:
+            gpu_devices = jax.devices("gpu")
+            if gpu_devices:
+                device = gpu_devices[0]
+        except RuntimeError:
+            pass
+    return device
+
+
+def _build_covariate_matrix(
+    covariates: np.ndarray | None, n_samples: int
+) -> tuple[np.ndarray, int]:
+    """Construct covariate matrix W and return (W, n_cvt).
+
+    If covariates is None, uses intercept-only model. Warns if provided
+    covariates lack an intercept column.
+
+    Args:
+        covariates: Optional covariate matrix (n_samples, n_covariates).
+        n_samples: Number of samples (for intercept construction).
+
+    Returns:
+        Tuple of (W, n_cvt) where W is the covariate matrix.
+    """
+    if covariates is None:
+        W = np.ones((n_samples, 1))
+    else:
+        W = covariates.astype(np.float64)
+        if not np.allclose(W[:, 0], 1.0):
+            logger.warning(
+                "Covariate matrix does not have intercept column "
+                "(first column is not all 1s). "
+                "Model will NOT include an intercept term."
+            )
+    return W, W.shape[1]
+
+
+def _eigendecompose_or_reuse(
+    kinship: np.ndarray,
+    eigenvalues: np.ndarray | None,
+    eigenvectors: np.ndarray | None,
+    show_progress: bool,
+    label: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return eigendecomposition, computing it if not provided.
+
+    Args:
+        kinship: Kinship matrix (n_samples, n_samples).
+        eigenvalues: Pre-computed eigenvalues or None.
+        eigenvectors: Pre-computed eigenvectors or None.
+        show_progress: Whether to log memory usage.
+        label: Label for memory logging (e.g. "lmm_jax", "lmm_streaming").
+
+    Returns:
+        Tuple of (eigenvalues, eigenvectors).
+    """
+    if eigenvalues is not None and eigenvectors is not None:
+        if show_progress:
+            logger.debug("Using pre-computed eigendecomposition")
+        return eigenvalues, eigenvectors
+
+    if show_progress:
+        log_rss_memory(label, "before_eigendecomp")
+    eigenvalues_np, U = eigendecompose_kinship(kinship)
+    if show_progress:
+        log_rss_memory(label, "after_eigendecomp")
+    return eigenvalues_np, U
+
+
 def run_lmm_association_jax(
     genotypes: np.ndarray,
     phenotypes: np.ndarray,
@@ -359,16 +441,7 @@ def run_lmm_association_jax(
                 f"genotypes={est.genotypes_gb:.1f}GB"
             )
 
-    # Configure JAX device with safe GPU detection
-    device = jax.devices("cpu")[0]
-    if use_gpu:
-        try:
-            gpu_devices = jax.devices("gpu")
-            if gpu_devices:
-                device = gpu_devices[0]
-        except RuntimeError:
-            # No GPU backend available, fall back to CPU
-            pass
+    device = _select_jax_device(use_gpu)
 
     # Filter samples with missing phenotypes or missing covariates
     valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
@@ -384,20 +457,7 @@ def run_lmm_association_jax(
 
     n_samples, n_snps = genotypes.shape
 
-    # Construct covariate matrix W
-    if covariates is None:
-        W = np.ones((n_samples, 1))
-    else:
-        W = covariates.astype(np.float64)
-        # Warn if first column is not all 1s (missing intercept)
-        first_col = W[:, 0]
-        if not np.allclose(first_col, 1.0):
-            logger.warning(
-                "Covariate matrix does not have intercept column "
-                "(first column is not all 1s). "
-                "Model will NOT include an intercept term."
-            )
-    n_cvt = W.shape[1]
+    W, n_cvt = _build_covariate_matrix(covariates, n_samples)
 
     # Vectorized SNP stats computation (replaces per-SNP Python loop)
     missing_counts = np.sum(np.isnan(genotypes), axis=0)  # (n_snps,)
@@ -431,19 +491,9 @@ def run_lmm_association_jax(
         )
     )
 
-    # Eigendecompose kinship (one-time, uses NumPy/LAPACK)
-    # Skip if pre-computed eigendecomposition provided
-    if eigenvalues is not None and eigenvectors is not None:
-        eigenvalues_np = eigenvalues
-        U = eigenvectors
-        if show_progress:
-            logger.debug("Using pre-computed eigendecomposition")
-    else:
-        if show_progress:
-            log_rss_memory("lmm_jax", "before_eigendecomp")
-        eigenvalues_np, U = eigendecompose_kinship(kinship)
-        if show_progress:
-            log_rss_memory("lmm_jax", "after_eigendecomp")
+    eigenvalues_np, U = _eigendecompose_or_reuse(
+        kinship, eigenvalues, eigenvectors, show_progress, "lmm_jax"
+    )
 
     # Prepare rotated matrices
     UtW = U.T @ W
@@ -840,15 +890,7 @@ def run_lmm_association_streaming(
         logger.info(f"number of total SNPs/variants = {n_snps}")
         logger.info(f"lambda range = [{l_min:.2e}, {l_max:.2e}]")
 
-    # Configure JAX device
-    device = jax.devices("cpu")[0]
-    if use_gpu:
-        try:
-            gpu_devices = jax.devices("gpu")
-            if gpu_devices:
-                device = gpu_devices[0]
-        except RuntimeError:
-            pass
+    device = _select_jax_device(use_gpu)
 
     # === PASS 1: SNP statistics ===
     # Compute per-SNP stats without loading all genotypes at once
@@ -917,33 +959,11 @@ def run_lmm_association_streaming(
     filtered_means = all_means[snp_indices]
 
     # === SETUP: Eigendecomposition ===
-    # Skip if pre-computed eigendecomposition provided
-    if eigenvalues is not None and eigenvectors is not None:
-        eigenvalues_np = eigenvalues
-        U = eigenvectors
-        if show_progress:
-            logger.debug("Using pre-computed eigendecomposition")
-    else:
-        if show_progress:
-            log_rss_memory("lmm_streaming", "before_eigendecomp")
-        eigenvalues_np, U = eigendecompose_kinship(kinship)
-        if show_progress:
-            log_rss_memory("lmm_streaming", "after_eigendecomp")
+    eigenvalues_np, U = _eigendecompose_or_reuse(
+        kinship, eigenvalues, eigenvectors, show_progress, "lmm_streaming"
+    )
 
-    # Construct covariate matrix W
-    if covariates is None:
-        W = np.ones((n_samples, 1))
-    else:
-        W = covariates.astype(np.float64)
-        # Warn if first column is not all 1s (missing intercept)
-        first_col = W[:, 0]
-        if not np.allclose(first_col, 1.0):
-            logger.warning(
-                "Covariate matrix does not have intercept column "
-                "(first column is not all 1s). "
-                "Model will NOT include an intercept term."
-            )
-    n_cvt = W.shape[1]
+    W, n_cvt = _build_covariate_matrix(covariates, n_samples)
 
     # Prepare rotated matrices
     UtW = U.T @ W
@@ -968,7 +988,7 @@ def run_lmm_association_streaming(
         writer.__enter__()
 
     # Track results for in-memory mode (when output_path is None)
-    all_results: list[AssocResult] = [] if output_path is None else []
+    all_results: list[AssocResult] = []
 
     try:
         # Map filtered SNP indices to original indices for chunk extraction
@@ -1042,7 +1062,6 @@ def run_lmm_association_streaming(
             file_chunk_betas = []
             file_chunk_ses = []
             file_chunk_pwalds = []
-            file_chunk_jax_offsets = []  # Track JAX chunk boundaries for index mapping
 
             # Prepare first JAX chunk
             UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
@@ -1051,7 +1070,6 @@ def run_lmm_association_streaming(
             UtG_jax = jax.device_put(UtG_np, device)
             del UtG_np
 
-            cumulative_offset = 0
             for i, _jax_start in enumerate(jax_starts):
                 current_actual_len = actual_jax_len
                 current_needs_padding = needs_padding
@@ -1097,8 +1115,6 @@ def run_lmm_association_streaming(
                 file_chunk_betas.append(betas[:slice_len])
                 file_chunk_ses.append(ses[:slice_len])
                 file_chunk_pwalds.append(p_walds[:slice_len])
-                file_chunk_jax_offsets.append(cumulative_offset)
-                cumulative_offset += slice_len
 
             # After ALL JAX chunks in this file chunk are processed:
             # Concatenate file chunk results and transfer to host
@@ -1161,16 +1177,11 @@ def run_lmm_association_streaming(
     # This prevents SIGSEGV from background threads accessing freed memory
     jax.clear_caches()
 
-    # Return results
-    if output_path is not None:
-        results: list[AssocResult] = []  # Results are on disk
-    else:
-        results = all_results
-
     # GEMMA-style completion logging
     if show_progress:
         elapsed = time.perf_counter() - start_time
         logger.info("## LMM Association completed")
         logger.info(f"time elapsed = {elapsed:.2f} seconds")
 
-    return results
+    # When output_path is set, results are on disk; return empty list
+    return [] if output_path is not None else all_results

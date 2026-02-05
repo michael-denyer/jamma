@@ -99,12 +99,52 @@ def format_assoc_line_lrt(result: AssocResult) -> str:
     )
 
 
+def format_assoc_line_all(result: AssocResult) -> str:
+    """Format all-tests result as tab-separated line.
+
+    GEMMA -lmm 4 format (15 columns):
+    chr  rs  ps  n_miss  allele1  allele0  af  beta  se  logl_H1  l_remle
+    l_mle  p_wald  p_lrt  p_score
+
+    Beta/SE come from Wald test. logl_H1 is REML (from Wald path).
+
+    Args:
+        result: AssocResult dataclass instance with all fields populated.
+
+    Returns:
+        Tab-separated string (no newline)
+    """
+    return "\t".join(
+        [
+            result.chr,
+            result.rs,
+            str(result.ps),
+            str(result.n_miss),
+            result.allele1,
+            result.allele0,
+            f"{result.af:.3f}",
+            f"{result.beta:.6e}",
+            f"{result.se:.6e}",
+            f"{result.logl_H1:.6e}",
+            f"{result.l_remle:.6e}",
+            f"{result.l_mle:.6e}",
+            f"{result.p_wald:.6e}",
+            f"{result.p_lrt:.6e}",
+            f"{result.p_score:.6e}",
+        ]
+    )
+
+
 # GEMMA headers
 HEADER_WALD = (
     "chr\trs\tps\tn_miss\tallele1\tallele0\taf\tbeta\tse\tlogl_H1\tl_remle\tp_wald"
 )
 HEADER_SCORE = "chr\trs\tps\tn_miss\tallele1\tallele0\taf\tbeta\tse\tp_score"
 HEADER_LRT = "chr\trs\tps\tn_miss\tallele1\tallele0\taf\tl_mle\tp_lrt"
+HEADER_ALL = (
+    "chr\trs\tps\tn_miss\tallele1\tallele0\taf\t"
+    "beta\tse\tlogl_H1\tl_remle\tl_mle\tp_wald\tp_lrt\tp_score"
+)
 
 
 def write_assoc_results(results: list[AssocResult], path: Path) -> None:
@@ -160,7 +200,7 @@ class IncrementalAssocWriter:
 
         Args:
             path: Output file path. Parent directories created if needed.
-            test_type: Test type for formatting ("wald", "score", or "lrt")
+            test_type: Test type for formatting ("wald", "score", "lrt", or "all")
         """
         self.path = Path(path)
         self.test_type = test_type
@@ -175,6 +215,8 @@ class IncrementalAssocWriter:
             header = HEADER_SCORE
         elif self.test_type == "lrt":
             header = HEADER_LRT
+        elif self.test_type == "all":
+            header = HEADER_ALL
         else:
             header = HEADER_WALD
         self._file.write(header + "\n")
@@ -192,6 +234,8 @@ class IncrementalAssocWriter:
             line = format_assoc_line_score(result)
         elif self.test_type == "lrt":
             line = format_assoc_line_lrt(result)
+        elif self.test_type == "all":
+            line = format_assoc_line_all(result)
         else:
             line = format_assoc_line(result)
         self._file.write(line + "\n")

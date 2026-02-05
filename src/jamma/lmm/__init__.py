@@ -18,6 +18,7 @@ Test modes:
 - lmm_mode=1: Wald test (default) - per-SNP REML optimization
 - lmm_mode=2: LRT - null MLE once, per-SNP alternative MLE
 - lmm_mode=3: Score test - null MLE once, no per-SNP optimization
+- lmm_mode=4: All tests - Wald + LRT + Score in one pass with computation reuse
 """
 
 from pathlib import Path
@@ -127,12 +128,15 @@ def run_lmm_association(
         output_path: If provided, write results incrementally to this file.
             Returns empty list when output_path is set (results are on disk).
             If None (default), accumulate results in memory and return list.
-        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score). Default is 1 (Wald).
+        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All). Default is 1 (Wald).
             - Wald test (1): Per-SNP REML optimization, full statistics.
             - LRT (2): Null MLE once, per-SNP alternative MLE. Output has
               l_mle and p_lrt (no beta/se in GEMMA -lmm 2 format).
             - Score test (3): Null model MLE lambda once, no per-SNP optimization.
               Faster than Wald. Output has p_score.
+            - All tests (4): Wald + LRT + Score in one pass. Uab computed once
+              per SNP, null MLE once before loop. 15-column output with all
+              statistics.
 
     Returns:
         List of AssocResult for each SNP that passes filtering.
@@ -141,6 +145,7 @@ def run_lmm_association(
         - lmm_mode=1: logl_H1, l_remle, p_wald populated
         - lmm_mode=2: l_mle, p_lrt populated (no beta/se in output)
         - lmm_mode=3: p_score populated (logl_H1/l_remle/p_wald are None)
+        - lmm_mode=4: All fields populated (beta/se from Wald, logl_H1 is REML)
     """
     # Step 0: Filter samples with missing phenotypes (-9 or NaN) or missing covariates
     valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
@@ -196,31 +201,19 @@ def run_lmm_association(
     UtW = U.T @ W
     n_cvt = W.shape[1]
 
-    # For Score test: compute null model MLE lambda once before SNP loop
-    # GEMMA uses MLE (not REML) for Score test null model
+    # Pre-SNP-loop null model computation.
+    # Both Score and LRT need the null MLE. For mode 4, compute once and reuse.
     lambda_null = None
-    if lmm_mode == 3:
-        lambda_null, logl_null = compute_null_model_mle(eigenvalues, UtW, Uty, n_cvt)
-        logger.info(f"Null model MLE lambda: {lambda_null:.6f}, logl: {logl_null:.6f}")
-
-    # For LRT: compute null model MLE once before SNP loop
-    lambda_null_mle = None
     logl_H0 = None
-    if lmm_mode == 2:
-        lambda_null_mle, logl_H0 = compute_null_model_mle(eigenvalues, UtW, Uty, n_cvt)
-        logger.info(
-            f"Null model MLE: lambda={lambda_null_mle:.6f}, logl_H0={logl_H0:.6f}"
-        )
+    if lmm_mode in (2, 3, 4):
+        lambda_null, logl_H0 = compute_null_model_mle(eigenvalues, UtW, Uty, n_cvt)
+        logger.info(f"Null model MLE: lambda={lambda_null:.6f}, logl_H0={logl_H0:.6f}")
 
     results = []
     writer = None
     if output_path is not None:
-        if lmm_mode == 2:
-            test_type = "lrt"
-        elif lmm_mode == 3:
-            test_type = "score"
-        else:
-            test_type = "wald"
+        test_type_map = {1: "wald", 2: "lrt", 3: "score", 4: "all"}
+        test_type = test_type_map[lmm_mode]
         writer = IncrementalAssocWriter(output_path, test_type=test_type)
         writer.__enter__()
 
@@ -315,8 +308,48 @@ def run_lmm_association(
                     p_score=p_score,
                 )
 
+            elif lmm_mode == 4:  # All tests (Wald + LRT + Score)
+                # 1. Wald test (REML per-SNP optimization)
+                lambda_remle, logl_H1_reml = optimize_lambda_for_snp(
+                    eigenvalues, Uab, n_cvt
+                )
+                beta, se, p_wald = calc_wald_test_from_uab(
+                    lambda_remle, eigenvalues, Uab, n_cvt, n_samples
+                )
+
+                # 2. LRT (MLE per-SNP optimization, logl_H0 cached before loop)
+                lambda_mle, logl_H1_mle = optimize_lambda_mle_for_snp(
+                    eigenvalues, Uab, n_cvt
+                )
+                p_lrt = calc_lrt_test(logl_H1_mle, logl_H0)
+
+                # 3. Score test (null lambda cached before loop)
+                Hi_eval = 1.0 / (lambda_null * eigenvalues + 1.0)
+                Pab = calc_pab(n_cvt, Hi_eval, Uab)
+                _, _, p_score = calc_score_test(lambda_null, Pab, n_cvt, n_samples)
+
+                result = AssocResult(
+                    chr=info["chr"],
+                    rs=info["rs"],
+                    ps=info.get("pos", info.get("ps", 0)),
+                    n_miss=n_miss,
+                    allele1=info.get("a1", info.get("allele1", "")),
+                    allele0=info.get("a0", info.get("allele0", "")),
+                    af=af,
+                    beta=beta,
+                    se=se,
+                    logl_H1=logl_H1_reml,  # REML logl, NOT MLE
+                    l_remle=lambda_remle,
+                    l_mle=lambda_mle,
+                    p_wald=p_wald,
+                    p_lrt=p_lrt,
+                    p_score=p_score,
+                )
+
             else:
-                raise ValueError(f"Unsupported lmm_mode: {lmm_mode}. Use 1, 2, or 3.")
+                raise ValueError(
+                    f"Unsupported lmm_mode: {lmm_mode}. Use 1, 2, 3, or 4."
+                )
 
             if writer is not None:
                 writer.write(result)

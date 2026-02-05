@@ -437,16 +437,6 @@ def lmm_command(
     test_name = {1: "Wald", 2: "LRT", 3: "Score", 4: "All tests"}[lmm_mode]
     typer.echo(f"Running LMM {test_name} test on {n_snps} SNPs...")
 
-    # Progress callback for long runs
-    last_progress = [0]  # Use list to allow modification in closure
-
-    def progress_callback(i: int, n_total: int) -> None:
-        """Print progress every 1000 SNPs or at 10% increments."""
-        percent = int(100 * i / n_total)
-        if i % 1000 == 0 or percent >= last_progress[0] + 10:
-            typer.echo(f"  Processing SNP {i}/{n_total} ({percent}%)")
-            last_progress[0] = percent
-
     # Define output path for incremental writing (avoids list accumulation)
     assoc_path = _global_config.outdir / f"{_global_config.prefix}.assoc.txt"
 

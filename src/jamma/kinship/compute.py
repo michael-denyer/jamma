@@ -25,6 +25,7 @@ from loguru import logger
 from jamma.core import configure_jax
 from jamma.core.memory import (
     check_memory_available,
+    estimate_eigendecomp_memory,
     estimate_streaming_memory,
     log_memory_snapshot,
 )
@@ -182,13 +183,13 @@ def compute_centered_kinship(
         )
 
     # Memory check before allocation
+    # Check against full pipeline peak (eigendecomp) since it always follows kinship
     if check_memory:
-        # Kinship matrix: n^2 * 8 bytes (float64)
-        kinship_gb = n_samples**2 * 8 / 1e9
-        # Genotypes already allocated, but batch needs workspace
-        batch_gb = n_samples * batch_size * 8 / 1e9
-        required_gb = kinship_gb + batch_gb
-        check_memory_available(required_gb, operation="kinship computation")
+        eigendecomp_peak_gb = estimate_eigendecomp_memory(n_samples)
+        check_memory_available(
+            eigendecomp_peak_gb,
+            operation=f"GWAS pipeline (eigendecomp peak: {eigendecomp_peak_gb:.1f}GB)",
+        )
 
     # Log memory state before kinship allocation for debugging OOM
     log_memory_snapshot(f"before_kinship_{n_samples}samples")
@@ -291,12 +292,12 @@ def compute_kinship_streaming(
     logger.info(f"chunk size = {chunk_size}")
 
     # Memory check before allocation
+    # Check against full pipeline peak (eigendecomp) since it always follows kinship
     if check_memory:
         est = estimate_streaming_memory(n_samples, n_snps, chunk_size)
-        # For kinship phase: kinship + chunk
-        kinship_phase_gb = est.kinship_gb + est.chunk_gb
         check_memory_available(
-            kinship_phase_gb, operation="streaming kinship computation"
+            est.total_peak_gb,
+            operation=f"GWAS pipeline (eigendecomp peak: {est.total_peak_gb:.1f}GB)",
         )
 
     # === PASS 1: Compute per-SNP statistics for filtering ===

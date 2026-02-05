@@ -94,7 +94,7 @@ configure_jax(enable_x64=True)
 
 from jamma.io import load_plink_binary  # noqa: E402
 from jamma.kinship.compute import compute_centered_kinship  # noqa: E402
-from jamma.kinship.io import read_kinship_matrix  # noqa: E402
+from jamma.kinship.io import read_kinship_matrix, write_kinship_matrix  # noqa: E402
 from jamma.lmm.io import write_assoc_results  # noqa: E402
 from jamma.lmm.runner_jax import run_lmm_association_jax  # noqa: E402
 from jamma.validation import load_gemma_assoc  # noqa: E402
@@ -209,6 +209,10 @@ else:
     kinship = compute_centered_kinship(plink_data.genotypes, check_memory=False)
     t_kin = time.perf_counter() - t0
     print(f"  {kinship.shape[0]}x{kinship.shape[1]} ({t_kin:.2f}s)")
+    # Save JAMMA kinship
+    jamma_kin_path = OUTPUT_DIR / "jamma_kinship.cXX.txt"
+    write_kinship_matrix(kinship, jamma_kin_path)
+    print(f"  Saved to {jamma_kin_path}")
 
 # SNP info for JAMMA
 snp_info = [

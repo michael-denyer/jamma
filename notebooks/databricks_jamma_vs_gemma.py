@@ -93,7 +93,10 @@ from jamma.core import configure_jax  # noqa: E402
 configure_jax(enable_x64=True)
 
 from jamma.io import load_plink_binary  # noqa: E402
-from jamma.kinship.compute import compute_centered_kinship  # noqa: E402
+from jamma.kinship.compute import (  # noqa: E402
+    compute_centered_kinship,
+    compute_kinship_streaming,
+)
 from jamma.kinship.io import read_kinship_matrix, write_kinship_matrix  # noqa: E402
 from jamma.lmm.io import write_assoc_results  # noqa: E402
 from jamma.lmm.runner_jax import run_lmm_association_jax  # noqa: E402
@@ -204,10 +207,24 @@ if KINSHIP_FILE:
     t_kin = time.perf_counter() - t0
     print(f"  {kinship.shape[0]}x{kinship.shape[1]} ({t_kin:.2f}s)")
 else:
-    print("Computing kinship from genotypes...")
-    t0 = time.perf_counter()
-    kinship = compute_centered_kinship(plink_data.genotypes, check_memory=False)
-    t_kin = time.perf_counter() - t0
+    # Auto-select streaming for large datasets (progress bar + lower memory)
+    STREAMING_THRESHOLD = 10_000  # samples
+    use_streaming = plink_data.n_samples > STREAMING_THRESHOLD
+
+    if use_streaming:
+        print(
+            f"Computing kinship (streaming, n={plink_data.n_samples:,} > {STREAMING_THRESHOLD:,})..."
+        )
+        t0 = time.perf_counter()
+        kinship = compute_kinship_streaming(
+            str(Path(BFILE).with_suffix(".bed")), show_progress=True
+        )
+        t_kin = time.perf_counter() - t0
+    else:
+        print("Computing kinship from genotypes...")
+        t0 = time.perf_counter()
+        kinship = compute_centered_kinship(plink_data.genotypes, check_memory=False)
+        t_kin = time.perf_counter() - t0
     print(f"  {kinship.shape[0]}x{kinship.shape[1]} ({t_kin:.2f}s)")
     # Save JAMMA kinship
     jamma_kin_path = OUTPUT_DIR / "jamma_kinship.cXX.txt"

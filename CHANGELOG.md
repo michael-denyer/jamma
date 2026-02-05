@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Skip JIT warmup for large datasets (>10k samples) to avoid double eigendecomp
+- Auto-select streaming kinship for large datasets (>10k samples) with progress bar
 - Expanded WHY_JAMMA.md with detailed GEMMA vs JAMMA speed comparison
 
 ### Fixed

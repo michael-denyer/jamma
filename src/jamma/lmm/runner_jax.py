@@ -1359,7 +1359,7 @@ def run_lmm_association_streaming(
     # Open writer at start if output_path provided (per-chunk writing)
     writer = None
     if output_path is not None:
-        test_type_map = {1: "wald", 2: "lrt", 3: "score"}
+        test_type_map = {1: "wald", 2: "lrt", 3: "score", 4: "all"}
         test_type = test_type_map.get(lmm_mode, "wald")
         writer = IncrementalAssocWriter(output_path, test_type=test_type)
         writer.__enter__()
@@ -1448,6 +1448,16 @@ def run_lmm_association_streaming(
                 file_chunk_lambdas_mle = []
                 file_chunk_logls_mle = []
                 file_chunk_p_lrts = []
+            elif lmm_mode == 4:  # All tests
+                file_chunk_lambdas = []
+                file_chunk_logls = []
+                file_chunk_betas = []
+                file_chunk_ses = []
+                file_chunk_pwalds = []
+                file_chunk_lambdas_mle = []
+                file_chunk_logls_mle = []
+                file_chunk_p_lrts = []
+                file_chunk_p_scores = []
 
             # Prepare first JAX chunk
             UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
@@ -1509,6 +1519,44 @@ def run_lmm_association_streaming(
                         best_logls_mle, jnp.full_like(best_logls_mle, logl_H0)
                     )
 
+                elif lmm_mode == 4:  # All tests
+                    # Score test (cheapest, no optimization)
+                    _, _, p_scores = batch_calc_score_stats(
+                        n_cvt, Hi_eval_null_jax, Uab_batch, n_samples
+                    )
+
+                    # MLE optimization for LRT
+                    best_lambdas_mle, best_logls_mle = (
+                        golden_section_optimize_lambda_mle(
+                            n_cvt,
+                            eigenvalues,
+                            Uab_batch,
+                            l_min=l_min,
+                            l_max=l_max,
+                            n_grid=n_grid,
+                            n_iter=max(n_refine, 20),
+                        )
+                    )
+                    p_lrts = jax.vmap(calc_lrt_pvalue_jax)(
+                        best_logls_mle, jnp.full_like(best_logls_mle, logl_H0)
+                    )
+
+                    # REML optimization for Wald
+                    Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
+                    best_lambdas, best_logls = _grid_optimize_lambda_batched(
+                        n_cvt,
+                        eigenvalues,
+                        Uab_batch,
+                        Iab_batch,
+                        l_min,
+                        l_max,
+                        n_grid,
+                        n_refine,
+                    )
+                    betas, ses, p_walds = batch_calc_wald_stats(
+                        n_cvt, best_lambdas, eigenvalues, Uab_batch, n_samples
+                    )
+
                 # Strip padding, keep as JAX arrays for file chunk concatenation
                 if lmm_mode == 1:
                     slice_len = (
@@ -1537,6 +1585,24 @@ def run_lmm_association_streaming(
                     file_chunk_lambdas_mle.append(best_lambdas_mle[:slice_len])
                     file_chunk_logls_mle.append(best_logls_mle[:slice_len])
                     file_chunk_p_lrts.append(p_lrts[:slice_len])
+                elif lmm_mode == 4:
+                    slice_len = (
+                        current_actual_len
+                        if current_needs_padding
+                        else len(best_lambdas)
+                    )
+                    # Wald
+                    file_chunk_lambdas.append(best_lambdas[:slice_len])
+                    file_chunk_logls.append(best_logls[:slice_len])
+                    file_chunk_betas.append(betas[:slice_len])
+                    file_chunk_ses.append(ses[:slice_len])
+                    file_chunk_pwalds.append(p_walds[:slice_len])
+                    # LRT
+                    file_chunk_lambdas_mle.append(best_lambdas_mle[:slice_len])
+                    file_chunk_logls_mle.append(best_logls_mle[:slice_len])
+                    file_chunk_p_lrts.append(p_lrts[:slice_len])
+                    # Score
+                    file_chunk_p_scores.append(p_scores[:slice_len])
 
             # After ALL JAX chunks in this file chunk are processed:
             # Concatenate file chunk results and transfer to host
@@ -1544,6 +1610,7 @@ def run_lmm_association_streaming(
                 (lmm_mode == 1 and file_chunk_lambdas)
                 or (lmm_mode == 3 and file_chunk_betas)
                 or (lmm_mode == 2 and file_chunk_lambdas_mle)
+                or (lmm_mode == 4 and file_chunk_lambdas)
             )
             if _has_results:
                 if lmm_mode == 1:
@@ -1561,6 +1628,17 @@ def run_lmm_association_streaming(
                         jnp.concatenate(file_chunk_lambdas_mle)
                     )
                     chunk_p_lrts_np = np.asarray(jnp.concatenate(file_chunk_p_lrts))
+                elif lmm_mode == 4:
+                    chunk_lambdas_np = np.asarray(jnp.concatenate(file_chunk_lambdas))
+                    chunk_logls_np = np.asarray(jnp.concatenate(file_chunk_logls))
+                    chunk_betas_np = np.asarray(jnp.concatenate(file_chunk_betas))
+                    chunk_ses_np = np.asarray(jnp.concatenate(file_chunk_ses))
+                    chunk_pwalds_np = np.asarray(jnp.concatenate(file_chunk_pwalds))
+                    chunk_lambdas_mle_np = np.asarray(
+                        jnp.concatenate(file_chunk_lambdas_mle)
+                    )
+                    chunk_p_lrts_np = np.asarray(jnp.concatenate(file_chunk_p_lrts))
+                    chunk_p_scores_np = np.asarray(jnp.concatenate(file_chunk_p_scores))
 
                 # Build and write/accumulate results for this file chunk
                 for j, local_idx in enumerate(chunk_filtered_local_idx):
@@ -1593,6 +1671,18 @@ def run_lmm_association_streaming(
                             l_mle=float(chunk_lambdas_mle_np[j]),
                             p_lrt=float(chunk_p_lrts_np[j]),
                         )
+                    elif lmm_mode == 4:
+                        result = AssocResult(
+                            **meta,
+                            beta=float(chunk_betas_np[j]),
+                            se=float(chunk_ses_np[j]),
+                            logl_H1=float(chunk_logls_np[j]),
+                            l_remle=float(chunk_lambdas_np[j]),
+                            l_mle=float(chunk_lambdas_mle_np[j]),
+                            p_wald=float(chunk_pwalds_np[j]),
+                            p_lrt=float(chunk_p_lrts_np[j]),
+                            p_score=float(chunk_p_scores_np[j]),
+                        )
 
                     if writer is not None:
                         writer.write(result)
@@ -1612,6 +1702,14 @@ def run_lmm_association_streaming(
                     del chunk_lambdas_mle_np, chunk_p_lrts_np
                     del file_chunk_lambdas_mle, file_chunk_logls_mle
                     del file_chunk_p_lrts
+                elif lmm_mode == 4:
+                    del chunk_lambdas_np, chunk_logls_np, chunk_betas_np
+                    del chunk_ses_np, chunk_pwalds_np
+                    del chunk_lambdas_mle_np, chunk_p_lrts_np, chunk_p_scores_np
+                    del file_chunk_lambdas, file_chunk_logls, file_chunk_betas
+                    del file_chunk_ses, file_chunk_pwalds
+                    del file_chunk_lambdas_mle, file_chunk_logls_mle
+                    del file_chunk_p_lrts, file_chunk_p_scores
 
         # Log memory after association pass completes
         if show_progress:

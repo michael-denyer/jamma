@@ -16,15 +16,20 @@ from jamma.core import configure_jax
 from jamma.io import load_plink_binary
 from jamma.kinship import compute_centered_kinship
 from jamma.kinship.io import read_kinship_matrix
-from jamma.lmm import run_lmm_association
 from jamma.lmm.io import write_assoc_results
 from jamma.lmm.runner_jax import run_lmm_association_jax
 from jamma.lmm.stats import AssocResult
 from jamma.validation import (
     AssocComparisonResult,
+    ToleranceConfig,
     compare_assoc_results,
     load_gemma_assoc,
 )
+
+# JAX golden section optimizer produces slightly different lambda values than
+# GEMMA's Brent method. Use lambda_rtol=5e-5 (documented bound) for all
+# GEMMA parity tests that now use the JAX runner.
+JAX_GEMMA_TOLERANCES = ToleranceConfig(lambda_rtol=5e-5)
 
 # Test data paths - use gemma_synthetic which has matching PLINK + reference outputs
 EXAMPLE_DATA = Path("tests/fixtures/gemma_synthetic/test")
@@ -44,6 +49,19 @@ ALL_TESTS_FIXTURE_DIR = Path("tests/fixtures/gemma_all_tests")
 ALL_TESTS_REFERENCE = ALL_TESTS_FIXTURE_DIR / "gemma_all.assoc.txt"
 ALL_TESTS_COVAR_REFERENCE = ALL_TESTS_FIXTURE_DIR / "gemma_all_covar.assoc.txt"
 
+# Mouse HS1940 validation paths
+MOUSE_HS1940_DIR = Path("tests/fixtures/mouse_hs1940")
+MOUSE_HS1940_DATA = MOUSE_HS1940_DIR / "mouse_hs1940"
+MOUSE_HS1940_KINSHIP = MOUSE_HS1940_DIR / "mouse_hs1940_kinship.cXX.txt"
+MOUSE_HS1940_COVARIATES = MOUSE_HS1940_DIR / "covariates.txt"
+MOUSE_HS1940_LRT = MOUSE_HS1940_DIR / "mouse_hs1940_lrt.assoc.txt"
+MOUSE_HS1940_SCORE = MOUSE_HS1940_DIR / "mouse_hs1940_score.assoc.txt"
+MOUSE_HS1940_ALL = MOUSE_HS1940_DIR / "mouse_hs1940_all.assoc.txt"
+MOUSE_HS1940_COVAR_WALD = MOUSE_HS1940_DIR / "mouse_hs1940_covar_wald.assoc.txt"
+MOUSE_HS1940_COVAR_LRT = MOUSE_HS1940_DIR / "mouse_hs1940_covar_lrt.assoc.txt"
+MOUSE_HS1940_COVAR_SCORE = MOUSE_HS1940_DIR / "mouse_hs1940_covar_score.assoc.txt"
+MOUSE_HS1940_COVAR_ALL = MOUSE_HS1940_DIR / "mouse_hs1940_covar_all.assoc.txt"
+
 
 def _score_reference_exists():
     """Check if Score test reference file exists."""
@@ -53,6 +71,11 @@ def _score_reference_exists():
 def _all_tests_reference_exists():
     """Check if all-tests (-lmm 4) reference files exist."""
     return ALL_TESTS_REFERENCE.exists()
+
+
+def _mouse_hs1940_exists():
+    """Check if mouse_hs1940 PLINK data exists."""
+    return MOUSE_HS1940_DATA.with_suffix(".bed").exists()
 
 
 @pytest.fixture(autouse=True)
@@ -90,6 +113,49 @@ def reference_kinship():
     return read_kinship_matrix(REFERENCE_KINSHIP)
 
 
+@pytest.fixture
+def hs1940_data():
+    """Load mouse_hs1940 PLINK data."""
+    if not _mouse_hs1940_exists():
+        pytest.skip("mouse_hs1940 PLINK data not found")
+    return load_plink_binary(MOUSE_HS1940_DATA)
+
+
+@pytest.fixture
+def hs1940_phenotypes():
+    """Load mouse_hs1940 phenotypes from .fam file."""
+    fam_path = MOUSE_HS1940_DATA.with_suffix(".fam")
+    if not fam_path.exists():
+        pytest.skip("mouse_hs1940 .fam not found")
+    phenotypes = []
+    with open(fam_path) as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) >= 6:
+                val = parts[5]
+                if val == "-9" or val == "NA":
+                    phenotypes.append(np.nan)
+                else:
+                    phenotypes.append(float(val))
+    return np.array(phenotypes)
+
+
+@pytest.fixture
+def hs1940_kinship():
+    """Load mouse_hs1940 kinship matrix."""
+    if not MOUSE_HS1940_KINSHIP.exists():
+        pytest.skip("mouse_hs1940 kinship not found")
+    return read_kinship_matrix(MOUSE_HS1940_KINSHIP)
+
+
+@pytest.fixture
+def hs1940_covariates():
+    """Load mouse_hs1940 covariates."""
+    if not MOUSE_HS1940_COVARIATES.exists():
+        pytest.skip("mouse_hs1940 covariates not found")
+    return np.loadtxt(MOUSE_HS1940_COVARIATES)
+
+
 class TestLmmValidation:
     """Tests validating JAMMA LMM against GEMMA reference."""
 
@@ -112,15 +178,19 @@ class TestLmmValidation:
         snp_info = _build_snp_info(mouse_data)
 
         # Run JAMMA LMM
-        jamma_results = run_lmm_association(
+        jamma_results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=reference_kinship,
             snp_info=snp_info,
+            show_progress=False,
+            check_memory=False,
         )
 
         # Compare results
-        comparison = compare_assoc_results(jamma_results, reference_results)
+        comparison = compare_assoc_results(
+            jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
+        )
 
         # Assert overall pass
         assert comparison.passed, _format_comparison_failure(comparison)
@@ -137,14 +207,18 @@ class TestLmmValidation:
         phenotypes = mouse_phenotypes
         snp_info = _build_snp_info(mouse_data)
 
-        jamma_results = run_lmm_association(
+        jamma_results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=reference_kinship,
             snp_info=snp_info,
+            show_progress=False,
+            check_memory=False,
         )
 
-        comparison = compare_assoc_results(jamma_results, reference_results)
+        comparison = compare_assoc_results(
+            jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
+        )
 
         assert comparison.beta.passed, (
             f"Beta comparison failed: {comparison.beta.message}\n"
@@ -166,14 +240,18 @@ class TestLmmValidation:
         phenotypes = mouse_phenotypes
         snp_info = _build_snp_info(mouse_data)
 
-        jamma_results = run_lmm_association(
+        jamma_results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=reference_kinship,
             snp_info=snp_info,
+            show_progress=False,
+            check_memory=False,
         )
 
-        comparison = compare_assoc_results(jamma_results, reference_results)
+        comparison = compare_assoc_results(
+            jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
+        )
 
         assert comparison.p_wald.passed, (
             f"P-value comparison failed: {comparison.p_wald.message}\n"
@@ -414,7 +492,7 @@ class TestLmmSmallScale:
         # Kinship matrix
         kinship = compute_centered_kinship(genotypes)
 
-        # SNP info - use format expected by run_lmm_association
+        # SNP info - use format expected by run_lmm_association_jax
         snp_info = [
             {
                 "chr": "1",
@@ -434,11 +512,13 @@ class TestLmmSmallScale:
         """LMM runs without errors on small data."""
         genotypes, phenotypes, kinship, snp_info = small_data
 
-        results = run_lmm_association(
+        results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
+            show_progress=False,
+            check_memory=False,
         )
 
         assert len(results) == genotypes.shape[1]
@@ -447,11 +527,13 @@ class TestLmmSmallScale:
         """All p-values are in [0, 1]."""
         genotypes, phenotypes, kinship, snp_info = small_data
 
-        results = run_lmm_association(
+        results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
+            show_progress=False,
+            check_memory=False,
         )
 
         for result in results:
@@ -461,11 +543,13 @@ class TestLmmSmallScale:
         """All standard errors are positive."""
         genotypes, phenotypes, kinship, snp_info = small_data
 
-        results = run_lmm_association(
+        results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
+            show_progress=False,
+            check_memory=False,
         )
 
         for result in results:
@@ -475,17 +559,21 @@ class TestLmmSmallScale:
         """Same input produces identical output."""
         genotypes, phenotypes, kinship, snp_info = small_data
 
-        results1 = run_lmm_association(
+        results1 = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
+            show_progress=False,
+            check_memory=False,
         )
-        results2 = run_lmm_association(
+        results2 = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
+            show_progress=False,
+            check_memory=False,
         )
 
         for r1, r2 in zip(results1, results2, strict=True):
@@ -532,11 +620,13 @@ class TestLmmWithMissingPhenotypes:
         """LMM handles missing phenotypes without errors."""
         genotypes, phenotypes, kinship, snp_info = data_with_missing
 
-        results = run_lmm_association(
+        results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
+            show_progress=False,
+            check_memory=False,
         )
 
         # Should produce results for all SNPs
@@ -640,6 +730,8 @@ class TestLmmJaxValidation:
             snp_info=snp_info,
             n_grid=50,
             n_refine=20,
+            show_progress=False,
+            check_memory=False,
         )
 
         # Build lookup by rs
@@ -693,12 +785,12 @@ class TestLmmJaxValidation:
             snp_info=snp_info,
             n_grid=50,
             n_refine=20,
+            show_progress=False,
+            check_memory=False,
         )
 
         # Use relaxed tolerances for JAX since golden section optimization
         # produces slightly different lambda values than Brent's method
-        from jamma.validation import ToleranceConfig
-
         jax_tolerances = ToleranceConfig.relaxed()
         comparison = compare_assoc_results(
             jax_results, reference_results, config=jax_tolerances
@@ -738,6 +830,7 @@ class TestLmmJaxValidation:
             snp_info=snp_info,
             covariates=covariates,
             show_progress=False,
+            check_memory=False,
         )
 
         # Should produce results
@@ -751,70 +844,33 @@ class TestLmmJaxValidation:
             assert 0 <= r.p_wald <= 1, f"p_wald out of range for {r.rs}"
 
     @pytest.mark.skipif(
-        not REFERENCE_ASSOC.exists(),
-        reason="Reference LMM data not generated. Run generate_lmm_reference.sh",
+        not COVARIATE_REFERENCE_ASSOC.exists(),
+        reason="Covariate ref not generated. Run generate_covariate_reference.sh",
     )
-    def test_jax_covariate_matches_numpy(
+    def test_jax_covariate_matches_gemma(
         self, mouse_data, mouse_phenotypes, reference_kinship
     ):
-        """JAX runner with covariates matches NumPy runner within tolerance."""
-        genotypes = mouse_data.genotypes
-        phenotypes = mouse_phenotypes
-        snp_info = _build_snp_info(mouse_data)
-        n_samples = len(phenotypes)
+        """JAX runner with covariates matches GEMMA covariate reference."""
+        if not COVARIATE_FILE.exists():
+            pytest.skip("Covariate fixture not generated")
 
-        # Create covariates
-        rng = np.random.default_rng(42)
-        covariates = np.column_stack(
-            [
-                np.ones(n_samples),
-                rng.standard_normal(n_samples),
-            ]
-        )
+        covariates = np.loadtxt(COVARIATE_FILE)
+        reference_results = load_gemma_assoc(COVARIATE_REFERENCE_ASSOC)
 
-        # Run JAX path
         jax_results = run_lmm_association_jax(
-            genotypes=genotypes,
-            phenotypes=phenotypes,
+            genotypes=mouse_data.genotypes,
+            phenotypes=mouse_phenotypes,
             kinship=reference_kinship,
-            snp_info=snp_info,
+            snp_info=_build_snp_info(mouse_data),
             covariates=covariates,
-            n_grid=50,
-            n_refine=20,
             show_progress=False,
+            check_memory=False,
         )
 
-        # Run NumPy path
-        numpy_results = run_lmm_association(
-            genotypes=genotypes,
-            phenotypes=phenotypes,
-            kinship=reference_kinship,
-            snp_info=snp_info,
-            covariates=covariates,
+        comparison = compare_assoc_results(
+            jax_results, reference_results, config=JAX_GEMMA_TOLERANCES
         )
-
-        # Build lookup
-        jax_by_rs = {r.rs: r for r in jax_results}
-        np_by_rs = {r.rs: r for r in numpy_results}
-        common_rs = sorted(set(jax_by_rs) & set(np_by_rs))
-
-        assert len(common_rs) > 0, "No common SNPs between JAX and NumPy"
-
-        # Compare results within tolerance
-        beta_diffs = []
-        p_diffs = []
-        for rs in common_rs:
-            j, n = jax_by_rs[rs], np_by_rs[rs]
-            if np.isfinite(j.beta) and np.isfinite(n.beta):
-                beta_diffs.append(abs(j.beta - n.beta) / max(abs(n.beta), 1e-10))
-            if np.isfinite(j.p_wald) and np.isfinite(n.p_wald):
-                p_diffs.append(abs(j.p_wald - n.p_wald))
-
-        max_rel_beta = max(beta_diffs) if beta_diffs else 0
-        max_abs_p = max(p_diffs) if p_diffs else 0
-
-        assert max_rel_beta < 1e-2, f"Beta relative diff too large: {max_rel_beta:.2e}"
-        assert max_abs_p < 1e-4, f"P-value absolute diff too large: {max_abs_p:.2e}"
+        assert comparison.passed, _format_comparison_failure(comparison)
 
     def test_jax_intercept_only_unchanged(
         self, mouse_data, mouse_phenotypes, reference_kinship
@@ -832,6 +888,7 @@ class TestLmmJaxValidation:
             snp_info=snp_info,
             covariates=None,
             show_progress=False,
+            check_memory=False,
         )
 
         results_intercept = run_lmm_association_jax(
@@ -841,6 +898,7 @@ class TestLmmJaxValidation:
             snp_info=snp_info,
             covariates=np.ones((n_samples, 1)),
             show_progress=False,
+            check_memory=False,
         )
 
         assert len(results_none) == len(results_intercept)
@@ -910,9 +968,10 @@ class TestJaxChunkingCorrectness:
                 kinship=kinship,
                 snp_info=snp_info,
                 check_memory=False,
+                show_progress=False,
             )
 
-            # Run with small buffer (force ~4 chunks with 200 samples × 100 SNPs)
+            # Run with small buffer (force ~4 chunks with 200 samples x 100 SNPs)
             # Elements per SNP = 200 * 6 = 1200
             # With buffer = 30000, chunk_size = 30000 // 1200 = 25 SNPs
             runner_jax._MAX_BUFFER_ELEMENTS = 30_000
@@ -922,6 +981,7 @@ class TestJaxChunkingCorrectness:
                 kinship=kinship,
                 snp_info=snp_info,
                 check_memory=False,
+                show_progress=False,
             )
         finally:
             # Restore original value
@@ -998,22 +1058,26 @@ class TestLmmCovariateIntegration:
         n_samples = len(phenotypes)
 
         # Run with covariates=None (default intercept-only)
-        results_none = run_lmm_association(
+        results_none = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             covariates=None,
+            show_progress=False,
+            check_memory=False,
         )
 
         # Run with explicit intercept column
         intercept_only = np.ones((n_samples, 1))
-        results_explicit = run_lmm_association(
+        results_explicit = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             covariates=intercept_only,
+            show_progress=False,
+            check_memory=False,
         )
 
         # Should have same number of results
@@ -1062,12 +1126,14 @@ class TestLmmCovariateIntegration:
         rng = np.random.default_rng(123)
 
         # Run with intercept only
-        results_intercept = run_lmm_association(
+        results_intercept = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             covariates=None,
+            show_progress=False,
+            check_memory=False,
         )
 
         # Run with intercept + a covariate correlated with phenotype
@@ -1079,12 +1145,14 @@ class TestLmmCovariateIntegration:
                 covariate_col,  # Non-trivial covariate
             ]
         )
-        results_with_cov = run_lmm_association(
+        results_with_cov = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             covariates=covariates_with_cov,
+            show_progress=False,
+            check_memory=False,
         )
 
         # Should have same number of results
@@ -1120,12 +1188,14 @@ class TestLmmCovariateIntegration:
         covariates[10:15, 1] = np.nan
 
         # Run should not error - missing samples excluded
-        results = run_lmm_association(
+        results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             covariates=covariates,
+            show_progress=False,
+            check_memory=False,
         )
 
         # Should produce results (samples with missing covariates excluded)
@@ -1162,15 +1232,19 @@ class TestLmmCovariateValidation:
         """JAMMA LMM with covariates matches GEMMA reference within tolerance."""
         reference_results = load_gemma_assoc(COVARIATE_REFERENCE_ASSOC)
 
-        jamma_results = run_lmm_association(
+        jamma_results = run_lmm_association_jax(
             genotypes=mouse_data.genotypes,
             phenotypes=mouse_phenotypes,
             kinship=reference_kinship,
             snp_info=_build_snp_info(mouse_data),
             covariates=covariate_data,
+            show_progress=False,
+            check_memory=False,
         )
 
-        comparison = compare_assoc_results(jamma_results, reference_results)
+        comparison = compare_assoc_results(
+            jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
+        )
         assert comparison.passed, _format_comparison_failure(comparison)
 
     @pytest.mark.skipif(
@@ -1183,15 +1257,19 @@ class TestLmmCovariateValidation:
         """Beta values with covariates match within tolerance."""
         reference_results = load_gemma_assoc(COVARIATE_REFERENCE_ASSOC)
 
-        jamma_results = run_lmm_association(
+        jamma_results = run_lmm_association_jax(
             genotypes=mouse_data.genotypes,
             phenotypes=mouse_phenotypes,
             kinship=reference_kinship,
             snp_info=_build_snp_info(mouse_data),
             covariates=covariate_data,
+            show_progress=False,
+            check_memory=False,
         )
 
-        comparison = compare_assoc_results(jamma_results, reference_results)
+        comparison = compare_assoc_results(
+            jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
+        )
         assert (
             comparison.beta.passed
         ), f"Beta with covariates failed: {comparison.beta.message}"
@@ -1206,15 +1284,19 @@ class TestLmmCovariateValidation:
         """P-values with covariates match within tolerance."""
         reference_results = load_gemma_assoc(COVARIATE_REFERENCE_ASSOC)
 
-        jamma_results = run_lmm_association(
+        jamma_results = run_lmm_association_jax(
             genotypes=mouse_data.genotypes,
             phenotypes=mouse_phenotypes,
             kinship=reference_kinship,
             snp_info=_build_snp_info(mouse_data),
             covariates=covariate_data,
+            show_progress=False,
+            check_memory=False,
         )
 
-        comparison = compare_assoc_results(jamma_results, reference_results)
+        comparison = compare_assoc_results(
+            jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
+        )
         assert (
             comparison.p_wald.passed
         ), f"P-value with covariates failed: {comparison.p_wald.message}"
@@ -1288,17 +1370,21 @@ class TestAFSemantics:
         ]
 
         # Run LMM on both orientations
-        results_original = run_lmm_association(
+        results_original = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship_original,
             snp_info=snp_info,
+            show_progress=False,
+            check_memory=False,
         )
-        results_flipped = run_lmm_association(
+        results_flipped = run_lmm_association_jax(
             genotypes=genotypes_flipped,
             phenotypes=phenotypes,
             kinship=kinship_flipped,
             snp_info=snp_info,
+            show_progress=False,
+            check_memory=False,
         )
 
         # Both should produce results for all SNPs
@@ -1357,7 +1443,7 @@ class TestAFSemantics:
         )
 
     def test_af_output_in_lmm_results(self):
-        """Verify that run_lmm_association outputs raw AF (not MAF)."""
+        """Verify that run_lmm_association_jax outputs raw AF (not MAF)."""
         rng = np.random.default_rng(42)
         n_samples = 100
         n_snps = 20
@@ -1384,12 +1470,14 @@ class TestAFSemantics:
             for i in range(n_snps)
         ]
 
-        results = run_lmm_association(
+        results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             maf_threshold=0.01,  # Low threshold to keep high-AF SNPs
+            show_progress=False,
+            check_memory=False,
         )
 
         # Check that we have both AF > 0.5 and AF <= 0.5 in output
@@ -1430,15 +1518,19 @@ class TestLmmScoreValidation:
         """JAMMA Score test matches GEMMA -lmm 3 within tolerance."""
         reference_results = load_gemma_assoc(SCORE_REFERENCE_ASSOC)
 
-        jamma_results = run_lmm_association(
+        jamma_results = run_lmm_association_jax(
             genotypes=mouse_data.genotypes,
             phenotypes=mouse_phenotypes,
             kinship=reference_kinship,
             snp_info=_build_snp_info(mouse_data),
             lmm_mode=3,  # Score test
+            show_progress=False,
+            check_memory=False,
         )
 
-        comparison = compare_assoc_results(jamma_results, reference_results)
+        comparison = compare_assoc_results(
+            jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
+        )
         assert comparison.passed, _format_comparison_failure(comparison)
 
     @pytest.mark.skipif(
@@ -1454,15 +1546,19 @@ class TestLmmScoreValidation:
         """Score p-values match GEMMA within 1e-8 tolerance."""
         reference_results = load_gemma_assoc(SCORE_REFERENCE_ASSOC)
 
-        jamma_results = run_lmm_association(
+        jamma_results = run_lmm_association_jax(
             genotypes=mouse_data.genotypes,
             phenotypes=mouse_phenotypes,
             kinship=reference_kinship,
             snp_info=_build_snp_info(mouse_data),
             lmm_mode=3,
+            show_progress=False,
+            check_memory=False,
         )
 
-        comparison = compare_assoc_results(jamma_results, reference_results)
+        comparison = compare_assoc_results(
+            jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
+        )
         assert comparison.p_score.passed, (
             f"Score p-value comparison failed: {comparison.p_score.message}\n"
             f"Max abs diff: {comparison.p_score.max_abs_diff:.2e}\n"
@@ -1487,21 +1583,25 @@ class TestLmmScoreValidation:
         snp_info = _build_snp_info(mouse_data)
 
         # Run Wald test
-        wald_results = run_lmm_association(
+        wald_results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=reference_kinship,
             snp_info=snp_info,
             lmm_mode=1,  # Wald
+            show_progress=False,
+            check_memory=False,
         )
 
         # Run Score test
-        score_results = run_lmm_association(
+        score_results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=reference_kinship,
             snp_info=snp_info,
             lmm_mode=3,  # Score
+            show_progress=False,
+            check_memory=False,
         )
 
         # Wald should have varying l_remle values (per-SNP optimization)
@@ -1559,12 +1659,14 @@ class TestScoreTestProperties:
         genotypes, phenotypes, kinship, snp_info = score_test_data
 
         # Run Score test
-        results = run_lmm_association(
+        results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             lmm_mode=3,
+            show_progress=False,
+            check_memory=False,
         )
 
         # All results should have l_remle=None (Score doesn't report per-SNP lambda)
@@ -1575,12 +1677,14 @@ class TestScoreTestProperties:
         """All Score p-values are in valid range [0, 1]."""
         genotypes, phenotypes, kinship, snp_info = score_test_data
 
-        results = run_lmm_association(
+        results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             lmm_mode=3,
+            show_progress=False,
+            check_memory=False,
         )
 
         for r in results:
@@ -1590,12 +1694,14 @@ class TestScoreTestProperties:
         """Score test does not compute per-SNP log-likelihood."""
         genotypes, phenotypes, kinship, snp_info = score_test_data
 
-        results = run_lmm_association(
+        results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             lmm_mode=3,
+            show_progress=False,
+            check_memory=False,
         )
 
         for r in results:
@@ -1606,12 +1712,14 @@ class TestScoreTestProperties:
         """Score test produces p_score field, not p_wald."""
         genotypes, phenotypes, kinship, snp_info = score_test_data
 
-        results = run_lmm_association(
+        results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             lmm_mode=3,
+            show_progress=False,
+            check_memory=False,
         )
 
         for r in results:
@@ -1647,15 +1755,19 @@ class TestLmmAllTestsValidation:
         """JAMMA -lmm 4 (intercept-only) matches GEMMA reference."""
         reference_results = load_gemma_assoc(ALL_TESTS_REFERENCE)
 
-        jamma_results = run_lmm_association(
+        jamma_results = run_lmm_association_jax(
             genotypes=mouse_data.genotypes,
             phenotypes=mouse_phenotypes,
             kinship=reference_kinship,
             snp_info=_build_snp_info(mouse_data),
             lmm_mode=4,
+            show_progress=False,
+            check_memory=False,
         )
 
-        comparison = compare_assoc_results(jamma_results, reference_results)
+        comparison = compare_assoc_results(
+            jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
+        )
         assert comparison.passed, _format_comparison_failure(comparison)
 
     @pytest.mark.skipif(
@@ -1675,16 +1787,20 @@ class TestLmmAllTestsValidation:
         covariates = np.loadtxt(COVARIATE_FILE)
         reference_results = load_gemma_assoc(ALL_TESTS_COVAR_REFERENCE)
 
-        jamma_results = run_lmm_association(
+        jamma_results = run_lmm_association_jax(
             genotypes=mouse_data.genotypes,
             phenotypes=mouse_phenotypes,
             kinship=reference_kinship,
             snp_info=_build_snp_info(mouse_data),
             covariates=covariates,
             lmm_mode=4,
+            show_progress=False,
+            check_memory=False,
         )
 
-        comparison = compare_assoc_results(jamma_results, reference_results)
+        comparison = compare_assoc_results(
+            jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
+        )
         assert comparison.passed, _format_comparison_failure(comparison)
 
     @pytest.mark.skipif(
@@ -1705,15 +1821,19 @@ class TestLmmAllTestsValidation:
         """
         reference_results = load_gemma_assoc(ALL_TESTS_REFERENCE)
 
-        jamma_results = run_lmm_association(
+        jamma_results = run_lmm_association_jax(
             genotypes=mouse_data.genotypes,
             phenotypes=mouse_phenotypes,
             kinship=reference_kinship,
             snp_info=_build_snp_info(mouse_data),
             lmm_mode=4,
+            show_progress=False,
+            check_memory=False,
         )
 
-        comparison = compare_assoc_results(jamma_results, reference_results)
+        comparison = compare_assoc_results(
+            jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
+        )
 
         # Verify each column individually for clear diagnostics
         assert comparison.beta.passed, (
@@ -1783,12 +1903,14 @@ class TestLmmAllTestsProperties:
         """Mode 4 populates all result fields."""
         genotypes, phenotypes, kinship, snp_info = all_tests_data
 
-        results = run_lmm_association(
+        results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             lmm_mode=4,
+            show_progress=False,
+            check_memory=False,
         )
 
         for r in results:
@@ -1805,12 +1927,14 @@ class TestLmmAllTestsProperties:
         """All p-values from mode 4 are in [0, 1]."""
         genotypes, phenotypes, kinship, snp_info = all_tests_data
 
-        results = run_lmm_association(
+        results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             lmm_mode=4,
+            show_progress=False,
+            check_memory=False,
         )
 
         for r in results:
@@ -1822,19 +1946,23 @@ class TestLmmAllTestsProperties:
         """Same input produces identical mode 4 output."""
         genotypes, phenotypes, kinship, snp_info = all_tests_data
 
-        results1 = run_lmm_association(
+        results1 = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             lmm_mode=4,
+            show_progress=False,
+            check_memory=False,
         )
-        results2 = run_lmm_association(
+        results2 = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             lmm_mode=4,
+            show_progress=False,
+            check_memory=False,
         )
 
         assert len(results1) == len(results2)
@@ -1849,19 +1977,23 @@ class TestLmmAllTestsProperties:
         """Mode 4 beta/se matches standalone Wald (mode 1) exactly."""
         genotypes, phenotypes, kinship, snp_info = all_tests_data
 
-        wald_results = run_lmm_association(
+        wald_results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             lmm_mode=1,
+            show_progress=False,
+            check_memory=False,
         )
-        all_results = run_lmm_association(
+        all_results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             lmm_mode=4,
+            show_progress=False,
+            check_memory=False,
         )
 
         assert len(wald_results) == len(all_results)
@@ -1887,19 +2019,23 @@ class TestLmmAllTestsProperties:
         """Mode 4 p_score matches standalone Score test (mode 3) exactly."""
         genotypes, phenotypes, kinship, snp_info = all_tests_data
 
-        score_results = run_lmm_association(
+        score_results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             lmm_mode=3,
+            show_progress=False,
+            check_memory=False,
         )
-        all_results = run_lmm_association(
+        all_results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             lmm_mode=4,
+            show_progress=False,
+            check_memory=False,
         )
 
         assert len(score_results) == len(all_results)
@@ -1913,19 +2049,23 @@ class TestLmmAllTestsProperties:
         """Mode 4 p_lrt matches standalone LRT (mode 2) exactly."""
         genotypes, phenotypes, kinship, snp_info = all_tests_data
 
-        lrt_results = run_lmm_association(
+        lrt_results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             lmm_mode=2,
+            show_progress=False,
+            check_memory=False,
         )
-        all_results = run_lmm_association(
+        all_results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
             lmm_mode=4,
+            show_progress=False,
+            check_memory=False,
         )
 
         assert len(lrt_results) == len(all_results)
@@ -1937,3 +2077,188 @@ class TestLmmAllTestsProperties:
             assert (
                 lrt.l_mle == all_r.l_mle
             ), f"l_mle mismatch for {lrt.rs}: {lrt.l_mle} vs {all_r.l_mle}"
+
+
+class TestMouseHS1940Validation:
+    """Tests validating JAMMA against GEMMA on mouse_hs1940 dataset.
+
+    This is the primary GEMMA validation dataset (1940 samples, 10768 SNPs).
+    Tests cover all LMM modes (1-4) with and without covariates.
+    """
+
+    @pytest.mark.skipif(
+        not MOUSE_HS1940_LRT.exists(),
+        reason="mouse_hs1940 LRT fixture not found",
+    )
+    def test_mouse_hs1940_lrt_no_covar(
+        self, hs1940_data, hs1940_phenotypes, hs1940_kinship
+    ):
+        """Mouse HS1940 LRT (mode 2, no covariates) matches GEMMA."""
+        reference_results = load_gemma_assoc(MOUSE_HS1940_LRT)
+
+        jamma_results = run_lmm_association_jax(
+            genotypes=hs1940_data.genotypes,
+            phenotypes=hs1940_phenotypes,
+            kinship=hs1940_kinship,
+            snp_info=_build_snp_info(hs1940_data),
+            lmm_mode=2,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        lrt_tolerances = ToleranceConfig(pvalue_rtol=5e-3)
+        comparison = compare_assoc_results(
+            jamma_results, reference_results, config=lrt_tolerances
+        )
+        assert comparison.passed, _format_comparison_failure(comparison)
+
+    @pytest.mark.skipif(
+        not MOUSE_HS1940_SCORE.exists(),
+        reason="mouse_hs1940 Score fixture not found",
+    )
+    def test_mouse_hs1940_score_no_covar(
+        self, hs1940_data, hs1940_phenotypes, hs1940_kinship
+    ):
+        """Mouse HS1940 Score test (mode 3, no covariates) matches GEMMA."""
+        reference_results = load_gemma_assoc(MOUSE_HS1940_SCORE)
+
+        jamma_results = run_lmm_association_jax(
+            genotypes=hs1940_data.genotypes,
+            phenotypes=hs1940_phenotypes,
+            kinship=hs1940_kinship,
+            snp_info=_build_snp_info(hs1940_data),
+            lmm_mode=3,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        comparison = compare_assoc_results(jamma_results, reference_results)
+        assert comparison.passed, _format_comparison_failure(comparison)
+
+    @pytest.mark.skipif(
+        not MOUSE_HS1940_ALL.exists(),
+        reason="mouse_hs1940 all-tests fixture not found",
+    )
+    def test_mouse_hs1940_all_no_covar(
+        self, hs1940_data, hs1940_phenotypes, hs1940_kinship
+    ):
+        """Mouse HS1940 all-tests (mode 4, no covariates) matches GEMMA."""
+        reference_results = load_gemma_assoc(MOUSE_HS1940_ALL)
+
+        jamma_results = run_lmm_association_jax(
+            genotypes=hs1940_data.genotypes,
+            phenotypes=hs1940_phenotypes,
+            kinship=hs1940_kinship,
+            snp_info=_build_snp_info(hs1940_data),
+            lmm_mode=4,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        lrt_tolerances = ToleranceConfig(pvalue_rtol=5e-3)
+        comparison = compare_assoc_results(
+            jamma_results, reference_results, config=lrt_tolerances
+        )
+        assert comparison.passed, _format_comparison_failure(comparison)
+
+    @pytest.mark.skipif(
+        not MOUSE_HS1940_COVAR_WALD.exists(),
+        reason="mouse_hs1940 covariate Wald fixture not found",
+    )
+    def test_mouse_hs1940_covar_wald(
+        self, hs1940_data, hs1940_phenotypes, hs1940_kinship, hs1940_covariates
+    ):
+        """Mouse HS1940 Wald (mode 1, with covariates) matches GEMMA."""
+        reference_results = load_gemma_assoc(MOUSE_HS1940_COVAR_WALD)
+
+        jamma_results = run_lmm_association_jax(
+            genotypes=hs1940_data.genotypes,
+            phenotypes=hs1940_phenotypes,
+            kinship=hs1940_kinship,
+            snp_info=_build_snp_info(hs1940_data),
+            covariates=hs1940_covariates,
+            lmm_mode=1,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        comparison = compare_assoc_results(jamma_results, reference_results)
+        assert comparison.passed, _format_comparison_failure(comparison)
+
+    @pytest.mark.skipif(
+        not MOUSE_HS1940_COVAR_LRT.exists(),
+        reason="mouse_hs1940 covariate LRT fixture not found",
+    )
+    def test_mouse_hs1940_covar_lrt(
+        self, hs1940_data, hs1940_phenotypes, hs1940_kinship, hs1940_covariates
+    ):
+        """Mouse HS1940 LRT (mode 2, with covariates) matches GEMMA."""
+        reference_results = load_gemma_assoc(MOUSE_HS1940_COVAR_LRT)
+
+        jamma_results = run_lmm_association_jax(
+            genotypes=hs1940_data.genotypes,
+            phenotypes=hs1940_phenotypes,
+            kinship=hs1940_kinship,
+            snp_info=_build_snp_info(hs1940_data),
+            covariates=hs1940_covariates,
+            lmm_mode=2,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        lrt_tolerances = ToleranceConfig(pvalue_rtol=5e-3)
+        comparison = compare_assoc_results(
+            jamma_results, reference_results, config=lrt_tolerances
+        )
+        assert comparison.passed, _format_comparison_failure(comparison)
+
+    @pytest.mark.skipif(
+        not MOUSE_HS1940_COVAR_SCORE.exists(),
+        reason="mouse_hs1940 covariate Score fixture not found",
+    )
+    def test_mouse_hs1940_covar_score(
+        self, hs1940_data, hs1940_phenotypes, hs1940_kinship, hs1940_covariates
+    ):
+        """Mouse HS1940 Score (mode 3, with covariates) matches GEMMA."""
+        reference_results = load_gemma_assoc(MOUSE_HS1940_COVAR_SCORE)
+
+        jamma_results = run_lmm_association_jax(
+            genotypes=hs1940_data.genotypes,
+            phenotypes=hs1940_phenotypes,
+            kinship=hs1940_kinship,
+            snp_info=_build_snp_info(hs1940_data),
+            covariates=hs1940_covariates,
+            lmm_mode=3,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        comparison = compare_assoc_results(jamma_results, reference_results)
+        assert comparison.passed, _format_comparison_failure(comparison)
+
+    @pytest.mark.skipif(
+        not MOUSE_HS1940_COVAR_ALL.exists(),
+        reason="mouse_hs1940 covariate all-tests fixture not found",
+    )
+    def test_mouse_hs1940_covar_all(
+        self, hs1940_data, hs1940_phenotypes, hs1940_kinship, hs1940_covariates
+    ):
+        """Mouse HS1940 all-tests (mode 4, with covariates) matches GEMMA."""
+        reference_results = load_gemma_assoc(MOUSE_HS1940_COVAR_ALL)
+
+        jamma_results = run_lmm_association_jax(
+            genotypes=hs1940_data.genotypes,
+            phenotypes=hs1940_phenotypes,
+            kinship=hs1940_kinship,
+            snp_info=_build_snp_info(hs1940_data),
+            covariates=hs1940_covariates,
+            lmm_mode=4,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        lrt_tolerances = ToleranceConfig(pvalue_rtol=5e-3)
+        comparison = compare_assoc_results(
+            jamma_results, reference_results, config=lrt_tolerances
+        )
+        assert comparison.passed, _format_comparison_failure(comparison)

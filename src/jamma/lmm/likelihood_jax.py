@@ -35,14 +35,6 @@ from jamma.lmm.likelihood import get_ab_index
 if TYPE_CHECKING:
     from jaxtyping import Array, Float
 
-# DEPRECATED: only used by legacy callers if any. Use build_index_table instead.
-_IDX_WW = 0  # covariate-covariate
-_IDX_WX = 1  # covariate-genotype
-_IDX_WY = 2  # covariate-phenotype
-_IDX_XX = 3  # genotype-genotype
-_IDX_XY = 4  # genotype-phenotype
-_IDX_YY = 5  # phenotype-phenotype
-
 
 def build_index_table(n_cvt: int) -> dict:
     """Precompute all index mappings for a given n_cvt.
@@ -193,36 +185,39 @@ def calc_pab_jax(
     return Pab
 
 
-@jit
+@partial(jit, static_argnums=(0,))
 def mle_log_likelihood_jax(
+    n_cvt: int,
     lambda_val: Float[Array, ""],
     eigenvalues: Float[Array, " n"],
-    Uab: Float[Array, "n 6"],
+    Uab: Float[Array, "n ni"],
 ) -> Float[Array, ""]:
-    """MLE log-likelihood (not REML) for n_cvt=1.
+    """MLE log-likelihood (not REML) for arbitrary n_cvt.
 
     Key difference from REML: no logdet_hiw term, uses n instead of df.
 
     Args:
-        lambda_val: Variance ratio to evaluate
-        eigenvalues: Kinship eigenvalues
-        Uab: Pre-computed Uab matrix
+        n_cvt: Number of covariates (static, triggers recompilation).
+        lambda_val: Variance ratio to evaluate.
+        eigenvalues: Kinship eigenvalues.
+        Uab: Pre-computed Uab matrix (n_samples, n_index).
 
     Returns:
-        MLE log-likelihood value
+        MLE log-likelihood value.
     """
     n = eigenvalues.shape[0]
+    nc_total = n_cvt + 1
+    table = build_index_table(n_cvt)
+    idx_yy = table["idx_yy"]
 
     v_temp = lambda_val * eigenvalues + 1.0
     Hi_eval = 1.0 / v_temp
     logdet_h = jnp.sum(jnp.log(jnp.abs(v_temp)))
 
-    # Compute Pab using calc_pab_jax (n_cvt=1 for this function)
-    Pab = calc_pab_jax(1, Hi_eval, Uab)
+    Pab = calc_pab_jax(n_cvt, Hi_eval, Uab)
 
     # P_yy after projecting out covariates and genotype
-    # For n_cvt=1: nc_total = 2, so Pab[2, _IDX_YY]
-    P_yy = Pab[2, _IDX_YY]
+    P_yy = Pab[nc_total, idx_yy]
     P_yy = jnp.where((P_yy >= 0.0) & (P_yy < 1e-8), 1e-8, P_yy)
 
     # MLE formula (NO logdet_hiw, uses n not df)
@@ -255,55 +250,60 @@ def calc_lrt_pvalue_jax(
     return p_lrt
 
 
-@jit
+@partial(jit, static_argnums=(0,))
 def reml_log_likelihood_jax(
+    n_cvt: int,
     lambda_val: Float[Array, ""],
     eigenvalues: Float[Array, " n"],
-    Uab: Float[Array, "n 6"],
+    Uab: Float[Array, "n ni"],
 ) -> Float[Array, ""]:
-    """Compute REML log-likelihood using JAX (optimized for n_cvt=1).
+    """Compute REML log-likelihood using JAX for arbitrary n_cvt.
 
     JIT-compiled version for efficient repeated evaluation during optimization.
 
     Args:
-        lambda_val: Variance component ratio (scalar)
-        eigenvalues: Eigenvalues of kinship matrix (n_samples,)
-        Uab: Matrix products (n_samples, 6)
+        n_cvt: Number of covariates (static, triggers recompilation).
+        lambda_val: Variance component ratio (scalar).
+        eigenvalues: Eigenvalues of kinship matrix (n_samples,).
+        Uab: Matrix products (n_samples, n_index).
 
     Returns:
-        Log-likelihood value (scalar)
+        Log-likelihood value (scalar).
     """
     # Compute Iab inline (identity weighting for logdet correction)
     ones = jnp.ones(eigenvalues.shape[0], dtype=jnp.float64)
-    Iab = calc_pab_jax(1, ones, Uab)
-    return _reml_with_precomputed_iab(lambda_val, eigenvalues, Uab, Iab)
+    Iab = calc_pab_jax(n_cvt, ones, Uab)
+    return _reml_with_precomputed_iab(n_cvt, lambda_val, eigenvalues, Uab, Iab)
 
 
-@jit
+@partial(jit, static_argnums=(0,))
 def _reml_with_precomputed_iab(
+    n_cvt: int,
     lambda_val: Float[Array, ""],
     eigenvalues: Float[Array, " n"],
-    Uab: Float[Array, "n 6"],
-    Iab: Float[Array, "3 6"],
+    Uab: Float[Array, "n ni"],
+    Iab: Float[Array, "nr ni"],
 ) -> Float[Array, ""]:
-    """REML log-likelihood with precomputed Iab (avoids redundant computation).
+    """REML log-likelihood with precomputed Iab for arbitrary n_cvt.
 
     This is the optimized inner loop - Iab can be computed once per SNP
     and reused across all lambda evaluations during optimization.
 
     Args:
-        lambda_val: Variance component ratio (scalar)
-        eigenvalues: Eigenvalues of kinship matrix (n_samples,)
-        Uab: Matrix products (n_samples, 6)
-        Iab: Precomputed identity-weighted Pab (3, 6) - constant for given Uab
+        n_cvt: Number of covariates (static, triggers recompilation).
+        lambda_val: Variance component ratio (scalar).
+        eigenvalues: Eigenvalues of kinship matrix (n_samples,).
+        Uab: Matrix products (n_samples, n_index).
+        Iab: Precomputed identity-weighted Pab (n_cvt+2, n_index).
 
     Returns:
-        Log-likelihood value (scalar)
+        Log-likelihood value (scalar).
     """
     n = eigenvalues.shape[0]
-    n_cvt = 1
-    nc_total = n_cvt + 1  # = 2
+    nc_total = n_cvt + 1
     df = n - n_cvt - 1
+    table = build_index_table(n_cvt)
+    idx_yy = table["idx_yy"]
 
     # H_inv weights
     v_temp = lambda_val * eigenvalues + 1.0
@@ -312,27 +312,23 @@ def _reml_with_precomputed_iab(
     # Log determinant of H
     logdet_h = jnp.sum(jnp.log(jnp.abs(v_temp)))
 
-    # Compute Pab with H-inverse weighting (n_cvt=1 for this function)
-    Pab = calc_pab_jax(1, Hi_eval, Uab)
+    # Compute Pab with H-inverse weighting
+    Pab = calc_pab_jax(n_cvt, Hi_eval, Uab)
 
     # logdet_hiw = log|WHiW| - log|WW|
-    # For n_cvt=1: sum over i=0,1 (W and X)
+    # For each diagonal element i=0..n_cvt, accumulate
+    # log(Pab[i, diag_col]) - log(Iab[i, diag_col])
     logdet_hiw = 0.0
-    # i=0: WW index
-    d_pab_0 = Pab[0, _IDX_WW]
-    d_iab_0 = Iab[0, _IDX_WW]
-    logdet_hiw = logdet_hiw + jnp.where(d_pab_0 > 0, jnp.log(d_pab_0), 0.0)
-    logdet_hiw = logdet_hiw - jnp.where(d_iab_0 > 0, jnp.log(d_iab_0), 0.0)
-    # i=1: XX index (after projecting out W)
-    d_pab_1 = Pab[1, _IDX_XX]
-    d_iab_1 = Iab[1, _IDX_XX]
-    logdet_hiw = logdet_hiw + jnp.where(d_pab_1 > 0, jnp.log(d_pab_1), 0.0)
-    logdet_hiw = logdet_hiw - jnp.where(d_iab_1 > 0, jnp.log(d_iab_1), 0.0)
+    for row, col in table["logdet_diag_indices"]:
+        d_pab = Pab[row, col]
+        d_iab = Iab[row, col]
+        logdet_hiw = logdet_hiw + jnp.where(d_pab > 0, jnp.log(d_pab), 0.0)
+        logdet_hiw = logdet_hiw - jnp.where(d_iab > 0, jnp.log(d_iab), 0.0)
 
     # P_yy after projecting out covariates and genotype
     # Use GEMMA's conditional clamping: only clamp if P_yy >= 0 and P_yy < 1e-8
     # Matches lmm.cpp:854: if (P_yy >= 0.0 && P_yy < P_YY_MIN) P_yy = P_YY_MIN
-    P_yy = Pab[nc_total, _IDX_YY]
+    P_yy = Pab[nc_total, idx_yy]
     P_yy = jnp.where((P_yy >= 0.0) & (P_yy < 1e-8), 1e-8, P_yy)
 
     # REML log-likelihood
@@ -601,36 +597,41 @@ def _batch_grid_reml_with_iab(
     return vmap(reml_for_lambda)(lambdas)
 
 
-@jit
+@partial(jit, static_argnums=(0,))
 def calc_wald_stats_jax(
+    n_cvt: int,
     lambda_val: Float[Array, ""],
     eigenvalues: Float[Array, " n"],
-    Uab: Float[Array, "n 6"],
+    Uab: Float[Array, "n ni"],
     n_samples: int,
 ) -> tuple[Float[Array, ""], Float[Array, ""], Float[Array, ""]]:
-    """Compute Wald test statistics using JAX (n_cvt=1).
+    """Compute Wald test statistics using JAX for arbitrary n_cvt.
 
     Args:
-        lambda_val: Optimized variance ratio (scalar)
-        eigenvalues: Eigenvalues (n_samples,)
-        Uab: Matrix products (n_samples, 6)
-        n_samples: Number of samples
+        n_cvt: Number of covariates (static, triggers recompilation).
+        lambda_val: Optimized variance ratio (scalar).
+        eigenvalues: Eigenvalues (n_samples,).
+        Uab: Matrix products (n_samples, n_index).
+        n_samples: Number of samples.
 
     Returns:
-        Tuple of (beta, se, p_wald) - all scalars
+        Tuple of (beta, se, p_wald) - all scalars.
     """
-    n_cvt = 1
     df = n_samples - n_cvt - 1
+    table = build_index_table(n_cvt)
+    idx_xx = table["idx_xx"]
+    idx_xy = table["idx_xy"]
+    idx_yy = table["idx_yy"]
 
-    # Compute Pab (n_cvt=1 for this function)
+    # Compute Pab
     Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
-    Pab = calc_pab_jax(1, Hi_eval, Uab)
+    Pab = calc_pab_jax(n_cvt, Hi_eval, Uab)
 
-    # Extract values (using n_cvt=1 indices)
-    P_XX = Pab[n_cvt, _IDX_XX]  # After projecting out W
-    P_XY = Pab[n_cvt, _IDX_XY]
-    P_YY = Pab[n_cvt, _IDX_YY]
-    Px_YY = Pab[n_cvt + 1, _IDX_YY]  # After projecting out W and X
+    # Extract values using precomputed indices
+    P_XX = Pab[n_cvt, idx_xx]  # After projecting out covariates
+    P_XY = Pab[n_cvt, idx_xy]
+    P_YY = Pab[n_cvt, idx_yy]
+    Px_YY = Pab[n_cvt + 1, idx_yy]  # After projecting out covariates AND genotype
 
     # Clamp Px_YY like NumPy path (GEMMA lmm.cpp:854)
     # Only clamp if >= 0 and < 1e-8; leave negative values to produce NaN
@@ -673,9 +674,29 @@ def calc_wald_stats_jax(
     return beta, se, p_wald
 
 
-# Vectorized version for batch processing
-batch_calc_wald_stats = vmap(
-    calc_wald_stats_jax,
-    in_axes=(0, None, 0, None),  # lambda per SNP, shared eigenvalues, Uab per SNP
-    out_axes=(0, 0, 0),  # beta, se, p per SNP
-)
+def batch_calc_wald_stats(
+    n_cvt: int,
+    lambdas: Float[Array, " p"],
+    eigenvalues: Float[Array, " n"],
+    Uab_batch: Float[Array, "p n ni"],
+    n_samples: int,
+) -> tuple[Float[Array, " p"], Float[Array, " p"], Float[Array, " p"]]:
+    """Vectorized Wald test statistics across SNPs.
+
+    Since n_cvt is static, it cannot be vmapped over. Instead we create
+    a lambda that closes over n_cvt and vmap over the remaining args.
+
+    Args:
+        n_cvt: Number of covariates (static).
+        lambdas: Optimized lambda per SNP (n_snps,).
+        eigenvalues: Shared eigenvalues (n_samples,).
+        Uab_batch: Uab matrices per SNP (n_snps, n_samples, n_index).
+        n_samples: Number of samples.
+
+    Returns:
+        Tuple of (betas, ses, p_walds) - each (n_snps,).
+    """
+    return vmap(
+        lambda lam, uab: calc_wald_stats_jax(n_cvt, lam, eigenvalues, uab, n_samples),
+        in_axes=(0, 0),
+    )(lambdas, Uab_batch)

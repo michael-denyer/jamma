@@ -959,6 +959,7 @@ def run_lmm_association_streaming(
     check_memory: bool = True,
     show_progress: bool = True,
     output_path: Path | None = None,
+    lmm_mode: int = 1,
 ) -> list[AssocResult]:
     """Run LMM association tests by streaming genotypes from disk.
 
@@ -972,7 +973,7 @@ def run_lmm_association_streaming(
 
     Two-pass approach:
     1. SNP statistics pass: Compute MAF and missing rate for filtering
-    2. Association pass: For each chunk, rotate genotypes and compute Wald stats
+    2. Association pass: For each chunk, rotate genotypes and compute stats
 
     Memory Scaling:
         Peak memory is dominated by eigendecomposition:
@@ -1009,6 +1010,10 @@ def run_lmm_association_streaming(
             results are written to disk as computed instead of being accumulated
             in memory. Returns empty list when output_path is set (results are
             on disk). If None (default), returns list of AssocResult as before.
+        lmm_mode: Test type (default 1).
+            - 1 (Wald): Per-SNP REML optimization, full statistics.
+            - 2 (LRT): Null MLE once, per-SNP MLE optimization, LRT p-values.
+            - 3 (Score): Null MLE once, no per-SNP optimization (fastest).
 
     Returns:
         List of AssocResult for each SNP that passes filtering. Empty list if
@@ -1162,6 +1167,22 @@ def run_lmm_association_streaming(
     UtW = U.T @ W
     Uty = U.T @ phenotypes
 
+    # Pre-loop null model computation for Score and LRT
+    lambda_null_mle = None
+    logl_H0 = None
+    Hi_eval_null_jax = None
+    if lmm_mode in (2, 3):
+        lambda_null_mle, logl_H0 = compute_null_model_mle(
+            eigenvalues_np, UtW, Uty, n_cvt
+        )
+        if show_progress:
+            logger.info(
+                f"Null model MLE: lambda={lambda_null_mle:.6f}, logl_H0={logl_H0:.6f}"
+            )
+        if lmm_mode == 3:
+            Hi_eval_null = 1.0 / (lambda_null_mle * eigenvalues_np + 1.0)
+            Hi_eval_null_jax = jax.device_put(Hi_eval_null, device)
+
     # Device-resident shared arrays - placed on device ONCE before chunk loop
     # These are NOT re-transferred inside the file chunk or JAX chunk loops
     # Only UtG (rotated genotypes) is transferred per-chunk as it differs by SNP
@@ -1177,7 +1198,9 @@ def run_lmm_association_streaming(
     # Open writer at start if output_path provided (per-chunk writing)
     writer = None
     if output_path is not None:
-        writer = IncrementalAssocWriter(output_path)
+        test_type_map = {1: "wald", 2: "lrt", 3: "score"}
+        test_type = test_type_map.get(lmm_mode, "wald")
+        writer = IncrementalAssocWriter(output_path, test_type=test_type)
         writer.__enter__()
 
     # Track results for in-memory mode (when output_path is None)
@@ -1249,12 +1272,21 @@ def run_lmm_association_streaming(
                 UtG_chunk = np.ascontiguousarray(U.T @ geno_jax_chunk)
                 return UtG_chunk, actual_len, needs_pad
 
-            # Collect results for this FILE chunk (not global accumulation)
-            file_chunk_lambdas = []
-            file_chunk_logls = []
-            file_chunk_betas = []
-            file_chunk_ses = []
-            file_chunk_pwalds = []
+            # Collect results for this FILE chunk (mode-aware accumulators)
+            if lmm_mode == 1:  # Wald
+                file_chunk_lambdas = []
+                file_chunk_logls = []
+                file_chunk_betas = []
+                file_chunk_ses = []
+                file_chunk_pwalds = []
+            elif lmm_mode == 3:  # Score
+                file_chunk_betas = []
+                file_chunk_ses = []
+                file_chunk_p_scores = []
+            elif lmm_mode == 2:  # LRT
+                file_chunk_lambdas_mle = []
+                file_chunk_logls_mle = []
+                file_chunk_p_lrts = []
 
             # Prepare first JAX chunk
             UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
@@ -1276,70 +1308,147 @@ def run_lmm_association_streaming(
                     UtG_jax = jax.device_put(UtG_np, device)
                     del UtG_np
 
-                # Batch compute Uab
+                # Batch compute Uab (shared across all modes)
                 Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
 
-                # Precompute Iab (identity-weighted) once per chunk
-                Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
+                if lmm_mode == 1:  # Wald (existing, unchanged)
+                    Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
+                    best_lambdas, best_logls = _grid_optimize_lambda_batched(
+                        n_cvt,
+                        eigenvalues,
+                        Uab_batch,
+                        Iab_batch,
+                        l_min,
+                        l_max,
+                        n_grid,
+                        n_refine,
+                    )
+                    betas, ses, p_walds = batch_calc_wald_stats(
+                        n_cvt, best_lambdas, eigenvalues, Uab_batch, n_samples
+                    )
 
-                # Grid-based lambda optimization
-                best_lambdas, best_logls = _grid_optimize_lambda_batched(
-                    n_cvt,
-                    eigenvalues,
-                    Uab_batch,
-                    Iab_batch,
-                    l_min,
-                    l_max,
-                    n_grid,
-                    n_refine,
-                )
+                elif lmm_mode == 3:  # Score
+                    betas, ses, p_scores = batch_calc_score_stats(
+                        n_cvt, Hi_eval_null_jax, Uab_batch, n_samples
+                    )
 
-                # Batch compute Wald statistics
-                betas, ses, p_walds = batch_calc_wald_stats(
-                    n_cvt, best_lambdas, eigenvalues, Uab_batch, n_samples
-                )
+                elif lmm_mode == 2:  # LRT
+                    best_lambdas_mle, best_logls_mle = (
+                        golden_section_optimize_lambda_mle(
+                            n_cvt,
+                            eigenvalues,
+                            Uab_batch,
+                            l_min=l_min,
+                            l_max=l_max,
+                            n_grid=n_grid,
+                            n_iter=max(n_refine, 20),
+                        )
+                    )
+                    p_lrts = jax.vmap(calc_lrt_pvalue_jax)(
+                        best_logls_mle, jnp.full_like(best_logls_mle, logl_H0)
+                    )
 
                 # Strip padding, keep as JAX arrays for file chunk concatenation
-                slice_len = (
-                    current_actual_len if current_needs_padding else len(best_lambdas)
-                )
-                file_chunk_lambdas.append(best_lambdas[:slice_len])
-                file_chunk_logls.append(best_logls[:slice_len])
-                file_chunk_betas.append(betas[:slice_len])
-                file_chunk_ses.append(ses[:slice_len])
-                file_chunk_pwalds.append(p_walds[:slice_len])
+                if lmm_mode == 1:
+                    slice_len = (
+                        current_actual_len
+                        if current_needs_padding
+                        else len(best_lambdas)
+                    )
+                    file_chunk_lambdas.append(best_lambdas[:slice_len])
+                    file_chunk_logls.append(best_logls[:slice_len])
+                    file_chunk_betas.append(betas[:slice_len])
+                    file_chunk_ses.append(ses[:slice_len])
+                    file_chunk_pwalds.append(p_walds[:slice_len])
+                elif lmm_mode == 3:
+                    slice_len = (
+                        current_actual_len if current_needs_padding else len(betas)
+                    )
+                    file_chunk_betas.append(betas[:slice_len])
+                    file_chunk_ses.append(ses[:slice_len])
+                    file_chunk_p_scores.append(p_scores[:slice_len])
+                elif lmm_mode == 2:
+                    slice_len = (
+                        current_actual_len
+                        if current_needs_padding
+                        else len(best_lambdas_mle)
+                    )
+                    file_chunk_lambdas_mle.append(best_lambdas_mle[:slice_len])
+                    file_chunk_logls_mle.append(best_logls_mle[:slice_len])
+                    file_chunk_p_lrts.append(p_lrts[:slice_len])
 
             # After ALL JAX chunks in this file chunk are processed:
             # Concatenate file chunk results and transfer to host
-            if file_chunk_lambdas:
-                chunk_lambdas_np = np.asarray(jnp.concatenate(file_chunk_lambdas))
-                chunk_logls_np = np.asarray(jnp.concatenate(file_chunk_logls))
-                chunk_betas_np = np.asarray(jnp.concatenate(file_chunk_betas))
-                chunk_ses_np = np.asarray(jnp.concatenate(file_chunk_ses))
-                chunk_pwalds_np = np.asarray(jnp.concatenate(file_chunk_pwalds))
+            _has_results = (
+                (lmm_mode == 1 and file_chunk_lambdas)
+                or (lmm_mode == 3 and file_chunk_betas)
+                or (lmm_mode == 2 and file_chunk_lambdas_mle)
+            )
+            if _has_results:
+                if lmm_mode == 1:
+                    chunk_lambdas_np = np.asarray(jnp.concatenate(file_chunk_lambdas))
+                    chunk_logls_np = np.asarray(jnp.concatenate(file_chunk_logls))
+                    chunk_betas_np = np.asarray(jnp.concatenate(file_chunk_betas))
+                    chunk_ses_np = np.asarray(jnp.concatenate(file_chunk_ses))
+                    chunk_pwalds_np = np.asarray(jnp.concatenate(file_chunk_pwalds))
+                elif lmm_mode == 3:
+                    chunk_betas_np = np.asarray(jnp.concatenate(file_chunk_betas))
+                    chunk_ses_np = np.asarray(jnp.concatenate(file_chunk_ses))
+                    chunk_p_scores_np = np.asarray(jnp.concatenate(file_chunk_p_scores))
+                elif lmm_mode == 2:
+                    chunk_lambdas_mle_np = np.asarray(
+                        jnp.concatenate(file_chunk_lambdas_mle)
+                    )
+                    chunk_p_lrts_np = np.asarray(jnp.concatenate(file_chunk_p_lrts))
 
                 # Build and write/accumulate results for this file chunk
                 for j, local_idx in enumerate(chunk_filtered_local_idx):
                     snp_idx = snp_indices[local_idx]
-                    af, n_miss = snp_stats[
-                        local_idx
-                    ]  # af is raw allele frequency for output
+                    af, n_miss = snp_stats[local_idx]
                     info = snp_info[snp_idx]
 
-                    result = AssocResult(
-                        chr=info["chr"],
-                        rs=info["rs"],
-                        ps=info.get("pos", info.get("ps", 0)),
-                        n_miss=n_miss,
-                        allele1=info.get("a1", info.get("allele1", "")),
-                        allele0=info.get("a0", info.get("allele0", "")),
-                        af=af,
-                        beta=float(chunk_betas_np[j]),
-                        se=float(chunk_ses_np[j]),
-                        logl_H1=float(chunk_logls_np[j]),
-                        l_remle=float(chunk_lambdas_np[j]),
-                        p_wald=float(chunk_pwalds_np[j]),
-                    )
+                    if lmm_mode == 1:
+                        result = AssocResult(
+                            chr=info["chr"],
+                            rs=info["rs"],
+                            ps=info.get("pos", info.get("ps", 0)),
+                            n_miss=n_miss,
+                            allele1=info.get("a1", info.get("allele1", "")),
+                            allele0=info.get("a0", info.get("allele0", "")),
+                            af=af,
+                            beta=float(chunk_betas_np[j]),
+                            se=float(chunk_ses_np[j]),
+                            logl_H1=float(chunk_logls_np[j]),
+                            l_remle=float(chunk_lambdas_np[j]),
+                            p_wald=float(chunk_pwalds_np[j]),
+                        )
+                    elif lmm_mode == 3:
+                        result = AssocResult(
+                            chr=info["chr"],
+                            rs=info["rs"],
+                            ps=info.get("pos", info.get("ps", 0)),
+                            n_miss=n_miss,
+                            allele1=info.get("a1", info.get("allele1", "")),
+                            allele0=info.get("a0", info.get("allele0", "")),
+                            af=af,
+                            beta=float(chunk_betas_np[j]),
+                            se=float(chunk_ses_np[j]),
+                            p_score=float(chunk_p_scores_np[j]),
+                        )
+                    elif lmm_mode == 2:
+                        result = AssocResult(
+                            chr=info["chr"],
+                            rs=info["rs"],
+                            ps=info.get("pos", info.get("ps", 0)),
+                            n_miss=n_miss,
+                            allele1=info.get("a1", info.get("allele1", "")),
+                            allele0=info.get("a0", info.get("allele0", "")),
+                            af=af,
+                            beta=float("nan"),
+                            se=float("nan"),
+                            l_mle=float(chunk_lambdas_mle_np[j]),
+                            p_lrt=float(chunk_p_lrts_np[j]),
+                        )
 
                     if writer is not None:
                         writer.write(result)
@@ -1347,10 +1456,18 @@ def run_lmm_association_streaming(
                         all_results.append(result)
 
                 # Clear file chunk arrays to free memory
-                del chunk_lambdas_np, chunk_logls_np, chunk_betas_np
-                del chunk_ses_np, chunk_pwalds_np
-                del file_chunk_lambdas, file_chunk_logls, file_chunk_betas
-                del file_chunk_ses, file_chunk_pwalds
+                if lmm_mode == 1:
+                    del chunk_lambdas_np, chunk_logls_np, chunk_betas_np
+                    del chunk_ses_np, chunk_pwalds_np
+                    del file_chunk_lambdas, file_chunk_logls, file_chunk_betas
+                    del file_chunk_ses, file_chunk_pwalds
+                elif lmm_mode == 3:
+                    del chunk_betas_np, chunk_ses_np, chunk_p_scores_np
+                    del file_chunk_betas, file_chunk_ses, file_chunk_p_scores
+                elif lmm_mode == 2:
+                    del chunk_lambdas_mle_np, chunk_p_lrts_np
+                    del file_chunk_lambdas_mle, file_chunk_logls_mle
+                    del file_chunk_p_lrts
 
         # Log memory after association pass completes
         if show_progress:

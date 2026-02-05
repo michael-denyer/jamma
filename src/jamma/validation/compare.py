@@ -286,6 +286,19 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
             "l_mle",
             "p_lrt",
         ]
+        # Format 4b: LRT with logl_H1 (-lmm 2, some GEMMA versions)
+        expected_cols_lrt_full = [
+            "chr",
+            "rs",
+            "ps",
+            "n_miss",
+            "allele1",
+            "allele0",
+            "af",
+            "logl_H1",
+            "l_mle",
+            "p_lrt",
+        ]
         # Format 5: All tests (-lmm 4)
         expected_cols_all = [
             "chr",
@@ -312,6 +325,8 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
             format_type = "score"
         elif actual_cols == expected_cols_lrt:
             format_type = "lrt"
+        elif actual_cols == expected_cols_lrt_full:
+            format_type = "lrt_full"
         elif actual_cols == expected_cols_all:
             format_type = "all_tests"
         else:
@@ -321,6 +336,7 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
                 f"  {expected_cols_wald_short}\n"
                 f"  {expected_cols_score}\n"
                 f"  {expected_cols_lrt}\n"
+                f"  {expected_cols_lrt_full}\n"
                 f"  {expected_cols_all}\n"
                 f"Got: {actual_cols}"
             )
@@ -397,6 +413,25 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
                         p_wald=float(fields[11]),
                         p_lrt=float(fields[12]),
                         p_score=float(fields[13]),
+                    )
+                )
+            elif format_type == "lrt_full":
+                results.append(
+                    AssocResult(
+                        chr=fields[0],
+                        rs=fields[1],
+                        ps=int(fields[2]),
+                        n_miss=int(fields[3]),
+                        allele1=fields[4],
+                        allele0=fields[5],
+                        af=float(fields[6]),
+                        beta=float("nan"),  # LRT format has no beta
+                        se=float("nan"),  # LRT format has no se
+                        logl_H1=float(fields[7]),
+                        l_remle=None,
+                        p_wald=None,
+                        l_mle=float(fields[8]),
+                        p_lrt=float(fields[9]),
                     )
                 )
             else:  # lrt

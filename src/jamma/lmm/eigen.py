@@ -2,13 +2,9 @@
 
 Provides GEMMA-compatible eigendecomposition with small eigenvalue thresholding.
 
-Uses numpy.linalg.eigh (LAPACK) with system BLAS. When linked to MKL, this is
-stable and efficient at 100k+ samples with lower memory overhead.
-
-Note on threading: OpenBLAS can segfault with multi-threaded eigendecomposition
-on large matrices (>50k) due to memory allocation races. We detect the BLAS
-backend at runtime and only limit threads for OpenBLAS (MKL is stable).
-See: https://github.com/scipy/scipy/issues/8741
+Uses numpy.linalg.eigh (LAPACK) with system BLAS. Thread control is handled
+by jamma.core.threading via threadpool_limits context managers, giving explicit
+BLAS thread management for all backends (MKL, OpenBLAS, etc.).
 """
 
 import time
@@ -16,78 +12,14 @@ import warnings
 
 import numpy as np
 from loguru import logger
-
-try:
-    from threadpoolctl import threadpool_info, threadpool_limits
-
-    HAVE_THREADPOOLCTL = True
-except ImportError:
-    HAVE_THREADPOOLCTL = False
+from threadpoolctl import threadpool_info
 
 from jamma.core.memory import (
     check_memory_available,
     estimate_eigendecomp_memory,
     log_memory_snapshot,
 )
-
-# Threshold above which we limit BLAS threads for OpenBLAS to prevent SIGSEGV
-# 50k samples = 2.5B elements, empirically safe with threading
-# 100k samples = 10B elements, crashes with OpenBLAS multi-threading
-THREAD_LIMIT_THRESHOLD = 50_000
-
-# Thread cap for large matrices with OpenBLAS (not 1, which kills performance)
-# 4-8 threads is a reasonable balance between speed and stability
-OPENBLAS_THREAD_CAP = 4
-
-
-def _get_blas_backend() -> str | None:
-    """Detect the BLAS backend in use (openblas, mkl, blis, etc).
-
-    Returns:
-        Backend name in lowercase, or None if detection fails.
-    """
-    if not HAVE_THREADPOOLCTL:
-        return None
-
-    try:
-        info = threadpool_info()
-        for lib in info:
-            # Look for BLAS libraries
-            if lib.get("user_api") == "blas":
-                # internal_api gives the backend name
-                backend = lib.get("internal_api", "").lower()
-                if backend:
-                    return backend
-        return None
-    except Exception:
-        return None
-
-
-def _should_limit_threads(n_samples: int, backend: str | None) -> tuple[bool, int]:
-    """Determine if we should limit BLAS threads and to what value.
-
-    Args:
-        n_samples: Number of samples in the matrix.
-        backend: BLAS backend name (openblas, mkl, etc).
-
-    Returns:
-        Tuple of (should_limit, thread_limit).
-    """
-    if n_samples < THREAD_LIMIT_THRESHOLD:
-        return False, 0
-
-    # MKL and BLIS are stable with multi-threading
-    if backend in ("mkl", "blis"):
-        return False, 0
-
-    # OpenBLAS needs thread limiting for large matrices
-    # Use a cap (not 1) to preserve some parallelism
-    if backend == "openblas":
-        return True, OPENBLAS_THREAD_CAP
-
-    # Unknown backend - be conservative and limit threads
-    # This includes None (detection failed) and any other backend
-    return True, OPENBLAS_THREAD_CAP
+from jamma.core.threading import blas_threads, get_blas_thread_count
 
 
 def eigendecompose_kinship(
@@ -144,35 +76,19 @@ def eigendecompose_kinship(
     # Log memory state right before allocation for debugging OOM crashes
     log_memory_snapshot(f"before_eigendecomp_{n_samples}samples")
 
-    # Detect BLAS backend and determine threading strategy
-    # MKL is stable; OpenBLAS needs thread limiting for large matrices
-    backend = _get_blas_backend()
-    should_limit, thread_cap = _should_limit_threads(n_samples, backend)
-
-    if backend:
-        logger.debug(f"BLAS backend: {backend}")
-
-    if should_limit:
-        if HAVE_THREADPOOLCTL:
-            logger.info(
-                f"Limiting BLAS to {thread_cap} threads for "
-                f"{n_samples:,}x{n_samples:,} matrix (backend={backend})"
+    # Log BLAS thread state for diagnostics
+    n_threads = get_blas_thread_count()
+    for lib in threadpool_info():
+        if lib.get("user_api") == "blas":
+            logger.debug(
+                f"BLAS: {lib.get('internal_api')}, "
+                f"current={lib.get('num_threads')}, target={n_threads}"
             )
-        else:
-            logger.warning(
-                f"threadpoolctl not installed - cannot limit BLAS threads for "
-                f"{n_samples:,}x{n_samples:,} matrix. "
-                "Install with: pip install threadpoolctl"
-            )
+    logger.info(f"Eigendecomp using {n_threads} BLAS threads")
 
     start_time = time.perf_counter()
     try:
-        # numpy.linalg.eigh doesn't have overwrite_a option like scipy
-        # but it's more memory efficient when linked to MKL
-        if should_limit and HAVE_THREADPOOLCTL:
-            with threadpool_limits(limits=thread_cap, user_api="blas"):
-                eigenvalues, eigenvectors = np.linalg.eigh(K)
-        else:
+        with blas_threads(n_threads):
             eigenvalues, eigenvectors = np.linalg.eigh(K)
     except MemoryError:
         mem_gb = n_elements * 8 * 3 / 1e9

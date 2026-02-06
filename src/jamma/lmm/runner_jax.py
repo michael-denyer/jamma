@@ -14,6 +14,7 @@ from loguru import logger
 from jamma.core.memory import estimate_workflow_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
+from jamma.core.threading import blas_threads
 from jamma.lmm.chunk import (
     _MAX_BUFFER_ELEMENTS,  # noqa: F401 - re-export for backward compatibility
     MAX_SAFE_CHUNK,  # noqa: F401 - re-export for backward compatibility
@@ -172,8 +173,9 @@ def run_lmm_association_jax(
     )
     UT = np.ascontiguousarray(U.T)  # Cache contiguous transpose for BLAS matmuls
 
-    UtW = UT @ W
-    Uty = UT @ phenotypes
+    with blas_threads():
+        UtW = UT @ W
+        Uty = UT @ phenotypes
 
     logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
         lmm_mode, eigenvalues_np, UtW, Uty, n_cvt, device, show_progress
@@ -242,7 +244,8 @@ def run_lmm_association_jax(
             pad_width = chunk_size - actual_len
             geno_chunk = np.pad(geno_chunk, ((0, 0), (0, pad_width)), mode="constant")
 
-        UtG_chunk = np.ascontiguousarray(UT @ geno_chunk)
+        with blas_threads():
+            UtG_chunk = np.ascontiguousarray(UT @ geno_chunk)
         return UtG_chunk, actual_len, needs_pad
 
     # Double buffering: overlap device transfer with computation

@@ -43,6 +43,9 @@ jamma = "jamma.cli:app"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-n auto --randomly-seed=last --benchmark-skip"
+filterwarnings = [
+    "ignore:Some donated buffers were not usable:UserWarning",
+]
 markers = [
     "tier0: fast unit tests (<5s), no external dependencies, no GEMMA reference",
     "tier1: parity tests (<60s), validates against GEMMA reference data",

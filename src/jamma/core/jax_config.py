@@ -12,6 +12,7 @@ JAX computations to enable x64 mode.
 from __future__ import annotations
 
 import os
+import warnings
 from typing import Any
 
 import jax
@@ -36,6 +37,10 @@ def _pin_blas_threads(n_threads: int = 1) -> None:
 
 # Pin threads on module import (before JAX does any work)
 _pin_blas_threads(1)
+
+# Suppress unhelpful JAX buffer donation warnings — fires when
+# @jit donate_argnums can't reuse a buffer (shape/type mismatch).
+warnings.filterwarnings("ignore", message="Some donated buffers were not usable")
 
 
 def configure_jax(

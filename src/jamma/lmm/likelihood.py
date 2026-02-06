@@ -14,6 +14,8 @@ Reference: Zhou & Stephens (2012) Nature Genetics, Supplementary Information
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 from jax import config
 
@@ -547,6 +549,88 @@ def mle_log_likelihood_null(
     return f
 
 
+def _golden_section_minimize(
+    func: Callable[[float], float],
+    l_min: float = 1e-5,
+    l_max: float = 1e5,
+    n_grid: int = 50,
+    n_iter: int = 20,
+) -> tuple[float, float]:
+    """Minimize a scalar function over [l_min, l_max] using golden section search.
+
+    Pure Python implementation matching the JAX batch optimizer algorithm:
+    1. Log-spaced grid search to bracket the minimum
+    2. Golden section refinement within the bracket
+
+    Operates in log-lambda space for numerical stability across the wide
+    lambda range (1e-5 to 1e5). After 20 iterations, achieves relative
+    tolerance of 0.618^20 ~ 6.6e-5, comparable to Brent's method with
+    tol=1e-5.
+
+    Args:
+        func: Scalar function to minimize (negative log-likelihood).
+        l_min: Lower bound for lambda search.
+        l_max: Upper bound for lambda search.
+        n_grid: Number of coarse grid points.
+        n_iter: Golden section refinement iterations.
+
+    Returns:
+        (optimal_lambda, positive_logl) where positive_logl = -func(optimal_lambda).
+    """
+    import math
+
+    phi = 0.6180339887498949  # Golden ratio - 1
+
+    # Stage 1: Coarse grid search on log scale
+    log_l_min = math.log(l_min)
+    log_l_max = math.log(l_max)
+    step = (log_l_max - log_l_min) / (n_grid - 1)
+    log_lambdas = [log_l_min + i * step for i in range(n_grid)]
+
+    # Evaluate func at each grid point, find minimum
+    best_idx = 0
+    best_val = func(math.exp(log_lambdas[0]))
+    for i in range(1, n_grid):
+        val = func(math.exp(log_lambdas[i]))
+        if val < best_val:
+            best_val = val
+            best_idx = i
+
+    # Bracket around best grid point
+    idx_low = max(best_idx - 1, 0)
+    idx_high = min(best_idx + 1, n_grid - 1)
+    a = log_lambdas[idx_low]
+    b = log_lambdas[idx_high]
+
+    # Stage 2: Golden section refinement in log space
+    c = b - phi * (b - a)
+    d = a + phi * (b - a)
+    fc = func(math.exp(c))
+    fd = func(math.exp(d))
+
+    for _ in range(n_iter):
+        if fc < fd:
+            # Minimum is in [a, d]
+            b = d
+            d = c
+            fd = fc
+            c = b - phi * (b - a)
+            fc = func(math.exp(c))
+        else:
+            # Minimum is in [c, b]
+            a = c
+            c = d
+            fc = fd
+            d = a + phi * (b - a)
+            fd = func(math.exp(d))
+
+    log_opt = (a + b) / 2.0
+    opt_lambda = math.exp(log_opt)
+    opt_val = func(opt_lambda)
+
+    return opt_lambda, -opt_val
+
+
 def compute_null_model_lambda(
     eigenvalues: np.ndarray,
     UtW: np.ndarray,
@@ -573,9 +657,6 @@ def compute_null_model_lambda(
     Returns:
         (lambda_null, logl_null) - Null model lambda and log-likelihood
     """
-    # Import here to avoid circular dependency at module load time
-    from jamma.lmm.optimize import optimize_lambda
-
     # Compute Uab without genotype (Utx=None)
     # This sets genotype-related columns to zero via placeholder
     Uab = compute_Uab(UtW, Uty, Utx=None)
@@ -584,8 +665,8 @@ def compute_null_model_lambda(
     def neg_reml_null(lam: float) -> float:
         return -reml_log_likelihood_null(lam, eigenvalues, Uab, n_cvt)
 
-    # Optimize lambda under the null model
-    lambda_null, logl_null = optimize_lambda(neg_reml_null, l_min=l_min, l_max=l_max)
+    # Optimize lambda under the null model using golden section search
+    lambda_null, logl_null = _golden_section_minimize(neg_reml_null, l_min, l_max)
 
     return lambda_null, logl_null
 

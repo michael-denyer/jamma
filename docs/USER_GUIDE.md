@@ -142,24 +142,23 @@ K = compute_centered_kinship(data.genotypes)
 ### LMM Association
 
 ```python
-from jamma.lmm import run_lmm_association
-from jamma.lmm.runner_jax import run_lmm_association_jax
+from jamma.lmm import run_lmm_association_jax, run_lmm_association_streaming
 
-# NumPy runner (supports covariates)
-results = run_lmm_association(
-    genotypes=data.genotypes,
-    phenotypes=phenotypes,
-    kinship=K,
-    snp_info=snp_info,
-)
-
-# JAX runner (faster, intercept-only)
+# Batch runner (genotypes in memory)
 results = run_lmm_association_jax(
     genotypes=data.genotypes,
     phenotypes=phenotypes,
     kinship=K,
     snp_info=snp_info,
     use_gpu=True,  # Enable GPU acceleration
+)
+
+# Streaming runner (genotypes from disk, never loads full matrix)
+results = run_lmm_association_streaming(
+    bed_path="data/my_study",
+    phenotypes=phenotypes,
+    kinship=K,
+    chunk_size=10_000,
 )
 ```
 

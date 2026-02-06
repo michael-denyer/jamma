@@ -199,33 +199,33 @@ def run_lmm_association_jax(
                 f"({chunk_size:,} SNPs/chunk) to avoid buffer overflow"
             )
 
-    # Mode-aware accumulators
+    # Pre-allocate result arrays (replaces list accumulators)
+    write_offset = 0
+
     if lmm_mode == 1:  # Wald
-        all_lambdas = []
-        all_logls = []
-        all_betas = []
-        all_ses = []
-        all_pwalds = []
+        lambdas_out = np.empty(n_filtered, dtype=np.float64)
+        logls_out = np.empty(n_filtered, dtype=np.float64)
+        betas_out = np.empty(n_filtered, dtype=np.float64)
+        ses_out = np.empty(n_filtered, dtype=np.float64)
+        pwalds_out = np.empty(n_filtered, dtype=np.float64)
     elif lmm_mode == 3:  # Score
-        all_betas = []
-        all_ses = []
-        all_p_scores = []
+        betas_out = np.empty(n_filtered, dtype=np.float64)
+        ses_out = np.empty(n_filtered, dtype=np.float64)
+        p_scores_out = np.empty(n_filtered, dtype=np.float64)
     elif lmm_mode == 2:  # LRT
-        all_lambdas_mle = []
-        all_logls_mle = []
-        all_p_lrts = []
+        lambdas_mle_out = np.empty(n_filtered, dtype=np.float64)
+        logls_mle_out = np.empty(n_filtered, dtype=np.float64)
+        p_lrts_out = np.empty(n_filtered, dtype=np.float64)
     elif lmm_mode == 4:  # All tests
-        # Wald accumulators
-        all_lambdas = []
-        all_logls = []
-        all_betas = []
-        all_ses = []
-        all_pwalds = []
-        # LRT accumulators
-        all_lambdas_mle = []
-        all_p_lrts = []
-        # Score accumulator
-        all_p_scores = []
+        lambdas_out = np.empty(n_filtered, dtype=np.float64)
+        logls_out = np.empty(n_filtered, dtype=np.float64)
+        betas_out = np.empty(n_filtered, dtype=np.float64)
+        ses_out = np.empty(n_filtered, dtype=np.float64)
+        pwalds_out = np.empty(n_filtered, dtype=np.float64)
+        lambdas_mle_out = np.empty(n_filtered, dtype=np.float64)
+        logls_mle_out = np.empty(n_filtered, dtype=np.float64)
+        p_lrts_out = np.empty(n_filtered, dtype=np.float64)
+        p_scores_out = np.empty(n_filtered, dtype=np.float64)
 
     def _prepare_chunk(start: int) -> tuple[jnp.ndarray, int, bool]:
         """Prepare a chunk for device transfer (CPU work)."""
@@ -371,83 +371,56 @@ def run_lmm_association_jax(
                 )
             raise
 
-        # Strip padding if needed, keep as JAX arrays to avoid per-chunk host transfer
+        # Write results into pre-allocated arrays by index (no list append)
         if lmm_mode == 1:
             slice_len = actual_chunk_len if needs_padding else len(best_lambdas)
-            all_lambdas.append(best_lambdas[:slice_len])
-            all_logls.append(best_logls[:slice_len])
-            all_betas.append(betas[:slice_len])
-            all_ses.append(ses[:slice_len])
-            all_pwalds.append(p_walds[:slice_len])
+            s = slice(write_offset, write_offset + slice_len)
+            lambdas_out[s] = np.asarray(best_lambdas[:slice_len])
+            logls_out[s] = np.asarray(best_logls[:slice_len])
+            betas_out[s] = np.asarray(betas[:slice_len])
+            ses_out[s] = np.asarray(ses[:slice_len])
+            pwalds_out[s] = np.asarray(p_walds[:slice_len])
         elif lmm_mode == 3:
             slice_len = actual_chunk_len if needs_padding else len(betas)
-            all_betas.append(betas[:slice_len])
-            all_ses.append(ses[:slice_len])
-            all_p_scores.append(p_scores[:slice_len])
+            s = slice(write_offset, write_offset + slice_len)
+            betas_out[s] = np.asarray(betas[:slice_len])
+            ses_out[s] = np.asarray(ses[:slice_len])
+            p_scores_out[s] = np.asarray(p_scores[:slice_len])
         elif lmm_mode == 2:
             slice_len = actual_chunk_len if needs_padding else len(best_lambdas_mle)
-            all_lambdas_mle.append(best_lambdas_mle[:slice_len])
-            all_logls_mle.append(best_logls_mle[:slice_len])
-            all_p_lrts.append(p_lrts[:slice_len])
+            s = slice(write_offset, write_offset + slice_len)
+            lambdas_mle_out[s] = np.asarray(best_lambdas_mle[:slice_len])
+            logls_mle_out[s] = np.asarray(best_logls_mle[:slice_len])
+            p_lrts_out[s] = np.asarray(p_lrts[:slice_len])
         elif lmm_mode == 4:
             slice_len = actual_chunk_len if needs_padding else len(best_lambdas)
+            s = slice(write_offset, write_offset + slice_len)
             # Wald
-            all_lambdas.append(best_lambdas[:slice_len])
-            all_logls.append(best_logls[:slice_len])
-            all_betas.append(betas[:slice_len])
-            all_ses.append(ses[:slice_len])
-            all_pwalds.append(p_walds[:slice_len])
+            lambdas_out[s] = np.asarray(best_lambdas[:slice_len])
+            logls_out[s] = np.asarray(best_logls[:slice_len])
+            betas_out[s] = np.asarray(betas[:slice_len])
+            ses_out[s] = np.asarray(ses[:slice_len])
+            pwalds_out[s] = np.asarray(p_walds[:slice_len])
             # LRT
-            all_lambdas_mle.append(best_lambdas_mle[:slice_len])
-            all_p_lrts.append(p_lrts[:slice_len])
+            lambdas_mle_out[s] = np.asarray(best_lambdas_mle[:slice_len])
+            p_lrts_out[s] = np.asarray(p_lrts[:slice_len])
             # Score
-            all_p_scores.append(p_scores[:slice_len])
+            p_scores_out[s] = np.asarray(p_scores[:slice_len])
+
+        write_offset += slice_len
+
+    # Validate all results were written
+    assert (
+        write_offset == n_filtered
+    ), f"Pre-allocated array size mismatch: wrote {write_offset}, expected {n_filtered}"
 
     # Log memory after all chunks processed
     if show_progress:
         log_rss_memory("lmm_jax", "after_all_chunks")
 
-    # Concatenate on device, then single host transfer (mode-aware)
-    if lmm_mode == 1:
-        best_lambdas_np = np.asarray(jnp.concatenate(all_lambdas))
-        best_logls_np = np.asarray(jnp.concatenate(all_logls))
-        betas_np = np.asarray(jnp.concatenate(all_betas))
-        ses_np = np.asarray(jnp.concatenate(all_ses))
-        p_walds_np = np.asarray(jnp.concatenate(all_pwalds))
-        del all_lambdas, all_logls, all_betas, all_ses, all_pwalds
-    elif lmm_mode == 3:
-        betas_np = np.asarray(jnp.concatenate(all_betas))
-        ses_np = np.asarray(jnp.concatenate(all_ses))
-        p_scores_np = np.asarray(jnp.concatenate(all_p_scores))
-        del all_betas, all_ses, all_p_scores
-    elif lmm_mode == 2:
-        lambdas_mle_np = np.asarray(jnp.concatenate(all_lambdas_mle))
-        p_lrts_np = np.asarray(jnp.concatenate(all_p_lrts))
-        del all_lambdas_mle, all_logls_mle, all_p_lrts
-    elif lmm_mode == 4:
-        best_lambdas_np = np.asarray(jnp.concatenate(all_lambdas))
-        best_logls_np = np.asarray(jnp.concatenate(all_logls))
-        betas_np = np.asarray(jnp.concatenate(all_betas))
-        ses_np = np.asarray(jnp.concatenate(all_ses))
-        p_walds_np = np.asarray(jnp.concatenate(all_pwalds))
-        lambdas_mle_np = np.asarray(jnp.concatenate(all_lambdas_mle))
-        p_lrts_np = np.asarray(jnp.concatenate(all_p_lrts))
-        p_scores_np = np.asarray(jnp.concatenate(all_p_scores))
-        del all_lambdas, all_logls, all_betas, all_ses, all_pwalds
-        del all_lambdas_mle, all_p_lrts, all_p_scores
-
     # Explicit cleanup of JAX arrays before returning to prevent SIGSEGV
     # from race conditions between Python GC and JAX background threads
     del eigenvalues, UtW_jax, Uty_jax
-    # Force synchronization - ensures all JAX operations complete before returning
-    if lmm_mode == 1:
-        jax.block_until_ready(betas_np)
-    elif lmm_mode == 3:
-        jax.block_until_ready(p_scores_np)
-    elif lmm_mode == 2:
-        jax.block_until_ready(p_lrts_np)
-    elif lmm_mode == 4:
-        jax.block_until_ready(betas_np)
 
     # Log completion
     elapsed = time.perf_counter() - start_time
@@ -460,42 +433,42 @@ def run_lmm_association_jax(
             snp_indices,
             snp_stats,
             snp_info,
-            best_lambdas_np,
-            best_logls_np,
-            betas_np,
-            ses_np,
-            p_walds_np,
+            lambdas_out,
+            logls_out,
+            betas_out,
+            ses_out,
+            pwalds_out,
         )
     elif lmm_mode == 3:
         return _build_results_score(
             snp_indices,
             snp_stats,
             snp_info,
-            betas_np,
-            ses_np,
-            p_scores_np,
+            betas_out,
+            ses_out,
+            p_scores_out,
         )
     elif lmm_mode == 2:
         return _build_results_lrt(
             snp_indices,
             snp_stats,
             snp_info,
-            lambdas_mle_np,
-            p_lrts_np,
+            lambdas_mle_out,
+            p_lrts_out,
         )
     elif lmm_mode == 4:
         return _build_results_all(
             snp_indices,
             snp_stats,
             snp_info,
-            best_lambdas_np,
-            best_logls_np,
-            betas_np,
-            ses_np,
-            p_walds_np,
-            lambdas_mle_np,
-            p_lrts_np,
-            p_scores_np,
+            lambdas_out,
+            logls_out,
+            betas_out,
+            ses_out,
+            pwalds_out,
+            lambdas_mle_out,
+            p_lrts_out,
+            p_scores_out,
         )
     else:
         raise ValueError(f"Unsupported lmm_mode: {lmm_mode}. Use 1, 2, 3, or 4.")

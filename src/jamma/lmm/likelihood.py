@@ -815,9 +815,6 @@ def compute_null_model_mle(
     Returns:
         (lambda_null_mle, logl_H0) - Null model MLE lambda and log-likelihood
     """
-    # Import here to avoid circular dependency at module load time
-    from jamma.lmm.optimize import optimize_lambda
-
     # Compute Uab without genotype (Utx=None)
     Uab = compute_Uab(UtW, Uty, Utx=None)
 
@@ -825,7 +822,7 @@ def compute_null_model_mle(
     def neg_mle_null(lam: float) -> float:
         return -mle_log_likelihood_null(lam, eigenvalues, Uab, n_cvt)
 
-    # Optimize lambda under the null model using MLE
-    lambda_null_mle, logl_H0 = optimize_lambda(neg_mle_null, l_min=l_min, l_max=l_max)
+    # Optimize lambda under the null model using golden section search
+    lambda_null_mle, logl_H0 = _golden_section_minimize(neg_mle_null, l_min, l_max)
 
     return lambda_null_mle, logl_H0

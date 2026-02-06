@@ -355,10 +355,21 @@ class TestScoreVsWald:
             lambda_null, Pab_score, n_cvt, data["n_samples"]
         )
 
-        # Wald test with optimized lambda (per-SNP)
-        from jamma.lmm.optimize import optimize_lambda_for_snp
+        # Wald test with optimized lambda (per-SNP) -- use JAX optimizer
+        import jax.numpy as jnp
 
-        lambda_wald, _ = optimize_lambda_for_snp(data["eigenvalues"], Uab, n_cvt)
+        from jamma.lmm.likelihood_jax import (
+            batch_compute_iab,
+            golden_section_optimize_lambda,
+        )
+
+        Uab_jax = jnp.expand_dims(jnp.array(Uab), 0)
+        Iab_jax = batch_compute_iab(n_cvt, Uab_jax)
+        eigenvalues_jax = jnp.array(data["eigenvalues"])
+        lambdas, _ = golden_section_optimize_lambda(
+            n_cvt, eigenvalues_jax, Uab_jax, Iab_jax
+        )
+        lambda_wald = float(lambdas[0])
         Hi_eval_wald = 1.0 / (lambda_wald * data["eigenvalues"] + 1.0)
         Pab_wald = calc_pab(n_cvt, Hi_eval_wald, Uab)
         beta_wald, _, _ = calc_wald_test(

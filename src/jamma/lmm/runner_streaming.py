@@ -15,6 +15,7 @@ from loguru import logger
 from jamma.core.memory import estimate_streaming_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask
+from jamma.core.threading import blas_threads
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
 from jamma.lmm.chunk import _compute_chunk_size
 from jamma.lmm.io import IncrementalAssocWriter
@@ -275,9 +276,10 @@ def run_lmm_association_streaming(
 
     W, n_cvt = _build_covariate_matrix(covariates, n_samples)
 
-    # Prepare rotated matrices
-    UtW = UT @ W
-    Uty = UT @ phenotypes
+    # Prepare rotated matrices (numpy BLAS matmuls)
+    with blas_threads():
+        UtW = UT @ W
+        Uty = UT @ phenotypes
 
     logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
         lmm_mode, eigenvalues_np, UtW, Uty, n_cvt, device, show_progress
@@ -361,7 +363,8 @@ def run_lmm_association_streaming(
                         geno_jax_chunk, ((0, 0), (0, pad_width)), mode="constant"
                     )
 
-                UtG_chunk = np.ascontiguousarray(UT @ geno_jax_chunk)
+                with blas_threads():
+                    UtG_chunk = np.ascontiguousarray(UT @ geno_jax_chunk)
                 return UtG_chunk, actual_len, needs_pad
 
             # Dict-based accumulators for this file chunk

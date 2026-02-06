@@ -204,6 +204,7 @@ def run_lmm_association_streaming(
     device = _select_jax_device(use_gpu)
 
     # === PASS 1: SNP statistics (without loading all genotypes) ===
+    t_io_start = time.perf_counter()
     all_means = np.zeros(n_snps, dtype=np.float64)
     all_miss_counts = np.zeros(n_snps, dtype=np.int32)
     all_vars = np.zeros(n_snps, dtype=np.float64)  # For monomorphic detection
@@ -234,6 +235,10 @@ def run_lmm_association_streaming(
         all_miss_counts[start:end] = chunk_miss_counts
         all_vars[start:end] = chunk_vars
 
+    t_io_end = time.perf_counter()
+
+    # === SNP statistics: filtering + stats construction ===
+    t_snp_start = time.perf_counter()
     snp_mask, allele_freqs, _mafs = compute_snp_filter_mask(
         all_means, all_miss_counts, all_vars, n_samples, maf_threshold, miss_threshold
     )
@@ -258,7 +263,10 @@ def run_lmm_association_streaming(
         )
     )
     filtered_means = all_means[snp_indices]
+    t_snp_end = time.perf_counter()
 
+    # === Eigendecomp + setup ===
+    t_eigen_start = time.perf_counter()
     eigenvalues_np, U = _eigendecompose_or_reuse(
         kinship, eigenvalues, eigenvectors, show_progress, "lmm_streaming"
     )
@@ -280,6 +288,12 @@ def run_lmm_association_streaming(
     Uty_jax = jax.device_put(Uty, device)
 
     jax_chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid, n_cvt)
+    t_eigen_end = time.perf_counter()
+
+    # Timing accumulators for per-chunk phases
+    t_rotation_total = 0.0
+    t_jax_compute_total = 0.0
+    t_result_write_total = 0.0
 
     # === PASS 2: Association ===
     writer = None
@@ -353,9 +367,12 @@ def run_lmm_association_streaming(
             accum: dict[str, list] = _init_accumulators(lmm_mode)
 
             # Prepare first JAX chunk
+            t_rot_start = time.perf_counter()
             UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
                 jax_starts[0], geno_subset, n_subset
             )
+            t_rot_end = time.perf_counter()
+            t_rotation_total += t_rot_end - t_rot_start
             UtG_jax = jax.device_put(UtG_np, device)
             del UtG_np
 
@@ -366,11 +383,17 @@ def run_lmm_association_streaming(
 
                 # Start async transfer of next JAX chunk while computing current
                 if i + 1 < len(jax_starts):
+                    t_rot_start = time.perf_counter()
                     UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
                         jax_starts[i + 1], geno_subset, n_subset
                     )
+                    t_rot_end = time.perf_counter()
+                    t_rotation_total += t_rot_end - t_rot_start
                     UtG_jax = jax.device_put(UtG_np, device)
                     del UtG_np
+
+                # --- JAX compute timing ---
+                t_jax_start = time.perf_counter()
 
                 # Batch compute Uab (shared across all modes)
                 Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
@@ -390,11 +413,13 @@ def run_lmm_association_streaming(
                     betas, ses, p_walds = batch_calc_wald_stats(
                         n_cvt, best_lambdas, eigenvalues, Uab_batch, n_samples
                     )
+                    p_walds.block_until_ready()
 
                 elif lmm_mode == 3:  # Score
                     betas, ses, p_scores = batch_calc_score_stats(
                         n_cvt, Hi_eval_null_jax, Uab_batch, n_samples
                     )
+                    p_scores.block_until_ready()
 
                 elif lmm_mode == 2:  # LRT
                     best_lambdas_mle, best_logls_mle = (
@@ -411,6 +436,7 @@ def run_lmm_association_streaming(
                     p_lrts = jax.vmap(calc_lrt_pvalue_jax)(
                         best_logls_mle, jnp.full_like(best_logls_mle, logl_H0)
                     )
+                    p_lrts.block_until_ready()
 
                 elif lmm_mode == 4:  # All tests
                     # Score test (cheapest, no optimization)
@@ -449,6 +475,10 @@ def run_lmm_association_streaming(
                     betas, ses, p_walds = batch_calc_wald_stats(
                         n_cvt, best_lambdas, eigenvalues, Uab_batch, n_samples
                     )
+                    p_walds.block_until_ready()
+
+                t_jax_end = time.perf_counter()
+                t_jax_compute_total += t_jax_end - t_jax_start
 
                 # Strip padding and append to dict-based accumulators
                 _append_chunk_results(
@@ -461,6 +491,7 @@ def run_lmm_association_streaming(
 
             # Concatenate, build results, write/accumulate
             if any(accum.values()):
+                t_write_start = time.perf_counter()
                 arrays = _concat_jax_accumulators(lmm_mode, accum)
                 for result in _yield_chunk_results(
                     lmm_mode,
@@ -475,9 +506,30 @@ def run_lmm_association_streaming(
                     else:
                         all_results.append(result)
                 del arrays, accum
+                t_write_end = time.perf_counter()
+                t_result_write_total += t_write_end - t_write_start
 
         if show_progress:
             log_rss_memory("lmm_streaming", "after_association")
+
+            elapsed = time.perf_counter() - start_time
+            logger.info("## Timing breakdown:")
+            logger.info(f"##   I/O read (pass 1):   {t_io_end - t_io_start:.2f}s")
+            logger.info(f"##   SNP statistics:      {t_snp_end - t_snp_start:.2f}s")
+            logger.info(f"##   Eigendecomp+setup:   {t_eigen_end - t_eigen_start:.2f}s")
+            logger.info(f"##   UT@G rotation:       {t_rotation_total:.2f}s")
+            logger.info(f"##   JAX compute:         {t_jax_compute_total:.2f}s")
+            logger.info(f"##   Result write:        {t_result_write_total:.2f}s")
+            accounted = (
+                (t_io_end - t_io_start)
+                + (t_snp_end - t_snp_start)
+                + (t_eigen_end - t_eigen_start)
+                + t_rotation_total
+                + t_jax_compute_total
+                + t_result_write_total
+            )
+            logger.info(f"##   Accounted:           {accounted:.2f}s")
+            logger.info(f"##   Total:               {elapsed:.2f}s")
 
         del eigenvalues, UtW_jax, Uty_jax
 

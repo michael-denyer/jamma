@@ -976,16 +976,16 @@ class TestJaxChunkingCorrectness:
         This tests the chunking implementation by forcing different chunk sizes
         and verifying the results match exactly.
         """
-        from jamma.lmm import runner_jax
+        from jamma.lmm import chunk as chunk_module
 
         genotypes, phenotypes, kinship, snp_info = chunk_test_data
 
-        # Store original MAX_BUFFER_ELEMENTS
-        original_max = runner_jax._MAX_BUFFER_ELEMENTS
+        # Store original MAX_BUFFER_ELEMENTS (now lives in chunk module)
+        original_max = chunk_module._MAX_BUFFER_ELEMENTS
 
         try:
             # Run with large buffer (single chunk - no chunking)
-            runner_jax._MAX_BUFFER_ELEMENTS = 10**15  # Effectively no limit
+            chunk_module._MAX_BUFFER_ELEMENTS = 10**15  # Effectively no limit
             single_chunk_results = run_lmm_association_jax(
                 genotypes=genotypes,
                 phenotypes=phenotypes,
@@ -998,7 +998,7 @@ class TestJaxChunkingCorrectness:
             # Run with small buffer (force ~4 chunks with 200 samples x 100 SNPs)
             # Elements per SNP = 200 * 6 = 1200
             # With buffer = 30000, chunk_size = 30000 // 1200 = 25 SNPs
-            runner_jax._MAX_BUFFER_ELEMENTS = 30_000
+            chunk_module._MAX_BUFFER_ELEMENTS = 30_000
             multi_chunk_results = run_lmm_association_jax(
                 genotypes=genotypes,
                 phenotypes=phenotypes,
@@ -1009,7 +1009,7 @@ class TestJaxChunkingCorrectness:
             )
         finally:
             # Restore original value
-            runner_jax._MAX_BUFFER_ELEMENTS = original_max
+            chunk_module._MAX_BUFFER_ELEMENTS = original_max
 
         # Same number of results
         assert len(single_chunk_results) == len(multi_chunk_results)

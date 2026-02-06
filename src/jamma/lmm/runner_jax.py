@@ -94,6 +94,12 @@ from jamma.core.memory import (
 )
 from jamma.core.progress import progress_iterator
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
+from jamma.lmm.chunk import (
+    _MAX_BUFFER_ELEMENTS,  # noqa: F401 - re-export for backward compatibility
+    MAX_SAFE_CHUNK,  # noqa: F401 - re-export for backward compatibility
+    _compute_chunk_size,
+    auto_tune_chunk_size,  # noqa: F401 - re-export for backward compatibility
+)
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.likelihood import compute_null_model_mle
@@ -106,131 +112,15 @@ from jamma.lmm.likelihood_jax import (
     golden_section_optimize_lambda,
     golden_section_optimize_lambda_mle,
 )
+from jamma.lmm.results import (
+    _build_results_all,
+    _build_results_lrt,
+    _build_results_score,
+    _build_results_wald,
+    _snp_metadata,
+)
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
-
-# Maximum safe chunk size to prevent int32 overflow and excessive memory allocation
-# 50k SNPs per chunk is safe for most sample sizes while maintaining good throughput
-MAX_SAFE_CHUNK = 50_000
-
-# INT32_MAX with headroom for JAX internal indexing overhead
-# Multiple arrays contribute to buffer sizing:
-# - Uab: (n_snps, n_samples, n_index) where n_index = (n_cvt+3)*(n_cvt+2)//2
-# - Grid REML intermediate: (n_grid, n_snps) during vmap over lambdas
-# - UtG_chunk: (n_samples, n_snps)
-#
-# The bottleneck is the grid REML vmap which creates (n_grid, n_snps) intermediate
-# tensors. Total elements must stay below INT32_MAX.
-_MAX_BUFFER_ELEMENTS = 1_700_000_000  # ~1.7B elements, 80% of INT32_MAX
-
-
-def _compute_chunk_size(
-    n_samples: int, n_snps: int, n_grid: int = 50, n_cvt: int = 1
-) -> int:
-    """Compute optimal chunk size to avoid int32 buffer overflow.
-
-    JAX uses int32 for buffer indexing by default. Multiple arrays contribute:
-    1. Uab: (chunk_size, n_samples, n_index) = chunk_size * n_samples * n_index
-    2. Grid REML: (n_grid, chunk_size) intermediate = n_grid * chunk_size
-    3. UtG_chunk: (n_samples, chunk_size) = n_samples * chunk_size
-
-    n_index depends on n_cvt: n_index = (n_cvt+3)*(n_cvt+2)//2.
-    For n_cvt=1: n_index=6, for n_cvt=2: n_index=10.
-
-    The most restrictive constraint is typically Uab for large n_samples.
-
-    Args:
-        n_samples: Number of samples.
-        n_snps: Total number of SNPs.
-        n_grid: Grid points for lambda optimization (default 50).
-        n_cvt: Number of covariates (default 1).
-
-    Returns:
-        Chunk size (number of SNPs per chunk). Returns n_snps if no chunking needed.
-    """
-    if n_samples == 0:
-        return n_snps
-
-    n_index = (n_cvt + 3) * (n_cvt + 2) // 2
-
-    # Calculate elements per SNP for each array type
-    # Most restrictive constraint is typically Uab: (chunk_size, n_samples, n_index)
-    elements_per_snp = max(
-        n_samples * n_index,  # Uab: n_samples * n_index elements per SNP
-        n_grid,  # Grid REML: (n_grid, chunk_size) intermediate → n_grid per SNP
-        n_samples,  # UtG_chunk: n_samples elements per SNP
-    )
-
-    if elements_per_snp == 0:
-        return n_snps
-
-    max_snps_per_chunk = _MAX_BUFFER_ELEMENTS // elements_per_snp
-
-    if max_snps_per_chunk >= n_snps:
-        return n_snps
-
-    return max(100, max_snps_per_chunk)
-
-
-def auto_tune_chunk_size(
-    n_samples: int,
-    n_filtered: int,
-    n_grid: int = 50,
-    mem_budget_gb: float = 4.0,
-    min_chunk: int = 1000,
-    max_chunk: int = MAX_SAFE_CHUNK,
-    n_cvt: int = 1,
-) -> int:
-    """Compute optimal chunk size based on memory budget heuristic.
-
-    Uses a deterministic formula to compute chunk size that fits within
-    memory budget. No benchmarking required - fast and predictable.
-
-    Memory per SNP (float64):
-      - Uab: n_samples * n_index elements (n_index depends on n_cvt)
-      - UtG_chunk: n_samples elements
-      - Grid evaluations: n_grid elements
-      - Total: 8 * (n_samples*n_index + n_samples + n_grid) bytes
-
-    Args:
-        n_samples: Number of samples in the dataset.
-        n_filtered: Number of SNPs after filtering (upper bound for chunk).
-        n_grid: Grid points for lambda optimization (default 50).
-        mem_budget_gb: Memory budget in GB (default 4.0).
-        min_chunk: Minimum chunk size (default 1000).
-        max_chunk: Maximum chunk size cap (default MAX_SAFE_CHUNK=50000).
-            Prevents excessive memory allocation on high-memory systems.
-        n_cvt: Number of covariates (default 1). Affects Uab array size.
-
-    Returns:
-        Optimal chunk size that fits within memory budget.
-
-    Example:
-        >>> chunk = auto_tune_chunk_size(n_samples=10000, n_filtered=50000)
-        >>> results = run_lmm_association_streaming(..., chunk_size=chunk)
-    """
-    n_index = (n_cvt + 3) * (n_cvt + 2) // 2
-
-    # Memory per SNP in bytes (float64 = 8 bytes)
-    # Uab: (n_samples, n_index), UtG: (n_samples,), grid workspace: (n_grid,)
-    bytes_per_snp = 8 * (n_samples * n_index + n_samples + n_grid)
-
-    # Compute chunk size with 70% safety margin for JAX overhead
-    mem_budget_bytes = mem_budget_gb * 0.7 * 1e9
-    chunk_from_memory = int(mem_budget_bytes / bytes_per_snp)
-
-    # Apply int32 buffer limit constraint
-    buffer_limit = _compute_chunk_size(n_samples, chunk_from_memory, n_grid, n_cvt)
-
-    # Clamp to valid range INCLUDING max_chunk cap
-    chunk_size = max(min_chunk, min(buffer_limit, n_filtered, max_chunk))
-
-    logger.debug(
-        f"auto_tune_chunk_size: n_samples={n_samples}, n_filtered={n_filtered}, "
-        f"bytes_per_snp={bytes_per_snp}, chunk_size={chunk_size}, max_chunk={max_chunk}"
-    )
-
-    return chunk_size
 
 
 def _select_jax_device(use_gpu: bool) -> jax.Device:
@@ -857,197 +747,6 @@ def _compute_null_model(
         Hi_eval_null_jax = jax.device_put(Hi_eval_null, device)
 
     return logl_H0, lambda_null_mle, Hi_eval_null_jax
-
-
-def _snp_metadata(snp_info: dict, af: float, n_miss: int) -> dict:
-    """Extract common SNP metadata fields for AssocResult construction.
-
-    Args:
-        snp_info: SNP metadata dict with keys: chr, rs, pos/ps, a1/allele1, a0/allele0.
-        af: Allele frequency of counted allele (BIM A1), can be > 0.5.
-        n_miss: Missing genotype count.
-
-    Returns:
-        Dict of shared AssocResult fields.
-    """
-    return {
-        "chr": snp_info["chr"],
-        "rs": snp_info["rs"],
-        "ps": snp_info.get("pos", snp_info.get("ps", 0)),
-        "n_miss": n_miss,
-        "allele1": snp_info.get("a1", snp_info.get("allele1", "")),
-        "allele0": snp_info.get("a0", snp_info.get("allele0", "")),
-        "af": af,
-    }
-
-
-def _build_results_wald(
-    snp_indices: np.ndarray,
-    snp_stats: list[tuple[float, int]],
-    snp_info: list,
-    best_lambdas_np: np.ndarray,
-    best_logls_np: np.ndarray,
-    betas_np: np.ndarray,
-    ses_np: np.ndarray,
-    p_walds_np: np.ndarray,
-) -> list[AssocResult]:
-    """Build AssocResult objects for Wald test mode.
-
-    Args:
-        snp_indices: Indices of SNPs that passed filtering.
-        snp_stats: List of (af, n_miss) tuples for each filtered SNP.
-        snp_info: Full SNP metadata list.
-        best_lambdas_np: Optimal REML lambda values.
-        best_logls_np: Log-likelihoods at optimal lambda.
-        betas_np: Effect sizes.
-        ses_np: Standard errors.
-        p_walds_np: Wald test p-values.
-
-    Returns:
-        List of AssocResult objects.
-    """
-    results = []
-    for j, snp_idx in enumerate(snp_indices):
-        af, n_miss = snp_stats[j]
-        meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
-        results.append(
-            AssocResult(
-                **meta,
-                beta=float(betas_np[j]),
-                se=float(ses_np[j]),
-                logl_H1=float(best_logls_np[j]),
-                l_remle=float(best_lambdas_np[j]),
-                p_wald=float(p_walds_np[j]),
-            )
-        )
-    return results
-
-
-def _build_results_score(
-    snp_indices: np.ndarray,
-    snp_stats: list[tuple[float, int]],
-    snp_info: list,
-    betas_np: np.ndarray,
-    ses_np: np.ndarray,
-    p_scores_np: np.ndarray,
-) -> list[AssocResult]:
-    """Build AssocResult objects for Score test mode.
-
-    Args:
-        snp_indices: Indices of SNPs that passed filtering.
-        snp_stats: List of (af, n_miss) tuples for each filtered SNP.
-        snp_info: Full SNP metadata list.
-        betas_np: Effect sizes (informational only).
-        ses_np: Standard errors (informational only).
-        p_scores_np: Score test p-values.
-
-    Returns:
-        List of AssocResult objects with p_score set.
-    """
-    results = []
-    for j, snp_idx in enumerate(snp_indices):
-        af, n_miss = snp_stats[j]
-        meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
-        results.append(
-            AssocResult(
-                **meta,
-                beta=float(betas_np[j]),
-                se=float(ses_np[j]),
-                p_score=float(p_scores_np[j]),
-            )
-        )
-    return results
-
-
-def _build_results_lrt(
-    snp_indices: np.ndarray,
-    snp_stats: list[tuple[float, int]],
-    snp_info: list,
-    lambdas_mle_np: np.ndarray,
-    p_lrts_np: np.ndarray,
-) -> list[AssocResult]:
-    """Build AssocResult objects for LRT mode.
-
-    LRT does not compute beta/se (matching GEMMA -lmm 2 output format).
-
-    Args:
-        snp_indices: Indices of SNPs that passed filtering.
-        snp_stats: List of (af, n_miss) tuples for each filtered SNP.
-        snp_info: Full SNP metadata list.
-        lambdas_mle_np: MLE lambda values per SNP.
-        p_lrts_np: LRT p-values.
-
-    Returns:
-        List of AssocResult objects with l_mle and p_lrt set.
-    """
-    results = []
-    for j, snp_idx in enumerate(snp_indices):
-        af, n_miss = snp_stats[j]
-        meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
-        results.append(
-            AssocResult(
-                **meta,
-                beta=float("nan"),
-                se=float("nan"),
-                l_mle=float(lambdas_mle_np[j]),
-                p_lrt=float(p_lrts_np[j]),
-            )
-        )
-    return results
-
-
-def _build_results_all(
-    snp_indices: np.ndarray,
-    snp_stats: list[tuple[float, int]],
-    snp_info: list,
-    best_lambdas_np: np.ndarray,
-    best_logls_np: np.ndarray,
-    betas_np: np.ndarray,
-    ses_np: np.ndarray,
-    p_walds_np: np.ndarray,
-    lambdas_mle_np: np.ndarray,
-    p_lrts_np: np.ndarray,
-    p_scores_np: np.ndarray,
-) -> list[AssocResult]:
-    """Build AssocResult objects for All-tests mode (Wald + LRT + Score).
-
-    Uses Wald beta/se (not Score beta/se) and REML logl_H1 (not MLE),
-    matching the NumPy runner output at __init__.py:331-347.
-
-    Args:
-        snp_indices: Indices of SNPs that passed filtering.
-        snp_stats: List of (af, n_miss) tuples for each filtered SNP.
-        snp_info: Full SNP metadata list.
-        best_lambdas_np: Optimal REML lambda values (Wald).
-        best_logls_np: REML log-likelihoods at optimal lambda.
-        betas_np: Effect sizes from Wald test.
-        ses_np: Standard errors from Wald test.
-        p_walds_np: Wald test p-values.
-        lambdas_mle_np: MLE lambda values per SNP (LRT).
-        p_lrts_np: LRT p-values.
-        p_scores_np: Score test p-values.
-
-    Returns:
-        List of AssocResult objects with all fields populated.
-    """
-    results = []
-    for j, snp_idx in enumerate(snp_indices):
-        af, n_miss = snp_stats[j]
-        meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
-        results.append(
-            AssocResult(
-                **meta,
-                beta=float(betas_np[j]),
-                se=float(ses_np[j]),
-                logl_H1=float(best_logls_np[j]),
-                l_remle=float(best_lambdas_np[j]),
-                l_mle=float(lambdas_mle_np[j]),
-                p_wald=float(p_walds_np[j]),
-                p_lrt=float(p_lrts_np[j]),
-                p_score=float(p_scores_np[j]),
-            )
-        )
-    return results
 
 
 def _grid_optimize_lambda_batched(

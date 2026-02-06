@@ -129,9 +129,8 @@ GEMMA algorithm reimplementation: kinship → eigendecomp → REML → test stat
 | 3d | `get_ab_index()` | GEMMA GetabIndex — 1-based upper triangular | [likelihood.py:39](../src/jamma/lmm/likelihood.py#L39) |
 | 3d | `compute_null_model_lambda()` | Null model REML for Score test | [likelihood.py:550](../src/jamma/lmm/likelihood.py#L550) |
 | 3d | `compute_null_model_mle()` | Null model MLE for LRT | [likelihood.py:711](../src/jamma/lmm/likelihood.py#L711) |
-| 3e | `brent_minimize()` | Brent's method (golden section + parabolic) | [optimize.py:24](../src/jamma/lmm/optimize.py#L24) |
-| 3e | `optimize_lambda_for_snp()` | REML optimization per SNP (Wald) | [optimize.py:184](../src/jamma/lmm/optimize.py#L184) |
-| 3e | `optimize_lambda_mle_for_snp()` | MLE optimization per SNP (LRT) | [optimize.py:214](../src/jamma/lmm/optimize.py#L214) |
+| 3e | `golden_section_optimize_lambda()` | REML optimization per SNP (Wald) | [likelihood_jax.py](../src/jamma/lmm/likelihood_jax.py) |
+| 3e | `golden_section_optimize_lambda_mle()` | MLE optimization per SNP (LRT) | [likelihood_jax.py](../src/jamma/lmm/likelihood_jax.py) |
 | 3f | `AssocResult` | Per-SNP result dataclass (all test fields) | [stats.py:40](../src/jamma/lmm/stats.py#L40) |
 | 3f | `calc_wald_test()` | β, SE, p_wald from Pab matrix | [stats.py:98](../src/jamma/lmm/stats.py#L98) |
 | 3f | `calc_score_test()` | p_score using null model lambda | [stats.py:232](../src/jamma/lmm/stats.py#L232) |
@@ -307,7 +306,7 @@ flowchart TD
 | Kinship compute | [compute.py:118](../src/jamma/kinship/compute.py#L118) |
 | Eigendecomposition | [eigen.py:93](../src/jamma/lmm/eigen.py#L93) |
 | REML likelihood | [likelihood.py:384](../src/jamma/lmm/likelihood.py#L384) |
-| Lambda optimization | [optimize.py:24](../src/jamma/lmm/optimize.py#L24) |
+| Lambda optimization | [likelihood_jax.py](../src/jamma/lmm/likelihood_jax.py) |
 | Wald/Score/LRT tests | [stats.py:98](../src/jamma/lmm/stats.py#L98) |
 | JAX batch runner | [runner_jax.py:246](../src/jamma/lmm/runner_jax.py#L246) |
 | Streaming runner | [runner_jax.py:668](../src/jamma/lmm/runner_jax.py#L668) |

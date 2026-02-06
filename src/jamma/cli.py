@@ -144,15 +144,15 @@ def gk_command(
 
     typer.echo(f"Loaded {plink_data.n_samples} samples, {plink_data.n_snps} SNPs")
 
-    # Warn if mode 2 requested (standardized) - not yet implemented
+    # Mode 2 (standardized) is not yet implemented - fail loudly
     if mode == 2:
-        typer.echo(
-            "Warning: Mode 2 (standardized) not yet implemented, "
-            "using mode 1 (centered)"
+        raise NotImplementedError(
+            "Kinship mode 2 (standardized) is not yet implemented. "
+            "Use -gk 1 for centered relatedness matrix."
         )
 
     # Compute kinship matrix
-    typer.echo(f"Computing centered kinship matrix (mode {mode})...")
+    typer.echo("Computing centered kinship matrix...")
     if maf > 0.0 or miss < 1.0:
         typer.echo(f"Filtering: MAF >= {maf}, missing rate <= {miss}")
     kinship_start = time.time()

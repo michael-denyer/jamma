@@ -141,6 +141,18 @@ def test_cli_lmm_mode_2_accepted():
     assert "kinship matrix file not found" in result.output.lower()
 
 
+def test_cli_gk_mode_2_not_implemented(tmp_path: Path):
+    """Test that -gk 2 raises NotImplementedError instead of silently falling back."""
+    outdir = tmp_path / "output"
+    result = runner.invoke(
+        app, ["-outdir", str(outdir), "gk", "-bfile", str(EXAMPLE_BFILE), "-gk", "2"]
+    )
+    assert result.exit_code == 1
+    assert isinstance(result.exception, NotImplementedError)
+    assert "mode 2" in str(result.exception).lower()
+    assert "not yet implemented" in str(result.exception).lower()
+
+
 def test_cli_gk_maf_miss_flags(tmp_path: Path):
     """Test that gk command accepts -maf and -miss flags."""
     outdir = tmp_path / "output"

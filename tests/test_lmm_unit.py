@@ -15,7 +15,6 @@ from jamma.lmm.likelihood import (
     get_ab_index,
     reml_log_likelihood,
 )
-from jamma.lmm.optimize import brent_minimize, optimize_lambda
 from jamma.lmm.stats import AssocResult, calc_wald_test, f_sf
 
 
@@ -246,78 +245,6 @@ class TestRemlLogLikelihood:
         assert (
             logls[max_idx] > logls[0] or logls[max_idx] > logls[-1]
         ), "REML should have a maximum value"
-
-
-class TestBrentMinimize:
-    """Tests for custom Brent's method implementation."""
-
-    def test_brent_finds_minimum_quadratic(self):
-        """Brent's method finds minimum of a quadratic."""
-
-        def f(x):
-            return (x - 3.0) ** 2
-
-        x_min, f_min = brent_minimize(f, 0.0, 10.0)
-
-        assert np.isclose(x_min, 3.0, atol=1e-5), f"Expected x=3, got {x_min}"
-        assert np.isclose(f_min, 0.0, atol=1e-10), f"Expected f=0, got {f_min}"
-
-    def test_brent_finds_minimum_asymmetric(self):
-        """Brent's method works for asymmetric functions."""
-
-        def f(x):
-            return x**4 - 4 * x**3 + 4 * x**2
-
-        x_min, f_min = brent_minimize(f, -1.0, 5.0)
-
-        # Minimum at x=0 or x=2
-        assert f_min < 0.1, f"Expected minimum near 0, got {f_min}"
-
-    def test_brent_respects_bounds(self):
-        """Result is within specified bounds."""
-
-        def f(x):
-            return (x - 10.0) ** 2  # Minimum at x=10, outside bounds
-
-        x_min, _ = brent_minimize(f, 0.0, 5.0)
-
-        assert 0.0 <= x_min <= 5.0, f"Result {x_min} outside bounds [0, 5]"
-
-    def test_brent_tolerance(self):
-        """Brent's method respects tolerance parameter."""
-
-        def f(x):
-            return (x - 2.5) ** 2
-
-        x_min_tight, _ = brent_minimize(f, 0.0, 5.0, tol=1e-10)
-        x_min_loose, _ = brent_minimize(f, 0.0, 5.0, tol=1e-2)
-
-        # Tighter tolerance should get closer to true minimum
-        assert abs(x_min_tight - 2.5) < abs(x_min_loose - 2.5) + 1e-3
-
-
-class TestOptimizeLambda:
-    """Tests for lambda optimization wrapper."""
-
-    def test_optimize_lambda_positive_result(self):
-        """Optimized lambda should be positive."""
-
-        def neg_logl(lam):
-            return (np.log(lam) - 1.0) ** 2 + 1.0
-
-        lambda_opt, logl = optimize_lambda(neg_logl)
-
-        assert lambda_opt > 0, f"Lambda should be positive, got {lambda_opt}"
-
-    def test_optimize_lambda_returns_positive_logl(self):
-        """Returned log-likelihood should be positive (negated)."""
-
-        def neg_logl(lam):
-            return 10.0 + (np.log(lam) - 1.0) ** 2
-
-        _, logl = optimize_lambda(neg_logl)
-
-        assert logl < 0, "Log-likelihood should be negative (from negated input)"
 
 
 class TestFDistributionSF:

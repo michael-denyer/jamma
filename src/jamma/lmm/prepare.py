@@ -1,8 +1,8 @@
 """Shared setup utilities for LMM association runners.
 
 Provides device selection, covariate matrix construction,
-eigendecomposition handling, and null model computation used
-by both the batch and streaming runners.
+eigendecomposition handling, null model computation, and
+batch lambda optimization used by both the batch and streaming runners.
 """
 
 import jax
@@ -12,6 +12,7 @@ from loguru import logger
 
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood import compute_null_model_mle
+from jamma.lmm.likelihood_jax import golden_section_optimize_lambda
 from jamma.utils.logging import log_rss_memory
 
 
@@ -139,3 +140,39 @@ def _compute_null_model(
         Hi_eval_null_jax = jax.device_put(Hi_eval_null, device)
 
     return logl_H0, lambda_null_mle, Hi_eval_null_jax
+
+
+def _grid_optimize_lambda_batched(
+    n_cvt: int,
+    eigenvalues: jnp.ndarray,
+    Uab_batch: jnp.ndarray,
+    Iab_batch: jnp.ndarray,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Batch lambda optimization using grid search + golden section refinement.
+
+    Delegates to golden_section_optimize_lambda with precomputed Iab and at
+    least 20 iterations to achieve ~1e-5 relative tolerance.
+
+    Args:
+        n_cvt: Number of covariates.
+        eigenvalues: Eigenvalues (n_samples,)
+        Uab_batch: Uab matrices (n_snps, n_samples, n_index)
+        Iab_batch: Precomputed identity-weighted Pab (n_snps, n_cvt+2, n_index)
+        l_min, l_max: Lambda bounds
+        n_grid: Coarse grid points
+        n_refine: Golden section iterations
+    """
+    return golden_section_optimize_lambda(
+        n_cvt,
+        eigenvalues,
+        Uab_batch,
+        Iab_batch,
+        l_min=l_min,
+        l_max=l_max,
+        n_grid=n_grid,
+        n_iter=max(n_refine, 20),
+    )

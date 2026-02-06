@@ -1,9 +1,12 @@
 """Result building functions for LMM association tests.
 
 Constructs AssocResult objects from computed statistics for each
-test mode (Wald, Score, LRT, All).
+test mode (Wald, Score, LRT, All). Used by both batch and streaming runners.
 """
 
+from collections.abc import Generator
+
+import jax.numpy as jnp
 import numpy as np
 
 from jamma.lmm.stats import AssocResult
@@ -198,3 +201,86 @@ def _build_results_all(
             )
         )
     return results
+
+
+def _concat_jax_accumulators(
+    lmm_mode: int,
+    accumulators: dict[str, list],
+) -> dict[str, np.ndarray]:
+    """Concatenate JAX accumulator lists and transfer to host numpy arrays.
+
+    Args:
+        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
+        accumulators: Dict mapping stat names to lists of JAX arrays.
+
+    Returns:
+        Dict mapping stat names to concatenated numpy arrays.
+    """
+    return {k: np.asarray(jnp.concatenate(v)) for k, v in accumulators.items()}
+
+
+def _yield_chunk_results(
+    lmm_mode: int,
+    chunk_filtered_local_idx: list[int],
+    snp_indices: np.ndarray,
+    snp_stats: list[tuple[float, int]],
+    snp_info: list,
+    arrays: dict[str, np.ndarray],
+) -> Generator[AssocResult, None, None]:
+    """Yield AssocResult objects for a streaming file chunk.
+
+    Builds one result per filtered SNP in the chunk from the concatenated
+    numpy arrays returned by _concat_jax_accumulators.
+
+    Args:
+        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
+        chunk_filtered_local_idx: Indices within the filtered SNP arrays.
+        snp_indices: Full array of filtered SNP indices.
+        snp_stats: List of (af, n_miss) tuples.
+        snp_info: Full SNP metadata list.
+        arrays: Dict of numpy arrays from _concat_jax_accumulators.
+
+    Yields:
+        AssocResult for each SNP in the chunk.
+    """
+    for j, local_idx in enumerate(chunk_filtered_local_idx):
+        snp_idx = snp_indices[local_idx]
+        af, n_miss = snp_stats[local_idx]
+        meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
+
+        if lmm_mode == 1:
+            yield AssocResult(
+                **meta,
+                beta=float(arrays["betas"][j]),
+                se=float(arrays["ses"][j]),
+                logl_H1=float(arrays["logls"][j]),
+                l_remle=float(arrays["lambdas"][j]),
+                p_wald=float(arrays["pwalds"][j]),
+            )
+        elif lmm_mode == 3:
+            yield AssocResult(
+                **meta,
+                beta=float(arrays["betas"][j]),
+                se=float(arrays["ses"][j]),
+                p_score=float(arrays["p_scores"][j]),
+            )
+        elif lmm_mode == 2:
+            yield AssocResult(
+                **meta,
+                beta=float("nan"),
+                se=float("nan"),
+                l_mle=float(arrays["lambdas_mle"][j]),
+                p_lrt=float(arrays["p_lrts"][j]),
+            )
+        elif lmm_mode == 4:
+            yield AssocResult(
+                **meta,
+                beta=float(arrays["betas"][j]),
+                se=float(arrays["ses"][j]),
+                logl_H1=float(arrays["logls"][j]),
+                l_remle=float(arrays["lambdas"][j]),
+                l_mle=float(arrays["lambdas_mle"][j]),
+                p_wald=float(arrays["pwalds"][j]),
+                p_lrt=float(arrays["p_lrts"][j]),
+                p_score=float(arrays["p_scores"][j]),
+            )

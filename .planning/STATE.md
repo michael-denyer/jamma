@@ -5,15 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-06)
 
 **Core value:** Exact GEMMA statistical results at 200k sample scale
-**Current focus:** v1.3 Tech Debt Cleanup — Phase 17 complete, ready to plan Phase 18
+**Current focus:** Planning next milestone (v2.0)
 
 ## Current Position
 
-Milestone: v1.3
-Phase: 18 of 18 (Correctness & Performance)
-Plan: 2 plans (18-01, 18-02) in 2 waves
-Status: Ready to execute
-Last activity: 2026-02-06 — Phase 18 planned (2 plans: CORR-01+PERF-01, PERF-02)
+Milestone: v1.3 complete
+Phase: All v1.x phases complete (1-18)
+Status: Ready for next milestone
+Last activity: 2026-02-06 — v1.3 milestone archived
+
+Progress: All v1.x milestones shipped (v1.0, v1.1, v1.2, v1.3)
 
 ## Performance Metrics
 
@@ -35,30 +36,20 @@ Last activity: 2026-02-06 — Phase 18 planned (2 plans: CORR-01+PERF-01, PERF-0
 - Average duration: ~6min
 - Total execution time: ~1hr 48min
 
-*Updated after each plan completion*
+**v1.3 Velocity:**
+
+- Total plans completed: 7
+- Average duration: ~8min
+- Total execution time: ~56min
 
 ## Accumulated Context
 
 ### Decisions
 
-Decisions are logged in PROJECT.md Key Decisions table.
-Key decisions from v1.2 relevant to v1.3:
-
-- [15-05]: NumPy runner removed, JAX streaming is sole execution path
-- [15-05]: check_memory_before_run() uses estimate_streaming_memory
-- [14-01]: JAX path passes raw (unfiltered) phenotypes/kinship; runner handles filtering
-- [11-01]: build_index_table runs at Python level, not inside JIT
-- [13-01]: Mode 4 execution order is Score -> MLE -> REML -> Wald
-- [16-01]: Golden section matches JAX batch optimizer algorithm (grid + refinement), not Brent's method
-- [16-01]: Pure Python math.log/math.exp for self-contained optimizer
-- [16-02]: No replacement tests for deleted Brent/OptimizeLambda -- golden section tested via null model tests
-- [17-01]: Drop underscore prefix on progress_iterator (now public utility in core/)
-- [17-01]: Place snp_filter.py in core/ not a new snp/ package
-- [17-02]: Re-export moved names from runner_jax.py with noqa: F401 for backward compatibility
-- [17-02]: Monkeypatch test targets chunk module directly (re-exports don't propagate mutations)
-- [17-03]: Place _grid_optimize_lambda_batched in prepare.py (shared by both runners)
-- [17-03]: Use dict-based accumulators in streaming runner for compact mode dispatch
-- [17-03]: likelihood.py (607) and likelihood_jax.py (883) left as-is (out of scope)
+All milestone decisions archived in:
+- .planning/v1-MILESTONE-ARCHIVE.md (v1.0)
+- .planning/milestones/v1.3-ROADMAP.md (v1.3)
+- .planning/PROJECT.md Key Decisions table (cumulative)
 
 ### Pending Todos
 
@@ -71,24 +62,19 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-06
-Stopped at: Phase 18 planned (2 plans, plan check passed)
+Stopped at: v1.3 milestone completed and archived
 Resume file: None
-Next: `/gsd:execute-phase 18` (Correctness & Performance)
+Next: `/gsd:new-milestone` to start v2.0
 
 ---
 
-## v1.0 Summary
+## Milestone History
 
-**Shipped:** 2026-02-01
-**Phases:** 6 (21 plans)
-**Requirements:** 14/14 complete
-**Tests:** 243 passing
+| Version | Shipped | Phases | Plans |
+|---------|---------|--------|-------|
+| v1.0 MVP | 2026-02-01 | 1-4.2 | 21 |
+| v1.1 Covariates | 2026-02-05 | 5-10 | 39 |
+| v1.2 JAX Unification | 2026-02-05 | 11-15 | 18 |
+| v1.3 Tech Debt | 2026-02-06 | 16-18 | 7 |
 
-See: .planning/v1-MILESTONE-ARCHIVE.md
-
-## v1.2 Summary
-
-**Shipped:** 2026-02-05
-**Phases:** 11-15 (18 plans)
-**Requirements:** 12/12 complete
-**Tests:** 400+ passing
+**Cumulative:** 85 plans across 18 phases in 4 milestones

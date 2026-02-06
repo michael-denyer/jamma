@@ -5,7 +5,7 @@
 - v1.0 MVP - Phases 1-4.2 (shipped 2026-02-01)
 - v1.1 Covariates & Extended Tests - Phases 5-10 (shipped 2026-02-05)
 - v1.2 JAX Runner Unification - Phases 11-15 (shipped 2026-02-05)
-- v1.3 Tech Debt Cleanup - Phases 16-18 (in progress)
+- v1.3 Tech Debt Cleanup - Phases 16-18 (shipped 2026-02-06)
 - v2.0 Extended Features - Phases 19+ (planned)
 
 ## Overview
@@ -349,98 +349,30 @@ Plans:
 
 </details>
 
-### v1.3 Tech Debt Cleanup (Phases 16-18)
+<details>
+<summary>v1.3 Tech Debt Cleanup (Phases 16-18) - SHIPPED 2026-02-06</summary>
 
-**Milestone Goal:** Eliminate dead code from the NumPy-to-JAX migration, split the oversized runner module into focused units, and add targeted correctness and performance improvements -- all without changing statistical output.
+- [x] Phase 16: Dead Code Removal (2/2 plans) — completed 2026-02-06
+- [x] Phase 17: Module Restructuring (3/3 plans) — completed 2026-02-06
+- [x] Phase 18: Correctness & Performance (2/2 plans) — completed 2026-02-06
 
-- [x] **Phase 16: Dead Code Removal** - Migrate null model to JAX, delete optimize.py, strip dead numba code from likelihood.py
-- [x] **Phase 17: Module Restructuring** - Split runner_jax.py into focused modules, unify duplicated SNP filtering
-- [ ] **Phase 18: Correctness & Performance** - Fix mode 2 kinship error, cache eigenvector transpose, pre-allocate result arrays
+See: .planning/milestones/v1.3-ROADMAP.md for full details.
 
-#### Phase 16: Dead Code Removal
-**Goal**: Codebase contains only live code paths -- no dead numba functions, no orphaned optimizer, no unused dependencies
-**Depends on**: Phase 15
-**Requirements**: DEAD-01, DEAD-02, DEAD-03, DEAD-04
-**Success Criteria** (what must be TRUE):
-  1. `compute_null_model_mle` and `compute_null_model_lambda` call JAX likelihood functions directly (no route through optimize.py)
-  2. `optimize.py` is deleted from the codebase and no imports reference it
-  3. `likelihood.py` contains only the four shared utilities (`get_ab_index`, `compute_Uab`, `calc_pab`, `calc_iab`) -- all dead numba-optimized functions removed
-  4. The `[cpu]` extra and numba dependency are removed from `pyproject.toml`
-  5. All existing tests pass with identical statistical output (no numerical changes)
-**Plans**: 2 plans
-
-Plans:
-- [x] 16-01-PLAN.md — Migrate null model functions to golden section optimization
-- [x] 16-02-PLAN.md — Delete optimize.py, strip numba, update tests and docs
-
-#### Phase 17: Module Restructuring
-**Goal**: No module exceeds 500 lines, and duplicated logic lives in exactly one place
-**Depends on**: Phase 16
-**Requirements**: MOD-01, MOD-02
-**Success Criteria** (what must be TRUE):
-  1. `runner_jax.py` is split into focused modules (streaming runner, chunk management, result building) each under 500 lines
-  2. SNP filtering logic exists in a single shared module used by both kinship computation and the LMM runner
-  3. All imports across the codebase resolve correctly after the restructuring
-  4. All existing tests pass with identical statistical output (no numerical changes)
-**Plans**: 3 plans
-
-Plans:
-- [x] 17-01-PLAN.md — Extract shared utilities (progress iterator, SNP filter) to core/
-- [x] 17-02-PLAN.md — Extract chunk, results, and setup modules from runner_jax.py
-- [x] 17-03-PLAN.md — Split streaming runner and update all imports
-
-#### Phase 18: Correctness & Performance
-**Goal**: Known correctness gap (mode 2 kinship) is closed, and two measurable inefficiencies in the runner are eliminated
-**Depends on**: Phase 17
-**Requirements**: CORR-01, PERF-01, PERF-02
-**Success Criteria** (what must be TRUE):
-  1. Running `jamma kinship -gk 2` raises `NotImplementedError` with a clear message (no silent fallback to mode 1)
-  2. `U.T` (eigenvector transpose) is computed once at the start of an LMM run and reused across all chunks (verifiable by inspecting the code path or adding a test that confirms no redundant transpose)
-  3. Result arrays are pre-allocated to full SNP count at the start of the run, with results written by index rather than appended to a growing list
-  4. All existing tests pass with identical statistical output (no numerical changes)
-**Plans**: 2 plans
-
-Plans:
-- [ ] 18-01-PLAN.md — CORR-01 kinship mode 2 guard + PERF-01 cache contiguous U.T in both runners
-- [ ] 18-02-PLAN.md — PERF-02 pre-allocate result arrays in batch runner
+</details>
 
 ## Progress
 
-**Execution Order:**
-Phases execute in numeric order: 16 -> 17 -> 18
-
-| Phase | Milestone | Plans Complete | Status | Completed |
-|-------|-----------|----------------|--------|-----------|
-| 1. Foundation | v1.0 | 6/6 | Complete | 2026-01-31 |
-| 2. Kinship | v1.0 | 4/4 | Complete | 2026-01-31 |
-| 3. LMM Association | v1.0 | 5/5 | Complete | 2026-01-31 |
-| 4. Scale | v1.0 | 0/3 | Superseded | - |
-| 4.1 Streaming I/O | v1.0 | 3/3 | Complete | 2026-02-01 |
-| 4.2 JAX Runtime Opt | v1.0 | 3/3 | Complete | 2026-02-01 |
-| 5. Covariate Infrastructure | v1.1 | 4/4 | Complete | 2026-02-02 |
-| 5.1 Memory Reliability | v1.1 | 4/4 | Complete | 2026-02-02 |
-| 5.2 LMM Memory Completeness | v1.1 | 6/6 | Complete | 2026-02-02 |
-| 5.3 Allele Semantics | v1.1 | 2/2 | Complete | 2026-02-02 |
-| 6. Score Test | v1.1 | 3/3 | Complete | 2026-02-02 |
-| 6.1 Rust Eigendecomp | v1.1 | 4/4 | Complete | 2026-02-03 |
-| 6.2 Dual Backend Cleanup | v1.1 | 4/4 | Complete | 2026-02-03 |
-| 7. Likelihood Ratio Test | v1.1 | 3/3 | Complete | 2026-02-03 |
-| 7.1 Null Model Discrepancy | v1.1 | 2/2 | Complete | 2026-02-03 |
-| 8. All-Tests & Validation | v1.1 | 3/3 | Complete | 2026-02-05 |
-| 10. Remove Rust/faer Backend | v1.1 | 2/2 | Complete | 2026-02-05 |
-| 9. GEMMA Equivalence Framework | v1.1 | 0/TBD | Not started | - |
-| 11. JAX Covariate Generalization | v1.2 | 4/4 | Complete | 2026-02-05 |
-| 12. JAX Score & LRT Tests | v1.2 | 3/3 | Complete | 2026-02-05 |
-| 13. JAX All-Tests Mode | v1.2 | 2/2 | Complete | 2026-02-05 |
-| 14. CLI JAX Integration | v1.2 | 2/2 | Complete | 2026-02-05 |
-| 15. JAX-GEMMA Validation & NumPy Removal | v1.2 | 5/5 | Complete | 2026-02-05 |
-| 16. Dead Code Removal | v1.3 | 2/2 | Complete | 2026-02-06 |
-| 17. Module Restructuring | v1.3 | 3/3 | Complete | 2026-02-06 |
-| 18. Correctness & Performance | v1.3 | 0/2 | Not started | - |
+| Milestone | Phases | Plans | Status | Shipped |
+|-----------|--------|-------|--------|---------|
+| v1.0 MVP | 1-4.2 | 21 | Complete | 2026-02-01 |
+| v1.1 Covariates & Extended Tests | 5-10 | 39 | Complete | 2026-02-05 |
+| v1.2 JAX Runner Unification | 11-15 | 18 | Complete | 2026-02-05 |
+| v1.3 Tech Debt Cleanup | 16-18 | 7 | Complete | 2026-02-06 |
+| v2.0 Extended Features | 19+ | TBD | Planned | - |
 
 ---
 *Roadmap created: 2026-01-31*
 *v1.0 shipped: 2026-02-01*
 *v1.1 shipped: 2026-02-05*
 *v1.2 shipped: 2026-02-05*
-*v1.3 roadmap created: 2026-02-06*
+*v1.3 shipped: 2026-02-06*

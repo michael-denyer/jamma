@@ -395,7 +395,7 @@ pass/fail against calibrated tolerances.
 | `CalcPab` | `calc_pab` | lmm/likelihood.py:159 |
 | `LogRL_f` | `reml_log_likelihood` | lmm/likelihood.py:384 |
 | `LogL_f` | `mle_log_likelihood` | lmm/likelihood.py:652 |
-| `CalcLambda` (Brent) | `optimize_lambda` | lmm/optimize.py:141 |
+| `CalcLambda` (golden section) | `golden_section_optimize_lambda` | lmm/likelihood_jax.py |
 | `CalcRLWald` | `calc_wald_test` | lmm/stats.py:98 |
 | `CalcRLScore` | `calc_score_test` | lmm/stats.py:232 |
 | `gsl_cdf_fdist_Q` | `f_sf` (via `betainc`) | lmm/stats.py:67 |

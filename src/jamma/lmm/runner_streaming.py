@@ -513,21 +513,24 @@ def run_lmm_association_streaming(
             log_rss_memory("lmm_streaming", "after_association")
 
             elapsed = time.perf_counter() - start_time
-            logger.info("## Timing breakdown:")
-            logger.info(f"##   I/O read (pass 1):   {t_io_end - t_io_start:.2f}s")
-            logger.info(f"##   SNP statistics:      {t_snp_end - t_snp_start:.2f}s")
-            logger.info(f"##   Eigendecomp+setup:   {t_eigen_end - t_eigen_start:.2f}s")
-            logger.info(f"##   UT@G rotation:       {t_rotation_total:.2f}s")
-            logger.info(f"##   JAX compute:         {t_jax_compute_total:.2f}s")
-            logger.info(f"##   Result write:        {t_result_write_total:.2f}s")
+            t_io = t_io_end - t_io_start
+            t_snp = t_snp_end - t_snp_start
+            t_eigen = t_eigen_end - t_eigen_start
             accounted = (
-                (t_io_end - t_io_start)
-                + (t_snp_end - t_snp_start)
-                + (t_eigen_end - t_eigen_start)
+                t_io
+                + t_snp
+                + t_eigen
                 + t_rotation_total
                 + t_jax_compute_total
                 + t_result_write_total
             )
+            logger.info("## Timing breakdown:")
+            logger.info(f"##   I/O read (pass 1):   {t_io:.2f}s")
+            logger.info(f"##   SNP statistics:      {t_snp:.2f}s")
+            logger.info(f"##   Eigendecomp+setup:   {t_eigen:.2f}s")
+            logger.info(f"##   UT@G rotation:       {t_rotation_total:.2f}s")
+            logger.info(f"##   JAX compute:         {t_jax_compute_total:.2f}s")
+            logger.info(f"##   Result write:        {t_result_write_total:.2f}s")
             logger.info(f"##   Accounted:           {accounted:.2f}s")
             logger.info(f"##   Total:               {elapsed:.2f}s")
 

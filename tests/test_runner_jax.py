@@ -878,7 +878,7 @@ def test_timing_breakdown_logged(sample_plink_data):
     # Verify timing breakdown header appears
     assert "Timing breakdown" in log_output, "Expected 'Timing breakdown' in log output"
 
-    # Verify all 6 phase labels appear with numeric seconds values
+    # Verify all 6 phase labels plus summary lines appear with numeric seconds
     expected_labels = [
         "I/O read (pass 1):",
         "SNP statistics:",
@@ -886,17 +886,13 @@ def test_timing_breakdown_logged(sample_plink_data):
         "UT@G rotation:",
         "JAX compute:",
         "Result write:",
+        "Accounted:",
+        "Total:",
     ]
+    lines = log_output.splitlines()
     for label in expected_labels:
-        assert label in log_output, f"Expected '{label}' in log output"
-        # Find the line and verify it has a numeric seconds value
-        for line in log_output.splitlines():
-            if label in line:
-                assert re.search(
-                    r"\d+\.\d+s", line
-                ), f"Expected numeric seconds value in line: {line}"
-                break
-
-    # Verify Accounted and Total lines
-    assert "Accounted:" in log_output, "Expected 'Accounted:' in log output"
-    assert "Total:" in log_output, "Expected 'Total:' in log output"
+        matching_line = next((line for line in lines if label in line), None)
+        assert matching_line is not None, f"Expected '{label}' in log output"
+        assert re.search(
+            r"\d+\.\d+s", matching_line
+        ), f"Expected numeric seconds value in line: {matching_line}"

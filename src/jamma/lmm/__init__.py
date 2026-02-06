@@ -8,7 +8,6 @@ Key components:
 - eigendecompose_kinship: Eigendecomposition with GEMMA-compatible thresholding
 - reml_log_likelihood: REML log-likelihood for variance component estimation
 - mle_log_likelihood: MLE log-likelihood for LRT
-- optimize_lambda: Brent's method optimization for variance ratio
 - calc_wald_test: Wald test statistics (beta, SE, p-value)
 - calc_lrt_test: Likelihood ratio test p-value
 - run_lmm_association_jax: JAX-optimized batch processing

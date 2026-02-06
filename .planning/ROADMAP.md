@@ -330,7 +330,7 @@ See: .planning/milestones/v1.3-ROADMAP.md for full details.
 
 **Key insight:** Two operations dominate: eigendecomp (~40% FLOPS) and UT@G rotation (~60% FLOPS). Everything else is <1%. A confirmed thread-pinning bug may be forcing single-threaded MKL execution, meaning the fix could deliver 8-32x speedup -- or the bug may be inactive on Databricks, capping gains at ~7%. Phase 19 resolves this unknown before committing to optimization scope.
 
-- [ ] **Phase 19: Measure and Diagnose** - Instrument profiling, get baseline timings, determine actual MKL thread state
+- [x] **Phase 19: Measure and Diagnose** - Instrument profiling, get baseline timings, determine actual MKL thread state (completed 2026-02-06)
 - [ ] **Phase 20: Thread Configuration Fix** - Fix MKL thread pinning, benchmark optimal thread count
 - [ ] **Phase 21: Scipy Eigendecomp Switch** - Explicit LAPACK driver, memory optimization, adaptive driver selection
 - [ ] **Phase 22: Validation and Micro-Optimization** - Post-optimization profiling, equivalence verification, documentation
@@ -346,11 +346,11 @@ See: .planning/milestones/v1.3-ROADMAP.md for full details.
   2. Actual MKL thread count after JAMMA import on Databricks is known and documented (threadpool_info output)
   3. Which LAPACK driver numpy.linalg.eigh invokes on the target VM is confirmed (dsyevd vs dsyevr via MKL_VERBOSE=1)
   4. Baseline wall-clock numbers at 90k exist for A/B comparison with subsequent phases
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 19-01: Add per-phase timing instrumentation at 6 missing measurement points
-- [ ] 19-02: Databricks diagnostic notebook (thread count, LAPACK driver, baseline timing)
+- [x] 19-01-PLAN.md — Add per-phase timing instrumentation at 6 measurement points in runner_streaming.py
+- [x] 19-02-PLAN.md — Databricks diagnostic notebook (thread count, LAPACK driver, baseline 90k timing)
 
 ### Phase 20: Thread Configuration Fix
 **Goal**: MKL BLAS operations (eigendecomp and UT@G rotation) run multi-threaded, while JAX phases remain pinned to 1 thread
@@ -414,7 +414,7 @@ Phases execute in numeric order: 19 -> 20 -> 21 -> 22
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 19. Measure and Diagnose | 0/2 | Not started | - |
+| 19. Measure and Diagnose | 2/2 | Complete | 2026-02-06 |
 | 20. Thread Configuration Fix | 0/2 | Not started | - |
 | 21. Scipy Eigendecomp Switch | 0/2 | Not started | - |
 | 22. Validation and Micro-Optimization | 0/2 | Not started | - |

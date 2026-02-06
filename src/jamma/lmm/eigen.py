@@ -123,7 +123,7 @@ def eigendecompose_kinship(
     if K.ndim != 2 or K.shape[0] != K.shape[1]:
         raise ValueError(f"Kinship matrix must be square, got shape {K.shape}")
 
-    logger.info(f"## Eigendecomposing kinship matrix ({n_samples:,} x {n_samples:,})")
+    logger.info(f"Eigendecomposing kinship matrix ({n_samples:,} x {n_samples:,})")
     logger.debug(
         f"Matrix elements: {n_elements:,}, memory: ~{n_elements * 8 / 1e9:.1f} GB"
     )

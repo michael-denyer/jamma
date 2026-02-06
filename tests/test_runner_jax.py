@@ -6,12 +6,8 @@ import numpy as np
 import pytest
 
 from jamma.kinship import compute_centered_kinship
-from jamma.lmm.runner_jax import (
-    MAX_SAFE_CHUNK,
-    _compute_chunk_size,
-    auto_tune_chunk_size,
-    run_lmm_association_jax,
-)
+from jamma.lmm.chunk import MAX_SAFE_CHUNK, _compute_chunk_size, auto_tune_chunk_size
+from jamma.lmm.runner_jax import run_lmm_association_jax
 from jamma.validation import compare_assoc_results, load_gemma_assoc
 
 # GEMMA covariate fixture paths (Score and LRT with covariates)

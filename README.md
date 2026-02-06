@@ -49,7 +49,7 @@ Output files match GEMMA format exactly:
 ```python
 from jamma.io import load_plink_binary
 from jamma.kinship import compute_centered_kinship
-from jamma.lmm import run_lmm_association, eigendecompose_kinship
+from jamma.lmm import run_lmm_association_jax, eigendecompose_kinship
 
 # Load PLINK data
 data = load_plink_binary("data/my_study")
@@ -61,7 +61,7 @@ kinship = compute_centered_kinship(data.genotypes)
 eigenvalues, eigenvectors = eigendecompose_kinship(kinship)
 
 # Run association
-results = run_lmm_association(
+results = run_lmm_association_jax(
     genotypes=data.genotypes,
     phenotypes=phenotypes,
     kinship=kinship,

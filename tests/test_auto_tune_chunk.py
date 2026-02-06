@@ -4,7 +4,7 @@ Verifies that auto_tune_chunk_size respects max_chunk parameter to prevent
 excessive memory allocation and int32 overflow.
 """
 
-from jamma.lmm.runner_jax import MAX_SAFE_CHUNK, auto_tune_chunk_size
+from jamma.lmm.chunk import MAX_SAFE_CHUNK, auto_tune_chunk_size
 
 
 class TestAutoTuneChunkSize:

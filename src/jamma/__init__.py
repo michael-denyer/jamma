@@ -22,11 +22,11 @@ from loguru import logger
 __version__ = "0.1.0"
 
 # Configure loguru with sensible defaults on import
-# This ensures logging works out-of-the-box in notebooks (Databricks, Jupyter)
-# Users can override by calling setup_logging() or logger.remove()/add()
+# Uses stdout so output is visible in Databricks notebook cells (stderr may be buffered)
+# Users can override by calling logger.remove()/add()
 logger.remove()  # Remove default handler
 logger.add(
-    sys.stderr,
+    sys.stdout,
     level="INFO",
     format="{time:HH:mm:ss} | <level>{level: <8}</level> | {message}",
     colorize=True,

@@ -107,10 +107,9 @@ if Px_yy >= 0.0 and Px_yy < 1e-8:
 logdet_h += safe_log(fabs(d));
 ```
 
-### JAMMA (likelihood.py:315, 403)
+### JAMMA (likelihood.py)
 ```python
-logdet_h += np.log(np.abs(v))  # numba path
-logdet_h = np.sum(np.log(np.abs(v_temp)))  # general path
+logdet_h = np.sum(np.log(np.abs(v_temp)))
 ```
 
 ### Status: **ALIGNED**

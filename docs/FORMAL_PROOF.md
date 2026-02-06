@@ -147,8 +147,7 @@ This is a direct transcription of GEMMA's `GetabIndex` (lmm.cpp line ~200).
 
 **The recursion is algebraically identical.** Differences arise only from
 floating-point evaluation order in the weighted dot product (row 0), where
-GEMMA uses a serial accumulation loop and JAMMA uses either a serial loop
-(numba path) or `numpy.dot` (general path).
+GEMMA uses a serial accumulation loop and JAMMA uses `numpy.dot`.
 
 **Bound**: The dot product of two length-`n` vectors in IEEE-754 double has
 rounding error bounded by `n × ε_mach × ||a|| × ||b||`. For `n ≤ 200,000`:

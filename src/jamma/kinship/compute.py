@@ -28,6 +28,7 @@ from jamma.core.memory import (
     log_memory_snapshot,
 )
 from jamma.core.progress import progress_iterator
+from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
 from jamma.kinship.missing import impute_and_center
 
@@ -57,6 +58,7 @@ def _filter_snps(
     """Filter SNPs by MAF, missing rate, and monomorphism.
 
     Monomorphic SNPs (variance == 0) are always filtered to match GEMMA.
+    Delegates to shared utilities in jamma.core.snp_filter.
 
     Args:
         genotypes: Genotype matrix (n_samples, n_snps), NaN for missing.
@@ -68,23 +70,11 @@ def _filter_snps(
     """
     n_samples, n_snps = genotypes.shape
 
-    # Compute per-SNP statistics
-    missing_counts = np.sum(np.isnan(genotypes), axis=0)
-    miss_rates = missing_counts / n_samples
+    col_means, miss_counts, col_vars = compute_snp_stats(genotypes)
+    snp_mask, _allele_freqs, _mafs = compute_snp_filter_mask(
+        col_means, miss_counts, col_vars, n_samples, maf_threshold, miss_threshold
+    )
 
-    with np.errstate(invalid="ignore"):
-        col_means = np.nanmean(genotypes, axis=0)
-        col_vars = np.nanvar(genotypes, axis=0)
-    col_means = np.nan_to_num(col_means, nan=0.0)
-    col_vars = np.nan_to_num(col_vars, nan=0.0)
-    allele_freqs = col_means / 2.0
-    mafs = np.minimum(allele_freqs, 1.0 - allele_freqs)
-
-    # Monomorphic SNPs always filtered (GEMMA behavior)
-    is_polymorphic = col_vars > 0
-
-    # Combined filter: MAF >= threshold AND miss_rate <= threshold AND polymorphic
-    snp_mask = (mafs >= maf_threshold) & (miss_rates <= miss_threshold) & is_polymorphic
     n_filtered = int(np.sum(snp_mask))
 
     if n_filtered == 0:

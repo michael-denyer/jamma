@@ -112,9 +112,9 @@ def run_lmm_association_jax(
     start_time = time.perf_counter()
 
     if show_progress:
-        logger.info("## Performing LMM Association Test (JAX)")
-        logger.info(f"number of total individuals = {n_samples:,}")
-        logger.info(f"number of total SNPs/variants = {n_snps:,}")
+        logger.info("Performing LMM Association Test (JAX batch)")
+        logger.info(f"  Total individuals: {n_samples:,}")
+        logger.info(f"  Total SNPs: {n_snps:,}")
         logger.debug(
             f"MAF threshold = {maf_threshold}, missing threshold = {miss_threshold}"
         )
@@ -191,12 +191,11 @@ def run_lmm_association_jax(
     # Process in chunks if needed
     n_chunks = (n_filtered + chunk_size - 1) // chunk_size
     if show_progress:
-        logger.info(f"number of analyzed individuals = {n_samples:,}")
-        logger.info(f"number of analyzed SNPs = {n_filtered:,}")
+        logger.info(f"  Analyzed individuals: {n_samples:,}")
+        logger.info(f"  Analyzed SNPs: {n_filtered:,}")
         if chunk_size < n_filtered:
             logger.info(
-                f"Processing in {n_chunks} chunks "
-                f"({chunk_size:,} SNPs/chunk) to avoid buffer overflow"
+                f"  Processing in {n_chunks} chunks " f"({chunk_size:,} SNPs/chunk)"
             )
 
     # Pre-allocate result arrays (replaces list accumulators)
@@ -425,8 +424,7 @@ def run_lmm_association_jax(
     # Log completion
     elapsed = time.perf_counter() - start_time
     if show_progress:
-        logger.info("## LMM Association completed")
-        logger.info(f"time elapsed = {elapsed:.2f} seconds")
+        logger.info(f"LMM Association completed in {elapsed:.2f}s")
 
     if lmm_mode == 1:
         return _build_results_wald(

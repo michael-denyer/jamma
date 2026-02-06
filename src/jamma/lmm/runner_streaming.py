@@ -195,11 +195,11 @@ def run_lmm_association_streaming(
             )
 
     if show_progress:
-        logger.info("## Performing LMM Association Test (Streaming)")
-        logger.info(f"number of total individuals = {n_samples_total}")
-        logger.info(f"number of analyzed individuals = {n_valid}")
-        logger.info(f"number of total SNPs/variants = {n_snps}")
-        logger.info(f"lambda range = [{l_min:.2e}, {l_max:.2e}]")
+        logger.info("Performing LMM Association Test (streaming)")
+        logger.info(f"  Total individuals: {n_samples_total:,}")
+        logger.info(f"  Analyzed individuals: {n_valid:,}")
+        logger.info(f"  Total SNPs: {n_snps:,}")
+        logger.info(f"  Lambda range: [{l_min:.2e}, {l_max:.2e}]")
 
     device = _select_jax_device(use_gpu)
 
@@ -246,13 +246,14 @@ def run_lmm_association_streaming(
     n_filtered = len(snp_indices)
 
     if show_progress:
-        logger.info(f"number of analyzed SNPs = {n_filtered}")
+        logger.info(f"  Analyzed SNPs: {n_filtered:,}")
 
     if n_filtered == 0:
         if show_progress:
             elapsed = time.perf_counter() - start_time
-            logger.info("## LMM Association completed")
-            logger.info(f"time elapsed = {elapsed:.2f} seconds")
+            logger.info(
+                f"LMM Association completed in {elapsed:.2f}s (no SNPs passed filter)"
+            )
         return []
 
     snp_stats = list(
@@ -524,15 +525,16 @@ def run_lmm_association_streaming(
                 + t_jax_compute_total
                 + t_result_write_total
             )
-            logger.info("## Timing breakdown:")
-            logger.info(f"##   I/O read (pass 1):   {t_io:.2f}s")
-            logger.info(f"##   SNP statistics:      {t_snp:.2f}s")
-            logger.info(f"##   Eigendecomp+setup:   {t_eigen:.2f}s")
-            logger.info(f"##   UT@G rotation:       {t_rotation_total:.2f}s")
-            logger.info(f"##   JAX compute:         {t_jax_compute_total:.2f}s")
-            logger.info(f"##   Result write:        {t_result_write_total:.2f}s")
-            logger.info(f"##   Accounted:           {accounted:.2f}s")
-            logger.info(f"##   Total:               {elapsed:.2f}s")
+            logger.info("Timing breakdown:")
+            logger.info(f"  I/O read (pass 1):   {t_io:.2f}s")
+            logger.info(f"  SNP statistics:      {t_snp:.2f}s")
+            logger.info(f"  Eigendecomp+setup:   {t_eigen:.2f}s")
+            logger.info(f"  UT@G rotation:       {t_rotation_total:.2f}s")
+            logger.info(f"  JAX compute:         {t_jax_compute_total:.2f}s")
+            logger.info(f"  Result write:        {t_result_write_total:.2f}s")
+            logger.info("  ----")
+            logger.info(f"  Accounted:           {accounted:.2f}s")
+            logger.info(f"  Total:               {elapsed:.2f}s")
 
         del eigenvalues, UtW_jax, Uty_jax
 
@@ -546,7 +548,6 @@ def run_lmm_association_streaming(
 
     if show_progress:
         elapsed = time.perf_counter() - start_time
-        logger.info("## LMM Association completed")
-        logger.info(f"time elapsed = {elapsed:.2f} seconds")
+        logger.info(f"LMM Association completed in {elapsed:.2f}s")
 
     return [] if output_path is not None else all_results

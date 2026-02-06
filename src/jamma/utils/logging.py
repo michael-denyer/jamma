@@ -30,12 +30,12 @@ def setup_logging(
     # Remove default handler
     logger.remove()
 
-    # Console handler
+    # Console handler — stdout for Databricks visibility (stderr may be buffered)
     level = "DEBUG" if verbose else "INFO"
     logger.add(
-        sys.stderr,
+        sys.stdout,
         level=level,
-        format="<level>{level: <8}</level> | {message}",
+        format="{time:HH:mm:ss} | <level>{level: <8}</level> | {message}",
         colorize=True,
     )
 

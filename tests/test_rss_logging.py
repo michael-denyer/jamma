@@ -34,11 +34,11 @@ class TestLogRssMemory:
 
             log_rss_memory("eigendecomp", "before")
 
-            # Check stderr for log message
+            # Check stdout for log message (loguru routes to stdout for Databricks)
             captured = capfd.readouterr()
-            assert "RSS memory" in captured.err
-            assert "eigendecomp" in captured.err
-            assert "before" in captured.err
+            assert "RSS memory" in captured.out
+            assert "eigendecomp" in captured.out
+            assert "before" in captured.out
 
     def test_real_rss_measurement(self):
         """Should measure actual process RSS (sanity check)."""

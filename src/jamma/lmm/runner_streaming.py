@@ -262,12 +262,13 @@ def run_lmm_association_streaming(
     eigenvalues_np, U = _eigendecompose_or_reuse(
         kinship, eigenvalues, eigenvectors, show_progress, "lmm_streaming"
     )
+    UT = np.ascontiguousarray(U.T)  # Cache contiguous transpose for BLAS matmuls
 
     W, n_cvt = _build_covariate_matrix(covariates, n_samples)
 
     # Prepare rotated matrices
-    UtW = U.T @ W
-    Uty = U.T @ phenotypes
+    UtW = UT @ W
+    Uty = UT @ phenotypes
 
     logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
         lmm_mode, eigenvalues_np, UtW, Uty, n_cvt, device, show_progress
@@ -345,7 +346,7 @@ def run_lmm_association_streaming(
                         geno_jax_chunk, ((0, 0), (0, pad_width)), mode="constant"
                     )
 
-                UtG_chunk = np.ascontiguousarray(U.T @ geno_jax_chunk)
+                UtG_chunk = np.ascontiguousarray(UT @ geno_jax_chunk)
                 return UtG_chunk, actual_len, needs_pad
 
             # Dict-based accumulators for this file chunk

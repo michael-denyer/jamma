@@ -5,42 +5,33 @@
 See: .planning/PROJECT.md (updated 2026-02-06)
 
 **Core value:** Exact GEMMA statistical results at 200k sample scale
-**Current focus:** Planning next milestone (v2.0)
+**Current focus:** v1.4 Performance -- Phase 19: Measure and Diagnose
 
 ## Current Position
 
-Milestone: v1.3 complete
-Phase: All v1.x phases complete (1-18)
-Status: Ready for next milestone
-Last activity: 2026-02-06 — v1.3 milestone archived
+Milestone: v1.4 Performance (Phases 19-22)
+Phase: 19 of 22 (Measure and Diagnose)
+Plan: 0 of 2 in current phase
+Status: Ready to plan
+Last activity: 2026-02-06 -- v1.4 roadmap created (4 phases, 14 requirements)
 
-Progress: All v1.x milestones shipped (v1.0, v1.1, v1.2, v1.3)
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
-**v1.0 Velocity:**
+**Velocity:**
+- Total plans completed: 85
+- Average duration: ~6 min
+- Total execution time: ~8.6 hours
 
-- Total plans completed: 21
-- Average duration: 5min 47s
-- Total execution time: 1.93 hours
+**By Milestone:**
 
-**v1.1 Velocity:**
-
-- Total plans completed: 39
-- Average duration: ~6min
-- Total execution time: ~3.9 hours
-
-**v1.2 Velocity:**
-
-- Total plans completed: 18
-- Average duration: ~6min
-- Total execution time: ~1hr 48min
-
-**v1.3 Velocity:**
-
-- Total plans completed: 7
-- Average duration: ~8min
-- Total execution time: ~56min
+| Milestone | Plans | Total | Avg/Plan |
+|-----------|-------|-------|----------|
+| v1.0 | 21 | 1.93h | 5m 47s |
+| v1.1 | 39 | 3.9h | ~6m |
+| v1.2 | 18 | 1.8h | ~6m |
+| v1.3 | 7 | 56m | ~8m |
 
 ## Accumulated Context
 
@@ -51,20 +42,27 @@ All milestone decisions archived in:
 - .planning/milestones/v1.3-ROADMAP.md (v1.3)
 - .planning/PROJECT.md Key Decisions table (cumulative)
 
+v1.4-specific:
+- Research confirms eigendecomp + UT@G rotation are >99% of compute
+- Thread pinning bug in jax_config.py is the #1 optimization target
+- No approximate methods (preserves GEMMA equivalence)
+- No new runtime dependencies
+
 ### Pending Todos
 
 None.
 
 ### Blockers/Concerns
 
-None.
+- Phase 19 requires Databricks access to measure actual MKL thread state
+- Thread pinning bug effect is unknown until empirical measurement (8-32x vs ~7% gain)
 
 ## Session Continuity
 
 Last session: 2026-02-06
-Stopped at: v1.3 milestone completed and archived
+Stopped at: v1.4 roadmap created, ready to plan Phase 19
 Resume file: None
-Next: `/gsd:new-milestone` to start v2.0
+Next: `/gsd:plan-phase 19`
 
 ---
 

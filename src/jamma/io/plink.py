@@ -10,29 +10,10 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import progressbar
 from bed_reader import open_bed
 from loguru import logger
 
-
-def _progress_iterator(iterable: Iterator, total: int, desc: str = "") -> Iterator:
-    """Wrap iterator with progressbar2 progress display."""
-    widgets = [
-        f"{desc}: " if desc else "",
-        progressbar.Counter(),
-        f"/{total} ",
-        progressbar.Percentage(),
-        " ",
-        progressbar.Bar(),
-        " ",
-        progressbar.ETA(),
-    ]
-    bar = progressbar.ProgressBar(max_value=total, widgets=widgets)
-    bar.start()
-    for i, item in enumerate(iterable):
-        yield item
-        bar.update(i + 1)
-    bar.finish()
+from jamma.core.progress import progress_iterator
 
 
 @dataclass
@@ -208,7 +189,7 @@ def stream_genotype_chunks(
 
         iterator = range(0, n_snps, chunk_size)
         if show_progress:
-            iterator = _progress_iterator(
+            iterator = progress_iterator(
                 iterator, total=n_chunks, desc="Reading genotypes"
             )
 

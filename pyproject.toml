@@ -24,9 +24,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Numba accelerates CPU path but conflicts with JAX's numpy 2.x requirement
-# Install with: pip install jamma[cpu] (requires numpy<2.0)
-cpu = ["numba>=0.60.0"]
 dev = [
     "pytest>=8.0.0",
     "pytest-xdist>=3.5.0",

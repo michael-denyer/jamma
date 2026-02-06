@@ -13,12 +13,10 @@ to per-SNP mean, and p is the number of SNPs.
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
 from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
-import progressbar
 from jax import jit
 from loguru import logger
 
@@ -29,29 +27,9 @@ from jamma.core.memory import (
     estimate_streaming_memory,
     log_memory_snapshot,
 )
+from jamma.core.progress import progress_iterator
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
 from jamma.kinship.missing import impute_and_center
-
-
-def _progress_iterator(iterable: Iterator, total: int, desc: str = "") -> Iterator:
-    """Wrap iterator with progressbar2 progress display."""
-    widgets = [
-        f"{desc}: " if desc else "",
-        progressbar.Counter(),
-        f"/{total} ",
-        progressbar.Percentage(),
-        " ",
-        progressbar.Bar(),
-        " ",
-        progressbar.ETA(),
-    ]
-    bar = progressbar.ProgressBar(max_value=total, widgets=widgets)
-    bar.start()
-    for i, item in enumerate(iterable):
-        yield item
-        bar.update(i + 1)
-    bar.finish()
-
 
 # Ensure 64-bit precision for GEMMA equivalence
 configure_jax()
@@ -324,7 +302,7 @@ def compute_kinship_streaming(
     )
     if show_progress:
         n_chunks = (n_snps + chunk_size - 1) // chunk_size
-        stats_iterator = _progress_iterator(
+        stats_iterator = progress_iterator(
             stats_iterator, total=n_chunks, desc="Computing SNP statistics"
         )
 
@@ -380,7 +358,7 @@ def compute_kinship_streaming(
     )
 
     if show_progress:
-        chunk_iter = _progress_iterator(
+        chunk_iter = progress_iterator(
             chunk_iter, total=n_chunks, desc="Computing kinship"
         )
 

@@ -194,8 +194,11 @@ class TestEstimateStreamingMemory:
         # Eigenvectors: same as kinship = 320GB
         assert 319 < est.eigenvectors_gb < 321
 
-        # Workspace: O(n) ~50MB for 200k
-        assert est.eigendecomp_workspace_gb < 1.0
+        # Workspace: DSYEVD O(n^2) ~640GB at 200k
+        assert est.eigendecomp_workspace_gb > 600, (
+            f"DSYEVD workspace should be ~640GB at 200k, "
+            f"got {est.eigendecomp_workspace_gb:.2f}GB"
+        )
 
         # Chunk: 200k * 10k * 8 / 1e9 = 16GB
         assert 15 < est.chunk_gb < 17, f"Expected ~16GB chunk, got {est.chunk_gb}"
@@ -205,10 +208,10 @@ class TestEstimateStreamingMemory:
             0.003 < est.grid_reml_gb < 0.005
         ), f"Expected ~0.004GB grid_reml, got {est.grid_reml_gb}"
 
-        # Peak should be eigendecomp: ~640GB (kinship + eigenvectors)
+        # Peak should be eigendecomp: ~1280GB (K + U + dsyevd workspace)
         assert (
-            600 < est.total_peak_gb < 700
-        ), f"Expected ~640GB peak, got {est.total_peak_gb}"
+            1250 < est.total_peak_gb < 1310
+        ), f"Expected ~1280GB peak, got {est.total_peak_gb}"
 
     def test_chunk_size_affects_chunk_gb(self) -> None:
         """Verify chunk_size parameter affects chunk memory."""

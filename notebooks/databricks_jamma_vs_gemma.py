@@ -151,14 +151,30 @@ print(f"Output:     {OUTPUT_DIR}")
 
 # COMMAND ----------
 
-GEMMA_BIN = Path("/tmp/gemma")
+# Search for existing GEMMA install before downloading
+# Set GEMMA_LOCAL_PATH to override (e.g., "/usr/local/bin/gemma" or "/dbfs/tools/gemma")
+GEMMA_LOCAL_PATH = os.environ.get("GEMMA_LOCAL_PATH", "")
+GEMMA_SEARCH_PATHS = [
+    GEMMA_LOCAL_PATH,
+    "/tmp/gemma",
+    "/usr/local/bin/gemma",
+    "/opt/gemma/bin/gemma",
+    "/dbfs/tools/gemma",
+]
 GEMMA_URL = "https://github.com/genetics-statistics/GEMMA/releases/download/v0.98.5/gemma-0.98.5-linux-static-AMD64.gz"
 
+GEMMA_BIN = None
+for candidate in GEMMA_SEARCH_PATHS:
+    if candidate and Path(candidate).exists():
+        GEMMA_BIN = Path(candidate)
+        break
+
 if RUN_GEMMA:
-    if GEMMA_BIN.exists():
-        print(f"GEMMA binary already at {GEMMA_BIN}")
+    if GEMMA_BIN is not None:
+        print(f"GEMMA binary found at {GEMMA_BIN}")
     else:
-        print("Downloading GEMMA 0.98.5 static binary...")
+        GEMMA_BIN = Path("/tmp/gemma")
+        print("No existing GEMMA found, downloading v0.98.5 static binary...")
         subprocess.run(
             [
                 "bash",
@@ -177,6 +193,7 @@ if RUN_GEMMA:
     else:
         print("GEMMA binary verified (no version string found)")
 else:
+    GEMMA_BIN = Path("/tmp/gemma")  # default path for type consistency
     print("GEMMA comparison disabled")
 
 # COMMAND ----------

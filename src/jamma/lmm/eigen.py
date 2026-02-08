@@ -3,9 +3,7 @@
 Provides GEMMA-compatible eigendecomposition with small eigenvalue thresholding.
 
 Uses scipy.linalg.eigh (LAPACK) with explicit driver selection and in-place
-operation. Thread control is handled by jamma.core.threading via threadpool_limits
-context managers, giving explicit BLAS thread management for all backends
-(MKL, OpenBLAS, etc.).
+operation. Thread control is handled by jamma.core.threading via threadpool_limits.
 
 Driver selection:
 - dsyevd (driver='evd'): Divide-and-conquer, fastest but O(n^2) workspace.
@@ -26,6 +24,7 @@ from loguru import logger
 from threadpoolctl import threadpool_info
 
 from jamma.core.memory import (
+    _dsyevd_workspace_gb,
     check_memory_available,
     estimate_eigendecomp_memory,
     log_memory_snapshot,
@@ -39,10 +38,8 @@ def _select_eigendecomp_driver(n_samples: int) -> str:
     dsyevd (divide-and-conquer): O(n^2) workspace, fastest.
     dsyevr (relatively robust representations): O(n) workspace, slower.
 
-    With overwrite_a=True, K is the input buffer being overwritten (already
-    allocated), so it is NOT counted in total_needed. We need space for:
-    - Eigenvectors (output): n^2 * 8 bytes
-    - dsyevd workspace: (1 + 6*n + 2*n^2) * 8 + (3 + 5*n) * 4 bytes
+    With overwrite_a=True, K is already allocated, so we only need space for
+    eigenvectors (output) and dsyevd workspace.
 
     Args:
         n_samples: Number of samples (matrix dimension).
@@ -51,22 +48,19 @@ def _select_eigendecomp_driver(n_samples: int) -> str:
         'evd' if dsyevd workspace fits in available memory, 'evr' otherwise.
     """
     available_gb = psutil.virtual_memory().available / 1e9
-    dsyevd_workspace_bytes = (1 + 6 * n_samples + 2 * n_samples * n_samples) * 8 + (
-        3 + 5 * n_samples
-    ) * 4
-    dsyevd_workspace_gb = dsyevd_workspace_bytes / 1e9
+    dsyevd_workspace_gb = _dsyevd_workspace_gb(n_samples)
     eigenvectors_gb = n_samples**2 * 8 / 1e9
     total_needed = eigenvectors_gb + dsyevd_workspace_gb
 
     if total_needed * 1.1 < available_gb:
         return "evd"
-    else:
-        logger.warning(
-            f"dsyevd workspace ({dsyevd_workspace_gb:.1f}GB) too large for "
-            f"available memory ({available_gb:.1f}GB), "
-            f"falling back to dsyevr (slower but O(n) workspace)"
-        )
-        return "evr"
+
+    logger.warning(
+        f"dsyevd workspace ({dsyevd_workspace_gb:.1f}GB) too large for "
+        f"available memory ({available_gb:.1f}GB), "
+        f"falling back to dsyevr (slower but O(n) workspace)"
+    )
+    return "evr"
 
 
 def eigendecompose_kinship(
@@ -105,7 +99,6 @@ def eigendecompose_kinship(
     n_samples = K.shape[0]
     n_elements = n_samples * n_samples
 
-    # Validate input
     if K.ndim != 2 or K.shape[0] != K.shape[1]:
         raise ValueError(f"Kinship matrix must be square, got shape {K.shape}")
 
@@ -114,8 +107,7 @@ def eigendecompose_kinship(
         f"Matrix elements: {n_elements:,}, memory: ~{n_elements * 8 / 1e9:.1f} GB"
     )
 
-    # Pre-flight memory check - fail fast before numpy allocates
-    # This prevents silent OOM crashes on Linux where OOM killer sends SIGKILL
+    # Fail fast before LAPACK allocates -- prevents silent SIGKILL from OOM killer
     required_gb = estimate_eigendecomp_memory(n_samples)
     check_memory_available(
         required_gb,
@@ -123,26 +115,18 @@ def eigendecompose_kinship(
         operation=f"eigendecomposition of {n_samples:,}x{n_samples:,} kinship matrix",
     )
 
-    # Use scipy.linalg.eigh with LAPACK driver selection (via MKL when available)
-    # This supports matrices up to sqrt(int64_max) ~ 3 billion rows
-    # JAX's jnp.linalg.eigh hits int32 overflow at ~46k x 46k (2.1B elements)
-    #
-    # Log memory state right before allocation for debugging OOM crashes
     log_memory_snapshot(f"before_eigendecomp_{n_samples}samples")
 
-    # Log BLAS thread state for diagnostics
     n_threads = get_blas_thread_count()
-    for lib in threadpool_info():
-        if lib.get("user_api") == "blas":
-            logger.debug(
-                f"BLAS: {lib.get('internal_api')}, "
-                f"current={lib.get('num_threads')}, target={n_threads}"
-            )
-    logger.info(f"Eigendecomp using {n_threads} BLAS threads")
+    blas_libs = [lib for lib in threadpool_info() if lib.get("user_api") == "blas"]
+    for lib in blas_libs:
+        logger.debug(
+            f"BLAS: {lib.get('internal_api')}, "
+            f"current={lib.get('num_threads')}, target={n_threads}"
+        )
 
-    # Select driver based on available memory
     driver = _select_eigendecomp_driver(n_samples)
-    logger.info(f"Eigendecomp using driver={driver}, overwrite_a=True")
+    logger.info(f"Eigendecomp: driver={driver}, threads={n_threads}, overwrite_a=True")
 
     # Ensure Fortran order for true in-place operation with overwrite_a
     if not K.flags["F_CONTIGUOUS"]:
@@ -159,17 +143,7 @@ def eigendecompose_kinship(
                 check_finite=False,
             )
     except MemoryError:
-        # Estimate based on actual driver workspace
-        dsyevd_workspace_gb = (
-            (1 + 6 * n_samples + 2 * n_samples * n_samples) * 8
-            + (3 + 5 * n_samples) * 4
-        ) / 1e9
-        eigenvectors_gb = n_elements * 8 / 1e9
-        if driver == "evd":
-            mem_gb = n_elements * 8 / 1e9 + eigenvectors_gb + dsyevd_workspace_gb
-        else:
-            dsyevr_workspace_gb = (26 * n_samples * 8 + 10 * n_samples * 4) / 1e9
-            mem_gb = n_elements * 8 / 1e9 + eigenvectors_gb + dsyevr_workspace_gb
+        mem_gb = estimate_eigendecomp_memory(n_samples, driver=driver)
         logger.error(
             f"MemoryError during eigendecomposition of {n_samples:,}x{n_samples:,} "
             f"matrix (driver={driver}). Estimated memory: ~{mem_gb:.1f} GB. "
@@ -180,17 +154,13 @@ def eigendecompose_kinship(
         logger.error(f"Eigendecomposition failed: {type(e).__name__}: {e}")
         raise
 
-    # K contents are now destroyed by overwrite_a=True
-    del K
+    del K  # Destroyed by overwrite_a=True
     gc.collect()
 
     elapsed = time.perf_counter() - start_time
     logger.info(f"Eigendecomposition completed in {elapsed:.2f} seconds")
-
-    # Log memory after eigendecomp - shows peak allocation
     log_memory_snapshot(f"after_eigendecomp_{n_samples}samples")
 
-    # Count negative eigenvalues before thresholding
     n_negative = np.sum(eigenvalues < -threshold)
     if n_negative > 0:
         warnings.warn(
@@ -199,10 +169,8 @@ def eigendecompose_kinship(
             stacklevel=2,
         )
 
-    # Zero small eigenvalues (GEMMA's behavior)
     eigenvalues = np.where(np.abs(eigenvalues) < threshold, 0.0, eigenvalues)
 
-    # Count zero eigenvalues after thresholding
     n_zero = np.sum(eigenvalues == 0.0)
     if n_zero > 1:
         warnings.warn(

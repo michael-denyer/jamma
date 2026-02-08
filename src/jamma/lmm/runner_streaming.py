@@ -273,10 +273,8 @@ def run_lmm_association_streaming(
     eigenvalues_np, U = _eigendecompose_or_reuse(
         kinship, eigenvalues, eigenvectors, show_progress, "lmm_streaming"
     )
-    UT = np.ascontiguousarray(U.T)  # Cache contiguous transpose for BLAS matmuls
-    # K was destroyed by overwrite_a=True in eigendecomp -- delete reference
-    # to allow GC to reclaim ~n^2*8 bytes (~65 GB at 90k samples)
-    del kinship
+    UT = np.ascontiguousarray(U.T)
+    del kinship  # Destroyed by eigendecomp overwrite_a=True
     gc.collect()
 
     W, n_cvt = _build_covariate_matrix(covariates, n_samples)

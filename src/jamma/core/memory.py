@@ -358,14 +358,7 @@ def log_memory_snapshot(label: str = "", level: str = "INFO") -> MemorySnapshot:
         f"Available={snap.available_gb:.1f}GB/{snap.total_gb:.1f}GB "
         f"({snap.percent_used:.1f}% used)"
     )
-
-    if level == "DEBUG":
-        logger.debug(msg)
-    elif level == "WARNING":
-        logger.warning(msg)
-    else:
-        logger.info(msg)
-
+    logger.log(level, msg)
     return snap
 
 
@@ -406,23 +399,16 @@ def cleanup_memory(clear_jax: bool = True, verbose: bool = True) -> MemorySnapsh
     else:
         before = get_memory_snapshot()
 
-    # Multiple GC passes to handle reference cycles
-    gc.collect()
-    gc.collect()
     gc.collect()
 
-    # Clear JAX caches if requested
     if clear_jax:
         try:
             import jax
 
             jax.clear_caches()
-            # Note: jax.clear_backends() would also clear device memory
-            # but reinitializes backends on next use - more aggressive
         except ImportError:
-            pass  # JAX not installed, skip
+            pass
 
-    # Final GC pass after clearing caches
     gc.collect()
 
     if verbose:

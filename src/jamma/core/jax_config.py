@@ -19,8 +19,6 @@ import jax
 import jax.numpy as jnp
 from loguru import logger
 
-# Thread management moved to jamma.core.threading (Phase 20)
-
 # Suppress unhelpful JAX buffer donation warnings — fires when
 # @jit donate_argnums can't reuse a buffer (shape/type mismatch).
 warnings.filterwarnings("ignore", message="Some donated buffers were not usable")

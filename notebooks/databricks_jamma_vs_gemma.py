@@ -151,15 +151,17 @@ print(f"Output:     {OUTPUT_DIR}")
 
 # COMMAND ----------
 
-# Search for existing GEMMA install before downloading
-# Set GEMMA_LOCAL_PATH to override (e.g., "/usr/local/bin/gemma" or "/dbfs/tools/gemma")
+# Search for existing GEMMA install before downloading.
+# On Disco Bio clusters, GEMMA is pre-installed via micromamba "disco" environment
+# (activated by init_disco.sh) and available on PATH.
+# Set GEMMA_LOCAL_PATH env var to override with a custom path.
 GEMMA_LOCAL_PATH = os.environ.get("GEMMA_LOCAL_PATH", "")
 GEMMA_SEARCH_PATHS = [
     GEMMA_LOCAL_PATH,
+    shutil.which("gemma") or "",  # finds gemma on PATH (Disco env)
+    "/opt/micromamba/envs/disco/bin/gemma",  # Disco Bio Docker image
     "/tmp/gemma",
     "/usr/local/bin/gemma",
-    "/opt/gemma/bin/gemma",
-    "/dbfs/tools/gemma",
 ]
 GEMMA_URL = "https://github.com/genetics-statistics/GEMMA/releases/download/v0.98.5/gemma-0.98.5-linux-static-AMD64.gz"
 

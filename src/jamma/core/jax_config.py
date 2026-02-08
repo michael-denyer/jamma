@@ -12,30 +12,16 @@ JAX computations to enable x64 mode.
 from __future__ import annotations
 
 import os
+import warnings
 from typing import Any
 
 import jax
 import jax.numpy as jnp
 from loguru import logger
 
-
-def _pin_blas_threads(n_threads: int = 1) -> None:
-    """Pin BLAS thread count to avoid oversubscription with JAX.
-
-    JAX manages its own parallelism; having BLAS libraries spawn additional
-    threads causes contention and slowdowns. This sets environment variables
-    for common BLAS implementations.
-
-    Must be called BEFORE importing numpy/scipy in the process.
-    """
-    os.environ.setdefault("OMP_NUM_THREADS", str(n_threads))
-    os.environ.setdefault("MKL_NUM_THREADS", str(n_threads))
-    os.environ.setdefault("OPENBLAS_NUM_THREADS", str(n_threads))
-    os.environ.setdefault("VECLIB_MAXIMUM_THREADS", str(n_threads))  # macOS Accelerate
-
-
-# Pin threads on module import (before JAX does any work)
-_pin_blas_threads(1)
+# Suppress unhelpful JAX buffer donation warnings — fires when
+# @jit donate_argnums can't reuse a buffer (shape/type mismatch).
+warnings.filterwarnings("ignore", message="Some donated buffers were not usable")
 
 
 def configure_jax(

@@ -837,3 +837,62 @@ class TestJaxAllTestsMode:
                 rtol=1e-10,
                 err_msg=f"logl_H1 mismatch for {rs}",
             )
+
+
+def test_timing_breakdown_logged(sample_plink_data):
+    """Verify timing breakdown appears in loguru output with all 6 phases."""
+    import io
+    import re
+
+    from loguru import logger
+
+    from jamma.io.plink import load_plink_binary
+    from jamma.kinship import compute_centered_kinship
+    from jamma.lmm import run_lmm_association_streaming
+
+    # Load small test dataset
+    data = load_plink_binary(sample_plink_data)
+    np.random.seed(42)
+    phenotypes = np.random.randn(data.n_samples)
+    kinship = compute_centered_kinship(
+        data.genotypes.astype(np.float64), check_memory=False
+    )
+
+    # Capture loguru output
+    sink = io.StringIO()
+    handler_id = logger.add(sink, format="{message}", level="INFO")
+    try:
+        run_lmm_association_streaming(
+            sample_plink_data,
+            phenotypes,
+            kinship,
+            snp_info=None,
+            check_memory=False,
+            show_progress=True,
+        )
+    finally:
+        logger.remove(handler_id)
+
+    log_output = sink.getvalue()
+
+    # Verify timing breakdown header appears
+    assert "Timing breakdown" in log_output, "Expected 'Timing breakdown' in log output"
+
+    # Verify all 6 phase labels plus summary lines appear with numeric seconds
+    expected_labels = [
+        "I/O read (pass 1):",
+        "SNP statistics:",
+        "Eigendecomp+setup:",
+        "UT@G rotation:",
+        "JAX compute:",
+        "Result write:",
+        "Accounted:",
+        "Total:",
+    ]
+    lines = log_output.splitlines()
+    for label in expected_labels:
+        matching_line = next((line for line in lines if label in line), None)
+        assert matching_line is not None, f"Expected '{label}' in log output"
+        assert re.search(
+            r"\d+\.\d+s", matching_line
+        ), f"Expected numeric seconds value in line: {matching_line}"

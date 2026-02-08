@@ -14,6 +14,7 @@ from loguru import logger
 from jamma.core.memory import estimate_workflow_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
+from jamma.core.threading import blas_threads
 from jamma.lmm.chunk import (
     _MAX_BUFFER_ELEMENTS,  # noqa: F401 - re-export for backward compatibility
     MAX_SAFE_CHUNK,  # noqa: F401 - re-export for backward compatibility
@@ -112,9 +113,9 @@ def run_lmm_association_jax(
     start_time = time.perf_counter()
 
     if show_progress:
-        logger.info("## Performing LMM Association Test (JAX)")
-        logger.info(f"number of total individuals = {n_samples:,}")
-        logger.info(f"number of total SNPs/variants = {n_snps:,}")
+        logger.info("Performing LMM Association Test (JAX batch)")
+        logger.info(f"  Total individuals: {n_samples:,}")
+        logger.info(f"  Total SNPs: {n_snps:,}")
         logger.debug(
             f"MAF threshold = {maf_threshold}, missing threshold = {miss_threshold}"
         )
@@ -172,8 +173,9 @@ def run_lmm_association_jax(
     )
     UT = np.ascontiguousarray(U.T)  # Cache contiguous transpose for BLAS matmuls
 
-    UtW = UT @ W
-    Uty = UT @ phenotypes
+    with blas_threads():
+        UtW = UT @ W
+        Uty = UT @ phenotypes
 
     logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
         lmm_mode, eigenvalues_np, UtW, Uty, n_cvt, device, show_progress
@@ -191,12 +193,11 @@ def run_lmm_association_jax(
     # Process in chunks if needed
     n_chunks = (n_filtered + chunk_size - 1) // chunk_size
     if show_progress:
-        logger.info(f"number of analyzed individuals = {n_samples:,}")
-        logger.info(f"number of analyzed SNPs = {n_filtered:,}")
+        logger.info(f"  Analyzed individuals: {n_samples:,}")
+        logger.info(f"  Analyzed SNPs: {n_filtered:,}")
         if chunk_size < n_filtered:
             logger.info(
-                f"Processing in {n_chunks} chunks "
-                f"({chunk_size:,} SNPs/chunk) to avoid buffer overflow"
+                f"  Processing in {n_chunks} chunks " f"({chunk_size:,} SNPs/chunk)"
             )
 
     # Pre-allocate result arrays (replaces list accumulators)
@@ -243,7 +244,8 @@ def run_lmm_association_jax(
             pad_width = chunk_size - actual_len
             geno_chunk = np.pad(geno_chunk, ((0, 0), (0, pad_width)), mode="constant")
 
-        UtG_chunk = np.ascontiguousarray(UT @ geno_chunk)
+        with blas_threads():
+            UtG_chunk = np.ascontiguousarray(UT @ geno_chunk)
         return UtG_chunk, actual_len, needs_pad
 
     # Double buffering: overlap device transfer with computation
@@ -425,8 +427,7 @@ def run_lmm_association_jax(
     # Log completion
     elapsed = time.perf_counter() - start_time
     if show_progress:
-        logger.info("## LMM Association completed")
-        logger.info(f"time elapsed = {elapsed:.2f} seconds")
+        logger.info(f"LMM Association completed in {elapsed:.2f}s")
 
     if lmm_mode == 1:
         return _build_results_wald(

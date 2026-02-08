@@ -34,7 +34,7 @@ dist/
 venv/
 
 # General output
-./output
+output/
 
 # Planning and claude config (dev-only)
 .planning/

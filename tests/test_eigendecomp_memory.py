@@ -13,18 +13,25 @@ class TestEigendecompMemoryEstimate:
     """Tests for memory estimation function."""
 
     def test_estimate_200k_samples(self):
-        """200k samples should require approximately 640GB."""
+        """200k samples should require approximately 1280GB with dsyevd."""
         n_samples = 200_000
         estimate = estimate_eigendecomp_memory(n_samples)
-        # K (320GB) + U (320GB) + workspace (~0.04GB) = ~640GB
+        # K (320GB) + U (320GB) + dsyevd workspace (~640GB) = ~1280GB
+        assert 1275 < estimate < 1285
+
+    def test_estimate_200k_samples_evr(self):
+        """200k samples with dsyevr should require approximately 640GB."""
+        n_samples = 200_000
+        estimate = estimate_eigendecomp_memory(n_samples, driver="evr")
+        # K (320GB) + U (320GB) + dsyevr workspace (~0.05GB) = ~640GB
         assert 635 < estimate < 645
 
     def test_estimate_100k_samples(self):
-        """100k samples should require approximately 160GB."""
+        """100k samples should require approximately 320GB with dsyevd."""
         n_samples = 100_000
         estimate = estimate_eigendecomp_memory(n_samples)
-        # K (80GB) + U (80GB) + workspace (~0.02GB) = ~160GB
-        assert 155 < estimate < 165
+        # K (80GB) + U (80GB) + dsyevd workspace (~160GB) = ~320GB
+        assert 315 < estimate < 325
 
     def test_estimate_scales_quadratically(self):
         """Memory should scale quadratically with n_samples."""

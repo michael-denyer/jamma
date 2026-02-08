@@ -151,14 +151,32 @@ print(f"Output:     {OUTPUT_DIR}")
 
 # COMMAND ----------
 
-GEMMA_BIN = Path("/tmp/gemma")
+# Search for existing GEMMA install before downloading.
+# On Disco Bio clusters, GEMMA is pre-installed via micromamba "disco" environment
+# (activated by init_disco.sh) and available on PATH.
+# Set GEMMA_LOCAL_PATH env var to override with a custom path.
+GEMMA_LOCAL_PATH = os.environ.get("GEMMA_LOCAL_PATH", "")
+GEMMA_SEARCH_PATHS = [
+    GEMMA_LOCAL_PATH,
+    shutil.which("gemma") or "",  # finds gemma on PATH (Disco env)
+    "/opt/micromamba/envs/disco/bin/gemma",  # Disco Bio Docker image
+    "/tmp/gemma",
+    "/usr/local/bin/gemma",
+]
 GEMMA_URL = "https://github.com/genetics-statistics/GEMMA/releases/download/v0.98.5/gemma-0.98.5-linux-static-AMD64.gz"
 
+GEMMA_BIN = None
+for candidate in GEMMA_SEARCH_PATHS:
+    if candidate and Path(candidate).exists():
+        GEMMA_BIN = Path(candidate)
+        break
+
 if RUN_GEMMA:
-    if GEMMA_BIN.exists():
-        print(f"GEMMA binary already at {GEMMA_BIN}")
+    if GEMMA_BIN is not None:
+        print(f"GEMMA binary found at {GEMMA_BIN}")
     else:
-        print("Downloading GEMMA 0.98.5 static binary...")
+        GEMMA_BIN = Path("/tmp/gemma")
+        print("No existing GEMMA found, downloading v0.98.5 static binary...")
         subprocess.run(
             [
                 "bash",
@@ -177,6 +195,7 @@ if RUN_GEMMA:
     else:
         print("GEMMA binary verified (no version string found)")
 else:
+    GEMMA_BIN = Path("/tmp/gemma")  # default path for type consistency
     print("GEMMA comparison disabled")
 
 # COMMAND ----------

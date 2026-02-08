@@ -1,0 +1,30 @@
+##
+## GEMMA Version = 0.96
+##
+## Command Line Input = gemma -bfile tests/fixtures/gemma_synthetic/test -k tests/fixtures/gemma_synthetic/gemma_kinship.cXX.txt -c tests/fixtures/gemma_covariate/covariates.txt -lmm 4 -o gemma_all_covar -outdir tests/fixtures/gemma_all_tests 
+##
+## Date = Thu Feb  5 01:52:08 2026
+##
+## Summary Statistics:
+## number of total individuals = 100
+## number of analyzed individuals = 100
+## number of covariates = 2
+## number of phenotypes = 1
+## number of total SNPs = 500
+## number of analyzed SNPs = 500
+## REMLE log-likelihood in the null model = -139.624
+## MLE log-likelihood in the null model = -138.905
+## pve estimate in the null model = 0.325307
+## se(pve) in the null model = 0.35506
+## vg estimate in the null model = 0.839755
+## ve estimate in the null model = 0.687909
+## beta estimate in the null model =   -0.00475218  -0.0915228
+## se(beta) =   0.0837585  0.224917
+##
+## Computation Time:
+## total computation time = 0.00377232 min 
+## computation time break down: 
+##      time on eigen-decomposition = 6.89333e-05 min 
+##      time on calculating UtX = 3.39667e-05 min 
+##      time on optimization = 0.0034493 min 
+##

@@ -26,8 +26,8 @@
 
 # COMMAND ----------
 
-# MAGIC %sh # Purge all non-MKL BLAS/LAPACK providers and system numpy
-# MAGIC apt-get purge -y libopenblas* libblas* libatlas* liblapack* python3-numpy 2>/dev/null; echo "Non-MKL BLAS purged"
+# MAGIC %sh # Purge all non-MKL BLAS/LAPACK providers
+# MAGIC apt-get purge -y libopenblas* libblas* libatlas* liblapack* 2>/dev/null; echo "Non-MKL BLAS purged"
 
 # COMMAND ----------
 
@@ -40,6 +40,13 @@
 # Install numpy with MKL ILP64 from forked wheel repository
 # ILP64 uses 64-bit integers, supporting matrices >46k x 46k
 # MAGIC %pip install numpy --extra-index-url https://michael-denyer.github.io/numpy-mkl --force-reinstall --upgrade
+
+# COMMAND ----------
+
+# Install scipy with MKL ILP64 from forked wheel repository
+# Phase 21 switched eigendecomp to scipy.linalg.eigh -- scipy must use MKL, not bundled OpenBLAS
+# IMPORTANT: Install AFTER numpy ILP64 and BEFORE jamma --no-deps
+# MAGIC %pip install scipy --extra-index-url https://michael-denyer.github.io/numpy-mkl --force-reinstall --upgrade
 
 # COMMAND ----------
 
@@ -191,6 +198,54 @@ elif not ilp64_ok:
 elif not detected_mkl:
     print("WARNING: MKL not detected at runtime - stability risk at 50k+")
 print(f"{'=' * 40}")
+
+# COMMAND ----------
+
+# --- Verify scipy MKL backend ---
+import scipy
+import scipy.linalg
+
+print("=== SciPy Backend Verification ===")
+print(f"SciPy version: {scipy.__version__}")
+print(f"SciPy location: {scipy.__file__}")
+
+try:
+    config = scipy.show_config(mode="dicts")
+    blas_info = config.get("Build Dependencies", {}).get("blas", {})
+    lapack_info = config.get("Build Dependencies", {}).get("lapack", {})
+    scipy_blas = blas_info.get("name", "unknown")
+    scipy_lapack = lapack_info.get("name", "unknown")
+    print(f"  BLAS:   {scipy_blas}")
+    print(f"  LAPACK: {scipy_lapack}")
+    scipy_mkl = "mkl" in scipy_blas.lower() or "mkl" in scipy_lapack.lower()
+    if scipy_mkl:
+        print("  MKL: CONFIRMED")
+    else:
+        print(
+            "  WARNING: SciPy is NOT using MKL. Eigendecomp uses scipy.linalg.eigh since Phase 21."
+        )
+        print("  This means eigendecomp will use OpenBLAS instead of MKL.")
+        print(
+            "  Reinstall: %pip install scipy --extra-index-url https://michael-denyer.github.io/numpy-mkl --force-reinstall --upgrade"
+        )
+except Exception as e:
+    print(f"  ERROR reading scipy config: {e}")
+    scipy.show_config()
+
+# Verify scipy.linalg.eigh works with driver='evd'
+test_k = np.random.default_rng(42).standard_normal((500, 500))
+test_k = test_k @ test_k.T
+t0 = time.perf_counter()
+vals, vecs = scipy.linalg.eigh(
+    test_k, driver="evd", overwrite_a=False, check_finite=False
+)
+t1 = time.perf_counter()
+print(f"\n  scipy.linalg.eigh 500x500 (driver='evd'): {(t1-t0)*1000:.1f}ms")
+recon = vecs @ np.diag(vals) @ vecs.T
+recon_err = np.abs(test_k - recon).max()
+print(f"  Reconstruction error: {recon_err:.2e}")
+assert recon_err < 1e-8, f"scipy eigendecomp failed: error={recon_err:.2e}"
+print("  SciPy eigendecomp: PASSED")
 
 # COMMAND ----------
 
@@ -742,6 +797,8 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
 # Execute benchmarks
 # To skip scales that already completed, set SKIP_SCALES (e.g., ["small", "medium"])
 # To resume a previous run, set RESUME_RUN_ID to the previous run_id
+# Phase 22 validation: Run "large" (50k) or "xlarge" (100k) for Phase 19 comparison
+# Phase 19 baseline was at 90k samples (custom config, not one of these presets)
 BENCHMARK_SCALES = ["small", "medium", "large", "xlarge", "target"]
 SKIP_SCALES: list[
     str
@@ -871,6 +928,54 @@ for _, row in results_df.iterrows():
         snps_per_sec = row.get("jax_snps_per_sec")
         if snps_per_sec:
             print(f"  Throughput: {snps_per_sec:,.0f} SNPs/sec")
+
+# Phase 19 vs Phase 22 timing comparison
+# Phase 19 baseline from 19-02-SUMMARY.md (90k synthetic, 32-core Databricks VM)
+# Values verified against .planning/phases/19-measure-and-diagnose/19-02-SUMMARY.md
+PHASE_19_BASELINE = {
+    "eigendecomp": 3114.0,  # seconds (54% of total)
+    "kinship": 1440.0,  # seconds (25% of total)
+    "lmm_assoc": 1211.0,  # seconds (21% of total)
+    "total": 5764.0,  # seconds (96.1 min)
+}
+
+# Extract Phase 22 timings from results
+# The "large" config in this notebook is 50k samples -- Phase 19 baseline was 90k
+# Check if we ran a comparable scale before printing comparison
+for _, row in results_df.iterrows():
+    cfg_name = row["config"]
+    cfg = CONFIGS.get(cfg_name)
+    if cfg is None:
+        continue
+
+    # Only compare configs at 50k+ samples (comparable to Phase 19 baseline)
+    if cfg.n_samples < 50_000:
+        continue
+
+    print(f"\n{'=' * 70}")
+    print(f"PHASE 19 vs PHASE 22 COMPARISON ({cfg_name}: {cfg.n_samples:,} samples)")
+    print(f"{'=' * 70}")
+    print(
+        "NOTE: Phase 19 baseline was 90k samples. Scale differences affect absolute times."
+    )
+    print(f"{'Phase':<20} {'P19 (90k)':>12} {'P22 (' + cfg_name + ')':>14}")
+    print("-" * 50)
+
+    kinship_t = row.get("kinship_time", 0)
+    eigen_t = row.get("eigendecomp_time", 0)
+    lmm_t = row.get("lmm_jax_time", 0)
+    total_t = row.get("jamma_total_time", 0)
+
+    for label, p19, p22 in [
+        ("Eigendecomp", PHASE_19_BASELINE["eigendecomp"], eigen_t),
+        ("Kinship", PHASE_19_BASELINE["kinship"], kinship_t),
+        ("LMM Association", PHASE_19_BASELINE["lmm_assoc"], lmm_t),
+        ("Total", PHASE_19_BASELINE["total"], total_t),
+    ]:
+        if p22 > 0:
+            print(f"  {label:<18} {p19:>8.0f}s {p22:>10.0f}s")
+        else:
+            print(f"  {label:<18} {p19:>8.0f}s {'N/A':>10}")
 
 # COMMAND ----------
 

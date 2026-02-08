@@ -11,30 +11,55 @@ import psutil
 from loguru import logger
 
 
-def estimate_eigendecomp_memory(n_samples: int) -> float:
+def _dsyevd_workspace_gb(n: int) -> float:
+    """DSYEVD workspace: LWORK=(1+6N+2N^2) doubles, LIWORK=(3+5N) ints."""
+    lwork_bytes = (1 + 6 * n + 2 * n * n) * 8  # float64
+    liwork_bytes = (3 + 5 * n) * 4  # int32
+    return (lwork_bytes + liwork_bytes) / 1e9
+
+
+def _dsyevr_workspace_gb(n: int) -> float:
+    """DSYEVR workspace: LWORK=26N doubles, LIWORK=10N ints."""
+    lwork_bytes = 26 * n * 8  # float64
+    liwork_bytes = 10 * n * 4  # int32
+    return (lwork_bytes + liwork_bytes) / 1e9
+
+
+def estimate_eigendecomp_memory(n_samples: int, driver: str = "evd") -> float:
     """Estimate peak memory (GB) for eigendecomposition of kinship matrix.
 
-    Peak memory during eigendecomposition includes:
-    - K (input kinship matrix): n^2 * 8 bytes
+    With overwrite_a=True (scipy), peak memory during eigendecomposition:
+    - K (input, overwritten in-place): n^2 * 8 bytes
     - U (output eigenvectors): n^2 * 8 bytes
-    - workspace (DSYEVR LAPACK routine): ~26*n*8 + 10*n*4 bytes
+    - workspace (LAPACK driver-specific)
 
-    For 200k samples: 320GB + 320GB + 0.04GB = ~640GB
-    For 100k samples: 80GB + 80GB + 0.02GB = ~160GB
+    Driver 'evd' (DSYEVD, default): divide-and-conquer, fast, O(n^2) workspace.
+      For 200k samples: 320GB + 320GB + ~640GB = ~1280GB
+      For 100k samples: 80GB + 80GB + ~160GB = ~320GB
+
+    Driver 'evr' (DSYEVR): relatively robust representations, O(n) workspace.
+      For 200k samples: 320GB + 320GB + ~0.05GB = ~640GB
+      For 100k samples: 80GB + 80GB + ~0.02GB = ~160GB
 
     Args:
         n_samples: Number of samples (individuals).
+        driver: LAPACK driver -- 'evd' for DSYEVD (default), 'evr' for DSYEVR.
 
     Returns:
         Estimated peak memory in GB.
 
     Example:
         >>> estimate_eigendecomp_memory(200_000)
-        640.04
+        1280.01
+        >>> estimate_eigendecomp_memory(200_000, driver='evr')
+        640.05
     """
     kinship_gb = n_samples**2 * 8 / 1e9  # K input matrix
     eigenvectors_gb = n_samples**2 * 8 / 1e9  # U output eigenvectors
-    workspace_gb = (26 * n_samples * 8 + 10 * n_samples * 4) / 1e9  # DSYEVR
+    if driver == "evr":
+        workspace_gb = _dsyevr_workspace_gb(n_samples)
+    else:
+        workspace_gb = _dsyevd_workspace_gb(n_samples)
     return kinship_gb + eigenvectors_gb + workspace_gb
 
 
@@ -48,7 +73,7 @@ class MemoryBreakdown(NamedTuple):
     kinship_gb: float  # n^2 * 8 bytes (float64)
     genotypes_gb: float  # n * p * 4 bytes (float32)
     eigenvectors_gb: float  # n^2 * 8 bytes (float64)
-    eigendecomp_workspace_gb: float  # ~26*n*8 + 10*n*4 bytes for DSYEVR
+    eigendecomp_workspace_gb: float  # DSYEVD: (1+6n+2n^2)*8 + (3+5n)*4 bytes
     lmm_rotated_gb: float  # n * 8 * 3 bytes (Uy, UW, rotated vectors)
     lmm_batch_gb: float  # n * batch_size * 8 bytes
     total_gb: float  # Peak memory (max of phases)
@@ -90,9 +115,9 @@ def estimate_workflow_memory(
     genotypes_gb = n_samples * n_snps * 4 / 1e9  # float32
     eigenvectors_gb = n_samples**2 * 8 / 1e9  # float64
 
-    # Eigendecomp workspace: DSYEVR uses O(n) workspace
-    # Formula: LWORK=26*n doubles + LIWORK=10*n integers
-    eigendecomp_workspace_gb = (26 * n_samples * 8 + 10 * n_samples * 4) / 1e9
+    # Eigendecomp workspace: DSYEVD uses O(n^2) workspace (default driver)
+    # Formula: LWORK=(1+6n+2n^2) doubles + LIWORK=(3+5n) integers
+    eigendecomp_workspace_gb = _dsyevd_workspace_gb(n_samples)
 
     # LMM working memory
     lmm_rotated_gb = n_samples * 8 * 3 / 1e9  # Uy, UW, Ux per SNP
@@ -149,7 +174,7 @@ class StreamingMemoryBreakdown(NamedTuple):
 
     kinship_gb: float  # n^2 * 8 bytes (float64)
     eigenvectors_gb: float  # n^2 * 8 bytes (float64)
-    eigendecomp_workspace_gb: float  # ~26*n*8 + 10*n*4 bytes for DSYEVR
+    eigendecomp_workspace_gb: float  # DSYEVD: (1+6n+2n^2)*8 + (3+5n)*4 bytes
     chunk_gb: float  # n * chunk_size * 8 bytes (float64 for precision)
     rotation_buffer_gb: float  # n * chunk_size * 8 bytes for UtG
     grid_reml_gb: float  # n_grid * chunk_size * 8 bytes for Grid REML intermediate
@@ -175,8 +200,8 @@ def estimate_streaming_memory(
 
     For 200k samples, 95k SNPs, 10k chunk, n_grid=50:
     - Kinship accumulation: 320GB + 16GB = 336GB
-    - Eigendecomp: 320GB + 320GB + 0.04GB = 640GB (PEAK)
-    - LMM: 320GB + 16GB + 16GB + 4MB = 356GB (still not peak since eigendecomp is 640GB)
+    - Eigendecomp: 320GB + 320GB + ~640GB = ~1280GB (PEAK, DSYEVD workspace)
+    - LMM: 320GB + 16GB + 16GB + 4MB = 356GB
 
     Note: This reveals the true constraint - eigendecomposition cannot be
     streamed and requires both kinship (input) and eigenvectors (output)
@@ -199,9 +224,9 @@ def estimate_streaming_memory(
     kinship_gb = n_samples**2 * 8 / 1e9  # float64
     eigenvectors_gb = n_samples**2 * 8 / 1e9  # float64
 
-    # Eigendecomp workspace: DSYEVR uses O(n) workspace
-    # Formula: LWORK=26*n doubles + LIWORK=10*n integers
-    eigendecomp_workspace_gb = (26 * n_samples * 8 + 10 * n_samples * 4) / 1e9
+    # Eigendecomp workspace: DSYEVD uses O(n^2) workspace (default driver)
+    # Formula: LWORK=(1+6n+2n^2) doubles + LIWORK=(3+5n) integers
+    eigendecomp_workspace_gb = _dsyevd_workspace_gb(n_samples)
 
     # Chunk memory (float64 for precision in kinship accumulation)
     chunk_gb = n_samples * chunk_size * 8 / 1e9
@@ -333,14 +358,7 @@ def log_memory_snapshot(label: str = "", level: str = "INFO") -> MemorySnapshot:
         f"Available={snap.available_gb:.1f}GB/{snap.total_gb:.1f}GB "
         f"({snap.percent_used:.1f}% used)"
     )
-
-    if level == "DEBUG":
-        logger.debug(msg)
-    elif level == "WARNING":
-        logger.warning(msg)
-    else:
-        logger.info(msg)
-
+    logger.log(level, msg)
     return snap
 
 
@@ -381,23 +399,16 @@ def cleanup_memory(clear_jax: bool = True, verbose: bool = True) -> MemorySnapsh
     else:
         before = get_memory_snapshot()
 
-    # Multiple GC passes to handle reference cycles
-    gc.collect()
-    gc.collect()
     gc.collect()
 
-    # Clear JAX caches if requested
     if clear_jax:
         try:
             import jax
 
             jax.clear_caches()
-            # Note: jax.clear_backends() would also clear device memory
-            # but reinitializes backends on next use - more aggressive
         except ImportError:
-            pass  # JAX not installed, skip
+            pass
 
-    # Final GC pass after clearing caches
     gc.collect()
 
     if verbose:

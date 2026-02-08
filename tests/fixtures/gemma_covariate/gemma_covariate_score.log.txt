@@ -1,0 +1,37 @@
+##
+## GEMMA Version    = 0.98.5 (2021-08-25)
+## Build profile    = /gnu/store/8rvid272yb53bgascf5c468z0jhsyflj-profile
+## GCC version      = 13.3.0
+## GSL Version      = 2.8
+## OpenBlas         = OpenBLAS 0.3.29  - OpenBLAS 0.3.29 DYNAMIC_ARCH NO_AFFINITY Nehalem MAX_THREADS=128
+##   arch           = Nehalem
+##   threads        = 8
+##   parallel type  = threaded
+##
+## Command Line Input = gemma -bfile /data/tests/fixtures/gemma_synthetic/test -k /data/tests/fixtures/gemma_synthetic/gemma_kinship.cXX.txt -c /data/tests/fixtures/gemma_covariate/covariates.txt -lmm 3 -o gemma_covariate_score -outdir /data/tests/fixtures/gemma_covariate 
+##
+## Date = Thu Feb  5 16:25:10 2026
+##
+## Summary Statistics:
+## number of total individuals = 100
+## number of analyzed individuals = 100
+## number of covariates = 2
+## number of phenotypes = 1
+## number of total SNPs/var = 500
+## number of analyzed SNPs/var = 500
+## REMLE log-likelihood in the null model = -139.624
+## MLE log-likelihood in the null model = -138.905
+## pve estimate in the null model = 0.325307
+## se(pve) in the null model = 0.35506
+## vg estimate in the null model = 0.839755
+## ve estimate in the null model = 0.687909
+## beta estimate in the null model =   -0.00475218  -0.0915228
+## se(beta) =   0.0837585  0.224917
+##
+## Computation Time:
+## total computation time = 0.0213594 min 
+## computation time break down: 
+##      time on eigen-decomposition = 0.0032477 min 
+##      time on calculating UtX = 0.0002508 min 
+##      time on optimization = 0.0005419 min 
+##

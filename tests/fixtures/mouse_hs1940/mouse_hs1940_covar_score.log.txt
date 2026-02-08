@@ -1,0 +1,37 @@
+##
+## GEMMA Version    = 0.98.5 (2021-08-25)
+## Build profile    = /gnu/store/8rvid272yb53bgascf5c468z0jhsyflj-profile
+## GCC version      = 13.3.0
+## GSL Version      = 2.8
+## OpenBlas         = OpenBLAS 0.3.29  - OpenBLAS 0.3.29 DYNAMIC_ARCH NO_AFFINITY Nehalem MAX_THREADS=128
+##   arch           = Nehalem
+##   threads        = 8
+##   parallel type  = threaded
+##
+## Command Line Input = gemma -bfile /data/tests/fixtures/mouse_hs1940/mouse_hs1940 -k /data/tests/fixtures/mouse_hs1940/mouse_hs1940_kinship.cXX.txt -c /data/tests/fixtures/mouse_hs1940/covariates.txt -lmm 3 -o mouse_hs1940_covar_score -outdir /data/tests/fixtures/mouse_hs1940 
+##
+## Date = Thu Feb  5 16:24:35 2026
+##
+## Summary Statistics:
+## number of total individuals = 1940
+## number of analyzed individuals = 1410
+## number of covariates = 3
+## number of phenotypes = 1
+## number of total SNPs/var = 12226
+## number of analyzed SNPs/var = 10768
+## REMLE log-likelihood in the null model = -1582.86
+## MLE log-likelihood in the null model = -1584.33
+## pve estimate in the null model = 0.608887
+## se(pve) in the null model = 0.0328319
+## vg estimate in the null model = 1.47748
+## ve estimate in the null model = 0.341293
+## beta estimate in the null model =   0.00917974  0.00253985  -0.000884065
+## se(beta) =   0.018461  0.0363378  0.0242243
+##
+## Computation Time:
+## total computation time = 0.348688 min 
+## computation time break down: 
+##      time on eigen-decomposition = 0.0939141 min 
+##      time on calculating UtX = 0.0766341 min 
+##      time on optimization = 0.0191683 min 
+##

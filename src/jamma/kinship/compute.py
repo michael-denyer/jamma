@@ -264,10 +264,10 @@ def compute_kinship_streaming(
     n_samples = meta["n_samples"]
     n_snps = meta["n_snps"]
 
-    logger.info("## Computing Kinship Matrix")
-    logger.info(f"number of total individuals = {n_samples}")
-    logger.info(f"number of total SNPs/variants = {n_snps}")
-    logger.info(f"chunk size = {chunk_size}")
+    logger.info("Computing Kinship Matrix")
+    logger.info(f"  Individuals: {n_samples:,}")
+    logger.info(f"  SNPs: {n_snps:,}")
+    logger.info(f"  Chunk size: {chunk_size:,}")
 
     # Memory check before allocation
     # Check against full pipeline peak (eigendecomp) since it always follows kinship.
@@ -333,7 +333,7 @@ def compute_kinship_streaming(
             f"{n_removed:,} removed (MAF/missing/monomorphic)"
         )
     else:
-        logger.info(f"number of analyzed SNPs = {n_filtered}")
+        logger.info(f"  Analyzed SNPs: {n_filtered:,}")
 
     # Get indices of SNPs that passed filtering
     snp_indices = np.where(snp_mask)[0]
@@ -373,8 +373,7 @@ def compute_kinship_streaming(
     K = K / n_filtered
 
     elapsed = time.perf_counter() - start_time
-    logger.info("## Kinship matrix computed")
-    logger.info(f"time elapsed = {elapsed:.2f} seconds")
+    logger.info(f"Kinship matrix computed in {elapsed:.2f}s")
 
     # Return as numpy array for downstream compatibility
     return np.array(K)

@@ -35,16 +35,16 @@ class TestMemoryEstimation:
         # Eigenvectors: same as kinship = 320GB
         assert 319 < est.eigenvectors_gb < 321
 
-        # Eigendecomp workspace: O(n) not O(n^2) - should be < 1GB
-        assert (
-            est.eigendecomp_workspace_gb < 1.0
-        ), f"Workspace should be O(n) ~50MB, got {est.eigendecomp_workspace_gb:.2f}GB"
+        # Eigendecomp workspace: DSYEVD O(n^2) - ~640GB at 200k
+        assert est.eigendecomp_workspace_gb > 600, (
+            f"DSYEVD workspace should be ~640GB at 200k, "
+            f"got {est.eigendecomp_workspace_gb:.2f}GB"
+        )
 
-        # Peak is during eigendecomp: kinship + eigenvectors = ~640GB
-        # (kinship matrix in + eigenvectors out simultaneously)
+        # Peak is during eigendecomp: kinship + eigenvectors + workspace = ~1280GB
         assert (
-            600 < est.total_gb < 700
-        ), f"Expected ~640GB (eigendecomp peak), got {est.total_gb}"
+            1250 < est.total_gb < 1310
+        ), f"Expected ~1280GB (eigendecomp peak), got {est.total_gb}"
 
     def test_memory_breakdown_10k(self):
         """Memory estimate for 10k samples should be reasonable."""

@@ -4,6 +4,7 @@ Two-pass disk streaming: (1) SNP statistics, (2) association per chunk.
 Never allocates the full genotype matrix.
 """
 
+import gc
 import time
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from loguru import logger
 from jamma.core.memory import estimate_streaming_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask
+from jamma.core.threading import blas_threads
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
 from jamma.lmm.chunk import _compute_chunk_size
 from jamma.lmm.io import IncrementalAssocWriter
@@ -195,15 +197,16 @@ def run_lmm_association_streaming(
             )
 
     if show_progress:
-        logger.info("## Performing LMM Association Test (Streaming)")
-        logger.info(f"number of total individuals = {n_samples_total}")
-        logger.info(f"number of analyzed individuals = {n_valid}")
-        logger.info(f"number of total SNPs/variants = {n_snps}")
-        logger.info(f"lambda range = [{l_min:.2e}, {l_max:.2e}]")
+        logger.info("Performing LMM Association Test (streaming)")
+        logger.info(f"  Total individuals: {n_samples_total:,}")
+        logger.info(f"  Analyzed individuals: {n_valid:,}")
+        logger.info(f"  Total SNPs: {n_snps:,}")
+        logger.info(f"  Lambda range: [{l_min:.2e}, {l_max:.2e}]")
 
     device = _select_jax_device(use_gpu)
 
     # === PASS 1: SNP statistics (without loading all genotypes) ===
+    t_io_start = time.perf_counter()
     all_means = np.zeros(n_snps, dtype=np.float64)
     all_miss_counts = np.zeros(n_snps, dtype=np.int32)
     all_vars = np.zeros(n_snps, dtype=np.float64)  # For monomorphic detection
@@ -234,6 +237,10 @@ def run_lmm_association_streaming(
         all_miss_counts[start:end] = chunk_miss_counts
         all_vars[start:end] = chunk_vars
 
+    t_io_end = time.perf_counter()
+
+    # === SNP statistics: filtering + stats construction ===
+    t_snp_start = time.perf_counter()
     snp_mask, allele_freqs, _mafs = compute_snp_filter_mask(
         all_means, all_miss_counts, all_vars, n_samples, maf_threshold, miss_threshold
     )
@@ -241,13 +248,14 @@ def run_lmm_association_streaming(
     n_filtered = len(snp_indices)
 
     if show_progress:
-        logger.info(f"number of analyzed SNPs = {n_filtered}")
+        logger.info(f"  Analyzed SNPs: {n_filtered:,}")
 
     if n_filtered == 0:
         if show_progress:
             elapsed = time.perf_counter() - start_time
-            logger.info("## LMM Association completed")
-            logger.info(f"time elapsed = {elapsed:.2f} seconds")
+            logger.info(
+                f"LMM Association completed in {elapsed:.2f}s (no SNPs passed filter)"
+            )
         return []
 
     snp_stats = list(
@@ -258,17 +266,23 @@ def run_lmm_association_streaming(
         )
     )
     filtered_means = all_means[snp_indices]
+    t_snp_end = time.perf_counter()
 
+    # === Eigendecomp + setup ===
+    t_eigen_start = time.perf_counter()
     eigenvalues_np, U = _eigendecompose_or_reuse(
         kinship, eigenvalues, eigenvectors, show_progress, "lmm_streaming"
     )
-    UT = np.ascontiguousarray(U.T)  # Cache contiguous transpose for BLAS matmuls
+    UT = np.ascontiguousarray(U.T)
+    del kinship  # Destroyed by eigendecomp overwrite_a=True
+    gc.collect()
 
     W, n_cvt = _build_covariate_matrix(covariates, n_samples)
 
-    # Prepare rotated matrices
-    UtW = UT @ W
-    Uty = UT @ phenotypes
+    # Prepare rotated matrices (numpy BLAS matmuls)
+    with blas_threads():
+        UtW = UT @ W
+        Uty = UT @ phenotypes
 
     logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
         lmm_mode, eigenvalues_np, UtW, Uty, n_cvt, device, show_progress
@@ -280,6 +294,12 @@ def run_lmm_association_streaming(
     Uty_jax = jax.device_put(Uty, device)
 
     jax_chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid, n_cvt)
+    t_eigen_end = time.perf_counter()
+
+    # Timing accumulators for per-chunk phases
+    t_rotation_total = 0.0
+    t_jax_compute_total = 0.0
+    t_result_write_total = 0.0
 
     # === PASS 2: Association ===
     writer = None
@@ -346,16 +366,20 @@ def run_lmm_association_streaming(
                         geno_jax_chunk, ((0, 0), (0, pad_width)), mode="constant"
                     )
 
-                UtG_chunk = np.ascontiguousarray(UT @ geno_jax_chunk)
+                with blas_threads():
+                    UtG_chunk = np.ascontiguousarray(UT @ geno_jax_chunk)
                 return UtG_chunk, actual_len, needs_pad
 
             # Dict-based accumulators for this file chunk
             accum: dict[str, list] = _init_accumulators(lmm_mode)
 
             # Prepare first JAX chunk
+            t_rot_start = time.perf_counter()
             UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
                 jax_starts[0], geno_subset, n_subset
             )
+            t_rot_end = time.perf_counter()
+            t_rotation_total += t_rot_end - t_rot_start
             UtG_jax = jax.device_put(UtG_np, device)
             del UtG_np
 
@@ -366,11 +390,17 @@ def run_lmm_association_streaming(
 
                 # Start async transfer of next JAX chunk while computing current
                 if i + 1 < len(jax_starts):
+                    t_rot_start = time.perf_counter()
                     UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
                         jax_starts[i + 1], geno_subset, n_subset
                     )
+                    t_rot_end = time.perf_counter()
+                    t_rotation_total += t_rot_end - t_rot_start
                     UtG_jax = jax.device_put(UtG_np, device)
                     del UtG_np
+
+                # --- JAX compute timing ---
+                t_jax_start = time.perf_counter()
 
                 # Batch compute Uab (shared across all modes)
                 Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
@@ -390,11 +420,13 @@ def run_lmm_association_streaming(
                     betas, ses, p_walds = batch_calc_wald_stats(
                         n_cvt, best_lambdas, eigenvalues, Uab_batch, n_samples
                     )
+                    p_walds.block_until_ready()
 
                 elif lmm_mode == 3:  # Score
                     betas, ses, p_scores = batch_calc_score_stats(
                         n_cvt, Hi_eval_null_jax, Uab_batch, n_samples
                     )
+                    p_scores.block_until_ready()
 
                 elif lmm_mode == 2:  # LRT
                     best_lambdas_mle, best_logls_mle = (
@@ -411,6 +443,7 @@ def run_lmm_association_streaming(
                     p_lrts = jax.vmap(calc_lrt_pvalue_jax)(
                         best_logls_mle, jnp.full_like(best_logls_mle, logl_H0)
                     )
+                    p_lrts.block_until_ready()
 
                 elif lmm_mode == 4:  # All tests
                     # Score test (cheapest, no optimization)
@@ -449,6 +482,10 @@ def run_lmm_association_streaming(
                     betas, ses, p_walds = batch_calc_wald_stats(
                         n_cvt, best_lambdas, eigenvalues, Uab_batch, n_samples
                     )
+                    p_walds.block_until_ready()
+
+                t_jax_end = time.perf_counter()
+                t_jax_compute_total += t_jax_end - t_jax_start
 
                 # Strip padding and append to dict-based accumulators
                 _append_chunk_results(
@@ -461,6 +498,7 @@ def run_lmm_association_streaming(
 
             # Concatenate, build results, write/accumulate
             if any(accum.values()):
+                t_write_start = time.perf_counter()
                 arrays = _concat_jax_accumulators(lmm_mode, accum)
                 for result in _yield_chunk_results(
                     lmm_mode,
@@ -475,9 +513,34 @@ def run_lmm_association_streaming(
                     else:
                         all_results.append(result)
                 del arrays, accum
+                t_write_end = time.perf_counter()
+                t_result_write_total += t_write_end - t_write_start
 
         if show_progress:
             log_rss_memory("lmm_streaming", "after_association")
+
+            elapsed = time.perf_counter() - start_time
+            t_io = t_io_end - t_io_start
+            t_snp = t_snp_end - t_snp_start
+            t_eigen = t_eigen_end - t_eigen_start
+            accounted = (
+                t_io
+                + t_snp
+                + t_eigen
+                + t_rotation_total
+                + t_jax_compute_total
+                + t_result_write_total
+            )
+            logger.info("Timing breakdown:")
+            logger.info(f"  I/O read (pass 1):   {t_io:.2f}s")
+            logger.info(f"  SNP statistics:      {t_snp:.2f}s")
+            logger.info(f"  Eigendecomp+setup:   {t_eigen:.2f}s")
+            logger.info(f"  UT@G rotation:       {t_rotation_total:.2f}s")
+            logger.info(f"  JAX compute:         {t_jax_compute_total:.2f}s")
+            logger.info(f"  Result write:        {t_result_write_total:.2f}s")
+            logger.info("  ----")
+            logger.info(f"  Accounted:           {accounted:.2f}s")
+            logger.info(f"  Total:               {elapsed:.2f}s")
 
         del eigenvalues, UtW_jax, Uty_jax
 
@@ -491,7 +554,6 @@ def run_lmm_association_streaming(
 
     if show_progress:
         elapsed = time.perf_counter() - start_time
-        logger.info("## LMM Association completed")
-        logger.info(f"time elapsed = {elapsed:.2f} seconds")
+        logger.info(f"LMM Association completed in {elapsed:.2f}s")
 
     return [] if output_path is not None else all_results

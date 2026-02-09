@@ -257,4 +257,4 @@ numpy's LAPACK binding supports large matrices without this limitation.
 
 ---
 
-*Last updated: 2026-02-05*
+*Last updated: 2026-02-09*

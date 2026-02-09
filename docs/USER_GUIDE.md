@@ -165,23 +165,28 @@ results = run_lmm_association_streaming(
 ## Large-Scale Eigendecomposition (>46k samples)
 
 JAMMA's LMM requires eigendecomposition of the N×N kinship matrix. The default
-numpy/scipy stack uses LP64 BLAS (32-bit integers), which overflows at ~46k samples
+numpy stack uses LP64 BLAS (32-bit integers), which overflows at ~46k samples
 (46k × 46k = 2.1 billion elements > int32 max).
 
 ### NumPy with MKL ILP64 (Linux)
 
-For datasets with >46k samples on Linux, install numpy and scipy built against
+For datasets with >46k samples on Linux, install numpy built against
 Intel MKL with 64-bit integer support (ILP64):
 
 ```bash
-# Install ILP64 numpy and scipy wheels
-pip install numpy scipy \
+# Install ILP64 numpy wheel
+pip install numpy \
   --extra-index-url https://michael-denyer.github.io/numpy-mkl \
   --force-reinstall --upgrade
 
-# CRITICAL: Install jamma without dependencies to avoid overwriting ILP64 builds
+# CRITICAL: Install jamma without dependencies to avoid overwriting ILP64 numpy
 pip install jamma --no-deps
 ```
+
+> **Note:** scipy does not support ILP64 — it hardcodes `ilp64=False` in
+> `get_lapack_funcs()` ([scipy#23351](https://github.com/scipy/scipy/issues/23351)).
+> JAMMA uses `numpy.linalg.eigh` which correctly uses ILP64 when numpy is built
+> with ILP64 MKL.
 
 **Verify ILP64 is active:**
 
@@ -218,7 +223,7 @@ which permits free redistribution with no royalty fees. However, the ISSL is **n
 an open source license** — it restricts reverse engineering and decompilation, and
 is not GPL-compatible.
 
-This does not affect JAMMA itself (GPL-3.0). JAMMA calls numpy/scipy APIs (BSD
+This does not affect JAMMA itself (GPL-3.0). JAMMA calls numpy APIs (BSD
 licensed) and has no direct dependency on MKL. Users who install MKL-backed numpy
 wheels do so as a separate, optional runtime choice. Users requiring a pure
 GPL/FOSS stack can use standard numpy with OpenBLAS (the default), which works

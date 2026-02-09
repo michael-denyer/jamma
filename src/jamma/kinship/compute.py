@@ -206,6 +206,10 @@ def compute_centered_kinship(
     # Scale by number of filtered SNPs
     K = K / n_snps
 
+    # Block until all async JAX operations complete — without this,
+    # the progress bar and memory snapshot report before computation finishes.
+    K.block_until_ready()
+
     # Log memory after kinship computation
     log_memory_snapshot(f"after_kinship_{n_samples}samples")
 
@@ -385,6 +389,10 @@ def compute_kinship_streaming(
 
     # Scale by number of filtered SNPs
     K = K / n_filtered
+
+    # Block until all async JAX operations complete — without this,
+    # the timer and progress bar report before computation finishes.
+    K.block_until_ready()
 
     elapsed = time.perf_counter() - start_time
     logger.info(f"Kinship matrix computed in {elapsed:.2f}s")

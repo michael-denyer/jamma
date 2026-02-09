@@ -351,9 +351,10 @@ def cleanup_memory(clear_jax: bool = True, verbose: bool = True) -> MemorySnapsh
     prevent memory accumulation that can cause OOM/SIGSEGV errors.
 
     This function:
-    1. Runs Python garbage collection (multiple passes)
+    1. Runs Python garbage collection
     2. Clears JAX compilation caches (optional, enabled by default)
-    3. Logs memory before/after cleanup if verbose
+    3. Runs a second GC pass to collect objects freed by cache clearing
+    4. Logs memory before/after cleanup if verbose
 
     Args:
         clear_jax: If True (default), clear JAX caches. Set False if JAX

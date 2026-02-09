@@ -10,7 +10,6 @@ overflows at ~46k x 46k matrices. With ILP64 numpy (MKL), matrices up to
 200k+ are supported.
 """
 
-import gc
 import time
 import warnings
 
@@ -75,12 +74,12 @@ def eigendecompose_kinship(
     log_memory_snapshot(f"before_eigendecomp_{n_samples}samples")
 
     n_threads = get_blas_thread_count()
-    blas_libs = [lib for lib in threadpool_info() if lib.get("user_api") == "blas"]
-    for lib in blas_libs:
-        logger.debug(
-            f"BLAS: {lib.get('internal_api')}, "
-            f"current={lib.get('num_threads')}, target={n_threads}"
-        )
+    for lib in threadpool_info():
+        if lib.get("user_api") == "blas":
+            logger.debug(
+                f"BLAS: {lib.get('internal_api')}, "
+                f"current={lib.get('num_threads')}, target={n_threads}"
+            )
 
     logger.info(f"Eigendecomp: numpy.linalg.eigh, threads={n_threads}")
 
@@ -89,19 +88,15 @@ def eigendecompose_kinship(
         with blas_threads(n_threads):
             eigenvalues, eigenvectors = np.linalg.eigh(K)
     except MemoryError:
-        mem_gb = estimate_eigendecomp_memory(n_samples)
         logger.error(
             f"MemoryError during eigendecomposition of {n_samples:,}x{n_samples:,} "
-            f"matrix. Estimated memory: ~{mem_gb:.1f} GB. "
+            f"matrix. Estimated memory: ~{required_gb:.1f} GB. "
             f"Consider using a machine with more RAM or reducing sample size."
         )
         raise
     except Exception as e:
         logger.error(f"Eigendecomposition failed: {type(e).__name__}: {e}")
         raise
-
-    del K
-    gc.collect()
 
     elapsed = time.perf_counter() - start_time
     logger.info(f"Eigendecomposition completed in {elapsed:.2f} seconds")

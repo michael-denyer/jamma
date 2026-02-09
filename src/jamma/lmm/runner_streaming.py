@@ -262,7 +262,7 @@ def run_lmm_association_streaming(
         zip(
             allele_freqs[snp_indices],
             all_miss_counts[snp_indices].astype(int),
-            strict=False,
+            strict=True,
         )
     )
     filtered_means = all_means[snp_indices]
@@ -274,7 +274,7 @@ def run_lmm_association_streaming(
         kinship, eigenvalues, eigenvectors, show_progress, "lmm_streaming"
     )
     UT = np.ascontiguousarray(U.T)
-    del kinship  # Destroyed by eigendecomp overwrite_a=True
+    del kinship
     gc.collect()
 
     W, n_cvt = _build_covariate_matrix(covariates, n_samples)
@@ -322,6 +322,26 @@ def run_lmm_association_streaming(
                 assoc_iterator, total=n_chunks, desc="Running LMM association"
             )
 
+        def _prepare_jax_chunk(
+            start: int, geno: np.ndarray, total: int
+        ) -> tuple[np.ndarray, int, bool]:
+            """Prepare a JAX chunk for device transfer (CPU work)."""
+            end = min(start + jax_chunk_size, total)
+            actual_len = end - start
+
+            geno_jax_chunk = geno[:, start:end]
+
+            needs_pad = actual_len < jax_chunk_size
+            if needs_pad:
+                pad_width = jax_chunk_size - actual_len
+                geno_jax_chunk = np.pad(
+                    geno_jax_chunk, ((0, 0), (0, pad_width)), mode="constant"
+                )
+
+            with blas_threads():
+                UtG_chunk = np.ascontiguousarray(UT @ geno_jax_chunk)
+            return UtG_chunk, actual_len, needs_pad
+
         for chunk, file_start, file_end in assoc_iterator:
             # Apply sample filtering
             if not np.all(valid_mask):
@@ -351,26 +371,6 @@ def run_lmm_association_streaming(
 
             n_subset = geno_subset.shape[1]
             jax_starts = list(range(0, n_subset, jax_chunk_size))
-
-            def _prepare_jax_chunk(
-                start: int, geno: np.ndarray, total: int
-            ) -> tuple[np.ndarray, int, bool]:
-                """Prepare a JAX chunk for device transfer (CPU work)."""
-                end = min(start + jax_chunk_size, total)
-                actual_len = end - start
-
-                geno_jax_chunk = geno[:, start:end]
-
-                needs_pad = actual_len < jax_chunk_size
-                if needs_pad:
-                    pad_width = jax_chunk_size - actual_len
-                    geno_jax_chunk = np.pad(
-                        geno_jax_chunk, ((0, 0), (0, pad_width)), mode="constant"
-                    )
-
-                with blas_threads():
-                    UtG_chunk = np.ascontiguousarray(UT @ geno_jax_chunk)
-                return UtG_chunk, actual_len, needs_pad
 
             # Dict-based accumulators for this file chunk
             accum: dict[str, list] = _init_accumulators(lmm_mode)

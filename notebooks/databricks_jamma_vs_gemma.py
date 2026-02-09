@@ -65,7 +65,6 @@ dbutils.widgets.dropdown(  # noqa: F821
 dbutils.widgets.text("maf", "0.01", "MAF threshold")  # noqa: F821
 dbutils.widgets.text("miss", "0.05", "Missing rate threshold")  # noqa: F821
 dbutils.widgets.dropdown("run_gemma", "yes", ["yes", "no"], "Run GEMMA for comparison")  # noqa: F821
-dbutils.widgets.text("output_dir", "/dbfs/tmp/jamma_benchmark", "Output directory")  # noqa: F821
 
 # COMMAND ----------
 
@@ -116,7 +115,6 @@ LMM_MODE = int(dbutils.widgets.get("lmm_mode"))  # noqa: F821
 MAF = float(dbutils.widgets.get("maf"))  # noqa: F821
 MISS = float(dbutils.widgets.get("miss"))  # noqa: F821
 RUN_GEMMA = dbutils.widgets.get("run_gemma") == "yes"  # noqa: F821
-OUTPUT_DIR = Path(dbutils.widgets.get("output_dir").strip())  # noqa: F821
 
 # Validate required inputs
 assert BFILE, "bfile widget is required — set it to your PLINK binary prefix"
@@ -132,8 +130,6 @@ if KINSHIP_FILE:
 if COVARIATE_FILE:
     assert Path(COVARIATE_FILE).exists(), f"Covariate file not found: {COVARIATE_FILE}"
 
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
 MODE_NAMES = {1: "Wald", 2: "LRT", 3: "Score", 4: "All tests"}
 print(f"Dataset:    {BFILE}")
 print(f"Kinship:    {KINSHIP_FILE or '(compute from genotypes)'}")
@@ -142,7 +138,7 @@ print(f"LMM mode:   {LMM_MODE} ({MODE_NAMES[LMM_MODE]})")
 print(f"MAF:        {MAF}")
 print(f"Miss:       {MISS}")
 print(f"Run GEMMA:  {RUN_GEMMA}")
-print(f"Output:     {OUTPUT_DIR}")
+print("Output:     /tmp/ (local disk)")
 
 # COMMAND ----------
 
@@ -243,8 +239,8 @@ else:
         kinship = compute_centered_kinship(plink_data.genotypes, check_memory=False)
         t_kin = time.perf_counter() - t0
     print(f"  {kinship.shape[0]}x{kinship.shape[1]} ({t_kin:.2f}s)")
-    # Save JAMMA kinship
-    jamma_kin_path = OUTPUT_DIR / "jamma_kinship.cXX.txt"
+    # Save JAMMA kinship (write to local disk — DBFS FUSE is too slow for large files)
+    jamma_kin_path = Path("/tmp/jamma_kinship.cXX.txt")
     write_kinship_matrix(kinship, jamma_kin_path)
     print(f"  Saved to {jamma_kin_path}")
 
@@ -327,8 +323,8 @@ print(
     f"JAMMA: {len(jamma_results)} SNPs in {jamma_time:.2f}s ({len(jamma_results) / jamma_time:.0f} SNPs/sec)"
 )
 
-# Save JAMMA results
-jamma_out = OUTPUT_DIR / "jamma_results.assoc.txt"
+# Save JAMMA results (local disk — DBFS FUSE is slow)
+jamma_out = Path("/tmp/jamma_results.assoc.txt")
 write_assoc_results(jamma_results, jamma_out)
 print(f"Saved to {jamma_out}")
 
@@ -373,8 +369,8 @@ if RUN_GEMMA:
             else:
                 gemma_kin_path = str(Path(tmpdir) / "kinship.cXX.txt")
                 print(f"  GEMMA kinship: {gemma_kinship_time:.2f}s")
-                # Copy to output dir for comparison
-                gemma_kin_save = OUTPUT_DIR / "gemma_kinship.cXX.txt"
+                # Copy to local disk for comparison
+                gemma_kin_save = Path("/tmp/gemma_kinship.cXX.txt")
                 shutil.copy2(gemma_kin_path, gemma_kin_save)
                 print(f"  Saved to {gemma_kin_save}")
 
@@ -424,8 +420,8 @@ if RUN_GEMMA:
                 if gemma_outfile.exists():
                     gemma_results = load_gemma_assoc(gemma_outfile)
                     print(f"  {len(gemma_results)} SNPs")
-                    # Copy to output dir
-                    gemma_save = OUTPUT_DIR / "gemma_results.assoc.txt"
+                    # Copy to local disk
+                    gemma_save = Path("/tmp/gemma_results.assoc.txt")
                     shutil.copy2(gemma_outfile, gemma_save)
                     print(f"  Saved to {gemma_save}")
                 else:
@@ -445,7 +441,7 @@ kinship_comparison = None
 
 # Compare kinship only when both tools computed it (no pre-computed file)
 if not KINSHIP_FILE and gemma_kinship_time is not None:
-    gemma_kin_save = OUTPUT_DIR / "gemma_kinship.cXX.txt"
+    gemma_kin_save = Path("/tmp/gemma_kinship.cXX.txt")
     if gemma_kin_save.exists():
         print("Comparing kinship matrices...")
         gemma_kinship = read_kinship_matrix(gemma_kin_save)
@@ -633,7 +629,7 @@ if gemma_results is not None:
         "max_relative_p_diff": f"{max_p_rel:.2e}",
     }
 
-summary_path = OUTPUT_DIR / "benchmark_summary.json"
+summary_path = Path("/tmp/benchmark_summary.json")
 with open(summary_path, "w") as f:
     json.dump(summary, f, indent=2)
 print(f"\nSummary saved to {summary_path}")

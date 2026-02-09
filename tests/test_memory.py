@@ -13,14 +13,14 @@ from jamma.core import (
     get_memory_snapshot,
     log_memory_snapshot,
 )
-from jamma.core.memory import estimate_lmm_memory
+from jamma.core.memory import _uab_iab_gb, estimate_lmm_memory
 
 
 class TestMemoryEstimation:
     """Tests for estimate_workflow_memory function."""
 
     def test_memory_breakdown_200k(self):
-        """Memory estimate for 200k samples - peak during eigendecomp ~640GB."""
+        """Memory estimate for 200k samples - peak during eigendecomp ~1280GB."""
         est = estimate_workflow_memory(200_000, 95_000)
 
         # Kinship: 200k^2 * 8 / 1e9 = 320GB
@@ -28,10 +28,10 @@ class TestMemoryEstimation:
             319 < est.kinship_gb < 321
         ), f"Expected ~320GB kinship, got {est.kinship_gb}"
 
-        # Genotypes: 200k * 95k * 4 / 1e9 = 76GB
+        # Genotypes: 200k * 95k * 8 / 1e9 = 152GB (float64 JAX copy)
         assert (
-            75 < est.genotypes_gb < 77
-        ), f"Expected ~76GB genotypes, got {est.genotypes_gb}"
+            151 < est.genotypes_gb < 153
+        ), f"Expected ~152GB genotypes (float64), got {est.genotypes_gb}"
 
         # Eigenvectors: same as kinship = 320GB
         assert 319 < est.eigenvectors_gb < 321
@@ -51,8 +51,9 @@ class TestMemoryEstimation:
         """Memory estimate for 10k samples should be reasonable."""
         est = estimate_workflow_memory(10_000, 100_000)
 
-        # Total should be < 10GB for this scale
-        assert est.total_gb < 10, f"10k scale should need <10GB, got {est.total_gb}"
+        # Total includes float64 genotypes (8GB) + Uab/Iab intermediates
+        # LMM phase peak: eigenvectors(0.8) + genotypes(8) + batch+Uab/Iab(~11) ≈ 20GB
+        assert est.total_gb < 25, f"10k scale should need <25GB, got {est.total_gb}"
 
     def test_memory_breakdown_has_all_fields(self):
         """MemoryBreakdown should have all expected fields."""
@@ -307,3 +308,201 @@ class TestLmmMemoryEstimation:
         """Tiny estimate should be sufficient."""
         est = estimate_lmm_memory(100, 100)
         assert est.sufficient is True
+
+
+class TestMemoryEstimateVsActualAllocation:
+    """Regression tests: estimates must cover actual runtime tensor shapes.
+
+    These tests verify that memory estimators account for the dominant JAX
+    intermediate buffers (Uab_batch, Iab_batch) that are created during LMM
+    computation. Without these, the estimate can pass but execution OOMs.
+    """
+
+    @pytest.mark.parametrize(
+        "n_samples,chunk_size,n_cvt",
+        [
+            (1_000, 500, 1),
+            (10_000, 5_000, 1),
+            (100_000, 10_000, 1),
+            (10_000, 5_000, 3),
+            (50_000, 20_000, 2),
+        ],
+    )
+    def test_lmm_estimate_covers_uab_iab(self, n_samples, chunk_size, n_cvt):
+        """LMM estimate must include Uab_batch + Iab_batch memory.
+
+        Runtime allocates:
+        - Uab_batch: (chunk_size, n_samples, n_index) float64
+        - Iab_batch: (chunk_size, n_cvt+2, n_index) float64
+        """
+        n_index = (n_cvt + 3) * (n_cvt + 2) // 2
+
+        # Actual allocation sizes
+        uab_bytes = chunk_size * n_samples * n_index * 8
+        iab_bytes = chunk_size * (n_cvt + 2) * n_index * 8
+        actual_uab_iab_gb = (uab_bytes + iab_bytes) / 1e9
+
+        # Estimator's computation
+        estimated_gb = _uab_iab_gb(n_samples, chunk_size, n_cvt)
+
+        assert abs(estimated_gb - actual_uab_iab_gb) < 1e-9, (
+            f"_uab_iab_gb({n_samples}, {chunk_size}, {n_cvt}) = {estimated_gb:.6f}GB "
+            f"but actual is {actual_uab_iab_gb:.6f}GB"
+        )
+
+    def test_lmm_batch_gb_includes_uab_iab(self):
+        """estimate_lmm_memory.lmm_batch_gb must include Uab/Iab, not just UtG."""
+        n_samples = 10_000
+        batch_size = 5_000
+        n_cvt = 1
+
+        est = estimate_lmm_memory(
+            n_samples, 1_000, lmm_batch_size=batch_size, n_cvt=n_cvt
+        )
+
+        # UtG alone: n_samples * batch_size * 8
+        utg_only_gb = n_samples * batch_size * 8 / 1e9
+
+        # lmm_batch_gb must be strictly larger than UtG alone (Uab+Iab added)
+        assert est.lmm_batch_gb > utg_only_gb, (
+            f"lmm_batch_gb ({est.lmm_batch_gb:.4f}GB) should exceed "
+            f"UtG-only ({utg_only_gb:.4f}GB) because Uab/Iab must be included"
+        )
+
+    def test_streaming_lmm_estimate_covers_uab_iab(self):
+        """Streaming LMM estimate must include Uab/Iab in total_peak_gb."""
+        from jamma.core.memory import estimate_lmm_streaming_memory
+
+        n_samples = 10_000
+        chunk_size = 5_000
+
+        est = estimate_lmm_streaming_memory(n_samples, 95_000, chunk_size=chunk_size)
+
+        # Minimum must include eigenvectors + Uab/Iab
+        uab_iab_gb = _uab_iab_gb(n_samples, chunk_size, n_cvt=1)
+        eigenvectors_gb = n_samples**2 * 8 / 1e9
+
+        assert est.total_peak_gb >= eigenvectors_gb + uab_iab_gb, (
+            f"total_peak_gb ({est.total_peak_gb:.4f}GB) should be >= "
+            f"eigenvectors ({eigenvectors_gb:.4f}GB) + Uab/Iab ({uab_iab_gb:.4f}GB)"
+        )
+
+
+class TestKinshipDtypeAccounting:
+    """Verify memory model accounts for float64 genotype copy in kinship."""
+
+    def test_workflow_genotypes_gb_is_float64(self):
+        """estimate_workflow_memory must use float64 (8 bytes) for genotypes.
+
+        compute_centered_kinship converts genotypes to float64 via
+        jnp.array(genotypes_filtered, dtype=jnp.float64).
+        """
+        n_samples = 10_000
+        n_snps = 50_000
+
+        est = estimate_workflow_memory(n_samples, n_snps)
+
+        # float64: n_samples * n_snps * 8 bytes
+        expected_gb = n_samples * n_snps * 8 / 1e9
+        assert abs(est.genotypes_gb - expected_gb) < 1e-9, (
+            f"genotypes_gb ({est.genotypes_gb:.4f}GB) should be float64 "
+            f"({expected_gb:.4f}GB), not float32 ({expected_gb / 2:.4f}GB)"
+        )
+
+    def test_lmm_genotypes_gb_is_float64(self):
+        """estimate_lmm_memory must use float64 for genotypes."""
+        n_samples = 10_000
+        n_snps = 50_000
+
+        est = estimate_lmm_memory(n_samples, n_snps)
+
+        expected_gb = n_samples * n_snps * 8 / 1e9
+        assert abs(est.genotypes_gb - expected_gb) < 1e-9
+
+
+class TestGateCorrectnessRunnerJax:
+    """Tests that runner_jax.py memory gate correctly blocks/passes."""
+
+    def test_lmm_gate_passes_with_ample_memory(self):
+        """Memory check should pass when plenty of memory is available."""
+        from unittest.mock import patch
+
+        with patch("jamma.core.memory.psutil.virtual_memory") as mock_mem:
+            mock_obj = mock_mem.return_value
+            mock_obj.available = 500 * 1e9  # 500GB
+
+            est = estimate_lmm_memory(1_000, 1_000)
+            assert est.sufficient is True
+
+    def test_lmm_gate_blocks_with_scarce_memory(self):
+        """Memory check should fail when memory is insufficient."""
+        from unittest.mock import patch
+
+        with patch("jamma.core.memory.psutil.virtual_memory") as mock_mem:
+            mock_obj = mock_mem.return_value
+            mock_obj.available = 1 * 1e9  # 1GB
+
+            # 100k samples needs ~80GB eigenvectors alone
+            est = estimate_lmm_memory(100_000, 10_000)
+            assert est.sufficient is False
+
+    def test_lmm_gate_threshold_boundary(self):
+        """Memory check should account for 10% safety margin.
+
+        _check_available uses strict less-than: total_gb * 1.1 < available_gb.
+        """
+        from unittest.mock import patch
+
+        # Compute total_gb deterministically (mock memory so it doesn't affect total)
+        with patch("jamma.core.memory.psutil.virtual_memory") as mock_mem:
+            mock_obj = mock_mem.return_value
+            mock_obj.available = 1000 * 1e9
+            est_dry = estimate_lmm_memory(100, 100)
+
+        needed_with_margin = est_dry.total_gb * 1.1
+
+        # Set available to just above the margin (should pass)
+        with patch("jamma.core.memory.psutil.virtual_memory") as mock_mem:
+            mock_obj = mock_mem.return_value
+            mock_obj.available = (needed_with_margin + 0.001) * 1e9
+
+            est = estimate_lmm_memory(100, 100)
+            assert est.sufficient is True
+
+        # Set available to just under the margin (should fail)
+        with patch("jamma.core.memory.psutil.virtual_memory") as mock_mem:
+            mock_obj = mock_mem.return_value
+            mock_obj.available = (needed_with_margin - 0.001) * 1e9
+
+            est = estimate_lmm_memory(100, 100)
+            assert est.sufficient is False
+
+
+class TestGateCorrectnessRunnerStreaming:
+    """Tests that runner_streaming.py memory gate correctly blocks/passes."""
+
+    def test_streaming_gate_passes_with_ample_memory(self):
+        """Memory check should pass when plenty of memory is available."""
+        from unittest.mock import patch
+
+        from jamma.core.memory import estimate_lmm_streaming_memory
+
+        with patch("jamma.core.memory.psutil.virtual_memory") as mock_mem:
+            mock_obj = mock_mem.return_value
+            mock_obj.available = 500 * 1e9
+
+            est = estimate_lmm_streaming_memory(1_000, 10_000)
+            assert est.sufficient is True
+
+    def test_streaming_gate_blocks_with_scarce_memory(self):
+        """Memory check should fail when memory is insufficient."""
+        from unittest.mock import patch
+
+        from jamma.core.memory import estimate_lmm_streaming_memory
+
+        with patch("jamma.core.memory.psutil.virtual_memory") as mock_mem:
+            mock_obj = mock_mem.return_value
+            mock_obj.available = 1 * 1e9
+
+            est = estimate_lmm_streaming_memory(100_000, 95_000)
+            assert est.sufficient is False

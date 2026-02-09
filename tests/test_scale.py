@@ -176,16 +176,19 @@ class TestMemoryEstimationAccuracy:
         expected_kinship = n_samples**2 * 8 / 1e9
         assert abs(est.kinship_gb - expected_kinship) < 0.01
 
-        # Genotypes: n * p * 4 bytes = 10000 * 50000 * 4 / 1e9 = 2.0 GB
-        expected_genotypes = n_samples * n_snps * 4 / 1e9
+        # Genotypes: n * p * 8 bytes (float64 JAX copy) = 4.0 GB
+        expected_genotypes = n_samples * n_snps * 8 / 1e9
         assert abs(est.genotypes_gb - expected_genotypes) < 0.01
 
         # Eigenvectors: same as kinship
         assert abs(est.eigenvectors_gb - expected_kinship) < 0.01
 
-        # Total should be reasonable (eigendecomp peak ~1.6GB, LMM peak ~4.4GB)
-        assert est.total_gb > 1.5
-        assert est.total_gb < 5.0
+        # Total should be reasonable: LMM peak includes genotypes (4GB) +
+        # eigenvectors (0.8GB) + Uab/Iab batch intermediates (~11GB for
+        # default batch_size=20k with n_index=6).  Eigendecomp peak is ~2.4GB.
+        # max(LMM ~16GB, eigendecomp ~2.4GB) → ~16GB.
+        assert est.total_gb > 10.0
+        assert est.total_gb < 20.0
 
     def test_estimate_scales_quadratically_with_samples(self):
         """Memory estimate should scale O(n^2) with samples."""

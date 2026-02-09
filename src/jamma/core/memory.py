@@ -69,10 +69,32 @@ class MemoryBreakdown(NamedTuple):
     sufficient: bool  # Whether available >= total * 1.1
 
 
+def _uab_iab_gb(n_samples: int, chunk_size: int, n_cvt: int = 1) -> float:
+    """Estimate Uab_batch + Iab_batch memory (GB) for LMM JAX computation.
+
+    These are the dominant intermediate buffers created during batch LMM:
+    - Uab_batch: (chunk_size, n_samples, n_index) float64
+    - Iab_batch: (chunk_size, n_cvt+2, n_index) float64  [Wald/All modes]
+
+    Args:
+        n_samples: Number of samples.
+        chunk_size: SNPs per JAX chunk.
+        n_cvt: Number of covariates (default 1).
+
+    Returns:
+        Combined memory in GB.
+    """
+    n_index = (n_cvt + 3) * (n_cvt + 2) // 2
+    uab_bytes = chunk_size * n_samples * n_index * 8
+    iab_bytes = chunk_size * (n_cvt + 2) * n_index * 8
+    return (uab_bytes + iab_bytes) / 1e9
+
+
 def estimate_workflow_memory(
     n_samples: int,
     n_snps: int,
     lmm_batch_size: int = 20_000,
+    n_cvt: int = 1,
 ) -> MemoryBreakdown:
     """Estimate memory requirements for full GWAS workflow.
 
@@ -90,6 +112,7 @@ def estimate_workflow_memory(
         n_snps: Number of SNPs (variants).
         lmm_batch_size: Batch size for LMM SNP processing (used for estimate,
             actual JAX chunk size is computed from int32 limits).
+        n_cvt: Number of covariates (default 1).
 
     Returns:
         MemoryBreakdown with detailed component estimates and total.
@@ -100,7 +123,8 @@ def estimate_workflow_memory(
     """
     # Component sizes
     kinship_gb = n_samples**2 * 8 / 1e9  # float64
-    genotypes_gb = n_samples * n_snps * 4 / 1e9  # float32
+    # Kinship converts genotypes to float64 via jnp.array(..., dtype=jnp.float64)
+    genotypes_gb = n_samples * n_snps * 8 / 1e9  # float64 (JAX copy)
     eigenvectors_gb = n_samples**2 * 8 / 1e9  # float64
 
     # Eigendecomp workspace: DSYEVD uses O(n^2) workspace (default driver)
@@ -109,13 +133,17 @@ def estimate_workflow_memory(
 
     # LMM working memory
     lmm_rotated_gb = n_samples * 8 * 3 / 1e9  # Uy, UW, Ux per SNP
-    lmm_batch_gb = n_samples * lmm_batch_size * 8 / 1e9
+    # UtG chunk + Uab_batch + Iab_batch (dominant JAX intermediates)
+    lmm_batch_gb = (
+        n_samples * lmm_batch_size * 8 / 1e9  # UtG chunk
+        + _uab_iab_gb(n_samples, lmm_batch_size, n_cvt)  # Uab + Iab
+    )
 
     # Peak memory calculation
     # Workflow: genotypes -> kinship -> eigendecomp -> LMM
     # Kinship can be freed after eigendecomp
 
-    # Phase 1 (kinship): genotypes + kinship (building kinship from genotypes)
+    # Phase 1 (kinship): genotypes (float64 JAX copy) + kinship accumulator
     peak_kinship = genotypes_gb + kinship_gb
 
     # Phase 2 (eigendecomp): kinship + eigenvectors + workspace
@@ -149,6 +177,7 @@ def estimate_lmm_memory(
     n_samples: int,
     n_snps: int,
     lmm_batch_size: int = 20_000,
+    n_cvt: int = 1,
 ) -> MemoryBreakdown:
     """Estimate memory for the LMM phase only (not the full pipeline).
 
@@ -156,10 +185,14 @@ def estimate_lmm_memory(
     freed. Unlike estimate_workflow_memory() which returns the peak across all
     phases, this returns only the LMM phase requirement.
 
+    Includes Uab_batch (n_chunk, n_samples, n_index) and Iab_batch
+    (n_chunk, n_cvt+2, n_index) which are the dominant JAX intermediates.
+
     Args:
         n_samples: Number of samples (individuals).
         n_snps: Number of SNPs (variants).
         lmm_batch_size: Batch size for LMM SNP processing.
+        n_cvt: Number of covariates (default 1).
 
     Returns:
         MemoryBreakdown with total_gb reflecting only LMM phase needs.
@@ -169,10 +202,14 @@ def estimate_lmm_memory(
         >>> print(f"LMM needs {est.total_gb:.0f}GB")
     """
     eigenvectors_gb = n_samples**2 * 8 / 1e9
-    genotypes_gb = n_samples * n_snps * 4 / 1e9
+    genotypes_gb = n_samples * n_snps * 8 / 1e9  # float64 (JAX copy)
     eigenvalues_gb = n_samples * 8 / 1e9
     lmm_rotated_gb = n_samples * 8 * 3 / 1e9
-    lmm_batch_gb = n_samples * lmm_batch_size * 8 / 1e9
+    # UtG chunk + Uab_batch + Iab_batch (dominant JAX intermediates)
+    lmm_batch_gb = (
+        n_samples * lmm_batch_size * 8 / 1e9  # UtG chunk
+        + _uab_iab_gb(n_samples, lmm_batch_size, n_cvt)  # Uab + Iab
+    )
 
     total_gb = (
         eigenvectors_gb + genotypes_gb + eigenvalues_gb + lmm_rotated_gb + lmm_batch_gb
@@ -247,6 +284,7 @@ def estimate_streaming_memory(
     n_snps: int,  # Only for logging; not used in peak calculation
     chunk_size: int = 10_000,
     n_grid: int = 50,
+    n_cvt: int = 1,
 ) -> StreamingMemoryBreakdown:
     """Estimate memory requirements for streaming GWAS workflow.
 
@@ -260,7 +298,7 @@ def estimate_streaming_memory(
     For 200k samples, 95k SNPs, 10k chunk, n_grid=50:
     - Kinship accumulation: 320GB + 16GB = 336GB
     - Eigendecomp: 320GB + 320GB + ~640GB = ~1280GB (PEAK, DSYEVD workspace)
-    - LMM: 320GB + 16GB + 16GB + 4MB = 356GB
+    - LMM: 320GB + 16GB + 16GB + Uab/Iab
 
     Note: This reveals the true constraint - eigendecomposition cannot be
     streamed and requires both kinship (input) and eigenvectors (output)
@@ -271,6 +309,7 @@ def estimate_streaming_memory(
         n_snps: Number of SNPs (for logging only, not used in peak calculation).
         chunk_size: SNPs per chunk (default 10,000).
         n_grid: Grid points for lambda optimization (default 50).
+        n_cvt: Number of covariates (default 1).
 
     Returns:
         StreamingMemoryBreakdown with detailed component estimates.
@@ -288,10 +327,14 @@ def estimate_streaming_memory(
         grid_reml_gb,
     ) = _streaming_component_sizes(n_samples, chunk_size, n_grid)
 
+    uab_iab_gb = _uab_iab_gb(n_samples, chunk_size, n_cvt)
+
     # Peak memory calculation by workflow phase
     peak_kinship = kinship_gb + chunk_gb
     peak_eigendecomp = kinship_gb + eigenvectors_gb + eigendecomp_workspace_gb
-    peak_lmm = eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb
+    peak_lmm = (
+        eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb + uab_iab_gb
+    )
 
     total_peak_gb = max(peak_kinship, peak_eigendecomp, peak_lmm)
     available_gb, sufficient = _check_available(total_peak_gb)
@@ -314,6 +357,7 @@ def estimate_lmm_streaming_memory(
     n_snps: int,
     chunk_size: int = 10_000,
     n_grid: int = 50,
+    n_cvt: int = 1,
 ) -> StreamingMemoryBreakdown:
     """Estimate memory for the streaming LMM phase only (not the full pipeline).
 
@@ -321,11 +365,15 @@ def estimate_lmm_streaming_memory(
     freed. Unlike estimate_streaming_memory() which returns the peak across all
     phases, this returns only the LMM phase requirement.
 
+    Includes Uab_batch and Iab_batch intermediates which are the dominant
+    JAX buffers during LMM computation.
+
     Args:
         n_samples: Number of samples (individuals).
         n_snps: Number of SNPs (for logging only, not used in peak calculation).
         chunk_size: SNPs per chunk (default 10,000).
         n_grid: Grid points for lambda optimization (default 50).
+        n_cvt: Number of covariates (default 1).
 
     Returns:
         StreamingMemoryBreakdown with total_peak_gb reflecting only LMM phase needs.
@@ -343,7 +391,10 @@ def estimate_lmm_streaming_memory(
         grid_reml_gb,
     ) = _streaming_component_sizes(n_samples, chunk_size, n_grid)
 
-    total_peak_gb = eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb
+    uab_iab_gb = _uab_iab_gb(n_samples, chunk_size, n_cvt)
+    total_peak_gb = (
+        eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb + uab_iab_gb
+    )
     available_gb, sufficient = _check_available(total_peak_gb)
 
     return StreamingMemoryBreakdown(

@@ -484,6 +484,9 @@ def run_lmm_association_streaming(
                     betas, ses, p_walds = batch_calc_wald_stats(
                         n_cvt, best_lambdas, eigenvalues, Uab_batch, n_samples
                     )
+                    # Block all async results for accurate timing
+                    p_scores.block_until_ready()
+                    p_lrts.block_until_ready()
                     p_walds.block_until_ready()
 
                 t_jax_end = time.perf_counter()

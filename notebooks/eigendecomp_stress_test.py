@@ -15,7 +15,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install psutil threadpoolctl loguru scipy numpy "jax>=0.8" "jaxlib>=0.8"
+# MAGIC %pip install psutil threadpoolctl loguru numpy "jax>=0.8" "jaxlib>=0.8"
 
 # COMMAND ----------
 
@@ -52,7 +52,7 @@ try:
     from threadpoolctl import threadpool_info
 
     info = threadpool_info()
-    print("\n=== Threadpool Info (scipy fallback) ===")
+    print("\n=== Threadpool Info ===")
     print(json.dumps(info, indent=2))
 
     # Check for BLAS
@@ -165,7 +165,7 @@ test_eigendecomp(50_000)
 # MAGIC %md
 # MAGIC ## 5. The 100k Test
 # MAGIC
-# MAGIC This is where scipy/OpenBLAS crashes. numpy with thread limiting should work.
+# MAGIC This is where OpenBLAS crashes. numpy with MKL and thread limiting should work.
 
 # COMMAND ----------
 

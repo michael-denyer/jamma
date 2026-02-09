@@ -115,7 +115,7 @@ def gk_command(
     Reads PLINK binary files and computes a genetic relatedness matrix.
     Writes output in GEMMA-compatible .cXX.txt format.
     """
-    start_time = time.time()
+    start_time = time.perf_counter()
 
     # Get global config
     global _global_config
@@ -155,14 +155,14 @@ def gk_command(
     typer.echo("Computing centered kinship matrix...")
     if maf > 0.0 or miss < 1.0:
         typer.echo(f"Filtering: MAF >= {maf}, missing rate <= {miss}")
-    kinship_start = time.time()
+    kinship_start = time.perf_counter()
     K = compute_centered_kinship(
         plink_data.genotypes,
         maf_threshold=maf,
         miss_threshold=miss,
         check_memory=check_memory,
     )
-    kinship_time = time.time() - kinship_start
+    kinship_time = time.perf_counter() - kinship_start
     typer.echo(f"Kinship computation completed in {kinship_time:.2f}s")
 
     # Write kinship matrix
@@ -171,7 +171,7 @@ def gk_command(
     typer.echo(f"Kinship matrix written to {kinship_path}")
 
     # Calculate timing
-    end_time = time.time()
+    end_time = time.perf_counter()
     elapsed = end_time - start_time
 
     # Write log file

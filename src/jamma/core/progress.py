@@ -17,6 +17,9 @@ def progress_iterator(iterable: Iterator, total: int, desc: str = "") -> Iterato
     unlike tqdm which only works in interactive mode. Writes to stdout so
     output is visible in Databricks notebook cells (stderr may be buffered).
 
+    The bar is finalized in a try/finally block so that early breaks or
+    exceptions from the caller don't leave terminal output corrupted.
+
     Args:
         iterable: Iterator to wrap.
         total: Total number of items.
@@ -37,7 +40,9 @@ def progress_iterator(iterable: Iterator, total: int, desc: str = "") -> Iterato
     ]
     bar = progressbar.ProgressBar(max_value=total, widgets=widgets, fd=sys.stdout)
     bar.start()
-    for i, item in enumerate(iterable):
-        yield item
-        bar.update(i + 1)
-    bar.finish()
+    try:
+        for i, item in enumerate(iterable):
+            yield item
+            bar.update(i + 1)
+    finally:
+        bar.finish()

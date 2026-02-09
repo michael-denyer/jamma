@@ -19,13 +19,6 @@ class TestEigendecompMemoryEstimate:
         # K (320GB) + U (320GB) + dsyevd workspace (~640GB) = ~1280GB
         assert 1275 < estimate < 1285
 
-    def test_estimate_200k_samples_evr(self):
-        """200k samples with dsyevr should require approximately 640GB."""
-        n_samples = 200_000
-        estimate = estimate_eigendecomp_memory(n_samples, driver="evr")
-        # K (320GB) + U (320GB) + dsyevr workspace (~0.05GB) = ~640GB
-        assert 635 < estimate < 645
-
     def test_estimate_100k_samples(self):
         """100k samples should require approximately 320GB with dsyevd."""
         n_samples = 100_000
@@ -46,7 +39,7 @@ class TestEigendecompPreflightCheck:
     """Tests for pre-flight memory check in eigendecompose_kinship."""
 
     def test_raises_memory_error_when_insufficient(self):
-        """Should raise MemoryError before scipy call when memory insufficient."""
+        """Should raise MemoryError before LAPACK call when memory insufficient."""
         # Create small matrix (won't actually be decomposed if check fails)
         K = np.eye(100, dtype=np.float64)
 

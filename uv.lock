@@ -237,7 +237,6 @@ dependencies = [
     { name = "numpy" },
     { name = "progressbar2" },
     { name = "psutil" },
-    { name = "scipy" },
     { name = "threadpoolctl" },
     { name = "typer" },
 ]
@@ -253,6 +252,7 @@ dev = [
     { name = "pytest-randomly" },
     { name = "pytest-xdist" },
     { name = "ruff" },
+    { name = "scipy" },
 ]
 
 [package.dev-dependencies]
@@ -282,7 +282,7 @@ requires-dist = [
     { name = "pytest-randomly", marker = "extra == 'dev'", specifier = ">=3.15.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.5.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5.0" },
-    { name = "scipy", specifier = ">=1.10.0" },
+    { name = "scipy", marker = "extra == 'dev'", specifier = ">=1.10.0" },
     { name = "threadpoolctl", specifier = ">=3.0.0" },
     { name = "typer", specifier = ">=0.12.0" },
 ]

@@ -18,32 +18,19 @@ def _dsyevd_workspace_gb(n: int) -> float:
     return (lwork_bytes + liwork_bytes) / 1e9
 
 
-def _dsyevr_workspace_gb(n: int) -> float:
-    """DSYEVR workspace: LWORK=26N doubles, LIWORK=10N ints."""
-    lwork_bytes = 26 * n * 8  # float64
-    liwork_bytes = 10 * n * 4  # int32
-    return (lwork_bytes + liwork_bytes) / 1e9
-
-
-def estimate_eigendecomp_memory(n_samples: int, driver: str = "evd") -> float:
+def estimate_eigendecomp_memory(n_samples: int) -> float:
     """Estimate peak memory (GB) for eigendecomposition of kinship matrix.
 
-    With overwrite_a=True (scipy), peak memory during eigendecomposition:
-    - K (input, overwritten in-place): n^2 * 8 bytes
+    Peak memory during eigendecomposition (numpy.linalg.eigh uses DSYEVD):
+    - K (input): n^2 * 8 bytes
     - U (output eigenvectors): n^2 * 8 bytes
-    - workspace (LAPACK driver-specific)
+    - workspace (DSYEVD O(n^2))
 
-    Driver 'evd' (DSYEVD, default): divide-and-conquer, fast, O(n^2) workspace.
-      For 200k samples: 320GB + 320GB + ~640GB = ~1280GB
-      For 100k samples: 80GB + 80GB + ~160GB = ~320GB
-
-    Driver 'evr' (DSYEVR): relatively robust representations, O(n) workspace.
-      For 200k samples: 320GB + 320GB + ~0.05GB = ~640GB
-      For 100k samples: 80GB + 80GB + ~0.02GB = ~160GB
+    For 200k samples: 320GB + 320GB + ~640GB = ~1280GB
+    For 100k samples: 80GB + 80GB + ~160GB = ~320GB
 
     Args:
         n_samples: Number of samples (individuals).
-        driver: LAPACK driver -- 'evd' for DSYEVD (default), 'evr' for DSYEVR.
 
     Returns:
         Estimated peak memory in GB.
@@ -51,15 +38,10 @@ def estimate_eigendecomp_memory(n_samples: int, driver: str = "evd") -> float:
     Example:
         >>> estimate_eigendecomp_memory(200_000)
         1280.01
-        >>> estimate_eigendecomp_memory(200_000, driver='evr')
-        640.05
     """
     kinship_gb = n_samples**2 * 8 / 1e9  # K input matrix
     eigenvectors_gb = n_samples**2 * 8 / 1e9  # U output eigenvectors
-    if driver == "evr":
-        workspace_gb = _dsyevr_workspace_gb(n_samples)
-    else:
-        workspace_gb = _dsyevd_workspace_gb(n_samples)
+    workspace_gb = _dsyevd_workspace_gb(n_samples)
     return kinship_gb + eigenvectors_gb + workspace_gb
 
 

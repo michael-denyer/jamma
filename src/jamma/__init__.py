@@ -10,9 +10,9 @@ Key features:
 - Modern Python packaging and CLI interface
 
 Example:
-    >>> import jamma
-    >>> jamma.__version__
-    '0.1.0'
+    >>> from jamma import gwas
+    >>> result = gwas("data/my_study", kinship_file="data/kinship.cXX.txt")
+    >>> print(f"{result.n_snps_tested} SNPs in {result.timing['total_s']:.1f}s")
 """
 
 import sys
@@ -31,3 +31,7 @@ logger.add(
     format="{time:HH:mm:ss} | <level>{level: <8}</level> | {message}",
     colorize=True,
 )
+
+from jamma.gwas import GWASResult, gwas  # noqa: E402
+
+__all__ = ["gwas", "GWASResult", "__version__"]

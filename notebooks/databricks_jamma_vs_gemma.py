@@ -65,12 +65,6 @@ dbutils.widgets.dropdown(  # noqa: F821
 dbutils.widgets.text("maf", "0.01", "MAF threshold")  # noqa: F821
 dbutils.widgets.text("miss", "0.05", "Missing rate threshold")  # noqa: F821
 dbutils.widgets.dropdown("run_gemma", "yes", ["yes", "no"], "Run GEMMA for comparison")  # noqa: F821
-dbutils.widgets.text(  # noqa: F821
-    "gemma_assoc_file", "", "Pre-existing GEMMA .assoc.txt (skip GEMMA run)"
-)
-dbutils.widgets.text(  # noqa: F821
-    "gemma_kinship_file", "", "Pre-existing GEMMA kinship .cXX.txt (for comparison)"
-)
 dbutils.widgets.text("output_dir", "/dbfs/tmp/jamma_benchmark", "Output directory")  # noqa: F821
 
 # COMMAND ----------
@@ -122,8 +116,6 @@ LMM_MODE = int(dbutils.widgets.get("lmm_mode"))  # noqa: F821
 MAF = float(dbutils.widgets.get("maf"))  # noqa: F821
 MISS = float(dbutils.widgets.get("miss"))  # noqa: F821
 RUN_GEMMA = dbutils.widgets.get("run_gemma") == "yes"  # noqa: F821
-GEMMA_ASSOC_FILE = dbutils.widgets.get("gemma_assoc_file").strip()  # noqa: F821
-GEMMA_KINSHIP_FILE = dbutils.widgets.get("gemma_kinship_file").strip()  # noqa: F821
 OUTPUT_DIR = Path(dbutils.widgets.get("output_dir").strip())  # noqa: F821
 
 # Validate required inputs
@@ -139,18 +131,6 @@ if KINSHIP_FILE:
     assert Path(KINSHIP_FILE).exists(), f"Kinship file not found: {KINSHIP_FILE}"
 if COVARIATE_FILE:
     assert Path(COVARIATE_FILE).exists(), f"Covariate file not found: {COVARIATE_FILE}"
-if GEMMA_ASSOC_FILE:
-    assert Path(
-        GEMMA_ASSOC_FILE
-    ).exists(), f"GEMMA assoc file not found: {GEMMA_ASSOC_FILE}"
-if GEMMA_KINSHIP_FILE:
-    assert Path(
-        GEMMA_KINSHIP_FILE
-    ).exists(), f"GEMMA kinship file not found: {GEMMA_KINSHIP_FILE}"
-
-# If pre-existing GEMMA results provided, skip running GEMMA
-if GEMMA_ASSOC_FILE:
-    RUN_GEMMA = False
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -162,10 +142,6 @@ print(f"LMM mode:   {LMM_MODE} ({MODE_NAMES[LMM_MODE]})")
 print(f"MAF:        {MAF}")
 print(f"Miss:       {MISS}")
 print(f"Run GEMMA:  {RUN_GEMMA}")
-if GEMMA_ASSOC_FILE:
-    print(f"GEMMA assoc: {GEMMA_ASSOC_FILE} (pre-existing, GEMMA run skipped)")
-if GEMMA_KINSHIP_FILE:
-    print(f"GEMMA kinship: {GEMMA_KINSHIP_FILE} (pre-existing)")
 print(f"Output:     {OUTPUT_DIR}")
 
 # COMMAND ----------
@@ -367,23 +343,7 @@ gemma_time = None
 gemma_kinship_time = None
 gemma_results = None
 
-if GEMMA_ASSOC_FILE:
-    # Load pre-existing GEMMA results instead of running GEMMA
-    print(f"Loading pre-existing GEMMA results from {GEMMA_ASSOC_FILE}...")
-    gemma_results = load_gemma_assoc(Path(GEMMA_ASSOC_FILE))
-    print(f"  {len(gemma_results)} SNPs loaded")
-
-    # Copy to output dir for consistency
-    gemma_save = OUTPUT_DIR / "gemma_results.assoc.txt"
-    shutil.copy2(GEMMA_ASSOC_FILE, gemma_save)
-
-    # If a GEMMA kinship file was also provided, copy it to output dir
-    if GEMMA_KINSHIP_FILE:
-        gemma_kin_save = OUTPUT_DIR / "gemma_kinship.cXX.txt"
-        shutil.copy2(GEMMA_KINSHIP_FILE, gemma_kin_save)
-        print(f"  GEMMA kinship copied to {gemma_kin_save}")
-
-elif RUN_GEMMA:
+if RUN_GEMMA:
     with tempfile.TemporaryDirectory() as tmpdir:
         # Step 1: Compute kinship if no file provided (GEMMA -gk 1)
         if KINSHIP_FILE:
@@ -483,59 +443,60 @@ else:
 
 kinship_comparison = None
 
-# Compare kinship when GEMMA kinship is available (computed or pre-existing)
-gemma_kin_save = OUTPUT_DIR / "gemma_kinship.cXX.txt"
-has_gemma_kinship = (
-    (not KINSHIP_FILE and gemma_kinship_time is not None)  # GEMMA computed it
-    or GEMMA_KINSHIP_FILE  # pre-existing file provided
-)
-if has_gemma_kinship and gemma_kin_save.exists():
-    print("Comparing kinship matrices...")
-    gemma_kinship = read_kinship_matrix(gemma_kin_save)
+# Compare kinship only when both tools computed it (no pre-computed file)
+if not KINSHIP_FILE and gemma_kinship_time is not None:
+    gemma_kin_save = OUTPUT_DIR / "gemma_kinship.cXX.txt"
+    if gemma_kin_save.exists():
+        print("Comparing kinship matrices...")
+        gemma_kinship = read_kinship_matrix(gemma_kin_save)
 
-    # Flatten upper triangles for comparison (kinship is symmetric)
-    triu_idx = np.triu_indices(kinship.shape[0])
-    jamma_triu = kinship[triu_idx]
-    gemma_triu = gemma_kinship[triu_idx]
+        # Flatten upper triangles for comparison (kinship is symmetric)
+        triu_idx = np.triu_indices(kinship.shape[0])
+        jamma_triu = kinship[triu_idx]
+        gemma_triu = gemma_kinship[triu_idx]
 
-    # Spearman correlation
-    kin_rho, _ = spearmanr(jamma_triu, gemma_triu)
+        # Spearman correlation
+        kin_rho, _ = spearmanr(jamma_triu, gemma_triu)
 
-    # Max absolute and relative differences
-    abs_diff = np.abs(jamma_triu - gemma_triu)
-    max_abs = float(np.max(abs_diff))
-    mean_abs = float(np.mean(abs_diff))
+        # Max absolute and relative differences
+        abs_diff = np.abs(jamma_triu - gemma_triu)
+        max_abs = float(np.max(abs_diff))
+        mean_abs = float(np.mean(abs_diff))
 
-    with np.errstate(divide="ignore", invalid="ignore"):
-        rel_diff = abs_diff / np.abs(gemma_triu)
-        rel_diff = np.where(np.isfinite(rel_diff), rel_diff, 0.0)
-    max_rel = float(np.max(rel_diff))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            rel_diff = abs_diff / np.abs(gemma_triu)
+            rel_diff = np.where(np.isfinite(rel_diff), rel_diff, 0.0)
+        max_rel = float(np.max(rel_diff))
 
-    # Frobenius norm of difference
-    frob_diff = float(np.linalg.norm(kinship - gemma_kinship, "fro"))
-    frob_gemma = float(np.linalg.norm(gemma_kinship, "fro"))
-    frob_rel = frob_diff / frob_gemma if frob_gemma > 0 else 0.0
+        # Frobenius norm of difference
+        frob_diff = float(np.linalg.norm(kinship - gemma_kinship, "fro"))
+        frob_gemma = float(np.linalg.norm(gemma_kinship, "fro"))
+        frob_rel = frob_diff / frob_gemma if frob_gemma > 0 else 0.0
 
-    kinship_comparison = {
-        "spearman_rho": round(kin_rho, 8),
-        "max_abs_diff": f"{max_abs:.2e}",
-        "mean_abs_diff": f"{mean_abs:.2e}",
-        "max_rel_diff": f"{max_rel:.2e}",
-        "frobenius_rel_diff": f"{frob_rel:.2e}",
-    }
+        kinship_comparison = {
+            "spearman_rho": round(kin_rho, 8),
+            "max_abs_diff": f"{max_abs:.2e}",
+            "mean_abs_diff": f"{mean_abs:.2e}",
+            "max_rel_diff": f"{max_rel:.2e}",
+            "frobenius_rel_diff": f"{frob_rel:.2e}",
+        }
 
-    print("=" * 70)
-    print("  KINSHIP: JAMMA vs GEMMA")
-    print("=" * 70)
-    print(f"  Matrix size:              {kinship.shape[0]} x {kinship.shape[1]}")
-    print(f"  Spearman rho:             {kin_rho:.8f}")
-    print(f"  Max absolute difference:  {max_abs:.2e}")
-    print(f"  Mean absolute difference: {mean_abs:.2e}")
-    print(f"  Max relative difference:  {max_rel:.2e}")
-    print(f"  Frobenius norm (rel):     {frob_rel:.2e}")
-    print("=" * 70)
+        print("=" * 70)
+        print("  KINSHIP: JAMMA vs GEMMA")
+        print("=" * 70)
+        print(f"  Matrix size:              {kinship.shape[0]} x {kinship.shape[1]}")
+        print(f"  Spearman rho:             {kin_rho:.8f}")
+        print(f"  Max absolute difference:  {max_abs:.2e}")
+        print(f"  Mean absolute difference: {mean_abs:.2e}")
+        print(f"  Max relative difference:  {max_rel:.2e}")
+        print(f"  Frobenius norm (rel):     {frob_rel:.2e}")
+        print("=" * 70)
+    else:
+        print(f"GEMMA kinship file not found at {gemma_kin_save} — comparison skipped")
+elif KINSHIP_FILE:
+    print("Using pre-computed kinship — no JAMMA vs GEMMA kinship comparison")
 else:
-    print("GEMMA kinship not available — comparison skipped")
+    print("GEMMA kinship not computed — comparison skipped")
 
 # COMMAND ----------
 
@@ -653,9 +614,6 @@ summary = {
     "jamma_lmm_time_s": round(jamma_time, 3),
     "jamma_snps_tested": len(jamma_results),
     "kinship_source": KINSHIP_FILE if KINSHIP_FILE else "computed",
-    "gemma_source": GEMMA_ASSOC_FILE
-    if GEMMA_ASSOC_FILE
-    else ("ran" if RUN_GEMMA else "skipped"),
 }
 if not KINSHIP_FILE:
     summary["jamma_kinship_time_s"] = round(t_kin, 3)

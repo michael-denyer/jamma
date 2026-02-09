@@ -36,6 +36,8 @@ def progress_iterator(iterable: Iterator, total: int, desc: str = "") -> Iterato
         " ",
         progressbar.Bar(),
         " ",
+        progressbar.Timer(),
+        " ",
         progressbar.ETA(),
     ]
     bar = progressbar.ProgressBar(max_value=total, widgets=widgets, fd=sys.stdout)

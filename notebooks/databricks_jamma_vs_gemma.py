@@ -259,9 +259,7 @@ else:
             f"Computing kinship (streaming, n={plink_data.n_samples:,} > {STREAMING_THRESHOLD:,})..."
         )
         t0 = time.perf_counter()
-        kinship = compute_kinship_streaming(
-            str(Path(BFILE).with_suffix(".bed")), show_progress=True
-        )
+        kinship = compute_kinship_streaming(BFILE, show_progress=True)
         t_kin = time.perf_counter() - t0
     else:
         print("Computing kinship from genotypes...")

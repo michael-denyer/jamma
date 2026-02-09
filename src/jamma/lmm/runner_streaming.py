@@ -342,10 +342,12 @@ def run_lmm_association_streaming(
             chunk_filtered_col_idx_arr = np.array(chunk_filtered_col_idx)
             geno_subset = chunk[:, chunk_filtered_col_idx_arr].copy()
 
-            for j, local_idx in enumerate(chunk_filtered_local_idx):
-                missing_mask = np.isnan(geno_subset[:, j])
-                if np.any(missing_mask):
-                    geno_subset[missing_mask, j] = filtered_means[local_idx]
+            # Vectorized imputation: broadcast filtered_means to match geno_subset shape
+            filtered_means_broadcast = filtered_means[chunk_filtered_local_idx].reshape(
+                1, -1
+            )
+            missing_mask = np.isnan(geno_subset)
+            geno_subset = np.where(missing_mask, filtered_means_broadcast, geno_subset)
 
             n_subset = geno_subset.shape[1]
             jax_starts = list(range(0, n_subset, jax_chunk_size))

@@ -142,6 +142,55 @@ def estimate_workflow_memory(
     )
 
 
+def estimate_lmm_memory(
+    n_samples: int,
+    n_snps: int,
+    lmm_batch_size: int = 20_000,
+) -> MemoryBreakdown:
+    """Estimate memory for the LMM phase only (not the full pipeline).
+
+    Use this when eigendecomposition is already complete and kinship has been
+    freed. Unlike estimate_workflow_memory() which returns the peak across all
+    phases, this returns only the LMM phase requirement.
+
+    Args:
+        n_samples: Number of samples (individuals).
+        n_snps: Number of SNPs (variants).
+        lmm_batch_size: Batch size for LMM SNP processing.
+
+    Returns:
+        MemoryBreakdown with total_gb reflecting only LMM phase needs.
+
+    Example:
+        >>> est = estimate_lmm_memory(100_000, 100)
+        >>> print(f"LMM needs {est.total_gb:.0f}GB")
+    """
+    eigenvectors_gb = n_samples**2 * 8 / 1e9
+    genotypes_gb = n_samples * n_snps * 4 / 1e9
+    eigenvalues_gb = n_samples * 8 / 1e9
+    lmm_rotated_gb = n_samples * 8 * 3 / 1e9
+    lmm_batch_gb = n_samples * lmm_batch_size * 8 / 1e9
+
+    total_gb = (
+        eigenvectors_gb + genotypes_gb + eigenvalues_gb + lmm_rotated_gb + lmm_batch_gb
+    )
+
+    available_gb = psutil.virtual_memory().available / 1e9
+    sufficient = total_gb * 1.1 < available_gb
+
+    return MemoryBreakdown(
+        kinship_gb=0.0,
+        genotypes_gb=genotypes_gb,
+        eigenvectors_gb=eigenvectors_gb,
+        eigendecomp_workspace_gb=0.0,
+        lmm_rotated_gb=lmm_rotated_gb,
+        lmm_batch_gb=lmm_batch_gb,
+        total_gb=total_gb,
+        available_gb=available_gb,
+        sufficient=sufficient,
+    )
+
+
 class StreamingMemoryBreakdown(NamedTuple):
     """Detailed memory breakdown for streaming GWAS workflow.
 
@@ -239,6 +288,54 @@ def estimate_streaming_memory(
         kinship_gb=kinship_gb,
         eigenvectors_gb=eigenvectors_gb,
         eigendecomp_workspace_gb=eigendecomp_workspace_gb,
+        chunk_gb=chunk_gb,
+        rotation_buffer_gb=rotation_buffer_gb,
+        grid_reml_gb=grid_reml_gb,
+        total_peak_gb=total_peak_gb,
+        available_gb=available_gb,
+        sufficient=sufficient,
+    )
+
+
+def estimate_lmm_streaming_memory(
+    n_samples: int,
+    n_snps: int,
+    chunk_size: int = 10_000,
+    n_grid: int = 50,
+) -> StreamingMemoryBreakdown:
+    """Estimate memory for the streaming LMM phase only (not the full pipeline).
+
+    Use this when eigendecomposition is already complete and kinship has been
+    freed. Unlike estimate_streaming_memory() which returns the peak across all
+    phases, this returns only the LMM phase requirement.
+
+    Args:
+        n_samples: Number of samples (individuals).
+        n_snps: Number of SNPs (for logging only, not used in peak calculation).
+        chunk_size: SNPs per chunk (default 10,000).
+        n_grid: Grid points for lambda optimization (default 50).
+
+    Returns:
+        StreamingMemoryBreakdown with total_peak_gb reflecting only LMM phase needs.
+
+    Example:
+        >>> est = estimate_lmm_streaming_memory(100_000, 95_000)
+        >>> print(f"LMM needs {est.total_peak_gb:.0f}GB")
+    """
+    eigenvectors_gb = n_samples**2 * 8 / 1e9
+    chunk_gb = n_samples * chunk_size * 8 / 1e9
+    rotation_buffer_gb = n_samples * chunk_size * 8 / 1e9
+    grid_reml_gb = n_grid * chunk_size * 8 / 1e9
+
+    total_peak_gb = eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb
+
+    available_gb = psutil.virtual_memory().available / 1e9
+    sufficient = total_peak_gb * 1.1 < available_gb
+
+    return StreamingMemoryBreakdown(
+        kinship_gb=0.0,
+        eigenvectors_gb=eigenvectors_gb,
+        eigendecomp_workspace_gb=0.0,
         chunk_gb=chunk_gb,
         rotation_buffer_gb=rotation_buffer_gb,
         grid_reml_gb=grid_reml_gb,

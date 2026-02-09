@@ -5,7 +5,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.core.memory import StreamingMemoryBreakdown, estimate_streaming_memory
+from jamma.core.memory import (
+    StreamingMemoryBreakdown,
+    estimate_lmm_streaming_memory,
+    estimate_streaming_memory,
+)
 from jamma.io.plink import (
     get_plink_metadata,
     load_plink_binary,
@@ -307,6 +311,57 @@ class TestEstimateStreamingMemory:
                 f"10k samples should require ~{est.total_peak_gb:.1f}GB, "
                 f"fitting in mocked 32GB available"
             )
+
+
+class TestEstimateLmmStreamingMemory:
+    """Tests for estimate_lmm_streaming_memory function (LMM-phase only)."""
+
+    def test_lmm_estimate_less_than_full_pipeline(self) -> None:
+        """LMM-only estimate should be less than full streaming estimate."""
+        lmm_est = estimate_lmm_streaming_memory(100_000, 95_000)
+        full_est = estimate_streaming_memory(100_000, 95_000)
+
+        assert lmm_est.total_peak_gb < full_est.total_peak_gb, (
+            f"LMM-only ({lmm_est.total_peak_gb:.1f}GB) should be less than "
+            f"full pipeline ({full_est.total_peak_gb:.1f}GB)"
+        )
+
+    def test_lmm_estimate_excludes_kinship(self) -> None:
+        """LMM estimate should not include kinship memory."""
+        est = estimate_lmm_streaming_memory(100_000, 95_000)
+        assert est.kinship_gb == 0.0
+
+    def test_lmm_estimate_excludes_eigendecomp_workspace(self) -> None:
+        """LMM estimate should not include eigendecomp workspace."""
+        est = estimate_lmm_streaming_memory(100_000, 95_000)
+        assert est.eigendecomp_workspace_gb == 0.0
+
+    def test_lmm_estimate_includes_eigenvectors(self) -> None:
+        """LMM estimate should include eigenvectors (~80GB at 100k)."""
+        est = estimate_lmm_streaming_memory(100_000, 95_000)
+        assert 79 < est.eigenvectors_gb < 81
+
+    def test_lmm_estimate_100k_under_300gb(self) -> None:
+        """At 100k samples, LMM should need well under 300GB.
+
+        This is the exact scenario from the xlarge benchmark bug:
+        300.6GB available after eigendecomp, but old check demanded 320GB.
+        """
+        est = estimate_lmm_streaming_memory(100_000, 95_000)
+        assert est.total_peak_gb < 200, (
+            f"Streaming LMM for 100k should need <200GB, "
+            f"got {est.total_peak_gb:.1f}GB"
+        )
+
+    def test_returns_streaming_memory_breakdown(self) -> None:
+        """Should return StreamingMemoryBreakdown with all fields."""
+        est = estimate_lmm_streaming_memory(1_000, 10_000)
+        assert isinstance(est, StreamingMemoryBreakdown)
+
+    def test_sufficient_flag_correct(self) -> None:
+        """Tiny estimate should be sufficient."""
+        est = estimate_lmm_streaming_memory(100, 100)
+        assert est.sufficient is True
 
 
 class TestComputeKinshipStreaming:

@@ -155,7 +155,7 @@ def compute_centered_kinship(
     # 1. Kinship phase: K (n²×8) + X JAX copy (n×p×8) + batch temps
     # 2. Eigendecomp phase: K (n²×8) + U (n²×8) + LAPACK workspace
     # When 2*p > n (typical GWAS), kinship phase with JAX genotype copy is the peak.
-    # Use 50% safety margin: JAX creates temporary arrays ~1.5x naive estimate.
+    # 10% safety margin: eigendecomp estimate includes full DSYEVD workspace.
     if check_memory:
         eigendecomp_peak_gb = estimate_eigendecomp_memory(n_samples)
         kinship_peak_gb = (
@@ -165,7 +165,7 @@ def compute_centered_kinship(
         required_gb = max(eigendecomp_peak_gb, kinship_peak_gb)
         check_memory_available(
             required_gb,
-            safety_margin=0.5,
+            safety_margin=0.1,
             operation=f"GWAS pipeline (peak: {required_gb:.1f}GB)",
         )
 

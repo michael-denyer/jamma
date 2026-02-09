@@ -2,11 +2,12 @@
 # MAGIC %md
 # MAGIC # JAMMA Large-Scale Benchmark - Databricks Edition
 # MAGIC
-# MAGIC Benchmark JAMMA performance at scale (up to 160K samples) on Databricks.
+# MAGIC Benchmark JAMMA performance at scale on Databricks.
 # MAGIC
-# MAGIC **Memory Constraint:** Eigendecomp needs K + U simultaneously:
-# MAGIC - 160K samples: ~410GB peak (fits 512GB node)
-# MAGIC - 200K samples: ~640GB peak (requires 768GB+ node)
+# MAGIC **Memory Constraint:** Eigendecomp needs K + U + DSYEVD workspace (~4 × n² × 8 bytes):
+# MAGIC - 50K samples: ~80GB peak
+# MAGIC - 100K samples: ~320GB peak (fits 512GB node)
+# MAGIC - 160K samples: ~820GB peak (requires 1TB+ node)
 # MAGIC
 # MAGIC **Cluster Requirements:**
 # MAGIC - Memory-optimized instance with 512GB+ RAM (e.g., `Standard_M64s`)
@@ -375,11 +376,11 @@ class BenchmarkConfig:
 
 # Benchmark configurations for 512GB VM
 #
-# Memory constraint: Eigendecomposition requires K + U simultaneously
-#   Peak = 2 * n_samples^2 * 8 bytes
-#   512GB node (~460GB usable) supports max ~160k samples safely
+# Memory constraint: Eigendecomposition requires K + U + DSYEVD workspace
+#   Peak ≈ 4 * n_samples^2 * 8 bytes (K + U + O(n^2) workspace)
+#   512GB node (~460GB usable) supports max ~100k samples
 #
-# Original target was 200k but that requires ~640GB (eigendecomp bottleneck)
+# Configs beyond available memory are skipped by validate_memory()
 CONFIGS = {
     "small": BenchmarkConfig("small", 1_000, 10_000, 10_000),
     "medium": BenchmarkConfig("medium", 10_000, 100_000, 100_000),
@@ -387,7 +388,7 @@ CONFIGS = {
     "xlarge": BenchmarkConfig("xlarge", 100_000, 95_000, 10_000),
     "target": BenchmarkConfig(
         "target", 160_000, 95_000, 95_000
-    ),  # Max for 512GB node (~410GB peak during eigendecomp)
+    ),  # ~820GB peak — requires 1TB+ node, will be skipped on 512GB
 }
 
 for name, cfg in CONFIGS.items():
@@ -872,7 +873,7 @@ for _, row in results_df.iterrows():
     jax_lmm = row.get("lmm_jax_time")
     if jax_lmm:
         print(f"  JAMMA JAX:  {jax_lmm:7.2f}s")
-        snps_per_sec = row.get("jax_snps_per_sec")
+        snps_per_sec = row.get("lmm_jax_snps_per_sec")
         if snps_per_sec:
             print(f"  Throughput: {snps_per_sec:,.0f} SNPs/sec")
 

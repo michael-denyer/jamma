@@ -58,10 +58,13 @@ def configure_jax(
         # Enable XLA compilation cache - reuses compiled kernels across runs
         # Only cache compilations that take >1s to avoid cache bloat
         cache_dir = os.path.expanduser("~/.cache/jax")
-        os.makedirs(cache_dir, exist_ok=True)
-        jax.config.update("jax_compilation_cache_dir", cache_dir)
-        jax.config.update("jax_persistent_cache_min_compile_time_secs", 1.0)
-        logger.debug(f"JAX compilation cache enabled: {cache_dir}")
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            jax.config.update("jax_compilation_cache_dir", cache_dir)
+            jax.config.update("jax_persistent_cache_min_compile_time_secs", 1.0)
+            logger.debug(f"JAX compilation cache enabled: {cache_dir}")
+        except OSError:
+            logger.debug(f"Could not create JAX cache dir {cache_dir}, skipping")
 
     info = get_jax_info()
     logger.info(

@@ -16,10 +16,11 @@ Example:
 """
 
 import sys
+from importlib.metadata import version
 
 from loguru import logger
 
-__version__ = "0.1.0"
+__version__ = version("jamma")
 
 # Configure loguru with sensible defaults on import
 # Uses stdout so output is visible in Databricks notebook cells (stderr may be buffered)

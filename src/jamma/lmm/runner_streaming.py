@@ -13,7 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 from loguru import logger
 
-from jamma.core.memory import estimate_streaming_memory
+from jamma.core.memory import estimate_lmm_streaming_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask
 from jamma.core.threading import blas_threads
@@ -184,7 +184,7 @@ def run_lmm_association_streaming(
     n_samples = phenotypes.shape[0]
 
     if check_memory:
-        est = estimate_streaming_memory(n_samples, n_snps, chunk_size=chunk_size)
+        est = estimate_lmm_streaming_memory(n_samples, n_snps, chunk_size=chunk_size)
         if not est.sufficient:
             raise MemoryError(
                 f"Insufficient memory for streaming LMM with {n_samples:,} samples "

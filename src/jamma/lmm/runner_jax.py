@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 from loguru import logger
 
-from jamma.core.memory import estimate_workflow_memory
+from jamma.core.memory import estimate_lmm_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.core.threading import blas_threads
@@ -121,7 +121,7 @@ def run_lmm_association_jax(
         )
 
     if check_memory:
-        est = estimate_workflow_memory(n_samples, n_snps)
+        est = estimate_lmm_memory(n_samples, n_snps)
         if not est.sufficient:
             raise MemoryError(
                 f"Insufficient memory for LMM workflow with {n_samples:,} samples × "

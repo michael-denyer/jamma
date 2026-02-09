@@ -13,6 +13,7 @@ from jamma.core import (
     get_memory_snapshot,
     log_memory_snapshot,
 )
+from jamma.core.memory import estimate_lmm_memory
 
 
 class TestMemoryEstimation:
@@ -255,3 +256,54 @@ class TestCleanupMemory:
         # Memory should not have increased significantly
         # (may not decrease due to allocator behavior, but shouldn't spike)
         assert after.rss_gb <= before.rss_gb + 0.1
+
+
+class TestLmmMemoryEstimation:
+    """Tests for estimate_lmm_memory function (LMM-phase only)."""
+
+    def test_lmm_estimate_less_than_workflow(self):
+        """LMM-only estimate should be less than full workflow estimate."""
+        lmm_est = estimate_lmm_memory(100_000, 10_000)
+        full_est = estimate_workflow_memory(100_000, 10_000)
+
+        assert lmm_est.total_gb < full_est.total_gb, (
+            f"LMM-only ({lmm_est.total_gb:.1f}GB) should be less than "
+            f"full pipeline ({full_est.total_gb:.1f}GB)"
+        )
+
+    def test_lmm_estimate_excludes_kinship(self):
+        """LMM estimate should not include kinship memory."""
+        est = estimate_lmm_memory(100_000, 10_000)
+        assert est.kinship_gb == 0.0
+
+    def test_lmm_estimate_excludes_eigendecomp_workspace(self):
+        """LMM estimate should not include eigendecomp workspace."""
+        est = estimate_lmm_memory(100_000, 10_000)
+        assert est.eigendecomp_workspace_gb == 0.0
+
+    def test_lmm_estimate_includes_eigenvectors(self):
+        """LMM estimate should include eigenvectors (~80GB at 100k)."""
+        est = estimate_lmm_memory(100_000, 10_000)
+        assert 79 < est.eigenvectors_gb < 81
+
+    def test_lmm_estimate_100k_under_300gb(self):
+        """At 100k samples with 100 SNPs, LMM should need well under 300GB.
+
+        This is the exact scenario from the xlarge benchmark bug:
+        300.6GB available, but old check demanded 320GB (eigendecomp peak).
+        """
+        est = estimate_lmm_memory(100_000, 100)
+        assert est.total_gb < 200, (
+            f"LMM for 100k samples × 100 SNPs should need <200GB, "
+            f"got {est.total_gb:.1f}GB"
+        )
+
+    def test_returns_memory_breakdown(self):
+        """Should return MemoryBreakdown with all fields."""
+        est = estimate_lmm_memory(1_000, 1_000)
+        assert isinstance(est, MemoryBreakdown)
+
+    def test_sufficient_flag_correct(self):
+        """Tiny estimate should be sufficient."""
+        est = estimate_lmm_memory(100, 100)
+        assert est.sufficient is True

@@ -137,11 +137,11 @@ def gwas(
             )
 
     # --- Parse phenotypes from .fam ---
-    fam_path = Path(f"{bfile}.fam")
-    fam_data = np.loadtxt(fam_path, dtype=str, usecols=(5,))
-    phenotypes = np.array(
-        [float(x) if x not in ("-9", "NA") else np.nan for x in fam_data]
-    )
+    fam_data = np.loadtxt(f"{bfile}.fam", dtype=str, usecols=(5,))
+    missing_mask = np.isin(fam_data, ["-9", "NA"])
+    fam_data[missing_mask] = "0"  # placeholder for safe float conversion
+    phenotypes = fam_data.astype(np.float64)
+    phenotypes[missing_mask] = np.nan
 
     valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9)
     n_analyzed = int(valid_mask.sum())
@@ -158,7 +158,7 @@ def gwas(
     if kinship_file is not None:
         kinship_file = Path(kinship_file)
         logger.info(f"Loading kinship from {kinship_file}")
-        K = read_kinship_matrix(kinship_file, n_samples=len(phenotypes))
+        K = read_kinship_matrix(kinship_file, n_samples=n_samples)
     else:
         logger.info("Computing kinship from genotypes")
         K = compute_kinship_streaming(
@@ -176,10 +176,10 @@ def gwas(
     covariates = None
     if covariate_file is not None:
         covariates, _ = read_covariate_file(Path(covariate_file))
-        if covariates.shape[0] != len(phenotypes):
+        if covariates.shape[0] != n_samples:
             raise ValueError(
                 f"Covariate file has {covariates.shape[0]} rows "
-                f"but PLINK data has {len(phenotypes)} samples"
+                f"but PLINK data has {n_samples} samples"
             )
 
     # --- Run LMM ---

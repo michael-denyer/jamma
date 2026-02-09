@@ -18,6 +18,12 @@ def _dsyevd_workspace_gb(n: int) -> float:
     return (lwork_bytes + liwork_bytes) / 1e9
 
 
+def _check_available(total_gb: float) -> tuple[float, bool]:
+    """Return (available_gb, sufficient) with 10% safety margin."""
+    available_gb = psutil.virtual_memory().available / 1e9
+    return available_gb, total_gb * 1.1 < available_gb
+
+
 def estimate_eigendecomp_memory(n_samples: int) -> float:
     """Estimate peak memory (GB) for eigendecomposition of kinship matrix.
 
@@ -124,10 +130,7 @@ def estimate_workflow_memory(
     )
 
     total_gb = max(peak_kinship, peak_eigendecomp, peak_lmm)
-
-    # Check available memory
-    available_gb = psutil.virtual_memory().available / 1e9
-    sufficient = total_gb * 1.1 < available_gb  # 10% safety margin
+    available_gb, sufficient = _check_available(total_gb)
 
     return MemoryBreakdown(
         kinship_gb=kinship_gb,
@@ -174,9 +177,7 @@ def estimate_lmm_memory(
     total_gb = (
         eigenvectors_gb + genotypes_gb + eigenvalues_gb + lmm_rotated_gb + lmm_batch_gb
     )
-
-    available_gb = psutil.virtual_memory().available / 1e9
-    sufficient = total_gb * 1.1 < available_gb
+    available_gb, sufficient = _check_available(total_gb)
 
     return MemoryBreakdown(
         kinship_gb=0.0,
@@ -212,6 +213,33 @@ class StreamingMemoryBreakdown(NamedTuple):
     total_peak_gb: float  # Max of phases (eigendecomp is typically peak)
     available_gb: float  # Current available system memory
     sufficient: bool  # Whether available >= total * 1.1
+
+
+def _streaming_component_sizes(
+    n_samples: int,
+    chunk_size: int,
+    n_grid: int,
+) -> tuple[float, float, float, float, float, float]:
+    """Compute component memory sizes (GB) for streaming estimation.
+
+    Returns:
+        Tuple of (kinship_gb, eigenvectors_gb, eigendecomp_workspace_gb,
+        chunk_gb, rotation_buffer_gb, grid_reml_gb).
+    """
+    kinship_gb = n_samples**2 * 8 / 1e9
+    eigenvectors_gb = n_samples**2 * 8 / 1e9
+    eigendecomp_workspace_gb = _dsyevd_workspace_gb(n_samples)
+    chunk_gb = n_samples * chunk_size * 8 / 1e9
+    rotation_buffer_gb = n_samples * chunk_size * 8 / 1e9  # UtG buffer
+    grid_reml_gb = n_grid * chunk_size * 8 / 1e9
+    return (
+        kinship_gb,
+        eigenvectors_gb,
+        eigendecomp_workspace_gb,
+        chunk_gb,
+        rotation_buffer_gb,
+        grid_reml_gb,
+    )
 
 
 def estimate_streaming_memory(
@@ -251,38 +279,22 @@ def estimate_streaming_memory(
         >>> est = estimate_streaming_memory(200_000, 95_000)
         >>> print(f"Peak: {est.total_peak_gb:.0f}GB (eigendecomp)")
     """
-    # Component sizes
-    kinship_gb = n_samples**2 * 8 / 1e9  # float64
-    eigenvectors_gb = n_samples**2 * 8 / 1e9  # float64
-
-    # Eigendecomp workspace: DSYEVD uses O(n^2) workspace (default driver)
-    # Formula: LWORK=(1+6n+2n^2) doubles + LIWORK=(3+5n) integers
-    eigendecomp_workspace_gb = _dsyevd_workspace_gb(n_samples)
-
-    # Chunk memory (float64 for precision in kinship accumulation)
-    chunk_gb = n_samples * chunk_size * 8 / 1e9
-    rotation_buffer_gb = n_samples * chunk_size * 8 / 1e9  # UtG buffer
-
-    # Grid REML intermediate: vmap over lambda values creates
-    # (n_grid, chunk_size) arrays during log-likelihood evaluation
-    grid_reml_gb = n_grid * chunk_size * 8 / 1e9
+    (
+        kinship_gb,
+        eigenvectors_gb,
+        eigendecomp_workspace_gb,
+        chunk_gb,
+        rotation_buffer_gb,
+        grid_reml_gb,
+    ) = _streaming_component_sizes(n_samples, chunk_size, n_grid)
 
     # Peak memory calculation by workflow phase
-    # Phase 1 (kinship accumulation): kinship + chunk
     peak_kinship = kinship_gb + chunk_gb
-
-    # Phase 2 (eigendecomp): kinship (input) + eigenvectors (output) + workspace
     peak_eigendecomp = kinship_gb + eigenvectors_gb + eigendecomp_workspace_gb
-
-    # Phase 3 (LMM): eigenvectors + chunk + rotation buffer + grid REML
-    # (kinship can be freed after eigendecomp)
     peak_lmm = eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb
 
     total_peak_gb = max(peak_kinship, peak_eigendecomp, peak_lmm)
-
-    # Check available memory
-    available_gb = psutil.virtual_memory().available / 1e9
-    sufficient = total_peak_gb * 1.1 < available_gb  # 10% safety margin
+    available_gb, sufficient = _check_available(total_peak_gb)
 
     return StreamingMemoryBreakdown(
         kinship_gb=kinship_gb,
@@ -322,15 +334,17 @@ def estimate_lmm_streaming_memory(
         >>> est = estimate_lmm_streaming_memory(100_000, 95_000)
         >>> print(f"LMM needs {est.total_peak_gb:.0f}GB")
     """
-    eigenvectors_gb = n_samples**2 * 8 / 1e9
-    chunk_gb = n_samples * chunk_size * 8 / 1e9
-    rotation_buffer_gb = n_samples * chunk_size * 8 / 1e9
-    grid_reml_gb = n_grid * chunk_size * 8 / 1e9
+    (
+        _kinship_gb,
+        eigenvectors_gb,
+        _eigendecomp_workspace_gb,
+        chunk_gb,
+        rotation_buffer_gb,
+        grid_reml_gb,
+    ) = _streaming_component_sizes(n_samples, chunk_size, n_grid)
 
     total_peak_gb = eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb
-
-    available_gb = psutil.virtual_memory().available / 1e9
-    sufficient = total_peak_gb * 1.1 < available_gb
+    available_gb, sufficient = _check_available(total_peak_gb)
 
     return StreamingMemoryBreakdown(
         kinship_gb=0.0,

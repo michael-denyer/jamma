@@ -638,7 +638,7 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
         ]
 
         # JAMMA: Kinship + eigendecomposition + LMM (wall clock time)
-        jamma_start = time.time()
+        jamma_start = time.perf_counter()
 
         K, eigenvalues, eigenvectors, kinship_time, eigen_time = benchmark_kinship(
             genotypes, profiler
@@ -675,7 +675,7 @@ def run_benchmark(config_name: str, run_id: str) -> tuple[dict, pd.DataFrame]:
             results["error"] = f"lmm_jax: {type(e).__name__}: {e}"
 
         # JAMMA total = wall clock from start to end (not sum of components)
-        jamma_total = time.time() - jamma_start
+        jamma_total = time.perf_counter() - jamma_start
         results["jamma_total_time"] = jamma_total
         logger.info(f"JAMMA total time: {jamma_total:.1f}s (wall clock)")
 
@@ -782,7 +782,7 @@ logger.info(f"Run ID: {run_id}")
 logger.info(f"Scales to run: {[s for s in BENCHMARK_SCALES if s not in SKIP_SCALES]}")
 
 # Track total benchmark suite time
-benchmark_start_time = time.time()
+benchmark_start_time = time.perf_counter()
 logger.info(f"Starting benchmark suite at {datetime.now(UTC).isoformat()}")
 
 for scale in BENCHMARK_SCALES:
@@ -808,9 +808,9 @@ for scale in BENCHMARK_SCALES:
         f"RSS: {psutil.Process().memory_info().rss / 1e9:.1f}GB ---"
     )
 
-    scale_start = time.time()
+    scale_start = time.perf_counter()
     results, events_df = run_benchmark(scale, run_id)
-    scale_elapsed = time.time() - scale_start
+    scale_elapsed = time.perf_counter() - scale_start
 
     # If we get here, no crash — overwrite the marker
     results["total_time"] = scale_elapsed
@@ -844,7 +844,7 @@ for scale in BENCHMARK_SCALES:
 results_df = pd.DataFrame(all_results)
 events_df = pd.concat(all_events, ignore_index=True)
 
-benchmark_total_time = time.time() - benchmark_start_time
+benchmark_total_time = time.perf_counter() - benchmark_start_time
 logger.info(f"\nBenchmark suite complete at {datetime.now(UTC).isoformat()}")
 total_min = benchmark_total_time / 60
 logger.info(f"Total benchmark time: {benchmark_total_time:.1f}s ({total_min:.1f} min)")

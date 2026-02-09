@@ -43,14 +43,9 @@
 
 # COMMAND ----------
 
-# Install scipy with MKL ILP64 from forked wheel repository
-# Phase 21 switched eigendecomp to scipy.linalg.eigh -- scipy must use MKL, not bundled OpenBLAS
-# IMPORTANT: Install AFTER numpy ILP64 and BEFORE jamma --no-deps
-# MAGIC %pip install scipy --extra-index-url https://michael-denyer.github.io/numpy-mkl --force-reinstall --upgrade
-
-# COMMAND ----------
-
 # Install jamma dependencies (except numpy which is ILP64 above)
+# NOTE: Do NOT pip install scipy here -- Databricks has scipy pre-installed and
+# reinstalling pulls LP64 deps that overwrite ILP64 numpy
 # MAGIC %pip install psutil loguru threadpoolctl jax jaxlib jaxtyping typer progressbar2 bed-reader
 
 # COMMAND ----------
@@ -198,54 +193,6 @@ elif not ilp64_ok:
 elif not detected_mkl:
     print("WARNING: MKL not detected at runtime - stability risk at 50k+")
 print(f"{'=' * 40}")
-
-# COMMAND ----------
-
-# --- Verify scipy MKL backend ---
-import scipy
-import scipy.linalg
-
-print("=== SciPy Backend Verification ===")
-print(f"SciPy version: {scipy.__version__}")
-print(f"SciPy location: {scipy.__file__}")
-
-try:
-    config = scipy.show_config(mode="dicts")
-    blas_info = config.get("Build Dependencies", {}).get("blas", {})
-    lapack_info = config.get("Build Dependencies", {}).get("lapack", {})
-    scipy_blas = blas_info.get("name", "unknown")
-    scipy_lapack = lapack_info.get("name", "unknown")
-    print(f"  BLAS:   {scipy_blas}")
-    print(f"  LAPACK: {scipy_lapack}")
-    scipy_mkl = "mkl" in scipy_blas.lower() or "mkl" in scipy_lapack.lower()
-    if scipy_mkl:
-        print("  MKL: CONFIRMED")
-    else:
-        print(
-            "  WARNING: SciPy is NOT using MKL. Eigendecomp uses scipy.linalg.eigh since Phase 21."
-        )
-        print("  This means eigendecomp will use OpenBLAS instead of MKL.")
-        print(
-            "  Reinstall: %pip install scipy --extra-index-url https://michael-denyer.github.io/numpy-mkl --force-reinstall --upgrade"
-        )
-except Exception as e:
-    print(f"  ERROR reading scipy config: {e}")
-    scipy.show_config()
-
-# Verify scipy.linalg.eigh works with driver='evd'
-test_k = np.random.default_rng(42).standard_normal((500, 500))
-test_k = test_k @ test_k.T
-t0 = time.perf_counter()
-vals, vecs = scipy.linalg.eigh(
-    test_k, driver="evd", overwrite_a=False, check_finite=False
-)
-t1 = time.perf_counter()
-print(f"\n  scipy.linalg.eigh 500x500 (driver='evd'): {(t1-t0)*1000:.1f}ms")
-recon = vecs @ np.diag(vals) @ vecs.T
-recon_err = np.abs(test_k - recon).max()
-print(f"  Reconstruction error: {recon_err:.2e}")
-assert recon_err < 1e-8, f"scipy eigendecomp failed: error={recon_err:.2e}"
-print("  SciPy eigendecomp: PASSED")
 
 # COMMAND ----------
 

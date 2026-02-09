@@ -178,8 +178,22 @@ def compute_centered_kinship(
     # Initialize kinship accumulator
     K = jnp.zeros((n_samples, n_samples), dtype=jnp.float64)
 
+    n_batches = (n_snps + batch_size - 1) // batch_size
+    logger.info(
+        f"Kinship: in-memory mode, {n_samples:,} samples x {n_snps:,} SNPs, "
+        f"{n_batches} batches of {batch_size:,}"
+    )
+
     # Process SNPs in batches
-    for start in range(0, n_snps, batch_size):
+    batch_starts = list(range(0, n_snps, batch_size))
+    if n_batches > 1:
+        batch_iter = progress_iterator(
+            enumerate(batch_starts), total=n_batches, desc="Kinship"
+        )
+    else:
+        batch_iter = enumerate(batch_starts)
+
+    for _, start in batch_iter:
         end = min(start + batch_size, n_snps)
         X_batch = X[:, start:end]
 

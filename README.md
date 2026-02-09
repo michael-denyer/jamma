@@ -46,10 +46,29 @@ Output files match GEMMA format exactly:
 
 ## Python API
 
+### One-call GWAS (recommended)
+
+```python
+from jamma import gwas
+
+# Full pipeline: load data → kinship → eigendecomp → LMM → results
+result = gwas("data/my_study", kinship_file="data/kinship.cXX.txt")
+print(f"Tested {result.n_snps_tested} SNPs in {result.timing['total_s']:.1f}s")
+
+# Compute kinship from scratch and save it
+result = gwas("data/my_study", save_kinship=True, output_dir="output")
+
+# With covariates and LRT test
+result = gwas("data/my_study", kinship_file="k.txt", covariate_file="covars.txt", lmm_mode=2)
+```
+
+### Low-level API
+
 ```python
 from jamma.io import load_plink_binary
 from jamma.kinship import compute_centered_kinship
-from jamma.lmm import run_lmm_association_jax, eigendecompose_kinship
+from jamma.lmm import run_lmm_association_streaming
+from jamma.lmm.eigen import eigendecompose_kinship
 
 # Load PLINK data
 data = load_plink_binary("data/my_study")
@@ -60,29 +79,9 @@ kinship = compute_centered_kinship(data.genotypes)
 # Eigendecompose for LMM
 eigenvalues, eigenvectors = eigendecompose_kinship(kinship)
 
-# Run association
-results = run_lmm_association_jax(
-    genotypes=data.genotypes,
-    phenotypes=phenotypes,
-    kinship=kinship,
-    snp_info=snp_info,
-)
-```
-
-## Streaming for Large Datasets
-
-For datasets that don't fit in memory:
-
-```python
-from jamma.kinship import compute_kinship_streaming
-from jamma.lmm import run_lmm_association_streaming
-
-# Kinship: streams genotypes from disk in chunks
-kinship = compute_kinship_streaming("data/large_study", chunk_size=10000)
-
-# LMM: streams SNPs for association testing
+# Run association (streaming from disk)
 results = run_lmm_association_streaming(
-    bed_path="data/large_study",
+    bed_path="data/my_study",
     phenotypes=phenotypes,
     kinship=kinship,
     chunk_size=5000,
@@ -98,7 +97,7 @@ from jamma.core.memory import estimate_workflow_memory
 
 # Check memory requirements BEFORE loading data
 estimate = estimate_workflow_memory(n_samples=200_000, n_snps=95_000)
-print(f"Peak memory: {estimate.peak_gb:.1f}GB")
+print(f"Peak memory: {estimate.total_gb:.1f}GB")
 print(f"Available: {estimate.available_gb:.1f}GB")
 print(f"Sufficient: {estimate.sufficient}")
 ```

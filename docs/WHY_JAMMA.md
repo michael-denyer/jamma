@@ -216,8 +216,8 @@ from jamma.core.memory import estimate_workflow_memory
 
 # Before starting a big job
 estimate = estimate_workflow_memory(n_samples=200_000, n_snps=95_000)
-print(f"Peak: {estimate.total_gb:.1f} GB")
-print(f"Available: {estimate.available_gb:.1f} GB")
+print(f"Peak: {estimate.total_gb:.1f}GB")
+print(f"Available: {estimate.available_gb:.1f}GB")
 print(f"Will fit: {estimate.sufficient}")
 ```
 
@@ -314,7 +314,7 @@ from jamma.core.memory import estimate_lmm_memory
 
 estimate = estimate_lmm_memory(n_samples, n_snps)
 if not estimate.sufficient:
-    raise MemoryError(f"Need {estimate.total_peak_gb:.1f}GB")
+    raise MemoryError(f"Need {estimate.total_gb:.1f}GB")
 ```
 
 ---

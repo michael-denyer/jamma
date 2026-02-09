@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-02-09
+
+### Added
+- **Top-level `gwas()` API**: Single-call entry point for full GWAS pipeline
+  - `from jamma import gwas` — load data, compute kinship, run LMM, write results
+  - Returns `GWASResult` dataclass with associations, timing, and summary stats
+  - Supports pre-computed kinship, covariates, save-kinship mode
+- **Phase-specific memory estimation**: `estimate_lmm_memory()` and
+  `estimate_lmm_streaming_memory()` check only LMM-phase memory (not full pipeline peak)
+- **Progress bar** for in-memory kinship computation
+- **Method logging** for kinship computation (in-memory vs streaming)
+
+### Changed
+- LMM runners use phase-specific memory checks instead of total pipeline peak —
+  fixes false `MemoryError` when eigendecomp is already complete (e.g., 100k sample
+  benchmark: 300GB available, LMM needs ~96GB, was incorrectly demanding 320GB)
+- `__version__` now reads from package metadata (`importlib.metadata`) instead of
+  hardcoded string — stays in sync with `pyproject.toml` automatically
+- JAX cache directory creation wrapped in `try/except OSError` — no longer crashes
+  in restricted environments (read-only filesystems, containers)
+- Memory safety margin reduced from 50% to 10% based on empirical benchmarks
+- Extracted shared helpers in memory estimation (`_check_available`,
+  `_streaming_component_sizes`) to reduce duplication
+- Vectorized phenotype parsing in `gwas.py` (numpy ops instead of list comprehension)
+- GEMMA comparison notebook accepts pre-existing GEMMA output files
+
+### Fixed
+- **LMM MemoryError at 100k samples**: LMM phase demanded 320GB (eigendecomp peak)
+  against 300GB available, but only needed ~96GB. Now uses `estimate_lmm_memory()`
+- Flaky `test_gwas_with_precomputed_kinship` timing assertion under pytest-xdist
+
+## [1.3.0] - 2026-02-07
+
+### Added
+- **Golden section optimizer**: Replaced Brent's method (via scipy) with grid search +
+  golden section refinement for lambda optimization — removes scipy runtime dependency
+- Auto-select streaming kinship for large datasets (>10k samples)
+
+### Changed
+- **Removed scipy runtime dependency**: scipy is now dev-only (tests use `scipy.stats`).
+  JAMMA uses `numpy.linalg.eigh` for eigendecomposition, which correctly uses ILP64
+  when numpy is built with ILP64 MKL
+- Deleted `optimize.py` — lambda optimization now lives in `likelihood_jax.py`
+- Stripped numba from `likelihood.py`
+- Split `runner_streaming.py` from `runner_jax.py` (separate module)
+- Extracted shared utilities: `prepare.py`, `chunk.py`, `results.py`, `progress.py`,
+  `snp_filter.py`
+- Cached contiguous `U.T` in both LMM runners (perf)
+- Replaced list accumulators with pre-allocated numpy arrays (perf)
+
+### Removed
+- `optimize.py` (Brent's method via scipy)
+- Numba dependency in likelihood computation
+- scipy as a runtime dependency
+
+### Fixed
+- `NotImplementedError` for kinship mode 2 (standardized) — now raises explicitly
+  instead of producing wrong results
+
 ## [1.2.0] - 2026-02-05
 
 ### Added
@@ -72,7 +131,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
-[Unreleased]: https://github.com/michael-denyer/jamma/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/michael-denyer/jamma/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/michael-denyer/jamma/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/michael-denyer/jamma/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/michael-denyer/jamma/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/michael-denyer/jamma/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/michael-denyer/jamma/releases/tag/v1.0.0

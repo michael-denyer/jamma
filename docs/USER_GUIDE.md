@@ -126,7 +126,38 @@ Space-separated N×N matrix where N is the number of samples. Compatible with GE
 
 ## Python API
 
-### Kinship Computation
+### One-call GWAS (recommended)
+
+The simplest way to run a complete GWAS from Python:
+
+```python
+from jamma import gwas
+
+# With pre-computed kinship
+result = gwas("data/my_study", kinship_file="data/kinship.cXX.txt")
+print(f"Tested {result.n_snps_tested} SNPs in {result.timing['total_s']:.1f}s")
+
+# Compute kinship from scratch, save it for reuse
+result = gwas("data/my_study", save_kinship=True, output_dir="output")
+
+# With covariates
+result = gwas(
+    "data/my_study",
+    kinship_file="k.txt",
+    covariate_file="covars.txt",
+    lmm_mode=2,  # LRT test
+)
+```
+
+`gwas()` handles the full pipeline: load data, compute or load kinship,
+eigendecompose, run LMM association, and write results. Returns a `GWASResult`
+with timing breakdown and summary stats.
+
+### Low-level API
+
+For more control, use the component functions directly:
+
+#### Kinship Computation
 
 ```python
 from jamma.io import load_plink_binary
@@ -139,19 +170,10 @@ data = load_plink_binary("data/my_study")
 K = compute_centered_kinship(data.genotypes)
 ```
 
-### LMM Association
+#### LMM Association
 
 ```python
-from jamma.lmm import run_lmm_association_jax, run_lmm_association_streaming
-
-# Batch runner (genotypes in memory)
-results = run_lmm_association_jax(
-    genotypes=data.genotypes,
-    phenotypes=phenotypes,
-    kinship=K,
-    snp_info=snp_info,
-    use_gpu=True,  # Enable GPU acceleration
-)
+from jamma.lmm import run_lmm_association_streaming
 
 # Streaming runner (genotypes from disk, never loads full matrix)
 results = run_lmm_association_streaming(
@@ -304,18 +326,18 @@ jamma lmm ... --no-check-memory
 ### Programmatic Memory Estimation
 
 ```python
-from jamma.core.memory import estimate_lmm_memory
+from jamma.core.memory import estimate_workflow_memory, estimate_lmm_memory
 
-estimate = estimate_lmm_memory(
-    n_samples=200_000,
-    n_snps=95_000,
-    has_kinship=True,  # Using pre-computed kinship
-)
+# Full pipeline estimate (before starting anything)
+full = estimate_workflow_memory(n_samples=200_000, n_snps=95_000)
+print(f"Full pipeline peak: {full.total_gb:.1f}GB")
+print(f"Eigendecomp workspace: {full.eigendecomp_workspace_gb:.1f}GB")
+print(f"Available: {full.available_gb:.1f}GB")
+print(f"Sufficient: {full.sufficient}")
 
-print(f"Peak memory: {estimate.total_peak_gb:.1f}GB")
-print(f"Eigendecomp workspace: {estimate.eigendecomp_workspace_gb:.1f}GB")
-print(f"Available: {estimate.available_gb:.1f}GB")
-print(f"Sufficient: {estimate.sufficient}")
+# LMM-only estimate (after eigendecomp is done, kinship freed)
+lmm = estimate_lmm_memory(n_samples=200_000, n_snps=95_000)
+print(f"LMM phase: {lmm.total_gb:.1f}GB")
 ```
 
 ## Troubleshooting

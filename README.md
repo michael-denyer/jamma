@@ -1,8 +1,4 @@
 <p align="center">
-  <img src="logos/JAMMA_Banner_logo.png" alt="JAMMA" width="600">
-</p>
-
-<p align="center">
   <a href="https://github.com/michael-denyer/jamma/actions/workflows/ci.yml"><img src="https://github.com/michael-denyer/jamma/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://pypi.org/project/jamma/"><img src="https://img.shields.io/pypi/v/jamma.svg" alt="PyPI"></a>
   <a href="https://bioconda.github.io/recipes/jamma/README.html"><img src="https://img.shields.io/conda/vn/bioconda/jamma.svg" alt="Bioconda"></a>
@@ -11,6 +7,10 @@
   <a href="https://numpy.org/"><img src="https://img.shields.io/badge/NumPy-1.26+-013243.svg?logo=numpy" alt="NumPy"></a>
   <a href="https://hypothesis.readthedocs.io/"><img src="https://img.shields.io/badge/tested%20with-Hypothesis-blue.svg" alt="Hypothesis"></a>
   <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPL%203.0-blue.svg" alt="License: GPL-3.0"></a>
+</p>
+
+<p align="center">
+  <img src="logos/JAMMA_Large_Logo_v2.png" alt="JAMMA" width="200">
 </p>
 
 **JAX-Accelerated Mixed Model Association** — A modern Python reimplementation of [GEMMA](https://github.com/genetics-statistics/GEMMA) for genome-wide association studies (GWAS).

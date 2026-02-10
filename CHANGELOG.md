@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-02-10
+
+### Added
+- **PipelineRunner service**: Shared orchestration class eliminates duplicated pipeline
+  logic between CLI and Python API — single source of truth for validate, parse, check
+  memory, load kinship, load covariates, run LMM
+- **Bioconda recipe**: `bioconda/meta.yaml` and automated PR submission to
+  bioconda-recipes on each release
+- **Memory/chunk coupling**: Memory estimation now uses computed chunk size from
+  `_compute_chunk_size()` instead of hardcoded 10,000 — estimates match actual runtime
+- **README badges**: Bioconda, JAX, NumPy, Hypothesis
+- **Project logo** in README hero section
+
+### Changed
+- CLI `lmm` command delegates to `PipelineRunner` (256 → 78 lines)
+- `gwas()` API delegates to `PipelineRunner` (164 → 28 lines)
+- Removed import-time side effects — `configure_jax()` is now lazy via
+  `ensure_jax_configured()` sentinel pattern
+- CI restructured into 3 jobs: `lint`, `test-fast` (unmarked tests), `test-slow`
+  (tier2/slow, master-only)
+- Ruff pre-commit hook updated v0.8.6 → v0.15.0
+- Publish workflow updated for live PyPI with automated bioconda PR submission
+
+### Fixed
+- Memory estimates used hardcoded chunk size (10,000) instead of the actual computed
+  chunk size — could over/underestimate by 2-5x at different scales
+
 ## [1.4.3] - 2026-02-10
 
 ### Added
@@ -146,7 +173,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
-[Unreleased]: https://github.com/michael-denyer/jamma/compare/v1.4.3...HEAD
+[Unreleased]: https://github.com/michael-denyer/jamma/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/michael-denyer/jamma/compare/v1.4.3...v1.5.0
 [1.4.3]: https://github.com/michael-denyer/jamma/compare/v1.3.0...v1.4.3
 [1.3.0]: https://github.com/michael-denyer/jamma/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/michael-denyer/jamma/compare/v1.1.0...v1.2.0

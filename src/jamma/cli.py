@@ -265,13 +265,7 @@ def lmm_command(
         if check_memory:
             typer.echo("Checking memory requirements...")
         result = PipelineRunner(config).run()
-    except FileNotFoundError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(code=1) from None
-    except ValueError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(code=1) from None
-    except MemoryError as e:
+    except (FileNotFoundError, ValueError, MemoryError) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from None
 

@@ -11,7 +11,6 @@ from jamma.pipeline import PipelineConfig, PipelineRunner
 # Fixture paths for gemma_synthetic dataset
 FIXTURES = Path(__file__).parent / "fixtures" / "gemma_synthetic"
 BFILE = FIXTURES / "test"
-KINSHIP_FILE = FIXTURES / "gemma_kinship.cXX.txt"
 
 
 class TestPipelineConfig:

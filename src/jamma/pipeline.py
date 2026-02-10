@@ -340,19 +340,16 @@ class PipelineRunner:
         assoc_path = self.config.output_dir / f"{self.config.output_prefix}.assoc.txt"
 
         # 6. Kinship
-        t_kinship_start = time.perf_counter()
+        t_kinship = time.perf_counter()
         K = self.load_kinship(n_samples)
-        t_kinship_end = time.perf_counter()
-        kinship_s = t_kinship_end - t_kinship_start
+        kinship_s = time.perf_counter() - t_kinship
 
         # 7. Covariates
         covariates = self.load_covariates(n_samples)
-
-        t_load = time.perf_counter()
-        load_s = t_load - t_start
+        load_s = time.perf_counter() - t_start
 
         # 8. Run LMM
-        t_lmm_start = time.perf_counter()
+        t_lmm = time.perf_counter()
         results = run_lmm_association_streaming(
             bed_path=self.config.bfile,
             phenotypes=phenotypes,
@@ -366,8 +363,7 @@ class PipelineRunner:
             check_memory=False,  # Already checked above
             show_progress=self.config.show_progress,
         )
-        t_lmm_end = time.perf_counter()
-        lmm_s = t_lmm_end - t_lmm_start
+        lmm_s = time.perf_counter() - t_lmm
 
         total_s = time.perf_counter() - t_start
         logger.info(f"GWAS complete: {n_snps} SNPs tested in {total_s:.1f}s")

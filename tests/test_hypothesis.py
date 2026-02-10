@@ -136,9 +136,9 @@ class TestKinshipProperties:
         K = compute_centered_kinship(genotypes)
 
         # Diagonal should be >= 0 (self-relatedness)
-        assert np.all(
-            K.diagonal() >= -1e-10
-        ), f"Negative diagonal: {K.diagonal().min()}"
+        assert np.all(K.diagonal() >= -1e-10), (
+            f"Negative diagonal: {K.diagonal().min()}"
+        )
 
     @given(
         genotypes=genotype_matrix(
@@ -156,9 +156,9 @@ class TestKinshipProperties:
         eigenvalues = np.linalg.eigvalsh(K)
 
         # Allow small negative eigenvalues due to numerical error
-        assert np.all(
-            eigenvalues >= -1e-8
-        ), f"Large negative eigenvalue: {eigenvalues.min()}"
+        assert np.all(eigenvalues >= -1e-8), (
+            f"Large negative eigenvalue: {eigenvalues.min()}"
+        )
 
 
 # -----------------------------------------------------------------------------
@@ -217,9 +217,9 @@ class TestRemlProperties:
         # Boundary maximum: at edge but local maximum (slope inward)
         is_left_boundary_max = max_idx == 0 and logls[0] >= logls[1]
         is_right_boundary_max = max_idx == len(lambdas) - 1 and logls[-1] >= logls[-2]
-        assert (
-            is_interior or is_left_boundary_max or is_right_boundary_max
-        ), f"REML appears monotonic - no clear maximum (max at idx {max_idx})"
+        assert is_interior or is_left_boundary_max or is_right_boundary_max, (
+            f"REML appears monotonic - no clear maximum (max at idx {max_idx})"
+        )
 
 
 # -----------------------------------------------------------------------------
@@ -469,9 +469,9 @@ class TestNumericalStability:
 
         logl = reml_log_likelihood(1.0, eigenvalues, Uab, n_cvt)
 
-        assert np.isfinite(
-            logl
-        ), f"Non-finite likelihood with {n_small} small eigenvalues"
+        assert np.isfinite(logl), (
+            f"Non-finite likelihood with {n_small} small eigenvalues"
+        )
 
 
 # -----------------------------------------------------------------------------
@@ -510,9 +510,9 @@ class TestDegenerateSNPEdgeCases:
         # All should be NaN for constant genotype
         assert np.isnan(beta), f"Expected NaN beta for constant genotype, got {beta}"
         assert np.isnan(se), f"Expected NaN SE for constant genotype, got {se}"
-        assert np.isnan(
-            p_wald
-        ), f"Expected NaN p-value for constant genotype, got {p_wald}"
+        assert np.isnan(p_wald), (
+            f"Expected NaN p-value for constant genotype, got {p_wald}"
+        )
 
     def test_constant_genotype_jax_returns_nan(self):
         """JAX path should also return NaN for constant genotypes."""
@@ -608,9 +608,9 @@ class TestDegenerateSNPEdgeCases:
         # Should be finite or NaN, never inf
         assert np.isfinite(beta) or np.isnan(beta), f"Unexpected inf beta: {beta}"
         assert np.isfinite(se) or np.isnan(se), f"Unexpected inf SE: {se}"
-        assert np.isfinite(p_wald) or np.isnan(
-            p_wald
-        ), f"Unexpected inf p-value: {p_wald}"
+        assert np.isfinite(p_wald) or np.isnan(p_wald), (
+            f"Unexpected inf p-value: {p_wald}"
+        )
 
     @given(
         n_samples=st.integers(min_value=30, max_value=50),
@@ -809,9 +809,9 @@ class TestFilteringProperties:
             mafs = np.minimum(allele_freqs, 1.0 - allele_freqs)
 
             # All should be >= threshold (with small tolerance for numerical error)
-            assert np.all(
-                mafs >= maf_threshold - 1e-10
-            ), f"SNP with MAF {mafs.min():.4f} passed threshold {maf_threshold}"
+            assert np.all(mafs >= maf_threshold - 1e-10), (
+                f"SNP with MAF {mafs.min():.4f} passed threshold {maf_threshold}"
+            )
 
     @given(
         n_samples=st.integers(min_value=50, max_value=100),

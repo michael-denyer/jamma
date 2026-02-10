@@ -87,12 +87,12 @@ class TestGemmaKinshipValidation:
         """Both JAMMA and GEMMA kinship are symmetric."""
         jamma_kinship = compute_centered_kinship(plink_data.genotypes)
 
-        assert np.allclose(
-            gemma_kinship, gemma_kinship.T
-        ), "GEMMA kinship not symmetric"
-        assert np.allclose(
-            jamma_kinship, jamma_kinship.T
-        ), "JAMMA kinship not symmetric"
+        assert np.allclose(gemma_kinship, gemma_kinship.T), (
+            "GEMMA kinship not symmetric"
+        )
+        assert np.allclose(jamma_kinship, jamma_kinship.T), (
+            "JAMMA kinship not symmetric"
+        )
 
     def test_kinship_deterministic(self, plink_data):
         """JAMMA kinship is deterministic."""
@@ -193,9 +193,9 @@ class TestGemmaLmmValidation:
         max_lambda_diff = np.max(lambda_diff)
 
         # lambda_rtol from tolerances.py = 2e-5
-        assert (
-            max_lambda_diff < 2e-4
-        ), f"Lambda max abs diff {max_lambda_diff:.2e} >= 2e-4"
+        assert max_lambda_diff < 2e-4, (
+            f"Lambda max abs diff {max_lambda_diff:.2e} >= 2e-4"
+        )
 
     def test_lmm_pvalue_rank_correlation(self, gemma_assoc, jamma_assoc):
         """JAMMA p-values have perfect rank correlation with GEMMA."""
@@ -211,9 +211,9 @@ class TestGemmaLmmValidation:
         gemma_top5 = set(gemma_assoc.nsmallest(5, "p_wald")["rs"])
         jamma_top5 = set(jamma_assoc.nsmallest(5, "p_wald")["rs"])
 
-        assert (
-            gemma_top5 == jamma_top5
-        ), f"Top 5 mismatch: GEMMA={gemma_top5}, JAMMA={jamma_top5}"
+        assert gemma_top5 == jamma_top5, (
+            f"Top 5 mismatch: GEMMA={gemma_top5}, JAMMA={jamma_top5}"
+        )
 
     def test_lmm_causal_snp_is_top_hit(self, gemma_assoc, jamma_assoc):
         """Both JAMMA and GEMMA detect the causal SNP (rs0000) as top hit."""
@@ -225,9 +225,9 @@ class TestGemmaLmmValidation:
 
     def test_lmm_all_snps_present(self, gemma_assoc, jamma_assoc):
         """JAMMA produces results for all SNPs."""
-        assert len(jamma_assoc) == len(
-            gemma_assoc
-        ), f"SNP count mismatch: JAMMA={len(jamma_assoc)}, GEMMA={len(gemma_assoc)}"
+        assert len(jamma_assoc) == len(gemma_assoc), (
+            f"SNP count mismatch: JAMMA={len(jamma_assoc)}, GEMMA={len(gemma_assoc)}"
+        )
 
 
 class TestGemmaSyntheticDataProperties:
@@ -243,9 +243,9 @@ class TestGemmaSyntheticDataProperties:
 
     def test_plink_data_dimensions(self, plink_data):
         """PLINK data has expected dimensions."""
-        assert (
-            plink_data.n_samples == 100
-        ), f"Expected 100 samples, got {plink_data.n_samples}"
+        assert plink_data.n_samples == 100, (
+            f"Expected 100 samples, got {plink_data.n_samples}"
+        )
         assert plink_data.n_snps == 500, f"Expected 500 SNPs, got {plink_data.n_snps}"
 
     def test_gemma_kinship_dimensions(self, gemma_kinship):

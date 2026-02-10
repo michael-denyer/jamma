@@ -249,6 +249,6 @@ class TestJammaVsGemma:
         assert jamma_result.shape == (n_samples, n_samples)
 
         # CRITICAL: JAMMA must be faster than GEMMA
-        assert (
-            jamma_time < gemma_time
-        ), f"JAMMA ({jamma_time:.3f}s) must be faster than GEMMA ({gemma_time:.3f}s)"
+        assert jamma_time < gemma_time, (
+            f"JAMMA ({jamma_time:.3f}s) must be faster than GEMMA ({gemma_time:.3f}s)"
+        )

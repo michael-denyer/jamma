@@ -130,9 +130,9 @@ class TestREMLNullLogLikelihood:
         )
 
         # They should differ due to different nc_total and df
-        assert (
-            logl_null != logl_alt
-        ), f"Null and alt REML should differ: null={logl_null}, alt={logl_alt}"
+        assert logl_null != logl_alt, (
+            f"Null and alt REML should differ: null={logl_null}, alt={logl_alt}"
+        )
 
 
 class TestMLENullLogLikelihood:
@@ -185,9 +185,9 @@ class TestMLENullLogLikelihood:
 
         # They should differ due to different nc_total
         # (P_yy extracted at different Pab level)
-        assert (
-            logl_null != logl_alt
-        ), f"Null and alt MLE should differ: null={logl_null}, alt={logl_alt}"
+        assert logl_null != logl_alt, (
+            f"Null and alt MLE should differ: null={logl_null}, alt={logl_alt}"
+        )
 
 
 class TestNullModelFormulas:

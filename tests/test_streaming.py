@@ -191,9 +191,9 @@ class TestEstimateStreamingMemory:
         est = estimate_streaming_memory(200_000, 95_000, chunk_size=10_000)
 
         # Kinship: 200k^2 * 8 / 1e9 = 320GB
-        assert (
-            319 < est.kinship_gb < 321
-        ), f"Expected ~320GB kinship, got {est.kinship_gb}"
+        assert 319 < est.kinship_gb < 321, (
+            f"Expected ~320GB kinship, got {est.kinship_gb}"
+        )
 
         # Eigenvectors: same as kinship = 320GB
         assert 319 < est.eigenvectors_gb < 321
@@ -208,14 +208,14 @@ class TestEstimateStreamingMemory:
         assert 15 < est.chunk_gb < 17, f"Expected ~16GB chunk, got {est.chunk_gb}"
 
         # Grid REML: 50 * 10k * 8 / 1e9 = 0.004GB (4MB with default n_grid=50)
-        assert (
-            0.003 < est.grid_reml_gb < 0.005
-        ), f"Expected ~0.004GB grid_reml, got {est.grid_reml_gb}"
+        assert 0.003 < est.grid_reml_gb < 0.005, (
+            f"Expected ~0.004GB grid_reml, got {est.grid_reml_gb}"
+        )
 
         # Peak should be eigendecomp: ~1280GB (K + U + dsyevd workspace)
-        assert (
-            1250 < est.total_peak_gb < 1310
-        ), f"Expected ~1280GB peak, got {est.total_peak_gb}"
+        assert 1250 < est.total_peak_gb < 1310, (
+            f"Expected ~1280GB peak, got {est.total_peak_gb}"
+        )
 
     def test_chunk_size_affects_chunk_gb(self) -> None:
         """Verify chunk_size parameter affects chunk memory."""
@@ -245,9 +245,9 @@ class TestEstimateStreamingMemory:
 
         # 200k estimate requires ~640GB - not sufficient on typical machines
         est = estimate_streaming_memory(200_000, 95_000)
-        assert (
-            est.sufficient is False
-        ), "200k sample workflow should exceed available memory"
+        assert est.sufficient is False, (
+            "200k sample workflow should exceed available memory"
+        )
 
     def test_n_grid_affects_lmm_memory(self) -> None:
         """Verify n_grid parameter affects LMM phase memory estimate."""
@@ -349,8 +349,7 @@ class TestEstimateLmmStreamingMemory:
         """
         est = estimate_lmm_streaming_memory(100_000, 95_000)
         assert est.total_peak_gb < 200, (
-            f"Streaming LMM for 100k should need <200GB, "
-            f"got {est.total_peak_gb:.1f}GB"
+            f"Streaming LMM for 100k should need <200GB, got {est.total_peak_gb:.1f}GB"
         )
 
     def test_returns_streaming_memory_breakdown(self) -> None:
@@ -611,9 +610,9 @@ class TestRunLmmAssociationStreaming:
         )
 
         # Same number of results
-        assert len(results_full) == len(
-            results_stream
-        ), f"Count mismatch: full={len(results_full)}, stream={len(results_stream)}"
+        assert len(results_full) == len(results_stream), (
+            f"Count mismatch: full={len(results_full)}, stream={len(results_stream)}"
+        )
 
         # Compare p-values and betas
         for i, (r_full, r_stream) in enumerate(

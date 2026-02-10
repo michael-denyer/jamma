@@ -438,9 +438,9 @@ class TestLmmOutputFormat:
             f.readline()  # skip header
             for i, line in enumerate(f):
                 fields = line.strip().split("\t")
-                assert (
-                    len(fields) == 15
-                ), f"Line {i} has {len(fields)} fields, expected 15"
+                assert len(fields) == 15, (
+                    f"Line {i} has {len(fields)} fields, expected 15"
+                )
                 orig = results[i]
                 assert fields[0] == orig.chr
                 assert fields[1] == orig.rs
@@ -1018,9 +1018,9 @@ class TestJaxChunkingCorrectness:
         for single, multi in zip(
             single_chunk_results, multi_chunk_results, strict=True
         ):
-            assert (
-                single.rs == multi.rs
-            ), f"SNP order mismatch: {single.rs} vs {multi.rs}"
+            assert single.rs == multi.rs, (
+                f"SNP order mismatch: {single.rs} vs {multi.rs}"
+            )
             np.testing.assert_allclose(
                 single.beta,
                 multi.beta,
@@ -1294,9 +1294,9 @@ class TestLmmCovariateValidation:
         comparison = compare_assoc_results(
             jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
         )
-        assert (
-            comparison.beta.passed
-        ), f"Beta with covariates failed: {comparison.beta.message}"
+        assert comparison.beta.passed, (
+            f"Beta with covariates failed: {comparison.beta.message}"
+        )
 
     @pytest.mark.skipif(
         not COVARIATE_REFERENCE_ASSOC.exists(),
@@ -1321,9 +1321,9 @@ class TestLmmCovariateValidation:
         comparison = compare_assoc_results(
             jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
         )
-        assert (
-            comparison.p_wald.passed
-        ), f"P-value with covariates failed: {comparison.p_wald.message}"
+        assert comparison.p_wald.passed, (
+            f"P-value with covariates failed: {comparison.p_wald.message}"
+        )
 
 
 class TestAFSemantics:
@@ -1399,9 +1399,9 @@ class TestAFSemantics:
             # SE should be very similar (doesn't depend on direction)
             if orig.se > 1e-8:
                 se_ratio = flip.se / orig.se
-                assert (
-                    0.9 < se_ratio < 1.1
-                ), f"SE should be similar for {orig.rs}: {orig.se} vs {flip.se}"
+                assert 0.9 < se_ratio < 1.1, (
+                    f"SE should be similar for {orig.rs}: {orig.se} vs {flip.se}"
+                )
 
             # p-value should be very similar (Wald uses beta^2)
             if orig.p_wald < 0.99 and flip.p_wald < 0.99:  # Skip uninformative
@@ -1603,23 +1603,23 @@ class TestLmmScoreValidation:
 
         # Wald should have varying l_remle values (per-SNP optimization)
         wald_lambdas = [r.l_remle for r in wald_results if r.l_remle is not None]
-        assert (
-            len(set(wald_lambdas)) > 1
-        ), "Wald test should have varying lambda values per SNP"
+        assert len(set(wald_lambdas)) > 1, (
+            "Wald test should have varying lambda values per SNP"
+        )
 
         # Score should have no l_remle (uses fixed null model lambda)
         score_lambdas = [r.l_remle for r in score_results]
-        assert all(
-            lam is None for lam in score_lambdas
-        ), "Score test should not have per-SNP l_remle values"
+        assert all(lam is None for lam in score_lambdas), (
+            "Score test should not have per-SNP l_remle values"
+        )
 
         # Score should have p_score, Wald should have p_wald
-        assert all(
-            r.p_score is not None for r in score_results
-        ), "Score test results should have p_score"
-        assert all(
-            r.p_wald is not None for r in wald_results
-        ), "Wald test results should have p_wald"
+        assert all(r.p_score is not None for r in score_results), (
+            "Score test results should have p_score"
+        )
+        assert all(r.p_wald is not None for r in wald_results), (
+            "Wald test results should have p_wald"
+        )
 
 
 class TestScoreTestProperties:
@@ -1850,12 +1850,12 @@ class TestLmmAllTestsValidation:
             f"Max rel diff: {comparison.p_wald.max_rel_diff:.2e}"
         )
         # logl_H1 is skipped (GEMMA -lmm 4 has 14 columns, no logl_H1)
-        assert (
-            comparison.logl_H1.passed
-        ), f"logl_H1 should be skipped/pass: {comparison.logl_H1.message}"
-        assert (
-            comparison.l_remle.passed
-        ), f"l_remle comparison failed: {comparison.l_remle.message}"
+        assert comparison.logl_H1.passed, (
+            f"logl_H1 should be skipped/pass: {comparison.logl_H1.message}"
+        )
+        assert comparison.l_remle.passed, (
+            f"l_remle comparison failed: {comparison.l_remle.message}"
+        )
         assert comparison.p_score.passed, (
             f"p_score comparison failed: {comparison.p_score.message}\n"
             f"Max abs diff: {comparison.p_score.max_abs_diff:.2e}\n"
@@ -1866,9 +1866,9 @@ class TestLmmAllTestsValidation:
             f"Max abs diff: {comparison.p_lrt.max_abs_diff:.2e}\n"
             f"Max rel diff: {comparison.p_lrt.max_rel_diff:.2e}"
         )
-        assert (
-            comparison.l_mle.passed
-        ), f"l_mle comparison failed: {comparison.l_mle.message}"
+        assert comparison.l_mle.passed, (
+            f"l_mle comparison failed: {comparison.l_mle.message}"
+        )
 
 
 class TestLmmAllTestsProperties:
@@ -1996,21 +1996,21 @@ class TestLmmAllTestsProperties:
         assert len(wald_results) == len(all_results)
         for wald, all_r in zip(wald_results, all_results, strict=True):
             assert wald.rs == all_r.rs, f"SNP order mismatch: {wald.rs} vs {all_r.rs}"
-            assert (
-                wald.beta == all_r.beta
-            ), f"beta mismatch for {wald.rs}: {wald.beta} vs {all_r.beta}"
-            assert (
-                wald.se == all_r.se
-            ), f"se mismatch for {wald.rs}: {wald.se} vs {all_r.se}"
-            assert (
-                wald.p_wald == all_r.p_wald
-            ), f"p_wald mismatch for {wald.rs}: {wald.p_wald} vs {all_r.p_wald}"
-            assert (
-                wald.l_remle == all_r.l_remle
-            ), f"l_remle mismatch for {wald.rs}: {wald.l_remle} vs {all_r.l_remle}"
-            assert (
-                wald.logl_H1 == all_r.logl_H1
-            ), f"logl_H1 mismatch for {wald.rs}: {wald.logl_H1} vs {all_r.logl_H1}"
+            assert wald.beta == all_r.beta, (
+                f"beta mismatch for {wald.rs}: {wald.beta} vs {all_r.beta}"
+            )
+            assert wald.se == all_r.se, (
+                f"se mismatch for {wald.rs}: {wald.se} vs {all_r.se}"
+            )
+            assert wald.p_wald == all_r.p_wald, (
+                f"p_wald mismatch for {wald.rs}: {wald.p_wald} vs {all_r.p_wald}"
+            )
+            assert wald.l_remle == all_r.l_remle, (
+                f"l_remle mismatch for {wald.rs}: {wald.l_remle} vs {all_r.l_remle}"
+            )
+            assert wald.logl_H1 == all_r.logl_H1, (
+                f"logl_H1 mismatch for {wald.rs}: {wald.logl_H1} vs {all_r.logl_H1}"
+            )
 
     def test_mode_4_p_score_matches_mode_3(self, all_tests_data):
         """Mode 4 p_score matches standalone Score test (mode 3) exactly."""
@@ -2038,9 +2038,9 @@ class TestLmmAllTestsProperties:
         assert len(score_results) == len(all_results)
         for score, all_r in zip(score_results, all_results, strict=True):
             assert score.rs == all_r.rs, f"SNP order mismatch: {score.rs} vs {all_r.rs}"
-            assert (
-                score.p_score == all_r.p_score
-            ), f"p_score mismatch for {score.rs}: {score.p_score} vs {all_r.p_score}"
+            assert score.p_score == all_r.p_score, (
+                f"p_score mismatch for {score.rs}: {score.p_score} vs {all_r.p_score}"
+            )
 
     def test_mode_4_p_lrt_matches_mode_2(self, all_tests_data):
         """Mode 4 p_lrt matches standalone LRT (mode 2) exactly."""
@@ -2068,12 +2068,12 @@ class TestLmmAllTestsProperties:
         assert len(lrt_results) == len(all_results)
         for lrt, all_r in zip(lrt_results, all_results, strict=True):
             assert lrt.rs == all_r.rs, f"SNP order mismatch: {lrt.rs} vs {all_r.rs}"
-            assert (
-                lrt.p_lrt == all_r.p_lrt
-            ), f"p_lrt mismatch for {lrt.rs}: {lrt.p_lrt} vs {all_r.p_lrt}"
-            assert (
-                lrt.l_mle == all_r.l_mle
-            ), f"l_mle mismatch for {lrt.rs}: {lrt.l_mle} vs {all_r.l_mle}"
+            assert lrt.p_lrt == all_r.p_lrt, (
+                f"p_lrt mismatch for {lrt.rs}: {lrt.p_lrt} vs {all_r.p_lrt}"
+            )
+            assert lrt.l_mle == all_r.l_mle, (
+                f"l_mle mismatch for {lrt.rs}: {lrt.l_mle} vs {all_r.l_mle}"
+            )
 
 
 class TestMouseHS1940Validation:

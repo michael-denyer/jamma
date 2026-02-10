@@ -73,6 +73,18 @@ def configure_jax(
     )
 
 
+_jax_configured = False
+
+
+def ensure_jax_configured() -> None:
+    """Configure JAX for 64-bit precision. Idempotent -- safe to call multiple times."""
+    global _jax_configured
+    if _jax_configured:
+        return
+    configure_jax()
+    _jax_configured = True
+
+
 def get_jax_info() -> dict[str, Any]:
     """Get information about the current JAX configuration.
 

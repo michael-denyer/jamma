@@ -298,7 +298,7 @@ def print_field_table(fields: list[FieldResult]):
         f"  {'Field':<14} {'N':>6}  {'Max Abs Diff':>14}  "
         f"{'Max Rel Diff':>14}  {'Tolerance':>12}  {'Result':>6}"
     )
-    print(f"  {'-'*14} {'-'*6}  {'-'*14}  {'-'*14}  {'-'*12}  {'-'*6}")
+    print(f"  {'-' * 14} {'-' * 6}  {'-' * 14}  {'-' * 14}  {'-' * 12}  {'-' * 6}")
     for f in fields:
         status = "PASS" if f.passed else "FAIL"
         print(
@@ -312,13 +312,13 @@ def print_performance_summary(timings: list[SectionTiming], total: float):
     print("  Performance Summary")
     print(f"{'=' * 70}")
     print(f"  {'Section':<32} {'SNPs':>6}  {'Time (s)':>10}  {'SNPs/sec':>10}")
-    print(f"  {'-'*32} {'-'*6}  {'-'*10}  {'-'*10}")
+    print(f"  {'-' * 32} {'-' * 6}  {'-' * 10}  {'-' * 10}")
     for t in timings:
         snps_per_sec = t.n_snps / t.elapsed if t.elapsed > 0 else 0
         print(
             f"  {t.name:<32} {t.n_snps:>6}  {t.elapsed:>10.3f}  {snps_per_sec:>10.0f}"
         )
-    print(f"  {'-'*32} {'-'*6}  {'-'*10}  {'-'*10}")
+    print(f"  {'-' * 32} {'-' * 6}  {'-' * 10}  {'-' * 10}")
     print(f"  {'Total':<32} {'':>6}  {total:>10.3f}")
 
 

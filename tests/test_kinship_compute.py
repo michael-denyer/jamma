@@ -57,9 +57,9 @@ class TestKinshipSymmetry:
     def test_kinship_symmetric_with_missing(self, genotypes_with_missing):
         """Symmetry should hold even with missing data."""
         K = compute_centered_kinship(genotypes_with_missing)
-        assert np.allclose(
-            K, K.T
-        ), "Kinship matrix should be symmetric with missing data"
+        assert np.allclose(K, K.T), (
+            "Kinship matrix should be symmetric with missing data"
+        )
 
 
 class TestKinshipShape:

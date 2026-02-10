@@ -89,11 +89,11 @@ def test_eigendecomp(n_samples: int):
     Args:
         n_samples: Matrix dimension (n_samples x n_samples)
     """
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Testing eigendecomp: {n_samples:,} x {n_samples:,}")
     print(f"Matrix memory: {n_samples * n_samples * 8 / 1e9:.1f} GB")
     print("Backend: numpy/LAPACK")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # Generate random symmetric matrix
     print("Generating random symmetric matrix...")

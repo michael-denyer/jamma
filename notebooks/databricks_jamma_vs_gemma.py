@@ -165,9 +165,9 @@ if not COMPARE_ONLY:
     if KINSHIP_FILE:
         assert Path(KINSHIP_FILE).exists(), f"Kinship file not found: {KINSHIP_FILE}"
     if COVARIATE_FILE:
-        assert Path(
-            COVARIATE_FILE
-        ).exists(), f"Covariate file not found: {COVARIATE_FILE}"
+        assert Path(COVARIATE_FILE).exists(), (
+            f"Covariate file not found: {COVARIATE_FILE}"
+        )
 
 print(f"Dataset:      {BFILE}")
 print(f"Kinship:      {KINSHIP_FILE or '(compute from genotypes)'}")

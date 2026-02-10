@@ -325,5 +325,4 @@ flowchart TD
 | Result writer | [lmm/io.py:172](../src/jamma/lmm/io.py#L172) |
 | Memory estimation | [memory.py:72](../src/jamma/core/memory.py#L72) |
 | Validation comparison | [compare.py:536](../src/jamma/validation/compare.py#L536) |
-| Formal proof | [FORMAL_PROOF.md](FORMAL_PROOF.md) |
-| Equivalence data | [MATHEMATICAL_EQUIVALENCE.md](MATHEMATICAL_EQUIVALENCE.md) |
+| Equivalence proof | [EQUIVALENCE.md](EQUIVALENCE.md) |

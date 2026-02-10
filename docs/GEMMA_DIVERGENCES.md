@@ -2,6 +2,9 @@
 
 JAMMA aims for **numerical equivalence** with GEMMA on well-formed inputs, but makes deliberate deviations for robustness in edge cases. This document catalogs each divergence with rationale.
 
+For mathematical proofs of equivalence and empirical validation results, see
+[EQUIVALENCE.md](EQUIVALENCE.md).
+
 ## Philosophy
 
 GEMMA is the **reference implementation**, not the specification. Where GEMMA has bugs or undefined behavior, JAMMA chooses correctness over bug-compatibility. All divergences affect only degenerate/edge cases that should not occur in real GWAS data.
@@ -182,38 +185,12 @@ n_cvt. All LMM modes (Wald, LRT, Score, all-tests) work with covariates.
 
 ## 6. Lambda Optimization: Brent vs Golden Section
 
-**GEMMA:** Brent's method (GSL `gsl_min_fminimizer_brent`) with bounds
-[1e-5, 1e5] and tolerance 1e-5.
+GEMMA uses Brent's method; JAMMA uses grid search + golden section. Both
+converge to within 1e-5 for strong signals. On flat landscapes (weak-signal
+SNPs) they settle on slightly different optima — affects only the MLE
+log-likelihood diagnostic, not p-values or effect sizes.
 
-**JAMMA (since v1.2):** Grid search (50 log-spaced points) + golden section
-refinement (20 iterations) with effective tolerance ~6.6e-5 per grid cell.
-
-### Divergence on Flat Optimization Landscapes
-
-Both methods converge to within 1e-5 of the true optimum for strong-signal
-SNPs. However, for weak-signal SNPs where the optimization surface is nearly
-flat (lambda converging near the lower bound 1e-5), Brent and golden section
-can settle on slightly different points within the flat region:
-
-- **REML lambda**: negligible impact (< 1e-4 relative)
-- **MLE lambda**: up to ~9e-4 relative on mouse_hs1940
-- **MLE logl_H1**: up to ~1.35e-3 relative (worst case: SNP 596 of 10768,
-  abs_diff ~2.1 on values ~-1583)
-
-This only affects the per-SNP MLE log-likelihood diagnostic (logl_H1).
-P-values, effect sizes, and significance calls are identical because the flat
-region corresponds to weak-signal SNPs where test statistics are small.
-
-JAMMA warns when lambda converges at the lower bound:
-
-```text
-RuntimeWarning: Lambda converged at lower bound (1.00e-05 ~ 1.00e-05).
-True optimum may be below search range.
-```
-
-**Validation note:** Lambda values at the boundary (< 1e-4) are excluded from
-tolerance comparisons since relative error is inflated when dividing by small
-numbers.
+See [EQUIVALENCE.md § Lambda Optimization](EQUIVALENCE.md#5-lambda-optimization) for full analysis and error bounds.
 
 ---
 
@@ -244,7 +221,7 @@ numpy's LAPACK binding supports large matrices without this limitation.
 | logdet with neg eigenvalues | log(abs(v)) | log(abs(v)) | Aligned |
 | Monomorphic detection | Count-based | Variance-based | Aligned (equivalent) |
 | JAX covariates | n_cvt >= 1 | n_cvt >= 1 | Aligned (since v1.2) |
-| Lambda optimizer | Brent | Golden section | logl_H1 ~1.35e-3 on flat landscapes |
+| Lambda optimizer | Brent | Golden section | See [EQUIVALENCE.md](EQUIVALENCE.md#5-lambda-optimization) |
 | Eigendecomp library | GSL | numpy LAPACK | 200k+ sample support |
 
 ---
@@ -255,20 +232,8 @@ numpy's LAPACK binding supports large matrices without this limitation.
 2. **Edge case tests**: `tests/test_hypothesis.py` verifies JAMMA's robust behavior
 3. **No silent failures**: Divergences produce NaN, not silently wrong values
 
-### Production-Scale Validation (v1.4.3)
-
-JAMMA vs GEMMA validated on 85,000 real samples × 91,613 SNPs (Databricks, MKL ILP64):
-
-| Metric | Result |
-|--------|--------|
-| Kinship Spearman rho | 1.00000000 |
-| Kinship max abs diff | 1.09e-05 |
-| Kinship Frobenius relative | 1.52e-05 |
-| Association Spearman rho (-log10 p) | 1.000000 |
-| Significance agree (p < 0.05) | 91,613/91,613 (100%) |
-| Significance agree (p < 5e-8) | 91,613/91,613 (100%) |
-| Effect direction agreement | 100.0% |
-| Max relative p-value diff | 2.10e-03 |
+For full empirical validation results (small-scale and production-scale), see
+[EQUIVALENCE.md § Empirical Results](EQUIVALENCE.md#empirical-results).
 
 ---
 

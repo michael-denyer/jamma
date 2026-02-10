@@ -290,8 +290,8 @@ with up to ~0.14% relative difference on real datasets (observed on mouse_hs1940
 SNP index 596 of 10768). The quantities that drive scientific conclusions (p-values,
 effect directions, significance rankings) are unaffected.
 
-See [MATHEMATICAL_EQUIVALENCE.md](MATHEMATICAL_EQUIVALENCE.md) for empirical validation
-and [FORMAL_PROOF.md](FORMAL_PROOF.md) for the formal error propagation analysis.
+See [EQUIVALENCE.md](EQUIVALENCE.md) for empirical validation and formal error
+propagation analysis.
 
 ## Memory Safety
 

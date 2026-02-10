@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-02-10
+
+### Changed
+- README logo and badge layout refinements
+
 ## [1.5.0] - 2026-02-10
 
 ### Added
@@ -173,7 +178,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
-[Unreleased]: https://github.com/michael-denyer/jamma/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/michael-denyer/jamma/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/michael-denyer/jamma/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/michael-denyer/jamma/compare/v1.4.3...v1.5.0
 [1.4.3]: https://github.com/michael-denyer/jamma/compare/v1.3.0...v1.4.3
 [1.3.0]: https://github.com/michael-denyer/jamma/compare/v1.2.0...v1.3.0

@@ -190,7 +190,7 @@ class TestCliStreamingRunner:
 
     def test_cli_jax_default_uses_streaming_runner(self, tmp_path):
         """Verify CLI calls run_lmm_association_streaming."""
-        with patch("jamma.cli.run_lmm_association_streaming") as mock_stream:
+        with patch("jamma.pipeline.run_lmm_association_streaming") as mock_stream:
             mock_stream.return_value = []
 
             runner.invoke(

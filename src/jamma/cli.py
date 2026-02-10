@@ -9,20 +9,16 @@ import time
 from pathlib import Path
 from typing import Annotated
 
-import numpy as np
 import typer
 
 import jamma
 from jamma.core import OutputConfig
-from jamma.core.memory import estimate_streaming_memory
-from jamma.io import get_plink_metadata, load_plink_binary, read_covariate_file
+from jamma.io import load_plink_binary
 from jamma.kinship import (
     compute_centered_kinship,
-    read_kinship_matrix,
     write_kinship_matrix,
 )
-from jamma.lmm import run_lmm_association_streaming
-from jamma.lmm.chunk import _compute_chunk_size
+from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.utils import setup_logging, write_gemma_log
 
 # Create Typer app
@@ -237,214 +233,84 @@ def lmm_command(
     Supports Wald test (-lmm 1), LRT (-lmm 2), Score test (-lmm 3),
     and all tests combined (-lmm 4).
     """
-    # Get global config
     global _global_config
     if _global_config is None:
         _global_config = OutputConfig()
 
-    # Validate -lmm mode
-    if lmm_mode not in (1, 2, 3, 4):
-        typer.echo(f"Error: -lmm must be 1, 2, 3, or 4 (got {lmm_mode})", err=True)
-        raise typer.Exit(code=1)
-
-    # Validate bfile exists
-    bed_path = Path(f"{bfile}.bed")
-    bim_path = Path(f"{bfile}.bim")
-    fam_path = Path(f"{bfile}.fam")
-
-    if not bed_path.exists():
-        typer.echo(f"Error: PLINK .bed file not found: {bed_path}", err=True)
-        raise typer.Exit(code=1)
-    if not bim_path.exists():
-        typer.echo(f"Error: PLINK .bim file not found: {bim_path}", err=True)
-        raise typer.Exit(code=1)
-    if not fam_path.exists():
-        typer.echo(f"Error: PLINK .fam file not found: {fam_path}", err=True)
-        raise typer.Exit(code=1)
-
-    # Validate kinship file is provided and exists
+    # CLI requires kinship file (API can compute it)
     if kinship_file is None:
-        typer.echo("Error: -k (kinship matrix) is required for -lmm 1", err=True)
-        raise typer.Exit(code=1)
-    if not kinship_file.exists():
-        typer.echo(f"Error: Kinship matrix file not found: {kinship_file}", err=True)
-        raise typer.Exit(code=1)
-
-    # Validate covariate file exists if provided
-    if covariate_file is not None and not covariate_file.exists():
-        typer.echo(f"Error: Covariate file not found: {covariate_file}", err=True)
-        raise typer.Exit(code=1)
-
-    # Always fetch PLINK metadata (needed for memory check AND progress message)
-    meta = get_plink_metadata(bfile)
-    n_samples_meta = meta["n_samples"]
-    n_snps_meta = meta["n_snps"]
-
-    # Pre-flight memory check (before any large allocations)
-    if check_memory:
-        typer.echo("Checking memory requirements...")
-
-        actual_chunk = _compute_chunk_size(n_samples_meta, n_snps_meta)
-        est = estimate_streaming_memory(
-            n_samples=n_samples_meta,
-            n_snps=n_snps_meta,
-            chunk_size=actual_chunk,
-        )
-
         typer.echo(
-            f"Memory estimate: {est.total_peak_gb:.1f}GB required, "
-            f"{est.available_gb:.1f}GB available"
+            "Error: -k (kinship matrix) is required for -lmm 1",
+            err=True,
         )
-
-        # Check hard budget if specified
-        if mem_budget is not None and est.total_peak_gb > mem_budget:
-            typer.echo(
-                f"Error: Estimated memory ({est.total_peak_gb:.1f}GB) exceeds "
-                f"budget ({mem_budget}GB). Use --no-check-memory to override.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-
-        # Check available memory
-        if not est.sufficient:
-            typer.echo(
-                f"Error: Insufficient memory. "
-                f"Need {est.total_peak_gb:.1f}GB (with 10% margin), "
-                f"have {est.available_gb:.1f}GB. "
-                f"Use --no-check-memory to override.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-
-        typer.echo("Memory check passed.")
-
-    # Ensure output directory exists
-    _global_config.ensure_outdir()
-
-    # Record start time
-    t_start = time.perf_counter()
-    command_line = " ".join(sys.argv)
-
-    # === Data loading ===
-
-    # Parse phenotypes from .fam file
-    fam_data = np.loadtxt(fam_path, dtype=str, usecols=(5,))
-    phenotypes = np.array(
-        [float(x) if x not in ("-9", "NA") else np.nan for x in fam_data]
-    )
-    n_samples_raw = len(phenotypes)
-
-    # Count valid samples for logging (before any filtering)
-    valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9)
-    n_analyzed = int(valid_mask.sum())
-
-    if n_analyzed == 0:
-        typer.echo("Error: No samples with valid phenotypes", err=True)
         raise typer.Exit(code=1)
 
-    n_filtered = n_samples_raw - n_analyzed
-    typer.echo(
-        f"Analyzing {n_analyzed} samples with valid phenotypes (filtered {n_filtered})"
+    # Build pipeline config
+    config = PipelineConfig(
+        bfile=bfile,
+        kinship_file=kinship_file,
+        covariate_file=covariate_file,
+        lmm_mode=lmm_mode,
+        maf=maf,
+        miss=miss,
+        output_dir=_global_config.outdir,
+        output_prefix=_global_config.prefix,
+        check_memory=check_memory,
+        show_progress=True,
+        mem_budget=mem_budget,
     )
 
-    # Load kinship matrix
-    typer.echo(f"Loading kinship matrix from {kinship_file}...")
+    # Run pipeline, converting exceptions to CLI-friendly errors
     try:
-        K = read_kinship_matrix(kinship_file, n_samples=n_samples_raw)
-    except Exception as e:
-        typer.echo(f"Error loading kinship matrix: {e}", err=True)
+        if check_memory:
+            typer.echo("Checking memory requirements...")
+        result = PipelineRunner(config).run()
+    except FileNotFoundError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from None
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from None
+    except MemoryError as e:
+        typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from None
 
-    # Load covariate file if provided
-    covariates = None
+    # Write GEMMA log file (CLI-only)
+    command_line = " ".join(sys.argv)
+    n_covariates = 1
     if covariate_file is not None:
-        typer.echo(f"Loading covariates from {covariate_file}...")
-        try:
-            covariates, indicator_cvt = read_covariate_file(covariate_file)
-        except Exception as e:
-            typer.echo(f"Error loading covariate file: {e}", err=True)
-            raise typer.Exit(code=1) from None
+        # Covariate count from result timing context
+        n_covariates = result.timing.get("n_covariates", 1)
 
-        if covariates.shape[0] != n_samples_raw:
-            typer.echo(
-                f"Error: Covariate file has {covariates.shape[0]} rows "
-                f"but PLINK data has {n_samples_raw} samples. "
-                f"Covariate rows must match sample count exactly.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-
-        typer.echo(f"Loaded {covariates.shape[1]} covariates")
-
-        first_col = covariates[:, 0]
-        valid_first = first_col[~np.isnan(first_col)]
-        if not np.allclose(valid_first, 1.0):
-            typer.echo(
-                "Warning: Covariate file does not have intercept column "
-                "(first column is not all 1s). Model will NOT include intercept.",
-                err=True,
-            )
-
-    t_load = time.perf_counter()
-    typer.echo(f"Data loading completed in {t_load - t_start:.2f}s")
-
-    # === Run LMM association (JAX streaming) ===
-    test_name = {1: "Wald", 2: "LRT", 3: "Score", 4: "All tests"}[lmm_mode]
-    typer.echo(f"Running LMM {test_name} test on {n_snps_meta} SNPs...")
-
-    assoc_path = _global_config.outdir / f"{_global_config.prefix}.assoc.txt"
-
-    run_lmm_association_streaming(
-        bed_path=bfile,
-        phenotypes=phenotypes,
-        kinship=K,
-        snp_info=None,
-        covariates=covariates,
-        maf_threshold=maf,
-        miss_threshold=miss,
-        output_path=assoc_path,
-        lmm_mode=lmm_mode,
-        check_memory=False,  # Already checked above
-        show_progress=True,
-    )
-
-    t_lmm = time.perf_counter()
-    lmm_time = t_lmm - t_load
-    typer.echo(f"LMM analysis completed in {lmm_time:.2f}s")
-
-    typer.echo(f"Association results written to {assoc_path}")
-
-    # Calculate total time
-    total_time = t_lmm - t_start
-    load_time = t_load - t_start
-
-    # Write log file with LMM-specific parameters
     params = {
-        "n_samples": n_samples_raw,
-        "n_analyzed": n_analyzed,
-        "n_snps": n_snps_meta,
+        "n_samples": result.n_samples,
+        "n_snps": result.n_snps_tested,
         "backend": "jax",
         "lmm_mode": lmm_mode,
         "kinship_file": str(kinship_file),
         "covariate_file": str(covariate_file) if covariate_file else None,
-        "n_covariates": covariates.shape[1] if covariates is not None else 1,
-        "output_file": str(assoc_path),
+        "n_covariates": n_covariates,
+        "output_file": str(result.assoc_path),
         "maf_threshold": maf,
         "miss_threshold": miss,
         "check_memory": check_memory,
         "mem_budget": mem_budget,
     }
     timing = {
-        "total": total_time,
-        "load": load_time,
-        "lmm": lmm_time,
+        "total": result.timing["total_s"],
+        "load": result.timing["load_s"],
+        "lmm": result.timing["lmm_s"],
     }
 
+    _global_config.ensure_outdir()
     log_path = write_gemma_log(_global_config, params, timing, command_line)
     typer.echo(f"Log written to {log_path}")
 
     # Final summary
-    typer.echo(f"\nAnalyzed {n_snps_meta} SNPs in {total_time:.2f} seconds")
+    typer.echo(
+        f"\nAnalyzed {result.n_snps_tested} SNPs "
+        f"in {result.timing['total_s']:.2f} seconds"
+    )
 
 
 if __name__ == "__main__":

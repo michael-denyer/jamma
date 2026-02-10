@@ -11,24 +11,11 @@ Example:
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import numpy as np
-from loguru import logger
-
-from jamma.core.memory import estimate_streaming_memory
-from jamma.io.covariate import read_covariate_file
-from jamma.io.plink import get_plink_metadata
-from jamma.kinship import (
-    compute_kinship_streaming,
-    read_kinship_matrix,
-    write_kinship_matrix,
-)
-from jamma.lmm import run_lmm_association_streaming
-from jamma.lmm.chunk import _compute_chunk_size
 from jamma.lmm.stats import AssocResult
+from jamma.pipeline import PipelineConfig, PipelineRunner
 
 
 @dataclass
@@ -103,115 +90,29 @@ def gwas(
         ... )
         >>> print(f"{result.n_snps_tested} SNPs, {result.timing['total_s']:.1f}s")
     """
-    t_start = time.perf_counter()
-
-    # --- Validate inputs ---
-    bfile = Path(bfile)
-    for ext in (".bed", ".bim", ".fam"):
-        p = Path(f"{bfile}{ext}")
-        if not p.exists():
-            raise FileNotFoundError(f"PLINK {ext} file not found: {p}")
-
-    if lmm_mode not in (1, 2, 3, 4):
-        raise ValueError(
-            f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
-        )
-
-    # --- Prepare output ---
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    assoc_path = output_dir / f"{output_prefix}.assoc.txt"
-    logger.info(f"Output: {assoc_path}")
-
-    # --- Get metadata ---
-    meta = get_plink_metadata(bfile)
-    n_samples = meta["n_samples"]
-    n_snps = meta["n_snps"]
-
-    # --- Memory check ---
-    if check_memory:
-        actual_chunk = _compute_chunk_size(n_samples, n_snps)
-        est = estimate_streaming_memory(n_samples, n_snps, chunk_size=actual_chunk)
-        if not est.sufficient:
-            raise MemoryError(
-                f"Insufficient memory: need {est.total_peak_gb:.1f}GB, "
-                f"have {est.available_gb:.1f}GB"
-            )
-
-    # --- Parse phenotypes from .fam ---
-    fam_data = np.loadtxt(f"{bfile}.fam", dtype=str, usecols=(5,))
-    missing_mask = np.isin(fam_data, ["-9", "NA"])
-    fam_data[missing_mask] = "0"  # placeholder for safe float conversion
-    phenotypes = fam_data.astype(np.float64)
-    phenotypes[missing_mask] = np.nan
-
-    valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9)
-    n_analyzed = int(valid_mask.sum())
-    if n_analyzed == 0:
-        raise ValueError("No samples with valid phenotypes")
-
-    logger.info(
-        f"Analyzing {n_analyzed} samples with valid phenotypes "
-        f"({n_samples - n_analyzed} filtered)"
-    )
-
-    # --- Kinship ---
-    t_kinship_start = time.perf_counter()
-    if kinship_file is not None:
-        kinship_file = Path(kinship_file)
-        logger.info(f"Loading kinship from {kinship_file}")
-        K = read_kinship_matrix(kinship_file, n_samples=n_samples)
-    else:
-        logger.info("Computing kinship from genotypes")
-        K = compute_kinship_streaming(
-            bfile, check_memory=False, show_progress=show_progress
-        )
-    t_kinship_end = time.perf_counter()
-    kinship_s = t_kinship_end - t_kinship_start
-
-    if save_kinship:
-        kinship_path = output_dir / f"{output_prefix}.cXX.txt"
-        write_kinship_matrix(K, kinship_path)
-        logger.info(f"Kinship matrix saved to {kinship_path}")
-
-    # --- Covariates ---
-    covariates = None
-    if covariate_file is not None:
-        covariates, _ = read_covariate_file(Path(covariate_file))
-        if covariates.shape[0] != n_samples:
-            raise ValueError(
-                f"Covariate file has {covariates.shape[0]} rows "
-                f"but PLINK data has {n_samples} samples"
-            )
-
-    # --- Run LMM ---
-    t_lmm_start = time.perf_counter()
-    results = run_lmm_association_streaming(
-        bed_path=bfile,
-        phenotypes=phenotypes,
-        kinship=K,
-        snp_info=None,
-        covariates=covariates,
-        maf_threshold=maf,
-        miss_threshold=miss,
-        output_path=assoc_path,
+    config = PipelineConfig(
+        bfile=Path(bfile),
+        kinship_file=Path(kinship_file) if kinship_file is not None else None,
+        covariate_file=(Path(covariate_file) if covariate_file is not None else None),
         lmm_mode=lmm_mode,
-        check_memory=False,  # Already checked above
+        maf=maf,
+        miss=miss,
+        output_dir=Path(output_dir),
+        output_prefix=output_prefix,
+        save_kinship=save_kinship,
+        check_memory=check_memory,
         show_progress=show_progress,
     )
-    t_lmm_end = time.perf_counter()
-    lmm_s = t_lmm_end - t_lmm_start
 
-    total_s = time.perf_counter() - t_start
-    logger.info(f"GWAS complete: {n_snps} SNPs tested in {total_s:.1f}s")
+    pipeline_result = PipelineRunner(config).run()
 
     return GWASResult(
-        associations=results,
-        n_samples=n_analyzed,
-        n_snps_tested=n_snps,
+        associations=pipeline_result.associations,
+        n_samples=pipeline_result.n_samples,
+        n_snps_tested=pipeline_result.n_snps_tested,
         timing={
-            "kinship_s": kinship_s,
-            "lmm_s": lmm_s,
-            "total_s": total_s,
+            "kinship_s": pipeline_result.timing["kinship_s"],
+            "lmm_s": pipeline_result.timing["lmm_s"],
+            "total_s": pipeline_result.timing["total_s"],
         },
     )

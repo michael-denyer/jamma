@@ -7,9 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.4.0] - 2026-02-09
+## [1.4.3] - 2026-02-10
 
 ### Added
+- **Production-scale GEMMA validation**: 85,000 real samples × 91,613 SNPs — 100%
+  significance agreement, 100% effect direction agreement, Spearman rho 1.000000
+- **Compare-only mode** for GEMMA comparison notebook — load pre-computed results
+  from configurable source paths, skip all compute
+- **OOM-safe kinship comparison**: Sampled Spearman (10M elements) + chunked row-by-row
+  statistics for 85k+ matrices without materializing `np.triu_indices` (~58GB) or
+  full rank arrays (~60GB)
+- **Performance documentation** (`docs/PERFORMANCE.md`): Bottleneck breakdown,
+  theoretical floor analysis, configuration guide, validation results
 - **Top-level `gwas()` API**: Single-call entry point for full GWAS pipeline
   - `from jamma import gwas` — load data, compute kinship, run LMM, write results
   - Returns `GWASResult` dataclass with associations, timing, and summary stats
@@ -31,11 +40,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Extracted shared helpers in memory estimation (`_check_available`,
   `_streaming_component_sizes`) to reduce duplication
 - Vectorized phenotype parsing in `gwas.py` (numpy ops instead of list comprehension)
+- Vectorized per-SNP imputation in streaming runner (~2x faster)
+- GEMMA comparison notebook writes output to local `/tmp/` instead of DBFS FUSE
 - GEMMA comparison notebook accepts pre-existing GEMMA output files
 
 ### Fixed
 - **LMM MemoryError at 100k samples**: LMM phase demanded 320GB (eigendecomp peak)
   against 300GB available, but only needed ~96GB. Now uses `estimate_lmm_memory()`
+- **JAX async dispatch**: `block_until_ready()` in kinship compute loop — progress
+  bars and timing now reflect actual compute, not async dispatch time
+- **Progress bar lifecycle**: Bars complete cleanly (no hanging on final iteration)
+- **Double `.bed` extension**: Fixed `.bed.bed` path construction in GEMMA comparison notebook
 - Flaky `test_gwas_with_precomputed_kinship` timing assertion under pytest-xdist
 
 ## [1.3.0] - 2026-02-07
@@ -131,8 +146,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
-[Unreleased]: https://github.com/michael-denyer/jamma/compare/v1.4.0...HEAD
-[1.4.0]: https://github.com/michael-denyer/jamma/compare/v1.3.0...v1.4.0
+[Unreleased]: https://github.com/michael-denyer/jamma/compare/v1.4.3...HEAD
+[1.4.3]: https://github.com/michael-denyer/jamma/compare/v1.3.0...v1.4.3
 [1.3.0]: https://github.com/michael-denyer/jamma/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/michael-denyer/jamma/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/michael-denyer/jamma/compare/v1.0.0...v1.1.0

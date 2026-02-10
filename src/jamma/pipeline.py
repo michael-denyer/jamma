@@ -275,6 +275,7 @@ class PipelineRunner:
         if self.config.covariate_file is None:
             return None
 
+        logger.info(f"Loading covariates from {self.config.covariate_file}")
         covariates, _ = read_covariate_file(self.config.covariate_file)
 
         if covariates.shape[0] != n_samples:
@@ -285,6 +286,17 @@ class PipelineRunner:
             )
 
         logger.info(f"Loaded {covariates.shape[1]} covariates")
+
+        # Warn if first column is not an intercept
+        first_col = covariates[:, 0]
+        valid_first = first_col[~np.isnan(first_col)]
+        if not np.allclose(valid_first, 1.0):
+            logger.warning(
+                "Warning: Covariate file does not have intercept column "
+                "(first column is not all 1s). "
+                "Model will NOT include intercept."
+            )
+
         return covariates
 
     def run(self) -> PipelineResult:

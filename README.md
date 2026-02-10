@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="logos/JAMMA_Large_Logo_v2.png" alt="JAMMA" width="600">
+  <img src="logos/JAMMA_Large_Logo_v2.png" alt="JAMMA" width="500">
 </p>
 
 **JAX-Accelerated Mixed Model Association** — A modern Python reimplementation of [GEMMA](https://github.com/genetics-statistics/GEMMA) for genome-wide association studies (GWAS).

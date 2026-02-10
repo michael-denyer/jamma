@@ -15,7 +15,11 @@
 # MAGIC | `maf` | MAF threshold (default 0.01) |
 # MAGIC | `miss` | Missing rate threshold (default 0.05) |
 # MAGIC | `run_gemma` | Run GEMMA for comparison (yes/no) |
-# MAGIC | `compare_only` | Load pre-computed results from /tmp/ and skip compute |
+# MAGIC | `compare_only` | Load pre-computed results and skip compute |
+# MAGIC | `jamma_kinship_src` | Source path for JAMMA kinship (compare-only) |
+# MAGIC | `jamma_assoc_src` | Source path for JAMMA assoc results (compare-only) |
+# MAGIC | `gemma_kinship_src` | Source path for GEMMA kinship (compare-only) |
+# MAGIC | `gemma_assoc_src` | Source path for GEMMA assoc results (compare-only) |
 # MAGIC
 # MAGIC **Cluster requirements:** DBR 15.4+, memory-optimized instance for large datasets.
 
@@ -69,7 +73,24 @@ dbutils.widgets.dropdown(  # noqa: F821
     "compare_only",
     "no",
     ["yes", "no"],
-    "Compare only (load results from /tmp/, skip compute)",
+    "Compare only (load results from source paths, skip compute)",
+)
+# Source paths for compare-only mode (files are copied to /tmp/ for comparison)
+dbutils.widgets.text(  # noqa: F821
+    "jamma_kinship_src",
+    "/dbfs/tmp/jamma_benchmark/jamma_kinship.cXX.txt",
+    "JAMMA kinship source path",
+)
+dbutils.widgets.text(  # noqa: F821
+    "jamma_assoc_src",
+    "/dbfs/tmp/jamma_benchmark/jamma_results.assoc.txt",
+    "JAMMA assoc source path",
+)
+dbutils.widgets.text(  # noqa: F821
+    "gemma_kinship_src", "", "GEMMA kinship source path"
+)
+dbutils.widgets.text(  # noqa: F821
+    "gemma_assoc_src", "", "GEMMA assoc source path"
 )
 
 # COMMAND ----------
@@ -161,39 +182,71 @@ print("Output:       /tmp/ (local disk)")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Compare-Only: Load Results from Disk
+# MAGIC ### Compare-Only: Copy & Load Results
 # MAGIC
-# MAGIC When `compare_only=yes`, load pre-computed results from `/tmp/` and skip
-# MAGIC directly to comparison cells. Expects these files:
-# MAGIC - `/tmp/jamma_kinship.cXX.txt`
-# MAGIC - `/tmp/jamma_results.assoc.txt`
-# MAGIC - `/tmp/gemma_kinship.cXX.txt`
-# MAGIC - `/tmp/gemma_results.assoc.txt`
+# MAGIC When `compare_only=yes`, copies result files from source paths (widgets)
+# MAGIC to `/tmp/` via `shutil.copy2`, then loads them for comparison.
+# MAGIC Set the `*_src` widgets to wherever your files are (DBFS, local, etc).
 
 # COMMAND ----------
 
 if COMPARE_ONLY:
-    # Load pre-computed results
-    jamma_kin_path = Path("/tmp/jamma_kinship.cXX.txt")
-    gemma_kin_save = Path("/tmp/gemma_kinship.cXX.txt")
-    jamma_out = Path("/tmp/jamma_results.assoc.txt")
-    gemma_save = Path("/tmp/gemma_results.assoc.txt")
+    # Read source paths from widgets
+    src_paths = {
+        "jamma_kinship": dbutils.widgets.get("jamma_kinship_src").strip(),  # noqa: F821
+        "jamma_assoc": dbutils.widgets.get("jamma_assoc_src").strip(),  # noqa: F821
+        "gemma_kinship": dbutils.widgets.get("gemma_kinship_src").strip(),  # noqa: F821
+        "gemma_assoc": dbutils.widgets.get("gemma_assoc_src").strip(),  # noqa: F821
+    }
 
-    for p in [jamma_kin_path, gemma_kin_save, jamma_out, gemma_save]:
+    # Local paths for comparison
+    local_paths = {
+        "jamma_kinship": Path("/tmp/jamma_kinship.cXX.txt"),
+        "jamma_assoc": Path("/tmp/jamma_results.assoc.txt"),
+        "gemma_kinship": Path("/tmp/gemma_kinship.cXX.txt"),
+        "gemma_assoc": Path("/tmp/gemma_results.assoc.txt"),
+    }
+
+    # Copy source files to /tmp/ (skip if source is empty or already at /tmp/)
+    print("Copying result files to /tmp/ ...")
+    for key in local_paths:
+        src = src_paths[key]
+        dst = local_paths[key]
+        if not src:
+            print(f"  SKIP: {key} (no source path set)")
+            continue
+        src_p = Path(src)
+        if not src_p.exists():
+            print(f"  MISSING: {src}")
+            continue
+        if src_p == dst:
+            print(f"  OK:   {key} already at {dst}")
+        else:
+            t0 = time.perf_counter()
+            shutil.copy2(src, dst)
+            elapsed = time.perf_counter() - t0
+            size_mb = dst.stat().st_size / 1e6
+            print(f"  COPY: {src} -> {dst} ({size_mb:.0f} MB, {elapsed:.1f}s)")
+
+    # Verify all files present
+    print()
+    for p in local_paths.values():
         status = "OK" if p.exists() else "MISSING"
         size = f"({p.stat().st_size / 1e6:.0f} MB)" if p.exists() else ""
         print(f"  {status}: {p} {size}")
 
+    # Load kinship
     print("\nLoading kinship matrices...")
     t0 = time.perf_counter()
-    kinship = read_kinship_matrix(jamma_kin_path)
+    kinship = read_kinship_matrix(local_paths["jamma_kinship"])
     t1 = time.perf_counter()
     print(f"  JAMMA kinship: {kinship.shape[0]}x{kinship.shape[1]} ({t1 - t0:.1f}s)")
 
+    # Load association results
     print("\nLoading association results...")
-    jamma_results = load_gemma_assoc(jamma_out)
+    jamma_results = load_gemma_assoc(local_paths["jamma_assoc"])
     print(f"  JAMMA: {len(jamma_results)} SNPs")
-    gemma_results = load_gemma_assoc(gemma_save)
+    gemma_results = load_gemma_assoc(local_paths["gemma_assoc"])
     print(f"  GEMMA: {len(gemma_results)} SNPs")
 
     # Placeholder timing (not available in compare-only mode)

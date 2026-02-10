@@ -434,7 +434,7 @@ def check_memory_available(
     if required_with_margin > available_gb:
         raise MemoryError(
             f"Insufficient memory for {operation}. "
-            f"Need {required_gb:.1f}GB (+{safety_margin*100:.0f}% margin = "
+            f"Need {required_gb:.1f}GB (+{safety_margin * 100:.0f}% margin = "
             f"{required_with_margin:.1f}GB), but only {available_gb:.1f}GB available. "
             f"Consider using a machine with more RAM or reducing dataset size."
         )

@@ -39,9 +39,9 @@ class TestLoadPlinkBinary:
         # All non-NaN values should be 0, 1, or 2
         unique_values = np.unique(non_nan_values)
         valid_values = {0.0, 1.0, 2.0}
-        assert set(unique_values).issubset(
-            valid_values
-        ), f"Genotype values should be in {{0, 1, 2}}, got {unique_values}"
+        assert set(unique_values).issubset(valid_values), (
+            f"Genotype values should be in {{0, 1, 2}}, got {unique_values}"
+        )
 
     def test_load_plink_binary_dtype(self, sample_plink_data: Path) -> None:
         """Verify genotypes are returned as float32."""

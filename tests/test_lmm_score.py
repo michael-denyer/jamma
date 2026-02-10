@@ -101,30 +101,30 @@ class TestNullModelLambda:
         idx_xx = get_ab_index(2, 2, n_cvt)  # XX = (2,2)
         idx_xy = get_ab_index(2, 3, n_cvt)  # XY = (2,3)
 
-        assert np.allclose(
-            Uab_no_geno[:, idx_wx], 0.0
-        ), "WX column should be zero without genotype"
-        assert np.allclose(
-            Uab_no_geno[:, idx_xx], 0.0
-        ), "XX column should be zero without genotype"
-        assert np.allclose(
-            Uab_no_geno[:, idx_xy], 0.0
-        ), "XY column should be zero without genotype"
+        assert np.allclose(Uab_no_geno[:, idx_wx], 0.0), (
+            "WX column should be zero without genotype"
+        )
+        assert np.allclose(Uab_no_geno[:, idx_xx], 0.0), (
+            "XX column should be zero without genotype"
+        )
+        assert np.allclose(Uab_no_geno[:, idx_xy], 0.0), (
+            "XY column should be zero without genotype"
+        )
 
         # Verify non-genotype columns are NOT zero
         idx_ww = get_ab_index(1, 1, n_cvt)  # WW = (1,1)
         idx_wy = get_ab_index(1, 3, n_cvt)  # WY = (1,3)
         idx_yy = get_ab_index(3, 3, n_cvt)  # YY = (3,3)
 
-        assert not np.allclose(
-            Uab_no_geno[:, idx_ww], 0.0
-        ), "WW column should be non-zero"
-        assert not np.allclose(
-            Uab_no_geno[:, idx_wy], 0.0
-        ), "WY column should be non-zero"
-        assert not np.allclose(
-            Uab_no_geno[:, idx_yy], 0.0
-        ), "YY column should be non-zero"
+        assert not np.allclose(Uab_no_geno[:, idx_ww], 0.0), (
+            "WW column should be non-zero"
+        )
+        assert not np.allclose(Uab_no_geno[:, idx_wy], 0.0), (
+            "WY column should be non-zero"
+        )
+        assert not np.allclose(Uab_no_geno[:, idx_yy], 0.0), (
+            "YY column should be non-zero"
+        )
 
     def test_null_model_lambda_reproducible(self):
         """Same inputs produce same lambda."""
@@ -239,14 +239,14 @@ class TestScoreTestMath:
         df = n - n_cvt - 1
         p_expected = f_sf(f_stat_expected, 1.0, float(df))
 
-        assert np.isclose(
-            p_score, p_expected, rtol=1e-10
-        ), f"P-values differ: {p_score} vs {p_expected}"
+        assert np.isclose(p_score, p_expected, rtol=1e-10), (
+            f"P-values differ: {p_score} vs {p_expected}"
+        )
 
         # Also verify Wald uses different Px_yy (just to confirm difference)
-        assert (
-            P_yy_score != Px_yy_wald
-        ), "Score and Wald should use different P_yy values"
+        assert P_yy_score != Px_yy_wald, (
+            "Score and Wald should use different P_yy values"
+        )
 
     def test_score_test_degenerate_snp(self):
         """Degenerate SNPs (P_xx <= 0) return NaN."""
@@ -300,9 +300,9 @@ class TestScoreTestMath:
         # Get p-value from calc_score_test
         _, _, p_score = calc_score_test(lambda_null, Pab, n_cvt, n)
 
-        assert np.isclose(
-            p_score, p_expected, rtol=1e-10
-        ), f"Formula mismatch: {p_score} vs {p_expected}"
+        assert np.isclose(p_score, p_expected, rtol=1e-10), (
+            f"Formula mismatch: {p_score} vs {p_expected}"
+        )
 
 
 class TestScoreVsWald:
@@ -377,9 +377,9 @@ class TestScoreVsWald:
         )
 
         # Both should have same sign (effect direction)
-        assert np.sign(beta_score) == np.sign(
-            beta_wald
-        ), f"Score beta={beta_score}, Wald beta={beta_wald} have different signs"
+        assert np.sign(beta_score) == np.sign(beta_wald), (
+            f"Score beta={beta_score}, Wald beta={beta_wald} have different signs"
+        )
 
     def test_score_faster_concept(self):
         """Score test reuses lambda (concept test, not timing)."""
@@ -448,9 +448,9 @@ class TestScoreTestEdgeCases:
         _, _, p_small = calc_score_test(
             lambda_small, Pab_small, n_cvt, data["n_samples"]
         )
-        assert (
-            0.0 <= p_small <= 1.0
-        ), f"P-value {p_small} not in [0, 1] for small lambda"
+        assert 0.0 <= p_small <= 1.0, (
+            f"P-value {p_small} not in [0, 1] for small lambda"
+        )
 
         # Test with very large lambda (high genetic variance)
         lambda_large = 1e5
@@ -459,9 +459,9 @@ class TestScoreTestEdgeCases:
         _, _, p_large = calc_score_test(
             lambda_large, Pab_large, n_cvt, data["n_samples"]
         )
-        assert (
-            0.0 <= p_large <= 1.0
-        ), f"P-value {p_large} not in [0, 1] for large lambda"
+        assert 0.0 <= p_large <= 1.0, (
+            f"P-value {p_large} not in [0, 1] for large lambda"
+        )
 
     def test_score_test_perfect_correlation(self):
         """Score test handles genotype perfectly correlated with phenotype."""
@@ -492,8 +492,8 @@ class TestScoreTestEdgeCases:
         beta, se, p_score = calc_score_test(lambda_null, Pab, n_cvt, n_samples)
 
         # Should get very significant p-value (close to 0)
-        assert (
-            p_score < 0.01
-        ), f"Perfect correlation should give small p-value, got {p_score}"
+        assert p_score < 0.01, (
+            f"Perfect correlation should give small p-value, got {p_score}"
+        )
         assert np.isfinite(beta), "Beta should be finite"
         assert np.isfinite(se), "SE should be finite"

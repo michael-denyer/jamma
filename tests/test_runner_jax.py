@@ -893,6 +893,6 @@ def test_timing_breakdown_logged(sample_plink_data):
     for label in expected_labels:
         matching_line = next((line for line in lines if label in line), None)
         assert matching_line is not None, f"Expected '{label}' in log output"
-        assert re.search(
-            r"\d+\.\d+s", matching_line
-        ), f"Expected numeric seconds value in line: {matching_line}"
+        assert re.search(r"\d+\.\d+s", matching_line), (
+            f"Expected numeric seconds value in line: {matching_line}"
+        )

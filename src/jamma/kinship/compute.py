@@ -20,7 +20,7 @@ import numpy as np
 from jax import jit
 from loguru import logger
 
-from jamma.core import configure_jax
+from jamma.core import ensure_jax_configured
 from jamma.core.memory import (
     check_memory_available,
     estimate_eigendecomp_memory,
@@ -31,9 +31,6 @@ from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
 from jamma.kinship.missing import impute_and_center
-
-# Ensure 64-bit precision for GEMMA equivalence
-configure_jax()
 
 
 @jit
@@ -129,6 +126,8 @@ def compute_centered_kinship(
         >>> np.allclose(K, K.T)  # Symmetric
         True
     """
+    ensure_jax_configured()
+
     n_samples, n_snps_original = genotypes.shape
 
     # Filter SNPs by MAF, missing rate, and monomorphism

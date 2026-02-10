@@ -342,8 +342,7 @@ def lmm_command(
 
     n_filtered = n_samples_raw - n_analyzed
     typer.echo(
-        f"Analyzing {n_analyzed} samples with valid phenotypes "
-        f"(filtered {n_filtered})"
+        f"Analyzing {n_analyzed} samples with valid phenotypes (filtered {n_filtered})"
     )
 
     # Load kinship matrix

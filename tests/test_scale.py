@@ -241,6 +241,6 @@ class TestEigendecompMemory:
         # Total with O(n^2) would be >200MB
 
         # Allow generous margin for JIT overhead, but should be < 500MB
-        assert (
-            mem_delta < 0.5
-        ), f"Eigendecomp delta {mem_delta:.2f}GB suggests O(n^2) workspace"
+        assert mem_delta < 0.5, (
+            f"Eigendecomp delta {mem_delta:.2f}GB suggests O(n^2) workspace"
+        )

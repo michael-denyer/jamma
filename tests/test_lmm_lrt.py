@@ -244,9 +244,9 @@ class TestLRTIntegration:
         correlation = np.corrcoef(np.log10(p_wald + 1e-100), np.log10(p_lrt + 1e-100))[
             0, 1
         ]
-        assert (
-            correlation > 0.9
-        ), f"Wald and LRT should be correlated (got {correlation})"
+        assert correlation > 0.9, (
+            f"Wald and LRT should be correlated (got {correlation})"
+        )
 
 
 class TestGEMMALRTValidation:

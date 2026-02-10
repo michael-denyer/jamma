@@ -11,6 +11,7 @@ from jamma.core.backend import get_backend_info
 from jamma.core.config import OutputConfig
 from jamma.core.jax_config import (
     configure_jax,
+    ensure_jax_configured,
     get_jax_info,
     verify_jax_installation,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "get_backend_info",
     "OutputConfig",
     "configure_jax",
+    "ensure_jax_configured",
     "get_jax_info",
     "verify_jax_installation",
     "MemoryBreakdown",

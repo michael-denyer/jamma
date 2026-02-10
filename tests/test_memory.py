@@ -24,14 +24,14 @@ class TestMemoryEstimation:
         est = estimate_workflow_memory(200_000, 95_000)
 
         # Kinship: 200k^2 * 8 / 1e9 = 320GB
-        assert (
-            319 < est.kinship_gb < 321
-        ), f"Expected ~320GB kinship, got {est.kinship_gb}"
+        assert 319 < est.kinship_gb < 321, (
+            f"Expected ~320GB kinship, got {est.kinship_gb}"
+        )
 
         # Genotypes: 200k * 95k * 8 / 1e9 = 152GB (float64 JAX copy)
-        assert (
-            151 < est.genotypes_gb < 153
-        ), f"Expected ~152GB genotypes (float64), got {est.genotypes_gb}"
+        assert 151 < est.genotypes_gb < 153, (
+            f"Expected ~152GB genotypes (float64), got {est.genotypes_gb}"
+        )
 
         # Eigenvectors: same as kinship = 320GB
         assert 319 < est.eigenvectors_gb < 321
@@ -43,9 +43,9 @@ class TestMemoryEstimation:
         )
 
         # Peak is during eigendecomp: kinship + eigenvectors + workspace = ~1280GB
-        assert (
-            1250 < est.total_gb < 1310
-        ), f"Expected ~1280GB (eigendecomp peak), got {est.total_gb}"
+        assert 1250 < est.total_gb < 1310, (
+            f"Expected ~1280GB (eigendecomp peak), got {est.total_gb}"
+        )
 
     def test_memory_breakdown_10k(self):
         """Memory estimate for 10k samples should be reasonable."""
@@ -80,9 +80,9 @@ class TestMemoryEstimation:
         est = estimate_workflow_memory(200_000, 95_000)
         # Don't check exact match - just verify it's False for this huge estimate
         # (would need 640GB+ which no typical machine has)
-        assert (
-            est.sufficient is False
-        ), "200k sample workflow should exceed available memory"
+        assert est.sufficient is False, (
+            "200k sample workflow should exceed available memory"
+        )
 
 
 class TestCheckMemoryAvailable:
@@ -157,9 +157,9 @@ class TestEigendecompMemory:
         # With O(n^2) workspace, would see 300MB+ delta
         #
         # Use 500MB threshold - generous for JIT but catches gross O(n^2) issues
-        assert (
-            mem_delta < 0.5
-        ), f"Eigendecomp used {mem_delta:.2f}GB - may have O(n^2) workspace"
+        assert mem_delta < 0.5, (
+            f"Eigendecomp used {mem_delta:.2f}GB - may have O(n^2) workspace"
+        )
 
         # Sanity check results
         assert eigenvalues.shape == (n,)

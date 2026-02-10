@@ -242,9 +242,9 @@ class TestRemlLogLikelihood:
         # Find maximum (REML returns positive log-likelihood)
         max_idx = np.argmax(logls)
         # Should have a clear maximum somewhere
-        assert (
-            logls[max_idx] > logls[0] or logls[max_idx] > logls[-1]
-        ), "REML should have a maximum value"
+        assert logls[max_idx] > logls[0] or logls[max_idx] > logls[-1], (
+            "REML should have a maximum value"
+        )
 
 
 class TestFDistributionSF:

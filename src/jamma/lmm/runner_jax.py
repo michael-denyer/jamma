@@ -197,7 +197,7 @@ def run_lmm_association_jax(
         logger.info(f"  Analyzed SNPs: {n_filtered:,}")
         if chunk_size < n_filtered:
             logger.info(
-                f"  Processing in {n_chunks} chunks " f"({chunk_size:,} SNPs/chunk)"
+                f"  Processing in {n_chunks} chunks ({chunk_size:,} SNPs/chunk)"
             )
 
     # Pre-allocate result arrays (replaces list accumulators)
@@ -359,7 +359,7 @@ def run_lmm_association_jax(
                 buffer_elements = n_samples * chunk_size * n_index
                 logger.error(
                     f"JAX int32 buffer overflow during LMM computation.\n"
-                    f"  Chunk {i+1}/{n_chunks}: {chunk_size:,} SNPs x "
+                    f"  Chunk {i + 1}/{n_chunks}: {chunk_size:,} SNPs x "
                     f"{n_samples:,} samples\n"
                     f"  Buffer elements: {buffer_elements:,} (limit: ~2.1B)\n"
                     f"  This should not happen with automatic chunking.\n"
@@ -367,7 +367,7 @@ def run_lmm_association_jax(
                 )
             else:
                 logger.error(
-                    f"JAX computation failed on chunk {i+1}/{n_chunks}:\n"
+                    f"JAX computation failed on chunk {i + 1}/{n_chunks}:\n"
                     f"  {type(e).__name__}: {error_msg}\n"
                     f"  Chunk size: {chunk_size:,} SNPs, Samples: {n_samples:,}"
                 )
@@ -412,9 +412,10 @@ def run_lmm_association_jax(
         write_offset += slice_len
 
     # Validate all results were written
-    assert (
-        write_offset == n_filtered
-    ), f"Pre-allocated array size mismatch: wrote {write_offset}, expected {n_filtered}"
+    assert write_offset == n_filtered, (
+        f"Pre-allocated array size mismatch: wrote {write_offset},"
+        f" expected {n_filtered}"
+    )
 
     # Log memory after all chunks processed
     if show_progress:

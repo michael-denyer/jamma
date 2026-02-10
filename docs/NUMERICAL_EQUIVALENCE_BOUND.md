@@ -2,7 +2,7 @@
 
 This document states a formal, end-to-end **numerical equivalence bound**
 between JAMMA and GEMMA for the complete GWAS pipeline. It complements
-`docs/FORMAL_PROOF.md` (exact-algebra equivalence) and focuses on the
+`docs/EQUIVALENCE.md` (exact-algebra equivalence) and focuses on the
 **magnitude of numerical differences** under floating-point arithmetic.
 
 The goal is a *stated bound* that is rigorous but data-dependent: constants
@@ -194,7 +194,7 @@ when the linear algebra is well-conditioned.
 - `τ_opt` is configured at approximately `1e-5` for Brent, and the JAX
   grid + golden-section search is designed to reach a comparable tolerance.
 - `δ_CDF` can be measured empirically; see
-  `docs/MATHEMATICAL_EQUIVALENCE.md` for observed differences.
+  `docs/EQUIVALENCE.md` for observed differences.
 - If `κ(K)` and `gap(K)` are favorable, the linear algebra perturbation terms
   are typically **smaller than `τ_opt`** and the bound is driven by
   optimization tolerance and CDF differences.
@@ -210,4 +210,4 @@ dataset-specific condition-number constraints.
 2. It does not claim equivalence for ill-conditioned or degenerate inputs.
 3. It does not override documented edge-case divergences.
 
-For empirical validation on real datasets, see `docs/MATHEMATICAL_EQUIVALENCE.md`.
+For empirical validation on real datasets, see `docs/EQUIVALENCE.md`.

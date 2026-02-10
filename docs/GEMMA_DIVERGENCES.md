@@ -255,6 +255,21 @@ numpy's LAPACK binding supports large matrices without this limitation.
 2. **Edge case tests**: `tests/test_hypothesis.py` verifies JAMMA's robust behavior
 3. **No silent failures**: Divergences produce NaN, not silently wrong values
 
+### Production-Scale Validation (v1.4.3)
+
+JAMMA vs GEMMA validated on 85,000 real samples × 91,613 SNPs (Databricks, MKL ILP64):
+
+| Metric | Result |
+|--------|--------|
+| Kinship Spearman rho | 1.00000000 |
+| Kinship max abs diff | 1.09e-05 |
+| Kinship Frobenius relative | 1.52e-05 |
+| Association Spearman rho (-log10 p) | 1.000000 |
+| Significance agree (p < 0.05) | 91,613/91,613 (100%) |
+| Significance agree (p < 5e-8) | 91,613/91,613 (100%) |
+| Effect direction agreement | 100.0% |
+| Max relative p-value diff | 2.10e-03 |
+
 ---
 
-*Last updated: 2026-02-09*
+*Last updated: 2026-02-10*

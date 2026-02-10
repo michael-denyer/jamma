@@ -1,17 +1,17 @@
-[![CI](https://github.com/michael-denyer/jamma/actions/workflows/ci.yml/badge.svg)](https://github.com/michael-denyer/jamma/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/jamma.svg)](https://pypi.org/project/jamma/)
-[![Bioconda](https://img.shields.io/conda/vn/bioconda/jamma.svg)](https://bioconda.github.io/recipes/jamma/README.html)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![JAX](https://img.shields.io/badge/JAX-accelerated-9cf.svg)](https://github.com/jax-ml/jax)
-[![NumPy](https://img.shields.io/badge/NumPy-1.26+-013243.svg?logo=numpy)](https://numpy.org/)
-[![Hypothesis](https://img.shields.io/badge/tested%20with-Hypothesis-blue.svg)](https://hypothesis.readthedocs.io/)
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+<p align="center">
+  <img src="logos/JAMMA_Banner_logo.png" alt="JAMMA" width="600">
+</p>
 
-<table><tr><td valign="top" width="140">
-<img src="logos/JAMMA_Large_Logo.png" alt="JAMMA" width="130">
-</td><td valign="top">
-
-# JAMMA
+<p align="center">
+  <a href="https://github.com/michael-denyer/jamma/actions/workflows/ci.yml"><img src="https://github.com/michael-denyer/jamma/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://pypi.org/project/jamma/"><img src="https://img.shields.io/pypi/v/jamma.svg" alt="PyPI"></a>
+  <a href="https://bioconda.github.io/recipes/jamma/README.html"><img src="https://img.shields.io/conda/vn/bioconda/jamma.svg" alt="Bioconda"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+"></a>
+  <a href="https://github.com/jax-ml/jax"><img src="https://img.shields.io/badge/JAX-accelerated-9cf.svg" alt="JAX"></a>
+  <a href="https://numpy.org/"><img src="https://img.shields.io/badge/NumPy-1.26+-013243.svg?logo=numpy" alt="NumPy"></a>
+  <a href="https://hypothesis.readthedocs.io/"><img src="https://img.shields.io/badge/tested%20with-Hypothesis-blue.svg" alt="Hypothesis"></a>
+  <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPL%203.0-blue.svg" alt="License: GPL-3.0"></a>
+</p>
 
 **JAX-Accelerated Mixed Model Association** — A modern Python reimplementation of [GEMMA](https://github.com/genetics-statistics/GEMMA) for genome-wide association studies (GWAS).
 
@@ -20,8 +20,6 @@
 - **Fast**: Up to 7x faster than GEMMA on kinship and 4x faster on LMM association
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
 - **Pure Python**: JAX + NumPy stack, no C++ compilation required
-
-</td></tr></table>
 
 ## Installation
 

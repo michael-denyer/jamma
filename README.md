@@ -2,7 +2,11 @@
 
 [![CI](https://github.com/michael-denyer/jamma/actions/workflows/ci.yml/badge.svg)](https://github.com/michael-denyer/jamma/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/jamma.svg)](https://pypi.org/project/jamma/)
+[![Bioconda](https://img.shields.io/conda/vn/bioconda/jamma.svg)](https://bioconda.github.io/recipes/jamma/README.html)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![JAX](https://img.shields.io/badge/JAX-accelerated-9cf.svg)](https://github.com/jax-ml/jax)
+[![NumPy](https://img.shields.io/badge/NumPy-1.26+-013243.svg?logo=numpy)](https://numpy.org/)
+[![Hypothesis](https://img.shields.io/badge/tested%20with-Hypothesis-blue.svg)](https://hypothesis.readthedocs.io/)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
 **JAX-Accelerated Mixed Model Association** — A modern Python reimplementation of [GEMMA](https://github.com/genetics-statistics/GEMMA) for genome-wide association studies (GWAS).

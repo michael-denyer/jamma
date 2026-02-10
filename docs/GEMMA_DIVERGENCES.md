@@ -198,7 +198,7 @@ See [EQUIVALENCE.md § Lambda Optimization](EQUIVALENCE.md#5-lambda-optimization
 
 GEMMA uses GSL (GNU Scientific Library) for eigendecomposition. JAMMA uses `numpy.linalg.eigh` (LAPACK) instead of JAX's `jnp.linalg.eigh`.
 
-**Rationale:** JAX uses int32 buffer indexing internally, which overflows at ~2.1 billion elements (~46k × 46k matrix). For 200k+ sample GWAS, the kinship matrix has 40+ billion elements, causing:
+**Rationale:** JAX uses int32 buffer indexing internally, which overflows at ~2.1 billion elements (~46k × 46k matrix). For large-sample GWAS (50k+), the kinship matrix exceeds this limit, causing:
 
 ```text
 JaxRuntimeError: INVALID_ARGUMENT: Buffer Definition Event:
@@ -222,7 +222,7 @@ numpy's LAPACK binding supports large matrices without this limitation.
 | Monomorphic detection | Count-based | Variance-based | Aligned (equivalent) |
 | JAX covariates | n_cvt >= 1 | n_cvt >= 1 | Aligned (since v1.2) |
 | Lambda optimizer | Brent | Golden section | See [EQUIVALENCE.md](EQUIVALENCE.md#5-lambda-optimization) |
-| Eigendecomp library | GSL | numpy LAPACK | 200k+ sample support |
+| Eigendecomp library | GSL | numpy LAPACK | Large-sample support (ILP64) |
 
 ---
 

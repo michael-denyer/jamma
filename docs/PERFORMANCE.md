@@ -64,7 +64,7 @@ All three pipeline phases are dominated by BLAS/LAPACK calls. No Python-level op
 | Small | ≤10k | 8 GB | Any |
 | Medium | 10–50k | 64 GB | LP64 or ILP64 |
 | Large | 50–100k | 256 GB | ILP64 required |
-| XLarge | 100–200k | 512 GB+ | ILP64 required |
+| XLarge | 100–120k | 512 GB+ | ILP64 required |
 
 See [USER_GUIDE.md](USER_GUIDE.md) for installation instructions and [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md) for documented divergences from GEMMA.
 

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="logos/JAMMA_Large_Logo_v2.png" alt="JAMMA" width="500">
+  <img src="https://raw.githubusercontent.com/michael-denyer/jamma/master/logos/JAMMA_Large_Logo_v2.png" alt="JAMMA" width="500">
 </p>
 
 **JAX-Accelerated Mixed Model Association** — A modern Python reimplementation of [GEMMA](https://github.com/genetics-statistics/GEMMA) for genome-wide association studies (GWAS).
@@ -138,7 +138,7 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs):
 - [x] Pre-computed kinship input (`-k`)
 - [x] Covariate support (`-c`)
 - [x] PLINK binary format (`.bed/.bim/.fam`)
-- [x] Streaming I/O for 200k+ samples
+- [x] Large-scale streaming I/O (>100k samples requires ILP64 MKL)
 - [x] JAX acceleration (CPU/GPU)
 - [x] Pre-flight memory checks (fail-fast before OOM)
 - [x] RSS memory logging at workflow boundaries

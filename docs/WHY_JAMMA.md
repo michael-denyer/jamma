@@ -7,7 +7,7 @@ JAMMA delivers the same statistical results as GEMMA while solving practical pro
 | Feature | GEMMA | JAMMA |
 |---------|-------|-------|
 | **OOM Handling** | Silent crash (OS kill) | Pre-flight check with clear error |
-| **200k Samples** | Requires manual tuning | Works out of the box (streaming) |
+| **Large-Scale** | Requires manual tuning | Streaming I/O, pre-flight memory checks (>100k requires ILP64) |
 | **Speed** | 1x baseline | 4-7x faster (JAX) |
 | **Installation** | C++ compilation required | `pip install jamma` |
 | **Error Messages** | Segfault or cryptic | Clear, actionable |
@@ -50,17 +50,17 @@ Suggestion: Use a larger instance or streaming mode.
 
 ---
 
-## 2. Scale: 200k+ Samples Without Manual Tuning
+## 2. Scale: Large Samples Without Manual Tuning
 
 ### The GEMMA Problem
 
-GEMMA requires the full n×p genotype matrix in memory. For 200k samples × 95k SNPs:
+GEMMA requires the full n×p genotype matrix in memory. For 90k samples × 90k SNPs:
 
-- Genotype matrix: ~76 GB
-- Kinship matrix: ~320 GB
-- Eigendecomposition workspace: ~640 GB peak
+- Genotype matrix: ~32 GB
+- Kinship matrix: ~65 GB
+- Eigendecomposition workspace: ~130 GB peak
 
-Most cloud VMs can't handle this without careful manual tuning.
+Studies over 100k samples require ILP64 BLAS and 512 GB+ RAM due to O(n³) eigendecomposition memory.
 
 ### The JAMMA Solution
 
@@ -334,7 +334,7 @@ JAMMA is not always the right choice:
 | Concern | GEMMA | JAMMA |
 |---------|-------|-------|
 | Crashes at scale | Silent OOM | Pre-flight checks |
-| 200k samples | Manual tuning | Automatic streaming |
+| Large samples | Manual tuning | Automatic streaming (>100k requires ILP64) |
 | Speed | Baseline | 4-7x faster |
 | Installation | C++ build | pip install |
 | Errors | Cryptic | Actionable |

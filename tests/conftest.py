@@ -53,6 +53,19 @@ def pytest_configure(config):
     pass
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _configure_jax_for_tests():
+    """Ensure JAX 64-bit precision is configured for all tests.
+
+    Previously, importing jamma.kinship.compute triggered module-level
+    configure_jax(). Now that side effects are removed, this fixture
+    provides the same guarantee explicitly.
+    """
+    from jamma.core.jax_config import ensure_jax_configured
+
+    ensure_jax_configured()
+
+
 @pytest.fixture
 def sample_plink_data() -> Path:
     """Return path prefix for sample PLINK data from test fixtures.

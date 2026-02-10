@@ -157,7 +157,7 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs):
 
 - Python 3.11+
 - JAX 0.8.0+
-- NumPy 2.0+ (< 2.4)
+- NumPy 1.26+
 
 ## License
 

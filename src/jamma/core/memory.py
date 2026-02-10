@@ -607,7 +607,10 @@ def check_memory_before_run(
         INFO |   Available: 237.4GB
         INFO |   Status: OK (47.6GB headroom)
     """
-    est = estimate_streaming_memory(n_samples, n_snps)
+    from jamma.lmm.chunk import _compute_chunk_size
+
+    actual_chunk = _compute_chunk_size(n_samples, n_snps)
+    est = estimate_streaming_memory(n_samples, n_snps, chunk_size=actual_chunk)
     snap = get_memory_snapshot()
 
     logger.info(

@@ -22,6 +22,7 @@ from jamma.kinship import (
     write_kinship_matrix,
 )
 from jamma.lmm import run_lmm_association_streaming
+from jamma.lmm.chunk import _compute_chunk_size
 from jamma.utils import setup_logging, write_gemma_log
 
 # Create Typer app
@@ -283,10 +284,11 @@ def lmm_command(
     if check_memory:
         typer.echo("Checking memory requirements...")
 
+        actual_chunk = _compute_chunk_size(n_samples_meta, n_snps_meta)
         est = estimate_streaming_memory(
             n_samples=n_samples_meta,
             n_snps=n_snps_meta,
-            chunk_size=10_000,
+            chunk_size=actual_chunk,
         )
 
         typer.echo(

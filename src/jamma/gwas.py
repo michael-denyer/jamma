@@ -27,6 +27,7 @@ from jamma.kinship import (
     write_kinship_matrix,
 )
 from jamma.lmm import run_lmm_association_streaming
+from jamma.lmm.chunk import _compute_chunk_size
 from jamma.lmm.stats import AssocResult
 
 
@@ -129,7 +130,8 @@ def gwas(
 
     # --- Memory check ---
     if check_memory:
-        est = estimate_streaming_memory(n_samples, n_snps, chunk_size=10_000)
+        actual_chunk = _compute_chunk_size(n_samples, n_snps)
+        est = estimate_streaming_memory(n_samples, n_snps, chunk_size=actual_chunk)
         if not est.sufficient:
             raise MemoryError(
                 f"Insufficient memory: need {est.total_peak_gb:.1f}GB, "

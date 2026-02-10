@@ -274,6 +274,8 @@ def compute_kinship_streaming(
         >>> K.shape
         (1940, 1940)
     """
+    ensure_jax_configured()
+
     start_time = time.perf_counter()
 
     # Get dimensions without loading genotypes

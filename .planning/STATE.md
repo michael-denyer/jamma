@@ -10,12 +10,12 @@ See: .planning/PROJECT.md (updated 2026-02-10)
 ## Current Position
 
 Milestone: v2.0 Production GWAS
-Phase: Phase 25 - LOCO Kinship — IN PROGRESS
-Plan: 2/3 complete (25-01, 25-02 done)
-Status: Executing Phase 25 plans
-Last activity: 2026-02-11 — 25-02 LOCO LMM orchestrator and CLI/API integration
+Phase: Phase 25 - LOCO Kinship — COMPLETE
+Plan: 3/3 complete (25-01, 25-02, 25-03 done)
+Status: Phase 25 complete, ready for Phase 26
+Last activity: 2026-02-11 — 25-03 LOCO validation test suite
 
-Progress: [████░░░░░░░░░░░░░░░░] 20% (1/5 phases)
+Progress: [████████░░░░░░░░░░░░] 40% (2/5 phases)
 
 ## Performance Metrics
 
@@ -62,6 +62,7 @@ Progress: [████░░░░░░░░░░░░░░░░] 20% (1/
 | 24-02 Missingness Tests + Memory Comments  | 3min     | 2     | 2     |
 | 25-01 LOCO Kinship Computation             | 10min    | 2     | 4     |
 | 25-02 LOCO LMM Orchestrator + Integration  | 9min     | 2     | 7     |
+| 25-03 LOCO Validation Test Suite           | 25min    | 2     | 1     |
 
 ## Accumulated Context
 
@@ -101,6 +102,8 @@ All milestone decisions archived in:
 - Per-chromosome single BED read in _run_lmm_for_chromosome; chromosome subsets small enough for memory (25-02)
 - -k and -loco mutually exclusive; LOCO computes kinship internally (25-02)
 - LOCO pipeline branch skips standard kinship loading entirely (25-02)
+- rtol=1e-9 validated bound for LOCO subtraction identity (batched JAX FP accumulation) (25-03)
+- Mathematical self-consistency as LOCO validation strategy (no GEMMA reference available) (25-03)
 
 ### v2.0 Roadmap Structure
 
@@ -133,9 +136,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-11
-Stopped at: Completed 25-02-PLAN.md
+Stopped at: Completed 25-03-PLAN.md (Phase 25 complete)
 Resume file: None
-Next: `/gsd:execute-phase 25` (plan 25-03)
+Next: `/gsd:execute-phase 26` (Phase 26: Eigendecomposition Reuse)
 
 ---
 

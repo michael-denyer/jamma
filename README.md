@@ -15,10 +15,11 @@
 **JAX-Accelerated Mixed Model Association** — A modern Python reimplementation of [GEMMA](https://github.com/genetics-statistics/GEMMA) for genome-wide association studies (GWAS).
 
 - **GEMMA-compatible**: Drop-in replacement with identical CLI flags and output formats
-- **Numerical equivalence**: Validated against GEMMA on 85k real samples (91,613 SNPs) — 100% significance agreement, 100% effect direction agreement
+- **Numerical equivalence**: Validated against GEMMA — 100% significance agreement, 100% effect direction agreement
 - **Fast**: Up to 7x faster than GEMMA on kinship and 4x faster on LMM association
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
 - **Pure Python**: JAX + NumPy stack, no C++ compilation required
+- **Large-scale ready**: Optional [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) wheels (numpy 2.4.2) for >46k sample eigendecomposition
 
 ## Installation
 
@@ -137,7 +138,7 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs):
 - [x] Pre-computed kinship input (`-k`)
 - [x] Covariate support (`-c`)
 - [x] PLINK binary format (`.bed/.bim/.fam`)
-- [x] Large-scale streaming I/O (>100k samples requires ILP64 MKL)
+- [x] Large-scale streaming I/O (>100k samples via [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) — numpy 2.4.2)
 - [x] JAX acceleration (CPU/GPU)
 - [x] Pre-flight memory checks (fail-fast before OOM)
 - [x] RSS memory logging at workflow boundaries

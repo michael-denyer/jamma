@@ -10,12 +10,12 @@ See: .planning/PROJECT.md (updated 2026-02-10)
 ## Current Position
 
 Milestone: v2.0 Production GWAS
-Phase: Phase 24 - Quality and Cleanup — COMPLETE
-Plan: —
-Status: Phase 24 verified, ready for Phase 25 planning
-Last activity: 2026-02-11 — Phase 24 complete (searchsorted optimization, missingness tests, memory comments)
+Phase: Phase 26 - Eigendecomposition Reuse
+Plan: 2/2 complete (26-01, 26-02 done)
+Status: Phase 26 complete
+Last activity: 2026-02-11 — 26-02 Eigen I/O validation test suite
 
-Progress: [████░░░░░░░░░░░░░░░░] 20% (1/5 phases)
+Progress: [████████████░░░░░░░░] 60% (3/5 phases)
 
 ## Performance Metrics
 
@@ -56,10 +56,15 @@ Progress: [████░░░░░░░░░░░░░░░░] 20% (1/
 
 **v2.0 (Phase 24+):**
 
-| Plan                                      | Duration | Tasks | Files |
-|-------------------------------------------|----------|-------|-------|
-| 24-01 SNP Filter Searchsorted             | 2min     | 2     | 3     |
-| 24-02 Missingness Tests + Memory Comments | 3min     | 2     | 2     |
+| Plan                                       | Duration | Tasks | Files |
+|--------------------------------------------|----------|-------|-------|
+| 24-01 SNP Filter Searchsorted              | 2min     | 2     | 3     |
+| 24-02 Missingness Tests + Memory Comments  | 3min     | 2     | 2     |
+| 25-01 LOCO Kinship Computation             | 10min    | 2     | 4     |
+| 25-02 LOCO LMM Orchestrator + Integration  | 9min     | 2     | 7     |
+| 25-03 LOCO Validation Test Suite           | 25min    | 2     | 1     |
+| 26-01 Eigen I/O + Pipeline Integration     | 7min     | 2     | 7     |
+| 26-02 Eigen I/O Validation Test Suite      | 9min     | 2     | 2     |
 
 ## Accumulated Context
 
@@ -93,6 +98,18 @@ All milestone decisions archived in:
 
 - np.searchsorted with side="left" for half-open [start, end) chunk filtering on sorted snp_indices (24-01)
 - No functional changes to memory.py for comment updates -- docstrings only (24-02)
+- Generator (Iterator) return type for LOCO kinship -- yields one K_loco at a time for memory efficiency (25-01)
+- Streaming LOCO accumulates all S_chr simultaneously in single pass -- trades O(n_chr * n^2) memory for O(1) passes (25-01)
+- Global SNP filtering before chromosome partitioning; chromosome array co-filtered with same mask (25-01)
+- Per-chromosome single BED read in _run_lmm_for_chromosome; chromosome subsets small enough for memory (25-02)
+- -k and -loco mutually exclusive; LOCO computes kinship internally (25-02)
+- LOCO pipeline branch skips standard kinship loading entirely (25-02)
+- rtol=1e-9 validated bound for LOCO subtraction identity (batched JAX FP accumulation) (25-03)
+- Mathematical self-consistency as LOCO validation strategy (no GEMMA reference available) (25-03)
+- write_eigen eigendecomposes before runner call, passes pre-computed eigen to runner (26-01)
+- kinship=None valid in streaming runner when eigenvalues+eigenvectors provided (26-01)
+- write_eigen subsets kinship to valid-phenotype samples before eigendecomp (26-02)
+- Standard calibrated tolerances sufficient for loaded-eigen LMM equivalence (26-02)
 
 ### v2.0 Roadmap Structure
 
@@ -125,9 +142,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-11
-Stopped at: Phase 24 executed and verified
+Stopped at: Completed 26-02-PLAN.md (Phase 26 complete)
 Resume file: None
-Next: `/gsd:plan-phase 25`
+Next: Phase 27 - Phenotype Selection and Standardized Kinship
 
 ---
 

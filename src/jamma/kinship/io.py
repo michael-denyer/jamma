@@ -1,5 +1,6 @@
 """Kinship matrix I/O in GEMMA format."""
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
@@ -64,3 +65,44 @@ def write_kinship_matrix(K: np.ndarray, path: Path) -> None:
             # This matches C++ iostream precision(10) behavior
             values = [f"{K[i, j]:.10g}" for j in range(K.shape[1])]
             f.write("\t".join(values) + "\n")
+
+
+def write_loco_kinship_matrices(
+    loco_kinships: Iterator[tuple[str, np.ndarray]],
+    output_dir: Path,
+    prefix: str = "result",
+) -> list[Path]:
+    """Write per-chromosome LOCO kinship matrices to disk.
+
+    For each (chr_name, K) pair yielded by the iterator, writes the matrix
+    to ``{output_dir}/{prefix}.loco.cXX.chr{chr_name}.txt`` using GEMMA
+    format via ``write_kinship_matrix()``.
+
+    This is a convenience wrapper for the ``gk -loco`` standalone command.
+
+    Args:
+        loco_kinships: Iterator yielding (chromosome_name, kinship_matrix)
+            pairs. Typically produced by ``compute_loco_kinship_streaming()``.
+        output_dir: Directory for output files (created if needed).
+        prefix: Filename prefix (default "result").
+
+    Returns:
+        List of Paths to the written kinship files.
+
+    Example:
+        >>> from jamma.kinship import compute_loco_kinship_streaming
+        >>> loco_iter = compute_loco_kinship_streaming(Path("data/study"))
+        >>> paths = write_loco_kinship_matrices(loco_iter, Path("output"))
+        >>> len(paths)  # One file per chromosome
+        19
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+
+    for chr_name, K in loco_kinships:
+        kinship_path = output_dir / f"{prefix}.loco.cXX.chr{chr_name}.txt"
+        write_kinship_matrix(K, kinship_path)
+        written.append(kinship_path)
+
+    return written

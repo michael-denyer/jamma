@@ -67,7 +67,7 @@ def _build_covariate_matrix(
 
 
 def _eigendecompose_or_reuse(
-    kinship: np.ndarray,
+    kinship: np.ndarray | None,
     eigenvalues: np.ndarray | None,
     eigenvectors: np.ndarray | None,
     show_progress: bool,
@@ -76,7 +76,8 @@ def _eigendecompose_or_reuse(
     """Return eigendecomposition, computing it if not provided.
 
     Args:
-        kinship: Kinship matrix (n_samples, n_samples).
+        kinship: Kinship matrix (n_samples, n_samples), or None when
+            pre-computed eigenvalues and eigenvectors are provided.
         eigenvalues: Pre-computed eigenvalues or None.
         eigenvectors: Pre-computed eigenvectors or None.
         show_progress: Whether to log memory usage.

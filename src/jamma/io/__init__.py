@@ -9,6 +9,7 @@ This package contains modules for reading and writing various file formats:
 from jamma.io.covariate import read_covariate_file
 from jamma.io.plink import (
     PlinkData,
+    get_chromosome_partitions,
     get_plink_metadata,
     load_plink_binary,
     stream_genotype_chunks,
@@ -16,6 +17,7 @@ from jamma.io.plink import (
 
 __all__ = [
     "PlinkData",
+    "get_chromosome_partitions",
     "get_plink_metadata",
     "load_plink_binary",
     "read_covariate_file",

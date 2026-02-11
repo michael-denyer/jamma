@@ -518,3 +518,304 @@ class TestLocoEdgeCases:
             assert np.allclose(K_loco, K_loco.T, atol=1e-14)
             eigenvalues = np.linalg.eigvalsh(K_loco)
             assert np.all(eigenvalues >= -1e-10)
+
+
+# ===========================================================================
+# LMM Integration Tests
+# ===========================================================================
+
+
+def _load_mouse_phenotypes() -> np.ndarray:
+    """Load mouse_hs1940 phenotypes from .fam file."""
+    fam_path = MOUSE_HS1940_BFILE.with_suffix(".fam")
+    fam_data = np.loadtxt(str(fam_path), dtype=str, usecols=(5,))
+    missing_mask = np.isin(fam_data, ["-9", "NA"])
+    fam_data[missing_mask] = "0"
+    phenotypes = fam_data.astype(np.float64)
+    phenotypes[missing_mask] = np.nan
+    return phenotypes
+
+
+class TestLocoLmmIntegration:
+    """LOCO LMM produces valid results on mouse_hs1940."""
+
+    @pytest.mark.slow
+    def test_loco_lmm_produces_valid_results(self):
+        """run_lmm_loco returns valid AssocResults with finite stats."""
+        if not _mouse_hs1940_exists():
+            pytest.skip("mouse_hs1940 PLINK data not found")
+
+        from jamma.lmm.loco import run_lmm_loco
+
+        phenotypes = _load_mouse_phenotypes()
+        results = run_lmm_loco(
+            bed_path=MOUSE_HS1940_BFILE,
+            phenotypes=phenotypes,
+            lmm_mode=1,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        assert len(results) > 0, "Should produce results"
+
+        for r in results:
+            assert 0 < r.p_wald <= 1, f"p_wald={r.p_wald} for {r.rs}"
+            assert np.isfinite(r.beta), f"beta not finite for {r.rs}"
+            assert np.isfinite(r.se) and r.se > 0, f"se={r.se} for {r.rs}"
+
+        # Results cover multiple chromosomes
+        result_chrs = {r.chr for r in results}
+        assert len(result_chrs) > 1
+
+    @pytest.mark.slow
+    def test_loco_lmm_results_have_correct_snp_info(self):
+        """SNP IDs and chromosome assignments match BIM metadata."""
+        if not _mouse_hs1940_exists():
+            pytest.skip("mouse_hs1940 PLINK data not found")
+
+        from jamma.lmm.loco import run_lmm_loco
+
+        phenotypes = _load_mouse_phenotypes()
+        results = run_lmm_loco(
+            bed_path=MOUSE_HS1940_BFILE,
+            phenotypes=phenotypes,
+            lmm_mode=1,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        meta = get_plink_metadata(MOUSE_HS1940_BFILE)
+        bim_snps = set(meta["sid"])
+
+        # All result SNP IDs should be in the BIM file
+        for r in results:
+            assert r.rs in bim_snps, f"SNP {r.rs} not found in BIM file"
+
+        # Results should come from multiple chromosomes
+        result_chrs = {r.chr for r in results}
+        bim_chrs = set(meta["chromosome"])
+        assert result_chrs.issubset(bim_chrs)
+
+    @pytest.mark.slow
+    def test_loco_lmm_top_hits_overlap_with_standard(self):
+        """Top 100 SNPs from LOCO and standard LMM have >50% overlap."""
+        if not _mouse_hs1940_exists():
+            pytest.skip("mouse_hs1940 PLINK data not found")
+
+        from jamma.lmm import run_lmm_association_streaming
+        from jamma.lmm.loco import run_lmm_loco
+
+        phenotypes = _load_mouse_phenotypes()
+
+        # Standard LMM (needs kinship)
+        K_full = compute_centered_kinship(
+            np.asarray(
+                __import__("jamma.io", fromlist=["load_plink_binary"])
+                .load_plink_binary(MOUSE_HS1940_BFILE)
+                .genotypes,
+                dtype=np.float64,
+            ),
+            check_memory=False,
+        )
+
+        standard_results = run_lmm_association_streaming(
+            bed_path=MOUSE_HS1940_BFILE,
+            phenotypes=phenotypes,
+            kinship=K_full,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        # LOCO LMM
+        loco_results = run_lmm_loco(
+            bed_path=MOUSE_HS1940_BFILE,
+            phenotypes=phenotypes,
+            lmm_mode=1,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        # Get top 100 SNPs by p-value
+        standard_sorted = sorted(standard_results, key=lambda r: r.p_wald or 1.0)
+        loco_sorted = sorted(loco_results, key=lambda r: r.p_wald or 1.0)
+
+        top_n = 100
+        standard_top = {r.rs for r in standard_sorted[:top_n]}
+        loco_top = {r.rs for r in loco_sorted[:top_n]}
+
+        overlap = len(standard_top & loco_top)
+        assert overlap > 50, (
+            f"Top {top_n} overlap is {overlap}/100 (<50%). "
+            f"LOCO and standard should find similar signals."
+        )
+
+    @pytest.mark.slow
+    def test_loco_lmm_writes_assoc_file(self, tmp_path: Path):
+        """LOCO LMM writes valid assoc output file."""
+        if not _mouse_hs1940_exists():
+            pytest.skip("mouse_hs1940 PLINK data not found")
+
+        from jamma.lmm.loco import run_lmm_loco
+
+        phenotypes = _load_mouse_phenotypes()
+        output_path = tmp_path / "loco_result.assoc.txt"
+
+        run_lmm_loco(
+            bed_path=MOUSE_HS1940_BFILE,
+            phenotypes=phenotypes,
+            lmm_mode=1,
+            output_path=output_path,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        assert output_path.exists()
+        lines = output_path.read_text().strip().splitlines()
+        assert len(lines) > 1, "Should have header + data lines"
+
+        # Check header
+        header = lines[0]
+        assert "chr" in header
+        assert "rs" in header
+        assert "p_wald" in header
+
+        # Check column count consistency
+        header_cols = len(header.split("\t"))
+        for line in lines[1:5]:  # Check first few data lines
+            assert len(line.split("\t")) == header_cols
+
+
+# ===========================================================================
+# Pipeline Integration Tests
+# ===========================================================================
+
+
+class TestPipelineLocoMode:
+    """Pipeline integration with LOCO mode."""
+
+    @pytest.mark.slow
+    def test_pipeline_loco_mode(self, tmp_path: Path):
+        """PipelineRunner with loco=True produces valid PipelineResult."""
+        if not _mouse_hs1940_exists():
+            pytest.skip("mouse_hs1940 PLINK data not found")
+
+        from jamma.pipeline import PipelineConfig, PipelineRunner
+
+        config = PipelineConfig(
+            bfile=MOUSE_HS1940_BFILE,
+            loco=True,
+            output_dir=tmp_path,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        result = PipelineRunner(config).run()
+
+        assert result.n_samples > 0
+        assert result.n_snps_tested > 0
+        assert result.assoc_path.exists()
+        assert "total_s" in result.timing
+
+    def test_pipeline_loco_rejects_kinship_file(self):
+        """PipelineConfig with loco=True and kinship_file raises ValueError."""
+        from jamma.pipeline import PipelineConfig, PipelineRunner
+
+        config = PipelineConfig(
+            bfile=MOUSE_HS1940_BFILE,
+            loco=True,
+            kinship_file=Path("something.txt"),
+            check_memory=False,
+        )
+
+        runner = PipelineRunner(config)
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            runner.validate_inputs()
+
+
+# ===========================================================================
+# CLI Tests
+# ===========================================================================
+
+
+class TestCliLocoFlags:
+    """CLI integration tests for -loco flag."""
+
+    def test_cli_lmm_loco_flag_exists(self):
+        """-loco appears in lmm --help output."""
+        from typer.testing import CliRunner
+
+        from jamma.cli import app
+
+        result = CliRunner().invoke(app, ["lmm", "--help"])
+        assert result.exit_code == 0
+        assert "-loco" in result.output
+
+    def test_cli_gk_loco_flag_exists(self):
+        """-loco appears in gk --help output."""
+        from typer.testing import CliRunner
+
+        from jamma.cli import app
+
+        result = CliRunner().invoke(app, ["gk", "--help"])
+        assert result.exit_code == 0
+        assert "-loco" in result.output
+
+    def test_cli_lmm_loco_rejects_k_flag(self):
+        """jamma lmm -bfile X -loco -k Y exits with error."""
+        from typer.testing import CliRunner
+
+        from jamma.cli import app
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "lmm",
+                "-bfile",
+                str(MOUSE_HS1940_BFILE),
+                "-loco",
+                "-k",
+                "something.txt",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
+
+
+# ===========================================================================
+# Python API Test
+# ===========================================================================
+
+
+class TestGwasApiLocoParameter:
+    """gwas() function accepts loco=True."""
+
+    def test_gwas_api_loco_parameter_exists(self):
+        """gwas() function signature includes loco parameter."""
+        import inspect
+
+        from jamma.gwas import gwas
+
+        sig = inspect.signature(gwas)
+        assert "loco" in sig.parameters
+        assert sig.parameters["loco"].default is False
+
+    @pytest.mark.slow
+    def test_gwas_api_loco_integration(self, tmp_path: Path):
+        """gwas(loco=True) runs to completion on mouse_hs1940."""
+        if not _mouse_hs1940_exists():
+            pytest.skip("mouse_hs1940 PLINK data not found")
+
+        from jamma.gwas import GWASResult, gwas
+
+        result = gwas(
+            MOUSE_HS1940_BFILE,
+            loco=True,
+            output_dir=tmp_path,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        assert isinstance(result, GWASResult)
+        assert result.n_samples > 0
+        assert result.n_snps_tested > 0
+        assert result.timing["total_s"] > 0

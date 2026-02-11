@@ -8,11 +8,17 @@ The kinship matrix K is computed as:
 
 where X_c is the centered genotype matrix with missing values imputed
 to per-SNP mean, and p is the number of SNPs.
+
+LOCO (Leave-One-Chromosome-Out) kinship is also supported via the
+subtraction approach: K_loco_c = (S_full - S_c) / (p - p_c), where
+S_full is the unscaled full kinship numerator and S_c is the contribution
+from chromosome c. This avoids redundant computation.
 """
 
 from __future__ import annotations
 
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import jax.numpy as jnp
@@ -29,7 +35,10 @@ from jamma.core.memory import (
 )
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
-from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
+from jamma.io.plink import (
+    get_plink_metadata,
+    stream_genotype_chunks,
+)
 from jamma.kinship.missing import impute_and_center
 
 
@@ -214,6 +223,144 @@ def compute_centered_kinship(
 
     # Return as numpy array for downstream compatibility
     return np.array(K)
+
+
+def compute_loco_kinship(
+    genotypes: np.ndarray,
+    chromosome_for_each_snp: np.ndarray,
+    batch_size: int = 10000,
+    maf_threshold: float = 0.0,
+    miss_threshold: float = 1.0,
+    check_memory: bool = True,
+) -> Iterator[tuple[str, np.ndarray]]:
+    """Compute LOCO kinship matrices via subtraction approach.
+
+    For each chromosome c, computes K_loco_c = (S_full - S_c) / (p - p_c)
+    where S_full is the unscaled full kinship numerator and S_c is the
+    contribution from chromosome c's SNPs.
+
+    Global centering is used (not per-chromosome centering) so the
+    subtraction identity holds: S_full = sum(S_c) over all chromosomes.
+
+    Yields one (chr_name, K_loco) pair at a time so the caller can process
+    and discard each matrix without holding all LOCO matrices in memory.
+
+    Args:
+        genotypes: Genotype matrix (n_samples, n_snps), NaN for missing.
+        chromosome_for_each_snp: String array of chromosome name per SNP,
+            length must equal genotypes.shape[1].
+        batch_size: SNPs per batch for kinship accumulation (default 10000).
+        maf_threshold: Minimum MAF for SNP inclusion (default 0.0 = no filter).
+        miss_threshold: Maximum missing rate (default 1.0 = no filter).
+        check_memory: If True (default), check available memory before allocation.
+
+    Yields:
+        Tuple of (chr_name, K_loco) where chr_name is the chromosome being
+        excluded and K_loco is the LOCO kinship matrix (n_samples, n_samples).
+
+    Raises:
+        MemoryError: If check_memory=True and insufficient memory available.
+        ValueError: If no SNPs pass filtering, or if all filtered SNPs are on
+            a single chromosome (cannot compute LOCO).
+    """
+    ensure_jax_configured()
+
+    n_samples, n_snps_original = genotypes.shape
+
+    # Filter SNPs globally (MAF, missingness, monomorphism)
+    genotypes_filtered, n_filtered, n_original = _filter_snps(
+        genotypes, maf_threshold, miss_threshold
+    )
+
+    if n_filtered == 0:
+        raise ValueError(
+            f"No SNPs passed filtering (maf>={maf_threshold}, "
+            f"miss<={miss_threshold}, polymorphic). "
+            f"Original SNP count: {n_original}"
+        )
+
+    # CRITICAL: filter the chromosome array to match filtered genotypes
+    col_means, miss_counts, col_vars = compute_snp_stats(genotypes)
+    snp_mask, _allele_freqs, _mafs = compute_snp_filter_mask(
+        col_means, miss_counts, col_vars, n_samples, maf_threshold, miss_threshold
+    )
+    chr_filtered = chromosome_for_each_snp[snp_mask]
+
+    if n_filtered < n_original:
+        n_removed = n_original - n_filtered
+        logger.info(
+            f"LOCO kinship filtering: {n_filtered:,} SNPs retained, "
+            f"{n_removed:,} removed (MAF/missing/monomorphic)"
+        )
+
+    # Memory check: S_full (n^2*8) + X_centered (n*p*8) + one S_c at a time (n^2*8)
+    if check_memory:
+        required_gb = (
+            n_samples**2 * 8 / 1e9  # S_full
+            + n_samples * n_filtered * 8 / 1e9  # X_centered (float64)
+            + n_samples**2 * 8 / 1e9  # S_c (one at a time)
+        )
+        check_memory_available(
+            required_gb,
+            safety_margin=0.1,
+            operation=f"LOCO kinship ({n_samples:,} samples, {n_filtered:,} SNPs)",
+        )
+
+    # Convert to JAX and center globally
+    X = jnp.array(genotypes_filtered, dtype=jnp.float64)
+    X_centered = impute_and_center(X)
+
+    # Accumulate full kinship numerator S_full = X_centered @ X_centered.T (unscaled)
+    S_full = jnp.zeros((n_samples, n_samples), dtype=jnp.float64)
+    n_batches = (n_filtered + batch_size - 1) // batch_size
+
+    logger.info(
+        f"LOCO kinship: {n_samples:,} samples x {n_filtered:,} SNPs, "
+        f"{n_batches} batches"
+    )
+
+    batch_starts = list(range(0, n_filtered, batch_size))
+    if n_batches > 1:
+        batch_iter = progress_iterator(
+            enumerate(batch_starts), total=n_batches, desc="LOCO: full kinship"
+        )
+    else:
+        batch_iter = enumerate(batch_starts)
+
+    for _, start in batch_iter:
+        end = min(start + batch_size, n_filtered)
+        S_full = _accumulate_kinship(S_full, X_centered[:, start:end])
+        S_full.block_until_ready()
+
+    # Compute per-chromosome LOCO kinship via subtraction
+    unique_chrs = sorted(set(np.array(chr_filtered)))
+    logger.info(f"LOCO: computing {len(unique_chrs)} leave-one-out kinship matrices")
+
+    for chr_name in unique_chrs:
+        chr_mask = chr_filtered == chr_name
+        p_chr = int(np.sum(chr_mask))
+        p_loco = n_filtered - p_chr
+
+        if p_loco == 0:
+            raise ValueError(
+                f"Cannot compute LOCO kinship: all {n_filtered} filtered SNPs "
+                f"are on chromosome '{chr_name}'. LOCO requires SNPs on multiple "
+                f"chromosomes."
+            )
+
+        # Compute chromosome contribution S_c
+        X_chr = X_centered[:, chr_mask]
+        S_chr = jnp.matmul(X_chr, X_chr.T)
+        S_chr.block_until_ready()
+
+        # K_loco = (S_full - S_c) / p_loco
+        K_loco = np.array((S_full - S_chr) / p_loco)
+
+        logger.debug(
+            f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs retained"
+        )
+
+        yield (chr_name, K_loco)
 
 
 def compute_kinship_streaming(

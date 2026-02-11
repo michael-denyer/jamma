@@ -405,9 +405,14 @@ Plans:
   1. User can compute LOCO kinship with `-loco` flag that generates one kinship matrix per chromosome
   2. Chromosome annotations are read from .bim file and used to partition SNPs by chromosome
   3. Each chromosome-specific kinship matrix excludes all SNPs from that chromosome
-  4. LOCO kinship output matches GEMMA `-loco` implementation within calibrated tolerances
+  4. LOCO kinship satisfies mathematical self-consistency (subtraction identity, symmetry, PSD, manual computation equivalence)
   5. LMM association with `-loco` uses the appropriate chromosome-specific kinship for each SNP
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 25-01-PLAN.md — Chromosome partitioning and LOCO kinship computation (subtraction approach)
+- [ ] 25-02-PLAN.md — LOCO LMM orchestrator, pipeline, and CLI integration
+- [ ] 25-03-PLAN.md — LOCO validation tests (mathematical self-consistency and integration)
 
 ### Phase 26: Eigendecomposition Reuse
 **Goal**: Enable loading pre-computed eigendecomposition for multi-phenotype workflows

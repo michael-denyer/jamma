@@ -136,6 +136,43 @@ def get_plink_metadata(bfile: Path) -> dict[str, Any]:
         }
 
 
+def get_chromosome_partitions(bed_path: Path) -> dict[str, np.ndarray]:
+    """Get SNP column indices grouped by chromosome from BIM file.
+
+    Opens the PLINK .bed file to read the chromosome array from BIM metadata,
+    then groups SNP indices by chromosome name. Chromosome names are preserved
+    exactly as they appear in the BIM file (e.g., '1', 'chr1', 'X').
+
+    Args:
+        bed_path: Path prefix for PLINK files (without .bed/.bim/.fam extension).
+
+    Returns:
+        Dict mapping chromosome name (string) to sorted np.ndarray of SNP
+        column indices. Keys are sorted in natural string order.
+
+    Raises:
+        FileNotFoundError: If the .bed file does not exist.
+
+    Example:
+        >>> partitions = get_chromosome_partitions(Path("data/mouse_hs1940"))
+        >>> list(partitions.keys())[:3]
+        ['1', '10', '11']
+        >>> partitions['1'].shape
+        (...)
+    """
+    bed_file = Path(f"{bed_path}.bed")
+
+    if not bed_file.exists():
+        raise FileNotFoundError(f"PLINK .bed file not found: {bed_file}")
+
+    with open_bed(bed_file) as bed:
+        chromosomes = bed.chromosome
+        unique_chrs = sorted(set(chromosomes))
+        return {
+            chr_name: np.where(chromosomes == chr_name)[0] for chr_name in unique_chrs
+        }
+
+
 def stream_genotype_chunks(
     bed_path: Path,
     chunk_size: int = 10_000,

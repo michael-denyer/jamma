@@ -51,6 +51,9 @@ def gwas(
     check_memory: bool = True,
     show_progress: bool = True,
     loco: bool = False,
+    eigenvalue_file: str | Path | None = None,
+    eigenvector_file: str | Path | None = None,
+    write_eigen: bool = False,
 ) -> GWASResult:
     """Run a complete GWAS pipeline in a single call.
 
@@ -63,6 +66,10 @@ def gwas(
     it, and runs LMM association on that chromosome's SNPs. This
     eliminates proximal contamination. The ``kinship_file`` parameter
     must be None when ``loco=True`` (mutually exclusive).
+
+    When ``eigenvalue_file`` and ``eigenvector_file`` are provided,
+    loads pre-computed eigendecomposition and skips both kinship loading
+    and eigendecomposition. Both must be provided together.
 
     Args:
         bfile: PLINK binary file prefix (without .bed/.bim/.fam extension).
@@ -82,6 +89,12 @@ def gwas(
         show_progress: If True, show progress bars and log messages.
         loco: If True, enable leave-one-chromosome-out analysis.
             Computes per-chromosome kinship internally.
+        eigenvalue_file: Pre-computed eigenvalue file (.eigenD.txt).
+            Must be paired with eigenvector_file.
+        eigenvector_file: Pre-computed eigenvector file (.eigenU.txt).
+            Must be paired with eigenvalue_file.
+        write_eigen: If True, write eigendecomposition files as
+            side effect of the pipeline run.
 
     Returns:
         GWASResult with association results, sample/SNP counts, and timing.
@@ -111,6 +124,13 @@ def gwas(
         check_memory=check_memory,
         show_progress=show_progress,
         loco=loco,
+        eigenvalue_file=(
+            Path(eigenvalue_file) if eigenvalue_file is not None else None
+        ),
+        eigenvector_file=(
+            Path(eigenvector_file) if eigenvector_file is not None else None
+        ),
+        write_eigen=write_eigen,
     )
 
     pipeline_result = PipelineRunner(config).run()

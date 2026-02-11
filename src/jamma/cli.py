@@ -115,6 +115,13 @@ def gk_command(
             help="Compute LOCO kinship matrices (one per chromosome)",
         ),
     ] = False,
+    write_eigen: Annotated[
+        bool,
+        typer.Option(
+            "-eigen",
+            help="Write eigendecomposition files (.eigenD.txt, .eigenU.txt)",
+        ),
+    ] = False,
 ) -> None:
     """Compute kinship matrix from genotype data.
 
@@ -123,6 +130,9 @@ def gk_command(
 
     With -loco, computes one LOCO kinship matrix per chromosome, writing
     each to {prefix}.loco.cXX.chr{N}.txt.
+
+    With -eigen, also eigendecomposes the kinship matrix and writes
+    .eigenD.txt and .eigenU.txt files.
     """
     start_time = time.perf_counter()
 
@@ -141,6 +151,13 @@ def gk_command(
     bed_path = Path(f"{bfile}.bed")
     if not bed_path.exists():
         typer.echo(f"Error: PLINK file not found: {bed_path}", err=True)
+        raise typer.Exit(code=1)
+
+    if write_eigen and loco:
+        typer.echo(
+            "Error: -eigen not supported with -loco mode",
+            err=True,
+        )
         raise typer.Exit(code=1)
 
     if loco:
@@ -219,6 +236,21 @@ def gk_command(
     write_kinship_matrix(K, kinship_path)
     typer.echo(f"Kinship matrix written to {kinship_path}")
 
+    # Eigendecompose and write if -eigen flag
+    if write_eigen:
+        from jamma.lmm.eigen import eigendecompose_kinship
+        from jamma.lmm.eigen_io import write_eigen_files
+
+        eigenvalues, eigenvectors = eigendecompose_kinship(K)
+        d_path, u_path = write_eigen_files(
+            eigenvalues,
+            eigenvectors,
+            _global_config.outdir,
+            _global_config.prefix,
+        )
+        typer.echo(f"Eigenvalues written to {d_path}")
+        typer.echo(f"Eigenvectors written to {u_path}")
+
     # Calculate timing
     end_time = time.perf_counter()
     elapsed = end_time - start_time
@@ -285,6 +317,27 @@ def lmm_command(
             help="Enable leave-one-chromosome-out analysis",
         ),
     ] = False,
+    eigenvalue_file: Annotated[
+        Path | None,
+        typer.Option(
+            "-d",
+            help="Pre-computed eigenvalues file (.eigenD.txt)",
+        ),
+    ] = None,
+    eigenvector_file: Annotated[
+        Path | None,
+        typer.Option(
+            "-u",
+            help="Pre-computed eigenvectors file (.eigenU.txt)",
+        ),
+    ] = None,
+    write_eigen: Annotated[
+        bool,
+        typer.Option(
+            "-eigen",
+            help="Write eigendecomposition output files",
+        ),
+    ] = False,
 ) -> None:
     """Perform linear mixed model association testing.
 
@@ -294,6 +347,10 @@ def lmm_command(
 
     With -loco, computes per-chromosome LOCO kinship internally.
     The -k flag is not required (and is mutually exclusive with -loco).
+
+    With -d and -u, loads pre-computed eigendecomposition and skips
+    both kinship loading and eigendecomposition. Both flags required
+    together.
     """
     global _global_config
     if _global_config is None:
@@ -307,10 +364,11 @@ def lmm_command(
         )
         raise typer.Exit(code=1)
 
-    # CLI requires kinship file unless LOCO mode
-    if kinship_file is None and not loco:
+    # CLI requires kinship file unless LOCO mode or eigen files
+    if kinship_file is None and not loco and eigenvalue_file is None:
         typer.echo(
-            "Error: -k (kinship matrix) is required for -lmm 1",
+            "Error: -k (kinship matrix) is required for -lmm "
+            "(or use -d/-u for pre-computed eigen)",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -329,6 +387,9 @@ def lmm_command(
         show_progress=True,
         mem_budget=mem_budget,
         loco=loco,
+        eigenvalue_file=eigenvalue_file,
+        eigenvector_file=eigenvector_file,
+        write_eigen=write_eigen,
     )
 
     # Run pipeline, converting exceptions to CLI-friendly errors

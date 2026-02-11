@@ -31,6 +31,8 @@ from jamma.kinship import (
 )
 from jamma.lmm import run_lmm_association_streaming, run_lmm_loco
 from jamma.lmm.chunk import _compute_chunk_size
+from jamma.lmm.eigen import eigendecompose_kinship
+from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.stats import AssocResult
 
 
@@ -54,6 +56,12 @@ class PipelineConfig:
         loco: If True, use leave-one-chromosome-out analysis. Computes
             per-chromosome kinship internally; mutually exclusive with
             kinship_file in this version.
+        eigenvalue_file: Pre-computed eigenvalue file (.eigenD.txt), or None.
+            Must be paired with eigenvector_file (-d flag).
+        eigenvector_file: Pre-computed eigenvector file (.eigenU.txt), or None.
+            Must be paired with eigenvalue_file (-u flag).
+        write_eigen: If True, write eigendecomposition files as side effect
+            (-eigen flag).
     """
 
     bfile: Path
@@ -69,6 +77,9 @@ class PipelineConfig:
     show_progress: bool = True
     mem_budget: float | None = None
     loco: bool = False
+    eigenvalue_file: Path | None = None
+    eigenvector_file: Path | None = None
+    write_eigen: bool = False
 
 
 @dataclass
@@ -138,6 +149,27 @@ class PipelineRunner:
             raise ValueError(
                 "-k and -loco are mutually exclusive in this version. "
                 "LOCO computes kinship internally."
+            )
+
+        # Eigen file validation: -d and -u must be paired
+        has_d = self.config.eigenvalue_file is not None
+        has_u = self.config.eigenvector_file is not None
+        if has_d != has_u:
+            raise ValueError(
+                "Both -d (eigenvalues) and -u (eigenvectors) must be provided together"
+            )
+
+        if has_d and self.config.loco:
+            raise ValueError("-d/-u (pre-computed eigen) not supported with -loco mode")
+
+        if has_d and not self.config.eigenvalue_file.exists():
+            raise FileNotFoundError(
+                f"Eigenvalue file not found: {self.config.eigenvalue_file}"
+            )
+
+        if has_u and not self.config.eigenvector_file.exists():
+            raise FileNotFoundError(
+                f"Eigenvector file not found: {self.config.eigenvector_file}"
             )
 
         if (
@@ -385,9 +417,43 @@ class PipelineRunner:
                 },
             )
 
-        # 7. Standard path: Kinship
+        # 7. Standard path: load eigen files or kinship
         t_kinship = time.perf_counter()
-        K = self.load_kinship(n_samples)
+        eigenvalues = None
+        eigenvectors = None
+
+        if self.config.eigenvalue_file and self.config.eigenvector_file:
+            # Load pre-computed eigendecomposition
+            eigenvalues, eigenvectors = read_eigen_files(
+                self.config.eigenvalue_file,
+                self.config.eigenvector_file,
+                n_samples=n_analyzed,
+            )
+            logger.info(
+                f"Loaded pre-computed eigendecomposition "
+                f"({len(eigenvalues)} eigenvalues)"
+            )
+            if self.config.kinship_file:
+                logger.warning(
+                    "Both kinship (-k) and eigen files (-d/-u) "
+                    "provided. Using eigen files; kinship will "
+                    "be ignored."
+                )
+            K = None  # Not needed when eigen provided
+        else:
+            K = self.load_kinship(n_samples)
+            # If write_eigen requested, eigendecompose now and write
+            if self.config.write_eigen:
+                eigenvalues, eigenvectors = eigendecompose_kinship(K)
+                d_path, u_path = write_eigen_files(
+                    eigenvalues,
+                    eigenvectors,
+                    self.config.output_dir,
+                    self.config.output_prefix,
+                )
+                logger.info(f"Wrote eigenvalues to {d_path}")
+                logger.info(f"Wrote eigenvectors to {u_path}")
+
         kinship_s = time.perf_counter() - t_kinship
 
         # 8. Covariates
@@ -402,6 +468,8 @@ class PipelineRunner:
             kinship=K,
             snp_info=None,
             covariates=covariates,
+            eigenvalues=eigenvalues,
+            eigenvectors=eigenvectors,
             maf_threshold=self.config.maf,
             miss_threshold=self.config.miss,
             output_path=assoc_path,

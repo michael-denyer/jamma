@@ -387,20 +387,15 @@ Plans:
 
 ## v2.0 Production GWAS (Phases 24-28)
 
-### Phase 24: Quality and Cleanup
+### Phase 24: Quality and Cleanup — COMPLETE (2026-02-11)
 **Goal**: Fix streaming performance, expand test coverage, and update documentation
 **Depends on**: Phase 23
 **Requirements**: PERF-01, TEST-01, TEST-02, DOC-01
-**Success Criteria** (what must be TRUE):
-  1. Chunk-level SNP filtering uses binary search (searchsorted) instead of linear scan for O(log n) lookup
-  2. Tests validate heterogeneous missingness patterns across SNPs and samples
-  3. Tests validate all-missing and near-all-missing SNP edge cases
-  4. Memory model comments in memory.py reflect current dtype assumptions and streaming architecture
 **Plans**: 2 plans
 
 Plans:
-- [ ] 24-01-PLAN.md — Replace linear SNP filtering with searchsorted in streaming modules
-- [ ] 24-02-PLAN.md — Missingness pattern tests and memory model comment cleanup
+- [x] 24-01-PLAN.md — Replace linear SNP filtering with searchsorted in streaming modules
+- [x] 24-02-PLAN.md — Missingness pattern tests and memory model comment cleanup
 
 ### Phase 25: LOCO Kinship
 **Goal**: Enable leave-one-chromosome-out kinship computation for reduced proximal contamination

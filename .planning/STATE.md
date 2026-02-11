@@ -10,10 +10,10 @@ See: .planning/PROJECT.md (updated 2026-02-10)
 ## Current Position
 
 Milestone: v2.0 Production GWAS
-Phase: Phase 24 - Quality and Cleanup — COMPLETE
-Plan: —
-Status: Phase 24 verified, ready for Phase 25 planning
-Last activity: 2026-02-11 — Phase 24 complete (searchsorted optimization, missingness tests, memory comments)
+Phase: Phase 25 - LOCO Kinship — IN PROGRESS
+Plan: 1/3 complete (25-01 done)
+Status: Executing Phase 25 plans
+Last activity: 2026-02-11 — 25-01 LOCO kinship computation (in-memory + streaming)
 
 Progress: [████░░░░░░░░░░░░░░░░] 20% (1/5 phases)
 
@@ -56,10 +56,11 @@ Progress: [████░░░░░░░░░░░░░░░░] 20% (1/
 
 **v2.0 (Phase 24+):**
 
-| Plan                                      | Duration | Tasks | Files |
-|-------------------------------------------|----------|-------|-------|
-| 24-01 SNP Filter Searchsorted             | 2min     | 2     | 3     |
-| 24-02 Missingness Tests + Memory Comments | 3min     | 2     | 2     |
+| Plan                                       | Duration | Tasks | Files |
+|--------------------------------------------|----------|-------|-------|
+| 24-01 SNP Filter Searchsorted              | 2min     | 2     | 3     |
+| 24-02 Missingness Tests + Memory Comments  | 3min     | 2     | 2     |
+| 25-01 LOCO Kinship Computation             | 10min    | 2     | 4     |
 
 ## Accumulated Context
 
@@ -93,6 +94,9 @@ All milestone decisions archived in:
 
 - np.searchsorted with side="left" for half-open [start, end) chunk filtering on sorted snp_indices (24-01)
 - No functional changes to memory.py for comment updates -- docstrings only (24-02)
+- Generator (Iterator) return type for LOCO kinship -- yields one K_loco at a time for memory efficiency (25-01)
+- Streaming LOCO accumulates all S_chr simultaneously in single pass -- trades O(n_chr * n^2) memory for O(1) passes (25-01)
+- Global SNP filtering before chromosome partitioning; chromosome array co-filtered with same mask (25-01)
 
 ### v2.0 Roadmap Structure
 
@@ -125,9 +129,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-11
-Stopped at: Phase 24 executed and verified
+Stopped at: Completed 25-01-PLAN.md
 Resume file: None
-Next: `/gsd:plan-phase 25`
+Next: `/gsd:execute-phase 25` (plan 25-02)
 
 ---
 

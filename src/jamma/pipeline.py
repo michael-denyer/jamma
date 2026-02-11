@@ -29,7 +29,7 @@ from jamma.kinship import (
     read_kinship_matrix,
     write_kinship_matrix,
 )
-from jamma.lmm import run_lmm_association_streaming
+from jamma.lmm import run_lmm_association_streaming, run_lmm_loco
 from jamma.lmm.chunk import _compute_chunk_size
 from jamma.lmm.stats import AssocResult
 
@@ -51,6 +51,9 @@ class PipelineConfig:
         check_memory: If True, check available memory before computation.
         show_progress: If True, show progress bars and log messages.
         mem_budget: Hard memory budget in GB, or None for no budget.
+        loco: If True, use leave-one-chromosome-out analysis. Computes
+            per-chromosome kinship internally; mutually exclusive with
+            kinship_file in this version.
     """
 
     bfile: Path
@@ -65,6 +68,7 @@ class PipelineConfig:
     check_memory: bool = True
     show_progress: bool = True
     mem_budget: float | None = None
+    loco: bool = False
 
 
 @dataclass
@@ -128,6 +132,12 @@ class PipelineRunner:
             raise ValueError(
                 f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), "
                 f"got {self.config.lmm_mode}"
+            )
+
+        if self.config.loco and self.config.kinship_file is not None:
+            raise ValueError(
+                "-k and -loco are mutually exclusive in this version. "
+                "LOCO computes kinship internally."
             )
 
         if (
@@ -339,16 +349,52 @@ class PipelineRunner:
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         assoc_path = self.config.output_dir / f"{self.config.output_prefix}.assoc.txt"
 
-        # 6. Kinship
+        # 6. LOCO branch: skip standard kinship, run LOCO orchestrator
+        if self.config.loco:
+            covariates = self.load_covariates(n_samples)
+
+            t_loco = time.perf_counter()
+            results = run_lmm_loco(
+                bed_path=self.config.bfile,
+                phenotypes=phenotypes,
+                covariates=covariates,
+                maf_threshold=self.config.maf,
+                miss_threshold=self.config.miss,
+                lmm_mode=self.config.lmm_mode,
+                output_path=assoc_path,
+                check_memory=self.config.check_memory,
+                show_progress=self.config.show_progress,
+                save_kinship=self.config.save_kinship,
+                kinship_output_dir=self.config.output_dir,
+                kinship_output_prefix=self.config.output_prefix,
+            )
+            loco_s = time.perf_counter() - t_loco
+            total_s = time.perf_counter() - t_start
+            logger.info(f"LOCO GWAS complete: {n_snps} SNPs in {total_s:.1f}s")
+
+            return PipelineResult(
+                associations=results,
+                n_samples=n_analyzed,
+                n_snps_tested=n_snps,
+                assoc_path=assoc_path,
+                timing={
+                    "kinship_s": 0.0,
+                    "load_s": 0.0,
+                    "lmm_s": loco_s,
+                    "total_s": total_s,
+                },
+            )
+
+        # 7. Standard path: Kinship
         t_kinship = time.perf_counter()
         K = self.load_kinship(n_samples)
         kinship_s = time.perf_counter() - t_kinship
 
-        # 7. Covariates
+        # 8. Covariates
         covariates = self.load_covariates(n_samples)
         load_s = time.perf_counter() - t_start
 
-        # 8. Run LMM
+        # 9. Run LMM
         t_lmm = time.perf_counter()
         results = run_lmm_association_streaming(
             bed_path=self.config.bfile,

@@ -16,7 +16,9 @@ from jamma.core import OutputConfig
 from jamma.io import load_plink_binary
 from jamma.kinship import (
     compute_centered_kinship,
+    compute_loco_kinship_streaming,
     write_kinship_matrix,
+    write_loco_kinship_matrices,
 )
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.utils import setup_logging, write_gemma_log
@@ -106,11 +108,21 @@ def gk_command(
             help="Enable/disable pre-flight memory check (default: enabled)",
         ),
     ] = True,
+    loco: Annotated[
+        bool,
+        typer.Option(
+            "-loco/--no-loco",
+            help="Compute LOCO kinship matrices (one per chromosome)",
+        ),
+    ] = False,
 ) -> None:
     """Compute kinship matrix from genotype data.
 
     Reads PLINK binary files and computes a genetic relatedness matrix.
     Writes output in GEMMA-compatible .cXX.txt format.
+
+    With -loco, computes one LOCO kinship matrix per chromosome, writing
+    each to {prefix}.loco.cXX.chr{N}.txt.
     """
     start_time = time.perf_counter()
 
@@ -131,6 +143,46 @@ def gk_command(
         typer.echo(f"Error: PLINK file not found: {bed_path}", err=True)
         raise typer.Exit(code=1)
 
+    if loco:
+        # LOCO kinship mode: compute per-chromosome LOCO kinship matrices
+        typer.echo(f"Computing LOCO kinship matrices from {bfile}...")
+        kinship_start = time.perf_counter()
+
+        loco_iter = compute_loco_kinship_streaming(
+            bfile,
+            maf_threshold=maf,
+            miss_threshold=miss,
+            check_memory=check_memory,
+            show_progress=True,
+        )
+        written_paths = write_loco_kinship_matrices(
+            loco_iter,
+            output_dir=_global_config.outdir,
+            prefix=_global_config.prefix,
+        )
+        kinship_time = time.perf_counter() - kinship_start
+
+        typer.echo(
+            f"Wrote {len(written_paths)} LOCO kinship matrices in {kinship_time:.2f}s"
+        )
+        for p in written_paths:
+            typer.echo(f"  {p}")
+
+        # Write log file
+        end_time = time.perf_counter()
+        elapsed = end_time - start_time
+        params = {
+            "kinship_mode": "loco",
+            "n_chromosomes": len(written_paths),
+            "maf_threshold": maf,
+            "miss_threshold": miss,
+        }
+        timing = {"total": elapsed, "kinship": kinship_time}
+        log_path = write_gemma_log(_global_config, params, timing, command_line)
+        typer.echo(f"Log written to {log_path}")
+        return
+
+    # Standard kinship mode
     # Load PLINK data
     typer.echo(f"Loading PLINK data from {bfile}...")
     try:
@@ -226,19 +278,37 @@ def lmm_command(
             help="Hard memory budget in GB. Fail if estimate exceeds this.",
         ),
     ] = None,
+    loco: Annotated[
+        bool,
+        typer.Option(
+            "-loco/--no-loco",
+            help="Enable leave-one-chromosome-out analysis",
+        ),
+    ] = False,
 ) -> None:
     """Perform linear mixed model association testing.
 
     Runs LMM association tests using a pre-computed kinship matrix.
     Supports Wald test (-lmm 1), LRT (-lmm 2), Score test (-lmm 3),
     and all tests combined (-lmm 4).
+
+    With -loco, computes per-chromosome LOCO kinship internally.
+    The -k flag is not required (and is mutually exclusive with -loco).
     """
     global _global_config
     if _global_config is None:
         _global_config = OutputConfig()
 
-    # CLI requires kinship file (API can compute it)
-    if kinship_file is None:
+    # Mutual exclusivity check
+    if loco and kinship_file is not None:
+        typer.echo(
+            "Error: -k and -loco are mutually exclusive",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # CLI requires kinship file unless LOCO mode
+    if kinship_file is None and not loco:
         typer.echo(
             "Error: -k (kinship matrix) is required for -lmm 1",
             err=True,
@@ -258,6 +328,7 @@ def lmm_command(
         check_memory=check_memory,
         show_progress=True,
         mem_budget=mem_budget,
+        loco=loco,
     )
 
     # Run pipeline, converting exceptions to CLI-friendly errors

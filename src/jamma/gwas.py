@@ -50,6 +50,7 @@ def gwas(
     save_kinship: bool = False,
     check_memory: bool = True,
     show_progress: bool = True,
+    loco: bool = False,
 ) -> GWASResult:
     """Run a complete GWAS pipeline in a single call.
 
@@ -57,10 +58,17 @@ def gwas(
     association testing, and result writing. Equivalent to the CLI
     ``jamma lmm`` command but as a Python function.
 
+    When ``loco=True``, runs leave-one-chromosome-out analysis: computes
+    a separate LOCO kinship matrix for each chromosome, eigendecomposes
+    it, and runs LMM association on that chromosome's SNPs. This
+    eliminates proximal contamination. The ``kinship_file`` parameter
+    must be None when ``loco=True`` (mutually exclusive).
+
     Args:
         bfile: PLINK binary file prefix (without .bed/.bim/.fam extension).
         kinship_file: Pre-computed kinship matrix file (.cXX.txt format).
-            If None, kinship is computed from genotypes.
+            If None, kinship is computed from genotypes. Must be None
+            when loco=True.
         covariate_file: GEMMA-format covariate file (whitespace-delimited,
             no header). If None, intercept-only model is used.
         lmm_mode: LMM test type: 1=Wald, 2=LRT, 3=Score, 4=All.
@@ -69,8 +77,11 @@ def gwas(
         output_dir: Directory for output files (created if needed).
         output_prefix: Prefix for output filenames.
         save_kinship: If True, save computed kinship matrix to disk.
+            In LOCO mode, saves per-chromosome kinship files.
         check_memory: If True, check available memory before computation.
         show_progress: If True, show progress bars and log messages.
+        loco: If True, enable leave-one-chromosome-out analysis.
+            Computes per-chromosome kinship internally.
 
     Returns:
         GWASResult with association results, sample/SNP counts, and timing.
@@ -78,16 +89,13 @@ def gwas(
     Raises:
         FileNotFoundError: If PLINK files (.bed, .bim, .fam) do not exist.
         ValueError: If lmm_mode is not in (1, 2, 3, 4), no valid phenotypes
-            found, or covariate row count mismatches sample count.
+            found, covariate row count mismatches sample count, or if both
+            kinship_file and loco are specified.
         MemoryError: If check_memory=True and insufficient memory available.
 
     Example:
         >>> from jamma import gwas
-        >>> result = gwas(
-        ...     "data/mouse_hs1940",
-        ...     kinship_file="data/kinship.cXX.txt",
-        ...     output_dir="results",
-        ... )
+        >>> result = gwas("data/mouse_hs1940", loco=True)
         >>> print(f"{result.n_snps_tested} SNPs, {result.timing['total_s']:.1f}s")
     """
     config = PipelineConfig(
@@ -102,6 +110,7 @@ def gwas(
         save_kinship=save_kinship,
         check_memory=check_memory,
         show_progress=show_progress,
+        loco=loco,
     )
 
     pipeline_result = PipelineRunner(config).run()

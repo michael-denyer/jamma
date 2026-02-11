@@ -1,7 +1,6 @@
 <p align="center">
   <a href="https://github.com/michael-denyer/jamma/actions/workflows/ci.yml"><img src="https://github.com/michael-denyer/jamma/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://pypi.org/project/jamma/"><img src="https://img.shields.io/pypi/v/jamma.svg" alt="PyPI"></a>
-  <a href="https://bioconda.github.io/recipes/jamma/README.html"><img src="https://img.shields.io/conda/vn/bioconda/jamma.svg" alt="Bioconda"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+"></a>
   <a href="https://github.com/jax-ml/jax"><img src="https://img.shields.io/badge/JAX-accelerated-9cf.svg" alt="JAX"></a>
   <a href="https://numpy.org/"><img src="https://img.shields.io/badge/NumPy-1.26+-013243.svg?logo=numpy" alt="NumPy"></a>

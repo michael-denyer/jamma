@@ -372,9 +372,11 @@ def compute_kinship_streaming(
         )
 
     for chunk, file_start, file_end in chunk_iter:
-        # Find filtered SNPs in this chunk
-        chunk_snp_mask = (snp_indices >= file_start) & (snp_indices < file_end)
-        chunk_filtered_indices = snp_indices[chunk_snp_mask] - file_start
+        # Binary search for filtered SNPs in this chunk: O(log n) vs O(n)
+        # snp_indices is sorted (from np.where), so searchsorted is valid
+        left = np.searchsorted(snp_indices, file_start, side="left")
+        right = np.searchsorted(snp_indices, file_end, side="left")
+        chunk_filtered_indices = snp_indices[left:right] - file_start
 
         if len(chunk_filtered_indices) == 0:
             continue

@@ -347,19 +347,16 @@ def run_lmm_association_streaming(
             if not np.all(valid_mask):
                 chunk = chunk[valid_mask, :]
 
-            chunk_filtered_indices = []
-            chunk_filtered_local_idx = []
-            chunk_filtered_col_idx = []
-            for i, snp_idx in enumerate(snp_indices):
-                if file_start <= snp_idx < file_end:
-                    chunk_filtered_indices.append(snp_idx)
-                    chunk_filtered_local_idx.append(i)
-                    chunk_filtered_col_idx.append(snp_idx - file_start)
+            # Binary search for filtered SNPs in this chunk: O(log n) vs O(n)
+            # snp_indices is sorted (from np.where), so searchsorted is valid
+            left = np.searchsorted(snp_indices, file_start, side="left")
+            right = np.searchsorted(snp_indices, file_end, side="left")
 
-            if len(chunk_filtered_indices) == 0:
+            if left == right:
                 continue
 
-            chunk_filtered_col_idx_arr = np.array(chunk_filtered_col_idx)
+            chunk_filtered_local_idx = np.arange(left, right)
+            chunk_filtered_col_idx_arr = snp_indices[left:right] - file_start
             geno_subset = chunk[:, chunk_filtered_col_idx_arr].copy()
 
             # Vectorized imputation: broadcast filtered_means to match geno_subset shape

@@ -59,3 +59,61 @@ def impute_and_center(X: jnp.ndarray) -> jnp.ndarray:
     X_centered = X_imputed - snp_means
 
     return X_centered
+
+
+@jit
+def impute_center_and_standardize(X: jnp.ndarray) -> jnp.ndarray:
+    """Impute missing values, center, and standardize by per-SNP standard deviation.
+
+    Implements GEMMA's standardized kinship preprocessing (-gk 2):
+    1. Compute mean per SNP excluding missing (NaN)
+    2. Replace missing with mean
+    3. Center: x = x - mean
+    4. Compute variance on imputed data: var = E[X^2] - E[X]^2
+    5. Standardize: z = centered / sqrt(var), with zero-variance SNPs set to 0
+
+    GEMMA computes variance over all samples including imputed values.
+    The impute-to-mean step makes missing values equal to the mean, so they
+    contribute zero to centered values but DO affect the variance denominator
+    (sample count is n_samples, not n_observed).
+
+    Args:
+        X: Genotype matrix (n_samples, n_snps), NaN for missing values.
+            Values are typically 0, 1, or 2 representing minor allele counts.
+
+    Returns:
+        Standardized genotype matrix with missing values imputed to SNP mean,
+        centered, and divided by per-SNP standard deviation.
+        Shape is (n_samples, n_snps), dtype matches input (typically float64).
+        Zero-variance SNPs contribute zero (matching GEMMA's geno_var != 0 check).
+
+    Example:
+        >>> import jax.numpy as jnp
+        >>> X = jnp.array([[0.0, 1.0], [1.0, 2.0], [2.0, 1.0]])
+        >>> Z = impute_center_and_standardize(X)
+        >>> # Each column is centered and divided by its standard deviation
+    """
+    # Compute per-SNP mean excluding NaN values
+    snp_means = jnp.nanmean(X, axis=0, keepdims=True)
+
+    # Handle all-missing columns: nanmean returns NaN, replace with 0
+    snp_means = jnp.nan_to_num(snp_means, nan=0.0)
+
+    # Replace NaN with SNP mean
+    X_imputed = jnp.where(jnp.isnan(X), snp_means, X)
+
+    # Center by subtracting mean
+    X_centered = X_imputed - snp_means
+
+    # Compute variance AFTER imputation (matching GEMMA):
+    # geno_var = E[X^2] - E[X]^2 where sums include imputed values
+    snp_var = jnp.mean(X_imputed**2, axis=0, keepdims=True) - snp_means**2
+
+    # Standard deviation
+    snp_sd = jnp.sqrt(snp_var)
+
+    # Standardize, guarding against zero variance (monomorphic SNPs)
+    # Zero-variance SNPs contribute nothing to kinship
+    X_standardized = jnp.where(snp_sd > 0, X_centered / snp_sd, 0.0)
+
+    return X_standardized

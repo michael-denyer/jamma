@@ -40,7 +40,7 @@ from jamma.io.plink import (
     get_plink_metadata,
     stream_genotype_chunks,
 )
-from jamma.kinship.missing import impute_and_center
+from jamma.kinship.missing import impute_and_center, impute_center_and_standardize
 
 
 @jit
@@ -221,6 +221,140 @@ def compute_centered_kinship(
 
     # Log memory after kinship computation
     log_memory_snapshot(f"after_kinship_{n_samples}samples")
+
+    # Return as numpy array for downstream compatibility
+    return np.array(K)
+
+
+def compute_standardized_kinship(
+    genotypes: np.ndarray,
+    batch_size: int = 10000,
+    maf_threshold: float = 0.0,
+    miss_threshold: float = 1.0,
+    check_memory: bool = True,
+) -> np.ndarray:
+    """Compute standardized relatedness matrix (GEMMA -gk 2).
+
+    Implements K = (1/p) * Z @ Z.T where Z[i,k] = (x[i,k] - mean_k) / sd_k.
+    Each SNP is centered and divided by its standard deviation. Monomorphic
+    SNPs (sd=0) are included in the SNP count p but contribute zero to K.
+
+    GEMMA's standardized kinship algorithm:
+    1. Filter SNPs by MAF, missing rate, and monomorphism
+    2. For each SNP batch: impute missing to mean, center, divide by sd
+    3. Accumulate K += Z_batch @ Z_batch.T
+    4. Scale K /= n_filtered_snps
+
+    Note: Monomorphic SNPs are excluded by _filter_snps (which removes
+    zero-variance SNPs). This matches GEMMA since monomorphic SNPs also
+    fail MAF filtering in practice.
+
+    Args:
+        genotypes: Genotype matrix (n_samples, n_snps), NaN for missing.
+            Values are typically 0, 1, or 2 representing minor allele counts.
+        batch_size: SNPs per batch (default 10000, matches GEMMA).
+            Batching prevents memory issues with large SNP counts.
+        maf_threshold: Minimum MAF for SNP inclusion (default 0.0 = no filter).
+        miss_threshold: Maximum missing rate (default 1.0 = no filter).
+        check_memory: If True (default), check available memory before allocation
+            and raise MemoryError if insufficient.
+
+    Returns:
+        Kinship matrix (n_samples, n_samples), symmetric, scaled by n_filtered_snps.
+
+    Raises:
+        MemoryError: If check_memory=True and insufficient memory available.
+        ValueError: If no SNPs pass filtering.
+
+    Example:
+        >>> import numpy as np
+        >>> X = np.array([[0, 1, 2], [1, 1, 1], [2, 1, 0]], dtype=np.float64)
+        >>> K = compute_standardized_kinship(X, maf_threshold=0.01)
+        >>> K.shape
+        (3, 3)
+        >>> np.allclose(K, K.T)  # Symmetric
+        True
+    """
+    ensure_jax_configured()
+
+    n_samples, n_snps_original = genotypes.shape
+
+    # Filter SNPs by MAF, missing rate, and monomorphism
+    genotypes_filtered, n_snps, n_original = _filter_snps(
+        genotypes, maf_threshold, miss_threshold
+    )
+
+    if n_snps == 0:
+        raise ValueError(
+            f"No SNPs passed filtering (maf>={maf_threshold}, "
+            f"miss<={miss_threshold}, polymorphic). "
+            f"Original SNP count: {n_original}"
+        )
+
+    if n_snps < n_original:
+        n_removed = n_original - n_snps
+        logger.info(
+            f"Standardized kinship filtering: {n_snps:,} SNPs retained, "
+            f"{n_removed:,} removed (MAF/missing/monomorphic)"
+        )
+
+    # Memory check before allocation
+    if check_memory:
+        eigendecomp_peak_gb = estimate_eigendecomp_memory(n_samples)
+        kinship_peak_gb = (
+            n_samples**2 * 8 / 1e9  # K accumulator
+            + n_samples * n_snps * 8 / 1e9  # X JAX copy of genotypes
+        )
+        required_gb = max(eigendecomp_peak_gb, kinship_peak_gb)
+        check_memory_available(
+            required_gb,
+            safety_margin=0.1,
+            operation=f"GWAS pipeline (peak: {required_gb:.1f}GB)",
+        )
+
+    # Log memory state before kinship allocation
+    log_memory_snapshot(f"before_standardized_kinship_{n_samples}samples")
+
+    # Convert to JAX array
+    X = jnp.array(genotypes_filtered, dtype=jnp.float64)
+
+    # Initialize kinship accumulator
+    K = jnp.zeros((n_samples, n_samples), dtype=jnp.float64)
+
+    n_batches = (n_snps + batch_size - 1) // batch_size
+    logger.info(
+        f"Standardized kinship: in-memory mode, {n_samples:,} samples x "
+        f"{n_snps:,} SNPs, {n_batches} batches of {batch_size:,}"
+    )
+
+    # Process SNPs in batches
+    batch_starts = list(range(0, n_snps, batch_size))
+    if n_batches > 1:
+        batch_iter = progress_iterator(
+            enumerate(batch_starts), total=n_batches, desc="Standardized Kinship"
+        )
+    else:
+        batch_iter = enumerate(batch_starts)
+
+    for _, start in batch_iter:
+        end = min(start + batch_size, n_snps)
+        X_batch = X[:, start:end]
+
+        # Impute, center, and standardize the batch
+        X_standardized = impute_center_and_standardize(X_batch)
+
+        # Accumulate kinship contribution
+        K = _accumulate_kinship(K, X_standardized)
+        K.block_until_ready()  # Sync so progress bar reflects actual compute
+
+    # Scale by number of filtered SNPs
+    K = K / n_snps
+
+    # Sync the K/n_snps division so memory snapshot is accurate
+    K.block_until_ready()
+
+    # Log memory after kinship computation
+    log_memory_snapshot(f"after_standardized_kinship_{n_samples}samples")
 
     # Return as numpy array for downstream compatibility
     return np.array(K)

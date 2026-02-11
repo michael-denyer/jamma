@@ -186,8 +186,7 @@ def gk_command(
             typer.echo(f"  {p}")
 
         # Write log file
-        end_time = time.perf_counter()
-        elapsed = end_time - start_time
+        elapsed = time.perf_counter() - start_time
         params = {
             "kinship_mode": "loco",
             "n_chromosomes": len(written_paths),

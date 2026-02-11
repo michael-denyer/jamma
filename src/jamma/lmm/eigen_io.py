@@ -129,8 +129,7 @@ def write_eigenvectors(eigenvectors: np.ndarray, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(path, "w") as f:
-        for i in range(eigenvectors.shape[0]):
-            row = eigenvectors[i]
+        for row in eigenvectors:
             values = [f"{v:.10g}" for v in row]
             f.write("\t".join(values) + "\n")
 

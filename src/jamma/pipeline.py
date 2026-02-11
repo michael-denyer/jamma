@@ -152,25 +152,26 @@ class PipelineRunner:
             )
 
         # Eigen file validation: -d and -u must be paired
-        has_d = self.config.eigenvalue_file is not None
-        has_u = self.config.eigenvector_file is not None
-        if has_d != has_u:
+        has_eigen = self.config.eigenvalue_file is not None
+        has_eigenvec = self.config.eigenvector_file is not None
+        if has_eigen != has_eigenvec:
             raise ValueError(
                 "Both -d (eigenvalues) and -u (eigenvectors) must be provided together"
             )
 
-        if has_d and self.config.loco:
-            raise ValueError("-d/-u (pre-computed eigen) not supported with -loco mode")
-
-        if has_d and not self.config.eigenvalue_file.exists():
-            raise FileNotFoundError(
-                f"Eigenvalue file not found: {self.config.eigenvalue_file}"
-            )
-
-        if has_u and not self.config.eigenvector_file.exists():
-            raise FileNotFoundError(
-                f"Eigenvector file not found: {self.config.eigenvector_file}"
-            )
+        if has_eigen:
+            if self.config.loco:
+                raise ValueError(
+                    "-d/-u (pre-computed eigen) not supported with -loco mode"
+                )
+            if not self.config.eigenvalue_file.exists():
+                raise FileNotFoundError(
+                    f"Eigenvalue file not found: {self.config.eigenvalue_file}"
+                )
+            if not self.config.eigenvector_file.exists():
+                raise FileNotFoundError(
+                    f"Eigenvector file not found: {self.config.eigenvector_file}"
+                )
 
         if (
             self.config.kinship_file is not None
@@ -448,10 +449,7 @@ class PipelineRunner:
             # files are consistent with what the runner computes.
             if self.config.write_eigen:
                 valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
-                if np.all(valid_mask):
-                    K_valid = K
-                else:
-                    K_valid = K[np.ix_(valid_mask, valid_mask)]
+                K_valid = K if np.all(valid_mask) else K[np.ix_(valid_mask, valid_mask)]
                 eigenvalues, eigenvectors = eigendecompose_kinship(K_valid)
                 d_path, u_path = write_eigen_files(
                     eigenvalues,

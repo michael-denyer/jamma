@@ -608,13 +608,11 @@ class TestLocoLmmIntegration:
         phenotypes = _load_mouse_phenotypes()
 
         # Standard LMM (needs kinship)
+        from jamma.io import load_plink_binary
+
+        plink_data = load_plink_binary(MOUSE_HS1940_BFILE)
         K_full = compute_centered_kinship(
-            np.asarray(
-                __import__("jamma.io", fromlist=["load_plink_binary"])
-                .load_plink_binary(MOUSE_HS1940_BFILE)
-                .genotypes,
-                dtype=np.float64,
-            ),
+            plink_data.genotypes.astype(np.float64),
             check_memory=False,
         )
 

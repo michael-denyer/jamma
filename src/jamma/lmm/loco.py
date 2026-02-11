@@ -149,17 +149,22 @@ def run_lmm_loco(
         for i in range(n_snps_total)
     ]
 
-    # Open shared incremental writer
-    writer = None
-    if output_path is not None:
-        test_type_map = {1: "wald", 2: "lrt", 3: "score", 4: "all"}
-        test_type = test_type_map.get(lmm_mode, "wald")
-        writer = IncrementalAssocWriter(output_path, test_type=test_type)
-        writer.__enter__()
+    # Determine test type for incremental writer
+    test_type_map = {1: "wald", 2: "lrt", 3: "score", 4: "all"}
+    test_type = test_type_map.get(lmm_mode, "wald")
 
     all_results: list[AssocResult] = []
 
+    # Use IncrementalAssocWriter as context manager when writing to disk
+    writer_ctx = (
+        IncrementalAssocWriter(output_path, test_type=test_type)
+        if output_path is not None
+        else None
+    )
+
     try:
+        writer = writer_ctx.__enter__() if writer_ctx is not None else None
+
         # Stream LOCO kinship matrices one at a time
         loco_iter = compute_loco_kinship_streaming(
             bed_path,
@@ -169,17 +174,15 @@ def run_lmm_loco(
 
         for chr_idx, (chr_name, K_loco) in enumerate(loco_iter):
             chr_snp_indices = partitions[chr_name]
-            n_snps_chr = len(chr_snp_indices)
 
             if show_progress:
                 logger.info(
                     f"LOCO: chromosome {chr_name} ({chr_idx + 1}/{len(unique_chrs)}), "
-                    f"{n_snps_chr} SNPs, eigendecomposing..."
+                    f"{len(chr_snp_indices)} SNPs, eigendecomposing..."
                 )
 
             # Eigendecompose K_loco (subset to valid samples)
             K_loco_valid = K_loco[np.ix_(valid_mask, valid_mask)]
-
             eigenvalues_np, U = eigendecompose_kinship(K_loco_valid)
 
             # Optionally save kinship
@@ -224,8 +227,8 @@ def run_lmm_loco(
             jax.clear_caches()
 
     finally:
-        if writer is not None:
-            writer.__exit__(None, None, None)
+        if writer_ctx is not None:
+            writer_ctx.__exit__(None, None, None)
             if show_progress:
                 logger.info(f"Wrote {writer.count:,} results to {output_path}")
 
@@ -283,7 +286,6 @@ def _run_lmm_for_chromosome(
         List of AssocResult for this chromosome's SNPs.
     """
     n_samples = phenotypes.shape[0]
-    n_snps_chr = len(chr_snp_indices)
 
     # Read this chromosome's SNPs from BED file in a single read
     bed_file = Path(f"{bed_path}.bed")
@@ -310,7 +312,9 @@ def _run_lmm_for_chromosome(
     n_filtered = len(local_filtered_indices)
 
     if show_progress:
-        logger.debug(f"  Chromosome SNPs: {n_snps_chr}, after filter: {n_filtered}")
+        logger.debug(
+            f"  Chromosome SNPs: {len(chr_snp_indices)}, after filter: {n_filtered}"
+        )
 
     if n_filtered == 0:
         return []
@@ -495,10 +499,10 @@ def _run_lmm_for_chromosome(
             meta_dict = {
                 "chr": info["chr"],
                 "rs": info["rs"],
-                "ps": info.get("pos", info.get("ps", 0)),
+                "ps": info["pos"],
                 "n_miss": n_miss,
-                "allele1": info.get("a1", info.get("allele1", "")),
-                "allele0": info.get("a0", info.get("allele0", "")),
+                "allele1": info["a1"],
+                "allele0": info["a0"],
                 "af": af,
             }
 

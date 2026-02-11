@@ -269,9 +269,14 @@ def compute_loco_kinship(
     n_samples, n_snps_original = genotypes.shape
 
     # Filter SNPs globally (MAF, missingness, monomorphism)
-    genotypes_filtered, n_filtered, n_original = _filter_snps(
-        genotypes, maf_threshold, miss_threshold
+    # Compute mask once, use for both genotype and chromosome filtering
+    col_means, miss_counts, col_vars = compute_snp_stats(genotypes)
+    snp_mask, _allele_freqs, _mafs = compute_snp_filter_mask(
+        col_means, miss_counts, col_vars, n_samples, maf_threshold, miss_threshold
     )
+
+    n_filtered = int(np.sum(snp_mask))
+    n_original = n_snps_original
 
     if n_filtered == 0:
         raise ValueError(
@@ -280,11 +285,7 @@ def compute_loco_kinship(
             f"Original SNP count: {n_original}"
         )
 
-    # CRITICAL: filter the chromosome array to match filtered genotypes
-    col_means, miss_counts, col_vars = compute_snp_stats(genotypes)
-    snp_mask, _allele_freqs, _mafs = compute_snp_filter_mask(
-        col_means, miss_counts, col_vars, n_samples, maf_threshold, miss_threshold
-    )
+    genotypes_filtered = genotypes[:, snp_mask]
     chr_filtered = chromosome_for_each_snp[snp_mask]
 
     if n_filtered < n_original:
@@ -668,9 +669,9 @@ def compute_loco_kinship_streaming(
     chr_for_filtered = chromosomes[snp_indices]
 
     # Count filtered SNPs per chromosome
-    n_chr_filtered: dict[str, int] = {}
-    for chr_name in unique_chrs:
-        n_chr_filtered[chr_name] = int(np.sum(chr_for_filtered == chr_name))
+    n_chr_filtered: dict[str, int] = {
+        chr_name: int(np.sum(chr_for_filtered == chr_name)) for chr_name in unique_chrs
+    }
 
     # Memory check: S_full + all S_chr + chunk buffer
     if check_memory:
@@ -735,10 +736,7 @@ def compute_loco_kinship_streaming(
         # Group by chromosome and accumulate per-chromosome contributions
         chunk_chrs = chromosomes[chunk_snp_global_indices]
         for chr_name in set(chunk_chrs):
-            chr_col_mask = chunk_chrs == chr_name
-            if not np.any(chr_col_mask):
-                continue
-            X_chr_part = X_centered[:, chr_col_mask]
+            X_chr_part = X_centered[:, chunk_chrs == chr_name]
             S_chr[chr_name] = _accumulate_kinship(S_chr[chr_name], X_chr_part)
             S_chr[chr_name].block_until_ready()
 

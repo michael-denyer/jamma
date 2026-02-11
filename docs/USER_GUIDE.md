@@ -193,10 +193,11 @@ numpy stack uses LP64 BLAS (32-bit integers), which overflows at ~46k samples
 ### NumPy with MKL ILP64 (Linux)
 
 For datasets with >46k samples on Linux, install numpy built against
-Intel MKL with 64-bit integer support (ILP64):
+Intel MKL with 64-bit integer support (ILP64). Pre-built wheels are
+available for numpy 2.4.2 (Python 3.11–3.14, Linux and Windows):
 
 ```bash
-# Install ILP64 numpy wheel
+# Install ILP64 numpy 2.4.2 wheel
 pip install numpy \
   --extra-index-url https://michael-denyer.github.io/numpy-mkl \
   --force-reinstall --upgrade

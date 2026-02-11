@@ -11,9 +11,9 @@ See: .planning/PROJECT.md (updated 2026-02-10)
 
 Milestone: v2.0 Production GWAS
 Phase: Phase 25 - LOCO Kinship — IN PROGRESS
-Plan: 1/3 complete (25-01 done)
+Plan: 2/3 complete (25-01, 25-02 done)
 Status: Executing Phase 25 plans
-Last activity: 2026-02-11 — 25-01 LOCO kinship computation (in-memory + streaming)
+Last activity: 2026-02-11 — 25-02 LOCO LMM orchestrator and CLI/API integration
 
 Progress: [████░░░░░░░░░░░░░░░░] 20% (1/5 phases)
 
@@ -61,6 +61,7 @@ Progress: [████░░░░░░░░░░░░░░░░] 20% (1/
 | 24-01 SNP Filter Searchsorted              | 2min     | 2     | 3     |
 | 24-02 Missingness Tests + Memory Comments  | 3min     | 2     | 2     |
 | 25-01 LOCO Kinship Computation             | 10min    | 2     | 4     |
+| 25-02 LOCO LMM Orchestrator + Integration  | 9min     | 2     | 7     |
 
 ## Accumulated Context
 
@@ -97,6 +98,9 @@ All milestone decisions archived in:
 - Generator (Iterator) return type for LOCO kinship -- yields one K_loco at a time for memory efficiency (25-01)
 - Streaming LOCO accumulates all S_chr simultaneously in single pass -- trades O(n_chr * n^2) memory for O(1) passes (25-01)
 - Global SNP filtering before chromosome partitioning; chromosome array co-filtered with same mask (25-01)
+- Per-chromosome single BED read in _run_lmm_for_chromosome; chromosome subsets small enough for memory (25-02)
+- -k and -loco mutually exclusive; LOCO computes kinship internally (25-02)
+- LOCO pipeline branch skips standard kinship loading entirely (25-02)
 
 ### v2.0 Roadmap Structure
 
@@ -129,9 +133,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-11
-Stopped at: Completed 25-01-PLAN.md
+Stopped at: Completed 25-02-PLAN.md
 Resume file: None
-Next: `/gsd:execute-phase 25` (plan 25-02)
+Next: `/gsd:execute-phase 25` (plan 25-03)
 
 ---
 

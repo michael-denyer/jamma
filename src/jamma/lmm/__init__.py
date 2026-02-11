@@ -17,6 +17,7 @@ Modules:
 
 from jamma.lmm.chunk import auto_tune_chunk_size
 from jamma.lmm.eigen import eigendecompose_kinship
+from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.io import write_assoc_results
 from jamma.lmm.loco import run_lmm_loco
 from jamma.lmm.runner_jax import run_lmm_association_jax
@@ -30,5 +31,7 @@ __all__ = [
     "run_lmm_loco",
     "AssocResult",
     "eigendecompose_kinship",
+    "read_eigen_files",
     "write_assoc_results",
+    "write_eigen_files",
 ]

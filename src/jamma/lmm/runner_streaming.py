@@ -94,7 +94,7 @@ def _append_chunk_results(
 def run_lmm_association_streaming(
     bed_path: Path,
     phenotypes: np.ndarray,
-    kinship: np.ndarray,
+    kinship: np.ndarray | None = None,
     snp_info: list | None = None,
     covariates: np.ndarray | None = None,
     eigenvalues: np.ndarray | None = None,
@@ -120,7 +120,8 @@ def run_lmm_association_streaming(
     Args:
         bed_path: PLINK file prefix (without .bed/.bim/.fam extension).
         phenotypes: Phenotype vector (n_samples,).
-        kinship: Kinship matrix (n_samples, n_samples).
+        kinship: Kinship matrix (n_samples, n_samples), or None when
+            pre-computed eigenvalues and eigenvectors are provided.
         snp_info: List of SNP metadata dicts, or None to build from PLINK.
         covariates: Covariate matrix (n_samples, n_cvt) or None for intercept-only.
         eigenvalues: Pre-computed eigenvalues (sorted ascending) or None.
@@ -154,6 +155,12 @@ def run_lmm_association_streaming(
             f"eigenvectors={eigenvectors is not None}"
         )
 
+    if kinship is None and eigenvalues is None:
+        raise ValueError(
+            "Either kinship or pre-computed eigendecomposition (eigenvalues + "
+            "eigenvectors) must be provided"
+        )
+
     meta = get_plink_metadata(bed_path)
     n_samples_total = meta["n_samples"]
     n_snps = meta["n_snps"]
@@ -177,7 +184,8 @@ def run_lmm_association_streaming(
     n_valid = int(np.sum(valid_mask))
     if not np.all(valid_mask):
         phenotypes = phenotypes[valid_mask]
-        kinship = kinship[np.ix_(valid_mask, valid_mask)]
+        if kinship is not None:
+            kinship = kinship[np.ix_(valid_mask, valid_mask)]
         if covariates is not None:
             covariates = covariates[valid_mask, :]
 
@@ -274,7 +282,8 @@ def run_lmm_association_streaming(
         kinship, eigenvalues, eigenvectors, show_progress, "lmm_streaming"
     )
     UT = np.ascontiguousarray(U.T)
-    del kinship
+    if kinship is not None:
+        del kinship
     gc.collect()
 
     W, n_cvt = _build_covariate_matrix(covariates, n_samples)

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **SNP filter regression tests**: Verify searchsorted-based chunk filtering matches
+  naive linear scan across edge cases (boundary SNPs, full/empty chunks, single-element)
+- **Missingness test suite**: Heterogeneous missingness patterns, column-specific
+  imputation accuracy, edge cases (all-missing, no-missing, single-sample)
+
+### Changed
+- **Streaming SNP filtering**: Replaced O(n) linear scan with `np.searchsorted` for
+  chunk-level SNP range filtering — eliminates per-SNP Python overhead in streaming runners
+- **Memory module comments**: Updated docstrings to reflect streaming architecture
+  and actual component breakdown
+
+### Removed
+- **Bioconda recipe**: Removed `bioconda/meta.yaml` and automated bioconda PR submission —
+  bioconda's conda-forge numpy is LP64 only, which silently breaks for JAMMA's target
+  users (>46k samples require ILP64 MKL). pip is the canonical install path.
+
 ## [1.5.1] - 2026-02-10
 
 ### Changed

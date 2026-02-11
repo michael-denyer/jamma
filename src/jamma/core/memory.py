@@ -52,10 +52,14 @@ def estimate_eigendecomp_memory(n_samples: int) -> float:
 
 
 class MemoryBreakdown(NamedTuple):
-    """Detailed memory breakdown for GWAS workflow.
+    """Detailed memory breakdown for GWAS workflow (full-materialization path).
 
     All values in GB. Peak memory is the maximum of eigendecomp phase
     and LMM phase since they don't overlap.
+
+    Note: Streaming is the sole execution path in production. Prefer
+    StreamingMemoryBreakdown for runtime estimates. This class is retained
+    for backward compatibility and direct callers of estimate_workflow_memory.
     """
 
     kinship_gb: float  # n^2 * 8 bytes (float64)
@@ -96,22 +100,27 @@ def estimate_workflow_memory(
     lmm_batch_size: int = 20_000,
     n_cvt: int = 1,
 ) -> MemoryBreakdown:
-    """Estimate memory requirements for full GWAS workflow.
+    """Estimate memory requirements for full GWAS workflow (full-materialization).
 
     Calculates memory for kinship computation, eigendecomposition, and LMM
-    association testing. Returns the peak memory requirement.
+    association testing assuming genotypes are fully loaded into memory.
+    Returns the peak memory requirement.
 
-    Note: This is a conservative estimate based on a fixed batch size. The JAX
-    runner computes its own chunk size based on int32 buffer limits, which may
-    differ. This check ensures sufficient memory for the dominant costs (kinship
-    and eigenvector matrices at O(n_samples²)) but may underestimate memory for
-    very large SNP counts on small-memory systems.
+    Note: This estimate assumes full genotype materialization. In the streaming
+    architecture (the sole production path), genotypes are loaded as chunks and
+    never fully materialized — see estimate_streaming_memory() for accurate
+    runtime estimates. check_memory_before_run() uses estimate_streaming_memory
+    with the actual chunk size from _compute_chunk_size().
+
+    This function remains useful for direct callers who pass an explicit
+    lmm_batch_size and want worst-case full-load estimates.
 
     Args:
         n_samples: Number of samples (individuals).
         n_snps: Number of SNPs (variants).
-        lmm_batch_size: Batch size for LMM SNP processing (used for estimate,
-            actual JAX chunk size is computed from int32 limits).
+        lmm_batch_size: Batch size for LMM SNP processing. The actual
+            runtime chunk size is computed by auto_tune_chunk_size() in
+            chunk.py; this parameter is for explicit caller control.
         n_cvt: Number of covariates (default 1).
 
     Returns:
@@ -124,6 +133,8 @@ def estimate_workflow_memory(
     # Component sizes
     kinship_gb = n_samples**2 * 8 / 1e9  # float64
     # Kinship converts genotypes to float64 via jnp.array(..., dtype=jnp.float64)
+    # Full materialization — streaming path uses chunk_size instead
+    # (see estimate_streaming_memory)
     genotypes_gb = n_samples * n_snps * 8 / 1e9  # float64 (JAX copy)
     eigenvectors_gb = n_samples**2 * 8 / 1e9  # float64
 
@@ -179,7 +190,7 @@ def estimate_lmm_memory(
     lmm_batch_size: int = 20_000,
     n_cvt: int = 1,
 ) -> MemoryBreakdown:
-    """Estimate memory for the LMM phase only (not the full pipeline).
+    """Estimate memory for the LMM phase only (full-materialization path).
 
     Use this when eigendecomposition is already complete and kinship has been
     freed. Unlike estimate_workflow_memory() which returns the peak across all
@@ -188,10 +199,16 @@ def estimate_lmm_memory(
     Includes Uab_batch (n_chunk, n_samples, n_index) and Iab_batch
     (n_chunk, n_cvt+2, n_index) which are the dominant JAX intermediates.
 
+    Note: The default lmm_batch_size=20_000 is a generic estimate. At runtime,
+    auto_tune_chunk_size() in chunk.py computes the actual chunk size based on
+    memory budget and int32 buffer constraints. Callers should use that value
+    for accurate estimates.
+
     Args:
         n_samples: Number of samples (individuals).
         n_snps: Number of SNPs (variants).
-        lmm_batch_size: Batch size for LMM SNP processing.
+        lmm_batch_size: Batch size for LMM SNP processing. Use the value
+            from auto_tune_chunk_size() for accurate runtime estimates.
         n_cvt: Number of covariates (default 1).
 
     Returns:
@@ -202,6 +219,8 @@ def estimate_lmm_memory(
         >>> print(f"LMM needs {est.total_gb:.0f}GB")
     """
     eigenvectors_gb = n_samples**2 * 8 / 1e9
+    # Full materialization — streaming path uses chunk_size instead
+    # (see estimate_lmm_streaming_memory)
     genotypes_gb = n_samples * n_snps * 8 / 1e9  # float64 (JAX copy)
     eigenvalues_gb = n_samples * 8 / 1e9
     lmm_rotated_gb = n_samples * 8 * 3 / 1e9

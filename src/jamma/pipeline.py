@@ -442,9 +442,17 @@ class PipelineRunner:
             K = None  # Not needed when eigen provided
         else:
             K = self.load_kinship(n_samples)
-            # If write_eigen requested, eigendecompose now and write
+            # If write_eigen requested, eigendecompose the valid-sample
+            # subset of K so files match the analyzed sample count.
+            # The runner will also subset K internally, so these eigen
+            # files are consistent with what the runner computes.
             if self.config.write_eigen:
-                eigenvalues, eigenvectors = eigendecompose_kinship(K)
+                valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
+                if np.all(valid_mask):
+                    K_valid = K
+                else:
+                    K_valid = K[np.ix_(valid_mask, valid_mask)]
+                eigenvalues, eigenvectors = eigendecompose_kinship(K_valid)
                 d_path, u_path = write_eigen_files(
                     eigenvalues,
                     eigenvectors,

@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-10)
 
 Milestone: v2.0 Production GWAS
 Phase: Phase 26 - Eigendecomposition Reuse
-Plan: 1/2 complete (26-01 done)
-Status: Executing Phase 26
-Last activity: 2026-02-11 — 26-01 Eigen I/O and pipeline integration
+Plan: 2/2 complete (26-01, 26-02 done)
+Status: Phase 26 complete
+Last activity: 2026-02-11 — 26-02 Eigen I/O validation test suite
 
-Progress: [████████░░░░░░░░░░░░] 40% (2/5 phases)
+Progress: [████████████░░░░░░░░] 60% (3/5 phases)
 
 ## Performance Metrics
 
@@ -64,6 +64,7 @@ Progress: [████████░░░░░░░░░░░░] 40% (2/
 | 25-02 LOCO LMM Orchestrator + Integration  | 9min     | 2     | 7     |
 | 25-03 LOCO Validation Test Suite           | 25min    | 2     | 1     |
 | 26-01 Eigen I/O + Pipeline Integration     | 7min     | 2     | 7     |
+| 26-02 Eigen I/O Validation Test Suite      | 9min     | 2     | 2     |
 
 ## Accumulated Context
 
@@ -107,6 +108,8 @@ All milestone decisions archived in:
 - Mathematical self-consistency as LOCO validation strategy (no GEMMA reference available) (25-03)
 - write_eigen eigendecomposes before runner call, passes pre-computed eigen to runner (26-01)
 - kinship=None valid in streaming runner when eigenvalues+eigenvectors provided (26-01)
+- write_eigen subsets kinship to valid-phenotype samples before eigendecomp (26-02)
+- Standard calibrated tolerances sufficient for loaded-eigen LMM equivalence (26-02)
 
 ### v2.0 Roadmap Structure
 
@@ -139,9 +142,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-11
-Stopped at: Completed 26-01-PLAN.md
+Stopped at: Completed 26-02-PLAN.md (Phase 26 complete)
 Resume file: None
-Next: Execute 26-02-PLAN.md (Eigen I/O tests)
+Next: Phase 27 - Phenotype Selection and Standardized Kinship
 
 ---
 

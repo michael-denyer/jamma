@@ -20,7 +20,11 @@ from jamma.kinship.compute import (
     compute_loco_kinship,
     compute_loco_kinship_streaming,
 )
-from jamma.kinship.io import read_kinship_matrix, write_kinship_matrix
+from jamma.kinship.io import (
+    read_kinship_matrix,
+    write_kinship_matrix,
+    write_loco_kinship_matrices,
+)
 from jamma.kinship.missing import impute_and_center
 
 __all__ = [
@@ -32,4 +36,5 @@ __all__ = [
     "impute_and_center",
     "read_kinship_matrix",
     "write_kinship_matrix",
+    "write_loco_kinship_matrices",
 ]

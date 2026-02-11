@@ -29,8 +29,10 @@ from jamma.kinship import (
     read_kinship_matrix,
     write_kinship_matrix,
 )
-from jamma.lmm import run_lmm_association_streaming
+from jamma.lmm import run_lmm_association_streaming, run_lmm_loco
 from jamma.lmm.chunk import _compute_chunk_size
+from jamma.lmm.eigen import eigendecompose_kinship
+from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.stats import AssocResult
 
 
@@ -51,6 +53,15 @@ class PipelineConfig:
         check_memory: If True, check available memory before computation.
         show_progress: If True, show progress bars and log messages.
         mem_budget: Hard memory budget in GB, or None for no budget.
+        loco: If True, use leave-one-chromosome-out analysis. Computes
+            per-chromosome kinship internally; mutually exclusive with
+            kinship_file in this version.
+        eigenvalue_file: Pre-computed eigenvalue file (.eigenD.txt), or None.
+            Must be paired with eigenvector_file (-d flag).
+        eigenvector_file: Pre-computed eigenvector file (.eigenU.txt), or None.
+            Must be paired with eigenvalue_file (-u flag).
+        write_eigen: If True, write eigendecomposition files as side effect
+            (-eigen flag).
     """
 
     bfile: Path
@@ -65,6 +76,10 @@ class PipelineConfig:
     check_memory: bool = True
     show_progress: bool = True
     mem_budget: float | None = None
+    loco: bool = False
+    eigenvalue_file: Path | None = None
+    eigenvector_file: Path | None = None
+    write_eigen: bool = False
 
 
 @dataclass
@@ -129,6 +144,34 @@ class PipelineRunner:
                 f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), "
                 f"got {self.config.lmm_mode}"
             )
+
+        if self.config.loco and self.config.kinship_file is not None:
+            raise ValueError(
+                "-k and -loco are mutually exclusive in this version. "
+                "LOCO computes kinship internally."
+            )
+
+        # Eigen file validation: -d and -u must be paired
+        has_eigen = self.config.eigenvalue_file is not None
+        has_eigenvec = self.config.eigenvector_file is not None
+        if has_eigen != has_eigenvec:
+            raise ValueError(
+                "Both -d (eigenvalues) and -u (eigenvectors) must be provided together"
+            )
+
+        if has_eigen:
+            if self.config.loco:
+                raise ValueError(
+                    "-d/-u (pre-computed eigen) not supported with -loco mode"
+                )
+            if not self.config.eigenvalue_file.exists():
+                raise FileNotFoundError(
+                    f"Eigenvalue file not found: {self.config.eigenvalue_file}"
+                )
+            if not self.config.eigenvector_file.exists():
+                raise FileNotFoundError(
+                    f"Eigenvector file not found: {self.config.eigenvector_file}"
+                )
 
         if (
             self.config.kinship_file is not None
@@ -339,16 +382,91 @@ class PipelineRunner:
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         assoc_path = self.config.output_dir / f"{self.config.output_prefix}.assoc.txt"
 
-        # 6. Kinship
+        # 6. LOCO branch: skip standard kinship, run LOCO orchestrator
+        if self.config.loco:
+            covariates = self.load_covariates(n_samples)
+
+            t_loco = time.perf_counter()
+            results = run_lmm_loco(
+                bed_path=self.config.bfile,
+                phenotypes=phenotypes,
+                covariates=covariates,
+                maf_threshold=self.config.maf,
+                miss_threshold=self.config.miss,
+                lmm_mode=self.config.lmm_mode,
+                output_path=assoc_path,
+                check_memory=self.config.check_memory,
+                show_progress=self.config.show_progress,
+                save_kinship=self.config.save_kinship,
+                kinship_output_dir=self.config.output_dir,
+                kinship_output_prefix=self.config.output_prefix,
+            )
+            loco_s = time.perf_counter() - t_loco
+            total_s = time.perf_counter() - t_start
+            logger.info(f"LOCO GWAS complete: {n_snps} SNPs in {total_s:.1f}s")
+
+            return PipelineResult(
+                associations=results,
+                n_samples=n_analyzed,
+                n_snps_tested=n_snps,
+                assoc_path=assoc_path,
+                timing={
+                    "kinship_s": 0.0,
+                    "load_s": 0.0,
+                    "lmm_s": loco_s,
+                    "total_s": total_s,
+                },
+            )
+
+        # 7. Standard path: load eigen files or kinship
         t_kinship = time.perf_counter()
-        K = self.load_kinship(n_samples)
+        eigenvalues = None
+        eigenvectors = None
+
+        if self.config.eigenvalue_file and self.config.eigenvector_file:
+            # Load pre-computed eigendecomposition
+            eigenvalues, eigenvectors = read_eigen_files(
+                self.config.eigenvalue_file,
+                self.config.eigenvector_file,
+                n_samples=n_analyzed,
+            )
+            logger.info(
+                f"Loaded pre-computed eigendecomposition "
+                f"({len(eigenvalues)} eigenvalues)"
+            )
+            if self.config.kinship_file:
+                logger.warning(
+                    "Both kinship (-k) and eigen files (-d/-u) "
+                    "provided. Using eigen files; kinship will "
+                    "be ignored."
+                )
+            K = None  # Not needed when eigen provided
+        else:
+            K = self.load_kinship(n_samples)
+            # If write_eigen requested, eigendecompose the valid-sample
+            # subset of K so files match the analyzed sample count.
+            # The runner will also subset K internally, so these eigen
+            # files are consistent with what the runner computes.
+            if self.config.write_eigen:
+                valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
+                K_valid = K if np.all(valid_mask) else K[np.ix_(valid_mask, valid_mask)]
+                eigenvalues, eigenvectors = eigendecompose_kinship(K_valid)
+                d_path, u_path = write_eigen_files(
+                    eigenvalues,
+                    eigenvectors,
+                    self.config.output_dir,
+                    self.config.output_prefix,
+                )
+                logger.info(f"Wrote eigenvalues to {d_path}")
+                logger.info(f"Wrote eigenvectors to {u_path}")
+
         kinship_s = time.perf_counter() - t_kinship
 
-        # 7. Covariates
+        # 8. Covariates
         covariates = self.load_covariates(n_samples)
         load_s = time.perf_counter() - t_start
 
-        # 8. Run LMM
+        # 9. Run LMM
         t_lmm = time.perf_counter()
         results = run_lmm_association_streaming(
             bed_path=self.config.bfile,
@@ -356,6 +474,8 @@ class PipelineRunner:
             kinship=K,
             snp_info=None,
             covariates=covariates,
+            eigenvalues=eigenvalues,
+            eigenvectors=eigenvectors,
             maf_threshold=self.config.maf,
             miss_threshold=self.config.miss,
             output_path=assoc_path,

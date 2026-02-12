@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from loguru import logger
 
 import jamma
 from jamma.core import OutputConfig
@@ -17,6 +18,7 @@ from jamma.io import load_plink_binary
 from jamma.kinship import (
     compute_centered_kinship,
     compute_loco_kinship_streaming,
+    compute_standardized_kinship,
     write_kinship_matrix,
     write_loco_kinship_matrices,
 )
@@ -122,6 +124,10 @@ def gk_command(
             help="Write eigendecomposition files (.eigenD.txt, .eigenU.txt)",
         ),
     ] = False,
+    phenotype_column: Annotated[
+        int,
+        typer.Option("-n", help="Phenotype column in .fam file (1-based, default 1)"),
+    ] = 1,
 ) -> None:
     """Compute kinship matrix from genotype data.
 
@@ -134,6 +140,12 @@ def gk_command(
     With -eigen, also eigendecomposes the kinship matrix and writes
     .eigenD.txt and .eigenU.txt files.
     """
+    if phenotype_column != 1:
+        logger.info(
+            f"Note: -n {phenotype_column} accepted but kinship computation "
+            f"uses all samples"
+        )
+
     start_time = time.perf_counter()
 
     # Get global config
@@ -209,26 +221,25 @@ def gk_command(
 
     typer.echo(f"Loaded {plink_data.n_samples} samples, {plink_data.n_snps} SNPs")
 
-    # Mode 2 (standardized) is not yet implemented - fail loudly
     if mode == 2:
-        raise NotImplementedError(
-            "Kinship mode 2 (standardized) is not yet implemented. "
-            "Use -gk 1 for centered relatedness matrix."
-        )
+        kinship_label = "standardized"
+        compute_fn = compute_standardized_kinship
+    else:
+        kinship_label = "centered"
+        compute_fn = compute_centered_kinship
 
-    # Compute kinship matrix
-    typer.echo("Computing centered kinship matrix...")
+    typer.echo(f"Computing {kinship_label} kinship matrix...")
     if maf > 0.0 or miss < 1.0:
         typer.echo(f"Filtering: MAF >= {maf}, missing rate <= {miss}")
     kinship_start = time.perf_counter()
-    K = compute_centered_kinship(
+    K = compute_fn(
         plink_data.genotypes,
         maf_threshold=maf,
         miss_threshold=miss,
         check_memory=check_memory,
     )
     kinship_time = time.perf_counter() - kinship_start
-    typer.echo(f"Kinship computation completed in {kinship_time:.2f}s")
+    typer.echo(f"{kinship_label.capitalize()} kinship computed in {kinship_time:.2f}s")
 
     # Write kinship matrix
     kinship_path = _global_config.outdir / f"{_global_config.prefix}.cXX.txt"
@@ -337,6 +348,10 @@ def lmm_command(
             help="Write eigendecomposition output files",
         ),
     ] = False,
+    phenotype_column: Annotated[
+        int,
+        typer.Option("-n", help="Phenotype column in .fam file (1-based, default 1)"),
+    ] = 1,
 ) -> None:
     """Perform linear mixed model association testing.
 
@@ -350,6 +365,9 @@ def lmm_command(
     With -d and -u, loads pre-computed eigendecomposition and skips
     both kinship loading and eigendecomposition. Both flags required
     together.
+
+    With -n, selects which phenotype column to analyze from multi-phenotype
+    .fam files (1-based, matching GEMMA).
     """
     global _global_config
     if _global_config is None:
@@ -389,6 +407,7 @@ def lmm_command(
         eigenvalue_file=eigenvalue_file,
         eigenvector_file=eigenvector_file,
         write_eigen=write_eigen,
+        phenotype_column=phenotype_column,
     )
 
     # Run pipeline, converting exceptions to CLI-friendly errors

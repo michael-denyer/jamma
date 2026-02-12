@@ -276,6 +276,41 @@ The streaming approach produces mathematically identical LOCO kinship matrices w
 
 ---
 
+## GEMMA Features Not Implemented
+
+JAMMA targets full parity on the **univariate LMM workflow** — the core GWAS pipeline
+that the vast majority of GEMMA users rely on. The following GEMMA features are
+deliberately out of scope, either because better alternatives exist or because they
+represent niche use cases.
+
+### Not planned
+
+| GEMMA Feature | Flag | Rationale |
+|---------------|------|-----------|
+| BSLMM (Bayesian sparse LMM) | `-bslmm 1/2/3` | Entirely different model class (MCMC-based). Rarely used in modern GWAS — polygenic risk score methods (LDpred2, PRS-CS) have largely replaced BSLMM for prediction. Would require a separate codebase. |
+| Linear model (no random effects) | `-lm 1/2/3/4` | Trivially available via statsmodels or scipy. No kinship matrix needed — not an LMM. |
+| R² LD filtering | `-r2` | LD pruning is standard upstream QC done with PLINK (`--indep-pairwise`). Not an association testing concern. |
+| Debug/legacy flags | `-debug`, `-legacy`, `-strict`, `-issue` | Internal GEMMA development flags, not user-facing functionality. |
+| BSLMM MCMC parameters | `-w`, `-s`, `-seed`, `-rpace`, `-wpace`, `-hmin/max`, `-rmin/max`, `-pmin/max`, `-smin/max` | Only relevant if BSLMM were implemented. |
+| Pace output | `-pace` | JAMMA uses progress bars with ETA instead. |
+
+### Planned (in backlog)
+
+| GEMMA Feature | Flag | Beads Issue | Priority |
+|---------------|------|-------------|----------|
+| GxE interaction | `-gxe` | `jamma-9yk` | P2 |
+| Variance components | `-vc 1/2` | `jamma-678` | P2 |
+| Multivariate LMM | `-lmm` + multi-phenotype | `jamma-6rk` | P2 (epic) |
+| BLUP prediction | `-predict 1/2` | `jamma-32k` | P3 |
+| Multiple kinship matrices | `-mk` | `jamma-qqr` | P3 |
+| BIMBAM format input | `-g`, `-p`, `-a` | `jamma-ls1` | P3 |
+| Individual/SNP weights | `-widv`, `-wsnp` | `jamma-cs6` | P3 |
+| Lambda bounds | `-lmin`, `-lmax`, `-region` | `jamma-0cc` | P4 |
+| Category covariates | `-cat` | `jamma-15w` | P4 |
+| SNP correlation matrix | `-calccor` | `jamma-acc` | P4 |
+
+---
+
 ## Validation Strategy
 
 1. **Real-world data**: JAMMA matches GEMMA within tolerance on actual GWAS datasets

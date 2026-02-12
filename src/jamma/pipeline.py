@@ -23,7 +23,7 @@ from loguru import logger
 
 from jamma.core.memory import StreamingMemoryBreakdown, estimate_streaming_memory
 from jamma.io.covariate import read_covariate_file
-from jamma.io.plink import get_plink_metadata
+from jamma.io.plink import get_plink_metadata, validate_plink_dimensions
 from jamma.kinship import (
     compute_kinship_streaming,
     read_kinship_matrix,
@@ -65,6 +65,13 @@ class PipelineConfig:
         phenotype_column: 1-based phenotype column index. 1 selects column 6
             of .fam (standard phenotype), 2 selects column 7, etc. Matches
             GEMMA's -n flag.
+        snps_file: SNP list file to restrict association testing. One SNP ID
+            per line. Matches GEMMA's -snps flag. None means test all SNPs.
+        ksnps_file: SNP list file to restrict kinship computation. One SNP ID
+            per line. Matches GEMMA's -ksnps flag. None means use all SNPs.
+        hwe_threshold: HWE p-value threshold. SNPs with HWE p-value below
+            this threshold are excluded from association testing. 0.0 disables
+            HWE filtering. Matches GEMMA's -hwe flag.
     """
 
     bfile: Path
@@ -84,6 +91,9 @@ class PipelineConfig:
     eigenvector_file: Path | None = None
     write_eigen: bool = False
     phenotype_column: int = 1
+    snps_file: Path | None = None
+    ksnps_file: Path | None = None
+    hwe_threshold: float = 0.0
 
 
 @dataclass
@@ -143,6 +153,9 @@ class PipelineRunner:
             if not p.exists():
                 raise FileNotFoundError(f"PLINK {ext} file not found: {p}")
 
+        # Validate .bed file size matches .fam/.bim dimensions (VALID-01)
+        validate_plink_dimensions(bfile)
+
         if self.config.phenotype_column < 1:
             raise ValueError(
                 f"phenotype_column must be >= 1 (1-based), "
@@ -197,6 +210,31 @@ class PipelineRunner:
         ):
             raise FileNotFoundError(
                 f"Covariate file not found: {self.config.covariate_file}"
+            )
+
+        # SNP list file validation
+        if self.config.snps_file is not None and not self.config.snps_file.exists():
+            raise FileNotFoundError(f"SNP list file not found: {self.config.snps_file}")
+
+        if self.config.ksnps_file is not None and not self.config.ksnps_file.exists():
+            raise FileNotFoundError(
+                f"Kinship SNP list file not found: {self.config.ksnps_file}"
+            )
+
+        # HWE threshold validation
+        if self.config.hwe_threshold < 0:
+            raise ValueError(
+                f"hwe_threshold must be >= 0, got {self.config.hwe_threshold}"
+            )
+        if self.config.hwe_threshold > 1.0:
+            raise ValueError(
+                f"hwe_threshold must be in [0, 1] (p-value threshold), "
+                f"got {self.config.hwe_threshold}"
+            )
+        if self.config.hwe_threshold > 0 and self.config.loco:
+            raise ValueError(
+                "-hwe is not yet supported with -loco mode. "
+                "Apply HWE filtering as a pre-processing step."
             )
 
     def parse_phenotypes(self) -> tuple[np.ndarray, int]:
@@ -303,7 +341,11 @@ class PipelineRunner:
 
         return est
 
-    def load_kinship(self, n_samples: int) -> np.ndarray:
+    def load_kinship(
+        self,
+        n_samples: int,
+        ksnps_indices: np.ndarray | None = None,
+    ) -> np.ndarray:
         """Load or compute the kinship matrix.
 
         If kinship_file is provided, loads from disk. Otherwise, computes
@@ -314,6 +356,8 @@ class PipelineRunner:
 
         Args:
             n_samples: Number of samples (for validation of loaded kinship).
+            ksnps_indices: Optional SNP indices to restrict kinship computation.
+                Ignored when loading pre-computed kinship from file.
 
         Returns:
             Kinship matrix of shape (n_samples, n_samples).
@@ -327,6 +371,7 @@ class PipelineRunner:
                 self.config.bfile,
                 check_memory=False,
                 show_progress=self.config.show_progress,
+                ksnps_indices=ksnps_indices,
             )
 
         if self.config.save_kinship:
@@ -414,11 +459,31 @@ class PipelineRunner:
             f"({n_filtered} filtered)"
         )
 
-        # 5. Output directory
+        # 5. Resolve SNP list files to indices
+        snps_indices = None
+        ksnps_indices = None
+        if self.config.snps_file is not None or self.config.ksnps_file is not None:
+            from jamma.io.snp_list import (
+                read_snp_list_file,
+                resolve_snp_list_to_indices,
+            )
+
+        if self.config.snps_file is not None:
+            snp_ids = read_snp_list_file(self.config.snps_file)
+            snps_indices = resolve_snp_list_to_indices(snp_ids, meta["sid"])
+            logger.info(f"SNP list (-snps): {len(snps_indices)} SNPs to test")
+        if self.config.ksnps_file is not None:
+            ksnp_ids = read_snp_list_file(self.config.ksnps_file)
+            ksnps_indices = resolve_snp_list_to_indices(ksnp_ids, meta["sid"])
+            logger.info(
+                f"Kinship SNP list (-ksnps): {len(ksnps_indices)} SNPs for kinship"
+            )
+
+        # 6. Output directory
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         assoc_path = self.config.output_dir / f"{self.config.output_prefix}.assoc.txt"
 
-        # 6. LOCO branch: skip standard kinship, run LOCO orchestrator
+        # 7. LOCO branch: skip standard kinship, run LOCO orchestrator
         if self.config.loco:
             covariates = self.load_covariates(n_samples)
 
@@ -436,6 +501,8 @@ class PipelineRunner:
                 save_kinship=self.config.save_kinship,
                 kinship_output_dir=self.config.output_dir,
                 kinship_output_prefix=self.config.output_prefix,
+                snps_indices=snps_indices,
+                ksnps_indices=ksnps_indices,
             )
             loco_s = time.perf_counter() - t_loco
             total_s = time.perf_counter() - t_start
@@ -478,7 +545,7 @@ class PipelineRunner:
                 )
             K = None  # Not needed when eigen provided
         else:
-            K = self.load_kinship(n_samples)
+            K = self.load_kinship(n_samples, ksnps_indices=ksnps_indices)
             # If write_eigen requested, eigendecompose the valid-sample
             # subset of K so files match the analyzed sample count.
             # The runner will also subset K internally, so these eigen
@@ -518,6 +585,8 @@ class PipelineRunner:
             lmm_mode=self.config.lmm_mode,
             check_memory=False,  # Already checked above
             show_progress=self.config.show_progress,
+            snps_indices=snps_indices,
+            hwe_threshold=self.config.hwe_threshold,
         )
         lmm_s = time.perf_counter() - t_lmm
 

@@ -55,6 +55,9 @@ def gwas(
     eigenvector_file: str | Path | None = None,
     write_eigen: bool = False,
     phenotype_column: int = 1,
+    snps_file: str | Path | None = None,
+    ksnps_file: str | Path | None = None,
+    hwe: float = 0.0,
 ) -> GWASResult:
     """Run a complete GWAS pipeline in a single call.
 
@@ -99,6 +102,15 @@ def gwas(
         phenotype_column: 1-based phenotype column index in the .fam file.
             1 selects the standard phenotype (column 6), 2 selects column 7,
             etc. Matches GEMMA's ``-n`` flag.
+        snps_file: File with SNP IDs to restrict association testing. One
+            SNP ID per line (first token used). Matches GEMMA's ``-snps`` flag.
+            None means test all SNPs.
+        ksnps_file: File with SNP IDs to restrict kinship computation. One
+            SNP ID per line. Matches GEMMA's ``-ksnps`` flag. None means
+            use all SNPs for kinship.
+        hwe: HWE p-value threshold. SNPs with Hardy-Weinberg equilibrium
+            p-value below this threshold are excluded. 0.0 disables HWE
+            filtering. Matches GEMMA's ``-hwe`` flag.
 
     Returns:
         GWASResult with association results, sample/SNP counts, and timing.
@@ -136,6 +148,9 @@ def gwas(
         ),
         write_eigen=write_eigen,
         phenotype_column=phenotype_column,
+        snps_file=Path(snps_file) if snps_file is not None else None,
+        ksnps_file=Path(ksnps_file) if ksnps_file is not None else None,
+        hwe_threshold=hwe,
     )
 
     pipeline_result = PipelineRunner(config).run()

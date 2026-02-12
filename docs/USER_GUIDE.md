@@ -48,12 +48,16 @@ jamma -o kinship -outdir output gk -bfile data/my_study -gk 1
 
 - `-bfile PATH` — PLINK binary file prefix (required)
 - `-gk MODE` — Kinship type: 1 = centered (default), 2 = standardized
+- `-ksnps PATH` — SNP list file to restrict kinship computation (one RS ID per line)
+- `-n INT` — Phenotype column in .fam file (1-based, default: 1)
 - `-maf FLOAT` — MAF threshold (default: 0.0, no filter)
 - `-miss FLOAT` — Missing rate threshold (default: 1.0, no filter)
 - `-o PREFIX` — Output file prefix
 - `-outdir DIR` — Output directory
 
 **Note:** Monomorphic SNPs (variance = 0) are always filtered to match GEMMA behavior.
+
+**Note:** `-gk 2` (standardized kinship) cannot be used with `-loco` mode.
 
 **Output:**
 
@@ -84,9 +88,17 @@ jamma -o assoc -outdir output lmm \
 **Options:**
 
 - `-bfile PATH` — PLINK binary file prefix (required)
-- `-k PATH` — Kinship matrix file (required)
+- `-k PATH` — Kinship matrix file (required unless `-loco` or `-d`/`-u` are used)
 - `-lmm MODE` — Test type: 1 = Wald (default), 2 = LRT, 3 = Score, 4 = All
 - `-c PATH` — Covariate file (GEMMA format: whitespace-delimited, first column should be intercept)
+- `-loco` — Enable leave-one-chromosome-out analysis (mutually exclusive with `-k`)
+- `-d PATH` — Pre-computed eigenvalue file (.eigenD.txt)
+- `-u PATH` — Pre-computed eigenvector file (.eigenU.txt)
+- `-eigen` — Write eigendecomposition files (.eigenD.txt, .eigenU.txt)
+- `-n INT` — Phenotype column in .fam file (1-based, default: 1)
+- `-snps PATH` — SNP list file to restrict association testing (one RS ID per line)
+- `-ksnps PATH` — SNP list file to restrict kinship computation (one RS ID per line)
+- `-hwe FLOAT` — HWE p-value threshold; exclude SNPs below this value (default: 0.0, disabled)
 - `-maf FLOAT` — MAF threshold (default: 0.01)
 - `-miss FLOAT` — Missing rate threshold (default: 0.05)
 - `--mem-budget GB` — Memory budget in GB (default: available - 10%)
@@ -124,6 +136,104 @@ Tab-separated file with columns:
 
 Space-separated N×N matrix where N is the number of samples. Compatible with GEMMA format.
 
+## LOCO Analysis
+
+Leave-one-chromosome-out (LOCO) analysis eliminates proximal contamination by
+excluding the test chromosome's SNPs from the kinship matrix. JAMMA computes
+per-chromosome LOCO kinship via streaming subtraction from a full kinship matrix,
+processing one chromosome at a time for memory efficiency.
+
+```bash
+# LOCO association (kinship computed internally per chromosome)
+jamma -o loco_results -outdir output lmm \
+  -bfile data/my_study \
+  -loco \
+  -lmm 1
+```
+
+**Key constraints:**
+
+- `-loco` is mutually exclusive with `-k` (kinship is computed internally)
+- `-loco` is mutually exclusive with `-gk 2` (standardized kinship not supported in LOCO mode)
+- `-hwe` is not supported with `-loco` (HWE filtering requires a single-pass architecture)
+
+## Eigendecomposition Reuse
+
+For multi-phenotype workflows, eigendecomposition (O(n^3)) dominates runtime. Save
+and reload eigendecomposition to skip it after the first run:
+
+```bash
+# First phenotype: compute kinship + eigen, save both
+jamma -o pheno1 -outdir output lmm \
+  -bfile data/my_study \
+  -k kinship.cXX.txt \
+  -eigen \
+  -n 1 \
+  -lmm 1
+
+# Second phenotype: reuse eigendecomposition (skips kinship + eigen entirely)
+jamma -o pheno2 -outdir output lmm \
+  -bfile data/my_study \
+  -d output/pheno1.eigenD.txt \
+  -u output/pheno1.eigenU.txt \
+  -n 2 \
+  -lmm 1
+```
+
+**Output files when `-eigen` is used:**
+
+- `output/pheno1.eigenD.txt` — Eigenvalues (one per line)
+- `output/pheno1.eigenU.txt` — Eigenvectors (space-separated N×N matrix)
+
+## SNP Filtering
+
+Restrict which SNPs are used for kinship computation and/or association testing:
+
+```bash
+# Restrict association to specific SNPs
+jamma -o filtered -outdir output lmm \
+  -bfile data/my_study \
+  -k kinship.cXX.txt \
+  -snps snp_list.txt \
+  -lmm 1
+
+# Restrict kinship computation to specific SNPs
+jamma -o kinship -outdir output gk \
+  -bfile data/my_study \
+  -ksnps kinship_snps.txt \
+  -gk 1
+
+# HWE quality control
+jamma -o qc -outdir output lmm \
+  -bfile data/my_study \
+  -k kinship.cXX.txt \
+  -hwe 0.001 \
+  -lmm 1
+```
+
+**SNP list file format:** One SNP RS ID per line (first whitespace-delimited token used).
+
+**HWE filtering:** JAMMA uses a chi-squared goodness-of-fit test (df=1) via JAX.
+SNPs with p-value below the threshold are excluded from association testing.
+See [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md) for differences from GEMMA's
+Wigginton exact test.
+
+## Phenotype Selection
+
+For .fam files with multiple phenotype columns, select which to use:
+
+```bash
+# Use the second phenotype column (column 7 in .fam)
+jamma -o pheno2 -outdir output lmm \
+  -bfile data/my_study \
+  -k kinship.cXX.txt \
+  -n 2 \
+  -lmm 1
+```
+
+The `-n` flag uses 1-based indexing matching GEMMA: `-n 1` selects column 6
+(standard phenotype), `-n 2` selects column 7, etc.
+
 ## Python API
 
 ### One-call GWAS (recommended)
@@ -146,6 +256,26 @@ result = gwas(
     kinship_file="k.txt",
     covariate_file="covars.txt",
     lmm_mode=2,  # LRT test
+)
+
+# LOCO analysis (leave-one-chromosome-out)
+result = gwas("data/my_study", loco=True)
+
+# Multi-phenotype with eigendecomp reuse
+result = gwas("data/my_study", write_eigen=True, phenotype_column=1)
+result = gwas(
+    "data/my_study",
+    eigenvalue_file="output/result.eigenD.txt",
+    eigenvector_file="output/result.eigenU.txt",
+    phenotype_column=2,
+)
+
+# SNP filtering and HWE QC
+result = gwas(
+    "data/my_study",
+    kinship_file="k.txt",
+    snps_file="snps.txt",
+    hwe=0.001,
 )
 ```
 
@@ -356,7 +486,7 @@ print(jax.devices())  # Should show GPU if available
 
 JAMMA runs a pre-flight memory check before kinship and eigendecomposition. The
 check estimates peak memory (dominated by eigendecomposition: K + U + workspace)
-and applies a 50% safety margin to account for JAX temporary arrays.
+and applies a 10% safety margin based on empirical benchmarks.
 
 **Approximate sample limits by machine size:**
 

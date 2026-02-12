@@ -1,5 +1,28 @@
 # Performance Summary
 
+## v2.0 — Production GWAS Features
+
+v2.0 added LOCO kinship, eigendecomposition reuse, SNP filtering, HWE QC, and phenotype selection. No performance regressions from v1.4.
+
+### New Features Performance Characteristics
+
+| Feature | Scaling | Notes |
+|---------|---------|-------|
+| LOCO kinship | O(n_chr × n²) | Linear in chromosomes; one eigendecomp per chromosome |
+| Eigendecomp reuse (`-d`/`-u`) | Eliminates O(n³) | Skips eigendecomp entirely on subsequent phenotypes |
+| SNP filtering (`-snps`/`-ksnps`) | O(log n) per chunk | Searchsorted-based chunk filtering |
+| HWE filtering (`-hwe`) | O(1) per SNP | Piggybacks on pass-1 streaming (no extra disk pass) |
+
+### LOCO Scaling
+
+LOCO analysis processes each chromosome independently: compute K_loco via streaming subtraction, eigendecompose, run LMM. Total time scales linearly with the number of chromosomes (typically 22 for human data). Each per-chromosome eigendecomp is the same O(n³) as a standard run, so total LOCO wall time is approximately `n_chr × single_eigendecomp_time + LMM_time`.
+
+### Test Suite
+
+593 tests passing (up from 448 in v1.4). Zero tolerance changes. Tolerance constants in `src/jamma/validation/tolerances.py` unchanged.
+
+---
+
 ## v1.4 — Memory Optimization and Scale Validation
 
 v1.4 targeted memory optimization and correctness at production scale (85k+ real samples). The primary achievement is **validated GEMMA equivalence at 85,000 samples on 91,613 real SNPs** with 100% agreement on significance calls, effect directions, and SNP rankings.

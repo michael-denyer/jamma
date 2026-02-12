@@ -1003,3 +1003,344 @@ class TestFilteringEquivalence:
             assert r_s.rs == r_l.rs
             np.testing.assert_allclose(r_s.beta, r_l.beta, rtol=1e-10)
             np.testing.assert_allclose(r_s.p_wald, r_l.p_wald, rtol=1e-10)
+
+
+# -----------------------------------------------------------------------------
+# HWE Chi-Squared Properties
+# -----------------------------------------------------------------------------
+
+
+class TestHweProperties:
+    """Property tests for Hardy-Weinberg equilibrium chi-squared computation."""
+
+    @given(
+        n_aa=st.integers(min_value=0, max_value=500),
+        n_ab=st.integers(min_value=0, max_value=500),
+        n_bb=st.integers(min_value=0, max_value=500),
+    )
+    @settings(
+        max_examples=50, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_hwe_pvalues_in_bounds(self, n_aa, n_ab, n_bb):
+        """HWE p-values must be in [0, 1] for any genotype counts."""
+        from jamma.core.snp_filter import compute_hwe_pvalues
+
+        pvals = compute_hwe_pvalues(
+            np.array([n_aa]), np.array([n_ab]), np.array([n_bb])
+        )
+        assert 0.0 <= pvals[0] <= 1.0, (
+            f"p-value {pvals[0]} out of [0,1] for counts ({n_aa}, {n_ab}, {n_bb})"
+        )
+
+    @given(
+        n_aa=st.integers(min_value=1, max_value=500),
+        n_ab=st.integers(min_value=1, max_value=500),
+        n_bb=st.integers(min_value=1, max_value=500),
+    )
+    @settings(
+        max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_hwe_allele_swap_symmetry(self, n_aa, n_ab, n_bb):
+        """Swapping alleles (n_aa <-> n_bb) must produce identical p-values."""
+        from jamma.core.snp_filter import compute_hwe_pvalues
+
+        pval_original = compute_hwe_pvalues(
+            np.array([n_aa]), np.array([n_ab]), np.array([n_bb])
+        )
+        pval_swapped = compute_hwe_pvalues(
+            np.array([n_bb]), np.array([n_ab]), np.array([n_aa])
+        )
+        np.testing.assert_allclose(
+            pval_original[0],
+            pval_swapped[0],
+            rtol=1e-10,
+            err_msg=f"Allele swap broke symmetry: ({n_aa},{n_ab},{n_bb})",
+        )
+
+    @given(
+        n=st.integers(min_value=10, max_value=500),
+    )
+    @settings(
+        max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_hwe_perfect_equilibrium_high_pvalue(self, n):
+        """Genotype counts exactly at HWE frequencies should have high p-values."""
+        from jamma.core.snp_filter import compute_hwe_pvalues
+
+        # p = 0.5 -> expected: AA=0.25n, AB=0.5n, BB=0.25n
+        n_aa = n // 4
+        n_ab = n // 2
+        n_bb = n - n_aa - n_ab
+
+        pval = compute_hwe_pvalues(np.array([n_aa]), np.array([n_ab]), np.array([n_bb]))
+        # Should not be significant (p > 0.01 for near-equilibrium)
+        assert pval[0] > 0.01, (
+            f"Near-HWE counts got low p-value {pval[0]}: ({n_aa},{n_ab},{n_bb})"
+        )
+
+    def test_hwe_degenerate_all_zero(self):
+        """All-zero genotype counts should return p=1.0 (pass by convention)."""
+        from jamma.core.snp_filter import compute_hwe_pvalues
+
+        pval = compute_hwe_pvalues(np.array([0]), np.array([0]), np.array([0]))
+        assert pval[0] == 1.0, f"Expected p=1.0 for all-zero, got {pval[0]}"
+
+    def test_hwe_monomorphic_returns_one(self):
+        """Monomorphic SNPs (only one genotype class) should return p=1.0."""
+        from jamma.core.snp_filter import compute_hwe_pvalues
+
+        # All AA
+        pval = compute_hwe_pvalues(np.array([100]), np.array([0]), np.array([0]))
+        assert pval[0] == 1.0, f"All-AA got p={pval[0]}, expected 1.0"
+
+        # All BB
+        pval = compute_hwe_pvalues(np.array([0]), np.array([0]), np.array([100]))
+        assert pval[0] == 1.0, f"All-BB got p={pval[0]}, expected 1.0"
+
+    @given(
+        seed=st.integers(min_value=0, max_value=2**32 - 1),
+        n_snps=st.integers(min_value=5, max_value=50),
+    )
+    @settings(
+        max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_hwe_vectorized_matches_scalar(self, seed, n_snps):
+        """Vectorized HWE computation should match per-SNP scalar computation."""
+        from jamma.core.snp_filter import compute_hwe_pvalues
+
+        rng = np.random.default_rng(seed)
+        n_aa = rng.integers(0, 200, size=n_snps)
+        n_ab = rng.integers(0, 200, size=n_snps)
+        n_bb = rng.integers(0, 200, size=n_snps)
+
+        # Vectorized
+        pvals_vec = compute_hwe_pvalues(n_aa, n_ab, n_bb)
+
+        # Scalar (one at a time)
+        pvals_scalar = np.array(
+            [
+                compute_hwe_pvalues(
+                    np.array([n_aa[i]]), np.array([n_ab[i]]), np.array([n_bb[i]])
+                )[0]
+                for i in range(n_snps)
+            ]
+        )
+
+        np.testing.assert_allclose(pvals_vec, pvals_scalar, rtol=1e-10)
+
+
+# -----------------------------------------------------------------------------
+# Standardized Kinship Properties
+# -----------------------------------------------------------------------------
+
+
+class TestStandardizedKinshipProperties:
+    """Property tests for standardized kinship matrix (-gk 2)."""
+
+    @given(
+        genotypes=genotype_matrix(
+            min_samples=20, max_samples=40, min_snps=20, max_snps=40
+        )
+    )
+    @settings(
+        max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_standardized_kinship_is_symmetric(self, genotypes):
+        """Standardized kinship must be symmetric."""
+        from jamma.kinship.compute import compute_standardized_kinship
+
+        K = compute_standardized_kinship(genotypes, check_memory=False)
+        np.testing.assert_allclose(K, K.T, rtol=1e-10, atol=1e-14)
+
+    @given(
+        genotypes=genotype_matrix(
+            min_samples=20, max_samples=40, min_snps=20, max_snps=40
+        )
+    )
+    @settings(
+        max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_standardized_kinship_psd(self, genotypes):
+        """Standardized kinship eigenvalues should be non-negative."""
+        from jamma.kinship.compute import compute_standardized_kinship
+
+        K = compute_standardized_kinship(genotypes, check_memory=False)
+        eigenvalues = np.linalg.eigvalsh(K)
+        assert np.all(eigenvalues >= -1e-8), (
+            f"Large negative eigenvalue: {eigenvalues.min()}"
+        )
+
+    @given(
+        genotypes=genotype_matrix(
+            min_samples=20, max_samples=40, min_snps=30, max_snps=50
+        )
+    )
+    @settings(
+        max_examples=15, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_standardized_kinship_trace_approximates_n(self, genotypes):
+        """Standardized kinship trace should approximate n_samples.
+
+        K = (1/p) * Z @ Z.T where each column of Z has unit variance.
+        So trace(K) = (1/p) * sum of column norms^2. Each column has
+        variance ~1 and n samples, so norm^2 ~ n, giving trace ~ n.
+        """
+        from jamma.kinship.compute import compute_standardized_kinship
+
+        K = compute_standardized_kinship(genotypes, check_memory=False)
+        n_samples = genotypes.shape[0]
+        trace = np.trace(K)
+
+        # Trace should be approximately n_samples (within ~30% for small samples)
+        assert trace > 0, f"Trace should be positive, got {trace}"
+        assert abs(trace - n_samples) / n_samples < 0.5, (
+            f"Trace {trace:.2f} too far from n_samples {n_samples}"
+        )
+
+    @given(
+        genotypes=genotype_matrix(
+            min_samples=20, max_samples=40, min_snps=20, max_snps=40
+        )
+    )
+    @settings(
+        max_examples=15, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_centered_and_standardized_same_shape(self, genotypes):
+        """Centered and standardized kinship should produce same-shaped matrices."""
+        from jamma.kinship.compute import (
+            compute_centered_kinship,
+            compute_standardized_kinship,
+        )
+
+        K_centered = compute_centered_kinship(genotypes, check_memory=False)
+        K_standardized = compute_standardized_kinship(genotypes, check_memory=False)
+
+        assert K_centered.shape == K_standardized.shape
+        # Both should be symmetric
+        np.testing.assert_allclose(K_centered, K_centered.T, rtol=1e-10, atol=1e-14)
+        np.testing.assert_allclose(
+            K_standardized, K_standardized.T, rtol=1e-10, atol=1e-14
+        )
+
+
+# -----------------------------------------------------------------------------
+# Eigendecomposition I/O Round-Trip Properties
+# -----------------------------------------------------------------------------
+
+
+class TestEigenIoRoundTrip:
+    """Property tests for eigendecomposition file I/O precision."""
+
+    @given(
+        genotypes=genotype_matrix(
+            min_samples=10, max_samples=30, min_snps=20, max_snps=40
+        )
+    )
+    @settings(
+        max_examples=15, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_eigen_roundtrip_reconstruction(self, genotypes):
+        """K = U @ diag(D) @ U.T should hold after write -> read."""
+        import tempfile
+        from pathlib import Path
+
+        from jamma.kinship import compute_centered_kinship
+        from jamma.lmm.eigen import eigendecompose_kinship
+        from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+
+        K = compute_centered_kinship(genotypes, check_memory=False)
+        eigenvalues, U = eigendecompose_kinship(K, threshold=0)
+
+        # Write and read back (fresh dir per Hypothesis example)
+        tmp_dir = Path(tempfile.mkdtemp())
+        write_eigen_files(eigenvalues, U, tmp_dir, prefix="test")
+        D_read, U_read = read_eigen_files(
+            tmp_dir / "test.eigenD.txt",
+            tmp_dir / "test.eigenU.txt",
+        )
+
+        # Reconstruct from round-tripped values
+        K_reconstructed = U_read @ np.diag(D_read) @ U_read.T
+
+        # .10g format gives ~10 significant digits; near-zero K entries
+        # have large relative error from rounding, so use atol scaled to K.
+        scale = max(np.abs(K).max(), 1e-10)
+        np.testing.assert_allclose(
+            K,
+            K_reconstructed,
+            rtol=1e-7,
+            atol=scale * 1e-8,
+            err_msg="Round-trip reconstruction failed",
+        )
+
+    @given(
+        genotypes=genotype_matrix(
+            min_samples=10, max_samples=30, min_snps=20, max_snps=40
+        )
+    )
+    @settings(
+        max_examples=15, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_eigen_roundtrip_orthonormality(self, genotypes):
+        """U.T @ U = I should hold after write -> read."""
+        import tempfile
+        from pathlib import Path
+
+        from jamma.kinship import compute_centered_kinship
+        from jamma.lmm.eigen import eigendecompose_kinship
+        from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+
+        K = compute_centered_kinship(genotypes, check_memory=False)
+        eigenvalues, U = eigendecompose_kinship(K, threshold=0)
+
+        tmp_dir = Path(tempfile.mkdtemp())
+        write_eigen_files(eigenvalues, U, tmp_dir, prefix="test")
+        _, U_read = read_eigen_files(
+            tmp_dir / "test.eigenD.txt",
+            tmp_dir / "test.eigenU.txt",
+        )
+
+        # .10g rounding accumulates through n dot products
+        n = U_read.shape[0]
+        np.testing.assert_allclose(
+            U_read.T @ U_read,
+            np.eye(n),
+            rtol=1e-6,
+            atol=n * 1e-9,
+            err_msg="Orthonormality lost after round-trip",
+        )
+
+    @given(
+        genotypes=genotype_matrix(
+            min_samples=10, max_samples=30, min_snps=20, max_snps=40
+        )
+    )
+    @settings(
+        max_examples=10, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_eigen_roundtrip_eigenvalue_precision(self, genotypes):
+        """Individual eigenvalues should survive round-trip within .10g precision."""
+        import tempfile
+        from pathlib import Path
+
+        from jamma.kinship import compute_centered_kinship
+        from jamma.lmm.eigen import eigendecompose_kinship
+        from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+
+        K = compute_centered_kinship(genotypes, check_memory=False)
+        eigenvalues, U = eigendecompose_kinship(K, threshold=0)
+
+        tmp_dir = Path(tempfile.mkdtemp())
+        write_eigen_files(eigenvalues, U, tmp_dir, prefix="test")
+        D_read, _ = read_eigen_files(
+            tmp_dir / "test.eigenD.txt",
+            tmp_dir / "test.eigenU.txt",
+        )
+
+        # .10g format preserves ~10 significant digits
+        np.testing.assert_allclose(
+            eigenvalues,
+            D_read,
+            rtol=1e-9,
+            err_msg="Eigenvalue precision lost in round-trip",
+        )

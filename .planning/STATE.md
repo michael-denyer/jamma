@@ -10,12 +10,12 @@ See: .planning/PROJECT.md (updated 2026-02-10)
 ## Current Position
 
 Milestone: v2.0 Production GWAS
-Phase: Phase 28 - Filtering and Input Validation
-Plan: 2/2 complete (28-01, 28-02 done)
-Status: Phase 28 Complete
-Last activity: 2026-02-12 — 28-02 CLI flags, GWAS API, PLINK validation
+Phase: Phase 29 - LOCO Integration Wiring (gap closure)
+Plan: 1/1 complete (29-01 done)
+Status: Phase 29 Complete -- All v2.0 phases done (24-29)
+Last activity: 2026-02-12 — 29-01 LOCO ksnps wiring + gk validation
 
-Progress: [████████████████████] 100% (5/5 phases)
+Progress: [████████████████████] 100% (6/6 phases)
 
 ## Performance Metrics
 
@@ -67,6 +67,7 @@ Progress: [████████████████████] 100% (5
 | 26-02 Eigen I/O Validation Test Suite      | 9min     | 2     | 2     |
 | 28-01 SNP List Filtering + HWE QC          | 10min    | 2     | 10    |
 | 28-02 CLI Flags, GWAS API, PLINK Valid.    | 9min     | 2     | 7     |
+| 29-01 LOCO Integration Wiring              | 6min     | 2     | 4     |
 
 ## Accumulated Context
 
@@ -119,19 +120,22 @@ All milestone decisions archived in:
 - validate_plink_dimensions cross-validates .bed size against .fam/.bim line counts (28-02)
 - Lazy import of snp_list module in PipelineRunner.run() to avoid overhead when not used (28-02)
 - Non-streaming gk path filters genotype columns before compute_fn; streaming path passes ksnps_indices (28-02)
+- ksnps_indices passed directly to compute_loco_kinship_streaming from run_lmm_loco -- no transformation needed (29-01)
+- -gk 2 -loco validation placed in CLI gk_command only; lmm uses centered internally (29-01)
 
 ### v2.0 Roadmap Structure
 
-**5 phases, 24 requirements:**
+**6 phases, 24 requirements + 2 integration gaps:**
 
 - Phase 24: Quality and Cleanup (4 reqs) - performance fix, test coverage, docs
 - Phase 25: LOCO Kinship (4 reqs) - chromosome-specific kinship
 - Phase 26: Eigendecomposition Reuse (4 reqs) - `-d` and `-u` flags
 - Phase 27: Phenotype Selection and Standardized Kinship (5 reqs) - `-n` flag, `-gk 2`
 - Phase 28: Filtering and Input Validation (7 reqs) - `-snps`, `-ksnps`, `-hwe`, PLINK checks
+- Phase 29: LOCO Integration Wiring (2 gaps) - ksnps + LOCO, gk 2 + LOCO
 
 **Phase dependency chain:**
-Phase 24 (no deps) → Phase 25 → Phase 26 → Phase 27 → Phase 28
+Phase 24 (no deps) → Phase 25 → Phase 26 → Phase 27 → Phase 28 → Phase 29
 
 ### Pending Todos
 
@@ -151,9 +155,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-12
-Stopped at: Completed 28-02-PLAN.md (Phase 28 complete)
+Stopped at: Completed 29-01-PLAN.md (Phase 29 complete)
 Resume file: None
-Next: v2.0 milestone complete -- all 5 phases (24-28) done
+Next: v2.0 milestone complete -- all 6 phases (24-29) done
 
 ---
 
@@ -167,6 +171,6 @@ Next: v2.0 milestone complete -- all 5 phases (24-28) done
 | v1.3 Tech Debt | 2026-02-06 | 16-18 | 7 |
 | v1.4 Performance | 2026-02-10 | 19-22 | (direct commits) |
 | v1.5 Tests & Architecture | 2026-02-10 | 23 | 4 |
-| v2.0 Production GWAS | (planned) | 24-28 | TBD |
+| v2.0 Production GWAS | (planned) | 24-29 | 10 |
 
-**Cumulative:** 89 GSD plans + v1.4 direct work across 23 phases in 6 milestones
+**Cumulative:** 90 GSD plans + v1.4 direct work across 24 phases in 6 milestones

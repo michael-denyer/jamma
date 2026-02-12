@@ -7,14 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- **Hypothesis property tests for v2.0 features**: 14 new tests covering HWE chi-squared
-  (p-value bounds, allele swap symmetry, perfect equilibrium, degenerate inputs,
-  vectorized/scalar equivalence), standardized kinship (symmetry, PSD, trace approximation,
-  shape consistency), and eigen I/O round-trip (.10g format reconstruction, orthonormality,
-  eigenvalue precision). Total: 42 hypothesis tests (up from 29)
-
 ## [2.0.0] - 2026-02-12
 
 ### Added
@@ -41,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   naive linear scan across edge cases (boundary SNPs, full/empty chunks, single-element)
 - **Missingness test suite**: Heterogeneous missingness patterns, column-specific
   imputation accuracy, edge cases (all-missing, no-missing, single-sample)
+- **Hypothesis property tests for v2.0 features**: 14 new tests covering HWE chi-squared
+  (p-value bounds, allele swap symmetry, perfect equilibrium, degenerate inputs,
+  vectorized/scalar equivalence), standardized kinship (symmetry, PSD, trace approximation,
+  shape consistency), and eigen I/O round-trip (.10g format reconstruction, orthonormality,
+  eigenvalue precision). Total: 42 hypothesis tests (up from 29)
 
 ### Changed
 - **Streaming SNP filtering**: Replaced O(n) linear scan with `np.searchsorted` for

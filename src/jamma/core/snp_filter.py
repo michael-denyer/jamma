@@ -1,11 +1,36 @@
 """Shared SNP filtering utilities for JAMMA.
 
 Provides reusable functions for computing per-SNP statistics and
-applying quality control filters (MAF, missing rate, monomorphism).
+applying quality control filters (MAF, missing rate, monomorphism, HWE).
 Used by both kinship computation and LMM association runners.
 """
 
+import logging
+
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
+
+def apply_snp_list_mask(
+    snp_mask: np.ndarray, indices: np.ndarray, n_snps: int, label: str
+) -> None:
+    """Apply SNP list restriction to mask in-place with bounds validation.
+
+    Args:
+        snp_mask: Boolean mask to modify in-place (AND with list mask).
+        indices: Array of SNP indices to include.
+        n_snps: Total number of SNPs (for bounds checking).
+        label: Human-readable label for log messages (e.g. "Kinship SNP list").
+    """
+    if len(indices) > 0 and indices.max() >= n_snps:
+        raise ValueError(
+            f"{label} index {indices.max()} out of range for {n_snps} SNPs"
+        )
+    list_mask = np.zeros(n_snps, dtype=bool)
+    list_mask[indices] = True
+    snp_mask &= list_mask
+    logger.info(f"{label}: restricting to {len(indices)} requested SNPs")
 
 
 def compute_snp_stats(
@@ -64,3 +89,62 @@ def compute_snp_filter_mask(
     is_polymorphic = col_vars > 0
     snp_mask = (mafs >= maf_threshold) & (miss_rates <= miss_threshold) & is_polymorphic
     return snp_mask, allele_freqs, mafs
+
+
+def compute_hwe_pvalues(
+    n_aa: np.ndarray, n_ab: np.ndarray, n_bb: np.ndarray
+) -> np.ndarray:
+    """Compute Hardy-Weinberg equilibrium chi-squared p-values.
+
+    Computes the chi-squared goodness-of-fit test for HWE for each SNP.
+    Under HWE, genotype frequencies are p^2 (AA), 2pq (AB), q^2 (BB)
+    where p = freq(A), q = 1-p.
+
+    This uses the chi-squared approximation (df=1). Note this differs
+    from GEMMA's exact test (Wigginton et al. 2005) but is standard
+    for large-sample QC filtering.
+
+    Degenerate SNPs (all same genotype, zero total, or monomorphic)
+    return p-value = 1.0 by convention (they pass HWE trivially).
+
+    Args:
+        n_aa: Count of homozygous reference genotypes per SNP.
+        n_ab: Count of heterozygous genotypes per SNP.
+        n_bb: Count of homozygous alternate genotypes per SNP.
+
+    Returns:
+        Array of p-values, one per SNP. Values >= threshold pass HWE.
+    """
+    import jax.numpy as jnp
+    import jax.scipy.stats as jax_stats
+
+    n_aa = np.asarray(n_aa, dtype=np.float64)
+    n_ab = np.asarray(n_ab, dtype=np.float64)
+    n_bb = np.asarray(n_bb, dtype=np.float64)
+
+    n = n_aa + n_ab + n_bb
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        p = (2 * n_aa + n_ab) / (2 * n)
+        q = 1.0 - p
+
+        e_aa = n * p**2
+        e_ab = 2 * n * p * q
+        e_bb = n * q**2
+
+        chi_sq = (
+            (n_aa - e_aa) ** 2 / e_aa
+            + (n_ab - e_ab) ** 2 / e_ab
+            + (n_bb - e_bb) ** 2 / e_bb
+        )
+
+    # Degenerate SNPs (monomorphic, zero count) produce NaN chi_sq.
+    # Replace with 0.0 so they get p-value = 1.0 (pass HWE by convention).
+    chi_sq = np.where(np.isnan(chi_sq), 0.0, chi_sq)
+
+    # Use JAX chi2.sf for p-value computation (avoids scipy runtime dep)
+    chi_sq_jax = jnp.asarray(chi_sq)
+    pvalues_jax = jax_stats.chi2.sf(chi_sq_jax, df=1)
+
+    # np.asarray is an implicit JAX sync point (per MEMORY.md)
+    return np.asarray(pvalues_jax)

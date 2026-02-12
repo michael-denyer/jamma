@@ -1,17 +1,3 @@
-# Legacy GEMMA C++ build artifacts
-*.o
-*.tar.gz
-legacy/src/Eigen
-legacy/example/output
-legacy/test/output
-legacy/bin/gemma
-legacy/doc/manual.aux
-legacy/doc/manual.bbl
-legacy/doc/manual.blg
-legacy/doc/manual.log
-legacy/doc/manual.out
-legacy/doc/manual.toc
-
 # Python cache and bytecode
 __pycache__/
 *.py[cod]
@@ -21,6 +7,7 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+.hypothesis/
 
 # Linting
 .ruff_cache/
@@ -44,10 +31,3 @@ CLAUDE.md
 # Beads issue tracker
 .beads/
 AGENTS.md
-
-# Legacy GEMMA C++ source (reference only, not used at runtime)
-legacy/src/
-legacy/doc/
-legacy/bin/
-legacy/test/
-.hypothesis/

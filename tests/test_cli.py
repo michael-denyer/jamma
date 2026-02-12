@@ -415,3 +415,49 @@ def test_cli_n_flag_in_help(subcommand: str):
     assert result.exit_code == 0
     assert "-n" in result.output
     assert "Phenotype column" in result.output
+
+
+def test_cli_lmm_snps_flag_in_help():
+    """Verify -snps appears in lmm help output."""
+    result = runner.invoke(app, ["lmm", "--help"])
+    assert result.exit_code == 0
+    assert "-snps" in result.output
+
+
+def test_cli_lmm_ksnps_flag_in_help():
+    """Verify -ksnps appears in lmm help output."""
+    result = runner.invoke(app, ["lmm", "--help"])
+    assert result.exit_code == 0
+    assert "-ksnps" in result.output
+
+
+def test_cli_lmm_hwe_flag_in_help():
+    """Verify -hwe appears in lmm help output."""
+    result = runner.invoke(app, ["lmm", "--help"])
+    assert result.exit_code == 0
+    assert "-hwe" in result.output
+
+
+def test_cli_gk_ksnps_flag_in_help():
+    """Verify -ksnps appears in gk help output."""
+    result = runner.invoke(app, ["gk", "--help"])
+    assert result.exit_code == 0
+    assert "-ksnps" in result.output
+
+
+def test_cli_gk_ksnps_missing_file_error(tmp_path: Path):
+    """CLI gk command exits gracefully when -ksnps file doesn't exist."""
+    result = runner.invoke(
+        app,
+        [
+            "-outdir",
+            str(tmp_path),
+            "gk",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-ksnps",
+            str(tmp_path / "nonexistent.txt"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Error:" in result.output

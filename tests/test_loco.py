@@ -778,6 +778,26 @@ class TestCliLocoFlags:
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output
 
+    def test_cli_gk_standardized_loco_rejected(self):
+        """jamma gk -bfile X -gk 2 -loco exits with error."""
+        from typer.testing import CliRunner
+
+        from jamma.cli import app
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "gk",
+                "-bfile",
+                str(MOUSE_HS1940_BFILE),
+                "-gk",
+                "2",
+                "-loco",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "not supported" in result.output
+
 
 # ===========================================================================
 # Python API Test
@@ -817,3 +837,80 @@ class TestGwasApiLocoParameter:
         assert result.n_samples > 0
         assert result.n_snps_tested > 0
         assert result.timing["total_s"] > 0
+
+
+# ===========================================================================
+# LOCO ksnps Wiring Tests (GAP-1)
+# ===========================================================================
+
+
+class TestLocoKsnpsWiring:
+    """Tests proving ksnps_indices wires through the LOCO path end-to-end."""
+
+    @pytest.mark.slow
+    def test_run_lmm_loco_accepts_ksnps_indices(self):
+        """run_lmm_loco() with ksnps_indices runs without error and produces results."""
+        if not _mouse_hs1940_exists():
+            pytest.skip("mouse_hs1940 PLINK data not found")
+
+        from jamma.lmm.loco import run_lmm_loco
+
+        phenotypes = _load_mouse_phenotypes()
+
+        # Use first 5000 SNP indices for kinship computation
+        ksnps_indices = np.arange(5000)
+
+        results = run_lmm_loco(
+            bed_path=MOUSE_HS1940_BFILE,
+            phenotypes=phenotypes,
+            lmm_mode=1,
+            check_memory=False,
+            show_progress=False,
+            ksnps_indices=ksnps_indices,
+        )
+
+        assert len(results) > 0, "Should produce results with ksnps_indices"
+
+        # Results should still have valid statistics
+        for r in results[:10]:
+            assert 0 < r.p_wald <= 1, f"p_wald={r.p_wald} for {r.rs}"
+            assert np.isfinite(r.beta), f"beta not finite for {r.rs}"
+            assert np.isfinite(r.se) and r.se > 0, f"se={r.se} for {r.rs}"
+
+        # Results should cover multiple chromosomes
+        result_chrs = {r.chr for r in results}
+        assert len(result_chrs) > 1
+
+    @pytest.mark.slow
+    def test_pipeline_loco_ksnps_wiring(self, tmp_path: Path):
+        """PipelineRunner with loco=True and ksnps_file produces valid output."""
+        if not _mouse_hs1940_exists():
+            pytest.skip("mouse_hs1940 PLINK data not found")
+
+        from jamma.pipeline import PipelineConfig, PipelineRunner
+
+        # Pick ~100 SNP IDs spread across chromosomes (every 120th SNP)
+        # to ensure LOCO has SNPs on multiple chromosomes
+        meta = get_plink_metadata(MOUSE_HS1940_BFILE)
+        snp_ids = meta["sid"][::120]  # ~102 SNPs across all chromosomes
+        ksnps_path = tmp_path / "ksnps.txt"
+        ksnps_path.write_text("\n".join(snp_ids) + "\n")
+
+        config = PipelineConfig(
+            bfile=MOUSE_HS1940_BFILE,
+            loco=True,
+            ksnps_file=ksnps_path,
+            output_dir=tmp_path,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        result = PipelineRunner(config).run()
+
+        assert result.n_samples > 0
+        assert result.n_snps_tested > 0
+        assert result.assoc_path.exists()
+
+        # Verify output file has data
+        lines = result.assoc_path.read_text().strip().splitlines()
+        assert len(lines) > 1, "Should have header + data lines"

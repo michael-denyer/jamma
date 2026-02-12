@@ -64,6 +64,8 @@ def run_lmm_loco(
     save_kinship: bool = False,
     kinship_output_dir: Path | None = None,
     kinship_output_prefix: str = "result",
+    snps_indices: np.ndarray | None = None,
+    ksnps_indices: np.ndarray | None = None,
 ) -> list[AssocResult]:
     """Run LOCO LMM association: per-chromosome eigendecomp and association.
 
@@ -88,6 +90,10 @@ def run_lmm_loco(
         save_kinship: If True, save each K_loco to disk before discarding.
         kinship_output_dir: Directory for kinship output files.
         kinship_output_prefix: Prefix for kinship output filenames.
+        snps_indices: Pre-resolved column indices for -snps restriction, or None.
+        ksnps_indices: Pre-resolved column indices for -ksnps restriction, or
+            None. When provided, only these SNPs are used for LOCO kinship
+            computation. Passed through to compute_loco_kinship_streaming().
 
     Returns:
         List of AssocResult in original SNP order (empty if output_path set).
@@ -173,6 +179,7 @@ def run_lmm_loco(
             miss_threshold=miss_threshold,
             check_memory=check_memory,
             show_progress=show_progress,
+            ksnps_indices=ksnps_indices,
         )
 
         for chr_idx, (chr_name, K_loco) in enumerate(loco_iter):
@@ -216,6 +223,7 @@ def run_lmm_loco(
                 lmm_mode=lmm_mode,
                 valid_mask=valid_mask,
                 show_progress=show_progress,
+                snps_indices=snps_indices,
             )
 
             # Write results
@@ -259,6 +267,7 @@ def _run_lmm_for_chromosome(
     l_max: float = 1e5,
     n_grid: int = 50,
     n_refine: int = 10,
+    snps_indices: np.ndarray | None = None,
 ) -> list[AssocResult]:
     """Run LMM association on a single chromosome's SNPs.
 
@@ -284,6 +293,7 @@ def _run_lmm_for_chromosome(
         l_max: Maximum lambda for optimization.
         n_grid: Grid search resolution.
         n_refine: Golden section iterations.
+        snps_indices: Pre-resolved column indices for -snps restriction, or None.
 
     Returns:
         List of AssocResult for this chromosome's SNPs.
@@ -294,6 +304,16 @@ def _run_lmm_for_chromosome(
     bed_file = Path(f"{bed_path}.bed")
     with open_bed(bed_file) as bed:
         geno_chr = bed.read(index=np.s_[:, chr_snp_indices], dtype=np.float64)
+
+    # Validate genotype values
+    from jamma.io.plink import validate_genotype_values
+
+    n_unexpected = validate_genotype_values(geno_chr)
+    if n_unexpected > 0:
+        logger.warning(
+            f"LOCO chr genotype validation: {n_unexpected} values outside "
+            f"expected range {{0, 1, 2, NaN}}"
+        )
 
     # Apply sample filtering
     if not np.all(valid_mask):
@@ -311,6 +331,15 @@ def _run_lmm_for_chromosome(
     snp_mask, allele_freqs, _mafs = compute_snp_filter_mask(
         col_means, miss_counts, col_vars, n_samples, maf_threshold, miss_threshold
     )
+
+    # Apply SNP list restriction (if -snps provided)
+    if snps_indices is not None:
+        snps_set = set(snps_indices.tolist())
+        local_snp_list_mask = np.array(
+            [idx in snps_set for idx in chr_snp_indices], dtype=bool
+        )
+        snp_mask &= local_snp_list_mask
+
     local_filtered_indices = np.where(snp_mask)[0]
     n_filtered = len(local_filtered_indices)
 
@@ -320,6 +349,8 @@ def _run_lmm_for_chromosome(
         )
 
     if n_filtered == 0:
+        if show_progress:
+            logger.warning("  Chromosome has no SNPs after filtering, skipping")
         return []
 
     # Build snp_stats for result construction

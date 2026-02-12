@@ -2,20 +2,17 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-10)
+See: .planning/PROJECT.md (updated 2026-02-12)
 
 **Core value:** Exact GEMMA statistical results at large scale
-**Current focus:** v2.0 Production GWAS
+**Current focus:** Planning next milestone
 
 ## Current Position
 
-Milestone: v2.0 Production GWAS
-Phase: Phase 26 - Eigendecomposition Reuse
-Plan: 2/2 complete (26-01, 26-02 done)
-Status: Phase 26 complete
-Last activity: 2026-02-11 — 26-02 Eigen I/O validation test suite
-
-Progress: [████████████░░░░░░░░] 60% (3/5 phases)
+Milestone: v2.0 Production GWAS — SHIPPED 2026-02-12
+Phase: All complete (24-29)
+Status: Milestone archived, ready for next milestone
+Last activity: 2026-02-12 — v2.0 milestone completion
 
 ## Performance Metrics
 
@@ -54,7 +51,7 @@ Progress: [████████████░░░░░░░░] 60% (3/
 | 23-03 Memory/Chunk Coupling | — | 2 | 3 |
 | 23-04 Pipeline Runner | 32min | 2 | 5 |
 
-**v2.0 (Phase 24+):**
+**v2.0 (Phases 24-29):**
 
 | Plan                                       | Duration | Tasks | Files |
 |--------------------------------------------|----------|-------|-------|
@@ -65,6 +62,9 @@ Progress: [████████████░░░░░░░░] 60% (3/
 | 25-03 LOCO Validation Test Suite           | 25min    | 2     | 1     |
 | 26-01 Eigen I/O + Pipeline Integration     | 7min     | 2     | 7     |
 | 26-02 Eigen I/O Validation Test Suite      | 9min     | 2     | 2     |
+| 28-01 SNP List Filtering + HWE QC          | 10min    | 2     | 10    |
+| 28-02 CLI Flags, GWAS API, PLINK Valid.    | 9min     | 2     | 7     |
+| 29-01 LOCO Integration Wiring              | 6min     | 2     | 4     |
 
 ## Accumulated Context
 
@@ -73,56 +73,8 @@ Progress: [████████████░░░░░░░░] 60% (3/
 All milestone decisions archived in:
 - .planning/v1-MILESTONE-ARCHIVE.md (v1.0)
 - .planning/milestones/v1.3-ROADMAP.md (v1.3)
+- .planning/milestones/v2.0-ROADMAP.md (v2.0)
 - .planning/PROJECT.md Key Decisions table (cumulative)
-
-### v1.4 Key Results
-
-- **85k GEMMA validation**: 91,613 SNPs, 100% significance agreement, Spearman rho 1.0
-- **Memory fix**: Phase-specific LMM memory estimates (was demanding 320GB pipeline peak, needed 96GB)
-- **JAX async fix**: block_until_ready() for accurate progress/timing
-- **Eigendecomp at theoretical floor**: 90k at 32 cores ≈ 3,100s, matching ~310 GFLOPS effective
-- **scipy reverted**: numpy.linalg.eigh used (scipy ILP64 not viable)
-
-### v1.5 Decisions
-
-- Loguru default stderr handler retained for library users; CLI setup_logging() handles reconfiguration
-- ensure_jax_configured() wraps configure_jax() with sentinel, preserving backward compatibility
-- Negative marker selection for test-fast: unmarked tests default to fast tier
-- Pre-commit in CI lint job for exact parity with local hooks
-- test-slow gated on master merge and workflow_dispatch only
-- PipelineRunner raises exceptions; CLI catches and converts to typer.Exit (23-04)
-- CLI retains kinship-required check; API can compute kinship from genotypes (23-04)
-- Intercept warning moved into PipelineRunner.load_covariates for single source of truth (23-04)
-
-### v2.0 Decisions
-
-- np.searchsorted with side="left" for half-open [start, end) chunk filtering on sorted snp_indices (24-01)
-- No functional changes to memory.py for comment updates -- docstrings only (24-02)
-- Generator (Iterator) return type for LOCO kinship -- yields one K_loco at a time for memory efficiency (25-01)
-- Streaming LOCO accumulates all S_chr simultaneously in single pass -- trades O(n_chr * n^2) memory for O(1) passes (25-01)
-- Global SNP filtering before chromosome partitioning; chromosome array co-filtered with same mask (25-01)
-- Per-chromosome single BED read in _run_lmm_for_chromosome; chromosome subsets small enough for memory (25-02)
-- -k and -loco mutually exclusive; LOCO computes kinship internally (25-02)
-- LOCO pipeline branch skips standard kinship loading entirely (25-02)
-- rtol=1e-9 validated bound for LOCO subtraction identity (batched JAX FP accumulation) (25-03)
-- Mathematical self-consistency as LOCO validation strategy (no GEMMA reference available) (25-03)
-- write_eigen eigendecomposes before runner call, passes pre-computed eigen to runner (26-01)
-- kinship=None valid in streaming runner when eigenvalues+eigenvectors provided (26-01)
-- write_eigen subsets kinship to valid-phenotype samples before eigendecomp (26-02)
-- Standard calibrated tolerances sufficient for loaded-eigen LMM equivalence (26-02)
-
-### v2.0 Roadmap Structure
-
-**5 phases, 24 requirements:**
-
-- Phase 24: Quality and Cleanup (4 reqs) - performance fix, test coverage, docs
-- Phase 25: LOCO Kinship (4 reqs) - chromosome-specific kinship
-- Phase 26: Eigendecomposition Reuse (4 reqs) - `-d` and `-u` flags
-- Phase 27: Phenotype Selection and Standardized Kinship (5 reqs) - `-n` flag, `-gk 2`
-- Phase 28: Filtering and Input Validation (7 reqs) - `-snps`, `-ksnps`, `-hwe`, PLINK checks
-
-**Phase dependency chain:**
-Phase 24 (no deps) → Phase 25 → Phase 26 → Phase 27 → Phase 28
 
 ### Pending Todos
 
@@ -141,10 +93,10 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-11
-Stopped at: Completed 26-02-PLAN.md (Phase 26 complete)
+Last session: 2026-02-12
+Stopped at: v2.0 milestone archived
 Resume file: None
-Next: Phase 27 - Phenotype Selection and Standardized Kinship
+Next: `/gsd:new-milestone` to start next milestone
 
 ---
 
@@ -158,6 +110,6 @@ Next: Phase 27 - Phenotype Selection and Standardized Kinship
 | v1.3 Tech Debt | 2026-02-06 | 16-18 | 7 |
 | v1.4 Performance | 2026-02-10 | 19-22 | (direct commits) |
 | v1.5 Tests & Architecture | 2026-02-10 | 23 | 4 |
-| v2.0 Production GWAS | (planned) | 24-28 | TBD |
+| v2.0 Production GWAS | 2026-02-12 | 24-29 | 12 |
 
-**Cumulative:** 89 GSD plans + v1.4 direct work across 23 phases in 6 milestones
+**Cumulative:** 101 GSD plans + v1.4 direct work across 29 phases in 7 milestones

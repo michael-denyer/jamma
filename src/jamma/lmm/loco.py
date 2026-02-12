@@ -65,6 +65,7 @@ def run_lmm_loco(
     kinship_output_dir: Path | None = None,
     kinship_output_prefix: str = "result",
     snps_indices: np.ndarray | None = None,
+    ksnps_indices: np.ndarray | None = None,
 ) -> list[AssocResult]:
     """Run LOCO LMM association: per-chromosome eigendecomp and association.
 
@@ -90,6 +91,9 @@ def run_lmm_loco(
         kinship_output_dir: Directory for kinship output files.
         kinship_output_prefix: Prefix for kinship output filenames.
         snps_indices: Pre-resolved column indices for -snps restriction, or None.
+        ksnps_indices: Pre-resolved column indices for -ksnps restriction, or
+            None. When provided, only these SNPs are used for LOCO kinship
+            computation. Passed through to compute_loco_kinship_streaming().
 
     Returns:
         List of AssocResult in original SNP order (empty if output_path set).
@@ -175,6 +179,7 @@ def run_lmm_loco(
             miss_threshold=miss_threshold,
             check_memory=check_memory,
             show_progress=show_progress,
+            ksnps_indices=ksnps_indices,
         )
 
         for chr_idx, (chr_name, K_loco) in enumerate(loco_iter):

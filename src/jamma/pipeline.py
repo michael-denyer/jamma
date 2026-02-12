@@ -496,6 +496,7 @@ class PipelineRunner:
                 kinship_output_dir=self.config.output_dir,
                 kinship_output_prefix=self.config.output_prefix,
                 snps_indices=snps_indices,
+                ksnps_indices=ksnps_indices,
             )
             loco_s = time.perf_counter() - t_loco
             total_s = time.perf_counter() - t_start

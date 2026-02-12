@@ -182,6 +182,15 @@ def gk_command(
         )
         raise typer.Exit(code=1)
 
+    if mode == 2 and loco:
+        typer.echo(
+            "Error: -gk 2 (standardized) is not supported with -loco. "
+            "LOCO kinship uses centered mode (-gk 1). "
+            "Use 'jamma gk -bfile X -gk 2' without -loco for standardized kinship.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
     # Resolve ksnps_file to indices if provided
     ksnps_indices = None
     if ksnps_file is not None:

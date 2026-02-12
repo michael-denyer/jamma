@@ -778,6 +778,26 @@ class TestCliLocoFlags:
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output
 
+    def test_cli_gk_standardized_loco_rejected(self):
+        """jamma gk -bfile X -gk 2 -loco exits with error."""
+        from typer.testing import CliRunner
+
+        from jamma.cli import app
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "gk",
+                "-bfile",
+                str(MOUSE_HS1940_BFILE),
+                "-gk",
+                "2",
+                "-loco",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "not supported" in result.output
+
 
 # ===========================================================================
 # Python API Test

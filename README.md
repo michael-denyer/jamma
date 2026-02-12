@@ -65,6 +65,17 @@ result = gwas("data/my_study", save_kinship=True, output_dir="output")
 
 # With covariates and LRT test
 result = gwas("data/my_study", kinship_file="k.txt", covariate_file="covars.txt", lmm_mode=2)
+
+# LOCO analysis (leave-one-chromosome-out)
+result = gwas("data/my_study", loco=True)
+
+# Multi-phenotype with eigendecomp reuse
+result = gwas("data/my_study", write_eigen=True, phenotype_column=1)
+result = gwas("data/my_study", eigenvalue_file="output/result.eigenD.txt",
+              eigenvector_file="output/result.eigenU.txt", phenotype_column=2)
+
+# SNP filtering
+result = gwas("data/my_study", kinship_file="k.txt", snps_file="snps.txt", hwe=0.001)
 ```
 
 ### Low-level API
@@ -130,14 +141,19 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs):
 
 ### Current
 
-- [x] Kinship matrix computation (`-gk 1`)
+- [x] Kinship matrix computation — centered (`-gk 1`) and standardized (`-gk 2`)
 - [x] Univariate LMM Wald test (`-lmm 1`)
 - [x] Likelihood ratio test (`-lmm 2`)
 - [x] Score test (`-lmm 3`)
 - [x] All tests mode (`-lmm 4`)
+- [x] LOCO kinship — leave-one-chromosome-out analysis (`-loco`)
+- [x] Eigendecomposition reuse — multi-phenotype workflows (`-d`/`-u`/`-eigen`)
+- [x] Phenotype column selection (`-n`)
+- [x] SNP subset selection for association and kinship (`-snps`/`-ksnps`)
+- [x] HWE QC filtering (`-hwe`)
 - [x] Pre-computed kinship input (`-k`)
 - [x] Covariate support (`-c`)
-- [x] PLINK binary format (`.bed/.bim/.fam`)
+- [x] PLINK binary format (`.bed/.bim/.fam`) with input dimension validation
 - [x] Large-scale streaming I/O (>100k samples via [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) — numpy 2.4.2)
 - [x] JAX acceleration (CPU/GPU)
 - [x] Pre-flight memory checks (fail-fast before OOM)

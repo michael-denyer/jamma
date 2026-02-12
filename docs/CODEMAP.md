@@ -9,6 +9,7 @@ flowchart TB
     subgraph L1["Entry Points [1]"]
         CLI["CLI (typer) [1a]"]
         GWAS["gwas() API [1b]"]
+        PIPE["PipelineRunner [1c]"]
     end
 
     subgraph L2["I/O Layer [2]"]
@@ -16,6 +17,8 @@ flowchart TB
         COVAR["Covariate Reader [2b]"]
         KIO["Kinship I/O [2c]"]
         RIO["Result Writer [2d]"]
+        SNPLIST["SNP List I/O [2e]"]
+        EIGIO["Eigen I/O [2f]"]
     end
 
     subgraph L3["Core Computation [3]"]
@@ -25,12 +28,14 @@ flowchart TB
         LIKE["REML Likelihood [3d]"]
         OPT["Lambda Optimizer [3e]"]
         STATS["Test Statistics [3f]"]
+        SNPF["SNP Filters [3g]"]
     end
 
     subgraph L4["JAX Acceleration [4]"]
         LIKEJAX["Batch Likelihood [4a]"]
         RUNNER["JAX Runner [4b]"]
         STREAM["Streaming Runner [4c]"]
+        LOCO["LOCO Runner [4d]"]
     end
 
     subgraph L5["Infrastructure [5]"]
@@ -45,7 +50,8 @@ flowchart TB
         CMP["GEMMA Comparator [6b]"]
     end
 
-    CLI --> GWAS
+    CLI --> PIPE
+    PIPE --> GWAS
     GWAS --> PLINK
     GWAS --> COVAR
     GWAS --> KIO
@@ -57,17 +63,27 @@ flowchart TB
     CLI --> COVAR
     CLI --> KIO
     CLI --> RIO
+    CLI --> SNPLIST
     CLI --> CONFIG
     CLI --> LOG
+
+    PIPE --> EIGIO
+    PIPE --> SNPLIST
+    PIPE --> LOCO
 
     KINSHIP --> MISSING
     KINSHIP --> PLINK
     KINSHIP --> MEM
+    KINSHIP --> SNPF
 
     CLI --> KINSHIP
     CLI --> EIGEN
     CLI --> RUNNER
     CLI --> STREAM
+
+    LOCO --> KINSHIP
+    LOCO --> EIGEN
+    LOCO --> STREAM
 
     RUNNER --> LIKEJAX
     RUNNER --> STATS
@@ -76,6 +92,7 @@ flowchart TB
     STREAM --> OPT
     STREAM --> STATS
     STREAM --> RIO
+    STREAM --> SNPF
 
     LIKEJAX --> LIKE
     OPT --> LIKE
@@ -97,8 +114,10 @@ Two entry points: the `gwas()` API for programmatic use, and the CLI for command
 | 1a | `main()` | Typer app callback — global flags (`-o`, `-outdir`, `-v`) | [cli.py:54](../src/jamma/cli.py#L54) |
 | 1a | `gk_command()` | Kinship computation (`-gk 1`) | [cli.py:88](../src/jamma/cli.py#L88) |
 | 1a | `lmm_command()` | LMM association (`-lmm 1/2/3/4`) | [cli.py:193](../src/jamma/cli.py#L193) |
-| 1b | `gwas()` | One-call GWAS pipeline (load → kinship → LMM → results) | [gwas.py:52](../src/jamma/gwas.py#L52) |
-| 1b | `GWASResult` | Pipeline result dataclass (associations, timing, counts) | [gwas.py:34](../src/jamma/gwas.py#L34) |
+| 1b | `gwas()` | One-call GWAS pipeline (load → kinship → LMM → results) | [gwas.py:40](../src/jamma/gwas.py#L40) |
+| 1b | `GWASResult` | Pipeline result dataclass (associations, timing, counts) | [gwas.py:22](../src/jamma/gwas.py#L22) |
+| 1c | `PipelineRunner` | Shared orchestration (validate → parse → memory → kinship → LMM) | [pipeline.py](../src/jamma/pipeline.py) |
+| 1c | `PipelineConfig` | Pipeline configuration dataclass (all CLI flags) | [pipeline.py](../src/jamma/pipeline.py) |
 
 ---
 
@@ -118,6 +137,10 @@ Reads PLINK binary genotypes, covariates, and kinship matrices. Writes GEMMA-com
 | 2d | `IncrementalAssocWriter` | Per-SNP disk writer (no memory accumulation) | [lmm/io.py:172](../src/jamma/lmm/io.py#L172) |
 | 2d | `format_assoc_line()` | Wald output row (12 columns) | [lmm/io.py:12](../src/jamma/lmm/io.py#L12) |
 | 2d | `write_assoc_results()` | Batch write from list | [lmm/io.py:150](../src/jamma/lmm/io.py#L150) |
+| 2e | `read_snp_list_file()` | Parse SNP list file (one RS ID per line) | [io/snp_list.py](../src/jamma/io/snp_list.py) |
+| 2e | `resolve_snp_list_to_indices()` | Map SNP IDs to dataset indices | [io/snp_list.py](../src/jamma/io/snp_list.py) |
+| 2f | `read_eigen_files()` | Load eigenvalue/eigenvector files | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
+| 2f | `write_eigen_files()` | Write eigendecomposition to disk | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
 
 ---
 
@@ -146,6 +169,8 @@ GEMMA algorithm reimplementation: kinship → eigendecomp → REML → test stat
 | 3f | `calc_score_test()` | p_score using null model lambda | [stats.py:232](../src/jamma/lmm/stats.py#L232) |
 | 3f | `calc_lrt_test()` | p_lrt via chi-squared CDF | [stats.py:202](../src/jamma/lmm/stats.py#L202) |
 | 3f | `f_sf()` | F-distribution survival via JAX betainc | [stats.py:67](../src/jamma/lmm/stats.py#L67) |
+| 3g | `compute_hwe_pvalues()` | Chi-squared HWE test via JAX | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |
+| 3g | `apply_snp_list_mask()` | DRY bounds-validated SNP mask application | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |
 
 ---
 
@@ -161,6 +186,7 @@ Batch SNP processing with JIT compilation and vmap vectorization.
 | 4a | `golden_section_optimize_lambda()` | Grid search + 20 golden section iterations | [likelihood_jax.py:492](../src/jamma/lmm/likelihood_jax.py#L492) |
 | 4b | `run_lmm_association_jax()` | Full-load JAX batch runner | [runner_jax.py](../src/jamma/lmm/runner_jax.py) |
 | 4c | `run_lmm_association_streaming()` | Streaming from disk, O(n² + n×chunk) | [runner_streaming.py:94](../src/jamma/lmm/runner_streaming.py#L94) |
+| 4d | `run_lmm_loco()` | LOCO: per-chromosome kinship → eigen → LMM | [lmm/loco.py](../src/jamma/lmm/loco.py) |
 
 ---
 
@@ -312,16 +338,21 @@ flowchart TD
 
 | Area | Entry Point |
 |------|-------------|
-| gwas() API | [gwas.py:52](../src/jamma/gwas.py#L52) |
+| gwas() API | [gwas.py:40](../src/jamma/gwas.py#L40) |
+| PipelineRunner | [pipeline.py](../src/jamma/pipeline.py) |
 | CLI dispatch | [cli.py:54](../src/jamma/cli.py#L54) |
 | Load genotypes | [plink.py:53](../src/jamma/io/plink.py#L53) |
+| SNP list I/O | [io/snp_list.py](../src/jamma/io/snp_list.py) |
+| Eigen I/O | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
 | Kinship compute | [compute.py:86](../src/jamma/kinship/compute.py#L86) |
 | Eigendecomposition | [eigen.py:28](../src/jamma/lmm/eigen.py#L28) |
 | REML likelihood | [likelihood.py:234](../src/jamma/lmm/likelihood.py#L234) |
 | Lambda optimization | [likelihood_jax.py:492](../src/jamma/lmm/likelihood_jax.py#L492) |
 | Wald/Score/LRT tests | [stats.py:98](../src/jamma/lmm/stats.py#L98) |
+| SNP filters (HWE) | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |
 | JAX batch runner | [runner_jax.py](../src/jamma/lmm/runner_jax.py) |
 | Streaming runner | [runner_streaming.py:94](../src/jamma/lmm/runner_streaming.py#L94) |
+| LOCO runner | [lmm/loco.py](../src/jamma/lmm/loco.py) |
 | Result writer | [lmm/io.py:172](../src/jamma/lmm/io.py#L172) |
 | Memory estimation | [memory.py:72](../src/jamma/core/memory.py#L72) |
 | Validation comparison | [compare.py:536](../src/jamma/validation/compare.py#L536) |

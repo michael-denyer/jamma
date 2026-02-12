@@ -323,7 +323,7 @@ if not estimate.sufficient:
 
 JAMMA is not always the right choice:
 
-1. **Multivariate LMM (mvLMM)**: GEMMA-only for now (planned for JAMMA v2)
+1. **Multivariate LMM (mvLMM)**: GEMMA-only for now (planned for a future JAMMA release)
 2. **Extreme validation requirements**: When you need bit-exact GEMMA output
 3. **Air-gapped systems**: Where pip install isn't an option
 

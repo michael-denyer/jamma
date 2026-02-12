@@ -211,6 +211,54 @@ numpy's LAPACK binding supports large matrices without this limitation.
 
 ---
 
+## 8. HWE Test Implementation
+
+### GEMMA
+
+Uses the **Wigginton exact test** — a permutation-based exact test for Hardy-Weinberg equilibrium that is accurate at all sample sizes, including small cohorts.
+
+### JAMMA
+
+Uses a **chi-squared goodness-of-fit test** (df=1) computed via JAX's `jax.scipy.stats.chi2.sf`. The chi-squared test compares observed genotype counts to expected counts under HWE.
+
+### Divergence Impact
+
+| Sample Size | Divergence |
+|-------------|------------|
+| n > 100 | Negligible — both tests agree on filtering decisions |
+| n = 30–100 | Slight p-value differences, rare disagreements near threshold |
+| n < 30 | More significant differences — Wigginton exact test is more accurate |
+
+### Rationale
+
+The chi-squared test avoids a scipy dependency (Wigginton's exact test requires `scipy.stats`). For JAMMA's target use case (large-scale GWAS with thousands to hundreds of thousands of samples), the chi-squared approximation is indistinguishable from the exact test.
+
+---
+
+## 9. LOCO Kinship Computation
+
+### GEMMA
+
+Materializes **all** per-chromosome LOCO kinship matrices simultaneously, requiring `n_chr × n² × 8` bytes of memory.
+
+### JAMMA
+
+Uses **streaming subtraction**: computes the full kinship matrix K once, then derives each chromosome's LOCO kinship as `K_loco_c = (p × K - K_c) / (p - p_c)` one at a time, where K_c is the contribution of chromosome c's SNPs and p_c is the SNP count for that chromosome.
+
+### Divergence Impact
+
+| Aspect | GEMMA | JAMMA |
+|--------|-------|-------|
+| Math | Same formula | Same formula |
+| Memory | O(n_chr × n²) | O(n²) |
+| I/O | One pass per chromosome | Two passes total (full K + per-chr subtraction) |
+
+### Rationale
+
+The streaming approach produces mathematically identical LOCO kinship matrices while using constant memory (one K_loco at a time). This is critical for large-sample GWAS where materializing 22 copies of an n×n matrix is infeasible.
+
+---
+
 ## Summary Table
 
 | Feature | GEMMA Behavior | JAMMA Behavior | Impact |
@@ -223,6 +271,8 @@ numpy's LAPACK binding supports large matrices without this limitation.
 | JAX covariates | n_cvt >= 1 | n_cvt >= 1 | Aligned (since v1.2) |
 | Lambda optimizer | Brent | Golden section | See [EQUIVALENCE.md](EQUIVALENCE.md#5-lambda-optimization) |
 | Eigendecomp library | GSL | numpy LAPACK | Large-sample support (ILP64) |
+| HWE test | Wigginton exact | Chi-squared (df=1) | Identical for large n |
+| LOCO kinship | Materialized all | Streaming subtraction | Same math, lower memory |
 
 ---
 
@@ -237,4 +287,4 @@ For full empirical validation results (small-scale and production-scale), see
 
 ---
 
-*Last updated: 2026-02-10*
+*Last updated: 2026-02-12*

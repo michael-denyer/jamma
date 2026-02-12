@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-02-12
+
 ### Added
+- **LOCO kinship** (`-loco` flag): Leave-one-chromosome-out kinship via streaming
+  subtraction approach — computes per-chromosome K_loco one at a time for memory
+  efficiency. Eliminates proximal contamination in LMM association
+- **Eigendecomposition reuse** (`-d`/`-u`/`-eigen` flags): Save and load pre-computed
+  eigendecomposition for multi-phenotype workflows — skip O(n³) eigendecomp after first run
+- **Phenotype selection** (`-n` flag): Select phenotype column from multi-phenotype
+  .fam files (1-based indexing, matching GEMMA)
+- **Standardized kinship** (`-gk 2`): GEMMA-compatible standardized relatedness matrix
+  using (X - mean) / sqrt(p*(1-p)) normalization
+- **SNP subset selection** (`-snps`/`-ksnps` flags): Restrict association testing and/or
+  kinship computation to SNP lists (one RS ID per line)
+- **HWE QC filtering** (`-hwe` flag): Hardy-Weinberg equilibrium chi-squared
+  goodness-of-fit test — exclude SNPs below p-value threshold. Genotype counts
+  piggyback on pass-1 streaming (no extra disk pass)
+- **PLINK dimension validation**: Cross-validate .bed file size against .fam/.bim
+  line counts before processing
+- **Genotype value validation**: Warn on values outside expected range {0, 1, 2, NaN}
+- **`apply_snp_list_mask()` helper**: DRY bounds-validated SNP mask application
+  (replaces 3 duplicate code blocks in kinship and LMM runners)
 - **SNP filter regression tests**: Verify searchsorted-based chunk filtering matches
   naive linear scan across edge cases (boundary SNPs, full/empty chunks, single-element)
 - **Missingness test suite**: Heterogeneous missingness patterns, column-specific
@@ -18,6 +39,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chunk-level SNP range filtering — eliminates per-SNP Python overhead in streaming runners
 - **Memory module comments**: Updated docstrings to reflect streaming architecture
   and actual component breakdown
+- **HWE accumulators**: Upgraded int32 → int64 for overflow safety on large cohorts
+- **HWE NaN handling**: Replaced `np.nan_to_num` with explicit `np.where` to avoid
+  silent inf/neginf clobbering
+
+### Fixed
+- **HWE silently ignored in LOCO mode**: `-hwe` parameter was accepted but had no
+  effect when `-loco` was active — now rejected with clear error message
+- **CLI gk ksnps errors uncaught**: Missing/invalid ksnps file produced a traceback
+  instead of user-friendly error — now wrapped in try/except
+- **HWE threshold >1.0 accepted**: Out-of-range p-value threshold now validated
 
 ### Removed
 - **Bioconda recipe**: Removed `bioconda/meta.yaml` and automated bioconda PR submission —
@@ -195,7 +226,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
-[Unreleased]: https://github.com/michael-denyer/jamma/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/michael-denyer/jamma/compare/v1.5.1...v2.0.0
 [1.5.1]: https://github.com/michael-denyer/jamma/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/michael-denyer/jamma/compare/v1.4.3...v1.5.0
 [1.4.3]: https://github.com/michael-denyer/jamma/compare/v1.3.0...v1.4.3

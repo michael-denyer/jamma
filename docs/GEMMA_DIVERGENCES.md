@@ -293,6 +293,7 @@ represent niche use cases.
 | Debug/legacy flags | `-debug`, `-legacy`, `-strict`, `-issue` | Internal GEMMA development flags, not user-facing functionality. |
 | BSLMM MCMC parameters | `-w`, `-s`, `-seed`, `-rpace`, `-wpace`, `-hmin/max`, `-rmin/max`, `-pmin/max`, `-smin/max` | Only relevant if BSLMM were implemented. |
 | Pace output | `-pace` | JAMMA uses progress bars with ETA instead. |
+| BIMBAM format input | `-g`, `-p`, `-a` | JAMMA uses PLINK binary format exclusively. BIMBAM is a legacy text format (~10-50x larger than PLINK binary) with no QC tooling. Convert with `plink --import-dosage file.mean.genotype --fam file.fam --make-bed --out output`. |
 
 ---
 

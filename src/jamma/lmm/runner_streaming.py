@@ -111,6 +111,9 @@ def run_lmm_association_streaming(
     show_progress: bool = True,
     output_path: Path | None = None,
     lmm_mode: int = 1,
+    snps_indices: np.ndarray | None = None,
+    hwe_threshold: float = 0.0,
+    validate_genotypes: bool = True,
 ) -> list[AssocResult]:
     """Run LMM association tests by streaming genotypes from disk.
 
@@ -138,6 +141,11 @@ def run_lmm_association_streaming(
         show_progress: Show progress bars and GEMMA-style logging.
         output_path: Path for incremental result writing, or None for in-memory.
         lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
+        snps_indices: Pre-resolved column indices for -snps restriction, or None.
+        hwe_threshold: HWE p-value threshold; SNPs with p < threshold are
+            removed. 0.0 disables HWE filtering (default).
+        validate_genotypes: Check for unexpected genotype values during pass-1
+            (default True).
 
     Returns:
         List of AssocResult (empty if output_path is set -- results on disk).
@@ -219,6 +227,15 @@ def run_lmm_association_streaming(
     all_miss_counts = np.zeros(n_snps, dtype=np.int32)
     all_vars = np.zeros(n_snps, dtype=np.float64)  # For monomorphic detection
 
+    # HWE genotype count accumulators (only when threshold > 0)
+    if hwe_threshold > 0:
+        all_n_aa = np.zeros(n_snps, dtype=np.int32)
+        all_n_ab = np.zeros(n_snps, dtype=np.int32)
+        all_n_bb = np.zeros(n_snps, dtype=np.int32)
+
+    # Genotype validation accumulator
+    n_unexpected_total = 0
+
     stats_iterator = stream_genotype_chunks(
         bed_path, chunk_size=chunk_size, dtype=np.float32, show_progress=False
     )
@@ -245,6 +262,31 @@ def run_lmm_association_streaming(
         all_miss_counts[start:end] = chunk_miss_counts
         all_vars[start:end] = chunk_vars
 
+        # Accumulate HWE genotype counts (no extra disk pass)
+        if hwe_threshold > 0:
+            valid_geno = ~np.isnan(chunk)
+            all_n_aa[start:end] += np.sum((chunk == 0) & valid_geno, axis=0).astype(
+                np.int32
+            )
+            all_n_ab[start:end] += np.sum((chunk == 1) & valid_geno, axis=0).astype(
+                np.int32
+            )
+            all_n_bb[start:end] += np.sum((chunk == 2) & valid_geno, axis=0).astype(
+                np.int32
+            )
+
+        # Validate genotype values
+        if validate_genotypes:
+            from jamma.io.plink import validate_genotype_values
+
+            n_unexpected_total += validate_genotype_values(chunk)
+
+    if validate_genotypes and n_unexpected_total > 0:
+        logger.warning(
+            f"Genotype validation: {n_unexpected_total} values outside "
+            f"expected range {{0, 1, 2, NaN}}"
+        )
+
     t_io_end = time.perf_counter()
 
     # === SNP statistics: filtering + stats construction ===
@@ -252,6 +294,26 @@ def run_lmm_association_streaming(
     snp_mask, allele_freqs, _mafs = compute_snp_filter_mask(
         all_means, all_miss_counts, all_vars, n_samples, maf_threshold, miss_threshold
     )
+
+    # Apply SNP list restriction (if -snps provided)
+    if snps_indices is not None:
+        snp_list_mask = np.zeros(n_snps, dtype=bool)
+        snp_list_mask[snps_indices] = True
+        snp_mask &= snp_list_mask
+        logger.info(
+            f"SNP list filter: restricting to {len(snps_indices)} requested SNPs"
+        )
+
+    # Apply HWE filter (if -hwe threshold > 0)
+    if hwe_threshold > 0:
+        from jamma.core.snp_filter import compute_hwe_pvalues
+
+        hwe_pvalues = compute_hwe_pvalues(all_n_aa, all_n_ab, all_n_bb)
+        hwe_pass = hwe_pvalues >= hwe_threshold
+        n_hwe_fail = int(np.sum(~hwe_pass & snp_mask))
+        snp_mask &= hwe_pass
+        logger.info(f"HWE filter: {n_hwe_fail} SNPs removed (p < {hwe_threshold})")
+
     snp_indices = np.where(snp_mask)[0]
     n_filtered = len(snp_indices)
 

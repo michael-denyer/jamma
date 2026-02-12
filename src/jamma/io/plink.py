@@ -175,6 +175,22 @@ def get_chromosome_partitions(bed_path: Path) -> dict[str, np.ndarray]:
         }
 
 
+def validate_genotype_values(chunk: np.ndarray) -> int:
+    """Check that all non-NaN genotype values are in {0.0, 1.0, 2.0}.
+
+    Called per-chunk during pass-1 streaming. The caller accumulates
+    the total count and logs a single summary warning at the end.
+
+    Args:
+        chunk: Genotype matrix chunk (n_samples, n_snps_chunk).
+
+    Returns:
+        Count of unexpected values (not in {0, 1, 2, NaN}).
+    """
+    valid_mask = np.isnan(chunk) | (chunk == 0) | (chunk == 1) | (chunk == 2)
+    return int(np.sum(~valid_mask))
+
+
 def stream_genotype_chunks(
     bed_path: Path,
     chunk_size: int = 10_000,

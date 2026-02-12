@@ -506,6 +506,7 @@ def compute_kinship_streaming(
     miss_threshold: float = 1.0,
     check_memory: bool = True,
     show_progress: bool = True,
+    ksnps_indices: np.ndarray | None = None,
 ) -> np.ndarray:
     """Compute centered relatedness matrix from disk-streamed genotypes.
 
@@ -542,6 +543,7 @@ def compute_kinship_streaming(
         check_memory: If True (default), check available memory before allocation
             and raise MemoryError if insufficient.
         show_progress: If True (default), show progress bar during iteration.
+        ksnps_indices: Pre-resolved column indices for -ksnps restriction, or None.
 
     Returns:
         Kinship matrix (n_samples, n_samples), symmetric, scaled by n_filtered_snps.
@@ -619,6 +621,15 @@ def compute_kinship_streaming(
     # Combined filter: MAF, missing rate, and monomorphism (always applied)
     snp_mask = (mafs >= maf_threshold) & (miss_rates <= miss_threshold) & is_polymorphic
 
+    # Apply kinship SNP list restriction (if -ksnps provided)
+    if ksnps_indices is not None:
+        ksnp_list_mask = np.zeros(n_snps, dtype=bool)
+        ksnp_list_mask[ksnps_indices] = True
+        snp_mask &= ksnp_list_mask
+        logger.info(
+            f"Kinship SNP list: restricting to {len(ksnps_indices)} requested SNPs"
+        )
+
     n_filtered = int(np.sum(snp_mask))
 
     if n_filtered == 0:
@@ -691,6 +702,7 @@ def compute_loco_kinship_streaming(
     miss_threshold: float = 1.0,
     check_memory: bool = True,
     show_progress: bool = True,
+    ksnps_indices: np.ndarray | None = None,
 ) -> Iterator[tuple[str, np.ndarray]]:
     """Compute LOCO kinship matrices from disk-streamed genotypes.
 
@@ -716,6 +728,7 @@ def compute_loco_kinship_streaming(
         miss_threshold: Maximum missing rate (default 1.0 = no filter).
         check_memory: If True (default), check available memory before allocation.
         show_progress: If True (default), show progress bar during iteration.
+        ksnps_indices: Pre-resolved column indices for -ksnps restriction, or None.
 
     Yields:
         Tuple of (chr_name, K_loco) where chr_name is the chromosome being
@@ -779,6 +792,15 @@ def compute_loco_kinship_streaming(
     mafs = np.minimum(allele_freqs, 1.0 - allele_freqs)
     is_polymorphic = all_vars > 0
     snp_mask = (mafs >= maf_threshold) & (miss_rates <= miss_threshold) & is_polymorphic
+
+    # Apply kinship SNP list restriction (if -ksnps provided)
+    if ksnps_indices is not None:
+        ksnp_list_mask = np.zeros(n_snps, dtype=bool)
+        ksnp_list_mask[ksnps_indices] = True
+        snp_mask &= ksnp_list_mask
+        logger.info(
+            f"Kinship SNP list: restricting to {len(ksnps_indices)} requested SNPs"
+        )
 
     n_filtered = int(np.sum(snp_mask))
 

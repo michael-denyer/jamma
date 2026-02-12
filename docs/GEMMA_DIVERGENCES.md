@@ -294,21 +294,6 @@ represent niche use cases.
 | BSLMM MCMC parameters | `-w`, `-s`, `-seed`, `-rpace`, `-wpace`, `-hmin/max`, `-rmin/max`, `-pmin/max`, `-smin/max` | Only relevant if BSLMM were implemented. |
 | Pace output | `-pace` | JAMMA uses progress bars with ETA instead. |
 
-### Planned (in backlog)
-
-| GEMMA Feature | Flag | Beads Issue | Priority |
-|---------------|------|-------------|----------|
-| GxE interaction | `-gxe` | `jamma-9yk` | P2 |
-| Variance components | `-vc 1/2` | `jamma-678` | P2 |
-| Multivariate LMM | `-lmm` + multi-phenotype | `jamma-6rk` | P2 (epic) |
-| BLUP prediction | `-predict 1/2` | `jamma-32k` | P3 |
-| Multiple kinship matrices | `-mk` | `jamma-qqr` | P3 |
-| BIMBAM format input | `-g`, `-p`, `-a` | `jamma-ls1` | P3 |
-| Individual/SNP weights | `-widv`, `-wsnp` | `jamma-cs6` | P3 |
-| Lambda bounds | `-lmin`, `-lmax`, `-region` | `jamma-0cc` | P4 |
-| Category covariates | `-cat` | `jamma-15w` | P4 |
-| SNP correlation matrix | `-calccor` | `jamma-acc` | P4 |
-
 ---
 
 ## Validation Strategy

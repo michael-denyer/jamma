@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-10)
 
 Milestone: v2.0 Production GWAS
 Phase: Phase 28 - Filtering and Input Validation
-Plan: 1/2 complete (28-01 done)
-Status: Executing Phase 28
-Last activity: 2026-02-12 — 28-01 SNP list filtering and HWE QC
+Plan: 2/2 complete (28-01, 28-02 done)
+Status: Phase 28 Complete
+Last activity: 2026-02-12 — 28-02 CLI flags, GWAS API, PLINK validation
 
-Progress: [████████████████░░░░] 80% (4.5/5 phases)
+Progress: [████████████████████] 100% (5/5 phases)
 
 ## Performance Metrics
 
@@ -66,6 +66,7 @@ Progress: [████████████████░░░░] 80% (4.
 | 26-01 Eigen I/O + Pipeline Integration     | 7min     | 2     | 7     |
 | 26-02 Eigen I/O Validation Test Suite      | 9min     | 2     | 2     |
 | 28-01 SNP List Filtering + HWE QC          | 10min    | 2     | 10    |
+| 28-02 CLI Flags, GWAS API, PLINK Valid.    | 9min     | 2     | 7     |
 
 ## Accumulated Context
 
@@ -115,6 +116,9 @@ All milestone decisions archived in:
 - JAX chi2.sf for HWE p-values to avoid scipy runtime dependency (28-01)
 - HWE genotype counts piggyback on pass-1 streaming (no extra disk pass) (28-01)
 - Filter composition via boolean AND: MAF, miss, polymorphic, SNP list, HWE on snp_mask (28-01)
+- validate_plink_dimensions cross-validates .bed size against .fam/.bim line counts (28-02)
+- Lazy import of snp_list module in PipelineRunner.run() to avoid overhead when not used (28-02)
+- Non-streaming gk path filters genotype columns before compute_fn; streaming path passes ksnps_indices (28-02)
 
 ### v2.0 Roadmap Structure
 
@@ -147,9 +151,9 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-12
-Stopped at: Completed 28-01-PLAN.md
+Stopped at: Completed 28-02-PLAN.md (Phase 28 complete)
 Resume file: None
-Next: 28-02-PLAN.md (Input validation and CLI wiring)
+Next: v2.0 milestone complete -- all 5 phases (24-28) done
 
 ---
 

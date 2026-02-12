@@ -128,6 +128,12 @@ def gk_command(
         int,
         typer.Option("-n", help="Phenotype column in .fam file (1-based, default 1)"),
     ] = 1,
+    ksnps_file: Annotated[
+        Path | None,
+        typer.Option(
+            "-ksnps", help="File with SNP IDs to restrict kinship computation"
+        ),
+    ] = None,
 ) -> None:
     """Compute kinship matrix from genotype data.
 
@@ -176,6 +182,20 @@ def gk_command(
         )
         raise typer.Exit(code=1)
 
+    # Resolve ksnps_file to indices if provided
+    ksnps_indices = None
+    if ksnps_file is not None:
+        from jamma.io.plink import get_plink_metadata
+        from jamma.io.snp_list import read_snp_list_file, resolve_snp_list_to_indices
+
+        meta = get_plink_metadata(bfile)
+        ksnp_ids = read_snp_list_file(ksnps_file)
+        ksnps_indices = resolve_snp_list_to_indices(ksnp_ids, meta["sid"])
+        typer.echo(
+            f"Kinship SNP list (-ksnps): {len(ksnps_indices)} of "
+            f"{meta['n_snps']} SNPs selected"
+        )
+
     if loco:
         # LOCO kinship mode: compute per-chromosome LOCO kinship matrices
         typer.echo(f"Computing LOCO kinship matrices from {bfile}...")
@@ -187,6 +207,7 @@ def gk_command(
             miss_threshold=miss,
             check_memory=check_memory,
             show_progress=True,
+            ksnps_indices=ksnps_indices,
         )
         written_paths = write_loco_kinship_matrices(
             loco_iter,
@@ -235,9 +256,16 @@ def gk_command(
     typer.echo(f"Computing {kinship_label} kinship matrix...")
     if maf > 0.0 or miss < 1.0:
         typer.echo(f"Filtering: MAF >= {maf}, missing rate <= {miss}")
+
+    # Filter genotypes to ksnps subset if provided
+    genotypes = plink_data.genotypes
+    if ksnps_indices is not None:
+        genotypes = genotypes[:, ksnps_indices]
+        typer.echo(f"Using {genotypes.shape[1]} SNPs for kinship computation")
+
     kinship_start = time.perf_counter()
     K = compute_fn(
-        plink_data.genotypes,
+        genotypes,
         maf_threshold=maf,
         miss_threshold=miss,
         check_memory=check_memory,
@@ -356,6 +384,22 @@ def lmm_command(
         int,
         typer.Option("-n", help="Phenotype column in .fam file (1-based, default 1)"),
     ] = 1,
+    snps_file: Annotated[
+        Path | None,
+        typer.Option("-snps", help="File with SNP IDs to restrict association testing"),
+    ] = None,
+    ksnps_file: Annotated[
+        Path | None,
+        typer.Option(
+            "-ksnps", help="File with SNP IDs to restrict kinship computation"
+        ),
+    ] = None,
+    hwe_threshold: Annotated[
+        float,
+        typer.Option(
+            "-hwe", help="HWE p-value threshold (exclude SNPs with p < threshold)"
+        ),
+    ] = 0.0,
 ) -> None:
     """Perform linear mixed model association testing.
 
@@ -412,6 +456,9 @@ def lmm_command(
         eigenvector_file=eigenvector_file,
         write_eigen=write_eigen,
         phenotype_column=phenotype_column,
+        snps_file=snps_file,
+        ksnps_file=ksnps_file,
+        hwe_threshold=hwe_threshold,
     )
 
     # Run pipeline, converting exceptions to CLI-friendly errors

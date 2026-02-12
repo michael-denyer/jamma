@@ -264,6 +264,70 @@ class TestPhenotypeColumnSelection:
         with pytest.raises(ValueError, match="exceeds available columns"):
             runner.parse_phenotypes()
 
+
+class TestPipelineConfigSnpsFields:
+    """Tests for PipelineConfig SNP filtering fields."""
+
+    def test_snps_fields_defaults(self) -> None:
+        """PipelineConfig has correct defaults for SNP filtering fields."""
+        config = PipelineConfig(bfile=Path("test"))
+        assert config.snps_file is None
+        assert config.ksnps_file is None
+        assert config.hwe_threshold == 0.0
+
+    def test_snps_fields_custom(self) -> None:
+        """PipelineConfig accepts custom SNP filtering values."""
+        config = PipelineConfig(
+            bfile=Path("test"),
+            snps_file=Path("snps.txt"),
+            ksnps_file=Path("ksnps.txt"),
+            hwe_threshold=0.001,
+        )
+        assert config.snps_file == Path("snps.txt")
+        assert config.ksnps_file == Path("ksnps.txt")
+        assert config.hwe_threshold == 0.001
+
+
+class TestValidateInputsSnpsFields:
+    """Tests for validate_inputs SNP filtering validation."""
+
+    def test_snps_file_not_found(self, tmp_path: Path) -> None:
+        """validate_inputs raises FileNotFoundError for missing snps_file."""
+        config = PipelineConfig(
+            bfile=BFILE,
+            snps_file=tmp_path / "nonexistent_snps.txt",
+            check_memory=False,
+        )
+        runner = PipelineRunner(config)
+        with pytest.raises(FileNotFoundError, match="SNP list file not found"):
+            runner.validate_inputs()
+
+    def test_ksnps_file_not_found(self, tmp_path: Path) -> None:
+        """validate_inputs raises FileNotFoundError for missing ksnps_file."""
+        config = PipelineConfig(
+            bfile=BFILE,
+            ksnps_file=tmp_path / "nonexistent_ksnps.txt",
+            check_memory=False,
+        )
+        runner = PipelineRunner(config)
+        with pytest.raises(FileNotFoundError, match="Kinship SNP list file not found"):
+            runner.validate_inputs()
+
+    def test_negative_hwe_raises(self) -> None:
+        """validate_inputs raises ValueError for negative hwe_threshold."""
+        config = PipelineConfig(
+            bfile=BFILE,
+            hwe_threshold=-0.1,
+            check_memory=False,
+        )
+        runner = PipelineRunner(config)
+        with pytest.raises(ValueError, match="hwe_threshold must be >= 0"):
+            runner.validate_inputs()
+
+
+class TestPhenotypeColumnMissingValues:
+    """Tests for missing value handling in non-default phenotype columns."""
+
     def test_phenotype_column_with_missing_values(self, tmp_path: Path) -> None:
         """Missing value handling works correctly for non-default phenotype columns."""
         bfile = _copy_plink_genotypes(tmp_path)

@@ -63,7 +63,15 @@ def _build_covariate_matrix(
                 "(first column is not all 1s). "
                 "Model will NOT include an intercept term."
             )
-    return W, W.shape[1]
+    n_cvt = W.shape[1]
+    # df = n_samples - n_cvt - 1 must be positive for valid REML
+    if n_samples <= n_cvt + 1:
+        raise ValueError(
+            f"Over-parameterized model: {n_samples} samples with {n_cvt} "
+            f"covariates leaves df={n_samples - n_cvt - 1} "
+            f"(need at least {n_cvt + 2} samples)"
+        )
+    return W, n_cvt
 
 
 def _eigendecompose_or_reuse(

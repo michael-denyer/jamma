@@ -148,7 +148,7 @@ def get_chromosome_partitions(bed_path: Path) -> dict[str, np.ndarray]:
 
     Returns:
         Dict mapping chromosome name (string) to sorted np.ndarray of SNP
-        column indices. Keys are sorted in natural string order.
+        column indices. Keys are ordered by first appearance in the BIM file.
 
     Raises:
         FileNotFoundError: If the .bed file does not exist.
@@ -156,7 +156,7 @@ def get_chromosome_partitions(bed_path: Path) -> dict[str, np.ndarray]:
     Example:
         >>> partitions = get_chromosome_partitions(Path("data/mouse_hs1940"))
         >>> list(partitions.keys())[:3]
-        ['1', '10', '11']
+        ['1', '2', '3']
         >>> partitions['1'].shape
         (...)
     """
@@ -167,7 +167,9 @@ def get_chromosome_partitions(bed_path: Path) -> dict[str, np.ndarray]:
 
     with open_bed(bed_file) as bed:
         chromosomes = bed.chromosome
-        unique_chrs = sorted(set(chromosomes))
+        # Preserve BIM order: unique chromosomes by first appearance
+        _, first_idx = np.unique(chromosomes, return_index=True)
+        unique_chrs = [chromosomes[i] for i in np.sort(first_idx)]
         return {
             chr_name: np.where(chromosomes == chr_name)[0] for chr_name in unique_chrs
         }

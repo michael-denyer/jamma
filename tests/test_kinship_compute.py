@@ -9,7 +9,12 @@ import numpy as np
 import pytest
 
 from jamma.core import configure_jax
-from jamma.kinship import compute_centered_kinship, impute_and_center
+from jamma.kinship import (
+    compute_centered_kinship,
+    compute_standardized_kinship,
+    impute_and_center,
+    impute_center_and_standardize,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -234,3 +239,108 @@ class TestKinshipNumerical:
         eigenvalues = np.linalg.eigvalsh(K)
         # Allow small negative due to numerical error
         assert np.all(eigenvalues >= -1e-8), f"Min eigenvalue: {eigenvalues.min()}"
+
+
+class TestStandardizedKinshipBasic:
+    """Tests for standardized kinship matrix (GEMMA -gk 2)."""
+
+    def test_standardized_kinship_basic(self):
+        """Standardized kinship has correct shape, is symmetric, positive diagonal."""
+        rng = np.random.default_rng(42)
+        X = rng.integers(0, 3, size=(5, 10)).astype(np.float64)
+        K = compute_standardized_kinship(X)
+
+        assert K.shape == (5, 5)
+        assert np.allclose(K, K.T), "Standardized kinship should be symmetric"
+        assert np.all(np.diag(K) > 0), "Diagonal elements should be positive"
+
+    def test_standardized_kinship_manual_computation(self):
+        """Standardized kinship matches hand-computed reference for tiny matrix."""
+        # 3 samples, 2 SNPs with known values
+        X = np.array([[0.0, 2.0], [1.0, 1.0], [2.0, 0.0]], dtype=np.float64)
+
+        # Manual computation:
+        # SNP 0: mean=1, imputed=[0,1,2], centered=[-1,0,1]
+        #   var = E[X^2]-E[X]^2 = (0+1+4)/3 - 1 = 2/3
+        #   sd=sqrt(2/3), z=[-1,0,1]/sqrt(2/3)
+        # SNP 1: mean=1, imputed=[2,1,0], centered=[1,0,-1], var=2/3
+        #   sd=sqrt(2/3), z=[1,0,-1]/sqrt(2/3)
+        sd = np.sqrt(2.0 / 3.0)
+        Z = np.array([[-1.0 / sd, 1.0 / sd], [0.0, 0.0], [1.0 / sd, -1.0 / sd]])
+        K_expected = Z @ Z.T / 2  # n_snps=2
+
+        K = compute_standardized_kinship(X)
+        assert np.allclose(K, K_expected, atol=1e-10)
+
+    def test_standardized_kinship_differs_from_centered(self):
+        """Standardized and centered kinship differ for varying-variance SNPs."""
+        # Use SNPs with different variances so standardization matters
+        X = np.array(
+            [[0, 0, 2], [1, 1, 1], [2, 2, 0], [1, 1, 1]],
+            dtype=np.float64,
+        )
+        K_centered = compute_centered_kinship(X)
+        K_standardized = compute_standardized_kinship(X)
+
+        assert not np.allclose(K_centered, K_standardized), (
+            "Standardized and centered kinship should differ when SNPs have "
+            "different variances"
+        )
+
+    def test_standardized_kinship_with_missing(self, genotypes_with_missing):
+        """Standardized kinship handles NaN values without error."""
+        K = compute_standardized_kinship(genotypes_with_missing)
+
+        assert not np.any(np.isnan(K)), "Should not contain NaN"
+        assert np.allclose(K, K.T), "Should be symmetric"
+        assert K.shape == (4, 4)
+
+    def test_standardized_kinship_monomorphic_snps(self):
+        """Monomorphic SNPs are filtered and don't cause division-by-zero."""
+        # 3 polymorphic SNPs + 2 monomorphic (all 1s)
+        X = np.array(
+            [
+                [0, 1, 2, 1, 1],
+                [1, 1, 1, 1, 1],
+                [2, 1, 0, 1, 1],
+                [1, 0, 1, 1, 1],
+            ],
+            dtype=np.float64,
+        )
+        K = compute_standardized_kinship(X)
+
+        assert not np.any(np.isnan(K)), "Should not contain NaN"
+        assert np.allclose(K, K.T), "Should be symmetric"
+        # Diagonal should be non-negative
+        assert np.all(np.diag(K) >= -1e-10)
+
+
+class TestImputeCenterAndStandardize:
+    """Tests for the impute_center_and_standardize function."""
+
+    def test_no_missing_standardization(self):
+        """Standardization without missing values."""
+        X = jnp.array([[0.0, 2.0], [1.0, 1.0], [2.0, 0.0]])
+        Z = impute_center_and_standardize(X)
+
+        # Column means should be zero after centering+standardization
+        col_means = jnp.mean(Z, axis=0)
+        assert jnp.allclose(col_means, 0.0, atol=1e-10)
+
+        # Column variances should be 1.0 (standardized)
+        col_vars = jnp.var(Z, axis=0)
+        assert jnp.allclose(col_vars, 1.0, atol=1e-10)
+
+    def test_preserves_dtype(self):
+        """Output dtype should match input dtype."""
+        X = jnp.array([[1.0, 2.0], [3.0, 4.0]], dtype=jnp.float64)
+        Z = impute_center_and_standardize(X)
+        assert Z.dtype == jnp.float64
+
+    def test_zero_variance_returns_zero(self):
+        """Monomorphic SNPs (zero variance) should produce all-zero column."""
+        X = jnp.array([[1.0, 0.0], [1.0, 2.0], [1.0, 1.0]])
+        Z = impute_center_and_standardize(X)
+
+        # Column 0 is constant (all 1s), should be all zeros after standardization
+        assert jnp.allclose(Z[:, 0], 0.0)

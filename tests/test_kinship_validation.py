@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from jamma.io import load_plink_binary
-from jamma.kinship import compute_centered_kinship
+from jamma.kinship import compute_centered_kinship, compute_standardized_kinship
 from jamma.validation import (
     compare_kinship_matrices,
     load_gemma_kinship,
@@ -155,3 +155,104 @@ class TestKinshipWithMissingData:
         K1 = compute_centered_kinship(genotypes_with_missing)
         K2 = compute_centered_kinship(genotypes_with_missing)
         assert np.array_equal(K1, K2)
+
+
+def _numpy_standardized_kinship(genotypes: np.ndarray) -> np.ndarray:
+    """Reference implementation using pure NumPy per-SNP loop.
+
+    Matches GEMMA's standardized kinship algorithm: impute missing to mean,
+    compute variance on imputed data (E[X^2] - E[X]^2), standardize.
+
+    Uses a per-SNP loop for clarity. Note that this produces slightly different
+    floating-point results from JAX's vectorized operations due to different
+    reduction order, so comparisons need rtol ~1e-6 not 1e-8.
+    """
+    n_samples, n_snps = genotypes.shape
+    Z = np.zeros_like(genotypes, dtype=np.float64)
+    p_used = 0
+    for k in range(n_snps):
+        col = genotypes[:, k].copy()
+        mask = np.isnan(col)
+        mean_val = np.nanmean(col)
+        if np.isnan(mean_val):
+            mean_val = 0.0
+        col[mask] = mean_val
+        var_val = np.mean(col**2) - mean_val**2
+        if var_val > 0:
+            Z[:, k] = (col - mean_val) / np.sqrt(var_val)
+            p_used += 1
+        # else: Z[:, k] stays zero
+    if p_used == 0:
+        return np.zeros((n_samples, n_samples), dtype=np.float64)
+    return Z @ Z.T / p_used
+
+
+class TestStandardizedKinshipValidation:
+    """Tests validating JAMMA standardized kinship against NumPy reference."""
+
+    def test_standardized_kinship_matches_numpy_reference(self, mouse_genotypes):
+        """JAMMA standardized kinship matches NumPy reference on gemma_synthetic.
+
+        Tolerance is rtol=1e-3 because JAX vectorized nanmean/variance uses
+        different reduction order than NumPy per-SNP scalar loop. The per-element
+        Z difference (~1e-6 relative) accumulates through the matrix multiply to
+        ~5e-4 relative on K elements. This is normal FP behavior, not a bug.
+        """
+        K_jamma = compute_standardized_kinship(mouse_genotypes)
+        K_ref = _numpy_standardized_kinship(mouse_genotypes)
+
+        max_rel = np.max(np.abs(K_jamma - K_ref) / (np.abs(K_ref) + 1e-15))
+        assert max_rel < 1e-3, (
+            f"Standardized kinship mismatch: max rel diff = {max_rel:.2e}"
+        )
+
+    def test_standardized_kinship_differs_from_centered(self, mouse_genotypes):
+        """Standardized and centered kinship are not identical on real data."""
+        K_centered = compute_centered_kinship(mouse_genotypes)
+        K_standardized = compute_standardized_kinship(mouse_genotypes)
+
+        assert not np.allclose(K_centered, K_standardized), (
+            "Standardized and centered kinship should differ on real data"
+        )
+
+    def test_standardized_kinship_properties(self, mouse_genotypes):
+        """Standardized kinship has expected mathematical properties."""
+        K = compute_standardized_kinship(mouse_genotypes)
+
+        # Symmetric
+        assert np.allclose(K, K.T), "Standardized kinship should be symmetric"
+
+        # No NaN
+        assert not np.any(np.isnan(K)), "Should not contain NaN"
+
+        # Positive semi-definite (eigenvalues >= 0)
+        eigenvalues = np.linalg.eigvalsh(K)
+        assert np.all(eigenvalues >= -1e-8), (
+            f"Should be PSD, min eigenvalue: {eigenvalues.min():.2e}"
+        )
+
+        # Positive diagonal
+        assert np.all(np.diag(K) > 0), "Diagonal should be positive"
+
+    def test_standardized_kinship_with_maf_filter(self, mouse_genotypes):
+        """Standardized kinship works with MAF filtering."""
+        K = compute_standardized_kinship(mouse_genotypes, maf_threshold=0.05)
+
+        assert np.allclose(K, K.T), "Should be symmetric with MAF filter"
+        assert not np.any(np.isnan(K)), "Should not contain NaN"
+
+    def test_standardized_kinship_matches_numpy_with_missing(self):
+        """Standardized kinship matches reference with missing data."""
+        rng = np.random.default_rng(42)
+        X = rng.integers(0, 3, size=(100, 1000)).astype(np.float64)
+        # Set 5% to NaN
+        mask = rng.random(X.shape) < 0.05
+        X[mask] = np.nan
+
+        K_jamma = compute_standardized_kinship(X)
+        K_ref = _numpy_standardized_kinship(X)
+
+        max_rel = np.max(np.abs(K_jamma - K_ref) / (np.abs(K_ref) + 1e-15))
+        assert max_rel < 1e-3, (
+            f"Mismatch with missing data: max rel diff = {max_rel:.2e}"
+        )

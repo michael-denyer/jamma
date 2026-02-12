@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Hypothesis property tests for v2.0 features**: 14 new tests covering HWE chi-squared
+  (p-value bounds, allele swap symmetry, perfect equilibrium, degenerate inputs,
+  vectorized/scalar equivalence), standardized kinship (symmetry, PSD, trace approximation,
+  shape consistency), and eigen I/O round-trip (.10g format reconstruction, orthonormality,
+  eigenvalue precision). Total: 42 hypothesis tests (up from 29)
+
 ## [2.0.0] - 2026-02-12
 
 ### Added

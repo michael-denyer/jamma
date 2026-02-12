@@ -623,12 +623,9 @@ def compute_kinship_streaming(
 
     # Apply kinship SNP list restriction (if -ksnps provided)
     if ksnps_indices is not None:
-        ksnp_list_mask = np.zeros(n_snps, dtype=bool)
-        ksnp_list_mask[ksnps_indices] = True
-        snp_mask &= ksnp_list_mask
-        logger.info(
-            f"Kinship SNP list: restricting to {len(ksnps_indices)} requested SNPs"
-        )
+        from jamma.core.snp_filter import apply_snp_list_mask
+
+        apply_snp_list_mask(snp_mask, ksnps_indices, n_snps, "Kinship SNP list")
 
     n_filtered = int(np.sum(snp_mask))
 
@@ -795,12 +792,9 @@ def compute_loco_kinship_streaming(
 
     # Apply kinship SNP list restriction (if -ksnps provided)
     if ksnps_indices is not None:
-        ksnp_list_mask = np.zeros(n_snps, dtype=bool)
-        ksnp_list_mask[ksnps_indices] = True
-        snp_mask &= ksnp_list_mask
-        logger.info(
-            f"Kinship SNP list: restricting to {len(ksnps_indices)} requested SNPs"
-        )
+        from jamma.core.snp_filter import apply_snp_list_mask
+
+        apply_snp_list_mask(snp_mask, ksnps_indices, n_snps, "Kinship SNP list")
 
     n_filtered = int(np.sum(snp_mask))
 

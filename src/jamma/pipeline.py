@@ -226,6 +226,16 @@ class PipelineRunner:
             raise ValueError(
                 f"hwe_threshold must be >= 0, got {self.config.hwe_threshold}"
             )
+        if self.config.hwe_threshold > 1.0:
+            raise ValueError(
+                f"hwe_threshold must be in [0, 1] (p-value threshold), "
+                f"got {self.config.hwe_threshold}"
+            )
+        if self.config.hwe_threshold > 0 and self.config.loco:
+            raise ValueError(
+                "-hwe is not yet supported with -loco mode. "
+                "Apply HWE filtering as a pre-processing step."
+            )
 
     def parse_phenotypes(self) -> tuple[np.ndarray, int]:
         """Parse phenotypes from the .fam file.
@@ -452,21 +462,17 @@ class PipelineRunner:
         # 5. Resolve SNP list files to indices
         snps_indices = None
         ksnps_indices = None
-        if self.config.snps_file is not None:
+        if self.config.snps_file is not None or self.config.ksnps_file is not None:
             from jamma.io.snp_list import (
                 read_snp_list_file,
                 resolve_snp_list_to_indices,
             )
 
+        if self.config.snps_file is not None:
             snp_ids = read_snp_list_file(self.config.snps_file)
             snps_indices = resolve_snp_list_to_indices(snp_ids, meta["sid"])
             logger.info(f"SNP list (-snps): {len(snps_indices)} SNPs to test")
         if self.config.ksnps_file is not None:
-            from jamma.io.snp_list import (
-                read_snp_list_file,
-                resolve_snp_list_to_indices,
-            )
-
             ksnp_ids = read_snp_list_file(self.config.ksnps_file)
             ksnps_indices = resolve_snp_list_to_indices(ksnp_ids, meta["sid"])
             logger.info(

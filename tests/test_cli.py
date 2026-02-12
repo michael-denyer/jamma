@@ -443,3 +443,21 @@ def test_cli_gk_ksnps_flag_in_help():
     result = runner.invoke(app, ["gk", "--help"])
     assert result.exit_code == 0
     assert "-ksnps" in result.output
+
+
+def test_cli_gk_ksnps_missing_file_error(tmp_path: Path):
+    """CLI gk command exits gracefully when -ksnps file doesn't exist."""
+    result = runner.invoke(
+        app,
+        [
+            "-outdir",
+            str(tmp_path),
+            "gk",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-ksnps",
+            str(tmp_path / "nonexistent.txt"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Error:" in result.output

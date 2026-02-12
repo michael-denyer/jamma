@@ -5,7 +5,32 @@ applying quality control filters (MAF, missing rate, monomorphism, HWE).
 Used by both kinship computation and LMM association runners.
 """
 
+import logging
+
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
+
+def apply_snp_list_mask(
+    snp_mask: np.ndarray, indices: np.ndarray, n_snps: int, label: str
+) -> None:
+    """Apply SNP list restriction to mask in-place with bounds validation.
+
+    Args:
+        snp_mask: Boolean mask to modify in-place (AND with list mask).
+        indices: Array of SNP indices to include.
+        n_snps: Total number of SNPs (for bounds checking).
+        label: Human-readable label for log messages (e.g. "Kinship SNP list").
+    """
+    if len(indices) > 0 and indices.max() >= n_snps:
+        raise ValueError(
+            f"{label} index {indices.max()} out of range for {n_snps} SNPs"
+        )
+    list_mask = np.zeros(n_snps, dtype=bool)
+    list_mask[indices] = True
+    snp_mask &= list_mask
+    logger.info(f"{label}: restricting to {len(indices)} requested SNPs")
 
 
 def compute_snp_stats(
@@ -115,7 +140,7 @@ def compute_hwe_pvalues(
 
     # Degenerate SNPs (monomorphic, zero count) produce NaN chi_sq.
     # Replace with 0.0 so they get p-value = 1.0 (pass HWE by convention).
-    chi_sq = np.nan_to_num(chi_sq, nan=0.0)
+    chi_sq = np.where(np.isnan(chi_sq), 0.0, chi_sq)
 
     # Use JAX chi2.sf for p-value computation (avoids scipy runtime dep)
     chi_sq_jax = jnp.asarray(chi_sq)

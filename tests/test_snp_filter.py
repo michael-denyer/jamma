@@ -8,7 +8,11 @@ vectorized, and textbook cases. Also tests filter composition (SNP list
 import numpy as np
 import pytest
 
-from jamma.core.snp_filter import compute_hwe_pvalues, compute_snp_filter_mask
+from jamma.core.snp_filter import (
+    apply_snp_list_mask,
+    compute_hwe_pvalues,
+    compute_snp_filter_mask,
+)
 
 
 @pytest.mark.tier0
@@ -83,6 +87,33 @@ class TestComputeHwePvalues:
 
         pvalues = compute_hwe_pvalues(n_aa, n_ab, n_bb)
         assert not np.isnan(pvalues[0])
+
+
+@pytest.mark.tier0
+class TestApplySnpListMask:
+    """Tests for apply_snp_list_mask helper with bounds validation."""
+
+    def test_basic_mask_application(self):
+        """apply_snp_list_mask restricts mask to specified indices."""
+        snp_mask = np.ones(10, dtype=bool)
+        indices = np.array([2, 5, 7])
+        apply_snp_list_mask(snp_mask, indices, 10, "test")
+        assert np.sum(snp_mask) == 3
+        assert snp_mask[2] and snp_mask[5] and snp_mask[7]
+
+    def test_bounds_check_raises(self):
+        """apply_snp_list_mask raises ValueError for out-of-range index."""
+        snp_mask = np.ones(10, dtype=bool)
+        indices = np.array([2, 5, 15])  # 15 is out of range for 10 SNPs
+        with pytest.raises(ValueError, match="index 15 out of range for 10 SNPs"):
+            apply_snp_list_mask(snp_mask, indices, 10, "test")
+
+    def test_empty_indices(self):
+        """apply_snp_list_mask with empty indices zeros out entire mask."""
+        snp_mask = np.ones(10, dtype=bool)
+        indices = np.array([], dtype=np.int64)
+        apply_snp_list_mask(snp_mask, indices, 10, "test")
+        assert np.sum(snp_mask) == 0
 
 
 @pytest.mark.tier0

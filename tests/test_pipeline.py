@@ -324,6 +324,29 @@ class TestValidateInputsSnpsFields:
         with pytest.raises(ValueError, match="hwe_threshold must be >= 0"):
             runner.validate_inputs()
 
+    def test_hwe_upper_bound_raises(self) -> None:
+        """validate_inputs raises ValueError for hwe_threshold > 1.0."""
+        config = PipelineConfig(
+            bfile=BFILE,
+            hwe_threshold=1.5,
+            check_memory=False,
+        )
+        runner = PipelineRunner(config)
+        with pytest.raises(ValueError, match="hwe_threshold must be in"):
+            runner.validate_inputs()
+
+    def test_hwe_with_loco_raises(self) -> None:
+        """validate_inputs raises ValueError for -hwe combined with -loco."""
+        config = PipelineConfig(
+            bfile=BFILE,
+            hwe_threshold=0.001,
+            loco=True,
+            check_memory=False,
+        )
+        runner = PipelineRunner(config)
+        with pytest.raises(ValueError, match="not yet supported with -loco"):
+            runner.validate_inputs()
+
 
 class TestPhenotypeColumnMissingValues:
     """Tests for missing value handling in non-default phenotype columns."""

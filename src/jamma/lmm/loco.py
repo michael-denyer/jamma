@@ -305,6 +305,16 @@ def _run_lmm_for_chromosome(
     with open_bed(bed_file) as bed:
         geno_chr = bed.read(index=np.s_[:, chr_snp_indices], dtype=np.float64)
 
+    # Validate genotype values
+    from jamma.io.plink import validate_genotype_values
+
+    n_unexpected = validate_genotype_values(geno_chr)
+    if n_unexpected > 0:
+        logger.warning(
+            f"LOCO chr genotype validation: {n_unexpected} values outside "
+            f"expected range {{0, 1, 2, NaN}}"
+        )
+
     # Apply sample filtering
     if not np.all(valid_mask):
         geno_chr = geno_chr[valid_mask, :]

@@ -229,9 +229,9 @@ def run_lmm_association_streaming(
 
     # HWE genotype count accumulators (only when threshold > 0)
     if hwe_threshold > 0:
-        all_n_aa = np.zeros(n_snps, dtype=np.int32)
-        all_n_ab = np.zeros(n_snps, dtype=np.int32)
-        all_n_bb = np.zeros(n_snps, dtype=np.int32)
+        all_n_aa = np.zeros(n_snps, dtype=np.int64)
+        all_n_ab = np.zeros(n_snps, dtype=np.int64)
+        all_n_bb = np.zeros(n_snps, dtype=np.int64)
 
     # Genotype validation accumulator
     n_unexpected_total = 0
@@ -265,15 +265,9 @@ def run_lmm_association_streaming(
         # Accumulate HWE genotype counts (no extra disk pass)
         if hwe_threshold > 0:
             valid_geno = ~np.isnan(chunk)
-            all_n_aa[start:end] += np.sum((chunk == 0) & valid_geno, axis=0).astype(
-                np.int32
-            )
-            all_n_ab[start:end] += np.sum((chunk == 1) & valid_geno, axis=0).astype(
-                np.int32
-            )
-            all_n_bb[start:end] += np.sum((chunk == 2) & valid_geno, axis=0).astype(
-                np.int32
-            )
+            all_n_aa[start:end] += np.sum((chunk == 0) & valid_geno, axis=0)
+            all_n_ab[start:end] += np.sum((chunk == 1) & valid_geno, axis=0)
+            all_n_bb[start:end] += np.sum((chunk == 2) & valid_geno, axis=0)
 
         # Validate genotype values
         if validate_genotypes:
@@ -297,12 +291,9 @@ def run_lmm_association_streaming(
 
     # Apply SNP list restriction (if -snps provided)
     if snps_indices is not None:
-        snp_list_mask = np.zeros(n_snps, dtype=bool)
-        snp_list_mask[snps_indices] = True
-        snp_mask &= snp_list_mask
-        logger.info(
-            f"SNP list filter: restricting to {len(snps_indices)} requested SNPs"
-        )
+        from jamma.core.snp_filter import apply_snp_list_mask
+
+        apply_snp_list_mask(snp_mask, snps_indices, n_snps, "SNP list filter")
 
     # Apply HWE filter (if -hwe threshold > 0)
     if hwe_threshold > 0:

@@ -194,12 +194,19 @@ def gk_command(
     # Resolve ksnps_file to indices if provided
     ksnps_indices = None
     if ksnps_file is not None:
-        from jamma.io.plink import get_plink_metadata
-        from jamma.io.snp_list import read_snp_list_file, resolve_snp_list_to_indices
+        try:
+            from jamma.io.plink import get_plink_metadata
+            from jamma.io.snp_list import (
+                read_snp_list_file,
+                resolve_snp_list_to_indices,
+            )
 
-        meta = get_plink_metadata(bfile)
-        ksnp_ids = read_snp_list_file(ksnps_file)
-        ksnps_indices = resolve_snp_list_to_indices(ksnp_ids, meta["sid"])
+            meta = get_plink_metadata(bfile)
+            ksnp_ids = read_snp_list_file(ksnps_file)
+            ksnps_indices = resolve_snp_list_to_indices(ksnp_ids, meta["sid"])
+        except (FileNotFoundError, ValueError) as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(code=1) from None
         typer.echo(
             f"Kinship SNP list (-ksnps): {len(ksnps_indices)} of "
             f"{meta['n_snps']} SNPs selected"

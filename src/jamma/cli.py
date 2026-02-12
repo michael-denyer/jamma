@@ -140,6 +140,10 @@ def gk_command(
     With -eigen, also eigendecomposes the kinship matrix and writes
     .eigenD.txt and .eigenU.txt files.
     """
+    if mode not in (1, 2):
+        typer.echo(f"Error: invalid kinship mode {mode}. Use -gk 1 or -gk 2.", err=True)
+        raise typer.Exit(code=1)
+
     if phenotype_column != 1:
         logger.info(
             f"Note: -n {phenotype_column} accepted but kinship computation "

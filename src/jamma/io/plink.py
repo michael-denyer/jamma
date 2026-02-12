@@ -175,6 +175,51 @@ def get_chromosome_partitions(bed_path: Path) -> dict[str, np.ndarray]:
         }
 
 
+def validate_plink_dimensions(bfile: Path) -> None:
+    """Validate that PLINK .bed file size matches .fam and .bim counts.
+
+    Computes the expected .bed file size from .fam sample count and .bim
+    SNP count, then compares with the actual file size. This provides a
+    more informative error message than bed-reader's built-in check when
+    files are corrupted or truncated.
+
+    Expected size: 3 (magic bytes) + ceil(n_fam / 4) * n_bim bytes.
+
+    Args:
+        bfile: Path prefix for PLINK files (without .bed/.bim/.fam extension).
+
+    Raises:
+        FileNotFoundError: If any of the .bed, .bim, or .fam files are missing.
+        ValueError: If .bed file size does not match expected size from
+            .fam and .bim dimensions.
+    """
+    bed_path = Path(f"{bfile}.bed")
+    bim_path = Path(f"{bfile}.bim")
+    fam_path = Path(f"{bfile}.fam")
+
+    for path, ext in [(bed_path, ".bed"), (bim_path, ".bim"), (fam_path, ".fam")]:
+        if not path.exists():
+            raise FileNotFoundError(f"PLINK {ext} file not found: {path}")
+
+    # Count lines in .fam (= n_samples) and .bim (= n_snps)
+    with open(fam_path) as f:
+        n_fam = sum(1 for _ in f)
+    with open(bim_path) as f:
+        n_bim = sum(1 for _ in f)
+
+    # Expected .bed size: 3 magic bytes + ceil(n_fam/4) bytes per SNP
+    bytes_per_snp = (n_fam + 3) // 4
+    expected_size = 3 + bytes_per_snp * n_bim
+    actual_size = bed_path.stat().st_size
+
+    if actual_size != expected_size:
+        raise ValueError(
+            f"PLINK dimension mismatch: .fam has {n_fam} samples, "
+            f".bim has {n_bim} SNPs, but .bed file size ({actual_size} bytes) "
+            f"doesn't match expected ({expected_size} bytes)"
+        )
+
+
 def validate_genotype_values(chunk: np.ndarray) -> int:
     """Check that all non-NaN genotype values are in {0.0, 1.0, 2.0}.
 

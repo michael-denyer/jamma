@@ -23,7 +23,7 @@ from loguru import logger
 
 from jamma.core.memory import StreamingMemoryBreakdown, estimate_streaming_memory
 from jamma.io.covariate import read_covariate_file
-from jamma.io.plink import get_plink_metadata
+from jamma.io.plink import get_plink_metadata, validate_plink_dimensions
 from jamma.kinship import (
     compute_kinship_streaming,
     read_kinship_matrix,
@@ -142,6 +142,9 @@ class PipelineRunner:
             p = Path(f"{bfile}{ext}")
             if not p.exists():
                 raise FileNotFoundError(f"PLINK {ext} file not found: {p}")
+
+        # Validate .bed file size matches .fam/.bim dimensions (VALID-01)
+        validate_plink_dimensions(bfile)
 
         if self.config.phenotype_column < 1:
             raise ValueError(

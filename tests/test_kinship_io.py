@@ -272,4 +272,4 @@ class TestCLIIntegration:
         )
 
         assert result.exit_code == 0
-        assert "completed in" in result.stdout.lower()
+        assert "computed in" in result.stdout.lower()

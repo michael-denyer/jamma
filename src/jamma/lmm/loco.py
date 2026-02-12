@@ -161,6 +161,7 @@ def run_lmm_loco(
         if output_path is not None
         else None
     )
+    writer = None
 
     try:
         writer = writer_ctx.__enter__() if writer_ctx is not None else None
@@ -168,6 +169,8 @@ def run_lmm_loco(
         # Stream LOCO kinship matrices one at a time
         loco_iter = compute_loco_kinship_streaming(
             bed_path,
+            maf_threshold=maf_threshold,
+            miss_threshold=miss_threshold,
             check_memory=check_memory,
             show_progress=show_progress,
         )
@@ -229,7 +232,7 @@ def run_lmm_loco(
     finally:
         if writer_ctx is not None:
             writer_ctx.__exit__(None, None, None)
-            if show_progress:
+            if show_progress and writer is not None:
                 logger.info(f"Wrote {writer.count:,} results to {output_path}")
 
     if show_progress:

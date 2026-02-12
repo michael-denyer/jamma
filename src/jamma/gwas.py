@@ -54,6 +54,7 @@ def gwas(
     eigenvalue_file: str | Path | None = None,
     eigenvector_file: str | Path | None = None,
     write_eigen: bool = False,
+    phenotype_column: int = 1,
 ) -> GWASResult:
     """Run a complete GWAS pipeline in a single call.
 
@@ -95,6 +96,9 @@ def gwas(
             Must be paired with eigenvalue_file.
         write_eigen: If True, write eigendecomposition files as
             side effect of the pipeline run.
+        phenotype_column: 1-based phenotype column index in the .fam file.
+            1 selects the standard phenotype (column 6), 2 selects column 7,
+            etc. Matches GEMMA's ``-n`` flag.
 
     Returns:
         GWASResult with association results, sample/SNP counts, and timing.
@@ -131,6 +135,7 @@ def gwas(
             Path(eigenvector_file) if eigenvector_file is not None else None
         ),
         write_eigen=write_eigen,
+        phenotype_column=phenotype_column,
     )
 
     pipeline_result = PipelineRunner(config).run()

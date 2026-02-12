@@ -62,6 +62,9 @@ class PipelineConfig:
             Must be paired with eigenvalue_file (-u flag).
         write_eigen: If True, write eigendecomposition files as side effect
             (-eigen flag).
+        phenotype_column: 1-based phenotype column index. 1 selects column 6
+            of .fam (standard phenotype), 2 selects column 7, etc. Matches
+            GEMMA's -n flag.
     """
 
     bfile: Path
@@ -80,6 +83,7 @@ class PipelineConfig:
     eigenvalue_file: Path | None = None
     eigenvector_file: Path | None = None
     write_eigen: bool = False
+    phenotype_column: int = 1
 
 
 @dataclass
@@ -139,6 +143,12 @@ class PipelineRunner:
             if not p.exists():
                 raise FileNotFoundError(f"PLINK {ext} file not found: {p}")
 
+        if self.config.phenotype_column < 1:
+            raise ValueError(
+                f"phenotype_column must be >= 1 (1-based), "
+                f"got {self.config.phenotype_column}"
+            )
+
         if self.config.lmm_mode not in (1, 2, 3, 4):
             raise ValueError(
                 f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), "
@@ -194,6 +204,8 @@ class PipelineRunner:
 
         Uses vectorized parsing: reads the phenotype column, replaces
         missing indicators ("-9", "NA") with NaN, converts to float64.
+        The column is selected by ``self.config.phenotype_column`` (1-based,
+        matching GEMMA's ``-n`` flag).
 
         Returns:
             Tuple of (phenotypes array, n_analyzed) where phenotypes has
@@ -201,10 +213,34 @@ class PipelineRunner:
             (non-NaN, non-missing) phenotypes.
 
         Raises:
-            ValueError: If no samples have valid phenotypes.
+            ValueError: If no samples have valid phenotypes, or if
+                phenotype_column is invalid.
         """
+        pheno_col = self.config.phenotype_column
+        if pheno_col < 1:
+            raise ValueError(
+                f"phenotype_column must be >= 1 (1-based), got {pheno_col}"
+            )
+
+        # Columns 0-4 are FID, IID, father, mother, sex; phenotype 1 is column 5
+        col_index = 4 + pheno_col
+
         fam_path = f"{self.config.bfile}.fam"
-        fam_data = np.loadtxt(fam_path, dtype=str, usecols=(5,))
+
+        # Check column count from first line
+        first_line = np.loadtxt(fam_path, dtype=str, max_rows=1)
+        n_cols = first_line.size
+        if col_index >= n_cols:
+            n_pheno_cols = n_cols - 5
+            raise ValueError(
+                f"phenotype_column {pheno_col} exceeds available columns "
+                f"in .fam file ({n_pheno_cols} phenotype column"
+                f"{'s' if n_pheno_cols != 1 else ''} available)"
+            )
+
+        logger.info(f"Using phenotype column {pheno_col} (file column {col_index + 1})")
+
+        fam_data = np.loadtxt(fam_path, dtype=str, usecols=(col_index,))
         missing_mask = np.isin(fam_data, ["-9", "NA"])
         fam_data[missing_mask] = "0"  # placeholder for safe float conversion
         phenotypes = fam_data.astype(np.float64)

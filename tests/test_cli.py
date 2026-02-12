@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from jamma.cli import app
@@ -141,16 +142,22 @@ def test_cli_lmm_mode_2_accepted():
     assert "kinship matrix file not found" in result.output.lower()
 
 
-def test_cli_gk_mode_2_not_implemented(tmp_path: Path):
-    """Test that -gk 2 raises NotImplementedError instead of silently falling back."""
+def test_cli_gk_mode_2_succeeds(tmp_path: Path):
+    """Test that -gk 2 computes standardized kinship and writes output."""
     outdir = tmp_path / "output"
     result = runner.invoke(
         app, ["-outdir", str(outdir), "gk", "-bfile", str(EXAMPLE_BFILE), "-gk", "2"]
     )
-    assert result.exit_code == 1
-    assert isinstance(result.exception, NotImplementedError)
-    assert "mode 2" in str(result.exception).lower()
-    assert "not yet implemented" in str(result.exception).lower()
+    assert result.exit_code == 0, f"gk mode 2 failed: {result.output}"
+    assert "standardized" in result.output.lower()
+
+    # Verify output file was created
+    kinship_path = outdir / "result.cXX.txt"
+    assert kinship_path.exists(), "Kinship output file should exist"
+
+    # Verify it has content (100 lines for 100 samples)
+    lines = kinship_path.read_text().strip().split("\n")
+    assert len(lines) == 100, f"Expected 100 lines, got {len(lines)}"
 
 
 def test_cli_gk_maf_miss_flags(tmp_path: Path):
@@ -399,3 +406,12 @@ def test_lmm_covariate_intercept_warning(tmp_path: Path):
     assert result.exit_code == 0
     assert "Warning" in result.output
     assert "intercept" in result.output.lower()
+
+
+@pytest.mark.parametrize("subcommand", ["lmm", "gk"])
+def test_cli_n_flag_in_help(subcommand: str):
+    """Verify -n (phenotype column) appears in subcommand help output."""
+    result = runner.invoke(app, [subcommand, "--help"])
+    assert result.exit_code == 0
+    assert "-n" in result.output
+    assert "Phenotype column" in result.output

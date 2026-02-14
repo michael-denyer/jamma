@@ -575,13 +575,11 @@ def compute_kinship_streaming(
 
     # Memory check before allocation
     # Check against full pipeline peak (eigendecomp) since it always follows kinship.
-    # Use 50% safety margin: JAX kinship creates temporary arrays (centered batches,
-    # batch products) that ~1.5x the naive estimate per empirical benchmarks.
     if check_memory:
         est = estimate_streaming_memory(n_samples, n_snps, chunk_size)
         check_memory_available(
             est.total_peak_gb,
-            safety_margin=0.5,
+            safety_margin=0.1,
             operation=f"GWAS pipeline (eigendecomp peak: {est.total_peak_gb:.1f}GB)",
         )
 

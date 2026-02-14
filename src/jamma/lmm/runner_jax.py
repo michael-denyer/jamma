@@ -169,7 +169,12 @@ def run_lmm_association_jax(
     )
 
     eigenvalues_np, U = _eigendecompose_or_reuse(
-        kinship, eigenvalues, eigenvectors, show_progress, "lmm_jax"
+        kinship,
+        eigenvalues,
+        eigenvectors,
+        show_progress,
+        "lmm_jax",
+        check_memory=check_memory,
     )
     UT = np.ascontiguousarray(U.T)  # Cache contiguous transpose for BLAS matmuls
 

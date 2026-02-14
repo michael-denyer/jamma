@@ -332,7 +332,12 @@ def run_lmm_association_streaming(
     # === Eigendecomp + setup ===
     t_eigen_start = time.perf_counter()
     eigenvalues_np, U = _eigendecompose_or_reuse(
-        kinship, eigenvalues, eigenvectors, show_progress, "lmm_streaming"
+        kinship,
+        eigenvalues,
+        eigenvectors,
+        show_progress,
+        "lmm_streaming",
+        check_memory=check_memory,
     )
     UT = np.ascontiguousarray(U.T)
     if kinship is not None:

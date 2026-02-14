@@ -553,7 +553,9 @@ class PipelineRunner:
             if self.config.write_eigen:
                 valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
                 K_valid = K if np.all(valid_mask) else K[np.ix_(valid_mask, valid_mask)]
-                eigenvalues, eigenvectors = eigendecompose_kinship(K_valid)
+                eigenvalues, eigenvectors = eigendecompose_kinship(
+                    K_valid, check_memory=self.config.check_memory
+                )
                 d_path, u_path = write_eigen_files(
                     eigenvalues,
                     eigenvectors,

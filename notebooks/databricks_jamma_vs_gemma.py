@@ -33,10 +33,6 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install mkl
-
-# COMMAND ----------
-
 # MAGIC %pip install numpy --extra-index-url https://michael-denyer.github.io/numpy-mkl --force-reinstall --upgrade
 
 # COMMAND ----------

@@ -299,7 +299,7 @@ def gk_command(
         from jamma.lmm.eigen import eigendecompose_kinship
         from jamma.lmm.eigen_io import write_eigen_files
 
-        eigenvalues, eigenvectors = eigendecompose_kinship(K)
+        eigenvalues, eigenvectors = eigendecompose_kinship(K, check_memory=check_memory)
         d_path, u_path = write_eigen_files(
             eigenvalues,
             eigenvectors,

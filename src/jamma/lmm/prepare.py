@@ -80,6 +80,8 @@ def _eigendecompose_or_reuse(
     eigenvectors: np.ndarray | None,
     show_progress: bool,
     label: str,
+    *,
+    check_memory: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return eigendecomposition, computing it if not provided.
 
@@ -90,6 +92,8 @@ def _eigendecompose_or_reuse(
         eigenvectors: Pre-computed eigenvectors or None.
         show_progress: Whether to log memory usage.
         label: Label for memory logging (e.g. "lmm_jax", "lmm_streaming").
+        check_memory: If True (default), check available memory before
+            eigendecomposition.
 
     Returns:
         Tuple of (eigenvalues, eigenvectors).
@@ -101,7 +105,7 @@ def _eigendecompose_or_reuse(
 
     if show_progress:
         log_rss_memory(label, "before_eigendecomp")
-    eigenvalues_np, U = eigendecompose_kinship(kinship)
+    eigenvalues_np, U = eigendecompose_kinship(kinship, check_memory=check_memory)
     if show_progress:
         log_rss_memory(label, "after_eigendecomp")
     return eigenvalues_np, U

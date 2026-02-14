@@ -26,7 +26,7 @@ from jamma.core.threading import blas_threads, get_blas_thread_count
 
 
 def eigendecompose_kinship(
-    K: np.ndarray, threshold: float = 1e-10
+    K: np.ndarray, threshold: float = 1e-10, *, check_memory: bool = True
 ) -> tuple[np.ndarray, np.ndarray]:
     """Eigendecompose kinship matrix, zeroing small eigenvalues.
 
@@ -42,6 +42,8 @@ def eigendecompose_kinship(
     Args:
         K: Symmetric kinship matrix (n_samples, n_samples).
         threshold: Eigenvalues below this are zeroed (default: 1e-10)
+        check_memory: If True (default), check available memory before
+            eigendecomposition. Set False to skip (e.g., when already checked).
 
     Returns:
         Tuple of (eigenvalues, eigenvectors) where:
@@ -65,11 +67,14 @@ def eigendecompose_kinship(
 
     # Fail fast before LAPACK allocates -- prevents silent SIGKILL from OOM killer
     required_gb = estimate_eigendecomp_memory(n_samples)
-    check_memory_available(
-        required_gb,
-        safety_margin=0.1,
-        operation=f"eigendecomposition of {n_samples:,}x{n_samples:,} kinship matrix",
-    )
+    if check_memory:
+        check_memory_available(
+            required_gb,
+            safety_margin=0.1,
+            operation=(
+                f"eigendecomposition of {n_samples:,}x{n_samples:,} kinship matrix"
+            ),
+        )
 
     log_memory_snapshot(f"before_eigendecomp_{n_samples}samples")
 

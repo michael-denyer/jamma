@@ -193,7 +193,9 @@ def run_lmm_loco(
 
             # Eigendecompose K_loco (subset to valid samples)
             K_loco_valid = K_loco[np.ix_(valid_mask, valid_mask)]
-            eigenvalues_np, U = eigendecompose_kinship(K_loco_valid)
+            eigenvalues_np, U = eigendecompose_kinship(
+                K_loco_valid, check_memory=check_memory
+            )
 
             # Optionally save kinship
             if save_kinship and kinship_output_dir is not None:

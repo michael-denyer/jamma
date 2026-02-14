@@ -14,7 +14,8 @@
 # MAGIC | `lmm_mode` | 1=Wald, 2=LRT, 3=Score, 4=All |
 # MAGIC | `maf` | MAF threshold (default 0.01) |
 # MAGIC | `miss` | Missing rate threshold (default 0.05) |
-# MAGIC | `run_gemma` | Run GEMMA for comparison (yes/no) |
+# MAGIC | `run_gemma` | Run GEMMA binary for comparison (yes/no) |
+# MAGIC | `gemma_output_file` | Pre-computed GEMMA `.assoc.txt` — skips running GEMMA binary |
 # MAGIC | `compare_only` | Load pre-computed results and skip compute |
 # MAGIC | `jamma_kinship_src` | Source path for JAMMA kinship (compare-only) |
 # MAGIC | `jamma_assoc_src` | Source path for JAMMA assoc results (compare-only) |
@@ -69,6 +70,9 @@ dbutils.widgets.dropdown(  # noqa: F821
 dbutils.widgets.text("maf", "0.01", "MAF threshold")  # noqa: F821
 dbutils.widgets.text("miss", "0.05", "Missing rate threshold")  # noqa: F821
 dbutils.widgets.dropdown("run_gemma", "yes", ["yes", "no"], "Run GEMMA for comparison")  # noqa: F821
+dbutils.widgets.text(  # noqa: F821
+    "gemma_output_file", "", "Pre-computed GEMMA .assoc.txt (skips running GEMMA)"
+)
 dbutils.widgets.dropdown(  # noqa: F821
     "compare_only",
     "no",
@@ -149,8 +153,18 @@ LMM_MODE = int(dbutils.widgets.get("lmm_mode"))  # noqa: F821
 MAF = float(dbutils.widgets.get("maf"))  # noqa: F821
 MISS = float(dbutils.widgets.get("miss"))  # noqa: F821
 RUN_GEMMA = dbutils.widgets.get("run_gemma") == "yes"  # noqa: F821
+GEMMA_OUTPUT_FILE = dbutils.widgets.get("gemma_output_file").strip()  # noqa: F821
 
 MODE_NAMES = {1: "Wald", 2: "LRT", 3: "Score", 4: "All tests"}
+
+# If a pre-computed GEMMA output file is provided, don't run the binary
+if GEMMA_OUTPUT_FILE:
+    assert Path(GEMMA_OUTPUT_FILE).exists(), (
+        f"GEMMA output file not found: {GEMMA_OUTPUT_FILE}"
+    )
+    if RUN_GEMMA:
+        print("gemma_output_file provided — overriding run_gemma to 'no'")
+        RUN_GEMMA = False
 
 if not COMPARE_ONLY:
     # Validate required inputs
@@ -176,6 +190,9 @@ print(f"LMM mode:     {LMM_MODE} ({MODE_NAMES[LMM_MODE]})")
 print(f"MAF:          {MAF}")
 print(f"Miss:         {MISS}")
 print(f"Run GEMMA:    {RUN_GEMMA}")
+print(
+    f"GEMMA output: {GEMMA_OUTPUT_FILE or '(none — will run GEMMA binary if enabled)'}"
+)
 print(f"Compare only: {COMPARE_ONLY}")
 print("Output:       /tmp/ (local disk)")
 
@@ -472,7 +489,15 @@ if not COMPARE_ONLY:
     gemma_kinship_time = None
     gemma_results = None
 
-    if RUN_GEMMA:
+    if GEMMA_OUTPUT_FILE:
+        # Load pre-computed GEMMA results from file (no binary execution needed)
+        print(f"Loading pre-computed GEMMA results from {GEMMA_OUTPUT_FILE}...")
+        gemma_results = load_gemma_assoc(Path(GEMMA_OUTPUT_FILE))
+        print(f"  {len(gemma_results)} SNPs loaded")
+        # Copy to /tmp/ for consistency with live-run path
+        gemma_save = Path("/tmp/gemma_results.assoc.txt")
+        shutil.copy2(GEMMA_OUTPUT_FILE, gemma_save)
+    elif RUN_GEMMA:
         with tempfile.TemporaryDirectory() as tmpdir:
             # Step 1: Compute kinship if no file provided (GEMMA -gk 1)
             if KINSHIP_FILE:
@@ -563,7 +588,7 @@ if not COMPARE_ONLY:
                         )
                         print(f"  Files in tmpdir: {os.listdir(tmpdir)}")
     else:
-        print("GEMMA comparison skipped")
+        print("GEMMA comparison skipped (no gemma_output_file and run_gemma=no)")
 else:
     print("Compare-only mode — GEMMA results loaded above")
 

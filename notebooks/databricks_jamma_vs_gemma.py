@@ -99,7 +99,9 @@ os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.8"
 
 from jamma.core import configure_jax  # noqa: E402
+from jamma.utils.logging import setup_logging  # noqa: E402
 
+setup_logging()
 configure_jax(enable_x64=True)
 
 from jamma.io import load_plink_binary  # noqa: E402

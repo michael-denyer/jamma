@@ -17,6 +17,7 @@
 # MAGIC | `run_gemma` | Run GEMMA binary for comparison (yes/no) |
 # MAGIC | `gemma_output_file` | Pre-computed GEMMA `.assoc.txt` — skips running GEMMA binary |
 # MAGIC | `gemma_kinship_file` | Pre-computed GEMMA `kinship.cXX.txt` for kinship comparison |
+# MAGIC | `check_memory` | Pre-flight memory check (yes/no, default yes) |
 # MAGIC
 # MAGIC **Cluster requirements:** DBR 15.4+, memory-optimized instance for large datasets.
 
@@ -72,6 +73,9 @@ dbutils.widgets.text(  # noqa: F821
 dbutils.widgets.text(  # noqa: F821
     "gemma_kinship_file", "", "Pre-computed GEMMA kinship.cXX.txt for comparison"
 )
+dbutils.widgets.dropdown(  # noqa: F821
+    "check_memory", "yes", ["yes", "no"], "Pre-flight memory check"
+)
 
 # COMMAND ----------
 
@@ -124,6 +128,7 @@ MISS = float(dbutils.widgets.get("miss"))  # noqa: F821
 RUN_GEMMA = dbutils.widgets.get("run_gemma") == "yes"  # noqa: F821
 GEMMA_OUTPUT_FILE = dbutils.widgets.get("gemma_output_file").strip()  # noqa: F821
 GEMMA_KINSHIP_FILE = dbutils.widgets.get("gemma_kinship_file").strip()  # noqa: F821
+CHECK_MEMORY = dbutils.widgets.get("check_memory") == "yes"  # noqa: F821
 
 MODE_NAMES = {1: "Wald", 2: "LRT", 3: "Score", 4: "All tests"}
 
@@ -165,6 +170,7 @@ print(
     f"GEMMA output: {GEMMA_OUTPUT_FILE or '(none — will run GEMMA binary if enabled)'}"
 )
 print(f"GEMMA kinship:{GEMMA_KINSHIP_FILE or '(none)'}")
+print(f"Check memory: {CHECK_MEMORY}")
 print("Output:       /tmp/ (local disk)")
 
 # COMMAND ----------
@@ -258,12 +264,16 @@ else:
             f"Computing kinship (streaming, n={plink_data.n_samples:,} > {STREAMING_THRESHOLD:,})..."
         )
         t0 = time.perf_counter()
-        kinship = compute_kinship_streaming(BFILE, show_progress=True)
+        kinship = compute_kinship_streaming(
+            BFILE, show_progress=True, check_memory=CHECK_MEMORY
+        )
         t_kin = time.perf_counter() - t0
     else:
         print("Computing kinship from genotypes...")
         t0 = time.perf_counter()
-        kinship = compute_centered_kinship(plink_data.genotypes, check_memory=False)
+        kinship = compute_centered_kinship(
+            plink_data.genotypes, check_memory=CHECK_MEMORY
+        )
         t_kin = time.perf_counter() - t0
     print(f"  {kinship.shape[0]}x{kinship.shape[1]} ({t_kin:.2f}s)")
     # Save JAMMA kinship (write to local disk — DBFS FUSE is too slow for large files)
@@ -343,7 +353,7 @@ jamma_results = run_lmm_association_jax(
     n_grid=50,
     n_refine=20,
     show_progress=True,
-    check_memory=False,
+    check_memory=CHECK_MEMORY,
 )
 jamma_time = time.perf_counter() - t0
 print(

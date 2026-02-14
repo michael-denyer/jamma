@@ -16,6 +16,7 @@
 # MAGIC | `miss` | Missing rate threshold (default 0.05) |
 # MAGIC | `run_gemma` | Run GEMMA binary for comparison (yes/no) |
 # MAGIC | `gemma_output_file` | Pre-computed GEMMA `.assoc.txt` — skips running GEMMA binary |
+# MAGIC | `gemma_kinship_file` | Pre-computed GEMMA `kinship.cXX.txt` for kinship comparison |
 # MAGIC
 # MAGIC **Cluster requirements:** DBR 15.4+, memory-optimized instance for large datasets.
 
@@ -68,6 +69,9 @@ dbutils.widgets.dropdown("run_gemma", "yes", ["yes", "no"], "Run GEMMA for compa
 dbutils.widgets.text(  # noqa: F821
     "gemma_output_file", "", "Pre-computed GEMMA .assoc.txt (skips running GEMMA)"
 )
+dbutils.widgets.text(  # noqa: F821
+    "gemma_kinship_file", "", "Pre-computed GEMMA kinship.cXX.txt for comparison"
+)
 
 # COMMAND ----------
 
@@ -119,6 +123,7 @@ MAF = float(dbutils.widgets.get("maf"))  # noqa: F821
 MISS = float(dbutils.widgets.get("miss"))  # noqa: F821
 RUN_GEMMA = dbutils.widgets.get("run_gemma") == "yes"  # noqa: F821
 GEMMA_OUTPUT_FILE = dbutils.widgets.get("gemma_output_file").strip()  # noqa: F821
+GEMMA_KINSHIP_FILE = dbutils.widgets.get("gemma_kinship_file").strip()  # noqa: F821
 
 MODE_NAMES = {1: "Wald", 2: "LRT", 3: "Score", 4: "All tests"}
 
@@ -130,6 +135,10 @@ if GEMMA_OUTPUT_FILE:
     if RUN_GEMMA:
         print("gemma_output_file provided — overriding run_gemma to 'no'")
         RUN_GEMMA = False
+if GEMMA_KINSHIP_FILE:
+    assert Path(GEMMA_KINSHIP_FILE).exists(), (
+        f"GEMMA kinship file not found: {GEMMA_KINSHIP_FILE}"
+    )
 
 # Validate required inputs
 assert BFILE, "bfile widget is required — set it to your PLINK binary prefix"
@@ -155,6 +164,7 @@ print(f"Run GEMMA:    {RUN_GEMMA}")
 print(
     f"GEMMA output: {GEMMA_OUTPUT_FILE or '(none — will run GEMMA binary if enabled)'}"
 )
+print(f"GEMMA kinship:{GEMMA_KINSHIP_FILE or '(none)'}")
 print("Output:       /tmp/ (local disk)")
 
 # COMMAND ----------
@@ -464,17 +474,20 @@ else:
 
 kinship_comparison = None
 
-# Compare kinship only when both tools computed it (no pre-computed file provided)
-jamma_kin_path = Path("/tmp/jamma_kinship.cXX.txt")
+# Kinship comparison: use pre-computed GEMMA kinship file if provided,
+# otherwise use the one GEMMA computed during this run (if it ran)
 gemma_kin_save = Path("/tmp/gemma_kinship.cXX.txt")
 
-run_kinship_comparison = (
-    not KINSHIP_FILE and gemma_kinship_time is not None and gemma_kin_save.exists()
-)
+if GEMMA_KINSHIP_FILE:
+    gemma_kin_compare_path = Path(GEMMA_KINSHIP_FILE)
+elif gemma_kinship_time is not None and gemma_kin_save.exists():
+    gemma_kin_compare_path = gemma_kin_save
+else:
+    gemma_kin_compare_path = None
 
-if run_kinship_comparison:
-    print("Comparing kinship matrices...")
-    gemma_kinship = read_kinship_matrix(gemma_kin_save)
+if gemma_kin_compare_path is not None:
+    print(f"Comparing kinship matrices (GEMMA source: {gemma_kin_compare_path})...")
+    gemma_kinship = read_kinship_matrix(gemma_kin_compare_path)
     n = kinship.shape[0]
     n_triu = n * (n + 1) // 2
 
@@ -589,10 +602,11 @@ if run_kinship_comparison:
 
     # Free GEMMA kinship — no longer needed
     del gemma_kinship
-elif KINSHIP_FILE:
-    print("Using pre-computed kinship — no JAMMA vs GEMMA kinship comparison")
 else:
-    print("GEMMA kinship not computed — comparison skipped")
+    print(
+        "No GEMMA kinship available — provide gemma_kinship_file or run GEMMA "
+        "with run_gemma=yes (without kinship_file) to enable kinship comparison"
+    )
 
 # COMMAND ----------
 

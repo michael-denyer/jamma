@@ -489,7 +489,10 @@ kinship_comparison = None
 gemma_kin_save = Path("/tmp/gemma_kinship.cXX.txt")
 
 if GEMMA_KINSHIP_FILE:
-    gemma_kin_compare_path = Path(GEMMA_KINSHIP_FILE)
+    # Copy to local disk for faster comparison (DBFS FUSE is slow)
+    gemma_kin_local = Path("/tmp/gemma_kinship.cXX.txt")
+    shutil.copy2(GEMMA_KINSHIP_FILE, gemma_kin_local)
+    gemma_kin_compare_path = gemma_kin_local
 elif gemma_kinship_time is not None and gemma_kin_save.exists():
     gemma_kin_compare_path = gemma_kin_save
 else:

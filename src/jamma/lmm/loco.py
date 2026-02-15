@@ -377,12 +377,11 @@ def _run_lmm_for_chromosome(
     gc.collect()
 
     # Eigendecomp setup
-    UT = np.ascontiguousarray(eigenvectors.T)
     W, n_cvt = _build_covariate_matrix(covariates, n_samples)
 
     with blas_threads():
-        UtW = UT @ W
-        Uty = UT @ phenotypes
+        UtW = eigenvectors.T @ W
+        Uty = eigenvectors.T @ phenotypes
 
     device = _select_jax_device(use_gpu=False)
 
@@ -419,7 +418,7 @@ def _run_lmm_for_chromosome(
             )
 
         with blas_threads():
-            UtG_chunk = np.ascontiguousarray(UT @ geno_jax_chunk)
+            UtG_chunk = np.ascontiguousarray(eigenvectors.T @ geno_jax_chunk)
         return UtG_chunk, actual_len, needs_pad
 
     # Prepare first chunk

@@ -343,7 +343,6 @@ def run_lmm_association_streaming(
         "lmm_streaming",
         check_memory=check_memory,
     )
-    UT = np.ascontiguousarray(U.T)
     if kinship is not None:
         del kinship
     gc.collect()
@@ -352,8 +351,8 @@ def run_lmm_association_streaming(
 
     # Prepare rotated matrices (numpy BLAS matmuls)
     with blas_threads():
-        UtW = UT @ W
-        Uty = UT @ phenotypes
+        UtW = U.T @ W
+        Uty = U.T @ phenotypes
 
     logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
         lmm_mode, eigenvalues_np, UtW, Uty, n_cvt, device, show_progress
@@ -410,7 +409,7 @@ def run_lmm_association_streaming(
                 )
 
             with blas_threads():
-                UtG_chunk = np.ascontiguousarray(UT @ geno_jax_chunk)
+                UtG_chunk = np.ascontiguousarray(U.T @ geno_jax_chunk)
             return UtG_chunk, actual_len, needs_pad
 
         for chunk, file_start, file_end in assoc_iterator:

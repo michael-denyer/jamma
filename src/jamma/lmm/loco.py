@@ -177,6 +177,9 @@ def run_lmm_loco(
     try:
         writer = writer_ctx.__enter__() if writer_ctx is not None else None
 
+        # Pre-compute snps_set once (avoids O(n) set construction per chromosome)
+        snps_set = set(snps_indices.tolist()) if snps_indices is not None else None
+
         # Stream LOCO kinship matrices one at a time
         loco_iter = compute_loco_kinship_streaming(
             bed_path,
@@ -230,7 +233,7 @@ def run_lmm_loco(
                 lmm_mode=lmm_mode,
                 valid_mask=valid_mask,
                 show_progress=show_progress,
-                snps_indices=snps_indices,
+                snps_set=snps_set,
             )
 
             # Write results
@@ -274,7 +277,7 @@ def _run_lmm_for_chromosome(
     l_max: float = 1e5,
     n_grid: int = 50,
     n_refine: int = 10,
-    snps_indices: np.ndarray | None = None,
+    snps_set: set[int] | None = None,
 ) -> list[AssocResult]:
     """Run LMM association on a single chromosome's SNPs.
 
@@ -300,7 +303,8 @@ def _run_lmm_for_chromosome(
         l_max: Maximum lambda for optimization.
         n_grid: Grid search resolution.
         n_refine: Golden section iterations.
-        snps_indices: Pre-resolved column indices for -snps restriction, or None.
+        snps_set: Pre-computed set of global SNP indices for -snps restriction,
+            or None. Hoisted from run_lmm_loco to avoid per-chromosome rebuild.
 
     Returns:
         List of AssocResult for this chromosome's SNPs.
@@ -340,8 +344,7 @@ def _run_lmm_for_chromosome(
     )
 
     # Apply SNP list restriction (if -snps provided)
-    if snps_indices is not None:
-        snps_set = set(snps_indices.tolist())
+    if snps_set is not None:
         local_snp_list_mask = np.array(
             [idx in snps_set for idx in chr_snp_indices], dtype=bool
         )

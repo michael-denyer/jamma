@@ -109,6 +109,11 @@ def run_lmm_association_jax(
             f"eigenvectors={eigenvectors is not None}"
         )
 
+    if lmm_mode not in (1, 2, 3, 4):
+        raise ValueError(
+            f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
+        )
+
     # Memory check before workflow
     n_samples, n_snps = genotypes.shape
     start_time = time.perf_counter()
@@ -227,7 +232,6 @@ def run_lmm_association_jax(
         p_scores_out = np.empty(n_filtered, dtype=np.float64)
     elif lmm_mode == 2:  # LRT
         lambdas_mle_out = np.empty(n_filtered, dtype=np.float64)
-        logls_mle_out = np.empty(n_filtered, dtype=np.float64)
         p_lrts_out = np.empty(n_filtered, dtype=np.float64)
     elif lmm_mode == 4:  # All tests
         lambdas_out = np.empty(n_filtered, dtype=np.float64)
@@ -236,7 +240,6 @@ def run_lmm_association_jax(
         ses_out = np.empty(n_filtered, dtype=np.float64)
         pwalds_out = np.empty(n_filtered, dtype=np.float64)
         lambdas_mle_out = np.empty(n_filtered, dtype=np.float64)
-        logls_mle_out = np.empty(n_filtered, dtype=np.float64)
         p_lrts_out = np.empty(n_filtered, dtype=np.float64)
         p_scores_out = np.empty(n_filtered, dtype=np.float64)
 
@@ -404,7 +407,6 @@ def run_lmm_association_jax(
             slice_len = actual_chunk_len if needs_padding else len(best_lambdas_mle)
             s = slice(write_offset, write_offset + slice_len)
             lambdas_mle_out[s] = np.asarray(best_lambdas_mle[:slice_len])
-            logls_mle_out[s] = np.asarray(best_logls_mle[:slice_len])
             p_lrts_out[s] = np.asarray(p_lrts[:slice_len])
         elif lmm_mode == 4:
             slice_len = actual_chunk_len if needs_padding else len(best_lambdas)
@@ -484,5 +486,3 @@ def run_lmm_association_jax(
             p_lrts_out,
             p_scores_out,
         )
-    else:
-        raise ValueError(f"Unsupported lmm_mode: {lmm_mode}. Use 1, 2, 3, or 4.")

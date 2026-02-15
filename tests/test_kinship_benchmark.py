@@ -214,9 +214,13 @@ class TestJammaVsGemma:
         from jamma.kinship import compute_centered_kinship
 
         # Check Docker is available
-        docker_check = subprocess.run(
-            ["docker", "info"], capture_output=True, text=True
-        )
+        try:
+            docker_check = subprocess.run(
+                ["docker", "info"], capture_output=True, text=True
+            )
+        except FileNotFoundError:
+            pytest.skip("Docker not installed")
+
         if docker_check.returncode != 0:
             pytest.skip("Docker not available")
 

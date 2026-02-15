@@ -66,6 +66,7 @@ def run_lmm_loco(
     kinship_output_prefix: str = "result",
     snps_indices: np.ndarray | None = None,
     ksnps_indices: np.ndarray | None = None,
+    col_chunk_size: int = 5_000,
 ) -> list[AssocResult]:
     """Run LOCO LMM association: per-chromosome eigendecomp and association.
 
@@ -94,6 +95,8 @@ def run_lmm_loco(
         ksnps_indices: Pre-resolved column indices for -ksnps restriction, or
             None. When provided, only these SNPs are used for LOCO kinship
             computation. Passed through to compute_loco_kinship_streaming().
+        col_chunk_size: Number of SNP columns per disk read chunk. Controls
+            peak memory: n_valid * col_chunk_size * 8 bytes per chunk.
 
     Returns:
         List of AssocResult in original SNP order (empty if output_path set).
@@ -234,6 +237,7 @@ def run_lmm_loco(
                 valid_mask=valid_mask,
                 show_progress=show_progress,
                 snps_set=snps_set,
+                col_chunk_size=col_chunk_size,
             )
 
             # Write results
@@ -278,13 +282,14 @@ def _run_lmm_for_chromosome(
     n_grid: int = 50,
     n_refine: int = 10,
     snps_set: set[int] | None = None,
+    col_chunk_size: int = 5_000,
 ) -> list[AssocResult]:
     """Run LMM association on a single chromosome's SNPs.
 
-    Reads only the chromosome's SNPs from the BED file in a single read
-    (chromosome subsets are small enough to fit in memory), computes SNP
-    statistics, applies filters, then runs the JAX LMM pipeline using
-    pre-computed eigendecomposition.
+    Reads the chromosome's SNPs from the BED file in column chunks
+    (two-pass: statistics, then association), never allocating the full
+    chromosome genotype matrix. Peak per-chunk allocation is
+    (n_valid, col_chunk_size) instead of (n_valid, n_chr_snps).
 
     Args:
         bed_path: PLINK file prefix.
@@ -305,38 +310,56 @@ def _run_lmm_for_chromosome(
         n_refine: Golden section iterations.
         snps_set: Pre-computed set of global SNP indices for -snps restriction,
             or None. Hoisted from run_lmm_loco to avoid per-chromosome rebuild.
+        col_chunk_size: Number of SNP columns per disk read chunk.
 
     Returns:
         List of AssocResult for this chromosome's SNPs.
     """
     n_samples = phenotypes.shape[0]
+    valid_indices = np.where(valid_mask)[0]
 
-    # Read this chromosome's SNPs from BED file in a single read
+    # === PASS 1: Chunked SNP statistics ===
+    n_chr_snps = len(chr_snp_indices)
+    col_means = np.zeros(n_chr_snps, dtype=np.float64)
+    miss_counts = np.zeros(n_chr_snps, dtype=np.int32)
+    col_vars = np.zeros(n_chr_snps, dtype=np.float64)
+    n_unexpected_total = 0
+
     bed_file = Path(f"{bed_path}.bed")
     with open_bed(bed_file) as bed:
-        geno_chr = bed.read(index=np.s_[:, chr_snp_indices], dtype=np.float64)
+        for chunk_start in range(0, n_chr_snps, col_chunk_size):
+            chunk_end = min(chunk_start + col_chunk_size, n_chr_snps)
+            chunk_col_indices = chr_snp_indices[chunk_start:chunk_end]
 
-    # Validate genotype values
-    from jamma.io.plink import validate_genotype_values
+            geno_chunk = bed.read(
+                index=np.s_[valid_indices, chunk_col_indices],
+                dtype=np.float64,
+            )
 
-    n_unexpected = validate_genotype_values(geno_chr)
-    if n_unexpected > 0:
+            # Validate genotype values
+            from jamma.io.plink import validate_genotype_values
+
+            n_unexpected_total += validate_genotype_values(geno_chunk)
+
+            # Compute per-SNP statistics for this chunk
+            chunk_miss = np.sum(np.isnan(geno_chunk), axis=0)
+            with np.errstate(invalid="ignore"):
+                chunk_means = np.nanmean(geno_chunk, axis=0)
+                chunk_vars = np.nanvar(geno_chunk, axis=0)
+            chunk_means = np.nan_to_num(chunk_means, nan=0.0)
+            chunk_vars = np.nan_to_num(chunk_vars, nan=0.0)
+
+            col_means[chunk_start:chunk_end] = chunk_means
+            miss_counts[chunk_start:chunk_end] = chunk_miss
+            col_vars[chunk_start:chunk_end] = chunk_vars
+
+            del geno_chunk
+
+    if n_unexpected_total > 0:
         logger.warning(
-            f"LOCO chr genotype validation: {n_unexpected} values outside "
+            f"LOCO chr genotype validation: {n_unexpected_total} values outside "
             f"expected range {{0, 1, 2, NaN}}"
         )
-
-    # Apply sample filtering
-    if not np.all(valid_mask):
-        geno_chr = geno_chr[valid_mask, :]
-
-    # Compute SNP statistics for filtering
-    miss_counts = np.sum(np.isnan(geno_chr), axis=0)
-    with np.errstate(invalid="ignore"):
-        col_means = np.nanmean(geno_chr, axis=0)
-        col_vars = np.nanvar(geno_chr, axis=0)
-    col_means = np.nan_to_num(col_means, nan=0.0)
-    col_vars = np.nan_to_num(col_vars, nan=0.0)
 
     # Apply SNP filter
     snp_mask, allele_freqs, _mafs = compute_snp_filter_mask(
@@ -373,16 +396,11 @@ def _run_lmm_for_chromosome(
             strict=True,
         )
     )
-    filtered_means = col_means[local_filtered_indices]
+    filtered_means_all = col_means[local_filtered_indices]
 
-    # Extract filtered genotype columns and impute missing to mean
-    geno_filtered = geno_chr[:, local_filtered_indices].copy()
-    filtered_means_broadcast = filtered_means.reshape(1, -1)
-    missing_mask = np.isnan(geno_filtered)
-    geno_filtered = np.where(missing_mask, filtered_means_broadcast, geno_filtered)
-
-    del geno_chr
-    gc.collect()
+    # === PASS 2: Chunked association ===
+    # filtered_chr_col_indices: global BED column indices for filtered SNPs
+    filtered_chr_col_indices = chr_snp_indices[local_filtered_indices]
 
     # Eigendecomp setup
     W, n_cvt = _build_covariate_matrix(covariates, n_samples)
@@ -404,12 +422,6 @@ def _run_lmm_for_chromosome(
 
     jax_chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid, n_cvt)
 
-    # Process in JAX chunks
-    n_subset = geno_filtered.shape[1]
-    jax_starts = list(range(0, n_subset, jax_chunk_size))
-
-    accum: dict[str, list] = _init_accumulators(lmm_mode)
-
     def _prepare_jax_chunk(
         start: int, geno: np.ndarray, total: int
     ) -> tuple[np.ndarray, int, bool]:
@@ -429,105 +441,140 @@ def _run_lmm_for_chromosome(
             UtG_chunk = np.ascontiguousarray(eigenvectors.T @ geno_jax_chunk)
         return UtG_chunk, actual_len, needs_pad
 
-    # Prepare first chunk
-    UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
-        jax_starts[0], geno_filtered, n_subset
-    )
-    UtG_jax = jax.device_put(UtG_np, device)
-    del UtG_np
+    # Single accumulator across all disk chunks
+    accum: dict[str, list] = _init_accumulators(lmm_mode)
 
-    for i, _jax_start in enumerate(jax_starts):
-        current_actual_len = actual_jax_len
-        current_needs_padding = needs_padding
-        current_UtG = UtG_jax
+    with open_bed(bed_file) as bed:
+        for disk_start in range(0, n_filtered, col_chunk_size):
+            disk_end = min(disk_start + col_chunk_size, n_filtered)
+            disk_col_indices = filtered_chr_col_indices[disk_start:disk_end]
 
-        # Async transfer of next chunk
-        if i + 1 < len(jax_starts):
+            geno_disk_chunk = bed.read(
+                index=np.s_[valid_indices, disk_col_indices],
+                dtype=np.float64,
+            )
+
+            # Impute missing values with column means
+            chunk_filtered_means = filtered_means_all[disk_start:disk_end]
+            filtered_means_broadcast = chunk_filtered_means.reshape(1, -1)
+            missing_mask = np.isnan(geno_disk_chunk)
+            geno_disk_chunk = np.where(
+                missing_mask, filtered_means_broadcast, geno_disk_chunk
+            )
+
+            # Process this disk chunk through the existing JAX chunk pipeline
+            n_disk_subset = geno_disk_chunk.shape[1]
+            jax_starts = list(range(0, n_disk_subset, jax_chunk_size))
+
+            # Prepare first JAX chunk
             UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
-                jax_starts[i + 1], geno_filtered, n_subset
+                jax_starts[0], geno_disk_chunk, n_disk_subset
             )
             UtG_jax = jax.device_put(UtG_np, device)
             del UtG_np
 
-        # Batch compute Uab
-        Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
+            for i, _jax_start in enumerate(jax_starts):
+                current_actual_len = actual_jax_len
+                current_needs_padding = needs_padding
+                current_UtG = UtG_jax
 
-        if lmm_mode == 1:
-            Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
-            best_lambdas, best_logls = _grid_optimize_lambda_batched(
-                n_cvt,
-                eigenvalues_jax,
-                Uab_batch,
-                Iab_batch,
-                l_min,
-                l_max,
-                n_grid,
-                n_refine,
-            )
-            betas, ses, p_walds = batch_calc_wald_stats(
-                n_cvt, best_lambdas, eigenvalues_jax, Uab_batch, n_samples
-            )
-            p_walds.block_until_ready()
+                # Async transfer of next chunk
+                if i + 1 < len(jax_starts):
+                    UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
+                        jax_starts[i + 1], geno_disk_chunk, n_disk_subset
+                    )
+                    UtG_jax = jax.device_put(UtG_np, device)
+                    del UtG_np
 
-        elif lmm_mode == 3:
-            betas, ses, p_scores = batch_calc_score_stats(
-                n_cvt, Hi_eval_null_jax, Uab_batch, n_samples
-            )
-            p_scores.block_until_ready()
+                # Batch compute Uab
+                Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
 
-        elif lmm_mode == 2:
-            best_lambdas_mle, best_logls_mle = golden_section_optimize_lambda_mle(
-                n_cvt,
-                eigenvalues_jax,
-                Uab_batch,
-                l_min=l_min,
-                l_max=l_max,
-                n_grid=n_grid,
-                n_iter=max(n_refine, 20),
-            )
-            p_lrts = jax.vmap(calc_lrt_pvalue_jax)(
-                best_logls_mle, jnp.full_like(best_logls_mle, logl_H0)
-            )
-            p_lrts.block_until_ready()
+                if lmm_mode == 1:
+                    Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
+                    best_lambdas, best_logls = _grid_optimize_lambda_batched(
+                        n_cvt,
+                        eigenvalues_jax,
+                        Uab_batch,
+                        Iab_batch,
+                        l_min,
+                        l_max,
+                        n_grid,
+                        n_refine,
+                    )
+                    betas, ses, p_walds = batch_calc_wald_stats(
+                        n_cvt, best_lambdas, eigenvalues_jax, Uab_batch, n_samples
+                    )
+                    p_walds.block_until_ready()
 
-        elif lmm_mode == 4:
-            _, _, p_scores = batch_calc_score_stats(
-                n_cvt, Hi_eval_null_jax, Uab_batch, n_samples
-            )
-            best_lambdas_mle, best_logls_mle = golden_section_optimize_lambda_mle(
-                n_cvt,
-                eigenvalues_jax,
-                Uab_batch,
-                l_min=l_min,
-                l_max=l_max,
-                n_grid=n_grid,
-                n_iter=max(n_refine, 20),
-            )
-            p_lrts = jax.vmap(calc_lrt_pvalue_jax)(
-                best_logls_mle, jnp.full_like(best_logls_mle, logl_H0)
-            )
-            Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
-            best_lambdas, best_logls = _grid_optimize_lambda_batched(
-                n_cvt,
-                eigenvalues_jax,
-                Uab_batch,
-                Iab_batch,
-                l_min,
-                l_max,
-                n_grid,
-                n_refine,
-            )
-            betas, ses, p_walds = batch_calc_wald_stats(
-                n_cvt, best_lambdas, eigenvalues_jax, Uab_batch, n_samples
-            )
-            p_scores.block_until_ready()
-            p_lrts.block_until_ready()
-            p_walds.block_until_ready()
+                elif lmm_mode == 3:
+                    betas, ses, p_scores = batch_calc_score_stats(
+                        n_cvt, Hi_eval_null_jax, Uab_batch, n_samples
+                    )
+                    p_scores.block_until_ready()
 
-        # Strip padding and append to accumulators
-        _append_chunk_results(
-            lmm_mode, accum, current_actual_len, current_needs_padding, locals()
-        )
+                elif lmm_mode == 2:
+                    best_lambdas_mle, best_logls_mle = (
+                        golden_section_optimize_lambda_mle(
+                            n_cvt,
+                            eigenvalues_jax,
+                            Uab_batch,
+                            l_min=l_min,
+                            l_max=l_max,
+                            n_grid=n_grid,
+                            n_iter=max(n_refine, 20),
+                        )
+                    )
+                    p_lrts = jax.vmap(calc_lrt_pvalue_jax)(
+                        best_logls_mle, jnp.full_like(best_logls_mle, logl_H0)
+                    )
+                    p_lrts.block_until_ready()
+
+                elif lmm_mode == 4:
+                    _, _, p_scores = batch_calc_score_stats(
+                        n_cvt, Hi_eval_null_jax, Uab_batch, n_samples
+                    )
+                    best_lambdas_mle, best_logls_mle = (
+                        golden_section_optimize_lambda_mle(
+                            n_cvt,
+                            eigenvalues_jax,
+                            Uab_batch,
+                            l_min=l_min,
+                            l_max=l_max,
+                            n_grid=n_grid,
+                            n_iter=max(n_refine, 20),
+                        )
+                    )
+                    p_lrts = jax.vmap(calc_lrt_pvalue_jax)(
+                        best_logls_mle, jnp.full_like(best_logls_mle, logl_H0)
+                    )
+                    Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
+                    best_lambdas, best_logls = _grid_optimize_lambda_batched(
+                        n_cvt,
+                        eigenvalues_jax,
+                        Uab_batch,
+                        Iab_batch,
+                        l_min,
+                        l_max,
+                        n_grid,
+                        n_refine,
+                    )
+                    betas, ses, p_walds = batch_calc_wald_stats(
+                        n_cvt, best_lambdas, eigenvalues_jax, Uab_batch, n_samples
+                    )
+                    p_scores.block_until_ready()
+                    p_lrts.block_until_ready()
+                    p_walds.block_until_ready()
+
+                # Strip padding and append to accumulators
+                _append_chunk_results(
+                    lmm_mode,
+                    accum,
+                    current_actual_len,
+                    current_needs_padding,
+                    locals(),
+                )
+
+            del geno_disk_chunk
 
     # Build results from accumulators
     results: list[AssocResult] = []

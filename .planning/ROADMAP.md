@@ -57,7 +57,7 @@ Plans:
 Plans:
 - [ ] 29.2-01-PLAN.md — Runner hygiene: dead logls_mle removal, lmm_mode validation, empty output fix, Docker test skip
 - [ ] 29.2-02-PLAN.md — Pipeline correctness: covariate-aware eigen validation, snps_set hoisting
-- [ ] 29.2-03-PLAN.md — LOCO memory: row-filtered genotype reads
+- [ ] 29.2-03-PLAN.md — LOCO memory: two-pass chunked column iteration for chromosome genotype reads
 
 ### Phase 29.3: Pipeline Memory Lifecycle (INSERTED)
 

@@ -65,8 +65,17 @@ def eigendecompose_kinship(
         f"Matrix elements: {n_elements:,}, memory: ~{n_elements * 8 / 1e9:.1f} GB"
     )
 
-    # Fail fast before LAPACK allocates -- prevents silent SIGKILL from OOM killer
+    # Always log estimated memory requirement (useful even without hard check)
     required_gb = estimate_eigendecomp_memory(n_samples)
+    available_gb = log_memory_snapshot(
+        f"before_eigendecomp_{n_samples}samples"
+    ).available_gb
+    logger.info(
+        f"Eigendecomp memory: estimated {required_gb:.1f}GB, "
+        f"available {available_gb:.1f}GB"
+    )
+
+    # Fail fast before LAPACK allocates -- prevents silent SIGKILL from OOM killer
     if check_memory:
         check_memory_available(
             required_gb,
@@ -75,8 +84,6 @@ def eigendecompose_kinship(
                 f"eigendecomposition of {n_samples:,}x{n_samples:,} kinship matrix"
             ),
         )
-
-    log_memory_snapshot(f"before_eigendecomp_{n_samples}samples")
 
     n_threads = get_blas_thread_count()
     for lib in threadpool_info():

@@ -199,18 +199,22 @@ def run_lmm_association_streaming(
 
     n_samples = phenotypes.shape[0]
 
-    if check_memory:
-        est = estimate_lmm_streaming_memory(n_samples, n_snps, chunk_size=chunk_size)
-        if not est.sufficient:
-            raise MemoryError(
-                f"Insufficient memory for streaming LMM with {n_samples:,} samples "
-                f"x {n_snps:,} SNPs (chunk_size={chunk_size:,}).\n"
-                f"Peak: {est.total_peak_gb:.1f}GB, "
-                f"Available: {est.available_gb:.1f}GB\n"
-                f"Breakdown: kinship={est.kinship_gb:.1f}GB, "
-                f"eigenvectors={est.eigenvectors_gb:.1f}GB, "
-                f"eigendecomp_workspace={est.eigendecomp_workspace_gb:.1f}GB"
-            )
+    # Always log memory estimate (useful even without hard check)
+    est = estimate_lmm_streaming_memory(n_samples, n_snps, chunk_size=chunk_size)
+    logger.info(
+        f"LMM streaming memory: estimated peak {est.total_peak_gb:.1f}GB, "
+        f"available {est.available_gb:.1f}GB"
+    )
+    if check_memory and not est.sufficient:
+        raise MemoryError(
+            f"Insufficient memory for streaming LMM with {n_samples:,} samples "
+            f"x {n_snps:,} SNPs (chunk_size={chunk_size:,}).\n"
+            f"Peak: {est.total_peak_gb:.1f}GB, "
+            f"Available: {est.available_gb:.1f}GB\n"
+            f"Breakdown: kinship={est.kinship_gb:.1f}GB, "
+            f"eigenvectors={est.eigenvectors_gb:.1f}GB, "
+            f"eigendecomp_workspace={est.eigendecomp_workspace_gb:.1f}GB"
+        )
 
     if show_progress:
         logger.info("Performing LMM Association Test (streaming)")

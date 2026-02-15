@@ -120,17 +120,21 @@ def run_lmm_association_jax(
             f"MAF threshold = {maf_threshold}, missing threshold = {miss_threshold}"
         )
 
-    if check_memory:
-        est = estimate_lmm_memory(n_samples, n_snps)
-        if not est.sufficient:
-            raise MemoryError(
-                f"Insufficient memory for LMM workflow with {n_samples:,} samples × "
-                f"{n_snps:,} SNPs.\n"
-                f"Need: {est.total_gb:.1f}GB, Available: {est.available_gb:.1f}GB\n"
-                f"Breakdown: kinship={est.kinship_gb:.1f}GB, "
-                f"eigenvectors={est.eigenvectors_gb:.1f}GB, "
-                f"genotypes={est.genotypes_gb:.1f}GB"
-            )
+    # Always log memory estimate (useful even without hard check)
+    est = estimate_lmm_memory(n_samples, n_snps)
+    logger.info(
+        f"LMM memory: estimated {est.total_gb:.1f}GB, "
+        f"available {est.available_gb:.1f}GB"
+    )
+    if check_memory and not est.sufficient:
+        raise MemoryError(
+            f"Insufficient memory for LMM workflow with {n_samples:,} samples × "
+            f"{n_snps:,} SNPs.\n"
+            f"Need: {est.total_gb:.1f}GB, Available: {est.available_gb:.1f}GB\n"
+            f"Breakdown: kinship={est.kinship_gb:.1f}GB, "
+            f"eigenvectors={est.eigenvectors_gb:.1f}GB, "
+            f"genotypes={est.genotypes_gb:.1f}GB"
+        )
 
     device = _select_jax_device(use_gpu)
 

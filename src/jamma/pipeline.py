@@ -431,9 +431,11 @@ class PipelineRunner:
         2. Get PLINK metadata
         3. Check memory requirements
         4. Parse phenotypes
-        5. Load kinship matrix
-        6. Load covariates
-        7. Run LMM association (streaming)
+        5. Resolve SNP list files
+        6. Prepare output directory
+        7. Load covariates (early, for eigen validation)
+        8. Load eigen files or kinship matrix
+        9. Run LMM association (streaming)
 
         Returns:
             PipelineResult with associations, counts, output path, and timing.
@@ -521,7 +523,17 @@ class PipelineRunner:
                 },
             )
 
-        # 7. Standard path: load eigen files or kinship
+        # 7. Covariates (loaded early for eigen validation)
+        covariates = self.load_covariates(n_samples)
+
+        # Compute valid sample count (phenotype + covariate filtering)
+        valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
+        if covariates is not None:
+            valid_covariate = np.all(~np.isnan(covariates), axis=1)
+            valid_mask = valid_mask & valid_covariate
+        n_valid = int(np.sum(valid_mask))
+
+        # 8. Standard path: load eigen files or kinship
         t_kinship = time.perf_counter()
         eigenvalues = None
         eigenvectors = None
@@ -531,7 +543,7 @@ class PipelineRunner:
             eigenvalues, eigenvectors = read_eigen_files(
                 self.config.eigenvalue_file,
                 self.config.eigenvector_file,
-                n_samples=n_analyzed,
+                n_samples=n_valid,
             )
             logger.info(
                 f"Loaded pre-computed eigendecomposition "
@@ -551,7 +563,7 @@ class PipelineRunner:
             # The runner will also subset K internally, so these eigen
             # files are consistent with what the runner computes.
             if self.config.write_eigen:
-                valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
+                # valid_mask already includes covariate filtering from above
                 K_valid = K if np.all(valid_mask) else K[np.ix_(valid_mask, valid_mask)]
                 eigenvalues, eigenvectors = eigendecompose_kinship(
                     K_valid, check_memory=self.config.check_memory
@@ -566,12 +578,9 @@ class PipelineRunner:
                 logger.info(f"Wrote eigenvectors to {u_path}")
 
         kinship_s = time.perf_counter() - t_kinship
-
-        # 8. Covariates
-        covariates = self.load_covariates(n_samples)
         load_s = time.perf_counter() - t_start
 
-        # 9. Run LMM
+        # 9. Run LMM association
         t_lmm = time.perf_counter()
         results = run_lmm_association_streaming(
             bed_path=self.config.bfile,

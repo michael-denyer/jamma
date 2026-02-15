@@ -103,6 +103,11 @@ def run_lmm_loco(
     """
     start_time = time.perf_counter()
 
+    if lmm_mode not in (1, 2, 3, 4):
+        raise ValueError(
+            f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
+        )
+
     # Get metadata
     meta = get_plink_metadata(bed_path)
     n_samples_total = meta["n_samples"]

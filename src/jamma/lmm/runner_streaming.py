@@ -41,7 +41,7 @@ from jamma.utils.logging import log_rss_memory
 
 _ACCUM_KEYS = {
     1: ("lambdas", "logls", "betas", "ses", "pwalds"),
-    2: ("lambdas_mle", "logls_mle", "p_lrts"),
+    2: ("lambdas_mle", "p_lrts"),
     3: ("betas", "ses", "p_scores"),
     4: (
         "lambdas",
@@ -50,7 +50,6 @@ _ACCUM_KEYS = {
         "ses",
         "pwalds",
         "lambdas_mle",
-        "logls_mle",
         "p_lrts",
         "p_scores",
     ),
@@ -167,6 +166,11 @@ def run_lmm_association_streaming(
         raise ValueError(
             "Either kinship or pre-computed eigendecomposition (eigenvalues + "
             "eigenvectors) must be provided"
+        )
+
+    if lmm_mode not in (1, 2, 3, 4):
+        raise ValueError(
+            f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
         )
 
     meta = get_plink_metadata(bed_path)
@@ -316,6 +320,11 @@ def run_lmm_association_streaming(
         logger.info(f"  Analyzed SNPs: {n_filtered:,}")
 
     if n_filtered == 0:
+        if output_path is not None:
+            test_type_map = {1: "wald", 2: "lrt", 3: "score", 4: "all"}
+            test_type = test_type_map.get(lmm_mode, "wald")
+            with IncrementalAssocWriter(output_path, test_type=test_type):
+                pass  # Context manager writes header, no data rows
         if show_progress:
             elapsed = time.perf_counter() - start_time
             logger.info(

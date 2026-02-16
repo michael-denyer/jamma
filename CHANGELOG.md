@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `check_memory` widget toggle and GEMMA output/kinship file widgets for the
   vs-gemma comparison notebook
 - Memory estimates now logged even when `check_memory=False`
+- **Slimline Dockerfile**: `python:3.11-slim` base with ILP64 numpy + JAMMA
+  (replaces Databricks-specific Dockerfile)
+- **CONTRIBUTING.md**: Development setup, testing, code style, and PR guidelines
 
 ### Changed
 - LOCO kinship: extracted `_stream_s_full_and_chr` and `_yield_loco_matrices`
@@ -27,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   created once, only consumption differs (writer vs list)
 - Memory safety margin reduced from 50% to 10% for streaming kinship
 - Removed compare_only mode from vs-gemma notebook
+- **Removed Databricks notebooks and Dockerfile**: Moved to separate `jamma-databricks`
+  project — JAMMA repo now contains only the library and a general-purpose Dockerfile
 
 ### Fixed
 - JAX device array leak on write exception — `eigenvalues_jax`, `UtW_jax`,

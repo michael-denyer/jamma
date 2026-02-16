@@ -47,6 +47,7 @@ from jamma.lmm.results import _concat_jax_accumulators
 from jamma.lmm.runner_streaming import (
     _append_chunk_results,
     _init_accumulators,
+    _LazySnpMeta,
 )
 from jamma.lmm.stats import AssocResult
 
@@ -151,17 +152,8 @@ def run_lmm_loco(
             f"  Analyzed individuals: {n_valid:,} ({n_filtered_samples} filtered)"
         )
 
-    # Build SNP metadata for result construction
-    snp_info = [
-        {
-            "chr": str(meta["chromosome"][i]),
-            "rs": meta["sid"][i],
-            "pos": int(meta["bp_position"][i]),
-            "a1": meta["allele_1"][i],
-            "a0": meta["allele_2"][i],
-        }
-        for i in range(n_snps_total)
-    ]
+    # Build SNP metadata for result construction (lazy -- no upfront dict allocation)
+    snp_info = _LazySnpMeta(meta)
 
     # Determine test type for incremental writer
     test_type_map = {1: "wald", 2: "lrt", 3: "score", 4: "all"}

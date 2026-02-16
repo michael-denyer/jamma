@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-02-16
+
 ### Added
+
 - **Multi-pass LOCO S_chr batching**: When all per-chromosome S_chr matrices don't
   fit in memory (e.g. 100k samples x 22 chromosomes), chromosomes are automatically
   batched across multiple disk passes — S_full computed once and reused
@@ -16,24 +19,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accumulation in memory
 - **In-memory mode warnings**: Log warning when running without `output_path` with
   >100k SNPs, recommending disk streaming
-- `check_memory` widget toggle and GEMMA output/kinship file widgets for the
-  vs-gemma comparison notebook
 - Memory estimates now logged even when `check_memory=False`
-- **Slimline Dockerfile**: `python:3.11-slim` base with ILP64 numpy + JAMMA
-  (replaces Databricks-specific Dockerfile)
 - **CONTRIBUTING.md**: Development setup, testing, code style, and PR guidelines
 
 ### Changed
+
+- **CLI: Typer → Click**: Flat GEMMA-compatible CLI — `jamma -gk 1 -bfile data` instead
+  of `jamma gk -bfile data`. True drop-in replacement for GEMMA command lines
+- **Dockerfile**: Uses uv for package management; documents `--platform linux/amd64`
+  requirement for MKL (x86_64-only)
+- All documentation updated to flat CLI syntax
 - LOCO kinship: extracted `_stream_s_full_and_chr` and `_yield_loco_matrices`
   helpers to eliminate code duplication across single-pass and multi-pass paths
 - Deduplicated `_yield_chunk_results` call in `_run_lmm_for_chromosome` — iterator
   created once, only consumption differs (writer vs list)
 - Memory safety margin reduced from 50% to 10% for streaming kinship
-- Removed compare_only mode from vs-gemma notebook
 - **Removed Databricks notebooks and Dockerfile**: Moved to separate `jamma-databricks`
   project — JAMMA repo now contains only the library and a general-purpose Dockerfile
+- Minimum numpy bumped to 2.0+ (1.26 is EOL)
 
 ### Fixed
+
 - JAX device array leak on write exception — `eigenvalues_jax`, `UtW_jax`,
   `Uty_jax` now freed via `try/finally` in `_run_lmm_for_chromosome`
 - Multi-pass memory accounting underestimated first-pass peak by one `matrix_gb`
@@ -42,9 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Eigen file validation against covariate-filtered sample count
 - Empty output and dead `logls_mle` accumulation removed from LMM runner
 - `check_memory` flag now respected in `eigendecompose_kinship`
-- loguru output routed to stdout for Databricks cell visibility
 
 ### Performance
+
 - Two-pass chunked column iteration in LOCO replaces single full-matrix read
 - Lazy SNP metadata loading and early cleanup of pass-1 statistics arrays
   (`all_vars`, `all_means`, `all_miss_counts`) immediately after deriving filters

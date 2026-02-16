@@ -70,10 +70,10 @@ def write_gemma_log(
 
     Example output format:
         ##
-        ## JAMMA Version = 0.1.0
+        ## JAMMA Version = 2.1.0
         ## Date = 2024-01-31T10:30:00
         ##
-        ## Command Line Input = jamma gk -bfile data
+        ## Command Line Input = jamma -gk 1 -bfile data
         ##
         ## Summary Statistics:
         ## n_samples = 1940

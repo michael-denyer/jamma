@@ -36,22 +36,22 @@ my_study.fam   # Sample information
 
 ## Commands
 
-### Kinship Matrix Computation (`gk`)
+### Kinship Matrix Computation (`-gk`)
 
 Compute genetic relatedness matrix from genotype data:
 
 ```bash
-jamma -o kinship -outdir output gk -bfile data/my_study -gk 1
+jamma -gk 1 -bfile data/my_study -o kinship -outdir output
 ```
 
 **Options:**
 
 - `-bfile PATH` — PLINK binary file prefix (required)
-- `-gk MODE` — Kinship type: 1 = centered (default), 2 = standardized
+- `-gk MODE` — Kinship type: 1 = centered, 2 = standardized
 - `-ksnps PATH` — SNP list file to restrict kinship computation (one RS ID per line)
 - `-n INT` — Phenotype column in .fam file (1-based, default: 1)
-- `-maf FLOAT` — MAF threshold (default: 0.0, no filter)
-- `-miss FLOAT` — Missing rate threshold (default: 1.0, no filter)
+- `-maf FLOAT` — MAF threshold (default: 0.0, no filter for gk mode)
+- `-miss FLOAT` — Missing rate threshold (default: 1.0, no filter for gk mode)
 - `-o PREFIX` — Output file prefix
 - `-outdir DIR` — Output directory
 
@@ -64,25 +64,19 @@ jamma -o kinship -outdir output gk -bfile data/my_study -gk 1
 - `output/kinship.cXX.txt` — Kinship matrix (GEMMA format)
 - `output/kinship.log.txt` — Run log
 
-### LMM Association Testing (`lmm`)
+### LMM Association Testing (`-lmm`)
 
 Run univariate linear mixed model association tests:
 
 ```bash
-jamma -o assoc -outdir output lmm \
-  -bfile data/my_study \
-  -k output/kinship.cXX.txt \
-  -lmm 1
+jamma -lmm 1 -bfile data/my_study -k output/kinship.cXX.txt -o assoc -outdir output
 ```
 
 **With covariates:**
 
 ```bash
-jamma -o assoc -outdir output lmm \
-  -bfile data/my_study \
-  -k output/kinship.cXX.txt \
-  -c covariates.txt \
-  -lmm 1
+jamma -lmm 1 -bfile data/my_study -k output/kinship.cXX.txt \
+  -c covariates.txt -o assoc -outdir output
 ```
 
 **Options:**
@@ -145,10 +139,7 @@ processing one chromosome at a time for memory efficiency.
 
 ```bash
 # LOCO association (kinship computed internally per chromosome)
-jamma -o loco_results -outdir output lmm \
-  -bfile data/my_study \
-  -loco \
-  -lmm 1
+jamma -lmm 1 -bfile data/my_study -loco -o loco_results -outdir output
 ```
 
 **Key constraints:**
@@ -164,20 +155,13 @@ and reload eigendecomposition to skip it after the first run:
 
 ```bash
 # First phenotype: compute kinship + eigen, save both
-jamma -o pheno1 -outdir output lmm \
-  -bfile data/my_study \
-  -k kinship.cXX.txt \
-  -eigen \
-  -n 1 \
-  -lmm 1
+jamma -lmm 1 -bfile data/my_study -k kinship.cXX.txt \
+  -eigen -n 1 -o pheno1 -outdir output
 
 # Second phenotype: reuse eigendecomposition (skips kinship + eigen entirely)
-jamma -o pheno2 -outdir output lmm \
-  -bfile data/my_study \
-  -d output/pheno1.eigenD.txt \
-  -u output/pheno1.eigenU.txt \
-  -n 2 \
-  -lmm 1
+jamma -lmm 1 -bfile data/my_study \
+  -d output/pheno1.eigenD.txt -u output/pheno1.eigenU.txt \
+  -n 2 -o pheno2 -outdir output
 ```
 
 **Output files when `-eigen` is used:**
@@ -191,24 +175,16 @@ Restrict which SNPs are used for kinship computation and/or association testing:
 
 ```bash
 # Restrict association to specific SNPs
-jamma -o filtered -outdir output lmm \
-  -bfile data/my_study \
-  -k kinship.cXX.txt \
-  -snps snp_list.txt \
-  -lmm 1
+jamma -lmm 1 -bfile data/my_study -k kinship.cXX.txt \
+  -snps snp_list.txt -o filtered -outdir output
 
 # Restrict kinship computation to specific SNPs
-jamma -o kinship -outdir output gk \
-  -bfile data/my_study \
-  -ksnps kinship_snps.txt \
-  -gk 1
+jamma -gk 1 -bfile data/my_study -ksnps kinship_snps.txt \
+  -o kinship -outdir output
 
 # HWE quality control
-jamma -o qc -outdir output lmm \
-  -bfile data/my_study \
-  -k kinship.cXX.txt \
-  -hwe 0.001 \
-  -lmm 1
+jamma -lmm 1 -bfile data/my_study -k kinship.cXX.txt \
+  -hwe 0.001 -o qc -outdir output
 ```
 
 **SNP list file format:** One SNP RS ID per line (first whitespace-delimited token used).
@@ -224,11 +200,8 @@ For .fam files with multiple phenotype columns, select which to use:
 
 ```bash
 # Use the second phenotype column (column 7 in .fam)
-jamma -o pheno2 -outdir output lmm \
-  -bfile data/my_study \
-  -k kinship.cXX.txt \
-  -n 2 \
-  -lmm 1
+jamma -lmm 1 -bfile data/my_study -k kinship.cXX.txt \
+  -n 2 -o pheno2 -outdir output
 ```
 
 The `-n` flag uses 1-based indexing matching GEMMA: `-n 1` selects column 6
@@ -434,7 +407,7 @@ By default, JAMMA estimates memory requirements before large allocations:
 
 ```bash
 # Check memory estimate without running
-jamma lmm -bfile data/large_study -k kinship.cXX.txt --mem-budget 64
+jamma -lmm 1 -bfile data/large_study -k kinship.cXX.txt --mem-budget 64
 ```
 
 If the estimate exceeds available memory, you'll get a clear error:
@@ -448,10 +421,10 @@ MemoryError: LMM requires ~128.5GB but only 64.0GB available
 
 ```bash
 # Set explicit memory budget (GB)
-jamma lmm ... --mem-budget 128
+jamma -lmm 1 ... --mem-budget 128
 
 # Disable checks (use at your own risk)
-jamma lmm ... --no-check-memory
+jamma -lmm 1 ... --no-check-memory
 ```
 
 ### Programmatic Memory Estimation
@@ -508,14 +481,14 @@ available memory at runtime — other processes reduce headroom.
 2. **Use `--no-check-memory`** to bypass the check (at your own risk):
 
    ```bash
-   jamma gk --no-check-memory -g data/study
-   jamma lmm --no-check-memory -g data/study -p pheno.txt -k kinship.txt
+   jamma -gk 1 --no-check-memory -bfile data/study
+   jamma -lmm 1 --no-check-memory -bfile data/study -k kinship.txt
    ```
 
 3. **Reduce chunk size** for lower per-batch memory:
 
    ```bash
-   jamma lmm ... --chunk-size 1000
+   jamma -lmm 1 ... --chunk-size 1000
    ```
 
 ### Results differ from GEMMA

@@ -102,7 +102,7 @@ Key source layout:
 
 ```
 src/jamma/
-├── cli.py           # Typer CLI entry point
+├── cli.py           # Click CLI entry point
 ├── core/            # JAX config, memory estimation, utilities
 ├── io/              # PLINK file readers, result writers
 ├── kinship/         # Kinship matrix computation (standard, streaming, LOCO)

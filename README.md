@@ -37,10 +37,10 @@ uv add jamma
 
 ```bash
 # Compute kinship matrix (centered relatedness)
-jamma -o output gk -bfile data/my_study -gk 1
+jamma -gk 1 -bfile data/my_study -o output
 
 # Run LMM association (Wald test)
-jamma -o results lmm -bfile data/my_study -k output/output.cXX.txt -lmm 1
+jamma -lmm 1 -bfile data/my_study -k output/output.cXX.txt -o results
 ```
 
 Output files match GEMMA format exactly:

@@ -7,7 +7,7 @@ Architectural overview with bidirectional links between diagram nodes and source
 ```mermaid
 flowchart TB
     subgraph L1["Entry Points [1]"]
-        CLI["CLI (typer) [1a]"]
+        CLI["CLI (click) [1a]"]
         GWAS["gwas() API [1b]"]
         PIPE["PipelineRunner [1c]"]
     end
@@ -111,9 +111,9 @@ Two entry points: the `gwas()` API for programmatic use, and the CLI for command
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 1a | `main()` | Typer app callback — global flags (`-o`, `-outdir`, `-v`) | [cli.py:54](../src/jamma/cli.py#L54) |
-| 1a | `gk_command()` | Kinship computation (`-gk 1`) | [cli.py:88](../src/jamma/cli.py#L88) |
-| 1a | `lmm_command()` | LMM association (`-lmm 1/2/3/4`) | [cli.py:193](../src/jamma/cli.py#L193) |
+| 1a | `main()` | Click command — all flags (`-gk`, `-lmm`, `-bfile`, `-o`, `-outdir`) | [cli.py](../src/jamma/cli.py) |
+| 1a | `_run_gk()` | Kinship computation (`-gk 1`) | [cli.py](../src/jamma/cli.py) |
+| 1a | `_run_lmm()` | LMM association (`-lmm 1/2/3/4`) | [cli.py](../src/jamma/cli.py) |
 | 1b | `gwas()` | One-call GWAS pipeline (load → kinship → LMM → results) | [gwas.py:40](../src/jamma/gwas.py#L40) |
 | 1b | `GWASResult` | Pipeline result dataclass (associations, timing, counts) | [gwas.py:22](../src/jamma/gwas.py#L22) |
 | 1c | `PipelineRunner` | Shared orchestration (validate → parse → memory → kinship → LMM) | [pipeline.py](../src/jamma/pipeline.py) |
@@ -242,7 +242,7 @@ sequenceDiagram
     participant S as Statistics [3f]
     participant W as Writer [2d]
 
-    U->>CLI: jamma lmm -bfile data -k K.txt -lmm 1
+    U->>CLI: jamma -lmm 1 -bfile data -k K.txt
     CLI->>IO: load_plink_binary()
     IO-->>CLI: PlinkData (genotypes, metadata)
     CLI->>K: read_kinship_matrix()

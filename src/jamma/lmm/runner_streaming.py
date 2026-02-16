@@ -323,6 +323,7 @@ def run_lmm_association_streaming(
     snp_mask, allele_freqs, _mafs = compute_snp_filter_mask(
         all_means, all_miss_counts, all_vars, n_samples, maf_threshold, miss_threshold
     )
+    del all_vars  # Only used by compute_snp_filter_mask
 
     # Apply SNP list restriction (if -snps provided)
     if snps_indices is not None:
@@ -346,6 +347,12 @@ def run_lmm_association_streaming(
     if show_progress:
         logger.info(f"  Analyzed SNPs: {n_filtered:,}")
 
+    if output_path is None and n_filtered > 100_000:
+        logger.warning(
+            f"In-memory mode with {n_filtered:,} SNPs. Results will accumulate "
+            f"in memory. Provide output_path to stream results to disk."
+        )
+
     if n_filtered == 0:
         if output_path is not None:
             with IncrementalAssocWriter(
@@ -366,10 +373,9 @@ def run_lmm_association_streaming(
             strict=True,
         )
     )
+    del all_miss_counts, allele_freqs
     filtered_means = all_means[snp_indices]
-
-    # Free pass-1 statistics arrays -- filtered subsets already extracted
-    del all_means, all_miss_counts, all_vars, allele_freqs
+    del all_means
     if hwe_threshold > 0:
         del all_n_aa, all_n_ab, all_n_bb
 

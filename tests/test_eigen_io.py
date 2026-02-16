@@ -256,6 +256,7 @@ BFILE = FIXTURES / "mouse_hs1940"
 KINSHIP_FILE = FIXTURES / "mouse_hs1940_kinship.cXX.txt"
 
 
+@pytest.mark.slow
 class TestLMMEquivalence:
     """Verify loaded-eigen LMM results match fresh-eigen results."""
 

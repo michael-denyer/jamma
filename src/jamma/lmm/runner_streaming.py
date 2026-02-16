@@ -4,6 +4,7 @@ Two-pass disk streaming: (1) SNP statistics, (2) association per chunk.
 Never allocates the full genotype matrix.
 """
 
+import contextlib
 import gc
 import time
 from pathlib import Path
@@ -413,15 +414,15 @@ def run_lmm_association_streaming(
     t_result_write_total = 0.0
 
     # === PASS 2: Association ===
-    writer = None
-    if output_path is not None:
-        writer = IncrementalAssocWriter(output_path, test_type=_TEST_TYPE_MAP[lmm_mode])
-        writer.__enter__()
-
     # Track results for in-memory mode (when output_path is None)
     all_results: list[AssocResult] = []
 
-    try:
+    with contextlib.ExitStack() as stack:
+        writer = None
+        if output_path is not None:
+            writer = stack.enter_context(
+                IncrementalAssocWriter(output_path, test_type=_TEST_TYPE_MAP[lmm_mode])
+            )
         assoc_iterator = stream_genotype_chunks(
             bed_path, chunk_size=chunk_size, dtype=np.float64, show_progress=False
         )
@@ -655,11 +656,8 @@ def run_lmm_association_streaming(
 
         del eigenvalues, UtW_jax, Uty_jax
 
-    finally:
-        if writer is not None:
-            writer.__exit__(None, None, None)
-            if show_progress:
-                logger.info(f"Wrote {writer.count:,} results to {output_path}")
+        if writer is not None and show_progress:
+            logger.info(f"Wrote {writer.count:,} results to {output_path}")
 
     jax.clear_caches()
 

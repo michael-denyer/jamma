@@ -882,6 +882,7 @@ class TestFilteringProperties:
         )
 
 
+@pytest.mark.slow
 class TestFilteringEquivalence:
     """Tests for filtering equivalence across different code paths."""
 

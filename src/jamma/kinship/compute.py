@@ -24,6 +24,7 @@ from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
+import psutil
 from jax import jit
 from loguru import logger
 
@@ -542,11 +543,14 @@ def compute_kinship_streaming(
         all_miss_counts[start:end] = chunk_miss_counts
         all_vars[start:end] = chunk_vars
 
-    # Compute filters
+    # Compute filters (free source arrays immediately after deriving values)
     miss_rates = all_miss_counts / n_samples
+    del all_miss_counts
     allele_freqs = all_means / 2.0
+    del all_means
     mafs = np.minimum(allele_freqs, 1.0 - allele_freqs)
     is_polymorphic = all_vars > 0
+    del all_vars
 
     # Combined filter: MAF, missing rate, and monomorphism (always applied)
     snp_mask = (mafs >= maf_threshold) & (miss_rates <= miss_threshold) & is_polymorphic
@@ -625,6 +629,83 @@ def compute_kinship_streaming(
     return K_np
 
 
+def _stream_s_full_and_chr(
+    bed_path: Path,
+    n_samples: int,
+    n_snps: int,
+    snp_indices: np.ndarray,
+    chromosomes: np.ndarray,
+    chr_subset: list[str],
+    chunk_size: int,
+    show_progress: bool,
+    desc: str,
+    S_full_accum: bool = True,
+) -> tuple[jnp.ndarray | None, dict[str, jnp.ndarray]]:
+    """Stream genotypes and accumulate S_full and/or per-chromosome S_chr.
+
+    Args:
+        bed_path: PLINK file prefix.
+        n_samples: Number of samples.
+        n_snps: Total SNPs in the BED file (for chunk iteration).
+        snp_indices: Global indices of filtered SNPs (sorted).
+        chromosomes: Chromosome label for every SNP in the BED file.
+        chr_subset: Chromosomes to accumulate S_chr for in this pass.
+        chunk_size: SNPs per disk chunk.
+        show_progress: Show progress bar.
+        desc: Progress bar description.
+        S_full_accum: If True, also accumulate S_full. Set False for
+            multi-pass batches after S_full is already computed.
+
+    Returns:
+        (S_full or None, dict of chr_name -> S_chr)
+    """
+    S_full = (
+        jnp.zeros((n_samples, n_samples), dtype=jnp.float64) if S_full_accum else None
+    )
+    chr_set = set(chr_subset)
+    S_chr: dict[str, jnp.ndarray] = {
+        c: jnp.zeros((n_samples, n_samples), dtype=jnp.float64) for c in chr_subset
+    }
+
+    n_chunks = (n_snps + chunk_size - 1) // chunk_size
+    chunk_iter = stream_genotype_chunks(
+        bed_path, chunk_size=chunk_size, dtype=np.float64, show_progress=False
+    )
+    if show_progress:
+        chunk_iter = progress_iterator(chunk_iter, total=n_chunks, desc=desc)
+
+    for chunk, file_start, file_end in chunk_iter:
+        left = np.searchsorted(snp_indices, file_start, side="left")
+        right = np.searchsorted(snp_indices, file_end, side="left")
+        chunk_snp_global_indices = snp_indices[left:right]
+        chunk_filtered_local = chunk_snp_global_indices - file_start
+
+        if len(chunk_filtered_local) == 0:
+            continue
+
+        # Check which target chromosomes are in this chunk before allocating
+        chunk_chrs = chromosomes[chunk_snp_global_indices]
+        target_chrs_in_chunk = set(chunk_chrs) & chr_set
+
+        # Skip centering when S_full isn't needed and no target chromosomes present
+        if S_full is None and not target_chrs_in_chunk:
+            continue
+
+        X_chunk = jnp.array(chunk[:, chunk_filtered_local])
+        X_centered = impute_and_center(X_chunk)
+
+        if S_full is not None:
+            S_full = _accumulate_kinship(S_full, X_centered)
+            S_full.block_until_ready()
+
+        for chr_name in target_chrs_in_chunk:
+            X_chr_part = X_centered[:, chunk_chrs == chr_name]
+            S_chr[chr_name] = _accumulate_kinship(S_chr[chr_name], X_chr_part)
+            S_chr[chr_name].block_until_ready()
+
+    return S_full, S_chr
+
+
 def compute_loco_kinship_streaming(
     bed_path: Path,
     chunk_size: int = 10_000,
@@ -637,19 +718,16 @@ def compute_loco_kinship_streaming(
     """Compute LOCO kinship matrices from disk-streamed genotypes.
 
     Two-pass streaming approach that accumulates both S_full and per-chromosome
-    S_chr matrices in a single second pass, then derives LOCO kinship via
-    subtraction: K_loco_c = (S_full - S_chr[c]) / (p - p_c).
+    S_chr matrices, then derives LOCO kinship via subtraction:
+    K_loco_c = (S_full - S_chr[c]) / (p - p_c).
 
     Pass 1: Compute per-SNP statistics for filtering (MAF, missingness, variance).
-    Pass 2: Stream filtered SNPs, accumulate S_full and all S_chr simultaneously.
-    After passes: Yield LOCO kinship matrices one at a time.
+    Pass 2: Stream filtered SNPs, accumulate S_full and S_chr.
 
-    Memory profile: S_full (n^2*8) + sum(S_chr) (n_chr * n^2*8) + chunk buffer.
-    For mouse_hs1940 (1940 samples, 19 chromosomes): ~570 MB.
-
-    TODO: For large-scale datasets (100k+ samples) where n_chr * n^2 * 8 exceeds
-    available memory, a multi-pass approach (one chromosome per pass) would be
-    needed. Not implemented in Phase 25.
+    When all S_chr fit in memory, a single second pass accumulates everything.
+    When memory is insufficient (e.g. 100k+ samples), chromosomes are batched
+    across multiple passes — S_full is computed once in the first pass, then
+    each subsequent pass accumulates S_chr for a batch of chromosomes.
 
     Args:
         bed_path: Path prefix for PLINK files (without .bed/.bim/.fam extension).
@@ -665,7 +743,8 @@ def compute_loco_kinship_streaming(
         excluded and K_loco is the LOCO kinship matrix (n_samples, n_samples).
 
     Raises:
-        MemoryError: If check_memory=True and insufficient memory available.
+        MemoryError: If check_memory=True and insufficient memory for even
+            S_full + one S_chr.
         FileNotFoundError: If the PLINK .bed file does not exist.
         ValueError: If no SNPs pass filtering, or if all filtered SNPs are on
             a single chromosome.
@@ -718,9 +797,12 @@ def compute_loco_kinship_streaming(
 
     # Compute filters
     miss_rates = all_miss_counts / n_samples
+    del all_miss_counts
     allele_freqs = all_means / 2.0
+    del all_means
     mafs = np.minimum(allele_freqs, 1.0 - allele_freqs)
     is_polymorphic = all_vars > 0
+    del all_vars
     snp_mask = (mafs >= maf_threshold) & (miss_rates <= miss_threshold) & is_polymorphic
 
     # Apply kinship SNP list restriction (if -ksnps provided)
@@ -755,97 +837,171 @@ def compute_loco_kinship_streaming(
     n_chr_filtered: dict[str, int] = {
         chr_name: int(np.sum(chr_for_filtered == chr_name)) for chr_name in unique_chrs
     }
+    chrs_with_snps = [c for c in unique_chrs if n_chr_filtered.get(c, 0) > 0]
+    n_chr_with_snps = len(chrs_with_snps)
 
-    # Memory check: S_full + all S_chr + chunk buffer
-    if check_memory:
-        n_chr_with_snps = sum(1 for c in n_chr_filtered.values() if c > 0)
-        required_gb = (
-            n_samples**2 * 8 / 1e9  # S_full
-            + n_chr_with_snps * n_samples**2 * 8 / 1e9  # all S_chr
-            + n_samples * chunk_size * 8 / 1e9  # chunk buffer
-        )
-        if required_gb > 10:
-            logger.warning(
-                f"LOCO streaming: combined S_chr allocation is "
-                f"{n_chr_with_snps * n_samples**2 * 8 / 1e9:.1f}GB "
-                f"({n_chr_with_snps} chromosomes x {n_samples:,} samples)"
-            )
-        check_memory_available(
-            required_gb,
-            safety_margin=0.1,
-            operation=(
-                f"LOCO kinship streaming ({n_samples:,} samples, "
-                f"{n_filtered:,} SNPs, {n_chr_with_snps} chromosomes)"
-            ),
+    # Determine memory strategy: single-pass vs multi-pass batching
+    matrix_gb = n_samples**2 * 8 / 1e9
+    chunk_buffer_gb = n_samples * chunk_size * 8 / 1e9
+    single_pass_gb = matrix_gb * (1 + n_chr_with_snps) + chunk_buffer_gb
+    available_gb = psutil.virtual_memory().available / 1e9
+    # S_full (numpy, persistent) + batch of S_chr (JAX) + chunk buffer
+    min_required_gb = matrix_gb * 2 + chunk_buffer_gb  # S_full + 1 S_chr + buffer
+
+    if check_memory and min_required_gb > available_gb * 0.9:
+        raise MemoryError(
+            f"Insufficient memory for LOCO kinship: need at least "
+            f"{min_required_gb:.1f}GB for S_full + one S_chr, "
+            f"available {available_gb:.1f}GB"
         )
 
-    # Initialize accumulators
-    S_full = jnp.zeros((n_samples, n_samples), dtype=jnp.float64)
-    S_chr: dict[str, jnp.ndarray] = {
-        chr_name: jnp.zeros((n_samples, n_samples), dtype=jnp.float64)
-        for chr_name in unique_chrs
-        if n_chr_filtered.get(chr_name, 0) > 0
-    }
+    single_pass = single_pass_gb <= available_gb * 0.9
 
-    # === PASS 2: Accumulate S_full and per-chromosome S_chr ===
-    n_chunks = (n_snps + chunk_size - 1) // chunk_size
-    chunk_iter = stream_genotype_chunks(
-        bed_path, chunk_size=chunk_size, dtype=np.float64, show_progress=False
-    )
-
-    if show_progress:
-        chunk_iter = progress_iterator(
-            chunk_iter, total=n_chunks, desc="LOCO: kinship accumulation"
-        )
-
-    for chunk, file_start, file_end in chunk_iter:
-        # Binary search for filtered SNPs in this chunk
-        left = np.searchsorted(snp_indices, file_start, side="left")
-        right = np.searchsorted(snp_indices, file_end, side="left")
-        chunk_snp_global_indices = snp_indices[left:right]
-        chunk_filtered_local = chunk_snp_global_indices - file_start
-
-        if len(chunk_filtered_local) == 0:
-            continue
-
-        # Extract filtered columns, impute and center
-        X_chunk = jnp.array(chunk[:, chunk_filtered_local])
-        X_centered = impute_and_center(X_chunk)
-
-        # Accumulate full kinship
-        S_full = _accumulate_kinship(S_full, X_centered)
-        S_full.block_until_ready()
-
-        # Group by chromosome and accumulate per-chromosome contributions
-        chunk_chrs = chromosomes[chunk_snp_global_indices]
-        for chr_name in set(chunk_chrs):
-            X_chr_part = X_centered[:, chunk_chrs == chr_name]
-            S_chr[chr_name] = _accumulate_kinship(S_chr[chr_name], X_chr_part)
-            S_chr[chr_name].block_until_ready()
-
-    # === Yield LOCO kinship matrices ===
-    elapsed = time.perf_counter() - start_time
-    logger.info(
-        f"LOCO streaming accumulation complete in {elapsed:.2f}s, "
-        f"computing {len(S_chr)} LOCO matrices"
-    )
-
-    for chr_name in sorted(S_chr.keys()):
-        p_chr = n_chr_filtered[chr_name]
-        p_loco = n_filtered - p_chr
-
-        if p_loco == 0:
-            raise ValueError(
-                f"Cannot compute LOCO kinship: all {n_filtered} filtered SNPs "
-                f"are on chromosome '{chr_name}'."
+    if single_pass:
+        # === SINGLE-PASS: accumulate S_full and all S_chr together ===
+        if single_pass_gb > 10:
+            logger.info(
+                f"LOCO streaming: single-pass ({single_pass_gb:.1f}GB for "
+                f"{n_chr_with_snps} chromosomes)"
             )
 
-        K_loco = np.array((S_full - S_chr[chr_name]) / p_loco)
-
-        logger.debug(
-            f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs retained"
+        S_full_jax, S_chr = _stream_s_full_and_chr(
+            bed_path,
+            n_samples,
+            n_snps,
+            snp_indices,
+            chromosomes,
+            chrs_with_snps,
+            chunk_size,
+            show_progress,
+            desc="LOCO: kinship accumulation",
         )
 
-        # Free S_chr for this chromosome after yielding
-        del S_chr[chr_name]
-        yield (chr_name, K_loco)
+        S_full_np = np.array(S_full_jax)
+        del S_full_jax
+        gc.collect()
+
+        elapsed = time.perf_counter() - start_time
+        logger.info(
+            f"LOCO streaming accumulation complete in {elapsed:.2f}s, "
+            f"computing {len(S_chr)} LOCO matrices"
+        )
+
+        for chr_name in sorted(S_chr.keys()):
+            p_chr = n_chr_filtered[chr_name]
+            p_loco = n_filtered - p_chr
+
+            if p_loco == 0:
+                raise ValueError(
+                    f"Cannot compute LOCO kinship: all {n_filtered} filtered SNPs "
+                    f"are on chromosome '{chr_name}'."
+                )
+
+            K_loco = (S_full_np - np.array(S_chr[chr_name])) / p_loco
+
+            logger.debug(
+                f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs retained"
+            )
+
+            del S_chr[chr_name]
+            yield (chr_name, K_loco)
+    else:
+        # === MULTI-PASS: batch chromosomes across disk passes ===
+        # First pass holds JAX S_full + batch S_chr + chunk buffer; after
+        # conversion, numpy S_full replaces JAX S_full (briefly both exist).
+        # Reserve 2x matrix_gb for that transition.
+        usable_gb = available_gb * 0.9 - 2 * matrix_gb - chunk_buffer_gb
+        batch_size = max(1, int(usable_gb / matrix_gb))
+
+        n_batches = (n_chr_with_snps + batch_size - 1) // batch_size
+        logger.warning(
+            f"LOCO streaming: multi-pass mode ({n_batches} passes, "
+            f"{batch_size} chromosomes/pass). Single-pass would need "
+            f"{single_pass_gb:.1f}GB, available {available_gb:.1f}GB."
+        )
+
+        # First batch: compute S_full + first batch of S_chr
+        first_batch = chrs_with_snps[:batch_size]
+        S_full_jax, S_chr = _stream_s_full_and_chr(
+            bed_path,
+            n_samples,
+            n_snps,
+            snp_indices,
+            chromosomes,
+            first_batch,
+            chunk_size,
+            show_progress,
+            desc=f"LOCO: pass 1/{n_batches} (S_full + {len(first_batch)} chr)",
+        )
+
+        S_full_np = np.array(S_full_jax)
+        del S_full_jax
+        gc.collect()
+
+        # Yield first batch results
+        for chr_name in sorted(S_chr.keys()):
+            p_chr = n_chr_filtered[chr_name]
+            p_loco = n_filtered - p_chr
+
+            if p_loco == 0:
+                raise ValueError(
+                    f"Cannot compute LOCO kinship: all {n_filtered} filtered SNPs "
+                    f"are on chromosome '{chr_name}'."
+                )
+
+            K_loco = (S_full_np - np.array(S_chr[chr_name])) / p_loco
+            logger.debug(
+                f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs retained"
+            )
+            del S_chr[chr_name]
+            yield (chr_name, K_loco)
+
+        del S_chr
+        gc.collect()
+
+        # Subsequent batches: only accumulate S_chr (S_full already computed)
+        for batch_idx in range(1, n_batches):
+            batch_start = batch_idx * batch_size
+            batch_chrs = chrs_with_snps[batch_start : batch_start + batch_size]
+
+            _, S_chr = _stream_s_full_and_chr(
+                bed_path,
+                n_samples,
+                n_snps,
+                snp_indices,
+                chromosomes,
+                batch_chrs,
+                chunk_size,
+                show_progress,
+                desc=(
+                    f"LOCO: pass {batch_idx + 1}/{n_batches} ({len(batch_chrs)} chr)"
+                ),
+                S_full_accum=False,
+            )
+
+            for chr_name in sorted(S_chr.keys()):
+                p_chr = n_chr_filtered[chr_name]
+                p_loco = n_filtered - p_chr
+
+                if p_loco == 0:
+                    raise ValueError(
+                        f"Cannot compute LOCO kinship: all {n_filtered} filtered "
+                        f"SNPs are on chromosome '{chr_name}'."
+                    )
+
+                K_loco = (S_full_np - np.array(S_chr[chr_name])) / p_loco
+                logger.debug(
+                    f"LOCO chr {chr_name}: {p_chr} SNPs excluded, "
+                    f"{p_loco} SNPs retained"
+                )
+                del S_chr[chr_name]
+                yield (chr_name, K_loco)
+
+            del S_chr
+            gc.collect()
+
+        elapsed = time.perf_counter() - start_time
+        logger.info(
+            f"LOCO multi-pass complete in {elapsed:.2f}s, "
+            f"{n_batches} passes over {n_chr_with_snps} chromosomes"
+        )

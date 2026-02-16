@@ -629,6 +629,47 @@ def compute_kinship_streaming(
     return K_np
 
 
+def _yield_loco_matrices(
+    S_full_np: np.ndarray,
+    S_chr: dict[str, jnp.ndarray],
+    n_chr_filtered: dict[str, int],
+    n_filtered: int,
+) -> Iterator[tuple[str, np.ndarray]]:
+    """Compute and yield LOCO kinship matrices from S_full and per-chr accumulators.
+
+    For each chromosome, computes K_loco = (S_full - S_chr[c]) / (p - p_c),
+    freeing S_chr[c] after each yield.
+
+    Args:
+        S_full_np: Full kinship numerator as numpy array (n_samples, n_samples).
+        S_chr: Per-chromosome kinship contributions (JAX arrays).
+        n_chr_filtered: Count of filtered SNPs per chromosome.
+        n_filtered: Total number of filtered SNPs.
+
+    Yields:
+        (chr_name, K_loco) pairs in sorted chromosome order.
+
+    Raises:
+        ValueError: If all filtered SNPs are on a single chromosome.
+    """
+    for chr_name in sorted(S_chr.keys()):
+        p_chr = n_chr_filtered[chr_name]
+        p_loco = n_filtered - p_chr
+
+        if p_loco == 0:
+            raise ValueError(
+                f"Cannot compute LOCO kinship: all {n_filtered} filtered SNPs "
+                f"are on chromosome '{chr_name}'."
+            )
+
+        K_loco = (S_full_np - np.array(S_chr[chr_name])) / p_loco
+        logger.debug(
+            f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs retained"
+        )
+        del S_chr[chr_name]
+        yield (chr_name, K_loco)
+
+
 def _stream_s_full_and_chr(
     bed_path: Path,
     n_samples: int,
@@ -887,24 +928,7 @@ def compute_loco_kinship_streaming(
             f"computing {len(S_chr)} LOCO matrices"
         )
 
-        for chr_name in sorted(S_chr.keys()):
-            p_chr = n_chr_filtered[chr_name]
-            p_loco = n_filtered - p_chr
-
-            if p_loco == 0:
-                raise ValueError(
-                    f"Cannot compute LOCO kinship: all {n_filtered} filtered SNPs "
-                    f"are on chromosome '{chr_name}'."
-                )
-
-            K_loco = (S_full_np - np.array(S_chr[chr_name])) / p_loco
-
-            logger.debug(
-                f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs retained"
-            )
-
-            del S_chr[chr_name]
-            yield (chr_name, K_loco)
+        yield from _yield_loco_matrices(S_full_np, S_chr, n_chr_filtered, n_filtered)
     else:
         # === MULTI-PASS: batch chromosomes across disk passes ===
         # First pass holds JAX S_full + batch S_chr + chunk buffer; after
@@ -938,24 +962,7 @@ def compute_loco_kinship_streaming(
         del S_full_jax
         gc.collect()
 
-        # Yield first batch results
-        for chr_name in sorted(S_chr.keys()):
-            p_chr = n_chr_filtered[chr_name]
-            p_loco = n_filtered - p_chr
-
-            if p_loco == 0:
-                raise ValueError(
-                    f"Cannot compute LOCO kinship: all {n_filtered} filtered SNPs "
-                    f"are on chromosome '{chr_name}'."
-                )
-
-            K_loco = (S_full_np - np.array(S_chr[chr_name])) / p_loco
-            logger.debug(
-                f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs retained"
-            )
-            del S_chr[chr_name]
-            yield (chr_name, K_loco)
-
+        yield from _yield_loco_matrices(S_full_np, S_chr, n_chr_filtered, n_filtered)
         del S_chr
         gc.collect()
 
@@ -979,24 +986,9 @@ def compute_loco_kinship_streaming(
                 S_full_accum=False,
             )
 
-            for chr_name in sorted(S_chr.keys()):
-                p_chr = n_chr_filtered[chr_name]
-                p_loco = n_filtered - p_chr
-
-                if p_loco == 0:
-                    raise ValueError(
-                        f"Cannot compute LOCO kinship: all {n_filtered} filtered "
-                        f"SNPs are on chromosome '{chr_name}'."
-                    )
-
-                K_loco = (S_full_np - np.array(S_chr[chr_name])) / p_loco
-                logger.debug(
-                    f"LOCO chr {chr_name}: {p_chr} SNPs excluded, "
-                    f"{p_loco} SNPs retained"
-                )
-                del S_chr[chr_name]
-                yield (chr_name, K_loco)
-
+            yield from _yield_loco_matrices(
+                S_full_np, S_chr, n_chr_filtered, n_filtered
+            )
             del S_chr
             gc.collect()
 

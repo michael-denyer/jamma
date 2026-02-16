@@ -577,27 +577,19 @@ def _run_lmm_for_chromosome(
         results: list[AssocResult] = []
         if any(accum.values()):
             arrays = _concat_jax_accumulators(lmm_mode, accum)
+            results_iter = _yield_chunk_results(
+                lmm_mode,
+                np.arange(n_filtered),
+                global_filtered_indices,
+                snp_stats,
+                snp_info,
+                arrays,
+            )
             if writer is not None:
-                for result in _yield_chunk_results(
-                    lmm_mode,
-                    np.arange(n_filtered),
-                    global_filtered_indices,
-                    snp_stats,
-                    snp_info,
-                    arrays,
-                ):
+                for result in results_iter:
                     writer.write(result)
             else:
-                results = list(
-                    _yield_chunk_results(
-                        lmm_mode,
-                        np.arange(n_filtered),
-                        global_filtered_indices,
-                        snp_stats,
-                        snp_info,
-                        arrays,
-                    )
-                )
+                results = list(results_iter)
 
         return results
     finally:

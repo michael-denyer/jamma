@@ -5,6 +5,8 @@ eigendecomposition handling, null model computation, and
 batch lambda optimization used by both the batch and streaming runners.
 """
 
+import gc
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -106,6 +108,8 @@ def _eigendecompose_or_reuse(
     if show_progress:
         log_rss_memory(label, "before_eigendecomp")
     eigenvalues_np, U = eigendecompose_kinship(kinship, check_memory=check_memory)
+    # Release LAPACK DSYEVD workspace before LMM phase
+    gc.collect()
     if show_progress:
         log_rss_memory(label, "after_eigendecomp")
     return eigenvalues_np, U

@@ -4,6 +4,7 @@ Batch-optimized LMM association testing on CPU (XLA) or GPU (JAX).
 Input genotypes must fit in memory; for disk streaming use runner_streaming.py.
 """
 
+import gc
 import time
 
 import jax
@@ -108,6 +109,11 @@ def run_lmm_association_jax(
             f"eigenvectors={eigenvectors is not None}"
         )
 
+    if lmm_mode not in (1, 2, 3, 4):
+        raise ValueError(
+            f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
+        )
+
     # Memory check before workflow
     n_samples, n_snps = genotypes.shape
     start_time = time.perf_counter()
@@ -180,11 +186,13 @@ def run_lmm_association_jax(
         "lmm_jax",
         check_memory=check_memory,
     )
-    UT = np.ascontiguousarray(U.T)  # Cache contiguous transpose for BLAS matmuls
+    # Free kinship ref and LAPACK workspace before LMM phase
+    del kinship
+    gc.collect()
 
     with blas_threads():
-        UtW = UT @ W
-        Uty = UT @ phenotypes
+        UtW = U.T @ W
+        Uty = U.T @ phenotypes
 
     logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
         lmm_mode, eigenvalues_np, UtW, Uty, n_cvt, device, show_progress
@@ -224,7 +232,6 @@ def run_lmm_association_jax(
         p_scores_out = np.empty(n_filtered, dtype=np.float64)
     elif lmm_mode == 2:  # LRT
         lambdas_mle_out = np.empty(n_filtered, dtype=np.float64)
-        logls_mle_out = np.empty(n_filtered, dtype=np.float64)
         p_lrts_out = np.empty(n_filtered, dtype=np.float64)
     elif lmm_mode == 4:  # All tests
         lambdas_out = np.empty(n_filtered, dtype=np.float64)
@@ -233,7 +240,6 @@ def run_lmm_association_jax(
         ses_out = np.empty(n_filtered, dtype=np.float64)
         pwalds_out = np.empty(n_filtered, dtype=np.float64)
         lambdas_mle_out = np.empty(n_filtered, dtype=np.float64)
-        logls_mle_out = np.empty(n_filtered, dtype=np.float64)
         p_lrts_out = np.empty(n_filtered, dtype=np.float64)
         p_scores_out = np.empty(n_filtered, dtype=np.float64)
 
@@ -254,7 +260,7 @@ def run_lmm_association_jax(
             geno_chunk = np.pad(geno_chunk, ((0, 0), (0, pad_width)), mode="constant")
 
         with blas_threads():
-            UtG_chunk = np.ascontiguousarray(UT @ geno_chunk)
+            UtG_chunk = np.ascontiguousarray(U.T @ geno_chunk)
         return UtG_chunk, actual_len, needs_pad
 
     # Double buffering: overlap device transfer with computation
@@ -401,7 +407,6 @@ def run_lmm_association_jax(
             slice_len = actual_chunk_len if needs_padding else len(best_lambdas_mle)
             s = slice(write_offset, write_offset + slice_len)
             lambdas_mle_out[s] = np.asarray(best_lambdas_mle[:slice_len])
-            logls_mle_out[s] = np.asarray(best_logls_mle[:slice_len])
             p_lrts_out[s] = np.asarray(p_lrts[:slice_len])
         elif lmm_mode == 4:
             slice_len = actual_chunk_len if needs_padding else len(best_lambdas)
@@ -481,5 +486,3 @@ def run_lmm_association_jax(
             p_lrts_out,
             p_scores_out,
         )
-    else:
-        raise ValueError(f"Unsupported lmm_mode: {lmm_mode}. Use 1, 2, 3, or 4.")

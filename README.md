@@ -3,7 +3,7 @@
   <a href="https://pypi.org/project/jamma/"><img src="https://img.shields.io/pypi/v/jamma.svg" alt="PyPI"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+"></a>
   <a href="https://github.com/jax-ml/jax"><img src="https://img.shields.io/badge/JAX-accelerated-9cf.svg" alt="JAX"></a>
-  <a href="https://numpy.org/"><img src="https://img.shields.io/badge/NumPy-1.26+-013243.svg?logo=numpy" alt="NumPy"></a>
+  <a href="https://numpy.org/"><img src="https://img.shields.io/badge/NumPy-2.0+-013243.svg?logo=numpy" alt="NumPy"></a>
   <a href="https://hypothesis.readthedocs.io/"><img src="https://img.shields.io/badge/tested%20with-Hypothesis-blue.svg" alt="Hypothesis"></a>
   <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPL%203.0-blue.svg" alt="License: GPL-3.0"></a>
 </p>
@@ -179,7 +179,7 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs):
 
 - Python 3.11+
 - JAX 0.8.0+
-- NumPy 1.26+
+- NumPy 2.0+
 
 ## License
 

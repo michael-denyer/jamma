@@ -16,7 +16,7 @@
 
 - **GEMMA-compatible**: Drop-in replacement with identical CLI flags and output formats
 - **Numerical equivalence**: Validated against GEMMA — 100% significance agreement, 100% effect direction agreement
-- **Fast**: Up to 7x faster than GEMMA on kinship and 4x faster on LMM association
+- **Fast**: Up to 22x faster than GEMMA on kinship and 5x faster on LMM association
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
 - **Pure Python**: JAX + NumPy stack, no C++ compilation required
 - **Large-scale ready**: Optional [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) wheels (numpy 2.4.2) for >46k sample eigendecomposition
@@ -129,13 +129,13 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 
 ## Performance
 
-Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs):
+Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M3 Pro:
 
-| Operation          | GEMMA | JAMMA | Speedup  |
-|--------------------|-------|-------|----------|
-| Kinship (`-gk 1`)  | 6.5s  | 0.9s  | **7.1x** |
-| LMM (`-lmm 1`)     | 19.5s | 4.7s  | **4.2x** |
-| **Total**          | 26.0s | 5.6s  | **4.6x** |
+| Operation          | GEMMA  | JAMMA | Speedup   |
+|--------------------|--------|-------|-----------|
+| Kinship (`-gk 1`)  | 24.7s  | 1.1s  | **22.5x** |
+| LMM (`-lmm 1`)     | 27.8s  | 5.3s  | **5.2x**  |
+| **Total**          | 52.5s  | 6.4s  | **8.2x**  |
 
 ## Supported Features
 

@@ -2076,6 +2076,7 @@ class TestLmmAllTestsProperties:
             )
 
 
+@pytest.mark.slow
 class TestMouseHS1940Validation:
     """Tests validating JAMMA against GEMMA on mouse_hs1940 dataset.
 

@@ -24,6 +24,7 @@ from loguru import logger
 from jamma.core.memory import StreamingMemoryBreakdown, estimate_streaming_memory
 from jamma.io.covariate import read_covariate_file
 from jamma.io.plink import get_plink_metadata, validate_plink_dimensions
+from jamma.io.snp_list import read_snp_list_file, resolve_snp_list_to_indices
 from jamma.kinship import (
     compute_kinship_streaming,
     read_kinship_matrix,
@@ -423,6 +424,27 @@ class PipelineRunner:
 
         return covariates
 
+    @staticmethod
+    def _resolve_snp_list(
+        snp_file: Path | None, sid_array: np.ndarray, label: str
+    ) -> np.ndarray | None:
+        """Resolve a SNP list file to column indices, or return None.
+
+        Args:
+            snp_file: Path to SNP list file, or None.
+            sid_array: Array of SNP IDs from PLINK metadata.
+            label: Label for log message (e.g. "-snps", "-ksnps").
+
+        Returns:
+            Sorted array of column indices, or None if snp_file is None.
+        """
+        if snp_file is None:
+            return None
+        snp_ids = read_snp_list_file(snp_file)
+        indices = resolve_snp_list_to_indices(snp_ids, sid_array)
+        logger.info(f"SNP list ({label}): {len(indices)} SNPs resolved")
+        return indices
+
     def run(self) -> PipelineResult:
         """Execute the full GWAS pipeline.
 
@@ -463,24 +485,12 @@ class PipelineRunner:
         )
 
         # 5. Resolve SNP list files to indices
-        snps_indices = None
-        ksnps_indices = None
-        if self.config.snps_file is not None or self.config.ksnps_file is not None:
-            from jamma.io.snp_list import (
-                read_snp_list_file,
-                resolve_snp_list_to_indices,
-            )
-
-        if self.config.snps_file is not None:
-            snp_ids = read_snp_list_file(self.config.snps_file)
-            snps_indices = resolve_snp_list_to_indices(snp_ids, meta["sid"])
-            logger.info(f"SNP list (-snps): {len(snps_indices)} SNPs to test")
-        if self.config.ksnps_file is not None:
-            ksnp_ids = read_snp_list_file(self.config.ksnps_file)
-            ksnps_indices = resolve_snp_list_to_indices(ksnp_ids, meta["sid"])
-            logger.info(
-                f"Kinship SNP list (-ksnps): {len(ksnps_indices)} SNPs for kinship"
-            )
+        snps_indices = self._resolve_snp_list(
+            self.config.snps_file, meta["sid"], "-snps"
+        )
+        ksnps_indices = self._resolve_snp_list(
+            self.config.ksnps_file, meta["sid"], "-ksnps"
+        )
 
         # 6. Output directory
         self.config.output_dir.mkdir(parents=True, exist_ok=True)

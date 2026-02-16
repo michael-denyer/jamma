@@ -472,7 +472,7 @@ def run_lmm_association_jax(
             lambdas_mle_out,
             p_lrts_out,
         )
-    elif lmm_mode == 4:
+    else:  # lmm_mode == 4 (validated at top)
         return _build_results_all(
             snp_indices,
             snp_stats,

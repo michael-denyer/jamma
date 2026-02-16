@@ -17,7 +17,11 @@ from jamma.core.memory import estimate_lmm_streaming_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask
 from jamma.core.threading import blas_threads
-from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
+from jamma.io.plink import (
+    get_plink_metadata,
+    stream_genotype_chunks,
+    validate_genotype_values,
+)
 from jamma.lmm.chunk import _compute_chunk_size
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.likelihood_jax import (
@@ -90,6 +94,8 @@ _ACCUM_KEYS = {
 
 _FIRST_ARRAY_KEY = {1: "lambdas", 2: "lambdas_mle", 3: "betas", 4: "lambdas"}
 
+_TEST_TYPE_MAP = {1: "wald", 2: "lrt", 3: "score", 4: "all"}
+
 
 def _init_accumulators(lmm_mode: int) -> dict[str, list]:
     """Create empty accumulator dict for the given mode."""
@@ -111,7 +117,6 @@ def _append_chunk_results(
         "ses": "ses",
         "pwalds": "p_walds",
         "lambdas_mle": "best_lambdas_mle",
-        "logls_mle": "best_logls_mle",
         "p_lrts": "p_lrts",
         "p_scores": "p_scores",
     }
@@ -257,7 +262,7 @@ def run_lmm_association_streaming(
     t_io_start = time.perf_counter()
     all_means = np.zeros(n_snps, dtype=np.float64)
     all_miss_counts = np.zeros(n_snps, dtype=np.int32)
-    all_vars = np.zeros(n_snps, dtype=np.float64)  # For monomorphic detection
+    all_vars = np.zeros(n_snps, dtype=np.float64)
 
     # HWE genotype count accumulators (only when threshold > 0)
     if hwe_threshold > 0:
@@ -286,7 +291,7 @@ def run_lmm_association_streaming(
         chunk_miss_counts = np.sum(np.isnan(chunk), axis=0)
         with np.errstate(invalid="ignore"):
             chunk_means = np.nanmean(chunk, axis=0)
-            chunk_vars = np.nanvar(chunk, axis=0)  # For monomorphic detection
+            chunk_vars = np.nanvar(chunk, axis=0)
         chunk_means = np.nan_to_num(chunk_means, nan=0.0)
         chunk_vars = np.nan_to_num(chunk_vars, nan=0.0)
 
@@ -301,10 +306,7 @@ def run_lmm_association_streaming(
             all_n_ab[start:end] += np.sum((chunk == 1) & valid_geno, axis=0)
             all_n_bb[start:end] += np.sum((chunk == 2) & valid_geno, axis=0)
 
-        # Validate genotype values
         if validate_genotypes:
-            from jamma.io.plink import validate_genotype_values
-
             n_unexpected_total += validate_genotype_values(chunk)
 
     if validate_genotypes and n_unexpected_total > 0:
@@ -345,9 +347,9 @@ def run_lmm_association_streaming(
 
     if n_filtered == 0:
         if output_path is not None:
-            test_type_map = {1: "wald", 2: "lrt", 3: "score", 4: "all"}
-            test_type = test_type_map.get(lmm_mode, "wald")
-            with IncrementalAssocWriter(output_path, test_type=test_type):
+            with IncrementalAssocWriter(
+                output_path, test_type=_TEST_TYPE_MAP[lmm_mode]
+            ):
                 pass  # Context manager writes header, no data rows
         if show_progress:
             elapsed = time.perf_counter() - start_time
@@ -413,9 +415,7 @@ def run_lmm_association_streaming(
     # === PASS 2: Association ===
     writer = None
     if output_path is not None:
-        test_type_map = {1: "wald", 2: "lrt", 3: "score", 4: "all"}
-        test_type = test_type_map.get(lmm_mode, "wald")
-        writer = IncrementalAssocWriter(output_path, test_type=test_type)
+        writer = IncrementalAssocWriter(output_path, test_type=_TEST_TYPE_MAP[lmm_mode])
         writer.__enter__()
 
     # Track results for in-memory mode (when output_path is None)

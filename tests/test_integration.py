@@ -12,9 +12,9 @@ from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
-from typer.testing import CliRunner
+from click.testing import CliRunner
 
-from jamma.cli import app
+from jamma.cli import main
 
 runner = CliRunner()
 
@@ -30,7 +30,7 @@ class TestGkWorkflow:
         outdir = tmp_path / "output"
 
         result = runner.invoke(
-            app, ["-outdir", str(outdir), "gk", "-bfile", str(EXAMPLE_BFILE)]
+            main, ["-outdir", str(outdir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
         )
 
         assert result.exit_code == 0
@@ -42,7 +42,7 @@ class TestGkWorkflow:
         outdir = tmp_path / "output"
 
         result = runner.invoke(
-            app, ["-outdir", str(outdir), "gk", "-bfile", str(EXAMPLE_BFILE)]
+            main, ["-outdir", str(outdir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
         )
 
         assert result.exit_code == 0

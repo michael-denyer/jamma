@@ -125,7 +125,7 @@ class PipelineRunner:
     kinship, load covariates, run LMM association.
 
     Raises exceptions (ValueError, FileNotFoundError, MemoryError)
-    rather than calling sys.exit or typer.Exit. The CLI wrapper catches
+    rather than calling sys.exit or click.ClickException. The CLI wrapper catches
     these and converts to user-friendly error messages.
 
     Args:

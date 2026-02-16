@@ -3,9 +3,9 @@
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
+from click.testing import CliRunner
 
-from jamma.cli import app
+from jamma.cli import main
 
 runner = CliRunner()
 
@@ -13,30 +13,57 @@ runner = CliRunner()
 EXAMPLE_BFILE = Path(__file__).parent / "fixtures" / "gemma_synthetic" / "test"
 
 
-def test_cli_help():
-    """Test that --help shows usage with expected options."""
-    result = runner.invoke(app, ["--help"])
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "-bfile",
+        "-gk",
+        "-lmm",
+        "-k",
+        "-c",
+        "-o",
+        "-outdir",
+        "-maf",
+        "-miss",
+        "-loco",
+        "-eigen",
+        "-n",
+        "-d",
+        "-u",
+        "-hwe",
+        "-snps",
+        "-ksnps",
+    ],
+)
+def test_cli_help_shows_flag(flag: str):
+    """All CLI flags appear in --help output."""
+    result = runner.invoke(main, ["--help"])
     assert result.exit_code == 0
-    assert "-outdir" in result.output
-    assert "-o" in result.output
-    assert "gk" in result.output
+    assert flag in result.output
+
+
+@pytest.mark.parametrize(
+    "flag,description_fragment",
+    [
+        ("-c", "Covariate"),
+        ("-n", "Phenotype column"),
+    ],
+)
+def test_cli_help_shows_description(flag: str, description_fragment: str):
+    """Flag descriptions contain expected text."""
+    result = runner.invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert flag in result.output
+    assert description_fragment in result.output
 
 
 def test_cli_version():
     """Test that --version shows version number."""
     import jamma
 
-    result = runner.invoke(app, ["--version"])
+    result = runner.invoke(main, ["--version"])
     assert result.exit_code == 0
     assert jamma.__version__ in result.output
-
-
-def test_cli_gk_help():
-    """Test that gk --help shows -bfile option."""
-    result = runner.invoke(app, ["gk", "--help"])
-    assert result.exit_code == 0
-    assert "-bfile" in result.output
-    assert "-gk" in result.output
 
 
 def test_cli_gk_loads_data(tmp_path: Path):
@@ -44,7 +71,7 @@ def test_cli_gk_loads_data(tmp_path: Path):
     outdir = tmp_path / "output"
 
     result = runner.invoke(
-        app, ["-outdir", str(outdir), "gk", "-bfile", str(EXAMPLE_BFILE)]
+        main, ["-outdir", str(outdir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
     )
 
     assert result.exit_code == 0
@@ -58,7 +85,7 @@ def test_cli_gk_log_file(tmp_path: Path):
     outdir = tmp_path / "output"
 
     result = runner.invoke(
-        app, ["-outdir", str(outdir), "gk", "-bfile", str(EXAMPLE_BFILE)]
+        main, ["-outdir", str(outdir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
     )
 
     assert result.exit_code == 0
@@ -79,7 +106,7 @@ def test_cli_gk_invalid_bfile(tmp_path: Path):
     fake_bfile = tmp_path / "nonexistent"
 
     result = runner.invoke(
-        app, ["-outdir", str(outdir), "gk", "-bfile", str(fake_bfile)]
+        main, ["-outdir", str(outdir), "-gk", "1", "-bfile", str(fake_bfile)]
     )
 
     assert result.exit_code == 1
@@ -91,7 +118,7 @@ def test_cli_gk_custom_outdir(tmp_path: Path):
     custom_dir = tmp_path / "custom_output_dir"
 
     result = runner.invoke(
-        app, ["-outdir", str(custom_dir), "gk", "-bfile", str(EXAMPLE_BFILE)]
+        main, ["-outdir", str(custom_dir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
     )
 
     assert result.exit_code == 0
@@ -104,8 +131,17 @@ def test_cli_gk_custom_prefix(tmp_path: Path):
     outdir = tmp_path / "output"
 
     result = runner.invoke(
-        app,
-        ["-outdir", str(outdir), "-o", "myprefix", "gk", "-bfile", str(EXAMPLE_BFILE)],
+        main,
+        [
+            "-outdir",
+            str(outdir),
+            "-o",
+            "myprefix",
+            "-gk",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+        ],
     )
 
     assert result.exit_code == 0
@@ -114,26 +150,16 @@ def test_cli_gk_custom_prefix(tmp_path: Path):
 
 def test_cli_lmm_requires_kinship():
     """Test that lmm command requires -k (kinship) flag."""
-    result = runner.invoke(app, ["lmm", "-bfile", str(EXAMPLE_BFILE)])
+    result = runner.invoke(main, ["-lmm", "1", "-bfile", str(EXAMPLE_BFILE)])
 
     assert result.exit_code == 1
     assert "-k" in result.output or "kinship" in result.output.lower()
 
 
-def test_cli_lmm_help():
-    """Test that lmm --help shows all required options."""
-    result = runner.invoke(app, ["lmm", "--help"])
-
-    assert result.exit_code == 0
-    assert "-bfile" in result.output
-    assert "-k" in result.output
-    assert "-lmm" in result.output
-
-
 def test_cli_lmm_mode_2_accepted():
     """Test that lmm mode 2 (LRT) is accepted and doesn't show 'not implemented'."""
     result = runner.invoke(
-        app, ["lmm", "-bfile", str(EXAMPLE_BFILE), "-k", "fake.txt", "-lmm", "2"]
+        main, ["-lmm", "2", "-bfile", str(EXAMPLE_BFILE), "-k", "fake.txt"]
     )
 
     # Mode 2 is now implemented - fails on kinship file, not 'not implemented'
@@ -146,7 +172,7 @@ def test_cli_gk_mode_2_succeeds(tmp_path: Path):
     """Test that -gk 2 computes standardized kinship and writes output."""
     outdir = tmp_path / "output"
     result = runner.invoke(
-        app, ["-outdir", str(outdir), "gk", "-bfile", str(EXAMPLE_BFILE), "-gk", "2"]
+        main, ["-outdir", str(outdir), "-gk", "2", "-bfile", str(EXAMPLE_BFILE)]
     )
     assert result.exit_code == 0, f"gk mode 2 failed: {result.output}"
     assert "standardized" in result.output.lower()
@@ -166,11 +192,12 @@ def test_cli_gk_maf_miss_flags(tmp_path: Path):
 
     # Run with MAF and missing filters
     result = runner.invoke(
-        app,
+        main,
         [
             "-outdir",
             str(outdir),
-            "gk",
+            "-gk",
+            "1",
             "-bfile",
             str(EXAMPLE_BFILE),
             "-maf",
@@ -191,30 +218,6 @@ def test_cli_gk_maf_miss_flags(tmp_path: Path):
     assert "miss_threshold = 0.1" in log_content
 
 
-def test_cli_gk_help_shows_filter_flags():
-    """Test that gk --help shows -maf and -miss options."""
-    result = runner.invoke(app, ["gk", "--help"])
-    assert result.exit_code == 0
-    assert "-maf" in result.output
-    assert "-miss" in result.output
-
-
-def test_cli_lmm_help_shows_filter_flags():
-    """Test that lmm --help shows -maf and -miss options."""
-    result = runner.invoke(app, ["lmm", "--help"])
-    assert result.exit_code == 0
-    assert "-maf" in result.output
-    assert "-miss" in result.output
-
-
-def test_cli_lmm_help_shows_covariate_flag():
-    """Test that lmm --help shows -c option."""
-    result = runner.invoke(app, ["lmm", "--help"])
-    assert result.exit_code == 0
-    assert "-c" in result.output
-    assert "Covariate" in result.output
-
-
 def test_lmm_jax_default_mode4(tmp_path: Path):
     """Test that default JAX backend works with -lmm 4."""
     outdir = tmp_path / "output"
@@ -222,24 +225,23 @@ def test_lmm_jax_default_mode4(tmp_path: Path):
 
     # Create kinship matrix
     result = runner.invoke(
-        app, ["-outdir", str(kinship_dir), "gk", "-bfile", str(EXAMPLE_BFILE)]
+        main, ["-outdir", str(kinship_dir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
     )
     assert result.exit_code == 0
     kinship_file = kinship_dir / "result.cXX.txt"
 
     # Run LMM mode 4 with JAX (default)
     result = runner.invoke(
-        app,
+        main,
         [
             "-outdir",
             str(outdir),
-            "lmm",
+            "-lmm",
+            "4",
             "-bfile",
             str(EXAMPLE_BFILE),
             "-k",
             str(kinship_file),
-            "-lmm",
-            "4",
             "--no-check-memory",
         ],
     )
@@ -263,7 +265,7 @@ def test_lmm_with_covariate_file(tmp_path: Path):
 
     # First, create kinship matrix
     result = runner.invoke(
-        app, ["-outdir", str(kinship_dir), "gk", "-bfile", str(EXAMPLE_BFILE)]
+        main, ["-outdir", str(kinship_dir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
     )
     assert result.exit_code == 0
     kinship_file = kinship_dir / "result.cXX.txt"
@@ -277,11 +279,12 @@ def test_lmm_with_covariate_file(tmp_path: Path):
 
     # Run LMM with covariates
     result = runner.invoke(
-        app,
+        main,
         [
             "-outdir",
             str(outdir),
-            "lmm",
+            "-lmm",
+            "1",
             "-bfile",
             str(EXAMPLE_BFILE),
             "-k",
@@ -303,7 +306,7 @@ def test_lmm_covariate_file_not_found(tmp_path: Path):
 
     # First, create kinship matrix
     result = runner.invoke(
-        app, ["-outdir", str(kinship_dir), "gk", "-bfile", str(EXAMPLE_BFILE)]
+        main, ["-outdir", str(kinship_dir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
     )
     assert result.exit_code == 0
     kinship_file = kinship_dir / "result.cXX.txt"
@@ -311,11 +314,12 @@ def test_lmm_covariate_file_not_found(tmp_path: Path):
     # Run LMM with nonexistent covariate file
     fake_cov = tmp_path / "nonexistent_covariates.txt"
     result = runner.invoke(
-        app,
+        main,
         [
             "-outdir",
             str(outdir),
-            "lmm",
+            "-lmm",
+            "1",
             "-bfile",
             str(EXAMPLE_BFILE),
             "-k",
@@ -336,7 +340,7 @@ def test_lmm_covariate_sample_mismatch(tmp_path: Path):
 
     # First, create kinship matrix
     result = runner.invoke(
-        app, ["-outdir", str(kinship_dir), "gk", "-bfile", str(EXAMPLE_BFILE)]
+        main, ["-outdir", str(kinship_dir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
     )
     assert result.exit_code == 0
     kinship_file = kinship_dir / "result.cXX.txt"
@@ -349,11 +353,12 @@ def test_lmm_covariate_sample_mismatch(tmp_path: Path):
 
     # Run LMM with mismatched covariates
     result = runner.invoke(
-        app,
+        main,
         [
             "-outdir",
             str(outdir),
-            "lmm",
+            "-lmm",
+            "1",
             "-bfile",
             str(EXAMPLE_BFILE),
             "-k",
@@ -375,7 +380,7 @@ def test_lmm_covariate_intercept_warning(tmp_path: Path):
 
     # First, create kinship matrix
     result = runner.invoke(
-        app, ["-outdir", str(kinship_dir), "gk", "-bfile", str(EXAMPLE_BFILE)]
+        main, ["-outdir", str(kinship_dir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
     )
     assert result.exit_code == 0
     kinship_file = kinship_dir / "result.cXX.txt"
@@ -389,11 +394,12 @@ def test_lmm_covariate_intercept_warning(tmp_path: Path):
 
     # Run LMM - should succeed but warn
     result = runner.invoke(
-        app,
+        main,
         [
             "-outdir",
             str(outdir),
-            "lmm",
+            "-lmm",
+            "1",
             "-bfile",
             str(EXAMPLE_BFILE),
             "-k",
@@ -408,51 +414,15 @@ def test_lmm_covariate_intercept_warning(tmp_path: Path):
     assert "intercept" in result.output.lower()
 
 
-@pytest.mark.parametrize("subcommand", ["lmm", "gk"])
-def test_cli_n_flag_in_help(subcommand: str):
-    """Verify -n (phenotype column) appears in subcommand help output."""
-    result = runner.invoke(app, [subcommand, "--help"])
-    assert result.exit_code == 0
-    assert "-n" in result.output
-    assert "Phenotype column" in result.output
-
-
-def test_cli_lmm_snps_flag_in_help():
-    """Verify -snps appears in lmm help output."""
-    result = runner.invoke(app, ["lmm", "--help"])
-    assert result.exit_code == 0
-    assert "-snps" in result.output
-
-
-def test_cli_lmm_ksnps_flag_in_help():
-    """Verify -ksnps appears in lmm help output."""
-    result = runner.invoke(app, ["lmm", "--help"])
-    assert result.exit_code == 0
-    assert "-ksnps" in result.output
-
-
-def test_cli_lmm_hwe_flag_in_help():
-    """Verify -hwe appears in lmm help output."""
-    result = runner.invoke(app, ["lmm", "--help"])
-    assert result.exit_code == 0
-    assert "-hwe" in result.output
-
-
-def test_cli_gk_ksnps_flag_in_help():
-    """Verify -ksnps appears in gk help output."""
-    result = runner.invoke(app, ["gk", "--help"])
-    assert result.exit_code == 0
-    assert "-ksnps" in result.output
-
-
 def test_cli_gk_ksnps_missing_file_error(tmp_path: Path):
     """CLI gk command exits gracefully when -ksnps file doesn't exist."""
     result = runner.invoke(
-        app,
+        main,
         [
             "-outdir",
             str(tmp_path),
-            "gk",
+            "-gk",
+            "1",
             "-bfile",
             str(EXAMPLE_BFILE),
             "-ksnps",
@@ -461,3 +431,68 @@ def test_cli_gk_ksnps_missing_file_error(tmp_path: Path):
     )
     assert result.exit_code == 1
     assert "Error:" in result.output
+
+
+def test_cli_gk_lmm_mutually_exclusive():
+    """Providing both -gk and -lmm should fail with a usage error."""
+    result = runner.invoke(
+        main, ["-bfile", str(EXAMPLE_BFILE), "-gk", "1", "-lmm", "1"]
+    )
+    assert result.exit_code == 2
+    assert "mutually exclusive" in result.output
+
+
+def test_cli_requires_gk_or_lmm():
+    """Providing -bfile without -gk or -lmm should fail with a usage error."""
+    result = runner.invoke(main, ["-bfile", str(EXAMPLE_BFILE)])
+    assert result.exit_code == 2
+    assert "One of -gk or -lmm is required" in result.output
+
+
+@pytest.mark.parametrize(
+    "flag,value",
+    [
+        ("-gxe", "file.txt"),
+        ("-vc", "1"),
+        ("-mk", "file.txt"),
+        ("-mvlmm", "1"),
+    ],
+)
+def test_cli_unimplemented_flags_error(flag: str, value: str):
+    """Unimplemented flags should produce a clear error message."""
+    result = runner.invoke(
+        main, ["-bfile", str(EXAMPLE_BFILE), "-gk", "1", flag, value]
+    )
+    assert result.exit_code == 1
+    assert "not yet implemented" in result.output.lower()
+
+
+def test_cli_gk_default_no_filtering(tmp_path: Path):
+    """Default gk invocation should not apply MAF/miss filtering."""
+    outdir = tmp_path / "output"
+    result = runner.invoke(
+        main, ["-outdir", str(outdir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
+    )
+    assert result.exit_code == 0
+    assert "Filtering" not in result.output
+
+
+def test_cli_gk_explicit_maf_applies_filtering(tmp_path: Path):
+    """Explicit -maf with -gk should apply filtering."""
+    outdir = tmp_path / "output"
+    result = runner.invoke(
+        main,
+        [
+            "-outdir",
+            str(outdir),
+            "-gk",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-maf",
+            "0.05",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Filtering" in result.output
+    assert "MAF >= 0.05" in result.output

@@ -9,9 +9,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from typer.testing import CliRunner
+from click.testing import CliRunner
 
-from jamma.cli import app
+from jamma.cli import main
 
 runner = CliRunner()
 
@@ -33,7 +33,8 @@ class TestCliMemoryCheck:
                 "jamma",
                 "-o",
                 str(tmp_path / "result"),
-                "lmm",
+                "-lmm",
+                "1",
                 "-bfile",
                 str(PLINK_PREFIX),
                 "-k",
@@ -58,7 +59,8 @@ class TestCliMemoryCheck:
                 "jamma",
                 "-o",
                 str(tmp_path / "result"),
-                "lmm",
+                "-lmm",
+                "1",
                 "-bfile",
                 str(PLINK_PREFIX),
                 "-k",
@@ -83,7 +85,8 @@ class TestCliMemoryCheck:
                 "jamma",
                 "-o",
                 str(tmp_path / "result"),
-                "lmm",
+                "-lmm",
+                "1",
                 "-bfile",
                 str(PLINK_PREFIX),
                 "-k",
@@ -108,7 +111,8 @@ class TestCliMemoryCheck:
                 "jamma",
                 "-o",
                 str(tmp_path / "result"),
-                "lmm",
+                "-lmm",
+                "1",
                 "-bfile",
                 str(PLINK_PREFIX),
                 "-k",
@@ -131,7 +135,8 @@ class TestCliMemoryCheck:
                 "jamma",
                 "-o",
                 str(tmp_path / "result"),
-                "lmm",
+                "-lmm",
+                "1",
                 "-bfile",
                 str(PLINK_PREFIX),
                 "-k",
@@ -194,13 +199,14 @@ class TestCliStreamingRunner:
             mock_stream.return_value = []
 
             runner.invoke(
-                app,
+                main,
                 [
                     "-outdir",
                     str(tmp_path),
                     "-o",
                     "lmm_test",
-                    "lmm",
+                    "-lmm",
+                    "1",
                     "-bfile",
                     str(PLINK_PREFIX),
                     "-k",

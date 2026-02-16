@@ -12,6 +12,7 @@ Memory profile (sequential processing):
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import time
 from pathlib import Path
@@ -164,16 +165,12 @@ def run_lmm_loco(
 
     all_results: list[AssocResult] = []
 
-    # Use IncrementalAssocWriter as context manager when writing to disk
-    writer_ctx = (
-        IncrementalAssocWriter(output_path, test_type=test_type)
-        if output_path is not None
-        else None
-    )
-    writer = None
-
-    try:
-        writer = writer_ctx.__enter__() if writer_ctx is not None else None
+    with contextlib.ExitStack() as stack:
+        writer = None
+        if output_path is not None:
+            writer = stack.enter_context(
+                IncrementalAssocWriter(output_path, test_type=test_type)
+            )
 
         # Pre-compute snps_set once (avoids O(n) set construction per chromosome)
         snps_set = set(snps_indices.tolist()) if snps_indices is not None else None
@@ -246,11 +243,8 @@ def run_lmm_loco(
             gc.collect()
             jax.clear_caches()
 
-    finally:
-        if writer_ctx is not None:
-            writer_ctx.__exit__(None, None, None)
-            if show_progress and writer is not None:
-                logger.info(f"Wrote {writer.count:,} results to {output_path}")
+        if writer is not None and show_progress:
+            logger.info(f"Wrote {writer.count:,} results to {output_path}")
 
     if show_progress:
         elapsed = time.perf_counter() - start_time

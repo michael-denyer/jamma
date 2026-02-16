@@ -172,6 +172,8 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs):
 - [Equivalence Proof](docs/EQUIVALENCE.md) — Mathematical proofs and empirical validation against GEMMA
 - [GEMMA Divergences](docs/GEMMA_DIVERGENCES.md) — Known differences from GEMMA
 - [Performance](docs/PERFORMANCE.md) — Bottleneck analysis, scale validation, configuration guide
+- [Contributing](CONTRIBUTING.md) — Development setup, testing, and PR guidelines
+- [Changelog](CHANGELOG.md) — Version history
 
 ## Requirements
 

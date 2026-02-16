@@ -452,6 +452,7 @@ class PipelineRunner:
 
         # 3. Memory check
         self.check_memory_requirements(n_samples, n_snps)
+        actual_chunk = _compute_chunk_size(n_samples, n_snps)
 
         # 4. Phenotypes
         phenotypes, n_analyzed = self.parse_phenotypes()
@@ -576,6 +577,9 @@ class PipelineRunner:
                 )
                 logger.info(f"Wrote eigenvalues to {d_path}")
                 logger.info(f"Wrote eigenvectors to {u_path}")
+                # Free K -- eigenvalues/eigenvectors already computed,
+                # runner doesn't need K
+                K = None
 
         kinship_s = time.perf_counter() - t_kinship
         load_s = time.perf_counter() - t_start
@@ -598,6 +602,7 @@ class PipelineRunner:
             show_progress=self.config.show_progress,
             snps_indices=snps_indices,
             hwe_threshold=self.config.hwe_threshold,
+            chunk_size=actual_chunk,
         )
         lmm_s = time.perf_counter() - t_lmm
 

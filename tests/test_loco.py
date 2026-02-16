@@ -739,35 +739,26 @@ class TestCliLocoFlags:
     """CLI integration tests for -loco flag."""
 
     def test_cli_lmm_loco_flag_exists(self):
-        """-loco appears in lmm --help output."""
-        from typer.testing import CliRunner
+        """-loco appears in --help output."""
+        from click.testing import CliRunner
 
-        from jamma.cli import app
+        from jamma.cli import main
 
-        result = CliRunner().invoke(app, ["lmm", "--help"])
-        assert result.exit_code == 0
-        assert "-loco" in result.output
-
-    def test_cli_gk_loco_flag_exists(self):
-        """-loco appears in gk --help output."""
-        from typer.testing import CliRunner
-
-        from jamma.cli import app
-
-        result = CliRunner().invoke(app, ["gk", "--help"])
+        result = CliRunner().invoke(main, ["--help"])
         assert result.exit_code == 0
         assert "-loco" in result.output
 
     def test_cli_lmm_loco_rejects_k_flag(self):
-        """jamma lmm -bfile X -loco -k Y exits with error."""
-        from typer.testing import CliRunner
+        """jamma -lmm 1 -bfile X -loco -k Y exits with error."""
+        from click.testing import CliRunner
 
-        from jamma.cli import app
+        from jamma.cli import main
 
         result = CliRunner().invoke(
-            app,
+            main,
             [
-                "lmm",
+                "-lmm",
+                "1",
                 "-bfile",
                 str(MOUSE_HS1940_BFILE),
                 "-loco",
@@ -779,19 +770,18 @@ class TestCliLocoFlags:
         assert "mutually exclusive" in result.output
 
     def test_cli_gk_standardized_loco_rejected(self):
-        """jamma gk -bfile X -gk 2 -loco exits with error."""
-        from typer.testing import CliRunner
+        """jamma -gk 2 -bfile X -loco exits with error."""
+        from click.testing import CliRunner
 
-        from jamma.cli import app
+        from jamma.cli import main
 
         result = CliRunner().invoke(
-            app,
+            main,
             [
-                "gk",
-                "-bfile",
-                str(MOUSE_HS1940_BFILE),
                 "-gk",
                 "2",
+                "-bfile",
+                str(MOUSE_HS1940_BFILE),
                 "-loco",
             ],
         )

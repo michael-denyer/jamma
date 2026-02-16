@@ -515,27 +515,15 @@ class TestCLIFlags:
     """Verify CLI help shows eigen flags."""
 
     def test_lmm_help_shows_eigen_flags(self) -> None:
-        """lmm --help output contains -d, -u, and -eigen flags."""
-        from typer.testing import CliRunner
+        """--help output contains -d, -u, and -eigen flags."""
+        from click.testing import CliRunner
 
-        from jamma.cli import app
+        from jamma.cli import main
 
         runner = CliRunner()
-        result = runner.invoke(app, ["lmm", "--help"])
+        result = runner.invoke(main, ["--help"])
 
         assert result.exit_code == 0
         assert "-d" in result.output
         assert "-u" in result.output
-        assert "-eigen" in result.output
-
-    def test_gk_help_shows_eigen_flag(self) -> None:
-        """gk --help output contains -eigen flag."""
-        from typer.testing import CliRunner
-
-        from jamma.cli import app
-
-        runner = CliRunner()
-        result = runner.invoke(app, ["gk", "--help"])
-
-        assert result.exit_code == 0
         assert "-eigen" in result.output

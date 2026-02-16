@@ -1,15 +1,16 @@
 """JAMMA command-line interface.
 
-This module provides a Typer-based CLI matching GEMMA's command-line interface,
-including -bfile, -o, -outdir flags for data loading and output configuration.
+This module provides a Click-based CLI matching GEMMA's flat flag interface,
+including -bfile, -gk, -lmm, -k, -o, -outdir flags for data loading,
+mode selection, and output configuration.
 """
 
 import sys
 import time
 from pathlib import Path
-from typing import Annotated
+from typing import NoReturn
 
-import typer
+import click
 from loguru import logger
 
 import jamma
@@ -25,130 +26,233 @@ from jamma.kinship import (
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.utils import setup_logging, write_gemma_log
 
-# Create Typer app
-app = typer.Typer(
-    name="jamma",
-    help="JAMMA: Mixed Model Association for genome-wide association studies.",
-    add_completion=False,
+
+def _cli_error(message: str) -> NoReturn:
+    """Print error to stderr and exit with code 1."""
+    click.echo(f"Error: {message}", err=True)
+    sys.exit(1)
+
+
+def _opt_path(value: str | None) -> Path | None:
+    """Convert optional string to Path."""
+    return Path(value) if value else None
+
+
+def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> None:
+    """Print version, backend info, and GPU status, then exit."""
+    if not value or ctx.resilient_parsing:
+        return
+    from jamma.core import get_backend_info
+
+    info = get_backend_info()
+    click.echo(f"JAMMA version {jamma.__version__}")
+    click.echo(f"Backend: {info['selected']}")
+    click.echo("  (JAX pipeline + numpy/LAPACK eigendecomp)")
+    click.echo(f"GPU available: {info['gpu_available']}")
+    ctx.exit()
+
+
+@click.command()
+@click.option(
+    "-bfile", type=click.Path(), required=True, help="PLINK binary file prefix"
 )
-
-# Store global options set by callback
-_global_config: OutputConfig | None = None
-
-
-def version_callback(value: bool) -> None:
-    """Print version and exit."""
-    if value:
-        from jamma.core import get_backend_info
-
-        typer.echo(f"JAMMA version {jamma.__version__}")
-
-        # Show backend information for debugging
-        info = get_backend_info()
-        typer.echo(f"Backend: {info['selected']}")
-        typer.echo("  (JAX pipeline + numpy/LAPACK eigendecomp)")
-        typer.echo(f"GPU available: {info['gpu_available']}")
-        raise typer.Exit()
-
-
-@app.callback()
+@click.option(
+    "-gk", type=int, default=None, help="Kinship mode (1=centered, 2=standardized)"
+)
+@click.option(
+    "-lmm", type=int, default=None, help="LMM mode (1=Wald, 2=LRT, 3=Score, 4=All)"
+)
+@click.option(
+    "-k", type=click.Path(), default=None, help="Pre-computed kinship matrix file"
+)
+@click.option(
+    "-c",
+    type=click.Path(),
+    default=None,
+    help="Covariate file (whitespace-delimited, no header)",
+)
+@click.option("-o", type=str, default="result", help="Output file prefix")
+@click.option(
+    "-outdir", type=click.Path(), default="output", help="Output directory path"
+)
+@click.option("-maf", type=float, default=0.01, help="MAF threshold for SNP filtering")
+@click.option("-miss", type=float, default=0.05, help="Missing rate threshold")
+@click.option(
+    "-loco",
+    is_flag=True,
+    default=False,
+    help="Enable leave-one-chromosome-out analysis",
+)
+@click.option(
+    "-eigen", is_flag=True, default=False, help="Write eigendecomposition files"
+)
+@click.option("-n", type=int, default=1, help="Phenotype column in .fam file (1-based)")
+@click.option(
+    "-d", type=click.Path(), default=None, help="Eigenvalue file (.eigenD.txt)"
+)
+@click.option(
+    "-u", type=click.Path(), default=None, help="Eigenvector file (.eigenU.txt)"
+)
+@click.option("-hwe", type=float, default=0.0, help="HWE p-value threshold")
+@click.option(
+    "-snps", type=click.Path(), default=None, help="SNP list for association testing"
+)
+@click.option(
+    "-ksnps", type=click.Path(), default=None, help="SNP list for kinship computation"
+)
+@click.option("-v", "--verbose", is_flag=True, default=False, help="Verbose output")
+@click.option(
+    "--check-memory/--no-check-memory",
+    default=True,
+    help="Enable/disable pre-flight memory check",
+)
+@click.option("--mem-budget", type=float, default=None, help="Hard memory budget in GB")
+@click.option(
+    "--version",
+    is_flag=True,
+    callback=print_version,
+    expose_value=False,
+    is_eager=True,
+    help="Show version and exit",
+)
+@click.option(
+    "-gxe",
+    type=click.Path(),
+    default=None,
+    hidden=True,
+    help="G x E interaction file (not yet implemented)",
+)
+@click.option(
+    "-vc",
+    type=int,
+    default=None,
+    hidden=True,
+    help="Variance component estimation (not yet implemented)",
+)
+@click.option(
+    "-mk",
+    type=click.Path(),
+    default=None,
+    hidden=True,
+    help="Multiple kinship matrices (not yet implemented)",
+)
+@click.option(
+    "-mvlmm",
+    type=int,
+    default=None,
+    hidden=True,
+    help="Multivariate LMM (not yet implemented)",
+)
+@click.pass_context
 def main(
-    outdir: Annotated[
-        Path,
-        typer.Option("-outdir", help="Output directory"),
-    ] = Path("output"),
-    output: Annotated[
-        str,
-        typer.Option("-o", help="Output file prefix"),
-    ] = "result",
-    verbose: Annotated[
-        bool,
-        typer.Option("-v", "--verbose", help="Verbose output"),
-    ] = False,
-    version: Annotated[
-        bool | None,
-        typer.Option(
-            "--version",
-            callback=version_callback,
-            is_eager=True,
-            help="Show version and exit",
-        ),
-    ] = None,
-) -> None:
-    """JAMMA: Mixed Model Association.
+    ctx,
+    bfile,
+    gk,
+    lmm,
+    k,
+    c,
+    o,
+    outdir,
+    maf,
+    miss,
+    loco,
+    eigen,
+    n,
+    d,
+    u,
+    hwe,
+    snps,
+    ksnps,
+    verbose,
+    check_memory,
+    mem_budget,
+    gxe,
+    vc,
+    mk,
+    mvlmm,
+):
+    """JAMMA: Mixed Model Association for GWAS.
 
     A modern Python reimplementation of GEMMA targeting exact numerical
     compatibility with the original C++ implementation.
     """
-    global _global_config
-    _global_config = OutputConfig(outdir=outdir, prefix=output, verbose=verbose)
     setup_logging(verbose=verbose)
 
+    config = OutputConfig(outdir=Path(outdir), prefix=o, verbose=verbose)
 
-@app.command("gk")
-def gk_command(
-    bfile: Annotated[
-        Path,
-        typer.Option("-bfile", help="PLINK binary file prefix"),
-    ],
-    mode: Annotated[
-        int,
-        typer.Option("-gk", help="Kinship matrix type (1=centered, 2=standardized)"),
-    ] = 1,
-    maf: Annotated[
-        float,
-        typer.Option("-maf", help="MAF threshold for SNP filtering (default: 0.0)"),
-    ] = 0.0,
-    miss: Annotated[
-        float,
-        typer.Option("-miss", help="Missing rate threshold (default: 1.0)"),
-    ] = 1.0,
-    check_memory: Annotated[
-        bool,
-        typer.Option(
-            "--check-memory/--no-check-memory",
-            help="Enable/disable pre-flight memory check (default: enabled)",
-        ),
-    ] = True,
-    loco: Annotated[
-        bool,
-        typer.Option(
-            "-loco/--no-loco",
-            help="Compute LOCO kinship matrices (one per chromosome)",
-        ),
-    ] = False,
-    write_eigen: Annotated[
-        bool,
-        typer.Option(
-            "-eigen",
-            help="Write eigendecomposition files (.eigenD.txt, .eigenU.txt)",
-        ),
-    ] = False,
-    phenotype_column: Annotated[
-        int,
-        typer.Option("-n", help="Phenotype column in .fam file (1-based, default 1)"),
-    ] = 1,
-    ksnps_file: Annotated[
-        Path | None,
-        typer.Option(
-            "-ksnps", help="File with SNP IDs to restrict kinship computation"
-        ),
-    ] = None,
+    # Validate unimplemented flags
+    _unimplemented = {"-gxe": gxe, "-vc": vc, "-mk": mk, "-mvlmm": mvlmm}
+    for flag_name, flag_value in _unimplemented.items():
+        if flag_value is not None:
+            raise click.ClickException(f"Flag {flag_name} is not yet implemented")
+
+    # Mode validation: exactly one of -gk or -lmm required
+    if gk is not None and lmm is not None:
+        raise click.UsageError("-gk and -lmm are mutually exclusive")
+    if gk is None and lmm is None:
+        raise click.UsageError("One of -gk or -lmm is required")
+
+    # Apply per-mode defaults for maf/miss.
+    # gk mode: no filtering by default (GEMMA kinship behavior)
+    # lmm mode: standard filtering (GEMMA association behavior)
+    if gk is not None:
+        if ctx.get_parameter_source("maf") == click.core.ParameterSource.DEFAULT:
+            maf = 0.0
+        if ctx.get_parameter_source("miss") == click.core.ParameterSource.DEFAULT:
+            miss = 1.0
+
+    # Dispatch to handler
+    if gk is not None:
+        _run_gk(
+            bfile=Path(bfile),
+            mode=gk,
+            config=config,
+            maf=maf,
+            miss=miss,
+            check_memory=check_memory,
+            loco=loco,
+            write_eigen=eigen,
+            phenotype_column=n,
+            ksnps_file=_opt_path(ksnps),
+        )
+    else:
+        _run_lmm(
+            bfile=Path(bfile),
+            mode=lmm,
+            config=config,
+            kinship_file=_opt_path(k),
+            covariate_file=_opt_path(c),
+            maf=maf,
+            miss=miss,
+            check_memory=check_memory,
+            mem_budget=mem_budget,
+            loco=loco,
+            eigenvalue_file=_opt_path(d),
+            eigenvector_file=_opt_path(u),
+            write_eigen=eigen,
+            phenotype_column=n,
+            snps_file=_opt_path(snps),
+            ksnps_file=_opt_path(ksnps),
+            hwe_threshold=hwe,
+        )
+
+
+def _run_gk(
+    *,
+    bfile: Path,
+    mode: int,
+    config: OutputConfig,
+    maf: float,
+    miss: float,
+    check_memory: bool,
+    loco: bool,
+    write_eigen: bool,
+    phenotype_column: int,
+    ksnps_file: Path | None,
 ) -> None:
-    """Compute kinship matrix from genotype data.
-
-    Reads PLINK binary files and computes a genetic relatedness matrix.
-    Writes output in GEMMA-compatible .cXX.txt format.
-
-    With -loco, computes one LOCO kinship matrix per chromosome, writing
-    each to {prefix}.loco.cXX.chr{N}.txt.
-
-    With -eigen, also eigendecomposes the kinship matrix and writes
-    .eigenD.txt and .eigenU.txt files.
-    """
+    """Run kinship matrix computation."""
     if mode not in (1, 2):
-        typer.echo(f"Error: invalid kinship mode {mode}. Use -gk 1 or -gk 2.", err=True)
-        raise typer.Exit(code=1)
+        _cli_error(f"invalid kinship mode {mode}. Use -gk 1 or -gk 2.")
 
     if phenotype_column != 1:
         logger.info(
@@ -158,13 +262,8 @@ def gk_command(
 
     start_time = time.perf_counter()
 
-    # Get global config
-    global _global_config
-    if _global_config is None:
-        _global_config = OutputConfig()
-
     # Ensure output directory exists
-    _global_config.ensure_outdir()
+    config.ensure_outdir()
 
     # Construct command line for logging
     command_line = " ".join(sys.argv)
@@ -172,24 +271,17 @@ def gk_command(
     # Validate bfile exists
     bed_path = Path(f"{bfile}.bed")
     if not bed_path.exists():
-        typer.echo(f"Error: PLINK file not found: {bed_path}", err=True)
-        raise typer.Exit(code=1)
+        _cli_error(f"PLINK file not found: {bed_path}")
 
     if write_eigen and loco:
-        typer.echo(
-            "Error: -eigen not supported with -loco mode",
-            err=True,
-        )
-        raise typer.Exit(code=1)
+        _cli_error("-eigen not supported with -loco mode")
 
     if mode == 2 and loco:
-        typer.echo(
-            "Error: -gk 2 (standardized) is not supported with -loco. "
+        _cli_error(
+            "-gk 2 (standardized) is not supported with -loco. "
             "LOCO kinship uses centered mode (-gk 1). "
-            "Use 'jamma gk -bfile X -gk 2' without -loco for standardized kinship.",
-            err=True,
+            "Use 'jamma -gk 2 -bfile X' without -loco for standardized kinship."
         )
-        raise typer.Exit(code=1)
 
     # Resolve ksnps_file to indices if provided
     ksnps_indices = None
@@ -205,16 +297,15 @@ def gk_command(
             ksnp_ids = read_snp_list_file(ksnps_file)
             ksnps_indices = resolve_snp_list_to_indices(ksnp_ids, meta["sid"])
         except (FileNotFoundError, ValueError) as e:
-            typer.echo(f"Error: {e}", err=True)
-            raise typer.Exit(code=1) from None
-        typer.echo(
+            _cli_error(str(e))
+        click.echo(
             f"Kinship SNP list (-ksnps): {len(ksnps_indices)} of "
             f"{meta['n_snps']} SNPs selected"
         )
 
     if loco:
         # LOCO kinship mode: compute per-chromosome LOCO kinship matrices
-        typer.echo(f"Computing LOCO kinship matrices from {bfile}...")
+        click.echo(f"Computing LOCO kinship matrices from {bfile}...")
         kinship_start = time.perf_counter()
 
         loco_iter = compute_loco_kinship_streaming(
@@ -227,16 +318,16 @@ def gk_command(
         )
         written_paths = write_loco_kinship_matrices(
             loco_iter,
-            output_dir=_global_config.outdir,
-            prefix=_global_config.prefix,
+            output_dir=config.outdir,
+            prefix=config.prefix,
         )
         kinship_time = time.perf_counter() - kinship_start
 
-        typer.echo(
+        click.echo(
             f"Wrote {len(written_paths)} LOCO kinship matrices in {kinship_time:.2f}s"
         )
         for p in written_paths:
-            typer.echo(f"  {p}")
+            click.echo(f"  {p}")
 
         # Write log file
         elapsed = time.perf_counter() - start_time
@@ -247,20 +338,19 @@ def gk_command(
             "miss_threshold": miss,
         }
         timing = {"total": elapsed, "kinship": kinship_time}
-        log_path = write_gemma_log(_global_config, params, timing, command_line)
-        typer.echo(f"Log written to {log_path}")
+        log_path = write_gemma_log(config, params, timing, command_line)
+        click.echo(f"Log written to {log_path}")
         return
 
     # Standard kinship mode
     # Load PLINK data
-    typer.echo(f"Loading PLINK data from {bfile}...")
+    click.echo(f"Loading PLINK data from {bfile}...")
     try:
         plink_data = load_plink_binary(bfile)
-    except Exception as e:
-        typer.echo(f"Error loading PLINK data: {e}", err=True)
-        raise typer.Exit(code=1) from None
+    except (FileNotFoundError, ValueError, OSError) as e:
+        _cli_error(f"loading PLINK data: {e}")
 
-    typer.echo(f"Loaded {plink_data.n_samples} samples, {plink_data.n_snps} SNPs")
+    click.echo(f"Loaded {plink_data.n_samples} samples, {plink_data.n_snps} SNPs")
 
     if mode == 2:
         kinship_label = "standardized"
@@ -269,15 +359,15 @@ def gk_command(
         kinship_label = "centered"
         compute_fn = compute_centered_kinship
 
-    typer.echo(f"Computing {kinship_label} kinship matrix...")
+    click.echo(f"Computing {kinship_label} kinship matrix...")
     if maf > 0.0 or miss < 1.0:
-        typer.echo(f"Filtering: MAF >= {maf}, missing rate <= {miss}")
+        click.echo(f"Filtering: MAF >= {maf}, missing rate <= {miss}")
 
     # Filter genotypes to ksnps subset if provided
     genotypes = plink_data.genotypes
     if ksnps_indices is not None:
         genotypes = genotypes[:, ksnps_indices]
-        typer.echo(f"Using {genotypes.shape[1]} SNPs for kinship computation")
+        click.echo(f"Using {genotypes.shape[1]} SNPs for kinship computation")
 
     kinship_start = time.perf_counter()
     K = compute_fn(
@@ -287,12 +377,12 @@ def gk_command(
         check_memory=check_memory,
     )
     kinship_time = time.perf_counter() - kinship_start
-    typer.echo(f"{kinship_label.capitalize()} kinship computed in {kinship_time:.2f}s")
+    click.echo(f"{kinship_label.capitalize()} kinship computed in {kinship_time:.2f}s")
 
     # Write kinship matrix
-    kinship_path = _global_config.outdir / f"{_global_config.prefix}.cXX.txt"
+    kinship_path = config.outdir / f"{config.prefix}.cXX.txt"
     write_kinship_matrix(K, kinship_path)
-    typer.echo(f"Kinship matrix written to {kinship_path}")
+    click.echo(f"Kinship matrix written to {kinship_path}")
 
     # Eigendecompose and write if -eigen flag
     if write_eigen:
@@ -303,11 +393,11 @@ def gk_command(
         d_path, u_path = write_eigen_files(
             eigenvalues,
             eigenvectors,
-            _global_config.outdir,
-            _global_config.prefix,
+            config.outdir,
+            config.prefix,
         )
-        typer.echo(f"Eigenvalues written to {d_path}")
-        typer.echo(f"Eigenvectors written to {u_path}")
+        click.echo(f"Eigenvalues written to {d_path}")
+        click.echo(f"Eigenvectors written to {u_path}")
 
     # Calculate timing
     end_time = time.perf_counter()
@@ -324,146 +414,52 @@ def gk_command(
     }
     timing = {"total": elapsed, "kinship": kinship_time}
 
-    log_path = write_gemma_log(_global_config, params, timing, command_line)
-    typer.echo(f"Log written to {log_path}")
+    log_path = write_gemma_log(config, params, timing, command_line)
+    click.echo(f"Log written to {log_path}")
 
 
-@app.command("lmm")
-def lmm_command(
-    bfile: Annotated[
-        Path,
-        typer.Option("-bfile", help="PLINK binary file prefix"),
-    ],
-    kinship_file: Annotated[
-        Path | None,
-        typer.Option("-k", help="Pre-computed kinship matrix file"),
-    ] = None,
-    covariate_file: Annotated[
-        Path | None,
-        typer.Option("-c", help="Covariate file (whitespace-delimited, no header)"),
-    ] = None,
-    lmm_mode: Annotated[
-        int,
-        typer.Option("-lmm", help="LMM analysis type (1=Wald, 2=LRT, 3=Score, 4=All)"),
-    ] = 1,
-    maf: Annotated[
-        float,
-        typer.Option("-maf", help="MAF threshold for SNP filtering (default: 0.01)"),
-    ] = 0.01,
-    miss: Annotated[
-        float,
-        typer.Option("-miss", help="Missing rate threshold (default: 0.05)"),
-    ] = 0.05,
-    check_memory: Annotated[
-        bool,
-        typer.Option(
-            "--check-memory/--no-check-memory",
-            help="Enable/disable pre-flight memory check (default: enabled)",
-        ),
-    ] = True,
-    mem_budget: Annotated[
-        float | None,
-        typer.Option(
-            "--mem-budget",
-            help="Hard memory budget in GB. Fail if estimate exceeds this.",
-        ),
-    ] = None,
-    loco: Annotated[
-        bool,
-        typer.Option(
-            "-loco/--no-loco",
-            help="Enable leave-one-chromosome-out analysis",
-        ),
-    ] = False,
-    eigenvalue_file: Annotated[
-        Path | None,
-        typer.Option(
-            "-d",
-            help="Pre-computed eigenvalues file (.eigenD.txt)",
-        ),
-    ] = None,
-    eigenvector_file: Annotated[
-        Path | None,
-        typer.Option(
-            "-u",
-            help="Pre-computed eigenvectors file (.eigenU.txt)",
-        ),
-    ] = None,
-    write_eigen: Annotated[
-        bool,
-        typer.Option(
-            "-eigen",
-            help="Write eigendecomposition output files",
-        ),
-    ] = False,
-    phenotype_column: Annotated[
-        int,
-        typer.Option("-n", help="Phenotype column in .fam file (1-based, default 1)"),
-    ] = 1,
-    snps_file: Annotated[
-        Path | None,
-        typer.Option("-snps", help="File with SNP IDs to restrict association testing"),
-    ] = None,
-    ksnps_file: Annotated[
-        Path | None,
-        typer.Option(
-            "-ksnps", help="File with SNP IDs to restrict kinship computation"
-        ),
-    ] = None,
-    hwe_threshold: Annotated[
-        float,
-        typer.Option(
-            "-hwe", help="HWE p-value threshold (exclude SNPs with p < threshold)"
-        ),
-    ] = 0.0,
+def _run_lmm(
+    *,
+    bfile: Path,
+    mode: int,
+    config: OutputConfig,
+    kinship_file: Path | None,
+    covariate_file: Path | None,
+    maf: float,
+    miss: float,
+    check_memory: bool,
+    mem_budget: float | None,
+    loco: bool,
+    eigenvalue_file: Path | None,
+    eigenvector_file: Path | None,
+    write_eigen: bool,
+    phenotype_column: int,
+    snps_file: Path | None,
+    ksnps_file: Path | None,
+    hwe_threshold: float,
 ) -> None:
-    """Perform linear mixed model association testing.
-
-    Runs LMM association tests using a pre-computed kinship matrix.
-    Supports Wald test (-lmm 1), LRT (-lmm 2), Score test (-lmm 3),
-    and all tests combined (-lmm 4).
-
-    With -loco, computes per-chromosome LOCO kinship internally.
-    The -k flag is not required (and is mutually exclusive with -loco).
-
-    With -d and -u, loads pre-computed eigendecomposition and skips
-    both kinship loading and eigendecomposition. Both flags required
-    together.
-
-    With -n, selects which phenotype column to analyze from multi-phenotype
-    .fam files (1-based, matching GEMMA).
-    """
-    global _global_config
-    if _global_config is None:
-        _global_config = OutputConfig()
-
+    """Run LMM association testing."""
     # Mutual exclusivity check
     if loco and kinship_file is not None:
-        typer.echo(
-            "Error: -k and -loco are mutually exclusive",
-            err=True,
-        )
-        raise typer.Exit(code=1)
+        _cli_error("-k and -loco are mutually exclusive")
 
     # CLI requires kinship file unless LOCO mode or eigen files
     if kinship_file is None and not loco and eigenvalue_file is None:
-        typer.echo(
-            "Error: -k (kinship matrix) is required for -lmm "
-            "(or use -d/-u for pre-computed eigen)",
-            err=True,
+        _cli_error(
+            "-k (kinship matrix) is required for -lmm "
+            "(or use -d/-u for pre-computed eigen)"
         )
-        raise typer.Exit(code=1)
 
     # Build pipeline config
-    config = PipelineConfig(
+    pipeline_config = PipelineConfig(
         bfile=bfile,
         kinship_file=kinship_file,
         covariate_file=covariate_file,
-        lmm_mode=lmm_mode,
+        lmm_mode=mode,
         maf=maf,
         miss=miss,
-        output_dir=_global_config.outdir,
-        output_prefix=_global_config.prefix,
+        output_dir=config.outdir,
+        output_prefix=config.prefix,
         check_memory=check_memory,
         show_progress=True,
         mem_budget=mem_budget,
@@ -480,11 +476,10 @@ def lmm_command(
     # Run pipeline, converting exceptions to CLI-friendly errors
     try:
         if check_memory:
-            typer.echo("Checking memory requirements...")
-        result = PipelineRunner(config).run()
+            click.echo("Checking memory requirements...")
+        result = PipelineRunner(pipeline_config).run()
     except (FileNotFoundError, ValueError, MemoryError) as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(code=1) from None
+        _cli_error(str(e))
 
     # Write GEMMA log file (CLI-only)
     command_line = " ".join(sys.argv)
@@ -497,7 +492,7 @@ def lmm_command(
         "n_samples": result.n_samples,
         "n_snps": result.n_snps_tested,
         "backend": "jax",
-        "lmm_mode": lmm_mode,
+        "lmm_mode": mode,
         "kinship_file": str(kinship_file),
         "covariate_file": str(covariate_file) if covariate_file else None,
         "n_covariates": n_covariates,
@@ -513,16 +508,16 @@ def lmm_command(
         "lmm": result.timing["lmm_s"],
     }
 
-    _global_config.ensure_outdir()
-    log_path = write_gemma_log(_global_config, params, timing, command_line)
-    typer.echo(f"Log written to {log_path}")
+    config.ensure_outdir()
+    log_path = write_gemma_log(config, params, timing, command_line)
+    click.echo(f"Log written to {log_path}")
 
     # Final summary
-    typer.echo(
+    click.echo(
         f"\nAnalyzed {result.n_snps_tested} SNPs "
         f"in {result.timing['total_s']:.2f} seconds"
     )
 
 
 if __name__ == "__main__":
-    app()
+    main()

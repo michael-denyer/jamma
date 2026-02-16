@@ -7,9 +7,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from typer.testing import CliRunner
+from click.testing import CliRunner
 
-from jamma.cli import app
+from jamma.cli import main
 from jamma.kinship import write_kinship_matrix
 
 
@@ -154,13 +154,14 @@ class TestCLIIntegration:
     def test_cli_gk_creates_kinship_file(self, runner, tmp_path, example_plink_path):
         """Test that gk command creates kinship file."""
         result = runner.invoke(
-            app,
+            main,
             [
                 "-outdir",
                 str(tmp_path),
                 "-o",
                 "test",
-                "gk",
+                "-gk",
+                "1",
                 "-bfile",
                 str(example_plink_path),
             ],
@@ -173,13 +174,14 @@ class TestCLIIntegration:
     def test_cli_gk_creates_log_file(self, runner, tmp_path, example_plink_path):
         """Test that gk command creates log file."""
         result = runner.invoke(
-            app,
+            main,
             [
                 "-outdir",
                 str(tmp_path),
                 "-o",
                 "test",
-                "gk",
+                "-gk",
+                "1",
                 "-bfile",
                 str(example_plink_path),
             ],
@@ -192,13 +194,14 @@ class TestCLIIntegration:
     def test_cli_gk_kinship_file_format(self, runner, tmp_path, example_plink_path):
         """Test that kinship file has correct format."""
         result = runner.invoke(
-            app,
+            main,
             [
                 "-outdir",
                 str(tmp_path),
                 "-o",
                 "test",
-                "gk",
+                "-gk",
+                "1",
                 "-bfile",
                 str(example_plink_path),
             ],
@@ -220,13 +223,14 @@ class TestCLIIntegration:
     ):
         """Test that log file mentions kinship output."""
         result = runner.invoke(
-            app,
+            main,
             [
                 "-outdir",
                 str(tmp_path),
                 "-o",
                 "test",
-                "gk",
+                "-gk",
+                "1",
                 "-bfile",
                 str(example_plink_path),
             ],
@@ -242,13 +246,14 @@ class TestCLIIntegration:
     def test_cli_gk_invalid_bfile(self, runner, tmp_path):
         """Test error handling for non-existent PLINK file."""
         result = runner.invoke(
-            app,
+            main,
             [
                 "-outdir",
                 str(tmp_path),
                 "-o",
                 "test",
-                "gk",
+                "-gk",
+                "1",
                 "-bfile",
                 str(tmp_path / "nonexistent"),
             ],
@@ -259,13 +264,14 @@ class TestCLIIntegration:
     def test_cli_gk_output_shows_timing(self, runner, tmp_path, example_plink_path):
         """Test that CLI output shows timing information."""
         result = runner.invoke(
-            app,
+            main,
             [
                 "-outdir",
                 str(tmp_path),
                 "-o",
                 "test",
-                "gk",
+                "-gk",
+                "1",
                 "-bfile",
                 str(example_plink_path),
             ],

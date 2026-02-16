@@ -17,6 +17,7 @@ from chromosome c. This avoids redundant computation.
 
 from __future__ import annotations
 
+import gc
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -222,8 +223,11 @@ def compute_centered_kinship(
     # Log memory after kinship computation
     log_memory_snapshot(f"after_kinship_{n_samples}samples")
 
-    # Return as numpy array for downstream compatibility
-    return np.array(K)
+    # Convert to numpy and free JAX device array immediately
+    K_np = np.array(K)
+    del K
+    gc.collect()
+    return K_np
 
 
 def compute_standardized_kinship(
@@ -356,8 +360,11 @@ def compute_standardized_kinship(
     # Log memory after kinship computation
     log_memory_snapshot(f"after_standardized_kinship_{n_samples}samples")
 
-    # Return as numpy array for downstream compatibility
-    return np.array(K)
+    # Convert to numpy and free JAX device array immediately
+    K_np = np.array(K)
+    del K
+    gc.collect()
+    return K_np
 
 
 def compute_loco_kinship(
@@ -686,8 +693,11 @@ def compute_kinship_streaming(
     elapsed = time.perf_counter() - start_time
     logger.info(f"Kinship matrix computed in {elapsed:.2f}s")
 
-    # Return as numpy array for downstream compatibility
-    return np.array(K)
+    # Convert to numpy and free JAX device array immediately
+    K_np = np.array(K)
+    del K
+    gc.collect()
+    return K_np
 
 
 def compute_loco_kinship_streaming(

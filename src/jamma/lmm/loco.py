@@ -24,7 +24,11 @@ from loguru import logger
 
 from jamma.core.snp_filter import compute_snp_filter_mask
 from jamma.core.threading import blas_threads
-from jamma.io.plink import get_chromosome_partitions, get_plink_metadata
+from jamma.io.plink import (
+    get_chromosome_partitions,
+    get_plink_metadata,
+    validate_genotype_values,
+)
 from jamma.kinship import compute_loco_kinship_streaming, write_kinship_matrix
 from jamma.lmm.chunk import _compute_chunk_size
 from jamma.lmm.eigen import eigendecompose_kinship
@@ -43,8 +47,9 @@ from jamma.lmm.prepare import (
     _grid_optimize_lambda_batched,
     _select_jax_device,
 )
-from jamma.lmm.results import _concat_jax_accumulators
+from jamma.lmm.results import _concat_jax_accumulators, _yield_chunk_results
 from jamma.lmm.runner_streaming import (
+    _TEST_TYPE_MAP,
     _append_chunk_results,
     _init_accumulators,
     _LazySnpMeta,
@@ -155,9 +160,7 @@ def run_lmm_loco(
     # Build SNP metadata for result construction (lazy -- no upfront dict allocation)
     snp_info = _LazySnpMeta(meta)
 
-    # Determine test type for incremental writer
-    test_type_map = {1: "wald", 2: "lrt", 3: "score", 4: "all"}
-    test_type = test_type_map.get(lmm_mode, "wald")
+    test_type = _TEST_TYPE_MAP[lmm_mode]
 
     all_results: list[AssocResult] = []
 
@@ -327,9 +330,6 @@ def _run_lmm_for_chromosome(
                 index=np.s_[valid_indices, chunk_col_indices],
                 dtype=np.float64,
             )
-
-            # Validate genotype values
-            from jamma.io.plink import validate_genotype_values
 
             n_unexpected_total += validate_genotype_values(geno_chunk)
 
@@ -572,66 +572,16 @@ def _run_lmm_for_chromosome(
     results: list[AssocResult] = []
     if any(accum.values()):
         arrays = _concat_jax_accumulators(lmm_mode, accum)
-
-        # Build results using global SNP indices
-        for j in range(n_filtered):
-            global_idx = int(global_filtered_indices[j])
-            af, n_miss = snp_stats[j]
-            info = snp_info[global_idx]
-            meta_dict = {
-                "chr": info["chr"],
-                "rs": info["rs"],
-                "ps": info["pos"],
-                "n_miss": n_miss,
-                "allele1": info["a1"],
-                "allele0": info["a0"],
-                "af": af,
-            }
-
-            if lmm_mode == 1:
-                results.append(
-                    AssocResult(
-                        **meta_dict,
-                        beta=float(arrays["betas"][j]),
-                        se=float(arrays["ses"][j]),
-                        logl_H1=float(arrays["logls"][j]),
-                        l_remle=float(arrays["lambdas"][j]),
-                        p_wald=float(arrays["pwalds"][j]),
-                    )
-                )
-            elif lmm_mode == 3:
-                results.append(
-                    AssocResult(
-                        **meta_dict,
-                        beta=float(arrays["betas"][j]),
-                        se=float(arrays["ses"][j]),
-                        p_score=float(arrays["p_scores"][j]),
-                    )
-                )
-            elif lmm_mode == 2:
-                results.append(
-                    AssocResult(
-                        **meta_dict,
-                        beta=float("nan"),
-                        se=float("nan"),
-                        l_mle=float(arrays["lambdas_mle"][j]),
-                        p_lrt=float(arrays["p_lrts"][j]),
-                    )
-                )
-            elif lmm_mode == 4:
-                results.append(
-                    AssocResult(
-                        **meta_dict,
-                        beta=float(arrays["betas"][j]),
-                        se=float(arrays["ses"][j]),
-                        logl_H1=float(arrays["logls"][j]),
-                        l_remle=float(arrays["lambdas"][j]),
-                        l_mle=float(arrays["lambdas_mle"][j]),
-                        p_wald=float(arrays["pwalds"][j]),
-                        p_lrt=float(arrays["p_lrts"][j]),
-                        p_score=float(arrays["p_scores"][j]),
-                    )
-                )
+        results = list(
+            _yield_chunk_results(
+                lmm_mode,
+                np.arange(n_filtered),
+                global_filtered_indices,
+                snp_stats,
+                snp_info,
+                arrays,
+            )
+        )
 
     del eigenvalues_jax, UtW_jax, Uty_jax
     jax.clear_caches()

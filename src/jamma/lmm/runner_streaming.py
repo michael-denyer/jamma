@@ -39,9 +39,42 @@ from jamma.lmm.results import _concat_jax_accumulators, _yield_chunk_results
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
 
+
+class _LazySnpMeta:
+    """Lazy view over PLINK metadata arrays, avoiding per-SNP dict materialization.
+
+    Instead of building a list of n_snps dicts at construction time, this wrapper
+    holds references to the underlying metadata arrays and materializes a single
+    dict on each __getitem__ access. This saves O(n_snps) dict + string objects.
+
+    Compatible with all snp_info consumers that use integer indexing (snp_info[idx]).
+    """
+
+    __slots__ = ("_chr", "_rs", "_pos", "_a1", "_a0")
+
+    def __init__(self, meta: dict) -> None:
+        self._chr = meta["chromosome"]
+        self._rs = meta["sid"]
+        self._pos = meta["bp_position"]
+        self._a1 = meta["allele_1"]
+        self._a0 = meta["allele_2"]
+
+    def __len__(self) -> int:
+        return len(self._rs)
+
+    def __getitem__(self, i: int) -> dict:
+        return {
+            "chr": str(self._chr[i]),
+            "rs": self._rs[i],
+            "pos": int(self._pos[i]),
+            "a1": self._a1[i],
+            "a0": self._a0[i],
+        }
+
+
 _ACCUM_KEYS = {
     1: ("lambdas", "logls", "betas", "ses", "pwalds"),
-    2: ("lambdas_mle", "logls_mle", "p_lrts"),
+    2: ("lambdas_mle", "p_lrts"),
     3: ("betas", "ses", "p_scores"),
     4: (
         "lambdas",
@@ -50,7 +83,6 @@ _ACCUM_KEYS = {
         "ses",
         "pwalds",
         "lambdas_mle",
-        "logls_mle",
         "p_lrts",
         "p_scores",
     ),
@@ -169,21 +201,17 @@ def run_lmm_association_streaming(
             "eigenvectors) must be provided"
         )
 
+    if lmm_mode not in (1, 2, 3, 4):
+        raise ValueError(
+            f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
+        )
+
     meta = get_plink_metadata(bed_path)
     n_samples_total = meta["n_samples"]
     n_snps = meta["n_snps"]
 
     if snp_info is None:
-        snp_info = [
-            {
-                "chr": str(meta["chromosome"][i]),
-                "rs": meta["sid"][i],
-                "pos": int(meta["bp_position"][i]),
-                "a1": meta["allele_1"][i],
-                "a0": meta["allele_2"][i],
-            }
-            for i in range(n_snps)
-        ]
+        snp_info = _LazySnpMeta(meta)
 
     valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
     if covariates is not None:
@@ -316,6 +344,11 @@ def run_lmm_association_streaming(
         logger.info(f"  Analyzed SNPs: {n_filtered:,}")
 
     if n_filtered == 0:
+        if output_path is not None:
+            test_type_map = {1: "wald", 2: "lrt", 3: "score", 4: "all"}
+            test_type = test_type_map.get(lmm_mode, "wald")
+            with IncrementalAssocWriter(output_path, test_type=test_type):
+                pass  # Context manager writes header, no data rows
         if show_progress:
             elapsed = time.perf_counter() - start_time
             logger.info(
@@ -331,6 +364,12 @@ def run_lmm_association_streaming(
         )
     )
     filtered_means = all_means[snp_indices]
+
+    # Free pass-1 statistics arrays -- filtered subsets already extracted
+    del all_means, all_miss_counts, all_vars, allele_freqs
+    if hwe_threshold > 0:
+        del all_n_aa, all_n_ab, all_n_bb
+
     t_snp_end = time.perf_counter()
 
     # === Eigendecomp + setup ===
@@ -343,7 +382,6 @@ def run_lmm_association_streaming(
         "lmm_streaming",
         check_memory=check_memory,
     )
-    UT = np.ascontiguousarray(U.T)
     if kinship is not None:
         del kinship
     gc.collect()
@@ -352,8 +390,8 @@ def run_lmm_association_streaming(
 
     # Prepare rotated matrices (numpy BLAS matmuls)
     with blas_threads():
-        UtW = UT @ W
-        Uty = UT @ phenotypes
+        UtW = U.T @ W
+        Uty = U.T @ phenotypes
 
     logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
         lmm_mode, eigenvalues_np, UtW, Uty, n_cvt, device, show_progress
@@ -410,7 +448,7 @@ def run_lmm_association_streaming(
                 )
 
             with blas_threads():
-                UtG_chunk = np.ascontiguousarray(UT @ geno_jax_chunk)
+                UtG_chunk = np.ascontiguousarray(U.T @ geno_jax_chunk)
             return UtG_chunk, actual_len, needs_pad
 
         for chunk, file_start, file_end in assoc_iterator:
@@ -428,7 +466,7 @@ def run_lmm_association_streaming(
 
             chunk_filtered_local_idx = np.arange(left, right)
             chunk_filtered_col_idx_arr = snp_indices[left:right] - file_start
-            geno_subset = chunk[:, chunk_filtered_col_idx_arr].copy()
+            geno_subset = chunk[:, chunk_filtered_col_idx_arr]
 
             # Vectorized imputation: broadcast filtered_means to match geno_subset shape
             filtered_means_broadcast = filtered_means[chunk_filtered_local_idx].reshape(

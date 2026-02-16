@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import gc
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import jax.numpy as jnp
@@ -93,7 +93,7 @@ def _filter_snps(
 
 def _compute_kinship_inmemory(
     genotypes: np.ndarray,
-    transform_fn,
+    transform_fn: Callable[[jnp.ndarray], jnp.ndarray],
     batch_size: int,
     maf_threshold: float,
     miss_threshold: float,

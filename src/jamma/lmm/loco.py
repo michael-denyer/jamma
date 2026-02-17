@@ -48,7 +48,12 @@ from jamma.lmm.prepare import (
     _grid_optimize_lambda_batched,
     _select_jax_device,
 )
-from jamma.lmm.results import _concat_jax_accumulators, _yield_chunk_results
+from jamma.lmm.results import (
+    _concat_jax_accumulators,
+    _yield_chunk_results,
+    count_lambda_boundary_hits,
+    log_lambda_boundary_warning,
+)
 from jamma.lmm.runner_streaming import (
     _TEST_TYPE_MAP,
     _append_chunk_results,
@@ -74,6 +79,8 @@ def run_lmm_loco(
     snps_indices: np.ndarray | None = None,
     ksnps_indices: np.ndarray | None = None,
     col_chunk_size: int = 5_000,
+    l_min: float = 1e-5,
+    l_max: float = 1e5,
 ) -> list[AssocResult]:
     """Run LOCO LMM association: per-chromosome eigendecomp and association.
 
@@ -104,6 +111,8 @@ def run_lmm_loco(
             computation. Passed through to compute_loco_kinship_streaming().
         col_chunk_size: Number of SNP columns per disk read chunk. Controls
             peak memory: n_valid * col_chunk_size * 8 bytes per chunk.
+        l_min: Minimum lambda for optimization (default 1e-5).
+        l_max: Maximum lambda for optimization (default 1e5).
 
     Returns:
         List of AssocResult in original SNP order (empty if output_path set).
@@ -234,6 +243,8 @@ def run_lmm_loco(
                 lmm_mode=lmm_mode,
                 valid_mask=valid_mask,
                 show_progress=show_progress,
+                l_min=l_min,
+                l_max=l_max,
                 snps_set=snps_set,
                 col_chunk_size=col_chunk_size,
                 writer=writer,
@@ -577,6 +588,15 @@ def _run_lmm_for_chromosome(
         results: list[AssocResult] = []
         if any(accum.values()):
             arrays = _concat_jax_accumulators(lmm_mode, accum)
+
+            # Count SNPs converging at lambda bounds
+            n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
+                lmm_mode, arrays, l_min, l_max
+            )
+            log_lambda_boundary_warning(
+                n_at_lmin, n_at_lmax, l_min, l_max, prefix="LOCO "
+            )
+
             results_iter = _yield_chunk_results(
                 lmm_mode,
                 np.arange(n_filtered),

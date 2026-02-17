@@ -167,7 +167,7 @@ class TestDimensionValidation:
         write_eigenvalues(np.ones(10), d_path)
         write_eigenvectors(np.eye(10), u_path)
 
-        with pytest.raises(ValueError, match="does not match expected n_samples=12"):
+        with pytest.raises(ValueError, match="pipeline expects 12"):
             read_eigen_files(d_path, u_path, n_samples=12)
 
     def test_read_eigen_files_consistent_dimensions(self, tmp_path: Path) -> None:
@@ -212,16 +212,12 @@ class TestEdgeCases:
         assert len(loaded) == 2
 
     def test_read_eigenvalues_empty_file(self, tmp_path: Path) -> None:
-        """Empty eigenD file returns empty array (numpy warns but does not raise)."""
+        """Empty eigenD file raises ValueError."""
         path = tmp_path / "empty.eigenD.txt"
         path.write_text("")
 
-        # numpy >= 2.0 returns empty float64 array with a UserWarning
-        with pytest.warns(UserWarning, match="no data"):
-            result = read_eigenvalues(path)
-
-        assert result.size == 0
-        assert result.dtype == np.float64
+        with pytest.raises(ValueError, match="empty"):
+            read_eigenvalues(path)
 
     def test_write_read_single_eigenvalue(self, tmp_path: Path) -> None:
         """1x1 matrix edge case preserves correct shapes."""
@@ -237,13 +233,54 @@ class TestEdgeCases:
         loaded_d = read_eigenvalues(d_path)
         loaded_u = read_eigenvectors(u_path)
 
-        # np.loadtxt on a single-line file returns a 0-d array for 1D
-        # and a 1D array for a single-row matrix. Verify shape handling.
-        assert loaded_d.ndim <= 1
-        assert np.isclose(float(loaded_d), 3.14, rtol=1e-9)
+        # Readers now guarantee correct shapes via atleast_1d/atleast_2d
+        assert loaded_d.shape == (1,)
+        np.testing.assert_allclose(loaded_d, [3.14], rtol=1e-9)
 
-        # Single row eigenvector file: np.loadtxt returns 1D
-        assert np.isclose(float(loaded_u.flat[0]), 1.0)
+        assert loaded_u.shape == (1, 1)
+        np.testing.assert_allclose(loaded_u, [[1.0]])
+
+
+# =============================================================================
+# Reader validation tests
+# =============================================================================
+
+
+class TestReaderValidation:
+    """Verify individual readers catch parse errors and bad shapes."""
+
+    def test_read_eigenvalues_unparseable_includes_path(self, tmp_path: Path) -> None:
+        """Non-numeric eigenvalue file includes path in error."""
+        path = tmp_path / "bad.eigenD.txt"
+        path.write_text("1.0\nhello\n3.0\n")
+
+        with pytest.raises(ValueError, match=str(path)):
+            read_eigenvalues(path)
+
+    def test_read_eigenvectors_unparseable_includes_path(self, tmp_path: Path) -> None:
+        """Non-numeric eigenvector file includes path in error."""
+        path = tmp_path / "bad.eigenU.txt"
+        path.write_text("1.0\t2.0\nfoo\tbar\n")
+
+        with pytest.raises(ValueError, match=str(path)):
+            read_eigenvectors(path)
+
+    def test_read_eigenvectors_non_square_raises(self, tmp_path: Path) -> None:
+        """Non-square eigenvector matrix raises ValueError at reader level."""
+        path = tmp_path / "nonsquare.eigenU.txt"
+        # 2 rows x 3 columns
+        np.savetxt(path, np.ones((2, 3)), fmt="%.10g", delimiter="\t")
+
+        with pytest.raises(ValueError, match="square"):
+            read_eigenvectors(path)
+
+    def test_read_eigenvectors_empty_file_raises(self, tmp_path: Path) -> None:
+        """Empty eigenvector file raises ValueError."""
+        path = tmp_path / "empty.eigenU.txt"
+        path.write_text("")
+
+        with pytest.raises(ValueError, match="empty"):
+            read_eigenvectors(path)
 
 
 # =============================================================================

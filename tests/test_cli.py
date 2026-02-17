@@ -452,6 +452,7 @@ def test_cli_requires_gk_or_lmm():
 @pytest.mark.parametrize(
     "flag,value",
     [
+        ("-wsnp", "file.txt"),
         ("-gxe", "file.txt"),
         ("-vc", "1"),
         ("-mk", "file.txt"),
@@ -496,3 +497,230 @@ def test_cli_gk_explicit_maf_applies_filtering(tmp_path: Path):
     assert result.exit_code == 0
     assert "Filtering" in result.output
     assert "MAF >= 0.05" in result.output
+
+
+def test_lmin_lmax_flags(tmp_path: Path):
+    """CLI accepts -lmin and -lmax flags and runs successfully."""
+    outdir = tmp_path / "output"
+    kinship_dir = tmp_path / "kinship_out"
+
+    # Create kinship matrix
+    result = runner.invoke(
+        main, ["-outdir", str(kinship_dir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
+    )
+    assert result.exit_code == 0
+    kinship_file = kinship_dir / "result.cXX.txt"
+
+    # Run LMM with custom lambda bounds
+    result = runner.invoke(
+        main,
+        [
+            "-outdir",
+            str(outdir),
+            "-lmm",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-k",
+            str(kinship_file),
+            "-lmin",
+            "1e-3",
+            "-lmax",
+            "1e3",
+            "--no-check-memory",
+        ],
+    )
+    assert result.exit_code == 0
+    assoc_path = outdir / "result.assoc.txt"
+    assert assoc_path.exists()
+
+
+def test_lmin_validation():
+    """CLI rejects invalid -lmin values."""
+    # lmin = 0 should fail
+    result = runner.invoke(
+        main,
+        ["-bfile", str(EXAMPLE_BFILE), "-lmm", "1", "-k", "fake.txt", "-lmin", "0"],
+    )
+    assert result.exit_code == 2
+    assert "-lmin must be > 0" in result.output
+
+    # lmin = -1 should fail
+    result = runner.invoke(
+        main,
+        [
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-lmm",
+            "1",
+            "-k",
+            "fake.txt",
+            "-lmin",
+            "-1",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "-lmin must be > 0" in result.output
+
+
+def test_lmax_validation():
+    """CLI rejects -lmax less than or equal to -lmin."""
+    result = runner.invoke(
+        main,
+        [
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-lmm",
+            "1",
+            "-k",
+            "fake.txt",
+            "-lmin",
+            "1e-3",
+            "-lmax",
+            "1e-4",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "-lmax must be > -lmin" in result.output
+
+
+def test_cli_help_shows_lmin_lmax():
+    """CLI --help shows -lmin and -lmax flags with defaults."""
+    result = runner.invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "-lmin" in result.output
+    assert "-lmax" in result.output
+    assert "1e-5" in result.output
+    assert "1e5" in result.output
+
+
+def test_widv_flag(tmp_path: Path):
+    """CLI accepts -widv flag and applies weights to kinship."""
+    outdir = tmp_path / "output"
+    kinship_dir = tmp_path / "kinship_out"
+
+    # Create kinship matrix first
+    result = runner.invoke(
+        main, ["-outdir", str(kinship_dir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
+    )
+    assert result.exit_code == 0
+    kinship_file = kinship_dir / "result.cXX.txt"
+
+    # Create weight file with 100 samples (all 1.0 -- should not change results)
+    weight_file = tmp_path / "weights.txt"
+    with open(weight_file, "w") as f:
+        for _ in range(100):
+            f.write("1.0\n")
+
+    # Run LMM with -widv
+    result = runner.invoke(
+        main,
+        [
+            "-outdir",
+            str(outdir),
+            "-lmm",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-k",
+            str(kinship_file),
+            "-widv",
+            str(weight_file),
+            "--no-check-memory",
+        ],
+    )
+    assert result.exit_code == 0, f"CLI failed: {result.output}"
+    assert (outdir / "result.assoc.txt").exists()
+
+
+def test_wsnp_not_implemented():
+    """CLI rejects -wsnp with 'not yet implemented' error."""
+    weight_file = "dummy_snp_weights.txt"
+    result = runner.invoke(
+        main,
+        ["-bfile", str(EXAMPLE_BFILE), "-gk", "1", "-wsnp", weight_file],
+    )
+    assert result.exit_code == 1
+    assert "not yet implemented" in result.output.lower()
+
+
+def test_cli_help_shows_widv():
+    """CLI --help shows -widv flag."""
+    result = runner.invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "-widv" in result.output
+    assert "weight" in result.output.lower()
+
+
+def test_cat_flag(tmp_path: Path):
+    """CLI accepts -cat flag and applies categorical encoding to covariates."""
+    outdir = tmp_path / "output"
+    kinship_dir = tmp_path / "kinship_out"
+
+    # Create kinship matrix
+    result = runner.invoke(
+        main, ["-outdir", str(kinship_dir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
+    )
+    assert result.exit_code == 0
+    kinship_file = kinship_dir / "result.cXX.txt"
+
+    # Create covariate file: intercept + continuous + categorical(1,2,1,2,...)
+    cov_file = tmp_path / "covariates.txt"
+    with open(cov_file, "w") as f:
+        for i in range(100):
+            cat_val = 1 + (i % 2)  # alternating 1, 2
+            f.write(f"1 0.5 {cat_val}\n")
+
+    # Run LMM with -cat "3" to encode column 3 as categorical
+    result = runner.invoke(
+        main,
+        [
+            "-outdir",
+            str(outdir),
+            "-lmm",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-k",
+            str(kinship_file),
+            "-c",
+            str(cov_file),
+            "-cat",
+            "3",
+            "--no-check-memory",
+        ],
+    )
+    assert result.exit_code == 0, f"CLI failed: {result.output}"
+    assert "Categorical encoding applied" in result.output
+    assert (outdir / "result.assoc.txt").exists()
+
+
+def test_cat_requires_covariate_file(tmp_path: Path):
+    """CLI rejects -cat without -c (covariate file)."""
+    # Use a dummy file for -k (validation fails on -cat before kinship load)
+    dummy_kinship = tmp_path / "dummy_k.txt"
+    dummy_kinship.write_text("0")
+
+    result = runner.invoke(
+        main,
+        [
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-lmm",
+            "1",
+            "-k",
+            str(dummy_kinship),
+            "-cat",
+            "1",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "-cat requires -c" in result.output
+
+
+def test_cli_help_shows_cat():
+    """CLI --help shows -cat flag."""
+    result = runner.invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "-cat" in result.output
+    assert "Categorical" in result.output

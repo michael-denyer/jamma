@@ -348,6 +348,169 @@ class TestValidateInputsSnpsFields:
             runner.validate_inputs()
 
 
+class TestPipelineConfigLambdaBounds:
+    """Tests for PipelineConfig lambda bounds (l_min, l_max)."""
+
+    def test_lambda_bounds_defaults(self) -> None:
+        """PipelineConfig has correct defaults for lambda bounds."""
+        config = PipelineConfig(bfile=Path("test"))
+        assert config.l_min == 1e-5
+        assert config.l_max == 1e5
+
+    def test_lambda_bounds_custom(self) -> None:
+        """PipelineConfig accepts custom lambda bounds."""
+        config = PipelineConfig(
+            bfile=BFILE,
+            l_min=1e-3,
+            l_max=1e3,
+            check_memory=False,
+        )
+        runner = PipelineRunner(config)
+        runner.validate_inputs()  # Should not raise
+        assert config.l_min == 1e-3
+        assert config.l_max == 1e3
+
+    def test_lambda_lmin_zero_raises(self) -> None:
+        """validate_inputs raises ValueError for l_min=0."""
+        config = PipelineConfig(
+            bfile=BFILE,
+            l_min=0,
+            check_memory=False,
+        )
+        runner = PipelineRunner(config)
+        with pytest.raises(ValueError, match="l_min must be > 0"):
+            runner.validate_inputs()
+
+    def test_lambda_lmin_negative_raises(self) -> None:
+        """validate_inputs raises ValueError for negative l_min."""
+        config = PipelineConfig(
+            bfile=BFILE,
+            l_min=-1e-5,
+            check_memory=False,
+        )
+        runner = PipelineRunner(config)
+        with pytest.raises(ValueError, match="l_min must be > 0"):
+            runner.validate_inputs()
+
+    def test_lambda_lmax_less_than_lmin_raises(self) -> None:
+        """validate_inputs raises ValueError when l_max <= l_min."""
+        config = PipelineConfig(
+            bfile=BFILE,
+            l_min=1e-3,
+            l_max=1e-4,
+            check_memory=False,
+        )
+        runner = PipelineRunner(config)
+        with pytest.raises(ValueError, match="l_max must be > l_min"):
+            runner.validate_inputs()
+
+    def test_lambda_lmax_equals_lmin_raises(self) -> None:
+        """validate_inputs raises ValueError when l_max == l_min."""
+        config = PipelineConfig(
+            bfile=BFILE,
+            l_min=1.0,
+            l_max=1.0,
+            check_memory=False,
+        )
+        runner = PipelineRunner(config)
+        with pytest.raises(ValueError, match="l_max must be > l_min"):
+            runner.validate_inputs()
+
+
+class TestPipelineConfigWeightFile:
+    """Tests for PipelineConfig weight_file and pipeline weight application."""
+
+    def test_weight_file_default_none(self) -> None:
+        """PipelineConfig weight_file defaults to None."""
+        config = PipelineConfig(bfile=Path("test"))
+        assert config.weight_file is None
+
+    def test_weight_file_not_found(self, tmp_path: Path) -> None:
+        """validate_inputs raises FileNotFoundError for missing weight file."""
+        config = PipelineConfig(
+            bfile=BFILE,
+            weight_file=tmp_path / "nonexistent_weights.txt",
+            check_memory=False,
+        )
+        runner = PipelineRunner(config)
+        with pytest.raises(FileNotFoundError, match="Weight file not found"):
+            runner.validate_inputs()
+
+    def test_weight_file_with_loco_raises(self) -> None:
+        """validate_inputs raises ValueError for -widv with -loco."""
+        weight_path = FIXTURES / "test.fam"  # Use any existing file
+        config = PipelineConfig(
+            bfile=BFILE,
+            weight_file=weight_path,
+            loco=True,
+            check_memory=False,
+        )
+        runner = PipelineRunner(config)
+        with pytest.raises(ValueError, match="not yet supported with -loco"):
+            runner.validate_inputs()
+
+    def test_weight_file_with_eigen_raises(self, tmp_path: Path) -> None:
+        """validate_inputs raises ValueError for -widv with -d/-u."""
+        weight_path = FIXTURES / "test.fam"  # Use any existing file
+        # Create dummy eigen files
+        d_file = tmp_path / "test.eigenD.txt"
+        u_file = tmp_path / "test.eigenU.txt"
+        d_file.write_text("1.0\n")
+        u_file.write_text("1.0\n")
+
+        config = PipelineConfig(
+            bfile=BFILE,
+            weight_file=weight_path,
+            eigenvalue_file=d_file,
+            eigenvector_file=u_file,
+            check_memory=False,
+        )
+        runner = PipelineRunner(config)
+        with pytest.raises(ValueError, match="cannot be used with -d/-u"):
+            runner.validate_inputs()
+
+    def test_weight_file_applied_to_kinship(self, tmp_path: Path) -> None:
+        """Pipeline applies weights to kinship matrix when weight_file is set."""
+        # Create a weight file with non-trivial weights
+        weight_file = tmp_path / "weights.txt"
+        with open(weight_file, "w") as f:
+            for _ in range(100):
+                f.write("4.0\n")  # All weights = 4.0
+
+        # Run pipeline with weights
+        config_weighted = PipelineConfig(
+            bfile=BFILE,
+            lmm_mode=1,
+            maf=0.01,
+            miss=0.05,
+            output_dir=tmp_path / "weighted",
+            check_memory=False,
+            show_progress=False,
+            weight_file=weight_file,
+        )
+
+        # Run pipeline without weights for comparison
+        config_unweighted = PipelineConfig(
+            bfile=BFILE,
+            lmm_mode=1,
+            maf=0.01,
+            miss=0.05,
+            output_dir=tmp_path / "unweighted",
+            check_memory=False,
+            show_progress=False,
+        )
+
+        runner_w = PipelineRunner(config_weighted)
+        runner_u = PipelineRunner(config_unweighted)
+
+        # Load kinship with and without weights
+        K_weighted = runner_w.load_kinship(100)
+        K_unweighted = runner_u.load_kinship(100)
+
+        # With uniform weights=4.0, K_weighted[i,j] = K[i,j] / sqrt(4*4) = K[i,j] / 4
+        np.testing.assert_allclose(K_weighted, K_unweighted / 4.0, rtol=1e-10)
+
+
 class TestPhenotypeColumnMissingValues:
     """Tests for missing value handling in non-default phenotype columns."""
 

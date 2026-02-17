@@ -15,6 +15,7 @@ from jamma.io.plink import (
     stream_genotype_chunks,
 )
 from jamma.io.snp_list import read_snp_list_file, resolve_snp_list_to_indices
+from jamma.io.weight import read_weight_file
 
 __all__ = [
     "PlinkData",
@@ -23,6 +24,7 @@ __all__ = [
     "load_plink_binary",
     "read_covariate_file",
     "read_snp_list_file",
+    "read_weight_file",
     "resolve_snp_list_to_indices",
     "stream_genotype_chunks",
 ]

@@ -8,8 +8,12 @@ from collections.abc import Generator
 
 import jax.numpy as jnp
 import numpy as np
+from loguru import logger
 
 from jamma.lmm.stats import AssocResult
+
+# Relative tolerance for detecting lambda convergence at optimization bounds
+LAMBDA_BOUND_TOL = 1e-3
 
 
 def _snp_metadata(snp_info: dict, af: float, n_miss: int) -> dict:
@@ -284,3 +288,73 @@ def _yield_chunk_results(
                 p_lrt=float(arrays["p_lrts"][j]),
                 p_score=float(arrays["p_scores"][j]),
             )
+
+
+def _count_boundary_hits(
+    lambdas: np.ndarray, l_min: float, l_max: float
+) -> tuple[int, int]:
+    """Count how many lambda values sit at the lower/upper optimization bound."""
+    if len(lambdas) == 0:
+        return 0, 0
+    at_min = int(np.sum(lambdas / l_min < 1 + LAMBDA_BOUND_TOL))
+    at_max = int(np.sum(lambdas / l_max > 1 - LAMBDA_BOUND_TOL))
+    return at_min, at_max
+
+
+def count_lambda_boundary_hits(
+    lmm_mode: int,
+    arrays: dict[str, np.ndarray],
+    l_min: float,
+    l_max: float,
+) -> tuple[int, int]:
+    """Count SNPs with lambda converging at optimization bounds.
+
+    Args:
+        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
+        arrays: Dict of numpy arrays from _concat_jax_accumulators.
+        l_min: Lower lambda bound.
+        l_max: Upper lambda bound.
+
+    Returns:
+        Tuple of (n_at_lmin, n_at_lmax).
+    """
+    n_at_lmin = 0
+    n_at_lmax = 0
+    if lmm_mode in (1, 4):
+        lmin, lmax = _count_boundary_hits(
+            np.asarray(arrays.get("lambdas", [])), l_min, l_max
+        )
+        n_at_lmin += lmin
+        n_at_lmax += lmax
+    if lmm_mode in (2, 4):
+        lmin, lmax = _count_boundary_hits(
+            np.asarray(arrays.get("lambdas_mle", [])), l_min, l_max
+        )
+        n_at_lmin += lmin
+        n_at_lmax += lmax
+    return n_at_lmin, n_at_lmax
+
+
+def log_lambda_boundary_warning(
+    n_at_lmin: int,
+    n_at_lmax: int,
+    l_min: float,
+    l_max: float,
+    prefix: str = "",
+) -> None:
+    """Emit a warning if any SNPs converged at lambda bounds.
+
+    Args:
+        n_at_lmin: Count of SNPs at lower bound.
+        n_at_lmax: Count of SNPs at upper bound.
+        l_min: Lower lambda bound.
+        l_max: Upper lambda bound.
+        prefix: Optional prefix for log message (e.g. "LOCO ").
+    """
+    if n_at_lmin > 0 or n_at_lmax > 0:
+        parts = []
+        if n_at_lmin > 0:
+            parts.append(f"{n_at_lmin} SNPs at l_min={l_min:.1e}")
+        if n_at_lmax > 0:
+            parts.append(f"{n_at_lmax} SNPs at l_max={l_max:.1e}")
+        logger.warning(f"{prefix}Lambda bound convergence: {', '.join(parts)}")

@@ -904,3 +904,90 @@ class TestLocoKsnpsWiring:
         # Verify output file has data
         lines = result.assoc_path.read_text().strip().splitlines()
         assert len(lines) > 1, "Should have header + data lines"
+
+
+# ===========================================================================
+# Multi-Pass LOCO Kinship Tests
+# ===========================================================================
+
+
+class TestLocoMultiPass:
+    """Verify multi-pass LOCO kinship batching produces identical results."""
+
+    def test_multipass_loco_matches_singlepass(
+        self, synthetic_multi_chr, tmp_path: Path
+    ):
+        """Multi-pass LOCO (psutil mocked low memory) matches single-pass.
+
+        Forces multi-pass mode by mocking psutil.virtual_memory() to report
+        very low available memory, then verifies results are identical to a
+        normal (single-pass) run.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from bed_reader import to_bed
+
+        genotypes, chromosomes = synthetic_multi_chr
+        n_samples, n_snps = genotypes.shape
+
+        # Write synthetic data to PLINK binary files
+        bed_path = tmp_path / "synthetic"
+        # Replace NaN with -127 for integer encoding
+        geno_int = genotypes.copy()
+        geno_int[np.isnan(geno_int)] = -127
+        geno_int = geno_int.astype(np.int8)
+
+        # Create sample and SNP IDs
+        iid = [f"sample_{i}" for i in range(n_samples)]
+        sid = [f"snp_{i}" for i in range(n_snps)]
+        bp_position = list(range(1, n_snps + 1))
+
+        to_bed(
+            str(bed_path) + ".bed",
+            geno_int,
+            properties={
+                "iid": iid,
+                "sid": sid,
+                "chromosome": chromosomes.tolist(),
+                "bp_position": bp_position,
+            },
+        )
+
+        # Run single-pass (normal memory)
+        K_single = dict(
+            compute_loco_kinship_streaming(
+                bed_path, check_memory=False, show_progress=False
+            )
+        )
+
+        # Mock psutil to report very low available memory.
+        # 100 samples: matrix_gb = 100^2*8/1e9 = 0.00008 GB.
+        # 3 chromosomes: single_pass ~= 0.00032 + buffer.
+        # 300KB forces multi-pass while exceeding minimum.
+        mock_vmem = MagicMock()
+        mock_vmem.available = 300_000  # 300 KB
+
+        with patch(
+            "jamma.kinship.compute.psutil.virtual_memory", return_value=mock_vmem
+        ):
+            K_multi = dict(
+                compute_loco_kinship_streaming(
+                    bed_path, check_memory=False, show_progress=False
+                )
+            )
+
+        # Verify same chromosome set
+        assert set(K_single.keys()) == set(K_multi.keys()), (
+            f"Chromosome sets differ: single={sorted(K_single.keys())}, "
+            f"multi={sorted(K_multi.keys())}"
+        )
+
+        # Verify identical results within FP tolerance
+        for chr_name in K_single:
+            np.testing.assert_allclose(
+                K_multi[chr_name],
+                K_single[chr_name],
+                atol=1e-14,
+                rtol=1e-10,
+                err_msg=(f"Multi-pass != single-pass for chr {chr_name}"),
+            )

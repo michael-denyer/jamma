@@ -15,6 +15,7 @@ KINSHIP_FILE = FIXTURES / "mouse_hs1940_kinship.cXX.txt"
 COVARIATE_FILE = FIXTURES / "covariates.txt"
 
 
+@pytest.mark.slow
 @pytest.mark.tier1
 def test_gwas_basic(tmp_path: Path) -> None:
     """gwas() with pre-computed kinship returns valid GWASResult and writes output."""
@@ -57,6 +58,7 @@ def test_gwas_custom_prefix(tmp_path: Path) -> None:
     assert (tmp_path / "custom.assoc.txt").exists()
 
 
+@pytest.mark.slow
 @pytest.mark.tier1
 def test_gwas_save_kinship(tmp_path: Path) -> None:
     """gwas() computes and saves kinship when save_kinship=True."""
@@ -78,6 +80,7 @@ def test_gwas_save_kinship(tmp_path: Path) -> None:
     assert result.n_samples > 0
 
 
+@pytest.mark.slow
 @pytest.mark.tier1
 def test_gwas_with_precomputed_kinship(tmp_path: Path) -> None:
     """Loading pre-computed kinship skips computation (just file read)."""

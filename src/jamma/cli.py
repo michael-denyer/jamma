@@ -95,6 +95,18 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
 )
 @click.option("-hwe", type=float, default=0.0, help="HWE p-value threshold")
 @click.option(
+    "-lmin",
+    type=float,
+    default=1e-5,
+    help="Minimum lambda for optimization (default: 1e-5)",
+)
+@click.option(
+    "-lmax",
+    type=float,
+    default=1e5,
+    help="Maximum lambda for optimization (default: 1e5)",
+)
+@click.option(
     "-snps", type=click.Path(), default=None, help="SNP list for association testing"
 )
 @click.option(
@@ -114,6 +126,25 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     expose_value=False,
     is_eager=True,
     help="Show version and exit",
+)
+@click.option(
+    "-cat",
+    type=str,
+    default=None,
+    help="Categorical covariate columns, 1-indexed (e.g., -cat '1 3'). JAMMA-specific.",
+)
+@click.option(
+    "-widv",
+    type=click.Path(),
+    default=None,
+    help="Individual weight file (one weight per line)",
+)
+@click.option(
+    "-wsnp",
+    type=click.Path(),
+    default=None,
+    hidden=True,
+    help="SNP weight file (not yet implemented)",
 )
 @click.option(
     "-gxe",
@@ -161,11 +192,16 @@ def main(
     d,
     u,
     hwe,
+    lmin,
+    lmax,
     snps,
     ksnps,
     verbose,
     check_memory,
     mem_budget,
+    cat,
+    widv,
+    wsnp,
     gxe,
     vc,
     mk,
@@ -181,7 +217,7 @@ def main(
     config = OutputConfig(outdir=Path(outdir), prefix=o, verbose=verbose)
 
     # Validate unimplemented flags
-    _unimplemented = {"-gxe": gxe, "-vc": vc, "-mk": mk, "-mvlmm": mvlmm}
+    _unimplemented = {"-wsnp": wsnp, "-gxe": gxe, "-vc": vc, "-mk": mk, "-mvlmm": mvlmm}
     for flag_name, flag_value in _unimplemented.items():
         if flag_value is not None:
             raise click.ClickException(f"Flag {flag_name} is not yet implemented")
@@ -192,6 +228,12 @@ def main(
     if gk is None and lmm is None:
         raise click.UsageError("One of -gk or -lmm is required")
 
+    # Validate lambda bounds (before pipeline construction)
+    if lmin <= 0:
+        raise click.UsageError(f"-lmin must be > 0, got {lmin}")
+    if lmax <= lmin:
+        raise click.UsageError(f"-lmax must be > -lmin ({lmin}), got {lmax}")
+
     # Apply per-mode defaults for maf/miss.
     # gk mode: no filtering by default (GEMMA kinship behavior)
     # lmm mode: standard filtering (GEMMA association behavior)
@@ -200,6 +242,18 @@ def main(
             maf = 0.0
         if ctx.get_parameter_source("miss") == click.core.ParameterSource.DEFAULT:
             miss = 1.0
+
+    # Parse -cat option
+    cat_columns = None
+    if cat is not None:
+        try:
+            cat_columns = [int(x) for x in cat.split()]
+        except ValueError as e:
+            raise click.UsageError(
+                f"-cat must be space-separated integers, got '{cat}'"
+            ) from e
+        if not cat_columns:
+            raise click.UsageError("-cat requires at least one column index")
 
     # Dispatch to handler
     if gk is not None:
@@ -234,6 +288,10 @@ def main(
             snps_file=_opt_path(snps),
             ksnps_file=_opt_path(ksnps),
             hwe_threshold=hwe,
+            l_min=lmin,
+            l_max=lmax,
+            weight_file=_opt_path(widv),
+            cat_columns=cat_columns,
         )
 
 
@@ -437,6 +495,10 @@ def _run_lmm(
     snps_file: Path | None,
     ksnps_file: Path | None,
     hwe_threshold: float,
+    l_min: float = 1e-5,
+    l_max: float = 1e5,
+    weight_file: Path | None = None,
+    cat_columns: list[int] | None = None,
 ) -> None:
     """Run LMM association testing."""
     # Mutual exclusivity check
@@ -471,6 +533,10 @@ def _run_lmm(
         snps_file=snps_file,
         ksnps_file=ksnps_file,
         hwe_threshold=hwe_threshold,
+        l_min=l_min,
+        l_max=l_max,
+        weight_file=weight_file,
+        cat_columns=cat_columns,
     )
 
     # Run pipeline, converting exceptions to CLI-friendly errors

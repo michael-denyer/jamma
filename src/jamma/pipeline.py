@@ -73,6 +73,16 @@ class PipelineConfig:
         hwe_threshold: HWE p-value threshold. SNPs with HWE p-value below
             this threshold are excluded from association testing. 0.0 disables
             HWE filtering. Matches GEMMA's -hwe flag.
+        l_min: Minimum lambda for optimization (default 1e-5, matches GEMMA).
+        l_max: Maximum lambda for optimization (default 1e5, matches GEMMA).
+        weight_file: Individual weight file for kinship pre-transformation.
+            One weight per line, matching sample order. Applies
+            K[i,j] /= sqrt(w_i * w_j) before eigendecomposition.
+            GEMMA's -widv flag.
+        cat_columns: 1-indexed covariate column indices to treat as
+            categorical. JAMMA-specific feature (not GEMMA's -cat which is
+            for SNP categories in VC mode). Columns are one-hot encoded with
+            the first sorted level dropped as reference.
     """
 
     bfile: Path
@@ -95,6 +105,10 @@ class PipelineConfig:
     snps_file: Path | None = None
     ksnps_file: Path | None = None
     hwe_threshold: float = 0.0
+    l_min: float = 1e-5
+    l_max: float = 1e5
+    weight_file: Path | None = None
+    cat_columns: list[int] | None = None
 
 
 @dataclass
@@ -221,6 +235,42 @@ class PipelineRunner:
             raise FileNotFoundError(
                 f"Kinship SNP list file not found: {self.config.ksnps_file}"
             )
+
+        # Lambda bounds validation
+        if self.config.l_min <= 0:
+            raise ValueError(f"l_min must be > 0, got {self.config.l_min}")
+        if self.config.l_max <= self.config.l_min:
+            raise ValueError(
+                f"l_max must be > l_min ({self.config.l_min}), got {self.config.l_max}"
+            )
+
+        # Weight file validation
+        if self.config.weight_file is not None and not self.config.weight_file.exists():
+            raise FileNotFoundError(f"Weight file not found: {self.config.weight_file}")
+        if self.config.weight_file is not None and self.config.loco:
+            raise ValueError(
+                "-widv (individual weights) is not yet supported with -loco mode. "
+                "Apply weights to pre-computed kinship and use -k instead."
+            )
+        if (
+            self.config.weight_file is not None
+            and self.config.eigenvalue_file is not None
+        ):
+            raise ValueError(
+                "-widv (individual weights) cannot be used with -d/-u "
+                "(pre-computed eigen). "
+                "Weights must be applied to kinship before eigendecomposition."
+            )
+
+        # Categorical columns validation
+        if self.config.cat_columns is not None:
+            if self.config.covariate_file is None:
+                raise ValueError("-cat requires -c (covariate file)")
+            for col in self.config.cat_columns:
+                if col < 1:
+                    raise ValueError(
+                        f"-cat column indices must be >= 1 (1-indexed), got {col}"
+                    )
 
         # HWE threshold validation
         if self.config.hwe_threshold < 0:
@@ -352,8 +402,11 @@ class PipelineRunner:
         If kinship_file is provided, loads from disk. Otherwise, computes
         from genotypes using streaming kinship computation.
 
-        If save_kinship is True and kinship was computed (not loaded),
-        writes it to the output directory.
+        If weight_file is configured, applies individual weights to K via
+        K[i,j] /= sqrt(w_i * w_j) before returning (and before saving).
+
+        If save_kinship is True, writes the kinship matrix to the
+        output directory (whether loaded or computed).
 
         Args:
             n_samples: Number of samples (for validation of loaded kinship).
@@ -374,6 +427,19 @@ class PipelineRunner:
                 show_progress=self.config.show_progress,
                 ksnps_indices=ksnps_indices,
             )
+
+        # Apply individual weights before eigendecomposition
+        if self.config.weight_file is not None:
+            from jamma.io.weight import apply_individual_weights, read_weight_file
+
+            weights = read_weight_file(self.config.weight_file)
+            if len(weights) != n_samples:
+                raise ValueError(
+                    f"Weight file has {len(weights)} entries but expected "
+                    f"{n_samples} (matching sample count)"
+                )
+            logger.info(f"Applying individual weights from {self.config.weight_file}")
+            K = apply_individual_weights(K, weights)
 
         if self.config.save_kinship:
             kinship_path = (
@@ -420,6 +486,18 @@ class PipelineRunner:
                 "Warning: Covariate file does not have intercept column "
                 "(first column is not all 1s). "
                 "Model will NOT include intercept."
+            )
+
+        # Apply categorical encoding if -cat specified
+        if self.config.cat_columns is not None:
+            from jamma.io.covariate import encode_categorical_covariates
+
+            covariates = encode_categorical_covariates(
+                covariates, self.config.cat_columns
+            )
+            logger.info(
+                f"Categorical encoding applied to columns {self.config.cat_columns}: "
+                f"expanded to {covariates.shape[1]} covariate columns"
             )
 
         return covariates
@@ -516,6 +594,8 @@ class PipelineRunner:
                 kinship_output_prefix=self.config.output_prefix,
                 snps_indices=snps_indices,
                 ksnps_indices=ksnps_indices,
+                l_min=self.config.l_min,
+                l_max=self.config.l_max,
             )
             loco_s = time.perf_counter() - t_loco
             total_s = time.perf_counter() - t_start
@@ -606,6 +686,8 @@ class PipelineRunner:
             eigenvectors=eigenvectors,
             maf_threshold=self.config.maf,
             miss_threshold=self.config.miss,
+            l_min=self.config.l_min,
+            l_max=self.config.l_max,
             output_path=assoc_path,
             lmm_mode=self.config.lmm_mode,
             check_memory=False,  # Already checked above

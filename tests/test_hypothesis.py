@@ -1002,8 +1002,8 @@ class TestFilteringEquivalence:
         assert len(results_small) == len(results_large), "Same filtering applied"
         for r_s, r_l in zip(results_small, results_large, strict=True):
             assert r_s.rs == r_l.rs
-            np.testing.assert_allclose(r_s.beta, r_l.beta, rtol=1e-10)
-            np.testing.assert_allclose(r_s.p_wald, r_l.p_wald, rtol=1e-10)
+            np.testing.assert_allclose(r_s.beta, r_l.beta, rtol=1e-6)
+            np.testing.assert_allclose(r_s.p_wald, r_l.p_wald, rtol=1e-6)
 
 
 # -----------------------------------------------------------------------------

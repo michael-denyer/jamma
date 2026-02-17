@@ -4,9 +4,26 @@ Writes association results in GEMMA .assoc.txt format for
 byte-identical output compatibility.
 """
 
+import errno
+import time
 from pathlib import Path
 
+from loguru import logger
+
 from jamma.lmm.stats import AssocResult
+
+# Retry backoff schedule (seconds) for transient write failures
+_RETRY_BACKOFF = (0.1, 0.5, 2.0)
+
+# Errno values worth retrying (transient I/O conditions)
+_RETRYABLE_ERRNOS = frozenset(
+    {
+        errno.ENOSPC,  # No space left on device (may free up)
+        errno.EIO,  # I/O error (transient on network filesystems)
+        errno.EAGAIN,  # Resource temporarily unavailable
+        errno.EBUSY,  # Device or resource busy
+    }
+)
 
 
 def format_assoc_line(result: AssocResult) -> str:
@@ -222,11 +239,35 @@ class IncrementalAssocWriter:
         self._file.write(header + "\n")
         return self
 
+    def _cleanup_partial(self) -> None:
+        """Close file and delete partial output (best-effort).
+
+        Called after final write failure to avoid leaving corrupt partial
+        files on disk.
+        """
+        if self._file is not None:
+            try:
+                self._file.close()
+            except OSError as e:
+                logger.warning(f"Failed to close partial output file: {e}")
+            self._file = None
+        try:
+            self.path.unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning(f"Failed to delete partial output {self.path}: {e}")
+
     def write(self, result: AssocResult) -> None:
         """Write single result immediately to disk.
 
+        Retries up to 3 times with increasing backoff on OSError.
+        After final failure, cleans up partial output and re-raises.
+
         Args:
             result: AssocResult to write.
+
+        Raises:
+            RuntimeError: If writer is not opened as context manager.
+            OSError: After exhausting retries on write failure.
         """
         if self._file is None:
             raise RuntimeError("Writer not opened. Use as context manager.")
@@ -238,8 +279,39 @@ class IncrementalAssocWriter:
             line = format_assoc_line_all(result)
         else:
             line = format_assoc_line(result)
-        self._file.write(line + "\n")
-        self._count += 1
+
+        last_error: OSError | None = None
+        for attempt in range(1 + len(_RETRY_BACKOFF)):
+            try:
+                pos = self._file.tell()
+                self._file.write(line + "\n")
+                self._file.flush()
+                self._count += 1
+                return
+            except OSError as e:
+                last_error = e
+                # Truncate any partial write back to pre-write position
+                try:
+                    self._file.seek(pos)
+                    self._file.truncate()
+                except OSError:
+                    pass
+                if attempt < len(_RETRY_BACKOFF):
+                    err_code = getattr(e, "errno", None)
+                    if err_code is not None and err_code not in _RETRYABLE_ERRNOS:
+                        # Non-retryable error — fail immediately
+                        break
+                    logger.warning(
+                        f"Write attempt {attempt + 1} failed ({e}), "
+                        f"retrying in {_RETRY_BACKOFF[attempt]}s..."
+                    )
+                    time.sleep(_RETRY_BACKOFF[attempt])
+
+        # All retries exhausted (or non-retryable error)
+        self._cleanup_partial()
+        n_retries = len(_RETRY_BACKOFF)
+        logger.error(f"Write failed after {n_retries} retries: {self.path}")
+        raise last_error  # type: ignore[misc]
 
     def write_batch(self, results: list[AssocResult]) -> None:
         """Write multiple results at once (convenience method).
@@ -251,9 +323,20 @@ class IncrementalAssocWriter:
             self.write(result)
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Close file."""
-        if self._file:
-            self._file.close()
+        """Close file, cleaning up partial output on OSError.
+
+        On normal exit or non-OSError exceptions, closes the file normally.
+        On OSError (write failure propagating up), deletes the partial file.
+        """
+        if exc_type is not None and issubclass(exc_type, OSError):
+            self._cleanup_partial()
+        elif self._file:
+            try:
+                self._file.close()
+            except OSError as e:
+                logger.warning(f"Failed to close output file: {e}")
+                self._cleanup_partial()
+                return
             self._file = None
 
     @property

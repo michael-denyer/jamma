@@ -40,7 +40,12 @@ from jamma.lmm.prepare import (
     _grid_optimize_lambda_batched,
     _select_jax_device,
 )
-from jamma.lmm.results import _concat_jax_accumulators, _yield_chunk_results
+from jamma.lmm.results import (
+    _concat_jax_accumulators,
+    _yield_chunk_results,
+    count_lambda_boundary_hits,
+    log_lambda_boundary_warning,
+)
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
 
@@ -423,6 +428,10 @@ def run_lmm_association_streaming(
     # Track results for in-memory mode (when output_path is None)
     all_results: list[AssocResult] = []
 
+    # Lambda boundary convergence counters
+    n_at_lmin = 0
+    n_at_lmax = 0
+
     with contextlib.ExitStack() as stack:
         writer = None
         if output_path is not None:
@@ -618,6 +627,14 @@ def run_lmm_association_streaming(
             if any(accum.values()):
                 t_write_start = time.perf_counter()
                 arrays = _concat_jax_accumulators(lmm_mode, accum)
+
+                # Count SNPs converging at lambda bounds
+                chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
+                    lmm_mode, arrays, l_min, l_max
+                )
+                n_at_lmin += chunk_lmin
+                n_at_lmax += chunk_lmax
+
                 for result in _yield_chunk_results(
                     lmm_mode,
                     chunk_filtered_local_idx,
@@ -666,6 +683,9 @@ def run_lmm_association_streaming(
             logger.info(f"Wrote {writer.count:,} results to {output_path}")
 
     jax.clear_caches()
+
+    # Emit boundary convergence summary warning
+    log_lambda_boundary_warning(n_at_lmin, n_at_lmax, l_min, l_max)
 
     if show_progress:
         elapsed = time.perf_counter() - start_time

@@ -22,9 +22,28 @@ def read_eigenvalues(path: Path) -> np.ndarray:
         path: Path to eigenvalue file (one value per line).
 
     Returns:
-        1D array of eigenvalues (n_samples,).
+        1-D float64 array of eigenvalues, shape (n_samples,).
+
+    Raises:
+        ValueError: If file is empty or contains non-numeric data.
     """
-    return np.loadtxt(path, dtype=np.float64)
+    try:
+        data = np.loadtxt(path, dtype=np.float64)
+    except ValueError as e:
+        raise ValueError(f"Cannot parse eigenvalue file {path}: {e}") from e
+
+    if data.size == 0:
+        raise ValueError(f"Eigenvalue file is empty: {path}")
+
+    # np.loadtxt returns 0-D scalar for single-line files
+    data = np.atleast_1d(data)
+
+    if data.ndim != 1:
+        raise ValueError(
+            f"Eigenvalue file must be single-column, got shape {data.shape}: {path}"
+        )
+
+    return data
 
 
 def read_eigenvectors(path: Path) -> np.ndarray:
@@ -34,9 +53,33 @@ def read_eigenvectors(path: Path) -> np.ndarray:
         path: Path to eigenvector file (tab-separated matrix).
 
     Returns:
-        2D array of eigenvectors (n_samples, n_samples).
+        2-D float64 array of eigenvectors, shape (n_samples, n_samples).
+
+    Raises:
+        ValueError: If file is empty, non-numeric, or not a square matrix.
     """
-    return np.loadtxt(path, dtype=np.float64)
+    try:
+        data = np.loadtxt(path, dtype=np.float64)
+    except ValueError as e:
+        raise ValueError(f"Cannot parse eigenvector file {path}: {e}") from e
+
+    if data.size == 0:
+        raise ValueError(f"Eigenvector file is empty: {path}")
+
+    # np.loadtxt returns 1-D for single-row files
+    data = np.atleast_2d(data)
+
+    if data.ndim != 2:
+        raise ValueError(
+            f"Eigenvector file must be a 2D matrix, got {data.ndim}D array: {path}"
+        )
+
+    if data.shape[0] != data.shape[1]:
+        raise ValueError(
+            f"Eigenvector matrix must be square, got shape {data.shape}: {path}"
+        )
+
+    return data
 
 
 def read_eigen_files(
@@ -44,11 +87,10 @@ def read_eigen_files(
     eigenU_path: Path,
     n_samples: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Read both eigenvalue and eigenvector files with validation.
+    """Read both eigenvalue and eigenvector files with cross-validation.
 
-    Validates internal consistency: eigenvalue count must match
-    eigenvector rows and columns (square matrix). Optionally validates
-    against expected sample count.
+    Validates that eigenvalue count matches eigenvector dimensions.
+    Optionally validates against expected sample count.
 
     Args:
         eigenD_path: Path to eigenvalue file (.eigenD.txt).
@@ -66,32 +108,21 @@ def read_eigen_files(
     eigenvectors = read_eigenvectors(eigenU_path)
 
     n_eval = eigenvalues.shape[0]
-
-    if eigenvectors.ndim != 2:
-        raise ValueError(
-            f"Eigenvector file must contain a 2D matrix, "
-            f"got {eigenvectors.ndim}D array from {eigenU_path}"
-        )
-
-    n_rows, n_cols = eigenvectors.shape
-
-    if n_rows != n_cols:
-        raise ValueError(
-            f"Eigenvector matrix must be square, got shape "
-            f"({n_rows}, {n_cols}) from {eigenU_path}"
-        )
+    n_rows = eigenvectors.shape[0]
 
     if n_eval != n_rows:
         raise ValueError(
             f"Eigenvalue count ({n_eval}) does not match eigenvector "
-            f"dimensions ({n_rows} x {n_cols}). Files may be mismatched: "
+            f"dimensions ({n_rows} x {n_rows}). Files may be mismatched: "
             f"{eigenD_path}, {eigenU_path}"
         )
 
     if n_samples is not None and n_eval != n_samples:
         raise ValueError(
-            f"Eigenvalue count ({n_eval}) does not match expected "
-            f"n_samples={n_samples}. Eigen files may be from a different dataset."
+            f"Eigen files have {n_eval} samples but pipeline expects "
+            f"{n_samples} after phenotype/covariate filtering. "
+            f"Re-run with -eigen to regenerate eigen files matching "
+            f"the current filtering."
         )
 
     return eigenvalues, eigenvectors
@@ -109,10 +140,7 @@ def write_eigenvalues(eigenvalues: np.ndarray, path: Path) -> None:
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(path, "w") as f:
-        for val in eigenvalues:
-            f.write(f"{val:.10g}\n")
+    np.savetxt(path, eigenvalues, fmt="%.10g")
 
 
 def write_eigenvectors(eigenvectors: np.ndarray, path: Path) -> None:
@@ -127,11 +155,7 @@ def write_eigenvectors(eigenvectors: np.ndarray, path: Path) -> None:
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(path, "w") as f:
-        for row in eigenvectors:
-            values = [f"{v:.10g}" for v in row]
-            f.write("\t".join(values) + "\n")
+    np.savetxt(path, eigenvectors, fmt="%.10g", delimiter="\t")
 
 
 def write_eigen_files(

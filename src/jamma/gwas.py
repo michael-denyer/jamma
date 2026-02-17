@@ -27,8 +27,7 @@ class GWASResult:
             used (results written to disk instead).
         n_samples: Number of samples with valid phenotypes.
         n_snps_tested: Total number of SNPs in the dataset.
-        timing: Timing breakdown with keys 'kinship_s', 'eigendecomp_s',
-            'lmm_s', 'total_s'.
+        timing: Timing breakdown with keys 'kinship_s', 'lmm_s', 'total_s'.
     """
 
     associations: list[AssocResult]
@@ -58,6 +57,10 @@ def gwas(
     snps_file: str | Path | None = None,
     ksnps_file: str | Path | None = None,
     hwe: float = 0.0,
+    l_min: float = 1e-5,
+    l_max: float = 1e5,
+    weight_file: str | Path | None = None,
+    cat_columns: list[int] | None = None,
 ) -> GWASResult:
     """Run a complete GWAS pipeline in a single call.
 
@@ -111,6 +114,17 @@ def gwas(
         hwe: HWE p-value threshold. SNPs with Hardy-Weinberg equilibrium
             p-value below this threshold are excluded. 0.0 disables HWE
             filtering. Matches GEMMA's ``-hwe`` flag.
+        l_min: Minimum lambda for optimization (default 1e-5, matches GEMMA).
+        l_max: Maximum lambda for optimization (default 1e5, matches GEMMA).
+        weight_file: Individual weight file for kinship pre-transformation.
+            One weight per line, matching sample order. Applies
+            K[i,j] /= sqrt(w_i * w_j) before eigendecomposition.
+            GEMMA's ``-widv`` flag. None means no weight application.
+        cat_columns: 1-indexed covariate column indices to treat as
+            categorical. JAMMA-specific feature (not GEMMA's ``-cat`` which
+            is for SNP categories in VC mode). Columns are one-hot encoded
+            with the first sorted level dropped as reference. Requires
+            covariate_file to be set.
 
     Returns:
         GWASResult with association results, sample/SNP counts, and timing.
@@ -151,6 +165,10 @@ def gwas(
         snps_file=Path(snps_file) if snps_file is not None else None,
         ksnps_file=Path(ksnps_file) if ksnps_file is not None else None,
         hwe_threshold=hwe,
+        l_min=l_min,
+        l_max=l_max,
+        weight_file=Path(weight_file) if weight_file is not None else None,
+        cat_columns=cat_columns,
     )
 
     pipeline_result = PipelineRunner(config).run()

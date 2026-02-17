@@ -1,6 +1,7 @@
 """Tests for incremental association result writer."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -138,3 +139,93 @@ class TestIncrementalAssocWriter:
 
         with pytest.raises(RuntimeError, match="not opened"):
             writer.write(sample_result)
+
+    def test_retries_on_oserror(self, tmp_path: Path, sample_result: AssocResult):
+        """Should retry on OSError and succeed on second attempt."""
+        output_path = tmp_path / "test.assoc.txt"
+        call_count = 0
+
+        with IncrementalAssocWriter(output_path) as writer:
+            original_write = writer._file.write
+
+            def flaky_write(data):
+                nonlocal call_count
+                call_count += 1
+                # First call to this patched write is the data line -- fail it.
+                # Second call (retry) succeeds.
+                if call_count == 1:
+                    raise OSError("Disk full")
+                return original_write(data)
+
+            writer._file.write = flaky_write
+
+            with patch("jamma.lmm.io.time.sleep") as mock_sleep:
+                writer.write(sample_result)
+                # Should have slept once with 0.1s (first retry backoff)
+                mock_sleep.assert_called_once_with(0.1)
+
+        assert writer.count == 1
+
+    def test_deletes_partial_on_final_failure(
+        self, tmp_path: Path, sample_result: AssocResult
+    ):
+        """Should delete partial file after exhausting all retries."""
+        output_path = tmp_path / "test.assoc.txt"
+
+        with patch("jamma.lmm.io.time.sleep"):
+            with pytest.raises(OSError):
+                with IncrementalAssocWriter(output_path) as writer:
+                    # Make every write after header fail
+                    original_write = writer._file.write
+
+                    def always_fail(data):
+                        if "\t" in data:  # data lines have tabs
+                            raise OSError("Disk full")
+                        return original_write(data)
+
+                    writer._file.write = always_fail
+                    writer.write(sample_result)
+
+        # Partial file should be cleaned up
+        assert not output_path.exists(), "Partial output file should be deleted"
+
+    def test_no_retry_on_non_oserror(self, tmp_path: Path, sample_result: AssocResult):
+        """Non-OSError exceptions propagate immediately without retries."""
+        output_path = tmp_path / "test.assoc.txt"
+
+        with patch("jamma.lmm.io.time.sleep") as mock_sleep:
+            with pytest.raises(TypeError):
+                with IncrementalAssocWriter(output_path) as writer:
+                    # Patch format function to raise TypeError
+                    with patch(
+                        "jamma.lmm.io.format_assoc_line",
+                        side_effect=TypeError("bad format"),
+                    ):
+                        writer.write(sample_result)
+
+            # time.sleep should NOT have been called
+            mock_sleep.assert_not_called()
+
+    def test_cleanup_on_context_exit_with_error(
+        self, tmp_path: Path, sample_result: AssocResult
+    ):
+        """Partial file deleted when OSError propagates through context exit."""
+        output_path = tmp_path / "test.assoc.txt"
+
+        with patch("jamma.lmm.io.time.sleep"):
+            with pytest.raises(OSError):
+                with IncrementalAssocWriter(output_path) as writer:
+                    original_write = writer._file.write
+
+                    def always_fail(data):
+                        if "\t" in data:
+                            raise OSError("Disk full")
+                        return original_write(data)
+
+                    writer._file.write = always_fail
+                    writer.write(sample_result)
+
+        # File should be cleaned up by __exit__
+        assert not output_path.exists(), (
+            "Partial file should be deleted on context exit with OSError"
+        )

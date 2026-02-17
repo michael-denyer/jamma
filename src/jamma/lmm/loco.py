@@ -81,7 +81,7 @@ def run_lmm_loco(
     col_chunk_size: int = 5_000,
     l_min: float = 1e-5,
     l_max: float = 1e5,
-) -> list[AssocResult]:
+) -> tuple[list[AssocResult], int]:
     """Run LOCO LMM association: per-chromosome eigendecomp and association.
 
     For each chromosome:
@@ -115,7 +115,9 @@ def run_lmm_loco(
         l_max: Maximum lambda for optimization (default 1e5).
 
     Returns:
-        List of AssocResult in original SNP order (empty if output_path set).
+        Tuple of (results, n_tested) where results is a list of AssocResult
+        in original SNP order (empty if output_path set) and n_tested is the
+        total number of SNPs tested across all chromosomes.
 
     Raises:
         ValueError: If only one chromosome present, or if lmm_mode invalid.
@@ -267,7 +269,8 @@ def run_lmm_loco(
         elapsed = time.perf_counter() - start_time
         logger.info(f"LOCO LMM Association completed in {elapsed:.2f}s")
 
-    return [] if output_path is not None else all_results
+    n_tested = writer.count if writer is not None else len(all_results)
+    return ([] if output_path is not None else all_results), n_tested
 
 
 def _run_lmm_for_chromosome(
@@ -597,19 +600,20 @@ def _run_lmm_for_chromosome(
                 n_at_lmin, n_at_lmax, l_min, l_max, prefix="LOCO "
             )
 
-            results_iter = _yield_chunk_results(
-                lmm_mode,
-                np.arange(n_filtered),
-                global_filtered_indices,
-                snp_stats,
-                snp_info,
-                arrays,
+            chunk_results = list(
+                _yield_chunk_results(
+                    lmm_mode,
+                    np.arange(n_filtered),
+                    global_filtered_indices,
+                    snp_stats,
+                    snp_info,
+                    arrays,
+                )
             )
             if writer is not None:
-                for result in results_iter:
-                    writer.write(result)
+                writer.write_batch(chunk_results)
             else:
-                results = list(results_iter)
+                results = chunk_results
 
         return results
     finally:

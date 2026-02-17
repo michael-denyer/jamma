@@ -59,12 +59,7 @@ def write_kinship_matrix(K: np.ndarray, path: Path) -> None:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(path, "w") as f:
-        for i in range(K.shape[0]):
-            # Use .10g format: 10 significant digits, general format
-            # This matches C++ iostream precision(10) behavior
-            values = [f"{K[i, j]:.10g}" for j in range(K.shape[1])]
-            f.write("\t".join(values) + "\n")
+    np.savetxt(path, K, fmt="%.10g", delimiter="\t")
 
 
 def write_loco_kinship_matrices(

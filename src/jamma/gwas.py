@@ -25,8 +25,9 @@ class GWASResult:
     Attributes:
         associations: Per-SNP association results. Empty when output_path is
             used (results written to disk instead).
-        n_samples: Number of samples with valid phenotypes.
-        n_snps_tested: Total number of SNPs in the dataset.
+        n_samples: Number of samples after phenotype and covariate filtering.
+        n_snps_tested: Number of SNPs tested after MAF/missingness/HWE/SNP-list
+            filtering.
         timing: Timing breakdown with keys 'kinship_s', 'lmm_s', 'total_s'.
     """
 

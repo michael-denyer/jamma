@@ -122,6 +122,66 @@ class TestIncrementalAssocWriter:
 
         assert writer.count == len(sample_results)
 
+    def test_write_batch_single_flush(self, tmp_path: Path, sample_results: list):
+        """write_batch should have far fewer flushes than N results.
+
+        CPython's TextIOWrapper.tell() internally calls flush(), so the
+        exact count is 2 (tell-induced + explicit). The key invariant is
+        that it's constant per batch, not proportional to len(results).
+        The old per-SNP path would have produced len(results) flushes.
+        """
+        output_path = tmp_path / "test.assoc.txt"
+
+        with IncrementalAssocWriter(output_path) as writer:
+            original_flush = writer._file.flush
+            flush_count = 0
+
+            def counting_flush():
+                nonlocal flush_count
+                flush_count += 1
+                return original_flush()
+
+            writer._file.flush = counting_flush
+            writer.write_batch(sample_results)
+            # Count flushes only during write_batch, not __exit__
+            batch_flush_count = flush_count
+
+        # Constant flush count per batch (tell + explicit), not N per-SNP
+        n = len(sample_results)
+        assert batch_flush_count <= 2, f"Expected <=2 flushes, got {batch_flush_count}"
+        assert batch_flush_count < n, (
+            f"Batch flush count ({batch_flush_count}) should be far less than "
+            f"result count ({n})"
+        )
+
+    def test_write_batch_output_matches_individual_writes(
+        self, tmp_path: Path, sample_results: list
+    ):
+        """write_batch output must be byte-identical to individual write() calls."""
+        batch_path = tmp_path / "batch.assoc.txt"
+        individual_path = tmp_path / "individual.assoc.txt"
+
+        with IncrementalAssocWriter(batch_path) as writer:
+            writer.write_batch(sample_results)
+
+        with IncrementalAssocWriter(individual_path) as writer:
+            for result in sample_results:
+                writer.write(result)
+
+        assert batch_path.read_bytes() == individual_path.read_bytes()
+
+    def test_write_batch_empty_list(self, tmp_path: Path):
+        """write_batch([]) should be a no-op: count stays 0, no error."""
+        output_path = tmp_path / "test.assoc.txt"
+
+        with IncrementalAssocWriter(output_path) as writer:
+            writer.write_batch([])
+
+        assert writer.count == 0
+        # File should only contain header
+        lines = output_path.read_text().strip().split("\n")
+        assert len(lines) == 1  # Header only
+
     def test_creates_parent_directories(
         self, tmp_path: Path, sample_result: AssocResult
     ):
@@ -229,3 +289,42 @@ class TestIncrementalAssocWriter:
         assert not output_path.exists(), (
             "Partial file should be deleted on context exit with OSError"
         )
+
+    def test_write_batch_retries_on_flaky_write(
+        self, tmp_path: Path, sample_results: list
+    ):
+        """write_batch retries on first OSError and succeeds on second attempt."""
+        output_path = tmp_path / "test.assoc.txt"
+        call_count = 0
+
+        with IncrementalAssocWriter(output_path) as writer:
+            original_write = writer._file.write
+
+            def flaky_write(data):
+                nonlocal call_count
+                call_count += 1
+                # First write of data (not header) fails; retry succeeds
+                if call_count == 1 and "\t" in data:
+                    raise OSError("Transient I/O error")
+                return original_write(data)
+
+            writer._file.write = flaky_write
+
+            with patch("jamma.lmm.io.time.sleep") as mock_sleep:
+                writer.write_batch(sample_results)
+                mock_sleep.assert_called_once_with(0.1)
+
+        assert writer.count == len(sample_results)
+
+        # Verify file content is complete and not duplicated
+        lines = output_path.read_text().strip().split("\n")
+        assert len(lines) == 1 + len(sample_results), (
+            f"Expected header + {len(sample_results)} results, got {len(lines)} lines"
+        )
+
+    def test_write_batch_raises_if_not_opened(self, sample_results: list):
+        """write_batch on unopened writer raises RuntimeError."""
+        writer = IncrementalAssocWriter(Path("dummy.txt"))
+
+        with pytest.raises(RuntimeError, match="not opened"):
+            writer.write_batch(sample_results)

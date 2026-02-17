@@ -21,6 +21,7 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
+from jamma.core.jax_config import ensure_jax_configured
 from jamma.core.memory import StreamingMemoryBreakdown, estimate_streaming_memory
 from jamma.io.covariate import read_covariate_file
 from jamma.io.plink import get_plink_metadata, validate_plink_dimensions
@@ -118,8 +119,9 @@ class PipelineResult:
     Attributes:
         associations: Per-SNP association results. Empty when results are
             written to disk via output_path.
-        n_samples: Number of samples with valid phenotypes.
-        n_snps_tested: Total number of SNPs in the dataset.
+        n_samples: Number of samples after phenotype and covariate filtering.
+        n_snps_tested: Number of SNPs tested after MAF/missingness/HWE/SNP-list
+            filtering.
         assoc_path: Path to the written association results file.
         timing: Timing breakdown by pipeline phase.
     """
@@ -153,6 +155,26 @@ class PipelineRunner:
 
     def __init__(self, config: PipelineConfig) -> None:
         self.config = config
+
+    @staticmethod
+    def _compute_valid_mask(
+        phenotypes: np.ndarray, covariates: np.ndarray | None
+    ) -> np.ndarray:
+        """Compute boolean mask of samples with valid phenotype and covariate values.
+
+        Args:
+            phenotypes: Phenotype vector (n_samples,).
+            covariates: Covariate matrix (n_samples, n_cvt) or None.
+
+        Returns:
+            Boolean mask array of shape (n_samples,) where True indicates
+            a sample with valid phenotype and covariate values.
+        """
+        valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
+        if covariates is not None:
+            valid_covariate = np.all(~np.isnan(covariates), axis=1)
+            valid_mask = valid_mask & valid_covariate
+        return valid_mask
 
     def validate_inputs(self) -> None:
         """Validate that all required input files exist and parameters are valid.
@@ -542,6 +564,11 @@ class PipelineRunner:
         """
         t_start = time.perf_counter()
 
+        # Guarantee JAX x64 precision for ALL code paths, including
+        # precomputed kinship (-k) and precomputed eigen (-d/-u) where
+        # kinship/compute.py is never called.
+        ensure_jax_configured()
+
         # 1. Validate
         self.validate_inputs()
 
@@ -577,9 +604,11 @@ class PipelineRunner:
         # 7. LOCO branch: skip standard kinship, run LOCO orchestrator
         if self.config.loco:
             covariates = self.load_covariates(n_samples)
+            valid_mask = self._compute_valid_mask(phenotypes, covariates)
+            n_valid = int(np.sum(valid_mask))
 
             t_loco = time.perf_counter()
-            results = run_lmm_loco(
+            results, n_tested = run_lmm_loco(
                 bed_path=self.config.bfile,
                 phenotypes=phenotypes,
                 covariates=covariates,
@@ -599,12 +628,12 @@ class PipelineRunner:
             )
             loco_s = time.perf_counter() - t_loco
             total_s = time.perf_counter() - t_start
-            logger.info(f"LOCO GWAS complete: {n_snps} SNPs in {total_s:.1f}s")
+            logger.info(f"LOCO GWAS complete: {n_tested} SNPs tested in {total_s:.1f}s")
 
             return PipelineResult(
                 associations=results,
-                n_samples=n_analyzed,
-                n_snps_tested=n_snps,
+                n_samples=n_valid,
+                n_snps_tested=n_tested,
                 assoc_path=assoc_path,
                 timing={
                     "kinship_s": 0.0,
@@ -618,10 +647,7 @@ class PipelineRunner:
         covariates = self.load_covariates(n_samples)
 
         # Compute valid sample count (phenotype + covariate filtering)
-        valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
-        if covariates is not None:
-            valid_covariate = np.all(~np.isnan(covariates), axis=1)
-            valid_mask = valid_mask & valid_covariate
+        valid_mask = self._compute_valid_mask(phenotypes, covariates)
         n_valid = int(np.sum(valid_mask))
 
         # 8. Standard path: load eigen files or kinship
@@ -676,7 +702,7 @@ class PipelineRunner:
 
         # 9. Run LMM association
         t_lmm = time.perf_counter()
-        results = run_lmm_association_streaming(
+        results, n_tested = run_lmm_association_streaming(
             bed_path=self.config.bfile,
             phenotypes=phenotypes,
             kinship=K,
@@ -699,12 +725,12 @@ class PipelineRunner:
         lmm_s = time.perf_counter() - t_lmm
 
         total_s = time.perf_counter() - t_start
-        logger.info(f"GWAS complete: {n_snps} SNPs tested in {total_s:.1f}s")
+        logger.info(f"GWAS complete: {n_tested} SNPs tested in {total_s:.1f}s")
 
         return PipelineResult(
             associations=results,
-            n_samples=n_analyzed,
-            n_snps_tested=n_snps,
+            n_samples=n_valid,
+            n_snps_tested=n_tested,
             assoc_path=assoc_path,
             timing={
                 "kinship_s": kinship_s,

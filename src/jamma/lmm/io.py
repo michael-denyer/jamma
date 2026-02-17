@@ -285,7 +285,6 @@ class IncrementalAssocWriter:
             try:
                 pos = self._file.tell()
                 self._file.write(line + "\n")
-                self._file.flush()
                 self._count += 1
                 return
             except OSError as e:
@@ -294,8 +293,13 @@ class IncrementalAssocWriter:
                 try:
                     self._file.seek(pos)
                     self._file.truncate()
-                except OSError:
-                    pass
+                except OSError as seek_err:
+                    logger.warning(
+                        f"Failed to rollback partial write at position {pos} "
+                        f"({seek_err}); file may be in inconsistent state"
+                    )
+                    self._cleanup_partial()
+                    raise last_error from None
                 if attempt < len(_RETRY_BACKOFF):
                     err_code = getattr(e, "errno", None)
                     if err_code is not None and err_code not in _RETRYABLE_ERRNOS:
@@ -309,18 +313,88 @@ class IncrementalAssocWriter:
 
         # All retries exhausted (or non-retryable error)
         self._cleanup_partial()
-        n_retries = len(_RETRY_BACKOFF)
-        logger.error(f"Write failed after {n_retries} retries: {self.path}")
+        err_code = getattr(last_error, "errno", None)
+        if attempt == 0 and err_code is not None and err_code not in _RETRYABLE_ERRNOS:
+            logger.error(
+                f"Write failed immediately (non-retryable errno={err_code}): "
+                f"{self.path}"
+            )
+        else:
+            logger.error(f"Write failed after {attempt} retries: {self.path}")
         raise last_error  # type: ignore[misc]
 
     def write_batch(self, results: list[AssocResult]) -> None:
-        """Write multiple results at once (convenience method).
+        """Write multiple results as a single buffered write + flush.
+
+        Formats all results into one string buffer, writes once, flushes once.
+        This reduces flush syscalls from N to 1 per batch -- critical on
+        network/cloud filesystems where each flush costs 5-50ms.
 
         Args:
             results: List of AssocResult to write.
+
+        Raises:
+            RuntimeError: If writer is not opened as context manager.
+            OSError: After exhausting retries on write failure.
         """
-        for result in results:
-            self.write(result)
+        if self._file is None:
+            raise RuntimeError("Writer not opened. Use as context manager.")
+        if not results:
+            return
+
+        # Select formatter once for the batch
+        if self.test_type == "score":
+            fmt = format_assoc_line_score
+        elif self.test_type == "lrt":
+            fmt = format_assoc_line_lrt
+        elif self.test_type == "all":
+            fmt = format_assoc_line_all
+        else:
+            fmt = format_assoc_line
+
+        # Format entire batch into single buffer
+        buf = "\n".join(fmt(r) for r in results) + "\n"
+
+        last_error: OSError | None = None
+        for attempt in range(1 + len(_RETRY_BACKOFF)):
+            try:
+                pos = self._file.tell()
+                self._file.write(buf)
+                self._file.flush()
+                self._count += len(results)
+                return
+            except OSError as e:
+                last_error = e
+                try:
+                    self._file.seek(pos)
+                    self._file.truncate()
+                except OSError as seek_err:
+                    logger.warning(
+                        f"Failed to rollback partial write at position {pos} "
+                        f"({seek_err}); file may be in inconsistent state"
+                    )
+                    self._cleanup_partial()
+                    raise last_error from None
+                if attempt < len(_RETRY_BACKOFF):
+                    err_code = getattr(e, "errno", None)
+                    if err_code is not None and err_code not in _RETRYABLE_ERRNOS:
+                        break
+                    logger.warning(
+                        f"Batch write attempt {attempt + 1} failed ({e}), "
+                        f"retrying in {_RETRY_BACKOFF[attempt]}s..."
+                    )
+                    time.sleep(_RETRY_BACKOFF[attempt])
+
+        self._cleanup_partial()
+        err_code = getattr(last_error, "errno", None)
+        if attempt == 0 and err_code is not None and err_code not in _RETRYABLE_ERRNOS:
+            logger.error(
+                f"Batch write failed immediately (non-retryable errno={err_code}): "
+                f"{self.path}"
+            )
+        else:
+            logger.error(f"Batch write failed after {attempt} retries: {self.path}")
+        raise last_error  # type: ignore[misc]
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Close file, cleaning up partial output on OSError.
@@ -332,12 +406,17 @@ class IncrementalAssocWriter:
             self._cleanup_partial()
         elif self._file:
             try:
-                self._file.close()
+                self._file.flush()
             except OSError as e:
-                logger.warning(f"Failed to close output file: {e}")
+                logger.warning(f"Failed to flush output file on close: {e}")
                 self._cleanup_partial()
                 return
-            self._file = None
+            try:
+                self._file.close()
+            except OSError as e:
+                logger.warning(f"Failed to close output file (data was flushed): {e}")
+            finally:
+                self._file = None
 
     @property
     def count(self) -> int:

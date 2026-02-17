@@ -600,7 +600,7 @@ class TestRunLmmAssociationStreaming:
         )
 
         # Run streaming version
-        results_stream = run_lmm_association_streaming(
+        results_stream, _ = run_lmm_association_streaming(
             sample_plink_data,
             phenotypes,
             kinship,
@@ -652,7 +652,7 @@ class TestRunLmmAssociationStreaming:
         )
 
         # Run streaming without snp_info
-        results = run_lmm_association_streaming(
+        results, _ = run_lmm_association_streaming(
             sample_plink_data,
             phenotypes,
             kinship,
@@ -705,7 +705,7 @@ class TestRunLmmAssociationStreaming:
             check_memory=False,
         )
 
-        results_stream = run_lmm_association_streaming(
+        results_stream, _ = run_lmm_association_streaming(
             sample_plink_data,
             phenotypes,
             kinship,
@@ -761,7 +761,7 @@ class TestRunLmmAssociationStreaming:
         )
 
         # Run streaming version
-        results_stream = run_lmm_association_streaming(
+        results_stream, _ = run_lmm_association_streaming(
             sample_plink_data,
             phenotypes,
             kinship,
@@ -796,7 +796,7 @@ class TestRunLmmAssociationStreaming:
         )
 
         # Run LMM via streaming (no genotype matrix loaded)
-        results = run_lmm_association_streaming(
+        results, _ = run_lmm_association_streaming(
             sample_plink_data,
             phenotypes,
             kinship,
@@ -850,7 +850,7 @@ class TestRunLmmAssociationStreaming:
         # This tests that results are written incrementally, not accumulated
         chunk_size = 100  # Very small to force many file chunks
 
-        results = run_lmm_association_streaming(
+        results, n_tested = run_lmm_association_streaming(
             sample_plink_data,
             phenotypes,
             kinship,
@@ -863,6 +863,7 @@ class TestRunLmmAssociationStreaming:
 
         # Verify empty list returned (results on disk)
         assert results == [], "Should return empty list when output_path is provided"
+        assert n_tested > 0, "Should have tested some SNPs"
 
         # Verify file exists and has content
         assert output_path.exists(), "Output file should exist"
@@ -942,7 +943,7 @@ class TestChunkEquivalence:
 
         # Run with streaming (multiple chunks)
         # Use larger chunk to reduce number of JIT compilations
-        results_multi = run_lmm_association_streaming(
+        results_multi, _ = run_lmm_association_streaming(
             sample_plink_data,
             phenotypes,
             kinship,
@@ -995,7 +996,7 @@ class TestChunkEquivalence:
         results_by_chunk: dict[int, list] = {}
 
         for cs in chunk_sizes:
-            results = run_lmm_association_streaming(
+            results, _ = run_lmm_association_streaming(
                 sample_plink_data,
                 phenotypes,
                 kinship,

@@ -157,7 +157,7 @@ def run_lmm_association_streaming(
     snps_indices: np.ndarray | None = None,
     hwe_threshold: float = 0.0,
     validate_genotypes: bool = True,
-) -> list[AssocResult]:
+) -> tuple[list[AssocResult], int]:
     """Run LMM association tests by streaming genotypes from disk.
 
     Reads genotypes per-chunk, never allocating the full genotype matrix.
@@ -191,7 +191,9 @@ def run_lmm_association_streaming(
             (default True).
 
     Returns:
-        List of AssocResult (empty if output_path is set -- results on disk).
+        Tuple of (results, n_tested) where results is a list of AssocResult
+        (empty if output_path is set -- results on disk) and n_tested is the
+        number of SNPs that passed filtering and were tested.
 
     Raises:
         MemoryError: If check_memory=True and insufficient memory.
@@ -369,7 +371,7 @@ def run_lmm_association_streaming(
             logger.info(
                 f"LMM Association completed in {elapsed:.2f}s (no SNPs passed filter)"
             )
-        return []
+        return [], 0
 
     snp_stats = list(
         zip(
@@ -635,18 +637,20 @@ def run_lmm_association_streaming(
                 n_at_lmin += chunk_lmin
                 n_at_lmax += chunk_lmax
 
-                for result in _yield_chunk_results(
-                    lmm_mode,
-                    chunk_filtered_local_idx,
-                    snp_indices,
-                    snp_stats,
-                    snp_info,
-                    arrays,
-                ):
-                    if writer is not None:
-                        writer.write(result)
-                    else:
-                        all_results.append(result)
+                chunk_results = list(
+                    _yield_chunk_results(
+                        lmm_mode,
+                        chunk_filtered_local_idx,
+                        snp_indices,
+                        snp_stats,
+                        snp_info,
+                        arrays,
+                    )
+                )
+                if writer is not None:
+                    writer.write_batch(chunk_results)
+                else:
+                    all_results.extend(chunk_results)
                 del arrays, accum
                 t_write_end = time.perf_counter()
                 t_result_write_total += t_write_end - t_write_start
@@ -691,4 +695,5 @@ def run_lmm_association_streaming(
         elapsed = time.perf_counter() - start_time
         logger.info(f"LMM Association completed in {elapsed:.2f}s")
 
-    return [] if output_path is not None else all_results
+    n_tested = writer.count if writer is not None else len(all_results)
+    return ([] if output_path is not None else all_results), n_tested

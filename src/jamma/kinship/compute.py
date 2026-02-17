@@ -879,6 +879,7 @@ def compute_loco_kinship_streaming(
         chr_name: int(np.sum(chr_for_filtered == chr_name)) for chr_name in unique_chrs
     }
     chrs_with_snps = [c for c in unique_chrs if n_chr_filtered.get(c, 0) > 0]
+    chrs_without_snps = [c for c in unique_chrs if n_chr_filtered.get(c, 0) == 0]
     n_chr_with_snps = len(chrs_with_snps)
 
     # Determine memory strategy: single-pass vs multi-pass batching
@@ -926,9 +927,23 @@ def compute_loco_kinship_streaming(
         logger.info(
             f"LOCO streaming accumulation complete in {elapsed:.2f}s, "
             f"computing {len(S_chr)} LOCO matrices"
+            + (
+                f" ({len(chrs_without_snps)} using full-kinship fallback)"
+                if chrs_without_snps
+                else ""
+            )
         )
 
         yield from _yield_loco_matrices(S_full_np, S_chr, n_chr_filtered, n_filtered)
+
+        # Yield full-kinship fallback for chromosomes with 0 ksnps
+        if chrs_without_snps:
+            K_full = S_full_np / n_filtered
+            for chr_name in sorted(chrs_without_snps):
+                logger.warning(
+                    f"LOCO chr {chr_name}: 0 ksnps, using full kinship as fallback"
+                )
+                yield (chr_name, K_full)
     else:
         # === MULTI-PASS: batch chromosomes across disk passes ===
         # First pass holds JAX S_full + batch S_chr + chunk buffer; after
@@ -992,8 +1007,22 @@ def compute_loco_kinship_streaming(
             del S_chr
             gc.collect()
 
+        # Yield full-kinship fallback for chromosomes with 0 ksnps
+        if chrs_without_snps:
+            K_full = S_full_np / n_filtered
+            for chr_name in sorted(chrs_without_snps):
+                logger.warning(
+                    f"LOCO chr {chr_name}: 0 ksnps, using full kinship as fallback"
+                )
+                yield (chr_name, K_full)
+
         elapsed = time.perf_counter() - start_time
         logger.info(
             f"LOCO multi-pass complete in {elapsed:.2f}s, "
             f"{n_batches} passes over {n_chr_with_snps} chromosomes"
+            + (
+                f" ({len(chrs_without_snps)} using full-kinship fallback)"
+                if chrs_without_snps
+                else ""
+            )
         )

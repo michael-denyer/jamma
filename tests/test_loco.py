@@ -18,6 +18,7 @@ import pytest
 from jamma.io.plink import get_chromosome_partitions, get_plink_metadata
 from jamma.kinship import (
     compute_centered_kinship,
+    compute_kinship_streaming,
     compute_loco_kinship,
     compute_loco_kinship_streaming,
 )
@@ -548,7 +549,7 @@ class TestLocoLmmIntegration:
         from jamma.lmm.loco import run_lmm_loco
 
         phenotypes = _load_mouse_phenotypes()
-        results = run_lmm_loco(
+        results, n_tested = run_lmm_loco(
             bed_path=MOUSE_HS1940_BFILE,
             phenotypes=phenotypes,
             lmm_mode=1,
@@ -557,6 +558,7 @@ class TestLocoLmmIntegration:
         )
 
         assert len(results) > 0, "Should produce results"
+        assert n_tested == len(results), "n_tested should match result count"
 
         for r in results:
             assert 0 < r.p_wald <= 1, f"p_wald={r.p_wald} for {r.rs}"
@@ -576,7 +578,7 @@ class TestLocoLmmIntegration:
         from jamma.lmm.loco import run_lmm_loco
 
         phenotypes = _load_mouse_phenotypes()
-        results = run_lmm_loco(
+        results, _ = run_lmm_loco(
             bed_path=MOUSE_HS1940_BFILE,
             phenotypes=phenotypes,
             lmm_mode=1,
@@ -616,7 +618,7 @@ class TestLocoLmmIntegration:
             check_memory=False,
         )
 
-        standard_results = run_lmm_association_streaming(
+        standard_results, _ = run_lmm_association_streaming(
             bed_path=MOUSE_HS1940_BFILE,
             phenotypes=phenotypes,
             kinship=K_full,
@@ -625,7 +627,7 @@ class TestLocoLmmIntegration:
         )
 
         # LOCO LMM
-        loco_results = run_lmm_loco(
+        loco_results, _ = run_lmm_loco(
             bed_path=MOUSE_HS1940_BFILE,
             phenotypes=phenotypes,
             lmm_mode=1,
@@ -850,7 +852,7 @@ class TestLocoKsnpsWiring:
         # Use first 5000 SNP indices for kinship computation
         ksnps_indices = np.arange(5000)
 
-        results = run_lmm_loco(
+        results, _ = run_lmm_loco(
             bed_path=MOUSE_HS1940_BFILE,
             phenotypes=phenotypes,
             lmm_mode=1,
@@ -904,6 +906,220 @@ class TestLocoKsnpsWiring:
         # Verify output file has data
         lines = result.assoc_path.read_text().strip().splitlines()
         assert len(lines) > 1, "Should have header + data lines"
+
+
+# ===========================================================================
+# Partial ksnps Chromosome Coverage Tests (GAP: jamma-qsz P1)
+# ===========================================================================
+
+
+class TestLocoPartialKsnpsCoverage:
+    """Regression tests: LOCO yields ALL chromosomes even when ksnps excludes some.
+
+    When -ksnps selects SNPs covering only a subset of chromosomes, chromosomes
+    with 0 ksnps should use the full kinship as K_loco (mathematically correct:
+    no SNPs to exclude means K_loco == K_full).
+    """
+
+    @staticmethod
+    def _write_synthetic_plink(
+        genotypes: np.ndarray,
+        chromosomes: np.ndarray,
+        tmp_path: Path,
+        name: str = "synthetic",
+    ) -> Path:
+        """Write synthetic genotype data to PLINK binary files."""
+        from bed_reader import to_bed
+
+        n_samples, n_snps = genotypes.shape
+        geno_int = genotypes.copy()
+        geno_int[np.isnan(geno_int)] = -127
+        geno_int = geno_int.astype(np.int8)
+
+        bed_path = tmp_path / name
+        to_bed(
+            str(bed_path) + ".bed",
+            geno_int,
+            properties={
+                "iid": [f"sample_{i}" for i in range(n_samples)],
+                "sid": [f"snp_{i}" for i in range(n_snps)],
+                "chromosome": chromosomes.tolist(),
+                "bp_position": list(range(1, n_snps + 1)),
+            },
+        )
+        return bed_path
+
+    def test_loco_all_chromosomes_covered_with_partial_ksnps(
+        self, synthetic_multi_chr, tmp_path: Path
+    ):
+        """LOCO yields results for ALL chromosomes even when ksnps excludes some.
+
+        Regression test for silent data loss: ksnps covering only chr1+chr2
+        must still produce a LOCO matrix for chr3 (using full-kinship fallback).
+        """
+        genotypes, chromosomes = synthetic_multi_chr
+        bed_path = self._write_synthetic_plink(genotypes, chromosomes, tmp_path)
+
+        # ksnps covers only chr1 (indices 0-99) and chr2 (100-199), excluding chr3
+        ksnps_indices = np.arange(200)
+
+        K_loco = dict(
+            compute_loco_kinship_streaming(
+                bed_path,
+                check_memory=False,
+                show_progress=False,
+                ksnps_indices=ksnps_indices,
+            )
+        )
+
+        # ALL 3 chromosomes must be present
+        assert "chr1" in K_loco, "chr1 should be in LOCO results"
+        assert "chr2" in K_loco, "chr2 should be in LOCO results"
+        assert "chr3" in K_loco, "chr3 should be in LOCO results (fallback)"
+
+        # All matrices should be valid (symmetric, PSD, correct shape)
+        n_samples = genotypes.shape[0]
+        for chr_name, K in K_loco.items():
+            assert K.shape == (n_samples, n_samples), (
+                f"Wrong shape for {chr_name}: {K.shape}"
+            )
+            assert np.allclose(K, K.T, atol=1e-14), (
+                f"K_loco for {chr_name} is not symmetric"
+            )
+            eigenvalues = np.linalg.eigvalsh(K)
+            assert np.all(eigenvalues >= -1e-10), (
+                f"K_loco for {chr_name} is not PSD: "
+                f"min eigenvalue = {eigenvalues.min()}"
+            )
+
+        # chr3 fallback should equal K_full (= S_full / n_filtered)
+        # because no ksnps are excluded from chr3.
+        # With ksnps_indices covering 0-199, only chr1+chr2 SNPs pass.
+        # chr3's fallback K_loco = S_full / n_filtered = same as full kinship.
+        # Verify by computing full kinship from ksnps only
+        K_full_ref = compute_kinship_streaming(
+            bed_path,
+            check_memory=False,
+            show_progress=False,
+            ksnps_indices=ksnps_indices,
+        )
+        np.testing.assert_allclose(
+            K_loco["chr3"],
+            K_full_ref,
+            atol=1e-14,
+            rtol=1e-10,
+            err_msg="chr3 fallback K_loco should equal full kinship",
+        )
+
+        # chr1 and chr2 results should differ from K_full (they exclude SNPs)
+        assert not np.allclose(K_loco["chr1"], K_full_ref, atol=1e-8), (
+            "chr1 K_loco should differ from full kinship"
+        )
+        assert not np.allclose(K_loco["chr2"], K_full_ref, atol=1e-8), (
+            "chr2 K_loco should differ from full kinship"
+        )
+
+    def test_loco_fallback_warning_logged(self, synthetic_multi_chr, tmp_path: Path):
+        """Warning message logged for chromosomes using full-kinship fallback."""
+        from loguru import logger
+
+        genotypes, chromosomes = synthetic_multi_chr
+        bed_path = self._write_synthetic_plink(genotypes, chromosomes, tmp_path)
+
+        # ksnps covers only chr1+chr2
+        ksnps_indices = np.arange(200)
+
+        # Capture loguru messages via a custom sink
+        captured: list[str] = []
+        sink_id = logger.add(lambda msg: captured.append(str(msg)), level="WARNING")
+
+        try:
+            # Consume the generator to trigger all yields
+            list(
+                compute_loco_kinship_streaming(
+                    bed_path,
+                    check_memory=False,
+                    show_progress=False,
+                    ksnps_indices=ksnps_indices,
+                )
+            )
+        finally:
+            logger.remove(sink_id)
+
+        # Find the fallback warning for chr3
+        fallback_warnings = [m for m in captured if "0 ksnps" in m]
+        assert len(fallback_warnings) >= 1, (
+            f"Expected at least one '0 ksnps' warning, got: {captured}"
+        )
+        assert any("chr3" in w for w in fallback_warnings), (
+            f"Expected warning about chr3, got: {fallback_warnings}"
+        )
+
+    def test_loco_partial_ksnps_chr_with_snps_unchanged(
+        self, synthetic_multi_chr, tmp_path: Path
+    ):
+        """Adding unrelated ksnps changes LOCO matrices (non-tautological).
+
+        Run 1: ksnps = chr1+chr2 (indices 0-199).
+        Run 2: ksnps = chr1+chr2+chr3 (indices 0-299).
+
+        Adding chr3 SNPs to ksnps changes S_full and therefore K_loco for
+        chr1/chr2. This test proves ksnps_indices actually affects LOCO
+        output (not a tautological identity comparison).
+
+        Also verifies determinism: the same ksnps_indices produces identical
+        results on a second run.
+        """
+        genotypes, chromosomes = synthetic_multi_chr
+        bed_path = self._write_synthetic_plink(genotypes, chromosomes, tmp_path)
+
+        # Run 1: ksnps covers chr1+chr2 only (indices 0-199)
+        K_partial = dict(
+            compute_loco_kinship_streaming(
+                bed_path,
+                check_memory=False,
+                show_progress=False,
+                ksnps_indices=np.arange(200),
+            )
+        )
+
+        # Run 2: ksnps covers all chromosomes (indices 0-299)
+        K_full_ksnps = dict(
+            compute_loco_kinship_streaming(
+                bed_path,
+                check_memory=False,
+                show_progress=False,
+                ksnps_indices=np.arange(300),
+            )
+        )
+
+        # chr1 and chr2 LOCO kinships should DIFFER between partial and full ksnps
+        # (proving ksnps_indices actually affects the result)
+        for chr_name in ["chr1", "chr2"]:
+            assert not np.allclose(
+                K_partial[chr_name], K_full_ksnps[chr_name], atol=1e-8
+            ), (
+                f"{chr_name} K_loco should differ when ksnps changes "
+                f"(was tautological before)"
+            )
+
+        # Run 3: repeat run 1 to verify determinism
+        K_partial_repeat = dict(
+            compute_loco_kinship_streaming(
+                bed_path,
+                check_memory=False,
+                show_progress=False,
+                ksnps_indices=np.arange(200),
+            )
+        )
+        for chr_name in ["chr1", "chr2"]:
+            np.testing.assert_allclose(
+                K_partial[chr_name],
+                K_partial_repeat[chr_name],
+                atol=1e-14,
+                rtol=0,
+                err_msg=f"{chr_name} K_loco should be deterministic across runs",
+            )
 
 
 # ===========================================================================
@@ -991,3 +1207,80 @@ class TestLocoMultiPass:
                 rtol=1e-10,
                 err_msg=(f"Multi-pass != single-pass for chr {chr_name}"),
             )
+
+    def test_multipass_loco_fallback_with_partial_ksnps(
+        self, synthetic_multi_chr, tmp_path: Path
+    ):
+        """Multi-pass with partial ksnps produces chr3 fallback matching full kinship.
+
+        Combines psutil-mock (forces multi-pass) with ksnps_indices covering
+        only chr1+chr2. Asserts chr3 is present in multi-pass results and
+        equals the full kinship computed from the same ksnps subset.
+        """
+        from unittest.mock import MagicMock, patch
+
+        genotypes, chromosomes = synthetic_multi_chr
+        bed_path = TestLocoPartialKsnpsCoverage._write_synthetic_plink(
+            genotypes, chromosomes, tmp_path
+        )
+
+        ksnps_indices = np.arange(200)  # chr1+chr2 only
+
+        # Single-pass reference (normal memory)
+        K_single = dict(
+            compute_loco_kinship_streaming(
+                bed_path,
+                check_memory=False,
+                show_progress=False,
+                ksnps_indices=ksnps_indices,
+            )
+        )
+
+        # Force multi-pass via low memory mock
+        mock_vmem = MagicMock()
+        mock_vmem.available = 300_000  # 300 KB
+
+        with patch(
+            "jamma.kinship.compute.psutil.virtual_memory", return_value=mock_vmem
+        ):
+            K_multi = dict(
+                compute_loco_kinship_streaming(
+                    bed_path,
+                    check_memory=False,
+                    show_progress=False,
+                    ksnps_indices=ksnps_indices,
+                )
+            )
+
+        # chr3 must be present (fallback from full kinship)
+        assert "chr3" in K_multi, "chr3 should be in multi-pass results (fallback)"
+
+        # All 3 chromosomes present
+        assert set(K_multi.keys()) == {"chr1", "chr2", "chr3"}
+
+        # Multi-pass matches single-pass for all chromosomes
+        for chr_name in K_single:
+            np.testing.assert_allclose(
+                K_multi[chr_name],
+                K_single[chr_name],
+                atol=1e-14,
+                rtol=1e-10,
+                err_msg=(
+                    f"Multi-pass != single-pass for {chr_name} with partial ksnps"
+                ),
+            )
+
+        # chr3 equals full kinship (= S_full / n_filtered)
+        K_full_ref = compute_kinship_streaming(
+            bed_path,
+            check_memory=False,
+            show_progress=False,
+            ksnps_indices=ksnps_indices,
+        )
+        np.testing.assert_allclose(
+            K_multi["chr3"],
+            K_full_ref,
+            atol=1e-14,
+            rtol=1e-10,
+            err_msg="chr3 multi-pass fallback should equal full kinship",
+        )

@@ -122,6 +122,29 @@ class TestWriteKinshipFormat:
         # Should be able to parse back
         assert np.isclose(float(values[0]), 1e-10, rtol=1e-9)
 
+    def test_savetxt_matches_python_loop(self, tmp_path):
+        """np.savetxt output must be byte-identical to the old Python loop.
+
+        Guards against format drift if np.savetxt ever changes its %.10g
+        rendering. Uses a 50x50 random matrix for non-trivial coverage.
+        """
+        rng = np.random.default_rng(12345)
+        K = rng.standard_normal((50, 50))
+        K = (K + K.T) / 2  # Make symmetric like a real kinship matrix
+
+        # Write with np.savetxt (current implementation)
+        savetxt_path = tmp_path / "savetxt.cXX.txt"
+        write_kinship_matrix(K, savetxt_path)
+
+        # Write with old Python loop
+        loop_path = tmp_path / "loop.cXX.txt"
+        with open(loop_path, "w") as f:
+            for i in range(K.shape[0]):
+                values = [f"{K[i, j]:.10g}" for j in range(K.shape[1])]
+                f.write("\t".join(values) + "\n")
+
+        assert savetxt_path.read_bytes() == loop_path.read_bytes()
+
 
 class TestKinshipRoundtrip:
     """Tests for write-then-read consistency."""

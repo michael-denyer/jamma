@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-02-17
+
+### Added
+
+- **Lambda bounds** (`-lmin`/`-lmax`): Configurable optimization bounds for lambda
+  with boundary convergence warnings when SNPs cluster at bounds
+- **Individual weights** (`-widv`): GEMMA-exact kinship pre-transformation
+  K[i,j] /= sqrt(w_i * w_j) via memory-efficient two-pass scaling (O(n) memory)
+- **Categorical covariates** (`-cat`): One-hot encode specified covariate columns
+  with reference level dropped. JAMMA-specific feature (not GEMMA's -cat)
+- `-wsnp` flag accepted (hidden, not yet implemented — clear error message)
+- Eigen I/O validation: empty file checks, parse error wrapping with file paths,
+  `atleast_1d`/`atleast_2d` for single-line files, square matrix validation
+
+### Changed
+
+- `IncrementalAssocWriter`: retries transient write failures with backoff,
+  truncates partial writes before retry, cleans up partial files on final failure
+- Replaced `click.echo` with `loguru` in I/O module (removes click dependency from io)
+- Eigen file writers use `np.savetxt` instead of Python f-string loops
+- Slow gwas_api integration tests marked `@pytest.mark.slow`, skipped by default
+
+### Fixed
+
+- Categorical single-level columns with NaN now keep a NaN marker column
+  (previously deleted entirely, losing missingness signal for pipeline filtering)
+- Weight file reader rejects multi-column files instead of silently flattening
+  via `.ravel()` (prevented weight misalignment)
+- Weight file reader rejects NaN values (bypassed all scaling logic due to
+  NaN comparison semantics)
+- `__exit__` cleanup now properly nulls `_file` on successful close
+- Writer retry truncates partial writes to prevent duplicate lines on retry
+
 ## [2.1.0] - 2026-02-16
 
 ### Added
@@ -283,7 +316,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
-[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/michael-denyer/jamma/compare/v2.1.0...v2.2.0
+[2.1.0]: https://github.com/michael-denyer/jamma/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/michael-denyer/jamma/compare/v1.5.1...v2.0.0
 [1.5.1]: https://github.com/michael-denyer/jamma/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/michael-denyer/jamma/compare/v1.4.3...v1.5.0

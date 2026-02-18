@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-02-18
+
+### Added
+
+- **Parallel matrix writer**: `write_matrix_parallel()` using `multiprocessing.Pool.imap`
+  with SharedMemory to format matrix rows across CPU cores. Falls back to `np.savetxt`
+  for small matrices (<500 rows). Byte-identical output to `np.savetxt` for all sizes.
+  Reduces 100k×100k matrix write from ~30min to ~2-4min.
+- **Unified output schema**: `schema.py` with `StatColumn`/`ModeSpec` frozen dataclasses
+  as single source of truth for LMM output column definitions. `MODE_SPECS` frozen via
+  `MappingProxyType`. Replaces 4 separate dispatch tables across 3 modules.
+- **Fast PLINK line counting**: `_count_lines_fast()` uses binary `bytes.count(b'\n')`
+  in 1MB chunks instead of text-mode `sum(1 for _ in f)`. Correctly handles files
+  without trailing newline.
+- **`write_arrays_batch` hot path**: Formats and writes results directly from numpy
+  arrays, bypassing `AssocResult` construction. Validates stat array lengths and
+  snp_info keys upfront.
+
+### Changed
+
+- Kinship and eigenvector writers now delegate to `write_matrix_parallel()`
+- `IncrementalAssocWriter` retry logic consolidated into shared `_write_buf()` method
+- `ACCUM_KEYS`, `RESULT_FIELDS`, `FORMAT_COLUMNS`, `HEADERS`, `TEST_TYPE_MAP` derived
+  mechanically from `MODE_SPECS` (eliminates manual sync)
+- File I/O functions in `kinship/io.py` and `lmm/eigen_io.py` log resolved paths
+
+### Fixed
+
+- Partial file cleanup on worker failure in parallel matrix writer
+- `n_workers` validation (reject < 1) in `write_matrix_parallel`
+- `StatColumn.fmt` included in string type validation
+- `ModeSpec` validates duplicate header names across columns
+- Worker error context includes chunk row range for debugging
+- Pool errors logged before `pool.terminate()` for diagnostics
+
 ## [2.3.0] - 2026-02-18
 
 ### Fixed

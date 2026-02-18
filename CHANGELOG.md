@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Lambda bounds not plumbed to null MLE**: `l_min`/`l_max` now passed through
+  `_compute_null_model` to `compute_null_model_mle` so null-model optimization
+  respects user-configured lambda bounds
+- **Memory check used raw PLINK dimensions**: Pipeline memory estimation now uses
+  post-filter sample count (`n_valid`) and actual covariate count instead of raw
+  `.fam`/`.bim` metadata dimensions
+- **LOCO accumulated full-chromosome results**: Results now flushed per disk chunk
+  instead of accumulating all JAX arrays for the entire chromosome before conversion
+- **`chunk_size <= 0` in `stream_genotype_chunks`**: Guard against `chunk_size=0`
+  (ZeroDivisionError) and negative values (infinite range)
+- **Batch runner missing `jax.clear_caches()`**: Added after chunk loop for parity
+  with streaming runner — prevents JIT trace accumulation across LOCO runs
+- **Batch runner missing lambda boundary tracking**: Diagnostic warning for SNPs
+  converging at lambda bounds (was only in streaming runner)
+- **Output prefix path traversal**: `OutputConfig` and `PipelineConfig` now reject
+  `output_prefix` containing path separators
+
+### Changed
+
+- `_MAX_BUFFER_ELEMENTS` derived from `INT32_MAX` constant instead of magic number
+- `_LazySnpMeta.__getitem__` supports slice indexing for list-like behavior
+- Removed unused backward-compat re-exports from `runner_jax.py`
+  (`_MAX_BUFFER_ELEMENTS`, `MAX_SAFE_CHUNK`, `auto_tune_chunk_size`,
+  `run_lmm_association_streaming`)
+
 ## [2.3.0] - 2026-02-17
 
 ### Fixed

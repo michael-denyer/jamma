@@ -131,8 +131,10 @@ def run_lmm_loco(
 
     Returns:
         Tuple of (results, n_tested) where results is a list of AssocResult
-        in original SNP order (empty if output_path set) and n_tested is the
-        total number of SNPs tested across all chromosomes.
+        in biological chromosome order (1-22, X, Y, XY, MT) with original
+        within-chromosome SNP order preserved (empty list if output_path
+        set) and n_tested is the total number of SNPs tested across all
+        chromosomes.
 
     Raises:
         ValueError: If only one chromosome present, or if lmm_mode invalid.
@@ -432,7 +434,15 @@ def _run_lmm_for_chromosome(
     device = _select_jax_device(use_gpu=False)
 
     logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
-        lmm_mode, eigenvalues, UtW, Uty, n_cvt, device, show_progress=False
+        lmm_mode,
+        eigenvalues,
+        UtW,
+        Uty,
+        n_cvt,
+        device,
+        show_progress=False,
+        l_min=l_min,
+        l_max=l_max,
     )
 
     # Device-resident shared arrays
@@ -461,8 +471,11 @@ def _run_lmm_for_chromosome(
             UtG_chunk = np.ascontiguousarray(eigenvectors.T @ geno_jax_chunk)
         return UtG_chunk, actual_len, needs_pad
 
-    # Single accumulator across all disk chunks
-    accum: dict[str, list] = _init_accumulators(lmm_mode)
+    # Track lambda boundary hits across all disk chunks
+    total_at_lmin = 0
+    total_at_lmax = 0
+    results: list[AssocResult] = []
+    snp_offset = 0  # Tracks position within filtered SNPs across disk chunks
 
     try:
         with open_bed(bed_file) as bed:
@@ -486,6 +499,9 @@ def _run_lmm_for_chromosome(
                 # Process this disk chunk through the existing JAX chunk pipeline
                 n_disk_subset = geno_disk_chunk.shape[1]
                 jax_starts = list(range(0, n_disk_subset, jax_chunk_size))
+
+                # Fresh accumulator per disk chunk (flush after each)
+                accum: dict[str, list] = _init_accumulators(lmm_mode)
 
                 # Initialize mode-specific variables (prevents NameError)
                 best_lambdas = best_logls = betas = ses = p_walds = None
@@ -610,34 +626,40 @@ def _run_lmm_for_chromosome(
 
                 del geno_disk_chunk
 
-        # Build results from accumulators
-        results: list[AssocResult] = []
-        if any(accum.values()):
-            arrays = _concat_jax_accumulators(lmm_mode, accum)
+                # Flush this disk chunk's results immediately
+                if any(accum.values()):
+                    arrays = _concat_jax_accumulators(lmm_mode, accum)
 
-            # Count SNPs converging at lambda bounds
-            n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
-                lmm_mode, arrays, l_min, l_max
-            )
-            log_lambda_boundary_warning(
-                n_at_lmin, n_at_lmax, l_min, l_max, prefix="LOCO "
-            )
+                    n_lmin, n_lmax = count_lambda_boundary_hits(
+                        lmm_mode, arrays, l_min, l_max
+                    )
+                    total_at_lmin += n_lmin
+                    total_at_lmax += n_lmax
 
-            chunk_results = list(
-                _yield_chunk_results(
-                    lmm_mode,
-                    np.arange(n_filtered),
-                    global_filtered_indices,
-                    filtered_afs,
-                    filtered_miss,
-                    snp_info,
-                    arrays,
-                )
-            )
-            if writer is not None:
-                writer.write_batch(chunk_results)
-            else:
-                results = chunk_results
+                    n_disk_snps = disk_end - disk_start
+                    disk_chunk_results = list(
+                        _yield_chunk_results(
+                            lmm_mode,
+                            np.arange(n_disk_snps),
+                            global_filtered_indices[disk_start:disk_end],
+                            filtered_afs[disk_start:disk_end],
+                            filtered_miss[disk_start:disk_end],
+                            snp_info,
+                            arrays,
+                        )
+                    )
+                    if writer is not None:
+                        writer.write_batch(disk_chunk_results)
+                    else:
+                        results.extend(disk_chunk_results)
+
+                    snp_offset += n_disk_snps
+                    del arrays, accum
+
+        # Log boundary warnings once per chromosome
+        log_lambda_boundary_warning(
+            total_at_lmin, total_at_lmax, l_min, l_max, prefix="LOCO "
+        )
 
         return results
     finally:

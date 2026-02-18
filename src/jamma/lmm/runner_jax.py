@@ -190,7 +190,15 @@ def run_lmm_association_jax(
         Uty = U.T @ phenotypes
 
     logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
-        lmm_mode, eigenvalues_np, UtW, Uty, n_cvt, device, show_progress
+        lmm_mode,
+        eigenvalues_np,
+        UtW,
+        Uty,
+        n_cvt,
+        device,
+        show_progress,
+        l_min=l_min,
+        l_max=l_max,
     )
 
     # Determine chunk size to avoid int32 buffer overflow

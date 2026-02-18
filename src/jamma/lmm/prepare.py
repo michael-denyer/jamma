@@ -123,6 +123,8 @@ def _compute_null_model(
     n_cvt: int,
     device: jax.Device,
     show_progress: bool,
+    l_min: float = 1e-5,
+    l_max: float = 1e5,
 ) -> tuple[float | None, float | None, jnp.ndarray | None]:
     """Compute null model MLE for Score, LRT, and All-tests modes.
 
@@ -141,6 +143,8 @@ def _compute_null_model(
         n_cvt: Number of covariates.
         device: JAX device for Hi_eval placement.
         show_progress: Whether to log results.
+        l_min: Minimum lambda for optimization.
+        l_max: Maximum lambda for optimization.
 
     Returns:
         Tuple of (logl_H0, lambda_null_mle, Hi_eval_null_jax).
@@ -149,7 +153,9 @@ def _compute_null_model(
     if lmm_mode not in (2, 3, 4):
         return None, None, None
 
-    lambda_null_mle, logl_H0 = compute_null_model_mle(eigenvalues_np, UtW, Uty, n_cvt)
+    lambda_null_mle, logl_H0 = compute_null_model_mle(
+        eigenvalues_np, UtW, Uty, n_cvt, l_min=l_min, l_max=l_max
+    )
     if show_progress:
         logger.info(
             f"Null model MLE: lambda={lambda_null_mle:.6f}, logl_H0={logl_H0:.6f}"

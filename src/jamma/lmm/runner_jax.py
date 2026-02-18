@@ -17,19 +17,12 @@ from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.core.threading import blas_threads
 from jamma.lmm.chunk import _compute_chunk_size
-from jamma.lmm.likelihood_jax import (
-    batch_calc_score_stats,
-    batch_calc_wald_stats,
-    batch_compute_iab,
-    batch_compute_uab,
-    calc_lrt_pvalue_jax,
-    golden_section_optimize_lambda_mle,
-)
+from jamma.lmm.compute import _compute_lmm_chunk
+from jamma.lmm.likelihood_jax import batch_compute_uab
 from jamma.lmm.prepare import (
     _build_covariate_matrix,
     _compute_null_model,
     _eigendecompose_or_reuse,
-    _grid_optimize_lambda_batched,
     _select_jax_device,
 )
 from jamma.lmm.results import (
@@ -298,76 +291,19 @@ def run_lmm_association_jax(
             # Batch compute Uab for this chunk (shared across all modes)
             Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
 
-            if lmm_mode == 1:  # Wald (existing, unchanged)
-                Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
-                best_lambdas, best_logls = _grid_optimize_lambda_batched(
-                    n_cvt,
-                    eigenvalues,
-                    Uab_batch,
-                    Iab_batch,
-                    l_min,
-                    l_max,
-                    n_grid,
-                    n_refine,
-                )
-                betas, ses, p_walds = batch_calc_wald_stats(
-                    n_cvt, best_lambdas, eigenvalues, Uab_batch, n_samples
-                )
-
-            elif lmm_mode == 3:  # Score
-                betas, ses, p_scores = batch_calc_score_stats(
-                    n_cvt, Hi_eval_null_jax, Uab_batch, n_samples
-                )
-
-            elif lmm_mode == 2:  # LRT
-                best_lambdas_mle, best_logls_mle = golden_section_optimize_lambda_mle(
-                    n_cvt,
-                    eigenvalues,
-                    Uab_batch,
-                    l_min=l_min,
-                    l_max=l_max,
-                    n_grid=n_grid,
-                    n_iter=max(n_refine, 20),
-                )
-                p_lrts = jax.vmap(calc_lrt_pvalue_jax)(
-                    best_logls_mle, jnp.full_like(best_logls_mle, logl_H0)
-                )
-
-            elif lmm_mode == 4:  # All tests
-                # Score test (cheapest, no optimization, reads Uab_batch)
-                _, _, p_scores = batch_calc_score_stats(
-                    n_cvt, Hi_eval_null_jax, Uab_batch, n_samples
-                )
-
-                # MLE optimization for LRT
-                best_lambdas_mle, best_logls_mle = golden_section_optimize_lambda_mle(
-                    n_cvt,
-                    eigenvalues,
-                    Uab_batch,
-                    l_min=l_min,
-                    l_max=l_max,
-                    n_grid=n_grid,
-                    n_iter=max(n_refine, 20),
-                )
-                p_lrts = jax.vmap(calc_lrt_pvalue_jax)(
-                    best_logls_mle, jnp.full_like(best_logls_mle, logl_H0)
-                )
-
-                # REML optimization for Wald
-                Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
-                best_lambdas, best_logls = _grid_optimize_lambda_batched(
-                    n_cvt,
-                    eigenvalues,
-                    Uab_batch,
-                    Iab_batch,
-                    l_min,
-                    l_max,
-                    n_grid,
-                    n_refine,
-                )
-                betas, ses, p_walds = batch_calc_wald_stats(
-                    n_cvt, best_lambdas, eigenvalues, Uab_batch, n_samples
-                )
+            chunk_result = _compute_lmm_chunk(
+                lmm_mode, n_cvt, eigenvalues, Uab_batch, n_samples,
+                l_min=l_min, l_max=l_max, n_grid=n_grid, n_refine=n_refine,
+                Hi_eval_null=Hi_eval_null_jax, logl_H0=logl_H0,
+            )
+            best_lambdas = chunk_result["best_lambdas"]
+            best_logls = chunk_result["best_logls"]
+            betas = chunk_result["betas"]
+            ses = chunk_result["ses"]
+            p_walds = chunk_result["p_walds"]
+            best_lambdas_mle = chunk_result["best_lambdas_mle"]
+            p_lrts = chunk_result["p_lrts"]
+            p_scores = chunk_result["p_scores"]
 
         except Exception as e:
             error_msg = str(e)

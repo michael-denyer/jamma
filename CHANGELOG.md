@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-02-18
+
 ### Fixed
 
 - **Lambda bounds not plumbed to null MLE**: `l_min`/`l_max` now passed through
@@ -25,19 +27,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   converging at lambda bounds (was only in streaming runner)
 - **Output prefix path traversal**: `OutputConfig` and `PipelineConfig` now reject
   `output_prefix` containing path separators
-
-### Changed
-
-- `_MAX_BUFFER_ELEMENTS` derived from `INT32_MAX` constant instead of magic number
-- `_LazySnpMeta.__getitem__` supports slice indexing for list-like behavior
-- Removed unused backward-compat re-exports from `runner_jax.py`
-  (`_MAX_BUFFER_ELEMENTS`, `MAX_SAFE_CHUNK`, `auto_tune_chunk_size`,
-  `run_lmm_association_streaming`)
-
-## [2.3.0] - 2026-02-17
-
-### Fixed
-
 - **Biological chromosome ordering in LOCO**: Chromosomes now sort 1..22, X, Y,
   XY, MT instead of lexicographic order (1, 10, 11, ..., 2, 20, ...)
 - **CLI timing key access**: Bare `result.timing["key"]` replaced with `.get()`
@@ -54,18 +43,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when all phenotypes are NaN/-9 (no valid samples remain)
 - **Streaming runner empty samples guard**: Streaming runner raises `ValueError`
   on zero valid samples after filtering
+- **`__main__.py` missing `__name__` guard**: Prevented double execution on import
+- **`ensure_jax_configured` silent on conflicts**: Now raises `RuntimeError` on
+  conflicting non-default args after JAX is locked (was silent warning)
+- **Negative P_yy only logged at debug**: Elevated to `warning` with lambda context
+  in 4 locations in `likelihood.py`
+- **GPU fallback only logged at debug**: Elevated to `warning` in `prepare.py`
+- **Empty results misclassification**: `compare.py` guarded `all()` on empty lists
+- **Double eigendecomp in `test_hypothesis.py`**: Reduced to single `eigh` call
 
 ### Changed
 
+- `_MAX_BUFFER_ELEMENTS` derived from `INT32_MAX` constant instead of magic number
+- `_LazySnpMeta.__getitem__` supports slice indexing for list-like behavior
+- Removed unused backward-compat re-exports from `runner_jax.py`
 - Migrated `snp_filter.py` logging from `print()` to `loguru`
 - SNP statistics in streaming runners use numpy arrays instead of `locals()` dict
-- Replaced `np.random.seed()` with `np.random.default_rng()` in test_lmm_lrt.py
+- Replaced `np.random.seed()` with `np.random.default_rng()` in tests
+- Dead code removed: unused `n_snps` param, unreachable shape check, unused
+  `lambda_val` param, 8 duplicated `setup_jax` test fixtures
+- 4 `format_assoc_line_*` → 1 table-driven function (`io.py`, -161 lines)
+- 4 `_build_results_*` → 1 with `_RESULT_FIELDS` dispatch (`results.py`)
+- `runner_jax.py` mode-to-arrays refactored to use `_RESULT_FIELDS` (DRY)
+- Header selection unified to table-driven `_HEADERS` dict in `io.py`
+- Input validation on dispatch keys in `io.py` and `results.py`
+- Fixture paths use `Path(__file__).parent` instead of cwd-relative (6 files)
+- CLI subprocess tests decoupled from `uv` runtime
+- `ToleranceConfig` gains `p_lrt_rtol` field
+- Pinned ruff to 0.15.x across local dev deps and CI pre-commit
 
 ### Added
 
 - Streaming-vs-batch parity tests for degenerate SNP and empty-samples edge cases
 - Hypothesis property tests for variance computation and SNP filtering
 - `Raises` docstring for `run_lmm_association_jax()` ValueError
+- `__main__.py` for `python -m jamma` execution
+- LOCO integration tests: multi-pass batching, NaN covariates, MAF filtering
+- Streaming LRT/Score mode tests, writer retry/rollback tests
+- 7 new Hypothesis property tests for Score test and LRT invariants
+- Tier markers on all 723 tests (392 tier0, 309 tier1, 22 tier2)
+- 22 unit tests in `test_review_fixes.py` for dispatch validation and erfc
 
 ## [2.2.0] - 2026-02-17
 

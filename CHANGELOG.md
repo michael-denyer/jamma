@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-02-18
+
+### Fixed
+
+- **Docker SIGBUS on large matrices**: Replaced `SharedMemory` (POSIX `shm_open()`)
+  with file-backed `numpy.memmap` in `write_matrix_parallel()`. Docker defaults
+  `/dev/shm` to 64 MB — a 100k×100k float64 matrix is ~75 GB, causing SIGBUS on
+  access. The memmap approach uses filesystem-backed temp files instead, bypassing
+  `/dev/shm` entirely. ([cpython#114390](https://github.com/python/cpython/issues/114390))
+
 ## [2.4.0] - 2026-02-18
 
 ### Added
@@ -428,7 +438,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
-[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.4.1...HEAD
+[2.4.1]: https://github.com/michael-denyer/jamma/compare/v2.4.0...v2.4.1
+[2.4.0]: https://github.com/michael-denyer/jamma/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/michael-denyer/jamma/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/michael-denyer/jamma/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/michael-denyer/jamma/compare/v2.0.0...v2.1.0

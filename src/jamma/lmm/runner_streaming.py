@@ -72,7 +72,9 @@ class _LazySnpMeta:
     def __len__(self) -> int:
         return len(self._rs)
 
-    def __getitem__(self, i: int) -> dict:
+    def __getitem__(self, i: int | slice) -> "dict | list[dict]":
+        if isinstance(i, slice):
+            return [self[j] for j in range(*i.indices(len(self)))]
         return {
             "chr": str(self._chr[i]),
             "rs": self._rs[i],

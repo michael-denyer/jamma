@@ -16,12 +16,7 @@ from jamma.core.memory import estimate_lmm_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.core.threading import blas_threads
-from jamma.lmm.chunk import (
-    _MAX_BUFFER_ELEMENTS,  # noqa: F401 - re-export for backward compatibility
-    MAX_SAFE_CHUNK,  # noqa: F401 - re-export for backward compatibility
-    _compute_chunk_size,
-    auto_tune_chunk_size,  # noqa: F401 - re-export for backward compatibility
-)
+from jamma.lmm.chunk import _compute_chunk_size
 from jamma.lmm.likelihood_jax import (
     batch_calc_score_stats,
     batch_calc_wald_stats,
@@ -42,9 +37,8 @@ from jamma.lmm.results import (
     _build_results_lrt,
     _build_results_score,
     _build_results_wald,
-)
-from jamma.lmm.runner_streaming import (
-    run_lmm_association_streaming,  # noqa: F401 - re-export for backward compatibility
+    _count_boundary_hits,
+    log_lambda_boundary_warning,
 )
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
@@ -436,9 +430,22 @@ def run_lmm_association_jax(
     if show_progress:
         log_rss_memory("lmm_jax", "after_all_chunks")
 
+    # Lambda boundary convergence diagnostics
+    n_at_lmin, n_at_lmax = 0, 0
+    if lmm_mode in (1, 4):
+        lmin_hits, lmax_hits = _count_boundary_hits(lambdas_out, l_min, l_max)
+        n_at_lmin += lmin_hits
+        n_at_lmax += lmax_hits
+    if lmm_mode in (2, 4):
+        lmin_hits, lmax_hits = _count_boundary_hits(lambdas_mle_out, l_min, l_max)
+        n_at_lmin += lmin_hits
+        n_at_lmax += lmax_hits
+    log_lambda_boundary_warning(n_at_lmin, n_at_lmax, l_min, l_max)
+
     # Explicit cleanup of JAX arrays before returning to prevent SIGSEGV
     # from race conditions between Python GC and JAX background threads
     del eigenvalues, UtW_jax, Uty_jax
+    jax.clear_caches()
 
     # Log completion
     elapsed = time.perf_counter() - start_time

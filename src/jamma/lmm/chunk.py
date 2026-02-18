@@ -10,15 +10,15 @@ from loguru import logger
 # 50k SNPs per chunk is safe for most sample sizes while maintaining good throughput
 MAX_SAFE_CHUNK = 50_000
 
-# INT32_MAX with headroom for JAX internal indexing overhead
-# Multiple arrays contribute to buffer sizing:
+# JAX uses int32 for buffer indexing. Multiple arrays contribute:
 # - Uab: (n_snps, n_samples, n_index) where n_index = (n_cvt+3)*(n_cvt+2)//2
 # - Grid REML intermediate: (n_grid, n_snps) during vmap over lambdas
 # - UtG_chunk: (n_samples, n_snps)
 #
 # The bottleneck is the grid REML vmap which creates (n_grid, n_snps) intermediate
-# tensors. Total elements must stay below INT32_MAX.
-_MAX_BUFFER_ELEMENTS = 1_700_000_000  # ~1.7B elements, 80% of INT32_MAX
+# tensors. Total elements must stay below INT32_MAX with headroom for JAX overhead.
+_INT32_MAX = 2**31 - 1
+_MAX_BUFFER_ELEMENTS = int(_INT32_MAX * 0.80)  # 80% of INT32_MAX
 
 
 def _compute_chunk_size(

@@ -14,6 +14,7 @@ Example:
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -110,6 +111,13 @@ class PipelineConfig:
     l_max: float = 1e5
     weight_file: Path | None = None
     cat_columns: list[int] | None = None
+
+    def __post_init__(self) -> None:
+        if os.sep in self.output_prefix or "/" in self.output_prefix:
+            raise ValueError(
+                f"output_prefix must not contain path separators, "
+                f"got '{self.output_prefix}'. Use output_dir for directory paths."
+            )
 
 
 @dataclass

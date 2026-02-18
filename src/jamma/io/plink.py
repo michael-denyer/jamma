@@ -272,6 +272,9 @@ def stream_genotype_chunks(
         SNPs 0-5000: shape (1940, 5000)
         SNPs 5000-10000: shape (1940, 5000)
     """
+    if chunk_size < 1:
+        raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
+
     bed_file = Path(f"{bed_path}.bed")
 
     if not bed_file.exists():

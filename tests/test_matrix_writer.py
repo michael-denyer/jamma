@@ -186,35 +186,38 @@ class TestFailureHandling:
             " -- Docker /dev/shm is capped at 64 MB"
         )
 
-    def test_temp_file_cleaned_after_success(
+    @pytest.fixture()
+    def isolated_tmpdir(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
+    ) -> Path:
+        """Create an isolated temp dir to detect leftover .dat files."""
+        isolated = tmp_path / "tmpdir"
+        isolated.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(isolated))
+        return isolated
+
+    def test_temp_file_cleaned_after_success(
+        self,
+        tmp_path: Path,
+        isolated_tmpdir: Path,
     ) -> None:
         """Temp file for memmap IPC is cleaned up after success."""
-        # Isolated temp dir avoids parallel test worker interference
-        isolated_tmp = tmp_path / "tmpdir"
-        isolated_tmp.mkdir()
-        monkeypatch.setattr(tempfile, "tempdir", str(isolated_tmp))
-
         rng = np.random.default_rng(42)
         matrix = rng.standard_normal((600, 10))
         out_path = tmp_path / "output.txt"
         write_matrix_parallel(matrix, out_path, n_workers=2)
 
-        remaining = list(isolated_tmp.glob("*.dat"))
+        remaining = list(isolated_tmpdir.glob("*.dat"))
         assert not remaining, f"Temp .dat files not cleaned up: {remaining}"
 
     def test_temp_file_cleaned_after_failure(
         self,
         tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+        isolated_tmpdir: Path,
     ) -> None:
         """Temp file for memmap IPC is cleaned up on failure."""
-        isolated_tmp = tmp_path / "tmpdir"
-        isolated_tmp.mkdir()
-        monkeypatch.setattr(tempfile, "tempdir", str(isolated_tmp))
-
         rng = np.random.default_rng(42)
         matrix = rng.standard_normal((600, 10))
         out_path = tmp_path / "should_not_exist.txt"
@@ -222,5 +225,5 @@ class TestFailureHandling:
         with pytest.raises(RuntimeError, match="_format_rows_chunk failed"):
             write_matrix_parallel(matrix, out_path, fmt="%s%s", n_workers=2)
 
-        remaining = list(isolated_tmp.glob("*.dat"))
+        remaining = list(isolated_tmpdir.glob("*.dat"))
         assert not remaining, f"Temp .dat not cleaned up after failure: {remaining}"

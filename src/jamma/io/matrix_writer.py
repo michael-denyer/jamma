@@ -4,12 +4,15 @@ Provides write_matrix_parallel() which uses multiprocessing to format matrix
 rows across CPU cores. At 100k x 100k (10B floats), np.savetxt is single-threaded
 and takes ~30 minutes. Parallel formatting reduces this to ~2-4 minutes.
 
+Uses file-backed numpy.memmap for worker IPC instead of shared memory to avoid
+SIGBUS crashes when Docker's /dev/shm is capped at 64 MB (cpython#114390).
+
 Output is byte-identical to np.savetxt for all matrix sizes.
 """
 
 import multiprocessing as mp
 import os
-from multiprocessing.shared_memory import SharedMemory
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -22,18 +25,18 @@ def _format_rows_chunk(args: tuple) -> bytes:
     Must be a top-level function for pickling with spawn context.
 
     Args:
-        args: Tuple of (shm_name, start, end, ncols, fmt,
+        args: Tuple of (file_path, start, end, ncols, fmt,
               delimiter, shape, dtype_str).
 
     Returns:
         Encoded bytes for the row chunk.
     """
-    (shm_name, start, end, ncols, fmt, delimiter, shape, dtype_str) = args
+    (file_path, start, end, ncols, fmt, delimiter, shape, dtype_str) = args
 
-    shm = None
     try:
-        shm = SharedMemory(name=shm_name, create=False)
-        matrix = np.ndarray(shape, dtype=np.dtype(dtype_str), buffer=shm.buf)
+        matrix = np.memmap(
+            file_path, dtype=np.dtype(dtype_str), mode="r", shape=shape
+        )
 
         row_fmt = delimiter.join([fmt] * ncols)
         lines = []
@@ -43,9 +46,6 @@ def _format_rows_chunk(args: tuple) -> bytes:
         return chunk_text.encode("ascii")
     except Exception as e:
         raise type(e)(f"_format_rows_chunk failed on rows {start}-{end}: {e}") from e
-    finally:
-        if shm is not None:
-            shm.close()
 
 
 def write_matrix_parallel(
@@ -91,7 +91,7 @@ def write_matrix_parallel(
         f"Writing {n_rows}x{n_cols} matrix to {path.resolve()} ({n_workers} workers)"
     )
 
-    # Ensure contiguous float64 for shared memory
+    # Ensure contiguous float64 for memmap compatibility
     matrix = np.ascontiguousarray(matrix, dtype=np.float64)
 
     rows_per_chunk = max(100, n_rows // n_workers)
@@ -99,17 +99,16 @@ def write_matrix_parallel(
 
     ctx = mp.get_context("spawn")
 
-    shm = None
+    fd, tmp_path = tempfile.mkstemp(suffix=".dat")
+    os.close(fd)  # Avoid fd leak -- tofile opens by path
     try:
-        shm = SharedMemory(create=True, size=matrix.nbytes)
-        shm_array = np.ndarray(matrix.shape, dtype=matrix.dtype, buffer=shm.buf)
-        np.copyto(shm_array, matrix)
+        matrix.tofile(tmp_path)
 
         for start in range(0, n_rows, rows_per_chunk):
             end = min(start + rows_per_chunk, n_rows)
             chunks_args.append(
                 (
-                    shm.name,
+                    tmp_path,
                     start,
                     end,
                     n_cols,
@@ -138,6 +137,7 @@ def write_matrix_parallel(
                     )
                 raise
     finally:
-        if shm is not None:
-            shm.close()
-            shm.unlink()
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass

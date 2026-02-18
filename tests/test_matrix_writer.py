@@ -180,9 +180,7 @@ class TestFailureHandling:
     def test_uses_memmap_not_shared_memory(self) -> None:
         """Memmap used, not SharedMemory (Docker /dev/shm SIGBUS)."""
         source = inspect.getsource(write_matrix_parallel)
-        assert "memmap" in source, (
-            "write_matrix_parallel should use numpy.memmap"
-        )
+        assert "memmap" in source, "write_matrix_parallel should use numpy.memmap"
         assert "SharedMemory" not in source, (
             "write_matrix_parallel should not use SharedMemory"
             " -- Docker /dev/shm is capped at 64 MB"
@@ -205,9 +203,7 @@ class TestFailureHandling:
         write_matrix_parallel(matrix, out_path, n_workers=2)
 
         remaining = list(isolated_tmp.glob("*.dat"))
-        assert not remaining, (
-            f"Temp .dat files not cleaned up: {remaining}"
-        )
+        assert not remaining, f"Temp .dat files not cleaned up: {remaining}"
 
     def test_temp_file_cleaned_after_failure(
         self,
@@ -224,11 +220,7 @@ class TestFailureHandling:
         out_path = tmp_path / "should_not_exist.txt"
 
         with pytest.raises(RuntimeError, match="_format_rows_chunk failed"):
-            write_matrix_parallel(
-                matrix, out_path, fmt="%s%s", n_workers=2
-            )
+            write_matrix_parallel(matrix, out_path, fmt="%s%s", n_workers=2)
 
         remaining = list(isolated_tmp.glob("*.dat"))
-        assert not remaining, (
-            f"Temp .dat not cleaned up after failure: {remaining}"
-        )
+        assert not remaining, f"Temp .dat not cleaned up after failure: {remaining}"

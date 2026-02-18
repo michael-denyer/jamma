@@ -130,9 +130,7 @@ class TestBuildResults:
         miss = np.zeros(n, dtype=int)
         snp_info = self._make_snp_info(n)
 
-        results = _build_results(
-            lmm_mode, snp_indices, afs, miss, snp_info, arrays
-        )
+        results = _build_results(lmm_mode, snp_indices, afs, miss, snp_info, arrays)
         assert len(results) == n
 
         field_map = _RESULT_FIELDS[lmm_mode]
@@ -149,8 +147,12 @@ class TestBuildResults:
         n = 2
         arrays = self._make_arrays(2, n)
         results = _build_results(
-            2, np.arange(n), np.full(n, 0.3), np.zeros(n, dtype=int),
-            self._make_snp_info(n), arrays,
+            2,
+            np.arange(n),
+            np.full(n, 0.3),
+            np.zeros(n, dtype=int),
+            self._make_snp_info(n),
+            arrays,
         )
         for r in results:
             assert math.isnan(r.beta)
@@ -161,8 +163,12 @@ class TestBuildResults:
         snp = [{"chr": "1", "rs": "x", "pos": 0, "a1": "A", "a0": "G"}]
         with pytest.raises(ValueError, match="Unknown lmm_mode"):
             _build_results(
-                99, np.array([0]), np.array([0.3]),
-                np.array([0]), snp, {},
+                99,
+                np.array([0]),
+                np.array([0.3]),
+                np.array([0]),
+                snp,
+                {},
             )
 
     def test_missing_array_key_raises_value_error(self) -> None:
@@ -172,8 +178,12 @@ class TestBuildResults:
         arrays = {k: np.ones(n) for k in list(_RESULT_FIELDS[1].keys())[:-1]}
         with pytest.raises(ValueError, match="Missing arrays"):
             _build_results(
-                1, np.arange(n), np.full(n, 0.3), np.zeros(n, dtype=int),
-                self._make_snp_info(n), arrays,
+                1,
+                np.arange(n),
+                np.full(n, 0.3),
+                np.zeros(n, dtype=int),
+                self._make_snp_info(n),
+                arrays,
             )
 
 

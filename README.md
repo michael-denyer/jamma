@@ -156,6 +156,9 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M3 Pro:
 - [x] PLINK binary format (`.bed/.bim/.fam`) with input dimension validation
 - [x] Large-scale streaming I/O (>100k samples via [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) — numpy 2.4.2)
 - [x] JAX acceleration (CPU/GPU)
+- [x] Lambda optimization bounds (`-lmin`/`-lmax`)
+- [x] Individual weights for kinship (`-widv`)
+- [x] Categorical covariates with one-hot encoding (`-cat`)
 - [x] Pre-flight memory checks (fail-fast before OOM)
 - [x] RSS memory logging at workflow boundaries
 - [x] Incremental result writing

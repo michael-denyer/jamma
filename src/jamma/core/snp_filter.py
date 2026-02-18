@@ -5,11 +5,8 @@ applying quality control filters (MAF, missing rate, monomorphism, HWE).
 Used by both kinship computation and LMM association runners.
 """
 
-import logging
-
 import numpy as np
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 def apply_snp_list_mask(

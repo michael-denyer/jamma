@@ -202,23 +202,31 @@ class TestRemlProperties:
         max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow]
     )
     def test_reml_has_maximum(self, data):
-        """REML function should have a maximum in the search range."""
+        """REML function should have a non-flat maximum in the search range.
+
+        The previous version was tautological: the disjunction of interior,
+        left-boundary, and right-boundary covered ALL possible argmax positions
+        and could never fail. This version asserts that the REML surface has
+        meaningful variation (not flat), which can fail for degenerate inputs.
+        """
         eigenvalues, Uab, n_cvt, n_samples = data
 
         # Sample at multiple lambda values
         lambdas = np.logspace(-4, 4, 20)
         logls = [reml_log_likelihood(lam, eigenvalues, Uab, n_cvt) for lam in lambdas]
 
-        # Should have a clear maximum somewhere (not monotonic)
-        max_idx = np.argmax(logls)
-        # Maximum shouldn't be at the extreme ends (unless at boundary)
-        # Interior maximum: not at first or last position
-        is_interior = 0 < max_idx < len(lambdas) - 1
-        # Boundary maximum: at edge but local maximum (slope inward)
-        is_left_boundary_max = max_idx == 0 and logls[0] >= logls[1]
-        is_right_boundary_max = max_idx == len(lambdas) - 1 and logls[-1] >= logls[-2]
-        assert is_interior or is_left_boundary_max or is_right_boundary_max, (
-            f"REML appears monotonic - no clear maximum (max at idx {max_idx})"
+        logls_arr = np.array(logls)
+        max_val = np.max(logls_arr)
+        min_val = np.min(logls_arr)
+
+        # REML should not be flat (all values identical) -- there should be
+        # meaningful variation indicating a maximum exists.
+        # Boundary maxima (lambda at bounds) are valid for REML -- lambda
+        # can converge at bounds for weak-signal SNPs. The non-flatness
+        # check is sufficient to verify a maximum exists.
+        assert max_val > min_val, (
+            f"REML log-likelihood is flat across lambda range "
+            f"[1e-4, 1e4]: all values = {max_val:.6f}"
         )
 
 

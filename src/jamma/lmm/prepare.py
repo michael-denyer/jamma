@@ -126,6 +126,10 @@ def _compute_null_model(
 ) -> tuple[float | None, float | None, jnp.ndarray | None]:
     """Compute null model MLE for Score, LRT, and All-tests modes.
 
+    GEMMA computes both REML and MLE null lambdas in CalcLambda, but uses
+    MLE lambda for Hi_eval in the Score test. This matches GEMMA's behavior:
+    Hi_eval_null = 1 / (lambda_null_mle * eigenvalues + 1).
+
     Score test (mode 3) and All-tests (mode 4) additionally precompute Hi_eval
     at the null lambda. Wald (mode 1) skips this entirely.
 

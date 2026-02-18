@@ -640,6 +640,9 @@ class PipelineRunner:
                     "load_s": 0.0,
                     "lmm_s": loco_s,
                     "total_s": total_s,
+                    "n_covariates": (
+                        covariates.shape[1] if covariates is not None else 1
+                    ),
                 },
             )
 
@@ -737,5 +740,6 @@ class PipelineRunner:
                 "load_s": load_s,
                 "lmm_s": lmm_s,
                 "total_s": total_s,
+                "n_covariates": covariates.shape[1] if covariates is not None else 1,
             },
         )

@@ -99,7 +99,8 @@ def run_lmm_association_jax(
 
     Raises:
         MemoryError: If check_memory=True and insufficient memory.
-        ValueError: If only one of eigenvalues/eigenvectors is provided.
+        ValueError: If only one of eigenvalues/eigenvectors is provided,
+            or if no valid samples remain after filtering.
     """
     # Validate eigendecomposition params - must provide both or neither
     if (eigenvalues is None) != (eigenvectors is None):
@@ -156,6 +157,11 @@ def run_lmm_association_jax(
             covariates = covariates[valid_mask, :]
 
     n_samples, n_snps = genotypes.shape
+    if n_samples == 0:
+        raise ValueError(
+            "No valid samples: all phenotypes are missing or -9"
+            + (", or all have missing covariates" if covariates is not None else "")
+        )
 
     W, n_cvt = _build_covariate_matrix(covariates, n_samples)
 
@@ -169,14 +175,9 @@ def run_lmm_association_jax(
     if len(snp_indices) == 0:
         return []
 
-    # Extract filtered stats (use allele_freqs for output, not mafs)
-    snp_stats = list(
-        zip(
-            allele_freqs[snp_indices],
-            missing_counts[snp_indices].astype(int),
-            strict=False,
-        )
-    )
+    # Extract filtered stats as numpy arrays (use allele_freqs for output, not mafs)
+    filtered_afs = allele_freqs[snp_indices]
+    filtered_miss = missing_counts[snp_indices].astype(int)
 
     eigenvalues_np, U = _eigendecompose_or_reuse(
         kinship,
@@ -447,7 +448,8 @@ def run_lmm_association_jax(
     if lmm_mode == 1:
         return _build_results_wald(
             snp_indices,
-            snp_stats,
+            filtered_afs,
+            filtered_miss,
             snp_info,
             lambdas_out,
             logls_out,
@@ -458,7 +460,8 @@ def run_lmm_association_jax(
     elif lmm_mode == 3:
         return _build_results_score(
             snp_indices,
-            snp_stats,
+            filtered_afs,
+            filtered_miss,
             snp_info,
             betas_out,
             ses_out,
@@ -467,7 +470,8 @@ def run_lmm_association_jax(
     elif lmm_mode == 2:
         return _build_results_lrt(
             snp_indices,
-            snp_stats,
+            filtered_afs,
+            filtered_miss,
             snp_info,
             lambdas_mle_out,
             p_lrts_out,
@@ -475,7 +479,8 @@ def run_lmm_association_jax(
     else:  # lmm_mode == 4 (validated at top)
         return _build_results_all(
             snp_indices,
-            snp_stats,
+            filtered_afs,
+            filtered_miss,
             snp_info,
             lambdas_out,
             logls_out,

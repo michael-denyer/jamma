@@ -289,11 +289,11 @@ uv run python scripts/prove_equivalence.py
 | GEMMA Function (lmm.cpp) | JAMMA Function | Location |
 |--------------------------|----------------|----------|
 | `CalcKin` | `compute_centered_kinship` | kinship/compute.py |
-| `GetabIndex` | `get_ab_index` | lmm/likelihood.py:39 |
-| `CalcUab` | `compute_Uab` | lmm/likelihood.py:60 |
-| `CalcPab` | `calc_pab` | lmm/likelihood.py:159 |
-| `LogRL_f` | `reml_log_likelihood` | lmm/likelihood.py:384 |
-| `LogL_f` | `mle_log_likelihood` | lmm/likelihood.py:652 |
+| `GetabIndex` | `get_ab_index` | lmm/likelihood.py:25 |
+| `CalcUab` | `compute_Uab` | lmm/likelihood.py:46 |
+| `CalcPab` | `calc_pab` | lmm/likelihood.py:145 |
+| `LogRL_f` | `reml_log_likelihood` | lmm/likelihood.py:234 |
+| `LogL_f` | `mle_log_likelihood` | lmm/likelihood.py:517 |
 | `CalcLambda` | `golden_section_optimize_lambda` | lmm/likelihood_jax.py |
 | `CalcRLWald` | `calc_wald_test` | lmm/stats.py:98 |
 | `CalcRLScore` | `calc_score_test` | lmm/stats.py:232 |

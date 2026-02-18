@@ -285,6 +285,7 @@ class IncrementalAssocWriter:
             try:
                 pos = self._file.tell()
                 self._file.write(line + "\n")
+                self._file.flush()
                 self._count += 1
                 return
             except OSError as e:

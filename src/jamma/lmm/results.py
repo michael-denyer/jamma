@@ -40,7 +40,8 @@ def _snp_metadata(snp_info: dict, af: float, n_miss: int) -> dict:
 
 def _build_results_wald(
     snp_indices: np.ndarray,
-    snp_stats: list[tuple[float, int]],
+    filtered_afs: np.ndarray,
+    filtered_miss: np.ndarray,
     snp_info: list,
     best_lambdas_np: np.ndarray,
     best_logls_np: np.ndarray,
@@ -52,7 +53,8 @@ def _build_results_wald(
 
     Args:
         snp_indices: Indices of SNPs that passed filtering.
-        snp_stats: List of (af, n_miss) tuples for each filtered SNP.
+        filtered_afs: Allele frequencies for filtered SNPs (numpy array).
+        filtered_miss: Missing counts for filtered SNPs (numpy int array).
         snp_info: Full SNP metadata list.
         best_lambdas_np: Optimal REML lambda values.
         best_logls_np: Log-likelihoods at optimal lambda.
@@ -65,7 +67,8 @@ def _build_results_wald(
     """
     results = []
     for j, snp_idx in enumerate(snp_indices):
-        af, n_miss = snp_stats[j]
+        af = float(filtered_afs[j])
+        n_miss = int(filtered_miss[j])
         meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
         results.append(
             AssocResult(
@@ -82,7 +85,8 @@ def _build_results_wald(
 
 def _build_results_score(
     snp_indices: np.ndarray,
-    snp_stats: list[tuple[float, int]],
+    filtered_afs: np.ndarray,
+    filtered_miss: np.ndarray,
     snp_info: list,
     betas_np: np.ndarray,
     ses_np: np.ndarray,
@@ -92,7 +96,8 @@ def _build_results_score(
 
     Args:
         snp_indices: Indices of SNPs that passed filtering.
-        snp_stats: List of (af, n_miss) tuples for each filtered SNP.
+        filtered_afs: Allele frequencies for filtered SNPs (numpy array).
+        filtered_miss: Missing counts for filtered SNPs (numpy int array).
         snp_info: Full SNP metadata list.
         betas_np: Effect sizes (informational only).
         ses_np: Standard errors (informational only).
@@ -103,7 +108,8 @@ def _build_results_score(
     """
     results = []
     for j, snp_idx in enumerate(snp_indices):
-        af, n_miss = snp_stats[j]
+        af = float(filtered_afs[j])
+        n_miss = int(filtered_miss[j])
         meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
         results.append(
             AssocResult(
@@ -118,7 +124,8 @@ def _build_results_score(
 
 def _build_results_lrt(
     snp_indices: np.ndarray,
-    snp_stats: list[tuple[float, int]],
+    filtered_afs: np.ndarray,
+    filtered_miss: np.ndarray,
     snp_info: list,
     lambdas_mle_np: np.ndarray,
     p_lrts_np: np.ndarray,
@@ -129,7 +136,8 @@ def _build_results_lrt(
 
     Args:
         snp_indices: Indices of SNPs that passed filtering.
-        snp_stats: List of (af, n_miss) tuples for each filtered SNP.
+        filtered_afs: Allele frequencies for filtered SNPs (numpy array).
+        filtered_miss: Missing counts for filtered SNPs (numpy int array).
         snp_info: Full SNP metadata list.
         lambdas_mle_np: MLE lambda values per SNP.
         p_lrts_np: LRT p-values.
@@ -139,7 +147,8 @@ def _build_results_lrt(
     """
     results = []
     for j, snp_idx in enumerate(snp_indices):
-        af, n_miss = snp_stats[j]
+        af = float(filtered_afs[j])
+        n_miss = int(filtered_miss[j])
         meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
         results.append(
             AssocResult(
@@ -155,7 +164,8 @@ def _build_results_lrt(
 
 def _build_results_all(
     snp_indices: np.ndarray,
-    snp_stats: list[tuple[float, int]],
+    filtered_afs: np.ndarray,
+    filtered_miss: np.ndarray,
     snp_info: list,
     best_lambdas_np: np.ndarray,
     best_logls_np: np.ndarray,
@@ -173,7 +183,8 @@ def _build_results_all(
 
     Args:
         snp_indices: Indices of SNPs that passed filtering.
-        snp_stats: List of (af, n_miss) tuples for each filtered SNP.
+        filtered_afs: Allele frequencies for filtered SNPs (numpy array).
+        filtered_miss: Missing counts for filtered SNPs (numpy int array).
         snp_info: Full SNP metadata list.
         best_lambdas_np: Optimal REML lambda values (Wald).
         best_logls_np: REML log-likelihoods at optimal lambda.
@@ -189,7 +200,8 @@ def _build_results_all(
     """
     results = []
     for j, snp_idx in enumerate(snp_indices):
-        af, n_miss = snp_stats[j]
+        af = float(filtered_afs[j])
+        n_miss = int(filtered_miss[j])
         meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
         results.append(
             AssocResult(
@@ -227,7 +239,8 @@ def _yield_chunk_results(
     lmm_mode: int,
     chunk_filtered_local_idx: list[int],
     snp_indices: np.ndarray,
-    snp_stats: list[tuple[float, int]],
+    filtered_afs: np.ndarray,
+    filtered_miss: np.ndarray,
     snp_info: list,
     arrays: dict[str, np.ndarray],
 ) -> Generator[AssocResult, None, None]:
@@ -240,7 +253,8 @@ def _yield_chunk_results(
         lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
         chunk_filtered_local_idx: Indices within the filtered SNP arrays.
         snp_indices: Full array of filtered SNP indices.
-        snp_stats: List of (af, n_miss) tuples.
+        filtered_afs: Allele frequencies for filtered SNPs (numpy array).
+        filtered_miss: Missing counts for filtered SNPs (numpy int array).
         snp_info: Full SNP metadata list.
         arrays: Dict of numpy arrays from _concat_jax_accumulators.
 
@@ -249,7 +263,8 @@ def _yield_chunk_results(
     """
     for j, local_idx in enumerate(chunk_filtered_local_idx):
         snp_idx = snp_indices[local_idx]
-        af, n_miss = snp_stats[local_idx]
+        af = float(filtered_afs[local_idx])
+        n_miss = int(filtered_miss[local_idx])
         meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
 
         if lmm_mode == 1:

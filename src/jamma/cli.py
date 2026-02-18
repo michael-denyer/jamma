@@ -569,9 +569,9 @@ def _run_lmm(
         "mem_budget": mem_budget,
     }
     timing = {
-        "total": result.timing["total_s"],
-        "load": result.timing["load_s"],
-        "lmm": result.timing["lmm_s"],
+        "total": result.timing.get("total_s", 0.0),
+        "load": result.timing.get("load_s", 0.0),
+        "lmm": result.timing.get("lmm_s", 0.0),
     }
 
     config.ensure_outdir()
@@ -581,7 +581,7 @@ def _run_lmm(
     # Final summary
     click.echo(
         f"\nAnalyzed {result.n_snps_tested} SNPs "
-        f"in {result.timing['total_s']:.2f} seconds"
+        f"in {result.timing.get('total_s', 0.0):.2f} seconds"
     )
 
 

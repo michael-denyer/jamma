@@ -70,6 +70,25 @@ class TestMemoryEstimation:
         assert isinstance(est.available_gb, float)
         assert isinstance(est.sufficient, bool)
 
+    def test_peak_kinship_accounts_for_numpy_jax_copy(self):
+        """Phase 1 (kinship) accounts for numpy + JAX device copy of genotypes.
+
+        During kinship accumulation, the numpy input and JAX device copy
+        coexist. The estimate must use genotypes_gb * 2, not genotypes_gb.
+        """
+        # Choose dimensions where kinship phase is large relative to eigendecomp
+        est = estimate_workflow_memory(1_000, 500_000)
+
+        genotypes_gb = 1_000 * 500_000 * 8 / 1e9  # 4.0 GB
+        kinship_gb = 1_000**2 * 8 / 1e9  # 0.008 GB
+        # peak_kinship = genotypes * 2 + kinship
+        expected_peak_kinship = genotypes_gb * 2 + kinship_gb
+
+        assert est.total_gb >= expected_peak_kinship, (
+            f"total_gb ({est.total_gb:.4f}) should be >= peak_kinship "
+            f"({expected_peak_kinship:.4f}) which includes numpy+JAX copy"
+        )
+
     def test_sufficient_flag_correct(self):
         """Sufficient flag should reflect available vs required."""
         # Tiny estimate should always be sufficient
@@ -208,16 +227,37 @@ class TestCleanupMemory:
         assert isinstance(snap, MemorySnapshot)
         assert snap.rss_gb > 0
 
-    def test_cleanup_memory_verbose_logs(self, caplog):
-        """cleanup_memory with verbose=True should log before/after."""
-        import logging
+    def test_cleanup_memory_verbose_logs(self):
+        """cleanup_memory with verbose=True runs gc and returns valid snapshot.
 
-        caplog.set_level(logging.INFO)
-        cleanup_memory(clear_jax=False, verbose=True)
+        Verifies the function performs garbage collection (gc.collect) and
+        returns a MemorySnapshot with valid data, not just assert True.
+        """
+        import gc
 
-        # Check that memory logging happened (loguru logs may not appear in caplog)
-        # Just verify it doesn't crash
-        assert True
+        # Create some garbage to collect
+        _garbage = [object() for _ in range(1000)]
+        del _garbage
+
+        # Record gc generation-0 count before cleanup
+        gen0_before = gc.get_count()[0]
+
+        snap = cleanup_memory(clear_jax=False, verbose=True)
+
+        # cleanup_memory calls gc.collect() which resets gen-0 counter
+        gen0_after = gc.get_count()[0]
+
+        # After gc.collect(), generation-0 count should be lower than before
+        # (gc.collect resets uncollected count for generation 0)
+        assert gen0_after <= gen0_before, (
+            f"gc.collect() should have been called: "
+            f"gen0 before={gen0_before}, after={gen0_after}"
+        )
+
+        # Return value must be a valid MemorySnapshot
+        assert isinstance(snap, MemorySnapshot)
+        assert snap.rss_gb > 0, "RSS should be positive after cleanup"
+        assert snap.available_gb > 0, "Available memory should be positive"
 
     def test_cleanup_memory_clears_jax_caches(self):
         """cleanup_memory with clear_jax=True should clear JAX caches."""

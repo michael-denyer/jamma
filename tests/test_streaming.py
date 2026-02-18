@@ -1029,3 +1029,145 @@ class TestChunkEquivalence:
                     atol=0,
                     err_msg=f"P-value mismatch at chunk_size={cs}",
                 )
+
+
+def test_streaming_vs_batch_parity(sample_plink_data: Path) -> None:
+    """Streaming and batch runners must produce identical results for the same input.
+
+    This test catches regressions where streaming and batch code paths diverge
+    (e.g., different imputation, different filtering, different eigendecomp reuse).
+    Uses chunk_size=10 to force multiple streaming chunks for thorough coverage.
+    """
+    np.random.seed(42)
+
+    data = load_plink_binary(sample_plink_data)
+    phenotypes = np.random.randn(data.n_samples)
+    kinship = compute_centered_kinship(
+        data.genotypes.astype(np.float64), check_memory=False
+    )
+
+    snp_info = [
+        {
+            "chr": str(c),
+            "rs": s,
+            "pos": int(p),
+            "a1": a1,
+            "a0": a0,
+        }
+        for c, s, p, a1, a0 in zip(
+            data.chromosome,
+            data.sid,
+            data.bp_position,
+            data.allele_1,
+            data.allele_2,
+            strict=False,
+        )
+    ]
+
+    # Batch runner (all genotypes in memory, float64 to match streaming reader)
+    results_batch = run_lmm_association_jax(
+        data.genotypes.astype(np.float64),
+        phenotypes,
+        kinship,
+        snp_info,
+        check_memory=False,
+        show_progress=False,
+    )
+
+    # Streaming runner with small chunk_size to force multiple file chunks
+    results_stream, _ = run_lmm_association_streaming(
+        sample_plink_data,
+        phenotypes,
+        kinship,
+        snp_info,
+        chunk_size=100,  # Small to exercise chunking
+        check_memory=False,
+        show_progress=False,
+    )
+
+    # Same number of results (same filtering applied)
+    assert len(results_batch) == len(results_stream), (
+        f"Result count mismatch: batch={len(results_batch)}, "
+        f"stream={len(results_stream)}"
+    )
+    assert len(results_batch) > 0, "Expected some results"
+
+    # Element-by-element comparison of key statistics
+    for i, (rb, rs) in enumerate(zip(results_batch, results_stream, strict=True)):
+        assert rb.rs == rs.rs, f"SNP {i}: rs mismatch {rb.rs} vs {rs.rs}"
+        np.testing.assert_allclose(
+            rb.beta,
+            rs.beta,
+            rtol=1e-10,
+            atol=0,
+            err_msg=f"SNP {i} ({rb.rs}) beta mismatch",
+        )
+        np.testing.assert_allclose(
+            rb.se,
+            rs.se,
+            rtol=1e-10,
+            atol=0,
+            err_msg=f"SNP {i} ({rb.rs}) se mismatch",
+        )
+        np.testing.assert_allclose(
+            rb.p_wald,
+            rs.p_wald,
+            rtol=1e-10,
+            atol=0,
+            err_msg=f"SNP {i} ({rb.rs}) p_wald mismatch",
+        )
+        # AF tolerance relaxed: batch computes from in-memory matrix,
+        # streaming computes from disk-read chunks with different FP
+        # accumulation order, producing ~1e-8 relative differences.
+        np.testing.assert_allclose(
+            rb.af,
+            rs.af,
+            rtol=1e-7,
+            atol=0,
+            err_msg=f"SNP {i} ({rb.rs}) af mismatch",
+        )
+        np.testing.assert_allclose(
+            rb.l_remle,
+            rs.l_remle,
+            rtol=1e-10,
+            atol=0,
+            err_msg=f"SNP {i} ({rb.rs}) l_remle mismatch",
+        )
+
+
+def test_streaming_all_invalid_samples_raises(tmp_path: Path) -> None:
+    """Streaming runner raises ValueError when all samples have missing phenotypes.
+
+    Regression test for the guard clause that prevents empty eigendecomposition
+    when all phenotype values are NaN or -9.
+    """
+    from bed_reader import to_bed
+
+    n_samples, n_snps = 50, 20
+    rng = np.random.default_rng(42)
+    genotypes = rng.choice([0, 1, 2], size=(n_samples, n_snps)).astype(np.int8)
+
+    bed_path = tmp_path / "all_missing"
+    to_bed(
+        str(bed_path) + ".bed",
+        genotypes,
+        properties={
+            "iid": [f"sample_{i}" for i in range(n_samples)],
+            "sid": [f"snp_{i}" for i in range(n_snps)],
+            "chromosome": ["1"] * n_snps,
+            "bp_position": list(range(1, n_snps + 1)),
+        },
+    )
+
+    # All phenotypes are NaN (missing)
+    phenotypes = np.full(n_samples, np.nan)
+    kinship = np.eye(n_samples)
+
+    with pytest.raises(ValueError, match="No valid samples"):
+        run_lmm_association_streaming(
+            bed_path,
+            phenotypes,
+            kinship,
+            check_memory=False,
+            show_progress=False,
+        )

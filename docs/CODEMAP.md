@@ -51,25 +51,25 @@ flowchart TB
     end
 
     CLI --> PIPE
-    PIPE --> GWAS
-    GWAS --> PLINK
-    GWAS --> COVAR
-    GWAS --> KIO
-    GWAS --> RIO
-    GWAS --> KINSHIP
-    GWAS --> STREAM
+    GWAS --> PIPE
 
     CLI --> PLINK
-    CLI --> COVAR
     CLI --> KIO
-    CLI --> RIO
     CLI --> SNPLIST
     CLI --> CONFIG
     CLI --> LOG
 
-    PIPE --> EIGIO
+    PIPE --> PLINK
+    PIPE --> COVAR
+    PIPE --> KIO
+    PIPE --> RIO
     PIPE --> SNPLIST
+    PIPE --> EIGIO
+    PIPE --> KINSHIP
+    PIPE --> EIGEN
+    PIPE --> STREAM
     PIPE --> LOCO
+    PIPE --> MEM
 
     KINSHIP --> MISSING
     KINSHIP --> PLINK
@@ -77,9 +77,6 @@ flowchart TB
     KINSHIP --> SNPF
 
     CLI --> KINSHIP
-    CLI --> EIGEN
-    CLI --> RUNNER
-    CLI --> STREAM
 
     LOCO --> KINSHIP
     LOCO --> EIGEN
@@ -107,7 +104,7 @@ flowchart TB
 
 ### [1] Entry Points
 
-Two entry points: the `gwas()` API for programmatic use, and the CLI for command-line use.
+Two user-facing entry points: the `gwas()` API for programmatic use and the CLI for command-line use. Both delegate to `PipelineRunner` for LMM orchestration.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
@@ -185,7 +182,7 @@ Batch SNP processing with JIT compilation and vmap vectorization.
 | 4a | `batch_compute_uab()` | vmap across SNP dimension | [likelihood_jax.py:343](../src/jamma/lmm/likelihood_jax.py#L343) |
 | 4a | `golden_section_optimize_lambda()` | Grid search + 20 golden section iterations | [likelihood_jax.py:492](../src/jamma/lmm/likelihood_jax.py#L492) |
 | 4b | `run_lmm_association_jax()` | Full-load JAX batch runner | [runner_jax.py](../src/jamma/lmm/runner_jax.py) |
-| 4c | `run_lmm_association_streaming()` | Streaming from disk, O(n² + n×chunk) | [runner_streaming.py:94](../src/jamma/lmm/runner_streaming.py#L94) |
+| 4c | `run_lmm_association_streaming()` | Streaming from disk, O(n² + n×chunk) | [runner_streaming.py:137](../src/jamma/lmm/runner_streaming.py#L137) |
 | 4d | `run_lmm_loco()` | LOCO: per-chromosome kinship → eigen → LMM | [lmm/loco.py](../src/jamma/lmm/loco.py) |
 
 ---
@@ -200,12 +197,12 @@ Configuration, memory management, and logging.
 | 5b | `configure_jax()` | Enable x64, set platform, XLA cache | [jax_config.py:27](../src/jamma/core/jax_config.py#L27) |
 | 5b | `get_jax_info()` | JAX version, backend, devices | [jax_config.py:76](../src/jamma/core/jax_config.py#L76) |
 | 5c | `MemoryBreakdown` | Estimated memory per workflow stage | [memory.py:54](../src/jamma/core/memory.py#L54) |
-| 5c | `estimate_workflow_memory()` | Full pipeline memory estimate (pre-flight) | [memory.py:72](../src/jamma/core/memory.py#L72) |
-| 5c | `estimate_lmm_memory()` | LMM-phase-only memory estimate | [memory.py:148](../src/jamma/core/memory.py#L148) |
-| 5c | `estimate_lmm_streaming_memory()` | LMM streaming phase memory estimate | [memory.py:312](../src/jamma/core/memory.py#L312) |
-| 5c | `check_memory_before_run()` | Raise MemoryError if insufficient | [memory.py:527](../src/jamma/core/memory.py#L527) |
-| 5c | `get_memory_snapshot()` | Current RSS, VMS, available | [memory.py:407](../src/jamma/core/memory.py#L407) |
-| 5c | `cleanup_memory()` | GC + clear JAX caches | [memory.py:458](../src/jamma/core/memory.py#L458) |
+| 5c | `estimate_workflow_memory()` | Full pipeline memory estimate (pre-flight) | [memory.py:97](../src/jamma/core/memory.py#L97) |
+| 5c | `estimate_lmm_memory()` | LMM-phase-only memory estimate | [memory.py:188](../src/jamma/core/memory.py#L188) |
+| 5c | `estimate_lmm_streaming_memory()` | LMM streaming phase memory estimate | [memory.py:375](../src/jamma/core/memory.py#L375) |
+| 5c | `check_memory_before_run()` | Raise MemoryError if insufficient | [memory.py:598](../src/jamma/core/memory.py#L598) |
+| 5c | `get_memory_snapshot()` | Current RSS, VMS, available | [memory.py:478](../src/jamma/core/memory.py#L478) |
+| 5c | `cleanup_memory()` | GC + clear JAX caches | [memory.py:529](../src/jamma/core/memory.py#L529) |
 | 5d | `setup_logging()` | Loguru console + optional file | [logging.py:16](../src/jamma/utils/logging.py#L16) |
 | 5d | `write_gemma_log()` | GEMMA-compatible `.log.txt` | [logging.py:51](../src/jamma/utils/logging.py#L51) |
 | 5d | `log_rss_memory()` | RSS snapshot at phase boundaries | [logging.py:120](../src/jamma/utils/logging.py#L120) |
@@ -351,9 +348,9 @@ flowchart TD
 | Wald/Score/LRT tests | [stats.py:98](../src/jamma/lmm/stats.py#L98) |
 | SNP filters (HWE) | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |
 | JAX batch runner | [runner_jax.py](../src/jamma/lmm/runner_jax.py) |
-| Streaming runner | [runner_streaming.py:94](../src/jamma/lmm/runner_streaming.py#L94) |
+| Streaming runner | [runner_streaming.py:137](../src/jamma/lmm/runner_streaming.py#L137) |
 | LOCO runner | [lmm/loco.py](../src/jamma/lmm/loco.py) |
 | Result writer | [lmm/io.py:172](../src/jamma/lmm/io.py#L172) |
-| Memory estimation | [memory.py:72](../src/jamma/core/memory.py#L72) |
+| Memory estimation | [memory.py:97](../src/jamma/core/memory.py#L97) |
 | Validation comparison | [compare.py:536](../src/jamma/validation/compare.py#L536) |
 | Equivalence proof | [EQUIVALENCE.md](EQUIVALENCE.md) |

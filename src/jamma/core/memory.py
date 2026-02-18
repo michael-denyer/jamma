@@ -154,8 +154,9 @@ def estimate_workflow_memory(
     # Workflow: genotypes -> kinship -> eigendecomp -> LMM
     # Kinship can be freed after eigendecomp
 
-    # Phase 1 (kinship): genotypes (float64 JAX copy) + kinship accumulator
-    peak_kinship = genotypes_gb + kinship_gb
+    # Phase 1 (kinship): numpy input + JAX device copy coexist during
+    # kinship accumulation in _compute_kinship_inmemory
+    peak_kinship = genotypes_gb * 2 + kinship_gb
 
     # Phase 2 (eigendecomp): kinship + eigenvectors + workspace
     # (genotypes can be freed during eigendecomp if not needed for LMM)

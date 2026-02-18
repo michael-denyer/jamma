@@ -171,10 +171,8 @@ class TestFailureHandling:
         out_path = tmp_path / "should_not_exist.txt"
 
         # Trigger worker error via invalid format string: "%s%s" causes
-        # TypeError when applied to float rows. The memmap is float64 so
-        # we can't inject bad dtype, but format string mismatch reliably
-        # fails in the spawned worker process.
-        with pytest.raises((TypeError, ValueError)):
+        # TypeError in the worker, wrapped as RuntimeError with row context.
+        with pytest.raises(RuntimeError, match="_format_rows_chunk failed"):
             write_matrix_parallel(matrix, out_path, fmt="%s%s", n_workers=2)
 
         assert not out_path.exists(), "Partial output file should be deleted on failure"
@@ -225,7 +223,7 @@ class TestFailureHandling:
         matrix = rng.standard_normal((600, 10))
         out_path = tmp_path / "should_not_exist.txt"
 
-        with pytest.raises((TypeError, ValueError)):
+        with pytest.raises(RuntimeError, match="_format_rows_chunk failed"):
             write_matrix_parallel(
                 matrix, out_path, fmt="%s%s", n_workers=2
             )

@@ -45,7 +45,7 @@ def _format_rows_chunk(args: tuple) -> bytes:
         chunk_text = "\n".join(lines) + "\n"
         return chunk_text.encode("ascii")
     except Exception as e:
-        raise type(e)(f"_format_rows_chunk failed on rows {start}-{end}: {e}") from e
+        raise RuntimeError(f"_format_rows_chunk failed on rows {start}-{end}: {e}") from e
 
 
 def write_matrix_parallel(
@@ -102,7 +102,14 @@ def write_matrix_parallel(
     fd, tmp_path = tempfile.mkstemp(suffix=".dat")
     os.close(fd)  # Avoid fd leak -- tofile opens by path
     try:
-        matrix.tofile(tmp_path)
+        try:
+            matrix.tofile(tmp_path)
+        except OSError as e:
+            raise OSError(
+                f"Failed to write {matrix.nbytes / (1024**3):.1f} GB temp file "
+                f"to {tmp_path} for parallel matrix IPC. "
+                f"Set TMPDIR to a filesystem with sufficient space."
+            ) from e
 
         for start in range(0, n_rows, rows_per_chunk):
             end = min(start + rows_per_chunk, n_rows)
@@ -139,5 +146,5 @@ def write_matrix_parallel(
     finally:
         try:
             os.unlink(tmp_path)
-        except OSError:
-            pass
+        except OSError as e:
+            logger.warning(f"Failed to remove temp memmap file {tmp_path}: {e}")

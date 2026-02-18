@@ -185,12 +185,79 @@ n_cvt. All LMM modes (Wald, LRT, Score, all-tests) work with covariates.
 
 ## 6. Lambda Optimization: Brent vs Golden Section
 
-GEMMA uses Brent's method; JAMMA uses grid search + golden section. Both
-converge to within 1e-5 for strong signals. On flat landscapes (weak-signal
-SNPs) they settle on slightly different optima — affects only the MLE
-log-likelihood diagnostic, not p-values or effect sizes.
+### GEMMA
 
-See [EQUIVALENCE.md § Lambda Optimization](EQUIVALENCE.md#5-lambda-optimization) for full analysis and error bounds.
+Uses **Brent's method** (GSL `gsl_min_fminimizer_brent`) — a hybrid algorithm
+combining inverse quadratic interpolation with golden section fallback. Variable
+iteration count per SNP; serial execution.
+
+### JAMMA (likelihood_jax.py:419-562)
+
+Uses **grid search (50 log-spaced points) + golden section refinement (20
+iterations)** via `lax.fori_loop`. All SNPs in a chunk are optimized
+simultaneously in lockstep (same bracket operation per iteration, vectorized
+across the SNP batch).
+
+### Unimodality Assumption
+
+Both methods assume the REML/MLE log-likelihood is **unimodal** in log-lambda
+space. This is empirically true for standard GWAS data (hundreds to hundreds of
+thousands of samples, intercept + typical covariates) but is not mathematically
+guaranteed. Theoretical scenarios where multimodality could arise — very small
+samples (<50), extreme covariate collinearity, or lambda bounds spanning >15
+orders of magnitude — are outside JAMMA's practical use case.
+
+The golden section method has no mechanism to detect or recover from
+multimodality. Brent's method also assumes unimodality but is somewhat more
+robust to flat regions due to its inverse quadratic interpolation step.
+
+### Why Not Brent?
+
+Brent's method is inherently serial: each SNP follows a different convergence
+path with a variable number of iterations. Golden section processes all SNPs in
+lockstep, enabling:
+
+- **JAX `vmap` vectorization** across the entire SNP batch
+- **`lax.fori_loop`** that stays on-device (no host/device sync per iteration)
+- **Double buffering** of chunk transfer overlapped with compute
+
+Replacing golden section with Brent would require either scalar per-SNP
+optimization (destroying batch vectorization, ~100x slower) or padded vectorized
+Brent (wasteful, complex state machine that diverges per SNP).
+
+### Convergence
+
+After grid bracketing to ±1 cell, 20 golden section iterations reduce the
+bracket by `0.618^20 ≈ 6.6e-5`, giving relative tolerance < 1e-5 for typical
+lambda values. This matches Brent's 1e-5 tolerance in practice.
+
+### Boundary Diagnostic
+
+When the grid search maximum falls at the first or last grid point, the bracket
+may not contain the true optimum. JAMMA tracks this via
+`count_lambda_boundary_hits()` in `results.py` and emits a warning:
+
+```
+Lambda bound convergence: 42 SNPs at l_min=1.0e-05
+```
+
+This corresponds to weak-signal SNPs where lambda converges at the optimization
+bound — normal behavior that also occurs in GEMMA.
+
+### Divergence Impact
+
+| Signal Strength | Lambda Divergence | Effect on Results |
+|-----------------|-------------------|-------------------|
+| Strong signal | < 1e-4 relative | Negligible |
+| Moderate signal | < 1e-4 relative | Negligible |
+| Weak signal (flat MLE surface) | up to ~9e-4 relative | Affects only MLE logl_H1 diagnostic |
+
+P-values, effect sizes, and significance calls are unaffected. The flat region
+corresponds to weak-signal SNPs where test statistics are small regardless of
+the exact lambda.
+
+See [EQUIVALENCE.md § Lambda Optimization](EQUIVALENCE.md#5-lambda-optimization)
+for full error bounds and empirical validation results.
 
 ---
 
@@ -269,7 +336,7 @@ The streaming approach produces mathematically identical LOCO kinship matrices w
 | logdet with neg eigenvalues | log(abs(v)) | log(abs(v)) | Aligned |
 | Monomorphic detection | Count-based | Variance-based | Aligned (equivalent) |
 | JAX covariates | n_cvt >= 1 | n_cvt >= 1 | Aligned (since v1.2) |
-| Lambda optimizer | Brent | Golden section | See [EQUIVALENCE.md](EQUIVALENCE.md#5-lambda-optimization) |
+| Lambda optimizer | Brent (serial) | Golden section (vectorized, assumes unimodal) | < 1e-4 relative; see §6 |
 | Eigendecomp library | GSL | numpy LAPACK | Large-sample support (ILP64) |
 | HWE test | Wigginton exact | Chi-squared (df=1) | Identical for large n |
 | LOCO kinship | Materialized all | Streaming subtraction | Same math, lower memory |
@@ -305,7 +372,3 @@ represent niche use cases.
 
 For full empirical validation results (small-scale and production-scale), see
 [EQUIVALENCE.md § Empirical Results](EQUIVALENCE.md#empirical-results).
-
----
-
-*Last updated: 2026-02-12*

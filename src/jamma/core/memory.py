@@ -301,7 +301,6 @@ def _streaming_component_sizes(
 
 def estimate_streaming_memory(
     n_samples: int,
-    n_snps: int,  # Only for logging; not used in peak calculation
     chunk_size: int = 10_000,
     n_grid: int = 50,
     n_cvt: int = 1,
@@ -315,7 +314,7 @@ def estimate_streaming_memory(
     - Genotypes: O(n * chunk_size) not O(n * n_snps)
     - Peak is typically eigendecomposition (kinship + eigenvectors simultaneously)
 
-    For 200k samples, 95k SNPs, 10k chunk, n_grid=50:
+    For 200k samples, 10k chunk, n_grid=50:
     - Kinship accumulation: 320GB + 16GB = 336GB
     - Eigendecomp: 320GB + 320GB + ~640GB = ~1280GB (PEAK, DSYEVD workspace)
     - LMM: 320GB + 16GB + 16GB + Uab/Iab
@@ -326,7 +325,6 @@ def estimate_streaming_memory(
 
     Args:
         n_samples: Number of samples (individuals).
-        n_snps: Number of SNPs (for logging only, not used in peak calculation).
         chunk_size: SNPs per chunk (default 10,000).
         n_grid: Grid points for lambda optimization (default 50).
         n_cvt: Number of covariates (default 1).
@@ -335,7 +333,7 @@ def estimate_streaming_memory(
         StreamingMemoryBreakdown with detailed component estimates.
 
     Example:
-        >>> est = estimate_streaming_memory(200_000, 95_000)
+        >>> est = estimate_streaming_memory(200_000)
         >>> print(f"Peak: {est.total_peak_gb:.0f}GB (eigendecomp)")
     """
     (
@@ -630,7 +628,7 @@ def check_memory_before_run(
     from jamma.lmm.chunk import _compute_chunk_size
 
     actual_chunk = _compute_chunk_size(n_samples, n_snps)
-    est = estimate_streaming_memory(n_samples, n_snps, chunk_size=actual_chunk)
+    est = estimate_streaming_memory(n_samples, chunk_size=actual_chunk)
     snap = get_memory_snapshot()
 
     logger.info(

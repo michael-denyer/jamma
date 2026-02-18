@@ -5,8 +5,15 @@ applying quality control filters (MAF, missing rate, monomorphism, HWE).
 Used by both kinship computation and LMM association runners.
 """
 
+import math
+
 import numpy as np
 from loguru import logger
+
+# Chi-squared SF with df=1: P(X > x) = erfc(sqrt(x/2))
+# Uses np.vectorize(math.erfc) since numpy has no built-in erfc.
+# HWE runs once per GWAS (not per-chunk), so vectorize overhead is negligible.
+_erfc_vec = np.vectorize(math.erfc, otypes=[np.float64])
 
 
 def apply_snp_list_mask(
@@ -112,9 +119,6 @@ def compute_hwe_pvalues(
     Returns:
         Array of p-values, one per SNP. Values >= threshold pass HWE.
     """
-    import jax.numpy as jnp
-    import jax.scipy.stats as jax_stats
-
     n_aa = np.asarray(n_aa, dtype=np.float64)
     n_ab = np.asarray(n_ab, dtype=np.float64)
     n_bb = np.asarray(n_bb, dtype=np.float64)
@@ -139,9 +143,6 @@ def compute_hwe_pvalues(
     # Replace with 0.0 so they get p-value = 1.0 (pass HWE by convention).
     chi_sq = np.where(np.isnan(chi_sq), 0.0, chi_sq)
 
-    # Use JAX chi2.sf for p-value computation (avoids scipy runtime dep)
-    chi_sq_jax = jnp.asarray(chi_sq)
-    pvalues_jax = jax_stats.chi2.sf(chi_sq_jax, df=1)
-
-    # np.asarray is an implicit JAX sync point (per MEMORY.md)
-    return np.asarray(pvalues_jax)
+    # Chi-squared SF with df=1: P(X > x) = erfc(sqrt(x/2))
+    pvalues = _erfc_vec(np.sqrt(chi_sq / 2.0))
+    return pvalues

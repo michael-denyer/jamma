@@ -5,6 +5,7 @@ memory sizes.
 """
 
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,6 +22,7 @@ PLINK_PREFIX = FIXTURE_DIR / "test"
 KINSHIP_FILE = FIXTURE_DIR / "gemma_kinship.cXX.txt"
 
 
+@pytest.mark.tier1
 class TestCliMemoryCheck:
     """Tests for CLI lmm command memory pre-flight checks."""
 
@@ -28,8 +30,8 @@ class TestCliMemoryCheck:
         """--no-check-memory should skip pre-flight check."""
         result = subprocess.run(
             [
-                "uv",
-                "run",
+                sys.executable,
+                "-m",
                 "jamma",
                 "-outdir",
                 str(tmp_path),
@@ -56,8 +58,8 @@ class TestCliMemoryCheck:
         """--mem-budget should fail if estimate exceeds budget."""
         result = subprocess.run(
             [
-                "uv",
-                "run",
+                sys.executable,
+                "-m",
                 "jamma",
                 "-outdir",
                 str(tmp_path),
@@ -84,8 +86,8 @@ class TestCliMemoryCheck:
         """Memory check should run by default."""
         result = subprocess.run(
             [
-                "uv",
-                "run",
+                sys.executable,
+                "-m",
                 "jamma",
                 "-outdir",
                 str(tmp_path),
@@ -112,8 +114,8 @@ class TestCliMemoryCheck:
         """Memory check should report estimated and available memory."""
         result = subprocess.run(
             [
-                "uv",
-                "run",
+                sys.executable,
+                "-m",
                 "jamma",
                 "-outdir",
                 str(tmp_path),
@@ -138,8 +140,8 @@ class TestCliMemoryCheck:
         """--check-memory should explicitly enable memory check."""
         result = subprocess.run(
             [
-                "uv",
-                "run",
+                sys.executable,
+                "-m",
                 "jamma",
                 "-outdir",
                 str(tmp_path),
@@ -180,7 +182,6 @@ class TestCliMemoryCheckUnit:
         meta = get_plink_metadata(PLINK_PREFIX)
         est = estimate_streaming_memory(
             n_samples=meta["n_samples"],
-            n_snps=meta["n_snps"],
         )
 
         assert est.total_peak_gb >= 0

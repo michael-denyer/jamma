@@ -19,6 +19,22 @@ from jamma.kinship.compute import compute_centered_kinship, compute_kinship_stre
 from jamma.lmm import run_lmm_association_jax, run_lmm_association_streaming
 
 
+def _build_snp_info(data) -> list[dict]:
+    """Build snp_info list from plink data for test use."""
+    return [
+        {"chr": str(c), "rs": s, "pos": int(p), "a1": a1, "a0": a0}
+        for c, s, p, a1, a0 in zip(
+            data.chromosome,
+            data.sid,
+            data.bp_position,
+            data.allele_1,
+            data.allele_2,
+            strict=False,
+        )
+    ]
+
+
+@pytest.mark.tier1
 class TestStreamGenotypeChunks:
     """Tests for stream_genotype_chunks generator."""
 
@@ -105,6 +121,7 @@ class TestStreamGenotypeChunks:
             list(stream_genotype_chunks(nonexistent, show_progress=False))
 
 
+@pytest.mark.tier1
 class TestGetPlinkMetadata:
     """Tests for get_plink_metadata function."""
 
@@ -150,12 +167,13 @@ class TestGetPlinkMetadata:
             get_plink_metadata(nonexistent)
 
 
+@pytest.mark.tier1
 class TestEstimateStreamingMemory:
     """Tests for estimate_streaming_memory function."""
 
     def test_returns_breakdown(self) -> None:
         """Verify function returns StreamingMemoryBreakdown with all fields."""
-        est = estimate_streaming_memory(1_000, 10_000)
+        est = estimate_streaming_memory(1_000)
 
         assert isinstance(est, StreamingMemoryBreakdown)
         assert isinstance(est.kinship_gb, float)
@@ -173,7 +191,7 @@ class TestEstimateStreamingMemory:
         For large n_samples, eigendecomp requires both kinship (input) and
         eigenvectors (output) simultaneously, which exceeds other phases.
         """
-        est = estimate_streaming_memory(100_000, 95_000, chunk_size=10_000)
+        est = estimate_streaming_memory(100_000, chunk_size=10_000)
 
         # Eigendecomp peak: kinship + eigenvectors + workspace
         eigendecomp_peak = (
@@ -188,7 +206,7 @@ class TestEstimateStreamingMemory:
 
     def test_200k_memory_estimate(self) -> None:
         """Verify memory estimates for 200k sample scale."""
-        est = estimate_streaming_memory(200_000, 95_000, chunk_size=10_000)
+        est = estimate_streaming_memory(200_000, chunk_size=10_000)
 
         # Kinship: 200k^2 * 8 / 1e9 = 320GB
         assert 319 < est.kinship_gb < 321, (
@@ -219,40 +237,29 @@ class TestEstimateStreamingMemory:
 
     def test_chunk_size_affects_chunk_gb(self) -> None:
         """Verify chunk_size parameter affects chunk memory."""
-        est_small = estimate_streaming_memory(100_000, 95_000, chunk_size=5_000)
-        est_large = estimate_streaming_memory(100_000, 95_000, chunk_size=20_000)
+        est_small = estimate_streaming_memory(100_000, chunk_size=5_000)
+        est_large = estimate_streaming_memory(100_000, chunk_size=20_000)
 
         # Larger chunk size should require more chunk memory
         assert est_large.chunk_gb > est_small.chunk_gb
         assert abs(est_large.chunk_gb / est_small.chunk_gb - 4.0) < 0.01
 
-    def test_n_snps_does_not_affect_peak(self) -> None:
-        """Verify n_snps parameter doesn't affect peak memory.
-
-        n_snps is only for logging; streaming memory doesn't scale with total SNPs.
-        """
-        est_few = estimate_streaming_memory(100_000, 10_000, chunk_size=10_000)
-        est_many = estimate_streaming_memory(100_000, 1_000_000, chunk_size=10_000)
-
-        # Peak should be identical regardless of n_snps
-        assert est_few.total_peak_gb == est_many.total_peak_gb
-
     def test_sufficient_flag_correct(self) -> None:
         """Verify sufficient flag reflects available vs required."""
         # Tiny estimate should always be sufficient
-        est = estimate_streaming_memory(100, 100)
+        est = estimate_streaming_memory(100)
         assert est.sufficient is True
 
         # 200k estimate requires ~640GB - not sufficient on typical machines
-        est = estimate_streaming_memory(200_000, 95_000)
+        est = estimate_streaming_memory(200_000)
         assert est.sufficient is False, (
             "200k sample workflow should exceed available memory"
         )
 
     def test_n_grid_affects_lmm_memory(self) -> None:
         """Verify n_grid parameter affects LMM phase memory estimate."""
-        est_default = estimate_streaming_memory(100_000, 95_000, n_grid=50)
-        est_large = estimate_streaming_memory(100_000, 95_000, n_grid=100)
+        est_default = estimate_streaming_memory(100_000, n_grid=50)
+        est_large = estimate_streaming_memory(100_000, n_grid=100)
 
         # Larger n_grid should increase grid_reml_gb
         assert est_large.grid_reml_gb > est_default.grid_reml_gb
@@ -261,7 +268,7 @@ class TestEstimateStreamingMemory:
 
     def test_grid_reml_gb_in_breakdown(self) -> None:
         """Verify grid_reml_gb is included in breakdown."""
-        est = estimate_streaming_memory(100_000, 95_000, chunk_size=10_000, n_grid=50)
+        est = estimate_streaming_memory(100_000, chunk_size=10_000, n_grid=50)
 
         # grid_reml: 50 * 10_000 * 8 / 1e9 = 0.004GB = 4MB
         expected_grid_reml = 50 * 10_000 * 8 / 1e9
@@ -282,7 +289,7 @@ class TestEstimateStreamingMemory:
 
             # Estimate for 100k samples - eigendecomp needs ~160GB
             # (kinship + eigenvectors = 2 * 100k^2 * 8 bytes = 160GB)
-            est = estimate_streaming_memory(100_000, 95_000)
+            est = estimate_streaming_memory(100_000)
 
             # Should report insufficient (160GB > 8GB)
             assert est.sufficient is False, (
@@ -304,7 +311,7 @@ class TestEstimateStreamingMemory:
 
             # Estimate for 10k samples - eigendecomp needs ~1.6GB
             # (kinship + eigenvectors = 2 * 10k^2 * 8 bytes = 1.6GB)
-            est = estimate_streaming_memory(10_000, 95_000)
+            est = estimate_streaming_memory(10_000)
 
             # Should report sufficient (1.6GB < 32GB)
             assert est.sufficient is True, (
@@ -313,13 +320,14 @@ class TestEstimateStreamingMemory:
             )
 
 
+@pytest.mark.tier1
 class TestEstimateLmmStreamingMemory:
     """Tests for estimate_lmm_streaming_memory function (LMM-phase only)."""
 
     def test_lmm_estimate_less_than_full_pipeline(self) -> None:
         """LMM-only estimate should be less than full streaming estimate."""
         lmm_est = estimate_lmm_streaming_memory(100_000, 95_000)
-        full_est = estimate_streaming_memory(100_000, 95_000)
+        full_est = estimate_streaming_memory(100_000)
 
         assert lmm_est.total_peak_gb < full_est.total_peak_gb, (
             f"LMM-only ({lmm_est.total_peak_gb:.1f}GB) should be less than "
@@ -363,6 +371,7 @@ class TestEstimateLmmStreamingMemory:
         assert est.sufficient is True
 
 
+@pytest.mark.tier1
 class TestComputeKinshipStreaming:
     """Tests for compute_kinship_streaming function."""
 
@@ -495,6 +504,7 @@ class TestComputeKinshipStreaming:
         )
 
 
+@pytest.mark.tier1
 class TestFilteringBoundaryBehavior:
     """Tests for MAF/missing threshold boundary behavior."""
 
@@ -556,39 +566,24 @@ class TestFilteringBoundaryBehavior:
             )
 
 
+@pytest.mark.tier1
 class TestRunLmmAssociationStreaming:
     """Tests for run_lmm_association_streaming function."""
 
     def test_run_lmm_streaming_matches_full_load(self, sample_plink_data: Path) -> None:
         """Verify streaming LMM matches full-load LMM results."""
         # Fixed seed for reproducible phenotypes
-        np.random.seed(42)
+        rng = np.random.default_rng(42)
 
         # Load genotypes and compute kinship
         data = load_plink_binary(sample_plink_data)
-        phenotypes = np.random.randn(data.n_samples)
+        phenotypes = rng.standard_normal(data.n_samples)
         kinship = compute_centered_kinship(
             data.genotypes.astype(np.float64), check_memory=False
         )
 
         # Build snp_info
-        snp_info = [
-            {
-                "chr": str(c),
-                "rs": s,
-                "pos": int(p),
-                "a1": a1,
-                "a0": a0,
-            }
-            for c, s, p, a1, a0 in zip(
-                data.chromosome,
-                data.sid,
-                data.bp_position,
-                data.allele_1,
-                data.allele_2,
-                strict=False,
-            )
-        ]
+        snp_info = _build_snp_info(data)
 
         # Run full-load version
         results_full = run_lmm_association_jax(
@@ -639,14 +634,14 @@ class TestRunLmmAssociationStreaming:
         self, sample_plink_data: Path
     ) -> None:
         """Verify SNP info is extracted from PLINK metadata when not provided."""
-        np.random.seed(42)
+        rng = np.random.default_rng(42)
 
         # Get expected metadata
         meta = get_plink_metadata(sample_plink_data)
 
         # Compute kinship
         data = load_plink_binary(sample_plink_data)
-        phenotypes = np.random.randn(data.n_samples)
+        phenotypes = rng.standard_normal(data.n_samples)
         kinship = compute_centered_kinship(
             data.genotypes.astype(np.float64), check_memory=False
         )
@@ -670,25 +665,15 @@ class TestRunLmmAssociationStreaming:
 
     def test_run_lmm_streaming_filters_correctly(self, sample_plink_data: Path) -> None:
         """Verify streaming applies same filtering as full-load version."""
-        np.random.seed(42)
+        rng = np.random.default_rng(42)
 
         data = load_plink_binary(sample_plink_data)
-        phenotypes = np.random.randn(data.n_samples)
+        phenotypes = rng.standard_normal(data.n_samples)
         kinship = compute_centered_kinship(
             data.genotypes.astype(np.float64), check_memory=False
         )
 
-        snp_info = [
-            {"chr": str(c), "rs": s, "pos": int(p), "a1": a1, "a0": a0}
-            for c, s, p, a1, a0 in zip(
-                data.chromosome,
-                data.sid,
-                data.bp_position,
-                data.allele_1,
-                data.allele_2,
-                strict=False,
-            )
-        ]
+        snp_info = _build_snp_info(data)
 
         # Strict filtering thresholds
         maf_threshold = 0.1
@@ -726,10 +711,10 @@ class TestRunLmmAssociationStreaming:
         self, sample_plink_data: Path
     ) -> None:
         """Verify streaming handles missing phenotypes correctly."""
-        np.random.seed(42)
+        rng = np.random.default_rng(42)
 
         data = load_plink_binary(sample_plink_data)
-        phenotypes = np.random.randn(data.n_samples)
+        phenotypes = rng.standard_normal(data.n_samples)
 
         # Set some phenotypes to missing
         n_missing = 50
@@ -739,17 +724,7 @@ class TestRunLmmAssociationStreaming:
             data.genotypes.astype(np.float64), check_memory=False
         )
 
-        snp_info = [
-            {"chr": str(c), "rs": s, "pos": int(p), "a1": a1, "a0": a0}
-            for c, s, p, a1, a0 in zip(
-                data.chromosome,
-                data.sid,
-                data.bp_position,
-                data.allele_1,
-                data.allele_2,
-                strict=False,
-            )
-        ]
+        snp_info = _build_snp_info(data)
 
         # Run full-load version (filters internally)
         results_full = run_lmm_association_jax(
@@ -784,11 +759,11 @@ class TestRunLmmAssociationStreaming:
 
         This is the target use case: never loading full genotype matrix.
         """
-        np.random.seed(42)
+        rng = np.random.default_rng(42)
 
         # Get metadata for phenotype generation
         meta = get_plink_metadata(sample_plink_data)
-        phenotypes = np.random.randn(meta["n_samples"])
+        phenotypes = rng.standard_normal(meta["n_samples"])
 
         # Compute kinship via streaming (no genotype matrix loaded)
         kinship = compute_kinship_streaming(
@@ -819,7 +794,7 @@ class TestRunLmmAssociationStreaming:
     def test_run_lmm_streaming_missing_file_raises(self, tmp_path: Path) -> None:
         """Verify FileNotFoundError for nonexistent file."""
         nonexistent = tmp_path / "nonexistent"
-        phenotypes = np.random.randn(100)
+        phenotypes = np.random.default_rng(42).standard_normal(100)
         kinship = np.eye(100)
 
         with pytest.raises(FileNotFoundError, match="PLINK .bed file not found"):
@@ -835,11 +810,11 @@ class TestRunLmmAssociationStreaming:
         This tests that results are written incrementally to disk as each file chunk
         is processed, rather than accumulating all results in memory first.
         """
-        np.random.seed(42)
+        rng = np.random.default_rng(42)
 
         # Load data and prepare
         data = load_plink_binary(sample_plink_data)
-        phenotypes = np.random.randn(data.n_samples)
+        phenotypes = rng.standard_normal(data.n_samples)
         kinship = compute_centered_kinship(
             data.genotypes.astype(np.float64), check_memory=False
         )
@@ -902,6 +877,7 @@ class TestRunLmmAssociationStreaming:
         assert n_results > 100, f"Expected many results, got {n_results}"
 
 
+@pytest.mark.tier1
 class TestChunkEquivalence:
     """Tests verifying chunked processing produces identical results."""
 
@@ -911,11 +887,11 @@ class TestChunkEquivalence:
         This test proves that JAX chunking is purely a memory optimization
         and does not affect numerical results.
         """
-        np.random.seed(42)
+        rng = np.random.default_rng(42)
 
         # Load data and prepare
         data = load_plink_binary(sample_plink_data)
-        phenotypes = np.random.randn(data.n_samples)
+        phenotypes = rng.standard_normal(data.n_samples)
         kinship = compute_centered_kinship(
             data.genotypes.astype(np.float64), check_memory=False
         )
@@ -981,11 +957,11 @@ class TestChunkEquivalence:
         self, sample_plink_data: Path
     ) -> None:
         """Verify different chunk sizes in streaming produce identical results."""
-        np.random.seed(42)
+        rng = np.random.default_rng(42)
 
         # Load data
         data = load_plink_binary(sample_plink_data)
-        phenotypes = np.random.randn(data.n_samples)
+        phenotypes = rng.standard_normal(data.n_samples)
         kinship = compute_centered_kinship(
             data.genotypes.astype(np.float64), check_memory=False
         )
@@ -1031,6 +1007,7 @@ class TestChunkEquivalence:
                 )
 
 
+@pytest.mark.tier1
 def test_streaming_vs_batch_parity(sample_plink_data: Path) -> None:
     """Streaming and batch runners must produce identical results for the same input.
 
@@ -1038,31 +1015,15 @@ def test_streaming_vs_batch_parity(sample_plink_data: Path) -> None:
     (e.g., different imputation, different filtering, different eigendecomp reuse).
     Uses chunk_size=10 to force multiple streaming chunks for thorough coverage.
     """
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
 
     data = load_plink_binary(sample_plink_data)
-    phenotypes = np.random.randn(data.n_samples)
+    phenotypes = rng.standard_normal(data.n_samples)
     kinship = compute_centered_kinship(
         data.genotypes.astype(np.float64), check_memory=False
     )
 
-    snp_info = [
-        {
-            "chr": str(c),
-            "rs": s,
-            "pos": int(p),
-            "a1": a1,
-            "a0": a0,
-        }
-        for c, s, p, a1, a0 in zip(
-            data.chromosome,
-            data.sid,
-            data.bp_position,
-            data.allele_1,
-            data.allele_2,
-            strict=False,
-        )
-    ]
+    snp_info = _build_snp_info(data)
 
     # Batch runner (all genotypes in memory, float64 to match streaming reader)
     results_batch = run_lmm_association_jax(
@@ -1135,6 +1096,168 @@ def test_streaming_vs_batch_parity(sample_plink_data: Path) -> None:
         )
 
 
+@pytest.mark.tier1
+def test_streaming_lrt_only_matches_batch(sample_plink_data: Path) -> None:
+    """Verify streaming LRT-only (mode 2) output matches batch runner.
+
+    LRT mode computes l_mle and p_lrt per SNP; beta and se are NaN.
+    This test exercises the lmm_mode=2 code path in both runners and
+    verifies parity.
+    """
+    rng = np.random.default_rng(42)
+
+    data = load_plink_binary(sample_plink_data)
+    phenotypes = rng.standard_normal(data.n_samples)
+    kinship = compute_centered_kinship(
+        data.genotypes.astype(np.float64), check_memory=False
+    )
+
+    snp_info = _build_snp_info(data)
+
+    # Batch runner with lmm_mode=2
+    results_batch = run_lmm_association_jax(
+        data.genotypes.astype(np.float64),
+        phenotypes,
+        kinship,
+        snp_info,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=2,
+    )
+
+    # Streaming runner with lmm_mode=2
+    results_stream, _ = run_lmm_association_streaming(
+        sample_plink_data,
+        phenotypes,
+        kinship,
+        snp_info,
+        chunk_size=100,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=2,
+    )
+
+    assert len(results_batch) == len(results_stream), (
+        f"Count mismatch: batch={len(results_batch)}, stream={len(results_stream)}"
+    )
+    assert len(results_batch) > 0, "Expected some results"
+
+    for i, (rb, rs) in enumerate(zip(results_batch, results_stream, strict=True)):
+        assert rb.rs == rs.rs, f"SNP {i}: rs mismatch {rb.rs} vs {rs.rs}"
+
+        # LRT-specific fields must match
+        np.testing.assert_allclose(
+            rb.l_mle,
+            rs.l_mle,
+            rtol=1e-10,
+            atol=0,
+            err_msg=f"SNP {i} ({rb.rs}) l_mle mismatch",
+        )
+        np.testing.assert_allclose(
+            rb.p_lrt,
+            rs.p_lrt,
+            rtol=1e-10,
+            atol=0,
+            err_msg=f"SNP {i} ({rb.rs}) p_lrt mismatch",
+        )
+
+        # LRT mode: beta and se should be NaN
+        assert np.isnan(rb.beta), f"SNP {i} batch beta should be NaN, got {rb.beta}"
+        assert np.isnan(rs.beta), f"SNP {i} stream beta should be NaN, got {rs.beta}"
+        assert np.isnan(rb.se), f"SNP {i} batch se should be NaN, got {rb.se}"
+        assert np.isnan(rs.se), f"SNP {i} stream se should be NaN, got {rs.se}"
+
+
+@pytest.mark.tier1
+def test_streaming_score_only_matches_batch(sample_plink_data: Path) -> None:
+    """Verify streaming Score-only (mode 3) output matches batch runner.
+
+    Score mode computes p_score per SNP; logl_H1 and l_remle are None.
+    This test exercises the lmm_mode=3 code path in both runners and
+    verifies parity.
+    """
+    rng = np.random.default_rng(42)
+
+    data = load_plink_binary(sample_plink_data)
+    phenotypes = rng.standard_normal(data.n_samples)
+    kinship = compute_centered_kinship(
+        data.genotypes.astype(np.float64), check_memory=False
+    )
+
+    snp_info = _build_snp_info(data)
+
+    # Batch runner with lmm_mode=3
+    results_batch = run_lmm_association_jax(
+        data.genotypes.astype(np.float64),
+        phenotypes,
+        kinship,
+        snp_info,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=3,
+    )
+
+    # Streaming runner with lmm_mode=3
+    results_stream, _ = run_lmm_association_streaming(
+        sample_plink_data,
+        phenotypes,
+        kinship,
+        snp_info,
+        chunk_size=100,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=3,
+    )
+
+    assert len(results_batch) == len(results_stream), (
+        f"Count mismatch: batch={len(results_batch)}, stream={len(results_stream)}"
+    )
+    assert len(results_batch) > 0, "Expected some results"
+
+    for i, (rb, rs) in enumerate(zip(results_batch, results_stream, strict=True)):
+        assert rb.rs == rs.rs, f"SNP {i}: rs mismatch {rb.rs} vs {rs.rs}"
+
+        # Score-specific fields must match
+        np.testing.assert_allclose(
+            rb.p_score,
+            rs.p_score,
+            rtol=1e-10,
+            atol=0,
+            err_msg=f"SNP {i} ({rb.rs}) p_score mismatch",
+        )
+
+        # Score mode still computes beta/se (unlike LRT)
+        np.testing.assert_allclose(
+            rb.beta,
+            rs.beta,
+            rtol=1e-10,
+            atol=0,
+            err_msg=f"SNP {i} ({rb.rs}) beta mismatch",
+        )
+        np.testing.assert_allclose(
+            rb.se,
+            rs.se,
+            rtol=1e-10,
+            atol=0,
+            err_msg=f"SNP {i} ({rb.rs}) se mismatch",
+        )
+
+        # Score mode: logl_H1 and l_remle should be None
+        assert rb.logl_H1 is None, (
+            f"SNP {i} batch logl_H1 should be None, got {rb.logl_H1}"
+        )
+        assert rs.logl_H1 is None, (
+            f"SNP {i} stream logl_H1 should be None, got {rs.logl_H1}"
+        )
+        assert rb.l_remle is None, (
+            f"SNP {i} batch l_remle should be None, got {rb.l_remle}"
+        )
+        assert rs.l_remle is None, (
+            f"SNP {i} stream l_remle should be None, got {rs.l_remle}"
+        )
+
+
+@pytest.mark.tier1
 def test_streaming_all_invalid_samples_raises(tmp_path: Path) -> None:
     """Streaming runner raises ValueError when all samples have missing phenotypes.
 

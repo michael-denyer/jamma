@@ -16,6 +16,7 @@ from jamma.core import (
 from jamma.core.memory import _uab_iab_gb, estimate_lmm_memory
 
 
+@pytest.mark.tier0
 class TestMemoryEstimation:
     """Tests for estimate_workflow_memory function."""
 
@@ -104,6 +105,7 @@ class TestMemoryEstimation:
         )
 
 
+@pytest.mark.tier0
 class TestCheckMemoryAvailable:
     """Tests for check_memory_available function."""
 
@@ -131,10 +133,12 @@ class TestCheckMemoryAvailable:
         assert "kinship" in msg  # Operation name
 
 
+@pytest.mark.tier0
 class TestEigendecompMemory:
     """Tests for eigendecomposition memory usage."""
 
     @pytest.mark.slow
+    @pytest.mark.tier2
     def test_eigendecomp_memory_reasonable(self):
         """JAX eigh should use reasonable memory (not O(n^2) workspace).
 
@@ -185,6 +189,7 @@ class TestEigendecompMemory:
         assert eigenvectors.shape == (n, n)
 
 
+@pytest.mark.tier0
 class TestMemorySnapshot:
     """Tests for memory snapshot functions."""
 
@@ -217,6 +222,7 @@ class TestMemorySnapshot:
         assert snap.rss_gb > 0
 
 
+@pytest.mark.tier0
 class TestCleanupMemory:
     """Tests for memory cleanup function."""
 
@@ -299,6 +305,7 @@ class TestCleanupMemory:
         assert after.rss_gb <= before.rss_gb + 0.1
 
 
+@pytest.mark.tier0
 class TestLmmMemoryEstimation:
     """Tests for estimate_lmm_memory function (LMM-phase only)."""
 
@@ -350,6 +357,7 @@ class TestLmmMemoryEstimation:
         assert est.sufficient is True
 
 
+@pytest.mark.tier0
 class TestMemoryEstimateVsActualAllocation:
     """Regression tests: estimates must cover actual runtime tensor shapes.
 
@@ -428,6 +436,7 @@ class TestMemoryEstimateVsActualAllocation:
         )
 
 
+@pytest.mark.tier0
 class TestKinshipDtypeAccounting:
     """Verify memory model accounts for float64 genotype copy in kinship."""
 
@@ -460,6 +469,7 @@ class TestKinshipDtypeAccounting:
         assert abs(est.genotypes_gb - expected_gb) < 1e-9
 
 
+@pytest.mark.tier0
 class TestGateCorrectnessRunnerJax:
     """Tests that runner_jax.py memory gate correctly blocks/passes."""
 
@@ -518,6 +528,7 @@ class TestGateCorrectnessRunnerJax:
             assert est.sufficient is False
 
 
+@pytest.mark.tier0
 class TestGateCorrectnessRunnerStreaming:
     """Tests that runner_streaming.py memory gate correctly blocks/passes."""
 

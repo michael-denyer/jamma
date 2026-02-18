@@ -15,6 +15,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "gemma_synthetic"
 BFILE = FIXTURES / "test"
 
 
+@pytest.mark.tier0
 class TestValidatePlinkDimensions:
     """Tests for validate_plink_dimensions."""
 
@@ -43,6 +44,7 @@ class TestValidatePlinkDimensions:
             validate_plink_dimensions(tmp_path / "nonexistent")
 
 
+@pytest.mark.tier0
 class TestValidateGenotypeValues:
     """Tests for validate_genotype_values."""
 

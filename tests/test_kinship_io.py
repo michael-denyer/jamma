@@ -25,6 +25,7 @@ def example_plink_path() -> Path:
     return Path(__file__).parent / "fixtures" / "gemma_synthetic" / "test"
 
 
+@pytest.mark.tier0
 class TestWriteKinshipFormat:
     """Tests for write_kinship_matrix format compliance."""
 
@@ -146,6 +147,7 @@ class TestWriteKinshipFormat:
         assert savetxt_path.read_bytes() == loop_path.read_bytes()
 
 
+@pytest.mark.tier0
 class TestKinshipRoundtrip:
     """Tests for write-then-read consistency."""
 
@@ -171,6 +173,7 @@ class TestKinshipRoundtrip:
         assert np.allclose(K, K_read, rtol=1e-9)
 
 
+@pytest.mark.tier1
 class TestCLIIntegration:
     """Tests for CLI gk command integration."""
 

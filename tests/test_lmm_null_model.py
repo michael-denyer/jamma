@@ -14,7 +14,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.core import configure_jax
 from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm.eigen import eigendecompose_kinship
@@ -36,12 +35,6 @@ GEMMA_PVE_NULL = 0.293439
 
 # Test fixture paths
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "gemma_synthetic"
-
-
-@pytest.fixture(autouse=True)
-def setup_jax():
-    """Configure JAX with 64-bit precision before each test."""
-    configure_jax(enable_x64=True)
 
 
 @pytest.fixture
@@ -85,6 +78,7 @@ def gemma_test_data():
     }
 
 
+@pytest.mark.tier1
 class TestREMLNullLogLikelihood:
     """Tests for REML null model log-likelihood."""
 
@@ -135,6 +129,7 @@ class TestREMLNullLogLikelihood:
         )
 
 
+@pytest.mark.tier1
 class TestMLENullLogLikelihood:
     """Tests for MLE null model log-likelihood."""
 
@@ -190,6 +185,7 @@ class TestMLENullLogLikelihood:
         )
 
 
+@pytest.mark.tier1
 class TestNullModelFormulas:
     """Tests verifying null model uses correct degrees of freedom."""
 
@@ -252,6 +248,7 @@ class TestNullModelFormulas:
         assert np.isfinite(logl_null), f"logl should be finite, got {logl_null}"
 
 
+@pytest.mark.tier1
 class TestWaldTestUnchanged:
     """Regression tests verifying Wald test is unaffected by null model fix.
 
@@ -349,6 +346,7 @@ class TestWaldTestUnchanged:
         )
 
 
+@pytest.mark.tier0
 class TestNullModelProperties:
     """Property-based tests for null model functions."""
 

@@ -13,6 +13,7 @@ runner = CliRunner()
 EXAMPLE_BFILE = Path(__file__).parent / "fixtures" / "gemma_synthetic" / "test"
 
 
+@pytest.mark.tier1
 @pytest.mark.parametrize(
     "flag",
     [
@@ -42,6 +43,7 @@ def test_cli_help_shows_flag(flag: str):
     assert flag in result.output
 
 
+@pytest.mark.tier1
 @pytest.mark.parametrize(
     "flag,description_fragment",
     [
@@ -57,6 +59,7 @@ def test_cli_help_shows_description(flag: str, description_fragment: str):
     assert description_fragment in result.output
 
 
+@pytest.mark.tier1
 def test_cli_version():
     """Test that --version shows version number."""
     import jamma
@@ -66,6 +69,7 @@ def test_cli_version():
     assert jamma.__version__ in result.output
 
 
+@pytest.mark.tier1
 def test_cli_gk_loads_data(tmp_path: Path):
     """Test that gk command loads PLINK data and creates output directory."""
     outdir = tmp_path / "output"
@@ -80,6 +84,7 @@ def test_cli_gk_loads_data(tmp_path: Path):
     assert "500 SNPs" in result.output
 
 
+@pytest.mark.tier1
 def test_cli_gk_log_file(tmp_path: Path):
     """Test that gk command creates GEMMA-format log file."""
     outdir = tmp_path / "output"
@@ -100,6 +105,7 @@ def test_cli_gk_log_file(tmp_path: Path):
     assert "##" in log_content
 
 
+@pytest.mark.tier1
 def test_cli_gk_invalid_bfile(tmp_path: Path):
     """Test that gk command fails gracefully with nonexistent bfile."""
     outdir = tmp_path / "output"
@@ -113,6 +119,7 @@ def test_cli_gk_invalid_bfile(tmp_path: Path):
     assert "not found" in result.output.lower() or "error" in result.output.lower()
 
 
+@pytest.mark.tier1
 def test_cli_gk_custom_outdir(tmp_path: Path):
     """Test that gk command respects custom -outdir."""
     custom_dir = tmp_path / "custom_output_dir"
@@ -126,6 +133,7 @@ def test_cli_gk_custom_outdir(tmp_path: Path):
     assert (custom_dir / "result.log.txt").exists()
 
 
+@pytest.mark.tier1
 def test_cli_gk_custom_prefix(tmp_path: Path):
     """Test that gk command respects custom -o prefix."""
     outdir = tmp_path / "output"
@@ -148,6 +156,7 @@ def test_cli_gk_custom_prefix(tmp_path: Path):
     assert (outdir / "myprefix.log.txt").exists()
 
 
+@pytest.mark.tier1
 def test_cli_lmm_requires_kinship():
     """Test that lmm command requires -k (kinship) flag."""
     result = runner.invoke(main, ["-lmm", "1", "-bfile", str(EXAMPLE_BFILE)])
@@ -156,6 +165,7 @@ def test_cli_lmm_requires_kinship():
     assert "-k" in result.output or "kinship" in result.output.lower()
 
 
+@pytest.mark.tier1
 def test_cli_lmm_mode_2_accepted():
     """Test that lmm mode 2 (LRT) is accepted and doesn't show 'not implemented'."""
     result = runner.invoke(
@@ -168,6 +178,7 @@ def test_cli_lmm_mode_2_accepted():
     assert "kinship matrix file not found" in result.output.lower()
 
 
+@pytest.mark.tier1
 def test_cli_gk_mode_2_succeeds(tmp_path: Path):
     """Test that -gk 2 computes standardized kinship and writes output."""
     outdir = tmp_path / "output"
@@ -186,6 +197,7 @@ def test_cli_gk_mode_2_succeeds(tmp_path: Path):
     assert len(lines) == 100, f"Expected 100 lines, got {len(lines)}"
 
 
+@pytest.mark.tier1
 def test_cli_gk_maf_miss_flags(tmp_path: Path):
     """Test that gk command accepts -maf and -miss flags."""
     outdir = tmp_path / "output"
@@ -218,6 +230,7 @@ def test_cli_gk_maf_miss_flags(tmp_path: Path):
     assert "miss_threshold = 0.1" in log_content
 
 
+@pytest.mark.tier1
 def test_lmm_jax_default_mode4(tmp_path: Path):
     """Test that default JAX backend works with -lmm 4."""
     outdir = tmp_path / "output"
@@ -258,6 +271,7 @@ def test_lmm_jax_default_mode4(tmp_path: Path):
     assert "p_score" in header
 
 
+@pytest.mark.tier1
 def test_lmm_with_covariate_file(tmp_path: Path):
     """Test that lmm command accepts -c option and runs with covariates."""
     outdir = tmp_path / "output"
@@ -299,6 +313,7 @@ def test_lmm_with_covariate_file(tmp_path: Path):
     assert "Loaded 2 covariates" in result.output
 
 
+@pytest.mark.tier1
 def test_lmm_covariate_file_not_found(tmp_path: Path):
     """Test that lmm command fails gracefully when covariate file not found."""
     outdir = tmp_path / "output"
@@ -333,6 +348,7 @@ def test_lmm_covariate_file_not_found(tmp_path: Path):
     assert "Covariate file not found" in result.output
 
 
+@pytest.mark.tier1
 def test_lmm_covariate_sample_mismatch(tmp_path: Path):
     """Test that lmm command fails when covariate row count mismatches samples."""
     outdir = tmp_path / "output"
@@ -373,6 +389,7 @@ def test_lmm_covariate_sample_mismatch(tmp_path: Path):
     assert "100 samples" in result.output
 
 
+@pytest.mark.tier1
 def test_lmm_covariate_intercept_warning(tmp_path: Path):
     """Test that lmm command warns when covariate file lacks intercept column."""
     outdir = tmp_path / "output"
@@ -414,6 +431,7 @@ def test_lmm_covariate_intercept_warning(tmp_path: Path):
     assert "intercept" in result.output.lower()
 
 
+@pytest.mark.tier1
 def test_cli_gk_ksnps_missing_file_error(tmp_path: Path):
     """CLI gk command exits gracefully when -ksnps file doesn't exist."""
     result = runner.invoke(
@@ -433,6 +451,7 @@ def test_cli_gk_ksnps_missing_file_error(tmp_path: Path):
     assert "Error:" in result.output
 
 
+@pytest.mark.tier1
 def test_cli_gk_lmm_mutually_exclusive():
     """Providing both -gk and -lmm should fail with a usage error."""
     result = runner.invoke(
@@ -442,6 +461,7 @@ def test_cli_gk_lmm_mutually_exclusive():
     assert "mutually exclusive" in result.output
 
 
+@pytest.mark.tier1
 def test_cli_requires_gk_or_lmm():
     """Providing -bfile without -gk or -lmm should fail with a usage error."""
     result = runner.invoke(main, ["-bfile", str(EXAMPLE_BFILE)])
@@ -449,6 +469,7 @@ def test_cli_requires_gk_or_lmm():
     assert "One of -gk or -lmm is required" in result.output
 
 
+@pytest.mark.tier1
 @pytest.mark.parametrize(
     "flag,value",
     [
@@ -468,6 +489,7 @@ def test_cli_unimplemented_flags_error(flag: str, value: str):
     assert "not yet implemented" in result.output.lower()
 
 
+@pytest.mark.tier1
 def test_cli_gk_default_no_filtering(tmp_path: Path):
     """Default gk invocation should not apply MAF/miss filtering."""
     outdir = tmp_path / "output"
@@ -478,6 +500,7 @@ def test_cli_gk_default_no_filtering(tmp_path: Path):
     assert "Filtering" not in result.output
 
 
+@pytest.mark.tier1
 def test_cli_gk_explicit_maf_applies_filtering(tmp_path: Path):
     """Explicit -maf with -gk should apply filtering."""
     outdir = tmp_path / "output"
@@ -499,6 +522,7 @@ def test_cli_gk_explicit_maf_applies_filtering(tmp_path: Path):
     assert "MAF >= 0.05" in result.output
 
 
+@pytest.mark.tier1
 def test_lmin_lmax_flags(tmp_path: Path):
     """CLI accepts -lmin and -lmax flags and runs successfully."""
     outdir = tmp_path / "output"
@@ -535,6 +559,7 @@ def test_lmin_lmax_flags(tmp_path: Path):
     assert assoc_path.exists()
 
 
+@pytest.mark.tier1
 def test_lmin_validation():
     """CLI rejects invalid -lmin values."""
     # lmin = 0 should fail
@@ -563,6 +588,7 @@ def test_lmin_validation():
     assert "-lmin must be > 0" in result.output
 
 
+@pytest.mark.tier1
 def test_lmax_validation():
     """CLI rejects -lmax less than or equal to -lmin."""
     result = runner.invoke(
@@ -584,6 +610,7 @@ def test_lmax_validation():
     assert "-lmax must be > -lmin" in result.output
 
 
+@pytest.mark.tier1
 def test_cli_help_shows_lmin_lmax():
     """CLI --help shows -lmin and -lmax flags with defaults."""
     result = runner.invoke(main, ["--help"])
@@ -594,6 +621,7 @@ def test_cli_help_shows_lmin_lmax():
     assert "1e5" in result.output
 
 
+@pytest.mark.tier1
 def test_widv_flag(tmp_path: Path):
     """CLI accepts -widv flag and applies weights to kinship."""
     outdir = tmp_path / "output"
@@ -633,6 +661,7 @@ def test_widv_flag(tmp_path: Path):
     assert (outdir / "result.assoc.txt").exists()
 
 
+@pytest.mark.tier1
 def test_wsnp_not_implemented():
     """CLI rejects -wsnp with 'not yet implemented' error."""
     weight_file = "dummy_snp_weights.txt"
@@ -644,6 +673,7 @@ def test_wsnp_not_implemented():
     assert "not yet implemented" in result.output.lower()
 
 
+@pytest.mark.tier1
 def test_cli_help_shows_widv():
     """CLI --help shows -widv flag."""
     result = runner.invoke(main, ["--help"])
@@ -652,6 +682,7 @@ def test_cli_help_shows_widv():
     assert "weight" in result.output.lower()
 
 
+@pytest.mark.tier1
 def test_cat_flag(tmp_path: Path):
     """CLI accepts -cat flag and applies categorical encoding to covariates."""
     outdir = tmp_path / "output"
@@ -695,6 +726,7 @@ def test_cat_flag(tmp_path: Path):
     assert (outdir / "result.assoc.txt").exists()
 
 
+@pytest.mark.tier1
 def test_cat_requires_covariate_file(tmp_path: Path):
     """CLI rejects -cat without -c (covariate file)."""
     # Use a dummy file for -k (validation fails on -cat before kinship load)
@@ -718,6 +750,7 @@ def test_cat_requires_covariate_file(tmp_path: Path):
     assert "-cat requires -c" in result.output
 
 
+@pytest.mark.tier1
 def test_cli_help_shows_cat():
     """CLI --help shows -cat flag."""
     result = runner.invoke(main, ["--help"])

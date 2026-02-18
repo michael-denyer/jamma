@@ -9,6 +9,7 @@ from jamma.core.memory import estimate_eigendecomp_memory
 from jamma.lmm.eigen import eigendecompose_kinship
 
 
+@pytest.mark.tier0
 class TestEigendecompMemoryEstimate:
     """Tests for memory estimation function."""
 
@@ -35,6 +36,7 @@ class TestEigendecompMemoryEstimate:
         assert 3.9 < ratio < 4.1
 
 
+@pytest.mark.tier0
 class TestEigendecompPreflightCheck:
     """Tests for pre-flight memory check in eigendecompose_kinship."""
 

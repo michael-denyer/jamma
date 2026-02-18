@@ -40,8 +40,16 @@ from dataclasses import dataclass
 class ToleranceConfig:
     """Configuration for numerical comparison tolerances.
 
-    Different types of statistical values require different tolerance levels
-    due to numerical precision characteristics of the underlying computations.
+    Uses numpy's allclose semantics: |a - b| <= atol + rtol * |b|
+
+    When comparing values near zero (e.g., p-value = 1e-15), relative
+    tolerance alone is misleading -- "100% relative error" on a biologically
+    irrelevant value. The atol floor (default 1e-12) ensures values smaller
+    than atol are considered equal regardless of relative difference.
+
+    Example: atol=1e-12, rtol=1e-4
+    - Comparing 0.05 vs 0.0500001: rtol dominates (relative check)
+    - Comparing 1e-15 vs 2e-15: atol dominates (both effectively zero)
 
     Tolerance values are calibrated based on empirical comparison between
     JAMMA (JAX-based) and GEMMA (GSL-based) implementations on the mouse_hs1940
@@ -73,7 +81,9 @@ class ToleranceConfig:
         af_rtol: Relative tolerance for allele frequency.
             JAMMA reports MAF (<=0.5), GEMMA reports AF (can be >0.5).
             Comparison normalizes both to MAF before comparing.
-        atol: Absolute tolerance for values near zero.
+        atol: Absolute tolerance floor for near-zero comparisons.
+            Values smaller than atol are considered equal regardless of
+            relative difference. Used by np.allclose: |a-b| <= atol + rtol*|b|
 
     Example:
         >>> config = ToleranceConfig()
@@ -89,9 +99,12 @@ class ToleranceConfig:
     beta_rtol: float = 1e-2
     # SE: follows beta sensitivity pattern
     se_rtol: float = 1e-5
-    # P-values: CDF implementation differences (JAX betainc vs GSL)
+    # P-values (Wald/Score): CDF implementation differences (JAX betainc vs GSL)
     # Max observed: 4.1e-5. Scientific thresholds (0.05, 0.01, etc.) unaffected.
     pvalue_rtol: float = 1e-4
+    # LRT p-values: wider than Wald/Score due to chi-squared distribution
+    # magnifying small log-likelihood differences, especially with covariates.
+    p_lrt_rtol: float = 5e-3
     # Kinship: direct matrix computation, tightest tolerance
     kinship_rtol: float = 1e-8
     # Log-likelihood: REML logl max observed 3.2e-7. Per-SNP MLE logl_H1 can be
@@ -102,6 +115,9 @@ class ToleranceConfig:
     lambda_rtol: float = 2e-5
     # AF: JAMMA reports MAF (<=0.5), GEMMA reports AF. Max diff from rounding: 0.04
     af_rtol: float = 0.05
+    # Absolute tolerance floor for near-zero comparisons.
+    # Values smaller than atol are considered equal regardless of relative difference.
+    # Used by np.allclose: |a-b| <= atol + rtol*|b|
     atol: float = 1e-12
 
     @classmethod

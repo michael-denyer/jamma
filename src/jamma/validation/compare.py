@@ -570,25 +570,26 @@ def compare_assoc_results(
     if config is None:
         config = ToleranceConfig()
 
-    # Detect test type from reference data
-    # All-tests has ALL of p_wald, p_lrt, p_score populated
-    # Must check before individual test type checks (all-tests has p_wald set)
-    is_all_tests = (
-        len(expected) > 0
-        and expected[0].p_wald is not None
-        and expected[0].p_lrt is not None
-        and expected[0].p_score is not None
+    # Detect test type from reference data using majority of first N records
+    # (not just first record, to handle degenerate/NaN first SNP)
+    _SAMPLE_SIZE = min(5, len(expected))
+    sample = expected[:_SAMPLE_SIZE]
+
+    is_all_tests = len(sample) > 0 and all(
+        r.p_wald is not None and r.p_lrt is not None and r.p_score is not None
+        for r in sample
     )
-    # Score test has p_score only; LRT has p_lrt only; Wald has p_wald only
     is_score_test = (
-        len(expected) > 0
-        and expected[0].p_score is not None
-        and expected[0].p_wald is None
+        len(sample) > 0
+        and not is_all_tests
+        and all(r.p_score is not None for r in sample)
+        and all(r.p_wald is None for r in sample)
     )
     is_lrt_test = (
-        len(expected) > 0
-        and expected[0].p_lrt is not None
-        and expected[0].p_wald is None
+        len(sample) > 0
+        and not is_all_tests
+        and all(r.p_lrt is not None for r in sample)
+        and all(r.p_wald is None for r in sample)
     )
 
     # Helper to create skipped comparison result
@@ -683,10 +684,8 @@ def compare_assoc_results(
             actual_pscore, expected_pscore, config.pvalue_rtol, config.atol, "p_score"
         )
 
-        # LRT p-values: RELAXED tolerance (rtol=5e-3) per Phase 7.1 decision [07.1-02]
+        # LRT p-values use wider tolerance from config (default 5e-3).
         # Chi-squared distribution magnifies small log-likelihood differences.
-        # Covariate models compound the effect, requiring slightly wider margin.
-        lrt_pvalue_rtol = 5e-3
         actual_plrt = np.array(
             [r.p_lrt if r.p_lrt is not None else np.nan for r in actual]
         )
@@ -694,7 +693,7 @@ def compare_assoc_results(
             [r.p_lrt if r.p_lrt is not None else np.nan for r in expected]
         )
         p_lrt_result = compare_arrays(
-            actual_plrt, expected_plrt, lrt_pvalue_rtol, config.atol, "p_lrt"
+            actual_plrt, expected_plrt, config.p_lrt_rtol, config.atol, "p_lrt"
         )
 
         # logl_H1: compare if present in reference (all_tests_full format)

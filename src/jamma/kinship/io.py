@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
+from loguru import logger
 
 
 def read_kinship_matrix(path: Path, n_samples: int | None = None) -> np.ndarray:
@@ -19,6 +20,13 @@ def read_kinship_matrix(path: Path, n_samples: int | None = None) -> np.ndarray:
     Raises:
         ValueError: If matrix is not square, not symmetric, or dimension mismatch
     """
+    if n_samples is not None and n_samples > 50_000:
+        logger.warning(
+            f"Reading {n_samples}x{n_samples} kinship matrix from text file. "
+            f"This may be slow (~{n_samples**2 * 24 / 1e9:.0f}GB parse memory). "
+            "Consider binary kinship format for large cohorts."
+        )
+
     # Load matrix - handles tab and space separated
     K = np.loadtxt(path, dtype=np.float64)
 

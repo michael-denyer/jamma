@@ -28,7 +28,8 @@ from jamma.lmm.runner_jax import run_lmm_association_jax
 from jamma.validation import load_gemma_kinship
 
 # Fixture paths
-FIXTURE_DIR = Path("tests/fixtures/gemma_synthetic")
+_FIXTURE_ROOT = Path(__file__).parent / "fixtures"
+FIXTURE_DIR = _FIXTURE_ROOT / "gemma_synthetic"
 PLINK_PREFIX = FIXTURE_DIR / "test"
 GEMMA_KINSHIP = FIXTURE_DIR / "gemma_kinship.cXX.txt"
 GEMMA_ASSOC = FIXTURE_DIR / "gemma_assoc.assoc.txt"
@@ -68,6 +69,7 @@ def gemma_assoc():
     return pd.read_csv(GEMMA_ASSOC, sep="\t")
 
 
+@pytest.mark.tier1
 class TestGemmaKinshipValidation:
     """Validate JAMMA kinship against pre-computed GEMMA reference."""
 
@@ -101,6 +103,7 @@ class TestGemmaKinshipValidation:
         assert np.array_equal(k1, k2), "JAMMA kinship is not deterministic"
 
 
+@pytest.mark.tier1
 class TestGemmaLmmValidation:
     """Validate JAMMA LMM against pre-computed GEMMA reference."""
 
@@ -230,6 +233,7 @@ class TestGemmaLmmValidation:
         )
 
 
+@pytest.mark.tier1
 class TestGemmaSyntheticDataProperties:
     """Verify properties of the synthetic fixture data."""
 

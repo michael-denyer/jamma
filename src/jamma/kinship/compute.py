@@ -509,7 +509,7 @@ def compute_kinship_streaming(
     # Memory check before allocation
     # Check against full pipeline peak (eigendecomp) since it always follows kinship.
     if check_memory:
-        est = estimate_streaming_memory(n_samples, n_snps, chunk_size)
+        est = estimate_streaming_memory(n_samples, chunk_size=chunk_size)
         check_memory_available(
             est.total_peak_gb,
             safety_margin=0.1,

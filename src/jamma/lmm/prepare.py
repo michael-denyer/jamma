@@ -35,8 +35,8 @@ def _select_jax_device(use_gpu: bool) -> jax.Device:
             gpu_devices = jax.devices("gpu")
             if gpu_devices:
                 device = gpu_devices[0]
-        except RuntimeError:
-            pass
+        except RuntimeError as e:
+            logger.warning(f"GPU requested but not available, falling back to CPU: {e}")
     return device
 
 

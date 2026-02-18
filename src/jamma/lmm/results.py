@@ -2,6 +2,9 @@
 
 Constructs AssocResult objects from computed statistics for each
 test mode (Wald, Score, LRT, All). Used by both batch and streaming runners.
+
+# TODO(jamma-e32): Profile AssocResult creation overhead in streaming path.
+# If format is the bottleneck, write directly from numpy arrays.
 """
 
 from collections.abc import Generator
@@ -38,184 +41,86 @@ def _snp_metadata(snp_info: dict, af: float, n_miss: int) -> dict:
     }
 
 
-def _build_results_wald(
+# Maps lmm_mode to (array_key, AssocResult_field) pairs for stat columns.
+# Array keys match _ACCUM_KEYS in runner_streaming.py and _compute_lmm_chunk output.
+_RESULT_FIELDS: dict[int, dict[str, str]] = {
+    1: {  # Wald
+        "betas": "beta",
+        "ses": "se",
+        "logls": "logl_H1",
+        "lambdas": "l_remle",
+        "pwalds": "p_wald",
+    },
+    2: {  # LRT -- beta=NaN, se=NaN handled separately
+        "lambdas_mle": "l_mle",
+        "p_lrts": "p_lrt",
+    },
+    3: {  # Score
+        "betas": "beta",
+        "ses": "se",
+        "p_scores": "p_score",
+    },
+    4: {  # All
+        "betas": "beta",
+        "ses": "se",
+        "logls": "logl_H1",
+        "lambdas": "l_remle",
+        "lambdas_mle": "l_mle",
+        "pwalds": "p_wald",
+        "p_lrts": "p_lrt",
+        "p_scores": "p_score",
+    },
+}
+
+
+def _build_results(
+    lmm_mode: int,
     snp_indices: np.ndarray,
     filtered_afs: np.ndarray,
     filtered_miss: np.ndarray,
     snp_info: list,
-    best_lambdas_np: np.ndarray,
-    best_logls_np: np.ndarray,
-    betas_np: np.ndarray,
-    ses_np: np.ndarray,
-    p_walds_np: np.ndarray,
+    arrays: dict[str, np.ndarray],
 ) -> list[AssocResult]:
-    """Build AssocResult objects for Wald test mode.
+    """Build AssocResult objects for any LMM test mode.
 
     Args:
+        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
         snp_indices: Indices of SNPs that passed filtering.
-        filtered_afs: Allele frequencies for filtered SNPs (numpy array).
-        filtered_miss: Missing counts for filtered SNPs (numpy int array).
+        filtered_afs: Allele frequencies for filtered SNPs.
+        filtered_miss: Missing counts for filtered SNPs.
         snp_info: Full SNP metadata list.
-        best_lambdas_np: Optimal REML lambda values.
-        best_logls_np: Log-likelihoods at optimal lambda.
-        betas_np: Effect sizes.
-        ses_np: Standard errors.
-        p_walds_np: Wald test p-values.
+        arrays: Dict mapping stat name -> numpy array of values.
 
     Returns:
         List of AssocResult objects.
     """
+    if lmm_mode not in _RESULT_FIELDS:
+        raise ValueError(
+            f"Unknown lmm_mode={lmm_mode}; expected one of {list(_RESULT_FIELDS)}"
+        )
+    field_map = _RESULT_FIELDS[lmm_mode]
+    missing_keys = set(field_map.keys()) - set(arrays.keys())
+    if missing_keys:
+        raise ValueError(
+            f"Missing arrays for lmm_mode={lmm_mode}: {missing_keys}. "
+            f"Expected keys: {set(field_map.keys())}, got: {set(arrays.keys())}"
+        )
     results = []
     for j, snp_idx in enumerate(snp_indices):
         af = float(filtered_afs[j])
         n_miss = int(filtered_miss[j])
         meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
-        results.append(
-            AssocResult(
-                **meta,
-                beta=float(betas_np[j]),
-                se=float(ses_np[j]),
-                logl_H1=float(best_logls_np[j]),
-                l_remle=float(best_lambdas_np[j]),
-                p_wald=float(p_walds_np[j]),
-            )
-        )
-    return results
 
+        # LRT mode: beta and se are NaN (not computed)
+        if lmm_mode == 2:
+            meta["beta"] = float("nan")
+            meta["se"] = float("nan")
 
-def _build_results_score(
-    snp_indices: np.ndarray,
-    filtered_afs: np.ndarray,
-    filtered_miss: np.ndarray,
-    snp_info: list,
-    betas_np: np.ndarray,
-    ses_np: np.ndarray,
-    p_scores_np: np.ndarray,
-) -> list[AssocResult]:
-    """Build AssocResult objects for Score test mode.
+        # Populate stat fields from arrays
+        for array_key, field_name in field_map.items():
+            meta[field_name] = float(arrays[array_key][j])
 
-    Args:
-        snp_indices: Indices of SNPs that passed filtering.
-        filtered_afs: Allele frequencies for filtered SNPs (numpy array).
-        filtered_miss: Missing counts for filtered SNPs (numpy int array).
-        snp_info: Full SNP metadata list.
-        betas_np: Effect sizes (informational only).
-        ses_np: Standard errors (informational only).
-        p_scores_np: Score test p-values.
-
-    Returns:
-        List of AssocResult objects with p_score set.
-    """
-    results = []
-    for j, snp_idx in enumerate(snp_indices):
-        af = float(filtered_afs[j])
-        n_miss = int(filtered_miss[j])
-        meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
-        results.append(
-            AssocResult(
-                **meta,
-                beta=float(betas_np[j]),
-                se=float(ses_np[j]),
-                p_score=float(p_scores_np[j]),
-            )
-        )
-    return results
-
-
-def _build_results_lrt(
-    snp_indices: np.ndarray,
-    filtered_afs: np.ndarray,
-    filtered_miss: np.ndarray,
-    snp_info: list,
-    lambdas_mle_np: np.ndarray,
-    p_lrts_np: np.ndarray,
-) -> list[AssocResult]:
-    """Build AssocResult objects for LRT mode.
-
-    LRT does not compute beta/se (matching GEMMA -lmm 2 output format).
-
-    Args:
-        snp_indices: Indices of SNPs that passed filtering.
-        filtered_afs: Allele frequencies for filtered SNPs (numpy array).
-        filtered_miss: Missing counts for filtered SNPs (numpy int array).
-        snp_info: Full SNP metadata list.
-        lambdas_mle_np: MLE lambda values per SNP.
-        p_lrts_np: LRT p-values.
-
-    Returns:
-        List of AssocResult objects with l_mle and p_lrt set.
-    """
-    results = []
-    for j, snp_idx in enumerate(snp_indices):
-        af = float(filtered_afs[j])
-        n_miss = int(filtered_miss[j])
-        meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
-        results.append(
-            AssocResult(
-                **meta,
-                beta=float("nan"),
-                se=float("nan"),
-                l_mle=float(lambdas_mle_np[j]),
-                p_lrt=float(p_lrts_np[j]),
-            )
-        )
-    return results
-
-
-def _build_results_all(
-    snp_indices: np.ndarray,
-    filtered_afs: np.ndarray,
-    filtered_miss: np.ndarray,
-    snp_info: list,
-    best_lambdas_np: np.ndarray,
-    best_logls_np: np.ndarray,
-    betas_np: np.ndarray,
-    ses_np: np.ndarray,
-    p_walds_np: np.ndarray,
-    lambdas_mle_np: np.ndarray,
-    p_lrts_np: np.ndarray,
-    p_scores_np: np.ndarray,
-) -> list[AssocResult]:
-    """Build AssocResult objects for All-tests mode (Wald + LRT + Score).
-
-    Uses Wald beta/se (not Score beta/se) and REML logl_H1 (not MLE),
-    matching the NumPy runner output at __init__.py:331-347.
-
-    Args:
-        snp_indices: Indices of SNPs that passed filtering.
-        filtered_afs: Allele frequencies for filtered SNPs (numpy array).
-        filtered_miss: Missing counts for filtered SNPs (numpy int array).
-        snp_info: Full SNP metadata list.
-        best_lambdas_np: Optimal REML lambda values (Wald).
-        best_logls_np: REML log-likelihoods at optimal lambda.
-        betas_np: Effect sizes from Wald test.
-        ses_np: Standard errors from Wald test.
-        p_walds_np: Wald test p-values.
-        lambdas_mle_np: MLE lambda values per SNP (LRT).
-        p_lrts_np: LRT p-values.
-        p_scores_np: Score test p-values.
-
-    Returns:
-        List of AssocResult objects with all fields populated.
-    """
-    results = []
-    for j, snp_idx in enumerate(snp_indices):
-        af = float(filtered_afs[j])
-        n_miss = int(filtered_miss[j])
-        meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
-        results.append(
-            AssocResult(
-                **meta,
-                beta=float(betas_np[j]),
-                se=float(ses_np[j]),
-                logl_H1=float(best_logls_np[j]),
-                l_remle=float(best_lambdas_np[j]),
-                l_mle=float(lambdas_mle_np[j]),
-                p_wald=float(p_walds_np[j]),
-                p_lrt=float(p_lrts_np[j]),
-                p_score=float(p_scores_np[j]),
-            )
-        )
+        results.append(AssocResult(**meta))
     return results
 
 
@@ -261,48 +166,33 @@ def _yield_chunk_results(
     Yields:
         AssocResult for each SNP in the chunk.
     """
+    if lmm_mode not in _RESULT_FIELDS:
+        raise ValueError(
+            f"Unknown lmm_mode={lmm_mode}; expected one of {list(_RESULT_FIELDS)}"
+        )
+    field_map = _RESULT_FIELDS[lmm_mode]
+    missing_keys = set(field_map.keys()) - set(arrays.keys())
+    if missing_keys:
+        raise ValueError(
+            f"Missing arrays for lmm_mode={lmm_mode}: {missing_keys}. "
+            f"Expected keys: {set(field_map.keys())}, got: {set(arrays.keys())}"
+        )
     for j, local_idx in enumerate(chunk_filtered_local_idx):
         snp_idx = snp_indices[local_idx]
         af = float(filtered_afs[local_idx])
         n_miss = int(filtered_miss[local_idx])
         meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
 
-        if lmm_mode == 1:
-            yield AssocResult(
-                **meta,
-                beta=float(arrays["betas"][j]),
-                se=float(arrays["ses"][j]),
-                logl_H1=float(arrays["logls"][j]),
-                l_remle=float(arrays["lambdas"][j]),
-                p_wald=float(arrays["pwalds"][j]),
-            )
-        elif lmm_mode == 3:
-            yield AssocResult(
-                **meta,
-                beta=float(arrays["betas"][j]),
-                se=float(arrays["ses"][j]),
-                p_score=float(arrays["p_scores"][j]),
-            )
-        elif lmm_mode == 2:
-            yield AssocResult(
-                **meta,
-                beta=float("nan"),
-                se=float("nan"),
-                l_mle=float(arrays["lambdas_mle"][j]),
-                p_lrt=float(arrays["p_lrts"][j]),
-            )
-        elif lmm_mode == 4:
-            yield AssocResult(
-                **meta,
-                beta=float(arrays["betas"][j]),
-                se=float(arrays["ses"][j]),
-                logl_H1=float(arrays["logls"][j]),
-                l_remle=float(arrays["lambdas"][j]),
-                l_mle=float(arrays["lambdas_mle"][j]),
-                p_wald=float(arrays["pwalds"][j]),
-                p_lrt=float(arrays["p_lrts"][j]),
-                p_score=float(arrays["p_scores"][j]),
-            )
+        # LRT mode: beta and se are NaN (not computed)
+        if lmm_mode == 2:
+            meta["beta"] = float("nan")
+            meta["se"] = float("nan")
+
+        # Populate stat fields from arrays
+        for array_key, field_name in field_map.items():
+            meta[field_name] = float(arrays[array_key][j])
+
+        yield AssocResult(**meta)
 
 
 def _count_boundary_hits(

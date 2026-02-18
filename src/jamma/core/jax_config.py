@@ -76,12 +76,34 @@ def configure_jax(
 _jax_configured = False
 
 
-def ensure_jax_configured() -> None:
-    """Configure JAX for 64-bit precision. Idempotent -- safe to call multiple times."""
+def ensure_jax_configured(
+    enable_x64: bool = True,
+    platform: str | None = None,
+) -> None:
+    """Configure JAX for 64-bit precision. Idempotent -- safe to call multiple times.
+
+    Raises RuntimeError if called with non-default arguments after JAX has already
+    been configured, since the configuration is locked after first call.
+
+    Args:
+        enable_x64: Enable 64-bit precision (default True).
+        platform: JAX platform override (default None = auto-detect).
+
+    Raises:
+        RuntimeError: If called with non-default args after JAX is already configured.
+    """
     global _jax_configured
     if _jax_configured:
+        if not enable_x64 or platform is not None:
+            raise RuntimeError(
+                "ensure_jax_configured() called with non-default args after "
+                "JAX already configured. JAX configuration is locked after "
+                f"first call. Requested: enable_x64={enable_x64}, "
+                f"platform={platform}. Call configure_jax() before any "
+                "other JAMMA operations to override defaults."
+            )
         return
-    configure_jax()
+    configure_jax(enable_x64=enable_x64, platform=platform)
     _jax_configured = True
 
 
@@ -138,11 +160,8 @@ def verify_jax_installation() -> bool:
         # Run JIT-compiled function
         result = _matmul_test(a, b)
 
-        # Verify result shape and approximate values
+        # Verify result values
         expected = jnp.array([[19.0, 22.0], [43.0, 50.0]])
-        if result.shape != (2, 2):
-            raise RuntimeError(f"Unexpected result shape: {result.shape}")
-
         if not jnp.allclose(result, expected):
             raise RuntimeError(f"Incorrect matmul result: {result}")
 

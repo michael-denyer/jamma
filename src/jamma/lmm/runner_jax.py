@@ -26,11 +26,9 @@ from jamma.lmm.prepare import (
     _select_jax_device,
 )
 from jamma.lmm.results import (
-    _build_results_all,
-    _build_results_lrt,
-    _build_results_score,
-    _build_results_wald,
-    _count_boundary_hits,
+    _RESULT_FIELDS,
+    _build_results,
+    count_lambda_boundary_hits,
     log_lambda_boundary_warning,
 )
 from jamma.lmm.stats import AssocResult
@@ -75,7 +73,8 @@ def run_lmm_association_jax(
         l_min: Minimum lambda for optimization.
         l_max: Maximum lambda for optimization.
         n_grid: Grid search resolution for lambda bracketing.
-        n_refine: Golden section iterations (min 20 for 1e-5 tolerance).
+        n_refine: Golden section iterations (clamped to min 20
+            internally for ~1e-5 tolerance).
         use_gpu: Whether to use GPU acceleration.
         check_memory: Check available memory before workflow.
         show_progress: Show progress bars and GEMMA-style logging.
@@ -213,31 +212,11 @@ def run_lmm_association_jax(
                 f"  Processing in {n_chunks} chunks ({chunk_size:,} SNPs/chunk)"
             )
 
-    # Pre-allocate result arrays (replaces list accumulators)
+    # Pre-allocate result arrays driven by _RESULT_FIELDS mapping
     write_offset = 0
-
-    if lmm_mode == 1:  # Wald
-        lambdas_out = np.empty(n_filtered, dtype=np.float64)
-        logls_out = np.empty(n_filtered, dtype=np.float64)
-        betas_out = np.empty(n_filtered, dtype=np.float64)
-        ses_out = np.empty(n_filtered, dtype=np.float64)
-        pwalds_out = np.empty(n_filtered, dtype=np.float64)
-    elif lmm_mode == 3:  # Score
-        betas_out = np.empty(n_filtered, dtype=np.float64)
-        ses_out = np.empty(n_filtered, dtype=np.float64)
-        p_scores_out = np.empty(n_filtered, dtype=np.float64)
-    elif lmm_mode == 2:  # LRT
-        lambdas_mle_out = np.empty(n_filtered, dtype=np.float64)
-        p_lrts_out = np.empty(n_filtered, dtype=np.float64)
-    elif lmm_mode == 4:  # All tests
-        lambdas_out = np.empty(n_filtered, dtype=np.float64)
-        logls_out = np.empty(n_filtered, dtype=np.float64)
-        betas_out = np.empty(n_filtered, dtype=np.float64)
-        ses_out = np.empty(n_filtered, dtype=np.float64)
-        pwalds_out = np.empty(n_filtered, dtype=np.float64)
-        lambdas_mle_out = np.empty(n_filtered, dtype=np.float64)
-        p_lrts_out = np.empty(n_filtered, dtype=np.float64)
-        p_scores_out = np.empty(n_filtered, dtype=np.float64)
+    arrays_out: dict[str, np.ndarray] = {
+        key: np.empty(n_filtered, dtype=np.float64) for key in _RESULT_FIELDS[lmm_mode]
+    }
 
     def _prepare_chunk(start: int) -> tuple[jnp.ndarray, int, bool]:
         """Prepare a chunk for device transfer (CPU work)."""
@@ -332,28 +311,8 @@ def run_lmm_association_jax(
         slice_len = actual_chunk_len if needs_padding else len(first_arr)
         s = slice(write_offset, write_offset + slice_len)
 
-        if lmm_mode == 1:
-            lambdas_out[s] = np.asarray(cr["lambdas"][:slice_len])
-            logls_out[s] = np.asarray(cr["logls"][:slice_len])
-            betas_out[s] = np.asarray(cr["betas"][:slice_len])
-            ses_out[s] = np.asarray(cr["ses"][:slice_len])
-            pwalds_out[s] = np.asarray(cr["pwalds"][:slice_len])
-        elif lmm_mode == 3:
-            betas_out[s] = np.asarray(cr["betas"][:slice_len])
-            ses_out[s] = np.asarray(cr["ses"][:slice_len])
-            p_scores_out[s] = np.asarray(cr["p_scores"][:slice_len])
-        elif lmm_mode == 2:
-            lambdas_mle_out[s] = np.asarray(cr["lambdas_mle"][:slice_len])
-            p_lrts_out[s] = np.asarray(cr["p_lrts"][:slice_len])
-        elif lmm_mode == 4:
-            lambdas_out[s] = np.asarray(cr["lambdas"][:slice_len])
-            logls_out[s] = np.asarray(cr["logls"][:slice_len])
-            betas_out[s] = np.asarray(cr["betas"][:slice_len])
-            ses_out[s] = np.asarray(cr["ses"][:slice_len])
-            pwalds_out[s] = np.asarray(cr["pwalds"][:slice_len])
-            lambdas_mle_out[s] = np.asarray(cr["lambdas_mle"][:slice_len])
-            p_lrts_out[s] = np.asarray(cr["p_lrts"][:slice_len])
-            p_scores_out[s] = np.asarray(cr["p_scores"][:slice_len])
+        for key in arrays_out:
+            arrays_out[key][s] = np.asarray(cr[key][:slice_len])
 
         write_offset += slice_len
 
@@ -368,15 +327,9 @@ def run_lmm_association_jax(
         log_rss_memory("lmm_jax", "after_all_chunks")
 
     # Lambda boundary convergence diagnostics
-    n_at_lmin, n_at_lmax = 0, 0
-    if lmm_mode in (1, 4):
-        lmin_hits, lmax_hits = _count_boundary_hits(lambdas_out, l_min, l_max)
-        n_at_lmin += lmin_hits
-        n_at_lmax += lmax_hits
-    if lmm_mode in (2, 4):
-        lmin_hits, lmax_hits = _count_boundary_hits(lambdas_mle_out, l_min, l_max)
-        n_at_lmin += lmin_hits
-        n_at_lmax += lmax_hits
+    n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
+        lmm_mode, arrays_out, l_min, l_max
+    )
     log_lambda_boundary_warning(n_at_lmin, n_at_lmax, l_min, l_max)
 
     # Explicit cleanup of JAX arrays before returning to prevent SIGSEGV
@@ -389,49 +342,6 @@ def run_lmm_association_jax(
     if show_progress:
         logger.info(f"LMM Association completed in {elapsed:.2f}s")
 
-    if lmm_mode == 1:
-        return _build_results_wald(
-            snp_indices,
-            filtered_afs,
-            filtered_miss,
-            snp_info,
-            lambdas_out,
-            logls_out,
-            betas_out,
-            ses_out,
-            pwalds_out,
-        )
-    elif lmm_mode == 3:
-        return _build_results_score(
-            snp_indices,
-            filtered_afs,
-            filtered_miss,
-            snp_info,
-            betas_out,
-            ses_out,
-            p_scores_out,
-        )
-    elif lmm_mode == 2:
-        return _build_results_lrt(
-            snp_indices,
-            filtered_afs,
-            filtered_miss,
-            snp_info,
-            lambdas_mle_out,
-            p_lrts_out,
-        )
-    else:  # lmm_mode == 4 (validated at top)
-        return _build_results_all(
-            snp_indices,
-            filtered_afs,
-            filtered_miss,
-            snp_info,
-            lambdas_out,
-            logls_out,
-            betas_out,
-            ses_out,
-            pwalds_out,
-            lambdas_mle_out,
-            p_lrts_out,
-            p_scores_out,
-        )
+    return _build_results(
+        lmm_mode, snp_indices, filtered_afs, filtered_miss, snp_info, arrays_out
+    )

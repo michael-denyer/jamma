@@ -12,7 +12,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.core import configure_jax
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood import (
     compute_null_model_lambda,
@@ -23,12 +22,6 @@ from jamma.lmm.likelihood import (
 )
 from jamma.lmm.runner_jax import run_lmm_association_jax
 from jamma.lmm.stats import calc_lrt_test
-
-
-@pytest.fixture(autouse=True)
-def setup_jax():
-    """Configure JAX with 64-bit precision before each test."""
-    configure_jax(enable_x64=True)
 
 
 def _create_test_data(n_samples: int = 100, n_cvt: int = 1, seed: int = 42):
@@ -70,6 +63,7 @@ def _create_test_data(n_samples: int = 100, n_cvt: int = 1, seed: int = 42):
     }
 
 
+@pytest.mark.tier0
 class TestMLELogLikelihood:
     """Unit tests for MLE log-likelihood formula."""
 
@@ -120,6 +114,7 @@ class TestMLELogLikelihood:
         assert all(np.isfinite(v) for v in mle_vals), "All MLE values should be finite"
 
 
+@pytest.mark.tier0
 class TestComputeNullModelMLE:
     """Tests for null model MLE computation."""
 
@@ -152,6 +147,7 @@ class TestComputeNullModelMLE:
         assert 1e-5 <= lambda_mle <= 1e5, "MLE lambda should be in bounds"
 
 
+@pytest.mark.tier0
 class TestCalcLRTTest:
     """Tests for LRT p-value computation."""
 
@@ -189,6 +185,7 @@ class TestCalcLRTTest:
         np.testing.assert_allclose(p_jamma, p_scipy, rtol=1e-10)
 
 
+@pytest.mark.tier0
 class TestLRTIntegration:
     """Integration tests for LRT via run_lmm_association_jax."""
 
@@ -248,6 +245,7 @@ class TestLRTIntegration:
         )
 
 
+@pytest.mark.tier1
 class TestGEMMALRTValidation:
     """Validation tests against GEMMA LRT reference data."""
 

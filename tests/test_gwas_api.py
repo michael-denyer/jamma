@@ -98,18 +98,21 @@ def test_gwas_with_precomputed_kinship(tmp_path: Path) -> None:
     assert result.n_samples > 0
 
 
+@pytest.mark.tier0
 def test_gwas_missing_bfile() -> None:
     """gwas() raises FileNotFoundError for nonexistent bfile."""
     with pytest.raises(FileNotFoundError):
         gwas("/nonexistent/path", check_memory=False, show_progress=False)
 
 
+@pytest.mark.tier0
 def test_gwas_invalid_lmm_mode() -> None:
     """gwas() raises ValueError for invalid lmm_mode."""
     with pytest.raises(ValueError, match="lmm_mode must be"):
         gwas(BFILE, lmm_mode=99, check_memory=False, show_progress=False)
 
 
+@pytest.mark.tier0
 def test_gwas_import_from_top_level() -> None:
     """gwas and GWASResult are importable from the top-level jamma package."""
     from jamma import GWASResult as GR

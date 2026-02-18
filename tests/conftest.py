@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 #   - Example: test_streaming_large_dataset, test_memory_estimation_accuracy
 #   - Run: pytest -m tier2
 #
-# The existing @pytest.mark.slow is an alias for tier2.
+# @pytest.mark.slow is independent (not tied to a specific tier).
 #
 # Quick reference:
 #   pytest -m tier0           # Fast tests only (~30s total)
@@ -45,12 +45,6 @@ if TYPE_CHECKING:
 #   pytest -m "not tier2"     # Exclude slow/memory tests
 #   pytest                    # All tests
 # =============================================================================
-
-
-def pytest_configure(config):
-    """Register custom markers and provide tier documentation."""
-    # Markers are registered in pyproject.toml, but we can add runtime config here
-    pass
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -101,3 +95,97 @@ def tolerance_config() -> ToleranceConfig:
     from jamma.validation import ToleranceConfig
 
     return ToleranceConfig()
+
+
+@pytest.fixture(scope="session")
+def validation_pipeline_data():
+    """Run LMM pipeline once on gemma_synthetic data for validation tests.
+
+    Returns dict with keys: jamma_results, reference_results, comparison.
+
+    Session-scoped: all validation tests share one pipeline run, avoiding
+    the cost of running the full association pipeline 3x.
+
+    Returns None if reference data is not available (tests should skip).
+    """
+    import numpy as np
+
+    fixture_root = Path(__file__).parent / "fixtures"
+    example_data = fixture_root / "gemma_synthetic" / "test"
+    reference_assoc = fixture_root / "gemma_synthetic" / "gemma_assoc.assoc.txt"
+
+    if not reference_assoc.exists():
+        return None
+
+    from jamma.io import load_plink_binary
+    from jamma.kinship.io import read_kinship_matrix
+    from jamma.lmm.runner_jax import run_lmm_association_jax
+    from jamma.validation import (
+        ToleranceConfig,
+        compare_assoc_results,
+        load_gemma_assoc,
+    )
+
+    reference_kinship = fixture_root / "gemma_synthetic" / "gemma_kinship.cXX.txt"
+
+    plink_data = load_plink_binary(example_data)
+    kinship = read_kinship_matrix(reference_kinship)
+    reference_results = load_gemma_assoc(reference_assoc)
+
+    # Load phenotypes from .fam file
+    fam_path = example_data.with_suffix(".fam")
+    phenotypes = []
+    with open(fam_path) as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) >= 6:
+                val = parts[5]
+                if val == "-9" or val == "NA":
+                    phenotypes.append(np.nan)
+                else:
+                    phenotypes.append(float(val))
+    phenotypes = np.array(phenotypes)
+
+    # Build SNP info
+    snp_info = [
+        {
+            "chr": str(plink_data.chromosome[i]),
+            "rs": plink_data.sid[i],
+            "pos": plink_data.bp_position[i],
+            "a1": plink_data.allele_1[i],
+            "a0": plink_data.allele_2[i],
+            "maf": 0.0,
+            "n_miss": 0,
+        }
+        for i in range(plink_data.n_snps)
+    ]
+
+    jamma_results = run_lmm_association_jax(
+        genotypes=plink_data.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        show_progress=False,
+        check_memory=False,
+    )
+
+    jax_tolerances = ToleranceConfig(lambda_rtol=5e-5)
+    comparison = compare_assoc_results(
+        jamma_results, reference_results, config=jax_tolerances
+    )
+
+    result = {
+        "jamma_results": jamma_results,
+        "reference_results": reference_results,
+        "comparison": comparison,
+    }
+
+    # Mark arrays as read-only to prevent accidental mutation in session scope
+    for r_list in (jamma_results, reference_results):
+        for r in r_list:
+            for attr_name in ("beta", "se", "p_wald", "logl_H1", "l_remle", "af"):
+                val = getattr(r, attr_name, None)
+                if isinstance(val, np.ndarray):
+                    val.flags.writeable = False
+
+    return result

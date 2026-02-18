@@ -374,7 +374,7 @@ class PipelineRunner:
         return phenotypes, n_analyzed
 
     def check_memory_requirements(
-        self, n_samples: int, n_snps: int
+        self, n_samples: int, n_snps: int, n_cvt: int = 1
     ) -> StreamingMemoryBreakdown | None:
         """Check memory requirements if memory checking is enabled.
 
@@ -383,8 +383,9 @@ class PipelineRunner:
         available system memory.
 
         Args:
-            n_samples: Number of samples in the dataset.
+            n_samples: Number of valid samples (after phenotype/covariate filtering).
             n_snps: Number of SNPs in the dataset.
+            n_cvt: Number of covariates (affects Uab array sizing).
 
         Returns:
             StreamingMemoryBreakdown if check_memory is True, None otherwise.
@@ -395,8 +396,10 @@ class PipelineRunner:
         if not self.config.check_memory:
             return None
 
-        actual_chunk = _compute_chunk_size(n_samples, n_snps)
-        est = estimate_streaming_memory(n_samples, n_snps, chunk_size=actual_chunk)
+        actual_chunk = _compute_chunk_size(n_samples, n_snps, n_cvt=n_cvt)
+        est = estimate_streaming_memory(
+            n_samples, n_snps, chunk_size=actual_chunk, n_cvt=n_cvt
+        )
 
         logger.info(
             f"Memory estimate: {est.total_peak_gb:.1f}GB required, "
@@ -585,11 +588,7 @@ class PipelineRunner:
         n_samples = meta["n_samples"]
         n_snps = meta["n_snps"]
 
-        # 3. Memory check
-        self.check_memory_requirements(n_samples, n_snps)
-        actual_chunk = _compute_chunk_size(n_samples, n_snps)
-
-        # 4. Phenotypes
+        # 3. Phenotypes (before memory check so we use valid sample count)
         phenotypes, n_analyzed = self.parse_phenotypes()
         n_filtered = len(phenotypes) - n_analyzed
         logger.info(
@@ -660,8 +659,13 @@ class PipelineRunner:
         # Compute valid sample count (phenotype + covariate filtering)
         valid_mask = self._compute_valid_mask(phenotypes, covariates)
         n_valid = int(np.sum(valid_mask))
+        n_cvt = covariates.shape[1] if covariates is not None else 1
 
-        # 8. Standard path: load eigen files or kinship
+        # 8. Memory check (uses post-filter sample count and actual n_cvt)
+        actual_chunk = _compute_chunk_size(n_valid, n_snps, n_cvt=n_cvt)
+        self.check_memory_requirements(n_valid, n_snps, n_cvt=n_cvt)
+
+        # 9. Standard path: load eigen files or kinship
         t_kinship = time.perf_counter()
         eigenvalues = None
         eigenvectors = None

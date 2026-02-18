@@ -13,6 +13,9 @@ Format follows GEMMA param.cpp WriteVector/WriteMatrix:
 from pathlib import Path
 
 import numpy as np
+from loguru import logger
+
+from jamma.io.matrix_writer import write_matrix_parallel
 
 
 def read_eigenvalues(path: Path) -> np.ndarray:
@@ -27,6 +30,7 @@ def read_eigenvalues(path: Path) -> np.ndarray:
     Raises:
         ValueError: If file is empty or contains non-numeric data.
     """
+    logger.info(f"Reading eigenvalues from {path}")
     try:
         data = np.loadtxt(path, dtype=np.float64)
     except ValueError as e:
@@ -58,6 +62,7 @@ def read_eigenvectors(path: Path) -> np.ndarray:
     Raises:
         ValueError: If file is empty, non-numeric, or not a square matrix.
     """
+    logger.info(f"Reading eigenvectors from {path}")
     try:
         data = np.loadtxt(path, dtype=np.float64)
     except ValueError as e:
@@ -140,6 +145,7 @@ def write_eigenvalues(eigenvalues: np.ndarray, path: Path) -> None:
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Writing eigenvalues to {path}")
     np.savetxt(path, eigenvalues, fmt="%.10g")
 
 
@@ -155,7 +161,7 @@ def write_eigenvectors(eigenvectors: np.ndarray, path: Path) -> None:
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savetxt(path, eigenvectors, fmt="%.10g", delimiter="\t")
+    write_matrix_parallel(eigenvectors, path, fmt="%.10g", delimiter="\t")
 
 
 def write_eigen_files(

@@ -46,11 +46,8 @@ from jamma.lmm.results import (
     count_lambda_boundary_hits,
     log_lambda_boundary_warning,
 )
-from jamma.lmm.runner_streaming import (
-    _TEST_TYPE_MAP,
-    _init_accumulators,
-    _LazySnpMeta,
-)
+from jamma.lmm.runner_streaming import _init_accumulators, _LazySnpMeta
+from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.stats import AssocResult
 
 # Chromosome ordering: numeric first (1-22), then special (X, Y, XY, MT)
@@ -468,7 +465,6 @@ def _run_lmm_for_chromosome(
     total_at_lmin = 0
     total_at_lmax = 0
     results: list[AssocResult] = []
-    snp_offset = 0  # Tracks position within filtered SNPs across disk chunks
 
     try:
         with open_bed(bed_file) as bed:
@@ -551,23 +547,29 @@ def _run_lmm_for_chromosome(
                     total_at_lmax += n_lmax
 
                     n_disk_snps = disk_end - disk_start
-                    disk_chunk_results = list(
-                        _yield_chunk_results(
+                    if writer is not None:
+                        writer.write_arrays_batch(
                             lmm_mode,
-                            np.arange(n_disk_snps),
                             global_filtered_indices[disk_start:disk_end],
+                            snp_info,
                             filtered_afs[disk_start:disk_end],
                             filtered_miss[disk_start:disk_end],
-                            snp_info,
                             arrays,
                         )
-                    )
-                    if writer is not None:
-                        writer.write_batch(disk_chunk_results)
                     else:
+                        disk_chunk_results = list(
+                            _yield_chunk_results(
+                                lmm_mode,
+                                np.arange(n_disk_snps),
+                                global_filtered_indices[disk_start:disk_end],
+                                filtered_afs[disk_start:disk_end],
+                                filtered_miss[disk_start:disk_end],
+                                snp_info,
+                                arrays,
+                            )
+                        )
                         results.extend(disk_chunk_results)
 
-                    snp_offset += n_disk_snps
                     del arrays, accum
 
         # Log boundary warnings once per chromosome

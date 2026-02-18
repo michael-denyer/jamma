@@ -38,6 +38,8 @@ from jamma.lmm.results import (
     count_lambda_boundary_hits,
     log_lambda_boundary_warning,
 )
+from jamma.lmm.schema import ACCUM_KEYS as _ACCUM_KEYS
+from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
 
@@ -74,25 +76,6 @@ class _LazySnpMeta:
             "a1": self._a1[i],
             "a0": self._a0[i],
         }
-
-
-_ACCUM_KEYS = {
-    1: ("lambdas", "logls", "betas", "ses", "pwalds"),
-    2: ("lambdas_mle", "p_lrts"),
-    3: ("betas", "ses", "p_scores"),
-    4: (
-        "lambdas",
-        "logls",
-        "betas",
-        "ses",
-        "pwalds",
-        "lambdas_mle",
-        "p_lrts",
-        "p_scores",
-    ),
-}
-
-_TEST_TYPE_MAP = {1: "wald", 2: "lrt", 3: "score", 4: "all"}
 
 
 def _init_accumulators(lmm_mode: int) -> dict[str, list]:
@@ -539,20 +522,28 @@ def run_lmm_association_streaming(
                 n_at_lmin += chunk_lmin
                 n_at_lmax += chunk_lmax
 
-                chunk_results = list(
-                    _yield_chunk_results(
+                if writer is not None:
+                    # Direct array → TSV (no AssocResult construction)
+                    writer.write_arrays_batch(
                         lmm_mode,
-                        chunk_filtered_local_idx,
-                        snp_indices,
-                        filtered_afs,
-                        filtered_miss,
+                        snp_indices[left:right],
                         snp_info,
+                        filtered_afs[left:right],
+                        filtered_miss[left:right],
                         arrays,
                     )
-                )
-                if writer is not None:
-                    writer.write_batch(chunk_results)
                 else:
+                    chunk_results = list(
+                        _yield_chunk_results(
+                            lmm_mode,
+                            chunk_filtered_local_idx,
+                            snp_indices,
+                            filtered_afs,
+                            filtered_miss,
+                            snp_info,
+                            arrays,
+                        )
+                    )
                     all_results.extend(chunk_results)
                 del arrays, accum
                 t_write_end = time.perf_counter()

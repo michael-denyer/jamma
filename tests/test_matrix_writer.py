@@ -1,0 +1,187 @@
+"""Tests for parallel matrix text writer.
+
+Validates that write_matrix_parallel produces byte-identical output to
+np.savetxt for all matrix sizes, including the parallel path (>=500 rows).
+"""
+
+import inspect
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from jamma.io.matrix_writer import write_matrix_parallel
+
+
+def _savetxt_bytes(
+    matrix: np.ndarray,
+    path: Path,
+    fmt: str = "%.10g",
+    delimiter: str = "\t",
+) -> bytes:
+    """Write matrix with np.savetxt and return the raw bytes."""
+    np.savetxt(path, matrix, fmt=fmt, delimiter=delimiter)
+    return path.read_bytes()
+
+
+@pytest.mark.tier0
+class TestByteIdentity:
+    """Verify write_matrix_parallel is byte-identical to np.savetxt."""
+
+    def test_savetxt_byte_identical_small(self, tmp_path: Path) -> None:
+        """10x10 matrix: parallel output matches np.savetxt bytes."""
+        rng = np.random.default_rng(42)
+        matrix = rng.standard_normal((10, 10))
+
+        parallel_path = tmp_path / "parallel.txt"
+        savetxt_path = tmp_path / "savetxt.txt"
+
+        write_matrix_parallel(matrix, parallel_path)
+        expected = _savetxt_bytes(matrix, savetxt_path)
+
+        assert parallel_path.read_bytes() == expected
+
+    def test_savetxt_byte_identical_random_50x50(self, tmp_path: Path) -> None:
+        """50x50 symmetric matrix (same seed as test_kinship_io): byte-identical."""
+        rng = np.random.default_rng(12345)
+        K = rng.standard_normal((50, 50))
+        K = (K + K.T) / 2
+
+        parallel_path = tmp_path / "parallel.txt"
+        savetxt_path = tmp_path / "savetxt.txt"
+
+        write_matrix_parallel(K, parallel_path)
+        expected = _savetxt_bytes(K, savetxt_path)
+
+        assert parallel_path.read_bytes() == expected
+
+    def test_savetxt_byte_identical_500x20(self, tmp_path: Path) -> None:
+        """500x20 matrix exceeds min_rows_for_parallel: byte-identical."""
+        rng = np.random.default_rng(999)
+        matrix = rng.standard_normal((500, 20))
+
+        parallel_path = tmp_path / "parallel.txt"
+        savetxt_path = tmp_path / "savetxt.txt"
+
+        write_matrix_parallel(matrix, parallel_path)
+        expected = _savetxt_bytes(matrix, savetxt_path)
+
+        assert parallel_path.read_bytes() == expected
+
+    def test_fallback_to_savetxt_below_threshold(self, tmp_path: Path) -> None:
+        """100-row matrix (below default 500): exercises fallback, byte-identical."""
+        rng = np.random.default_rng(77)
+        matrix = rng.standard_normal((100, 10))
+
+        parallel_path = tmp_path / "parallel.txt"
+        savetxt_path = tmp_path / "savetxt.txt"
+
+        write_matrix_parallel(matrix, parallel_path)
+        expected = _savetxt_bytes(matrix, savetxt_path)
+
+        assert parallel_path.read_bytes() == expected
+
+    def test_scientific_notation_values(self, tmp_path: Path) -> None:
+        """Values spanning 1e-15 to 1e15: byte-identical to np.savetxt."""
+        matrix = np.array(
+            [
+                [1e-15, 1e-10, 1e-5, 1.0],
+                [1e5, 1e10, 1e15, 3.14159265358979],
+            ]
+        )
+
+        parallel_path = tmp_path / "parallel.txt"
+        savetxt_path = tmp_path / "savetxt.txt"
+
+        write_matrix_parallel(matrix, parallel_path)
+        expected = _savetxt_bytes(matrix, savetxt_path)
+
+        assert parallel_path.read_bytes() == expected
+
+    def test_n_workers_1(self, tmp_path: Path) -> None:
+        """Single worker still produces byte-identical output."""
+        rng = np.random.default_rng(555)
+        matrix = rng.standard_normal((600, 10))
+
+        parallel_path = tmp_path / "parallel.txt"
+        savetxt_path = tmp_path / "savetxt.txt"
+
+        write_matrix_parallel(matrix, parallel_path, n_workers=1)
+        expected = _savetxt_bytes(matrix, savetxt_path)
+
+        assert parallel_path.read_bytes() == expected
+
+
+@pytest.mark.tier0
+class TestEdgeCases:
+    """Edge cases for write_matrix_parallel."""
+
+    def test_single_row_matrix(self, tmp_path: Path) -> None:
+        """1x5 matrix: byte-identical."""
+        matrix = np.array([[1.0, 2.0, 3.0, 4.0, 5.0]])
+
+        parallel_path = tmp_path / "parallel.txt"
+        savetxt_path = tmp_path / "savetxt.txt"
+
+        write_matrix_parallel(matrix, parallel_path)
+        expected = _savetxt_bytes(matrix, savetxt_path)
+
+        assert parallel_path.read_bytes() == expected
+
+    def test_single_column_matrix(self, tmp_path: Path) -> None:
+        """5x1 matrix: byte-identical."""
+        matrix = np.array([[1.0], [2.0], [3.0], [4.0], [5.0]])
+
+        parallel_path = tmp_path / "parallel.txt"
+        savetxt_path = tmp_path / "savetxt.txt"
+
+        write_matrix_parallel(matrix, parallel_path)
+        expected = _savetxt_bytes(matrix, savetxt_path)
+
+        assert parallel_path.read_bytes() == expected
+
+    def test_creates_parent_directories(self, tmp_path: Path) -> None:
+        """Nested path that doesn't exist is created."""
+        matrix = np.array([[1.0, 2.0], [3.0, 4.0]])
+
+        nested_path = tmp_path / "a" / "b" / "c" / "matrix.txt"
+        write_matrix_parallel(matrix, nested_path)
+
+        assert nested_path.exists()
+        # Verify content is correct
+        savetxt_path = tmp_path / "savetxt.txt"
+        expected = _savetxt_bytes(matrix, savetxt_path)
+        assert nested_path.read_bytes() == expected
+
+
+@pytest.mark.tier0
+class TestFailureHandling:
+    """Verify cleanup and platform behavior of write_matrix_parallel."""
+
+    def test_partial_file_cleaned_on_worker_error(self, tmp_path: Path) -> None:
+        """Multiprocessing failure cleans up partial output file.
+
+        Uses object-type matrix to trigger a real TypeError in workers
+        (which runs in spawn context and can't use mocks).
+        """
+        rng = np.random.default_rng(42)
+        # Create a valid float64 matrix but large enough for parallel path
+        matrix = rng.standard_normal((600, 10))
+        out_path = tmp_path / "should_not_exist.txt"
+
+        # Trigger worker error via invalid format string: "%s%s" causes
+        # TypeError when applied to float rows. SharedMemory copy forces
+        # float64 so we can't inject bad dtype, but format string mismatch
+        # reliably fails in the spawned worker process.
+        with pytest.raises((TypeError, ValueError)):
+            write_matrix_parallel(matrix, out_path, fmt="%s%s", n_workers=2)
+
+        assert not out_path.exists(), "Partial output file should be deleted on failure"
+
+    def test_always_uses_shared_memory(self) -> None:
+        """write_matrix_parallel has no fork path — always uses SharedMemory."""
+        source = inspect.getsource(write_matrix_parallel)
+        assert "fork" not in source, (
+            "write_matrix_parallel should not contain 'fork' — "
+            "SharedMemory should be used on all platforms"
+        )

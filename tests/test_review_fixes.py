@@ -8,8 +8,6 @@ import numpy as np
 import pytest
 
 from jamma.lmm.io import (
-    _FORMAT_COLUMNS,
-    _HEADERS,
     HEADER_ALL,
     HEADER_LRT,
     HEADER_SCORE,
@@ -17,7 +15,8 @@ from jamma.lmm.io import (
     IncrementalAssocWriter,
     format_assoc_line,
 )
-from jamma.lmm.results import _RESULT_FIELDS, _build_results
+from jamma.lmm.results import _build_results
+from jamma.lmm.schema import FORMAT_COLUMNS, HEADERS, RESULT_FIELDS
 from jamma.lmm.stats import AssocResult
 
 # ---------------------------------------------------------------------------
@@ -62,17 +61,17 @@ class TestFormatAssocLine:
         """Each test_type line should have same number of columns as its header."""
         result = _make_result()
         line = format_assoc_line(result, test_type)
-        header = _HEADERS[test_type]
+        header = HEADERS[test_type]
         assert len(line.split("\t")) == len(header.split("\t"))
 
     @pytest.mark.parametrize("test_type", ["wald", "score", "lrt", "all"])
     def test_stat_columns_match_format_columns(self, test_type: str) -> None:
-        """Stat columns (after 7-column prefix) should match _FORMAT_COLUMNS spec."""
+        """Stat columns (after 7-column prefix) should match FORMAT_COLUMNS."""
         result = _make_result()
         line = format_assoc_line(result, test_type)
         parts = line.split("\t")
         stat_parts = parts[7:]  # Skip 7-column prefix
-        expected_cols = _FORMAT_COLUMNS[test_type]
+        expected_cols = FORMAT_COLUMNS[test_type]
         assert len(stat_parts) == len(expected_cols)
         # Verify each stat column is the correct field value
         for col_name, col_val in zip(expected_cols, stat_parts, strict=True):
@@ -86,11 +85,11 @@ class TestFormatAssocLine:
             format_assoc_line(result, "waldd")
 
     def test_headers_generated_from_format_columns(self) -> None:
-        """Verify _HEADERS dict is consistent with named constants."""
-        assert _HEADERS["wald"] == HEADER_WALD
-        assert _HEADERS["score"] == HEADER_SCORE
-        assert _HEADERS["lrt"] == HEADER_LRT
-        assert _HEADERS["all"] == HEADER_ALL
+        """Verify HEADERS dict matches named constants in io.py."""
+        assert HEADERS["wald"] == HEADER_WALD
+        assert HEADERS["score"] == HEADER_SCORE
+        assert HEADERS["lrt"] == HEADER_LRT
+        assert HEADERS["all"] == HEADER_ALL
 
     def test_writer_rejects_invalid_test_type(self, tmp_path) -> None:
         """IncrementalAssocWriter should reject invalid test_type at init."""
@@ -108,10 +107,9 @@ class TestBuildResults:
     """Verify _build_results field mapping for each lmm_mode."""
 
     def _make_arrays(self, lmm_mode: int, n: int = 3) -> dict[str, np.ndarray]:
-        """Create arrays dict matching _RESULT_FIELDS for the given mode."""
+        """Create arrays dict matching RESULT_FIELDS for the given mode."""
         return {
-            key: np.arange(n, dtype=np.float64) + 1.0
-            for key in _RESULT_FIELDS[lmm_mode]
+            key: np.arange(n, dtype=np.float64) + 1.0 for key in RESULT_FIELDS[lmm_mode]
         }
 
     def _make_snp_info(self, n: int = 3) -> list[dict]:
@@ -122,7 +120,7 @@ class TestBuildResults:
 
     @pytest.mark.parametrize("lmm_mode", [1, 2, 3, 4])
     def test_correct_fields_populated(self, lmm_mode: int) -> None:
-        """Each mode should populate exactly the fields in _RESULT_FIELDS."""
+        """Each mode should populate exactly the fields in RESULT_FIELDS."""
         n = 3
         arrays = self._make_arrays(lmm_mode, n)
         snp_indices = np.arange(n)
@@ -133,7 +131,7 @@ class TestBuildResults:
         results = _build_results(lmm_mode, snp_indices, afs, miss, snp_info, arrays)
         assert len(results) == n
 
-        field_map = _RESULT_FIELDS[lmm_mode]
+        field_map = RESULT_FIELDS[lmm_mode]
         for j, r in enumerate(results):
             for array_key, field_name in field_map.items():
                 val = getattr(r, field_name)
@@ -175,7 +173,7 @@ class TestBuildResults:
         """Missing array key should raise ValueError with helpful message."""
         n = 1
         # Provide incomplete arrays for mode 1 (missing 'pwalds')
-        arrays = {k: np.ones(n) for k in list(_RESULT_FIELDS[1].keys())[:-1]}
+        arrays = {k: np.ones(n) for k in list(RESULT_FIELDS[1].keys())[:-1]}
         with pytest.raises(ValueError, match="Missing arrays"):
             _build_results(
                 1,

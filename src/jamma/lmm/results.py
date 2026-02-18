@@ -2,9 +2,8 @@
 
 Constructs AssocResult objects from computed statistics for each
 test mode (Wald, Score, LRT, All). Used by both batch and streaming runners.
-
-# TODO(jamma-e32): Profile AssocResult creation overhead in streaming path.
-# If format is the bottleneck, write directly from numpy arrays.
+Note: the disk-write hot path bypasses this module entirely — see
+``IncrementalAssocWriter.write_arrays_batch`` in ``io.py``.
 """
 
 from collections.abc import Generator
@@ -13,6 +12,7 @@ import jax.numpy as jnp
 import numpy as np
 from loguru import logger
 
+from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
 from jamma.lmm.stats import AssocResult
 
 # Relative tolerance for detecting lambda convergence at optimization bounds
@@ -39,38 +39,6 @@ def _snp_metadata(snp_info: dict, af: float, n_miss: int) -> dict:
         "allele0": snp_info.get("a0", snp_info.get("allele0", "")),
         "af": af,
     }
-
-
-# Maps lmm_mode to (array_key, AssocResult_field) pairs for stat columns.
-# Array keys match _ACCUM_KEYS in runner_streaming.py and _compute_lmm_chunk output.
-_RESULT_FIELDS: dict[int, dict[str, str]] = {
-    1: {  # Wald
-        "betas": "beta",
-        "ses": "se",
-        "logls": "logl_H1",
-        "lambdas": "l_remle",
-        "pwalds": "p_wald",
-    },
-    2: {  # LRT -- beta=NaN, se=NaN handled separately
-        "lambdas_mle": "l_mle",
-        "p_lrts": "p_lrt",
-    },
-    3: {  # Score
-        "betas": "beta",
-        "ses": "se",
-        "p_scores": "p_score",
-    },
-    4: {  # All
-        "betas": "beta",
-        "ses": "se",
-        "logls": "logl_H1",
-        "lambdas": "l_remle",
-        "lambdas_mle": "l_mle",
-        "pwalds": "p_wald",
-        "p_lrts": "p_lrt",
-        "p_scores": "p_score",
-    },
-}
 
 
 def _build_results(

@@ -6,6 +6,8 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
+from jamma.io.matrix_writer import write_matrix_parallel
+
 
 def read_kinship_matrix(path: Path, n_samples: int | None = None) -> np.ndarray:
     """Read kinship matrix from GEMMA .cXX.txt format.
@@ -20,6 +22,8 @@ def read_kinship_matrix(path: Path, n_samples: int | None = None) -> np.ndarray:
     Raises:
         ValueError: If matrix is not square, not symmetric, or dimension mismatch
     """
+    logger.info(f"Reading kinship matrix from {path}")
+
     if n_samples is not None and n_samples > 50_000:
         logger.warning(
             f"Reading {n_samples}x{n_samples} kinship matrix from text file. "
@@ -66,8 +70,7 @@ def write_kinship_matrix(K: np.ndarray, path: Path) -> None:
         >>> write_kinship_matrix(K, Path("output/result.cXX.txt"))
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    np.savetxt(path, K, fmt="%.10g", delimiter="\t")
+    write_matrix_parallel(K, path, fmt="%.10g", delimiter="\t")
 
 
 def write_loco_kinship_matrices(

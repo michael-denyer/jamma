@@ -175,6 +175,35 @@ def get_chromosome_partitions(bed_path: Path) -> dict[str, np.ndarray]:
         }
 
 
+def _count_lines_fast(path: Path, chunk_size: int = 1024 * 1024) -> int:
+    """Count logical lines in a file using binary byte counting.
+
+    Reads the file in binary mode and counts newline bytes in chunks.
+    2-3x faster than text-mode iteration for large files because it
+    avoids line decoding overhead. Handles files without a trailing
+    newline by checking the last byte.
+
+    Args:
+        path: Path to the file to count lines in.
+        chunk_size: Read buffer size in bytes (default 1 MB).
+
+    Returns:
+        Number of logical lines in the file.
+    """
+    count = 0
+    last_byte = b""
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            count += chunk.count(b"\n")
+            last_byte = chunk[-1:]
+    if last_byte and last_byte != b"\n":
+        count += 1
+    return count
+
+
 def validate_plink_dimensions(bfile: Path) -> None:
     """Validate that PLINK .bed file size matches .fam and .bim counts.
 
@@ -202,12 +231,9 @@ def validate_plink_dimensions(bfile: Path) -> None:
             raise FileNotFoundError(f"PLINK {ext} file not found: {path}")
 
     # Count lines in .fam (= n_samples) and .bim (= n_snps)
-    # TODO(jamma-oit): For very large .bim files (>1M SNPs), consider
-    # using file size estimation or subprocess wc -l instead of line scan.
-    with open(fam_path) as f:
-        n_fam = sum(1 for _ in f)
-    with open(bim_path) as f:
-        n_bim = sum(1 for _ in f)
+    logger.info(f"Validating PLINK dimensions: {fam_path}")
+    n_fam = _count_lines_fast(fam_path)
+    n_bim = _count_lines_fast(bim_path)
 
     # Expected .bed size: 3 magic bytes + ceil(n_fam/4) bytes per SNP
     bytes_per_snp = (n_fam + 3) // 4

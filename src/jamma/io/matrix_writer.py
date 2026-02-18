@@ -132,7 +132,7 @@ def write_matrix_parallel(
                     for chunk_bytes in pool.imap(_format_rows_chunk, chunks_args):
                         f.write(chunk_bytes)
             except BaseException as e:
-                logger.error(f"Pool error writing {path}: {e}", exc_info=True)
+                logger.opt(exception=e).error(f"Pool error writing {path}: {e}")
                 pool.terminate()
                 pool.join()
                 # Best-effort cleanup of partial file

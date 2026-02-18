@@ -18,7 +18,6 @@ import time
 from pathlib import Path
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 from bed_reader import open_bed
 from loguru import logger
@@ -32,20 +31,13 @@ from jamma.io.plink import (
 )
 from jamma.kinship import compute_loco_kinship_streaming, write_kinship_matrix
 from jamma.lmm.chunk import _compute_chunk_size
+from jamma.lmm.compute import _compute_lmm_chunk
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.io import IncrementalAssocWriter
-from jamma.lmm.likelihood_jax import (
-    batch_calc_score_stats,
-    batch_calc_wald_stats,
-    batch_compute_iab,
-    batch_compute_uab,
-    calc_lrt_pvalue_jax,
-    golden_section_optimize_lambda_mle,
-)
+from jamma.lmm.likelihood_jax import batch_compute_uab
 from jamma.lmm.prepare import (
     _build_covariate_matrix,
     _compute_null_model,
-    _grid_optimize_lambda_batched,
     _select_jax_device,
 )
 from jamma.lmm.results import (
@@ -530,81 +522,32 @@ def _run_lmm_for_chromosome(
                     # Batch compute Uab
                     Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
 
+                    chunk_result = _compute_lmm_chunk(
+                        lmm_mode, n_cvt, eigenvalues_jax, Uab_batch, n_samples,
+                        l_min=l_min, l_max=l_max, n_grid=n_grid, n_refine=n_refine,
+                        Hi_eval_null=Hi_eval_null_jax, logl_H0=logl_H0,
+                    )
+
+                    # Sync for timing accuracy (LOCO has same pattern as streaming)
                     if lmm_mode == 1:
-                        Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
-                        best_lambdas, best_logls = _grid_optimize_lambda_batched(
-                            n_cvt,
-                            eigenvalues_jax,
-                            Uab_batch,
-                            Iab_batch,
-                            l_min,
-                            l_max,
-                            n_grid,
-                            n_refine,
-                        )
-                        betas, ses, p_walds = batch_calc_wald_stats(
-                            n_cvt, best_lambdas, eigenvalues_jax, Uab_batch, n_samples
-                        )
-                        p_walds.block_until_ready()
-
+                        chunk_result["p_walds"].block_until_ready()
                     elif lmm_mode == 3:
-                        betas, ses, p_scores = batch_calc_score_stats(
-                            n_cvt, Hi_eval_null_jax, Uab_batch, n_samples
-                        )
-                        p_scores.block_until_ready()
-
+                        chunk_result["p_scores"].block_until_ready()
                     elif lmm_mode == 2:
-                        best_lambdas_mle, best_logls_mle = (
-                            golden_section_optimize_lambda_mle(
-                                n_cvt,
-                                eigenvalues_jax,
-                                Uab_batch,
-                                l_min=l_min,
-                                l_max=l_max,
-                                n_grid=n_grid,
-                                n_iter=max(n_refine, 20),
-                            )
-                        )
-                        p_lrts = jax.vmap(calc_lrt_pvalue_jax)(
-                            best_logls_mle, jnp.full_like(best_logls_mle, logl_H0)
-                        )
-                        p_lrts.block_until_ready()
-
+                        chunk_result["p_lrts"].block_until_ready()
                     elif lmm_mode == 4:
-                        _, _, p_scores = batch_calc_score_stats(
-                            n_cvt, Hi_eval_null_jax, Uab_batch, n_samples
-                        )
-                        best_lambdas_mle, best_logls_mle = (
-                            golden_section_optimize_lambda_mle(
-                                n_cvt,
-                                eigenvalues_jax,
-                                Uab_batch,
-                                l_min=l_min,
-                                l_max=l_max,
-                                n_grid=n_grid,
-                                n_iter=max(n_refine, 20),
-                            )
-                        )
-                        p_lrts = jax.vmap(calc_lrt_pvalue_jax)(
-                            best_logls_mle, jnp.full_like(best_logls_mle, logl_H0)
-                        )
-                        Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
-                        best_lambdas, best_logls = _grid_optimize_lambda_batched(
-                            n_cvt,
-                            eigenvalues_jax,
-                            Uab_batch,
-                            Iab_batch,
-                            l_min,
-                            l_max,
-                            n_grid,
-                            n_refine,
-                        )
-                        betas, ses, p_walds = batch_calc_wald_stats(
-                            n_cvt, best_lambdas, eigenvalues_jax, Uab_batch, n_samples
-                        )
-                        p_scores.block_until_ready()
-                        p_lrts.block_until_ready()
-                        p_walds.block_until_ready()
+                        chunk_result["p_scores"].block_until_ready()
+                        chunk_result["p_lrts"].block_until_ready()
+                        chunk_result["p_walds"].block_until_ready()
+
+                    best_lambdas = chunk_result["best_lambdas"]
+                    best_logls = chunk_result["best_logls"]
+                    betas = chunk_result["betas"]
+                    ses = chunk_result["ses"]
+                    p_walds = chunk_result["p_walds"]
+                    best_lambdas_mle = chunk_result["best_lambdas_mle"]
+                    p_lrts = chunk_result["p_lrts"]
+                    p_scores = chunk_result["p_scores"]
 
                     # Strip padding and append to accumulators
                     _append_chunk_results(

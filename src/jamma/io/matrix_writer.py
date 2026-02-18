@@ -34,9 +34,7 @@ def _format_rows_chunk(args: tuple) -> bytes:
     (file_path, start, end, ncols, fmt, delimiter, shape, dtype_str) = args
 
     try:
-        matrix = np.memmap(
-            file_path, dtype=np.dtype(dtype_str), mode="r", shape=shape
-        )
+        matrix = np.memmap(file_path, dtype=np.dtype(dtype_str), mode="r", shape=shape)
 
         row_fmt = delimiter.join([fmt] * ncols)
         lines = []
@@ -45,7 +43,9 @@ def _format_rows_chunk(args: tuple) -> bytes:
         chunk_text = "\n".join(lines) + "\n"
         return chunk_text.encode("ascii")
     except Exception as e:
-        raise RuntimeError(f"_format_rows_chunk failed on rows {start}-{end}: {e}") from e
+        raise RuntimeError(
+            f"_format_rows_chunk failed on rows {start}-{end}: {e}"
+        ) from e
 
 
 def write_matrix_parallel(

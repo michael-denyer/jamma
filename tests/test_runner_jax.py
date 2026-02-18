@@ -185,6 +185,58 @@ class TestJaxRunnerBasic:
             )
 
 
+class TestJaxRunnerGuards:
+    """Tests for runner_jax input validation guards."""
+
+    def test_all_invalid_samples_raises(self):
+        """ValueError when all phenotypes are NaN (no valid samples remain)."""
+        rng = np.random.default_rng(55)
+        n_samples = 50
+        n_snps = 20
+
+        genotypes = rng.choice([0, 1, 2], size=(n_samples, n_snps)).astype(np.float64)
+        phenotypes = np.full(n_samples, np.nan)
+        kinship = np.eye(n_samples)
+        snp_info = [
+            {"chr": "1", "rs": f"rs{j}", "pos": j * 1000, "a1": "A", "a0": "G"}
+            for j in range(n_snps)
+        ]
+
+        with pytest.raises(ValueError, match="No valid samples"):
+            run_lmm_association_jax(
+                genotypes=genotypes,
+                phenotypes=phenotypes,
+                kinship=kinship,
+                snp_info=snp_info,
+                show_progress=False,
+                check_memory=False,
+            )
+
+    def test_all_minus9_samples_raises(self):
+        """ValueError when all phenotypes are -9 (PLINK missing code)."""
+        rng = np.random.default_rng(56)
+        n_samples = 50
+        n_snps = 20
+
+        genotypes = rng.choice([0, 1, 2], size=(n_samples, n_snps)).astype(np.float64)
+        phenotypes = np.full(n_samples, -9.0)
+        kinship = np.eye(n_samples)
+        snp_info = [
+            {"chr": "1", "rs": f"rs{j}", "pos": j * 1000, "a1": "A", "a0": "G"}
+            for j in range(n_snps)
+        ]
+
+        with pytest.raises(ValueError, match="No valid samples"):
+            run_lmm_association_jax(
+                genotypes=genotypes,
+                phenotypes=phenotypes,
+                kinship=kinship,
+                snp_info=snp_info,
+                show_progress=False,
+                check_memory=False,
+            )
+
+
 class TestJaxRunnerCleanup:
     """Tests for JAX runner cleanup to prevent SIGSEGV."""
 
@@ -839,6 +891,104 @@ class TestJaxAllTestsMode:
             )
 
 
+class TestDegenerateSNPPipeline:
+    """Integration tests for degenerate SNP handling through full runner."""
+
+    def test_degenerate_snp_filtered_out(self):
+        """Constant-genotype (degenerate) SNPs are filtered out by variance check.
+
+        A monomorphic SNP has zero variance, so compute_snp_filter_mask removes it
+        before the association test. This test verifies the full pipeline: the
+        degenerate SNP should not appear in results, while polymorphic SNPs produce
+        finite statistics.
+        """
+        rng = np.random.default_rng(42)
+        n_samples = 200
+        n_snps = 20
+
+        # Generate polymorphic genotypes
+        mafs = rng.uniform(0.1, 0.4, n_snps)
+        genotypes = np.zeros((n_samples, n_snps), dtype=np.float64)
+        for j in range(n_snps):
+            p = mafs[j]
+            genotypes[:, j] = rng.choice(
+                [0, 1, 2], size=n_samples, p=[(1 - p) ** 2, 2 * p * (1 - p), p**2]
+            )
+
+        # Make the first SNP degenerate (all zeros -- constant genotype)
+        genotypes[:, 0] = 0.0
+
+        phenotype = rng.standard_normal(n_samples)
+        kinship = compute_centered_kinship(genotypes)
+        snp_info = [
+            {"chr": "1", "rs": f"rs{j}", "pos": j * 1000, "a1": "A", "a0": "G"}
+            for j in range(n_snps)
+        ]
+
+        results = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        # The degenerate SNP (rs0) should be absent from results (filtered by variance)
+        result_rs_ids = {r.rs for r in results}
+        assert "rs0" not in result_rs_ids, (
+            "Degenerate SNP rs0 (constant genotype) should be filtered out"
+        )
+
+        # Polymorphic SNPs should produce finite, valid results
+        assert len(results) >= n_snps - 1, (
+            f"Expected at least {n_snps - 1} results (all except degenerate), "
+            f"got {len(results)}"
+        )
+        for r in results:
+            assert np.isfinite(r.beta), f"Non-finite beta for {r.rs}"
+            assert np.isfinite(r.se), f"Non-finite se for {r.rs}"
+            assert 0 <= r.p_wald <= 1, f"Invalid p_wald for {r.rs}: {r.p_wald}"
+
+    def test_all_degenerate_snps_returns_empty(self):
+        """When ALL SNPs are degenerate, the runner returns an empty list.
+
+        All columns have zero variance, so all are filtered out.
+        """
+        rng = np.random.default_rng(99)
+        n_samples = 100
+
+        # All SNPs constant -- genotypes all zeros
+        genotypes = np.zeros((n_samples, 10), dtype=np.float64)
+        phenotype = rng.standard_normal(n_samples)
+
+        # Need a valid kinship -- use random symmetric PSD matrix
+        X = rng.standard_normal((n_samples, 50))
+        kinship = X @ X.T / 50
+
+        snp_info = [
+            {"chr": "1", "rs": f"rs{j}", "pos": j * 1000, "a1": "A", "a0": "G"}
+            for j in range(10)
+        ]
+
+        results = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        assert results == [], (
+            f"Expected empty results for all-degenerate SNPs, got {len(results)}"
+        )
+
+
 def test_timing_breakdown_logged(sample_plink_data):
     """Verify timing breakdown appears in loguru output with all 6 phases."""
     import io
@@ -896,3 +1046,54 @@ def test_timing_breakdown_logged(sample_plink_data):
         assert re.search(r"\d+\.\d+s", matching_line), (
             f"Expected numeric seconds value in line: {matching_line}"
         )
+
+
+def test_maf_normalization_in_comparison():
+    """AF > 0.5 in expected results should match MAF <= 0.5 in actual.
+
+    JAMMA reports MAF (always <= 0.5), GEMMA reports AF (can be > 0.5).
+    compare_assoc_results normalizes both to MAF before comparison.
+    Without normalization, af=0.3 vs af=0.7 would incorrectly fail.
+    """
+    from jamma.lmm.stats import AssocResult
+
+    # JAMMA result: reports MAF = 0.3
+    actual = [
+        AssocResult(
+            chr="1",
+            rs="rs1",
+            ps=100,
+            n_miss=0,
+            allele1="A",
+            allele0="G",
+            af=0.3,
+            beta=0.1,
+            se=0.01,
+            logl_H1=-100.0,
+            l_remle=1.0,
+            p_wald=0.05,
+        )
+    ]
+    # GEMMA result: reports AF = 0.7 (same minor allele, opposite convention)
+    expected = [
+        AssocResult(
+            chr="1",
+            rs="rs1",
+            ps=100,
+            n_miss=0,
+            allele1="A",
+            allele0="G",
+            af=0.7,
+            beta=0.1,
+            se=0.01,
+            logl_H1=-100.0,
+            l_remle=1.0,
+            p_wald=0.05,
+        )
+    ]
+
+    comparison = compare_assoc_results(actual, expected)
+    assert comparison.af.passed, (
+        f"AF=0.3 and AF=0.7 have the same MAF (0.3), comparison should pass: "
+        f"{comparison.af.message}"
+    )

@@ -640,6 +640,11 @@ def compare_assoc_results(
     actual_af = np.array([r.af for r in actual])
     expected_af = np.array([r.af for r in expected])
 
+    # Normalize to MAF (minor allele freq <= 0.5) before comparison.
+    # JAMMA reports MAF, GEMMA reports AF which can be > 0.5.
+    actual_maf = np.minimum(actual_af, 1.0 - actual_af)
+    expected_maf = np.minimum(expected_af, 1.0 - expected_af)
+
     # Compare always-present columns
     beta_result = compare_arrays(
         actual_beta, expected_beta, config.beta_rtol, config.atol, "beta"
@@ -648,7 +653,7 @@ def compare_assoc_results(
         actual_se, expected_se, config.se_rtol, config.atol, "se"
     )
     af_result = compare_arrays(
-        actual_af, expected_af, config.af_rtol, config.atol, "af"
+        actual_maf, expected_maf, config.af_rtol, config.atol, "af"
     )
 
     # Handle test-type specific columns
@@ -928,9 +933,17 @@ def compare_assoc_results(
             and len(mismatched) == 0
         )
     elif is_lrt_test:
-        # LRT has no beta/se, only check AF and LRT-specific columns
-        all_passed = af_result.passed and len(mismatched) == 0
-        all_passed = all_passed and p_lrt_result.passed and l_mle_result.passed
+        # LRT beta/se are NaN by construction — verify both sides are all-NaN
+        beta_all_nan = np.all(np.isnan(actual_beta)) and np.all(np.isnan(expected_beta))
+        se_all_nan = np.all(np.isnan(actual_se)) and np.all(np.isnan(expected_se))
+        all_passed = (
+            af_result.passed
+            and beta_all_nan
+            and se_all_nan
+            and len(mismatched) == 0
+            and p_lrt_result.passed
+            and l_mle_result.passed
+        )
     else:
         all_passed = (
             beta_result.passed

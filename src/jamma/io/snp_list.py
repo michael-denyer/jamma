@@ -63,7 +63,18 @@ def resolve_snp_list_to_indices(snp_ids: set[str], bim_sids: np.ndarray) -> np.n
     Raises:
         ValueError: If zero SNPs match.
     """
-    sid_to_index = {sid: i for i, sid in enumerate(bim_sids)}
+    sid_to_index: dict[str, int] = {}
+    n_duplicates = 0
+    for i, sid in enumerate(bim_sids):
+        if sid in sid_to_index:
+            n_duplicates += 1
+        else:
+            sid_to_index[sid] = i
+    if n_duplicates > 0:
+        logger.warning(
+            f"BIM file contains {n_duplicates} duplicate SNP ID(s); "
+            f"keeping first occurrence of each"
+        )
 
     indices = []
     for snp_id in snp_ids:

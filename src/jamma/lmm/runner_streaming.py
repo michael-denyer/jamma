@@ -231,6 +231,11 @@ def run_lmm_association_streaming(
         valid_covariate = np.all(~np.isnan(covariates), axis=1)
         valid_mask = valid_mask & valid_covariate
     n_valid = int(np.sum(valid_mask))
+    if n_valid == 0:
+        raise ValueError(
+            "No valid samples: all phenotypes are missing or -9"
+            + (", or all have missing covariates" if covariates is not None else "")
+        )
     if not np.all(valid_mask):
         phenotypes = phenotypes[valid_mask]
         if kinship is not None:
@@ -373,13 +378,8 @@ def run_lmm_association_streaming(
             )
         return [], 0
 
-    snp_stats = list(
-        zip(
-            allele_freqs[snp_indices],
-            all_miss_counts[snp_indices].astype(int),
-            strict=True,
-        )
-    )
+    filtered_afs = allele_freqs[snp_indices]
+    filtered_miss = all_miss_counts[snp_indices].astype(int)
     del all_miss_counts, allele_freqs
     filtered_means = all_means[snp_indices]
     del all_means
@@ -498,6 +498,10 @@ def run_lmm_association_streaming(
 
             # Dict-based accumulators for this file chunk
             accum: dict[str, list] = _init_accumulators(lmm_mode)
+
+            # Initialize mode-specific variables (prevents NameError in explicit dict)
+            best_lambdas = best_logls = betas = ses = p_walds = None
+            best_lambdas_mle = p_lrts = p_scores = None
 
             # Prepare first JAX chunk
             t_rot_start = time.perf_counter()
@@ -622,7 +626,16 @@ def run_lmm_association_streaming(
                     accum,
                     current_actual_len,
                     current_needs_padding,
-                    locals(),
+                    {
+                        "best_lambdas": best_lambdas,
+                        "best_logls": best_logls,
+                        "betas": betas,
+                        "ses": ses,
+                        "p_walds": p_walds,
+                        "best_lambdas_mle": best_lambdas_mle,
+                        "p_lrts": p_lrts,
+                        "p_scores": p_scores,
+                    },
                 )
 
             # Concatenate, build results, write/accumulate
@@ -642,7 +655,8 @@ def run_lmm_association_streaming(
                         lmm_mode,
                         chunk_filtered_local_idx,
                         snp_indices,
-                        snp_stats,
+                        filtered_afs,
+                        filtered_miss,
                         snp_info,
                         arrays,
                     )

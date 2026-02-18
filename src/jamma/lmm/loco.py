@@ -62,6 +62,21 @@ from jamma.lmm.runner_streaming import (
 )
 from jamma.lmm.stats import AssocResult
 
+# Chromosome ordering: numeric first (1-22), then special (X, Y, XY, MT)
+_CHR_SPECIAL_ORDER = {"X": 23, "Y": 24, "XY": 25, "MT": 26, "M": 26}
+
+
+def _chr_sort_key(chrom: str) -> tuple[int, str]:
+    """Sort key for biological chromosome order (1..22, X, Y, XY, MT)."""
+    upper = chrom.upper()
+    if upper in _CHR_SPECIAL_ORDER:
+        return (_CHR_SPECIAL_ORDER[upper], "")
+    try:
+        return (int(chrom), "")
+    except ValueError:
+        # Unknown chromosome names sort after all known ones
+        return (100, chrom)
+
 
 def run_lmm_loco(
     bed_path: Path,
@@ -136,7 +151,7 @@ def run_lmm_loco(
 
     # Chromosome partitions (unfiltered)
     partitions = get_chromosome_partitions(bed_path)
-    unique_chrs = sorted(partitions.keys())
+    unique_chrs = sorted(partitions.keys(), key=_chr_sort_key)
 
     if len(unique_chrs) < 2:
         raise ValueError(
@@ -189,9 +204,6 @@ def run_lmm_loco(
                 IncrementalAssocWriter(output_path, test_type=test_type)
             )
 
-        # Pre-compute snps_set once (avoids O(n) set construction per chromosome)
-        snps_set = set(snps_indices.tolist()) if snps_indices is not None else None
-
         # Stream LOCO kinship matrices one at a time
         loco_iter = compute_loco_kinship_streaming(
             bed_path,
@@ -211,13 +223,7 @@ def run_lmm_loco(
                     f"{len(chr_snp_indices)} SNPs, eigendecomposing..."
                 )
 
-            # Eigendecompose K_loco (subset to valid samples)
-            K_loco_valid = K_loco[np.ix_(valid_mask, valid_mask)]
-            eigenvalues_np, U = eigendecompose_kinship(
-                K_loco_valid, check_memory=check_memory
-            )
-
-            # Optionally save kinship
+            # Save full K_loco BEFORE subsetting (frees it before eigendecomp)
             if save_kinship and kinship_output_dir is not None:
                 kinship_path = (
                     kinship_output_dir
@@ -227,8 +233,16 @@ def run_lmm_loco(
                 if show_progress:
                     logger.info(f"  Saved LOCO kinship to {kinship_path}")
 
-            # Free K_loco
-            del K_loco, K_loco_valid
+            # Subset to valid samples, then free the full matrix
+            K_loco_valid = K_loco[np.ix_(valid_mask, valid_mask)]
+            del K_loco
+            gc.collect()
+
+            # Eigendecompose the valid subset
+            eigenvalues_np, U = eigendecompose_kinship(
+                K_loco_valid, check_memory=check_memory
+            )
+            del K_loco_valid
             gc.collect()
 
             # Run LMM for this chromosome
@@ -247,7 +261,7 @@ def run_lmm_loco(
                 show_progress=show_progress,
                 l_min=l_min,
                 l_max=l_max,
-                snps_set=snps_set,
+                snps_indices_array=snps_indices,
                 col_chunk_size=col_chunk_size,
                 writer=writer,
             )
@@ -260,7 +274,10 @@ def run_lmm_loco(
             # Free eigendecomp
             del eigenvalues_np, U
             gc.collect()
-            jax.clear_caches()
+
+        # Clear JIT caches once after all chromosomes (kernels reused across
+        # chromosomes since n_samples, n_cvt are identical)
+        jax.clear_caches()
 
         if writer is not None and show_progress:
             logger.info(f"Wrote {writer.count:,} results to {output_path}")
@@ -290,7 +307,7 @@ def _run_lmm_for_chromosome(
     l_max: float = 1e5,
     n_grid: int = 50,
     n_refine: int = 10,
-    snps_set: set[int] | None = None,
+    snps_indices_array: np.ndarray | None = None,
     col_chunk_size: int = 5_000,
     writer: IncrementalAssocWriter | None = None,
 ) -> list[AssocResult]:
@@ -318,8 +335,8 @@ def _run_lmm_for_chromosome(
         l_max: Maximum lambda for optimization.
         n_grid: Grid search resolution.
         n_refine: Golden section iterations.
-        snps_set: Pre-computed set of global SNP indices for -snps restriction,
-            or None. Hoisted from run_lmm_loco to avoid per-chromosome rebuild.
+        snps_indices_array: Numpy array of global SNP indices for -snps restriction,
+            or None. Passed through for vectorized np.isin filtering.
         col_chunk_size: Number of SNP columns per disk read chunk.
         writer: Optional incremental writer for streaming results to disk.
             When provided, results are written directly and an empty list
@@ -377,10 +394,8 @@ def _run_lmm_for_chromosome(
     )
 
     # Apply SNP list restriction (if -snps provided)
-    if snps_set is not None:
-        local_snp_list_mask = np.array(
-            [idx in snps_set for idx in chr_snp_indices], dtype=bool
-        )
+    if snps_indices_array is not None:
+        local_snp_list_mask = np.isin(chr_snp_indices, snps_indices_array)
         snp_mask &= local_snp_list_mask
 
     local_filtered_indices = np.where(snp_mask)[0]
@@ -396,16 +411,11 @@ def _run_lmm_for_chromosome(
             logger.warning("  Chromosome has no SNPs after filtering, skipping")
         return []
 
-    # Build snp_stats for result construction
+    # Build SNP stat arrays for result construction
     # Map local filtered index -> global SNP index
     global_filtered_indices = chr_snp_indices[local_filtered_indices]
-    snp_stats = list(
-        zip(
-            allele_freqs[local_filtered_indices],
-            miss_counts[local_filtered_indices].astype(int),
-            strict=True,
-        )
-    )
+    filtered_afs = allele_freqs[local_filtered_indices]
+    filtered_miss = miss_counts[local_filtered_indices].astype(int)
     filtered_means_all = col_means[local_filtered_indices]
 
     # === PASS 2: Chunked association ===
@@ -476,6 +486,10 @@ def _run_lmm_for_chromosome(
                 # Process this disk chunk through the existing JAX chunk pipeline
                 n_disk_subset = geno_disk_chunk.shape[1]
                 jax_starts = list(range(0, n_disk_subset, jax_chunk_size))
+
+                # Initialize mode-specific variables (prevents NameError)
+                best_lambdas = best_logls = betas = ses = p_walds = None
+                best_lambdas_mle = p_lrts = p_scores = None
 
                 # Prepare first JAX chunk
                 UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
@@ -582,7 +596,16 @@ def _run_lmm_for_chromosome(
                         accum,
                         current_actual_len,
                         current_needs_padding,
-                        locals(),
+                        {
+                            "best_lambdas": best_lambdas,
+                            "best_logls": best_logls,
+                            "betas": betas,
+                            "ses": ses,
+                            "p_walds": p_walds,
+                            "best_lambdas_mle": best_lambdas_mle,
+                            "p_lrts": p_lrts,
+                            "p_scores": p_scores,
+                        },
                     )
 
                 del geno_disk_chunk
@@ -605,7 +628,8 @@ def _run_lmm_for_chromosome(
                     lmm_mode,
                     np.arange(n_filtered),
                     global_filtered_indices,
-                    snp_stats,
+                    filtered_afs,
+                    filtered_miss,
                     snp_info,
                     arrays,
                 )
@@ -618,4 +642,3 @@ def _run_lmm_for_chromosome(
         return results
     finally:
         del eigenvalues_jax, UtW_jax, Uty_jax
-        jax.clear_caches()

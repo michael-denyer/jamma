@@ -344,3 +344,21 @@ class TestImputeCenterAndStandardize:
 
         # Column 0 is constant (all 1s), should be all zeros after standardization
         assert jnp.allclose(Z[:, 0], 0.0)
+
+    def test_variance_stable_high_mean_low_variance(self):
+        """Variance computation is stable for high-mean, low-variance SNPs.
+
+        E[X^2] - E[X]^2 suffers catastrophic cancellation when the mean is
+        large relative to the standard deviation. mean(X_centered^2) avoids
+        this. Verifies unit variance after standardization on a high-mean SNP.
+        """
+        # SNP with high mean (9 samples at genotype 2, 1 at genotype 1)
+        X = jnp.array(
+            [[2.0], [2.0], [2.0], [2.0], [2.0], [2.0], [2.0], [2.0], [2.0], [1.0]]
+        )
+        Z = impute_center_and_standardize(X)
+
+        col_var = jnp.var(Z[:, 0])
+        assert jnp.allclose(col_var, 1.0, atol=1e-10), (
+            f"Standardized variance should be ~1.0, got {float(col_var)}"
+        )

@@ -75,7 +75,6 @@ class TestMLELogLikelihood:
 
     def test_mle_differs_from_reml(self):
         """MLE should differ from REML (no logdet_hiw term)."""
-        np.random.seed(42)
         data = _create_test_data(n_samples=100, n_cvt=1, seed=42)
 
         # Compute Uab with genotype
@@ -195,10 +194,10 @@ class TestLRTIntegration:
 
     def test_lrt_mode_produces_results(self):
         """LRT mode should produce valid results."""
-        np.random.seed(42)
+        rng = np.random.default_rng(42)
         n, p = 50, 10
-        G = np.random.binomial(2, 0.3, (n, p)).astype(float)
-        y = np.random.randn(n)
+        G = rng.binomial(2, 0.3, (n, p)).astype(float)
+        y = rng.standard_normal(n)
         K = G @ G.T / p
 
         snp_info = [
@@ -218,10 +217,10 @@ class TestLRTIntegration:
 
     def test_lrt_vs_wald_correlation(self):
         """LRT and Wald p-values should be highly correlated."""
-        np.random.seed(123)
+        rng = np.random.default_rng(123)
         n, p = 100, 20
-        G = np.random.binomial(2, 0.3, (n, p)).astype(float)
-        y = np.random.randn(n) + 0.3 * G[:, 0]  # First SNP has effect
+        G = rng.binomial(2, 0.3, (n, p)).astype(float)
+        y = rng.standard_normal(n) + 0.3 * G[:, 0]  # First SNP has effect
         K = G @ G.T / p
 
         snp_info = [

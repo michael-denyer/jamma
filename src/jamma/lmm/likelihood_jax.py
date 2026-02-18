@@ -488,7 +488,7 @@ def _golden_section_refine(
     return best_lambdas, best_logls
 
 
-@partial(jit, static_argnums=(0, 4, 5, 6, 7), donate_argnums=(2,))
+@partial(jit, static_argnums=(0, 4, 5, 6, 7))
 def golden_section_optimize_lambda(
     n_cvt: int,
     eigenvalues: Float[Array, " n"],
@@ -522,7 +522,6 @@ def golden_section_optimize_lambda(
     - Golden section: O(n_iter) likelihood evaluations per SNP (vectorized)
     - Total: ~70 evaluations vs ~50 for Brent (similar cost)
     - All computations stay on device (no host/device sync in loops)
-    - donate_argnums=(2,) hints XLA to reuse Uab_batch memory (when possible)
 
     Args:
         n_cvt: Number of covariates (static, triggers recompilation).
@@ -827,7 +826,7 @@ def _batch_grid_mle(
     return vmap(mle_for_lambda)(lambdas)
 
 
-@partial(jit, static_argnums=(0, 3, 4, 5, 6), donate_argnums=(2,))
+@partial(jit, static_argnums=(0, 3, 4, 5, 6))
 def golden_section_optimize_lambda_mle(
     n_cvt: int,
     eigenvalues: Float[Array, " n"],

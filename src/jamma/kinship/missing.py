@@ -69,7 +69,7 @@ def impute_center_and_standardize(X: jnp.ndarray) -> jnp.ndarray:
     1. Compute mean per SNP excluding missing (NaN)
     2. Replace missing with mean
     3. Center: x = x - mean
-    4. Compute variance on imputed data: var = E[X^2] - E[X]^2
+    4. Compute variance from centered data: var = mean((X - mean)^2)
     5. Standardize: z = centered / sqrt(var), with zero-variance SNPs set to 0
 
     GEMMA computes variance over all samples including imputed values.
@@ -106,8 +106,8 @@ def impute_center_and_standardize(X: jnp.ndarray) -> jnp.ndarray:
     X_centered = X_imputed - snp_means
 
     # Compute variance AFTER imputation (matching GEMMA):
-    # geno_var = E[X^2] - E[X]^2 where sums include imputed values
-    snp_var = jnp.mean(X_imputed**2, axis=0, keepdims=True) - snp_means**2
+    # var(X) = mean((X - mu)^2), reuses already-computed X_centered
+    snp_var = jnp.mean(X_centered**2, axis=0, keepdims=True)
 
     # Standard deviation
     snp_sd = jnp.sqrt(snp_var)

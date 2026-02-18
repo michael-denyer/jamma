@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-02-17
+
+### Fixed
+
+- **Biological chromosome ordering in LOCO**: Chromosomes now sort 1..22, X, Y,
+  XY, MT instead of lexicographic order (1, 10, 11, ..., 2, 20, ...)
+- **CLI timing key access**: Bare `result.timing["key"]` replaced with `.get()`
+  to prevent KeyError when timing keys are missing
+- **CLI `n_covariates` display**: Pipeline now populates `n_covariates` in timing
+  dict (was always showing default value)
+- **LRT validation `all_passed`**: Beta/SE NaN validation now included in LRT
+  comparison (was silently skipped)
+- **Duplicate BIM SNP IDs**: `resolve_snp_list_to_indices()` now warns about
+  duplicate SNP IDs and keeps first occurrence (was silently using last)
+- **`donate_argnums` deprecation**: Removed deprecated JAX `donate_argnums` from
+  golden section optimizers
+- **Empty samples guard**: `run_lmm_association_jax()` now raises `ValueError`
+  when all phenotypes are NaN/-9 (no valid samples remain)
+- **Streaming runner empty samples guard**: Streaming runner raises `ValueError`
+  on zero valid samples after filtering
+
+### Changed
+
+- Migrated `snp_filter.py` logging from `print()` to `loguru`
+- SNP statistics in streaming runners use numpy arrays instead of `locals()` dict
+- Replaced `np.random.seed()` with `np.random.default_rng()` in test_lmm_lrt.py
+
+### Added
+
+- Streaming-vs-batch parity tests for degenerate SNP and empty-samples edge cases
+- Hypothesis property tests for variance computation and SNP filtering
+- `Raises` docstring for `run_lmm_association_jax()` ValueError
+
 ## [2.2.0] - 2026-02-17
 
 ### Added
@@ -316,7 +349,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
-[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/michael-denyer/jamma/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/michael-denyer/jamma/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/michael-denyer/jamma/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/michael-denyer/jamma/compare/v1.5.1...v2.0.0

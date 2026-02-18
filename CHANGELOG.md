@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.2] - 2026-02-18
+
+### Fixed
+
+- **Loguru traceback in pool errors**: Use `logger.opt(exception=e)` instead of
+  `exc_info=True` (stdlib pattern ignored by Loguru) for full traceback on worker failures.
+- **Improved error handling**: Use `RuntimeError` for worker exception wrapping
+  (fixes fragile `type(e)(...)` pattern), log warning on temp file cleanup failure,
+  add `TMPDIR` hint for disk-full errors.
+- **Pre-commit hooks**: Fix hook chain so ruff lint/format runs in CI and locally
+  (was bypassed by beads `core.hooksPath` override).
+
+### Changed
+
+- **Code simplification**: List comprehensions in parallel matrix writer, extracted
+  shared test fixture for temp dir isolation.
+
 ## [2.4.1] - 2026-02-18
 
 ### Fixed
@@ -438,7 +455,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
-[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.4.1...HEAD
+[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.4.2...HEAD
+[2.4.2]: https://github.com/michael-denyer/jamma/compare/v2.4.1...v2.4.2
 [2.4.1]: https://github.com/michael-denyer/jamma/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/michael-denyer/jamma/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/michael-denyer/jamma/compare/v2.2.0...v2.3.0

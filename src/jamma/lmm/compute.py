@@ -5,7 +5,8 @@ shared across runner_jax.py, runner_streaming.py, and loco.py.
 
 The caller is responsible for:
 - Computing Uab_batch via batch_compute_uab (before calling this)
-- Calling block_until_ready() on results (after calling this)
+- Calling block_until_ready() on results (after calling this),
+  or using block_chunk_result() for convenience
 """
 
 from __future__ import annotations
@@ -22,6 +23,88 @@ from jamma.lmm.likelihood_jax import (
 )
 from jamma.lmm.prepare import _grid_optimize_lambda_batched
 
+# Which result key to use for determining slice length per mode
+_FIRST_KEY = {1: "lambdas", 2: "lambdas_mle", 3: "betas", 4: "lambdas"}
+
+# Which keys to sync on per mode (last-computed arrays for timing accuracy)
+_SYNC_KEYS = {
+    1: ("pwalds",),
+    2: ("p_lrts",),
+    3: ("p_scores",),
+    4: ("p_scores", "p_lrts", "pwalds"),
+}
+
+
+def _compute_wald(
+    n_cvt: int,
+    eigenvalues: jax.Array,
+    Uab_batch: jax.Array,
+    n_samples: int,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+) -> dict[str, jax.Array]:
+    """Compute REML-optimized Wald test statistics."""
+    Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
+    lambdas, logls = _grid_optimize_lambda_batched(
+        n_cvt,
+        eigenvalues,
+        Uab_batch,
+        Iab_batch,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+    )
+    betas, ses, pwalds = batch_calc_wald_stats(
+        n_cvt, lambdas, eigenvalues, Uab_batch, n_samples
+    )
+    return {
+        "lambdas": lambdas,
+        "logls": logls,
+        "betas": betas,
+        "ses": ses,
+        "pwalds": pwalds,
+    }
+
+
+def _compute_lrt(
+    n_cvt: int,
+    eigenvalues: jax.Array,
+    Uab_batch: jax.Array,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+    logl_H0: float,
+) -> dict[str, jax.Array]:
+    """Compute MLE-optimized LRT statistics."""
+    lambdas_mle, logls_mle = golden_section_optimize_lambda_mle(
+        n_cvt,
+        eigenvalues,
+        Uab_batch,
+        l_min=l_min,
+        l_max=l_max,
+        n_grid=n_grid,
+        n_iter=max(n_refine, 20),
+    )
+    p_lrts = jax.vmap(calc_lrt_pvalue_jax)(logls_mle, jnp.full_like(logls_mle, logl_H0))
+    return {"lambdas_mle": lambdas_mle, "p_lrts": p_lrts}
+
+
+def _compute_score(
+    n_cvt: int,
+    Hi_eval_null: jax.Array,
+    Uab_batch: jax.Array,
+    n_samples: int,
+) -> dict[str, jax.Array]:
+    """Compute Score test statistics (no optimization needed)."""
+    betas, ses, p_scores = batch_calc_score_stats(
+        n_cvt, Hi_eval_null, Uab_batch, n_samples
+    )
+    return {"betas": betas, "ses": ses, "p_scores": p_scores}
+
 
 def _compute_lmm_chunk(
     lmm_mode: int,
@@ -30,14 +113,11 @@ def _compute_lmm_chunk(
     Uab_batch: jax.Array,
     n_samples: int,
     *,
-    # Wald/LRT optimization params (modes 1, 2, 4)
     l_min: float = 1e-5,
     l_max: float = 1e5,
     n_grid: int = 100,
     n_refine: int = 5,
-    # Score test params (modes 3, 4)
     Hi_eval_null: jax.Array | None = None,
-    # LRT params (modes 2, 4)
     logl_H0: float | None = None,
 ) -> dict[str, jax.Array | None]:
     """Compute LMM statistics for a chunk of SNPs.
@@ -60,109 +140,132 @@ def _compute_lmm_chunk(
         logl_H0: Null model MLE log-likelihood for LRT.
 
     Returns:
-        Dict with keys: best_lambdas, best_logls, betas, ses, p_walds,
-        best_lambdas_mle, p_lrts, p_scores. Keys not relevant to the
+        Dict with keys: lambdas, logls, betas, ses, pwalds,
+        lambdas_mle, p_lrts, p_scores. Keys not relevant to the
         mode are set to None.
     """
     result: dict[str, jax.Array | None] = {
-        "best_lambdas": None,
-        "best_logls": None,
+        "lambdas": None,
+        "logls": None,
         "betas": None,
         "ses": None,
-        "p_walds": None,
-        "best_lambdas_mle": None,
+        "pwalds": None,
+        "lambdas_mle": None,
         "p_lrts": None,
         "p_scores": None,
     }
 
-    if lmm_mode == 1:  # Wald
-        Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
-        best_lambdas, best_logls = _grid_optimize_lambda_batched(
-            n_cvt,
-            eigenvalues,
-            Uab_batch,
-            Iab_batch,
-            l_min,
-            l_max,
-            n_grid,
-            n_refine,
-        )
-        betas, ses, p_walds = batch_calc_wald_stats(
-            n_cvt, best_lambdas, eigenvalues, Uab_batch, n_samples
-        )
-        result["best_lambdas"] = best_lambdas
-        result["best_logls"] = best_logls
-        result["betas"] = betas
-        result["ses"] = ses
-        result["p_walds"] = p_walds
-
-    elif lmm_mode == 3:  # Score
-        betas, ses, p_scores = batch_calc_score_stats(
-            n_cvt, Hi_eval_null, Uab_batch, n_samples
-        )
-        result["betas"] = betas
-        result["ses"] = ses
-        result["p_scores"] = p_scores
-
-    elif lmm_mode == 2:  # LRT
-        best_lambdas_mle, best_logls_mle = golden_section_optimize_lambda_mle(
-            n_cvt,
-            eigenvalues,
-            Uab_batch,
-            l_min=l_min,
-            l_max=l_max,
-            n_grid=n_grid,
-            n_iter=max(n_refine, 20),
-        )
-        p_lrts = jax.vmap(calc_lrt_pvalue_jax)(
-            best_logls_mle, jnp.full_like(best_logls_mle, logl_H0)
-        )
-        result["best_lambdas_mle"] = best_lambdas_mle
-        result["p_lrts"] = p_lrts
-
-    elif lmm_mode == 4:  # All tests
-        # Score test (cheapest, no optimization, reads Uab_batch)
-        _, _, p_scores = batch_calc_score_stats(
-            n_cvt, Hi_eval_null, Uab_batch, n_samples
+    if lmm_mode == 1:
+        result.update(
+            _compute_wald(
+                n_cvt,
+                eigenvalues,
+                Uab_batch,
+                n_samples,
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+            )
         )
 
-        # MLE optimization for LRT
-        best_lambdas_mle, best_logls_mle = golden_section_optimize_lambda_mle(
-            n_cvt,
-            eigenvalues,
-            Uab_batch,
-            l_min=l_min,
-            l_max=l_max,
-            n_grid=n_grid,
-            n_iter=max(n_refine, 20),
-        )
-        p_lrts = jax.vmap(calc_lrt_pvalue_jax)(
-            best_logls_mle, jnp.full_like(best_logls_mle, logl_H0)
-        )
-
-        # REML optimization for Wald
-        Iab_batch = batch_compute_iab(n_cvt, Uab_batch)
-        best_lambdas, best_logls = _grid_optimize_lambda_batched(
-            n_cvt,
-            eigenvalues,
-            Uab_batch,
-            Iab_batch,
-            l_min,
-            l_max,
-            n_grid,
-            n_refine,
-        )
-        betas, ses, p_walds = batch_calc_wald_stats(
-            n_cvt, best_lambdas, eigenvalues, Uab_batch, n_samples
+    elif lmm_mode == 2:
+        result.update(
+            _compute_lrt(
+                n_cvt,
+                eigenvalues,
+                Uab_batch,
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+                logl_H0,
+            )
         )
 
-        result["best_lambdas"] = best_lambdas
-        result["best_logls"] = best_logls
-        result["betas"] = betas
-        result["ses"] = ses
-        result["p_walds"] = p_walds
-        result["best_lambdas_mle"] = best_lambdas_mle
-        result["p_lrts"] = p_lrts
-        result["p_scores"] = p_scores
+    elif lmm_mode == 3:
+        result.update(
+            _compute_score(
+                n_cvt,
+                Hi_eval_null,
+                Uab_batch,
+                n_samples,
+            )
+        )
+
+    elif lmm_mode == 4:
+        # Compose all three tests; Score is cheapest so runs first
+        result.update(
+            _compute_score(
+                n_cvt,
+                Hi_eval_null,
+                Uab_batch,
+                n_samples,
+            )
+        )
+        result.update(
+            _compute_lrt(
+                n_cvt,
+                eigenvalues,
+                Uab_batch,
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+                logl_H0,
+            )
+        )
+        # Wald overwrites betas/ses from Score (REML-optimized values)
+        result.update(
+            _compute_wald(
+                n_cvt,
+                eigenvalues,
+                Uab_batch,
+                n_samples,
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+            )
+        )
 
     return result
+
+
+def block_chunk_result(result: dict[str, jax.Array | None], lmm_mode: int) -> None:
+    """Block until async JAX computation completes for timing accuracy.
+
+    Must be called after _compute_lmm_chunk when the caller needs
+    accurate wall-clock timing (e.g., streaming and LOCO runners).
+
+    Args:
+        result: Dict returned by _compute_lmm_chunk.
+        lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
+    """
+    for key in _SYNC_KEYS[lmm_mode]:
+        result[key].block_until_ready()
+
+
+def strip_and_append(
+    result: dict[str, jax.Array | None],
+    accum: dict[str, list],
+    actual_len: int,
+    needs_padding: bool,
+) -> None:
+    """Strip padding from chunk result arrays and append to accumulators.
+
+    Transfers only the keys present in accum (which are mode-specific),
+    slicing off padding when the chunk was padded.
+
+    Args:
+        result: Dict returned by _compute_lmm_chunk.
+        accum: Dict of lists (from _init_accumulators) to append to.
+        actual_len: Number of real (non-padded) SNPs in this chunk.
+        needs_padding: Whether the chunk was zero-padded.
+    """
+    # Determine slice length from the first non-None array in accum
+    first_key = next(iter(accum))
+    arr = result[first_key]
+    slice_len = actual_len if needs_padding else len(arr)
+    for key in accum:
+        accum[key].append(result[key][:slice_len])

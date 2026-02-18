@@ -4,6 +4,7 @@ This module contains dataclasses that configure various aspects of JAMMA
 execution, including output paths and logging settings.
 """
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -21,6 +22,13 @@ class OutputConfig:
     outdir: Path = field(default_factory=lambda: Path("output"))
     prefix: str = "result"
     verbose: bool = False
+
+    def __post_init__(self) -> None:
+        if os.sep in self.prefix or "/" in self.prefix:
+            raise ValueError(
+                f"prefix must not contain path separators, "
+                f"got '{self.prefix}'. Use outdir for directory paths."
+            )
 
     @property
     def log_path(self) -> Path:

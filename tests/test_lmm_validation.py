@@ -12,7 +12,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.core import configure_jax
 from jamma.io import load_plink_binary
 from jamma.kinship import compute_centered_kinship
 from jamma.kinship.io import read_kinship_matrix
@@ -47,25 +46,26 @@ MOUSE_HS1940_TOLERANCES = ToleranceConfig(
 )
 
 # Test data paths - use gemma_synthetic which has matching PLINK + reference outputs
-EXAMPLE_DATA = Path("tests/fixtures/gemma_synthetic/test")
-REFERENCE_KINSHIP = Path("tests/fixtures/gemma_synthetic/gemma_kinship.cXX.txt")
-REFERENCE_ASSOC = Path("tests/fixtures/gemma_synthetic/gemma_assoc.assoc.txt")
+_FIXTURE_ROOT = Path(__file__).parent / "fixtures"
+EXAMPLE_DATA = _FIXTURE_ROOT / "gemma_synthetic" / "test"
+REFERENCE_KINSHIP = _FIXTURE_ROOT / "gemma_synthetic" / "gemma_kinship.cXX.txt"
+REFERENCE_ASSOC = _FIXTURE_ROOT / "gemma_synthetic" / "gemma_assoc.assoc.txt"
 
 # Covariate validation paths
-COVARIATE_FIXTURE_DIR = Path("tests/fixtures/gemma_covariate")
+COVARIATE_FIXTURE_DIR = _FIXTURE_ROOT / "gemma_covariate"
 COVARIATE_FILE = COVARIATE_FIXTURE_DIR / "covariates.txt"
 COVARIATE_REFERENCE_ASSOC = COVARIATE_FIXTURE_DIR / "gemma_covariate.assoc.txt"
 
 # Score test validation path
-SCORE_REFERENCE_ASSOC = Path("tests/fixtures/gemma_score/gemma_score.assoc.txt")
+SCORE_REFERENCE_ASSOC = _FIXTURE_ROOT / "gemma_score" / "gemma_score.assoc.txt"
 
 # All-tests (-lmm 4) validation paths
-ALL_TESTS_FIXTURE_DIR = Path("tests/fixtures/gemma_all_tests")
+ALL_TESTS_FIXTURE_DIR = _FIXTURE_ROOT / "gemma_all_tests"
 ALL_TESTS_REFERENCE = ALL_TESTS_FIXTURE_DIR / "gemma_all.assoc.txt"
 ALL_TESTS_COVAR_REFERENCE = ALL_TESTS_FIXTURE_DIR / "gemma_all_covar.assoc.txt"
 
 # Mouse HS1940 validation paths
-MOUSE_HS1940_DIR = Path("tests/fixtures/mouse_hs1940")
+MOUSE_HS1940_DIR = _FIXTURE_ROOT / "mouse_hs1940"
 MOUSE_HS1940_DATA = MOUSE_HS1940_DIR / "mouse_hs1940"
 MOUSE_HS1940_KINSHIP = MOUSE_HS1940_DIR / "mouse_hs1940_kinship.cXX.txt"
 MOUSE_HS1940_COVARIATES = MOUSE_HS1940_DIR / "covariates.txt"
@@ -91,12 +91,6 @@ def _all_tests_reference_exists():
 def _mouse_hs1940_exists():
     """Check if mouse_hs1940 PLINK data exists."""
     return MOUSE_HS1940_DATA.with_suffix(".bed").exists()
-
-
-@pytest.fixture(autouse=True)
-def setup_jax():
-    """Configure JAX with 64-bit precision before each test."""
-    configure_jax(enable_x64=True)
 
 
 @pytest.fixture
@@ -180,70 +174,34 @@ def hs1940_covariates():
     return np.hstack([intercept, raw])
 
 
+@pytest.mark.tier1
 class TestLmmValidation:
-    """Tests validating JAMMA LMM against GEMMA reference."""
+    """Tests validating JAMMA LMM against GEMMA reference.
+
+    Uses session-scoped validation_pipeline_data fixture to run the
+    LMM pipeline once and share results across all three tests.
+    """
 
     @pytest.mark.skipif(
         not REFERENCE_ASSOC.exists(),
         reason="Reference LMM data not generated. Run generate_lmm_reference.sh",
     )
-    def test_lmm_matches_reference(
-        self, mouse_data, mouse_phenotypes, reference_kinship
-    ):
+    def test_lmm_matches_reference(self, validation_pipeline_data):
         """JAMMA LMM matches GEMMA reference within tolerance."""
-        # Load reference results
-        reference_results = load_gemma_assoc(REFERENCE_ASSOC)
-
-        # Extract data from PLINK
-        genotypes = mouse_data.genotypes
-        phenotypes = mouse_phenotypes
-
-        # Build SNP info from PlinkData
-        snp_info = _build_snp_info(mouse_data)
-
-        # Run JAMMA LMM
-        jamma_results = run_lmm_association_jax(
-            genotypes=genotypes,
-            phenotypes=phenotypes,
-            kinship=reference_kinship,
-            snp_info=snp_info,
-            show_progress=False,
-            check_memory=False,
-        )
-
-        # Compare results
-        comparison = compare_assoc_results(
-            jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
-        )
-
-        # Assert overall pass
+        if validation_pipeline_data is None:
+            pytest.skip("Reference data not available")
+        comparison = validation_pipeline_data["comparison"]
         assert comparison.passed, _format_comparison_failure(comparison)
 
     @pytest.mark.skipif(
         not REFERENCE_ASSOC.exists(),
         reason="Reference LMM data not generated. Run generate_lmm_reference.sh",
     )
-    def test_lmm_beta_tolerance(self, mouse_data, mouse_phenotypes, reference_kinship):
+    def test_lmm_beta_tolerance(self, validation_pipeline_data):
         """Effect sizes match within beta_rtol tolerance."""
-        reference_results = load_gemma_assoc(REFERENCE_ASSOC)
-
-        genotypes = mouse_data.genotypes
-        phenotypes = mouse_phenotypes
-        snp_info = _build_snp_info(mouse_data)
-
-        jamma_results = run_lmm_association_jax(
-            genotypes=genotypes,
-            phenotypes=phenotypes,
-            kinship=reference_kinship,
-            snp_info=snp_info,
-            show_progress=False,
-            check_memory=False,
-        )
-
-        comparison = compare_assoc_results(
-            jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
-        )
-
+        if validation_pipeline_data is None:
+            pytest.skip("Reference data not available")
+        comparison = validation_pipeline_data["comparison"]
         assert comparison.beta.passed, (
             f"Beta comparison failed: {comparison.beta.message}\n"
             f"Max abs diff: {comparison.beta.max_abs_diff:.2e}\n"
@@ -254,29 +212,11 @@ class TestLmmValidation:
         not REFERENCE_ASSOC.exists(),
         reason="Reference LMM data not generated. Run generate_lmm_reference.sh",
     )
-    def test_lmm_pvalue_tolerance(
-        self, mouse_data, mouse_phenotypes, reference_kinship
-    ):
+    def test_lmm_pvalue_tolerance(self, validation_pipeline_data):
         """P-values match within pvalue_rtol tolerance."""
-        reference_results = load_gemma_assoc(REFERENCE_ASSOC)
-
-        genotypes = mouse_data.genotypes
-        phenotypes = mouse_phenotypes
-        snp_info = _build_snp_info(mouse_data)
-
-        jamma_results = run_lmm_association_jax(
-            genotypes=genotypes,
-            phenotypes=phenotypes,
-            kinship=reference_kinship,
-            snp_info=snp_info,
-            show_progress=False,
-            check_memory=False,
-        )
-
-        comparison = compare_assoc_results(
-            jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
-        )
-
+        if validation_pipeline_data is None:
+            pytest.skip("Reference data not available")
+        comparison = validation_pipeline_data["comparison"]
         assert comparison.p_wald.passed, (
             f"P-value comparison failed: {comparison.p_wald.message}\n"
             f"Max abs diff: {comparison.p_wald.max_abs_diff:.2e}\n"
@@ -284,6 +224,7 @@ class TestLmmValidation:
         )
 
 
+@pytest.mark.tier1
 class TestLmmOutputFormat:
     """Tests for LMM output format compatibility."""
 
@@ -495,6 +436,7 @@ class TestLmmOutputFormat:
         assert header == expected
 
 
+@pytest.mark.tier1
 class TestLmmSmallScale:
     """Tests with smaller synthetic data for faster CI."""
 
@@ -606,6 +548,7 @@ class TestLmmSmallScale:
             assert r1.p_wald == r2.p_wald
 
 
+@pytest.mark.tier1
 class TestLmmWithMissingPhenotypes:
     """Tests for LMM with missing phenotype data."""
 
@@ -718,6 +661,7 @@ def _status(result) -> str:
     return "PASS" if result.passed else "FAIL"
 
 
+@pytest.mark.tier1
 class TestLmmJaxValidation:
     """Tests validating JAX LMM runner against GEMMA reference.
 
@@ -945,6 +889,7 @@ class TestLmmJaxValidation:
             )
 
 
+@pytest.mark.tier1
 class TestJaxChunkingCorrectness:
     """Tests verifying multi-chunk JAX processing matches single-chunk.
 
@@ -1051,6 +996,7 @@ class TestJaxChunkingCorrectness:
             )
 
 
+@pytest.mark.tier1
 class TestLmmCovariateIntegration:
     """Tests for covariate integration in LMM association."""
 
@@ -1231,6 +1177,7 @@ class TestLmmCovariateIntegration:
             assert np.isfinite(r.p_wald), f"NaN p-value for {r.rs}"
 
 
+@pytest.mark.tier1
 class TestLmmCovariateValidation:
     """Tests validating JAMMA LMM with covariates against GEMMA reference.
 
@@ -1326,6 +1273,7 @@ class TestLmmCovariateValidation:
         )
 
 
+@pytest.mark.tier1
 class TestAFSemantics:
     """Tests verifying allele frequency semantics and orientation behavior.
 
@@ -1494,6 +1442,7 @@ class TestAFSemantics:
         )
 
 
+@pytest.mark.tier1
 class TestLmmScoreValidation:
     """Tests validating JAMMA Score test against GEMMA reference.
 
@@ -1622,6 +1571,7 @@ class TestLmmScoreValidation:
         )
 
 
+@pytest.mark.tier1
 class TestScoreTestProperties:
     """Tests for Score test mathematical properties.
 
@@ -1724,6 +1674,7 @@ class TestScoreTestProperties:
             assert r.p_wald is None, "Score test should not produce p_wald"
 
 
+@pytest.mark.tier1
 class TestLmmAllTestsValidation:
     """Tests validating JAMMA -lmm 4 (all tests) against GEMMA reference.
 
@@ -1871,6 +1822,7 @@ class TestLmmAllTestsValidation:
         )
 
 
+@pytest.mark.tier1
 class TestLmmAllTestsProperties:
     """Tests for -lmm 4 (all tests) mathematical properties.
 
@@ -2077,6 +2029,7 @@ class TestLmmAllTestsProperties:
 
 
 @pytest.mark.slow
+@pytest.mark.tier2
 class TestMouseHS1940Validation:
     """Tests validating JAMMA against GEMMA on mouse_hs1940 dataset.
 

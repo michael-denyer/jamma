@@ -6,6 +6,7 @@ import pytest
 from jamma.io.covariate import encode_categorical_covariates
 
 
+@pytest.mark.tier0
 class TestEncodeCategoricalBasic:
     """Tests for basic categorical encoding behavior."""
 

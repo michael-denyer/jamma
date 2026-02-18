@@ -7,6 +7,7 @@ import pytest
 from jamma.core.progress import progress_iterator
 
 
+@pytest.mark.tier0
 class TestProgressBarLifecycle:
     """Tests that progress bar is finalized correctly in all scenarios."""
 

@@ -2,9 +2,12 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from jamma.utils.logging import log_rss_memory
 
 
+@pytest.mark.tier0
 class TestLogRssMemory:
     """Tests for log_rss_memory function."""
 

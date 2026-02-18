@@ -123,9 +123,11 @@ def run_lmm_loco(
     Returns:
         Tuple of (results, n_tested) where results is a list of AssocResult
         in biological chromosome order (1-22, X, Y, XY, MT) with original
-        within-chromosome SNP order preserved (empty list if output_path
-        set) and n_tested is the total number of SNPs tested across all
-        chromosomes.
+        within-chromosome SNP order preserved. Chromosomes that lack
+        leave-one-out kinship (e.g., excluded by -ksnps) use full-kinship
+        fallback and are yielded after all LOCO chromosomes. Empty list
+        if output_path is set. n_tested is the total number of SNPs tested
+        across all chromosomes.
 
     Raises:
         ValueError: If only one chromosome present, or if lmm_mode invalid.

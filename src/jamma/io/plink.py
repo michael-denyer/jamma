@@ -202,6 +202,8 @@ def validate_plink_dimensions(bfile: Path) -> None:
             raise FileNotFoundError(f"PLINK {ext} file not found: {path}")
 
     # Count lines in .fam (= n_samples) and .bim (= n_snps)
+    # TODO(jamma-oit): For very large .bim files (>1M SNPs), consider
+    # using file size estimation or subprocess wc -l instead of line scan.
     with open(fam_path) as f:
         n_fam = sum(1 for _ in f)
     with open(bim_path) as f:

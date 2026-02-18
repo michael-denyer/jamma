@@ -9,15 +9,10 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from jamma.core import configure_jax, get_jax_info, verify_jax_installation
+from jamma.core import get_jax_info, verify_jax_installation
 
 
-@pytest.fixture(autouse=True)
-def setup_jax():
-    """Configure JAX with 64-bit precision before each test."""
-    configure_jax(enable_x64=True)
-
-
+@pytest.mark.tier0
 class TestJaxImports:
     """Test that JAX imports correctly."""
 
@@ -29,6 +24,7 @@ class TestJaxImports:
         assert hasattr(jnp, "array")
 
 
+@pytest.mark.tier0
 class TestJax64Bit:
     """Test JAX 64-bit precision configuration."""
 
@@ -46,6 +42,7 @@ class TestJax64Bit:
         assert result.dtype == jnp.float64
 
 
+@pytest.mark.tier0
 class TestJaxJit:
     """Test JAX JIT compilation."""
 
@@ -82,6 +79,7 @@ class TestJaxJit:
         assert jnp.allclose(result1, jnp.array([8.0, 15.0]))
 
 
+@pytest.mark.tier0
 class TestJaxLinearAlgebra:
     """Test JAX linear algebra operations needed for GEMMA."""
 
@@ -130,6 +128,7 @@ class TestJaxLinearAlgebra:
         assert jnp.allclose(jnp.matmul(a, x), b)
 
 
+@pytest.mark.tier0
 class TestJaxConfigFunctions:
     """Test the JAX configuration utility functions."""
 

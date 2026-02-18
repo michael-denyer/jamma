@@ -17,7 +17,7 @@ import jamma
 from jamma.core import OutputConfig
 from jamma.io import load_plink_binary
 from jamma.kinship import (
-    compute_centered_kinship,
+    compute_kinship_streaming,
     compute_loco_kinship_streaming,
     compute_standardized_kinship,
     write_kinship_matrix,
@@ -401,39 +401,49 @@ def _run_gk(
         return
 
     # Standard kinship mode
-    # Load PLINK data
-    click.echo(f"Loading PLINK data from {bfile}...")
-    try:
-        plink_data = load_plink_binary(bfile)
-    except (FileNotFoundError, ValueError, OSError) as e:
-        _cli_error(f"loading PLINK data: {e}")
-
-    click.echo(f"Loaded {plink_data.n_samples} samples, {plink_data.n_snps} SNPs")
-
-    if mode == 2:
-        kinship_label = "standardized"
-        compute_fn = compute_standardized_kinship
-    else:
-        kinship_label = "centered"
-        compute_fn = compute_centered_kinship
-
-    click.echo(f"Computing {kinship_label} kinship matrix...")
-    if maf > 0.0 or miss < 1.0:
-        click.echo(f"Filtering: MAF >= {maf}, missing rate <= {miss}")
-
-    # Filter genotypes to ksnps subset if provided
-    genotypes = plink_data.genotypes
-    if ksnps_indices is not None:
-        genotypes = genotypes[:, ksnps_indices]
-        click.echo(f"Using {genotypes.shape[1]} SNPs for kinship computation")
-
     kinship_start = time.perf_counter()
-    K = compute_fn(
-        genotypes,
-        maf_threshold=maf,
-        miss_threshold=miss,
-        check_memory=check_memory,
-    )
+
+    if mode == 1:
+        # Centered kinship: use streaming to avoid loading full genotype matrix
+        kinship_label = "centered"
+        click.echo(f"Computing {kinship_label} kinship matrix (streaming)...")
+        if maf > 0.0 or miss < 1.0:
+            click.echo(f"Filtering: MAF >= {maf}, missing rate <= {miss}")
+
+        K = compute_kinship_streaming(
+            bfile,
+            maf_threshold=maf,
+            miss_threshold=miss,
+            check_memory=check_memory,
+            show_progress=True,
+            ksnps_indices=ksnps_indices,
+        )
+    else:
+        # Standardized kinship: requires full genotype matrix (no streaming variant)
+        kinship_label = "standardized"
+        click.echo(f"Loading PLINK data from {bfile}...")
+        try:
+            plink_data = load_plink_binary(bfile)
+        except (FileNotFoundError, ValueError, OSError) as e:
+            _cli_error(f"loading PLINK data: {e}")
+
+        click.echo(f"Loaded {plink_data.n_samples} samples, {plink_data.n_snps} SNPs")
+        click.echo(f"Computing {kinship_label} kinship matrix...")
+        if maf > 0.0 or miss < 1.0:
+            click.echo(f"Filtering: MAF >= {maf}, missing rate <= {miss}")
+
+        genotypes = plink_data.genotypes
+        if ksnps_indices is not None:
+            genotypes = genotypes[:, ksnps_indices]
+            click.echo(f"Using {genotypes.shape[1]} SNPs for kinship computation")
+
+        K = compute_standardized_kinship(
+            genotypes,
+            maf_threshold=maf,
+            miss_threshold=miss,
+            check_memory=check_memory,
+        )
+
     kinship_time = time.perf_counter() - kinship_start
     click.echo(f"{kinship_label.capitalize()} kinship computed in {kinship_time:.2f}s")
 
@@ -462,9 +472,13 @@ def _run_gk(
     elapsed = end_time - start_time
 
     # Write log file
+    n_samples = K.shape[0]
+    from jamma.io.plink import get_plink_metadata
+
+    n_snps = get_plink_metadata(bfile)["n_snps"]
     params = {
-        "n_samples": plink_data.n_samples,
-        "n_snps": plink_data.n_snps,
+        "n_samples": n_samples,
+        "n_snps": n_snps,
         "kinship_mode": mode,
         "kinship_file": str(kinship_path),
         "maf_threshold": maf,

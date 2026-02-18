@@ -15,6 +15,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "gemma_synthetic"
 BFILE = FIXTURES / "test"
 
 
+@pytest.mark.tier1
 class TestPipelineConfig:
     """Tests for PipelineConfig defaults."""
 
@@ -54,6 +55,7 @@ class TestPipelineConfig:
         assert config.mem_budget == 64.0
 
 
+@pytest.mark.tier1
 class TestValidateInputs:
     """Tests for PipelineRunner.validate_inputs."""
 
@@ -112,6 +114,7 @@ class TestValidateInputs:
             runner.validate_inputs()
 
 
+@pytest.mark.tier1
 class TestParsePhenotypes:
     """Tests for PipelineRunner.parse_phenotypes."""
 
@@ -129,6 +132,7 @@ class TestParsePhenotypes:
         assert n_analyzed <= 100
 
 
+@pytest.mark.tier1
 class TestCheckMemory:
     """Tests for PipelineRunner.check_memory_requirements."""
 
@@ -169,6 +173,7 @@ def _copy_plink_genotypes(dest: Path) -> Path:
     return dest / "test"
 
 
+@pytest.mark.tier1
 class TestPhenotypeColumnSelection:
     """Tests for phenotype column selection via PipelineConfig.phenotype_column."""
 
@@ -265,6 +270,7 @@ class TestPhenotypeColumnSelection:
             runner.parse_phenotypes()
 
 
+@pytest.mark.tier1
 class TestPipelineConfigSnpsFields:
     """Tests for PipelineConfig SNP filtering fields."""
 
@@ -288,6 +294,7 @@ class TestPipelineConfigSnpsFields:
         assert config.hwe_threshold == 0.001
 
 
+@pytest.mark.tier1
 class TestValidateInputsSnpsFields:
     """Tests for validate_inputs SNP filtering validation."""
 
@@ -348,6 +355,7 @@ class TestValidateInputsSnpsFields:
             runner.validate_inputs()
 
 
+@pytest.mark.tier1
 class TestPipelineConfigLambdaBounds:
     """Tests for PipelineConfig lambda bounds (l_min, l_max)."""
 
@@ -417,6 +425,7 @@ class TestPipelineConfigLambdaBounds:
             runner.validate_inputs()
 
 
+@pytest.mark.tier1
 class TestPipelineConfigWeightFile:
     """Tests for PipelineConfig weight_file and pipeline weight application."""
 
@@ -511,6 +520,7 @@ class TestPipelineConfigWeightFile:
         np.testing.assert_allclose(K_weighted, K_unweighted / 4.0, rtol=1e-10)
 
 
+@pytest.mark.tier1
 class TestPhenotypeColumnMissingValues:
     """Tests for missing value handling in non-default phenotype columns."""
 
@@ -549,6 +559,7 @@ class TestPhenotypeColumnMissingValues:
 # ===========================================================================
 
 
+@pytest.mark.tier1
 class TestX64GuaranteedWithPrecomputedEigen:
     """Regression test for Bug 1 (jamma-4x8): x64 not guaranteed when
     using precomputed eigen files, which bypass kinship/compute.py.
@@ -607,6 +618,7 @@ class TestX64GuaranteedWithPrecomputedEigen:
             jc._jax_configured = original_state
 
 
+@pytest.mark.tier1
 class TestNSamplesReflectsCovariateFiltering:
     """Regression test for Bug 2 (jamma-ri0): n_samples reported
     phenotype-only count instead of post-covariate-filter count.
@@ -661,6 +673,7 @@ class TestNSamplesReflectsCovariateFiltering:
         )
 
 
+@pytest.mark.tier1
 class TestNSnpsTestedReflectsFiltering:
     """Regression test for Bug 3 (jamma-bza): n_snps_tested reported
     dataset total instead of post-filter count.

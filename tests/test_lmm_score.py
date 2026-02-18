@@ -10,7 +10,6 @@ Tests verify:
 import numpy as np
 import pytest
 
-from jamma.core import configure_jax
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood import (
     calc_pab,
@@ -19,12 +18,6 @@ from jamma.lmm.likelihood import (
     get_ab_index,
 )
 from jamma.lmm.stats import calc_score_test, calc_wald_test, f_sf
-
-
-@pytest.fixture(autouse=True)
-def setup_jax():
-    """Configure JAX with 64-bit precision before each test."""
-    configure_jax(enable_x64=True)
 
 
 def _create_test_data(n_samples: int = 100, n_cvt: int = 1, seed: int = 42):
@@ -66,6 +59,7 @@ def _create_test_data(n_samples: int = 100, n_cvt: int = 1, seed: int = 42):
     }
 
 
+@pytest.mark.tier0
 class TestNullModelLambda:
     """Tests for null model lambda computation."""
 
@@ -171,6 +165,7 @@ class TestNullModelLambda:
         assert np.isfinite(logl_null), "Log-likelihood should be finite"
 
 
+@pytest.mark.tier0
 class TestScoreTestMath:
     """Tests for Score test statistic computation."""
 
@@ -305,6 +300,7 @@ class TestScoreTestMath:
         )
 
 
+@pytest.mark.tier0
 class TestScoreVsWald:
     """Tests comparing Score and Wald test properties."""
 
@@ -372,9 +368,7 @@ class TestScoreVsWald:
         lambda_wald = float(lambdas[0])
         Hi_eval_wald = 1.0 / (lambda_wald * data["eigenvalues"] + 1.0)
         Pab_wald = calc_pab(n_cvt, Hi_eval_wald, Uab)
-        beta_wald, _, _ = calc_wald_test(
-            lambda_wald, Pab_wald, n_cvt, data["n_samples"]
-        )
+        beta_wald, _, _ = calc_wald_test(Pab_wald, n_cvt, data["n_samples"])
 
         # Both should have same sign (effect direction)
         assert np.sign(beta_score) == np.sign(beta_wald), (
@@ -412,6 +406,7 @@ class TestScoreVsWald:
             assert 0.0 <= p <= 1.0, f"SNP {i}: p-value {p} not in [0, 1]"
 
 
+@pytest.mark.tier0
 class TestScoreTestEdgeCases:
     """Edge case tests for Score test."""
 

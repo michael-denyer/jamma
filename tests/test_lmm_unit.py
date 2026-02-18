@@ -7,7 +7,6 @@ using synthetic data with known properties.
 import numpy as np
 import pytest
 
-from jamma.core import configure_jax
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood import (
     calc_pab,
@@ -18,12 +17,7 @@ from jamma.lmm.likelihood import (
 from jamma.lmm.stats import AssocResult, calc_wald_test, f_sf
 
 
-@pytest.fixture(autouse=True)
-def setup_jax():
-    """Configure JAX with 64-bit precision before each test."""
-    configure_jax(enable_x64=True)
-
-
+@pytest.mark.tier0
 class TestEigendecomposition:
     """Tests for kinship eigendecomposition."""
 
@@ -139,6 +133,7 @@ class TestEigendecomposition:
             mock_check.assert_called_once()
 
 
+@pytest.mark.tier0
 class TestEigendecomposeOrReuse:
     """Tests for _eigendecompose_or_reuse check_memory propagation."""
 
@@ -189,6 +184,7 @@ class TestEigendecomposeOrReuse:
             mock_check.assert_called_once()
 
 
+@pytest.mark.tier0
 class TestUabComputation:
     """Tests for U'ab matrix computation."""
 
@@ -229,6 +225,7 @@ class TestUabComputation:
         assert idx_12 == idx_21, "Index should be symmetric"
 
 
+@pytest.mark.tier0
 class TestPabComputation:
     """Tests for weighted Pab computation."""
 
@@ -271,6 +268,7 @@ class TestPabComputation:
         assert Pab[0, idx_33] > 0, f"Pab[0, {idx_33}] should be positive"
 
 
+@pytest.mark.tier0
 class TestRemlLogLikelihood:
     """Tests for REML log-likelihood computation."""
 
@@ -338,6 +336,7 @@ class TestRemlLogLikelihood:
         )
 
 
+@pytest.mark.tier0
 class TestFDistributionSF:
     """Tests for F-distribution survival function."""
 
@@ -372,99 +371,74 @@ class TestFDistributionSF:
         assert np.isclose(p, 0.05, atol=0.01), f"Expected p≈0.05, got {p}"
 
 
+@pytest.fixture
+def wald_test_inputs():
+    """Create valid Pab matrix and metadata for Wald test.
+
+    Shared setup for Wald test methods that need consistent
+    K, eigenvalues, U, y, W, x, Uab, Hi_eval, Pab.
+    """
+    n_samples = 100
+    n_cvt = 1
+    rng = np.random.default_rng(42)
+
+    X = rng.standard_normal((n_samples, 100))
+    K = X @ X.T / X.shape[1]
+    eigenvalues = np.linalg.eigvalsh(K)
+    eigenvalues = np.maximum(eigenvalues, 1e-10)
+
+    U = np.linalg.eigh(K)[1]
+    y = rng.standard_normal(n_samples)
+    W = np.ones((n_samples, 1))
+    x = rng.standard_normal(n_samples)
+    Uty = U.T @ y
+    UtW = U.T @ W
+    Utx = U.T @ x
+
+    Uab = compute_Uab(UtW, Uty, Utx)
+    lambda_val = 1.0
+    Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
+    Pab = calc_pab(n_cvt, Hi_eval, Uab)
+
+    return {
+        "Pab": Pab,
+        "n_cvt": n_cvt,
+        "n_samples": n_samples,
+        "eigenvalues": eigenvalues,
+        "Uab": Uab,
+        "lambda_val": lambda_val,
+    }
+
+
+@pytest.mark.tier0
 class TestWaldTest:
     """Tests for Wald test statistics computation."""
 
-    def test_calc_wald_returns_three_values(self):
+    def test_calc_wald_returns_three_values(self, wald_test_inputs):
         """Wald test returns beta, se, p_wald."""
-        n_samples = 100
-        n_cvt = 1
-        rng = np.random.default_rng(42)
-
-        # Create valid Pab matrix
-        X = rng.standard_normal((n_samples, 100))
-        K = X @ X.T / X.shape[1]
-        eigenvalues = np.linalg.eigvalsh(K)
-        eigenvalues = np.maximum(eigenvalues, 1e-10)
-
-        U = np.linalg.eigh(K)[1]
-        y = rng.standard_normal(n_samples)
-        W = np.ones((n_samples, 1))
-        x = rng.standard_normal(n_samples)
-        Uty = U.T @ y
-        UtW = U.T @ W
-        Utx = U.T @ x
-
-        Uab = compute_Uab(UtW, Uty, Utx)
-        lambda_val = 1.0
-        Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
-        Pab = calc_pab(n_cvt, Hi_eval, Uab)
-
-        beta, se, p_wald = calc_wald_test(lambda_val, Pab, n_cvt, n_samples)
+        d = wald_test_inputs
+        beta, se, p_wald = calc_wald_test(d["Pab"], d["n_cvt"], d["n_samples"])
 
         assert isinstance(beta, int | float)
         assert isinstance(se, int | float)
         assert isinstance(p_wald, int | float)
 
-    def test_calc_wald_se_positive(self):
+    def test_calc_wald_se_positive(self, wald_test_inputs):
         """Standard error should be positive."""
-        n_samples = 100
-        n_cvt = 1
-        rng = np.random.default_rng(42)
-
-        # Create valid Pab matrix
-        X = rng.standard_normal((n_samples, 100))
-        K = X @ X.T / X.shape[1]
-        eigenvalues = np.linalg.eigvalsh(K)
-        eigenvalues = np.maximum(eigenvalues, 1e-10)
-
-        U = np.linalg.eigh(K)[1]
-        y = rng.standard_normal(n_samples)
-        W = np.ones((n_samples, 1))
-        x = rng.standard_normal(n_samples)
-        Uty = U.T @ y
-        UtW = U.T @ W
-        Utx = U.T @ x
-
-        Uab = compute_Uab(UtW, Uty, Utx)
-        lambda_val = 1.0
-        Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
-        Pab = calc_pab(n_cvt, Hi_eval, Uab)
-
-        _, se, _ = calc_wald_test(lambda_val, Pab, n_cvt, n_samples)
+        d = wald_test_inputs
+        _, se, _ = calc_wald_test(d["Pab"], d["n_cvt"], d["n_samples"])
 
         assert se > 0, f"SE should be positive, got {se}"
 
-    def test_calc_wald_pvalue_valid(self):
+    def test_calc_wald_pvalue_valid(self, wald_test_inputs):
         """P-value should be in [0, 1]."""
-        n_samples = 100
-        n_cvt = 1
-        rng = np.random.default_rng(42)
-
-        # Create valid Pab matrix
-        X = rng.standard_normal((n_samples, 100))
-        K = X @ X.T / X.shape[1]
-        eigenvalues = np.linalg.eigvalsh(K)
-        eigenvalues = np.maximum(eigenvalues, 1e-10)
-
-        U = np.linalg.eigh(K)[1]
-        y = rng.standard_normal(n_samples)
-        W = np.ones((n_samples, 1))
-        x = rng.standard_normal(n_samples)
-        Uty = U.T @ y
-        UtW = U.T @ W
-        Utx = U.T @ x
-
-        Uab = compute_Uab(UtW, Uty, Utx)
-        lambda_val = 1.0
-        Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
-        Pab = calc_pab(n_cvt, Hi_eval, Uab)
-
-        _, _, p_wald = calc_wald_test(lambda_val, Pab, n_cvt, n_samples)
+        d = wald_test_inputs
+        _, _, p_wald = calc_wald_test(d["Pab"], d["n_cvt"], d["n_samples"])
 
         assert 0.0 <= p_wald <= 1.0, f"P-value {p_wald} not in [0, 1]"
 
 
+@pytest.mark.tier0
 class TestGetAbIndex:
     """Tests for Pab array indexing using GEMMA's GetabIndex."""
 
@@ -501,6 +475,7 @@ class TestGetAbIndex:
         assert get_ab_index(3, 3, n_cvt) == 5
 
 
+@pytest.mark.tier0
 class TestAssocResult:
     """Tests for AssocResult dataclass."""
 

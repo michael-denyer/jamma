@@ -397,9 +397,7 @@ class PipelineRunner:
             return None
 
         actual_chunk = _compute_chunk_size(n_samples, n_snps, n_cvt=n_cvt)
-        est = estimate_streaming_memory(
-            n_samples, n_snps, chunk_size=actual_chunk, n_cvt=n_cvt
-        )
+        est = estimate_streaming_memory(n_samples, chunk_size=actual_chunk, n_cvt=n_cvt)
 
         logger.info(
             f"Memory estimate: {est.total_peak_gb:.1f}GB required, "

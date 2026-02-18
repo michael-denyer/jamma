@@ -1,8 +1,11 @@
 """Tests for compute backend information."""
 
+import pytest
+
 from jamma.core.backend import get_backend_info
 
 
+@pytest.mark.tier0
 class TestBackendInfo:
     """Tests for get_backend_info function."""
 

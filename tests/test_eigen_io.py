@@ -31,6 +31,7 @@ from jamma.lmm.eigen_io import (
 # =============================================================================
 
 
+@pytest.mark.tier0
 class TestEigenvalueFormat:
     """Verify eigenvalue file format matches GEMMA .eigenD.txt."""
 
@@ -94,6 +95,7 @@ class TestEigenvalueFormat:
 # =============================================================================
 
 
+@pytest.mark.tier0
 class TestRoundTripPrecision:
     """Verify .10g format preserves sufficient precision for LMM."""
 
@@ -145,6 +147,7 @@ class TestRoundTripPrecision:
 # =============================================================================
 
 
+@pytest.mark.tier0
 class TestDimensionValidation:
     """Verify read_eigen_files catches dimension mismatches."""
 
@@ -200,6 +203,7 @@ class TestDimensionValidation:
 # =============================================================================
 
 
+@pytest.mark.tier0
 class TestEdgeCases:
     """Edge case handling for eigen I/O."""
 
@@ -246,6 +250,7 @@ class TestEdgeCases:
 # =============================================================================
 
 
+@pytest.mark.tier0
 class TestReaderValidation:
     """Verify individual readers catch parse errors and bad shapes."""
 
@@ -294,6 +299,7 @@ KINSHIP_FILE = FIXTURES / "mouse_hs1940_kinship.cXX.txt"
 
 
 @pytest.mark.slow
+@pytest.mark.tier1
 class TestLMMEquivalence:
     """Verify loaded-eigen LMM results match fresh-eigen results."""
 
@@ -451,6 +457,7 @@ class TestLMMEquivalence:
 # =============================================================================
 
 
+@pytest.mark.tier0
 class TestFlagInteractions:
     """Verify flag validation rules for eigen reuse."""
 
@@ -548,6 +555,7 @@ class TestFlagInteractions:
 # =============================================================================
 
 
+@pytest.mark.tier0
 class TestCLIFlags:
     """Verify CLI help shows eigen flags."""
 

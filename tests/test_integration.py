@@ -12,6 +12,7 @@ from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from click.testing import CliRunner
 
 from jamma.cli import main
@@ -22,6 +23,7 @@ runner = CliRunner()
 EXAMPLE_BFILE = Path(__file__).parent / "fixtures" / "gemma_synthetic" / "test"
 
 
+@pytest.mark.tier1
 class TestGkWorkflow:
     """Integration tests for the gk (kinship) workflow."""
 
@@ -60,6 +62,7 @@ class TestGkWorkflow:
         assert "n_snps = 500" in log_content, "Log should contain SNP count"
 
 
+@pytest.mark.tier1
 class TestPlinkToValidationRoundtrip:
     """Integration tests for data loading, processing, and validation."""
 
@@ -103,6 +106,7 @@ class TestPlinkToValidationRoundtrip:
         assert result.passed, f"Kinship roundtrip failed: {result.message}"
 
 
+@pytest.mark.tier1
 class TestFullModuleImports:
     """Integration tests for module imports."""
 
@@ -160,6 +164,7 @@ class TestFullModuleImports:
         assert load_gemma_kinship is not None
 
 
+@pytest.mark.tier1
 class TestJaxWithPlinkData:
     """Integration tests for JAX operations with real PLINK data."""
 

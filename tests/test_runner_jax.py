@@ -11,12 +11,13 @@ from jamma.lmm.runner_jax import run_lmm_association_jax
 from jamma.validation import compare_assoc_results, load_gemma_assoc
 
 # GEMMA covariate fixture paths (Score and LRT with covariates)
-COVARIATE_FIXTURE_DIR = Path("tests/fixtures/gemma_covariate")
+_FIXTURE_ROOT = Path(__file__).parent / "fixtures"
+COVARIATE_FIXTURE_DIR = _FIXTURE_ROOT / "gemma_covariate"
 GEMMA_COVARIATE_SCORE = COVARIATE_FIXTURE_DIR / "gemma_covariate_score.assoc.txt"
 GEMMA_COVARIATE_LRT = COVARIATE_FIXTURE_DIR / "gemma_covariate_lrt.assoc.txt"
 
 # GEMMA synthetic fixture paths (used for covariate data)
-FIXTURE_DIR = Path("tests/fixtures/gemma_synthetic")
+FIXTURE_DIR = _FIXTURE_ROOT / "gemma_synthetic"
 COVARIATE_FILE = COVARIATE_FIXTURE_DIR / "covariates.txt"
 
 
@@ -60,6 +61,7 @@ def _make_synthetic_gwas_data(
     return genotypes, phenotype, snp_info
 
 
+@pytest.mark.tier0
 class TestChunkSizeComputation:
     """Tests for chunk size calculation to avoid int32 overflow."""
 
@@ -98,6 +100,7 @@ class TestChunkSizeComputation:
         assert chunk <= 5000
 
 
+@pytest.mark.tier1
 class TestJaxRunnerBasic:
     """Basic tests for run_lmm_association_jax."""
 
@@ -185,6 +188,7 @@ class TestJaxRunnerBasic:
             )
 
 
+@pytest.mark.tier1
 class TestJaxRunnerGuards:
     """Tests for runner_jax input validation guards."""
 
@@ -237,6 +241,7 @@ class TestJaxRunnerGuards:
             )
 
 
+@pytest.mark.tier1
 class TestJaxRunnerCleanup:
     """Tests for JAX runner cleanup to prevent SIGSEGV."""
 
@@ -291,6 +296,7 @@ class TestJaxRunnerCleanup:
         assert delta_mb < 100, f"Memory grew by {delta_mb:.0f}MB over 5 runs"
 
 
+@pytest.mark.tier1
 class TestJaxScoreMode:
     """Validation tests for JAX Score mode (lmm_mode=3) against NumPy runner."""
 
@@ -410,6 +416,7 @@ class TestJaxScoreMode:
         )
 
 
+@pytest.mark.tier1
 class TestJaxLrtMode:
     """Validation tests for JAX LRT mode (lmm_mode=2) against NumPy runner."""
 
@@ -604,6 +611,7 @@ class TestJaxLrtMode:
             assert r.l_mle > 0, f"l_mle={r.l_mle} not positive for {r.rs}"
 
 
+@pytest.mark.tier1
 class TestJaxAllTestsMode:
     """Validation tests for JAX all-tests mode (lmm_mode=4) against NumPy runner."""
 
@@ -891,6 +899,7 @@ class TestJaxAllTestsMode:
             )
 
 
+@pytest.mark.tier1
 class TestDegenerateSNPPipeline:
     """Integration tests for degenerate SNP handling through full runner."""
 
@@ -989,6 +998,7 @@ class TestDegenerateSNPPipeline:
         )
 
 
+@pytest.mark.tier1
 def test_timing_breakdown_logged(sample_plink_data):
     """Verify timing breakdown appears in loguru output with all 6 phases."""
     import io
@@ -1048,6 +1058,7 @@ def test_timing_breakdown_logged(sample_plink_data):
         )
 
 
+@pytest.mark.tier1
 def test_maf_normalization_in_comparison():
     """AF > 0.5 in expected results should match MAF <= 0.5 in actual.
 

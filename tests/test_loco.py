@@ -26,7 +26,8 @@ from jamma.kinship import (
 # ---------------------------------------------------------------------------
 # Fixture paths
 # ---------------------------------------------------------------------------
-MOUSE_HS1940_DIR = Path("tests/fixtures/mouse_hs1940")
+_FIXTURE_ROOT = Path(__file__).parent / "fixtures"
+MOUSE_HS1940_DIR = _FIXTURE_ROOT / "mouse_hs1940"
 MOUSE_HS1940_BFILE = MOUSE_HS1940_DIR / "mouse_hs1940"
 
 
@@ -146,6 +147,7 @@ def _compute_centered_genotypes_and_S_chr(genotypes, chromosomes):
 # ===========================================================================
 
 
+@pytest.mark.tier1
 class TestChromosomePartitioning:
     """Tests for get_chromosome_partitions()."""
 
@@ -190,6 +192,7 @@ class TestChromosomePartitioning:
 # ===========================================================================
 
 
+@pytest.mark.tier1
 class TestLocoSubtractionIdentity:
     """Validate the fundamental LOCO subtraction identity.
 
@@ -265,6 +268,7 @@ class TestLocoSubtractionIdentity:
 # ===========================================================================
 
 
+@pytest.mark.tier1
 class TestLocoSymmetry:
     """Each LOCO kinship matrix must be symmetric."""
 
@@ -290,6 +294,7 @@ class TestLocoSymmetry:
 # ===========================================================================
 
 
+@pytest.mark.tier1
 class TestLocoEigenvalueNonNegativity:
     """LOCO kinship matrices should be PSD (eigenvalues >= -1e-10)."""
 
@@ -320,6 +325,7 @@ class TestLocoEigenvalueNonNegativity:
 # ===========================================================================
 
 
+@pytest.mark.tier1
 class TestLocoTraceRelationship:
     """Verify trace(K_loco_c) == (p * trace(K_full) - trace(S_c)) / (p - p_c)."""
 
@@ -357,6 +363,7 @@ class TestLocoTraceRelationship:
 # ===========================================================================
 
 
+@pytest.mark.tier1
 class TestLocoManualComputation:
     """LOCO kinship via subtraction matches brute-force recomputation."""
 
@@ -437,6 +444,7 @@ class TestLocoManualComputation:
 # ===========================================================================
 
 
+@pytest.mark.tier1
 class TestLocoStreamingEquivalence:
     """Streaming and in-memory LOCO should produce identical results."""
 
@@ -469,6 +477,7 @@ class TestLocoStreamingEquivalence:
 # ===========================================================================
 
 
+@pytest.mark.tier1
 class TestLocoEdgeCases:
     """Edge case tests for LOCO kinship."""
 
@@ -537,6 +546,7 @@ def _load_mouse_phenotypes() -> np.ndarray:
     return phenotypes
 
 
+@pytest.mark.tier1
 class TestLocoLmmIntegration:
     """LOCO LMM produces valid results on mouse_hs1940."""
 
@@ -690,6 +700,7 @@ class TestLocoLmmIntegration:
 # ===========================================================================
 
 
+@pytest.mark.tier1
 class TestPipelineLocoMode:
     """Pipeline integration with LOCO mode."""
 
@@ -737,6 +748,7 @@ class TestPipelineLocoMode:
 # ===========================================================================
 
 
+@pytest.mark.tier1
 class TestCliLocoFlags:
     """CLI integration tests for -loco flag."""
 
@@ -796,6 +808,7 @@ class TestCliLocoFlags:
 # ===========================================================================
 
 
+@pytest.mark.tier1
 class TestGwasApiLocoParameter:
     """gwas() function accepts loco=True."""
 
@@ -836,6 +849,7 @@ class TestGwasApiLocoParameter:
 # ===========================================================================
 
 
+@pytest.mark.tier1
 class TestLocoKsnpsWiring:
     """Tests proving ksnps_indices wires through the LOCO path end-to-end."""
 
@@ -913,6 +927,7 @@ class TestLocoKsnpsWiring:
 # ===========================================================================
 
 
+@pytest.mark.tier1
 class TestLocoPartialKsnpsCoverage:
     """Regression tests: LOCO yields ALL chromosomes even when ksnps excludes some.
 
@@ -1127,6 +1142,7 @@ class TestLocoPartialKsnpsCoverage:
 # ===========================================================================
 
 
+@pytest.mark.tier1
 class TestLocoMultiPass:
     """Verify multi-pass LOCO kinship batching produces identical results."""
 
@@ -1283,4 +1299,270 @@ class TestLocoMultiPass:
             atol=1e-14,
             rtol=1e-10,
             err_msg="chr3 multi-pass fallback should equal full kinship",
+        )
+
+
+# ===========================================================================
+# Multi-Pass LOCO LMM Tests
+# ===========================================================================
+
+
+@pytest.mark.tier1
+class TestLocoLmmMultiPass:
+    """Verify multi-pass LOCO LMM (small col_chunk_size) matches single-pass."""
+
+    @staticmethod
+    def _write_synthetic_loco_plink(
+        tmp_path: Path,
+        rng: np.random.Generator,
+        n_samples: int = 60,
+        snps_per_chr: int = 40,
+        n_chromosomes: int = 3,
+    ) -> tuple[Path, np.ndarray]:
+        """Write synthetic multi-chromosome PLINK files with phenotypes.
+
+        Returns (bed_path_prefix, phenotypes).
+        """
+        from bed_reader import to_bed
+
+        n_snps = snps_per_chr * n_chromosomes
+        genotypes = rng.integers(0, 3, size=(n_samples, n_snps)).astype(np.int8)
+        chromosomes = []
+        for c in range(1, n_chromosomes + 1):
+            chromosomes.extend([str(c)] * snps_per_chr)
+
+        phenotypes = rng.standard_normal(n_samples)
+
+        bed_path = tmp_path / "loco_lmm"
+        to_bed(
+            str(bed_path) + ".bed",
+            genotypes,
+            properties={
+                "iid": [f"sample_{i}" for i in range(n_samples)],
+                "sid": [f"snp_{i}" for i in range(n_snps)],
+                "chromosome": chromosomes,
+                "bp_position": list(range(1, n_snps + 1)),
+                "pheno": phenotypes.tolist(),
+            },
+        )
+        return bed_path, phenotypes
+
+    def test_loco_lmm_multi_pass_matches_single_pass(self, tmp_path: Path):
+        """Multi-pass LOCO LMM (col_chunk_size=2) matches default chunk size.
+
+        Forces many disk chunks per chromosome via col_chunk_size=2, then
+        verifies results are numerically identical to a single-pass run
+        (col_chunk_size large enough for all SNPs on each chromosome).
+        """
+        from jamma.lmm.loco import run_lmm_loco
+
+        rng = np.random.default_rng(42)
+        bed_path, phenotypes = self._write_synthetic_loco_plink(tmp_path, rng)
+
+        # Single-pass: col_chunk_size > max SNPs per chromosome (40)
+        results_single, n_single = run_lmm_loco(
+            bed_path=bed_path,
+            phenotypes=phenotypes,
+            lmm_mode=1,
+            check_memory=False,
+            show_progress=False,
+            col_chunk_size=5000,
+        )
+
+        # Multi-pass: col_chunk_size=2 forces ~20 disk chunks per chromosome
+        results_multi, n_multi = run_lmm_loco(
+            bed_path=bed_path,
+            phenotypes=phenotypes,
+            lmm_mode=1,
+            check_memory=False,
+            show_progress=False,
+            col_chunk_size=2,
+        )
+
+        assert n_single == n_multi, (
+            f"n_tested mismatch: single={n_single}, multi={n_multi}"
+        )
+        assert len(results_single) == len(results_multi), (
+            f"Result count mismatch: single={len(results_single)}, "
+            f"multi={len(results_multi)}"
+        )
+        assert len(results_single) > 0, "Expected some results"
+
+        for i, (rs, rm) in enumerate(zip(results_single, results_multi, strict=True)):
+            assert rs.rs == rm.rs, f"SNP {i}: rs mismatch {rs.rs} vs {rm.rs}"
+            np.testing.assert_allclose(
+                rs.beta,
+                rm.beta,
+                rtol=1e-10,
+                atol=0,
+                err_msg=f"SNP {i} ({rs.rs}) beta mismatch",
+            )
+            np.testing.assert_allclose(
+                rs.p_wald,
+                rm.p_wald,
+                rtol=1e-10,
+                atol=0,
+                err_msg=f"SNP {i} ({rs.rs}) p_wald mismatch",
+            )
+
+
+# ===========================================================================
+# LOCO n_samples with NaN Covariates Test
+# ===========================================================================
+
+
+@pytest.mark.tier1
+class TestLocoNSamplesCovariateFiltering:
+    """Verify PipelineResult.n_samples reflects covariate NaN filtering in LOCO."""
+
+    def test_loco_n_samples_reflects_covariate_nan_filtering(self, tmp_path: Path):
+        """PipelineResult.n_samples after LOCO with NaN covariate rows.
+
+        Creates a multi-chromosome fixture with covariates containing NaN rows.
+        Verifies that n_samples == n_total - n_nan_rows (covariate NaNs are
+        excluded from analysis).
+        """
+        from bed_reader import to_bed
+
+        from jamma.pipeline import PipelineConfig, PipelineRunner
+
+        rng = np.random.default_rng(42)
+        n_samples = 50
+        n_snps = 90  # 30 per chromosome
+
+        genotypes = rng.integers(0, 3, size=(n_samples, n_snps)).astype(np.int8)
+        chromosomes = ["1"] * 30 + ["2"] * 30 + ["3"] * 30
+        phenotypes = rng.standard_normal(n_samples)
+
+        bed_path = tmp_path / "loco_cov"
+        to_bed(
+            str(bed_path) + ".bed",
+            genotypes,
+            properties={
+                "iid": [f"sample_{i}" for i in range(n_samples)],
+                "sid": [f"snp_{i}" for i in range(n_snps)],
+                "chromosome": chromosomes,
+                "bp_position": list(range(1, n_snps + 1)),
+                "pheno": phenotypes.tolist(),
+            },
+        )
+
+        # Create covariate file with NaN rows
+        n_nan_rows = 5
+        covariates = rng.standard_normal((n_samples, 2))
+        covariates[:n_nan_rows, 0] = np.nan  # First 5 samples have NaN covariates
+
+        covariate_path = tmp_path / "covariates.txt"
+        np.savetxt(covariate_path, covariates, fmt="%.6f")
+
+        output_dir = tmp_path / "output"
+        config = PipelineConfig(
+            bfile=bed_path,
+            loco=True,
+            covariate_file=covariate_path,
+            output_dir=output_dir,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        result = PipelineRunner(config).run()
+
+        assert result.n_samples == n_samples - n_nan_rows, (
+            f"Expected n_samples={n_samples - n_nan_rows} "
+            f"(total={n_samples} - nan_rows={n_nan_rows}), "
+            f"got {result.n_samples}"
+        )
+        assert result.n_snps_tested > 0
+
+
+# ===========================================================================
+# LOCO n_snps_tested with MAF Filtering Test
+# ===========================================================================
+
+
+@pytest.mark.tier1
+class TestLocoNSnpsTestedMafFilter:
+    """Verify PipelineResult.n_snps_tested reflects MAF-filtered count in LOCO."""
+
+    def test_loco_n_snps_tested_with_maf_filter(self, tmp_path: Path):
+        """PipelineResult.n_snps_tested reflects MAF-filtered count in LOCO.
+
+        Creates a fixture with some very low MAF SNPs (monomorphic or rare),
+        runs with a MAF threshold that filters some out, and verifies
+        n_snps_tested < total_snps.
+        """
+        from bed_reader import to_bed
+
+        from jamma.pipeline import PipelineConfig, PipelineRunner
+
+        rng = np.random.default_rng(42)
+        n_samples = 60
+        snps_per_chr = 20
+        n_chromosomes = 3
+        n_snps = snps_per_chr * n_chromosomes
+
+        # Create genotypes with some low-MAF SNPs
+        genotypes = rng.integers(0, 3, size=(n_samples, n_snps)).astype(np.float64)
+
+        # Make some SNPs monomorphic (MAF = 0) -- these should always be filtered
+        for chr_idx in range(n_chromosomes):
+            base = chr_idx * snps_per_chr
+            # 2 monomorphic SNPs per chromosome
+            genotypes[:, base] = 0  # All homozygous reference
+            genotypes[:, base + 1] = 2  # All homozygous alt
+
+        # Make some SNPs very rare (MAF < 0.1) -- filtered when maf_threshold=0.1
+        for chr_idx in range(n_chromosomes):
+            base = chr_idx * snps_per_chr
+            genotypes[:, base + 2] = 0  # Start all as 0
+            genotypes[0, base + 2] = (
+                1  # Only 1 minor allele in 60 samples => MAF ~0.008
+            )
+
+        geno_int = genotypes.astype(np.int8)
+        chromosomes = []
+        for c in range(1, n_chromosomes + 1):
+            chromosomes.extend([str(c)] * snps_per_chr)
+
+        phenotypes = rng.standard_normal(n_samples)
+
+        bed_path = tmp_path / "loco_maf"
+        to_bed(
+            str(bed_path) + ".bed",
+            geno_int,
+            properties={
+                "iid": [f"sample_{i}" for i in range(n_samples)],
+                "sid": [f"snp_{i}" for i in range(n_snps)],
+                "chromosome": chromosomes,
+                "bp_position": list(range(1, n_snps + 1)),
+                "pheno": phenotypes.tolist(),
+            },
+        )
+
+        output_dir = tmp_path / "output"
+        config = PipelineConfig(
+            bfile=bed_path,
+            loco=True,
+            maf=0.1,  # Aggressive MAF filter
+            output_dir=output_dir,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        result = PipelineRunner(config).run()
+
+        # n_snps_tested should be less than total SNPs (some filtered)
+        assert result.n_snps_tested < n_snps, (
+            f"Expected n_snps_tested < {n_snps} with MAF=0.1 filter, "
+            f"got {result.n_snps_tested}"
+        )
+        # But should still have some results
+        assert result.n_snps_tested > 0, "Expected some SNPs to pass filtering"
+
+        # Verify output file exists and has correct line count
+        lines = result.assoc_path.read_text().strip().splitlines()
+        n_data_lines = len(lines) - 1  # Subtract header
+        assert n_data_lines == result.n_snps_tested, (
+            f"Output file has {n_data_lines} data lines but "
+            f"n_snps_tested={result.n_snps_tested}"
         )

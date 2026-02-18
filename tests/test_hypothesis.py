@@ -13,16 +13,8 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from jamma.core import configure_jax
 from jamma.lmm.likelihood import calc_pab, compute_Uab, reml_log_likelihood
-from jamma.lmm.stats import calc_wald_test
-
-
-@pytest.fixture(autouse=True)
-def setup_jax():
-    """Configure JAX with 64-bit precision before each test."""
-    configure_jax(enable_x64=True)
-
+from jamma.lmm.stats import calc_lrt_test, calc_score_test, calc_wald_test
 
 # -----------------------------------------------------------------------------
 # Custom Strategies for Genetic Data
@@ -75,10 +67,8 @@ def valid_lmm_inputs(draw, min_samples=30, max_samples=60):
     # Generate valid kinship-like matrix and eigendecompose
     X = rng.standard_normal((n_samples, max(n_samples, 50)))
     K = X @ X.T / X.shape[1]
-    eigenvalues = np.linalg.eigvalsh(K)
+    eigenvalues, U = np.linalg.eigh(K)
     eigenvalues = np.maximum(eigenvalues, 1e-10)  # Threshold small values
-
-    U = np.linalg.eigh(K)[1]
 
     # Generate phenotype, covariates, genotype
     y = rng.standard_normal(n_samples)
@@ -101,6 +91,7 @@ def valid_lmm_inputs(draw, min_samples=30, max_samples=60):
 # -----------------------------------------------------------------------------
 
 
+@pytest.mark.tier0
 class TestKinshipProperties:
     """Property tests for kinship matrix computation."""
 
@@ -166,6 +157,7 @@ class TestKinshipProperties:
 # -----------------------------------------------------------------------------
 
 
+@pytest.mark.tier0
 class TestRemlProperties:
     """Property tests for REML log-likelihood computation."""
 
@@ -235,6 +227,7 @@ class TestRemlProperties:
 # -----------------------------------------------------------------------------
 
 
+@pytest.mark.tier0
 class TestWaldProperties:
     """Property tests for Wald test statistics."""
 
@@ -251,7 +244,7 @@ class TestWaldProperties:
         Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
         Pab = calc_pab(n_cvt, Hi_eval, Uab)
 
-        beta, se, p_wald = calc_wald_test(lambda_val, Pab, n_cvt, n_samples)
+        beta, se, p_wald = calc_wald_test(Pab, n_cvt, n_samples)
 
         assert 0.0 <= p_wald <= 1.0, f"P-value out of bounds: {p_wald}"
 
@@ -267,7 +260,7 @@ class TestWaldProperties:
         Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
         Pab = calc_pab(n_cvt, Hi_eval, Uab)
 
-        beta, se, p_wald = calc_wald_test(lambda_val, Pab, n_cvt, n_samples)
+        beta, se, p_wald = calc_wald_test(Pab, n_cvt, n_samples)
 
         assert se > 0, f"Non-positive SE: {se}"
 
@@ -285,7 +278,7 @@ class TestWaldProperties:
         Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
         Pab = calc_pab(n_cvt, Hi_eval, Uab)
 
-        beta, se, p_wald = calc_wald_test(lambda_val, Pab, n_cvt, n_samples)
+        beta, se, p_wald = calc_wald_test(Pab, n_cvt, n_samples)
 
         assert np.isfinite(beta), f"Non-finite beta at lambda={lambda_val}"
         assert np.isfinite(se), f"Non-finite SE at lambda={lambda_val}"
@@ -293,10 +286,144 @@ class TestWaldProperties:
 
 
 # -----------------------------------------------------------------------------
+# Score Test Properties
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+class TestScoreTestProperties:
+    """Property tests for Score test statistics."""
+
+    @given(data=valid_lmm_inputs())
+    @settings(
+        max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_score_test_pvalue_in_unit_interval(self, data):
+        """Score test p-value is always in [0, 1] for valid inputs."""
+        eigenvalues, Uab, n_cvt, n_samples = data
+        lambda_null = 1.0
+
+        Hi_eval = 1.0 / (lambda_null * eigenvalues + 1.0)
+        Pab = calc_pab(n_cvt, Hi_eval, Uab)
+
+        beta, se, p_score = calc_score_test(lambda_null, Pab, n_cvt, n_samples)
+
+        # For valid inputs with variance, p_score should be in [0, 1]
+        # For degenerate inputs, NaN is acceptable
+        if not np.isnan(p_score):
+            assert 0.0 <= p_score <= 1.0, f"p_score out of bounds: {p_score}"
+
+    @given(data=valid_lmm_inputs())
+    @settings(
+        max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_score_test_beta_se_finite_or_nan(self, data):
+        """Score test beta and SE are finite or NaN (never inf)."""
+        eigenvalues, Uab, n_cvt, n_samples = data
+        lambda_null = 1.0
+
+        Hi_eval = 1.0 / (lambda_null * eigenvalues + 1.0)
+        Pab = calc_pab(n_cvt, Hi_eval, Uab)
+
+        beta, se, p_score = calc_score_test(lambda_null, Pab, n_cvt, n_samples)
+
+        assert not np.isinf(beta), f"Infinite beta: {beta}"
+        assert not np.isinf(se), f"Infinite SE: {se}"
+        assert not np.isinf(p_score), f"Infinite p_score: {p_score}"
+
+    @given(
+        data=valid_lmm_inputs(),
+        lambda_val=lambda_value(),
+    )
+    @settings(
+        max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_score_test_consistent_across_lambda(self, data, lambda_val):
+        """Score test should be finite across lambda range."""
+        eigenvalues, Uab, n_cvt, n_samples = data
+
+        Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
+        Pab = calc_pab(n_cvt, Hi_eval, Uab)
+
+        beta, se, p_score = calc_score_test(lambda_val, Pab, n_cvt, n_samples)
+
+        # All values should be finite or NaN (never inf)
+        assert np.isfinite(beta) or np.isnan(beta), f"Unexpected inf beta: {beta}"
+        assert np.isfinite(se) or np.isnan(se), f"Unexpected inf SE: {se}"
+        assert np.isfinite(p_score) or np.isnan(p_score), (
+            f"Unexpected inf p_score: {p_score}"
+        )
+
+
+# -----------------------------------------------------------------------------
+# LRT Test Properties
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+class TestLrtProperties:
+    """Property tests for LRT test statistics."""
+
+    @given(
+        logl_H1=st.floats(min_value=-1e10, max_value=1e10, allow_nan=False),
+        logl_H0=st.floats(min_value=-1e10, max_value=1e10, allow_nan=False),
+    )
+    @settings(
+        max_examples=50, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_lrt_pvalue_nonnegative(self, logl_H1, logl_H0):
+        """LRT p-value is always >= 0."""
+        p_lrt = calc_lrt_test(logl_H1, logl_H0)
+        assert p_lrt >= 0.0, f"Negative p_lrt: {p_lrt}"
+        assert p_lrt <= 1.0, f"p_lrt > 1: {p_lrt}"
+
+    @given(
+        logl_H0=st.floats(min_value=-1e10, max_value=1e10, allow_nan=False),
+    )
+    @settings(
+        max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_lrt_null_equals_alt_gives_pvalue_one(self, logl_H0):
+        """When H1 == H0, LRT statistic is 0, p-value should be 1.0."""
+        p_lrt = calc_lrt_test(logl_H0, logl_H0)
+        # LRT stat = 2 * (H1 - H0) = 0, chi2.sf(0, 1) = 1.0
+        assert p_lrt >= 0.999, f"Expected p~1.0 for equal logls, got {p_lrt}"
+
+    @given(
+        delta=st.floats(min_value=0.01, max_value=1e6, allow_nan=False),
+        logl_H0=st.floats(min_value=-1e8, max_value=0, allow_nan=False),
+    )
+    @settings(
+        max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_lrt_larger_delta_smaller_pvalue(self, delta, logl_H0):
+        """Larger logl delta should give smaller (or equal) p-value."""
+        p_small = calc_lrt_test(logl_H0 + delta, logl_H0)
+        p_large = calc_lrt_test(logl_H0 + delta * 2, logl_H0)
+        assert p_large <= p_small + 1e-10, (
+            f"Larger delta should give smaller p: {p_large} > {p_small}"
+        )
+
+    @given(
+        logl_H0=st.floats(min_value=-1e10, max_value=1e10, allow_nan=False),
+        deficit=st.floats(min_value=0.01, max_value=1e6, allow_nan=False),
+    )
+    @settings(
+        max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_lrt_negative_stat_gives_pvalue_one(self, logl_H0, deficit):
+        """When H1 < H0 (negative LRT stat), p-value should be 1.0."""
+        logl_H1 = logl_H0 - deficit
+        p_lrt = calc_lrt_test(logl_H1, logl_H0)
+        assert p_lrt == 1.0, f"Expected p=1.0 for negative stat, got {p_lrt}"
+
+
+# -----------------------------------------------------------------------------
 # CPU/JAX Path Equivalence
 # -----------------------------------------------------------------------------
 
 
+@pytest.mark.tier0
 class TestCpuJaxEquivalence:
     """Property tests verifying CPU and JAX paths produce identical results."""
 
@@ -368,6 +495,7 @@ class TestCpuJaxEquivalence:
 # -----------------------------------------------------------------------------
 
 
+@pytest.mark.tier0
 class TestEigendecompositionProperties:
     """Property tests for eigendecomposition."""
 
@@ -422,6 +550,7 @@ class TestEigendecompositionProperties:
 # -----------------------------------------------------------------------------
 
 
+@pytest.mark.tier0
 class TestNumericalStability:
     """Property tests for numerical stability at edge cases."""
 
@@ -487,6 +616,7 @@ class TestNumericalStability:
 # -----------------------------------------------------------------------------
 
 
+@pytest.mark.tier0
 class TestDegenerateSNPEdgeCases:
     """Property tests for degenerate SNP scenarios (zero variance, constant, etc.)."""
 
@@ -513,7 +643,7 @@ class TestDegenerateSNPEdgeCases:
         Hi_eval = 1.0 / (1.0 * eigenvalues + 1.0)
         Pab = calc_pab(n_cvt, Hi_eval, Uab)
 
-        beta, se, p_wald = calc_wald_test(1.0, Pab, n_cvt, n_samples)
+        beta, se, p_wald = calc_wald_test(Pab, n_cvt, n_samples)
 
         # All should be NaN for constant genotype
         assert np.isnan(beta), f"Expected NaN beta for constant genotype, got {beta}"
@@ -567,7 +697,7 @@ class TestDegenerateSNPEdgeCases:
         # CPU path
         Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
         Pab = calc_pab(n_cvt, Hi_eval, Uab)
-        beta_cpu, se_cpu, p_cpu = calc_wald_test(lambda_val, Pab, n_cvt, n_samples)
+        beta_cpu, se_cpu, p_cpu = calc_wald_test(Pab, n_cvt, n_samples)
 
         # JAX path
         beta_jax, se_jax, p_jax = calc_wald_stats_jax(
@@ -611,7 +741,7 @@ class TestDegenerateSNPEdgeCases:
         Hi_eval = 1.0 / (1.0 * eigenvalues + 1.0)
         Pab = calc_pab(n_cvt, Hi_eval, Uab)
 
-        beta, se, p_wald = calc_wald_test(1.0, Pab, n_cvt, n_samples)
+        beta, se, p_wald = calc_wald_test(Pab, n_cvt, n_samples)
 
         # Should be finite or NaN, never inf
         assert np.isfinite(beta) or np.isnan(beta), f"Unexpected inf beta: {beta}"
@@ -642,7 +772,7 @@ class TestDegenerateSNPEdgeCases:
         Hi_eval = 1.0 / (1.0 * eigenvalues + 1.0)
         Pab = calc_pab(n_cvt, Hi_eval, Uab)
 
-        beta, se, p_wald = calc_wald_test(1.0, Pab, n_cvt, n_samples)
+        beta, se, p_wald = calc_wald_test(Pab, n_cvt, n_samples)
 
         assert not np.isinf(beta), f"Infinite beta: {beta}"
         assert not np.isinf(se), f"Infinite SE: {se}"
@@ -718,6 +848,7 @@ class TestDegenerateSNPEdgeCases:
 # -----------------------------------------------------------------------------
 
 
+@pytest.mark.tier0
 class TestFilteringProperties:
     """Property-based tests for MAF/missing/monomorphic filtering."""
 
@@ -891,6 +1022,7 @@ class TestFilteringProperties:
 
 
 @pytest.mark.slow
+@pytest.mark.tier2
 class TestFilteringEquivalence:
     """Tests for filtering equivalence across different code paths."""
 
@@ -1019,6 +1151,7 @@ class TestFilteringEquivalence:
 # -----------------------------------------------------------------------------
 
 
+@pytest.mark.tier0
 class TestHweProperties:
     """Property tests for Hardy-Weinberg equilibrium chi-squared computation."""
 
@@ -1143,6 +1276,7 @@ class TestHweProperties:
 # -----------------------------------------------------------------------------
 
 
+@pytest.mark.tier0
 class TestStandardizedKinshipProperties:
     """Property tests for standardized kinship matrix (-gk 2)."""
 
@@ -1237,6 +1371,7 @@ class TestStandardizedKinshipProperties:
 # -----------------------------------------------------------------------------
 
 
+@pytest.mark.tier0
 class TestEigenIoRoundTrip:
     """Property tests for eigendecomposition file I/O precision."""
 

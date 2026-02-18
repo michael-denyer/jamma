@@ -2,9 +2,12 @@
 
 import os
 
+import pytest
+
 from jamma.core.threading import blas_threads, get_blas_thread_count
 
 
+@pytest.mark.tier0
 class TestGetBlasThreadCount:
     """Tests for get_blas_thread_count()."""
 
@@ -30,6 +33,7 @@ class TestGetBlasThreadCount:
         assert get_blas_thread_count() == 1
 
 
+@pytest.mark.tier0
 class TestBlasThreads:
     """Tests for blas_threads() context manager."""
 

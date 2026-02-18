@@ -19,7 +19,8 @@ import numpy as np
 import pytest
 
 GEMMA_DOCKER_IMAGE = "quay.io/biocontainers/gemma:0.98.5--ha36d3ea_0"
-EXAMPLE_DATA = Path("tests/fixtures/gemma_synthetic/test")
+_FIXTURE_ROOT = Path(__file__).parent / "fixtures"
+EXAMPLE_DATA = _FIXTURE_ROOT / "gemma_synthetic" / "test"
 
 
 @pytest.fixture
@@ -56,6 +57,7 @@ def numpy_kinship(X):
 
 
 @pytest.mark.benchmark
+@pytest.mark.tier2
 class TestKinshipBenchmarks:
     """Benchmark kinship computation performance."""
 
@@ -116,6 +118,7 @@ class TestKinshipBenchmarks:
 
 
 @pytest.mark.benchmark
+@pytest.mark.tier2
 class TestKinshipScaling:
     """Test kinship computation scaling with data size."""
 
@@ -164,6 +167,7 @@ class TestKinshipScaling:
 
 @pytest.mark.benchmark
 @pytest.mark.slow
+@pytest.mark.tier2
 class TestJammaVsGemma:
     """Compare JAMMA performance against GEMMA (the target to beat)."""
 

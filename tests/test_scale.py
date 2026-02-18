@@ -79,6 +79,7 @@ def generate_synthetic_gwas_data(
     return genotypes, phenotype.astype(np.float64), snp_info
 
 
+@pytest.mark.tier2
 class TestScaleWorkflow:
     """Tests for full workflow at moderate scale."""
 
@@ -163,6 +164,7 @@ class TestScaleWorkflow:
             assert r1.p_wald == r2.p_wald, "P-value should be identical"
 
 
+@pytest.mark.tier2
 class TestMemoryEstimationAccuracy:
     """Tests for memory estimation accuracy."""
 
@@ -209,6 +211,7 @@ class TestMemoryEstimationAccuracy:
         assert 1.8 < ratio < 2.2, f"Genotypes should scale ~2x, got {ratio:.1f}x"
 
 
+@pytest.mark.tier2
 class TestEigendecompMemory:
     """Tests for eigendecomposition memory usage."""
 

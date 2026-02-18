@@ -65,7 +65,7 @@ class AssocResult:
 
 
 def f_sf(x: float, df1: float, df2: float) -> float:
-    """F-distribution survival function using scipy.
+    """F-distribution survival function using JAX betainc.
 
     Computes P(F > x) for F-distributed random variable with df1 and df2
     degrees of freedom. Uses the regularized incomplete beta function
@@ -96,7 +96,6 @@ def f_sf(x: float, df1: float, df2: float) -> float:
 
 
 def calc_wald_test(
-    lambda_val: float,
     Pab: np.ndarray,
     n_cvt: int,
     ni_test: int,
@@ -114,7 +113,6 @@ def calc_wald_test(
     - p_wald = F-distribution survival function((P_yy - Px_yy) * tau, 1, df)
 
     Args:
-        lambda_val: Optimized variance ratio (unused here, kept for API compat)
         Pab: Pab matrix from calc_pab (n_cvt+2, n_index)
         n_cvt: Number of covariates
         ni_test: Number of samples
@@ -196,7 +194,7 @@ def calc_wald_test_from_uab(
     Pab = calc_pab(n_cvt, Hi_eval, Uab)
 
     # Compute Wald test
-    return calc_wald_test(lambda_val, Pab, n_cvt, ni_test)
+    return calc_wald_test(Pab, n_cvt, ni_test)
 
 
 def calc_lrt_test(

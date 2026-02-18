@@ -20,6 +20,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import numpy as np
+from loguru import logger
 
 
 def get_ab_index(a: int, b: int, n_cvt: int) -> int:
@@ -282,6 +283,11 @@ def reml_log_likelihood(
     P_YY_MIN = 1e-8
     if P_yy >= 0.0 and P_yy < P_YY_MIN:
         P_yy = P_YY_MIN
+    elif P_yy < 0:
+        logger.warning(
+            f"Negative P_yy ({P_yy:.6e}) at lambda={lambda_val:.6e} — "
+            "numerical breakdown. Log-likelihood will be NaN for this evaluation."
+        )
 
     c = 0.5 * df * (np.log(df) - np.log(2 * np.pi) - 1.0)
     f = c - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
@@ -339,6 +345,11 @@ def reml_log_likelihood_null(
     P_YY_MIN = 1e-8
     if P_yy >= 0.0 and P_yy < P_YY_MIN:
         P_yy = P_YY_MIN
+    elif P_yy < 0:
+        logger.warning(
+            f"Negative P_yy ({P_yy:.6e}) at lambda={lambda_val:.6e} — "
+            "numerical breakdown. Log-likelihood will be NaN for this evaluation."
+        )
 
     c = 0.5 * df * (np.log(df) - np.log(2 * np.pi) - 1.0)
     f = c - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
@@ -384,6 +395,11 @@ def mle_log_likelihood_null(
     P_YY_MIN = 1e-8
     if P_yy >= 0.0 and P_yy < P_YY_MIN:
         P_yy = P_YY_MIN
+    elif P_yy < 0:
+        logger.warning(
+            f"Negative P_yy ({P_yy:.6e}) at lambda={lambda_val:.6e} — "
+            "numerical breakdown. Log-likelihood will be NaN for this evaluation."
+        )
 
     # MLE formula (uses n, not df; no logdet_hiw)
     c = 0.5 * n * (np.log(n) - np.log(2 * np.pi) - 1.0)
@@ -560,6 +576,11 @@ def mle_log_likelihood(
     P_YY_MIN = 1e-8
     if P_yy >= 0.0 and P_yy < P_YY_MIN:
         P_yy = P_YY_MIN
+    elif P_yy < 0:
+        logger.warning(
+            f"Negative P_yy ({P_yy:.6e}) at lambda={lambda_val:.6e} — "
+            "numerical breakdown. Log-likelihood will be NaN for this evaluation."
+        )
 
     # MLE formula (uses n, not df; no logdet_hiw)
     c = 0.5 * n * (np.log(n) - np.log(2 * np.pi) - 1.0)

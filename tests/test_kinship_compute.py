@@ -8,19 +8,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from jamma.core import configure_jax
 from jamma.kinship import (
     compute_centered_kinship,
     compute_standardized_kinship,
     impute_and_center,
     impute_center_and_standardize,
 )
-
-
-@pytest.fixture(autouse=True)
-def setup_jax():
-    """Configure JAX with 64-bit precision before each test."""
-    configure_jax(enable_x64=True)
 
 
 @pytest.fixture
@@ -51,6 +44,7 @@ def genotypes_with_missing():
     )
 
 
+@pytest.mark.tier0
 class TestKinshipSymmetry:
     """Tests for kinship matrix symmetry."""
 
@@ -67,6 +61,7 @@ class TestKinshipSymmetry:
         )
 
 
+@pytest.mark.tier0
 class TestKinshipShape:
     """Tests for kinship matrix dimensions."""
 
@@ -85,6 +80,7 @@ class TestKinshipShape:
             assert K.shape == (n_samples, n_samples)
 
 
+@pytest.mark.tier0
 class TestKinshipDiagonal:
     """Tests for kinship matrix diagonal properties."""
 
@@ -100,6 +96,7 @@ class TestKinshipDiagonal:
         assert np.all(np.diag(K) >= -1e-10), "Diagonal should be non-negative"
 
 
+@pytest.mark.tier0
 class TestKinshipMissingData:
     """Tests for missing data handling."""
 
@@ -121,6 +118,7 @@ class TestKinshipMissingData:
         assert np.allclose(np.diag(K), expected_diag)
 
 
+@pytest.mark.tier0
 class TestKinshipScaling:
     """Tests for kinship matrix scaling."""
 
@@ -142,6 +140,7 @@ class TestKinshipScaling:
         assert np.allclose(K, K_expected, rtol=1e-10)
 
 
+@pytest.mark.tier0
 class TestKinshipDeterminism:
     """Tests for reproducibility."""
 
@@ -158,6 +157,7 @@ class TestKinshipDeterminism:
         assert np.allclose(K1, K2), "Results should be deterministic with missing data"
 
 
+@pytest.mark.tier0
 class TestKinshipBatching:
     """Tests for batch processing."""
 
@@ -178,6 +178,7 @@ class TestKinshipBatching:
         assert np.allclose(K, K.T)
 
 
+@pytest.mark.tier0
 class TestImputeAndCenter:
     """Tests for the impute_and_center function."""
 
@@ -218,6 +219,7 @@ class TestImputeAndCenter:
         assert X_centered.dtype == jnp.float64
 
 
+@pytest.mark.tier0
 class TestKinshipNumerical:
     """Tests for numerical properties."""
 
@@ -241,6 +243,7 @@ class TestKinshipNumerical:
         assert np.all(eigenvalues >= -1e-8), f"Min eigenvalue: {eigenvalues.min()}"
 
 
+@pytest.mark.tier0
 class TestStandardizedKinshipBasic:
     """Tests for standardized kinship matrix (GEMMA -gk 2)."""
 
@@ -315,6 +318,7 @@ class TestStandardizedKinshipBasic:
         assert np.all(np.diag(K) >= -1e-10)
 
 
+@pytest.mark.tier0
 class TestImputeCenterAndStandardize:
     """Tests for the impute_center_and_standardize function."""
 

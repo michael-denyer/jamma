@@ -52,6 +52,7 @@ def sample_results(sample_result: AssocResult) -> list[AssocResult]:
     return results
 
 
+@pytest.mark.tier0
 class TestIncrementalAssocWriter:
     """Tests for IncrementalAssocWriter class."""
 
@@ -328,3 +329,106 @@ class TestIncrementalAssocWriter:
 
         with pytest.raises(RuntimeError, match="not opened"):
             writer.write_batch(sample_results)
+
+    def test_write_retries_on_transient_eio(
+        self, tmp_path: Path, sample_result: AssocResult
+    ):
+        """Verify retry with exponential backoff on retryable EIO errno.
+
+        Injects a transient errno.EIO on first write attempt. The writer
+        should retry and succeed on the second attempt.
+        """
+        import errno as errno_mod
+
+        output_path = tmp_path / "test.assoc.txt"
+        call_count = 0
+
+        with IncrementalAssocWriter(output_path) as writer:
+            original_write = writer._file.write
+
+            def eio_write(data):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    err = OSError("I/O error")
+                    err.errno = errno_mod.EIO
+                    raise err
+                return original_write(data)
+
+            writer._file.write = eio_write
+
+            with patch("jamma.lmm.io.time.sleep") as mock_sleep:
+                writer.write(sample_result)
+                mock_sleep.assert_called_once_with(0.1)
+
+        assert writer.count == 1
+        # Verify file has header + 1 result
+        lines = output_path.read_text().strip().split("\n")
+        assert len(lines) == 2
+
+    def test_write_fails_immediately_on_eacces(
+        self, tmp_path: Path, sample_result: AssocResult
+    ):
+        """Verify immediate failure on non-retryable EACCES errno.
+
+        EACCES is not in _RETRYABLE_ERRNOS, so the writer should fail
+        after a single attempt with no retry backoff.
+        """
+        import errno as errno_mod
+
+        output_path = tmp_path / "test.assoc.txt"
+
+        with patch("jamma.lmm.io.time.sleep") as mock_sleep:
+            with pytest.raises(OSError):
+                with IncrementalAssocWriter(output_path) as writer:
+                    original_write = writer._file.write
+
+                    def eacces_write(data):
+                        if "\t" in data:
+                            err = OSError("Permission denied")
+                            err.errno = errno_mod.EACCES
+                            raise err
+                        return original_write(data)
+
+                    writer._file.write = eacces_write
+                    writer.write(sample_result)
+
+            # No retry sleeps should have occurred
+            mock_sleep.assert_not_called()
+
+        # Partial file should be cleaned up
+        assert not output_path.exists(), "Partial output file should be deleted"
+
+    def test_write_rollback_preserves_first_result(
+        self, tmp_path: Path, sample_results: list
+    ):
+        """Verify seek+truncate rollback on second write preserves first result.
+
+        Writes first result successfully, then injects a permanent OSError
+        on the second write. After all retries exhausted, verifies the file
+        is cleaned up (partial file deleted).
+        """
+        output_path = tmp_path / "test.assoc.txt"
+        write_call_count = 0
+
+        with patch("jamma.lmm.io.time.sleep"):
+            with pytest.raises(OSError):
+                with IncrementalAssocWriter(output_path) as writer:
+                    # Write first result successfully
+                    writer.write(sample_results[0])
+                    assert writer.count == 1
+
+                    # Now make all subsequent writes fail permanently
+                    def fail_after_first(data):
+                        nonlocal write_call_count
+                        write_call_count += 1
+                        raise OSError("Disk full")
+
+                    writer._file.write = fail_after_first
+                    # This should fail after retries and clean up
+                    writer.write(sample_results[1])
+
+        # _cleanup_partial deletes the file after exhausting retries
+        assert not output_path.exists(), (
+            "Partial output file should be deleted after exhausting retries"
+        )

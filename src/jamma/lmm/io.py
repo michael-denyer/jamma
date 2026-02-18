@@ -26,142 +26,66 @@ _RETRYABLE_ERRNOS = frozenset(
 )
 
 
-def format_assoc_line(result: AssocResult) -> str:
-    """Format a single Wald test result as tab-separated line.
+# Column spec per test type: which fields follow the 7-col prefix
+_FORMAT_COLUMNS: dict[str, list[str]] = {
+    "wald": ["beta", "se", "logl_H1", "l_remle", "p_wald"],
+    "score": ["beta", "se", "p_score"],
+    "lrt": ["l_mle", "p_lrt"],
+    "all": ["beta", "se", "logl_H1", "l_remle", "l_mle", "p_wald", "p_lrt", "p_score"],
+}
 
-    Matches GEMMA's WriteFiles formatting:
+
+def format_assoc_line(result: AssocResult, test_type: str = "wald") -> str:
+    """Format a single association result as tab-separated line.
+
+    Matches GEMMA's WriteFiles formatting exactly:
     - af: .3f (3 decimal places, fixed)
-    - beta, se, logl_H1, l_remle, p_wald: .6e (scientific notation)
+    - All stat columns: .6e (scientific notation, 6 decimal places)
     - chr, rs: string as-is
     - ps, n_miss: integer as-is
 
-    Args:
-        result: AssocResult dataclass instance
-
-    Returns:
-        Tab-separated string (no newline)
-    """
-    return "\t".join(
-        [
-            result.chr,
-            result.rs,
-            str(result.ps),
-            str(result.n_miss),
-            result.allele1,
-            result.allele0,
-            f"{result.af:.3f}",
-            f"{result.beta:.6e}",
-            f"{result.se:.6e}",
-            f"{result.logl_H1:.6e}",
-            f"{result.l_remle:.6e}",
-            f"{result.p_wald:.6e}",
-        ]
-    )
-
-
-def format_assoc_line_score(result: AssocResult) -> str:
-    """Format Score test result as tab-separated line.
-
-    GEMMA -lmm 3 format:
-    chr  rs  ps  n_miss  allele1  allele0  af  beta  se  p_score
+    The 7-column prefix (chr, rs, ps, n_miss, allele1, allele0, af) is
+    shared across all test types. Only the stat columns differ.
 
     Args:
-        result: AssocResult dataclass instance
+        result: AssocResult dataclass instance.
+        test_type: One of "wald", "score", "lrt", "all".
 
     Returns:
-        Tab-separated string (no newline)
+        Tab-separated string (no newline).
+
+    Raises:
+        ValueError: If test_type is not recognized.
     """
-    return "\t".join(
-        [
-            result.chr,
-            result.rs,
-            str(result.ps),
-            str(result.n_miss),
-            result.allele1,
-            result.allele0,
-            f"{result.af:.3f}",
-            f"{result.beta:.6e}",
-            f"{result.se:.6e}",
-            f"{result.p_score:.6e}",
-        ]
-    )
+    if test_type not in _FORMAT_COLUMNS:
+        raise ValueError(
+            f"Unknown test_type={test_type!r}; expected one of {list(_FORMAT_COLUMNS)}"
+        )
+    prefix = [
+        result.chr,
+        result.rs,
+        str(result.ps),
+        str(result.n_miss),
+        result.allele1,
+        result.allele0,
+        f"{result.af:.3f}",
+    ]
+    stat_cols = _FORMAT_COLUMNS[test_type]
+    stats = [f"{getattr(result, col):.6e}" for col in stat_cols]
+    return "\t".join(prefix + stats)
 
 
-def format_assoc_line_lrt(result: AssocResult) -> str:
-    """Format LRT result as tab-separated line.
+# GEMMA headers — keyed by test_type, matching _FORMAT_COLUMNS
+_HEADER_PREFIX = "chr\trs\tps\tn_miss\tallele1\tallele0\taf"
+_HEADERS: dict[str, str] = {
+    tt: _HEADER_PREFIX + "\t" + "\t".join(cols) for tt, cols in _FORMAT_COLUMNS.items()
+}
 
-    GEMMA -lmm 2 format:
-    chr  rs  ps  n_miss  allele1  allele0  af  l_mle  p_lrt
-
-    Note: beta and se are NOT included in pure LRT output.
-
-    Args:
-        result: AssocResult dataclass instance
-
-    Returns:
-        Tab-separated string (no newline)
-    """
-    return "\t".join(
-        [
-            result.chr,
-            result.rs,
-            str(result.ps),
-            str(result.n_miss),
-            result.allele1,
-            result.allele0,
-            f"{result.af:.3f}",
-            f"{result.l_mle:.6e}",
-            f"{result.p_lrt:.6e}",
-        ]
-    )
-
-
-def format_assoc_line_all(result: AssocResult) -> str:
-    """Format all-tests result as tab-separated line.
-
-    GEMMA -lmm 4 format (15 columns):
-    chr  rs  ps  n_miss  allele1  allele0  af  beta  se  logl_H1  l_remle
-    l_mle  p_wald  p_lrt  p_score
-
-    Beta/SE come from Wald test. logl_H1 is REML (from Wald path).
-
-    Args:
-        result: AssocResult dataclass instance with all fields populated.
-
-    Returns:
-        Tab-separated string (no newline)
-    """
-    return "\t".join(
-        [
-            result.chr,
-            result.rs,
-            str(result.ps),
-            str(result.n_miss),
-            result.allele1,
-            result.allele0,
-            f"{result.af:.3f}",
-            f"{result.beta:.6e}",
-            f"{result.se:.6e}",
-            f"{result.logl_H1:.6e}",
-            f"{result.l_remle:.6e}",
-            f"{result.l_mle:.6e}",
-            f"{result.p_wald:.6e}",
-            f"{result.p_lrt:.6e}",
-            f"{result.p_score:.6e}",
-        ]
-    )
-
-
-# GEMMA headers
-HEADER_WALD = (
-    "chr\trs\tps\tn_miss\tallele1\tallele0\taf\tbeta\tse\tlogl_H1\tl_remle\tp_wald"
-)
-HEADER_SCORE = "chr\trs\tps\tn_miss\tallele1\tallele0\taf\tbeta\tse\tp_score"
-HEADER_LRT = "chr\trs\tps\tn_miss\tallele1\tallele0\taf\tl_mle\tp_lrt"
-HEADER_ALL = (
-    "chr\trs\tps\tn_miss\tallele1\tallele0\taf\t"
-    "beta\tse\tlogl_H1\tl_remle\tl_mle\tp_wald\tp_lrt\tp_score"
-)
+# Keep named constants for backward compatibility / direct import
+HEADER_WALD = _HEADERS["wald"]
+HEADER_SCORE = _HEADERS["score"]
+HEADER_LRT = _HEADERS["lrt"]
+HEADER_ALL = _HEADERS["all"]
 
 
 def write_assoc_results(results: list[AssocResult], path: Path) -> None:
@@ -218,7 +142,15 @@ class IncrementalAssocWriter:
         Args:
             path: Output file path. Parent directories created if needed.
             test_type: Test type for formatting ("wald", "score", "lrt", or "all")
+
+        Raises:
+            ValueError: If test_type is not recognized.
         """
+        if test_type not in _FORMAT_COLUMNS:
+            raise ValueError(
+                f"Unknown test_type={test_type!r}; "
+                f"expected one of {list(_FORMAT_COLUMNS)}"
+            )
         self.path = Path(path)
         self.test_type = test_type
         self._file = None
@@ -228,15 +160,7 @@ class IncrementalAssocWriter:
         """Open file and write header."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = open(self.path, "w")
-        if self.test_type == "score":
-            header = HEADER_SCORE
-        elif self.test_type == "lrt":
-            header = HEADER_LRT
-        elif self.test_type == "all":
-            header = HEADER_ALL
-        else:
-            header = HEADER_WALD
-        self._file.write(header + "\n")
+        self._file.write(_HEADERS[self.test_type] + "\n")
         return self
 
     def _cleanup_partial(self) -> None:
@@ -271,14 +195,7 @@ class IncrementalAssocWriter:
         """
         if self._file is None:
             raise RuntimeError("Writer not opened. Use as context manager.")
-        if self.test_type == "score":
-            line = format_assoc_line_score(result)
-        elif self.test_type == "lrt":
-            line = format_assoc_line_lrt(result)
-        elif self.test_type == "all":
-            line = format_assoc_line_all(result)
-        else:
-            line = format_assoc_line(result)
+        line = format_assoc_line(result, self.test_type)
 
         last_error: OSError | None = None
         for attempt in range(1 + len(_RETRY_BACKOFF)):
@@ -343,18 +260,8 @@ class IncrementalAssocWriter:
         if not results:
             return
 
-        # Select formatter once for the batch
-        if self.test_type == "score":
-            fmt = format_assoc_line_score
-        elif self.test_type == "lrt":
-            fmt = format_assoc_line_lrt
-        elif self.test_type == "all":
-            fmt = format_assoc_line_all
-        else:
-            fmt = format_assoc_line
-
         # Format entire batch into single buffer
-        buf = "\n".join(fmt(r) for r in results) + "\n"
+        buf = "\n".join(format_assoc_line(r, self.test_type) for r in results) + "\n"
 
         last_error: OSError | None = None
         for attempt in range(1 + len(_RETRY_BACKOFF)):

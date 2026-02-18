@@ -31,7 +31,7 @@ from jamma.io.plink import (
 )
 from jamma.kinship import compute_loco_kinship_streaming, write_kinship_matrix
 from jamma.lmm.chunk import _compute_chunk_size
-from jamma.lmm.compute import _compute_lmm_chunk
+from jamma.lmm.compute import _compute_lmm_chunk, block_chunk_result, strip_and_append
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.likelihood_jax import batch_compute_uab
@@ -48,7 +48,6 @@ from jamma.lmm.results import (
 )
 from jamma.lmm.runner_streaming import (
     _TEST_TYPE_MAP,
-    _append_chunk_results,
     _init_accumulators,
     _LazySnpMeta,
 )
@@ -495,10 +494,6 @@ def _run_lmm_for_chromosome(
                 # Fresh accumulator per disk chunk (flush after each)
                 accum: dict[str, list] = _init_accumulators(lmm_mode)
 
-                # Initialize mode-specific variables (prevents NameError)
-                best_lambdas = best_logls = betas = ses = p_walds = None
-                best_lambdas_mle = p_lrts = p_scores = None
-
                 # Prepare first JAX chunk
                 UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
                     jax_starts[0], geno_disk_chunk, n_disk_subset
@@ -523,48 +518,22 @@ def _run_lmm_for_chromosome(
                     Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
 
                     chunk_result = _compute_lmm_chunk(
-                        lmm_mode, n_cvt, eigenvalues_jax, Uab_batch, n_samples,
-                        l_min=l_min, l_max=l_max, n_grid=n_grid, n_refine=n_refine,
-                        Hi_eval_null=Hi_eval_null_jax, logl_H0=logl_H0,
-                    )
-
-                    # Sync for timing accuracy (LOCO has same pattern as streaming)
-                    if lmm_mode == 1:
-                        chunk_result["p_walds"].block_until_ready()
-                    elif lmm_mode == 3:
-                        chunk_result["p_scores"].block_until_ready()
-                    elif lmm_mode == 2:
-                        chunk_result["p_lrts"].block_until_ready()
-                    elif lmm_mode == 4:
-                        chunk_result["p_scores"].block_until_ready()
-                        chunk_result["p_lrts"].block_until_ready()
-                        chunk_result["p_walds"].block_until_ready()
-
-                    best_lambdas = chunk_result["best_lambdas"]
-                    best_logls = chunk_result["best_logls"]
-                    betas = chunk_result["betas"]
-                    ses = chunk_result["ses"]
-                    p_walds = chunk_result["p_walds"]
-                    best_lambdas_mle = chunk_result["best_lambdas_mle"]
-                    p_lrts = chunk_result["p_lrts"]
-                    p_scores = chunk_result["p_scores"]
-
-                    # Strip padding and append to accumulators
-                    _append_chunk_results(
                         lmm_mode,
-                        accum,
-                        current_actual_len,
-                        current_needs_padding,
-                        {
-                            "best_lambdas": best_lambdas,
-                            "best_logls": best_logls,
-                            "betas": betas,
-                            "ses": ses,
-                            "p_walds": p_walds,
-                            "best_lambdas_mle": best_lambdas_mle,
-                            "p_lrts": p_lrts,
-                            "p_scores": p_scores,
-                        },
+                        n_cvt,
+                        eigenvalues_jax,
+                        Uab_batch,
+                        n_samples,
+                        l_min=l_min,
+                        l_max=l_max,
+                        n_grid=n_grid,
+                        n_refine=n_refine,
+                        Hi_eval_null=Hi_eval_null_jax,
+                        logl_H0=logl_H0,
+                    )
+                    block_chunk_result(chunk_result, lmm_mode)
+
+                    strip_and_append(
+                        chunk_result, accum, current_actual_len, current_needs_padding
                     )
 
                 del geno_disk_chunk

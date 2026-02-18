@@ -23,7 +23,7 @@ from jamma.io.plink import (
     validate_genotype_values,
 )
 from jamma.lmm.chunk import _compute_chunk_size
-from jamma.lmm.compute import _compute_lmm_chunk
+from jamma.lmm.compute import _compute_lmm_chunk, block_chunk_result, strip_and_append
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.likelihood_jax import batch_compute_uab
 from jamma.lmm.prepare import (
@@ -92,40 +92,12 @@ _ACCUM_KEYS = {
     ),
 }
 
-_FIRST_ARRAY_KEY = {1: "lambdas", 2: "lambdas_mle", 3: "betas", 4: "lambdas"}
-
 _TEST_TYPE_MAP = {1: "wald", 2: "lrt", 3: "score", 4: "all"}
 
 
 def _init_accumulators(lmm_mode: int) -> dict[str, list]:
     """Create empty accumulator dict for the given mode."""
     return {k: [] for k in _ACCUM_KEYS[lmm_mode]}
-
-
-def _append_chunk_results(
-    lmm_mode: int,
-    accum: dict[str, list],
-    actual_len: int,
-    needs_padding: bool,
-    local_vars: dict,
-) -> None:
-    """Strip padding from JAX arrays and append to accumulators."""
-    _var_map = {
-        "lambdas": "best_lambdas",
-        "logls": "best_logls",
-        "betas": "betas",
-        "ses": "ses",
-        "pwalds": "p_walds",
-        "lambdas_mle": "best_lambdas_mle",
-        "p_lrts": "p_lrts",
-        "p_scores": "p_scores",
-    }
-    first_key = _FIRST_ARRAY_KEY[lmm_mode]
-    first_var = _var_map[first_key]
-    arr = local_vars[first_var]
-    slice_len = actual_len if needs_padding else len(arr)
-    for key in _ACCUM_KEYS[lmm_mode]:
-        accum[key].append(local_vars[_var_map[key]][:slice_len])
 
 
 def run_lmm_association_streaming(
@@ -501,10 +473,6 @@ def run_lmm_association_streaming(
             # Dict-based accumulators for this file chunk
             accum: dict[str, list] = _init_accumulators(lmm_mode)
 
-            # Initialize mode-specific variables (prevents NameError in explicit dict)
-            best_lambdas = best_logls = betas = ses = p_walds = None
-            best_lambdas_mle = p_lrts = p_scores = None
-
             # Prepare first JAX chunk
             t_rot_start = time.perf_counter()
             UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
@@ -538,51 +506,25 @@ def run_lmm_association_streaming(
                 Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
 
                 chunk_result = _compute_lmm_chunk(
-                    lmm_mode, n_cvt, eigenvalues, Uab_batch, n_samples,
-                    l_min=l_min, l_max=l_max, n_grid=n_grid, n_refine=n_refine,
-                    Hi_eval_null=Hi_eval_null_jax, logl_H0=logl_H0,
+                    lmm_mode,
+                    n_cvt,
+                    eigenvalues,
+                    Uab_batch,
+                    n_samples,
+                    l_min=l_min,
+                    l_max=l_max,
+                    n_grid=n_grid,
+                    n_refine=n_refine,
+                    Hi_eval_null=Hi_eval_null_jax,
+                    logl_H0=logl_H0,
                 )
-
-                # Sync for timing accuracy (streaming runner needs this)
-                if lmm_mode == 1:
-                    chunk_result["p_walds"].block_until_ready()
-                elif lmm_mode == 3:
-                    chunk_result["p_scores"].block_until_ready()
-                elif lmm_mode == 2:
-                    chunk_result["p_lrts"].block_until_ready()
-                elif lmm_mode == 4:
-                    chunk_result["p_scores"].block_until_ready()
-                    chunk_result["p_lrts"].block_until_ready()
-                    chunk_result["p_walds"].block_until_ready()
-
-                best_lambdas = chunk_result["best_lambdas"]
-                best_logls = chunk_result["best_logls"]
-                betas = chunk_result["betas"]
-                ses = chunk_result["ses"]
-                p_walds = chunk_result["p_walds"]
-                best_lambdas_mle = chunk_result["best_lambdas_mle"]
-                p_lrts = chunk_result["p_lrts"]
-                p_scores = chunk_result["p_scores"]
+                block_chunk_result(chunk_result, lmm_mode)
 
                 t_jax_end = time.perf_counter()
                 t_jax_compute_total += t_jax_end - t_jax_start
 
-                # Strip padding and append to dict-based accumulators
-                _append_chunk_results(
-                    lmm_mode,
-                    accum,
-                    current_actual_len,
-                    current_needs_padding,
-                    {
-                        "best_lambdas": best_lambdas,
-                        "best_logls": best_logls,
-                        "betas": betas,
-                        "ses": ses,
-                        "p_walds": p_walds,
-                        "best_lambdas_mle": best_lambdas_mle,
-                        "p_lrts": p_lrts,
-                        "p_scores": p_scores,
-                    },
+                strip_and_append(
+                    chunk_result, accum, current_actual_len, current_needs_padding
                 )
 
             # Concatenate, build results, write/accumulate

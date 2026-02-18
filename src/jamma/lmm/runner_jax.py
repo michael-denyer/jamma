@@ -17,7 +17,7 @@ from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.core.threading import blas_threads
 from jamma.lmm.chunk import _compute_chunk_size
-from jamma.lmm.compute import _compute_lmm_chunk
+from jamma.lmm.compute import _FIRST_KEY, _compute_lmm_chunk
 from jamma.lmm.likelihood_jax import batch_compute_uab
 from jamma.lmm.prepare import (
     _build_covariate_matrix,
@@ -291,19 +291,19 @@ def run_lmm_association_jax(
             # Batch compute Uab for this chunk (shared across all modes)
             Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
 
-            chunk_result = _compute_lmm_chunk(
-                lmm_mode, n_cvt, eigenvalues, Uab_batch, n_samples,
-                l_min=l_min, l_max=l_max, n_grid=n_grid, n_refine=n_refine,
-                Hi_eval_null=Hi_eval_null_jax, logl_H0=logl_H0,
+            cr = _compute_lmm_chunk(
+                lmm_mode,
+                n_cvt,
+                eigenvalues,
+                Uab_batch,
+                n_samples,
+                l_min=l_min,
+                l_max=l_max,
+                n_grid=n_grid,
+                n_refine=n_refine,
+                Hi_eval_null=Hi_eval_null_jax,
+                logl_H0=logl_H0,
             )
-            best_lambdas = chunk_result["best_lambdas"]
-            best_logls = chunk_result["best_logls"]
-            betas = chunk_result["betas"]
-            ses = chunk_result["ses"]
-            p_walds = chunk_result["p_walds"]
-            best_lambdas_mle = chunk_result["best_lambdas_mle"]
-            p_lrts = chunk_result["p_lrts"]
-            p_scores = chunk_result["p_scores"]
 
         except Exception as e:
             error_msg = str(e)
@@ -328,39 +328,32 @@ def run_lmm_association_jax(
             raise
 
         # Write results into pre-allocated arrays by index (no list append)
+        first_arr = cr[_FIRST_KEY[lmm_mode]]
+        slice_len = actual_chunk_len if needs_padding else len(first_arr)
+        s = slice(write_offset, write_offset + slice_len)
+
         if lmm_mode == 1:
-            slice_len = actual_chunk_len if needs_padding else len(best_lambdas)
-            s = slice(write_offset, write_offset + slice_len)
-            lambdas_out[s] = np.asarray(best_lambdas[:slice_len])
-            logls_out[s] = np.asarray(best_logls[:slice_len])
-            betas_out[s] = np.asarray(betas[:slice_len])
-            ses_out[s] = np.asarray(ses[:slice_len])
-            pwalds_out[s] = np.asarray(p_walds[:slice_len])
+            lambdas_out[s] = np.asarray(cr["lambdas"][:slice_len])
+            logls_out[s] = np.asarray(cr["logls"][:slice_len])
+            betas_out[s] = np.asarray(cr["betas"][:slice_len])
+            ses_out[s] = np.asarray(cr["ses"][:slice_len])
+            pwalds_out[s] = np.asarray(cr["pwalds"][:slice_len])
         elif lmm_mode == 3:
-            slice_len = actual_chunk_len if needs_padding else len(betas)
-            s = slice(write_offset, write_offset + slice_len)
-            betas_out[s] = np.asarray(betas[:slice_len])
-            ses_out[s] = np.asarray(ses[:slice_len])
-            p_scores_out[s] = np.asarray(p_scores[:slice_len])
+            betas_out[s] = np.asarray(cr["betas"][:slice_len])
+            ses_out[s] = np.asarray(cr["ses"][:slice_len])
+            p_scores_out[s] = np.asarray(cr["p_scores"][:slice_len])
         elif lmm_mode == 2:
-            slice_len = actual_chunk_len if needs_padding else len(best_lambdas_mle)
-            s = slice(write_offset, write_offset + slice_len)
-            lambdas_mle_out[s] = np.asarray(best_lambdas_mle[:slice_len])
-            p_lrts_out[s] = np.asarray(p_lrts[:slice_len])
+            lambdas_mle_out[s] = np.asarray(cr["lambdas_mle"][:slice_len])
+            p_lrts_out[s] = np.asarray(cr["p_lrts"][:slice_len])
         elif lmm_mode == 4:
-            slice_len = actual_chunk_len if needs_padding else len(best_lambdas)
-            s = slice(write_offset, write_offset + slice_len)
-            # Wald
-            lambdas_out[s] = np.asarray(best_lambdas[:slice_len])
-            logls_out[s] = np.asarray(best_logls[:slice_len])
-            betas_out[s] = np.asarray(betas[:slice_len])
-            ses_out[s] = np.asarray(ses[:slice_len])
-            pwalds_out[s] = np.asarray(p_walds[:slice_len])
-            # LRT
-            lambdas_mle_out[s] = np.asarray(best_lambdas_mle[:slice_len])
-            p_lrts_out[s] = np.asarray(p_lrts[:slice_len])
-            # Score
-            p_scores_out[s] = np.asarray(p_scores[:slice_len])
+            lambdas_out[s] = np.asarray(cr["lambdas"][:slice_len])
+            logls_out[s] = np.asarray(cr["logls"][:slice_len])
+            betas_out[s] = np.asarray(cr["betas"][:slice_len])
+            ses_out[s] = np.asarray(cr["ses"][:slice_len])
+            pwalds_out[s] = np.asarray(cr["pwalds"][:slice_len])
+            lambdas_mle_out[s] = np.asarray(cr["lambdas_mle"][:slice_len])
+            p_lrts_out[s] = np.asarray(cr["p_lrts"][:slice_len])
+            p_scores_out[s] = np.asarray(cr["p_scores"][:slice_len])
 
         write_offset += slice_len
 

@@ -37,11 +37,8 @@ def _format_rows_chunk(args: tuple) -> bytes:
         matrix = np.memmap(file_path, dtype=np.dtype(dtype_str), mode="r", shape=shape)
 
         row_fmt = delimiter.join([fmt] * ncols)
-        lines = []
-        for i in range(start, end):
-            lines.append(row_fmt % tuple(matrix[i]))
-        chunk_text = "\n".join(lines) + "\n"
-        return chunk_text.encode("ascii")
+        lines = [row_fmt % tuple(matrix[i]) for i in range(start, end)]
+        return ("\n".join(lines) + "\n").encode("ascii")
     except Exception as e:
         raise RuntimeError(
             f"_format_rows_chunk failed on rows {start}-{end}: {e}"
@@ -95,8 +92,6 @@ def write_matrix_parallel(
     matrix = np.ascontiguousarray(matrix, dtype=np.float64)
 
     rows_per_chunk = max(100, n_rows // n_workers)
-    chunks_args = []
-
     ctx = mp.get_context("spawn")
 
     fd, tmp_path = tempfile.mkstemp(suffix=".dat")
@@ -111,20 +106,19 @@ def write_matrix_parallel(
                 f"Set TMPDIR to a filesystem with sufficient space."
             ) from e
 
-        for start in range(0, n_rows, rows_per_chunk):
-            end = min(start + rows_per_chunk, n_rows)
-            chunks_args.append(
-                (
-                    tmp_path,
-                    start,
-                    end,
-                    n_cols,
-                    fmt,
-                    delimiter,
-                    matrix.shape,
-                    str(matrix.dtype),
-                )
+        chunks_args = [
+            (
+                tmp_path,
+                start,
+                min(start + rows_per_chunk, n_rows),
+                n_cols,
+                fmt,
+                delimiter,
+                matrix.shape,
+                str(matrix.dtype),
             )
+            for start in range(0, n_rows, rows_per_chunk)
+        ]
 
         with ctx.Pool(processes=n_workers) as pool:
             try:

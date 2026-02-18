@@ -5,6 +5,7 @@ np.savetxt for all matrix sizes, including the parallel path (>=500 rows).
 """
 
 import inspect
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -170,18 +171,66 @@ class TestFailureHandling:
         out_path = tmp_path / "should_not_exist.txt"
 
         # Trigger worker error via invalid format string: "%s%s" causes
-        # TypeError when applied to float rows. SharedMemory copy forces
-        # float64 so we can't inject bad dtype, but format string mismatch
-        # reliably fails in the spawned worker process.
+        # TypeError when applied to float rows. The memmap is float64 so
+        # we can't inject bad dtype, but format string mismatch reliably
+        # fails in the spawned worker process.
         with pytest.raises((TypeError, ValueError)):
             write_matrix_parallel(matrix, out_path, fmt="%s%s", n_workers=2)
 
         assert not out_path.exists(), "Partial output file should be deleted on failure"
 
-    def test_always_uses_shared_memory(self) -> None:
-        """write_matrix_parallel has no fork path — always uses SharedMemory."""
+    def test_uses_memmap_not_shared_memory(self) -> None:
+        """Memmap used, not SharedMemory (Docker /dev/shm SIGBUS)."""
         source = inspect.getsource(write_matrix_parallel)
-        assert "fork" not in source, (
-            "write_matrix_parallel should not contain 'fork' — "
-            "SharedMemory should be used on all platforms"
+        assert "memmap" in source, (
+            "write_matrix_parallel should use numpy.memmap"
+        )
+        assert "SharedMemory" not in source, (
+            "write_matrix_parallel should not use SharedMemory"
+            " -- Docker /dev/shm is capped at 64 MB"
+        )
+
+    def test_temp_file_cleaned_after_success(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Temp file for memmap IPC is cleaned up after success."""
+        # Isolated temp dir avoids parallel test worker interference
+        isolated_tmp = tmp_path / "tmpdir"
+        isolated_tmp.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(isolated_tmp))
+
+        rng = np.random.default_rng(42)
+        matrix = rng.standard_normal((600, 10))
+        out_path = tmp_path / "output.txt"
+        write_matrix_parallel(matrix, out_path, n_workers=2)
+
+        remaining = list(isolated_tmp.glob("*.dat"))
+        assert not remaining, (
+            f"Temp .dat files not cleaned up: {remaining}"
+        )
+
+    def test_temp_file_cleaned_after_failure(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Temp file for memmap IPC is cleaned up on failure."""
+        isolated_tmp = tmp_path / "tmpdir"
+        isolated_tmp.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(isolated_tmp))
+
+        rng = np.random.default_rng(42)
+        matrix = rng.standard_normal((600, 10))
+        out_path = tmp_path / "should_not_exist.txt"
+
+        with pytest.raises((TypeError, ValueError)):
+            write_matrix_parallel(
+                matrix, out_path, fmt="%s%s", n_workers=2
+            )
+
+        remaining = list(isolated_tmp.glob("*.dat"))
+        assert not remaining, (
+            f"Temp .dat not cleaned up after failure: {remaining}"
         )

@@ -172,7 +172,7 @@ class TestFailureHandling:
 
         # Trigger worker error via invalid format string: "%s%s" causes
         # TypeError in the worker, wrapped as RuntimeError with row context.
-        with pytest.raises(RuntimeError, match="_format_rows_chunk failed"):
+        with pytest.raises(RuntimeError, match="_format_rows_to_file failed"):
             write_matrix_parallel(matrix, out_path, fmt="%s%s", n_workers=2)
 
         assert not out_path.exists(), "Partial output file should be deleted on failure"
@@ -203,27 +203,27 @@ class TestFailureHandling:
         tmp_path: Path,
         isolated_tmpdir: Path,
     ) -> None:
-        """Temp file for memmap IPC is cleaned up after success."""
+        """Temp dir and all chunk files are cleaned up after success."""
         rng = np.random.default_rng(42)
         matrix = rng.standard_normal((600, 10))
         out_path = tmp_path / "output.txt"
         write_matrix_parallel(matrix, out_path, n_workers=2)
 
-        remaining = list(isolated_tmpdir.glob("*.dat"))
-        assert not remaining, f"Temp .dat files not cleaned up: {remaining}"
+        remaining = list(isolated_tmpdir.glob("jamma_mwrite_*"))
+        assert not remaining, f"Temp dirs not cleaned up: {remaining}"
 
     def test_temp_file_cleaned_after_failure(
         self,
         tmp_path: Path,
         isolated_tmpdir: Path,
     ) -> None:
-        """Temp file for memmap IPC is cleaned up on failure."""
+        """Temp dir and all chunk files are cleaned up on failure."""
         rng = np.random.default_rng(42)
         matrix = rng.standard_normal((600, 10))
         out_path = tmp_path / "should_not_exist.txt"
 
-        with pytest.raises(RuntimeError, match="_format_rows_chunk failed"):
+        with pytest.raises(RuntimeError, match="_format_rows_to_file failed"):
             write_matrix_parallel(matrix, out_path, fmt="%s%s", n_workers=2)
 
-        remaining = list(isolated_tmpdir.glob("*.dat"))
-        assert not remaining, f"Temp .dat not cleaned up after failure: {remaining}"
+        remaining = list(isolated_tmpdir.glob("jamma_mwrite_*"))
+        assert not remaining, f"Temp dirs not cleaned up after failure: {remaining}"

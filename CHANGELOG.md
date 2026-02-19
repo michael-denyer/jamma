@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.3] - 2026-02-19
+
+### Changed
+
+- **File-to-file parallel writer**: Workers write formatted text to per-chunk temp
+  files instead of returning ~1.2 GB bytes objects through the multiprocessing IPC
+  pipe. Eliminates memory spike at end of write phase — at 100k×100k with 16 workers,
+  old code buffered ~19 GB in the IPC queue; new code: ~0 bytes in IPC.
+- **Removed 16-worker cap**: `write_matrix_parallel()` defaults to `cpu_count`
+  instead of `min(cpu_count, 16)`. Per-worker memory is now ~150 MB process overhead
+  (not 1.2 GB buffered bytes), so higher worker counts are safe.
+
 ## [2.4.2] - 2026-02-18
 
 ### Fixed
@@ -455,7 +467,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
-[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.4.2...HEAD
+[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.4.3...HEAD
+[2.4.3]: https://github.com/michael-denyer/jamma/compare/v2.4.2...v2.4.3
 [2.4.2]: https://github.com/michael-denyer/jamma/compare/v2.4.1...v2.4.2
 [2.4.1]: https://github.com/michael-denyer/jamma/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/michael-denyer/jamma/compare/v2.3.0...v2.4.0

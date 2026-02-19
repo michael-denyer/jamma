@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jamma"
-version = "2.4.3"
+version = "2.4.4"
 description = "JAMMA: JAX-Accelerated Mixed Model Association"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -54,6 +54,8 @@ markers = [
     "slow: alias for tier2, marks tests as slow (deselect with '-m \"not slow\"')",
     "benchmark: marks tests that require pytest-benchmark (run with '--benchmark-only')",
 ]
+
+[tool.hatch.build.hooks.custom]
 
 [tool.ruff]
 line-length = 88

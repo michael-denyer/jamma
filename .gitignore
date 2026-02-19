@@ -16,6 +16,9 @@ htmlcov/
 dist/
 *.egg-info/
 
+# Auto-generated build metadata
+src/jamma/_build_meta.py
+
 # Virtual environments
 .venv/
 venv/

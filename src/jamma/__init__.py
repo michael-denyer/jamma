@@ -19,6 +19,11 @@ from importlib.metadata import version
 
 __version__ = version("jamma")
 
+try:
+    from jamma._build_meta import BUILD_DATE as __release_date__
+except ImportError:
+    __release_date__ = "dev"
+
 from jamma.gwas import GWASResult, gwas  # noqa: E402
 
-__all__ = ["gwas", "GWASResult", "__version__"]
+__all__ = ["gwas", "GWASResult", "__version__", "__release_date__"]

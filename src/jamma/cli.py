@@ -45,7 +45,7 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     from jamma.core import get_backend_info
 
     info = get_backend_info()
-    click.echo(f"JAMMA version {jamma.__version__}")
+    click.echo(f"JAMMA version {jamma.__version__} ({jamma.__release_date__})")
     click.echo(f"Backend: {info['selected']}")
     click.echo("  (JAX pipeline + numpy/LAPACK eigendecomp)")
     click.echo(f"GPU available: {info['gpu_available']}")
@@ -340,6 +340,15 @@ def _run_gk(
             "LOCO kinship uses centered mode (-gk 1). "
             "Use 'jamma -gk 2 -bfile X' without -loco for standardized kinship."
         )
+
+    # Log startup banner
+    from jamma.io.plink import get_plink_metadata as _get_meta
+
+    _meta = _get_meta(bfile)
+    logger.info(f"JAMMA v{jamma.__version__} ({jamma.__release_date__})")
+    logger.info("Reading Files ...")
+    logger.info(f"## number of total individuals = {_meta['n_samples']:,}")
+    logger.info(f"## number of total SNPs/var = {_meta['n_snps']:,}")
 
     # Resolve ksnps_file to indices if provided
     ksnps_indices = None

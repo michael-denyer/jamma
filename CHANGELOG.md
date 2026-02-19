@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.4] - 2026-02-19
+
+### Added
+
+- **GEMMA-style startup banner**: Consolidated dataset summary logged at startup for
+  both LMM and kinship modes — version, release date, total/analyzed individuals,
+  covariates, phenotypes, and total SNPs.
+- **Auto-derived release date**: Hatchling build hook (`hatch_build.py`) embeds the git
+  commit date into the package at build time. No manual maintenance required — the date
+  appears in the banner and `--version` output automatically.
+
 ## [2.4.3] - 2026-02-19
 
 ### Changed

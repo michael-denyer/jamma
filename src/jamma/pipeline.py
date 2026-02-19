@@ -554,6 +554,25 @@ class PipelineRunner:
         logger.info(f"SNP list ({label}): {len(indices)} SNPs resolved")
         return indices
 
+    @staticmethod
+    def _log_banner(
+        n_total: int,
+        n_analyzed: int,
+        n_snps: int,
+        n_covariates: int = 1,
+        n_phenotypes: int = 1,
+    ) -> None:
+        """Log GEMMA-style startup banner with dataset summary."""
+        import jamma
+
+        logger.info(f"JAMMA v{jamma.__version__} ({jamma.__release_date__})")
+        logger.info("Reading Files ...")
+        logger.info(f"## number of total individuals = {n_total:,}")
+        logger.info(f"## number of analyzed individuals = {n_analyzed:,}")
+        logger.info(f"## number of covariates = {n_covariates}")
+        logger.info(f"## number of phenotypes = {n_phenotypes}")
+        logger.info(f"## number of total SNPs/var = {n_snps:,}")
+
     def run(self) -> PipelineResult:
         """Execute the full GWAS pipeline.
 
@@ -611,6 +630,8 @@ class PipelineRunner:
             covariates = self.load_covariates(n_samples)
             valid_mask = self._compute_valid_mask(phenotypes, covariates)
             n_valid = int(np.sum(valid_mask))
+            n_cvt = covariates.shape[1] if covariates is not None else 1
+            self._log_banner(n_samples, n_valid, n_snps, n_covariates=n_cvt)
 
             t_loco = time.perf_counter()
             results, n_tested = run_lmm_loco(
@@ -658,6 +679,7 @@ class PipelineRunner:
         valid_mask = self._compute_valid_mask(phenotypes, covariates)
         n_valid = int(np.sum(valid_mask))
         n_cvt = covariates.shape[1] if covariates is not None else 1
+        self._log_banner(n_samples, n_valid, n_snps, n_covariates=n_cvt)
 
         # 8. Memory check (uses post-filter sample count and actual n_cvt)
         actual_chunk = _compute_chunk_size(n_valid, n_snps, n_cvt=n_cvt)

@@ -160,10 +160,12 @@ class TestFailureHandling:
     """Verify cleanup and platform behavior of write_matrix_parallel."""
 
     def test_partial_file_cleaned_on_worker_error(self, tmp_path: Path) -> None:
-        """Multiprocessing failure cleans up partial output file.
+        """Worker failure does not leave a partial output file.
 
-        Uses object-type matrix to trigger a real TypeError in workers
-        (which runs in spawn context and can't use mocks).
+        Uses invalid format string to trigger a real TypeError in workers
+        (which run in spawn context and can't use mocks). The output file
+        is never created because concatenation only runs after all workers
+        succeed.
         """
         rng = np.random.default_rng(42)
         # Create a valid float64 matrix but large enough for parallel path

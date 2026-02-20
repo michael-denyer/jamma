@@ -562,7 +562,18 @@ class PipelineRunner:
         n_covariates: int = 1,
         n_phenotypes: int = 1,
     ) -> None:
-        """Log GEMMA-style startup banner with dataset summary."""
+        """Log GEMMA-style startup banner with dataset summary.
+
+        Prints version, release date, and dataset dimensions to match
+        GEMMA's startup output format for user familiarity.
+
+        Args:
+            n_total: Total number of individuals in the PLINK file.
+            n_analyzed: Number of individuals after phenotype/covariate filtering.
+            n_snps: Total number of SNPs in the dataset.
+            n_covariates: Number of covariate columns (1 = intercept-only).
+            n_phenotypes: Number of phenotype columns being analyzed.
+        """
         import jamma
 
         logger.info(f"JAMMA v{jamma.__version__} ({jamma.__release_date__})")

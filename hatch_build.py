@@ -19,7 +19,7 @@ class CustomBuildHook(BuildHookInterface):
                 text=True,
                 stderr=subprocess.DEVNULL,
             ).strip()[:10]
-        except Exception:
+        except (FileNotFoundError, subprocess.CalledProcessError):
             date_str = datetime.date.today().isoformat()
 
         meta_path = Path(self.root) / "src" / "jamma" / "_build_meta.py"

@@ -7,8 +7,9 @@ and takes ~30 minutes. Parallel formatting reduces this to ~2-4 minutes.
 Uses file-backed numpy.memmap for worker IPC instead of shared memory to avoid
 SIGBUS crashes when Docker's /dev/shm is capped at 64 MB (cpython#114390).
 
-Workers write formatted text to per-chunk temp files instead of returning bytes
-through the IPC pipe, keeping memory usage bounded regardless of worker count.
+Workers write formatted text to per-chunk temp files, returning only the file
+path through the IPC pipe. This keeps memory usage bounded regardless of worker
+count.
 
 Output is byte-identical to np.savetxt for all matrix sizes.
 """
@@ -22,7 +23,7 @@ import numpy as np
 from loguru import logger
 
 
-def _format_rows_to_file(args: tuple) -> str:
+def _format_rows_to_file(args: tuple) -> None:
     """Format a chunk of matrix rows and write to a temp file.
 
     Must be a top-level function for pickling with spawn context.
@@ -30,9 +31,6 @@ def _format_rows_to_file(args: tuple) -> str:
     Args:
         args: Tuple of (memmap_path, out_path, start, end, ncols, fmt,
               delimiter, shape, dtype_str).
-
-    Returns:
-        Path to the output chunk file (same as out_path).
     """
     (memmap_path, out_path, start, end, ncols, fmt, delimiter, shape, dtype_str) = args
 
@@ -45,7 +43,6 @@ def _format_rows_to_file(args: tuple) -> str:
             for i in range(start, end):
                 line = (row_fmt % tuple(matrix[i])) + "\n"
                 f.write(line.encode("ascii"))
-        return out_path
     except Exception as e:
         raise RuntimeError(
             f"_format_rows_to_file failed on rows {start}-{end}: {e}"
@@ -137,7 +134,7 @@ def write_matrix_parallel(
 
         with ctx.Pool(processes=n_workers) as pool:
             try:
-                # imap preserves order; workers write to disk, return only path
+                # imap (not imap_unordered) preserves chunk order for concatenation
                 for _ in pool.imap(_format_rows_to_file, chunks_args):
                     pass
             except BaseException as e:
@@ -156,7 +153,10 @@ def write_matrix_parallel(
                             if not buf:
                                 break
                             f_out.write(buf)
-        except BaseException:
+        except BaseException as e:
+            logger.opt(exception=e).error(
+                f"Failed during chunk concatenation to {path}: {e}"
+            )
             try:
                 path.unlink(missing_ok=True)
             except OSError as cleanup_err:
@@ -167,8 +167,10 @@ def write_matrix_parallel(
         for p in [memmap_path, *chunk_paths]:
             try:
                 os.unlink(p)
-            except OSError:
+            except FileNotFoundError:
                 pass
+            except OSError as e:
+                logger.warning(f"Failed to remove temp file {p}: {e}")
         try:
             os.rmdir(tmp_dir)
         except OSError as e:

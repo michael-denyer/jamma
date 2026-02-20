@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.5] - 2026-02-20
+
+### Fixed
+
+- **Assert→RuntimeError**: Replaced `assert` with `if`/`raise` for write_offset
+  check in JAX runner — `assert` is stripped under `python -O`, risking silent
+  data truncation.
+- **File handle leak**: Fixed `IncrementalAssocWriter.__exit__` skipping file
+  close on non-OSError exceptions.
+- **Off-by-one in retry count**: Error message now reports correct attempt number.
+- **Exception propagation**: `verify_jax_installation()` re-raises original
+  exceptions instead of wrapping in `RuntimeError`.
+
+### Added
+
+- **Eigenvector shape validation**: Raises `ValueError` when pre-computed
+  eigenvectors don't match sample count after filtering.
+- **JAX int32 overflow detection**: Streaming and LOCO runners catch and log
+  diagnostic context for JAX buffer overflow errors.
+- **Parameter validation**: `_compute_lmm_chunk()` validates `logl_H0` and
+  `Hi_eval_null` are provided for modes that require them.
+- **23 new tests**: Covers `_safe_sqrt` boundary behavior, `_clamp_p_yy`
+  clamping, P_yy in log-likelihood, over-parameterization guard, and golden
+  section optimizer.
+
+### Changed
+
+- **DRY P_yy clamping**: Extracted `_clamp_p_yy()` helper replacing 4 duplicate
+  clamping blocks in likelihood.py.
+- **Precomputed sample filter**: `needs_sample_filter` flag computed once before
+  hot loops instead of `np.all(valid_mask)` per iteration.
+- **Narrowed eigendecomp exception**: Catches `np.linalg.LinAlgError` before
+  generic `Exception` with PSD-specific guidance.
+- **Debug tracebacks**: CLI exception handlers log `exc_info=True` for verbose
+  diagnostics.
+
 ## [2.4.4] - 2026-02-19
 
 ### Added

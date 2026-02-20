@@ -106,6 +106,12 @@ def eigendecompose_kinship(
             f"Consider using a machine with more RAM or reducing sample size."
         )
         raise
+    except np.linalg.LinAlgError as e:
+        logger.error(
+            f"Eigendecomposition failed: {e}. "
+            f"Kinship matrix may not be positive semi-definite."
+        )
+        raise
     except Exception as e:
         logger.error(f"Eigendecomposition failed: {type(e).__name__}: {e}")
         raise

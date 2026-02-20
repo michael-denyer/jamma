@@ -347,7 +347,10 @@ class PipelineRunner:
         fam_path = f"{self.config.bfile}.fam"
 
         # Check column count from first line
-        first_line = np.loadtxt(fam_path, dtype=str, max_rows=1)
+        try:
+            first_line = np.loadtxt(fam_path, dtype=str, max_rows=1)
+        except (ValueError, OSError) as e:
+            raise ValueError(f"Failed to read .fam file {fam_path}: {e}") from e
         n_cols = first_line.size
         if col_index >= n_cols:
             n_pheno_cols = n_cols - 5
@@ -359,7 +362,12 @@ class PipelineRunner:
 
         logger.info(f"Using phenotype column {pheno_col} (file column {col_index + 1})")
 
-        fam_data = np.loadtxt(fam_path, dtype=str, usecols=(col_index,))
+        try:
+            fam_data = np.loadtxt(fam_path, dtype=str, usecols=(col_index,))
+        except (ValueError, OSError) as e:
+            raise ValueError(
+                f"Failed to read phenotype column {pheno_col} from {fam_path}: {e}"
+            ) from e
         missing_mask = np.isin(fam_data, ["-9", "NA"])
         fam_data[missing_mask] = "0"  # placeholder for safe float conversion
         phenotypes = fam_data.astype(np.float64)

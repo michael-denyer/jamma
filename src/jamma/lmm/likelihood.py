@@ -22,6 +22,33 @@ from collections.abc import Callable
 import numpy as np
 from loguru import logger
 
+_P_YY_MIN = 1e-8
+
+
+def _clamp_p_yy(P_yy: float, lambda_val: float) -> float:
+    """Clamp P_yy to prevent log(0) or log(negative) in log-likelihood.
+
+    Returns -inf for negative P_yy (signals invalid region to optimizer)
+    and clamps near-zero positive values to _P_YY_MIN.
+
+    Args:
+        P_yy: Projected residual variance from Pab.
+        lambda_val: Current lambda value (for diagnostic logging).
+
+    Returns:
+        Clamped P_yy, or triggers -inf log-likelihood via float('-inf').
+    """
+    if P_yy < 0:
+        logger.warning(
+            f"Negative P_yy ({P_yy:.6e}) at lambda={lambda_val:.6e} — "
+            "numerical breakdown. If this occurs frequently, the kinship "
+            "matrix may not be positive semi-definite."
+        )
+        return float("nan")  # np.log(nan) = nan, optimizer avoids
+    if P_yy < _P_YY_MIN:
+        return _P_YY_MIN
+    return P_yy
+
 
 def get_ab_index(a: int, b: int, n_cvt: int) -> int:
     """Compute index for accessing Uab/Pab elements using GEMMA's GetabIndex.
@@ -278,16 +305,7 @@ def reml_log_likelihood(
             logdet_hiw -= np.log(d_iab)
 
     index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
-    P_yy = Pab[nc_total, index_yy]
-
-    P_YY_MIN = 1e-8
-    if P_yy >= 0.0 and P_yy < P_YY_MIN:
-        P_yy = P_YY_MIN
-    elif P_yy < 0:
-        logger.warning(
-            f"Negative P_yy ({P_yy:.6e}) at lambda={lambda_val:.6e} — "
-            "numerical breakdown. Log-likelihood will be NaN for this evaluation."
-        )
+    P_yy = _clamp_p_yy(Pab[nc_total, index_yy], lambda_val)
 
     c = 0.5 * df * (np.log(df) - np.log(2 * np.pi) - 1.0)
     f = c - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
@@ -340,16 +358,7 @@ def reml_log_likelihood_null(
 
     # P_yy at level nc_total (n_cvt for null model)
     index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
-    P_yy = Pab[nc_total, index_yy]
-
-    P_YY_MIN = 1e-8
-    if P_yy >= 0.0 and P_yy < P_YY_MIN:
-        P_yy = P_YY_MIN
-    elif P_yy < 0:
-        logger.warning(
-            f"Negative P_yy ({P_yy:.6e}) at lambda={lambda_val:.6e} — "
-            "numerical breakdown. Log-likelihood will be NaN for this evaluation."
-        )
+    P_yy = _clamp_p_yy(Pab[nc_total, index_yy], lambda_val)
 
     c = 0.5 * df * (np.log(df) - np.log(2 * np.pi) - 1.0)
     f = c - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
@@ -390,16 +399,7 @@ def mle_log_likelihood_null(
 
     # P_yy at level nc_total (n_cvt for null model)
     index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
-    P_yy = Pab[nc_total, index_yy]
-
-    P_YY_MIN = 1e-8
-    if P_yy >= 0.0 and P_yy < P_YY_MIN:
-        P_yy = P_YY_MIN
-    elif P_yy < 0:
-        logger.warning(
-            f"Negative P_yy ({P_yy:.6e}) at lambda={lambda_val:.6e} — "
-            "numerical breakdown. Log-likelihood will be NaN for this evaluation."
-        )
+    P_yy = _clamp_p_yy(Pab[nc_total, index_yy], lambda_val)
 
     # MLE formula (uses n, not df; no logdet_hiw)
     c = 0.5 * n * (np.log(n) - np.log(2 * np.pi) - 1.0)
@@ -571,16 +571,7 @@ def mle_log_likelihood(
     # NO logdet_hiw computation for MLE (key difference from REML)
 
     index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
-    P_yy = Pab[nc_total, index_yy]
-
-    P_YY_MIN = 1e-8
-    if P_yy >= 0.0 and P_yy < P_YY_MIN:
-        P_yy = P_YY_MIN
-    elif P_yy < 0:
-        logger.warning(
-            f"Negative P_yy ({P_yy:.6e}) at lambda={lambda_val:.6e} — "
-            "numerical breakdown. Log-likelihood will be NaN for this evaluation."
-        )
+    P_yy = _clamp_p_yy(Pab[nc_total, index_yy], lambda_val)
 
     # MLE formula (uses n, not df; no logdet_hiw)
     c = 0.5 * n * (np.log(n) - np.log(2 * np.pi) - 1.0)

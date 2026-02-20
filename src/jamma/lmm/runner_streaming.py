@@ -191,6 +191,15 @@ def run_lmm_association_streaming(
             kinship = kinship[np.ix_(valid_mask, valid_mask)]
         if covariates is not None:
             covariates = covariates[valid_mask, :]
+        if eigenvalues is not None and eigenvectors is not None:
+            if eigenvectors.shape[0] != n_valid:
+                raise ValueError(
+                    f"Pre-computed eigenvectors have {eigenvectors.shape[0]} rows "
+                    f"but {n_valid} samples remain after filtering "
+                    f"({n_samples_total - n_valid} removed by missing "
+                    f"phenotype/covariate). Re-run eigendecomposition on the "
+                    f"filtered kinship matrix."
+                )
 
     n_samples = phenotypes.shape[0]
 
@@ -219,6 +228,7 @@ def run_lmm_association_streaming(
         logger.info(f"  Lambda range: [{l_min:.2e}, {l_max:.2e}]")
 
     device = _select_jax_device(use_gpu)
+    needs_sample_filter = not np.all(valid_mask)
 
     # === PASS 1: SNP statistics (without loading all genotypes) ===
     t_io_start = time.perf_counter()
@@ -246,7 +256,7 @@ def run_lmm_association_streaming(
 
     for chunk, start, end in stats_iterator:
         # Apply sample filtering
-        if not np.all(valid_mask):
+        if needs_sample_filter:
             chunk = chunk[valid_mask, :]
 
         # Compute stats for this chunk
@@ -485,23 +495,41 @@ def run_lmm_association_streaming(
                 # --- JAX compute timing ---
                 t_jax_start = time.perf_counter()
 
-                # Batch compute Uab (shared across all modes)
-                Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
+                try:
+                    # Batch compute Uab (shared across all modes)
+                    Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
 
-                chunk_result = _compute_lmm_chunk(
-                    lmm_mode,
-                    n_cvt,
-                    eigenvalues,
-                    Uab_batch,
-                    n_samples,
-                    l_min=l_min,
-                    l_max=l_max,
-                    n_grid=n_grid,
-                    n_refine=n_refine,
-                    Hi_eval_null=Hi_eval_null_jax,
-                    logl_H0=logl_H0,
-                )
-                block_chunk_result(chunk_result, lmm_mode)
+                    chunk_result = _compute_lmm_chunk(
+                        lmm_mode,
+                        n_cvt,
+                        eigenvalues,
+                        Uab_batch,
+                        n_samples,
+                        l_min=l_min,
+                        l_max=l_max,
+                        n_grid=n_grid,
+                        n_refine=n_refine,
+                        Hi_eval_null=Hi_eval_null_jax,
+                        logl_H0=logl_H0,
+                    )
+                    block_chunk_result(chunk_result, lmm_mode)
+                except Exception as e:
+                    error_msg = str(e)
+                    # JAX int32 overflow (observed in JAX 0.4.x)
+                    if "exceeds the maximum representable value" in error_msg:
+                        logger.error(
+                            f"JAX int32 buffer overflow in streaming LMM.\n"
+                            f"  JAX chunk {i + 1}: {current_actual_len:,} SNPs x "
+                            f"{n_samples:,} samples"
+                        )
+                    else:
+                        logger.error(
+                            f"JAX computation failed in streaming LMM chunk:\n"
+                            f"  {type(e).__name__}: {error_msg}\n"
+                            f"  Chunk size: {current_actual_len:,} SNPs, "
+                            f"Samples: {n_samples:,}"
+                        )
+                    raise
 
                 t_jax_end = time.perf_counter()
                 t_jax_compute_total += t_jax_end - t_jax_start

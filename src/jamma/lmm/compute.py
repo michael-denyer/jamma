@@ -144,6 +144,11 @@ def _compute_lmm_chunk(
         lambdas_mle, p_lrts, p_scores. Keys not relevant to the
         mode are set to None.
     """
+    if lmm_mode in (2, 4) and logl_H0 is None:
+        raise ValueError("logl_H0 is required for LRT (mode 2) and All (mode 4)")
+    if lmm_mode in (3, 4) and Hi_eval_null is None:
+        raise ValueError("Hi_eval_null is required for Score (mode 3) and All (mode 4)")
+
     result: dict[str, jax.Array | None] = {
         "lambdas": None,
         "logls": None,

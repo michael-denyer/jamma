@@ -365,6 +365,7 @@ def _run_gk(
             ksnp_ids = read_snp_list_file(ksnps_file)
             ksnps_indices = resolve_snp_list_to_indices(ksnp_ids, meta["sid"])
         except (FileNotFoundError, ValueError) as e:
+            logger.debug("CLI operation failed with traceback:", exc_info=True)
             _cli_error(str(e))
         click.echo(
             f"Kinship SNP list (-ksnps): {len(ksnps_indices)} of "
@@ -435,6 +436,7 @@ def _run_gk(
         try:
             plink_data = load_plink_binary(bfile)
         except (FileNotFoundError, ValueError, OSError) as e:
+            logger.debug("Loading PLINK data failed with traceback:", exc_info=True)
             _cli_error(f"loading PLINK data: {e}")
 
         click.echo(f"Loaded {plink_data.n_samples} samples, {plink_data.n_snps} SNPs")
@@ -567,6 +569,7 @@ def _run_lmm(
             click.echo("Checking memory requirements...")
         result = PipelineRunner(pipeline_config).run()
     except (FileNotFoundError, ValueError, MemoryError) as e:
+        logger.debug("Pipeline failed with traceback:", exc_info=True)
         _cli_error(str(e))
 
     # Write GEMMA log file (CLI-only)

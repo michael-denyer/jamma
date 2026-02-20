@@ -286,7 +286,8 @@ def run_lmm_association_jax(
 
         except Exception as e:
             error_msg = str(e)
-            # Check for int32 overflow error
+            # JAX int32 overflow (observed in JAX 0.4.x). String-based
+            # detection is fragile — update if JAX changes the wording.
             if "exceeds the maximum representable value" in error_msg:
                 n_index = (n_cvt + 3) * (n_cvt + 2) // 2
                 buffer_elements = n_samples * chunk_size * n_index
@@ -317,10 +318,12 @@ def run_lmm_association_jax(
         write_offset += slice_len
 
     # Validate all results were written
-    assert write_offset == n_filtered, (
-        f"Pre-allocated array size mismatch: wrote {write_offset},"
-        f" expected {n_filtered}"
-    )
+    if write_offset != n_filtered:
+        raise RuntimeError(
+            f"Pre-allocated array size mismatch: wrote {write_offset} results,"
+            f" expected {n_filtered}. This is an internal error — please report"
+            f" this issue with your dataset dimensions."
+        )
 
     # Log memory after all chunks processed
     if show_progress:

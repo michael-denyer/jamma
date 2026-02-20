@@ -23,7 +23,10 @@ def _has_gpu() -> bool:
         logger.debug("JAX not installed, no GPU support")
         return False
     except Exception as e:
-        logger.debug(f"Error checking for GPU: {e}")
+        logger.warning(
+            f"GPU detection failed ({type(e).__name__}: {e}). "
+            f"Falling back to CPU. Check JAX/CUDA installation."
+        )
         return False
 
 

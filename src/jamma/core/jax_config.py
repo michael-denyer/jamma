@@ -169,6 +169,5 @@ def verify_jax_installation() -> bool:
         return True
 
     except Exception as e:
-        error_msg = f"JAX verification failed: {type(e).__name__}: {e}"
-        logger.error(error_msg)
-        raise RuntimeError(error_msg) from e
+        logger.error(f"JAX verification failed: {type(e).__name__}: {e}")
+        raise

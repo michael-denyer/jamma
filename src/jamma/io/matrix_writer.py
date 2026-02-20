@@ -137,6 +137,8 @@ def write_matrix_parallel(
                 # imap (not imap_unordered) preserves chunk order for concatenation
                 for _ in pool.imap(_format_rows_to_file, chunks_args):
                     pass
+            # BaseException (not Exception) to ensure pool cleanup even on
+            # KeyboardInterrupt or SystemExit — orphaned workers would leak.
             except BaseException as e:
                 logger.opt(exception=e).error(f"Pool error writing {path}: {e}")
                 pool.terminate()

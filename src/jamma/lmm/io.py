@@ -205,7 +205,7 @@ class IncrementalAssocWriter:
                 f"(non-retryable errno={err_code}): {self.path}"
             )
         else:
-            logger.error(f"Write failed after {attempt} retries: {self.path}")
+            logger.error(f"Write failed after {attempt + 1} retries: {self.path}")
         raise last_error  # type: ignore[misc]
 
     def write(self, result: AssocResult) -> None:
@@ -351,7 +351,8 @@ class IncrementalAssocWriter:
         """Close file, cleaning up partial output on OSError."""
         if exc_type is not None and issubclass(exc_type, OSError):
             self._cleanup_partial()
-        elif self._file:
+            return
+        if self._file:
             try:
                 self._file.flush()
             except OSError as e:

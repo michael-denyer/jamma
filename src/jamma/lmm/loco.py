@@ -63,6 +63,9 @@ def _chr_sort_key(chrom: str) -> tuple[int, str]:
         return (int(chrom), "")
     except ValueError:
         # Unknown chromosome names sort after all known ones
+        logger.debug(
+            f"Non-numeric chromosome '{chrom}' — sorting after known chromosomes"
+        )
         return (100, chrom)
 
 
@@ -513,22 +516,42 @@ def _run_lmm_for_chromosome(
                         del UtG_np
 
                     # Batch compute Uab
-                    Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
+                    try:
+                        Uab_batch = batch_compute_uab(
+                            n_cvt, UtW_jax, Uty_jax, current_UtG
+                        )
 
-                    chunk_result = _compute_lmm_chunk(
-                        lmm_mode,
-                        n_cvt,
-                        eigenvalues_jax,
-                        Uab_batch,
-                        n_samples,
-                        l_min=l_min,
-                        l_max=l_max,
-                        n_grid=n_grid,
-                        n_refine=n_refine,
-                        Hi_eval_null=Hi_eval_null_jax,
-                        logl_H0=logl_H0,
-                    )
-                    block_chunk_result(chunk_result, lmm_mode)
+                        chunk_result = _compute_lmm_chunk(
+                            lmm_mode,
+                            n_cvt,
+                            eigenvalues_jax,
+                            Uab_batch,
+                            n_samples,
+                            l_min=l_min,
+                            l_max=l_max,
+                            n_grid=n_grid,
+                            n_refine=n_refine,
+                            Hi_eval_null=Hi_eval_null_jax,
+                            logl_H0=logl_H0,
+                        )
+                        block_chunk_result(chunk_result, lmm_mode)
+                    except Exception as e:
+                        error_msg = str(e)
+                        if "exceeds the maximum representable" in error_msg:
+                            logger.error(
+                                "JAX int32 buffer overflow in LOCO.\n"
+                                f"  JAX chunk {i + 1}: "
+                                f"{current_actual_len:,} SNPs x "
+                                f"{n_samples:,} samples"
+                            )
+                        else:
+                            logger.error(
+                                "JAX computation failed in LOCO:\n"
+                                f"  {type(e).__name__}: {error_msg}\n"
+                                f"  Chunk: {current_actual_len:,} SNPs, "
+                                f"Samples: {n_samples:,}"
+                            )
+                        raise
 
                     strip_and_append(
                         chunk_result, accum, current_actual_len, current_needs_padding

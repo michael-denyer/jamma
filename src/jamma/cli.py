@@ -341,14 +341,15 @@ def _run_gk(
             "Use 'jamma -gk 2 -bfile X' without -loco for standardized kinship."
         )
 
-    # Log startup banner
+    # Log startup banner (kinship uses all samples, so n_analyzed == n_total)
     from jamma.io.plink import get_plink_metadata as _get_meta
 
     _meta = _get_meta(bfile)
-    logger.info(f"JAMMA v{jamma.__version__} ({jamma.__release_date__})")
-    logger.info("Reading Files ...")
-    logger.info(f"## number of total individuals = {_meta['n_samples']:,}")
-    logger.info(f"## number of total SNPs/var = {_meta['n_snps']:,}")
+    PipelineRunner._log_banner(
+        n_total=_meta["n_samples"],
+        n_analyzed=_meta["n_samples"],
+        n_snps=_meta["n_snps"],
+    )
 
     # Resolve ksnps_file to indices if provided
     ksnps_indices = None
@@ -482,9 +483,7 @@ def _run_gk(
 
     # Write log file
     n_samples = K.shape[0]
-    from jamma.io.plink import get_plink_metadata
-
-    n_snps = get_plink_metadata(bfile)["n_snps"]
+    n_snps = _meta["n_snps"]
     params = {
         "n_samples": n_samples,
         "n_snps": n_snps,

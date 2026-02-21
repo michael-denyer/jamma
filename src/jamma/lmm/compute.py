@@ -255,22 +255,17 @@ def strip_and_append(
     result: dict[str, jax.Array | None],
     accum: dict[str, list],
     actual_len: int,
-    needs_padding: bool,
 ) -> None:
     """Strip padding from chunk result arrays and append to accumulators.
 
     Transfers only the keys present in accum (which are mode-specific),
-    slicing off padding when the chunk was padded.
+    slicing to actual_len to discard both tail-chunk and device-alignment
+    padding.
 
     Args:
         result: Dict returned by _compute_lmm_chunk.
         accum: Dict of lists (from _init_accumulators) to append to.
         actual_len: Number of real (non-padded) SNPs in this chunk.
-        needs_padding: Whether the chunk was zero-padded.
     """
-    # Determine slice length from the first non-None array in accum
-    first_key = next(iter(accum))
-    arr = result[first_key]
-    slice_len = actual_len if needs_padding else len(arr)
     for key in accum:
-        accum[key].append(result[key][:slice_len])
+        accum[key].append(result[key][:actual_len])

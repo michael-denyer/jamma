@@ -17,7 +17,7 @@ from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.core.threading import blas_threads
 from jamma.lmm.chunk import _compute_chunk_size
-from jamma.lmm.compute import _FIRST_KEY, _compute_lmm_chunk, block_chunk_result
+from jamma.lmm.compute import _compute_lmm_chunk, block_chunk_result
 from jamma.lmm.likelihood_jax import batch_compute_uab
 from jamma.lmm.prepare import (
     _build_covariate_matrix,
@@ -190,13 +190,11 @@ def run_lmm_association_jax(
     n_filtered = len(snp_indices)
     chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid, n_cvt, n_devices)
 
-    # Sharding is only active when chunk_size is a multiple of n_devices.
-    # When n_filtered <= max int32 capacity, chunk_size = n_filtered which may
-    # not be divisible by n_devices (e.g. small test datasets). Fall back to
-    # single-device placement in that case to avoid XLA padding errors.
-    use_sharding = snp_spec is not None and chunk_size % n_devices == 0
-    effective_snp_spec = snp_spec if use_sharding else None
-    effective_rep_spec = rep_spec if use_sharding else None
+    # Use sharding whenever multiple devices are available. Chunks that aren't
+    # evenly divisible by n_devices get zero-padded before device_put (the
+    # padded SNP results are discarded via actual_len slicing).
+    effective_snp_spec = snp_spec
+    effective_rep_spec = rep_spec
 
     logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
         lmm_mode,
@@ -261,6 +259,12 @@ def run_lmm_association_jax(
 
         with blas_threads():
             UtG_chunk = np.ascontiguousarray(U.T @ geno_chunk)
+
+        # Pad to device-count multiple for even NamedSharding distribution
+        if effective_snp_spec is not None and UtG_chunk.shape[1] % n_devices != 0:
+            dev_pad = n_devices - (UtG_chunk.shape[1] % n_devices)
+            UtG_chunk = np.pad(UtG_chunk, ((0, 0), (0, dev_pad)), mode="constant")
+
         return UtG_chunk, actual_len, needs_pad
 
     # Double buffering: overlap device transfer with computation
@@ -287,7 +291,6 @@ def run_lmm_association_jax(
 
     for i, _chunk_start in chunk_iterator:
         actual_chunk_len = actual_len
-        needs_padding = needs_pad
         current_UtG = UtG_jax
 
         # Start async transfer of next chunk while computing current
@@ -354,8 +357,9 @@ def run_lmm_association_jax(
 
         # Write results into pre-allocated arrays by index (no list append)
         t_write_start = time.perf_counter()
-        first_arr = cr[_FIRST_KEY[lmm_mode]]
-        slice_len = actual_chunk_len if needs_padding else len(first_arr)
+        # Always slice to actual_chunk_len — strips both tail-chunk padding
+        # and device-alignment padding from NamedSharding.
+        slice_len = actual_chunk_len
         s = slice(write_offset, write_offset + slice_len)
 
         for key in arrays_out:

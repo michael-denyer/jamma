@@ -410,8 +410,12 @@ class TestShardedBenchmarks:
         n_devices = len(jax.devices("cpu"))
         n_snps = UtG.shape[1]
 
-        # Use sharding only when chunk is divisible by device count
-        use_sharding = snp_spec is not None and n_snps % n_devices == 0
+        # Pad UtG to device-count multiple for even sharding distribution
+        use_sharding = snp_spec is not None
+        if use_sharding and n_snps % n_devices != 0:
+            dev_pad = n_devices - (n_snps % n_devices)
+            UtG = np.pad(UtG, ((0, 0), (0, dev_pad)), mode="constant")
+
         effective_snp_spec = snp_spec if use_sharding else device
         effective_rep_spec = rep_spec if use_sharding else device
 
@@ -423,8 +427,7 @@ class TestShardedBenchmarks:
         n_cvt = 1
 
         # JIT warmup: use same sharding config so compiled kernel matches timed run.
-        # A 10-SNP slice must also be divisible by n_devices for sharded warmup.
-        warmup_n = 10 if (not use_sharding or 10 % n_devices == 0) else n_devices
+        warmup_n = n_devices if use_sharding else 10
         _warmup_UtG = jax.device_put(UtG[:, :warmup_n], effective_snp_spec)
         _warmup_Uab = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, _warmup_UtG)
         _warmup_cr = _compute_lmm_chunk(
@@ -453,7 +456,7 @@ class TestShardedBenchmarks:
         benchmark.extra_info["n_samples"] = len(phenotypes)
         benchmark.extra_info["n_snps"] = n_snps
         benchmark.extra_info["n_cvt"] = n_cvt
-        benchmark.extra_info["sharding_enabled"] = use_sharding
+        benchmark.extra_info["sharding_enabled"] = snp_spec is not None
         benchmark.extra_info["jax_device_count"] = n_devices
 
         assert result["pwalds"] is not None

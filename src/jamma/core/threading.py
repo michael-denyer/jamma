@@ -30,10 +30,12 @@ def get_blas_thread_count() -> int:
 
     When JAX is configured with multiple virtual CPU devices, MKL threads are
     reduced proportionally to avoid oversubscription. Each JAX device manages
-    its own XLA thread pool, so MKL should only use the remaining cores.
+    its own XLA thread pool, so BLAS gets ``physical_cores // n_devices``
+    threads, leaving the rest for XLA.
 
     Returns:
-        Positive integer thread count, capped at os.cpu_count().
+        Positive integer thread count. Capped at os.cpu_count() for the
+        env var and single-device paths; proportionally reduced for multi-device.
     """
     max_threads = os.cpu_count() or 64
 
@@ -64,10 +66,14 @@ def get_blas_thread_count() -> int:
     from jamma.core.jax_config import _jax_configured
 
     if not _jax_configured:
+        # Return physical cores without querying JAX — calling jax.devices()
+        # here would permanently freeze the backend at 1 device.
+        n = max(1, min(physical_cores, max_threads))
         logger.warning(
             "get_blas_thread_count() called before configure_jax(). "
-            "JAX device count may not reflect intended configuration."
+            f"Returning physical core count ({n}) without JAX device reduction."
         )
+        return n
 
     n_jax_devices = len(jax.devices("cpu"))
     if n_jax_devices > 1:

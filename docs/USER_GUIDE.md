@@ -409,12 +409,12 @@ jamma -lmm 1 -bfile data/my_study -k kinship.txt -o output
 Tuning guidance (benchmarked on Azure E64ds_v6 — Intel Xeon Platinum
 8573C, 32 physical / 64 logical cores, 541 GB RAM, MKL ILP64, DBR 16.4 LTS):
 
-| Devices | 5K samples | 10K samples | 20K samples |
-| ------- | ---------- | ----------- | ----------- |
-| 1       | 54.4s      | 65.4s       | 93.7s       |
-| 8       | 12.0s      | 34.5s       | 67.7s       |
-| 16      | 8.0s       | 28.8s       | 40.6s       |
-| 32      | 8.3s       | 28.7s       | 55.0s       |
+| Devices | 5K×50K | 10K×100K | 20K×100K |
+| ------- | ------ | -------- | -------- |
+| 1       | 54.4s  | 65.4s    | 93.7s    |
+| 8       | 12.0s  | 34.5s    | 67.7s    |
+| 16      | 8.0s   | 28.8s    | 40.6s    |
+| 32      | 8.3s   | 28.7s    | 55.0s    |
 
 The sweet spot is typically `physical_cores // 2`. Going higher adds
 coordination overhead that outweighs parallelism gains.

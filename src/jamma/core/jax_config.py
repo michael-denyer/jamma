@@ -80,6 +80,9 @@ def configure_jax(
         except OSError:
             logger.debug(f"Could not create JAX cache dir {cache_dir}, skipping")
 
+    global _jax_configured
+    _jax_configured = True
+
     info = get_jax_info()
     logger.info(
         f"JAX configured: version={info['version']}, "
@@ -102,7 +105,8 @@ def _configure_cpu_devices(n_cpu_devices: int | None) -> None:
         n_cpu_devices: Caller-requested device count, or None for auto-config.
 
     Raises:
-        ValueError: If JAMMA_JAX_DEVICES is set to a non-integer or non-positive value.
+        ValueError: If JAMMA_JAX_DEVICES is set to a non-integer or non-positive
+            value, or if n_cpu_devices is less than 1.
     """
     env_override = os.environ.get("JAMMA_JAX_DEVICES")
     if env_override is not None:
@@ -124,10 +128,14 @@ def _configure_cpu_devices(n_cpu_devices: int | None) -> None:
         return
 
     if n_cpu_devices is not None:
-        n = max(1, n_cpu_devices)
-        if n > 1:
-            jax.config.update("jax_num_cpu_devices", n)
-        logger.debug(f"JAX CPU devices from argument: {n}")
+        if n_cpu_devices < 1:
+            raise ValueError(
+                f"n_cpu_devices={n_cpu_devices} must be >= 1. "
+                "Use None for auto-configuration."
+            )
+        if n_cpu_devices > 1:
+            jax.config.update("jax_num_cpu_devices", n_cpu_devices)
+        logger.debug(f"JAX CPU devices from argument: {n_cpu_devices}")
         return
 
     # Auto-configure: half the physical cores, at least 1
@@ -173,7 +181,6 @@ def ensure_jax_configured(
             )
         return
     configure_jax(enable_x64=enable_x64, platform=platform)
-    _jax_configured = True
 
 
 def get_jax_info() -> dict[str, Any]:

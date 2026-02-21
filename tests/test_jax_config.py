@@ -20,6 +20,7 @@ import pytest
 from jamma.core.jax_config import _configure_cpu_devices, get_jax_info
 from jamma.core.threading import get_blas_thread_count
 from jamma.lmm.chunk import _compute_chunk_size, auto_tune_chunk_size
+from jamma.lmm.compute import _compute_lmm_chunk
 from jamma.lmm.likelihood_jax import batch_compute_uab
 from jamma.lmm.prepare import _setup_cpu_sharding
 
@@ -177,7 +178,18 @@ class TestAutoTuneChunkSizeDeviceAlignment:
         assert result % 4 == 0, f"Expected multiple of 4, got {result}"
 
     def test_min_chunk_still_enforced_with_n_devices(self):
-        """min_chunk floor must apply even with n_devices set."""
+        """min_chunk floor applies when n_filtered allows it."""
+        result = auto_tune_chunk_size(
+            n_samples=1000,
+            n_filtered=50_000,
+            mem_budget_gb=0.001,
+            min_chunk=1000,
+            n_devices=4,
+        )
+        assert result >= 1000
+
+    def test_n_filtered_caps_below_min_chunk_with_n_devices(self):
+        """n_filtered ceiling takes precedence over min_chunk floor."""
         result = auto_tune_chunk_size(
             n_samples=1000,
             n_filtered=500,
@@ -185,7 +197,7 @@ class TestAutoTuneChunkSizeDeviceAlignment:
             min_chunk=1000,
             n_devices=4,
         )
-        assert result >= 1000
+        assert result <= 500
 
     def test_min_chunk_result_is_device_aligned(self):
         """When min_chunk forces the result up, it must still be device-aligned.
@@ -241,12 +253,15 @@ class TestConfigureCpuDevices:
         for call in mock_update.call_args_list:
             assert call[0][0] != "jax_num_cpu_devices"
 
-    def test_n_cpu_devices_argument_clamped_to_1(self):
-        """n_cpu_devices=0 must be clamped to 1 without calling config.update."""
-        with patch.object(jax.config, "update") as mock_update:
+    def test_n_cpu_devices_zero_raises_value_error(self):
+        """n_cpu_devices=0 must raise ValueError."""
+        with pytest.raises(ValueError, match="must be >= 1"):
             _configure_cpu_devices(n_cpu_devices=0)
-        for call in mock_update.call_args_list:
-            assert call[0][0] != "jax_num_cpu_devices"
+
+    def test_n_cpu_devices_negative_raises_value_error(self):
+        """n_cpu_devices=-3 must raise ValueError."""
+        with pytest.raises(ValueError, match="must be >= 1"):
+            _configure_cpu_devices(n_cpu_devices=-3)
 
     def test_env_var_overrides_argument(self, monkeypatch):
         """JAMMA_JAX_DEVICES env var must take priority over n_cpu_devices arg."""
@@ -403,3 +418,66 @@ class TestMultiDevicePaddingRoundTrip:
             Uab_ref,
             err_msg=f"Padding mismatch: n_snps={n_snps}, n_devices={n_devices}",
         )
+
+
+@pytest.mark.tier0
+class TestComputeLmmChunkPaddingRoundTrip:
+    """Verify _compute_lmm_chunk results are unaffected by device-alignment padding.
+
+    This extends TestMultiDevicePaddingRoundTrip to cover the full computation
+    pipeline (Wald stats, golden section optimization, result slicing), not just
+    batch_compute_uab. Ensures padded results[:actual_len] == unpadded results.
+    """
+
+    @pytest.fixture
+    def synthetic_pipeline_inputs(self):
+        """Create synthetic inputs for the full _compute_lmm_chunk pipeline."""
+        rng = np.random.default_rng(99)
+        n_samples = 50
+        n_cvt = 1
+
+        # Simulate eigenvalues (positive, decreasing)
+        eigenvalues_np = np.sort(rng.uniform(0.1, 10.0, size=n_samples))[::-1]
+        eigenvalues = jnp.array(eigenvalues_np, dtype=jnp.float64)
+
+        # Rotated covariates and phenotype
+        UtW = jnp.array(rng.standard_normal((n_samples, n_cvt)), dtype=jnp.float64)
+        Uty = jnp.array(rng.standard_normal(n_samples), dtype=jnp.float64)
+
+        return n_samples, n_cvt, eigenvalues, UtW, Uty
+
+    def test_padded_lmm_chunk_matches_unpadded(self, synthetic_pipeline_inputs):
+        """_compute_lmm_chunk (Wald) on padded UtG must match unpadded for real SNPs."""
+        n_samples, n_cvt, eigenvalues, UtW, Uty = synthetic_pipeline_inputs
+        lmm_mode = 1  # Wald — no null model dependency
+        rng = np.random.default_rng(lmm_mode * 1000)
+        n_snps = 7
+        n_devices = 4
+
+        UtG = jnp.array(rng.standard_normal((n_samples, n_snps)), dtype=jnp.float64)
+
+        # Unpadded reference
+        Uab_ref = batch_compute_uab(n_cvt, UtW, Uty, UtG)
+        ref_result = _compute_lmm_chunk(
+            lmm_mode, n_cvt, eigenvalues, Uab_ref, n_samples
+        )
+
+        # Padded version
+        dev_pad = n_devices - (n_snps % n_devices)
+        UtG_padded = jnp.pad(UtG, ((0, 0), (0, dev_pad)), mode="constant")
+        Uab_padded = batch_compute_uab(n_cvt, UtW, Uty, UtG_padded)
+        padded_result = _compute_lmm_chunk(
+            lmm_mode, n_cvt, eigenvalues, Uab_padded, n_samples
+        )
+
+        # Compare real SNP results (slice to actual_len)
+        for key in ref_result:
+            if ref_result[key] is None:
+                continue
+            ref_arr = np.asarray(ref_result[key])
+            padded_arr = np.asarray(padded_result[key][:n_snps])
+            np.testing.assert_array_equal(
+                padded_arr,
+                ref_arr,
+                err_msg=f"mode={lmm_mode}, key={key}: padded differs from unpadded",
+            )

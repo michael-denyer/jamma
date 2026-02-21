@@ -40,8 +40,8 @@ def _compute_chunk_size(
 
     The most restrictive constraint is typically Uab for large n_samples.
 
-    When n_devices > 1, the chunk size is rounded DOWN to the nearest multiple
-    of n_devices to prevent XLA from padding partial shards.
+    When n_devices > 1, the chunk size is rounded down to a multiple of
+    n_devices to prevent XLA from padding partial shards.
 
     Args:
         n_samples: Number of samples.
@@ -49,12 +49,13 @@ def _compute_chunk_size(
         n_grid: Grid points for lambda optimization (default 50).
         n_cvt: Number of covariates (default 1).
         n_devices: Number of JAX virtual CPU devices (default 1). When > 1,
-            the result is aligned to the nearest multiple of n_devices.
+            the result is rounded down to a multiple of n_devices.
 
     Returns:
         Chunk size (number of SNPs per chunk). Returns n_snps if no chunking needed.
         Minimum 100 when chunking is needed. When n_devices > 1, the chunk is
-        also aligned to a multiple of n_devices.
+        also rounded down to a multiple of n_devices. Never exceeds the int32
+        safe bound regardless of alignment adjustments.
     """
     if n_samples == 0:
         return n_snps
@@ -72,13 +73,15 @@ def _compute_chunk_size(
     if elements_per_snp == 0:
         return n_snps
 
-    max_snps_per_chunk = _MAX_BUFFER_ELEMENTS // elements_per_snp
+    safe_bound = _MAX_BUFFER_ELEMENTS // elements_per_snp
+    max_snps_per_chunk = safe_bound
 
     # Align chunk to device count multiples to prevent XLA padding partial shards
     if n_devices > 1:
         max_snps_per_chunk = (max_snps_per_chunk // n_devices) * n_devices
         if max_snps_per_chunk == 0:
-            max_snps_per_chunk = n_devices  # minimum one shard per device
+            # Can't fit one device-aligned chunk; use unaligned safe bound
+            max_snps_per_chunk = safe_bound
 
     if max_snps_per_chunk >= n_snps:
         return n_snps
@@ -89,7 +92,8 @@ def _compute_chunk_size(
     if n_devices > 1 and chunk % n_devices != 0:
         chunk = max(n_devices, (chunk // n_devices) * n_devices)
 
-    return chunk
+    # Never exceed safe bound regardless of alignment/floor adjustments
+    return min(chunk, safe_bound)
 
 
 def auto_tune_chunk_size(
@@ -113,8 +117,8 @@ def auto_tune_chunk_size(
       - Grid evaluations: n_grid elements
       - Total: 8 * (n_samples*n_index + n_samples + n_grid) bytes
 
-    When n_devices > 1, the final chunk size is aligned to a multiple of
-    n_devices to prevent XLA from padding partial shards.
+    When n_devices > 1, the final chunk size is rounded down to a multiple
+    of n_devices to prevent XLA from padding partial shards.
 
     Args:
         n_samples: Number of samples in the dataset.
@@ -126,11 +130,11 @@ def auto_tune_chunk_size(
             Prevents excessive memory allocation on high-memory systems.
         n_cvt: Number of covariates (default 1). Affects Uab array size.
         n_devices: Number of JAX virtual CPU devices (default 1). When > 1,
-            the result is aligned to the nearest multiple of n_devices.
+            the result is rounded down to a multiple of n_devices.
 
     Returns:
-        Optimal chunk size that fits within memory budget, at least min_chunk.
-        When n_devices > 1, the result is aligned to a multiple of n_devices.
+        Optimal chunk size that fits within memory budget. Capped by n_filtered
+        and max_chunk. When n_devices > 1, rounded down to a multiple of n_devices.
 
     Example:
         >>> chunk = auto_tune_chunk_size(n_samples=10000, n_filtered=50000)
@@ -157,6 +161,10 @@ def auto_tune_chunk_size(
     # Re-align to n_devices after clamping (may break alignment)
     if n_devices > 1 and chunk_size % n_devices != 0:
         chunk_size = max(n_devices, (chunk_size // n_devices) * n_devices)
+
+    # Re-apply ceiling after alignment — alignment rounds down but
+    # max(n_devices, ...) could exceed n_filtered/max_chunk in edge cases
+    chunk_size = min(chunk_size, n_filtered, max_chunk)
 
     logger.debug(
         f"auto_tune_chunk_size: n_samples={n_samples}, n_filtered={n_filtered}, "

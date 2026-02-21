@@ -443,9 +443,9 @@ def _run_lmm_for_chromosome(
     UtW_jax = jax.device_put(UtW, device)
     Uty_jax = jax.device_put(Uty, device)
 
-    # LOCO intentionally uses single-device mode — sharding the per-chromosome
-    # eigendecomp across multiple virtual CPU devices adds complexity without
-    # benefit since eigendecomp must complete before association begins.
+    # LOCO intentionally uses single-device mode — each chromosome's
+    # association pass has fewer SNPs, so multi-device sharding overhead
+    # outweighs the parallelism benefit.
     jax_chunk_size = _compute_chunk_size(
         n_samples, n_filtered, n_grid, n_cvt, n_devices=1
     )

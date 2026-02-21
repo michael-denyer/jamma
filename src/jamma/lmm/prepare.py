@@ -28,7 +28,8 @@ def _setup_cpu_sharding() -> tuple[NamedSharding | None, NamedSharding | None]:
 
     Returns:
         snp_spec: Sharding for UtG (n_samples, n_snps) — shard on SNP axis.
-        rep_spec: Sharding for eigenvalues, UtW, Uty — replicated on all devices.
+        rep_spec: Sharding for eigenvalues, UtW, Uty, Hi_eval_null — replicated
+            on all devices.
     """
     cpu_devices = jax.devices("cpu")
     if len(cpu_devices) <= 1:
@@ -39,7 +40,7 @@ def _setup_cpu_sharding() -> tuple[NamedSharding | None, NamedSharding | None]:
         snp_spec = NamedSharding(mesh, P(None, "snps"))
         rep_spec = NamedSharding(mesh, P())
         return snp_spec, rep_spec
-    except Exception as e:
+    except (RuntimeError, ValueError, TypeError) as e:
         logger.warning(
             f"Failed to create CPU sharding mesh with {len(cpu_devices)} devices: "
             f"{type(e).__name__}: {e}. Falling back to single-device mode. "
@@ -182,7 +183,8 @@ def _compute_null_model(
 
     Returns:
         Tuple of (logl_H0, lambda_null_mle, Hi_eval_null_jax).
-        All None for Wald mode.
+        All None for Wald (mode 1). For LRT (mode 2), Hi_eval_null_jax
+        is None. For Score/All (modes 3, 4), all three are populated.
     """
     if lmm_mode not in (2, 3, 4):
         return None, None, None

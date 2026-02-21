@@ -16,7 +16,7 @@ from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.core.threading import blas_threads
 from jamma.lmm.chunk import _compute_chunk_size
-from jamma.lmm.compute import _compute_lmm_chunk, block_chunk_result
+from jamma.lmm.compute import _compute_lmm_chunk, block_chunk_result, log_jax_error
 from jamma.lmm.likelihood_jax import batch_compute_uab
 from jamma.lmm.prepare import (
     _build_covariate_matrix,
@@ -206,14 +206,11 @@ def run_lmm_association_jax(
     # Device-resident shared arrays - placed on device ONCE before chunk loop.
     # Chunks not evenly divisible by n_devices get zero-padded before
     # device_put; padded SNP results are discarded via actual_len slicing.
-    if rep_spec is not None:
-        eigenvalues = jax.device_put(eigenvalues_np, rep_spec)
-        UtW_jax = jax.device_put(UtW, rep_spec)
-        Uty_jax = jax.device_put(Uty, rep_spec)
-    else:
-        eigenvalues = jax.device_put(eigenvalues_np, device)
-        UtW_jax = jax.device_put(UtW, device)
-        Uty_jax = jax.device_put(Uty, device)
+    rep_placement = rep_spec if rep_spec is not None else device
+    snp_placement = snp_spec if snp_spec is not None else device
+    eigenvalues = jax.device_put(eigenvalues_np, rep_placement)
+    UtW_jax = jax.device_put(UtW, rep_placement)
+    Uty_jax = jax.device_put(Uty, rep_placement)
 
     # Process in chunks if needed
     n_chunks = (n_filtered + chunk_size - 1) // chunk_size
@@ -272,10 +269,7 @@ def run_lmm_association_jax(
     UtG_np, actual_len = _prepare_chunk(chunk_starts[0])
     t_rot_end = time.perf_counter()
     t_rotation_total += t_rot_end - t_rot_start
-    if snp_spec is not None:
-        UtG_jax = jax.device_put(UtG_np, snp_spec)
-    else:
-        UtG_jax = jax.device_put(UtG_np, device)
+    UtG_jax = jax.device_put(UtG_np, snp_placement)
     del UtG_np
 
     # Create progress bar iterator
@@ -297,10 +291,7 @@ def run_lmm_association_jax(
             t_rot_end = time.perf_counter()
             t_rotation_total += t_rot_end - t_rot_start
             # device_put is async - transfer starts immediately, overlaps with compute
-            if snp_spec is not None:
-                UtG_jax = jax.device_put(next_UtG_np, snp_spec)
-            else:
-                UtG_jax = jax.device_put(next_UtG_np, device)
+            UtG_jax = jax.device_put(next_UtG_np, snp_placement)
             del next_UtG_np
 
         # --- JAX compute timing ---
@@ -327,26 +318,13 @@ def run_lmm_association_jax(
             block_chunk_result(cr, lmm_mode)
 
         except Exception as e:
-            error_msg = str(e)
-            # JAX int32 overflow (observed in JAX 0.4.x). String-based
-            # detection is fragile — update if JAX changes the wording.
-            if "exceeds the maximum representable value" in error_msg:
-                n_index = (n_cvt + 3) * (n_cvt + 2) // 2
-                buffer_elements = n_samples * chunk_size * n_index
-                logger.error(
-                    f"JAX int32 buffer overflow during LMM computation.\n"
-                    f"  Chunk {i + 1}/{n_chunks}: {chunk_size:,} SNPs x "
-                    f"{n_samples:,} samples\n"
-                    f"  Buffer elements: {buffer_elements:,} (limit: ~2.1B)\n"
-                    f"  This should not happen with automatic chunking.\n"
-                    f"  Please report this issue with your dataset dimensions."
-                )
-            else:
-                logger.error(
-                    f"JAX computation failed on chunk {i + 1}/{n_chunks}:\n"
-                    f"  {type(e).__name__}: {error_msg}\n"
-                    f"  Chunk size: {chunk_size:,} SNPs, Samples: {n_samples:,}"
-                )
+            log_jax_error(
+                e,
+                chunk_label=f"{i + 1}/{n_chunks}",
+                chunk_snps=chunk_size,
+                n_samples=n_samples,
+                n_cvt=n_cvt,
+            )
             raise
 
         t_jax_end = time.perf_counter()

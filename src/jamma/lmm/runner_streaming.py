@@ -23,7 +23,12 @@ from jamma.io.plink import (
     validate_genotype_values,
 )
 from jamma.lmm.chunk import _compute_chunk_size
-from jamma.lmm.compute import _compute_lmm_chunk, block_chunk_result, strip_and_append
+from jamma.lmm.compute import (
+    _compute_lmm_chunk,
+    block_chunk_result,
+    log_jax_error,
+    strip_and_append,
+)
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.likelihood_jax import batch_compute_uab
 from jamma.lmm.prepare import (
@@ -67,7 +72,7 @@ class _LazySnpMeta:
     def __len__(self) -> int:
         return len(self._rs)
 
-    def __getitem__(self, i: int | slice) -> "dict | list[dict]":
+    def __getitem__(self, i: int | slice) -> dict | list[dict]:
         if isinstance(i, slice):
             return [self[j] for j in range(*i.indices(len(self)))]
         return {
@@ -393,14 +398,11 @@ def run_lmm_association_streaming(
         # Device-resident shared arrays - placed on device ONCE before chunk loop.
         # Chunks not evenly divisible by n_devices get zero-padded before
         # device_put; padded SNP results are discarded via actual_len slicing.
-        if rep_spec is not None:
-            eigenvalues = jax.device_put(eigenvalues_np, rep_spec)
-            UtW_jax = jax.device_put(UtW, rep_spec)
-            Uty_jax = jax.device_put(Uty, rep_spec)
-        else:
-            eigenvalues = jax.device_put(eigenvalues_np, device)
-            UtW_jax = jax.device_put(UtW, device)
-            Uty_jax = jax.device_put(Uty, device)
+        rep_placement = rep_spec if rep_spec is not None else device
+        snp_placement = snp_spec if snp_spec is not None else device
+        eigenvalues = jax.device_put(eigenvalues_np, rep_placement)
+        UtW_jax = jax.device_put(UtW, rep_placement)
+        Uty_jax = jax.device_put(Uty, rep_placement)
     t_eigen_end = time.perf_counter()
 
     # Timing accumulators for per-chunk phases
@@ -462,7 +464,7 @@ def run_lmm_association_streaming(
 
         for chunk, file_start, file_end in assoc_iterator:
             # Apply sample filtering
-            if not np.all(valid_mask):
+            if needs_sample_filter:
                 chunk = chunk[valid_mask, :]
 
             # Binary search for filtered SNPs in this chunk: O(log n) vs O(n)
@@ -497,10 +499,7 @@ def run_lmm_association_streaming(
             )
             t_rot_end = time.perf_counter()
             t_rotation_total += t_rot_end - t_rot_start
-            if snp_spec is not None:
-                UtG_jax = jax.device_put(UtG_np, snp_spec)
-            else:
-                UtG_jax = jax.device_put(UtG_np, device)
+            UtG_jax = jax.device_put(UtG_np, snp_placement)
             del UtG_np
 
             for i, _jax_start in enumerate(jax_starts):
@@ -515,10 +514,7 @@ def run_lmm_association_streaming(
                     )
                     t_rot_end = time.perf_counter()
                     t_rotation_total += t_rot_end - t_rot_start
-                    if snp_spec is not None:
-                        UtG_jax = jax.device_put(UtG_np, snp_spec)
-                    else:
-                        UtG_jax = jax.device_put(UtG_np, device)
+                    UtG_jax = jax.device_put(UtG_np, snp_placement)
                     del UtG_np
 
                 # --- JAX compute timing ---
@@ -546,21 +542,13 @@ def run_lmm_association_streaming(
                         )
                         block_chunk_result(chunk_result, lmm_mode)
                 except Exception as e:
-                    error_msg = str(e)
-                    # JAX int32 overflow (observed in JAX 0.4.x)
-                    if "exceeds the maximum representable value" in error_msg:
-                        logger.error(
-                            f"JAX int32 buffer overflow in streaming LMM.\n"
-                            f"  JAX chunk {i + 1}: {current_actual_len:,} SNPs x "
-                            f"{n_samples:,} samples"
-                        )
-                    else:
-                        logger.error(
-                            f"JAX computation failed in streaming LMM chunk:\n"
-                            f"  {type(e).__name__}: {error_msg}\n"
-                            f"  Chunk size: {current_actual_len:,} SNPs, "
-                            f"Samples: {n_samples:,}"
-                        )
+                    log_jax_error(
+                        e,
+                        chunk_label=f"streaming {i + 1}",
+                        chunk_snps=current_actual_len,
+                        n_samples=n_samples,
+                        n_cvt=n_cvt,
+                    )
                     raise
 
                 t_jax_end = time.perf_counter()

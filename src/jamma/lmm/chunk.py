@@ -74,6 +74,7 @@ def _compute_chunk_size(
         return n_snps
 
     safe_bound = _MAX_BUFFER_ELEMENTS // elements_per_snp
+    # Will be adjusted by device alignment; safe_bound is the hard ceiling
     max_snps_per_chunk = safe_bound
 
     # Align chunk to device count multiples to prevent XLA padding partial shards
@@ -155,10 +156,10 @@ def auto_tune_chunk_size(
         n_samples, chunk_from_memory, n_grid, n_cvt, n_devices
     )
 
-    # Clamp to valid range INCLUDING max_chunk cap
+    # Clamp may break device alignment from _compute_chunk_size; re-align below
     chunk_size = max(min_chunk, min(buffer_limit, n_filtered, max_chunk))
 
-    # Re-align to n_devices after clamping (may break alignment)
+    # Re-align to n_devices after clamping
     if n_devices > 1 and chunk_size % n_devices != 0:
         chunk_size = max(n_devices, (chunk_size // n_devices) * n_devices)
 

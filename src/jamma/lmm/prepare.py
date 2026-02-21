@@ -200,10 +200,8 @@ def _compute_null_model(
     Hi_eval_null_jax = None
     if lmm_mode in (3, 4):
         Hi_eval_null = 1.0 / (lambda_null_mle * eigenvalues_np + 1.0)
-        if rep_spec is not None:
-            Hi_eval_null_jax = jax.device_put(Hi_eval_null, rep_spec)
-        else:
-            Hi_eval_null_jax = jax.device_put(Hi_eval_null, device)
+        placement = rep_spec if rep_spec is not None else device
+        Hi_eval_null_jax = jax.device_put(Hi_eval_null, placement)
 
     return logl_H0, lambda_null_mle, Hi_eval_null_jax
 

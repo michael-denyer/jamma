@@ -111,9 +111,9 @@ production workloads.
 
 #### Benchmark: JAX optimisation time
 
-Hardware: Azure Standard_M64s (Intel Xeon Platinum 8272CL @ 2.50 GHz,
-32 physical / 64 logical cores, 541 GB RAM). numpy 2.4.2 with MKL ILP64,
-JAX 0.9.0, Databricks Runtime 15.4 LTS.
+Hardware: Intel Xeon Platinum 8573C (32 physical / 64 logical cores,
+541 GB RAM). numpy 2.4.2 with MKL ILP64, JAX 0.9.0, Python 3.12,
+Databricks Runtime 16.4 LTS with Docker (jamma-dbr image).
 
 | Devices | Mouse (1.4K×11K) | 5K×50K     | 10K×100K    | 20K×100K    |
 | ------- | ---------------- | ---------- | ----------- | ----------- |

@@ -11,7 +11,6 @@ comparison. All benchmarks use JAX x64 precision with proper block_until_ready
 synchronization.
 """
 
-import os
 import time
 from pathlib import Path
 
@@ -602,8 +601,11 @@ class TestXLACacheVerification:
             check_memory=False,
         )
 
-        # Verify cache directory exists
-        cache_dir = Path(os.path.expanduser("~/.cache/jax"))
+        # Verify cache directory exists (use the constant from jax_config
+        # rather than hardcoding, so the test follows XDG_CACHE_HOME changes)
+        from jamma.core.jax_config import JAX_CACHE_DIR
+
+        cache_dir = Path(JAX_CACHE_DIR)
         assert cache_dir.exists(), (
             f"XLA compilation cache directory not found at {cache_dir}. "
             f"JAX persistent cache may not be configured."

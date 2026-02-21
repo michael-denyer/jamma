@@ -24,9 +24,6 @@ from jamma.lmm.likelihood_jax import (
 )
 from jamma.lmm.prepare import _grid_optimize_lambda_batched
 
-# Which result key to use for determining slice length per mode
-_FIRST_KEY = {1: "lambdas", 2: "lambdas_mle", 3: "betas", 4: "lambdas"}
-
 # Which keys to sync on per mode (last-computed arrays for timing accuracy)
 _SYNC_KEYS = {
     1: ("pwalds",),

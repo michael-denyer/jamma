@@ -100,22 +100,28 @@ def _configure_cpu_devices(n_cpu_devices: int | None) -> None:
 
     Args:
         n_cpu_devices: Caller-requested device count, or None for auto-config.
+
+    Raises:
+        ValueError: If JAMMA_JAX_DEVICES is set to a non-integer or non-positive value.
     """
     env_override = os.environ.get("JAMMA_JAX_DEVICES")
     if env_override is not None:
         try:
-            n = int(env_override)
-        except ValueError:
-            logger.warning(
-                f"JAMMA_JAX_DEVICES={env_override!r} is not a valid integer, "
-                "falling back to auto-config"
+            n = int(env_override.strip())
+        except ValueError as err:
+            raise ValueError(
+                f"JAMMA_JAX_DEVICES={env_override!r} is not a valid integer. "
+                "Set to a positive integer or unset to use auto-config."
+            ) from err
+        if n < 1:
+            raise ValueError(
+                f"JAMMA_JAX_DEVICES={n} must be >= 1. "
+                "Set to a positive integer or unset to use auto-config."
             )
-        else:
-            n = max(1, n)
-            if n > 1:
-                jax.config.update("jax_num_cpu_devices", n)
-            logger.debug(f"JAX CPU devices from JAMMA_JAX_DEVICES: {n}")
-            return
+        if n > 1:
+            jax.config.update("jax_num_cpu_devices", n)
+        logger.debug(f"JAX CPU devices from JAMMA_JAX_DEVICES: {n}")
+        return
 
     if n_cpu_devices is not None:
         n = max(1, n_cpu_devices)

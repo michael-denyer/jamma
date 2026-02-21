@@ -56,7 +56,18 @@ def get_blas_thread_count() -> int:
     # Lazy import of jax to avoid triggering backend initialisation at module level.
     # By the time get_blas_thread_count() is called, configure_jax() has already
     # set jax_num_cpu_devices, so jax.devices("cpu") returns the correct count.
+    # WARNING: calling this before configure_jax() will initialize the JAX backend
+    # with defaults (1 CPU device), freezing the config. Callers must ensure
+    # configure_jax() runs first.
     import jax
+
+    from jamma.core.jax_config import _jax_configured
+
+    if not _jax_configured:
+        logger.warning(
+            "get_blas_thread_count() called before configure_jax(). "
+            "JAX device count may not reflect intended configuration."
+        )
 
     n_jax_devices = len(jax.devices("cpu"))
     if n_jax_devices > 1:

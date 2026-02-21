@@ -23,7 +23,8 @@ from jamma.utils.logging import log_rss_memory
 def _setup_cpu_sharding() -> tuple[NamedSharding | None, NamedSharding | None]:
     """Create NamedSharding specs for SNP parallelism across CPU devices.
 
-    Returns (snp_spec, rep_spec) or (None, None) if only 1 CPU device.
+    Returns (snp_spec, rep_spec) or (None, None) if only 1 CPU device
+    or if sharding setup fails.
 
     Returns:
         snp_spec: Sharding for UtG (n_samples, n_snps) — shard on SNP axis.
@@ -33,10 +34,18 @@ def _setup_cpu_sharding() -> tuple[NamedSharding | None, NamedSharding | None]:
     if len(cpu_devices) <= 1:
         return None, None
 
-    mesh = Mesh(np.array(cpu_devices), ("snps",))
-    snp_spec = NamedSharding(mesh, P(None, "snps"))
-    rep_spec = NamedSharding(mesh, P())
-    return snp_spec, rep_spec
+    try:
+        mesh = Mesh(np.array(cpu_devices), ("snps",))
+        snp_spec = NamedSharding(mesh, P(None, "snps"))
+        rep_spec = NamedSharding(mesh, P())
+        return snp_spec, rep_spec
+    except Exception as e:
+        logger.warning(
+            f"Failed to create CPU sharding mesh with {len(cpu_devices)} devices: "
+            f"{type(e).__name__}: {e}. Falling back to single-device mode. "
+            "Set JAMMA_JAX_DEVICES=1 to suppress this warning."
+        )
+        return None, None
 
 
 def _select_jax_device(use_gpu: bool) -> jax.Device:

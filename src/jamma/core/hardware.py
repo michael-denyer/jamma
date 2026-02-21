@@ -18,7 +18,7 @@ from threadpoolctl import threadpool_info
 from jamma.core.threading import get_blas_thread_count
 
 
-def get_hardware_context() -> dict[str, str | int | bool | list[str]]:
+def get_hardware_context() -> dict[str, str | int | bool]:
     """Collect hardware and software context for benchmark reproducibility.
 
     Gathers CPU, BLAS, JAX, NumPy, platform, and Python version information

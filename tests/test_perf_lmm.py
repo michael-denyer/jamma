@@ -343,10 +343,9 @@ class TestLMMBenchmarks:
 class TestShardedBenchmarks:
     """Sharded benchmark variants for before/after comparison on server hardware.
 
-    These benchmarks exercise the CPU device sharding code path introduced in
-    Phase 31. They record ``sharding_enabled`` and ``jax_device_count`` in
-    ``benchmark.extra_info`` so results from different machines are directly
-    comparable.
+    These benchmarks exercise the CPU device sharding code path. They record
+    ``sharding_enabled`` and ``jax_device_count`` in ``benchmark.extra_info``
+    so results from different machines are directly comparable.
 
     Comparison methodology
     ----------------------
@@ -467,9 +466,9 @@ class TestShardedBenchmarks:
         """Benchmark the full LMM pipeline with CPU device sharding active.
 
         Calls ``run_lmm_association_jax()`` identically to
-        ``TestLMMBenchmarks.test_full_pipeline_benchmark``. Sharding is now
-        baked into the runner (Phase 31 Plan 02): ``_setup_cpu_sharding()`` is
-        called automatically when multiple JAX CPU devices are configured.
+        ``TestLMMBenchmarks.test_full_pipeline_benchmark``. Sharding is baked
+        into the runner: ``_setup_cpu_sharding()`` is called automatically when
+        multiple JAX CPU devices are configured.
 
         On single-device machines the sharding fallback activates — timing is
         still collected for the metadata record.
@@ -514,7 +513,7 @@ class TestShardedBenchmarks:
         benchmark.extra_info["n_samples_total"] = mouse_plink.n_samples
         benchmark.extra_info["n_snps_total"] = mouse_plink.n_snps
         benchmark.extra_info["n_results"] = len(result)
-        benchmark.extra_info["sharding_enabled"] = True
+        benchmark.extra_info["sharding_enabled"] = n_devices > 1
         benchmark.extra_info["jax_device_count"] = n_devices
 
         assert len(result) > 5000
@@ -526,7 +525,7 @@ class TestShardedBenchmarks:
 
         Calls ``run_lmm_association_streaming()`` identically to
         ``TestLMMBenchmarks.test_full_pipeline_streaming_benchmark``. Sharding
-        is baked into the streaming runner (Phase 31 Plan 02).
+        is baked into the streaming runner.
 
         On single-device machines the sharding fallback activates — timing is
         still collected for the metadata record.
@@ -559,7 +558,7 @@ class TestShardedBenchmarks:
         benchmark.extra_info.update(hw_ctx)
         benchmark.extra_info["stage"] = "full_pipeline_streaming_sharded"
         benchmark.extra_info["n_tested"] = n_tested
-        benchmark.extra_info["sharding_enabled"] = True
+        benchmark.extra_info["sharding_enabled"] = n_devices > 1
         benchmark.extra_info["jax_device_count"] = n_devices
 
         assert n_tested > 5000
@@ -571,11 +570,12 @@ class TestXLACacheVerification:
     """Verify XLA compilation cache persistence across runs."""
 
     def test_xla_cache_populated(self, mouse_plink, mouse_phenotypes, mouse_kinship):
-        """Verify XLA compilation cache directory exists and is populated.
+        """Verify XLA compilation cache directory is created and accessible.
 
         After running an LMM pipeline, the JAX compilation cache directory
-        (~/.cache/jax) should contain cached compilations that can be reused
-        on subsequent runs.
+        (~/.cache/jax) should exist. Whether it contains cached compilations
+        depends on jax_persistent_cache_min_compile_time_secs (default 1s) —
+        small-scale compilations may not exceed the threshold.
         """
         assert_x64_precision()
 
@@ -609,13 +609,6 @@ class TestXLACacheVerification:
             f"JAX persistent cache may not be configured."
         )
 
-        # Check that something was written (directory is not empty)
-        # The cache may contain subdirectories or files depending on JAX version
-        contents = list(cache_dir.iterdir())  # noqa: F841
-        # Note: cache_dir existing is sufficient -- contents depend on
-        # jax_persistent_cache_min_compile_time_secs threshold (default 1s).
-        # Small-scale compilations may not exceed the threshold.
-        # We verify the directory is created and accessible.
         assert cache_dir.is_dir(), (
             f"Cache path exists but is not a directory: {cache_dir}"
         )

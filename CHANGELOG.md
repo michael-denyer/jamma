@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CPU device sharding**: JAX automatically partitions SNP batches across
+  virtual CPU devices using `NamedSharding`. Auto-configures as
+  `max(1, physical_cores // 2)` — no user action required. Override with
+  `JAMMA_JAX_DEVICES` environment variable for custom tuning.
+- **BLAS thread coordination**: BLAS thread count auto-reduces when multiple
+  JAX devices are active to avoid oversubscription. Override with
+  `JAMMA_BLAS_THREADS` environment variable.
+- **Per-stage timing**: LMM runners now log timing breakdowns for
+  eigendecomposition, DGEMM rotation, JAX compute, and result writing.
+- **JAX profiler annotations**: `TraceAnnotation` labels on all pipeline
+  stages for use with `--profile-dir` (TensorBoard/Perfetto).
+
+### Fixed
+
+- **Sharding divisibility fallback**: SNP counts not evenly divisible by the
+  device count (e.g. 50,000 SNPs with 32 devices) no longer silently disable
+  sharding. UtG arrays are zero-padded to the next device-count multiple and
+  padded results are discarded.
+
 ## [2.4.5] - 2026-02-20
 
 ### Fixed

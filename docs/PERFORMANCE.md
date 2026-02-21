@@ -89,6 +89,38 @@ All three pipeline phases are dominated by BLAS/LAPACK calls. No Python-level op
 | Large | 50–100k | 256 GB | ILP64 required |
 | XLarge | 100–120k | 512 GB+ | ILP64 required |
 
+### CPU Device Sharding
+
+JAMMA uses JAX `NamedSharding` to partition SNP batches across virtual CPU
+devices, parallelising the per-SNP REML grid search and golden-section
+refinement.
+
+**Current optimisation target: Intel x86_64 Linux** (Databricks / HPC).
+The heuristics are calibrated for MKL-backed numpy on Intel Xeon hardware.
+Other platforms (ARM, Apple Silicon, AMD) work correctly but may benefit
+from manual tuning via `JAMMA_JAX_DEVICES` and `JAMMA_BLAS_THREADS`.
+GPU acceleration (`use_gpu=True`) is functional but not yet tuned for
+production workloads.
+
+**Auto-configuration:**
+
+| Setting | Default | Override |
+| ------- | ------- | -------- |
+| JAX devices | `max(1, physical_cores // 2)` | `JAMMA_JAX_DEVICES` |
+| BLAS threads | `physical_cores // n_devices` | `JAMMA_BLAS_THREADS` |
+
+**Benchmark: JAX optimisation time** (32-physical-core Intel Xeon, MKL ILP64):
+
+| Devices | Mouse (1.4K×11K) | 5K×50K     | 10K×100K    | 20K×100K    |
+| ------- | ---------------- | ---------- | ----------- | ----------- |
+| 1       | 3.38s            | 54.4s      | 65.4s       | 93.7s       |
+| 8       | 0.84s            | 12.0s      | 34.5s       | 67.7s       |
+| 16      | **0.79s**        | **8.0s**   | **28.8s**   | **40.6s**   |
+| 32      | 0.79s            | 8.3s       | 28.7s       | 55.0s       |
+
+Peak speedup is at `physical_cores // 2`. Beyond that, XLA cross-device
+coordination overhead outweighs the per-device compute savings.
+
 See [USER_GUIDE.md](USER_GUIDE.md) for installation instructions and [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md) for documented divergences from GEMMA.
 
 ### Test Suite

@@ -109,7 +109,11 @@ production workloads.
 | JAX devices | `max(1, physical_cores // 2)` | `JAMMA_JAX_DEVICES` |
 | BLAS threads | `physical_cores // n_devices` | `JAMMA_BLAS_THREADS` |
 
-**Benchmark: JAX optimisation time** (32-physical-core Intel Xeon, MKL ILP64):
+#### Benchmark: JAX optimisation time
+
+Hardware: Azure Standard_M64s (Intel Xeon Platinum 8272CL @ 2.50 GHz,
+32 physical / 64 logical cores, 541 GB RAM). numpy 2.4.2 with MKL ILP64,
+JAX 0.9.0, Databricks Runtime 15.4 LTS.
 
 | Devices | Mouse (1.4K×11K) | 5K×50K     | 10K×100K    | 20K×100K    |
 | ------- | ---------------- | ---------- | ----------- | ----------- |

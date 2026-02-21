@@ -406,7 +406,8 @@ export JAMMA_BLAS_THREADS=16
 jamma -lmm 1 -bfile data/my_study -k kinship.txt -o output
 ```
 
-**Tuning guidance** (benchmarked on 32-physical-core Intel Xeon):
+Tuning guidance (benchmarked on Azure Standard_M64s — Intel Xeon Platinum
+8272CL, 32 physical cores, 541 GB RAM, MKL ILP64):
 
 | Devices | 5K samples | 10K samples | 20K samples |
 | ------- | ---------- | ----------- | ----------- |

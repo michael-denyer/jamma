@@ -31,7 +31,12 @@ from jamma.io.plink import (
 )
 from jamma.kinship import compute_loco_kinship_streaming, write_kinship_matrix
 from jamma.lmm.chunk import _compute_chunk_size
-from jamma.lmm.compute import _compute_lmm_chunk, block_chunk_result, strip_and_append
+from jamma.lmm.compute import (
+    _compute_lmm_chunk,
+    block_chunk_result,
+    log_jax_error,
+    strip_and_append,
+)
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.likelihood_jax import batch_compute_uab
@@ -452,14 +457,13 @@ def _run_lmm_for_chromosome(
 
     def _prepare_jax_chunk(
         start: int, geno: np.ndarray, total: int
-    ) -> tuple[np.ndarray, int, bool]:
+    ) -> tuple[np.ndarray, int]:
         """Prepare a JAX chunk for device transfer."""
         end = min(start + jax_chunk_size, total)
         actual_len = end - start
         geno_jax_chunk = geno[:, start:end]
 
-        needs_pad = actual_len < jax_chunk_size
-        if needs_pad:
+        if actual_len < jax_chunk_size:
             pad_width = jax_chunk_size - actual_len
             geno_jax_chunk = np.pad(
                 geno_jax_chunk, ((0, 0), (0, pad_width)), mode="constant"
@@ -467,7 +471,7 @@ def _run_lmm_for_chromosome(
 
         with blas_threads():
             UtG_chunk = np.ascontiguousarray(eigenvectors.T @ geno_jax_chunk)
-        return UtG_chunk, actual_len, needs_pad
+        return UtG_chunk, actual_len
 
     # Track lambda boundary hits across all disk chunks
     total_at_lmin = 0
@@ -501,7 +505,7 @@ def _run_lmm_for_chromosome(
                 accum: dict[str, list] = _init_accumulators(lmm_mode)
 
                 # Prepare first JAX chunk
-                UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
+                UtG_np, actual_jax_len = _prepare_jax_chunk(
                     jax_starts[0], geno_disk_chunk, n_disk_subset
                 )
                 UtG_jax = jax.device_put(UtG_np, device)
@@ -513,7 +517,7 @@ def _run_lmm_for_chromosome(
 
                     # Async transfer of next chunk
                     if i + 1 < len(jax_starts):
-                        UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
+                        UtG_np, actual_jax_len = _prepare_jax_chunk(
                             jax_starts[i + 1], geno_disk_chunk, n_disk_subset
                         )
                         UtG_jax = jax.device_put(UtG_np, device)
@@ -540,21 +544,13 @@ def _run_lmm_for_chromosome(
                         )
                         block_chunk_result(chunk_result, lmm_mode)
                     except Exception as e:
-                        error_msg = str(e)
-                        if "exceeds the maximum representable" in error_msg:
-                            logger.error(
-                                "JAX int32 buffer overflow in LOCO.\n"
-                                f"  JAX chunk {i + 1}: "
-                                f"{current_actual_len:,} SNPs x "
-                                f"{n_samples:,} samples"
-                            )
-                        else:
-                            logger.error(
-                                "JAX computation failed in LOCO:\n"
-                                f"  {type(e).__name__}: {error_msg}\n"
-                                f"  Chunk: {current_actual_len:,} SNPs, "
-                                f"Samples: {n_samples:,}"
-                            )
+                        log_jax_error(
+                            e,
+                            chunk_label=f"LOCO {i + 1}",
+                            chunk_snps=current_actual_len,
+                            n_samples=n_samples,
+                            n_cvt=n_cvt,
+                        )
                         raise
 
                     strip_and_append(chunk_result, accum, current_actual_len)

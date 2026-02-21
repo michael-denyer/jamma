@@ -63,9 +63,9 @@ def get_blas_thread_count() -> int:
     # configure_jax() runs first.
     import jax
 
-    from jamma.core.jax_config import _jax_configured
+    from jamma.core.jax_config import is_jax_configured
 
-    if not _jax_configured:
+    if not is_jax_configured():
         # Return physical cores without querying JAX — calling jax.devices()
         # here would permanently freeze the backend at 1 device.
         n = max(1, min(physical_cores, max_threads))

@@ -71,7 +71,7 @@ def configure_jax(
     if persistent_cache:
         # Enable XLA compilation cache - reuses compiled kernels across runs
         # Only cache compilations that take >1s to avoid cache bloat
-        cache_dir = os.path.expanduser("~/.cache/jax")
+        cache_dir = JAX_CACHE_DIR
         try:
             os.makedirs(cache_dir, exist_ok=True)
             jax.config.update("jax_compilation_cache_dir", cache_dir)
@@ -149,6 +149,19 @@ def _configure_cpu_devices(n_cpu_devices: int | None) -> None:
 
 
 _jax_configured = False
+
+# Cache directory used by configure_jax() — exposed as constant so tests
+# can verify the path without hardcoding it.
+JAX_CACHE_DIR = os.path.expanduser("~/.cache/jax")
+
+
+def is_jax_configured() -> bool:
+    """Return whether configure_jax() has been called.
+
+    Used by other modules (e.g. threading) to guard against premature
+    JAX backend initialization.
+    """
+    return _jax_configured
 
 
 def ensure_jax_configured(

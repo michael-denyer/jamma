@@ -30,7 +30,8 @@ def get_hardware_context() -> dict[str, str | int | bool]:
             - cpu_model: CPU model string.
             - cpu_count_physical: Physical (non-hyperthreaded) core count.
             - cpu_count_logical: Logical core count (includes hyperthreading).
-            - blas_backend: BLAS library name ("mkl", "openblas", or "unknown").
+            - blas_backend: BLAS library name (e.g. "mkl", "openblas",
+              "accelerate", "blis") or "unknown".
             - blas_threads: Current BLAS thread target.
             - jax_version: JAX version string.
             - jax_backend: JAX default backend ("cpu", "gpu", "tpu").

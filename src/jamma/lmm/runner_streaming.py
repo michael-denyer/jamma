@@ -433,15 +433,17 @@ def run_lmm_association_streaming(
 
         def _prepare_jax_chunk(
             start: int, geno: np.ndarray, total: int
-        ) -> tuple[np.ndarray, int, bool]:
-            """Prepare a JAX chunk for device transfer (CPU work)."""
+        ) -> tuple[np.ndarray, int]:
+            """Prepare a JAX chunk for device transfer (CPU work).
+
+            Returns numpy array — caller is responsible for device_put.
+            """
             end = min(start + jax_chunk_size, total)
             actual_len = end - start
 
             geno_jax_chunk = geno[:, start:end]
 
-            needs_pad = actual_len < jax_chunk_size
-            if needs_pad:
+            if actual_len < jax_chunk_size:
                 pad_width = jax_chunk_size - actual_len
                 geno_jax_chunk = np.pad(
                     geno_jax_chunk, ((0, 0), (0, pad_width)), mode="constant"
@@ -456,7 +458,7 @@ def run_lmm_association_streaming(
                 dev_pad = n_devices - (UtG_chunk.shape[1] % n_devices)
                 UtG_chunk = np.pad(UtG_chunk, ((0, 0), (0, dev_pad)), mode="constant")
 
-            return UtG_chunk, actual_len, needs_pad
+            return UtG_chunk, actual_len
 
         for chunk, file_start, file_end in assoc_iterator:
             # Apply sample filtering
@@ -490,7 +492,7 @@ def run_lmm_association_streaming(
 
             # Prepare first JAX chunk
             t_rot_start = time.perf_counter()
-            UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
+            UtG_np, actual_jax_len = _prepare_jax_chunk(
                 jax_starts[0], geno_subset, n_subset
             )
             t_rot_end = time.perf_counter()
@@ -508,7 +510,7 @@ def run_lmm_association_streaming(
                 # Start async transfer of next JAX chunk while computing current
                 if i + 1 < len(jax_starts):
                     t_rot_start = time.perf_counter()
-                    UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
+                    UtG_np, actual_jax_len = _prepare_jax_chunk(
                         jax_starts[i + 1], geno_subset, n_subset
                     )
                     t_rot_end = time.perf_counter()

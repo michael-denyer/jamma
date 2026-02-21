@@ -122,8 +122,9 @@ Python 3.12, Databricks Runtime 16.4 LTS with Docker (jamma-dbr image).
 | 16      | **0.79s**        | **8.0s**   | **28.8s**   | **40.6s**   |
 | 32      | 0.79s            | 8.3s       | 28.7s       | 55.0s       |
 
-Peak speedup is at `physical_cores // 2`. Beyond that, XLA cross-device
-coordination overhead outweighs the per-device compute savings.
+Peak speedup is generally at `physical_cores // 2`. Beyond that, XLA
+cross-device coordination overhead typically outweighs the per-device
+compute savings.
 
 See [USER_GUIDE.md](USER_GUIDE.md) for installation instructions and [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md) for documented divergences from GEMMA.
 

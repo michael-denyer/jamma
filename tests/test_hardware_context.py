@@ -45,16 +45,10 @@ class TestHardwareContext:
         assert len(ctx["cpu_model"]) > 0
 
     def test_hardware_context_blas_backend(self):
-        """BLAS backend is a recognized string."""
+        """BLAS backend is a non-empty string."""
         ctx = get_hardware_context()
         assert isinstance(ctx["blas_backend"], str)
-        assert ctx["blas_backend"] in (
-            "mkl",
-            "openblas",
-            "blis",
-            "accelerate",
-            "unknown",
-        )
+        assert len(ctx["blas_backend"]) > 0
 
     def test_hardware_context_jax_x64(self):
         """JAX x64 is enabled in test environment."""

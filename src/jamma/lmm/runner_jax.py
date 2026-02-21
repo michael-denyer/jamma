@@ -184,8 +184,8 @@ def run_lmm_association_jax(
         UtW = U.T @ W
         Uty = U.T @ phenotypes
 
-    # Determine chunk size to avoid int32 buffer overflow (before null model to
-    # use n_devices-aligned chunk_size for placement decisions)
+    # Determine chunk size to avoid int32 buffer overflow. Computed before
+    # null model so n_devices alignment is available early.
     n_filtered = len(snp_indices)
     chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid, n_cvt, n_devices)
 

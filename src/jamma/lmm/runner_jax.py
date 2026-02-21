@@ -24,6 +24,7 @@ from jamma.lmm.prepare import (
     _compute_null_model,
     _eigendecompose_or_reuse,
     _select_jax_device,
+    _setup_cpu_sharding,
 )
 from jamma.lmm.results import (
     _RESULT_FIELDS,
@@ -130,6 +131,8 @@ def run_lmm_association_jax(
         )
 
     device = _select_jax_device(use_gpu)
+    snp_spec, rep_spec = _setup_cpu_sharding()
+    n_devices = len(jax.devices("cpu"))
 
     valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
     if covariates is not None:
@@ -182,6 +185,19 @@ def run_lmm_association_jax(
         UtW = U.T @ W
         Uty = U.T @ phenotypes
 
+    # Determine chunk size to avoid int32 buffer overflow (before null model to
+    # use n_devices-aligned chunk_size for placement decisions)
+    n_filtered = len(snp_indices)
+    chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid, n_cvt, n_devices)
+
+    # Sharding is only active when chunk_size is a multiple of n_devices.
+    # When n_filtered <= max int32 capacity, chunk_size = n_filtered which may
+    # not be divisible by n_devices (e.g. small test datasets). Fall back to
+    # single-device placement in that case to avoid XLA padding errors.
+    use_sharding = snp_spec is not None and chunk_size % n_devices == 0
+    effective_snp_spec = snp_spec if use_sharding else None
+    effective_rep_spec = rep_spec if use_sharding else None
+
     logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
         lmm_mode,
         eigenvalues_np,
@@ -192,17 +208,19 @@ def run_lmm_association_jax(
         show_progress,
         l_min=l_min,
         l_max=l_max,
+        rep_spec=effective_rep_spec,
     )
     t_eigen_end = time.perf_counter()
 
-    # Determine chunk size to avoid int32 buffer overflow
-    n_filtered = len(snp_indices)
-    chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid, n_cvt)
-
     # Device-resident shared arrays - placed on device ONCE before chunk loop
-    eigenvalues = jax.device_put(eigenvalues_np, device)
-    UtW_jax = jax.device_put(UtW, device)
-    Uty_jax = jax.device_put(Uty, device)
+    if effective_rep_spec is not None:
+        eigenvalues = jax.device_put(eigenvalues_np, effective_rep_spec)
+        UtW_jax = jax.device_put(UtW, effective_rep_spec)
+        Uty_jax = jax.device_put(Uty, effective_rep_spec)
+    else:
+        eigenvalues = jax.device_put(eigenvalues_np, device)
+        UtW_jax = jax.device_put(UtW, device)
+        Uty_jax = jax.device_put(Uty, device)
 
     # Process in chunks if needed
     n_chunks = (n_filtered + chunk_size - 1) // chunk_size
@@ -253,7 +271,10 @@ def run_lmm_association_jax(
     UtG_np, actual_len, needs_pad = _prepare_chunk(chunk_starts[0])
     t_rot_end = time.perf_counter()
     t_rotation_total += t_rot_end - t_rot_start
-    UtG_jax = jax.device_put(UtG_np, device)
+    if effective_snp_spec is not None:
+        UtG_jax = jax.device_put(UtG_np, effective_snp_spec)
+    else:
+        UtG_jax = jax.device_put(UtG_np, device)
     del UtG_np
 
     # Create progress bar iterator
@@ -276,7 +297,10 @@ def run_lmm_association_jax(
             t_rot_end = time.perf_counter()
             t_rotation_total += t_rot_end - t_rot_start
             # device_put is async - transfer starts immediately, overlaps with compute
-            UtG_jax = jax.device_put(next_UtG_np, device)
+            if effective_snp_spec is not None:
+                UtG_jax = jax.device_put(next_UtG_np, effective_snp_spec)
+            else:
+                UtG_jax = jax.device_put(next_UtG_np, device)
             del next_UtG_np
 
         # --- JAX compute timing ---

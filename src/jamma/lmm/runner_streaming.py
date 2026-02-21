@@ -31,6 +31,7 @@ from jamma.lmm.prepare import (
     _compute_null_model,
     _eigendecompose_or_reuse,
     _select_jax_device,
+    _setup_cpu_sharding,
 )
 from jamma.lmm.results import (
     _concat_jax_accumulators,
@@ -228,6 +229,8 @@ def run_lmm_association_streaming(
         logger.info(f"  Lambda range: [{l_min:.2e}, {l_max:.2e}]")
 
     device = _select_jax_device(use_gpu)
+    snp_spec, rep_spec = _setup_cpu_sharding()
+    n_devices = len(jax.devices("cpu"))
     needs_sample_filter = not np.all(valid_mask)
 
     # === PASS 1: SNP statistics (without loading all genotypes) ===
@@ -370,6 +373,18 @@ def run_lmm_association_streaming(
             UtW = U.T @ W
             Uty = U.T @ phenotypes
 
+        jax_chunk_size = _compute_chunk_size(
+            n_samples, n_filtered, n_grid, n_cvt, n_devices
+        )
+
+        # Sharding is only active when jax_chunk_size is a multiple of n_devices.
+        # When n_filtered <= max int32 capacity, jax_chunk_size = n_filtered which
+        # may not be divisible by n_devices (e.g. small test datasets). Fall back
+        # to single-device placement in that case to avoid XLA padding errors.
+        use_sharding = snp_spec is not None and jax_chunk_size % n_devices == 0
+        effective_snp_spec = snp_spec if use_sharding else None
+        effective_rep_spec = rep_spec if use_sharding else None
+
         logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
             lmm_mode,
             eigenvalues_np,
@@ -380,14 +395,18 @@ def run_lmm_association_streaming(
             show_progress,
             l_min=l_min,
             l_max=l_max,
+            rep_spec=effective_rep_spec,
         )
 
         # Device-resident shared arrays - placed on device ONCE before chunk loop
-        eigenvalues = jax.device_put(eigenvalues_np, device)
-        UtW_jax = jax.device_put(UtW, device)
-        Uty_jax = jax.device_put(Uty, device)
-
-        jax_chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid, n_cvt)
+        if effective_rep_spec is not None:
+            eigenvalues = jax.device_put(eigenvalues_np, effective_rep_spec)
+            UtW_jax = jax.device_put(UtW, effective_rep_spec)
+            Uty_jax = jax.device_put(Uty, effective_rep_spec)
+        else:
+            eigenvalues = jax.device_put(eigenvalues_np, device)
+            UtW_jax = jax.device_put(UtW, device)
+            Uty_jax = jax.device_put(Uty, device)
     t_eigen_end = time.perf_counter()
 
     # Timing accumulators for per-chunk phases
@@ -476,7 +495,10 @@ def run_lmm_association_streaming(
             )
             t_rot_end = time.perf_counter()
             t_rotation_total += t_rot_end - t_rot_start
-            UtG_jax = jax.device_put(UtG_np, device)
+            if effective_snp_spec is not None:
+                UtG_jax = jax.device_put(UtG_np, effective_snp_spec)
+            else:
+                UtG_jax = jax.device_put(UtG_np, device)
             del UtG_np
 
             for i, _jax_start in enumerate(jax_starts):
@@ -492,7 +514,10 @@ def run_lmm_association_streaming(
                     )
                     t_rot_end = time.perf_counter()
                     t_rotation_total += t_rot_end - t_rot_start
-                    UtG_jax = jax.device_put(UtG_np, device)
+                    if effective_snp_spec is not None:
+                        UtG_jax = jax.device_put(UtG_np, effective_snp_spec)
+                    else:
+                        UtG_jax = jax.device_put(UtG_np, device)
                     del UtG_np
 
                 # --- JAX compute timing ---

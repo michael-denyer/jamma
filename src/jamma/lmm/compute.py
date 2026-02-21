@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
+from loguru import logger
 
 from jamma.lmm.likelihood_jax import (
     batch_calc_score_stats,
@@ -22,9 +23,6 @@ from jamma.lmm.likelihood_jax import (
     golden_section_optimize_lambda_mle,
 )
 from jamma.lmm.prepare import _grid_optimize_lambda_batched
-
-# Which result key to use for determining slice length per mode
-_FIRST_KEY = {1: "lambdas", 2: "lambdas_mle", 3: "betas", 4: "lambdas"}
 
 # Which keys to sync on per mode (last-computed arrays for timing accuracy)
 _SYNC_KEYS = {
@@ -255,22 +253,57 @@ def strip_and_append(
     result: dict[str, jax.Array | None],
     accum: dict[str, list],
     actual_len: int,
-    needs_padding: bool,
 ) -> None:
     """Strip padding from chunk result arrays and append to accumulators.
 
     Transfers only the keys present in accum (which are mode-specific),
-    slicing off padding when the chunk was padded.
+    slicing to actual_len to discard both tail-chunk and device-alignment
+    padding.
 
     Args:
         result: Dict returned by _compute_lmm_chunk.
         accum: Dict of lists (from _init_accumulators) to append to.
         actual_len: Number of real (non-padded) SNPs in this chunk.
-        needs_padding: Whether the chunk was zero-padded.
     """
-    # Determine slice length from the first non-None array in accum
-    first_key = next(iter(accum))
-    arr = result[first_key]
-    slice_len = actual_len if needs_padding else len(arr)
     for key in accum:
-        accum[key].append(result[key][:slice_len])
+        accum[key].append(result[key][:actual_len])
+
+
+def log_jax_error(
+    e: Exception,
+    *,
+    chunk_label: str,
+    chunk_snps: int,
+    n_samples: int,
+    n_cvt: int = 1,
+) -> None:
+    """Log a JAX computation error with context, detecting int32 overflow.
+
+    String-based detection of JAX int32 overflow is fragile — update if
+    JAX changes the wording in future versions.
+
+    Args:
+        e: The caught exception.
+        chunk_label: Human-readable chunk identifier (e.g. "3/10").
+        chunk_snps: Number of SNPs in the failing chunk.
+        n_samples: Number of samples.
+        n_cvt: Number of covariates (for buffer size calculation).
+    """
+    error_msg = str(e)
+    if "exceeds the maximum representable value" in error_msg:
+        n_index = (n_cvt + 3) * (n_cvt + 2) // 2
+        buffer_elements = n_samples * chunk_snps * n_index
+        logger.error(
+            f"JAX int32 buffer overflow during LMM computation.\n"
+            f"  Chunk {chunk_label}: {chunk_snps:,} SNPs x "
+            f"{n_samples:,} samples\n"
+            f"  Buffer elements: {buffer_elements:,} (limit: ~2.1B)\n"
+            f"  This should not happen with automatic chunking.\n"
+            f"  Please report this issue with your dataset dimensions."
+        )
+    else:
+        logger.error(
+            f"JAX computation failed on chunk {chunk_label}:\n"
+            f"  {type(e).__name__}: {error_msg}\n"
+            f"  Chunk size: {chunk_snps:,} SNPs, Samples: {n_samples:,}"
+        )

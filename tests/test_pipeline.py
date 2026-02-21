@@ -34,6 +34,18 @@ class TestPipelineConfig:
         assert config.show_progress is True
         assert config.mem_budget is None
 
+    def test_profile_dir_default(self) -> None:
+        """profile_dir defaults to None."""
+        config = PipelineConfig(bfile=Path("/tmp/test"))
+        assert config.profile_dir is None
+
+    def test_profile_dir_set(self, tmp_path: Path) -> None:
+        """profile_dir can be set to a Path."""
+        config = PipelineConfig(
+            bfile=Path("/tmp/test"), profile_dir=tmp_path / "traces"
+        )
+        assert config.profile_dir == tmp_path / "traces"
+
     def test_custom_values(self) -> None:
         """PipelineConfig accepts custom values."""
         config = PipelineConfig(

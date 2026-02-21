@@ -128,6 +128,12 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     help="Show version and exit",
 )
 @click.option(
+    "--profile-dir",
+    type=click.Path(),
+    default=None,
+    help="Directory for XLA profiling traces (view with TensorBoard)",
+)
+@click.option(
     "-cat",
     type=str,
     default=None,
@@ -199,6 +205,7 @@ def main(
     verbose,
     check_memory,
     mem_budget,
+    profile_dir,
     cat,
     widv,
     wsnp,
@@ -292,6 +299,7 @@ def main(
             l_max=lmax,
             weight_file=_opt_path(widv),
             cat_columns=cat_columns,
+            profile_dir=Path(profile_dir) if profile_dir else None,
         )
 
 
@@ -523,6 +531,7 @@ def _run_lmm(
     l_max: float = 1e5,
     weight_file: Path | None = None,
     cat_columns: list[int] | None = None,
+    profile_dir: Path | None = None,
 ) -> None:
     """Run LMM association testing."""
     # Mutual exclusivity check
@@ -561,6 +570,7 @@ def _run_lmm(
         l_max=l_max,
         weight_file=weight_file,
         cat_columns=cat_columns,
+        profile_dir=profile_dir,
     )
 
     # Run pipeline, converting exceptions to CLI-friendly errors

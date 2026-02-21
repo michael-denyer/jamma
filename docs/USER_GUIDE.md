@@ -369,10 +369,61 @@ If MKL ILP64 is not available:
 
 ## Performance Tips
 
+### Platform
+
+JAMMA's current performance optimizations target **Intel x86_64 Linux** — the
+typical Databricks / HPC environment for large-scale GWAS:
+
+- **BLAS/LAPACK**: Tuned for Intel MKL (shipped via `numpy-mkl` wheels).
+  OpenBLAS works but is slower and segfaults above ~50k samples.
+- **JAX backend**: Uses XLA's CPU backend. GPU acceleration (`use_gpu=True`)
+  is supported but not yet tuned for production workloads.
+- **ARM / Apple Silicon**: Runs correctly via Accelerate BLAS, but the
+  thread-count and device-count heuristics are calibrated for Intel server
+  hardware. Override with `JAMMA_JAX_DEVICES` and `JAMMA_BLAS_THREADS` if
+  defaults are suboptimal on your platform.
+
+### CPU Device Sharding
+
+JAMMA partitions SNP batches across virtual CPU devices using JAX
+`NamedSharding`. This parallelises the per-SNP REML optimisation across
+cores without any code changes.
+
+**Auto-configuration** (no action required):
+
+- Devices: `max(1, physical_cores // 2)`
+- BLAS threads: `physical_cores // n_devices` (avoids oversubscription)
+
+**Environment variable overrides:**
+
+```bash
+# Custom device count (set before running JAMMA)
+export JAMMA_JAX_DEVICES=8
+
+# Custom BLAS thread count for eigendecomp / DGEMM
+export JAMMA_BLAS_THREADS=16
+
+jamma -lmm 1 -bfile data/my_study -k kinship.txt -o output
+```
+
+Tuning guidance (benchmarked on Azure E64ds_v6 — Intel Xeon Platinum
+8573C, 32 physical / 64 logical cores, 541 GB RAM, MKL ILP64, DBR 16.4 LTS):
+
+| Devices | 5K×50K | 10K×100K | 20K×100K |
+| ------- | ------ | -------- | -------- |
+| 1       | 54.4s  | 65.4s    | 93.7s    |
+| 8       | 12.0s  | 34.5s    | 67.7s    |
+| 16      | 8.0s   | 28.8s    | 40.6s    |
+| 32      | 8.3s   | 28.7s    | 55.0s    |
+
+The sweet spot is typically `physical_cores // 2`. Going higher adds
+coordination overhead that outweighs parallelism gains.
+
+### General Tips
+
 1. **Use JAX runner** for large datasets (>1000 samples)
-2. **Enable GPU** with `use_gpu=True` if available
-3. **Batch processing**: JAMMA automatically batches kinship computation
-4. **Memory**: For very large datasets, consider sample subsetting
+2. **Batch processing**: JAMMA automatically batches kinship computation
+3. **Memory**: For very large datasets, consider sample subsetting
 
 ## Validation
 

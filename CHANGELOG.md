@@ -16,10 +16,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BLAS thread coordination**: BLAS thread count auto-reduces when multiple
   JAX devices are active to avoid oversubscription. Override with
   `JAMMA_BLAS_THREADS` environment variable.
+- **`--profile-dir` CLI flag**: Capture XLA profiling traces for
+  TensorBoard/Perfetto analysis. Degrades gracefully — profiling failures
+  never prevent GWAS results.
 - **Per-stage timing**: LMM runners now log timing breakdowns for
   eigendecomposition, DGEMM rotation, JAX compute, and result writing.
 - **JAX profiler annotations**: `TraceAnnotation` labels on all pipeline
-  stages for use with `--profile-dir` (TensorBoard/Perfetto).
+  stages for use with `--profile-dir`.
+- **Benchmark harness**: `pytest-benchmark` pedantic-mode benchmarks for
+  eigendecomp, DGEMM rotation, JAX optimization, and full pipeline on
+  mouse_hs1940. Includes hardware context (CPU model, BLAS backend, device
+  count) for cross-machine comparison.
+- **Hardware context module**: `jamma.core.hardware.get_hardware_context()`
+  collects CPU, BLAS, JAX, and platform info for benchmark reproducibility.
+  `assert_x64_precision()` guard prevents silent float32 fallback in
+  benchmark entry points.
 
 ### Fixed
 
@@ -27,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   device count (e.g. 50,000 SNPs with 32 devices) no longer silently disable
   sharding. UtG arrays are zero-padded to the next device-count multiple and
   padded results are discarded.
+- **Chunk device alignment**: `_compute_chunk_size` and `auto_tune_chunk_size`
+  round chunk sizes to device-count multiples, preventing XLA from padding
+  partial shards internally.
 
 ## [2.4.5] - 2026-02-20
 

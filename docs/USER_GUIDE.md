@@ -406,8 +406,8 @@ export JAMMA_BLAS_THREADS=16
 jamma -lmm 1 -bfile data/my_study -k kinship.txt -o output
 ```
 
-Tuning guidance (benchmarked on Intel Xeon Platinum 8573C, 32 physical /
-64 logical cores, 541 GB RAM, MKL ILP64, JAX 0.9.0, DBR 16.4 LTS):
+Tuning guidance (benchmarked on Azure E64ds_v6 — Intel Xeon Platinum
+8573C, 32 physical / 64 logical cores, 541 GB RAM, MKL ILP64, DBR 16.4 LTS):
 
 | Devices | 5K samples | 10K samples | 20K samples |
 | ------- | ---------- | ----------- | ----------- |

@@ -340,6 +340,230 @@ class TestLMMBenchmarks:
 
 @pytest.mark.benchmark
 @pytest.mark.slow
+class TestShardedBenchmarks:
+    """Sharded benchmark variants for before/after comparison on server hardware.
+
+    These benchmarks exercise the CPU device sharding code path introduced in
+    Phase 31. They record ``sharding_enabled`` and ``jax_device_count`` in
+    ``benchmark.extra_info`` so results from different machines are directly
+    comparable.
+
+    Comparison methodology
+    ----------------------
+    True before/after comparison requires controlling device count:
+
+    * **Before (unsharded baseline)**::
+
+          JAMMA_JAX_DEVICES=1 uv run pytest tests/test_perf_lmm.py -v -n0 \\
+              --benchmark-only -k "jax_optimization"
+
+    * **After (sharded)**::
+
+          uv run pytest tests/test_perf_lmm.py -v -n0 \\
+              --benchmark-only -k "jax_optimization_sharded"
+
+    On development machines (ARM Mac), JAX typically exposes only a single
+    virtual CPU device, so the sharding fallback activates and timing is
+    directional only. The definitive measurement is on Databricks Intel Xeon
+    hardware where ``configure_jax()`` auto-configures multiple virtual devices
+    (``physical_cores // 2``).
+    """
+
+    def test_jax_optimization_sharded_benchmark(
+        self, benchmark, mouse_plink, mouse_phenotypes, mouse_eigen
+    ):
+        """Benchmark JAX optimization with explicit NamedSharding on UtG.
+
+        Mirrors ``TestLMMBenchmarks.test_jax_optimization_benchmark`` but
+        places UtG using ``snp_spec`` (sharded on SNP axis) and shared arrays
+        using ``rep_spec`` (replicated). JIT warmup uses the same sharding
+        configuration so the compiled kernel matches the timed run.
+
+        Records ``sharding_enabled`` and ``jax_device_count`` to distinguish
+        single-device fallback (small-scale dev machines) from multi-device
+        server runs.
+        """
+        assert_x64_precision()
+        hw_ctx = get_hardware_context()
+
+        from jamma.lmm.compute import _compute_lmm_chunk, block_chunk_result
+        from jamma.lmm.likelihood_jax import batch_compute_uab
+        from jamma.lmm.prepare import _setup_cpu_sharding
+
+        eigenvalues, eigenvectors, valid_mask = mouse_eigen
+        genotypes = mouse_plink.genotypes[valid_mask, :]
+        phenotypes = mouse_phenotypes[valid_mask]
+        U = eigenvectors
+
+        col_means = np.nanmean(genotypes, axis=0)
+        missing = np.isnan(genotypes)
+        genotypes_imp = np.where(missing, col_means[None, :], genotypes)
+
+        W = np.ones((len(phenotypes), 1))
+        with blas_threads():
+            UtW = U.T @ W
+            Uty = U.T @ phenotypes
+            UtG = np.ascontiguousarray(U.T @ genotypes_imp)
+
+        snp_spec, rep_spec = _setup_cpu_sharding()
+        device = jax.devices("cpu")[0]
+        n_devices = len(jax.devices("cpu"))
+        n_snps = UtG.shape[1]
+
+        # Use sharding only when chunk is divisible by device count
+        use_sharding = snp_spec is not None and n_snps % n_devices == 0
+        effective_snp_spec = snp_spec if use_sharding else device
+        effective_rep_spec = rep_spec if use_sharding else device
+
+        eigenvalues_jax = jax.device_put(eigenvalues, effective_rep_spec)
+        UtW_jax = jax.device_put(UtW, effective_rep_spec)
+        Uty_jax = jax.device_put(Uty, effective_rep_spec)
+        UtG_jax = jax.device_put(UtG, effective_snp_spec)
+
+        n_cvt = 1
+
+        # JIT warmup: use same sharding config so compiled kernel matches timed run.
+        # A 10-SNP slice must also be divisible by n_devices for sharded warmup.
+        warmup_n = 10 if (not use_sharding or 10 % n_devices == 0) else n_devices
+        _warmup_UtG = jax.device_put(UtG[:, :warmup_n], effective_snp_spec)
+        _warmup_Uab = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, _warmup_UtG)
+        _warmup_cr = _compute_lmm_chunk(
+            1, n_cvt, eigenvalues_jax, _warmup_Uab, len(phenotypes)
+        )
+        block_chunk_result(_warmup_cr, 1)
+        del _warmup_UtG, _warmup_Uab, _warmup_cr
+
+        def _run():
+            Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, UtG_jax)
+            cr = _compute_lmm_chunk(
+                1, n_cvt, eigenvalues_jax, Uab_batch, len(phenotypes)
+            )
+            block_chunk_result(cr, 1)
+            return cr
+
+        result = benchmark.pedantic(
+            _run,
+            warmup_rounds=0,  # Already warmed up JIT above with sharded config
+            rounds=3,
+            iterations=1,
+        )
+
+        benchmark.extra_info.update(hw_ctx)
+        benchmark.extra_info["stage"] = "jax_optimization_sharded"
+        benchmark.extra_info["n_samples"] = len(phenotypes)
+        benchmark.extra_info["n_snps"] = n_snps
+        benchmark.extra_info["n_cvt"] = n_cvt
+        benchmark.extra_info["sharding_enabled"] = use_sharding
+        benchmark.extra_info["jax_device_count"] = n_devices
+
+        assert result["pwalds"] is not None
+
+    def test_full_pipeline_sharded_benchmark(
+        self, benchmark, mouse_plink, mouse_phenotypes, mouse_kinship
+    ):
+        """Benchmark the full LMM pipeline with CPU device sharding active.
+
+        Calls ``run_lmm_association_jax()`` identically to
+        ``TestLMMBenchmarks.test_full_pipeline_benchmark``. Sharding is now
+        baked into the runner (Phase 31 Plan 02): ``_setup_cpu_sharding()`` is
+        called automatically when multiple JAX CPU devices are configured.
+
+        On single-device machines the sharding fallback activates — timing is
+        still collected for the metadata record.
+        """
+        assert_x64_precision()
+        hw_ctx = get_hardware_context()
+
+        from jamma.lmm.runner_jax import run_lmm_association_jax
+
+        snp_info = [
+            {
+                "chr": str(mouse_plink.chromosome[i]),
+                "rs": mouse_plink.sid[i],
+                "pos": int(mouse_plink.bp_position[i]),
+                "a1": mouse_plink.allele_1[i],
+                "a0": mouse_plink.allele_2[i],
+            }
+            for i in range(mouse_plink.n_snps)
+        ]
+        n_devices = len(jax.devices("cpu"))
+
+        def _run():
+            results = run_lmm_association_jax(
+                genotypes=mouse_plink.genotypes,
+                phenotypes=mouse_phenotypes,
+                kinship=mouse_kinship,
+                snp_info=snp_info,
+                show_progress=False,
+                check_memory=False,
+            )
+            return results
+
+        result = benchmark.pedantic(
+            _run,
+            warmup_rounds=1,
+            rounds=3,
+            iterations=1,
+        )
+
+        benchmark.extra_info.update(hw_ctx)
+        benchmark.extra_info["stage"] = "full_pipeline_sharded"
+        benchmark.extra_info["n_samples_total"] = mouse_plink.n_samples
+        benchmark.extra_info["n_snps_total"] = mouse_plink.n_snps
+        benchmark.extra_info["n_results"] = len(result)
+        benchmark.extra_info["sharding_enabled"] = True
+        benchmark.extra_info["jax_device_count"] = n_devices
+
+        assert len(result) > 5000
+
+    def test_full_pipeline_streaming_sharded_benchmark(
+        self, benchmark, mouse_phenotypes, mouse_kinship
+    ):
+        """Benchmark the streaming LMM pipeline with CPU device sharding active.
+
+        Calls ``run_lmm_association_streaming()`` identically to
+        ``TestLMMBenchmarks.test_full_pipeline_streaming_benchmark``. Sharding
+        is baked into the streaming runner (Phase 31 Plan 02).
+
+        On single-device machines the sharding fallback activates — timing is
+        still collected for the metadata record.
+        """
+        assert_x64_precision()
+        hw_ctx = get_hardware_context()
+
+        from jamma.lmm import run_lmm_association_streaming
+
+        n_devices = len(jax.devices("cpu"))
+
+        def _run():
+            results, n_tested = run_lmm_association_streaming(
+                bed_path=_MOUSE_DATA,
+                phenotypes=mouse_phenotypes,
+                kinship=mouse_kinship,
+                show_progress=False,
+                check_memory=False,
+            )
+            return results, n_tested
+
+        result = benchmark.pedantic(
+            _run,
+            warmup_rounds=1,
+            rounds=3,
+            iterations=1,
+        )
+
+        results, n_tested = result
+        benchmark.extra_info.update(hw_ctx)
+        benchmark.extra_info["stage"] = "full_pipeline_streaming_sharded"
+        benchmark.extra_info["n_tested"] = n_tested
+        benchmark.extra_info["sharding_enabled"] = True
+        benchmark.extra_info["jax_device_count"] = n_devices
+
+        assert n_tested > 5000
+
+
+@pytest.mark.benchmark
+@pytest.mark.slow
 class TestXLACacheVerification:
     """Verify XLA compilation cache persistence across runs."""
 

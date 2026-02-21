@@ -14,11 +14,13 @@ Example:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import jax
 import numpy as np
 from loguru import logger
 
@@ -85,6 +87,10 @@ class PipelineConfig:
             categorical. JAMMA-specific feature (not GEMMA's -cat which is
             for SNP categories in VC mode). Columns are one-hot encoded with
             the first sorted level dropped as reference.
+        profile_dir: Directory for JAX XLA profiling traces. None disables
+            profiling. When set, wraps the pipeline in jax.profiler.trace()
+            and annotates stages with TraceAnnotation. View traces with
+            `tensorboard --logdir <profile_dir>`.
     """
 
     bfile: Path
@@ -111,6 +117,7 @@ class PipelineConfig:
     l_max: float = 1e5
     weight_file: Path | None = None
     cat_columns: list[int] | None = None
+    profile_dir: Path | None = None
 
     def __post_init__(self) -> None:
         if os.sep in self.output_prefix or "/" in self.output_prefix:
@@ -616,6 +623,30 @@ class PipelineRunner:
         # kinship/compute.py is never called.
         ensure_jax_configured()
 
+        # Set up optional XLA profiling — degrade gracefully on failure
+        # so profiling issues never prevent GWAS results from being produced
+        trace_ctx = contextlib.nullcontext()
+        if self.config.profile_dir is not None:
+            try:
+                self.config.profile_dir.mkdir(parents=True, exist_ok=True)
+                trace_ctx = jax.profiler.trace(
+                    str(self.config.profile_dir), create_perfetto_link=False
+                )
+                logger.info(
+                    "XLA profiling enabled: traces will be written to "
+                    f"{self.config.profile_dir}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Could not enable XLA profiling: {type(e).__name__}: {e}. "
+                    "Continuing without profiling."
+                )
+
+        with trace_ctx:
+            return self._run_inner(t_start)
+
+    def _run_inner(self, t_start: float) -> PipelineResult:
+        """Execute the pipeline body, called within the optional profiling context."""
         # 1. Validate
         self.validate_inputs()
 

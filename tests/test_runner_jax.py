@@ -1042,7 +1042,7 @@ def test_timing_breakdown_logged(sample_plink_data):
     expected_labels = [
         "I/O read (pass 1):",
         "SNP statistics:",
-        "Eigendecomp+setup:",
+        "Setup (eigen+null):",
         "UT@G rotation:",
         "JAX compute:",
         "Result write:",

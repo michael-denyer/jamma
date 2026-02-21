@@ -23,7 +23,12 @@ from jamma.io.plink import (
     validate_genotype_values,
 )
 from jamma.lmm.chunk import _compute_chunk_size
-from jamma.lmm.compute import _compute_lmm_chunk, block_chunk_result, strip_and_append
+from jamma.lmm.compute import (
+    _compute_lmm_chunk,
+    block_chunk_result,
+    log_jax_error,
+    strip_and_append,
+)
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.likelihood_jax import batch_compute_uab
 from jamma.lmm.prepare import (
@@ -31,6 +36,7 @@ from jamma.lmm.prepare import (
     _compute_null_model,
     _eigendecompose_or_reuse,
     _select_jax_device,
+    _setup_cpu_sharding,
 )
 from jamma.lmm.results import (
     _concat_jax_accumulators,
@@ -66,7 +72,7 @@ class _LazySnpMeta:
     def __len__(self) -> int:
         return len(self._rs)
 
-    def __getitem__(self, i: int | slice) -> "dict | list[dict]":
+    def __getitem__(self, i: int | slice) -> dict | list[dict]:
         if isinstance(i, slice):
             return [self[j] for j in range(*i.indices(len(self)))]
         return {
@@ -228,6 +234,8 @@ def run_lmm_association_streaming(
         logger.info(f"  Lambda range: [{l_min:.2e}, {l_max:.2e}]")
 
     device = _select_jax_device(use_gpu)
+    snp_spec, rep_spec = _setup_cpu_sharding()
+    n_devices = len(jax.devices("cpu"))
     needs_sample_filter = not np.all(valid_mask)
 
     # === PASS 1: SNP statistics (without loading all genotypes) ===
@@ -254,32 +262,33 @@ def run_lmm_association_streaming(
             stats_iterator, total=n_chunks, desc="Computing SNP statistics"
         )
 
-    for chunk, start, end in stats_iterator:
-        # Apply sample filtering
-        if needs_sample_filter:
-            chunk = chunk[valid_mask, :]
+    with jax.profiler.TraceAnnotation("pass1_snp_statistics"):
+        for chunk, start, end in stats_iterator:
+            # Apply sample filtering
+            if needs_sample_filter:
+                chunk = chunk[valid_mask, :]
 
-        # Compute stats for this chunk
-        chunk_miss_counts = np.sum(np.isnan(chunk), axis=0)
-        with np.errstate(invalid="ignore"):
-            chunk_means = np.nanmean(chunk, axis=0)
-            chunk_vars = np.nanvar(chunk, axis=0)
-        chunk_means = np.nan_to_num(chunk_means, nan=0.0)
-        chunk_vars = np.nan_to_num(chunk_vars, nan=0.0)
+            # Compute stats for this chunk
+            chunk_miss_counts = np.sum(np.isnan(chunk), axis=0)
+            with np.errstate(invalid="ignore"):
+                chunk_means = np.nanmean(chunk, axis=0)
+                chunk_vars = np.nanvar(chunk, axis=0)
+            chunk_means = np.nan_to_num(chunk_means, nan=0.0)
+            chunk_vars = np.nan_to_num(chunk_vars, nan=0.0)
 
-        all_means[start:end] = chunk_means
-        all_miss_counts[start:end] = chunk_miss_counts
-        all_vars[start:end] = chunk_vars
+            all_means[start:end] = chunk_means
+            all_miss_counts[start:end] = chunk_miss_counts
+            all_vars[start:end] = chunk_vars
 
-        # Accumulate HWE genotype counts (no extra disk pass)
-        if hwe_threshold > 0:
-            valid_geno = ~np.isnan(chunk)
-            all_n_aa[start:end] += np.sum((chunk == 0) & valid_geno, axis=0)
-            all_n_ab[start:end] += np.sum((chunk == 1) & valid_geno, axis=0)
-            all_n_bb[start:end] += np.sum((chunk == 2) & valid_geno, axis=0)
+            # Accumulate HWE genotype counts (no extra disk pass)
+            if hwe_threshold > 0:
+                valid_geno = ~np.isnan(chunk)
+                all_n_aa[start:end] += np.sum((chunk == 0) & valid_geno, axis=0)
+                all_n_ab[start:end] += np.sum((chunk == 1) & valid_geno, axis=0)
+                all_n_bb[start:end] += np.sum((chunk == 2) & valid_geno, axis=0)
 
-        if validate_genotypes:
-            n_unexpected_total += validate_genotype_values(chunk)
+            if validate_genotypes:
+                n_unexpected_total += validate_genotype_values(chunk)
 
     if validate_genotypes and n_unexpected_total > 0:
         logger.warning(
@@ -349,43 +358,51 @@ def run_lmm_association_streaming(
 
     # === Eigendecomp + setup ===
     t_eigen_start = time.perf_counter()
-    eigenvalues_np, U = _eigendecompose_or_reuse(
-        kinship,
-        eigenvalues,
-        eigenvectors,
-        show_progress,
-        "lmm_streaming",
-        check_memory=check_memory,
-    )
-    if kinship is not None:
-        del kinship
-    gc.collect()
+    with jax.profiler.TraceAnnotation("eigendecomp_and_setup"):
+        eigenvalues_np, U = _eigendecompose_or_reuse(
+            kinship,
+            eigenvalues,
+            eigenvectors,
+            show_progress,
+            "lmm_streaming",
+            check_memory=check_memory,
+        )
+        if kinship is not None:
+            del kinship
+        gc.collect()
 
-    W, n_cvt = _build_covariate_matrix(covariates, n_samples)
+        W, n_cvt = _build_covariate_matrix(covariates, n_samples)
 
-    # Prepare rotated matrices (numpy BLAS matmuls)
-    with blas_threads():
-        UtW = U.T @ W
-        Uty = U.T @ phenotypes
+        # Prepare rotated matrices (numpy BLAS matmuls)
+        with blas_threads():
+            UtW = U.T @ W
+            Uty = U.T @ phenotypes
 
-    logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
-        lmm_mode,
-        eigenvalues_np,
-        UtW,
-        Uty,
-        n_cvt,
-        device,
-        show_progress,
-        l_min=l_min,
-        l_max=l_max,
-    )
+        jax_chunk_size = _compute_chunk_size(
+            n_samples, n_filtered, n_grid, n_cvt, n_devices
+        )
 
-    # Device-resident shared arrays - placed on device ONCE before chunk loop
-    eigenvalues = jax.device_put(eigenvalues_np, device)
-    UtW_jax = jax.device_put(UtW, device)
-    Uty_jax = jax.device_put(Uty, device)
+        logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
+            lmm_mode,
+            eigenvalues_np,
+            UtW,
+            Uty,
+            n_cvt,
+            device,
+            show_progress,
+            l_min=l_min,
+            l_max=l_max,
+            rep_spec=rep_spec,
+        )
 
-    jax_chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid, n_cvt)
+        # Device-resident shared arrays - placed on device ONCE before chunk loop.
+        # Chunks not evenly divisible by n_devices get zero-padded before
+        # device_put; padded SNP results are discarded via actual_len slicing.
+        rep_placement = rep_spec if rep_spec is not None else device
+        snp_placement = snp_spec if snp_spec is not None else device
+        eigenvalues = jax.device_put(eigenvalues_np, rep_placement)
+        UtW_jax = jax.device_put(UtW, rep_placement)
+        Uty_jax = jax.device_put(Uty, rep_placement)
     t_eigen_end = time.perf_counter()
 
     # Timing accumulators for per-chunk phases
@@ -418,27 +435,36 @@ def run_lmm_association_streaming(
 
         def _prepare_jax_chunk(
             start: int, geno: np.ndarray, total: int
-        ) -> tuple[np.ndarray, int, bool]:
-            """Prepare a JAX chunk for device transfer (CPU work)."""
+        ) -> tuple[np.ndarray, int]:
+            """Prepare a JAX chunk for device transfer (CPU work).
+
+            Returns numpy array — caller is responsible for device_put.
+            """
             end = min(start + jax_chunk_size, total)
             actual_len = end - start
 
             geno_jax_chunk = geno[:, start:end]
 
-            needs_pad = actual_len < jax_chunk_size
-            if needs_pad:
+            if actual_len < jax_chunk_size:
                 pad_width = jax_chunk_size - actual_len
                 geno_jax_chunk = np.pad(
                     geno_jax_chunk, ((0, 0), (0, pad_width)), mode="constant"
                 )
 
             with blas_threads():
-                UtG_chunk = np.ascontiguousarray(U.T @ geno_jax_chunk)
-            return UtG_chunk, actual_len, needs_pad
+                with jax.profiler.TraceAnnotation("dgemm_rotation"):
+                    UtG_chunk = np.ascontiguousarray(U.T @ geno_jax_chunk)
+
+            # Pad to device-count multiple for even NamedSharding distribution
+            if snp_spec is not None and UtG_chunk.shape[1] % n_devices != 0:
+                dev_pad = n_devices - (UtG_chunk.shape[1] % n_devices)
+                UtG_chunk = np.pad(UtG_chunk, ((0, 0), (0, dev_pad)), mode="constant")
+
+            return UtG_chunk, actual_len
 
         for chunk, file_start, file_end in assoc_iterator:
             # Apply sample filtering
-            if not np.all(valid_mask):
+            if needs_sample_filter:
                 chunk = chunk[valid_mask, :]
 
             # Binary search for filtered SNPs in this chunk: O(log n) vs O(n)
@@ -468,112 +494,105 @@ def run_lmm_association_streaming(
 
             # Prepare first JAX chunk
             t_rot_start = time.perf_counter()
-            UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
+            UtG_np, actual_jax_len = _prepare_jax_chunk(
                 jax_starts[0], geno_subset, n_subset
             )
             t_rot_end = time.perf_counter()
             t_rotation_total += t_rot_end - t_rot_start
-            UtG_jax = jax.device_put(UtG_np, device)
+            UtG_jax = jax.device_put(UtG_np, snp_placement)
             del UtG_np
 
             for i, _jax_start in enumerate(jax_starts):
                 current_actual_len = actual_jax_len
-                current_needs_padding = needs_padding
                 current_UtG = UtG_jax
 
                 # Start async transfer of next JAX chunk while computing current
                 if i + 1 < len(jax_starts):
                     t_rot_start = time.perf_counter()
-                    UtG_np, actual_jax_len, needs_padding = _prepare_jax_chunk(
+                    UtG_np, actual_jax_len = _prepare_jax_chunk(
                         jax_starts[i + 1], geno_subset, n_subset
                     )
                     t_rot_end = time.perf_counter()
                     t_rotation_total += t_rot_end - t_rot_start
-                    UtG_jax = jax.device_put(UtG_np, device)
+                    UtG_jax = jax.device_put(UtG_np, snp_placement)
                     del UtG_np
 
                 # --- JAX compute timing ---
                 t_jax_start = time.perf_counter()
 
                 try:
-                    # Batch compute Uab (shared across all modes)
-                    Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
+                    with jax.profiler.TraceAnnotation("jax_optimization"):
+                        # Batch compute Uab (shared across all modes)
+                        Uab_batch = batch_compute_uab(
+                            n_cvt, UtW_jax, Uty_jax, current_UtG
+                        )
 
-                    chunk_result = _compute_lmm_chunk(
-                        lmm_mode,
-                        n_cvt,
-                        eigenvalues,
-                        Uab_batch,
-                        n_samples,
-                        l_min=l_min,
-                        l_max=l_max,
-                        n_grid=n_grid,
-                        n_refine=n_refine,
-                        Hi_eval_null=Hi_eval_null_jax,
-                        logl_H0=logl_H0,
-                    )
-                    block_chunk_result(chunk_result, lmm_mode)
+                        chunk_result = _compute_lmm_chunk(
+                            lmm_mode,
+                            n_cvt,
+                            eigenvalues,
+                            Uab_batch,
+                            n_samples,
+                            l_min=l_min,
+                            l_max=l_max,
+                            n_grid=n_grid,
+                            n_refine=n_refine,
+                            Hi_eval_null=Hi_eval_null_jax,
+                            logl_H0=logl_H0,
+                        )
+                        block_chunk_result(chunk_result, lmm_mode)
                 except Exception as e:
-                    error_msg = str(e)
-                    # JAX int32 overflow (observed in JAX 0.4.x)
-                    if "exceeds the maximum representable value" in error_msg:
-                        logger.error(
-                            f"JAX int32 buffer overflow in streaming LMM.\n"
-                            f"  JAX chunk {i + 1}: {current_actual_len:,} SNPs x "
-                            f"{n_samples:,} samples"
-                        )
-                    else:
-                        logger.error(
-                            f"JAX computation failed in streaming LMM chunk:\n"
-                            f"  {type(e).__name__}: {error_msg}\n"
-                            f"  Chunk size: {current_actual_len:,} SNPs, "
-                            f"Samples: {n_samples:,}"
-                        )
+                    log_jax_error(
+                        e,
+                        chunk_label=f"streaming {i + 1}",
+                        chunk_snps=current_actual_len,
+                        n_samples=n_samples,
+                        n_cvt=n_cvt,
+                    )
                     raise
 
                 t_jax_end = time.perf_counter()
                 t_jax_compute_total += t_jax_end - t_jax_start
 
-                strip_and_append(
-                    chunk_result, accum, current_actual_len, current_needs_padding
-                )
+                strip_and_append(chunk_result, accum, current_actual_len)
 
             # Concatenate, build results, write/accumulate
             if any(accum.values()):
                 t_write_start = time.perf_counter()
-                arrays = _concat_jax_accumulators(lmm_mode, accum)
+                with jax.profiler.TraceAnnotation("result_write"):
+                    arrays = _concat_jax_accumulators(lmm_mode, accum)
 
-                # Count SNPs converging at lambda bounds
-                chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
-                    lmm_mode, arrays, l_min, l_max
-                )
-                n_at_lmin += chunk_lmin
-                n_at_lmax += chunk_lmax
-
-                if writer is not None:
-                    # Direct array → TSV (no AssocResult construction)
-                    writer.write_arrays_batch(
-                        lmm_mode,
-                        snp_indices[left:right],
-                        snp_info,
-                        filtered_afs[left:right],
-                        filtered_miss[left:right],
-                        arrays,
+                    # Count SNPs converging at lambda bounds
+                    chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
+                        lmm_mode, arrays, l_min, l_max
                     )
-                else:
-                    chunk_results = list(
-                        _yield_chunk_results(
+                    n_at_lmin += chunk_lmin
+                    n_at_lmax += chunk_lmax
+
+                    if writer is not None:
+                        # Direct array → TSV (no AssocResult construction)
+                        writer.write_arrays_batch(
                             lmm_mode,
-                            chunk_filtered_local_idx,
-                            snp_indices,
-                            filtered_afs,
-                            filtered_miss,
+                            snp_indices[left:right],
                             snp_info,
+                            filtered_afs[left:right],
+                            filtered_miss[left:right],
                             arrays,
                         )
-                    )
-                    all_results.extend(chunk_results)
-                del arrays, accum
+                    else:
+                        chunk_results = list(
+                            _yield_chunk_results(
+                                lmm_mode,
+                                chunk_filtered_local_idx,
+                                snp_indices,
+                                filtered_afs,
+                                filtered_miss,
+                                snp_info,
+                                arrays,
+                            )
+                        )
+                        all_results.extend(chunk_results)
+                    del arrays, accum
                 t_write_end = time.perf_counter()
                 t_result_write_total += t_write_end - t_write_start
 
@@ -595,7 +614,7 @@ def run_lmm_association_streaming(
             logger.info("Timing breakdown:")
             logger.info(f"  I/O read (pass 1):   {t_io:.2f}s")
             logger.info(f"  SNP statistics:      {t_snp:.2f}s")
-            logger.info(f"  Eigendecomp+setup:   {t_eigen:.2f}s")
+            logger.info(f"  Setup (eigen+null):  {t_eigen:.2f}s")
             logger.info(f"  UT@G rotation:       {t_rotation_total:.2f}s")
             logger.info(f"  JAX compute:         {t_jax_compute_total:.2f}s")
             logger.info(f"  Result write:        {t_result_write_total:.2f}s")

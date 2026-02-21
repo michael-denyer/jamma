@@ -221,6 +221,18 @@ class TestEnsureJaxConfigured:
         finally:
             jax_config._jax_configured = original
 
+    def test_configure_jax_sets_configured_flag(self) -> None:
+        """Direct configure_jax() should set _jax_configured so no false warning."""
+        from jamma.core import jax_config
+
+        original = jax_config._jax_configured
+        jax_config._jax_configured = False
+        try:
+            jax_config.configure_jax()
+            assert jax_config._jax_configured is True
+        finally:
+            jax_config._jax_configured = original
+
 
 # ---------------------------------------------------------------------------
 # __main__.py smoke test (#13)

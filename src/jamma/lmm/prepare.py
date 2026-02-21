@@ -10,12 +10,43 @@ import gc
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.sharding import Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
 from loguru import logger
 
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood import compute_null_model_mle
 from jamma.lmm.likelihood_jax import golden_section_optimize_lambda
 from jamma.utils.logging import log_rss_memory
+
+
+def _setup_cpu_sharding() -> tuple[NamedSharding | None, NamedSharding | None]:
+    """Create NamedSharding specs for SNP parallelism across CPU devices.
+
+    Returns (snp_spec, rep_spec) or (None, None) if only 1 CPU device
+    or if sharding setup fails.
+
+    Returns:
+        snp_spec: Sharding for UtG (n_samples, n_snps) — shard on SNP axis.
+        rep_spec: Sharding for eigenvalues, UtW, Uty, Hi_eval_null — replicated
+            on all devices.
+    """
+    cpu_devices = jax.devices("cpu")
+    if len(cpu_devices) <= 1:
+        return None, None
+
+    try:
+        mesh = Mesh(np.array(cpu_devices), ("snps",))
+        snp_spec = NamedSharding(mesh, P(None, "snps"))
+        rep_spec = NamedSharding(mesh, P())
+        return snp_spec, rep_spec
+    except (RuntimeError, ValueError, TypeError) as e:
+        logger.warning(
+            f"Failed to create CPU sharding mesh with {len(cpu_devices)} devices: "
+            f"{type(e).__name__}: {e}. Falling back to single-device mode. "
+            "Set JAMMA_JAX_DEVICES=1 to suppress this warning."
+        )
+        return None, None
 
 
 def _select_jax_device(use_gpu: bool) -> jax.Device:
@@ -125,6 +156,7 @@ def _compute_null_model(
     show_progress: bool,
     l_min: float = 1e-5,
     l_max: float = 1e5,
+    rep_spec: NamedSharding | None = None,
 ) -> tuple[float | None, float | None, jnp.ndarray | None]:
     """Compute null model MLE for Score, LRT, and All-tests modes.
 
@@ -141,14 +173,18 @@ def _compute_null_model(
         UtW: Rotated covariates.
         Uty: Rotated phenotype.
         n_cvt: Number of covariates.
-        device: JAX device for Hi_eval placement.
+        device: JAX device for Hi_eval placement (used when rep_spec is None).
         show_progress: Whether to log results.
         l_min: Minimum lambda for optimization.
         l_max: Maximum lambda for optimization.
+        rep_spec: NamedSharding replication spec for multi-device placement.
+            When provided, Hi_eval_null is replicated across all devices.
+            When None, Hi_eval_null is placed on the single device.
 
     Returns:
         Tuple of (logl_H0, lambda_null_mle, Hi_eval_null_jax).
-        All None for Wald mode.
+        All None for Wald (mode 1). For LRT (mode 2), Hi_eval_null_jax
+        is None. For Score/All (modes 3, 4), all three are populated.
     """
     if lmm_mode not in (2, 3, 4):
         return None, None, None
@@ -164,7 +200,8 @@ def _compute_null_model(
     Hi_eval_null_jax = None
     if lmm_mode in (3, 4):
         Hi_eval_null = 1.0 / (lambda_null_mle * eigenvalues_np + 1.0)
-        Hi_eval_null_jax = jax.device_put(Hi_eval_null, device)
+        placement = rep_spec if rep_spec is not None else device
+        Hi_eval_null_jax = jax.device_put(Hi_eval_null, placement)
 
     return logl_H0, lambda_null_mle, Hi_eval_null_jax
 

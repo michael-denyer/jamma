@@ -155,7 +155,8 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M3 Pro:
 - [x] Covariate support (`-c`)
 - [x] PLINK binary format (`.bed/.bim/.fam`) with input dimension validation
 - [x] Large-scale streaming I/O (>100k samples via [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) — numpy 2.4.2)
-- [x] JAX acceleration (CPU/GPU)
+- [x] JAX acceleration (CPU/GPU) with automatic CPU device sharding
+- [x] XLA profiling traces (`--profile-dir`) for TensorBoard/Perfetto
 - [x] Lambda optimization bounds (`-lmin`/`-lmax`)
 - [x] Individual weights for kinship (`-widv`)
 - [x] Categorical covariates with one-hot encoding (`-cat`)

@@ -623,18 +623,24 @@ class PipelineRunner:
         # kinship/compute.py is never called.
         ensure_jax_configured()
 
-        # Set up optional XLA profiling
+        # Set up optional XLA profiling — degrade gracefully on failure
+        # so profiling issues never prevent GWAS results from being produced
+        trace_ctx = contextlib.nullcontext()
         if self.config.profile_dir is not None:
-            self.config.profile_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(
-                "XLA profiling enabled: traces will be written to "
-                f"{self.config.profile_dir}"
-            )
-            trace_ctx = jax.profiler.trace(
-                str(self.config.profile_dir), create_perfetto_link=False
-            )
-        else:
-            trace_ctx = contextlib.nullcontext()
+            try:
+                self.config.profile_dir.mkdir(parents=True, exist_ok=True)
+                trace_ctx = jax.profiler.trace(
+                    str(self.config.profile_dir), create_perfetto_link=False
+                )
+                logger.info(
+                    "XLA profiling enabled: traces will be written to "
+                    f"{self.config.profile_dir}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Could not enable XLA profiling: {type(e).__name__}: {e}. "
+                    "Continuing without profiling."
+                )
 
         with trace_ctx:
             return self._run_inner(t_start)

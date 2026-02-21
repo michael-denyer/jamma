@@ -377,12 +377,6 @@ def run_lmm_association_streaming(
             n_samples, n_filtered, n_grid, n_cvt, n_devices
         )
 
-        # Use sharding whenever multiple devices are available. Chunks that aren't
-        # evenly divisible by n_devices get zero-padded before device_put (the
-        # padded SNP results are discarded via actual_len slicing).
-        effective_snp_spec = snp_spec
-        effective_rep_spec = rep_spec
-
         logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
             lmm_mode,
             eigenvalues_np,
@@ -393,14 +387,16 @@ def run_lmm_association_streaming(
             show_progress,
             l_min=l_min,
             l_max=l_max,
-            rep_spec=effective_rep_spec,
+            rep_spec=rep_spec,
         )
 
-        # Device-resident shared arrays - placed on device ONCE before chunk loop
-        if effective_rep_spec is not None:
-            eigenvalues = jax.device_put(eigenvalues_np, effective_rep_spec)
-            UtW_jax = jax.device_put(UtW, effective_rep_spec)
-            Uty_jax = jax.device_put(Uty, effective_rep_spec)
+        # Device-resident shared arrays - placed on device ONCE before chunk loop.
+        # Chunks not evenly divisible by n_devices get zero-padded before
+        # device_put; padded SNP results are discarded via actual_len slicing.
+        if rep_spec is not None:
+            eigenvalues = jax.device_put(eigenvalues_np, rep_spec)
+            UtW_jax = jax.device_put(UtW, rep_spec)
+            Uty_jax = jax.device_put(Uty, rep_spec)
         else:
             eigenvalues = jax.device_put(eigenvalues_np, device)
             UtW_jax = jax.device_put(UtW, device)
@@ -456,7 +452,7 @@ def run_lmm_association_streaming(
                     UtG_chunk = np.ascontiguousarray(U.T @ geno_jax_chunk)
 
             # Pad to device-count multiple for even NamedSharding distribution
-            if effective_snp_spec is not None and UtG_chunk.shape[1] % n_devices != 0:
+            if snp_spec is not None and UtG_chunk.shape[1] % n_devices != 0:
                 dev_pad = n_devices - (UtG_chunk.shape[1] % n_devices)
                 UtG_chunk = np.pad(UtG_chunk, ((0, 0), (0, dev_pad)), mode="constant")
 
@@ -499,8 +495,8 @@ def run_lmm_association_streaming(
             )
             t_rot_end = time.perf_counter()
             t_rotation_total += t_rot_end - t_rot_start
-            if effective_snp_spec is not None:
-                UtG_jax = jax.device_put(UtG_np, effective_snp_spec)
+            if snp_spec is not None:
+                UtG_jax = jax.device_put(UtG_np, snp_spec)
             else:
                 UtG_jax = jax.device_put(UtG_np, device)
             del UtG_np
@@ -517,8 +513,8 @@ def run_lmm_association_streaming(
                     )
                     t_rot_end = time.perf_counter()
                     t_rotation_total += t_rot_end - t_rot_start
-                    if effective_snp_spec is not None:
-                        UtG_jax = jax.device_put(UtG_np, effective_snp_spec)
+                    if snp_spec is not None:
+                        UtG_jax = jax.device_put(UtG_np, snp_spec)
                     else:
                         UtG_jax = jax.device_put(UtG_np, device)
                     del UtG_np
@@ -628,7 +624,7 @@ def run_lmm_association_streaming(
             logger.info("Timing breakdown:")
             logger.info(f"  I/O read (pass 1):   {t_io:.2f}s")
             logger.info(f"  SNP statistics:      {t_snp:.2f}s")
-            logger.info(f"  Eigendecomp+setup:   {t_eigen:.2f}s")
+            logger.info(f"  Setup (eigen+null):  {t_eigen:.2f}s")
             logger.info(f"  UT@G rotation:       {t_rotation_total:.2f}s")
             logger.info(f"  JAX compute:         {t_jax_compute_total:.2f}s")
             logger.info(f"  Result write:        {t_result_write_total:.2f}s")

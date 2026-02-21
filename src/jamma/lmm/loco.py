@@ -443,7 +443,12 @@ def _run_lmm_for_chromosome(
     UtW_jax = jax.device_put(UtW, device)
     Uty_jax = jax.device_put(Uty, device)
 
-    jax_chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid, n_cvt)
+    # LOCO intentionally uses single-device mode — sharding the per-chromosome
+    # eigendecomp across multiple virtual CPU devices adds complexity without
+    # benefit since eigendecomp must complete before association begins.
+    jax_chunk_size = _compute_chunk_size(
+        n_samples, n_filtered, n_grid, n_cvt, n_devices=1
+    )
 
     def _prepare_jax_chunk(
         start: int, geno: np.ndarray, total: int

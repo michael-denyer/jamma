@@ -5,18 +5,23 @@ Tests for:
 - get_blas_thread_count() JAX-device-aware thread reduction
 - _compute_chunk_size() device-count alignment
 - auto_tune_chunk_size() device-count alignment pass-through
+- Zero-padding round-trip correctness for multi-device distribution
 """
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import jax
+import jax.numpy as jnp
+import numpy as np
 import pytest
 
-from jamma.core.jax_config import get_jax_info
+from jamma.core.jax_config import _configure_cpu_devices, get_jax_info
 from jamma.core.threading import get_blas_thread_count
 from jamma.lmm.chunk import _compute_chunk_size, auto_tune_chunk_size
+from jamma.lmm.likelihood_jax import batch_compute_uab
+from jamma.lmm.prepare import _setup_cpu_sharding
 
 
 @pytest.mark.tier0
@@ -181,3 +186,220 @@ class TestAutoTuneChunkSizeDeviceAlignment:
             n_devices=4,
         )
         assert result >= 1000
+
+    def test_min_chunk_result_is_device_aligned(self):
+        """When min_chunk forces the result up, it must still be device-aligned.
+
+        Device alignment takes precedence: if min_chunk=1001 and n_devices=4,
+        the result is rounded down to 1000 (nearest multiple of 4).
+        """
+        result = auto_tune_chunk_size(
+            n_samples=1000,
+            n_filtered=50000,
+            mem_budget_gb=0.001,
+            min_chunk=1001,  # not a multiple of 4
+            n_devices=4,
+        )
+        assert result % 4 == 0, f"Expected multiple of 4, got {result}"
+        assert result >= 1000  # rounded down from min_chunk=1001
+
+
+@pytest.mark.tier0
+class TestConfigureCpuDevices:
+    """Tests for _configure_cpu_devices() priority chain and validation."""
+
+    def test_invalid_env_var_raises_value_error(self, monkeypatch):
+        """Non-integer JAMMA_JAX_DEVICES must raise ValueError."""
+        monkeypatch.setenv("JAMMA_JAX_DEVICES", "four")
+        with pytest.raises(ValueError, match="not a valid integer"):
+            _configure_cpu_devices(None)
+
+    def test_negative_env_var_raises_value_error(self, monkeypatch):
+        """Negative JAMMA_JAX_DEVICES must raise ValueError."""
+        monkeypatch.setenv("JAMMA_JAX_DEVICES", "-1")
+        with pytest.raises(ValueError, match="must be >= 1"):
+            _configure_cpu_devices(None)
+
+    def test_zero_env_var_raises_value_error(self, monkeypatch):
+        """JAMMA_JAX_DEVICES=0 must raise ValueError."""
+        monkeypatch.setenv("JAMMA_JAX_DEVICES", "0")
+        with pytest.raises(ValueError, match="must be >= 1"):
+            _configure_cpu_devices(None)
+
+    def test_env_var_strips_whitespace(self, monkeypatch):
+        """Trailing whitespace in JAMMA_JAX_DEVICES must be handled."""
+        monkeypatch.setenv("JAMMA_JAX_DEVICES", " 1 ")
+        # Should not raise — int(" 1 ".strip()) = 1
+        _configure_cpu_devices(None)
+
+    def test_env_var_1_does_not_call_config_update(self, monkeypatch):
+        """JAMMA_JAX_DEVICES=1 must not call jax.config.update."""
+        monkeypatch.setenv("JAMMA_JAX_DEVICES", "1")
+        with patch.object(jax.config, "update") as mock_update:
+            _configure_cpu_devices(None)
+        # n=1 should NOT call jax.config.update (leaves JAX default)
+        for call in mock_update.call_args_list:
+            assert call[0][0] != "jax_num_cpu_devices"
+
+    def test_n_cpu_devices_argument_clamped_to_1(self):
+        """n_cpu_devices=0 must be clamped to 1 without calling config.update."""
+        with patch.object(jax.config, "update") as mock_update:
+            _configure_cpu_devices(n_cpu_devices=0)
+        for call in mock_update.call_args_list:
+            assert call[0][0] != "jax_num_cpu_devices"
+
+    def test_env_var_overrides_argument(self, monkeypatch):
+        """JAMMA_JAX_DEVICES env var must take priority over n_cpu_devices arg."""
+        monkeypatch.setenv("JAMMA_JAX_DEVICES", "1")
+        # Even with n_cpu_devices=8, the env var should win
+        with patch.object(jax.config, "update") as mock_update:
+            _configure_cpu_devices(n_cpu_devices=8)
+        # n=1 from env var → should NOT set jax_num_cpu_devices
+        for call in mock_update.call_args_list:
+            assert call[0][0] != "jax_num_cpu_devices"
+
+
+@pytest.mark.tier0
+class TestSetupCpuSharding:
+    """Tests for _setup_cpu_sharding()."""
+
+    def test_single_device_returns_none_none(self):
+        """Single CPU device must return (None, None)."""
+        with patch.object(jax, "devices", return_value=[MagicMock()]):
+            snp_spec, rep_spec = _setup_cpu_sharding()
+        assert snp_spec is None
+        assert rep_spec is None
+
+    def test_returns_none_none_on_actual_single_device(self):
+        """On actual test machine with 1 device, returns (None, None)."""
+        cpu_devices = jax.devices("cpu")
+        if len(cpu_devices) > 1:
+            pytest.skip("Test requires single CPU device")
+        snp_spec, rep_spec = _setup_cpu_sharding()
+        assert snp_spec is None
+        assert rep_spec is None
+
+    def test_multi_device_returns_sharding_specs(self):
+        """Multiple CPU devices must return valid NamedSharding specs."""
+        cpu_devices = jax.devices("cpu")
+        if len(cpu_devices) <= 1:
+            pytest.skip("Test requires multiple CPU devices")
+        snp_spec, rep_spec = _setup_cpu_sharding()
+        assert snp_spec is not None
+        assert rep_spec is not None
+
+    def test_sharding_failure_falls_back_to_none(self):
+        """If Mesh construction fails, must return (None, None) with warning."""
+
+        mock_devices = [MagicMock(), MagicMock()]
+        with (
+            patch.object(jax, "devices", return_value=mock_devices),
+            patch("jamma.lmm.prepare.Mesh", side_effect=RuntimeError("test error")),
+        ):
+            snp_spec, rep_spec = _setup_cpu_sharding()
+        assert snp_spec is None
+        assert rep_spec is None
+
+
+@pytest.mark.tier0
+class TestMultiDevicePaddingRoundTrip:
+    """Verify zero-padding for device alignment preserves computation correctness.
+
+    When UtG columns aren't evenly divisible by n_devices, the runner pads
+    with zero columns before device_put and strips padding from results via
+    actual_len slicing. These tests verify the padding is mathematically
+    transparent: padded results[:actual_len] == unpadded results exactly.
+    """
+
+    @pytest.fixture
+    def synthetic_lmm_inputs(self):
+        """Create small synthetic LMM inputs for padding tests."""
+        rng = np.random.default_rng(42)
+        n_samples = 50
+        n_cvt = 1
+
+        # Rotated covariates and phenotype (as if U.T @ W, U.T @ y)
+        UtW = jnp.array(rng.standard_normal((n_samples, n_cvt)), dtype=jnp.float64)
+        Uty = jnp.array(rng.standard_normal(n_samples), dtype=jnp.float64)
+
+        return n_samples, n_cvt, UtW, Uty
+
+    def test_padded_uab_matches_unpadded(self, synthetic_lmm_inputs):
+        """batch_compute_uab on zero-padded UtG must match unpadded for real columns."""
+        n_samples, n_cvt, UtW, Uty = synthetic_lmm_inputs
+        rng = np.random.default_rng(123)
+        n_snps = 7  # deliberately not divisible by 2, 4, or 8
+        n_devices = 4
+
+        UtG = jnp.array(rng.standard_normal((n_samples, n_snps)), dtype=jnp.float64)
+
+        # Unpadded reference
+        Uab_ref = batch_compute_uab(n_cvt, UtW, Uty, UtG)
+        Uab_ref_np = np.asarray(Uab_ref)
+
+        # Pad to n_devices multiple (same logic as runner_jax._prepare_chunk)
+        dev_pad = n_devices - (n_snps % n_devices)
+        UtG_padded = jnp.pad(UtG, ((0, 0), (0, dev_pad)), mode="constant")
+        assert UtG_padded.shape[1] % n_devices == 0
+
+        # Padded computation
+        Uab_padded = batch_compute_uab(n_cvt, UtW, Uty, UtG_padded)
+        Uab_padded_np = np.asarray(Uab_padded)
+
+        # Slice to actual_len — must be bitwise identical (zero-padding
+        # cannot affect independent per-column computations)
+        np.testing.assert_array_equal(
+            Uab_padded_np[:n_snps],
+            Uab_ref_np,
+            err_msg="Padded Uab[:actual_len] differs from unpadded reference",
+        )
+
+    def test_padding_columns_produce_deterministic_zeros(self, synthetic_lmm_inputs):
+        """Zero-padded columns must produce deterministic Uab (no NaN/Inf)."""
+        n_samples, n_cvt, UtW, Uty = synthetic_lmm_inputs
+        n_devices = 4
+        n_snps_padded = n_devices * 3  # 12 columns, all zero
+
+        UtG_zeros = jnp.zeros((n_samples, n_snps_padded), dtype=jnp.float64)
+        Uab_zeros = batch_compute_uab(n_cvt, UtW, Uty, UtG_zeros)
+        Uab_np = np.asarray(Uab_zeros)
+
+        assert np.all(np.isfinite(Uab_np)), "Zero-column Uab contains NaN or Inf"
+
+    @pytest.mark.parametrize(
+        "n_snps,n_devices",
+        [
+            (1, 2),  # 1 real + 1 pad
+            (3, 4),  # 3 real + 1 pad
+            (5, 4),  # 5 real + 3 pad
+            (7, 8),  # 7 real + 1 pad
+            (13, 4),  # 13 real + 3 pad
+            (16, 4),  # 16 real + 0 pad (exact multiple, no padding)
+        ],
+    )
+    def test_various_padding_sizes(self, synthetic_lmm_inputs, n_snps, n_devices):
+        """Padding correctness across various SNP count / device count combos."""
+        n_samples, n_cvt, UtW, Uty = synthetic_lmm_inputs
+        rng = np.random.default_rng(n_snps * 100 + n_devices)
+
+        UtG = jnp.array(rng.standard_normal((n_samples, n_snps)), dtype=jnp.float64)
+
+        # Reference: no padding
+        Uab_ref = np.asarray(batch_compute_uab(n_cvt, UtW, Uty, UtG))
+
+        # Padded version
+        remainder = n_snps % n_devices
+        if remainder != 0:
+            dev_pad = n_devices - remainder
+            UtG_padded = jnp.pad(UtG, ((0, 0), (0, dev_pad)), mode="constant")
+        else:
+            UtG_padded = UtG
+
+        assert UtG_padded.shape[1] % n_devices == 0
+        Uab_padded = np.asarray(batch_compute_uab(n_cvt, UtW, Uty, UtG_padded))
+
+        np.testing.assert_array_equal(
+            Uab_padded[:n_snps],
+            Uab_ref,
+            err_msg=f"Padding mismatch: n_snps={n_snps}, n_devices={n_devices}",
+        )

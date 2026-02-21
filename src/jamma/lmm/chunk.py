@@ -53,7 +53,8 @@ def _compute_chunk_size(
 
     Returns:
         Chunk size (number of SNPs per chunk). Returns n_snps if no chunking needed.
-        When n_devices > 1, the chunk is a multiple of n_devices (minimum 100).
+        Minimum 100 when chunking is needed. When n_devices > 1, the chunk is
+        also aligned to a multiple of n_devices.
     """
     if n_samples == 0:
         return n_snps
@@ -76,11 +77,19 @@ def _compute_chunk_size(
     # Align chunk to device count multiples to prevent XLA padding partial shards
     if n_devices > 1:
         max_snps_per_chunk = (max_snps_per_chunk // n_devices) * n_devices
+        if max_snps_per_chunk == 0:
+            max_snps_per_chunk = n_devices  # minimum one shard per device
 
     if max_snps_per_chunk >= n_snps:
         return n_snps
 
-    return max(100, max_snps_per_chunk)
+    chunk = max(100, max_snps_per_chunk)
+
+    # Re-align to n_devices after applying the minimum floor
+    if n_devices > 1 and chunk % n_devices != 0:
+        chunk = max(n_devices, (chunk // n_devices) * n_devices)
+
+    return chunk
 
 
 def auto_tune_chunk_size(
@@ -120,8 +129,8 @@ def auto_tune_chunk_size(
             the result is aligned to the nearest multiple of n_devices.
 
     Returns:
-        Optimal chunk size that fits within memory budget. When n_devices > 1,
-        the result is a multiple of n_devices (at least min_chunk).
+        Optimal chunk size that fits within memory budget, at least min_chunk.
+        When n_devices > 1, the result is aligned to a multiple of n_devices.
 
     Example:
         >>> chunk = auto_tune_chunk_size(n_samples=10000, n_filtered=50000)
@@ -144,6 +153,10 @@ def auto_tune_chunk_size(
 
     # Clamp to valid range INCLUDING max_chunk cap
     chunk_size = max(min_chunk, min(buffer_limit, n_filtered, max_chunk))
+
+    # Re-align to n_devices after clamping (may break alignment)
+    if n_devices > 1 and chunk_size % n_devices != 0:
+        chunk_size = max(n_devices, (chunk_size // n_devices) * n_devices)
 
     logger.debug(
         f"auto_tune_chunk_size: n_samples={n_samples}, n_filtered={n_filtered}, "

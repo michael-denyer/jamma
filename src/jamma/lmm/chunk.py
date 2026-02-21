@@ -22,7 +22,11 @@ _MAX_BUFFER_ELEMENTS = int(_INT32_MAX * 0.80)  # 80% of INT32_MAX
 
 
 def _compute_chunk_size(
-    n_samples: int, n_snps: int, n_grid: int = 50, n_cvt: int = 1
+    n_samples: int,
+    n_snps: int,
+    n_grid: int = 50,
+    n_cvt: int = 1,
+    n_devices: int = 1,
 ) -> int:
     """Compute optimal chunk size to avoid int32 buffer overflow.
 
@@ -36,14 +40,20 @@ def _compute_chunk_size(
 
     The most restrictive constraint is typically Uab for large n_samples.
 
+    When n_devices > 1, the chunk size is rounded DOWN to the nearest multiple
+    of n_devices to prevent XLA from padding partial shards.
+
     Args:
         n_samples: Number of samples.
         n_snps: Total number of SNPs.
         n_grid: Grid points for lambda optimization (default 50).
         n_cvt: Number of covariates (default 1).
+        n_devices: Number of JAX virtual CPU devices (default 1). When > 1,
+            the result is aligned to the nearest multiple of n_devices.
 
     Returns:
         Chunk size (number of SNPs per chunk). Returns n_snps if no chunking needed.
+        When n_devices > 1, the chunk is a multiple of n_devices (minimum 100).
     """
     if n_samples == 0:
         return n_snps
@@ -63,6 +73,10 @@ def _compute_chunk_size(
 
     max_snps_per_chunk = _MAX_BUFFER_ELEMENTS // elements_per_snp
 
+    # Align chunk to device count multiples to prevent XLA padding partial shards
+    if n_devices > 1:
+        max_snps_per_chunk = (max_snps_per_chunk // n_devices) * n_devices
+
     if max_snps_per_chunk >= n_snps:
         return n_snps
 
@@ -77,6 +91,7 @@ def auto_tune_chunk_size(
     min_chunk: int = 1000,
     max_chunk: int = MAX_SAFE_CHUNK,
     n_cvt: int = 1,
+    n_devices: int = 1,
 ) -> int:
     """Compute optimal chunk size based on memory budget heuristic.
 
@@ -89,6 +104,9 @@ def auto_tune_chunk_size(
       - Grid evaluations: n_grid elements
       - Total: 8 * (n_samples*n_index + n_samples + n_grid) bytes
 
+    When n_devices > 1, the final chunk size is aligned to a multiple of
+    n_devices to prevent XLA from padding partial shards.
+
     Args:
         n_samples: Number of samples in the dataset.
         n_filtered: Number of SNPs after filtering (upper bound for chunk).
@@ -98,9 +116,12 @@ def auto_tune_chunk_size(
         max_chunk: Maximum chunk size cap (default MAX_SAFE_CHUNK=50000).
             Prevents excessive memory allocation on high-memory systems.
         n_cvt: Number of covariates (default 1). Affects Uab array size.
+        n_devices: Number of JAX virtual CPU devices (default 1). When > 1,
+            the result is aligned to the nearest multiple of n_devices.
 
     Returns:
-        Optimal chunk size that fits within memory budget.
+        Optimal chunk size that fits within memory budget. When n_devices > 1,
+        the result is a multiple of n_devices (at least min_chunk).
 
     Example:
         >>> chunk = auto_tune_chunk_size(n_samples=10000, n_filtered=50000)
@@ -116,15 +137,18 @@ def auto_tune_chunk_size(
     mem_budget_bytes = mem_budget_gb * 0.7 * 1e9
     chunk_from_memory = int(mem_budget_bytes / bytes_per_snp)
 
-    # Apply int32 buffer limit constraint
-    buffer_limit = _compute_chunk_size(n_samples, chunk_from_memory, n_grid, n_cvt)
+    # Apply int32 buffer limit constraint with device alignment
+    buffer_limit = _compute_chunk_size(
+        n_samples, chunk_from_memory, n_grid, n_cvt, n_devices
+    )
 
     # Clamp to valid range INCLUDING max_chunk cap
     chunk_size = max(min_chunk, min(buffer_limit, n_filtered, max_chunk))
 
     logger.debug(
         f"auto_tune_chunk_size: n_samples={n_samples}, n_filtered={n_filtered}, "
-        f"bytes_per_snp={bytes_per_snp}, chunk_size={chunk_size}, max_chunk={max_chunk}"
+        f"bytes_per_snp={bytes_per_snp}, chunk_size={chunk_size}, "
+        f"max_chunk={max_chunk}, n_devices={n_devices}"
     )
 
     return chunk_size

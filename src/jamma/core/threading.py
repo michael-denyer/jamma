@@ -25,7 +25,12 @@ def get_blas_thread_count() -> int:
 
     Priority:
     1. JAMMA_BLAS_THREADS env var (explicit override for benchmarking)
-    2. Physical core count via psutil (avoids hyperthreading oversubscription)
+    2. JAX device-aware reduction: physical_cores // n_jax_devices
+    3. Physical core count via psutil (avoids hyperthreading oversubscription)
+
+    When JAX is configured with multiple virtual CPU devices, MKL threads are
+    reduced proportionally to avoid oversubscription. Each JAX device manages
+    its own XLA thread pool, so MKL should only use the remaining cores.
 
     Returns:
         Positive integer thread count, capped at os.cpu_count().
@@ -46,9 +51,24 @@ def get_blas_thread_count() -> int:
             logger.debug(f"BLAS threads from JAMMA_BLAS_THREADS: {n}")
             return n
 
-    n = psutil.cpu_count(logical=False) or max_threads
-    n = max(1, min(n, max_threads))
-    logger.debug(f"BLAS threads from physical core count: {n}")
+    physical_cores = psutil.cpu_count(logical=False) or max_threads
+
+    # Lazy import of jax to avoid triggering backend initialisation at module level.
+    # By the time get_blas_thread_count() is called, configure_jax() has already
+    # set jax_num_cpu_devices, so jax.devices("cpu") returns the correct count.
+    import jax
+
+    n_jax_devices = len(jax.devices("cpu"))
+    if n_jax_devices > 1:
+        n = max(1, physical_cores // n_jax_devices)
+        logger.debug(
+            f"BLAS threads reduced to {n} "
+            f"({physical_cores} cores / {n_jax_devices} JAX devices)"
+        )
+    else:
+        n = max(1, min(physical_cores, max_threads))
+        logger.debug(f"BLAS threads from physical core count: {n}")
+
     return n
 
 

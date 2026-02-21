@@ -377,13 +377,11 @@ def run_lmm_association_streaming(
             n_samples, n_filtered, n_grid, n_cvt, n_devices
         )
 
-        # Sharding is only active when jax_chunk_size is a multiple of n_devices.
-        # When n_filtered <= max int32 capacity, jax_chunk_size = n_filtered which
-        # may not be divisible by n_devices (e.g. small test datasets). Fall back
-        # to single-device placement in that case to avoid XLA padding errors.
-        use_sharding = snp_spec is not None and jax_chunk_size % n_devices == 0
-        effective_snp_spec = snp_spec if use_sharding else None
-        effective_rep_spec = rep_spec if use_sharding else None
+        # Use sharding whenever multiple devices are available. Chunks that aren't
+        # evenly divisible by n_devices get zero-padded before device_put (the
+        # padded SNP results are discarded via actual_len slicing).
+        effective_snp_spec = snp_spec
+        effective_rep_spec = rep_spec
 
         logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
             lmm_mode,
@@ -456,6 +454,12 @@ def run_lmm_association_streaming(
             with blas_threads():
                 with jax.profiler.TraceAnnotation("dgemm_rotation"):
                     UtG_chunk = np.ascontiguousarray(U.T @ geno_jax_chunk)
+
+            # Pad to device-count multiple for even NamedSharding distribution
+            if effective_snp_spec is not None and UtG_chunk.shape[1] % n_devices != 0:
+                dev_pad = n_devices - (UtG_chunk.shape[1] % n_devices)
+                UtG_chunk = np.pad(UtG_chunk, ((0, 0), (0, dev_pad)), mode="constant")
+
             return UtG_chunk, actual_len, needs_pad
 
         for chunk, file_start, file_end in assoc_iterator:
@@ -503,7 +507,6 @@ def run_lmm_association_streaming(
 
             for i, _jax_start in enumerate(jax_starts):
                 current_actual_len = actual_jax_len
-                current_needs_padding = needs_padding
                 current_UtG = UtG_jax
 
                 # Start async transfer of next JAX chunk while computing current
@@ -565,9 +568,7 @@ def run_lmm_association_streaming(
                 t_jax_end = time.perf_counter()
                 t_jax_compute_total += t_jax_end - t_jax_start
 
-                strip_and_append(
-                    chunk_result, accum, current_actual_len, current_needs_padding
-                )
+                strip_and_append(chunk_result, accum, current_actual_len)
 
             # Concatenate, build results, write/accumulate
             if any(accum.values()):

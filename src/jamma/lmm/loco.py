@@ -504,7 +504,6 @@ def _run_lmm_for_chromosome(
 
                 for i, _jax_start in enumerate(jax_starts):
                     current_actual_len = actual_jax_len
-                    current_needs_padding = needs_padding
                     current_UtG = UtG_jax
 
                     # Async transfer of next chunk
@@ -553,9 +552,7 @@ def _run_lmm_for_chromosome(
                             )
                         raise
 
-                    strip_and_append(
-                        chunk_result, accum, current_actual_len, current_needs_padding
-                    )
+                    strip_and_append(chunk_result, accum, current_actual_len)
 
                 del geno_disk_chunk
 

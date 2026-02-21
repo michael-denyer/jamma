@@ -17,7 +17,7 @@ from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.core.threading import blas_threads
 from jamma.lmm.chunk import _compute_chunk_size
-from jamma.lmm.compute import _FIRST_KEY, _compute_lmm_chunk
+from jamma.lmm.compute import _FIRST_KEY, _compute_lmm_chunk, block_chunk_result
 from jamma.lmm.likelihood_jax import batch_compute_uab
 from jamma.lmm.prepare import (
     _build_covariate_matrix,
@@ -165,6 +165,7 @@ def run_lmm_association_jax(
     filtered_afs = allele_freqs[snp_indices]
     filtered_miss = missing_counts[snp_indices].astype(int)
 
+    t_eigen_start = time.perf_counter()
     eigenvalues_np, U = _eigendecompose_or_reuse(
         kinship,
         eigenvalues,
@@ -192,6 +193,7 @@ def run_lmm_association_jax(
         l_min=l_min,
         l_max=l_max,
     )
+    t_eigen_end = time.perf_counter()
 
     # Determine chunk size to avoid int32 buffer overflow
     n_filtered = len(snp_indices)
@@ -218,6 +220,11 @@ def run_lmm_association_jax(
         key: np.empty(n_filtered, dtype=np.float64) for key in _RESULT_FIELDS[lmm_mode]
     }
 
+    # Timing accumulators for per-chunk phases
+    t_rotation_total = 0.0
+    t_jax_compute_total = 0.0
+    t_result_write_total = 0.0
+
     def _prepare_chunk(start: int) -> tuple[jnp.ndarray, int, bool]:
         """Prepare a chunk for device transfer (CPU work)."""
         end = min(start + chunk_size, n_filtered)
@@ -241,8 +248,11 @@ def run_lmm_association_jax(
     # Double buffering: overlap device transfer with computation
     chunk_starts = list(range(0, n_filtered, chunk_size))
 
-    # Prepare first chunk
+    # Prepare first chunk (includes BLAS rotation U.T @ G)
+    t_rot_start = time.perf_counter()
     UtG_np, actual_len, needs_pad = _prepare_chunk(chunk_starts[0])
+    t_rot_end = time.perf_counter()
+    t_rotation_total += t_rot_end - t_rot_start
     UtG_jax = jax.device_put(UtG_np, device)
     del UtG_np
 
@@ -261,11 +271,16 @@ def run_lmm_association_jax(
 
         # Start async transfer of next chunk while computing current
         if i + 1 < len(chunk_starts):
+            t_rot_start = time.perf_counter()
             next_UtG_np, actual_len, needs_pad = _prepare_chunk(chunk_starts[i + 1])
+            t_rot_end = time.perf_counter()
+            t_rotation_total += t_rot_end - t_rot_start
             # device_put is async - transfer starts immediately, overlaps with compute
             UtG_jax = jax.device_put(next_UtG_np, device)
             del next_UtG_np
 
+        # --- JAX compute timing ---
+        t_jax_start = time.perf_counter()
         try:
             # Batch compute Uab for this chunk (shared across all modes)
             Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
@@ -283,6 +298,9 @@ def run_lmm_association_jax(
                 Hi_eval_null=Hi_eval_null_jax,
                 logl_H0=logl_H0,
             )
+            # Explicit sync before timing result write (np.asarray below also syncs,
+            # but this isolates JAX compute time accurately)
+            block_chunk_result(cr, lmm_mode)
 
         except Exception as e:
             error_msg = str(e)
@@ -307,7 +325,11 @@ def run_lmm_association_jax(
                 )
             raise
 
+        t_jax_end = time.perf_counter()
+        t_jax_compute_total += t_jax_end - t_jax_start
+
         # Write results into pre-allocated arrays by index (no list append)
+        t_write_start = time.perf_counter()
         first_arr = cr[_FIRST_KEY[lmm_mode]]
         slice_len = actual_chunk_len if needs_padding else len(first_arr)
         s = slice(write_offset, write_offset + slice_len)
@@ -316,6 +338,8 @@ def run_lmm_association_jax(
             arrays_out[key][s] = np.asarray(cr[key][:slice_len])
 
         write_offset += slice_len
+        t_write_end = time.perf_counter()
+        t_result_write_total += t_write_end - t_write_start
 
     # Validate all results were written
     if write_offset != n_filtered:
@@ -343,6 +367,18 @@ def run_lmm_association_jax(
     # Log completion
     elapsed = time.perf_counter() - start_time
     if show_progress:
+        t_eigen = t_eigen_end - t_eigen_start
+        accounted = (
+            t_eigen + t_rotation_total + t_jax_compute_total + t_result_write_total
+        )
+        logger.info("Timing breakdown:")
+        logger.info(f"  Eigendecomp+setup:   {t_eigen:.2f}s")
+        logger.info(f"  UT@G rotation:       {t_rotation_total:.2f}s")
+        logger.info(f"  JAX compute:         {t_jax_compute_total:.2f}s")
+        logger.info(f"  Result write:        {t_result_write_total:.2f}s")
+        logger.info("  ----")
+        logger.info(f"  Accounted:           {accounted:.2f}s")
+        logger.info(f"  Total:               {elapsed:.2f}s")
         logger.info(f"LMM Association completed in {elapsed:.2f}s")
 
     return _build_results(

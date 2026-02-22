@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.5] - 2026-02-22
+
+### Added
+
+- Regression tests for worker cap (verifies 32-worker limit on high-core machines)
+- Regression tests for eigendecomp threading (verifies all physical cores used, not divided by JAX devices)
+- Chunk sizing tests at Databricks scale (125k samples, parametrized across 1-48 devices)
+- Fast synthetic LOCO partition tests (no fixture dependency)
+- Eigendecomp memory gate integration tests (verifies MemoryError before LAPACK runs)
+
 ## [2.5.4] - 2026-02-22
 
 ### Fixed

@@ -1,5 +1,61 @@
 # Performance Summary
 
+## v2.5 — 125k Scale Validation
+
+v2.5 validated JAMMA at 125,632 samples on 91,586 real SNPs with full GEMMA equivalence. Key fixes: eigendecomp threading (v2.5.4), matrix writer disk space (v2.5.2), LMM rotation threading (v2.5.6).
+
+### 125k Real Data Benchmark (v2.5.5, Databricks)
+
+Hardware: Azure E96ds_v6 (Intel Xeon Platinum 8573C, 48 physical / 96 logical cores, 672 GB RAM). numpy 2.4.2 with MKL ILP64, JAX 0.9.0, Python 3.12, Databricks Runtime 16.4 LTS.
+
+| Phase | Time | % of Total |
+|-------|------|-----------|
+| SNP statistics | 103s (2 min) | 1% |
+| Kinship compute | 2,011s (34 min) | 16% |
+| Kinship write | 547s (9 min) | 4% |
+| Eigendecomp | 8,465s (2h 21m) | 69% |
+| LMM association | 1,131s (19 min) | 9% |
+| **Total** | **~12,257s (3h 24m)** | **100%** |
+
+LMM timing breakdown (from per-phase accumulators):
+
+| LMM Sub-phase | Time | Notes |
+|---------------|------|-------|
+| U.T @ G rotation | 797s | 48 threads, 41 chunks × ~19s/chunk |
+| JAX compute | 329s | Grid REML + golden section per SNP |
+| Result write | 5s | Pre-allocated numpy arrays |
+
+### 125k Validation: JAMMA vs GEMMA
+
+| Metric | Result |
+|--------|--------|
+| **Kinship Spearman rho** | 1.00000000 |
+| Kinship max abs diff | 5.00e-11 |
+| Kinship mean abs diff | 1.24e-12 |
+| Kinship Frobenius relative | 1.45e-10 |
+| **Association Spearman rho (-log10 p)** | 1.000000 |
+| Significance agree (p < 0.05) | 91,586/91,586 (100%) |
+| Significance agree (p < 5e-8) | 91,586/91,586 (100%) |
+| Effect direction agreement | 100.0% |
+| Max relative p-value diff | 9.66e-04 |
+
+### v2.3 vs v2.5: Threading Fix Impact
+
+Like-for-like comparison on the same 125,632 samples × 91,586 SNPs dataset, same E96ds_v6 machine. v2.3 did not have the psutil threading fix, so BLAS used ~32 of the 48 available cores. v2.5 uses all 48 physical cores for eigendecomp and rotation.
+
+| Phase | v2.3 (~32 threads) | v2.5 (48 threads) | Notes |
+| ----- | ------------------- | ------------------ | ----- |
+| Kinship | 1,440s (24 min) | 2,011s (34 min) | JAX-based, not BLAS-threaded |
+| Eigendecomp | 3,114s (52 min) | 8,465s (2h 21m) | BW-bound: more threads = slower |
+| LMM | 1,211s (20 min) | 1,131s (19 min) | 7% faster with more threads |
+| **Total** | **5,764s (96 min)** | **11,607s (3h 14m)** | |
+
+Eigendecomp got 2.7× slower with 48 threads despite doing the same work. At 125k, the 126 GB eigenvector matrices exceed L3 cache, making eigendecomp memory-bandwidth-bound. More cores competing for memory bus bandwidth actively hurts. LMM rotation benefits slightly from more threads because the per-chunk matrices are much smaller.
+
+Kinship is slower in v2.5 due to JAX sharding configuration differences, not BLAS threading (kinship uses JAX-batched dgemm, not numpy BLAS).
+
+---
+
 ## v2.0 — Production GWAS Features
 
 v2.0 added LOCO kinship, eigendecomposition reuse, SNP filtering, HWE QC, and phenotype selection. No performance regressions from v1.4.
@@ -38,9 +94,9 @@ v1.4 targeted memory optimization and correctness at production scale (85k+ real
 | Top-level `gwas()` API | Single-call Python entry point for full GWAS pipeline |
 | GEMMA comparison notebook | Compare-only mode with OOM-safe kinship comparison at 85k scale |
 
-### 90k Synthetic Baseline (Phase 19, Databricks)
+### 125k Baseline (v2.3, Databricks)
 
-Measured on 32-core Databricks VM with MKL ILP64, 90k synthetic samples x 90k SNPs:
+Same 125,632 samples × 91,586 SNPs dataset as the v2.5 benchmark above, same E96ds_v6 machine. v2.3 did not have the psutil threading fix, so BLAS used ~32 of the 48 available cores.
 
 | Phase | Time | % of Total |
 |-------|------|-----------|
@@ -71,7 +127,7 @@ All three pipeline phases are dominated by BLAS/LAPACK calls. No Python-level op
 
 | Phase | Bottleneck | Notes |
 |-------|-----------|-------|
-| Eigendecomp (54%) | LAPACK dsyevd — O(n³) | Single call, irreducible. 90k at 32 cores ≈ 3,100s, matching theoretical floor (~9.7e14 FLOPs / ~310 GFLOPS effective) |
+| Eigendecomp (54%) | LAPACK dsyevd — O(n³) | Single call, irreducible. 125k at ~32 cores ≈ 3,100s (v2.3, pre-threading fix) |
 | Kinship (25%) | JAX-batched dgemm | Already JIT-compiled matrix multiply |
 | LMM Association (21%) | JAX JIT + golden section per SNP | Rotation is a single dgemm per chunk |
 
@@ -82,12 +138,12 @@ All three pipeline phases are dominated by BLAS/LAPACK calls. No Python-level op
 
 ### Configuration Guide
 
-| Scale | Samples | RAM Required | MKL Build |
-|-------|---------|-------------|-----------|
-| Small | ≤10k | 8 GB | Any |
-| Medium | 10–50k | 64 GB | LP64 or ILP64 |
-| Large | 50–100k | 256 GB | ILP64 required |
-| XLarge | 100–120k | 512 GB+ | ILP64 required |
+| Scale | Samples | RAM Required | MKL Build | Reference |
+|-------|---------|-------------|-----------|-----------|
+| Small | ≤10k | 8 GB | Any | |
+| Medium | 10–50k | 64 GB | LP64 or ILP64 | |
+| Large | 50–100k | 256 GB | ILP64 required | 85k validated (v1.4) |
+| XLarge | 100–125k | 672 GB+ | ILP64 required | 125k validated (v2.5) |
 
 ### CPU Device Sharding
 
@@ -111,8 +167,8 @@ production workloads.
 
 #### Benchmark: JAX optimisation time
 
-Hardware: Azure E64ds_v6 (Intel Xeon Platinum 8573C, 32 physical /
-64 logical cores, 541 GB RAM). numpy 2.4.2 with MKL ILP64, JAX 0.9.0,
+Hardware: Azure E96ds_v6 (Intel Xeon Platinum 8573C, 48 physical /
+96 logical cores, 672 GB RAM). numpy 2.4.2 with MKL ILP64, JAX 0.9.0,
 Python 3.12, Databricks Runtime 16.4 LTS with Docker (jamma-dbr image).
 
 | Devices | Mouse (1.4K×11K) | 5K×50K     | 10K×100K    | 20K×100K    |

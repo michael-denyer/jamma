@@ -130,7 +130,7 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 
 ## Performance
 
-Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M3 Pro:
+Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2:
 
 | Operation          | GEMMA  | JAMMA | Speedup   |
 |--------------------|--------|-------|-----------|

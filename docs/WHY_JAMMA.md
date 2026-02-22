@@ -85,13 +85,13 @@ results = run_lmm_association_streaming(
 
 ## 3. Speed: JAX Acceleration
 
-### Benchmark (mouse_hs1940: 1,940 samples × 12,226 SNPs, Apple M3 Pro)
+### Benchmark (mouse_hs1940: 1,940 samples × 12,226 SNPs, Apple M2)
 
-| Operation          | GEMMA | JAMMA | Speedup   |
-|--------------------|-------|-------|-----------|
-| Kinship (`-gk 1`)  | 24.7s | 1.1s  | **22.5x** |
-| LMM (`-lmm 1`)     | 27.8s | 5.3s  | **5.2x**  |
-| **Total**          | 52.5s | 6.4s  | **8.2x**  |
+| Operation          | GEMMA  | JAMMA | Speedup   |
+|--------------------|--------|-------|-----------|
+| Kinship (`-gk 1`)  | 26.5s  | 2.4s  | **11.0x** |
+| LMM (`-lmm 1`)     | 27.6s  | 4.5s  | **6.1x**  |
+| **Total**          | 54.1s  | 6.9s  | **7.8x**  |
 
 ### Why Faster?
 

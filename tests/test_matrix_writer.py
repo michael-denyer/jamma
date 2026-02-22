@@ -5,7 +5,6 @@ np.savetxt for all matrix sizes, including the parallel path (>=500 rows).
 """
 
 import inspect
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -188,37 +187,34 @@ class TestFailureHandling:
             " -- Docker /dev/shm is capped at 64 MB"
         )
 
-    @pytest.fixture()
-    def isolated_tmpdir(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> Path:
-        """Create an isolated temp dir to detect leftover .dat files."""
-        isolated = tmp_path / "tmpdir"
-        isolated.mkdir()
-        monkeypatch.setattr(tempfile, "tempdir", str(isolated))
-        return isolated
+    def test_temp_files_created_in_output_dir(self, tmp_path: Path) -> None:
+        """Temp dir is created adjacent to output, not in system /tmp."""
+        rng = np.random.default_rng(42)
+        matrix = rng.standard_normal((600, 10))
+        output_dir = tmp_path / "my_output"
+        output_dir.mkdir()
+        out_path = output_dir / "matrix.txt"
 
-    def test_temp_file_cleaned_after_success(
-        self,
-        tmp_path: Path,
-        isolated_tmpdir: Path,
-    ) -> None:
+        # During write, temp dir should appear as .jamma_mwrite_* in output_dir
+        write_matrix_parallel(matrix, out_path, n_workers=2)
+
+        # After completion, temp dir should be cleaned up
+        remaining = list(output_dir.glob(".jamma_mwrite_*"))
+        assert not remaining, f"Temp dirs not cleaned up: {remaining}"
+        # Output file should exist
+        assert out_path.exists()
+
+    def test_temp_file_cleaned_after_success(self, tmp_path: Path) -> None:
         """Temp dir and all chunk files are cleaned up after success."""
         rng = np.random.default_rng(42)
         matrix = rng.standard_normal((600, 10))
         out_path = tmp_path / "output.txt"
         write_matrix_parallel(matrix, out_path, n_workers=2)
 
-        remaining = list(isolated_tmpdir.glob("jamma_mwrite_*"))
+        remaining = list(tmp_path.glob(".jamma_mwrite_*"))
         assert not remaining, f"Temp dirs not cleaned up: {remaining}"
 
-    def test_temp_file_cleaned_after_failure(
-        self,
-        tmp_path: Path,
-        isolated_tmpdir: Path,
-    ) -> None:
+    def test_temp_file_cleaned_after_failure(self, tmp_path: Path) -> None:
         """Temp dir and all chunk files are cleaned up on failure."""
         rng = np.random.default_rng(42)
         matrix = rng.standard_normal((600, 10))
@@ -227,5 +223,5 @@ class TestFailureHandling:
         with pytest.raises(RuntimeError, match="_format_rows_to_file failed"):
             write_matrix_parallel(matrix, out_path, fmt="%s%s", n_workers=2)
 
-        remaining = list(isolated_tmpdir.glob("jamma_mwrite_*"))
+        remaining = list(tmp_path.glob(".jamma_mwrite_*"))
         assert not remaining, f"Temp dirs not cleaned up after failure: {remaining}"

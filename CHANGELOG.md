@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.2] - 2026-02-22
+
+### Fixed
+
+- Matrix writer no longer fills `/tmp` when writing large kinship matrices — temp files (memmap + chunks) are now created on the same filesystem as the output file
+- Chunks are deleted eagerly during concatenation, reducing peak disk from 2x output size to ~1x
+- Memmap is freed before concatenation starts, reclaiming matrix-sized temp space earlier
+- Pre-flight disk space warning when free space looks insufficient for the write
+
 ## [2.5.1] - 2026-02-22
 
 ### Added

@@ -11,11 +11,16 @@ Workers write formatted text to per-chunk temp files, returning only the file
 path through the IPC pipe. This keeps memory usage bounded regardless of worker
 count.
 
+Temp files are created adjacent to the output file (same filesystem) to avoid
+filling /tmp on systems where it's a small tmpfs (e.g. Databricks). Chunks are
+deleted eagerly during concatenation to minimize peak disk usage.
+
 Output is byte-identical to np.savetxt for all matrix sizes.
 """
 
 import multiprocessing as mp
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -49,6 +54,31 @@ def _format_rows_to_file(args: tuple) -> None:
         ) from e
 
 
+def _estimate_text_size(n_rows: int, n_cols: int) -> int:
+    """Estimate text file size for a matrix written with %.10g format.
+
+    Each float averages ~12 chars, plus one delimiter per column and a newline.
+    """
+    bytes_per_row = n_cols * 12 + n_cols  # values + delimiters/newline
+    return n_rows * bytes_per_row
+
+
+def _create_temp_dir(output_path: Path) -> str:
+    """Create temp dir on the same filesystem as the output file.
+
+    Tries the output's parent directory first, falls back to the system
+    default (TMPDIR / /tmp) if that fails.
+    """
+    output_dir = output_path.parent
+    try:
+        return tempfile.mkdtemp(prefix=".jamma_mwrite_", dir=output_dir)
+    except OSError:
+        logger.warning(
+            f"Cannot create temp dir in {output_dir}, falling back to system tmpdir"
+        )
+        return tempfile.mkdtemp(prefix="jamma_mwrite_")
+
+
 def write_matrix_parallel(
     matrix: np.ndarray,
     path: Path,
@@ -62,6 +92,10 @@ def write_matrix_parallel(
     For matrices with fewer than min_rows_for_parallel rows, falls back to
     np.savetxt. For larger matrices, distributes row formatting across
     multiple processes for significant speedup.
+
+    Temp files (memmap + chunks) are placed on the same filesystem as the
+    output to avoid filling /tmp. Chunks are deleted eagerly during
+    concatenation to minimize peak disk usage.
 
     Output is byte-identical to np.savetxt(path, matrix, fmt=fmt, delimiter=delimiter).
 
@@ -95,11 +129,30 @@ def write_matrix_parallel(
     # Ensure contiguous float64 for memmap compatibility
     matrix = np.ascontiguousarray(matrix, dtype=np.float64)
 
+    # Pre-flight disk space check (warn only — unreliable on network FS)
+    memmap_bytes = matrix.nbytes
+    text_bytes = _estimate_text_size(n_rows, n_cols)
+    # Peak: memmap + one chunk + growing output file
     rows_per_chunk = max(100, n_rows // n_workers)
+    chunk_text_bytes = _estimate_text_size(rows_per_chunk, n_cols)
+    peak_bytes = memmap_bytes + chunk_text_bytes + text_bytes
+    try:
+        usage = shutil.disk_usage(path.parent)
+        if usage.free < peak_bytes:
+            logger.warning(
+                f"Low disk space: {usage.free / (1024**3):.1f} GB free, "
+                f"estimated peak ~{peak_bytes / (1024**3):.0f} GB needed "
+                f"(memmap {memmap_bytes / (1024**3):.0f} GB + "
+                f"output {text_bytes / (1024**3):.0f} GB). "
+                f"Write may fail with ENOSPC."
+            )
+    except OSError:
+        pass  # disk_usage can fail on some filesystems
+
     ctx = mp.get_context("spawn")
 
-    # Create temp dir for memmap + per-chunk output files
-    tmp_dir = tempfile.mkdtemp(prefix="jamma_mwrite_")
+    # Create temp dir on same filesystem as output (avoids filling /tmp)
+    tmp_dir = _create_temp_dir(path)
     memmap_path = os.path.join(tmp_dir, "matrix.dat")
     chunk_paths: list[str] = []
 
@@ -110,7 +163,7 @@ def write_matrix_parallel(
             raise OSError(
                 f"Failed to write {matrix.nbytes / (1024**3):.1f} GB temp file "
                 f"to {memmap_path} for parallel matrix IPC. "
-                f"Set TMPDIR to a filesystem with sufficient space."
+                f"Ensure the output directory has sufficient disk space."
             ) from e
 
         # Build chunk args — each worker writes to its own temp file
@@ -145,7 +198,14 @@ def write_matrix_parallel(
                 pool.join()
                 raise
 
-        # Concatenate chunk files in order
+        # Free memmap before concatenation — at 125k samples this is 126 GB
+        try:
+            os.unlink(memmap_path)
+        except OSError:
+            pass
+        memmap_path = None  # prevent double-delete in finally
+
+        # Concatenate chunk files in order, deleting each after use
         try:
             with open(path, "wb") as f_out:
                 for chunk_path in chunk_paths:
@@ -155,6 +215,11 @@ def write_matrix_parallel(
                             if not buf:
                                 break
                             f_out.write(buf)
+                    # Eagerly delete — frees disk before writing the next chunk
+                    try:
+                        os.unlink(chunk_path)
+                    except OSError:
+                        pass
         except BaseException as e:
             logger.opt(exception=e).error(
                 f"Failed during chunk concatenation to {path}: {e}"
@@ -165,15 +230,18 @@ def write_matrix_parallel(
                 logger.warning(f"Failed to delete partial output {path}: {cleanup_err}")
             raise
     finally:
-        # Clean up all temp files
-        for p in [memmap_path, *chunk_paths]:
+        # Clean up any remaining temp files (error paths)
+        if memmap_path is not None:
+            try:
+                os.unlink(memmap_path)
+            except (FileNotFoundError, OSError):
+                pass
+        for p in chunk_paths:
             try:
                 os.unlink(p)
-            except FileNotFoundError:
+            except (FileNotFoundError, OSError):
                 pass
-            except OSError as e:
-                logger.warning(f"Failed to remove temp file {p}: {e}")
         try:
             os.rmdir(tmp_dir)
-        except OSError as e:
-            logger.warning(f"Failed to remove temp dir {tmp_dir}: {e}")
+        except OSError:
+            pass

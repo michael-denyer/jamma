@@ -96,7 +96,10 @@ def eigendecompose_kinship(
                 f"current={lib.get('num_threads')}, target={n_threads}"
             )
 
+    from jamma.core.estimates import estimate_eigendecomp_time
+
     logger.info(f"Eigendecomp: numpy.linalg.eigh, threads={n_threads}")
+    logger.info(f"  Estimated time: {estimate_eigendecomp_time(n_samples, n_threads)}")
 
     start_time = time.perf_counter()
     try:

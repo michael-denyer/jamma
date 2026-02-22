@@ -325,7 +325,10 @@ def run_lmm_association_streaming(
     n_filtered = len(snp_indices)
 
     if show_progress:
+        from jamma.core.estimates import estimate_lmm_time
+
         logger.info(f"  Analyzed SNPs: {n_filtered:,}")
+        logger.info(f"  Estimated time: {estimate_lmm_time(n_samples, n_filtered)}")
 
     if output_path is None and n_filtered > 100_000:
         logger.warning(

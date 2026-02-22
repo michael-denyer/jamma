@@ -219,12 +219,16 @@ def run_lmm_association_jax(
     # Process in chunks if needed
     n_chunks = (n_filtered + chunk_size - 1) // chunk_size
     if show_progress:
+        from jamma.core.estimates import estimate_lmm_time
+
         logger.info(f"  Analyzed individuals: {n_samples:,}")
         logger.info(f"  Analyzed SNPs: {n_filtered:,}")
         if chunk_size < n_filtered:
             logger.info(
                 f"  Processing in {n_chunks} chunks ({chunk_size:,} SNPs/chunk)"
             )
+        est = estimate_lmm_time(n_samples, n_filtered, rotation_threads)
+        logger.info(f"  Estimated time: {est}")
 
     # Pre-allocate result arrays driven by _RESULT_FIELDS mapping
     write_offset = 0

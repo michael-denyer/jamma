@@ -501,10 +501,13 @@ def compute_kinship_streaming(
     n_samples = meta["n_samples"]
     n_snps = meta["n_snps"]
 
+    from jamma.core.estimates import estimate_kinship_time
+
     logger.info("Computing Kinship Matrix")
     logger.info(f"  Individuals: {n_samples:,}")
     logger.info(f"  SNPs: {n_snps:,}")
     logger.info(f"  Chunk size: {chunk_size:,}")
+    logger.info(f"  Estimated time: {estimate_kinship_time(n_samples, n_snps)}")
 
     # Memory check before allocation
     # Check against full pipeline peak (eigendecomp) since it always follows kinship.

@@ -6,6 +6,7 @@
   <a href="https://numpy.org/"><img src="https://img.shields.io/badge/NumPy-2.0+-013243.svg?logo=numpy" alt="NumPy"></a>
   <a href="https://hypothesis.readthedocs.io/"><img src="https://img.shields.io/badge/tested%20with-Hypothesis-blue.svg" alt="Hypothesis"></a>
   <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPL%203.0-blue.svg" alt="License: GPL-3.0"></a>
+  <a href="https://buymeacoffee.com/codenyer"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buy-me-a-coffee&logoColor=black" alt="Buy Me a Coffee"></a>
 </p>
 
 <p align="center">

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.3] - 2026-02-22
+
+### Fixed
+
+- Cap matrix writer workers at 32 (was unbounded cpu_count) — 96 workers on Databricks added process overhead with no I/O benefit
+- Eliminate per-row `tuple()` allocation in worker formatting — was creating 125k Python float objects (~3 MB) per row per worker, causing GC thrashing
+- Correct peak disk estimate to account for all chunks existing simultaneously during worker phase
+
 ## [2.5.2] - 2026-02-22
 
 ### Fixed

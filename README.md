@@ -17,7 +17,7 @@
 
 - **GEMMA-compatible**: Drop-in replacement with identical CLI flags and output formats
 - **Numerical equivalence**: Validated against GEMMA — 100% significance agreement, 100% effect direction agreement
-- **Fast**: Up to 22x faster than GEMMA on kinship and 5x faster on LMM association
+- **Fast**: Up to 11x faster than GEMMA on kinship and 6x faster on LMM association
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
 - **Pure Python**: JAX + NumPy stack, no C++ compilation required
 - **Large-scale ready**: Optional [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) wheels (numpy 2.4.2) for >46k sample eigendecomposition

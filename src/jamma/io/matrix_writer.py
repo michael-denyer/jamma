@@ -27,6 +27,10 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
+# Cap worker count — beyond this, disk I/O is the bottleneck, not CPU
+# formatting. Excess workers just add process overhead and memory pressure.
+_MAX_WRITERS = 32
+
 
 def _format_rows_to_file(args: tuple) -> None:
     """Format a chunk of matrix rows and write to a temp file.
@@ -43,11 +47,16 @@ def _format_rows_to_file(args: tuple) -> None:
         matrix = np.memmap(
             memmap_path, dtype=np.dtype(dtype_str), mode="r", shape=shape
         )
-        row_fmt = delimiter.join([fmt] * ncols)
+        delimiter_bytes = delimiter.encode("ascii")
+        newline = b"\n"
         with open(out_path, "wb") as f:
             for i in range(start, end):
-                line = (row_fmt % tuple(matrix[i])) + "\n"
-                f.write(line.encode("ascii"))
+                row = matrix[i]
+                # Format each value individually and join — avoids creating a
+                # Python tuple of 125k float objects (~3 MB per row) that the
+                # old `row_fmt % tuple(row)` approach required.
+                parts = [(fmt % row[j]).encode("ascii") for j in range(len(row))]
+                f.write(delimiter_bytes.join(parts) + newline)
     except Exception as e:
         raise RuntimeError(
             f"_format_rows_to_file failed on rows {start}-{end}: {e}"
@@ -104,7 +113,7 @@ def write_matrix_parallel(
         path: Output file path.
         fmt: Format string for each element (default "%.10g").
         delimiter: Column separator (default tab).
-        n_workers: Number of worker processes (default: cpu_count).
+        n_workers: Number of worker processes (default: min(cpu_count, 32)).
         min_rows_for_parallel: Row threshold for parallel path (default 500).
     """
     path = Path(path)
@@ -118,7 +127,7 @@ def write_matrix_parallel(
         return
 
     if n_workers is None:
-        n_workers = os.cpu_count() or 1
+        n_workers = min(os.cpu_count() or 1, _MAX_WRITERS)
     if n_workers < 1:
         raise ValueError(f"n_workers must be >= 1, got {n_workers}")
 
@@ -129,13 +138,13 @@ def write_matrix_parallel(
     # Ensure contiguous float64 for memmap compatibility
     matrix = np.ascontiguousarray(matrix, dtype=np.float64)
 
+    rows_per_chunk = max(100, n_rows // n_workers)
+
     # Pre-flight disk space check (warn only — unreliable on network FS)
+    # Peak during worker phase: memmap + ALL chunks (workers run concurrently)
     memmap_bytes = matrix.nbytes
     text_bytes = _estimate_text_size(n_rows, n_cols)
-    # Peak: memmap + one chunk + growing output file
-    rows_per_chunk = max(100, n_rows // n_workers)
-    chunk_text_bytes = _estimate_text_size(rows_per_chunk, n_cols)
-    peak_bytes = memmap_bytes + chunk_text_bytes + text_bytes
+    peak_bytes = memmap_bytes + text_bytes  # memmap + all chunks ≈ full output
     try:
         usage = shutil.disk_usage(path.parent)
         if usage.free < peak_bytes:
@@ -143,7 +152,7 @@ def write_matrix_parallel(
                 f"Low disk space: {usage.free / (1024**3):.1f} GB free, "
                 f"estimated peak ~{peak_bytes / (1024**3):.0f} GB needed "
                 f"(memmap {memmap_bytes / (1024**3):.0f} GB + "
-                f"output {text_bytes / (1024**3):.0f} GB). "
+                f"chunks {text_bytes / (1024**3):.0f} GB). "
                 f"Write may fail with ENOSPC."
             )
     except OSError:

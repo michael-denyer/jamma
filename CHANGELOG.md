@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.4] - 2026-02-22
+
+### Fixed
+
+- Eigendecomposition now uses all physical cores instead of `physical_cores // n_jax_devices` — JAX isn't running during `eigh`, so the thread reduction was a ~16x slowdown on multi-device configs
+
 ## [2.5.3] - 2026-02-22
 
 ### Fixed

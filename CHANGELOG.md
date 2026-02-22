@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-02-22
+
+### Added
+
+- PyPI keywords and classifiers for search discoverability
+- Project URLs (Homepage, Repository, Documentation, Changelog, Issues) for PyPI verified details
+
 ## [2.5.0] - 2026-02-21
 
 ### Added

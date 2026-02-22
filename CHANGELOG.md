@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.6] - 2026-02-22
+
+### Fixed
+
+- LMM rotation (`U.T @ G`) now uses all physical cores instead of `physical_cores // n_jax_devices` — same bug class as eigendecomp (v2.5.4), but in the per-chunk dgemm. On a 48-core machine with 24 JAX devices, rotation ran with 2 threads instead of 48 (~16x slowdown per chunk, ~4 hours instead of ~30 minutes for 125k samples)
+- Applied fix to all three runners: `runner_jax.py`, `runner_streaming.py`, `loco.py`
+- Extracted `get_physical_core_count()` helper in `core/threading.py` to consolidate physical core detection (replaces inline `psutil.cpu_count(logical=False)` in eigen.py)
+
 ## [2.5.5] - 2026-02-22
 
 ### Added

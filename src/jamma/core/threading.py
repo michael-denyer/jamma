@@ -20,6 +20,20 @@ from loguru import logger
 from threadpoolctl import threadpool_limits
 
 
+def get_physical_core_count() -> int:
+    """Return the number of physical CPU cores.
+
+    Use this for BLAS operations that run without JAX contention
+    (e.g. eigendecomp, U.T @ G rotation when JAX isn't computing).
+    Unlike get_blas_thread_count(), this does NOT divide by n_jax_devices.
+
+    Returns:
+        Physical core count, falling back to os.cpu_count() if psutil
+        can't determine it.
+    """
+    return psutil.cpu_count(logical=False) or (os.cpu_count() or 1)
+
+
 def get_blas_thread_count() -> int:
     """Determine the number of BLAS threads to use for numpy operations.
 

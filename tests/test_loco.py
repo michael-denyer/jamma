@@ -147,6 +147,77 @@ def _compute_centered_genotypes_and_S_chr(genotypes, chromosomes):
 # ===========================================================================
 
 
+@pytest.mark.tier0
+class TestChromosomePartitioningSynthetic:
+    """Fast synthetic tests for get_chromosome_partitions().
+
+    Uses bed_reader.to_bed to create PLINK files with known chromosome
+    structure, then verifies partitioning is correct without needing
+    the mouse_hs1940 fixture.
+    """
+
+    def test_partitions_correct_grouping(self, tmp_path):
+        """Partitions group SNPs by chromosome correctly on synthetic data."""
+        from bed_reader import to_bed
+
+        n_samples, n_snps = 20, 60
+        rng = np.random.default_rng(42)
+        genotypes = rng.integers(0, 3, size=(n_samples, n_snps)).astype(np.int8)
+        chromosomes = ["1"] * 20 + ["2"] * 15 + ["3"] * 25
+
+        bed_path = tmp_path / "synth"
+        to_bed(
+            str(bed_path) + ".bed",
+            genotypes,
+            properties={
+                "iid": [f"s{i}" for i in range(n_samples)],
+                "sid": [f"snp{i}" for i in range(n_snps)],
+                "chromosome": chromosomes,
+                "bp_position": list(range(1, n_snps + 1)),
+            },
+        )
+
+        partitions = get_chromosome_partitions(bed_path)
+
+        # Correct chromosome keys
+        assert set(partitions.keys()) == {"1", "2", "3"}
+
+        # Correct index ranges
+        np.testing.assert_array_equal(partitions["1"], np.arange(0, 20))
+        np.testing.assert_array_equal(partitions["2"], np.arange(20, 35))
+        np.testing.assert_array_equal(partitions["3"], np.arange(35, 60))
+
+        # All indices unique and cover all SNPs
+        all_indices = np.sort(np.concatenate(list(partitions.values())))
+        np.testing.assert_array_equal(all_indices, np.arange(n_snps))
+
+    def test_partitions_single_snp_chromosomes(self, tmp_path):
+        """Chromosomes with a single SNP are correctly partitioned."""
+        from bed_reader import to_bed
+
+        n_samples, n_snps = 10, 5
+        genotypes = np.zeros((n_samples, n_snps), dtype=np.int8)
+        chromosomes = ["A", "B", "C", "D", "E"]
+
+        bed_path = tmp_path / "single"
+        to_bed(
+            str(bed_path) + ".bed",
+            genotypes,
+            properties={
+                "iid": [f"s{i}" for i in range(n_samples)],
+                "sid": [f"snp{i}" for i in range(n_snps)],
+                "chromosome": chromosomes,
+                "bp_position": list(range(1, n_snps + 1)),
+            },
+        )
+
+        partitions = get_chromosome_partitions(bed_path)
+
+        assert len(partitions) == 5
+        for i, key in enumerate(["A", "B", "C", "D", "E"]):
+            np.testing.assert_array_equal(partitions[key], np.array([i]))
+
+
 @pytest.mark.tier1
 class TestChromosomePartitioning:
     """Tests for get_chromosome_partitions()."""

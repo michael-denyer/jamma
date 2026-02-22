@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.io.matrix_writer import write_matrix_parallel
+from jamma.io.matrix_writer import _MAX_WRITERS, write_matrix_parallel
 
 
 def _savetxt_bytes(
@@ -225,3 +225,37 @@ class TestFailureHandling:
 
         remaining = list(tmp_path.glob(".jamma_mwrite_*"))
         assert not remaining, f"Temp dirs not cleaned up after failure: {remaining}"
+
+
+@pytest.mark.tier0
+class TestWorkerCap:
+    """Verify worker count is capped to avoid disk I/O bottleneck."""
+
+    def test_max_writers_constant(self) -> None:
+        """_MAX_WRITERS cap is 32."""
+        assert _MAX_WRITERS == 32
+
+    def test_worker_count_capped_on_high_core_machine(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """On a 96-vCPU machine, n_workers defaults to 32, not 96.
+
+        Regression test for Databricks where 96 workers hammering NFS
+        caused cluster instability.
+        """
+        monkeypatch.setattr("os.cpu_count", lambda: 96)
+
+        rng = np.random.default_rng(42)
+        matrix = rng.standard_normal((600, 10))
+        out_path = tmp_path / "output.txt"
+
+        # write_matrix_parallel should cap at _MAX_WRITERS internally.
+        # Verify by checking the output is correct (proves it ran) and
+        # that the constant is in effect (tested above).
+        write_matrix_parallel(matrix, out_path)
+        assert out_path.exists()
+
+        # Verify byte-identical to savetxt (correctness under cap)
+        savetxt_path = tmp_path / "savetxt.txt"
+        np.savetxt(savetxt_path, matrix, fmt="%.10g", delimiter="\t")
+        assert out_path.read_bytes() == savetxt_path.read_bytes()

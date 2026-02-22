@@ -190,6 +190,48 @@ class TestEigendecompMemory:
 
 
 @pytest.mark.tier0
+class TestEigendecompMemoryGate:
+    """Integration: eigendecompose_kinship respects check_memory flag."""
+
+    def test_eigendecomp_raises_on_insufficient_memory(self):
+        """MemoryError raised when memory is scarce.
+
+        Mocks psutil.virtual_memory to report 1 byte available.
+        Should raise MemoryError before LAPACK runs.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from jamma.lmm.eigen import eigendecompose_kinship
+
+        rng = np.random.default_rng(42)
+        K = rng.standard_normal((50, 50))
+        K = (K + K.T) / 2
+
+        # Build a mock that satisfies both get_memory_snapshot() and
+        # check_memory_available(). Must have numeric .available and .total.
+        mock_vmem = MagicMock()
+        mock_vmem.available = 1  # 1 byte — definitely not enough
+        mock_vmem.total = 1
+
+        with patch("jamma.core.memory.psutil.virtual_memory", return_value=mock_vmem):
+            with pytest.raises(MemoryError, match="Insufficient memory"):
+                eigendecompose_kinship(K, check_memory=True)
+
+    def test_eigendecomp_skips_check_when_disabled(self):
+        """eigendecompose_kinship with check_memory=False skips memory check."""
+        from jamma.lmm.eigen import eigendecompose_kinship
+
+        rng = np.random.default_rng(42)
+        K = rng.standard_normal((30, 30))
+        K = (K + K.T) / 2
+
+        # Should succeed even if we don't mock memory (check_memory=False)
+        eigenvalues, eigenvectors = eigendecompose_kinship(K, check_memory=False)
+        assert eigenvalues.shape == (30,)
+        assert eigenvectors.shape == (30, 30)
+
+
+@pytest.mark.tier0
 class TestMemorySnapshot:
     """Tests for memory snapshot functions."""
 

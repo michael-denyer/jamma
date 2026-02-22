@@ -211,3 +211,71 @@ class TestComputeChunkSizeInvariants:
             n_devices=n_devices,
         )
         assert result <= safe_bound
+
+
+@pytest.mark.tier0
+class TestChunkSizingAtDatabricksScale:
+    """Chunk sizing at Databricks-relevant scale (100k+ samples, many devices).
+
+    Verifies _compute_chunk_size and auto_tune_chunk_size produce valid,
+    device-aligned chunks at the scale where JAMMA actually runs.
+    """
+
+    @pytest.mark.parametrize("n_devices", [1, 8, 16, 24, 48])
+    def test_chunk_never_exceeds_safe_bound_at_scale(self, n_devices):
+        """At 125k samples (Databricks scale), chunk never exceeds int32 safe bound.
+
+        This is the exact configuration that caused ENOSPC on Databricks:
+        125k samples, 95k SNPs, high device counts.
+        """
+        n_samples = 125_000
+        n_snps = 95_000
+        n_cvt = 1
+        n_index = (n_cvt + 3) * (n_cvt + 2) // 2
+        elements_per_snp = n_samples * n_index
+        safe_bound = _MAX_BUFFER_ELEMENTS // elements_per_snp
+
+        result = _compute_chunk_size(
+            n_samples=n_samples,
+            n_snps=n_snps,
+            n_devices=n_devices,
+        )
+        assert result <= safe_bound, (
+            f"Chunk {result} exceeds safe bound {safe_bound} "
+            f"at {n_samples} samples, {n_devices} devices"
+        )
+
+    @pytest.mark.parametrize("n_devices", [1, 8, 16, 24, 48])
+    def test_chunk_device_alignment_at_scale(self, n_devices):
+        """Chunk is a multiple of n_devices when n_devices > 1."""
+        n_samples = 125_000
+        n_snps = 95_000
+
+        result = _compute_chunk_size(
+            n_samples=n_samples,
+            n_snps=n_snps,
+            n_devices=n_devices,
+        )
+
+        if n_devices > 1 and result < n_snps:
+            assert result % n_devices == 0, (
+                f"Chunk {result} is not aligned to {n_devices} devices"
+            )
+
+    @pytest.mark.parametrize("n_devices", [1, 8, 16, 24, 48])
+    def test_auto_tune_databricks_scale(self, n_devices):
+        """auto_tune_chunk_size at 125k samples, 4GB budget, various device counts."""
+        result = auto_tune_chunk_size(
+            n_samples=125_000,
+            n_filtered=95_000,
+            mem_budget_gb=4.0,
+            n_devices=n_devices,
+        )
+        assert result > 0
+        assert result <= MAX_SAFE_CHUNK
+        assert result <= 95_000
+
+        if n_devices > 1 and result > n_devices:
+            assert result % n_devices == 0, (
+                f"auto_tune result {result} not aligned to {n_devices} devices"
+            )

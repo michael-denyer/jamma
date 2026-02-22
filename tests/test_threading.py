@@ -2,6 +2,7 @@
 
 import os
 
+import numpy as np
 import pytest
 
 from jamma.core.threading import blas_threads, get_blas_thread_count
@@ -48,3 +49,90 @@ class TestBlasThreads:
     def test_context_manager_returns_none(self):
         with blas_threads(2) as result:
             assert result is None
+
+
+@pytest.mark.tier0
+class TestEigendecompThreading:
+    """Eigendecomp uses all physical cores, not get_blas_thread_count().
+
+    get_blas_thread_count() divides by n_jax_devices, which is correct for
+    LMM association (JAX competing for cores) but wrong for eigendecomp
+    (pure LAPACK, no JAX contention).
+    """
+
+    def test_eigendecomp_uses_all_physical_cores(self, monkeypatch):
+        """eigendecomp_kinship sets n_threads to physical core count, not reduced.
+
+        On a 48-physical-core machine with 24 JAX devices:
+        - get_blas_thread_count() returns 48 // 24 = 2  (WRONG for eigendecomp)
+        - eigendecomp should use all 48 physical cores
+
+        Regression test for the bug where eigendecomp ran 24x slower than
+        expected on Databricks (2 threads instead of 48).
+        """
+        # Mock psutil to report 48 physical cores
+        monkeypatch.setattr("jamma.lmm.eigen.psutil.cpu_count", lambda logical=True: 48)
+        monkeypatch.setattr("jamma.lmm.eigen.os.cpu_count", lambda: 96)
+
+        # Track what thread count blas_threads() is called with
+        captured_threads = []
+        original_blas_threads = blas_threads
+
+        from contextlib import contextmanager
+
+        @contextmanager
+        def capturing_blas_threads(n):
+            captured_threads.append(n)
+            with original_blas_threads(n):
+                yield
+
+        monkeypatch.setattr("jamma.lmm.eigen.blas_threads", capturing_blas_threads)
+
+        # Run eigendecomp on a small matrix
+        from jamma.lmm.eigen import eigendecompose_kinship
+
+        rng = np.random.default_rng(42)
+        K = rng.standard_normal((50, 50))
+        K = (K + K.T) / 2
+
+        eigendecompose_kinship(K, check_memory=False)
+
+        assert len(captured_threads) == 1, (
+            f"Expected 1 blas_threads call, got {len(captured_threads)}"
+        )
+        assert captured_threads[0] == 48, (
+            f"Eigendecomp should use all 48 physical cores, got {captured_threads[0]}. "
+            f"If this is 2, it's dividing by JAX device count (the old bug)."
+        )
+
+    def test_eigendecomp_falls_back_to_os_cpu_count(self, monkeypatch):
+        """Falls back to os.cpu_count() when psutil returns None."""
+        monkeypatch.setattr(
+            "jamma.lmm.eigen.psutil.cpu_count", lambda logical=True: None
+        )
+        monkeypatch.setattr("jamma.lmm.eigen.os.cpu_count", lambda: 64)
+
+        captured_threads = []
+        original_blas_threads = blas_threads
+
+        from contextlib import contextmanager
+
+        @contextmanager
+        def capturing_blas_threads(n):
+            captured_threads.append(n)
+            with original_blas_threads(n):
+                yield
+
+        monkeypatch.setattr("jamma.lmm.eigen.blas_threads", capturing_blas_threads)
+
+        from jamma.lmm.eigen import eigendecompose_kinship
+
+        rng = np.random.default_rng(42)
+        K = rng.standard_normal((30, 30))
+        K = (K + K.T) / 2
+
+        eigendecompose_kinship(K, check_memory=False)
+
+        assert captured_threads[0] == 64, (
+            f"Should fall back to os.cpu_count()=64, got {captured_threads[0]}"
+        )

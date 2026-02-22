@@ -39,20 +39,18 @@ LMM timing breakdown (from per-phase accumulators):
 | Effect direction agreement | 100.0% |
 | Max relative p-value diff | 9.66e-04 |
 
-### v2.3 vs v2.5: Threading Fix Impact
+### Scaling from 90k to 125k
 
-Like-for-like comparison on the same 125,632 samples × 91,586 SNPs dataset, same E96ds_v6 machine. v2.3 did not have the psutil threading fix, so BLAS used ~32 of the 48 available cores. v2.5 uses all 48 physical cores for eigendecomp and rotation.
+Comparison against the v2.3 baseline (90k samples, 32-core Databricks VM). Hardware and sample counts differ, so this is not a like-for-like comparison — it shows how wall time scales with both sample size and hardware.
 
-| Phase | v2.3 (~32 threads) | v2.5 (48 threads) | Notes |
-| ----- | ------------------- | ------------------ | ----- |
-| Kinship | 1,440s (24 min) | 2,011s (34 min) | JAX-based, not BLAS-threaded |
-| Eigendecomp | 3,114s (52 min) | 8,465s (2h 21m) | BW-bound: more threads = slower |
-| LMM | 1,211s (20 min) | 1,131s (19 min) | 7% faster with more threads |
-| **Total** | **5,764s (96 min)** | **11,607s (3h 14m)** | |
+| Phase | v2.3 (90k, 32 cores) | v2.5 (125k, 48 cores) |
+|-------|------|-----------|
+| Kinship | 1,440s (24 min) | 2,011s (34 min) |
+| Eigendecomp | 3,114s (52 min) | 8,465s (2h 21m) |
+| LMM | 1,211s (20 min) | 1,131s (19 min) |
+| **Total** | **5,764s (96 min)** | **11,607s (3h 14m)** |
 
-Eigendecomp got 2.7× slower with 48 threads despite doing the same work. At 125k, the 126 GB eigenvector matrices exceed L3 cache, making eigendecomp memory-bandwidth-bound. More cores competing for memory bus bandwidth actively hurts. LMM rotation benefits slightly from more threads because the per-chunk matrices are much smaller.
-
-Kinship is slower in v2.5 due to JAX sharding configuration differences, not BLAS threading (kinship uses JAX-batched dgemm, not numpy BLAS).
+Eigendecomp dominates the increase: O(n³) scaling from 90k→125k is ~2.7×, plus memory bandwidth saturation at 125k (the 126 GB eigenvector matrices exceed L3 cache). LMM is faster despite more samples, likely due to the 48-core machine and the v2.5.6 rotation threading fix.
 
 ---
 
@@ -94,9 +92,9 @@ v1.4 targeted memory optimization and correctness at production scale (85k+ real
 | Top-level `gwas()` API | Single-call Python entry point for full GWAS pipeline |
 | GEMMA comparison notebook | Compare-only mode with OOM-safe kinship comparison at 85k scale |
 
-### 125k Baseline (v2.3, Databricks)
+### 90k Baseline (v2.3, Databricks)
 
-Same 125,632 samples × 91,586 SNPs dataset as the v2.5 benchmark above, same E96ds_v6 machine. v2.3 did not have the psutil threading fix, so BLAS used ~32 of the 48 available cores.
+Measured on 32-core Databricks VM with MKL ILP64, 90k synthetic samples × 90k SNPs.
 
 | Phase | Time | % of Total |
 |-------|------|-----------|
@@ -127,7 +125,7 @@ All three pipeline phases are dominated by BLAS/LAPACK calls. No Python-level op
 
 | Phase | Bottleneck | Notes |
 |-------|-----------|-------|
-| Eigendecomp (54%) | LAPACK dsyevd — O(n³) | Single call, irreducible. 125k at ~32 cores ≈ 3,100s (v2.3, pre-threading fix) |
+| Eigendecomp (54%) | LAPACK dsyevd — O(n³) | Single call, irreducible. 90k at 32 cores ≈ 3,100s |
 | Kinship (25%) | JAX-batched dgemm | Already JIT-compiled matrix multiply |
 | LMM Association (21%) | JAX JIT + golden section per SNP | Rotation is a single dgemm per chunk |
 

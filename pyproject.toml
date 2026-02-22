@@ -10,6 +10,33 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "JAMMA Contributors" }]
+keywords = [
+    "gwas",
+    "genomics",
+    "genetics",
+    "bioinformatics",
+    "gemma",
+    "jax",
+    "linear-mixed-model",
+    "association-testing",
+    "kinship",
+    "plink",
+    "snp",
+    "eigendecomposition",
+    "wald-test",
+    "lmm",
+    "reml",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "bed-reader>=1.0.0",
     "jax>=0.8.0",

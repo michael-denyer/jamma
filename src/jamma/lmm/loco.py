@@ -23,7 +23,7 @@ from bed_reader import open_bed
 from loguru import logger
 
 from jamma.core.snp_filter import compute_snp_filter_mask
-from jamma.core.threading import blas_threads
+from jamma.core.threading import blas_threads, get_physical_core_count
 from jamma.io.plink import (
     get_chromosome_partitions,
     get_plink_metadata,
@@ -425,7 +425,11 @@ def _run_lmm_for_chromosome(
     # Eigendecomp setup
     W, n_cvt = _build_covariate_matrix(covariates, n_samples)
 
-    with blas_threads():
+    # Rotation is pure BLAS — use all physical cores, not the JAX-reduced
+    # count from get_blas_thread_count(). JAX isn't running during rotation.
+    rotation_threads = get_physical_core_count()
+
+    with blas_threads(rotation_threads):
         UtW = eigenvectors.T @ W
         Uty = eigenvectors.T @ phenotypes
 
@@ -469,7 +473,7 @@ def _run_lmm_for_chromosome(
                 geno_jax_chunk, ((0, 0), (0, pad_width)), mode="constant"
             )
 
-        with blas_threads():
+        with blas_threads(rotation_threads):
             UtG_chunk = np.ascontiguousarray(eigenvectors.T @ geno_jax_chunk)
         return UtG_chunk, actual_len
 

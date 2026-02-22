@@ -70,9 +70,8 @@ class TestEigendecompThreading:
         Regression test for the bug where eigendecomp ran 24x slower than
         expected on Databricks (2 threads instead of 48).
         """
-        # Mock psutil to report 48 physical cores
-        monkeypatch.setattr("jamma.lmm.eigen.psutil.cpu_count", lambda logical=True: 48)
-        monkeypatch.setattr("jamma.lmm.eigen.os.cpu_count", lambda: 96)
+        # Mock get_physical_core_count to report 48 physical cores
+        monkeypatch.setattr("jamma.lmm.eigen.get_physical_core_count", lambda: 48)
 
         # Track what thread count blas_threads() is called with
         captured_threads = []
@@ -107,10 +106,12 @@ class TestEigendecompThreading:
 
     def test_eigendecomp_falls_back_to_os_cpu_count(self, monkeypatch):
         """Falls back to os.cpu_count() when psutil returns None."""
+        # get_physical_core_count uses psutil then os.cpu_count as fallback.
+        # Mock at the threading module level where it's defined.
         monkeypatch.setattr(
-            "jamma.lmm.eigen.psutil.cpu_count", lambda logical=True: None
+            "jamma.core.threading.psutil.cpu_count", lambda logical=False: None
         )
-        monkeypatch.setattr("jamma.lmm.eigen.os.cpu_count", lambda: 64)
+        monkeypatch.setattr("jamma.core.threading.os.cpu_count", lambda: 64)
 
         captured_threads = []
         original_blas_threads = blas_threads

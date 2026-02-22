@@ -16,7 +16,7 @@ from loguru import logger
 from jamma.core.memory import estimate_lmm_streaming_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask
-from jamma.core.threading import blas_threads
+from jamma.core.threading import blas_threads, get_physical_core_count
 from jamma.io.plink import (
     get_plink_metadata,
     stream_genotype_chunks,
@@ -373,8 +373,12 @@ def run_lmm_association_streaming(
 
         W, n_cvt = _build_covariate_matrix(covariates, n_samples)
 
+        # Rotation is pure BLAS — use all physical cores, not the JAX-reduced
+        # count from get_blas_thread_count(). JAX isn't running during rotation.
+        rotation_threads = get_physical_core_count()
+
         # Prepare rotated matrices (numpy BLAS matmuls)
-        with blas_threads():
+        with blas_threads(rotation_threads):
             UtW = U.T @ W
             Uty = U.T @ phenotypes
 
@@ -451,7 +455,7 @@ def run_lmm_association_streaming(
                     geno_jax_chunk, ((0, 0), (0, pad_width)), mode="constant"
                 )
 
-            with blas_threads():
+            with blas_threads(rotation_threads):
                 with jax.profiler.TraceAnnotation("dgemm_rotation"):
                     UtG_chunk = np.ascontiguousarray(U.T @ geno_jax_chunk)
 

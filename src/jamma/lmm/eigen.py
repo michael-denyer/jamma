@@ -10,12 +10,10 @@ overflows at ~46k x 46k matrices. With ILP64 numpy (MKL), matrices up to
 200k+ are supported.
 """
 
-import os
 import time
 import warnings
 
 import numpy as np
-import psutil
 from loguru import logger
 from threadpoolctl import threadpool_info
 
@@ -24,7 +22,7 @@ from jamma.core.memory import (
     estimate_eigendecomp_memory,
     log_memory_snapshot,
 )
-from jamma.core.threading import blas_threads
+from jamma.core.threading import blas_threads, get_physical_core_count
 
 
 def eigendecompose_kinship(
@@ -90,7 +88,7 @@ def eigendecompose_kinship(
     # Eigendecomp is pure numpy/LAPACK — JAX isn't running, so use all
     # physical cores. get_blas_thread_count() would divide by n_jax_devices,
     # which is wrong here (no XLA contention during eigh).
-    n_threads = psutil.cpu_count(logical=False) or (os.cpu_count() or 1)
+    n_threads = get_physical_core_count()
     for lib in threadpool_info():
         if lib.get("user_api") == "blas":
             logger.debug(

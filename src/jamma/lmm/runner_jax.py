@@ -14,7 +14,7 @@ from loguru import logger
 from jamma.core.memory import estimate_lmm_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
-from jamma.core.threading import blas_threads
+from jamma.core.threading import blas_threads, get_physical_core_count
 from jamma.lmm.chunk import _compute_chunk_size
 from jamma.lmm.compute import _compute_lmm_chunk, block_chunk_result, log_jax_error
 from jamma.lmm.likelihood_jax import batch_compute_uab
@@ -180,7 +180,11 @@ def run_lmm_association_jax(
     del kinship
     gc.collect()
 
-    with blas_threads():
+    # Rotation is pure BLAS — use all physical cores, not the JAX-reduced
+    # count from get_blas_thread_count(). JAX isn't running during rotation.
+    rotation_threads = get_physical_core_count()
+
+    with blas_threads(rotation_threads):
         UtW = U.T @ W
         Uty = U.T @ phenotypes
 
@@ -251,7 +255,7 @@ def run_lmm_association_jax(
             pad_width = chunk_size - actual_len
             geno_chunk = np.pad(geno_chunk, ((0, 0), (0, pad_width)), mode="constant")
 
-        with blas_threads():
+        with blas_threads(rotation_threads):
             UtG_chunk = np.ascontiguousarray(U.T @ geno_chunk)
 
         # Pad to device-count multiple for even NamedSharding distribution

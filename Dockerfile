@@ -11,21 +11,15 @@ FROM python:3.11-slim
 # Install uv for fast, reproducible installs
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# MKL runtime — provides libmkl_def.so.2 and other computational kernels
-# loaded via dlopen (not bundled by auditwheel)
-RUN uv pip install --system --no-cache mkl
-
-# ILP64 numpy from fork index (must go after MKL, before jamma)
-RUN uv pip install --system --no-cache numpy \
-    --extra-index-url https://michael-denyer.github.io/numpy-mkl \
-    --reinstall
-
-# JAMMA runtime deps (everything except numpy, which is ILP64 above)
-RUN uv pip install --system --no-cache \
-    psutil loguru threadpoolctl jax jaxlib jaxtyping click progressbar2 bed-reader
-
-# JAMMA itself — --no-deps to preserve ILP64 numpy
-RUN uv pip install --system --no-cache --no-deps jamma
+# MKL + deps + ILP64 numpy + JAMMA in minimal layers
+# Order matters: MKL first, then ILP64 numpy (--reinstall), then deps, then jamma (--no-deps)
+RUN uv pip install --system --no-cache mkl && \
+    uv pip install --system --no-cache numpy \
+        --extra-index-url https://michael-denyer.github.io/numpy-mkl \
+        --reinstall && \
+    uv pip install --system --no-cache \
+        psutil loguru threadpoolctl jax jaxlib jaxtyping click progressbar2 bed-reader && \
+    uv pip install --system --no-cache --no-deps jamma
 
 # Verify ILP64 at build time
 RUN python -c "\
@@ -34,6 +28,10 @@ cfg = np.show_config(mode='dicts'); \
 blas = cfg['Build Dependencies']['blas']['name']; \
 assert 'ilp64' in blas.lower(), f'Expected ILP64 BLAS, got: {blas}'; \
 print(f'ILP64 verified: {blas}')"
+
+# Run as non-root for security (volume mounts won't be owned by root)
+RUN useradd -m -u 1000 jamma && mkdir -p /data && chown jamma:jamma /data
+USER jamma
 
 ENTRYPOINT ["jamma"]
 CMD ["--help"]

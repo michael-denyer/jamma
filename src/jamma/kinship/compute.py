@@ -63,7 +63,7 @@ def _accumulate_kinship(K: np.ndarray, X_centered: np.ndarray) -> np.ndarray:
     Returns:
         Updated kinship matrix with batch contribution added.
     """
-    K += np.matmul(X_centered, X_centered.T)
+    K = K + np.matmul(X_centered, X_centered.T)
     return K
 
 
@@ -545,6 +545,7 @@ def compute_kinship_streaming(
         all_means[start:end] = chunk_means
         all_miss_counts[start:end] = chunk_miss_counts
         all_vars[start:end] = chunk_vars
+        del chunk  # Free ~1.6GB per chunk at scale before next iteration
 
     # Compute filters (free source arrays immediately after deriving values)
     miss_rates = all_miss_counts / n_samples
@@ -833,6 +834,7 @@ def compute_loco_kinship_streaming(
         all_means[start:end] = chunk_means
         all_miss_counts[start:end] = chunk_miss_counts
         all_vars[start:end] = chunk_vars
+        del chunk  # Free ~1.6GB per chunk at scale before next iteration
 
     # Compute filters
     miss_rates = all_miss_counts / n_samples
@@ -878,6 +880,12 @@ def compute_loco_kinship_streaming(
     }
     chrs_with_snps = [c for c in unique_chrs if n_chr_filtered.get(c, 0) > 0]
     chrs_without_snps = [c for c in unique_chrs if n_chr_filtered.get(c, 0) == 0]
+    if chrs_without_snps:
+        logger.warning(
+            f"{len(chrs_without_snps)} chromosome(s) have 0 ksnps after filtering: "
+            f"{chrs_without_snps}. LOCO will use full kinship for these "
+            f"(nothing to leave out)."
+        )
     n_chr_with_snps = len(chrs_with_snps)
 
     # Determine memory strategy: single-pass vs multi-pass batching
@@ -925,21 +933,16 @@ def compute_loco_kinship_streaming(
         logger.info(
             f"LOCO streaming accumulation complete in {elapsed:.2f}s, "
             f"computing {len(S_chr)} LOCO matrices"
-            + (
-                f" ({len(chrs_without_snps)} using full-kinship fallback)"
-                if chrs_without_snps
-                else ""
-            )
         )
 
         yield from _yield_loco_matrices(S_full_np, S_chr, n_chr_filtered, n_filtered)
 
-        # Yield full-kinship fallback for chromosomes with 0 ksnps
+        # Chromosomes with 0 ksnps: K_loco = K_full (nothing to leave out)
         if chrs_without_snps:
             K_full = S_full_np / n_filtered
             for chr_name in sorted(chrs_without_snps):
-                logger.warning(
-                    f"LOCO chr {chr_name}: 0 ksnps, using full kinship as fallback"
+                logger.debug(
+                    f"LOCO chr {chr_name}: 0 SNPs after filtering, using full kinship"
                 )
                 yield (chr_name, K_full)
     else:
@@ -1005,12 +1008,12 @@ def compute_loco_kinship_streaming(
             del S_chr
             gc.collect()
 
-        # Yield full-kinship fallback for chromosomes with 0 ksnps
+        # Chromosomes with 0 ksnps: K_loco = K_full (nothing to leave out)
         if chrs_without_snps:
             K_full = S_full_np / n_filtered
             for chr_name in sorted(chrs_without_snps):
-                logger.warning(
-                    f"LOCO chr {chr_name}: 0 ksnps, using full kinship as fallback"
+                logger.debug(
+                    f"LOCO chr {chr_name}: 0 SNPs after filtering, using full kinship"
                 )
                 yield (chr_name, K_full)
 
@@ -1018,9 +1021,4 @@ def compute_loco_kinship_streaming(
         logger.info(
             f"LOCO multi-pass complete in {elapsed:.2f}s, "
             f"{n_batches} passes over {n_chr_with_snps} chromosomes"
-            + (
-                f" ({len(chrs_without_snps)} using full-kinship fallback)"
-                if chrs_without_snps
-                else ""
-            )
         )

@@ -68,7 +68,7 @@ dev = [
     "hypothesis[numpy]>=6.100.0",
     "scipy>=1.10.0",
     "pandas>=2.0.0",
-    "ruff>=0.5.0",
+    "ruff>=0.15.0",
     "pre-commit>=3.7.0",
 ]
 
@@ -77,7 +77,7 @@ jamma = "jamma.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-n auto --randomly-seed=last --benchmark-skip -m 'not slow'"
+addopts = "-n auto --randomly-seed=last --benchmark-skip -m 'not slow' --cov=src/jamma --cov-fail-under=80"
 filterwarnings = [
     "ignore:Some donated buffers were not usable:UserWarning",
 ]

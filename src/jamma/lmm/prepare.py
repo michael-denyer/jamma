@@ -218,7 +218,7 @@ class DevicePlacement:
 
     Encapsulates the common pattern of choosing between NamedSharding
     (multi-device) and single device placement, used identically by
-    both the batch, streaming, and LOCO runners.
+    the batch, streaming, and LOCO runners.
 
     Invariants (enforced by __post_init__):
     - snp and rep are always the same type (both NamedSharding or both Device)

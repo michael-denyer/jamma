@@ -52,9 +52,9 @@ from jamma.kinship.missing import impute_and_center, impute_center_and_standardi
 def _accumulate_kinship(K: np.ndarray, X_centered: np.ndarray) -> np.ndarray:
     """Accumulate kinship contribution from centered SNP batch.
 
-    Uses numpy.matmul (backed by MKL/OpenBLAS dgemm) for in-place accumulation.
-    The non-LOCO kinship path uses this exclusively so that JAX is never
-    initialized during kinship computation.
+    Uses numpy.matmul (backed by MKL/OpenBLAS dgemm) for out-of-place
+    accumulation. The non-LOCO kinship path uses this exclusively so
+    that JAX is never initialized during kinship computation.
 
     Args:
         K: Current kinship matrix accumulator (n_samples, n_samples)
@@ -628,6 +628,32 @@ def compute_kinship_streaming(
     return K
 
 
+def _yield_full_kinship_fallback(
+    S_full_np: np.ndarray,
+    chrs_without_snps: list[str],
+    n_filtered: int,
+) -> Iterator[tuple[str, np.ndarray]]:
+    """Yield full kinship for chromosomes with 0 filtered SNPs.
+
+    When a chromosome has no SNPs after filtering, there is nothing to leave
+    out, so K_loco equals K_full.
+
+    Args:
+        S_full_np: Full kinship numerator as numpy array (n_samples, n_samples).
+        chrs_without_snps: Chromosomes with 0 filtered SNPs.
+        n_filtered: Total number of filtered SNPs.
+
+    Yields:
+        (chr_name, K_full) pairs in sorted order.
+    """
+    if not chrs_without_snps:
+        return
+    K_full = S_full_np / n_filtered
+    for chr_name in sorted(chrs_without_snps):
+        logger.debug(f"LOCO chr {chr_name}: 0 SNPs after filtering, using full kinship")
+        yield (chr_name, K_full)
+
+
 def _yield_loco_matrices(
     S_full_np: np.ndarray,
     S_chr: dict[str, jnp.ndarray],
@@ -936,15 +962,9 @@ def compute_loco_kinship_streaming(
         )
 
         yield from _yield_loco_matrices(S_full_np, S_chr, n_chr_filtered, n_filtered)
-
-        # Chromosomes with 0 ksnps: K_loco = K_full (nothing to leave out)
-        if chrs_without_snps:
-            K_full = S_full_np / n_filtered
-            for chr_name in sorted(chrs_without_snps):
-                logger.debug(
-                    f"LOCO chr {chr_name}: 0 SNPs after filtering, using full kinship"
-                )
-                yield (chr_name, K_full)
+        yield from _yield_full_kinship_fallback(
+            S_full_np, chrs_without_snps, n_filtered
+        )
     else:
         # === MULTI-PASS: batch chromosomes across disk passes ===
         # First pass holds JAX S_full + batch S_chr + chunk buffer; after
@@ -1008,14 +1028,9 @@ def compute_loco_kinship_streaming(
             del S_chr
             gc.collect()
 
-        # Chromosomes with 0 ksnps: K_loco = K_full (nothing to leave out)
-        if chrs_without_snps:
-            K_full = S_full_np / n_filtered
-            for chr_name in sorted(chrs_without_snps):
-                logger.debug(
-                    f"LOCO chr {chr_name}: 0 SNPs after filtering, using full kinship"
-                )
-                yield (chr_name, K_full)
+        yield from _yield_full_kinship_fallback(
+            S_full_np, chrs_without_snps, n_filtered
+        )
 
         elapsed = time.perf_counter() - start_time
         logger.info(

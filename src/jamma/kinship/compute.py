@@ -1,4 +1,4 @@
-"""JAX kinship matrix computation.
+"""Kinship matrix computation.
 
 This module provides the main kinship matrix computation function,
 implementing GEMMA's centered relatedness matrix algorithm (-gk 1 mode).
@@ -8,6 +8,11 @@ The kinship matrix K is computed as:
 
 where X_c is the centered genotype matrix with missing values imputed
 to per-SNP mean, and p is the number of SNPs.
+
+The standard (non-LOCO) kinship computation uses numpy.matmul exclusively,
+so JAX is never initialized during kinship or eigendecomp phases. JAX is
+only used by the LOCO functions (compute_loco_kinship,
+compute_loco_kinship_streaming), which remain unchanged.
 
 LOCO (Leave-One-Chromosome-Out) kinship is also supported via the
 subtraction approach: K_loco_c = (S_full - S_c) / (p - p_c), where
@@ -25,7 +30,6 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 import psutil
-from jax import jit
 from loguru import logger
 
 from jamma.core import ensure_jax_configured
@@ -45,9 +49,12 @@ from jamma.io.plink import (
 from jamma.kinship.missing import impute_and_center, impute_center_and_standardize
 
 
-@jit
-def _accumulate_kinship(K: jnp.ndarray, X_centered: jnp.ndarray) -> jnp.ndarray:
+def _accumulate_kinship(K: np.ndarray, X_centered: np.ndarray) -> np.ndarray:
     """Accumulate kinship contribution from centered SNP batch.
+
+    Uses numpy.matmul (backed by MKL/OpenBLAS dgemm) for in-place accumulation.
+    The non-LOCO kinship path uses this exclusively so that JAX is never
+    initialized during kinship computation.
 
     Args:
         K: Current kinship matrix accumulator (n_samples, n_samples)
@@ -56,7 +63,8 @@ def _accumulate_kinship(K: jnp.ndarray, X_centered: jnp.ndarray) -> jnp.ndarray:
     Returns:
         Updated kinship matrix with batch contribution added.
     """
-    return K + jnp.matmul(X_centered, X_centered.T)
+    K += np.matmul(X_centered, X_centered.T)
+    return K
 
 
 def _filter_snps(
@@ -94,7 +102,7 @@ def _filter_snps(
 
 def _compute_kinship_inmemory(
     genotypes: np.ndarray,
-    transform_fn: Callable[[jnp.ndarray], jnp.ndarray],
+    transform_fn: Callable[[np.ndarray], np.ndarray],
     batch_size: int,
     maf_threshold: float,
     miss_threshold: float,
@@ -123,8 +131,6 @@ def _compute_kinship_inmemory(
         MemoryError: If check_memory=True and insufficient memory available.
         ValueError: If no SNPs pass filtering.
     """
-    ensure_jax_configured()
-
     n_samples, _ = genotypes.shape
 
     genotypes_filtered, n_snps, n_original = _filter_snps(
@@ -157,8 +163,8 @@ def _compute_kinship_inmemory(
 
     log_memory_snapshot(f"before_{label.lower().replace(' ', '_')}_{n_samples}samples")
 
-    X = jnp.array(genotypes_filtered, dtype=jnp.float64)
-    K = jnp.zeros((n_samples, n_samples), dtype=jnp.float64)
+    X = np.asarray(genotypes_filtered, dtype=np.float64)
+    K = np.zeros((n_samples, n_samples), dtype=np.float64)
 
     n_batches = (n_snps + batch_size - 1) // batch_size
     logger.info(
@@ -178,17 +184,12 @@ def _compute_kinship_inmemory(
         end = min(start + batch_size, n_snps)
         X_transformed = transform_fn(X[:, start:end])
         K = _accumulate_kinship(K, X_transformed)
-        K.block_until_ready()
 
     K = K / n_snps
-    K.block_until_ready()
 
     log_memory_snapshot(f"after_{label.lower().replace(' ', '_')}_{n_samples}samples")
 
-    K_np = np.array(K)
-    del K
-    gc.collect()
-    return K_np
+    return K
 
 
 def compute_centered_kinship(
@@ -398,7 +399,8 @@ def compute_loco_kinship(
 
     for _, start in batch_iter:
         end = min(start + batch_size, n_filtered)
-        S_full = _accumulate_kinship(S_full, X_centered[:, start:end])
+        batch = X_centered[:, start:end]
+        S_full = S_full + jnp.matmul(batch, batch.T)
         S_full.block_until_ready()
 
     # Compute per-chromosome LOCO kinship via subtraction
@@ -492,8 +494,6 @@ def compute_kinship_streaming(
         >>> K.shape
         (1940, 1940)
     """
-    ensure_jax_configured()
-
     start_time = time.perf_counter()
 
     # Get dimensions without loading genotypes
@@ -585,8 +585,8 @@ def compute_kinship_streaming(
     # Get indices of SNPs that passed filtering
     snp_indices = np.where(snp_mask)[0]
 
-    # Initialize kinship accumulator
-    K = jnp.zeros((n_samples, n_samples), dtype=jnp.float64)
+    # Initialize kinship accumulator (numpy — no JAX device memory)
+    K = np.zeros((n_samples, n_samples), dtype=np.float64)
 
     # === PASS 2: Accumulate kinship from filtered SNPs ===
     n_chunks = (n_snps + chunk_size - 1) // chunk_size
@@ -609,15 +609,14 @@ def compute_kinship_streaming(
         if len(chunk_filtered_indices) == 0:
             continue
 
-        # Extract only filtered columns
-        X_chunk = jnp.array(chunk[:, chunk_filtered_indices])
+        # Extract only filtered columns (float64 for numerical accuracy)
+        X_chunk = np.asarray(chunk[:, chunk_filtered_indices], dtype=np.float64)
 
         # Impute and center the chunk
         X_centered = impute_and_center(X_chunk)
 
-        # Accumulate kinship contribution
+        # Accumulate kinship contribution (in-place numpy matmul)
         K = _accumulate_kinship(K, X_centered)
-        K.block_until_ready()  # Sync so progress bar reflects actual compute
 
     # Scale by number of filtered SNPs
     K = K / n_filtered
@@ -625,11 +624,7 @@ def compute_kinship_streaming(
     elapsed = time.perf_counter() - start_time
     logger.info(f"Kinship matrix computed in {elapsed:.2f}s")
 
-    # Convert to numpy and free JAX device array immediately
-    K_np = np.array(K)
-    del K
-    gc.collect()
-    return K_np
+    return K
 
 
 def _yield_loco_matrices(
@@ -739,12 +734,12 @@ def _stream_s_full_and_chr(
         X_centered = impute_and_center(X_chunk)
 
         if S_full is not None:
-            S_full = _accumulate_kinship(S_full, X_centered)
+            S_full = S_full + jnp.matmul(X_centered, X_centered.T)
             S_full.block_until_ready()
 
         for chr_name in target_chrs_in_chunk:
             X_chr_part = X_centered[:, chunk_chrs == chr_name]
-            S_chr[chr_name] = _accumulate_kinship(S_chr[chr_name], X_chr_part)
+            S_chr[chr_name] = S_chr[chr_name] + jnp.matmul(X_chr_part, X_chr_part.T)
             S_chr[chr_name].block_until_ready()
 
     return S_full, S_chr

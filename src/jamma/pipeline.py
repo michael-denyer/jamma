@@ -618,10 +618,12 @@ class PipelineRunner:
         """
         t_start = time.perf_counter()
 
-        # Guarantee JAX x64 precision for ALL code paths, including
-        # precomputed kinship (-k) and precomputed eigen (-d/-u) where
-        # kinship/compute.py is never called.
-        ensure_jax_configured()
+        # Set x64 precision for ALL code paths, including precomputed kinship (-k)
+        # and precomputed eigen (-d/-u) where kinship/compute.py is never called.
+        # Does NOT initialize the JAX backend or create XLA thread pools.
+        # Device count (jax_num_cpu_devices) is deferred until LMM phase via
+        # ensure_jax_configured(), called in _run_inner() just before LMM.
+        jax.config.update("jax_enable_x64", True)
 
         # Set up optional XLA profiling — degrade gracefully on failure
         # so profiling issues never prevent GWAS results from being produced
@@ -784,6 +786,11 @@ class PipelineRunner:
 
         kinship_s = time.perf_counter() - t_kinship
         load_s = time.perf_counter() - t_start
+
+        # Initialize JAX backend NOW (after kinship + eigendecomp completes).
+        # This sets jax_num_cpu_devices for LMM sharding. Deferred from run()
+        # to avoid XLA thread pools competing with MKL during eigendecomp.
+        ensure_jax_configured()
 
         # 9. Run LMM association
         t_lmm = time.perf_counter()

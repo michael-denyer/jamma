@@ -15,12 +15,10 @@ kinship matrix while maintaining numerical equivalence with GEMMA.
 
 from __future__ import annotations
 
-import jax.numpy as jnp
-from jax import jit
+import numpy as np
 
 
-@jit
-def impute_and_center(X: jnp.ndarray) -> jnp.ndarray:
+def impute_and_center(X: np.ndarray) -> np.ndarray:
     """Impute missing values to SNP mean and center.
 
     Implements GEMMA's PlinkKin algorithm for handling missing data:
@@ -37,23 +35,23 @@ def impute_and_center(X: jnp.ndarray) -> jnp.ndarray:
         Shape is (n_samples, n_snps), dtype matches input (typically float64).
 
     Example:
-        >>> import jax.numpy as jnp
-        >>> X = jnp.array([[0.0, 1.0], [jnp.nan, 2.0], [2.0, 1.0]])
+        >>> import numpy as np
+        >>> X = np.array([[0.0, 1.0], [np.nan, 2.0], [2.0, 1.0]])
         >>> X_centered = impute_and_center(X)
         >>> # Mean of column 0 is (0+2)/2 = 1.0 (excluding NaN)
         >>> # NaN is replaced with 1.0, then column is centered
     """
     # Compute per-SNP mean excluding NaN values
     # nanmean ignores NaN when computing the mean
-    snp_means = jnp.nanmean(X, axis=0, keepdims=True)
+    snp_means = np.nanmean(X, axis=0, keepdims=True)
 
     # Handle all-missing columns: nanmean returns NaN, replace with 0
     # This ensures such SNPs contribute nothing to kinship (centered = 0)
-    snp_means = jnp.nan_to_num(snp_means, nan=0.0)
+    snp_means = np.nan_to_num(snp_means, nan=0.0)
 
     # Replace NaN with SNP mean (0 for all-missing columns)
     # where(condition, x, y) returns x where condition is True, else y
-    X_imputed = jnp.where(jnp.isnan(X), snp_means, X)
+    X_imputed = np.where(np.isnan(X), snp_means, X)
 
     # Center by subtracting mean
     X_centered = X_imputed - snp_means
@@ -61,8 +59,7 @@ def impute_and_center(X: jnp.ndarray) -> jnp.ndarray:
     return X_centered
 
 
-@jit
-def impute_center_and_standardize(X: jnp.ndarray) -> jnp.ndarray:
+def impute_center_and_standardize(X: np.ndarray) -> np.ndarray:
     """Impute missing values, center, and standardize by per-SNP standard deviation.
 
     Implements GEMMA's standardized kinship preprocessing (-gk 2):
@@ -88,32 +85,32 @@ def impute_center_and_standardize(X: jnp.ndarray) -> jnp.ndarray:
         Zero-variance SNPs contribute zero (matching GEMMA's geno_var != 0 check).
 
     Example:
-        >>> import jax.numpy as jnp
-        >>> X = jnp.array([[0.0, 1.0], [1.0, 2.0], [2.0, 1.0]])
+        >>> import numpy as np
+        >>> X = np.array([[0.0, 1.0], [1.0, 2.0], [2.0, 1.0]])
         >>> Z = impute_center_and_standardize(X)
         >>> # Each column is centered and divided by its standard deviation
     """
     # Compute per-SNP mean excluding NaN values
-    snp_means = jnp.nanmean(X, axis=0, keepdims=True)
+    snp_means = np.nanmean(X, axis=0, keepdims=True)
 
     # Handle all-missing columns: nanmean returns NaN, replace with 0
-    snp_means = jnp.nan_to_num(snp_means, nan=0.0)
+    snp_means = np.nan_to_num(snp_means, nan=0.0)
 
     # Replace NaN with SNP mean
-    X_imputed = jnp.where(jnp.isnan(X), snp_means, X)
+    X_imputed = np.where(np.isnan(X), snp_means, X)
 
     # Center by subtracting mean
     X_centered = X_imputed - snp_means
 
     # Compute variance AFTER imputation (matching GEMMA):
     # var(X) = mean((X - mu)^2), reuses already-computed X_centered
-    snp_var = jnp.mean(X_centered**2, axis=0, keepdims=True)
+    snp_var = np.mean(X_centered**2, axis=0, keepdims=True)
 
     # Standard deviation
-    snp_sd = jnp.sqrt(snp_var)
+    snp_sd = np.sqrt(snp_var)
 
     # Standardize, guarding against zero variance (monomorphic SNPs)
     # Zero-variance SNPs contribute nothing to kinship
-    X_standardized = jnp.where(snp_sd > 0, X_centered / snp_sd, 0.0)
+    X_standardized = np.where(snp_sd > 0, X_centered / snp_sd, 0.0)
 
     return X_standardized

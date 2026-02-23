@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.7] - 2026-02-23
+
+### Added
+
+- Unit tests for likelihood_jax.py edge cases: negative P_yy, degenerate SNPs, near-zero eigenvalues, lambda bounds, JAX/NumPy consistency, covariate rank validation, kinship symmetry checks
+- CI coverage threshold (`--cov-fail-under=80`) enforced on the full test suite
+
+### Fixed
+
+- JAX REML and MLE paths now guard negative P_yy → NaN (previously only the NumPy path had this guard)
+- CLI rejects `--mem-budget <= 0` with a clear error instead of silently proceeding
+- Covariate rank validation: rank-deficient covariate matrices now raise `ValueError` before LMM runs
+- Kinship eigendecomposition warns when input matrix is asymmetric
+- LOCO warns and uses full kinship for chromosomes with 0 ksnps (was silently skipping them)
+- Out-of-place kinship accumulation (`K = K + matmul(...)`) for deterministic FP rounding
+- Explicit `del chunk` in streaming stats loops to free memory between iterations
+- Test tolerances aligned with EQUIVALENCE.md (kinship 1e-10 → 1e-8)
+- CI: `test-slow` job skips coverage threshold (partial test runs can't meet 80%)
+
+### Changed
+
+- Dockerfile: consolidated RUN layers, added non-root user (`jamma`, uid 1000)
+- CI: upgraded `astral-sh/setup-uv` v4 → v5
+- Pinned `ruff>=0.15.0` in dev dependencies to match CI
+- Kinship non-LOCO path converted from JAX to numpy (JAX not initialized during kinship phase)
+- Extracted `DevicePlacement` and shared chunk preparation into `prepare.py`
+- Deferred JAX backend initialization until LMM phase
+- Wall clock time estimates for kinship, eigendecomp, and LMM phases
+
 ## [2.5.6] - 2026-02-22
 
 ### Fixed

@@ -35,8 +35,8 @@ from jamma.lmm.prepare import (
     _build_covariate_matrix,
     _compute_null_model,
     _eigendecompose_or_reuse,
-    _select_jax_device,
-    _setup_cpu_sharding,
+    prepare_utg_chunk,
+    resolve_device_placement,
 )
 from jamma.lmm.results import (
     _concat_jax_accumulators,
@@ -233,9 +233,7 @@ def run_lmm_association_streaming(
         logger.info(f"  Total SNPs: {n_snps:,}")
         logger.info(f"  Lambda range: [{l_min:.2e}, {l_max:.2e}]")
 
-    device = _select_jax_device(use_gpu)
-    snp_spec, rep_spec = _setup_cpu_sharding()
-    n_devices = len(jax.devices("cpu"))
+    placement = resolve_device_placement(use_gpu)
     needs_sample_filter = not np.all(valid_mask)
 
     # === PASS 1: SNP statistics (without loading all genotypes) ===
@@ -376,17 +374,15 @@ def run_lmm_association_streaming(
 
         W, n_cvt = _build_covariate_matrix(covariates, n_samples)
 
-        # Rotation is pure BLAS — use all physical cores, not the JAX-reduced
-        # count from get_blas_thread_count(). JAX isn't running during rotation.
+        # Use all physical cores for BLAS rotation (no JAX contention)
         rotation_threads = get_physical_core_count()
 
-        # Prepare rotated matrices (numpy BLAS matmuls)
         with blas_threads(rotation_threads):
             UtW = U.T @ W
             Uty = U.T @ phenotypes
 
         jax_chunk_size = _compute_chunk_size(
-            n_samples, n_filtered, n_grid, n_cvt, n_devices
+            n_samples, n_filtered, n_grid, n_cvt, placement.n_devices
         )
 
         logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
@@ -395,21 +391,15 @@ def run_lmm_association_streaming(
             UtW,
             Uty,
             n_cvt,
-            device,
+            placement.rep,
             show_progress,
             l_min=l_min,
             l_max=l_max,
-            rep_spec=rep_spec,
         )
 
-        # Device-resident shared arrays - placed on device ONCE before chunk loop.
-        # Chunks not evenly divisible by n_devices get zero-padded before
-        # device_put; padded SNP results are discarded via actual_len slicing.
-        rep_placement = rep_spec if rep_spec is not None else device
-        snp_placement = snp_spec if snp_spec is not None else device
-        eigenvalues = jax.device_put(eigenvalues_np, rep_placement)
-        UtW_jax = jax.device_put(UtW, rep_placement)
-        Uty_jax = jax.device_put(Uty, rep_placement)
+        eigenvalues = jax.device_put(eigenvalues_np, placement.rep)
+        UtW_jax = jax.device_put(UtW, placement.rep)
+        Uty_jax = jax.device_put(Uty, placement.rep)
     t_eigen_end = time.perf_counter()
 
     # Timing accumulators for per-chunk phases
@@ -443,31 +433,11 @@ def run_lmm_association_streaming(
         def _prepare_jax_chunk(
             start: int, geno: np.ndarray, total: int
         ) -> tuple[np.ndarray, int]:
-            """Prepare a JAX chunk for device transfer (CPU work).
-
-            Returns numpy array — caller is responsible for device_put.
-            """
-            end = min(start + jax_chunk_size, total)
-            actual_len = end - start
-
-            geno_jax_chunk = geno[:, start:end]
-
-            if actual_len < jax_chunk_size:
-                pad_width = jax_chunk_size - actual_len
-                geno_jax_chunk = np.pad(
-                    geno_jax_chunk, ((0, 0), (0, pad_width)), mode="constant"
-                )
-
-            with blas_threads(rotation_threads):
-                with jax.profiler.TraceAnnotation("dgemm_rotation"):
-                    UtG_chunk = np.ascontiguousarray(U.T @ geno_jax_chunk)
-
-            # Pad to device-count multiple for even NamedSharding distribution
-            if snp_spec is not None and UtG_chunk.shape[1] % n_devices != 0:
-                dev_pad = n_devices - (UtG_chunk.shape[1] % n_devices)
-                UtG_chunk = np.pad(UtG_chunk, ((0, 0), (0, dev_pad)), mode="constant")
-
-            return UtG_chunk, actual_len
+            """Slice a genotype subset and prepare UtG for device transfer."""
+            geno_slice = geno[:, start : min(start + jax_chunk_size, total)]
+            return prepare_utg_chunk(
+                geno_slice, U, jax_chunk_size, placement, rotation_threads
+            )
 
         for chunk, file_start, file_end in assoc_iterator:
             # Apply sample filtering
@@ -506,14 +476,14 @@ def run_lmm_association_streaming(
             )
             t_rot_end = time.perf_counter()
             t_rotation_total += t_rot_end - t_rot_start
-            UtG_jax = jax.device_put(UtG_np, snp_placement)
+            UtG_jax = jax.device_put(UtG_np, placement.snp)
             del UtG_np
 
             for i, _jax_start in enumerate(jax_starts):
                 current_actual_len = actual_jax_len
                 current_UtG = UtG_jax
 
-                # Start async transfer of next JAX chunk while computing current
+                # Async transfer of next JAX chunk overlaps with current compute
                 if i + 1 < len(jax_starts):
                     t_rot_start = time.perf_counter()
                     UtG_np, actual_jax_len = _prepare_jax_chunk(
@@ -521,7 +491,7 @@ def run_lmm_association_streaming(
                     )
                     t_rot_end = time.perf_counter()
                     t_rotation_total += t_rot_end - t_rot_start
-                    UtG_jax = jax.device_put(UtG_np, snp_placement)
+                    UtG_jax = jax.device_put(UtG_np, placement.snp)
                     del UtG_np
 
                 # --- JAX compute timing ---

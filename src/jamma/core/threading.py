@@ -69,37 +69,28 @@ def get_blas_thread_count() -> int:
 
     physical_cores = psutil.cpu_count(logical=False) or max_threads
 
-    # Lazy import of jax to avoid triggering backend initialisation at module level.
-    # By the time get_blas_thread_count() is called, configure_jax() has already
-    # set jax_num_cpu_devices, so jax.devices("cpu") returns the correct count.
-    # WARNING: calling this before configure_jax() will initialize the JAX backend
-    # with defaults (1 CPU device), freezing the config. Callers must ensure
-    # configure_jax() runs first.
+    # Lazy import — calling jax.devices() before configure_jax() would
+    # permanently freeze the backend at 1 device.
     import jax
 
     from jamma.core.jax_config import is_jax_configured
 
     if not is_jax_configured():
-        # Return physical cores without querying JAX — calling jax.devices()
-        # here would permanently freeze the backend at 1 device.
-        # This is expected during kinship and eigendecomp phases (JAX not yet
-        # initialized by design — deferred until LMM phase).
+        # Don't query jax.devices() — it would freeze the backend at 1 device.
+        # Expected during kinship and eigendecomp phases (JAX deferred until LMM).
         n = max(1, min(physical_cores, max_threads))
-        logger.debug(
-            f"BLAS thread count: {n} (full physical cores, JAX not yet initialized)"
-        )
+        logger.debug(f"BLAS threads: {n} (JAX not yet initialized)")
         return n
 
     n_jax_devices = len(jax.devices("cpu"))
     if n_jax_devices > 1:
         n = max(1, physical_cores // n_jax_devices)
         logger.debug(
-            f"BLAS threads reduced to {n} "
-            f"({physical_cores} cores / {n_jax_devices} JAX devices)"
+            f"BLAS threads: {n} ({physical_cores} cores / {n_jax_devices} JAX devices)"
         )
     else:
         n = max(1, min(physical_cores, max_threads))
-        logger.debug(f"BLAS threads from physical core count: {n}")
+        logger.debug(f"BLAS threads: {n} (physical cores)")
 
     return n
 

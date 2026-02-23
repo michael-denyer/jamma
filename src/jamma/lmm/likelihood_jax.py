@@ -218,7 +218,9 @@ def mle_log_likelihood_jax(
     Pab = calc_pab_jax(n_cvt, Hi_eval, Uab)
 
     # P_yy after projecting out covariates and genotype
+    # Negative P_yy → NaN (numerical breakdown); near-zero → clamp to avoid log(0)
     P_yy = Pab[nc_total, idx_yy]
+    P_yy = jnp.where(P_yy < 0.0, jnp.nan, P_yy)
     P_yy = jnp.where((P_yy >= 0.0) & (P_yy < 1e-8), 1e-8, P_yy)
 
     # MLE formula (NO logdet_hiw, uses n not df)
@@ -327,12 +329,13 @@ def _reml_with_precomputed_iab(
         logdet_hiw = logdet_hiw - jnp.where(d_iab > 0, jnp.log(d_iab), 0.0)
 
     # P_yy after projecting out covariates and genotype
-    # Use GEMMA's conditional clamping: only clamp if P_yy >= 0 and P_yy < 1e-8
-    # Matches lmm.cpp:854: if (P_yy >= 0.0 && P_yy < P_YY_MIN) P_yy = P_YY_MIN
+    # Matches lmm.cpp:854: negative P_yy → NaN (numerical breakdown),
+    # near-zero P_yy → clamp to P_YY_MIN to avoid log(0)
     P_yy = Pab[nc_total, idx_yy]
+    P_yy = jnp.where(P_yy < 0.0, jnp.nan, P_yy)
     P_yy = jnp.where((P_yy >= 0.0) & (P_yy < 1e-8), 1e-8, P_yy)
 
-    # REML log-likelihood
+    # REML log-likelihood (NaN P_yy propagates → optimizer avoids this region)
     c = 0.5 * df * (jnp.log(df) - jnp.log(2 * jnp.pi) - 1.0)
     f = c - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * jnp.log(P_yy)
 

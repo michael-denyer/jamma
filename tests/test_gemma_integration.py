@@ -78,7 +78,8 @@ class TestGemmaKinshipValidation:
         jamma_kinship = compute_centered_kinship(plink_data.genotypes)
 
         max_abs_diff = np.max(np.abs(gemma_kinship - jamma_kinship))
-        assert max_abs_diff < 1e-10, f"Kinship max abs diff {max_abs_diff:.2e} >= 1e-10"
+        # Tolerance per EQUIVALENCE.md (1e-8, BLAS accumulation)
+        assert max_abs_diff < 1e-8, f"Kinship max abs diff {max_abs_diff:.2e} >= 1e-8"
 
     def test_kinship_shape_matches(self, plink_data, gemma_kinship):
         """JAMMA and GEMMA produce same shape kinship matrix."""

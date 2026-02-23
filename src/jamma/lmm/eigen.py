@@ -60,6 +60,13 @@ def eigendecompose_kinship(
     if K.ndim != 2 or K.shape[0] != K.shape[1]:
         raise ValueError(f"Kinship matrix must be square, got shape {K.shape}")
 
+    if not np.allclose(K, K.T, atol=1e-10):
+        logger.warning(
+            "Kinship matrix is not symmetric (max asymmetry: %.2e). "
+            "np.linalg.eigh will use lower triangle only.",
+            np.max(np.abs(K - K.T)),
+        )
+
     logger.info(f"Eigendecomposing kinship matrix ({n_samples:,} x {n_samples:,})")
     logger.debug(
         f"Matrix elements: {n_elements:,}, memory: ~{n_elements * 8 / 1e9:.1f} GB"

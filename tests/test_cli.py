@@ -287,10 +287,11 @@ def test_lmm_with_covariate_file(tmp_path: Path):
     assert kinship_file.exists()
 
     # Create covariate file with correct sample count (100 samples)
+    # Column 1 = intercept, column 2 = varying covariate (must not be constant)
     cov_file = tmp_path / "covariates.txt"
     with open(cov_file, "w") as f:
-        for _ in range(100):
-            f.write("1 0.5\n")  # Intercept + one covariate
+        for i in range(100):
+            f.write(f"1 {0.1 * (i % 10):.1f}\n")
 
     # Run LMM with covariates
     result = runner.invoke(
@@ -696,12 +697,12 @@ def test_cat_flag(tmp_path: Path):
     assert result.exit_code == 0
     kinship_file = kinship_dir / "result.cXX.txt"
 
-    # Create covariate file: intercept + continuous + categorical(1,2,1,2,...)
+    # Create covariate file: intercept + varying continuous + categorical(1,2,1,2,...)
     cov_file = tmp_path / "covariates.txt"
     with open(cov_file, "w") as f:
         for i in range(100):
             cat_val = 1 + (i % 2)  # alternating 1, 2
-            f.write(f"1 0.5 {cat_val}\n")
+            f.write(f"1 {0.1 * (i % 10):.1f} {cat_val}\n")
 
     # Run LMM with -cat "3" to encode column 3 as categorical
     result = runner.invoke(

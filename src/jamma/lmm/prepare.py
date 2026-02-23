@@ -108,6 +108,13 @@ def _build_covariate_matrix(
             f"covariates leaves df={n_samples - n_cvt - 1} "
             f"(need at least {n_cvt + 2} samples)"
         )
+    # Rank-deficient covariates cause singular Pab → cryptic LAPACK errors
+    rank = np.linalg.matrix_rank(W)
+    if rank < n_cvt:
+        raise ValueError(
+            f"Covariate matrix is rank-deficient: rank={rank} but "
+            f"n_cvt={n_cvt}. Check for linearly dependent columns."
+        )
     return W, n_cvt
 
 

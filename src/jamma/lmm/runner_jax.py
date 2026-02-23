@@ -248,7 +248,7 @@ def run_lmm_association_jax(
     t_rot_end = time.perf_counter()
     t_rotation_total += t_rot_end - t_rot_start
     UtG_jax = jax.device_put(UtG_np, placement.snp)
-    del UtG_np
+    del UtG_np  # Safe: JAX holds internal ref during async transfer
 
     # Create progress bar iterator
     if show_progress and n_chunks > 1:

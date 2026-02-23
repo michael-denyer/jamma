@@ -235,6 +235,10 @@ def main(
     if gk is None and lmm is None:
         raise click.UsageError("One of -gk or -lmm is required")
 
+    # Validate memory budget
+    if mem_budget is not None and mem_budget <= 0:
+        raise click.UsageError(f"--mem-budget must be positive, got {mem_budget}")
+
     # Validate lambda bounds (before pipeline construction)
     if lmin <= 0:
         raise click.UsageError(f"-lmin must be > 0, got {lmin}")

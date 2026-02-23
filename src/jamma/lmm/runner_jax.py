@@ -22,8 +22,8 @@ from jamma.lmm.prepare import (
     _build_covariate_matrix,
     _compute_null_model,
     _eigendecompose_or_reuse,
-    _select_jax_device,
-    _setup_cpu_sharding,
+    prepare_utg_chunk,
+    resolve_device_placement,
 )
 from jamma.lmm.results import (
     _RESULT_FIELDS,
@@ -129,9 +129,7 @@ def run_lmm_association_jax(
             f"genotypes={est.genotypes_gb:.1f}GB"
         )
 
-    device = _select_jax_device(use_gpu)
-    snp_spec, rep_spec = _setup_cpu_sharding()
-    n_devices = len(jax.devices("cpu"))
+    placement = resolve_device_placement(use_gpu)
 
     valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
     if covariates is not None:
@@ -176,22 +174,20 @@ def run_lmm_association_jax(
         "lmm_jax",
         check_memory=check_memory,
     )
-    # Free kinship ref and LAPACK workspace before LMM phase
     del kinship
     gc.collect()
 
-    # Rotation is pure BLAS — use all physical cores, not the JAX-reduced
-    # count from get_blas_thread_count(). JAX isn't running during rotation.
+    # Use all physical cores for BLAS rotation (no JAX contention)
     rotation_threads = get_physical_core_count()
 
     with blas_threads(rotation_threads):
         UtW = U.T @ W
         Uty = U.T @ phenotypes
 
-    # Determine chunk size to avoid int32 buffer overflow. Computed before
-    # null model so n_devices alignment is available early.
     n_filtered = len(snp_indices)
-    chunk_size = _compute_chunk_size(n_samples, n_filtered, n_grid, n_cvt, n_devices)
+    chunk_size = _compute_chunk_size(
+        n_samples, n_filtered, n_grid, n_cvt, placement.n_devices
+    )
 
     logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
         lmm_mode,
@@ -199,22 +195,16 @@ def run_lmm_association_jax(
         UtW,
         Uty,
         n_cvt,
-        device,
+        placement.rep,
         show_progress,
         l_min=l_min,
         l_max=l_max,
-        rep_spec=rep_spec,
     )
     t_eigen_end = time.perf_counter()
 
-    # Device-resident shared arrays - placed on device ONCE before chunk loop.
-    # Chunks not evenly divisible by n_devices get zero-padded before
-    # device_put; padded SNP results are discarded via actual_len slicing.
-    rep_placement = rep_spec if rep_spec is not None else device
-    snp_placement = snp_spec if snp_spec is not None else device
-    eigenvalues = jax.device_put(eigenvalues_np, rep_placement)
-    UtW_jax = jax.device_put(UtW, rep_placement)
-    Uty_jax = jax.device_put(Uty, rep_placement)
+    eigenvalues = jax.device_put(eigenvalues_np, placement.rep)
+    UtW_jax = jax.device_put(UtW, placement.rep)
+    Uty_jax = jax.device_put(Uty, placement.rep)
 
     # Process in chunks if needed
     n_chunks = (n_filtered + chunk_size - 1) // chunk_size
@@ -241,43 +231,23 @@ def run_lmm_association_jax(
     t_jax_compute_total = 0.0
     t_result_write_total = 0.0
 
-    def _prepare_chunk(start: int) -> tuple[np.ndarray, int]:
-        """Prepare a chunk for device transfer (CPU work).
-
-        Returns numpy array — caller is responsible for device_put.
-        """
-        end = min(start + chunk_size, n_filtered)
-        actual_len = end - start
-
-        chunk_indices = snp_indices[start:end]
+    def _impute_and_prepare(start: int) -> tuple[np.ndarray, int]:
+        """Mean-impute a genotype slice and prepare UtG for device transfer."""
+        chunk_indices = snp_indices[start : start + chunk_size]
         geno_chunk = genotypes[:, chunk_indices]
         chunk_means_local = col_means[chunk_indices]
-        missing_mask = np.isnan(geno_chunk)
-        geno_chunk = np.where(missing_mask, chunk_means_local[None, :], geno_chunk)
+        missing = np.isnan(geno_chunk)
+        geno_chunk = np.where(missing, chunk_means_local[None, :], geno_chunk)
+        return prepare_utg_chunk(geno_chunk, U, chunk_size, placement, rotation_threads)
 
-        if actual_len < chunk_size:
-            pad_width = chunk_size - actual_len
-            geno_chunk = np.pad(geno_chunk, ((0, 0), (0, pad_width)), mode="constant")
-
-        with blas_threads(rotation_threads):
-            UtG_chunk = np.ascontiguousarray(U.T @ geno_chunk)
-
-        # Pad to device-count multiple for even NamedSharding distribution
-        if snp_spec is not None and UtG_chunk.shape[1] % n_devices != 0:
-            dev_pad = n_devices - (UtG_chunk.shape[1] % n_devices)
-            UtG_chunk = np.pad(UtG_chunk, ((0, 0), (0, dev_pad)), mode="constant")
-
-        return UtG_chunk, actual_len
-
-    # Double buffering: overlap device transfer with computation
     chunk_starts = list(range(0, n_filtered, chunk_size))
 
     # Prepare first chunk (includes BLAS rotation U.T @ G)
     t_rot_start = time.perf_counter()
-    UtG_np, actual_len = _prepare_chunk(chunk_starts[0])
+    UtG_np, actual_len = _impute_and_prepare(chunk_starts[0])
     t_rot_end = time.perf_counter()
     t_rotation_total += t_rot_end - t_rot_start
-    UtG_jax = jax.device_put(UtG_np, snp_placement)
+    UtG_jax = jax.device_put(UtG_np, placement.snp)
     del UtG_np
 
     # Create progress bar iterator
@@ -292,14 +262,13 @@ def run_lmm_association_jax(
         actual_chunk_len = actual_len
         current_UtG = UtG_jax
 
-        # Start async transfer of next chunk while computing current
+        # Async transfer of next chunk overlaps with current compute
         if i + 1 < len(chunk_starts):
             t_rot_start = time.perf_counter()
-            next_UtG_np, actual_len = _prepare_chunk(chunk_starts[i + 1])
+            next_UtG_np, actual_len = _impute_and_prepare(chunk_starts[i + 1])
             t_rot_end = time.perf_counter()
             t_rotation_total += t_rot_end - t_rot_start
-            # device_put is async - transfer starts immediately, overlaps with compute
-            UtG_jax = jax.device_put(next_UtG_np, snp_placement)
+            UtG_jax = jax.device_put(next_UtG_np, placement.snp)
             del next_UtG_np
 
         # --- JAX compute timing ---
@@ -338,17 +307,12 @@ def run_lmm_association_jax(
         t_jax_end = time.perf_counter()
         t_jax_compute_total += t_jax_end - t_jax_start
 
-        # Write results into pre-allocated arrays by index (no list append)
+        # Write results, stripping padding from tail/device-alignment
         t_write_start = time.perf_counter()
-        # Always slice to actual_chunk_len — strips both tail-chunk padding
-        # and device-alignment padding from NamedSharding.
-        slice_len = actual_chunk_len
-        s = slice(write_offset, write_offset + slice_len)
-
+        s = slice(write_offset, write_offset + actual_chunk_len)
         for key in arrays_out:
-            arrays_out[key][s] = np.asarray(cr[key][:slice_len])
-
-        write_offset += slice_len
+            arrays_out[key][s] = np.asarray(cr[key][:actual_chunk_len])
+        write_offset += actual_chunk_len
         t_write_end = time.perf_counter()
         t_result_write_total += t_write_end - t_write_start
 
@@ -370,8 +334,7 @@ def run_lmm_association_jax(
     )
     log_lambda_boundary_warning(n_at_lmin, n_at_lmax, l_min, l_max)
 
-    # Explicit cleanup of JAX arrays before returning to prevent SIGSEGV
-    # from race conditions between Python GC and JAX background threads
+    # Explicit cleanup prevents SIGSEGV from GC/JAX thread race conditions
     del eigenvalues, UtW_jax, Uty_jax
     jax.clear_caches()
 

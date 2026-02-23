@@ -41,9 +41,11 @@ from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.likelihood_jax import batch_compute_uab
 from jamma.lmm.prepare import (
+    DevicePlacement,
     _build_covariate_matrix,
     _compute_null_model,
     _select_jax_device,
+    prepare_utg_chunk,
 )
 from jamma.lmm.results import (
     _concat_jax_accumulators,
@@ -433,7 +435,11 @@ def _run_lmm_for_chromosome(
         UtW = eigenvectors.T @ W
         Uty = eigenvectors.T @ phenotypes
 
+    # LOCO intentionally uses single-device mode — each chromosome's
+    # association pass has fewer SNPs, so multi-device sharding overhead
+    # outweighs the parallelism benefit.
     device = _select_jax_device(use_gpu=False)
+    placement = DevicePlacement(snp=device, rep=device, n_devices=1)
 
     logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
         lmm_mode,
@@ -441,41 +447,28 @@ def _run_lmm_for_chromosome(
         UtW,
         Uty,
         n_cvt,
-        device,
+        placement.rep,
         show_progress=False,
         l_min=l_min,
         l_max=l_max,
     )
 
-    # Device-resident shared arrays
-    eigenvalues_jax = jax.device_put(eigenvalues, device)
-    UtW_jax = jax.device_put(UtW, device)
-    Uty_jax = jax.device_put(Uty, device)
+    eigenvalues_jax = jax.device_put(eigenvalues, placement.rep)
+    UtW_jax = jax.device_put(UtW, placement.rep)
+    Uty_jax = jax.device_put(Uty, placement.rep)
 
-    # LOCO intentionally uses single-device mode — each chromosome's
-    # association pass has fewer SNPs, so multi-device sharding overhead
-    # outweighs the parallelism benefit.
     jax_chunk_size = _compute_chunk_size(
-        n_samples, n_filtered, n_grid, n_cvt, n_devices=1
+        n_samples, n_filtered, n_grid, n_cvt, n_devices=placement.n_devices
     )
 
     def _prepare_jax_chunk(
         start: int, geno: np.ndarray, total: int
     ) -> tuple[np.ndarray, int]:
-        """Prepare a JAX chunk for device transfer."""
-        end = min(start + jax_chunk_size, total)
-        actual_len = end - start
-        geno_jax_chunk = geno[:, start:end]
-
-        if actual_len < jax_chunk_size:
-            pad_width = jax_chunk_size - actual_len
-            geno_jax_chunk = np.pad(
-                geno_jax_chunk, ((0, 0), (0, pad_width)), mode="constant"
-            )
-
-        with blas_threads(rotation_threads):
-            UtG_chunk = np.ascontiguousarray(eigenvectors.T @ geno_jax_chunk)
-        return UtG_chunk, actual_len
+        """Slice a genotype subset and prepare UtG for device transfer."""
+        geno_slice = geno[:, start : min(start + jax_chunk_size, total)]
+        return prepare_utg_chunk(
+            geno_slice, eigenvectors, jax_chunk_size, placement, rotation_threads
+        )
 
     # Track lambda boundary hits across all disk chunks
     total_at_lmin = 0
@@ -512,7 +505,7 @@ def _run_lmm_for_chromosome(
                 UtG_np, actual_jax_len = _prepare_jax_chunk(
                     jax_starts[0], geno_disk_chunk, n_disk_subset
                 )
-                UtG_jax = jax.device_put(UtG_np, device)
+                UtG_jax = jax.device_put(UtG_np, placement.snp)
                 del UtG_np
 
                 for i, _jax_start in enumerate(jax_starts):
@@ -524,7 +517,7 @@ def _run_lmm_for_chromosome(
                         UtG_np, actual_jax_len = _prepare_jax_chunk(
                             jax_starts[i + 1], geno_disk_chunk, n_disk_subset
                         )
-                        UtG_jax = jax.device_put(UtG_np, device)
+                        UtG_jax = jax.device_put(UtG_np, placement.snp)
                         del UtG_np
 
                     # Batch compute Uab

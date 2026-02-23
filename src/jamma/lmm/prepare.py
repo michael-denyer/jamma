@@ -1,11 +1,14 @@
 """Shared setup utilities for LMM association runners.
 
 Provides device selection, covariate matrix construction,
-eigendecomposition handling, null model computation, and
-batch lambda optimization used by both the batch and streaming runners.
+eigendecomposition handling, null model computation, device placement,
+and batch lambda optimization used by both the batch and streaming runners.
 """
 
+from __future__ import annotations
+
 import gc
+from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
@@ -14,6 +17,7 @@ from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from loguru import logger
 
+from jamma.core.threading import blas_threads
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood import compute_null_model_mle
 from jamma.lmm.likelihood_jax import golden_section_optimize_lambda
@@ -152,20 +156,19 @@ def _compute_null_model(
     UtW: np.ndarray,
     Uty: np.ndarray,
     n_cvt: int,
-    device: jax.Device,
+    rep_placement: NamedSharding | jax.Device,
     show_progress: bool,
     l_min: float = 1e-5,
     l_max: float = 1e5,
-    rep_spec: NamedSharding | None = None,
 ) -> tuple[float | None, float | None, jnp.ndarray | None]:
     """Compute null model MLE for Score, LRT, and All-tests modes.
 
     GEMMA computes both REML and MLE null lambdas in CalcLambda, but uses
-    MLE lambda for Hi_eval in the Score test. This matches GEMMA's behavior:
+    MLE lambda for Hi_eval in the Score test:
     Hi_eval_null = 1 / (lambda_null_mle * eigenvalues + 1).
 
-    Score test (mode 3) and All-tests (mode 4) additionally precompute Hi_eval
-    at the null lambda. Wald (mode 1) skips this entirely.
+    Wald (mode 1) skips this entirely; LRT (mode 2) needs only logl_H0;
+    Score/All (modes 3, 4) precompute Hi_eval at the null lambda.
 
     Args:
         lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
@@ -173,13 +176,10 @@ def _compute_null_model(
         UtW: Rotated covariates.
         Uty: Rotated phenotype.
         n_cvt: Number of covariates.
-        device: JAX device for Hi_eval placement (used when rep_spec is None).
+        rep_placement: JAX device or NamedSharding for Hi_eval placement.
         show_progress: Whether to log results.
         l_min: Minimum lambda for optimization.
         l_max: Maximum lambda for optimization.
-        rep_spec: NamedSharding replication spec for multi-device placement.
-            When provided, Hi_eval_null is replicated across all devices.
-            When None, Hi_eval_null is placed on the single device.
 
     Returns:
         Tuple of (logl_H0, lambda_null_mle, Hi_eval_null_jax).
@@ -200,10 +200,115 @@ def _compute_null_model(
     Hi_eval_null_jax = None
     if lmm_mode in (3, 4):
         Hi_eval_null = 1.0 / (lambda_null_mle * eigenvalues_np + 1.0)
-        placement = rep_spec if rep_spec is not None else device
-        Hi_eval_null_jax = jax.device_put(Hi_eval_null, placement)
+        Hi_eval_null_jax = jax.device_put(Hi_eval_null, rep_placement)
 
     return logl_H0, lambda_null_mle, Hi_eval_null_jax
+
+
+@dataclass(frozen=True)
+class DevicePlacement:
+    """Resolved device/sharding placement targets for JAX arrays.
+
+    Encapsulates the common pattern of choosing between NamedSharding
+    (multi-device) and single device placement, used identically by
+    both the batch, streaming, and LOCO runners.
+
+    Invariants (enforced by __post_init__):
+    - snp and rep are always the same type (both NamedSharding or both Device)
+    - n_devices > 1 iff placement uses NamedSharding
+    - n_devices >= 1
+    """
+
+    snp: NamedSharding | jax.Device
+    rep: NamedSharding | jax.Device
+    n_devices: int
+
+    def __post_init__(self) -> None:
+        if self.n_devices < 1:
+            raise ValueError(f"n_devices must be >= 1, got {self.n_devices}")
+        if type(self.snp) is not type(self.rep):
+            raise ValueError(
+                f"snp and rep must be the same type, got "
+                f"{type(self.snp).__name__} and {type(self.rep).__name__}"
+            )
+        if isinstance(self.snp, NamedSharding) and self.n_devices == 1:
+            raise ValueError("NamedSharding placement requires n_devices > 1")
+        if not isinstance(self.snp, NamedSharding) and self.n_devices > 1:
+            raise ValueError(
+                f"Single-device placement inconsistent with n_devices={self.n_devices}"
+            )
+
+
+def resolve_device_placement(use_gpu: bool) -> DevicePlacement:
+    """Set up JAX device selection and sharding placement.
+
+    Combines _select_jax_device and _setup_cpu_sharding into a single call
+    that returns resolved placement targets ready for jax.device_put.
+
+    Args:
+        use_gpu: Whether to attempt GPU selection.
+
+    Returns:
+        DevicePlacement with resolved sharding/device targets.
+    """
+    device = _select_jax_device(use_gpu)
+    snp_spec, rep_spec = _setup_cpu_sharding()
+    # When sharding fails, n_devices must be 1 to match the single-device
+    # fallback — otherwise padding/alignment logic acts as if multi-device
+    # is active while placement targets a single device.
+    n_devices = len(jax.devices("cpu")) if snp_spec is not None else 1
+    return DevicePlacement(
+        snp=snp_spec if snp_spec is not None else device,
+        rep=rep_spec if rep_spec is not None else device,
+        n_devices=n_devices,
+    )
+
+
+def prepare_utg_chunk(
+    geno_chunk: np.ndarray,
+    U: np.ndarray,
+    chunk_size: int,
+    placement: DevicePlacement,
+    rotation_threads: int,
+) -> tuple[np.ndarray, int]:
+    """Impute, pad, rotate, and device-align a genotype chunk for JAX.
+
+    Shared by both the batch and streaming runners. The caller is
+    responsible for mean-imputation of missing values before calling this.
+
+    Steps:
+    1. Pad to chunk_size if this is a tail chunk (fewer SNPs than chunk_size).
+    2. Rotate: UtG = U.T @ geno_chunk (BLAS matmul).
+    3. Pad to device-count multiple for even NamedSharding distribution.
+
+    Args:
+        geno_chunk: Mean-imputed genotype chunk (n_samples, n_snps_actual).
+        U: Eigenvector matrix for rotation (n_samples, n_samples).
+        chunk_size: Target chunk width (for tail-chunk padding).
+        placement: Resolved device placement (for device-alignment padding).
+        rotation_threads: BLAS thread count for U.T @ G rotation.
+
+    Returns:
+        Tuple of (UtG_chunk_np, actual_len) where UtG_chunk_np is ready for
+        jax.device_put and actual_len is the number of real (non-padded) SNPs.
+    """
+    actual_len = geno_chunk.shape[1]
+
+    if actual_len < chunk_size:
+        pad_width = chunk_size - actual_len
+        geno_chunk = np.pad(geno_chunk, ((0, 0), (0, pad_width)), mode="constant")
+
+    with blas_threads(rotation_threads):
+        with jax.profiler.TraceAnnotation("dgemm_rotation"):
+            UtG_chunk = np.ascontiguousarray(U.T @ geno_chunk)
+
+    # Pad to device-count multiple for even NamedSharding distribution
+    n_devices = placement.n_devices
+    if n_devices > 1 and UtG_chunk.shape[1] % n_devices != 0:
+        dev_pad = n_devices - (UtG_chunk.shape[1] % n_devices)
+        UtG_chunk = np.pad(UtG_chunk, ((0, 0), (0, dev_pad)), mode="constant")
+
+    return UtG_chunk, actual_len
 
 
 def _grid_optimize_lambda_batched(

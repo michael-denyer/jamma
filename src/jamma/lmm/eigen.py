@@ -85,9 +85,7 @@ def eigendecompose_kinship(
             ),
         )
 
-    # Eigendecomp is pure numpy/LAPACK — JAX isn't running, so use all
-    # physical cores. get_blas_thread_count() would divide by n_jax_devices,
-    # which is wrong here (no XLA contention during eigh).
+    # Use all physical cores for BLAS (no JAX contention during eigh)
     n_threads = get_physical_core_count()
     for lib in threadpool_info():
         if lib.get("user_api") == "blas":

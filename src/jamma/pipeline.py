@@ -618,15 +618,12 @@ class PipelineRunner:
         """
         t_start = time.perf_counter()
 
-        # Set x64 precision for ALL code paths, including precomputed kinship (-k)
-        # and precomputed eigen (-d/-u) where kinship/compute.py is never called.
-        # Does NOT initialize the JAX backend or create XLA thread pools.
-        # Device count (jax_num_cpu_devices) is deferred until LMM phase via
-        # ensure_jax_configured(), called in _run_inner() just before LMM.
+        # Enable x64 without initializing the JAX backend — device count is
+        # deferred until LMM phase via ensure_jax_configured().
         jax.config.update("jax_enable_x64", True)
 
-        # Set up optional XLA profiling — degrade gracefully on failure
-        # so profiling issues never prevent GWAS results from being produced
+        # Optional XLA profiling — degrade gracefully so profiling issues
+        # never prevent GWAS results from being produced.
         trace_ctx = contextlib.nullcontext()
         if self.config.profile_dir is not None:
             try:
@@ -649,15 +646,12 @@ class PipelineRunner:
 
     def _run_inner(self, t_start: float) -> PipelineResult:
         """Execute the pipeline body, called within the optional profiling context."""
-        # 1. Validate
         self.validate_inputs()
 
-        # 2. Metadata
         meta = get_plink_metadata(self.config.bfile)
         n_samples = meta["n_samples"]
         n_snps = meta["n_snps"]
 
-        # 3. Phenotypes (before memory check so we use valid sample count)
         phenotypes, n_analyzed = self.parse_phenotypes()
         n_filtered = len(phenotypes) - n_analyzed
         logger.info(
@@ -665,7 +659,6 @@ class PipelineRunner:
             f"({n_filtered} filtered)"
         )
 
-        # 5. Resolve SNP list files to indices
         snps_indices = self._resolve_snp_list(
             self.config.snps_file, meta["sid"], "-snps"
         )
@@ -673,11 +666,10 @@ class PipelineRunner:
             self.config.ksnps_file, meta["sid"], "-ksnps"
         )
 
-        # 6. Output directory
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         assoc_path = self.config.output_dir / f"{self.config.output_prefix}.assoc.txt"
 
-        # 7. LOCO branch: skip standard kinship, run LOCO orchestrator
+        # LOCO branch: skip standard kinship, run LOCO orchestrator
         if self.config.loco:
             covariates = self.load_covariates(n_samples)
             valid_mask = self._compute_valid_mask(phenotypes, covariates)
@@ -724,20 +716,15 @@ class PipelineRunner:
                 },
             )
 
-        # 7. Covariates (loaded early for eigen validation)
         covariates = self.load_covariates(n_samples)
-
-        # Compute valid sample count (phenotype + covariate filtering)
         valid_mask = self._compute_valid_mask(phenotypes, covariates)
         n_valid = int(np.sum(valid_mask))
         n_cvt = covariates.shape[1] if covariates is not None else 1
         self._log_banner(n_samples, n_valid, n_snps, n_covariates=n_cvt)
 
-        # 8. Memory check (uses post-filter sample count and actual n_cvt)
         actual_chunk = _compute_chunk_size(n_valid, n_snps, n_cvt=n_cvt)
         self.check_memory_requirements(n_valid, n_snps, n_cvt=n_cvt)
 
-        # 9. Standard path: load eigen files or kinship
         t_kinship = time.perf_counter()
         eigenvalues = None
         eigenvectors = None
@@ -759,15 +746,10 @@ class PipelineRunner:
                     "provided. Using eigen files; kinship will "
                     "be ignored."
                 )
-            K = None  # Not needed when eigen provided
+            K = None
         else:
             K = self.load_kinship(n_samples, ksnps_indices=ksnps_indices)
-            # If write_eigen requested, eigendecompose the valid-sample
-            # subset of K so files match the analyzed sample count.
-            # The runner will also subset K internally, so these eigen
-            # files are consistent with what the runner computes.
             if self.config.write_eigen:
-                # valid_mask already includes covariate filtering from above
                 K_valid = K if np.all(valid_mask) else K[np.ix_(valid_mask, valid_mask)]
                 eigenvalues, eigenvectors = eigendecompose_kinship(
                     K_valid, check_memory=self.config.check_memory
@@ -780,19 +762,15 @@ class PipelineRunner:
                 )
                 logger.info(f"Wrote eigenvalues to {d_path}")
                 logger.info(f"Wrote eigenvectors to {u_path}")
-                # Free K -- eigenvalues/eigenvectors already computed,
-                # runner doesn't need K
-                K = None
+                K = None  # Runner uses eigenvalues/eigenvectors directly
 
         kinship_s = time.perf_counter() - t_kinship
         load_s = time.perf_counter() - t_start
 
-        # Initialize JAX backend NOW (after kinship + eigendecomp completes).
-        # This sets jax_num_cpu_devices for LMM sharding. Deferred from run()
+        # Initialize JAX backend after kinship + eigendecomp completes,
         # to avoid XLA thread pools competing with MKL during eigendecomp.
         ensure_jax_configured()
 
-        # 9. Run LMM association
         t_lmm = time.perf_counter()
         results, n_tested = run_lmm_association_streaming(
             bed_path=self.config.bfile,

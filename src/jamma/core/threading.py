@@ -82,10 +82,11 @@ def get_blas_thread_count() -> int:
     if not is_jax_configured():
         # Return physical cores without querying JAX — calling jax.devices()
         # here would permanently freeze the backend at 1 device.
+        # This is expected during kinship and eigendecomp phases (JAX not yet
+        # initialized by design — deferred until LMM phase).
         n = max(1, min(physical_cores, max_threads))
-        logger.warning(
-            "get_blas_thread_count() called before configure_jax(). "
-            f"Returning physical core count ({n}) without JAX device reduction."
+        logger.debug(
+            f"BLAS thread count: {n} (full physical cores, JAX not yet initialized)"
         )
         return n
 

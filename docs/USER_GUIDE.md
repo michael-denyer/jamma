@@ -540,12 +540,6 @@ available memory at runtime — other processes reduce headroom.
    jamma -lmm 1 --no-check-memory -bfile data/study -k kinship.txt
    ```
 
-3. **Reduce chunk size** for lower per-batch memory:
-
-   ```bash
-   jamma -lmm 1 ... --chunk-size 1000
-   ```
-
 ### Results differ from GEMMA
 
 Small numerical differences (< 1e-5) are expected due to different optimization algorithms. Scientific conclusions (significance, rankings) should be identical. If you see larger differences, please open an issue.

@@ -628,7 +628,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
-[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.4.4...HEAD
+[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.5.7...HEAD
+[2.5.7]: https://github.com/michael-denyer/jamma/compare/v2.5.6...v2.5.7
+[2.5.6]: https://github.com/michael-denyer/jamma/compare/v2.5.5...v2.5.6
+[2.5.5]: https://github.com/michael-denyer/jamma/compare/v2.5.4...v2.5.5
+[2.5.4]: https://github.com/michael-denyer/jamma/compare/v2.5.3...v2.5.4
+[2.5.3]: https://github.com/michael-denyer/jamma/compare/v2.5.2...v2.5.3
+[2.5.2]: https://github.com/michael-denyer/jamma/compare/v2.5.1...v2.5.2
+[2.5.1]: https://github.com/michael-denyer/jamma/compare/v2.5.0...v2.5.1
+[2.5.0]: https://github.com/michael-denyer/jamma/compare/v2.4.5...v2.5.0
+[2.4.5]: https://github.com/michael-denyer/jamma/compare/v2.4.4...v2.4.5
 [2.4.4]: https://github.com/michael-denyer/jamma/compare/v2.4.3...v2.4.4
 [2.4.3]: https://github.com/michael-denyer/jamma/compare/v2.4.2...v2.4.3
 [2.4.2]: https://github.com/michael-denyer/jamma/compare/v2.4.1...v2.4.2

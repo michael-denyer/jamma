@@ -28,7 +28,7 @@ bugs), see [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md).
 data the max is < 1e-6. Divergence arises from weak-signal SNPs with flat MLE
 surfaces where golden section and Brent settle on different optima.*
 
-**Production-scale validation** (85,000 real samples, 91,613 SNPs):
+**Production-scale validation** (125,632 real samples, 91,586 SNPs):
 Spearman rho 1.000000, significance agreement 100% at all thresholds,
 effect direction agreement 100%. See [Empirical Results](#empirical-results).
 
@@ -256,6 +256,27 @@ Validated on Databricks with MKL ILP64 numpy:
 | Effect direction agreement | 100.0% |
 | Max relative p-value diff | 2.10e-03 |
 
+### Production Scale (v2.5): 125,632 real samples x 91,586 SNPs
+
+Validated on Databricks (Azure E96ds_v6, 48 physical cores, 672 GB RAM) with
+MKL ILP64 numpy 2.4.2, JAX 0.9.0:
+
+| Metric | Result |
+|--------|--------|
+| Kinship Spearman rho | 1.00000000 |
+| Kinship max abs diff | 5.00e-11 |
+| Kinship mean abs diff | 1.24e-12 |
+| Kinship Frobenius relative | 1.45e-10 |
+| Association Spearman rho (-log10 p) | 1.000000 |
+| Significance agree (p < 0.05) | 91,586/91,586 (100%) |
+| Significance agree (p < 5e-8) | 91,586/91,586 (100%) |
+| Effect direction agreement | 100.0% |
+| Max relative p-value diff | 9.66e-04 |
+
+The 125k validation shows tighter kinship tolerances than 85k (5e-11 vs 1e-05
+max abs diff), likely reflecting identical BLAS libraries on the 125k run
+versus mixed OpenBLAS/MKL at 85k.
+
 ---
 
 ## Test Coverage
@@ -315,12 +336,13 @@ algebraically identical formulas in both JAMMA and GEMMA.
 4. CDF implementation differences (tail probabilities)
 
 **Scientific Equivalence**: Identical significance calls at all thresholds,
-identical effect directions, identical SNP rankings. Validated at both small
-scale (1,940 samples) and production scale (85,000 samples).
+identical effect directions, identical SNP rankings. Validated at small
+scale (1,940 samples), production scale (85,000 samples), and large
+scale (125,632 samples).
 
 Reference tolerances: `src/jamma/validation/tolerances.py`
 Reference data: `tests/fixtures/`
 
 ---
 
-*Last updated: 2026-02-10*
+*Last updated: 2026-02-24*

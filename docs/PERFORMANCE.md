@@ -73,7 +73,7 @@ LOCO analysis processes each chromosome independently: compute K_loco via stream
 
 ### Test Suite
 
-Full test suite passing (`uv run pytest tests/ -x`). Zero tolerance changes. Tolerance constants in `src/jamma/validation/tolerances.py` unchanged.
+Full test suite passing (`uv run pytest tests/ -x`). Tolerance constants in `src/jamma/validation/tolerances.py` unchanged from v1.3 (kinship tolerance aligned to 1e-8 in v2.5.7).
 
 ---
 
@@ -184,7 +184,7 @@ See [USER_GUIDE.md](USER_GUIDE.md) for installation instructions and [GEMMA_DIVE
 
 ### Test Suite
 
-Full test suite passing. Zero tolerance changes from v1.3. Tolerance constants in `src/jamma/validation/tolerances.py` unchanged.
+Full test suite passing. Kinship tolerance aligned from 1e-10 to 1e-8 in v2.5.7 to match EQUIVALENCE.md bounds. All other tolerance constants in `src/jamma/validation/tolerances.py` unchanged from v1.3.
 
 ---
-*Created: 2026-02-10*
+*Last updated: 2026-02-24*

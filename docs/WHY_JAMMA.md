@@ -286,9 +286,15 @@ class AssocResult:
 # pyproject.toml - single source of truth
 [project]
 dependencies = [
-    "jax>=0.8.0",
-    "numpy>=2.0,<2.4",
     "bed-reader>=1.0.0",
+    "jax>=0.8.0",
+    "jaxlib>=0.8.0",
+    "numpy>=2.0.0",
+    "psutil>=5.9.0",
+    "threadpoolctl>=3.0.0",
+    "click>=8.0.0",
+    "loguru>=0.7.0",
+    "progressbar2>=4.2.0",
 ]
 
 [tool.pytest.ini_options]

@@ -19,6 +19,7 @@ flowchart TB
         RIO["Result Writer [2d]"]
         SNPLIST["SNP List I/O [2e]"]
         EIGIO["Eigen I/O [2f]"]
+        MATIO["Matrix Writer [2g]"]
     end
 
     subgraph L3["Core Computation [3]"]
@@ -36,6 +37,11 @@ flowchart TB
         RUNNER["JAX Runner [4b]"]
         STREAM["Streaming Runner [4c]"]
         LOCO["LOCO Runner [4d]"]
+        PREP["Chunk Preparation [4e]"]
+        CHUNK["Chunk Sizing [4f]"]
+        COMPUTE["Chunk Compute [4g]"]
+        SCHEMA["Output Schema [4h]"]
+        RESULTS["Result Building [4i]"]
     end
 
     subgraph L5["Infrastructure [5]"]
@@ -43,6 +49,9 @@ flowchart TB
         JAX["JAX Config [5b]"]
         MEM["Memory Manager [5c]"]
         LOG["Logging [5d]"]
+        THREAD["Threading [5e]"]
+        HW["Hardware Context [5f]"]
+        PROG["Progress [5g]"]
     end
 
     subgraph L6["Validation [6]"]
@@ -85,17 +94,30 @@ flowchart TB
     RUNNER --> LIKEJAX
     RUNNER --> STATS
     RUNNER --> RIO
+    RUNNER --> PREP
+    RUNNER --> CHUNK
+    RUNNER --> COMPUTE
     STREAM --> LIKE
     STREAM --> OPT
     STREAM --> STATS
     STREAM --> RIO
     STREAM --> SNPF
+    STREAM --> PREP
+    STREAM --> CHUNK
+    STREAM --> COMPUTE
+
+    COMPUTE --> LIKEJAX
+    COMPUTE --> STATS
+    PREP --> THREAD
 
     LIKEJAX --> LIKE
     OPT --> LIKE
     STATS --> LIKE
 
     EIGEN --> MEM
+    EIGEN --> THREAD
+
+    KIO --> MATIO
 
     CMP --> TOL
 ```
@@ -130,14 +152,15 @@ Reads PLINK binary genotypes, covariates, and kinship matrices. Writes GEMMA-com
 | 2a | `get_plink_metadata()` | Dimensions + metadata without loading genotypes | [plink.py:92](../src/jamma/io/plink.py#L92) |
 | 2b | `read_covariate_file()` | Whitespace-delimited covariate matrix | [covariate.py:19](../src/jamma/io/covariate.py#L19) |
 | 2c | `read_kinship_matrix()` | Load GEMMA `.cXX.txt` format | [kinship/io.py:8](../src/jamma/kinship/io.py#L8) |
-| 2c | `write_kinship_matrix()` | Write `.cXX.txt` (10 sig digits) | [kinship/io.py:42](../src/jamma/kinship/io.py#L42) |
+| 2c | `write_kinship_matrix()` | Write `.cXX.txt` via parallel writer | [kinship/io.py:42](../src/jamma/kinship/io.py#L42) |
 | 2d | `IncrementalAssocWriter` | Per-SNP disk writer (no memory accumulation) | [lmm/io.py:172](../src/jamma/lmm/io.py#L172) |
-| 2d | `format_assoc_line()` | Wald output row (12 columns) | [lmm/io.py:12](../src/jamma/lmm/io.py#L12) |
+| 2d | `format_assoc_line()` | Table-driven output row formatting | [lmm/io.py:12](../src/jamma/lmm/io.py#L12) |
 | 2d | `write_assoc_results()` | Batch write from list | [lmm/io.py:150](../src/jamma/lmm/io.py#L150) |
 | 2e | `read_snp_list_file()` | Parse SNP list file (one RS ID per line) | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | 2e | `resolve_snp_list_to_indices()` | Map SNP IDs to dataset indices | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | 2f | `read_eigen_files()` | Load eigenvalue/eigenvector files | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
 | 2f | `write_eigen_files()` | Write eigendecomposition to disk | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
+| 2g | `write_matrix_parallel()` | Parallel matrix writer using file-backed memmap | [io/matrix_writer.py:91](../src/jamma/io/matrix_writer.py#L91) |
 
 ---
 
@@ -152,15 +175,15 @@ GEMMA algorithm reimplementation: kinship → eigendecomp → REML → test stat
 | 3a | `_filter_snps()` | MAF, missing rate, monomorphism filters | [compute.py:53](../src/jamma/kinship/compute.py#L53) |
 | 3b | `impute_and_center()` | NaN → mean, then center (JIT-compiled) | [missing.py:23](../src/jamma/kinship/missing.py#L23) |
 | 3c | `eigendecompose_kinship()` | numpy.linalg.eigh with BLAS thread control | [eigen.py:28](../src/jamma/lmm/eigen.py#L28) |
-| 3d | `reml_log_likelihood()` | REML ℓ(λ) for variance component estimation | [likelihood.py:234](../src/jamma/lmm/likelihood.py#L234) |
-| 3d | `mle_log_likelihood()` | MLE ℓ(λ) for LRT | [likelihood.py:517](../src/jamma/lmm/likelihood.py#L517) |
-| 3d | `compute_Uab()` | Element-wise products of rotated vectors | [likelihood.py:46](../src/jamma/lmm/likelihood.py#L46) |
-| 3d | `calc_pab()` | Recursive Schur complement projection (GEMMA CalcPab) | [likelihood.py:145](../src/jamma/lmm/likelihood.py#L145) |
-| 3d | `get_ab_index()` | GEMMA GetabIndex — 1-based upper triangular | [likelihood.py:25](../src/jamma/lmm/likelihood.py#L25) |
-| 3d | `compute_null_model_lambda()` | Null model REML for Score test | [likelihood.py:477](../src/jamma/lmm/likelihood.py#L477) |
-| 3d | `compute_null_model_mle()` | Null model MLE for LRT | [likelihood.py:571](../src/jamma/lmm/likelihood.py#L571) |
-| 3e | `golden_section_optimize_lambda()` | REML optimization per SNP (Wald) | [likelihood_jax.py](../src/jamma/lmm/likelihood_jax.py) |
-| 3e | `golden_section_optimize_lambda_mle()` | MLE optimization per SNP (LRT) | [likelihood_jax.py](../src/jamma/lmm/likelihood_jax.py) |
+| 3d | `reml_log_likelihood()` | REML ℓ(λ) for variance component estimation | [likelihood.py:262](../src/jamma/lmm/likelihood.py#L262) |
+| 3d | `mle_log_likelihood()` | MLE ℓ(λ) for LRT | [likelihood.py:533](../src/jamma/lmm/likelihood.py#L533) |
+| 3d | `compute_Uab()` | Element-wise products of rotated vectors | [likelihood.py:74](../src/jamma/lmm/likelihood.py#L74) |
+| 3d | `calc_pab()` | Recursive Schur complement projection (GEMMA CalcPab) | [likelihood.py:173](../src/jamma/lmm/likelihood.py#L173) |
+| 3d | `get_ab_index()` | GEMMA GetabIndex — 1-based upper triangular | [likelihood.py:53](../src/jamma/lmm/likelihood.py#L53) |
+| 3d | `compute_null_model_lambda()` | Null model REML for Score test | [likelihood.py:493](../src/jamma/lmm/likelihood.py#L493) |
+| 3d | `compute_null_model_mle()` | Null model MLE for LRT | [likelihood.py:583](../src/jamma/lmm/likelihood.py#L583) |
+| 3e | `golden_section_optimize_lambda()` | REML optimization per SNP (Wald) | [likelihood_jax.py:495](../src/jamma/lmm/likelihood_jax.py#L495) |
+| 3e | `golden_section_optimize_lambda_mle()` | MLE optimization per SNP (LRT) | [likelihood_jax.py:833](../src/jamma/lmm/likelihood_jax.py#L833) |
 | 3f | `AssocResult` | Per-SNP result dataclass (all test fields) | [stats.py:40](../src/jamma/lmm/stats.py#L40) |
 | 3f | `calc_wald_test()` | β, SE, p_wald from Pab matrix | [stats.py:98](../src/jamma/lmm/stats.py#L98) |
 | 3f | `calc_score_test()` | p_score using null model lambda | [stats.py:232](../src/jamma/lmm/stats.py#L232) |
@@ -173,23 +196,35 @@ GEMMA algorithm reimplementation: kinship → eigendecomp → REML → test stat
 
 ### [4] JAX Acceleration
 
-Batch SNP processing with JIT compilation and vmap vectorization.
+Batch SNP processing with JIT compilation and vmap vectorization. Shared preparation, chunk sizing, and result building modules support both batch and streaming runners.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
 | 4a | `compute_uab_jax()` | JIT-compiled Uab for n_cvt=1 | [likelihood_jax.py:113](../src/jamma/lmm/likelihood_jax.py#L113) |
 | 4a | `calc_pab_jax()` | JIT-compiled Pab projection | [likelihood_jax.py:149](../src/jamma/lmm/likelihood_jax.py#L149) |
-| 4a | `batch_compute_uab()` | vmap across SNP dimension | [likelihood_jax.py:343](../src/jamma/lmm/likelihood_jax.py#L343) |
-| 4a | `golden_section_optimize_lambda()` | Grid search + 20 golden section iterations | [likelihood_jax.py:492](../src/jamma/lmm/likelihood_jax.py#L492) |
+| 4a | `batch_compute_uab()` | vmap across SNP dimension | [likelihood_jax.py:346](../src/jamma/lmm/likelihood_jax.py#L346) |
+| 4a | `golden_section_optimize_lambda()` | Grid search + 20 golden section iterations | [likelihood_jax.py:495](../src/jamma/lmm/likelihood_jax.py#L495) |
 | 4b | `run_lmm_association_jax()` | Full-load JAX batch runner | [runner_jax.py](../src/jamma/lmm/runner_jax.py) |
-| 4c | `run_lmm_association_streaming()` | Streaming from disk, O(n² + n×chunk) | [runner_streaming.py:137](../src/jamma/lmm/runner_streaming.py#L137) |
+| 4c | `run_lmm_association_streaming()` | Streaming from disk, O(n² + n×chunk) | [runner_streaming.py:92](../src/jamma/lmm/runner_streaming.py#L92) |
 | 4d | `run_lmm_loco()` | LOCO: per-chromosome kinship → eigen → LMM | [lmm/loco.py](../src/jamma/lmm/loco.py) |
+| 4e | `DevicePlacement` | CPU/GPU device + sharding configuration | [lmm/prepare.py:216](../src/jamma/lmm/prepare.py#L216) |
+| 4e | `resolve_device_placement()` | Select device and set up NamedSharding | [lmm/prepare.py:249](../src/jamma/lmm/prepare.py#L249) |
+| 4e | `prepare_utg_chunk()` | Rotate genotype chunk: U.T @ G with device transfer | [lmm/prepare.py:274](../src/jamma/lmm/prepare.py#L274) |
+| 4e | `_compute_null_model()` | Shared null model computation (REML + MLE) | [lmm/prepare.py:160](../src/jamma/lmm/prepare.py#L160) |
+| 4f | `_compute_chunk_size()` | JAX int32-safe chunk sizing with device alignment | [lmm/chunk.py:24](../src/jamma/lmm/chunk.py#L24) |
+| 4f | `auto_tune_chunk_size()` | Chunk size auto-tuning for memory/performance | [lmm/chunk.py:98](../src/jamma/lmm/chunk.py#L98) |
+| 4g | `_compute_lmm_chunk()` | Per-chunk Wald/LRT/Score computation | [lmm/compute.py:107](../src/jamma/lmm/compute.py#L107) |
+| 4g | `block_chunk_result()` | Call `block_until_ready()` on JAX arrays | [lmm/compute.py:238](../src/jamma/lmm/compute.py#L238) |
+| 4h | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:17](../src/jamma/lmm/schema.py#L17) |
+| 4h | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:43](../src/jamma/lmm/schema.py#L43) |
+| 4i | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:44](../src/jamma/lmm/results.py#L44) |
+| 4i | `count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/results.py:177](../src/jamma/lmm/results.py#L177) |
 
 ---
 
 ### [5] Infrastructure
 
-Configuration, memory management, and logging.
+Configuration, memory management, threading, and logging.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
@@ -199,13 +234,18 @@ Configuration, memory management, and logging.
 | 5c | `MemoryBreakdown` | Estimated memory per workflow stage | [memory.py:54](../src/jamma/core/memory.py#L54) |
 | 5c | `estimate_workflow_memory()` | Full pipeline memory estimate (pre-flight) | [memory.py:97](../src/jamma/core/memory.py#L97) |
 | 5c | `estimate_lmm_memory()` | LMM-phase-only memory estimate | [memory.py:188](../src/jamma/core/memory.py#L188) |
-| 5c | `estimate_lmm_streaming_memory()` | LMM streaming phase memory estimate | [memory.py:375](../src/jamma/core/memory.py#L375) |
+| 5c | `estimate_lmm_streaming_memory()` | LMM streaming phase memory estimate | [memory.py:373](../src/jamma/core/memory.py#L373) |
 | 5c | `check_memory_before_run()` | Raise MemoryError if insufficient | [memory.py:598](../src/jamma/core/memory.py#L598) |
 | 5c | `get_memory_snapshot()` | Current RSS, VMS, available | [memory.py:478](../src/jamma/core/memory.py#L478) |
 | 5c | `cleanup_memory()` | GC + clear JAX caches | [memory.py:529](../src/jamma/core/memory.py#L529) |
 | 5d | `setup_logging()` | Loguru console + optional file | [logging.py:16](../src/jamma/utils/logging.py#L16) |
 | 5d | `write_gemma_log()` | GEMMA-compatible `.log.txt` | [logging.py:51](../src/jamma/utils/logging.py#L51) |
 | 5d | `log_rss_memory()` | RSS snapshot at phase boundaries | [logging.py:120](../src/jamma/utils/logging.py#L120) |
+| 5e | `get_physical_core_count()` | Physical core detection (consolidated helper) | [threading.py:23](../src/jamma/core/threading.py#L23) |
+| 5e | `blas_threads()` | Context manager for BLAS thread control | [threading.py:99](../src/jamma/core/threading.py#L99) |
+| 5f | `get_hardware_context()` | CPU, BLAS, JAX, platform info for benchmarks | [hardware.py:21](../src/jamma/core/hardware.py#L21) |
+| 5f | `assert_x64_precision()` | Guard against silent float32 fallback | [hardware.py:65](../src/jamma/core/hardware.py#L65) |
+| 5g | `progress_iterator()` | Progress bar wrapper for iterables | [progress.py:13](../src/jamma/core/progress.py#L13) |
 
 ---
 
@@ -341,16 +381,24 @@ flowchart TD
 | Load genotypes | [plink.py:53](../src/jamma/io/plink.py#L53) |
 | SNP list I/O | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | Eigen I/O | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
+| Matrix writer | [io/matrix_writer.py:91](../src/jamma/io/matrix_writer.py#L91) |
 | Kinship compute | [compute.py:86](../src/jamma/kinship/compute.py#L86) |
 | Eigendecomposition | [eigen.py:28](../src/jamma/lmm/eigen.py#L28) |
-| REML likelihood | [likelihood.py:234](../src/jamma/lmm/likelihood.py#L234) |
-| Lambda optimization | [likelihood_jax.py:492](../src/jamma/lmm/likelihood_jax.py#L492) |
+| REML likelihood | [likelihood.py:262](../src/jamma/lmm/likelihood.py#L262) |
+| Lambda optimization | [likelihood_jax.py:495](../src/jamma/lmm/likelihood_jax.py#L495) |
 | Wald/Score/LRT tests | [stats.py:98](../src/jamma/lmm/stats.py#L98) |
 | SNP filters (HWE) | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |
+| Output schema | [lmm/schema.py:17](../src/jamma/lmm/schema.py#L17) |
+| Chunk preparation | [lmm/prepare.py:216](../src/jamma/lmm/prepare.py#L216) |
+| Chunk sizing | [lmm/chunk.py:24](../src/jamma/lmm/chunk.py#L24) |
+| Chunk compute | [lmm/compute.py:107](../src/jamma/lmm/compute.py#L107) |
+| Result building | [lmm/results.py:44](../src/jamma/lmm/results.py#L44) |
 | JAX batch runner | [runner_jax.py](../src/jamma/lmm/runner_jax.py) |
-| Streaming runner | [runner_streaming.py:137](../src/jamma/lmm/runner_streaming.py#L137) |
+| Streaming runner | [runner_streaming.py:92](../src/jamma/lmm/runner_streaming.py#L92) |
 | LOCO runner | [lmm/loco.py](../src/jamma/lmm/loco.py) |
 | Result writer | [lmm/io.py:172](../src/jamma/lmm/io.py#L172) |
 | Memory estimation | [memory.py:97](../src/jamma/core/memory.py#L97) |
+| Threading | [threading.py:23](../src/jamma/core/threading.py#L23) |
+| Hardware context | [hardware.py:21](../src/jamma/core/hardware.py#L21) |
 | Validation comparison | [compare.py:536](../src/jamma/validation/compare.py#L536) |
 | Equivalence proof | [EQUIVALENCE.md](EQUIVALENCE.md) |

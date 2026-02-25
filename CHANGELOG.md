@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.8] - 2026-02-25
+
+### Changed
+
+- In-place kinship accumulation (`K += np.matmul(...)`) eliminates one n×n temporary per batch
+- Size-gated eigendecomp symmetry check: full `np.allclose` for n<10k, vectorized sampled check for n≥10k (avoids 80GB temporary at 100k samples)
+- Single-pass eigenvalue post-processing with in-place thresholding (no `np.where` allocation)
+- LOCO valid_mask guard: skips n×n subsetting copy when all samples are valid
+- LOCO SNP-list restriction uses precomputed boolean mask instead of per-chromosome `np.isin`
+
 ## [2.5.7] - 2026-02-23
 
 ### Added

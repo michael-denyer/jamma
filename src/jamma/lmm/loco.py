@@ -177,6 +177,9 @@ def run_lmm_loco(
     if n_valid == 0:
         raise ValueError("No samples with valid phenotypes")
 
+    # Computed once: avoids re-evaluating np.all(valid_mask) inside the chromosome loop.
+    all_samples_valid = np.all(valid_mask)
+
     phenotypes_valid = phenotypes[valid_mask]
     covariates_valid = covariates[valid_mask, :] if covariates is not None else None
 
@@ -205,6 +208,14 @@ def run_lmm_loco(
             writer = stack.enter_context(
                 IncrementalAssocWriter(output_path, test_type=test_type)
             )
+
+        # Precompute global SNP membership mask for -snps restriction.
+        # Avoids per-chromosome np.isin(chr_snp_indices, snps_indices) in 22 iterations.
+        if snps_indices is not None:
+            snps_global_mask: np.ndarray | None = np.zeros(n_snps_total, dtype=bool)
+            snps_global_mask[snps_indices] = True
+        else:
+            snps_global_mask = None
 
         # Stream LOCO kinship matrices one at a time
         loco_iter = compute_loco_kinship_streaming(
@@ -235,10 +246,13 @@ def run_lmm_loco(
                 if show_progress:
                     logger.info(f"  Saved LOCO kinship to {kinship_path}")
 
-            # Subset to valid samples, then free the full matrix
-            K_loco_valid = K_loco[np.ix_(valid_mask, valid_mask)]
-            del K_loco
-            gc.collect()
+            # Subset to valid samples (skip copy when all samples are valid)
+            if all_samples_valid:
+                K_loco_valid = K_loco
+            else:
+                K_loco_valid = K_loco[np.ix_(valid_mask, valid_mask)]
+                del K_loco
+                gc.collect()
 
             # Eigendecompose the valid subset
             eigenvalues_np, U = eigendecompose_kinship(
@@ -263,7 +277,7 @@ def run_lmm_loco(
                 show_progress=show_progress,
                 l_min=l_min,
                 l_max=l_max,
-                snps_indices_array=snps_indices,
+                snps_global_mask=snps_global_mask,
                 col_chunk_size=col_chunk_size,
                 writer=writer,
             )
@@ -309,7 +323,7 @@ def _run_lmm_for_chromosome(
     l_max: float = 1e5,
     n_grid: int = 50,
     n_refine: int = 10,
-    snps_indices_array: np.ndarray | None = None,
+    snps_global_mask: np.ndarray | None = None,
     col_chunk_size: int = 5_000,
     writer: IncrementalAssocWriter | None = None,
 ) -> list[AssocResult]:
@@ -337,8 +351,9 @@ def _run_lmm_for_chromosome(
         l_max: Maximum lambda for optimization.
         n_grid: Grid search resolution.
         n_refine: Golden section iterations.
-        snps_indices_array: Numpy array of global SNP indices for -snps restriction,
-            or None. Passed through for vectorized np.isin filtering.
+        snps_global_mask: Boolean mask over all SNPs (True = included by -snps), or
+            None. Pre-indexed: `snps_global_mask[chr_snp_indices]` gives the
+            per-chromosome mask. Avoids per-chromosome np.isin computation.
         col_chunk_size: Number of SNP columns per disk read chunk.
         writer: Optional incremental writer for streaming results to disk.
             When provided, results are written directly and an empty list
@@ -396,9 +411,8 @@ def _run_lmm_for_chromosome(
     )
 
     # Apply SNP list restriction (if -snps provided)
-    if snps_indices_array is not None:
-        local_snp_list_mask = np.isin(chr_snp_indices, snps_indices_array)
-        snp_mask &= local_snp_list_mask
+    if snps_global_mask is not None:
+        snp_mask &= snps_global_mask[chr_snp_indices]
 
     local_filtered_indices = np.where(snp_mask)[0]
     n_filtered = len(local_filtered_indices)

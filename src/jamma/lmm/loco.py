@@ -178,7 +178,7 @@ def run_lmm_loco(
         raise ValueError("No samples with valid phenotypes")
 
     # Computed once: avoids re-evaluating np.all(valid_mask) inside the chromosome loop.
-    all_samples_valid = np.all(valid_mask)
+    all_samples_valid = n_valid == n_samples_total
 
     phenotypes_valid = phenotypes[valid_mask]
     covariates_valid = covariates[valid_mask, :] if covariates is not None else None
@@ -210,7 +210,7 @@ def run_lmm_loco(
             )
 
         # Precompute global SNP membership mask for -snps restriction.
-        # Avoids per-chromosome np.isin(chr_snp_indices, snps_indices) in 22 iterations.
+        # Avoids per-chromosome np.isin on every iteration.
         if snps_indices is not None:
             snps_global_mask: np.ndarray | None = np.zeros(n_snps_total, dtype=bool)
             snps_global_mask[snps_indices] = True
@@ -236,7 +236,7 @@ def run_lmm_loco(
                     f"{len(chr_snp_indices)} SNPs, eigendecomposing..."
                 )
 
-            # Save full K_loco BEFORE subsetting (frees it before eigendecomp)
+            # Save full K_loco BEFORE subsetting (else branch frees it)
             if save_kinship and kinship_output_dir is not None:
                 kinship_path = (
                     kinship_output_dir
@@ -249,6 +249,7 @@ def run_lmm_loco(
             # Subset to valid samples (skip copy when all samples are valid)
             if all_samples_valid:
                 K_loco_valid = K_loco
+                del K_loco  # drop name; K_loco_valid holds sole reference
             else:
                 K_loco_valid = K_loco[np.ix_(valid_mask, valid_mask)]
                 del K_loco

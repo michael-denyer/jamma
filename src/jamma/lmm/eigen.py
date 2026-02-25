@@ -46,12 +46,10 @@ def _check_symmetry_sampled(K: np.ndarray, n: int, *, atol: float = 1e-10) -> No
         atol: Absolute tolerance for element-wise comparison.
     """
     stride = max(1, int(np.sqrt(n)))
-    max_asym = 0.0
-
-    for i in range(0, n, stride):
-        row_asym = float(np.max(np.abs(K[i, :] - K[:, i])))
-        if row_asym > max_asym:
-            max_asym = row_asym
+    # K[::stride, :] selects sampled rows; K[:, ::stride].T gives corresponding
+    # columns transposed to the same shape. Temporary is (n/stride, n) — ~0.5 GB
+    # at 100k vs 80 GB for full K - K.T.
+    max_asym = float(np.max(np.abs(K[::stride, :] - K[:, ::stride].T)))
 
     if max_asym > atol:
         logger.warning(
@@ -67,7 +65,7 @@ def eigendecompose_kinship(
     """Eigendecompose kinship matrix, zeroing small eigenvalues.
 
     GEMMA behavior from EigenDecomp_Zeroed:
-    - Eigenvalues < 1e-10 are set to 0
+    - Eigenvalues with |value| < 1e-10 are set to 0
     - Warning if >1 zero eigenvalue
     - Warning if negative eigenvalues remain after thresholding
 
@@ -105,9 +103,7 @@ def eigendecompose_kinship(
                 np.max(np.abs(K - K.T)),
             )
     else:
-        # Sampled check: O(n*sqrt(n)), avoids allocating full n*n temporary.
-        # np.linalg.eigh reads only the lower triangle, so asymmetry
-        # is harmless — this check is purely diagnostic.
+        # Sampled check: O(n*sqrt(n)), avoids n*n temporary allocation.
         _check_symmetry_sampled(K, n_samples, atol=1e-10)
 
     logger.info(f"Eigendecomposing kinship matrix ({n_samples:,} x {n_samples:,})")

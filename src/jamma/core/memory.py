@@ -19,9 +19,10 @@ def _dsyevd_workspace_gb(n: int) -> float:
 
 
 def _check_available(total_gb: float) -> tuple[float, bool]:
-    """Return (available_gb, sufficient) with 10% safety margin."""
+    """Return (available_gb, sufficient) with 10% margin capped at 10GB."""
     available_gb = psutil.virtual_memory().available / 1e9
-    return available_gb, total_gb * 1.1 < available_gb
+    margin_gb = min(total_gb * 0.1, 10.0)
+    return available_gb, (total_gb + margin_gb) < available_gb
 
 
 def estimate_eigendecomp_memory(n_samples: int) -> float:
@@ -435,9 +436,14 @@ def check_memory_available(
 ) -> bool:
     """Check if sufficient memory is available, raise if not.
 
+    The safety margin is percentage-based but capped at 10GB absolute.
+    At large scale (500GB+), a 10% margin (50GB) is excessive — the OS
+    and process overhead don't scale with eigendecomp workspace size.
+
     Args:
         required_gb: Memory required in GB.
-        safety_margin: Additional margin (0.1 = 10%).
+        safety_margin: Additional margin as fraction (0.1 = 10%), capped
+            at 10GB absolute to avoid blocking runs with adequate headroom.
         operation: Description for error message.
 
     Returns:
@@ -447,12 +453,13 @@ def check_memory_available(
         MemoryError: If insufficient memory with detailed message.
     """
     available_gb = psutil.virtual_memory().available / 1e9
-    required_with_margin = required_gb * (1 + safety_margin)
+    margin_gb = min(required_gb * safety_margin, 10.0)
+    required_with_margin = required_gb + margin_gb
 
     if required_with_margin > available_gb:
         raise MemoryError(
             f"Insufficient memory for {operation}. "
-            f"Need {required_gb:.1f}GB (+{safety_margin * 100:.0f}% margin = "
+            f"Need {required_gb:.1f}GB (+{margin_gb:.1f}GB margin = "
             f"{required_with_margin:.1f}GB), but only {available_gb:.1f}GB available. "
             f"Consider using a machine with more RAM or reducing dataset size."
         )

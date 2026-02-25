@@ -28,13 +28,12 @@ def _check_available(total_gb: float) -> tuple[float, bool]:
 def estimate_eigendecomp_memory(n_samples: int) -> float:
     """Estimate peak memory (GB) for eigendecomposition of kinship matrix.
 
-    Peak memory during eigendecomposition (numpy.linalg.eigh uses DSYEVD):
-    - K (input): n^2 * 8 bytes
-    - U (output eigenvectors): n^2 * 8 bytes
+    Peak memory during eigendecomposition (DSYEVD called in-place):
+    - K/U (shared buffer): n^2 * 8 bytes [kinship overwritten with eigenvectors]
     - workspace (DSYEVD O(n^2))
 
-    For 200k samples: 320GB + 320GB + ~640GB = ~1280GB
-    For 100k samples: 80GB + 80GB + ~160GB = ~320GB
+    For 200k samples: 320GB + ~640GB = ~960GB (saves 320GB vs copy approach)
+    For 100k samples:  80GB + ~160GB = ~240GB (saves  80GB vs copy approach)
 
     Args:
         n_samples: Number of samples (individuals).
@@ -44,12 +43,11 @@ def estimate_eigendecomp_memory(n_samples: int) -> float:
 
     Example:
         >>> estimate_eigendecomp_memory(200_000)
-        1280.01
+        960.01
     """
-    kinship_gb = n_samples**2 * 8 / 1e9  # K input matrix
-    eigenvectors_gb = n_samples**2 * 8 / 1e9  # U output eigenvectors
+    kinship_gb = n_samples**2 * 8 / 1e9  # K buffer, reused as U output
     workspace_gb = _dsyevd_workspace_gb(n_samples)
-    return kinship_gb + eigenvectors_gb + workspace_gb
+    return kinship_gb + workspace_gb
 
 
 class MemoryBreakdown(NamedTuple):
@@ -159,9 +157,10 @@ def estimate_workflow_memory(
     # kinship accumulation in _compute_kinship_inmemory
     peak_kinship = genotypes_gb * 2 + kinship_gb
 
-    # Phase 2 (eigendecomp): kinship + eigenvectors + workspace
+    # Phase 2 (eigendecomp): K/U shared buffer + workspace
     # (genotypes can be freed during eigendecomp if not needed for LMM)
-    peak_eigendecomp = kinship_gb + eigenvectors_gb + eigendecomp_workspace_gb
+    # K/U shared buffer (in-place eigendecomp)
+    peak_eigendecomp = kinship_gb + eigendecomp_workspace_gb
 
     # Phase 3 (LMM): eigenvectors + genotypes + working
     # (kinship freed, eigenvalues are small ~n*8 bytes)
@@ -317,12 +316,13 @@ def estimate_streaming_memory(
 
     For 200k samples, 10k chunk, n_grid=50:
     - Kinship accumulation: 320GB + 16GB = 336GB
-    - Eigendecomp: 320GB + 320GB + ~640GB = ~1280GB (PEAK, DSYEVD workspace)
+    - Eigendecomp: 320GB + ~640GB = ~960GB (PEAK, K/U shared buffer)
     - LMM: 320GB + 16GB + 16GB + Uab/Iab
 
     Note: This reveals the true constraint - eigendecomposition cannot be
     streamed and requires both kinship (input) and eigenvectors (output)
-    matrices simultaneously.
+    matrices simultaneously. With in-place eigendecomp, K's buffer is reused
+    for U, saving one n²×8 allocation.
 
     Args:
         n_samples: Number of samples (individuals).
@@ -350,7 +350,8 @@ def estimate_streaming_memory(
 
     # Peak memory calculation by workflow phase
     peak_kinship = kinship_gb + chunk_gb
-    peak_eigendecomp = kinship_gb + eigenvectors_gb + eigendecomp_workspace_gb
+    # K/U shared buffer (in-place eigendecomp)
+    peak_eigendecomp = kinship_gb + eigendecomp_workspace_gb
     peak_lmm = (
         eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb + uab_iab_gb
     )

@@ -21,7 +21,7 @@ class TestMemoryEstimation:
     """Tests for estimate_workflow_memory function."""
 
     def test_memory_breakdown_200k(self):
-        """Memory estimate for 200k samples - peak during eigendecomp ~1280GB."""
+        """Memory estimate for 200k samples - peak during eigendecomp ~960GB."""
         est = estimate_workflow_memory(200_000, 95_000)
 
         # Kinship: 200k^2 * 8 / 1e9 = 320GB
@@ -34,7 +34,7 @@ class TestMemoryEstimation:
             f"Expected ~152GB genotypes (float64), got {est.genotypes_gb}"
         )
 
-        # Eigenvectors: same as kinship = 320GB
+        # Eigenvectors: same as kinship = 320GB (used in LMM phase)
         assert 319 < est.eigenvectors_gb < 321
 
         # Eigendecomp workspace: DSYEVD O(n^2) - ~640GB at 200k
@@ -43,9 +43,11 @@ class TestMemoryEstimation:
             f"got {est.eigendecomp_workspace_gb:.2f}GB"
         )
 
-        # Peak is during eigendecomp: kinship + eigenvectors + workspace = ~1280GB
-        assert 1250 < est.total_gb < 1310, (
-            f"Expected ~1280GB (eigendecomp peak), got {est.total_gb}"
+        # Peak is during eigendecomp: K/U shared buffer + workspace = ~960GB
+        # (in-place eigendecomp reuses K's buffer for U, saving 320GB)
+        assert 950 < est.total_gb < 970, (
+            f"Expected ~960GB (eigendecomp peak with in-place buffer reuse), "
+            f"got {est.total_gb}"
         )
 
     def test_memory_breakdown_10k(self):

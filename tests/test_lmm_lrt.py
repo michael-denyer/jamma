@@ -225,11 +225,25 @@ class TestLRTIntegration:
             for i in range(p)
         ]
 
+        # eigendecompose_kinship overwrites K's buffer (in-place); use separate
+        # copies so each run gets a valid kinship matrix.
         results_wald = run_lmm_association_jax(
-            G, y, K, snp_info, lmm_mode=1, show_progress=False, check_memory=False
+            G,
+            y,
+            K.copy(),
+            snp_info,
+            lmm_mode=1,
+            show_progress=False,
+            check_memory=False,
         )
         results_lrt = run_lmm_association_jax(
-            G, y, K, snp_info, lmm_mode=2, show_progress=False, check_memory=False
+            G,
+            y,
+            K.copy(),
+            snp_info,
+            lmm_mode=2,
+            show_progress=False,
+            check_memory=False,
         )
 
         p_wald = np.array([r.p_wald for r in results_wald])

@@ -14,18 +14,18 @@ class TestEigendecompMemoryEstimate:
     """Tests for memory estimation function."""
 
     def test_estimate_200k_samples(self):
-        """200k samples should require approximately 1280GB with dsyevd."""
+        """200k samples should require approximately 960GB with in-place dsyevd."""
         n_samples = 200_000
         estimate = estimate_eigendecomp_memory(n_samples)
-        # K (320GB) + U (320GB) + dsyevd workspace (~640GB) = ~1280GB
-        assert 1275 < estimate < 1285
+        # K/U shared (320GB) + dsyevd workspace (~640GB) = ~960GB
+        assert 955 < estimate < 965
 
     def test_estimate_100k_samples(self):
-        """100k samples should require approximately 320GB with dsyevd."""
+        """100k samples should require approximately 240GB with in-place dsyevd."""
         n_samples = 100_000
         estimate = estimate_eigendecomp_memory(n_samples)
-        # K (80GB) + U (80GB) + dsyevd workspace (~160GB) = ~320GB
-        assert 315 < estimate < 325
+        # K/U shared (80GB) + dsyevd workspace (~160GB) = ~240GB
+        assert 235 < estimate < 245
 
     def test_estimate_scales_quadratically(self):
         """Memory should scale quadratically with n_samples."""
@@ -105,3 +105,24 @@ class TestEigendecompPreflightCheck:
             assert "GB" in error_msg  # Should mention GB
             has_need = "Need" in error_msg or "required" in error_msg.lower()
             assert has_need
+
+    def test_inplace_reuses_k_buffer(self):
+        """eigenvectors should reuse K's memory buffer (no extra allocation)."""
+        n = 50
+        rng = np.random.default_rng(42)
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+        K_ptr = K.ctypes.data
+
+        eigenvalues, eigenvectors = eigendecompose_kinship(K, check_memory=False)
+
+        # Verify buffer reuse (gufunc path)
+        try:
+            from numpy.linalg import _umath_linalg  # noqa: F401
+
+            assert eigenvectors.ctypes.data == K_ptr, (
+                "eigenvectors should reuse K's buffer; got new allocation"
+            )
+        except (ImportError, AttributeError):
+            # Fallback path — buffer reuse not available, skip assertion
+            pass

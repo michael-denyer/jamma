@@ -835,11 +835,15 @@ class TestJaxAllTestsMode:
         """Mode 4 Wald component is identical to mode 1 (same code path)."""
         genotypes, phenotype, snp_info = synthetic_data
         kinship = compute_centered_kinship(genotypes)
+        # eigendecompose_kinship overwrites K's buffer (in-place); use separate
+        # copies so each run gets a valid kinship matrix.
+        kinship_mode4 = kinship.copy()
+        kinship_mode1 = kinship.copy()
 
         results_mode4 = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
-            kinship=kinship,
+            kinship=kinship_mode4,
             snp_info=snp_info,
             lmm_mode=4,
             show_progress=False,
@@ -849,7 +853,7 @@ class TestJaxAllTestsMode:
         results_mode1 = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
-            kinship=kinship,
+            kinship=kinship_mode1,
             snp_info=snp_info,
             lmm_mode=1,
             show_progress=False,

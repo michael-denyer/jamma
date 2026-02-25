@@ -525,10 +525,12 @@ class TestLmmSmallScale:
         """Same input produces identical output."""
         genotypes, phenotypes, kinship, snp_info = small_data
 
+        # eigendecompose_kinship overwrites K's buffer (in-place); use separate
+        # copies so each run gets a valid kinship matrix.
         results1 = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
-            kinship=kinship,
+            kinship=kinship.copy(),
             snp_info=snp_info,
             show_progress=False,
             check_memory=False,
@@ -536,7 +538,7 @@ class TestLmmSmallScale:
         results2 = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
-            kinship=kinship,
+            kinship=kinship.copy(),
             snp_info=snp_info,
             show_progress=False,
             check_memory=False,
@@ -849,10 +851,12 @@ class TestLmmJaxValidation:
         snp_info = _build_snp_info(mouse_data)
         n_samples = len(phenotypes)
 
+        # eigendecompose_kinship overwrites K's buffer (in-place); use separate
+        # copies so each run gets a valid kinship matrix.
         results_none = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
-            kinship=reference_kinship,
+            kinship=reference_kinship.copy(),
             snp_info=snp_info,
             covariates=None,
             show_progress=False,
@@ -862,7 +866,7 @@ class TestLmmJaxValidation:
         results_intercept = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
-            kinship=reference_kinship,
+            kinship=reference_kinship.copy(),
             snp_info=snp_info,
             covariates=np.ones((n_samples, 1)),
             show_progress=False,
@@ -930,11 +934,13 @@ class TestJaxChunkingCorrectness:
 
         try:
             # Run with large buffer (single chunk - no chunking)
+            # eigendecompose_kinship overwrites K's buffer (in-place); use
+            # separate copies so each run gets a valid kinship matrix.
             chunk_module._MAX_BUFFER_ELEMENTS = 10**15  # Effectively no limit
             single_chunk_results = run_lmm_association_jax(
                 genotypes=genotypes,
                 phenotypes=phenotypes,
-                kinship=kinship,
+                kinship=kinship.copy(),
                 snp_info=snp_info,
                 check_memory=False,
                 show_progress=False,
@@ -947,7 +953,7 @@ class TestJaxChunkingCorrectness:
             multi_chunk_results = run_lmm_association_jax(
                 genotypes=genotypes,
                 phenotypes=phenotypes,
-                kinship=kinship,
+                kinship=kinship.copy(),
                 snp_info=snp_info,
                 check_memory=False,
                 show_progress=False,
@@ -1027,11 +1033,13 @@ class TestLmmCovariateIntegration:
         genotypes, phenotypes, kinship, snp_info = covariate_test_data
         n_samples = len(phenotypes)
 
+        # eigendecompose_kinship overwrites K's buffer (in-place); use separate
+        # copies so each run gets a valid kinship matrix.
         # Run with covariates=None (default intercept-only)
         results_none = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
-            kinship=kinship,
+            kinship=kinship.copy(),
             snp_info=snp_info,
             covariates=None,
             show_progress=False,
@@ -1043,7 +1051,7 @@ class TestLmmCovariateIntegration:
         results_explicit = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
-            kinship=kinship,
+            kinship=kinship.copy(),
             snp_info=snp_info,
             covariates=intercept_only,
             show_progress=False,
@@ -1895,10 +1903,12 @@ class TestLmmAllTestsProperties:
         """Same input produces identical mode 4 output."""
         genotypes, phenotypes, kinship, snp_info = all_tests_data
 
+        # eigendecompose_kinship overwrites K's buffer (in-place); use separate
+        # copies so each run gets a valid kinship matrix.
         results1 = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
-            kinship=kinship,
+            kinship=kinship.copy(),
             snp_info=snp_info,
             lmm_mode=4,
             show_progress=False,
@@ -1907,7 +1917,7 @@ class TestLmmAllTestsProperties:
         results2 = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
-            kinship=kinship,
+            kinship=kinship.copy(),
             snp_info=snp_info,
             lmm_mode=4,
             show_progress=False,
@@ -1926,10 +1936,12 @@ class TestLmmAllTestsProperties:
         """Mode 4 beta/se matches standalone Wald (mode 1) exactly."""
         genotypes, phenotypes, kinship, snp_info = all_tests_data
 
+        # eigendecompose_kinship overwrites K's buffer (in-place); use separate
+        # copies so each run gets a valid kinship matrix.
         wald_results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
-            kinship=kinship,
+            kinship=kinship.copy(),
             snp_info=snp_info,
             lmm_mode=1,
             show_progress=False,
@@ -1938,7 +1950,7 @@ class TestLmmAllTestsProperties:
         all_results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
-            kinship=kinship,
+            kinship=kinship.copy(),
             snp_info=snp_info,
             lmm_mode=4,
             show_progress=False,
@@ -1968,10 +1980,12 @@ class TestLmmAllTestsProperties:
         """Mode 4 p_score matches standalone Score test (mode 3) exactly."""
         genotypes, phenotypes, kinship, snp_info = all_tests_data
 
+        # eigendecompose_kinship overwrites K's buffer (in-place); use separate
+        # copies so each run gets a valid kinship matrix.
         score_results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
-            kinship=kinship,
+            kinship=kinship.copy(),
             snp_info=snp_info,
             lmm_mode=3,
             show_progress=False,
@@ -1980,7 +1994,7 @@ class TestLmmAllTestsProperties:
         all_results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
-            kinship=kinship,
+            kinship=kinship.copy(),
             snp_info=snp_info,
             lmm_mode=4,
             show_progress=False,
@@ -1998,10 +2012,12 @@ class TestLmmAllTestsProperties:
         """Mode 4 p_lrt matches standalone LRT (mode 2) exactly."""
         genotypes, phenotypes, kinship, snp_info = all_tests_data
 
+        # eigendecompose_kinship overwrites K's buffer (in-place); use separate
+        # copies so each run gets a valid kinship matrix.
         lrt_results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
-            kinship=kinship,
+            kinship=kinship.copy(),
             snp_info=snp_info,
             lmm_mode=2,
             show_progress=False,
@@ -2010,7 +2026,7 @@ class TestLmmAllTestsProperties:
         all_results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
-            kinship=kinship,
+            kinship=kinship.copy(),
             snp_info=snp_info,
             lmm_mode=4,
             show_progress=False,

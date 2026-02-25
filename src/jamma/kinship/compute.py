@@ -52,7 +52,7 @@ from jamma.kinship.missing import impute_and_center, impute_center_and_standardi
 def _accumulate_kinship(K: np.ndarray, X_centered: np.ndarray) -> np.ndarray:
     """Accumulate kinship contribution from centered SNP batch.
 
-    Uses numpy.matmul (backed by MKL/OpenBLAS dgemm) for out-of-place
+    Uses numpy.matmul (backed by MKL/OpenBLAS dgemm) with in-place
     accumulation. The non-LOCO kinship path uses this exclusively so
     that JAX is never initialized during kinship computation.
 
@@ -63,7 +63,7 @@ def _accumulate_kinship(K: np.ndarray, X_centered: np.ndarray) -> np.ndarray:
     Returns:
         Updated kinship matrix with batch contribution added.
     """
-    K = K + np.matmul(X_centered, X_centered.T)
+    K += np.matmul(X_centered, X_centered.T)
     return K
 
 

@@ -517,13 +517,15 @@ class TestEigendecompositionProperties:
         from jamma.lmm.eigen import eigendecompose_kinship
 
         K = compute_centered_kinship(genotypes)
+        # eigendecompose_kinship overwrites K's buffer (in-place); save a copy first.
+        K_original = K.copy()
         eigenvalues, U = eigendecompose_kinship(K, threshold=0)  # No thresholding
 
         # Reconstruct
         K_reconstructed = U @ np.diag(eigenvalues) @ U.T
 
         # Use atol for values near zero where rtol alone would be too strict
-        np.testing.assert_allclose(K, K_reconstructed, rtol=1e-8, atol=1e-14)
+        np.testing.assert_allclose(K_original, K_reconstructed, rtol=1e-8, atol=1e-14)
 
     @given(
         genotypes=genotype_matrix(
@@ -1393,6 +1395,9 @@ class TestEigenIoRoundTrip:
         from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 
         K = compute_centered_kinship(genotypes, check_memory=False)
+        # eigendecompose_kinship overwrites K's buffer (in-place); save a copy
+        # so we can compare the original kinship against the reconstructed one.
+        K_original = K.copy()
         eigenvalues, U = eigendecompose_kinship(K, threshold=0)
 
         # Write and read back (fresh dir per Hypothesis example)
@@ -1408,9 +1413,9 @@ class TestEigenIoRoundTrip:
 
         # .10g format gives ~10 significant digits; near-zero K entries
         # have large relative error from rounding, so use atol scaled to K.
-        scale = max(np.abs(K).max(), 1e-10)
+        scale = max(np.abs(K_original).max(), 1e-10)
         np.testing.assert_allclose(
-            K,
+            K_original,
             K_reconstructed,
             rtol=1e-7,
             atol=scale * 1e-8,

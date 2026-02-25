@@ -188,15 +188,13 @@ class TestEstimateStreamingMemory:
     def test_peak_is_eigendecomp(self) -> None:
         """Verify peak memory is dominated by eigendecomp phase.
 
-        For large n_samples, eigendecomp requires both kinship (input) and
-        eigenvectors (output) simultaneously, which exceeds other phases.
+        With in-place eigendecomp (K/U share a buffer), eigendecomp peak
+        is kinship + workspace (eigenvectors_gb not counted separately).
         """
         est = estimate_streaming_memory(100_000, chunk_size=10_000)
 
-        # Eigendecomp peak: kinship + eigenvectors + workspace
-        eigendecomp_peak = (
-            est.kinship_gb + est.eigenvectors_gb + est.eigendecomp_workspace_gb
-        )
+        # Eigendecomp peak: K/U shared buffer + workspace (no separate eigenvectors_gb)
+        eigendecomp_peak = est.kinship_gb + est.eigendecomp_workspace_gb
 
         # Verify peak equals eigendecomp phase (within floating point tolerance)
         assert abs(est.total_peak_gb - eigendecomp_peak) < 1e-6, (
@@ -230,9 +228,9 @@ class TestEstimateStreamingMemory:
             f"Expected ~0.004GB grid_reml, got {est.grid_reml_gb}"
         )
 
-        # Peak should be eigendecomp: ~1280GB (K + U + dsyevd workspace)
-        assert 1250 < est.total_peak_gb < 1310, (
-            f"Expected ~1280GB peak, got {est.total_peak_gb}"
+        # Peak should be eigendecomp: ~960GB (K/U shared + dsyevd workspace)
+        assert 950 < est.total_peak_gb < 970, (
+            f"Expected ~960GB peak, got {est.total_peak_gb}"
         )
 
     def test_chunk_size_affects_chunk_gb(self) -> None:
@@ -581,6 +579,10 @@ class TestRunLmmAssociationStreaming:
         kinship = compute_centered_kinship(
             data.genotypes.astype(np.float64), check_memory=False
         )
+        # eigendecompose_kinship overwrites K's buffer (in-place); each runner
+        # needs its own copy so both get a valid kinship matrix.
+        kinship_full = kinship.copy()
+        kinship_stream = kinship.copy()
 
         # Build snp_info
         snp_info = _build_snp_info(data)
@@ -589,7 +591,7 @@ class TestRunLmmAssociationStreaming:
         results_full = run_lmm_association_jax(
             data.genotypes.astype(np.float32),
             phenotypes,
-            kinship,
+            kinship_full,
             snp_info,
             check_memory=False,
         )
@@ -598,7 +600,7 @@ class TestRunLmmAssociationStreaming:
         results_stream, _ = run_lmm_association_streaming(
             sample_plink_data,
             phenotypes,
-            kinship,
+            kinship_stream,
             snp_info,
             check_memory=False,
             show_progress=False,
@@ -895,6 +897,10 @@ class TestChunkEquivalence:
         kinship = compute_centered_kinship(
             data.genotypes.astype(np.float64), check_memory=False
         )
+        # eigendecompose_kinship overwrites K's buffer (in-place); each runner
+        # needs its own copy so both get a valid kinship matrix.
+        kinship_single = kinship.copy()
+        kinship_multi = kinship.copy()
 
         # Build snp_info
         snp_info = [
@@ -912,7 +918,7 @@ class TestChunkEquivalence:
         results_single = run_lmm_association_jax(
             data.genotypes,
             phenotypes,
-            kinship,
+            kinship_single,
             snp_info,
             check_memory=False,
         )
@@ -922,7 +928,7 @@ class TestChunkEquivalence:
         results_multi, _ = run_lmm_association_streaming(
             sample_plink_data,
             phenotypes,
-            kinship,
+            kinship_multi,
             chunk_size=5000,  # Fewer chunks = faster test
             check_memory=False,
             show_progress=False,
@@ -972,10 +978,12 @@ class TestChunkEquivalence:
         results_by_chunk: dict[int, list] = {}
 
         for cs in chunk_sizes:
+            # eigendecompose_kinship overwrites K's buffer (in-place); use a
+            # fresh copy for each run so each gets a valid kinship matrix.
             results, _ = run_lmm_association_streaming(
                 sample_plink_data,
                 phenotypes,
-                kinship,
+                kinship.copy(),
                 chunk_size=cs,
                 check_memory=False,
                 show_progress=False,
@@ -1022,6 +1030,10 @@ def test_streaming_vs_batch_parity(sample_plink_data: Path) -> None:
     kinship = compute_centered_kinship(
         data.genotypes.astype(np.float64), check_memory=False
     )
+    # eigendecompose_kinship overwrites K's buffer (in-place); each runner
+    # needs its own copy so both get a valid kinship matrix.
+    kinship_batch = kinship.copy()
+    kinship_stream = kinship.copy()
 
     snp_info = _build_snp_info(data)
 
@@ -1029,7 +1041,7 @@ def test_streaming_vs_batch_parity(sample_plink_data: Path) -> None:
     results_batch = run_lmm_association_jax(
         data.genotypes.astype(np.float64),
         phenotypes,
-        kinship,
+        kinship_batch,
         snp_info,
         check_memory=False,
         show_progress=False,
@@ -1039,7 +1051,7 @@ def test_streaming_vs_batch_parity(sample_plink_data: Path) -> None:
     results_stream, _ = run_lmm_association_streaming(
         sample_plink_data,
         phenotypes,
-        kinship,
+        kinship_stream,
         snp_info,
         chunk_size=100,  # Small to exercise chunking
         check_memory=False,
@@ -1111,6 +1123,10 @@ def test_streaming_lrt_only_matches_batch(sample_plink_data: Path) -> None:
     kinship = compute_centered_kinship(
         data.genotypes.astype(np.float64), check_memory=False
     )
+    # eigendecompose_kinship overwrites K's buffer (in-place); each runner
+    # needs its own copy so both get a valid kinship matrix.
+    kinship_batch = kinship.copy()
+    kinship_stream = kinship.copy()
 
     snp_info = _build_snp_info(data)
 
@@ -1118,7 +1134,7 @@ def test_streaming_lrt_only_matches_batch(sample_plink_data: Path) -> None:
     results_batch = run_lmm_association_jax(
         data.genotypes.astype(np.float64),
         phenotypes,
-        kinship,
+        kinship_batch,
         snp_info,
         check_memory=False,
         show_progress=False,
@@ -1129,7 +1145,7 @@ def test_streaming_lrt_only_matches_batch(sample_plink_data: Path) -> None:
     results_stream, _ = run_lmm_association_streaming(
         sample_plink_data,
         phenotypes,
-        kinship,
+        kinship_stream,
         snp_info,
         chunk_size=100,
         check_memory=False,
@@ -1183,6 +1199,10 @@ def test_streaming_score_only_matches_batch(sample_plink_data: Path) -> None:
     kinship = compute_centered_kinship(
         data.genotypes.astype(np.float64), check_memory=False
     )
+    # eigendecompose_kinship overwrites K's buffer (in-place); each runner
+    # needs its own copy so both get a valid kinship matrix.
+    kinship_batch = kinship.copy()
+    kinship_stream = kinship.copy()
 
     snp_info = _build_snp_info(data)
 
@@ -1190,7 +1210,7 @@ def test_streaming_score_only_matches_batch(sample_plink_data: Path) -> None:
     results_batch = run_lmm_association_jax(
         data.genotypes.astype(np.float64),
         phenotypes,
-        kinship,
+        kinship_batch,
         snp_info,
         check_memory=False,
         show_progress=False,
@@ -1201,7 +1221,7 @@ def test_streaming_score_only_matches_batch(sample_plink_data: Path) -> None:
     results_stream, _ = run_lmm_association_streaming(
         sample_plink_data,
         phenotypes,
-        kinship,
+        kinship_stream,
         snp_info,
         chunk_size=100,
         check_memory=False,

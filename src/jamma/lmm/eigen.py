@@ -1,9 +1,11 @@
 """Eigendecomposition of kinship matrix.
 
 Provides GEMMA-compatible eigendecomposition with small eigenvalue thresholding.
+Uses the LAPACK DSYEVD gufunc with in-place buffer reuse (eigenvectors
+overwrite K) to save one n²×8 allocation. Falls back to numpy.linalg.eigh
+if the internal gufunc is unavailable.
 
-Uses numpy.linalg.eigh (LAPACK) for eigendecomposition. Thread control is
-handled by jamma.core.threading via threadpool_limits.
+Thread control is handled by jamma.core.threading via threadpool_limits.
 
 Note: Uses numpy (LAPACK) instead of JAX because JAX's int32 buffer indexing
 overflows at ~46k x 46k matrices. With ILP64 numpy (MKL), matrices up to
@@ -23,6 +25,13 @@ from jamma.core.memory import (
     log_memory_snapshot,
 )
 from jamma.core.threading import blas_threads, get_physical_core_count
+
+try:
+    from numpy.linalg import _umath_linalg as _np_linalg_gufuncs
+
+    _eigh_lo = _np_linalg_gufuncs.eigh_lo
+except (ImportError, AttributeError):
+    _eigh_lo = None
 
 # For matrices >= this size, use sampled symmetry check instead of full np.allclose.
 # Full check allocates an n*n temporary; at 100k samples that is ~80GB.
@@ -59,6 +68,32 @@ def _check_symmetry_sampled(K: np.ndarray, n: int, *, atol: float = 1e-10) -> No
         )
 
 
+def _eigh_inplace(K: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Eigendecompose K in-place, reusing K's buffer for eigenvectors.
+
+    Uses numpy's internal LAPACK gufunc with out= parameter to write
+    eigenvectors directly into K's memory buffer. Saves one n²×8 allocation
+    (142GB at 133k samples). Falls back to np.linalg.eigh if the private
+    gufunc is unavailable.
+
+    Args:
+        K: Symmetric matrix (n, n). OVERWRITTEN with eigenvectors on return.
+
+    Returns:
+        Tuple of (eigenvalues, eigenvectors) where eigenvectors shares K's buffer.
+    """
+    if _eigh_lo is not None:
+        n = K.shape[0]
+        eigenvalues = np.empty(n, dtype=np.float64)
+        _, eigenvectors = _eigh_lo(K, signature="d->dd", out=(eigenvalues, K))
+        return eigenvalues, eigenvectors
+    else:
+        logger.debug(
+            "_umath_linalg.eigh_lo unavailable; falling back to np.linalg.eigh"
+        )
+        return np.linalg.eigh(K)
+
+
 def eigendecompose_kinship(
     K: np.ndarray, threshold: float = 1e-10, *, check_memory: bool = True
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -74,7 +109,8 @@ def eigendecompose_kinship(
     numpy (MKL), matrices up to 200k+ are supported.
 
     Args:
-        K: Symmetric kinship matrix (n_samples, n_samples).
+        K: Symmetric kinship matrix (n_samples, n_samples). Overwritten
+            with eigenvectors on return (buffer reused to save memory).
         threshold: Eigenvalues below this are zeroed (default: 1e-10)
         check_memory: If True (default), check available memory before
             eigendecomposition. Set False to skip (e.g., when already checked).
@@ -148,7 +184,7 @@ def eigendecompose_kinship(
     start_time = time.perf_counter()
     try:
         with blas_threads(n_threads):
-            eigenvalues, eigenvectors = np.linalg.eigh(K)
+            eigenvalues, eigenvectors = _eigh_inplace(K)
     except MemoryError:
         logger.error(
             f"MemoryError during eigendecomposition of {n_samples:,}x{n_samples:,} "

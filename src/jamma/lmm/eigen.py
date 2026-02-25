@@ -24,6 +24,42 @@ from jamma.core.memory import (
 )
 from jamma.core.threading import blas_threads, get_physical_core_count
 
+# For matrices >= this size, use sampled symmetry check instead of full np.allclose.
+# Full check allocates an n*n temporary; at 100k samples that is ~80GB.
+_SAMPLED_SYMMETRY_THRESHOLD = 10_000
+
+
+def _check_symmetry_sampled(K: np.ndarray, n: int, *, atol: float = 1e-10) -> None:
+    """Check kinship symmetry via deterministic strided row sampling.
+
+    Samples every sqrt(n)-th row and compares it against the
+    corresponding column. Total work: O(n*sqrt(n)), no n*n temporary.
+    Every column is covered at least once, so systematic asymmetry
+    (e.g. from non-deterministic BLAS accumulation order) is caught.
+
+    np.linalg.eigh reads only the lower triangle, so asymmetry is
+    harmless — this check is purely diagnostic.
+
+    Args:
+        K: Square matrix (n, n).
+        n: Matrix dimension (== K.shape[0]).
+        atol: Absolute tolerance for element-wise comparison.
+    """
+    stride = max(1, int(np.sqrt(n)))
+    max_asym = 0.0
+
+    for i in range(0, n, stride):
+        row_asym = float(np.max(np.abs(K[i, :] - K[:, i])))
+        if row_asym > max_asym:
+            max_asym = row_asym
+
+    if max_asym > atol:
+        logger.warning(
+            "Kinship matrix is not symmetric (sampled max asymmetry: %.2e). "
+            "np.linalg.eigh will use lower triangle only.",
+            max_asym,
+        )
+
 
 def eigendecompose_kinship(
     K: np.ndarray, threshold: float = 1e-10, *, check_memory: bool = True
@@ -60,12 +96,19 @@ def eigendecompose_kinship(
     if K.ndim != 2 or K.shape[0] != K.shape[1]:
         raise ValueError(f"Kinship matrix must be square, got shape {K.shape}")
 
-    if not np.allclose(K, K.T, atol=1e-10):
-        logger.warning(
-            "Kinship matrix is not symmetric (max asymmetry: %.2e). "
-            "np.linalg.eigh will use lower triangle only.",
-            np.max(np.abs(K - K.T)),
-        )
+    if n_samples < _SAMPLED_SYMMETRY_THRESHOLD:
+        # Full check: O(n^2), fine for small matrices (<1s)
+        if not np.allclose(K, K.T, atol=1e-10):
+            logger.warning(
+                "Kinship matrix is not symmetric (max asymmetry: %.2e). "
+                "np.linalg.eigh will use lower triangle only.",
+                np.max(np.abs(K - K.T)),
+            )
+    else:
+        # Sampled check: O(n*sqrt(n)), avoids allocating full n*n temporary.
+        # np.linalg.eigh reads only the lower triangle, so asymmetry
+        # is harmless — this check is purely diagnostic.
+        _check_symmetry_sampled(K, n_samples, atol=1e-10)
 
     logger.info(f"Eigendecomposing kinship matrix ({n_samples:,} x {n_samples:,})")
     logger.debug(
@@ -131,7 +174,8 @@ def eigendecompose_kinship(
     logger.info(f"Eigendecomposition completed in {elapsed:.2f} seconds")
     log_memory_snapshot(f"after_eigendecomp_{n_samples}samples")
 
-    n_negative = np.sum(eigenvalues < -threshold)
+    abs_evals = np.abs(eigenvalues)
+    n_negative = int(np.sum(eigenvalues < -threshold))
     if n_negative > 0:
         warnings.warn(
             f"Kinship matrix has {n_negative} negative eigenvalue(s). "
@@ -139,9 +183,10 @@ def eigendecompose_kinship(
             stacklevel=2,
         )
 
-    eigenvalues = np.where(np.abs(eigenvalues) < threshold, 0.0, eigenvalues)
+    small_mask = abs_evals < threshold
+    n_zero = int(np.sum(small_mask))
+    eigenvalues[small_mask] = 0.0
 
-    n_zero = np.sum(eigenvalues == 0.0)
     if n_zero > 1:
         warnings.warn(
             f"Kinship matrix has {n_zero} eigenvalues close to zero. "

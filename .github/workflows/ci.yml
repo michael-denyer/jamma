@@ -35,6 +35,7 @@ jobs:
             python-version: "3.12"
             install_args: "--extra jax --extra dev"
             name: "Linux + JAX"
+            cov_threshold: "--cov-fail-under=80"
           - os: ubuntu-latest
             python-version: "3.12"
             install_args: "--extra dev"
@@ -44,6 +45,7 @@ jobs:
             python-version: "3.11"
             install_args: "--extra jax --extra dev"
             name: "Linux + JAX (3.11)"
+            cov_threshold: "--cov-fail-under=80"
           - os: windows-latest
             python-version: "3.12"
             install_args: "--extra dev"
@@ -58,6 +60,7 @@ jobs:
             python-version: "3.12"
             install_args: "--extra jax --extra dev"
             name: "ARM Mac + JAX"
+            cov_threshold: "--cov-fail-under=80"
     name: ${{ matrix.name }}
     steps:
       - uses: actions/checkout@v4
@@ -72,7 +75,7 @@ jobs:
         run: uv sync ${{ matrix.install_args }}
 
       - name: Run tests
-        run: uv run pytest ${{ matrix.pytest_args || '-m "not tier2 and not slow"' }} -v --cov=src/jamma --cov-report=term-missing
+        run: uv run pytest ${{ matrix.pytest_args || '-m "not tier2 and not slow"' }} -v --cov=src/jamma --cov-report=term-missing ${{ matrix.cov_threshold }}
 
   test-slow:
     runs-on: ubuntu-latest

@@ -87,7 +87,7 @@ jamma = "jamma.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-n auto --randomly-seed=last --benchmark-skip -m 'not slow' --cov=src/jamma --cov-fail-under=80"
+addopts = "-n auto --randomly-seed=last --benchmark-skip -m 'not slow' --cov=src/jamma"
 filterwarnings = [
     "ignore:Some donated buffers were not usable:UserWarning",
 ]

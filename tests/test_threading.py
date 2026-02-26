@@ -17,8 +17,8 @@ class TestGetBlasThreadCount:
         assert result > 0
 
     def test_env_override(self, monkeypatch):
-        monkeypatch.setenv("JAMMA_BLAS_THREADS", "4")
-        assert get_blas_thread_count() == 4
+        monkeypatch.setenv("JAMMA_BLAS_THREADS", "2")
+        assert get_blas_thread_count() == 2
 
     def test_env_capped_at_cpu_count(self, monkeypatch):
         monkeypatch.setenv("JAMMA_BLAS_THREADS", "9999")

@@ -1116,11 +1116,12 @@ class TestFilteringEquivalence:
         miss_threshold = 0.1
 
         # Run with small chunk size (forces multiple chunks)
+        # .copy() because eigendecompose_kinship consumes K (in-place eigenvectors)
         with patch("jamma.lmm.runner_jax._compute_chunk_size", return_value=5):
             results_small = run_lmm_association_jax(
                 genotypes.astype(np.float32),
                 phenotypes,
-                kinship,
+                kinship.copy(),
                 snp_info,
                 maf_threshold=maf_threshold,
                 miss_threshold=miss_threshold,

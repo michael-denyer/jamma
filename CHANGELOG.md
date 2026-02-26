@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.1] - 2026-02-26
+
+### Fixed
+
+- `test_lmm_jax_chunk_invariance` passed consumed kinship to second
+  `run_lmm_association_jax` call (in-place eigendecomp overwrites K with
+  eigenvectors; added `.copy()`)
+
 ## [2.6.0] - 2026-02-26
 
 ### Added

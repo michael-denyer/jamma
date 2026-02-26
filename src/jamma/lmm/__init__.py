@@ -21,12 +21,14 @@ from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.io import write_assoc_results
 from jamma.lmm.loco import run_lmm_loco
 from jamma.lmm.runner_jax import run_lmm_association_jax
+from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.runner_streaming import run_lmm_association_streaming
 from jamma.lmm.stats import AssocResult
 
 __all__ = [
     "auto_tune_chunk_size",
     "run_lmm_association_jax",
+    "run_lmm_association_numpy",
     "run_lmm_association_streaming",
     "run_lmm_loco",
     "AssocResult",

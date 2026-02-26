@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-02-26
+
+### Added
+
+- **Pure-NumPy backend**: Full LMM association (Wald, LRT, Score, All modes) without
+  JAX dependency — `jamma` now works out-of-the-box on any platform with just numpy
+- **`--backend` CLI flag**: Explicit backend selection (`auto`, `jax`, `numpy`); `auto`
+  prefers JAX when available, falls back to NumPy
+- **`backend` parameter on `gwas()` API and `PipelineConfig`**: Programmatic backend control
+- **`special.py` module**: Pure-stdlib `betainc()` (Lentz continued-fraction) and `chi2_sf()`
+  implementations — eliminates scipy dependency for p-value computation
+- **`prepare_common.py`**: Shared null-model setup (eigendecomposition, rotation, REML)
+  extracted from JAX-specific code for reuse by both backends
+- **`likelihood_numpy.py`**: Batch Uab/Pab/REML/MLE computation and Wald/LRT/Score
+  statistics using pure NumPy — vectorized across grid/refinement steps
+- **`compute_numpy.py`**: Mode-dispatch layer routing to NumPy likelihood functions
+- **`runner_numpy.py`**: Streaming chunk-loop LMM runner using NumPy backend with
+  identical output format to JAX runner
+- **`detect_backend()` and `log_backend_selection()`**: Backend probing and diagnostic logging
+- **Platform-smart JAX defaults**: `pip install jamma[jax]` auto-includes JAX on Linux
+  and ARM Mac via PEP 508 markers; Windows/Intel Mac get NumPy-only by default
+- **`requires_jax` pytest marker**: JAX-dependent tests auto-skip when JAX unavailable
+- **Cross-backend CI matrix**: Tests run on Linux+JAX, Linux+NumPy, macOS+JAX,
+  Windows+NumPy, and Linux+JAX(3.11) configurations
+- **406 new tests** in `test_special.py` for `betainc`/`chi2_sf` edge cases
+- **Typed backend literals**: `BackendRequest` and `BackendResolved` types for pipeline config
+
+### Changed
+
+- JAX moved from required to optional dependency (`jamma[jax]` extra)
+- All `__init__.py` modules guard JAX imports behind `has_jax()` — `import jamma`
+  succeeds without JAX installed
+- `PipelineConfig.backend` uses `BackendRequest` literal type; `PipelineResult.backend`
+  uses `BackendResolved` literal type
+- `conftest.py` registers `requires_jax` marker and auto-applies to JAX-importing tests
+- Dockerfile updated for layered `jamma[jax]` install
+- `_compute_lmm_chunk` defaults aligned: `n_grid=50`, `n_refine=10` (was inconsistent
+  between JAX and NumPy compute modules)
+- `snp_filter.py` `np.errstate` scope narrowed to `invalid`/`divide` only (was `all`)
+
+### Fixed
+
+- **`has_jax()` swallowed `RuntimeError`/`OSError`**: JAX installation failures (broken
+  CUDA, missing libraries) now log a warning instead of silently returning `False`
+- **`runner_jax.py` crashed on `kinship=None`**: Type signature and guard updated to
+  accept `None` when pre-computed eigendecomposition is provided
+- **Missing eigenpair validation in `runner_jax.py`**: Added dimension checks matching
+  `runner_numpy.py` — catches shape mismatches before LAPACK calls
+- **`prepare.py` dropped `TypeError`**: `_setup_cpu_sharding` exception tuple restored
+  to include `TypeError` alongside `RuntimeError`/`ValueError`
+- **Silent invalid `lmm_mode` in `_compute_null_model_common`**: Mode 1 now returns
+  `None` explicitly; invalid modes raise `ValueError` (was silently returning `None`)
+- **`betainc` ArithmeticError catch unlogged**: CF non-convergence now logged at debug level
+- **All-SNPs-filtered produced silent empty return in `runner_jax.py`**: Now logs warning
+- **Memory estimate ran unconditionally in `runner_jax.py`**: Now gated behind `check_memory` flag
+- **P_yy zero in Score test denominator**: Clamped to 1e-8 floor to prevent Inf F-statistic
+- **`runner_numpy.py` missing early validation**: Raises `ValueError` when neither kinship
+  nor eigendecomposition is provided
+- **`_RESULT_FIELDS` import path**: `runner_jax.py` now imports from `schema.py` (was
+  importing from deleted `results.py` path)
+
 ## [2.6.1] - 2026-02-26
 
 ### Fixed
@@ -702,7 +763,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
-[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.5.8...HEAD
+[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.7.0...HEAD
+[2.7.0]: https://github.com/michael-denyer/jamma/compare/v2.6.1...v2.7.0
+[2.6.1]: https://github.com/michael-denyer/jamma/compare/v2.6.0...v2.6.1
+[2.6.0]: https://github.com/michael-denyer/jamma/compare/v2.5.8...v2.6.0
 [2.5.8]: https://github.com/michael-denyer/jamma/compare/v2.5.7...v2.5.8
 [2.5.7]: https://github.com/michael-denyer/jamma/compare/v2.5.6...v2.5.7
 [2.5.6]: https://github.com/michael-denyer/jamma/compare/v2.5.5...v2.5.6

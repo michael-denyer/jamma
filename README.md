@@ -44,12 +44,12 @@ uv add jamma[jax]   # With JAX acceleration
 
 | Platform | `pip install jamma` | `pip install jamma[jax]` | Notes |
 |----------|---------------------|--------------------------|-------|
-| Linux x86_64 | NumPy backend | JAX (CPU/GPU) | Full support; ILP64 for >46k samples |
-| ARM Mac (M1+) | NumPy backend | JAX (CPU) | Full support |
-| Intel Mac | NumPy backend | Not available | JAX 0.5.0+ dropped Intel Mac |
-| Windows | NumPy backend | JAX (CPU) | JAX CPU via jaxlib wheels |
+| Linux x86_64 | JAX (auto-included) | — | Full support; ILP64 for >46k samples |
+| ARM Mac (M1+) | JAX (auto-included) | — | Full support |
+| Intel Mac | NumPy only | Not available | JAX dropped Intel Mac support |
+| Windows | NumPy only | JAX (CPU) | Explicit opt-in via `[jax]` extra |
 
-The backend is auto-detected: if JAX is installed, it's used automatically.
+JAX is auto-included on Linux and ARM Mac via platform markers.
 Force a specific backend with `--backend numpy` or `--backend jax`.
 
 ## Quick Start

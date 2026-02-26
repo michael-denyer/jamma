@@ -228,7 +228,7 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2:
 
 - Python 3.11+
 - NumPy 2.0+
-- JAX 0.5.0+ (optional, for GPU acceleration: `pip install jamma[jax]`)
+- JAX 0.8.0+ (optional, for GPU acceleration: `pip install jamma[jax]`)
 
 ## License
 

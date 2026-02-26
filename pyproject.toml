@@ -46,11 +46,11 @@ dependencies = [
     "loguru>=0.7.0",
     "progressbar2>=4.2.0",
     # Platform-smart JAX defaults: auto-included where wheels are reliable
-    "jax>=0.5.0; sys_platform == 'linux'",
-    "jaxlib>=0.5.0; sys_platform == 'linux'",
+    "jax>=0.8.0; sys_platform == 'linux'",
+    "jaxlib>=0.8.0; sys_platform == 'linux'",
     "jaxtyping>=0.2.28; sys_platform == 'linux'",
-    "jax>=0.5.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
-    "jaxlib>=0.5.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "jax>=0.8.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "jaxlib>=0.8.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "jaxtyping>=0.2.28; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 
@@ -63,8 +63,8 @@ Issues = "https://github.com/michael-denyer/jamma/issues"
 
 [project.optional-dependencies]
 jax = [
-    "jax>=0.5.0",
-    "jaxlib>=0.5.0",
+    "jax>=0.8.0",
+    "jaxlib>=0.8.0",
     "jaxtyping>=0.2.28",
 ]
 

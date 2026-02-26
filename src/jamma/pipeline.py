@@ -612,48 +612,58 @@ class PipelineRunner:
         6. Prepare output directory
         7. Load covariates (early, for eigen validation)
         8. Load eigen files or kinship matrix
-        9. Run LMM association (streaming)
+        9. Run LMM association (streaming or NumPy batch)
 
         Returns:
             PipelineResult with associations, counts, output path, and timing.
         """
         t_start = time.perf_counter()
 
-        # Enable x64 without initializing the JAX backend — device count is
-        # deferred until LMM phase via ensure_jax_configured().
-        try:
+        from jamma.core.backend import detect_backend, log_backend_selection
+
+        active_backend = detect_backend(self.config.backend)
+        log_backend_selection(active_backend, self.config.backend)
+
+        trace_ctx = contextlib.nullcontext()
+        if active_backend == "jax":
             import jax
 
+            # Enable x64 without initializing the JAX backend — device count is
+            # deferred until LMM phase via ensure_jax_configured().
             jax.config.update("jax_enable_x64", True)
-        except ImportError:
-            pass  # NumPy backend — no JAX config needed
 
-        # Optional XLA profiling — degrade gracefully so profiling issues
-        # never prevent GWAS results from being produced.
-        trace_ctx = contextlib.nullcontext()
-        if self.config.profile_dir is not None:
-            try:
-                import jax
-
-                self.config.profile_dir.mkdir(parents=True, exist_ok=True)
-                trace_ctx = jax.profiler.trace(
-                    str(self.config.profile_dir), create_perfetto_link=False
-                )
-                logger.info(
-                    "XLA profiling enabled: traces will be written to "
-                    f"{self.config.profile_dir}"
-                )
-            except (OSError, ImportError, AttributeError) as e:
-                logger.warning(
-                    f"Could not enable XLA profiling: {type(e).__name__}: {e}. "
-                    "Continuing without profiling."
-                )
+            # Optional XLA profiling — degrade gracefully so profiling issues
+            # never prevent GWAS results from being produced.
+            if self.config.profile_dir is not None:
+                try:
+                    self.config.profile_dir.mkdir(parents=True, exist_ok=True)
+                    trace_ctx = jax.profiler.trace(
+                        str(self.config.profile_dir), create_perfetto_link=False
+                    )
+                    logger.info(f"XLA profiling enabled: {self.config.profile_dir}")
+                except (OSError, ImportError, AttributeError) as e:
+                    logger.warning(f"Could not enable XLA profiling: {e}")
+        elif self.config.profile_dir is not None:
+            logger.warning("XLA profiling requires JAX backend; ignoring --profile-dir")
 
         with trace_ctx:
-            return self._run_inner(t_start)
+            return self._run_inner(t_start, active_backend)
 
-    def _run_inner(self, t_start: float) -> PipelineResult:
-        """Execute the pipeline body, called within the optional profiling context."""
+    def _run_inner(self, t_start: float, active_backend: str) -> PipelineResult:
+        """Execute the pipeline body, called within the optional profiling context.
+
+        Args:
+            t_start: Pipeline start time from time.perf_counter().
+            active_backend: Resolved backend name — "jax" or "numpy".
+        """
+        # Check for incompatible LOCO+NumPy early, before I/O operations.
+        # validate_inputs() follows but requires files to exist.
+        if self.config.loco and active_backend == "numpy":
+            raise ValueError(
+                "LOCO mode requires JAX backend. "
+                "Install JAX with: pip install jamma[jax]"
+            )
+
         self.validate_inputs()
 
         meta = get_plink_metadata(self.config.bfile)
@@ -720,6 +730,7 @@ class PipelineRunner:
                     "load_s": 0.0,
                     "lmm_s": loco_s,
                     "total_s": total_s,
+                    "backend": active_backend,
                     "n_covariates": (
                         covariates.shape[1] if covariates is not None else 1
                     ),
@@ -777,34 +788,101 @@ class PipelineRunner:
         kinship_s = time.perf_counter() - t_kinship
         load_s = time.perf_counter() - t_start
 
-        # Initialize JAX backend after kinship + eigendecomp completes,
-        # to avoid XLA thread pools competing with MKL during eigendecomp.
-        from jamma.core.jax_config import ensure_jax_configured
-        from jamma.lmm import run_lmm_association_streaming
-
-        ensure_jax_configured()
-
         t_lmm = time.perf_counter()
-        results, n_tested = run_lmm_association_streaming(
-            bed_path=self.config.bfile,
-            phenotypes=phenotypes,
-            kinship=K,
-            snp_info=None,
-            covariates=covariates,
-            eigenvalues=eigenvalues,
-            eigenvectors=eigenvectors,
-            maf_threshold=self.config.maf,
-            miss_threshold=self.config.miss,
-            l_min=self.config.l_min,
-            l_max=self.config.l_max,
-            output_path=assoc_path,
-            lmm_mode=self.config.lmm_mode,
-            check_memory=False,  # Already checked above
-            show_progress=self.config.show_progress,
-            snps_indices=snps_indices,
-            hwe_threshold=self.config.hwe_threshold,
-            chunk_size=actual_chunk,
-        )
+
+        if active_backend == "jax":
+            # Initialize JAX backend after kinship + eigendecomp completes,
+            # to avoid XLA thread pools competing with MKL during eigendecomp.
+            from jamma.core.jax_config import ensure_jax_configured
+            from jamma.lmm import run_lmm_association_streaming
+
+            ensure_jax_configured()
+
+            results, n_tested = run_lmm_association_streaming(
+                bed_path=self.config.bfile,
+                phenotypes=phenotypes,
+                kinship=K,
+                snp_info=None,
+                covariates=covariates,
+                eigenvalues=eigenvalues,
+                eigenvectors=eigenvectors,
+                maf_threshold=self.config.maf,
+                miss_threshold=self.config.miss,
+                l_min=self.config.l_min,
+                l_max=self.config.l_max,
+                output_path=assoc_path,
+                lmm_mode=self.config.lmm_mode,
+                check_memory=False,  # Already checked above
+                show_progress=self.config.show_progress,
+                snps_indices=snps_indices,
+                hwe_threshold=self.config.hwe_threshold,
+                chunk_size=actual_chunk,
+            )
+        else:
+            # NumPy backend: load all genotypes into memory
+            from jamma.io import load_plink_binary
+            from jamma.lmm import run_lmm_association_numpy
+            from jamma.lmm.io import IncrementalAssocWriter
+            from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
+
+            logger.info(
+                "NumPy backend: loading all genotypes into memory "
+                "(for large datasets, use JAX backend: pip install jamma[jax])"
+            )
+
+            plink_data = load_plink_binary(self.config.bfile)
+            genotypes = plink_data.genotypes
+
+            # Apply snps_indices filter before passing to runner
+            if snps_indices is not None:
+                genotypes = genotypes[:, snps_indices]
+                snp_info = [
+                    {
+                        "chr": str(plink_data.chromosome[i]),
+                        "rs": plink_data.sid[i],
+                        "pos": int(plink_data.bp_position[i]),
+                        "a1": plink_data.allele_1[i],
+                        "a0": plink_data.allele_2[i],
+                    }
+                    for i in snps_indices
+                ]
+            else:
+                snp_info = [
+                    {
+                        "chr": str(plink_data.chromosome[i]),
+                        "rs": plink_data.sid[i],
+                        "pos": int(plink_data.bp_position[i]),
+                        "a1": plink_data.allele_1[i],
+                        "a0": plink_data.allele_2[i],
+                    }
+                    for i in range(plink_data.n_snps)
+                ]
+
+            assoc_results = run_lmm_association_numpy(
+                genotypes=genotypes,
+                phenotypes=phenotypes,
+                kinship=K,
+                snp_info=snp_info,
+                covariates=covariates,
+                eigenvalues=eigenvalues,
+                eigenvectors=eigenvectors,
+                maf_threshold=self.config.maf,
+                miss_threshold=self.config.miss,
+                l_min=self.config.l_min,
+                l_max=self.config.l_max,
+                check_memory=False,  # Already checked above
+                show_progress=self.config.show_progress,
+                lmm_mode=self.config.lmm_mode,
+            )
+
+            # Write results to disk in GEMMA format
+            test_type = _TEST_TYPE_MAP[self.config.lmm_mode]
+            with IncrementalAssocWriter(assoc_path, test_type=test_type) as writer:
+                writer.write_batch(assoc_results)
+
+            results = []  # Results written to disk; consistent with JAX streaming
+            n_tested = len(assoc_results)
+
         lmm_s = time.perf_counter() - t_lmm
 
         total_s = time.perf_counter() - t_start
@@ -820,6 +898,7 @@ class PipelineRunner:
                 "load_s": load_s,
                 "lmm_s": lmm_s,
                 "total_s": total_s,
+                "backend": active_backend,
                 "n_covariates": covariates.shape[1] if covariates is not None else 1,
             },
         )

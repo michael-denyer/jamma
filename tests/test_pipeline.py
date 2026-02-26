@@ -757,3 +757,66 @@ class TestNSnpsTestedReflectsFiltering:
             f"n_snps_tested ({result.n_snps_tested}) should be less than "
             f"dataset total ({total_snps_in_dataset})"
         )
+
+
+# ===========================================================================
+# Backend Routing Tests (Phase 36-02)
+# ===========================================================================
+
+
+@pytest.mark.tier1
+def test_pipeline_numpy_backend(sample_plink_data: Path, output_dir: Path) -> None:
+    """Pipeline completes with NumPy backend and writes assoc file."""
+    kinship_file = sample_plink_data.parent / "gemma_kinship.cXX.txt"
+    config = PipelineConfig(
+        bfile=sample_plink_data,
+        kinship_file=kinship_file,
+        lmm_mode=1,
+        output_dir=output_dir,
+        check_memory=False,
+        show_progress=False,
+        backend="numpy",
+    )
+    result = PipelineRunner(config).run()
+    assert result.n_snps_tested > 0
+    assert result.assoc_path.exists()
+    assert result.timing["backend"] == "numpy"
+
+
+@pytest.mark.tier0
+def test_pipeline_loco_numpy_raises() -> None:
+    """LOCO + NumPy backend raises ValueError with clear message."""
+    config = PipelineConfig(
+        bfile=Path("dummy"),
+        lmm_mode=1,
+        loco=True,
+        backend="numpy",
+    )
+    runner = PipelineRunner(config)
+    with pytest.raises(ValueError, match="LOCO mode requires JAX"):
+        runner.run()
+
+
+@pytest.mark.tier1
+def test_pipeline_backend_in_timing(sample_plink_data: Path, output_dir: Path) -> None:
+    """PipelineResult.timing includes 'backend' key for JAX backend."""
+    kinship_file = sample_plink_data.parent / "gemma_kinship.cXX.txt"
+    config = PipelineConfig(
+        bfile=sample_plink_data,
+        kinship_file=kinship_file,
+        lmm_mode=1,
+        output_dir=output_dir,
+        check_memory=False,
+        show_progress=False,
+        backend="jax",
+    )
+    result = PipelineRunner(config).run()
+    assert "backend" in result.timing
+    assert result.timing["backend"] == "jax"
+
+
+@pytest.mark.tier0
+def test_pipeline_config_backend_validation() -> None:
+    """PipelineConfig raises ValueError for invalid backend value."""
+    with pytest.raises(ValueError, match="backend must be"):
+        PipelineConfig(bfile=Path("dummy"), backend="invalid")

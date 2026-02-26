@@ -17,6 +17,8 @@ from click.testing import CliRunner
 
 from jamma.cli import main
 
+pytestmark = pytest.mark.requires_jax
+
 runner = CliRunner()
 
 # Path to example PLINK data

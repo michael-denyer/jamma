@@ -21,6 +21,8 @@ import pytest
 from jamma.core.hardware import assert_x64_precision, get_hardware_context
 from jamma.core.threading import blas_threads
 
+pytestmark = pytest.mark.requires_jax
+
 _FIXTURE_ROOT = Path(__file__).parent / "fixtures"
 _MOUSE_DIR = _FIXTURE_ROOT / "mouse_hs1940"
 _MOUSE_DATA = _MOUSE_DIR / "mouse_hs1940"

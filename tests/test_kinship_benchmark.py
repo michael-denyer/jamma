@@ -18,6 +18,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+pytestmark = pytest.mark.requires_jax
+
 GEMMA_DOCKER_IMAGE = "quay.io/biocontainers/gemma:0.98.5--ha36d3ea_0"
 _FIXTURE_ROOT = Path(__file__).parent / "fixtures"
 EXAMPLE_DATA = _FIXTURE_ROOT / "gemma_synthetic" / "test"

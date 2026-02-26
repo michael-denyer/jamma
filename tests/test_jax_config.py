@@ -24,6 +24,8 @@ from jamma.lmm.compute import _compute_lmm_chunk
 from jamma.lmm.likelihood_jax import batch_compute_uab
 from jamma.lmm.prepare import _setup_cpu_sharding
 
+pytestmark = pytest.mark.requires_jax
+
 
 @pytest.mark.tier0
 class TestJaxDeviceConfiguration:

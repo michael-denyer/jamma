@@ -11,6 +11,8 @@ import pytest
 
 from jamma.core import get_jax_info, verify_jax_installation
 
+pytestmark = pytest.mark.requires_jax
+
 
 @pytest.mark.tier0
 class TestJaxImports:

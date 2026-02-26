@@ -572,6 +572,7 @@ class TestPhenotypeColumnMissingValues:
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 class TestX64GuaranteedWithPrecomputedEigen:
     """Regression test for Bug 1 (jamma-4x8): x64 not guaranteed when
     using precomputed eigen files, which bypass kinship/compute.py.
@@ -631,6 +632,7 @@ class TestX64GuaranteedWithPrecomputedEigen:
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 class TestNSamplesReflectsCovariateFiltering:
     """Regression test for Bug 2 (jamma-ri0): n_samples reported
     phenotype-only count instead of post-covariate-filter count.
@@ -686,6 +688,7 @@ class TestNSamplesReflectsCovariateFiltering:
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 class TestNSnpsTestedReflectsFiltering:
     """Regression test for Bug 3 (jamma-bza): n_snps_tested reported
     dataset total instead of post-filter count.

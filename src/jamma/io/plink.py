@@ -260,8 +260,9 @@ def validate_genotype_values(chunk: np.ndarray) -> int:
     Returns:
         Count of unexpected values (not in {0, 1, 2, NaN}).
     """
-    valid_mask = np.isnan(chunk) | (chunk == 0) | (chunk == 1) | (chunk == 2)
-    return int(np.sum(~valid_mask))
+    # Count values outside {0, 1, 2, NaN}.
+    # Valid genotypes are integers in [0, 2]; NaN is missing data (also valid).
+    return int(np.count_nonzero(~(np.isnan(chunk) | np.isin(chunk, (0, 1, 2)))))
 
 
 def stream_genotype_chunks(

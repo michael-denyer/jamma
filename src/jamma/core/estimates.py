@@ -41,15 +41,15 @@ def _format_duration(seconds: float) -> str:
     if seconds < 1:
         return "<1s"
     if seconds < 60:
-        return f"{seconds:.0f}s"
-    minutes = seconds / 60
+        return f"{int(seconds)}s"
+    minutes = int(seconds) // 60
     if minutes < 60:
-        return f"{minutes:.0f} min"
-    hours = minutes / 60
+        return f"{minutes} min"
+    hours = minutes // 60
     remaining_min = minutes % 60
-    if remaining_min < 1:
-        return f"{hours:.0f}h"
-    return f"{hours:.0f}h {remaining_min:.0f}m"
+    if remaining_min == 0:
+        return f"{hours}h"
+    return f"{hours}h {remaining_min}m"
 
 
 def estimate_kinship_time(

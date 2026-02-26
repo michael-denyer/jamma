@@ -353,12 +353,13 @@ class PipelineRunner:
 
         fam_path = f"{self.config.bfile}.fam"
 
-        # Check column count from first line
+        # Single-pass read: load all columns as strings, then validate and extract
         try:
-            first_line = np.loadtxt(fam_path, dtype=str, max_rows=1)
+            all_data = np.loadtxt(fam_path, dtype=str, ndmin=2)
         except (ValueError, OSError) as e:
             raise ValueError(f"Failed to read .fam file {fam_path}: {e}") from e
-        n_cols = first_line.size
+
+        n_cols = all_data.shape[1]
         if col_index >= n_cols:
             n_pheno_cols = n_cols - 5
             raise ValueError(
@@ -369,12 +370,7 @@ class PipelineRunner:
 
         logger.info(f"Using phenotype column {pheno_col} (file column {col_index + 1})")
 
-        try:
-            fam_data = np.loadtxt(fam_path, dtype=str, usecols=(col_index,))
-        except (ValueError, OSError) as e:
-            raise ValueError(
-                f"Failed to read phenotype column {pheno_col} from {fam_path}: {e}"
-            ) from e
+        fam_data = all_data[:, col_index]
         missing_mask = np.isin(fam_data, ["-9", "NA"])
         fam_data[missing_mask] = "0"  # placeholder for safe float conversion
         phenotypes = fam_data.astype(np.float64)
@@ -635,7 +631,7 @@ class PipelineRunner:
                     "XLA profiling enabled: traces will be written to "
                     f"{self.config.profile_dir}"
                 )
-            except Exception as e:
+            except (OSError, ImportError, AttributeError) as e:
                 logger.warning(
                     f"Could not enable XLA profiling: {type(e).__name__}: {e}. "
                     "Continuing without profiling."

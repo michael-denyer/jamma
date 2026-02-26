@@ -154,12 +154,14 @@ class TestJaxRunnerBasic:
 
         genotypes, phenotype, snp_info = synthetic_data
         kinship = compute_centered_kinship(genotypes)
+        # eigendecomp may overwrite K in-place; save copy for runner
+        kinship_copy = kinship.copy()
         eigenvalues, eigenvectors = eigendecompose_kinship(kinship)
 
         results = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
-            kinship=kinship,
+            kinship=kinship_copy,
             snp_info=snp_info,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,

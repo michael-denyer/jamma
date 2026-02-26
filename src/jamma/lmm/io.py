@@ -142,14 +142,19 @@ class IncrementalAssocWriter:
         self._file.write(HEADERS[self.test_type] + "\n")
         return self
 
-    def _cleanup_partial(self) -> None:
-        """Close file and delete partial output (best-effort)."""
+    def _close_file(self) -> None:
+        """Close file handle (best-effort), set to None."""
         if self._file is not None:
             try:
                 self._file.close()
             except OSError as e:
-                logger.warning(f"Failed to close partial output file: {e}")
-            self._file = None
+                logger.warning(f"Failed to close output file {self.path}: {e}")
+            finally:
+                self._file = None
+
+    def _cleanup_partial(self) -> None:
+        """Close file and delete partial output (best-effort)."""
+        self._close_file()
         try:
             self.path.unlink(missing_ok=True)
         except OSError as e:
@@ -348,23 +353,39 @@ class IncrementalAssocWriter:
         self._write_buf("\n".join(lines) + "\n", n)
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Close file, cleaning up partial output on OSError."""
-        if exc_type is not None and issubclass(exc_type, OSError):
-            self._cleanup_partial()
-            return
+        """Close file; delete partial on error, retain on interrupt/OOM."""
+        if exc_type is not None:
+            if issubclass(exc_type, (KeyboardInterrupt, SystemExit, MemoryError)):
+                # Resource/signal — partial output is valid, retain it
+                logger.warning(
+                    f"{exc_type.__name__} with {self._count} results written to "
+                    f"{self.path} (partial file retained)"
+                )
+                self._close_file()
+            elif issubclass(exc_type, Exception):
+                # Computation error — partial output is unreliable, delete it
+                logger.warning(
+                    f"Error during association testing "
+                    f"({exc_type.__name__}: {exc_val}); "
+                    f"deleting partial output {self.path} "
+                    f"({self._count} results written)"
+                )
+                self._cleanup_partial()
+            else:
+                # Other BaseException (e.g. GeneratorExit) — close file, retain output
+                self._close_file()
+            return  # exception propagates (returning None does not suppress)
         if self._file:
             try:
                 self._file.flush()
             except OSError as e:
-                logger.warning(f"Failed to flush output file on close: {e}")
+                logger.error(
+                    f"Failed to flush output file {self.path} on close: {e}. "
+                    f"Deleting partial output ({self._count} results written)."
+                )
                 self._cleanup_partial()
-                return
-            try:
-                self._file.close()
-            except OSError as e:
-                logger.warning(f"Failed to close output file (data was flushed): {e}")
-            finally:
-                self._file = None
+                raise  # Caller must know the write failed
+            self._close_file()
 
     @property
     def count(self) -> int:

@@ -5,8 +5,47 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from jamma.core.memory import estimate_eigendecomp_memory
+from jamma.core.memory import _dsyevd_workspace_gb, estimate_eigendecomp_memory
 from jamma.lmm.eigen import eigendecompose_kinship
+
+
+@pytest.mark.tier0
+class TestDsyevdWorkspaceFormula:
+    """Tests for _dsyevd_workspace_gb (LWORK + LIWORK upper bound)."""
+
+    def test_known_value_1000(self):
+        """Spot-check: n=1000 workspace matches hand-computed value."""
+        n = 1000
+        lwork_bytes = (1 + 6 * n + 2 * n * n) * 8
+        liwork_bytes = (3 + 5 * n) * 8
+        expected_gb = (lwork_bytes + liwork_bytes) / 1e9
+        assert _dsyevd_workspace_gb(n) == pytest.approx(expected_gb, rel=1e-12)
+
+    def test_scales_quadratically(self):
+        """Workspace is dominated by 2n^2 term, so 2x n -> ~4x workspace."""
+        ws_10k = _dsyevd_workspace_gb(10_000)
+        ws_20k = _dsyevd_workspace_gb(20_000)
+        ratio = ws_20k / ws_10k
+        assert 3.9 < ratio < 4.1
+
+    def test_liwork_uses_8_bytes(self):
+        """LIWORK uses 8-byte integers (ILP64 upper bound), not 4-byte."""
+        n = 100_000
+        # Compute with 4-byte integers (LP64) and 8-byte (ILP64)
+        lwork_bytes = (1 + 6 * n + 2 * n * n) * 8
+        liwork_4 = (3 + 5 * n) * 4
+        liwork_8 = (3 + 5 * n) * 8
+        ws_lp64 = (lwork_bytes + liwork_4) / 1e9
+        ws_ilp64 = (lwork_bytes + liwork_8) / 1e9
+        actual = _dsyevd_workspace_gb(n)
+        assert actual == pytest.approx(ws_ilp64, rel=1e-12)
+        assert actual > ws_lp64  # Must use the larger ILP64 estimate
+
+    def test_zero_samples(self):
+        """n=0 should return near-zero workspace."""
+        ws = _dsyevd_workspace_gb(0)
+        # (1+0+0)*8 + (3+0)*8 = 32 bytes
+        assert ws == pytest.approx(32 / 1e9, rel=1e-12)
 
 
 @pytest.mark.tier0
@@ -141,3 +180,71 @@ class TestEigendecompPreflightCheck:
         # Verify correctness: reconstruction K = U @ diag(w) @ U.T
         K_reconstructed = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
         np.testing.assert_allclose(K_ref, K_reconstructed, rtol=1e-10, atol=1e-14)
+
+    def test_eigh_inplace_rejects_non_float64(self):
+        """_eigh_inplace raises TypeError for non-float64 input."""
+        from jamma.lmm.eigen import _eigh_inplace
+
+        K = np.eye(10, dtype=np.float32)
+        with pytest.raises(TypeError, match="float64"):
+            _eigh_inplace(K)
+
+    def test_eigh_inplace_rejects_readonly_array(self):
+        """_eigh_inplace raises ValueError for read-only arrays."""
+        from jamma.lmm.eigen import _eigh_inplace
+
+        K = np.eye(10, dtype=np.float64)
+        K.flags.writeable = False
+        with pytest.raises(ValueError, match="writeable"):
+            _eigh_inplace(K)
+
+    def test_buffer_mismatch_clears_inplace_flag(self, monkeypatch):
+        """Buffer mismatch sets INPLACE_EIGEN_AVAILABLE to False."""
+        import jamma.lmm.eigen as eigen_mod
+
+        # monkeypatch auto-restores on teardown, even on unexpected exceptions
+        monkeypatch.setattr(eigen_mod, "INPLACE_EIGEN_AVAILABLE", True)
+
+        n = 20
+        rng = np.random.default_rng(99)
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+
+        # Mock _eigh_lo to return correct results but in a NEW buffer
+        # (simulates gufunc ignoring `out=` parameter)
+        def fake_eigh_lo(K_in, *, signature=None, out=None):
+            eigenvalues_out, _ = out
+            w, v = np.linalg.eigh(K_in)
+            eigenvalues_out[:] = w
+            # Return eigenvectors in a NEW allocation (not K_in's buffer)
+            return w, v.copy()
+
+        with patch("jamma.lmm.eigen._eigh_lo", fake_eigh_lo):
+            eigenvalues, eigenvectors = eigen_mod._eigh_inplace(K)
+
+        # The flag should now be False
+        assert eigen_mod.INPLACE_EIGEN_AVAILABLE is False, (
+            "INPLACE_EIGEN_AVAILABLE should be set False on buffer mismatch"
+        )
+
+        # Results should still be correct
+        K_ref = (A @ A.T) / n
+        K_reconstructed = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
+        np.testing.assert_allclose(K_ref, K_reconstructed, rtol=1e-10, atol=1e-14)
+
+        # Memory estimator should now see the flag as False
+        from jamma.core.memory import _inplace_eigen_available
+
+        assert _inplace_eigen_available() is False
+
+    def test_fallback_estimate_includes_eigenvector_allocation(self):
+        """When gufunc unavailable, memory estimate adds eigenvector buffer."""
+        with patch("jamma.core.memory._inplace_eigen_available", return_value=False):
+            est = estimate_eigendecomp_memory(200_000)
+            # K (320GB) + U (320GB) + workspace (~640GB) = ~1280GB
+            assert 1275 < est < 1285
+
+        with patch("jamma.core.memory._inplace_eigen_available", return_value=True):
+            est = estimate_eigendecomp_memory(200_000)
+            # K/U shared (320GB) + workspace (~640GB) = ~960GB
+            assert 955 < est < 965

@@ -1,5 +1,7 @@
 """Tests for memory estimation module."""
 
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import psutil
 import pytest
@@ -13,6 +15,7 @@ from jamma.core import (
     get_memory_snapshot,
     log_memory_snapshot,
 )
+from jamma.core.estimates import _format_duration
 from jamma.core.memory import _uab_iab_gb, estimate_lmm_memory
 
 
@@ -201,7 +204,6 @@ class TestEigendecompMemoryGate:
         Mocks psutil.virtual_memory to report 1 byte available.
         Should raise MemoryError before LAPACK runs.
         """
-        from unittest.mock import MagicMock, patch
 
         from jamma.lmm.eigen import eigendecompose_kinship
 
@@ -519,7 +521,6 @@ class TestGateCorrectnessRunnerJax:
 
     def test_lmm_gate_passes_with_ample_memory(self):
         """Memory check should pass when plenty of memory is available."""
-        from unittest.mock import patch
 
         with patch("jamma.core.memory.psutil.virtual_memory") as mock_mem:
             mock_obj = mock_mem.return_value
@@ -530,7 +531,6 @@ class TestGateCorrectnessRunnerJax:
 
     def test_lmm_gate_blocks_with_scarce_memory(self):
         """Memory check should fail when memory is insufficient."""
-        from unittest.mock import patch
 
         with patch("jamma.core.memory.psutil.virtual_memory") as mock_mem:
             mock_obj = mock_mem.return_value
@@ -541,11 +541,10 @@ class TestGateCorrectnessRunnerJax:
             assert est.sufficient is False
 
     def test_lmm_gate_threshold_boundary(self):
-        """Memory check should account for 10% safety margin.
+        """Memory check should account for safety margin (10% capped at 10GB).
 
-        _check_available uses strict less-than: total_gb * 1.1 < available_gb.
+        _check_available uses: (total_gb + min(total_gb * 0.1, 10)) < available_gb.
         """
-        from unittest.mock import patch
 
         # Compute total_gb deterministically (mock memory so it doesn't affect total)
         with patch("jamma.core.memory.psutil.virtual_memory") as mock_mem:
@@ -553,7 +552,8 @@ class TestGateCorrectnessRunnerJax:
             mock_obj.available = 1000 * 1e9
             est_dry = estimate_lmm_memory(100, 100)
 
-        needed_with_margin = est_dry.total_gb * 1.1
+        margin = min(est_dry.total_gb * 0.1, 10.0)
+        needed_with_margin = est_dry.total_gb + margin
 
         # Set available to just above the margin (should pass)
         with patch("jamma.core.memory.psutil.virtual_memory") as mock_mem:
@@ -578,7 +578,6 @@ class TestGateCorrectnessRunnerStreaming:
 
     def test_streaming_gate_passes_with_ample_memory(self):
         """Memory check should pass when plenty of memory is available."""
-        from unittest.mock import patch
 
         from jamma.core.memory import estimate_lmm_streaming_memory
 
@@ -591,7 +590,6 @@ class TestGateCorrectnessRunnerStreaming:
 
     def test_streaming_gate_blocks_with_scarce_memory(self):
         """Memory check should fail when memory is insufficient."""
-        from unittest.mock import patch
 
         from jamma.core.memory import estimate_lmm_streaming_memory
 
@@ -601,3 +599,174 @@ class TestGateCorrectnessRunnerStreaming:
 
             est = estimate_lmm_streaming_memory(100_000, 95_000)
             assert est.sufficient is False
+
+
+@pytest.mark.tier0
+class TestInplaceEigenAvailableHelper:
+    """Tests for _inplace_eigen_available() helper function."""
+
+    def test_returns_false_and_logs_on_import_error(self, monkeypatch):
+        """_inplace_eigen_available logs warning when import fails."""
+        import jamma.core.memory as mem_mod
+        from jamma.core.memory import _inplace_eigen_available
+
+        # Use monkeypatch for auto-restore between tests (pytest-randomly safe)
+        monkeypatch.setattr(mem_mod, "_inplace_import_warned", False)
+
+        with patch("jamma.core.memory.logger") as mock_logger:
+            # Make the import inside _inplace_eigen_available raise ImportError
+            with patch.dict("sys.modules", {"jamma.lmm.eigen": None}):
+                result = _inplace_eigen_available()
+
+            assert result is False
+            mock_logger.warning.assert_called_once()
+            call_args = mock_logger.warning.call_args[0][0]
+            assert "Could not import" in call_args
+
+    def test_returns_false_on_missing_attribute(self, monkeypatch):
+        """_inplace_eigen_available returns False when attribute absent from module.
+
+        Python's ``from X import Y`` raises ImportError (not AttributeError)
+        when Y doesn't exist in X, so this exercises the same except branch.
+        """
+        import types
+
+        import jamma.core.memory as mem_mod
+        from jamma.core.memory import _inplace_eigen_available
+
+        # Use monkeypatch for auto-restore between tests (pytest-randomly safe)
+        monkeypatch.setattr(mem_mod, "_inplace_import_warned", False)
+
+        # Module exists but INPLACE_EIGEN_AVAILABLE attribute is missing
+        fake_module = types.ModuleType("jamma.lmm.eigen")
+
+        with patch("jamma.core.memory.logger") as mock_logger:
+            with patch.dict("sys.modules", {"jamma.lmm.eigen": fake_module}):
+                result = _inplace_eigen_available()
+
+            assert result is False
+            mock_logger.warning.assert_called_once()
+            call_args = mock_logger.warning.call_args[0][0]
+            assert "Could not import" in call_args
+
+
+@pytest.mark.tier0
+class TestMemoryEstimatorFallbackPath:
+    """Verify memory estimates differ correctly when in-place eigen unavailable."""
+
+    def test_workflow_fallback_adds_eigenvector_allocation(self):
+        """Fallback path includes separate eigenvector allocation in peak."""
+
+        with patch("jamma.core.memory._inplace_eigen_available", return_value=True):
+            est_inplace = estimate_workflow_memory(200_000, 95_000)
+
+        with patch("jamma.core.memory._inplace_eigen_available", return_value=False):
+            est_fallback = estimate_workflow_memory(200_000, 95_000)
+
+        # Fallback should be ~320GB higher (one extra n^2*8 allocation)
+        diff = est_fallback.total_gb - est_inplace.total_gb
+        assert 315 < diff < 325, (
+            f"Fallback should add ~320GB for eigenvectors, got {diff:.1f}GB"
+        )
+
+    def test_streaming_fallback_adds_eigenvector_allocation(self):
+        """Streaming fallback path includes separate eigenvector allocation."""
+
+        from jamma.core.memory import estimate_streaming_memory
+
+        with patch("jamma.core.memory._inplace_eigen_available", return_value=True):
+            est_inplace = estimate_streaming_memory(200_000)
+
+        with patch("jamma.core.memory._inplace_eigen_available", return_value=False):
+            est_fallback = estimate_streaming_memory(200_000)
+
+        diff = est_fallback.total_peak_gb - est_inplace.total_peak_gb
+        assert 315 < diff < 325, (
+            f"Fallback should add ~320GB for eigenvectors, got {diff:.1f}GB"
+        )
+
+
+@pytest.mark.tier0
+class TestSafetyMarginCap:
+    """Verify 10GB absolute cap on safety margin."""
+
+    def test_margin_capped_at_10gb_for_large_requirements(self):
+        """Safety margin caps at 10GB for large memory requirements."""
+
+        # 500GB required: old formula = 500*1.1 = 550GB needed
+        # new formula = 500 + min(50, 10) = 510GB needed
+        with patch("jamma.core.memory.psutil.virtual_memory") as mock_vm:
+            mock_vm.return_value.available = 515 * 1e9  # 515GB
+            # Should PASS with capped margin (510GB < 515GB)
+            assert check_memory_available(500.0) is True
+
+        with patch("jamma.core.memory.psutil.virtual_memory") as mock_vm:
+            mock_vm.return_value.available = 505 * 1e9  # 505GB
+            # Should FAIL (510GB > 505GB)
+            with pytest.raises(MemoryError):
+                check_memory_available(500.0)
+
+    def test_small_requirements_use_percentage_margin(self):
+        """Small requirements use 10% margin (not capped)."""
+
+        # 10GB required: margin = min(1, 10) = 1GB, total = 11GB
+        with patch("jamma.core.memory.psutil.virtual_memory") as mock_vm:
+            mock_vm.return_value.available = 11.5 * 1e9
+            assert check_memory_available(10.0) is True
+
+        with patch("jamma.core.memory.psutil.virtual_memory") as mock_vm:
+            mock_vm.return_value.available = 10.5 * 1e9  # 10.5 < 11
+            with pytest.raises(MemoryError):
+                check_memory_available(10.0)
+
+
+class TestFormatDuration:
+    """Tests for _format_duration human-readable formatting."""
+
+    def test_sub_second(self):
+        assert _format_duration(0.5) == "<1s"
+
+    def test_seconds(self):
+        assert _format_duration(30) == "30s"
+
+    def test_one_second(self):
+        assert _format_duration(1) == "1s"
+
+    def test_just_under_minute(self):
+        assert _format_duration(59) == "59s"
+
+    def test_no_60s_rounding(self):
+        """59.6s must be '59s', not '60s' — truncation not rounding."""
+        assert _format_duration(59.6) == "59s"
+
+    def test_minutes(self):
+        assert _format_duration(120) == "2 min"
+
+    def test_exactly_60_minutes(self):
+        assert _format_duration(3600) == "1h"
+
+    def test_hours_and_minutes(self):
+        assert _format_duration(5400) == "1h 30m"
+
+    def test_exactly_60_seconds(self):
+        """60 seconds is 1 minute, not '60s'."""
+        assert _format_duration(60) == "1 min"
+
+    def test_no_60_minutes_rounding(self):
+        """7199s must be '1h 59m', not '2h 60m' (rounding bug)."""
+        assert _format_duration(7199) == "1h 59m"
+
+    def test_no_60_minutes_rounding_fractional(self):
+        """7199.9s must be '1h 59m' — truncation not rounding."""
+        assert _format_duration(7199.9) == "1h 59m"
+
+    def test_no_60_min_label_at_boundary(self):
+        """3599s must be '59 min', not '60 min' (rounding in minutes branch)."""
+        assert _format_duration(3599) == "59 min"
+
+    def test_no_60_min_label_fractional(self):
+        """3599.5s must be '59 min', not '60 min' — truncation not rounding."""
+        assert _format_duration(3599.5) == "59 min"
+
+    def test_large_duration(self):
+        assert _format_duration(7261) == "2h 1m"

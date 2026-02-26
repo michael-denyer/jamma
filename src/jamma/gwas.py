@@ -62,6 +62,7 @@ def gwas(
     l_max: float = 1e5,
     weight_file: str | Path | None = None,
     cat_columns: list[int] | None = None,
+    backend: str = "auto",
 ) -> GWASResult:
     """Run a complete GWAS pipeline in a single call.
 
@@ -126,6 +127,10 @@ def gwas(
             is for SNP categories in VC mode). Columns are one-hot encoded
             with the first sorted level dropped as reference. Requires
             covariate_file to be set.
+        backend: Compute backend: "auto" (default), "jax", or "numpy". "auto"
+            selects JAX when installed, falling back to NumPy. "jax" requires
+            JAX to be installed (pip install jamma[jax]). "numpy" forces the
+            pure-NumPy backend, which loads all genotypes into memory.
 
     Returns:
         GWASResult with association results, sample/SNP counts, and timing.
@@ -170,6 +175,7 @@ def gwas(
         l_max=l_max,
         weight_file=Path(weight_file) if weight_file is not None else None,
         cat_columns=cat_columns,
+        backend=backend,
     )
 
     pipeline_result = PipelineRunner(config).run()

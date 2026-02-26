@@ -50,13 +50,14 @@ jobs:
             python-version: "3.12"
             install_args: "--extra dev"
             name: "Windows + NumPy"
-            pytest_args: "-m 'not tier2 and not slow and not requires_jax'"
+            pytest_args: "-n0 -m 'not tier2 and not slow and not requires_jax'"
           - os: macos-latest
             python-version: "3.12"
             install_args: "--extra jax --extra dev"
             name: "ARM Mac + JAX"
             cov_threshold: "--cov-fail-under=80"
     name: ${{ matrix.name }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 

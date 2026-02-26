@@ -7,7 +7,6 @@ and batch lambda optimization used by both the batch and streaming runners.
 
 from __future__ import annotations
 
-import gc
 from dataclasses import dataclass
 
 import jax
@@ -18,10 +17,12 @@ from jax.sharding import PartitionSpec as P
 from loguru import logger
 
 from jamma.core.threading import blas_threads
-from jamma.lmm.eigen import eigendecompose_kinship
-from jamma.lmm.likelihood import compute_null_model_mle
 from jamma.lmm.likelihood_jax import golden_section_optimize_lambda
-from jamma.utils.logging import log_rss_memory
+from jamma.lmm.prepare_common import (
+    _build_covariate_matrix,  # noqa: F401 — re-exported for existing callers
+    _compute_null_model_common,
+    _eigendecompose_or_reuse,  # noqa: F401 — re-exported for existing callers
+)
 
 
 def _setup_cpu_sharding() -> tuple[NamedSharding | None, NamedSharding | None]:
@@ -75,88 +76,6 @@ def _select_jax_device(use_gpu: bool) -> jax.Device:
     return device
 
 
-def _build_covariate_matrix(
-    covariates: np.ndarray | None, n_samples: int
-) -> tuple[np.ndarray, int]:
-    """Construct covariate matrix W and return (W, n_cvt).
-
-    If covariates is None, uses intercept-only model. Warns if provided
-    covariates lack an intercept column.
-
-    Args:
-        covariates: Optional covariate matrix (n_samples, n_covariates).
-        n_samples: Number of samples (for intercept construction).
-
-    Returns:
-        Tuple of (W, n_cvt) where W is the covariate matrix.
-    """
-    if covariates is None:
-        W = np.ones((n_samples, 1))
-    else:
-        W = covariates.astype(np.float64)
-        if not np.allclose(W[:, 0], 1.0):
-            logger.warning(
-                "Covariate matrix does not have intercept column "
-                "(first column is not all 1s). "
-                "Model will NOT include an intercept term."
-            )
-    n_cvt = W.shape[1]
-    # df = n_samples - n_cvt - 1 must be positive for valid REML
-    if n_samples <= n_cvt + 1:
-        raise ValueError(
-            f"Over-parameterized model: {n_samples} samples with {n_cvt} "
-            f"covariates leaves df={n_samples - n_cvt - 1} "
-            f"(need at least {n_cvt + 2} samples)"
-        )
-    # Rank-deficient covariates cause singular Pab → cryptic LAPACK errors
-    rank = np.linalg.matrix_rank(W)
-    if rank < n_cvt:
-        raise ValueError(
-            f"Covariate matrix is rank-deficient: rank={rank} but "
-            f"n_cvt={n_cvt}. Check for linearly dependent columns."
-        )
-    return W, n_cvt
-
-
-def _eigendecompose_or_reuse(
-    kinship: np.ndarray | None,
-    eigenvalues: np.ndarray | None,
-    eigenvectors: np.ndarray | None,
-    show_progress: bool,
-    label: str,
-    *,
-    check_memory: bool = True,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return eigendecomposition, computing it if not provided.
-
-    Args:
-        kinship: Kinship matrix (n_samples, n_samples), or None when
-            pre-computed eigenvalues and eigenvectors are provided.
-        eigenvalues: Pre-computed eigenvalues or None.
-        eigenvectors: Pre-computed eigenvectors or None.
-        show_progress: Whether to log memory usage.
-        label: Label for memory logging (e.g. "lmm_jax", "lmm_streaming").
-        check_memory: If True (default), check available memory before
-            eigendecomposition.
-
-    Returns:
-        Tuple of (eigenvalues, eigenvectors).
-    """
-    if eigenvalues is not None and eigenvectors is not None:
-        if show_progress:
-            logger.debug("Using pre-computed eigendecomposition")
-        return eigenvalues, eigenvectors
-
-    if show_progress:
-        log_rss_memory(label, "before_eigendecomp")
-    eigenvalues_np, U = eigendecompose_kinship(kinship, check_memory=check_memory)
-    # Release LAPACK DSYEVD workspace before LMM phase
-    gc.collect()
-    if show_progress:
-        log_rss_memory(label, "after_eigendecomp")
-    return eigenvalues_np, U
-
-
 def _compute_null_model(
     lmm_mode: int,
     eigenvalues_np: np.ndarray,
@@ -169,6 +88,9 @@ def _compute_null_model(
     l_max: float = 1e5,
 ) -> tuple[float | None, float | None, jnp.ndarray | None]:
     """Compute null model MLE for Score, LRT, and All-tests modes.
+
+    Thin JAX wrapper around _compute_null_model_common. Calls the pure-NumPy
+    computation and places Hi_eval_null on the specified JAX device.
 
     GEMMA computes both REML and MLE null lambdas in CalcLambda, but uses
     MLE lambda for Hi_eval in the Score test:
@@ -193,22 +115,13 @@ def _compute_null_model(
         All None for Wald (mode 1). For LRT (mode 2), Hi_eval_null_jax
         is None. For Score/All (modes 3, 4), all three are populated.
     """
-    if lmm_mode not in (2, 3, 4):
-        return None, None, None
-
-    lambda_null_mle, logl_H0 = compute_null_model_mle(
-        eigenvalues_np, UtW, Uty, n_cvt, l_min=l_min, l_max=l_max
+    logl_H0, lambda_null_mle, Hi_eval_null_np = _compute_null_model_common(
+        lmm_mode, eigenvalues_np, UtW, Uty, n_cvt, show_progress, l_min, l_max
     )
-    if show_progress:
-        logger.info(
-            f"Null model MLE: lambda={lambda_null_mle:.6f}, logl_H0={logl_H0:.6f}"
-        )
-
-    Hi_eval_null_jax = None
-    if lmm_mode in (3, 4):
-        Hi_eval_null = 1.0 / (lambda_null_mle * eigenvalues_np + 1.0)
-        Hi_eval_null_jax = jax.device_put(Hi_eval_null, rep_placement)
-
+    if Hi_eval_null_np is not None:
+        Hi_eval_null_jax = jax.device_put(Hi_eval_null_np, rep_placement)
+    else:
+        Hi_eval_null_jax = None
     return logl_H0, lambda_null_mle, Hi_eval_null_jax
 
 

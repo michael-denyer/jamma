@@ -54,10 +54,17 @@ def _configure_jax_for_tests():
     Previously, importing jamma.kinship.compute triggered module-level
     configure_jax(). Now that side effects are removed, this fixture
     provides the same guarantee explicitly.
-    """
-    from jamma.core.jax_config import ensure_jax_configured
 
-    ensure_jax_configured()
+    When JAX is not installed (NumPy-only environment), this fixture
+    silently passes — tests that need JAX will fail with their own
+    ImportError, providing clear error messages.
+    """
+    try:
+        from jamma.core.jax_config import ensure_jax_configured
+
+        ensure_jax_configured()
+    except ImportError:
+        pass  # JAX not installed; NumPy backend tests run without configuration
 
 
 @pytest.fixture

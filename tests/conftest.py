@@ -47,6 +47,15 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
+def pytest_runtest_setup(item):
+    """Auto-skip tests marked requires_jax when JAX is not installed."""
+    if any(m.name == "requires_jax" for m in item.iter_markers()):
+        try:
+            import jax  # noqa: F401
+        except ImportError:
+            pytest.skip("JAX not installed — install with: pip install jamma[jax]")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _configure_jax_for_tests():
     """Ensure JAX 64-bit precision is configured for all tests.
@@ -123,6 +132,11 @@ def validation_pipeline_data():
 
     if not reference_assoc.exists():
         return None
+
+    try:
+        import jax  # noqa: F401
+    except ImportError:
+        return None  # JAX not installed; validation tests will skip
 
     from jamma.io import load_plink_binary
     from jamma.kinship.io import read_kinship_matrix

@@ -28,6 +28,8 @@ from jamma.lmm.likelihood import (
 )
 from jamma.lmm.runner_jax import run_lmm_association_jax
 
+pytestmark = pytest.mark.requires_jax
+
 # GEMMA reference values from gemma_lrt.log.txt
 GEMMA_REML_NULL_LOGL = -140.636
 GEMMA_MLE_NULL_LOGL = -139.281

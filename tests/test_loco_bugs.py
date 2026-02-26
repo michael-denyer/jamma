@@ -2,9 +2,12 @@
 
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from jamma.kinship.compute import _yield_full_kinship_fallback, _yield_loco_matrices
 from jamma.utils import chr_sort_key
+
+pytestmark = pytest.mark.requires_jax
 
 
 class TestFallbackKinshipAliasing:

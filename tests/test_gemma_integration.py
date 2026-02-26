@@ -27,6 +27,8 @@ from jamma.kinship import compute_centered_kinship
 from jamma.lmm.runner_jax import run_lmm_association_jax
 from jamma.validation import load_gemma_kinship
 
+pytestmark = pytest.mark.requires_jax
+
 # Fixture paths
 _FIXTURE_ROOT = Path(__file__).parent / "fixtures"
 FIXTURE_DIR = _FIXTURE_ROOT / "gemma_synthetic"

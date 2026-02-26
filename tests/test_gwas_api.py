@@ -17,6 +17,7 @@ COVARIATE_FILE = FIXTURES / "covariates.txt"
 
 @pytest.mark.slow
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_gwas_basic(tmp_path: Path) -> None:
     """gwas() with pre-computed kinship returns valid GWASResult and writes output."""
     result = gwas(
@@ -43,6 +44,7 @@ def test_gwas_basic(tmp_path: Path) -> None:
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_gwas_custom_prefix(tmp_path: Path) -> None:
     """gwas() writes output with the specified prefix."""
     result = gwas(
@@ -60,6 +62,7 @@ def test_gwas_custom_prefix(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_gwas_save_kinship(tmp_path: Path) -> None:
     """gwas() computes and saves kinship when save_kinship=True."""
     result = gwas(
@@ -82,6 +85,7 @@ def test_gwas_save_kinship(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_gwas_with_precomputed_kinship(tmp_path: Path) -> None:
     """Loading pre-computed kinship skips computation (just file read)."""
     result = gwas(

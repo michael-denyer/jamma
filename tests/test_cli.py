@@ -71,6 +71,7 @@ def test_cli_version():
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_cli_gk_loads_data(tmp_path: Path):
     """Test that gk command loads PLINK data and creates output directory."""
     outdir = tmp_path / "output"
@@ -86,6 +87,7 @@ def test_cli_gk_loads_data(tmp_path: Path):
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_cli_gk_log_file(tmp_path: Path):
     """Test that gk command creates GEMMA-format log file."""
     outdir = tmp_path / "output"
@@ -121,6 +123,7 @@ def test_cli_gk_invalid_bfile(tmp_path: Path):
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_cli_gk_custom_outdir(tmp_path: Path):
     """Test that gk command respects custom -outdir."""
     custom_dir = tmp_path / "custom_output_dir"
@@ -135,6 +138,7 @@ def test_cli_gk_custom_outdir(tmp_path: Path):
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_cli_gk_custom_prefix(tmp_path: Path):
     """Test that gk command respects custom -o prefix."""
     outdir = tmp_path / "output"
@@ -180,6 +184,7 @@ def test_cli_lmm_mode_2_accepted():
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_cli_gk_mode_2_succeeds(tmp_path: Path):
     """Test that -gk 2 computes standardized kinship and writes output."""
     outdir = tmp_path / "output"
@@ -199,6 +204,7 @@ def test_cli_gk_mode_2_succeeds(tmp_path: Path):
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_cli_gk_maf_miss_flags(tmp_path: Path):
     """Test that gk command accepts -maf and -miss flags."""
     outdir = tmp_path / "output"
@@ -232,6 +238,7 @@ def test_cli_gk_maf_miss_flags(tmp_path: Path):
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_lmm_jax_default_mode4(tmp_path: Path):
     """Test that default JAX backend works with -lmm 4."""
     outdir = tmp_path / "output"
@@ -273,6 +280,7 @@ def test_lmm_jax_default_mode4(tmp_path: Path):
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_lmm_with_covariate_file(tmp_path: Path):
     """Test that lmm command accepts -c option and runs with covariates."""
     outdir = tmp_path / "output"
@@ -316,6 +324,7 @@ def test_lmm_with_covariate_file(tmp_path: Path):
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_lmm_covariate_file_not_found(tmp_path: Path):
     """Test that lmm command fails gracefully when covariate file not found."""
     outdir = tmp_path / "output"
@@ -351,6 +360,7 @@ def test_lmm_covariate_file_not_found(tmp_path: Path):
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_lmm_covariate_sample_mismatch(tmp_path: Path):
     """Test that lmm command fails when covariate row count mismatches samples."""
     outdir = tmp_path / "output"
@@ -392,6 +402,7 @@ def test_lmm_covariate_sample_mismatch(tmp_path: Path):
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_lmm_covariate_intercept_warning(tmp_path: Path):
     """Test that lmm command warns when covariate file lacks intercept column."""
     outdir = tmp_path / "output"
@@ -492,6 +503,7 @@ def test_cli_unimplemented_flags_error(flag: str, value: str):
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_cli_gk_default_no_filtering(tmp_path: Path):
     """Default gk invocation should not apply MAF/miss filtering."""
     outdir = tmp_path / "output"
@@ -503,6 +515,7 @@ def test_cli_gk_default_no_filtering(tmp_path: Path):
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_cli_gk_explicit_maf_applies_filtering(tmp_path: Path):
     """Explicit -maf with -gk should apply filtering."""
     outdir = tmp_path / "output"
@@ -525,6 +538,7 @@ def test_cli_gk_explicit_maf_applies_filtering(tmp_path: Path):
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_lmin_lmax_flags(tmp_path: Path):
     """CLI accepts -lmin and -lmax flags and runs successfully."""
     outdir = tmp_path / "output"
@@ -624,6 +638,7 @@ def test_cli_help_shows_lmin_lmax():
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_widv_flag(tmp_path: Path):
     """CLI accepts -widv flag and applies weights to kinship."""
     outdir = tmp_path / "output"
@@ -685,6 +700,7 @@ def test_cli_help_shows_widv():
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 def test_cat_flag(tmp_path: Path):
     """CLI accepts -cat flag and applies categorical encoding to covariates."""
     outdir = tmp_path / "output"

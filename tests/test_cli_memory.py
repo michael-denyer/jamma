@@ -23,6 +23,7 @@ KINSHIP_FILE = FIXTURE_DIR / "gemma_kinship.cXX.txt"
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 class TestCliMemoryCheck:
     """Tests for CLI lmm command memory pre-flight checks."""
 

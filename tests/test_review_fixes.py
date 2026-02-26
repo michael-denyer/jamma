@@ -191,6 +191,7 @@ class TestBuildResults:
 
 
 @pytest.mark.tier0
+@pytest.mark.requires_jax
 class TestEnsureJaxConfigured:
     """Test ensure_jax_configured locking behavior."""
 

@@ -25,6 +25,8 @@ from jamma.validation import (
     load_gemma_assoc,
 )
 
+pytestmark = pytest.mark.requires_jax
+
 # JAX golden section optimizer produces slightly different lambda values than
 # GEMMA's Brent method. Use lambda_rtol=5e-5 (documented bound) for all
 # GEMMA parity tests that now use the JAX runner.

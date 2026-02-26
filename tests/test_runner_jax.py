@@ -10,6 +10,8 @@ from jamma.lmm.chunk import MAX_SAFE_CHUNK, _compute_chunk_size, auto_tune_chunk
 from jamma.lmm.runner_jax import run_lmm_association_jax
 from jamma.validation import compare_assoc_results, load_gemma_assoc
 
+pytestmark = pytest.mark.requires_jax
+
 # GEMMA covariate fixture paths (Score and LRT with covariates)
 _FIXTURE_ROOT = Path(__file__).parent / "fixtures"
 COVARIATE_FIXTURE_DIR = _FIXTURE_ROOT / "gemma_covariate"

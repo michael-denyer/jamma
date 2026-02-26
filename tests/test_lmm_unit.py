@@ -148,7 +148,7 @@ class TestEigendecomposeOrReuse:
         eigenvalues = np.array([1.0, 2.0])
         eigenvectors = np.eye(2)
 
-        with patch("jamma.lmm.prepare.eigendecompose_kinship") as mock_eigen:
+        with patch("jamma.lmm.prepare_common.eigendecompose_kinship") as mock_eigen:
             result = _eigendecompose_or_reuse(
                 None, eigenvalues, eigenvectors, False, "test"
             )

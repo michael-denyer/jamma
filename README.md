@@ -13,26 +13,44 @@
   <img src="https://raw.githubusercontent.com/michael-denyer/jamma/master/logos/JAMMA_Large_Logo_v2.png" alt="JAMMA" width="500">
 </p>
 
-**JAX-Accelerated Mixed Model Association** — A modern Python reimplementation of [GEMMA](https://github.com/genetics-statistics/GEMMA) for genome-wide association studies (GWAS).
+**Fast Mixed Model Association** — A modern Python reimplementation of [GEMMA](https://github.com/genetics-statistics/GEMMA) for genome-wide association studies (GWAS).
 
 - **GEMMA-compatible**: Drop-in replacement with identical CLI flags and output formats
 - **Numerical equivalence**: Validated against GEMMA — 100% significance agreement, 100% effect direction agreement
 - **Fast**: Up to 11x faster than GEMMA on kinship and 6x faster on LMM association
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
-- **Pure Python**: JAX + NumPy stack, no C++ compilation required
+- **Cross-platform**: Runs on Linux, macOS, and Windows — NumPy backend works everywhere, JAX backend adds GPU acceleration
+- **Pure Python**: NumPy + optional JAX stack, no C++ compilation required
 - **Large-scale ready**: Optional [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) wheels (numpy 2.4.2) for >46k sample eigendecomposition
 
 ## Installation
 
 ```bash
+# Base install (NumPy backend — works on all platforms)
 pip install jamma
+
+# With JAX acceleration (Linux, ARM Mac, Windows CPU)
+pip install jamma[jax]
 ```
 
 Or with uv:
 
 ```bash
-uv add jamma
+uv add jamma        # NumPy backend
+uv add jamma[jax]   # With JAX acceleration
 ```
+
+### Platform Support
+
+| Platform | `pip install jamma` | `pip install jamma[jax]` | Notes |
+|----------|---------------------|--------------------------|-------|
+| Linux x86_64 | JAX (auto-included) | — | Full support; ILP64 for >46k samples |
+| ARM Mac (M1+) | JAX (auto-included) | — | Full support |
+| Intel Mac | NumPy only | Not available | JAX dropped Intel Mac support |
+| Windows | NumPy only | JAX (CPU) | Explicit opt-in via `[jax]` extra |
+
+JAX is auto-included on Linux and ARM Mac via platform markers.
+Force a specific backend with `--backend numpy` or `--backend jax`.
 
 ## Quick Start
 
@@ -79,7 +97,7 @@ result = gwas("data/my_study", eigenvalue_file="output/result.eigenD.txt",
 result = gwas("data/my_study", kinship_file="k.txt", snps_file="snps.txt", hwe=0.001)
 ```
 
-### Low-level API
+### Low-level API (JAX backend)
 
 ```python
 import numpy as np
@@ -104,6 +122,39 @@ results, n_tested = run_lmm_association_streaming(
     eigenvalues=eigenvalues,
     eigenvectors=eigenvectors,
     chunk_size=5000,
+)
+```
+
+### Low-level API (NumPy backend)
+
+```python
+import numpy as np
+
+from jamma.io import load_plink_binary
+from jamma.kinship import compute_centered_kinship
+from jamma.lmm import run_lmm_association_numpy
+from jamma.lmm.eigen import eigendecompose_kinship
+
+data = load_plink_binary("data/my_study")
+phenotypes = np.loadtxt("data/my_study.pheno")
+kinship = compute_centered_kinship(data.genotypes)
+eigenvalues, eigenvectors = eigendecompose_kinship(kinship)
+
+snp_info = [
+    {"chr": str(data.chromosome[i]), "rs": data.sid[i],
+     "pos": int(data.bp_position[i]), "a1": data.allele_1[i], "a0": data.allele_2[i]}
+    for i in range(data.n_snps)
+]
+
+# Returns list[AssocResult] — write to disk via IncrementalAssocWriter
+results = run_lmm_association_numpy(
+    genotypes=data.genotypes,
+    phenotypes=phenotypes,
+    kinship=None,  # Not needed when eigenvalues/eigenvectors provided
+    snp_info=snp_info,
+    eigenvalues=eigenvalues,
+    eigenvectors=eigenvectors,
+    lmm_mode=1,
 )
 ```
 
@@ -171,6 +222,24 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2:
 
 - [ ] Multivariate LMM (mvLMM)
 
+## Architecture
+
+JAMMA uses a dual-backend architecture: a **JAX backend** for GPU/multi-core acceleration and a **NumPy backend** that works everywhere with zero extra dependencies.
+
+```mermaid
+flowchart LR
+    CLI["CLI / gwas()"] --> PIPE["PipelineRunner"]
+    PIPE --> DET{"detect_backend()"}
+    DET -->|"jax"| JAX["JAX Backend<br>JIT + vmap + sharding"]
+    DET -->|"numpy"| NP["NumPy Backend<br>pure stdlib"]
+    JAX --> RES["AssocResult"]
+    NP --> RES
+```
+
+Both backends share the same core algorithms ([likelihood.py](src/jamma/lmm/likelihood.py), [prepare_common.py](src/jamma/lmm/prepare_common.py)) and produce identical results. Backend-specific files follow a naming convention: `*_jax.py` / `*_numpy.py`.
+
+See [Code Map](docs/CODEMAP.md) for the full architecture diagram with source links.
+
 ## Documentation
 
 - [Why JAMMA?](docs/WHY_JAMMA.md) — Key differentiators from GEMMA
@@ -185,8 +254,8 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2:
 ## Requirements
 
 - Python 3.11+
-- JAX 0.8.0+
 - NumPy 2.0+
+- JAX 0.8.0+ (optional, for GPU acceleration: `pip install jamma[jax]`)
 
 ## License
 

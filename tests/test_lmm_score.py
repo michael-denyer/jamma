@@ -332,6 +332,7 @@ class TestScoreVsWald:
         for i, p in enumerate(p_values):
             assert 0.0 <= p <= 1.0, f"SNP {i}: p-value {p} not in [0, 1]"
 
+    @pytest.mark.requires_jax
     def test_score_and_wald_agree_on_direction(self):
         """Score and Wald tests should agree on effect direction (beta sign)."""
         data = _create_test_data(n_samples=100, n_cvt=1, seed=42)

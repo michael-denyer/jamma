@@ -23,6 +23,8 @@ from jamma.lmm.likelihood import (
 from jamma.lmm.runner_jax import run_lmm_association_jax
 from jamma.lmm.stats import calc_lrt_test
 
+pytestmark = pytest.mark.requires_jax
+
 
 def _create_test_data(n_samples: int = 100, n_cvt: int = 1, seed: int = 42):
     """Create synthetic test data for LMM tests.

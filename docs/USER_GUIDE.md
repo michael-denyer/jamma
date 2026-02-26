@@ -5,8 +5,15 @@
 ### From PyPI
 
 ```bash
+# Base install (NumPy backend — works on all platforms)
 pip install jamma
+
+# With JAX acceleration (Linux, ARM Mac, Windows CPU)
+pip install jamma[jax]
 ```
+
+JAX is auto-included on Linux and ARM Mac via platform markers.
+See [Platform Support](#platform-support) for details.
 
 ### From Source
 
@@ -23,6 +30,29 @@ For GPU acceleration, install JAX with CUDA support:
 ```bash
 pip install jax[cuda12]
 ```
+
+### Platform Support
+
+| Platform | `pip install jamma` | `pip install jamma[jax]` | Notes |
+|----------|---------------------|--------------------------|-------|
+| Linux x86_64 | JAX (auto-included) | — | Full support; ILP64 for >46k samples |
+| ARM Mac (M1+) | JAX (auto-included) | — | Full support |
+| Intel Mac | NumPy only | Not available | JAX dropped Intel Mac support |
+| Windows | NumPy only | JAX (CPU) | Explicit opt-in via `[jax]` extra |
+
+### Backend Selection
+
+JAMMA auto-detects the best available backend. Force a specific backend with:
+
+```bash
+# CLI flag
+jamma -lmm 1 --backend numpy -bfile data/my_study -k kinship.cXX.txt
+
+# Environment variable (overrides CLI flag)
+export JAMMA_BACKEND=numpy
+```
+
+Priority: `JAMMA_BACKEND` env var → `--backend` flag → auto-detect (try JAX, fall back to NumPy).
 
 ## Input Data Format
 
@@ -195,6 +225,7 @@ jamma -lmm 1 -bfile data/my_study -k kinship.cXX.txt \
 
 **HWE filtering:** JAMMA uses a chi-squared goodness-of-fit test (df=1) via JAX.
 SNPs with p-value below the threshold are excluded from association testing.
+**Note:** HWE filtering requires the JAX backend (`pip install jamma[jax]`).
 See [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md) for differences from GEMMA's
 Wigginton exact test.
 
@@ -277,7 +308,7 @@ data = load_plink_binary("data/my_study")
 K = compute_centered_kinship(data.genotypes)
 ```
 
-#### LMM Association
+#### LMM Association (JAX backend)
 
 ```python
 from jamma.lmm import run_lmm_association_streaming
@@ -290,6 +321,27 @@ results = run_lmm_association_streaming(
     chunk_size=10_000,
 )
 ```
+
+#### LMM Association (NumPy backend)
+
+```python
+from jamma.lmm import run_lmm_association_numpy
+from jamma.lmm.eigen import eigendecompose_kinship
+
+eigenvalues, eigenvectors = eigendecompose_kinship(K)
+
+# Pure-NumPy runner (no JAX required, loads full genotype matrix)
+results = run_lmm_association_numpy(
+    genotypes=data.genotypes,
+    phenotypes=phenotypes,
+    snp_info=snp_info,  # list of dicts with chr, rs, pos, a1, a0
+    eigenvalues=eigenvalues,
+    eigenvectors=eigenvectors,
+    lmm_mode=1,  # 1=Wald, 2=LRT, 3=Score, 4=All
+)
+```
+
+The NumPy backend supports Wald, LRT, Score, and all-tests modes. LOCO and HWE filtering require JAX.
 
 ## Large-Scale Eigendecomposition (>46k samples)
 
@@ -421,9 +473,10 @@ coordination overhead that outweighs parallelism gains.
 
 ### General Tips
 
-1. **Use JAX runner** for large datasets (>1000 samples)
-2. **Batch processing**: JAMMA automatically batches kinship computation
-3. **Memory**: For very large datasets, consider sample subsetting
+1. **Use JAX backend** for large datasets (>1000 samples) — JIT compilation and device sharding provide substantial speedups
+2. **NumPy backend** works on all platforms and requires no extra dependencies — suitable for smaller datasets or platforms without JAX support (Intel Mac)
+3. **Batch processing**: JAMMA automatically batches kinship computation
+4. **Memory**: For very large datasets, consider sample subsetting
 
 ## Validation
 

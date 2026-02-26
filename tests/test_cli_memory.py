@@ -23,6 +23,7 @@ KINSHIP_FILE = FIXTURE_DIR / "gemma_kinship.cXX.txt"
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 class TestCliMemoryCheck:
     """Tests for CLI lmm command memory pre-flight checks."""
 
@@ -206,7 +207,7 @@ class TestCliStreamingRunner:
 
     def test_cli_jax_default_uses_streaming_runner(self, tmp_path):
         """Verify CLI calls run_lmm_association_streaming."""
-        with patch("jamma.pipeline.run_lmm_association_streaming") as mock_stream:
+        with patch("jamma.lmm.run_lmm_association_streaming") as mock_stream:
             mock_stream.return_value = []
 
             runner.invoke(

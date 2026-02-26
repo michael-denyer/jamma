@@ -20,11 +20,10 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import jax
 import numpy as np
 from loguru import logger
 
-from jamma.core.jax_config import ensure_jax_configured
+from jamma.core.backend import BackendRequest, BackendResolved
 from jamma.core.memory import StreamingMemoryBreakdown, estimate_streaming_memory
 from jamma.io.covariate import read_covariate_file
 from jamma.io.plink import get_plink_metadata, validate_plink_dimensions
@@ -34,7 +33,6 @@ from jamma.kinship import (
     read_kinship_matrix,
     write_kinship_matrix,
 )
-from jamma.lmm import run_lmm_association_streaming, run_lmm_loco
 from jamma.lmm.chunk import _compute_chunk_size
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
@@ -91,6 +89,9 @@ class PipelineConfig:
             profiling. When set, wraps the pipeline in jax.profiler.trace()
             and annotates stages with TraceAnnotation. View traces with
             `tensorboard --logdir <profile_dir>`.
+        backend: Compute backend selection: "auto" (default), "jax", or "numpy".
+            "auto" uses JAX when installed, falling back to NumPy. "jax" requires
+            JAX to be installed. "numpy" forces the pure-NumPy backend.
     """
 
     bfile: Path
@@ -118,12 +119,17 @@ class PipelineConfig:
     weight_file: Path | None = None
     cat_columns: list[int] | None = None
     profile_dir: Path | None = None
+    backend: BackendRequest = "auto"
 
     def __post_init__(self) -> None:
         if os.sep in self.output_prefix or "/" in self.output_prefix:
             raise ValueError(
                 f"output_prefix must not contain path separators, "
                 f"got '{self.output_prefix}'. Use output_dir for directory paths."
+            )
+        if self.backend not in ("auto", "jax", "numpy"):
+            raise ValueError(
+                f"backend must be 'auto', 'jax', or 'numpy', got {self.backend!r}"
             )
 
 
@@ -138,7 +144,9 @@ class PipelineResult:
         n_snps_tested: Number of SNPs tested after MAF/missingness/HWE/SNP-list
             filtering.
         assoc_path: Path to the written association results file.
-        timing: Timing breakdown by pipeline phase.
+        timing: Timing breakdown by pipeline phase (seconds).
+        backend: The compute backend used ("jax" or "numpy").
+        n_covariates: Number of covariate columns (1 = intercept-only).
     """
 
     associations: list[AssocResult]
@@ -146,6 +154,14 @@ class PipelineResult:
     n_snps_tested: int
     assoc_path: Path
     timing: dict[str, float] = field(default_factory=dict)
+    backend: BackendResolved = "numpy"  # Set by PipelineRunner.run()
+    n_covariates: int = 1
+
+    def __post_init__(self) -> None:
+        if self.backend not in ("jax", "numpy"):
+            raise ValueError(
+                f"PipelineResult.backend must be 'jax' or 'numpy', got {self.backend!r}"
+            )
 
 
 class PipelineRunner:
@@ -607,41 +623,65 @@ class PipelineRunner:
         6. Prepare output directory
         7. Load covariates (early, for eigen validation)
         8. Load eigen files or kinship matrix
-        9. Run LMM association (streaming)
+        9. Run LMM association (streaming or NumPy batch)
 
         Returns:
             PipelineResult with associations, counts, output path, and timing.
         """
         t_start = time.perf_counter()
 
-        # Enable x64 without initializing the JAX backend — device count is
-        # deferred until LMM phase via ensure_jax_configured().
-        jax.config.update("jax_enable_x64", True)
+        from jamma.core.backend import detect_backend, log_backend_selection
 
-        # Optional XLA profiling — degrade gracefully so profiling issues
-        # never prevent GWAS results from being produced.
+        active_backend = detect_backend(self.config.backend)
+        log_backend_selection(active_backend, self.config.backend)
+
         trace_ctx = contextlib.nullcontext()
-        if self.config.profile_dir is not None:
-            try:
-                self.config.profile_dir.mkdir(parents=True, exist_ok=True)
-                trace_ctx = jax.profiler.trace(
-                    str(self.config.profile_dir), create_perfetto_link=False
-                )
-                logger.info(
-                    "XLA profiling enabled: traces will be written to "
-                    f"{self.config.profile_dir}"
-                )
-            except (OSError, ImportError, AttributeError) as e:
-                logger.warning(
-                    f"Could not enable XLA profiling: {type(e).__name__}: {e}. "
-                    "Continuing without profiling."
-                )
+        if active_backend == "jax":
+            import jax
+
+            # Enable x64 without initializing the JAX backend — device count is
+            # deferred until LMM phase via ensure_jax_configured().
+            jax.config.update("jax_enable_x64", True)
+
+            # Optional XLA profiling — degrade gracefully so profiling issues
+            # never prevent GWAS results from being produced.
+            if self.config.profile_dir is not None:
+                try:
+                    self.config.profile_dir.mkdir(parents=True, exist_ok=True)
+                    trace_ctx = jax.profiler.trace(
+                        str(self.config.profile_dir), create_perfetto_link=False
+                    )
+                    logger.info(f"XLA profiling enabled: {self.config.profile_dir}")
+                except (OSError, ImportError, AttributeError) as e:
+                    logger.warning(f"Could not enable XLA profiling: {e}")
+        elif self.config.profile_dir is not None:
+            logger.warning("XLA profiling requires JAX backend; ignoring --profile-dir")
 
         with trace_ctx:
-            return self._run_inner(t_start)
+            return self._run_inner(t_start, active_backend)
 
-    def _run_inner(self, t_start: float) -> PipelineResult:
-        """Execute the pipeline body, called within the optional profiling context."""
+    def _run_inner(self, t_start: float, active_backend: str) -> PipelineResult:
+        """Execute the pipeline body, called within the optional profiling context.
+
+        Args:
+            t_start: Pipeline start time from time.perf_counter().
+            active_backend: Resolved backend name — "jax" or "numpy".
+        """
+        # Check for incompatible LOCO+NumPy early, before I/O operations.
+        # validate_inputs() follows but requires files to exist.
+        if self.config.loco and active_backend == "numpy":
+            raise ValueError(
+                "LOCO mode requires JAX backend. "
+                "Install JAX with: pip install jamma[jax]"
+            )
+
+        # HWE filtering not yet supported on NumPy backend
+        if self.config.hwe_threshold > 0 and active_backend == "numpy":
+            raise ValueError(
+                "HWE filtering (--hwe) is not yet supported with the NumPy backend. "
+                "Use the JAX backend (pip install jamma[jax]) or set --hwe 0."
+            )
+
         self.validate_inputs()
 
         meta = get_plink_metadata(self.config.bfile)
@@ -667,6 +707,8 @@ class PipelineRunner:
 
         # LOCO branch: skip standard kinship, run LOCO orchestrator
         if self.config.loco:
+            from jamma.lmm import run_lmm_loco
+
             covariates = self.load_covariates(n_samples)
             valid_mask = self._compute_valid_mask(phenotypes, covariates)
             n_valid = int(np.sum(valid_mask))
@@ -706,10 +748,9 @@ class PipelineRunner:
                     "load_s": 0.0,
                     "lmm_s": loco_s,
                     "total_s": total_s,
-                    "n_covariates": (
-                        covariates.shape[1] if covariates is not None else 1
-                    ),
                 },
+                backend=active_backend,
+                n_covariates=covariates.shape[1] if covariates is not None else 1,
             )
 
         covariates = self.load_covariates(n_samples)
@@ -718,8 +759,37 @@ class PipelineRunner:
         n_cvt = covariates.shape[1] if covariates is not None else 1
         self._log_banner(n_samples, n_valid, n_snps, n_covariates=n_cvt)
 
-        actual_chunk = _compute_chunk_size(n_valid, n_snps, n_cvt=n_cvt)
-        self.check_memory_requirements(n_valid, n_snps, n_cvt=n_cvt)
+        # Memory preflight: streaming estimate for JAX, in-memory estimate for NumPy
+        if active_backend == "jax":
+            actual_chunk = _compute_chunk_size(n_valid, n_snps, n_cvt=n_cvt)
+            self.check_memory_requirements(n_valid, n_snps, n_cvt=n_cvt)
+        else:
+            # NumPy loads all genotypes into memory; use the runner's own estimate
+            from jamma.core.memory import estimate_lmm_memory
+
+            if self.config.check_memory:
+                est = estimate_lmm_memory(n_valid, n_snps)
+                logger.info(
+                    f"Memory estimate (NumPy): {est.total_gb:.1f}GB required, "
+                    f"{est.available_gb:.1f}GB available"
+                )
+                exceeds_budget = (
+                    self.config.mem_budget is not None
+                    and est.total_gb > self.config.mem_budget
+                )
+                if exceeds_budget:
+                    raise MemoryError(
+                        f"Estimated memory ({est.total_gb:.1f}GB) exceeds "
+                        f"budget ({self.config.mem_budget}GB). "
+                        f"Use --no-check-memory to override."
+                    )
+                if not est.sufficient:
+                    raise MemoryError(
+                        f"Insufficient memory: need {est.total_gb:.1f}GB, "
+                        f"have {est.available_gb:.1f}GB. "
+                        f"Use --no-check-memory to override."
+                    )
+            actual_chunk = None  # Not used by NumPy runner
 
         t_kinship = time.perf_counter()
         eigenvalues = None
@@ -763,12 +833,68 @@ class PipelineRunner:
         kinship_s = time.perf_counter() - t_kinship
         load_s = time.perf_counter() - t_start
 
-        # Initialize JAX backend after kinship + eigendecomp completes,
-        # to avoid XLA thread pools competing with MKL during eigendecomp.
+        t_lmm = time.perf_counter()
+
+        if active_backend == "jax":
+            results, n_tested = self._run_jax_backend(
+                phenotypes,
+                K,
+                covariates,
+                eigenvalues,
+                eigenvectors,
+                assoc_path,
+                snps_indices,
+                actual_chunk,
+            )
+        else:
+            results, n_tested = self._run_numpy_backend(
+                phenotypes,
+                K,
+                covariates,
+                eigenvalues,
+                eigenvectors,
+                assoc_path,
+                snps_indices,
+            )
+
+        lmm_s = time.perf_counter() - t_lmm
+
+        total_s = time.perf_counter() - t_start
+        logger.info(f"GWAS complete: {n_tested} SNPs tested in {total_s:.1f}s")
+
+        return PipelineResult(
+            associations=results,
+            n_samples=n_valid,
+            n_snps_tested=n_tested,
+            assoc_path=assoc_path,
+            timing={
+                "kinship_s": kinship_s,
+                "load_s": load_s,
+                "lmm_s": lmm_s,
+                "total_s": total_s,
+            },
+            backend=active_backend,
+            n_covariates=covariates.shape[1] if covariates is not None else 1,
+        )
+
+    def _run_jax_backend(
+        self,
+        phenotypes: np.ndarray,
+        K: np.ndarray | None,
+        covariates: np.ndarray | None,
+        eigenvalues: np.ndarray | None,
+        eigenvectors: np.ndarray | None,
+        assoc_path: Path,
+        snps_indices: np.ndarray | None,
+        actual_chunk: int,
+    ) -> tuple[list[AssocResult], int]:
+        """Run LMM association using the JAX streaming backend."""
+        from jamma.core.jax_config import ensure_jax_configured
+        from jamma.lmm import run_lmm_association_streaming
+
         ensure_jax_configured()
 
-        t_lmm = time.perf_counter()
-        results, n_tested = run_lmm_association_streaming(
+        return run_lmm_association_streaming(
             bed_path=self.config.bfile,
             phenotypes=phenotypes,
             kinship=K,
@@ -788,21 +914,75 @@ class PipelineRunner:
             hwe_threshold=self.config.hwe_threshold,
             chunk_size=actual_chunk,
         )
-        lmm_s = time.perf_counter() - t_lmm
 
-        total_s = time.perf_counter() - t_start
-        logger.info(f"GWAS complete: {n_tested} SNPs tested in {total_s:.1f}s")
+    def _run_numpy_backend(
+        self,
+        phenotypes: np.ndarray,
+        K: np.ndarray | None,
+        covariates: np.ndarray | None,
+        eigenvalues: np.ndarray | None,
+        eigenvectors: np.ndarray | None,
+        assoc_path: Path,
+        snps_indices: np.ndarray | None,
+    ) -> tuple[list[AssocResult], int]:
+        """Run LMM association using the pure-NumPy batch backend."""
+        from jamma.io import load_plink_binary
+        from jamma.lmm import run_lmm_association_numpy
+        from jamma.lmm.io import IncrementalAssocWriter
+        from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 
-        return PipelineResult(
-            associations=results,
-            n_samples=n_valid,
-            n_snps_tested=n_tested,
-            assoc_path=assoc_path,
-            timing={
-                "kinship_s": kinship_s,
-                "load_s": load_s,
-                "lmm_s": lmm_s,
-                "total_s": total_s,
-                "n_covariates": covariates.shape[1] if covariates is not None else 1,
-            },
+        logger.info(
+            "NumPy backend: loading all genotypes into memory "
+            "(for large datasets, use JAX backend: pip install jamma[jax])"
         )
+
+        plink_data = load_plink_binary(self.config.bfile)
+        genotypes = plink_data.genotypes
+
+        # Apply snps_indices filter before passing to runner
+        indices = snps_indices if snps_indices is not None else range(plink_data.n_snps)
+        if snps_indices is not None:
+            genotypes = genotypes[:, snps_indices]
+        snp_info = [
+            {
+                "chr": str(plink_data.chromosome[i]),
+                "rs": plink_data.sid[i],
+                "pos": int(plink_data.bp_position[i]),
+                "a1": plink_data.allele_1[i],
+                "a0": plink_data.allele_2[i],
+            }
+            for i in indices
+        ]
+
+        assoc_results = run_lmm_association_numpy(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=K,
+            snp_info=snp_info,
+            covariates=covariates,
+            eigenvalues=eigenvalues,
+            eigenvectors=eigenvectors,
+            maf_threshold=self.config.maf,
+            miss_threshold=self.config.miss,
+            l_min=self.config.l_min,
+            l_max=self.config.l_max,
+            check_memory=False,  # Already checked above
+            show_progress=self.config.show_progress,
+            lmm_mode=self.config.lmm_mode,
+        )
+
+        # Write results to disk in GEMMA format
+        test_type = _TEST_TYPE_MAP[self.config.lmm_mode]
+        logger.info(f"Writing {len(assoc_results)} results to {assoc_path}")
+        try:
+            with IncrementalAssocWriter(assoc_path, test_type=test_type) as writer:
+                writer.write_batch(assoc_results)
+        except OSError as e:
+            logger.error(
+                f"Failed to write {len(assoc_results)} association results to "
+                f"{assoc_path}: {e}. Results were computed successfully but could "
+                f"not be saved. Check disk space and file permissions."
+            )
+            raise
+
+        return [], len(assoc_results)  # Results written to disk

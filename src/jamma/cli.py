@@ -18,7 +18,6 @@ from jamma.core import OutputConfig
 from jamma.io import load_plink_binary
 from jamma.kinship import (
     compute_kinship_streaming,
-    compute_loco_kinship_streaming,
     compute_standardized_kinship,
     write_kinship_matrix,
     write_loco_kinship_matrices,
@@ -39,16 +38,15 @@ def _opt_path(value: str | None) -> Path | None:
 
 
 def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> None:
-    """Print version, backend info, and GPU status, then exit."""
+    """Print version, backend info, and JAX availability, then exit."""
     if not value or ctx.resilient_parsing:
         return
-    from jamma.core import get_backend_info
+    from jamma.core.backend import get_backend_info
 
     info = get_backend_info()
     click.echo(f"JAMMA version {jamma.__version__} ({jamma.__release_date__})")
     click.echo(f"Backend: {info['selected']}")
-    click.echo("  (JAX pipeline + numpy/LAPACK eigendecomp)")
-    click.echo(f"GPU available: {info['gpu_available']}")
+    click.echo(f"JAX available: {info['jax_available']}")
     ctx.exit()
 
 
@@ -134,6 +132,12 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     help="Directory for XLA profiling traces (view with TensorBoard)",
 )
 @click.option(
+    "--backend",
+    type=click.Choice(["auto", "jax", "numpy"], case_sensitive=False),
+    default="auto",
+    help="Compute backend: auto (default), jax, or numpy.",
+)
+@click.option(
     "-cat",
     type=str,
     default=None,
@@ -206,6 +210,7 @@ def main(
     check_memory,
     mem_budget,
     profile_dir,
+    backend,
     cat,
     widv,
     wsnp,
@@ -304,6 +309,7 @@ def main(
             weight_file=_opt_path(widv),
             cat_columns=cat_columns,
             profile_dir=Path(profile_dir) if profile_dir else None,
+            backend=backend,
         )
 
 
@@ -386,6 +392,8 @@ def _run_gk(
 
     if loco:
         # LOCO kinship mode: compute per-chromosome LOCO kinship matrices
+        from jamma.kinship import compute_loco_kinship_streaming
+
         click.echo(f"Computing LOCO kinship matrices from {bfile}...")
         kinship_start = time.perf_counter()
 
@@ -536,6 +544,7 @@ def _run_lmm(
     weight_file: Path | None = None,
     cat_columns: list[int] | None = None,
     profile_dir: Path | None = None,
+    backend: str = "auto",
 ) -> None:
     """Run LMM association testing."""
     # Mutual exclusivity check
@@ -575,6 +584,7 @@ def _run_lmm(
         weight_file=weight_file,
         cat_columns=cat_columns,
         profile_dir=profile_dir,
+        backend=backend,
     )
 
     # Run pipeline, converting exceptions to CLI-friendly errors
@@ -582,21 +592,18 @@ def _run_lmm(
         if check_memory:
             click.echo("Checking memory requirements...")
         result = PipelineRunner(pipeline_config).run()
-    except (FileNotFoundError, ValueError, MemoryError) as e:
+    except (FileNotFoundError, ValueError, MemoryError, OSError) as e:
         logger.debug("Pipeline failed with traceback:", exc_info=True)
         _cli_error(str(e))
 
     # Write GEMMA log file (CLI-only)
     command_line = " ".join(sys.argv)
-    n_covariates = 1
-    if covariate_file is not None:
-        # Covariate count from result timing context
-        n_covariates = result.timing.get("n_covariates", 1)
+    n_covariates = result.n_covariates
 
     params = {
         "n_samples": result.n_samples,
         "n_snps": result.n_snps_tested,
-        "backend": "jax",
+        "backend": result.backend,
         "lmm_mode": mode,
         "kinship_file": str(kinship_file),
         "covariate_file": str(covariate_file) if covariate_file else None,

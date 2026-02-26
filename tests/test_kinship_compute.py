@@ -15,6 +15,8 @@ from jamma.kinship import (
     impute_center_and_standardize,
 )
 
+pytestmark = pytest.mark.requires_jax
+
 
 @pytest.fixture
 def simple_genotypes():

@@ -572,6 +572,7 @@ class TestPhenotypeColumnMissingValues:
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 class TestX64GuaranteedWithPrecomputedEigen:
     """Regression test for Bug 1 (jamma-4x8): x64 not guaranteed when
     using precomputed eigen files, which bypass kinship/compute.py.
@@ -631,6 +632,7 @@ class TestX64GuaranteedWithPrecomputedEigen:
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 class TestNSamplesReflectsCovariateFiltering:
     """Regression test for Bug 2 (jamma-ri0): n_samples reported
     phenotype-only count instead of post-covariate-filter count.
@@ -686,6 +688,7 @@ class TestNSamplesReflectsCovariateFiltering:
 
 
 @pytest.mark.tier1
+@pytest.mark.requires_jax
 class TestNSnpsTestedReflectsFiltering:
     """Regression test for Bug 3 (jamma-bza): n_snps_tested reported
     dataset total instead of post-filter count.
@@ -757,3 +760,125 @@ class TestNSnpsTestedReflectsFiltering:
             f"n_snps_tested ({result.n_snps_tested}) should be less than "
             f"dataset total ({total_snps_in_dataset})"
         )
+
+
+# ===========================================================================
+# Backend Routing Tests (Phase 36-02)
+# ===========================================================================
+
+
+@pytest.mark.tier1
+def test_pipeline_numpy_backend(sample_plink_data: Path, output_dir: Path) -> None:
+    """Pipeline completes with NumPy backend and writes assoc file."""
+    kinship_file = sample_plink_data.parent / "gemma_kinship.cXX.txt"
+    config = PipelineConfig(
+        bfile=sample_plink_data,
+        kinship_file=kinship_file,
+        lmm_mode=1,
+        output_dir=output_dir,
+        check_memory=False,
+        show_progress=False,
+        backend="numpy",
+    )
+    result = PipelineRunner(config).run()
+    assert result.n_snps_tested > 0
+    assert result.assoc_path.exists()
+    assert result.backend == "numpy"
+
+
+@pytest.mark.tier0
+def test_pipeline_loco_numpy_raises() -> None:
+    """LOCO + NumPy backend raises ValueError with clear message."""
+    config = PipelineConfig(
+        bfile=Path("dummy"),
+        lmm_mode=1,
+        loco=True,
+        backend="numpy",
+    )
+    runner = PipelineRunner(config)
+    with pytest.raises(ValueError, match="LOCO mode requires JAX"):
+        runner.run()
+
+
+@pytest.mark.tier1
+@pytest.mark.requires_jax
+def test_pipeline_backend_in_timing(sample_plink_data: Path, output_dir: Path) -> None:
+    """PipelineResult.backend is 'jax' when JAX backend is used."""
+    kinship_file = sample_plink_data.parent / "gemma_kinship.cXX.txt"
+    config = PipelineConfig(
+        bfile=sample_plink_data,
+        kinship_file=kinship_file,
+        lmm_mode=1,
+        output_dir=output_dir,
+        check_memory=False,
+        show_progress=False,
+        backend="jax",
+    )
+    result = PipelineRunner(config).run()
+    assert result.backend == "jax"
+
+
+@pytest.mark.tier0
+def test_pipeline_config_backend_validation() -> None:
+    """PipelineConfig raises ValueError for invalid backend value."""
+    with pytest.raises(ValueError, match="backend must be"):
+        PipelineConfig(bfile=Path("dummy"), backend="invalid")
+
+
+@pytest.mark.tier1
+@pytest.mark.parametrize("lmm_mode", [2, 3, 4], ids=["LRT", "Score", "All"])
+def test_pipeline_numpy_backend_modes(
+    sample_plink_data: Path, tmp_path: Path, lmm_mode: int
+) -> None:
+    """T3: Pipeline completes with NumPy backend for modes 2, 3, and 4."""
+    kinship_file = sample_plink_data.parent / "gemma_kinship.cXX.txt"
+    out = tmp_path / f"output_mode{lmm_mode}"
+    out.mkdir()
+    config = PipelineConfig(
+        bfile=sample_plink_data,
+        kinship_file=kinship_file,
+        lmm_mode=lmm_mode,
+        output_dir=out,
+        check_memory=False,
+        show_progress=False,
+        backend="numpy",
+    )
+    result = PipelineRunner(config).run()
+    assert result.n_snps_tested > 0
+    assert result.assoc_path.exists()
+    assert result.backend == "numpy"
+
+
+@pytest.mark.tier1
+def test_pipeline_numpy_with_snps_file(sample_plink_data: Path, tmp_path: Path) -> None:
+    """T8: Pipeline NumPy backend works with -snps file filtering."""
+    from jamma.io.plink import get_plink_metadata
+
+    meta = get_plink_metadata(sample_plink_data)
+    total_snps = meta["n_snps"]
+
+    # Restrict to first 30 SNPs
+    n_restrict = 30
+    snps_path = tmp_path / "snps.txt"
+    snps_path.write_text("\n".join(meta["sid"][:n_restrict]) + "\n")
+
+    kinship_file = sample_plink_data.parent / "gemma_kinship.cXX.txt"
+    out = tmp_path / "output_snps"
+    out.mkdir()
+    config = PipelineConfig(
+        bfile=sample_plink_data,
+        kinship_file=kinship_file,
+        snps_file=snps_path,
+        lmm_mode=1,
+        maf=0.0,
+        miss=1.0,
+        output_dir=out,
+        check_memory=False,
+        show_progress=False,
+        backend="numpy",
+    )
+    result = PipelineRunner(config).run()
+    assert result.n_snps_tested <= n_restrict
+    assert result.n_snps_tested < total_snps
+    assert result.assoc_path.exists()
+    assert result.backend == "numpy"

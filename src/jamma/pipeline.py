@@ -20,11 +20,9 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import jax
 import numpy as np
 from loguru import logger
 
-from jamma.core.jax_config import ensure_jax_configured
 from jamma.core.memory import StreamingMemoryBreakdown, estimate_streaming_memory
 from jamma.io.covariate import read_covariate_file
 from jamma.io.plink import get_plink_metadata, validate_plink_dimensions
@@ -34,7 +32,6 @@ from jamma.kinship import (
     read_kinship_matrix,
     write_kinship_matrix,
 )
-from jamma.lmm import run_lmm_association_streaming, run_lmm_loco
 from jamma.lmm.chunk import _compute_chunk_size
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
@@ -616,13 +613,20 @@ class PipelineRunner:
 
         # Enable x64 without initializing the JAX backend — device count is
         # deferred until LMM phase via ensure_jax_configured().
-        jax.config.update("jax_enable_x64", True)
+        try:
+            import jax
+
+            jax.config.update("jax_enable_x64", True)
+        except ImportError:
+            pass  # NumPy backend — no JAX config needed
 
         # Optional XLA profiling — degrade gracefully so profiling issues
         # never prevent GWAS results from being produced.
         trace_ctx = contextlib.nullcontext()
         if self.config.profile_dir is not None:
             try:
+                import jax
+
                 self.config.profile_dir.mkdir(parents=True, exist_ok=True)
                 trace_ctx = jax.profiler.trace(
                     str(self.config.profile_dir), create_perfetto_link=False
@@ -667,6 +671,8 @@ class PipelineRunner:
 
         # LOCO branch: skip standard kinship, run LOCO orchestrator
         if self.config.loco:
+            from jamma.lmm import run_lmm_loco
+
             covariates = self.load_covariates(n_samples)
             valid_mask = self._compute_valid_mask(phenotypes, covariates)
             n_valid = int(np.sum(valid_mask))
@@ -765,6 +771,9 @@ class PipelineRunner:
 
         # Initialize JAX backend after kinship + eigendecomp completes,
         # to avoid XLA thread pools competing with MKL during eigendecomp.
+        from jamma.core.jax_config import ensure_jax_configured
+        from jamma.lmm import run_lmm_association_streaming
+
         ensure_jax_configured()
 
         t_lmm = time.perf_counter()

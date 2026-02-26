@@ -2,19 +2,13 @@
 
 This package contains the core algorithms and data structures:
 - config: Configuration dataclasses
-- jax_config: JAX configuration and verification
+- jax_config: JAX configuration and verification (optional — requires JAX)
 - kinship: Kinship matrix computation
 - lmm: Linear mixed model fitting
 """
 
 from jamma.core.backend import get_backend_info
 from jamma.core.config import OutputConfig
-from jamma.core.jax_config import (
-    configure_jax,
-    ensure_jax_configured,
-    get_jax_info,
-    verify_jax_installation,
-)
 from jamma.core.memory import (
     MemoryBreakdown,
     MemorySnapshot,
@@ -30,13 +24,20 @@ from jamma.core.memory import (
     log_memory_snapshot,
 )
 
+# JAX configuration — optional; requires JAX to be installed:
+try:
+    from jamma.core.jax_config import (  # noqa: F401
+        configure_jax,
+        ensure_jax_configured,
+        get_jax_info,
+        verify_jax_installation,
+    )
+except ImportError:
+    pass  # JAX not installed
+
 __all__ = [
     "get_backend_info",
     "OutputConfig",
-    "configure_jax",
-    "ensure_jax_configured",
-    "get_jax_info",
-    "verify_jax_installation",
     "MemoryBreakdown",
     "MemorySnapshot",
     "StreamingMemoryBreakdown",

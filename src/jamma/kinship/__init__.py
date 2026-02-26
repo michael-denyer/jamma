@@ -19,8 +19,6 @@ from jamma.io.plink import get_chromosome_partitions
 from jamma.kinship.compute import (
     compute_centered_kinship,
     compute_kinship_streaming,
-    compute_loco_kinship,
-    compute_loco_kinship_streaming,
     compute_standardized_kinship,
 )
 from jamma.kinship.io import (
@@ -29,6 +27,15 @@ from jamma.kinship.io import (
     write_loco_kinship_matrices,
 )
 from jamma.kinship.missing import impute_and_center, impute_center_and_standardize
+
+# LOCO kinship functions require JAX:
+try:
+    from jamma.kinship.compute import (
+        compute_loco_kinship,
+        compute_loco_kinship_streaming,
+    )
+except ImportError:
+    pass  # JAX not installed; LOCO requires JAX
 
 __all__ = [
     "compute_centered_kinship",

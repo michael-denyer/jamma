@@ -32,6 +32,15 @@ try:
     _eigh_lo = _np_linalg_gufuncs.eigh_lo
 except (ImportError, AttributeError):
     _eigh_lo = None
+    logger.info(
+        "In-place eigendecomp unavailable (numpy %s lacks _umath_linalg.eigh_lo); "
+        "will use np.linalg.eigh with separate eigenvector allocation",
+        np.__version__,
+    )
+
+# Whether in-place eigendecomp is available. Used by memory estimators to
+# decide whether to include a separate eigenvector allocation in peak estimates.
+INPLACE_EIGEN_AVAILABLE: bool = _eigh_lo is not None
 
 # For matrices >= this size, use sampled symmetry check instead of full np.allclose.
 # Full check allocates an n*n temporary; at 100k samples that is ~80GB.
@@ -73,23 +82,51 @@ def _eigh_inplace(K: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
     Uses numpy's internal LAPACK gufunc with out= parameter to write
     eigenvectors directly into K's memory buffer. Saves one n²×8 allocation
-    (142GB at 133k samples). Falls back to np.linalg.eigh if the private
+    (~142GB at 133k samples). Falls back to np.linalg.eigh if the private
     gufunc is unavailable.
 
     Args:
-        K: Symmetric matrix (n, n). OVERWRITTEN with eigenvectors on return.
+        K: Symmetric float64 matrix (n, n). OVERWRITTEN with eigenvectors
+            on return.
 
     Returns:
         Tuple of (eigenvalues, eigenvectors) where eigenvectors shares K's buffer.
+
+    Raises:
+        TypeError: If K is not float64.
+        ValueError: If K is read-only.
     """
+    if K.dtype != np.float64:
+        raise TypeError(
+            f"_eigh_inplace requires float64 input, got {K.dtype}. "
+            "Cast with K.astype(np.float64) before eigendecomposition."
+        )
+    if not K.flags.writeable:
+        raise ValueError(
+            "K must be writeable for in-place eigendecomposition. "
+            "If K is a memory-mapped or read-only array, copy it first: K = K.copy()"
+        )
+
     if _eigh_lo is not None:
         n = K.shape[0]
         eigenvalues = np.empty(n, dtype=np.float64)
         _, eigenvectors = _eigh_lo(K, signature="d->dd", out=(eigenvalues, K))
+        if eigenvectors.ctypes.data != K.ctypes.data:
+            logger.warning(
+                "eigh_lo did not reuse K's buffer; "
+                "in-place optimization inactive (numpy %s). "
+                "Memory estimates may undercount by %.1fGB.",
+                np.__version__,
+                n**2 * 8 / 1e9,
+            )
         return eigenvalues, eigenvectors
     else:
-        logger.debug(
-            "_umath_linalg.eigh_lo unavailable; falling back to np.linalg.eigh"
+        logger.warning(
+            "_umath_linalg.eigh_lo unavailable (numpy %s); "
+            "falling back to np.linalg.eigh — allocates an additional "
+            "%.1fGB for eigenvector buffer",
+            np.__version__,
+            K.shape[0] ** 2 * 8 / 1e9,
         )
         return np.linalg.eigh(K)
 

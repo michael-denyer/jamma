@@ -108,6 +108,11 @@ class TestEigendecompPreflightCheck:
 
     def test_inplace_reuses_k_buffer(self):
         """eigenvectors should reuse K's memory buffer (no extra allocation)."""
+        try:
+            from numpy.linalg import _umath_linalg  # noqa: F401
+        except (ImportError, AttributeError):
+            pytest.skip("_umath_linalg.eigh_lo unavailable; in-place path not testable")
+
         n = 50
         rng = np.random.default_rng(42)
         A = rng.standard_normal((n, n))
@@ -116,13 +121,23 @@ class TestEigendecompPreflightCheck:
 
         eigenvalues, eigenvectors = eigendecompose_kinship(K, check_memory=False)
 
-        # Verify buffer reuse (gufunc path)
-        try:
-            from numpy.linalg import _umath_linalg  # noqa: F401
+        assert eigenvectors.ctypes.data == K_ptr, (
+            "eigenvectors should reuse K's buffer; got new allocation"
+        )
 
-            assert eigenvectors.ctypes.data == K_ptr, (
-                "eigenvectors should reuse K's buffer; got new allocation"
-            )
-        except (ImportError, AttributeError):
-            # Fallback path — buffer reuse not available, skip assertion
-            pass
+    def test_fallback_when_gufunc_unavailable(self):
+        """_eigh_inplace falls back to np.linalg.eigh when gufunc unavailable."""
+        from jamma.lmm.eigen import _eigh_inplace
+
+        n = 30
+        rng = np.random.default_rng(42)
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+        K_ref = K.copy()
+
+        with patch("jamma.lmm.eigen._eigh_lo", None):
+            eigenvalues, eigenvectors = _eigh_inplace(K.copy())
+
+        # Verify correctness: reconstruction K = U @ diag(w) @ U.T
+        K_reconstructed = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
+        np.testing.assert_allclose(K_ref, K_reconstructed, rtol=1e-10, atol=1e-14)

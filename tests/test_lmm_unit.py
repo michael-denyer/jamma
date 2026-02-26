@@ -56,7 +56,7 @@ class TestEigendecomposition:
         rng = np.random.default_rng(42)
         X = rng.standard_normal((30, 50))
         K = X @ X.T / X.shape[1]
-        # eigendecompose_kinship overwrites K's buffer (in-place); save a copy.
+        # eigendecomp overwrites K in-place; save copy
         K_original = K.copy()
 
         eigenvalues, U = eigendecompose_kinship(K)

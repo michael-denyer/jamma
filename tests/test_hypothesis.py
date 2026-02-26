@@ -517,7 +517,7 @@ class TestEigendecompositionProperties:
         from jamma.lmm.eigen import eigendecompose_kinship
 
         K = compute_centered_kinship(genotypes)
-        # eigendecompose_kinship overwrites K's buffer (in-place); save a copy first.
+        # eigendecomp overwrites K in-place; save copy first
         K_original = K.copy()
         eigenvalues, U = eigendecompose_kinship(K, threshold=0)  # No thresholding
 
@@ -1395,8 +1395,7 @@ class TestEigenIoRoundTrip:
         from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 
         K = compute_centered_kinship(genotypes, check_memory=False)
-        # eigendecompose_kinship overwrites K's buffer (in-place); save a copy
-        # so we can compare the original kinship against the reconstructed one.
+        # eigendecomp overwrites K in-place; save copy for reconstruction check
         K_original = K.copy()
         eigenvalues, U = eigendecompose_kinship(K, threshold=0)
 

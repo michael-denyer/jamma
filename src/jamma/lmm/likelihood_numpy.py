@@ -12,15 +12,15 @@ Design:
 
 No JAX imports anywhere in this module. Compatible with JAX-free environments.
 
-Reference: likelihood_jax.py (JAX implementations being ported),
-RESEARCH.md Patterns 2-5.
+Reference: likelihood_jax.py (ported to NumPy in this module).
 """
 
 from __future__ import annotations
 
 import numpy as np
+from loguru import logger
 
-from jamma.lmm.likelihood import build_index_table, get_ab_index  # noqa: F401
+from jamma.lmm.likelihood import build_index_table
 from jamma.lmm.special import betainc, chi2_sf
 
 # Module-level vectorized wrappers (created once, reused across calls)
@@ -225,16 +225,26 @@ def _fill_pab_recursion(
         table: Index table from build_index_table.
         n_cvt: Number of covariates.
     """
+    n_degenerate = 0
     for p in range(1, n_cvt + 2):
         for _a, _b, index_ab, index_aw, index_bw, index_ww in table["pab_recursion"][p]:
             ps_ww = Pab_batch[:, p - 1, index_ww]  # (n_snps,)
-            safe_inv = np.where(ps_ww != 0, 1.0 / ps_ww, 0.0)
+            # Guard: ps_ww=0 means degenerate covariate projection. Use 0
+            # to prevent NaN/Inf propagation to valid SNPs in the same batch.
+            # Degenerate SNPs are caught downstream by P_XX > 0 checks.
+            n_degenerate += int(np.sum(ps_ww == 0))
+            with np.errstate(divide="ignore"):
+                safe_inv = np.where(ps_ww != 0, 1.0 / ps_ww, 0.0)
             Pab_batch[:, p, index_ab] = (
                 Pab_batch[:, p - 1, index_ab]
                 - Pab_batch[:, p - 1, index_aw]
                 * Pab_batch[:, p - 1, index_bw]
                 * safe_inv
             )
+    if n_degenerate > 0:
+        logger.debug(
+            f"Pab recursion: {n_degenerate} degenerate ps_ww=0 entries guarded"
+        )
 
 
 def batch_compute_iab_numpy(
@@ -299,12 +309,16 @@ def _batch_reml_at_lambda_numpy(
     Pab_batch = _batch_compute_pab_varying_numpy(n_cvt, Hi_eval_batch, Uab_batch)
 
     # logdet_hiw per SNP: sum over diagonal indices
+    # Guard: non-positive diagonal Pab/Iab entries (degenerate SNPs) use 0.0
+    # instead of log to prevent NaN/Inf from corrupting the batch. Degenerate
+    # SNPs are caught downstream by the P_yy < 0 → NaN guard.
     logdet_hiw = np.zeros(n_snps, dtype=np.float64)
     for row, col in table["logdet_diag_indices"]:
         d_pab = Pab_batch[:, row, col]  # (n_snps,)
         d_iab = Iab_batch[:, row, col]  # (n_snps,)
-        logdet_hiw += np.where(d_pab > 0, np.log(d_pab), 0.0)
-        logdet_hiw -= np.where(d_iab > 0, np.log(d_iab), 0.0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            logdet_hiw += np.where(d_pab > 0, np.log(d_pab), 0.0)
+            logdet_hiw -= np.where(d_iab > 0, np.log(d_iab), 0.0)
 
     # P_yy per SNP with guards
     P_yy = Pab_batch[:, nc_total, table["idx_yy"]]  # (n_snps,)
@@ -595,6 +609,73 @@ def golden_section_optimize_lambda_mle_numpy(
 
 
 # ---------------------------------------------------------------------------
+# Shared helpers for batch test statistics
+# ---------------------------------------------------------------------------
+
+
+def _beta_se_from_pab(
+    P_XX: np.ndarray,
+    P_XY: np.ndarray,
+    Px_YY: np.ndarray,
+    df: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute beta, SE, and validity mask from Pab projections.
+
+    Shared by Wald and Score tests. Handles degenerate SNPs (P_XX <= 0)
+    by setting beta/SE to NaN and GEMMA-compatible safe_sqrt for tiny
+    variance values.
+
+    Args:
+        P_XX: Projected genotype variance per SNP (n_snps,).
+        P_XY: Projected genotype-phenotype covariance per SNP (n_snps,).
+        Px_YY: Projected phenotype variance at n_cvt+1 level (n_snps,).
+        df: Degrees of freedom (n_samples - n_cvt - 1).
+
+    Returns:
+        Tuple of (beta, se, is_valid) each shape (n_snps,).
+    """
+    is_valid = P_XX > 0
+    safe_P_XX = np.where(is_valid, P_XX, 1.0)
+
+    beta = np.where(is_valid, P_XY / safe_P_XX, np.nan)
+    tau = df / Px_YY
+    variance_beta = np.where(is_valid, 1.0 / (tau * safe_P_XX), np.nan)
+    # safe_sqrt: for |v| < 0.001, use abs(v) to avoid sqrt of tiny negative
+    # values from FP rounding (matches GEMMA lmm.cpp safe_sqrt behaviour)
+    variance_safe = np.where(
+        np.abs(variance_beta) < 0.001,
+        np.abs(variance_beta),
+        variance_beta,
+    )
+    se = np.where(is_valid, np.sqrt(variance_safe), np.nan)
+
+    return beta, se, is_valid
+
+
+def _f_to_pvalue(f_stat: np.ndarray, df: int, is_valid: np.ndarray) -> np.ndarray:
+    """Convert F-statistics to p-values via regularized incomplete beta.
+
+    Shared by Wald and Score test computations. Uses algebraically exact
+    complement_z = f_safe / (df + f_safe) to avoid cancellation near z = 1.
+
+    Args:
+        f_stat: F-statistics per SNP (n_snps,).
+        df: Degrees of freedom (n_samples - n_cvt - 1).
+        is_valid: Boolean mask of valid (non-degenerate) SNPs.
+
+    Returns:
+        P-values (n_snps,), NaN for invalid SNPs.
+    """
+    f_safe = np.maximum(f_stat, 1e-10)
+    denom = df + f_safe
+    z = np.clip(df / denom, 0.0, 1.0)
+    complement_z = f_safe / denom  # algebraically exact 1-z, avoids cancellation
+    p_val = _betainc_vec(df / 2.0, 0.5, z, complement_z)
+    p_val = np.where(f_stat <= 0, 1.0, p_val)
+    return np.where(is_valid, p_val, np.nan)
+
+
+# ---------------------------------------------------------------------------
 # Batch test statistics
 # ---------------------------------------------------------------------------
 
@@ -612,7 +693,7 @@ def batch_calc_wald_stats_numpy(
     Hi_eval from optimized lambdas, then calls _batch_compute_pab_varying_numpy.
 
     p_wald uses Cephes betainc via np.vectorize (more accurate than JAX XLA
-    betainc for large a; see STATE.md blocker note).
+    betainc for large a).
 
     Args:
         n_cvt: Number of covariates.
@@ -644,30 +725,12 @@ def batch_calc_wald_stats_numpy(
     # Clamp Px_YY
     Px_YY = np.where((Px_YY >= 0.0) & (Px_YY < 1e-8), 1e-8, Px_YY)
 
-    is_valid = P_XX > 0
-
-    # Beta and SE
-    beta = np.where(is_valid, P_XY / np.where(is_valid, P_XX, 1.0), np.nan)
-    tau = df / Px_YY
-    variance_beta = np.where(
-        is_valid, 1.0 / (tau * np.where(is_valid, P_XX, 1.0)), np.nan
-    )
-    # safe_sqrt: for |v| < 0.001, use abs(v) (matches GEMMA lmm.cpp safe_sqrt)
-    variance_safe = np.where(
-        np.abs(variance_beta) < 0.001,
-        np.abs(variance_beta),
-        variance_beta,
-    )
-    se = np.where(is_valid, np.sqrt(variance_safe), np.nan)
+    beta, se, is_valid = _beta_se_from_pab(P_XX, P_XY, Px_YY, df)
 
     # F-statistic and p-value via Cephes betainc
+    tau = df / Px_YY
     f_stat = (P_YY - Px_YY) * tau
-    z = df / (df + np.maximum(f_stat, 1e-10))
-    z = np.clip(z, 0.0, 1.0)
-    complement_z = 1.0 - z
-    p_wald = _betainc_vec(df / 2.0, 0.5, z, complement_z)
-    p_wald = np.where(f_stat <= 0, 1.0, p_wald)
-    p_wald = np.where(is_valid, p_wald, np.nan)
+    p_wald = _f_to_pvalue(f_stat, df, is_valid)
 
     return beta, se, p_wald
 
@@ -706,6 +769,7 @@ def batch_calc_score_stats_numpy(
 
     # Score test: extract at level n_cvt (covariates only, NOT genotype)
     P_yy = Pab_batch[:, n_cvt, idx_yy]
+    P_yy = np.where((P_yy >= 0.0) & (P_yy < 1e-8), 1e-8, P_yy)
     P_xx = Pab_batch[:, n_cvt, idx_xx]
     P_xy = Pab_batch[:, n_cvt, idx_xy]
 
@@ -713,31 +777,14 @@ def batch_calc_score_stats_numpy(
     Px_yy = Pab_batch[:, n_cvt + 1, idx_yy]
     Px_yy = np.where((Px_yy >= 0.0) & (Px_yy < 1e-8), 1e-8, Px_yy)
 
-    is_valid = P_xx > 0
-
-    # Beta and SE
-    beta = np.where(is_valid, P_xy / np.where(is_valid, P_xx, 1.0), np.nan)
-    tau = df / Px_yy
-    variance_beta = np.where(
-        is_valid, 1.0 / (tau * np.where(is_valid, P_xx, 1.0)), np.nan
-    )
-    variance_safe = np.where(
-        np.abs(variance_beta) < 0.001,
-        np.abs(variance_beta),
-        variance_beta,
-    )
-    se = np.where(is_valid, np.sqrt(variance_safe), np.nan)
+    beta, se, is_valid = _beta_se_from_pab(P_xx, P_xy, Px_yy, df)
 
     # Score F-statistic: F = n * P_xy^2 / (P_yy * P_xx)
-    f_stat = n_samples * (P_xy * P_xy) / (P_yy * np.where(is_valid, P_xx, 1.0))
+    safe_P_xx = np.where(is_valid, P_xx, 1.0)
+    f_stat = n_samples * (P_xy * P_xy) / (P_yy * safe_P_xx)
 
     # p_score via Cephes betainc
-    z = df / (df + np.maximum(f_stat, 1e-10))
-    z = np.clip(z, 0.0, 1.0)
-    complement_z = 1.0 - z
-    p_score = _betainc_vec(df / 2.0, 0.5, z, complement_z)
-    p_score = np.where(f_stat <= 0, 1.0, p_score)
-    p_score = np.where(is_valid, p_score, np.nan)
+    p_score = _f_to_pvalue(f_stat, df, is_valid)
 
     return beta, se, p_score
 
@@ -762,4 +809,7 @@ def _batch_lrt_pvalues_numpy(
     """
     lrt_stats = 2.0 * (logls_mle - logl_H0)
     lrt_stats = np.maximum(lrt_stats, 0.0)
-    return _chi2_sf_vec(lrt_stats)
+    p_lrts = _chi2_sf_vec(lrt_stats)
+    # Propagate NaN from MLE optimization failures (degenerate SNPs)
+    p_lrts = np.where(np.isnan(logls_mle), np.nan, p_lrts)
+    return p_lrts

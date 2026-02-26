@@ -1,8 +1,8 @@
-"""Shared setup utilities for LMM association runners.
+"""JAX-specific setup utilities for LMM association runners.
 
-Provides device selection, covariate matrix construction,
-eigendecomposition handling, null model computation, device placement,
-and batch lambda optimization used by both the batch and streaming runners.
+Provides device selection, CPU sharding, device placement, and JAX null
+model wrapper. Shared backend-agnostic logic (covariate construction,
+eigendecomposition, null model core) lives in prepare_common.py.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def _setup_cpu_sharding() -> tuple[NamedSharding | None, NamedSharding | None]:
         snp_spec = NamedSharding(mesh, P(None, "snps"))
         rep_spec = NamedSharding(mesh, P())
         return snp_spec, rep_spec
-    except (RuntimeError, ValueError, TypeError) as e:
+    except (RuntimeError, TypeError, ValueError) as e:
         logger.warning(
             f"Failed to create CPU sharding mesh with {len(cpu_devices)} devices: "
             f"{type(e).__name__}: {e}. Falling back to single-device mode. "

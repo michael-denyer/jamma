@@ -19,6 +19,8 @@ Accuracy (verified against scipy):
 
 import math
 
+from loguru import logger
+
 # Lentz continued fraction constants
 _CF_TINY = 1.0e-30  # underflow guard: replaces values < TINY with TINY
 _CF_STOP = 1.0e-14  # convergence threshold (tighter than codeplea 1e-8 for accuracy)
@@ -111,6 +113,10 @@ def betainc(a: float, b: float, z: float, complement_z: float | None = None) -> 
     Raises:
         ValueError: If z is not in [0, 1].
     """
+    if a <= 0.0:
+        raise ValueError(f"a must be > 0, got {a}")
+    if b <= 0.0:
+        raise ValueError(f"b must be > 0, got {b}")
     if not (0.0 <= z <= 1.0):
         raise ValueError(f"z must be in [0, 1], got {z}")
     if z == 0.0:
@@ -121,12 +127,18 @@ def betainc(a: float, b: float, z: float, complement_z: float | None = None) -> 
     # Symmetry threshold: use I_{1-z}(b,a) = 1 - I_z(a,b) when z > threshold
     # for better CF convergence (ensures x < (a+1)/(a+b+2) for the CF call)
     threshold = (a + 1.0) / (a + b + 2.0)
-    if z > threshold:
-        # Use caller-provided complement to avoid 1.0 - z precision loss
-        cz = complement_z if complement_z is not None else 1.0 - z
-        return 1.0 - _betainc_cf(b, a, cz)
+    try:
+        if z > threshold:
+            # Use caller-provided complement to avoid 1.0 - z precision loss
+            cz = complement_z if complement_z is not None else 1.0 - z
+            return 1.0 - _betainc_cf(b, a, cz)
 
-    return _betainc_cf(a, b, z)
+        return _betainc_cf(a, b, z)
+    except ArithmeticError as e:
+        # CF non-convergence for pathological inputs — return NaN rather
+        # than killing the entire GWAS run for a single degenerate SNP.
+        logger.debug(f"betainc CF non-convergence: {e}")
+        return float("nan")
 
 
 def chi2_sf(x: float, df: int = 1) -> float:
@@ -150,6 +162,8 @@ def chi2_sf(x: float, df: int = 1) -> float:
     """
     if df != 1:
         raise ValueError(f"chi2_sf only supports df=1, got df={df}")
+    if math.isnan(x):
+        return float("nan")
     if x <= 0.0:
         return 1.0
     if not math.isfinite(x):

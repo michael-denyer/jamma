@@ -90,6 +90,12 @@ def _eigendecompose_or_reuse(
             logger.debug("Using pre-computed eigendecomposition")
         return eigenvalues, eigenvectors
 
+    if kinship is None:
+        raise ValueError(
+            "Must provide either (eigenvalues, eigenvectors) or kinship matrix. "
+            "All three are None."
+        )
+
     if show_progress:
         log_rss_memory(label, "before_eigendecomp")
     eigenvalues_np, U = eigendecompose_kinship(kinship, check_memory=check_memory)
@@ -138,8 +144,12 @@ def _compute_null_model_common(
         All None for Wald (mode 1). For LRT (mode 2), Hi_eval_null_np
         is None. For Score/All (modes 3, 4), all three are populated.
     """
-    if lmm_mode not in (2, 3, 4):
+    if lmm_mode == 1:
         return None, None, None
+    if lmm_mode not in (2, 3, 4):
+        raise ValueError(
+            f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
+        )
 
     lambda_null_mle, logl_H0 = compute_null_model_mle(
         eigenvalues_np, UtW, Uty, n_cvt, l_min=l_min, l_max=l_max

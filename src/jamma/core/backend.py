@@ -10,12 +10,38 @@ Backend selection priority:
 3. Auto-detection: JAX if importable, else NumPy
 """
 
+from __future__ import annotations
+
+import functools
 import os
+from typing import Literal
 
 from loguru import logger
 
+BackendRequest = Literal["auto", "jax", "numpy"]
+BackendResolved = Literal["jax", "numpy"]
 
-def detect_backend(requested: str = "auto") -> str:
+
+@functools.cache
+def has_jax() -> bool:
+    """Check whether JAX is importable.
+
+    Used by __init__.py modules to gate JAX-dependent imports. Cached
+    after the first call (import success/failure won't change at runtime).
+    """
+    try:
+        import jax  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+    except (RuntimeError, OSError) as e:
+        # JAX installed but broken (e.g. bad CUDA, corrupted install)
+        logger.warning(f"JAX installed but failed to import: {type(e).__name__}: {e}")
+        return False
+
+
+def detect_backend(requested: BackendRequest = "auto") -> BackendResolved:
     """Detect or validate the compute backend.
 
     Checks the JAMMA_BACKEND environment variable first; it overrides the
@@ -54,25 +80,18 @@ def detect_backend(requested: str = "auto") -> str:
         return "numpy"
 
     if effective == "jax":
-        try:
-            import jax  # noqa: F401
-        except ImportError as err:
+        if not has_jax():
             raise ValueError(
                 "Backend 'jax' was explicitly requested but JAX is not installed. "
                 "Install JAX with: pip install jamma[jax]"
-            ) from err
+            )
         return "jax"
 
     # effective == "auto"
-    try:
-        import jax  # noqa: F401
-
-        return "jax"
-    except ImportError:
-        return "numpy"
+    return "jax" if has_jax() else "numpy"
 
 
-def log_backend_selection(active: str, requested: str) -> None:
+def log_backend_selection(active: BackendResolved, requested: BackendRequest) -> None:
     """Log the selected backend at INFO level.
 
     Args:
@@ -82,46 +101,32 @@ def log_backend_selection(active: str, requested: str) -> None:
     Example:
         >>> log_backend_selection("numpy", "auto")
         # logs: "Backend: numpy"
-        >>> log_backend_selection("numpy", "jax")
-        # logs: "Backend: numpy (forced)"
+        >>> log_backend_selection("jax", "jax")
+        # logs: "Backend: jax (explicitly requested)"
     """
-    if requested != "auto" and requested != active:
-        logger.info(f"Backend: {active} (forced)")
+    env_override = os.environ.get("JAMMA_BACKEND")
+    if env_override:
+        logger.info(f"Backend: {active} (from JAMMA_BACKEND)")
+    elif requested != "auto":
+        logger.info(f"Backend: {active} (explicitly requested)")
+    elif active == "numpy":
+        logger.info(
+            f"Backend: {active} (JAX not installed; "
+            "install with: pip install jamma[jax])"
+        )
     else:
         logger.info(f"Backend: {active}")
 
 
-def _has_gpu() -> bool:
-    """Check if a GPU is available via JAX.
-
-    Returns:
-        True if JAX can access a GPU, False otherwise.
-    """
-    try:
-        import jax
-
-        devices = jax.devices()
-        return any(d.platform in ("gpu", "cuda", "rocm") for d in devices)
-    except ImportError:
-        logger.debug("JAX not installed, no GPU support")
-        return False
-    except Exception as e:
-        logger.warning(
-            f"GPU detection failed ({type(e).__name__}: {e}). "
-            f"Falling back to CPU. Check JAX/CUDA installation."
-        )
-        return False
-
-
-def get_backend_info() -> dict:
+def get_backend_info() -> dict[str, str | bool]:
     """Get information about the compute backend.
 
     Returns:
         Dictionary with backend info:
         - selected: Backend name ("jax" or "numpy")
-        - gpu_available: True if JAX can access a GPU
+        - jax_available: True if JAX is importable
     """
     return {
         "selected": detect_backend(),
-        "gpu_available": _has_gpu(),
+        "jax_available": has_jax(),
     }

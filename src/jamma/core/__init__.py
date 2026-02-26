@@ -7,7 +7,7 @@ This package contains the core algorithms and data structures:
 - lmm: Linear mixed model fitting
 """
 
-from jamma.core.backend import get_backend_info
+from jamma.core.backend import get_backend_info, has_jax
 from jamma.core.config import OutputConfig
 from jamma.core.memory import (
     MemoryBreakdown,
@@ -24,16 +24,17 @@ from jamma.core.memory import (
     log_memory_snapshot,
 )
 
-# JAX configuration — optional; requires JAX to be installed:
-try:
+# JAX configuration — probe for JAX first, then import unconditionally
+# so that non-JAX import errors propagate immediately.
+_HAS_JAX = has_jax()
+
+if _HAS_JAX:
     from jamma.core.jax_config import (  # noqa: F401
         configure_jax,
         ensure_jax_configured,
         get_jax_info,
         verify_jax_installation,
     )
-except ImportError:
-    pass  # JAX not installed
 
 __all__ = [
     "get_backend_info",
@@ -51,3 +52,10 @@ __all__ = [
     "get_memory_snapshot",
     "log_memory_snapshot",
 ]
+if _HAS_JAX:
+    __all__ += [
+        "configure_jax",
+        "ensure_jax_configured",
+        "get_jax_info",
+        "verify_jax_installation",
+    ]

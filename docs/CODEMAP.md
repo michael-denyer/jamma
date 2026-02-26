@@ -30,18 +30,26 @@ flowchart TB
         OPT["Lambda Optimizer [3e]"]
         STATS["Test Statistics [3f]"]
         SNPF["SNP Filters [3g]"]
+        PREPCOM["Shared Preparation [3h]"]
+        SPECIAL["Special Functions [3i]"]
     end
 
-    subgraph L4["JAX Acceleration [4]"]
+    subgraph L4["JAX Backend [4]"]
         LIKEJAX["Batch Likelihood [4a]"]
         RUNNER["JAX Runner [4b]"]
         STREAM["Streaming Runner [4c]"]
         LOCO["LOCO Runner [4d]"]
-        PREP["Chunk Preparation [4e]"]
+        PREP["Device Preparation [4e]"]
         CHUNK["Chunk Sizing [4f]"]
         COMPUTE["Chunk Compute [4g]"]
         SCHEMA["Output Schema [4h]"]
         RESULTS["Result Building [4i]"]
+    end
+
+    subgraph L4N["NumPy Backend [4N]"]
+        LIKENP["Batch Likelihood [4Na]"]
+        RUNNERNP["NumPy Runner [4Nb]"]
+        COMPUTENP["Chunk Compute [4Nc]"]
     end
 
     subgraph L5["Infrastructure [5]"]
@@ -77,6 +85,7 @@ flowchart TB
     PIPE --> KINSHIP
     PIPE --> EIGEN
     PIPE --> STREAM
+    PIPE --> RUNNERNP
     PIPE --> LOCO
     PIPE --> MEM
 
@@ -91,6 +100,7 @@ flowchart TB
     LOCO --> EIGEN
     LOCO --> STREAM
 
+    %% JAX backend connections
     RUNNER --> LIKEJAX
     RUNNER --> STATS
     RUNNER --> RIO
@@ -105,11 +115,19 @@ flowchart TB
     STREAM --> PREP
     STREAM --> CHUNK
     STREAM --> COMPUTE
-
     COMPUTE --> LIKEJAX
     COMPUTE --> STATS
     PREP --> THREAD
 
+    %% NumPy backend connections
+    RUNNERNP --> LIKENP
+    RUNNERNP --> PREPCOM
+    RUNNERNP --> RIO
+    COMPUTENP --> LIKENP
+    LIKENP --> SPECIAL
+
+    %% Shared connections
+    PREPCOM --> EIGEN
     LIKEJAX --> LIKE
     OPT --> LIKE
     STATS --> LIKE
@@ -166,7 +184,7 @@ Reads PLINK binary genotypes, covariates, and kinship matrices. Writes GEMMA-com
 
 ### [3] Core Computation
 
-GEMMA algorithm reimplementation: kinship → eigendecomp → REML → test statistics.
+GEMMA algorithm reimplementation: kinship → eigendecomp → REML → test statistics. These modules are shared across both backends.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
@@ -191,12 +209,17 @@ GEMMA algorithm reimplementation: kinship → eigendecomp → REML → test stat
 | 3f | `f_sf()` | F-distribution survival via JAX betainc | [stats.py:67](../src/jamma/lmm/stats.py#L67) |
 | 3g | `compute_hwe_pvalues()` | Chi-squared HWE test via JAX | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |
 | 3g | `apply_snp_list_mask()` | DRY bounds-validated SNP mask application | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |
+| 3h | `_build_covariate_matrix()` | Pure-NumPy covariate setup (shared by both backends) | [prepare_common.py](../src/jamma/lmm/prepare_common.py) |
+| 3h | `_eigendecompose_or_reuse()` | Handles kinship decomp or reuses pre-computed eigen | [prepare_common.py](../src/jamma/lmm/prepare_common.py) |
+| 3h | `_compute_null_model_common()` | Null model fitting (shared by both backends) | [prepare_common.py](../src/jamma/lmm/prepare_common.py) |
+| 3i | `betainc()` | Regularized incomplete beta (pure-stdlib, no scipy) | [special.py](../src/jamma/lmm/special.py) |
+| 3i | `chi2_sf()` | Chi-squared survival function (pure-stdlib) | [special.py](../src/jamma/lmm/special.py) |
 
 ---
 
-### [4] JAX Acceleration
+### [4] JAX Backend
 
-Batch SNP processing with JIT compilation and vmap vectorization. Shared preparation, chunk sizing, and result building modules support both batch and streaming runners.
+Batch SNP processing with JIT compilation and vmap vectorization. Requires JAX (`pip install jamma[jax]`). Supports LOCO, HWE filtering, disk streaming, and CPU device sharding.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
@@ -210,7 +233,6 @@ Batch SNP processing with JIT compilation and vmap vectorization. Shared prepara
 | 4e | `DevicePlacement` | CPU/GPU device + sharding configuration | [lmm/prepare.py:216](../src/jamma/lmm/prepare.py#L216) |
 | 4e | `resolve_device_placement()` | Select device and set up NamedSharding | [lmm/prepare.py:249](../src/jamma/lmm/prepare.py#L249) |
 | 4e | `prepare_utg_chunk()` | Rotate genotype chunk: U.T @ G with device transfer | [lmm/prepare.py:274](../src/jamma/lmm/prepare.py#L274) |
-| 4e | `_compute_null_model()` | Shared null model computation (REML + MLE) | [lmm/prepare.py:160](../src/jamma/lmm/prepare.py#L160) |
 | 4f | `_compute_chunk_size()` | JAX int32-safe chunk sizing with device alignment | [lmm/chunk.py:24](../src/jamma/lmm/chunk.py#L24) |
 | 4f | `auto_tune_chunk_size()` | Chunk size auto-tuning for memory/performance | [lmm/chunk.py:98](../src/jamma/lmm/chunk.py#L98) |
 | 4g | `_compute_lmm_chunk()` | Per-chunk Wald/LRT/Score computation | [lmm/compute.py:107](../src/jamma/lmm/compute.py#L107) |
@@ -219,6 +241,20 @@ Batch SNP processing with JIT compilation and vmap vectorization. Shared prepara
 | 4h | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:43](../src/jamma/lmm/schema.py#L43) |
 | 4i | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:44](../src/jamma/lmm/results.py#L44) |
 | 4i | `count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/results.py:177](../src/jamma/lmm/results.py#L177) |
+
+---
+
+### [4N] NumPy Backend
+
+Pure-NumPy LMM implementation with zero JAX dependency. Works on all platforms (Intel Mac, Windows, Linux). Uses `np.vectorize` for batch operations and stdlib-only special functions for p-value computation.
+
+| ID | Component | Description | File:Line |
+|----|-----------|-------------|-----------|
+| 4Na | `batch_calc_wald_stats_numpy()` | Vectorized Wald: REML optimize → β, SE, p_wald | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
+| 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null λ → p_score | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
+| 4Na | `batch_calc_lrt_stats_numpy()` | Vectorized LRT: MLE optimize → p_lrt | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
+| 4Nb | `run_lmm_association_numpy()` | In-memory batch runner (full genotype load) | [runner_numpy.py](../src/jamma/lmm/runner_numpy.py) |
+| 4Nc | `compute_lmm_chunk_numpy()` | Per-chunk dispatch for NumPy backend | [compute_numpy.py](../src/jamma/lmm/compute_numpy.py) |
 
 ---
 
@@ -371,6 +407,73 @@ flowchart TD
 
 ---
 
+## Backend Architecture
+
+`PipelineRunner` selects a backend at startup via `detect_backend()` and routes all LMM computation through that backend. Both backends produce identical `AssocResult` outputs.
+
+```mermaid
+flowchart TD
+    PIPE["PipelineRunner"]
+    DET["detect_backend()"]
+    PREP["prepare_common.py<br>(covariates, eigen, null model)"]
+
+    subgraph JAX["JAX Backend (requires JAX)"]
+        direction TB
+        RJ["runner_jax / runner_streaming"]
+        CJ["compute.py"]
+        LJ["likelihood_jax.py"]
+        PJ["prepare.py<br>(device sharding)"]
+    end
+
+    subgraph NP["NumPy Backend (no JAX)"]
+        direction TB
+        RN["runner_numpy"]
+        CN["compute_numpy.py"]
+        LN["likelihood_numpy.py"]
+        SP["special.py<br>(stdlib betainc/chi2)"]
+    end
+
+    PIPE --> DET
+    DET -->|"jax"| JAX
+    DET -->|"numpy"| NP
+    PIPE --> PREP
+    PREP --> JAX
+    PREP --> NP
+    RJ --> CJ --> LJ
+    RJ --> PJ
+    RN --> CN --> LN
+    LN --> SP
+```
+
+### Backend Selection
+
+Priority order: `JAMMA_BACKEND` env var → `--backend` CLI flag → auto-detect (try JAX, fall back to NumPy).
+
+### Feature Parity
+
+| Feature | JAX | NumPy |
+|---------|-----|-------|
+| Wald test (`-lmm 1`) | Yes | Yes |
+| LRT (`-lmm 2`) | Yes | Yes |
+| Score test (`-lmm 3`) | Yes | Yes |
+| All tests (`-lmm 4`) | Yes | Yes |
+| LOCO (`-loco`) | Yes | No |
+| HWE filtering (`-hwe`) | Yes | No |
+| Disk streaming | Yes | No (full load) |
+| CPU device sharding | Yes | N/A |
+| GPU acceleration | Yes | N/A |
+
+### File Naming Convention
+
+| Pattern | Purpose | Examples |
+|---------|---------|---------|
+| `*_jax.py` | JAX-specific implementation | `likelihood_jax.py`, `runner_jax.py` |
+| `*_numpy.py` | Pure-NumPy implementation | `likelihood_numpy.py`, `runner_numpy.py`, `compute_numpy.py` |
+| `*_common.py` | Shared by both backends | `prepare_common.py` |
+| No suffix | Base algorithms or shared code | `likelihood.py`, `stats.py`, `eigen.py` |
+
+---
+
 ## Quick Navigation
 
 | Area | Entry Point |
@@ -395,6 +498,12 @@ flowchart TD
 | Result building | [lmm/results.py:44](../src/jamma/lmm/results.py#L44) |
 | JAX batch runner | [runner_jax.py](../src/jamma/lmm/runner_jax.py) |
 | Streaming runner | [runner_streaming.py:92](../src/jamma/lmm/runner_streaming.py#L92) |
+| NumPy batch runner | [runner_numpy.py](../src/jamma/lmm/runner_numpy.py) |
+| NumPy likelihood | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
+| NumPy chunk compute | [compute_numpy.py](../src/jamma/lmm/compute_numpy.py) |
+| Shared preparation | [prepare_common.py](../src/jamma/lmm/prepare_common.py) |
+| Special functions | [special.py](../src/jamma/lmm/special.py) |
+| Backend detection | [backend.py](../src/jamma/core/backend.py) |
 | LOCO runner | [lmm/loco.py](../src/jamma/lmm/loco.py) |
 | Result writer | [lmm/io.py:172](../src/jamma/lmm/io.py#L172) |
 | Memory estimation | [memory.py:97](../src/jamma/core/memory.py#L97) |

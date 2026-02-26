@@ -270,3 +270,256 @@ def test_erfc_matches_chi2_sf() -> None:
 
     # For reasonable chi_sq values, should match to high precision
     np.testing.assert_allclose(erfc_pvalues, scipy_pvalues, rtol=1e-12, atol=1e-15)
+
+
+# ---------------------------------------------------------------------------
+# PR #17 review fixes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+class TestDegenerateSNPNaN:
+    """NumPy batch stat functions must return NaN for degenerate (constant) SNPs."""
+
+    def test_wald_degenerate_snps_return_nan(self) -> None:
+        """batch_calc_wald_stats_numpy returns NaN for zero-variance SNPs."""
+        from jamma.lmm.likelihood_numpy import (
+            batch_calc_wald_stats_numpy,
+            batch_compute_iab_numpy,
+            batch_compute_uab_numpy,
+            golden_section_optimize_lambda_numpy,
+        )
+
+        rng = np.random.default_rng(42)
+        n_samples, n_snps, n_cvt = 50, 5, 1
+
+        eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
+        UtW = rng.standard_normal((n_samples, n_cvt))
+        Uty = rng.standard_normal(n_samples)
+        UtG = rng.standard_normal((n_samples, n_snps))
+        # Make SNPs 0 and 3 constant (zero variance after rotation)
+        UtG[:, 0] = 0.0
+        UtG[:, 3] = 0.0
+
+        Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+        Iab = batch_compute_iab_numpy(n_cvt, Uab)
+        lambdas, _ = golden_section_optimize_lambda_numpy(n_cvt, eigenvalues, Uab, Iab)
+        betas, ses, pwalds = batch_calc_wald_stats_numpy(
+            n_cvt, lambdas, eigenvalues, Uab, n_samples
+        )
+
+        # Degenerate SNPs should be NaN
+        for idx in [0, 3]:
+            assert np.isnan(betas[idx]), f"beta[{idx}] should be NaN"
+            assert np.isnan(ses[idx]), f"se[{idx}] should be NaN"
+            assert np.isnan(pwalds[idx]), f"p_wald[{idx}] should be NaN"
+
+        # Valid SNPs should be finite
+        for idx in [1, 2, 4]:
+            assert np.isfinite(betas[idx]), f"beta[{idx}] should be finite"
+            assert np.isfinite(ses[idx]), f"se[{idx}] should be finite"
+            assert np.isfinite(pwalds[idx]), f"p_wald[{idx}] should be finite"
+
+    def test_score_degenerate_snps_return_nan(self) -> None:
+        """batch_calc_score_stats_numpy returns NaN for zero-variance SNPs."""
+        from jamma.lmm.likelihood_numpy import (
+            batch_calc_score_stats_numpy,
+            batch_compute_uab_numpy,
+        )
+
+        rng = np.random.default_rng(42)
+        n_samples, n_snps, n_cvt = 50, 4, 1
+
+        eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
+        UtW = rng.standard_normal((n_samples, n_cvt))
+        Uty = rng.standard_normal(n_samples)
+        UtG = rng.standard_normal((n_samples, n_snps))
+        UtG[:, 1] = 0.0  # Make SNP 1 constant
+
+        Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+        Hi_eval = 1.0 / (1.0 * eigenvalues + 1.0)
+
+        betas, ses, p_scores = batch_calc_score_stats_numpy(
+            n_cvt, Hi_eval, Uab, n_samples
+        )
+
+        assert np.isnan(betas[1])
+        assert np.isnan(ses[1])
+        assert np.isnan(p_scores[1])
+        assert np.isfinite(betas[0])
+        assert np.isfinite(p_scores[0])
+
+
+@pytest.mark.tier0
+class TestNegativeLRTClamp:
+    """_batch_lrt_pvalues_numpy must clamp negative LRT stats to 0."""
+
+    def test_negative_lrt_returns_pvalue_one(self) -> None:
+        """When H1 logl < H0 logl, LRT stat is negative → p-value should be 1.0."""
+        from jamma.lmm.likelihood_numpy import _batch_lrt_pvalues_numpy
+
+        logl_H0 = -100.0
+        # Some H1 logls worse than null (negative LRT stat)
+        logls_mle = np.array([-101.0, -105.0, -100.5, -99.0, -98.0])
+        p_lrts = _batch_lrt_pvalues_numpy(logls_mle, logl_H0)
+
+        # First 3 have worse H1 → clamped to 0 → chi2_sf(0) = 1.0
+        np.testing.assert_allclose(p_lrts[:3], 1.0)
+        # Last 2 have better H1 → valid p-values < 1
+        assert all(p_lrts[3:] < 1.0)
+
+
+@pytest.mark.tier0
+class TestNumpyRunnerValidation:
+    """run_lmm_association_numpy input validation tests."""
+
+    def test_eigenvalue_without_eigenvector_raises(self) -> None:
+        """Providing eigenvalues without eigenvectors raises ValueError."""
+        from jamma.lmm.runner_numpy import run_lmm_association_numpy
+
+        with pytest.raises(ValueError, match="Must provide both"):
+            run_lmm_association_numpy(
+                genotypes=np.ones((10, 5)),
+                phenotypes=np.ones(10),
+                kinship=np.eye(10),
+                snp_info=[{"chr": "1", "rs": "x", "pos": 0, "a1": "A", "a0": "G"}] * 5,
+                eigenvalues=np.ones(10),
+                eigenvectors=None,
+                check_memory=False,
+                show_progress=False,
+            )
+
+    def test_invalid_lmm_mode_raises(self) -> None:
+        """Invalid lmm_mode raises ValueError."""
+        from jamma.lmm.runner_numpy import run_lmm_association_numpy
+
+        with pytest.raises(ValueError, match="lmm_mode must be"):
+            run_lmm_association_numpy(
+                genotypes=np.ones((10, 5)),
+                phenotypes=np.ones(10),
+                kinship=np.eye(10),
+                snp_info=[{"chr": "1", "rs": "x", "pos": 0, "a1": "A", "a0": "G"}] * 5,
+                lmm_mode=5,
+                check_memory=False,
+                show_progress=False,
+            )
+
+
+@pytest.mark.tier0
+class TestComputeNumpyInvalidMode:
+    """_compute_lmm_chunk_numpy must raise on invalid lmm_mode."""
+
+    def test_invalid_mode_raises_value_error(self) -> None:
+        """lmm_mode=99 should raise ValueError, not return all-None dict."""
+        from jamma.lmm.compute_numpy import _compute_lmm_chunk_numpy
+
+        with pytest.raises(ValueError, match="lmm_mode must be"):
+            _compute_lmm_chunk_numpy(
+                lmm_mode=99,
+                n_cvt=1,
+                eigenvalues=np.ones(10),
+                Uab_batch=np.ones((5, 10, 3)),
+                n_samples=10,
+            )
+
+
+@pytest.mark.tier0
+class TestBetaincValidation:
+    """betainc must validate a > 0 and b > 0."""
+
+    def test_a_zero_raises(self) -> None:
+        from jamma.lmm.special import betainc
+
+        with pytest.raises(ValueError, match="a must be > 0"):
+            betainc(0.0, 0.5, 0.5)
+
+    def test_b_negative_raises(self) -> None:
+        from jamma.lmm.special import betainc
+
+        with pytest.raises(ValueError, match="b must be > 0"):
+            betainc(1.0, -1.0, 0.5)
+
+
+@pytest.mark.tier0
+class TestCrossBackendMode4:
+    """Cross-backend mode 4 (All) parity test."""
+
+    @pytest.mark.requires_jax
+    def test_mode4_parity(self) -> None:
+        """Mode 4 results from NumPy and JAX backends should match."""
+        from jamma.lmm.compute_numpy import _compute_lmm_chunk_numpy
+        from jamma.lmm.likelihood_numpy import (
+            batch_compute_uab_numpy,
+        )
+
+        pytest.importorskip("jax")
+        from jamma.lmm.prepare_common import _compute_null_model_common
+
+        rng = np.random.default_rng(42)
+        n_samples, n_snps, n_cvt = 50, 10, 1
+
+        eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
+        UtW = rng.standard_normal((n_samples, n_cvt))
+        Uty = rng.standard_normal(n_samples)
+        UtG = rng.standard_normal((n_samples, n_snps))
+
+        Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+
+        logl_H0, _, Hi_eval_null = _compute_null_model_common(
+            4, eigenvalues, UtW, Uty, n_cvt, show_progress=False
+        )
+
+        result = _compute_lmm_chunk_numpy(
+            lmm_mode=4,
+            n_cvt=n_cvt,
+            eigenvalues=eigenvalues,
+            Uab_batch=Uab,
+            n_samples=n_samples,
+            Hi_eval_null=Hi_eval_null,
+            logl_H0=logl_H0,
+        )
+
+        # Mode 4 should have all keys populated
+        assert result["pwalds"] is not None
+        assert result["p_lrts"] is not None
+        assert result["p_scores"] is not None
+        assert result["betas"] is not None
+        assert result["ses"] is not None
+        assert result["lambdas"] is not None
+        assert result["lambdas_mle"] is not None
+
+        # All p-values should be in [0, 1] or NaN
+        for key in ["pwalds", "p_lrts", "p_scores"]:
+            vals = result[key]
+            finite = vals[np.isfinite(vals)]
+            assert np.all((finite >= 0) & (finite <= 1)), f"{key} has invalid p-values"
+
+
+@pytest.mark.tier0
+def test_jax_free_export_surface() -> None:
+    """from jamma.lmm import * must not fail on NumPy-only exports."""
+    import jamma.lmm as lmm_module
+    from jamma.lmm import __all__ as lmm_all
+
+    for name in lmm_all:
+        assert hasattr(lmm_module, name), (
+            f"jamma.lmm.__all__ lists {name!r} but it is not defined"
+        )
+
+
+@pytest.mark.tier0
+def test_pipeline_hwe_numpy_raises() -> None:
+    """HWE filtering with NumPy backend raises ValueError."""
+    from pathlib import Path
+
+    from jamma.pipeline import PipelineConfig, PipelineRunner
+
+    config = PipelineConfig(
+        bfile=Path("dummy"),
+        lmm_mode=1,
+        backend="numpy",
+        hwe_threshold=0.001,
+    )
+    runner = PipelineRunner(config)
+    with pytest.raises(ValueError, match="HWE filtering.*not yet supported.*NumPy"):
+        runner.run()

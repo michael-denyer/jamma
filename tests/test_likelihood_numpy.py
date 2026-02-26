@@ -60,11 +60,12 @@ def synthetic_data():
 @pytest.mark.tier0
 def test_no_jax_imports_in_numpy_modules():
     """AST check: likelihood_numpy.py and compute_numpy.py must not import JAX."""
+    project_root = Path(__file__).parent.parent
     for module_path in [
-        "src/jamma/lmm/likelihood_numpy.py",
-        "src/jamma/lmm/compute_numpy.py",
+        project_root / "src" / "jamma" / "lmm" / "likelihood_numpy.py",
+        project_root / "src" / "jamma" / "lmm" / "compute_numpy.py",
     ]:
-        source = Path(module_path).read_text()
+        source = module_path.read_text()
         tree = ast.parse(source)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -524,3 +525,42 @@ def test_compute_lmm_chunk_numpy_missing_args_raise(synthetic_data):
 
     with pytest.raises(ValueError, match="Hi_eval_null is required"):
         _compute_lmm_chunk_numpy(3, 1, eigenvalues, Uab_batch, n_samples)
+
+
+# ---------------------------------------------------------------------------
+# Multi-covariate Uab parity (n_cvt > 1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+def test_batch_uab_multi_covariate_matches_jax():
+    """batch_compute_uab_numpy with n_cvt=3 must match JAX to 1e-12."""
+    pytest.importorskip("jax")
+    import jax.numpy as jnp
+
+    from jamma.lmm.likelihood_jax import batch_compute_uab
+
+    rng = np.random.default_rng(77)
+    n_samples, n_snps, n_cvt = 50, 10, 3
+    rng.uniform(0.1, 5.0, n_samples)  # advance RNG state
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+
+    Uab_numpy = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+    Uab_jax = np.asarray(
+        batch_compute_uab(n_cvt, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG))
+    )
+
+    # n_index = (n_cvt + 3) * (n_cvt + 2) // 2 = 6 * 5 // 2 = 15
+    expected_n_index = (n_cvt + 3) * (n_cvt + 2) // 2
+    assert Uab_numpy.shape == (n_snps, n_samples, expected_n_index), (
+        f"Wrong shape: {Uab_numpy.shape}"
+    )
+    np.testing.assert_allclose(
+        Uab_numpy,
+        Uab_jax,
+        rtol=1e-12,
+        atol=1e-14,
+        err_msg="batch_compute_uab_numpy (n_cvt=3) does not match JAX",
+    )

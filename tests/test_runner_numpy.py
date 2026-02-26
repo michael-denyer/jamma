@@ -16,7 +16,7 @@ import pytest
 
 from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
-from jamma.lmm.runner_numpy import run_lmm_association_numpy
+from jamma.lmm.runner_numpy import _compute_chunk_size_numpy, run_lmm_association_numpy
 from jamma.lmm.stats import AssocResult
 from jamma.validation import (
     ToleranceConfig,
@@ -202,6 +202,36 @@ def test_numpy_runner_empty_after_filter(synthetic_data):
         show_progress=False,
     )
     assert results == [], f"Expected empty list, got {len(results)} results"
+
+
+# ---------------------------------------------------------------------------
+# Chunk size computation
+# ---------------------------------------------------------------------------
+
+
+def test_compute_chunk_size_small_dataset():
+    """Small dataset: chunk size = n_filtered (everything in one chunk)."""
+    chunk = _compute_chunk_size_numpy(n_samples=100, n_filtered=500, n_cvt=1)
+    assert chunk == 500, f"Expected 500, got {chunk}"
+
+
+def test_compute_chunk_size_large_dataset():
+    """Large dataset: chunk capped by memory budget or _MAX_CHUNK."""
+    chunk = _compute_chunk_size_numpy(n_samples=10_000, n_filtered=200_000, n_cvt=1)
+    assert 100 <= chunk <= 50_000, f"Chunk {chunk} outside expected bounds"
+
+
+def test_compute_chunk_size_zero_bytes():
+    """bytes_per_snp=0 (n_samples=0): returns n_filtered directly."""
+    chunk = _compute_chunk_size_numpy(n_samples=0, n_filtered=1000, n_cvt=1)
+    assert chunk == 1000, f"Expected 1000, got {chunk}"
+
+
+def test_compute_chunk_size_minimum():
+    """Chunk size never drops below 100."""
+    # Huge n_samples to force small chunk_from_memory, tiny n_filtered to avoid cap
+    chunk = _compute_chunk_size_numpy(n_samples=1_000_000, n_filtered=200, n_cvt=10)
+    assert chunk >= 100, f"Chunk {chunk} below minimum 100"
 
 
 # ---------------------------------------------------------------------------

@@ -50,6 +50,78 @@ def _clamp_p_yy(P_yy: float, lambda_val: float) -> float:
     return P_yy
 
 
+def build_index_table(n_cvt: int) -> dict:
+    """Precompute all index mappings for a given n_cvt.
+
+    Pure Python function with zero JAX dependency. Runs at Python level.
+    When called inside a JIT function with n_cvt as a static argument,
+    it executes at trace time, producing compile-time constants.
+
+    GEMMA convention (1-based):
+      Columns 1..n_cvt = covariates (W)
+      Column n_cvt+1 = genotype (X)
+      Column n_cvt+2 = phenotype (Y)
+
+    Args:
+        n_cvt: Number of covariates.
+
+    Returns:
+        Dict with precomputed index mappings:
+        - n_index: total (a,b) pairs = (n_cvt+3)*(n_cvt+2)//2
+        - idx_yy: index for phenotype-phenotype
+        - idx_xx: index for genotype-genotype
+        - idx_xy: index for genotype-phenotype
+        - uab_pairs: list of (a_col, b_col, index) for Uab construction
+        - pab_recursion: per-level recursion tuples for Pab
+        - logdet_diag_indices: (row, col) pairs for logdet_hiw diagonal
+    """
+    n_index = (n_cvt + 3) * (n_cvt + 2) // 2
+
+    idx_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
+    idx_xx = get_ab_index(n_cvt + 1, n_cvt + 1, n_cvt)
+    idx_xy = get_ab_index(n_cvt + 2, n_cvt + 1, n_cvt)
+
+    # Uab column pairs: (0-based col_a, 0-based col_b, linear index)
+    # Vectors array is [W1,...,W_ncvt, X, Y] with 0-based columns
+    uab_pairs = []
+    for a in range(1, n_cvt + 3):
+        for b in range(a, n_cvt + 3):
+            idx = get_ab_index(a, b, n_cvt)
+            uab_pairs.append((a - 1, b - 1, idx))
+
+    # Pab recursion: for each projection level p (1..n_cvt+1),
+    # build list of (a, b, index_ab, index_aw, index_bw, index_ww)
+    # using GEMMA 1-based indexing
+    pab_recursion = {}
+    for p in range(1, n_cvt + 2):
+        entries = []
+        for a in range(p + 1, n_cvt + 3):
+            for b in range(a, n_cvt + 3):
+                index_ab = get_ab_index(a, b, n_cvt)
+                index_aw = get_ab_index(a, p, n_cvt)
+                index_bw = get_ab_index(b, p, n_cvt)
+                index_ww = get_ab_index(p, p, n_cvt)
+                entries.append((a, b, index_ab, index_aw, index_bw, index_ww))
+        pab_recursion[p] = entries
+
+    # logdet_hiw diagonal: for i=0..n_cvt, the diagonal element is
+    # Pab[i, get_ab_index(i+1, i+1, n_cvt)]
+    logdet_diag_indices = []
+    for i in range(n_cvt + 1):
+        col = get_ab_index(i + 1, i + 1, n_cvt)
+        logdet_diag_indices.append((i, col))
+
+    return {
+        "n_index": n_index,
+        "idx_yy": idx_yy,
+        "idx_xx": idx_xx,
+        "idx_xy": idx_xy,
+        "uab_pairs": uab_pairs,
+        "pab_recursion": pab_recursion,
+        "logdet_diag_indices": logdet_diag_indices,
+    }
+
+
 def get_ab_index(a: int, b: int, n_cvt: int) -> int:
     """Compute index for accessing Uab/Pab elements using GEMMA's GetabIndex.
 

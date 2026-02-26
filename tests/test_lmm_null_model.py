@@ -14,6 +14,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+pytest.importorskip("jax")
+
 from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm.eigen import eigendecompose_kinship

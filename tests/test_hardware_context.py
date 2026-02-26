@@ -6,6 +6,8 @@ import json
 
 import pytest
 
+pytest.importorskip("jax")
+
 from jamma.core.hardware import assert_x64_precision, get_hardware_context
 
 

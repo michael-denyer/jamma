@@ -22,6 +22,8 @@ import pandas as pd
 import pytest
 from scipy.stats import spearmanr
 
+pytest.importorskip("jax")
+
 from jamma.io import load_plink_binary
 from jamma.kinship import compute_centered_kinship
 from jamma.lmm.runner_jax import run_lmm_association_jax

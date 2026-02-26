@@ -4,9 +4,12 @@ These tests verify the JAX-accelerated kinship matrix computation,
 including symmetry, scaling, missing data handling, and determinism.
 """
 
-import jax.numpy as jnp
 import numpy as np
 import pytest
+
+pytest.importorskip("jax")
+
+import jax.numpy as jnp
 
 from jamma.kinship import (
     compute_centered_kinship,

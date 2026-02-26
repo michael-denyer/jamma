@@ -10,9 +10,12 @@ These tests verify that all components work together correctly:
 
 from pathlib import Path
 
-import jax.numpy as jnp
 import numpy as np
 import pytest
+
+pytest.importorskip("jax")
+
+import jax.numpy as jnp
 from click.testing import CliRunner
 
 from jamma.cli import main

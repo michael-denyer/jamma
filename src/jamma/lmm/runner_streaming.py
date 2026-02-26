@@ -122,7 +122,9 @@ def run_lmm_association_streaming(
         bed_path: PLINK file prefix (without .bed/.bim/.fam extension).
         phenotypes: Phenotype vector (n_samples,).
         kinship: Kinship matrix (n_samples, n_samples), or None when
-            pre-computed eigenvalues and eigenvectors are provided.
+            pre-computed eigenvalues and eigenvectors are provided. WARNING:
+            overwritten in-place during eigendecomposition (buffer reused for
+            eigenvectors). Pass kinship.copy() if you need the original matrix.
         snp_info: List of SNP metadata dicts, or None to build from PLINK.
         covariates: Covariate matrix (n_samples, n_cvt) or None for intercept-only.
         eigenvalues: Pre-computed eigenvalues (sorted ascending) or None.

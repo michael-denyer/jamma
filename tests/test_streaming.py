@@ -579,8 +579,7 @@ class TestRunLmmAssociationStreaming:
         kinship = compute_centered_kinship(
             data.genotypes.astype(np.float64), check_memory=False
         )
-        # eigendecompose_kinship overwrites K's buffer (in-place); each runner
-        # needs its own copy so both get a valid kinship matrix.
+        # eigendecomp overwrites K in-place; needs fresh copy per run
         kinship_full = kinship.copy()
         kinship_stream = kinship.copy()
 
@@ -897,8 +896,7 @@ class TestChunkEquivalence:
         kinship = compute_centered_kinship(
             data.genotypes.astype(np.float64), check_memory=False
         )
-        # eigendecompose_kinship overwrites K's buffer (in-place); each runner
-        # needs its own copy so both get a valid kinship matrix.
+        # eigendecomp overwrites K in-place; needs fresh copy per run
         kinship_single = kinship.copy()
         kinship_multi = kinship.copy()
 
@@ -978,8 +976,7 @@ class TestChunkEquivalence:
         results_by_chunk: dict[int, list] = {}
 
         for cs in chunk_sizes:
-            # eigendecompose_kinship overwrites K's buffer (in-place); use a
-            # fresh copy for each run so each gets a valid kinship matrix.
+            # eigendecomp overwrites K in-place; needs fresh copy per run
             results, _ = run_lmm_association_streaming(
                 sample_plink_data,
                 phenotypes,
@@ -1030,8 +1027,7 @@ def test_streaming_vs_batch_parity(sample_plink_data: Path) -> None:
     kinship = compute_centered_kinship(
         data.genotypes.astype(np.float64), check_memory=False
     )
-    # eigendecompose_kinship overwrites K's buffer (in-place); each runner
-    # needs its own copy so both get a valid kinship matrix.
+    # eigendecomp overwrites K in-place; needs fresh copy per run
     kinship_batch = kinship.copy()
     kinship_stream = kinship.copy()
 
@@ -1123,8 +1119,7 @@ def test_streaming_lrt_only_matches_batch(sample_plink_data: Path) -> None:
     kinship = compute_centered_kinship(
         data.genotypes.astype(np.float64), check_memory=False
     )
-    # eigendecompose_kinship overwrites K's buffer (in-place); each runner
-    # needs its own copy so both get a valid kinship matrix.
+    # eigendecomp overwrites K in-place; needs fresh copy per run
     kinship_batch = kinship.copy()
     kinship_stream = kinship.copy()
 
@@ -1199,8 +1194,7 @@ def test_streaming_score_only_matches_batch(sample_plink_data: Path) -> None:
     kinship = compute_centered_kinship(
         data.genotypes.astype(np.float64), check_memory=False
     )
-    # eigendecompose_kinship overwrites K's buffer (in-place); each runner
-    # needs its own copy so both get a valid kinship matrix.
+    # eigendecomp overwrites K in-place; needs fresh copy per run
     kinship_batch = kinship.copy()
     kinship_stream = kinship.copy()
 

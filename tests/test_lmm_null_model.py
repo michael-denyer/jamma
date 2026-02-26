@@ -55,8 +55,7 @@ def gemma_test_data():
     fam_data = np.loadtxt(FIXTURE_DIR / "test.fam", dtype=str)
     phenotypes = fam_data[:, 5].astype(float)
 
-    # eigendecompose_kinship overwrites K's buffer with eigenvectors (in-place).
-    # Save a copy for tests that need the original kinship matrix (e.g. runner tests).
+    # eigendecomp overwrites K in-place; save copy for runner tests
     kinship_original = kinship.copy()
 
     # Eigendecomposition

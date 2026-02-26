@@ -225,8 +225,7 @@ class TestLRTIntegration:
             for i in range(p)
         ]
 
-        # eigendecompose_kinship overwrites K's buffer (in-place); use separate
-        # copies so each run gets a valid kinship matrix.
+        # eigendecomp overwrites K in-place; needs fresh copy per run
         results_wald = run_lmm_association_jax(
             G,
             y,

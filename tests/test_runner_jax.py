@@ -835,8 +835,7 @@ class TestJaxAllTestsMode:
         """Mode 4 Wald component is identical to mode 1 (same code path)."""
         genotypes, phenotype, snp_info = synthetic_data
         kinship = compute_centered_kinship(genotypes)
-        # eigendecompose_kinship overwrites K's buffer (in-place); use separate
-        # copies so each run gets a valid kinship matrix.
+        # eigendecomp overwrites K in-place; needs fresh copy per run
         kinship_mode4 = kinship.copy()
         kinship_mode1 = kinship.copy()
 

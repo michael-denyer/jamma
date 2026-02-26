@@ -476,12 +476,15 @@ def _run_gk(
     write_kinship_matrix(K, kinship_path)
     click.echo(f"Kinship matrix written to {kinship_path}")
 
+    n_samples = K.shape[0]
+
     # Eigendecompose and write if -eigen flag
     if write_eigen:
         from jamma.lmm.eigen import eigendecompose_kinship
         from jamma.lmm.eigen_io import write_eigen_files
 
         eigenvalues, eigenvectors = eigendecompose_kinship(K, check_memory=check_memory)
+        del K  # K's buffer now contains eigenvectors; prevent accidental reuse
         d_path, u_path = write_eigen_files(
             eigenvalues,
             eigenvectors,
@@ -494,9 +497,6 @@ def _run_gk(
     # Calculate timing
     end_time = time.perf_counter()
     elapsed = end_time - start_time
-
-    # Write log file
-    n_samples = K.shape[0]
     n_snps = _meta["n_snps"]
     params = {
         "n_samples": n_samples,

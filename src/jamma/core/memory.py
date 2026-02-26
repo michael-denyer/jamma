@@ -25,15 +25,30 @@ def _check_available(total_gb: float) -> tuple[float, bool]:
     return available_gb, (total_gb + margin_gb) < available_gb
 
 
+def _inplace_eigen_available() -> bool:
+    """Check if in-place eigendecomp is available (lazy import to avoid circularity)."""
+    try:
+        from jamma.lmm.eigen import INPLACE_EIGEN_AVAILABLE
+
+        return INPLACE_EIGEN_AVAILABLE
+    except ImportError:
+        return False
+
+
 def estimate_eigendecomp_memory(n_samples: int) -> float:
     """Estimate peak memory (GB) for eigendecomposition of kinship matrix.
 
-    Peak memory during eigendecomposition (DSYEVD called in-place):
+    When in-place eigendecomp is available (DSYEVD gufunc with out= parameter):
     - K/U (shared buffer): n^2 * 8 bytes [kinship overwritten with eigenvectors]
     - workspace (DSYEVD O(n^2))
 
-    For 200k samples: 320GB + ~640GB = ~960GB (saves 320GB vs copy approach)
-    For 100k samples:  80GB + ~160GB = ~240GB (saves  80GB vs copy approach)
+    When in-place is unavailable (fallback to np.linalg.eigh):
+    - K (input): n^2 * 8 bytes
+    - U (output eigenvectors): n^2 * 8 bytes
+    - workspace (DSYEVD O(n^2))
+
+    For 200k samples (in-place):  320GB + ~640GB = ~960GB
+    For 200k samples (fallback): 320GB + 320GB + ~640GB = ~1280GB
 
     Args:
         n_samples: Number of samples (individuals).
@@ -42,12 +57,16 @@ def estimate_eigendecomp_memory(n_samples: int) -> float:
         Estimated peak memory in GB.
 
     Example:
-        >>> estimate_eigendecomp_memory(200_000)
+        >>> estimate_eigendecomp_memory(200_000)  # in-place available
         960.01
     """
-    kinship_gb = n_samples**2 * 8 / 1e9  # K buffer, reused as U output
+    kinship_gb = n_samples**2 * 8 / 1e9
     workspace_gb = _dsyevd_workspace_gb(n_samples)
-    return kinship_gb + workspace_gb
+    if _inplace_eigen_available():
+        return kinship_gb + workspace_gb  # K/U shared buffer
+    else:
+        eigenvectors_gb = n_samples**2 * 8 / 1e9
+        return kinship_gb + eigenvectors_gb + workspace_gb
 
 
 class MemoryBreakdown(NamedTuple):
@@ -62,7 +81,7 @@ class MemoryBreakdown(NamedTuple):
     """
 
     kinship_gb: float  # n^2 * 8 bytes (float64)
-    genotypes_gb: float  # n * p * 4 bytes (float32)
+    genotypes_gb: float  # n * p * 8 bytes (float64, JAX copy)
     eigenvectors_gb: float  # n^2 * 8 bytes (float64)
     eigendecomp_workspace_gb: float  # DSYEVD: (1+6n+2n^2)*8 + (3+5n)*4 bytes
     lmm_rotated_gb: float  # n * 8 * 3 bytes (Uy, UW, rotated vectors)
@@ -157,10 +176,12 @@ def estimate_workflow_memory(
     # kinship accumulation in _compute_kinship_inmemory
     peak_kinship = genotypes_gb * 2 + kinship_gb
 
-    # Phase 2 (eigendecomp): K/U shared buffer + workspace
+    # Phase 2 (eigendecomp): K + workspace (+ U if fallback path)
     # (genotypes can be freed during eigendecomp if not needed for LMM)
-    # K/U shared buffer (in-place eigendecomp)
-    peak_eigendecomp = kinship_gb + eigendecomp_workspace_gb
+    if _inplace_eigen_available():
+        peak_eigendecomp = kinship_gb + eigendecomp_workspace_gb  # K/U shared
+    else:
+        peak_eigendecomp = kinship_gb + eigenvectors_gb + eigendecomp_workspace_gb
 
     # Phase 3 (LMM): eigenvectors + genotypes + working
     # (kinship freed, eigenvalues are small ~n*8 bytes)
@@ -254,7 +275,8 @@ class StreamingMemoryBreakdown(NamedTuple):
 
     All values in GB. Peak memory is the maximum across workflow phases:
     1. Kinship accumulation: kinship + chunk
-    2. Eigendecomposition: kinship + eigenvectors + workspace (typically peak)
+    2. Eigendecomposition: K/U shared buffer + workspace (typically peak;
+       eigenvectors overwrite K in-place when gufunc available)
     3. LMM: eigenvectors + chunk + rotation buffer + grid REML
 
     The key difference from full-load estimation is that genotypes are
@@ -319,10 +341,9 @@ def estimate_streaming_memory(
     - Eigendecomp: 320GB + ~640GB = ~960GB (PEAK, K/U shared buffer)
     - LMM: 320GB + 16GB + 16GB + Uab/Iab
 
-    Note: This reveals the true constraint - eigendecomposition cannot be
-    streamed and requires both kinship (input) and eigenvectors (output)
-    matrices simultaneously. With in-place eigendecomp, K's buffer is reused
-    for U, saving one n²×8 allocation.
+    Note: Eigendecomposition cannot be streamed. With in-place eigendecomp,
+    K's buffer is reused for eigenvectors (saving one n²×8 allocation), but
+    DSYEVD's O(n²) workspace still dominates peak memory.
 
     Args:
         n_samples: Number of samples (individuals).
@@ -350,8 +371,11 @@ def estimate_streaming_memory(
 
     # Peak memory calculation by workflow phase
     peak_kinship = kinship_gb + chunk_gb
-    # K/U shared buffer (in-place eigendecomp)
-    peak_eigendecomp = kinship_gb + eigendecomp_workspace_gb
+    # Eigendecomp: K + workspace (+ separate U if in-place unavailable)
+    if _inplace_eigen_available():
+        peak_eigendecomp = kinship_gb + eigendecomp_workspace_gb  # K/U shared
+    else:
+        peak_eigendecomp = kinship_gb + eigenvectors_gb + eigendecomp_workspace_gb
     peak_lmm = (
         eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb + uab_iab_gb
     )

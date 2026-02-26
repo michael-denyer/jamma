@@ -63,7 +63,9 @@ def run_lmm_association_jax(
     Args:
         genotypes: Genotype matrix (n_samples, n_snps) with values 0, 1, 2.
         phenotypes: Phenotype vector (n_samples,).
-        kinship: Kinship matrix (n_samples, n_samples).
+        kinship: Kinship matrix (n_samples, n_samples). WARNING: overwritten
+            in-place during eigendecomposition (buffer reused for eigenvectors).
+            Pass kinship.copy() if you need the original matrix after this call.
         snp_info: List of dicts with keys: chr, rs, pos, a1, a0.
         covariates: Covariate matrix (n_samples, n_cvt) or None for intercept-only.
         eigenvalues: Pre-computed eigenvalues (sorted ascending) or None.

@@ -8,7 +8,6 @@ Note: the disk-write hot path bypasses this module entirely — see
 
 from collections.abc import Generator
 
-import jax.numpy as jnp
 import numpy as np
 from loguru import logger
 
@@ -105,6 +104,8 @@ def _concat_jax_accumulators(
     Returns:
         Dict mapping stat names to concatenated numpy arrays.
     """
+    import jax.numpy as jnp  # lazy — only when JAX runner path executes
+
     return {k: np.asarray(jnp.concatenate(v)) for k, v in accumulators.items()}
 
 

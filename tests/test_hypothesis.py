@@ -424,6 +424,7 @@ class TestLrtProperties:
 
 
 @pytest.mark.tier0
+@pytest.mark.requires_jax
 class TestCpuJaxEquivalence:
     """Property tests verifying CPU and JAX paths produce identical results."""
 

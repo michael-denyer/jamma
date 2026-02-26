@@ -1,13 +1,13 @@
-"""JAX-optimized batch LMM association runner.
+"""Pure-NumPy batch LMM association runner.
 
-Batch-optimized LMM association testing on CPU (XLA) or GPU (JAX).
-Input genotypes must fit in memory; for disk streaming use runner_streaming.py.
+No JAX dependency. Input genotypes must fit in memory.
 """
+
+from __future__ import annotations
 
 import gc
 import time
 
-import jax
 import numpy as np
 from loguru import logger
 
@@ -15,15 +15,12 @@ from jamma.core.memory import estimate_lmm_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.core.threading import blas_threads, get_physical_core_count
-from jamma.lmm.chunk import _compute_chunk_size
-from jamma.lmm.compute import _compute_lmm_chunk, block_chunk_result, log_jax_error
-from jamma.lmm.likelihood_jax import batch_compute_uab
-from jamma.lmm.prepare import (
+from jamma.lmm.compute_numpy import _compute_lmm_chunk_numpy
+from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
+from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
-    _compute_null_model,
+    _compute_null_model_common,
     _eigendecompose_or_reuse,
-    prepare_utg_chunk,
-    resolve_device_placement,
 )
 from jamma.lmm.results import (
     _build_results,
@@ -34,8 +31,35 @@ from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
 
+# Default chunk cap (same as JAX runner)
+_MAX_CHUNK = 50_000
 
-def run_lmm_association_jax(
+
+def _compute_chunk_size_numpy(n_samples: int, n_filtered: int, n_cvt: int = 1) -> int:
+    """Compute chunk size based on RAM budget (no int32 constraint for NumPy).
+
+    Memory per SNP: n_samples * n_index * 8 bytes (Uab dominates).
+    Target: stay under ~2 GB per chunk for Uab allocation.
+
+    Args:
+        n_samples: Number of samples.
+        n_filtered: Number of filtered SNPs.
+        n_cvt: Number of covariates.
+
+    Returns:
+        Chunk size (number of SNPs per chunk).
+    """
+    n_index = (n_cvt + 3) * (n_cvt + 2) // 2
+    bytes_per_snp = n_samples * n_index * 8
+    if bytes_per_snp == 0:
+        return n_filtered
+    mem_budget = 2e9  # 2 GB
+    chunk_from_memory = int(mem_budget / bytes_per_snp)
+    chunk = max(100, min(chunk_from_memory, n_filtered, _MAX_CHUNK))
+    return chunk
+
+
+def run_lmm_association_numpy(
     genotypes: np.ndarray,
     phenotypes: np.ndarray,
     kinship: np.ndarray | None,
@@ -54,20 +78,19 @@ def run_lmm_association_jax(
     show_progress: bool = True,
     lmm_mode: int = 1,
 ) -> list[AssocResult]:
-    """Run LMM association tests using JAX-optimized batch processing.
+    """Run LMM association tests using pure-NumPy batch processing.
 
-    Processes all SNPs in parallel via JAX vectorization and JIT compilation.
-    SNPs are processed in chunks to avoid JAX int32 buffer overflow. Input
-    genotypes must fit in memory; for disk streaming use run_lmm_association_streaming.
+    Processes SNPs in memory-bounded chunks using BLAS-backed NumPy operations.
+    No JAX dependency. Input genotypes must fit in memory; for disk streaming
+    use run_lmm_association_streaming.
 
     Args:
         genotypes: Genotype matrix (n_samples, n_snps) with values 0, 1, 2.
         phenotypes: Phenotype vector (n_samples,).
-        kinship: Kinship matrix (n_samples, n_samples) or None when
-            pre-computed eigenvalues/eigenvectors are provided. WARNING: may
-            be overwritten in-place during eigendecomposition (buffer reused
-            for eigenvectors). Treat as consumed; pass kinship.copy() if you
-            need the original matrix after this call.
+        kinship: Kinship matrix (n_samples, n_samples). WARNING: may be
+            overwritten in-place during eigendecomposition (buffer reused for
+            eigenvectors). Treat as consumed; pass kinship.copy() if you need
+            the original matrix after this call.
         snp_info: List of dicts with keys: chr, rs, pos, a1, a0.
         covariates: Covariate matrix (n_samples, n_cvt) or None for intercept-only.
         eigenvalues: Pre-computed eigenvalues (sorted ascending) or None.
@@ -79,7 +102,7 @@ def run_lmm_association_jax(
         n_grid: Grid search resolution for lambda bracketing.
         n_refine: Golden section iterations (clamped to min 20
             internally for ~1e-5 tolerance).
-        use_gpu: Whether to use GPU acceleration.
+        use_gpu: Accepted but silently ignored — NumPy backend is CPU-only.
         check_memory: Check available memory before workflow.
         show_progress: Show progress bars and GEMMA-style logging.
         lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
@@ -100,17 +123,26 @@ def run_lmm_association_jax(
             f"eigenvectors={eigenvectors is not None}"
         )
 
+    if kinship is None and eigenvalues is None:
+        raise ValueError(
+            "Either kinship or pre-computed eigendecomposition (eigenvalues + "
+            "eigenvectors) must be provided"
+        )
+
     if lmm_mode not in (1, 2, 3, 4):
         raise ValueError(
             f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
         )
+
+    if use_gpu:
+        logger.debug("use_gpu ignored for NumPy backend")
 
     # Memory check before workflow
     n_samples, n_snps = genotypes.shape
     start_time = time.perf_counter()
 
     if show_progress:
-        logger.info("Performing LMM Association Test (JAX batch)")
+        logger.info("Performing LMM Association Test (NumPy batch)")
         logger.info(f"  Total individuals: {n_samples:,}")
         logger.info(f"  Total SNPs: {n_snps:,}")
         logger.debug(
@@ -132,8 +164,6 @@ def run_lmm_association_jax(
                 f"eigenvectors={est.eigenvectors_gb:.1f}GB, "
                 f"genotypes={est.genotypes_gb:.1f}GB"
             )
-
-    placement = resolve_device_placement(use_gpu)
 
     valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
     if covariates is not None:
@@ -200,54 +230,42 @@ def run_lmm_association_jax(
         eigenvalues,
         eigenvectors,
         show_progress,
-        "lmm_jax",
+        "lmm_numpy",
         check_memory=check_memory,
     )
     del kinship
     gc.collect()
 
-    # Use all physical cores for BLAS rotation (no JAX contention)
+    # Use all physical cores for BLAS rotation
     rotation_threads = get_physical_core_count()
 
     with blas_threads(rotation_threads):
         UtW = U.T @ W
         Uty = U.T @ phenotypes
 
-    n_filtered = len(snp_indices)
-    chunk_size = _compute_chunk_size(
-        n_samples, n_filtered, n_grid, n_cvt, placement.n_devices
-    )
-
-    logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
+    logl_H0, lambda_null_mle, Hi_eval_null = _compute_null_model_common(
         lmm_mode,
         eigenvalues_np,
         UtW,
         Uty,
         n_cvt,
-        placement.rep,
         show_progress,
         l_min=l_min,
         l_max=l_max,
     )
     t_eigen_end = time.perf_counter()
 
-    eigenvalues = jax.device_put(eigenvalues_np, placement.rep)
-    UtW_jax = jax.device_put(UtW, placement.rep)
-    Uty_jax = jax.device_put(Uty, placement.rep)
+    n_filtered = len(snp_indices)
+    chunk_size = _compute_chunk_size_numpy(n_samples, n_filtered, n_cvt)
 
-    # Process in chunks if needed
     n_chunks = (n_filtered + chunk_size - 1) // chunk_size
     if show_progress:
-        from jamma.core.estimates import estimate_lmm_time
-
         logger.info(f"  Analyzed individuals: {n_samples:,}")
         logger.info(f"  Analyzed SNPs: {n_filtered:,}")
         if chunk_size < n_filtered:
             logger.info(
                 f"  Processing in {n_chunks} chunks ({chunk_size:,} SNPs/chunk)"
             )
-        est = estimate_lmm_time(n_samples, n_filtered, rotation_threads)
-        logger.info(f"  Estimated time: {est}")
 
     # Pre-allocate result arrays driven by _RESULT_FIELDS mapping
     write_offset = 0
@@ -257,93 +275,62 @@ def run_lmm_association_jax(
 
     # Timing accumulators for per-chunk phases
     t_rotation_total = 0.0
-    t_jax_compute_total = 0.0
+    t_numpy_compute_total = 0.0
     t_result_write_total = 0.0
-
-    def _impute_and_prepare(start: int) -> tuple[np.ndarray, int]:
-        """Mean-impute a genotype slice and prepare UtG for device transfer."""
-        chunk_indices = snp_indices[start : start + chunk_size]
-        geno_chunk = genotypes[:, chunk_indices]
-        chunk_means_local = col_means[chunk_indices]
-        missing = np.isnan(geno_chunk)
-        geno_chunk = np.where(missing, chunk_means_local[None, :], geno_chunk)
-        return prepare_utg_chunk(geno_chunk, U, chunk_size, placement, rotation_threads)
 
     chunk_starts = list(range(0, n_filtered, chunk_size))
 
-    # Prepare first chunk (includes BLAS rotation U.T @ G)
-    t_rot_start = time.perf_counter()
-    UtG_np, actual_len = _impute_and_prepare(chunk_starts[0])
-    t_rot_end = time.perf_counter()
-    t_rotation_total += t_rot_end - t_rot_start
-    UtG_jax = jax.device_put(UtG_np, placement.snp)
-    del UtG_np  # Safe: JAX holds internal ref during async transfer
-
-    # Create progress bar iterator
     if show_progress and n_chunks > 1:
         chunk_iterator = progress_iterator(
-            enumerate(chunk_starts), total=n_chunks, desc="LMM association"
+            chunk_starts, total=n_chunks, desc="LMM association"
         )
     else:
-        chunk_iterator = enumerate(chunk_starts)
+        chunk_iterator = iter(chunk_starts)
 
-    for i, _chunk_start in chunk_iterator:
-        actual_chunk_len = actual_len
-        current_UtG = UtG_jax
+    for chunk_start in chunk_iterator:
+        chunk_end = min(chunk_start + chunk_size, n_filtered)
+        chunk_indices = snp_indices[chunk_start:chunk_end]
+        geno_chunk = genotypes[:, chunk_indices]
 
-        # Async transfer of next chunk overlaps with current compute
-        if i + 1 < len(chunk_starts):
-            t_rot_start = time.perf_counter()
-            next_UtG_np, actual_len = _impute_and_prepare(chunk_starts[i + 1])
-            t_rot_end = time.perf_counter()
-            t_rotation_total += t_rot_end - t_rot_start
-            UtG_jax = jax.device_put(next_UtG_np, placement.snp)
-            del next_UtG_np
+        # Mean-impute missing genotypes
+        chunk_means = col_means[chunk_indices]
+        missing = np.isnan(geno_chunk)
+        geno_chunk = np.where(missing, chunk_means[None, :], geno_chunk)
 
-        # --- JAX compute timing ---
-        t_jax_start = time.perf_counter()
-        try:
-            # Batch compute Uab for this chunk (shared across all modes)
-            Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
+        # Rotate genotypes
+        t_rot_start = time.perf_counter()
+        with blas_threads(rotation_threads):
+            UtG = U.T @ geno_chunk
+        t_rotation_total += time.perf_counter() - t_rot_start
 
-            cr = _compute_lmm_chunk(
-                lmm_mode,
-                n_cvt,
-                eigenvalues,
-                Uab_batch,
-                n_samples,
-                l_min=l_min,
-                l_max=l_max,
-                n_grid=n_grid,
-                n_refine=n_refine,
-                Hi_eval_null=Hi_eval_null_jax,
-                logl_H0=logl_H0,
-            )
-            # Explicit sync before timing result write (np.asarray below also syncs,
-            # but this isolates JAX compute time accurately)
-            block_chunk_result(cr, lmm_mode)
+        # Compute Uab batch
+        t_compute_start = time.perf_counter()
+        Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
 
-        except Exception as e:
-            log_jax_error(
-                e,
-                chunk_label=f"{i + 1}/{n_chunks}",
-                chunk_snps=chunk_size,
-                n_samples=n_samples,
-                n_cvt=n_cvt,
-            )
-            raise
+        # Mode dispatch
+        cr = _compute_lmm_chunk_numpy(
+            lmm_mode,
+            n_cvt,
+            eigenvalues_np,
+            Uab_batch,
+            n_samples,
+            l_min=l_min,
+            l_max=l_max,
+            n_grid=n_grid,
+            n_refine=n_refine,
+            Hi_eval_null=Hi_eval_null,
+            logl_H0=logl_H0,
+        )
+        t_numpy_compute_total += time.perf_counter() - t_compute_start
 
-        t_jax_end = time.perf_counter()
-        t_jax_compute_total += t_jax_end - t_jax_start
-
-        # Write results, stripping padding from tail/device-alignment
+        # Write results
         t_write_start = time.perf_counter()
-        s = slice(write_offset, write_offset + actual_chunk_len)
+        actual_len = chunk_end - chunk_start
+        s = slice(write_offset, write_offset + actual_len)
         for key in arrays_out:
-            arrays_out[key][s] = np.asarray(cr[key][:actual_chunk_len])
-        write_offset += actual_chunk_len
-        t_write_end = time.perf_counter()
-        t_result_write_total += t_write_end - t_write_start
+            arrays_out[key][s] = cr[key][:actual_len]
+        write_offset += actual_len
+        t_result_write_total += time.perf_counter() - t_write_start
 
     # Validate all results were written
     if write_offset != n_filtered:
@@ -355,7 +342,7 @@ def run_lmm_association_jax(
 
     # Log memory after all chunks processed
     if show_progress:
-        log_rss_memory("lmm_jax", "after_all_chunks")
+        log_rss_memory("lmm_numpy", "after_all_chunks")
 
     # Lambda boundary convergence diagnostics
     n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
@@ -363,21 +350,17 @@ def run_lmm_association_jax(
     )
     log_lambda_boundary_warning(n_at_lmin, n_at_lmax, l_min, l_max)
 
-    # Explicit cleanup prevents SIGSEGV from GC/JAX thread race conditions
-    del eigenvalues, UtW_jax, Uty_jax
-    jax.clear_caches()
-
     # Log completion
     elapsed = time.perf_counter() - start_time
     if show_progress:
         t_eigen = t_eigen_end - t_eigen_start
         accounted = (
-            t_eigen + t_rotation_total + t_jax_compute_total + t_result_write_total
+            t_eigen + t_rotation_total + t_numpy_compute_total + t_result_write_total
         )
         logger.info("Timing breakdown:")
         logger.info(f"  Setup (eigen+null):  {t_eigen:.2f}s")
         logger.info(f"  UT@G rotation:       {t_rotation_total:.2f}s")
-        logger.info(f"  JAX compute:         {t_jax_compute_total:.2f}s")
+        logger.info(f"  NumPy compute:       {t_numpy_compute_total:.2f}s")
         logger.info(f"  Result write:        {t_result_write_total:.2f}s")
         logger.info("  ----")
         logger.info(f"  Accounted:           {accounted:.2f}s")

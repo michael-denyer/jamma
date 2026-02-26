@@ -20,6 +20,8 @@ from jamma.lmm.likelihood_jax import (
 )
 from jamma.lmm.stats import calc_wald_test
 
+pytestmark = pytest.mark.requires_jax
+
 
 def _make_test_data(n_samples=50, n_cvt=1, rng_seed=42):
     """Create synthetic eigenvalues, UtW, Uty, Utx for testing."""

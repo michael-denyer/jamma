@@ -23,6 +23,8 @@ from jamma.kinship import (
     compute_loco_kinship_streaming,
 )
 
+pytestmark = pytest.mark.requires_jax
+
 # ---------------------------------------------------------------------------
 # Fixture paths
 # ---------------------------------------------------------------------------

@@ -47,6 +47,15 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
+def pytest_runtest_setup(item):
+    """Auto-skip tests marked requires_jax when JAX is not installed."""
+    if any(m.name == "requires_jax" for m in item.iter_markers()):
+        try:
+            import jax  # noqa: F401
+        except ImportError:
+            pytest.skip("JAX not installed — install with: pip install jamma[jax]")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _configure_jax_for_tests():
     """Ensure JAX 64-bit precision is configured for all tests.
@@ -54,10 +63,17 @@ def _configure_jax_for_tests():
     Previously, importing jamma.kinship.compute triggered module-level
     configure_jax(). Now that side effects are removed, this fixture
     provides the same guarantee explicitly.
-    """
-    from jamma.core.jax_config import ensure_jax_configured
 
-    ensure_jax_configured()
+    When JAX is not installed (NumPy-only environment), this fixture
+    silently passes — tests that need JAX will fail with their own
+    ImportError, providing clear error messages.
+    """
+    try:
+        from jamma.core.jax_config import ensure_jax_configured
+
+        ensure_jax_configured()
+    except ImportError:
+        pass  # JAX not installed; NumPy backend tests run without configuration
 
 
 @pytest.fixture
@@ -116,6 +132,11 @@ def validation_pipeline_data():
 
     if not reference_assoc.exists():
         return None
+
+    try:
+        import jax  # noqa: F401
+    except ImportError:
+        return None  # JAX not installed; validation tests will skip
 
     from jamma.io import load_plink_binary
     from jamma.kinship.io import read_kinship_matrix

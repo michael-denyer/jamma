@@ -52,7 +52,7 @@ def compute_snp_stats(
         1-D array of length n_snps.
     """
     miss_counts = np.sum(np.isnan(genotypes), axis=0)
-    with np.errstate(invalid="ignore"):
+    with np.errstate(invalid="ignore", divide="ignore"):
         col_means = np.nanmean(genotypes, axis=0)
         col_vars = np.nanvar(genotypes, axis=0)
     col_means = np.nan_to_num(col_means, nan=0.0)

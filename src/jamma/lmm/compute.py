@@ -113,8 +113,8 @@ def _compute_lmm_chunk(
     *,
     l_min: float = 1e-5,
     l_max: float = 1e5,
-    n_grid: int = 100,
-    n_refine: int = 5,
+    n_grid: int = 50,
+    n_refine: int = 10,
     Hi_eval_null: jax.Array | None = None,
     logl_H0: float | None = None,
 ) -> dict[str, jax.Array | None]:

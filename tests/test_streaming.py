@@ -18,6 +18,8 @@ from jamma.io.plink import (
 from jamma.kinship.compute import compute_centered_kinship, compute_kinship_streaming
 from jamma.lmm import run_lmm_association_jax, run_lmm_association_streaming
 
+pytestmark = pytest.mark.requires_jax
+
 
 def _build_snp_info(data) -> list[dict]:
     """Build snp_info list from plink data for test use."""

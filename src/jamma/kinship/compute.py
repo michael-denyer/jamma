@@ -26,13 +26,15 @@ import gc
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import jax.numpy as jnp
 import numpy as np
+
+if TYPE_CHECKING:
+    import jax.numpy as jnp
 import psutil
 from loguru import logger
 
-from jamma.core import ensure_jax_configured
 from jamma.core.memory import (
     check_memory_available,
     estimate_eigendecomp_memory,
@@ -333,6 +335,10 @@ def compute_loco_kinship(
         ValueError: If no SNPs pass filtering, or if all filtered SNPs are on
             a single chromosome (cannot compute LOCO).
     """
+    import jax.numpy as jnp
+
+    from jamma.core import ensure_jax_configured
+
     ensure_jax_configured()
 
     n_samples, n_snps_original = genotypes.shape
@@ -740,6 +746,8 @@ def _stream_s_full_and_chr(
     Returns:
         (S_full or None, dict of chr_name -> S_chr)
     """
+    import jax.numpy as jnp
+
     S_full = (
         jnp.zeros((n_samples, n_samples), dtype=jnp.float64) if S_full_accum else None
     )
@@ -830,6 +838,8 @@ def compute_loco_kinship_streaming(
         ValueError: If no SNPs pass filtering, or if all filtered SNPs are on
             a single chromosome.
     """
+    from jamma.core import ensure_jax_configured
+
     ensure_jax_configured()
 
     start_time = time.perf_counter()

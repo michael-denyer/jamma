@@ -25,12 +25,40 @@ jobs:
       - name: Lint and format check via pre-commit
         run: uv run pre-commit run --all-files
 
-  test-fast:
-    runs-on: ubuntu-latest
+  test:
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
-
+        include:
+          - os: ubuntu-latest
+            python-version: "3.12"
+            install_args: "--extra jax --extra dev"
+            name: "Linux + JAX"
+          - os: ubuntu-latest
+            python-version: "3.12"
+            install_args: "--extra dev"
+            name: "Linux + NumPy"
+            pytest_args: "-m 'not tier2 and not slow and not requires_jax'"
+          - os: ubuntu-latest
+            python-version: "3.11"
+            install_args: "--extra jax --extra dev"
+            name: "Linux + JAX (3.11)"
+          - os: windows-latest
+            python-version: "3.12"
+            install_args: "--extra dev"
+            name: "Windows + NumPy"
+            pytest_args: "-m 'not tier2 and not slow and not requires_jax'"
+          - os: macos-13
+            python-version: "3.12"
+            install_args: "--extra dev"
+            name: "Intel Mac + NumPy"
+            pytest_args: "-m 'not tier2 and not slow and not requires_jax'"
+          - os: macos-latest
+            python-version: "3.12"
+            install_args: "--extra jax --extra dev"
+            name: "ARM Mac + JAX"
+    name: ${{ matrix.name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -41,10 +69,10 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync ${{ matrix.install_args }}
 
-      - name: Run fast tests
-        run: uv run pytest -m "not tier2 and not slow" -v --cov=src/jamma --cov-report=term-missing
+      - name: Run tests
+        run: uv run pytest ${{ matrix.pytest_args || '-m "not tier2 and not slow"' }} -v --cov=src/jamma --cov-report=term-missing
 
   test-slow:
     runs-on: ubuntu-latest

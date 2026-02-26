@@ -1,15 +1,15 @@
 """Wald test statistics computation for LMM association.
 
 Implements the Wald test formula from GEMMA's CalcRLWald function.
-Uses JAX's betainc for the F-distribution survival function.
+Uses pure-stdlib betainc (Cephes CF) for the F-distribution survival function.
 """
 
 from dataclasses import dataclass
 
 import numpy as np
-from jax.scipy.special import betainc
 
 from jamma.lmm.likelihood import calc_pab, get_ab_index
+from jamma.lmm.special import betainc, chi2_sf
 
 
 def _safe_sqrt(d: float) -> float:
@@ -65,7 +65,7 @@ class AssocResult:
 
 
 def f_sf(x: float, df1: float, df2: float) -> float:
-    """F-distribution survival function using JAX betainc.
+    """F-distribution survival function using regularized incomplete beta.
 
     Computes P(F > x) for F-distributed random variable with df1 and df2
     degrees of freedom. Uses the regularized incomplete beta function
@@ -90,7 +90,8 @@ def f_sf(x: float, df1: float, df2: float) -> float:
         return 0.0
 
     z = df2 / (df2 + df1 * x)
-    result = betainc(df2 / 2.0, df1 / 2.0, z)
+    complement_z = df1 * x / (df2 + df1 * x)
+    result = betainc(df2 / 2.0, df1 / 2.0, z, complement_z=complement_z)
 
     return float(result)
 
@@ -220,9 +221,7 @@ def calc_lrt_test(
         return 1.0
 
     # Chi-squared survival function with df=1
-    from jax.scipy.stats import chi2
-
-    p_lrt = chi2.sf(lrt_stat, df=1)
+    p_lrt = chi2_sf(lrt_stat)
 
     return float(p_lrt)
 

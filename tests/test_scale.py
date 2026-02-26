@@ -11,6 +11,8 @@ import numpy as np
 import psutil
 import pytest
 
+pytest.importorskip("jax")
+
 from jamma.core.memory import estimate_workflow_memory
 from jamma.kinship import compute_centered_kinship
 from jamma.lmm.runner_jax import run_lmm_association_jax

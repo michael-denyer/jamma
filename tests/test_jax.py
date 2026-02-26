@@ -5,9 +5,12 @@ for JAMMA numerical computations, including 64-bit precision,
 JIT compilation, and linear algebra operations.
 """
 
+import pytest
+
+pytest.importorskip("jax")
+
 import jax
 import jax.numpy as jnp
-import pytest
 
 from jamma.core import get_jax_info, verify_jax_installation
 

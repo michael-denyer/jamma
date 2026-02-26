@@ -10,6 +10,8 @@ Covers critical test gaps identified in the codebase audit:
 import numpy as np
 import pytest
 
+pytest.importorskip("jax")
+
 from jamma.lmm.likelihood import (
     _clamp_p_yy,
     _golden_section_minimize,

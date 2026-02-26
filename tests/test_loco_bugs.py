@@ -1,8 +1,11 @@
 """Tests for LOCO kinship bugs: aliasing, chromosome ordering, partial cleanup."""
 
-import jax.numpy as jnp
 import numpy as np
 import pytest
+
+pytest.importorskip("jax")
+
+import jax.numpy as jnp
 
 from jamma.kinship.compute import _yield_full_kinship_fallback, _yield_loco_matrices
 from jamma.utils import chr_sort_key

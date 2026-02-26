@@ -12,10 +12,13 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+pytest.importorskip("jax")
+
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 
 from jamma.core.jax_config import _configure_cpu_devices, get_jax_info
 from jamma.core.threading import get_blas_thread_count

@@ -4,9 +4,12 @@ Tests cover: negative P_yy handling, degenerate SNPs (Wald/LRT),
 batch assembly correctness, and near-zero eigenvalue stability.
 """
 
-import jax.numpy as jnp
 import numpy as np
 import pytest
+
+pytest.importorskip("jax")
+
+import jax.numpy as jnp
 
 from jamma.lmm.likelihood import (
     calc_pab,

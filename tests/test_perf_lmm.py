@@ -14,9 +14,12 @@ synchronization.
 import time
 from pathlib import Path
 
-import jax
 import numpy as np
 import pytest
+
+pytest.importorskip("jax")
+
+import jax
 
 from jamma.core.hardware import assert_x64_precision, get_hardware_context
 from jamma.core.threading import blas_threads

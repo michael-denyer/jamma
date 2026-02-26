@@ -226,7 +226,7 @@ wheels = [
 
 [[package]]
 name = "jamma"
-version = "2.5.8"
+version = "2.6.1"
 source = { editable = "." }
 dependencies = [
     { name = "bed-reader" },

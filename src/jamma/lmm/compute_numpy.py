@@ -103,7 +103,7 @@ def _compute_lrt_numpy(
         l_min=l_min,
         l_max=l_max,
         n_grid=n_grid,
-        n_iter=max(n_refine, 20),
+        n_iter=n_refine,  # callee enforces min 20
     )
     p_lrts = _batch_lrt_pvalues_numpy(logls_mle, logl_H0)
     return {"lambdas_mle": lambdas_mle, "p_lrts": p_lrts}
@@ -141,8 +141,8 @@ def _compute_lmm_chunk_numpy(
     *,
     l_min: float = 1e-5,
     l_max: float = 1e5,
-    n_grid: int = 100,
-    n_refine: int = 5,
+    n_grid: int = 50,
+    n_refine: int = 10,
     Hi_eval_null: np.ndarray | None = None,
     logl_H0: float | None = None,
 ) -> dict[str, np.ndarray | None]:
@@ -229,6 +229,11 @@ def _compute_lmm_chunk_numpy(
             _compute_wald_numpy(
                 n_cvt, eigenvalues, Uab_batch, n_samples, l_min, l_max, n_grid, n_refine
             )
+        )
+
+    else:
+        raise ValueError(
+            f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
         )
 
     return result

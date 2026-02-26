@@ -157,3 +157,12 @@ class TestCrossBackend:
         """Score test: JAX vs NumPy produce equivalent results."""
         jax_r, np_r = self._run_both(cross_backend_data, 3)
         self._compare(jax_r, np_r, ["p_score", "l_remle"])
+
+    def test_all_cross_backend(self, cross_backend_data):
+        """Mode 4 (All): JAX vs NumPy produce equivalent Wald+LRT+Score results."""
+        jax_r, np_r = self._run_both(cross_backend_data, 4)
+        self._compare(
+            jax_r,
+            np_r,
+            ["beta", "se", "p_wald", "p_lrt", "p_score", "logl_H1", "l_remle"],
+        )

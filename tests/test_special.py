@@ -6,8 +6,8 @@ Covers:
   - SPEC-03: betainc matches scipy.special.betainc to 1e-10 rtol across JAMMA parameter
              ranges (a=df/2 for df 10-100000, b=0.5)
   - ISOL-01/02/04: import isolation — stats.py and results.py have no module-level JAX
-             imports (Plan 34-02 completed); subprocess tests xfail pending Phase 36
-             (DEPS-01) to make JAX an optional extra in jamma/__init__.py.
+             imports (Plan 34-02 completed). Phase 36 made JAX an optional extra so
+             subprocess import tests now pass without xfail.
 """
 
 from __future__ import annotations
@@ -61,6 +61,24 @@ class TestBetaincInterface:
     def test_betainc_edge_z_one(self):
         """betainc(a, b, 1.0) == 1.0 for any valid a, b."""
         assert betainc(1.0, 1.0, 1.0) == 1.0
+
+    def test_betainc_non_convergence_returns_nan(self):
+        """T5: betainc returns NaN (not ArithmeticError) when CF fails to converge.
+
+        Pathological inputs can cause the continued fraction to not converge
+        within _CF_MAX_ITER iterations. The ArithmeticError is caught internally
+        and NaN is returned, preventing a single degenerate SNP from killing
+        an entire GWAS run.
+        """
+        from unittest.mock import patch
+
+        # Mock _betainc_cf to raise ArithmeticError (simulating non-convergence)
+        with patch(
+            "jamma.lmm.special._betainc_cf",
+            side_effect=ArithmeticError("mock: CF did not converge"),
+        ):
+            result = betainc(5.0, 0.5, 0.3)
+            assert np.isnan(result), f"Expected NaN for non-convergent CF, got {result}"
 
     def test_betainc_raises_z_below_zero(self):
         """betainc raises ValueError when z < 0."""
@@ -238,6 +256,11 @@ class TestChi2SF:
         """chi2_sf(inf) == 0.0 (no mass above infinity)."""
         assert chi2_sf(float("inf")) == 0.0
 
+    def test_chi2_sf_nan_returns_nan(self):
+        """T4: chi2_sf(NaN) returns NaN (propagates degenerate SNP values)."""
+        result = chi2_sf(float("nan"))
+        assert np.isnan(result), f"Expected NaN, got {result}"
+
     def test_chi2_sf_raises_df_not_one(self):
         """chi2_sf raises ValueError when df != 1."""
         with pytest.raises(ValueError, match="df=1"):
@@ -258,14 +281,10 @@ class TestImportIsolation:
     """ISOL-01/02/04: jamma.lmm.stats and results importable without JAX.
 
     These tests use subprocess with a mock JAX that raises ImportError to
-    simulate a JAX-free environment. Plan 34-02 removed module-level JAX imports
-    from stats.py and results.py, but jamma/__init__.py still eagerly imports
-    jax_config (required until Phase 36 DEPS-01 makes JAX an optional extra).
-
-    Marked xfail(strict=False):
-    - test_stats/results: fail because jamma/__init__ traversal hits jax_config
-    - test_no_module_level_jax_in_lmm: fail because runner_jax.py etc. correctly
-      use module-level JAX imports
+    simulate a JAX-free environment. Phase 36 made JAX optional: stats.py
+    and results.py import cleanly without JAX. test_no_module_level_jax_in_lmm
+    is xfail(strict=True) because runner_jax.py etc. correctly use module-level
+    JAX imports — the test scope is intentionally too broad.
     """
 
     def _make_mock_jax_path(self, tmp_path: str) -> str:
@@ -302,13 +321,6 @@ class TestImportIsolation:
             env["PYTHONPATH"] = f"{mock_jax_path}:{src_path}"
         return env
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason=(
-            "jamma/__init__.py eagerly imports jax_config; full JAX decoupling "
-            "requires Phase 36 (DEPS-01) to make JAX an optional extra"
-        ),
-    )
     def test_stats_importable_without_jax(self):
         """from jamma.lmm.stats import AssocResult succeeds without JAX installed.
 
@@ -330,13 +342,6 @@ class TestImportIsolation:
                 f"stderr: {result.stderr}"
             )
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason=(
-            "jamma/__init__.py eagerly imports jax_config; full JAX decoupling "
-            "requires Phase 36 (DEPS-01) to make JAX an optional extra"
-        ),
-    )
     def test_results_importable_without_jax(self):
         """from jamma.lmm.results import _build_results succeeds without JAX installed.
 
@@ -363,7 +368,7 @@ class TestImportIsolation:
             )
 
     @pytest.mark.xfail(
-        strict=False,
+        strict=True,
         reason=(
             "runner_jax.py, likelihood_jax.py etc. correctly have module-level "
             "JAX imports; scope is too broad. stats.py/results.py isolation "

@@ -26,11 +26,11 @@ from jamma.lmm.prepare import (
     resolve_device_placement,
 )
 from jamma.lmm.results import (
-    _RESULT_FIELDS,
     _build_results,
     count_lambda_boundary_hits,
     log_lambda_boundary_warning,
 )
+from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
 
@@ -38,7 +38,7 @@ from jamma.utils.logging import log_rss_memory
 def run_lmm_association_jax(
     genotypes: np.ndarray,
     phenotypes: np.ndarray,
-    kinship: np.ndarray,
+    kinship: np.ndarray | None,
     snp_info: list,
     covariates: np.ndarray | None = None,
     eigenvalues: np.ndarray | None = None,
@@ -63,10 +63,11 @@ def run_lmm_association_jax(
     Args:
         genotypes: Genotype matrix (n_samples, n_snps) with values 0, 1, 2.
         phenotypes: Phenotype vector (n_samples,).
-        kinship: Kinship matrix (n_samples, n_samples). WARNING: may be
-            overwritten in-place during eigendecomposition (buffer reused for
-            eigenvectors). Treat as consumed; pass kinship.copy() if you need
-            the original matrix after this call.
+        kinship: Kinship matrix (n_samples, n_samples) or None when
+            pre-computed eigenvalues/eigenvectors are provided. WARNING: may
+            be overwritten in-place during eigendecomposition (buffer reused
+            for eigenvectors). Treat as consumed; pass kinship.copy() if you
+            need the original matrix after this call.
         snp_info: List of dicts with keys: chr, rs, pos, a1, a0.
         covariates: Covariate matrix (n_samples, n_cvt) or None for intercept-only.
         eigenvalues: Pre-computed eigenvalues (sorted ascending) or None.
@@ -116,21 +117,21 @@ def run_lmm_association_jax(
             f"MAF threshold = {maf_threshold}, missing threshold = {miss_threshold}"
         )
 
-    # Always log memory estimate (useful even without hard check)
-    est = estimate_lmm_memory(n_samples, n_snps)
-    logger.info(
-        f"LMM memory: estimated {est.total_gb:.1f}GB, "
-        f"available {est.available_gb:.1f}GB"
-    )
-    if check_memory and not est.sufficient:
-        raise MemoryError(
-            f"Insufficient memory for LMM workflow with {n_samples:,} samples × "
-            f"{n_snps:,} SNPs.\n"
-            f"Need: {est.total_gb:.1f}GB, Available: {est.available_gb:.1f}GB\n"
-            f"Breakdown: kinship={est.kinship_gb:.1f}GB, "
-            f"eigenvectors={est.eigenvectors_gb:.1f}GB, "
-            f"genotypes={est.genotypes_gb:.1f}GB"
+    if check_memory:
+        est = estimate_lmm_memory(n_samples, n_snps)
+        logger.info(
+            f"LMM memory: estimated {est.total_gb:.1f}GB, "
+            f"available {est.available_gb:.1f}GB"
         )
+        if not est.sufficient:
+            raise MemoryError(
+                f"Insufficient memory for LMM workflow with {n_samples:,} samples × "
+                f"{n_snps:,} SNPs.\n"
+                f"Need: {est.total_gb:.1f}GB, Available: {est.available_gb:.1f}GB\n"
+                f"Breakdown: kinship={est.kinship_gb:.1f}GB, "
+                f"eigenvectors={est.eigenvectors_gb:.1f}GB, "
+                f"genotypes={est.genotypes_gb:.1f}GB"
+            )
 
     placement = resolve_device_placement(use_gpu)
 
@@ -141,7 +142,8 @@ def run_lmm_association_jax(
     if not np.all(valid_mask):
         genotypes = genotypes[valid_mask, :]
         phenotypes = phenotypes[valid_mask]
-        kinship = kinship[np.ix_(valid_mask, valid_mask)]
+        if kinship is not None:
+            kinship = kinship[np.ix_(valid_mask, valid_mask)]
         if covariates is not None:
             covariates = covariates[valid_mask, :]
 
@@ -151,6 +153,25 @@ def run_lmm_association_jax(
             "No valid samples: all phenotypes are missing or -9"
             + (", or all have missing covariates" if covariates is not None else "")
         )
+
+    # Validate precomputed eigenpair dimensions against (possibly filtered) n_samples
+    if eigenvalues is not None and eigenvectors is not None:
+        hint = (
+            "Recompute eigenpairs on the filtered kinship, or pass kinship= "
+            "and let JAMMA compute the eigendecomposition."
+        )
+        if eigenvalues.shape[0] != n_samples:
+            raise ValueError(
+                f"eigenvalues length ({eigenvalues.shape[0]}) does not match "
+                f"n_samples ({n_samples}) after removing missing "
+                f"phenotypes/covariates. {hint}"
+            )
+        if eigenvectors.shape != (n_samples, n_samples):
+            raise ValueError(
+                f"eigenvectors shape {eigenvectors.shape} does not match "
+                f"({n_samples}, {n_samples}) after removing missing "
+                f"phenotypes/covariates. {hint}"
+            )
 
     W, n_cvt = _build_covariate_matrix(covariates, n_samples)
 
@@ -162,6 +183,11 @@ def run_lmm_association_jax(
     snp_indices = np.where(snp_mask)[0]
 
     if len(snp_indices) == 0:
+        logger.warning(
+            f"All {n_snps} SNPs filtered out (MAF>{maf_threshold}, "
+            f"miss<{miss_threshold}). No association tests to run. "
+            f"Consider relaxing --maf or --miss thresholds."
+        )
         return []
 
     # Extract filtered stats as numpy arrays (use allele_freqs for output, not mafs)

@@ -15,25 +15,25 @@ class TestBackendInfo:
 
         assert isinstance(info, dict)
         assert "selected" in info
-        assert "gpu_available" in info
-        # Should only have these two keys
-        assert set(info.keys()) == {"selected", "gpu_available"}
+        assert "jax_available" in info
+        assert set(info.keys()) == {"selected", "jax_available"}
 
     def test_selected_is_valid_backend(self):
         """Selected backend should be 'jax' or 'numpy'."""
         info = get_backend_info()
         assert info["selected"] in ("jax", "numpy")
 
-    def test_gpu_available_is_bool(self):
-        """gpu_available should be a boolean."""
+    def test_jax_available_is_bool(self):
+        """jax_available should be a boolean."""
         info = get_backend_info()
-        assert isinstance(info["gpu_available"], bool)
+        assert isinstance(info["jax_available"], bool)
 
 
 @pytest.mark.tier0
 class TestDetectBackend:
     """Tests for detect_backend() function."""
 
+    @pytest.mark.requires_jax
     def test_auto_returns_jax_when_available(self):
         """detect_backend('auto') returns 'jax' in dev env where JAX is installed."""
         result = detect_backend("auto")
@@ -44,6 +44,7 @@ class TestDetectBackend:
         result = detect_backend("numpy")
         assert result == "numpy"
 
+    @pytest.mark.requires_jax
     def test_jax_returns_jax_when_available(self):
         """detect_backend('jax') returns 'jax' in dev env where JAX is installed."""
         result = detect_backend("jax")
@@ -60,6 +61,7 @@ class TestDetectBackend:
         result = detect_backend("jax")
         assert result == "numpy"
 
+    @pytest.mark.requires_jax
     def test_env_var_jax_overrides_auto(self, monkeypatch):
         """JAMMA_BACKEND=jax overrides detect_backend('auto') explicitly."""
         monkeypatch.setenv("JAMMA_BACKEND", "jax")
@@ -71,6 +73,33 @@ class TestDetectBackend:
         monkeypatch.setenv("JAMMA_BACKEND", "spark")
         with pytest.raises(ValueError, match="Unknown backend"):
             detect_backend("auto")
+
+
+@pytest.mark.tier0
+class TestDetectBackendJaxAbsent:
+    """T1: detect_backend('jax') raises ValueError when JAX is absent."""
+
+    def test_jax_requested_when_absent_raises(self, monkeypatch):
+        """detect_backend('jax') raises ValueError when JAX import fails."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "jax":
+                raise ImportError("mock: jax not installed")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+        # Clear the has_jax cache so detect_backend re-probes
+        from jamma.core import backend
+
+        backend.has_jax.cache_clear()
+        try:
+            with pytest.raises(ValueError, match="JAX is not installed"):
+                detect_backend("jax")
+        finally:
+            backend.has_jax.cache_clear()
 
 
 @pytest.mark.tier0

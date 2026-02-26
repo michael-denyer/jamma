@@ -136,16 +136,25 @@ from jamma.lmm import run_lmm_association_numpy
 from jamma.lmm.eigen import eigendecompose_kinship
 
 data = load_plink_binary("data/my_study")
+phenotypes = np.loadtxt("data/my_study.pheno")
 kinship = compute_centered_kinship(data.genotypes)
 eigenvalues, eigenvectors = eigendecompose_kinship(kinship)
 
-results, n_tested = run_lmm_association_numpy(
+snp_info = [
+    {"chr": str(data.chromosome[i]), "rs": data.sid[i],
+     "pos": int(data.bp_position[i]), "a1": data.allele_1[i], "a0": data.allele_2[i]}
+    for i in range(data.n_snps)
+]
+
+# Returns list[AssocResult] — write to disk via IncrementalAssocWriter
+results = run_lmm_association_numpy(
     genotypes=data.genotypes,
-    phenotypes=np.loadtxt("data/my_study.pheno"),
+    phenotypes=phenotypes,
+    kinship=None,  # Not needed when eigenvalues/eigenvectors provided
+    snp_info=snp_info,
     eigenvalues=eigenvalues,
     eigenvectors=eigenvectors,
     lmm_mode=1,
-    output_path="output/results.assoc.txt",
 )
 ```
 
@@ -212,6 +221,24 @@ Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2:
 ### Planned
 
 - [ ] Multivariate LMM (mvLMM)
+
+## Architecture
+
+JAMMA uses a dual-backend architecture: a **JAX backend** for GPU/multi-core acceleration and a **NumPy backend** that works everywhere with zero extra dependencies.
+
+```mermaid
+flowchart LR
+    CLI["CLI / gwas()"] --> PIPE["PipelineRunner"]
+    PIPE --> DET{"detect_backend()"}
+    DET -->|"jax"| JAX["JAX Backend<br>JIT + vmap + sharding"]
+    DET -->|"numpy"| NP["NumPy Backend<br>pure stdlib"]
+    JAX --> RES["AssocResult"]
+    NP --> RES
+```
+
+Both backends share the same core algorithms ([likelihood.py](src/jamma/lmm/likelihood.py), [prepare_common.py](src/jamma/lmm/prepare_common.py)) and produce identical results. Backend-specific files follow a naming convention: `*_jax.py` / `*_numpy.py`.
+
+See [Code Map](docs/CODEMAP.md) for the full architecture diagram with source links.
 
 ## Documentation
 

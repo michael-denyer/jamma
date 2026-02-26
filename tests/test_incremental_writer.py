@@ -291,6 +291,51 @@ class TestIncrementalAssocWriter:
             "Partial file should be deleted on context exit with OSError"
         )
 
+    def test_retains_partial_on_keyboard_interrupt(
+        self, tmp_path: Path, sample_result: AssocResult
+    ):
+        """Partial file retained (not deleted) on KeyboardInterrupt."""
+        output_path = tmp_path / "test.assoc.txt"
+
+        with pytest.raises(KeyboardInterrupt):
+            with IncrementalAssocWriter(output_path) as writer:
+                writer.write(sample_result)
+                raise KeyboardInterrupt()
+
+        assert output_path.exists(), "Partial file should be retained on interrupt"
+        content = output_path.read_text()
+        assert "rs12345" in content
+
+    def test_retains_partial_on_system_exit(
+        self, tmp_path: Path, sample_result: AssocResult
+    ):
+        """Partial file retained (not deleted) on SystemExit (e.g. SIGTERM)."""
+        output_path = tmp_path / "test.assoc.txt"
+
+        with pytest.raises(SystemExit):
+            with IncrementalAssocWriter(output_path) as writer:
+                writer.write(sample_result)
+                raise SystemExit(1)
+
+        assert output_path.exists(), "Partial file should be retained on SystemExit"
+        content = output_path.read_text()
+        assert "rs12345" in content
+
+    def test_cleanup_on_computation_error(
+        self, tmp_path: Path, sample_result: AssocResult
+    ):
+        """Partial file deleted for any Exception subclass (computation error)."""
+        output_path = tmp_path / "test.assoc.txt"
+
+        with pytest.raises(ValueError, match="bad data"):
+            with IncrementalAssocWriter(output_path) as writer:
+                writer.write(sample_result)
+                raise ValueError("bad data")
+
+        assert not output_path.exists(), (
+            "Partial file should be deleted on computation error"
+        )
+
     def test_write_batch_retries_on_flaky_write(
         self, tmp_path: Path, sample_results: list
     ):
@@ -432,3 +477,71 @@ class TestIncrementalAssocWriter:
         assert not output_path.exists(), (
             "Partial output file should be deleted after exhausting retries"
         )
+
+    def test_retains_partial_on_memory_error(
+        self, tmp_path: Path, sample_result: AssocResult
+    ):
+        """Partial file retained on MemoryError (valid data, resource exhaustion)."""
+        output_path = tmp_path / "test.assoc.txt"
+
+        with pytest.raises(MemoryError):
+            with IncrementalAssocWriter(output_path) as writer:
+                writer.write(sample_result)
+                raise MemoryError("OOM at 90% completion")
+
+        assert output_path.exists(), "Partial file should be retained on MemoryError"
+        content = output_path.read_text()
+        assert "rs12345" in content
+
+    def test_retains_partial_on_generator_exit(
+        self, tmp_path: Path, sample_result: AssocResult
+    ):
+        """GeneratorExit (other BaseException) retains partial file."""
+        output_path = tmp_path / "test.assoc.txt"
+
+        with pytest.raises(GeneratorExit):
+            with IncrementalAssocWriter(output_path) as writer:
+                writer.write(sample_result)
+                raise GeneratorExit()
+
+        assert output_path.exists(), "Partial file should be retained on GeneratorExit"
+        content = output_path.read_text()
+        assert "rs12345" in content
+
+    def test_flush_failure_on_normal_exit_raises(
+        self, tmp_path: Path, sample_result: AssocResult
+    ):
+        """OSError during flush on normal exit propagates (not silently swallowed)."""
+        output_path = tmp_path / "test.assoc.txt"
+
+        with pytest.raises(OSError, match="Disk full"):
+            with IncrementalAssocWriter(output_path) as writer:
+                writer.write(sample_result)
+
+                def failing_flush():
+                    raise OSError("Disk full")
+
+                writer._file.flush = failing_flush
+
+        # Partial file should be cleaned up
+        assert not output_path.exists(), (
+            "Partial output should be deleted after flush failure"
+        )
+
+    def test_keyboard_interrupt_with_close_failure(
+        self, tmp_path: Path, sample_result: AssocResult
+    ):
+        """OSError during file.close() on interrupt does not mask KeyboardInterrupt."""
+        output_path = tmp_path / "test.assoc.txt"
+
+        with pytest.raises(KeyboardInterrupt):
+            with IncrementalAssocWriter(output_path) as writer:
+                writer.write(sample_result)
+                original_close = writer._file.close
+
+                def failing_close():
+                    original_close()
+                    raise OSError("Stale NFS file handle")
+
+                writer._file.close = failing_close
+                raise KeyboardInterrupt()

@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-02-26
+
+### Added
+
+- **Runtime buffer mismatch detection**: If `eigh_lo` ignores the `out=` parameter
+  (future numpy change), `INPLACE_EIGEN_AVAILABLE` flag is set False at runtime
+  and memory estimates automatically correct to include separate eigenvector allocation
+- Tests for buffer mismatch flag update, fallback memory estimates, guard clauses,
+  safety margin cap, ImportError logging in `_inplace_eigen_available()`
+- Tests for LOCO kinship bugs: aliasing, chromosome ordering, fallback normalization,
+  n_filtered=0 guard, GeneratorExit partial retention, flush failure propagation,
+  `_dsyevd_workspace_gb` formula (LIWORK uses 8-byte integers)
+
+### Changed
+
+- `chr_sort_key` extracted from `loco.py` to `utils/__init__.py` (DRY — used by
+  both loco.py and kinship/compute.py); unknown chromosome sentinel raised from
+  100 to 1000 (supports species with >99 numeric chromosomes)
+- Memory safety margin capped at 10GB absolute (was unbounded 10%, which
+  demanded 50GB+ headroom at scale)
+- Memory estimates adapt to in-place vs fallback eigendecomp path at runtime
+- `IncrementalAssocWriter.__exit__` cleans up partial output on any `Exception`
+  subclass (was OSError-only); retains partial output on `KeyboardInterrupt`,
+  `SystemExit`, and `MemoryError` (partial results are valid up to point of failure)
+- Docstrings clarified: K "may be overwritten" / "treat as consumed" (was
+  unconditional "OVERWRITTEN" which was inaccurate for fallback path)
+- `_inplace_eigen_available()` ImportError logged at warning (was info) — indicates
+  broken installation
+- In-place eigendecomp fallback logged at warning (was info) — 320GB impact at scale
+- Unknown chromosome names logged at info (was debug) — aids debugging LOCO issues
+- `pipeline.py` XLA profiling catch narrowed to `(OSError, ImportError, AttributeError)`
+  (was bare `except Exception`)
+- `S_full_np` marked read-only after in-place division in `_yield_loco_matrices`
+  to guard against accidental re-mutation
+- LOCO `write_kinship_matrix` error includes chromosome name and path for diagnostics
+
+### Fixed
+
+- **`IncrementalAssocWriter.__exit__` flush failure silently deleted output** — now
+  raises after cleanup so callers know the write failed (was `logger.warning` + return)
+- `_format_duration` produced "2h 60m" for durations near hour boundaries and
+  "60 min" at exactly 3599s due to `:.0f` rounding (now uses integer truncation
+  throughout)
+- README Low-level API example passed consumed kinship matrix to streaming runner
+  (now correctly passes eigenvalues/eigenvectors); added missing `import numpy as np`
+- `test_runner_jax.py` passed mutated K as kinship to runner (added `.copy()`)
+- `_yield_full_kinship_fallback` held persistent `K_full` alongside `S_full_np`
+  while consumer processed yielded matrix (3 n×n matrices live). Now divides
+  `S_full_np` in-place once and yields `.copy()` per chromosome (2 matrices
+  live at yield: modified `S_full_np` + the copy), matching the LOCO memory
+  gate budget
+- Stale field comments on `MemoryBreakdown.sufficient` and
+  `StreamingMemoryBreakdown.sufficient` (referenced old `total * 1.1` formula)
+- Inaccurate comments: plink.py "two boolean ops" (actually 3), eigen.py
+  "re-imports each call" (reads module attribute), CHANGELOG fallback description
+
 ## [2.5.8] - 2026-02-25
 
 ### Changed
@@ -638,7 +694,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
-[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.5.7...HEAD
+[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.5.8...HEAD
+[2.5.8]: https://github.com/michael-denyer/jamma/compare/v2.5.7...v2.5.8
 [2.5.7]: https://github.com/michael-denyer/jamma/compare/v2.5.6...v2.5.7
 [2.5.6]: https://github.com/michael-denyer/jamma/compare/v2.5.5...v2.5.6
 [2.5.5]: https://github.com/michael-denyer/jamma/compare/v2.5.4...v2.5.5

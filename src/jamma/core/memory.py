@@ -12,9 +12,10 @@ from loguru import logger
 
 
 def _dsyevd_workspace_gb(n: int) -> float:
-    """DSYEVD workspace: LWORK=(1+6N+2N^2) doubles, LIWORK=(3+5N) ints."""
+    """DSYEVD workspace in GB: (1+6N+2N^2) float64s + (3+5N) int64s (upper bound)."""
     lwork_bytes = (1 + 6 * n + 2 * n * n) * 8  # float64
-    liwork_bytes = (3 + 5 * n) * 4  # int32
+    # int64 on ILP64, int32 on LP64; use 8 to avoid underestimating
+    liwork_bytes = (3 + 5 * n) * 8
     return (lwork_bytes + liwork_bytes) / 1e9
 
 
@@ -25,13 +26,34 @@ def _check_available(total_gb: float) -> tuple[float, bool]:
     return available_gb, (total_gb + margin_gb) < available_gb
 
 
+_inplace_import_warned = False
+
+
 def _inplace_eigen_available() -> bool:
-    """Check if in-place eigendecomp is available (lazy import to avoid circularity)."""
+    """Check if in-place eigendecomp is available (lazy import to avoid circularity).
+
+    Called by memory estimation functions to determine whether peak estimates
+    should include separate eigenvector allocation.
+
+    Not cached because INPLACE_EIGEN_AVAILABLE can be set to False at runtime
+    if the gufunc's buffer reuse fails (see _eigh_inplace).
+    """
+    global _inplace_import_warned
     try:
         from jamma.lmm.eigen import INPLACE_EIGEN_AVAILABLE
 
         return INPLACE_EIGEN_AVAILABLE
     except ImportError:
+        # Covers both module-not-found and attribute-not-found (from-import
+        # raises ImportError for both cases).  Log only once to avoid noise
+        # in LOCO runs that call this per-chromosome.
+        if not _inplace_import_warned:
+            _inplace_import_warned = True
+            logger.warning(
+                "Could not import INPLACE_EIGEN_AVAILABLE from jamma.lmm.eigen; "
+                "memory estimates will include separate eigenvector allocation. "
+                "This may indicate a broken installation."
+            )
         return False
 
 
@@ -56,17 +78,14 @@ def estimate_eigendecomp_memory(n_samples: int) -> float:
     Returns:
         Estimated peak memory in GB.
 
-    Example:
-        >>> estimate_eigendecomp_memory(200_000)  # in-place available
-        960.01
+    Note:
+        Return value depends on whether in-place eigendecomposition is
+        available at runtime (``INPLACE_EIGEN_AVAILABLE`` flag).
     """
     kinship_gb = n_samples**2 * 8 / 1e9
     workspace_gb = _dsyevd_workspace_gb(n_samples)
-    if _inplace_eigen_available():
-        return kinship_gb + workspace_gb  # K/U shared buffer
-    else:
-        eigenvectors_gb = n_samples**2 * 8 / 1e9
-        return kinship_gb + eigenvectors_gb + workspace_gb
+    eigenvectors_gb = 0.0 if _inplace_eigen_available() else kinship_gb
+    return kinship_gb + eigenvectors_gb + workspace_gb
 
 
 class MemoryBreakdown(NamedTuple):
@@ -83,12 +102,12 @@ class MemoryBreakdown(NamedTuple):
     kinship_gb: float  # n^2 * 8 bytes (float64)
     genotypes_gb: float  # n * p * 8 bytes (float64, JAX copy)
     eigenvectors_gb: float  # n^2 * 8 bytes (float64)
-    eigendecomp_workspace_gb: float  # DSYEVD: (1+6n+2n^2)*8 + (3+5n)*4 bytes
+    eigendecomp_workspace_gb: float  # DSYEVD: (1+6n+2n^2)*8 + (3+5n)*8 bytes
     lmm_rotated_gb: float  # n * 8 * 3 bytes (Uy, UW, rotated vectors)
     lmm_batch_gb: float  # n * batch_size * 8 bytes
     total_gb: float  # Peak memory (max of phases)
     available_gb: float  # Current available system memory
-    sufficient: bool  # Whether available >= total * 1.1
+    sufficient: bool  # Whether available exceeds total plus margin (10% capped at 10GB)
 
 
 def _uab_iab_gb(n_samples: int, chunk_size: int, n_cvt: int = 1) -> float:
@@ -285,13 +304,13 @@ class StreamingMemoryBreakdown(NamedTuple):
 
     kinship_gb: float  # n^2 * 8 bytes (float64)
     eigenvectors_gb: float  # n^2 * 8 bytes (float64)
-    eigendecomp_workspace_gb: float  # DSYEVD: (1+6n+2n^2)*8 + (3+5n)*4 bytes
+    eigendecomp_workspace_gb: float  # DSYEVD: (1+6n+2n^2)*8 + (3+5n)*8 bytes
     chunk_gb: float  # n * chunk_size * 8 bytes (float64 for precision)
     rotation_buffer_gb: float  # n * chunk_size * 8 bytes for UtG
     grid_reml_gb: float  # n_grid * chunk_size * 8 bytes for Grid REML intermediate
     total_peak_gb: float  # Max of phases (eigendecomp is typically peak)
     available_gb: float  # Current available system memory
-    sufficient: bool  # Whether available >= total * 1.1
+    sufficient: bool  # Whether available exceeds total plus margin (10% capped at 10GB)
 
 
 def _streaming_component_sizes(
@@ -338,7 +357,8 @@ def estimate_streaming_memory(
 
     For 200k samples, 10k chunk, n_grid=50:
     - Kinship accumulation: 320GB + 16GB = 336GB
-    - Eigendecomp: 320GB + ~640GB = ~960GB (PEAK, K/U shared buffer)
+    - Eigendecomp (in-place): 320GB + ~640GB = ~960GB (PEAK, K/U shared buffer)
+    - Eigendecomp (fallback): 320GB + 320GB + ~640GB = ~1280GB
     - LMM: 320GB + 16GB + 16GB + Uab/Iab
 
     Note: Eigendecomposition cannot be streamed. With in-place eigendecomp,
@@ -602,7 +622,7 @@ def cleanup_memory(clear_jax: bool = True, verbose: bool = True) -> MemorySnapsh
 
             jax.clear_caches()
         except ImportError:
-            pass
+            logger.debug("JAX not available; skipping cache clearing")
 
     gc.collect()
 
@@ -673,7 +693,10 @@ def check_memory_before_run(
     # Check if estimated peak exceeds available
     headroom = snap.available_gb - est.total_peak_gb
 
-    if headroom < est.total_peak_gb * 0.1:  # Less than 10% headroom
+    # Intentionally uncapped 10%: e.g. at 500GB peak, this warns below 50GB
+    # headroom while _check_available only rejects below 10GB, giving the
+    # user a ~40GB window to run cleanup_memory() before the gate rejects.
+    if headroom < est.total_peak_gb * 0.1:
         logger.warning(
             f"  Status: RISKY ({headroom:.1f}GB headroom, recommend cleanup first)"
         )

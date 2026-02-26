@@ -47,6 +47,7 @@ from jamma.io.plink import (
     stream_genotype_chunks,
 )
 from jamma.kinship.missing import impute_and_center, impute_center_and_standardize
+from jamma.utils import chr_sort_key
 
 
 def _accumulate_kinship(K: np.ndarray, X_centered: np.ndarray) -> np.ndarray:
@@ -638,20 +639,33 @@ def _yield_full_kinship_fallback(
     When a chromosome has no SNPs after filtering, there is nothing to leave
     out, so K_loco equals K_full.
 
+    Divides S_full_np in-place to avoid allocating a separate K_full buffer
+    (saves n^2 * 8 bytes — 320GB at 200k samples).  Callers must not use
+    S_full_np after this function returns.
+
     Args:
         S_full_np: Full kinship numerator as numpy array (n_samples, n_samples).
+            **Consumed in-place** — contents are overwritten with K_full.
         chrs_without_snps: Chromosomes with 0 filtered SNPs.
         n_filtered: Total number of filtered SNPs.
 
     Yields:
-        (chr_name, K_full) pairs in sorted order.
+        (chr_name, K_full) pairs in biological chromosome order.
+        Each matrix is an independent allocation (safe to mutate in-place).
     """
     if not chrs_without_snps:
         return
-    K_full = S_full_np / n_filtered
-    for chr_name in sorted(chrs_without_snps):
+    if n_filtered == 0:
+        raise ValueError(
+            "Cannot compute fallback kinship: n_filtered is 0 "
+            "(no SNPs passed filtering)"
+        )
+    # In-place division: S_full_np becomes K_full, no extra n^2 allocation.
+    S_full_np /= n_filtered
+    S_full_np.flags.writeable = False  # Guard against accidental re-mutation
+    for chr_name in sorted(chrs_without_snps, key=chr_sort_key):
         logger.debug(f"LOCO chr {chr_name}: 0 SNPs after filtering, using full kinship")
-        yield (chr_name, K_full)
+        yield (chr_name, S_full_np.copy())
 
 
 def _yield_loco_matrices(
@@ -672,12 +686,13 @@ def _yield_loco_matrices(
         n_filtered: Total number of filtered SNPs.
 
     Yields:
-        (chr_name, K_loco) pairs in sorted chromosome order.
+        (chr_name, K_loco) pairs in biological chromosome order.
 
     Raises:
         ValueError: If all filtered SNPs are on a single chromosome.
     """
-    for chr_name in sorted(S_chr.keys()):
+    # Safe to del during iteration: sorted() materializes keys into a list.
+    for chr_name in sorted(S_chr.keys(), key=chr_sort_key):
         p_chr = n_chr_filtered[chr_name]
         p_loco = n_filtered - p_chr
 
@@ -827,7 +842,7 @@ def compute_loco_kinship_streaming(
 
     # Build chromosome partition from metadata
     partitions = get_chromosome_partitions(bed_path)
-    unique_chrs = sorted(partitions.keys())
+    unique_chrs = sorted(partitions.keys(), key=chr_sort_key)
 
     logger.info("Computing LOCO Kinship (streaming)")
     logger.info(f"  Individuals: {n_samples:,}")

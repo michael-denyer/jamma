@@ -1,9 +1,9 @@
 """Eigendecomposition of kinship matrix.
 
 Provides GEMMA-compatible eigendecomposition with small eigenvalue thresholding.
-Uses the LAPACK DSYEVD gufunc with in-place buffer reuse (eigenvectors
-overwrite K) to save one n²×8 allocation. Falls back to numpy.linalg.eigh
-if the internal gufunc is unavailable.
+Uses numpy's internal ``eigh_lo`` gufunc (backed by LAPACK DSYEVD) with
+in-place buffer reuse (eigenvectors overwrite K) to save one n²×8 allocation.
+Falls back to ``numpy.linalg.eigh`` if the internal gufunc is unavailable.
 
 Thread control is handled by jamma.core.threading via threadpool_limits.
 
@@ -32,7 +32,7 @@ try:
     _eigh_lo = _np_linalg_gufuncs.eigh_lo
 except (ImportError, AttributeError):
     _eigh_lo = None
-    logger.info(
+    logger.warning(
         "In-place eigendecomp unavailable (numpy %s lacks _umath_linalg.eigh_lo); "
         "will use np.linalg.eigh with separate eigenvector allocation",
         np.__version__,
@@ -78,19 +78,22 @@ def _check_symmetry_sampled(K: np.ndarray, n: int, *, atol: float = 1e-10) -> No
 
 
 def _eigh_inplace(K: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Eigendecompose K in-place, reusing K's buffer for eigenvectors.
+    """Eigendecompose K, reusing K's buffer for eigenvectors when possible.
 
-    Uses numpy's internal LAPACK gufunc with out= parameter to write
-    eigenvectors directly into K's memory buffer. Saves one n²×8 allocation
-    (~142GB at 133k samples). Falls back to np.linalg.eigh if the private
-    gufunc is unavailable.
+    When the ``eigh_lo`` gufunc is available, writes eigenvectors directly
+    into K's memory buffer via the ``out=`` parameter, saving one n²×8
+    allocation (~142GB at 133k samples). Falls back to ``np.linalg.eigh``
+    (separate allocation) if the gufunc is unavailable.
+
+    Callers should treat K as consumed after this call regardless of path.
 
     Args:
-        K: Symmetric float64 matrix (n, n). OVERWRITTEN with eigenvectors
-            on return.
+        K: Symmetric float64 matrix (n, n). May be overwritten with
+            eigenvectors on return (when gufunc is available).
 
     Returns:
-        Tuple of (eigenvalues, eigenvectors) where eigenvectors shares K's buffer.
+        Tuple of (eigenvalues, eigenvectors). Eigenvectors shares K's
+        buffer when in-place path succeeds; separate allocation on fallback.
 
     Raises:
         TypeError: If K is not float64.
@@ -103,24 +106,11 @@ def _eigh_inplace(K: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         )
     if not K.flags.writeable:
         raise ValueError(
-            "K must be writeable for in-place eigendecomposition. "
+            "K must be writeable for eigendecomposition. "
             "If K is a memory-mapped or read-only array, copy it first: K = K.copy()"
         )
 
-    if _eigh_lo is not None:
-        n = K.shape[0]
-        eigenvalues = np.empty(n, dtype=np.float64)
-        _, eigenvectors = _eigh_lo(K, signature="d->dd", out=(eigenvalues, K))
-        if eigenvectors.ctypes.data != K.ctypes.data:
-            logger.warning(
-                "eigh_lo did not reuse K's buffer; "
-                "in-place optimization inactive (numpy %s). "
-                "Memory estimates may undercount by %.1fGB.",
-                np.__version__,
-                n**2 * 8 / 1e9,
-            )
-        return eigenvalues, eigenvectors
-    else:
+    if _eigh_lo is None:
         logger.warning(
             "_umath_linalg.eigh_lo unavailable (numpy %s); "
             "falling back to np.linalg.eigh — allocates an additional "
@@ -129,6 +119,30 @@ def _eigh_inplace(K: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
             K.shape[0] ** 2 * 8 / 1e9,
         )
         return np.linalg.eigh(K)
+
+    # One-way latch (True -> False only): once a buffer mismatch is detected,
+    # conservatively assume all subsequent calls will also mismatch.
+    # Importers must not cache this value — _inplace_eigen_available() reads the
+    # module attribute each call to see runtime updates.
+    global INPLACE_EIGEN_AVAILABLE
+
+    n = K.shape[0]
+    eigenvalues = np.empty(n, dtype=np.float64)
+    _, eigenvectors = _eigh_lo(K, signature="d->dd", out=(eigenvalues, K))
+    if eigenvectors.ctypes.data != K.ctypes.data and INPLACE_EIGEN_AVAILABLE:
+        # No lock needed: False is the conservative direction, so races
+        # between LOCO calls are benign. Guard on INPLACE_EIGEN_AVAILABLE
+        # so only the first mismatch warns.
+        INPLACE_EIGEN_AVAILABLE = False
+        logger.warning(
+            "eigh_lo did not reuse K's buffer; "
+            "in-place optimization inactive (numpy %s). "
+            "Memory estimates corrected to include separate "
+            "eigenvector allocation (%.1fGB).",
+            np.__version__,
+            n**2 * 8 / 1e9,
+        )
+    return eigenvalues, eigenvectors
 
 
 def eigendecompose_kinship(
@@ -146,8 +160,9 @@ def eigendecompose_kinship(
     numpy (MKL), matrices up to 200k+ are supported.
 
     Args:
-        K: Symmetric kinship matrix (n_samples, n_samples). Overwritten
-            with eigenvectors on return (buffer reused to save memory).
+        K: Symmetric kinship matrix (n_samples, n_samples). May be
+            overwritten with eigenvectors on return (buffer reused when
+            gufunc available). Treat K as consumed after this call.
         threshold: Eigenvalues below this are zeroed (default: 1e-10)
         check_memory: If True (default), check available memory before
             eigendecomposition. Set False to skip (e.g., when already checked).

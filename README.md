@@ -82,25 +82,27 @@ result = gwas("data/my_study", kinship_file="k.txt", snps_file="snps.txt", hwe=0
 ### Low-level API
 
 ```python
+import numpy as np
+
 from jamma.io import load_plink_binary
 from jamma.kinship import compute_centered_kinship
 from jamma.lmm import run_lmm_association_streaming
 from jamma.lmm.eigen import eigendecompose_kinship
 
-# Load PLINK data
+# Load PLINK data and phenotypes
 data = load_plink_binary("data/my_study")
+phenotypes = np.loadtxt("data/my_study.pheno")  # loaded separately from .fam or phenotype file
 
-# Compute kinship
+# Compute kinship and eigendecompose (treat kinship as consumed after this)
 kinship = compute_centered_kinship(data.genotypes)
-
-# Eigendecompose for LMM
 eigenvalues, eigenvectors = eigendecompose_kinship(kinship)
 
 # Run association (streaming from disk)
-results = run_lmm_association_streaming(
+results, n_tested = run_lmm_association_streaming(
     bed_path="data/my_study",
     phenotypes=phenotypes,
-    kinship=kinship,
+    eigenvalues=eigenvalues,
+    eigenvectors=eigenvectors,
     chunk_size=5000,
 )
 ```

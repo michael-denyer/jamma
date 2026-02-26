@@ -56,24 +56,7 @@ from jamma.lmm.results import (
 from jamma.lmm.runner_streaming import _init_accumulators, _LazySnpMeta
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.stats import AssocResult
-
-# Chromosome ordering: numeric first (1-22), then special (X, Y, XY, MT)
-_CHR_SPECIAL_ORDER = {"X": 23, "Y": 24, "XY": 25, "MT": 26, "M": 26}
-
-
-def _chr_sort_key(chrom: str) -> tuple[int, str]:
-    """Sort key for biological chromosome order (1..22, X, Y, XY, MT)."""
-    upper = chrom.upper()
-    if upper in _CHR_SPECIAL_ORDER:
-        return (_CHR_SPECIAL_ORDER[upper], "")
-    try:
-        return (int(chrom), "")
-    except ValueError:
-        # Unknown chromosome names sort after all known ones
-        logger.debug(
-            f"Non-numeric chromosome '{chrom}' — sorting after known chromosomes"
-        )
-        return (100, chrom)
+from jamma.utils import chr_sort_key
 
 
 def run_lmm_loco(
@@ -153,7 +136,7 @@ def run_lmm_loco(
 
     # Chromosome partitions (unfiltered)
     partitions = get_chromosome_partitions(bed_path)
-    unique_chrs = sorted(partitions.keys(), key=_chr_sort_key)
+    unique_chrs = sorted(partitions.keys(), key=chr_sort_key)
 
     if len(unique_chrs) < 2:
         raise ValueError(
@@ -242,7 +225,13 @@ def run_lmm_loco(
                     kinship_output_dir
                     / f"{kinship_output_prefix}.loco.cXX.chr{chr_name}.txt"
                 )
-                write_kinship_matrix(K_loco, kinship_path)
+                try:
+                    write_kinship_matrix(K_loco, kinship_path)
+                except OSError as e:
+                    raise OSError(
+                        f"Failed to save LOCO kinship for chromosome {chr_name} "
+                        f"to {kinship_path}: {e}"
+                    ) from e
                 if show_progress:
                     logger.info(f"  Saved LOCO kinship to {kinship_path}")
 

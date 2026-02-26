@@ -88,6 +88,9 @@ class PipelineConfig:
             profiling. When set, wraps the pipeline in jax.profiler.trace()
             and annotates stages with TraceAnnotation. View traces with
             `tensorboard --logdir <profile_dir>`.
+        backend: Compute backend selection: "auto" (default), "jax", or "numpy".
+            "auto" uses JAX when installed, falling back to NumPy. "jax" requires
+            JAX to be installed. "numpy" forces the pure-NumPy backend.
     """
 
     bfile: Path
@@ -115,12 +118,17 @@ class PipelineConfig:
     weight_file: Path | None = None
     cat_columns: list[int] | None = None
     profile_dir: Path | None = None
+    backend: str = "auto"
 
     def __post_init__(self) -> None:
         if os.sep in self.output_prefix or "/" in self.output_prefix:
             raise ValueError(
                 f"output_prefix must not contain path separators, "
                 f"got '{self.output_prefix}'. Use output_dir for directory paths."
+            )
+        if self.backend not in ("auto", "jax", "numpy"):
+            raise ValueError(
+                f"backend must be 'auto', 'jax', or 'numpy', got {self.backend!r}"
             )
 
 

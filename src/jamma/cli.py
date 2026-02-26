@@ -42,12 +42,11 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     """Print version, backend info, and GPU status, then exit."""
     if not value or ctx.resilient_parsing:
         return
-    from jamma.core import get_backend_info
+    from jamma.core.backend import get_backend_info
 
     info = get_backend_info()
     click.echo(f"JAMMA version {jamma.__version__} ({jamma.__release_date__})")
     click.echo(f"Backend: {info['selected']}")
-    click.echo("  (JAX pipeline + numpy/LAPACK eigendecomp)")
     click.echo(f"GPU available: {info['gpu_available']}")
     ctx.exit()
 
@@ -134,6 +133,12 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     help="Directory for XLA profiling traces (view with TensorBoard)",
 )
 @click.option(
+    "--backend",
+    type=click.Choice(["auto", "jax", "numpy"], case_sensitive=False),
+    default="auto",
+    help="Compute backend: auto (default), jax, or numpy.",
+)
+@click.option(
     "-cat",
     type=str,
     default=None,
@@ -206,6 +211,7 @@ def main(
     check_memory,
     mem_budget,
     profile_dir,
+    backend,
     cat,
     widv,
     wsnp,
@@ -304,6 +310,7 @@ def main(
             weight_file=_opt_path(widv),
             cat_columns=cat_columns,
             profile_dir=Path(profile_dir) if profile_dir else None,
+            backend=backend,
         )
 
 
@@ -536,6 +543,7 @@ def _run_lmm(
     weight_file: Path | None = None,
     cat_columns: list[int] | None = None,
     profile_dir: Path | None = None,
+    backend: str = "auto",
 ) -> None:
     """Run LMM association testing."""
     # Mutual exclusivity check
@@ -575,6 +583,7 @@ def _run_lmm(
         weight_file=weight_file,
         cat_columns=cat_columns,
         profile_dir=profile_dir,
+        backend=backend,
     )
 
     # Run pipeline, converting exceptions to CLI-friendly errors
@@ -596,7 +605,7 @@ def _run_lmm(
     params = {
         "n_samples": result.n_samples,
         "n_snps": result.n_snps_tested,
-        "backend": "jax",
+        "backend": result.timing.get("backend", "unknown"),
         "lmm_mode": mode,
         "kinship_file": str(kinship_file),
         "covariate_file": str(covariate_file) if covariate_file else None,

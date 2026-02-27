@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-02-27
+
 ### Added
 
 - **NumPy LOCO kinship streaming**: `_compute_loco_kinship_streaming_numpy()` — pure NumPy
@@ -20,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   result arrays are not fully written
 - Diagnostic error handling around NumPy LOCO computation loop (logs chromosome, chunk
   offset, and SNP count on failure)
+- **GEMMA covariate validation tests**: 4 mouse_hs1940 covariate tests for NumPy backend
+  (Wald, LRT, Score, All modes) validating beta, SE, p-values against GEMMA reference
+- **Synthetic no-covariate GEMMA validation tests**: LRT, Score, and All mode tests
+  completing the NumPy backend validation matrix
 
 ### Changed
 

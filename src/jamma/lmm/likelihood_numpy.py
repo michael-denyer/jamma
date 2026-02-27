@@ -228,17 +228,17 @@ def _fill_pab_recursion(
     n_degenerate = 0
     for p in range(1, n_cvt + 2):
         for _a, _b, index_ab, index_aw, index_bw, index_ww in table["pab_recursion"][p]:
-            ps_ww = Pab_batch[:, p - 1, index_ww]  # (n_snps,)
+            ps_ww = Pab_batch[..., p - 1, index_ww]
             # Guard: ps_ww=0 means degenerate covariate projection. Use 0
             # to prevent NaN/Inf propagation to valid SNPs in the same batch.
             # Degenerate SNPs are caught downstream by P_XX > 0 checks.
             n_degenerate += int(np.sum(ps_ww == 0))
             with np.errstate(divide="ignore"):
                 safe_inv = np.where(ps_ww != 0, 1.0 / ps_ww, 0.0)
-            Pab_batch[:, p, index_ab] = (
-                Pab_batch[:, p - 1, index_ab]
-                - Pab_batch[:, p - 1, index_aw]
-                * Pab_batch[:, p - 1, index_bw]
+            Pab_batch[..., p, index_ab] = (
+                Pab_batch[..., p - 1, index_ab]
+                - Pab_batch[..., p - 1, index_aw]
+                * Pab_batch[..., p - 1, index_bw]
                 * safe_inv
             )
     if n_degenerate > 0:
@@ -387,6 +387,11 @@ def _batch_grid_reml_numpy(
 ) -> np.ndarray:
     """Evaluate REML at all grid lambda values for all SNPs.
 
+    Vectorized: single tensordot replaces Python loop over grid lambdas.
+    Since all SNPs share the same lambda at each grid point, Hi_eval is
+    (n_grid, n_samples) not (n_snps, n_samples) — eliminates the dominant
+    memory allocation at scale.
+
     Args:
         n_cvt: Number of covariates.
         lambdas_grid: Grid of lambda values (n_grid,).
@@ -397,17 +402,47 @@ def _batch_grid_reml_numpy(
     Returns:
         Log-likelihoods (n_grid, n_snps).
     """
-    n_snps = Uab_batch.shape[0]
+    table = build_index_table(n_cvt)
+    n_snps, n_samples, n_index = Uab_batch.shape
     n_grid = len(lambdas_grid)
-    all_logls = np.zeros((n_grid, n_snps), dtype=np.float64)
+    nc_total = n_cvt + 1
+    df = n_samples - n_cvt - 1
 
-    for i, lam in enumerate(lambdas_grid):
-        lam_batch = np.full(n_snps, lam, dtype=np.float64)
-        all_logls[i, :] = _batch_reml_at_lambda_numpy(
-            n_cvt, lam_batch, eigenvalues, Uab_batch, Iab_batch
-        )
+    # All grid lambdas at once: (n_grid, n_samples)
+    v_temp = lambdas_grid[:, None] * eigenvalues[None, :] + 1.0
+    Hi_eval_grid = 1.0 / v_temp
 
-    return all_logls
+    # logdet(H) per grid lambda — shared across SNPs: (n_grid,)
+    logdet_h = np.sum(np.log(np.abs(v_temp)), axis=1)
+
+    # Pab row 0 via single tensordot (BLAS gemm):
+    # Hi_eval_grid (n_grid, n_samples) × Uab_batch (n_snps, n_samples, n_index)
+    # contracts n_samples → (n_grid, n_snps, n_index)
+    Pab = np.zeros((n_grid, n_snps, n_cvt + 2, n_index), dtype=np.float64)
+    Pab[:, :, 0, :] = np.tensordot(Hi_eval_grid, Uab_batch, axes=([1], [1]))
+
+    # Recursive rows 1..n_cvt+1 (uses ... indexing for 4D)
+    _fill_pab_recursion(Pab, table, n_cvt)
+
+    # logdet_hiw: Iab part is lambda-independent, precompute once
+    logdet_iab = np.zeros(n_snps, dtype=np.float64)
+    logdet_pab = np.zeros((n_grid, n_snps), dtype=np.float64)
+    for row, col in table["logdet_diag_indices"]:
+        d_pab = Pab[:, :, row, col]  # (n_grid, n_snps)
+        d_iab = Iab_batch[:, row, col]  # (n_snps,)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            logdet_pab += np.where(d_pab > 0, np.log(d_pab), 0.0)
+            logdet_iab += np.where(d_iab > 0, np.log(d_iab), 0.0)
+    logdet_hiw = logdet_pab - logdet_iab[None, :]
+
+    # P_yy with guards: (n_grid, n_snps)
+    P_yy = Pab[:, :, nc_total, table["idx_yy"]]
+    P_yy = np.where(P_yy < 0.0, np.nan, P_yy)
+    P_yy = np.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
+
+    # REML log-likelihood: (n_grid, n_snps)
+    c = 0.5 * df * (np.log(df) - np.log(2.0 * np.pi) - 1.0)
+    return c - 0.5 * logdet_h[:, None] - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
 
 
 def _batch_grid_mle_numpy(
@@ -418,6 +453,8 @@ def _batch_grid_mle_numpy(
 ) -> np.ndarray:
     """Evaluate MLE at all grid lambda values for all SNPs.
 
+    Vectorized: single tensordot replaces Python loop over grid lambdas.
+
     Args:
         n_cvt: Number of covariates.
         lambdas_grid: Grid of lambda values (n_grid,).
@@ -427,17 +464,34 @@ def _batch_grid_mle_numpy(
     Returns:
         Log-likelihoods (n_grid, n_snps).
     """
-    n_snps = Uab_batch.shape[0]
+    table = build_index_table(n_cvt)
+    n_snps, n_samples, n_index = Uab_batch.shape
     n_grid = len(lambdas_grid)
-    all_logls = np.zeros((n_grid, n_snps), dtype=np.float64)
+    nc_total = n_cvt + 1
+    n = n_samples
 
-    for i, lam in enumerate(lambdas_grid):
-        lam_batch = np.full(n_snps, lam, dtype=np.float64)
-        all_logls[i, :] = _batch_mle_at_lambda_numpy(
-            n_cvt, lam_batch, eigenvalues, Uab_batch
-        )
+    # All grid lambdas at once: (n_grid, n_samples)
+    v_temp = lambdas_grid[:, None] * eigenvalues[None, :] + 1.0
+    Hi_eval_grid = 1.0 / v_temp
 
-    return all_logls
+    # logdet(H) per grid lambda: (n_grid,)
+    logdet_h = np.sum(np.log(np.abs(v_temp)), axis=1)
+
+    # Pab row 0 via single tensordot: (n_grid, n_snps, n_index)
+    Pab = np.zeros((n_grid, n_snps, n_cvt + 2, n_index), dtype=np.float64)
+    Pab[:, :, 0, :] = np.tensordot(Hi_eval_grid, Uab_batch, axes=([1], [1]))
+
+    # Recursive rows 1..n_cvt+1
+    _fill_pab_recursion(Pab, table, n_cvt)
+
+    # P_yy with guards: (n_grid, n_snps)
+    P_yy = Pab[:, :, nc_total, table["idx_yy"]]
+    P_yy = np.where(P_yy < 0.0, np.nan, P_yy)
+    P_yy = np.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
+
+    # MLE log-likelihood: (n_grid, n_snps) — no logdet_hiw, uses n not df
+    c = 0.5 * n * (np.log(n) - np.log(2.0 * np.pi) - 1.0)
+    return c - 0.5 * logdet_h[:, None] - 0.5 * n * np.log(P_yy)
 
 
 # ---------------------------------------------------------------------------

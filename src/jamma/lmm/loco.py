@@ -239,7 +239,7 @@ def _compute_loco_kinship_streaming_numpy(
         bed_path, chunk_size=chunk_size, dtype=np.float32, show_progress=False
     )
     if show_progress:
-        from jamma.utils import progress_iterator
+        from jamma.core.progress import progress_iterator
 
         n_chunks = (n_snps + chunk_size - 1) // chunk_size
         stats_iterator = progress_iterator(
@@ -335,7 +335,7 @@ def _compute_loco_kinship_streaming_numpy(
         bed_path, chunk_size=chunk_size, dtype=np.float64, show_progress=False
     )
     if show_progress:
-        from jamma.utils import progress_iterator
+        from jamma.core.progress import progress_iterator
 
         n_chunks = (n_snps + chunk_size - 1) // chunk_size
         accum_iterator = progress_iterator(

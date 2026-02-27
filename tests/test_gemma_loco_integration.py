@@ -7,7 +7,7 @@ kinship matrices, using a multi-chromosome synthetic dataset.
 Dataset:
 - 100 samples, 500 SNPs across 3 chromosomes (chr1: 200, chr2: 150, chr3: 150)
 - Causal SNP rs0000 on chr1 with effect size 0.5
-- Phenotype: 0.5 * genotype[rs0000] + noise, standardized
+- Phenotype: 0.5 * genotype[rs0000] + N(0, 1)
 
 Validation approach:
 - For each chromosome c, JAMMA computes K_loco_c = (p*K_full - p_c*K_c) / (p - p_c)
@@ -38,11 +38,14 @@ import pandas as pd
 import pytest
 from scipy.stats import spearmanr
 
+from tests.conftest import load_phenotypes_from_fam
+
 pytest.importorskip("jax")
 
 from jamma.lmm.loco import run_lmm_loco
 
-pytestmark = pytest.mark.requires_jax  # LOCO currently requires JAX backend
+# LOCO requires JAX backend (eigendecomp + batch Uab)
+pytestmark = pytest.mark.requires_jax
 
 # Fixture paths
 _FIXTURE_ROOT = Path(__file__).parent / "fixtures"
@@ -60,23 +63,6 @@ GEMMA_CHR_ASSOC = {
 EXPECTED_SNP_COUNTS = {"1": 200, "2": 150, "3": 150}
 
 _CHROMOSOMES = ["1", "2", "3"]
-
-
-def load_phenotypes_from_fam(fam_path: Path) -> np.ndarray:
-    """Load phenotypes from FAM file (column 6, 0-indexed column 5).
-
-    Args:
-        fam_path: Path to .fam PLINK file.
-
-    Returns:
-        Array of phenotype values (float64).
-    """
-    phenotypes = []
-    with open(fam_path) as f:
-        for line in f:
-            fields = line.strip().split()
-            phenotypes.append(float(fields[5]))
-    return np.array(phenotypes, dtype=np.float64)
 
 
 @pytest.mark.tier1
@@ -121,7 +107,11 @@ class TestGemmaLocoFixtureProperties:
         )
 
     def test_annotation_file_format(self):
-        """test_snps.txt has 500 lines with 3 tab-separated columns."""
+        """test_snps.txt has 500 lines with 3 tab-separated columns.
+
+        This file is not consumed by the LOCO validation tests but is checked
+        for format consistency (generated for potential GEMMA -loco -a usage).
+        """
         with open(FIXTURE_DIR / "test_snps.txt") as f:
             lines = f.readlines()
         assert len(lines) == 500, f"Expected 500 annotation lines, got {len(lines)}"
@@ -239,17 +229,25 @@ class TestGemmaLocoValidation:
         """Merge GEMMA and JAMMA DataFrames on 'rs' for each chromosome.
 
         Returns dict[str, pd.DataFrame] with suffixes ("_gemma", "_jamma").
+        Asserts merge is lossless (no dropped rows from ID mismatch).
         """
-        return {
-            chrom: pd.merge(
+        result = {}
+        for chrom in _CHROMOSOMES:
+            merged = pd.merge(
                 gemma_loco_assoc[chrom],
                 jamma_loco_results[chrom],
                 on="rs",
                 suffixes=("_gemma", "_jamma"),
                 how="inner",
             )
-            for chrom in _CHROMOSOMES
-        }
+            expected = len(gemma_loco_assoc[chrom])
+            assert len(merged) == expected, (
+                f"chr{chrom}: inner join dropped rows — "
+                f"GEMMA has {expected} SNPs but merge produced {len(merged)}. "
+                f"Check SNP ID alignment between GEMMA and JAMMA results."
+            )
+            result[chrom] = merged
+        return result
 
     # ------------------------------------------------------------------
     # Structural tests
@@ -279,7 +277,11 @@ class TestGemmaLocoValidation:
     # ------------------------------------------------------------------
 
     def test_loco_beta_per_chromosome(self, merged_per_chr: dict[str, pd.DataFrame]):
-        """LOCO-03: Per-chromosome beta matches GEMMA within 1e-5 absolute tolerance."""
+        """LOCO-03: Per-chromosome beta matches GEMMA within 1e-5 absolute tolerance.
+
+        Tighter than the general 1e-2 relative tolerance (EQUIVALENCE.md) because
+        the synthetic dataset has clean signal and avoids flat-optima edge cases.
+        """
         for chrom in _CHROMOSOMES:
             merged = merged_per_chr[chrom]
             max_diff = np.max(np.abs(merged["beta_gemma"] - merged["beta_jamma"]))
@@ -310,12 +312,32 @@ class TestGemmaLocoValidation:
     # ------------------------------------------------------------------
 
     def test_loco_lambda_per_chromosome(self, merged_per_chr: dict[str, pd.DataFrame]):
-        """LOCO-04: Per-chromosome l_remle matches GEMMA within 2e-4 tolerance."""
+        """LOCO-04: Per-chromosome l_remle matches GEMMA within 2e-4 tolerance.
+
+        Note: On this synthetic dataset (100 samples, weak signal), l_remle
+        converges to the lower bound (1e-5) for all SNPs on all chromosomes.
+        This test is a structural check only — it cannot distinguish a correct
+        optimizer from one that always returns l_min. Real-data validation with
+        non-boundary lambda values is in test_gemma_integration.py.
+        """
         for chrom in _CHROMOSOMES:
             merged = merged_per_chr[chrom]
             max_diff = np.max(np.abs(merged["l_remle_gemma"] - merged["l_remle_jamma"]))
             assert max_diff < 2e-4, (
                 f"chr{chrom}: l_remle max abs diff {max_diff:.2e} >= 2e-4"
+            )
+
+    # ------------------------------------------------------------------
+    # LOCO-04b: Log-likelihood parity
+    # ------------------------------------------------------------------
+
+    def test_loco_logl_h1_per_chromosome(self, merged_per_chr: dict[str, pd.DataFrame]):
+        """LOCO-04b: Per-chromosome logl_H1 matches GEMMA within 1e-4 tolerance."""
+        for chrom in _CHROMOSOMES:
+            merged = merged_per_chr[chrom]
+            max_diff = np.max(np.abs(merged["logl_H1_gemma"] - merged["logl_H1_jamma"]))
+            assert max_diff < 1e-4, (
+                f"chr{chrom}: logl_H1 max abs diff {max_diff:.2e} >= 1e-4"
             )
 
     # ------------------------------------------------------------------

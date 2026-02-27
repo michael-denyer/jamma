@@ -4,7 +4,9 @@ Creates tests/fixtures/gemma_loco/ with:
   - test.bed / test.bim / test.fam  (100 samples, 500 SNPs, 3 chromosomes)
   - test_snps.txt                   (GEMMA annotation file: SNP_ID, bp_pos, chr)
 
-The annotation file (test_snps.txt) is required by GEMMA -loco (-a flag).
+The annotation file (test_snps.txt) uses GEMMA's annotation format.
+Not used by the current fixture generation pipeline (which uses -snps
+per-chromosome filtering), but kept for potential GEMMA -loco -a usage.
 Format: 3 tab-separated columns, no header: SNP_ID  bp_position  chromosome
 
 Design:

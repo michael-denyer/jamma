@@ -5,7 +5,26 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pytest
+
+
+def load_phenotypes_from_fam(fam_path: Path) -> np.ndarray:
+    """Load phenotypes from FAM file (column 6, 0-indexed column 5).
+
+    Args:
+        fam_path: Path to .fam PLINK file.
+
+    Returns:
+        Array of phenotype values (float64).
+    """
+    phenotypes = []
+    with open(fam_path) as f:
+        for line in f:
+            fields = line.strip().split()
+            phenotypes.append(float(fields[5]))
+    return np.array(phenotypes, dtype=np.float64)
+
 
 if TYPE_CHECKING:
     from jamma.validation import ToleranceConfig

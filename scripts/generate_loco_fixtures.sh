@@ -52,7 +52,7 @@ echo "  PLINK files : $FIXTURE_DIR/test"
 echo "  Output dir  : $FIXTURE_DIR"
 echo ""
 
-# Helper: run GEMMA in Docker with project root mounted to /data
+# Runs inside linux/amd64 container — GEMMA is x86-only
 run_gemma() {
     docker run --rm --platform linux/amd64 \
         -v "$PROJECT_ROOT:/data" \
@@ -185,10 +185,11 @@ done
 
 echo "=== Step 4: Causal SNP rs0000 in chr1 ==="
 echo "Expected: p_wald < 0.01 (causal effect size 0.5, 100 samples)"
-if grep "rs0000" "$FIXTURE_DIR/gemma_loco_chr1.assoc.txt"; then
-    :
+if ! grep -qw "rs0000" "$FIXTURE_DIR/gemma_loco_chr1.assoc.txt"; then
+    echo "FAIL: rs0000 not found in chr1 output"
+    PASS=false
 else
-    echo "WARNING: rs0000 not found in chr1 output"
+    grep -w "rs0000" "$FIXTURE_DIR/gemma_loco_chr1.assoc.txt"
 fi
 
 echo ""
@@ -206,10 +207,6 @@ echo "=== Step 5: Clean up ==="
 rm -f "$FIXTURE_DIR/loco_chr"*.cXX.txt
 rm -f "$FIXTURE_DIR/chr"*"_snps.txt"
 rm -f "$FIXTURE_DIR/gemma_loco_chr"*.log.txt
-rm -f "$FIXTURE_DIR/gemma_loco1_kinship.cXX.txt"
-rm -f "$FIXTURE_DIR/gemma_loco1_kinship.log.txt"
-rm -f "$FIXTURE_DIR/gemma_loco_full_kinship.cXX.txt"
-rm -f "$FIXTURE_DIR/gemma_loco_full_kinship.log.txt"
 rm -rf "$FIXTURE_DIR/output"
 echo "Intermediate files removed."
 echo "Kept: test.{bed,bim,fam}, test_snps.txt, gemma_loco_chr{1,2,3}.assoc.txt"

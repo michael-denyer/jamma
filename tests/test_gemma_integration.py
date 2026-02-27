@@ -22,6 +22,8 @@ import pandas as pd
 import pytest
 from scipy.stats import spearmanr
 
+from tests.conftest import load_phenotypes_from_fam
+
 pytest.importorskip("jax")
 
 from jamma.io import load_plink_binary
@@ -37,16 +39,6 @@ FIXTURE_DIR = _FIXTURE_ROOT / "gemma_synthetic"
 PLINK_PREFIX = FIXTURE_DIR / "test"
 GEMMA_KINSHIP = FIXTURE_DIR / "gemma_kinship.cXX.txt"
 GEMMA_ASSOC = FIXTURE_DIR / "gemma_assoc.assoc.txt"
-
-
-def load_phenotypes_from_fam(fam_path: Path) -> np.ndarray:
-    """Load phenotypes from FAM file (column 6)."""
-    phenotypes = []
-    with open(fam_path) as f:
-        for line in f:
-            fields = line.strip().split()
-            phenotypes.append(float(fields[5]))
-    return np.array(phenotypes, dtype=np.float64)
 
 
 @pytest.fixture

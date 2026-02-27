@@ -41,21 +41,23 @@ jobs:
             install_args: "--extra dev"
             name: "Linux + NumPy"
             pytest_args: "-m 'not tier2 and not slow and not requires_jax'"
+            cov_threshold: "--cov-fail-under=50"
           - os: ubuntu-latest
             python-version: "3.11"
             install_args: "--extra jax --extra dev"
             name: "Linux + JAX (3.11)"
             cov_threshold: "--cov-fail-under=80"
-          - os: windows-latest
-            python-version: "3.12"
-            install_args: "--extra dev"
-            name: "Windows + NumPy"
-            pytest_args: "-n0 -m 'not tier2 and not slow and not requires_jax'"
           - os: macos-latest
             python-version: "3.12"
             install_args: "--extra jax --extra dev"
             name: "ARM Mac + JAX"
             cov_threshold: "--cov-fail-under=80"
+          - os: windows-latest
+            python-version: "3.12"
+            install_args: "--extra dev"
+            name: "Windows + NumPy"
+            pytest_args: "-m 'not tier2 and not slow and not requires_jax'"
+            cov_threshold: "--cov-fail-under=50"
     name: ${{ matrix.name }}
     timeout-minutes: 15
     steps:

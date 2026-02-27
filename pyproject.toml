@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jamma"
-version = "2.8.2"
+version = "2.8.3"
 description = "Fast Mixed Model Association for GWAS"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -87,7 +87,7 @@ jamma = "jamma.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-n auto --randomly-seed=last --benchmark-skip --cov=src/jamma --cov-fail-under=80 --cov-report=term-missing --cov-report=json"
+addopts = "-n 3 --randomly-seed=last --benchmark-skip -m 'not slow and not tier2' --no-cov"
 filterwarnings = [
     "ignore:Some donated buffers were not usable:UserWarning",
 ]

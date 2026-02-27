@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.2] - 2026-02-27
+
+### Fixed
+
+- **Critical: NaN propagation in golden section optimizer** — if the first grid point
+  returned NaN (degenerate kinship), the scalar optimizer stayed stuck at NaN forever,
+  silently producing NaN results for the entire GWAS run. Now initializes `best_val=inf`
+  and skips NaN grid points.
+- **Critical: `argmax` on NaN-containing grids** — JAX/NumPy `argmax` could select NaN
+  entries as "best", causing the golden section to refine around a garbage bracket.
+  NaN entries are now replaced with `-inf` before `argmax` in both batch paths.
+- **Negative eigenvalues now zeroed in `eigendecompose_kinship`** — previously only warned.
+  Negative eigenvalues above the threshold (e.g. -1e-5) survived into likelihood computation
+  where `np.abs(v_temp)` silently masked incorrect logdet values.
+- Missing `kinship is None` guard in JAX runner (NumPy runner already had it)
+- Missing `lmm_mode` validation in `_compute_lmm_chunk` (JAX compute dispatch)
+- `block_chunk_result` could `AttributeError` on `None` values for unexpected modes
+
+### Changed
+
+- Batch `_guard_P_yy` now logs a warning when negative P_yy values are detected
+  (previously silent, unlike the scalar `_clamp_p_yy` path)
+- Scalar Pab recursion now logs debug message for degenerate `ps_ww=0` entries
+- Runners now emit per-key NaN count warnings after processing all chunks
+- Removed unused `lambda_null` parameter from `calc_score_test`
+
 ## [2.8.1] - 2026-02-27
 
 ### Performance

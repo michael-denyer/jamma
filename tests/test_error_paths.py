@@ -56,7 +56,7 @@ class TestCovariateErrorPaths:
         cov_path = tmp_path / "nonnumeric.txt"
         cov_path.write_text("1 foo 3\n")
 
-        with pytest.raises(ValueError, match="foo|cannot parse"):
+        with pytest.raises(ValueError, match="cannot parse"):
             read_covariate_file(cov_path)
 
     def test_na_cascades_to_indicator(self, tmp_path: Path) -> None:
@@ -159,7 +159,8 @@ class TestPipelineErrorPaths:
             shutil.copy(FIXTURES / f"test{ext}", tmp_path / f"test{ext}")
 
         fam_path = tmp_path / "test.fam"
-        n_samples = sum(1 for _ in open(fam_path))
+        with open(fam_path) as f:
+            n_samples = sum(1 for _ in f)
 
         with open(fam_path, "w") as f:
             for i in range(n_samples):
@@ -191,7 +192,8 @@ class TestPipelineErrorPaths:
 
         # Determine sample count from BFILE .fam
         fam_path = Path(f"{BFILE}.fam")
-        n_samples = sum(1 for _ in open(fam_path))
+        with open(fam_path) as f:
+            n_samples = sum(1 for _ in f)
 
         cov_path = tmp_path / "cov.txt"
         with open(cov_path, "w") as f:

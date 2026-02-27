@@ -57,7 +57,7 @@ class TestPlinkIOErrorPaths:
         shutil.copy(FIXTURES / "test.bim", tmp_path / "test.bim")
         shutil.copy(FIXTURES / "test.fam", tmp_path / "test.fam")
 
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(FileNotFoundError, match=r"\.bed"):
             validate_plink_dimensions(tmp_path / "test")
 
     def test_missing_bim_raises(self, tmp_path: Path) -> None:
@@ -65,7 +65,7 @@ class TestPlinkIOErrorPaths:
         shutil.copy(FIXTURES / "test.bed", tmp_path / "test.bed")
         shutil.copy(FIXTURES / "test.fam", tmp_path / "test.fam")
 
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(FileNotFoundError, match=r"\.bim"):
             validate_plink_dimensions(tmp_path / "test")
 
     def test_missing_fam_raises(self, tmp_path: Path) -> None:
@@ -73,7 +73,7 @@ class TestPlinkIOErrorPaths:
         shutil.copy(FIXTURES / "test.bed", tmp_path / "test.bed")
         shutil.copy(FIXTURES / "test.bim", tmp_path / "test.bim")
 
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(FileNotFoundError, match=r"\.fam"):
             validate_plink_dimensions(tmp_path / "test")
 
     def test_validate_genotype_out_of_range(self) -> None:
@@ -87,21 +87,24 @@ class TestPlinkIOErrorPaths:
         chunk = np.array([[0.0, 1.0, 2.0, np.nan]], dtype=np.float32)
         assert validate_genotype_values(chunk) == 0
 
-    def test_non_monotonic_chromosomes_handled(self) -> None:
-        """get_chromosome_partitions handles multi-chromosome data without crash.
+    def test_multi_chromosome_partitions(self) -> None:
+        """get_chromosome_partitions returns correct multi-chromosome partitions.
 
         Uses gemma_loco fixture which has chromosomes 1, 2, and 3.
-        Verifies the returned dict has at least 1 key and total SNP count
+        Verifies the returned dict has >= 3 keys and total SNP count
         matches the BIM line count.
         """
-        bfile = LOCO_BFILE if (LOCO_FIXTURES / "test.bed").exists() else BFILE
-        partitions = get_chromosome_partitions(bfile)
+        if not (LOCO_FIXTURES / "test.bed").exists():
+            pytest.skip("gemma_loco fixture not available")
 
-        assert len(partitions) >= 1
+        partitions = get_chromosome_partitions(LOCO_BFILE)
+
+        assert len(partitions) >= 3
 
         # Verify SNP counts are consistent with the BIM file
-        bim_path = Path(f"{bfile}.bim")
-        n_bim_snps = sum(1 for _ in open(bim_path))
+        bim_path = Path(f"{LOCO_BFILE}.bim")
+        with open(bim_path) as f:
+            n_bim_snps = sum(1 for _ in f)
         total_snps = sum(len(indices) for indices in partitions.values())
         assert total_snps == n_bim_snps
 
@@ -150,10 +153,8 @@ class TestLmmIOErrorPaths:
         afs = np.array([0.3])
         miss_counts = np.array([0])
 
-        with pytest.raises(ValueError, match="does not match"):
-            with IncrementalAssocWriter(
-                tmp_path / "out.txt", test_type="wald"
-            ) as writer:
+        with IncrementalAssocWriter(tmp_path / "out.txt", test_type="wald") as writer:
+            with pytest.raises(ValueError, match="does not match"):
                 # lmm_mode=2 is LRT but writer expects wald
                 writer.write_arrays_batch(
                     lmm_mode=2,
@@ -171,10 +172,8 @@ class TestLmmIOErrorPaths:
         afs = np.array([0.3])
         miss_counts = np.array([0])
 
-        with pytest.raises(ValueError, match="missing arrays"):
-            with IncrementalAssocWriter(
-                tmp_path / "out.txt", test_type="wald"
-            ) as writer:
+        with IncrementalAssocWriter(tmp_path / "out.txt", test_type="wald") as writer:
+            with pytest.raises(ValueError, match="missing arrays"):
                 # lmm_mode=1 is wald, but arrays={} is missing all required keys
                 writer.write_arrays_batch(
                     lmm_mode=1,
@@ -199,10 +198,8 @@ class TestLmmIOErrorPaths:
         spec = get_spec(1)
         arrays = {c.array_key: np.array([0.1]) for c in spec.stat_columns}
 
-        with pytest.raises(KeyError, match="missing required keys"):
-            with IncrementalAssocWriter(
-                tmp_path / "out.txt", test_type="wald"
-            ) as writer:
+        with IncrementalAssocWriter(tmp_path / "out.txt", test_type="wald") as writer:
+            with pytest.raises(KeyError, match="missing required keys"):
                 writer.write_arrays_batch(
                     lmm_mode=1,
                     snp_indices=snp_indices,
@@ -226,10 +223,8 @@ class TestLmmIOErrorPaths:
         spec = get_spec(1)
         arrays = {c.array_key: np.array([0.1, 0.2]) for c in spec.stat_columns}
 
-        with pytest.raises(ValueError, match="length"):
-            with IncrementalAssocWriter(
-                tmp_path / "out.txt", test_type="wald"
-            ) as writer:
+        with IncrementalAssocWriter(tmp_path / "out.txt", test_type="wald") as writer:
+            with pytest.raises(ValueError, match="length"):
                 writer.write_arrays_batch(
                     lmm_mode=1,
                     snp_indices=snp_indices,

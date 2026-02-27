@@ -10,8 +10,6 @@ Covers critical test gaps identified in the codebase audit:
 import numpy as np
 import pytest
 
-pytest.importorskip("jax")
-
 from jamma.lmm.likelihood import (
     _clamp_p_yy,
     _golden_section_minimize,
@@ -21,7 +19,7 @@ from jamma.lmm.likelihood import (
     reml_log_likelihood,
     reml_log_likelihood_null,
 )
-from jamma.lmm.prepare import _build_covariate_matrix
+from jamma.lmm.prepare_common import _build_covariate_matrix
 from jamma.lmm.stats import _safe_sqrt
 
 

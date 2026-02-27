@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.3] - 2026-02-27
+
+### Changed
+
+- Local pytest defaults to `-n 3`, `--no-cov`, and skips `slow`/`tier2` tests to reduce memory pressure on dev machines
+- CI overrides `addopts` with `-o 'addopts='` to run full suite with coverage independently of local config
+
 ## [2.8.2] - 2026-02-27
 
 ### Fixed

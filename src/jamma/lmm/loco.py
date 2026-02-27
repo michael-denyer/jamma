@@ -17,7 +17,6 @@ import gc
 import time
 from pathlib import Path
 
-import jax
 import numpy as np
 from bed_reader import open_bed
 from loguru import logger
@@ -31,33 +30,58 @@ from jamma.io.plink import (
     validate_genotype_values,
 )
 from jamma.kinship import compute_loco_kinship_streaming, write_kinship_matrix
-from jamma.lmm.chunk import _compute_chunk_size
-from jamma.lmm.compute import (
-    _compute_lmm_chunk,
-    block_chunk_result,
-    log_jax_error,
-    strip_and_append,
-)
+from jamma.lmm.compute_numpy import _compute_lmm_chunk_numpy
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.io import IncrementalAssocWriter
-from jamma.lmm.likelihood_jax import batch_compute_uab
-from jamma.lmm.prepare import (
-    DevicePlacement,
+from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
+from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
-    _compute_null_model,
-    _select_jax_device,
-    prepare_utg_chunk,
+    _compute_null_model_common,
 )
 from jamma.lmm.results import (
-    _concat_jax_accumulators,
     _yield_chunk_results,
     count_lambda_boundary_hits,
     log_lambda_boundary_warning,
 )
-from jamma.lmm.runner_streaming import _init_accumulators, _LazySnpMeta
+from jamma.lmm.runner_numpy import _compute_chunk_size_numpy
+from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.stats import AssocResult
 from jamma.utils import chr_sort_key
+
+
+class _LazySnpMeta:
+    """Lazy view over PLINK metadata arrays, avoiding per-SNP dict materialization.
+
+    Instead of building a list of n_snps dicts at construction time, this wrapper
+    holds references to the underlying metadata arrays and materializes a single
+    dict on each __getitem__ access. This saves O(n_snps) dict + string objects.
+
+    Compatible with all snp_info consumers that use integer indexing (snp_info[idx]).
+    """
+
+    __slots__ = ("_chr", "_rs", "_pos", "_a1", "_a0")
+
+    def __init__(self, meta: dict) -> None:
+        self._chr = meta["chromosome"]
+        self._rs = meta["sid"]
+        self._pos = meta["bp_position"]
+        self._a1 = meta["allele_1"]
+        self._a0 = meta["allele_2"]
+
+    def __len__(self) -> int:
+        return len(self._rs)
+
+    def __getitem__(self, i: int | slice) -> dict | list[dict]:
+        if isinstance(i, slice):
+            return [self[j] for j in range(*i.indices(len(self)))]
+        return {
+            "chr": str(self._chr[i]),
+            "rs": self._rs[i],
+            "pos": int(self._pos[i]),
+            "a1": self._a1[i],
+            "a0": self._a0[i],
+        }
 
 
 def run_lmm_loco(
@@ -78,6 +102,7 @@ def run_lmm_loco(
     col_chunk_size: int = 5_000,
     l_min: float = 1e-5,
     l_max: float = 1e5,
+    backend: str = "jax",
 ) -> tuple[list[AssocResult], int]:
     """Run LOCO LMM association: per-chromosome eigendecomp and association.
 
@@ -110,6 +135,7 @@ def run_lmm_loco(
             peak memory: n_valid * col_chunk_size * 8 bytes per chunk.
         l_min: Minimum lambda for optimization (default 1e-5).
         l_max: Maximum lambda for optimization (default 1e5).
+        backend: Compute backend — "jax" (default) or "numpy".
 
     Returns:
         Tuple of (results, n_tested) where results is a list of AssocResult
@@ -253,25 +279,46 @@ def run_lmm_loco(
             gc.collect()
 
             # Run LMM for this chromosome
-            chr_results = _run_lmm_for_chromosome(
-                bed_path=bed_path,
-                chr_snp_indices=chr_snp_indices,
-                eigenvalues=eigenvalues_np,
-                eigenvectors=U,
-                phenotypes=phenotypes_valid,
-                covariates=covariates_valid,
-                snp_info=snp_info,
-                maf_threshold=maf_threshold,
-                miss_threshold=miss_threshold,
-                lmm_mode=lmm_mode,
-                valid_mask=valid_mask,
-                show_progress=show_progress,
-                l_min=l_min,
-                l_max=l_max,
-                snps_global_mask=snps_global_mask,
-                col_chunk_size=col_chunk_size,
-                writer=writer,
-            )
+            if backend == "numpy":
+                chr_results = _run_lmm_for_chromosome_numpy(
+                    bed_path=bed_path,
+                    chr_snp_indices=chr_snp_indices,
+                    eigenvalues=eigenvalues_np,
+                    eigenvectors=U,
+                    phenotypes=phenotypes_valid,
+                    covariates=covariates_valid,
+                    snp_info=snp_info,
+                    maf_threshold=maf_threshold,
+                    miss_threshold=miss_threshold,
+                    lmm_mode=lmm_mode,
+                    valid_mask=valid_mask,
+                    show_progress=show_progress,
+                    l_min=l_min,
+                    l_max=l_max,
+                    snps_global_mask=snps_global_mask,
+                    col_chunk_size=col_chunk_size,
+                    writer=writer,
+                )
+            else:
+                chr_results = _run_lmm_for_chromosome(
+                    bed_path=bed_path,
+                    chr_snp_indices=chr_snp_indices,
+                    eigenvalues=eigenvalues_np,
+                    eigenvectors=U,
+                    phenotypes=phenotypes_valid,
+                    covariates=covariates_valid,
+                    snp_info=snp_info,
+                    maf_threshold=maf_threshold,
+                    miss_threshold=miss_threshold,
+                    lmm_mode=lmm_mode,
+                    valid_mask=valid_mask,
+                    show_progress=show_progress,
+                    l_min=l_min,
+                    l_max=l_max,
+                    snps_global_mask=snps_global_mask,
+                    col_chunk_size=col_chunk_size,
+                    writer=writer,
+                )
 
             # When writer is provided, results are already on disk;
             # chr_results is empty. Otherwise accumulate in memory.
@@ -284,7 +331,10 @@ def run_lmm_loco(
 
         # Clear JIT caches once after all chromosomes (kernels reused across
         # chromosomes since n_samples, n_cvt are identical)
-        jax.clear_caches()
+        if backend == "jax":
+            import jax
+
+            jax.clear_caches()
 
         if writer is not None and show_progress:
             logger.info(f"Wrote {writer.count:,} results to {output_path}")
@@ -318,7 +368,7 @@ def _run_lmm_for_chromosome(
     col_chunk_size: int = 5_000,
     writer: IncrementalAssocWriter | None = None,
 ) -> list[AssocResult]:
-    """Run LMM association on a single chromosome's SNPs.
+    """Run JAX LMM association on a single chromosome's SNPs.
 
     Reads the chromosome's SNPs from the BED file in column chunks
     (two-pass: statistics, then association), never allocating the full
@@ -353,6 +403,25 @@ def _run_lmm_for_chromosome(
     Returns:
         List of AssocResult for this chromosome's SNPs (empty if writer used).
     """
+    import jax  # noqa: PLC0415
+
+    from jamma.lmm.chunk import _compute_chunk_size  # noqa: PLC0415
+    from jamma.lmm.compute import (  # noqa: PLC0415
+        _compute_lmm_chunk,
+        block_chunk_result,
+        log_jax_error,
+        strip_and_append,
+    )
+    from jamma.lmm.likelihood_jax import batch_compute_uab  # noqa: PLC0415
+    from jamma.lmm.prepare import (  # noqa: PLC0415
+        DevicePlacement,
+        _compute_null_model,
+        _select_jax_device,
+        prepare_utg_chunk,
+    )
+    from jamma.lmm.results import _concat_jax_accumulators  # noqa: PLC0415
+    from jamma.lmm.runner_streaming import _init_accumulators  # noqa: PLC0415
+
     n_samples = phenotypes.shape[0]
     valid_indices = np.where(valid_mask)[0]
 
@@ -603,3 +672,262 @@ def _run_lmm_for_chromosome(
         return results
     finally:
         del eigenvalues_jax, UtW_jax, Uty_jax
+
+
+def _run_lmm_for_chromosome_numpy(
+    bed_path: Path,
+    chr_snp_indices: np.ndarray,
+    eigenvalues: np.ndarray,
+    eigenvectors: np.ndarray,
+    phenotypes: np.ndarray,
+    covariates: np.ndarray | None,
+    snp_info: list,
+    maf_threshold: float,
+    miss_threshold: float,
+    lmm_mode: int,
+    valid_mask: np.ndarray,
+    show_progress: bool = True,
+    l_min: float = 1e-5,
+    l_max: float = 1e5,
+    n_grid: int = 50,
+    n_refine: int = 10,
+    snps_global_mask: np.ndarray | None = None,
+    col_chunk_size: int = 5_000,
+    writer: IncrementalAssocWriter | None = None,
+) -> list[AssocResult]:
+    """Run NumPy LMM association on a single chromosome's SNPs.
+
+    Pure-NumPy implementation — no JAX dependency. Mirrors the structure of
+    _run_lmm_for_chromosome but uses NumPy functions throughout.
+
+    Reads the chromosome's SNPs from the BED file in column chunks
+    (two-pass: statistics, then association), never allocating the full
+    chromosome genotype matrix.
+
+    Args:
+        bed_path: PLINK file prefix.
+        chr_snp_indices: Column indices for this chromosome's SNPs.
+        eigenvalues: Eigenvalues from LOCO kinship eigendecomp.
+        eigenvectors: Eigenvectors from LOCO kinship eigendecomp.
+        phenotypes: Phenotype vector (n_valid_samples,), already filtered.
+        covariates: Covariate matrix (n_valid_samples, n_cvt) or None.
+        snp_info: Full SNP metadata list (indexed by global SNP index).
+        maf_threshold: Minimum MAF for SNP inclusion.
+        miss_threshold: Maximum missing rate for SNP inclusion.
+        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
+        valid_mask: Boolean mask for valid samples (for genotype subsetting).
+        show_progress: Whether to log progress.
+        l_min: Minimum lambda for optimization.
+        l_max: Maximum lambda for optimization.
+        n_grid: Grid search resolution.
+        n_refine: Golden section iterations.
+        snps_global_mask: Boolean mask over all SNPs (True = included by -snps), or
+            None. Pre-indexed: `snps_global_mask[chr_snp_indices]` gives the
+            per-chromosome mask. Avoids per-chromosome np.isin computation.
+        col_chunk_size: Number of SNP columns per disk read chunk.
+        writer: Optional incremental writer for streaming results to disk.
+            When provided, results are written directly and an empty list
+            is returned. When None, results are accumulated and returned.
+
+    Returns:
+        List of AssocResult for this chromosome's SNPs (empty if writer used).
+    """
+    n_samples = phenotypes.shape[0]
+    valid_indices = np.where(valid_mask)[0]
+
+    # === PASS 1: Chunked SNP statistics ===
+    n_chr_snps = len(chr_snp_indices)
+    col_means = np.zeros(n_chr_snps, dtype=np.float64)
+    miss_counts = np.zeros(n_chr_snps, dtype=np.int32)
+    col_vars = np.zeros(n_chr_snps, dtype=np.float64)
+    n_unexpected_total = 0
+
+    bed_file = Path(f"{bed_path}.bed")
+    with open_bed(bed_file) as bed:
+        for chunk_start in range(0, n_chr_snps, col_chunk_size):
+            chunk_end = min(chunk_start + col_chunk_size, n_chr_snps)
+            chunk_col_indices = chr_snp_indices[chunk_start:chunk_end]
+
+            geno_chunk = bed.read(
+                index=np.s_[valid_indices, chunk_col_indices],
+                dtype=np.float64,
+            )
+
+            n_unexpected_total += validate_genotype_values(geno_chunk)
+
+            # Compute per-SNP statistics for this chunk
+            chunk_miss = np.sum(np.isnan(geno_chunk), axis=0)
+            with np.errstate(invalid="ignore"):
+                chunk_means = np.nanmean(geno_chunk, axis=0)
+                chunk_vars = np.nanvar(geno_chunk, axis=0)
+            chunk_means = np.nan_to_num(chunk_means, nan=0.0)
+            chunk_vars = np.nan_to_num(chunk_vars, nan=0.0)
+
+            col_means[chunk_start:chunk_end] = chunk_means
+            miss_counts[chunk_start:chunk_end] = chunk_miss
+            col_vars[chunk_start:chunk_end] = chunk_vars
+
+            del geno_chunk
+
+    if n_unexpected_total > 0:
+        logger.warning(
+            f"LOCO chr genotype validation: {n_unexpected_total} values outside "
+            f"expected range {{0, 1, 2, NaN}}"
+        )
+
+    # Apply SNP filter
+    snp_mask, allele_freqs, _mafs = compute_snp_filter_mask(
+        col_means, miss_counts, col_vars, n_samples, maf_threshold, miss_threshold
+    )
+
+    # Apply SNP list restriction (if -snps provided)
+    if snps_global_mask is not None:
+        snp_mask &= snps_global_mask[chr_snp_indices]
+
+    local_filtered_indices = np.where(snp_mask)[0]
+    n_filtered = len(local_filtered_indices)
+
+    if show_progress:
+        logger.debug(
+            f"  Chromosome SNPs: {len(chr_snp_indices)}, after filter: {n_filtered}"
+        )
+
+    if n_filtered == 0:
+        if show_progress:
+            logger.warning("  Chromosome has no SNPs after filtering, skipping")
+        return []
+
+    # Build SNP stat arrays for result construction
+    # Map local filtered index -> global SNP index
+    global_filtered_indices = chr_snp_indices[local_filtered_indices]
+    filtered_afs = allele_freqs[local_filtered_indices]
+    filtered_miss = miss_counts[local_filtered_indices].astype(int)
+    filtered_means_all = col_means[local_filtered_indices]
+
+    # === PASS 2: Chunked NumPy association ===
+    # filtered_chr_col_indices: global BED column indices for filtered SNPs
+    filtered_chr_col_indices = chr_snp_indices[local_filtered_indices]
+
+    # Build covariate matrix
+    W, n_cvt = _build_covariate_matrix(covariates, n_samples)
+
+    # Rotation uses all physical cores (pure BLAS, no JAX)
+    rotation_threads = get_physical_core_count()
+
+    with blas_threads(rotation_threads):
+        UtW = eigenvectors.T @ W
+        Uty = eigenvectors.T @ phenotypes
+
+    # Compute null model (NumPy version, returns plain numpy arrays)
+    logl_H0, _lambda_null_mle, Hi_eval_null = _compute_null_model_common(
+        lmm_mode,
+        eigenvalues,
+        UtW,
+        Uty,
+        n_cvt,
+        show_progress=False,
+        l_min=l_min,
+        l_max=l_max,
+    )
+
+    # Compute chunk size based on RAM budget
+    chunk_size = _compute_chunk_size_numpy(n_samples, n_filtered, n_cvt)
+
+    # Pre-allocate result arrays
+    write_offset = 0
+    arrays_out: dict[str, np.ndarray] = {
+        key: np.empty(n_filtered, dtype=np.float64) for key in _RESULT_FIELDS[lmm_mode]
+    }
+
+    # Track lambda boundary hits across all disk chunks
+    total_at_lmin = 0
+    total_at_lmax = 0
+    results: list[AssocResult] = []
+
+    with open_bed(bed_file) as bed:
+        for disk_start in range(0, n_filtered, col_chunk_size):
+            disk_end = min(disk_start + col_chunk_size, n_filtered)
+            disk_col_indices = filtered_chr_col_indices[disk_start:disk_end]
+
+            geno_disk_chunk = bed.read(
+                index=np.s_[valid_indices, disk_col_indices],
+                dtype=np.float64,
+            )
+
+            # Impute missing values with column means
+            chunk_filtered_means = filtered_means_all[disk_start:disk_end]
+            missing_mask = np.isnan(geno_disk_chunk)
+            geno_disk_chunk = np.where(
+                missing_mask, chunk_filtered_means.reshape(1, -1), geno_disk_chunk
+            )
+
+            # Process disk chunk in numpy sub-chunks
+            n_disk_subset = geno_disk_chunk.shape[1]
+
+            for sub_start in range(0, n_disk_subset, chunk_size):
+                sub_end = min(sub_start + chunk_size, n_disk_subset)
+                geno_sub = geno_disk_chunk[:, sub_start:sub_end]
+
+                # Rotate genotypes
+                with blas_threads(rotation_threads):
+                    UtG = eigenvectors.T @ geno_sub
+
+                # Compute Uab batch
+                Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+
+                # Mode dispatch
+                cr = _compute_lmm_chunk_numpy(
+                    lmm_mode,
+                    n_cvt,
+                    eigenvalues,
+                    Uab_batch,
+                    n_samples,
+                    l_min=l_min,
+                    l_max=l_max,
+                    n_grid=n_grid,
+                    n_refine=n_refine,
+                    Hi_eval_null=Hi_eval_null,
+                    logl_H0=logl_H0,
+                )
+
+                # Write sub-chunk results to pre-allocated arrays
+                actual_len = sub_end - sub_start
+                s = slice(write_offset, write_offset + actual_len)
+                for key in arrays_out:
+                    arrays_out[key][s] = cr[key][:actual_len]
+                write_offset += actual_len
+
+            del geno_disk_chunk
+
+    # Count lambda boundary hits and log warnings
+    n_lmin, n_lmax = count_lambda_boundary_hits(lmm_mode, arrays_out, l_min, l_max)
+    total_at_lmin += n_lmin
+    total_at_lmax += n_lmax
+    log_lambda_boundary_warning(
+        total_at_lmin, total_at_lmax, l_min, l_max, prefix="LOCO "
+    )
+
+    # Flush results
+    if writer is not None:
+        writer.write_arrays_batch(
+            lmm_mode,
+            global_filtered_indices,
+            snp_info,
+            filtered_afs,
+            filtered_miss,
+            arrays_out,
+        )
+    else:
+        results = list(
+            _yield_chunk_results(
+                lmm_mode,
+                np.arange(n_filtered),
+                global_filtered_indices,
+                filtered_afs,
+                filtered_miss,
+                snp_info,
+                arrays_out,
+            )
+        )
+
+    return results

@@ -29,7 +29,7 @@ from jamma.io.plink import (
     get_plink_metadata,
     validate_genotype_values,
 )
-from jamma.kinship import compute_loco_kinship_streaming, write_kinship_matrix
+from jamma.kinship import write_kinship_matrix
 from jamma.lmm.compute_numpy import _compute_lmm_chunk_numpy
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.io import IncrementalAssocWriter
@@ -228,6 +228,9 @@ def run_lmm_loco(
             snps_global_mask = None
 
         # Stream LOCO kinship matrices one at a time
+        # Lazy import: compute_loco_kinship_streaming requires JAX via kinship module.
+        from jamma.kinship import compute_loco_kinship_streaming  # noqa: PLC0415
+
         loco_iter = compute_loco_kinship_streaming(
             bed_path,
             maf_threshold=maf_threshold,

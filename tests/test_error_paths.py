@@ -154,17 +154,13 @@ class TestPipelineErrorPaths:
 
     def test_all_phenotypes_missing_raises(self, tmp_path: Path) -> None:
         """parse_phenotypes raises ValueError when all phenotypes are -9 (missing)."""
-        # Copy .bed and .bim from fixture; overwrite .fam with all-missing phenotypes
         for ext in (".bed", ".bim", ".fam"):
             shutil.copy(FIXTURES / f"test{ext}", tmp_path / f"test{ext}")
 
         fam_path = tmp_path / "test.fam"
-        with open(fam_path) as f:
-            n_samples = sum(1 for _ in f)
-
-        with open(fam_path, "w") as f:
-            for i in range(n_samples):
-                f.write(f"FAM{i:03d} IND{i:03d} 0 0 0 -9\n")
+        n_samples = len(fam_path.read_text().strip().splitlines())
+        lines = [f"FAM{i:03d} IND{i:03d} 0 0 0 -9" for i in range(n_samples)]
+        fam_path.write_text("\n".join(lines) + "\n")
 
         config = PipelineConfig(
             bfile=tmp_path / "test",
@@ -190,15 +186,12 @@ class TestPipelineErrorPaths:
         """load_covariates emits a loguru warning when first column is not all 1s."""
         from loguru import logger
 
-        # Determine sample count from BFILE .fam
-        fam_path = Path(f"{BFILE}.fam")
-        with open(fam_path) as f:
-            n_samples = sum(1 for _ in f)
+        fam_path = BFILE.with_suffix(".fam")
+        n_samples = len(fam_path.read_text().strip().splitlines())
 
         cov_path = tmp_path / "cov.txt"
-        with open(cov_path, "w") as f:
-            for i in range(n_samples):
-                f.write(f"{2 + i} {3 + i}\n")  # First column is NOT all 1s
+        lines = [f"{2 + i} {3 + i}" for i in range(n_samples)]
+        cov_path.write_text("\n".join(lines) + "\n")
 
         config = PipelineConfig(
             bfile=BFILE,

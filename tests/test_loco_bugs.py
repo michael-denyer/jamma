@@ -48,8 +48,6 @@ class TestFallbackKinshipAliasing:
 
     def test_raises_on_zero_n_filtered(self):
         """n_filtered=0 raises ValueError (division by zero guard)."""
-        import pytest
-
         S_full = np.eye(3, dtype=np.float64)
         with pytest.raises(ValueError, match="n_filtered is 0"):
             list(_yield_full_kinship_fallback(S_full, ["1"], n_filtered=0))

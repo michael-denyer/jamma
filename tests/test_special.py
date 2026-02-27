@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -288,23 +289,23 @@ class TestImportIsolation:
     JAX imports.
     """
 
-    def _make_mock_jax_path(self, tmp_path: str) -> str:
+    def _make_mock_jax_path(self, tmp_dir: str) -> Path:
         """Create a temporary directory with a mock jax package that raises ImportError.
 
         Args:
-            tmp_path: Temporary directory path.
+            tmp_dir: Temporary directory path.
 
         Returns:
             Path to the temporary directory (prepend to PYTHONPATH).
         """
-        jax_dir = os.path.join(tmp_path, "jax")
-        os.makedirs(jax_dir, exist_ok=True)
-        init_path = os.path.join(jax_dir, "__init__.py")
-        with open(init_path, "w") as f:
-            f.write('raise ImportError("mock: jax not installed")\n')
-        return tmp_path
+        jax_dir = Path(tmp_dir) / "jax"
+        jax_dir.mkdir(parents=True, exist_ok=True)
+        (jax_dir / "__init__.py").write_text(
+            'raise ImportError("mock: jax not installed")\n'
+        )
+        return Path(tmp_dir)
 
-    def _env_without_jax(self, mock_jax_path: str) -> dict[str, str]:
+    def _env_without_jax(self, mock_jax_path: Path) -> dict[str, str]:
         """Build subprocess env with mock JAX prepended to PYTHONPATH.
 
         Args:
@@ -314,12 +315,12 @@ class TestImportIsolation:
             Copy of os.environ with PYTHONPATH modified.
         """
         env = os.environ.copy()
-        src_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src")
-        existing_pythonpath = env.get("PYTHONPATH", "")
-        if existing_pythonpath:
-            env["PYTHONPATH"] = f"{mock_jax_path}:{src_path}:{existing_pythonpath}"
-        else:
-            env["PYTHONPATH"] = f"{mock_jax_path}:{src_path}"
+        src_path = Path(__file__).parent.parent / "src"
+        parts = [str(mock_jax_path), str(src_path)]
+        existing = env.get("PYTHONPATH", "")
+        if existing:
+            parts.append(existing)
+        env["PYTHONPATH"] = ":".join(parts)
         return env
 
     def test_stats_importable_without_jax(self):
@@ -386,15 +387,13 @@ class TestImportIsolation:
             "compute.py",
         }
 
-        src_lmm = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "src", "jamma", "lmm"
-        )
+        src_lmm = Path(__file__).parent.parent / "src" / "jamma" / "lmm"
         result = subprocess.run(
             [
                 "grep",
                 "-rn",
                 r"^import jax\|^from jax",
-                src_lmm,
+                str(src_lmm),
             ],
             capture_output=True,
             text=True,
@@ -402,12 +401,12 @@ class TestImportIsolation:
         matching_lines = (
             result.stdout.strip().splitlines() if result.stdout.strip() else []
         )
-        found_files = {os.path.basename(line.split(":")[0]) for line in matching_lines}
+        found_files = {Path(line.split(":")[0]).name for line in matching_lines}
         unexpected = found_files - _JAX_IMPORT_ALLOWLIST
         unexpected_lines = "\n".join(
             line
             for line in matching_lines
-            if os.path.basename(line.split(":")[0]) in unexpected
+            if Path(line.split(":")[0]).name in unexpected
         )
         assert not unexpected, (
             "Unexpected module-level JAX imports found in src/jamma/lmm/:\n"

@@ -102,9 +102,8 @@ class TestPlinkIOErrorPaths:
         assert len(partitions) >= 3
 
         # Verify SNP counts are consistent with the BIM file
-        bim_path = Path(f"{LOCO_BFILE}.bim")
-        with open(bim_path) as f:
-            n_bim_snps = sum(1 for _ in f)
+        bim_path = LOCO_BFILE.with_suffix(".bim")
+        n_bim_snps = len(bim_path.read_text().strip().splitlines())
         total_snps = sum(len(indices) for indices in partitions.values())
         assert total_snps == n_bim_snps
 

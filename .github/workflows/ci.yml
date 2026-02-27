@@ -52,6 +52,12 @@ jobs:
             install_args: "--extra jax --extra dev"
             name: "ARM Mac + JAX"
             cov_threshold: "--cov-fail-under=80"
+          - os: macos-13
+            python-version: "3.12"
+            install_args: "--extra dev"
+            name: "Intel Mac + NumPy"
+            pytest_args: "-m 'not tier2 and not slow and not requires_jax'"
+            cov_threshold: "--cov-fail-under=50"
     name: ${{ matrix.name }}
     timeout-minutes: 15
     steps:

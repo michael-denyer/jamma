@@ -20,7 +20,7 @@ from __future__ import annotations
 import numpy as np
 from loguru import logger
 
-from jamma.lmm.likelihood import build_index_table
+from jamma.lmm.likelihood import _P_YY_MIN, build_index_table
 from jamma.lmm.special import betainc, chi2_sf
 
 # Module-level vectorized wrappers (created once, reused across calls)
@@ -323,7 +323,7 @@ def _batch_reml_at_lambda_numpy(
     # P_yy per SNP with guards
     P_yy = Pab_batch[:, nc_total, table["idx_yy"]]  # (n_snps,)
     P_yy = np.where(P_yy < 0.0, np.nan, P_yy)
-    P_yy = np.where((P_yy >= 0.0) & (P_yy < 1e-8), 1e-8, P_yy)
+    P_yy = np.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
 
     # REML log-likelihood per SNP
     c = 0.5 * df * (np.log(df) - np.log(2.0 * np.pi) - 1.0)
@@ -366,7 +366,7 @@ def _batch_mle_at_lambda_numpy(
     # P_yy per SNP with guards
     P_yy = Pab_batch[:, nc_total, table["idx_yy"]]
     P_yy = np.where(P_yy < 0.0, np.nan, P_yy)
-    P_yy = np.where((P_yy >= 0.0) & (P_yy < 1e-8), 1e-8, P_yy)
+    P_yy = np.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
 
     # MLE log-likelihood per SNP (no logdet_hiw, uses n not df)
     c = 0.5 * n * (np.log(n) - np.log(2.0 * np.pi) - 1.0)
@@ -723,7 +723,7 @@ def batch_calc_wald_stats_numpy(
     Px_YY = Pab_batch[:, n_cvt + 1, idx_yy]
 
     # Clamp Px_YY
-    Px_YY = np.where((Px_YY >= 0.0) & (Px_YY < 1e-8), 1e-8, Px_YY)
+    Px_YY = np.where((Px_YY >= 0.0) & (Px_YY < _P_YY_MIN), _P_YY_MIN, Px_YY)
 
     beta, se, is_valid = _beta_se_from_pab(P_XX, P_XY, Px_YY, df)
 
@@ -769,13 +769,13 @@ def batch_calc_score_stats_numpy(
 
     # Score test: extract at level n_cvt (covariates only, NOT genotype)
     P_yy = Pab_batch[:, n_cvt, idx_yy]
-    P_yy = np.where((P_yy >= 0.0) & (P_yy < 1e-8), 1e-8, P_yy)
+    P_yy = np.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
     P_xx = Pab_batch[:, n_cvt, idx_xx]
     P_xy = Pab_batch[:, n_cvt, idx_xy]
 
     # Px_yy for beta/se computation
     Px_yy = Pab_batch[:, n_cvt + 1, idx_yy]
-    Px_yy = np.where((Px_yy >= 0.0) & (Px_yy < 1e-8), 1e-8, Px_yy)
+    Px_yy = np.where((Px_yy >= 0.0) & (Px_yy < _P_YY_MIN), _P_YY_MIN, Px_yy)
 
     beta, se, is_valid = _beta_se_from_pab(P_xx, P_xy, Px_yy, df)
 

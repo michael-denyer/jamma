@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from jamma.lmm.likelihood import calc_pab, get_ab_index
+from jamma.lmm.likelihood import _P_YY_MIN, calc_pab, get_ab_index
 from jamma.lmm.special import betainc, chi2_sf
 
 
@@ -147,9 +147,9 @@ def calc_wald_test(
         return float("nan"), float("nan"), float("nan")
 
     # Clamp Px_yy like JAX path does for P_yy (GEMMA lmm.cpp:854)
-    # Only clamp if >= 0 and < 1e-8; leave negative values to produce NaN
-    if Px_yy >= 0.0 and Px_yy < 1e-8:
-        Px_yy = 1e-8
+    # Only clamp if >= 0 and < _P_YY_MIN; leave negative values to produce NaN
+    if Px_yy >= 0.0 and Px_yy < _P_YY_MIN:
+        Px_yy = _P_YY_MIN
 
     # Compute effect size and standard error
     # Use safe_sqrt to handle edge cases where 1/(tau*P_xx) could be slightly negative
@@ -276,8 +276,8 @@ def calc_score_test(
         return float("nan"), float("nan"), float("nan")
 
     # Clamp Px_yy like Wald test does (GEMMA lmm.cpp:854)
-    if Px_yy >= 0.0 and Px_yy < 1e-8:
-        Px_yy = 1e-8
+    if Px_yy >= 0.0 and Px_yy < _P_YY_MIN:
+        Px_yy = _P_YY_MIN
 
     # Compute beta and se (informational only for Score test)
     beta = P_xy / P_xx

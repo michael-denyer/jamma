@@ -122,3 +122,37 @@ _HEADER_PREFIX = "chr\trs\tps\tn_miss\tallele1\tallele0\taf"
 HEADERS: dict[str, str] = {
     tt: _HEADER_PREFIX + "\t" + "\t".join(cols) for tt, cols in FORMAT_COLUMNS.items()
 }
+
+
+class LazySnpMeta:
+    """Lazy view over PLINK metadata arrays, avoiding per-SNP dict materialization.
+
+    Instead of building a list of n_snps dicts at construction time, this wrapper
+    holds references to the underlying metadata arrays and materializes a single
+    dict on each __getitem__ access. This saves O(n_snps) dict + string objects.
+
+    Compatible with all snp_info consumers that use integer indexing (snp_info[idx]).
+    """
+
+    __slots__ = ("_chr", "_rs", "_pos", "_a1", "_a0")
+
+    def __init__(self, meta: dict) -> None:
+        self._chr = meta["chromosome"]
+        self._rs = meta["sid"]
+        self._pos = meta["bp_position"]
+        self._a1 = meta["allele_1"]
+        self._a0 = meta["allele_2"]
+
+    def __len__(self) -> int:
+        return len(self._rs)
+
+    def __getitem__(self, i: int | slice) -> dict | list[dict]:
+        if isinstance(i, slice):
+            return [self[j] for j in range(*i.indices(len(self)))]
+        return {
+            "chr": str(self._chr[i]),
+            "rs": self._rs[i],
+            "pos": int(self._pos[i]),
+            "a1": self._a1[i],
+            "a0": self._a0[i],
+        }

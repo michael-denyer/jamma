@@ -653,7 +653,7 @@ class PipelineRunner:
                         str(self.config.profile_dir), create_perfetto_link=False
                     )
                     logger.info(f"XLA profiling enabled: {self.config.profile_dir}")
-                except (OSError, ImportError) as e:
+                except (OSError, ImportError, AttributeError) as e:
                     logger.warning(f"Could not enable XLA profiling: {e}")
         elif self.config.profile_dir is not None:
             logger.warning("XLA profiling requires JAX backend; ignoring --profile-dir")

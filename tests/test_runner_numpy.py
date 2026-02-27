@@ -509,3 +509,108 @@ def test_numpy_runner_all_covar_synthetic(synthetic_data_with_covariates):
     assert comparison.passed, (
         f"NumPy All+covar (synthetic) vs GEMMA failed:\n{comparison}"
     )
+
+
+# ---------------------------------------------------------------------------
+# mouse_hs1940 covariate GEMMA validation tests (slow)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not found")
+@pytest.mark.skipif(
+    not (MOUSE_HS1940_DIR / "mouse_hs1940_covar_wald.assoc.txt").exists(),
+    reason="mouse_hs1940 covariate Wald fixture not found",
+)
+def test_numpy_runner_wald_covar_mouse_hs1940(mouse_hs1940_data_with_covariates):
+    """Mode 1 (Wald) with covariates: NumPy runner matches GEMMA on mouse_hs1940."""
+    plink, kinship, phenotypes, snp_info, covariates = mouse_hs1940_data_with_covariates
+    results = run_lmm_association_numpy(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        covariates=covariates,
+        lmm_mode=1,
+        show_progress=False,
+    )
+    reference = load_gemma_assoc(MOUSE_HS1940_COVAR_WALD)
+    comparison = compare_assoc_results(results, reference, NUMPY_GEMMA_TOLERANCES)
+    assert comparison.passed, (
+        f"NumPy Wald+covar (mouse_hs1940) vs GEMMA failed:\n{comparison}"
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not found")
+@pytest.mark.skipif(
+    not (MOUSE_HS1940_DIR / "mouse_hs1940_covar_lrt.assoc.txt").exists(),
+    reason="mouse_hs1940 covariate LRT fixture not found",
+)
+def test_numpy_runner_lrt_covar_mouse_hs1940(mouse_hs1940_data_with_covariates):
+    """Mode 2 (LRT) with covariates: NumPy runner matches GEMMA on mouse_hs1940."""
+    plink, kinship, phenotypes, snp_info, covariates = mouse_hs1940_data_with_covariates
+    results = run_lmm_association_numpy(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        covariates=covariates,
+        lmm_mode=2,
+        show_progress=False,
+    )
+    reference = load_gemma_assoc(MOUSE_HS1940_COVAR_LRT)
+    comparison = compare_assoc_results(results, reference, NUMPY_GEMMA_TOLERANCES)
+    assert comparison.passed, (
+        f"NumPy LRT+covar (mouse_hs1940) vs GEMMA failed:\n{comparison}"
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not found")
+@pytest.mark.skipif(
+    not (MOUSE_HS1940_DIR / "mouse_hs1940_covar_score.assoc.txt").exists(),
+    reason="mouse_hs1940 covariate Score fixture not found",
+)
+def test_numpy_runner_score_covar_mouse_hs1940(mouse_hs1940_data_with_covariates):
+    """Mode 3 (Score) with covariates: NumPy runner matches GEMMA on mouse_hs1940."""
+    plink, kinship, phenotypes, snp_info, covariates = mouse_hs1940_data_with_covariates
+    results = run_lmm_association_numpy(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        covariates=covariates,
+        lmm_mode=3,
+        show_progress=False,
+    )
+    reference = load_gemma_assoc(MOUSE_HS1940_COVAR_SCORE)
+    comparison = compare_assoc_results(results, reference, NUMPY_GEMMA_TOLERANCES)
+    assert comparison.passed, (
+        f"NumPy Score+covar (mouse_hs1940) vs GEMMA failed:\n{comparison}"
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not found")
+@pytest.mark.skipif(
+    not (MOUSE_HS1940_DIR / "mouse_hs1940_covar_all.assoc.txt").exists(),
+    reason="mouse_hs1940 covariate all-tests fixture not found",
+)
+def test_numpy_runner_all_covar_mouse_hs1940(mouse_hs1940_data_with_covariates):
+    """Mode 4 (All) with covariates: NumPy runner matches GEMMA on mouse_hs1940."""
+    plink, kinship, phenotypes, snp_info, covariates = mouse_hs1940_data_with_covariates
+    results = run_lmm_association_numpy(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        covariates=covariates,
+        lmm_mode=4,
+        show_progress=False,
+    )
+    reference = load_gemma_assoc(MOUSE_HS1940_COVAR_ALL)
+    comparison = compare_assoc_results(results, reference, NUMPY_GEMMA_TOLERANCES)
+    assert comparison.passed, (
+        f"NumPy All+covar (mouse_hs1940) vs GEMMA failed:\n{comparison}"
+    )

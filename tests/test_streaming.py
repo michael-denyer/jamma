@@ -5,6 +5,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+pytest.importorskip("jax")
+
 from jamma.core.memory import (
     StreamingMemoryBreakdown,
     estimate_lmm_streaming_memory,

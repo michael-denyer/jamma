@@ -15,6 +15,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+pytest.importorskip("jax")
+
 from jamma.io.plink import get_chromosome_partitions, get_plink_metadata
 from jamma.kinship import (
     compute_centered_kinship,

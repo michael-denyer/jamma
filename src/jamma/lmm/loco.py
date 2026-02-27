@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import gc
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
@@ -27,9 +28,11 @@ from jamma.core.threading import blas_threads, get_physical_core_count
 from jamma.io.plink import (
     get_chromosome_partitions,
     get_plink_metadata,
+    stream_genotype_chunks,
     validate_genotype_values,
 )
 from jamma.kinship import write_kinship_matrix
+from jamma.kinship.missing import impute_and_center
 from jamma.lmm.compute_numpy import _compute_lmm_chunk_numpy
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.io import IncrementalAssocWriter
@@ -46,42 +49,353 @@ from jamma.lmm.results import (
 from jamma.lmm.runner_numpy import _compute_chunk_size_numpy
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
+from jamma.lmm.schema import LazySnpMeta
 from jamma.lmm.stats import AssocResult
 from jamma.utils import chr_sort_key
 
 
-class _LazySnpMeta:
-    """Lazy view over PLINK metadata arrays, avoiding per-SNP dict materialization.
+def _collect_chr_snp_stats(
+    bed_path: Path,
+    chr_snp_indices: np.ndarray,
+    valid_indices: np.ndarray,
+    col_chunk_size: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Collect per-SNP statistics for one chromosome via chunked BED reads.
 
-    Instead of building a list of n_snps dicts at construction time, this wrapper
-    holds references to the underlying metadata arrays and materializes a single
-    dict on each __getitem__ access. This saves O(n_snps) dict + string objects.
+    Shared by both JAX and NumPy LOCO chromosome runners (pass-1 logic).
 
-    Compatible with all snp_info consumers that use integer indexing (snp_info[idx]).
+    Args:
+        bed_path: PLINK file prefix (without extension).
+        chr_snp_indices: Global column indices for this chromosome's SNPs.
+        valid_indices: Row indices of valid (non-missing) samples.
+        col_chunk_size: Number of SNP columns per disk read chunk.
+
+    Returns:
+        Tuple of (col_means, miss_counts, col_vars, n_unexpected) where
+        arrays are of length len(chr_snp_indices).
     """
+    n_chr_snps = len(chr_snp_indices)
+    col_means = np.zeros(n_chr_snps, dtype=np.float64)
+    miss_counts = np.zeros(n_chr_snps, dtype=np.int32)
+    col_vars = np.zeros(n_chr_snps, dtype=np.float64)
+    n_unexpected_total = 0
 
-    __slots__ = ("_chr", "_rs", "_pos", "_a1", "_a0")
+    bed_file = Path(f"{bed_path}.bed")
+    with open_bed(bed_file) as bed:
+        for chunk_start in range(0, n_chr_snps, col_chunk_size):
+            chunk_end = min(chunk_start + col_chunk_size, n_chr_snps)
+            chunk_col_indices = chr_snp_indices[chunk_start:chunk_end]
 
-    def __init__(self, meta: dict) -> None:
-        self._chr = meta["chromosome"]
-        self._rs = meta["sid"]
-        self._pos = meta["bp_position"]
-        self._a1 = meta["allele_1"]
-        self._a0 = meta["allele_2"]
+            geno_chunk = bed.read(
+                index=np.s_[valid_indices, chunk_col_indices],
+                dtype=np.float64,
+            )
 
-    def __len__(self) -> int:
-        return len(self._rs)
+            n_unexpected_total += validate_genotype_values(geno_chunk)
 
-    def __getitem__(self, i: int | slice) -> dict | list[dict]:
-        if isinstance(i, slice):
-            return [self[j] for j in range(*i.indices(len(self)))]
-        return {
-            "chr": str(self._chr[i]),
-            "rs": self._rs[i],
-            "pos": int(self._pos[i]),
-            "a1": self._a1[i],
-            "a0": self._a0[i],
-        }
+            chunk_miss = np.sum(np.isnan(geno_chunk), axis=0)
+            with np.errstate(invalid="ignore"):
+                chunk_means = np.nanmean(geno_chunk, axis=0)
+                chunk_vars = np.nanvar(geno_chunk, axis=0)
+            chunk_means = np.nan_to_num(chunk_means, nan=0.0)
+            chunk_vars = np.nan_to_num(chunk_vars, nan=0.0)
+
+            col_means[chunk_start:chunk_end] = chunk_means
+            miss_counts[chunk_start:chunk_end] = chunk_miss
+            col_vars[chunk_start:chunk_end] = chunk_vars
+
+            del geno_chunk
+
+    return col_means, miss_counts, col_vars, n_unexpected_total
+
+
+def _filter_chr_snps(
+    col_means: np.ndarray,
+    miss_counts: np.ndarray,
+    col_vars: np.ndarray,
+    n_samples: int,
+    maf_threshold: float,
+    miss_threshold: float,
+    chr_snp_indices: np.ndarray,
+    snps_global_mask: np.ndarray | None,
+    n_unexpected_total: int,
+    show_progress: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+    """Apply SNP filtering and log warnings. Returns None if no SNPs pass.
+
+    Shared by both JAX and NumPy LOCO chromosome runners.
+
+    Args:
+        col_means: Per-SNP means from pass-1.
+        miss_counts: Per-SNP missing counts from pass-1.
+        col_vars: Per-SNP variances from pass-1.
+        n_samples: Number of valid samples.
+        maf_threshold: Minimum MAF.
+        miss_threshold: Maximum missing rate.
+        chr_snp_indices: Global column indices for this chromosome.
+        snps_global_mask: Boolean mask for -snps restriction, or None.
+        n_unexpected_total: Count of unexpected genotype values from pass-1.
+        show_progress: Whether to log progress.
+
+    Returns:
+        Tuple of (local_filtered_indices, global_filtered_indices,
+        filtered_afs, filtered_miss, filtered_means) or None if empty.
+    """
+    if n_unexpected_total > 0:
+        logger.warning(
+            f"LOCO chr genotype validation: {n_unexpected_total} values outside "
+            f"expected range {{0, 1, 2, NaN}}"
+        )
+
+    snp_mask, allele_freqs, _mafs = compute_snp_filter_mask(
+        col_means, miss_counts, col_vars, n_samples, maf_threshold, miss_threshold
+    )
+
+    if snps_global_mask is not None:
+        snp_mask &= snps_global_mask[chr_snp_indices]
+
+    local_filtered_indices = np.where(snp_mask)[0]
+    n_filtered = len(local_filtered_indices)
+
+    if show_progress:
+        logger.debug(
+            f"  Chromosome SNPs: {len(chr_snp_indices)}, after filter: {n_filtered}"
+        )
+
+    if n_filtered == 0:
+        logger.warning(
+            f"  Chromosome ({len(chr_snp_indices)} SNPs) has no SNPs after "
+            f"filtering, skipping"
+        )
+        return None
+
+    global_filtered_indices = chr_snp_indices[local_filtered_indices]
+    filtered_afs = allele_freqs[local_filtered_indices]
+    filtered_miss = miss_counts[local_filtered_indices].astype(int)
+    filtered_means = col_means[local_filtered_indices]
+
+    return (
+        local_filtered_indices,
+        global_filtered_indices,
+        filtered_afs,
+        filtered_miss,
+        filtered_means,
+    )
+
+
+def _compute_loco_kinship_streaming_numpy(
+    bed_path: Path,
+    chunk_size: int = 10_000,
+    maf_threshold: float = 0.0,
+    miss_threshold: float = 1.0,
+    check_memory: bool = True,
+    show_progress: bool = True,
+    ksnps_indices: np.ndarray | None = None,
+) -> Iterator[tuple[str, np.ndarray]]:
+    """Compute LOCO kinship matrices using pure NumPy (no JAX dependency).
+
+    Mirrors compute_loco_kinship_streaming from jamma.kinship but uses
+    np.matmul instead of jnp.matmul. Single-pass only (no multi-pass
+    batching) — sufficient for most workloads where the NumPy backend is
+    chosen (typically <50k samples where all S_chr fit in RAM).
+
+    Args:
+        bed_path: Path prefix for PLINK files (without extension).
+        chunk_size: Number of SNPs per chunk (default 10,000).
+        maf_threshold: Minimum MAF for SNP inclusion.
+        miss_threshold: Maximum missing rate.
+        check_memory: If True, check available memory before allocation.
+        show_progress: If True, show progress bars.
+        ksnps_indices: Pre-resolved column indices for -ksnps restriction.
+
+    Yields:
+        Tuple of (chr_name, K_loco) where K_loco is (n_samples, n_samples).
+    """
+    import psutil
+
+    start_time = time.perf_counter()
+
+    meta = get_plink_metadata(bed_path)
+    n_samples = meta["n_samples"]
+    n_snps = meta["n_snps"]
+    chromosomes = meta["chromosome"]
+
+    partitions = get_chromosome_partitions(bed_path)
+    unique_chrs = sorted(partitions.keys(), key=chr_sort_key)
+
+    logger.info("Computing LOCO Kinship (streaming, NumPy)")
+    logger.info(f"  Individuals: {n_samples:,}")
+    logger.info(f"  SNPs: {n_snps:,}")
+    logger.info(f"  Chromosomes: {len(unique_chrs)}")
+    logger.info(f"  Chunk size: {chunk_size:,}")
+
+    # === PASS 1: SNP statistics for filtering ===
+    all_means = np.zeros(n_snps, dtype=np.float64)
+    all_miss_counts = np.zeros(n_snps, dtype=np.int32)
+    all_vars = np.zeros(n_snps, dtype=np.float64)
+    n_unexpected_total = 0
+
+    stats_iterator = stream_genotype_chunks(
+        bed_path, chunk_size=chunk_size, dtype=np.float32, show_progress=False
+    )
+    if show_progress:
+        from jamma.utils import progress_iterator
+
+        n_chunks = (n_snps + chunk_size - 1) // chunk_size
+        stats_iterator = progress_iterator(
+            stats_iterator, total=n_chunks, desc="LOCO: SNP statistics (NumPy)"
+        )
+
+    for chunk, start, end in stats_iterator:
+        n_unexpected_total += validate_genotype_values(chunk)
+        chunk_miss_counts = np.sum(np.isnan(chunk), axis=0)
+        with np.errstate(invalid="ignore"):
+            chunk_means = np.nanmean(chunk, axis=0)
+            chunk_vars = np.nanvar(chunk, axis=0)
+        chunk_means = np.nan_to_num(chunk_means, nan=0.0)
+        chunk_vars = np.nan_to_num(chunk_vars, nan=0.0)
+
+        all_means[start:end] = chunk_means
+        all_miss_counts[start:end] = chunk_miss_counts
+        all_vars[start:end] = chunk_vars
+        del chunk
+
+    if n_unexpected_total > 0:
+        logger.warning(
+            f"LOCO kinship genotype validation: {n_unexpected_total} values outside "
+            f"expected range {{0, 1, 2, NaN}}"
+        )
+
+    # Compute filters
+    miss_rates = all_miss_counts / n_samples
+    del all_miss_counts
+    allele_freqs = all_means / 2.0
+    del all_means
+    mafs = np.minimum(allele_freqs, 1.0 - allele_freqs)
+    is_polymorphic = all_vars > 0
+    del all_vars
+    snp_mask = (mafs >= maf_threshold) & (miss_rates <= miss_threshold) & is_polymorphic
+
+    if ksnps_indices is not None:
+        from jamma.core.snp_filter import apply_snp_list_mask
+
+        apply_snp_list_mask(snp_mask, ksnps_indices, n_snps, "Kinship SNP list")
+
+    n_filtered = int(np.sum(snp_mask))
+    if n_filtered == 0:
+        raise ValueError(
+            f"No SNPs passed filtering (maf>={maf_threshold}, "
+            f"miss<={miss_threshold}, polymorphic). "
+            f"Original SNP count: {n_snps}"
+        )
+
+    if n_filtered < n_snps:
+        n_removed = n_snps - n_filtered
+        logger.info(
+            f"LOCO kinship filtering: {n_filtered:,} SNPs retained, "
+            f"{n_removed:,} removed (MAF/missing/monomorphic)"
+        )
+
+    snp_indices = np.where(snp_mask)[0]
+    chr_for_filtered = chromosomes[snp_indices]
+
+    n_chr_filtered: dict[str, int] = {
+        chr_name: int(np.sum(chr_for_filtered == chr_name)) for chr_name in unique_chrs
+    }
+    chrs_with_snps = [c for c in unique_chrs if n_chr_filtered.get(c, 0) > 0]
+    chrs_without_snps = [c for c in unique_chrs if n_chr_filtered.get(c, 0) == 0]
+    if chrs_without_snps:
+        logger.warning(
+            f"{len(chrs_without_snps)} chromosome(s) have 0 ksnps after filtering: "
+            f"{chrs_without_snps}. LOCO will use full kinship for these "
+            f"(nothing to leave out)."
+        )
+
+    # Memory check
+    matrix_gb = n_samples**2 * 8 / 1e9
+    n_chr_with_snps = len(chrs_with_snps)
+    total_gb = matrix_gb * (1 + n_chr_with_snps)  # S_full + all S_chr
+    if check_memory:
+        available_gb = psutil.virtual_memory().available / 1e9
+        if total_gb > available_gb * 0.9:
+            raise MemoryError(
+                f"Insufficient memory for NumPy LOCO kinship: need "
+                f"{total_gb:.1f}GB for S_full + {n_chr_with_snps} S_chr, "
+                f"available {available_gb:.1f}GB"
+            )
+
+    # === PASS 2: Accumulate S_full and per-chromosome S_chr ===
+    S_full = np.zeros((n_samples, n_samples), dtype=np.float64)
+    S_chr: dict[str, np.ndarray] = {
+        c: np.zeros((n_samples, n_samples), dtype=np.float64) for c in chrs_with_snps
+    }
+    chr_set = set(chrs_with_snps)
+
+    accum_iterator = stream_genotype_chunks(
+        bed_path, chunk_size=chunk_size, dtype=np.float64, show_progress=False
+    )
+    if show_progress:
+        from jamma.utils import progress_iterator
+
+        n_chunks = (n_snps + chunk_size - 1) // chunk_size
+        accum_iterator = progress_iterator(
+            accum_iterator, total=n_chunks, desc="LOCO: kinship accumulation (NumPy)"
+        )
+
+    for chunk, file_start, file_end in accum_iterator:
+        left = np.searchsorted(snp_indices, file_start, side="left")
+        right = np.searchsorted(snp_indices, file_end, side="left")
+        chunk_snp_global_indices = snp_indices[left:right]
+        chunk_filtered_local = chunk_snp_global_indices - file_start
+
+        if len(chunk_filtered_local) == 0:
+            continue
+
+        X_chunk = chunk[:, chunk_filtered_local].astype(np.float64)
+        X_centered = impute_and_center(X_chunk)
+
+        S_full += X_centered @ X_centered.T
+
+        chunk_chrs = chromosomes[chunk_snp_global_indices]
+        target_chrs_in_chunk = set(chunk_chrs) & chr_set
+        for chr_name in target_chrs_in_chunk:
+            X_chr_part = X_centered[:, chunk_chrs == chr_name]
+            S_chr[chr_name] += X_chr_part @ X_chr_part.T
+
+        del X_chunk, X_centered, chunk
+
+    elapsed = time.perf_counter() - start_time
+    logger.info(
+        f"LOCO streaming accumulation (NumPy) complete in {elapsed:.2f}s, "
+        f"computing {len(S_chr)} LOCO matrices"
+    )
+
+    # Yield LOCO matrices via subtraction
+    for chr_name in sorted(S_chr.keys(), key=chr_sort_key):
+        p_chr = n_chr_filtered[chr_name]
+        p_loco = n_filtered - p_chr
+
+        if p_loco == 0:
+            raise ValueError(
+                f"Cannot compute LOCO kinship: all {n_filtered} filtered SNPs "
+                f"are on chromosome '{chr_name}'."
+            )
+
+        K_loco = (S_full - S_chr[chr_name]) / p_loco
+        logger.debug(
+            f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs retained"
+        )
+        del S_chr[chr_name]
+        yield (chr_name, K_loco)
+
+    # Yield full kinship for chromosomes with 0 filtered SNPs
+    if chrs_without_snps:
+        S_full /= n_filtered
+        for chr_name in sorted(chrs_without_snps, key=chr_sort_key):
+            logger.debug(
+                f"LOCO chr {chr_name}: 0 SNPs after filtering, using full kinship"
+            )
+            yield (chr_name, S_full.copy())
 
 
 def run_lmm_loco(
@@ -147,9 +461,13 @@ def run_lmm_loco(
         across all chromosomes.
 
     Raises:
-        ValueError: If only one chromosome present, or if lmm_mode invalid.
+        ValueError: If only one chromosome present, if lmm_mode invalid,
+            or if backend is not 'jax' or 'numpy'.
     """
     start_time = time.perf_counter()
+
+    if backend not in ("jax", "numpy"):
+        raise ValueError(f"backend must be 'jax' or 'numpy', got {backend!r}")
 
     if lmm_mode not in (1, 2, 3, 4):
         raise ValueError(
@@ -200,7 +518,7 @@ def run_lmm_loco(
         )
 
     # Build SNP metadata for result construction (lazy -- no upfront dict allocation)
-    snp_info = _LazySnpMeta(meta)
+    snp_info = LazySnpMeta(meta)
 
     test_type = _TEST_TYPE_MAP[lmm_mode]
 
@@ -227,18 +545,31 @@ def run_lmm_loco(
         else:
             snps_global_mask = None
 
-        # Stream LOCO kinship matrices one at a time
-        # Lazy import: compute_loco_kinship_streaming requires JAX via kinship module.
-        from jamma.kinship import compute_loco_kinship_streaming  # noqa: PLC0415
+        # Stream LOCO kinship matrices one at a time.
+        # NumPy backend uses pure-NumPy kinship (no JAX dependency);
+        # JAX backend uses JAX matmul for GPU acceleration.
+        if backend == "numpy":
+            loco_iter = _compute_loco_kinship_streaming_numpy(
+                bed_path,
+                maf_threshold=maf_threshold,
+                miss_threshold=miss_threshold,
+                check_memory=check_memory,
+                show_progress=show_progress,
+                ksnps_indices=ksnps_indices,
+            )
+        else:
+            from jamma.kinship import (  # noqa: PLC0415
+                compute_loco_kinship_streaming,
+            )
 
-        loco_iter = compute_loco_kinship_streaming(
-            bed_path,
-            maf_threshold=maf_threshold,
-            miss_threshold=miss_threshold,
-            check_memory=check_memory,
-            show_progress=show_progress,
-            ksnps_indices=ksnps_indices,
-        )
+            loco_iter = compute_loco_kinship_streaming(
+                bed_path,
+                maf_threshold=maf_threshold,
+                miss_threshold=miss_threshold,
+                check_memory=check_memory,
+                show_progress=show_progress,
+                ksnps_indices=ksnps_indices,
+            )
 
         for chr_idx, (chr_name, K_loco) in enumerate(loco_iter):
             chr_snp_indices = partitions[chr_name]
@@ -301,6 +632,7 @@ def run_lmm_loco(
                     snps_global_mask=snps_global_mask,
                     col_chunk_size=col_chunk_size,
                     writer=writer,
+                    chr_name=chr_name,
                 )
             else:
                 chr_results = _run_lmm_for_chromosome(
@@ -428,79 +760,36 @@ def _run_lmm_for_chromosome(
     n_samples = phenotypes.shape[0]
     valid_indices = np.where(valid_mask)[0]
 
-    # === PASS 1: Chunked SNP statistics ===
-    n_chr_snps = len(chr_snp_indices)
-    col_means = np.zeros(n_chr_snps, dtype=np.float64)
-    miss_counts = np.zeros(n_chr_snps, dtype=np.int32)
-    col_vars = np.zeros(n_chr_snps, dtype=np.float64)
-    n_unexpected_total = 0
-
-    bed_file = Path(f"{bed_path}.bed")
-    with open_bed(bed_file) as bed:
-        for chunk_start in range(0, n_chr_snps, col_chunk_size):
-            chunk_end = min(chunk_start + col_chunk_size, n_chr_snps)
-            chunk_col_indices = chr_snp_indices[chunk_start:chunk_end]
-
-            geno_chunk = bed.read(
-                index=np.s_[valid_indices, chunk_col_indices],
-                dtype=np.float64,
-            )
-
-            n_unexpected_total += validate_genotype_values(geno_chunk)
-
-            # Compute per-SNP statistics for this chunk
-            chunk_miss = np.sum(np.isnan(geno_chunk), axis=0)
-            with np.errstate(invalid="ignore"):
-                chunk_means = np.nanmean(geno_chunk, axis=0)
-                chunk_vars = np.nanvar(geno_chunk, axis=0)
-            chunk_means = np.nan_to_num(chunk_means, nan=0.0)
-            chunk_vars = np.nan_to_num(chunk_vars, nan=0.0)
-
-            col_means[chunk_start:chunk_end] = chunk_means
-            miss_counts[chunk_start:chunk_end] = chunk_miss
-            col_vars[chunk_start:chunk_end] = chunk_vars
-
-            del geno_chunk
-
-    if n_unexpected_total > 0:
-        logger.warning(
-            f"LOCO chr genotype validation: {n_unexpected_total} values outside "
-            f"expected range {{0, 1, 2, NaN}}"
-        )
-
-    # Apply SNP filter
-    snp_mask, allele_freqs, _mafs = compute_snp_filter_mask(
-        col_means, miss_counts, col_vars, n_samples, maf_threshold, miss_threshold
+    # === PASS 1: Chunked SNP statistics + filtering ===
+    col_means, miss_counts, col_vars, n_unexpected = _collect_chr_snp_stats(
+        bed_path, chr_snp_indices, valid_indices, col_chunk_size
     )
 
-    # Apply SNP list restriction (if -snps provided)
-    if snps_global_mask is not None:
-        snp_mask &= snps_global_mask[chr_snp_indices]
-
-    local_filtered_indices = np.where(snp_mask)[0]
-    n_filtered = len(local_filtered_indices)
-
-    if show_progress:
-        logger.debug(
-            f"  Chromosome SNPs: {len(chr_snp_indices)}, after filter: {n_filtered}"
-        )
-
-    if n_filtered == 0:
-        if show_progress:
-            logger.warning("  Chromosome has no SNPs after filtering, skipping")
+    filter_result = _filter_chr_snps(
+        col_means,
+        miss_counts,
+        col_vars,
+        n_samples,
+        maf_threshold,
+        miss_threshold,
+        chr_snp_indices,
+        snps_global_mask,
+        n_unexpected,
+        show_progress,
+    )
+    if filter_result is None:
         return []
 
-    # Build SNP stat arrays for result construction
-    # Map local filtered index -> global SNP index
-    global_filtered_indices = chr_snp_indices[local_filtered_indices]
-    filtered_afs = allele_freqs[local_filtered_indices]
-    filtered_miss = miss_counts[local_filtered_indices].astype(int)
-    filtered_means_all = col_means[local_filtered_indices]
+    (
+        _local_filtered_indices,
+        global_filtered_indices,
+        filtered_afs,
+        filtered_miss,
+        filtered_means_all,
+    ) = filter_result
+    n_filtered = len(global_filtered_indices)
 
     # === PASS 2: Chunked association ===
-    # filtered_chr_col_indices: global BED column indices for filtered SNPs
-    filtered_chr_col_indices = chr_snp_indices[local_filtered_indices]
-
     # Eigendecomp setup
     W, n_cvt = _build_covariate_matrix(covariates, n_samples)
 
@@ -552,11 +841,12 @@ def _run_lmm_for_chromosome(
     total_at_lmax = 0
     results: list[AssocResult] = []
 
+    bed_file = Path(f"{bed_path}.bed")
     try:
         with open_bed(bed_file) as bed:
             for disk_start in range(0, n_filtered, col_chunk_size):
                 disk_end = min(disk_start + col_chunk_size, n_filtered)
-                disk_col_indices = filtered_chr_col_indices[disk_start:disk_end]
+                disk_col_indices = global_filtered_indices[disk_start:disk_end]
 
                 geno_disk_chunk = bed.read(
                     index=np.s_[valid_indices, disk_col_indices],
@@ -697,6 +987,7 @@ def _run_lmm_for_chromosome_numpy(
     snps_global_mask: np.ndarray | None = None,
     col_chunk_size: int = 5_000,
     writer: IncrementalAssocWriter | None = None,
+    chr_name: str = "",
 ) -> list[AssocResult]:
     """Run NumPy LMM association on a single chromosome's SNPs.
 
@@ -738,79 +1029,36 @@ def _run_lmm_for_chromosome_numpy(
     n_samples = phenotypes.shape[0]
     valid_indices = np.where(valid_mask)[0]
 
-    # === PASS 1: Chunked SNP statistics ===
-    n_chr_snps = len(chr_snp_indices)
-    col_means = np.zeros(n_chr_snps, dtype=np.float64)
-    miss_counts = np.zeros(n_chr_snps, dtype=np.int32)
-    col_vars = np.zeros(n_chr_snps, dtype=np.float64)
-    n_unexpected_total = 0
-
-    bed_file = Path(f"{bed_path}.bed")
-    with open_bed(bed_file) as bed:
-        for chunk_start in range(0, n_chr_snps, col_chunk_size):
-            chunk_end = min(chunk_start + col_chunk_size, n_chr_snps)
-            chunk_col_indices = chr_snp_indices[chunk_start:chunk_end]
-
-            geno_chunk = bed.read(
-                index=np.s_[valid_indices, chunk_col_indices],
-                dtype=np.float64,
-            )
-
-            n_unexpected_total += validate_genotype_values(geno_chunk)
-
-            # Compute per-SNP statistics for this chunk
-            chunk_miss = np.sum(np.isnan(geno_chunk), axis=0)
-            with np.errstate(invalid="ignore"):
-                chunk_means = np.nanmean(geno_chunk, axis=0)
-                chunk_vars = np.nanvar(geno_chunk, axis=0)
-            chunk_means = np.nan_to_num(chunk_means, nan=0.0)
-            chunk_vars = np.nan_to_num(chunk_vars, nan=0.0)
-
-            col_means[chunk_start:chunk_end] = chunk_means
-            miss_counts[chunk_start:chunk_end] = chunk_miss
-            col_vars[chunk_start:chunk_end] = chunk_vars
-
-            del geno_chunk
-
-    if n_unexpected_total > 0:
-        logger.warning(
-            f"LOCO chr genotype validation: {n_unexpected_total} values outside "
-            f"expected range {{0, 1, 2, NaN}}"
-        )
-
-    # Apply SNP filter
-    snp_mask, allele_freqs, _mafs = compute_snp_filter_mask(
-        col_means, miss_counts, col_vars, n_samples, maf_threshold, miss_threshold
+    # === PASS 1: Chunked SNP statistics + filtering ===
+    col_means, miss_counts, col_vars, n_unexpected = _collect_chr_snp_stats(
+        bed_path, chr_snp_indices, valid_indices, col_chunk_size
     )
 
-    # Apply SNP list restriction (if -snps provided)
-    if snps_global_mask is not None:
-        snp_mask &= snps_global_mask[chr_snp_indices]
-
-    local_filtered_indices = np.where(snp_mask)[0]
-    n_filtered = len(local_filtered_indices)
-
-    if show_progress:
-        logger.debug(
-            f"  Chromosome SNPs: {len(chr_snp_indices)}, after filter: {n_filtered}"
-        )
-
-    if n_filtered == 0:
-        if show_progress:
-            logger.warning("  Chromosome has no SNPs after filtering, skipping")
+    filter_result = _filter_chr_snps(
+        col_means,
+        miss_counts,
+        col_vars,
+        n_samples,
+        maf_threshold,
+        miss_threshold,
+        chr_snp_indices,
+        snps_global_mask,
+        n_unexpected,
+        show_progress,
+    )
+    if filter_result is None:
         return []
 
-    # Build SNP stat arrays for result construction
-    # Map local filtered index -> global SNP index
-    global_filtered_indices = chr_snp_indices[local_filtered_indices]
-    filtered_afs = allele_freqs[local_filtered_indices]
-    filtered_miss = miss_counts[local_filtered_indices].astype(int)
-    filtered_means_all = col_means[local_filtered_indices]
+    (
+        _local_filtered_indices,
+        global_filtered_indices,
+        filtered_afs,
+        filtered_miss,
+        filtered_means_all,
+    ) = filter_result
+    n_filtered = len(global_filtered_indices)
 
     # === PASS 2: Chunked NumPy association ===
-    # filtered_chr_col_indices: global BED column indices for filtered SNPs
-    filtered_chr_col_indices = chr_snp_indices[local_filtered_indices]
-
     # Build covariate matrix
     W, n_cvt = _build_covariate_matrix(covariates, n_samples)
 
@@ -841,16 +1089,13 @@ def _run_lmm_for_chromosome_numpy(
     arrays_out: dict[str, np.ndarray] = {
         key: np.empty(n_filtered, dtype=np.float64) for key in _RESULT_FIELDS[lmm_mode]
     }
-
-    # Track lambda boundary hits across all disk chunks
-    total_at_lmin = 0
-    total_at_lmax = 0
     results: list[AssocResult] = []
 
+    bed_file = Path(f"{bed_path}.bed")
     with open_bed(bed_file) as bed:
         for disk_start in range(0, n_filtered, col_chunk_size):
             disk_end = min(disk_start + col_chunk_size, n_filtered)
-            disk_col_indices = filtered_chr_col_indices[disk_start:disk_end]
+            disk_col_indices = global_filtered_indices[disk_start:disk_end]
 
             geno_disk_chunk = bed.read(
                 index=np.s_[valid_indices, disk_col_indices],
@@ -879,19 +1124,28 @@ def _run_lmm_for_chromosome_numpy(
                 Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
 
                 # Mode dispatch
-                cr = _compute_lmm_chunk_numpy(
-                    lmm_mode,
-                    n_cvt,
-                    eigenvalues,
-                    Uab_batch,
-                    n_samples,
-                    l_min=l_min,
-                    l_max=l_max,
-                    n_grid=n_grid,
-                    n_refine=n_refine,
-                    Hi_eval_null=Hi_eval_null,
-                    logl_H0=logl_H0,
-                )
+                try:
+                    cr = _compute_lmm_chunk_numpy(
+                        lmm_mode,
+                        n_cvt,
+                        eigenvalues,
+                        Uab_batch,
+                        n_samples,
+                        l_min=l_min,
+                        l_max=l_max,
+                        n_grid=n_grid,
+                        n_refine=n_refine,
+                        Hi_eval_null=Hi_eval_null,
+                        logl_H0=logl_H0,
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"NumPy LMM computation failed on chr {chr_name}, "
+                        f"sub-chunk [{sub_start}:{sub_end}] "
+                        f"({sub_end - sub_start} SNPs), "
+                        f"n_samples={n_samples}, n_cvt={n_cvt}: {e}"
+                    )
+                    raise
 
                 # Write sub-chunk results to pre-allocated arrays
                 actual_len = sub_end - sub_start
@@ -902,13 +1156,15 @@ def _run_lmm_for_chromosome_numpy(
 
             del geno_disk_chunk
 
+    if write_offset != n_filtered:
+        raise RuntimeError(
+            f"Pre-allocated array size mismatch: wrote {write_offset} results, "
+            f"expected {n_filtered}. This is an internal error."
+        )
+
     # Count lambda boundary hits and log warnings
     n_lmin, n_lmax = count_lambda_boundary_hits(lmm_mode, arrays_out, l_min, l_max)
-    total_at_lmin += n_lmin
-    total_at_lmax += n_lmax
-    log_lambda_boundary_warning(
-        total_at_lmin, total_at_lmax, l_min, l_max, prefix="LOCO "
-    )
+    log_lambda_boundary_warning(n_lmin, n_lmax, l_min, l_max, prefix="LOCO ")
 
     # Flush results
     if writer is not None:

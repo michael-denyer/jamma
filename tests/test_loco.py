@@ -1652,30 +1652,13 @@ _LOCO_FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "gemma_loco"
 _LOCO_BFILE = _LOCO_FIXTURE_ROOT / "test"
 
 
-def _load_fam_phenotypes(bfile: Path) -> np.ndarray:
-    """Load phenotypes from .fam file column 6.
-
-    Args:
-        bfile: PLINK file prefix (without extension).
-
-    Returns:
-        Phenotype array with NaN for missing values (-9 or NA).
-    """
-    fam = bfile.with_suffix(".fam")
-    phenos = []
-    with open(fam) as f:
-        for line in f:
-            val = line.strip().split()[5]
-            phenos.append(np.nan if val in ("-9", "NA") else float(val))
-    return np.array(phenos, dtype=np.float64)
-
-
 @pytest.mark.tier1
 def test_loco_cross_backend_parity(tmp_path: Path) -> None:
     """JAX and NumPy LOCO produce identical results on synthetic data."""
     from jamma.lmm.loco import run_lmm_loco
+    from tests.conftest import load_phenotypes_from_fam
 
-    phenotypes = _load_fam_phenotypes(_LOCO_BFILE)
+    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
 
     # Run JAX backend
     jax_results, jax_n = run_lmm_loco(

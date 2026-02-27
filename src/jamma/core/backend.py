@@ -40,7 +40,7 @@ def has_jax() -> bool:
         logger.error(
             f"JAX installed but failed to import: {type(e).__name__}: {e}. "
             f"Falling back to NumPy backend. Fix the JAX installation or "
-            f"use --backend numpy to suppress this warning."
+            f"use --backend numpy to suppress this error."
         )
         return False
 

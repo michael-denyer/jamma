@@ -457,9 +457,9 @@ def test_write_arrays_batch_multi_batch_count(tmp_path: Path) -> None:
 
 @pytest.mark.tier0
 def test_write_arrays_batch_with_lazy_snp_meta(tmp_path: Path) -> None:
-    """write_arrays_batch works with _LazySnpMeta (the production type)."""
+    """write_arrays_batch works with LazySnpMeta (the production type)."""
     from jamma.lmm.io import IncrementalAssocWriter
-    from jamma.lmm.runner_streaming import _LazySnpMeta
+    from jamma.lmm.schema import LazySnpMeta as _LazySnpMeta
 
     meta = {
         "chromosome": np.array(["1", "2", "3"]),

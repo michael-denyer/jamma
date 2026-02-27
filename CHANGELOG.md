@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **NumPy LOCO kinship streaming**: `_compute_loco_kinship_streaming_numpy()` — pure NumPy
+  LOCO kinship computation (no JAX dependency), enabling `--loco --backend numpy` workflows
+- **`LazySnpMeta` in `schema.py`**: Single canonical source for lazy PLINK metadata wrapper
+  (was duplicated in `loco.py` and `runner_streaming.py`)
+- **Shared LOCO helpers**: `_collect_chr_snp_stats()` and `_filter_chr_snps()` extract
+  duplicated pass-1 SNP statistics and filtering logic from JAX/NumPy chromosome runners
+- Backend validation in `run_lmm_loco`: raises `ValueError` for invalid backend values
+- Write-offset validation in NumPy LOCO path: raises `RuntimeError` if pre-allocated
+  result arrays are not fully written
+- Diagnostic error handling around NumPy LOCO computation loop (logs chromosome, chunk
+  offset, and SNP count on failure)
+
+### Changed
+
+- `_P_YY_MIN` constant (1e-8) propagated from `likelihood.py` to `likelihood_numpy.py`
+  and `stats.py` (was hardcoded in 7 locations)
+- `runner_streaming.py` imports `LazySnpMeta` from `schema.py` instead of defining its own copy
+
+### Fixed
+
+- LOCO backend dispatch: `backend="numpy"` now uses NumPy kinship streaming instead of
+  unconditionally importing JAX kinship module
+- `pipeline.py` XLA profiling catch restored `AttributeError` (JAX can raise this on
+  some platforms when profiling is unavailable)
+- `backend.py` logger text: "to suppress this warning" → "to suppress this error" (matches
+  actual log level)
+- `generate_loco_fixtures.sh`: corrected GEMMA version reference (0.96 → 0.98.5)
+- `test_loco.py`: fixed `ModuleNotFoundError` from invalid conftest import
+
 ## [2.7.1] - 2026-02-27
 
 ### Added
@@ -30,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - CI: added per-matrix `--cov-fail-under` thresholds (80% JAX, 50% NumPy-only)
-- `pytest.importorskip('jax')` added before JAX-only imports in all 16
+- `pytest.importorskip('jax')` added before JAX-only imports in all
   JAX-dependent test files (fixes NumPy-only CI)
 
 ## [2.7.0] - 2026-02-26

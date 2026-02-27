@@ -10,12 +10,14 @@ ERRP-02: pipeline.py error paths
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from jamma.io.covariate import encode_categorical_covariates, read_covariate_file
+from jamma.pipeline import PipelineConfig, PipelineResult, PipelineRunner
 
 FIXTURES = Path(__file__).parent / "fixtures" / "gemma_synthetic"
 BFILE = FIXTURES / "test"
@@ -123,3 +125,97 @@ class TestCovariateErrorPaths:
         assert np.isnan(result[1, 1])
         assert result[2, 1] == pytest.approx(0.0)
         assert np.isnan(result[3, 1])
+
+
+@pytest.mark.tier0
+class TestPipelineErrorPaths:
+    """Error-path tests for PipelineConfig, PipelineResult, and PipelineRunner."""
+
+    def test_output_prefix_with_separator_raises(self) -> None:
+        """PipelineConfig raises ValueError when output_prefix has path separators."""
+        with pytest.raises(ValueError, match="path separators"):
+            PipelineConfig(bfile=Path("test"), output_prefix="dir/prefix")
+
+    def test_pipeline_result_invalid_backend_raises(self) -> None:
+        """PipelineResult raises ValueError for unrecognised backend value."""
+        with pytest.raises(ValueError, match="must be"):
+            PipelineResult(
+                associations=[],
+                n_samples=10,
+                n_snps_tested=5,
+                assoc_path=Path("t.txt"),
+                backend="invalid",  # type: ignore[arg-type]
+            )
+
+    def test_pipeline_config_invalid_backend_raises(self) -> None:
+        """PipelineConfig raises ValueError for unrecognised backend value."""
+        with pytest.raises(ValueError, match="backend must be"):
+            PipelineConfig(bfile=Path("test"), backend="gpu")  # type: ignore[arg-type]
+
+    def test_all_phenotypes_missing_raises(self, tmp_path: Path) -> None:
+        """parse_phenotypes raises ValueError when all phenotypes are -9 (missing)."""
+        # Copy .bed and .bim from fixture; overwrite .fam with all-missing phenotypes
+        for ext in (".bed", ".bim", ".fam"):
+            shutil.copy(FIXTURES / f"test{ext}", tmp_path / f"test{ext}")
+
+        fam_path = tmp_path / "test.fam"
+        n_samples = sum(1 for _ in open(fam_path))
+
+        with open(fam_path, "w") as f:
+            for i in range(n_samples):
+                f.write(f"FAM{i:03d} IND{i:03d} 0 0 0 -9\n")
+
+        config = PipelineConfig(
+            bfile=tmp_path / "test",
+            check_memory=False,
+        )
+        with pytest.raises(ValueError, match="No samples"):
+            PipelineRunner(config).parse_phenotypes()
+
+    def test_covariate_dimension_mismatch_raises(self, tmp_path: Path) -> None:
+        """load_covariates raises ValueError when covariate row count != n_samples."""
+        cov_path = tmp_path / "cov.txt"
+        cov_path.write_text("1 2\n3 4\n")  # 2 rows
+
+        config = PipelineConfig(
+            bfile=BFILE,
+            covariate_file=cov_path,
+            check_memory=False,
+        )
+        with pytest.raises(ValueError, match="rows"):
+            PipelineRunner(config).load_covariates(n_samples=100)
+
+    def test_missing_intercept_warning(self, tmp_path: Path) -> None:
+        """load_covariates emits a loguru warning when first column is not all 1s."""
+        from loguru import logger
+
+        # Determine sample count from BFILE .fam
+        fam_path = Path(f"{BFILE}.fam")
+        n_samples = sum(1 for _ in open(fam_path))
+
+        cov_path = tmp_path / "cov.txt"
+        with open(cov_path, "w") as f:
+            for i in range(n_samples):
+                f.write(f"{2 + i} {3 + i}\n")  # First column is NOT all 1s
+
+        config = PipelineConfig(
+            bfile=BFILE,
+            covariate_file=cov_path,
+            check_memory=False,
+        )
+
+        # Capture loguru messages directly (compatible with pytest-xdist workers)
+        captured_messages: list[str] = []
+        handler_id = logger.add(
+            lambda msg: captured_messages.append(msg),
+            level="WARNING",
+            format="{message}",
+        )
+        try:
+            PipelineRunner(config).load_covariates(n_samples=n_samples)
+        finally:
+            logger.remove(handler_id)
+
+        assert any("intercept" in m for m in captured_messages), (
+            f"Expected 'intercept' warning from loguru, got: {captured_messages!r}"
+        )

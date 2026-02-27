@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.1] - 2026-02-27
+
+### Added
+
+- **GEMMA LOCO integration test**: 3-chromosome validation (beta, SE, p_wald, l_remle,
+  logl_H1, rank correlation, top hits) against GEMMA LMM with JAMMA-computed LOCO kinship
+- Fixture generation scripts: `generate_loco_synthetic.py` (PLINK data),
+  `generate_loco_fixtures.sh` (Docker-based GEMMA reference outputs)
+- `logl_H1` per-chromosome comparison test (LOCO-04b)
+- Merge completeness assertion in LOCO test fixture (detects inner-join data loss)
+
+### Changed
+
+- `load_phenotypes_from_fam` extracted to `conftest.py` (DRY — was duplicated in
+  3 test files); simplified to `np.loadtxt(usecols=5)`
+- CI: dropped Intel Mac job (macos-13 deprecated); replaced broken Windows job with
+  lean `windows-latest` NumPy-only config; added `--cov-fail-under` per matrix entry
+- Causal SNP check in `generate_loco_fixtures.sh` is now a hard failure (was warning)
+- Tolerance rationale comments added to LOCO integration tests
+
+### Fixed
+
+- `--cov-fail-under=80` restored to `pyproject.toml` addopts (was dropped, breaking
+  local coverage enforcement)
+- `pytest.importorskip('jax')` added before JAX-only imports in test_loco and
+  test_streaming (fixes NumPy-only CI)
+
 ## [2.7.0] - 2026-02-26
 
 ### Added
@@ -763,7 +790,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
-[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.7.0...HEAD
+[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.7.1...HEAD
+[2.7.1]: https://github.com/michael-denyer/jamma/compare/v2.7.0...v2.7.1
 [2.7.0]: https://github.com/michael-denyer/jamma/compare/v2.6.1...v2.7.0
 [2.6.1]: https://github.com/michael-denyer/jamma/compare/v2.6.0...v2.6.1
 [2.6.0]: https://github.com/michael-denyer/jamma/compare/v2.5.8...v2.6.0

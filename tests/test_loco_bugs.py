@@ -3,14 +3,8 @@
 import numpy as np
 import pytest
 
-pytest.importorskip("jax")
-
-import jax.numpy as jnp
-
 from jamma.kinship.compute import _yield_full_kinship_fallback, _yield_loco_matrices
 from jamma.utils import chr_sort_key
-
-pytestmark = pytest.mark.requires_jax
 
 
 class TestFallbackKinshipAliasing:
@@ -116,11 +110,14 @@ class TestChromosomeSortKey:
         assert sorted(shuffled, key=chr_sort_key) == chrs
 
 
+@pytest.mark.requires_jax
 class TestYieldLocoMatricesOrdering:
     """Verify _yield_loco_matrices produces biological order."""
 
     def test_biological_order(self):
         """Chromosomes yielded in biological order, not lexicographic."""
+        import jax.numpy as jnp
+
         n = 4
         S_full = np.eye(n, dtype=np.float64) * 100
         chr_names = ["1", "10", "2", "X"]

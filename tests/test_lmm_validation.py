@@ -26,6 +26,7 @@ from jamma.validation import (
     compare_assoc_results,
     load_gemma_assoc,
 )
+from tests.conftest import load_phenotypes_from_fam
 
 pytestmark = pytest.mark.requires_jax
 
@@ -106,18 +107,7 @@ def mouse_data():
 @pytest.fixture
 def mouse_phenotypes():
     """Load phenotypes from PLINK .fam file (column 6)."""
-    fam_path = EXAMPLE_DATA.with_suffix(".fam")
-    phenotypes = []
-    with open(fam_path) as f:
-        for line in f:
-            parts = line.strip().split()
-            if len(parts) >= 6:
-                val = parts[5]
-                if val == "-9" or val == "NA":
-                    phenotypes.append(np.nan)
-                else:
-                    phenotypes.append(float(val))
-    return np.array(phenotypes)
+    return load_phenotypes_from_fam(EXAMPLE_DATA.with_suffix(".fam"))
 
 
 @pytest.fixture
@@ -137,20 +127,7 @@ def hs1940_data():
 @pytest.fixture
 def hs1940_phenotypes():
     """Load mouse_hs1940 phenotypes from .fam file."""
-    fam_path = MOUSE_HS1940_DATA.with_suffix(".fam")
-    if not fam_path.exists():
-        pytest.skip("mouse_hs1940 .fam not found")
-    phenotypes = []
-    with open(fam_path) as f:
-        for line in f:
-            parts = line.strip().split()
-            if len(parts) >= 6:
-                val = parts[5]
-                if val == "-9" or val == "NA":
-                    phenotypes.append(np.nan)
-                else:
-                    phenotypes.append(float(val))
-    return np.array(phenotypes)
+    return load_phenotypes_from_fam(MOUSE_HS1940_DATA.with_suffix(".fam"))
 
 
 @pytest.fixture
@@ -186,10 +163,6 @@ class TestLmmValidation:
     LMM pipeline once and share results across all three tests.
     """
 
-    @pytest.mark.skipif(
-        not REFERENCE_ASSOC.exists(),
-        reason="Reference LMM data not generated. Run generate_lmm_reference.sh",
-    )
     def test_lmm_matches_reference(self, validation_pipeline_data):
         """JAMMA LMM matches GEMMA reference within tolerance."""
         if validation_pipeline_data is None:
@@ -197,10 +170,6 @@ class TestLmmValidation:
         comparison = validation_pipeline_data["comparison"]
         assert comparison.passed, _format_comparison_failure(comparison)
 
-    @pytest.mark.skipif(
-        not REFERENCE_ASSOC.exists(),
-        reason="Reference LMM data not generated. Run generate_lmm_reference.sh",
-    )
     def test_lmm_beta_tolerance(self, validation_pipeline_data):
         """Effect sizes match within beta_rtol tolerance."""
         if validation_pipeline_data is None:
@@ -212,10 +181,6 @@ class TestLmmValidation:
             f"Max rel diff: {comparison.beta.max_rel_diff:.2e}"
         )
 
-    @pytest.mark.skipif(
-        not REFERENCE_ASSOC.exists(),
-        reason="Reference LMM data not generated. Run generate_lmm_reference.sh",
-    )
     def test_lmm_pvalue_tolerance(self, validation_pipeline_data):
         """P-values match within pvalue_rtol tolerance."""
         if validation_pipeline_data is None:
@@ -676,10 +641,6 @@ class TestLmmJaxValidation:
     SNP ranking) is the primary validation criterion.
     """
 
-    @pytest.mark.skipif(
-        not REFERENCE_ASSOC.exists(),
-        reason="Reference LMM data not generated. Run generate_lmm_reference.sh",
-    )
     def test_jax_scientific_equivalence(
         self, mouse_data, mouse_phenotypes, reference_kinship
     ):
@@ -729,10 +690,6 @@ class TestLmmJaxValidation:
                 f"{(1 - agreement) * 100:.1f}% differ"
             )
 
-    @pytest.mark.skipif(
-        not REFERENCE_ASSOC.exists(),
-        reason="Reference LMM data not generated. Run generate_lmm_reference.sh",
-    )
     def test_jax_vs_gemma_tolerance(
         self, mouse_data, mouse_phenotypes, reference_kinship
     ):
@@ -816,10 +773,6 @@ class TestLmmJaxValidation:
             assert np.isfinite(r.p_wald), f"NaN p_wald for {r.rs}"
             assert 0 <= r.p_wald <= 1, f"p_wald out of range for {r.rs}"
 
-    @pytest.mark.skipif(
-        not COVARIATE_REFERENCE_ASSOC.exists(),
-        reason="Covariate ref not generated. Run generate_covariate_reference.sh",
-    )
     def test_jax_covariate_matches_gemma(
         self, mouse_data, mouse_phenotypes, reference_kinship
     ):
@@ -1201,10 +1154,6 @@ class TestLmmCovariateValidation:
         covariates = np.loadtxt(COVARIATE_FILE)
         return covariates
 
-    @pytest.mark.skipif(
-        not COVARIATE_REFERENCE_ASSOC.exists(),
-        reason="Covariate ref not generated. Run generate_covariate_reference.sh",
-    )
     def test_lmm_with_covariates_matches_gemma(
         self, mouse_data, mouse_phenotypes, reference_kinship, covariate_data
     ):
@@ -1226,10 +1175,6 @@ class TestLmmCovariateValidation:
         )
         assert comparison.passed, _format_comparison_failure(comparison)
 
-    @pytest.mark.skipif(
-        not COVARIATE_REFERENCE_ASSOC.exists(),
-        reason="Covariate reference data not generated",
-    )
     def test_covariate_beta_tolerance(
         self, mouse_data, mouse_phenotypes, reference_kinship, covariate_data
     ):
@@ -1253,10 +1198,6 @@ class TestLmmCovariateValidation:
             f"Beta with covariates failed: {comparison.beta.message}"
         )
 
-    @pytest.mark.skipif(
-        not COVARIATE_REFERENCE_ASSOC.exists(),
-        reason="Covariate reference data not generated",
-    )
     def test_covariate_pvalue_tolerance(
         self, mouse_data, mouse_phenotypes, reference_kinship, covariate_data
     ):
@@ -1368,10 +1309,6 @@ class TestAFSemantics:
                     f"{orig.p_wald} vs {flip.p_wald}"
                 )
 
-    @pytest.mark.skipif(
-        not REFERENCE_ASSOC.exists(),
-        reason="Reference LMM data not generated. Run generate_lmm_reference.sh",
-    )
     def test_gemma_fixture_has_af_above_half(self):
         """Confirm GEMMA fixture includes SNPs with AF > 0.5 for proper coverage.
 
@@ -1459,13 +1396,6 @@ class TestLmmScoreValidation:
     in CI if reference data is not committed to the repository.
     """
 
-    @pytest.mark.skipif(
-        not _score_reference_exists(),
-        reason=(
-            "Score test reference not found. "
-            "Run scripts/generate_score_reference.sh locally and commit the output."
-        ),
-    )
     def test_score_test_matches_gemma(
         self, mouse_data, mouse_phenotypes, reference_kinship
     ):
@@ -1487,13 +1417,6 @@ class TestLmmScoreValidation:
         )
         assert comparison.passed, _format_comparison_failure(comparison)
 
-    @pytest.mark.skipif(
-        not _score_reference_exists(),
-        reason=(
-            "Score test reference not found. "
-            "Run scripts/generate_score_reference.sh locally and commit the output."
-        ),
-    )
     def test_score_pvalue_tolerance(
         self, mouse_data, mouse_phenotypes, reference_kinship
     ):
@@ -1698,13 +1621,6 @@ class TestLmmAllTestsValidation:
     logl_H1 l_remle l_mle p_wald p_lrt p_score
     """
 
-    @pytest.mark.skipif(
-        not _all_tests_reference_exists(),
-        reason=(
-            "All-tests reference not found. "
-            "Run scripts/generate_all_tests_reference.sh locally."
-        ),
-    )
     def test_all_tests_matches_gemma(
         self, mouse_data, mouse_phenotypes, reference_kinship
     ):
@@ -1726,13 +1642,6 @@ class TestLmmAllTestsValidation:
         )
         assert comparison.passed, _format_comparison_failure(comparison)
 
-    @pytest.mark.skipif(
-        not ALL_TESTS_COVAR_REFERENCE.exists(),
-        reason=(
-            "All-tests covariate reference not found. "
-            "Run scripts/generate_all_tests_reference.sh locally."
-        ),
-    )
     def test_all_tests_with_covariates_matches_gemma(
         self, mouse_data, mouse_phenotypes, reference_kinship
     ):
@@ -1759,13 +1668,6 @@ class TestLmmAllTestsValidation:
         )
         assert comparison.passed, _format_comparison_failure(comparison)
 
-    @pytest.mark.skipif(
-        not _all_tests_reference_exists(),
-        reason=(
-            "All-tests reference not found. "
-            "Run scripts/generate_all_tests_reference.sh locally."
-        ),
-    )
     def test_all_tests_column_tolerances(
         self, mouse_data, mouse_phenotypes, reference_kinship
     ):
@@ -2049,10 +1951,6 @@ class TestMouseHS1940Validation:
     Tests cover all LMM modes (1-4) with and without covariates.
     """
 
-    @pytest.mark.skipif(
-        not MOUSE_HS1940_LRT.exists(),
-        reason="mouse_hs1940 LRT fixture not found",
-    )
     def test_mouse_hs1940_lrt_no_covar(
         self, hs1940_data, hs1940_phenotypes, hs1940_kinship
     ):
@@ -2074,10 +1972,6 @@ class TestMouseHS1940Validation:
         )
         assert comparison.passed, _format_comparison_failure(comparison)
 
-    @pytest.mark.skipif(
-        not MOUSE_HS1940_SCORE.exists(),
-        reason="mouse_hs1940 Score fixture not found",
-    )
     def test_mouse_hs1940_score_no_covar(
         self, hs1940_data, hs1940_phenotypes, hs1940_kinship
     ):
@@ -2099,10 +1993,6 @@ class TestMouseHS1940Validation:
         )
         assert comparison.passed, _format_comparison_failure(comparison)
 
-    @pytest.mark.skipif(
-        not MOUSE_HS1940_ALL.exists(),
-        reason="mouse_hs1940 all-tests fixture not found",
-    )
     def test_mouse_hs1940_all_no_covar(
         self, hs1940_data, hs1940_phenotypes, hs1940_kinship
     ):
@@ -2124,10 +2014,6 @@ class TestMouseHS1940Validation:
         )
         assert comparison.passed, _format_comparison_failure(comparison)
 
-    @pytest.mark.skipif(
-        not MOUSE_HS1940_COVAR_WALD.exists(),
-        reason="mouse_hs1940 covariate Wald fixture not found",
-    )
     def test_mouse_hs1940_covar_wald(
         self, hs1940_data, hs1940_phenotypes, hs1940_kinship, hs1940_covariates
     ):
@@ -2150,10 +2036,6 @@ class TestMouseHS1940Validation:
         )
         assert comparison.passed, _format_comparison_failure(comparison)
 
-    @pytest.mark.skipif(
-        not MOUSE_HS1940_COVAR_LRT.exists(),
-        reason="mouse_hs1940 covariate LRT fixture not found",
-    )
     def test_mouse_hs1940_covar_lrt(
         self, hs1940_data, hs1940_phenotypes, hs1940_kinship, hs1940_covariates
     ):
@@ -2176,10 +2058,6 @@ class TestMouseHS1940Validation:
         )
         assert comparison.passed, _format_comparison_failure(comparison)
 
-    @pytest.mark.skipif(
-        not MOUSE_HS1940_COVAR_SCORE.exists(),
-        reason="mouse_hs1940 covariate Score fixture not found",
-    )
     def test_mouse_hs1940_covar_score(
         self, hs1940_data, hs1940_phenotypes, hs1940_kinship, hs1940_covariates
     ):
@@ -2202,10 +2080,6 @@ class TestMouseHS1940Validation:
         )
         assert comparison.passed, _format_comparison_failure(comparison)
 
-    @pytest.mark.skipif(
-        not MOUSE_HS1940_COVAR_ALL.exists(),
-        reason="mouse_hs1940 covariate all-tests fixture not found",
-    )
     def test_mouse_hs1940_covar_all(
         self, hs1940_data, hs1940_phenotypes, hs1940_kinship, hs1940_covariates
     ):

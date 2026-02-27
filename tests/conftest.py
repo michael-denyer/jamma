@@ -12,19 +12,21 @@ import pytest
 def load_phenotypes_from_fam(fam_path: Path) -> np.ndarray:
     """Load phenotypes from FAM file (column 6, 0-indexed column 5).
 
-    Replaces GEMMA's missing-phenotype marker (-9) with NaN so downstream
-    valid_mask logic (which checks for NaN) handles them correctly.
+    Handles both GEMMA's missing-phenotype marker (-9) and literal 'NA'
+    strings. Returns float64 array with NaN for missing values.
 
     Args:
         fam_path: Path to .fam PLINK file.
 
     Returns:
-        Array of phenotype values (float64), with -9 replaced by NaN.
+        Array of phenotype values (float64), with -9 and NA replaced by NaN.
     """
     from jamma.core.constants import PHENOTYPE_MISSING
 
-    pheno = np.loadtxt(fam_path, usecols=5, dtype=np.float64)
-    pheno[pheno == PHENOTYPE_MISSING] = np.nan
+    data = np.loadtxt(fam_path, usecols=5, dtype=str)
+    missing = np.isin(data, [str(int(PHENOTYPE_MISSING)), "NA"])
+    pheno = np.where(missing, "0", data).astype(np.float64)
+    pheno[missing] = np.nan
     return pheno
 
 

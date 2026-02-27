@@ -23,6 +23,7 @@ from jamma.validation import (
     compare_assoc_results,
     load_gemma_assoc,
 )
+from tests.conftest import load_phenotypes_from_fam
 
 # ---------------------------------------------------------------------------
 # Tolerance configurations
@@ -74,34 +75,6 @@ ALL_TESTS_COVAR_REFERENCE = (
 )
 
 
-def _mouse_hs1940_exists() -> bool:
-    """Check if mouse_hs1940 PLINK data exists."""
-    return MOUSE_HS1940_DATA.with_suffix(".bed").exists()
-
-
-def _load_phenotypes(plink_path: Path) -> np.ndarray:
-    """Load phenotypes from a PLINK .fam file (column 6).
-
-    Args:
-        plink_path: Path to PLINK prefix (without extension).
-
-    Returns:
-        Phenotype array with NaN for missing values.
-    """
-    fam_path = plink_path.with_suffix(".fam")
-    phenotypes = []
-    with open(fam_path) as f:
-        for line in f:
-            parts = line.strip().split()
-            if len(parts) >= 6:
-                val = parts[5]
-                if val in ("-9", "NA"):
-                    phenotypes.append(np.nan)
-                else:
-                    phenotypes.append(float(val))
-    return np.array(phenotypes)
-
-
 def _build_snp_info(plink_data) -> list[dict]:
     """Build snp_info list from PlinkData object.
 
@@ -135,7 +108,7 @@ def synthetic_data():
     """Load gemma_synthetic PLINK data, kinship, phenotypes, and snp_info."""
     plink = load_plink_binary(SYNTHETIC_DATA)
     kinship = read_kinship_matrix(SYNTHETIC_KINSHIP)
-    phenotypes = _load_phenotypes(SYNTHETIC_DATA)
+    phenotypes = load_phenotypes_from_fam(SYNTHETIC_DATA.with_suffix(".fam"))
     snp_info = _build_snp_info(plink)
     return plink, kinship, phenotypes, snp_info
 
@@ -145,7 +118,7 @@ def mouse_hs1940_data():
     """Load mouse_hs1940 PLINK data, kinship, phenotypes, and snp_info."""
     plink = load_plink_binary(MOUSE_HS1940_DATA)
     kinship = read_kinship_matrix(MOUSE_HS1940_KINSHIP)
-    phenotypes = _load_phenotypes(MOUSE_HS1940_DATA)
+    phenotypes = load_phenotypes_from_fam(MOUSE_HS1940_DATA.with_suffix(".fam"))
     snp_info = _build_snp_info(plink)
     return plink, kinship, phenotypes, snp_info
 
@@ -290,7 +263,6 @@ def test_numpy_runner_wald_synthetic(synthetic_data):
     )
 
 
-@pytest.mark.skipif(not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not found")
 def test_numpy_runner_lrt_mouse_hs1940(mouse_hs1940_data):
     """Mode 2 (LRT): NumPy runner matches GEMMA on mouse_hs1940 (1410 samples)."""
     plink, kinship, phenotypes, snp_info = mouse_hs1940_data
@@ -309,7 +281,6 @@ def test_numpy_runner_lrt_mouse_hs1940(mouse_hs1940_data):
     )
 
 
-@pytest.mark.skipif(not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not found")
 def test_numpy_runner_score_mouse_hs1940(mouse_hs1940_data):
     """Mode 3 (Score): NumPy runner matches GEMMA on mouse_hs1940."""
     plink, kinship, phenotypes, snp_info = mouse_hs1940_data
@@ -328,7 +299,6 @@ def test_numpy_runner_score_mouse_hs1940(mouse_hs1940_data):
     )
 
 
-@pytest.mark.skipif(not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not found")
 def test_numpy_runner_all_mouse_hs1940(mouse_hs1940_data):
     """Mode 4 (All): NumPy runner matches GEMMA on mouse_hs1940 for Wald+LRT+Score."""
     plink, kinship, phenotypes, snp_info = mouse_hs1940_data
@@ -415,10 +385,6 @@ def synthetic_data_with_covariates(synthetic_data):
     return plink, kinship, phenotypes, snp_info, covariates
 
 
-@pytest.mark.skipif(
-    not COVARIATE_WALD_REFERENCE.exists(),
-    reason="Covariate Wald reference not found",
-)
 def test_numpy_runner_wald_covar_synthetic(synthetic_data_with_covariates):
     """Mode 1 (Wald) with covariates: NumPy runner matches GEMMA reference."""
     plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
@@ -439,10 +405,6 @@ def test_numpy_runner_wald_covar_synthetic(synthetic_data_with_covariates):
     )
 
 
-@pytest.mark.skipif(
-    not COVARIATE_LRT_REFERENCE.exists(),
-    reason="Covariate LRT reference not found",
-)
 def test_numpy_runner_lrt_covar_synthetic(synthetic_data_with_covariates):
     """Mode 2 (LRT) with covariates: NumPy runner matches GEMMA reference."""
     plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
@@ -463,10 +425,6 @@ def test_numpy_runner_lrt_covar_synthetic(synthetic_data_with_covariates):
     )
 
 
-@pytest.mark.skipif(
-    not COVARIATE_SCORE_REFERENCE.exists(),
-    reason="Covariate Score reference not found",
-)
 def test_numpy_runner_score_covar_synthetic(synthetic_data_with_covariates):
     """Mode 3 (Score) with covariates: NumPy runner matches GEMMA reference."""
     plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
@@ -487,10 +445,6 @@ def test_numpy_runner_score_covar_synthetic(synthetic_data_with_covariates):
     )
 
 
-@pytest.mark.skipif(
-    not ALL_TESTS_COVAR_REFERENCE.exists(),
-    reason="All-tests covariate reference not found",
-)
 def test_numpy_runner_all_covar_synthetic(synthetic_data_with_covariates):
     """Mode 4 (All) with covariates: NumPy runner matches GEMMA reference."""
     plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
@@ -517,11 +471,6 @@ def test_numpy_runner_all_covar_synthetic(synthetic_data_with_covariates):
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not found")
-@pytest.mark.skipif(
-    not (MOUSE_HS1940_DIR / "mouse_hs1940_covar_wald.assoc.txt").exists(),
-    reason="mouse_hs1940 covariate Wald fixture not found",
-)
 def test_numpy_runner_wald_covar_mouse_hs1940(mouse_hs1940_data_with_covariates):
     """Mode 1 (Wald) with covariates: NumPy runner matches GEMMA on mouse_hs1940."""
     plink, kinship, phenotypes, snp_info, covariates = mouse_hs1940_data_with_covariates
@@ -542,11 +491,6 @@ def test_numpy_runner_wald_covar_mouse_hs1940(mouse_hs1940_data_with_covariates)
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not found")
-@pytest.mark.skipif(
-    not (MOUSE_HS1940_DIR / "mouse_hs1940_covar_lrt.assoc.txt").exists(),
-    reason="mouse_hs1940 covariate LRT fixture not found",
-)
 def test_numpy_runner_lrt_covar_mouse_hs1940(mouse_hs1940_data_with_covariates):
     """Mode 2 (LRT) with covariates: NumPy runner matches GEMMA on mouse_hs1940."""
     plink, kinship, phenotypes, snp_info, covariates = mouse_hs1940_data_with_covariates
@@ -567,11 +511,6 @@ def test_numpy_runner_lrt_covar_mouse_hs1940(mouse_hs1940_data_with_covariates):
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not found")
-@pytest.mark.skipif(
-    not (MOUSE_HS1940_DIR / "mouse_hs1940_covar_score.assoc.txt").exists(),
-    reason="mouse_hs1940 covariate Score fixture not found",
-)
 def test_numpy_runner_score_covar_mouse_hs1940(mouse_hs1940_data_with_covariates):
     """Mode 3 (Score) with covariates: NumPy runner matches GEMMA on mouse_hs1940."""
     plink, kinship, phenotypes, snp_info, covariates = mouse_hs1940_data_with_covariates
@@ -592,11 +531,6 @@ def test_numpy_runner_score_covar_mouse_hs1940(mouse_hs1940_data_with_covariates
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not found")
-@pytest.mark.skipif(
-    not (MOUSE_HS1940_DIR / "mouse_hs1940_covar_all.assoc.txt").exists(),
-    reason="mouse_hs1940 covariate all-tests fixture not found",
-)
 def test_numpy_runner_all_covar_mouse_hs1940(mouse_hs1940_data_with_covariates):
     """Mode 4 (All) with covariates: NumPy runner matches GEMMA on mouse_hs1940."""
     plink, kinship, phenotypes, snp_info, covariates = mouse_hs1940_data_with_covariates

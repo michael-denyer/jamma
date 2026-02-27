@@ -29,6 +29,7 @@ from jamma.lmm.likelihood import (
     reml_log_likelihood_null,
 )
 from jamma.lmm.runner_jax import run_lmm_association_jax
+from tests.conftest import load_phenotypes_from_fam
 
 pytestmark = pytest.mark.requires_jax
 
@@ -56,8 +57,7 @@ def gemma_test_data():
     )
 
     # Load phenotype from .fam file
-    fam_data = np.loadtxt(FIXTURE_DIR / "test.fam", dtype=str)
-    phenotypes = fam_data[:, 5].astype(float)
+    phenotypes = load_phenotypes_from_fam(FIXTURE_DIR / "test.fam")
 
     # eigendecomp overwrites K in-place; save copy for runner tests
     kinship_original = kinship.copy()

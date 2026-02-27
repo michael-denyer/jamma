@@ -24,6 +24,7 @@ from jamma.lmm.likelihood import (
 )
 from jamma.lmm.runner_jax import run_lmm_association_jax
 from jamma.lmm.stats import calc_lrt_test
+from tests.conftest import load_phenotypes_from_fam
 
 pytestmark = pytest.mark.requires_jax
 
@@ -294,8 +295,7 @@ class TestGEMMALRTValidation:
 
         # Load phenotype from .fam file
         fam_path = fixture_dir / "test.fam"
-        fam_data = np.loadtxt(fam_path, dtype=str)
-        phenotypes = fam_data[:, 5].astype(float)
+        phenotypes = load_phenotypes_from_fam(fam_path)
 
         snp_info = [
             {

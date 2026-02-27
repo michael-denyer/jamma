@@ -229,6 +229,11 @@ def _compute_loco_kinship_streaming_numpy(
     logger.info(f"  Chromosomes: {len(unique_chrs)}")
     logger.info(f"  Chunk size: {chunk_size:,}")
 
+    # Lazy import: progress_iterator pulls in tqdm (optional dependency)
+    if show_progress:
+        from jamma.core.progress import progress_iterator
+    n_chunks = (n_snps + chunk_size - 1) // chunk_size
+
     # === PASS 1: SNP statistics for filtering ===
     all_means = np.zeros(n_snps, dtype=np.float64)
     all_miss_counts = np.zeros(n_snps, dtype=np.int32)
@@ -239,9 +244,6 @@ def _compute_loco_kinship_streaming_numpy(
         bed_path, chunk_size=chunk_size, dtype=np.float32, show_progress=False
     )
     if show_progress:
-        from jamma.core.progress import progress_iterator
-
-        n_chunks = (n_snps + chunk_size - 1) // chunk_size
         stats_iterator = progress_iterator(
             stats_iterator, total=n_chunks, desc="LOCO: SNP statistics (NumPy)"
         )
@@ -335,9 +337,6 @@ def _compute_loco_kinship_streaming_numpy(
         bed_path, chunk_size=chunk_size, dtype=np.float64, show_progress=False
     )
     if show_progress:
-        from jamma.core.progress import progress_iterator
-
-        n_chunks = (n_snps + chunk_size - 1) // chunk_size
         accum_iterator = progress_iterator(
             accum_iterator, total=n_chunks, desc="LOCO: kinship accumulation (NumPy)"
         )

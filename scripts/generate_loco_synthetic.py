@@ -123,12 +123,10 @@ def generate_synthetic_plink() -> None:
             f.write(f"{snp_id}\t{bp_pos}\t{chrom}\n")
 
     # ---- Summary ------------------------------------------------------------
-    chr_snp_counts = {chrom: chromosomes.count(chrom) for chrom in CHR_COUNTS}
-
     print("Generated LOCO synthetic dataset:")
     print(f"  Samples : {N_SAMPLES}")
     print(f"  SNPs    : {N_SNPS}")
-    for chrom, count in chr_snp_counts.items():
+    for chrom, count in CHR_COUNTS.items():
         print(f"    chr {chrom}: {count} SNPs")
     print(f"  Causal SNP: rs0000 (chr 1, effect size {EFFECT_SIZE})")
     print("")

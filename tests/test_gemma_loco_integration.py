@@ -92,19 +92,14 @@ class TestGemmaLocoFixtureProperties:
         chr_counts: dict[str, int] = {}
         with open(PLINK_PREFIX.with_suffix(".bim")) as f:
             for line in f:
-                fields = line.strip().split()
-                chrom = fields[0]
+                chrom = line.split(None, 1)[0]
                 chr_counts[chrom] = chr_counts.get(chrom, 0) + 1
 
-        assert chr_counts.get("1", 0) == 200, (
-            f"Expected 200 SNPs on chr1, got {chr_counts.get('1', 0)}"
-        )
-        assert chr_counts.get("2", 0) == 150, (
-            f"Expected 150 SNPs on chr2, got {chr_counts.get('2', 0)}"
-        )
-        assert chr_counts.get("3", 0) == 150, (
-            f"Expected 150 SNPs on chr3, got {chr_counts.get('3', 0)}"
-        )
+        for chrom, expected in EXPECTED_SNP_COUNTS.items():
+            actual = chr_counts.get(chrom, 0)
+            assert actual == expected, (
+                f"Expected {expected} SNPs on chr{chrom}, got {actual}"
+            )
 
     def test_annotation_file_format(self):
         """test_snps.txt has 500 lines with 3 tab-separated columns.

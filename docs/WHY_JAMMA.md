@@ -85,13 +85,15 @@ results = run_lmm_association_streaming(
 
 ## 3. Speed: JAX Acceleration
 
-### Benchmark (mouse_hs1940: 1,940 samples × 12,226 SNPs, Apple M2)
+### Benchmark (mouse_hs1940: 1,940 samples × 12,226 SNPs, Apple M2, GEMMA 0.98.5)
 
-| Operation          | GEMMA  | JAMMA | Speedup   |
-|--------------------|--------|-------|-----------|
-| Kinship (`-gk 1`)  | 26.5s  | 2.4s  | **11.0x** |
-| LMM (`-lmm 1`)     | 27.6s  | 4.5s  | **6.1x**  |
-| **Total**          | 54.1s  | 6.9s  | **7.8x**  |
+| Operation          | GEMMA 0.98.5 | JAMMA (JAX) | JAMMA (NumPy) | JAX Speedup |
+|--------------------|--------------|-------------|---------------|-------------|
+| Kinship (`-gk 1`)  | 2.1s         | 2.3s        | 1.7s          | ~1x         |
+| LMM (`-lmm 1`)     | 11.3s        | 2.8s        | 5.3s          | **4.0x**    |
+| **Total**          | **13.4s**    | **5.1s**    | **7.0s**      | **2.6x**    |
+
+Kinship is BLAS-bound (both use OpenBLAS/Accelerate matmul) so times are similar. The LMM speedup comes from batch-parallel SNP processing.
 
 ### Why Faster?
 

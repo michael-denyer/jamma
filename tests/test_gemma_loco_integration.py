@@ -309,11 +309,9 @@ class TestGemmaLocoValidation:
     def test_loco_lambda_per_chromosome(self, merged_per_chr: dict[str, pd.DataFrame]):
         """LOCO-04: Per-chromosome l_remle matches GEMMA within 2e-4 tolerance.
 
-        Note: On this synthetic dataset (100 samples, weak signal), l_remle
-        converges to the lower bound (1e-5) for all SNPs on all chromosomes.
-        This test is a structural check only — it cannot distinguish a correct
-        optimizer from one that always returns l_min. Real-data validation with
-        non-boundary lambda values is in test_gemma_integration.py.
+        On this synthetic dataset, l_remle converges to the lower bound (1e-5)
+        for chr1 and chr2, but chr3 has non-boundary values (~0.1-1.0),
+        providing meaningful optimizer validation.
         """
         for chrom in _CHROMOSOMES:
             merged = merged_per_chr[chrom]

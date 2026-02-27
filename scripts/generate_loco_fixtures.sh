@@ -20,8 +20,14 @@
 #   b) JAMMA's per-SNP beta, SE, p_wald, l_remle match GEMMA given the same kinship
 #
 # Prerequisites:
-#   - Docker running with gemma-loco image built:
-#       docker build --platform linux/amd64 -t gemma-loco -f docker/Dockerfile.gemma docker/
+#   - Docker running with gemma-loco image (GEMMA 0.96 on Ubuntu):
+#       docker build --platform linux/amd64 -t gemma-loco - <<'EOF'
+#         FROM ubuntu:22.04
+#         RUN apt-get update && apt-get install -y wget && \
+#             wget -qO /usr/local/bin/gemma https://github.com/genetics-statistics/GEMMA/releases/download/v0.98.5/gemma-0.98.5-linux-static-AMD64 && \
+#             chmod +x /usr/local/bin/gemma
+#         ENTRYPOINT ["gemma"]
+#       EOF
 #   - PLINK files and annotation file in tests/fixtures/gemma_loco/:
 #       uv run python scripts/generate_loco_synthetic.py
 #

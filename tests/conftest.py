@@ -167,19 +167,7 @@ def validation_pipeline_data():
     kinship = read_kinship_matrix(reference_kinship)
     reference_results = load_gemma_assoc(reference_assoc)
 
-    # Load phenotypes from .fam file
-    fam_path = example_data.with_suffix(".fam")
-    phenotypes = []
-    with open(fam_path) as f:
-        for line in f:
-            parts = line.strip().split()
-            if len(parts) >= 6:
-                val = parts[5]
-                if val == "-9" or val == "NA":
-                    phenotypes.append(np.nan)
-                else:
-                    phenotypes.append(float(val))
-    phenotypes = np.array(phenotypes)
+    phenotypes = load_phenotypes_from_fam(example_data.with_suffix(".fam"))
 
     # Build SNP info
     snp_info = [

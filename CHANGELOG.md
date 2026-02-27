@@ -20,19 +20,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `load_phenotypes_from_fam` extracted to `conftest.py` (DRY — was duplicated in
-  3 test files); simplified to `np.loadtxt(usecols=5)`
-- CI: dropped Intel Mac job (macos-13 deprecated); replaced broken Windows job with
-  lean `windows-latest` NumPy-only config; added `--cov-fail-under` per matrix entry
+- `load_phenotypes_from_fam` extracted to `conftest.py` for reuse; simplified to
+  `np.loadtxt(usecols=5)`
+- CI: dropped Intel Mac job (macos-13 deprecated) and Windows job (pytest-xdist
+  deadlock); added `--cov-fail-under` per matrix entry
 - Causal SNP check in `generate_loco_fixtures.sh` is now a hard failure (was warning)
 - Tolerance rationale comments added to LOCO integration tests
 
 ### Fixed
 
-- `--cov-fail-under=80` restored to `pyproject.toml` addopts (was dropped, breaking
-  local coverage enforcement)
-- `pytest.importorskip('jax')` added before JAX-only imports in test_loco and
-  test_streaming (fixes NumPy-only CI)
+- CI: added per-matrix `--cov-fail-under` thresholds (80% JAX, 50% NumPy-only)
+- `pytest.importorskip('jax')` added before JAX-only imports in all 16
+  JAX-dependent test files (fixes NumPy-only CI)
 
 ## [2.7.0] - 2026-02-26
 

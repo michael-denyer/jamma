@@ -85,6 +85,7 @@ def mouse_eigen(mouse_kinship, mouse_phenotypes):
 
 @pytest.mark.benchmark
 @pytest.mark.slow
+@pytest.mark.tier2
 class TestLMMBenchmarks:
     """Benchmark LMM pipeline stages on mouse_hs1940."""
 
@@ -329,6 +330,7 @@ class TestLMMBenchmarks:
 
 @pytest.mark.benchmark
 @pytest.mark.slow
+@pytest.mark.tier2
 class TestShardedBenchmarks:
     """Sharded benchmark variants for before/after comparison on server hardware.
 
@@ -555,6 +557,7 @@ class TestShardedBenchmarks:
 
 @pytest.mark.benchmark
 @pytest.mark.slow
+@pytest.mark.tier2
 class TestXLACacheVerification:
     """Verify XLA compilation cache persistence across runs."""
 

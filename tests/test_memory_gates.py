@@ -5,6 +5,8 @@ and check_memory_available are tested using mock psutil to simulate low-memory
 conditions without requiring actual large allocations.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 

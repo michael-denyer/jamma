@@ -101,6 +101,12 @@ def run_lmm_association_jax(
             f"eigenvectors={eigenvectors is not None}"
         )
 
+    if kinship is None and eigenvalues is None:
+        raise ValueError(
+            "Either kinship or pre-computed eigendecomposition (eigenvalues + "
+            "eigenvectors) must be provided"
+        )
+
     if lmm_mode not in (1, 2, 3, 4):
         raise ValueError(
             f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
@@ -357,6 +363,15 @@ def run_lmm_association_jax(
     # Log memory after all chunks processed
     if show_progress:
         log_rss_memory("lmm_jax", "after_all_chunks")
+
+    # NaN diagnostic: warn if any output arrays contain NaN results
+    for key, arr in arrays_out.items():
+        n_nan = int(np.sum(np.isnan(arr)))
+        if n_nan > 0:
+            logger.warning(
+                f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
+                "check kinship matrix quality"
+            )
 
     # Lambda boundary convergence diagnostics
     n_at_lmin, n_at_lmax = count_lambda_boundary_hits(

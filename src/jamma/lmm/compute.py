@@ -146,6 +146,10 @@ def _compute_lmm_chunk(
         raise ValueError("logl_H0 is required for LRT (mode 2) and All (mode 4)")
     if lmm_mode in (3, 4) and Hi_eval_null is None:
         raise ValueError("Hi_eval_null is required for Score (mode 3) and All (mode 4)")
+    if lmm_mode not in (1, 2, 3, 4):
+        raise ValueError(
+            f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
+        )
 
     result: dict[str, jax.Array | None] = {
         "lambdas": None,
@@ -245,8 +249,9 @@ def block_chunk_result(result: dict[str, jax.Array | None], lmm_mode: int) -> No
         result: Dict returned by _compute_lmm_chunk.
         lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
     """
-    for key in _SYNC_KEYS[lmm_mode]:
-        result[key].block_until_ready()
+    for key in _SYNC_KEYS.get(lmm_mode, ()):
+        if result[key] is not None:
+            result[key].block_until_ready()
 
 
 def strip_and_append(

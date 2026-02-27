@@ -348,6 +348,15 @@ def run_lmm_association_numpy(
     if show_progress:
         log_rss_memory("lmm_numpy", "after_all_chunks")
 
+    # NaN diagnostic: warn if any output arrays contain NaN results
+    for key, arr in arrays_out.items():
+        n_nan = int(np.sum(np.isnan(arr)))
+        if n_nan > 0:
+            logger.warning(
+                f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
+                "check kinship matrix quality"
+            )
+
     # Lambda boundary convergence diagnostics
     n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
         lmm_mode, arrays_out, l_min, l_max

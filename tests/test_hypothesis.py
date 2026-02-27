@@ -306,7 +306,7 @@ class TestScoreTestProperties:
         Hi_eval = 1.0 / (lambda_null * eigenvalues + 1.0)
         Pab = calc_pab(n_cvt, Hi_eval, Uab)
 
-        beta, se, p_score = calc_score_test(lambda_null, Pab, n_cvt, n_samples)
+        beta, se, p_score = calc_score_test(Pab, n_cvt, n_samples)
 
         # For valid inputs with variance, p_score should be in [0, 1]
         # For degenerate inputs, NaN is acceptable
@@ -325,7 +325,7 @@ class TestScoreTestProperties:
         Hi_eval = 1.0 / (lambda_null * eigenvalues + 1.0)
         Pab = calc_pab(n_cvt, Hi_eval, Uab)
 
-        beta, se, p_score = calc_score_test(lambda_null, Pab, n_cvt, n_samples)
+        beta, se, p_score = calc_score_test(Pab, n_cvt, n_samples)
 
         assert not np.isinf(beta), f"Infinite beta: {beta}"
         assert not np.isinf(se), f"Infinite SE: {se}"
@@ -345,7 +345,7 @@ class TestScoreTestProperties:
         Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
         Pab = calc_pab(n_cvt, Hi_eval, Uab)
 
-        beta, se, p_score = calc_score_test(lambda_val, Pab, n_cvt, n_samples)
+        beta, se, p_score = calc_score_test(Pab, n_cvt, n_samples)
 
         # All values should be finite or NaN (never inf)
         assert np.isfinite(beta) or np.isnan(beta), f"Unexpected inf beta: {beta}"

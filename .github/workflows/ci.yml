@@ -67,7 +67,7 @@ jobs:
         run: uv sync ${{ matrix.install_args }}
 
       - name: Run tests
-        run: uv run pytest ${{ matrix.pytest_args || '-m "not tier2 and not slow"' }} -v -o 'addopts=' --cov=src/jamma --cov-report=term-missing ${{ matrix.cov_threshold }}
+        run: uv run pytest ${{ matrix.pytest_args || '-m "not tier2 and not slow"' }} -v -o 'addopts=' --cov=src/jamma --cov-report=term-missing --cov-report=json ${{ matrix.cov_threshold }}
 
       - name: Check per-module coverage minimums
         if: matrix.name == 'Linux + JAX'

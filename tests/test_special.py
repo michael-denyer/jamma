@@ -7,7 +7,8 @@ Covers:
              ranges (a=df/2 for df 10-100000, b=0.5)
   - ISOL-01/02/04: import isolation — stats.py and results.py have no module-level JAX
              imports (Plan 34-02 completed). Phase 36 made JAX an optional extra so
-             subprocess import tests now pass without xfail.
+             subprocess import tests pass. An allowlist test enforces that only
+             designated lmm/ modules may have module-level JAX imports.
 """
 
 from __future__ import annotations
@@ -282,9 +283,9 @@ class TestImportIsolation:
 
     These tests use subprocess with a mock JAX that raises ImportError to
     simulate a JAX-free environment. Phase 36 made JAX optional: stats.py
-    and results.py import cleanly without JAX. test_no_module_level_jax_in_lmm
-    is xfail(strict=True) because runner_jax.py etc. correctly use module-level
-    JAX imports — the test scope is intentionally too broad.
+    and results.py import cleanly without JAX. test_module_level_jax_allowlist
+    enforces that only explicitly allowlisted modules may have module-level
+    JAX imports.
     """
 
     def _make_mock_jax_path(self, tmp_path: str) -> str:
@@ -367,24 +368,24 @@ class TestImportIsolation:
                 f"stderr: {result.stderr}"
             )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "runner_jax.py, likelihood_jax.py etc. correctly have module-level "
-            "JAX imports; scope is too broad. stats.py/results.py isolation "
-            "is verified by the subprocess import tests above."
-        ),
-    )
-    def test_no_module_level_jax_in_lmm(self):
-        """No module-level JAX imports exist in src/jamma/lmm/ after Plan 34-02.
+    @pytest.mark.tier0
+    def test_module_level_jax_allowlist(self):
+        """ISOL-04: Only allowlisted modules may have module-level JAX imports.
 
-        ISOL-04: Only function-body (indented) JAX imports are allowed.
-        grep for unindented 'import jax' or 'from jax' — should find none.
+        Grep src/jamma/lmm/ for unindented 'import jax' or 'from jax'. Any
+        file found must be in the allowlist. If a non-allowlisted file gains a
+        module-level JAX import, this test fails with a clear message.
 
-        Note: This test fails because JAX-specific modules (runner_jax.py,
-        likelihood_jax.py) correctly import JAX at module level. The intent of
-        ISOL-04 (stats.py and results.py isolated) is verified by the other tests.
+        To intentionally add a new file, update _JAX_IMPORT_ALLOWLIST below.
         """
+        _JAX_IMPORT_ALLOWLIST = {
+            "runner_streaming.py",
+            "runner_jax.py",
+            "likelihood_jax.py",
+            "prepare.py",
+            "compute.py",
+        }
+
         src_lmm = os.path.join(
             os.path.dirname(os.path.dirname(__file__)), "src", "jamma", "lmm"
         )
@@ -398,9 +399,19 @@ class TestImportIsolation:
             capture_output=True,
             text=True,
         )
-        # grep returns 0 if matches found, 1 if no matches
-        # We want no matches (returncode == 1)
-        matching_lines = result.stdout.strip()
-        assert not matching_lines, (
-            f"Found module-level JAX imports in src/jamma/lmm/:\n{matching_lines}"
+        matching_lines = (
+            result.stdout.strip().splitlines() if result.stdout.strip() else []
+        )
+        found_files = {os.path.basename(line.split(":")[0]) for line in matching_lines}
+        unexpected = found_files - _JAX_IMPORT_ALLOWLIST
+        unexpected_lines = "\n".join(
+            line
+            for line in matching_lines
+            if os.path.basename(line.split(":")[0]) in unexpected
+        )
+        assert not unexpected, (
+            "Unexpected module-level JAX imports found in src/jamma/lmm/:\n"
+            + unexpected_lines
+            + "\n\nIf intentional, add the filename(s) to "
+            "_JAX_IMPORT_ALLOWLIST in this test."
         )

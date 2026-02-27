@@ -14,6 +14,10 @@ BFILE = FIXTURES / "mouse_hs1940"
 KINSHIP_FILE = FIXTURES / "mouse_hs1940_kinship.cXX.txt"
 COVARIATE_FILE = FIXTURES / "covariates.txt"
 
+# Fixture paths for gemma_loco dataset (3 chromosomes — required for LOCO tests)
+SYNTHETIC_DIR = Path(__file__).parent / "fixtures" / "gemma_loco"
+SYNTHETIC_BFILE = SYNTHETIC_DIR / "test"
+
 
 @pytest.mark.slow
 @pytest.mark.tier1
@@ -124,3 +128,26 @@ def test_gwas_import_from_top_level() -> None:
 
     assert callable(g)
     assert hasattr(GR, "__dataclass_fields__")
+
+
+@pytest.mark.tier1
+def test_gwas_loco_numpy_backend(tmp_path: Path) -> None:
+    """gwas() with loco=True, backend='numpy' completes end-to-end."""
+    result = gwas(
+        SYNTHETIC_BFILE,
+        loco=True,
+        backend="numpy",
+        output_dir=tmp_path,
+        show_progress=False,
+        check_memory=False,
+    )
+
+    assert isinstance(result, GWASResult)
+    assert result.n_samples > 0
+    assert result.n_snps_tested > 0
+
+    # Output file should exist and contain results
+    assoc_file = tmp_path / "result.assoc.txt"
+    assert assoc_file.exists()
+    lines = assoc_file.read_text().strip().splitlines()
+    assert len(lines) > 1  # Header + data

@@ -11,6 +11,7 @@ from jamma.kinship import compute_centered_kinship
 from jamma.lmm.chunk import MAX_SAFE_CHUNK, _compute_chunk_size, auto_tune_chunk_size
 from jamma.lmm.runner_jax import run_lmm_association_jax
 from jamma.validation import compare_assoc_results, load_gemma_assoc
+from tests.conftest import load_phenotypes_from_fam
 
 pytestmark = pytest.mark.requires_jax
 
@@ -387,8 +388,7 @@ class TestJaxScoreMode:
         kinship = read_kinship_matrix(
             FIXTURE_DIR / "gemma_kinship.cXX.txt", n_samples=plink.n_samples
         )
-        fam_data = np.loadtxt(FIXTURE_DIR / "test.fam", dtype=str)
-        phenotypes = fam_data[:, 5].astype(float)
+        phenotypes = load_phenotypes_from_fam(FIXTURE_DIR / "test.fam")
         covariates = np.loadtxt(COVARIATE_FILE)
 
         snp_info = [
@@ -558,8 +558,7 @@ class TestJaxLrtMode:
         kinship = read_kinship_matrix(
             FIXTURE_DIR / "gemma_kinship.cXX.txt", n_samples=plink.n_samples
         )
-        fam_data = np.loadtxt(FIXTURE_DIR / "test.fam", dtype=str)
-        phenotypes = fam_data[:, 5].astype(float)
+        phenotypes = load_phenotypes_from_fam(FIXTURE_DIR / "test.fam")
         covariates = np.loadtxt(COVARIATE_FILE)
 
         snp_info = [

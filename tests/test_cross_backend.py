@@ -12,22 +12,11 @@ import pytest
 from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
+from tests.conftest import load_phenotypes_from_fam
 
 pytestmark = pytest.mark.requires_jax
 
 _FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "gemma_synthetic"
-
-
-def _load_phenotypes(plink_prefix: Path) -> np.ndarray:
-    """Load phenotypes from FAM file (column 6)."""
-    fam_path = plink_prefix.with_suffix(".fam")
-    phenotypes = []
-    with open(fam_path) as f:
-        for line in f:
-            parts = line.strip().split()
-            val = parts[5]
-            phenotypes.append(np.nan if val in ("-9", "NA") else float(val))
-    return np.array(phenotypes, dtype=np.float64)
 
 
 def _build_snp_info(plink_data) -> list[dict]:
@@ -51,7 +40,7 @@ def cross_backend_data():
     """Load gemma_synthetic data for both runners."""
     plink_data = load_plink_binary(_FIXTURE_ROOT / "test")
     kinship = read_kinship_matrix(_FIXTURE_ROOT / "gemma_kinship.cXX.txt")
-    phenotypes = _load_phenotypes(_FIXTURE_ROOT / "test")
+    phenotypes = load_phenotypes_from_fam((_FIXTURE_ROOT / "test").with_suffix(".fam"))
     snp_info = _build_snp_info(plink_data)
 
     return {

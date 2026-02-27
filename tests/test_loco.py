@@ -24,6 +24,7 @@ from jamma.kinship import (
     compute_loco_kinship,
     compute_loco_kinship_streaming,
 )
+from tests.conftest import load_phenotypes_from_fam
 
 pytestmark = pytest.mark.requires_jax
 
@@ -610,17 +611,6 @@ class TestLocoEdgeCases:
 # ===========================================================================
 
 
-def _load_mouse_phenotypes() -> np.ndarray:
-    """Load mouse_hs1940 phenotypes from .fam file."""
-    fam_path = MOUSE_HS1940_BFILE.with_suffix(".fam")
-    fam_data = np.loadtxt(str(fam_path), dtype=str, usecols=(5,))
-    missing_mask = np.isin(fam_data, ["-9", "NA"])
-    fam_data[missing_mask] = "0"
-    phenotypes = fam_data.astype(np.float64)
-    phenotypes[missing_mask] = np.nan
-    return phenotypes
-
-
 @pytest.mark.tier1
 class TestLocoLmmIntegration:
     """LOCO LMM produces valid results on mouse_hs1940."""
@@ -633,7 +623,7 @@ class TestLocoLmmIntegration:
 
         from jamma.lmm.loco import run_lmm_loco
 
-        phenotypes = _load_mouse_phenotypes()
+        phenotypes = load_phenotypes_from_fam(MOUSE_HS1940_BFILE.with_suffix(".fam"))
         results, n_tested = run_lmm_loco(
             bed_path=MOUSE_HS1940_BFILE,
             phenotypes=phenotypes,
@@ -662,7 +652,7 @@ class TestLocoLmmIntegration:
 
         from jamma.lmm.loco import run_lmm_loco
 
-        phenotypes = _load_mouse_phenotypes()
+        phenotypes = load_phenotypes_from_fam(MOUSE_HS1940_BFILE.with_suffix(".fam"))
         results, _ = run_lmm_loco(
             bed_path=MOUSE_HS1940_BFILE,
             phenotypes=phenotypes,
@@ -692,7 +682,7 @@ class TestLocoLmmIntegration:
         from jamma.lmm import run_lmm_association_streaming
         from jamma.lmm.loco import run_lmm_loco
 
-        phenotypes = _load_mouse_phenotypes()
+        phenotypes = load_phenotypes_from_fam(MOUSE_HS1940_BFILE.with_suffix(".fam"))
 
         # Standard LMM (needs kinship)
         from jamma.io import load_plink_binary
@@ -742,7 +732,7 @@ class TestLocoLmmIntegration:
 
         from jamma.lmm.loco import run_lmm_loco
 
-        phenotypes = _load_mouse_phenotypes()
+        phenotypes = load_phenotypes_from_fam(MOUSE_HS1940_BFILE.with_suffix(".fam"))
         output_path = tmp_path / "loco_result.assoc.txt"
 
         run_lmm_loco(
@@ -936,7 +926,7 @@ class TestLocoKsnpsWiring:
 
         from jamma.lmm.loco import run_lmm_loco
 
-        phenotypes = _load_mouse_phenotypes()
+        phenotypes = load_phenotypes_from_fam(MOUSE_HS1940_BFILE.with_suffix(".fam"))
 
         # Use first 5000 SNP indices for kinship computation
         ksnps_indices = np.arange(5000)
@@ -1656,7 +1646,6 @@ _LOCO_BFILE = _LOCO_FIXTURE_ROOT / "test"
 def test_loco_cross_backend_parity(tmp_path: Path) -> None:
     """JAX and NumPy LOCO produce identical results on synthetic data."""
     from jamma.lmm.loco import run_lmm_loco
-    from tests.conftest import load_phenotypes_from_fam
 
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
 

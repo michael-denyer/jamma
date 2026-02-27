@@ -25,6 +25,7 @@ from jamma.lmm.eigen_io import (
     write_eigenvalues,
     write_eigenvectors,
 )
+from tests.conftest import load_phenotypes_from_fam
 
 # =============================================================================
 # File format tests
@@ -333,12 +334,7 @@ class TestLMMEquivalence:
         K = read_kinship_matrix(KINSHIP_FILE, n_samples=meta["n_samples"])
 
         # Subset to valid-phenotype samples (same as runner does internally)
-        fam_data = np.loadtxt(f"{BFILE}.fam", dtype=str, usecols=(5,))
-        missing = np.isin(fam_data, ["-9", "NA"])
-        pheno = fam_data.copy()
-        pheno[missing] = "0"
-        pheno = pheno.astype(np.float64)
-        pheno[missing] = np.nan
+        pheno = load_phenotypes_from_fam(Path(f"{BFILE}.fam"))
         valid_mask = ~np.isnan(pheno) & (pheno != -9.0)
         K_valid = K[np.ix_(valid_mask, valid_mask)]
 

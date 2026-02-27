@@ -23,6 +23,7 @@ import jax
 
 from jamma.core.hardware import assert_x64_precision, get_hardware_context
 from jamma.core.threading import blas_threads
+from tests.conftest import load_phenotypes_from_fam
 
 pytestmark = pytest.mark.requires_jax
 
@@ -35,22 +36,6 @@ _MOUSE_KINSHIP = _MOUSE_DIR / "mouse_hs1940_kinship.cXX.txt"
 def _mouse_data_available() -> bool:
     """Check if mouse_hs1940 PLINK data is available."""
     return _MOUSE_DATA.with_suffix(".bed").exists()
-
-
-def _load_mouse_phenotypes() -> np.ndarray:
-    """Load mouse_hs1940 phenotypes from .fam file."""
-    fam_path = _MOUSE_DATA.with_suffix(".fam")
-    phenotypes = []
-    with open(fam_path) as f:
-        for line in f:
-            parts = line.strip().split()
-            if len(parts) >= 6:
-                val = parts[5]
-                if val in ("-9", "NA"):
-                    phenotypes.append(np.nan)
-                else:
-                    phenotypes.append(float(val))
-    return np.array(phenotypes, dtype=np.float64)
 
 
 @pytest.fixture(scope="module")
@@ -68,7 +53,7 @@ def mouse_phenotypes():
     """Load mouse_hs1940 phenotypes (module-scoped)."""
     if not _mouse_data_available():
         pytest.skip("mouse_hs1940 PLINK data not found")
-    return _load_mouse_phenotypes()
+    return load_phenotypes_from_fam(_MOUSE_DATA.with_suffix(".fam"))
 
 
 @pytest.fixture(scope="module")

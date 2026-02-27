@@ -17,7 +17,7 @@
 
 - **GEMMA-compatible**: Drop-in replacement with identical CLI flags and output formats
 - **Numerical equivalence**: Validated against GEMMA — 100% significance agreement, 100% effect direction agreement
-- **Fast**: Up to 11x faster than GEMMA on kinship and 6x faster on LMM association
+- **Fast**: Up to 4x faster than GEMMA 0.98.5 on LMM association (JAX backend), 2.6x faster end-to-end
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
 - **Cross-platform**: Runs on Linux, macOS, and Windows — NumPy backend works everywhere, JAX backend adds GPU acceleration
 - **Pure Python**: NumPy + optional JAX stack, no C++ compilation required
@@ -223,13 +223,15 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 
 ## Performance
 
-Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2:
+Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2, GEMMA 0.98.5:
 
-| Operation          | GEMMA  | JAMMA | Speedup   |
-|--------------------|--------|-------|-----------|
-| Kinship (`-gk 1`)  | 26.5s  | 2.4s  | **11.0x** |
-| LMM (`-lmm 1`)     | 27.6s  | 4.5s  | **6.1x**  |
-| **Total**          | 54.1s  | 6.9s  | **7.8x**  |
+| Operation          | GEMMA 0.98.5 | JAMMA (JAX) | JAMMA (NumPy) | JAX Speedup |
+|--------------------|--------------|-------------|---------------|-------------|
+| Kinship (`-gk 1`)  | 2.1s         | 2.3s        | 1.7s          | ~1x         |
+| LMM (`-lmm 1`)     | 11.3s        | 2.8s        | 5.3s          | **4.0x**    |
+| **Total**          | **13.4s**    | **5.1s**    | **7.0s**      | **2.6x**    |
+
+Kinship is BLAS-bound (both use OpenBLAS/Accelerate matmul) so times are similar. The LMM speedup comes from JAMMA's batch-parallel SNP processing via `jax.vmap`.
 
 ## Supported Features
 

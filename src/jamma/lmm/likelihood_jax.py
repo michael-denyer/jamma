@@ -384,7 +384,8 @@ def _golden_section_refine(
     phi = 0.6180339887498949  # Golden ratio - 1
 
     # Find best grid point per SNP and bracket
-    best_idx = jnp.argmax(all_logls, axis=0)
+    safe_logls = jnp.where(jnp.isnan(all_logls), -jnp.inf, all_logls)
+    best_idx = jnp.argmax(safe_logls, axis=0)
     idx_low = jnp.maximum(best_idx - 1, 0)
     idx_high = jnp.minimum(best_idx + 1, n_grid - 1)
 

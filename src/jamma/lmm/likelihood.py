@@ -305,6 +305,9 @@ def _calc_pab_general(n_cvt: int, Hi_eval: np.ndarray, Uab: np.ndarray) -> np.nd
                 if ps_ww != 0:
                     Pab[p, index_ab] = ps_ab - ps_aw * ps_bw / ps_ww
                 else:
+                    logger.debug(
+                        f"Degenerate ps_ww=0 at level {p}, skipping correction"
+                    )
                     Pab[p, index_ab] = ps_ab
 
     return Pab
@@ -520,12 +523,19 @@ def _golden_section_minimize(
 
     # Evaluate func at each grid point, find minimum
     best_idx = 0
-    best_val = func(math.exp(log_lambdas[0]))
-    for i in range(1, n_grid):
+    best_val = float("inf")
+    for i in range(n_grid):
         val = func(math.exp(log_lambdas[i]))
-        if val < best_val:
+        if not math.isnan(val) and val < best_val:
             best_val = val
             best_idx = i
+
+    if math.isinf(best_val):
+        logger.warning(
+            "All grid points returned NaN log-likelihood — "
+            "kinship matrix may be degenerate. Returning boundary lambda."
+        )
+        return l_min, float("nan")
 
     # Bracket around best grid point
     idx_low = max(best_idx - 1, 0)

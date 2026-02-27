@@ -186,9 +186,7 @@ class TestScoreTestMath:
         Pab = calc_pab(data["n_cvt"], Hi_eval, Uab)
 
         # Compute Score test
-        beta, se, p_score = calc_score_test(
-            lambda_null, Pab, data["n_cvt"], data["n_samples"]
-        )
+        beta, se, p_score = calc_score_test(Pab, data["n_cvt"], data["n_samples"])
 
         assert 0.0 <= p_score <= 1.0, f"P-value {p_score} not in [0, 1]"
         assert np.isfinite(beta), "Beta should be finite"
@@ -228,7 +226,7 @@ class TestScoreTestMath:
         f_stat_expected = n * (P_xy_score**2) / (P_yy_score * P_xx_score)
 
         # Compute actual Score test result
-        _, _, p_score = calc_score_test(lambda_null, Pab, n_cvt, n)
+        _, _, p_score = calc_score_test(Pab, n_cvt, n)
 
         # Verify F-statistic produces the same p-value
         df = n - n_cvt - 1
@@ -259,7 +257,7 @@ class TestScoreTestMath:
         Hi_eval = 1.0 / (lambda_null * data["eigenvalues"] + 1.0)
         Pab = calc_pab(n_cvt, Hi_eval, Uab)
 
-        beta, se, p_score = calc_score_test(lambda_null, Pab, n_cvt, data["n_samples"])
+        beta, se, p_score = calc_score_test(Pab, n_cvt, data["n_samples"])
 
         assert np.isnan(beta), "Beta should be NaN for degenerate SNP"
         assert np.isnan(se), "SE should be NaN for degenerate SNP"
@@ -293,7 +291,7 @@ class TestScoreTestMath:
         p_expected = f_sf(f_stat_manual, 1.0, float(df))
 
         # Get p-value from calc_score_test
-        _, _, p_score = calc_score_test(lambda_null, Pab, n_cvt, n)
+        _, _, p_score = calc_score_test(Pab, n_cvt, n)
 
         assert np.isclose(p_score, p_expected, rtol=1e-10), (
             f"Formula mismatch: {p_score} vs {p_expected}"
@@ -325,7 +323,7 @@ class TestScoreVsWald:
             Hi_eval = 1.0 / (lambda_null * data["eigenvalues"] + 1.0)
             Pab = calc_pab(n_cvt, Hi_eval, Uab)
 
-            _, _, p_score = calc_score_test(lambda_null, Pab, n_cvt, data["n_samples"])
+            _, _, p_score = calc_score_test(Pab, n_cvt, data["n_samples"])
             p_values.append(p_score)
 
         # All p-values should be valid (computed with same lambda)
@@ -348,9 +346,7 @@ class TestScoreVsWald:
         # Score test with null lambda
         Hi_eval_score = 1.0 / (lambda_null * data["eigenvalues"] + 1.0)
         Pab_score = calc_pab(n_cvt, Hi_eval_score, Uab)
-        beta_score, _, _ = calc_score_test(
-            lambda_null, Pab_score, n_cvt, data["n_samples"]
-        )
+        beta_score, _, _ = calc_score_test(Pab_score, n_cvt, data["n_samples"])
 
         # Wald test with optimized lambda (per-SNP) -- use JAX optimizer
         import jax.numpy as jnp
@@ -396,7 +392,7 @@ class TestScoreVsWald:
             Uab = compute_Uab(data["UtW"], data["Uty"], Utx_i)
             Hi_eval = 1.0 / (lambda_null * data["eigenvalues"] + 1.0)
             Pab = calc_pab(n_cvt, Hi_eval, Uab)
-            result = calc_score_test(lambda_null, Pab, n_cvt, data["n_samples"])
+            result = calc_score_test(Pab, n_cvt, data["n_samples"])
             score_results.append(result)
 
         # All results should be valid
@@ -424,7 +420,7 @@ class TestScoreTestEdgeCases:
         Hi_eval = 1.0 / (lambda_null * data["eigenvalues"] + 1.0)
         Pab = calc_pab(n_cvt, Hi_eval, Uab)
 
-        beta, se, p_score = calc_score_test(lambda_null, Pab, n_cvt, data["n_samples"])
+        beta, se, p_score = calc_score_test(Pab, n_cvt, data["n_samples"])
 
         assert np.isfinite(beta), "Beta should be finite for small samples"
         assert np.isfinite(se), "SE should be finite for small samples"
@@ -441,9 +437,7 @@ class TestScoreTestEdgeCases:
         lambda_small = 1e-5
         Hi_eval_small = 1.0 / (lambda_small * data["eigenvalues"] + 1.0)
         Pab_small = calc_pab(n_cvt, Hi_eval_small, Uab)
-        _, _, p_small = calc_score_test(
-            lambda_small, Pab_small, n_cvt, data["n_samples"]
-        )
+        _, _, p_small = calc_score_test(Pab_small, n_cvt, data["n_samples"])
         assert 0.0 <= p_small <= 1.0, (
             f"P-value {p_small} not in [0, 1] for small lambda"
         )
@@ -452,9 +446,7 @@ class TestScoreTestEdgeCases:
         lambda_large = 1e5
         Hi_eval_large = 1.0 / (lambda_large * data["eigenvalues"] + 1.0)
         Pab_large = calc_pab(n_cvt, Hi_eval_large, Uab)
-        _, _, p_large = calc_score_test(
-            lambda_large, Pab_large, n_cvt, data["n_samples"]
-        )
+        _, _, p_large = calc_score_test(Pab_large, n_cvt, data["n_samples"])
         assert 0.0 <= p_large <= 1.0, (
             f"P-value {p_large} not in [0, 1] for large lambda"
         )
@@ -485,7 +477,7 @@ class TestScoreTestEdgeCases:
         Hi_eval = 1.0 / (lambda_null * eigenvalues + 1.0)
         Pab = calc_pab(n_cvt, Hi_eval, Uab)
 
-        beta, se, p_score = calc_score_test(lambda_null, Pab, n_cvt, n_samples)
+        beta, se, p_score = calc_score_test(Pab, n_cvt, n_samples)
 
         # Should get very significant p-value (close to 0)
         assert p_score < 0.01, (

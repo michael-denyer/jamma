@@ -263,9 +263,10 @@ def eigendecompose_kinship(
     if n_negative > 0:
         warnings.warn(
             f"Kinship matrix has {n_negative} negative eigenvalue(s). "
-            "Matrix may not be positive semi-definite.",
+            "Zeroing them (matrix not positive semi-definite).",
             stacklevel=2,
         )
+        eigenvalues[eigenvalues < -threshold] = 0.0
 
     small_mask = abs_evals < threshold
     n_zero = int(np.sum(small_mask))

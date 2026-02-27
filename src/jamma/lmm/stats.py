@@ -227,7 +227,6 @@ def calc_lrt_test(
 
 
 def calc_score_test(
-    lambda_null: float,
     Pab: np.ndarray,
     n_cvt: int,
     ni_test: int,
@@ -241,7 +240,6 @@ def calc_score_test(
     (after covariates only), not n_cvt+1 (after covariates AND genotype).
 
     Args:
-        lambda_null: Null model lambda (fixed, same for all SNPs)
         Pab: Pab matrix from calc_pab (n_cvt+2, n_index)
         n_cvt: Number of covariates
         ni_test: Number of samples

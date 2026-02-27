@@ -40,6 +40,12 @@ def _guard_P_yy(P_yy: np.ndarray) -> np.ndarray:
     Returns:
         Guarded P_yy with same shape.
     """
+    n_negative = int(np.sum(P_yy < 0.0))
+    if n_negative > 0:
+        logger.warning(
+            f"{n_negative} SNPs have negative P_yy — numerical breakdown. "
+            "Kinship matrix may not be positive semi-definite."
+        )
     P_yy = np.where(P_yy < 0.0, np.nan, P_yy)
     return np.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
 
@@ -545,7 +551,8 @@ def _batch_golden_section_numpy(
     phi = 0.6180339887498949  # golden ratio - 1
 
     # Find best grid point per SNP and bracket
-    best_idx = np.argmax(grid_logls, axis=0)  # (n_snps,)
+    safe_logls = np.where(np.isnan(grid_logls), -np.inf, grid_logls)
+    best_idx = np.argmax(safe_logls, axis=0)  # (n_snps,)
     idx_low = np.maximum(best_idx - 1, 0)
     idx_high = np.minimum(best_idx + 1, len(log_lambdas) - 1)
 

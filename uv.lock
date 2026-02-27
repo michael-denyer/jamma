@@ -234,7 +234,7 @@ wheels = [
 
 [[package]]
 name = "jamma"
-version = "2.7.0"
+version = "2.7.1"
 source = { editable = "." }
 dependencies = [
     { name = "bed-reader" },
@@ -281,12 +281,12 @@ requires-dist = [
     { name = "click", specifier = ">=8.0.0" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100.0" },
     { name = "hypothesis", extras = ["numpy"], marker = "extra == 'dev'", specifier = ">=6.100.0" },
-    { name = "jax", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.8.0" },
-    { name = "jax", marker = "sys_platform == 'linux'", specifier = ">=0.8.0" },
-    { name = "jax", marker = "extra == 'jax'", specifier = ">=0.8.0" },
-    { name = "jaxlib", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.8.0" },
-    { name = "jaxlib", marker = "sys_platform == 'linux'", specifier = ">=0.8.0" },
-    { name = "jaxlib", marker = "extra == 'jax'", specifier = ">=0.8.0" },
+    { name = "jax", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.5.0" },
+    { name = "jax", marker = "sys_platform == 'linux'", specifier = ">=0.5.0" },
+    { name = "jax", marker = "extra == 'jax'", specifier = ">=0.5.0" },
+    { name = "jaxlib", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.5.0" },
+    { name = "jaxlib", marker = "sys_platform == 'linux'", specifier = ">=0.5.0" },
+    { name = "jaxlib", marker = "extra == 'jax'", specifier = ">=0.5.0" },
     { name = "jaxtyping", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.2.28" },
     { name = "jaxtyping", marker = "sys_platform == 'linux'", specifier = ">=0.2.28" },
     { name = "jaxtyping", marker = "extra == 'jax'", specifier = ">=0.2.28" },

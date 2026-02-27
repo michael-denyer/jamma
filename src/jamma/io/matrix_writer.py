@@ -155,8 +155,10 @@ def write_matrix_parallel(
                 f"chunks {text_bytes / (1024**3):.0f} GB). "
                 f"Write may fail with ENOSPC."
             )
-    except OSError:
-        pass  # disk_usage can fail on some filesystems
+    except OSError as e:
+        logger.warning(
+            f"Could not check disk space for {path.parent}: {e}. Skipping space check."
+        )
 
     ctx = mp.get_context("spawn")
 
@@ -210,8 +212,8 @@ def write_matrix_parallel(
         # Free memmap before concatenation — at 125k samples this is 126 GB
         try:
             os.unlink(memmap_path)
-        except OSError:
-            pass
+        except OSError as e:
+            logger.warning(f"Could not delete memmap {memmap_path}: {e}")
         memmap_path = None  # prevent double-delete in finally
 
         # Concatenate chunk files in order, deleting each after use
@@ -227,8 +229,10 @@ def write_matrix_parallel(
                     # Eagerly delete — frees disk before writing the next chunk
                     try:
                         os.unlink(chunk_path)
-                    except OSError:
-                        pass
+                    except OSError as e:
+                        logger.debug(
+                            f"Could not eagerly delete chunk {chunk_path}: {e}"
+                        )
         except BaseException as e:
             logger.opt(exception=e).error(
                 f"Failed during chunk concatenation to {path}: {e}"
@@ -243,14 +247,18 @@ def write_matrix_parallel(
         if memmap_path is not None:
             try:
                 os.unlink(memmap_path)
-            except (FileNotFoundError, OSError):
+            except FileNotFoundError:
                 pass
+            except OSError as e:
+                logger.warning(f"Failed to clean up temp memmap {memmap_path}: {e}")
         for p in chunk_paths:
             try:
                 os.unlink(p)
-            except (FileNotFoundError, OSError):
+            except FileNotFoundError:
                 pass
+            except OSError as e:
+                logger.warning(f"Failed to clean up chunk file {p}: {e}")
         try:
             os.rmdir(tmp_dir)
-        except OSError:
-            pass
+        except OSError as e:
+            logger.debug(f"Could not remove temp dir {tmp_dir}: {e}")

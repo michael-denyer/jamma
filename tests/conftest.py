@@ -12,13 +12,20 @@ import pytest
 def load_phenotypes_from_fam(fam_path: Path) -> np.ndarray:
     """Load phenotypes from FAM file (column 6, 0-indexed column 5).
 
+    Replaces GEMMA's missing-phenotype marker (-9) with NaN so downstream
+    valid_mask logic (which checks for NaN) handles them correctly.
+
     Args:
         fam_path: Path to .fam PLINK file.
 
     Returns:
-        Array of phenotype values (float64).
+        Array of phenotype values (float64), with -9 replaced by NaN.
     """
-    return np.loadtxt(fam_path, usecols=5, dtype=np.float64)
+    from jamma.core.constants import PHENOTYPE_MISSING
+
+    pheno = np.loadtxt(fam_path, usecols=5, dtype=np.float64)
+    pheno[pheno == PHENOTYPE_MISSING] = np.nan
+    return pheno
 
 
 if TYPE_CHECKING:
@@ -138,7 +145,6 @@ def validation_pipeline_data():
 
     Returns None if reference data is not available (tests should skip).
     """
-    import numpy as np
 
     fixture_root = Path(__file__).parent / "fixtures"
     example_data = fixture_root / "gemma_synthetic" / "test"
@@ -202,13 +208,5 @@ def validation_pipeline_data():
         "reference_results": reference_results,
         "comparison": comparison,
     }
-
-    # Mark arrays as read-only to prevent accidental mutation in session scope
-    for r_list in (jamma_results, reference_results):
-        for r in r_list:
-            for attr_name in ("beta", "se", "p_wald", "logl_H1", "l_remle", "af"):
-                val = getattr(r, attr_name, None)
-                if isinstance(val, np.ndarray):
-                    val.flags.writeable = False
 
     return result

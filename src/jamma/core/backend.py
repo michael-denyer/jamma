@@ -37,7 +37,11 @@ def has_jax() -> bool:
         return False
     except (RuntimeError, OSError) as e:
         # JAX installed but broken (e.g. bad CUDA, corrupted install)
-        logger.warning(f"JAX installed but failed to import: {type(e).__name__}: {e}")
+        logger.error(
+            f"JAX installed but failed to import: {type(e).__name__}: {e}. "
+            f"Falling back to NumPy backend. Fix the JAX installation or "
+            f"use --backend numpy to suppress this warning."
+        )
         return False
 
 

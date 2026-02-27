@@ -11,6 +11,7 @@ import time
 import numpy as np
 from loguru import logger
 
+from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.core.memory import estimate_lmm_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
@@ -135,7 +136,10 @@ def run_lmm_association_numpy(
         )
 
     if use_gpu:
-        logger.debug("use_gpu ignored for NumPy backend")
+        logger.warning(
+            "use_gpu=True ignored: NumPy backend is CPU-only. "
+            "Install JAX for GPU support: pip install jamma[jax]"
+        )
 
     # Memory check before workflow
     n_samples, n_snps = genotypes.shape
@@ -165,7 +169,7 @@ def run_lmm_association_numpy(
                 f"genotypes={est.genotypes_gb:.1f}GB"
             )
 
-    valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
+    valid_mask = ~np.isnan(phenotypes) & (phenotypes != PHENOTYPE_MISSING)
     if covariates is not None:
         valid_covariate = np.all(~np.isnan(covariates), axis=1)
         valid_mask = valid_mask & valid_covariate

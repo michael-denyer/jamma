@@ -13,6 +13,7 @@ import jax
 import numpy as np
 from loguru import logger
 
+from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.core.memory import estimate_lmm_streaming_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask
@@ -184,7 +185,7 @@ def run_lmm_association_streaming(
     if snp_info is None:
         snp_info = _LazySnpMeta(meta)
 
-    valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
+    valid_mask = ~np.isnan(phenotypes) & (phenotypes != PHENOTYPE_MISSING)
     if covariates is not None:
         valid_covariate = np.all(~np.isnan(covariates), axis=1)
         valid_mask = valid_mask & valid_covariate

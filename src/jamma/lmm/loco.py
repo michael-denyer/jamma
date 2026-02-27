@@ -22,6 +22,7 @@ import numpy as np
 from bed_reader import open_bed
 from loguru import logger
 
+from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.core.snp_filter import compute_snp_filter_mask
 from jamma.core.threading import blas_threads, get_physical_core_count
 from jamma.io.plink import (
@@ -151,7 +152,7 @@ def run_lmm_loco(
         logger.info(f"  Chromosomes: {len(unique_chrs)}")
 
     # Sample filtering: missing phenotypes, covariate NaNs
-    valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
+    valid_mask = ~np.isnan(phenotypes) & (phenotypes != PHENOTYPE_MISSING)
     if covariates is not None:
         valid_covariate = np.all(~np.isnan(covariates), axis=1)
         valid_mask = valid_mask & valid_covariate

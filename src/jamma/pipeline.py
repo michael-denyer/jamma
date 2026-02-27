@@ -24,6 +24,7 @@ import numpy as np
 from loguru import logger
 
 from jamma.core.backend import BackendRequest, BackendResolved
+from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.core.memory import StreamingMemoryBreakdown, estimate_streaming_memory
 from jamma.io.covariate import read_covariate_file
 from jamma.io.plink import get_plink_metadata, validate_plink_dimensions
@@ -201,7 +202,7 @@ class PipelineRunner:
             Boolean mask array of shape (n_samples,) where True indicates
             a sample with valid phenotype and covariate values.
         """
-        valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9.0)
+        valid_mask = ~np.isnan(phenotypes) & (phenotypes != PHENOTYPE_MISSING)
         if covariates is not None:
             valid_covariate = np.all(~np.isnan(covariates), axis=1)
             valid_mask = valid_mask & valid_covariate
@@ -392,7 +393,7 @@ class PipelineRunner:
         phenotypes = fam_data.astype(np.float64)
         phenotypes[missing_mask] = np.nan
 
-        valid_mask = ~np.isnan(phenotypes) & (phenotypes != -9)
+        valid_mask = ~np.isnan(phenotypes) & (phenotypes != PHENOTYPE_MISSING)
         n_analyzed = int(valid_mask.sum())
 
         if n_analyzed == 0:
@@ -652,7 +653,7 @@ class PipelineRunner:
                         str(self.config.profile_dir), create_perfetto_link=False
                     )
                     logger.info(f"XLA profiling enabled: {self.config.profile_dir}")
-                except (OSError, ImportError, AttributeError) as e:
+                except (OSError, ImportError) as e:
                     logger.warning(f"Could not enable XLA profiling: {e}")
         elif self.config.profile_dir is not None:
             logger.warning("XLA profiling requires JAX backend; ignoring --profile-dir")

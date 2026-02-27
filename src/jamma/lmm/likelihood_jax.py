@@ -31,7 +31,11 @@ import jax
 import jax.numpy as jnp
 from jax import jit, vmap
 
-from jamma.lmm.likelihood import build_index_table, get_ab_index  # noqa: F401
+from jamma.lmm.likelihood import (
+    _P_YY_MIN,
+    build_index_table,
+    get_ab_index,  # noqa: F401
+)
 
 if TYPE_CHECKING:
     from jaxtyping import Array, Float
@@ -149,7 +153,7 @@ def mle_log_likelihood_jax(
     # Negative P_yy → NaN (numerical breakdown); near-zero → clamp to avoid log(0)
     P_yy = Pab[nc_total, idx_yy]
     P_yy = jnp.where(P_yy < 0.0, jnp.nan, P_yy)
-    P_yy = jnp.where((P_yy >= 0.0) & (P_yy < 1e-8), 1e-8, P_yy)
+    P_yy = jnp.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
 
     # MLE formula (NO logdet_hiw, uses n not df)
     c = 0.5 * n * (jnp.log(n) - jnp.log(2 * jnp.pi) - 1.0)
@@ -261,7 +265,7 @@ def _reml_with_precomputed_iab(
     # near-zero P_yy → clamp to P_YY_MIN to avoid log(0)
     P_yy = Pab[nc_total, idx_yy]
     P_yy = jnp.where(P_yy < 0.0, jnp.nan, P_yy)
-    P_yy = jnp.where((P_yy >= 0.0) & (P_yy < 1e-8), 1e-8, P_yy)
+    P_yy = jnp.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
 
     # REML log-likelihood (NaN P_yy propagates → optimizer avoids this region)
     c = 0.5 * df * (jnp.log(df) - jnp.log(2 * jnp.pi) - 1.0)
@@ -565,8 +569,8 @@ def calc_wald_stats_jax(
     Px_YY = Pab[n_cvt + 1, idx_yy]  # After projecting out covariates AND genotype
 
     # Clamp Px_YY like NumPy path (GEMMA lmm.cpp:854)
-    # Only clamp if >= 0 and < 1e-8; leave negative values to produce NaN
-    Px_YY = jnp.where((Px_YY >= 0.0) & (Px_YY < 1e-8), 1e-8, Px_YY)
+    # Only clamp if >= 0 and < _P_YY_MIN; leave negative values to produce NaN
+    Px_YY = jnp.where((Px_YY >= 0.0) & (Px_YY < _P_YY_MIN), _P_YY_MIN, Px_YY)
 
     # Effect size and standard error
     # Guard P_XX <= 0: SNP has no variance, return NaN for all stats
@@ -669,7 +673,7 @@ def calc_score_stats_jax(
 
     # Px_yy for beta/se computation (after projecting out covariates AND genotype)
     Px_yy = Pab[n_cvt + 1, idx_yy]
-    Px_yy = jnp.where((Px_yy >= 0.0) & (Px_yy < 1e-8), 1e-8, Px_yy)
+    Px_yy = jnp.where((Px_yy >= 0.0) & (Px_yy < _P_YY_MIN), _P_YY_MIN, Px_yy)
 
     # Guard degenerate SNPs
     is_valid = P_xx > 0

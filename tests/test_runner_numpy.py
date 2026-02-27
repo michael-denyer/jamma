@@ -263,6 +263,8 @@ def test_numpy_runner_wald_synthetic(synthetic_data):
     )
 
 
+@pytest.mark.slow
+@pytest.mark.tier2
 def test_numpy_runner_lrt_mouse_hs1940(mouse_hs1940_data):
     """Mode 2 (LRT): NumPy runner matches GEMMA on mouse_hs1940 (1410 samples)."""
     plink, kinship, phenotypes, snp_info = mouse_hs1940_data
@@ -281,6 +283,8 @@ def test_numpy_runner_lrt_mouse_hs1940(mouse_hs1940_data):
     )
 
 
+@pytest.mark.slow
+@pytest.mark.tier2
 def test_numpy_runner_score_mouse_hs1940(mouse_hs1940_data):
     """Mode 3 (Score): NumPy runner matches GEMMA on mouse_hs1940."""
     plink, kinship, phenotypes, snp_info = mouse_hs1940_data
@@ -299,6 +303,8 @@ def test_numpy_runner_score_mouse_hs1940(mouse_hs1940_data):
     )
 
 
+@pytest.mark.slow
+@pytest.mark.tier2
 def test_numpy_runner_all_mouse_hs1940(mouse_hs1940_data):
     """Mode 4 (All): NumPy runner matches GEMMA on mouse_hs1940 for Wald+LRT+Score."""
     plink, kinship, phenotypes, snp_info = mouse_hs1940_data
@@ -471,6 +477,7 @@ def test_numpy_runner_all_covar_synthetic(synthetic_data_with_covariates):
 
 
 @pytest.mark.slow
+@pytest.mark.tier2
 def test_numpy_runner_wald_covar_mouse_hs1940(mouse_hs1940_data_with_covariates):
     """Mode 1 (Wald) with covariates: NumPy runner matches GEMMA on mouse_hs1940."""
     plink, kinship, phenotypes, snp_info, covariates = mouse_hs1940_data_with_covariates
@@ -491,6 +498,7 @@ def test_numpy_runner_wald_covar_mouse_hs1940(mouse_hs1940_data_with_covariates)
 
 
 @pytest.mark.slow
+@pytest.mark.tier2
 def test_numpy_runner_lrt_covar_mouse_hs1940(mouse_hs1940_data_with_covariates):
     """Mode 2 (LRT) with covariates: NumPy runner matches GEMMA on mouse_hs1940."""
     plink, kinship, phenotypes, snp_info, covariates = mouse_hs1940_data_with_covariates
@@ -511,6 +519,7 @@ def test_numpy_runner_lrt_covar_mouse_hs1940(mouse_hs1940_data_with_covariates):
 
 
 @pytest.mark.slow
+@pytest.mark.tier2
 def test_numpy_runner_score_covar_mouse_hs1940(mouse_hs1940_data_with_covariates):
     """Mode 3 (Score) with covariates: NumPy runner matches GEMMA on mouse_hs1940."""
     plink, kinship, phenotypes, snp_info, covariates = mouse_hs1940_data_with_covariates
@@ -531,6 +540,7 @@ def test_numpy_runner_score_covar_mouse_hs1940(mouse_hs1940_data_with_covariates
 
 
 @pytest.mark.slow
+@pytest.mark.tier2
 def test_numpy_runner_all_covar_mouse_hs1940(mouse_hs1940_data_with_covariates):
     """Mode 4 (All) with covariates: NumPy runner matches GEMMA on mouse_hs1940."""
     plink, kinship, phenotypes, snp_info, covariates = mouse_hs1940_data_with_covariates

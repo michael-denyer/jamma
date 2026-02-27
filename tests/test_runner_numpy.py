@@ -55,6 +55,18 @@ MOUSE_HS1940_SCORE = MOUSE_HS1940_DIR / "mouse_hs1940_score.assoc.txt"
 SYNTHETIC_DATA = _FIXTURE_ROOT / "gemma_synthetic" / "test"
 SYNTHETIC_KINSHIP = _FIXTURE_ROOT / "gemma_synthetic" / "gemma_kinship.cXX.txt"
 SYNTHETIC_REFERENCE = _FIXTURE_ROOT / "gemma_synthetic" / "gemma_assoc.assoc.txt"
+SYNTHETIC_LRT_REFERENCE = _FIXTURE_ROOT / "gemma_synthetic" / "gemma_lrt.assoc.txt"
+SCORE_REFERENCE = _FIXTURE_ROOT / "gemma_score" / "gemma_score.assoc.txt"
+ALL_TESTS_REFERENCE = _FIXTURE_ROOT / "gemma_all_tests" / "gemma_all.assoc.txt"
+
+COVARIATE_FIXTURE_DIR = _FIXTURE_ROOT / "gemma_covariate"
+COVARIATE_FILE = COVARIATE_FIXTURE_DIR / "covariates.txt"
+COVARIATE_WALD_REFERENCE = COVARIATE_FIXTURE_DIR / "gemma_covariate.assoc.txt"
+COVARIATE_LRT_REFERENCE = COVARIATE_FIXTURE_DIR / "gemma_covariate_lrt.assoc.txt"
+COVARIATE_SCORE_REFERENCE = COVARIATE_FIXTURE_DIR / "gemma_covariate_score.assoc.txt"
+ALL_TESTS_COVAR_REFERENCE = (
+    _FIXTURE_ROOT / "gemma_all_tests" / "gemma_all_covar.assoc.txt"
+)
 
 
 def _mouse_hs1940_exists() -> bool:
@@ -312,4 +324,168 @@ def test_numpy_runner_all_mouse_hs1940(mouse_hs1940_data):
     comparison = compare_assoc_results(results, reference, NUMPY_GEMMA_TOLERANCES)
     assert comparison.passed, (
         f"NumPy All (mouse_hs1940) vs GEMMA comparison failed:\n{comparison}"
+    )
+
+
+def test_numpy_runner_lrt_synthetic(synthetic_data):
+    """Mode 2 (LRT): NumPy runner matches GEMMA gemma_lrt.assoc.txt reference."""
+    plink, kinship, phenotypes, snp_info = synthetic_data
+    results = run_lmm_association_numpy(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        lmm_mode=2,
+        show_progress=False,
+    )
+    reference = load_gemma_assoc(SYNTHETIC_LRT_REFERENCE)
+    tolerances = ToleranceConfig(lambda_rtol=5e-5)
+    comparison = compare_assoc_results(results, reference, tolerances)
+    assert comparison.passed, f"NumPy LRT (synthetic) vs GEMMA failed:\n{comparison}"
+
+
+def test_numpy_runner_score_synthetic(synthetic_data):
+    """Mode 3 (Score): NumPy runner matches GEMMA gemma_score.assoc.txt reference."""
+    plink, kinship, phenotypes, snp_info = synthetic_data
+    results = run_lmm_association_numpy(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        lmm_mode=3,
+        show_progress=False,
+    )
+    reference = load_gemma_assoc(SCORE_REFERENCE)
+    tolerances = ToleranceConfig(lambda_rtol=5e-5)
+    comparison = compare_assoc_results(results, reference, tolerances)
+    assert comparison.passed, f"NumPy Score (synthetic) vs GEMMA failed:\n{comparison}"
+
+
+def test_numpy_runner_all_synthetic(synthetic_data):
+    """Mode 4 (All): NumPy runner matches GEMMA gemma_all.assoc.txt reference."""
+    plink, kinship, phenotypes, snp_info = synthetic_data
+    results = run_lmm_association_numpy(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        lmm_mode=4,
+        show_progress=False,
+    )
+    reference = load_gemma_assoc(ALL_TESTS_REFERENCE)
+    tolerances = ToleranceConfig(lambda_rtol=5e-5)
+    comparison = compare_assoc_results(results, reference, tolerances)
+    assert comparison.passed, f"NumPy All (synthetic) vs GEMMA failed:\n{comparison}"
+
+
+# ---------------------------------------------------------------------------
+# Covariate fixture and tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def synthetic_data_with_covariates(synthetic_data):
+    """Load gemma_synthetic data plus covariates from gemma_covariate fixture.
+
+    The covariates.txt file already includes the intercept column (first column
+    is all 1.0), matching GEMMA's internal representation when -c is used.
+    """
+    plink, kinship, phenotypes, snp_info = synthetic_data
+    covariates = np.loadtxt(COVARIATE_FILE)
+    return plink, kinship, phenotypes, snp_info, covariates
+
+
+@pytest.mark.skipif(
+    not COVARIATE_WALD_REFERENCE.exists(),
+    reason="Covariate Wald reference not found",
+)
+def test_numpy_runner_wald_covar_synthetic(synthetic_data_with_covariates):
+    """Mode 1 (Wald) with covariates: NumPy runner matches GEMMA reference."""
+    plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
+    results = run_lmm_association_numpy(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        covariates=covariates,
+        lmm_mode=1,
+        show_progress=False,
+    )
+    reference = load_gemma_assoc(COVARIATE_WALD_REFERENCE)
+    tolerances = ToleranceConfig(lambda_rtol=5e-5)
+    comparison = compare_assoc_results(results, reference, tolerances)
+    assert comparison.passed, (
+        f"NumPy Wald+covar (synthetic) vs GEMMA failed:\n{comparison}"
+    )
+
+
+@pytest.mark.skipif(
+    not COVARIATE_LRT_REFERENCE.exists(),
+    reason="Covariate LRT reference not found",
+)
+def test_numpy_runner_lrt_covar_synthetic(synthetic_data_with_covariates):
+    """Mode 2 (LRT) with covariates: NumPy runner matches GEMMA reference."""
+    plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
+    results = run_lmm_association_numpy(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        covariates=covariates,
+        lmm_mode=2,
+        show_progress=False,
+    )
+    reference = load_gemma_assoc(COVARIATE_LRT_REFERENCE)
+    tolerances = ToleranceConfig(lambda_rtol=5e-5)
+    comparison = compare_assoc_results(results, reference, tolerances)
+    assert comparison.passed, (
+        f"NumPy LRT+covar (synthetic) vs GEMMA failed:\n{comparison}"
+    )
+
+
+@pytest.mark.skipif(
+    not COVARIATE_SCORE_REFERENCE.exists(),
+    reason="Covariate Score reference not found",
+)
+def test_numpy_runner_score_covar_synthetic(synthetic_data_with_covariates):
+    """Mode 3 (Score) with covariates: NumPy runner matches GEMMA reference."""
+    plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
+    results = run_lmm_association_numpy(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        covariates=covariates,
+        lmm_mode=3,
+        show_progress=False,
+    )
+    reference = load_gemma_assoc(COVARIATE_SCORE_REFERENCE)
+    tolerances = ToleranceConfig(lambda_rtol=5e-5)
+    comparison = compare_assoc_results(results, reference, tolerances)
+    assert comparison.passed, (
+        f"NumPy Score+covar (synthetic) vs GEMMA failed:\n{comparison}"
+    )
+
+
+@pytest.mark.skipif(
+    not ALL_TESTS_COVAR_REFERENCE.exists(),
+    reason="All-tests covariate reference not found",
+)
+def test_numpy_runner_all_covar_synthetic(synthetic_data_with_covariates):
+    """Mode 4 (All) with covariates: NumPy runner matches GEMMA reference."""
+    plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
+    results = run_lmm_association_numpy(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        covariates=covariates,
+        lmm_mode=4,
+        show_progress=False,
+    )
+    reference = load_gemma_assoc(ALL_TESTS_COVAR_REFERENCE)
+    tolerances = ToleranceConfig(lambda_rtol=5e-5)
+    comparison = compare_assoc_results(results, reference, tolerances)
+    assert comparison.passed, (
+        f"NumPy All+covar (synthetic) vs GEMMA failed:\n{comparison}"
     )

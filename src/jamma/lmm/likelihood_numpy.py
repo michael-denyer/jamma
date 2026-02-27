@@ -28,6 +28,22 @@ _betainc_vec = np.vectorize(betainc)
 _chi2_sf_vec = np.vectorize(chi2_sf)
 
 
+def _guard_P_yy(P_yy: np.ndarray) -> np.ndarray:
+    """Clamp P_yy: negative -> NaN, near-zero -> _P_YY_MIN.
+
+    Prevents NaN/Inf from log(P_yy) in degenerate SNPs. Downstream code
+    detects NaN to mark those SNPs as invalid.
+
+    Args:
+        P_yy: Projected phenotype variance, any shape.
+
+    Returns:
+        Guarded P_yy with same shape.
+    """
+    P_yy = np.where(P_yy < 0.0, np.nan, P_yy)
+    return np.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
+
+
 # ---------------------------------------------------------------------------
 # Uab batch computation
 # ---------------------------------------------------------------------------
@@ -321,9 +337,7 @@ def _batch_reml_at_lambda_numpy(
             logdet_hiw -= np.where(d_iab > 0, np.log(d_iab), 0.0)
 
     # P_yy per SNP with guards
-    P_yy = Pab_batch[:, nc_total, table["idx_yy"]]  # (n_snps,)
-    P_yy = np.where(P_yy < 0.0, np.nan, P_yy)
-    P_yy = np.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
+    P_yy = _guard_P_yy(Pab_batch[:, nc_total, table["idx_yy"]])
 
     # REML log-likelihood per SNP
     c = 0.5 * df * (np.log(df) - np.log(2.0 * np.pi) - 1.0)
@@ -364,9 +378,7 @@ def _batch_mle_at_lambda_numpy(
     Pab_batch = _batch_compute_pab_varying_numpy(n_cvt, Hi_eval_batch, Uab_batch)
 
     # P_yy per SNP with guards
-    P_yy = Pab_batch[:, nc_total, table["idx_yy"]]
-    P_yy = np.where(P_yy < 0.0, np.nan, P_yy)
-    P_yy = np.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
+    P_yy = _guard_P_yy(Pab_batch[:, nc_total, table["idx_yy"]])
 
     # MLE log-likelihood per SNP (no logdet_hiw, uses n not df)
     c = 0.5 * n * (np.log(n) - np.log(2.0 * np.pi) - 1.0)
@@ -378,6 +390,57 @@ def _batch_mle_at_lambda_numpy(
 # ---------------------------------------------------------------------------
 
 
+def _batch_grid_pab_numpy(
+    n_cvt: int,
+    lambdas_grid: np.ndarray,
+    eigenvalues: np.ndarray,
+    Uab_batch: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute grid-level Pab, logdet(H), and guarded P_yy.
+
+    Shared computation for both REML and MLE grid evaluation. Since all SNPs
+    share the same lambda at each grid point, Hi_eval is (n_grid, n_samples)
+    not (n_snps, n_samples) -- eliminates the dominant memory allocation at
+    scale.
+
+    Args:
+        n_cvt: Number of covariates.
+        lambdas_grid: Grid of lambda values (n_grid,).
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        Uab_batch: Uab matrices (n_snps, n_samples, n_index).
+
+    Returns:
+        Tuple of (Pab, logdet_h, P_yy):
+            Pab: (n_grid, n_snps, n_cvt+2, n_index)
+            logdet_h: (n_grid,)
+            P_yy: (n_grid, n_snps) -- guarded
+    """
+    table = build_index_table(n_cvt)
+    n_snps, _n_samples, n_index = Uab_batch.shape
+    n_grid = len(lambdas_grid)
+    nc_total = n_cvt + 1
+
+    # All grid lambdas at once: (n_grid, n_samples)
+    v_temp = lambdas_grid[:, None] * eigenvalues[None, :] + 1.0
+    Hi_eval_grid = 1.0 / v_temp
+
+    # logdet(H) per grid lambda -- shared across SNPs: (n_grid,)
+    logdet_h = np.sum(np.log(np.abs(v_temp)), axis=1)
+
+    # Pab row 0 via single tensordot (BLAS gemm):
+    # Hi_eval_grid (n_grid, n_samples) x Uab_batch (n_snps, n_samples, n_index)
+    # contracts n_samples -> (n_grid, n_snps, n_index)
+    Pab = np.zeros((n_grid, n_snps, n_cvt + 2, n_index), dtype=np.float64)
+    Pab[:, :, 0, :] = np.tensordot(Hi_eval_grid, Uab_batch, axes=([1], [1]))
+
+    # Recursive rows 1..n_cvt+1 (uses ... indexing for 4D)
+    _fill_pab_recursion(Pab, table, n_cvt)
+
+    P_yy = _guard_P_yy(Pab[:, :, nc_total, table["idx_yy"]])
+
+    return Pab, logdet_h, P_yy
+
+
 def _batch_grid_reml_numpy(
     n_cvt: int,
     lambdas_grid: np.ndarray,
@@ -386,11 +449,6 @@ def _batch_grid_reml_numpy(
     Iab_batch: np.ndarray,
 ) -> np.ndarray:
     """Evaluate REML at all grid lambda values for all SNPs.
-
-    Vectorized: single tensordot replaces Python loop over grid lambdas.
-    Since all SNPs share the same lambda at each grid point, Hi_eval is
-    (n_grid, n_samples) not (n_snps, n_samples) — eliminates the dominant
-    memory allocation at scale.
 
     Args:
         n_cvt: Number of covariates.
@@ -403,26 +461,14 @@ def _batch_grid_reml_numpy(
         Log-likelihoods (n_grid, n_snps).
     """
     table = build_index_table(n_cvt)
-    n_snps, n_samples, n_index = Uab_batch.shape
-    n_grid = len(lambdas_grid)
-    nc_total = n_cvt + 1
+    n_snps = Uab_batch.shape[0]
+    n_samples = eigenvalues.shape[0]
     df = n_samples - n_cvt - 1
 
-    # All grid lambdas at once: (n_grid, n_samples)
-    v_temp = lambdas_grid[:, None] * eigenvalues[None, :] + 1.0
-    Hi_eval_grid = 1.0 / v_temp
-
-    # logdet(H) per grid lambda — shared across SNPs: (n_grid,)
-    logdet_h = np.sum(np.log(np.abs(v_temp)), axis=1)
-
-    # Pab row 0 via single tensordot (BLAS gemm):
-    # Hi_eval_grid (n_grid, n_samples) × Uab_batch (n_snps, n_samples, n_index)
-    # contracts n_samples → (n_grid, n_snps, n_index)
-    Pab = np.zeros((n_grid, n_snps, n_cvt + 2, n_index), dtype=np.float64)
-    Pab[:, :, 0, :] = np.tensordot(Hi_eval_grid, Uab_batch, axes=([1], [1]))
-
-    # Recursive rows 1..n_cvt+1 (uses ... indexing for 4D)
-    _fill_pab_recursion(Pab, table, n_cvt)
+    Pab, logdet_h, P_yy = _batch_grid_pab_numpy(
+        n_cvt, lambdas_grid, eigenvalues, Uab_batch
+    )
+    n_grid = len(lambdas_grid)
 
     # logdet_hiw: Iab part is lambda-independent, precompute once
     logdet_iab = np.zeros(n_snps, dtype=np.float64)
@@ -434,11 +480,6 @@ def _batch_grid_reml_numpy(
             logdet_pab += np.where(d_pab > 0, np.log(d_pab), 0.0)
             logdet_iab += np.where(d_iab > 0, np.log(d_iab), 0.0)
     logdet_hiw = logdet_pab - logdet_iab[None, :]
-
-    # P_yy with guards: (n_grid, n_snps)
-    P_yy = Pab[:, :, nc_total, table["idx_yy"]]
-    P_yy = np.where(P_yy < 0.0, np.nan, P_yy)
-    P_yy = np.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
 
     # REML log-likelihood: (n_grid, n_snps)
     c = 0.5 * df * (np.log(df) - np.log(2.0 * np.pi) - 1.0)
@@ -453,8 +494,6 @@ def _batch_grid_mle_numpy(
 ) -> np.ndarray:
     """Evaluate MLE at all grid lambda values for all SNPs.
 
-    Vectorized: single tensordot replaces Python loop over grid lambdas.
-
     Args:
         n_cvt: Number of covariates.
         lambdas_grid: Grid of lambda values (n_grid,).
@@ -464,34 +503,15 @@ def _batch_grid_mle_numpy(
     Returns:
         Log-likelihoods (n_grid, n_snps).
     """
-    table = build_index_table(n_cvt)
-    n_snps, n_samples, n_index = Uab_batch.shape
-    n_grid = len(lambdas_grid)
-    nc_total = n_cvt + 1
-    n = n_samples
+    n_samples = eigenvalues.shape[0]
 
-    # All grid lambdas at once: (n_grid, n_samples)
-    v_temp = lambdas_grid[:, None] * eigenvalues[None, :] + 1.0
-    Hi_eval_grid = 1.0 / v_temp
+    _Pab, logdet_h, P_yy = _batch_grid_pab_numpy(
+        n_cvt, lambdas_grid, eigenvalues, Uab_batch
+    )
 
-    # logdet(H) per grid lambda: (n_grid,)
-    logdet_h = np.sum(np.log(np.abs(v_temp)), axis=1)
-
-    # Pab row 0 via single tensordot: (n_grid, n_snps, n_index)
-    Pab = np.zeros((n_grid, n_snps, n_cvt + 2, n_index), dtype=np.float64)
-    Pab[:, :, 0, :] = np.tensordot(Hi_eval_grid, Uab_batch, axes=([1], [1]))
-
-    # Recursive rows 1..n_cvt+1
-    _fill_pab_recursion(Pab, table, n_cvt)
-
-    # P_yy with guards: (n_grid, n_snps)
-    P_yy = Pab[:, :, nc_total, table["idx_yy"]]
-    P_yy = np.where(P_yy < 0.0, np.nan, P_yy)
-    P_yy = np.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
-
-    # MLE log-likelihood: (n_grid, n_snps) — no logdet_hiw, uses n not df
-    c = 0.5 * n * (np.log(n) - np.log(2.0 * np.pi) - 1.0)
-    return c - 0.5 * logdet_h[:, None] - 0.5 * n * np.log(P_yy)
+    # MLE log-likelihood: (n_grid, n_snps) -- no logdet_hiw, uses n not df
+    c = 0.5 * n_samples * (np.log(n_samples) - np.log(2.0 * np.pi) - 1.0)
+    return c - 0.5 * logdet_h[:, None] - 0.5 * n_samples * np.log(P_yy)
 
 
 # ---------------------------------------------------------------------------

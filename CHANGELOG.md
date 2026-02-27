@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.1] - 2026-02-27
+
+### Performance
+
+- **NumPy grid REML/MLE vectorized**: replaced Python `for` loop over 50 grid lambdas
+  with single `np.tensordot` call. Since all SNPs share the same lambda at each grid point,
+  `Hi_eval` is `(n_grid, n_samples)` not `(n_snps, n_samples)`, eliminating the dominant
+  memory allocation at scale. Benchmark (mouse_hs1940): Wald 18.3s → 6.4s (2.9x),
+  All 34.4s → 11.6s (3.0x)
+- `_fill_pab_recursion` uses `...` indexing to support both 3D and 4D Pab arrays,
+  enabling the grid vectorization without duplicating the recursion logic
+
+### Changed
+
+- Extracted `_guard_P_yy` helper to deduplicate the P_yy clamping pattern (4 call sites)
+- Extracted `_batch_grid_pab_numpy` to share tensordot + Pab computation between
+  REML and MLE grid functions
+- LOCO NumPy progress import hoisted to single location (was duplicated in pass 1/2)
+
+### Fixed
+
+- **LOCO NumPy runtime crash**: `progress_iterator` was imported from `jamma.utils`
+  (which doesn't export it) instead of `jamma.core.progress` — caused `ImportError`
+  when `show_progress=True` (the default)
+
 ## [2.8.0] - 2026-02-27
 
 ### Added
@@ -826,7 +851,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
-[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.7.1...HEAD
+[Unreleased]: https://github.com/michael-denyer/jamma/compare/v2.8.1...HEAD
+[2.8.1]: https://github.com/michael-denyer/jamma/compare/v2.8.0...v2.8.1
+[2.8.0]: https://github.com/michael-denyer/jamma/compare/v2.7.1...v2.8.0
 [2.7.1]: https://github.com/michael-denyer/jamma/compare/v2.7.0...v2.7.1
 [2.7.0]: https://github.com/michael-denyer/jamma/compare/v2.6.1...v2.7.0
 [2.6.1]: https://github.com/michael-denyer/jamma/compare/v2.6.0...v2.6.1

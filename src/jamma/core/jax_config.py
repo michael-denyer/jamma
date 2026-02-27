@@ -77,8 +77,11 @@ def configure_jax(
             jax.config.update("jax_compilation_cache_dir", cache_dir)
             jax.config.update("jax_persistent_cache_min_compile_time_secs", 1.0)
             logger.debug(f"JAX compilation cache enabled: {cache_dir}")
-        except OSError:
-            logger.debug(f"Could not create JAX cache dir {cache_dir}, skipping")
+        except OSError as e:
+            logger.info(
+                f"Could not create JAX cache dir {cache_dir}: {e}. "
+                f"JIT compilation will not be cached across runs."
+            )
 
     global _jax_configured
     _jax_configured = True

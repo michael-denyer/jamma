@@ -51,6 +51,11 @@ MOUSE_HS1940_KINSHIP = MOUSE_HS1940_DIR / "mouse_hs1940_kinship.cXX.txt"
 MOUSE_HS1940_ALL = MOUSE_HS1940_DIR / "mouse_hs1940_all.assoc.txt"
 MOUSE_HS1940_LRT = MOUSE_HS1940_DIR / "mouse_hs1940_lrt.assoc.txt"
 MOUSE_HS1940_SCORE = MOUSE_HS1940_DIR / "mouse_hs1940_score.assoc.txt"
+MOUSE_HS1940_COVARIATES = MOUSE_HS1940_DIR / "covariates.txt"
+MOUSE_HS1940_COVAR_WALD = MOUSE_HS1940_DIR / "mouse_hs1940_covar_wald.assoc.txt"
+MOUSE_HS1940_COVAR_LRT = MOUSE_HS1940_DIR / "mouse_hs1940_covar_lrt.assoc.txt"
+MOUSE_HS1940_COVAR_SCORE = MOUSE_HS1940_DIR / "mouse_hs1940_covar_score.assoc.txt"
+MOUSE_HS1940_COVAR_ALL = MOUSE_HS1940_DIR / "mouse_hs1940_covar_all.assoc.txt"
 
 SYNTHETIC_DATA = _FIXTURE_ROOT / "gemma_synthetic" / "test"
 SYNTHETIC_KINSHIP = _FIXTURE_ROOT / "gemma_synthetic" / "gemma_kinship.cXX.txt"
@@ -143,6 +148,21 @@ def mouse_hs1940_data():
     phenotypes = _load_phenotypes(MOUSE_HS1940_DATA)
     snp_info = _build_snp_info(plink)
     return plink, kinship, phenotypes, snp_info
+
+
+@pytest.fixture
+def mouse_hs1940_data_with_covariates(mouse_hs1940_data):
+    """Load mouse_hs1940 data plus covariates with intercept column prepended.
+
+    The covariates.txt file contains only user-provided covariates (no intercept).
+    GEMMA adds the intercept internally when -c is used, so we prepend a column
+    of 1s to match GEMMA's internal representation.
+    """
+    plink, kinship, phenotypes, snp_info = mouse_hs1940_data
+    raw_covariates = np.loadtxt(MOUSE_HS1940_COVARIATES)
+    n_samples = raw_covariates.shape[0]
+    covariates = np.hstack([np.ones((n_samples, 1)), raw_covariates])
+    return plink, kinship, phenotypes, snp_info, covariates
 
 
 # ---------------------------------------------------------------------------

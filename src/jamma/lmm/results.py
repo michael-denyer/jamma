@@ -72,20 +72,27 @@ def _build_results(
             f"Missing arrays for lmm_mode={lmm_mode}: {missing_keys}. "
             f"Expected keys: {set(field_map.keys())}, got: {set(arrays.keys())}"
         )
+    # Convert stat arrays to Python lists in one C call each
+    # (avoids per-element float() conversion overhead)
+    stat_lists = {
+        field_name: arrays[array_key].tolist()
+        for array_key, field_name in field_map.items()
+    }
+    af_list = filtered_afs.tolist()
+    miss_list = filtered_miss.tolist()
+
+    nan = float("nan")
+    is_lrt = lmm_mode == 2
     results = []
     for j, snp_idx in enumerate(snp_indices):
-        af = float(filtered_afs[j])
-        n_miss = int(filtered_miss[j])
-        meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
+        meta = _snp_metadata(snp_info[snp_idx], af_list[j], int(miss_list[j]))
 
-        # LRT mode: beta and se are NaN (not computed)
-        if lmm_mode == 2:
-            meta["beta"] = float("nan")
-            meta["se"] = float("nan")
+        if is_lrt:
+            meta["beta"] = nan
+            meta["se"] = nan
 
-        # Populate stat fields from arrays
-        for array_key, field_name in field_map.items():
-            meta[field_name] = float(arrays[array_key][j])
+        for field_name, vals in stat_lists.items():
+            meta[field_name] = vals[j]
 
         results.append(AssocResult(**meta))
     return results

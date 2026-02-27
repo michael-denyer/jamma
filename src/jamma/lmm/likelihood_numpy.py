@@ -21,11 +21,7 @@ import numpy as np
 from loguru import logger
 
 from jamma.lmm.likelihood import _P_YY_MIN, build_index_table
-from jamma.lmm.special import betainc, chi2_sf
-
-# Module-level vectorized wrappers (created once, reused across calls)
-_betainc_vec = np.vectorize(betainc)
-_chi2_sf_vec = np.vectorize(chi2_sf)
+from jamma.lmm.special import betainc_batch, chi2_sf_batch
 
 
 def _guard_P_yy(P_yy: np.ndarray) -> np.ndarray:
@@ -103,17 +99,20 @@ def _batch_compute_uab_ncvt1_numpy(
     w = UtW[:, 0]  # (n_samples,)
     UtG_T = UtG.T  # (n_snps, n_samples)
 
-    # Broadcast scalar fields across all SNPs
-    ww = np.broadcast_to((w * w)[None, :], (n_snps, n_samples))
-    wy = np.broadcast_to((w * Uty)[None, :], (n_snps, n_samples))
-    yy = np.broadcast_to((Uty * Uty)[None, :], (n_snps, n_samples))
+    # Pre-allocate and fill directly — avoids 2x memory spike from np.stack
+    out = np.empty((n_snps, n_samples, 6), dtype=np.float64)
+
+    # SNP-invariant fields (broadcast into pre-allocated slices)
+    out[:, :, 0] = (w * w)[None, :]  # ww
+    out[:, :, 2] = (w * Uty)[None, :]  # wy
+    out[:, :, 5] = (Uty * Uty)[None, :]  # yy
 
     # SNP-varying fields
-    wx = w[None, :] * UtG_T  # (n_snps, n_samples)
-    xx = UtG_T * UtG_T  # (n_snps, n_samples)
-    xy = UtG_T * Uty[None, :]  # (n_snps, n_samples)
+    out[:, :, 1] = w[None, :] * UtG_T  # wx
+    out[:, :, 3] = UtG_T * UtG_T  # xx
+    out[:, :, 4] = UtG_T * Uty[None, :]  # xy
 
-    return np.stack([ww, wx, wy, xx, xy, yy], axis=-1)
+    return out
 
 
 def _batch_compute_uab_general_numpy(
@@ -751,7 +750,9 @@ def _f_to_pvalue(f_stat: np.ndarray, df: int, is_valid: np.ndarray) -> np.ndarra
     denom = df + f_safe
     z = np.clip(df / denom, 0.0, 1.0)
     complement_z = f_safe / denom  # algebraically exact 1-z, avoids cancellation
-    p_val = _betainc_vec(df / 2.0, 0.5, z, complement_z)
+    a_arr = np.full_like(z, df / 2.0)
+    b_arr = np.full_like(z, 0.5)
+    p_val = betainc_batch(a_arr, b_arr, z, complement_z)
     p_val = np.where(f_stat <= 0, 1.0, p_val)
     return np.where(is_valid, p_val, np.nan)
 
@@ -890,7 +891,7 @@ def _batch_lrt_pvalues_numpy(
     """
     lrt_stats = 2.0 * (logls_mle - logl_H0)
     lrt_stats = np.maximum(lrt_stats, 0.0)
-    p_lrts = _chi2_sf_vec(lrt_stats)
+    p_lrts = chi2_sf_batch(lrt_stats)
     # Propagate NaN from MLE optimization failures (degenerate SNPs)
     p_lrts = np.where(np.isnan(logls_mle), np.nan, p_lrts)
     return p_lrts

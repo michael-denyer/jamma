@@ -17,6 +17,7 @@ Reference: Zhou & Stephens (2012) Nature Genetics, Supplementary Information
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
 
 import numpy as np
@@ -50,6 +51,7 @@ def _clamp_p_yy(P_yy: float, lambda_val: float) -> float:
     return P_yy
 
 
+@functools.lru_cache(maxsize=8)
 def build_index_table(n_cvt: int) -> dict:
     """Precompute all index mappings for a given n_cvt.
 

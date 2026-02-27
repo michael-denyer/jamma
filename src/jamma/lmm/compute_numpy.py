@@ -32,6 +32,7 @@ def _compute_wald_numpy(
     l_max: float,
     n_grid: int,
     n_refine: int,
+    Iab_batch: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     """Compute REML-optimized Wald test statistics.
 
@@ -44,11 +45,13 @@ def _compute_wald_numpy(
         l_max: Maximum lambda for optimization.
         n_grid: Grid search resolution.
         n_refine: Golden section iterations (minimum 20 enforced internally).
+        Iab_batch: Pre-computed identity-weighted Pab. If None, computed internally.
 
     Returns:
         Dict with keys: lambdas, logls, betas, ses, pwalds.
     """
-    Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
+    if Iab_batch is None:
+        Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
     lambdas, logls = golden_section_optimize_lambda_numpy(
         n_cvt,
         eigenvalues,
@@ -224,10 +227,20 @@ def _compute_lmm_chunk_numpy(
                 logl_H0,
             )
         )
+        # Pre-compute Iab once for Wald (lambda-independent)
+        Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
         # Wald overwrites betas/ses from Score (REML-optimized values)
         result.update(
             _compute_wald_numpy(
-                n_cvt, eigenvalues, Uab_batch, n_samples, l_min, l_max, n_grid, n_refine
+                n_cvt,
+                eigenvalues,
+                Uab_batch,
+                n_samples,
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+                Iab_batch=Iab_batch,
             )
         )
 

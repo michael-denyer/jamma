@@ -668,14 +668,6 @@ class PipelineRunner:
             t_start: Pipeline start time from time.perf_counter().
             active_backend: Resolved backend name — "jax" or "numpy".
         """
-        # Check for incompatible LOCO+NumPy early, before I/O operations.
-        # validate_inputs() follows but requires files to exist.
-        if self.config.loco and active_backend == "numpy":
-            raise ValueError(
-                "LOCO mode requires JAX backend. "
-                "Install JAX with: pip install jamma[jax]"
-            )
-
         # HWE filtering not yet supported on NumPy backend
         if self.config.hwe_threshold > 0 and active_backend == "numpy":
             raise ValueError(
@@ -734,6 +726,7 @@ class PipelineRunner:
                 ksnps_indices=ksnps_indices,
                 l_min=self.config.l_min,
                 l_max=self.config.l_max,
+                backend=active_backend,
             )
             loco_s = time.perf_counter() - t_loco
             total_s = time.perf_counter() - t_start

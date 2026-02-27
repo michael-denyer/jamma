@@ -786,18 +786,24 @@ def test_pipeline_numpy_backend(sample_plink_data: Path, output_dir: Path) -> No
     assert result.backend == "numpy"
 
 
-@pytest.mark.tier0
-def test_pipeline_loco_numpy_raises() -> None:
-    """LOCO + NumPy backend raises ValueError with clear message."""
+@pytest.mark.tier1
+def test_pipeline_loco_numpy(tmp_path: Path) -> None:
+    """LOCO + NumPy backend completes end-to-end without error."""
+    # gemma_loco fixture: 100 samples, 500 SNPs across 3 chromosomes
+    loco_bfile = Path(__file__).parent / "fixtures" / "gemma_loco" / "test"
     config = PipelineConfig(
-        bfile=Path("dummy"),
+        bfile=loco_bfile,
         lmm_mode=1,
         loco=True,
         backend="numpy",
+        output_dir=tmp_path / "output",
+        check_memory=False,
+        show_progress=False,
     )
-    runner = PipelineRunner(config)
-    with pytest.raises(ValueError, match="LOCO mode requires JAX"):
-        runner.run()
+    result = PipelineRunner(config).run()
+    assert result.backend == "numpy"
+    assert result.n_snps_tested > 0
+    assert result.assoc_path.exists()
 
 
 @pytest.mark.tier1

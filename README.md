@@ -25,20 +25,60 @@
 
 ## Installation
 
-```bash
-# Base install (NumPy backend — works on all platforms)
-pip install jamma
-
-# With JAX acceleration (Linux, ARM Mac, Windows CPU)
-pip install jamma[jax]
-```
-
-Or with uv:
+### macOS (Intel or ARM)
 
 ```bash
-uv add jamma        # NumPy backend
-uv add jamma[jax]   # With JAX acceleration
+pip install jamma          # NumPy backend
+pip install jamma[jax]     # + JAX acceleration (ARM Mac only)
 ```
+
+That's it. macOS Accelerate BLAS handles large matrices natively.
+
+### Linux / Windows
+
+For small datasets (<46k samples), the standard install works:
+
+```bash
+pip install jamma          # NumPy backend
+pip install jamma[jax]     # + JAX acceleration
+```
+
+For large-scale GWAS (>46k samples), install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first — standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. Pre-built ILP64 wheels are available for Python 3.11–3.14:
+
+**NumPy backend only:**
+
+```bash
+pip install numpy \
+  --extra-index-url https://michael-denyer.github.io/numpy-mkl \
+  --force-reinstall --upgrade
+pip install jamma --no-deps
+pip install psutil loguru threadpoolctl click progressbar2 bed-reader
+```
+
+**With JAX acceleration:**
+
+```bash
+pip install numpy \
+  --extra-index-url https://michael-denyer.github.io/numpy-mkl \
+  --force-reinstall --upgrade
+pip install jamma[jax] --no-deps
+pip install psutil loguru threadpoolctl click progressbar2 bed-reader \
+  jax jaxlib jaxtyping
+```
+
+**From Git (latest development version):**
+
+```bash
+pip install numpy \
+  --extra-index-url https://michael-denyer.github.io/numpy-mkl \
+  --force-reinstall --upgrade
+pip install git+https://github.com/michael-denyer/jamma.git --no-deps
+pip install psutil loguru threadpoolctl click progressbar2 bed-reader
+```
+
+> **Why `--no-deps`?** JAMMA depends on `numpy>=2.0.0`, so a normal `pip install jamma` will pull in standard numpy and overwrite the ILP64 build. `--no-deps` prevents this; you install the runtime dependencies manually instead.
+
+See the [User Guide](docs/USER_GUIDE.md#linux--windows) for ILP64 verification steps.
 
 ### Platform Support
 

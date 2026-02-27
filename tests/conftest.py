@@ -18,12 +18,7 @@ def load_phenotypes_from_fam(fam_path: Path) -> np.ndarray:
     Returns:
         Array of phenotype values (float64).
     """
-    phenotypes = []
-    with open(fam_path) as f:
-        for line in f:
-            fields = line.strip().split()
-            phenotypes.append(float(fields[5]))
-    return np.array(phenotypes, dtype=np.float64)
+    return np.loadtxt(fam_path, usecols=5, dtype=np.float64)
 
 
 if TYPE_CHECKING:

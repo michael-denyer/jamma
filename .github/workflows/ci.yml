@@ -41,7 +41,7 @@ jobs:
             install_args: "--extra dev"
             name: "Linux + NumPy"
             pytest_args: "-m 'not tier2 and not slow and not requires_jax'"
-            cov_threshold: "--cov-fail-under=50"
+            cov_threshold: "--cov-fail-under=60"
           - os: ubuntu-latest
             python-version: "3.11"
             install_args: "--extra jax --extra dev"

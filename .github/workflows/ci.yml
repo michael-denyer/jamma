@@ -89,15 +89,27 @@ jobs:
               print(f'show_config failed: {e}')
           "
           echo "=== DSYEVR symbols in numpy BLAS library ==="
-          LIB=$(find $(uv run python -c "import numpy; print(numpy.__file__.rsplit('/',1)[0])") -path "*/numpy.libs/lib*openblas*" 2>/dev/null | head -1)
-          if [ -n "$LIB" ]; then
-            echo "Library: $LIB"
-            nm -D "$LIB" 2>/dev/null | grep -i dsyevr || echo "No dsyevr symbols found"
-            echo "=== All LAPACK symbols containing 'syev' ==="
-            nm -D "$LIB" 2>/dev/null | grep -i syev | head -20
-          else
-            echo "No openblas library found"
-          fi
+          uv run python -c "
+          import pathlib, numpy, subprocess
+          np_dir = pathlib.Path(numpy.__file__).resolve().parent
+          libs_dir = np_dir.parent / 'numpy.libs'
+          if libs_dir.is_dir():
+              for f in libs_dir.iterdir():
+                  if 'openblas' in f.name or 'mkl' in f.name:
+                      print(f'Library: {f}')
+                      r = subprocess.run(['nm', '-D', str(f)], capture_output=True, text=True)
+                      lines = r.stdout.splitlines()
+                      syev = [l for l in lines if 'syev' in l.lower()]
+                      print(f'syev symbols ({len(syev)}):')
+                      for l in syev[:20]:
+                          print(f'  {l}')
+                      dsyevr = [l for l in lines if 'dsyevr' in l.lower()]
+                      print(f'dsyevr symbols ({len(dsyevr)}):')
+                      for l in dsyevr:
+                          print(f'  {l}')
+          else:
+              print(f'numpy.libs not found at {libs_dir}')
+          "
 
       - name: Compile C extensions
         env:

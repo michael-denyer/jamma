@@ -66,6 +66,11 @@ jobs:
       - name: Install dependencies
         run: uv sync ${{ matrix.install_args }}
 
+      - name: Compile C extensions
+        run: |
+          uv run python -m jamma.lmm._compile_accel
+          uv run python -m jamma.lmm._compile_eigen
+
       - name: Run tests
         run: uv run pytest ${{ matrix.pytest_args || '-m "not tier2 and not slow"' }} -v -o 'addopts=' --cov=src/jamma --cov-report=term-missing --cov-report=json ${{ matrix.cov_threshold }}
 

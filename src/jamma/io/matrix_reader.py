@@ -70,10 +70,30 @@ def _parse_chunk_to_memmap(args: tuple) -> None:
         ) from e
 
 
+def _is_data_line(line: bytes) -> bool:
+    """Return True if line is a non-blank, non-comment data line.
+
+    Matches np.loadtxt behaviour: blank lines and lines starting with '#'
+    (after stripping leading whitespace) are skipped.
+    """
+    stripped = line.lstrip()
+    return len(stripped) > 0 and not stripped.startswith(b"#")
+
+
+def _count_data_lines(raw: bytes) -> int:
+    """Count data lines (non-blank, non-comment) in a byte buffer."""
+    return sum(1 for line in raw.split(b"\n") if _is_data_line(line))
+
+
 def _scan_chunk_boundaries(
-    path: Path, n_workers: int
+    path: Path, n_workers: int, delimiter: str | None = None
 ) -> tuple[int, int, list[tuple[int, int, int]]]:
     """Scan a text file to find byte offsets aligned to newline boundaries.
+
+    Args:
+        path: Input text file path.
+        n_workers: Number of parallel chunks to create.
+        delimiter: Column separator (None = whitespace).
 
     Returns:
         Tuple of (n_rows, n_cols, chunks) where each chunk is
@@ -83,24 +103,28 @@ def _scan_chunk_boundaries(
     if file_size == 0:
         raise ValueError(f"Matrix file is empty: {path}")
 
-    # Read first line to detect column count
+    # Read first data line to detect column count.
+    # Skip leading blank/comment lines to match np.loadtxt behaviour.
     with open(path, "rb") as f:
-        first_line = f.readline()
-    n_cols = len(first_line.split())
-
-    # Count total lines (= rows) via fast byte scan.
-    # Track the last byte read to handle files without a trailing newline.
-    n_rows = 0
-    last_byte = b""
-    with open(path, "rb") as f:
-        while True:
-            buf = f.read(8 * 1024 * 1024)
-            if not buf:
+        first_line = b""
+        for raw_line in f:
+            if _is_data_line(raw_line):
+                first_line = raw_line
                 break
-            n_rows += buf.count(b"\n")
-            last_byte = buf[-1:]
-    if last_byte and last_byte != b"\n":
-        n_rows += 1
+    if not first_line:
+        raise ValueError(f"Matrix file has no data rows: {path}")
+
+    if delimiter is not None:
+        n_cols = len(first_line.split(delimiter.encode()))
+    else:
+        n_cols = len(first_line.split())
+
+    # Count data lines (excluding blank/comment lines) to match np.loadtxt.
+    n_rows = 0
+    with open(path, "rb") as f:
+        for line in f:
+            if _is_data_line(line):
+                n_rows += 1
 
     if n_rows == 0:
         raise ValueError(f"Matrix file has no data rows: {path}")
@@ -122,10 +146,10 @@ def _scan_chunk_boundaries(
             f.readline()  # advance past next newline boundary
             chunk_end = f.tell()
 
-            # Count rows in this chunk
+            # Count data rows in this chunk (skip blank/comment lines)
             f.seek(chunk_start)
             chunk_bytes = f.read(chunk_end - chunk_start)
-            rows_in_chunk = chunk_bytes.count(b"\n")
+            rows_in_chunk = _count_data_lines(chunk_bytes)
 
             if rows_in_chunk > 0:
                 chunks.append((chunk_start, chunk_end, current_row))
@@ -205,7 +229,7 @@ def read_matrix_parallel(
 
     logger.info(f"Reading {path.name} via parallel parse ({n_workers} workers)")
 
-    n_rows, n_cols, chunks = _scan_chunk_boundaries(path, n_workers)
+    n_rows, n_cols, chunks = _scan_chunk_boundaries(path, n_workers, delimiter)
     shape = (n_rows, n_cols)
 
     logger.debug(f"Matrix dimensions: {n_rows}x{n_cols}, {len(chunks)} chunks")

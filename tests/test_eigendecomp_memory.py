@@ -6,8 +6,9 @@ import numpy as np
 import pytest
 
 from jamma.core.memory import (
+    _dsyevd_peak_gb,
     _dsyevd_workspace_gb,
-    _dsyevr_available,
+    _dsyevr_peak_gb,
     _dsyevr_workspace_gb,
     estimate_eigendecomp_memory,
 )
@@ -82,26 +83,26 @@ class TestEigendecompMemoryEstimate:
     """Tests for memory estimation function."""
 
     def test_estimate_200k_samples(self):
-        """200k samples: DSYEVR ~640GB, DSYEVD in-place ~960GB."""
+        """200k samples: estimate defaults to DSYEVD in-place ~960GB."""
         n_samples = 200_000
         estimate = estimate_eigendecomp_memory(n_samples)
-        if _dsyevr_available():
-            # K (320GB) + Z (320GB) + DSYEVR workspace (~0.06GB) = ~640GB
-            assert 635 < estimate < 645
-        else:
-            # K/U shared (320GB) + DSYEVD workspace (~640GB) = ~960GB
-            assert 955 < estimate < 965
+        # K/U shared (320GB) + DSYEVD workspace (~640GB) = ~960GB
+        assert 955 < estimate < 965
 
     def test_estimate_100k_samples(self):
-        """100k samples: DSYEVR ~160GB, DSYEVD in-place ~240GB."""
+        """100k samples: estimate defaults to DSYEVD in-place ~240GB."""
         n_samples = 100_000
         estimate = estimate_eigendecomp_memory(n_samples)
-        if _dsyevr_available():
-            # K (80GB) + Z (80GB) + DSYEVR workspace (~0.03GB) = ~160GB
-            assert 158 < estimate < 162
-        else:
-            # K/U shared (80GB) + DSYEVD workspace (~160GB) = ~240GB
-            assert 235 < estimate < 245
+        # K/U shared (80GB) + DSYEVD workspace (~160GB) = ~240GB
+        assert 235 < estimate < 245
+
+    def test_per_driver_peaks(self):
+        """Per-driver peak helpers return correct values."""
+        n = 200_000
+        # DSYEVD in-place: K (320GB) + workspace (~640GB) = ~960GB
+        assert 955 < _dsyevd_peak_gb(n) < 965
+        # DSYEVR: K (320GB) + Z (320GB) + workspace (~0.06GB) = ~640GB
+        assert 635 < _dsyevr_peak_gb(n) < 645
 
     def test_estimate_scales_quadratically(self):
         """Memory scales quadratically (kinship term dominates workspace)."""
@@ -197,7 +198,7 @@ class TestEigendecompPreflightCheck:
         K = (A @ A.T) / n
         K_ptr = K.ctypes.data
 
-        # Call _eigh_inplace directly (eigendecompose_kinship prefers DSYEVR now)
+        # Call _eigh_inplace directly (eigendecompose_kinship prefers DSYEVD now)
         eigenvalues, eigenvectors = _eigh_inplace(K)
 
         assert eigenvectors.ctypes.data == K_ptr, (
@@ -278,22 +279,15 @@ class TestEigendecompPreflightCheck:
         assert _inplace_eigen_available() is False
 
     def test_fallback_estimate_includes_eigenvector_allocation(self):
-        """When DSYEVD fallback path active, memory estimate adds eigenvector buffer."""
-        # Both _dsyevr_available=False and _inplace_eigen_available=False:
-        # falls back to np.linalg.eigh which allocates K and U separately
-        with (
-            patch("jamma.core.memory._dsyevr_available", return_value=False),
-            patch("jamma.core.memory._inplace_eigen_available", return_value=False),
-        ):
+        """When in-place unavailable, memory estimate adds eigenvector buffer."""
+        # _inplace_eigen_available=False: np.linalg.eigh allocates K and U
+        with patch("jamma.core.memory._inplace_eigen_available", return_value=False):
             est = estimate_eigendecomp_memory(200_000)
             # K (320GB) + U (320GB) + DSYEVD workspace (~640GB) = ~1280GB
             assert 1275 < est < 1285
 
-        # _dsyevr_available=False, _inplace_eigen_available=True: in-place DSYEVD
-        with (
-            patch("jamma.core.memory._dsyevr_available", return_value=False),
-            patch("jamma.core.memory._inplace_eigen_available", return_value=True),
-        ):
+        # _inplace_eigen_available=True: in-place DSYEVD (K/U shared)
+        with patch("jamma.core.memory._inplace_eigen_available", return_value=True):
             est = estimate_eigendecomp_memory(200_000)
             # K/U shared (320GB) + DSYEVD workspace (~640GB) = ~960GB
             assert 955 < est < 965

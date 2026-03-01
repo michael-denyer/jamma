@@ -93,44 +93,63 @@ def _dsyevr_available() -> bool:
 
 
 def _eigendecomp_workspace_gb(n: int) -> float:
-    """Return eigendecomp workspace in GB: DSYEVR if available, else DSYEVD."""
-    if _dsyevr_available():
-        return _dsyevr_workspace_gb(n)
+    """Return eigendecomp workspace in GB (DSYEVD, the default driver)."""
     return _dsyevd_workspace_gb(n)
 
 
 def _eigendecomp_eigvec_gb(kinship_gb: float) -> float:
-    """Return eigenvector memory (GB) for eigendecomp based on available driver.
+    """Return eigenvector memory (GB) for eigendecomp (DSYEVD, the default).
 
-    DSYEVR allocates a separate F-contiguous eigenvector array (K + Z coexist).
     DSYEVD in-place overwrites K with eigenvectors (no extra allocation).
     np.linalg.eigh fallback allocates a separate eigenvector array.
+
+    Note: DSYEVR (used under memory pressure) allocates a separate
+    F-contiguous Z array, but its total peak is lower because workspace
+    is O(N) not O(N^2). The dispatch decision happens in
+    eigendecompose_kinship(), not here.
     """
-    if _dsyevr_available():
-        return kinship_gb
     if _inplace_eigen_available():
         return 0.0
     return kinship_gb
 
 
+def _dsyevd_peak_gb(n: int) -> float:
+    """Peak memory (GB) for DSYEVD eigendecomposition.
+
+    DSYEVD in-place: K (shared with U) + O(N^2) workspace.
+    DSYEVD fallback: K + U (separate) + O(N^2) workspace.
+    """
+    kinship_gb = n**2 * 8 / 1e9
+    eigvec_gb = 0.0 if _inplace_eigen_available() else kinship_gb
+    return kinship_gb + eigvec_gb + _dsyevd_workspace_gb(n)
+
+
+def _dsyevr_peak_gb(n: int) -> float:
+    """Peak memory (GB) for DSYEVR eigendecomposition.
+
+    DSYEVR always allocates a separate F-contiguous Z array (K + Z coexist),
+    but workspace is O(N) not O(N^2).
+    """
+    kinship_gb = n**2 * 8 / 1e9
+    return kinship_gb + kinship_gb + _dsyevr_workspace_gb(n)
+
+
 def estimate_eigendecomp_memory(n_samples: int) -> float:
     """Estimate peak memory (GB) for eigendecomposition of kinship matrix.
 
-    When DSYEVR is available (C extension, O(N) workspace):
-    - K (input, destroyed by DSYEVR): n^2 * 8 bytes
-    - Z (output eigenvectors, separate F-contiguous array): n^2 * 8 bytes
-    - workspace (DSYEVR O(N): ~0.025 GB at 125k)
+    Returns the DSYEVD estimate (the default/faster driver). If DSYEVR is
+    used under memory pressure, actual consumption will be lower — this
+    is intentionally conservative for pre-flight budget planning.
 
-    When DSYEVR is unavailable, falls back to DSYEVD in-place if available:
+    DSYEVD in-place (default when gufunc available):
     - K/U (shared buffer): n^2 * 8 bytes [kinship overwritten with eigenvectors]
     - workspace (DSYEVD O(n^2))
 
-    When neither in-place path is available (fallback to np.linalg.eigh):
+    DSYEVD fallback (when gufunc unavailable):
     - K (input): n^2 * 8 bytes
     - U (output eigenvectors): n^2 * 8 bytes
     - workspace (DSYEVD O(n^2))
 
-    For 125k samples (DSYEVR): ~116GB + ~116GB + ~0.025GB = ~232GB
     For 200k samples (DSYEVD in-place):  320GB + ~640GB = ~960GB
     For 200k samples (DSYEVD fallback): 320GB + 320GB + ~640GB = ~1280GB
 
@@ -138,11 +157,7 @@ def estimate_eigendecomp_memory(n_samples: int) -> float:
         n_samples: Number of samples (individuals).
 
     Returns:
-        Estimated peak memory in GB.
-
-    Note:
-        Return value depends on whether DSYEVR or in-place eigendecomposition
-        is available at runtime.
+        Estimated peak memory in GB (DSYEVD, conservative).
     """
     kinship_gb = n_samples**2 * 8 / 1e9
     workspace_gb = _eigendecomp_workspace_gb(n_samples)
@@ -164,7 +179,7 @@ class MemoryBreakdown(NamedTuple):
     kinship_gb: float  # n^2 * 8 bytes (float64)
     genotypes_gb: float  # n * p * 8 bytes (float64, JAX copy)
     eigenvectors_gb: float  # n^2 * 8 bytes (float64)
-    eigendecomp_workspace_gb: float  # DSYEVR O(N) or DSYEVD O(N^2) per C ext
+    eigendecomp_workspace_gb: float  # DSYEVD O(N^2) workspace (conservative)
     lmm_rotated_gb: float  # n * 8 * 3 bytes (Uy, UW, rotated vectors)
     lmm_batch_gb: float  # n * batch_size * 8 bytes
     total_gb: float  # Peak memory (max of phases)
@@ -237,9 +252,8 @@ def estimate_workflow_memory(
     genotypes_gb = n_samples * n_snps * 8 / 1e9  # float64 (JAX copy)
     eigenvectors_gb = n_samples**2 * 8 / 1e9  # float64
 
-    # Eigendecomp workspace: DSYEVR uses O(n) workspace when available,
-    # else DSYEVD O(n^2). DSYEVR formula: max(1,26n) doubles + max(1,10n) int64s.
-    # DSYEVD formula: LWORK=(1+6n+2n^2) doubles + LIWORK=(3+5n) integers
+    # Eigendecomp workspace: DSYEVD O(n^2) (default driver).
+    # If DSYEVR is triggered by memory pressure, actual peak will be lower.
     eigendecomp_workspace_gb = _eigendecomp_workspace_gb(n_samples)
 
     # LMM working memory
@@ -366,7 +380,7 @@ class StreamingMemoryBreakdown(NamedTuple):
 
     kinship_gb: float  # n^2 * 8 bytes (float64)
     eigenvectors_gb: float  # n^2 * 8 bytes (float64)
-    eigendecomp_workspace_gb: float  # DSYEVR O(N) or DSYEVD O(N^2) per C ext
+    eigendecomp_workspace_gb: float  # DSYEVD O(N^2) workspace (conservative)
     chunk_gb: float  # n * chunk_size * 8 bytes (float64 for precision)
     rotation_buffer_gb: float  # n * chunk_size * 8 bytes for UtG
     grid_reml_gb: float  # n_grid * chunk_size * 8 bytes for Grid REML intermediate

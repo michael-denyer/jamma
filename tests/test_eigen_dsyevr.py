@@ -224,11 +224,27 @@ class TestDsyevrEdgeCases:
             eigh_dsyevr(K, uplo="X")
 
 
-class TestDsyevrFallback:
-    """Dispatch behavior: DSYEVR path vs DSYEVD fallback."""
+class TestDsyevrDispatch:
+    """Memory-aware driver dispatch: prefer DSYEVD, fall back to DSYEVR."""
 
-    def test_fallback_when_unavailable(self):
-        """When _DSYEVR_AVAILABLE=False, eigendecompose_kinship uses DSYEVD path."""
+    def test_dsyevd_used_when_memory_sufficient(self):
+        """With ample memory, eigendecompose_kinship uses DSYEVD (faster)."""
+        from jamma.lmm.eigen import eigendecompose_kinship
+
+        rng = np.random.default_rng(42)
+        n = 30
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+        K_ref = K.copy()
+
+        # check_memory=False → always DSYEVD
+        eigenvalues, eigenvectors = eigendecompose_kinship(K.copy(), check_memory=False)
+
+        K_recon = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
+        np.testing.assert_allclose(K_recon, K_ref, rtol=1e-10, atol=1e-14)
+
+    def test_dsyevd_when_c_ext_unavailable(self):
+        """Without C extension, DSYEVD is used regardless."""
         import jamma.lmm.eigen as eigen_mod
         from jamma.lmm.eigen import eigendecompose_kinship
 
@@ -238,28 +254,41 @@ class TestDsyevrFallback:
         K = (A @ A.T) / n
         K_ref = K.copy()
 
-        # Patch _DSYEVR_AVAILABLE to False — dispatch falls back to DSYEVD path
         with patch.object(eigen_mod, "_DSYEVR_AVAILABLE", False):
             eigenvalues, eigenvectors = eigendecompose_kinship(
                 K.copy(), check_memory=False
             )
 
-        # Results should still be correct via DSYEVD path
         K_recon = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
         np.testing.assert_allclose(K_recon, K_ref, rtol=1e-10, atol=1e-14)
 
-    def test_dsyevr_used_when_available(self):
-        """When _DSYEVR_AVAILABLE=True, _eigh_dsyevr is called."""
+    def test_dsyevr_when_dsyevd_wont_fit(self):
+        """DSYEVR used when DSYEVD workspace exceeds available memory."""
         import jamma.lmm.eigen as eigen_mod
         from jamma.lmm.eigen import _DSYEVR_AVAILABLE, eigendecompose_kinship
 
         if not _DSYEVR_AVAILABLE:
-            pytest.skip("DSYEVR not available — can't test dispatch to it")
+            pytest.skip("DSYEVR C extension not available")
 
         rng = np.random.default_rng(42)
         n = 30
         A = rng.standard_normal((n, n))
         K = (A @ A.T) / n
+
+        # DSYEVD peak for n=30: ~0.00002GB. DSYEVR peak: ~0.00002GB.
+        # Mock available memory between DSYEVR peak and DSYEVD peak
+        # to trigger DSYEVR fallback. Use a value where DSYEVD + margin
+        # exceeds available but DSYEVR + margin does not.
+        from jamma.core.memory import _dsyevd_peak_gb, _dsyevr_peak_gb
+
+        dsyevd_peak = _dsyevd_peak_gb(n)
+        dsyevr_peak = _dsyevr_peak_gb(n)
+        # Set available between the two peaks (with margin)
+        available = dsyevd_peak * 0.95  # below DSYEVD + margin
+
+        # Only meaningful if DSYEVR actually saves memory at this size
+        if dsyevr_peak * 1.1 >= available:
+            pytest.skip("DSYEVR peak too close to DSYEVD at n=30")
 
         call_count = []
         original = eigen_mod._eigh_dsyevr
@@ -268,9 +297,50 @@ class TestDsyevrFallback:
             call_count.append(1)
             return original(K_in)
 
-        with patch.object(eigen_mod, "_eigh_dsyevr", tracking_wrapper):
-            eigendecompose_kinship(K.copy(), check_memory=False)
+        with (
+            patch.object(eigen_mod, "_eigh_dsyevr", tracking_wrapper),
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_proc,
+        ):
+            mock_vm.return_value.available = available * 1e9
+            mock_vm.return_value.total = available * 1e9
+            mock_proc.return_value.memory_info.return_value.rss = 0
+            mock_proc.return_value.memory_info.return_value.vms = 0
 
-        assert len(call_count) == 1, (
-            "Expected _eigh_dsyevr to be called once when _DSYEVR_AVAILABLE is True"
-        )
+            eigendecompose_kinship(K.copy(), check_memory=True)
+
+        assert len(call_count) == 1, "Expected DSYEVR when DSYEVD won't fit"
+
+    def test_dsyevd_preferred_with_ample_memory(self):
+        """DSYEVD used even when DSYEVR available, if memory is ample."""
+        import jamma.lmm.eigen as eigen_mod
+        from jamma.lmm.eigen import _DSYEVR_AVAILABLE, eigendecompose_kinship
+
+        if not _DSYEVR_AVAILABLE:
+            pytest.skip("DSYEVR C extension not available")
+
+        rng = np.random.default_rng(42)
+        n = 30
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+
+        dsyevr_calls = []
+        original = eigen_mod._eigh_dsyevr
+
+        def tracking_wrapper(K_in):
+            dsyevr_calls.append(1)
+            return original(K_in)
+
+        with (
+            patch.object(eigen_mod, "_eigh_dsyevr", tracking_wrapper),
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_proc,
+        ):
+            mock_vm.return_value.available = 1e12  # 1TB
+            mock_vm.return_value.total = 1e12
+            mock_proc.return_value.memory_info.return_value.rss = 0
+            mock_proc.return_value.memory_info.return_value.vms = 0
+
+            eigendecompose_kinship(K.copy(), check_memory=True)
+
+        assert len(dsyevr_calls) == 0, "DSYEVD should be preferred when memory is ample"

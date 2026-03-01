@@ -22,8 +22,9 @@ from loguru import logger
 from threadpoolctl import threadpool_info
 
 from jamma.core.memory import (
+    _dsyevd_peak_gb,
+    _dsyevr_peak_gb,
     check_memory_available,
-    estimate_eigendecomp_memory,
     log_memory_snapshot,
 )
 from jamma.core.threading import blas_threads, get_physical_core_count
@@ -293,11 +294,30 @@ def eigendecompose_kinship(
         f"Matrix elements: {n_elements:,}, memory: ~{n_elements * 8 / 1e9:.1f} GB"
     )
 
-    # Always log estimated memory requirement (useful even without hard check)
-    required_gb = estimate_eigendecomp_memory(n_samples)
+    # Memory-aware driver selection: prefer DSYEVD (faster), fall back to
+    # DSYEVR (O(N) workspace) only when DSYEVD won't fit in available memory.
     available_gb = log_memory_snapshot(
         f"before_eigendecomp_{n_samples}samples"
     ).available_gb
+
+    use_dsyevr = False
+    dsyevd_peak = _dsyevd_peak_gb(n_samples)
+
+    if check_memory and _DSYEVR_AVAILABLE:
+        margin_gb = min(dsyevd_peak * 0.1, 10.0)
+        if dsyevd_peak + margin_gb > available_gb:
+            # DSYEVD won't fit — check DSYEVR
+            dsyevr_peak = _dsyevr_peak_gb(n_samples)
+            dsyevr_margin = min(dsyevr_peak * 0.1, 10.0)
+            if dsyevr_peak + dsyevr_margin <= available_gb:
+                use_dsyevr = True
+                logger.info(
+                    f"DSYEVD peak ({dsyevd_peak:.1f}GB) exceeds "
+                    f"available memory ({available_gb:.1f}GB). "
+                    f"Using DSYEVR ({dsyevr_peak:.1f}GB)."
+                )
+
+    required_gb = _dsyevr_peak_gb(n_samples) if use_dsyevr else dsyevd_peak
     logger.info(
         f"Eigendecomp memory: estimated {required_gb:.1f}GB, "
         f"available {available_gb:.1f}GB"
@@ -324,18 +344,14 @@ def eigendecompose_kinship(
 
     from jamma.core.estimates import estimate_eigendecomp_time
 
-    driver = (
-        "DSYEVR via _eigen_accel"
-        if _DSYEVR_AVAILABLE
-        else "DSYEVD via numpy.linalg.eigh"
-    )
+    driver = "DSYEVR via _eigen_accel" if use_dsyevr else "DSYEVD via numpy.linalg.eigh"
     logger.info(f"Eigendecomp: {driver}, threads={n_threads}")
     logger.info(f"  Estimated time: {estimate_eigendecomp_time(n_samples, n_threads)}")
 
     start_time = time.perf_counter()
     try:
         with blas_threads(n_threads):
-            if _DSYEVR_AVAILABLE:
+            if use_dsyevr:
                 eigenvalues, eigenvectors = _eigh_dsyevr(K)
             else:
                 eigenvalues, eigenvectors = _eigh_inplace(K)
@@ -354,7 +370,7 @@ def eigendecompose_kinship(
         raise
     except (ValueError, RuntimeError) as e:
         msg = f"Eigendecomposition failed ({driver}): {e}."
-        if _DSYEVR_AVAILABLE:
+        if use_dsyevr:
             msg += (
                 " If this persists, remove the C extension"
                 " .so to force DSYEVD fallback."

@@ -66,54 +66,7 @@ jobs:
       - name: Install dependencies
         run: uv sync ${{ matrix.install_args }}
 
-      - name: Debug numpy BLAS layout
-        if: runner.os == 'Linux'
-        run: |
-          uv run python -c "
-          import pathlib, numpy
-          np_dir = pathlib.Path(numpy.__file__).resolve().parent
-          print(f'numpy.__file__ = {numpy.__file__}')
-          print(f'resolved np_dir = {np_dir}')
-          for d in [np_dir / '.libs', np_dir / '_core' / '.libs', np_dir.parent / 'numpy.libs']:
-              print(f'{d}: exists={d.exists()}, is_dir={d.is_dir()}')
-              if d.is_dir():
-                  for f in sorted(d.iterdir()):
-                      print(f'  {f.name}')
-          try:
-              cfg = numpy.show_config(mode='dicts')
-              bd = cfg.get('Build Dependencies', {})
-              for k in ['blas', 'lapack']:
-                  info = bd.get(k, {})
-                  print(f'{k}: {info}')
-          except Exception as e:
-              print(f'show_config failed: {e}')
-          "
-          echo "=== DSYEVR symbols in numpy BLAS library ==="
-          uv run python -c "
-          import pathlib, numpy, subprocess
-          np_dir = pathlib.Path(numpy.__file__).resolve().parent
-          libs_dir = np_dir.parent / 'numpy.libs'
-          if libs_dir.is_dir():
-              for f in libs_dir.iterdir():
-                  if 'openblas' in f.name or 'mkl' in f.name:
-                      print(f'Library: {f}')
-                      r = subprocess.run(['nm', '-D', str(f)], capture_output=True, text=True)
-                      lines = r.stdout.splitlines()
-                      syev = [l for l in lines if 'syev' in l.lower()]
-                      print(f'syev symbols ({len(syev)}):')
-                      for l in syev[:20]:
-                          print(f'  {l}')
-                      dsyevr = [l for l in lines if 'dsyevr' in l.lower()]
-                      print(f'dsyevr symbols ({len(dsyevr)}):')
-                      for l in dsyevr:
-                          print(f'  {l}')
-          else:
-              print(f'numpy.libs not found at {libs_dir}')
-          "
-
       - name: Compile C extensions
-        env:
-          EIGEN_ACCEL_DEBUG: "1"
         run: |
           uv run python -m jamma.lmm._compile_accel
           uv run python -m jamma.lmm._compile_eigen

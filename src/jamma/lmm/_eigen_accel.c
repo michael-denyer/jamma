@@ -97,33 +97,52 @@ static int debug_enabled(void) {
     return val && val[0] == '1';
 }
 
+/* Symbol names to try for DSYEVR, in priority order.
+ *
+ * Naming conventions across LAPACK providers:
+ *   MKL ILP64:          dsyevr_64_     (built with -Dblas-symbol-suffix=_64)
+ *   scipy-openblas64:   scipy_dsyevr_64_  (PyPI numpy 2.x bundles this)
+ *   OpenBLAS ILP64:     dsyevr64_      (SYMBOLSUFFIX=64_)
+ *   MKL LP64 / system:  dsyevr_        (standard Fortran name mangling)
+ *   Accelerate (macOS): dsyevr_        (standard)
+ */
+static const char *ilp64_symbol_names[] = {
+    "dsyevr_64_",           /* MKL ILP64, numpy-mkl ILP64 */
+    "scipy_dsyevr_64_",     /* scipy-openblas64 (PyPI numpy wheels) */
+    "dsyevr64_",            /* OpenBLAS SYMBOLSUFFIX=64_ */
+    NULL
+};
+
+static const char *lp64_symbol_names[] = {
+    "dsyevr_",              /* Standard Fortran, MKL LP64, Accelerate */
+    NULL
+};
+
 /* Try to resolve dsyevr from a dlopen handle (or RTLD_DEFAULT).
  * Returns 1 if found, 0 if not. Sets g_is_ilp64 and the function pointer. */
 static int try_resolve_dsyevr(void *handle) {
-    void *sym;
+    int dbg = debug_enabled();
 
-    /* Try ILP64 first (dsyevr_64_) */
-    sym = dlsym(handle, "dsyevr_64_");
-    if (sym) {
-        g_dsyevr_ilp64 = (dsyevr_ilp64_fn)sym;
-        g_is_ilp64 = 1;
-        return 1;
+    /* Try ILP64 symbols first */
+    for (const char **name = ilp64_symbol_names; *name; name++) {
+        void *sym = dlsym(handle, *name);
+        if (sym) {
+            if (dbg) fprintf(stderr, "_eigen_accel:   resolved %s\n", *name);
+            g_dsyevr_ilp64 = (dsyevr_ilp64_fn)sym;
+            g_is_ilp64 = 1;
+            return 1;
+        }
     }
 
-    /* Try LP64 (dsyevr_) */
-    sym = dlsym(handle, "dsyevr_");
-    if (sym) {
-        g_dsyevr_lp64 = (dsyevr_lp64_fn)sym;
-        g_is_ilp64 = 0;
-        return 1;
-    }
-
-    /* Try LAPACKE-style names (some builds use these) */
-    sym = dlsym(handle, "LAPACK_dsyevr");
-    if (sym) {
-        g_dsyevr_lp64 = (dsyevr_lp64_fn)sym;
-        g_is_ilp64 = 0;
-        return 1;
+    /* Try LP64 symbols */
+    for (const char **name = lp64_symbol_names; *name; name++) {
+        void *sym = dlsym(handle, *name);
+        if (sym) {
+            if (dbg) fprintf(stderr, "_eigen_accel:   resolved %s\n", *name);
+            g_dsyevr_lp64 = (dsyevr_lp64_fn)sym;
+            g_is_ilp64 = 0;
+            return 1;
+        }
     }
 
     return 0;

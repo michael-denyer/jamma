@@ -1,17 +1,21 @@
-"""Hatchling build hook that embeds the git commit date and compiles the C extension.
+"""Hatchling build hook that embeds the git commit date and compiles the C extensions.
 
 Writes ``src/jamma/_build_meta.py`` at build time so the release date is
 available at runtime via ``jamma.__release_date__`` without manual upkeep.
 
-Also compiles ``src/jamma/lmm/_lmm_accel.c`` into a Python C extension
-(``_lmm_accel.cpython-*.so``) if a C compiler is available. If compilation
-fails for any reason, a warning is logged and a pure-Python wheel is produced
-as a graceful fallback — jamma is fully functional without the C extension.
+Also compiles two C extensions if a C compiler is available:
+  - ``src/jamma/lmm/_lmm_accel.c``: per-SNP REML Wald pipeline (with OpenMP)
+  - ``src/jamma/lmm/_eigen_accel.c``: DSYEVR eigendecomposition (no OpenMP)
+
+If compilation fails for any reason, a warning is logged and a pure-Python
+wheel is produced as a graceful fallback — jamma is fully functional without
+either C extension.
 """
 
 import datetime
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import sysconfig
@@ -38,8 +42,105 @@ class CustomBuildHook(BuildHookInterface):
             f'BUILD_DATE = "{date_str}"\n'
         )
 
-        # Compile the C extension (graceful fallback if unavailable)
+        # Compile C extensions (graceful fallback if unavailable).
+        # _lmm_accel is more critical — compile first so its errors are visible.
         self._compile_c_extension(build_data)
+        self._compile_eigen_extension(build_data)
+
+    def _preflight_c_build(self):
+        """Verify build prerequisites and return compiler/include information.
+
+        Checks that numpy >= 2.0 is available, the C compiler is on PATH,
+        and Python.h exists. All checks produce actionable WARNING messages
+        on failure.
+
+        Returns:
+            tuple(cc_cmd, cc_extra, python_inc, numpy_inc, ldflags) on success,
+            or None if any pre-flight check fails.
+        """
+        try:
+            import numpy as np
+        except ImportError:
+            print(
+                "WARNING: numpy not available in build environment — "
+                "skipping C extension compilation (pure-Python fallback).",
+                file=sys.stderr,
+            )
+            return None
+
+        # Refuse to compile against numpy 1.x — the resulting .so crashes on
+        # numpy 2.x at import time due to C API ABI break (NPY_ABI_VERSION).
+        np_major = int(np.__version__.split(".")[0])
+        if np_major < 2:
+            print(
+                f"WARNING: build numpy is {np.__version__} (1.x) — "
+                "skipping C extension to avoid ABI mismatch with numpy 2.x "
+                "at runtime (pure-Python fallback).\n"
+                "  To compile the C extension, build with numpy >= 2.0:\n"
+                "    pip install --no-build-isolation --no-deps jamma",
+                file=sys.stderr,
+            )
+            return None
+
+        # Resolve compiler — CC may contain flags (e.g. "gcc -pthread")
+        cc = os.environ.get("CC") or sysconfig.get_config_var("CC") or "cc"
+        cc_parts = cc.split()
+        cc_cmd = cc_parts[0]
+        cc_extra = cc_parts[1:]
+
+        # Pre-flight: verify compiler is on PATH
+        if not shutil.which(cc_cmd):
+            print(
+                f"WARNING: C compiler '{cc_cmd}' not found on PATH — "
+                "skipping C extension compilation (pure-Python fallback).\n"
+                "  To enable the C extension, install a C compiler:\n"
+                "    Debian/Ubuntu: apt-get install -y gcc\n"
+                "    macOS: xcode-select --install",
+                file=sys.stderr,
+            )
+            return None
+
+        python_inc = sysconfig.get_config_var("INCLUDEPY")
+        numpy_inc = np.get_include()
+
+        # Pre-flight: verify Python.h exists (python3-dev package)
+        python_h = Path(python_inc) / "Python.h" if python_inc else None
+        if not python_h or not python_h.exists():
+            print(
+                f"WARNING: Python.h not found at {python_inc} — "
+                "skipping C extension compilation (pure-Python fallback).\n"
+                "  To enable the C extension, install Python development headers:\n"
+                "    Debian/Ubuntu: apt-get install -y python3-dev\n"
+                "    Fedora/RHEL: dnf install python3-devel",
+                file=sys.stderr,
+            )
+            return None
+
+        # macOS requires -undefined dynamic_lookup for Python C extensions
+        # (Python symbols are resolved at runtime from the embedding binary)
+        ldflags = []
+        if platform.system() == "Darwin":
+            ldflags = ["-undefined", "dynamic_lookup"]
+
+        return (cc_cmd, cc_extra, python_inc, numpy_inc, ldflags)
+
+    def _detect_ilp64(self) -> bool:
+        """Check if numpy is built with ILP64 BLAS (64-bit integers).
+
+        Returns:
+            True if numpy uses ILP64 BLAS, False otherwise.
+        """
+        try:
+            import numpy as np
+
+            config = np.show_config(mode="dicts")
+            blas_info = config.get("Build Dependencies", {}).get("blas", {})
+            name = blas_info.get("name", "")
+            if "ilp64" in name.lower():
+                return True
+        except (TypeError, AttributeError):
+            pass
+        return False
 
     def _compile_c_extension(self, build_data):
         """Compile _lmm_accel.c -> _lmm_accel{EXT_SUFFIX} if a C compiler is available.
@@ -57,29 +158,10 @@ class CustomBuildHook(BuildHookInterface):
             build_data: Hatchling build data dict. Updated with force_include
                 entry mapping the compiled .so into the wheel.
         """
-        try:
-            import numpy as np
-        except ImportError:
-            print(
-                "WARNING: numpy not available in build environment — "
-                "skipping C extension compilation (pure-Python fallback).",
-                file=sys.stderr,
-            )
+        preflight = self._preflight_c_build()
+        if preflight is None:
             return
-
-        # Refuse to compile against numpy 1.x — the resulting .so crashes on
-        # numpy 2.x at import time due to C API ABI break (NPY_ABI_VERSION).
-        np_major = int(np.__version__.split(".")[0])
-        if np_major < 2:
-            print(
-                f"WARNING: build numpy is {np.__version__} (1.x) — "
-                "skipping C extension to avoid ABI mismatch with numpy 2.x "
-                "at runtime (pure-Python fallback).\n"
-                "  To compile the C extension, build with numpy >= 2.0:\n"
-                "    pip install --no-build-isolation --no-deps jamma",
-                file=sys.stderr,
-            )
-            return
+        cc_cmd, cc_extra, python_inc, numpy_inc, ldflags = preflight
 
         src = Path(self.root) / "src" / "jamma" / "lmm" / "_lmm_accel.c"
         if not src.exists():
@@ -94,42 +176,6 @@ class CustomBuildHook(BuildHookInterface):
         ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
         out_name = f"_lmm_accel{ext_suffix}"
         out_path = Path(self.root) / "src" / "jamma" / "lmm" / out_name
-
-        # Resolve compiler — CC may contain flags (e.g. "gcc -pthread")
-        cc = os.environ.get("CC") or sysconfig.get_config_var("CC") or "cc"
-        cc_parts = cc.split()
-        cc_cmd = cc_parts[0]
-        cc_extra = cc_parts[1:]
-
-        # Pre-flight: verify compiler is on PATH
-        import shutil
-
-        if not shutil.which(cc_cmd):
-            print(
-                f"WARNING: C compiler '{cc_cmd}' not found on PATH — "
-                "skipping C extension compilation (pure-Python fallback).\n"
-                "  To enable the C extension, install a C compiler:\n"
-                "    Debian/Ubuntu: apt-get install -y gcc\n"
-                "    macOS: xcode-select --install",
-                file=sys.stderr,
-            )
-            return
-
-        python_inc = sysconfig.get_config_var("INCLUDEPY")
-        numpy_inc = np.get_include()
-
-        # Pre-flight: verify Python.h exists (python3-dev package)
-        python_h = Path(python_inc) / "Python.h" if python_inc else None
-        if not python_h or not python_h.exists():
-            print(
-                f"WARNING: Python.h not found at {python_inc} — "
-                "skipping C extension compilation (pure-Python fallback).\n"
-                "  To enable the C extension, install Python development headers:\n"
-                "    Debian/Ubuntu: apt-get install -y python3-dev\n"
-                "    Fedora/RHEL: dnf install python3-devel",
-                file=sys.stderr,
-            )
-            return
 
         # Platform-specific OpenMP flags
         omp_flags = []
@@ -157,12 +203,6 @@ class CustomBuildHook(BuildHookInterface):
                 )
         else:
             omp_flags = ["-fopenmp"]
-
-        # macOS requires -undefined dynamic_lookup for Python C extensions
-        # (Python symbols are resolved at runtime from the embedding binary)
-        ldflags = []
-        if platform.system() == "Darwin":
-            ldflags = ["-undefined", "dynamic_lookup"]
 
         cmd = [
             cc_cmd,
@@ -241,5 +281,91 @@ class CustomBuildHook(BuildHookInterface):
         # contains a compiled .so, and cibuildwheel rejects it.
         # infer_tag makes hatchling use the current platform/ABI for the
         # wheel filename tag (e.g. cp311-cp311-macosx_14_0_arm64).
+        build_data["pure_python"] = False
+        build_data["infer_tag"] = True
+
+    def _compile_eigen_extension(self, build_data):
+        """Compile _eigen_accel.c -> _eigen_accel{EXT_SUFFIX} if compiler is available.
+
+        No OpenMP flags — DSYEVR is a single LAPACK call; MKL/OpenBLAS handles
+        threading internally.
+
+        ILP64 detection: if numpy is built with ILP64 MKL, the extension is
+        compiled with -DJAMMA_ILP64 to use the dsyevr_64_ symbol.
+
+        On any compilation failure, logs a warning and returns without raising.
+
+        Args:
+            build_data: Hatchling build data dict. Updated with force_include
+                entry mapping the compiled .so into the wheel.
+        """
+        preflight = self._preflight_c_build()
+        if preflight is None:
+            return
+        cc_cmd, cc_extra, python_inc, numpy_inc, ldflags = preflight
+
+        src = Path(self.root) / "src" / "jamma" / "lmm" / "_eigen_accel.c"
+        if not src.exists():
+            print(
+                f"WARNING: C source {src} not found — skipping eigen C extension "
+                "compilation (pure-Python fallback). If building from sdist, "
+                "verify the archive is complete.",
+                file=sys.stderr,
+            )
+            return
+
+        ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
+        out_name = f"_eigen_accel{ext_suffix}"
+        out_path = Path(self.root) / "src" / "jamma" / "lmm" / out_name
+
+        # ILP64 detection — determines DSYEVR symbol (dsyevr_64_ vs dsyevr_)
+        ilp64_flags = []
+        if self._detect_ilp64():
+            ilp64_flags = ["-DJAMMA_ILP64"]
+            print(
+                "ILP64 numpy detected — compiling _eigen_accel with -DJAMMA_ILP64",
+                file=sys.stderr,
+            )
+
+        cmd = [
+            cc_cmd,
+            *cc_extra,
+            "-O3",
+            "-ftree-vectorize",
+            "-fno-math-errno",
+            "-fno-trapping-math",
+            "-fPIC",
+            "-shared",
+            "-std=c99",
+            f"-I{python_inc}",
+            f"-I{numpy_inc}",
+            *ilp64_flags,
+            str(src),
+            "-o",
+            str(out_path),
+            "-lm",
+            *ldflags,
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(
+                "WARNING: eigen C extension compilation failed "
+                "(pure-Python fallback will be used):\n"
+                f"  Command: {' '.join(cmd)}\n"
+                f"  Error: {result.stderr[:2000]}",
+                file=sys.stderr,
+            )
+            return
+
+        print(f"Eigen C extension compiled: {out_path}", file=sys.stderr)
+
+        # Register the compiled .so as a forced wheel inclusion.
+        build_data.setdefault("force_include", {})
+        dist_path = f"jamma/lmm/{out_name}"
+        build_data["force_include"][str(out_path)] = dist_path
+
+        # pure_python and infer_tag may already be set by _compile_c_extension.
+        # Set them unconditionally — idempotent (same values).
         build_data["pure_python"] = False
         build_data["infer_tag"] = True

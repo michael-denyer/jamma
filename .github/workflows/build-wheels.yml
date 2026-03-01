@@ -65,6 +65,7 @@ jobs:
     needs: [build_wheels, build_sdist]
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
+    environment: pypi
     permissions:
       id-token: write
     steps:

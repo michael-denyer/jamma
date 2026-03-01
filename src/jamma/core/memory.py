@@ -68,30 +68,6 @@ def _inplace_eigen_available() -> bool:
         return False
 
 
-_dsyevr_import_warned = False
-
-
-def _dsyevr_available() -> bool:
-    """Check if DSYEVR C extension is available (lazy import).
-
-    Called by memory estimation to choose O(N) vs O(N^2) workspace.
-    Not cached because _DSYEVR_AVAILABLE could change after auto-recompile.
-    """
-    global _dsyevr_import_warned
-    try:
-        from jamma.lmm.eigen import _DSYEVR_AVAILABLE
-
-        return _DSYEVR_AVAILABLE
-    except ImportError:
-        if not _dsyevr_import_warned:
-            _dsyevr_import_warned = True
-            logger.info(
-                "Could not import _DSYEVR_AVAILABLE; "
-                "memory estimates will use DSYEVD workspace."
-            )
-        return False
-
-
 def _eigendecomp_workspace_gb(n: int) -> float:
     """Return eigendecomp workspace in GB (DSYEVD, the default driver)."""
     return _dsyevd_workspace_gb(n)
@@ -120,8 +96,7 @@ def _dsyevd_peak_gb(n: int) -> float:
     DSYEVD fallback: K + U (separate) + O(N^2) workspace.
     """
     kinship_gb = n**2 * 8 / 1e9
-    eigvec_gb = 0.0 if _inplace_eigen_available() else kinship_gb
-    return kinship_gb + eigvec_gb + _dsyevd_workspace_gb(n)
+    return kinship_gb + _eigendecomp_eigvec_gb(kinship_gb) + _dsyevd_workspace_gb(n)
 
 
 def _dsyevr_peak_gb(n: int) -> float:
@@ -131,7 +106,7 @@ def _dsyevr_peak_gb(n: int) -> float:
     but workspace is O(N) not O(N^2).
     """
     kinship_gb = n**2 * 8 / 1e9
-    return kinship_gb + kinship_gb + _dsyevr_workspace_gb(n)
+    return 2 * kinship_gb + _dsyevr_workspace_gb(n)
 
 
 def estimate_eigendecomp_memory(n_samples: int) -> float:
@@ -159,10 +134,7 @@ def estimate_eigendecomp_memory(n_samples: int) -> float:
     Returns:
         Estimated peak memory in GB (DSYEVD, conservative).
     """
-    kinship_gb = n_samples**2 * 8 / 1e9
-    workspace_gb = _eigendecomp_workspace_gb(n_samples)
-    eigenvectors_gb = _eigendecomp_eigvec_gb(kinship_gb)
-    return kinship_gb + eigenvectors_gb + workspace_gb
+    return _dsyevd_peak_gb(n_samples)
 
 
 class MemoryBreakdown(NamedTuple):

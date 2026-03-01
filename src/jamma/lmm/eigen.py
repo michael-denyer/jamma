@@ -302,6 +302,7 @@ def eigendecompose_kinship(
 
     use_dsyevr = False
     dsyevd_peak = _dsyevd_peak_gb(n_samples)
+    required_gb = dsyevd_peak
 
     if check_memory and _DSYEVR_AVAILABLE:
         margin_gb = min(dsyevd_peak * 0.1, 10.0)
@@ -311,13 +312,12 @@ def eigendecompose_kinship(
             dsyevr_margin = min(dsyevr_peak * 0.1, 10.0)
             if dsyevr_peak + dsyevr_margin <= available_gb:
                 use_dsyevr = True
+                required_gb = dsyevr_peak
                 logger.info(
                     f"DSYEVD peak ({dsyevd_peak:.1f}GB) exceeds "
                     f"available memory ({available_gb:.1f}GB). "
                     f"Using DSYEVR ({dsyevr_peak:.1f}GB)."
                 )
-
-    required_gb = _dsyevr_peak_gb(n_samples) if use_dsyevr else dsyevd_peak
     logger.info(
         f"Eigendecomp memory: estimated {required_gb:.1f}GB, "
         f"available {available_gb:.1f}GB"

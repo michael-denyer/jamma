@@ -147,6 +147,25 @@ static int scan_dir_for_lapack(const char *dirpath) {
     return 0;
 }
 
+/* Force numpy to load its BLAS/LAPACK by running a trivial linalg operation.
+ * numpy loads BLAS lazily — until a linalg function is called, the BLAS
+ * library may not be loaded into the process. */
+static void force_numpy_blas_load(void) {
+    /* Run: numpy.linalg.eigh(numpy.eye(2)) — minimal operation that
+     * forces numpy to dlopen its BLAS/LAPACK library. */
+    PyObject *result = PyRun_String(
+        "import numpy; numpy.linalg.eigh(numpy.eye(2))",
+        Py_file_input,
+        PyEval_GetGlobals() ? PyEval_GetGlobals() : PyDict_New(),
+        PyDict_New()
+    );
+    if (result) {
+        Py_DECREF(result);
+    } else {
+        PyErr_Clear();  /* Swallow any errors — this is best-effort */
+    }
+}
+
 /* Main LAPACK discovery function. Called once at module init.
  * Returns 1 if DSYEVR was resolved, 0 if not. */
 static int discover_lapack(void) {
@@ -155,73 +174,62 @@ static int discover_lapack(void) {
         return 1;
     }
 
-    /* 2. Find numpy's package directory and scan its bundled libs */
-    PyObject *numpy_mod = PyImport_ImportModule("numpy");
-    if (numpy_mod) {
-        PyObject *numpy_file = PyObject_GetAttrString(numpy_mod, "__file__");
-        if (numpy_file) {
-            const char *numpy_path = PyUnicode_AsUTF8(numpy_file);
-            if (numpy_path) {
-                /* numpy_path is like /path/to/numpy/__init__.py
-                 * We need /path/to/numpy/.libs/ and /path/to/numpy.libs/ */
-                char basedir[4096];
-                strncpy(basedir, numpy_path, sizeof(basedir) - 1);
-                basedir[sizeof(basedir) - 1] = '\0';
+    /* 2. Force numpy to load its BLAS, then retry RTLD_DEFAULT.
+     * numpy loads BLAS lazily; after a linalg call the symbols may be
+     * available globally (depends on how numpy's _umath_linalg opens them). */
+    force_numpy_blas_load();
+    if (try_resolve_dsyevr(RTLD_DEFAULT)) {
+        return 1;
+    }
 
-                /* Strip __init__.py to get numpy package dir */
-                char *slash = strrchr(basedir, '/');
-                if (slash) {
-                    *slash = '\0';  /* basedir = /path/to/numpy */
+    /* 3. Find numpy's package directory and scan its bundled libs.
+     * Use Python (pathlib.resolve) to handle symlinks/venvs correctly. */
+    PyObject *locals = PyDict_New();
+    if (!locals) { PyErr_Clear(); return 0; }
 
-                    /* Try numpy/.libs/ (older numpy layout) */
-                    char libdir[4096];
-                    snprintf(libdir, sizeof(libdir), "%s/.libs", basedir);
-                    if (scan_dir_for_lapack(libdir)) {
-                        Py_DECREF(numpy_file);
-                        Py_DECREF(numpy_mod);
-                        return 1;
-                    }
+    PyObject *code_result = PyRun_String(
+        "import pathlib, numpy\n"
+        "np_dir = pathlib.Path(numpy.__file__).resolve().parent\n"
+        "dirs = [\n"
+        "    str(np_dir / '.libs'),\n"
+        "    str(np_dir / '_core' / '.libs'),\n"
+        "    str(np_dir.parent / 'numpy.libs'),\n"
+        "]\n"
+        "try:\n"
+        "    cfg = numpy.show_config(mode='dicts')\n"
+        "    for section in ['blas', 'lapack']:\n"
+        "        info = cfg.get('Build Dependencies', {}).get(section, {})\n"
+        "        lib_dir = info.get('lib directory', '')\n"
+        "        if lib_dir:\n"
+        "            dirs.append(lib_dir)\n"
+        "except Exception:\n"
+        "    pass\n"
+        "lib_dirs = [d for d in dirs if pathlib.Path(d).is_dir()]\n",
+        Py_file_input,
+        PyDict_New(),  /* globals */
+        locals
+    );
 
-                    /* Try numpy/_core/.libs/ */
-                    snprintf(libdir, sizeof(libdir), "%s/_core/.libs", basedir);
-                    if (scan_dir_for_lapack(libdir)) {
-                        Py_DECREF(numpy_file);
-                        Py_DECREF(numpy_mod);
-                        return 1;
-                    }
+    if (code_result) {
+        Py_DECREF(code_result);
 
-                    /* Try sibling numpy.libs/ (pip wheel layout) */
-                    char *parent_slash = strrchr(basedir, '/');
-                    if (parent_slash) {
-                        /* basedir was /path/to/numpy, need /path/to/numpy.libs */
-                        snprintf(libdir, sizeof(libdir), "%s/numpy.libs",
-                                 basedir);  /* This gives /path/to/numpy/numpy.libs — wrong */
-                        /* Actually need parent + numpy.libs */
-                        char parentdir[4096];
-                        strncpy(parentdir, basedir, sizeof(parentdir) - 1);
-                        parentdir[sizeof(parentdir) - 1] = '\0';
-                        char *p = strrchr(parentdir, '/');
-                        if (p) {
-                            *p = '\0';  /* parentdir = /path/to */
-                            snprintf(libdir, sizeof(libdir), "%s/numpy.libs", parentdir);
-                            if (scan_dir_for_lapack(libdir)) {
-                                Py_DECREF(numpy_file);
-                                Py_DECREF(numpy_mod);
-                                return 1;
-                            }
-                        }
-                    }
+        PyObject *lib_dirs = PyDict_GetItemString(locals, "lib_dirs");
+        if (lib_dirs && PyList_Check(lib_dirs)) {
+            Py_ssize_t n = PyList_Size(lib_dirs);
+            for (Py_ssize_t i = 0; i < n; i++) {
+                PyObject *item = PyList_GetItem(lib_dirs, i);
+                const char *dirpath = PyUnicode_AsUTF8(item);
+                if (dirpath && scan_dir_for_lapack(dirpath)) {
+                    Py_DECREF(locals);
+                    return 1;
                 }
             }
-            Py_DECREF(numpy_file);
         }
-        Py_DECREF(numpy_mod);
     } else {
         PyErr_Clear();
     }
+    Py_DECREF(locals);
 
-    /* 3. Last resort: try RTLD_DEFAULT again (in case numpy loaded BLAS
-     * between our first attempt and now — shouldn't happen but costs nothing) */
     return 0;
 }
 

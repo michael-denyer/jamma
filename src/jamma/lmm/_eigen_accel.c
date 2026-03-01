@@ -166,6 +166,58 @@ static void force_numpy_blas_load(void) {
     }
 }
 
+/* Scan /proc/self/maps (Linux) for already-loaded BLAS/LAPACK libraries.
+ * After numpy loads its BLAS, the library appears in the process map.
+ * We can dlopen it by path with RTLD_NOLOAD to get a handle without
+ * loading it again, then resolve dsyevr from that handle.
+ * Returns 1 if DSYEVR was resolved, 0 if not. */
+static int scan_proc_maps_for_lapack(void) {
+#ifdef __linux__
+    FILE *fp = fopen("/proc/self/maps", "r");
+    if (!fp) return 0;
+
+    char line[4096];
+    while (fgets(line, sizeof(line), fp)) {
+        /* Each line looks like:
+         * 7f1234-7f5678 r-xp ... /path/to/libscipy_openblas64_-abc123.so
+         * We want the path portion containing openblas or mkl */
+        char *path = strchr(line, '/');
+        if (!path) continue;
+
+        /* Strip trailing newline */
+        char *nl = strchr(path, '\n');
+        if (nl) *nl = '\0';
+
+        /* Check if this is an openblas or mkl library */
+        char *basename = strrchr(path, '/');
+        if (!basename) continue;
+        basename++;  /* skip the '/' */
+
+        if (!strstr(basename, "openblas") && !strstr(basename, "libmkl"))
+            continue;
+        if (!strstr(basename, ".so"))
+            continue;
+
+        /* Found a candidate — dlopen with RTLD_NOLOAD (already loaded) */
+        void *handle = dlopen(path, RTLD_LAZY | RTLD_NOLOAD);
+        if (!handle) {
+            /* Try full load if NOLOAD fails */
+            handle = dlopen(path, RTLD_LAZY | RTLD_LOCAL);
+        }
+        if (!handle) continue;
+
+        if (try_resolve_dsyevr(handle)) {
+            g_lapack_handle = handle;
+            fclose(fp);
+            return 1;
+        }
+        dlclose(handle);
+    }
+    fclose(fp);
+#endif
+    return 0;
+}
+
 /* Main LAPACK discovery function. Called once at module init.
  * Returns 1 if DSYEVR was resolved, 0 if not. */
 static int discover_lapack(void) {
@@ -174,15 +226,24 @@ static int discover_lapack(void) {
         return 1;
     }
 
-    /* 2. Force numpy to load its BLAS, then retry RTLD_DEFAULT.
-     * numpy loads BLAS lazily; after a linalg call the symbols may be
-     * available globally (depends on how numpy's _umath_linalg opens them). */
+    /* 2. Force numpy to load its BLAS (lazy load), then check again.
+     * After numpy.linalg.eigh runs, the BLAS library is in the process.
+     * On macOS this often makes symbols available via RTLD_DEFAULT.
+     * On Linux, BLAS is loaded with RTLD_LOCAL so we need step 3. */
     force_numpy_blas_load();
     if (try_resolve_dsyevr(RTLD_DEFAULT)) {
         return 1;
     }
 
-    /* 3. Find numpy's package directory and scan its bundled libs.
+    /* 3. Scan /proc/self/maps for the already-loaded BLAS library.
+     * numpy loaded it (step 2), but with RTLD_LOCAL so it's not visible
+     * via RTLD_DEFAULT. We find it in /proc/self/maps and dlopen it
+     * directly to get a handle we can dlsym from. */
+    if (scan_proc_maps_for_lapack()) {
+        return 1;
+    }
+
+    /* 4. Fallback: scan numpy's lib directories for BLAS/LAPACK shared libs.
      * Use Python (pathlib.resolve) to handle symlinks/venvs correctly. */
     PyObject *locals = PyDict_New();
     if (!locals) { PyErr_Clear(); return 0; }

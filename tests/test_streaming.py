@@ -9,6 +9,7 @@ pytest.importorskip("jax")
 
 from jamma.core.memory import (
     StreamingMemoryBreakdown,
+    _dsyevr_available,
     estimate_lmm_streaming_memory,
     estimate_streaming_memory,
 )
@@ -189,22 +190,32 @@ class TestEstimateStreamingMemory:
         assert isinstance(est.available_gb, float)
         assert isinstance(est.sufficient, bool)
 
-    def test_peak_is_eigendecomp(self) -> None:
-        """Verify peak memory is dominated by eigendecomp phase.
+    def test_peak_phase_correct(self) -> None:
+        """Verify peak memory phase depends on DSYEVR availability.
 
-        With in-place eigendecomp (K/U share a buffer), eigendecomp peak
-        is kinship + workspace (eigenvectors_gb not counted separately).
+        With DSYEVR: eigendecomp workspace is O(N), so streaming LMM phase
+        (eigenvectors + chunk + rotation) dominates peak.
+        Without DSYEVR: eigendecomp workspace is O(N^2), so eigendecomp dominates.
         """
         est = estimate_streaming_memory(100_000, chunk_size=10_000)
 
-        # Eigendecomp peak: K/U shared buffer + workspace (no separate eigenvectors_gb)
         eigendecomp_peak = est.kinship_gb + est.eigendecomp_workspace_gb
-
-        # Verify peak equals eigendecomp phase (within floating point tolerance)
-        assert abs(est.total_peak_gb - eigendecomp_peak) < 1e-6, (
-            f"Peak {est.total_peak_gb:.2f}GB should equal "
-            f"eigendecomp {eigendecomp_peak:.2f}GB"
+        lmm_peak = (
+            est.eigenvectors_gb
+            + est.chunk_gb
+            + est.rotation_buffer_gb
+            + est.grid_reml_gb
         )
+
+        if _dsyevr_available():
+            # With DSYEVR, LMM phase dominates (eigendecomp workspace ~0GB)
+            assert est.total_peak_gb >= lmm_peak - 1e-6
+        else:
+            # Without DSYEVR, eigendecomp phase dominates
+            assert abs(est.total_peak_gb - eigendecomp_peak) < 1e-6, (
+                f"Peak {est.total_peak_gb:.2f}GB should equal "
+                f"eigendecomp {eigendecomp_peak:.2f}GB"
+            )
 
     def test_200k_memory_estimate(self) -> None:
         """Verify memory estimates for 200k sample scale."""
@@ -218,11 +229,19 @@ class TestEstimateStreamingMemory:
         # Eigenvectors: same as kinship = 320GB
         assert 319 < est.eigenvectors_gb < 321
 
-        # Workspace: DSYEVD O(n^2) ~640GB at 200k
-        assert est.eigendecomp_workspace_gb > 600, (
-            f"DSYEVD workspace should be ~640GB at 200k, "
-            f"got {est.eigendecomp_workspace_gb:.2f}GB"
-        )
+        # Eigendecomp workspace depends on DSYEVR availability
+        if _dsyevr_available():
+            # DSYEVR O(N) workspace: ~0.06GB at 200k
+            assert est.eigendecomp_workspace_gb < 1, (
+                f"DSYEVR workspace should be <1GB at 200k, "
+                f"got {est.eigendecomp_workspace_gb:.2f}GB"
+            )
+        else:
+            # DSYEVD O(n^2) ~640GB at 200k
+            assert est.eigendecomp_workspace_gb > 600, (
+                f"DSYEVD workspace should be ~640GB at 200k, "
+                f"got {est.eigendecomp_workspace_gb:.2f}GB"
+            )
 
         # Chunk: 200k * 10k * 8 / 1e9 = 16GB
         assert 15 < est.chunk_gb < 17, f"Expected ~16GB chunk, got {est.chunk_gb}"
@@ -232,10 +251,18 @@ class TestEstimateStreamingMemory:
             f"Expected ~0.004GB grid_reml, got {est.grid_reml_gb}"
         )
 
-        # Peak should be eigendecomp: ~960GB (K/U shared + dsyevd workspace)
-        assert 950 < est.total_peak_gb < 970, (
-            f"Expected ~960GB peak, got {est.total_peak_gb}"
-        )
+        if _dsyevr_available():
+            # Peak is streaming LMM phase (eigendecomp is cheap with DSYEVR)
+            # eigvec(320)+chunk(16)+rot(16)+grid+uab(96) ≈ 448GB
+            assert 440 < est.total_peak_gb < 455, (
+                f"Expected ~448GB peak (streaming LMM with DSYEVR), "
+                f"got {est.total_peak_gb}"
+            )
+        else:
+            # Peak is eigendecomp: ~960GB (K/U shared + dsyevd workspace)
+            assert 950 < est.total_peak_gb < 970, (
+                f"Expected ~960GB peak, got {est.total_peak_gb}"
+            )
 
     def test_chunk_size_affects_chunk_gb(self) -> None:
         """Verify chunk_size parameter affects chunk memory."""
@@ -326,13 +353,18 @@ class TestEstimateStreamingMemory:
 class TestEstimateLmmStreamingMemory:
     """Tests for estimate_lmm_streaming_memory function (LMM-phase only)."""
 
-    def test_lmm_estimate_less_than_full_pipeline(self) -> None:
-        """LMM-only estimate should be less than full streaming estimate."""
+    def test_lmm_estimate_at_most_full_pipeline(self) -> None:
+        """LMM-only estimate should be <= full streaming estimate.
+
+        With DSYEVR, eigendecomp workspace is tiny so streaming LMM phase
+        dominates — LMM-only equals full pipeline. With DSYEVD, eigendecomp
+        dominates so LMM-only is strictly less.
+        """
         lmm_est = estimate_lmm_streaming_memory(100_000, 95_000)
         full_est = estimate_streaming_memory(100_000)
 
-        assert lmm_est.total_peak_gb < full_est.total_peak_gb, (
-            f"LMM-only ({lmm_est.total_peak_gb:.1f}GB) should be less than "
+        assert lmm_est.total_peak_gb <= full_est.total_peak_gb, (
+            f"LMM-only ({lmm_est.total_peak_gb:.1f}GB) should be <= "
             f"full pipeline ({full_est.total_peak_gb:.1f}GB)"
         )
 

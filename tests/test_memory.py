@@ -16,7 +16,7 @@ from jamma.core import (
     log_memory_snapshot,
 )
 from jamma.core.estimates import _format_duration
-from jamma.core.memory import _uab_iab_gb, estimate_lmm_memory
+from jamma.core.memory import _dsyevr_available, _uab_iab_gb, estimate_lmm_memory
 
 
 @pytest.mark.tier0
@@ -40,18 +40,28 @@ class TestMemoryEstimation:
         # Eigenvectors: same as kinship = 320GB (used in LMM phase)
         assert 319 < est.eigenvectors_gb < 321
 
-        # Eigendecomp workspace: DSYEVD O(n^2) - ~640GB at 200k
-        assert est.eigendecomp_workspace_gb > 600, (
-            f"DSYEVD workspace should be ~640GB at 200k, "
-            f"got {est.eigendecomp_workspace_gb:.2f}GB"
-        )
-
-        # Peak is during eigendecomp: K/U shared buffer + workspace = ~960GB
-        # (in-place eigendecomp reuses K's buffer for U, saving 320GB)
-        assert 950 < est.total_gb < 970, (
-            f"Expected ~960GB (eigendecomp peak with in-place buffer reuse), "
-            f"got {est.total_gb}"
-        )
+        # Eigendecomp workspace depends on DSYEVR availability
+        if _dsyevr_available():
+            # DSYEVR O(N) workspace: ~0.06GB at 200k
+            assert est.eigendecomp_workspace_gb < 1, (
+                f"DSYEVR workspace should be <1GB at 200k, "
+                f"got {est.eigendecomp_workspace_gb:.2f}GB"
+            )
+            # LMM phase dominates: eigvec(320)+geno(152)+batch(224) ≈ 696GB
+            assert 690 < est.total_gb < 700, (
+                f"Expected ~696GB (LMM peak with DSYEVR), got {est.total_gb}"
+            )
+        else:
+            # DSYEVD O(n^2) workspace: ~640GB at 200k
+            assert est.eigendecomp_workspace_gb > 600, (
+                f"DSYEVD workspace should be ~640GB at 200k, "
+                f"got {est.eigendecomp_workspace_gb:.2f}GB"
+            )
+            # Peak is during eigendecomp: K/U shared buffer + workspace = ~960GB
+            assert 950 < est.total_gb < 970, (
+                f"Expected ~960GB (eigendecomp peak with in-place buffer reuse), "
+                f"got {est.total_gb}"
+            )
 
     def test_memory_breakdown_10k(self):
         """Memory estimate for 10k samples should be reasonable."""
@@ -355,13 +365,18 @@ class TestCleanupMemory:
 class TestLmmMemoryEstimation:
     """Tests for estimate_lmm_memory function (LMM-phase only)."""
 
-    def test_lmm_estimate_less_than_workflow(self):
-        """LMM-only estimate should be less than full workflow estimate."""
+    def test_lmm_estimate_at_most_workflow(self):
+        """LMM-only estimate should be <= full workflow estimate.
+
+        With DSYEVR, eigendecomp workspace is tiny so LMM phase dominates
+        the workflow total — LMM-only equals full pipeline. With DSYEVD,
+        eigendecomp dominates so LMM-only is strictly less.
+        """
         lmm_est = estimate_lmm_memory(100_000, 10_000)
         full_est = estimate_workflow_memory(100_000, 10_000)
 
-        assert lmm_est.total_gb < full_est.total_gb, (
-            f"LMM-only ({lmm_est.total_gb:.1f}GB) should be less than "
+        assert lmm_est.total_gb <= full_est.total_gb, (
+            f"LMM-only ({lmm_est.total_gb:.1f}GB) should be <= "
             f"full pipeline ({full_est.total_gb:.1f}GB)"
         )
 
@@ -655,12 +670,23 @@ class TestMemoryEstimatorFallbackPath:
     """Verify memory estimates differ correctly when in-place eigen unavailable."""
 
     def test_workflow_fallback_adds_eigenvector_allocation(self):
-        """Fallback path includes separate eigenvector allocation in peak."""
+        """Fallback path includes separate eigenvector allocation in peak.
 
-        with patch("jamma.core.memory._inplace_eigen_available", return_value=True):
+        Must force DSYEVD path (patch _dsyevr_available=False) so eigendecomp
+        peak dominates — otherwise DSYEVR makes eigendecomp cheap and LMM
+        peak hides the eigenvector allocation difference.
+        """
+
+        with (
+            patch("jamma.core.memory._dsyevr_available", return_value=False),
+            patch("jamma.core.memory._inplace_eigen_available", return_value=True),
+        ):
             est_inplace = estimate_workflow_memory(200_000, 95_000)
 
-        with patch("jamma.core.memory._inplace_eigen_available", return_value=False):
+        with (
+            patch("jamma.core.memory._dsyevr_available", return_value=False),
+            patch("jamma.core.memory._inplace_eigen_available", return_value=False),
+        ):
             est_fallback = estimate_workflow_memory(200_000, 95_000)
 
         # Fallback should be ~320GB higher (one extra n^2*8 allocation)
@@ -670,14 +696,24 @@ class TestMemoryEstimatorFallbackPath:
         )
 
     def test_streaming_fallback_adds_eigenvector_allocation(self):
-        """Streaming fallback path includes separate eigenvector allocation."""
+        """Streaming fallback path includes separate eigenvector allocation.
+
+        Must force DSYEVD path (patch _dsyevr_available=False) so eigendecomp
+        peak dominates.
+        """
 
         from jamma.core.memory import estimate_streaming_memory
 
-        with patch("jamma.core.memory._inplace_eigen_available", return_value=True):
+        with (
+            patch("jamma.core.memory._dsyevr_available", return_value=False),
+            patch("jamma.core.memory._inplace_eigen_available", return_value=True),
+        ):
             est_inplace = estimate_streaming_memory(200_000)
 
-        with patch("jamma.core.memory._inplace_eigen_available", return_value=False):
+        with (
+            patch("jamma.core.memory._dsyevr_available", return_value=False),
+            patch("jamma.core.memory._inplace_eigen_available", return_value=False),
+        ):
             est_fallback = estimate_streaming_memory(200_000)
 
         diff = est_fallback.total_peak_gb - est_inplace.total_peak_gb

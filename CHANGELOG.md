@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.3] - 2026-03-01
+
+### Added
+
+- Runtime LAPACK discovery via dlopen — `_eigen_accel` no longer has link-time LAPACK
+  dependency, making compiled wheels portable across numpy builds (OpenBLAS, MKL, Accelerate)
+- `scipy_dsyevr_64_` symbol resolution for PyPI numpy wheels (scipy-openblas64 uses
+  `scipy_` prefix on all LAPACK symbols)
+- Intel OpenMP (`libiomp5`) detection for `_lmm_accel` — avoids libgomp/libiomp5
+  dual-runtime conflict on MKL systems
+- `EIGEN_ACCEL_DEBUG=1` environment variable for LAPACK discovery diagnostics
+- `IS_ILP64` constant exported from `_eigen_accel` module
+
+### Changed
+
+- LAPACK discovery tries symbols in priority order: `dsyevr_64_` → `scipy_dsyevr_64_`
+  → `dsyevr64_` (ILP64), then `dsyevr_` (LP64)
+- `_eigen_accel` ABI version bumped to 2 (dlopen rewrite)
+- Linux wheels no longer need system LAPACK — dlopen resolves from numpy's bundled BLAS
+
+### Fixed
+
+- Linux CI: `_eigen_accel` DSYEVR resolution failed because PyPI numpy bundles
+  scipy-openblas64 with `scipy_` prefixed symbols
+- Module init: replaced `PyRun_String` with C API calls — `__builtins__` is unavailable
+  in globals dict during module init, causing silent import failures
+- Linux dlopen: uses `/proc/self/maps` scan after forcing numpy BLAS load to find
+  libraries opened with `RTLD_LOCAL` (invisible to `RTLD_DEFAULT`)
+
 ## [2.9.2] - 2026-03-01
 
 ### Added

@@ -17,10 +17,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install libomp (macOS)
-        if: runner.os == 'macOS'
-        run: brew install libomp
-
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.3.1
         env:
@@ -34,27 +30,11 @@ jobs:
           CIBW_ARCHS_LINUX: "x86_64"
           # Install libgomp in manylinux_2_28 container (AlmaLinux 8, dnf)
           CIBW_BEFORE_BUILD_LINUX: "dnf install -y libgomp"
-          # Test import + numerical sanity (catches ABI mismatches that silently corrupt results)
-          CIBW_TEST_COMMAND: >-
-            python -c "
-            from jamma.lmm._lmm_accel import compute_lmm_batch_c, HAS_OPENMP;
-            import numpy as np;
-            print(f'C extension OK, OpenMP={bool(HAS_OPENMP)}');
-            rng = np.random.default_rng(42);
-            n = 50;
-            eig = np.sort(rng.uniform(0.1, 2.0, n));
-            Uab = rng.standard_normal((3, n, 6));
-            Uab[:, :, 0] = np.abs(Uab[:, :, 0]) + 0.1;
-            Iab = np.zeros((3, 3, 6));
-            Iab[:, 0, :] = Uab.sum(axis=1);
-            Iab[:, 1, 3] = Iab[:, 0, 3] - Iab[:, 0, 1]**2 / Iab[:, 0, 0];
-            Iab[:, 1, 4] = Iab[:, 0, 4] - Iab[:, 0, 1] * Iab[:, 0, 2] / Iab[:, 0, 0];
-            Iab[:, 1, 5] = Iab[:, 0, 5] - Iab[:, 0, 2]**2 / Iab[:, 0, 0];
-            Iab[:, 2, 5] = Iab[:, 1, 5] - Iab[:, 1, 4]**2 / np.where(Iab[:, 1, 3] != 0, Iab[:, 1, 3], 1.0);
-            r = compute_lmm_batch_c(eig, Uab, Iab, n, 1e-5, 1e5, 50, 20, 1);
-            assert all(np.isfinite(r[k]).all() for k in ('lambdas', 'betas', 'ses')), 'Non-finite outputs';
-            print('Numerical sanity check passed');
-            "
+          # macOS: no libomp install — C extension compiles single-threaded
+          # (still faster than Python loops; users can build from source with
+          # brew install libomp for OpenMP support)
+          # Test import + numerical sanity (catches ABI mismatches)
+          CIBW_TEST_COMMAND: "python -c \"from jamma.lmm._lmm_accel import compute_lmm_batch_c, HAS_OPENMP; import numpy as np; print(f'C extension OK, OpenMP={bool(HAS_OPENMP)}'); rng=np.random.default_rng(42); n=50; eig=np.sort(rng.uniform(0.1,2.0,n)); Uab=rng.standard_normal((3,n,6)); Uab[:,:,0]=np.abs(Uab[:,:,0])+0.1; Iab=np.zeros((3,3,6)); Iab[:,0,:]=Uab.sum(axis=1); Iab[:,1,3]=Iab[:,0,3]-Iab[:,0,1]**2/Iab[:,0,0]; Iab[:,1,4]=Iab[:,0,4]-Iab[:,0,1]*Iab[:,0,2]/Iab[:,0,0]; Iab[:,1,5]=Iab[:,0,5]-Iab[:,0,2]**2/Iab[:,0,0]; Iab[:,2,5]=Iab[:,1,5]-Iab[:,1,4]**2/np.where(Iab[:,1,3]!=0,Iab[:,1,3],1.0); r=compute_lmm_batch_c(eig,Uab,Iab,n,1e-5,1e5,50,20,1); assert all(np.isfinite(r[k]).all() for k in ('lambdas','betas','ses')), 'Non-finite'; print('Numerical sanity OK')\""
           # Install test deps (numpy required for import)
           CIBW_TEST_REQUIRES: "numpy"
 

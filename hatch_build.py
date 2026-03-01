@@ -203,6 +203,8 @@ class CustomBuildHook(BuildHookInterface):
                     build_data.setdefault("force_include", {})
                     dist_path = f"jamma/lmm/{out_name}"
                     build_data["force_include"][str(out_path)] = dist_path
+                    build_data["pure_python"] = False
+                    build_data["infer_tag"] = True
                     return
                 # Both attempts failed — show both errors for diagnostics
                 print(
@@ -233,3 +235,11 @@ class CustomBuildHook(BuildHookInterface):
         build_data.setdefault("force_include", {})
         dist_path = f"jamma/lmm/{out_name}"
         build_data["force_include"][str(out_path)] = dist_path
+
+        # Tell hatchling this is a platform wheel (not pure-Python).
+        # Without this, the wheel gets tagged py3-none-any even though it
+        # contains a compiled .so, and cibuildwheel rejects it.
+        # infer_tag makes hatchling use the current platform/ABI for the
+        # wheel filename tag (e.g. cp311-cp311-macosx_14_0_arm64).
+        build_data["pure_python"] = False
+        build_data["infer_tag"] = True

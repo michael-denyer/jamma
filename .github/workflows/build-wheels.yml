@@ -22,7 +22,7 @@ jobs:
         run: brew install libomp
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.22.0
+        uses: pypa/cibuildwheel@v3.3.1
         env:
           # Build for CPython 3.11-3.13 only
           CIBW_BUILD: "cp311-* cp312-* cp313-*"
@@ -32,8 +32,8 @@ jobs:
           CIBW_ARCHS_MACOS: "arm64"
           # Linux: x86_64 only
           CIBW_ARCHS_LINUX: "x86_64"
-          # Install libgomp in manylinux container (yum-based images)
-          CIBW_BEFORE_BUILD_LINUX: "yum install -y libgomp"
+          # Install libgomp in manylinux_2_28 container (AlmaLinux 8, dnf)
+          CIBW_BEFORE_BUILD_LINUX: "dnf install -y libgomp"
           # Test import + numerical sanity (catches ABI mismatches that silently corrupt results)
           CIBW_TEST_COMMAND: >-
             python -c "

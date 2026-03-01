@@ -326,6 +326,46 @@ The streaming approach produces mathematically identical LOCO kinship matrices w
 
 ---
 
+## 10. LOCO with External Kinship
+
+### GEMMA
+
+GEMMA's `-loco` flag does **not** apply LOCO adjustment to an externally provided
+kinship matrix (`-k`). When both `-loco` and `-k` are specified, GEMMA uses the
+full kinship matrix unchanged for all chromosomes — the `-loco` flag is silently
+ignored for the kinship component. This means users who pre-compute kinship
+externally and then run `gemma -lmm 1 -loco -k K.txt` get standard (non-LOCO)
+association results despite requesting LOCO mode.
+
+### JAMMA
+
+JAMMA makes `-loco` and `-k` mutually exclusive. LOCO mode always computes
+kinship internally via streaming subtraction, ensuring correct per-chromosome
+LOCO kinship. There is no silent fallback to non-LOCO behavior.
+
+### Divergence Impact
+
+| Scenario             | GEMMA                                     | JAMMA                            |
+|----------------------|-------------------------------------------|----------------------------------|
+| `-loco` without `-k` | Computes LOCO kinship internally          | Computes LOCO kinship internally |
+| `-loco` with `-k`    | Silently uses full K (no LOCO adjustment) | Rejects with clear error         |
+
+### Rationale
+
+Using the full kinship matrix in LOCO mode defeats the purpose of LOCO analysis
+(eliminating proximal contamination). Making this an error prevents users from
+unknowingly running non-LOCO analysis.
+
+### Validation Approach
+
+JAMMA's LOCO integration tests use a two-step validation: (1) JAMMA computes
+per-chromosome LOCO kinship matrices, (2) GEMMA runs standard LMM with each
+LOCO kinship as external `-k` input. This validates that JAMMA's LOCO kinship
+formula produces results numerically equivalent to GEMMA's LMM expectations.
+See `tests/test_gemma_loco_integration.py`.
+
+---
+
 ## Summary Table
 
 | Feature | GEMMA Behavior | JAMMA Behavior | Impact |
@@ -340,6 +380,7 @@ The streaming approach produces mathematically identical LOCO kinship matrices w
 | Eigendecomp library | GSL | numpy LAPACK | Large-sample support (ILP64) |
 | HWE test | Wigginton exact | Chi-squared (df=1) | Identical for large n |
 | LOCO kinship | Materialized all | Streaming subtraction | Same math, lower memory |
+| LOCO + external kinship | Silently uses full K | Rejects (mutual exclusion) | Correctness guard |
 
 ---
 

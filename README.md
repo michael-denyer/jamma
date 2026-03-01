@@ -20,7 +20,7 @@
 - **Fast**: Up to 4x faster than GEMMA 0.98.5 on LMM association (JAX backend), 2.6x faster end-to-end
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
 - **Cross-platform**: Runs on Linux, macOS, and Windows — NumPy backend works everywhere, JAX backend adds GPU acceleration
-- **Pure Python**: NumPy + optional JAX stack, no C++ compilation required
+- **Pure Python + optional C extension**: NumPy + optional JAX stack; C extension with OpenMP provides 2-7x LMM speedup over JAX on CPU
 - **Large-scale ready**: Optional [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) wheels (numpy 2.4.2) for >46k sample eigendecomposition
 
 ## Installation
@@ -259,6 +259,7 @@ Kinship is BLAS-bound (both use OpenBLAS/Accelerate matmul) so times are similar
 - [x] Pre-flight memory checks (fail-fast before OOM)
 - [x] RSS memory logging at workflow boundaries
 - [x] Incremental result writing
+- [x] Optional C extension with OpenMP for NumPy LMM acceleration (auto-fallback to pure Python)
 
 ### Planned
 

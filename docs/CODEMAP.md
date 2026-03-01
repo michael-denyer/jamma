@@ -50,6 +50,7 @@ flowchart TB
         LIKENP["Batch Likelihood [4Na]"]
         RUNNERNP["NumPy Runner [4Nb]"]
         COMPUTENP["Chunk Compute [4Nc]"]
+        CACCEL["C Extension [4Nd]"]
     end
 
     subgraph L5["Infrastructure [5]"]
@@ -123,6 +124,7 @@ flowchart TB
     RUNNERNP --> LIKENP
     RUNNERNP --> PREPCOM
     RUNNERNP --> RIO
+    RUNNERNP --> CACCEL
     COMPUTENP --> LIKENP
     LIKENP --> SPECIAL
 
@@ -179,6 +181,7 @@ Reads PLINK binary genotypes, covariates, and kinship matrices. Writes GEMMA-com
 | 2f | `read_eigen_files()` | Load eigenvalue/eigenvector files | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
 | 2f | `write_eigen_files()` | Write eigendecomposition to disk | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
 | 2g | `write_matrix_parallel()` | Parallel matrix writer using file-backed memmap | [io/matrix_writer.py:91](../src/jamma/io/matrix_writer.py#L91) |
+| 2h | `read_matrix_parallel()` | Multi-worker matrix text reader with chunk scanning | [io/matrix_reader.py](../src/jamma/io/matrix_reader.py) |
 
 ---
 
@@ -246,7 +249,7 @@ Batch SNP processing with JIT compilation and vmap vectorization. Requires JAX (
 
 ### [4N] NumPy Backend
 
-Pure-NumPy LMM implementation with zero JAX dependency. Works on all platforms (Intel Mac, Windows, Linux). Uses `np.vectorize` for batch operations and stdlib-only special functions for p-value computation.
+Pure-NumPy LMM implementation with zero JAX dependency. Works on all platforms (Intel Mac, Windows, Linux). Uses `np.vectorize` for batch operations and stdlib-only special functions for p-value computation. Optional C extension (`_lmm_accel.c`) provides OpenMP-parallelized Wald test with workspace API for n_cvt=1, with automatic fallback to pure Python.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
@@ -255,6 +258,8 @@ Pure-NumPy LMM implementation with zero JAX dependency. Works on all platforms (
 | 4Na | `batch_calc_lrt_stats_numpy()` | Vectorized LRT: MLE optimize → p_lrt | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 4Nb | `run_lmm_association_numpy()` | In-memory batch runner (full genotype load) | [runner_numpy.py](../src/jamma/lmm/runner_numpy.py) |
 | 4Nc | `compute_lmm_chunk_numpy()` | Per-chunk dispatch for NumPy backend | [compute_numpy.py](../src/jamma/lmm/compute_numpy.py) |
+| 4Nd | `compute_wald_stats_workspace()` | C extension: OpenMP Wald test with workspace API | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
+| 4Nd | `_compile_accel.py` | Post-install C extension compilation | [_compile_accel.py](../src/jamma/lmm/_compile_accel.py) |
 
 ---
 
@@ -457,6 +462,7 @@ Priority order: `JAMMA_BACKEND` env var → `--backend` CLI flag → auto-detect
 | LRT (`-lmm 2`) | Yes | Yes |
 | Score test (`-lmm 3`) | Yes | Yes |
 | All tests (`-lmm 4`) | Yes | Yes |
+| C extension acceleration | N/A | Yes (n_cvt=1, auto-fallback) |
 | LOCO (`-loco`) | Yes | No |
 | HWE filtering (`-hwe`) | Yes | No |
 | Disk streaming | Yes | No (full load) |

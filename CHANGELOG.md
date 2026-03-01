@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **C extension for NumPy LMM runner** (`_lmm_accel.c`) — OpenMP-parallelized Wald test
+  replaces Python loop over SNPs. Includes workspace API (`create_workspace` /
+  `compute_wald_stats_workspace`) that pre-allocates all per-thread buffers once per chunk,
+  and SoA-native Uab generation with invariant precompute to eliminate redundant work
+- **Split-Uab C extension** — SoA (struct-of-arrays) layout for split Uab computation
+  with internal Iab precompute, avoiding Python-side Iab construction entirely
+- **Parallel matrix text I/O** (`matrix_reader.py`) — multi-worker `.eigenD.txt` /
+  `.eigenU.txt` reader with chunk-boundary scanning and `np.loadtxt` per chunk
+- **Eigen I/O `.npy` sidecar cache** — binary cache with mtime-based invalidation for
+  eigenvalue/eigenvector files (3s warm read vs 4min cold text parse at 50k samples)
+- **CI wheel build workflow** (`build-wheels.yml`) — cibuildwheel for manylinux x86_64
+  and macOS arm64 wheels with OpenMP support
+- Static OpenMP schedule for deterministic thread assignment across chunks
+
+### Changed
+
+- NumPy runner auto-detects C extension availability and dispatches to accelerated path
+  when `n_cvt=1`, falling back to pure Python otherwise
+- Memory estimator (`estimate_streaming_memory`) accounts for C extension workspace
+  allocation when the accelerated path is active
+- BLAS thread coordination: rotation threads and compute threads are balanced to prevent
+  oversubscription during OpenMP regions
+- Publish workflow includes wheel artifacts from build-wheels CI
+
 ## [2.8.3] - 2026-02-27
 
 ### Changed

@@ -71,6 +71,11 @@ def _find_numpy_lapack_flags() -> list[str]:
 def _detect_ilp64() -> bool:
     """Check if numpy is built with ILP64 BLAS (64-bit integers).
 
+    Detects ILP64 from two sources:
+    1. np.show_config() BLAS name containing "ilp64" (custom MKL builds)
+    2. Bundled library name containing "openblas64" (PyPI numpy ships
+       libscipy_openblas64_ which uses 64-bit integers with _64_ suffixed symbols)
+
     Note: Keep in sync with hatch_build.py:CustomBuildHook._detect_ilp64().
 
     Returns:
@@ -91,6 +96,44 @@ def _detect_ilp64() -> bool:
             "pass -DJAMMA_ILP64 manually.",
             flush=True,
         )
+
+    # Check bundled library name: PyPI numpy uses libscipy_openblas64_ which
+    # has ILP64 interface (all LAPACK symbols suffixed with _64_).
+    if _bundled_lapack_is_ilp64():
+        return True
+
+    return False
+
+
+def _bundled_lapack_is_ilp64() -> bool:
+    """Check if numpy's bundled LAPACK library uses ILP64 (64-bit integer) symbols.
+
+    PyPI numpy bundles libscipy_openblas64_ which uses _64_ suffixed symbols
+    (e.g. dsyevr_64_ instead of dsyevr_). The "64" in the library name indicates
+    64-bit integer interface.
+
+    Returns:
+        True if the bundled library name contains "openblas64", False otherwise.
+    """
+    if platform.system() != "Linux":
+        return False
+
+    try:
+        import numpy as np
+    except ImportError:
+        return False
+
+    np_dir = Path(np.__file__).parent
+    candidates = [
+        np_dir / ".libs",
+        np_dir.parent / "numpy.libs",
+    ]
+    for d in candidates:
+        if not d.is_dir():
+            continue
+        for lib in d.iterdir():
+            if "openblas64" in lib.name:
+                return True
     return False
 
 

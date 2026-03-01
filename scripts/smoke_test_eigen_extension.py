@@ -3,11 +3,27 @@
 Verifies:
 1. The compiled C extension imports successfully (ABI match)
 2. eigh_dsyevr produces correct eigenvalues on a known matrix
+
+On Linux, _eigen_accel is not included in pre-built wheels because it links
+against numpy's bundled LAPACK (auditwheel can't bundle it portably). Users
+compile post-install via: python -m jamma.lmm._compile_eigen
 """
+
+import platform
+import sys
 
 import numpy as np
 
-from jamma.lmm._eigen_accel import ABI_VERSION, eigh_dsyevr
+try:
+    from jamma.lmm._eigen_accel import ABI_VERSION, eigh_dsyevr
+except ImportError:
+    if platform.system() == "Linux":
+        print(
+            "Eigen extension not in wheel (expected on Linux) — "
+            "compile post-install: python -m jamma.lmm._compile_eigen"
+        )
+        sys.exit(0)
+    raise
 
 print(f"_eigen_accel OK, ABI={ABI_VERSION}")
 

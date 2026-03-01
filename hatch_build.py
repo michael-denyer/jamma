@@ -169,6 +169,11 @@ class CustomBuildHook(BuildHookInterface):
     def _detect_ilp64(self) -> bool:
         """Check if numpy is built with ILP64 BLAS (64-bit integers).
 
+        Detects ILP64 from two sources:
+        1. np.show_config() BLAS name containing "ilp64" (custom MKL builds)
+        2. Bundled library name containing "openblas64" (PyPI numpy ships
+           libscipy_openblas64_ which uses 64-bit integers with _64_ symbols)
+
         Note: Keep in sync with _compile_eigen.py:_detect_ilp64().
 
         Returns:
@@ -189,6 +194,42 @@ class CustomBuildHook(BuildHookInterface):
                 "set -DJAMMA_ILP64 manually.",
                 file=sys.stderr,
             )
+
+        # Check bundled library name: PyPI numpy uses libscipy_openblas64_
+        # which has ILP64 interface (all LAPACK symbols suffixed with _64_).
+        if self._bundled_lapack_is_ilp64():
+            return True
+
+        return False
+
+    def _bundled_lapack_is_ilp64(self) -> bool:
+        """Check if numpy's bundled LAPACK library uses ILP64 symbols.
+
+        PyPI numpy bundles libscipy_openblas64_ which uses _64_ suffixed
+        symbols (e.g. dsyevr_64_ instead of dsyevr_).
+
+        Returns:
+            True if the bundled library name contains "openblas64".
+        """
+        if platform.system() != "Linux":
+            return False
+
+        try:
+            import numpy as np
+        except ImportError:
+            return False
+
+        np_dir = Path(np.__file__).parent
+        candidates = [
+            np_dir / ".libs",
+            np_dir.parent / "numpy.libs",
+        ]
+        for d in candidates:
+            if not d.is_dir():
+                continue
+            for lib in d.iterdir():
+                if "openblas64" in lib.name:
+                    return True
         return False
 
     def _compile_c_extension(self, build_data):
@@ -342,12 +383,31 @@ class CustomBuildHook(BuildHookInterface):
         ILP64 detection: if numpy is built with ILP64 MKL, the extension is
         compiled with -DJAMMA_ILP64 to use the dsyevr_64_ symbol.
 
+        On Linux, this extension is skipped during wheel builds because it links
+        against numpy's bundled OpenBLAS, which auditwheel cannot portably
+        bundle (the library name includes a version-specific hash). Users
+        compile post-install via ``python -m jamma.lmm._compile_eigen``.
+
+        On macOS, -undefined dynamic_lookup defers LAPACK resolution to runtime
+        (Accelerate provides dsyevr_ natively), so wheel inclusion works.
+
         On any compilation failure, logs a warning and returns without raising.
 
         Args:
             build_data: Hatchling build data dict. Updated with force_include
                 entry mapping the compiled .so into the wheel.
         """
+        # Skip on Linux wheel builds — LAPACK symbols come from numpy's bundled
+        # OpenBLAS which auditwheel can't bundle portably. Users compile
+        # post-install where _compile_eigen links against their numpy's LAPACK.
+        if platform.system() == "Linux":
+            print(
+                "Skipping _eigen_accel in wheel build (Linux) — LAPACK symbols "
+                "are resolved post-install via: python -m jamma.lmm._compile_eigen",
+                file=sys.stderr,
+            )
+            return
+
         preflight = self._preflight_c_build()
         if preflight is None:
             return
@@ -376,15 +436,6 @@ class CustomBuildHook(BuildHookInterface):
                 file=sys.stderr,
             )
 
-        # LAPACK linkage: on Linux, numpy bundles OpenBLAS in numpy.libs/.
-        # Without explicit linkage, dsyevr_ is an undefined symbol at import.
-        lapack_flags = self._find_numpy_lapack_flags()
-        if lapack_flags:
-            print(
-                f"LAPACK link flags: {' '.join(lapack_flags)}",
-                file=sys.stderr,
-            )
-
         cmd = [
             cc_cmd,
             *cc_extra,
@@ -402,7 +453,6 @@ class CustomBuildHook(BuildHookInterface):
             "-o",
             str(out_path),
             "-lm",
-            *lapack_flags,
             *ldflags,
         ]
 

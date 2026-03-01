@@ -21,8 +21,8 @@ dist/
 src/jamma/_build_meta.py
 
 # Compiled C extensions (built by hatch_build.py, not committed)
-src/jamma/lmm/_lmm_accel*.so
-src/jamma/lmm/_lmm_accel*.dylib
+*.so
+*.dylib
 
 # Virtual environments
 .venv/

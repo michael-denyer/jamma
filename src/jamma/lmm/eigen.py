@@ -1,9 +1,10 @@
 """Eigendecomposition of kinship matrix.
 
 Provides GEMMA-compatible eigendecomposition with small eigenvalue thresholding.
-Uses numpy's internal ``eigh_lo`` gufunc (backed by LAPACK DSYEVD) with
+Preferred path: DSYEVR C extension (_eigen_accel) for O(N) workspace (MRRR algorithm).
+Fallback: numpy's internal ``eigh_lo`` gufunc (backed by LAPACK DSYEVD) with
 in-place buffer reuse (eigenvectors overwrite K) to save one n²×8 allocation.
-Falls back to ``numpy.linalg.eigh`` if the internal gufunc is unavailable.
+Final fallback: ``numpy.linalg.eigh`` if the internal gufunc is unavailable.
 
 Thread control is handled by jamma.core.threading via threadpool_limits.
 
@@ -12,6 +13,7 @@ overflows at ~46k x 46k matrices. With ILP64 numpy (MKL), matrices up to
 200k+ are supported.
 """
 
+import sys
 import time
 import warnings
 
@@ -41,6 +43,71 @@ except (ImportError, AttributeError):
 # Whether in-place eigendecomp is available. Used by memory estimators to
 # decide whether to include a separate eigenvector allocation in peak estimates.
 INPLACE_EIGEN_AVAILABLE: bool = _eigh_lo is not None
+
+_EXPECTED_EIGEN_ABI = 1  # Must match ABI_VERSION in _eigen_accel.c
+
+
+def _try_import_dsyevr() -> tuple[bool, object]:
+    """Attempt to import the DSYEVR C extension and validate ABI."""
+    try:
+        from jamma.lmm._eigen_accel import ABI_VERSION as abi
+        from jamma.lmm._eigen_accel import eigh_dsyevr
+    except ImportError:
+        return False, None
+    except AttributeError as e:
+        logger.warning(
+            f"_eigen_accel loaded but missing attribute: {e}. "
+            "Stale .so may need recompilation."
+        )
+        return False, None
+
+    if abi != _EXPECTED_EIGEN_ABI:
+        return False, None
+
+    return True, eigh_dsyevr
+
+
+def _auto_recompile_eigen() -> bool:
+    """Auto-recompile _eigen_accel and reimport."""
+    try:
+        from jamma.lmm._compile_eigen import compile_extension
+    except ImportError:
+        return False
+
+    logger.info(
+        "_eigen_accel needs recompilation (ABI mismatch or missing). Compiling..."
+    )
+
+    if not compile_extension(verbose=False):
+        logger.warning(
+            "Auto-recompilation of _eigen_accel failed. "
+            "Falling back to DSYEVD. "
+            "To diagnose: python -m jamma.lmm._compile_eigen"
+        )
+        return False
+
+    sys.modules.pop("jamma.lmm._eigen_accel", None)
+    logger.info("_eigen_accel recompiled successfully.")
+    return True
+
+
+# First attempt
+_DSYEVR_AVAILABLE, _eigh_dsyevr_func = _try_import_dsyevr()
+
+if not _DSYEVR_AVAILABLE:
+    if _auto_recompile_eigen():
+        _DSYEVR_AVAILABLE, _eigh_dsyevr_func = _try_import_dsyevr()
+
+    if not _DSYEVR_AVAILABLE:
+        logger.info(
+            "DSYEVR C extension unavailable — using DSYEVD (numpy.linalg.eigh). "
+            "DSYEVR saves ~232GB workspace at 125k samples. "
+            "To compile: python -m jamma.lmm._compile_eigen"
+        )
+
+# Whether DSYEVR path is available. Used by memory estimators to determine
+# workspace size (O(N) vs O(N^2)).
+# Imported by core/memory.py via lazy import to avoid circularity.
 
 # For matrices >= this size, use sampled symmetry check instead of full np.allclose.
 # Full check allocates an n*n temporary; at 100k samples that is ~80GB.
@@ -75,6 +142,21 @@ def _check_symmetry_sampled(K: np.ndarray, n: int, *, atol: float = 1e-10) -> No
             "np.linalg.eigh will use lower triangle only.",
             max_asym,
         )
+
+
+def _eigh_dsyevr(K: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Eigendecompose K via DSYEVR (MRRR algorithm, O(N) workspace).
+
+    Requires _eigen_accel C extension. Input K is destroyed on exit.
+
+    Args:
+        K: Symmetric float64 matrix (n, n). Overwritten on exit.
+
+    Returns:
+        Tuple of (eigenvalues, eigenvectors) with eigenvalues ascending.
+        Eigenvectors may be F-order (LAPACK native).
+    """
+    return _eigh_dsyevr_func(K)
 
 
 def _eigh_inplace(K: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -230,13 +312,20 @@ def eigendecompose_kinship(
 
     from jamma.core.estimates import estimate_eigendecomp_time
 
-    logger.info(f"Eigendecomp: numpy.linalg.eigh, threads={n_threads}")
+    if _DSYEVR_AVAILABLE:
+        logger.info(f"Eigendecomp: DSYEVR via _eigen_accel, threads={n_threads}")
+    else:
+        logger.info(f"Eigendecomp: DSYEVD via numpy.linalg.eigh, threads={n_threads}")
     logger.info(f"  Estimated time: {estimate_eigendecomp_time(n_samples, n_threads)}")
 
     start_time = time.perf_counter()
     try:
         with blas_threads(n_threads):
-            eigenvalues, eigenvectors = _eigh_inplace(K)
+            if _DSYEVR_AVAILABLE:
+                logger.info("Eigendecomp: DSYEVR (MRRR, O(N) workspace)")
+                eigenvalues, eigenvectors = _eigh_dsyevr(K)
+            else:
+                eigenvalues, eigenvectors = _eigh_inplace(K)
     except MemoryError:
         logger.error(
             f"MemoryError during eigendecomposition of {n_samples:,}x{n_samples:,} "

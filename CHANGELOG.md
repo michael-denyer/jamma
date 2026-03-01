@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.1] - 2026-03-01
+
+### Fixed
+
+- Platform-tagged wheels: set `pure_python=False` and `infer_tag=True` in hatch build
+  hook so cibuildwheel produces platform-specific wheels (e.g. `cp311-cp311-manylinux_2_28_x86_64`)
+  instead of `py3-none-any`
+- Upgrade cibuildwheel v2.22.0 to v3.3.1 (fixes stale manylinux2014 image reference)
+- Switch `CIBW_BEFORE_BUILD_LINUX` from `yum` to `dnf` (manylinux_2_28 uses AlmaLinux 8)
+- macOS wheels compile C extension single-threaded (no OpenMP) to avoid delocate
+  `MACOSX_DEPLOYMENT_TARGET` conflict with Homebrew libomp
+- Replace inline `python -c` test with standalone smoke test script to avoid shell
+  escaping and indentation issues in cibuildwheel containers
+
 ## [2.9.0] - 2026-03-01
 
 ### Added

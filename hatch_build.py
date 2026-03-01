@@ -124,114 +124,6 @@ class CustomBuildHook(BuildHookInterface):
 
         return (cc_cmd, cc_extra, python_inc, numpy_inc, ldflags)
 
-    def _find_numpy_lapack_flags(self) -> list[str]:
-        """Return compiler flags to link against numpy's bundled LAPACK (Linux).
-
-        On Linux, pip-installed numpy bundles OpenBLAS in numpy.libs/ or
-        numpy/_core/.libs/. Without explicit linkage, dsyevr_ is undefined.
-        macOS uses -undefined dynamic_lookup; Windows is unsupported.
-
-        Note: Keep in sync with _compile_eigen.py:_find_numpy_lapack_flags().
-
-        Returns:
-            List of compiler flags, empty if not needed or not found.
-        """
-        if platform.system() != "Linux":
-            return []
-
-        try:
-            import numpy as np
-        except ImportError:
-            return []
-
-        np_dir = Path(np.__file__).parent
-        candidates = [
-            np_dir / ".libs",
-            np_dir.parent / "numpy.libs",
-        ]
-        for d in candidates:
-            if not d.is_dir():
-                continue
-            for pat in ["libscipy_openblas*.so", "libopenblas*.so"]:
-                matches = sorted(d.glob(pat))
-                if matches:
-                    lib_file = matches[0].name
-                    lib_name = lib_file.split(".so")[0]
-                    if lib_name.startswith("lib"):
-                        lib_name = lib_name[3:]
-                    return [
-                        f"-L{d}",
-                        f"-l{lib_name}",
-                        f"-Wl,-rpath,{d}",
-                    ]
-        return []
-
-    def _detect_ilp64(self) -> bool:
-        """Check if numpy is built with ILP64 BLAS (64-bit integers).
-
-        Detects ILP64 from two sources:
-        1. np.show_config() BLAS name containing "ilp64" (custom MKL builds)
-        2. Bundled library name containing "openblas64" (PyPI numpy ships
-           libscipy_openblas64_ which uses 64-bit integers with _64_ symbols)
-
-        Note: Keep in sync with _compile_eigen.py:_detect_ilp64().
-
-        Returns:
-            True if numpy uses ILP64 BLAS, False otherwise.
-        """
-        try:
-            import numpy as np
-
-            config = np.show_config(mode="dicts")
-            blas_info = config.get("Build Dependencies", {}).get("blas", {})
-            name = blas_info.get("name", "")
-            if "ilp64" in name.lower():
-                return True
-        except (TypeError, AttributeError) as e:
-            print(
-                f"WARNING: ILP64 detection failed ({type(e).__name__}: {e}). "
-                "Defaulting to LP64 (dsyevr_). If numpy is ILP64, "
-                "set -DJAMMA_ILP64 manually.",
-                file=sys.stderr,
-            )
-
-        # Check bundled library name: PyPI numpy uses libscipy_openblas64_
-        # which has ILP64 interface (all LAPACK symbols suffixed with _64_).
-        if self._bundled_lapack_is_ilp64():
-            return True
-
-        return False
-
-    def _bundled_lapack_is_ilp64(self) -> bool:
-        """Check if numpy's bundled LAPACK library uses ILP64 symbols.
-
-        PyPI numpy bundles libscipy_openblas64_ which uses _64_ suffixed
-        symbols (e.g. dsyevr_64_ instead of dsyevr_).
-
-        Returns:
-            True if the bundled library name contains "openblas64".
-        """
-        if platform.system() != "Linux":
-            return False
-
-        try:
-            import numpy as np
-        except ImportError:
-            return False
-
-        np_dir = Path(np.__file__).parent
-        candidates = [
-            np_dir / ".libs",
-            np_dir.parent / "numpy.libs",
-        ]
-        for d in candidates:
-            if not d.is_dir():
-                continue
-            for lib in d.iterdir():
-                if "openblas64" in lib.name:
-                    return True
-        return False
-
     def _compile_c_extension(self, build_data):
         """Compile _lmm_accel.c -> _lmm_accel{EXT_SUFFIX} if a C compiler is available.
 
@@ -380,16 +272,10 @@ class CustomBuildHook(BuildHookInterface):
         No OpenMP flags — DSYEVR is a single LAPACK call; MKL/OpenBLAS handles
         threading internally.
 
-        ILP64 detection: if numpy is built with ILP64 MKL, the extension is
-        compiled with -DJAMMA_ILP64 to use the dsyevr_64_ symbol.
-
-        On Linux, this extension is skipped during wheel builds because it links
-        against numpy's bundled OpenBLAS, which auditwheel cannot portably
-        bundle (the library name includes a version-specific hash). Users
-        compile post-install via ``python -m jamma.lmm._compile_eigen``.
-
-        On macOS, -undefined dynamic_lookup defers LAPACK resolution to runtime
-        (Accelerate provides dsyevr_ natively), so wheel inclusion works.
+        No LAPACK link flags — the extension discovers LAPACK at runtime via
+        dlopen (resolves dsyevr_64_ or dsyevr_ from numpy's bundled BLAS).
+        This makes the compiled .so portable across numpy builds and eliminates
+        auditwheel issues on Linux.
 
         On any compilation failure, logs a warning and returns without raising.
 
@@ -397,17 +283,6 @@ class CustomBuildHook(BuildHookInterface):
             build_data: Hatchling build data dict. Updated with force_include
                 entry mapping the compiled .so into the wheel.
         """
-        # Skip on Linux wheel builds — LAPACK symbols come from numpy's bundled
-        # OpenBLAS which auditwheel can't bundle portably. Users compile
-        # post-install where _compile_eigen links against their numpy's LAPACK.
-        if platform.system() == "Linux":
-            print(
-                "Skipping _eigen_accel in wheel build (Linux) — LAPACK symbols "
-                "are resolved post-install via: python -m jamma.lmm._compile_eigen",
-                file=sys.stderr,
-            )
-            return
-
         preflight = self._preflight_c_build()
         if preflight is None:
             return
@@ -427,14 +302,8 @@ class CustomBuildHook(BuildHookInterface):
         out_name = f"_eigen_accel{ext_suffix}"
         out_path = Path(self.root) / "src" / "jamma" / "lmm" / out_name
 
-        # ILP64 detection — determines DSYEVR symbol (dsyevr_64_ vs dsyevr_)
-        ilp64_flags = []
-        if self._detect_ilp64():
-            ilp64_flags = ["-DJAMMA_ILP64"]
-            print(
-                "ILP64 numpy detected — compiling _eigen_accel with -DJAMMA_ILP64",
-                file=sys.stderr,
-            )
+        # dlopen needs -ldl on Linux (macOS has dlopen in libSystem)
+        dl_flags = ["-ldl"] if platform.system() == "Linux" else []
 
         cmd = [
             cc_cmd,
@@ -448,11 +317,11 @@ class CustomBuildHook(BuildHookInterface):
             "-std=c99",
             f"-I{python_inc}",
             f"-I{numpy_inc}",
-            *ilp64_flags,
             str(src),
             "-o",
             str(out_path),
             "-lm",
+            *dl_flags,
             *ldflags,
         ]
 

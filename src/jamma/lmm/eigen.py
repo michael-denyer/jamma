@@ -45,7 +45,7 @@ except (ImportError, AttributeError):
 # decide whether to include a separate eigenvector allocation in peak estimates.
 INPLACE_EIGEN_AVAILABLE: bool = _eigh_lo is not None
 
-_EXPECTED_EIGEN_ABI = 1  # Must match ABI_VERSION in _eigen_accel.c
+_EXPECTED_EIGEN_ABI = 2  # Must match ABI_VERSION in _eigen_accel.c
 
 
 def _try_import_dsyevr() -> tuple[bool, object | None]:

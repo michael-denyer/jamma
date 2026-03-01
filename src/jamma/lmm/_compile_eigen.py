@@ -13,8 +13,8 @@ Requires: gcc (or cc), Python development headers, numpy >= 2.0.
 No OpenMP needed — DSYEVR is a single LAPACK call; MKL/OpenBLAS handles
 threading internally.
 
-ILP64 detection: if numpy is built with ILP64 MKL, the extension is compiled
-with -DJAMMA_ILP64 to use the dsyevr_64_ symbol instead of dsyevr_.
+No LAPACK link flags needed — the extension discovers LAPACK at runtime via
+dlopen (resolves dsyevr_64_ or dsyevr_ from numpy's bundled BLAS/LAPACK).
 """
 
 from __future__ import annotations
@@ -25,116 +25,6 @@ import subprocess
 import sys
 import sysconfig
 from pathlib import Path
-
-
-def _find_numpy_lapack_flags() -> list[str]:
-    """Return compiler flags to link against numpy's bundled LAPACK (Linux).
-
-    On Linux, pip-installed numpy bundles OpenBLAS in numpy.libs/ or
-    numpy/_core/.libs/. Extensions calling LAPACK symbols need to link
-    against this library or the symbols won't resolve at import time.
-
-    Note: Keep in sync with hatch_build.py:_find_numpy_lapack_flags().
-
-    Returns:
-        List of compiler flags, empty if not needed (macOS/Windows) or
-        if numpy's LAPACK library cannot be found.
-    """
-    if platform.system() != "Linux":
-        return []
-
-    import numpy as np
-
-    np_dir = Path(np.__file__).parent
-    candidates = [
-        np_dir / ".libs",
-        np_dir.parent / "numpy.libs",
-    ]
-    for d in candidates:
-        if not d.is_dir():
-            continue
-        for pat in ["libscipy_openblas*.so", "libopenblas*.so"]:
-            matches = sorted(d.glob(pat))
-            if matches:
-                lib_file = matches[0].name
-                lib_name = lib_file.split(".so")[0]
-                if lib_name.startswith("lib"):
-                    lib_name = lib_name[3:]
-                return [
-                    f"-L{d}",
-                    f"-l{lib_name}",
-                    f"-Wl,-rpath,{d}",
-                ]
-    return []
-
-
-def _detect_ilp64() -> bool:
-    """Check if numpy is built with ILP64 BLAS (64-bit integers).
-
-    Detects ILP64 from two sources:
-    1. np.show_config() BLAS name containing "ilp64" (custom MKL builds)
-    2. Bundled library name containing "openblas64" (PyPI numpy ships
-       libscipy_openblas64_ which uses 64-bit integers with _64_ suffixed symbols)
-
-    Note: Keep in sync with hatch_build.py:CustomBuildHook._detect_ilp64().
-
-    Returns:
-        True if numpy uses ILP64 BLAS, False otherwise.
-    """
-    try:
-        import numpy as np
-
-        config = np.show_config(mode="dicts")
-        blas_info = config.get("Build Dependencies", {}).get("blas", {})
-        name = blas_info.get("name", "")
-        if "ilp64" in name.lower():
-            return True
-    except (TypeError, AttributeError) as e:
-        print(
-            f"WARNING: ILP64 detection failed ({type(e).__name__}: {e}). "
-            "Defaulting to LP64 (dsyevr_). If numpy is ILP64, "
-            "pass -DJAMMA_ILP64 manually.",
-            flush=True,
-        )
-
-    # Check bundled library name: PyPI numpy uses libscipy_openblas64_ which
-    # has ILP64 interface (all LAPACK symbols suffixed with _64_).
-    if _bundled_lapack_is_ilp64():
-        return True
-
-    return False
-
-
-def _bundled_lapack_is_ilp64() -> bool:
-    """Check if numpy's bundled LAPACK library uses ILP64 (64-bit integer) symbols.
-
-    PyPI numpy bundles libscipy_openblas64_ which uses _64_ suffixed symbols
-    (e.g. dsyevr_64_ instead of dsyevr_). The "64" in the library name indicates
-    64-bit integer interface.
-
-    Returns:
-        True if the bundled library name contains "openblas64", False otherwise.
-    """
-    if platform.system() != "Linux":
-        return False
-
-    try:
-        import numpy as np
-    except ImportError:
-        return False
-
-    np_dir = Path(np.__file__).parent
-    candidates = [
-        np_dir / ".libs",
-        np_dir.parent / "numpy.libs",
-    ]
-    for d in candidates:
-        if not d.is_dir():
-            continue
-        for lib in d.iterdir():
-            if "openblas64" in lib.name:
-                return True
-    return False
 
 
 def compile_extension(verbose: bool = True) -> bool:
@@ -208,32 +98,17 @@ def compile_extension(verbose: bool = True) -> bool:
         _print("ERROR: Windows is not supported for C extension compilation")
         return False
 
-    # ILP64 detection — determines which DSYEVR symbol to use
-    ilp64 = _detect_ilp64()
-    if ilp64:
-        _print("ILP64 numpy detected — compiling with -DJAMMA_ILP64 (dsyevr_64_)")
-    else:
-        _print("LP64 numpy detected — compiling with dsyevr_ (standard symbol)")
-
     # Platform flags
     ldflags: list[str] = []
     if platform.system() == "Darwin":
         ldflags = ["-undefined", "dynamic_lookup"]
 
-    # ILP64 define
-    ilp64_flags: list[str] = []
-    if ilp64:
-        ilp64_flags = ["-DJAMMA_ILP64"]
-
-    # LAPACK linkage: on Linux, numpy bundles OpenBLAS in numpy.libs/.
-    # Without explicit linkage, dsyevr_ is an undefined symbol at import.
-    # macOS uses -undefined dynamic_lookup (Accelerate resolves at runtime).
-    lapack_flags = _find_numpy_lapack_flags()
-    if lapack_flags:
-        _print(f"LAPACK link flags: {' '.join(lapack_flags)}")
+    # dlopen needs -ldl on Linux (macOS has dlopen in libSystem)
+    dl_flags = ["-ldl"] if platform.system() == "Linux" else []
 
     # -march=native is safe here: compiles on the user's own machine.
     # hatch_build.py omits this flag for portable wheel builds.
+    # No LAPACK link flags — DSYEVR is resolved at runtime via dlopen.
     cmd = [
         cc_cmd,
         *cc_extra,
@@ -247,12 +122,11 @@ def compile_extension(verbose: bool = True) -> bool:
         "-std=c99",
         f"-I{python_inc}",
         f"-I{numpy_inc}",
-        *ilp64_flags,
         str(src),
         "-o",
         str(out),
         "-lm",
-        *lapack_flags,
+        *dl_flags,
         *ldflags,
     ]
 

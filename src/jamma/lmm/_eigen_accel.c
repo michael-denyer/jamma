@@ -149,21 +149,46 @@ static int scan_dir_for_lapack(const char *dirpath) {
 
 /* Force numpy to load its BLAS/LAPACK by running a trivial linalg operation.
  * numpy loads BLAS lazily — until a linalg function is called, the BLAS
- * library may not be loaded into the process. */
+ * library may not be loaded into the process.
+ *
+ * Uses C API directly (not PyRun_String) because __builtins__ is unavailable
+ * in the globals dict during module init, making import statements fail. */
 static void force_numpy_blas_load(void) {
-    /* Run: numpy.linalg.eigh(numpy.eye(2)) — minimal operation that
-     * forces numpy to dlopen its BLAS/LAPACK library. */
-    PyObject *result = PyRun_String(
-        "import numpy; numpy.linalg.eigh(numpy.eye(2))",
-        Py_file_input,
-        PyEval_GetGlobals() ? PyEval_GetGlobals() : PyDict_New(),
-        PyDict_New()
-    );
-    if (result) {
-        Py_DECREF(result);
-    } else {
-        PyErr_Clear();  /* Swallow any errors — this is best-effort */
+    PyObject *np = PyImport_ImportModule("numpy");
+    if (!np) { PyErr_Clear(); return; }
+
+    PyObject *linalg = PyObject_GetAttrString(np, "linalg");
+    if (!linalg) { PyErr_Clear(); Py_DECREF(np); return; }
+
+    PyObject *eigh = PyObject_GetAttrString(linalg, "eigh");
+    PyObject *eye = PyObject_GetAttrString(np, "eye");
+    if (!eigh || !eye) {
+        PyErr_Clear();
+        Py_XDECREF(eigh); Py_XDECREF(eye);
+        Py_DECREF(linalg); Py_DECREF(np);
+        return;
     }
+
+    /* numpy.eye(2) */
+    PyObject *two = PyLong_FromLong(2);
+    PyObject *eye_result = PyObject_CallFunctionObjArgs(eye, two, NULL);
+    Py_DECREF(two);
+
+    if (eye_result) {
+        /* numpy.linalg.eigh(eye(2)) — forces BLAS load */
+        PyObject *eigh_result = PyObject_CallFunctionObjArgs(eigh, eye_result, NULL);
+        if (eigh_result) {
+            Py_DECREF(eigh_result);
+        } else {
+            PyErr_Clear();
+        }
+        Py_DECREF(eye_result);
+    } else {
+        PyErr_Clear();
+    }
+
+    Py_DECREF(eigh); Py_DECREF(eye);
+    Py_DECREF(linalg); Py_DECREF(np);
 }
 
 /* Scan /proc/self/maps (Linux) for already-loaded BLAS/LAPACK libraries.
@@ -244,53 +269,79 @@ static int discover_lapack(void) {
     }
 
     /* 4. Fallback: scan numpy's lib directories for BLAS/LAPACK shared libs.
-     * Use Python (pathlib.resolve) to handle symlinks/venvs correctly. */
-    PyObject *locals = PyDict_New();
-    if (!locals) { PyErr_Clear(); return 0; }
+     * Uses C API to resolve numpy.__file__ and build candidate paths.
+     * Avoids PyRun_String (__builtins__ unavailable during module init). */
+    PyObject *np2 = PyImport_ImportModule("numpy");
+    if (!np2) { PyErr_Clear(); return 0; }
 
-    PyObject *code_result = PyRun_String(
-        "import pathlib, numpy\n"
-        "np_dir = pathlib.Path(numpy.__file__).resolve().parent\n"
-        "dirs = [\n"
-        "    str(np_dir / '.libs'),\n"
-        "    str(np_dir / '_core' / '.libs'),\n"
-        "    str(np_dir.parent / 'numpy.libs'),\n"
-        "]\n"
-        "try:\n"
-        "    cfg = numpy.show_config(mode='dicts')\n"
-        "    for section in ['blas', 'lapack']:\n"
-        "        info = cfg.get('Build Dependencies', {}).get(section, {})\n"
-        "        lib_dir = info.get('lib directory', '')\n"
-        "        if lib_dir:\n"
-        "            dirs.append(lib_dir)\n"
-        "except Exception:\n"
-        "    pass\n"
-        "lib_dirs = [d for d in dirs if pathlib.Path(d).is_dir()]\n",
-        Py_file_input,
-        PyDict_New(),  /* globals */
-        locals
-    );
+    PyObject *np_file = PyObject_GetAttrString(np2, "__file__");
+    if (!np_file) { PyErr_Clear(); Py_DECREF(np2); return 0; }
 
-    if (code_result) {
-        Py_DECREF(code_result);
+    /* Get the resolved parent directory of numpy/__init__.py */
+    PyObject *pathlib = PyImport_ImportModule("pathlib");
+    if (!pathlib) { PyErr_Clear(); Py_DECREF(np_file); Py_DECREF(np2); return 0; }
 
-        PyObject *lib_dirs = PyDict_GetItemString(locals, "lib_dirs");
-        if (lib_dirs && PyList_Check(lib_dirs)) {
-            Py_ssize_t n = PyList_Size(lib_dirs);
-            for (Py_ssize_t i = 0; i < n; i++) {
-                PyObject *item = PyList_GetItem(lib_dirs, i);
-                const char *dirpath = PyUnicode_AsUTF8(item);
+    PyObject *Path = PyObject_GetAttrString(pathlib, "Path");
+    if (!Path) { PyErr_Clear(); Py_DECREF(pathlib); Py_DECREF(np_file); Py_DECREF(np2); return 0; }
+
+    PyObject *p = PyObject_CallFunctionObjArgs(Path, np_file, NULL);
+    Py_DECREF(np_file);
+    if (!p) { PyErr_Clear(); Py_DECREF(Path); Py_DECREF(pathlib); Py_DECREF(np2); return 0; }
+
+    /* resolve().parent → np_dir */
+    PyObject *resolved = PyObject_CallMethod(p, "resolve", NULL);
+    Py_DECREF(p);
+    if (!resolved) { PyErr_Clear(); Py_DECREF(Path); Py_DECREF(pathlib); Py_DECREF(np2); return 0; }
+
+    PyObject *np_dir = PyObject_GetAttrString(resolved, "parent");
+    Py_DECREF(resolved);
+    if (!np_dir) { PyErr_Clear(); Py_DECREF(Path); Py_DECREF(pathlib); Py_DECREF(np2); return 0; }
+
+    /* Build candidate directories:
+     *   np_dir / '.libs'
+     *   np_dir / '_core' / '.libs'
+     *   np_dir.parent / 'numpy.libs'  */
+    const char *subpaths[] = { ".libs", "_core/.libs", NULL };
+    for (int si = 0; subpaths[si]; si++) {
+        PyObject *candidate = PyObject_CallMethod(np_dir, "__truediv__", "s", subpaths[si]);
+        if (!candidate) { PyErr_Clear(); continue; }
+        PyObject *cstr = PyObject_Str(candidate);
+        Py_DECREF(candidate);
+        if (!cstr) { PyErr_Clear(); continue; }
+        const char *dirpath = PyUnicode_AsUTF8(cstr);
+        if (dirpath && scan_dir_for_lapack(dirpath)) {
+            Py_DECREF(cstr); Py_DECREF(np_dir); Py_DECREF(Path);
+            Py_DECREF(pathlib); Py_DECREF(np2);
+            return 1;
+        }
+        Py_DECREF(cstr);
+    }
+
+    /* np_dir.parent / 'numpy.libs' */
+    PyObject *np_parent = PyObject_GetAttrString(np_dir, "parent");
+    if (np_parent) {
+        PyObject *candidate = PyObject_CallMethod(np_parent, "__truediv__", "s", "numpy.libs");
+        if (candidate) {
+            PyObject *cstr = PyObject_Str(candidate);
+            Py_DECREF(candidate);
+            if (cstr) {
+                const char *dirpath = PyUnicode_AsUTF8(cstr);
                 if (dirpath && scan_dir_for_lapack(dirpath)) {
-                    Py_DECREF(locals);
+                    Py_DECREF(cstr); Py_DECREF(np_parent); Py_DECREF(np_dir);
+                    Py_DECREF(Path); Py_DECREF(pathlib); Py_DECREF(np2);
                     return 1;
                 }
+                Py_DECREF(cstr);
             }
+        } else {
+            PyErr_Clear();
         }
+        Py_DECREF(np_parent);
     } else {
         PyErr_Clear();
     }
-    Py_DECREF(locals);
 
+    Py_DECREF(np_dir); Py_DECREF(Path); Py_DECREF(pathlib); Py_DECREF(np2);
     return 0;
 }
 

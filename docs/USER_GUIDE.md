@@ -597,7 +597,10 @@ print(jax.devices())  # Should show GPU if available
 
 JAMMA runs a pre-flight memory check before kinship and eigendecomposition. The
 check estimates peak memory (dominated by eigendecomposition: K + U + workspace)
-and applies a 10% safety margin based on empirical benchmarks.
+and applies a 10% safety margin based on empirical benchmarks. When the DSYEVR C
+extension is compiled, JAMMA automatically falls back from DSYEVD (faster, O(N^2)
+workspace) to DSYEVR (slower, O(N) workspace) when DSYEVD won't fit — this can
+increase the maximum sample count by ~40% for a given machine size.
 
 **Approximate sample limits by machine size:**
 

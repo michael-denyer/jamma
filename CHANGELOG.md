@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Eigendecomposition now prefers DSYEVD (1.2–1.5x faster) by default, falling back to DSYEVR only when DSYEVD workspace exceeds available memory
+- Memory estimates default to DSYEVD (conservative); actual peak is lower if DSYEVR is triggered
+
 ## [2.9.1] - 2026-03-01
 
 ### Fixed

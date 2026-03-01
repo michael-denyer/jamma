@@ -262,7 +262,8 @@ class TestDsyevrDispatch:
         K_recon = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
         np.testing.assert_allclose(K_recon, K_ref, rtol=1e-10, atol=1e-14)
 
-    def test_dsyevr_when_dsyevd_wont_fit(self):
+    @pytest.mark.parametrize("check_memory", [True, False])
+    def test_dsyevr_when_dsyevd_wont_fit(self, check_memory):
         """DSYEVR used when DSYEVD workspace exceeds available memory."""
         import jamma.lmm.eigen as eigen_mod
         from jamma.lmm.eigen import _DSYEVR_AVAILABLE, eigendecompose_kinship
@@ -275,21 +276,8 @@ class TestDsyevrDispatch:
         A = rng.standard_normal((n, n))
         K = (A @ A.T) / n
 
-        # DSYEVD peak for n=30: ~0.00002GB. DSYEVR peak: ~0.00002GB.
-        # Mock available memory between DSYEVR peak and DSYEVD peak
-        # to trigger DSYEVR fallback. Use a value where DSYEVD + margin
-        # exceeds available but DSYEVR + margin does not.
-        from jamma.core.memory import _dsyevd_peak_gb, _dsyevr_peak_gb
-
-        dsyevd_peak = _dsyevd_peak_gb(n)
-        dsyevr_peak = _dsyevr_peak_gb(n)
-        # Set available between the two peaks (with margin)
-        available = dsyevd_peak * 0.95  # below DSYEVD + margin
-
-        # Only meaningful if DSYEVR actually saves memory at this size
-        if dsyevr_peak * 1.1 >= available:
-            pytest.skip("DSYEVR peak too close to DSYEVD at n=30")
-
+        # Mock peaks to create a meaningful spread: DSYEVD=100GB, DSYEVR=50GB,
+        # available=80GB. DSYEVD+margin(10GB) > 80 but DSYEVR+margin(5GB) < 80.
         call_count = []
         original = eigen_mod._eigh_dsyevr
 
@@ -299,15 +287,17 @@ class TestDsyevrDispatch:
 
         with (
             patch.object(eigen_mod, "_eigh_dsyevr", tracking_wrapper),
+            patch("jamma.lmm.eigen._dsyevd_peak_gb", return_value=100.0),
+            patch("jamma.lmm.eigen._dsyevr_peak_gb", return_value=50.0),
             patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
             patch("jamma.core.memory.psutil.Process") as mock_proc,
         ):
-            mock_vm.return_value.available = available * 1e9
-            mock_vm.return_value.total = available * 1e9
+            mock_vm.return_value.available = 80e9  # 80GB
+            mock_vm.return_value.total = 80e9
             mock_proc.return_value.memory_info.return_value.rss = 0
             mock_proc.return_value.memory_info.return_value.vms = 0
 
-            eigendecompose_kinship(K.copy(), check_memory=True)
+            eigendecompose_kinship(K.copy(), check_memory=check_memory)
 
         assert len(call_count) == 1, "Expected DSYEVR when DSYEVD won't fit"
 
@@ -345,9 +335,8 @@ class TestDsyevrDispatch:
 
         assert len(dsyevr_calls) == 0, "DSYEVD should be preferred when memory is ample"
 
-    def test_dsyevr_fallback_independent_of_check_memory(self):
-        """DSYEVR fallback works even with check_memory=False."""
-        import jamma.lmm.eigen as eigen_mod
+    def test_neither_driver_fits_raises_memoryerror(self):
+        """When neither DSYEVD nor DSYEVR fits, MemoryError reports DSYEVR peak."""
         from jamma.lmm.eigen import _DSYEVR_AVAILABLE, eigendecompose_kinship
 
         if not _DSYEVR_AVAILABLE:
@@ -358,24 +347,13 @@ class TestDsyevrDispatch:
         A = rng.standard_normal((n, n))
         K = (A @ A.T) / n
 
-        from jamma.core.memory import _dsyevd_peak_gb, _dsyevr_peak_gb
+        from jamma.core.memory import _dsyevr_peak_gb
 
-        dsyevd_peak = _dsyevd_peak_gb(n)
         dsyevr_peak = _dsyevr_peak_gb(n)
-        available = dsyevd_peak * 0.95
-
-        if dsyevr_peak * 1.1 >= available:
-            pytest.skip("DSYEVR peak too close to DSYEVD at n=30")
-
-        call_count = []
-        original = eigen_mod._eigh_dsyevr
-
-        def tracking_wrapper(K_in):
-            call_count.append(1)
-            return original(K_in)
+        # Set available memory below DSYEVR peak (both drivers fail)
+        available = dsyevr_peak * 0.5
 
         with (
-            patch.object(eigen_mod, "_eigh_dsyevr", tracking_wrapper),
             patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
             patch("jamma.core.memory.psutil.Process") as mock_proc,
         ):
@@ -384,9 +362,14 @@ class TestDsyevrDispatch:
             mock_proc.return_value.memory_info.return_value.rss = 0
             mock_proc.return_value.memory_info.return_value.vms = 0
 
-            # check_memory=False skips MemoryError but still picks DSYEVR
-            eigendecompose_kinship(K.copy(), check_memory=False)
+            with pytest.raises(MemoryError):
+                eigendecompose_kinship(K.copy(), check_memory=True)
 
-        assert len(call_count) == 1, (
-            "DSYEVR should be used when DSYEVD won't fit, even with check_memory=False"
-        )
+    def test_try_import_abi_mismatch_returns_false(self):
+        """ABI mismatch returns (False, None) and logs warning."""
+        from jamma.lmm.eigen import _try_import_dsyevr
+
+        with patch("jamma.lmm.eigen._EXPECTED_EIGEN_ABI", 999):
+            available, func = _try_import_dsyevr()
+        assert available is False
+        assert func is None

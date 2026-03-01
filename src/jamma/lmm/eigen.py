@@ -53,7 +53,11 @@ def _try_import_dsyevr() -> tuple[bool, object | None]:
     try:
         from jamma.lmm._eigen_accel import ABI_VERSION as abi
         from jamma.lmm._eigen_accel import eigh_dsyevr
-    except ImportError:
+    except ImportError as e:
+        logger.debug(
+            f"_eigen_accel not importable: {e}. "
+            "Expected if the extension has not been compiled."
+        )
         return False, None
     except AttributeError as e:
         logger.warning(
@@ -78,6 +82,9 @@ def _auto_recompile_eigen() -> bool:
     try:
         from jamma.lmm._compile_eigen import compile_extension
     except ImportError:
+        logger.debug(
+            "_compile_eigen module not available — auto-recompilation not possible"
+        )
         return False
 
     logger.info(
@@ -97,23 +104,19 @@ def _auto_recompile_eigen() -> bool:
     return True
 
 
-# First attempt
+# Import-time probe: fast, read-only — no compilation side effects.
 _DSYEVR_AVAILABLE, _eigh_dsyevr_func = _try_import_dsyevr()
+_DSYEVR_RECOMPILE_ATTEMPTED = False
 
 if not _DSYEVR_AVAILABLE:
-    if _auto_recompile_eigen():
-        _DSYEVR_AVAILABLE, _eigh_dsyevr_func = _try_import_dsyevr()
+    logger.info(
+        "DSYEVR C extension unavailable — using DSYEVD (numpy.linalg.eigh). "
+        "DSYEVR saves ~250GB workspace at 125k samples. "
+        "To compile: python -m jamma.lmm._compile_eigen"
+    )
 
-    if not _DSYEVR_AVAILABLE:
-        logger.info(
-            "DSYEVR C extension unavailable — using DSYEVD (numpy.linalg.eigh). "
-            "DSYEVR saves ~232GB workspace at 125k samples. "
-            "To compile: python -m jamma.lmm._compile_eigen"
-        )
-
-# Whether DSYEVR path is available. Used by memory estimators to determine
-# workspace size (O(N) vs O(N^2)).
-# Imported by core/memory.py via lazy import to avoid circularity.
+# Whether DSYEVR path is available. Used by eigendecompose_kinship()
+# to decide between DSYEVD and DSYEVR at runtime based on available memory.
 
 # For matrices >= this size, use sampled symmetry check instead of full np.allclose.
 # Full check allocates an n*n temporary; at 100k samples that is ~80GB.
@@ -160,7 +163,7 @@ def _eigh_dsyevr(K: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
     Returns:
         Tuple of (eigenvalues, eigenvectors) with eigenvalues ascending.
-        Eigenvectors may be F-order (LAPACK native).
+        Eigenvectors are F-order (LAPACK native).
     """
     if _eigh_dsyevr_func is None:
         raise RuntimeError(
@@ -254,6 +257,10 @@ def eigendecompose_kinship(
     46k x 46k samples (JAX hits int32 overflow at ~2.1B elements). With ILP64
     numpy (MKL), matrices up to 200k+ are supported.
 
+    Under memory pressure, may use DSYEVR (O(N) workspace) instead of
+    DSYEVD. In this case, K is destroyed but eigenvectors are in a
+    separate allocation (not reused from K's buffer).
+
     Args:
         K: Symmetric kinship matrix (n_samples, n_samples). May be
             overwritten with eigenvectors on return (buffer reused when
@@ -271,6 +278,14 @@ def eigendecompose_kinship(
         ValueError: If kinship matrix is not square or has invalid shape.
         MemoryError: If matrix is too large to decompose.
     """
+    # Lazy auto-recompile: deferred from module import to first use to avoid
+    # surprising subprocess/compiler side effects during import.
+    global _DSYEVR_AVAILABLE, _eigh_dsyevr_func, _DSYEVR_RECOMPILE_ATTEMPTED
+    if not _DSYEVR_AVAILABLE and not _DSYEVR_RECOMPILE_ATTEMPTED:
+        _DSYEVR_RECOMPILE_ATTEMPTED = True
+        if _auto_recompile_eigen():
+            _DSYEVR_AVAILABLE, _eigh_dsyevr_func = _try_import_dsyevr()
+
     n_samples = K.shape[0]
     n_elements = n_samples * n_samples
 
@@ -319,6 +334,16 @@ def eigendecompose_kinship(
                     f"DSYEVD peak ({dsyevd_peak:.1f}GB) exceeds "
                     f"available memory ({available_gb:.1f}GB). "
                     f"Using DSYEVR ({dsyevr_peak:.1f}GB)."
+                )
+            else:
+                # Neither fits — use DSYEVR anyway (smaller peak)
+                use_dsyevr = True
+                required_gb = dsyevr_peak
+                logger.warning(
+                    f"Neither DSYEVD ({dsyevd_peak:.1f}GB) nor DSYEVR "
+                    f"({dsyevr_peak:.1f}GB) fits in available memory "
+                    f"({available_gb:.1f}GB). Using DSYEVR (smaller peak). "
+                    f"OOM risk is high."
                 )
     logger.info(
         f"Eigendecomp memory: estimated {required_gb:.1f}GB, "

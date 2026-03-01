@@ -27,6 +27,47 @@ import sysconfig
 from pathlib import Path
 
 
+def _find_numpy_lapack_flags() -> list[str]:
+    """Return compiler flags to link against numpy's bundled LAPACK (Linux).
+
+    On Linux, pip-installed numpy bundles OpenBLAS in numpy.libs/ or
+    numpy/_core/.libs/. Extensions calling LAPACK symbols need to link
+    against this library or the symbols won't resolve at import time.
+
+    Note: Keep in sync with hatch_build.py:_find_numpy_lapack_flags().
+
+    Returns:
+        List of compiler flags, empty if not needed (macOS/Windows) or
+        if numpy's LAPACK library cannot be found.
+    """
+    if platform.system() != "Linux":
+        return []
+
+    import numpy as np
+
+    np_dir = Path(np.__file__).parent
+    candidates = [
+        np_dir / ".libs",
+        np_dir.parent / "numpy.libs",
+    ]
+    for d in candidates:
+        if not d.is_dir():
+            continue
+        for pat in ["libscipy_openblas*.so", "libopenblas*.so"]:
+            matches = sorted(d.glob(pat))
+            if matches:
+                lib_file = matches[0].name
+                lib_name = lib_file.split(".so")[0]
+                if lib_name.startswith("lib"):
+                    lib_name = lib_name[3:]
+                return [
+                    f"-L{d}",
+                    f"-l{lib_name}",
+                    f"-Wl,-rpath,{d}",
+                ]
+    return []
+
+
 def _detect_ilp64() -> bool:
     """Check if numpy is built with ILP64 BLAS (64-bit integers).
 
@@ -141,6 +182,13 @@ def compile_extension(verbose: bool = True) -> bool:
     if ilp64:
         ilp64_flags = ["-DJAMMA_ILP64"]
 
+    # LAPACK linkage: on Linux, numpy bundles OpenBLAS in numpy.libs/.
+    # Without explicit linkage, dsyevr_ is an undefined symbol at import.
+    # macOS uses -undefined dynamic_lookup (Accelerate resolves at runtime).
+    lapack_flags = _find_numpy_lapack_flags()
+    if lapack_flags:
+        _print(f"LAPACK link flags: {' '.join(lapack_flags)}")
+
     # -march=native is safe here: compiles on the user's own machine.
     # hatch_build.py omits this flag for portable wheel builds.
     cmd = [
@@ -161,6 +209,7 @@ def compile_extension(verbose: bool = True) -> bool:
         "-o",
         str(out),
         "-lm",
+        *lapack_flags,
         *ldflags,
     ]
 

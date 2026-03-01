@@ -7,10 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.2] - 2026-03-01
+
+### Added
+
+- DSYEVR C extension for eigendecomposition — O(N) workspace vs O(N²) for DSYEVD,
+  saving ~250GB at 125k samples; auto-compiled on first use with lazy recompilation
+- LAPACK linkage for Linux wheels: auto-detects numpy's bundled OpenBLAS in numpy.libs/
+  for C extension compilation (both hatch_build.py and post-install _compile_eigen.py)
+- Negative n_samples validation in memory estimation functions
+- ABI mismatch test for DSYEVR import probe
+
 ### Changed
 
-- Eigendecomposition now prefers DSYEVD (1.2–1.5x faster) by default, falling back to DSYEVR only when DSYEVD workspace exceeds available memory
-- Memory estimates default to DSYEVD (conservative); actual peak is lower if DSYEVR is triggered
+- Eigendecomposition now prefers DSYEVD (1.2–1.5x faster) by default, falling back
+  to DSYEVR only when DSYEVD workspace exceeds available memory
+- Memory estimates default to DSYEVD (conservative); actual peak is lower if DSYEVR
+  is triggered
+- DSYEVR auto-recompilation deferred from module import to first eigendecomp call
+  (avoids subprocess/compiler side effects during import)
+- DSYEVR workspace query uses ceil() to prevent off-by-one undersized allocation
+- DSYEVR type stub accepts lowercase UPLO values ('l', 'u')
+- Memory comment corrected: DSYEVR saves ~250GB (not ~232GB) at 125k samples
+
+### Fixed
+
+- DSYEVR fallback when neither driver fits: now uses DSYEVR (smaller peak) with
+  OOM warning instead of silently falling through to DSYEVD
+- Matrix reader: MemoryError re-raised directly instead of wrapping in RuntimeError
+- Matrix reader: temp dir fallback includes OS error message in warning
+- Class-level import in TestLambdaBoundaryDiagnostics moved to method level
+  (prevents import error when results module unavailable)
 
 ## [2.9.1] - 2026-03-01
 

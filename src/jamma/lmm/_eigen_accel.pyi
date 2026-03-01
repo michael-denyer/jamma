@@ -12,5 +12,5 @@ ABI_VERSION: int
 
 def eigh_dsyevr(
     K: npt.NDArray[np.float64],
-    uplo: Literal["L", "U"] = ...,
+    uplo: Literal["L", "U", "l", "u"] = ...,
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]: ...

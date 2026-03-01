@@ -5,7 +5,7 @@
  *
  * Uses DSYEVR (MRRR algorithm) instead of numpy's hardcoded DSYEVD
  * (divide-and-conquer). DSYEVR has O(N) workspace vs O(N^2) for DSYEVD,
- * saving ~232 GB at 125k samples.
+ * saving ~250 GB at 125k samples.
  *
  * ILP64 / LP64 selection:
  *   JAMMA_ILP64 defined at compile time for ILP64 MKL builds.
@@ -14,18 +14,18 @@
  *
  * Memory layout:
  *   Input K is a symmetric matrix (destroyed on return — DSYEVR uses it as
- *   workspace). C-contiguous (row-major) input is passed with UPLO='U',
- *   because a C-row-major upper triangle is the same as Fortran-column-major
- *   lower triangle. F-contiguous input is passed with UPLO='L'.
+ *   workspace). C-contiguous (row-major) input has its UPLO convention
+ *   transposed before passing to DSYEVR, because a C-row-major matrix is the
+ *   transpose of a Fortran-column-major matrix (upper <-> lower).
+ *   F-contiguous input uses the caller's UPLO as-is.
  *   Eigenvectors Z are returned as Fortran-order (column-major) arrays.
- *
- * ABI version: bump when function signatures or array layout expectations change.
  */
 
 #define PY_SSIZE_T_CLEAN
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <Python.h>
 #include <numpy/arrayobject.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -263,7 +263,9 @@ static PyObject *py_eigh_dsyevr(PyObject *self, PyObject *args, PyObject *kwargs
         return NULL;
     }
 
-    lapack_int lwork = (lapack_int)work_query;
+    /* ceil: LAPACK returns optimal LWORK as a double; truncation can
+     * undersize the workspace by 1, causing DSYEVR to write OOB. */
+    lapack_int lwork = (lapack_int)ceil(work_query);
     lapack_int liwork = iwork_query;
 
     /* ---- Allocate workspace ---------------------------------------------- */
@@ -346,7 +348,7 @@ static PyMethodDef methods[] = {
         "Eigendecompose a real symmetric matrix using LAPACK DSYEVR (MRRR algorithm).\n"
         "\n"
         "DSYEVR has O(N) workspace vs O(N^2) for numpy.linalg.eigh (DSYEVD),\n"
-        "saving ~232 GB at 125k samples.\n"
+        "saving ~250 GB at 125k samples.\n"
         "\n"
         "Args:\n"
         "    K:    float64 ndarray, 2D, square, writeable, C or Fortran contiguous.\n"

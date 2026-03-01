@@ -23,7 +23,7 @@ def _dsyevr_workspace_gb(n: int) -> float:
     """DSYEVR workspace in GB: max(1, 26*N) float64s + max(1, 10*N) int64s.
 
     DSYEVR (MRRR algorithm) uses O(N) workspace vs DSYEVD's O(N^2).
-    At 125k samples: ~0.025 GB vs ~232 GB.
+    At 125k samples: ~0.036 GB vs ~250 GB (excludes isuppz, 2*N ints, negligible).
     """
     lwork_bytes = max(1, 26 * n) * 8  # float64
     liwork_bytes = max(1, 10 * n) * 8  # int64 (ILP64 upper bound)
@@ -95,6 +95,8 @@ def _dsyevd_peak_gb(n: int) -> float:
     DSYEVD in-place: K (shared with U) + O(N^2) workspace.
     DSYEVD fallback: K + U (separate) + O(N^2) workspace.
     """
+    if n < 0:
+        raise ValueError(f"n_samples must be >= 0, got {n}")
     kinship_gb = n**2 * 8 / 1e9
     return kinship_gb + _eigendecomp_eigvec_gb(kinship_gb) + _dsyevd_workspace_gb(n)
 
@@ -105,6 +107,8 @@ def _dsyevr_peak_gb(n: int) -> float:
     DSYEVR always allocates a separate F-contiguous Z array (K + Z coexist),
     but workspace is O(N) not O(N^2).
     """
+    if n < 0:
+        raise ValueError(f"n_samples must be >= 0, got {n}")
     kinship_gb = n**2 * 8 / 1e9
     return 2 * kinship_gb + _dsyevr_workspace_gb(n)
 

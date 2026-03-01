@@ -63,6 +63,8 @@ def _parse_chunk_to_memmap(args: tuple) -> None:
         n_rows = chunk.shape[0]
         mm[start_row : start_row + n_rows, :] = chunk
         del mm  # flush
+    except MemoryError:
+        raise  # Let parent process handle OOM directly
     except Exception as e:
         raise RuntimeError(
             f"_parse_chunk_to_memmap failed at bytes {start_byte}-{end_byte}, "
@@ -172,9 +174,10 @@ def _create_temp_dir(input_path: Path) -> str:
     input_dir = input_path.parent
     try:
         return tempfile.mkdtemp(prefix=".jamma_mread_", dir=input_dir)
-    except OSError:
+    except OSError as e:
         logger.warning(
-            f"Cannot create temp dir in {input_dir}, falling back to system tmpdir"
+            f"Cannot create temp dir in {input_dir} ({e}), "
+            "falling back to system tmpdir"
         )
         return tempfile.mkdtemp(prefix="jamma_mread_")
 

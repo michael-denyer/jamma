@@ -673,11 +673,6 @@ class TestLambdaBoundaryDiagnostics:
     are correctly counted, and that the boundary warning logger path does not crash.
     """
 
-    from jamma.lmm.results import (
-        count_lambda_boundary_hits,
-        log_lambda_boundary_warning,
-    )
-
     def test_mode1_lower_bound_count(self):
         """Mode 1 (Wald): count 3 lambdas at l_min, 0 at l_max."""
         from jamma.lmm.results import count_lambda_boundary_hits

@@ -124,6 +124,48 @@ class CustomBuildHook(BuildHookInterface):
 
         return (cc_cmd, cc_extra, python_inc, numpy_inc, ldflags)
 
+    def _find_numpy_lapack_flags(self) -> list[str]:
+        """Return compiler flags to link against numpy's bundled LAPACK (Linux).
+
+        On Linux, pip-installed numpy bundles OpenBLAS in numpy.libs/ or
+        numpy/_core/.libs/. Without explicit linkage, dsyevr_ is undefined.
+        macOS uses -undefined dynamic_lookup; Windows is unsupported.
+
+        Note: Keep in sync with _compile_eigen.py:_find_numpy_lapack_flags().
+
+        Returns:
+            List of compiler flags, empty if not needed or not found.
+        """
+        if platform.system() != "Linux":
+            return []
+
+        try:
+            import numpy as np
+        except ImportError:
+            return []
+
+        np_dir = Path(np.__file__).parent
+        candidates = [
+            np_dir / ".libs",
+            np_dir.parent / "numpy.libs",
+        ]
+        for d in candidates:
+            if not d.is_dir():
+                continue
+            for pat in ["libscipy_openblas*.so", "libopenblas*.so"]:
+                matches = sorted(d.glob(pat))
+                if matches:
+                    lib_file = matches[0].name
+                    lib_name = lib_file.split(".so")[0]
+                    if lib_name.startswith("lib"):
+                        lib_name = lib_name[3:]
+                    return [
+                        f"-L{d}",
+                        f"-l{lib_name}",
+                        f"-Wl,-rpath,{d}",
+                    ]
+        return []
+
     def _detect_ilp64(self) -> bool:
         """Check if numpy is built with ILP64 BLAS (64-bit integers).
 
@@ -334,6 +376,15 @@ class CustomBuildHook(BuildHookInterface):
                 file=sys.stderr,
             )
 
+        # LAPACK linkage: on Linux, numpy bundles OpenBLAS in numpy.libs/.
+        # Without explicit linkage, dsyevr_ is an undefined symbol at import.
+        lapack_flags = self._find_numpy_lapack_flags()
+        if lapack_flags:
+            print(
+                f"LAPACK link flags: {' '.join(lapack_flags)}",
+                file=sys.stderr,
+            )
+
         cmd = [
             cc_cmd,
             *cc_extra,
@@ -351,6 +402,7 @@ class CustomBuildHook(BuildHookInterface):
             "-o",
             str(out_path),
             "-lm",
+            *lapack_flags,
             *ldflags,
         ]
 

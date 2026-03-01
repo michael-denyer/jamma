@@ -124,6 +124,58 @@ class CustomBuildHook(BuildHookInterface):
 
         return (cc_cmd, cc_extra, python_inc, numpy_inc, ldflags)
 
+    def _detect_linux_openmp_flags(self, cc_cmd: str) -> list[str]:
+        """Detect the best OpenMP flags for Linux.
+
+        Prefers Intel OpenMP (libiomp5) when available to avoid the
+        libgomp/libiomp5 dual-runtime conflict on systems with MKL-backed
+        numpy. Falls back to GNU OpenMP (-fopenmp → libgomp).
+
+        Args:
+            cc_cmd: C compiler command name.
+
+        Returns:
+            Compiler flags for OpenMP.
+        """
+        try:
+            import numpy as np
+
+            np_dir = Path(np.__file__).parent
+            for d in [
+                np_dir / ".libs",
+                np_dir.parent / "numpy.libs",
+                np_dir / "_core" / ".libs",
+            ]:
+                if not d.is_dir():
+                    continue
+                for lib in d.iterdir():
+                    if "libiomp5" in lib.name and ".so" in lib.name:
+                        print(
+                            f"Intel OpenMP found: {lib}",
+                            file=sys.stderr,
+                        )
+                        return [
+                            f"-L{d}",
+                            "-liomp5",
+                            f"-Wl,-rpath,{d}",
+                            "-fopenmp",
+                        ]
+        except ImportError:
+            pass
+
+        # Check system-wide libiomp5
+        result = subprocess.run(
+            [cc_cmd, "-liomp5", "-x", "c", "-", "-o", "/dev/null"],
+            input="int main(){return 0;}\n",
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            print("Intel OpenMP (system libiomp5) detected", file=sys.stderr)
+            return ["-liomp5", "-fopenmp"]
+
+        return ["-fopenmp"]
+
     def _compile_c_extension(self, build_data):
         """Compile _lmm_accel.c -> _lmm_accel{EXT_SUFFIX} if a C compiler is available.
 
@@ -184,7 +236,7 @@ class CustomBuildHook(BuildHookInterface):
                     file=sys.stderr,
                 )
         else:
-            omp_flags = ["-fopenmp"]
+            omp_flags = self._detect_linux_openmp_flags(cc_cmd)
 
         cmd = [
             cc_cmd,

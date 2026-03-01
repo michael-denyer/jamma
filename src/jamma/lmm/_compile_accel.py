@@ -23,6 +23,62 @@ import sysconfig
 from pathlib import Path
 
 
+def _detect_linux_openmp_flags(cc_cmd: str, _print: object = print) -> list[str]:
+    """Detect the best OpenMP flags for Linux.
+
+    Prefers Intel OpenMP (libiomp5) when available to avoid the libgomp/libiomp5
+    dual-runtime conflict on systems with MKL-backed numpy. MKL uses libiomp5
+    internally; linking _lmm_accel against libgomp creates two OpenMP runtimes
+    in the same process, which can cause thread oversubscription or hangs.
+
+    Detection order:
+    1. libiomp5 (Intel OpenMP) — found via numpy's MKL libs or system paths
+    2. libgomp (GNU OpenMP) — standard fallback via -fopenmp
+
+    Returns:
+        Compiler flags for OpenMP, or empty list if unavailable.
+    """
+    # Check if numpy bundles MKL (and thus libiomp5)
+    try:
+        import numpy as np
+
+        np_dir = Path(np.__file__).parent
+        # MKL numpy bundles libiomp5 in numpy.libs/ or numpy/_core/.libs/
+        search_dirs = [
+            np_dir / ".libs",
+            np_dir.parent / "numpy.libs",
+            np_dir / "_core" / ".libs",
+        ]
+        for d in search_dirs:
+            if not d.is_dir():
+                continue
+            for lib in d.iterdir():
+                if "libiomp5" in lib.name and ".so" in lib.name:
+                    _print(f"Intel OpenMP found: {lib}")
+                    return [
+                        f"-L{d}",
+                        "-liomp5",
+                        f"-Wl,-rpath,{d}",
+                        "-fopenmp",
+                    ]
+    except ImportError:
+        pass
+
+    # Check system-wide libiomp5 (e.g. from intel-openmp package)
+    result = subprocess.run(
+        [cc_cmd, "-liomp5", "-x", "c", "-", "-o", "/dev/null"],
+        input="int main(){return 0;}\n",
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        _print("Intel OpenMP (system libiomp5) detected")
+        return ["-liomp5", "-fopenmp"]
+
+    # Fallback to GNU OpenMP
+    return ["-fopenmp"]
+
+
 def compile_extension(verbose: bool = True, diagnose: bool = False) -> bool:
     """Compile _lmm_accel.c into a shared library in the installed package.
 
@@ -121,7 +177,10 @@ def compile_extension(verbose: bool = True, diagnose: bool = False) -> bool:
             )
         ldflags = ["-undefined", "dynamic_lookup"]
     else:
-        omp_flags = ["-fopenmp"]
+        # Prefer Intel OpenMP (libiomp5) when available — avoids libgomp/libiomp5
+        # dual-runtime conflict on systems with MKL numpy. libiomp5 ships with
+        # intel-openmp or MKL packages.
+        omp_flags = _detect_linux_openmp_flags(cc_cmd, _print)
 
     # -march=native is safe here: compiles on the user's own machine.
     # hatch_build.py omits this flag for portable wheel builds.

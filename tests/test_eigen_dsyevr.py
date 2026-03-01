@@ -237,7 +237,7 @@ class TestDsyevrDispatch:
         K = (A @ A.T) / n
         K_ref = K.copy()
 
-        # check_memory=False → always DSYEVD
+        # n=30 with real memory → DSYEVD (ample memory)
         eigenvalues, eigenvectors = eigendecompose_kinship(K.copy(), check_memory=False)
 
         K_recon = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
@@ -344,3 +344,49 @@ class TestDsyevrDispatch:
             eigendecompose_kinship(K.copy(), check_memory=True)
 
         assert len(dsyevr_calls) == 0, "DSYEVD should be preferred when memory is ample"
+
+    def test_dsyevr_fallback_independent_of_check_memory(self):
+        """DSYEVR fallback works even with check_memory=False."""
+        import jamma.lmm.eigen as eigen_mod
+        from jamma.lmm.eigen import _DSYEVR_AVAILABLE, eigendecompose_kinship
+
+        if not _DSYEVR_AVAILABLE:
+            pytest.skip("DSYEVR C extension not available")
+
+        rng = np.random.default_rng(42)
+        n = 30
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+
+        from jamma.core.memory import _dsyevd_peak_gb, _dsyevr_peak_gb
+
+        dsyevd_peak = _dsyevd_peak_gb(n)
+        dsyevr_peak = _dsyevr_peak_gb(n)
+        available = dsyevd_peak * 0.95
+
+        if dsyevr_peak * 1.1 >= available:
+            pytest.skip("DSYEVR peak too close to DSYEVD at n=30")
+
+        call_count = []
+        original = eigen_mod._eigh_dsyevr
+
+        def tracking_wrapper(K_in):
+            call_count.append(1)
+            return original(K_in)
+
+        with (
+            patch.object(eigen_mod, "_eigh_dsyevr", tracking_wrapper),
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_proc,
+        ):
+            mock_vm.return_value.available = available * 1e9
+            mock_vm.return_value.total = available * 1e9
+            mock_proc.return_value.memory_info.return_value.rss = 0
+            mock_proc.return_value.memory_info.return_value.vms = 0
+
+            # check_memory=False skips MemoryError but still picks DSYEVR
+            eigendecompose_kinship(K.copy(), check_memory=False)
+
+        assert len(call_count) == 1, (
+            "DSYEVR should be used when DSYEVD won't fit, even with check_memory=False"
+        )

@@ -296,6 +296,8 @@ def eigendecompose_kinship(
 
     # Memory-aware driver selection: prefer DSYEVD (faster), fall back to
     # DSYEVR (O(N) workspace) only when DSYEVD won't fit in available memory.
+    # This runs regardless of check_memory — check_memory only gates the
+    # MemoryError raise, not the driver choice.
     available_gb = log_memory_snapshot(
         f"before_eigendecomp_{n_samples}samples"
     ).available_gb
@@ -304,7 +306,7 @@ def eigendecompose_kinship(
     dsyevd_peak = _dsyevd_peak_gb(n_samples)
     required_gb = dsyevd_peak
 
-    if check_memory and _DSYEVR_AVAILABLE:
+    if _DSYEVR_AVAILABLE:
         margin_gb = min(dsyevd_peak * 0.1, 10.0)
         if dsyevd_peak + margin_gb > available_gb:
             # DSYEVD won't fit — check DSYEVR

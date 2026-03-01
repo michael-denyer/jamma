@@ -856,6 +856,15 @@ class PipelineRunner:
         total_s = time.perf_counter() - t_start
         logger.info(f"GWAS complete: {n_tested} SNPs tested in {total_s:.1f}s")
 
+        # Pull runner-level rotation timing if available (JAX backend only).
+        # The pipeline always routes through the streaming runner, so we read
+        # runner_streaming.last_run_timing (not runner_jax.last_run_timing).
+        runner_timing: dict[str, float] = {}
+        if active_backend == "jax":
+            from jamma.lmm.runner_streaming import last_run_timing as _stream_timing
+
+            runner_timing = dict(_stream_timing)
+
         return PipelineResult(
             associations=results,
             n_samples=n_valid,
@@ -866,6 +875,8 @@ class PipelineRunner:
                 "load_s": load_s,
                 "lmm_s": lmm_s,
                 "total_s": total_s,
+                "rotation_s": runner_timing.get("rotation_s", 0.0),
+                "rotation_exposed_s": runner_timing.get("rotation_exposed_s", 0.0),
             },
             backend=active_backend,
             n_covariates=covariates.shape[1] if covariates is not None else 1,

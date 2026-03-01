@@ -51,6 +51,12 @@ from jamma.lmm.schema import LazySnpMeta as _LazySnpMeta
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
 
+# Module-level timing from the last run, for programmatic access by pipeline/benchmarks.
+# Not thread-safe: concurrent calls will corrupt this dict.
+# Keys: rotation_s, rotation_exposed_s, jax_compute_s, result_write_s
+# Cleared at function entry; repopulated at function exit on success.
+last_run_timing: dict[str, float] = {}
+
 
 def _init_accumulators(lmm_mode: int) -> dict[str, list]:
     """Create empty accumulator dict for the given mode."""
@@ -373,10 +379,20 @@ def run_lmm_association_streaming(
         Uty_jax = jax.device_put(Uty, placement.rep)
     t_eigen_end = time.perf_counter()
 
+    # Invalidate stale timing immediately so callers never see prior-run data
+    # if this run raises mid-execution.
+    last_run_timing.clear()
+
     # Timing accumulators for per-chunk phases
     t_rotation_total = 0.0
+    t_rotation_exposed_total = 0.0
     t_jax_compute_total = 0.0
     t_result_write_total = 0.0
+
+    # prev_compute_end persists across file-chunks so the first JAX sub-chunk
+    # rotation of file-chunk N+1 correctly compares against the last compute_end
+    # of file-chunk N.
+    prev_compute_end: float | None = None
 
     # === PASS 2: Association ===
     # Track results for in-memory mode (when output_path is None)
@@ -446,7 +462,17 @@ def run_lmm_association_streaming(
                 jax_starts[0], geno_subset, n_subset
             )
             t_rot_end = time.perf_counter()
-            t_rotation_total += t_rot_end - t_rot_start
+            rot_dur = t_rot_end - t_rot_start
+            t_rotation_total += rot_dur
+            if prev_compute_end is None:
+                # Very first rotation in the run: fully exposed (no prior compute)
+                t_rotation_exposed_total += rot_dur
+            else:
+                # Cap at actual rotation duration to avoid counting inter-chunk gaps.
+                # If rotation finished before compute ended, overlap is complete (0).
+                t_rotation_exposed_total += min(
+                    rot_dur, max(0.0, t_rot_end - prev_compute_end)
+                )
             UtG_jax = jax.device_put(UtG_np, placement.snp)
             del UtG_np
 
@@ -461,7 +487,16 @@ def run_lmm_association_streaming(
                         jax_starts[i + 1], geno_subset, n_subset
                     )
                     t_rot_end = time.perf_counter()
-                    t_rotation_total += t_rot_end - t_rot_start
+                    rot_dur_inner = t_rot_end - t_rot_start
+                    t_rotation_total += rot_dur_inner
+                    if prev_compute_end is None:
+                        # No JAX compute has completed yet; fully exposed.
+                        t_rotation_exposed_total += rot_dur_inner
+                    else:
+                        # Cap at actual rotation duration to avoid counting gaps.
+                        t_rotation_exposed_total += min(
+                            rot_dur_inner, max(0.0, t_rot_end - prev_compute_end)
+                        )
                     UtG_jax = jax.device_put(UtG_np, placement.snp)
                     del UtG_np
 
@@ -501,6 +536,7 @@ def run_lmm_association_streaming(
 
                 t_jax_end = time.perf_counter()
                 t_jax_compute_total += t_jax_end - t_jax_start
+                prev_compute_end = t_jax_end
 
                 strip_and_append(chunk_result, accum, current_actual_len)
 
@@ -564,6 +600,7 @@ def run_lmm_association_streaming(
             logger.info(f"  SNP statistics:      {t_snp:.2f}s")
             logger.info(f"  Setup (eigen+null):  {t_eigen:.2f}s")
             logger.info(f"  UT@G rotation:       {t_rotation_total:.2f}s")
+            logger.info(f"  UT@G exposed:        {t_rotation_exposed_total:.2f}s")
             logger.info(f"  JAX compute:         {t_jax_compute_total:.2f}s")
             logger.info(f"  Result write:        {t_result_write_total:.2f}s")
             logger.info("  ----")
@@ -583,6 +620,16 @@ def run_lmm_association_streaming(
     if show_progress:
         elapsed = time.perf_counter() - start_time
         logger.info(f"LMM Association completed in {elapsed:.2f}s")
+
+    last_run_timing.clear()
+    last_run_timing.update(
+        {
+            "rotation_s": t_rotation_total,
+            "rotation_exposed_s": t_rotation_exposed_total,
+            "jax_compute_s": t_jax_compute_total,
+            "result_write_s": t_result_write_total,
+        }
+    )
 
     n_tested = writer.count if writer is not None else len(all_results)
     return ([] if output_path is not None else all_results), n_tested

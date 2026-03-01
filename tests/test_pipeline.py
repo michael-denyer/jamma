@@ -824,6 +824,30 @@ def test_pipeline_backend_in_timing(sample_plink_data: Path, output_dir: Path) -
     assert result.backend == "jax"
 
 
+@pytest.mark.tier1
+@pytest.mark.requires_jax
+def test_pipeline_rotation_timing_keys(
+    sample_plink_data: Path, output_dir: Path
+) -> None:
+    """PipelineResult.timing has rotation keys for JAX backend."""
+    kinship_file = sample_plink_data.parent / "gemma_kinship.cXX.txt"
+    config = PipelineConfig(
+        bfile=sample_plink_data,
+        kinship_file=kinship_file,
+        lmm_mode=1,
+        output_dir=output_dir,
+        check_memory=False,
+        show_progress=False,
+        backend="jax",
+    )
+    result = PipelineRunner(config).run()
+    assert "rotation_s" in result.timing
+    assert "rotation_exposed_s" in result.timing
+    assert result.timing["rotation_s"] >= 0.0
+    assert result.timing["rotation_exposed_s"] >= 0.0
+    assert result.timing["rotation_exposed_s"] <= result.timing["rotation_s"] + 1e-6
+
+
 @pytest.mark.tier0
 def test_pipeline_config_backend_validation() -> None:
     """PipelineConfig raises ValueError for invalid backend value."""

@@ -1007,6 +1007,112 @@ class TestDegenerateSNPPipeline:
 
 
 @pytest.mark.tier1
+class TestExposedRotationDiagnostic:
+    """Tests for the UT@G exposed rotation timing diagnostic in runner_jax."""
+
+    @pytest.fixture
+    def synthetic_data(self):
+        """Generate synthetic GWAS data for rotation diagnostic tests."""
+        return _make_synthetic_gwas_data(seed=77, n_samples=100, n_snps=200)
+
+    def test_single_chunk_exposed_equals_total(self, synthetic_data):
+        """Single-chunk run: exposed rotation should equal total rotation.
+
+        When all SNPs fit in one chunk there is no prior compute to overlap with,
+        so the first (and only) rotation is fully exposed: exposed == total.
+        """
+        from jamma.lmm.runner_jax import last_run_timing
+
+        genotypes, phenotype, snp_info = synthetic_data
+        kinship = compute_centered_kinship(genotypes)
+
+        _ = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        assert "rotation_s" in last_run_timing, (
+            "last_run_timing must contain 'rotation_s'"
+        )
+        assert "rotation_exposed_s" in last_run_timing, (
+            "last_run_timing must contain 'rotation_exposed_s'"
+        )
+        assert last_run_timing["rotation_exposed_s"] == pytest.approx(
+            last_run_timing["rotation_s"], abs=1e-6
+        ), (
+            f"Single-chunk: exposed ({last_run_timing['rotation_exposed_s']:.6f}s) "
+            f"should equal total ({last_run_timing['rotation_s']:.6f}s)"
+        )
+
+    def test_multi_chunk_exposed_leq_total(self, synthetic_data):
+        """Multi-chunk run: exposed rotation cannot exceed total rotation.
+
+        Patches _compute_chunk_size to force multiple chunks (the default chunk
+        size for small fixtures exceeds n_snps). The invariant exposed <= total
+        must hold regardless of overlap.
+        """
+        from unittest.mock import patch
+
+        from jamma.lmm.runner_jax import last_run_timing
+
+        genotypes, phenotype, snp_info = synthetic_data
+        kinship = compute_centered_kinship(genotypes)
+
+        # Force chunk_size=50 so 200 SNPs produce ~4 chunks
+        with patch("jamma.lmm.runner_jax._compute_chunk_size", return_value=50):
+            _ = run_lmm_association_jax(
+                genotypes=genotypes,
+                phenotypes=phenotype,
+                kinship=kinship,
+                snp_info=snp_info,
+                show_progress=False,
+                check_memory=False,
+            )
+
+        assert "rotation_s" in last_run_timing
+        assert "rotation_exposed_s" in last_run_timing
+        # Invariant: exposed cannot exceed total (with small float tolerance)
+        assert last_run_timing["rotation_exposed_s"] <= (
+            last_run_timing["rotation_s"] + 1e-6
+        ), (
+            f"Exposed ({last_run_timing['rotation_exposed_s']:.6f}s) must be "
+            f"<= total ({last_run_timing['rotation_s']:.6f}s)"
+        )
+
+    def test_timing_keys_present_after_run(self, synthetic_data):
+        """last_run_timing dict contains all four expected timing keys."""
+        from jamma.lmm.runner_jax import last_run_timing
+
+        genotypes, phenotype, snp_info = synthetic_data
+        kinship = compute_centered_kinship(genotypes)
+
+        _ = run_lmm_association_jax(
+            genotypes=genotypes,
+            phenotypes=phenotype,
+            kinship=kinship,
+            snp_info=snp_info,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        expected_keys = {
+            "rotation_s",
+            "rotation_exposed_s",
+            "jax_compute_s",
+            "result_write_s",
+        }
+        assert set(last_run_timing.keys()) == expected_keys, (
+            f"Expected keys {expected_keys}, got {set(last_run_timing.keys())}"
+        )
+        for key, val in last_run_timing.items():
+            assert val >= 0.0, f"Timing value for '{key}' must be >= 0, got {val}"
+
+
+@pytest.mark.tier1
 def test_timing_breakdown_logged(sample_plink_data):
     """Verify timing breakdown appears in loguru output with all 6 phases."""
     import io
@@ -1052,6 +1158,7 @@ def test_timing_breakdown_logged(sample_plink_data):
         "SNP statistics:",
         "Setup (eigen+null):",
         "UT@G rotation:",
+        "UT@G exposed:",
         "JAX compute:",
         "Result write:",
         "Accounted:",

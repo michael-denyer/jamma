@@ -1282,6 +1282,119 @@ def test_streaming_score_only_matches_batch(sample_plink_data: Path) -> None:
 
 
 @pytest.mark.tier1
+class TestExposedRotationDiagnostic:
+    """Tests for the UT@G exposed rotation timing diagnostic in runner_streaming."""
+
+    def test_single_chunk_exposed_equals_total(self, sample_plink_data: Path) -> None:
+        """Single-chunk run: exposed rotation should equal total rotation.
+
+        When chunk_size > n_snps, only one file-chunk and one JAX sub-chunk
+        are processed. The first (and only) rotation has no prior compute to
+        overlap with, so exposed == total.
+        """
+        from jamma.lmm.runner_streaming import last_run_timing
+
+        rng = np.random.default_rng(42)
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = rng.standard_normal(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        # chunk_size >> n_snps ensures single file-chunk and single JAX sub-chunk
+        _, _ = run_lmm_association_streaming(
+            sample_plink_data,
+            phenotypes,
+            kinship,
+            snp_info=None,
+            chunk_size=99_999,  # Larger than all 500 SNPs: single chunk
+            check_memory=False,
+            show_progress=False,
+        )
+
+        assert "rotation_s" in last_run_timing, (
+            "last_run_timing must contain 'rotation_s'"
+        )
+        assert "rotation_exposed_s" in last_run_timing, (
+            "last_run_timing must contain 'rotation_exposed_s'"
+        )
+        assert last_run_timing["rotation_exposed_s"] == pytest.approx(
+            last_run_timing["rotation_s"], abs=1e-6
+        ), (
+            f"Single-chunk: exposed ({last_run_timing['rotation_exposed_s']:.6f}s) "
+            f"should equal total ({last_run_timing['rotation_s']:.6f}s)"
+        )
+
+    def test_multi_chunk_exposed_leq_total(self, sample_plink_data: Path) -> None:
+        """Multi-chunk run: exposed rotation cannot exceed total rotation.
+
+        Whether or not actual overlap occurs, the invariant exposed <= total
+        must always hold. Uses a small chunk_size to force multiple chunks.
+        """
+        from jamma.lmm.runner_streaming import last_run_timing
+
+        rng = np.random.default_rng(42)
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = rng.standard_normal(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        # Small chunk_size forces multiple disk-read chunks
+        _, _ = run_lmm_association_streaming(
+            sample_plink_data,
+            phenotypes,
+            kinship,
+            snp_info=None,
+            chunk_size=100,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        assert "rotation_s" in last_run_timing
+        assert "rotation_exposed_s" in last_run_timing
+        # Invariant: exposed cannot exceed total (with small float tolerance)
+        assert last_run_timing["rotation_exposed_s"] <= (
+            last_run_timing["rotation_s"] + 1e-6
+        ), (
+            f"Exposed ({last_run_timing['rotation_exposed_s']:.6f}s) must be "
+            f"<= total ({last_run_timing['rotation_s']:.6f}s)"
+        )
+
+    def test_timing_keys_present_after_run(self, sample_plink_data: Path) -> None:
+        """last_run_timing dict contains all four expected timing keys."""
+        from jamma.lmm.runner_streaming import last_run_timing
+
+        rng = np.random.default_rng(42)
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = rng.standard_normal(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        _, _ = run_lmm_association_streaming(
+            sample_plink_data,
+            phenotypes,
+            kinship,
+            snp_info=None,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        expected_keys = {
+            "rotation_s",
+            "rotation_exposed_s",
+            "jax_compute_s",
+            "result_write_s",
+        }
+        assert set(last_run_timing.keys()) == expected_keys, (
+            f"Expected keys {expected_keys}, got {set(last_run_timing.keys())}"
+        )
+        for key, val in last_run_timing.items():
+            assert val >= 0.0, f"Timing value for '{key}' must be >= 0, got {val}"
+
+
+@pytest.mark.tier1
 def test_streaming_all_invalid_samples_raises(tmp_path: Path) -> None:
     """Streaming runner raises ValueError when all samples have missing phenotypes.
 

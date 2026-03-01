@@ -35,6 +35,13 @@ from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
 
+# Module-level timing from the last run, for direct callers (tests, notebooks).
+# The pipeline reads runner_streaming.last_run_timing instead (it always uses the
+# streaming runner). Not thread-safe: concurrent calls will corrupt this dict.
+# Keys: rotation_s, rotation_exposed_s, jax_compute_s, result_write_s
+# Cleared at function entry; repopulated at function exit on success.
+last_run_timing: dict[str, float] = {}
+
 
 def run_lmm_association_jax(
     genotypes: np.ndarray,
@@ -267,8 +274,13 @@ def run_lmm_association_jax(
         key: np.empty(n_filtered, dtype=np.float64) for key in _RESULT_FIELDS[lmm_mode]
     }
 
+    # Invalidate stale timing immediately so callers never see prior-run data
+    # if this run raises mid-execution.
+    last_run_timing.clear()
+
     # Timing accumulators for per-chunk phases
     t_rotation_total = 0.0
+    t_rotation_exposed_total = 0.0
     t_jax_compute_total = 0.0
     t_result_write_total = 0.0
 
@@ -283,11 +295,17 @@ def run_lmm_association_jax(
 
     chunk_starts = list(range(0, n_filtered, chunk_size))
 
+    # prev_compute_end tracks the perf_counter timestamp of the last JAX compute
+    # sync, used to compute how much rotation time was exposed (not overlapped).
+    prev_compute_end: float | None = None
+
     # Prepare first chunk (includes BLAS rotation U.T @ G)
     t_rot_start = time.perf_counter()
     UtG_np, actual_len = _impute_and_prepare(chunk_starts[0])
     t_rot_end = time.perf_counter()
     t_rotation_total += t_rot_end - t_rot_start
+    # First chunk has no prior compute to overlap with, so all rotation is exposed.
+    t_rotation_exposed_total += t_rot_end - t_rot_start
     UtG_jax = jax.device_put(UtG_np, placement.snp)
     del UtG_np  # Safe: JAX holds internal ref during async transfer
 
@@ -309,6 +327,16 @@ def run_lmm_association_jax(
             next_UtG_np, actual_len = _impute_and_prepare(chunk_starts[i + 1])
             t_rot_end = time.perf_counter()
             t_rotation_total += t_rot_end - t_rot_start
+            # Exposed = portion of rotation not overlapped by prior compute.
+            rot_dur = t_rot_end - t_rot_start
+            if prev_compute_end is None:
+                # No JAX compute has completed yet; rotation is fully exposed.
+                t_rotation_exposed_total += rot_dur
+            else:
+                # Cap at actual rotation duration to avoid counting inter-chunk gaps.
+                t_rotation_exposed_total += min(
+                    rot_dur, max(0.0, t_rot_end - prev_compute_end)
+                )
             UtG_jax = jax.device_put(next_UtG_np, placement.snp)
             del next_UtG_np
 
@@ -347,6 +375,7 @@ def run_lmm_association_jax(
 
         t_jax_end = time.perf_counter()
         t_jax_compute_total += t_jax_end - t_jax_start
+        prev_compute_end = t_jax_end
 
         # Write results, stripping padding from tail/device-alignment
         t_write_start = time.perf_counter()
@@ -398,12 +427,23 @@ def run_lmm_association_jax(
         logger.info("Timing breakdown:")
         logger.info(f"  Setup (eigen+null):  {t_eigen:.2f}s")
         logger.info(f"  UT@G rotation:       {t_rotation_total:.2f}s")
+        logger.info(f"  UT@G exposed:        {t_rotation_exposed_total:.2f}s")
         logger.info(f"  JAX compute:         {t_jax_compute_total:.2f}s")
         logger.info(f"  Result write:        {t_result_write_total:.2f}s")
         logger.info("  ----")
         logger.info(f"  Accounted:           {accounted:.2f}s")
         logger.info(f"  Total:               {elapsed:.2f}s")
         logger.info(f"LMM Association completed in {elapsed:.2f}s")
+
+    last_run_timing.clear()
+    last_run_timing.update(
+        {
+            "rotation_s": t_rotation_total,
+            "rotation_exposed_s": t_rotation_exposed_total,
+            "jax_compute_s": t_jax_compute_total,
+            "result_write_s": t_result_write_total,
+        }
+    )
 
     return _build_results(
         lmm_mode, snp_indices, filtered_afs, filtered_miss, snp_info, arrays_out

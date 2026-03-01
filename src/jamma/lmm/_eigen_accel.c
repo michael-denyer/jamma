@@ -91,6 +91,12 @@ static void *g_lapack_handle = NULL;  /* dlopen handle */
  *   3. Fallback: try RTLD_DEFAULT (system LAPACK)
  * ------------------------------------------------------------------------- */
 
+/* Debug flag: set EIGEN_ACCEL_DEBUG=1 to enable discovery diagnostics on stderr */
+static int debug_enabled(void) {
+    const char *val = getenv("EIGEN_ACCEL_DEBUG");
+    return val && val[0] == '1';
+}
+
 /* Try to resolve dsyevr from a dlopen handle (or RTLD_DEFAULT).
  * Returns 1 if found, 0 if not. Sets g_is_ilp64 and the function pointer. */
 static int try_resolve_dsyevr(void *handle) {
@@ -112,14 +118,27 @@ static int try_resolve_dsyevr(void *handle) {
         return 1;
     }
 
+    /* Try LAPACKE-style names (some builds use these) */
+    sym = dlsym(handle, "LAPACK_dsyevr");
+    if (sym) {
+        g_dsyevr_lp64 = (dsyevr_lp64_fn)sym;
+        g_is_ilp64 = 0;
+        return 1;
+    }
+
     return 0;
 }
 
 /* Scan a directory for LAPACK-providing shared libraries and try to dlopen them.
  * Returns 1 if DSYEVR was resolved, 0 if not. */
 static int scan_dir_for_lapack(const char *dirpath) {
+    int dbg = debug_enabled();
     DIR *dir = opendir(dirpath);
-    if (!dir) return 0;
+    if (!dir) {
+        if (dbg) fprintf(stderr, "_eigen_accel:   scan_dir %s — opendir failed\n", dirpath);
+        return 0;
+    }
+    if (dbg) fprintf(stderr, "_eigen_accel:   scan_dir %s — opened\n", dirpath);
 
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
@@ -132,14 +151,20 @@ static int scan_dir_for_lapack(const char *dirpath) {
             char fullpath[4096];
             snprintf(fullpath, sizeof(fullpath), "%s/%s", dirpath, entry->d_name);
 
-            void *handle = dlopen(fullpath, RTLD_LAZY | RTLD_LOCAL);
-            if (!handle) continue;
+            if (dbg) fprintf(stderr, "_eigen_accel:   trying dlopen: %s\n", fullpath);
+            void *handle = dlopen(fullpath, RTLD_LAZY | RTLD_GLOBAL);
+            if (!handle) {
+                if (dbg) fprintf(stderr, "_eigen_accel:   dlopen failed: %s\n", dlerror());
+                continue;
+            }
 
             if (try_resolve_dsyevr(handle)) {
+                if (dbg) fprintf(stderr, "_eigen_accel:   resolved dsyevr from %s (ilp64=%d)\n", fullpath, g_is_ilp64);
                 g_lapack_handle = handle;
                 closedir(dir);
                 return 1;
             }
+            if (dbg) fprintf(stderr, "_eigen_accel:   dsyevr not found in %s\n", entry->d_name);
             dlclose(handle);
         }
     }
@@ -198,44 +223,50 @@ static void force_numpy_blas_load(void) {
  * Returns 1 if DSYEVR was resolved, 0 if not. */
 static int scan_proc_maps_for_lapack(void) {
 #ifdef __linux__
+    int dbg = debug_enabled();
     FILE *fp = fopen("/proc/self/maps", "r");
-    if (!fp) return 0;
+    if (!fp) {
+        if (dbg) fprintf(stderr, "_eigen_accel:   /proc/self/maps — fopen failed\n");
+        return 0;
+    }
 
     char line[4096];
     while (fgets(line, sizeof(line), fp)) {
-        /* Each line looks like:
-         * 7f1234-7f5678 r-xp ... /path/to/libscipy_openblas64_-abc123.so
-         * We want the path portion containing openblas or mkl */
         char *path = strchr(line, '/');
         if (!path) continue;
 
-        /* Strip trailing newline */
         char *nl = strchr(path, '\n');
         if (nl) *nl = '\0';
 
-        /* Check if this is an openblas or mkl library */
         char *basename = strrchr(path, '/');
         if (!basename) continue;
-        basename++;  /* skip the '/' */
+        basename++;
 
         if (!strstr(basename, "openblas") && !strstr(basename, "libmkl"))
             continue;
         if (!strstr(basename, ".so"))
             continue;
 
-        /* Found a candidate — dlopen with RTLD_NOLOAD (already loaded) */
+        if (dbg) fprintf(stderr, "_eigen_accel:   /proc/self/maps candidate: %s\n", path);
+
+        /* Found a candidate — dlopen with RTLD_NOLOAD to get existing handle */
         void *handle = dlopen(path, RTLD_LAZY | RTLD_NOLOAD);
         if (!handle) {
-            /* Try full load if NOLOAD fails */
-            handle = dlopen(path, RTLD_LAZY | RTLD_LOCAL);
+            if (dbg) fprintf(stderr, "_eigen_accel:   RTLD_NOLOAD failed, trying full load: %s\n", dlerror());
+            handle = dlopen(path, RTLD_LAZY | RTLD_GLOBAL);
         }
-        if (!handle) continue;
+        if (!handle) {
+            if (dbg) fprintf(stderr, "_eigen_accel:   dlopen failed: %s\n", dlerror());
+            continue;
+        }
 
         if (try_resolve_dsyevr(handle)) {
+            if (dbg) fprintf(stderr, "_eigen_accel:   resolved dsyevr from /proc/self/maps (ilp64=%d)\n", g_is_ilp64);
             g_lapack_handle = handle;
             fclose(fp);
             return 1;
         }
+        if (dbg) fprintf(stderr, "_eigen_accel:   dsyevr not found in %s\n", basename);
         dlclose(handle);
     }
     fclose(fp);
@@ -246,31 +277,34 @@ static int scan_proc_maps_for_lapack(void) {
 /* Main LAPACK discovery function. Called once at module init.
  * Returns 1 if DSYEVR was resolved, 0 if not. */
 static int discover_lapack(void) {
+    int dbg = debug_enabled();
+
     /* 1. Try process-global symbols first (macOS Accelerate, LD_PRELOAD, etc.) */
+    if (dbg) fprintf(stderr, "_eigen_accel: step 1 — RTLD_DEFAULT\n");
     if (try_resolve_dsyevr(RTLD_DEFAULT)) {
+        if (dbg) fprintf(stderr, "_eigen_accel: found via RTLD_DEFAULT (ilp64=%d)\n", g_is_ilp64);
         return 1;
     }
 
-    /* 2. Force numpy to load its BLAS (lazy load), then check again.
-     * After numpy.linalg.eigh runs, the BLAS library is in the process.
-     * On macOS this often makes symbols available via RTLD_DEFAULT.
-     * On Linux, BLAS is loaded with RTLD_LOCAL so we need step 3. */
+    /* 2. Force numpy to load its BLAS (lazy load), then check again. */
+    if (dbg) fprintf(stderr, "_eigen_accel: step 2 — force numpy BLAS load\n");
     force_numpy_blas_load();
     if (try_resolve_dsyevr(RTLD_DEFAULT)) {
+        if (dbg) fprintf(stderr, "_eigen_accel: found via RTLD_DEFAULT after numpy load (ilp64=%d)\n", g_is_ilp64);
         return 1;
     }
 
-    /* 3. Scan /proc/self/maps for the already-loaded BLAS library.
-     * numpy loaded it (step 2), but with RTLD_LOCAL so it's not visible
-     * via RTLD_DEFAULT. We find it in /proc/self/maps and dlopen it
-     * directly to get a handle we can dlsym from. */
+    /* 3. Scan /proc/self/maps for the already-loaded BLAS library. */
+    if (dbg) fprintf(stderr, "_eigen_accel: step 3 — /proc/self/maps scan\n");
     if (scan_proc_maps_for_lapack()) {
+        if (dbg) fprintf(stderr, "_eigen_accel: found via /proc/self/maps (ilp64=%d)\n", g_is_ilp64);
         return 1;
     }
 
     /* 4. Fallback: scan numpy's lib directories for BLAS/LAPACK shared libs.
      * Uses C API to resolve numpy.__file__ and build candidate paths.
      * Avoids PyRun_String (__builtins__ unavailable during module init). */
+    if (dbg) fprintf(stderr, "_eigen_accel: step 4 — numpy dir scan\n");
     PyObject *np2 = PyImport_ImportModule("numpy");
     if (!np2) { PyErr_Clear(); return 0; }
 

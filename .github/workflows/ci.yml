@@ -91,6 +91,8 @@ jobs:
           "
 
       - name: Compile C extensions
+        env:
+          EIGEN_ACCEL_DEBUG: "1"
         run: |
           uv run python -m jamma.lmm._compile_accel
           uv run python -m jamma.lmm._compile_eigen

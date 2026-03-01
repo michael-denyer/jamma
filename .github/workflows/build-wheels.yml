@@ -34,7 +34,9 @@ jobs:
           # (still faster than Python loops; users can build from source with
           # brew install libomp for OpenMP support)
           # Smoke test: import + numerical sanity (catches ABI mismatches)
-          CIBW_TEST_COMMAND: "python {project}/scripts/smoke_test_c_extension.py"
+          CIBW_TEST_COMMAND: >-
+            python {project}/scripts/smoke_test_c_extension.py &&
+            python {project}/scripts/smoke_test_eigen_extension.py
           # Install test deps (numpy required for import)
           CIBW_TEST_REQUIRES: "numpy"
 

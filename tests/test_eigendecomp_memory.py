@@ -5,7 +5,12 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from jamma.core.memory import _dsyevd_workspace_gb, estimate_eigendecomp_memory
+from jamma.core.memory import (
+    _dsyevd_workspace_gb,
+    _dsyevr_available,
+    _dsyevr_workspace_gb,
+    estimate_eigendecomp_memory,
+)
 from jamma.lmm.eigen import eigendecompose_kinship
 
 
@@ -49,28 +54,60 @@ class TestDsyevdWorkspaceFormula:
 
 
 @pytest.mark.tier0
+class TestDsyevrWorkspaceFormula:
+    """Tests for _dsyevr_workspace_gb (linear O(N) workspace)."""
+
+    def test_known_value_125k(self):
+        """125k samples: DSYEVR workspace should be ~0.036 GB."""
+        ws = _dsyevr_workspace_gb(125_000)
+        # (26*125000 + 10*125000) * 8 / 1e9 = 0.036 GB
+        assert 0.034 < ws < 0.038
+
+    def test_scales_linearly(self):
+        """Workspace is O(N): 2x N -> ~2x workspace."""
+        ws_10k = _dsyevr_workspace_gb(10_000)
+        ws_20k = _dsyevr_workspace_gb(20_000)
+        ratio = ws_20k / ws_10k
+        assert 1.9 < ratio < 2.1
+
+    def test_zero_samples(self):
+        """n=0 should return minimal workspace (max(1, 0) = 1 for both terms)."""
+        ws = _dsyevr_workspace_gb(0)
+        # max(1, 0) * 8 + max(1, 0) * 8 = 16 bytes = 1.6e-08 GB
+        assert ws == pytest.approx(16 / 1e9, rel=1e-12)
+
+
+@pytest.mark.tier0
 class TestEigendecompMemoryEstimate:
     """Tests for memory estimation function."""
 
     def test_estimate_200k_samples(self):
-        """200k samples should require approximately 960GB with in-place dsyevd."""
+        """200k samples: DSYEVR ~320GB, DSYEVD in-place ~960GB."""
         n_samples = 200_000
         estimate = estimate_eigendecomp_memory(n_samples)
-        # K/U shared (320GB) + dsyevd workspace (~640GB) = ~960GB
-        assert 955 < estimate < 965
+        if _dsyevr_available():
+            # K/U shared (320GB) + DSYEVR workspace (~0.06GB) = ~320GB
+            assert 315 < estimate < 325
+        else:
+            # K/U shared (320GB) + DSYEVD workspace (~640GB) = ~960GB
+            assert 955 < estimate < 965
 
     def test_estimate_100k_samples(self):
-        """100k samples should require approximately 240GB with in-place dsyevd."""
+        """100k samples: DSYEVR ~80GB, DSYEVD in-place ~240GB."""
         n_samples = 100_000
         estimate = estimate_eigendecomp_memory(n_samples)
-        # K/U shared (80GB) + dsyevd workspace (~160GB) = ~240GB
-        assert 235 < estimate < 245
+        if _dsyevr_available():
+            # K/U shared (80GB) + DSYEVR workspace (~0.03GB) = ~80GB
+            assert 78 < estimate < 82
+        else:
+            # K/U shared (80GB) + DSYEVD workspace (~160GB) = ~240GB
+            assert 235 < estimate < 245
 
     def test_estimate_scales_quadratically(self):
-        """Memory should scale quadratically with n_samples."""
+        """Memory scales quadratically (kinship term dominates workspace)."""
         est_10k = estimate_eigendecomp_memory(10_000)
         est_20k = estimate_eigendecomp_memory(20_000)
-        # 2x samples -> 4x memory (quadratic)
+        # 2x samples -> 4x memory (quadratic kinship dominates linear workspace)
         ratio = est_20k / est_10k
         assert 3.9 < ratio < 4.1
 
@@ -146,7 +183,9 @@ class TestEigendecompPreflightCheck:
             assert has_need
 
     def test_inplace_reuses_k_buffer(self):
-        """eigenvectors should reuse K's memory buffer (no extra allocation)."""
+        """_eigh_inplace reuses K's memory buffer when called directly."""
+        from jamma.lmm.eigen import _eigh_inplace
+
         try:
             from numpy.linalg import _umath_linalg  # noqa: F401
         except (ImportError, AttributeError):
@@ -158,7 +197,8 @@ class TestEigendecompPreflightCheck:
         K = (A @ A.T) / n
         K_ptr = K.ctypes.data
 
-        eigenvalues, eigenvectors = eigendecompose_kinship(K, check_memory=False)
+        # Call _eigh_inplace directly (eigendecompose_kinship prefers DSYEVR now)
+        eigenvalues, eigenvectors = _eigh_inplace(K)
 
         assert eigenvectors.ctypes.data == K_ptr, (
             "eigenvectors should reuse K's buffer; got new allocation"
@@ -238,13 +278,22 @@ class TestEigendecompPreflightCheck:
         assert _inplace_eigen_available() is False
 
     def test_fallback_estimate_includes_eigenvector_allocation(self):
-        """When gufunc unavailable, memory estimate adds eigenvector buffer."""
-        with patch("jamma.core.memory._inplace_eigen_available", return_value=False):
+        """When DSYEVD fallback path active, memory estimate adds eigenvector buffer."""
+        # Both _dsyevr_available=False and _inplace_eigen_available=False:
+        # falls back to np.linalg.eigh which allocates K and U separately
+        with (
+            patch("jamma.core.memory._dsyevr_available", return_value=False),
+            patch("jamma.core.memory._inplace_eigen_available", return_value=False),
+        ):
             est = estimate_eigendecomp_memory(200_000)
-            # K (320GB) + U (320GB) + workspace (~640GB) = ~1280GB
+            # K (320GB) + U (320GB) + DSYEVD workspace (~640GB) = ~1280GB
             assert 1275 < est < 1285
 
-        with patch("jamma.core.memory._inplace_eigen_available", return_value=True):
+        # _dsyevr_available=False, _inplace_eigen_available=True: in-place DSYEVD
+        with (
+            patch("jamma.core.memory._dsyevr_available", return_value=False),
+            patch("jamma.core.memory._inplace_eigen_available", return_value=True),
+        ):
             est = estimate_eigendecomp_memory(200_000)
-            # K/U shared (320GB) + workspace (~640GB) = ~960GB
+            # K/U shared (320GB) + DSYEVD workspace (~640GB) = ~960GB
             assert 955 < est < 965

@@ -74,7 +74,6 @@ jobs:
           np_dir = pathlib.Path(numpy.__file__).resolve().parent
           print(f'numpy.__file__ = {numpy.__file__}')
           print(f'resolved np_dir = {np_dir}')
-          print(f'np_dir.parent = {np_dir.parent}')
           for d in [np_dir / '.libs', np_dir / '_core' / '.libs', np_dir.parent / 'numpy.libs']:
               print(f'{d}: exists={d.exists()}, is_dir={d.is_dir()}')
               if d.is_dir():
@@ -89,6 +88,16 @@ jobs:
           except Exception as e:
               print(f'show_config failed: {e}')
           "
+          echo "=== DSYEVR symbols in numpy BLAS library ==="
+          LIB=$(find $(uv run python -c "import numpy; print(numpy.__file__.rsplit('/',1)[0])") -path "*/numpy.libs/lib*openblas*" 2>/dev/null | head -1)
+          if [ -n "$LIB" ]; then
+            echo "Library: $LIB"
+            nm -D "$LIB" 2>/dev/null | grep -i dsyevr || echo "No dsyevr symbols found"
+            echo "=== All LAPACK symbols containing 'syev' ==="
+            nm -D "$LIB" 2>/dev/null | grep -i syev | head -20
+          else
+            echo "No openblas library found"
+          fi
 
       - name: Compile C extensions
         env:

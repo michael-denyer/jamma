@@ -66,6 +66,30 @@ jobs:
       - name: Install dependencies
         run: uv sync ${{ matrix.install_args }}
 
+      - name: Debug numpy BLAS layout
+        if: runner.os == 'Linux'
+        run: |
+          uv run python -c "
+          import pathlib, numpy
+          np_dir = pathlib.Path(numpy.__file__).resolve().parent
+          print(f'numpy.__file__ = {numpy.__file__}')
+          print(f'resolved np_dir = {np_dir}')
+          print(f'np_dir.parent = {np_dir.parent}')
+          for d in [np_dir / '.libs', np_dir / '_core' / '.libs', np_dir.parent / 'numpy.libs']:
+              print(f'{d}: exists={d.exists()}, is_dir={d.is_dir()}')
+              if d.is_dir():
+                  for f in sorted(d.iterdir()):
+                      print(f'  {f.name}')
+          try:
+              cfg = numpy.show_config(mode='dicts')
+              bd = cfg.get('Build Dependencies', {})
+              for k in ['blas', 'lapack']:
+                  info = bd.get(k, {})
+                  print(f'{k}: {info}')
+          except Exception as e:
+              print(f'show_config failed: {e}')
+          "
+
       - name: Compile C extensions
         run: |
           uv run python -m jamma.lmm._compile_accel

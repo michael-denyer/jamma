@@ -54,6 +54,39 @@ Eigendecomp dominates the increase: O(n³) scaling from 90k→125k is ~2.7×, pl
 
 ---
 
+## C Extension LMM Acceleration (NumPy Backend)
+
+The NumPy backend includes an optional C extension (`_lmm_accel.c`) with OpenMP parallelism
+that replaces the Python loop over SNPs for Wald test computation. The extension uses a
+workspace API (pre-allocated per-thread buffers) and SoA Uab layout with invariant precompute.
+
+### C Extension vs JAX Backend (E96ds_v6, 48 cores, synthetic 95k SNPs)
+
+| Scale    | C ext LMM | JAX LMM | C ext Speedup |
+|----------|-----------|---------|---------------|
+| 5k×95k   | 20.0s     | 142.9s  | **7.1x**      |
+| 20k×95k  | 90.3s     | 193.9s  | **2.1x**      |
+| 50k×95k  | 273.4s    | 530.8s  | **1.9x**      |
+| 75k×95k  | 484.3s    | 867.6s  | **1.8x**      |
+
+The C extension wins at all scales. At small n, JAX's per-SNP overhead (Python Brent loop +
+XLA dispatch) dominates. At large n, UT@G rotation (identical DGEMM in both) dominates and
+compute ratios converge to ~3x.
+
+### C Extension Scaling (LMM compute only, 95k SNPs)
+
+| Scale    | UT@G Rotation | Compute | LMM Total | RSS     |
+|----------|---------------|---------|-----------|---------|
+| 5k×95k   | 2.9s          | 10.2s   | 20.0s     | 7.4 GB  |
+| 20k×95k  | 24.6s         | 42.9s   | 90.3s     | 17.4 GB |
+| 50k×95k  | 118.4s        | 101.9s  | 273.4s    | 45.7 GB |
+| 75k×95k  | 254.0s        | 150.2s  | 484.3s    | 80.2 GB |
+
+Compute scales O(n_samples). Rotation scales O(n² × n_snps) and dominates at 50k+.
+Both use MKL DGEMM with 48 threads.
+
+---
+
 ## v2.0 — Production GWAS Features
 
 v2.0 added LOCO kinship, eigendecomposition reuse, SNP filtering, HWE QC, and phenotype selection. No performance regressions from v1.4.
@@ -187,4 +220,4 @@ See [USER_GUIDE.md](USER_GUIDE.md) for installation instructions and [GEMMA_DIVE
 Full test suite passing. Kinship tolerance aligned from 1e-10 to 1e-8 in v2.5.7 to match EQUIVALENCE.md bounds. All other tolerance constants in `src/jamma/validation/tolerances.py` unchanged from v1.3.
 
 ---
-*Last updated: 2026-02-24*
+*Last updated: 2026-03-01*

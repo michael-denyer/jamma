@@ -1,15 +1,10 @@
-name: Publish to PyPI
+name: Publish to TestPyPI
+
+# Production PyPI publishing is handled by build-wheels.yml (platform wheels + sdist).
+# This workflow is for manual TestPyPI publishes only.
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
-    inputs:
-      test_pypi:
-        description: 'Publish to TestPyPI instead of PyPI'
-        required: false
-        default: 'false'
-        type: boolean
 
 jobs:
   publish:
@@ -29,12 +24,7 @@ jobs:
       - name: Build package
         run: uv build
 
-      - name: Publish to PyPI
-        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.test_pypi == 'false')
-        uses: pypa/gh-action-pypi-publish@release/v1
-
       - name: Publish to TestPyPI
-        if: github.event_name == 'workflow_dispatch' && inputs.test_pypi == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/

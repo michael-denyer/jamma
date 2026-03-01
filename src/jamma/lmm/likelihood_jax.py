@@ -77,6 +77,55 @@ def compute_uab_jax(
     return Uab
 
 
+@jit
+def calc_pab_ncvt1_jax(
+    s_ww: Float[Array, ""],
+    s_wx: Float[Array, ""],
+    s_wy: Float[Array, ""],
+    s_xx: Float[Array, ""],
+    s_xy: Float[Array, ""],
+    s_yy: Float[Array, ""],
+) -> Float[Array, "3 6"]:
+    """Direct Pab for n_cvt=1 — no recursive loop, no index table.
+
+    Mirrors calc_pab_ncvt1_split from _lmm_accel.c:674-697.
+    Takes 6 scalar dot-product sums and returns Pab as a (3, 6) array
+    using direct Schur complement arithmetic.
+
+    Column ordering matches the n_cvt=1 Uab layout:
+        col 0: ww, col 1: wx, col 2: wy, col 3: xx, col 4: xy, col 5: yy
+
+    Args:
+        s_ww: Hi-weighted dot product of w with w.
+        s_wx: Hi-weighted dot product of w with x (SNP-varying).
+        s_wy: Hi-weighted dot product of w with y.
+        s_xx: Hi-weighted dot product of x with x (SNP-varying).
+        s_xy: Hi-weighted dot product of x with y (SNP-varying).
+        s_yy: Hi-weighted dot product of y with y.
+
+    Returns:
+        Pab matrix (3, 6).
+    """
+    pab = jnp.zeros((3, 6), dtype=jnp.float64)
+    # Row 0: raw sums
+    pab = pab.at[0, 0].set(s_ww)
+    pab = pab.at[0, 1].set(s_wx)
+    pab = pab.at[0, 2].set(s_wy)
+    pab = pab.at[0, 3].set(s_xx)
+    pab = pab.at[0, 4].set(s_xy)
+    pab = pab.at[0, 5].set(s_yy)
+    # Row 1: project out W (Schur complement)
+    inv_ww = jnp.where(s_ww != 0, 1.0 / s_ww, 0.0)
+    pab = pab.at[1, 3].set(s_xx - s_wx * s_wx * inv_ww)
+    pab = pab.at[1, 4].set(s_xy - s_wx * s_wy * inv_ww)
+    pab = pab.at[1, 5].set(s_yy - s_wy * s_wy * inv_ww)
+    # Row 2: project out X (Schur complement)
+    ps_xx = pab[1, 3]
+    inv_xx = jnp.where(ps_xx != 0, 1.0 / ps_xx, 0.0)
+    pab = pab.at[2, 5].set(pab[1, 5] - pab[1, 4] * pab[1, 4] * inv_xx)
+    return pab
+
+
 @partial(jit, static_argnums=(0,))
 def calc_pab_jax(
     n_cvt: int,
@@ -272,6 +321,66 @@ def _reml_with_precomputed_iab(
     f = c - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * jnp.log(P_yy)
 
     return f
+
+
+@jit
+def _reml_ncvt1_split(
+    Hi_eval: Float[Array, " n"],
+    uab_varying: Float[Array, "n 3"],
+    s_ww: Float[Array, ""],
+    s_wy: Float[Array, ""],
+    log_s_ww: Float[Array, ""],
+    pab1_5: Float[Array, ""],
+    logdet_iab: Float[Array, ""],
+    logdet_h: Float[Array, ""],
+    df: int,
+) -> Float[Array, ""]:
+    """REML log-likelihood for n_cvt=1 with split invariant/varying sums.
+
+    Mirrors reml_logl_ncvt1_cached_split from _lmm_accel.c:712-766.
+    Computes only 3 SNP-varying dot products; invariant sums come from
+    precomputed arguments. This halves DRAM reads vs the general path.
+
+    Args:
+        Hi_eval: 1/(lambda * eigenvalues + 1) vector (n_samples,).
+        uab_varying: SNP-varying Uab columns (n_samples, 3) — [wx, xx, xy].
+        s_ww: Precomputed invariant sum: dot(Hi_eval, ww).
+        s_wy: Precomputed invariant sum: dot(Hi_eval, wy).
+        log_s_ww: log(s_ww) for logdet computation (precomputed).
+        pab1_5: s_yy - s_wy^2/s_ww (completely SNP-invariant per lambda).
+        logdet_iab: log|WW| contribution (precomputed, lambda-independent).
+        logdet_h: log|H| (precomputed for this lambda).
+        df: Degrees of freedom = n_samples - n_cvt - 1 = n_samples - 2.
+
+    Returns:
+        REML log-likelihood scalar.
+    """
+    # 3 SNP-varying dot products only
+    s_wx = jnp.dot(Hi_eval, uab_varying[:, 0])
+    s_xx = jnp.dot(Hi_eval, uab_varying[:, 1])
+    s_xy = jnp.dot(Hi_eval, uab_varying[:, 2])
+
+    # Pab row 1 (project out W)
+    inv_ww = jnp.where(s_ww != 0, 1.0 / s_ww, 0.0)
+    p1_xx = s_xx - s_wx * s_wx * inv_ww
+    p1_xy = s_xy - s_wx * s_wy * inv_ww
+    # p1_yy is completely invariant (precomputed as pab1_5)
+
+    # Pab row 2 (project out X)
+    inv_xx = jnp.where(p1_xx != 0, 1.0 / p1_xx, 0.0)
+    P_yy = pab1_5 - p1_xy * p1_xy * inv_xx
+
+    # logdet_hiw = log|WHiW| - log|WW|
+    # For n_cvt=1: diagonal entries are s_ww (row 0) and p1_xx (row 1)
+    logdet_pab = log_s_ww + jnp.where(p1_xx > 0, jnp.log(p1_xx), 0.0)
+    logdet_hiw = logdet_pab - logdet_iab
+
+    # Guard P_yy: negative -> NaN, near-zero -> clamp
+    P_yy = jnp.where(P_yy < 0.0, jnp.nan, P_yy)
+    P_yy = jnp.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
+
+    c = 0.5 * df * (jnp.log(df) - jnp.log(2 * jnp.pi) - 1.0)
+    return c - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * jnp.log(P_yy)
 
 
 @partial(jit, static_argnums=(0,))
@@ -481,15 +590,66 @@ def golden_section_optimize_lambda(
         n_cvt, lambdas, eigenvalues, Uab_batch, Iab_batch
     )
 
-    # REML batch evaluator (closure over precomputed Iab)
-    def compute_reml_batch(log_lams):
-        lams = jnp.exp(log_lams)
-        return vmap(
-            lambda lam, Uab, Iab: _reml_with_precomputed_iab(
-                n_cvt, lam, eigenvalues, Uab, Iab
-            ),
-            in_axes=(0, 0, 0),
-        )(lams, Uab_batch, Iab_batch)
+    if n_cvt == 1:
+        # n_cvt=1 fast path: extract invariant columns once, reuse across SNPs.
+        # During golden section, each SNP has its own lambda, so invariant sums
+        # must be computed per-SNP lambda. The invariant Uab columns (ww, wy, yy)
+        # are still shared — extract once and close over them.
+        ww = Uab_batch[0, :, 0]  # same for all SNPs
+        wy = Uab_batch[0, :, 2]
+        yy = Uab_batch[0, :, 5]
+        uab_varying = Uab_batch[:, :, [1, 3, 4]]  # (n_snps, n_samples, 3)
+        n_samples = eigenvalues.shape[0]
+        df = n_samples - 2
+
+        # logdet_iab: lambda-independent, but SNP-varying (xx, wx differ per SNP).
+        # logdet_diag_indices = [(0,0), (1,3)] for n_cvt=1:
+        #   Iab[0, 0] = sum(ww) — invariant; Iab[1, 3] = projected xx — SNP-varying
+        iab_s_ww_all = Iab_batch[:, 0, 0]  # (n_snps,) — actually all equal for n_cvt=1
+        iab_p1_xx_all = Iab_batch[:, 1, 3]  # (n_snps,) — SNP-varying
+        logdet_iab_all = jnp.where(
+            iab_s_ww_all > 0, jnp.log(iab_s_ww_all), 0.0
+        ) + jnp.where(iab_p1_xx_all > 0, jnp.log(iab_p1_xx_all), 0.0)  # (n_snps,)
+
+        def compute_reml_batch(log_lams):
+            lams = jnp.exp(log_lams)
+
+            def reml_for_snp(lam, uab_snp, logdet_iab):
+                v_temp = lam * eigenvalues + 1.0
+                Hi_eval = 1.0 / v_temp
+                logdet_h = jnp.sum(jnp.log(jnp.abs(v_temp)))
+                s_ww = jnp.dot(Hi_eval, ww)
+                s_wy = jnp.dot(Hi_eval, wy)
+                s_yy_val = jnp.dot(Hi_eval, yy)
+                log_s_ww = jnp.where(s_ww > 0, jnp.log(s_ww), 0.0)
+                inv_ww = jnp.where(s_ww != 0, 1.0 / s_ww, 0.0)
+                pab1_5 = s_yy_val - s_wy * s_wy * inv_ww
+                return _reml_ncvt1_split(
+                    Hi_eval,
+                    uab_snp,
+                    s_ww,
+                    s_wy,
+                    log_s_ww,
+                    pab1_5,
+                    logdet_iab,
+                    logdet_h,
+                    df,
+                )
+
+            return vmap(reml_for_snp, in_axes=(0, 0, 0))(
+                lams, uab_varying, logdet_iab_all
+            )
+
+    else:
+        # General n_cvt path: use precomputed Iab
+        def compute_reml_batch(log_lams):
+            lams = jnp.exp(log_lams)
+            return vmap(
+                lambda lam, Uab, Iab: _reml_with_precomputed_iab(
+                    n_cvt, lam, eigenvalues, Uab, Iab
+                ),
+                in_axes=(0, 0, 0),
+            )(lams, Uab_batch, Iab_batch)
 
     # Stage 2: Golden section refinement
     return _golden_section_refine(
@@ -506,9 +666,12 @@ def _batch_grid_reml_with_iab(
 ) -> Float[Array, "g p"]:
     """Compute REML at all grid points using precomputed Iab (optimized).
 
-    Uses vmap over lambda values to avoid Python loops and host/device sync.
-    Iab is precomputed once per chunk, avoiding redundant identity-weighted
-    projection computations (~n_grid fewer calc_pab_jax calls per SNP).
+    For n_cvt=1: uses a fast path that precomputes invariant sums once per
+    lambda and vmaps SNPs outer / lambdas inner, keeping per-SNP data in
+    cache across all lambda evaluations. This halves DRAM reads (3 varying
+    columns vs 6 full columns per SNP per grid eval).
+
+    For n_cvt>1: falls through to the general lambda-outer vmap.
 
     Args:
         n_cvt: Number of covariates (passed through to _reml_with_precomputed_iab).
@@ -520,8 +683,10 @@ def _batch_grid_reml_with_iab(
     Returns:
         Log-likelihoods (n_grid, n_snps).
     """
+    if n_cvt == 1:
+        return _batch_grid_reml_ncvt1(lambdas, eigenvalues, Uab_batch, Iab_batch)
 
-    # vmap over lambda values, then vmap over SNPs
+    # General path: vmap over lambda values, then vmap over SNPs
     def reml_for_lambda(lam):
         return vmap(
             lambda Uab, Iab: _reml_with_precomputed_iab(
@@ -531,6 +696,109 @@ def _batch_grid_reml_with_iab(
         )(Uab_batch, Iab_batch)
 
     return vmap(reml_for_lambda)(lambdas)
+
+
+def _batch_grid_reml_ncvt1(
+    lambdas: Float[Array, " g"],
+    eigenvalues: Float[Array, " n"],
+    Uab_batch: Float[Array, "p n 6"],
+    Iab_batch: Float[Array, "p 3 6"],
+) -> Float[Array, "g p"]:
+    """n_cvt=1 fast path for grid REML: SNPs-outer, lambdas-inner vmap.
+
+    Precomputes per-lambda invariant sums (s_ww, s_wy, s_yy, logdet_h)
+    once for all SNPs, then evaluates each SNP across all lambdas keeping
+    the 3 SNP-varying columns resident in cache.
+
+    Args:
+        lambdas: Grid of lambda values (n_grid,).
+        eigenvalues: Eigenvalues (n_samples,).
+        Uab_batch: Uab matrices (n_snps, n_samples, 6).
+        Iab_batch: Identity-weighted Pab (n_snps, 3, 6).
+
+    Returns:
+        Log-likelihoods (n_grid, n_snps).
+    """
+    n_samples = eigenvalues.shape[0]
+    df = n_samples - 2  # n_cvt=1 → df = n - 1 - 1
+
+    # Extract invariant columns from Uab (identical across all SNPs for n_cvt=1)
+    # Uab column layout for n_cvt=1: [ww, wx, wy, xx, xy, yy]
+    #   col 0: ww, col 2: wy, col 5: yy
+    ww = Uab_batch[0, :, 0]  # (n_samples,) — same for all SNPs
+    wy = Uab_batch[0, :, 2]
+    yy = Uab_batch[0, :, 5]
+
+    # Extract SNP-varying columns: wx=col1, xx=col3, xy=col4
+    # uab_varying: (n_snps, n_samples, 3)
+    uab_varying = Uab_batch[:, :, [1, 3, 4]]
+
+    # Precompute per-SNP logdet_iab (lambda-independent, but SNP-varying).
+    # For n_cvt=1: logdet_diag_indices = [(0,0), (1,3)]
+    #   Iab[0, 0] = sum(ww)        — SNP-invariant (ww is shared)
+    #   Iab[1, 3] = sum(xx) - sum(wx)^2/sum(ww) — SNP-varying (xx, wx differ per SNP)
+    # We use Iab_batch[:, 0, 0] (same for all SNPs) and Iab_batch[:, 1, 3] (per-SNP).
+    iab_s_ww_all = Iab_batch[
+        :, 0, 0
+    ]  # (n_snps,) — actually all equal, but extract per-SNP
+    iab_p1_xx_all = Iab_batch[:, 1, 3]  # (n_snps,) — SNP-varying
+    log_iab_s_ww_all = jnp.where(iab_s_ww_all > 0, jnp.log(iab_s_ww_all), 0.0)
+    log_iab_p1_xx_all = jnp.where(iab_p1_xx_all > 0, jnp.log(iab_p1_xx_all), 0.0)
+    logdet_iab_all = log_iab_s_ww_all + log_iab_p1_xx_all  # (n_snps,)
+
+    # Precompute per-lambda invariant sums: vmap over lambdas
+    # Each lambda produces: Hi_eval, s_ww, s_wy, log_s_ww, pab1_5, logdet_h
+    def compute_lambda_invariants(lam):
+        v_temp = lam * eigenvalues + 1.0
+        Hi_eval = 1.0 / v_temp
+        logdet_h = jnp.sum(jnp.log(jnp.abs(v_temp)))
+        s_ww = jnp.dot(Hi_eval, ww)
+        s_wy = jnp.dot(Hi_eval, wy)
+        s_yy = jnp.dot(Hi_eval, yy)
+        log_s_ww = jnp.where(s_ww > 0, jnp.log(s_ww), 0.0)
+        inv_ww = jnp.where(s_ww != 0, 1.0 / s_ww, 0.0)
+        pab1_5 = s_yy - s_wy * s_wy * inv_ww  # completely SNP-invariant per lambda
+        return Hi_eval, s_ww, s_wy, log_s_ww, pab1_5, logdet_h
+
+    # Vectorize over lambda grid: (n_grid, ...)
+    (
+        Hi_eval_grid,  # (n_grid, n_samples)
+        s_ww_grid,  # (n_grid,)
+        s_wy_grid,  # (n_grid,)
+        log_s_ww_grid,  # (n_grid,)
+        pab1_5_grid,  # (n_grid,)
+        logdet_h_grid,  # (n_grid,)
+    ) = vmap(compute_lambda_invariants)(lambdas)
+
+    # Inner function: for one SNP, evaluate REML across all lambdas (lambdas-inner)
+    # uab_snp: (n_samples, 3) — [wx, xx, xy]
+    # logdet_iab_snp: scalar, pre-computed for this SNP
+    def reml_for_snp(uab_snp, logdet_iab_snp):
+        def reml_at_lambda(Hi_eval, s_ww, s_wy, log_s_ww, pab1_5, logdet_h):
+            return _reml_ncvt1_split(
+                Hi_eval,
+                uab_snp,
+                s_ww,
+                s_wy,
+                log_s_ww,
+                pab1_5,
+                logdet_iab_snp,
+                logdet_h,
+                df,
+            )
+
+        return vmap(reml_at_lambda)(
+            Hi_eval_grid,
+            s_ww_grid,
+            s_wy_grid,
+            log_s_ww_grid,
+            pab1_5_grid,
+            logdet_h_grid,
+        )  # (n_grid,)
+
+    # vmap over SNPs (outer): (n_snps, n_grid)
+    all_logls = vmap(reml_for_snp)(uab_varying, logdet_iab_all)
+    return all_logls.T  # (n_grid, n_snps)
 
 
 @partial(jit, static_argnums=(0,))

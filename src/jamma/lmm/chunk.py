@@ -73,7 +73,7 @@ def _compute_chunk_size(
     if elements_per_snp == 0:
         return n_snps
 
-    safe_bound = _MAX_BUFFER_ELEMENTS // elements_per_snp
+    safe_bound = max(1, _MAX_BUFFER_ELEMENTS // elements_per_snp)
 
     # Align to device count multiples to prevent XLA padding partial shards
     chunk = safe_bound

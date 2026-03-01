@@ -17,7 +17,11 @@ from jamma.lmm.likelihood import (
     reml_log_likelihood,
 )
 from jamma.lmm.likelihood_jax import (
+    _batch_grid_reml_ncvt1,
+    batch_compute_iab,
+    batch_compute_uab,
     build_index_table,
+    golden_section_optimize_lambda,
     mle_log_likelihood_jax,
     reml_log_likelihood_jax,
 )
@@ -331,3 +335,92 @@ class TestKinshipSymmetryCheck:
             logger.remove(sink_id)
 
         assert "not symmetric" not in buf.getvalue()
+
+
+@pytest.mark.tier0
+class TestNcvt1FastPathParity:
+    """n_cvt=1 fast path must match general path exactly."""
+
+    def _make_batch_data(self, n_samples=50, n_snps=20, rng_seed=42):
+        """Create Uab_batch and Iab_batch for n_cvt=1."""
+        rng = np.random.default_rng(rng_seed)
+        eigenvalues = np.sort(rng.exponential(1.0, size=n_samples))[::-1]
+
+        W = np.ones((n_samples, 1))
+        y = rng.standard_normal(n_samples)
+        U = np.linalg.qr(rng.standard_normal((n_samples, n_samples)))[0]
+        UtW = jnp.array(U.T @ W)
+        Uty = jnp.array(U.T @ y)
+
+        G = rng.choice([0.0, 1.0, 2.0], size=(n_samples, n_snps), p=[0.25, 0.5, 0.25])
+        UtG = jnp.array(U.T @ G)
+
+        evals = jnp.array(eigenvalues)
+        Uab = batch_compute_uab(1, UtW, Uty, UtG)
+        Iab = batch_compute_iab(1, Uab)
+
+        return evals, Uab, Iab
+
+    def test_grid_reml_ncvt1_matches_general(self):
+        """_batch_grid_reml_ncvt1 matches scalar _reml_with_precomputed_iab."""
+        from jax import vmap
+
+        from jamma.lmm.likelihood_jax import _reml_with_precomputed_iab
+
+        evals, Uab, Iab = self._make_batch_data()
+        lambdas = jnp.logspace(-5, 5, 50)
+
+        # Fast path (n_cvt=1 specialized)
+        fast = _batch_grid_reml_ncvt1(lambdas, evals, Uab, Iab)
+
+        # General path: manually vmap the scalar REML evaluator
+        # vmap over lambdas (outer), then over SNPs (inner)
+        def reml_for_lambda(lam):
+            return vmap(lambda u, i: _reml_with_precomputed_iab(1, lam, evals, u, i))(
+                Uab, Iab
+            )
+
+        general = vmap(reml_for_lambda)(lambdas)
+
+        np.testing.assert_allclose(
+            np.array(fast),
+            np.array(general),
+            rtol=1e-10,
+            err_msg="n_cvt=1 fast path diverges from general REML evaluator",
+        )
+
+    def test_golden_section_ncvt1_produces_valid_results(self):
+        """golden_section_optimize_lambda n_cvt=1 produces valid lambdas and logls."""
+        evals, Uab, Iab = self._make_batch_data()
+
+        # Run golden section with n_cvt=1 fast path
+        lambdas, logls = golden_section_optimize_lambda(
+            1,
+            evals,
+            Uab,
+            Iab,
+            n_grid=50,
+            n_iter=20,
+        )
+
+        lambdas_np = np.array(lambdas)
+        logls_np = np.array(logls)
+
+        # Lambdas should be in valid range
+        assert np.all(lambdas_np >= 1e-5), "Lambdas below l_min"
+        assert np.all(lambdas_np <= 1e5), "Lambdas above l_max"
+
+        # Log-likelihoods should be finite (no NaN from fast path)
+        assert np.all(np.isfinite(logls_np)), "Non-finite log-likelihoods"
+
+        # Optimized logls should be close to the best coarse grid point.
+        # Golden section refines within a bracket, so it can be marginally
+        # worse than the grid's best point when the optimum is very flat.
+        grid_logls = _batch_grid_reml_ncvt1(jnp.logspace(-5, 5, 50), evals, Uab, Iab)
+        best_grid = np.array(jnp.max(grid_logls, axis=0))
+        np.testing.assert_allclose(
+            logls_np,
+            best_grid,
+            rtol=1e-2,
+            err_msg="Golden section diverges from grid optimum",
+        )

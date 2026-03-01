@@ -202,14 +202,14 @@ def _compute_lmm_chunk(
 
     elif lmm_mode == 4:
         # Compose all three tests; Score is cheapest so runs first
-        result.update(
-            _compute_score(
-                n_cvt,
-                Hi_eval_null,
-                Uab_batch,
-                n_samples,
-            )
+        score_result = _compute_score(
+            n_cvt,
+            Hi_eval_null,
+            Uab_batch,
+            n_samples,
         )
+        # Score betas/ses omitted — Wald provides REML-optimized values below
+        result["p_scores"] = score_result["p_scores"]
         result.update(
             _compute_lrt(
                 n_cvt,

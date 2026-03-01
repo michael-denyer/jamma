@@ -216,14 +216,24 @@ def test_numpy_runner_empty_after_filter(synthetic_data):
 
 def test_compute_chunk_size_small_dataset():
     """Small dataset: chunk size = n_filtered (everything in one chunk)."""
-    chunk = _compute_chunk_size_numpy(n_samples=100, n_filtered=500, n_cvt=1)
+    chunk = _compute_chunk_size_numpy(
+        n_samples=100,
+        n_filtered=500,
+        n_cvt=1,
+        mem_budget_bytes=int(2e9),
+    )
     assert chunk == 500, f"Expected 500, got {chunk}"
 
 
 def test_compute_chunk_size_large_dataset():
     """Large dataset: chunk capped by memory budget or _MAX_CHUNK."""
-    chunk = _compute_chunk_size_numpy(n_samples=10_000, n_filtered=200_000, n_cvt=1)
-    assert 100 <= chunk <= 50_000, f"Chunk {chunk} outside expected bounds"
+    chunk = _compute_chunk_size_numpy(
+        n_samples=10_000,
+        n_filtered=200_000,
+        n_cvt=1,
+        mem_budget_bytes=int(2e9),
+    )
+    assert 100 <= chunk <= 200_000, f"Chunk {chunk} outside expected bounds"
 
 
 def test_compute_chunk_size_zero_bytes():
@@ -235,8 +245,98 @@ def test_compute_chunk_size_zero_bytes():
 def test_compute_chunk_size_minimum():
     """Chunk size never drops below 100."""
     # Huge n_samples to force small chunk_from_memory, tiny n_filtered to avoid cap
-    chunk = _compute_chunk_size_numpy(n_samples=1_000_000, n_filtered=200, n_cvt=10)
+    chunk = _compute_chunk_size_numpy(
+        n_samples=1_000_000,
+        n_filtered=200,
+        n_cvt=10,
+        mem_budget_bytes=int(2e9),
+    )
     assert chunk >= 100, f"Chunk {chunk} below minimum 100"
+
+
+def test_chunk_size_split_larger_than_full():
+    """Split Uab accounting produces larger chunks than full Uab."""
+    full = _compute_chunk_size_numpy(
+        n_samples=50_000,
+        n_filtered=100_000,
+        n_cvt=1,
+        mem_budget_bytes=int(10e9),
+    )
+    split = _compute_chunk_size_numpy(
+        n_samples=50_000,
+        n_filtered=100_000,
+        n_cvt=1,
+        use_split=True,
+        mem_budget_bytes=int(10e9),
+    )
+    assert split > full, f"Split chunk ({split}) should exceed full ({full})"
+
+
+def test_chunk_size_explicit_budget():
+    """Explicit mem_budget_bytes overrides auto-scaling."""
+    small_budget = _compute_chunk_size_numpy(
+        n_samples=50_000,
+        n_filtered=100_000,
+        n_cvt=1,
+        mem_budget_bytes=int(2e9),
+    )
+    large_budget = _compute_chunk_size_numpy(
+        n_samples=50_000,
+        n_filtered=100_000,
+        n_cvt=1,
+        mem_budget_bytes=int(20e9),
+    )
+    assert large_budget > small_budget
+
+
+def test_chunk_size_pipeline_halves_budget():
+    """pipeline_buffers=2 produces roughly half the chunk size."""
+    single = _compute_chunk_size_numpy(
+        n_samples=50_000,
+        n_filtered=100_000,
+        n_cvt=1,
+        use_split=True,
+        mem_budget_bytes=int(20e9),
+    )
+    double = _compute_chunk_size_numpy(
+        n_samples=50_000,
+        n_filtered=100_000,
+        n_cvt=1,
+        use_split=True,
+        mem_budget_bytes=int(20e9),
+        pipeline_buffers=2,
+    )
+    # Double-buffering halves the budget, so chunk should be ~half
+    assert double < single
+    assert double >= single // 2 - 1  # allow rounding
+
+
+def test_chunk_size_auto_scales_with_memory():
+    """Auto-scaled budget uses 5% of available RAM between 2-20 GB bounds."""
+    from unittest.mock import MagicMock, patch
+
+    # 400 GB available → 5% = 20 GB (hits ceiling)
+    mock_vmem = MagicMock()
+    mock_vmem.available = 400_000_000_000
+    with patch("jamma.lmm.runner_numpy.psutil.virtual_memory", return_value=mock_vmem):
+        chunk_big = _compute_chunk_size_numpy(
+            n_samples=50_000,
+            n_filtered=100_000,
+            n_cvt=1,
+            use_split=True,
+        )
+
+    # 20 GB available → 5% = 1 GB (hits floor at 2 GB)
+    mock_vmem.available = 20_000_000_000
+    with patch("jamma.lmm.runner_numpy.psutil.virtual_memory", return_value=mock_vmem):
+        chunk_small = _compute_chunk_size_numpy(
+            n_samples=50_000,
+            n_filtered=100_000,
+            n_cvt=1,
+            use_split=True,
+        )
+
+    assert chunk_big > chunk_small
 
 
 # ---------------------------------------------------------------------------

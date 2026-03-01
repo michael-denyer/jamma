@@ -17,11 +17,59 @@ Reference: likelihood_jax.py (ported to NumPy in this module).
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import numpy as np
 from loguru import logger
 
 from jamma.lmm.likelihood import _P_YY_MIN, build_index_table
 from jamma.lmm.special import betainc_batch, chi2_sf_batch
+
+
+class SplitUab(NamedTuple):
+    """Split Uab components for n_cvt=1 — separates SNP-varying from invariant columns.
+
+    Zero runtime cost (NamedTuple is just a tuple subclass). Prevents silent
+    argument swaps between varying and invariant at call sites.
+    """
+
+    varying: np.ndarray
+    """SNP-varying columns (n_snps, n_samples, 3) with order [wx, xx, xy]."""
+    invariant: np.ndarray
+    """SNP-invariant columns (n_samples, 3) with order [ww, wy, yy]."""
+
+
+class SplitUabSoA(NamedTuple):
+    """Split Uab in SoA layout for n_cvt=1 — optimised for SIMD C inner loops.
+
+    SoA (Structure-of-Arrays) layout gives stride-1 access to each column,
+    enabling AVX-512 contiguous loads instead of stride-N gathers.
+
+    Zero runtime cost (NamedTuple is just a tuple subclass).
+    """
+
+    varying: np.ndarray
+    """SNP-varying columns (n_snps, 3, n_samples) with axis-1 order [wx, xx, xy].
+
+    Axis-1 columns are contiguous in memory (stride-1 over n_samples).
+    """
+    invariant: np.ndarray
+    """SNP-invariant columns (3, n_samples) with axis-0 order [ww, wy, yy].
+
+    Each row is contiguous in memory (stride-1 over n_samples).
+    """
+
+
+# Module-level flag to deduplicate _guard_P_yy warning — fires hundreds of
+# times per run (once per grid eval + golden section iter per chunk) which
+# buries the meaningful first warning under identical log spam.
+_p_yy_warned = False
+
+
+def reset_p_yy_warned() -> None:
+    """Reset the P_yy warning flag so each LMM run gets its own warning."""
+    global _p_yy_warned  # noqa: PLW0603
+    _p_yy_warned = False
 
 
 def _guard_P_yy(P_yy: np.ndarray) -> np.ndarray:
@@ -36,12 +84,14 @@ def _guard_P_yy(P_yy: np.ndarray) -> np.ndarray:
     Returns:
         Guarded P_yy with same shape.
     """
+    global _p_yy_warned  # noqa: PLW0603
     n_negative = int(np.sum(P_yy < 0.0))
-    if n_negative > 0:
+    if n_negative > 0 and not _p_yy_warned:
         logger.warning(
             f"{n_negative} SNPs have negative P_yy — numerical breakdown. "
             "Kinship matrix may not be positive semi-definite."
         )
+        _p_yy_warned = True
     P_yy = np.where(P_yy < 0.0, np.nan, P_yy)
     return np.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
 
@@ -287,6 +337,258 @@ def batch_compute_iab_numpy(
     n_samples = Uab_batch.shape[1]
     ones = np.ones(n_samples, dtype=np.float64)
     return batch_compute_pab_numpy(n_cvt, ones, Uab_batch)
+
+
+# ---------------------------------------------------------------------------
+# Split Uab/Iab for n_cvt=1 — separates SNP-invariant columns
+# ---------------------------------------------------------------------------
+
+
+def batch_compute_uab_split_numpy(
+    n_cvt: int,
+    UtW: np.ndarray,
+    Uty: np.ndarray,
+    UtG: np.ndarray,
+) -> SplitUab:
+    """Compute split Uab: SNP-varying and SNP-invariant components.
+
+    For n_cvt=1, columns ww(0), wy(2), yy(5) are identical across all SNPs.
+    This function returns them as a shared (n_samples, 3) array instead of
+    broadcasting into every SNP row — halving Uab memory.
+
+    Args:
+        n_cvt: Number of covariates (must be 1).
+        UtW: Rotated covariates (n_samples, 1).
+        Uty: Rotated phenotype (n_samples,).
+        UtG: Rotated genotypes (n_samples, n_snps).
+
+    Returns:
+        SplitUab(varying, invariant) where:
+        - varying: (n_snps, n_samples, 3) — wx, xx, xy columns.
+        - invariant: (n_samples, 3) — ww, wy, yy (shared).
+    """
+    if n_cvt != 1:
+        raise ValueError("batch_compute_uab_split_numpy requires n_cvt=1")
+    return _batch_compute_uab_split_ncvt1_numpy(UtW, Uty, UtG)
+
+
+def _batch_compute_uab_split_ncvt1_numpy(
+    UtW: np.ndarray,
+    Uty: np.ndarray,
+    UtG: np.ndarray,
+) -> SplitUab:
+    """Fast-path split Uab for n_cvt=1.
+
+    Returns:
+        SplitUab(varying, invariant):
+        - varying: (n_snps, n_samples, 3) with col order [wx, xx, xy].
+        - invariant: (n_samples, 3) with col order [ww, wy, yy].
+    """
+    n_samples, n_snps = UtG.shape
+    w = UtW[:, 0]
+    UtG_T = UtG.T  # (n_snps, n_samples)
+
+    uab_varying = np.empty((n_snps, n_samples, 3), dtype=np.float64)
+    uab_varying[:, :, 0] = w[None, :] * UtG_T  # wx
+    uab_varying[:, :, 1] = UtG_T * UtG_T  # xx
+    uab_varying[:, :, 2] = UtG_T * Uty[None, :]  # xy
+
+    uab_invariant = np.empty((n_samples, 3), dtype=np.float64)
+    uab_invariant[:, 0] = w * w  # ww
+    uab_invariant[:, 1] = w * Uty  # wy
+    uab_invariant[:, 2] = Uty * Uty  # yy
+
+    return SplitUab(uab_varying, uab_invariant)
+
+
+def batch_compute_uab_split_soa_numpy(
+    n_cvt: int,
+    UtW: np.ndarray,
+    Uty: np.ndarray,
+    UtG: np.ndarray,
+) -> SplitUabSoA:
+    """Compute split Uab in SoA layout — eliminates per-chunk AoS->SoA transpose.
+
+    Produces the SoA layout (n_snps, 3, n_samples) for varying and
+    (3, n_samples) for invariant directly, without intermediate AoS allocation.
+    The C extension's inner loops read stride-1 columns, enabling SIMD loads.
+
+    Args:
+        n_cvt: Number of covariates (must be 1).
+        UtW: Rotated covariates (n_samples, 1).
+        Uty: Rotated phenotype (n_samples,).
+        UtG: Rotated genotypes (n_samples, n_snps).
+
+    Returns:
+        SplitUabSoA(varying, invariant) where:
+        - varying: (n_snps, 3, n_samples) — rows are wx, xx, xy.
+        - invariant: (3, n_samples) — rows are ww, wy, yy (shared).
+    """
+    if n_cvt != 1:
+        raise ValueError("batch_compute_uab_split_soa_numpy requires n_cvt=1")
+    inv = compute_uab_invariant_soa(UtW, Uty)
+    var = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG)
+    return SplitUabSoA(var, inv)
+
+
+def compute_uab_invariant_soa(
+    UtW: np.ndarray,
+    Uty: np.ndarray,
+) -> np.ndarray:
+    """Compute SNP-invariant Uab columns in SoA layout (3, n_samples).
+
+    Rows are [ww, wy, yy]. These columns depend only on UtW and Uty, so they
+    can be computed once per run (before the chunk loop) rather than once per
+    chunk.
+
+    Args:
+        UtW: Rotated covariates (n_samples, 1).
+        Uty: Rotated phenotype (n_samples,).
+
+    Returns:
+        Invariant array (3, n_samples) — rows [ww, wy, yy].
+    """
+    n_samples = Uty.shape[0]
+    w = UtW[:, 0]
+    uab_invariant_soa = np.empty((3, n_samples), dtype=np.float64)
+    uab_invariant_soa[0, :] = w * w  # ww
+    uab_invariant_soa[1, :] = w * Uty  # wy
+    uab_invariant_soa[2, :] = Uty * Uty  # yy
+    return uab_invariant_soa
+
+
+def batch_compute_uab_varying_soa_numpy(
+    n_cvt: int,
+    UtW: np.ndarray,
+    Uty: np.ndarray,
+    UtG: np.ndarray,
+) -> np.ndarray:
+    """Compute SNP-varying Uab columns in SoA layout (n_snps, 3, n_samples).
+
+    Rows are [wx, xx, xy]. Generated directly in SoA layout, eliminating the
+    AoS allocation + per-chunk transpose overhead.
+
+    Args:
+        n_cvt: Number of covariates (must be 1).
+        UtW: Rotated covariates (n_samples, 1).
+        Uty: Rotated phenotype (n_samples,).
+        UtG: Rotated genotypes (n_samples, n_snps).
+
+    Returns:
+        Varying array (n_snps, 3, n_samples) — axis-1 rows [wx, xx, xy].
+    """
+    if n_cvt != 1:
+        raise ValueError("batch_compute_uab_varying_soa_numpy requires n_cvt=1")
+    n_samples, n_snps = UtG.shape
+    w = UtW[:, 0]
+    UtG_T = UtG.T  # (n_snps, n_samples)
+
+    uab_varying_soa = np.empty((n_snps, 3, n_samples), dtype=np.float64)
+    uab_varying_soa[:, 0, :] = w[None, :] * UtG_T  # wx row
+    uab_varying_soa[:, 1, :] = UtG_T * UtG_T  # xx row
+    uab_varying_soa[:, 2, :] = UtG_T * Uty[None, :]  # xy row
+    return uab_varying_soa
+
+
+def batch_compute_iab_split_ncvt1_soa(
+    uab_varying_soa: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+) -> np.ndarray:
+    """Compute Iab from split Uab in SoA layout (n_cvt=1 only).
+
+    SoA variant of batch_compute_iab_split_ncvt1. Sums over axis=2 (n_samples)
+    instead of axis=1 because SoA columns are on axis=2 rather than axis=1.
+    Produces identical numerical results.
+
+    Args:
+        uab_varying_soa: (n_snps, 3, n_samples) — rows [wx, xx, xy].
+        uab_invariant_soa: (3, n_samples) — rows [ww, wy, yy].
+
+    Returns:
+        Iab batch (n_snps, 3, 6).
+    """
+    n_snps = uab_varying_soa.shape[0]
+
+    # Row 0: column sums (Hi_eval = ones -> just sum over samples, axis=2 for SoA)
+    s_ww = uab_invariant_soa[0, :].sum()
+    s_wy = uab_invariant_soa[1, :].sum()
+    s_yy = uab_invariant_soa[2, :].sum()
+    s_wx = uab_varying_soa[:, 0, :].sum(axis=1)  # (n_snps,)
+    s_xx = uab_varying_soa[:, 1, :].sum(axis=1)
+    s_xy = uab_varying_soa[:, 2, :].sum(axis=1)
+
+    iab = np.zeros((n_snps, 3, 6), dtype=np.float64)
+    iab[:, 0, 0] = s_ww
+    iab[:, 0, 1] = s_wx
+    iab[:, 0, 2] = s_wy
+    iab[:, 0, 3] = s_xx
+    iab[:, 0, 4] = s_xy
+    iab[:, 0, 5] = s_yy
+
+    # Row 1: project out W (Schur complement)
+    inv_ww = 1.0 / s_ww if s_ww != 0 else 0.0
+    iab[:, 1, 3] = s_xx - s_wx * s_wx * inv_ww
+    iab[:, 1, 4] = s_xy - s_wx * s_wy * inv_ww
+    iab[:, 1, 5] = s_yy - s_wy * s_wy * inv_ww
+
+    # Row 2: project out X
+    ps_xx = iab[:, 1, 3]
+    with np.errstate(divide="ignore"):
+        inv_xx = np.where(ps_xx != 0, 1.0 / ps_xx, 0.0)
+    iab[:, 2, 5] = iab[:, 1, 5] - iab[:, 1, 4] * iab[:, 1, 4] * inv_xx
+
+    return iab
+
+
+def batch_compute_iab_split_ncvt1(
+    uab_varying: np.ndarray,
+    uab_invariant: np.ndarray,
+) -> np.ndarray:
+    """Compute Iab from split Uab components (n_cvt=1 only).
+
+    Equivalent to batch_compute_iab_numpy(1, full_uab) but avoids
+    constructing the full 6-column Uab.
+
+    Args:
+        uab_varying: (n_snps, n_samples, 3) — [wx, xx, xy].
+        uab_invariant: (n_samples, 3) — [ww, wy, yy].
+
+    Returns:
+        Iab batch (n_snps, 3, 6).
+    """
+    n_snps = uab_varying.shape[0]
+
+    # Row 0: column sums (Hi_eval = ones → just sum over samples)
+    s_ww, s_wy, s_yy = (
+        uab_invariant[:, 0].sum(),
+        uab_invariant[:, 1].sum(),
+        uab_invariant[:, 2].sum(),
+    )
+    s_wx = uab_varying[:, :, 0].sum(axis=1)  # (n_snps,)
+    s_xx = uab_varying[:, :, 1].sum(axis=1)
+    s_xy = uab_varying[:, :, 2].sum(axis=1)
+
+    iab = np.zeros((n_snps, 3, 6), dtype=np.float64)
+    iab[:, 0, 0] = s_ww
+    iab[:, 0, 1] = s_wx
+    iab[:, 0, 2] = s_wy
+    iab[:, 0, 3] = s_xx
+    iab[:, 0, 4] = s_xy
+    iab[:, 0, 5] = s_yy
+
+    # Row 1: project out W (Schur complement)
+    inv_ww = 1.0 / s_ww if s_ww != 0 else 0.0
+    iab[:, 1, 3] = s_xx - s_wx * s_wx * inv_ww
+    iab[:, 1, 4] = s_xy - s_wx * s_wy * inv_ww
+    iab[:, 1, 5] = s_yy - s_wy * s_wy * inv_ww
+
+    # Row 2: project out X
+    ps_xx = iab[:, 1, 3]
+    with np.errstate(divide="ignore"):
+        inv_xx = np.where(ps_xx != 0, 1.0 / ps_xx, 0.0)
+    iab[:, 2, 5] = iab[:, 1, 5] - iab[:, 1, 4] * iab[:, 1, 4] * inv_xx
+
+    return iab
 
 
 # ---------------------------------------------------------------------------
@@ -609,13 +911,12 @@ def golden_section_optimize_lambda_numpy(
         l_min: Minimum lambda.
         l_max: Maximum lambda.
         n_grid: Coarse grid points.
-        n_iter: Golden section iterations (minimum 20 enforced).
+        n_iter: Golden section iterations (should be >= 20 for 1e-5 tolerance;
+            runner-level code enforces the minimum).
 
     Returns:
         (optimal_lambdas, optimal_logls) both shape (n_snps,).
     """
-    n_iter = max(n_iter, 20)
-
     log_l_min = np.log(l_min)
     log_l_max = np.log(l_max)
     log_lambdas = np.linspace(log_l_min, log_l_max, n_grid)
@@ -653,8 +954,6 @@ def golden_section_optimize_lambda_mle_numpy(
     Port of likelihood_jax.py::golden_section_optimize_lambda_mle.
     No Iab argument needed (MLE has no logdet_hiw term).
 
-    Enforces minimum of 20 golden section iterations.
-
     Args:
         n_cvt: Number of covariates.
         eigenvalues: Kinship eigenvalues (n_samples,).
@@ -662,13 +961,12 @@ def golden_section_optimize_lambda_mle_numpy(
         l_min: Minimum lambda.
         l_max: Maximum lambda.
         n_grid: Coarse grid points.
-        n_iter: Golden section iterations (minimum 20 enforced).
+        n_iter: Golden section iterations (should be >= 20 for 1e-5 tolerance;
+            runner-level code enforces the minimum).
 
     Returns:
         (optimal_lambdas, optimal_logls_mle) both shape (n_snps,).
     """
-    n_iter = max(n_iter, 20)
-
     log_l_min = np.log(l_min)
     log_l_max = np.log(l_max)
     log_lambdas = np.linspace(log_l_min, log_l_max, n_grid)
@@ -774,7 +1072,7 @@ def batch_calc_wald_stats_numpy(
     Port of likelihood_jax.py::batch_calc_wald_stats. Computes per-SNP
     Hi_eval from optimized lambdas, then calls _batch_compute_pab_varying_numpy.
 
-    p_wald uses Cephes betainc via np.vectorize (more accurate than JAX XLA
+    p_wald uses betainc_batch (vectorized Lentz CF, more accurate than JAX XLA
     betainc for large a).
 
     Args:
@@ -880,7 +1178,7 @@ def _batch_lrt_pvalues_numpy(
     Port of likelihood_jax.py::calc_lrt_pvalue_jax for batch use.
     LRT statistic = 2 * (logl_H1 - logl_H0), chi2 with df=1.
 
-    Uses special.chi2_sf (stdlib-only) via np.vectorize.
+    Uses special.chi2_sf_batch (erfc-based, stdlib-only).
 
     Args:
         logls_mle: Per-SNP MLE log-likelihoods under alternative (n_snps,).

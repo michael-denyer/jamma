@@ -20,6 +20,10 @@ dist/
 # Auto-generated build metadata
 src/jamma/_build_meta.py
 
+# Compiled C extensions (built by hatch_build.py, not committed)
+src/jamma/lmm/_lmm_accel*.so
+src/jamma/lmm/_lmm_accel*.dylib
+
 # Virtual environments
 .venv/
 venv/
@@ -31,6 +35,7 @@ output/
 .planning/
 .claude/
 CLAUDE.md
+docs/plans
 
 # Beads issue tracker
 .beads/

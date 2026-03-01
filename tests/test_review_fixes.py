@@ -496,6 +496,67 @@ class TestCrossBackendMode4:
 
 
 @pytest.mark.tier0
+class TestMode4WaldOverwritesScore:
+    """Mode=4 must use Wald betas/ses, not Score's.
+
+    The mode=4 composition runs Score first, then LRT, then Wald. Wald's
+    REML-optimized beta/SE must overwrite Score's values. This test verifies
+    the overwrite invariant by comparing mode=4 betas/ses against mode=1
+    (Wald-only) — they must match exactly.
+    """
+
+    def test_mode4_betas_ses_match_wald_only(self) -> None:
+        """Mode=4 betas/ses must equal mode=1 (Wald) betas/ses."""
+        from jamma.lmm.compute_numpy import _compute_lmm_chunk_numpy
+        from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
+        from jamma.lmm.prepare_common import _compute_null_model_common
+
+        rng = np.random.default_rng(99)
+        n_samples, n_snps, n_cvt = 50, 10, 1
+
+        eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
+        UtW = rng.standard_normal((n_samples, n_cvt))
+        Uty = rng.standard_normal(n_samples)
+        UtG = rng.standard_normal((n_samples, n_snps))
+
+        Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+
+        logl_H0, _, Hi_eval_null = _compute_null_model_common(
+            4, eigenvalues, UtW, Uty, n_cvt, show_progress=False
+        )
+
+        # Mode 1 — Wald only
+        wald_only = _compute_lmm_chunk_numpy(
+            lmm_mode=1,
+            n_cvt=n_cvt,
+            eigenvalues=eigenvalues,
+            Uab_batch=Uab,
+            n_samples=n_samples,
+        )
+
+        # Mode 4 — All tests composed
+        all_tests = _compute_lmm_chunk_numpy(
+            lmm_mode=4,
+            n_cvt=n_cvt,
+            eigenvalues=eigenvalues,
+            Uab_batch=Uab,
+            n_samples=n_samples,
+            Hi_eval_null=Hi_eval_null,
+            logl_H0=logl_H0,
+        )
+
+        # Wald fields must match exactly (same code path)
+        np.testing.assert_array_equal(all_tests["betas"], wald_only["betas"])
+        np.testing.assert_array_equal(all_tests["ses"], wald_only["ses"])
+        np.testing.assert_array_equal(all_tests["pwalds"], wald_only["pwalds"])
+        np.testing.assert_array_equal(all_tests["lambdas"], wald_only["lambdas"])
+
+        # Mode 4 must also have LRT and Score fields
+        assert all_tests["p_lrts"] is not None
+        assert all_tests["p_scores"] is not None
+
+
+@pytest.mark.tier0
 def test_jax_free_export_surface() -> None:
     """from jamma.lmm import * must not fail on NumPy-only exports."""
     import jamma.lmm as lmm_module

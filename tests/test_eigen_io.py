@@ -130,8 +130,8 @@ class TestRoundTripPrecision:
         """write_eigen_files + read_eigen_files round-trip both arrays."""
         rng = np.random.default_rng(789)
         A = rng.standard_normal((30, 30))
-        sym = A + A.T
-        eigenvalues, eigenvectors = np.linalg.eigh(sym)
+        psd = A @ A.T  # PSD → non-negative eigenvalues
+        eigenvalues, eigenvectors = np.linalg.eigh(psd)
 
         d_path, u_path = write_eigen_files(
             eigenvalues, eigenvectors, tmp_path, prefix="roundtrip"
@@ -287,6 +287,148 @@ class TestReaderValidation:
 
         with pytest.raises(ValueError, match="empty"):
             read_eigenvectors(path)
+
+    def test_negative_eigenvalues_rejected(self, tmp_path: Path) -> None:
+        """read_eigen_files rejects negative eigenvalues from external files.
+
+        Kinship eigenvalues are non-negative by construction, but externally
+        supplied -d/-u files could contain negatives. The C extension uses
+        log(v) (not log(abs(v))), so negative eigenvalues produce NaN/domain
+        errors. Validate at the input boundary.
+        """
+        d_path = tmp_path / "test.eigenD.txt"
+        u_path = tmp_path / "test.eigenU.txt"
+
+        # One negative eigenvalue
+        write_eigenvalues(np.array([-0.5, 1.0, 2.0]), d_path)
+        write_eigenvectors(np.eye(3), u_path)
+
+        with pytest.raises(ValueError, match="negative"):
+            read_eigen_files(d_path, u_path)
+
+    def test_zero_eigenvalues_accepted(self, tmp_path: Path) -> None:
+        """Zero eigenvalues are valid (rank-deficient kinship)."""
+        d_path = tmp_path / "test.eigenD.txt"
+        u_path = tmp_path / "test.eigenU.txt"
+
+        write_eigenvalues(np.array([0.0, 0.0, 1.0]), d_path)
+        write_eigenvectors(np.eye(3), u_path)
+
+        eigenvalues, _ = read_eigen_files(d_path, u_path)
+        assert eigenvalues[0] == 0.0
+
+
+# =============================================================================
+# .npy sidecar cache tests
+# =============================================================================
+
+
+@pytest.mark.tier0
+class TestNpyCache:
+    """Verify .npy sidecar cache behavior."""
+
+    def test_cache_written_on_first_read(self, tmp_path: Path) -> None:
+        """Reading eigenvalues/eigenvectors creates .npy sidecar."""
+        d_path = tmp_path / "test.eigenD.txt"
+        u_path = tmp_path / "test.eigenU.txt"
+        write_eigenvalues(np.ones(5), d_path)
+        write_eigenvectors(np.eye(5), u_path)
+
+        # Delete .npy files that write_* creates
+        d_path.with_suffix(".npy").unlink(missing_ok=True)
+        u_path.with_suffix(".npy").unlink(missing_ok=True)
+
+        read_eigenvalues(d_path)
+        read_eigenvectors(u_path)
+
+        assert d_path.with_suffix(".npy").exists(), ".eigenD.npy not created"
+        assert u_path.with_suffix(".npy").exists(), ".eigenU.npy not created"
+
+    def test_cache_used_on_second_read(self, tmp_path: Path) -> None:
+        """Second read uses .npy cache (verified by data correctness)."""
+        d_path = tmp_path / "test.eigenD.txt"
+        u_path = tmp_path / "test.eigenU.txt"
+
+        eigenvalues = np.array([1.0, 2.0, 3.0])
+        eigenvectors = np.eye(3) * 2.0
+        write_eigenvalues(eigenvalues, d_path)
+        write_eigenvectors(eigenvectors, u_path)
+
+        # First read (creates cache)
+        d1 = read_eigenvalues(d_path)
+        u1 = read_eigenvectors(u_path)
+
+        # Second read (uses cache)
+        d2 = read_eigenvalues(d_path)
+        u2 = read_eigenvectors(u_path)
+
+        np.testing.assert_array_equal(d1, d2)
+        np.testing.assert_array_equal(u1, u2)
+
+    def test_stale_cache_invalidated(self, tmp_path: Path) -> None:
+        """Modifying .txt file invalidates cache; fresh parse occurs."""
+        import time
+
+        path = tmp_path / "test.eigenD.txt"
+        write_eigenvalues(np.array([1.0, 2.0]), path)
+        first = read_eigenvalues(path)
+
+        # Overwrite text file with different data (wait for mtime granularity)
+        time.sleep(0.05)
+        np.savetxt(path, np.array([10.0, 20.0]), fmt="%.10g")
+        # Touch to ensure mtime is newer
+        path.touch()
+
+        second = read_eigenvalues(path)
+        np.testing.assert_array_equal(second, [10.0, 20.0])
+        assert not np.array_equal(first, second)
+
+    def test_corrupt_npy_falls_back_to_text(self, tmp_path: Path) -> None:
+        """Corrupted .npy file triggers text re-parse."""
+        path = tmp_path / "test.eigenD.txt"
+        write_eigenvalues(np.array([1.0, 2.0, 3.0]), path)
+
+        # Corrupt the .npy cache
+        npy_path = path.with_suffix(".npy")
+        npy_path.write_bytes(b"garbage data not a valid npy file")
+
+        # Should still work by falling back to text
+        data = read_eigenvalues(path)
+        np.testing.assert_allclose(data, [1.0, 2.0, 3.0])
+
+    def test_write_creates_npy_sidecar(self, tmp_path: Path) -> None:
+        """write_eigenvalues/write_eigenvectors create .npy alongside .txt."""
+        d_path = tmp_path / "test.eigenD.txt"
+        u_path = tmp_path / "test.eigenU.txt"
+
+        write_eigenvalues(np.ones(3), d_path)
+        write_eigenvectors(np.eye(3), u_path)
+
+        assert d_path.with_suffix(".npy").exists()
+        assert u_path.with_suffix(".npy").exists()
+
+        # Verify .npy content matches
+        d_cached = np.load(d_path.with_suffix(".npy"))
+        u_cached = np.load(u_path.with_suffix(".npy"))
+        np.testing.assert_array_equal(d_cached, np.ones(3))
+        np.testing.assert_array_equal(u_cached, np.eye(3))
+
+    def test_cache_survives_round_trip(self, tmp_path: Path) -> None:
+        """Full write → read → cache-read round trip preserves data."""
+        rng = np.random.default_rng(42)
+        A = rng.standard_normal((20, 20))
+        psd = A @ A.T  # PSD → non-negative eigenvalues
+        eigenvalues, eigenvectors = np.linalg.eigh(psd)
+
+        d_path, u_path = write_eigen_files(
+            eigenvalues, eigenvectors, tmp_path, prefix="cache_rt"
+        )
+
+        # Read from cache (write_* already created .npy)
+        loaded_d, loaded_u = read_eigen_files(d_path, u_path)
+
+        np.testing.assert_allclose(loaded_d, eigenvalues, rtol=1e-9)
+        np.testing.assert_allclose(loaded_u, eigenvectors, rtol=1e-9)
 
 
 # =============================================================================

@@ -47,7 +47,7 @@ INPLACE_EIGEN_AVAILABLE: bool = _eigh_lo is not None
 _EXPECTED_EIGEN_ABI = 1  # Must match ABI_VERSION in _eigen_accel.c
 
 
-def _try_import_dsyevr() -> tuple[bool, object]:
+def _try_import_dsyevr() -> tuple[bool, object | None]:
     """Attempt to import the DSYEVR C extension and validate ABI."""
     try:
         from jamma.lmm._eigen_accel import ABI_VERSION as abi
@@ -62,6 +62,11 @@ def _try_import_dsyevr() -> tuple[bool, object]:
         return False, None
 
     if abi != _EXPECTED_EIGEN_ABI:
+        logger.warning(
+            f"_eigen_accel ABI mismatch: extension has ABI_VERSION={abi}, "
+            f"expected {_EXPECTED_EIGEN_ABI}. Extension will not be used. "
+            f"Recompile with: python -m jamma.lmm._compile_eigen"
+        )
         return False, None
 
     return True, eigh_dsyevr
@@ -156,6 +161,13 @@ def _eigh_dsyevr(K: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         Tuple of (eigenvalues, eigenvectors) with eigenvalues ascending.
         Eigenvectors may be F-order (LAPACK native).
     """
+    if _eigh_dsyevr_func is None:
+        raise RuntimeError(
+            "DSYEVR C extension (_eigen_accel) is not available. "
+            "This is a bug — _eigh_dsyevr should not be called when "
+            "_DSYEVR_AVAILABLE is False. "
+            "To compile: python -m jamma.lmm._compile_eigen"
+        )
     return _eigh_dsyevr_func(K)
 
 
@@ -312,17 +324,18 @@ def eigendecompose_kinship(
 
     from jamma.core.estimates import estimate_eigendecomp_time
 
-    if _DSYEVR_AVAILABLE:
-        logger.info(f"Eigendecomp: DSYEVR via _eigen_accel, threads={n_threads}")
-    else:
-        logger.info(f"Eigendecomp: DSYEVD via numpy.linalg.eigh, threads={n_threads}")
+    driver = (
+        "DSYEVR via _eigen_accel"
+        if _DSYEVR_AVAILABLE
+        else "DSYEVD via numpy.linalg.eigh"
+    )
+    logger.info(f"Eigendecomp: {driver}, threads={n_threads}")
     logger.info(f"  Estimated time: {estimate_eigendecomp_time(n_samples, n_threads)}")
 
     start_time = time.perf_counter()
     try:
         with blas_threads(n_threads):
             if _DSYEVR_AVAILABLE:
-                logger.info("Eigendecomp: DSYEVR (MRRR, O(N) workspace)")
                 eigenvalues, eigenvectors = _eigh_dsyevr(K)
             else:
                 eigenvalues, eigenvectors = _eigh_inplace(K)
@@ -338,6 +351,15 @@ def eigendecompose_kinship(
             f"Eigendecomposition failed: {e}. "
             f"Kinship matrix may not be positive semi-definite."
         )
+        raise
+    except (ValueError, RuntimeError) as e:
+        msg = f"Eigendecomposition failed ({driver}): {e}."
+        if _DSYEVR_AVAILABLE:
+            msg += (
+                " If this persists, remove the C extension"
+                " .so to force DSYEVD fallback."
+            )
+        logger.error(msg)
         raise
     except Exception as e:
         logger.error(f"Eigendecomposition failed: {type(e).__name__}: {e}")

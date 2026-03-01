@@ -30,6 +30,8 @@ from pathlib import Path
 def _detect_ilp64() -> bool:
     """Check if numpy is built with ILP64 BLAS (64-bit integers).
 
+    Note: Keep in sync with hatch_build.py:CustomBuildHook._detect_ilp64().
+
     Returns:
         True if numpy uses ILP64 BLAS, False otherwise.
     """
@@ -41,10 +43,13 @@ def _detect_ilp64() -> bool:
         name = blas_info.get("name", "")
         if "ilp64" in name.lower():
             return True
-    except (TypeError, AttributeError):
-        pass
-    # Heuristic fallback: could check for dsyevr_64_ symbol in numpy libs,
-    # but show_config is reliable for modern numpy (>= 2.0).
+    except (TypeError, AttributeError) as e:
+        print(
+            f"WARNING: ILP64 detection failed ({type(e).__name__}: {e}). "
+            "Defaulting to LP64 (dsyevr_). If numpy is ILP64, "
+            "pass -DJAMMA_ILP64 manually.",
+            flush=True,
+        )
     return False
 
 

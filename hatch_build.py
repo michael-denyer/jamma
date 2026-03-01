@@ -127,6 +127,8 @@ class CustomBuildHook(BuildHookInterface):
     def _detect_ilp64(self) -> bool:
         """Check if numpy is built with ILP64 BLAS (64-bit integers).
 
+        Note: Keep in sync with _compile_eigen.py:_detect_ilp64().
+
         Returns:
             True if numpy uses ILP64 BLAS, False otherwise.
         """
@@ -138,8 +140,13 @@ class CustomBuildHook(BuildHookInterface):
             name = blas_info.get("name", "")
             if "ilp64" in name.lower():
                 return True
-        except (TypeError, AttributeError):
-            pass
+        except (TypeError, AttributeError) as e:
+            print(
+                f"WARNING: ILP64 detection failed ({type(e).__name__}: {e}). "
+                "Defaulting to LP64 (dsyevr_). If numpy is ILP64, "
+                "set -DJAMMA_ILP64 manually.",
+                file=sys.stderr,
+            )
         return False
 
     def _compile_c_extension(self, build_data):

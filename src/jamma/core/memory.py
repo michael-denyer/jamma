@@ -85,7 +85,7 @@ def _dsyevr_available() -> bool:
     except ImportError:
         if not _dsyevr_import_warned:
             _dsyevr_import_warned = True
-            logger.debug(
+            logger.info(
                 "Could not import _DSYEVR_AVAILABLE; "
                 "memory estimates will use DSYEVD workspace."
             )
@@ -99,11 +99,26 @@ def _eigendecomp_workspace_gb(n: int) -> float:
     return _dsyevd_workspace_gb(n)
 
 
+def _eigendecomp_eigvec_gb(kinship_gb: float) -> float:
+    """Return eigenvector memory (GB) for eigendecomp based on available driver.
+
+    DSYEVR allocates a separate F-contiguous eigenvector array (K + Z coexist).
+    DSYEVD in-place overwrites K with eigenvectors (no extra allocation).
+    np.linalg.eigh fallback allocates a separate eigenvector array.
+    """
+    if _dsyevr_available():
+        return kinship_gb
+    if _inplace_eigen_available():
+        return 0.0
+    return kinship_gb
+
+
 def estimate_eigendecomp_memory(n_samples: int) -> float:
     """Estimate peak memory (GB) for eigendecomposition of kinship matrix.
 
     When DSYEVR is available (C extension, O(N) workspace):
-    - K/U (shared buffer): n^2 * 8 bytes [kinship overwritten with eigenvectors]
+    - K (input, destroyed by DSYEVR): n^2 * 8 bytes
+    - Z (output eigenvectors, separate F-contiguous array): n^2 * 8 bytes
     - workspace (DSYEVR O(N): ~0.025 GB at 125k)
 
     When DSYEVR is unavailable, falls back to DSYEVD in-place if available:
@@ -115,7 +130,7 @@ def estimate_eigendecomp_memory(n_samples: int) -> float:
     - U (output eigenvectors): n^2 * 8 bytes
     - workspace (DSYEVD O(n^2))
 
-    For 125k samples (DSYEVR): ~116GB + ~0.025GB = ~116GB
+    For 125k samples (DSYEVR): ~116GB + ~116GB + ~0.025GB = ~232GB
     For 200k samples (DSYEVD in-place):  320GB + ~640GB = ~960GB
     For 200k samples (DSYEVD fallback): 320GB + 320GB + ~640GB = ~1280GB
 
@@ -131,7 +146,7 @@ def estimate_eigendecomp_memory(n_samples: int) -> float:
     """
     kinship_gb = n_samples**2 * 8 / 1e9
     workspace_gb = _eigendecomp_workspace_gb(n_samples)
-    eigenvectors_gb = 0.0 if _inplace_eigen_available() else kinship_gb
+    eigenvectors_gb = _eigendecomp_eigvec_gb(kinship_gb)
     return kinship_gb + eigenvectors_gb + workspace_gb
 
 
@@ -243,12 +258,11 @@ def estimate_workflow_memory(
     # kinship accumulation in _compute_kinship_inmemory
     peak_kinship = genotypes_gb * 2 + kinship_gb
 
-    # Phase 2 (eigendecomp): K + workspace (+ U if fallback path)
+    # Phase 2 (eigendecomp): K + workspace + eigenvectors (driver-dependent)
     # (genotypes can be freed during eigendecomp if not needed for LMM)
-    if _inplace_eigen_available():
-        peak_eigendecomp = kinship_gb + eigendecomp_workspace_gb  # K/U shared
-    else:
-        peak_eigendecomp = kinship_gb + eigenvectors_gb + eigendecomp_workspace_gb
+    peak_eigendecomp = (
+        kinship_gb + _eigendecomp_eigvec_gb(kinship_gb) + eigendecomp_workspace_gb
+    )
 
     # Phase 3 (LMM): eigenvectors + genotypes + working
     # (kinship freed, eigenvalues are small ~n*8 bytes)
@@ -439,11 +453,10 @@ def estimate_streaming_memory(
 
     # Peak memory calculation by workflow phase
     peak_kinship = kinship_gb + chunk_gb
-    # Eigendecomp: K + workspace (+ separate U if in-place unavailable)
-    if _inplace_eigen_available():
-        peak_eigendecomp = kinship_gb + eigendecomp_workspace_gb  # K/U shared
-    else:
-        peak_eigendecomp = kinship_gb + eigenvectors_gb + eigendecomp_workspace_gb
+    # Eigendecomp: K + workspace + eigenvectors (driver-dependent)
+    peak_eigendecomp = (
+        kinship_gb + _eigendecomp_eigvec_gb(kinship_gb) + eigendecomp_workspace_gb
+    )
     peak_lmm = (
         eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb + uab_iab_gb
     )

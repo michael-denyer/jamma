@@ -82,23 +82,23 @@ class TestEigendecompMemoryEstimate:
     """Tests for memory estimation function."""
 
     def test_estimate_200k_samples(self):
-        """200k samples: DSYEVR ~320GB, DSYEVD in-place ~960GB."""
+        """200k samples: DSYEVR ~640GB, DSYEVD in-place ~960GB."""
         n_samples = 200_000
         estimate = estimate_eigendecomp_memory(n_samples)
         if _dsyevr_available():
-            # K/U shared (320GB) + DSYEVR workspace (~0.06GB) = ~320GB
-            assert 315 < estimate < 325
+            # K (320GB) + Z (320GB) + DSYEVR workspace (~0.06GB) = ~640GB
+            assert 635 < estimate < 645
         else:
             # K/U shared (320GB) + DSYEVD workspace (~640GB) = ~960GB
             assert 955 < estimate < 965
 
     def test_estimate_100k_samples(self):
-        """100k samples: DSYEVR ~80GB, DSYEVD in-place ~240GB."""
+        """100k samples: DSYEVR ~160GB, DSYEVD in-place ~240GB."""
         n_samples = 100_000
         estimate = estimate_eigendecomp_memory(n_samples)
         if _dsyevr_available():
-            # K/U shared (80GB) + DSYEVR workspace (~0.03GB) = ~80GB
-            assert 78 < estimate < 82
+            # K (80GB) + Z (80GB) + DSYEVR workspace (~0.03GB) = ~160GB
+            assert 158 < estimate < 162
         else:
             # K/U shared (80GB) + DSYEVD workspace (~160GB) = ~240GB
             assert 235 < estimate < 245

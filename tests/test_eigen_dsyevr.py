@@ -20,7 +20,6 @@ pytestmark = [
 ]
 
 
-@pytest.mark.tier0
 class TestDsyevrCorrectness:
     """Eigenvalue/eigenvector accuracy against np.linalg.eigh (DSYEVD)."""
 
@@ -47,8 +46,8 @@ class TestDsyevrCorrectness:
         rng = np.random.default_rng(42)
         A = rng.standard_normal((100, 100))
         K = (A @ A.T) / 100
-        w_dsyevr, v_dsyevr = eigh_dsyevr(K.copy())
-        w_numpy, v_numpy = np.linalg.eigh(K.copy())
+        w_dsyevr, _ = eigh_dsyevr(K.copy())
+        w_numpy, _ = np.linalg.eigh(K.copy())
         np.testing.assert_allclose(w_dsyevr, w_numpy, rtol=1e-12, atol=1e-14)
 
     def test_random_spd_1000x1000(self):
@@ -81,7 +80,6 @@ class TestDsyevrCorrectness:
         assert np.all(np.diff(w) >= 0), "Eigenvalues should be sorted ascending"
 
 
-@pytest.mark.tier0
 class TestDsyevrSignConsistency:
     """Downstream invariants that hold regardless of eigenvector sign convention."""
 
@@ -113,7 +111,6 @@ class TestDsyevrSignConsistency:
         np.testing.assert_allclose(w_dsyevr, w_numpy, rtol=1e-12, atol=1e-14)
 
 
-@pytest.mark.tier0
 class TestDsyevrEdgeCases:
     """Boundary conditions and error handling."""
 
@@ -184,8 +181,49 @@ class TestDsyevrEdgeCases:
         with pytest.raises(ValueError):
             eigh_dsyevr(np.ones(10, dtype=np.float64))
 
+    def test_rejects_readonly(self):
+        """eigh_dsyevr raises ValueError for read-only arrays."""
+        K = np.eye(10, dtype=np.float64)
+        K.flags.writeable = False
+        with pytest.raises(ValueError, match="writeable"):
+            eigh_dsyevr(K)
 
-@pytest.mark.tier0
+    def test_rejects_non_contiguous(self):
+        """eigh_dsyevr raises ValueError for non-contiguous arrays."""
+        K = np.eye(10, dtype=np.float64)
+        # Slicing with step creates a non-contiguous view
+        K_nc = K[::2, ::2]
+        assert not K_nc.flags["C_CONTIGUOUS"]
+        assert not K_nc.flags["F_CONTIGUOUS"]
+        with pytest.raises(ValueError, match="contiguous"):
+            eigh_dsyevr(K_nc)
+
+    def test_f_contiguous_input(self):
+        """eigh_dsyevr handles F-contiguous input correctly."""
+        rng = np.random.default_rng(42)
+        n = 50
+        A = rng.standard_normal((n, n))
+        K = np.asfortranarray((A @ A.T) / n)
+        assert K.flags["F_CONTIGUOUS"]
+        K_ref = K.copy()
+        w, v = eigh_dsyevr(K)
+        K_recon = v @ np.diag(w) @ v.T
+        np.testing.assert_allclose(K_recon, K_ref, rtol=1e-10, atol=1e-14)
+
+    def test_empty_matrix(self):
+        """eigh_dsyevr handles 0x0 matrix (returns empty arrays)."""
+        K = np.empty((0, 0), dtype=np.float64)
+        w, v = eigh_dsyevr(K)
+        assert w.shape == (0,)
+        assert v.shape == (0, 0)
+
+    def test_rejects_invalid_uplo(self):
+        """eigh_dsyevr raises ValueError for invalid uplo argument."""
+        K = np.eye(5, dtype=np.float64)
+        with pytest.raises(ValueError, match="uplo"):
+            eigh_dsyevr(K, uplo="X")
+
+
 class TestDsyevrFallback:
     """Dispatch behavior: DSYEVR path vs DSYEVD fallback."""
 

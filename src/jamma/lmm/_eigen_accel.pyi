@@ -1,4 +1,9 @@
-"""Type stubs for the _eigen_accel C extension."""
+"""Type stubs for the _eigen_accel C extension.
+
+WARNING: eigh_dsyevr overwrites the input matrix K.
+"""
+
+from typing import Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -7,5 +12,5 @@ ABI_VERSION: int
 
 def eigh_dsyevr(
     K: npt.NDArray[np.float64],
-    uplo: str = ...,
+    uplo: Literal["L", "U"] = ...,
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]: ...

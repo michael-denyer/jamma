@@ -156,6 +156,13 @@ static PyObject *py_eigh_dsyevr(PyObject *self, PyObject *args, PyObject *kwargs
         return result;
     }
 
+    /* Validate uplo argument */
+    if (*uplo_arg != 'L' && *uplo_arg != 'l' && *uplo_arg != 'U' && *uplo_arg != 'u') {
+        PyErr_Format(PyExc_ValueError,
+            "uplo must be 'L' or 'U', got '%c'", *uplo_arg);
+        return NULL;
+    }
+
     /* LAPACK uses Fortran conventions (column-major).
      * A C-contiguous (row-major) symmetric matrix passed as-is looks like
      * its own transpose to LAPACK. For a symmetric matrix A = A^T, the
@@ -173,6 +180,18 @@ static PyObject *py_eigh_dsyevr(PyObject *self, PyObject *args, PyObject *kwargs
     double *a_data = (double *)PyArray_DATA(K_arr);
 
     lapack_int ln = (lapack_int)n;
+#ifndef JAMMA_ILP64
+    /* LP64: lapack_int is int (32-bit). Guard against int32 overflow. */
+    if ((npy_intp)ln != n) {
+        PyErr_Format(PyExc_OverflowError,
+            "Matrix dimension %ld exceeds LP64 LAPACK int32 limit (~46,340). "
+            "Install ILP64 numpy for large matrices: pip install numpy "
+            "--extra-index-url https://michael-denyer.github.io/numpy-mkl "
+            "--force-reinstall, then recompile: python -m jamma.lmm._compile_eigen",
+            (long)n);
+        return NULL;
+    }
+#endif
     lapack_int lda = ln;  /* leading dimension == n (square, contiguous) */
 
     /* ---- Allocate output arrays ------------------------------------------ */

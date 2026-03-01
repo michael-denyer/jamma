@@ -775,3 +775,42 @@ def test_cli_help_shows_cat():
     assert result.exit_code == 0
     assert "-cat" in result.output
     assert "Categorical" in result.output
+
+
+# Path to pre-computed GEMMA kinship for synthetic data (avoids -gk step in NumPy CI)
+KINSHIP_FILE = (
+    Path(__file__).parent / "fixtures" / "gemma_synthetic" / "gemma_kinship.cXX.txt"
+)
+
+
+@pytest.mark.tier1
+def test_lmm_numpy_backend(tmp_path: Path):
+    """CLI with --backend numpy runs LMM mode 1 end-to-end without JAX.
+
+    Uses the pre-computed GEMMA kinship fixture so -gk is not required.
+    Not marked @requires_jax so this runs in NumPy-only CI.
+    """
+    outdir = tmp_path / "output"
+
+    result = runner.invoke(
+        main,
+        [
+            "-outdir",
+            str(outdir),
+            "-lmm",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-k",
+            str(KINSHIP_FILE),
+            "--backend",
+            "numpy",
+            "--no-check-memory",
+        ],
+    )
+
+    assert result.exit_code == 0, f"CLI NumPy backend failed:\n{result.output}"
+    assoc_path = outdir / "result.assoc.txt"
+    assert assoc_path.exists(), "Association output file should exist"
+    lines = assoc_path.read_text().strip().split("\n")
+    assert len(lines) > 1, "Association file should have more than just the header line"

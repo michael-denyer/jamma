@@ -58,6 +58,7 @@ def run_lmm_association_jax(
     """Run LMM association tests using JAX-optimized batch processing.
 
     Processes all SNPs in parallel via JAX vectorization and JIT compilation.
+    Ensures JAX is configured for 64-bit precision (required for GEMMA equivalence).
     SNPs are processed in chunks to avoid JAX int32 buffer overflow. Input
     genotypes must fit in memory; for disk streaming use run_lmm_association_streaming.
 
@@ -93,6 +94,10 @@ def run_lmm_association_jax(
         ValueError: If only one of eigenvalues/eigenvectors is provided,
             or if no valid samples remain after filtering.
     """
+    from jamma.core.jax_config import ensure_jax_configured
+
+    ensure_jax_configured()
+
     # Validate eigendecomposition params - must provide both or neither
     if (eigenvalues is None) != (eigenvectors is None):
         raise ValueError(

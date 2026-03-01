@@ -279,3 +279,44 @@ class TestChunkSizingAtDatabricksScale:
             assert result % n_devices == 0, (
                 f"auto_tune result {result} not aligned to {n_devices} devices"
             )
+
+
+@pytest.mark.tier0
+class TestChunkSizeNeverZero:
+    """_compute_chunk_size must never return 0 (division-by-zero guard)."""
+
+    def test_extreme_n_cvt_does_not_return_zero(self):
+        """Very high n_cvt makes elements_per_snp > _MAX_BUFFER_ELEMENTS.
+
+        safe_bound would be 0 without the max(1, ...) floor, causing
+        division by zero in runner_jax.py and range(..., step=0) in
+        runner_streaming.py.
+        """
+        # n_index = (n_cvt+3)*(n_cvt+2)//2; for n_cvt=1000: n_index=504_510
+        # elements_per_snp = 10_000 * 504_510 >> _MAX_BUFFER_ELEMENTS
+        result = _compute_chunk_size(
+            n_samples=10_000,
+            n_snps=500,
+            n_cvt=1000,
+        )
+        assert result >= 1, f"Chunk size must be >= 1, got {result}"
+
+    def test_extreme_n_samples_does_not_return_zero(self):
+        """Very large n_samples can also push safe_bound to 0."""
+        result = _compute_chunk_size(
+            n_samples=5_000_000,
+            n_snps=1000,
+            n_cvt=2,
+        )
+        assert result >= 1, f"Chunk size must be >= 1, got {result}"
+
+    @pytest.mark.parametrize("n_devices", [1, 8, 64, 256])
+    def test_zero_safe_bound_with_devices(self, n_devices):
+        """Zero safe_bound edge case doesn't interact badly with device alignment."""
+        result = _compute_chunk_size(
+            n_samples=10_000,
+            n_snps=500,
+            n_cvt=1000,
+            n_devices=n_devices,
+        )
+        assert result >= 1

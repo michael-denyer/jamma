@@ -52,6 +52,11 @@ from jamma.kinship.missing import impute_and_center, impute_center_and_standardi
 from jamma.utils import chr_sort_key
 
 
+def _ensure_float64(arr: np.ndarray) -> np.ndarray:
+    """Return arr as float64, copying only when the dtype differs."""
+    return arr if arr.dtype == np.float64 else arr.astype(np.float64)
+
+
 def _accumulate_kinship(K: np.ndarray, X_centered: np.ndarray) -> np.ndarray:
     """Accumulate kinship contribution from centered SNP batch.
 
@@ -166,12 +171,7 @@ def _compute_kinship_inmemory(
 
     log_memory_snapshot(f"before_{label.lower().replace(' ', '_')}_{n_samples}samples")
 
-    # Skip conversion when already float64 (boolean indexing in _filter_snps
-    # preserves the input dtype, so float64 input avoids any copy here).
-    if genotypes_filtered.dtype != np.float64:
-        X = genotypes_filtered.astype(np.float64)
-    else:
-        X = genotypes_filtered
+    X = _ensure_float64(genotypes_filtered)
     K = np.zeros((n_samples, n_samples), dtype=np.float64)
 
     n_batches = (n_snps + batch_size - 1) // batch_size
@@ -382,11 +382,7 @@ def compute_loco_kinship(
             operation=f"LOCO kinship ({n_samples:,} samples, {n_filtered:,} SNPs)",
         )
 
-    # Skip conversion when already float64 (boolean indexing preserves dtype)
-    if genotypes_filtered.dtype != np.float64:
-        X = genotypes_filtered.astype(np.float64)
-    else:
-        X = genotypes_filtered
+    X = _ensure_float64(genotypes_filtered)
     X_centered = impute_and_center(X)
 
     # Accumulate full kinship numerator S_full = X_centered @ X_centered.T (unscaled)

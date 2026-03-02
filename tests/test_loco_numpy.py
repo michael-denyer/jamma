@@ -100,6 +100,41 @@ class TestComputeLocoKinshipNumpy:
             np.testing.assert_allclose(K_loco, K_loco.T, atol=1e-14)
             assert np.all(np.isfinite(K_loco))
 
+    def test_loco_single_chromosome_raises(self):
+        """LOCO with all SNPs on one chromosome raises ValueError."""
+        from jamma.kinship import compute_loco_kinship
+
+        rng = np.random.default_rng(42)
+        genotypes = rng.choice([0.0, 1.0, 2.0], size=(10, 20))
+        chrs = np.array(["1"] * 20)  # all on chr 1
+
+        with pytest.raises(ValueError, match="LOCO requires SNPs on multiple"):
+            list(compute_loco_kinship(genotypes, chrs, check_memory=False))
+
+    def test_loco_batch_size_invariant(self):
+        """Different batch sizes produce identical LOCO kinship."""
+        from jamma.kinship import compute_loco_kinship
+
+        rng = np.random.default_rng(42)
+        genotypes = rng.choice([0.0, 1.0, 2.0], size=(15, 20))
+        chrs = np.array(["1"] * 10 + ["2"] * 10)
+
+        results_small = dict(
+            compute_loco_kinship(
+                genotypes.copy(), chrs, batch_size=3, check_memory=False
+            )
+        )
+        results_large = dict(
+            compute_loco_kinship(
+                genotypes.copy(), chrs, batch_size=100, check_memory=False
+            )
+        )
+
+        for chr_name in results_small:
+            np.testing.assert_allclose(
+                results_small[chr_name], results_large[chr_name], atol=1e-14
+            )
+
 
 @pytest.mark.tier1
 def test_loco_numpy_show_progress_true():

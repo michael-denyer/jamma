@@ -21,6 +21,45 @@ from jamma.kinship import (
 pytestmark = pytest.mark.requires_jax
 
 
+@pytest.mark.tier0
+class TestImputeAndCenterInPlace:
+    """Tests for KIN-03: impute_and_center modifies input in-place."""
+
+    def test_returns_same_object(self):
+        """Return value is the same object as input (no copy)."""
+        X = np.array([[0.0, 1.0], [np.nan, 2.0], [2.0, 1.0]])
+        result = impute_and_center(X)
+        assert result is X, "impute_and_center must return the same array object"
+
+    def test_numerical_correctness_with_nans(self):
+        """Numerical output matches expected values after in-place imputation."""
+        X = np.array([[0.0, 1.0], [np.nan, 2.0], [2.0, 1.0]])
+        result = impute_and_center(X)
+        # Column 0: mean = (0+2)/2 = 1.0, NaN->1.0, centered: [-1, 0, 1]
+        # Column 1: mean = (1+2+1)/3 = 4/3, centered: [1-4/3, 2-4/3, 1-4/3]
+        expected_col0 = np.array([-1.0, 0.0, 1.0])
+        expected_col1 = np.array([1.0, 2.0, 1.0]) - 4.0 / 3.0
+        np.testing.assert_allclose(result[:, 0], expected_col0, atol=1e-14)
+        np.testing.assert_allclose(result[:, 1], expected_col1, atol=1e-14)
+
+    def test_all_missing_column(self):
+        """All-NaN column produces zeros after centering."""
+        X = np.array([[np.nan, 1.0], [np.nan, 2.0], [np.nan, 1.0]])
+        result = impute_and_center(X)
+        np.testing.assert_array_equal(result[:, 0], 0.0)
+
+    def test_no_missing_values(self):
+        """Matrix without NaN is centered correctly in-place."""
+        X = np.array(
+            [[0.0, 1.0, 2.0], [1.0, 1.0, 1.0], [2.0, 1.0, 0.0]], dtype=np.float64
+        )
+        X_ref = X.copy()
+        result = impute_and_center(X)
+        assert result is X
+        expected = X_ref - X_ref.mean(axis=0, keepdims=True)
+        np.testing.assert_allclose(result, expected, atol=1e-14)
+
+
 @pytest.fixture
 def simple_genotypes():
     """Small test genotype matrix (4 samples, 5 SNPs)."""

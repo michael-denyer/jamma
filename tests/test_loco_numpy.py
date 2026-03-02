@@ -311,6 +311,110 @@ def test_run_lmm_loco_reads_loco_workers_env(monkeypatch):
 
 
 @pytest.mark.tier1
+def test_loco_numpy_multipass_equivalence():
+    """Multi-pass and single-pass LOCO produce identical association results.
+
+    Forces multi-pass mode via _max_batch_chrs=1 (one chromosome per disk pass)
+    and verifies that all association statistics match the single-pass baseline.
+    This tests LOCO-02: batch_size_chrs sizing and S_full accumulation correctness.
+    """
+    if not _LOCO_BFILE.with_suffix(".bed").exists():
+        pytest.skip("gemma_loco fixture not available")
+
+    from jamma.lmm.loco import _compute_loco_kinship_streaming_numpy
+
+    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+
+    # Single-pass baseline (default behaviour, all chromosomes fit in memory)
+    results_single, n_single = run_lmm_loco(
+        bed_path=_LOCO_BFILE,
+        phenotypes=phenotypes,
+        backend="numpy",
+        check_memory=False,
+        show_progress=False,
+    )
+
+    # Multi-pass: force batch_size_chrs=1 via debug override (_max_batch_chrs).
+    # The fixture has 3 chromosomes, so this triggers 3 disk passes.
+    # We patch _compute_loco_kinship_streaming_numpy to inject _max_batch_chrs=1.
+    original_fn = _compute_loco_kinship_streaming_numpy
+
+    def patched_fn(*args, **kwargs):
+        kwargs["_max_batch_chrs"] = 1
+        return original_fn(*args, **kwargs)
+
+    from unittest.mock import patch
+
+    import jamma.lmm.loco as loco_module
+
+    with patch.object(
+        loco_module,
+        "_compute_loco_kinship_streaming_numpy",
+        side_effect=patched_fn,
+    ):
+        results_multi, n_multi = run_lmm_loco(
+            bed_path=_LOCO_BFILE,
+            phenotypes=phenotypes,
+            backend="numpy",
+            check_memory=False,
+            show_progress=False,
+        )
+
+    assert n_single == n_multi, f"n_tested mismatch: {n_single} vs {n_multi}"
+    assert len(results_single) == len(results_multi), (
+        f"result count mismatch: {len(results_single)} vs {len(results_multi)}"
+    )
+
+    for r_single, r_multi in zip(results_single, results_multi, strict=True):
+        assert r_single.rs == r_multi.rs, (
+            f"SNP order differs: {r_single.rs} vs {r_multi.rs}"
+        )
+        np.testing.assert_allclose(r_single.beta, r_multi.beta, rtol=1e-10, atol=1e-14)
+        np.testing.assert_allclose(r_single.se, r_multi.se, rtol=1e-10, atol=1e-14)
+        np.testing.assert_allclose(
+            r_single.p_wald, r_multi.p_wald, rtol=1e-10, atol=1e-14
+        )
+
+
+@pytest.mark.tier1
+def test_loco_numpy_valid_sample_subsetting():
+    """K_loco is computed at valid-sample size when valid_indices is provided.
+
+    Verifies LOCO-07: _compute_loco_kinship_streaming_numpy returns n_valid x n_valid
+    kinship matrices when valid_indices is provided, rather than n_samples x n_samples.
+    """
+    if not _LOCO_BFILE.with_suffix(".bed").exists():
+        pytest.skip("gemma_loco fixture not available")
+
+    from jamma.lmm.loco import _compute_loco_kinship_streaming_numpy
+
+    meta = get_plink_metadata(_LOCO_BFILE)
+    n_samples = meta["n_samples"]
+
+    # Exclude last 5 samples
+    valid_indices = np.arange(0, n_samples - 5)
+    n_valid = len(valid_indices)
+
+    loco_iter, cache = _compute_loco_kinship_streaming_numpy(
+        _LOCO_BFILE,
+        check_memory=False,
+        show_progress=False,
+        valid_indices=valid_indices,
+    )
+
+    for chr_name, K_loco in loco_iter:
+        assert K_loco.shape == (n_valid, n_valid), (
+            f"K_loco for chr {chr_name} has shape {K_loco.shape}, "
+            f"expected ({n_valid}, {n_valid})"
+        )
+        # Verify symmetry
+        np.testing.assert_allclose(K_loco, K_loco.T, atol=1e-14)
+        assert np.all(np.isfinite(K_loco)), (
+            f"K_loco for chr {chr_name} has non-finite values"
+        )
+
+
+@pytest.mark.tier1
 def test_loco_numpy_show_progress_true():
     """NumPy LOCO with show_progress=True completes without error.
 

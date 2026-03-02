@@ -9,10 +9,10 @@ The kinship matrix K is computed as:
 where X_c is the centered genotype matrix with missing values imputed
 to per-SNP mean, and p is the number of SNPs.
 
-The standard (non-LOCO) kinship computation uses numpy.matmul exclusively,
-so JAX is never initialized during kinship or eigendecomp phases. JAX is
-only used by the LOCO functions (compute_loco_kinship,
-compute_loco_kinship_streaming), which remain unchanged.
+The standard (non-LOCO) kinship computation and in-memory LOCO kinship
+use numpy.matmul exclusively, so JAX is never initialized during kinship
+or eigendecomp phases. The streaming LOCO function
+(compute_loco_kinship_streaming) uses JAX for GPU-accelerated accumulation.
 
 LOCO (Leave-One-Chromosome-Out) kinship is also supported via the
 subtraction approach: K_loco_c = (S_full - S_c) / (p - p_c), where
@@ -335,12 +335,6 @@ def compute_loco_kinship(
         ValueError: If no SNPs pass filtering, or if all filtered SNPs are on
             a single chromosome (cannot compute LOCO).
     """
-    import jax.numpy as jnp
-
-    from jamma.core import ensure_jax_configured
-
-    ensure_jax_configured()
-
     n_samples, n_snps_original = genotypes.shape
 
     # Filter SNPs globally (MAF, missingness, monomorphism)
@@ -383,12 +377,16 @@ def compute_loco_kinship(
             operation=f"LOCO kinship ({n_samples:,} samples, {n_filtered:,} SNPs)",
         )
 
-    # Convert to JAX and center globally
-    X = jnp.array(genotypes_filtered, dtype=jnp.float64)
+    # Convert to float64 numpy array and center globally
+    # Use dtype check to avoid a second allocation when input is already float64
+    if genotypes_filtered.dtype != np.float64:
+        X = genotypes_filtered.astype(np.float64)
+    else:
+        X = genotypes_filtered
     X_centered = impute_and_center(X)
 
     # Accumulate full kinship numerator S_full = X_centered @ X_centered.T (unscaled)
-    S_full = jnp.zeros((n_samples, n_samples), dtype=jnp.float64)
+    S_full = np.zeros((n_samples, n_samples), dtype=np.float64)
     n_batches = (n_filtered + batch_size - 1) // batch_size
 
     logger.info(
@@ -407,11 +405,10 @@ def compute_loco_kinship(
     for _, start in batch_iter:
         end = min(start + batch_size, n_filtered)
         batch = X_centered[:, start:end]
-        S_full = S_full + jnp.matmul(batch, batch.T)
-        S_full.block_until_ready()
+        S_full += np.matmul(batch, batch.T)
 
     # Compute per-chromosome LOCO kinship via subtraction
-    unique_chrs = sorted(set(np.array(chr_filtered)))
+    unique_chrs = sorted(set(chr_filtered))
     logger.info(f"LOCO: computing {len(unique_chrs)} leave-one-out kinship matrices")
 
     for chr_name in unique_chrs:
@@ -428,11 +425,10 @@ def compute_loco_kinship(
 
         # Compute chromosome contribution S_c
         X_chr = X_centered[:, chr_mask]
-        S_chr = jnp.matmul(X_chr, X_chr.T)
-        S_chr.block_until_ready()
+        S_chr = np.matmul(X_chr, X_chr.T)
 
         # K_loco = (S_full - S_c) / p_loco
-        K_loco = np.array((S_full - S_chr) / p_loco)
+        K_loco = (S_full - S_chr) / p_loco
 
         logger.debug(
             f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs retained"

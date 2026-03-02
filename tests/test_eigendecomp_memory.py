@@ -10,6 +10,7 @@ from jamma.core.memory import (
     _dsyevd_workspace_gb,
     _dsyevr_peak_gb,
     _dsyevr_workspace_gb,
+    check_memory_before_run,
     estimate_eigendecomp_memory,
 )
 from jamma.lmm.eigen import eigendecompose_kinship
@@ -365,3 +366,123 @@ class TestSymmetryThreshold:
         assert any("not symmetric" in m for m in captured_messages), (
             f"Expected 'not symmetric' warning from loguru, got: {captured_messages!r}"
         )
+
+
+@pytest.mark.tier0
+class TestDsyevdWorkspaceAccuracy:
+    """Tests for EIGEN-05: DSYEVD workspace formula accuracy."""
+
+    def test_formula_matches_lapack_documented_minimum(self):
+        """_dsyevd_workspace_gb matches LAPACK DSYEVD documented LWORK for JOBZ='V'.
+
+        LAPACK documentation: LWORK >= 2*N^2 + 6*N + 1 (float64)
+                              LIWORK >= 3 + 5*N (integers)
+        """
+        for n in [100, 500, 1000, 5000]:
+            lapack_lwork = 2 * n * n + 6 * n + 1
+            lapack_liwork = 3 + 5 * n
+            lapack_total_bytes = lapack_lwork * 8 + lapack_liwork * 8
+            lapack_gb = lapack_total_bytes / 1e9
+            actual_gb = _dsyevd_workspace_gb(n)
+            assert actual_gb == pytest.approx(lapack_gb, rel=0.01), (
+                f"n={n}: _dsyevd_workspace_gb={actual_gb:.6f}GB "
+                f"vs LAPACK documented={lapack_gb:.6f}GB"
+            )
+
+    def test_peak_components_do_not_double_count(self):
+        """_dsyevd_peak_gb = K + eigvec(if not inplace) + workspace. No overlap."""
+        n = 10_000
+        kinship_gb = n**2 * 8 / 1e9
+        workspace_gb = _dsyevd_workspace_gb(n)
+        with patch("jamma.core.memory._inplace_eigen_available", return_value=True):
+            peak = _dsyevd_peak_gb(n)
+            assert peak == pytest.approx(kinship_gb + workspace_gb, rel=0.01)
+        with patch("jamma.core.memory._inplace_eigen_available", return_value=False):
+            peak = _dsyevd_peak_gb(n)
+            assert peak == pytest.approx(2 * kinship_gb + workspace_gb, rel=0.01)
+
+    @pytest.mark.parametrize("n", [100, 1000, 10_000])
+    def test_workspace_is_within_10pct_of_formula(self, n):
+        """Workspace formula is within 10% of 2*N^2*8 bytes (dominant term)."""
+        dominant_term_gb = 2 * n * n * 8 / 1e9
+        actual = _dsyevd_workspace_gb(n)
+        assert actual >= dominant_term_gb, "Workspace must be >= dominant term"
+        assert actual < dominant_term_gb * 1.1, (
+            "Workspace must be < 110% of dominant term"
+        )
+
+
+@pytest.mark.tier0
+class TestPreFlightDsyevrAware:
+    """Tests for EIGEN-01: pre-flight check uses DSYEVR peak when appropriate."""
+
+    def test_reports_dsyevr_peak_when_dsyevd_wont_fit(self):
+        """When DSYEVR available and DSYEVD exceeds memory, report DSYEVR peak."""
+        n_samples = 100_000
+        n_snps = 10_000
+        dsyevd_peak = _dsyevd_peak_gb(n_samples)
+        dsyevr_peak = _dsyevr_peak_gb(n_samples)
+        available_gb = (dsyevr_peak + dsyevd_peak) / 2
+        with (
+            patch("jamma.lmm.eigen._DSYEVR_AVAILABLE", True),
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_proc,
+        ):
+            mock_vm.return_value.available = available_gb * 1e9
+            mock_vm.return_value.total = available_gb * 1e9
+            mock_proc.return_value.memory_info.return_value.rss = 0
+            mock_proc.return_value.memory_info.return_value.vms = 0
+            result = check_memory_before_run(n_samples, n_snps)
+            assert result is True
+
+    def test_raises_when_neither_driver_fits(self):
+        """When neither DSYEVD nor DSYEVR fits, MemoryError is raised."""
+        n_samples = 100_000
+        n_snps = 10_000
+        dsyevr_peak = _dsyevr_peak_gb(n_samples)
+        available_gb = dsyevr_peak * 0.5
+        with (
+            patch("jamma.lmm.eigen._DSYEVR_AVAILABLE", True),
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_proc,
+        ):
+            mock_vm.return_value.available = available_gb * 1e9
+            mock_vm.return_value.total = available_gb * 1e9
+            mock_proc.return_value.memory_info.return_value.rss = 0
+            mock_proc.return_value.memory_info.return_value.vms = 0
+            with pytest.raises(MemoryError):
+                check_memory_before_run(n_samples, n_snps)
+
+    def test_uses_dsyevd_peak_when_memory_ample(self):
+        """When memory is ample, DSYEVD peak is reported (no DSYEVR switch)."""
+        n_samples = 1_000
+        n_snps = 1_000
+        with (
+            patch("jamma.lmm.eigen._DSYEVR_AVAILABLE", True),
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_proc,
+        ):
+            mock_vm.return_value.available = 1e12
+            mock_vm.return_value.total = 1e12
+            mock_proc.return_value.memory_info.return_value.rss = 0
+            mock_proc.return_value.memory_info.return_value.vms = 0
+            result = check_memory_before_run(n_samples, n_snps)
+            assert result is True
+
+    def test_no_import_error_when_eigen_unavailable(self):
+        """Pre-flight check works even if jamma.lmm.eigen is not importable."""
+        import sys
+
+        n_samples = 100
+        n_snps = 100
+        with (
+            patch.dict(sys.modules, {"jamma.lmm.eigen": None}),
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_proc,
+        ):
+            mock_vm.return_value.available = 1e12
+            mock_vm.return_value.total = 1e12
+            mock_proc.return_value.memory_info.return_value.rss = 0
+            mock_proc.return_value.memory_info.return_value.vms = 0
+            result = check_memory_before_run(n_samples, n_snps)
+            assert result is True

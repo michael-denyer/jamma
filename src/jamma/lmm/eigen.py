@@ -109,7 +109,7 @@ _DSYEVR_AVAILABLE, _eigh_dsyevr_func = _try_import_dsyevr()
 _DSYEVR_RECOMPILE_ATTEMPTED = False
 
 if not _DSYEVR_AVAILABLE:
-    logger.info(
+    logger.debug(
         "DSYEVR C extension unavailable — using DSYEVD (numpy.linalg.eigh). "
         "DSYEVR saves ~250GB workspace at 125k samples. "
         "To compile: python -m jamma.lmm._compile_eigen"

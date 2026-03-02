@@ -106,8 +106,12 @@ def impute_center_and_standardize(X: np.ndarray) -> np.ndarray:
     X_centered = X_imputed - snp_means
 
     # Compute variance AFTER imputation (matching GEMMA):
-    # var(X) = mean((X - mu)^2), reuses already-computed X_centered
-    snp_var = np.mean(X_centered**2, axis=0, keepdims=True)
+    # var(X) = mean((X - mu)^2), computed via einsum to avoid O(N*M) X**2 allocation
+    # einsum('ij,ij->j') computes sum of squared elements per column without
+    # materializing the full squared matrix intermediate.
+    n_samples = X_centered.shape[0]
+    snp_var = np.einsum("ij,ij->j", X_centered, X_centered, optimize=True) / n_samples
+    snp_var = snp_var[np.newaxis, :]  # shape (1, n_snps) to broadcast with X_centered
 
     # Standard deviation
     snp_sd = np.sqrt(snp_var)

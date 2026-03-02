@@ -17,6 +17,9 @@
  *   7. Cached coarse-grid hi_eval: hi_eval[g][i] and logdet_h[g] precomputed
  *      once across all SNPs — eliminates n_snps * n_grid redundant hi_eval passes
  *   8. restrict + SIMD hints: helps compiler vectorize hot inner loops
+ *      (#pragma omp simd is used without #ifdef _OPENMP guards — unknown
+ *      pragmas are silently ignored per the C standard, so these are safe
+ *      on non-OpenMP compilers and act purely as vectorization hints)
  *
  * Pab indexing (n_cvt=1, build_index_table(1)):
  *   n_index = 6
@@ -68,14 +71,22 @@
 #define CF_STOP     1.0e-14
 #define CF_MAX_ITER 200
 
+/* REML sentinel: degenerate P_yy returns -INFINITY instead of NaN.
+ * Any valid REML log-likelihood beats this in a > comparison,
+ * so the coarse grid search skips degenerate points without needing
+ * isnan(). Matches the Python path's np.where(isnan, -inf, logl). */
+#define REML_SENTINEL (-INFINITY)
+
 /* ---------------------------------------------------------------------------
  * alloc_aligned_doubles — allocate n doubles with 32-byte alignment (AVX2).
  *
- * C11 aligned_alloc requires size to be a multiple of alignment, so we round
- * up to the nearest 32-byte boundary. Returns NULL on failure (caller checks).
+ * Uses aligned_alloc (C11; available as a compiler extension in C99 mode on
+ * GCC and Clang). Size is rounded up to a 32-byte multiple as required.
+ * Returns NULL on failure or if n == 0 (caller checks).
  * ------------------------------------------------------------------------- */
 static double *alloc_aligned_doubles(size_t n)
 {
+    if (n == 0) return NULL;
     size_t bytes = (n * sizeof(double) + 31) & ~(size_t)31;
     return (double *)aligned_alloc(32, bytes);
 }
@@ -249,13 +260,13 @@ static inline double reml_finish(
 }
 
 /* Wald statistics from a populated pab array.
- * Shared by calc_rl_wald_ncvt1 and golden_section_lambda_ncvt1 fusion.
+ * Shared by golden_section_lambda_ncvt1 and golden_section_lambda_ncvt1_split.
  *
  * Returns 1 if the SNP is valid (P_XX > 0), 0 if degenerate (P_XX <= 0).
  * Degenerate SNPs get beta = se = f_stat = NaN.
  *
- * Using a return value instead of isnan(beta) for validity avoids the
- * -ffinite-math-only optimization that folds isnan() to always-false. */
+ * The return value (not isnan(beta)) is used for validity checks — this is
+ * more robust than relying on NaN propagation through comparisons. */
 static inline int wald_from_pab(
     const double pab[3][6],
     int df,
@@ -561,13 +572,15 @@ static double golden_section_lambda_ncvt1(
     int df, double reml_const,
     double * restrict hi_eval, double *logl_out,
     double *beta_out, double *se_out, double *f_stat_out,
-    int *is_valid_out  /* avoids isnan() check under -ffinite-math-only */
+    int *is_valid_out
 )
 {
     const double phi = 0.6180339887498949;  /* golden ratio - 1 */
 
-    /* Stage 1: coarse grid search using cached hi_eval and logdet_h */
-    double best_logl = -1e300;
+    /* Stage 1: coarse grid search using cached hi_eval and logdet_h.
+     * Degenerate grid points return NaN from reml_finish (P_yy < 0);
+     * map NaN → REML_SENTINEL so the > comparison skips them. */
+    double best_logl = REML_SENTINEL;
     int best_idx = 0;
     for (int g = 0; g < n_grid; g++) {
         double logl = reml_logl_ncvt1_cached(
@@ -577,7 +590,8 @@ static double golden_section_lambda_ncvt1(
             logdet_iab,
             n_samples, df, reml_const
         );
-        if (!isnan(logl) && logl > best_logl) {
+        if (isnan(logl)) logl = REML_SENTINEL;
+        if (logl > best_logl) {
             best_logl = logl;
             best_idx = g;
         }
@@ -623,9 +637,7 @@ static double golden_section_lambda_ncvt1(
                                  n_samples, lambda_opt, reml_const, hi_eval);
 
     /* hi_eval is now populated with 1/(lambda_opt*eval+1) — reuse for Wald stats
-     * without another n_samples pass through calc_rl_wald_ncvt1.
-     * wald_from_pab() return value is stored in is_valid_out to avoid
-     * isnan() check in caller, which -ffinite-math-only folds to false. */
+     * without another n_samples pass to recompute hi_eval. */
     {
         double pab[3][6];
         calc_pab_ncvt1(uab, hi_eval, n_samples, pab);
@@ -633,37 +645,6 @@ static double golden_section_lambda_ncvt1(
     }
 
     return lambda_opt;
-}
-
-/* -------------------------------------------------------------------------
- * calc_rl_wald_ncvt1
- *
- * Compute Wald test statistics for one SNP at its optimal lambda (n_cvt=1).
- *
- * Notes:
- * - P_XX <= 0 (degenerate genotype) -> beta = se = f_stat = NaN
- * - Uses JAMMA's corrected safe_sqrt (see GEMMA_DIVERGENCES.md section 1)
- * - f_stat = (P_YY - Px_YY) * tau  where tau = df / Px_YY
- * ------------------------------------------------------------------------- */
-static void calc_rl_wald_ncvt1(
-    const double * restrict uab,
-    const double * restrict eigenvalues,
-    int n_samples,
-    double lambda_opt,
-    double * restrict hi_eval,
-    double *beta_out, double *se_out, double *f_stat_out)
-{
-    int df = n_samples - 2;
-
-    #pragma omp simd
-    for (int i = 0; i < n_samples; i++) {
-        hi_eval[i] = 1.0 / (lambda_opt * eigenvalues[i] + 1.0);
-    }
-
-    double pab[3][6];
-    calc_pab_ncvt1(uab, hi_eval, n_samples, pab);
-
-    wald_from_pab(pab, df, beta_out, se_out, f_stat_out);
 }
 
 /* =========================================================================
@@ -881,13 +862,15 @@ static double golden_section_lambda_ncvt1_split(
     int df, double reml_const,
     double *logl_out,
     double *beta_out, double *se_out, double *f_stat_out,
-    int *is_valid_out  /* avoids isnan() check under -ffinite-math-only */
+    int *is_valid_out
 )
 {
     const double phi = 0.6180339887498949;
 
-    /* Stage 1: coarse grid search using cached split */
-    double best_logl = -1e300;
+    /* Stage 1: coarse grid search using cached split.
+     * Degenerate grid points return NaN from reml_logl_ncvt1_cached_split
+     * (P_yy < 0); map NaN → REML_SENTINEL so > comparison skips them. */
+    double best_logl = REML_SENTINEL;
     int best_idx = 0;
     for (int g = 0; g < n_grid; g++) {
         double logl = reml_logl_ncvt1_cached_split(
@@ -898,7 +881,8 @@ static double golden_section_lambda_ncvt1_split(
             &grid_inv[g],
             n_samples, df, reml_const
         );
-        if (!isnan(logl) && logl > best_logl) {
+        if (isnan(logl)) logl = REML_SENTINEL;
+        if (logl > best_logl) {
             best_logl = logl;
             best_idx = g;
         }
@@ -1570,6 +1554,7 @@ static PyObject *compute_lmm_batch_split_c(
 
     Py_BEGIN_ALLOW_THREADS
 
+    /* Static schedule: uniform SNP cost — no work-stealing overhead */
 #ifdef _OPENMP
     #pragma omp parallel for schedule(static) num_threads(actual_threads)
 #endif
@@ -1823,6 +1808,7 @@ static PyObject *compute_lmm_batch_c(PyObject *self, PyObject *args, PyObject *k
 
     Py_BEGIN_ALLOW_THREADS
 
+    /* Static schedule: uniform SNP cost — no work-stealing overhead */
 #ifdef _OPENMP
     #pragma omp parallel for schedule(static) num_threads(actual_threads)
 #endif

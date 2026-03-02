@@ -373,3 +373,78 @@ class TestDsyevrDispatch:
             available, func = _try_import_dsyevr()
         assert available is False
         assert func is None
+
+
+@pytest.mark.tier0
+class TestDsyevrProbe:
+    """Tests for EIGEN-03: DSYEVR probe runs once at import time."""
+
+    # Override module-level skipif — these tests don't need the C extension
+    pytestmark = [pytest.mark.tier0]
+
+    def test_try_import_not_called_on_repeated_eigendecompose(self):
+        """_try_import_dsyevr is NOT called by repeated eigendecompose_kinship calls."""
+        import jamma.lmm.eigen as eigen_mod
+
+        rng = np.random.default_rng(42)
+        n = 20
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+
+        # Mark recompile as already attempted (simulates normal post-init state)
+        original_attempted = eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED
+        eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED = True
+
+        try:
+            with patch.object(
+                eigen_mod, "_try_import_dsyevr", wraps=eigen_mod._try_import_dsyevr
+            ) as mock_probe:
+                with (
+                    patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+                    patch("jamma.core.memory.psutil.Process") as mock_proc,
+                ):
+                    mock_vm.return_value.available = 1e12
+                    mock_vm.return_value.total = 1e12
+                    mock_proc.return_value.memory_info.return_value.rss = 1e9
+                    mock_proc.return_value.memory_info.return_value.vms = 2e9
+
+                    # Call eigendecompose_kinship 3 times
+                    for _ in range(3):
+                        eigen_mod.eigendecompose_kinship(K.copy(), check_memory=False)
+
+                # _try_import_dsyevr should NOT have been called by any of the 3 calls
+                assert mock_probe.call_count == 0, (
+                    f"_try_import_dsyevr called {mock_probe.call_count} times; "
+                    "expected 0 (probe should only run at import time)"
+                )
+        finally:
+            eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED = original_attempted
+
+    def test_lazy_init_runs_recompile_once(self):
+        """_lazy_init_dsyevr() recompiles exactly once when DSYEVR unavailable."""
+        import jamma.lmm.eigen as eigen_mod
+
+        # Save originals
+        orig_available = eigen_mod._DSYEVR_AVAILABLE
+        orig_attempted = eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED
+
+        try:
+            # Simulate: DSYEVR not available, recompile not yet attempted
+            eigen_mod._DSYEVR_AVAILABLE = False
+            eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED = False
+
+            with patch.object(
+                eigen_mod, "_auto_recompile_eigen", return_value=False
+            ) as mock_recompile:
+                eigen_mod._lazy_init_dsyevr()
+                eigen_mod._lazy_init_dsyevr()  # Second call should be no-op
+                eigen_mod._lazy_init_dsyevr()  # Third call should be no-op
+
+            assert mock_recompile.call_count == 1, (
+                f"_auto_recompile_eigen called {mock_recompile.call_count} times;"
+                " expected 1"
+            )
+            assert eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED is True
+        finally:
+            eigen_mod._DSYEVR_AVAILABLE = orig_available
+            eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED = orig_attempted

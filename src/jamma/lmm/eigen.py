@@ -115,6 +115,22 @@ if not _DSYEVR_AVAILABLE:
         "To compile: python -m jamma.lmm._compile_eigen"
     )
 
+
+def _lazy_init_dsyevr() -> None:
+    """One-shot lazy init: attempt auto-recompile if import-time probe failed.
+
+    Called on first eigendecompose_kinship() invocation only.
+    Deferred from module import to avoid surprising subprocess/compiler
+    side effects during import.
+    """
+    global _DSYEVR_AVAILABLE, _eigh_dsyevr_func, _DSYEVR_RECOMPILE_ATTEMPTED
+    if _DSYEVR_AVAILABLE or _DSYEVR_RECOMPILE_ATTEMPTED:
+        return
+    _DSYEVR_RECOMPILE_ATTEMPTED = True
+    if _auto_recompile_eigen():
+        _DSYEVR_AVAILABLE, _eigh_dsyevr_func = _try_import_dsyevr()
+
+
 # Whether DSYEVR path is available. Used by eigendecompose_kinship()
 # to decide between DSYEVD and DSYEVR at runtime based on available memory.
 
@@ -283,11 +299,7 @@ def eigendecompose_kinship(
     """
     # Lazy auto-recompile: deferred from module import to first use to avoid
     # surprising subprocess/compiler side effects during import.
-    global _DSYEVR_AVAILABLE, _eigh_dsyevr_func, _DSYEVR_RECOMPILE_ATTEMPTED
-    if not _DSYEVR_AVAILABLE and not _DSYEVR_RECOMPILE_ATTEMPTED:
-        _DSYEVR_RECOMPILE_ATTEMPTED = True
-        if _auto_recompile_eigen():
-            _DSYEVR_AVAILABLE, _eigh_dsyevr_func = _try_import_dsyevr()
+    _lazy_init_dsyevr()
 
     n_samples = K.shape[0]
     n_elements = n_samples * n_samples

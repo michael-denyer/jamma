@@ -405,9 +405,7 @@ static void calc_pab_ncvt1(
      * uab is row-major (n_samples, 6), so row i starts at uab[i*6].
      * Accessing 6 consecutive doubles per row is cache-friendly. */
     double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0;
-#ifdef _OPENMP
     #pragma omp simd reduction(+:s0,s1,s2,s3,s4,s5)
-#endif
     for (int i = 0; i < n_samples; i++) {
         double h = hi_eval[i];
         const double *row = uab + i * 6;
@@ -462,9 +460,7 @@ static double reml_logl_ncvt1(
     int df = n_samples - 2;
 
     double logdet_h = 0.0;
-#ifdef _OPENMP
     #pragma omp simd reduction(+:logdet_h)
-#endif
     for (int i = 0; i < n_samples; i++) {
         double v = lambda * eigenvalues[i] + 1.0;
         hi_eval[i] = 1.0 / v;
@@ -543,7 +539,8 @@ static double golden_section_lambda_ncvt1(
     double log_l_min, double step,
     int n_grid, int n_refine,
     int df, double reml_const,
-    double * restrict hi_eval, double *logl_out
+    double * restrict hi_eval, double *logl_out,
+    double *beta_out, double *se_out, double *f_stat_out  /* NEW */
 )
 {
     const double phi = 0.6180339887498949;  /* golden ratio - 1 */
@@ -603,6 +600,15 @@ static double golden_section_lambda_ncvt1(
     double lambda_opt = exp(log_opt);
     *logl_out = reml_logl_ncvt1(uab, eigenvalues, logdet_iab,
                                  n_samples, lambda_opt, reml_const, hi_eval);
+
+    /* hi_eval is now populated with 1/(lambda_opt*eval+1) — reuse for Wald stats
+     * without another n_samples pass through calc_rl_wald_ncvt1. */
+    {
+        double pab[3][6];
+        calc_pab_ncvt1(uab, hi_eval, n_samples, pab);
+        wald_from_pab(pab, df, beta_out, se_out, f_stat_out);
+    }
+
     return lambda_opt;
 }
 
@@ -626,9 +632,7 @@ static void calc_rl_wald_ncvt1(
 {
     int df = n_samples - 2;
 
-#ifdef _OPENMP
     #pragma omp simd
-#endif
     for (int i = 0; i < n_samples; i++) {
         hi_eval[i] = 1.0 / (lambda_opt * eigenvalues[i] + 1.0);
     }
@@ -724,9 +728,7 @@ static double reml_logl_ncvt1_cached_split(
 {
     /* Only 3 varying reductions — invariant sums precomputed per grid point */
     double s_wx = 0.0, s_xx = 0.0, s_xy = 0.0;
-#ifdef _OPENMP
     #pragma omp simd reduction(+:s_wx,s_xx,s_xy)
-#endif
     for (int i = 0; i < n_samples; i++) {
         double h = cached_hi_eval[i];
         s_wx += h * var_wx[i];
@@ -801,9 +803,7 @@ static double reml_logl_ncvt1_split(
     double s_ww = 0.0, s_wx = 0.0, s_wy = 0.0;
     double s_xx = 0.0, s_xy = 0.0, s_yy = 0.0;
 
-#ifdef _OPENMP
     #pragma omp simd reduction(+:logdet_h,s_ww,s_wx,s_wy,s_xx,s_xy,s_yy)
-#endif
     for (int i = 0; i < n_samples; i++) {
         double v = lambda * eigenvalues[i] + 1.0;
         double h = 1.0 / v;
@@ -927,9 +927,7 @@ static double golden_section_lambda_ncvt1_split(
         double s_ww = 0.0, s_wx = 0.0, s_wy = 0.0;
         double s_xx = 0.0, s_xy = 0.0, s_yy = 0.0;
 
-#ifdef _OPENMP
         #pragma omp simd reduction(+:logdet_h,s_ww,s_wx,s_wy,s_xx,s_xy,s_yy)
-#endif
         for (int i = 0; i < n_samples; i++) {
             double v = lambda_opt * eigenvalues[i] + 1.0;
             double h = 1.0 / v;
@@ -1295,9 +1293,7 @@ static PyObject *compute_lmm_chunk_split_c_py(
          * 1400 samples, negligible vs the existing 50-grid-point REML loop.
          */
         double iab_s_wx = 0.0, iab_s_xx = 0.0;
-#ifdef _OPENMP
         #pragma omp simd reduction(+:iab_s_wx,iab_s_xx)
-#endif
         for (int i = 0; i < n_samples; i++) {
             iab_s_wx += vwx[i];
             iab_s_xx += vxx[i];
@@ -1552,7 +1548,7 @@ static PyObject *compute_lmm_batch_split_c(
     Py_BEGIN_ALLOW_THREADS
 
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic, 64) num_threads(actual_threads)
+    #pragma omp parallel for schedule(static) num_threads(actual_threads)
 #endif
     for (int snp = 0; snp < n_snps; snp++) {
         /* SoA: (n_snps, 3, n_samples) — 3 contiguous columns per SNP */
@@ -1771,9 +1767,7 @@ static PyObject *compute_lmm_batch_c(PyObject *self, PyObject *args, PyObject *k
         double lam = lambda_grid[g];
         double *hi_row = hi_eval_grid + (size_t)g * n_samples;
         double logdet = 0.0;
-#ifdef _OPENMP
         #pragma omp simd reduction(+:logdet)
-#endif
         for (int i = 0; i < n_samples; i++) {
             double v = lam * eigenvalues_data[i] + 1.0;
             hi_row[i] = 1.0 / v;
@@ -1807,7 +1801,7 @@ static PyObject *compute_lmm_batch_c(PyObject *self, PyObject *args, PyObject *k
     Py_BEGIN_ALLOW_THREADS
 
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic, 64) num_threads(actual_threads)
+    #pragma omp parallel for schedule(static) num_threads(actual_threads)
 #endif
     for (int snp = 0; snp < n_snps; snp++) {
         /* Per-thread buffer — no malloc inside the hot loop */
@@ -1823,23 +1817,20 @@ static PyObject *compute_lmm_batch_c(PyObject *self, PyObject *args, PyObject *k
         double logdet_iab = compute_logdet_iab(iab);
 
         double lambda_opt, logl_opt;
+        double beta, se, f_stat;
         lambda_opt = golden_section_lambda_ncvt1(
             uab, eigenvalues_data, logdet_iab, n_samples,
             lambda_grid, hi_eval_grid, logdet_h_grid,
             log_l_min, step, n_grid, n_refine,
             df, reml_const,
-            hi_eval, &logl_opt
+            hi_eval, &logl_opt,
+            &beta, &se, &f_stat
         );
 
         lambdas[snp] = lambda_opt;
         logls[snp]   = logl_opt;
-
-        double beta, se, f_stat;
-        calc_rl_wald_ncvt1(uab, eigenvalues_data, n_samples, lambda_opt,
-                           hi_eval, &beta, &se, &f_stat);
-
-        betas[snp] = beta;
-        ses[snp]   = se;
+        betas[snp]   = beta;
+        ses[snp]     = se;
 
         int is_valid = (beta == beta);  /* !isnan(beta) */
         pwalds[snp] = f_to_pvalue(f_stat, df, is_valid, beta_a, beta_b, lbeta_ab);

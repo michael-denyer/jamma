@@ -245,6 +245,8 @@ class CustomBuildHook(BuildHookInterface):
             "-ftree-vectorize",
             "-fno-math-errno",
             "-fno-trapping-math",
+            "-ffinite-math-only",
+            "-funroll-loops",
             "-fPIC",
             "-shared",
             "-std=c99",

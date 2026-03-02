@@ -1,13 +1,12 @@
 """Tests for chunk size computation invariants.
 
-Verifies that _compute_chunk_size and auto_tune_chunk_size respect int32
-safe bounds, clamp constraints, and device alignment contracts.
+Verifies that _compute_chunk_size and auto_tune_chunk_size respect
+MAX_SAFE_CHUNK cap, clamp constraints, and device alignment contracts.
 """
 
 import pytest
 
 from jamma.lmm.chunk import (
-    _MAX_BUFFER_ELEMENTS,
     MAX_SAFE_CHUNK,
     _compute_chunk_size,
     auto_tune_chunk_size,
@@ -139,78 +138,42 @@ class TestAutoTuneChunkSize:
 
 
 @pytest.mark.tier0
-class TestComputeChunkSizeInvariants:
-    """Tests for _compute_chunk_size int32 safe bound invariants."""
+class TestComputeChunkSize:
+    """Tests for _compute_chunk_size with MAX_SAFE_CHUNK cap."""
 
-    def test_never_exceeds_safe_bound_large_samples_high_devices(self):
-        """Chunk must never exceed int32 safe bound for large n_samples."""
-        n_samples = 120_000
-        n_snps = 500_000
-        n_devices = 64
-        n_cvt = 1
-        n_index = (n_cvt + 3) * (n_cvt + 2) // 2
-        elements_per_snp = n_samples * n_index
-        safe_bound = _MAX_BUFFER_ELEMENTS // elements_per_snp
+    def test_small_dataset_no_chunking(self):
+        """When n_snps < MAX_SAFE_CHUNK, return n_snps."""
+        result = _compute_chunk_size(n_snps=5000)
+        assert result == 5000
 
-        result = _compute_chunk_size(
-            n_samples=n_samples,
-            n_snps=n_snps,
-            n_devices=n_devices,
-        )
-        assert result <= safe_bound
+    def test_large_dataset_caps_at_max_safe(self):
+        """When n_snps > MAX_SAFE_CHUNK, cap at MAX_SAFE_CHUNK."""
+        result = _compute_chunk_size(n_snps=500_000)
+        assert result == MAX_SAFE_CHUNK
 
-    def test_never_exceeds_safe_bound_alignment_forces_minimum(self):
-        """When alignment rounds to zero, result stays within safe bound."""
-        # Construct case where safe_bound < n_devices
-        # Use huge n_samples so elements_per_snp is large and safe_bound is small
-        n_samples = 300_000
-        n_cvt = 2  # n_index = 10
-        n_index = (n_cvt + 3) * (n_cvt + 2) // 2
-        elements_per_snp = n_samples * n_index
-        safe_bound = _MAX_BUFFER_ELEMENTS // elements_per_snp
-        # Pick n_devices larger than safe_bound to trigger the edge case
-        n_devices = max(safe_bound + 1, 2)
-
-        result = _compute_chunk_size(
-            n_samples=n_samples,
-            n_snps=1_000_000,
-            n_cvt=n_cvt,
-            n_devices=n_devices,
-        )
-        assert result <= safe_bound
-
-    def test_floor_100_does_not_exceed_safe_bound(self):
-        """The min-100 floor must not push result above the safe bound."""
-        # Large n_samples so safe_bound < 100
-        n_samples = 500_000
-        n_cvt = 2
-        n_index = (n_cvt + 3) * (n_cvt + 2) // 2
-        elements_per_snp = n_samples * n_index
-        safe_bound = _MAX_BUFFER_ELEMENTS // elements_per_snp
-
-        if safe_bound < 100:
-            result = _compute_chunk_size(
-                n_samples=n_samples,
-                n_snps=1_000_000,
-                n_cvt=n_cvt,
-            )
-            assert result <= safe_bound
+    def test_gwas_scale_caps_at_max_safe(self):
+        """At GWAS scale (95k SNPs), chunk is MAX_SAFE_CHUNK."""
+        chunk = _compute_chunk_size(n_snps=95_000)
+        assert chunk == MAX_SAFE_CHUNK
 
     @pytest.mark.parametrize("n_devices", [1, 2, 4, 8, 16, 32, 64, 128])
-    def test_safe_bound_invariant_across_device_counts(self, n_devices):
-        """Safe bound invariant holds across a range of device counts."""
-        n_samples = 50_000
-        n_cvt = 1
-        n_index = (n_cvt + 3) * (n_cvt + 2) // 2
-        elements_per_snp = n_samples * n_index
-        safe_bound = _MAX_BUFFER_ELEMENTS // elements_per_snp
+    def test_device_alignment(self, n_devices):
+        """Chunk is device-aligned when n_devices > 1 and chunking occurs."""
+        result = _compute_chunk_size(n_snps=500_000, n_devices=n_devices)
+        if n_devices > 1 and result < 500_000:
+            assert result % n_devices == 0, (
+                f"Chunk {result} is not aligned to {n_devices} devices"
+            )
 
-        result = _compute_chunk_size(
-            n_samples=n_samples,
-            n_snps=500_000,
-            n_devices=n_devices,
-        )
-        assert result <= safe_bound
+    def test_never_returns_zero(self):
+        """Chunk size must always be >= 1, even for degenerate input."""
+        assert _compute_chunk_size(n_snps=0) >= 1
+        assert _compute_chunk_size(n_snps=1) >= 1
+
+    def test_n_snps_equals_max_safe_chunk(self):
+        """When n_snps == MAX_SAFE_CHUNK, return exactly MAX_SAFE_CHUNK."""
+        result = _compute_chunk_size(n_snps=MAX_SAFE_CHUNK)
+        assert result == MAX_SAFE_CHUNK
 
 
 @pytest.mark.tier0
@@ -222,40 +185,11 @@ class TestChunkSizingAtDatabricksScale:
     """
 
     @pytest.mark.parametrize("n_devices", [1, 8, 16, 24, 48])
-    def test_chunk_never_exceeds_safe_bound_at_scale(self, n_devices):
-        """At 125k samples (Databricks scale), chunk never exceeds int32 safe bound.
-
-        This is the exact configuration that caused ENOSPC on Databricks:
-        125k samples, 95k SNPs, high device counts.
-        """
-        n_samples = 125_000
-        n_snps = 95_000
-        n_cvt = 1
-        n_index = (n_cvt + 3) * (n_cvt + 2) // 2
-        elements_per_snp = n_samples * n_index
-        safe_bound = _MAX_BUFFER_ELEMENTS // elements_per_snp
-
-        result = _compute_chunk_size(
-            n_samples=n_samples,
-            n_snps=n_snps,
-            n_devices=n_devices,
-        )
-        assert result <= safe_bound, (
-            f"Chunk {result} exceeds safe bound {safe_bound} "
-            f"at {n_samples} samples, {n_devices} devices"
-        )
-
-    @pytest.mark.parametrize("n_devices", [1, 8, 16, 24, 48])
     def test_chunk_device_alignment_at_scale(self, n_devices):
         """Chunk is a multiple of n_devices when n_devices > 1."""
-        n_samples = 125_000
         n_snps = 95_000
 
-        result = _compute_chunk_size(
-            n_samples=n_samples,
-            n_snps=n_snps,
-            n_devices=n_devices,
-        )
+        result = _compute_chunk_size(n_snps=n_snps, n_devices=n_devices)
 
         if n_devices > 1 and result < n_snps:
             assert result % n_devices == 0, (
@@ -279,44 +213,3 @@ class TestChunkSizingAtDatabricksScale:
             assert result % n_devices == 0, (
                 f"auto_tune result {result} not aligned to {n_devices} devices"
             )
-
-
-@pytest.mark.tier0
-class TestChunkSizeNeverZero:
-    """_compute_chunk_size must never return 0 (division-by-zero guard)."""
-
-    def test_extreme_n_cvt_does_not_return_zero(self):
-        """Very high n_cvt makes elements_per_snp > _MAX_BUFFER_ELEMENTS.
-
-        safe_bound would be 0 without the max(1, ...) floor, causing
-        division by zero in runner_jax.py and range(..., step=0) in
-        runner_streaming.py.
-        """
-        # n_index = (n_cvt+3)*(n_cvt+2)//2; for n_cvt=1000: n_index=504_510
-        # elements_per_snp = 10_000 * 504_510 >> _MAX_BUFFER_ELEMENTS
-        result = _compute_chunk_size(
-            n_samples=10_000,
-            n_snps=500,
-            n_cvt=1000,
-        )
-        assert result >= 1, f"Chunk size must be >= 1, got {result}"
-
-    def test_extreme_n_samples_does_not_return_zero(self):
-        """Very large n_samples can also push safe_bound to 0."""
-        result = _compute_chunk_size(
-            n_samples=5_000_000,
-            n_snps=1000,
-            n_cvt=2,
-        )
-        assert result >= 1, f"Chunk size must be >= 1, got {result}"
-
-    @pytest.mark.parametrize("n_devices", [1, 8, 64, 256])
-    def test_zero_safe_bound_with_devices(self, n_devices):
-        """Zero safe_bound edge case doesn't interact badly with device alignment."""
-        result = _compute_chunk_size(
-            n_samples=10_000,
-            n_snps=500,
-            n_cvt=1000,
-            n_devices=n_devices,
-        )
-        assert result >= 1

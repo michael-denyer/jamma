@@ -21,18 +21,24 @@ import numpy as np
 def impute_and_center(X: np.ndarray) -> np.ndarray:
     """Impute missing values to SNP mean and center.
 
+    When X is a writable NumPy array, operates in-place for zero-copy
+    performance. Falls back to a copy-based path for non-writable or
+    non-NumPy arrays (e.g., JAX arrays in streaming kinship).
+
     Implements GEMMA's PlinkKin algorithm for handling missing data:
     1. Compute mean per SNP excluding missing (NaN)
     2. Replace missing with mean
-    3. Center: x = x - mean
+    3. Center: x -= mean
 
     Args:
         X: Genotype matrix (n_samples, n_snps), NaN for missing values.
-            Values are typically 0, 1, or 2 representing minor allele counts.
+            For in-place operation, must be a writable NumPy float array.
+            If X is a view into a larger array, the underlying data will
+            be mutated.
 
     Returns:
-        Centered genotype matrix with missing values imputed to SNP mean.
-        Shape is (n_samples, n_snps), dtype matches input (typically float64).
+        Centered array with missing values imputed to SNP mean.
+        Same object as X when in-place path is taken; new array otherwise.
 
     Example:
         >>> import numpy as np
@@ -41,22 +47,24 @@ def impute_and_center(X: np.ndarray) -> np.ndarray:
         >>> # Mean of column 0 is (0+2)/2 = 1.0 (excluding NaN)
         >>> # NaN is replaced with 1.0, then column is centered
     """
-    # Compute per-SNP mean excluding NaN values
-    # nanmean ignores NaN when computing the mean
-    snp_means = np.nanmean(X, axis=0, keepdims=True)
+    # Compute per-SNP mean excluding NaN values; shape (n_snps,)
+    snp_means = np.nanmean(X, axis=0)
 
     # Handle all-missing columns: nanmean returns NaN, replace with 0
     # This ensures such SNPs contribute nothing to kinship (centered = 0)
     snp_means = np.nan_to_num(snp_means, nan=0.0)
 
-    # Replace NaN with SNP mean (0 for all-missing columns)
-    # where(condition, x, y) returns x where condition is True, else y
+    # In-place path: writable numpy arrays avoid an O(N*M) copy
+    if isinstance(X, np.ndarray) and X.flags.writeable:
+        nan_mask = np.isnan(X)
+        if nan_mask.any():
+            X[nan_mask] = np.take(snp_means, np.where(nan_mask)[1])
+        X -= snp_means
+        return X
+
+    # Copy-based path for immutable arrays (e.g., JAX arrays in streaming kinship)
     X_imputed = np.where(np.isnan(X), snp_means, X)
-
-    # Center by subtracting mean
-    X_centered = X_imputed - snp_means
-
-    return X_centered
+    return X_imputed - snp_means
 
 
 def impute_center_and_standardize(X: np.ndarray) -> np.ndarray:
@@ -103,8 +111,12 @@ def impute_center_and_standardize(X: np.ndarray) -> np.ndarray:
     X_centered = X_imputed - snp_means
 
     # Compute variance AFTER imputation (matching GEMMA):
-    # var(X) = mean((X - mu)^2), reuses already-computed X_centered
-    snp_var = np.mean(X_centered**2, axis=0, keepdims=True)
+    # var(X) = mean((X - mu)^2), computed via einsum to avoid O(N*M) X**2 allocation
+    # einsum('ij,ij->j') computes sum of squared elements per column without
+    # materializing the full squared matrix intermediate.
+    n_samples = X_centered.shape[0]
+    snp_var = np.einsum("ij,ij->j", X_centered, X_centered, optimize=True) / n_samples
+    snp_var = snp_var[np.newaxis, :]  # shape (1, n_snps) to broadcast with X_centered
 
     # Standard deviation
     snp_sd = np.sqrt(snp_var)

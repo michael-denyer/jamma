@@ -114,51 +114,39 @@ class TestComputeChunkSizeAlignment:
 
     def test_default_n_devices_is_backward_compatible(self):
         """n_devices=1 must produce same result as calling without it."""
-        result_default = _compute_chunk_size(1410, 10768, 50, 1)
-        result_explicit = _compute_chunk_size(1410, 10768, 50, 1, n_devices=1)
+        result_default = _compute_chunk_size(10768)
+        result_explicit = _compute_chunk_size(10768, n_devices=1)
         assert result_default == result_explicit
 
     def test_n_devices_4_result_is_multiple_of_4(self):
         """Result with n_devices=4 must be a multiple of 4."""
-        result = _compute_chunk_size(1410, 10768, 50, 1, n_devices=4)
+        result = _compute_chunk_size(10768, n_devices=4)
         assert result % 4 == 0, f"Expected multiple of 4, got {result}"
 
     def test_n_devices_8_result_is_multiple_of_8(self):
         """Result with n_devices=8 must be a multiple of 8."""
-        result = _compute_chunk_size(1000, 100000, 50, 1, n_devices=8)
+        result = _compute_chunk_size(100000, n_devices=8)
         if result < 100000:  # only check when chunking actually occurs
             assert result % 8 == 0, f"Expected multiple of 8, got {result}"
 
     def test_n_devices_1_no_alignment_applied(self):
         """n_devices=1 must not modify the chunk size calculation."""
-        result_no_devices = _compute_chunk_size(5000, 50000, 50, 1, n_devices=1)
-        # Just verify it returns a positive reasonable value
-        assert result_no_devices >= 100
+        result_no_devices = _compute_chunk_size(50000, n_devices=1)
+        assert result_no_devices == 50000
 
-    def test_minimum_still_enforced_after_alignment(self):
-        """Minimum chunk of 100 must apply even after device alignment."""
-        # Use extreme values to force very small chunk
-        result = _compute_chunk_size(
-            n_samples=1000000,
-            n_snps=10,
-            n_grid=50,
-            n_cvt=1,
-            n_devices=4,
-        )
-        # When n_snps is smaller than chunking threshold, returns n_snps
-        # otherwise minimum of 100 applies
-        assert result >= 4  # at least n_devices (alignment floor)
+    def test_small_n_snps_with_device_alignment(self):
+        """Small n_snps returns n_snps even with device alignment."""
+        result = _compute_chunk_size(n_snps=10, n_devices=4)
+        assert result == 10
 
     def test_no_chunking_needed_returns_n_snps(self):
-        """When no chunking needed, n_snps is returned unchanged."""
-        result = _compute_chunk_size(10, 100, 50, 1, n_devices=4)
-        # With tiny n_samples, buffer limit >> n_snps, so should return n_snps
+        """When n_snps < MAX_SAFE_CHUNK, n_snps is returned unchanged."""
+        result = _compute_chunk_size(100, n_devices=4)
         assert result == 100
 
     def test_n_devices_2_mouse_hs1940_scale(self):
-        """Test alignment at mouse_hs1940 scale (1410 samples, 10768 SNPs)."""
-        result = _compute_chunk_size(1410, 10768, 50, 1, n_devices=2)
-        # No chunking expected at this scale (buffer limit >> 10768)
+        """Test alignment at mouse_hs1940 scale (10768 SNPs)."""
+        result = _compute_chunk_size(10768, n_devices=2)
         assert result == 10768
 
 

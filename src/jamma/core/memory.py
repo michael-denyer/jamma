@@ -740,7 +740,7 @@ def check_memory_before_run(
     """
     from jamma.lmm.chunk import _compute_chunk_size
 
-    actual_chunk = _compute_chunk_size(n_samples, n_snps)
+    actual_chunk = _compute_chunk_size(n_snps)
     est = estimate_streaming_memory(n_samples, chunk_size=actual_chunk)
     snap = get_memory_snapshot()
 

@@ -1,7 +1,9 @@
-"""Tests for kinship matrix computation.
+"""Tests for kinship matrix computation (JAX-dependent).
 
-These tests verify the JAX-accelerated kinship matrix computation,
-including symmetry, scaling, missing data handling, and determinism.
+These tests verify kinship properties using JAX arrays for reference
+computation.  Pure-NumPy tests (in-place imputation, einsum variance,
+no-copy dtype optimization) live in test_kinship_numpy.py so they run
+in JAX-free CI environments.
 """
 
 import numpy as np

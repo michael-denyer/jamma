@@ -8,9 +8,9 @@ Final fallback: ``numpy.linalg.eigh`` if the internal gufunc is unavailable.
 
 Thread control is handled by jamma.core.threading via threadpool_limits.
 
-Note: Uses numpy (LAPACK) instead of JAX because JAX's int32 buffer indexing
-overflows at ~46k x 46k matrices. With ILP64 numpy (MKL), matrices up to
-200k+ are supported.
+Note: Uses numpy (LAPACK) instead of JAX because eigendecomposition of large
+kinship matrices (46k+) requires LP64/ILP64 LAPACK. With ILP64 numpy (MKL),
+matrices up to 200k+ are supported.
 """
 
 import sys
@@ -271,9 +271,9 @@ def eigendecompose_kinship(
     - Warning if >1 zero eigenvalue
     - Warning if negative eigenvalues remain after thresholding
 
-    Note: Uses numpy (LAPACK) instead of JAX to support matrices larger than
-    46k x 46k samples (JAX hits int32 overflow at ~2.1B elements). With ILP64
-    numpy (MKL), matrices up to 200k+ are supported.
+    Note: Uses numpy (LAPACK) instead of JAX because eigendecomposition of large
+    kinship matrices (46k+) requires LP64/ILP64 LAPACK. With ILP64 numpy (MKL),
+    matrices up to 200k+ are supported.
 
     Under memory pressure, may use DSYEVR (O(N) workspace) instead of
     DSYEVD. In this case, K is destroyed but eigenvectors are in a

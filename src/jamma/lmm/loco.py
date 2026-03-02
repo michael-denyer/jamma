@@ -822,9 +822,7 @@ def _run_lmm_for_chromosome(
     UtW_jax = jax.device_put(UtW, placement.rep)
     Uty_jax = jax.device_put(Uty, placement.rep)
 
-    jax_chunk_size = _compute_chunk_size(
-        n_samples, n_filtered, n_grid, n_cvt, n_devices=placement.n_devices
-    )
+    jax_chunk_size = _compute_chunk_size(n_filtered, n_devices=placement.n_devices)
 
     def _prepare_jax_chunk(
         start: int, geno: np.ndarray, total: int

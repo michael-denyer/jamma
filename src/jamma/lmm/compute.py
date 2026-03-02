@@ -282,10 +282,10 @@ def log_jax_error(
     n_samples: int,
     n_cvt: int = 1,
 ) -> None:
-    """Log a JAX computation error with context, detecting int32 overflow.
+    """Log a JAX computation error with context, detecting buffer overflow.
 
-    String-based detection of JAX int32 overflow is fragile — update if
-    JAX changes the wording in future versions.
+    String-based detection is fragile — update if JAX changes the
+    wording in future versions.
 
     Args:
         e: The caught exception.

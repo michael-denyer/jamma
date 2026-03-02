@@ -424,7 +424,7 @@ class PipelineRunner:
         if not self.config.check_memory:
             return None
 
-        actual_chunk = _compute_chunk_size(n_samples, n_snps, n_cvt=n_cvt)
+        actual_chunk = _compute_chunk_size(n_snps)
         est = estimate_streaming_memory(n_samples, chunk_size=actual_chunk, n_cvt=n_cvt)
 
         logger.info(
@@ -755,7 +755,7 @@ class PipelineRunner:
 
         # Memory preflight: streaming estimate for JAX, in-memory estimate for NumPy
         if active_backend == "jax":
-            actual_chunk = _compute_chunk_size(n_valid, n_snps, n_cvt=n_cvt)
+            actual_chunk = _compute_chunk_size(n_snps)
             self.check_memory_requirements(n_valid, n_snps, n_cvt=n_cvt)
         else:
             # NumPy loads all genotypes into memory; use the runner's own estimate

@@ -72,21 +72,18 @@ class TestChunkSizeComputation:
 
     def test_small_dataset_no_chunking(self):
         """Small datasets should not be chunked."""
-        chunk = _compute_chunk_size(n_samples=1000, n_snps=10_000, n_grid=50)
+        chunk = _compute_chunk_size(n_snps=10_000)
         assert chunk == 10_000  # Full dataset
 
     def test_large_dataset_is_chunked(self):
-        """Large datasets should be chunked to avoid int32 overflow."""
-        # 100k samples × 95k SNPs would overflow without chunking
-        chunk = _compute_chunk_size(n_samples=100_000, n_snps=95_000, n_grid=50)
-        assert chunk < 95_000  # Should be chunked
-        assert chunk >= 100  # Should be at least minimum
+        """Large datasets should be chunked at MAX_SAFE_CHUNK."""
+        chunk = _compute_chunk_size(n_snps=95_000)
+        assert chunk == MAX_SAFE_CHUNK  # Capped at 50k
 
-    def test_chunk_size_scales_with_samples(self):
-        """Larger sample counts should result in smaller chunk sizes."""
-        chunk_10k = _compute_chunk_size(n_samples=10_000, n_snps=100_000)
-        chunk_50k = _compute_chunk_size(n_samples=50_000, n_snps=100_000)
-        assert chunk_50k < chunk_10k
+    def test_chunk_size_caps_at_max_safe(self):
+        """Chunk size is capped at MAX_SAFE_CHUNK regardless of n_snps."""
+        chunk = _compute_chunk_size(n_snps=100_000)
+        assert chunk == MAX_SAFE_CHUNK
 
     def test_auto_tune_respects_max_chunk(self):
         """auto_tune_chunk_size should not exceed MAX_SAFE_CHUNK."""

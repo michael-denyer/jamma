@@ -98,6 +98,27 @@ def mouse_full_kinship(mouse_genotypes_and_chrs):
     return compute_centered_kinship(genotypes, check_memory=False)
 
 
+@pytest.fixture(scope="module")
+def mouse_loco_lmm_results():
+    """Run LOCO LMM on mouse_hs1940 once and share results (module-scoped).
+
+    Returns (results, n_tested) or skips if data unavailable.
+    """
+    if not _mouse_hs1940_exists():
+        pytest.skip("mouse_hs1940 PLINK data not found")
+
+    from jamma.lmm.loco import run_lmm_loco
+
+    phenotypes = load_phenotypes_from_fam(MOUSE_HS1940_BFILE.with_suffix(".fam"))
+    return run_lmm_loco(
+        bed_path=MOUSE_HS1940_BFILE,
+        phenotypes=phenotypes,
+        lmm_mode=1,
+        check_memory=False,
+        show_progress=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helper: compute globally-centered genotype matrix and per-chromosome S_c
 # ---------------------------------------------------------------------------
@@ -616,21 +637,9 @@ class TestLocoLmmIntegration:
     """LOCO LMM produces valid results on mouse_hs1940."""
 
     @pytest.mark.slow
-    def test_loco_lmm_produces_valid_results(self):
+    def test_loco_lmm_produces_valid_results(self, mouse_loco_lmm_results):
         """run_lmm_loco returns valid AssocResults with finite stats."""
-        if not _mouse_hs1940_exists():
-            pytest.skip("mouse_hs1940 PLINK data not found")
-
-        from jamma.lmm.loco import run_lmm_loco
-
-        phenotypes = load_phenotypes_from_fam(MOUSE_HS1940_BFILE.with_suffix(".fam"))
-        results, n_tested = run_lmm_loco(
-            bed_path=MOUSE_HS1940_BFILE,
-            phenotypes=phenotypes,
-            lmm_mode=1,
-            check_memory=False,
-            show_progress=False,
-        )
+        results, n_tested = mouse_loco_lmm_results
 
         assert len(results) > 0, "Should produce results"
         assert n_tested == len(results), "n_tested should match result count"
@@ -645,21 +654,9 @@ class TestLocoLmmIntegration:
         assert len(result_chrs) > 1
 
     @pytest.mark.slow
-    def test_loco_lmm_results_have_correct_snp_info(self):
+    def test_loco_lmm_results_have_correct_snp_info(self, mouse_loco_lmm_results):
         """SNP IDs and chromosome assignments match BIM metadata."""
-        if not _mouse_hs1940_exists():
-            pytest.skip("mouse_hs1940 PLINK data not found")
-
-        from jamma.lmm.loco import run_lmm_loco
-
-        phenotypes = load_phenotypes_from_fam(MOUSE_HS1940_BFILE.with_suffix(".fam"))
-        results, _ = run_lmm_loco(
-            bed_path=MOUSE_HS1940_BFILE,
-            phenotypes=phenotypes,
-            lmm_mode=1,
-            check_memory=False,
-            show_progress=False,
-        )
+        results, _ = mouse_loco_lmm_results
 
         meta = get_plink_metadata(MOUSE_HS1940_BFILE)
         bim_snps = set(meta["sid"])
@@ -674,19 +671,15 @@ class TestLocoLmmIntegration:
         assert result_chrs.issubset(bim_chrs)
 
     @pytest.mark.slow
-    def test_loco_lmm_top_hits_overlap_with_standard(self):
+    def test_loco_lmm_top_hits_overlap_with_standard(self, mouse_loco_lmm_results):
         """Top 100 SNPs from LOCO and standard LMM have >50% overlap."""
         if not _mouse_hs1940_exists():
             pytest.skip("mouse_hs1940 PLINK data not found")
 
+        from jamma.io import load_plink_binary
         from jamma.lmm import run_lmm_association_streaming
-        from jamma.lmm.loco import run_lmm_loco
 
         phenotypes = load_phenotypes_from_fam(MOUSE_HS1940_BFILE.with_suffix(".fam"))
-
-        # Standard LMM (needs kinship)
-        from jamma.io import load_plink_binary
-
         plink_data = load_plink_binary(MOUSE_HS1940_BFILE)
         K_full = compute_centered_kinship(
             plink_data.genotypes.astype(np.float64),
@@ -701,14 +694,8 @@ class TestLocoLmmIntegration:
             show_progress=False,
         )
 
-        # LOCO LMM
-        loco_results, _ = run_lmm_loco(
-            bed_path=MOUSE_HS1940_BFILE,
-            phenotypes=phenotypes,
-            lmm_mode=1,
-            check_memory=False,
-            show_progress=False,
-        )
+        # LOCO LMM results from shared fixture
+        loco_results, _ = mouse_loco_lmm_results
 
         # Get top 100 SNPs by p-value
         standard_sorted = sorted(standard_results, key=lambda r: r.p_wald or 1.0)

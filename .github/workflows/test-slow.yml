@@ -1,0 +1,30 @@
+name: Slow Tests
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  test-slow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Compile C extensions
+        run: |
+          uv run python -m jamma.lmm._compile_accel
+          uv run python -m jamma.lmm._compile_eigen
+
+      - name: Run slow and tier2 tests
+        run: uv run pytest -m "tier2 or slow" -v -o 'addopts=' --no-cov

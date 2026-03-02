@@ -116,7 +116,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" avx2-dist/*.whl --clobber
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$RELEASE_TAG" avx2-dist/*.whl --clobber --repo "$GH_REPO"
 
   build_sdist:
     name: Build sdist

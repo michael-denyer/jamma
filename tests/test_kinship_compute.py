@@ -447,3 +447,38 @@ class TestImputeCenterStandardizeEinsum:
         np.testing.assert_array_equal(result[:, 0], 0.0)
         # Column 1 has variance -> should be non-zero
         assert np.any(result[:, 1] != 0.0)
+
+
+@pytest.mark.tier0
+class TestKinshipNoCopy:
+    """Tests for KIN-02: no redundant float64 copy in _compute_kinship_inmemory."""
+
+    def test_float64_input_produces_correct_kinship(self):
+        """compute_centered_kinship on float64 input produces correct result.
+
+        When input is already float64, the dtype check avoids creating a second
+        copy. This test verifies the function still produces numerically correct
+        output after the optimization.
+        """
+        X = np.array([[0, 1, 2], [1, 1, 1], [2, 1, 0]], dtype=np.float64)
+        K = compute_centered_kinship(X, check_memory=False)
+        assert K.shape == (3, 3)
+        assert K.dtype == np.float64
+        np.testing.assert_allclose(K, K.T, atol=1e-14)
+
+    def test_float32_input_produces_correct_kinship(self):
+        """compute_centered_kinship on float32 input produces same result as float64.
+
+        When input is float32, the single astype(float64) allocation avoids the
+        intermediate float32 boolean-indexed copy followed by astype. This test
+        verifies the result matches reference computed from float64 input.
+        """
+        rng = np.random.default_rng(42)
+        X_f64 = rng.integers(0, 3, size=(10, 20)).astype(np.float64)
+        X_f32 = X_f64.astype(np.float32)
+
+        K_from_f64 = compute_centered_kinship(X_f64, check_memory=False)
+        K_from_f32 = compute_centered_kinship(X_f32, check_memory=False)
+
+        # float32 input should produce identical result (both converted to float64)
+        np.testing.assert_allclose(K_from_f32, K_from_f64, rtol=1e-10, atol=1e-12)

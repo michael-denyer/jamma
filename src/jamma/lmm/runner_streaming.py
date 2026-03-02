@@ -359,9 +359,7 @@ def run_lmm_association_streaming(
             UtW = U.T @ W
             Uty = U.T @ phenotypes
 
-        jax_chunk_size = _compute_chunk_size(
-            n_samples, n_filtered, n_grid, n_cvt, placement.n_devices
-        )
+        jax_chunk_size = _compute_chunk_size(n_filtered, placement.n_devices)
 
         logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
             lmm_mode,

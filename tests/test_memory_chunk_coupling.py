@@ -11,16 +11,16 @@ from jamma.lmm.chunk import _compute_chunk_size
 @pytest.mark.tier0
 def test_chunk_size_varies_with_scale():
     """_compute_chunk_size returns different values for different scales."""
-    small = _compute_chunk_size(1410, 12_000)
-    large = _compute_chunk_size(100_000, 500_000)
+    small = _compute_chunk_size(12_000)
+    large = _compute_chunk_size(500_000)
     assert small != large, "Chunk size should vary with scale"
 
 
 @pytest.mark.tier0
 def test_memory_estimate_uses_computed_chunk():
     """Memory estimates differ when using computed chunk sizes at different scales."""
-    small_chunk = _compute_chunk_size(1410, 12_000)
-    large_chunk = _compute_chunk_size(100_000, 500_000)
+    small_chunk = _compute_chunk_size(12_000)
+    large_chunk = _compute_chunk_size(500_000)
 
     est_small = estimate_streaming_memory(1410, chunk_size=small_chunk)
     est_large = estimate_streaming_memory(100_000, chunk_size=large_chunk)
@@ -38,4 +38,4 @@ def test_check_memory_before_run_uses_computed_chunk():
             check_memory_before_run(1410, 12_000)
         except MemoryError:
             pass  # OK if memory insufficient on this machine
-        mock.assert_called_once_with(1410, 12_000)
+        mock.assert_called_once_with(12_000)

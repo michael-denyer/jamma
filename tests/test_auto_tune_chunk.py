@@ -143,46 +143,37 @@ class TestComputeChunkSize:
 
     def test_small_dataset_no_chunking(self):
         """When n_snps < MAX_SAFE_CHUNK, return n_snps."""
-        result = _compute_chunk_size(n_samples=1000, n_snps=5000)
+        result = _compute_chunk_size(n_snps=5000)
         assert result == 5000
 
     def test_large_dataset_caps_at_max_safe(self):
         """When n_snps > MAX_SAFE_CHUNK, cap at MAX_SAFE_CHUNK."""
-        result = _compute_chunk_size(n_samples=1000, n_snps=500_000)
+        result = _compute_chunk_size(n_snps=500_000)
         assert result == MAX_SAFE_CHUNK
 
-    def test_75k_samples_gets_large_chunks(self):
-        """At 75k samples, chunk size is MAX_SAFE_CHUNK (no int32 guard).
-
-        The old int32 guard produced 3,817 SNPs/chunk at 75k samples,
-        fragmenting 95k SNPs into 25 tiny chunks. With memory-based
-        sizing, we get MAX_SAFE_CHUNK (50k) — just 2 chunks.
-        """
-        chunk = _compute_chunk_size(n_samples=75_000, n_snps=95_000)
-        assert chunk == MAX_SAFE_CHUNK
-
-    def test_125k_samples_gets_large_chunks(self):
-        """At 125k samples, chunk size is MAX_SAFE_CHUNK (no int32 guard)."""
-        chunk = _compute_chunk_size(n_samples=125_000, n_snps=95_000)
+    def test_gwas_scale_caps_at_max_safe(self):
+        """At GWAS scale (95k SNPs), chunk is MAX_SAFE_CHUNK."""
+        chunk = _compute_chunk_size(n_snps=95_000)
         assert chunk == MAX_SAFE_CHUNK
 
     @pytest.mark.parametrize("n_devices", [1, 2, 4, 8, 16, 32, 64, 128])
     def test_device_alignment(self, n_devices):
         """Chunk is device-aligned when n_devices > 1 and chunking occurs."""
-        result = _compute_chunk_size(
-            n_samples=50_000,
-            n_snps=500_000,
-            n_devices=n_devices,
-        )
+        result = _compute_chunk_size(n_snps=500_000, n_devices=n_devices)
         if n_devices > 1 and result < 500_000:
             assert result % n_devices == 0, (
                 f"Chunk {result} is not aligned to {n_devices} devices"
             )
 
     def test_never_returns_zero(self):
-        """Chunk size must always be >= 1."""
-        result = _compute_chunk_size(n_samples=0, n_snps=100)
-        assert result >= 1
+        """Chunk size must always be >= 1, even for degenerate input."""
+        assert _compute_chunk_size(n_snps=0) >= 1
+        assert _compute_chunk_size(n_snps=1) >= 1
+
+    def test_n_snps_equals_max_safe_chunk(self):
+        """When n_snps == MAX_SAFE_CHUNK, return exactly MAX_SAFE_CHUNK."""
+        result = _compute_chunk_size(n_snps=MAX_SAFE_CHUNK)
+        assert result == MAX_SAFE_CHUNK
 
 
 @pytest.mark.tier0
@@ -194,26 +185,11 @@ class TestChunkSizingAtDatabricksScale:
     """
 
     @pytest.mark.parametrize("n_devices", [1, 8, 16, 24, 48])
-    def test_chunk_positive_at_scale(self, n_devices):
-        """At 125k samples, chunk size is always positive."""
-        result = _compute_chunk_size(
-            n_samples=125_000,
-            n_snps=95_000,
-            n_devices=n_devices,
-        )
-        assert result > 0, f"Chunk size must be positive, got {result}"
-
-    @pytest.mark.parametrize("n_devices", [1, 8, 16, 24, 48])
     def test_chunk_device_alignment_at_scale(self, n_devices):
         """Chunk is a multiple of n_devices when n_devices > 1."""
-        n_samples = 125_000
         n_snps = 95_000
 
-        result = _compute_chunk_size(
-            n_samples=n_samples,
-            n_snps=n_snps,
-            n_devices=n_devices,
-        )
+        result = _compute_chunk_size(n_snps=n_snps, n_devices=n_devices)
 
         if n_devices > 1 and result < n_snps:
             assert result % n_devices == 0, (
@@ -237,37 +213,3 @@ class TestChunkSizingAtDatabricksScale:
             assert result % n_devices == 0, (
                 f"auto_tune result {result} not aligned to {n_devices} devices"
             )
-
-
-@pytest.mark.tier0
-class TestChunkSizeNeverZero:
-    """_compute_chunk_size must never return 0."""
-
-    def test_extreme_n_cvt_does_not_return_zero(self):
-        """Very high n_cvt should still return >= 1."""
-        result = _compute_chunk_size(
-            n_samples=10_000,
-            n_snps=500,
-            n_cvt=1000,
-        )
-        assert result >= 1, f"Chunk size must be >= 1, got {result}"
-
-    def test_extreme_n_samples_does_not_return_zero(self):
-        """Very large n_samples should still return >= 1."""
-        result = _compute_chunk_size(
-            n_samples=5_000_000,
-            n_snps=1000,
-            n_cvt=2,
-        )
-        assert result >= 1, f"Chunk size must be >= 1, got {result}"
-
-    @pytest.mark.parametrize("n_devices", [1, 8, 64, 256])
-    def test_zero_safe_bound_with_devices(self, n_devices):
-        """Edge case doesn't interact badly with device alignment."""
-        result = _compute_chunk_size(
-            n_samples=10_000,
-            n_snps=500,
-            n_cvt=1000,
-            n_devices=n_devices,
-        )
-        assert result >= 1

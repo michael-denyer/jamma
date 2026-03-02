@@ -1,4 +1,4 @@
-"""Chunk size computation for JAX LMM association.
+"""Chunk size computation for LMM association.
 
 Computes optimal chunk sizes to fit within memory budgets during
 batch SNP processing. The MAX_SAFE_CHUNK cap also limits JIT
@@ -13,10 +13,7 @@ MAX_SAFE_CHUNK = 50_000
 
 
 def _compute_chunk_size(
-    n_samples: int,
     n_snps: int,
-    n_grid: int = 50,
-    n_cvt: int = 1,
     n_devices: int = 1,
 ) -> int:
     """Compute chunk size capped at MAX_SAFE_CHUNK with device alignment.
@@ -29,10 +26,7 @@ def _compute_chunk_size(
     n_devices to prevent XLA from padding partial shards.
 
     Args:
-        n_samples: Unused. Retained for caller compatibility.
         n_snps: Total number of SNPs (upper bound for chunk size).
-        n_grid: Unused. Retained for caller compatibility.
-        n_cvt: Unused. Retained for caller compatibility.
         n_devices: Number of JAX virtual CPU devices (default 1). When > 1,
             the result is rounded down to a multiple of n_devices.
 

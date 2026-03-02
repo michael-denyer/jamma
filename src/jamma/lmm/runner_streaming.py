@@ -27,6 +27,7 @@ from jamma.lmm.chunk import _compute_chunk_size
 from jamma.lmm.compute import (
     _compute_lmm_chunk,
     block_chunk_result,
+    exposed_rotation_time,
     log_jax_error,
     strip_and_append,
 )
@@ -464,15 +465,9 @@ def run_lmm_association_streaming(
             t_rot_end = time.perf_counter()
             rot_dur = t_rot_end - t_rot_start
             t_rotation_total += rot_dur
-            if prev_compute_end is None:
-                # Very first rotation in the run: fully exposed (no prior compute)
-                t_rotation_exposed_total += rot_dur
-            else:
-                # Cap at actual rotation duration to avoid counting inter-chunk gaps.
-                # If rotation finished before compute ended, overlap is complete (0).
-                t_rotation_exposed_total += min(
-                    rot_dur, max(0.0, t_rot_end - prev_compute_end)
-                )
+            t_rotation_exposed_total += exposed_rotation_time(
+                rot_dur, t_rot_end, prev_compute_end
+            )
             UtG_jax = jax.device_put(UtG_np, placement.snp)
             del UtG_np
 
@@ -489,14 +484,9 @@ def run_lmm_association_streaming(
                     t_rot_end = time.perf_counter()
                     rot_dur_inner = t_rot_end - t_rot_start
                     t_rotation_total += rot_dur_inner
-                    if prev_compute_end is None:
-                        # No JAX compute has completed yet; fully exposed.
-                        t_rotation_exposed_total += rot_dur_inner
-                    else:
-                        # Cap at actual rotation duration to avoid counting gaps.
-                        t_rotation_exposed_total += min(
-                            rot_dur_inner, max(0.0, t_rot_end - prev_compute_end)
-                        )
+                    t_rotation_exposed_total += exposed_rotation_time(
+                        rot_dur_inner, t_rot_end, prev_compute_end
+                    )
                     UtG_jax = jax.device_put(UtG_np, placement.snp)
                     del UtG_np
 

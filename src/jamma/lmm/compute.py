@@ -312,3 +312,26 @@ def log_jax_error(
             f"  {type(e).__name__}: {error_msg}\n"
             f"  Chunk size: {chunk_snps:,} SNPs, Samples: {n_samples:,}"
         )
+
+
+def exposed_rotation_time(
+    rot_dur: float, t_rot_end: float, prev_compute_end: float | None
+) -> float:
+    """Compute exposed (non-overlapped) rotation time for a single chunk.
+
+    When rotation and JAX compute overlap, only the portion of rotation
+    that extends beyond the prior compute sync point is "exposed" — i.e.,
+    time the pipeline spent waiting for rotation with no useful compute.
+
+    Args:
+        rot_dur: Total rotation wall-clock duration for this chunk.
+        t_rot_end: perf_counter timestamp when rotation finished.
+        prev_compute_end: perf_counter timestamp when prior JAX compute
+            finished, or None if no compute has completed yet.
+
+    Returns:
+        Exposed rotation time in seconds.
+    """
+    if prev_compute_end is None:
+        return rot_dur
+    return min(rot_dur, max(0.0, t_rot_end - prev_compute_end))

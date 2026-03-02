@@ -82,15 +82,32 @@ def _is_data_line(line: bytes) -> bool:
     return len(stripped) > 0 and not stripped.startswith(b"#")
 
 
-def _count_data_lines(raw: bytes) -> int:
-    """Count data lines (non-blank, non-comment) in a byte buffer."""
-    return sum(1 for line in raw.split(b"\n") if _is_data_line(line))
+def _count_data_lines_between(f, start: int, end: int) -> int:
+    """Count data lines between byte offsets using line-by-line iteration.
+
+    Avoids materializing the entire byte range in memory — at 200GB files
+    with 4 workers, each chunk is ~50GB which would OOM before parsing.
+    """
+    f.seek(start)
+    count = 0
+    for line in f:
+        if f.tell() > end:
+            # Went past the boundary — this last line belongs to the next chunk.
+            # (f.tell() is already past the newline that terminated `line`.)
+            break
+        if _is_data_line(line):
+            count += 1
+    return count
 
 
 def _scan_chunk_boundaries(
     path: Path, n_workers: int, delimiter: str | None = None
 ) -> tuple[int, int, list[tuple[int, int, int]]]:
     """Scan a text file to find byte offsets aligned to newline boundaries.
+
+    Single-pass scan: detects column count from first data line and counts
+    total data rows in one read. Chunk row counts use bounded line-by-line
+    iteration to avoid materializing large byte buffers.
 
     Args:
         path: Input text file path.
@@ -105,31 +122,23 @@ def _scan_chunk_boundaries(
     if file_size == 0:
         raise ValueError(f"Matrix file is empty: {path}")
 
-    # Read first data line to detect column count.
-    # Skip leading blank/comment lines to match np.loadtxt behaviour.
+    # Single pass: find first data line (for column count) and count all data rows.
+    first_line = b""
+    n_rows = 0
     with open(path, "rb") as f:
-        first_line = b""
         for raw_line in f:
             if _is_data_line(raw_line):
-                first_line = raw_line
-                break
-    if not first_line:
+                if not first_line:
+                    first_line = raw_line
+                n_rows += 1
+
+    if n_rows == 0 or not first_line:
         raise ValueError(f"Matrix file has no data rows: {path}")
 
     if delimiter is not None:
         n_cols = len(first_line.split(delimiter.encode()))
     else:
         n_cols = len(first_line.split())
-
-    # Count data lines (excluding blank/comment lines) to match np.loadtxt.
-    n_rows = 0
-    with open(path, "rb") as f:
-        for line in f:
-            if _is_data_line(line):
-                n_rows += 1
-
-    if n_rows == 0:
-        raise ValueError(f"Matrix file has no data rows: {path}")
 
     # Compute byte boundaries aligned to newlines
     target_chunk_size = file_size // n_workers
@@ -148,10 +157,9 @@ def _scan_chunk_boundaries(
             f.readline()  # advance past next newline boundary
             chunk_end = f.tell()
 
-            # Count data rows in this chunk (skip blank/comment lines)
-            f.seek(chunk_start)
-            chunk_bytes = f.read(chunk_end - chunk_start)
-            rows_in_chunk = _count_data_lines(chunk_bytes)
+            # Count data rows in this chunk via bounded line iteration
+            # (no large byte buffer allocation)
+            rows_in_chunk = _count_data_lines_between(f, chunk_start, chunk_end)
 
             if rows_in_chunk > 0:
                 chunks.append((chunk_start, chunk_end, current_row))

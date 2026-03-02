@@ -17,7 +17,12 @@ from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.core.threading import blas_threads, get_physical_core_count
 from jamma.lmm.chunk import _compute_chunk_size
-from jamma.lmm.compute import _compute_lmm_chunk, block_chunk_result, log_jax_error
+from jamma.lmm.compute import (
+    _compute_lmm_chunk,
+    block_chunk_result,
+    exposed_rotation_time,
+    log_jax_error,
+)
 from jamma.lmm.likelihood_jax import batch_compute_uab
 from jamma.lmm.prepare import (
     _build_covariate_matrix,
@@ -303,9 +308,11 @@ def run_lmm_association_jax(
     t_rot_start = time.perf_counter()
     UtG_np, actual_len = _impute_and_prepare(chunk_starts[0])
     t_rot_end = time.perf_counter()
-    t_rotation_total += t_rot_end - t_rot_start
-    # First chunk has no prior compute to overlap with, so all rotation is exposed.
-    t_rotation_exposed_total += t_rot_end - t_rot_start
+    rot_dur = t_rot_end - t_rot_start
+    t_rotation_total += rot_dur
+    t_rotation_exposed_total += exposed_rotation_time(
+        rot_dur, t_rot_end, prev_compute_end
+    )
     UtG_jax = jax.device_put(UtG_np, placement.snp)
     del UtG_np  # Safe: JAX holds internal ref during async transfer
 
@@ -326,17 +333,11 @@ def run_lmm_association_jax(
             t_rot_start = time.perf_counter()
             next_UtG_np, actual_len = _impute_and_prepare(chunk_starts[i + 1])
             t_rot_end = time.perf_counter()
-            t_rotation_total += t_rot_end - t_rot_start
-            # Exposed = portion of rotation not overlapped by prior compute.
             rot_dur = t_rot_end - t_rot_start
-            if prev_compute_end is None:
-                # No JAX compute has completed yet; rotation is fully exposed.
-                t_rotation_exposed_total += rot_dur
-            else:
-                # Cap at actual rotation duration to avoid counting inter-chunk gaps.
-                t_rotation_exposed_total += min(
-                    rot_dur, max(0.0, t_rot_end - prev_compute_end)
-                )
+            t_rotation_total += rot_dur
+            t_rotation_exposed_total += exposed_rotation_time(
+                rot_dur, t_rot_end, prev_compute_end
+            )
             UtG_jax = jax.device_put(next_UtG_np, placement.snp)
             del next_UtG_np
 

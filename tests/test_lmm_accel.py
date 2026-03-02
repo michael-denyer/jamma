@@ -875,21 +875,29 @@ def test_workspace_invalid_inputs(split_wald_data):
             1,
         )
 
-    # Non-finite eigenvalues rejected (NaN, Inf, -Inf)
-    for bad_value in [np.nan, np.inf, -np.inf]:
-        bad_evals = eigenvalues.copy()
-        bad_evals[0] = bad_value
-        with pytest.raises(ValueError, match="eigenvalues.*not finite"):
-            create_lmm_workspace(
-                bad_evals,
-                uab_inv_soa,
-                n_samples,
-                1e-5,
-                1e5,
-                50,
-                20,
-                1,
-            )
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_SPLIT_AVAILABLE, reason="Split C extension unavailable")
+@pytest.mark.parametrize(
+    "bad_value", [np.nan, np.inf, -np.inf], ids=["nan", "inf", "neg_inf"]
+)
+def test_workspace_nonfinite_eigenvalues(split_wald_data, bad_value):
+    """Workspace creation rejects non-finite eigenvalues."""
+    eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
+    uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
+    bad_evals = eigenvalues.copy()
+    bad_evals[0] = bad_value
+    with pytest.raises(ValueError, match="eigenvalues.*not finite"):
+        create_lmm_workspace(
+            bad_evals,
+            uab_inv_soa,
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            20,
+            1,
+        )
 
     # Wrong uab_varying shape for chunk compute
     ws = create_lmm_workspace(eigenvalues, uab_inv_soa, n_samples, 1e-5, 1e5, 50, 20, 1)

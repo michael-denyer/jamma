@@ -281,7 +281,16 @@ static inline int wald_from_pab(
     double P_YY  = pab[1][5];
     double Px_YY = pab[2][5];
 
-    if ((Px_YY >= 0.0) && (Px_YY < P_YY_MIN)) {
+    if (Px_YY < 0.0) {
+        /* Schur complement went negative — degenerate SNP. Without this
+         * guard, small negative Px_YY passes through variance_safe's fabs
+         * branch and produces a fabricated positive SE with is_valid=1. */
+        *beta_out   = (double)NAN;
+        *se_out     = (double)NAN;
+        *f_stat_out = (double)NAN;
+        return 0;  /* degenerate */
+    }
+    if (Px_YY < P_YY_MIN) {
         Px_YY = P_YY_MIN;
     }
 
@@ -420,7 +429,11 @@ static double f_to_pvalue(
     if (z < 0.0) z = 0.0;
     if (z > 1.0) z = 1.0;
 
-    return betainc(a, b, z, complement_z, lbeta_ab);
+    double p = betainc(a, b, z, complement_z, lbeta_ab);
+    /* Clamp to [0, 1] — continued fraction FP accumulation can overshoot. */
+    if (p < 0.0) p = 0.0;
+    if (p > 1.0) p = 1.0;
+    return p;
 }
 
 /* -------------------------------------------------------------------------
@@ -605,6 +618,18 @@ static double golden_section_lambda_ncvt1(
             best_logl = logl;
             best_idx = g;
         }
+    }
+
+    /* Every grid point produced NaN — fully degenerate SNP.
+     * Without this, refinement proceeds on a meaningless bracket from
+     * best_idx=0 and can produce finite but nonsensical results. */
+    if (best_logl == REML_SENTINEL) {
+        *logl_out    = (double)NAN;
+        *beta_out    = (double)NAN;
+        *se_out      = (double)NAN;
+        *f_stat_out  = (double)NAN;
+        *is_valid_out = 0;
+        return lambda_grid[0];
     }
 
     /* Bracket around best grid point */
@@ -896,6 +921,16 @@ static double golden_section_lambda_ncvt1_split(
             best_logl = logl;
             best_idx = g;
         }
+    }
+
+    /* Every grid point produced NaN — fully degenerate SNP. */
+    if (best_logl == REML_SENTINEL) {
+        *logl_out    = (double)NAN;
+        *beta_out    = (double)NAN;
+        *se_out      = (double)NAN;
+        *f_stat_out  = (double)NAN;
+        *is_valid_out = 0;
+        return lambda_grid[0];
     }
 
     /* Bracket around best grid point */

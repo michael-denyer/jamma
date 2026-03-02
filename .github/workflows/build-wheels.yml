@@ -67,8 +67,15 @@ jobs:
           CIBW_TEST_REQUIRES: "numpy"
 
       - name: Verify AVX2 instructions in wheels
+        shell: bash
         run: |
-          for whl in ./wheelhouse/*.whl; do
+          shopt -s nullglob
+          wheels=(./wheelhouse/*.whl)
+          if [ ${#wheels[@]} -eq 0 ]; then
+            echo "FAIL: no wheels found in ./wheelhouse/"
+            exit 1
+          fi
+          for whl in "${wheels[@]}"; do
             tmpdir=$(mktemp -d)
             unzip -q "$whl" -d "$tmpdir"
             so=$(find "$tmpdir" -name '_lmm_accel*.so' | head -1)
@@ -80,7 +87,7 @@ jobs:
               echo "FAIL: no AVX2 instructions found in $so"
               exit 1
             fi
-            echo "OK: AVX2 instructions verified in $(basename $whl)"
+            echo "OK: AVX2 instructions verified in $(basename "$whl")"
             rm -rf "$tmpdir"
           done
 

@@ -17,10 +17,10 @@
 
 - **GEMMA-compatible**: Drop-in replacement with identical CLI flags and output formats
 - **Numerical equivalence**: Validated against GEMMA — 100% significance agreement, 100% effect direction agreement
-- **Fast**: Up to 4x faster than GEMMA 0.98.5 on LMM association (JAX backend), 2.6x faster end-to-end
+- **Fast**: Up to 10x faster than GEMMA 0.98.5 at scale
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
-- **Cross-platform**: Runs on Linux, macOS, and Windows — NumPy backend works everywhere, JAX backend adds GPU acceleration
-- **Pure Python + optional C extension**: NumPy + optional JAX stack; C extension with OpenMP provides 2-7x LMM speedup over JAX on CPU
+- **Cross-platform**: Runs on Linux, macOS, and Windows — NumPy backend works everywhere, JAX adds GPU acceleration on Linux and ARM Mac
+- **Pure Python + optional C extension**: NumPy + optional JAX stack; C extension with OpenMP for fast Wald tests, JAX for batch MLE optimization
 - **Large-scale ready**: Optional [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) wheels (numpy 2.4.2) for >46k sample eigendecomposition
 
 ## Installation
@@ -34,7 +34,7 @@ pip install jamma[jax]     # + JAX acceleration (ARM Mac only)
 
 That's it. macOS Accelerate BLAS handles large matrices natively.
 
-### Linux / Windows
+### Linux / Windows / Intel Mac
 
 For small datasets (<46k samples), the standard install works:
 
@@ -43,7 +43,7 @@ pip install jamma          # NumPy backend
 pip install jamma[jax]     # + JAX acceleration
 ```
 
-For large-scale GWAS (>46k samples), install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first — standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. Pre-built ILP64 wheels are available for Python 3.11–3.14:
+For large-scale GWAS (>46k samples) on **Linux x86_64**, install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first — standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. MKL is x86_64-only; ARM Mac and Windows users are limited to <46k samples. Pre-built ILP64 wheels are available for Python 3.11–3.14:
 
 **NumPy backend only:**
 
@@ -87,7 +87,7 @@ See the [User Guide](docs/USER_GUIDE.md#linux--windows) for ILP64 verification s
 | Linux x86_64 | JAX (auto-included) | — | Full support; ILP64 for >46k samples |
 | ARM Mac (M1+) | JAX (auto-included) | — | Full support |
 | Intel Mac | NumPy only | Not available | JAX dropped Intel Mac support |
-| Windows | NumPy only | JAX (CPU) | Explicit opt-in via `[jax]` extra |
+| Windows | NumPy only | Not available | JAX dropped Windows support |
 
 JAX is auto-included on Linux and ARM Mac via platform markers.
 Force a specific backend with `--backend numpy` or `--backend jax`.
@@ -223,15 +223,16 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 
 ## Performance
 
-Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2, GEMMA 0.98.5:
+Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2, JAMMA v2.9.4, GEMMA 0.98.5.
+Median of 3 runs, end-to-end wall clock:
 
-| Operation          | GEMMA 0.98.5 | JAMMA (JAX) | JAMMA (NumPy) | JAX Speedup |
-|--------------------|--------------|-------------|---------------|-------------|
-| Kinship (`-gk 1`)  | 2.1s         | 2.3s        | 1.7s          | ~1x         |
-| LMM (`-lmm 1`)     | 11.3s        | 2.8s        | 5.3s          | **4.0x**    |
-| **Total**          | **13.4s**    | **5.1s**    | **7.0s**      | **2.6x**    |
+| Operation          | GEMMA 0.98.5 | JAMMA (NumPy) | JAMMA (JAX) | vs GEMMA     |
+|--------------------|--------------|---------------|-------------|--------------|
+| Kinship (`-gk 1`)  | 2.2s         | 1.7s          | 1.7s        | **1.3x**     |
+| LMM (`-lmm 1`)     | 11.2s        | 1.3s          | 3.0s        | **8.6x**     |
+| LMM (`-lmm 4`)     | 20.7s        | 5.4s          | 4.1s        | **5.0x**     |
 
-Kinship is BLAS-bound (both use OpenBLAS/Accelerate matmul) so times are similar. The LMM speedup comes from JAMMA's batch-parallel SNP processing via `jax.vmap`.
+For Wald-only (`-lmm 1`), the C extension with OpenMP is fastest — REML-only optimization is compute-bound and parallelizes well across SNPs. For all-tests (`-lmm 4`), JAX pulls ahead because the additional MLE optimization per SNP benefits from `jax.vmap` batching.
 
 ## Supported Features
 

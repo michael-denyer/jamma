@@ -108,20 +108,13 @@ def _auto_recompile_eigen() -> bool:
 _DSYEVR_AVAILABLE, _eigh_dsyevr_func = _try_import_dsyevr()
 _DSYEVR_RECOMPILE_ATTEMPTED = False
 
-if not _DSYEVR_AVAILABLE:
-    logger.debug(
-        "DSYEVR C extension unavailable — using DSYEVD (numpy.linalg.eigh). "
-        "DSYEVR saves ~250GB workspace at 125k samples. "
-        "To compile: python -m jamma.lmm._compile_eigen"
-    )
-
 
 def _lazy_init_dsyevr() -> None:
     """One-shot lazy init: attempt auto-recompile if import-time probe failed.
 
     Called on first eigendecompose_kinship() invocation only.
     Deferred from module import to avoid surprising subprocess/compiler
-    side effects during import.
+    side effects during import. Also logs DSYEVR availability once.
     """
     global _DSYEVR_AVAILABLE, _eigh_dsyevr_func, _DSYEVR_RECOMPILE_ATTEMPTED
     if _DSYEVR_AVAILABLE or _DSYEVR_RECOMPILE_ATTEMPTED:
@@ -129,6 +122,12 @@ def _lazy_init_dsyevr() -> None:
     _DSYEVR_RECOMPILE_ATTEMPTED = True
     if _auto_recompile_eigen():
         _DSYEVR_AVAILABLE, _eigh_dsyevr_func = _try_import_dsyevr()
+    if not _DSYEVR_AVAILABLE:
+        logger.info(
+            "DSYEVR C extension unavailable — using DSYEVD (numpy.linalg.eigh). "
+            "DSYEVR saves ~250GB workspace at 125k samples. "
+            "To compile: python -m jamma.lmm._compile_eigen"
+        )
 
 
 # Whether DSYEVR path is available. Used by eigendecompose_kinship()

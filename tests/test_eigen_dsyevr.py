@@ -448,3 +448,128 @@ class TestDsyevrProbe:
         finally:
             eigen_mod._DSYEVR_AVAILABLE = orig_available
             eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED = orig_attempted
+
+
+@pytest.mark.tier0
+class TestDsyevrFallback:
+    """Tests for EIGEN-02: DSYEVR fallback when DSYEVD raises MemoryError."""
+
+    # Override module-level skipif — fallback test mocks DSYEVD
+    pytestmark = [pytest.mark.tier0]
+
+    def test_dsyevr_fallback_on_dsyevd_memory_error(self):
+        """When DSYEVD raises MemoryError, falls back to DSYEVR if available."""
+        import jamma.lmm.eigen as eigen_mod
+
+        if not eigen_mod._DSYEVR_AVAILABLE:
+            pytest.skip("DSYEVR C extension not available")
+
+        rng = np.random.default_rng(42)
+        n = 30
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+        K_ref = K.copy()
+
+        # Track DSYEVR calls
+        dsyevr_calls = []
+        original_dsyevr = eigen_mod._eigh_dsyevr
+
+        def tracking_dsyevr(K_in):
+            dsyevr_calls.append(1)
+            return original_dsyevr(K_in)
+
+        def failing_dsyevd(K_in):
+            """Simulates DSYEVD workspace malloc failure (before K is modified)."""
+            raise MemoryError("simulated DSYEVD workspace allocation failure")
+
+        with (
+            patch.object(eigen_mod, "_eigh_inplace", failing_dsyevd),
+            patch.object(eigen_mod, "_eigh_dsyevr", tracking_dsyevr),
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_proc,
+        ):
+            # Mock memory: enough that DSYEVD is selected (not DSYEVR)
+            mock_vm.return_value.available = 1e12
+            mock_vm.return_value.total = 1e12
+            mock_proc.return_value.memory_info.return_value.rss = 0
+            mock_proc.return_value.memory_info.return_value.vms = 0
+
+            eigenvalues, eigenvectors = eigen_mod.eigendecompose_kinship(
+                K.copy(), check_memory=False
+            )
+
+        # DSYEVR was called as fallback
+        assert len(dsyevr_calls) == 1, (
+            "Expected DSYEVR fallback after DSYEVD MemoryError"
+        )
+
+        # Results are correct
+        K_recon = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
+        np.testing.assert_allclose(K_recon, K_ref, rtol=1e-10, atol=1e-14)
+
+    def test_no_fallback_when_dsyevr_unavailable(self):
+        """When DSYEVR unavailable, DSYEVD MemoryError re-raises."""
+        import jamma.lmm.eigen as eigen_mod
+
+        rng = np.random.default_rng(42)
+        n = 20
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+
+        def failing_dsyevd(K_in):
+            raise MemoryError("simulated DSYEVD workspace allocation failure")
+
+        # Ensure _lazy_init_dsyevr() does not overwrite _DSYEVR_AVAILABLE=False
+        # by suppressing the recompile path (simulate already-attempted state).
+        orig_available = eigen_mod._DSYEVR_AVAILABLE
+        orig_attempted = eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED
+        try:
+            eigen_mod._DSYEVR_AVAILABLE = False
+            eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED = True
+
+            with (
+                patch.object(eigen_mod, "_eigh_inplace", failing_dsyevd),
+                patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+                patch("jamma.core.memory.psutil.Process") as mock_proc,
+            ):
+                mock_vm.return_value.available = 1e12
+                mock_vm.return_value.total = 1e12
+                mock_proc.return_value.memory_info.return_value.rss = 0
+                mock_proc.return_value.memory_info.return_value.vms = 0
+
+                with pytest.raises(MemoryError, match="simulated"):
+                    eigen_mod.eigendecompose_kinship(K.copy(), check_memory=False)
+        finally:
+            eigen_mod._DSYEVR_AVAILABLE = orig_available
+            eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED = orig_attempted
+
+    def test_no_fallback_when_already_using_dsyevr(self):
+        """When DSYEVR itself raises MemoryError, it re-raises (no double fallback)."""
+        import jamma.lmm.eigen as eigen_mod
+
+        if not eigen_mod._DSYEVR_AVAILABLE:
+            pytest.skip("DSYEVR C extension not available")
+
+        rng = np.random.default_rng(42)
+        n = 20
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+
+        def failing_dsyevr(K_in):
+            raise MemoryError("simulated DSYEVR failure")
+
+        with (
+            patch.object(eigen_mod, "_eigh_dsyevr", failing_dsyevr),
+            # Force DSYEVR path by mocking memory pressure
+            patch("jamma.lmm.eigen._dsyevd_peak_gb", return_value=100.0),
+            patch("jamma.lmm.eigen._dsyevr_peak_gb", return_value=50.0),
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_proc,
+        ):
+            mock_vm.return_value.available = 80e9
+            mock_vm.return_value.total = 80e9
+            mock_proc.return_value.memory_info.return_value.rss = 0
+            mock_proc.return_value.memory_info.return_value.vms = 0
+
+            with pytest.raises(MemoryError):
+                eigen_mod.eigendecompose_kinship(K.copy(), check_memory=False)

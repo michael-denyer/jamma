@@ -400,12 +400,35 @@ def eigendecompose_kinship(
             else:
                 eigenvalues, eigenvectors = _eigh_inplace(K)
     except MemoryError:
-        logger.error(
-            f"MemoryError during eigendecomposition of {n_samples:,}x{n_samples:,} "
-            f"matrix. Estimated memory: ~{required_gb:.1f} GB. "
-            f"Consider using a machine with more RAM or reducing sample size."
-        )
-        raise
+        if not use_dsyevr and _DSYEVR_AVAILABLE:
+            # DSYEVD workspace allocation failed before computation started.
+            # K is still valid: MemoryError from malloc precedes LAPACK modifying K.
+            # Attempt DSYEVR which has O(N) workspace instead of O(N^2).
+            logger.warning(
+                f"DSYEVD MemoryError for {n_samples:,}x{n_samples:,} matrix "
+                f"(estimated {required_gb:.1f}GB). "
+                f"Attempting DSYEVR fallback (O(N) workspace)."
+            )
+            use_dsyevr = True
+            driver = "DSYEVR via _eigen_accel (fallback from DSYEVD MemoryError)"
+            try:
+                with blas_threads(n_threads):
+                    eigenvalues, eigenvectors = _eigh_dsyevr(K)
+            except (MemoryError, Exception) as fallback_err:
+                logger.error(
+                    f"DSYEVR fallback also failed: "
+                    f"{type(fallback_err).__name__}: {fallback_err}. "
+                    f"Consider using a machine with more RAM or reducing sample size."
+                )
+                raise fallback_err from None
+        else:
+            logger.error(
+                f"MemoryError during eigendecomposition of "
+                f"{n_samples:,}x{n_samples:,} matrix. "
+                f"Estimated memory: ~{required_gb:.1f} GB. "
+                f"Consider using a machine with more RAM or reducing sample size."
+            )
+            raise
     except np.linalg.LinAlgError as e:
         logger.error(
             f"Eigendecomposition failed: {e}. "

@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.io.plink import get_plink_metadata
 from jamma.lmm.loco import run_lmm_loco
 from tests.conftest import load_phenotypes_from_fam
 
@@ -205,6 +206,108 @@ def test_get_loco_worker_count_env_var(monkeypatch):
 
     monkeypatch.setenv("JAMMA_LOCO_WORKERS", "-2")
     assert get_loco_worker_count() == 1
+
+
+@pytest.mark.tier1
+def test_loco_numpy_no_per_chromosome_bed_reads():
+    """NumPy LOCO stats cache eliminates per-chromosome BED re-reads.
+
+    Verifies LOCO-01: without the cache, each chromosome needs an extra open_bed
+    call for _collect_chr_snp_stats. With the cache, those calls are skipped.
+
+    Counts: 2 metadata reads (run_lmm_loco + streaming_numpy) + 2 kinship reads
+    (PASS 1 stats + PASS 2 accumulation) + n_chr assoc reads (genotypes per chr).
+    With cache = 4 + n_chr. Without cache = 4 + 2*n_chr (extra stats reads).
+    """
+    if not _LOCO_BFILE.with_suffix(".bed").exists():
+        pytest.skip("gemma_loco fixture not available")
+
+    from unittest.mock import patch
+
+    import bed_reader
+
+    call_count = 0
+    original_open_bed = bed_reader.open_bed
+
+    def counting_open_bed(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return original_open_bed(*args, **kwargs)
+
+    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+
+    # Patch at the plink.py import site (stream_genotype_chunks uses it for kinship
+    # PASS 1 and PASS 2, and get_plink_metadata for metadata reads)
+    # and at the loco.py import site (_run_lmm_for_chromosome_numpy uses it directly)
+    with (
+        patch("jamma.io.plink.open_bed", side_effect=counting_open_bed),
+        patch("jamma.lmm.loco.open_bed", side_effect=counting_open_bed),
+    ):
+        results, n_tested = run_lmm_loco(
+            bed_path=_LOCO_BFILE,
+            phenotypes=phenotypes,
+            backend="numpy",
+            check_memory=False,
+            show_progress=False,
+        )
+
+    meta = get_plink_metadata(_LOCO_BFILE)
+    n_chromosomes = len(set(meta["chromosome"].tolist()))
+
+    # Expected: 2 metadata reads + 2 kinship reads + n_chr assoc reads
+    # (no per-chromosome stats reads — eliminated by SnpStatsCache)
+    # Without the cache this would be 4 + 2*n_chr
+    expected_with_cache = 4 + n_chromosomes
+    expected_without_cache = 4 + 2 * n_chromosomes
+    assert call_count <= expected_with_cache, (
+        f"Expected at most {expected_with_cache} BED opens "
+        f"(2 metadata + 2 kinship + {n_chromosomes} assoc genotypes), "
+        f"got {call_count}. "
+        f"Without cache would be {expected_without_cache}. "
+        f"Per-chromosome stats BED reads not fully eliminated."
+    )
+    assert n_tested > 0, "Expected SNPs to be tested"
+
+
+@pytest.mark.tier1
+def test_run_lmm_loco_reads_loco_workers_env(monkeypatch):
+    """run_lmm_loco reads JAMMA_LOCO_WORKERS and logs the configured worker count.
+
+    Verifies LOCO-08 wiring: the env var is read at run_lmm_loco entry and
+    an INFO-level message is emitted when workers > 1.
+    """
+    if not _LOCO_BFILE.with_suffix(".bed").exists():
+        pytest.skip("gemma_loco fixture not available")
+
+    from unittest.mock import patch
+
+    monkeypatch.setenv("JAMMA_LOCO_WORKERS", "4")
+    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+
+    logged_messages: list[str] = []
+
+    # loguru does not integrate with pytest caplog; capture via the logger sink
+    import jamma.lmm.loco as loco_module
+
+    original_info = loco_module.logger.info
+
+    def capture_info(msg, *args, **kwargs):
+        logged_messages.append(str(msg))
+        return original_info(msg, *args, **kwargs)
+
+    with patch.object(loco_module.logger, "info", side_effect=capture_info):
+        results, n_tested = run_lmm_loco(
+            bed_path=_LOCO_BFILE,
+            phenotypes=phenotypes,
+            backend="numpy",
+            check_memory=False,
+            show_progress=False,
+        )
+
+    assert any("LOCO worker count: 4" in msg for msg in logged_messages), (
+        f"Expected 'LOCO worker count: 4' in log messages, got: {logged_messages}"
+    )
+    assert n_tested > 0, "Expected SNPs tested (workers > 1 falls back to sequential)"
 
 
 @pytest.mark.tier1

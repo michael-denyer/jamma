@@ -19,20 +19,19 @@ import numpy as np
 
 
 def impute_and_center(X: np.ndarray) -> np.ndarray:
-    """Impute missing values to SNP mean and center.
+    """Impute missing values to SNP mean and center, modifying X in-place.
 
     Implements GEMMA's PlinkKin algorithm for handling missing data:
     1. Compute mean per SNP excluding missing (NaN)
-    2. Replace missing with mean
-    3. Center: x = x - mean
+    2. Replace missing with mean (in-place)
+    3. Center: x -= mean (in-place)
 
     Args:
         X: Genotype matrix (n_samples, n_snps), NaN for missing values.
-            Values are typically 0, 1, or 2 representing minor allele counts.
+            Must be a writable float64 array. Modified in-place.
 
     Returns:
-        Centered genotype matrix with missing values imputed to SNP mean.
-        Shape is (n_samples, n_snps), dtype matches input (typically float64).
+        The same array X, now centered with missing values imputed to SNP mean.
 
     Example:
         >>> import numpy as np
@@ -40,23 +39,27 @@ def impute_and_center(X: np.ndarray) -> np.ndarray:
         >>> X_centered = impute_and_center(X)
         >>> # Mean of column 0 is (0+2)/2 = 1.0 (excluding NaN)
         >>> # NaN is replaced with 1.0, then column is centered
+        >>> # X_centered is X (same object)
     """
-    # Compute per-SNP mean excluding NaN values
-    # nanmean ignores NaN when computing the mean
-    snp_means = np.nanmean(X, axis=0, keepdims=True)
+    # Compute per-SNP mean excluding NaN values; shape (n_snps,)
+    snp_means = np.nanmean(X, axis=0)
 
     # Handle all-missing columns: nanmean returns NaN, replace with 0
     # This ensures such SNPs contribute nothing to kinship (centered = 0)
     snp_means = np.nan_to_num(snp_means, nan=0.0)
 
-    # Replace NaN with SNP mean (0 for all-missing columns)
-    # where(condition, x, y) returns x where condition is True, else y
+    # In-place path: only for writable numpy arrays (not JAX arrays)
+    # JAX arrays are immutable; Plan 02 will remove the JAX caller paths.
+    if isinstance(X, np.ndarray) and X.flags.writeable:
+        nan_mask = np.isnan(X)
+        if nan_mask.any():
+            X[nan_mask] = np.take(snp_means, np.where(nan_mask)[1])
+        X -= snp_means
+        return X
+
+    # Fallback copy-based path for JAX arrays (transitional, removed in Plan 02)
     X_imputed = np.where(np.isnan(X), snp_means, X)
-
-    # Center by subtracting mean
-    X_centered = X_imputed - snp_means
-
-    return X_centered
+    return X_imputed - snp_means
 
 
 def impute_center_and_standardize(X: np.ndarray) -> np.ndarray:

@@ -884,13 +884,13 @@ class TestJaxChunkingCorrectness:
 
         genotypes, phenotypes, kinship, snp_info = chunk_test_data
 
-        # Store original MAX_BUFFER_ELEMENTS (now lives in chunk module)
-        original_max = chunk_module._MAX_BUFFER_ELEMENTS
+        # Store original MAX_SAFE_CHUNK
+        original_max = chunk_module.MAX_SAFE_CHUNK
 
         try:
-            # Run with large buffer (single chunk - no chunking)
+            # Run with large cap (single chunk - no chunking)
             # eigendecomp overwrites K in-place; needs fresh copy per run
-            chunk_module._MAX_BUFFER_ELEMENTS = 10**15  # Effectively no limit
+            chunk_module.MAX_SAFE_CHUNK = 10**6  # Effectively no limit
             single_chunk_results = run_lmm_association_jax(
                 genotypes=genotypes,
                 phenotypes=phenotypes,
@@ -900,10 +900,8 @@ class TestJaxChunkingCorrectness:
                 show_progress=False,
             )
 
-            # Run with small buffer (force ~4 chunks with 200 samples x 100 SNPs)
-            # Elements per SNP = 200 * 6 = 1200
-            # With buffer = 30000, chunk_size = 30000 // 1200 = 25 SNPs
-            chunk_module._MAX_BUFFER_ELEMENTS = 30_000
+            # Run with small cap (force ~4 chunks with 100 SNPs)
+            chunk_module.MAX_SAFE_CHUNK = 25
             multi_chunk_results = run_lmm_association_jax(
                 genotypes=genotypes,
                 phenotypes=phenotypes,
@@ -914,7 +912,7 @@ class TestJaxChunkingCorrectness:
             )
         finally:
             # Restore original value
-            chunk_module._MAX_BUFFER_ELEMENTS = original_max
+            chunk_module.MAX_SAFE_CHUNK = original_max
 
         # Same number of results
         assert len(single_chunk_results) == len(multi_chunk_results)

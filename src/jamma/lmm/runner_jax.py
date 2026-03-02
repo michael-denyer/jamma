@@ -71,8 +71,8 @@ def run_lmm_association_jax(
 
     Processes all SNPs in parallel via JAX vectorization and JIT compilation.
     Ensures JAX is configured for 64-bit precision (required for GEMMA equivalence).
-    SNPs are processed in chunks to avoid JAX int32 buffer overflow. Input
-    genotypes must fit in memory; for disk streaming use run_lmm_association_streaming.
+    SNPs are processed in memory-budget-sized chunks. Input genotypes must fit
+    in memory; for disk streaming use run_lmm_association_streaming.
 
     Args:
         genotypes: Genotype matrix (n_samples, n_snps) with values 0, 1, 2.

@@ -8,9 +8,9 @@ Final fallback: ``numpy.linalg.eigh`` if the internal gufunc is unavailable.
 
 Thread control is handled by jamma.core.threading via threadpool_limits.
 
-Note: Uses numpy (LAPACK) instead of JAX because JAX's int32 buffer indexing
-overflows at ~46k x 46k matrices. With ILP64 numpy (MKL), matrices up to
-200k+ are supported.
+Note: Uses numpy (LAPACK) instead of JAX because eigendecomposition of large
+kinship matrices (46k+) requires LP64/ILP64 LAPACK. With ILP64 numpy (MKL),
+matrices up to 200k+ are supported.
 """
 
 import sys

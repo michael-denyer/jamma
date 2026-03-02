@@ -71,23 +71,26 @@
 #define CF_STOP     1.0e-14
 #define CF_MAX_ITER 200
 
-/* REML sentinel: degenerate P_yy returns -INFINITY instead of NaN.
- * Any valid REML log-likelihood beats this in a > comparison,
- * so the coarse grid search skips degenerate points without needing
- * isnan(). Matches the Python path's np.where(isnan, -inf, logl). */
+/* REML sentinel: replaces NaN log-likelihood from degenerate P_yy.
+ * reml_finish returns NaN when P_yy < 0; the golden section callers
+ * map NaN -> REML_SENTINEL so the > comparison skips degenerate points
+ * without needing an isnan() guard on every iteration.
+ * Matches the Python path's np.where(isnan, -inf, logl). */
 #define REML_SENTINEL (-INFINITY)
 
 /* ---------------------------------------------------------------------------
  * alloc_aligned_doubles — allocate n doubles with 32-byte alignment (AVX2).
  *
- * Uses aligned_alloc (C11; available as a compiler extension in C99 mode on
- * GCC and Clang). Size is rounded up to a 32-byte multiple as required.
+ * Uses aligned_alloc (C11). Size is rounded up to a 32-byte multiple as
+ * required by the C11 spec.
  * Returns NULL on failure or if n == 0 (caller checks).
  * ------------------------------------------------------------------------- */
 static double *alloc_aligned_doubles(size_t n)
 {
     if (n == 0) return NULL;
-    size_t bytes = (n * sizeof(double) + 31) & ~(size_t)31;
+    size_t raw = n * sizeof(double);
+    if (raw / sizeof(double) != n) return NULL;  /* overflow check */
+    size_t bytes = (raw + 31) & ~(size_t)31;
     return (double *)aligned_alloc(32, bytes);
 }
 
@@ -306,6 +309,13 @@ static inline int wald_from_pab(
     *beta_out   = beta;
     *se_out     = se;
     *f_stat_out = f_stat;
+
+    /* Guard against non-finite results from pathological Px_YY / tau.
+     * Without this, NaN f_stat passes is_valid=1 to f_to_pvalue, which
+     * clamps NaN to 1e-10 and returns a bogus near-1 p-value. */
+    if (!isfinite(f_stat) || !isfinite(beta) || !isfinite(se))
+        return 0;
+
     return 1;  /* valid */
 }
 
@@ -509,7 +519,7 @@ static double reml_logl_ncvt1(
  *
  * REML log-likelihood using precomputed hi_eval and logdet_h from the
  * shared coarse grid cache. Avoids recomputing 1/(lambda*eval+1) and
- * log(|v|) for every SNP at every grid point.
+ * log(v) for every SNP at every grid point.
  *
  * Returns REML log-likelihood.
  * ------------------------------------------------------------------------- */
@@ -658,8 +668,8 @@ static double golden_section_lambda_ncvt1(
  *   uab_var: (n_snps, 3, n_samples) — columns [wx, xx, xy] contiguous
  *   uab_inv: (3, n_samples)         — columns [ww, wy, yy] contiguous
  *
- * Each column is stride-1, enabling AVX-512 vmovupd (8 doubles/cycle)
- * instead of stride-3 vgatherdpd (~8 cycles/8 doubles).
+ * Each column is stride-1, enabling contiguous SIMD loads (vmovupd)
+ * instead of stride-3 gather instructions (vgatherdpd).
  * ========================================================================= */
 
 /* Pre-computed invariant dot products for one coarse grid point.
@@ -994,7 +1004,6 @@ typedef struct {
     const double *inv_yy;   /* uab_invariant_soa row 2 */
     PyObject *eigenvalues_ref;  /* keeps eigenvalues array alive */
     PyObject *uab_inv_ref;      /* keeps uab_invariant_soa array alive */
-    int n_threads;
 } lmm_workspace_t;
 
 /* PyCapsule destructor: free owned allocations, release Python array refs. */
@@ -1088,7 +1097,6 @@ static PyObject *create_workspace_split_c_py(
     ws->n_samples = n_samples;
     ws->n_grid    = n_grid;
     ws->n_refine  = n_refine;
-    ws->n_threads = n_threads;
     ws->l_min     = l_min;
     ws->l_max     = l_max;
     ws->df        = n_samples - 2;
@@ -1507,8 +1515,7 @@ static PyObject *compute_lmm_batch_split_c(
     }
 
     /* Precompute coarse-grid hi_eval, logdet_h, and invariant dot products */
-    hi_eval_grid = (double *)malloc(
-        (size_t)n_grid * (size_t)n_samples * sizeof(double));
+    hi_eval_grid = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
     logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
     grid_inv = (grid_invariant_t *)malloc(
         (size_t)n_grid * sizeof(grid_invariant_t));
@@ -1761,7 +1768,7 @@ static PyObject *compute_lmm_batch_c(PyObject *self, PyObject *args, PyObject *k
     /* Precompute coarse-grid hi_eval and logdet_h.
      *
      * hi_eval_grid: (n_grid * n_samples) — hi_eval[g][i] = 1/(lambda_grid[g]*eval[i]+1)
-     * logdet_h_grid: (n_grid)            — sum of log(|lambda_grid[g]*eval[i]+1|) per grid point
+     * logdet_h_grid: (n_grid)            — sum of log(lambda_grid[g]*eval[i]+1) per grid point
      *
      * These are identical across all SNPs (eigenvalues are shared) so we compute
      * them once here instead of n_snps * n_grid times inside the parallel loop.

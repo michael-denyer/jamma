@@ -250,6 +250,7 @@ class CustomBuildHook(BuildHookInterface):
             "-fno-trapping-math",
             "-funroll-loops",
             *extra_cflags,
+            "-fno-finite-math-only",  # override -Ofast in CFLAGS; isnan() must work
             "-fPIC",
             "-shared",
             "-std=c11",
@@ -373,6 +374,7 @@ class CustomBuildHook(BuildHookInterface):
             "-fno-math-errno",
             "-fno-trapping-math",
             *extra_cflags,
+            "-fno-finite-math-only",  # override -Ofast in CFLAGS
             "-fPIC",
             "-shared",
             "-std=c99",

@@ -66,6 +66,24 @@ jobs:
             python {project}/scripts/smoke_test_eigen_extension.py
           CIBW_TEST_REQUIRES: "numpy"
 
+      - name: Verify AVX2 instructions in wheels
+        run: |
+          for whl in ./wheelhouse/*.whl; do
+            tmpdir=$(mktemp -d)
+            unzip -q "$whl" -d "$tmpdir"
+            so=$(find "$tmpdir" -name '_lmm_accel*.so' | head -1)
+            if [ -z "$so" ]; then
+              echo "FAIL: no _lmm_accel .so found in $whl"
+              exit 1
+            fi
+            if ! objdump -d "$so" | grep -q 'vmovdqu\|vbroadcastsd\|vfmadd'; then
+              echo "FAIL: no AVX2 instructions found in $so"
+              exit 1
+            fi
+            echo "OK: AVX2 instructions verified in $(basename $whl)"
+            rm -rf "$tmpdir"
+          done
+
       - uses: actions/upload-artifact@v4
         with:
           name: avx2-wheels
@@ -91,7 +109,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" avx2-dist/*.whl
+        run: gh release upload "$RELEASE_TAG" avx2-dist/*.whl --clobber
 
   build_sdist:
     name: Build sdist

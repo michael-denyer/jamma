@@ -410,18 +410,19 @@ class TestCExtensionScalarValidation:
 
 @pytest.mark.tier0
 @pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
-def test_c_extension_nan_eigenvalues():
-    """NaN eigenvalues are rejected with ValueError by the C extension."""
+@pytest.mark.parametrize(
+    "bad_value", [np.nan, np.inf, -np.inf], ids=["nan", "inf", "neg_inf"]
+)
+def test_c_extension_nonfinite_eigenvalues(bad_value):
+    """Non-finite eigenvalues (NaN, Inf, -Inf) are rejected with ValueError."""
     rng = np.random.default_rng(11)
     n_samples, n_snps = 50, 3
     eigenvalues = rng.uniform(0.1, 2.0, n_samples)
-    eigenvalues[10] = np.nan  # inject NaN
+    eigenvalues[10] = bad_value
 
     Uab_batch = rng.standard_normal((n_snps, n_samples, 6))
     Uab_batch[:, :, 0] = np.abs(Uab_batch[:, :, 0]) + 0.1
 
-    # C extension now validates eigenvalues and rejects non-finite values
-    # to prevent silently wrong scientific results.
     with pytest.raises(ValueError, match="eigenvalues.*not finite"):
         _compute_wald_numpy(
             n_cvt=1,
@@ -702,12 +703,15 @@ def test_split_c_multithreaded_parity(split_wald_data):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(not _C_SPLIT_AVAILABLE, reason="Split C extension unavailable")
-def test_split_c_nan_eigenvalues():
-    """NaN eigenvalues are rejected with ValueError by the split C path."""
+@pytest.mark.parametrize(
+    "bad_value", [np.nan, np.inf, -np.inf], ids=["nan", "inf", "neg_inf"]
+)
+def test_split_c_nonfinite_eigenvalues(bad_value):
+    """Non-finite eigenvalues (NaN, Inf, -Inf) are rejected by the split C path."""
     rng = np.random.default_rng(11)
     n_samples, n_snps = 50, 3
     eigenvalues = rng.uniform(0.1, 2.0, n_samples)
-    eigenvalues[10] = np.nan
+    eigenvalues[10] = bad_value
 
     # SoA layout: (n_snps, 3, n_samples) for varying, (3, n_samples) for invariant
     uab_var_soa = rng.standard_normal((n_snps, 3, n_samples))
@@ -871,20 +875,21 @@ def test_workspace_invalid_inputs(split_wald_data):
             1,
         )
 
-    # NaN eigenvalues rejected
-    bad_evals = eigenvalues.copy()
-    bad_evals[0] = np.nan
-    with pytest.raises(ValueError, match="eigenvalues.*not finite"):
-        create_lmm_workspace(
-            bad_evals,
-            uab_inv_soa,
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
-        )
+    # Non-finite eigenvalues rejected (NaN, Inf, -Inf)
+    for bad_value in [np.nan, np.inf, -np.inf]:
+        bad_evals = eigenvalues.copy()
+        bad_evals[0] = bad_value
+        with pytest.raises(ValueError, match="eigenvalues.*not finite"):
+            create_lmm_workspace(
+                bad_evals,
+                uab_inv_soa,
+                n_samples,
+                1e-5,
+                1e5,
+                50,
+                20,
+                1,
+            )
 
     # Wrong uab_varying shape for chunk compute
     ws = create_lmm_workspace(eigenvalues, uab_inv_soa, n_samples, 1e-5, 1e5, 50, 20, 1)
@@ -1140,9 +1145,10 @@ class TestCExtensionPerformance:
         # Verify numerical parity: C and Python golden section can produce
         # slightly different optima due to FP operation ordering, especially
         # on flat likelihood landscapes at extreme lambda.  Use 5e-5 rtol
-        # (matching JAX-vs-GEMMA tolerance) since 2000-SNP batches routinely
-        # contain outliers at 2.3e-5 relative from Brent/golden section
-        # divergence on near-degenerate likelihoods.
+        # (borrowed from JAX-vs-GEMMA tolerance, where GEMMA uses Brent and
+        # JAMMA uses golden section) since 2000-SNP batches routinely
+        # contain outliers at 2.3e-5 relative from FP ordering differences
+        # on near-degenerate likelihoods.
         np.testing.assert_allclose(
             result_c["lambdas"], result_py["lambdas"], rtol=5e-5, atol=1e-14
         )

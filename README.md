@@ -17,10 +17,10 @@
 
 - **GEMMA-compatible**: Drop-in replacement with identical CLI flags and output formats
 - **Numerical equivalence**: Validated against GEMMA — 100% significance agreement, 100% effect direction agreement
-- **Fast**: Up to 4x faster than GEMMA 0.98.5 on LMM association (JAX backend), 2.6x faster end-to-end
+- **Fast**: Up to 10x faster than GEMMA 0.98.5 at scale
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
-- **Cross-platform**: Runs on Linux, macOS, and Windows — NumPy backend works everywhere, JAX backend adds GPU acceleration
-- **Pure Python + optional C extension**: NumPy + optional JAX stack; C extension with OpenMP provides 2-7x LMM speedup over JAX on CPU
+- **Cross-platform**: Runs on Linux, macOS, and Windows — NumPy backend works everywhere, JAX adds batch acceleration on Linux and ARM Mac
+- **Pure Python + optional C extension**: NumPy + optional JAX stack; C extension with OpenMP for fast Wald tests, JAX for batch MLE optimization
 - **Large-scale ready**: Optional [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) wheels (numpy 2.4.2) for >46k sample eigendecomposition
 
 ## Installation
@@ -34,7 +34,7 @@ pip install jamma[jax]     # + JAX acceleration (ARM Mac only)
 
 That's it. macOS Accelerate BLAS handles large matrices natively.
 
-### Linux / Windows
+### Linux / Windows / Intel Mac
 
 For small datasets (<46k samples), the standard install works:
 
@@ -43,7 +43,7 @@ pip install jamma          # NumPy backend
 pip install jamma[jax]     # + JAX acceleration
 ```
 
-For large-scale GWAS (>46k samples), install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first — standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. Pre-built ILP64 wheels are available for Python 3.11–3.14:
+For large-scale GWAS (>46k samples) on **Linux x86_64**, install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first — standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. MKL is x86_64-only; ARM Mac and Windows users are limited to <46k samples. Pre-built ILP64 wheels are available for Python 3.11–3.14:
 
 **NumPy backend only:**
 
@@ -87,7 +87,7 @@ See the [User Guide](docs/USER_GUIDE.md#linux--windows) for ILP64 verification s
 | Linux x86_64 | JAX (auto-included) | — | Full support; ILP64 for >46k samples |
 | ARM Mac (M1+) | JAX (auto-included) | — | Full support |
 | Intel Mac | NumPy only | Not available | JAX dropped Intel Mac support |
-| Windows | NumPy only | JAX (CPU) | Explicit opt-in via `[jax]` extra |
+| Windows | NumPy only | Not available | JAX dropped Windows support |
 
 JAX is auto-included on Linux and ARM Mac via platform markers.
 Force a specific backend with `--backend numpy` or `--backend jax`.
@@ -223,15 +223,16 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 
 ## Performance
 
-Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2, GEMMA 0.98.5:
+Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2, JAMMA v2.9.5, GEMMA 0.98.5.
+Median of 3 runs, end-to-end wall clock:
 
-| Operation          | GEMMA 0.98.5 | JAMMA (JAX) | JAMMA (NumPy) | JAX Speedup |
-|--------------------|--------------|-------------|---------------|-------------|
-| Kinship (`-gk 1`)  | 2.1s         | 2.3s        | 1.7s          | ~1x         |
-| LMM (`-lmm 1`)     | 11.3s        | 2.8s        | 5.3s          | **4.0x**    |
-| **Total**          | **13.4s**    | **5.1s**    | **7.0s**      | **2.6x**    |
+| Operation          | GEMMA 0.98.5 | JAMMA (NumPy) | JAMMA (JAX) | vs GEMMA     |
+|--------------------|--------------|---------------|-------------|--------------|
+| Kinship (`-gk 1`)  | 2.2s         | 1.5s          | 1.5s        | **1.5x**     |
+| LMM (`-lmm 1`)     | 11.2s        | 1.0s          | 2.4s        | **11.2x**    |
+| LMM (`-lmm 4`)     | 20.7s        | 5.1s          | 3.2s        | **6.5x**     |
 
-Kinship is BLAS-bound (both use OpenBLAS/Accelerate matmul) so times are similar. The LMM speedup comes from JAMMA's batch-parallel SNP processing via `jax.vmap`.
+For Wald-only (`-lmm 1`), the C extension with OpenMP is fastest — REML-only optimization is compute-bound and parallelizes well across SNPs. For all-tests (`-lmm 4`), JAX pulls ahead because the additional MLE optimization per SNP benefits from `jax.vmap` batching.
 
 ## Supported Features
 
@@ -251,7 +252,7 @@ Kinship is BLAS-bound (both use OpenBLAS/Accelerate matmul) so times are similar
 - [x] Covariate support (`-c`)
 - [x] PLINK binary format (`.bed/.bim/.fam`) with input dimension validation
 - [x] Large-scale streaming I/O (>100k samples via [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) — numpy 2.4.2)
-- [x] JAX acceleration (CPU/GPU) with automatic CPU device sharding
+- [x] JAX acceleration (CPU) with automatic device sharding
 - [x] XLA profiling traces (`--profile-dir`) for TensorBoard/Perfetto
 - [x] Lambda optimization bounds (`-lmin`/`-lmax`)
 - [x] Individual weights for kinship (`-widv`)
@@ -267,16 +268,23 @@ Kinship is BLAS-bound (both use OpenBLAS/Accelerate matmul) so times are similar
 
 ## Architecture
 
-JAMMA uses a dual-backend architecture: a **JAX backend** for GPU/multi-core acceleration and a **NumPy backend** that works everywhere with zero extra dependencies.
+JAMMA uses NumPy for data loading, kinship, and eigendecomposition, then splits at LMM into a **JAX backend** (JIT, vmap, sharding) or a **NumPy backend** with an optional C extension for OpenMP-parallel Wald tests.
 
 ```mermaid
-flowchart LR
+flowchart TD
     CLI["CLI / gwas()"] --> PIPE["PipelineRunner"]
-    PIPE --> DET{"detect_backend()"}
-    DET -->|"jax"| JAX["JAX Backend<br>JIT + vmap + sharding"]
-    DET -->|"numpy"| NP["NumPy Backend<br>pure stdlib"]
+    PIPE --> LOAD["Load PLINK + Phenotypes<br>(NumPy)"]
+    LOAD --> KIN["Kinship<br>(NumPy matmul)"]
+    KIN --> EIG["Eigendecomposition<br>(numpy.linalg.eigh)"]
+    EIG --> DET{"detect_backend()"}
+    DET -->|"jax"| JAX["JAX Streaming Runner<br>JIT + vmap + sharding"]
+    DET -->|"numpy"| NP["NumPy Batch Runner"]
+    NP --> CEXT{"C extension<br>available?"}
+    CEXT -->|yes| C["C Extension<br>OpenMP + SIMD"]
+    CEXT -->|no| PY["Pure Python<br>fallback"]
     JAX --> RES["AssocResult"]
-    NP --> RES
+    C --> RES
+    PY --> RES
 ```
 
 Both backends share the same core algorithms ([likelihood.py](src/jamma/lmm/likelihood.py), [prepare_common.py](src/jamma/lmm/prepare_common.py)) and produce identical results. Backend-specific files follow a naming convention: `*_jax.py` / `*_numpy.py`.
@@ -298,7 +306,7 @@ See [Code Map](docs/CODEMAP.md) for the full architecture diagram with source li
 
 - Python 3.11+
 - NumPy 2.0+
-- JAX 0.8.0+ (optional, for GPU acceleration: `pip install jamma[jax]`)
+- JAX 0.8.0+ (optional, for batch acceleration: `pip install jamma[jax]`)
 
 ## License
 

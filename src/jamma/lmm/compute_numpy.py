@@ -60,6 +60,13 @@ def _try_import_accel() -> tuple[bool, bool, bool, object, object, object, objec
         return False, False, False, None, None, None, None
 
     if abi != _EXPECTED_ABI_VERSION:
+        from loguru import logger
+
+        logger.warning(
+            "C extension ABI mismatch: "
+            f"compiled={abi}, expected={_EXPECTED_ABI_VERSION}. "
+            "Stale .so needs recompilation."
+        )
         return False, False, False, None, None, None, None
 
     return True, True, has_omp, batch_c, batch_split_c, ws_create, ws_chunk

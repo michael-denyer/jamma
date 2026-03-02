@@ -17,6 +17,9 @@
  *   7. Cached coarse-grid hi_eval: hi_eval[g][i] and logdet_h[g] precomputed
  *      once across all SNPs — eliminates n_snps * n_grid redundant hi_eval passes
  *   8. restrict + SIMD hints: helps compiler vectorize hot inner loops
+ *      (#pragma omp simd is used without #ifdef _OPENMP guards — unknown
+ *      pragmas are silently ignored per the C standard, so these are safe
+ *      on non-OpenMP compilers and act purely as vectorization hints)
  *
  * Pab indexing (n_cvt=1, build_index_table(1)):
  *   n_index = 6
@@ -48,6 +51,7 @@
 #include <limits.h>
 #include <math.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -66,6 +70,29 @@
 #define CF_TINY     1.0e-30
 #define CF_STOP     1.0e-14
 #define CF_MAX_ITER 200
+
+/* REML sentinel: replaces NaN log-likelihood from degenerate P_yy.
+ * reml_finish returns NaN when P_yy < 0; the golden section callers
+ * map NaN -> REML_SENTINEL so the > comparison skips degenerate points
+ * without needing an isnan() guard on every iteration.
+ * Matches the Python path's np.where(isnan, -inf, logl). */
+#define REML_SENTINEL (-INFINITY)
+
+/* ---------------------------------------------------------------------------
+ * alloc_aligned_doubles — allocate n doubles with 32-byte alignment (AVX2).
+ *
+ * Uses aligned_alloc (C11). Size is rounded up to a 32-byte multiple as
+ * required by the C11 spec.
+ * Returns NULL on failure or if n == 0 (caller checks).
+ * ------------------------------------------------------------------------- */
+static double *alloc_aligned_doubles(size_t n)
+{
+    if (n == 0) return NULL;
+    size_t raw = n * sizeof(double);
+    if (raw / sizeof(double) != n) return NULL;  /* overflow check */
+    size_t bytes = (raw + 31) & ~(size_t)31;
+    return (double *)aligned_alloc(32, bytes);
+}
 
 /* ---------------------------------------------------------------------------
  * validate_eigenvalues — reject NaN/Inf before entering the compute loop.
@@ -236,8 +263,14 @@ static inline double reml_finish(
 }
 
 /* Wald statistics from a populated pab array.
- * Shared by calc_rl_wald_ncvt1 and calc_rl_wald_ncvt1_split. */
-static inline void wald_from_pab(
+ * Shared by golden_section_lambda_ncvt1 and golden_section_lambda_ncvt1_split.
+ *
+ * Returns 1 if the SNP is valid (P_XX > 0), 0 if degenerate (P_XX <= 0).
+ * Degenerate SNPs get beta = se = f_stat = NaN.
+ *
+ * The return value (not isnan(beta)) is used for validity checks — this is
+ * more robust than relying on NaN propagation through comparisons. */
+static inline int wald_from_pab(
     const double pab[3][6],
     int df,
     double *beta_out, double *se_out, double *f_stat_out
@@ -248,7 +281,16 @@ static inline void wald_from_pab(
     double P_YY  = pab[1][5];
     double Px_YY = pab[2][5];
 
-    if ((Px_YY >= 0.0) && (Px_YY < P_YY_MIN)) {
+    if (Px_YY < 0.0) {
+        /* Schur complement went negative — degenerate SNP. Without this
+         * guard, small negative Px_YY passes through variance_safe's fabs
+         * branch and produces a fabricated positive SE with is_valid=1. */
+        *beta_out   = (double)NAN;
+        *se_out     = (double)NAN;
+        *f_stat_out = (double)NAN;
+        return 0;  /* degenerate */
+    }
+    if (Px_YY < P_YY_MIN) {
         Px_YY = P_YY_MIN;
     }
 
@@ -256,7 +298,7 @@ static inline void wald_from_pab(
         *beta_out   = (double)NAN;
         *se_out     = (double)NAN;
         *f_stat_out = (double)NAN;
-        return;
+        return 0;  /* degenerate */
     }
 
     double beta = P_XY / P_XX;
@@ -276,6 +318,14 @@ static inline void wald_from_pab(
     *beta_out   = beta;
     *se_out     = se;
     *f_stat_out = f_stat;
+
+    /* Guard against non-finite results from pathological Px_YY / tau.
+     * Without this, NaN f_stat passes is_valid=1 to f_to_pvalue, which
+     * clamps NaN to 1e-10 and returns a bogus near-1 p-value. */
+    if (!isfinite(f_stat) || !isfinite(beta) || !isfinite(se))
+        return 0;
+
+    return 1;  /* valid */
 }
 
 /* -------------------------------------------------------------------------
@@ -379,7 +429,11 @@ static double f_to_pvalue(
     if (z < 0.0) z = 0.0;
     if (z > 1.0) z = 1.0;
 
-    return betainc(a, b, z, complement_z, lbeta_ab);
+    double p = betainc(a, b, z, complement_z, lbeta_ab);
+    /* Clamp to [0, 1] — continued fraction FP accumulation can overshoot. */
+    if (p < 0.0) p = 0.0;
+    if (p > 1.0) p = 1.0;
+    return p;
 }
 
 /* -------------------------------------------------------------------------
@@ -405,9 +459,7 @@ static void calc_pab_ncvt1(
      * uab is row-major (n_samples, 6), so row i starts at uab[i*6].
      * Accessing 6 consecutive doubles per row is cache-friendly. */
     double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0;
-#ifdef _OPENMP
     #pragma omp simd reduction(+:s0,s1,s2,s3,s4,s5)
-#endif
     for (int i = 0; i < n_samples; i++) {
         double h = hi_eval[i];
         const double *row = uab + i * 6;
@@ -462,9 +514,7 @@ static double reml_logl_ncvt1(
     int df = n_samples - 2;
 
     double logdet_h = 0.0;
-#ifdef _OPENMP
     #pragma omp simd reduction(+:logdet_h)
-#endif
     for (int i = 0; i < n_samples; i++) {
         double v = lambda * eigenvalues[i] + 1.0;
         hi_eval[i] = 1.0 / v;
@@ -482,7 +532,7 @@ static double reml_logl_ncvt1(
  *
  * REML log-likelihood using precomputed hi_eval and logdet_h from the
  * shared coarse grid cache. Avoids recomputing 1/(lambda*eval+1) and
- * log(|v|) for every SNP at every grid point.
+ * log(v) for every SNP at every grid point.
  *
  * Returns REML log-likelihood.
  * ------------------------------------------------------------------------- */
@@ -543,13 +593,17 @@ static double golden_section_lambda_ncvt1(
     double log_l_min, double step,
     int n_grid, int n_refine,
     int df, double reml_const,
-    double * restrict hi_eval, double *logl_out
+    double * restrict hi_eval, double *logl_out,
+    double *beta_out, double *se_out, double *f_stat_out,
+    int *is_valid_out
 )
 {
     const double phi = 0.6180339887498949;  /* golden ratio - 1 */
 
-    /* Stage 1: coarse grid search using cached hi_eval and logdet_h */
-    double best_logl = -1e300;
+    /* Stage 1: coarse grid search using cached hi_eval and logdet_h.
+     * Degenerate grid points return NaN from reml_finish (P_yy < 0);
+     * map NaN → REML_SENTINEL so the > comparison skips them. */
+    double best_logl = REML_SENTINEL;
     int best_idx = 0;
     for (int g = 0; g < n_grid; g++) {
         double logl = reml_logl_ncvt1_cached(
@@ -559,10 +613,23 @@ static double golden_section_lambda_ncvt1(
             logdet_iab,
             n_samples, df, reml_const
         );
-        if (!isnan(logl) && logl > best_logl) {
+        if (isnan(logl)) logl = REML_SENTINEL;
+        if (logl > best_logl) {
             best_logl = logl;
             best_idx = g;
         }
+    }
+
+    /* Every grid point produced NaN — fully degenerate SNP.
+     * Without this, refinement proceeds on a meaningless bracket from
+     * best_idx=0 and can produce finite but nonsensical results. */
+    if (best_logl == REML_SENTINEL) {
+        *logl_out    = (double)NAN;
+        *beta_out    = (double)NAN;
+        *se_out      = (double)NAN;
+        *f_stat_out  = (double)NAN;
+        *is_valid_out = 0;
+        return lambda_grid[0];
     }
 
     /* Bracket around best grid point */
@@ -603,40 +670,16 @@ static double golden_section_lambda_ncvt1(
     double lambda_opt = exp(log_opt);
     *logl_out = reml_logl_ncvt1(uab, eigenvalues, logdet_iab,
                                  n_samples, lambda_opt, reml_const, hi_eval);
-    return lambda_opt;
-}
 
-/* -------------------------------------------------------------------------
- * calc_rl_wald_ncvt1
- *
- * Compute Wald test statistics for one SNP at its optimal lambda (n_cvt=1).
- *
- * Notes:
- * - P_XX <= 0 (degenerate genotype) -> beta = se = f_stat = NaN
- * - Uses JAMMA's corrected safe_sqrt (see GEMMA_DIVERGENCES.md section 1)
- * - f_stat = (P_YY - Px_YY) * tau  where tau = df / Px_YY
- * ------------------------------------------------------------------------- */
-static void calc_rl_wald_ncvt1(
-    const double * restrict uab,
-    const double * restrict eigenvalues,
-    int n_samples,
-    double lambda_opt,
-    double * restrict hi_eval,
-    double *beta_out, double *se_out, double *f_stat_out)
-{
-    int df = n_samples - 2;
-
-#ifdef _OPENMP
-    #pragma omp simd
-#endif
-    for (int i = 0; i < n_samples; i++) {
-        hi_eval[i] = 1.0 / (lambda_opt * eigenvalues[i] + 1.0);
+    /* hi_eval is now populated with 1/(lambda_opt*eval+1) — reuse for Wald stats
+     * without another n_samples pass to recompute hi_eval. */
+    {
+        double pab[3][6];
+        calc_pab_ncvt1(uab, hi_eval, n_samples, pab);
+        *is_valid_out = wald_from_pab(pab, df, beta_out, se_out, f_stat_out);
     }
 
-    double pab[3][6];
-    calc_pab_ncvt1(uab, hi_eval, n_samples, pab);
-
-    wald_from_pab(pab, df, beta_out, se_out, f_stat_out);
+    return lambda_opt;
 }
 
 /* =========================================================================
@@ -650,8 +693,8 @@ static void calc_rl_wald_ncvt1(
  *   uab_var: (n_snps, 3, n_samples) — columns [wx, xx, xy] contiguous
  *   uab_inv: (3, n_samples)         — columns [ww, wy, yy] contiguous
  *
- * Each column is stride-1, enabling AVX-512 vmovupd (8 doubles/cycle)
- * instead of stride-3 vgatherdpd (~8 cycles/8 doubles).
+ * Each column is stride-1, enabling contiguous SIMD loads (vmovupd)
+ * instead of stride-3 gather instructions (vgatherdpd).
  * ========================================================================= */
 
 /* Pre-computed invariant dot products for one coarse grid point.
@@ -724,9 +767,7 @@ static double reml_logl_ncvt1_cached_split(
 {
     /* Only 3 varying reductions — invariant sums precomputed per grid point */
     double s_wx = 0.0, s_xx = 0.0, s_xy = 0.0;
-#ifdef _OPENMP
     #pragma omp simd reduction(+:s_wx,s_xx,s_xy)
-#endif
     for (int i = 0; i < n_samples; i++) {
         double h = cached_hi_eval[i];
         s_wx += h * var_wx[i];
@@ -801,9 +842,7 @@ static double reml_logl_ncvt1_split(
     double s_ww = 0.0, s_wx = 0.0, s_wy = 0.0;
     double s_xx = 0.0, s_xy = 0.0, s_yy = 0.0;
 
-#ifdef _OPENMP
     #pragma omp simd reduction(+:logdet_h,s_ww,s_wx,s_wy,s_xx,s_xy,s_yy)
-#endif
     for (int i = 0; i < n_samples; i++) {
         double v = lambda * eigenvalues[i] + 1.0;
         double h = 1.0 / v;
@@ -857,13 +896,16 @@ static double golden_section_lambda_ncvt1_split(
     int n_grid, int n_refine,
     int df, double reml_const,
     double *logl_out,
-    double *beta_out, double *se_out, double *f_stat_out
+    double *beta_out, double *se_out, double *f_stat_out,
+    int *is_valid_out
 )
 {
     const double phi = 0.6180339887498949;
 
-    /* Stage 1: coarse grid search using cached split */
-    double best_logl = -1e300;
+    /* Stage 1: coarse grid search using cached split.
+     * Degenerate grid points return NaN from reml_logl_ncvt1_cached_split
+     * (P_yy < 0); map NaN → REML_SENTINEL so > comparison skips them. */
+    double best_logl = REML_SENTINEL;
     int best_idx = 0;
     for (int g = 0; g < n_grid; g++) {
         double logl = reml_logl_ncvt1_cached_split(
@@ -874,10 +916,21 @@ static double golden_section_lambda_ncvt1_split(
             &grid_inv[g],
             n_samples, df, reml_const
         );
-        if (!isnan(logl) && logl > best_logl) {
+        if (isnan(logl)) logl = REML_SENTINEL;
+        if (logl > best_logl) {
             best_logl = logl;
             best_idx = g;
         }
+    }
+
+    /* Every grid point produced NaN — fully degenerate SNP. */
+    if (best_logl == REML_SENTINEL) {
+        *logl_out    = (double)NAN;
+        *beta_out    = (double)NAN;
+        *se_out      = (double)NAN;
+        *f_stat_out  = (double)NAN;
+        *is_valid_out = 0;
+        return lambda_grid[0];
     }
 
     /* Bracket around best grid point */
@@ -927,9 +980,7 @@ static double golden_section_lambda_ncvt1_split(
         double s_ww = 0.0, s_wx = 0.0, s_wy = 0.0;
         double s_xx = 0.0, s_xy = 0.0, s_yy = 0.0;
 
-#ifdef _OPENMP
         #pragma omp simd reduction(+:logdet_h,s_ww,s_wx,s_wy,s_xx,s_xy,s_yy)
-#endif
         for (int i = 0; i < n_samples; i++) {
             double v = lambda_opt * eigenvalues[i] + 1.0;
             double h = 1.0 / v;
@@ -948,7 +999,7 @@ static double golden_section_lambda_ncvt1_split(
         calc_pab_ncvt1_split(s_ww, s_wx, s_wy, s_xx, s_xy, s_yy, pab);
 
         *logl_out = reml_finish(pab, logdet_h, logdet_iab, df, reml_const);
-        wald_from_pab(pab, df, beta_out, se_out, f_stat_out);
+        *is_valid_out = wald_from_pab(pab, df, beta_out, se_out, f_stat_out);
     }
 
     return lambda_opt;
@@ -988,7 +1039,6 @@ typedef struct {
     const double *inv_yy;   /* uab_invariant_soa row 2 */
     PyObject *eigenvalues_ref;  /* keeps eigenvalues array alive */
     PyObject *uab_inv_ref;      /* keeps uab_invariant_soa array alive */
-    int n_threads;
 } lmm_workspace_t;
 
 /* PyCapsule destructor: free owned allocations, release Python array refs. */
@@ -1082,7 +1132,6 @@ static PyObject *create_workspace_split_c_py(
     ws->n_samples = n_samples;
     ws->n_grid    = n_grid;
     ws->n_refine  = n_refine;
-    ws->n_threads = n_threads;
     ws->l_min     = l_min;
     ws->l_max     = l_max;
     ws->df        = n_samples - 2;
@@ -1120,8 +1169,7 @@ static PyObject *create_workspace_split_c_py(
 
     /* Allocate grid arrays */
     ws->lambda_grid   = (double *)malloc((size_t)n_grid * sizeof(double));
-    ws->hi_eval_grid  = (double *)malloc(
-        (size_t)n_grid * (size_t)n_samples * sizeof(double));
+    ws->hi_eval_grid  = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
     ws->logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
     ws->grid_inv      = (grid_invariant_t *)malloc(
         (size_t)n_grid * sizeof(grid_invariant_t));
@@ -1295,9 +1343,7 @@ static PyObject *compute_lmm_chunk_split_c_py(
          * 1400 samples, negligible vs the existing 50-grid-point REML loop.
          */
         double iab_s_wx = 0.0, iab_s_xx = 0.0;
-#ifdef _OPENMP
         #pragma omp simd reduction(+:iab_s_wx,iab_s_xx)
-#endif
         for (int i = 0; i < n_samples; i++) {
             iab_s_wx += vwx[i];
             iab_s_xx += vxx[i];
@@ -1309,12 +1355,13 @@ static PyObject *compute_lmm_chunk_split_c_py(
 
         /* Golden section lambda optimization (reuses workspace grids) */
         double logl_opt, beta, se, f_stat;
+        int is_valid;
         double lambda_opt = golden_section_lambda_ncvt1_split(
             vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
             ws->eigenvalues, logdet_iab,
             n_samples, ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
             ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
-            df, reml_const, &logl_opt, &beta, &se, &f_stat
+            df, reml_const, &logl_opt, &beta, &se, &f_stat, &is_valid
         );
 
         lambdas[snp] = lambda_opt;
@@ -1322,7 +1369,6 @@ static PyObject *compute_lmm_chunk_split_c_py(
         betas[snp]   = beta;
         ses[snp]     = se;
 
-        int is_valid = (beta == beta);  /* !isnan(beta) */
         pwalds[snp] = f_to_pvalue(
             f_stat, df, is_valid,
             ws->beta_a, ws->beta_b, ws->lbeta_ab);
@@ -1504,8 +1550,7 @@ static PyObject *compute_lmm_batch_split_c(
     }
 
     /* Precompute coarse-grid hi_eval, logdet_h, and invariant dot products */
-    hi_eval_grid = (double *)malloc(
-        (size_t)n_grid * (size_t)n_samples * sizeof(double));
+    hi_eval_grid = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
     logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
     grid_inv = (grid_invariant_t *)malloc(
         (size_t)n_grid * sizeof(grid_invariant_t));
@@ -1551,8 +1596,9 @@ static PyObject *compute_lmm_batch_split_c(
 
     Py_BEGIN_ALLOW_THREADS
 
+    /* Static schedule: uniform SNP cost — no work-stealing overhead */
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic, 64) num_threads(actual_threads)
+    #pragma omp parallel for schedule(static) num_threads(actual_threads)
 #endif
     for (int snp = 0; snp < n_snps; snp++) {
         /* SoA: (n_snps, 3, n_samples) — 3 contiguous columns per SNP */
@@ -1565,13 +1611,14 @@ static PyObject *compute_lmm_batch_split_c(
         double logdet_iab = compute_logdet_iab(iab);
 
         double lambda_opt, logl_opt, beta, se, f_stat;
+        int is_valid;
         lambda_opt = golden_section_lambda_ncvt1_split(
             vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
             eigenvalues_data, logdet_iab,
             n_samples, lambda_grid, hi_eval_grid, logdet_h_grid,
             grid_inv, log_l_min, step, n_grid, n_refine,
             df, reml_const, &logl_opt,
-            &beta, &se, &f_stat
+            &beta, &se, &f_stat, &is_valid
         );
 
         lambdas[snp] = lambda_opt;
@@ -1580,7 +1627,6 @@ static PyObject *compute_lmm_batch_split_c(
         betas[snp] = beta;
         ses[snp]   = se;
 
-        int is_valid = (beta == beta);
         pwalds[snp] = f_to_pvalue(f_stat, df, is_valid,
                                    beta_a, beta_b, lbeta_ab);
     }
@@ -1757,12 +1803,12 @@ static PyObject *compute_lmm_batch_c(PyObject *self, PyObject *args, PyObject *k
     /* Precompute coarse-grid hi_eval and logdet_h.
      *
      * hi_eval_grid: (n_grid * n_samples) — hi_eval[g][i] = 1/(lambda_grid[g]*eval[i]+1)
-     * logdet_h_grid: (n_grid)            — sum of log(|lambda_grid[g]*eval[i]+1|) per grid point
+     * logdet_h_grid: (n_grid)            — sum of log(lambda_grid[g]*eval[i]+1) per grid point
      *
      * These are identical across all SNPs (eigenvalues are shared) so we compute
      * them once here instead of n_snps * n_grid times inside the parallel loop.
      * Memory: n_grid * n_samples * 8 bytes (e.g. 50 * 50k = 20 MB). */
-    hi_eval_grid = (double *)malloc((size_t)n_grid * (size_t)n_samples * sizeof(double));
+    hi_eval_grid = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
     logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
 
     if (!hi_eval_grid || !logdet_h_grid) { PyErr_NoMemory(); goto err_output; }
@@ -1771,9 +1817,7 @@ static PyObject *compute_lmm_batch_c(PyObject *self, PyObject *args, PyObject *k
         double lam = lambda_grid[g];
         double *hi_row = hi_eval_grid + (size_t)g * n_samples;
         double logdet = 0.0;
-#ifdef _OPENMP
         #pragma omp simd reduction(+:logdet)
-#endif
         for (int i = 0; i < n_samples; i++) {
             double v = lam * eigenvalues_data[i] + 1.0;
             hi_row[i] = 1.0 / v;
@@ -1794,7 +1838,7 @@ static PyObject *compute_lmm_batch_c(PyObject *self, PyObject *args, PyObject *k
     int alloc_ok = (thread_bufs != NULL);
     if (alloc_ok) {
         for (int t = 0; t < actual_threads; t++) {
-            thread_bufs[t] = (double *)malloc((size_t)n_samples * sizeof(double));
+            thread_bufs[t] = alloc_aligned_doubles((size_t)n_samples);
             if (!thread_bufs[t]) { alloc_ok = 0; break; }
         }
     }
@@ -1806,8 +1850,9 @@ static PyObject *compute_lmm_batch_c(PyObject *self, PyObject *args, PyObject *k
 
     Py_BEGIN_ALLOW_THREADS
 
+    /* Static schedule: uniform SNP cost — no work-stealing overhead */
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic, 64) num_threads(actual_threads)
+    #pragma omp parallel for schedule(static) num_threads(actual_threads)
 #endif
     for (int snp = 0; snp < n_snps; snp++) {
         /* Per-thread buffer — no malloc inside the hot loop */
@@ -1823,25 +1868,22 @@ static PyObject *compute_lmm_batch_c(PyObject *self, PyObject *args, PyObject *k
         double logdet_iab = compute_logdet_iab(iab);
 
         double lambda_opt, logl_opt;
+        double beta, se, f_stat;
+        int is_valid;
         lambda_opt = golden_section_lambda_ncvt1(
             uab, eigenvalues_data, logdet_iab, n_samples,
             lambda_grid, hi_eval_grid, logdet_h_grid,
             log_l_min, step, n_grid, n_refine,
             df, reml_const,
-            hi_eval, &logl_opt
+            hi_eval, &logl_opt,
+            &beta, &se, &f_stat, &is_valid
         );
 
         lambdas[snp] = lambda_opt;
         logls[snp]   = logl_opt;
+        betas[snp]   = beta;
+        ses[snp]     = se;
 
-        double beta, se, f_stat;
-        calc_rl_wald_ncvt1(uab, eigenvalues_data, n_samples, lambda_opt,
-                           hi_eval, &beta, &se, &f_stat);
-
-        betas[snp] = beta;
-        ses[snp]   = se;
-
-        int is_valid = (beta == beta);  /* !isnan(beta) */
         pwalds[snp] = f_to_pvalue(f_stat, df, is_valid, beta_a, beta_b, lbeta_ab);
     }
 
@@ -1885,6 +1927,27 @@ err_input:
     free(hi_eval_grid);
     free(logdet_h_grid);
     return NULL;
+}
+
+/* -------------------------------------------------------------------------
+ * _get_aligned_alloc_test_ptr
+ *
+ * Debug function: verify aligned_alloc returns 32-byte-aligned pointers.
+ * Returns the pointer value as a Python int for assertion in tests.
+ * ------------------------------------------------------------------------- */
+static PyObject *_get_aligned_alloc_test_ptr(PyObject *self, PyObject *args)
+{
+    int n;
+    if (!PyArg_ParseTuple(args, "i", &n)) return NULL;
+    if (n <= 0) {
+        PyErr_SetString(PyExc_ValueError, "n must be positive");
+        return NULL;
+    }
+    double *p = alloc_aligned_doubles((size_t)n);
+    if (!p) return PyErr_NoMemory();
+    uintptr_t addr = (uintptr_t)p;
+    free(p);
+    return PyLong_FromUnsignedLongLong((unsigned long long)addr);
 }
 
 /* -------------------------------------------------------------------------
@@ -1975,6 +2038,12 @@ static PyMethodDef methods[] = {
         "\n"
         "Returns:\n"
         "    dict with keys: lambdas, logls, betas, ses, pwalds\n"
+    },
+    {
+        "_get_aligned_alloc_test_ptr",
+        (PyCFunction)_get_aligned_alloc_test_ptr,
+        METH_VARARGS,
+        "Debug: return address of an aligned_alloc buffer for alignment testing."
     },
     {NULL, NULL, 0, NULL}
 };

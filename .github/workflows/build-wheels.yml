@@ -45,6 +45,79 @@ jobs:
           name: wheels-${{ matrix.os }}
           path: ./wheelhouse/*.whl
 
+  build_avx2_wheels:
+    name: Build AVX2 wheels (Linux x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build AVX2-optimized wheels
+        uses: pypa/cibuildwheel@v3.3.1
+        env:
+          # Build for CPython 3.11-3.13, Linux x86_64 only
+          CIBW_BUILD: "cp311-manylinux_x86_64 cp312-manylinux_x86_64 cp313-manylinux_x86_64"
+          # AVX2 optimization flags via CFLAGS (picked up by hatch_build.py)
+          CIBW_ENVIRONMENT_LINUX: 'CFLAGS="-march=x86-64-v3 -mavx2"'
+          # Install libgomp in manylinux container (AlmaLinux 8, dnf)
+          CIBW_BEFORE_BUILD_LINUX: "dnf install -y libgomp"
+          # Same smoke tests as baseline wheels
+          CIBW_TEST_COMMAND: >-
+            python {project}/scripts/smoke_test_c_extension.py &&
+            python {project}/scripts/smoke_test_eigen_extension.py
+          CIBW_TEST_REQUIRES: "numpy"
+
+      - name: Verify AVX2 instructions in wheels
+        shell: bash
+        run: |
+          shopt -s nullglob
+          wheels=(./wheelhouse/*.whl)
+          if [ ${#wheels[@]} -eq 0 ]; then
+            echo "FAIL: no wheels found in ./wheelhouse/"
+            exit 1
+          fi
+          for whl in "${wheels[@]}"; do
+            tmpdir=$(mktemp -d)
+            unzip -q "$whl" -d "$tmpdir"
+            so=$(find "$tmpdir" -name '_lmm_accel*.so' | head -1)
+            if [ -z "$so" ]; then
+              echo "FAIL: no _lmm_accel .so found in $whl"
+              exit 1
+            fi
+            if ! objdump -d "$so" | grep -q 'vmovdqu\|vbroadcastsd\|vfmadd'; then
+              echo "FAIL: no AVX2 instructions found in $so"
+              exit 1
+            fi
+            echo "OK: AVX2 instructions verified in $(basename "$whl")"
+            rm -rf "$tmpdir"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: avx2-wheels
+          path: ./wheelhouse/*.whl
+
+  # Attach AVX2 wheels to GitHub Release (NOT uploaded to PyPI — same
+  # platform tags as baseline wheels would conflict). Users wanting AVX2
+  # can download from the release assets and pip install the .whl directly.
+  upload_avx2_release:
+    name: Attach AVX2 wheels to release
+    needs: [build_avx2_wheels]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: avx2-wheels
+          path: avx2-dist
+
+      - name: Upload AVX2 wheels to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" avx2-dist/*.whl --clobber
+
   build_sdist:
     name: Build sdist
     runs-on: ubuntu-latest
@@ -73,7 +146,17 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          merge-multiple: true
+          name: wheels-ubuntu-latest
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-macos-latest
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
           path: dist
 
       - uses: pypa/gh-action-pypi-publish@release/v1

@@ -19,7 +19,7 @@
 - **Numerical equivalence**: Validated against GEMMA — 100% significance agreement, 100% effect direction agreement
 - **Fast**: Up to 10x faster than GEMMA 0.98.5 at scale
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
-- **Cross-platform**: Runs on Linux, macOS, and Windows — NumPy backend works everywhere, JAX adds GPU acceleration on Linux and ARM Mac
+- **Cross-platform**: Runs on Linux, macOS, and Windows — NumPy backend works everywhere, JAX adds batch acceleration on Linux and ARM Mac
 - **Pure Python + optional C extension**: NumPy + optional JAX stack; C extension with OpenMP for fast Wald tests, JAX for batch MLE optimization
 - **Large-scale ready**: Optional [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) wheels (numpy 2.4.2) for >46k sample eigendecomposition
 
@@ -252,7 +252,7 @@ For Wald-only (`-lmm 1`), the C extension with OpenMP is fastest — REML-only o
 - [x] Covariate support (`-c`)
 - [x] PLINK binary format (`.bed/.bim/.fam`) with input dimension validation
 - [x] Large-scale streaming I/O (>100k samples via [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) — numpy 2.4.2)
-- [x] JAX acceleration (CPU/GPU) with automatic CPU device sharding
+- [x] JAX acceleration (CPU) with automatic device sharding
 - [x] XLA profiling traces (`--profile-dir`) for TensorBoard/Perfetto
 - [x] Lambda optimization bounds (`-lmin`/`-lmax`)
 - [x] Individual weights for kinship (`-widv`)
@@ -268,7 +268,7 @@ For Wald-only (`-lmm 1`), the C extension with OpenMP is fastest — REML-only o
 
 ## Architecture
 
-JAMMA uses a dual-backend architecture: a **JAX backend** for GPU/multi-core acceleration and a **NumPy backend** that works everywhere with zero extra dependencies.
+JAMMA uses a dual-backend architecture: a **JAX backend** for multi-core acceleration (JIT, vmap, sharding) and a **NumPy backend** that works everywhere with zero extra dependencies.
 
 ```mermaid
 flowchart LR
@@ -299,7 +299,7 @@ See [Code Map](docs/CODEMAP.md) for the full architecture diagram with source li
 
 - Python 3.11+
 - NumPy 2.0+
-- JAX 0.8.0+ (optional, for GPU acceleration: `pip install jamma[jax]`)
+- JAX 0.8.0+ (optional, for batch acceleration: `pip install jamma[jax]`)
 
 ## License
 

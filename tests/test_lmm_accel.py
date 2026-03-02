@@ -1008,6 +1008,20 @@ def test_pipeline_multi_chunk_correctness():
             )
 
 
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+def test_workspace_alignment():
+    """Verify alloc_aligned_doubles returns 32-byte-aligned addresses."""
+    from jamma.lmm._lmm_accel import _get_aligned_alloc_test_ptr
+
+    # Test several sizes including non-power-of-2
+    for n in [100, 101, 200, 1400, 50001]:
+        ptr = _get_aligned_alloc_test_ptr(n)
+        assert ptr % 32 == 0, (
+            f"alloc_aligned_doubles({n}) returned {ptr:#x}, not 32-byte aligned"
+        )
+
+
 @pytest.mark.tier2
 @pytest.mark.slow
 @pytest.mark.benchmark

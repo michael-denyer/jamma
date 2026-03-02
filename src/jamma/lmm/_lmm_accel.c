@@ -48,6 +48,7 @@
 #include <limits.h>
 #include <math.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -66,6 +67,18 @@
 #define CF_TINY     1.0e-30
 #define CF_STOP     1.0e-14
 #define CF_MAX_ITER 200
+
+/* ---------------------------------------------------------------------------
+ * alloc_aligned_doubles — allocate n doubles with 32-byte alignment (AVX2).
+ *
+ * C11 aligned_alloc requires size to be a multiple of alignment, so we round
+ * up to the nearest 32-byte boundary. Returns NULL on failure (caller checks).
+ * ------------------------------------------------------------------------- */
+static double *alloc_aligned_doubles(size_t n)
+{
+    size_t bytes = (n * sizeof(double) + 31) & ~(size_t)31;
+    return (double *)aligned_alloc(32, bytes);
+}
 
 /* ---------------------------------------------------------------------------
  * validate_eigenvalues — reject NaN/Inf before entering the compute loop.
@@ -236,8 +249,14 @@ static inline double reml_finish(
 }
 
 /* Wald statistics from a populated pab array.
- * Shared by calc_rl_wald_ncvt1 and calc_rl_wald_ncvt1_split. */
-static inline void wald_from_pab(
+ * Shared by calc_rl_wald_ncvt1 and golden_section_lambda_ncvt1 fusion.
+ *
+ * Returns 1 if the SNP is valid (P_XX > 0), 0 if degenerate (P_XX <= 0).
+ * Degenerate SNPs get beta = se = f_stat = NaN.
+ *
+ * Using a return value instead of isnan(beta) for validity avoids the
+ * -ffinite-math-only optimization that folds isnan() to always-false. */
+static inline int wald_from_pab(
     const double pab[3][6],
     int df,
     double *beta_out, double *se_out, double *f_stat_out
@@ -256,7 +275,7 @@ static inline void wald_from_pab(
         *beta_out   = (double)NAN;
         *se_out     = (double)NAN;
         *f_stat_out = (double)NAN;
-        return;
+        return 0;  /* degenerate */
     }
 
     double beta = P_XY / P_XX;
@@ -276,6 +295,7 @@ static inline void wald_from_pab(
     *beta_out   = beta;
     *se_out     = se;
     *f_stat_out = f_stat;
+    return 1;  /* valid */
 }
 
 /* -------------------------------------------------------------------------
@@ -540,7 +560,8 @@ static double golden_section_lambda_ncvt1(
     int n_grid, int n_refine,
     int df, double reml_const,
     double * restrict hi_eval, double *logl_out,
-    double *beta_out, double *se_out, double *f_stat_out  /* NEW */
+    double *beta_out, double *se_out, double *f_stat_out,
+    int *is_valid_out  /* avoids isnan() check under -ffinite-math-only */
 )
 {
     const double phi = 0.6180339887498949;  /* golden ratio - 1 */
@@ -602,11 +623,13 @@ static double golden_section_lambda_ncvt1(
                                  n_samples, lambda_opt, reml_const, hi_eval);
 
     /* hi_eval is now populated with 1/(lambda_opt*eval+1) — reuse for Wald stats
-     * without another n_samples pass through calc_rl_wald_ncvt1. */
+     * without another n_samples pass through calc_rl_wald_ncvt1.
+     * wald_from_pab() return value is stored in is_valid_out to avoid
+     * isnan() check in caller, which -ffinite-math-only folds to false. */
     {
         double pab[3][6];
         calc_pab_ncvt1(uab, hi_eval, n_samples, pab);
-        wald_from_pab(pab, df, beta_out, se_out, f_stat_out);
+        *is_valid_out = wald_from_pab(pab, df, beta_out, se_out, f_stat_out);
     }
 
     return lambda_opt;
@@ -857,7 +880,8 @@ static double golden_section_lambda_ncvt1_split(
     int n_grid, int n_refine,
     int df, double reml_const,
     double *logl_out,
-    double *beta_out, double *se_out, double *f_stat_out
+    double *beta_out, double *se_out, double *f_stat_out,
+    int *is_valid_out  /* avoids isnan() check under -ffinite-math-only */
 )
 {
     const double phi = 0.6180339887498949;
@@ -946,7 +970,7 @@ static double golden_section_lambda_ncvt1_split(
         calc_pab_ncvt1_split(s_ww, s_wx, s_wy, s_xx, s_xy, s_yy, pab);
 
         *logl_out = reml_finish(pab, logdet_h, logdet_iab, df, reml_const);
-        wald_from_pab(pab, df, beta_out, se_out, f_stat_out);
+        *is_valid_out = wald_from_pab(pab, df, beta_out, se_out, f_stat_out);
     }
 
     return lambda_opt;
@@ -1118,8 +1142,7 @@ static PyObject *create_workspace_split_c_py(
 
     /* Allocate grid arrays */
     ws->lambda_grid   = (double *)malloc((size_t)n_grid * sizeof(double));
-    ws->hi_eval_grid  = (double *)malloc(
-        (size_t)n_grid * (size_t)n_samples * sizeof(double));
+    ws->hi_eval_grid  = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
     ws->logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
     ws->grid_inv      = (grid_invariant_t *)malloc(
         (size_t)n_grid * sizeof(grid_invariant_t));
@@ -1305,12 +1328,13 @@ static PyObject *compute_lmm_chunk_split_c_py(
 
         /* Golden section lambda optimization (reuses workspace grids) */
         double logl_opt, beta, se, f_stat;
+        int is_valid;
         double lambda_opt = golden_section_lambda_ncvt1_split(
             vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
             ws->eigenvalues, logdet_iab,
             n_samples, ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
             ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
-            df, reml_const, &logl_opt, &beta, &se, &f_stat
+            df, reml_const, &logl_opt, &beta, &se, &f_stat, &is_valid
         );
 
         lambdas[snp] = lambda_opt;
@@ -1318,7 +1342,6 @@ static PyObject *compute_lmm_chunk_split_c_py(
         betas[snp]   = beta;
         ses[snp]     = se;
 
-        int is_valid = (beta == beta);  /* !isnan(beta) */
         pwalds[snp] = f_to_pvalue(
             f_stat, df, is_valid,
             ws->beta_a, ws->beta_b, ws->lbeta_ab);
@@ -1561,13 +1584,14 @@ static PyObject *compute_lmm_batch_split_c(
         double logdet_iab = compute_logdet_iab(iab);
 
         double lambda_opt, logl_opt, beta, se, f_stat;
+        int is_valid;
         lambda_opt = golden_section_lambda_ncvt1_split(
             vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
             eigenvalues_data, logdet_iab,
             n_samples, lambda_grid, hi_eval_grid, logdet_h_grid,
             grid_inv, log_l_min, step, n_grid, n_refine,
             df, reml_const, &logl_opt,
-            &beta, &se, &f_stat
+            &beta, &se, &f_stat, &is_valid
         );
 
         lambdas[snp] = lambda_opt;
@@ -1576,7 +1600,6 @@ static PyObject *compute_lmm_batch_split_c(
         betas[snp] = beta;
         ses[snp]   = se;
 
-        int is_valid = (beta == beta);
         pwalds[snp] = f_to_pvalue(f_stat, df, is_valid,
                                    beta_a, beta_b, lbeta_ab);
     }
@@ -1758,7 +1781,7 @@ static PyObject *compute_lmm_batch_c(PyObject *self, PyObject *args, PyObject *k
      * These are identical across all SNPs (eigenvalues are shared) so we compute
      * them once here instead of n_snps * n_grid times inside the parallel loop.
      * Memory: n_grid * n_samples * 8 bytes (e.g. 50 * 50k = 20 MB). */
-    hi_eval_grid = (double *)malloc((size_t)n_grid * (size_t)n_samples * sizeof(double));
+    hi_eval_grid = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
     logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
 
     if (!hi_eval_grid || !logdet_h_grid) { PyErr_NoMemory(); goto err_output; }
@@ -1788,7 +1811,7 @@ static PyObject *compute_lmm_batch_c(PyObject *self, PyObject *args, PyObject *k
     int alloc_ok = (thread_bufs != NULL);
     if (alloc_ok) {
         for (int t = 0; t < actual_threads; t++) {
-            thread_bufs[t] = (double *)malloc((size_t)n_samples * sizeof(double));
+            thread_bufs[t] = alloc_aligned_doubles((size_t)n_samples);
             if (!thread_bufs[t]) { alloc_ok = 0; break; }
         }
     }
@@ -1818,13 +1841,14 @@ static PyObject *compute_lmm_batch_c(PyObject *self, PyObject *args, PyObject *k
 
         double lambda_opt, logl_opt;
         double beta, se, f_stat;
+        int is_valid;
         lambda_opt = golden_section_lambda_ncvt1(
             uab, eigenvalues_data, logdet_iab, n_samples,
             lambda_grid, hi_eval_grid, logdet_h_grid,
             log_l_min, step, n_grid, n_refine,
             df, reml_const,
             hi_eval, &logl_opt,
-            &beta, &se, &f_stat
+            &beta, &se, &f_stat, &is_valid
         );
 
         lambdas[snp] = lambda_opt;
@@ -1832,7 +1856,6 @@ static PyObject *compute_lmm_batch_c(PyObject *self, PyObject *args, PyObject *k
         betas[snp]   = beta;
         ses[snp]     = se;
 
-        int is_valid = (beta == beta);  /* !isnan(beta) */
         pwalds[snp] = f_to_pvalue(f_stat, df, is_valid, beta_a, beta_b, lbeta_ab);
     }
 
@@ -1876,6 +1899,27 @@ err_input:
     free(hi_eval_grid);
     free(logdet_h_grid);
     return NULL;
+}
+
+/* -------------------------------------------------------------------------
+ * _get_aligned_alloc_test_ptr
+ *
+ * Debug function: verify aligned_alloc returns 32-byte-aligned pointers.
+ * Returns the pointer value as a Python int for assertion in tests.
+ * ------------------------------------------------------------------------- */
+static PyObject *_get_aligned_alloc_test_ptr(PyObject *self, PyObject *args)
+{
+    int n;
+    if (!PyArg_ParseTuple(args, "i", &n)) return NULL;
+    if (n <= 0) {
+        PyErr_SetString(PyExc_ValueError, "n must be positive");
+        return NULL;
+    }
+    double *p = alloc_aligned_doubles((size_t)n);
+    if (!p) return PyErr_NoMemory();
+    uintptr_t addr = (uintptr_t)p;
+    free(p);
+    return PyLong_FromUnsignedLongLong((unsigned long long)addr);
 }
 
 /* -------------------------------------------------------------------------
@@ -1966,6 +2010,12 @@ static PyMethodDef methods[] = {
         "\n"
         "Returns:\n"
         "    dict with keys: lambdas, logls, betas, ses, pwalds\n"
+    },
+    {
+        "_get_aligned_alloc_test_ptr",
+        (PyCFunction)_get_aligned_alloc_test_ptr,
+        METH_VARARGS,
+        "Debug: return address of an aligned_alloc buffer for alignment testing."
     },
     {NULL, NULL, 0, NULL}
 };

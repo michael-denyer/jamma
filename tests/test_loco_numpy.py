@@ -137,6 +137,77 @@ class TestComputeLocoKinshipNumpy:
 
 
 @pytest.mark.tier1
+def test_partitions_from_metadata_matches(sample_plink_data):
+    """partitions_from_metadata produces identical output to get_chromosome_partitions.
+
+    Verifies LOCO-04: derived partitions match direct BIM read without re-opening BED.
+    """
+    from jamma.io.plink import (
+        get_chromosome_partitions,
+        get_plink_metadata,
+        partitions_from_metadata,
+    )
+
+    meta = get_plink_metadata(sample_plink_data)
+    partitions_direct = get_chromosome_partitions(sample_plink_data)
+    partitions_derived = partitions_from_metadata(meta)
+
+    assert set(partitions_direct.keys()) == set(partitions_derived.keys())
+    for chr_name in partitions_direct:
+        np.testing.assert_array_equal(
+            partitions_direct[chr_name], partitions_derived[chr_name]
+        )
+
+
+@pytest.mark.tier1
+def test_apply_snp_list_mask_searchsorted():
+    """apply_snp_list_mask searchsorted yields same result as boolean array approach."""
+    from jamma.core.snp_filter import apply_snp_list_mask
+
+    n_snps = 10000
+    indices = np.sort(
+        np.random.default_rng(42).choice(n_snps, size=500, replace=False)
+    ).astype(np.intp)
+
+    # Build expected result using the old boolean approach
+    snp_mask_expected = np.ones(n_snps, dtype=bool)
+    list_mask = np.zeros(n_snps, dtype=bool)
+    list_mask[indices] = True
+    snp_mask_expected &= list_mask
+
+    # Build actual result using the new searchsorted approach
+    snp_mask_actual = np.ones(n_snps, dtype=bool)
+    apply_snp_list_mask(snp_mask_actual, indices, n_snps, "test")
+
+    np.testing.assert_array_equal(snp_mask_actual, snp_mask_expected)
+
+
+@pytest.mark.tier1
+def test_get_loco_worker_count_env_var(monkeypatch):
+    """JAMMA_LOCO_WORKERS env var is read and respected."""
+    from jamma.core.threading import get_loco_worker_count
+
+    # Default is 1
+    monkeypatch.delenv("JAMMA_LOCO_WORKERS", raising=False)
+    assert get_loco_worker_count() == 1
+
+    # Env var sets count
+    monkeypatch.setenv("JAMMA_LOCO_WORKERS", "4")
+    assert get_loco_worker_count() == 4
+
+    # Invalid env var falls back to 1
+    monkeypatch.setenv("JAMMA_LOCO_WORKERS", "abc")
+    assert get_loco_worker_count() == 1
+
+    # Zero or negative clamps to 1
+    monkeypatch.setenv("JAMMA_LOCO_WORKERS", "0")
+    assert get_loco_worker_count() == 1
+
+    monkeypatch.setenv("JAMMA_LOCO_WORKERS", "-2")
+    assert get_loco_worker_count() == 1
+
+
+@pytest.mark.tier1
 def test_loco_numpy_show_progress_true():
     """NumPy LOCO with show_progress=True completes without error.
 

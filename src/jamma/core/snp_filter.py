@@ -31,9 +31,19 @@ def apply_snp_list_mask(
         raise ValueError(
             f"{label} index {indices.max()} out of range for {n_snps} SNPs"
         )
-    list_mask = np.zeros(n_snps, dtype=bool)
-    list_mask[indices] = True
-    snp_mask &= list_mask
+    if len(indices) == 0:
+        snp_mask[:] = False
+        logger.info(f"{label}: restricting to 0 requested SNPs (all filtered)")
+        return
+
+    # indices is sorted (guaranteed by resolve_snp_list_to_indices).
+    # Use searchsorted to test membership without allocating an O(n_snps) boolean array.
+    active = np.where(snp_mask)[0]
+    pos = np.searchsorted(indices, active)
+    pos = np.clip(pos, 0, len(indices) - 1)
+    in_list = indices[pos] == active
+    # Zero out positions that are True in snp_mask but not in indices
+    snp_mask[active[~in_list]] = False
     logger.info(f"{label}: restricting to {len(indices)} requested SNPs")
 
 

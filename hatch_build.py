@@ -238,6 +238,9 @@ class CustomBuildHook(BuildHookInterface):
         else:
             omp_flags = self._detect_linux_openmp_flags(cc_cmd)
 
+        # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3)
+        extra_cflags = os.environ.get("CFLAGS", "").split()
+
         cmd = [
             cc_cmd,
             *cc_extra,
@@ -247,6 +250,7 @@ class CustomBuildHook(BuildHookInterface):
             "-fno-trapping-math",
             "-ffinite-math-only",
             "-funroll-loops",
+            *extra_cflags,
             "-fPIC",
             "-shared",
             "-std=c99",
@@ -359,6 +363,9 @@ class CustomBuildHook(BuildHookInterface):
         # dlopen needs -ldl on Linux (macOS has dlopen in libSystem)
         dl_flags = ["-ldl"] if platform.system() == "Linux" else []
 
+        # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3)
+        extra_cflags = os.environ.get("CFLAGS", "").split()
+
         cmd = [
             cc_cmd,
             *cc_extra,
@@ -366,6 +373,7 @@ class CustomBuildHook(BuildHookInterface):
             "-ftree-vectorize",
             "-fno-math-errno",
             "-fno-trapping-math",
+            *extra_cflags,
             "-fPIC",
             "-shared",
             "-std=c99",

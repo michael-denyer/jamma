@@ -45,6 +45,32 @@ jobs:
           name: wheels-${{ matrix.os }}
           path: ./wheelhouse/*.whl
 
+  build_avx2_wheels:
+    name: Build AVX2 wheels (Linux x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build AVX2-optimized wheels
+        uses: pypa/cibuildwheel@v3.3.1
+        env:
+          # Build for CPython 3.11-3.13, Linux x86_64 only
+          CIBW_BUILD: "cp311-manylinux_x86_64 cp312-manylinux_x86_64 cp313-manylinux_x86_64"
+          # AVX2 optimization flags via CFLAGS (picked up by hatch_build.py)
+          CIBW_ENVIRONMENT_LINUX: 'CFLAGS="-march=x86-64-v3 -mavx2"'
+          # Install libgomp in manylinux container (AlmaLinux 8, dnf)
+          CIBW_BEFORE_BUILD_LINUX: "dnf install -y libgomp"
+          # Same smoke tests as baseline wheels
+          CIBW_TEST_COMMAND: >-
+            python {project}/scripts/smoke_test_c_extension.py &&
+            python {project}/scripts/smoke_test_eigen_extension.py
+          CIBW_TEST_REQUIRES: "numpy"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: avx2-wheels
+          path: ./wheelhouse/*.whl
+
   build_sdist:
     name: Build sdist
     runs-on: ubuntu-latest

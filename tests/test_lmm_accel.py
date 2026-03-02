@@ -96,13 +96,18 @@ def test_c_vs_python_parity_synthetic(synthetic_wald_data, monkeypatch):
         n_threads=1,
     )
 
-    # All outputs must agree within tight tolerances.
+    # All outputs must agree within calibrated tolerances.
     # NaN entries (degenerate SNPs) are excluded from comparison via equal_nan=True.
+    # lambdas: C and Python golden section have different FP operation ordering.
+    # On flat likelihood landscapes (weak-signal SNPs near l_min=1e-5), this
+    # produces absolute differences ~6e-6 which are large relative to l_min.
+    # Same tolerance as the benchmark test (line ~1160).
     np.testing.assert_allclose(
         result_c["lambdas"],
         result_py["lambdas"],
-        rtol=1e-10,
+        rtol=5e-5,
         atol=1e-14,
+        equal_nan=True,
         err_msg="lambdas: C vs Python mismatch",
     )
     # logls: C and Python golden section have different FP operation ordering,

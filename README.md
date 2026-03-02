@@ -223,14 +223,14 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 
 ## Performance
 
-Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2, JAMMA v2.9.4, GEMMA 0.98.5.
+Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2, JAMMA v2.9.5, GEMMA 0.98.5.
 Median of 3 runs, end-to-end wall clock:
 
 | Operation          | GEMMA 0.98.5 | JAMMA (NumPy) | JAMMA (JAX) | vs GEMMA     |
 |--------------------|--------------|---------------|-------------|--------------|
-| Kinship (`-gk 1`)  | 2.2s         | 1.7s          | 1.7s        | **1.3x**     |
-| LMM (`-lmm 1`)     | 11.2s        | 1.3s          | 3.0s        | **8.6x**     |
-| LMM (`-lmm 4`)     | 20.7s        | 5.4s          | 4.1s        | **5.0x**     |
+| Kinship (`-gk 1`)  | 2.2s         | 1.5s          | 1.5s        | **1.5x**     |
+| LMM (`-lmm 1`)     | 11.2s        | 1.0s          | 2.4s        | **11.2x**    |
+| LMM (`-lmm 4`)     | 20.7s        | 5.1s          | 3.2s        | **6.5x**     |
 
 For Wald-only (`-lmm 1`), the C extension with OpenMP is fastest — REML-only optimization is compute-bound and parallelizes well across SNPs. For all-tests (`-lmm 4`), JAX pulls ahead because the additional MLE optimization per SNP benefits from `jax.vmap` batching.
 

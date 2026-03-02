@@ -410,3 +410,40 @@ class TestImputeCenterAndStandardize:
         assert jnp.allclose(col_var, 1.0, atol=1e-10), (
             f"Standardized variance should be ~1.0, got {float(col_var)}"
         )
+
+
+@pytest.mark.tier0
+class TestImputeCenterStandardizeEinsum:
+    """Tests for KIN-06: einsum variance replaces X**2 intermediate."""
+
+    def test_numerical_equivalence(self):
+        """einsum variance produces identical output to np.mean(X**2, axis=0)."""
+        rng = np.random.default_rng(42)
+        X = rng.choice([0.0, 1.0, 2.0], size=(100, 50))
+        # Inject some NaN
+        X[0, 3] = np.nan
+        X[10, 20] = np.nan
+        X[50, 0] = np.nan
+
+        result = impute_center_and_standardize(X.copy())
+
+        # Compute reference using the old method (inline)
+        X_ref = X.copy()
+        snp_means = np.nanmean(X_ref, axis=0, keepdims=True)
+        snp_means = np.nan_to_num(snp_means, nan=0.0)
+        X_imputed = np.where(np.isnan(X_ref), snp_means, X_ref)
+        X_centered = X_imputed - snp_means
+        snp_var = np.mean(X_centered**2, axis=0, keepdims=True)
+        snp_sd = np.sqrt(snp_var)
+        expected = np.where(snp_sd > 0, X_centered / snp_sd, 0.0)
+
+        np.testing.assert_allclose(result, expected, atol=1e-14)
+
+    def test_zero_variance_snp(self):
+        """Monomorphic SNP (zero variance) produces zero column."""
+        X = np.array([[1.0, 0.0], [1.0, 1.0], [1.0, 2.0]], dtype=np.float64)
+        result = impute_center_and_standardize(X)
+        # Column 0 is constant (variance=0) -> should be all zeros
+        np.testing.assert_array_equal(result[:, 0], 0.0)
+        # Column 1 has variance -> should be non-zero
+        assert np.any(result[:, 1] != 0.0)

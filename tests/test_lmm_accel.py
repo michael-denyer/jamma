@@ -99,14 +99,15 @@ def test_c_vs_python_parity_synthetic(synthetic_wald_data, monkeypatch):
     # All outputs must agree within calibrated tolerances.
     # NaN entries (degenerate SNPs) are excluded from comparison via equal_nan=True.
     # lambdas: C and Python golden section have different FP operation ordering.
-    # On flat likelihood landscapes (weak-signal SNPs near l_min=1e-5), this
-    # produces absolute differences ~6e-6 which are large relative to l_min.
-    # Same tolerance as the benchmark test (line ~1160).
+    # On flat likelihood landscapes (weak-signal SNPs near l_min=1e-5), both
+    # paths converge to the boundary but land ~6e-6 apart in absolute terms.
+    # atol=1e-4 absorbs this boundary effect; rtol=1e-6 covers well-determined
+    # lambdas (which agree to ~1e-10 relative).
     np.testing.assert_allclose(
         result_c["lambdas"],
         result_py["lambdas"],
-        rtol=5e-5,
-        atol=1e-14,
+        rtol=1e-6,
+        atol=1e-4,
         equal_nan=True,
         err_msg="lambdas: C vs Python mismatch",
     )

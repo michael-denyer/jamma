@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.5] - 2026-03-02
+
+### Added
+
+- AVX2-optimized wheel build job in CI — builds with `-march=x86-64-v3 -mavx2`,
+  verifies AVX2 instructions via `objdump`, attaches to GitHub releases
+- `aligned_alloc` for C extension workspace arrays (32-byte AVX2 alignment)
+- ABI mismatch detection — stale `.so` fallback logged via `loguru.warning`
+
+### Changed
+
+- Fused Wald computation into golden section optimizer — eliminates redundant
+  `n_samples` pass to recompute `hi_eval` at `lambda_opt` by reusing the buffer
+  from the final REML evaluation
+- C extension build: `CFLAGS` passthrough, `-funroll-loops`,
+  `-fno-finite-math-only` safety, C11 standard, `schedule(static)` for uniform
+  SNP cost
+- C vs Python parity test uses well-conditioned synthetic data (proper w×x
+  cross-products) with calibrated tolerances from measured FP differences
+
+### Fixed
+
+- Degenerate SNP hardening — negative P_YY guard (Schur complement), early-return
+  when every grid point is NaN (`REML_SENTINEL` pattern), explicit `is_valid`
+  return from `wald_from_pab`, p-value clamping to [0,1]
+- C extension validity checks hardened with input shape and scalar parameter
+  validation
+- README: removed false GPU acceleration claims, fixed architecture diagram
+
 ## [2.9.4] - 2026-03-02
 
 ### Changed

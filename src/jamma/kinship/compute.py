@@ -44,8 +44,8 @@ from jamma.core.memory import (
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.io.plink import (
-    get_chromosome_partitions,
     get_plink_metadata,
+    partitions_from_metadata,
     stream_genotype_chunks,
 )
 from jamma.kinship.missing import impute_and_center, impute_center_and_standardize
@@ -846,8 +846,8 @@ def compute_loco_kinship_streaming(
     n_snps = meta["n_snps"]
     chromosomes = meta["chromosome"]
 
-    # Build chromosome partition from metadata
-    partitions = get_chromosome_partitions(bed_path)
+    # Derive partitions from already-loaded metadata — avoids re-opening BED (LOCO-04)
+    partitions = partitions_from_metadata(meta)
     unique_chrs = sorted(partitions.keys(), key=chr_sort_key)
 
     logger.info("Computing LOCO Kinship (streaming)")

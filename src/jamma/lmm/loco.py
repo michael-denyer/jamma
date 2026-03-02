@@ -16,6 +16,7 @@ import contextlib
 import gc
 import time
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -24,10 +25,14 @@ from loguru import logger
 
 from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.core.snp_filter import compute_snp_filter_mask
-from jamma.core.threading import blas_threads, get_physical_core_count
+from jamma.core.threading import (
+    blas_threads,
+    get_loco_worker_count,
+    get_physical_core_count,
+)
 from jamma.io.plink import (
-    get_chromosome_partitions,
     get_plink_metadata,
+    partitions_from_metadata,
     stream_genotype_chunks,
     validate_genotype_values,
 )
@@ -52,6 +57,23 @@ from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.schema import LazySnpMeta
 from jamma.lmm.stats import AssocResult
 from jamma.utils import chr_sort_key
+
+
+@dataclass
+class SnpStatsCache:
+    """Global SNP statistics from kinship streaming PASS 1.
+
+    Stores per-SNP means, missing counts, and variances for ALL SNPs in the
+    BIM file (unfiltered). Per-chromosome stats are extracted by indexing
+    with chr_snp_indices: cache.col_means[chr_snp_indices].
+
+    This eliminates 22+ per-chromosome BED re-reads in _collect_chr_snp_stats.
+    """
+
+    col_means: np.ndarray  # shape (n_snps_total,), float64
+    miss_counts: np.ndarray  # shape (n_snps_total,), int32
+    col_vars: np.ndarray  # shape (n_snps_total,), float64
+    n_unexpected: int  # total unexpected genotype values from validation
 
 
 def _collect_chr_snp_stats(
@@ -191,7 +213,7 @@ def _compute_loco_kinship_streaming_numpy(
     check_memory: bool = True,
     show_progress: bool = True,
     ksnps_indices: np.ndarray | None = None,
-) -> Iterator[tuple[str, np.ndarray]]:
+) -> tuple[Iterator[tuple[str, np.ndarray]], SnpStatsCache]:
     """Compute LOCO kinship matrices using pure NumPy (no JAX dependency).
 
     Mirrors compute_loco_kinship_streaming from jamma.kinship but uses
@@ -208,8 +230,10 @@ def _compute_loco_kinship_streaming_numpy(
         show_progress: If True, show progress bars.
         ksnps_indices: Pre-resolved column indices for -ksnps restriction.
 
-    Yields:
-        Tuple of (chr_name, K_loco) where K_loco is (n_samples, n_samples).
+    Returns:
+        Tuple of (loco_iter, snp_stats_cache) where loco_iter yields
+        (chr_name, K_loco) pairs and snp_stats_cache holds global SNP
+        statistics from PASS 1 for reuse in the association pass (LOCO-01).
     """
     import psutil
 
@@ -220,7 +244,8 @@ def _compute_loco_kinship_streaming_numpy(
     n_snps = meta["n_snps"]
     chromosomes = meta["chromosome"]
 
-    partitions = get_chromosome_partitions(bed_path)
+    # Derive partitions from already-loaded metadata — avoids re-opening BED (LOCO-04)
+    partitions = partitions_from_metadata(meta)
     unique_chrs = sorted(partitions.keys(), key=chr_sort_key)
 
     logger.info("Computing LOCO Kinship (streaming, NumPy)")
@@ -267,6 +292,15 @@ def _compute_loco_kinship_streaming_numpy(
             f"LOCO kinship genotype validation: {n_unexpected_total} values outside "
             f"expected range {{0, 1, 2, NaN}}"
         )
+
+    # Cache global stats for the association pass (LOCO-01).
+    # Must be built BEFORE the del statements below destroy all_means / all_vars.
+    snp_stats_cache = SnpStatsCache(
+        col_means=all_means.copy(),
+        miss_counts=all_miss_counts.copy(),
+        col_vars=all_vars.copy(),
+        n_unexpected=n_unexpected_total,
+    )
 
     # Compute filters
     miss_rates = all_miss_counts / n_samples
@@ -369,32 +403,45 @@ def _compute_loco_kinship_streaming_numpy(
         f"computing {len(S_chr)} LOCO matrices"
     )
 
-    # Yield LOCO matrices via subtraction
-    for chr_name in sorted(S_chr.keys(), key=chr_sort_key):
-        p_chr = n_chr_filtered[chr_name]
-        p_loco = n_filtered - p_chr
+    # Pre-allocate K_loco buffer once for in-place subtraction (LOCO-03).
+    # Caller (run_lmm_loco) eigendecomposes before next yield — buffer reuse is safe.
+    K_loco_buf = np.empty_like(S_full)
 
-        if p_loco == 0:
-            raise ValueError(
-                f"Cannot compute LOCO kinship: all {n_filtered} filtered SNPs "
-                f"are on chromosome '{chr_name}'."
-            )
+    def _yield_matrices() -> Iterator[tuple[str, np.ndarray]]:
+        # needed because augmented assignments (/=) rebind these in the closure
+        nonlocal S_full, K_loco_buf
+        # Yield LOCO matrices via in-place subtraction
+        for chr_name in sorted(S_chr.keys(), key=chr_sort_key):
+            p_chr = n_chr_filtered[chr_name]
+            p_loco = n_filtered - p_chr
 
-        K_loco = (S_full - S_chr[chr_name]) / p_loco
-        logger.debug(
-            f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs retained"
-        )
-        del S_chr[chr_name]
-        yield (chr_name, K_loco)
+            if p_loco == 0:
+                raise ValueError(
+                    f"Cannot compute LOCO kinship: all {n_filtered} filtered SNPs "
+                    f"are on chromosome '{chr_name}'."
+                )
 
-    # Yield full kinship for chromosomes with 0 filtered SNPs
-    if chrs_without_snps:
-        S_full /= n_filtered
-        for chr_name in sorted(chrs_without_snps, key=chr_sort_key):
+            # In-place subtraction: reuses buffer each chromosome (LOCO-03)
+            np.subtract(S_full, S_chr[chr_name], out=K_loco_buf)
+            K_loco_buf /= p_loco
             logger.debug(
-                f"LOCO chr {chr_name}: 0 SNPs after filtering, using full kinship"
+                f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs retained"
             )
-            yield (chr_name, S_full.copy())
+            del S_chr[chr_name]
+            # INVARIANT: caller must eigendecompose before next yield (buffer reuse).
+            # run_lmm_loco: eigendecompose -> del K_loco -> next iteration.
+            yield (chr_name, K_loco_buf)
+
+        # Yield full kinship for chromosomes with 0 filtered SNPs
+        if chrs_without_snps:
+            S_full /= n_filtered
+            for chr_name in sorted(chrs_without_snps, key=chr_sort_key):
+                logger.debug(
+                    f"LOCO chr {chr_name}: 0 SNPs after filtering, using full kinship"
+                )
+                yield (chr_name, S_full.copy())
+
+    return _yield_matrices(), snp_stats_cache
 
 
 def run_lmm_loco(
@@ -473,13 +520,24 @@ def run_lmm_loco(
             f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
         )
 
+    # Read LOCO worker count and log configuration (LOCO-08)
+    loco_workers = get_loco_worker_count()
+    if loco_workers > 1:
+        logger.info(
+            f"LOCO worker count: {loco_workers} (from JAMMA_LOCO_WORKERS). "
+            "NOTE: parallel LOCO is not yet implemented; running sequentially."
+        )
+    else:
+        logger.debug("LOCO worker count: 1 (sequential)")
+
     # Get metadata
     meta = get_plink_metadata(bed_path)
     n_samples_total = meta["n_samples"]
     n_snps_total = meta["n_snps"]
 
-    # Chromosome partitions (unfiltered)
-    partitions = get_chromosome_partitions(bed_path)
+    # Chromosome partitions (unfiltered) — derived from already-loaded metadata
+    # to avoid a redundant BIM re-read (LOCO-04)
+    partitions = partitions_from_metadata(meta)
     unique_chrs = sorted(partitions.keys(), key=chr_sort_key)
 
     if len(unique_chrs) < 2:
@@ -548,7 +606,7 @@ def run_lmm_loco(
         # NumPy backend uses pure-NumPy kinship (no JAX dependency);
         # JAX backend uses JAX matmul for GPU acceleration.
         if backend == "numpy":
-            loco_iter = _compute_loco_kinship_streaming_numpy(
+            loco_iter, snp_stats_cache = _compute_loco_kinship_streaming_numpy(
                 bed_path,
                 maf_threshold=maf_threshold,
                 miss_threshold=miss_threshold,
@@ -557,6 +615,7 @@ def run_lmm_loco(
                 ksnps_indices=ksnps_indices,
             )
         else:
+            snp_stats_cache = None  # JAX path: cache not yet supported
             from jamma.kinship import (  # noqa: PLC0415
                 compute_loco_kinship_streaming,
             )
@@ -632,6 +691,7 @@ def run_lmm_loco(
                     col_chunk_size=col_chunk_size,
                     writer=writer,
                     chr_name=chr_name,
+                    snp_stats_cache=snp_stats_cache,
                 )
             else:
                 chr_results = _run_lmm_for_chromosome(
@@ -985,6 +1045,7 @@ def _run_lmm_for_chromosome_numpy(
     col_chunk_size: int = 5_000,
     writer: IncrementalAssocWriter | None = None,
     chr_name: str = "",
+    snp_stats_cache: SnpStatsCache | None = None,
 ) -> list[AssocResult]:
     """Run NumPy LMM association on a single chromosome's SNPs.
 
@@ -1019,6 +1080,10 @@ def _run_lmm_for_chromosome_numpy(
         writer: Optional incremental writer for streaming results to disk.
             When provided, results are written directly and an empty list
             is returned. When None, results are accumulated and returned.
+        snp_stats_cache: Global SNP statistics from kinship PASS 1 (LOCO-01).
+            When provided, per-chromosome stats are extracted by slicing
+            cache.col_means[chr_snp_indices] — eliminates a BED re-read.
+            When None, falls back to _collect_chr_snp_stats (legacy behavior).
 
     Returns:
         List of AssocResult for this chromosome's SNPs (empty if writer used).
@@ -1027,9 +1092,19 @@ def _run_lmm_for_chromosome_numpy(
     valid_indices = np.where(valid_mask)[0]
 
     # === PASS 1: Chunked SNP statistics + filtering ===
-    col_means, miss_counts, col_vars, n_unexpected = _collect_chr_snp_stats(
-        bed_path, chr_snp_indices, valid_indices, col_chunk_size
-    )
+    if snp_stats_cache is not None:
+        # Use cached global stats, sliced to this chromosome (LOCO-01).
+        # Stats were computed over ALL samples during kinship PASS 1.
+        # Used for filtering only (MAF, missing rate, monomorphism) — the
+        # actual genotype data is read fresh in PASS 2 using valid_indices.
+        col_means = snp_stats_cache.col_means[chr_snp_indices]
+        miss_counts = snp_stats_cache.miss_counts[chr_snp_indices]
+        col_vars = snp_stats_cache.col_vars[chr_snp_indices]
+        n_unexpected = snp_stats_cache.n_unexpected  # global count, not per-chr
+    else:
+        col_means, miss_counts, col_vars, n_unexpected = _collect_chr_snp_stats(
+            bed_path, chr_snp_indices, valid_indices, col_chunk_size
+        )
 
     filter_result = _filter_chr_snps(
         col_means,

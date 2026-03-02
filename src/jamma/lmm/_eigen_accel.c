@@ -576,6 +576,19 @@ static PyObject *py_eigh_dsyevr(PyObject *self, PyObject *args, PyObject *kwargs
         long long lwork = (long long)ceil(work_query);
         long long liwork = iwork_query;
 
+        /* EIGEN-06: bounds check on workspace query result */
+        if (lwork <= 0 || liwork <= 0) {
+            free(isuppz);
+            Py_DECREF(eigenvalues);
+            Py_DECREF(eigenvectors);
+            PyErr_Format(PyExc_RuntimeError,
+                "DSYEVR workspace query returned invalid sizes: "
+                "lwork=%lld, liwork=%lld. "
+                "This indicates a LAPACK internal error.",
+                lwork, liwork);
+            return NULL;
+        }
+
         double *work = (double *)malloc((size_t)lwork * sizeof(double));
         long long *iwork = (long long *)malloc((size_t)liwork * sizeof(long long));
         if (!work || !iwork) {
@@ -637,6 +650,19 @@ static PyObject *py_eigh_dsyevr(PyObject *self, PyObject *args, PyObject *kwargs
 
         int lwork = (int)ceil(work_query);
         int liwork = iwork_query;
+
+        /* EIGEN-06: bounds check on workspace query result */
+        if (lwork <= 0 || liwork <= 0) {
+            free(isuppz);
+            Py_DECREF(eigenvalues);
+            Py_DECREF(eigenvectors);
+            PyErr_Format(PyExc_RuntimeError,
+                "DSYEVR workspace query returned invalid sizes: "
+                "lwork=%d, liwork=%d. "
+                "This indicates a LAPACK internal error.",
+                lwork, liwork);
+            return NULL;
+        }
 
         double *work = (double *)malloc((size_t)lwork * sizeof(double));
         int *iwork = (int *)malloc((size_t)liwork * sizeof(int));

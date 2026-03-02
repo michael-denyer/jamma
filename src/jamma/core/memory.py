@@ -30,10 +30,20 @@ def _dsyevr_workspace_gb(n: int) -> float:
     return (lwork_bytes + liwork_bytes) / 1e9
 
 
+def _square_matrix_gb(n: int) -> float:
+    """Memory (GB) for an n×n float64 matrix."""
+    return n * n * 8 / 1e9
+
+
+def _memory_margin_gb(peak_gb: float) -> float:
+    """Safety margin: 10% of peak, capped at 10GB absolute."""
+    return min(peak_gb * 0.1, 10.0)
+
+
 def _check_available(total_gb: float) -> tuple[float, bool]:
     """Return (available_gb, sufficient) with 10% margin capped at 10GB."""
     available_gb = psutil.virtual_memory().available / 1e9
-    margin_gb = min(total_gb * 0.1, 10.0)
+    margin_gb = _memory_margin_gb(total_gb)
     return available_gb, (total_gb + margin_gb) < available_gb
 
 
@@ -97,7 +107,7 @@ def _dsyevd_peak_gb(n: int) -> float:
     """
     if n < 0:
         raise ValueError(f"n_samples must be >= 0, got {n}")
-    kinship_gb = n**2 * 8 / 1e9
+    kinship_gb = _square_matrix_gb(n)
     return kinship_gb + _eigendecomp_eigvec_gb(kinship_gb) + _dsyevd_workspace_gb(n)
 
 
@@ -109,7 +119,7 @@ def _dsyevr_peak_gb(n: int) -> float:
     """
     if n < 0:
         raise ValueError(f"n_samples must be >= 0, got {n}")
-    kinship_gb = n**2 * 8 / 1e9
+    kinship_gb = _square_matrix_gb(n)
     return 2 * kinship_gb + _dsyevr_workspace_gb(n)
 
 
@@ -221,12 +231,12 @@ def estimate_workflow_memory(
         >>> print(f"Need {est.total_gb:.0f}GB, have {est.available_gb:.0f}GB")
     """
     # Component sizes
-    kinship_gb = n_samples**2 * 8 / 1e9  # float64
+    kinship_gb = _square_matrix_gb(n_samples)
     # Kinship converts genotypes to float64 via jnp.array(..., dtype=jnp.float64)
     # Full materialization — streaming path uses chunk_size instead
     # (see estimate_streaming_memory)
     genotypes_gb = n_samples * n_snps * 8 / 1e9  # float64 (JAX copy)
-    eigenvectors_gb = n_samples**2 * 8 / 1e9  # float64
+    eigenvectors_gb = _square_matrix_gb(n_samples)
 
     # Eigendecomp workspace: DSYEVD O(n^2) (default driver).
     # If DSYEVR is triggered by memory pressure, actual peak will be lower.
@@ -311,7 +321,7 @@ def estimate_lmm_memory(
         >>> est = estimate_lmm_memory(100_000, 100)
         >>> print(f"LMM needs {est.total_gb:.0f}GB")
     """
-    eigenvectors_gb = n_samples**2 * 8 / 1e9
+    eigenvectors_gb = _square_matrix_gb(n_samples)
     # Full materialization — streaming path uses chunk_size instead
     # (see estimate_lmm_streaming_memory)
     genotypes_gb = n_samples * n_snps * 8 / 1e9  # float64 (JAX copy)
@@ -376,8 +386,8 @@ def _streaming_component_sizes(
         Tuple of (kinship_gb, eigenvectors_gb, eigendecomp_workspace_gb,
         chunk_gb, rotation_buffer_gb, grid_reml_gb).
     """
-    kinship_gb = n_samples**2 * 8 / 1e9
-    eigenvectors_gb = n_samples**2 * 8 / 1e9
+    kinship_gb = _square_matrix_gb(n_samples)
+    eigenvectors_gb = _square_matrix_gb(n_samples)
     eigendecomp_workspace_gb = _eigendecomp_workspace_gb(n_samples)
     chunk_gb = n_samples * chunk_size * 8 / 1e9
     rotation_buffer_gb = n_samples * chunk_size * 8 / 1e9  # UtG buffer
@@ -734,20 +744,52 @@ def check_memory_before_run(
     est = estimate_streaming_memory(n_samples, chunk_size=actual_chunk)
     snap = get_memory_snapshot()
 
+    # EIGEN-01: When DSYEVR is available and DSYEVD won't fit, report
+    # DSYEVR peak instead. This mirrors eigendecompose_kinship()'s driver
+    # selection logic and prevents spurious OOM aborts.
+    reported_peak = est.total_peak_gb
+    driver_note = "eigendecomp phase"
+    try:
+        from jamma.lmm.eigen import _DSYEVR_AVAILABLE
+    except ImportError:
+        _DSYEVR_AVAILABLE = False
+        logger.debug(
+            "Could not import _DSYEVR_AVAILABLE from jamma.lmm.eigen; "
+            "pre-flight check will use DSYEVD peak estimate only."
+        )
+
+    if _DSYEVR_AVAILABLE:
+        dsyevd_peak = _dsyevd_peak_gb(n_samples)
+        margin = _memory_margin_gb(dsyevd_peak)
+        if dsyevd_peak + margin > snap.available_gb:
+            # DSYEVD won't fit — eigendecompose_kinship() will select DSYEVR
+            dsyevr_peak = _dsyevr_peak_gb(n_samples)
+            # Recompute total_peak with DSYEVR instead of DSYEVD
+            peak_kinship = est.kinship_gb + est.chunk_gb
+            peak_lmm = (
+                est.eigenvectors_gb
+                + est.chunk_gb
+                + est.rotation_buffer_gb
+                + est.grid_reml_gb
+                + _uab_iab_gb(n_samples, actual_chunk)
+            )
+            reported_peak = max(peak_kinship, dsyevr_peak, peak_lmm)
+            driver_note = "eigendecomp phase, DSYEVR selected"
+
     logger.info(
         f"Memory check for {operation} ({n_samples:,} samples × {n_snps:,} SNPs):"
     )
-    logger.info(f"  Estimated peak: {est.total_peak_gb:.1f}GB (eigendecomp phase)")
+    logger.info(f"  Estimated peak: {reported_peak:.1f}GB ({driver_note})")
     logger.info(f"  Current RSS: {snap.rss_gb:.1f}GB")
     logger.info(f"  Available: {snap.available_gb:.1f}GB")
 
     # Check if estimated peak exceeds available
-    headroom = snap.available_gb - est.total_peak_gb
+    headroom = snap.available_gb - reported_peak
 
     # Intentionally uncapped 10%: e.g. at 500GB peak, this warns below 50GB
     # headroom while _check_available only rejects below 10GB, giving the
     # user a ~40GB window to run cleanup_memory() before the gate rejects.
-    if headroom < est.total_peak_gb * 0.1:
+    if headroom < reported_peak * 0.1:
         logger.warning(
             f"  Status: RISKY ({headroom:.1f}GB headroom, recommend cleanup first)"
         )
@@ -757,7 +799,7 @@ def check_memory_before_run(
             raise MemoryError(
                 f"Insufficient memory for {operation}.\n"
                 f"  Current RSS: {snap.rss_gb:.1f}GB (from previous runs?)\n"
-                f"  Estimated peak: {est.total_peak_gb:.1f}GB\n"
+                f"  Estimated peak: {reported_peak:.1f}GB\n"
                 f"  Available: {snap.available_gb:.1f}GB\n\n"
                 f"Suggestions:\n"
                 f"  1. Run cleanup_memory() to free memory from previous runs\n"
@@ -767,10 +809,10 @@ def check_memory_before_run(
         else:
             raise MemoryError(
                 f"Insufficient memory for {operation}.\n"
-                f"  Estimated peak: {est.total_peak_gb:.1f}GB\n"
+                f"  Estimated peak: {reported_peak:.1f}GB\n"
                 f"  Available: {snap.available_gb:.1f}GB\n\n"
                 f"Suggestions:\n"
-                f"  1. Use a larger machine (need ~{est.total_peak_gb * 1.2:.0f}GB+)\n"
+                f"  1. Use a larger machine (need ~{reported_peak * 1.2:.0f}GB+)\n"
                 f"  2. Reduce dataset size"
             )
     else:

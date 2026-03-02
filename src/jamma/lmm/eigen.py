@@ -24,6 +24,7 @@ from threadpoolctl import threadpool_info
 from jamma.core.memory import (
     _dsyevd_peak_gb,
     _dsyevr_peak_gb,
+    _memory_margin_gb,
     check_memory_available,
     log_memory_snapshot,
 )
@@ -108,22 +109,39 @@ def _auto_recompile_eigen() -> bool:
 _DSYEVR_AVAILABLE, _eigh_dsyevr_func = _try_import_dsyevr()
 _DSYEVR_RECOMPILE_ATTEMPTED = False
 
-if not _DSYEVR_AVAILABLE:
-    logger.info(
-        "DSYEVR C extension unavailable — using DSYEVD (numpy.linalg.eigh). "
-        "DSYEVR saves ~250GB workspace at 125k samples. "
-        "To compile: python -m jamma.lmm._compile_eigen"
-    )
 
-# Whether DSYEVR path is available. Used by eigendecompose_kinship()
-# to decide between DSYEVD and DSYEVR at runtime based on available memory.
+def _lazy_init_dsyevr() -> None:
+    """One-shot lazy init: attempt auto-recompile if import-time probe failed.
+
+    Called on first eigendecompose_kinship() invocation only.
+    Deferred from module import to avoid surprising subprocess/compiler
+    side effects during import. Also logs DSYEVR unavailability once.
+    """
+    global _DSYEVR_AVAILABLE, _eigh_dsyevr_func, _DSYEVR_RECOMPILE_ATTEMPTED
+    if _DSYEVR_AVAILABLE or _DSYEVR_RECOMPILE_ATTEMPTED:
+        return
+    _DSYEVR_RECOMPILE_ATTEMPTED = True
+    if _auto_recompile_eigen():
+        _DSYEVR_AVAILABLE, _eigh_dsyevr_func = _try_import_dsyevr()
+    if not _DSYEVR_AVAILABLE:
+        logger.info(
+            "DSYEVR C extension unavailable — using DSYEVD (numpy.linalg.eigh). "
+            "DSYEVR saves ~250GB workspace at 125k samples. "
+            "To compile: python -m jamma.lmm._compile_eigen"
+        )
+
 
 # For matrices >= this size, use sampled symmetry check instead of full np.allclose.
 # Full check allocates an n*n temporary; at 100k samples that is ~80GB.
 _SAMPLED_SYMMETRY_THRESHOLD = 10_000
 
+# Symmetry check tolerance; matches LAPACK precision expectations.
+_SYMMETRY_ATOL = 1e-11
 
-def _check_symmetry_sampled(K: np.ndarray, n: int, *, atol: float = 1e-10) -> None:
+
+def _check_symmetry_sampled(
+    K: np.ndarray, n: int, *, atol: float = _SYMMETRY_ATOL
+) -> None:
     """Check kinship symmetry via deterministic strided row sampling.
 
     Samples every sqrt(n)-th row and compares it against the
@@ -280,11 +298,7 @@ def eigendecompose_kinship(
     """
     # Lazy auto-recompile: deferred from module import to first use to avoid
     # surprising subprocess/compiler side effects during import.
-    global _DSYEVR_AVAILABLE, _eigh_dsyevr_func, _DSYEVR_RECOMPILE_ATTEMPTED
-    if not _DSYEVR_AVAILABLE and not _DSYEVR_RECOMPILE_ATTEMPTED:
-        _DSYEVR_RECOMPILE_ATTEMPTED = True
-        if _auto_recompile_eigen():
-            _DSYEVR_AVAILABLE, _eigh_dsyevr_func = _try_import_dsyevr()
+    _lazy_init_dsyevr()
 
     n_samples = K.shape[0]
     n_elements = n_samples * n_samples
@@ -293,8 +307,10 @@ def eigendecompose_kinship(
         raise ValueError(f"Kinship matrix must be square, got shape {K.shape}")
 
     if n_samples < _SAMPLED_SYMMETRY_THRESHOLD:
-        # Full check: O(n^2), fine for small matrices (<1s)
-        if not np.allclose(K, K.T, atol=1e-10):
+        # Full check: O(n^2), fine for small matrices (<1s).
+        # rtol=0 ensures only atol governs the check, consistent with
+        # _check_symmetry_sampled which uses max_asym > atol directly.
+        if not np.allclose(K, K.T, atol=_SYMMETRY_ATOL, rtol=0):
             logger.warning(
                 "Kinship matrix is not symmetric (max asymmetry: %.2e). "
                 "np.linalg.eigh will use lower triangle only.",
@@ -302,7 +318,7 @@ def eigendecompose_kinship(
             )
     else:
         # Sampled check: O(n*sqrt(n)), avoids n*n temporary allocation.
-        _check_symmetry_sampled(K, n_samples, atol=1e-10)
+        _check_symmetry_sampled(K, n_samples, atol=_SYMMETRY_ATOL)
 
     logger.info(f"Eigendecomposing kinship matrix ({n_samples:,} x {n_samples:,})")
     logger.debug(
@@ -322,11 +338,11 @@ def eigendecompose_kinship(
     required_gb = dsyevd_peak
 
     if _DSYEVR_AVAILABLE:
-        margin_gb = min(dsyevd_peak * 0.1, 10.0)
+        margin_gb = _memory_margin_gb(dsyevd_peak)
         if dsyevd_peak + margin_gb > available_gb:
             # DSYEVD won't fit — check DSYEVR
             dsyevr_peak = _dsyevr_peak_gb(n_samples)
-            dsyevr_margin = min(dsyevr_peak * 0.1, 10.0)
+            dsyevr_margin = _memory_margin_gb(dsyevr_peak)
             if dsyevr_peak + dsyevr_margin <= available_gb:
                 use_dsyevr = True
                 required_gb = dsyevr_peak
@@ -382,13 +398,36 @@ def eigendecompose_kinship(
                 eigenvalues, eigenvectors = _eigh_dsyevr(K)
             else:
                 eigenvalues, eigenvectors = _eigh_inplace(K)
-    except MemoryError:
-        logger.error(
-            f"MemoryError during eigendecomposition of {n_samples:,}x{n_samples:,} "
-            f"matrix. Estimated memory: ~{required_gb:.1f} GB. "
-            f"Consider using a machine with more RAM or reducing sample size."
-        )
-        raise
+    except MemoryError as dsyevd_err:
+        if not use_dsyevr and _DSYEVR_AVAILABLE:
+            # DSYEVD workspace allocation failed before computation started.
+            # K is still valid: numpy allocates DSYEVD workspace before calling
+            # LAPACK, so MemoryError from workspace malloc precedes LAPACK
+            # modifying K. This assumption depends on numpy's allocation order.
+            # Attempt DSYEVR which has O(N) workspace instead of O(N^2).
+            logger.warning(
+                f"DSYEVD MemoryError for {n_samples:,}x{n_samples:,} matrix "
+                f"(estimated {required_gb:.1f}GB). "
+                f"Attempting DSYEVR fallback (O(N) workspace)."
+            )
+            driver = "DSYEVR via _eigen_accel (fallback from DSYEVD MemoryError)"
+            try:
+                with blas_threads(n_threads):
+                    eigenvalues, eigenvectors = _eigh_dsyevr(K)
+            except MemoryError as fallback_err:
+                logger.error(
+                    f"DSYEVR fallback also ran out of memory: {fallback_err}. "
+                    f"Consider using a machine with more RAM or reducing sample size."
+                )
+                raise fallback_err from dsyevd_err
+        else:
+            logger.error(
+                f"MemoryError during eigendecomposition of "
+                f"{n_samples:,}x{n_samples:,} matrix. "
+                f"Estimated memory: ~{required_gb:.1f} GB. "
+                f"Consider using a machine with more RAM or reducing sample size."
+            )
+            raise
     except np.linalg.LinAlgError as e:
         logger.error(
             f"Eigendecomposition failed: {e}. "

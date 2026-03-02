@@ -373,3 +373,239 @@ class TestDsyevrDispatch:
             available, func = _try_import_dsyevr()
         assert available is False
         assert func is None
+
+
+@pytest.mark.tier0
+class TestDsyevrProbe:
+    """Tests for EIGEN-03: DSYEVR probe runs once at import time."""
+
+    # Override module-level skipif — these tests don't need the C extension
+    pytestmark = [pytest.mark.tier0]
+
+    def test_try_import_not_called_on_repeated_eigendecompose(self):
+        """_try_import_dsyevr is NOT called by repeated eigendecompose_kinship calls."""
+        import jamma.lmm.eigen as eigen_mod
+
+        rng = np.random.default_rng(42)
+        n = 20
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+
+        # Mark recompile as already attempted (simulates normal post-init state)
+        original_attempted = eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED
+        eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED = True
+
+        try:
+            with patch.object(
+                eigen_mod, "_try_import_dsyevr", wraps=eigen_mod._try_import_dsyevr
+            ) as mock_probe:
+                with (
+                    patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+                    patch("jamma.core.memory.psutil.Process") as mock_proc,
+                ):
+                    mock_vm.return_value.available = 1e12
+                    mock_vm.return_value.total = 1e12
+                    mock_proc.return_value.memory_info.return_value.rss = 1e9
+                    mock_proc.return_value.memory_info.return_value.vms = 2e9
+
+                    # Call eigendecompose_kinship 3 times
+                    for _ in range(3):
+                        eigen_mod.eigendecompose_kinship(K.copy(), check_memory=False)
+
+                # _try_import_dsyevr should NOT have been called by any of the 3 calls
+                assert mock_probe.call_count == 0, (
+                    f"_try_import_dsyevr called {mock_probe.call_count} times; "
+                    "expected 0 (probe should only run at import time)"
+                )
+        finally:
+            eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED = original_attempted
+
+    def test_lazy_init_runs_recompile_once(self):
+        """_lazy_init_dsyevr() recompiles exactly once when DSYEVR unavailable."""
+        import jamma.lmm.eigen as eigen_mod
+
+        # Save originals
+        orig_available = eigen_mod._DSYEVR_AVAILABLE
+        orig_attempted = eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED
+
+        try:
+            # Simulate: DSYEVR not available, recompile not yet attempted
+            eigen_mod._DSYEVR_AVAILABLE = False
+            eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED = False
+
+            with patch.object(
+                eigen_mod, "_auto_recompile_eigen", return_value=False
+            ) as mock_recompile:
+                eigen_mod._lazy_init_dsyevr()
+                eigen_mod._lazy_init_dsyevr()  # Second call should be no-op
+                eigen_mod._lazy_init_dsyevr()  # Third call should be no-op
+
+            assert mock_recompile.call_count == 1, (
+                f"_auto_recompile_eigen called {mock_recompile.call_count} times;"
+                " expected 1"
+            )
+            assert eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED is True
+        finally:
+            eigen_mod._DSYEVR_AVAILABLE = orig_available
+            eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED = orig_attempted
+
+
+@pytest.mark.tier0
+class TestDsyevrFallback:
+    """Tests for EIGEN-02: DSYEVR fallback when DSYEVD raises MemoryError."""
+
+    # Override module-level skipif — fallback test mocks DSYEVD
+    pytestmark = [pytest.mark.tier0]
+
+    def test_dsyevr_fallback_on_dsyevd_memory_error(self):
+        """When DSYEVD raises MemoryError, falls back to DSYEVR if available."""
+        import jamma.lmm.eigen as eigen_mod
+
+        if not eigen_mod._DSYEVR_AVAILABLE:
+            pytest.skip("DSYEVR C extension not available")
+
+        rng = np.random.default_rng(42)
+        n = 30
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+        K_ref = K.copy()
+
+        # Track DSYEVR calls
+        dsyevr_calls = []
+        original_dsyevr = eigen_mod._eigh_dsyevr
+
+        def tracking_dsyevr(K_in):
+            dsyevr_calls.append(1)
+            return original_dsyevr(K_in)
+
+        def failing_dsyevd(K_in):
+            """Simulates DSYEVD workspace malloc failure (before K is modified)."""
+            raise MemoryError("simulated DSYEVD workspace allocation failure")
+
+        with (
+            patch.object(eigen_mod, "_eigh_inplace", failing_dsyevd),
+            patch.object(eigen_mod, "_eigh_dsyevr", tracking_dsyevr),
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_proc,
+        ):
+            # Mock memory: enough that DSYEVD is selected (not DSYEVR)
+            mock_vm.return_value.available = 1e12
+            mock_vm.return_value.total = 1e12
+            mock_proc.return_value.memory_info.return_value.rss = 0
+            mock_proc.return_value.memory_info.return_value.vms = 0
+
+            eigenvalues, eigenvectors = eigen_mod.eigendecompose_kinship(
+                K.copy(), check_memory=False
+            )
+
+        # DSYEVR was called as fallback
+        assert len(dsyevr_calls) == 1, (
+            "Expected DSYEVR fallback after DSYEVD MemoryError"
+        )
+
+        # Results are correct
+        K_recon = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
+        np.testing.assert_allclose(K_recon, K_ref, rtol=1e-10, atol=1e-14)
+
+    def test_no_fallback_when_dsyevr_unavailable(self):
+        """When DSYEVR unavailable, DSYEVD MemoryError re-raises."""
+        import jamma.lmm.eigen as eigen_mod
+
+        rng = np.random.default_rng(42)
+        n = 20
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+
+        def failing_dsyevd(K_in):
+            raise MemoryError("simulated DSYEVD workspace allocation failure")
+
+        # Ensure _lazy_init_dsyevr() does not overwrite _DSYEVR_AVAILABLE=False
+        # by suppressing the recompile path (simulate already-attempted state).
+        orig_available = eigen_mod._DSYEVR_AVAILABLE
+        orig_attempted = eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED
+        try:
+            eigen_mod._DSYEVR_AVAILABLE = False
+            eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED = True
+
+            with (
+                patch.object(eigen_mod, "_eigh_inplace", failing_dsyevd),
+                patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+                patch("jamma.core.memory.psutil.Process") as mock_proc,
+            ):
+                mock_vm.return_value.available = 1e12
+                mock_vm.return_value.total = 1e12
+                mock_proc.return_value.memory_info.return_value.rss = 0
+                mock_proc.return_value.memory_info.return_value.vms = 0
+
+                with pytest.raises(MemoryError, match="simulated"):
+                    eigen_mod.eigendecompose_kinship(K.copy(), check_memory=False)
+        finally:
+            eigen_mod._DSYEVR_AVAILABLE = orig_available
+            eigen_mod._DSYEVR_RECOMPILE_ATTEMPTED = orig_attempted
+
+    def test_no_fallback_when_already_using_dsyevr(self):
+        """When DSYEVR itself raises MemoryError, it re-raises (no double fallback)."""
+        import jamma.lmm.eigen as eigen_mod
+
+        if not eigen_mod._DSYEVR_AVAILABLE:
+            pytest.skip("DSYEVR C extension not available")
+
+        rng = np.random.default_rng(42)
+        n = 20
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+
+        def failing_dsyevr(K_in):
+            raise MemoryError("simulated DSYEVR failure")
+
+        with (
+            patch.object(eigen_mod, "_eigh_dsyevr", failing_dsyevr),
+            # Force DSYEVR path by mocking memory pressure
+            patch("jamma.lmm.eigen._dsyevd_peak_gb", return_value=100.0),
+            patch("jamma.lmm.eigen._dsyevr_peak_gb", return_value=50.0),
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_proc,
+        ):
+            mock_vm.return_value.available = 80e9
+            mock_vm.return_value.total = 80e9
+            mock_proc.return_value.memory_info.return_value.rss = 0
+            mock_proc.return_value.memory_info.return_value.vms = 0
+
+            with pytest.raises(MemoryError):
+                eigen_mod.eigendecompose_kinship(K.copy(), check_memory=False)
+
+
+@pytest.mark.tier0
+class TestDsyevrBoundsCheck:
+    """Tests for EIGEN-06: workspace query bounds check in C extension."""
+
+    # Override module-level skipif for this class
+    pytestmark = [pytest.mark.tier0]
+
+    @pytest.mark.skipif(not dsyevr_available, reason="DSYEVR C extension not compiled")
+    def test_valid_workspace_on_normal_matrix(self):
+        """Normal matrix workspace query returns valid (positive) sizes.
+
+        This test exercises the happy path. The bounds check
+        (lwork <= 0 || liwork <= 0) in _eigen_accel.c guards against
+        LAPACK returning garbage workspace sizes. It cannot be triggered
+        from Python without simulating LAPACK malfunction.
+        """
+        rng = np.random.default_rng(42)
+        n = 100
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+        # If workspace query returned invalid sizes, this would raise RuntimeError
+        # with "workspace query returned invalid sizes" message
+        w, v = eigh_dsyevr(K)
+        assert w.shape == (n,)
+        assert v.shape == (n, n)
+
+    @pytest.mark.skipif(not dsyevr_available, reason="DSYEVR C extension not compiled")
+    def test_small_matrices_have_valid_workspace(self):
+        """Edge case matrices (n=1,2) still produce valid workspace queries."""
+        for n in [1, 2, 3]:
+            K = np.eye(n, dtype=np.float64)
+            w, v = eigh_dsyevr(K.copy())
+            assert w.shape == (n,)
+            np.testing.assert_allclose(w, np.ones(n), rtol=1e-14)

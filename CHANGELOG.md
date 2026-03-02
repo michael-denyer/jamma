@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.4] - 2026-03-02
+
+### Changed
+
+- `impute_and_center()` operates in-place on writable NumPy arrays, eliminating an
+  O(N×M) copy during kinship computation (KIN-03)
+- `impute_center_and_standardize()` uses `np.einsum('ij,ij->j')` for variance
+  computation instead of materializing an O(N×M) `X**2` intermediate (KIN-06)
+- `compute_loco_kinship()` rewritten in pure NumPy — no longer initializes JAX
+  during in-memory LOCO kinship computation (KIN-01, KIN-04)
+- `_ensure_float64()` skips copy when input is already float64 (KIN-02)
+- Per-chromosome `block_until_ready()` calls added to streaming LOCO accumulation
+  to prevent unbounded JAX async dispatch (KIN-05)
+- `_compute_chunk_size()` simplified: removed vestigial `n_samples`/`bytes_per_element`
+  parameters, uses `MAX_SAFE_CHUNK` cap directly
+
+### Fixed
+
+- Streaming LOCO `S_chr` matrices were not synchronized before subtraction, which
+  could produce stale results under heavy JAX async dispatch
+
 ## [2.9.3] - 2026-03-01
 
 ### Added

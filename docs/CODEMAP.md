@@ -194,7 +194,7 @@ GEMMA algorithm reimplementation: kinship → eigendecomp → REML → test stat
 | 3a | `compute_centered_kinship()` | K = (1/p) × Xc × Xc' in batches of 10k SNPs | [compute.py:86](../src/jamma/kinship/compute.py#L86) |
 | 3a | `compute_kinship_streaming()` | 2-pass streaming (stats → accumulate) | [compute.py:216](../src/jamma/kinship/compute.py#L216) |
 | 3a | `_filter_snps()` | MAF, missing rate, monomorphism filters | [compute.py:53](../src/jamma/kinship/compute.py#L53) |
-| 3b | `impute_and_center()` | NaN → mean, then center (JIT-compiled) | [missing.py:23](../src/jamma/kinship/missing.py#L23) |
+| 3b | `impute_and_center()` | NaN → mean, then center (in-place for NumPy arrays) | [missing.py:21](../src/jamma/kinship/missing.py#L21) |
 | 3c | `eigendecompose_kinship()` | Memory-aware DSYEVD/DSYEVR dispatch with BLAS thread control | [eigen.py:28](../src/jamma/lmm/eigen.py#L28) |
 | 3d | `reml_log_likelihood()` | REML ℓ(λ) for variance component estimation | [likelihood.py:262](../src/jamma/lmm/likelihood.py#L262) |
 | 3d | `mle_log_likelihood()` | MLE ℓ(λ) for LRT | [likelihood.py:533](../src/jamma/lmm/likelihood.py#L533) |
@@ -236,7 +236,7 @@ Batch SNP processing with JIT compilation and vmap vectorization. Requires JAX (
 | 4e | `DevicePlacement` | CPU/GPU device + sharding configuration | [lmm/prepare.py:216](../src/jamma/lmm/prepare.py#L216) |
 | 4e | `resolve_device_placement()` | Select device and set up NamedSharding | [lmm/prepare.py:249](../src/jamma/lmm/prepare.py#L249) |
 | 4e | `prepare_utg_chunk()` | Rotate genotype chunk: U.T @ G with device transfer | [lmm/prepare.py:274](../src/jamma/lmm/prepare.py#L274) |
-| 4f | `_compute_chunk_size()` | JAX int32-safe chunk sizing with device alignment | [lmm/chunk.py:24](../src/jamma/lmm/chunk.py#L24) |
+| 4f | `_compute_chunk_size()` | MAX_SAFE_CHUNK cap with device alignment | [lmm/chunk.py:15](../src/jamma/lmm/chunk.py#L15) |
 | 4f | `auto_tune_chunk_size()` | Chunk size auto-tuning for memory/performance | [lmm/chunk.py:98](../src/jamma/lmm/chunk.py#L98) |
 | 4g | `_compute_lmm_chunk()` | Per-chunk Wald/LRT/Score computation | [lmm/compute.py:107](../src/jamma/lmm/compute.py#L107) |
 | 4g | `block_chunk_result()` | Call `block_until_ready()` on JAX arrays | [lmm/compute.py:238](../src/jamma/lmm/compute.py#L238) |

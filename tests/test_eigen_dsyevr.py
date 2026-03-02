@@ -573,3 +573,39 @@ class TestDsyevrFallback:
 
             with pytest.raises(MemoryError):
                 eigen_mod.eigendecompose_kinship(K.copy(), check_memory=False)
+
+
+@pytest.mark.tier0
+class TestDsyevrBoundsCheck:
+    """Tests for EIGEN-06: workspace query bounds check in C extension."""
+
+    # Override module-level skipif for this class
+    pytestmark = [pytest.mark.tier0]
+
+    @pytest.mark.skipif(not dsyevr_available, reason="DSYEVR C extension not compiled")
+    def test_valid_workspace_on_normal_matrix(self):
+        """Normal matrix workspace query returns valid (positive) sizes.
+
+        This test exercises the happy path. The bounds check
+        (lwork <= 0 || liwork <= 0) in _eigen_accel.c guards against
+        LAPACK returning garbage workspace sizes. It cannot be triggered
+        from Python without simulating LAPACK malfunction.
+        """
+        rng = np.random.default_rng(42)
+        n = 100
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+        # If workspace query returned invalid sizes, this would raise RuntimeError
+        # with "workspace query returned invalid sizes" message
+        w, v = eigh_dsyevr(K)
+        assert w.shape == (n,)
+        assert v.shape == (n, n)
+
+    @pytest.mark.skipif(not dsyevr_available, reason="DSYEVR C extension not compiled")
+    def test_small_matrices_have_valid_workspace(self):
+        """Edge case matrices (n=1,2) still produce valid workspace queries."""
+        for n in [1, 2, 3]:
+            K = np.eye(n, dtype=np.float64)
+            w, v = eigh_dsyevr(K.copy())
+            assert w.shape == (n,)
+            np.testing.assert_allclose(w, np.ones(n), rtol=1e-14)

@@ -1,7 +1,9 @@
-"""Tests for kinship matrix computation.
+"""Tests for kinship matrix computation (JAX-dependent).
 
-These tests verify the JAX-accelerated kinship matrix computation,
-including symmetry, scaling, missing data handling, and determinism.
+These tests verify kinship properties using JAX arrays for reference
+computation.  Pure-NumPy tests (in-place imputation, einsum variance,
+no-copy dtype optimization) live in test_kinship_numpy.py so they run
+in JAX-free CI environments.
 """
 
 import numpy as np
@@ -19,61 +21,6 @@ from jamma.kinship import (
 )
 
 pytestmark = pytest.mark.requires_jax
-
-
-@pytest.mark.tier0
-class TestImputeAndCenterInPlace:
-    """Tests for KIN-03: impute_and_center modifies input in-place."""
-
-    def test_returns_same_object(self):
-        """Return value is the same object as input (no copy)."""
-        X = np.array([[0.0, 1.0], [np.nan, 2.0], [2.0, 1.0]])
-        result = impute_and_center(X)
-        assert result is X, "impute_and_center must return the same array object"
-
-    def test_numerical_correctness_with_nans(self):
-        """Numerical output matches expected values after in-place imputation."""
-        X = np.array([[0.0, 1.0], [np.nan, 2.0], [2.0, 1.0]])
-        result = impute_and_center(X)
-        # Column 0: mean = (0+2)/2 = 1.0, NaN->1.0, centered: [-1, 0, 1]
-        # Column 1: mean = (1+2+1)/3 = 4/3, centered: [1-4/3, 2-4/3, 1-4/3]
-        expected_col0 = np.array([-1.0, 0.0, 1.0])
-        expected_col1 = np.array([1.0, 2.0, 1.0]) - 4.0 / 3.0
-        np.testing.assert_allclose(result[:, 0], expected_col0, atol=1e-14)
-        np.testing.assert_allclose(result[:, 1], expected_col1, atol=1e-14)
-
-    def test_all_missing_column(self):
-        """All-NaN column produces zeros after centering."""
-        X = np.array([[np.nan, 1.0], [np.nan, 2.0], [np.nan, 1.0]])
-        result = impute_and_center(X)
-        np.testing.assert_array_equal(result[:, 0], 0.0)
-
-    def test_no_missing_values(self):
-        """Matrix without NaN is centered correctly in-place."""
-        X = np.array(
-            [[0.0, 1.0, 2.0], [1.0, 1.0, 1.0], [2.0, 1.0, 0.0]], dtype=np.float64
-        )
-        X_ref = X.copy()
-        result = impute_and_center(X)
-        assert result is X
-        expected = X_ref - X_ref.mean(axis=0, keepdims=True)
-        np.testing.assert_allclose(result, expected, atol=1e-14)
-
-    def test_read_only_array_uses_fallback(self):
-        """Read-only numpy array takes the copy-based fallback path."""
-        X = np.array([[0.0, 1.0], [np.nan, 2.0], [2.0, 1.0]])
-        X_ref = X.copy()
-        X.flags.writeable = False
-
-        result = impute_and_center(X)
-
-        # Must return a new object (not the read-only input)
-        assert result is not X
-        # Original must be unmodified
-        np.testing.assert_array_equal(X_ref[~np.isnan(X_ref)], X[~np.isnan(X)])
-        # Numerical output must match the writable path
-        expected = impute_and_center(X_ref)
-        np.testing.assert_allclose(result, expected, atol=1e-14)
 
 
 @pytest.fixture
@@ -426,75 +373,3 @@ class TestImputeCenterAndStandardize:
         assert jnp.allclose(col_var, 1.0, atol=1e-10), (
             f"Standardized variance should be ~1.0, got {float(col_var)}"
         )
-
-
-@pytest.mark.tier0
-class TestImputeCenterStandardizeEinsum:
-    """Tests for KIN-06: einsum variance replaces X**2 intermediate."""
-
-    def test_numerical_equivalence(self):
-        """einsum variance produces identical output to np.mean(X**2, axis=0)."""
-        rng = np.random.default_rng(42)
-        X = rng.choice([0.0, 1.0, 2.0], size=(100, 50))
-        # Inject some NaN
-        X[0, 3] = np.nan
-        X[10, 20] = np.nan
-        X[50, 0] = np.nan
-
-        result = impute_center_and_standardize(X.copy())
-
-        # Compute reference using the old method (inline)
-        X_ref = X.copy()
-        snp_means = np.nanmean(X_ref, axis=0, keepdims=True)
-        snp_means = np.nan_to_num(snp_means, nan=0.0)
-        X_imputed = np.where(np.isnan(X_ref), snp_means, X_ref)
-        X_centered = X_imputed - snp_means
-        snp_var = np.mean(X_centered**2, axis=0, keepdims=True)
-        snp_sd = np.sqrt(snp_var)
-        expected = np.where(snp_sd > 0, X_centered / snp_sd, 0.0)
-
-        np.testing.assert_allclose(result, expected, atol=1e-14)
-
-    def test_zero_variance_snp(self):
-        """Monomorphic SNP (zero variance) produces zero column."""
-        X = np.array([[1.0, 0.0], [1.0, 1.0], [1.0, 2.0]], dtype=np.float64)
-        result = impute_center_and_standardize(X)
-        # Column 0 is constant (variance=0) -> should be all zeros
-        np.testing.assert_array_equal(result[:, 0], 0.0)
-        # Column 1 has variance -> should be non-zero
-        assert np.any(result[:, 1] != 0.0)
-
-
-@pytest.mark.tier0
-class TestKinshipNoCopy:
-    """Tests for KIN-02: no redundant float64 copy in _compute_kinship_inmemory."""
-
-    def test_float64_input_produces_correct_kinship(self):
-        """compute_centered_kinship on float64 input produces correct result.
-
-        When input is already float64, the dtype check avoids creating a second
-        copy. This test verifies the function still produces numerically correct
-        output after the optimization.
-        """
-        X = np.array([[0, 1, 2], [1, 1, 1], [2, 1, 0]], dtype=np.float64)
-        K = compute_centered_kinship(X, check_memory=False)
-        assert K.shape == (3, 3)
-        assert K.dtype == np.float64
-        np.testing.assert_allclose(K, K.T, atol=1e-14)
-
-    def test_float32_input_produces_correct_kinship(self):
-        """compute_centered_kinship on float32 input produces same result as float64.
-
-        When input is float32, the single astype(float64) allocation avoids the
-        intermediate float32 boolean-indexed copy followed by astype. This test
-        verifies the result matches reference computed from float64 input.
-        """
-        rng = np.random.default_rng(42)
-        X_f64 = rng.integers(0, 3, size=(10, 20)).astype(np.float64)
-        X_f32 = X_f64.astype(np.float32)
-
-        K_from_f64 = compute_centered_kinship(X_f64, check_memory=False)
-        K_from_f32 = compute_centered_kinship(X_f32, check_memory=False)
-
-        # float32 input should produce identical result (both converted to float64)
-        np.testing.assert_allclose(K_from_f32, K_from_f64, rtol=1e-10, atol=1e-12)

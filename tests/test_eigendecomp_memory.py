@@ -291,3 +291,77 @@ class TestEigendecompPreflightCheck:
             est = estimate_eigendecomp_memory(200_000)
             # K/U shared (320GB) + DSYEVD workspace (~640GB) = ~960GB
             assert 955 < est < 965
+
+
+@pytest.mark.tier0
+class TestSymmetryThreshold:
+    """Tests for EIGEN-04: symmetry check threshold is 1e-11."""
+
+    def test_module_constant_value(self):
+        """_SYMMETRY_ATOL is 1e-11."""
+        from jamma.lmm.eigen import _SYMMETRY_ATOL
+
+        assert _SYMMETRY_ATOL == 1e-11
+
+    def test_passes_below_threshold(self):
+        """Matrix with max asymmetry 5e-12 passes without warning."""
+        n = 50
+        rng = np.random.default_rng(42)
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+        # Inject small asymmetry: 5e-12 < 1e-11 threshold
+        K[0, 1] += 5e-12
+
+        with (
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_proc,
+        ):
+            mock_vm.return_value.available = 1e12
+            mock_vm.return_value.total = 1e12
+            mock_proc.return_value.memory_info.return_value.rss = 1e9
+            mock_proc.return_value.memory_info.return_value.vms = 2e9
+
+            import warnings
+
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                eigendecompose_kinship(K.copy(), check_memory=False)
+            # No symmetry warning (negative eigenvalue warnings are fine)
+            sym_warnings = [x for x in w if "not symmetric" in str(x.message)]
+            assert len(sym_warnings) == 0
+
+    def test_warns_above_threshold(self):
+        """Matrix with max asymmetry 5e-11 triggers symmetry warning."""
+        from loguru import logger
+
+        n = 50
+        rng = np.random.default_rng(42)
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+        # Inject asymmetry: 5e-11 > 1e-11 threshold
+        K[0, 1] += 5e-11
+
+        # Capture loguru messages directly (compatible with pytest-xdist workers)
+        captured_messages: list[str] = []
+        handler_id = logger.add(
+            lambda msg: captured_messages.append(msg),
+            level="WARNING",
+            format="{message}",
+        )
+        try:
+            with (
+                patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+                patch("jamma.core.memory.psutil.Process") as mock_proc,
+            ):
+                mock_vm.return_value.available = 1e12
+                mock_vm.return_value.total = 1e12
+                mock_proc.return_value.memory_info.return_value.rss = 1e9
+                mock_proc.return_value.memory_info.return_value.vms = 2e9
+
+                eigendecompose_kinship(K.copy(), check_memory=False)
+        finally:
+            logger.remove(handler_id)
+
+        assert any("not symmetric" in m for m in captured_messages), (
+            f"Expected 'not symmetric' warning from loguru, got: {captured_messages!r}"
+        )

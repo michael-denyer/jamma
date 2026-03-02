@@ -122,8 +122,11 @@ if not _DSYEVR_AVAILABLE:
 # Full check allocates an n*n temporary; at 100k samples that is ~80GB.
 _SAMPLED_SYMMETRY_THRESHOLD = 10_000
 
+# Symmetry check tolerance; matches LAPACK precision expectations.
+_SYMMETRY_ATOL = 1e-11
 
-def _check_symmetry_sampled(K: np.ndarray, n: int, *, atol: float = 1e-10) -> None:
+
+def _check_symmetry_sampled(K: np.ndarray, n: int, *, atol: float = 1e-11) -> None:
     """Check kinship symmetry via deterministic strided row sampling.
 
     Samples every sqrt(n)-th row and compares it against the
@@ -293,8 +296,10 @@ def eigendecompose_kinship(
         raise ValueError(f"Kinship matrix must be square, got shape {K.shape}")
 
     if n_samples < _SAMPLED_SYMMETRY_THRESHOLD:
-        # Full check: O(n^2), fine for small matrices (<1s)
-        if not np.allclose(K, K.T, atol=1e-10):
+        # Full check: O(n^2), fine for small matrices (<1s).
+        # rtol=0 ensures only atol governs the check, consistent with
+        # _check_symmetry_sampled which uses max_asym > atol directly.
+        if not np.allclose(K, K.T, atol=_SYMMETRY_ATOL, rtol=0):
             logger.warning(
                 "Kinship matrix is not symmetric (max asymmetry: %.2e). "
                 "np.linalg.eigh will use lower triangle only.",
@@ -302,7 +307,7 @@ def eigendecompose_kinship(
             )
     else:
         # Sampled check: O(n*sqrt(n)), avoids n*n temporary allocation.
-        _check_symmetry_sampled(K, n_samples, atol=1e-10)
+        _check_symmetry_sampled(K, n_samples, atol=_SYMMETRY_ATOL)
 
     logger.info(f"Eigendecomposing kinship matrix ({n_samples:,} x {n_samples:,})")
     logger.debug(

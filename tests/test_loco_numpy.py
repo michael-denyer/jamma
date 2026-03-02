@@ -74,6 +74,32 @@ class TestComputeLocoKinshipNumpy:
                 results[chr_name], K_loco_expected, rtol=1e-12, atol=1e-14
             )
 
+    def test_loco_kinship_with_nan_genotypes(self):
+        """LOCO kinship handles NaN (missing) genotypes correctly."""
+        from jamma.kinship import compute_loco_kinship
+
+        rng = np.random.default_rng(77)
+        n_samples, n_snps = 15, 20
+        genotypes = rng.choice([0.0, 1.0, 2.0], size=(n_samples, n_snps))
+        # Inject missing values
+        genotypes[0, 3] = np.nan
+        genotypes[5, 10] = np.nan
+        genotypes[12, 0] = np.nan
+        chrs = np.array(["1"] * 10 + ["2"] * 10)
+
+        results = list(
+            compute_loco_kinship(
+                genotypes.copy(), chrs, batch_size=100, check_memory=False
+            )
+        )
+
+        assert len(results) == 2
+        for _chr_name, K_loco in results:
+            assert K_loco.shape == (n_samples, n_samples)
+            assert K_loco.dtype == np.float64
+            np.testing.assert_allclose(K_loco, K_loco.T, atol=1e-14)
+            assert np.all(np.isfinite(K_loco))
+
 
 @pytest.mark.tier1
 def test_loco_numpy_show_progress_true():

@@ -59,6 +59,22 @@ class TestImputeAndCenterInPlace:
         expected = X_ref - X_ref.mean(axis=0, keepdims=True)
         np.testing.assert_allclose(result, expected, atol=1e-14)
 
+    def test_read_only_array_uses_fallback(self):
+        """Read-only numpy array takes the copy-based fallback path."""
+        X = np.array([[0.0, 1.0], [np.nan, 2.0], [2.0, 1.0]])
+        X_ref = X.copy()
+        X.flags.writeable = False
+
+        result = impute_and_center(X)
+
+        # Must return a new object (not the read-only input)
+        assert result is not X
+        # Original must be unmodified
+        np.testing.assert_array_equal(X_ref[~np.isnan(X_ref)], X[~np.isnan(X)])
+        # Numerical output must match the writable path
+        expected = impute_and_center(X_ref)
+        np.testing.assert_allclose(result, expected, atol=1e-14)
+
 
 @pytest.fixture
 def simple_genotypes():

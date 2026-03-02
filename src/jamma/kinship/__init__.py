@@ -19,7 +19,7 @@ from jamma.io.plink import get_chromosome_partitions
 from jamma.kinship.compute import (
     compute_centered_kinship,
     compute_kinship_streaming,
-    compute_loco_kinship,  # No longer requires JAX
+    compute_loco_kinship,
     compute_standardized_kinship,
 )
 from jamma.kinship.io import (
@@ -40,7 +40,7 @@ if _HAS_JAX:
 __all__ = [
     "compute_centered_kinship",
     "compute_kinship_streaming",
-    "compute_loco_kinship",  # Always available — pure NumPy
+    "compute_loco_kinship",
     "compute_standardized_kinship",
     "get_chromosome_partitions",
     "impute_and_center",

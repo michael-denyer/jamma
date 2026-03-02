@@ -1,8 +1,8 @@
 """Chunk size computation for JAX LMM association.
 
 Computes optimal chunk sizes to fit within memory budgets during
-batch SNP processing. JAX 0.5+ with x64 enabled handles large
-element counts natively — memory is the binding constraint.
+batch SNP processing. The MAX_SAFE_CHUNK cap also limits JIT
+compilation overhead per chunk.
 """
 
 from loguru import logger
@@ -29,10 +29,10 @@ def _compute_chunk_size(
     n_devices to prevent XLA from padding partial shards.
 
     Args:
-        n_samples: Number of samples.
+        n_samples: Unused. Retained for caller compatibility.
         n_snps: Total number of SNPs (upper bound for chunk size).
-        n_grid: Grid points for lambda optimization (default 50).
-        n_cvt: Number of covariates (default 1).
+        n_grid: Unused. Retained for caller compatibility.
+        n_cvt: Unused. Retained for caller compatibility.
         n_devices: Number of JAX virtual CPU devices (default 1). When > 1,
             the result is rounded down to a multiple of n_devices.
 

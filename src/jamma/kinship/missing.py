@@ -19,19 +19,26 @@ import numpy as np
 
 
 def impute_and_center(X: np.ndarray) -> np.ndarray:
-    """Impute missing values to SNP mean and center, modifying X in-place.
+    """Impute missing values to SNP mean and center.
+
+    When X is a writable NumPy array, operates in-place for zero-copy
+    performance. Falls back to a copy-based path for non-writable or
+    non-NumPy arrays (e.g., JAX arrays in streaming kinship).
 
     Implements GEMMA's PlinkKin algorithm for handling missing data:
     1. Compute mean per SNP excluding missing (NaN)
-    2. Replace missing with mean (in-place)
-    3. Center: x -= mean (in-place)
+    2. Replace missing with mean
+    3. Center: x -= mean
 
     Args:
         X: Genotype matrix (n_samples, n_snps), NaN for missing values.
-            Must be a writable float64 array. Modified in-place.
+            For in-place operation, must be a writable NumPy float array.
+            If X is a view into a larger array, the underlying data will
+            be mutated.
 
     Returns:
-        The same array X, now centered with missing values imputed to SNP mean.
+        Centered array with missing values imputed to SNP mean.
+        Same object as X when in-place path is taken; new array otherwise.
 
     Example:
         >>> import numpy as np
@@ -39,7 +46,6 @@ def impute_and_center(X: np.ndarray) -> np.ndarray:
         >>> X_centered = impute_and_center(X)
         >>> # Mean of column 0 is (0+2)/2 = 1.0 (excluding NaN)
         >>> # NaN is replaced with 1.0, then column is centered
-        >>> # X_centered is X (same object)
     """
     # Compute per-SNP mean excluding NaN values; shape (n_snps,)
     snp_means = np.nanmean(X, axis=0)
@@ -48,8 +54,7 @@ def impute_and_center(X: np.ndarray) -> np.ndarray:
     # This ensures such SNPs contribute nothing to kinship (centered = 0)
     snp_means = np.nan_to_num(snp_means, nan=0.0)
 
-    # In-place path: only for writable numpy arrays (not JAX arrays)
-    # JAX arrays are immutable; Plan 02 will remove the JAX caller paths.
+    # In-place path: writable numpy arrays avoid an O(N*M) copy
     if isinstance(X, np.ndarray) and X.flags.writeable:
         nan_mask = np.isnan(X)
         if nan_mask.any():
@@ -57,7 +62,7 @@ def impute_and_center(X: np.ndarray) -> np.ndarray:
         X -= snp_means
         return X
 
-    # Fallback copy-based path for JAX arrays (transitional, removed in Plan 02)
+    # Copy-based path for immutable arrays (e.g., JAX arrays in streaming kinship)
     X_imputed = np.where(np.isnan(X), snp_means, X)
     return X_imputed - snp_means
 

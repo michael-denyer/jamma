@@ -166,10 +166,8 @@ def _compute_kinship_inmemory(
 
     log_memory_snapshot(f"before_{label.lower().replace(' ', '_')}_{n_samples}samples")
 
-    # Use dtype check to avoid a redundant allocation when already float64.
-    # genotypes_filtered is a boolean-indexed copy from _filter_snps (inherits
-    # the input dtype). If input was float32, a single astype() avoids the
-    # intermediate float32 copy + a second float64 conversion.
+    # Skip conversion when already float64 (boolean indexing in _filter_snps
+    # preserves the input dtype, so float64 input avoids any copy here).
     if genotypes_filtered.dtype != np.float64:
         X = genotypes_filtered.astype(np.float64)
     else:
@@ -384,8 +382,7 @@ def compute_loco_kinship(
             operation=f"LOCO kinship ({n_samples:,} samples, {n_filtered:,} SNPs)",
         )
 
-    # Convert to float64 numpy array and center globally
-    # Use dtype check to avoid a second allocation when input is already float64
+    # Skip conversion when already float64 (boolean indexing preserves dtype)
     if genotypes_filtered.dtype != np.float64:
         X = genotypes_filtered.astype(np.float64)
     else:
@@ -793,8 +790,7 @@ def _stream_s_full_and_chr(
         for chr_name in target_chrs_in_chunk:
             X_chr_part = X_centered[:, chunk_chrs == chr_name]
             S_chr[chr_name] = S_chr[chr_name] + jnp.matmul(X_chr_part, X_chr_part.T)
-            # S_full.block_until_ready() above forces batch completion;
-            # S_chr syncs naturally via np.array() conversion at yield time.
+            S_chr[chr_name].block_until_ready()
 
     return S_full, S_chr
 

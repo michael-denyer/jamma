@@ -268,16 +268,23 @@ For Wald-only (`-lmm 1`), the C extension with OpenMP is fastest — REML-only o
 
 ## Architecture
 
-JAMMA uses a dual-backend architecture: a **JAX backend** for multi-core acceleration (JIT, vmap, sharding) and a **NumPy backend** that works everywhere with zero extra dependencies.
+JAMMA uses NumPy for data loading, kinship, and eigendecomposition, then splits at LMM into a **JAX backend** (JIT, vmap, sharding) or a **NumPy backend** with an optional C extension for OpenMP-parallel Wald tests.
 
 ```mermaid
-flowchart LR
+flowchart TD
     CLI["CLI / gwas()"] --> PIPE["PipelineRunner"]
-    PIPE --> DET{"detect_backend()"}
-    DET -->|"jax"| JAX["JAX Backend<br>JIT + vmap + sharding"]
-    DET -->|"numpy"| NP["NumPy Backend<br>pure stdlib"]
+    PIPE --> LOAD["Load PLINK + Phenotypes<br>(NumPy)"]
+    LOAD --> KIN["Kinship<br>(NumPy matmul)"]
+    KIN --> EIG["Eigendecomposition<br>(numpy.linalg.eigh)"]
+    EIG --> DET{"detect_backend()"}
+    DET -->|"jax"| JAX["JAX Streaming Runner<br>JIT + vmap + sharding"]
+    DET -->|"numpy"| NP["NumPy Batch Runner"]
+    NP --> CEXT{"C extension<br>available?"}
+    CEXT -->|yes| C["C Extension<br>OpenMP + SIMD"]
+    CEXT -->|no| PY["Pure Python<br>fallback"]
     JAX --> RES["AssocResult"]
-    NP --> RES
+    C --> RES
+    PY --> RES
 ```
 
 Both backends share the same core algorithms ([likelihood.py](src/jamma/lmm/likelihood.py), [prepare_common.py](src/jamma/lmm/prepare_common.py)) and produce identical results. Backend-specific files follow a naming convention: `*_jax.py` / `*_numpy.py`.

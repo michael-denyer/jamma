@@ -1,7 +1,20 @@
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-merge-conflict
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.1
     hooks:
       - id: ruff
         args: [--fix]
       - id: ruff-format
+  - repo: local
+    hooks:
+      - id: uv-lock-sync
+        name: uv.lock sync check
+        entry: scripts/check-uv-lock.sh
+        language: script
+        files: ^pyproject\.toml$
+        pass_filenames: false

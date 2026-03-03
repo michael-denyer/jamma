@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.6] - 2026-03-03
+
+### Added
+
+- Device-memory-aware JAX chunk sizing — auto-scales to GPU/TPU memory budget
+  with psutil fallback for CPU
+- Filtered reads and threaded prefetch iterator for streaming runner —
+  `snp_indices` column-selection in PLINK reader skips unneeded genotype columns
+- Multi-pass chromosome batching for NumPy LOCO kinship — streams BED in
+  multiple passes when all per-chromosome matrices don't fit in memory
+- `SnpStatsCache` — caches global SNP statistics from kinship pass, eliminating
+  redundant per-chromosome BED re-reads in the association phase
+- Valid-indices threading — propagates phenotype-valid sample indices into
+  kinship streaming so K_loco is built at n_valid × n_valid directly
+- In-place K_loco buffer reused across chromosomes (caller must eigendecompose
+  before advancing)
+- `JAMMA_LOCO_WORKERS` env var for LOCO parallel execution control
+- Imputation guard raises on >50% missing rate before centering
+- 500+ lines of new tests: chunk tuning, split-Uab modes, LOCO aliasing,
+  filtered reads, streaming edge cases, multi-pass equivalence, valid-sample
+  subsetting
+
+### Changed
+
+- Split-Uab for all LMM modes — LRT/Score/All reconstruct full Uab from split
+  SoA components with correct 9-col peak memory accounting
+- Adaptive core split (`compute_pipeline_core_split`) replaces fixed 75/25 split
+  with min-2 / fallback logic
+- BLAS controllability detection gracefully falls back when Accelerate (macOS) is
+  the BLAS backend
+- DRY refactors in plink.py and runner_numpy.py, structured error handling in
+  chunk.py
+- Documentation: quote `'jamma[jax]'` in shell contexts (zsh glob fix), remove
+  misleading GPU Support section
+
+### Fixed
+
+- K_loco aliasing bug — copy buffer before yielding to prevent all chromosomes
+  sharing a single array
+- SnpStatsCache stores `n_samples` (all-sample population denominator) —
+  prevents inflated miss_rates when n_valid < n_samples
+- `_s_full_accumulated` assert prevents S_full double-counting in LOCO
+- Strict snp_indices validation (ascending + bounds), removes tail-chunk NaN
+  padding
+
 ## [2.9.5] - 2026-03-02
 
 ### Added

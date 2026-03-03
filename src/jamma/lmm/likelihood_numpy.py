@@ -1080,6 +1080,259 @@ def golden_section_optimize_lambda_mle_numpy(
 
 
 # ---------------------------------------------------------------------------
+# Split-Uab REML path for n_cvt=1 (grid + refinement + optimizer)
+# ---------------------------------------------------------------------------
+
+
+def _batch_grid_reml_split_ncvt1_numpy(
+    lambdas_grid: np.ndarray,
+    eigenvalues: np.ndarray,
+    uab_varying_soa: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+    iab_logdet: float,
+    iab_inv_s_ww: float,
+    iab_p1_yy: float,
+    reml_const: float,
+) -> np.ndarray:
+    """Evaluate REML at grid lambda values using split-Uab for n_cvt=1.
+
+    Invariant quantities (s_ww, s_wy, s_yy and their Schur complements) are
+    computed once per grid point — O(n_grid * n_samples), not
+    O(n_grid * n_snps * n_samples).
+
+    Only the varying columns (wx, xx, xy) are contracted per-SNP.
+
+    Args:
+        lambdas_grid: Grid lambda values (n_grid,).
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        uab_varying_soa: (n_snps, 3, n_samples) — [wx, xx, xy].
+        uab_invariant_soa: (3, n_samples) — [ww, wy, yy].
+        iab_logdet: Precomputed log(iab_s_ww) for logdet_hiw.
+        iab_inv_s_ww: Precomputed 1/iab_s_ww for Iab Schur complement.
+        iab_p1_yy: Precomputed iab_s_yy - iab_s_wy^2/iab_s_ww (Iab P1_yy).
+        reml_const: Precomputed 0.5 * df * (log(df) - log(2*pi) - 1).
+
+    Returns:
+        REML log-likelihoods (n_grid, n_snps).
+    """
+    n_samples = eigenvalues.shape[0]
+    df = n_samples - 2  # n_cvt=1 -> df = n - 1 - 1
+
+    # Hi_eval_grid: (n_grid, n_samples)
+    v_temp = lambdas_grid[:, None] * eigenvalues[None, :] + 1.0
+    Hi_eval_grid = 1.0 / v_temp
+    logdet_h = np.sum(np.log(np.abs(v_temp)), axis=1)  # (n_grid,)
+
+    # --- Invariant dot products: (n_grid,) — once per grid point ---
+    s_ww_grid = Hi_eval_grid @ uab_invariant_soa[0]  # (n_grid,)
+    s_wy_grid = Hi_eval_grid @ uab_invariant_soa[1]  # (n_grid,)
+    s_yy_grid = Hi_eval_grid @ uab_invariant_soa[2]  # (n_grid,)
+
+    # Invariant Pab row 1: project out W
+    with np.errstate(divide="ignore"):
+        inv_s_ww_grid = np.where(s_ww_grid != 0, 1.0 / s_ww_grid, 0.0)
+    p1_yy_grid = s_yy_grid - s_wy_grid * s_wy_grid * inv_s_ww_grid  # (n_grid,)
+
+    # logdet_hiw invariant part: log(s_ww) - log(iab_s_ww) per grid point
+    with np.errstate(divide="ignore", invalid="ignore"):
+        logdet_pab_inv = np.where(s_ww_grid > 0, np.log(s_ww_grid), 0.0)
+    logdet_hiw_inv = logdet_pab_inv - iab_logdet  # (n_grid,)
+
+    # --- Varying dot products: (n_grid, n_snps, 3) ---
+    # Hi_eval_grid: (n_grid, n_samples), uab_varying_soa: (n_snps, 3, n_samples)
+    # Contract over n_samples -> (n_grid, n_snps, 3)
+    s_varying = np.einsum("gn,pjn->gpj", Hi_eval_grid, uab_varying_soa)
+    s_wx = s_varying[:, :, 0]  # (n_grid, n_snps)
+    s_xx = s_varying[:, :, 1]
+    s_xy = s_varying[:, :, 2]
+
+    # --- Full Pab recursion using invariant + varying ---
+    # Row 1 varying: p1_xx, p1_xy (broadcast inv_s_ww_grid)
+    p1_xx = s_xx - s_wx * s_wx * inv_s_ww_grid[:, None]
+    p1_xy = s_xy - s_wx * s_wy_grid[:, None] * inv_s_ww_grid[:, None]
+
+    # Row 2: P_yy = p1_yy - p1_xy^2 / p1_xx
+    with np.errstate(divide="ignore", invalid="ignore"):
+        inv_p1_xx = np.where(p1_xx != 0, 1.0 / p1_xx, 0.0)
+    P_yy = p1_yy_grid[:, None] - p1_xy * p1_xy * inv_p1_xx  # (n_grid, n_snps)
+    P_yy = _guard_P_yy(P_yy)
+
+    # Compute per-SNP Iab varying quantities for logdet_hiw
+    # iab_p1_xx is per-SNP (from Iab with Hi_eval=ones): computed once per grid call
+    iab_s_wx = uab_varying_soa[:, 0, :].sum(axis=1)  # (n_snps,)
+    iab_s_xx = uab_varying_soa[:, 1, :].sum(axis=1)
+    iab_p1_xx = iab_s_xx - iab_s_wx * iab_s_wx * iab_inv_s_ww  # (n_snps,)
+
+    # logdet_hiw = (log(s_ww) - log(iab_s_ww)) + (log(p1_xx) - log(iab_p1_xx))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        logdet_pab_var = np.where(p1_xx > 0, np.log(p1_xx), 0.0)  # (n_grid, n_snps)
+        logdet_iab_var = np.where(iab_p1_xx > 0, np.log(iab_p1_xx), 0.0)  # (n_snps,)
+    logdet_hiw = logdet_hiw_inv[:, None] + logdet_pab_var - logdet_iab_var[None, :]
+
+    return (
+        reml_const
+        - 0.5 * logdet_h[:, None]
+        - 0.5 * logdet_hiw
+        - 0.5 * df * np.log(P_yy)
+    )
+
+
+def _batch_reml_at_lambda_split_ncvt1_numpy(
+    lambda_vals: np.ndarray,
+    eigenvalues: np.ndarray,
+    uab_varying_soa: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+    iab_logdet: float,
+    iab_inv_s_ww: float,
+    iab_p1_xx: np.ndarray,
+    iab_logdet_var: np.ndarray,
+    reml_const: float,
+) -> np.ndarray:
+    """Evaluate REML for each SNP at its own lambda using split-Uab (n_cvt=1).
+
+    Same split logic as grid version but with per-SNP lambda values.
+
+    Args:
+        lambda_vals: Per-SNP lambda values (n_snps,).
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        uab_varying_soa: (n_snps, 3, n_samples).
+        uab_invariant_soa: (3, n_samples).
+        iab_logdet: Precomputed log(iab_s_ww).
+        iab_inv_s_ww: Precomputed 1/iab_s_ww.
+        iab_p1_xx: Precomputed per-SNP Iab p1_xx (n_snps,).
+        iab_logdet_var: Precomputed per-SNP log(iab_p1_xx) (n_snps,).
+        reml_const: Precomputed REML constant.
+
+    Returns:
+        REML log-likelihoods (n_snps,).
+    """
+    n_samples = eigenvalues.shape[0]
+    df = n_samples - 2
+
+    # Per-SNP Hi_eval: (n_snps, n_samples)
+    v_temp = lambda_vals[:, None] * eigenvalues[None, :] + 1.0
+    Hi_eval_batch = 1.0 / v_temp
+    logdet_h = np.sum(np.log(np.abs(v_temp)), axis=1)  # (n_snps,)
+
+    # Invariant dot products: (n_snps,) — per-SNP lambda, but shared invariant cols
+    s_ww = Hi_eval_batch @ uab_invariant_soa[0]  # (n_snps,)
+    s_wy = Hi_eval_batch @ uab_invariant_soa[1]
+    s_yy = Hi_eval_batch @ uab_invariant_soa[2]
+
+    # Varying dot products: einsum for per-SNP contraction
+    # Hi_eval_batch: (n_snps, n_samples), uab_varying_soa: (n_snps, 3, n_samples)
+    s_varying = np.einsum("pn,pjn->pj", Hi_eval_batch, uab_varying_soa)
+    s_wx = s_varying[:, 0]
+    s_xx = s_varying[:, 1]
+    s_xy = s_varying[:, 2]
+
+    # Pab recursion
+    with np.errstate(divide="ignore"):
+        inv_s_ww = np.where(s_ww != 0, 1.0 / s_ww, 0.0)
+    p1_xx = s_xx - s_wx * s_wx * inv_s_ww
+    p1_xy = s_xy - s_wx * s_wy * inv_s_ww
+    p1_yy = s_yy - s_wy * s_wy * inv_s_ww
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        inv_p1_xx = np.where(p1_xx != 0, 1.0 / p1_xx, 0.0)
+    P_yy = _guard_P_yy(p1_yy - p1_xy * p1_xy * inv_p1_xx)
+
+    # logdet_hiw
+    with np.errstate(divide="ignore", invalid="ignore"):
+        logdet_pab_inv = np.where(s_ww > 0, np.log(s_ww), 0.0)
+        logdet_pab_var = np.where(p1_xx > 0, np.log(p1_xx), 0.0)
+    logdet_hiw = (logdet_pab_inv - iab_logdet) + (logdet_pab_var - iab_logdet_var)
+
+    return reml_const - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
+
+
+def golden_section_optimize_lambda_split_ncvt1_numpy(
+    eigenvalues: np.ndarray,
+    uab_varying_soa: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+    iab_s_ww: float,
+    iab_s_wy: float,
+    iab_s_yy: float,
+    iab_logdet: float,
+    l_min: float = 1e-5,
+    l_max: float = 1e5,
+    n_grid: int = 50,
+    n_iter: int = 20,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Optimize REML lambda using split-Uab for n_cvt=1.
+
+    Uses invariant/varying split to reduce per-SNP computation.
+    Precomputes all Iab-derived quantities once.
+
+    Args:
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        uab_varying_soa: (n_snps, 3, n_samples).
+        uab_invariant_soa: (3, n_samples).
+        iab_s_ww: Precomputed Iab s_ww scalar.
+        iab_s_wy: Precomputed Iab s_wy scalar.
+        iab_s_yy: Precomputed Iab s_yy scalar.
+        iab_logdet: Precomputed log(iab_s_ww).
+        l_min: Minimum lambda.
+        l_max: Maximum lambda.
+        n_grid: Coarse grid points.
+        n_iter: Golden section iterations.
+
+    Returns:
+        (optimal_lambdas, optimal_logls) both shape (n_snps,).
+    """
+    n_samples = eigenvalues.shape[0]
+    df = n_samples - 2
+    reml_const = _compute_reml_const(df)
+
+    # Precompute Iab quantities
+    iab_inv_s_ww = 1.0 / iab_s_ww if iab_s_ww != 0 else 0.0
+    iab_p1_yy = iab_s_yy - iab_s_wy * iab_s_wy * iab_inv_s_ww
+
+    # Per-SNP Iab varying quantities (constant across lambda)
+    iab_s_wx = uab_varying_soa[:, 0, :].sum(axis=1)  # (n_snps,)
+    iab_s_xx = uab_varying_soa[:, 1, :].sum(axis=1)
+    iab_p1_xx = iab_s_xx - iab_s_wx * iab_s_wx * iab_inv_s_ww
+    with np.errstate(divide="ignore", invalid="ignore"):
+        iab_logdet_var = np.where(iab_p1_xx > 0, np.log(iab_p1_xx), 0.0)
+
+    log_l_min = np.log(l_min)
+    log_l_max = np.log(l_max)
+    log_lambdas = np.linspace(log_l_min, log_l_max, n_grid)
+    lambdas_grid = np.exp(log_lambdas)
+
+    # Grid search
+    grid_logls = _batch_grid_reml_split_ncvt1_numpy(
+        lambdas_grid,
+        eigenvalues,
+        uab_varying_soa,
+        uab_invariant_soa,
+        iab_logdet,
+        iab_inv_s_ww,
+        iab_p1_yy,
+        reml_const,
+    )
+
+    # Refinement closure
+    def compute_reml_split(log_lams: np.ndarray) -> np.ndarray:
+        lams = np.exp(log_lams)
+        return _batch_reml_at_lambda_split_ncvt1_numpy(
+            lams,
+            eigenvalues,
+            uab_varying_soa,
+            uab_invariant_soa,
+            iab_logdet,
+            iab_inv_s_ww,
+            iab_p1_xx,
+            iab_logdet_var,
+            reml_const,
+        )
+
+    return _batch_golden_section_numpy(
+        compute_reml_split, grid_logls, log_lambdas, n_iter
+    )
+
+
+# ---------------------------------------------------------------------------
 # Shared helpers for batch test statistics
 # ---------------------------------------------------------------------------
 

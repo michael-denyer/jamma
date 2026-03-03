@@ -223,14 +223,14 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 
 ## Performance
 
-Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2, GEMMA 0.98.5.
+Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2 (AC power), GEMMA 0.98.5.
 Best of multiple runs, end-to-end wall clock:
 
 | Operation | GEMMA 0.98.5 | JAMMA NumPy+C | JAMMA JAX (batch) | JAMMA JAX (streaming) | vs GEMMA |
 |-----------|-------------|--------------|-------------------|----------------------|----------|
-| Kinship (`-gk 1`) | 3.8s | 412ms | 404ms | — | **9.4x** |
-| LMM Wald (`-lmm 1`) | 19.5s | 1.8s | 4.1s | 5.4s | **10.8x** |
-| LMM All (`-lmm 4`) | 36.3s | 7.8s | 6.7s | 8.9s | **5.4x** |
+| Kinship (`-gk 1`) | 2.1s | 262ms | 262ms | — | **7.9x** |
+| LMM Wald (`-lmm 1`) | 11.1s | 1.0s | 2.2s | 2.8s | **10.6x** |
+| LMM All (`-lmm 4`) | 20.6s | 5.1s | 2.8s | 4.3s | **7.3x** |
 
 **NumPy+C** uses a C extension with OpenMP for Wald-only (`-lmm 1`) — REML optimization is compute-bound and parallelizes well across SNPs. **JAX (batch)** pulls ahead on all-tests (`-lmm 4`) because the additional MLE optimization per SNP benefits from `jax.vmap` batching. **JAX (streaming)** reads genotypes from disk in chunks and is the production code path for large datasets that don't fit in memory.
 

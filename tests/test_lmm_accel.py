@@ -90,20 +90,37 @@ def test_c_vs_python_parity_synthetic(synthetic_wald_data, monkeypatch):
         n_threads=1,
     )
 
-    # --- Python path: temporarily disable C extension ---
-    monkeypatch.setattr(compute_numpy, "_C_ACCEL_AVAILABLE", False)
-    result_py = _compute_wald_numpy(
+    # --- Python path: use generic golden section (same algorithm as C extension).
+    # When _C_ACCEL_AVAILABLE is False, _compute_wald_numpy dispatches n_cvt=1
+    # to the split-Uab optimizer (Phase 53), which uses different FP accumulation
+    # than the C extension's generic golden section. To compare like-for-like,
+    # call the generic optimizer directly.
+    from jamma.lmm.likelihood_numpy import (
+        batch_calc_wald_stats_from_pab_numpy,
+        golden_section_optimize_lambda_numpy,
+    )
+
+    lambdas_py, logls_py, Pab_py = golden_section_optimize_lambda_numpy(
         n_cvt,
         eigenvalues,
         Uab_batch,
-        n_samples,
-        l_min,
-        l_max,
-        n_grid,
-        n_refine,
-        Iab_batch=Iab_batch,
-        n_threads=1,
+        Iab_batch,
+        l_min=l_min,
+        l_max=l_max,
+        n_grid=n_grid,
+        n_iter=n_refine,
+        return_pab=True,
     )
+    betas_py, ses_py, pwalds_py = batch_calc_wald_stats_from_pab_numpy(
+        n_cvt, Pab_py, n_samples
+    )
+    result_py = {
+        "lambdas": lambdas_py,
+        "logls": logls_py,
+        "betas": betas_py,
+        "ses": ses_py,
+        "pwalds": pwalds_py,
+    }
 
     # All outputs must agree within calibrated tolerances.
     # NaN entries (degenerate SNPs) are excluded from comparison via equal_nan=True.

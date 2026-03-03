@@ -804,7 +804,7 @@ def compare_assoc_results(
         actual_plrt = np.array([r.p_lrt for r in actual])
         expected_plrt = np.array([r.p_lrt for r in expected])
         p_lrt_result = compare_arrays(
-            actual_plrt, expected_plrt, config.pvalue_rtol, config.atol, "p_lrt"
+            actual_plrt, expected_plrt, config.p_lrt_rtol, config.atol, "p_lrt"
         )
 
         actual_lmle = np.array(

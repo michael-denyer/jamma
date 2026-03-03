@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.1] - 2026-03-03
+
+### Fixed
+
+- Golden section optimizer returned inconsistent (lambda, logl) pair — lambda
+  at midpoint `(a+b)/2` but logl as `max(fc, fd)` from different points c and d.
+  Now evaluates logl at the midpoint, matching the JAX path. This eliminates
+  cross-backend p_lrt divergence (4.5e-4 → 1.05e-10 on gemma_synthetic)
+- `compare_assoc_results` LRT mode used `pvalue_rtol` (1e-4) instead of
+  `p_lrt_rtol` (5e-3) for p_lrt comparison
+- C vs Python parity test compared C extension (generic golden section) against
+  Python split-Uab optimizer — now calls generic optimizer directly
+- `check_memory_before_run` passed defaults to `_compute_chunk_size` instead of
+  `n_samples` and `pipeline_buffers=2`, causing overestimated memory
+- `_compute_chunk_size_numpy` lacked `pipeline_buffers` type/range validation
+- Exposed rotation time metric could exceed total rotation time due to
+  GC/scheduling jitter — now capped at `rot_dur`
+
+### Added
+
+- MemoryError passthrough tests for both JAX batch and streaming runners
+- `pipeline_buffers` TypeError tests (float/str/None) for all chunk sizers
+  and memory estimators
+
 ## [2.10.0] - 2026-03-03
 
 ### Added

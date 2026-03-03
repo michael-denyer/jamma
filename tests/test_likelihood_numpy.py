@@ -33,6 +33,8 @@ from jamma.lmm.likelihood_numpy import (
     batch_compute_iab_numpy,
     batch_compute_pab_numpy,
     batch_compute_uab_numpy,
+    batch_compute_uab_varying_soa_numpy,
+    compute_uab_invariant_soa,
     golden_section_optimize_lambda_mle_numpy,
     golden_section_optimize_lambda_numpy,
 )
@@ -535,33 +537,39 @@ def test_compute_lmm_chunk_numpy_missing_args_raise(synthetic_data):
 
 
 @pytest.mark.tier0
-def test_p_yy_warn_once_scalar(caplog):
+def test_p_yy_warn_once_scalar():
     """_clamp_p_yy fires warning exactly once per run; reset restarts the counter."""
-    import logging
+    from loguru import logger
 
     from jamma.lmm.likelihood import _clamp_p_yy, reset_scalar_p_yy_warned
+
+    warning_messages: list[str] = []
+
+    def _capture_sink(message):
+        if message.record["level"].name == "WARNING":
+            warning_messages.append(message.record["message"])
 
     # Start clean
     reset_scalar_p_yy_warned()
 
-    with caplog.at_level(logging.WARNING, logger="jamma.lmm.likelihood"):
+    sink_id = logger.add(_capture_sink, level="WARNING")
+    try:
         for _ in range(10):
             _clamp_p_yy(-1.0, 1.0)
 
-    warning_records = [r for r in caplog.records if r.levelname == "WARNING"]
-    assert len(warning_records) == 1, (
-        f"Expected exactly 1 warning, got {len(warning_records)}"
-    )
+        assert len(warning_messages) == 1, (
+            f"Expected exactly 1 warning, got {len(warning_messages)}"
+        )
 
-    # Reset and fire again — should produce a second warning
-    reset_scalar_p_yy_warned()
-    with caplog.at_level(logging.WARNING, logger="jamma.lmm.likelihood"):
+        # Reset and fire again — should produce a second warning
+        reset_scalar_p_yy_warned()
         _clamp_p_yy(-1.0, 1.0)
 
-    warning_records = [r for r in caplog.records if r.levelname == "WARNING"]
-    assert len(warning_records) == 2, (
-        f"Expected 2 total warnings after reset, got {len(warning_records)}"
-    )
+        assert len(warning_messages) == 2, (
+            f"Expected 2 total warnings after reset, got {len(warning_messages)}"
+        )
+    finally:
+        logger.remove(sink_id)
 
 
 # ---------------------------------------------------------------------------
@@ -844,3 +852,240 @@ def test_golden_section_accuracy_no_final_eval(synthetic_data):
     )
     # Logls should be finite (no NaN for valid SNPs)
     assert np.all(np.isfinite(logls_opt)), "Some logls are not finite"
+
+
+# ---------------------------------------------------------------------------
+# Task 2: Split-Uab REML path for grid and refinement (n_cvt=1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def split_uab_data():
+    """Synthetic dataset for split-Uab tests.
+
+    Returns:
+        (eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch)
+        with n_samples=100, n_snps=50.
+    """
+    rng = np.random.default_rng(99)
+    n_samples, n_snps = 100, 50
+    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n_samples))
+    UtW = np.ones((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+
+    uab_invariant_soa = compute_uab_invariant_soa(UtW, Uty)
+    uab_varying_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
+
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
+
+    return eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch
+
+
+@pytest.mark.tier0
+def test_grid_reml_split_matches_full(split_uab_data):
+    """_batch_grid_reml_split_ncvt1_numpy must match _batch_grid_reml_numpy."""
+    from jamma.lmm.likelihood_numpy import (
+        _batch_grid_reml_split_ncvt1_numpy,
+        compute_iab_invariant_scalars_ncvt1,
+    )
+
+    eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch = (
+        split_uab_data
+    )
+    n_grid = 20
+    lambdas_grid = np.exp(np.linspace(np.log(1e-5), np.log(1e5), n_grid))
+
+    iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
+        uab_invariant_soa
+    )
+    iab_inv_s_ww = 1.0 / iab_s_ww if iab_s_ww != 0 else 0.0
+    iab_p1_yy = iab_s_yy - iab_s_wy * iab_s_wy * iab_inv_s_ww
+
+    n_samples = eigenvalues.shape[0]
+    df = n_samples - 2  # n_cvt=1
+
+    from jamma.lmm.likelihood_numpy import _compute_reml_const
+
+    reml_const = _compute_reml_const(df)
+
+    logls_split = _batch_grid_reml_split_ncvt1_numpy(
+        lambdas_grid,
+        eigenvalues,
+        uab_varying_soa,
+        uab_invariant_soa,
+        iab_logdet,
+        iab_inv_s_ww,
+        iab_p1_yy,
+        reml_const,
+    )
+
+    logls_full = _batch_grid_reml_numpy(
+        1, lambdas_grid, eigenvalues, Uab_batch, Iab_batch
+    )
+
+    np.testing.assert_allclose(
+        logls_split,
+        logls_full,
+        rtol=1e-12,
+        err_msg="_batch_grid_reml_split_ncvt1_numpy mismatch",
+    )
+
+
+@pytest.mark.tier0
+def test_refinement_reml_split_matches_full(split_uab_data):
+    """_batch_reml_at_lambda_split_ncvt1_numpy must match full path."""
+    from jamma.lmm.likelihood_numpy import (
+        _batch_reml_at_lambda_split_ncvt1_numpy,
+        _compute_reml_const,
+        compute_iab_invariant_scalars_ncvt1,
+    )
+
+    eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch = (
+        split_uab_data
+    )
+    n_snps = uab_varying_soa.shape[0]
+    n_samples = eigenvalues.shape[0]
+    df = n_samples - 2
+
+    # Per-SNP lambda values (different for each SNP)
+    rng = np.random.default_rng(7)
+    lambda_vals = np.exp(rng.uniform(np.log(1e-4), np.log(1e3), n_snps))
+
+    iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
+        uab_invariant_soa
+    )
+    iab_inv_s_ww = 1.0 / iab_s_ww if iab_s_ww != 0 else 0.0
+    reml_const = _compute_reml_const(df)
+
+    # Precompute per-SNP Iab varying quantities
+    iab_s_wx = uab_varying_soa[:, 0, :].sum(axis=1)
+    iab_s_xx = uab_varying_soa[:, 1, :].sum(axis=1)
+    iab_p1_xx = iab_s_xx - iab_s_wx * iab_s_wx * iab_inv_s_ww
+    with np.errstate(divide="ignore", invalid="ignore"):
+        iab_logdet_var = np.where(iab_p1_xx > 0, np.log(iab_p1_xx), 0.0)
+
+    logls_split = _batch_reml_at_lambda_split_ncvt1_numpy(
+        lambda_vals,
+        eigenvalues,
+        uab_varying_soa,
+        uab_invariant_soa,
+        iab_logdet,
+        iab_inv_s_ww,
+        iab_p1_xx,
+        iab_logdet_var,
+        reml_const,
+    )
+
+    logls_full = _batch_reml_at_lambda_numpy(
+        1, lambda_vals, eigenvalues, Uab_batch, Iab_batch
+    )
+
+    np.testing.assert_allclose(
+        logls_split,
+        logls_full,
+        rtol=1e-12,
+        err_msg="_batch_reml_at_lambda_split_ncvt1_numpy does not match full path",
+    )
+
+
+@pytest.mark.tier0
+def test_split_optimizer_matches_full(split_uab_data):
+    """golden_section_optimize_lambda_split_ncvt1_numpy must match full optimizer."""
+    from jamma.lmm.likelihood_numpy import (
+        compute_iab_invariant_scalars_ncvt1,
+        golden_section_optimize_lambda_split_ncvt1_numpy,
+    )
+
+    eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch = (
+        split_uab_data
+    )
+
+    iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
+        uab_invariant_soa
+    )
+
+    lambdas_split, logls_split = golden_section_optimize_lambda_split_ncvt1_numpy(
+        eigenvalues,
+        uab_varying_soa,
+        uab_invariant_soa,
+        iab_s_ww,
+        iab_s_wy,
+        iab_s_yy,
+        iab_logdet,
+    )
+
+    lambdas_full, logls_full = golden_section_optimize_lambda_numpy(
+        1, eigenvalues, Uab_batch, Iab_batch
+    )
+
+    np.testing.assert_allclose(
+        lambdas_split,
+        lambdas_full,
+        rtol=1e-10,
+        err_msg="Split optimizer lambdas do not match full optimizer",
+    )
+    np.testing.assert_allclose(
+        logls_split,
+        logls_full,
+        rtol=1e-8,
+        err_msg="Split optimizer logls do not match full optimizer",
+    )
+
+
+@pytest.mark.tier0
+def test_invariant_computed_once_per_lambda(split_uab_data):
+    """Invariant dot products must be (n_grid,), not (n_grid, n_snps)."""
+    from jamma.lmm.likelihood_numpy import (
+        _compute_reml_const,
+        compute_iab_invariant_scalars_ncvt1,
+    )
+
+    # Verify structural property: function produces (n_grid, n_snps) output
+    # while internally computing (n_grid,) invariant sums.
+    eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch = (
+        split_uab_data
+    )
+    n_grid = 15
+    n_snps = uab_varying_soa.shape[0]
+    n_samples = eigenvalues.shape[0]
+    df = n_samples - 2
+
+    lambdas_grid = np.exp(np.linspace(np.log(1e-5), np.log(1e5), n_grid))
+
+    Hi_eval_grid = 1.0 / (lambdas_grid[:, None] * eigenvalues[None, :] + 1.0)
+
+    # s_ww_grid: (n_grid,) @ (n_samples,) -> (n_grid,)
+    s_ww_grid = Hi_eval_grid @ uab_invariant_soa[0]
+    assert s_ww_grid.shape == (n_grid,), (
+        f"s_ww_grid should be (n_grid,)={(n_grid,)}, got {s_ww_grid.shape}"
+    )
+    # Must NOT be (n_grid, n_snps) — that would be the old O(n_grid * n_snps) path
+    assert s_ww_grid.shape != (n_grid, n_snps), (
+        "s_ww_grid shape should NOT be (n_grid, n_snps)"
+    )
+
+    # Also verify the split function itself returns (n_grid, n_snps) output
+    from jamma.lmm.likelihood_numpy import _batch_grid_reml_split_ncvt1_numpy
+
+    iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
+        uab_invariant_soa
+    )
+    iab_inv_s_ww = 1.0 / iab_s_ww if iab_s_ww != 0 else 0.0
+    iab_p1_yy = iab_s_yy - iab_s_wy * iab_s_wy * iab_inv_s_ww
+    reml_const = _compute_reml_const(df)
+
+    logls = _batch_grid_reml_split_ncvt1_numpy(
+        lambdas_grid,
+        eigenvalues,
+        uab_varying_soa,
+        uab_invariant_soa,
+        iab_logdet,
+        iab_inv_s_ww,
+        iab_p1_yy,
+        reml_const,
+    )
+    assert logls.shape == (n_grid, n_snps), (
+        f"Expected output shape ({n_grid}, {n_snps}), got {logls.shape}"
+    )

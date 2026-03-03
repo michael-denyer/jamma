@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-03-03
+
+### Added
+
+- Rotation-compute overlap pipelining — both JAX batch and streaming runners
+  overlap BLAS rotation (U.T @ G) with XLA compute using a `ThreadPoolExecutor`
+  background thread, achieving ~15% wall-time reduction on mouse_hs1940
+- `pipeline_buffers` parameter for `_compute_chunk_size` and streaming memory
+  estimators to account for double-buffered UtG arrays during overlap
+- Input validation for `pipeline_buffers` (type check, >= 1 guard)
+- `MemoryError` passthrough in both runners to avoid wrapping OOM as RuntimeError
+- Background rotation failure propagation tests with exception chaining
+- Multi-file-chunk `prev_compute_end` handoff test for streaming runner
+- Rotation overlap effectiveness tests (timing invariants)
+
+### Fixed
+
+- Streaming runner `ThreadPoolExecutor` scope hoisted to span BED file-chunk
+  boundaries, fixing `prev_compute_end` timing handoff across chunks
+- Memory estimators in `check_memory_before_run` and streaming runner now pass
+  `pipeline_buffers=2` for accurate double-buffer accounting
+
 ## [2.9.6] - 2026-03-03
 
 ### Added

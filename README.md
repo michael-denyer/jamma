@@ -17,7 +17,7 @@
 
 - **GEMMA-compatible**: Drop-in replacement with identical CLI flags and output formats
 - **Numerical equivalence**: Validated against GEMMA — 100% significance agreement, 100% effect direction agreement
-- **Fast**: Up to 10x faster than GEMMA 0.98.5 at scale
+- **Fast**: Up to 11x faster than GEMMA 0.98.5 at scale
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
 - **Cross-platform**: Runs on Linux, macOS, and Windows — NumPy backend works everywhere, JAX adds batch acceleration on Linux and ARM Mac
 - **Pure Python + optional C extension**: NumPy + optional JAX stack; C extension with OpenMP for fast Wald tests, JAX for batch MLE optimization
@@ -228,8 +228,8 @@ Best of multiple runs, end-to-end wall clock:
 
 | Operation | GEMMA 0.98.5 | JAMMA NumPy+C | JAMMA JAX (batch) | JAMMA JAX (streaming) | vs GEMMA |
 |-----------|-------------|--------------|-------------------|----------------------|----------|
-| Kinship (`-gk 1`) | 2.1s | 262ms | 262ms | — | **7.9x** |
-| LMM Wald (`-lmm 1`) | 11.1s | 1.0s | 2.2s | 2.8s | **10.6x** |
+| Kinship (`-gk 1`) | 2.1s | 259ms | 259ms | — | **8.1x** |
+| LMM Wald (`-lmm 1`) | 11.1s | 1.0s | 2.0s | 2.7s | **11.1x** |
 | LMM All (`-lmm 4`) | 20.6s | 5.1s | 2.8s | 4.3s | **7.3x** |
 
 **NumPy+C** uses a C extension with OpenMP for Wald-only (`-lmm 1`) — REML optimization is compute-bound and parallelizes well across SNPs. **JAX (batch)** pulls ahead on all-tests (`-lmm 4`) because the additional MLE optimization per SNP benefits from `jax.vmap` batching. **JAX (streaming)** reads genotypes from disk in chunks and is the production code path for large datasets that don't fit in memory.

@@ -275,3 +275,123 @@ def test_get_device_budget_bytes_cpu_returns_none():
     result = _get_device_budget_bytes()
     # On CPU, returns None; on GPU, returns an int — both are valid
     assert result is None or isinstance(result, int)
+
+
+@pytest.mark.tier0
+class TestComputeChunkSizePipelineBuffers:
+    """Tests for _compute_chunk_size pipeline_buffers parameter."""
+
+    def test_pipeline_buffers_halves_budget(self):
+        """pipeline_buffers=2 produces at most 60% of pipeline_buffers=1 chunk size.
+
+        This verifies the double-buffer memory accounting is working: when two
+        live UtG arrays are needed (current + next), the effective budget halves,
+        resulting in a smaller chunk size.
+
+        Uses n_samples=10_000 to keep memory-based sizing above the min clamp
+        even with a halved budget, while staying below MAX_SAFE_CHUNK.
+        If both hit the min clamp (extreme memory pressure), the test is skipped.
+        """
+        chunk_1 = _compute_chunk_size(
+            n_snps=50_000, n_devices=1, n_samples=10_000, pipeline_buffers=1
+        )
+        chunk_2 = _compute_chunk_size(
+            n_snps=50_000, n_devices=1, n_samples=10_000, pipeline_buffers=2
+        )
+        # Both must be positive
+        assert chunk_1 >= 1
+        assert chunk_2 >= 1
+
+        # If both hit the min clamp, memory pressure is extreme — skip halving check
+        min_clamp = 1000
+        if chunk_1 == min_clamp and chunk_2 == min_clamp:
+            pytest.skip(
+                "Both chunks at min clamp — memory too constrained to verify halving"
+            )
+
+        # pipeline_buffers=2 should yield a meaningfully smaller chunk
+        assert chunk_2 <= chunk_1 * 0.6, (
+            f"Expected pipeline_buffers=2 chunk ({chunk_2}) to be at most 60% "
+            f"of pipeline_buffers=1 chunk ({chunk_1})"
+        )
+
+    def test_pipeline_buffers_default_matches_explicit_one(self):
+        """Omitting pipeline_buffers gives the same result as pipeline_buffers=1."""
+        chunk_default = _compute_chunk_size(n_snps=50_000, n_devices=1, n_samples=1000)
+        chunk_explicit = _compute_chunk_size(
+            n_snps=50_000, n_devices=1, n_samples=1000, pipeline_buffers=1
+        )
+        assert chunk_default == chunk_explicit
+
+    def test_pipeline_buffers_small_snps_never_zero(self):
+        """pipeline_buffers=2 with tiny n_snps must return at least 1."""
+        result = _compute_chunk_size(
+            n_snps=100, n_devices=1, n_samples=1000, pipeline_buffers=2
+        )
+        assert result >= 1
+
+    @pytest.mark.parametrize("bad_value", [0, -1, -10])
+    def test_pipeline_buffers_invalid_raises(self, bad_value):
+        """pipeline_buffers < 1 raises ValueError."""
+        with pytest.raises(ValueError, match="pipeline_buffers must be >= 1"):
+            _compute_chunk_size(
+                n_snps=50_000, n_devices=1, n_samples=1000, pipeline_buffers=bad_value
+            )
+
+
+@pytest.mark.tier0
+class TestStreamingMemoryPipelineBuffers:
+    """Tests for pipeline_buffers parameter in streaming memory estimators."""
+
+    def test_streaming_memory_double_buffer_rotation_doubles(self):
+        """rotation_buffer_gb doubles when pipeline_buffers=2."""
+        from jamma.core.memory import estimate_streaming_memory
+
+        est_1 = estimate_streaming_memory(1000, pipeline_buffers=1)
+        est_2 = estimate_streaming_memory(1000, pipeline_buffers=2)
+        assert est_2.rotation_buffer_gb == pytest.approx(
+            2 * est_1.rotation_buffer_gb, rel=1e-10
+        )
+        assert est_2.total_peak_gb > est_1.total_peak_gb
+
+    def test_lmm_streaming_memory_double_buffer(self):
+        """estimate_lmm_streaming_memory(pipeline_buffers=2).total_peak_gb is higher."""
+        from jamma.core.memory import estimate_lmm_streaming_memory
+
+        est_1 = estimate_lmm_streaming_memory(1000, n_snps=10000, pipeline_buffers=1)
+        est_2 = estimate_lmm_streaming_memory(1000, n_snps=10000, pipeline_buffers=2)
+        assert est_2.rotation_buffer_gb == pytest.approx(
+            2 * est_1.rotation_buffer_gb, rel=1e-10
+        )
+        assert est_2.total_peak_gb > est_1.total_peak_gb
+
+    def test_streaming_memory_default_matches_single_buffer(self):
+        """Omitting pipeline_buffers gives the same total_peak_gb as pipeline_buffers=1.
+
+        Backward compatibility: default call must equal explicit pipeline_buffers=1.
+        """
+        from jamma.core.memory import estimate_streaming_memory
+
+        est_default = estimate_streaming_memory(1000)
+        est_explicit = estimate_streaming_memory(1000, pipeline_buffers=1)
+        assert est_default.total_peak_gb == pytest.approx(
+            est_explicit.total_peak_gb, rel=1e-10
+        )
+
+    @pytest.mark.parametrize("bad_value", [0, -1, -10])
+    def test_streaming_memory_pipeline_buffers_invalid_raises(self, bad_value):
+        """pipeline_buffers < 1 raises ValueError in memory estimators."""
+        from jamma.core.memory import estimate_streaming_memory
+
+        with pytest.raises(ValueError, match="pipeline_buffers must be >= 1"):
+            estimate_streaming_memory(1000, pipeline_buffers=bad_value)
+
+    @pytest.mark.parametrize("bad_value", [0, -1, -10])
+    def test_lmm_streaming_memory_pipeline_buffers_invalid_raises(self, bad_value):
+        """pipeline_buffers < 1 raises ValueError in LMM memory estimator."""
+        from jamma.core.memory import estimate_lmm_streaming_memory
+
+        with pytest.raises(ValueError, match="pipeline_buffers must be >= 1"):
+            estimate_lmm_streaming_memory(
+                1000, n_snps=10000, pipeline_buffers=bad_value
+            )

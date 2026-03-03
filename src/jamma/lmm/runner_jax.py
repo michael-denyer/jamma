@@ -6,6 +6,7 @@ Input genotypes must fit in memory; for disk streaming use runner_streaming.py.
 
 import gc
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import jax
 import numpy as np
@@ -239,7 +240,7 @@ def run_lmm_association_jax(
 
     n_filtered = len(snp_indices)
     chunk_size = _compute_chunk_size(
-        n_filtered, placement.n_devices, n_samples=n_samples
+        n_filtered, placement.n_devices, n_samples=n_samples, pipeline_buffers=2
     )
 
     logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
@@ -300,6 +301,16 @@ def run_lmm_association_jax(
         del missing
         return prepare_utg_chunk(geno_chunk, U, placement, rotation_threads)
 
+    def _impute_and_prepare_timed(start: int) -> tuple[np.ndarray, int, float]:
+        """_impute_and_prepare with internal duration measurement for background thread.
+
+        Duration is measured inside because the caller on the main thread cannot
+        observe start/end timestamps of work running on the background thread.
+        """
+        t0 = time.perf_counter()
+        UtG_np, actual_len = _impute_and_prepare(start)
+        return UtG_np, actual_len, time.perf_counter() - t0
+
     chunk_starts = list(range(0, n_filtered, chunk_size))
 
     # prev_compute_end tracks the perf_counter timestamp of the last JAX compute
@@ -326,68 +337,95 @@ def run_lmm_association_jax(
     else:
         chunk_iterator = enumerate(chunk_starts)
 
-    for i, _chunk_start in chunk_iterator:
-        actual_chunk_len = actual_len
-        current_UtG = UtG_jax
+    # Rotation-compute pipeline: while JAX processes chunk N on XLA, a
+    # background thread runs BLAS DGEMM (U.T @ G) for chunk N+1. DGEMM
+    # releases the GIL, so both run truly concurrently. max_workers=1
+    # ensures at most one prefetch is in flight (double-buffering, not
+    # unbounded prefetch). Memory budget is halved via pipeline_buffers=2
+    # to account for two live UtG arrays.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        for i, _chunk_start in chunk_iterator:
+            actual_chunk_len = actual_len
+            current_UtG = UtG_jax
 
-        # Async transfer of next chunk overlaps with current compute
-        if i + 1 < len(chunk_starts):
-            t_rot_start = time.perf_counter()
-            next_UtG_np, actual_len = _impute_and_prepare(chunk_starts[i + 1])
-            t_rot_end = time.perf_counter()
-            rot_dur = t_rot_end - t_rot_start
-            t_rotation_total += rot_dur
-            t_rotation_exposed_total += exposed_rotation_time(
-                rot_dur, t_rot_end, prev_compute_end
-            )
-            UtG_jax = jax.device_put(next_UtG_np, placement.snp)
-            del next_UtG_np
+            # Submit next rotation to BACKGROUND THREAD.
+            # BLAS DGEMM (U.T @ G) releases the GIL and runs concurrently
+            # with JAX compute dispatched below.
+            future = None
+            if i + 1 < len(chunk_starts):
+                future = executor.submit(_impute_and_prepare_timed, chunk_starts[i + 1])
 
-        # --- JAX compute timing ---
-        t_jax_start = time.perf_counter()
-        try:
-            # Batch compute Uab for this chunk (shared across all modes)
-            Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
+            # --- JAX compute timing ---
+            t_jax_start = time.perf_counter()
+            try:
+                # Batch compute Uab for this chunk (shared across all modes)
+                Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
 
-            cr = _compute_lmm_chunk(
-                lmm_mode,
-                n_cvt,
-                eigenvalues,
-                Uab_batch,
-                n_samples,
-                l_min=l_min,
-                l_max=l_max,
-                n_grid=n_grid,
-                n_refine=n_refine,
-                Hi_eval_null=Hi_eval_null_jax,
-                logl_H0=logl_H0,
-            )
-            # Explicit sync before timing result write (np.asarray below also syncs,
-            # but this isolates JAX compute time accurately)
-            block_chunk_result(cr, lmm_mode)
+                cr = _compute_lmm_chunk(
+                    lmm_mode,
+                    n_cvt,
+                    eigenvalues,
+                    Uab_batch,
+                    n_samples,
+                    l_min=l_min,
+                    l_max=l_max,
+                    n_grid=n_grid,
+                    n_refine=n_refine,
+                    Hi_eval_null=Hi_eval_null_jax,
+                    logl_H0=logl_H0,
+                )
+                # Explicit sync before timing result write (np.asarray below also
+                # syncs, but this isolates JAX compute time accurately)
+                block_chunk_result(cr, lmm_mode)
 
-        except Exception as e:
-            log_jax_error(
-                e,
-                chunk_label=f"{i + 1}/{n_chunks}",
-                chunk_snps=chunk_size,
-                n_samples=n_samples,
-                n_cvt=n_cvt,
-            )
-            raise
+            except Exception as e:
+                # Best-effort cancel: only succeeds if rotation hasn't started.
+                # If already running, executor.__exit__ will wait for completion.
+                if future is not None:
+                    future.cancel()
+                log_jax_error(
+                    e,
+                    chunk_label=f"{i + 1}/{n_chunks}",
+                    chunk_snps=chunk_size,
+                    n_samples=n_samples,
+                    n_cvt=n_cvt,
+                )
+                raise
 
-        t_jax_end = time.perf_counter()
-        t_jax_compute_total += t_jax_end - t_jax_start
-        prev_compute_end = t_jax_end
+            t_jax_end = time.perf_counter()
+            t_jax_compute_total += t_jax_end - t_jax_start
+            prev_compute_end = t_jax_end
 
-        # Write results, stripping padding from tail/device-alignment
-        t_write_start = time.perf_counter()
-        s = slice(write_offset, write_offset + actual_chunk_len)
-        for key in arrays_out:
-            arrays_out[key][s] = np.asarray(cr[key][:actual_chunk_len])
-        write_offset += actual_chunk_len
-        t_write_end = time.perf_counter()
-        t_result_write_total += t_write_end - t_write_start
+            # Collect background rotation result (may be ready by now).
+            # future.result() blocks only for the remaining time after JAX sync.
+            if future is not None:
+                try:
+                    UtG_np, actual_len, rot_dur = future.result()
+                except MemoryError:
+                    raise  # Let MemoryError propagate directly for OOM handling
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Background rotation failed for chunk starting at "
+                        f"index {chunk_starts[i + 1]}. "
+                        f"Processed {write_offset + actual_chunk_len} SNPs "
+                        f"before failure."
+                    ) from exc
+                t_rot_end = time.perf_counter()
+                t_rotation_total += rot_dur
+                # Exposed = time main thread waited for future AFTER JAX sync.
+                # Near zero when JAX compute takes longer than rotation.
+                t_rotation_exposed_total += max(0.0, t_rot_end - t_jax_end)
+                UtG_jax = jax.device_put(UtG_np, placement.snp)
+                del UtG_np  # Safe: JAX holds internal ref during async transfer
+
+            # Write results, stripping padding from tail/device-alignment
+            t_write_start = time.perf_counter()
+            s = slice(write_offset, write_offset + actual_chunk_len)
+            for key in arrays_out:
+                arrays_out[key][s] = np.asarray(cr[key][:actual_chunk_len])
+            write_offset += actual_chunk_len
+            t_write_end = time.perf_counter()
+            t_result_write_total += t_write_end - t_write_start
 
     # Validate all results were written
     if write_offset != n_filtered:

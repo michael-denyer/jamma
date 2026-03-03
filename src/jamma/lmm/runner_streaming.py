@@ -7,6 +7,7 @@ Never allocates the full genotype matrix.
 import contextlib
 import gc
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import jax
@@ -189,7 +190,9 @@ def run_lmm_association_streaming(
     n_samples = phenotypes.shape[0]
 
     # Always log memory estimate (useful even without hard check)
-    est = estimate_lmm_streaming_memory(n_samples, n_snps, chunk_size=chunk_size)
+    est = estimate_lmm_streaming_memory(
+        n_samples, n_snps, chunk_size=chunk_size, pipeline_buffers=2
+    )
     logger.info(
         f"LMM streaming memory: estimated peak {est.total_peak_gb:.1f}GB, "
         f"available {est.available_gb:.1f}GB"
@@ -361,7 +364,7 @@ def run_lmm_association_streaming(
             Uty = U.T @ phenotypes
 
         jax_chunk_size = _compute_chunk_size(
-            n_filtered, placement.n_devices, n_samples=n_samples
+            n_filtered, placement.n_devices, n_samples=n_samples, pipeline_buffers=2
         )
 
         logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
@@ -432,142 +435,190 @@ def run_lmm_association_streaming(
             geno_slice = geno[:, start : min(start + jax_chunk_size, total)]
             return prepare_utg_chunk(geno_slice, U, placement, rotation_threads)
 
-        for chunk, filt_start, filt_end in assoc_iterator:
-            # With filtered reads: chunk is already (n_samples, n_filtered_in_chunk)
-            # filt_start/filt_end are indices into snp_indices
-            if needs_sample_filter:
-                chunk = chunk[valid_mask, :]
+        def _prepare_jax_chunk_timed(
+            start: int, geno: np.ndarray, total: int
+        ) -> tuple[np.ndarray, int, float]:
+            """_prepare_jax_chunk with internal duration measurement.
 
-            if filt_end <= filt_start:
-                continue
+            Duration is measured inside because the caller on the main thread
+            cannot observe start/end timestamps of background thread work.
+            """
+            t0 = time.perf_counter()
+            UtG_np, actual_len = _prepare_jax_chunk(start, geno, total)
+            return UtG_np, actual_len, time.perf_counter() - t0
 
-            chunk_filtered_local_idx = np.arange(filt_start, filt_end)
+        # Rotation-compute pipeline: while JAX processes chunk N on XLA, a
+        # background thread runs BLAS DGEMM (U.T @ G) for chunk N+1. DGEMM
+        # releases the GIL, so both run truly concurrently. max_workers=1
+        # ensures at most one prefetch is in flight (double-buffering, not
+        # unbounded prefetch). Memory budget is halved via pipeline_buffers=2
+        # to account for two live UtG arrays.
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            for chunk, filt_start, filt_end in assoc_iterator:
+                # With filtered reads: chunk is already (n_samples, n_filtered_in_chunk)
+                # filt_start/filt_end are indices into snp_indices
+                if needs_sample_filter:
+                    chunk = chunk[valid_mask, :]
 
-            # Vectorized imputation: broadcast filtered_means to match chunk shape
-            filtered_means_broadcast = filtered_means[chunk_filtered_local_idx].reshape(
-                1, -1
-            )
-            missing_mask = np.isnan(chunk)
-            if missing_mask.any():  # RUN-06: skip O(n*chunk) np.where on clean data
-                chunk = np.where(missing_mask, filtered_means_broadcast, chunk)
-            del missing_mask
+                if filt_end <= filt_start:
+                    continue
 
-            n_subset = chunk.shape[1]
-            jax_starts = list(range(0, n_subset, jax_chunk_size))
+                chunk_filtered_local_idx = np.arange(filt_start, filt_end)
 
-            # Dict-based accumulators for this file chunk
-            accum: dict[str, list] = _init_accumulators(lmm_mode)
+                # Vectorized imputation: broadcast filtered_means to match chunk shape
+                filtered_means_broadcast = filtered_means[
+                    chunk_filtered_local_idx
+                ].reshape(1, -1)
+                missing_mask = np.isnan(chunk)
+                if missing_mask.any():  # RUN-06: skip O(n*chunk) np.where on clean data
+                    chunk = np.where(missing_mask, filtered_means_broadcast, chunk)
+                del missing_mask
 
-            # Prepare first JAX chunk
-            t_rot_start = time.perf_counter()
-            UtG_np, actual_jax_len = _prepare_jax_chunk(jax_starts[0], chunk, n_subset)
-            t_rot_end = time.perf_counter()
-            rot_dur = t_rot_end - t_rot_start
-            t_rotation_total += rot_dur
-            t_rotation_exposed_total += exposed_rotation_time(
-                rot_dur, t_rot_end, prev_compute_end
-            )
-            UtG_jax = jax.device_put(UtG_np, placement.snp)
-            del UtG_np
+                n_subset = chunk.shape[1]
+                jax_starts = list(range(0, n_subset, jax_chunk_size))
 
-            for i, _jax_start in enumerate(jax_starts):
-                current_actual_len = actual_jax_len
-                current_UtG = UtG_jax
+                # Dict-based accumulators for this file chunk
+                accum: dict[str, list] = _init_accumulators(lmm_mode)
 
-                # Async transfer of next JAX chunk overlaps with current compute
-                if i + 1 < len(jax_starts):
-                    t_rot_start = time.perf_counter()
-                    UtG_np, actual_jax_len = _prepare_jax_chunk(
-                        jax_starts[i + 1], chunk, n_subset
-                    )
-                    t_rot_end = time.perf_counter()
-                    rot_dur_inner = t_rot_end - t_rot_start
-                    t_rotation_total += rot_dur_inner
-                    t_rotation_exposed_total += exposed_rotation_time(
-                        rot_dur_inner, t_rot_end, prev_compute_end
-                    )
-                    UtG_jax = jax.device_put(UtG_np, placement.snp)
-                    del UtG_np
+                # Prepare first JAX chunk
+                t_rot_start = time.perf_counter()
+                UtG_np, actual_jax_len = _prepare_jax_chunk(
+                    jax_starts[0], chunk, n_subset
+                )
+                t_rot_end = time.perf_counter()
+                rot_dur = t_rot_end - t_rot_start
+                t_rotation_total += rot_dur
+                t_rotation_exposed_total += exposed_rotation_time(
+                    rot_dur, t_rot_end, prev_compute_end
+                )
+                UtG_jax = jax.device_put(UtG_np, placement.snp)
+                del UtG_np
 
-                # --- JAX compute timing ---
-                t_jax_start = time.perf_counter()
+                for i, _jax_start in enumerate(jax_starts):
+                    current_actual_len = actual_jax_len
+                    current_UtG = UtG_jax
 
-                try:
-                    with jax.profiler.TraceAnnotation("jax_optimization"):
-                        # Batch compute Uab (shared across all modes)
-                        Uab_batch = batch_compute_uab(
-                            n_cvt, UtW_jax, Uty_jax, current_UtG
+                    # Submit next sub-chunk rotation to BACKGROUND THREAD.
+                    # BLAS DGEMM (U.T @ G) releases the GIL and runs
+                    # concurrently with JAX compute dispatched below.
+                    future = None
+                    if i + 1 < len(jax_starts):
+                        future = executor.submit(
+                            _prepare_jax_chunk_timed,
+                            jax_starts[i + 1],
+                            chunk,
+                            n_subset,
                         )
 
-                        chunk_result = _compute_lmm_chunk(
-                            lmm_mode,
-                            n_cvt,
-                            eigenvalues,
-                            Uab_batch,
-                            n_samples,
-                            l_min=l_min,
-                            l_max=l_max,
-                            n_grid=n_grid,
-                            n_refine=n_refine,
-                            Hi_eval_null=Hi_eval_null_jax,
-                            logl_H0=logl_H0,
-                        )
-                        block_chunk_result(chunk_result, lmm_mode)
-                except Exception as e:
-                    log_jax_error(
-                        e,
-                        chunk_label=f"streaming {i + 1}",
-                        chunk_snps=current_actual_len,
-                        n_samples=n_samples,
-                        n_cvt=n_cvt,
-                    )
-                    raise
+                    # --- JAX compute timing ---
+                    t_jax_start = time.perf_counter()
 
-                t_jax_end = time.perf_counter()
-                t_jax_compute_total += t_jax_end - t_jax_start
-                prev_compute_end = t_jax_end
+                    try:
+                        with jax.profiler.TraceAnnotation("jax_optimization"):
+                            # Batch compute Uab (shared across all modes)
+                            Uab_batch = batch_compute_uab(
+                                n_cvt, UtW_jax, Uty_jax, current_UtG
+                            )
 
-                strip_and_append(chunk_result, accum, current_actual_len)
-
-            # Concatenate, build results, write/accumulate
-            if any(accum.values()):
-                t_write_start = time.perf_counter()
-                with jax.profiler.TraceAnnotation("result_write"):
-                    arrays = _concat_jax_accumulators(lmm_mode, accum)
-
-                    # Count SNPs converging at lambda bounds
-                    chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
-                        lmm_mode, arrays, l_min, l_max
-                    )
-                    n_at_lmin += chunk_lmin
-                    n_at_lmax += chunk_lmax
-
-                    if writer is not None:
-                        # Direct array → TSV (no AssocResult construction)
-                        writer.write_arrays_batch(
-                            lmm_mode,
-                            snp_indices[filt_start:filt_end],
-                            snp_info,
-                            filtered_afs[filt_start:filt_end],
-                            filtered_miss[filt_start:filt_end],
-                            arrays,
-                        )
-                    else:
-                        chunk_results = list(
-                            _yield_chunk_results(
+                            chunk_result = _compute_lmm_chunk(
                                 lmm_mode,
-                                chunk_filtered_local_idx,
-                                snp_indices,
-                                filtered_afs,
-                                filtered_miss,
+                                n_cvt,
+                                eigenvalues,
+                                Uab_batch,
+                                n_samples,
+                                l_min=l_min,
+                                l_max=l_max,
+                                n_grid=n_grid,
+                                n_refine=n_refine,
+                                Hi_eval_null=Hi_eval_null_jax,
+                                logl_H0=logl_H0,
+                            )
+                            block_chunk_result(chunk_result, lmm_mode)
+                    except Exception as e:
+                        # Best-effort cancel: only succeeds if rotation hasn't
+                        # started. If already running, executor.__exit__ waits.
+                        if future is not None:
+                            future.cancel()
+                        log_jax_error(
+                            e,
+                            chunk_label=f"streaming {i + 1}",
+                            chunk_snps=current_actual_len,
+                            n_samples=n_samples,
+                            n_cvt=n_cvt,
+                        )
+                        raise
+
+                    t_jax_end = time.perf_counter()
+                    t_jax_compute_total += t_jax_end - t_jax_start
+                    prev_compute_end = t_jax_end
+
+                    # Collect background rotation result (may be ready by now).
+                    # future.result() blocks only for remaining time after JAX.
+                    if future is not None:
+                        try:
+                            UtG_np, actual_jax_len, rot_dur = future.result()
+                        except MemoryError:
+                            raise  # Propagate directly for OOM handling
+                        except Exception as exc:
+                            processed = (
+                                writer.count if writer is not None else len(all_results)
+                            )
+                            raise RuntimeError(
+                                f"Background rotation failed for streaming "
+                                f"sub-chunk starting at index "
+                                f"{jax_starts[i + 1]}. "
+                                f"Processed ~{processed} results "
+                                f"before failure."
+                            ) from exc
+                        t_rot_end = time.perf_counter()
+                        t_rotation_total += rot_dur
+                        # Exposed = time main thread waited for future AFTER
+                        # JAX sync. Near zero when JAX dominates.
+                        t_rotation_exposed_total += max(0.0, t_rot_end - t_jax_end)
+                        UtG_jax = jax.device_put(UtG_np, placement.snp)
+                        del UtG_np  # Safe: JAX holds internal ref
+
+                    strip_and_append(chunk_result, accum, current_actual_len)
+
+                # Concatenate, build results, write/accumulate
+                if any(accum.values()):
+                    t_write_start = time.perf_counter()
+                    with jax.profiler.TraceAnnotation("result_write"):
+                        arrays = _concat_jax_accumulators(lmm_mode, accum)
+
+                        # Count SNPs converging at lambda bounds
+                        chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
+                            lmm_mode, arrays, l_min, l_max
+                        )
+                        n_at_lmin += chunk_lmin
+                        n_at_lmax += chunk_lmax
+
+                        if writer is not None:
+                            # Direct array → TSV (no AssocResult construction)
+                            writer.write_arrays_batch(
+                                lmm_mode,
+                                snp_indices[filt_start:filt_end],
                                 snp_info,
+                                filtered_afs[filt_start:filt_end],
+                                filtered_miss[filt_start:filt_end],
                                 arrays,
                             )
-                        )
-                        all_results.extend(chunk_results)
-                    del arrays, accum
-                t_write_end = time.perf_counter()
-                t_result_write_total += t_write_end - t_write_start
+                        else:
+                            chunk_results = list(
+                                _yield_chunk_results(
+                                    lmm_mode,
+                                    chunk_filtered_local_idx,
+                                    snp_indices,
+                                    filtered_afs,
+                                    filtered_miss,
+                                    snp_info,
+                                    arrays,
+                                )
+                            )
+                            all_results.extend(chunk_results)
+                        del arrays, accum
+                    t_write_end = time.perf_counter()
+                    t_result_write_total += t_write_end - t_write_start
 
         if show_progress:
             log_rss_memory("lmm_streaming", "after_association")

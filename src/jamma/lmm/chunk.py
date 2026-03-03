@@ -51,6 +51,7 @@ def _compute_chunk_size(
     n_devices: int = 1,
     n_samples: int = 0,
     n_cvt: int = 1,
+    pipeline_buffers: int = 1,
 ) -> int:
     """Compute chunk size using device memory budget with alignment.
 
@@ -67,10 +68,21 @@ def _compute_chunk_size(
         n_devices: Number of JAX virtual CPU devices (default 1).
         n_samples: Number of samples (0 = legacy mode, use MAX_SAFE_CHUNK cap).
         n_cvt: Number of covariates (default 1). Affects Uab memory estimate.
+        pipeline_buffers: Number of simultaneous live rotation buffers (default 1).
+            Pass 2 when rotation-compute pipelining holds current + next UtG arrays
+            simultaneously. Divides the memory budget accordingly (same
+            budget-division approach as _compute_chunk_size_numpy).
 
     Returns:
         Chunk size (number of SNPs per chunk).
     """
+    if not isinstance(pipeline_buffers, int):
+        raise TypeError(
+            f"pipeline_buffers must be an int, got {type(pipeline_buffers).__name__}"
+        )
+    if pipeline_buffers < 1:
+        raise ValueError(f"pipeline_buffers must be >= 1, got {pipeline_buffers}")
+
     chunk = min(n_snps, MAX_SAFE_CHUNK)  # default cap
 
     if n_samples > 0:
@@ -90,6 +102,7 @@ def _compute_chunk_size(
                 device_budget = None
 
         if device_budget is not None:
+            device_budget = device_budget // pipeline_buffers
             # Uab: n_samples * n_index, UtG: n_samples per SNP
             n_index = (n_cvt + 3) * (n_cvt + 2) // 2
             bytes_per_snp = n_samples * (n_index + 1) * 8

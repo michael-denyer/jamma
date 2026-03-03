@@ -368,7 +368,7 @@ class StreamingMemoryBreakdown(NamedTuple):
     eigenvectors_gb: float  # n^2 * 8 bytes (float64)
     eigendecomp_workspace_gb: float  # DSYEVD O(N^2) workspace (conservative)
     chunk_gb: float  # n * chunk_size * 8 bytes (float64 for precision)
-    rotation_buffer_gb: float  # n * chunk_size * 8 bytes for UtG
+    rotation_buffer_gb: float  # n * chunk_size * 8 * pipeline_buffers bytes for UtG
     grid_reml_gb: float  # n_grid * chunk_size * 8 bytes for Grid REML intermediate
     total_peak_gb: float  # Max of phases (eigendecomp is typically peak)
     available_gb: float  # Current available system memory
@@ -379,18 +379,32 @@ def _streaming_component_sizes(
     n_samples: int,
     chunk_size: int,
     n_grid: int,
+    pipeline_buffers: int = 1,
 ) -> tuple[float, float, float, float, float, float]:
     """Compute component memory sizes (GB) for streaming estimation.
+
+    Args:
+        n_samples: Number of samples.
+        chunk_size: SNPs per chunk.
+        n_grid: Grid points for lambda optimization.
+        pipeline_buffers: Number of simultaneous live UtG rotation buffers (default 1).
+            Pass 2 when rotation-compute pipelining holds current + next buffers.
 
     Returns:
         Tuple of (kinship_gb, eigenvectors_gb, eigendecomp_workspace_gb,
         chunk_gb, rotation_buffer_gb, grid_reml_gb).
     """
+    if not isinstance(pipeline_buffers, int):
+        raise TypeError(
+            f"pipeline_buffers must be an int, got {type(pipeline_buffers).__name__}"
+        )
+    if pipeline_buffers < 1:
+        raise ValueError(f"pipeline_buffers must be >= 1, got {pipeline_buffers}")
     kinship_gb = _square_matrix_gb(n_samples)
     eigenvectors_gb = _square_matrix_gb(n_samples)
     eigendecomp_workspace_gb = _eigendecomp_workspace_gb(n_samples)
     chunk_gb = n_samples * chunk_size * 8 / 1e9
-    rotation_buffer_gb = n_samples * chunk_size * 8 / 1e9  # UtG buffer
+    rotation_buffer_gb = n_samples * chunk_size * 8 / 1e9 * pipeline_buffers
     grid_reml_gb = n_grid * chunk_size * 8 / 1e9
     return (
         kinship_gb,
@@ -407,6 +421,7 @@ def estimate_streaming_memory(
     chunk_size: int = 10_000,
     n_grid: int = 50,
     n_cvt: int = 1,
+    pipeline_buffers: int = 1,
 ) -> StreamingMemoryBreakdown:
     """Estimate memory requirements for streaming GWAS workflow.
 
@@ -432,6 +447,9 @@ def estimate_streaming_memory(
         chunk_size: SNPs per chunk (default 10,000).
         n_grid: Grid points for lambda optimization (default 50).
         n_cvt: Number of covariates (default 1).
+        pipeline_buffers: Number of simultaneous live UtG rotation buffers (default 1).
+            Pass 2 when rotation-compute pipelining holds current + next buffers
+            simultaneously — rotation_buffer_gb is multiplied accordingly.
 
     Returns:
         StreamingMemoryBreakdown with detailed component estimates.
@@ -447,7 +465,7 @@ def estimate_streaming_memory(
         chunk_gb,
         rotation_buffer_gb,
         grid_reml_gb,
-    ) = _streaming_component_sizes(n_samples, chunk_size, n_grid)
+    ) = _streaming_component_sizes(n_samples, chunk_size, n_grid, pipeline_buffers)
 
     uab_iab_gb = _uab_iab_gb(n_samples, chunk_size, n_cvt)
 
@@ -483,6 +501,7 @@ def estimate_lmm_streaming_memory(
     chunk_size: int = 10_000,
     n_grid: int = 50,
     n_cvt: int = 1,
+    pipeline_buffers: int = 1,
 ) -> StreamingMemoryBreakdown:
     """Estimate memory for the streaming LMM phase only (not the full pipeline).
 
@@ -499,6 +518,9 @@ def estimate_lmm_streaming_memory(
         chunk_size: SNPs per chunk (default 10,000).
         n_grid: Grid points for lambda optimization (default 50).
         n_cvt: Number of covariates (default 1).
+        pipeline_buffers: Number of simultaneous live UtG rotation buffers (default 1).
+            Pass 2 when rotation-compute pipelining holds current + next buffers
+            simultaneously — rotation_buffer_gb is multiplied accordingly.
 
     Returns:
         StreamingMemoryBreakdown with total_peak_gb reflecting only LMM phase needs.
@@ -514,7 +536,7 @@ def estimate_lmm_streaming_memory(
         chunk_gb,
         rotation_buffer_gb,
         grid_reml_gb,
-    ) = _streaming_component_sizes(n_samples, chunk_size, n_grid)
+    ) = _streaming_component_sizes(n_samples, chunk_size, n_grid, pipeline_buffers)
 
     uab_iab_gb = _uab_iab_gb(n_samples, chunk_size, n_cvt)
     total_peak_gb = (
@@ -741,7 +763,9 @@ def check_memory_before_run(
     from jamma.lmm.chunk import _compute_chunk_size
 
     actual_chunk = _compute_chunk_size(n_snps)
-    est = estimate_streaming_memory(n_samples, chunk_size=actual_chunk)
+    est = estimate_streaming_memory(
+        n_samples, chunk_size=actual_chunk, pipeline_buffers=2
+    )
     snap = get_memory_snapshot()
 
     # EIGEN-01: When DSYEVR is available and DSYEVD won't fit, report

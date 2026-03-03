@@ -1561,3 +1561,413 @@ def test_prefetch_iterator_single_item() -> None:
     result = list(prefetch_iterator(single()))
     assert len(result) == 1
     np.testing.assert_array_equal(result[0][0], np.array([[1.0, 2.0]]))
+
+
+# ---------------------------------------------------------------------------
+# ThreadPoolExecutor rotation-compute overlap tests for streaming runner (Plan 54-02)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+@pytest.mark.requires_jax
+class TestThreadPoolExecutorOverlapStreaming:
+    """Tests for ThreadPoolExecutor-based rotation-compute overlap in runner_streaming.
+
+    Verifies that BLAS rotation for JAX sub-chunk N+1 runs concurrently
+    with JAX compute for sub-chunk N using a background thread.
+    """
+
+    def test_rotation_overlap_multi_subchunk_exposed_leq_total(
+        self, sample_plink_data: Path
+    ) -> None:
+        """Multi-sub-chunk: rotation_exposed_s <= rotation_s.
+
+        Uses a small jax_chunk_size to force multiple JAX sub-chunks within
+        a single BED file chunk, exercising the inner ThreadPoolExecutor loop.
+        """
+        from unittest.mock import patch
+
+        from jamma.lmm.runner_streaming import last_run_timing
+
+        rng = np.random.default_rng(42)
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = rng.standard_normal(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        # Force small jax_chunk_size so 500 SNPs → many sub-chunks
+        with patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=50):
+            _, _ = run_lmm_association_streaming(
+                sample_plink_data,
+                phenotypes,
+                kinship,
+                snp_info=None,
+                chunk_size=500,  # Single BED file chunk covering all SNPs
+                check_memory=False,
+                show_progress=False,
+            )
+
+        assert "rotation_s" in last_run_timing
+        assert "rotation_exposed_s" in last_run_timing
+        assert last_run_timing["rotation_exposed_s"] <= (
+            last_run_timing["rotation_s"] + 1e-6
+        ), (
+            f"Exposed ({last_run_timing['rotation_exposed_s']:.6f}s) must be "
+            f"<= total ({last_run_timing['rotation_s']:.6f}s)"
+        )
+
+    def test_rotation_overlap_single_subchunk_exposed_equals_total(
+        self, sample_plink_data: Path
+    ) -> None:
+        """Single-sub-chunk: rotation_exposed_s == rotation_s.
+
+        When jax_chunk_size >= all SNPs in the file chunk, there is only one
+        JAX sub-chunk and no overlap is possible.
+        """
+        from jamma.lmm.runner_streaming import last_run_timing
+
+        rng = np.random.default_rng(42)
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = rng.standard_normal(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        # chunk_size > n_snps ensures single BED chunk and single JAX sub-chunk
+        _, _ = run_lmm_association_streaming(
+            sample_plink_data,
+            phenotypes,
+            kinship,
+            snp_info=None,
+            chunk_size=99_999,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        assert last_run_timing["rotation_exposed_s"] == pytest.approx(
+            last_run_timing["rotation_s"], abs=1e-6
+        ), (
+            f"Single-sub-chunk: exposed ({last_run_timing['rotation_exposed_s']:.6f}s) "
+            f"should equal total ({last_run_timing['rotation_s']:.6f}s)"
+        )
+
+    def test_rotation_overlap_numerical_correctness(
+        self, sample_plink_data: Path
+    ) -> None:
+        """ThreadPoolExecutor overlap produces numerically identical results.
+
+        Results with multiple JAX sub-chunks (overlap active) must match
+        results with a single sub-chunk (no overlap) to rtol=1e-12.
+        """
+        from unittest.mock import patch
+
+        rng = np.random.default_rng(42)
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = rng.standard_normal(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        # Reference: single JAX sub-chunk (no overlap)
+        reference, _ = run_lmm_association_streaming(
+            sample_plink_data,
+            phenotypes,
+            kinship.copy(),
+            snp_info=None,
+            chunk_size=99_999,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        # Test: multiple JAX sub-chunks (overlap active)
+        with patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=50):
+            results, _ = run_lmm_association_streaming(
+                sample_plink_data,
+                phenotypes,
+                kinship.copy(),
+                snp_info=None,
+                chunk_size=500,
+                check_memory=False,
+                show_progress=False,
+            )
+
+        assert len(results) == len(reference), (
+            f"Expected {len(reference)} results, got {len(results)}"
+        )
+
+        ref_by_rs = {r.rs: r for r in reference}
+        for r in results:
+            ref = ref_by_rs[r.rs]
+            if not np.isnan(r.beta):
+                np.testing.assert_allclose(
+                    r.beta,
+                    ref.beta,
+                    rtol=1e-12,
+                    err_msg=f"beta mismatch for {r.rs}",
+                )
+                np.testing.assert_allclose(
+                    r.se,
+                    ref.se,
+                    rtol=1e-12,
+                    err_msg=f"se mismatch for {r.rs}",
+                )
+                np.testing.assert_allclose(
+                    r.p_wald,
+                    ref.p_wald,
+                    rtol=1e-12,
+                    err_msg=f"p_wald mismatch for {r.rs}",
+                )
+
+    def test_streaming_pipeline_buffers_passed(self, sample_plink_data: Path) -> None:
+        """_compute_chunk_size is called with pipeline_buffers=2 in streaming runner."""
+        from unittest.mock import patch
+
+        rng = np.random.default_rng(42)
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = rng.standard_normal(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        with patch(
+            "jamma.lmm.runner_streaming._compute_chunk_size", return_value=1000
+        ) as mock_chunk:
+            _, _ = run_lmm_association_streaming(
+                sample_plink_data,
+                phenotypes,
+                kinship,
+                snp_info=None,
+                check_memory=False,
+                show_progress=False,
+            )
+
+        calls_with_pipeline = [
+            c
+            for c in mock_chunk.call_args_list
+            if c.kwargs.get("pipeline_buffers") == 2
+            or (len(c.args) >= 5 and c.args[4] == 2)
+        ]
+        assert len(calls_with_pipeline) >= 1, (
+            f"Expected _compute_chunk_size called with pipeline_buffers=2. "
+            f"Actual calls: {mock_chunk.call_args_list}"
+        )
+
+    def test_threadpoolexecutor_used_in_streaming_runner(self) -> None:
+        """runner_streaming imports and uses ThreadPoolExecutor."""
+        import inspect
+
+        from jamma.lmm import runner_streaming
+
+        source = inspect.getsource(runner_streaming)
+        assert "ThreadPoolExecutor" in source, (
+            "runner_streaming must use ThreadPoolExecutor for rotation-compute overlap"
+        )
+        assert "executor.submit" in source, (
+            "runner_streaming must submit rotation work to background thread"
+        )
+
+    def test_background_rotation_failure_propagates(
+        self, sample_plink_data: Path
+    ) -> None:
+        """Background rotation failure raises RuntimeError with exception chain.
+
+        When prepare_utg_chunk raises in the background thread, the streaming
+        runner must wrap it in a RuntimeError with 'from exc' so the original
+        traceback is preserved.
+        """
+        from unittest.mock import patch
+
+        rng = np.random.default_rng(777)
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = rng.standard_normal(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        call_count = 0
+        from jamma.lmm import prepare
+
+        original_prepare = prepare.prepare_utg_chunk
+
+        def _failing_prepare(*args, **kwargs):
+            """Succeed on first call, fail on second (background thread)."""
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise ValueError("Simulated BLAS failure in background rotation")
+            return original_prepare(*args, **kwargs)
+
+        with (
+            patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=50),
+            patch(
+                "jamma.lmm.runner_streaming.prepare_utg_chunk",
+                side_effect=_failing_prepare,
+            ),
+        ):
+            with pytest.raises(
+                RuntimeError, match="Background rotation failed"
+            ) as exc_info:
+                run_lmm_association_streaming(
+                    sample_plink_data,
+                    phenotypes,
+                    kinship,
+                    snp_info=None,
+                    chunk_size=500,
+                    check_memory=False,
+                    show_progress=False,
+                )
+
+        assert exc_info.value.__cause__ is not None
+        assert isinstance(exc_info.value.__cause__, ValueError)
+        assert "Simulated BLAS failure" in str(exc_info.value.__cause__)
+
+    def test_multi_file_chunk_prev_compute_end_handoff(
+        self, sample_plink_data: Path
+    ) -> None:
+        """prev_compute_end persists across BED file-chunk boundaries.
+
+        Uses chunk_size=100 (5 BED file chunks for 500 SNPs) and small
+        jax_chunk_size to force multiple JAX sub-chunks within each BED chunk.
+        The exposed rotation timing must still satisfy exposed <= total,
+        verifying that prev_compute_end correctly bridges file-chunk boundaries.
+        """
+        from unittest.mock import patch
+
+        from jamma.lmm.runner_streaming import last_run_timing
+
+        rng = np.random.default_rng(42)
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = rng.standard_normal(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        # chunk_size=100 → 5 BED file chunks for 500 SNPs
+        # jax_chunk_size=25 → 4 JAX sub-chunks per BED file chunk
+        with patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=25):
+            results, n_tested = run_lmm_association_streaming(
+                sample_plink_data,
+                phenotypes,
+                kinship,
+                snp_info=None,
+                chunk_size=100,
+                check_memory=False,
+                show_progress=False,
+            )
+
+        assert n_tested > 0, "Should have tested some SNPs"
+        assert len(results) > 0, "Should have results"
+
+        # Timing invariant must hold across file-chunk boundaries
+        assert "rotation_s" in last_run_timing
+        assert "rotation_exposed_s" in last_run_timing
+        assert last_run_timing["rotation_exposed_s"] <= (
+            last_run_timing["rotation_s"] + 1e-6
+        ), (
+            f"Multi-file-chunk: exposed ({last_run_timing['rotation_exposed_s']:.6f}s) "
+            f"must be <= total ({last_run_timing['rotation_s']:.6f}s)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Rotation overlap effectiveness tests for streaming runner (Plan 54-03)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+@pytest.mark.requires_jax
+class TestRotationOverlapEffectivenessStreaming:
+    """Tests that rotation-compute overlap is measurably effective in streaming runner.
+
+    Verifies that on multi-sub-chunk runs, exposed rotation time is strictly
+    less than total rotation time (overlap hides meaningful rotation work).
+    These tests complement Plan 54-02 invariant tests with effectiveness checks.
+    """
+
+    def test_streaming_overlap_effectiveness(self, sample_plink_data: Path) -> None:
+        """Multi-sub-chunk: rotation_exposed_s < 0.95 * rotation_s (overlap hides >=5%).
+
+        Forces multiple JAX sub-chunks within a BED file chunk so the
+        ThreadPoolExecutor overlap can hide rotation work behind JAX compute.
+        The 5% threshold is conservative — real large datasets see 80%+ hiding.
+        """
+        from unittest.mock import patch
+
+        from jamma.lmm.runner_streaming import last_run_timing
+
+        rng = np.random.default_rng(54)
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = rng.standard_normal(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        # Force jax_chunk_size=25 so 500 SNPs → 20 JAX sub-chunks
+        with patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=25):
+            _, _ = run_lmm_association_streaming(
+                sample_plink_data,
+                phenotypes,
+                kinship,
+                snp_info=None,
+                chunk_size=500,  # Single BED file chunk covering all SNPs
+                check_memory=False,
+                show_progress=False,
+            )
+
+        rot_total = last_run_timing["rotation_s"]
+        rot_exposed = last_run_timing["rotation_exposed_s"]
+
+        assert rot_total > 0, "rotation_s must be > 0 (rotation occurred)"
+        assert rot_exposed >= 0, f"rotation_exposed_s must be >= 0, got {rot_exposed}"
+
+        # Overlap effectiveness: exposed must be < 95% of total (at least 5% hidden)
+        assert rot_exposed < 0.95 * rot_total, (
+            f"Expected overlap to hide at least 5% of rotation time "
+            f"on 20-sub-chunk run. "
+            f"total={rot_total:.6f}s, exposed={rot_exposed:.6f}s, "
+            f"ratio={rot_exposed / max(rot_total, 1e-10):.3f} (threshold: 0.95). "
+            f"ThreadPoolExecutor overlap in streaming runner may not be active."
+        )
+
+    def test_streaming_timing_keys_present(self, sample_plink_data: Path) -> None:
+        """All four timing keys are present and non-negative after a streaming run.
+
+        Verifies that last_run_timing is fully populated with all expected
+        keys and all values are valid (float, >= 0).
+        """
+        from jamma.lmm.runner_streaming import last_run_timing
+
+        rng = np.random.default_rng(42)
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = rng.standard_normal(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        _, _ = run_lmm_association_streaming(
+            sample_plink_data,
+            phenotypes,
+            kinship,
+            snp_info=None,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        expected_keys = {
+            "rotation_s",
+            "rotation_exposed_s",
+            "jax_compute_s",
+            "result_write_s",
+        }
+        assert set(last_run_timing.keys()) >= expected_keys, (
+            f"last_run_timing missing keys. "
+            f"Expected (at least): {expected_keys}, "
+            f"Got: {set(last_run_timing.keys())}"
+        )
+        for key in expected_keys:
+            val = last_run_timing[key]
+            assert isinstance(val, float), (
+                f"last_run_timing['{key}'] must be float, got {type(val)}"
+            )
+            assert val >= 0.0, f"last_run_timing['{key}'] must be >= 0, got {val}"

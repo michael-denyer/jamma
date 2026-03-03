@@ -1336,3 +1336,375 @@ def test_rotation_compute_overlap_metric_populated() -> None:
             f"exposed={rot_exposed:.4f}s, "
             f"hidden={rot_total - rot_exposed:.4f}s"
         )
+
+
+# ---------------------------------------------------------------------------
+# ThreadPoolExecutor rotation-compute overlap tests (Plan 54-02)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+@pytest.mark.requires_jax
+class TestThreadPoolExecutorOverlapJax:
+    """Tests for ThreadPoolExecutor-based rotation-compute overlap in runner_jax.
+
+    Verifies that BLAS rotation for chunk N+1 runs concurrently with JAX
+    compute for chunk N, using a background thread so the main thread is
+    not blocked on DGEMM before dispatching JAX work.
+    """
+
+    @pytest.fixture
+    def synthetic_data_multi_chunk(self):
+        """Generate synthetic GWAS data suitable for multi-chunk overlap tests."""
+        return _make_synthetic_gwas_data(seed=42, n_samples=100, n_snps=200)
+
+    def test_rotation_overlap_multi_chunk_exposed_leq_total(
+        self, synthetic_data_multi_chunk
+    ):
+        """Multi-chunk: rotation_exposed_s <= rotation_s (overlap is active).
+
+        With ThreadPoolExecutor, rotation for chunk N+1 runs in a background
+        thread concurrently with JAX compute for chunk N. The exposed time
+        (time the main thread waited for the future after JAX sync) should be
+        at most equal to total rotation time.
+        """
+        from unittest.mock import patch
+
+        from jamma.lmm.runner_jax import last_run_timing
+
+        genotypes, phenotype, snp_info = synthetic_data_multi_chunk
+        kinship = compute_centered_kinship(genotypes)
+
+        # Force chunk_size=50 to guarantee 4 chunks from 200 SNPs
+        with patch("jamma.lmm.runner_jax._compute_chunk_size", return_value=50):
+            _ = run_lmm_association_jax(
+                genotypes=genotypes,
+                phenotypes=phenotype,
+                kinship=kinship,
+                snp_info=snp_info,
+                show_progress=False,
+                check_memory=False,
+            )
+
+        assert "rotation_s" in last_run_timing
+        assert "rotation_exposed_s" in last_run_timing
+        # With true overlap: exposed should be <= total (not equal in general)
+        assert last_run_timing["rotation_exposed_s"] <= (
+            last_run_timing["rotation_s"] + 1e-6
+        ), (
+            f"Exposed ({last_run_timing['rotation_exposed_s']:.6f}s) must be "
+            f"<= total ({last_run_timing['rotation_s']:.6f}s)"
+        )
+
+    def test_rotation_overlap_single_chunk_exposed_equals_total(
+        self, synthetic_data_multi_chunk
+    ):
+        """Single-chunk: rotation_exposed_s == rotation_s (no overlap possible).
+
+        When all SNPs fit in one chunk, there is no next chunk to prepare, so
+        the first rotation is fully exposed.
+        """
+        from jamma.lmm.runner_jax import last_run_timing
+
+        genotypes, phenotype, snp_info = synthetic_data_multi_chunk
+        kinship = compute_centered_kinship(genotypes)
+
+        # Force a huge chunk_size so all 200 SNPs land in 1 chunk
+        with __import__("unittest.mock", fromlist=["patch"]).patch(
+            "jamma.lmm.runner_jax._compute_chunk_size", return_value=5000
+        ):
+            _ = run_lmm_association_jax(
+                genotypes=genotypes,
+                phenotypes=phenotype,
+                kinship=kinship,
+                snp_info=snp_info,
+                show_progress=False,
+                check_memory=False,
+            )
+
+        assert last_run_timing["rotation_exposed_s"] == pytest.approx(
+            last_run_timing["rotation_s"], abs=1e-6
+        ), (
+            f"Single-chunk: exposed ({last_run_timing['rotation_exposed_s']:.6f}s) "
+            f"should equal total ({last_run_timing['rotation_s']:.6f}s)"
+        )
+
+    def test_rotation_overlap_numerical_correctness(self, synthetic_data_multi_chunk):
+        """ThreadPoolExecutor overlap produces numerically identical results.
+
+        Results from the chunked (overlap) run must match a single-chunk
+        reference run to rtol=1e-12 for beta, se, and p_wald.
+        """
+        from unittest.mock import patch
+
+        genotypes, phenotype, snp_info = synthetic_data_multi_chunk
+        kinship = compute_centered_kinship(genotypes)
+        kinship2 = kinship.copy()
+
+        # Reference: single chunk (no overlap)
+        with patch("jamma.lmm.runner_jax._compute_chunk_size", return_value=5000):
+            reference = run_lmm_association_jax(
+                genotypes=genotypes,
+                phenotypes=phenotype,
+                kinship=kinship,
+                snp_info=snp_info,
+                show_progress=False,
+                check_memory=False,
+            )
+
+        # Test: multi-chunk overlap
+        with patch("jamma.lmm.runner_jax._compute_chunk_size", return_value=50):
+            results = run_lmm_association_jax(
+                genotypes=genotypes,
+                phenotypes=phenotype,
+                kinship=kinship2,
+                snp_info=snp_info,
+                show_progress=False,
+                check_memory=False,
+            )
+
+        assert len(results) == len(reference), (
+            f"Expected {len(reference)} results, got {len(results)}"
+        )
+
+        ref_by_rs = {r.rs: r for r in reference}
+        for r in results:
+            ref = ref_by_rs[r.rs]
+            if not np.isnan(r.beta):
+                np.testing.assert_allclose(
+                    r.beta, ref.beta, rtol=1e-12, err_msg=f"beta mismatch for {r.rs}"
+                )
+                np.testing.assert_allclose(
+                    r.se, ref.se, rtol=1e-12, err_msg=f"se mismatch for {r.rs}"
+                )
+                np.testing.assert_allclose(
+                    r.p_wald,
+                    ref.p_wald,
+                    rtol=1e-12,
+                    err_msg=f"p_wald mismatch for {r.rs}",
+                )
+
+    def test_pipeline_buffers_passed_to_chunk_size(self):
+        """_compute_chunk_size is called with pipeline_buffers=2.
+
+        The ThreadPoolExecutor holds two concurrent rotation buffers (current
+        + next), so memory budget must be halved via pipeline_buffers=2.
+        """
+        from unittest.mock import patch
+
+        rng = np.random.default_rng(999)
+        n_samples = 50
+        n_snps = 100
+        genotypes = rng.choice([0, 1, 2], size=(n_samples, n_snps)).astype(np.float64)
+        phenotypes = rng.standard_normal(n_samples)
+        kinship = np.eye(n_samples)
+        snp_info = [
+            {"chr": "1", "rs": f"rs{j}", "pos": j * 1000, "a1": "A", "a0": "G"}
+            for j in range(n_snps)
+        ]
+
+        with patch(
+            "jamma.lmm.runner_jax._compute_chunk_size", return_value=1000
+        ) as mock_chunk:
+            _ = run_lmm_association_jax(
+                genotypes=genotypes,
+                phenotypes=phenotypes,
+                kinship=kinship,
+                snp_info=snp_info,
+                maf_threshold=0.0,
+                show_progress=False,
+                check_memory=False,
+            )
+
+        # Assert pipeline_buffers=2 was passed in at least one call
+        calls_with_pipeline = [
+            c
+            for c in mock_chunk.call_args_list
+            if c.kwargs.get("pipeline_buffers") == 2
+            or (len(c.args) >= 5 and c.args[4] == 2)
+        ]
+        assert len(calls_with_pipeline) >= 1, (
+            f"Expected _compute_chunk_size to be called with pipeline_buffers=2. "
+            f"Actual calls: {mock_chunk.call_args_list}"
+        )
+
+    def test_threadpoolexecutor_used_in_runner(self):
+        """runner_jax imports and uses ThreadPoolExecutor.
+
+        This verifies the structural change is in place: the runner must
+        use concurrent.futures.ThreadPoolExecutor for the overlap pattern.
+        """
+        import inspect
+
+        from jamma.lmm import runner_jax
+
+        source = inspect.getsource(runner_jax)
+        assert "ThreadPoolExecutor" in source, (
+            "runner_jax must use ThreadPoolExecutor for rotation-compute overlap"
+        )
+        assert "executor.submit" in source, (
+            "runner_jax must submit rotation work to background thread"
+        )
+
+    def test_background_rotation_failure_propagates(self):
+        """Background rotation failure raises RuntimeError with exception chain.
+
+        When prepare_utg_chunk raises in the background thread, the runner
+        must wrap it in a RuntimeError (with 'from exc') so the original
+        traceback is preserved and the chunk index is reported.
+        """
+        from unittest.mock import patch
+
+        rng = np.random.default_rng(777)
+        n_samples = 50
+        n_snps = 100
+        genotypes = rng.choice([0, 1, 2], size=(n_samples, n_snps)).astype(np.float64)
+        phenotypes = rng.standard_normal(n_samples)
+        kinship = np.eye(n_samples)
+        snp_info = [
+            {"chr": "1", "rs": f"rs{j}", "pos": j * 1000, "a1": "A", "a0": "G"}
+            for j in range(n_snps)
+        ]
+
+        call_count = 0
+        original_prepare = None
+
+        def _failing_prepare(*args, **kwargs):
+            """Succeed on first call, fail on second (background thread)."""
+            nonlocal call_count, original_prepare
+            call_count += 1
+            if call_count > 1:
+                raise ValueError("Simulated BLAS failure in background rotation")
+            return original_prepare(*args, **kwargs)
+
+        from jamma.lmm import prepare
+
+        original_prepare = prepare.prepare_utg_chunk
+
+        with (
+            patch("jamma.lmm.runner_jax._compute_chunk_size", return_value=50),
+            patch(
+                "jamma.lmm.runner_jax.prepare_utg_chunk", side_effect=_failing_prepare
+            ),
+        ):
+            with pytest.raises(
+                RuntimeError, match="Background rotation failed"
+            ) as exc_info:
+                run_lmm_association_jax(
+                    genotypes=genotypes,
+                    phenotypes=phenotypes,
+                    kinship=kinship,
+                    snp_info=snp_info,
+                    maf_threshold=0.0,
+                    show_progress=False,
+                    check_memory=False,
+                )
+
+        # Verify exception chain preserves original cause
+        assert exc_info.value.__cause__ is not None
+        assert isinstance(exc_info.value.__cause__, ValueError)
+        assert "Simulated BLAS failure" in str(exc_info.value.__cause__)
+
+
+# ---------------------------------------------------------------------------
+# Rotation overlap effectiveness tests (Plan 54-03)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+@pytest.mark.requires_jax
+class TestRotationOverlapEffectivenessJax:
+    """Tests that rotation-compute overlap is measurably effective.
+
+    Verifies that on multi-chunk runs, the exposed rotation time is strictly
+    less than total rotation time (overlap hides meaningful rotation work).
+    These tests go beyond the Plan 54-02 invariant tests (exposed <= total)
+    to confirm the overlap mechanism is functionally active.
+    """
+
+    @pytest.fixture
+    def multi_chunk_data(self):
+        """Generate synthetic GWAS data for effectiveness tests.
+
+        Uses n_samples=200, n_snps=2000 to ensure non-trivial rotation
+        work that can be meaningfully overlapped.
+        """
+        return _make_synthetic_gwas_data(seed=54, n_samples=200, n_snps=2000)
+
+    def test_rotation_overlap_effectiveness(self, multi_chunk_data):
+        """Multi-chunk: rotation_exposed_s < 0.95 * rotation_s (overlap hides >=5%).
+
+        With 10 chunks (2000 SNPs / chunk_size=200), the ThreadPoolExecutor
+        pattern should hide meaningful rotation time behind JAX compute.
+        On small synthetic data the threshold is conservative (5%); on real
+        large data JAX compute dominates and exposed drops to near-zero.
+        """
+        from unittest.mock import patch
+
+        from jamma.lmm.runner_jax import last_run_timing
+
+        genotypes, phenotype, snp_info = multi_chunk_data
+        kinship = compute_centered_kinship(genotypes)
+
+        # Force chunk_size=200 so 2000 SNPs → 10 chunks
+        with patch("jamma.lmm.runner_jax._compute_chunk_size", return_value=200):
+            _ = run_lmm_association_jax(
+                genotypes=genotypes,
+                phenotypes=phenotype,
+                kinship=kinship,
+                snp_info=snp_info,
+                show_progress=False,
+                check_memory=False,
+            )
+
+        rot_total = last_run_timing["rotation_s"]
+        rot_exposed = last_run_timing["rotation_exposed_s"]
+
+        assert rot_total > 0, "rotation_s must be > 0 (rotation occurred)"
+        assert rot_exposed >= 0, f"rotation_exposed_s must be >= 0, got {rot_exposed}"
+
+        # Overlap effectiveness: exposed must be < 95% of total (at least 5% hidden)
+        assert rot_exposed < 0.95 * rot_total, (
+            f"Expected overlap to hide at least 5% of rotation time on 10-chunk run. "
+            f"total={rot_total:.6f}s, exposed={rot_exposed:.6f}s, "
+            f"ratio={rot_exposed / max(rot_total, 1e-10):.3f} (threshold: 0.95). "
+            f"The ThreadPoolExecutor overlap may not be functioning correctly."
+        )
+
+    def test_rotation_no_overlap_single_chunk(self, multi_chunk_data):
+        """Single-chunk: rotation_exposed_s ≈ rotation_s (within 20% jitter).
+
+        When all SNPs land in one chunk there is no next chunk to prefetch,
+        so exposed time must equal total rotation time (no overlap possible).
+        The 20% tolerance accounts for timing measurement noise.
+        """
+        from unittest.mock import patch
+
+        from jamma.lmm.runner_jax import last_run_timing
+
+        genotypes, phenotype, snp_info = multi_chunk_data
+        kinship = compute_centered_kinship(genotypes)
+
+        # Force huge chunk_size so all 2000 SNPs land in 1 chunk
+        with patch("jamma.lmm.runner_jax._compute_chunk_size", return_value=50_000):
+            _ = run_lmm_association_jax(
+                genotypes=genotypes,
+                phenotypes=phenotype,
+                kinship=kinship,
+                snp_info=snp_info,
+                show_progress=False,
+                check_memory=False,
+            )
+
+        rot_total = last_run_timing["rotation_s"]
+        rot_exposed = last_run_timing["rotation_exposed_s"]
+
+        assert rot_total > 0, "rotation_s must be > 0"
+        assert rot_exposed >= 0, "rotation_exposed_s must be >= 0"
+
+        ratio = rot_exposed / max(rot_total, 1e-10)
+        assert ratio >= 0.80, (
+            f"Single-chunk: exposed should be close to total (within 20%). "
+            f"total={rot_total:.6f}s, exposed={rot_exposed:.6f}s, ratio={ratio:.3f}. "
+            f"Single-chunk runs should not benefit from overlap."
+        )

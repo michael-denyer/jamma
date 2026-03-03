@@ -1089,3 +1089,325 @@ def test_invariant_computed_once_per_lambda(split_uab_data):
     assert logls.shape == (n_grid, n_snps), (
         f"Expected output shape ({n_grid}, {n_snps}), got {logls.shape}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Plan 53-03: Merged Wald path (optimizer returns Pab, no redundant Hi_eval)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def wald_pab_data():
+    """Synthetic data for merged Wald path tests.
+
+    Returns:
+        (eigenvalues, Uab_batch, Iab_batch, n_samples) with n_samples=80, n_snps=20.
+    """
+    rng = np.random.default_rng(99)
+    n_samples, n_snps = 80, 20
+    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n_samples))
+    UtW = np.ones((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+
+    from jamma.lmm.likelihood_numpy import (
+        batch_compute_iab_numpy,
+        batch_compute_uab_numpy,
+    )
+
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
+    return eigenvalues, Uab_batch, Iab_batch, n_samples
+
+
+@pytest.mark.tier0
+def test_optimizer_backward_compat(wald_pab_data):
+    """golden_section_optimize_lambda_numpy with return_pab=False returns 2-tuple."""
+    eigenvalues, Uab_batch, Iab_batch, _n_samples = wald_pab_data
+
+    result = golden_section_optimize_lambda_numpy(
+        1, eigenvalues, Uab_batch, Iab_batch, return_pab=False
+    )
+
+    assert isinstance(result, tuple), "Result must be a tuple"
+    assert len(result) == 2, f"Expected 2-tuple, got {len(result)}-tuple"
+    lambdas, logls = result
+    n_snps = Uab_batch.shape[0]
+    assert lambdas.shape == (n_snps,), f"lambdas shape {lambdas.shape}"
+    assert logls.shape == (n_snps,), f"logls shape {logls.shape}"
+
+
+@pytest.mark.tier0
+def test_optimizer_returns_pab(wald_pab_data):
+    """optimizer with return_pab=True returns 3-tuple with Pab of correct shape."""
+    from jamma.lmm.likelihood import build_index_table
+
+    eigenvalues, Uab_batch, Iab_batch, _n_samples = wald_pab_data
+    n_cvt = 1
+    n_snps = Uab_batch.shape[0]
+
+    result = golden_section_optimize_lambda_numpy(
+        n_cvt, eigenvalues, Uab_batch, Iab_batch, return_pab=True
+    )
+
+    assert isinstance(result, tuple), "Result must be a tuple"
+    assert len(result) == 3, f"Expected 3-tuple, got {len(result)}-tuple"
+    lambdas, logls, Pab_final = result
+
+    assert lambdas.shape == (n_snps,), f"lambdas shape {lambdas.shape}"
+    assert logls.shape == (n_snps,), f"logls shape {logls.shape}"
+
+    # Pab shape: (n_snps, n_cvt+2, n_index)
+    table = build_index_table(n_cvt)
+    n_index = table["n_index"]
+    assert Pab_final.shape == (n_snps, n_cvt + 2, n_index), (
+        f"Pab_final shape {Pab_final.shape}, expected {(n_snps, n_cvt + 2, n_index)}"
+    )
+    # Pab values should be finite (no NaN for non-degenerate synthetic data)
+    assert np.all(np.isfinite(Pab_final)), "Pab_final contains non-finite values"
+
+
+@pytest.mark.tier0
+def test_wald_from_pab_matches_original(wald_pab_data):
+    """Wald stats from pre-computed Pab match original path to rtol=1e-14."""
+    from jamma.lmm.likelihood_numpy import batch_calc_wald_stats_from_pab_numpy
+
+    eigenvalues, Uab_batch, Iab_batch, n_samples = wald_pab_data
+    n_cvt = 1
+
+    # Path A: original (optimizer + reconstruct Hi_eval + Pab)
+    lambdas, _logls = golden_section_optimize_lambda_numpy(
+        n_cvt, eigenvalues, Uab_batch, Iab_batch
+    )
+    betas_orig, ses_orig, pwalds_orig = batch_calc_wald_stats_numpy(
+        n_cvt, lambdas, eigenvalues, Uab_batch, n_samples
+    )
+
+    # Path B: merged (optimizer returns Pab directly)
+    lambdas2, _logls2, Pab_final = golden_section_optimize_lambda_numpy(
+        n_cvt, eigenvalues, Uab_batch, Iab_batch, return_pab=True
+    )
+    betas_pab, ses_pab, pwalds_pab = batch_calc_wald_stats_from_pab_numpy(
+        n_cvt, Pab_final, n_samples
+    )
+
+    # Lambdas from both paths should be identical (same optimizer, same path)
+    np.testing.assert_array_equal(
+        lambdas, lambdas2, err_msg="Lambdas differ between return_pab=False and True"
+    )
+
+    # Wald stats should be identical to machine precision
+    np.testing.assert_allclose(
+        betas_pab,
+        betas_orig,
+        rtol=1e-14,
+        atol=1e-15,
+        err_msg="betas from Pab path differ from original",
+    )
+    np.testing.assert_allclose(
+        ses_pab,
+        ses_orig,
+        rtol=1e-14,
+        atol=1e-15,
+        err_msg="ses from Pab path differ from original",
+    )
+    np.testing.assert_allclose(
+        pwalds_pab,
+        pwalds_orig,
+        rtol=1e-14,
+        atol=1e-15,
+        err_msg="p_walds from Pab path differ from original",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Plan 53-03 Task 2: _compute_wald_numpy dispatch tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def compute_wald_data():
+    """Synthetic data for _compute_wald_numpy dispatch tests.
+
+    Returns:
+        (eigenvalues, Uab_batch, n_samples) with n_samples=80, n_snps=30.
+    """
+    rng = np.random.default_rng(123)
+    n_samples, n_snps = 80, 30
+    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n_samples))
+    UtW = np.ones((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+
+    from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
+
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    return eigenvalues, Uab_batch, n_samples
+
+
+@pytest.mark.tier0
+def test_compute_wald_numpy_dispatches_split_ncvt1(compute_wald_data):
+    """_compute_wald_numpy with n_cvt=1 (C ext disabled) calls split optimizer."""
+    from unittest.mock import patch
+
+    from jamma.lmm import compute_numpy as cn
+    from jamma.lmm.likelihood_numpy import (
+        golden_section_optimize_lambda_split_ncvt1_numpy,
+    )
+
+    eigenvalues, Uab_batch, n_samples = compute_wald_data
+
+    call_log = []
+    real_split_fn = golden_section_optimize_lambda_split_ncvt1_numpy
+
+    def spy_split(*args, **kwargs):
+        call_log.append("split")
+        return real_split_fn(*args, **kwargs)
+
+    split_generic_log = []
+    real_generic_fn = cn.golden_section_optimize_lambda_numpy
+
+    def spy_generic(*args, **kwargs):
+        split_generic_log.append("generic")
+        return real_generic_fn(*args, **kwargs)
+
+    with (
+        patch.object(cn, "_C_ACCEL_AVAILABLE", False),
+        patch.object(cn, "golden_section_optimize_lambda_split_ncvt1_numpy", spy_split),
+        patch.object(cn, "golden_section_optimize_lambda_numpy", spy_generic),
+    ):
+        cn._compute_wald_numpy(1, eigenvalues, Uab_batch, n_samples, 1e-5, 1e5, 50, 20)
+
+    assert len(call_log) == 1, (
+        f"Split optimizer called {len(call_log)} times for n_cvt=1, expected 1"
+    )
+    assert len(split_generic_log) == 0, (
+        "Generic optimizer should NOT be called for n_cvt=1 Python path"
+    )
+
+    # Also verify n_cvt=2 uses generic, not split
+    rng = np.random.default_rng(456)
+    n_samples2, n_snps2 = 80, 10
+    eigenvalues2 = np.sort(rng.uniform(0.1, 5.0, n_samples2))
+    UtW2 = rng.standard_normal((n_samples2, 2))
+    Uty2 = rng.standard_normal(n_samples2)
+    UtG2 = rng.standard_normal((n_samples2, n_snps2))
+    from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
+
+    Uab_batch2 = batch_compute_uab_numpy(2, UtW2, Uty2, UtG2)
+
+    call_log2 = []
+    generic_log2 = []
+
+    def spy_split2(*args, **kwargs):
+        call_log2.append("split")
+        return real_split_fn(*args, **kwargs)
+
+    def spy_generic2(*args, **kwargs):
+        generic_log2.append("generic")
+        return real_generic_fn(*args, **kwargs)
+
+    with (
+        patch.object(cn, "_C_ACCEL_AVAILABLE", False),
+        patch.object(
+            cn, "golden_section_optimize_lambda_split_ncvt1_numpy", spy_split2
+        ),
+        patch.object(cn, "golden_section_optimize_lambda_numpy", spy_generic2),
+    ):
+        cn._compute_wald_numpy(
+            2, eigenvalues2, Uab_batch2, n_samples2, 1e-5, 1e5, 50, 20
+        )
+
+    assert len(call_log2) == 0, "Split should NOT be called for n_cvt=2"
+    assert len(generic_log2) == 1, "Generic should be called exactly once for n_cvt=2"
+
+
+@pytest.mark.tier0
+def test_compute_wald_numpy_split_matches_generic(compute_wald_data):
+    """split path (n_cvt=1) in _compute_wald_numpy produces same results as generic."""
+    from unittest.mock import patch
+
+    from jamma.lmm import compute_numpy as cn
+    from jamma.lmm.likelihood_numpy import batch_compute_iab_numpy
+
+    eigenvalues, Uab_batch, n_samples = compute_wald_data
+    n_cvt = 1
+    Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
+
+    # Split path (n_cvt=1 Python branch)
+    with patch.object(cn, "_C_ACCEL_AVAILABLE", False):
+        result_split = cn._compute_wald_numpy(
+            n_cvt, eigenvalues, Uab_batch, n_samples, 1e-5, 1e5, 50, 20
+        )
+
+    # Generic path: bypass n_cvt==1 branch by calling generic optimizer directly
+    import jamma.lmm.likelihood_numpy as ln
+
+    lambdas_gen, logls_gen, Pab_gen = ln.golden_section_optimize_lambda_numpy(
+        n_cvt,
+        eigenvalues,
+        Uab_batch,
+        Iab_batch,
+        l_min=1e-5,
+        l_max=1e5,
+        n_grid=50,
+        n_iter=20,
+        return_pab=True,
+    )
+    betas_gen, ses_gen, pwalds_gen = ln.batch_calc_wald_stats_from_pab_numpy(
+        n_cvt, Pab_gen, n_samples
+    )
+
+    np.testing.assert_allclose(
+        result_split["lambdas"],
+        lambdas_gen,
+        rtol=1e-10,
+        err_msg="lambdas: split path vs generic path",
+    )
+    np.testing.assert_allclose(
+        result_split["betas"],
+        betas_gen,
+        rtol=1e-12,
+        err_msg="betas: split path vs generic path",
+    )
+    np.testing.assert_allclose(
+        result_split["ses"],
+        ses_gen,
+        rtol=1e-12,
+        err_msg="ses: split path vs generic path",
+    )
+    np.testing.assert_allclose(
+        result_split["pwalds"],
+        pwalds_gen,
+        rtol=1e-12,
+        err_msg="pwalds: split path vs generic path",
+    )
+
+
+@pytest.mark.tier0
+def test_compute_wald_numpy_ncvt1_invariant_efficiency(compute_wald_data):
+    """compute_iab_invariant_scalars_ncvt1 called once per _compute_wald_numpy call."""
+    from unittest.mock import patch
+
+    import jamma.lmm.likelihood_numpy as ln
+    from jamma.lmm import compute_numpy as cn
+
+    eigenvalues, Uab_batch, n_samples = compute_wald_data
+
+    call_count = []
+    real_fn = ln.compute_iab_invariant_scalars_ncvt1
+
+    def counting_fn(*args, **kwargs):
+        call_count.append(1)
+        return real_fn(*args, **kwargs)
+
+    with (
+        patch.object(cn, "_C_ACCEL_AVAILABLE", False),
+        patch.object(cn, "compute_iab_invariant_scalars_ncvt1", counting_fn),
+    ):
+        cn._compute_wald_numpy(1, eigenvalues, Uab_batch, n_samples, 1e-5, 1e5, 50, 20)
+
+    assert len(call_count) == 1, (
+        f"compute_iab_invariant_scalars_ncvt1 should be called exactly once, "
+        f"got {len(call_count)}"
+    )

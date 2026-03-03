@@ -120,9 +120,14 @@ def get_loco_worker_count() -> int:
                 "falling back to 1 (sequential)"
             )
             return 1
-        result = max(1, n)
-        logger.debug(f"LOCO workers from JAMMA_LOCO_WORKERS: {result}")
-        return result
+        if n < 1:
+            logger.warning(
+                f"JAMMA_LOCO_WORKERS={n} is not a positive integer, "
+                "clamping to 1 (sequential)"
+            )
+            return 1
+        logger.debug(f"LOCO workers from JAMMA_LOCO_WORKERS: {n}")
+        return n
     return 1
 
 

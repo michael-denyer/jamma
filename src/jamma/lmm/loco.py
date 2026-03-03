@@ -59,13 +59,19 @@ from jamma.lmm.stats import AssocResult
 from jamma.utils import chr_sort_key
 
 
-@dataclass
+@dataclass(frozen=True)
 class SnpStatsCache:
     """Global SNP statistics from kinship streaming PASS 1.
 
     Stores per-SNP means, missing counts, and variances for ALL SNPs in the
-    BIM file (unfiltered). Per-chromosome stats are extracted by indexing
+    BIM file (unfiltered), computed over ALL samples (including those with
+    missing phenotypes). Per-chromosome stats are extracted by indexing
     with chr_snp_indices: cache.col_means[chr_snp_indices].
+
+    The all-samples population matters: ``n_samples`` is the denominator for
+    miss_rate and the basis for col_means / col_vars. When filtering in the
+    association pass, use ``cache.n_samples`` — NOT n_valid — to match the
+    population the stats were computed from.
 
     This eliminates 22+ per-chromosome BED re-reads in _collect_chr_snp_stats.
     """
@@ -73,7 +79,25 @@ class SnpStatsCache:
     col_means: np.ndarray  # shape (n_snps_total,), float64
     miss_counts: np.ndarray  # shape (n_snps_total,), int32
     col_vars: np.ndarray  # shape (n_snps_total,), float64
-    n_unexpected: int  # total unexpected genotype values from validation
+    n_samples: int  # sample count stats were computed over (ALL samples)
+
+    def __post_init__(self) -> None:
+        """Validate array shapes and freeze array contents."""
+        if not (self.col_means.shape == self.miss_counts.shape == self.col_vars.shape):
+            raise ValueError(
+                f"Array shape mismatch: col_means={self.col_means.shape}, "
+                f"miss_counts={self.miss_counts.shape}, "
+                f"col_vars={self.col_vars.shape}"
+            )
+        if self.col_means.ndim != 1:
+            raise ValueError(f"Expected 1-D arrays, got ndim={self.col_means.ndim}")
+        for arr in (self.col_means, self.miss_counts, self.col_vars):
+            arr.flags.writeable = False
+
+    @property
+    def n_snps(self) -> int:
+        """Number of SNPs in the cache (unfiltered BIM count)."""
+        return self.col_means.shape[0]
 
 
 def _collect_chr_snp_stats(
@@ -308,11 +332,12 @@ def _compute_loco_kinship_streaming_numpy(
 
     # Cache global stats for the association pass (LOCO-01).
     # Must be built BEFORE the del statements below destroy all_means / all_vars.
+    # n_samples is the population these stats were computed over (ALL rows).
     snp_stats_cache = SnpStatsCache(
         col_means=all_means.copy(),
         miss_counts=all_miss_counts.copy(),
         col_vars=all_vars.copy(),
-        n_unexpected=n_unexpected_total,
+        n_samples=n_samples,
     )
 
     # Compute filters
@@ -365,17 +390,19 @@ def _compute_loco_kinship_streaming_numpy(
     # valid_indices is provided for early subsetting) or full n_samples (LOCO-07).
     n_samples_kinship = len(valid_indices) if valid_indices is not None else n_samples
     matrix_gb = n_samples_kinship**2 * 8 / 1e9
-    chunk_buffer_gb = n_samples_kinship * chunk_size * 8 / 1e9
+    # Chunk buffer is n_samples (full BED rows) — subsetting happens after read.
+    chunk_buffer_gb = n_samples * chunk_size * 8 / 1e9
     n_chr_with_snps = len(chrs_with_snps)
-    single_pass_gb = matrix_gb * (1 + n_chr_with_snps) + chunk_buffer_gb
+    # S_full + K_loco_buf + all S_chr + chunk buffer
+    single_pass_gb = matrix_gb * (2 + n_chr_with_snps) + chunk_buffer_gb
     available_gb = psutil.virtual_memory().available / 1e9
-    # Minimum: S_full + 1 S_chr + chunk buffer
-    min_required_gb = matrix_gb * 2 + chunk_buffer_gb
+    # Minimum: S_full + K_loco_buf + 1 S_chr + chunk buffer
+    min_required_gb = matrix_gb * 3 + chunk_buffer_gb
 
     if check_memory and min_required_gb > available_gb * 0.9:
         raise MemoryError(
             f"Insufficient memory for NumPy LOCO kinship: need at least "
-            f"{min_required_gb:.1f}GB for S_full + one S_chr, "
+            f"{min_required_gb:.1f}GB for S_full + K_loco_buf + one S_chr, "
             f"available {available_gb:.1f}GB"
         )
 
@@ -391,7 +418,7 @@ def _compute_loco_kinship_streaming_numpy(
         if single_pass:
             batch_size_chrs = n_chr_with_snps  # unused in single-pass branch
         else:
-            usable_gb = available_gb * 0.9 - matrix_gb - chunk_buffer_gb
+            usable_gb = available_gb * 0.9 - matrix_gb * 2 - chunk_buffer_gb
             batch_size_chrs = max(1, int(usable_gb / matrix_gb))
 
     if not single_pass:
@@ -404,6 +431,8 @@ def _compute_loco_kinship_streaming_numpy(
 
     # Helper: stream one BED pass, accumulating S_full and selected S_chr matrices.
     # When accumulate_s_full=False, S_full is untouched (subsequent passes).
+    _s_full_accumulated = False
+
     def _stream_pass(
         batch_chrs: list[str],
         S_full_buf: np.ndarray,
@@ -417,12 +446,21 @@ def _compute_loco_kinship_streaming_numpy(
             S_full_buf: Pre-allocated S_full buffer; updated in-place when
                 accumulate_s_full=True, unchanged otherwise.
             accumulate_s_full: Whether to add to S_full_buf this pass.
-                Must be True ONLY for the first pass — see INVARIANT above.
+                Must be True ONLY for the first pass. Subsequent passes with
+                accumulate_s_full=True would double-count SNPs in S_full,
+                corrupting all K_loco matrices.
             pass_desc: Progress bar description string.
 
         Returns:
             Dict of {chr_name: S_chr_matrix} for batch_chrs.
         """
+        nonlocal _s_full_accumulated
+        if accumulate_s_full:
+            assert not _s_full_accumulated, (
+                "S_full accumulation requested more than once. "
+                "This would corrupt K_loco matrices by double-counting SNPs."
+            )
+            _s_full_accumulated = True
         batch_S_chr: dict[str, np.ndarray] = {
             c: np.zeros((n_samples_kinship, n_samples_kinship), dtype=np.float64)
             for c in batch_chrs
@@ -463,12 +501,16 @@ def _compute_loco_kinship_streaming_numpy(
 
         return batch_S_chr
 
-    # Helper: yield (chr_name, K_loco_buf) for one batch of chromosomes.
     def _yield_batch(
         S_full_buf: np.ndarray,
         batch_S_chr: dict[str, np.ndarray],
         K_loco_buf: np.ndarray,
     ) -> Iterator[tuple[str, np.ndarray]]:
+        """Yield (chr_name, K_loco) pairs, computing K_loco in-place via buffer reuse.
+
+        K_loco_buf is overwritten each iteration. Caller MUST eigendecompose
+        (or copy) the yielded matrix before advancing the iterator.
+        """
         for chr_name in sorted(batch_S_chr.keys(), key=chr_sort_key):
             p_chr = n_chr_filtered[chr_name]
             p_loco = n_filtered - p_chr
@@ -488,7 +530,7 @@ def _compute_loco_kinship_streaming_numpy(
             yield (chr_name, K_loco_buf)
 
     def _yield_matrices() -> Iterator[tuple[str, np.ndarray]]:
-        nonlocal S_full  # noqa: F841 — referenced in closure; augmented assign rebinds
+        nonlocal S_full  # needed: S_full /= n_filtered is augmented assignment
 
         if single_pass:
             # === SINGLE-PASS: accumulate S_full and all S_chr in one disk read ===
@@ -553,8 +595,6 @@ def _compute_loco_kinship_streaming_numpy(
                 )
                 yield (chr_name, S_full.copy())
 
-    # Pre-allocate S_full and K_loco_buf once for the full run.
-    # S_full is n_samples_kinship x n_samples_kinship (n_valid when valid_indices set).
     S_full = np.zeros((n_samples_kinship, n_samples_kinship), dtype=np.float64)
     K_loco_buf = np.empty_like(S_full)
 
@@ -640,9 +680,9 @@ def run_lmm_loco(
     # Read LOCO worker count and log configuration (LOCO-08)
     loco_workers = get_loco_worker_count()
     if loco_workers > 1:
-        logger.info(
-            f"LOCO worker count: {loco_workers} (from JAMMA_LOCO_WORKERS). "
-            "NOTE: parallel LOCO is not yet implemented; running sequentially."
+        logger.warning(
+            f"JAMMA_LOCO_WORKERS={loco_workers} but parallel LOCO is not yet "
+            "implemented. Running sequentially."
         )
     else:
         logger.debug("LOCO worker count: 1 (sequential)")
@@ -785,7 +825,11 @@ def run_lmm_loco(
             # When kinship_valid_indices was passed to the numpy streaming function,
             # K_loco is already n_valid x n_valid — skip post-hoc subsetting (LOCO-07).
             if backend == "numpy" and kinship_valid_indices is not None:
-                # K_loco already at valid-sample size; reuse directly
+                # K_loco already at valid-sample size from early subsetting.
+                assert K_loco.shape == (n_valid, n_valid), (
+                    f"Expected K_loco shape ({n_valid}, {n_valid}) from early "
+                    f"subsetting, got {K_loco.shape}"
+                )
                 K_loco_valid = K_loco
                 del K_loco
             elif all_samples_valid:
@@ -1216,6 +1260,7 @@ def _run_lmm_for_chromosome_numpy(
         snp_stats_cache: Global SNP statistics from kinship PASS 1 (LOCO-01).
             When provided, per-chromosome stats are extracted by slicing
             cache.col_means[chr_snp_indices] — eliminates a BED re-read.
+            Filtering uses cache.n_samples (all-sample count) as denominator.
             When None, falls back to _collect_chr_snp_stats (legacy behavior).
 
     Returns:
@@ -1233,17 +1278,24 @@ def _run_lmm_for_chromosome_numpy(
         col_means = snp_stats_cache.col_means[chr_snp_indices]
         miss_counts = snp_stats_cache.miss_counts[chr_snp_indices]
         col_vars = snp_stats_cache.col_vars[chr_snp_indices]
-        n_unexpected = snp_stats_cache.n_unexpected  # global count, not per-chr
+        # Use the cache's sample count as denominator — stats were computed
+        # over this population. Using n_valid would inflate miss_rates.
+        filter_n_samples = snp_stats_cache.n_samples
+        # Suppress per-chr n_unexpected warning: already logged in PASS 1.
+        n_unexpected = 0
     else:
         col_means, miss_counts, col_vars, n_unexpected = _collect_chr_snp_stats(
             bed_path, chr_snp_indices, valid_indices, col_chunk_size
         )
+        # Fallback stats are computed over valid_indices rows only,
+        # so n_samples (= n_valid = phenotypes.shape[0]) is the correct denominator.
+        filter_n_samples = n_samples
 
     filter_result = _filter_chr_snps(
         col_means,
         miss_counts,
         col_vars,
-        n_samples,
+        filter_n_samples,
         maf_threshold,
         miss_threshold,
         chr_snp_indices,

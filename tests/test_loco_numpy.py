@@ -271,10 +271,10 @@ def test_loco_numpy_no_per_chromosome_bed_reads():
 
 @pytest.mark.tier1
 def test_run_lmm_loco_reads_loco_workers_env(monkeypatch):
-    """run_lmm_loco reads JAMMA_LOCO_WORKERS and logs the configured worker count.
+    """run_lmm_loco reads JAMMA_LOCO_WORKERS and logs a WARNING when workers > 1.
 
     Verifies LOCO-08 wiring: the env var is read at run_lmm_loco entry and
-    an INFO-level message is emitted when workers > 1.
+    a WARNING-level message is emitted when workers > 1 (not yet implemented).
     """
     if not _LOCO_BFILE.with_suffix(".bed").exists():
         pytest.skip("gemma_loco fixture not available")
@@ -284,18 +284,18 @@ def test_run_lmm_loco_reads_loco_workers_env(monkeypatch):
     monkeypatch.setenv("JAMMA_LOCO_WORKERS", "4")
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
 
-    logged_messages: list[str] = []
+    logged_warnings: list[str] = []
 
     # loguru does not integrate with pytest caplog; capture via the logger sink
     import jamma.lmm.loco as loco_module
 
-    original_info = loco_module.logger.info
+    original_warning = loco_module.logger.warning
 
-    def capture_info(msg, *args, **kwargs):
-        logged_messages.append(str(msg))
-        return original_info(msg, *args, **kwargs)
+    def capture_warning(msg, *args, **kwargs):
+        logged_warnings.append(str(msg))
+        return original_warning(msg, *args, **kwargs)
 
-    with patch.object(loco_module.logger, "info", side_effect=capture_info):
+    with patch.object(loco_module.logger, "warning", side_effect=capture_warning):
         results, n_tested = run_lmm_loco(
             bed_path=_LOCO_BFILE,
             phenotypes=phenotypes,
@@ -304,8 +304,8 @@ def test_run_lmm_loco_reads_loco_workers_env(monkeypatch):
             show_progress=False,
         )
 
-    assert any("LOCO worker count: 4" in msg for msg in logged_messages), (
-        f"Expected 'LOCO worker count: 4' in log messages, got: {logged_messages}"
+    assert any("JAMMA_LOCO_WORKERS=4" in msg for msg in logged_warnings), (
+        f"Expected 'JAMMA_LOCO_WORKERS=4' in warning messages, got: {logged_warnings}"
     )
     assert n_tested > 0, "Expected SNPs tested (workers > 1 falls back to sequential)"
 

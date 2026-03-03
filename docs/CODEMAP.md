@@ -222,7 +222,7 @@ GEMMA algorithm reimplementation: kinship → eigendecomp → REML → test stat
 
 ### [4] JAX Backend
 
-Batch SNP processing with JIT compilation and vmap vectorization. Requires JAX (`pip install jamma[jax]`). Supports LOCO, HWE filtering, disk streaming, and CPU device sharding.
+Batch SNP processing with JIT compilation and vmap vectorization. Requires JAX (`pip install 'jamma[jax]'`). Supports LOCO, HWE filtering, disk streaming, and CPU device sharding.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|

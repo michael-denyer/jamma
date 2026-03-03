@@ -44,7 +44,11 @@ def apply_snp_list_mask(
     in_list = indices[pos] == active
     # Zero out positions that are True in snp_mask but not in indices
     snp_mask[active[~in_list]] = False
-    logger.info(f"{label}: restricting to {len(indices)} requested SNPs")
+    retained = int(np.sum(snp_mask))
+    logger.info(
+        f"{label}: restricting to {len(indices)} requested SNPs "
+        f"({retained} retained after intersection)"
+    )
 
 
 def compute_snp_stats(

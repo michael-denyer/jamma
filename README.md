@@ -29,7 +29,7 @@
 
 ```bash
 pip install jamma          # NumPy backend
-pip install jamma[jax]     # + JAX acceleration (ARM Mac only)
+pip install 'jamma[jax]'   # + JAX acceleration (ARM Mac only)
 ```
 
 That's it. macOS Accelerate BLAS handles large matrices natively.
@@ -40,7 +40,7 @@ For small datasets (<46k samples), the standard install works:
 
 ```bash
 pip install jamma          # NumPy backend
-pip install jamma[jax]     # + JAX acceleration
+pip install 'jamma[jax]'   # + JAX acceleration
 ```
 
 For large-scale GWAS (>46k samples) on **Linux x86_64**, install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first — standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. MKL is x86_64-only; ARM Mac and Windows users are limited to <46k samples. Pre-built ILP64 wheels are available for Python 3.11–3.14:
@@ -61,7 +61,7 @@ pip install psutil loguru threadpoolctl click progressbar2 bed-reader
 pip install numpy \
   --extra-index-url https://michael-denyer.github.io/numpy-mkl \
   --force-reinstall --upgrade
-pip install jamma[jax] --no-deps
+pip install 'jamma[jax]' --no-deps
 pip install psutil loguru threadpoolctl click progressbar2 bed-reader \
   jax jaxlib jaxtyping
 ```
@@ -306,7 +306,7 @@ See [Code Map](docs/CODEMAP.md) for the full architecture diagram with source li
 
 - Python 3.11+
 - NumPy 2.0+
-- JAX 0.8.0+ (optional, for batch acceleration: `pip install jamma[jax]`)
+- JAX 0.8.0+ (optional, for batch acceleration: `pip install 'jamma[jax]'`)
 
 ## License
 

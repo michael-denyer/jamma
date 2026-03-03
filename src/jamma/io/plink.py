@@ -188,7 +188,12 @@ def partitions_from_metadata(meta: dict[str, Any]) -> dict[str, np.ndarray]:
         Dict mapping chromosome name to sorted array of SNP column indices.
         Keys ordered by first appearance in BIM file.
     """
-    chromosomes = meta["chromosome"]
+    chromosomes = meta.get("chromosome")
+    if chromosomes is None:
+        raise ValueError(
+            "partitions_from_metadata requires 'chromosome' key in metadata dict. "
+            "Ensure this is the return value of get_plink_metadata()."
+        )
     _, first_idx = np.unique(chromosomes, return_index=True)
     unique_chrs = [chromosomes[i] for i in np.sort(first_idx)]
     return {chr_name: np.where(chromosomes == chr_name)[0] for chr_name in unique_chrs}

@@ -701,6 +701,73 @@ def test_mle_null_scalar_ncvt1():
     assert np.isfinite(logl), f"mle_log_likelihood_null returned non-finite: {logl}"
 
 
+@pytest.mark.tier0
+def test_mle_scalar_degenerate_s_ww_zero():
+    """Scalar MLE P_yy returns s_yy when s_ww == 0 (degenerate intercept)."""
+    from jamma.lmm.likelihood import (
+        _mle_p_yy_scalar_ncvt1,
+        _mle_p_yy_scalar_null_ncvt1,
+        calc_pab,
+        get_ab_index,
+    )
+
+    n_samples = 50
+    # Construct Uab where column 0 (ww) is all zeros -> Hi_eval @ Uab[:,0] = 0
+    Uab = np.zeros((n_samples, 6), dtype=np.float64)
+    rng = np.random.default_rng(111)
+    Uab[:, 5] = rng.standard_normal(n_samples) ** 2  # yy column: non-zero
+
+    Hi_eval = np.ones(n_samples)
+
+    # s_ww = 0 -> should return s_yy
+    p_yy = _mle_p_yy_scalar_ncvt1(Hi_eval, Uab)
+    expected_s_yy = float(Hi_eval @ Uab[:, 5])
+    assert p_yy == expected_s_yy, f"Expected s_yy={expected_s_yy}, got {p_yy}"
+
+    # Null path: same behavior
+    p_yy_null = _mle_p_yy_scalar_null_ncvt1(Hi_eval, Uab)
+    assert p_yy_null == expected_s_yy
+
+    # Full Pab path should also handle this
+    Pab = calc_pab(1, Hi_eval, Uab)
+    p_yy_full = Pab[2, get_ab_index(3, 3, 1)]
+    # Both should be s_yy since ww=0 means no projection happens
+    np.testing.assert_allclose(p_yy, p_yy_full, rtol=1e-12)
+
+
+@pytest.mark.tier0
+def test_mle_scalar_degenerate_p1_xx_zero():
+    """Scalar MLE P_yy returns p1_yy when p1_xx == 0 (constant genotype)."""
+    from jamma.lmm.likelihood import _mle_p_yy_scalar_ncvt1, calc_pab, get_ab_index
+
+    n_samples = 50
+    rng = np.random.default_rng(222)
+    Hi_eval = np.ones(n_samples)
+
+    # Construct Uab where genotype column produces p1_xx = 0:
+    # s_xx - s_wx^2/s_ww = 0 when s_xx = s_wx^2/s_ww
+    # Easiest: make wx and xx columns such that genotype is proportional to intercept
+    w = np.ones(n_samples)
+    x = 2.0 * w  # genotype proportional to intercept -> p1_xx = 0
+    y = rng.standard_normal(n_samples)
+
+    Uab = np.zeros((n_samples, 6), dtype=np.float64)
+    Uab[:, 0] = w * w  # ww
+    Uab[:, 1] = w * x  # wx
+    Uab[:, 2] = w * y  # wy
+    Uab[:, 3] = x * x  # xx
+    Uab[:, 4] = x * y  # xy
+    Uab[:, 5] = y * y  # yy
+
+    p_yy_scalar = _mle_p_yy_scalar_ncvt1(Hi_eval, Uab)
+
+    # Full Pab path for reference
+    Pab = calc_pab(1, Hi_eval, Uab)
+    p_yy_full = Pab[2, get_ab_index(3, 3, 1)]
+
+    np.testing.assert_allclose(p_yy_scalar, p_yy_full, rtol=1e-12)
+
+
 # ---------------------------------------------------------------------------
 # Multi-covariate Uab parity (n_cvt > 1)
 # ---------------------------------------------------------------------------
@@ -844,9 +911,7 @@ def test_golden_section_accuracy_no_final_eval(synthetic_data):
     )
 
     # Lambdas should be finite positive values
-    assert np.all(np.isfinite(lambdas_opt) | np.isnan(lambdas_opt)), (
-        "Some lambdas are infinite"
-    )
+    assert np.all(np.isfinite(lambdas_opt)), "Some lambdas are not finite"
     assert np.all(lambdas_opt[np.isfinite(lambdas_opt)] > 0), (
         "Some finite lambdas are non-positive"
     )
@@ -897,17 +962,22 @@ def test_grid_reml_split_matches_full(split_uab_data):
     n_grid = 20
     lambdas_grid = np.exp(np.linspace(np.log(1e-5), np.log(1e5), n_grid))
 
-    iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
+    iab_s_ww, _iab_s_wy, _iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
         uab_invariant_soa
     )
     iab_inv_s_ww = 1.0 / iab_s_ww if iab_s_ww != 0 else 0.0
-    iab_p1_yy = iab_s_yy - iab_s_wy * iab_s_wy * iab_inv_s_ww
 
     n_samples = eigenvalues.shape[0]
     df = n_samples - 2  # n_cvt=1
 
-    from jamma.lmm.likelihood_numpy import _compute_reml_const
+    from jamma.lmm.likelihood_numpy import (
+        _compute_iab_varying_ncvt1,
+        _compute_reml_const,
+    )
 
+    iab_p1_xx, iab_logdet_var = _compute_iab_varying_ncvt1(
+        uab_varying_soa, iab_inv_s_ww
+    )
     reml_const = _compute_reml_const(df)
 
     logls_split = _batch_grid_reml_split_ncvt1_numpy(
@@ -917,7 +987,8 @@ def test_grid_reml_split_matches_full(split_uab_data):
         uab_invariant_soa,
         iab_logdet,
         iab_inv_s_ww,
-        iab_p1_yy,
+        iab_p1_xx,
+        iab_logdet_var,
         reml_const,
     )
 
@@ -953,18 +1024,17 @@ def test_refinement_reml_split_matches_full(split_uab_data):
     rng = np.random.default_rng(7)
     lambda_vals = np.exp(rng.uniform(np.log(1e-4), np.log(1e3), n_snps))
 
-    iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
+    iab_s_ww, _iab_s_wy, _iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
         uab_invariant_soa
     )
     iab_inv_s_ww = 1.0 / iab_s_ww if iab_s_ww != 0 else 0.0
     reml_const = _compute_reml_const(df)
 
-    # Precompute per-SNP Iab varying quantities
-    iab_s_wx = uab_varying_soa[:, 0, :].sum(axis=1)
-    iab_s_xx = uab_varying_soa[:, 1, :].sum(axis=1)
-    iab_p1_xx = iab_s_xx - iab_s_wx * iab_s_wx * iab_inv_s_ww
-    with np.errstate(divide="ignore", invalid="ignore"):
-        iab_logdet_var = np.where(iab_p1_xx > 0, np.log(iab_p1_xx), 0.0)
+    from jamma.lmm.likelihood_numpy import _compute_iab_varying_ncvt1
+
+    iab_p1_xx, iab_logdet_var = _compute_iab_varying_ncvt1(
+        uab_varying_soa, iab_inv_s_ww
+    )
 
     logls_split = _batch_reml_at_lambda_split_ncvt1_numpy(
         lambda_vals,
@@ -1035,6 +1105,48 @@ def test_split_optimizer_matches_full(split_uab_data):
 
 
 @pytest.mark.tier0
+def test_split_pab_matches_generic_pab(split_uab_data):
+    """Pab from split optimizer must match generic Pab element-by-element."""
+    from jamma.lmm.likelihood_numpy import (
+        compute_iab_invariant_scalars_ncvt1,
+        golden_section_optimize_lambda_split_ncvt1_numpy,
+    )
+
+    eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch = (
+        split_uab_data
+    )
+
+    iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
+        uab_invariant_soa
+    )
+
+    _, _, Pab_split = golden_section_optimize_lambda_split_ncvt1_numpy(
+        eigenvalues,
+        uab_varying_soa,
+        uab_invariant_soa,
+        iab_s_ww,
+        iab_s_wy,
+        iab_s_yy,
+        iab_logdet,
+        return_pab=True,
+    )
+
+    _, _, Pab_generic = golden_section_optimize_lambda_numpy(
+        1, eigenvalues, Uab_batch, Iab_batch, return_pab=True
+    )
+
+    assert Pab_split.shape == Pab_generic.shape, (
+        f"Shape mismatch: split={Pab_split.shape} vs generic={Pab_generic.shape}"
+    )
+    np.testing.assert_allclose(
+        Pab_split,
+        Pab_generic,
+        rtol=1e-12,
+        err_msg="Split Pab does not match generic Pab element-by-element",
+    )
+
+
+@pytest.mark.tier0
 def test_invariant_computed_once_per_lambda(split_uab_data):
     """Invariant dot products must be (n_grid,), not (n_grid, n_snps)."""
     from jamma.lmm.likelihood_numpy import (
@@ -1069,12 +1181,17 @@ def test_invariant_computed_once_per_lambda(split_uab_data):
     # Also verify the split function itself returns (n_grid, n_snps) output
     from jamma.lmm.likelihood_numpy import _batch_grid_reml_split_ncvt1_numpy
 
-    iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
+    iab_s_ww, _iab_s_wy, _iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
         uab_invariant_soa
     )
     iab_inv_s_ww = 1.0 / iab_s_ww if iab_s_ww != 0 else 0.0
-    iab_p1_yy = iab_s_yy - iab_s_wy * iab_s_wy * iab_inv_s_ww
     reml_const = _compute_reml_const(df)
+
+    from jamma.lmm.likelihood_numpy import _compute_iab_varying_ncvt1
+
+    iab_p1_xx, iab_logdet_var = _compute_iab_varying_ncvt1(
+        uab_varying_soa, iab_inv_s_ww
+    )
 
     logls = _batch_grid_reml_split_ncvt1_numpy(
         lambdas_grid,
@@ -1083,7 +1200,8 @@ def test_invariant_computed_once_per_lambda(split_uab_data):
         uab_invariant_soa,
         iab_logdet,
         iab_inv_s_ww,
-        iab_p1_yy,
+        iab_p1_xx,
+        iab_logdet_var,
         reml_const,
     )
     assert logls.shape == (n_grid, n_snps), (

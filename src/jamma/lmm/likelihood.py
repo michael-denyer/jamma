@@ -39,8 +39,9 @@ def reset_scalar_p_yy_warned() -> None:
 def _clamp_p_yy(P_yy: float, lambda_val: float) -> float:
     """Clamp P_yy to prevent log(0) or log(negative) in log-likelihood.
 
-    Returns -inf for negative P_yy (signals invalid region to optimizer)
-    and clamps near-zero positive values to _P_YY_MIN.
+    Returns NaN for negative P_yy (propagates through np.log as NaN;
+    optimizer avoids NaN regions) and clamps near-zero positive values
+    to _P_YY_MIN.
 
     Warning deduplication: only logs the first negative P_yy per run.
     Call reset_scalar_p_yy_warned() at the start of each LMM run.
@@ -50,15 +51,15 @@ def _clamp_p_yy(P_yy: float, lambda_val: float) -> float:
         lambda_val: Current lambda value (for diagnostic logging).
 
     Returns:
-        Clamped P_yy, or triggers -inf log-likelihood via float('-inf').
+        Clamped P_yy, or NaN for negative values (signals invalid region).
     """
     global _scalar_p_yy_warned  # noqa: PLW0603
     if P_yy < 0:
         if not _scalar_p_yy_warned:
             logger.warning(
                 f"Negative P_yy ({P_yy:.6e}) at lambda={lambda_val:.6e} — "
-                "numerical breakdown. If this occurs frequently, the kinship "
-                "matrix may not be positive semi-definite."
+                "numerical breakdown (subsequent occurrences suppressed). "
+                "The kinship matrix may not be positive semi-definite."
             )
             _scalar_p_yy_warned = True
         return float("nan")  # np.log(nan) = nan, optimizer avoids
@@ -462,7 +463,7 @@ def reml_log_likelihood_null(
 def _mle_p_yy_scalar_ncvt1(Hi_eval: np.ndarray, Uab: np.ndarray) -> float:
     """Compute MLE P_yy via scalar Schur complements for n_cvt=1.
 
-    Avoids allocating full (3, 6) Pab matrix — computes only the 5 dot products
+    Avoids allocating full (3, 6) Pab matrix — computes only the 6 dot products
     and 2 Schur complement steps needed for P_yy = Pab[2][5].
 
     For n_cvt=1, nc_total=2, the trace is:
@@ -487,7 +488,12 @@ def _mle_p_yy_scalar_ncvt1(Hi_eval: np.ndarray, Uab: np.ndarray) -> float:
     s_yy = Hi_eval @ Uab[:, 5]
 
     # Row 1: project out W (Schur complement)
-    if s_ww == 0:
+    if s_ww <= 0:
+        if s_ww < 0:
+            logger.warning(
+                f"Negative s_ww ({s_ww:.6e}) in scalar MLE P_yy — "
+                "eigendecomposition may be degenerate."
+            )
         return float(s_yy)  # degenerate
     inv_ww = 1.0 / s_ww
     p1_xx = s_xx - s_wx * s_wx * inv_ww
@@ -518,7 +524,12 @@ def _mle_p_yy_scalar_null_ncvt1(Hi_eval: np.ndarray, Uab: np.ndarray) -> float:
     s_wy = Hi_eval @ Uab[:, 2]
     s_yy = Hi_eval @ Uab[:, 5]
 
-    if s_ww == 0:
+    if s_ww <= 0:
+        if s_ww < 0:
+            logger.warning(
+                f"Negative s_ww ({s_ww:.6e}) in scalar null MLE P_yy — "
+                "eigendecomposition may be degenerate."
+            )
         return float(s_yy)
     p1_yy = s_yy - s_wy * s_wy / s_ww
     return float(p1_yy)

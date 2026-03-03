@@ -7,8 +7,12 @@ Design:
 - batch_compute_uab_numpy: vectorized Uab for n_snps SNPs at once
 - batch_compute_pab_numpy / _batch_compute_pab_varying_numpy: Pab for a batch
 - batch_compute_iab_numpy: Iab (identity-weighted Pab)
+- _compute_reml_const / compute_iab_invariant_scalars_ncvt1: precomputed constants
 - golden_section_optimize_lambda_numpy / _mle: batch lambda optimization
-- batch_calc_wald_stats_numpy / score / lrt: batch test statistics
+- golden_section_optimize_lambda_split_ncvt1_numpy: split-Uab optimizer for n_cvt=1
+- _batch_grid_reml_split_ncvt1_numpy / _batch_reml_at_lambda_split_ncvt1_numpy:
+    split-Uab REML evaluation (invariant/varying separation for n_cvt=1)
+- batch_calc_wald_stats_numpy / _from_pab / score / lrt: batch test statistics
 
 No JAX imports anywhere in this module. Compatible with JAX-free environments.
 
@@ -634,7 +638,7 @@ def batch_compute_iab_split_ncvt1(
 def _compute_reml_const(df: int) -> float:
     """Precompute REML normalizing constant: 0.5 * df * (log(df) - log(2*pi) - 1).
 
-    Depends only on sample count — compute once per run, not per evaluation.
+    Constant across all SNPs and lambda values — compute once per run.
 
     Args:
         df: Degrees of freedom (n_samples - n_cvt - 1).
@@ -643,18 +647,6 @@ def _compute_reml_const(df: int) -> float:
         REML normalizing constant.
     """
     return 0.5 * df * (np.log(df) - np.log(2.0 * np.pi) - 1.0)
-
-
-def _compute_mle_const(n: int) -> float:
-    """Precompute MLE normalizing constant: 0.5 * n * (log(n) - log(2*pi) - 1).
-
-    Args:
-        n: Number of samples.
-
-    Returns:
-        MLE normalizing constant.
-    """
-    return 0.5 * n * (np.log(n) - np.log(2.0 * np.pi) - 1.0)
 
 
 def compute_iab_invariant_scalars_ncvt1(
@@ -1064,9 +1056,10 @@ def golden_section_optimize_lambda_numpy(
         )
 
     # Stage 2: Golden section refinement
+    pab_fn = None
     if return_pab:
 
-        def compute_reml_with_pab(log_lams: np.ndarray) -> tuple:
+        def pab_fn(log_lams: np.ndarray) -> tuple:
             lams = np.exp(log_lams)
             return _batch_reml_at_lambda_numpy(
                 n_cvt,
@@ -1078,16 +1071,12 @@ def golden_section_optimize_lambda_numpy(
                 return_pab=True,
             )
 
-        return _batch_golden_section_numpy(
-            compute_reml_batch,
-            grid_logls,
-            log_lambdas,
-            n_iter,
-            compute_batch_with_pab_fn=compute_reml_with_pab,
-        )
-
     return _batch_golden_section_numpy(
-        compute_reml_batch, grid_logls, log_lambdas, n_iter
+        compute_reml_batch,
+        grid_logls,
+        log_lambdas,
+        n_iter,
+        compute_batch_with_pab_fn=pab_fn,
     )
 
 
@@ -1142,6 +1131,30 @@ def golden_section_optimize_lambda_mle_numpy(
 # ---------------------------------------------------------------------------
 
 
+def _compute_iab_varying_ncvt1(
+    uab_varying_soa: np.ndarray,
+    iab_inv_s_ww: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute per-SNP Iab varying quantities for n_cvt=1.
+
+    These are lambda-independent (Iab uses Hi_eval=ones) and constant
+    across all grid/refinement evaluations. Compute once per optimizer call.
+
+    Args:
+        uab_varying_soa: (n_snps, 3, n_samples) — [wx, xx, xy].
+        iab_inv_s_ww: Precomputed 1/iab_s_ww.
+
+    Returns:
+        (iab_p1_xx, iab_logdet_var) both (n_snps,).
+    """
+    iab_s_wx = uab_varying_soa[:, 0, :].sum(axis=1)  # (n_snps,)
+    iab_s_xx = uab_varying_soa[:, 1, :].sum(axis=1)
+    iab_p1_xx = iab_s_xx - iab_s_wx * iab_s_wx * iab_inv_s_ww
+    with np.errstate(divide="ignore", invalid="ignore"):
+        iab_logdet_var = np.where(iab_p1_xx > 0, np.log(iab_p1_xx), 0.0)
+    return iab_p1_xx, iab_logdet_var
+
+
 def _batch_grid_reml_split_ncvt1_numpy(
     lambdas_grid: np.ndarray,
     eigenvalues: np.ndarray,
@@ -1149,7 +1162,8 @@ def _batch_grid_reml_split_ncvt1_numpy(
     uab_invariant_soa: np.ndarray,
     iab_logdet: float,
     iab_inv_s_ww: float,
-    iab_p1_yy: float,
+    iab_p1_xx: np.ndarray,
+    iab_logdet_var: np.ndarray,
     reml_const: float,
 ) -> np.ndarray:
     """Evaluate REML at grid lambda values using split-Uab for n_cvt=1.
@@ -1167,7 +1181,8 @@ def _batch_grid_reml_split_ncvt1_numpy(
         uab_invariant_soa: (3, n_samples) — [ww, wy, yy].
         iab_logdet: Precomputed log(iab_s_ww) for logdet_hiw.
         iab_inv_s_ww: Precomputed 1/iab_s_ww for Iab Schur complement.
-        iab_p1_yy: Precomputed iab_s_yy - iab_s_wy^2/iab_s_ww (Iab P1_yy).
+        iab_p1_xx: Precomputed per-SNP Iab p1_xx (n_snps,).
+        iab_logdet_var: Precomputed per-SNP log(iab_p1_xx) (n_snps,).
         reml_const: Precomputed 0.5 * df * (log(df) - log(2*pi) - 1).
 
     Returns:
@@ -1215,17 +1230,10 @@ def _batch_grid_reml_split_ncvt1_numpy(
     P_yy = p1_yy_grid[:, None] - p1_xy * p1_xy * inv_p1_xx  # (n_grid, n_snps)
     P_yy = _guard_P_yy(P_yy)
 
-    # Compute per-SNP Iab varying quantities for logdet_hiw
-    # iab_p1_xx is per-SNP (from Iab with Hi_eval=ones): computed once per grid call
-    iab_s_wx = uab_varying_soa[:, 0, :].sum(axis=1)  # (n_snps,)
-    iab_s_xx = uab_varying_soa[:, 1, :].sum(axis=1)
-    iab_p1_xx = iab_s_xx - iab_s_wx * iab_s_wx * iab_inv_s_ww  # (n_snps,)
-
     # logdet_hiw = (log(s_ww) - log(iab_s_ww)) + (log(p1_xx) - log(iab_p1_xx))
     with np.errstate(divide="ignore", invalid="ignore"):
         logdet_pab_var = np.where(p1_xx > 0, np.log(p1_xx), 0.0)  # (n_grid, n_snps)
-        logdet_iab_var = np.where(iab_p1_xx > 0, np.log(iab_p1_xx), 0.0)  # (n_snps,)
-    logdet_hiw = logdet_hiw_inv[:, None] + logdet_pab_var - logdet_iab_var[None, :]
+    logdet_hiw = logdet_hiw_inv[:, None] + logdet_pab_var - iab_logdet_var[None, :]
 
     return (
         reml_const
@@ -1375,14 +1383,11 @@ def golden_section_optimize_lambda_split_ncvt1_numpy(
 
     # Precompute Iab quantities
     iab_inv_s_ww = 1.0 / iab_s_ww if iab_s_ww != 0 else 0.0
-    iab_p1_yy = iab_s_yy - iab_s_wy * iab_s_wy * iab_inv_s_ww
 
     # Per-SNP Iab varying quantities (constant across lambda)
-    iab_s_wx = uab_varying_soa[:, 0, :].sum(axis=1)  # (n_snps,)
-    iab_s_xx = uab_varying_soa[:, 1, :].sum(axis=1)
-    iab_p1_xx = iab_s_xx - iab_s_wx * iab_s_wx * iab_inv_s_ww
-    with np.errstate(divide="ignore", invalid="ignore"):
-        iab_logdet_var = np.where(iab_p1_xx > 0, np.log(iab_p1_xx), 0.0)
+    iab_p1_xx, iab_logdet_var = _compute_iab_varying_ncvt1(
+        uab_varying_soa, iab_inv_s_ww
+    )
 
     log_l_min = np.log(l_min)
     log_l_max = np.log(l_max)
@@ -1397,7 +1402,8 @@ def golden_section_optimize_lambda_split_ncvt1_numpy(
         uab_invariant_soa,
         iab_logdet,
         iab_inv_s_ww,
-        iab_p1_yy,
+        iab_p1_xx,
+        iab_logdet_var,
         reml_const,
     )
 
@@ -1416,9 +1422,10 @@ def golden_section_optimize_lambda_split_ncvt1_numpy(
             reml_const,
         )
 
+    pab_fn = None
     if return_pab:
 
-        def compute_reml_split_with_pab(log_lams: np.ndarray) -> tuple:
+        def pab_fn(log_lams: np.ndarray) -> tuple:
             lams = np.exp(log_lams)
             return _batch_reml_at_lambda_split_ncvt1_numpy(
                 lams,
@@ -1433,16 +1440,12 @@ def golden_section_optimize_lambda_split_ncvt1_numpy(
                 return_pab=True,
             )
 
-        return _batch_golden_section_numpy(
-            compute_reml_split,
-            grid_logls,
-            log_lambdas,
-            n_iter,
-            compute_batch_with_pab_fn=compute_reml_split_with_pab,
-        )
-
     return _batch_golden_section_numpy(
-        compute_reml_split, grid_logls, log_lambdas, n_iter
+        compute_reml_split,
+        grid_logls,
+        log_lambdas,
+        n_iter,
+        compute_batch_with_pab_fn=pab_fn,
     )
 
 
@@ -1533,10 +1536,8 @@ def batch_calc_wald_stats_numpy(
     """Compute Wald test statistics for a batch of SNPs.
 
     Port of likelihood_jax.py::batch_calc_wald_stats. Computes per-SNP
-    Hi_eval from optimized lambdas, then calls _batch_compute_pab_varying_numpy.
-
-    p_wald uses betainc_batch (vectorized Lentz CF, more accurate than JAX XLA
-    betainc for large a).
+    Hi_eval from optimized lambdas, constructs Pab, then delegates to
+    batch_calc_wald_stats_from_pab_numpy for the statistics.
 
     Args:
         n_cvt: Number of covariates.
@@ -1548,34 +1549,9 @@ def batch_calc_wald_stats_numpy(
     Returns:
         Tuple of (betas, ses, p_walds) each shape (n_snps,).
     """
-    table = build_index_table(n_cvt)
-    idx_xx = table["idx_xx"]
-    idx_xy = table["idx_xy"]
-    idx_yy = table["idx_yy"]
-    df = n_samples - n_cvt - 1
-
-    # Per-SNP Hi_eval
     Hi_eval_batch = 1.0 / (lambdas[:, None] * eigenvalues[None, :] + 1.0)
-
-    # Pab batch with per-SNP Hi_eval
     Pab_batch = _batch_compute_pab_varying_numpy(n_cvt, Hi_eval_batch, Uab_batch)
-
-    P_XX = Pab_batch[:, n_cvt, idx_xx]
-    P_XY = Pab_batch[:, n_cvt, idx_xy]
-    P_YY = Pab_batch[:, n_cvt, idx_yy]
-    Px_YY = Pab_batch[:, n_cvt + 1, idx_yy]
-
-    # Clamp Px_YY
-    Px_YY = np.where((Px_YY >= 0.0) & (Px_YY < _P_YY_MIN), _P_YY_MIN, Px_YY)
-
-    beta, se, is_valid = _beta_se_from_pab(P_XX, P_XY, Px_YY, df)
-
-    # F-statistic and p-value via Cephes betainc
-    tau = df / Px_YY
-    f_stat = (P_YY - Px_YY) * tau
-    p_wald = _f_to_pvalue(f_stat, df, is_valid)
-
-    return beta, se, p_wald
+    return batch_calc_wald_stats_from_pab_numpy(n_cvt, Pab_batch, n_samples)
 
 
 def batch_calc_wald_stats_from_pab_numpy(

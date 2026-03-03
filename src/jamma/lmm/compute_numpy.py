@@ -324,7 +324,8 @@ def _compute_wald_numpy(
     """Compute REML-optimized Wald test statistics.
 
     Dispatches to the C extension for n_cvt=1 when _lmm_accel is importable.
-    Falls back to pure-Python NumPy for n_cvt>1 or when the extension is absent.
+    For n_cvt=1 without the C extension, uses the split-Uab Python path
+    (invariant/varying separation). Falls back to generic Python path for n_cvt>1.
 
     Args:
         n_cvt: Number of covariates.
@@ -359,8 +360,8 @@ def _compute_wald_numpy(
         )
 
     if n_cvt == 1:
-        # Python split path for n_cvt=1: invariant/varying split from Plan 02.
-        # Extract SoA components from pre-computed Uab_batch (n_snps, n_samples, 6).
+        # Python split path for n_cvt=1: separate invariant (ww, wy, yy)
+        # and varying (wx, xx, xy) Uab columns to reduce per-SNP computation.
         # Column layout: 0=ww, 1=wx, 2=wy, 3=xx, 4=xy, 5=yy.
         # Invariant columns (ww, wy, yy) are identical across SNPs — use SNP 0.
         uab_varying_soa = np.stack(

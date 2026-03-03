@@ -44,8 +44,8 @@ from jamma.core.memory import (
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.io.plink import (
-    get_chromosome_partitions,
     get_plink_metadata,
+    partitions_from_metadata,
     stream_genotype_chunks,
 )
 from jamma.kinship.missing import impute_and_center, impute_center_and_standardize
@@ -675,6 +675,7 @@ def _yield_loco_matrices(
     S_chr: dict[str, jnp.ndarray],
     n_chr_filtered: dict[str, int],
     n_filtered: int,
+    K_loco_buf: np.ndarray | None = None,
 ) -> Iterator[tuple[str, np.ndarray]]:
     """Compute and yield LOCO kinship matrices from S_full and per-chr accumulators.
 
@@ -686,6 +687,11 @@ def _yield_loco_matrices(
         S_chr: Per-chromosome kinship contributions (JAX arrays).
         n_chr_filtered: Count of filtered SNPs per chromosome.
         n_filtered: Total number of filtered SNPs.
+        K_loco_buf: Pre-allocated output buffer (n_samples, n_samples) for K_loco.
+            When provided, K_loco is computed in-place via np.subtract(out=) and
+            yielded directly. Caller must eigendecompose before the next yield
+            (buffer is reused each chromosome). When None, a new array is
+            allocated per chromosome (legacy behavior).
 
     Yields:
         (chr_name, K_loco) pairs in biological chromosome order.
@@ -704,7 +710,14 @@ def _yield_loco_matrices(
                 f"are on chromosome '{chr_name}'."
             )
 
-        K_loco = (S_full_np - np.array(S_chr[chr_name])) / p_loco
+        if K_loco_buf is not None:
+            # In-place subtraction: reuses buffer each chromosome (LOCO-03).
+            # INVARIANT: caller eigendecomposes before next yield (buffer reuse).
+            np.subtract(S_full_np, np.asarray(S_chr[chr_name]), out=K_loco_buf)
+            K_loco_buf /= p_loco
+            K_loco = K_loco_buf
+        else:
+            K_loco = (S_full_np - np.asarray(S_chr[chr_name])) / p_loco
         logger.debug(
             f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs retained"
         )
@@ -846,8 +859,8 @@ def compute_loco_kinship_streaming(
     n_snps = meta["n_snps"]
     chromosomes = meta["chromosome"]
 
-    # Build chromosome partition from metadata
-    partitions = get_chromosome_partitions(bed_path)
+    # Derive partitions from already-loaded metadata — avoids re-opening BED (LOCO-04)
+    partitions = partitions_from_metadata(meta)
     unique_chrs = sorted(partitions.keys(), key=chr_sort_key)
 
     logger.info("Computing LOCO Kinship (streaming)")
@@ -982,7 +995,10 @@ def compute_loco_kinship_streaming(
             f"computing {len(S_chr)} LOCO matrices"
         )
 
-        yield from _yield_loco_matrices(S_full_np, S_chr, n_chr_filtered, n_filtered)
+        K_loco_buf = np.empty_like(S_full_np)
+        yield from _yield_loco_matrices(
+            S_full_np, S_chr, n_chr_filtered, n_filtered, K_loco_buf
+        )
         yield from _yield_full_kinship_fallback(
             S_full_np, chrs_without_snps, n_filtered
         )
@@ -1019,7 +1035,10 @@ def compute_loco_kinship_streaming(
         del S_full_jax
         gc.collect()
 
-        yield from _yield_loco_matrices(S_full_np, S_chr, n_chr_filtered, n_filtered)
+        K_loco_buf = np.empty_like(S_full_np)
+        yield from _yield_loco_matrices(
+            S_full_np, S_chr, n_chr_filtered, n_filtered, K_loco_buf
+        )
         del S_chr
         gc.collect()
 
@@ -1044,7 +1063,7 @@ def compute_loco_kinship_streaming(
             )
 
             yield from _yield_loco_matrices(
-                S_full_np, S_chr, n_chr_filtered, n_filtered
+                S_full_np, S_chr, n_chr_filtered, n_filtered, K_loco_buf
             )
             del S_chr
             gc.collect()

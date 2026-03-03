@@ -175,6 +175,30 @@ def get_chromosome_partitions(bed_path: Path) -> dict[str, np.ndarray]:
         }
 
 
+def partitions_from_metadata(meta: dict[str, Any]) -> dict[str, np.ndarray]:
+    """Derive chromosome partitions from already-loaded PLINK metadata.
+
+    Equivalent to get_chromosome_partitions but avoids opening the BED
+    file a second time. Use when get_plink_metadata has already been called.
+
+    Args:
+        meta: Metadata dict from get_plink_metadata (must contain 'chromosome').
+
+    Returns:
+        Dict mapping chromosome name to sorted array of SNP column indices.
+        Keys ordered by first appearance in BIM file.
+    """
+    chromosomes = meta.get("chromosome")
+    if chromosomes is None:
+        raise ValueError(
+            "partitions_from_metadata requires 'chromosome' key in metadata dict. "
+            "Ensure this is the return value of get_plink_metadata()."
+        )
+    _, first_idx = np.unique(chromosomes, return_index=True)
+    unique_chrs = [chromosomes[i] for i in np.sort(first_idx)]
+    return {chr_name: np.where(chromosomes == chr_name)[0] for chr_name in unique_chrs}
+
+
 def _count_lines_fast(path: Path, chunk_size: int = 1024 * 1024) -> int:
     """Count logical lines in a file using binary byte counting.
 

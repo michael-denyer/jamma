@@ -6,7 +6,7 @@
 
 ```bash
 pip install jamma          # NumPy backend
-pip install jamma[jax]     # + JAX acceleration (ARM Mac only)
+pip install 'jamma[jax]'   # + JAX acceleration (ARM Mac only)
 ```
 
 That's it. macOS Accelerate BLAS handles large matrices natively.
@@ -17,7 +17,7 @@ For small datasets (<46k samples), the standard install works:
 
 ```bash
 pip install jamma          # NumPy backend
-pip install jamma[jax]     # + JAX acceleration
+pip install 'jamma[jax]'   # + JAX acceleration
 ```
 
 For large-scale GWAS (>46k samples), install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first — standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. Pre-built ILP64 wheels are available for Python 3.11–3.14:
@@ -38,7 +38,7 @@ pip install psutil loguru threadpoolctl click progressbar2 bed-reader
 pip install numpy \
   --extra-index-url https://michael-denyer.github.io/numpy-mkl \
   --force-reinstall --upgrade
-pip install jamma[jax] --no-deps
+pip install 'jamma[jax]' --no-deps
 pip install psutil loguru threadpoolctl click progressbar2 bed-reader \
   jax jaxlib jaxtyping
 ```
@@ -63,14 +63,6 @@ pip install psutil loguru threadpoolctl click progressbar2 bed-reader
 git clone https://github.com/michael-denyer/jamma.git
 cd jamma
 uv sync
-```
-
-### GPU Support
-
-For GPU acceleration, install JAX with CUDA support:
-
-```bash
-pip install jax[cuda12]
 ```
 
 ### Platform Support
@@ -267,7 +259,7 @@ jamma -lmm 1 -bfile data/my_study -k kinship.cXX.txt \
 
 **HWE filtering:** JAMMA uses a chi-squared goodness-of-fit test (df=1) via JAX.
 SNPs with p-value below the threshold are excluded from association testing.
-**Note:** HWE filtering requires the JAX backend (`pip install jamma[jax]`).
+**Note:** HWE filtering requires the JAX backend (`pip install 'jamma[jax]'`).
 See [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md) for differences from GEMMA's
 Wigginton exact test.
 
@@ -507,6 +499,27 @@ coordination overhead that outweighs parallelism gains.
 2. **NumPy backend** works on all platforms and requires no extra dependencies — suitable for smaller datasets or platforms without JAX support (Intel Mac)
 3. **Batch processing**: JAMMA automatically batches kinship computation
 4. **Memory**: For very large datasets, consider sample subsetting
+
+## Environment Variables
+
+| Variable | Default | Description |
+| -------- | ------- | ----------- |
+| `JAMMA_BACKEND` | auto-detect | Force backend: `numpy` or `jax`. Auto-detect tries JAX first. |
+| `JAMMA_JAX_DEVICES` | `physical_cores // 2` | Number of virtual CPU devices for JAX SNP-batch sharding. |
+| `JAMMA_BLAS_THREADS` | `physical_cores // n_devices` | Thread count for NumPy BLAS operations (eigendecomp, matmul). Controls MKL/OpenBLAS via `threadpoolctl`, not OpenMP. |
+| `JAMMA_LOCO_WORKERS` | `1` | Parallel chromosome workers in LOCO mode. Each worker holds a full K_loco matrix (`n_samples² × 8` bytes), so increase with caution. |
+
+```bash
+# Example: 8 JAX devices, 4 BLAS threads per device, 2 LOCO workers
+export JAMMA_JAX_DEVICES=8
+export JAMMA_BLAS_THREADS=4
+export JAMMA_LOCO_WORKERS=2
+jamma -lmm 1 -bfile data/my_study -loco -o output
+```
+
+**Note:** `JAMMA_BLAS_THREADS` scopes thread control to BLAS libraries (MKL, OpenBLAS)
+and does not affect OpenMP (`libgomp`/`libomp`) or JAX's XLA thread pool. If you have
+C extensions compiled with `-fopenmp`, use `OMP_NUM_THREADS` separately.
 
 ## Validation
 

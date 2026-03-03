@@ -95,6 +95,42 @@ def get_blas_thread_count() -> int:
     return n
 
 
+def get_loco_worker_count() -> int:
+    """Return configured LOCO worker count.
+
+    Controls how many chromosomes are processed in parallel during
+    LOCO analysis. Default is 1 (sequential), matching current behavior.
+    Increase with caution — each parallel worker holds a full K_loco
+    matrix (n_samples^2 * 8 bytes) in memory.
+
+    Priority:
+    1. JAMMA_LOCO_WORKERS env var
+    2. Default: 1 (sequential)
+
+    Returns:
+        Positive integer worker count.
+    """
+    env_override = os.environ.get("JAMMA_LOCO_WORKERS")
+    if env_override is not None:
+        try:
+            n = int(env_override)
+        except ValueError:
+            logger.warning(
+                f"JAMMA_LOCO_WORKERS={env_override!r} is not a valid integer, "
+                "falling back to 1 (sequential)"
+            )
+            return 1
+        if n < 1:
+            logger.warning(
+                f"JAMMA_LOCO_WORKERS={n} is not a positive integer, "
+                "clamping to 1 (sequential)"
+            )
+            return 1
+        logger.debug(f"LOCO workers from JAMMA_LOCO_WORKERS: {n}")
+        return n
+    return 1
+
+
 @contextmanager
 def blas_threads(n_threads: int | None = None) -> Generator[None, None, None]:
     """Context manager for scoped BLAS thread control.

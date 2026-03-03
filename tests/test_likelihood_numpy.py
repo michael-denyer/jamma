@@ -854,8 +854,14 @@ def test_iab_invariant_scalars():
 
 
 @pytest.mark.tier0
-def test_golden_section_no_redundant_eval():
-    """Golden section must call compute_fn exactly 2 + n_iter times (no extra eval)."""
+def test_golden_section_eval_count():
+    """Golden section calls compute_fn 2 + n_iter + 1 times (final midpoint eval).
+
+    The final midpoint evaluation ensures the returned (lambda, logl) pair is
+    consistent — both from the same evaluation point. Without it, lambda is at
+    the midpoint but logl is max(fc, fd) from different points c and d, causing
+    a mismatch that propagates into LRT p-values.
+    """
     from jamma.lmm.likelihood_numpy import _batch_golden_section_numpy
 
     call_count = [0]
@@ -889,13 +895,11 @@ def test_golden_section_no_redundant_eval():
 
     _batch_golden_section_numpy(counting_reml, grid_logls, log_lambdas, n_iter)
 
-    # Expected: 2 initial probes (c and d) + n_iter (one per iteration, evaluating
-    # whichever of new_c or new_d is needed) = 2 + n_iter
-    # Before fix: would be 2 + n_iter + 1 (extra midpoint call at the end)
-    expected_calls = 2 + n_iter
+    # 2 initial probes (c, d) + n_iter (one per iteration) + 1 final midpoint eval
+    expected_calls = 2 + n_iter + 1
     assert call_count[0] == expected_calls, (
         f"Expected {expected_calls} calls, got {call_count[0]}. "
-        "Golden section should NOT re-evaluate at midpoint."
+        "Golden section must evaluate at midpoint for consistent (lambda, logl)."
     )
 
 

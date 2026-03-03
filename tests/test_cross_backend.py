@@ -61,16 +61,13 @@ class TestCrossBackend:
     These tolerances are tight because the code paths are near-identical.
     """
 
-    # JAX uses generic golden section; NumPy n_cvt=1 uses split-Uab optimizer.
-    # Different FP accumulation order causes divergence on weak-signal SNPs,
-    # particularly for LRT/MLE statistics on flat optimization landscapes.
     TOLERANCES = {
         "beta": 1e-10,
         "se": 1e-10,
         "p_wald": 1e-10,
-        "p_lrt": 5e-3,  # split-Uab vs generic optimizer divergence on weak signals
+        "p_lrt": 1e-8,
         "p_score": 1e-8,
-        "logl_H1": 5e-3,  # same optimizer divergence affects per-SNP MLE logl
+        "logl_H1": 1e-8,
         "l_remle": 1e-10,
     }
 

@@ -988,11 +988,10 @@ def _batch_golden_section_numpy(
         opt_logl, Pab_final = compute_batch_with_pab_fn(log_opt)
         return np.exp(log_opt), opt_logl, Pab_final
 
-    # Default: return best of fc/fd at convergence — avoids one redundant batch
-    # REML call. The midpoint (a+b)/2 is bracketed by c and d, so the best of
-    # fc/fd is within golden ratio tolerance of the true optimum (6.6e-5 after
-    # 20 iters).
-    opt_logl = np.where(fc > fd, fc, fd)
+    # Evaluate logl at the midpoint to match lambda — ensures the returned
+    # (lambda, logl) pair is from the same evaluation point. This matches
+    # the JAX path (likelihood_jax.py line 531) which also evaluates at midpoint.
+    opt_logl = compute_batch_fn(log_opt)
     return np.exp(log_opt), opt_logl
 
 

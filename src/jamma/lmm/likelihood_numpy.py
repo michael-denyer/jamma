@@ -627,6 +627,60 @@ def batch_compute_iab_split_ncvt1(
 
 
 # ---------------------------------------------------------------------------
+# Precomputed REML/MLE constants and Iab invariant scalars
+# ---------------------------------------------------------------------------
+
+
+def _compute_reml_const(df: int) -> float:
+    """Precompute REML normalizing constant: 0.5 * df * (log(df) - log(2*pi) - 1).
+
+    Depends only on sample count — compute once per run, not per evaluation.
+
+    Args:
+        df: Degrees of freedom (n_samples - n_cvt - 1).
+
+    Returns:
+        REML normalizing constant.
+    """
+    return 0.5 * df * (np.log(df) - np.log(2.0 * np.pi) - 1.0)
+
+
+def _compute_mle_const(n: int) -> float:
+    """Precompute MLE normalizing constant: 0.5 * n * (log(n) - log(2*pi) - 1).
+
+    Args:
+        n: Number of samples.
+
+    Returns:
+        MLE normalizing constant.
+    """
+    return 0.5 * n * (np.log(n) - np.log(2.0 * np.pi) - 1.0)
+
+
+def compute_iab_invariant_scalars_ncvt1(
+    uab_invariant_soa: np.ndarray,
+) -> tuple[float, float, float, float]:
+    """Precompute Iab invariant scalars for n_cvt=1.
+
+    These are the simple sums of the invariant Uab columns (Hi_eval = ones),
+    constant across all chunks and all lambda values. Compute once at run start.
+
+    Args:
+        uab_invariant_soa: (3, n_samples) — rows [ww, wy, yy].
+
+    Returns:
+        (iab_s_ww, iab_s_wy, iab_s_yy, logdet_iab) where:
+        - iab_s_ww/wy/yy: simple sums of invariant columns
+        - logdet_iab: log(iab_s_ww) — the Iab diagonal for REML logdet_hiw
+    """
+    iab_s_ww = float(uab_invariant_soa[0, :].sum())
+    iab_s_wy = float(uab_invariant_soa[1, :].sum())
+    iab_s_yy = float(uab_invariant_soa[2, :].sum())
+    logdet_iab = np.log(iab_s_ww) if iab_s_ww > 0 else 0.0
+    return iab_s_ww, iab_s_wy, iab_s_yy, logdet_iab
+
+
+# ---------------------------------------------------------------------------
 # Batch REML / MLE log-likelihood evaluation
 # ---------------------------------------------------------------------------
 
@@ -916,8 +970,12 @@ def _batch_golden_section_numpy(
 
         a, b, c, d, fc, fd = new_a, new_b, new_c, new_d, new_fc, new_fd
 
+    # Return best of fc/fd at convergence — avoids one redundant batch REML call.
+    # The midpoint (a+b)/2 is bracketed by c and d, so the best of fc/fd is
+    # within golden ratio tolerance of the true optimum (6.6e-5 after 20 iters).
     log_opt = (a + b) / 2.0
-    return np.exp(log_opt), compute_batch_fn(log_opt)
+    opt_logl = np.where(fc > fd, fc, fd)
+    return np.exp(log_opt), opt_logl
 
 
 def golden_section_optimize_lambda_numpy(

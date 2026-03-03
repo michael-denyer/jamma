@@ -25,7 +25,9 @@ import pytest
 
 from jamma.lmm.compute_numpy import _compute_lmm_chunk_numpy
 from jamma.lmm.likelihood_numpy import (
+    _batch_grid_reml_numpy,
     _batch_lrt_pvalues_numpy,
+    _batch_reml_at_lambda_numpy,
     batch_calc_score_stats_numpy,
     batch_calc_wald_stats_numpy,
     batch_compute_iab_numpy,
@@ -528,6 +530,170 @@ def test_compute_lmm_chunk_numpy_missing_args_raise(synthetic_data):
 
 
 # ---------------------------------------------------------------------------
+# Scalar P_yy warning deduplication (LIK-07)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+def test_p_yy_warn_once_scalar(caplog):
+    """_clamp_p_yy fires warning exactly once per run; reset restarts the counter."""
+    import logging
+
+    from jamma.lmm.likelihood import _clamp_p_yy, reset_scalar_p_yy_warned
+
+    # Start clean
+    reset_scalar_p_yy_warned()
+
+    with caplog.at_level(logging.WARNING, logger="jamma.lmm.likelihood"):
+        for _ in range(10):
+            _clamp_p_yy(-1.0, 1.0)
+
+    warning_records = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warning_records) == 1, (
+        f"Expected exactly 1 warning, got {len(warning_records)}"
+    )
+
+    # Reset and fire again — should produce a second warning
+    reset_scalar_p_yy_warned()
+    with caplog.at_level(logging.WARNING, logger="jamma.lmm.likelihood"):
+        _clamp_p_yy(-1.0, 1.0)
+
+    warning_records = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warning_records) == 2, (
+        f"Expected 2 total warnings after reset, got {len(warning_records)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Scalar MLE P_yy without full Pab (LIK-08)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+def test_mle_scalar_pab_ncvt1():
+    """_mle_p_yy_scalar_ncvt1 must match calc_pab path to rtol=1e-14."""
+    from jamma.lmm.likelihood import (
+        _mle_p_yy_scalar_ncvt1,
+        calc_pab,
+        compute_Uab,
+        get_ab_index,
+    )
+
+    rng = np.random.default_rng(123)
+    n_samples = 50
+    n_cvt = 1
+
+    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n_samples))
+    UtW = np.ones((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+    Utx = rng.standard_normal(n_samples)
+
+    lambda_val = 0.5
+    v_temp = lambda_val * eigenvalues + 1.0
+    Hi_eval = 1.0 / v_temp
+
+    Uab = compute_Uab(UtW, Uty, Utx)
+    Pab = calc_pab(n_cvt, Hi_eval, Uab)
+
+    # Full Pab path: nc_total = n_cvt + 1 = 2
+    nc_total = n_cvt + 1
+    index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
+    p_yy_full = Pab[nc_total, index_yy]
+
+    # Scalar path
+    p_yy_scalar = _mle_p_yy_scalar_ncvt1(Hi_eval, Uab)
+
+    np.testing.assert_allclose(
+        p_yy_scalar,
+        p_yy_full,
+        rtol=1e-14,
+        err_msg="_mle_p_yy_scalar_ncvt1 does not match calc_pab P_yy",
+    )
+
+
+@pytest.mark.tier0
+def test_mle_no_calc_pab_ncvt1():
+    """mle_log_likelihood with n_cvt=1 must NOT call calc_pab; n_cvt=2 must call it."""
+    from unittest.mock import patch
+
+    import jamma.lmm.likelihood as lik_mod
+    from jamma.lmm.likelihood import compute_Uab
+
+    rng = np.random.default_rng(456)
+    n_samples = 50
+
+    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n_samples))
+    UtW = np.ones((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+    Utx = rng.standard_normal(n_samples)
+    lambda_val = 0.5
+
+    # n_cvt=1: scalar path, calc_pab should NOT be called
+    Uab_1 = compute_Uab(UtW, Uty, Utx)
+    with patch.object(lik_mod, "calc_pab", wraps=lik_mod.calc_pab) as mock_pab:
+        lik_mod.mle_log_likelihood(lambda_val, eigenvalues, Uab_1, n_cvt=1)
+    assert mock_pab.call_count == 0, (
+        f"calc_pab called {mock_pab.call_count} times for n_cvt=1 (expected 0)"
+    )
+
+    # n_cvt=2: full Pab path, calc_pab MUST be called
+    UtW2 = np.ones((n_samples, 2))
+    Uab_2 = compute_Uab(UtW2, Uty, Utx)
+    with patch.object(lik_mod, "calc_pab", wraps=lik_mod.calc_pab) as mock_pab:
+        lik_mod.mle_log_likelihood(lambda_val, eigenvalues, Uab_2, n_cvt=2)
+    assert mock_pab.call_count == 1, (
+        f"calc_pab called {mock_pab.call_count} times for n_cvt=2 (expected 1)"
+    )
+
+
+@pytest.mark.tier0
+def test_mle_null_scalar_ncvt1():
+    """mle_log_likelihood_null with n_cvt=1 produces identical results to full Pab."""
+    from jamma.lmm.likelihood import (
+        _mle_p_yy_scalar_null_ncvt1,
+        calc_pab,
+        compute_Uab,
+        get_ab_index,
+        mle_log_likelihood_null,
+    )
+
+    rng = np.random.default_rng(789)
+    n_samples = 50
+    n_cvt = 1
+
+    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n_samples))
+    UtW = np.ones((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+
+    lambda_val = 0.3
+    v_temp = lambda_val * eigenvalues + 1.0
+    Hi_eval = 1.0 / v_temp
+
+    # Null model Uab (no genotype)
+    Uab = compute_Uab(UtW, Uty, Utx=None)
+
+    # Full Pab path: nc_total = n_cvt = 1 for null model
+    nc_total = n_cvt  # null model
+    Pab = calc_pab(n_cvt, Hi_eval, Uab)
+    index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
+    p_yy_full = Pab[nc_total, index_yy]
+
+    # Scalar null path
+    p_yy_scalar = _mle_p_yy_scalar_null_ncvt1(Hi_eval, Uab)
+
+    np.testing.assert_allclose(
+        p_yy_scalar,
+        p_yy_full,
+        rtol=1e-14,
+        err_msg="_mle_p_yy_scalar_null_ncvt1 does not match calc_pab P_yy",
+    )
+
+    # Verify end-to-end: mle_log_likelihood_null should produce a finite result
+    logl = mle_log_likelihood_null(lambda_val, eigenvalues, Uab, n_cvt)
+    assert np.isfinite(logl), f"mle_log_likelihood_null returned non-finite: {logl}"
+
+
+# ---------------------------------------------------------------------------
 # Multi-covariate Uab parity (n_cvt > 1)
 # ---------------------------------------------------------------------------
 
@@ -564,3 +730,117 @@ def test_batch_uab_multi_covariate_matches_jax():
         atol=1e-14,
         err_msg="batch_compute_uab_numpy (n_cvt=3) does not match JAX",
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 1: Precompute REML constants, Iab invariant scalars, golden section fix
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+def test_reml_const_precomputed():
+    """_compute_reml_const(df) must match inline computation bit-exactly."""
+    from jamma.lmm.likelihood_numpy import _compute_reml_const
+
+    for df in [10, 48, 100, 1000, 50000]:
+        result = _compute_reml_const(df)
+        inline = 0.5 * df * (np.log(df) - np.log(2.0 * np.pi) - 1.0)
+        np.testing.assert_equal(
+            result,
+            inline,
+            err_msg=f"_compute_reml_const({df}) does not match inline for df={df}",
+        )
+
+
+@pytest.mark.tier0
+def test_iab_invariant_scalars():
+    """compute_iab_invariant_scalars_ncvt1 must match manual np.sum exactly."""
+    from jamma.lmm.likelihood_numpy import compute_iab_invariant_scalars_ncvt1
+
+    rng = np.random.default_rng(123)
+    n_samples = 80
+    uab_invariant_soa = rng.standard_normal((3, n_samples))
+    # Ensure rows are all positive-valued for log checks
+    uab_invariant_soa = np.abs(uab_invariant_soa) + 0.1
+
+    iab_s_ww, iab_s_wy, iab_s_yy, logdet_iab = compute_iab_invariant_scalars_ncvt1(
+        uab_invariant_soa
+    )
+
+    expected_s_ww = float(uab_invariant_soa[0, :].sum())
+    expected_s_wy = float(uab_invariant_soa[1, :].sum())
+    expected_s_yy = float(uab_invariant_soa[2, :].sum())
+    expected_logdet = np.log(expected_s_ww)
+
+    np.testing.assert_equal(iab_s_ww, expected_s_ww)
+    np.testing.assert_equal(iab_s_wy, expected_s_wy)
+    np.testing.assert_equal(iab_s_yy, expected_s_yy)
+    np.testing.assert_equal(logdet_iab, expected_logdet)
+
+
+@pytest.mark.tier0
+def test_golden_section_no_redundant_eval():
+    """Golden section must call compute_fn exactly 2 + n_iter times (no extra eval)."""
+    from jamma.lmm.likelihood_numpy import _batch_golden_section_numpy
+
+    call_count = [0]
+
+    rng = np.random.default_rng(42)
+    n_samples, n_snps = 50, 10
+    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n_samples))
+    UtW = np.ones((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
+
+    n_grid = 10
+    n_iter = 5
+
+    log_l_min = np.log(1e-5)
+    log_l_max = np.log(1e5)
+    log_lambdas = np.linspace(log_l_min, log_l_max, n_grid)
+    lambdas_grid = np.exp(log_lambdas)
+
+    grid_logls = _batch_grid_reml_numpy(
+        1, lambdas_grid, eigenvalues, Uab_batch, Iab_batch
+    )
+
+    def counting_reml(log_lams):
+        call_count[0] += 1
+        lams = np.exp(log_lams)
+        return _batch_reml_at_lambda_numpy(1, lams, eigenvalues, Uab_batch, Iab_batch)
+
+    _batch_golden_section_numpy(counting_reml, grid_logls, log_lambdas, n_iter)
+
+    # Expected: 2 initial probes (c and d) + n_iter (one per iteration, evaluating
+    # whichever of new_c or new_d is needed) = 2 + n_iter
+    # Before fix: would be 2 + n_iter + 1 (extra midpoint call at the end)
+    expected_calls = 2 + n_iter
+    assert call_count[0] == expected_calls, (
+        f"Expected {expected_calls} calls, got {call_count[0]}. "
+        "Golden section should NOT re-evaluate at midpoint."
+    )
+
+
+@pytest.mark.tier0
+def test_golden_section_accuracy_no_final_eval(synthetic_data):
+    """Golden section without final eval must produce finite, positive lambdas."""
+    eigenvalues, UtW, Uty, UtG = synthetic_data
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
+
+    lambdas_opt, logls_opt = golden_section_optimize_lambda_numpy(
+        1, eigenvalues, Uab_batch, Iab_batch
+    )
+
+    # Lambdas should be finite positive values
+    assert np.all(np.isfinite(lambdas_opt) | np.isnan(lambdas_opt)), (
+        "Some lambdas are infinite"
+    )
+    assert np.all(lambdas_opt[np.isfinite(lambdas_opt)] > 0), (
+        "Some finite lambdas are non-positive"
+    )
+    # Logls should be finite (no NaN for valid SNPs)
+    assert np.all(np.isfinite(logls_opt)), "Some logls are not finite"

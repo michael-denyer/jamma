@@ -312,10 +312,10 @@ def test_chunk_size_pipeline_halves_budget():
 
 
 def test_chunk_size_auto_scales_with_memory():
-    """Auto-scaled budget uses 5% of available RAM between 2-20 GB bounds."""
+    """Auto-scaled budget uses 15% of available RAM between 2-40 GB bounds."""
     from unittest.mock import MagicMock, patch
 
-    # 400 GB available → 5% = 20 GB (hits ceiling)
+    # 400 GB available → 15% = 60 GB (hits 40 GB ceiling)
     mock_vmem = MagicMock()
     mock_vmem.available = 400_000_000_000
     with patch("jamma.lmm.runner_numpy.psutil.virtual_memory", return_value=mock_vmem):
@@ -326,8 +326,8 @@ def test_chunk_size_auto_scales_with_memory():
             use_split=True,
         )
 
-    # 20 GB available → 5% = 1 GB (hits floor at 2 GB)
-    mock_vmem.available = 20_000_000_000
+    # 10 GB available → 15% = 1.5 GB (hits 2 GB floor)
+    mock_vmem.available = 10_000_000_000
     with patch("jamma.lmm.runner_numpy.psutil.virtual_memory", return_value=mock_vmem):
         chunk_small = _compute_chunk_size_numpy(
             n_samples=50_000,
@@ -736,3 +736,203 @@ class TestLambdaBoundaryDiagnostics:
         from jamma.lmm.results import log_lambda_boundary_warning
 
         log_lambda_boundary_warning(0, 0, 1e-5, 1e5)  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# Imputation guard tests (RUN-06)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+def test_imputation_skipped_on_clean_data():
+    """Imputation guard skips np.where when no NaN values present (RUN-06).
+
+    Verifies that the imputation code path handles clean data correctly
+    (the guard clause doesn't break the data flow).
+    """
+    rng = np.random.default_rng(42)
+    n_samples, n_snps = 100, 50
+
+    # Clean genotypes — no missing values
+    genotypes = rng.choice([0.0, 1.0, 2.0], size=(n_samples, n_snps))
+    assert not np.any(np.isnan(genotypes)), "Test expects no missing values"
+
+    phenotypes = rng.standard_normal(n_samples)
+    kinship = np.eye(n_samples, dtype=np.float64)
+    snp_info = [
+        {"chr": "1", "rs": f"rs{i}", "pos": i * 1000, "a1": "A", "a0": "T"}
+        for i in range(n_snps)
+    ]
+
+    results = run_lmm_association_numpy(
+        genotypes=genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        maf_threshold=0.0,
+        miss_threshold=1.0,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=1,
+    )
+
+    # Should complete without error and produce valid results
+    assert len(results) > 0
+    # Results should have finite values (no NaN from imputation issues)
+    for r in results[:5]:  # spot check
+        assert np.isfinite(r.beta), f"beta is not finite: {r.beta}"
+
+
+@pytest.mark.tier1
+def test_imputation_applies_on_missing_data():
+    """Imputation guard correctly imputes when NaN values are present (RUN-06)."""
+    rng = np.random.default_rng(42)
+    n_samples, n_snps = 100, 50
+
+    genotypes = rng.choice([0.0, 1.0, 2.0], size=(n_samples, n_snps))
+    # Add some missing values
+    genotypes[0, 0] = np.nan
+    genotypes[5, 3] = np.nan
+    genotypes[10, 10] = np.nan
+
+    phenotypes = rng.standard_normal(n_samples)
+    kinship = np.eye(n_samples, dtype=np.float64)
+    snp_info = [
+        {"chr": "1", "rs": f"rs{i}", "pos": i * 1000, "a1": "A", "a0": "T"}
+        for i in range(n_snps)
+    ]
+
+    results = run_lmm_association_numpy(
+        genotypes=genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        maf_threshold=0.0,
+        miss_threshold=1.0,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=1,
+    )
+
+    assert len(results) > 0
+    # With imputation, results should still be finite
+    for r in results[:5]:
+        assert np.isfinite(r.beta), f"beta is not finite: {r.beta}"
+
+
+# ---------------------------------------------------------------------------
+# Split-Uab all modes and reconstruct_uab_from_soa tests (RUN-01)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+@pytest.mark.parametrize("lmm_mode", [1, 2, 3, 4], ids=["Wald", "LRT", "Score", "All"])
+def test_split_uab_all_modes(lmm_mode):
+    """All LMM modes produce valid results with split-Uab layout (RUN-01)."""
+    rng = np.random.default_rng(42)
+    n_samples, n_snps = 100, 50
+
+    genotypes = rng.choice([0.0, 1.0, 2.0], size=(n_samples, n_snps))
+    phenotypes = rng.standard_normal(n_samples)
+    kinship = np.corrcoef(genotypes) + np.eye(n_samples) * 0.1
+    kinship = (kinship + kinship.T) / 2  # ensure symmetry
+    snp_info = [
+        {"chr": "1", "rs": f"rs{i}", "pos": i * 1000, "a1": "A", "a0": "T"}
+        for i in range(n_snps)
+    ]
+
+    results = run_lmm_association_numpy(
+        genotypes=genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        maf_threshold=0.0,
+        miss_threshold=1.0,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=lmm_mode,
+    )
+
+    assert len(results) > 0, f"Mode {lmm_mode} produced no results"
+
+    # Mode-specific output checks
+    if lmm_mode in (1, 4):  # Wald or All
+        for r in results[:5]:
+            assert hasattr(r, "beta") and np.isfinite(r.beta), (
+                f"Wald beta not finite: {r}"
+            )
+            assert hasattr(r, "p_wald") and np.isfinite(r.p_wald), (
+                f"Wald p not finite: {r}"
+            )
+    if lmm_mode in (2, 4):  # LRT or All
+        for r in results[:5]:
+            assert hasattr(r, "p_lrt") and np.isfinite(r.p_lrt), (
+                f"LRT p not finite: {r}"
+            )
+    if lmm_mode in (3, 4):  # Score or All
+        for r in results[:5]:
+            assert hasattr(r, "p_score") and np.isfinite(r.p_score), (
+                f"Score p not finite: {r}"
+            )
+
+
+@pytest.mark.tier1
+def test_reconstruct_uab_from_soa_matches_direct():
+    """reconstruct_uab_from_soa matches batch_compute_uab_numpy exactly (RUN-01)."""
+    from jamma.lmm.likelihood_numpy import (
+        batch_compute_uab_numpy,
+        batch_compute_uab_varying_soa_numpy,
+        compute_uab_invariant_soa,
+        reconstruct_uab_from_soa,
+    )
+
+    rng = np.random.default_rng(42)
+    n_samples, n_snps = 50, 20
+
+    UtW = rng.standard_normal((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+
+    # Direct full Uab construction
+    Uab_direct = batch_compute_uab_numpy(n_cvt=1, UtW=UtW, Uty=Uty, UtG=UtG)
+
+    # Split construction + reconstruction
+    invariant = compute_uab_invariant_soa(UtW, Uty)
+    varying = batch_compute_uab_varying_soa_numpy(n_cvt=1, UtW=UtW, Uty=Uty, UtG=UtG)
+    Uab_reconstructed = reconstruct_uab_from_soa(invariant, varying)
+
+    np.testing.assert_allclose(
+        Uab_reconstructed,
+        Uab_direct,
+        atol=1e-14,
+        err_msg="Reconstructed Uab does not match direct construction",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Adaptive core split tests (RUN-05)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+def test_adaptive_core_split():
+    """Core split adapts rotation/compute ratio based on n_samples (RUN-05)."""
+    from jamma.lmm.runner_numpy import compute_pipeline_core_split
+
+    total_cores = 8
+
+    # Large samples (>10k): rotation-heavy, gets 50% of cores
+    rot, omp = compute_pipeline_core_split(50_000, total_cores)
+    assert rot == 4 and omp == 4, f"Large: rot={rot}, omp={omp}"
+
+    # Medium samples (1k-10k): balanced, rotation gets 33%
+    rot, omp = compute_pipeline_core_split(5_000, total_cores)
+    assert rot == 2 and omp == 6, f"Medium: rot={rot}, omp={omp}"
+
+    # Small samples (<1k): compute-heavy, rotation gets 25%
+    rot, omp = compute_pipeline_core_split(500, total_cores)
+    assert rot == 2 and omp == 6, f"Small: rot={rot}, omp={omp}"
+
+    # Edge: 1 core — both get 1
+    rot, omp = compute_pipeline_core_split(50_000, 1)
+    assert rot >= 1 and omp >= 1, f"Single core: rot={rot}, omp={omp}"

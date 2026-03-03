@@ -490,6 +490,41 @@ def batch_compute_uab_varying_soa_numpy(
     return uab_varying_soa
 
 
+def reconstruct_uab_from_soa(
+    uab_invariant_soa: np.ndarray,
+    uab_varying_soa: np.ndarray,
+) -> np.ndarray:
+    """Reconstruct full Uab matrix from split SoA components.
+
+    Combines invariant columns [ww, wy, yy] with per-SNP varying columns
+    [wx, xx, xy] into the standard Uab layout (n_snps, n_samples, n_index=6).
+
+    The column ordering matches batch_compute_uab_numpy for n_cvt=1:
+    index 0: ww, 1: wx, 2: wy, 3: xx, 4: xy, 5: yy
+
+    Args:
+        uab_invariant_soa: Shape (3, n_samples) — rows [ww, wy, yy].
+        uab_varying_soa: Shape (n_snps, 3, n_samples) — axis-1 rows [wx, xx, xy].
+
+    Returns:
+        Full Uab array (n_snps, n_samples, 6) matching batch_compute_uab_numpy layout.
+    """
+    n_snps, _, n_samples = uab_varying_soa.shape
+    Uab = np.empty((n_snps, n_samples, 6), dtype=np.float64)
+
+    # Invariant columns — broadcast across all SNPs
+    Uab[:, :, 0] = uab_invariant_soa[0]  # ww
+    Uab[:, :, 2] = uab_invariant_soa[1]  # wy
+    Uab[:, :, 5] = uab_invariant_soa[2]  # yy
+
+    # Varying columns — per-SNP
+    Uab[:, :, 1] = uab_varying_soa[:, 0, :]  # wx
+    Uab[:, :, 3] = uab_varying_soa[:, 1, :]  # xx
+    Uab[:, :, 4] = uab_varying_soa[:, 2, :]  # xy
+
+    return Uab
+
+
 def batch_compute_iab_split_ncvt1_soa(
     uab_varying_soa: np.ndarray,
     uab_invariant_soa: np.ndarray,
@@ -1025,7 +1060,10 @@ def _beta_se_from_pab(
         np.abs(variance_beta),
         variance_beta,
     )
-    se = np.where(is_valid, np.sqrt(variance_safe), np.nan)
+    # np.where evaluates sqrt on all elements including NaN/negative variance_safe
+    # from invalid SNPs; those results are discarded by the is_valid mask
+    with np.errstate(invalid="ignore"):
+        se = np.where(is_valid, np.sqrt(variance_safe), np.nan)
 
     return beta, se, is_valid
 

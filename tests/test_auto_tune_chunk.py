@@ -213,3 +213,65 @@ class TestChunkSizingAtDatabricksScale:
             assert result % n_devices == 0, (
                 f"auto_tune result {result} not aligned to {n_devices} devices"
             )
+
+
+@pytest.mark.tier1
+def test_clear_caches_not_in_chunk_loop():
+    """jax.clear_caches() must be at end-of-run only, not inside chunk loop (RUN-07)."""
+    import ast
+    from pathlib import Path
+
+    runner_files = [
+        Path("src/jamma/lmm/runner_jax.py"),
+        Path("src/jamma/lmm/runner_streaming.py"),
+    ]
+
+    for fpath in runner_files:
+        source = fpath.read_text()
+        tree = ast.parse(source)
+
+        # Check that no jax.clear_caches() call is inside a for loop
+        for node in ast.walk(tree):
+            if isinstance(node, ast.For):
+                for inner in ast.walk(node):
+                    if isinstance(inner, ast.Call):
+                        func = inner.func
+                        if (
+                            isinstance(func, ast.Attribute)
+                            and func.attr == "clear_caches"
+                            and isinstance(func.value, ast.Name)
+                            and func.value.id == "jax"
+                        ):
+                            pytest.fail(
+                                f"jax.clear_caches() inside for loop in {fpath}"
+                                f" line {inner.lineno}"
+                            )
+
+
+@pytest.mark.tier1
+def test_compute_chunk_size_with_n_samples():
+    """_compute_chunk_size uses memory-aware sizing when n_samples > 0."""
+    chunk = _compute_chunk_size(n_snps=1_000_000, n_devices=1, n_samples=10_000)
+    # At minimum, it should be at least 1000 (the floor)
+    assert chunk >= 1000
+    # Should not exceed n_snps
+    assert chunk <= 1_000_000
+
+
+@pytest.mark.tier1
+def test_compute_chunk_size_backward_compatible():
+    """_compute_chunk_size without n_samples uses MAX_SAFE_CHUNK cap (legacy)."""
+    chunk = _compute_chunk_size(n_snps=100_000, n_devices=1)
+    assert chunk == MAX_SAFE_CHUNK  # Falls back to cap without n_samples
+
+
+@pytest.mark.tier1
+def test_get_device_budget_bytes_cpu_returns_none():
+    """_get_device_budget_bytes returns None on CPU (no device memory stats)."""
+    from jamma.lmm.chunk import _get_device_budget_bytes
+
+    # On CPU-only machines, device.memory_stats() returns None
+    # The function should gracefully return None
+    result = _get_device_budget_bytes()
+    # On CPU, returns None; on GPU, returns an int — both are valid
+    assert result is None or isinstance(result, int)

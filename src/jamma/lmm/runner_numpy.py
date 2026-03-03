@@ -18,7 +18,11 @@ from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.core.memory import estimate_lmm_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
-from jamma.core.threading import blas_threads, get_physical_core_count
+from jamma.core.threading import (
+    blas_threads,
+    get_physical_core_count,
+    is_blas_controllable,
+)
 from jamma.lmm.compute_numpy import (
     _C_ACCEL_AVAILABLE,
     _C_HAS_OPENMP,
@@ -32,6 +36,7 @@ from jamma.lmm.likelihood_numpy import (
     batch_compute_uab_numpy,
     batch_compute_uab_varying_soa_numpy,
     compute_uab_invariant_soa,
+    reconstruct_uab_from_soa,
     reset_p_yy_warned,
 )
 from jamma.lmm.prepare_common import (
@@ -53,7 +58,33 @@ _MAX_CHUNK = 200_000
 
 # Memory budget bounds for auto-scaling
 _MIN_BUDGET = 2_000_000_000  # 2 GB floor (original default)
-_MAX_BUDGET = 20_000_000_000  # 20 GB ceiling
+_MAX_BUDGET = 40_000_000_000  # 40 GB ceiling
+
+# Minimum number of chunks before pipelined execution is worthwhile.
+_MIN_PIPELINE_CHUNKS = 30
+
+
+def compute_pipeline_core_split(n_samples: int, total_cores: int) -> tuple[int, int]:
+    """Compute rotation/compute thread split for the pipeline path.
+
+    DGEMM rotation scales with n_samples^2 * chunk_size while per-SNP
+    compute scales with chunk_size * (n_grid + n_refine). For large
+    n_samples rotation dominates; for small n_samples compute dominates.
+
+    Args:
+        n_samples: Number of samples in the dataset.
+        total_cores: Physical core count available.
+
+    Returns:
+        (rotation_threads, compute_threads) tuple. Both >= 1.
+    """
+    if n_samples > 10_000:
+        rot = max(1, total_cores // 2)
+    elif n_samples > 1_000:
+        rot = max(1, total_cores // 3)
+    else:
+        rot = max(1, total_cores // 4)
+    return rot, max(1, total_cores - rot)
 
 
 def _compute_chunk_size_numpy(
@@ -62,6 +93,7 @@ def _compute_chunk_size_numpy(
     n_cvt: int = 1,
     *,
     use_split: bool = False,
+    lmm_mode: int = 1,
     mem_budget_bytes: int | None = None,
     pipeline_buffers: int = 1,
 ) -> int:
@@ -74,8 +106,10 @@ def _compute_chunk_size_numpy(
         n_samples: Number of samples.
         n_filtered: Number of filtered SNPs.
         n_cvt: Number of covariates.
-        use_split: If True, use split Uab accounting (3 varying columns +
-            1 UtG column) instead of full Uab (6 columns for n_cvt=1).
+        use_split: If True, use split Uab accounting instead of full Uab.
+        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All). Affects
+            memory accounting: Wald uses 4 cols/SNP (3 varying + 1 UtG),
+            non-Wald uses 9 cols/SNP (3 varying + 6 reconstructed Uab peak).
         mem_budget_bytes: Explicit per-chunk memory budget in bytes.
             None (default) auto-scales with available RAM.
         pipeline_buffers: Number of live chunks (1 for sequential,
@@ -85,8 +119,13 @@ def _compute_chunk_size_numpy(
         Chunk size (number of SNPs per chunk).
     """
     if use_split and n_cvt == 1:
-        # Split Uab path: 3 varying columns + 1 UtG column per SNP
-        bytes_per_snp = n_samples * 4 * 8
+        if lmm_mode == 1:
+            # Wald split path: 3 varying columns + 1 UtG column per SNP
+            bytes_per_snp = n_samples * 4 * 8
+        else:
+            # Non-Wald split: reconstruct_uab_from_soa allocates 6-col Uab
+            # while 3-col varying SoA is still live = 9 cols peak
+            bytes_per_snp = n_samples * 9 * 8
     else:
         n_index = (n_cvt + 3) * (n_cvt + 2) // 2
         bytes_per_snp = n_samples * n_index * 8
@@ -98,7 +137,11 @@ def _compute_chunk_size_numpy(
         mem_budget = mem_budget_bytes
     else:
         available = psutil.virtual_memory().available
-        mem_budget = max(_MIN_BUDGET, min(int(available * 0.05), _MAX_BUDGET))
+        # Budget: 15% of available RAM (up from 5%), 2 GB floor, 40 GB ceiling.
+        # Modern machines (128-512 GB) can afford larger working sets. The floor
+        # prevents degenerate chunk sizes on low-memory systems; the ceiling
+        # prevents excessive allocation on high-memory systems.
+        mem_budget = max(_MIN_BUDGET, min(int(available * 0.15), _MAX_BUDGET))
 
     mem_budget = mem_budget // max(1, pipeline_buffers)
 
@@ -313,23 +356,24 @@ def run_lmm_association_numpy(
 
     # Determine split/pipeline eligibility BEFORE chunk sizing so the
     # budget can use accurate per-SNP accounting (3 Uab columns vs 6).
-    use_split = _C_SPLIT_AVAILABLE and n_cvt == 1 and lmm_mode == 1
+    use_split = _C_SPLIT_AVAILABLE and n_cvt == 1
 
     chunk_size = _compute_chunk_size_numpy(
         n_samples,
         n_filtered,
         n_cvt,
         use_split=use_split,
+        lmm_mode=lmm_mode,
     )
     n_chunks = (n_filtered + chunk_size - 1) // chunk_size
 
-    # Pipeline overlaps rotation(N+1) with compute(N) using a 75/25 core
-    # split. This helps when rotation ≈ compute per chunk (many small chunks).
-    # With large chunks (few passes through U), rotation >> compute per chunk,
-    # so the pipeline overlap hides nothing but costs 75% of BLAS throughput.
-    # Only enable pipeline when there are enough chunks for overlap to matter.
-    _MIN_PIPELINE_CHUNKS = 30
-    use_pipeline = use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
+    # Pipeline overlaps rotation(N+1) with compute(N) using an adaptive core
+    # split (see compute_pipeline_core_split). This helps when rotation ≈
+    # compute per chunk (many small chunks). With large chunks (few passes
+    # through U), rotation >> compute per chunk, so the pipeline overlap
+    # hides nothing but costs reduced BLAS throughput. Only enable when
+    # enough chunks exist for overlap to matter.
+    use_pipeline = use_split and n_chunks >= _MIN_PIPELINE_CHUNKS and lmm_mode == 1
 
     if use_pipeline:
         # Pipeline has 2 chunks alive simultaneously — halve the budget
@@ -338,15 +382,22 @@ def run_lmm_association_numpy(
             n_filtered,
             n_cvt,
             use_split=use_split,
+            lmm_mode=lmm_mode,
             pipeline_buffers=2,
         )
         n_chunks = (n_filtered + chunk_size - 1) // chunk_size
-        use_pipeline = use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
+        use_pipeline = use_split and n_chunks >= _MIN_PIPELINE_CHUNKS and lmm_mode == 1
 
     # OpenMP thread count for C extension (set once, reused per chunk).
     # When C extension is active, BLAS threads are set to 1 inside the compute
     # phase to prevent oversubscription between BLAS and OpenMP.
-    omp_threads = get_physical_core_count() if _C_ACCEL_AVAILABLE else 1
+    # On macOS/Accelerate, blas_threads(1) is a no-op — Accelerate keeps using
+    # all cores — so we halve OpenMP threads to share cores with BLAS.
+    if _C_ACCEL_AVAILABLE:
+        cores = get_physical_core_count()
+        omp_threads = max(1, cores // 2) if not is_blas_controllable() else cores
+    else:
+        omp_threads = 1
 
     if show_progress:
         logger.info(f"  Analyzed individuals: {n_samples:,}")
@@ -385,11 +436,24 @@ def run_lmm_association_numpy(
     # BLAS rotation (background) and C extension compute (foreground) to
     # prevent oversubscription. Without partitioning, both use all cores
     # (2N threads on N cores), causing context-switch overhead.
+    # On Accelerate (uncontrollable BLAS), rotation threads are ignored
+    # by blas_threads() and Accelerate uses all cores, so give compute
+    # fewer threads to leave headroom.
     if use_pipeline:
         total_cores = get_physical_core_count()
-        # Give compute the majority — it's the longer phase at scale
-        pipeline_omp_threads = max(1, total_cores * 3 // 4)
-        pipeline_rot_threads = max(1, total_cores - pipeline_omp_threads)
+        if is_blas_controllable():
+            pipeline_rot_threads, pipeline_omp_threads = compute_pipeline_core_split(
+                n_samples, total_cores
+            )
+            logger.debug(
+                f"Pipeline core split: {pipeline_rot_threads} rotation, "
+                f"{pipeline_omp_threads} compute (n_samples={n_samples:,})"
+            )
+        else:
+            # Accelerate will use all cores for rotation regardless;
+            # give OpenMP half to reduce contention
+            pipeline_omp_threads = max(1, total_cores // 2)
+            pipeline_rot_threads = total_cores  # ignored by blas_threads()
     else:
         pipeline_omp_threads = omp_threads
         pipeline_rot_threads = rotation_threads
@@ -406,6 +470,9 @@ def run_lmm_association_numpy(
     # Holds precomputed lambda_grid, hi_eval_grid, logdet_h_grid, grid_inv, and
     # invariant Iab column sums — reused across all chunks without reallocation.
     # PyCapsule is freed automatically when lmm_workspace goes out of scope.
+    # Only create for Wald mode (lmm_mode==1): the C workspace uses
+    # compute_wald_split_c_ws which is Wald-specific. LRT/Score/All
+    # use _compute_lmm_chunk_numpy instead.
     lmm_workspace = (
         create_lmm_workspace(
             eigenvalues_np,
@@ -417,7 +484,7 @@ def run_lmm_association_numpy(
             n_refine,
             pipeline_omp_threads,
         )
-        if use_split
+        if use_split and lmm_mode == 1
         else None
     )
 
@@ -434,7 +501,9 @@ def run_lmm_association_numpy(
         # Mean-impute
         chunk_means = col_means[chunk_indices]
         missing = np.isnan(geno_chunk)
-        geno_chunk = np.where(missing, chunk_means[None, :], geno_chunk)
+        if missing.any():  # RUN-06: skip O(n*chunk) np.where on clean data
+            geno_chunk = np.where(missing, chunk_means[None, :], geno_chunk)
+        del missing
 
         # Rotate — always allocate fresh buffer (no shared UtG_buf in pipeline)
         with blas_threads(pipeline_rot_threads):
@@ -454,11 +523,16 @@ def run_lmm_association_numpy(
         chunk_iterator = iter(chunk_starts)
 
     def _compute_and_write(uab_var_soa: np.ndarray, actual_len: int) -> None:
-        """Run C extension compute on a chunk and write results to output arrays.
+        """Run Wald C extension compute on a chunk and write results.
 
-        Extracted to eliminate duplication between pipeline middle-chunks
-        and last-chunk processing.
+        Only valid for lmm_mode == 1 (Wald). Called exclusively from the
+        pipeline path which gates on lmm_mode == 1.
         """
+        if lmm_mode != 1:
+            raise RuntimeError(
+                "_compute_and_write requires lmm_mode=1 (Wald), "
+                f"got lmm_mode={lmm_mode}"
+            )
         nonlocal write_offset, t_numpy_compute_total, t_result_write_total
 
         t_compute_start = time.perf_counter()
@@ -527,6 +601,36 @@ def run_lmm_association_numpy(
             del uab_var_soa
     else:
         # Sequential path (non-split modes or single chunk)
+
+        def _run_lmm_chunk(Uab_batch: np.ndarray) -> dict:
+            """Run LMM compute on a Uab batch with BLAS thread control."""
+            blas_ctx = blas_threads(1) if _C_ACCEL_AVAILABLE else nullcontext()
+            with blas_ctx:
+                try:
+                    return _compute_lmm_chunk_numpy(
+                        lmm_mode,
+                        n_cvt,
+                        eigenvalues_np,
+                        Uab_batch,
+                        n_samples,
+                        l_min=l_min,
+                        l_max=l_max,
+                        n_grid=n_grid,
+                        n_refine=n_refine,
+                        Hi_eval_null=Hi_eval_null,
+                        logl_H0=logl_H0,
+                        n_threads=omp_threads,
+                    )
+                except MemoryError:
+                    raise
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"LMM compute failed at SNP offset "
+                        f"{write_offset}/{n_filtered}. "
+                        f"Processed {write_offset} SNPs "
+                        f"before failure."
+                    ) from exc
+
         for chunk_start in chunk_iterator:
             chunk_end = min(chunk_start + chunk_size, n_filtered)
             chunk_indices = snp_indices[chunk_start:chunk_end]
@@ -535,7 +639,8 @@ def run_lmm_association_numpy(
             # Mean-impute missing genotypes
             chunk_means = col_means[chunk_indices]
             missing = np.isnan(geno_chunk)
-            geno_chunk = np.where(missing, chunk_means[None, :], geno_chunk)
+            if missing.any():  # RUN-06: skip O(n*chunk) np.where on clean data
+                geno_chunk = np.where(missing, chunk_means[None, :], geno_chunk)
             del missing, chunk_means
 
             # Rotate genotypes
@@ -556,32 +661,25 @@ def run_lmm_association_numpy(
                 # Build SoA-layout varying Uab only — invariant was precomputed once.
                 uab_var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG)
                 del UtG
-                with blas_threads(1):
-                    cr = compute_wald_split_c_ws(
-                        lmm_workspace,
-                        uab_var_soa,
-                        omp_threads,
-                    )
-                del uab_var_soa
+                if lmm_mode == 1 and lmm_workspace is not None:
+                    # Wald: use C workspace (no full Uab needed)
+                    with blas_threads(1):
+                        cr = compute_wald_split_c_ws(
+                            lmm_workspace,
+                            uab_var_soa,
+                            omp_threads,
+                        )
+                    del uab_var_soa
+                else:
+                    # LRT/Score/All: reconstruct full Uab from split components
+                    Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_var_soa)
+                    del uab_var_soa
+                    cr = _run_lmm_chunk(Uab_batch)
+                    del Uab_batch
             else:
                 Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
                 del UtG
-                blas_ctx = blas_threads(1) if _C_ACCEL_AVAILABLE else nullcontext()
-                with blas_ctx:
-                    cr = _compute_lmm_chunk_numpy(
-                        lmm_mode,
-                        n_cvt,
-                        eigenvalues_np,
-                        Uab_batch,
-                        n_samples,
-                        l_min=l_min,
-                        l_max=l_max,
-                        n_grid=n_grid,
-                        n_refine=n_refine,
-                        Hi_eval_null=Hi_eval_null,
-                        logl_H0=logl_H0,
-                        n_threads=omp_threads,
-                    )
+                cr = _run_lmm_chunk(Uab_batch)
                 del Uab_batch
             t_numpy_compute_total += time.perf_counter() - t_compute_start
 

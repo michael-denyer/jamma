@@ -129,6 +129,44 @@ class TestYieldLocoMatricesOrdering:
         assert yielded_order == ["1", "2", "10", "X"]
 
 
+@pytest.mark.requires_jax
+class TestYieldLocoMatricesAliasing:
+    """Verify K_loco_buf.copy() prevents aliasing across chromosomes."""
+
+    def test_materialized_iterator_yields_independent_arrays(self):
+        """dict() materialization must produce different K_loco per chromosome."""
+        import jax.numpy as jnp
+
+        n = 10
+        S_full = np.eye(n, dtype=np.float64) * 3.0
+        chr_names = ["1", "2", "3"]
+        S_chr = {
+            name: jnp.eye(n, dtype=jnp.float64) * (i + 1)
+            for i, name in enumerate(chr_names)
+        }
+        n_chr_filtered = {name: 10 for name in chr_names}
+        K_loco_buf = np.empty((n, n), dtype=np.float64)
+
+        # Materializing the iterator into a dict should yield independent arrays.
+        # Before the .copy() fix, all values would alias K_loco_buf and contain
+        # only the last chromosome's result.
+        results = dict(
+            _yield_loco_matrices(
+                S_full, S_chr, n_chr_filtered, n_filtered=30, K_loco_buf=K_loco_buf
+            )
+        )
+
+        assert not np.allclose(results["1"], results["2"]), (
+            "Chromosomes 1 and 2 should have different K_loco matrices"
+        )
+        assert not np.allclose(results["1"], results["3"]), (
+            "Chromosomes 1 and 3 should have different K_loco matrices"
+        )
+        assert not np.allclose(results["2"], results["3"]), (
+            "Chromosomes 2 and 3 should have different K_loco matrices"
+        )
+
+
 class TestFallbackOrderingBiological:
     """Verify _yield_full_kinship_fallback produces biological order."""
 

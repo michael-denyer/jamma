@@ -12,30 +12,90 @@ from loguru import logger
 MAX_SAFE_CHUNK = 50_000
 
 
+def _get_device_budget_bytes(
+    utilization: float = 0.70,
+) -> int | None:
+    """Query JAX device memory and return a byte budget.
+
+    Returns the per-device memory budget (total device memory * utilization),
+    or None if device memory stats are unavailable (CPU-only environments).
+
+    Args:
+        utilization: Fraction of device memory to use (default 0.70).
+
+    Returns:
+        Memory budget in bytes, or None if unavailable.
+    """
+    try:
+        import jax
+    except ImportError:
+        return None
+
+    try:
+        devices = jax.devices()
+        if not devices:
+            logger.debug("No JAX devices found; skipping device memory query")
+            return None
+        stats = devices[0].memory_stats()
+        if stats is not None and "bytes_limit" in stats:
+            return int(stats["bytes_limit"] * utilization)
+        logger.debug("JAX device has no bytes_limit in memory_stats()")
+        return None
+    except Exception:
+        logger.debug("Could not query JAX device memory", exc_info=True)
+        return None
+
+
 def _compute_chunk_size(
     n_snps: int,
     n_devices: int = 1,
+    n_samples: int = 0,
+    n_cvt: int = 1,
 ) -> int:
-    """Compute chunk size capped at MAX_SAFE_CHUNK with device alignment.
+    """Compute chunk size using device memory budget with alignment.
 
-    This function applies the MAX_SAFE_CHUNK cap and device alignment.
-    It does NOT apply a memory budget — callers that need memory-aware
-    sizing should use auto_tune_chunk_size() instead.
+    When n_samples > 0, uses device memory introspection (GPU) or
+    psutil (CPU) to compute chunk size that fills ~70% of available
+    memory. Falls back to MAX_SAFE_CHUNK cap when n_samples is 0
+    (legacy callers) or memory query fails.
 
-    When n_devices > 1, the chunk size is rounded down to a multiple of
-    n_devices to prevent XLA from padding partial shards.
+    MAX_SAFE_CHUNK is always applied as an upper bound to limit JIT
+    compilation overhead, even when memory-based sizing would allow more.
 
     Args:
         n_snps: Total number of SNPs (upper bound for chunk size).
-        n_devices: Number of JAX virtual CPU devices (default 1). When > 1,
-            the result is rounded down to a multiple of n_devices.
+        n_devices: Number of JAX virtual CPU devices (default 1).
+        n_samples: Number of samples (0 = legacy mode, use MAX_SAFE_CHUNK cap).
+        n_cvt: Number of covariates (default 1). Affects Uab memory estimate.
 
     Returns:
-        Chunk size (number of SNPs per chunk). Returns n_snps if it fits
-        within MAX_SAFE_CHUNK. When n_devices > 1, the chunk is
-        rounded down to a multiple of n_devices.
+        Chunk size (number of SNPs per chunk).
     """
-    chunk = min(n_snps, MAX_SAFE_CHUNK)
+    chunk = min(n_snps, MAX_SAFE_CHUNK)  # default cap
+
+    if n_samples > 0:
+        device_budget = _get_device_budget_bytes()
+        if device_budget is None:
+            # CPU fallback: use psutil available RAM at 70%
+            try:
+                import psutil
+
+                device_budget = int(psutil.virtual_memory().available * 0.70)
+            except Exception:
+                logger.warning(
+                    "Could not query system memory via psutil; "
+                    "falling back to MAX_SAFE_CHUNK cap",
+                    exc_info=True,
+                )
+                device_budget = None
+
+        if device_budget is not None:
+            # Uab: n_samples * n_index, UtG: n_samples per SNP
+            n_index = (n_cvt + 3) * (n_cvt + 2) // 2
+            bytes_per_snp = n_samples * (n_index + 1) * 8
+            if bytes_per_snp > 0:
+                chunk_from_memory = int(device_budget / bytes_per_snp)
+                chunk = max(1000, min(chunk_from_memory, n_snps, MAX_SAFE_CHUNK))
 
     # Align to device count multiples to prevent XLA padding partial shards
     if n_devices > 1 and chunk < n_snps:

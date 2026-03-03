@@ -20,6 +20,7 @@ from jamma.core.snp_filter import compute_snp_filter_mask
 from jamma.core.threading import blas_threads, get_physical_core_count
 from jamma.io.plink import (
     get_plink_metadata,
+    prefetch_iterator,
     stream_genotype_chunks,
     validate_genotype_values,
 )
@@ -359,7 +360,9 @@ def run_lmm_association_streaming(
             UtW = U.T @ W
             Uty = U.T @ phenotypes
 
-        jax_chunk_size = _compute_chunk_size(n_filtered, placement.n_devices)
+        jax_chunk_size = _compute_chunk_size(
+            n_filtered, placement.n_devices, n_samples=n_samples
+        )
 
         logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
             lmm_mode,
@@ -408,10 +411,16 @@ def run_lmm_association_streaming(
                 IncrementalAssocWriter(output_path, test_type=_TEST_TYPE_MAP[lmm_mode])
             )
         assoc_iterator = stream_genotype_chunks(
-            bed_path, chunk_size=chunk_size, dtype=np.float64, show_progress=False
+            bed_path,
+            chunk_size=chunk_size,
+            dtype=np.float64,
+            show_progress=False,
+            snp_indices=snp_indices,
         )
+        # One-ahead prefetch: read next BED chunk while current is computing (RUN-09)
+        assoc_iterator = prefetch_iterator(assoc_iterator)
         if show_progress:
-            n_chunks = (n_snps + chunk_size - 1) // chunk_size
+            n_chunks = (n_filtered + chunk_size - 1) // chunk_size
             assoc_iterator = progress_iterator(
                 assoc_iterator, total=n_chunks, desc="Running LMM association"
             )
@@ -421,35 +430,29 @@ def run_lmm_association_streaming(
         ) -> tuple[np.ndarray, int]:
             """Slice a genotype subset and prepare UtG for device transfer."""
             geno_slice = geno[:, start : min(start + jax_chunk_size, total)]
-            return prepare_utg_chunk(
-                geno_slice, U, jax_chunk_size, placement, rotation_threads
-            )
+            return prepare_utg_chunk(geno_slice, U, placement, rotation_threads)
 
-        for chunk, file_start, file_end in assoc_iterator:
-            # Apply sample filtering
+        for chunk, filt_start, filt_end in assoc_iterator:
+            # With filtered reads: chunk is already (n_samples, n_filtered_in_chunk)
+            # filt_start/filt_end are indices into snp_indices
             if needs_sample_filter:
                 chunk = chunk[valid_mask, :]
 
-            # Binary search for filtered SNPs in this chunk: O(log n) vs O(n)
-            # snp_indices is sorted (from np.where), so searchsorted is valid
-            left = np.searchsorted(snp_indices, file_start, side="left")
-            right = np.searchsorted(snp_indices, file_end, side="left")
-
-            if left == right:
+            if filt_end <= filt_start:
                 continue
 
-            chunk_filtered_local_idx = np.arange(left, right)
-            chunk_filtered_col_idx_arr = snp_indices[left:right] - file_start
-            geno_subset = chunk[:, chunk_filtered_col_idx_arr]
+            chunk_filtered_local_idx = np.arange(filt_start, filt_end)
 
-            # Vectorized imputation: broadcast filtered_means to match geno_subset shape
+            # Vectorized imputation: broadcast filtered_means to match chunk shape
             filtered_means_broadcast = filtered_means[chunk_filtered_local_idx].reshape(
                 1, -1
             )
-            missing_mask = np.isnan(geno_subset)
-            geno_subset = np.where(missing_mask, filtered_means_broadcast, geno_subset)
+            missing_mask = np.isnan(chunk)
+            if missing_mask.any():  # RUN-06: skip O(n*chunk) np.where on clean data
+                chunk = np.where(missing_mask, filtered_means_broadcast, chunk)
+            del missing_mask
 
-            n_subset = geno_subset.shape[1]
+            n_subset = chunk.shape[1]
             jax_starts = list(range(0, n_subset, jax_chunk_size))
 
             # Dict-based accumulators for this file chunk
@@ -457,9 +460,7 @@ def run_lmm_association_streaming(
 
             # Prepare first JAX chunk
             t_rot_start = time.perf_counter()
-            UtG_np, actual_jax_len = _prepare_jax_chunk(
-                jax_starts[0], geno_subset, n_subset
-            )
+            UtG_np, actual_jax_len = _prepare_jax_chunk(jax_starts[0], chunk, n_subset)
             t_rot_end = time.perf_counter()
             rot_dur = t_rot_end - t_rot_start
             t_rotation_total += rot_dur
@@ -477,7 +478,7 @@ def run_lmm_association_streaming(
                 if i + 1 < len(jax_starts):
                     t_rot_start = time.perf_counter()
                     UtG_np, actual_jax_len = _prepare_jax_chunk(
-                        jax_starts[i + 1], geno_subset, n_subset
+                        jax_starts[i + 1], chunk, n_subset
                     )
                     t_rot_end = time.perf_counter()
                     rot_dur_inner = t_rot_end - t_rot_start
@@ -545,10 +546,10 @@ def run_lmm_association_streaming(
                         # Direct array → TSV (no AssocResult construction)
                         writer.write_arrays_batch(
                             lmm_mode,
-                            snp_indices[left:right],
+                            snp_indices[filt_start:filt_end],
                             snp_info,
-                            filtered_afs[left:right],
-                            filtered_miss[left:right],
+                            filtered_afs[filt_start:filt_end],
+                            filtered_miss[filt_start:filt_end],
                             arrays,
                         )
                     else:

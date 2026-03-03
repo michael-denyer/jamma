@@ -15,6 +15,7 @@ from jamma.core.memory import (
 from jamma.io.plink import (
     get_plink_metadata,
     load_plink_binary,
+    prefetch_iterator,
     stream_genotype_chunks,
 )
 from jamma.kinship.compute import compute_centered_kinship, compute_kinship_streaming
@@ -1431,3 +1432,132 @@ def test_streaming_all_invalid_samples_raises(tmp_path: Path) -> None:
             check_memory=False,
             show_progress=False,
         )
+
+
+@pytest.mark.tier1
+def test_stream_genotype_chunks_filtered(sample_plink_data: Path) -> None:
+    """stream_genotype_chunks with snp_indices reads only specified columns (RUN-04)."""
+    # Read full data for comparison
+    chunks_full = list(
+        stream_genotype_chunks(sample_plink_data, chunk_size=5000, show_progress=False)
+    )
+    n_snps_total = sum(end - start for _, start, end in chunks_full)
+
+    # Read filtered subset
+    rng = np.random.default_rng(42)
+    snp_indices = np.sort(
+        rng.choice(n_snps_total, size=min(200, n_snps_total), replace=False)
+    )
+
+    chunks_filtered = list(
+        stream_genotype_chunks(
+            sample_plink_data,
+            chunk_size=80,
+            show_progress=False,
+            snp_indices=snp_indices,
+        )
+    )
+
+    # Total filtered SNPs should match snp_indices length
+    total_filtered = sum(end - start for _, start, end in chunks_filtered)
+    assert total_filtered == len(snp_indices), (
+        f"Expected {len(snp_indices)} filtered SNPs, got {total_filtered}"
+    )
+
+    # Each chunk should have the right number of columns
+    for chunk, start, end in chunks_filtered:
+        assert chunk.shape[1] == end - start, (
+            f"Chunk shape mismatch: got {chunk.shape[1]} cols, expected {end - start}"
+        )
+
+    # Verify filtered data matches corresponding columns from full read
+    full_matrix = np.concatenate([c for c, _, _ in chunks_full], axis=1)
+    filtered_matrix = np.concatenate([c for c, _, _ in chunks_filtered], axis=1)
+    np.testing.assert_array_equal(
+        filtered_matrix,
+        full_matrix[:, snp_indices].astype(filtered_matrix.dtype),
+        err_msg="Filtered read values do not match corresponding full-read columns",
+    )
+
+
+@pytest.mark.tier1
+def test_stream_genotype_chunks_unsorted_snp_indices_raises(
+    sample_plink_data: Path,
+) -> None:
+    """Unsorted snp_indices raises ValueError."""
+    unsorted = np.array([5, 2, 8, 1])
+    with pytest.raises(ValueError, match="sorted in strictly ascending order"):
+        list(
+            stream_genotype_chunks(
+                sample_plink_data, snp_indices=unsorted, show_progress=False
+            )
+        )
+
+
+@pytest.mark.tier1
+def test_stream_genotype_chunks_duplicate_snp_indices_raises(
+    sample_plink_data: Path,
+) -> None:
+    """Duplicate snp_indices raises ValueError."""
+    duplicates = np.array([1, 3, 3, 5])
+    with pytest.raises(ValueError, match="sorted in strictly ascending order"):
+        list(
+            stream_genotype_chunks(
+                sample_plink_data, snp_indices=duplicates, show_progress=False
+            )
+        )
+
+
+@pytest.mark.tier1
+def test_stream_genotype_chunks_oob_snp_indices_raises(
+    sample_plink_data: Path,
+) -> None:
+    """Out-of-bounds snp_indices raises ValueError."""
+    oob = np.array([0, 1, 999_999])
+    with pytest.raises(ValueError, match="out of bounds"):
+        list(
+            stream_genotype_chunks(
+                sample_plink_data, snp_indices=oob, show_progress=False
+            )
+        )
+
+
+@pytest.mark.tier1
+def test_prefetch_iterator_correctness() -> None:
+    """prefetch_iterator yields identical results to sequential iteration (RUN-09)."""
+
+    def make_chunks():
+        for i in range(5):
+            chunk = np.arange(10 * i, 10 * (i + 1), dtype=np.float64).reshape(2, 5)
+            yield chunk, i * 5, (i + 1) * 5
+
+    # Sequential
+    sequential = list(make_chunks())
+
+    # Prefetched
+    prefetched = list(prefetch_iterator(make_chunks()))
+
+    assert len(prefetched) == len(sequential)
+    for (c1, s1, e1), (c2, s2, e2) in zip(sequential, prefetched, strict=True):
+        np.testing.assert_array_equal(c1, c2)
+        assert s1 == s2
+        assert e1 == e2
+
+
+@pytest.mark.tier1
+def test_prefetch_iterator_empty() -> None:
+    """prefetch_iterator handles empty iterator correctly (RUN-09)."""
+    result = list(prefetch_iterator(iter([])))
+    assert result == []
+
+
+@pytest.mark.tier1
+def test_prefetch_iterator_single_item() -> None:
+    """prefetch_iterator handles single-item iterator correctly (RUN-09)."""
+
+    def single():
+        yield np.array([[1.0, 2.0]]), 0, 2
+
+    result = list(prefetch_iterator(single()))
+    assert len(result) == 1
+    np.testing.assert_array_equal(result[0][0], np.array([[1.0, 2.0]]))

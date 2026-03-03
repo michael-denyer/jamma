@@ -687,11 +687,11 @@ def _yield_loco_matrices(
         S_chr: Per-chromosome kinship contributions (JAX arrays).
         n_chr_filtered: Count of filtered SNPs per chromosome.
         n_filtered: Total number of filtered SNPs.
-        K_loco_buf: Pre-allocated output buffer (n_samples, n_samples) for K_loco.
-            When provided, K_loco is computed in-place via np.subtract(out=) and
-            yielded directly. Caller must eigendecompose before the next yield
-            (buffer is reused each chromosome). When None, a new array is
-            allocated per chromosome (legacy behavior).
+        K_loco_buf: Pre-allocated workspace (n_samples, n_samples) for K_loco.
+            When provided, np.subtract(out=) avoids a temporary, then the
+            result is copied before yielding so callers may freely
+            materialise the iterator. When None, a new array is allocated
+            per chromosome (legacy behavior).
 
     Yields:
         (chr_name, K_loco) pairs in biological chromosome order.
@@ -711,11 +711,12 @@ def _yield_loco_matrices(
             )
 
         if K_loco_buf is not None:
-            # In-place subtraction: reuses buffer each chromosome (LOCO-03).
-            # INVARIANT: caller eigendecomposes before next yield (buffer reuse).
+            # In-place subtraction avoids a temporary array (LOCO-03).
+            # Copy before yielding so callers that materialise the full
+            # iterator (dict / list) get independent arrays.
             np.subtract(S_full_np, np.asarray(S_chr[chr_name]), out=K_loco_buf)
             K_loco_buf /= p_loco
-            K_loco = K_loco_buf
+            K_loco = K_loco_buf.copy()
         else:
             K_loco = (S_full_np - np.asarray(S_chr[chr_name])) / p_loco
         logger.debug(

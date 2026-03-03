@@ -226,13 +226,13 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2, JAMMA v2.9.5, GEMMA 0.98.5.
 Median of 3 runs, end-to-end wall clock:
 
-| Operation          | GEMMA 0.98.5 | JAMMA (NumPy) | JAMMA (JAX) | vs GEMMA     |
-|--------------------|--------------|---------------|-------------|--------------|
-| Kinship (`-gk 1`)  | 2.2s         | 1.5s          | 1.5s        | **1.5x**     |
-| LMM (`-lmm 1`)     | 11.2s        | 1.0s          | 2.4s        | **11.2x**    |
-| LMM (`-lmm 4`)     | 20.7s        | 5.1s          | 3.2s        | **6.5x**     |
+| Operation | GEMMA 0.98.5 | JAMMA NumPy+C | JAMMA JAX (batch) | JAMMA JAX (streaming) | vs GEMMA |
+|-----------|-------------|--------------|-------------------|----------------------|----------|
+| Kinship (`-gk 1`) | 3.8s | 412ms | 408ms | — | **9.4x** |
+| LMM Wald (`-lmm 1`) | 19.5s | 1.8s | 4.1s | 5.4s | **10.8x** |
+| LMM All (`-lmm 4`) | 36.5s | 8.7s | 6.7s | 8.9s | **5.4x** |
 
-For Wald-only (`-lmm 1`), the C extension with OpenMP is fastest — REML-only optimization is compute-bound and parallelizes well across SNPs. For all-tests (`-lmm 4`), JAX pulls ahead because the additional MLE optimization per SNP benefits from `jax.vmap` batching.
+**NumPy+C** uses a C extension with OpenMP for Wald-only (`-lmm 1`) — REML optimization is compute-bound and parallelizes well across SNPs. **JAX (batch)** pulls ahead on all-tests (`-lmm 4`) because the additional MLE optimization per SNP benefits from `jax.vmap` batching. **JAX (streaming)** reads genotypes from disk in chunks and is the production code path for large datasets that don't fit in memory.
 
 ## Supported Features
 

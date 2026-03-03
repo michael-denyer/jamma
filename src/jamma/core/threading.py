@@ -7,17 +7,24 @@ JAMMA has two separate BLAS paths:
   NOT affected by threadpool_limits.
 
 This module provides explicit thread control for the numpy path only.
+
+On macOS with Apple Accelerate, threadpoolctl cannot control the BLAS thread
+count (Accelerate has no public thread-count API and ignores VECLIB_MAXIMUM_THREADS
+after library init). In this case blas_threads() is a no-op and
+is_blas_controllable() returns False so callers can adjust OpenMP thread counts
+to avoid oversubscription.
 """
 
 from __future__ import annotations
 
+import functools
 import os
 from collections.abc import Generator
 from contextlib import contextmanager
 
 import psutil
 from loguru import logger
-from threadpoolctl import threadpool_limits
+from threadpoolctl import threadpool_info, threadpool_limits
 
 
 def get_physical_core_count() -> int:
@@ -32,6 +39,19 @@ def get_physical_core_count() -> int:
         can't determine it.
     """
     return psutil.cpu_count(logical=False) or (os.cpu_count() or 1)
+
+
+@functools.cache
+def is_blas_controllable() -> bool:
+    """Check if threadpoolctl can control the active BLAS library.
+
+    Returns False on macOS with Apple Accelerate (threadpoolctl can't detect it)
+    and in environments with no BLAS library loaded. Returns True for MKL and
+    OpenBLAS.
+
+    The result is cached — the BLAS library doesn't change mid-process.
+    """
+    return any(entry.get("user_api") == "blas" for entry in threadpool_info())
 
 
 def get_blas_thread_count() -> int:
@@ -149,5 +169,23 @@ def blas_threads(n_threads: int | None = None) -> Generator[None, None, None]:
     if n_threads is None:
         n_threads = get_blas_thread_count()
 
+    if not is_blas_controllable():
+        # Accelerate or no BLAS detected — threadpool_limits is a no-op.
+        # Log once so the user knows thread control isn't active.
+        _warn_uncontrollable_blas()
+        yield
+        return
+
     with threadpool_limits(limits=n_threads, user_api="blas"):
         yield
+
+
+@functools.cache
+def _warn_uncontrollable_blas() -> None:
+    """Log a one-time warning that BLAS thread control is not active."""
+    logger.warning(
+        "BLAS thread control is not active — threadpoolctl found no "
+        "controllable BLAS library. On macOS with Apple Accelerate this "
+        "is expected; Accelerate manages its own threads internally. "
+        "OpenMP thread counts are reduced automatically to compensate."
+    )

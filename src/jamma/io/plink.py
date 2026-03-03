@@ -294,6 +294,7 @@ def stream_genotype_chunks(
     chunk_size: int = 10_000,
     dtype: type = np.float32,
     show_progress: bool = True,
+    snp_indices: np.ndarray | None = None,
 ) -> Iterator[tuple[np.ndarray, int, int]]:
     """Stream genotype chunks from disk without full matrix load.
 
@@ -308,12 +309,19 @@ def stream_genotype_chunks(
         chunk_size: Number of SNPs per chunk (default 10,000).
         dtype: Output dtype for genotypes (default float32 for memory efficiency).
         show_progress: Whether to show progress bar (default True).
+        snp_indices: Sorted array of column indices to read. When provided,
+            only these columns are read from the BED file. chunk_size applies
+            to the filtered index space, not the total SNP count. Yields
+            (chunk, global_start_idx, global_end_idx) where indices refer to
+            positions in snp_indices, not BED file columns.
 
     Yields:
         Tuple of (genotypes_chunk, start_idx, end_idx):
         - genotypes_chunk: Array of shape (n_samples, chunk_snps)
         - start_idx: First SNP index (inclusive)
         - end_idx: Last SNP index (exclusive)
+        When snp_indices is None, indices are absolute BED column positions.
+        When snp_indices is provided, indices are positions within snp_indices.
 
     Raises:
         FileNotFoundError: If the .bed file does not exist.
@@ -335,22 +343,82 @@ def stream_genotype_chunks(
 
     with open_bed(bed_file) as bed:
         n_samples = bed.iid_count
-        n_snps = bed.sid_count
-        n_chunks = (n_snps + chunk_size - 1) // chunk_size
 
+        if snp_indices is not None:
+            # Filtered mode: validate and read only requested columns
+            if len(snp_indices) > 1 and np.any(np.diff(snp_indices) <= 0):
+                raise ValueError(
+                    "snp_indices must be sorted in strictly ascending order"
+                )
+            if len(snp_indices) > 0:
+                if snp_indices[0] < 0 or snp_indices[-1] >= bed.sid_count:
+                    raise ValueError(
+                        f"snp_indices out of bounds: range [{snp_indices[0]}, "
+                        f"{snp_indices[-1]}], BED file has {bed.sid_count} SNPs"
+                    )
+            n_total = len(snp_indices)
+            label = "filtered SNPs"
+
+            def read_chunk(start: int, end: int) -> np.ndarray:
+                return bed.read(index=(np.s_[:], snp_indices[start:end]), dtype=dtype)
+        else:
+            # Unfiltered mode: read all columns sequentially
+            n_total = bed.sid_count
+            label = "SNPs"
+
+            def read_chunk(start: int, end: int) -> np.ndarray:
+                return bed.read(index=np.s_[:, start:end], dtype=dtype)
+
+        n_chunks = (n_total + chunk_size - 1) // chunk_size
         logger.info(
-            f"Reading {n_snps} SNPs in {n_chunks} chunks of {chunk_size} "
-            f"({n_samples} samples)"
+            f"Reading {n_total} {label} in {n_chunks} chunks "
+            f"of {chunk_size} ({n_samples} samples)"
         )
 
-        iterator = range(0, n_snps, chunk_size)
+        iterator = range(0, n_total, chunk_size)
         if show_progress:
             iterator = progress_iterator(
                 iterator, total=n_chunks, desc="Reading genotypes"
             )
 
         for start in iterator:
-            end = min(start + chunk_size, n_snps)
-            # Windowed read: only reads bytes for SNPs [start:end]
-            chunk = bed.read(index=np.s_[:, start:end], dtype=dtype)
-            yield chunk, start, end
+            end = min(start + chunk_size, n_total)
+            yield read_chunk(start, end), start, end
+
+
+def prefetch_iterator(
+    source: Iterator[tuple[np.ndarray, int, int]],
+) -> Iterator[tuple[np.ndarray, int, int]]:
+    """Wrap a chunk iterator with one-item-ahead background prefetch.
+
+    Uses a single background thread to read the next chunk while the
+    current chunk is being processed. The ThreadPoolExecutor ensures
+    proper lifecycle management and exception propagation.
+
+    Memory impact: two chunks are live simultaneously during the overlap
+    window. Callers should account for this in their memory budget
+    (e.g., pipeline_buffers=2 in chunk sizing).
+
+    Args:
+        source: An iterator yielding (chunk, start, end) tuples.
+
+    Yields:
+        Same (chunk, start, end) tuples as the source, with I/O for
+        the next item started in the background.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        try:
+            nxt = next(source)
+        except StopIteration:
+            return
+
+        while True:
+            current = nxt
+            fut = pool.submit(next, source)
+            yield current
+            try:
+                nxt = fut.result()
+            except StopIteration:
+                return

@@ -452,10 +452,12 @@ typical Databricks / HPC environment for large-scale GWAS:
   OpenBLAS works but is slower and segfaults above ~50k samples.
 - **JAX backend**: Uses XLA's CPU backend. GPU acceleration (`use_gpu=True`)
   is supported but not yet tuned for production workloads.
-- **ARM / Apple Silicon**: Runs correctly via Accelerate BLAS, but the
-  thread-count and device-count heuristics are calibrated for Intel server
-  hardware. Override with `JAMMA_JAX_DEVICES` and `JAMMA_BLAS_THREADS` if
-  defaults are suboptimal on your platform.
+- **ARM / Apple Silicon**: Runs correctly via Accelerate BLAS. Thread control
+  (`blas_threads()`) is not available on Accelerate — Apple provides no public
+  API and `VECLIB_MAXIMUM_THREADS` is only read at library load time. JAMMA
+  detects this automatically and halves OpenMP threads in the C extension to
+  avoid oversubscription with Accelerate's uncontrollable thread pool.
+  `JAMMA_BLAS_THREADS` has no effect on Accelerate.
 
 ### CPU Device Sharding
 
@@ -506,7 +508,7 @@ coordination overhead that outweighs parallelism gains.
 | -------- | ------- | ----------- |
 | `JAMMA_BACKEND` | auto-detect | Force backend: `numpy` or `jax`. Auto-detect tries JAX first. |
 | `JAMMA_JAX_DEVICES` | `physical_cores // 2` | Number of virtual CPU devices for JAX SNP-batch sharding. |
-| `JAMMA_BLAS_THREADS` | `physical_cores // n_devices` | Thread count for NumPy BLAS operations (eigendecomp, matmul). Controls MKL/OpenBLAS via `threadpoolctl`, not OpenMP. |
+| `JAMMA_BLAS_THREADS` | `physical_cores // n_devices` | Thread count for NumPy BLAS operations (eigendecomp, matmul). Controls MKL/OpenBLAS via `threadpoolctl`, not OpenMP. **Linux only** — has no effect on macOS Accelerate. |
 | `JAMMA_LOCO_WORKERS` | `1` | Parallel chromosome workers in LOCO mode. Each worker holds a full K_loco matrix (`n_samples² × 8` bytes), so increase with caution. |
 
 ```bash
@@ -518,8 +520,9 @@ jamma -lmm 1 -bfile data/my_study -loco -o output
 ```
 
 **Note:** `JAMMA_BLAS_THREADS` scopes thread control to BLAS libraries (MKL, OpenBLAS)
-and does not affect OpenMP (`libgomp`/`libomp`) or JAX's XLA thread pool. If you have
-C extensions compiled with `-fopenmp`, use `OMP_NUM_THREADS` separately.
+and does not affect OpenMP (`libgomp`/`libomp`) or JAX's XLA thread pool. It has no
+effect on macOS Accelerate (which provides no thread-count API). If you have C
+extensions compiled with `-fopenmp`, use `OMP_NUM_THREADS` separately.
 
 ## Validation
 

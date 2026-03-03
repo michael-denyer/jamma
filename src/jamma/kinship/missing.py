@@ -47,8 +47,9 @@ def impute_and_center(X: np.ndarray) -> np.ndarray:
         >>> # Mean of column 0 is (0+2)/2 = 1.0 (excluding NaN)
         >>> # NaN is replaced with 1.0, then column is centered
     """
-    # Compute per-SNP mean excluding NaN values; shape (n_snps,)
-    snp_means = np.nanmean(X, axis=0)
+    # All-NaN columns produce a nanmean RuntimeWarning; handled below by nan_to_num
+    with np.errstate(invalid="ignore"):
+        snp_means = np.nanmean(X, axis=0)
 
     # Handle all-missing columns: nanmean returns NaN, replace with 0
     # This ensures such SNPs contribute nothing to kinship (centered = 0)
@@ -121,8 +122,11 @@ def impute_center_and_standardize(X: np.ndarray) -> np.ndarray:
     # Standard deviation
     snp_sd = np.sqrt(snp_var)
 
-    # Standardize, guarding against zero variance (monomorphic SNPs)
-    # Zero-variance SNPs contribute nothing to kinship
-    X_standardized = np.where(snp_sd > 0, X_centered / snp_sd, 0.0)
+    # Division by zero for monomorphic SNPs handled by np.where guard; result is 0.0.
+    # np.where evaluates both branches eagerly, so the division produces warnings
+    # even though zero-division results are discarded by the condition mask.
+    nonzero = snp_sd > 0
+    with np.errstate(invalid="ignore", divide="ignore"):
+        X_standardized = np.where(nonzero, X_centered / snp_sd, 0.0)
 
     return X_standardized

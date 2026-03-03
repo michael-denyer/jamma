@@ -456,10 +456,11 @@ def _compute_loco_kinship_streaming_numpy(
         """
         nonlocal _s_full_accumulated
         if accumulate_s_full:
-            assert not _s_full_accumulated, (
-                "S_full accumulation requested more than once. "
-                "This would corrupt K_loco matrices by double-counting SNPs."
-            )
+            if _s_full_accumulated:
+                raise RuntimeError(
+                    "S_full accumulation requested more than once. "
+                    "This would corrupt K_loco matrices by double-counting SNPs."
+                )
             _s_full_accumulated = True
         batch_S_chr: dict[str, np.ndarray] = {
             c: np.zeros((n_samples_kinship, n_samples_kinship), dtype=np.float64)
@@ -506,10 +507,10 @@ def _compute_loco_kinship_streaming_numpy(
         batch_S_chr: dict[str, np.ndarray],
         K_loco_buf: np.ndarray,
     ) -> Iterator[tuple[str, np.ndarray]]:
-        """Yield (chr_name, K_loco) pairs, computing K_loco in-place via buffer reuse.
+        """Yield independent (chr_name, K_loco) pairs, one per chromosome.
 
-        K_loco_buf is overwritten each iteration. Caller MUST eigendecompose
-        (or copy) the yielded matrix before advancing the iterator.
+        K_loco is computed in-place via buffer reuse, then copied before
+        yielding so callers may freely materialise the iterator.
         """
         for chr_name in sorted(batch_S_chr.keys(), key=chr_sort_key):
             p_chr = n_chr_filtered[chr_name]
@@ -525,9 +526,7 @@ def _compute_loco_kinship_streaming_numpy(
                 f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs retained"
             )
             del batch_S_chr[chr_name]
-            # INVARIANT: caller eigendecomposes before next yield (buffer reuse safe).
-            # run_lmm_loco: eigendecompose -> del K_loco -> next iteration.
-            yield (chr_name, K_loco_buf)
+            yield (chr_name, K_loco_buf.copy())
 
     def _yield_matrices() -> Iterator[tuple[str, np.ndarray]]:
         nonlocal S_full  # needed: S_full /= n_filtered is augmented assignment
@@ -826,10 +825,11 @@ def run_lmm_loco(
             # K_loco is already n_valid x n_valid — skip post-hoc subsetting (LOCO-07).
             if backend == "numpy" and kinship_valid_indices is not None:
                 # K_loco already at valid-sample size from early subsetting.
-                assert K_loco.shape == (n_valid, n_valid), (
-                    f"Expected K_loco shape ({n_valid}, {n_valid}) from early "
-                    f"subsetting, got {K_loco.shape}"
-                )
+                if K_loco.shape != (n_valid, n_valid):
+                    raise RuntimeError(
+                        f"Expected K_loco shape ({n_valid}, {n_valid}) from early "
+                        f"subsetting, got {K_loco.shape}"
+                    )
                 K_loco_valid = K_loco
                 del K_loco
             elif all_samples_valid:
@@ -1059,16 +1059,16 @@ def _run_lmm_for_chromosome(
     UtW_jax = jax.device_put(UtW, placement.rep)
     Uty_jax = jax.device_put(Uty, placement.rep)
 
-    jax_chunk_size = _compute_chunk_size(n_filtered, n_devices=placement.n_devices)
+    jax_chunk_size = _compute_chunk_size(
+        n_filtered, n_devices=placement.n_devices, n_samples=n_samples
+    )
 
     def _prepare_jax_chunk(
         start: int, geno: np.ndarray, total: int
     ) -> tuple[np.ndarray, int]:
         """Slice a genotype subset and prepare UtG for device transfer."""
         geno_slice = geno[:, start : min(start + jax_chunk_size, total)]
-        return prepare_utg_chunk(
-            geno_slice, eigenvectors, jax_chunk_size, placement, rotation_threads
-        )
+        return prepare_utg_chunk(geno_slice, eigenvectors, placement, rotation_threads)
 
     # Track lambda boundary hits across all disk chunks
     total_at_lmin = 0

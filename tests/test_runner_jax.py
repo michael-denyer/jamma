@@ -1220,3 +1220,119 @@ def test_maf_normalization_in_comparison():
         f"AF=0.3 and AF=0.7 have the same MAF (0.3), comparison should pass: "
         f"{comparison.af.message}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Tail chunk and imputation guard tests (RUN-02, RUN-06)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+def test_prepare_utg_chunk_no_tail_padding():
+    """Tail chunk returns actual SNP count shape, not padded to chunk_size (RUN-02)."""
+    import jax
+
+    from jamma.lmm.prepare import DevicePlacement, prepare_utg_chunk
+
+    n_samples = 50
+    actual_snps = 7  # Fewer than chunk_size
+    chunk_size = 100
+
+    U = np.eye(n_samples, dtype=np.float64)
+    geno = np.random.default_rng(42).standard_normal((n_samples, actual_snps))
+
+    # Use single CPU device placement (no multi-device alignment)
+    device = jax.devices("cpu")[0]
+    placement = DevicePlacement(snp=device, rep=device, n_devices=1)
+
+    UtG, actual_len = prepare_utg_chunk(geno, U, placement, rotation_threads=1)
+
+    assert actual_len == actual_snps
+    # UtG should have actual_snps columns, NOT chunk_size columns
+    assert UtG.shape[1] == actual_snps, (
+        f"Expected {actual_snps} columns (no padding), got {UtG.shape[1]}. "
+        f"Tail chunk should not be padded to chunk_size={chunk_size}."
+    )
+
+
+@pytest.mark.tier1
+def test_prepare_utg_chunk_full_chunk_no_change():
+    """prepare_utg_chunk with full chunk_size works unchanged (no padding needed)."""
+    import jax
+
+    from jamma.lmm.prepare import DevicePlacement, prepare_utg_chunk
+
+    n_samples = 50
+    chunk_size = 100
+
+    U = np.eye(n_samples, dtype=np.float64)
+    geno = np.random.default_rng(42).standard_normal((n_samples, chunk_size))
+
+    device = jax.devices("cpu")[0]
+    placement = DevicePlacement(snp=device, rep=device, n_devices=1)
+
+    UtG, actual_len = prepare_utg_chunk(geno, U, placement, rotation_threads=1)
+
+    assert actual_len == chunk_size
+    assert UtG.shape[1] == chunk_size
+
+
+@pytest.mark.tier1
+@pytest.mark.requires_jax
+def test_rotation_compute_overlap_metric_populated() -> None:
+    """JAX runner populates rotation_exposed_s <= rotation_s after a run (RUN-03).
+
+    The overlap pattern in runner_jax.py rotates chunk N+1 while computing
+    chunk N. On multi-chunk datasets, exposed rotation should be less than
+    total rotation time (some rotation is hidden behind compute). This test
+    verifies the timing metric is populated and the invariant holds.
+    """
+    from loguru import logger
+
+    from jamma.lmm.runner_jax import last_run_timing
+
+    rng = np.random.default_rng(42)
+    n_samples = 100
+    n_snps = 500
+
+    genotypes = rng.choice([0.0, 1.0, 2.0], size=(n_samples, n_snps))
+    phenotypes = rng.standard_normal(n_samples)
+    kinship = np.eye(n_samples, dtype=np.float64) * 1.1
+
+    snp_info = [
+        {"chr": "1", "rs": f"rs{i}", "pos": i * 1000, "a1": "A", "a0": "T"}
+        for i in range(n_snps)
+    ]
+
+    results = run_lmm_association_jax(
+        genotypes=genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        maf_threshold=0.0,
+        miss_threshold=1.0,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=1,
+    )
+
+    assert len(results) > 0
+    assert "rotation_s" in last_run_timing, "rotation_s not in last_run_timing"
+    assert "rotation_exposed_s" in last_run_timing, (
+        "rotation_exposed_s not in last_run_timing"
+    )
+
+    rot_total = last_run_timing["rotation_s"]
+    rot_exposed = last_run_timing["rotation_exposed_s"]
+
+    # Exposed rotation must never exceed total rotation (by definition)
+    assert rot_exposed <= rot_total + 1e-6, (
+        f"Exposed rotation ({rot_exposed:.4f}s) > total rotation ({rot_total:.4f}s)"
+    )
+
+    if rot_total > 0.001:
+        logger.info(
+            f"Rotation overlap: total={rot_total:.4f}s, "
+            f"exposed={rot_exposed:.4f}s, "
+            f"hidden={rot_total - rot_exposed:.4f}s"
+        )

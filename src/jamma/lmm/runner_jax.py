@@ -238,7 +238,9 @@ def run_lmm_association_jax(
         Uty = U.T @ phenotypes
 
     n_filtered = len(snp_indices)
-    chunk_size = _compute_chunk_size(n_filtered, placement.n_devices)
+    chunk_size = _compute_chunk_size(
+        n_filtered, placement.n_devices, n_samples=n_samples
+    )
 
     logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
         lmm_mode,
@@ -293,8 +295,10 @@ def run_lmm_association_jax(
         geno_chunk = genotypes[:, chunk_indices]
         chunk_means_local = col_means[chunk_indices]
         missing = np.isnan(geno_chunk)
-        geno_chunk = np.where(missing, chunk_means_local[None, :], geno_chunk)
-        return prepare_utg_chunk(geno_chunk, U, chunk_size, placement, rotation_threads)
+        if missing.any():  # RUN-06: skip O(n*chunk) np.where on clean data
+            geno_chunk = np.where(missing, chunk_means_local[None, :], geno_chunk)
+        del missing
+        return prepare_utg_chunk(geno_chunk, U, placement, rotation_threads)
 
     chunk_starts = list(range(0, n_filtered, chunk_size))
 

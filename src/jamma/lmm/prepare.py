@@ -187,24 +187,25 @@ def resolve_device_placement(use_gpu: bool) -> DevicePlacement:
 def prepare_utg_chunk(
     geno_chunk: np.ndarray,
     U: np.ndarray,
-    chunk_size: int,
     placement: DevicePlacement,
     rotation_threads: int,
 ) -> tuple[np.ndarray, int]:
-    """Impute, pad, rotate, and device-align a genotype chunk for JAX.
+    """Rotate and device-align a genotype chunk for JAX.
 
     Shared by both the batch and streaming runners. The caller is
     responsible for mean-imputation of missing values before calling this.
 
     Steps:
-    1. Pad to chunk_size if this is a tail chunk (fewer SNPs than chunk_size).
-    2. Rotate: UtG = U.T @ geno_chunk (BLAS matmul).
-    3. Pad to device-count multiple for even NamedSharding distribution.
+    1. Rotate: UtG = U.T @ geno_chunk (BLAS matmul).
+    2. Pad to device-count multiple for even NamedSharding distribution.
+
+    Tail chunks (fewer SNPs than a full chunk) pass their actual width
+    directly — no padding to chunk_size. JAX JIT traces once for the tail
+    shape; the recompilation cost is negligible vs wasted BLAS on zeros.
 
     Args:
         geno_chunk: Mean-imputed genotype chunk (n_samples, n_snps_actual).
         U: Eigenvector matrix for rotation (n_samples, n_samples).
-        chunk_size: Target chunk width (for tail-chunk padding).
         placement: Resolved device placement (for device-alignment padding).
         rotation_threads: BLAS thread count for U.T @ G rotation.
 
@@ -214,9 +215,9 @@ def prepare_utg_chunk(
     """
     actual_len = geno_chunk.shape[1]
 
-    if actual_len < chunk_size:
-        pad_width = chunk_size - actual_len
-        geno_chunk = np.pad(geno_chunk, ((0, 0), (0, pad_width)), mode="constant")
+    # RUN-02: Tail chunks process actual SNP count — no padding to chunk_size.
+    # JAX JIT traces once for the tail shape; cost is negligible vs saved BLAS.
+    # Device-count alignment (below) still pads if needed for even shard distribution.
 
     with blas_threads(rotation_threads):
         with jax.profiler.TraceAnnotation("dgemm_rotation"):

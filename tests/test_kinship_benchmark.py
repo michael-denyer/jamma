@@ -63,8 +63,8 @@ def numpy_kinship(X):
 class TestKinshipBenchmarks:
     """Benchmark kinship computation performance."""
 
-    def test_kinship_jax_performance(self, benchmark, medium_genotypes):
-        """Benchmark JAX kinship computation."""
+    def test_jamma_kinship_medium(self, benchmark, medium_genotypes):
+        """Benchmark JAMMA kinship (JAX backend) on medium data."""
         from jamma.kinship import compute_centered_kinship
 
         # Use pedantic mode with warmup to exclude JIT compilation time
@@ -84,8 +84,8 @@ class TestKinshipBenchmarks:
         # Basic sanity check
         assert result.shape == (500, 500)
 
-    def test_kinship_numpy_baseline(self, benchmark, medium_genotypes):
-        """Benchmark naive NumPy baseline for comparison."""
+    def test_naive_numpy_baseline_medium(self, benchmark, medium_genotypes):
+        """Benchmark naive NumPy baseline (not JAMMA) for comparison."""
         result = benchmark.pedantic(
             numpy_kinship,
             args=(medium_genotypes,),
@@ -100,8 +100,8 @@ class TestKinshipBenchmarks:
 
         assert result.shape == (500, 500)
 
-    def test_kinship_with_missing_data(self, benchmark, genotypes_with_missing):
-        """Benchmark with missing data handling."""
+    def test_jamma_kinship_missing_data(self, benchmark, genotypes_with_missing):
+        """Benchmark JAMMA kinship (JAX backend) with 5% missing data."""
         from jamma.kinship import compute_centered_kinship
 
         result = benchmark.pedantic(
@@ -130,8 +130,8 @@ class TestKinshipScaling:
         rng = np.random.default_rng(42)
         return rng.integers(0, 3, size=(100, 1000)).astype(np.float64)
 
-    def test_small_jax_benchmark(self, benchmark, small_genotypes):
-        """Benchmark JAX on small data."""
+    def test_jamma_kinship_small(self, benchmark, small_genotypes):
+        """Benchmark JAMMA kinship (JAX backend) on small data."""
         from jamma.kinship import compute_centered_kinship
 
         result = benchmark.pedantic(
@@ -149,8 +149,8 @@ class TestKinshipScaling:
 
         assert result.shape == (100, 100)
 
-    def test_small_numpy_benchmark(self, benchmark, small_genotypes):
-        """Benchmark NumPy on small data."""
+    def test_naive_numpy_baseline_small(self, benchmark, small_genotypes):
+        """Benchmark naive NumPy baseline (not JAMMA) on small data."""
         result = benchmark.pedantic(
             numpy_kinship,
             args=(small_genotypes,),

@@ -414,7 +414,10 @@ def run_lmm_association_jax(
                 t_rotation_total += rot_dur
                 # Exposed = time main thread waited for future AFTER JAX sync.
                 # Near zero when JAX compute takes longer than rotation.
-                t_rotation_exposed_total += max(0.0, t_rot_end - t_jax_end)
+                # Capped at rot_dur to prevent GC/scheduling jitter inflation.
+                t_rotation_exposed_total += min(
+                    rot_dur, max(0.0, t_rot_end - t_jax_end)
+                )
                 UtG_jax = jax.device_put(UtG_np, placement.snp)
                 del UtG_np  # Safe: JAX holds internal ref during async transfer
 

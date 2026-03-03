@@ -38,4 +38,4 @@ def test_check_memory_before_run_uses_computed_chunk():
             check_memory_before_run(1410, 12_000)
         except MemoryError:
             pass  # OK if memory insufficient on this machine
-        mock.assert_called_once_with(12_000)
+        mock.assert_called_once_with(12_000, n_samples=1410, pipeline_buffers=2)

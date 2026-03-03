@@ -118,6 +118,13 @@ def _compute_chunk_size_numpy(
     Returns:
         Chunk size (number of SNPs per chunk).
     """
+    if not isinstance(pipeline_buffers, int):
+        raise TypeError(
+            f"pipeline_buffers must be an int, got {type(pipeline_buffers).__name__}"
+        )
+    if pipeline_buffers < 1:
+        raise ValueError(f"pipeline_buffers must be >= 1, got {pipeline_buffers}")
+
     if use_split and n_cvt == 1:
         if lmm_mode == 1:
             # Wald split path: 3 varying columns + 1 UtG column per SNP
@@ -143,7 +150,7 @@ def _compute_chunk_size_numpy(
         # prevents excessive allocation on high-memory systems.
         mem_budget = max(_MIN_BUDGET, min(int(available * 0.15), _MAX_BUDGET))
 
-    mem_budget = mem_budget // max(1, pipeline_buffers)
+    mem_budget = mem_budget // pipeline_buffers
 
     chunk_from_memory = int(mem_budget / bytes_per_snp)
     chunk = max(100, min(chunk_from_memory, n_filtered, _MAX_CHUNK))

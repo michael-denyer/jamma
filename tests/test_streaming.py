@@ -1822,6 +1822,53 @@ class TestThreadPoolExecutorOverlapStreaming:
         assert isinstance(exc_info.value.__cause__, ValueError)
         assert "Simulated BLAS failure" in str(exc_info.value.__cause__)
 
+    def test_background_rotation_memoryerror_propagates_directly(
+        self, sample_plink_data: Path
+    ) -> None:
+        """MemoryError from background rotation is NOT wrapped in RuntimeError.
+
+        The except MemoryError: raise clause must fire before the generic
+        except Exception handler, allowing OOM to propagate directly.
+        """
+        from unittest.mock import patch
+
+        rng = np.random.default_rng(777)
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = rng.standard_normal(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        call_count = 0
+        from jamma.lmm import prepare
+
+        original_prepare = prepare.prepare_utg_chunk
+
+        def _oom_prepare(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise MemoryError("Simulated OOM in background rotation")
+            return original_prepare(*args, **kwargs)
+
+        with (
+            patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=50),
+            patch(
+                "jamma.lmm.runner_streaming.prepare_utg_chunk",
+                side_effect=_oom_prepare,
+            ),
+        ):
+            with pytest.raises(MemoryError, match="Simulated OOM"):
+                run_lmm_association_streaming(
+                    sample_plink_data,
+                    phenotypes,
+                    kinship,
+                    snp_info=None,
+                    chunk_size=500,
+                    check_memory=False,
+                    show_progress=False,
+                )
+
     def test_multi_file_chunk_prev_compute_end_handoff(
         self, sample_plink_data: Path
     ) -> None:

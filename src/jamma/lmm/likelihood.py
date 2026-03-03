@@ -25,26 +25,43 @@ from loguru import logger
 
 _P_YY_MIN = 1e-8
 
+# Module-level flag — deduplicates _clamp_p_yy warning across all calls
+# within a single LMM run. Reset at run start via reset_scalar_p_yy_warned().
+_scalar_p_yy_warned = False
+
+
+def reset_scalar_p_yy_warned() -> None:
+    """Reset the scalar P_yy warning flag so each LMM run gets its own warning."""
+    global _scalar_p_yy_warned  # noqa: PLW0603
+    _scalar_p_yy_warned = False
+
 
 def _clamp_p_yy(P_yy: float, lambda_val: float) -> float:
     """Clamp P_yy to prevent log(0) or log(negative) in log-likelihood.
 
-    Returns -inf for negative P_yy (signals invalid region to optimizer)
-    and clamps near-zero positive values to _P_YY_MIN.
+    Returns NaN for negative P_yy (propagates through np.log as NaN;
+    optimizer avoids NaN regions) and clamps near-zero positive values
+    to _P_YY_MIN.
+
+    Warning deduplication: only logs the first negative P_yy per run.
+    Call reset_scalar_p_yy_warned() at the start of each LMM run.
 
     Args:
         P_yy: Projected residual variance from Pab.
         lambda_val: Current lambda value (for diagnostic logging).
 
     Returns:
-        Clamped P_yy, or triggers -inf log-likelihood via float('-inf').
+        Clamped P_yy, or NaN for negative values (signals invalid region).
     """
+    global _scalar_p_yy_warned  # noqa: PLW0603
     if P_yy < 0:
-        logger.warning(
-            f"Negative P_yy ({P_yy:.6e}) at lambda={lambda_val:.6e} — "
-            "numerical breakdown. If this occurs frequently, the kinship "
-            "matrix may not be positive semi-definite."
-        )
+        if not _scalar_p_yy_warned:
+            logger.warning(
+                f"Negative P_yy ({P_yy:.6e}) at lambda={lambda_val:.6e} — "
+                "numerical breakdown (subsequent occurrences suppressed). "
+                "The kinship matrix may not be positive semi-definite."
+            )
+            _scalar_p_yy_warned = True
         return float("nan")  # np.log(nan) = nan, optimizer avoids
     if P_yy < _P_YY_MIN:
         return _P_YY_MIN
@@ -443,6 +460,81 @@ def reml_log_likelihood_null(
     return f
 
 
+def _mle_p_yy_scalar_ncvt1(Hi_eval: np.ndarray, Uab: np.ndarray) -> float:
+    """Compute MLE P_yy via scalar Schur complements for n_cvt=1.
+
+    Avoids allocating full (3, 6) Pab matrix — computes only the 6 dot products
+    and 2 Schur complement steps needed for P_yy = Pab[2][5].
+
+    For n_cvt=1, nc_total=2, the trace is:
+      Row 0: s_ww, s_wx, s_wy, s_xx, s_xy, s_yy = Hi_eval @ Uab[:, 0..5]
+      Row 1: p1_xx = s_xx - s_wx^2/s_ww
+              p1_xy = s_xy - s_wx*s_wy/s_ww
+              p1_yy = s_yy - s_wy^2/s_ww
+      Row 2: P_yy = p1_yy - p1_xy^2/p1_xx
+
+    Args:
+        Hi_eval: 1/(lambda*eigenvalues + 1) vector (n_samples,).
+        Uab: Matrix products (n_samples, 6) for n_cvt=1.
+
+    Returns:
+        P_yy scalar (the projected phenotype variance).
+    """
+    s_ww = Hi_eval @ Uab[:, 0]
+    s_wx = Hi_eval @ Uab[:, 1]
+    s_wy = Hi_eval @ Uab[:, 2]
+    s_xx = Hi_eval @ Uab[:, 3]
+    s_xy = Hi_eval @ Uab[:, 4]
+    s_yy = Hi_eval @ Uab[:, 5]
+
+    # Row 1: project out W (Schur complement)
+    if s_ww <= 0:
+        if s_ww < 0:
+            logger.warning(
+                f"Negative s_ww ({s_ww:.6e}) in scalar MLE P_yy — "
+                "eigendecomposition may be degenerate."
+            )
+        return float(s_yy)  # degenerate
+    inv_ww = 1.0 / s_ww
+    p1_xx = s_xx - s_wx * s_wx * inv_ww
+    p1_xy = s_xy - s_wx * s_wy * inv_ww
+    p1_yy = s_yy - s_wy * s_wy * inv_ww
+
+    # Row 2: project out X (Schur complement)
+    if p1_xx == 0:
+        return float(p1_yy)  # degenerate
+    P_yy = p1_yy - p1_xy * p1_xy / p1_xx
+    return float(P_yy)
+
+
+def _mle_p_yy_scalar_null_ncvt1(Hi_eval: np.ndarray, Uab: np.ndarray) -> float:
+    """Compute null-model MLE P_yy for n_cvt=1.
+
+    Null model: nc_total=n_cvt=1, so P_yy = Pab[1][5] = p1_yy.
+    Only row 0 and row 1 Schur complement needed.
+
+    Args:
+        Hi_eval: 1/(lambda*eigenvalues + 1) vector (n_samples,).
+        Uab: Matrix products (n_samples, 6) for n_cvt=1 null model.
+
+    Returns:
+        P_yy scalar for the null model.
+    """
+    s_ww = Hi_eval @ Uab[:, 0]
+    s_wy = Hi_eval @ Uab[:, 2]
+    s_yy = Hi_eval @ Uab[:, 5]
+
+    if s_ww <= 0:
+        if s_ww < 0:
+            logger.warning(
+                f"Negative s_ww ({s_ww:.6e}) in scalar null MLE P_yy — "
+                "eigendecomposition may be degenerate."
+            )
+        return float(s_yy)
+    p1_yy = s_yy - s_wy * s_wy / s_ww
+    return float(p1_yy)
+
+
 def mle_log_likelihood_null(
     lambda_val: float, eigenvalues: np.ndarray, Uab: np.ndarray, n_cvt: int
 ) -> float:
@@ -466,17 +558,21 @@ def mle_log_likelihood_null(
         Log-likelihood value (positive for maximization)
     """
     n = len(eigenvalues)
-    nc_total = n_cvt  # NULL MODEL: no genotype column
 
     v_temp = lambda_val * eigenvalues + 1.0
     Hi_eval = 1.0 / v_temp
     logdet_h = np.sum(np.log(np.abs(v_temp)))
 
-    Pab = calc_pab(n_cvt, Hi_eval, Uab)
+    # Scalar path for n_cvt=1: skip full Pab allocation
+    if n_cvt == 1:
+        P_yy_raw = _mle_p_yy_scalar_null_ncvt1(Hi_eval, Uab)
+    else:
+        nc_total = n_cvt  # NULL MODEL: no genotype column
+        Pab = calc_pab(n_cvt, Hi_eval, Uab)
+        index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
+        P_yy_raw = Pab[nc_total, index_yy]
 
-    # P_yy at level nc_total (n_cvt for null model)
-    index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
-    P_yy = _clamp_p_yy(Pab[nc_total, index_yy], lambda_val)
+    P_yy = _clamp_p_yy(P_yy_raw, lambda_val)
 
     # MLE formula (uses n, not df; no logdet_hiw)
     c = 0.5 * n * (np.log(n) - np.log(2 * np.pi) - 1.0)
@@ -600,6 +696,8 @@ def compute_null_model_lambda(
     Returns:
         (lambda_null, logl_null) - Null model lambda and log-likelihood
     """
+    reset_scalar_p_yy_warned()
+
     # Compute Uab without genotype (Utx=None)
     # This sets genotype-related columns to zero via placeholder
     Uab = compute_Uab(UtW, Uty, Utx=None)
@@ -644,18 +742,21 @@ def mle_log_likelihood(
         Log-likelihood value (positive for maximization)
     """
     n = len(eigenvalues)
-    nc_total = n_cvt + 1
 
     v_temp = lambda_val * eigenvalues + 1.0
     Hi_eval = 1.0 / v_temp
     logdet_h = np.sum(np.log(np.abs(v_temp)))
 
-    Pab = calc_pab(n_cvt, Hi_eval, Uab)
+    # Scalar path for n_cvt=1: skip full Pab allocation
+    if n_cvt == 1:
+        P_yy_raw = _mle_p_yy_scalar_ncvt1(Hi_eval, Uab)
+    else:
+        nc_total = n_cvt + 1
+        Pab = calc_pab(n_cvt, Hi_eval, Uab)
+        index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
+        P_yy_raw = Pab[nc_total, index_yy]
 
-    # NO logdet_hiw computation for MLE (key difference from REML)
-
-    index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
-    P_yy = _clamp_p_yy(Pab[nc_total, index_yy], lambda_val)
+    P_yy = _clamp_p_yy(P_yy_raw, lambda_val)
 
     # MLE formula (uses n, not df; no logdet_hiw)
     c = 0.5 * n * (np.log(n) - np.log(2 * np.pi) - 1.0)
@@ -690,6 +791,8 @@ def compute_null_model_mle(
     Returns:
         (lambda_null_mle, logl_H0) - Null model MLE lambda and log-likelihood
     """
+    reset_scalar_p_yy_warned()
+
     # Compute Uab without genotype (Utx=None)
     Uab = compute_Uab(UtW, Uty, Utx=None)
 

@@ -18,10 +18,12 @@ import numpy as np
 from jamma.lmm.likelihood_numpy import (
     _batch_lrt_pvalues_numpy,
     batch_calc_score_stats_numpy,
-    batch_calc_wald_stats_numpy,
+    batch_calc_wald_stats_from_pab_numpy,
     batch_compute_iab_numpy,
+    compute_iab_invariant_scalars_ncvt1,
     golden_section_optimize_lambda_mle_numpy,
     golden_section_optimize_lambda_numpy,
+    golden_section_optimize_lambda_split_ncvt1_numpy,
 )
 
 _EXPECTED_ABI_VERSION = 3  # Must match ABI_VERSION in _lmm_accel.c
@@ -322,7 +324,8 @@ def _compute_wald_numpy(
     """Compute REML-optimized Wald test statistics.
 
     Dispatches to the C extension for n_cvt=1 when _lmm_accel is importable.
-    Falls back to pure-Python NumPy for n_cvt>1 or when the extension is absent.
+    For n_cvt=1 without the C extension, uses the split-Uab Python path
+    (invariant/varying separation). Falls back to generic Python path for n_cvt>1.
 
     Args:
         n_cvt: Number of covariates.
@@ -356,20 +359,53 @@ def _compute_wald_numpy(
             n_threads,
         )
 
-    if Iab_batch is None:
-        Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
-    lambdas, logls = golden_section_optimize_lambda_numpy(
-        n_cvt,
-        eigenvalues,
-        Uab_batch,
-        Iab_batch,
-        l_min=l_min,
-        l_max=l_max,
-        n_grid=n_grid,
-        n_iter=n_refine,
-    )
-    betas, ses, pwalds = batch_calc_wald_stats_numpy(
-        n_cvt, lambdas, eigenvalues, Uab_batch, n_samples
+    if n_cvt == 1:
+        # Python split path for n_cvt=1: separate invariant (ww, wy, yy)
+        # and varying (wx, xx, xy) Uab columns to reduce per-SNP computation.
+        # Column layout: 0=ww, 1=wx, 2=wy, 3=xx, 4=xy, 5=yy.
+        # Invariant columns (ww, wy, yy) are identical across SNPs — use SNP 0.
+        uab_varying_soa = np.stack(
+            [Uab_batch[:, :, 1], Uab_batch[:, :, 3], Uab_batch[:, :, 4]], axis=1
+        )  # (n_snps, 3, n_samples): rows [wx, xx, xy]
+        uab_invariant_soa = np.stack(
+            [Uab_batch[0, :, 0], Uab_batch[0, :, 2], Uab_batch[0, :, 5]], axis=0
+        )  # (3, n_samples): rows [ww, wy, yy]
+
+        iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
+            uab_invariant_soa
+        )
+        lambdas, logls, Pab_final = golden_section_optimize_lambda_split_ncvt1_numpy(
+            eigenvalues,
+            uab_varying_soa,
+            uab_invariant_soa,
+            iab_s_ww,
+            iab_s_wy,
+            iab_s_yy,
+            iab_logdet,
+            l_min=l_min,
+            l_max=l_max,
+            n_grid=n_grid,
+            n_iter=n_refine,
+            return_pab=True,
+        )
+    else:
+        # Generic Python path for n_cvt > 1
+        if Iab_batch is None:
+            Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
+        lambdas, logls, Pab_final = golden_section_optimize_lambda_numpy(
+            n_cvt,
+            eigenvalues,
+            Uab_batch,
+            Iab_batch,
+            l_min=l_min,
+            l_max=l_max,
+            n_grid=n_grid,
+            n_iter=n_refine,
+            return_pab=True,
+        )
+
+    betas, ses, pwalds = batch_calc_wald_stats_from_pab_numpy(
+        n_cvt, Pab_final, n_samples
     )
     return {
         "lambdas": lambdas,

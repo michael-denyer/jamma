@@ -11,6 +11,7 @@ from click.testing import CliRunner
 
 from jamma.cli import main
 from jamma.kinship import write_kinship_matrix
+from jamma.kinship.io import write_loco_kinship_matrices
 
 
 @pytest.fixture
@@ -231,6 +232,90 @@ class TestReadKinshipValidation:
 
         assert K_loaded.shape == (5, 5)
         np.testing.assert_allclose(K_loaded, K, rtol=1e-9)
+
+
+@pytest.mark.tier0
+class TestWriteLocoKinshipMatrices:
+    """Tests for write_loco_kinship_matrices."""
+
+    def _make_kinship(self, n: int = 4, seed: int = 0) -> np.ndarray:
+        """Return a small symmetric PSD kinship matrix."""
+        rng = np.random.default_rng(seed)
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+        return (K + K.T) / 2
+
+    def test_writes_one_file_per_chromosome(self, tmp_path):
+        """One output file is written for each (chr, K) pair."""
+        loco_iter = (
+            ("1", self._make_kinship(seed=1)),
+            ("2", self._make_kinship(seed=2)),
+            ("X", self._make_kinship(seed=3)),
+        )
+
+        paths = write_loco_kinship_matrices(loco_iter, tmp_path)
+
+        assert len(paths) == 3
+
+    def test_output_filenames_use_expected_pattern(self, tmp_path):
+        """Files are named {prefix}.loco.cXX.chr{chr}.txt."""
+        loco_iter = [
+            ("1", self._make_kinship(seed=0)),
+            ("22", self._make_kinship(seed=1)),
+        ]
+
+        paths = write_loco_kinship_matrices(loco_iter, tmp_path, prefix="study")
+
+        names = {p.name for p in paths}
+        assert "study.loco.cXX.chr1.txt" in names
+        assert "study.loco.cXX.chr22.txt" in names
+
+    def test_default_prefix_is_result(self, tmp_path):
+        """Default prefix is 'result'."""
+        loco_iter = [("3", self._make_kinship())]
+
+        paths = write_loco_kinship_matrices(loco_iter, tmp_path)
+
+        assert paths[0].name == "result.loco.cXX.chr3.txt"
+
+    def test_output_directory_created_if_missing(self, tmp_path):
+        """Output directory (and parents) are created if they don't exist."""
+        output_dir = tmp_path / "nested" / "loco"
+        loco_iter = [("1", self._make_kinship())]
+
+        write_loco_kinship_matrices(loco_iter, output_dir)
+
+        assert output_dir.exists()
+
+    def test_matrix_content_roundtrips(self, tmp_path):
+        """Written kinship matrices load back with GEMMA-format precision."""
+        from jamma.kinship.io import read_kinship_matrix
+
+        K1 = self._make_kinship(n=5, seed=10)
+        K2 = self._make_kinship(n=5, seed=20)
+        loco_iter = [("1", K1.copy()), ("2", K2.copy())]
+
+        paths = write_loco_kinship_matrices(loco_iter, tmp_path)
+
+        for path, K_expected in zip(paths, [K1, K2], strict=True):
+            K_loaded = read_kinship_matrix(path)
+            np.testing.assert_allclose(K_loaded, K_expected, rtol=1e-9)
+
+    def test_returns_paths_in_iterator_order(self, tmp_path):
+        """Returned paths preserve the same order as the input iterator."""
+        chromosomes = ["5", "3", "1"]
+        loco_iter = [(c, self._make_kinship(seed=i)) for i, c in enumerate(chromosomes)]
+
+        paths = write_loco_kinship_matrices(loco_iter, tmp_path)
+
+        for path, chr_name in zip(paths, chromosomes, strict=True):
+            assert f"chr{chr_name}" in path.name
+
+    def test_empty_iterator_returns_empty_list(self, tmp_path):
+        """Empty iterator produces an empty result list."""
+        paths = write_loco_kinship_matrices(iter([]), tmp_path)
+
+        assert paths == []
 
 
 @pytest.mark.tier1

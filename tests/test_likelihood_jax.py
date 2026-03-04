@@ -18,6 +18,7 @@ from jamma.lmm.likelihood import (
 )
 from jamma.lmm.likelihood_jax import (
     _batch_grid_reml_ncvt1,
+    batch_calc_score_stats,
     batch_calc_wald_stats,
     batch_compute_iab,
     batch_compute_uab,
@@ -498,4 +499,166 @@ class TestJaxBatchDegenerateSNP:
         assert np.isnan(ses_np[1]), f"Degenerate SNP se should be NaN, got {ses_np[1]}"
         assert np.isnan(pwalds_np[1]), (
             f"Degenerate SNP p_wald should be NaN, got {pwalds_np[1]}"
+        )
+
+    def test_jax_batch_all_degenerate_snps_wald_all_nan(self):
+        """JAX batch path: all-degenerate SNPs (UtG=0) produce all-NaN Wald stats.
+
+        When every SNP is constant (UtG=0), P_XX=0 for every SNP.  The
+        optimizer may find any lambda (REML depends only on phenotype
+        variance when genotype is zero), but the critical downstream behavior
+        is that all Wald stats must be NaN.  Lambdas must be finite and
+        within [l_min, l_max].
+        """
+        n_samples = 50
+        n_snps = 5
+        l_min = 1e-5
+        l_max = 1e5
+        rng = np.random.default_rng(7)
+
+        eigenvalues = np.sort(rng.exponential(1.0, size=n_samples))[::-1]
+        U = np.linalg.qr(rng.standard_normal((n_samples, n_samples)))[0]
+        W = np.ones((n_samples, 1))
+        y = rng.standard_normal(n_samples)
+
+        UtW = jnp.array(U.T @ W)
+        Uty = jnp.array(U.T @ y)
+        UtG_degen = jnp.zeros((n_samples, n_snps))  # constant genotype
+
+        evals = jnp.array(eigenvalues)
+        Uab = batch_compute_uab(1, UtW, Uty, UtG_degen)
+        Iab = batch_compute_iab(1, Uab)
+
+        lambdas, logls = golden_section_optimize_lambda(
+            1, evals, Uab, Iab, l_min=l_min, l_max=l_max, n_grid=50, n_iter=20
+        )
+
+        lambdas_np = np.array(lambdas)
+        assert lambdas_np.shape == (n_snps,), (
+            f"Expected ({n_snps},), got {lambdas_np.shape}"
+        )
+        # Lambdas must be finite and within [l_min, l_max]
+        assert np.all(np.isfinite(lambdas_np)), (
+            f"All lambdas should be finite for degenerate batch, got {lambdas_np}"
+        )
+        assert np.all(lambdas_np >= l_min * 0.99), f"Lambdas below l_min: {lambdas_np}"
+        assert np.all(lambdas_np <= l_max * 1.01), f"Lambdas above l_max: {lambdas_np}"
+
+        # Wald stats: P_XX=0 → all NaN (critical downstream behavior)
+        betas, ses, pwalds = batch_calc_wald_stats(1, lambdas, evals, Uab, n_samples)
+        assert np.all(np.isnan(np.array(betas))), (
+            f"All betas should be NaN for degenerate batch, got {np.array(betas)}"
+        )
+        assert np.all(np.isnan(np.array(ses))), (
+            f"All ses should be NaN for degenerate batch, got {np.array(ses)}"
+        )
+        assert np.all(np.isnan(np.array(pwalds))), (
+            f"All p_walds should be NaN for degenerate batch, got {np.array(pwalds)}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Degenerate SNP tests — JAX Score stats path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+@pytest.mark.requires_jax
+class TestJaxScoreStatsDegenerateSNP:
+    """JAX batch Score stats path produces NaN for degenerate SNPs."""
+
+    def test_batch_score_stats_degenerate_snp_returns_nan(self):
+        """batch_calc_score_stats: degenerate SNP (P_XX=0) → NaN beta/se/p_score.
+
+        Score test uses a fixed null-model Hi_eval (lambda_null).  When a SNP
+        is constant (UtG=0), P_xx=0 after projection.  The guard `is_valid =
+        P_xx > 0` must propagate NaN through beta, se, and p_score for that
+        SNP without affecting the valid SNP in the same batch.
+        """
+
+        n_samples = 50
+        rng = np.random.default_rng(13)
+
+        eigenvalues = np.sort(rng.exponential(1.0, size=n_samples))[::-1]
+        U = np.linalg.qr(rng.standard_normal((n_samples, n_samples)))[0]
+        W = np.ones((n_samples, 1))
+        y = rng.standard_normal(n_samples)
+
+        UtW = jnp.array(U.T @ W)
+        Uty = jnp.array(U.T @ y)
+
+        x_valid = rng.choice([0.0, 1.0, 2.0], size=n_samples, p=[0.25, 0.5, 0.25])
+        x_degen = np.zeros(n_samples)
+        G = np.column_stack([x_valid, x_degen])
+        UtG = jnp.array(U.T @ G)
+
+        evals = jnp.array(eigenvalues)
+        Uab = batch_compute_uab(1, UtW, Uty, UtG)
+
+        # Null-model lambda: use l_min as a simple fixed null
+        lambda_null = 1e-5
+        Hi_eval_null = 1.0 / (lambda_null * evals + 1.0)
+
+        betas, ses, pscores = batch_calc_score_stats(1, Hi_eval_null, Uab, n_samples)
+
+        betas_np = np.array(betas)
+        ses_np = np.array(ses)
+        pscores_np = np.array(pscores)
+
+        # Valid SNP (index 0): finite stats
+        assert np.isfinite(betas_np[0]), (
+            f"Valid SNP beta should be finite, got {betas_np[0]}"
+        )
+        assert np.isfinite(ses_np[0]), f"Valid SNP se should be finite, got {ses_np[0]}"
+        assert np.isfinite(pscores_np[0]), (
+            f"Valid SNP p_score should be finite, got {pscores_np[0]}"
+        )
+
+        # Degenerate SNP (index 1): P_XX=0 → NaN
+        assert np.isnan(betas_np[1]), (
+            f"Degenerate SNP beta should be NaN, got {betas_np[1]}"
+        )
+        assert np.isnan(ses_np[1]), f"Degenerate SNP se should be NaN, got {ses_np[1]}"
+        assert np.isnan(pscores_np[1]), (
+            f"Degenerate SNP p_score should be NaN, got {pscores_np[1]}"
+        )
+
+    def test_batch_score_stats_all_degenerate_all_nan(self):
+        """batch_calc_score_stats: all-degenerate batch → all NaN.
+
+        Feeding only constant-genotype SNPs (UtG=0) should produce all-NaN
+        beta/se/p_score arrays.  This tests the P_yy clamping path and the
+        P_XX guard with no valid SNPs present.
+        """
+
+        n_samples = 50
+        n_snps = 5
+        rng = np.random.default_rng(31)
+
+        eigenvalues = np.sort(rng.exponential(1.0, size=n_samples))[::-1]
+        U = np.linalg.qr(rng.standard_normal((n_samples, n_samples)))[0]
+        W = np.ones((n_samples, 1))
+        y = rng.standard_normal(n_samples)
+
+        UtW = jnp.array(U.T @ W)
+        Uty = jnp.array(U.T @ y)
+        UtG_degen = jnp.zeros((n_samples, n_snps))
+
+        evals = jnp.array(eigenvalues)
+        Uab = batch_compute_uab(1, UtW, Uty, UtG_degen)
+
+        lambda_null = 1e-5
+        Hi_eval_null = 1.0 / (lambda_null * evals + 1.0)
+
+        betas, ses, pscores = batch_calc_score_stats(1, Hi_eval_null, Uab, n_samples)
+
+        assert np.all(np.isnan(np.array(betas))), (
+            f"All betas should be NaN for all-degenerate batch, got {np.array(betas)}"
+        )
+        assert np.all(np.isnan(np.array(ses))), (
+            f"All ses should be NaN for all-degenerate batch, got {np.array(ses)}"
+        )
+        assert np.all(np.isnan(np.array(pscores))), (
+            f"All p_scores should be NaN for all-degenerate batch, "
+            f"got {np.array(pscores)}"
         )

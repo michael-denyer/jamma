@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from jamma.lmm.schema import GWASTiming
 from jamma.lmm.stats import AssocResult
 from jamma.pipeline import PipelineConfig, PipelineRunner
 
@@ -34,7 +35,7 @@ class GWASResult:
     associations: list[AssocResult]
     n_samples: int
     n_snps_tested: int
-    timing: dict[str, float] = field(default_factory=dict)
+    timing: GWASTiming = field(default_factory=dict)
 
 
 def gwas(

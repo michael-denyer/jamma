@@ -11,6 +11,64 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import TypedDict
+
+
+class RunnerTiming(TypedDict, total=False):
+    """Timing breakdown from LMM runner execution.
+
+    All keys are optional because not all runners populate all fields.
+    For example, ``rotation_exposed_s`` only appears in multi-chunk runs.
+
+    Attributes:
+        rotation_s: Total UT@G rotation time (seconds).
+        rotation_exposed_s: Rotation time exposed (not overlapped) by compute.
+        jax_compute_s: Total JAX compute time (seconds).
+        result_write_s: Total result write time (seconds).
+    """
+
+    rotation_s: float
+    rotation_exposed_s: float
+    jax_compute_s: float
+    result_write_s: float
+
+
+class PipelineTiming(TypedDict, total=False):
+    """Timing breakdown from pipeline execution.
+
+    All keys are optional; keys from the runner are merged at pipeline exit.
+
+    Attributes:
+        kinship_s: Kinship load/compute time (seconds).
+        load_s: Total data loading time through kinship (seconds).
+        lmm_s: LMM association runtime (seconds).
+        total_s: Total pipeline wall time (seconds).
+        rotation_s: UT@G rotation time from the runner (seconds).
+        rotation_exposed_s: Exposed rotation time from the runner (seconds).
+    """
+
+    kinship_s: float
+    load_s: float
+    lmm_s: float
+    total_s: float
+    rotation_s: float
+    rotation_exposed_s: float
+
+
+class GWASTiming(TypedDict, total=False):
+    """Timing breakdown from GWAS API execution.
+
+    Subset of PipelineTiming exposed through the public gwas() API.
+
+    Attributes:
+        kinship_s: Kinship load/compute time (seconds).
+        lmm_s: LMM association runtime (seconds).
+        total_s: Total pipeline wall time (seconds).
+    """
+
+    kinship_s: float
+    lmm_s: float
+    total_s: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +190,13 @@ class LazySnpMeta:
     dict on each __getitem__ access. This saves O(n_snps) dict + string objects.
 
     Compatible with all snp_info consumers that use integer indexing (snp_info[idx]).
+
+    Items are dicts with keys:
+        chr: Chromosome identifier (str).
+        rs: SNP identifier / rsID (str).
+        pos: Base-pair position (int).
+        a1: Minor allele (str).
+        a0: Major allele (str).
     """
 
     __slots__ = ("_chr", "_rs", "_pos", "_a1", "_a0")

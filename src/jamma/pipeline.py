@@ -37,6 +37,7 @@ from jamma.kinship import (
 from jamma.lmm.chunk import _compute_chunk_size
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+from jamma.lmm.schema import PipelineTiming
 from jamma.lmm.stats import AssocResult
 
 
@@ -154,7 +155,7 @@ class PipelineResult:
     n_samples: int
     n_snps_tested: int
     assoc_path: Path
-    timing: dict[str, float] = field(default_factory=dict)
+    timing: PipelineTiming = field(default_factory=dict)
     backend: BackendResolved = "numpy"  # Set by PipelineRunner.run()
     n_covariates: int = 1
 

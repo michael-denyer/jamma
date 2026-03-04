@@ -51,14 +51,14 @@ from jamma.lmm.results import (
 from jamma.lmm.schema import ACCUM_KEYS as _ACCUM_KEYS
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.schema import LazySnpMeta as _LazySnpMeta
+from jamma.lmm.schema import RunnerTiming
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
 
 # Module-level timing from the last run, for programmatic access by pipeline/benchmarks.
 # Not thread-safe: concurrent calls will corrupt this dict.
-# Keys: rotation_s, rotation_exposed_s, jax_compute_s, result_write_s
 # Cleared at function entry; repopulated at function exit on success.
-last_run_timing: dict[str, float] = {}
+last_run_timing: RunnerTiming = {}
 
 
 def _init_accumulators(lmm_mode: int) -> dict[str, list]:

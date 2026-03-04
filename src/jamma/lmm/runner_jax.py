@@ -38,15 +38,15 @@ from jamma.lmm.results import (
     log_lambda_boundary_warning,
 )
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
+from jamma.lmm.schema import RunnerTiming
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
 
 # Module-level timing from the last run, for direct callers (tests, notebooks).
 # The pipeline reads runner_streaming.last_run_timing instead (it always uses the
 # streaming runner). Not thread-safe: concurrent calls will corrupt this dict.
-# Keys: rotation_s, rotation_exposed_s, jax_compute_s, result_write_s
 # Cleared at function entry; repopulated at function exit on success.
-last_run_timing: dict[str, float] = {}
+last_run_timing: RunnerTiming = {}
 
 
 def run_lmm_association_jax(

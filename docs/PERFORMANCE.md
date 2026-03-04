@@ -58,6 +58,19 @@ v2.10.1 is 968s (16 min) faster than the best prior run. Improvement is in the e
 
 Eigendecomp dominates the increase: O(n³) scaling from 90k→125k is ~2.7×, plus memory bandwidth saturation at 125k (the 126 GB eigenvector matrices exceed L3 cache).
 
+### Full Pipeline Scaling (v2.10.1, 95k SNPs, 48 cores)
+
+| Phase | 50k×95k | 75k×95k |
+|-------|---------|---------|
+| Kinship compute | 289s (5 min) | 561s (9 min) |
+| Eigendecomp (DSYEVD) | 495s (8 min) | 1,380s (23 min) |
+| LMM (C ext) | 448s (7 min) | 611s (10 min) |
+| **Total (C ext)** | **1,240s (21 min)** | **2,576s (43 min)** |
+| LMM (JAX) | 502s (8 min) | 693s (12 min) |
+| **Total (JAX)** | **1,299s (22 min)** | **2,650s (44 min)** |
+
+Eigendecomp scales O(n³): 495s at 50k → 1,380s at 75k (2.8× for 1.5× samples). LMM scales roughly O(n²) due to rotation dominance.
+
 ---
 
 ## C Extension LMM Acceleration (NumPy Backend)
@@ -66,27 +79,46 @@ The NumPy backend includes an optional C extension (`_lmm_accel.c`) with OpenMP 
 that replaces the Python loop over SNPs for Wald test computation. The extension uses a
 workspace API (pre-allocated per-thread buffers) and SoA Uab layout with invariant precompute.
 
-### C Extension vs JAX Backend (E96ds_v6, 48 cores, synthetic 95k SNPs)
+### C Extension vs JAX Backend (E96ds_v6, 48 cores, synthetic data)
+
+**5k SNPs (LMM only, pre-computed eigen):**
 
 | Scale    | C ext LMM | JAX LMM | C ext Speedup |
 |----------|-----------|---------|---------------|
-| 5k×95k   | 20.0s     | 142.9s  | **7.1x**      |
-| 20k×95k  | 90.3s     | 193.9s  | **2.1x**      |
-| 50k×95k  | 273.4s    | 530.8s  | **1.9x**      |
-| 75k×95k  | 484.3s    | 867.6s  | **1.8x**      |
+| 5k×5k    | 1.1s      | 2.6s    | **2.3x**      |
+| 20k×5k   | 4.1s      | 7.5s    | **1.8x**      |
+| 50k×5k   | 14.6s     | 20.9s   | **1.4x**      |
+| 75k×5k   | 27.1s     | 40.6s   | **1.5x**      |
 
-The C extension wins at all scales. At small n, JAX's per-SNP overhead (Python Brent loop +
-XLA dispatch) dominates. At large n, UT@G rotation (identical DGEMM in both) dominates and
-compute ratios converge to ~1.8x.
+**95k SNPs (LMM phase only):**
 
-### C Extension Scaling (LMM compute only, 95k SNPs)
+| Scale    | C ext LMM | JAX LMM | C ext Speedup |
+|----------|-----------|---------|---------------|
+| 5k×95k   | 19.8s     | 31.8s   | **1.6x**      |
+| 20k×95k  | 94.0s     | 145.0s  | **1.5x**      |
+| 50k×95k  | 448.0s    | 502.0s  | **1.1x**      |
+| 75k×95k  | 611.0s    | 693.0s  | **1.1x**      |
 
-| Scale    | UT@G Rotation | Compute | LMM Total | RSS     |
-|----------|---------------|---------|-----------|---------|
-| 5k×95k   | 2.9s          | 10.2s   | 20.0s     | 7.4 GB  |
-| 20k×95k  | 24.6s         | 42.9s   | 90.3s     | 17.4 GB |
-| 50k×95k  | 118.4s        | 101.9s  | 273.4s    | 45.7 GB |
-| 75k×95k  | 254.0s        | 150.2s  | 484.3s    | 80.2 GB |
+The C extension wins at all scales but the gap narrows at large n where UT@G rotation
+(identical DGEMM in both backends) dominates. At small SNP counts (5k), the speedup is
+clearer because compute is a larger fraction of total time. At 95k SNPs with large samples,
+rotation dominates both backends and ratios converge to ~1.1x.
+
+### C Extension Scaling (LMM timing breakdown, 95k SNPs)
+
+| Scale    | UT@G Rotation | Compute  | LMM Total | RSS      |
+|----------|---------------|----------|-----------|----------|
+| 50k×95k  | 148.7s        | 218.0s   | 446.1s    | 53.4 GB  |
+| 75k×95k  | 274.6s        | 220.9s   | 609.0s    | 93.4 GB  |
+
+### C Extension Scaling (LMM timing breakdown, 5k SNPs)
+
+| Scale    | UT@G Rotation | Compute  | LMM Total | RSS      |
+|----------|---------------|----------|-----------|----------|
+| 5k×5k    | 0.18s         | 0.51s    | 1.1s      | 1.0 GB   |
+| 20k×5k   | 1.17s         | 1.71s    | 4.0s      | 5.7 GB   |
+| 50k×5k   | 6.23s         | 5.23s    | 14.4s     | 24.6 GB  |
+| 75k×5k   | 13.59s        | 8.81s    | 26.9s     | 51.4 GB  |
 
 Compute scales O(n_samples). Rotation scales O(n² × n_snps) and dominates at 50k+.
 Both use MKL DGEMM with 48 threads.

@@ -976,7 +976,10 @@ def _run_lmm_for_chromosome(
     """
     import jax  # noqa: PLC0415
 
-    from jamma.lmm.chunk import _compute_chunk_size  # noqa: PLC0415
+    from jamma.lmm.chunk import (  # noqa: PLC0415
+        _compute_chunk_size,
+        compute_subchunk_starts,
+    )
     from jamma.lmm.compute import (  # noqa: PLC0415
         _compute_lmm_chunk,
         block_chunk_result,
@@ -1097,7 +1100,9 @@ def _run_lmm_for_chromosome(
 
                 # Process this disk chunk through the existing JAX chunk pipeline
                 n_disk_subset = geno_disk_chunk.shape[1]
-                jax_starts = list(range(0, n_disk_subset, jax_chunk_size))
+                jax_starts = compute_subchunk_starts(
+                    n_disk_subset, jax_chunk_size, placement.n_devices
+                )
 
                 # Fresh accumulator per disk chunk (flush after each)
                 accum: dict[str, list] = _init_accumulators(lmm_mode)

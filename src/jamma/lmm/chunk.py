@@ -119,6 +119,35 @@ def _compute_chunk_size(
     return max(1, chunk)
 
 
+def compute_subchunk_starts(
+    n_subset: int,
+    chunk_size: int,
+    n_devices: int,
+) -> list[int]:
+    """Compute sub-chunk start indices that avoid tiny tails.
+
+    When multi-device sharding is active, a tail sub-chunk with fewer
+    SNPs than n_devices causes an IndivisibleError because JAX cannot
+    shard the tail across the mesh.  This function merges any too-small
+    tail into the preceding sub-chunk.
+
+    Args:
+        n_subset: Total SNPs in the outer (file) chunk.
+        chunk_size: JAX sub-chunk size (already device-aligned).
+        n_devices: Number of JAX virtual CPU devices.
+
+    Returns:
+        List of start indices for sub-chunks within the outer chunk.
+    """
+    starts = list(range(0, n_subset, chunk_size))
+    if n_devices > 1 and len(starts) > 1:
+        tail = n_subset - starts[-1]
+        if tail < n_devices:
+            # Merge tail into previous sub-chunk
+            starts.pop()
+    return starts
+
+
 def auto_tune_chunk_size(
     n_samples: int,
     n_filtered: int,

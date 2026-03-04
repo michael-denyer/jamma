@@ -24,7 +24,7 @@ from jamma.io.plink import (
     stream_genotype_chunks,
     validate_genotype_values,
 )
-from jamma.lmm.chunk import _compute_chunk_size
+from jamma.lmm.chunk import _compute_chunk_size, compute_subchunk_starts
 from jamma.lmm.compute import (
     _compute_lmm_chunk,
     block_chunk_result,
@@ -459,7 +459,9 @@ def run_lmm_association_streaming(
                 del missing_mask
 
                 n_subset = chunk.shape[1]
-                jax_starts = list(range(0, n_subset, jax_chunk_size))
+                jax_starts = compute_subchunk_starts(
+                    n_subset, jax_chunk_size, placement.n_devices
+                )
 
                 # Dict-based accumulators for this file chunk
                 accum: dict[str, list] = _init_accumulators(lmm_mode)

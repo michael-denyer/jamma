@@ -10,6 +10,7 @@ from jamma.lmm.chunk import (
     MAX_SAFE_CHUNK,
     _compute_chunk_size,
     auto_tune_chunk_size,
+    compute_subchunk_starts,
 )
 
 
@@ -431,3 +432,46 @@ class TestStreamingMemoryPipelineBuffers:
             _compute_chunk_size_numpy(
                 n_samples=1000, n_filtered=50_000, pipeline_buffers=bad_value
             )
+
+
+@pytest.mark.tier0
+class TestComputeSubchunkStarts:
+    """Tests for compute_subchunk_starts() tail merging."""
+
+    def test_no_tail_issue_single_device(self):
+        """Single device never merges — no sharding constraint."""
+        starts = compute_subchunk_starts(50000, 49992, n_devices=1)
+        assert starts == [0, 49992]
+
+    def test_tail_smaller_than_n_devices_is_merged(self):
+        """Tail of 8 SNPs with 24 devices must be merged into previous chunk."""
+        # 50000 SNPs, chunk_size=49992 → tail=8, 8 < 24 → merge
+        starts = compute_subchunk_starts(50000, 49992, n_devices=24)
+        assert starts == [0], "Tail of 8 should be merged into first sub-chunk"
+
+    def test_tail_equal_to_n_devices_not_merged(self):
+        """Tail exactly equal to n_devices is valid — no merge needed."""
+        # 49992 + 24 = 50016 → tail=24, 24 >= 24 → keep
+        starts = compute_subchunk_starts(50016, 49992, n_devices=24)
+        assert starts == [0, 49992]
+
+    def test_tail_larger_than_n_devices_not_merged(self):
+        """Tail larger than n_devices is valid — no merge needed."""
+        starts = compute_subchunk_starts(50100, 49992, n_devices=24)
+        assert starts == [0, 49992]
+
+    def test_single_chunk_no_tail(self):
+        """When n_subset <= chunk_size, only one sub-chunk exists."""
+        starts = compute_subchunk_starts(45000, 49992, n_devices=24)
+        assert starts == [0]
+
+    def test_exact_multiple_no_tail(self):
+        """When n_subset is exact multiple of chunk_size, no tail exists."""
+        starts = compute_subchunk_starts(99984, 49992, n_devices=24)
+        assert starts == [0, 49992]
+
+    def test_many_chunks_with_small_tail(self):
+        """Multiple chunks where last tail is too small."""
+        # 3 * 49992 = 149976, total = 149980, tail = 4 < 24 → merge
+        starts = compute_subchunk_starts(149980, 49992, n_devices=24)
+        assert starts == [0, 49992, 99984], "Tail of 4 merged into third sub-chunk"

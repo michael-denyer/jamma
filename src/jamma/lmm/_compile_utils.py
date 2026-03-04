@@ -1,14 +1,49 @@
-"""Shared utilities for C extension auto-recompilation.
+"""Shared utilities for C extension detection and auto-recompilation.
 
-Provides a single ``auto_recompile_c_extension`` helper used by both the LMM
-and eigendecomp subsystems to rebuild stale or missing C extensions at runtime
-without duplicating the compiler-invocation and sys.modules eviction logic.
+Provides ``is_c_extension_usable`` for lightweight availability probes and
+``auto_recompile_c_extension`` for auto-rebuilding stale/missing C extensions
+at runtime.
 """
 
 from __future__ import annotations
 
 import importlib
 import sys
+
+
+def is_c_extension_usable() -> bool:
+    """Check whether the LMM C extension is importable and has a valid ABI.
+
+    This is the single source of truth for C extension availability checks.
+    Both ``pipeline._auto_select_backend`` and ``compute_numpy._try_import_accel``
+    ultimately depend on import + ABI validation — this function consolidates
+    the lightweight probe used by the auto-backend selector.
+
+    Returns:
+        True if _lmm_accel imports successfully and exposes _C_ABI_VERSION.
+    """
+    from loguru import logger
+
+    try:
+        mod = importlib.import_module("jamma.lmm._lmm_accel")
+    except ImportError:
+        logger.debug("C extension _lmm_accel not importable")
+        return False
+    except (OSError, AttributeError) as e:
+        logger.warning(
+            f"C extension _lmm_accel not usable: {type(e).__name__}: {e}. "
+            "Run: python -m jamma.lmm._compile_accel"
+        )
+        return False
+
+    if not hasattr(mod, "_C_ABI_VERSION"):
+        logger.debug(
+            "C extension imported but missing _C_ABI_VERSION — "
+            "likely stale; run: python -m jamma.lmm._compile_accel"
+        )
+        return False
+
+    return True
 
 
 def auto_recompile_c_extension(

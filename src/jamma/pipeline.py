@@ -65,30 +65,19 @@ def _auto_select_backend(n_samples: int, n_snps: int, use_gpu: bool = False) -> 
         'numpy' or 'jax'.
     """
     # GPU requires JAX — short-circuit before any memory check
-    if use_gpu and has_jax():
-        logger.info("Backend auto-selection: 'jax' (GPU requested, JAX available)")
-        return "jax"
-
-    # Check C extension availability — import + ABI version check
-    c_ext_available = False
-    try:
-        import importlib
-
-        mod = importlib.import_module("jamma.lmm._lmm_accel")
-        c_ext_available = hasattr(mod, "_C_ABI_VERSION")
-        if not c_ext_available:
-            logger.debug(
-                "C extension imported but missing _C_ABI_VERSION — "
-                "likely stale; run: python -m jamma.lmm._compile_accel"
-            )
-    except ImportError:
-        logger.debug("C extension _lmm_accel not importable")
-    except AttributeError as e:
+    if use_gpu:
+        if has_jax():
+            logger.info("Backend auto-selection: 'jax' (GPU requested, JAX available)")
+            return "jax"
         logger.warning(
-            f"C extension _lmm_accel has attribute errors: {e}. "
-            "This may indicate an ABI mismatch. "
-            "Run: python -m jamma.lmm._compile_accel"
+            "use_gpu=True but JAX is not installed — GPU acceleration unavailable. "
+            "Install JAX for GPU support: pip install jamma[jax]"
         )
+
+    # Check C extension availability (single source of truth in _compile_utils)
+    from jamma.lmm._compile_utils import is_c_extension_usable
+
+    c_ext_available = is_c_extension_usable()
 
     # Check in-memory fit
     est = estimate_lmm_memory(n_samples, n_snps)
@@ -118,7 +107,7 @@ def _auto_select_backend(n_samples: int, n_snps: int, use_gpu: bool = False) -> 
             f"Install JAX for streaming support: pip install jamma[jax]"
         )
     else:
-        logger.info(
+        logger.debug(
             "Backend auto-selection: 'numpy' (fallback — no C extension or JAX)"
         )
     return "numpy"
@@ -162,6 +151,8 @@ class PipelineConfig:
             HWE filtering. Matches GEMMA's -hwe flag.
         l_min: Minimum lambda for optimization (default 1e-5, matches GEMMA).
         l_max: Maximum lambda for optimization (default 1e5, matches GEMMA).
+        n_grid: Grid search resolution for lambda bracketing (default 50).
+        n_refine: Golden section refinement iterations (default 10).
         weight_file: Individual weight file for kinship pre-transformation.
             One weight per line, matching sample order. Applies
             K[i,j] /= sqrt(w_i * w_j) before eigendecomposition.
@@ -201,6 +192,8 @@ class PipelineConfig:
     hwe_threshold: float = 0.0
     l_min: float = 1e-5
     l_max: float = 1e5
+    n_grid: int = 50
+    n_refine: int = 10
     weight_file: Path | None = None
     cat_columns: list[int] | None = None
     profile_dir: Path | None = None
@@ -1002,6 +995,8 @@ class PipelineRunner:
             miss_threshold=self.config.miss,
             l_min=self.config.l_min,
             l_max=self.config.l_max,
+            n_grid=self.config.n_grid,
+            n_refine=self.config.n_refine,
             check_memory=False,  # Already checked above
             show_progress=self.config.show_progress,
             lmm_mode=self.config.lmm_mode,
@@ -1066,6 +1061,8 @@ class PipelineRunner:
             miss_threshold=self.config.miss,
             l_min=self.config.l_min,
             l_max=self.config.l_max,
+            n_grid=self.config.n_grid,
+            n_refine=self.config.n_refine,
             check_memory=False,  # Already checked above
             show_progress=self.config.show_progress,
             lmm_mode=self.config.lmm_mode,

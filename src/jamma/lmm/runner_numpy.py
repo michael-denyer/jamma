@@ -251,16 +251,13 @@ def run_lmm_association_numpy(
     """
     # Unpack config if provided (config takes precedence over individual kwargs)
     if config is not None:
-        maf_threshold = config.maf_threshold
-        miss_threshold = config.miss_threshold
-        l_min = config.l_min
-        l_max = config.l_max
-        n_grid = config.n_grid
-        n_refine = config.n_refine
-        use_gpu = config.use_gpu
-        check_memory = config.check_memory
-        show_progress = config.show_progress
-        lmm_mode = config.lmm_mode
+        kw = config.as_kwargs()
+        maf_threshold = kw["maf_threshold"]
+        miss_threshold = kw["miss_threshold"]
+        l_min, l_max = kw["l_min"], kw["l_max"]
+        n_grid, n_refine = kw["n_grid"], kw["n_refine"]
+        use_gpu, check_memory = kw["use_gpu"], kw["check_memory"]
+        show_progress, lmm_mode = kw["show_progress"], kw["lmm_mode"]
 
     # Reset per-run warning flags so each run gets its own diagnostics
     reset_p_yy_warned()

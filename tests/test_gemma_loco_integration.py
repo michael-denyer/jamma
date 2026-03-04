@@ -405,3 +405,128 @@ class TestGemmaLocoValidation:
         assert jamma_pval < 0.01, (
             f"JAMMA chr1 rs0000 p_wald = {jamma_pval:.4e}, expected < 0.01"
         )
+
+
+# ---------------------------------------------------------------------------
+# SC-01: LOCO multi-mode cross-backend parity (LRT, Score, All)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+@pytest.mark.requires_jax
+@pytest.mark.parametrize("lmm_mode", [2, 3, 4])
+def test_loco_cross_backend_parity_modes_2_3_4(lmm_mode: int) -> None:
+    """JAX and NumPy backends produce identical LOCO results for modes 2, 3, and 4.
+
+    LOCO mode 1 already has GEMMA reference validation (TestGemmaLocoValidation).
+    This test validates that modes 2 (LRT), 3 (Score), and 4 (All) are consistent
+    between the two backends — cross-backend parity is the validation strategy for
+    modes without GEMMA LOCO-adjusted fixtures.
+
+    Uses the gemma_loco fixture (100 samples, 500 SNPs, 3 chromosomes). Both
+    backends run on the same data and results are compared field-by-field.
+
+    Args:
+        lmm_mode: LMM test mode (2=LRT, 3=Score, 4=All).
+    """
+    phenotypes = load_phenotypes_from_fam(PLINK_PREFIX.with_suffix(".fam"))
+
+    jax_results, jax_n = run_lmm_loco(
+        bed_path=PLINK_PREFIX,
+        phenotypes=phenotypes,
+        lmm_mode=lmm_mode,
+        maf_threshold=0.0,
+        miss_threshold=1.0,
+        show_progress=False,
+        check_memory=False,
+        backend="jax",
+    )
+    numpy_results, numpy_n = run_lmm_loco(
+        bed_path=PLINK_PREFIX,
+        phenotypes=phenotypes,
+        lmm_mode=lmm_mode,
+        maf_threshold=0.0,
+        miss_threshold=1.0,
+        show_progress=False,
+        check_memory=False,
+        backend="numpy",
+    )
+
+    assert jax_n == numpy_n, (
+        f"mode {lmm_mode}: n_tested mismatch — JAX={jax_n}, NumPy={numpy_n}"
+    )
+    assert len(jax_results) == len(numpy_results), (
+        f"mode {lmm_mode}: result count mismatch — JAX={len(jax_results)}, "
+        f"NumPy={len(numpy_results)}"
+    )
+    assert len(jax_results) >= 100, (
+        f"mode {lmm_mode}: expected at least 100 results for meaningful comparison, "
+        f"got {len(jax_results)}"
+    )
+
+    # Sort both by (chr, ps) for stable ordering
+    jax_sorted = sorted(jax_results, key=lambda r: (r.chr, r.ps))
+    numpy_sorted = sorted(numpy_results, key=lambda r: (r.chr, r.ps))
+
+    for i, (jax_r, numpy_r) in enumerate(zip(jax_sorted, numpy_sorted, strict=True)):
+        label = f"mode {lmm_mode} SNP {i} ({jax_r.rs})"
+
+        # beta/se: required float fields (never None). Degenerate SNPs → NaN.
+        # Assert NaN consistency between backends; compare finite values.
+        for field in ("beta", "se"):
+            val_jax = getattr(jax_r, field)
+            val_np = getattr(numpy_r, field)
+            if np.isnan(val_jax):
+                assert np.isnan(val_np), (
+                    f"{label}: JAX {field} is NaN but NumPy is {val_np}"
+                )
+            else:
+                assert not np.isnan(val_np), (
+                    f"{label}: JAX {field} is {val_jax} but NumPy is NaN"
+                )
+                np.testing.assert_allclose(
+                    val_jax,
+                    val_np,
+                    rtol=1e-10,
+                    atol=1e-14,
+                    err_msg=f"{label}: {field} mismatch",
+                )
+
+        # p_wald is always present in modes 1 and 4
+        if lmm_mode in (1, 4):
+            assert jax_r.p_wald is not None, f"{label}: JAX p_wald is None"
+            assert numpy_r.p_wald is not None, f"{label}: NumPy p_wald is None"
+            np.testing.assert_allclose(
+                jax_r.p_wald,
+                numpy_r.p_wald,
+                rtol=1e-10,
+                atol=1e-14,
+                err_msg=f"{label}: p_wald mismatch",
+            )
+
+        # p_lrt is present in modes 2 and 4
+        # LRT uses MLE chi-squared computation which introduces ~1.6e-10 relative
+        # differences between JAX and NumPy due to different FP accumulation paths.
+        # Use rtol=1e-9 (10x looser than Wald) to accommodate this.
+        if lmm_mode in (2, 4):
+            assert jax_r.p_lrt is not None, f"{label}: JAX p_lrt is None"
+            assert numpy_r.p_lrt is not None, f"{label}: NumPy p_lrt is None"
+            np.testing.assert_allclose(
+                jax_r.p_lrt,
+                numpy_r.p_lrt,
+                rtol=1e-9,
+                atol=1e-14,
+                err_msg=f"{label}: p_lrt mismatch",
+            )
+
+        # p_score is present in modes 3 and 4
+        if lmm_mode in (3, 4):
+            assert jax_r.p_score is not None, f"{label}: JAX p_score is None"
+            assert numpy_r.p_score is not None, f"{label}: NumPy p_score is None"
+            np.testing.assert_allclose(
+                jax_r.p_score,
+                numpy_r.p_score,
+                rtol=1e-9,
+                atol=1e-14,
+                err_msg=f"{label}: p_score mismatch",
+            )

@@ -326,6 +326,23 @@ class TestStandardizedKinshipBasic:
 
 
 @pytest.mark.tier0
+class TestComputeCenteredKinshipArgValidation:
+    """Tests for compute_centered_kinship input shape validation."""
+
+    def test_compute_centered_kinship_1d_input_raises(self):
+        """1D genotype array raises ValueError (expects 2D input)."""
+        X_1d = np.array([0.0, 1.0, 2.0, 1.0, 0.0])
+        with pytest.raises(ValueError):
+            compute_centered_kinship(X_1d, check_memory=False)
+
+    def test_compute_centered_kinship_empty_input_raises(self):
+        """Empty (0, 0) genotype array raises ValueError (no SNPs)."""
+        X_empty = np.empty((0, 0), dtype=np.float64)
+        with pytest.raises(ValueError):
+            compute_centered_kinship(X_empty, check_memory=False)
+
+
+@pytest.mark.tier0
 class TestImputeCenterAndStandardize:
     """Tests for the impute_center_and_standardize function."""
 

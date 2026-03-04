@@ -1,5 +1,6 @@
 """Tests for incremental association result writer."""
 
+import errno
 from pathlib import Path
 from unittest.mock import patch
 
@@ -545,3 +546,90 @@ class TestIncrementalAssocWriter:
 
                 writer._file.close = failing_close
                 raise KeyboardInterrupt()
+
+    @pytest.mark.tier0
+    def test_write_buf_retries_enospc_and_succeeds(
+        self, tmp_path: Path, sample_result: AssocResult
+    ):
+        """_write_buf retries on ENOSPC flush failure and succeeds on second attempt.
+
+        Patches _file.flush to raise OSError(ENOSPC) on the explicit post-write
+        flush call inside _write_buf. TextIOWrapper.tell() also calls flush()
+        internally, so the counter targets the second flush call (first = tell-induced,
+        second = explicit post-write flush). ENOSPC is in _RETRYABLE_ERRNOS, so
+        _write_buf must retry. Patches time.sleep to avoid actual delays.
+        """
+        output_path = tmp_path / "test.assoc.txt"
+        # TextIOWrapper.tell() triggers an internal flush before returning position.
+        # _write_buf sequence per attempt:
+        #   tell() [flush #N] → write() → flush() [flush #N+1]
+        # We want to fail the first explicit post-write flush: flush call #2.
+        flush_call_count = 0
+        failed_once = False
+
+        with IncrementalAssocWriter(output_path) as writer:
+            original_flush = writer._file.flush
+
+            def flaky_flush():
+                nonlocal flush_call_count, failed_once
+                flush_call_count += 1
+                # Call 1: tell()-induced flush (let it succeed so pos is assigned).
+                # Call 2: first explicit post-write flush — fail with ENOSPC.
+                # Subsequent calls: succeed (retry path).
+                if flush_call_count == 2 and not failed_once:
+                    failed_once = True
+                    err = OSError("No space left on device")
+                    err.errno = errno.ENOSPC
+                    raise err
+                return original_flush()
+
+            writer._file.flush = flaky_flush
+
+            with patch("jamma.lmm.io.time.sleep") as mock_sleep:
+                writer.write(sample_result)
+                # Should have slept once with first retry backoff delay
+                mock_sleep.assert_called_once_with(0.1)
+
+        assert writer.count == 1
+        content = output_path.read_text()
+        assert "rs12345" in content
+
+    @pytest.mark.tier0
+    def test_write_buf_deletes_partial_on_non_retryable_rollback_failure(
+        self, tmp_path: Path, sample_result: AssocResult
+    ):
+        """_write_buf deletes partial file when EPERM + rollback (seek) both fail.
+
+        EPERM is not in _RETRYABLE_ERRNOS, so _write_buf breaks out immediately.
+        Patching seek to also raise OSError simulates rollback failure, which
+        triggers _cleanup_partial to delete the partial output file.
+        """
+        output_path = tmp_path / "test.assoc.txt"
+
+        with patch("jamma.lmm.io.time.sleep"):
+            with pytest.raises(OSError):
+                with IncrementalAssocWriter(output_path) as writer:
+                    original_write = writer._file.write
+
+                    def eperm_write(data):
+                        # Only fail on data lines (which contain tabs), not the header
+                        if "\t" in data:
+                            err = OSError("Operation not permitted")
+                            err.errno = errno.EPERM
+                            raise err
+                        return original_write(data)
+
+                    writer._file.write = eperm_write
+
+                    # Also make seek fail to trigger _cleanup_partial
+                    def failing_seek(pos):
+                        raise OSError("Seek failed")
+
+                    writer._file.seek = failing_seek
+
+                    writer.write(sample_result)
+
+        # _cleanup_partial should have deleted the partial file
+        assert not output_path.exists(), (
+            "Partial output file should be deleted when EPERM + rollback both fail"
+        )

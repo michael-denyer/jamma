@@ -576,6 +576,135 @@ class TestDsyevrFallback:
 
 
 @pytest.mark.tier0
+class TestEigendecompCrossVariant:
+    """Cross-variant equivalence tests: DSYEVR vs DSYEVD through the wrapper."""
+
+    def test_eigendecompose_kinship_dsyevr_vs_dsyevd_eigenvalue_equivalence(self):
+        """DSYEVR and DSYEVD paths through eigendecompose_kinship match rtol=1e-12."""
+        from jamma.lmm.eigen import _DSYEVR_AVAILABLE, eigendecompose_kinship
+
+        if not _DSYEVR_AVAILABLE:
+            pytest.skip("DSYEVR C extension not available")
+
+        rng = np.random.default_rng(42)
+        n = 50
+        A = rng.standard_normal((n, n))
+        K = (A @ A.T) / n
+        K_ref = K.copy()
+
+        # DSYEVD path: check_memory=False, no mocking (uses DSYEVD when memory ample)
+        w_dsyevd, v_dsyevd = eigendecompose_kinship(K.copy(), check_memory=False)
+
+        # DSYEVR path: mock memory to force DSYEVR selection
+        with (
+            patch("jamma.lmm.eigen._dsyevd_peak_gb", return_value=100.0),
+            patch("jamma.lmm.eigen._dsyevr_peak_gb", return_value=50.0),
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_proc,
+        ):
+            mock_vm.return_value.available = 80e9  # 80GB — fits DSYEVR but not DSYEVD
+            mock_vm.return_value.total = 80e9
+            mock_proc.return_value.memory_info.return_value.rss = 0
+            mock_proc.return_value.memory_info.return_value.vms = 0
+
+            w_dsyevr, v_dsyevr = eigendecompose_kinship(K.copy(), check_memory=True)
+
+        # Eigenvalues must match closely
+        np.testing.assert_allclose(w_dsyevr, w_dsyevd, rtol=1e-12, atol=1e-14)
+
+        # Eigenvectors must reconstruct the original K (sign convention may differ)
+        K_recon_dsyevr = v_dsyevr @ np.diag(w_dsyevr) @ v_dsyevr.T
+        np.testing.assert_allclose(K_recon_dsyevr, K_ref, rtol=1e-10, atol=1e-14)
+
+    def test_eigendecomp_near_singular_matrix(self):
+        """Near-singular kinship matrix is decomposed without exceptions."""
+        from jamma.lmm.eigen import eigendecompose_kinship
+
+        rng = np.random.default_rng(42)
+        n = 50
+        A = rng.standard_normal((n, n))
+        K_full = (A @ A.T) / n
+
+        # Build a near-singular matrix with last eigenvalue ~1e-15
+        w_full, v_full = np.linalg.eigh(K_full)
+        w_ill = w_full.copy()
+        w_ill[0] = w_full[-1] * 1e-15  # Make smallest eigenvalue near-zero
+        K_ill = v_full @ np.diag(w_ill) @ v_full.T
+        K_ill = (K_ill + K_ill.T) / 2  # Ensure exact symmetry
+
+        # Should not raise
+        eigenvalues, eigenvectors = eigendecompose_kinship(
+            K_ill.copy(), check_memory=False
+        )
+
+        # Eigenvalues must be sorted ascending
+        assert np.all(np.diff(eigenvalues) >= 0), "Eigenvalues must be sorted ascending"
+
+        # All returned eigenvalues must be non-negative (zeroed if near-zero/negative)
+        assert np.all(eigenvalues >= 0), (
+            f"All eigenvalues >= 0 after thresholding, min={eigenvalues.min()}"
+        )
+
+        # Correct count returned
+        assert eigenvalues.shape == (n,)
+
+        # Reconstruct original matrix (looser tol for ill-conditioned)
+        K_recon = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
+        np.testing.assert_allclose(
+            K_recon,
+            K_ill,
+            rtol=1e-4,
+            atol=1e-10,
+            err_msg="Near-singular matrix reconstruction failed",
+        )
+
+    def test_eigendecomp_many_sub_threshold_eigenvalues(self):
+        """Matrix with many sub-threshold eigenvalues returns all n values."""
+        from jamma.lmm.eigen import eigendecompose_kinship
+
+        rng = np.random.default_rng(42)
+        n = 50
+        # Construct matrix with 40 tiny eigenvalues and 10 large ones
+        diag_vals = np.array([1e-15] * 40 + [1.0] * 10)
+        # Rotate by random orthogonal matrix
+        Q, _ = np.linalg.qr(rng.standard_normal((n, n)))
+        K = Q @ np.diag(diag_vals) @ Q.T
+        K = (K + K.T) / 2  # Ensure exact symmetry
+
+        # Should not raise; all 50 eigenvalues returned
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message=".*rank.*deficien", category=UserWarning
+            )
+            eigenvalues, eigenvectors = eigendecompose_kinship(
+                K.copy(), check_memory=False
+            )
+
+        assert eigenvalues.shape == (n,), (
+            f"Expected {n} eigenvalues, got {eigenvalues.shape}"
+        )
+        assert eigenvectors.shape == (n, n), (
+            f"Expected ({n},{n}) eigenvectors, got {eigenvectors.shape}"
+        )
+
+        # Sub-threshold eigenvalues (1e-15) should be zeroed by thresholding
+        n_zeroed = int(np.sum(eigenvalues < 1e-10))
+        assert n_zeroed >= 35, (
+            f"Expected most of the 40 tiny eigenvalues to be zeroed, "
+            f"got {n_zeroed} below threshold"
+        )
+
+        # Large eigenvalues (~1.0) should be preserved
+        large_evals = eigenvalues[eigenvalues > 0.5]
+        assert len(large_evals) == 10, (
+            f"Expected 10 large eigenvalues, got {len(large_evals)}"
+        )
+        np.testing.assert_allclose(large_evals, 1.0, rtol=1e-6)
+
+
+@pytest.mark.tier0
 class TestDsyevrBoundsCheck:
     """Tests for EIGEN-06: workspace query bounds check in C extension."""
 

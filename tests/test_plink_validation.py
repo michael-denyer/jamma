@@ -136,3 +136,27 @@ class TestCountLinesFast:
 
         # Use small chunk_size to force multiple reads
         assert _count_lines_fast(path, chunk_size=1024) == 10_000
+
+    @pytest.mark.tier0
+    def test_count_lines_fast_crlf(self, tmp_path: Path) -> None:
+        """CRLF (\\r\\n) line endings are counted as one line each.
+
+        Windows-style line endings contain one \\n per line, so the binary
+        \\n counter treats each CRLF pair as a single line terminator.
+        """
+        content = "line1\r\nline2\r\nline3\r\n"
+        path = tmp_path / "crlf.txt"
+        path.write_bytes(content.encode("ascii"))
+        assert _count_lines_fast(path) == 3
+
+    @pytest.mark.tier0
+    def test_count_lines_fast_mixed_endings(self, tmp_path: Path) -> None:
+        """Mixed LF and CRLF line endings are each counted as one line.
+
+        Each line terminator (\\n or \\r\\n) contains exactly one \\n byte,
+        so the binary counter produces the correct logical line count.
+        """
+        content = "line1\nline2\r\nline3\n"
+        path = tmp_path / "mixed.txt"
+        path.write_bytes(content.encode("ascii"))
+        assert _count_lines_fast(path) == 3

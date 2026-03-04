@@ -8,7 +8,7 @@ JAMMA delivers the same statistical results as GEMMA while solving practical pro
 |---------|-------|-------|
 | **OOM Handling** | Silent crash (OS kill) | Pre-flight check with clear error |
 | **Large-Scale** | Requires manual tuning | Streaming I/O, pre-flight memory checks (>100k requires ILP64) |
-| **Speed** | 1x baseline | 4-7x faster (JAX) |
+| **Speed** | 1x baseline | Up to 9x faster (JAX); 11x on LMM-only benchmarks |
 | **Installation** | C++ compilation required | `pip install jamma` |
 | **Error Messages** | Segfault or cryptic | Clear, actionable |
 | **Numerical Results** | Reference | Equivalent ([proof](EQUIVALENCE.md)) |
@@ -94,6 +94,14 @@ results = run_lmm_association_streaming(
 | **Total**          | **13.4s**    | **5.1s**    | **7.0s**      | **2.6x**    |
 
 Kinship is BLAS-bound (both use OpenBLAS/Accelerate matmul) so times are similar. The LMM speedup comes from batch-parallel SNP processing.
+
+### At Scale: 125k Samples (Databricks E96ds_v6, 48 cores, ILP64 MKL)
+
+| Pipeline                      | GEMMA 0.98.5 | JAMMA v2.10.1 | Speedup |
+|-------------------------------|--------------|---------------|---------|
+| Full GWAS (125,632 × 91,586) | ~27 hours    | 3h 4m         | **~9x** |
+
+**Caveat**: GEMMA was compiled with default OpenBLAS, not MKL. Building GEMMA against MKL is non-trivial (requires patching the Makefile and linking against ILP64 MKL for matrices >46k) and we did not attempt it. The comparison reflects typical deployment: GEMMA as-distributed vs JAMMA with ILP64 numpy-mkl. The speedup would be smaller with an MKL-linked GEMMA, though the batch-parallel LMM architecture would still provide a significant advantage.
 
 ### Why Faster?
 
@@ -248,14 +256,15 @@ JAMMA applies contemporary software engineering practices that GEMMA (written in
 
 ```python
 # Type hints for all public APIs
-def run_lmm_association(
+def run_lmm_association_jax(
     genotypes: np.ndarray,
     phenotypes: np.ndarray,
     kinship: np.ndarray,
-    snp_info: list[SnpInfo],
+    snp_info: list[dict],
     *,
     maf_threshold: float = 0.01,
     miss_threshold: float = 0.05,
+    lmm_mode: int = 1,  # 1=Wald, 2=LRT, 3=Score, 4=All
 ) -> list[AssocResult]: ...
 
 # Dataclasses for structured returns
@@ -270,9 +279,12 @@ class AssocResult:
     af: float
     beta: float
     se: float
-    logl_H1: float
-    l_remle: float
-    p_wald: float
+    logl_H1: float | None = None   # Wald/All
+    l_remle: float | None = None    # Wald/All
+    p_wald: float | None = None     # Wald/All
+    p_score: float | None = None    # Score/All
+    l_mle: float | None = None      # LRT/All
+    p_lrt: float | None = None      # LRT/All
 ```
 
 ### Testing Philosophy
@@ -289,18 +301,19 @@ class AssocResult:
 [project]
 dependencies = [
     "bed-reader>=1.0.0",
-    "jax>=0.8.0",
-    "jaxlib>=0.8.0",
     "numpy>=2.0.0",
     "psutil>=5.9.0",
     "threadpoolctl>=3.0.0",
     "click>=8.0.0",
     "loguru>=0.7.0",
     "progressbar2>=4.2.0",
+    # Platform-smart JAX: auto-included on Linux and ARM Mac
+    "jax>=0.5.0; sys_platform == 'linux'",
+    "jaxlib>=0.5.0; sys_platform == 'linux'",
+    "jaxtyping>=0.2.28; sys_platform == 'linux'",
+    "jax>=0.5.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    # ... (ARM Mac markers)
 ]
-
-[tool.pytest.ini_options]
-addopts = "-n auto"  # Parallel by default
 
 [tool.ruff]
 line-length = 88
@@ -343,7 +356,7 @@ JAMMA is not always the right choice:
 |---------|-------|-------|
 | Crashes at scale | Silent OOM | Pre-flight checks |
 | Large samples | Manual tuning | Automatic streaming (>100k requires ILP64) |
-| Speed | Baseline | 4-7x faster |
+| Speed | Baseline | Up to 9x faster |
 | Installation | C++ build | pip install |
 | Errors | Cryptic | Actionable |
 | Results | Reference | Equivalent |

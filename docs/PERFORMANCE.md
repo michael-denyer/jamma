@@ -1,29 +1,23 @@
 # Performance Summary
 
-## v2.5 — 125k Scale Validation
+## v2.10 — 125k Scale (Latest)
 
-v2.5 validated JAMMA at 125,632 samples on 91,586 real SNPs with full GEMMA equivalence. Key fixes: eigendecomp threading (v2.5.4), matrix writer disk space (v2.5.2), LMM rotation threading (v2.5.6).
+v2.10.1 at 125,632 samples on 91,586 real SNPs. **~9x faster than GEMMA** (3h 4m vs ~27h). 8% faster than v2.5 thanks to rotation-compute overlap (Phase 54) and C extension improvements. Perfect GEMMA equivalence.
 
-### 125k Real Data Benchmark (v2.5.5, Databricks)
+**Note**: GEMMA was compiled with default OpenBLAS, not MKL. Building GEMMA against ILP64 MKL is non-trivial (requires Makefile patches and ILP64 linking for matrices >46k). The comparison reflects typical deployment: GEMMA as-distributed vs JAMMA with ILP64 numpy-mkl.
 
-Hardware: Azure E96ds_v6 (Intel Xeon Platinum 8573C, 48 physical / 96 logical cores, 672 GB RAM). numpy 2.4.2 with MKL ILP64, JAX 0.9.0, Python 3.12, Databricks Runtime 16.4 LTS.
+### 125k Real Data Benchmark (v2.10.1, Databricks)
+
+Hardware: Azure E96ds_v6 (Intel Xeon Platinum 8573C, 48 physical / 96 logical cores, 672 GB RAM). numpy 2.4.2 with MKL ILP64, JAX, Python 3.12, Databricks Runtime 16.4 LTS.
 
 | Phase | Time | % of Total |
 |-------|------|-----------|
-| SNP statistics | 103s (2 min) | 1% |
-| Kinship compute | 2,011s (34 min) | 16% |
-| Kinship write | 547s (9 min) | 4% |
-| Eigendecomp | 8,465s (2h 21m) | 69% |
-| LMM association | 1,131s (19 min) | 9% |
-| **Total** | **~12,257s (3h 24m)** | **100%** |
+| Kinship compute | 2,047s (34 min) | 19% |
+| Kinship write | 556s (9 min) | 5% |
+| Eigen + LMM | 8,437s (2h 21m) | 76% |
+| **Total** | **~11,040s (3h 4m)** | **100%** |
 
-LMM timing breakdown (from per-phase accumulators):
-
-| LMM Sub-phase | Time | Notes |
-|---------------|------|-------|
-| U.T @ G rotation | 797s | 48 threads, 41 chunks × ~19s/chunk |
-| JAX compute | 329s | Grid REML + golden section per SNP |
-| Result write | 5s | Pre-allocated numpy arrays |
+Throughput: 11 SNPs/sec (eigen+LMM), 8.3 SNPs/sec end-to-end.
 
 ### 125k Validation: JAMMA vs GEMMA
 
@@ -32,6 +26,7 @@ LMM timing breakdown (from per-phase accumulators):
 | **Kinship Spearman rho** | 1.00000000 |
 | Kinship max abs diff | 5.00e-11 |
 | Kinship mean abs diff | 1.24e-12 |
+| Kinship max relative diff | 8.49e-07 |
 | Kinship Frobenius relative | 1.45e-10 |
 | **Association Spearman rho (-log10 p)** | 1.000000 |
 | Significance agree (p < 0.05) | 91,586/91,586 (100%) |
@@ -39,18 +34,29 @@ LMM timing breakdown (from per-phase accumulators):
 | Effect direction agreement | 100.0% |
 | Max relative p-value diff | 9.66e-04 |
 
+### Progression: 125k benchmarks across versions
+
+All runs on the same hardware (E96ds_v6) and dataset (125,632 × 91,586).
+
+| Phase | v2.10.1 (latest) | v2.5.6 (1 dev) | v2.5.6 (24 dev) | v2.10 vs v2.5 (1 dev) |
+|-------|-----------------|----------------|-----------------|----------------------|
+| Kinship compute | 2,047s | 2,068s | 2,011s | -1% |
+| Kinship write | 556s | 575s | 547s | -3% |
+| Eigen+LMM | 8,437s | 9,365s | 9,699s | **-10%** |
+| **Pipeline total** | **11,040s** | **12,008s** | **12,257s** | **-8%** |
+
+v2.10.1 is 968s (16 min) faster than the best prior run. Improvement is in the eigen+LMM phase — kinship is unchanged (same DGEMM). Multi-device sharding (24 dev) was net negative due to eigendecomp regression (+23%); v2.10 runs on 1 device.
+
 ### Scaling from 90k to 125k
 
-Comparison against the v2.3 baseline (90k samples, 32-core Databricks VM). Hardware and sample counts differ, so this is not a like-for-like comparison — it shows how wall time scales with both sample size and hardware.
-
-| Phase | v2.3 (90k, 32 cores) | v2.5 (125k, 48 cores) |
+| Phase | v2.3 (90k, 32 cores) | v2.10 (125k, 48 cores) |
 |-------|------|-----------|
-| Kinship | 1,440s (24 min) | 2,011s (34 min) |
-| Eigendecomp | 3,114s (52 min) | 8,465s (2h 21m) |
-| LMM | 1,211s (20 min) | 1,131s (19 min) |
-| **Total** | **5,764s (96 min)** | **11,607s (3h 14m)** |
+| Kinship compute | 1,440s (24 min) | 2,047s (34 min) |
+| Kinship write | — | 556s (9 min) |
+| Eigen+LMM | 4,325s (72 min) | 8,437s (2h 21m) |
+| **Total** | **5,764s (96 min)** | **11,040s (3h 4m)** |
 
-Eigendecomp dominates the increase: O(n³) scaling from 90k→125k is ~2.7×, plus memory bandwidth saturation at 125k (the 126 GB eigenvector matrices exceed L3 cache). LMM is faster despite more samples, likely due to the 48-core machine and the v2.5.6 rotation threading fix.
+Eigendecomp dominates the increase: O(n³) scaling from 90k→125k is ~2.7×, plus memory bandwidth saturation at 125k (the 126 GB eigenvector matrices exceed L3 cache).
 
 ---
 
@@ -71,7 +77,7 @@ workspace API (pre-allocated per-thread buffers) and SoA Uab layout with invaria
 
 The C extension wins at all scales. At small n, JAX's per-SNP overhead (Python Brent loop +
 XLA dispatch) dominates. At large n, UT@G rotation (identical DGEMM in both) dominates and
-compute ratios converge to ~3x.
+compute ratios converge to ~1.8x.
 
 ### C Extension Scaling (LMM compute only, 95k SNPs)
 
@@ -220,4 +226,4 @@ See [USER_GUIDE.md](USER_GUIDE.md) for installation instructions and [GEMMA_DIVE
 Full test suite passing. Kinship tolerance aligned from 1e-10 to 1e-8 in v2.5.7 to match EQUIVALENCE.md bounds. All other tolerance constants in `src/jamma/validation/tolerances.py` unchanged from v1.3.
 
 ---
-*Last updated: 2026-03-01*
+*Last updated: 2026-03-04*

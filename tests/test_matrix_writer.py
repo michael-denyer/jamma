@@ -116,6 +116,28 @@ class TestByteIdentity:
 class TestEdgeCases:
     """Edge cases for write_matrix_parallel."""
 
+    def test_write_matrix_parallel_float32_input_casts_to_float64(
+        self, tmp_path: Path
+    ) -> None:
+        """float32 input is silently cast to float64: byte-identical to savetxt on f64.
+
+        write_matrix_parallel accepts float32 matrices (e.g. kinship computed
+        from float32 genotypes). It casts to float64 internally via
+        np.ascontiguousarray(matrix, dtype=np.float64), so output matches
+        np.savetxt called directly on the float64 equivalent.
+        """
+        rng = np.random.default_rng(42)
+        matrix_f32 = rng.standard_normal((20, 5)).astype(np.float32)
+        matrix_f64 = matrix_f32.astype(np.float64)
+
+        parallel_path = tmp_path / "parallel.txt"
+        savetxt_path = tmp_path / "savetxt.txt"
+
+        write_matrix_parallel(matrix_f32, parallel_path)
+        np.savetxt(savetxt_path, matrix_f64, fmt="%.10g", delimiter="\t")
+
+        assert parallel_path.read_bytes() == savetxt_path.read_bytes()
+
     def test_single_row_matrix(self, tmp_path: Path) -> None:
         """1x5 matrix: byte-identical."""
         matrix = np.array([[1.0, 2.0, 3.0, 4.0, 5.0]])

@@ -39,6 +39,31 @@ def _build_snp_info(data) -> list[dict]:
     ]
 
 
+def _assert_results_match(
+    results_a: list,
+    results_b: list,
+    fields: tuple[str, ...] = ("beta", "se", "p_wald"),
+    rtol: float = 1e-10,
+    atol: float = 0,
+) -> None:
+    """Assert two AssocResult lists match on the given fields."""
+    assert len(results_a) == len(results_b), (
+        f"Count mismatch: {len(results_a)} vs {len(results_b)}"
+    )
+    assert len(results_a) > 0, "Expected some results"
+
+    for i, (ra, rb) in enumerate(zip(results_a, results_b, strict=True)):
+        assert ra.rs == rb.rs, f"SNP {i}: rs mismatch {ra.rs} vs {rb.rs}"
+        for field in fields:
+            np.testing.assert_allclose(
+                getattr(ra, field),
+                getattr(rb, field),
+                rtol=rtol,
+                atol=atol,
+                err_msg=f"SNP {i} ({ra.rs}) {field} mismatch",
+            )
+
+
 @pytest.mark.tier1
 class TestStreamGenotypeChunks:
     """Tests for stream_genotype_chunks generator."""
@@ -2148,3 +2173,186 @@ class TestComputeKinshipStreamingSinglePass:
             K.T,
             err_msg="Single-pass kinship must be symmetric",
         )
+
+
+# ---------------------------------------------------------------------------
+# SC-02: Streaming runner mode 4, all-filtered, and covariate tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+def test_streaming_all_tests_matches_batch(sample_plink_data: Path) -> None:
+    """Verify streaming all-tests (mode 4) output matches batch runner mode 4.
+
+    Mode 4 populates p_wald, p_lrt, and p_score. This test exercises the
+    lmm_mode=4 code path in both runners and verifies field-by-field parity.
+    """
+    rng = np.random.default_rng(42)
+
+    data = load_plink_binary(sample_plink_data)
+    geno = data.genotypes.astype(np.float64)
+    phenotypes = rng.standard_normal(data.n_samples)
+    kinship = compute_centered_kinship(geno, check_memory=False)
+    # eigendecomp overwrites K in-place; needs fresh copy per run
+    kinship_batch = kinship.copy()
+    kinship_stream = kinship.copy()
+
+    snp_info = _build_snp_info(data)
+
+    results_batch = run_lmm_association_jax(
+        geno,
+        phenotypes,
+        kinship_batch,
+        snp_info,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=4,
+    )
+
+    results_stream, _ = run_lmm_association_streaming(
+        sample_plink_data,
+        phenotypes,
+        kinship_stream,
+        snp_info,
+        chunk_size=100,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=4,
+    )
+
+    _assert_results_match(
+        results_batch,
+        results_stream,
+        fields=("beta", "se", "p_wald", "p_lrt", "p_score"),
+    )
+
+
+@pytest.mark.tier1
+def test_streaming_unaligned_chunk_size_matches_batch(sample_plink_data: Path) -> None:
+    """Streaming with chunk_size that doesn't divide n_snps matches batch runner.
+
+    Uses chunk_size=7 with 500 SNPs (71 full chunks + 3 remainder) to verify
+    the streaming runner handles chunk boundaries correctly.
+    """
+    rng = np.random.default_rng(42)
+
+    data = load_plink_binary(sample_plink_data)
+    geno = data.genotypes.astype(np.float64)
+    phenotypes = rng.standard_normal(data.n_samples)
+    kinship = compute_centered_kinship(geno, check_memory=False)
+    kinship_batch = kinship.copy()
+    kinship_stream = kinship.copy()
+
+    snp_info = _build_snp_info(data)
+
+    results_batch = run_lmm_association_jax(
+        geno,
+        phenotypes,
+        kinship_batch,
+        snp_info,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=1,
+    )
+
+    results_stream, _ = run_lmm_association_streaming(
+        sample_plink_data,
+        phenotypes,
+        kinship_stream,
+        snp_info,
+        chunk_size=7,  # Does not divide 500 evenly
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=1,
+    )
+
+    _assert_results_match(results_batch, results_stream)
+
+
+@pytest.mark.tier1
+def test_streaming_all_snps_filtered_returns_zero(sample_plink_data: Path) -> None:
+    """Streaming runner with impossible MAF threshold returns zero tested SNPs.
+
+    maf_threshold=1.0 is impossible (MAF is at most 0.5), so all SNPs are
+    filtered out. The runner must handle this gracefully: return empty results
+    and n_tested == 0, without raising or hanging.
+    """
+    data = load_plink_binary(sample_plink_data)
+    phenotypes = np.random.default_rng(42).standard_normal(data.n_samples)
+    # Kinship is never consumed (all SNPs filtered before eigendecomp),
+    # so use a cheap identity matrix instead of computing the real one.
+    kinship = np.eye(data.n_samples)
+    snp_info = _build_snp_info(data)
+
+    results, n_tested = run_lmm_association_streaming(
+        sample_plink_data,
+        phenotypes,
+        kinship,
+        snp_info,
+        maf_threshold=1.0,  # Impossible threshold; all SNPs filtered
+        check_memory=False,
+        show_progress=False,
+    )
+
+    assert results == [], (
+        f"Expected empty results when all SNPs are filtered, got {len(results)}"
+    )
+    assert n_tested == 0, (
+        f"Expected n_tested=0 when all SNPs are filtered, got {n_tested}"
+    )
+
+
+@pytest.mark.tier1
+def test_streaming_with_covariates_matches_batch(sample_plink_data: Path) -> None:
+    """Streaming runner with covariates produces results consistent with batch runner.
+
+    Uses the gemma_synthetic fixture (100 samples) with a synthetic covariate
+    matrix (intercept + 1 random covariate). Both batch and streaming runners
+    are called with the same covariates and results compared field-by-field.
+    """
+    rng = np.random.default_rng(42)
+
+    data = load_plink_binary(sample_plink_data)
+    geno = data.genotypes.astype(np.float64)
+    n_samples = data.n_samples
+    phenotypes = rng.standard_normal(n_samples)
+    kinship = compute_centered_kinship(geno, check_memory=False)
+    # eigendecomp overwrites K in-place; needs fresh copy per run
+    kinship_batch = kinship.copy()
+    kinship_stream = kinship.copy()
+
+    snp_info = _build_snp_info(data)
+
+    # Synthetic covariate: intercept + 1 random covariate
+    covariates = np.column_stack(
+        [
+            np.ones(n_samples),
+            rng.standard_normal(n_samples),
+        ]
+    )
+
+    results_batch = run_lmm_association_jax(
+        geno,
+        phenotypes,
+        kinship_batch,
+        snp_info,
+        covariates=covariates,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=1,
+    )
+
+    # Streaming runner with same covariates
+    results_stream, _ = run_lmm_association_streaming(
+        sample_plink_data,
+        phenotypes,
+        kinship_stream,
+        snp_info,
+        covariates=covariates,
+        chunk_size=100,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=1,
+    )
+
+    _assert_results_match(results_batch, results_stream)

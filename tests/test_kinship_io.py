@@ -173,6 +173,66 @@ class TestKinshipRoundtrip:
         assert np.allclose(K, K_read, rtol=1e-9)
 
 
+@pytest.mark.tier0
+class TestReadKinshipValidation:
+    """Tests for read_kinship_matrix error paths (non-square, asymmetric, mismatch)."""
+
+    def test_read_kinship_non_square_raises(self, tmp_path):
+        """Non-square matrix file raises ValueError mentioning 'square'."""
+        from jamma.kinship import read_kinship_matrix
+
+        path = tmp_path / "nonsquare.cXX.txt"
+        K_rect = np.array([[1.0, 0.5, 0.2], [0.5, 1.0, 0.3]], dtype=np.float64)
+        np.savetxt(path, K_rect, fmt="%.10g", delimiter="\t")
+
+        with pytest.raises(ValueError, match="square"):
+            read_kinship_matrix(path)
+
+    def test_read_kinship_non_symmetric_raises(self, tmp_path):
+        """Asymmetric matrix raises ValueError mentioning 'symmetric'."""
+        from jamma.kinship import read_kinship_matrix
+
+        path = tmp_path / "asymm.cXX.txt"
+        K_asym = np.array(
+            [[1.0, 1.0, 0.2], [0.0, 1.0, 0.3], [0.2, 0.3, 1.0]], dtype=np.float64
+        )
+        np.savetxt(path, K_asym, fmt="%.10g", delimiter="\t")
+
+        with pytest.raises(ValueError, match="symmetric"):
+            read_kinship_matrix(path)
+
+    def test_read_kinship_dimension_mismatch_raises(self, tmp_path):
+        """Correct symmetric 5x5 matrix with n_samples=10 raises dimension error."""
+        from jamma.kinship import read_kinship_matrix
+
+        path = tmp_path / "dim_mismatch.cXX.txt"
+        rng = np.random.default_rng(42)
+        A = rng.standard_normal((5, 5))
+        K = (A @ A.T) / 5
+        K = (K + K.T) / 2
+        np.savetxt(path, K, fmt="%.10g", delimiter="\t")
+
+        with pytest.raises(ValueError, match="dimension"):
+            read_kinship_matrix(path, n_samples=10)
+
+    def test_read_kinship_valid_roundtrip(self, tmp_path):
+        """Valid symmetric PSD matrix round-trips through write/read correctly."""
+        from jamma.kinship import read_kinship_matrix
+
+        rng = np.random.default_rng(42)
+        A = rng.standard_normal((5, 5))
+        K = (A @ A.T) / 5
+        K = (K + K.T) / 2  # Ensure exact symmetry
+
+        path = tmp_path / "valid.cXX.txt"
+        write_kinship_matrix(K, path)
+
+        K_loaded = read_kinship_matrix(path, n_samples=5)
+
+        assert K_loaded.shape == (5, 5)
+        np.testing.assert_allclose(K_loaded, K, rtol=1e-9)
+
+
 @pytest.mark.tier1
 class TestCLIIntegration:
     """Tests for CLI gk command integration."""

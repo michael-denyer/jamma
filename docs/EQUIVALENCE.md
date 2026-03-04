@@ -300,7 +300,7 @@ uv run pytest tests/test_kinship_validation.py tests/test_lmm_validation.py -v
 Comprehensive formal validation across all 8 test configurations:
 
 ```bash
-uv run python scripts/prove_equivalence.py
+uv run python scripts/demonstrate_equivalence.py
 ```
 
 ---
@@ -310,16 +310,16 @@ uv run python scripts/prove_equivalence.py
 | GEMMA Function (lmm.cpp) | JAMMA Function | Location |
 |--------------------------|----------------|----------|
 | `CalcKin` | `compute_centered_kinship` | kinship/compute.py |
-| `GetabIndex` | `get_ab_index` | lmm/likelihood.py:25 |
-| `CalcUab` | `compute_Uab` | lmm/likelihood.py:46 |
-| `CalcPab` | `calc_pab` | lmm/likelihood.py:145 |
-| `LogRL_f` | `reml_log_likelihood` | lmm/likelihood.py:234 |
-| `LogL_f` | `mle_log_likelihood` | lmm/likelihood.py:517 |
+| `GetabIndex` | `get_ab_index` | lmm/likelihood.py:144 |
+| `CalcUab` | `compute_Uab` | lmm/likelihood.py:165 |
+| `CalcPab` | `calc_pab` | lmm/likelihood.py:264 |
+| `LogRL_f` | `reml_log_likelihood` | lmm/likelihood.py:356 |
+| `LogL_f` | `mle_log_likelihood` | lmm/likelihood.py:715 |
 | `CalcLambda` | `golden_section_optimize_lambda` | lmm/likelihood_jax.py |
-| `CalcRLWald` | `calc_wald_test` | lmm/stats.py:98 |
-| `CalcRLScore` | `calc_score_test` | lmm/stats.py:232 |
+| `CalcRLWald` | `calc_wald_test` | lmm/stats.py:99 |
+| `CalcRLScore` | `calc_score_test` | lmm/stats.py:229 |
 | `gsl_cdf_fdist_Q` | `f_sf` (via `betainc`) | lmm/stats.py:67 |
-| `gsl_cdf_chisq_Q` | `chi2.sf` (via JAX) | lmm/stats.py:225 |
+| `gsl_cdf_chisq_Q` | `chi2_sf` (via `jamma.lmm.special`, Cephes erfc) | lmm/stats.py:224 |
 
 ---
 
@@ -345,4 +345,4 @@ Reference data: `tests/fixtures/`
 
 ---
 
-*Last updated: 2026-02-24*
+*Last updated: 2026-03-04*

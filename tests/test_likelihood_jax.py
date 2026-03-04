@@ -18,6 +18,7 @@ from jamma.lmm.likelihood import (
 )
 from jamma.lmm.likelihood_jax import (
     _batch_grid_reml_ncvt1,
+    batch_calc_wald_stats,
     batch_compute_iab,
     batch_compute_uab,
     build_index_table,
@@ -423,4 +424,78 @@ class TestNcvt1FastPathParity:
             best_grid,
             rtol=1e-2,
             err_msg="Golden section diverges from grid optimum",
+        )
+
+
+@pytest.mark.tier0
+class TestJaxBatchDegenerateSNP:
+    """JAX batch likelihood path produces NaN stats for degenerate (zero) SNPs."""
+
+    def _make_batch_data_with_degen(self, n_samples=50, rng_seed=42):
+        """Create Uab_batch with one valid and one degenerate (all-zero) SNP column.
+
+        Returns:
+            (eigenvalues_jax, Uab_batch, Iab_batch, n_samples) as JAX arrays.
+        """
+        rng = np.random.default_rng(rng_seed)
+        eigenvalues = np.sort(rng.exponential(1.0, size=n_samples))[::-1]
+
+        W = np.ones((n_samples, 1))
+        y = rng.standard_normal(n_samples)
+        U = np.linalg.qr(rng.standard_normal((n_samples, n_samples)))[0]
+
+        UtW = jnp.array(U.T @ W)
+        Uty = jnp.array(U.T @ y)
+
+        # Two SNPs: column 0 is valid, column 1 is degenerate (constant genotype)
+        x_valid = rng.choice([0.0, 1.0, 2.0], size=n_samples, p=[0.25, 0.5, 0.25])
+        x_degen = np.zeros(n_samples)
+        G = np.column_stack([x_valid, x_degen])
+        UtG = jnp.array(U.T @ G)
+
+        evals = jnp.array(eigenvalues)
+        Uab = batch_compute_uab(1, UtW, Uty, UtG)
+        Iab = batch_compute_iab(1, Uab)
+
+        return evals, Uab, Iab, n_samples
+
+    def test_jax_batch_degenerate_snp_returns_nan_pvalues(self):
+        """JAX batch path: degenerate SNP produces NaN beta/se/p_wald.
+
+        An all-zero genotype column (P_XX=0) should propagate NaN through the
+        Wald test stats, producing NaN beta, se, and p_wald for that SNP.
+        The valid SNP in the same batch should remain unaffected.
+        """
+        evals, Uab_batch, Iab_batch, n_samples = self._make_batch_data_with_degen()
+
+        # Run batch optimizer
+        lambdas, logls = golden_section_optimize_lambda(
+            1, evals, Uab_batch, Iab_batch, n_grid=50, n_iter=20
+        )
+
+        # Run batch Wald stats
+        betas, ses, pwalds = batch_calc_wald_stats(
+            1, lambdas, evals, Uab_batch, n_samples
+        )
+
+        betas_np = np.array(betas)
+        ses_np = np.array(ses)
+        pwalds_np = np.array(pwalds)
+
+        # Valid SNP (index 0): should have finite stats
+        assert np.isfinite(betas_np[0]), (
+            f"Valid SNP beta should be finite, got {betas_np[0]}"
+        )
+        assert np.isfinite(ses_np[0]), f"Valid SNP se should be finite, got {ses_np[0]}"
+        assert np.isfinite(pwalds_np[0]), (
+            f"Valid SNP p_wald should be finite, got {pwalds_np[0]}"
+        )
+
+        # Degenerate SNP (index 1): zero genotype → NaN Wald stats
+        assert np.isnan(betas_np[1]), (
+            f"Degenerate SNP beta should be NaN, got {betas_np[1]}"
+        )
+        assert np.isnan(ses_np[1]), f"Degenerate SNP se should be NaN, got {ses_np[1]}"
+        assert np.isnan(pwalds_np[1]), (
+            f"Degenerate SNP p_wald should be NaN, got {pwalds_np[1]}"
         )

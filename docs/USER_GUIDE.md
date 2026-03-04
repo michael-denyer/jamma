@@ -165,6 +165,10 @@ jamma -lmm 1 -bfile data/my_study -k output/kinship.cXX.txt \
 - `-miss FLOAT` — Missing rate threshold (default: 0.05)
 - `--mem-budget GB` — Memory budget in GB (default: available - 10%)
 - `--no-check-memory` — Disable pre-flight memory checks
+- `--backend auto|jax|numpy` — Force compute backend (default: auto)
+- `--profile-dir DIR` — Directory for XLA profiling traces
+- `-v` / `--verbose` — Verbose output
+- `--version` — Show version and exit
 
 **Note:** Monomorphic SNPs (variance = 0) are always filtered to match GEMMA behavior.
 
@@ -177,7 +181,9 @@ jamma -lmm 1 -bfile data/my_study -k output/kinship.cXX.txt \
 
 ### Association Results (`.assoc.txt`)
 
-Tab-separated file with columns:
+Tab-separated file. The first 7 columns are always present; stat columns depend on `-lmm` mode:
+
+**Common columns (all modes):**
 
 | Column | Description |
 | ------ | ----------- |
@@ -188,11 +194,19 @@ Tab-separated file with columns:
 | `allele1` | Effect allele |
 | `allele0` | Reference allele |
 | `af` | Allele frequency |
-| `beta` | Effect size |
-| `se` | Standard error |
-| `logl_H1` | Log-likelihood under H1 |
-| `l_remle` | REML estimate of lambda |
-| `p_wald` | Wald test p-value |
+
+**Mode-specific stat columns:**
+
+| Column | `-lmm 1` (Wald) | `-lmm 2` (LRT) | `-lmm 3` (Score) | `-lmm 4` (All) |
+| ------ | :-: | :-: | :-: | :-: |
+| `beta` | yes | — | yes | yes |
+| `se` | yes | — | yes | yes |
+| `logl_H1` | yes | — | — | yes |
+| `l_remle` | yes | — | — | yes |
+| `l_mle` | — | yes | — | yes |
+| `p_wald` | yes | — | — | yes |
+| `p_lrt` | — | yes | — | yes |
+| `p_score` | — | — | yes | yes |
 
 ### Kinship Matrix (`.cXX.txt`)
 
@@ -375,7 +389,7 @@ results = run_lmm_association_numpy(
 )
 ```
 
-The NumPy backend supports Wald, LRT, Score, and all-tests modes. LOCO and HWE filtering require JAX.
+Both backends support Wald, LRT, Score, all-tests modes, and LOCO. HWE filtering (`-hwe`) requires the JAX streaming runner.
 
 ## Large-Scale Eigendecomposition (>46k samples)
 

@@ -191,7 +191,7 @@ Uses **Brent's method** (GSL `gsl_min_fminimizer_brent`) — a hybrid algorithm
 combining inverse quadratic interpolation with golden section fallback. Variable
 iteration count per SNP; serial execution.
 
-### JAMMA (likelihood_jax.py:419-562)
+### JAMMA (likelihood_jax.py:537-657)
 
 Uses **grid search (50 log-spaced points) + golden section refinement (20
 iterations)** via `lax.fori_loop`. All SNPs in a chunk are optimized
@@ -310,7 +310,7 @@ Materializes **all** per-chromosome LOCO kinship matrices simultaneously, requir
 
 ### JAMMA
 
-Uses **streaming subtraction**: computes the full kinship matrix K once, then derives each chromosome's LOCO kinship as `K_loco_c = (p × K - K_c) / (p - p_c)` one at a time, where K_c is the contribution of chromosome c's SNPs and p_c is the SNP count for that chromosome.
+Uses **streaming subtraction**: computes the full kinship matrix K once, then derives each chromosome's LOCO kinship as `K_loco_c = (p × K - p_c × K_c) / (p - p_c)` one at a time, where K_c is the normalized kinship for chromosome c's SNPs and p_c is the SNP count for that chromosome. (Equivalently, `(S_full - S_chr) / (p - p_c)` where S are unnormalized outer-product sums.)
 
 ### Divergence Impact
 

@@ -309,7 +309,7 @@ See [Code Map](docs/CODEMAP.md) for the full architecture diagram with source li
 
 - Python 3.11+
 - NumPy 2.0+
-- JAX 0.8.0+ (optional, for batch acceleration: `pip install 'jamma[jax]'`)
+- JAX 0.5.0+ (auto-included on Linux/ARM Mac; explicit extra on other platforms: `pip install 'jamma[jax]'`)
 
 ## License
 

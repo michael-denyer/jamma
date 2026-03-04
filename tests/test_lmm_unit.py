@@ -134,6 +134,101 @@ class TestEigendecomposition:
             eigendecompose_kinship(K)
             mock_check.assert_called_once()
 
+    def test_eigendecompose_linalg_error_propagates(self):
+        """np.linalg.LinAlgError from eigh is caught, logged, and re-raised."""
+        from unittest.mock import patch
+
+        import numpy.linalg
+
+        K = np.eye(10)
+
+        with patch(
+            "jamma.lmm.eigen._eigh_inplace",
+            side_effect=numpy.linalg.LinAlgError("SVD did not converge"),
+        ):
+            with pytest.raises(numpy.linalg.LinAlgError, match="SVD did not converge"):
+                eigendecompose_kinship(K, check_memory=False)
+
+    def test_check_symmetry_sampled_triggers_for_large_matrix(self):
+        """For n >= _SAMPLED_SYMMETRY_THRESHOLD, the sampled check is used."""
+        from unittest.mock import patch
+
+        from jamma.lmm.eigen import _SAMPLED_SYMMETRY_THRESHOLD
+
+        # Build a symmetric matrix just over the threshold size.
+        # Use an identity matrix (perfectly symmetric, fast to construct).
+        n = _SAMPLED_SYMMETRY_THRESHOLD + 1
+        K = np.eye(n)
+
+        with patch("jamma.lmm.eigen._check_symmetry_sampled") as mock_sampled:
+            eigendecompose_kinship(K, check_memory=False)
+            mock_sampled.assert_called_once()
+
+    def test_check_symmetry_sampled_not_called_for_small_matrix(self):
+        """For n < _SAMPLED_SYMMETRY_THRESHOLD, the full allclose check is used."""
+        from unittest.mock import patch
+
+        from jamma.lmm.eigen import _SAMPLED_SYMMETRY_THRESHOLD
+
+        n = _SAMPLED_SYMMETRY_THRESHOLD - 1
+        K = np.eye(n)
+
+        with patch("jamma.lmm.eigen._check_symmetry_sampled") as mock_sampled:
+            eigendecompose_kinship(K, check_memory=False)
+            mock_sampled.assert_not_called()
+
+    def test_check_symmetry_sampled_warns_on_asymmetric_matrix(self):
+        """_check_symmetry_sampled issues a warning for an asymmetric matrix."""
+        from loguru import logger
+
+        from jamma.lmm.eigen import _check_symmetry_sampled
+
+        n = 10_000
+        rng = np.random.default_rng(0)
+        K = rng.standard_normal((n, n))
+        # Force a large asymmetry by zeroing the upper triangle completely.
+        K[np.triu_indices(n, k=1)] = 0.0
+
+        warning_messages: list[str] = []
+
+        def _capture(message):
+            if message.record["level"].name == "WARNING":
+                warning_messages.append(message.record["message"])
+
+        sink_id = logger.add(_capture, level="WARNING")
+        try:
+            _check_symmetry_sampled(K, n)
+        finally:
+            logger.remove(sink_id)
+
+        assert len(warning_messages) >= 1
+        assert "symmetric" in warning_messages[0].lower()
+
+    def test_check_symmetry_sampled_silent_on_symmetric_matrix(self):
+        """_check_symmetry_sampled issues no warning for a symmetric matrix."""
+        from loguru import logger
+
+        from jamma.lmm.eigen import _check_symmetry_sampled
+
+        n = 10_000
+        rng = np.random.default_rng(1)
+        A = rng.standard_normal((n, n))
+        K = (A + A.T) / 2  # Exactly symmetric
+
+        warning_messages: list[str] = []
+
+        def _capture(message):
+            if message.record["level"].name == "WARNING":
+                warning_messages.append(message.record["message"])
+
+        sink_id = logger.add(_capture, level="WARNING")
+        try:
+            _check_symmetry_sampled(K, n)
+        finally:
+            logger.remove(sink_id)
+
+        assert warning_messages == []
+
 
 @pytest.mark.tier0
 class TestEigendecomposeOrReuse:

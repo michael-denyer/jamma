@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from jamma.lmm.schema import GWASTiming
 from jamma.lmm.stats import AssocResult
 from jamma.pipeline import PipelineConfig, PipelineRunner
 
@@ -34,7 +35,7 @@ class GWASResult:
     associations: list[AssocResult]
     n_samples: int
     n_snps_tested: int
-    timing: dict[str, float] = field(default_factory=dict)
+    timing: GWASTiming = field(default_factory=dict)
 
 
 def gwas(
@@ -128,9 +129,12 @@ def gwas(
             with the first sorted level dropped as reference. Requires
             covariate_file to be set.
         backend: Compute backend: "auto" (default), "jax", or "numpy". "auto"
-            selects JAX when installed, falling back to NumPy. "jax" requires
-            JAX to be installed (pip install jamma[jax]). "numpy" forces the
-            pure-NumPy backend, which loads all genotypes into memory.
+            selects numpy+C for datasets that fit in memory when the C
+            extension is available, JAX streaming for large datasets or when
+            the C extension is absent, and falls back to pure NumPy when
+            neither is present. "jax" requires JAX to be installed
+            (pip install jamma[jax]). "numpy" forces the pure-NumPy backend,
+            which loads all genotypes into memory.
 
     Returns:
         GWASResult with association results, sample/SNP counts, and timing.

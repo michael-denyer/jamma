@@ -1,21 +1,155 @@
 """Pure-NumPy setup utilities shared by JAX and NumPy LMM runners.
 
 Provides covariate matrix construction, eigendecomposition handling,
-and null model computation without any JAX dependency. Both the JAX
-runner (via prepare.py) and the NumPy runner (runner_numpy.py) import
-from this module.
+null model computation, and shared input validation without any JAX
+dependency. Both the JAX runner (via prepare.py) and the NumPy runner
+(runner_numpy.py) import from this module.
 """
 
 from __future__ import annotations
 
 import gc
+from dataclasses import dataclass
 
 import numpy as np
 from loguru import logger
 
+from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood import compute_null_model_mle
 from jamma.utils.logging import log_rss_memory
+
+
+@dataclass(frozen=True, slots=True)
+class RunnerSetup:
+    """Validated and filtered inputs for LMM runners.
+
+    Returned by validate_runner_inputs() after applying the valid-sample
+    mask, checking all invariants, and validating eigenpair dimensions.
+
+    Attributes:
+        phenotypes: Filtered phenotype vector (n_samples,).
+        kinship: Filtered kinship matrix (n_samples, n_samples) or None.
+        covariates: Filtered covariate matrix (n_samples, n_cvt) or None.
+        eigenvalues: Pre-computed eigenvalues (n_samples,) or None.
+        eigenvectors: Pre-computed eigenvectors (n_samples, n_samples) or None.
+        valid_mask: Boolean mask used to filter samples (original length).
+        n_samples: Number of valid samples after filtering.
+    """
+
+    phenotypes: np.ndarray
+    kinship: np.ndarray | None
+    covariates: np.ndarray | None
+    eigenvalues: np.ndarray | None
+    eigenvectors: np.ndarray | None
+    valid_mask: np.ndarray
+    n_samples: int
+
+
+def validate_runner_inputs(
+    phenotypes: np.ndarray,
+    kinship: np.ndarray | None,
+    covariates: np.ndarray | None,
+    eigenvalues: np.ndarray | None,
+    eigenvectors: np.ndarray | None,
+    lmm_mode: int,
+) -> RunnerSetup:
+    """Validate LMM runner inputs and apply sample filtering.
+
+    Performs the common validation sequence shared by all three runners
+    (numpy, jax, streaming): eigendecomposition pair check, lmm_mode guard,
+    kinship/eigenvalue guard, valid-sample mask computation and application,
+    empty-sample guard, and eigenpair dimension validation.
+
+    Does NOT include: memory checks (differ between runners), use_gpu
+    warnings (only numpy warns), or any JAX-specific setup.
+
+    Args:
+        phenotypes: Phenotype vector (n_samples,), with NaN for missing.
+        kinship: Kinship matrix (n_samples, n_samples), or None when
+            pre-computed eigenvalues/eigenvectors are provided.
+        covariates: Covariate matrix (n_samples, n_cvt) or None.
+        eigenvalues: Pre-computed eigenvalues (sorted ascending) or None.
+        eigenvectors: Pre-computed eigenvectors or None.
+        lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
+
+    Returns:
+        RunnerSetup with filtered arrays and validated n_samples.
+
+    Raises:
+        ValueError: If only one of eigenvalues/eigenvectors is provided,
+            if lmm_mode is not in (1, 2, 3, 4), if neither kinship nor
+            eigenvalues are provided, if no valid samples remain after
+            filtering, or if eigenpair dimensions do not match n_samples.
+    """
+    # Validate eigendecomposition params — must provide both or neither
+    if (eigenvalues is None) != (eigenvectors is None):
+        raise ValueError(
+            "Must provide both eigenvalues and eigenvectors, or neither. "
+            f"Got eigenvalues={eigenvalues is not None}, "
+            f"eigenvectors={eigenvectors is not None}"
+        )
+
+    if lmm_mode not in (1, 2, 3, 4):
+        raise ValueError(
+            f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
+        )
+
+    if kinship is None and eigenvalues is None:
+        raise ValueError(
+            "Either kinship or pre-computed eigendecomposition (eigenvalues + "
+            "eigenvectors) must be provided"
+        )
+
+    # Compute valid-sample mask from phenotype and covariate NaN
+    valid_mask = ~np.isnan(phenotypes) & (phenotypes != PHENOTYPE_MISSING)
+    if covariates is not None:
+        valid_covariate = np.all(~np.isnan(covariates), axis=1)
+        valid_mask = valid_mask & valid_covariate
+
+    # Apply mask only when needed (avoid a copy if all samples are valid)
+    if not np.all(valid_mask):
+        phenotypes = phenotypes[valid_mask]
+        if kinship is not None:
+            kinship = kinship[np.ix_(valid_mask, valid_mask)]
+        if covariates is not None:
+            covariates = covariates[valid_mask, :]
+
+    n_samples = phenotypes.shape[0]
+    if n_samples == 0:
+        raise ValueError(
+            "No valid samples: all phenotypes are missing or -9"
+            + (", or all have missing covariates" if covariates is not None else "")
+        )
+
+    # Validate precomputed eigenpair dimensions against (possibly filtered) n_samples
+    if eigenvalues is not None and eigenvectors is not None:
+        hint = (
+            "Recompute eigenpairs on the filtered kinship, or pass kinship= "
+            "and let JAMMA compute the eigendecomposition."
+        )
+        if eigenvalues.shape[0] != n_samples:
+            raise ValueError(
+                f"eigenvalues length ({eigenvalues.shape[0]}) does not match "
+                f"n_samples ({n_samples}) after removing missing "
+                f"phenotypes/covariates. {hint}"
+            )
+        if eigenvectors.shape != (n_samples, n_samples):
+            raise ValueError(
+                f"eigenvectors shape {eigenvectors.shape} does not match "
+                f"({n_samples}, {n_samples}) after removing missing "
+                f"phenotypes/covariates. {hint}"
+            )
+
+    return RunnerSetup(
+        phenotypes=phenotypes,
+        kinship=kinship,
+        covariates=covariates,
+        eigenvalues=eigenvalues,
+        eigenvectors=eigenvectors,
+        valid_mask=valid_mask,
+        n_samples=n_samples,
+    )
 
 
 def _build_covariate_matrix(

@@ -28,6 +28,7 @@ from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.io import write_assoc_results
 from jamma.lmm.loco import run_lmm_loco
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
+from jamma.lmm.schema import LmmConfig
 from jamma.lmm.stats import AssocResult
 
 # JAX-dependent runners — probe for JAX first, then import unconditionally
@@ -44,6 +45,7 @@ __all__ = [
     "run_lmm_loco",
     "AssocResult",
     "eigendecompose_kinship",
+    "LmmConfig",
     "read_eigen_files",
     "write_assoc_results",
     "write_eigen_files",

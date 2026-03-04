@@ -1,5 +1,9 @@
 """Tests for compute backend detection and information."""
 
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from jamma.core.backend import detect_backend, get_backend_info
@@ -108,3 +112,170 @@ def test_import_jamma_succeeds():
     import jamma
 
     assert hasattr(jamma, "__version__")
+
+
+@pytest.mark.tier0
+class TestAutoSelectBackend:
+    """Tests for _auto_select_backend() memory-aware auto-selection in pipeline.py."""
+
+    def _make_sufficient_estimate(self):
+        """Build a MemoryBreakdown-like mock with sufficient=True."""
+        m = MagicMock()
+        m.sufficient = True
+        m.total_gb = 1.0
+        m.available_gb = 100.0
+        return m
+
+    def _make_insufficient_estimate(self):
+        """Build a MemoryBreakdown-like mock with sufficient=False."""
+        m = MagicMock()
+        m.sufficient = False
+        m.total_gb = 500.0
+        m.available_gb = 10.0
+        return m
+
+    def test_small_dataset_c_ext_available_picks_numpy(self):
+        """Small dataset + C extension available -> selects 'numpy'."""
+        from jamma.pipeline import _auto_select_backend
+
+        with (
+            patch(
+                "jamma.pipeline.estimate_lmm_memory",
+                return_value=self._make_sufficient_estimate(),
+            ),
+            patch(
+                "jamma.lmm._compile_utils.is_c_extension_usable",
+                return_value=True,
+            ),
+        ):
+            result = _auto_select_backend(n_samples=100, n_snps=1000, use_gpu=False)
+        assert result == "numpy"
+
+    def test_large_dataset_no_memory_jax_available_picks_jax(self):
+        """Large dataset + insufficient memory + JAX available -> selects 'jax'."""
+        from jamma.pipeline import _auto_select_backend
+
+        with (
+            patch(
+                "jamma.pipeline.estimate_lmm_memory",
+                return_value=self._make_insufficient_estimate(),
+            ),
+            patch(
+                "jamma.lmm._compile_utils.is_c_extension_usable",
+                return_value=True,
+            ),
+            patch("jamma.pipeline.has_jax", return_value=True),
+        ):
+            result = _auto_select_backend(
+                n_samples=200_000, n_snps=100_000, use_gpu=False
+            )
+        assert result == "jax"
+
+    def test_no_c_ext_jax_available_picks_jax(self):
+        """No C extension + JAX available -> selects 'jax'."""
+        from jamma.pipeline import _auto_select_backend
+
+        with (
+            patch(
+                "jamma.pipeline.estimate_lmm_memory",
+                return_value=self._make_sufficient_estimate(),
+            ),
+            patch(
+                "jamma.lmm._compile_utils.is_c_extension_usable",
+                return_value=False,
+            ),
+            patch("jamma.pipeline.has_jax", return_value=True),
+        ):
+            result = _auto_select_backend(n_samples=100, n_snps=1000, use_gpu=False)
+        assert result == "jax"
+
+    def test_no_c_ext_no_jax_falls_back_to_numpy(self):
+        """No C extension + no JAX -> falls back to 'numpy'."""
+        from jamma.pipeline import _auto_select_backend
+
+        with (
+            patch(
+                "jamma.pipeline.estimate_lmm_memory",
+                return_value=self._make_sufficient_estimate(),
+            ),
+            patch(
+                "jamma.lmm._compile_utils.is_c_extension_usable",
+                return_value=False,
+            ),
+            patch("jamma.pipeline.has_jax", return_value=False),
+        ):
+            result = _auto_select_backend(n_samples=100, n_snps=1000, use_gpu=False)
+        assert result == "numpy"
+
+    def test_use_gpu_true_jax_available_picks_jax(self):
+        """use_gpu=True + JAX available -> always 'jax'."""
+        from jamma.pipeline import _auto_select_backend
+
+        with (
+            patch(
+                "jamma.pipeline.estimate_lmm_memory",
+                return_value=self._make_sufficient_estimate(),
+            ),
+            patch(
+                "jamma.lmm._compile_utils.is_c_extension_usable",
+                return_value=True,
+            ),
+            patch("jamma.pipeline.has_jax", return_value=True),
+        ):
+            result = _auto_select_backend(n_samples=100, n_snps=1000, use_gpu=True)
+        assert result == "jax"
+
+    def test_explicit_numpy_not_using_auto_select(self):
+        """Explicit backend='numpy' bypasses _auto_select_backend."""
+        from jamma.pipeline import PipelineConfig
+
+        config = PipelineConfig(bfile="/tmp/test", backend="numpy")
+        assert config.backend == "numpy"
+
+    def test_explicit_jax_not_using_auto_select(self):
+        """Explicit backend='jax' bypasses _auto_select_backend."""
+        from jamma.pipeline import PipelineConfig
+
+        config = PipelineConfig(bfile="/tmp/test", backend="jax")
+        assert config.backend == "jax"
+
+    def test_use_gpu_true_no_jax_warns_and_falls_through(self):
+        """use_gpu=True without JAX logs warning and falls back to numpy."""
+        from jamma.pipeline import _auto_select_backend
+
+        with (
+            patch(
+                "jamma.pipeline.estimate_lmm_memory",
+                return_value=self._make_sufficient_estimate(),
+            ),
+            patch(
+                "jamma.lmm._compile_utils.is_c_extension_usable",
+                return_value=False,
+            ),
+            patch("jamma.pipeline.has_jax", return_value=False),
+            patch("jamma.pipeline.logger") as mock_logger,
+        ):
+            result = _auto_select_backend(n_samples=100, n_snps=1000, use_gpu=True)
+        assert result == "numpy"
+        mock_logger.warning.assert_any_call(
+            "use_gpu=True but JAX is not installed — GPU acceleration unavailable. "
+            "Install JAX for GPU support: pip install jamma[jax]"
+        )
+
+    def test_c_ext_not_usable_falls_back_gracefully(self):
+        """is_c_extension_usable() returning False falls back gracefully."""
+        from jamma.pipeline import _auto_select_backend
+
+        with (
+            patch(
+                "jamma.pipeline.estimate_lmm_memory",
+                return_value=self._make_sufficient_estimate(),
+            ),
+            patch(
+                "jamma.lmm._compile_utils.is_c_extension_usable",
+                return_value=False,
+            ),
+            patch("jamma.pipeline.has_jax", return_value=False),
+        ):
+            result = _auto_select_backend(n_samples=100, n_snps=1000)
+        assert result == "numpy"

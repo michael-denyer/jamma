@@ -535,6 +535,15 @@ def test_compute_lmm_chunk_numpy_missing_args_raise(synthetic_data):
     with pytest.raises(ValueError, match="Hi_eval_null is required"):
         _compute_lmm_chunk_numpy(3, 1, eigenvalues, Uab_batch, n_samples)
 
+    # Mode 4 (All) requires both logl_H0 and Hi_eval_null.
+    # Missing logl_H0 is checked first (line order in source).
+    with pytest.raises(ValueError, match="logl_H0 is required"):
+        _compute_lmm_chunk_numpy(4, 1, eigenvalues, Uab_batch, n_samples)
+
+    # Providing logl_H0 but omitting Hi_eval_null also raises.
+    with pytest.raises(ValueError, match="Hi_eval_null is required"):
+        _compute_lmm_chunk_numpy(4, 1, eigenvalues, Uab_batch, n_samples, logl_H0=-50.0)
+
 
 # ---------------------------------------------------------------------------
 # Scalar P_yy warning deduplication (LIK-07)
@@ -1541,6 +1550,72 @@ def test_compute_wald_numpy_ncvt1_invariant_efficiency(compute_wald_data):
 
 
 # ---------------------------------------------------------------------------
+# All-NaN grid test for _batch_golden_section_numpy
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+def test_batch_golden_section_numpy_all_nan_grid():
+    """_batch_golden_section_numpy with all-NaN grid logls returns l_min lambda.
+
+    When every grid log-likelihood is NaN (all SNPs degenerate), argmax of
+    NaN-replaced -inf selects index 0 (the lower bound), bracketing around
+    l_min.  The optimizer should return lambdas at or near l_min without
+    crashing, and log-likelihoods should be finite (or NaN, but not inf).
+
+    This is the all-SNPs-degenerate extreme: _guard_P_yy produces NaN for
+    every grid point, so safe_logls is all -inf.
+    """
+    from jamma.lmm.likelihood_numpy import (
+        _batch_golden_section_numpy,
+        _batch_reml_at_lambda_numpy,
+    )
+
+    rng = np.random.default_rng(42)
+    n, n_snps = 30, 5
+    l_min = 1e-5
+
+    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n))
+    UtW = np.ones((n, 1))
+    Uty = rng.standard_normal(n)
+    UtG_degen = np.zeros((n, n_snps))  # all-zero genotype → all-NaN grid logls
+
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG_degen)
+    Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
+
+    n_grid = 10
+    log_l_min = np.log(l_min)
+    log_l_max = np.log(1e5)
+    log_lambdas = np.linspace(log_l_min, log_l_max, n_grid)
+
+    # All-degenerate grid: for zero genotype, P_yy after projecting out X
+    # may be pathological, but REML logls will be constant across lambda.
+    # Force the all-NaN scenario by using an artificial grid of NaN logls.
+    grid_logls_all_nan = np.full((n_grid, n_snps), np.nan)
+
+    def compute_batch_fn(log_lams):
+        lams = np.exp(log_lams)
+        return _batch_reml_at_lambda_numpy(1, lams, eigenvalues, Uab_batch, Iab_batch)
+
+    lambdas_out, logls_out = _batch_golden_section_numpy(
+        compute_batch_fn, grid_logls_all_nan, log_lambdas, n_iter=20
+    )
+
+    assert lambdas_out.shape == (n_snps,), (
+        f"Expected ({n_snps},), got {lambdas_out.shape}"
+    )
+
+    # With all-NaN grid, argmax(safe_logls) falls to index 0 (l_min bracket).
+    # Optimizer must not produce +inf or -inf lambdas.
+    assert not np.any(np.isinf(lambdas_out)), (
+        f"Lambdas should not be infinite, got {lambdas_out}"
+    )
+    # Lambdas should be within [l_min, l_max] range
+    assert np.all(lambdas_out >= l_min * 0.99), f"Lambdas below l_min: {lambdas_out}"
+    assert np.all(lambdas_out <= 1e5 * 1.01), f"Lambdas above l_max: {lambdas_out}"
+
+
+# ---------------------------------------------------------------------------
 # Degenerate SNP tests — NumPy batch REML path
 # ---------------------------------------------------------------------------
 
@@ -1649,6 +1724,197 @@ def test_batch_numpy_mixed_degenerate_and_valid_snps():
 
 
 # ---------------------------------------------------------------------------
+# Degenerate SNP tests — Python fallback (split ncvt1 and generic batch paths)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+def test_split_ncvt1_fallback_degenerate_snps_wald_nan():
+    """Split ncvt1 Python fallback path: degenerate SNPs produce NaN Wald stats.
+
+    golden_section_optimize_lambda_split_ncvt1_numpy is the Python fallback
+    when the C extension is unavailable.  When UtG is all-zero (constant
+    genotype), the varying columns [wx, xx, xy] are zero for every SNP.
+    The optimizer returns lambdas near l_min; downstream Wald stats must
+    produce NaN for every SNP because P_XX = 0.
+    """
+    from jamma.lmm.likelihood_numpy import (
+        batch_calc_wald_stats_numpy,
+        batch_compute_uab_varying_soa_numpy,
+        compute_iab_invariant_scalars_ncvt1,
+        compute_uab_invariant_soa,
+        golden_section_optimize_lambda_split_ncvt1_numpy,
+        reconstruct_uab_from_soa,
+    )
+
+    rng = np.random.default_rng(17)
+    n, n_snps = 30, 5
+    l_min = 1e-5
+
+    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n))
+    UtW = np.ones((n, 1))
+    Uty = rng.standard_normal(n)
+    UtG_degen = np.zeros((n, n_snps))  # constant genotype -> P_XX = 0
+
+    uab_invariant_soa = compute_uab_invariant_soa(UtW, Uty)
+    uab_varying_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG_degen)
+    iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
+        uab_invariant_soa
+    )
+
+    lambdas, logls = golden_section_optimize_lambda_split_ncvt1_numpy(
+        eigenvalues,
+        uab_varying_soa,
+        uab_invariant_soa,
+        iab_s_ww,
+        iab_s_wy,
+        iab_s_yy,
+        iab_logdet,
+        l_min=l_min,
+    )
+
+    assert lambdas.shape == (n_snps,), f"Expected ({n_snps},), got {lambdas.shape}"
+
+    # Optimizer converges to l_min when genotype has no variance
+    np.testing.assert_allclose(
+        lambdas,
+        l_min,
+        rtol=1e-4,
+        err_msg="Split ncvt1 all-degenerate SNPs should return l_min lambda",
+    )
+
+    # Reconstruct full Uab for Wald stats
+    Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_varying_soa)
+    betas, ses, pwalds = batch_calc_wald_stats_numpy(
+        1, lambdas, eigenvalues, Uab_batch, n
+    )
+
+    # P_XX = 0 -> all Wald stats NaN
+    assert np.all(np.isnan(betas)), f"Expected all-NaN betas, got {betas}"
+    assert np.all(np.isnan(ses)), f"Expected all-NaN ses, got {ses}"
+    assert np.all(np.isnan(pwalds)), f"Expected all-NaN pwalds, got {pwalds}"
+
+
+@pytest.mark.tier0
+def test_split_ncvt1_fallback_mixed_degenerate_valid():
+    """Split ncvt1 Python fallback: mixed batch, degenerate NaN, valid finite.
+
+    SNPs at indices 1 and 3 have non-zero genotypes (valid).
+    SNPs at indices 0, 2, 4 are zero-genotype (degenerate, P_XX=0).
+    The split optimizer must process them in the same batch without
+    cross-SNP contamination.
+    """
+    from jamma.lmm.likelihood_numpy import (
+        batch_calc_wald_stats_numpy,
+        batch_compute_uab_varying_soa_numpy,
+        compute_iab_invariant_scalars_ncvt1,
+        compute_uab_invariant_soa,
+        golden_section_optimize_lambda_split_ncvt1_numpy,
+        reconstruct_uab_from_soa,
+    )
+
+    rng = np.random.default_rng(99)
+    n, n_snps = 30, 5
+    l_min = 1e-5
+
+    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n))
+    UtW = np.ones((n, 1))
+    Uty = rng.standard_normal(n)
+
+    UtG = np.zeros((n, n_snps))
+    UtG[:, 1] = rng.standard_normal(n)  # valid
+    UtG[:, 3] = rng.standard_normal(n)  # valid
+
+    uab_invariant_soa = compute_uab_invariant_soa(UtW, Uty)
+    uab_varying_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
+    iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
+        uab_invariant_soa
+    )
+
+    lambdas, logls = golden_section_optimize_lambda_split_ncvt1_numpy(
+        eigenvalues,
+        uab_varying_soa,
+        uab_invariant_soa,
+        iab_s_ww,
+        iab_s_wy,
+        iab_s_yy,
+        iab_logdet,
+        l_min=l_min,
+    )
+
+    Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_varying_soa)
+    betas, ses, pwalds = batch_calc_wald_stats_numpy(
+        1, lambdas, eigenvalues, Uab_batch, n
+    )
+
+    degenerate_idxs = [0, 2, 4]
+    valid_idxs = [1, 3]
+
+    assert np.all(np.isnan(betas[degenerate_idxs])), (
+        f"Degenerate betas should be NaN, got {betas[degenerate_idxs]}"
+    )
+    assert np.all(np.isnan(ses[degenerate_idxs])), (
+        f"Degenerate ses should be NaN, got {ses[degenerate_idxs]}"
+    )
+    assert np.all(np.isnan(pwalds[degenerate_idxs])), (
+        f"Degenerate p_walds should be NaN, got {pwalds[degenerate_idxs]}"
+    )
+    assert np.all(np.isfinite(betas[valid_idxs])), (
+        f"Valid betas should be finite, got {betas[valid_idxs]}"
+    )
+    assert np.all(np.isfinite(ses[valid_idxs])), (
+        f"Valid ses should be finite, got {ses[valid_idxs]}"
+    )
+    assert np.all(np.isfinite(pwalds[valid_idxs])), (
+        f"Valid p_walds should be finite, got {pwalds[valid_idxs]}"
+    )
+
+
+@pytest.mark.tier0
+def test_generic_batch_numpy_fallback_degenerate_wald_nan():
+    """golden_section_optimize_lambda_numpy (generic path) with degenerate SNPs.
+
+    This tests the Python fallback path (golden_section_optimize_lambda_numpy
+    with n_cvt=1) independently from the C-extension path.  Degenerate SNPs
+    (UtG=0) should produce NaN Wald stats downstream regardless of which
+    low-level optimizer is used.
+    """
+    rng = np.random.default_rng(55)
+    n, n_snps = 30, 5
+    l_min = 1e-5
+
+    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n))
+    UtW = np.ones((n, 1))
+    Uty = rng.standard_normal(n)
+    UtG_degen = np.zeros((n, n_snps))  # constant genotype
+
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG_degen)
+    Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
+
+    lambdas, logls = golden_section_optimize_lambda_numpy(
+        1, eigenvalues, Uab_batch, Iab_batch, l_min=l_min
+    )
+
+    assert lambdas.shape == (n_snps,), f"Expected ({n_snps},), got {lambdas.shape}"
+
+    # Degenerate SNPs: optimizer should converge to l_min (no SNP signal)
+    np.testing.assert_allclose(
+        lambdas,
+        l_min,
+        rtol=1e-4,
+        err_msg="Generic fallback: all-degenerate SNPs should return l_min lambda",
+    )
+
+    # Wald stats: P_XX=0 -> all NaN
+    betas, ses, pwalds = batch_calc_wald_stats_numpy(
+        1, lambdas, eigenvalues, Uab_batch, n
+    )
+    assert np.all(np.isnan(betas)), f"Expected all-NaN betas, got {betas}"
+    assert np.all(np.isnan(ses)), f"Expected all-NaN ses, got {ses}"
+    assert np.all(np.isnan(pwalds)), f"Expected all-NaN pwalds, got {pwalds}"
+
+
+# ---------------------------------------------------------------------------
 # Scalar-vs-batch REML optimizer parity tests
 # ---------------------------------------------------------------------------
 
@@ -1736,4 +2002,78 @@ def test_scalar_vs_batch_reml_multi_snp_consistency():
         lambdas_batch,
         rtol=1e-4,
         err_msg="Scalar and batch REML paths should agree on all 10 SNP lambdas",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Scalar-vs-batch REML optimizer: tight lambda and logl parity (jamma-68j0)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+def test_scalar_vs_batch_reml_single_snp_lambda_and_logl_parity():
+    """Scalar and batch REML optimizers agree on lambda and logl.
+
+    Feeds a single SNP through both optimizers:
+    - Scalar: _golden_section_minimize + reml_log_likelihood (likelihood.py)
+    - Batch:  golden_section_optimize_lambda_numpy (likelihood_numpy.py)
+
+    Both run identical grid search + golden section in log-lambda space (same
+    n_grid=50, n_iter=20 defaults), so the returned optimal lambda and the
+    log-likelihood evaluated at that lambda should agree to near-machine-epsilon
+    after accounting for the batch midpoint vs scalar midpoint evaluation.
+
+    Tolerance rationale:
+    - lambda: rtol=1e-10 — both converge to log((a+b)/2) with same bracket,
+      so the difference is sub-ULP in double precision.
+    - logl: rtol=1e-10 — evaluated at the same lambda point via the same REML
+      arithmetic; any discrepancy would indicate a divergence in Pab/Iab logic.
+    """
+    rng = np.random.default_rng(123)
+    n = 50
+    n_cvt = 1
+
+    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n))
+    UtW = np.ones((n, 1))
+    Uty = rng.standard_normal(n)
+    Utx = rng.standard_normal(n)
+
+    # --- Scalar path ---
+    Uab_scalar = compute_Uab(UtW, Uty, Utx)
+
+    def scalar_neg_reml(lam: float) -> float:
+        return -reml_log_likelihood(lam, eigenvalues, Uab_scalar, n_cvt=n_cvt)
+
+    lambda_scalar, logl_scalar = _golden_section_minimize(
+        scalar_neg_reml, l_min=1e-5, l_max=1e5, n_grid=50, n_iter=20
+    )
+
+    # --- Batch path (single SNP wrapped in batch dimension) ---
+    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, Utx.reshape(n, 1))
+    Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
+    lambdas_batch, logls_batch = golden_section_optimize_lambda_numpy(
+        n_cvt, eigenvalues, Uab_batch, Iab_batch, n_grid=50, n_iter=20
+    )
+    lambda_batch = lambdas_batch[0]
+    logl_batch = logls_batch[0]
+
+    np.testing.assert_allclose(
+        lambda_scalar,
+        lambda_batch,
+        rtol=1e-10,
+        atol=1e-14,
+        err_msg=(
+            f"Scalar lambda {lambda_scalar:.6e} vs batch lambda {lambda_batch:.6e} "
+            "disagree beyond rtol=1e-10"
+        ),
+    )
+    np.testing.assert_allclose(
+        logl_scalar,
+        logl_batch,
+        rtol=1e-10,
+        atol=1e-14,
+        err_msg=(
+            f"Scalar logl {logl_scalar:.6e} vs batch logl {logl_batch:.6e} "
+            "disagree beyond rtol=1e-10"
+        ),
     )

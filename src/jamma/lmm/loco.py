@@ -1067,10 +1067,10 @@ def _run_lmm_for_chromosome(
     )
 
     def _prepare_jax_chunk(
-        start: int, geno: np.ndarray, total: int
+        start: int, end: int, geno: np.ndarray
     ) -> tuple[np.ndarray, int]:
         """Slice a genotype subset and prepare UtG for device transfer."""
-        geno_slice = geno[:, start : min(start + jax_chunk_size, total)]
+        geno_slice = geno[:, start:end]
         return prepare_utg_chunk(geno_slice, eigenvectors, placement, rotation_threads)
 
     # Track lambda boundary hits across all disk chunks
@@ -1103,13 +1103,19 @@ def _run_lmm_for_chromosome(
                 jax_starts = compute_subchunk_starts(
                     n_disk_subset, jax_chunk_size, placement.n_devices
                 )
+                # Derive end boundaries: next start, or n_disk_subset for
+                # last chunk. Critical when tail is merged.
+                jax_ends = [
+                    jax_starts[i + 1] if i + 1 < len(jax_starts) else n_disk_subset
+                    for i in range(len(jax_starts))
+                ]
 
                 # Fresh accumulator per disk chunk (flush after each)
                 accum: dict[str, list] = _init_accumulators(lmm_mode)
 
                 # Prepare first JAX chunk
                 UtG_np, actual_jax_len = _prepare_jax_chunk(
-                    jax_starts[0], geno_disk_chunk, n_disk_subset
+                    jax_starts[0], jax_ends[0], geno_disk_chunk
                 )
                 UtG_jax = jax.device_put(UtG_np, placement.snp)
                 del UtG_np
@@ -1121,7 +1127,7 @@ def _run_lmm_for_chromosome(
                     # Async transfer of next chunk
                     if i + 1 < len(jax_starts):
                         UtG_np, actual_jax_len = _prepare_jax_chunk(
-                            jax_starts[i + 1], geno_disk_chunk, n_disk_subset
+                            jax_starts[i + 1], jax_ends[i + 1], geno_disk_chunk
                         )
                         UtG_jax = jax.device_put(UtG_np, placement.snp)
                         del UtG_np

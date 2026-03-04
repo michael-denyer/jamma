@@ -23,9 +23,13 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-from jamma.core.backend import BackendRequest, BackendResolved
+from jamma.core.backend import BackendRequest, BackendResolved, has_jax
 from jamma.core.constants import PHENOTYPE_MISSING
-from jamma.core.memory import StreamingMemoryBreakdown, estimate_streaming_memory
+from jamma.core.memory import (
+    StreamingMemoryBreakdown,
+    estimate_lmm_memory,
+    estimate_streaming_memory,
+)
 from jamma.io.covariate import read_covariate_file
 from jamma.io.plink import get_plink_metadata, validate_plink_dimensions
 from jamma.io.snp_list import read_snp_list_file, resolve_snp_list_to_indices
@@ -37,7 +41,76 @@ from jamma.kinship import (
 from jamma.lmm.chunk import _compute_chunk_size
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+from jamma.lmm.schema import LmmConfig, PipelineTiming
 from jamma.lmm.stats import AssocResult
+
+
+def _auto_select_backend(n_samples: int, n_snps: int, use_gpu: bool = False) -> str:
+    """Select the optimal compute backend based on memory and hardware.
+
+    Picks numpy+C when the genotype matrix fits in memory and the C extension
+    is available (fast in-memory path). Falls back to JAX streaming for large
+    datasets, or to pure NumPy when neither C extension nor JAX is present.
+
+    This function does NOT import JAX unconditionally — it uses `has_jax()`
+    from core.backend (which is cached and import-safe) so that numpy-only
+    installs never trigger a JAX import at startup.
+
+    Args:
+        n_samples: Number of samples in the dataset.
+        n_snps: Number of SNPs in the dataset.
+        use_gpu: If True and JAX is available, always select 'jax'.
+
+    Returns:
+        'numpy' or 'jax'.
+    """
+    # GPU requires JAX — short-circuit before any memory check
+    if use_gpu:
+        if has_jax():
+            logger.info("Backend auto-selection: 'jax' (GPU requested, JAX available)")
+            return "jax"
+        logger.warning(
+            "use_gpu=True but JAX is not installed — GPU acceleration unavailable. "
+            "Install JAX for GPU support: pip install jamma[jax]"
+        )
+
+    # Check C extension availability (single source of truth in _compile_utils)
+    from jamma.lmm._compile_utils import is_c_extension_usable
+
+    c_ext_available = is_c_extension_usable()
+
+    # Check in-memory fit
+    est = estimate_lmm_memory(n_samples, n_snps)
+
+    if c_ext_available and est.sufficient:
+        logger.info(
+            f"Backend auto-selection: 'numpy' "
+            f"(C extension available, {est.total_gb:.1f}GB fits in "
+            f"{est.available_gb:.1f}GB available)"
+        )
+        return "numpy"
+
+    if has_jax():
+        if not c_ext_available:
+            reason = "C extension unavailable"
+        else:
+            reason = f"{est.total_gb:.1f}GB exceeds {est.available_gb:.1f}GB"
+        logger.info(f"Backend auto-selection: 'jax' ({reason}, using streaming)")
+        return "jax"
+
+    # Neither C extension nor JAX — fall back to pure NumPy
+    if not est.sufficient:
+        logger.warning(
+            f"Backend auto-selection: 'numpy' (fallback — no C extension or JAX). "
+            f"Dataset requires ~{est.total_gb:.1f}GB but only "
+            f"{est.available_gb:.1f}GB available. "
+            f"Install JAX for streaming support: pip install jamma[jax]"
+        )
+    else:
+        logger.debug(
+            "Backend auto-selection: 'numpy' (fallback — no C extension or JAX)"
+        )
+    return "numpy"
 
 
 @dataclass
@@ -78,6 +151,8 @@ class PipelineConfig:
             HWE filtering. Matches GEMMA's -hwe flag.
         l_min: Minimum lambda for optimization (default 1e-5, matches GEMMA).
         l_max: Maximum lambda for optimization (default 1e5, matches GEMMA).
+        n_grid: Grid search resolution for lambda bracketing (default 50).
+        n_refine: Golden section refinement iterations (default 10).
         weight_file: Individual weight file for kinship pre-transformation.
             One weight per line, matching sample order. Applies
             K[i,j] /= sqrt(w_i * w_j) before eigendecomposition.
@@ -117,6 +192,8 @@ class PipelineConfig:
     hwe_threshold: float = 0.0
     l_min: float = 1e-5
     l_max: float = 1e5
+    n_grid: int = 50
+    n_refine: int = 10
     weight_file: Path | None = None
     cat_columns: list[int] | None = None
     profile_dir: Path | None = None
@@ -154,7 +231,7 @@ class PipelineResult:
     n_samples: int
     n_snps_tested: int
     assoc_path: Path
-    timing: dict[str, float] = field(default_factory=dict)
+    timing: PipelineTiming = field(default_factory=dict)
     backend: BackendResolved = "numpy"  # Set by PipelineRunner.run()
     n_covariates: int = 1
 
@@ -633,8 +710,22 @@ class PipelineRunner:
 
         from jamma.core.backend import detect_backend, log_backend_selection
 
-        active_backend = detect_backend(self.config.backend)
-        log_backend_selection(active_backend, self.config.backend)
+        if self.config.backend == "auto":
+            # Memory-based auto-selection requires PLINK metadata (n_samples, n_snps).
+            # We load it here (lightweight — reads .fam/.bim header only) so the
+            # backend decision is data-driven rather than JAX-availability-only.
+            from jamma.io.plink import get_plink_metadata as _get_meta
+
+            _meta = _get_meta(self.config.bfile)
+            active_backend = _auto_select_backend(
+                n_samples=_meta["n_samples"],
+                n_snps=_meta["n_snps"],
+                use_gpu=False,
+            )
+            log_backend_selection(active_backend, self.config.backend)
+        else:
+            active_backend = detect_backend(self.config.backend)
+            log_backend_selection(active_backend, self.config.backend)
 
         trace_ctx = contextlib.nullcontext()
         if active_backend == "jax":
@@ -899,6 +990,18 @@ class PipelineRunner:
 
         ensure_jax_configured()
 
+        lmm_config = LmmConfig(
+            maf_threshold=self.config.maf,
+            miss_threshold=self.config.miss,
+            l_min=self.config.l_min,
+            l_max=self.config.l_max,
+            n_grid=self.config.n_grid,
+            n_refine=self.config.n_refine,
+            check_memory=False,  # Already checked above
+            show_progress=self.config.show_progress,
+            lmm_mode=self.config.lmm_mode,
+        )
+
         return run_lmm_association_streaming(
             bed_path=self.config.bfile,
             phenotypes=phenotypes,
@@ -907,17 +1010,11 @@ class PipelineRunner:
             covariates=covariates,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            maf_threshold=self.config.maf,
-            miss_threshold=self.config.miss,
-            l_min=self.config.l_min,
-            l_max=self.config.l_max,
             output_path=assoc_path,
-            lmm_mode=self.config.lmm_mode,
-            check_memory=False,  # Already checked above
-            show_progress=self.config.show_progress,
             snps_indices=snps_indices,
             hwe_threshold=self.config.hwe_threshold,
             chunk_size=actual_chunk,
+            config=lmm_config,
         )
 
     def _run_numpy_backend(
@@ -959,6 +1056,18 @@ class PipelineRunner:
             for i in indices
         ]
 
+        lmm_config = LmmConfig(
+            maf_threshold=self.config.maf,
+            miss_threshold=self.config.miss,
+            l_min=self.config.l_min,
+            l_max=self.config.l_max,
+            n_grid=self.config.n_grid,
+            n_refine=self.config.n_refine,
+            check_memory=False,  # Already checked above
+            show_progress=self.config.show_progress,
+            lmm_mode=self.config.lmm_mode,
+        )
+
         assoc_results = run_lmm_association_numpy(
             genotypes=genotypes,
             phenotypes=phenotypes,
@@ -967,13 +1076,7 @@ class PipelineRunner:
             covariates=covariates,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            maf_threshold=self.config.maf,
-            miss_threshold=self.config.miss,
-            l_min=self.config.l_min,
-            l_max=self.config.l_max,
-            check_memory=False,  # Already checked above
-            show_progress=self.config.show_progress,
-            lmm_mode=self.config.lmm_mode,
+            config=lmm_config,
         )
 
         # Write results to disk in GEMMA format

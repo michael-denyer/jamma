@@ -11,6 +11,67 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import TypedDict
+
+# LmmMode type alias (kept local to avoid circular imports with compute_numpy)
+LmmMode = int
+
+
+class RunnerTiming(TypedDict, total=False):
+    """Timing breakdown from LMM runner execution.
+
+    All keys are optional because not all runners populate all fields.
+    For example, ``rotation_exposed_s`` only appears in multi-chunk runs.
+
+    Attributes:
+        rotation_s: Total UT@G rotation time (seconds).
+        rotation_exposed_s: Rotation time exposed (not overlapped) by compute.
+        jax_compute_s: Total JAX compute time (seconds).
+        result_write_s: Total result write time (seconds).
+    """
+
+    rotation_s: float
+    rotation_exposed_s: float
+    jax_compute_s: float
+    result_write_s: float
+
+
+class PipelineTiming(TypedDict, total=False):
+    """Timing breakdown from pipeline execution.
+
+    All keys are optional; keys from the runner are merged at pipeline exit.
+
+    Attributes:
+        kinship_s: Kinship load/compute time (seconds).
+        load_s: Total data loading time through kinship (seconds).
+        lmm_s: LMM association runtime (seconds).
+        total_s: Total pipeline wall time (seconds).
+        rotation_s: UT@G rotation time from the runner (seconds).
+        rotation_exposed_s: Exposed rotation time from the runner (seconds).
+    """
+
+    kinship_s: float
+    load_s: float
+    lmm_s: float
+    total_s: float
+    rotation_s: float
+    rotation_exposed_s: float
+
+
+class GWASTiming(TypedDict, total=False):
+    """Timing breakdown from GWAS API execution.
+
+    Subset of PipelineTiming exposed through the public gwas() API.
+
+    Attributes:
+        kinship_s: Kinship load/compute time (seconds).
+        lmm_s: LMM association runtime (seconds).
+        total_s: Total pipeline wall time (seconds).
+    """
+
+    kinship_s: float
+    lmm_s: float
+    total_s: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +185,85 @@ HEADERS: dict[str, str] = {
 }
 
 
+@dataclass(frozen=True)
+class LmmConfig:
+    """Configuration for LMM association runners.
+
+    Groups the common parameters shared by all runner entry points.
+    Frozen to prevent accidental mutation — runners clamp values (e.g.,
+    n_refine >= 20) on local variables after unpacking via as_kwargs().
+
+    Attributes:
+        maf_threshold: Minimum MAF for SNP inclusion.
+        miss_threshold: Maximum missing rate for SNP inclusion.
+        l_min: Minimum lambda for optimization.
+        l_max: Maximum lambda for optimization.
+        n_grid: Grid search resolution for lambda bracketing.
+        n_refine: Golden section iterations (clamped to min 20 internally
+            for ~1e-5 tolerance).
+        use_gpu: Whether to use GPU acceleration (ignored by NumPy backend).
+        check_memory: Check available memory before workflow.
+        show_progress: Show progress bars and GEMMA-style logging.
+        lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
+    """
+
+    maf_threshold: float = 0.01
+    miss_threshold: float = 0.05
+    l_min: float = 1e-5
+    l_max: float = 1e5
+    n_grid: int = 50
+    n_refine: int = 10
+    use_gpu: bool = False
+    check_memory: bool = True
+    show_progress: bool = True
+    lmm_mode: LmmMode = 1
+
+    def __post_init__(self) -> None:
+        if self.lmm_mode not in (1, 2, 3, 4):
+            raise ValueError(
+                f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), "
+                f"got {self.lmm_mode}"
+            )
+        if not 0 <= self.maf_threshold <= 0.5:
+            raise ValueError(
+                f"maf_threshold must be in [0, 0.5], got {self.maf_threshold}"
+            )
+        if not 0 <= self.miss_threshold <= 1:
+            raise ValueError(
+                f"miss_threshold must be in [0, 1], got {self.miss_threshold}"
+            )
+        if self.l_min <= 0:
+            raise ValueError(f"l_min must be positive, got {self.l_min}")
+        if self.l_max <= self.l_min:
+            raise ValueError(
+                f"l_max ({self.l_max}) must be greater than l_min ({self.l_min})"
+            )
+        if self.n_grid < 1:
+            raise ValueError(f"n_grid must be >= 1, got {self.n_grid}")
+
+    def as_kwargs(self) -> dict:
+        """Return config fields as a dict suitable for unpacking into runner kwargs.
+
+        Maps config field names to the parameter names used by runner functions.
+        This eliminates the duplicated 10-line unpacking blocks in each runner.
+
+        Returns:
+            Dict with keys matching runner function parameters.
+        """
+        return {
+            "maf_threshold": self.maf_threshold,
+            "miss_threshold": self.miss_threshold,
+            "l_min": self.l_min,
+            "l_max": self.l_max,
+            "n_grid": self.n_grid,
+            "n_refine": self.n_refine,
+            "use_gpu": self.use_gpu,
+            "check_memory": self.check_memory,
+            "show_progress": self.show_progress,
+            "lmm_mode": self.lmm_mode,
+        }
+
+
 class LazySnpMeta:
     """Lazy view over PLINK metadata arrays, avoiding per-SNP dict materialization.
 
@@ -132,6 +272,13 @@ class LazySnpMeta:
     dict on each __getitem__ access. This saves O(n_snps) dict + string objects.
 
     Compatible with all snp_info consumers that use integer indexing (snp_info[idx]).
+
+    Items are dicts with keys:
+        chr: Chromosome identifier (str).
+        rs: SNP identifier / rsID (str).
+        pos: Base-pair position (int).
+        a1: Minor allele (str).
+        a0: Major allele (str).
     """
 
     __slots__ = ("_chr", "_rs", "_pos", "_a1", "_a0")

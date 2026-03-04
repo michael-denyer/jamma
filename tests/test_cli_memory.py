@@ -206,7 +206,7 @@ class TestCliStreamingRunner:
     """Tests for CLI lmm command JAX streaming runner integration."""
 
     def test_cli_jax_default_uses_streaming_runner(self, tmp_path):
-        """Verify CLI calls run_lmm_association_streaming."""
+        """Verify CLI calls run_lmm_association_streaming when backend=jax."""
         with patch("jamma.lmm.run_lmm_association_streaming") as mock_stream:
             mock_stream.return_value = []
 
@@ -224,6 +224,8 @@ class TestCliStreamingRunner:
                     "-k",
                     str(KINSHIP_FILE),
                     "--no-check-memory",
+                    "--backend",
+                    "jax",
                 ],
             )
 
@@ -232,6 +234,7 @@ class TestCliStreamingRunner:
             assert "output_path" in call_kwargs
             assert call_kwargs["output_path"] is not None
             assert str(call_kwargs["output_path"]).endswith(".assoc.txt")
-            # JAX path should pass raw data, not filtered
-            assert call_kwargs["check_memory"] is False
+            # JAX path uses LmmConfig — check_memory=False is inside config
+            config = call_kwargs["config"]
+            assert config.check_memory is False
             assert call_kwargs["snp_info"] is None

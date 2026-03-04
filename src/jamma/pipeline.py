@@ -69,15 +69,26 @@ def _auto_select_backend(n_samples: int, n_snps: int, use_gpu: bool = False) -> 
         logger.info("Backend auto-selection: 'jax' (GPU requested, JAX available)")
         return "jax"
 
-    # Check C extension availability — import attempt, no side effects
+    # Check C extension availability — import + ABI version check
     c_ext_available = False
     try:
         import importlib
 
-        importlib.import_module("jamma.lmm._lmm_accel")
-        c_ext_available = True
-    except (ImportError, AttributeError):
-        pass
+        mod = importlib.import_module("jamma.lmm._lmm_accel")
+        c_ext_available = hasattr(mod, "_C_ABI_VERSION")
+        if not c_ext_available:
+            logger.debug(
+                "C extension imported but missing _C_ABI_VERSION — "
+                "likely stale; run: python -m jamma.lmm._compile_accel"
+            )
+    except ImportError:
+        logger.debug("C extension _lmm_accel not importable")
+    except AttributeError as e:
+        logger.warning(
+            f"C extension _lmm_accel has attribute errors: {e}. "
+            "This may indicate an ABI mismatch. "
+            "Run: python -m jamma.lmm._compile_accel"
+        )
 
     # Check in-memory fit
     est = estimate_lmm_memory(n_samples, n_snps)
@@ -99,7 +110,17 @@ def _auto_select_backend(n_samples: int, n_snps: int, use_gpu: bool = False) -> 
         return "jax"
 
     # Neither C extension nor JAX — fall back to pure NumPy
-    logger.info("Backend auto-selection: 'numpy' (fallback — no C extension or JAX)")
+    if not est.sufficient:
+        logger.warning(
+            f"Backend auto-selection: 'numpy' (fallback — no C extension or JAX). "
+            f"Dataset requires ~{est.total_gb:.1f}GB but only "
+            f"{est.available_gb:.1f}GB available. "
+            f"Install JAX for streaming support: pip install jamma[jax]"
+        )
+    else:
+        logger.info(
+            "Backend auto-selection: 'numpy' (fallback — no C extension or JAX)"
+        )
     return "numpy"
 
 

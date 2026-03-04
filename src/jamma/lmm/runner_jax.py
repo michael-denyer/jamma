@@ -43,8 +43,8 @@ from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
 
 # Module-level timing from the last run, for direct callers (tests, notebooks).
-# The pipeline reads runner_streaming.last_run_timing instead (it always uses the
-# streaming runner). Not thread-safe: concurrent calls will corrupt this dict.
+# The pipeline reads runner_streaming.last_run_timing for the JAX streaming path.
+# Not thread-safe: concurrent calls will corrupt this dict.
 # Cleared at function entry; repopulated at function exit on success.
 last_run_timing: RunnerTiming = {}
 

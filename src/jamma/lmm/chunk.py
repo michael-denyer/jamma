@@ -139,6 +139,10 @@ def compute_subchunk_starts(
     Returns:
         List of start indices for sub-chunks within the outer chunk.
     """
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+    if n_subset < 0:
+        raise ValueError(f"n_subset must be non-negative, got {n_subset}")
     starts = list(range(0, n_subset, chunk_size))
     if n_devices > 1 and len(starts) > 1:
         tail = n_subset - starts[-1]

@@ -231,6 +231,14 @@ class LmmConfig:
             raise ValueError(
                 f"miss_threshold must be in [0, 1], got {self.miss_threshold}"
             )
+        if self.l_min <= 0:
+            raise ValueError(f"l_min must be positive, got {self.l_min}")
+        if self.l_max <= self.l_min:
+            raise ValueError(
+                f"l_max ({self.l_max}) must be greater than l_min ({self.l_min})"
+            )
+        if self.n_grid < 1:
+            raise ValueError(f"n_grid must be >= 1, got {self.n_grid}")
 
 
 class LazySnpMeta:

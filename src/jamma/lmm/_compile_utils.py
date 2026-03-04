@@ -50,7 +50,18 @@ def auto_recompile_c_extension(
         f"(ABI mismatch or missing). Compiling now..."
     )
 
-    if not compiler.compile_extension(verbose=False):
+    try:
+        success = compiler.compile_extension(verbose=False)
+    except Exception as e:
+        logger.warning(
+            f"Auto-recompilation of {module_name} raised "
+            f"{type(e).__name__}: {e}. "
+            f"Falling back to pure-Python ({label}). "
+            f"To diagnose, run: python -m {compiler_module}"
+        )
+        return False
+
+    if not success:
         logger.warning(
             f"Auto-recompilation of {module_name} failed. "
             f"Falling back to pure-Python ({label}). "

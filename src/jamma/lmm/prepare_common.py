@@ -20,7 +20,7 @@ from jamma.lmm.likelihood import compute_null_model_mle
 from jamma.utils.logging import log_rss_memory
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class RunnerSetup:
     """Validated and filtered inputs for LMM runners.
 

@@ -15,7 +15,6 @@ import pytest
 
 from jamma.io.plink import (
     get_chromosome_partitions,
-    validate_genotype_values,
     validate_plink_dimensions,
 )
 from jamma.lmm.io import IncrementalAssocWriter, format_assoc_line
@@ -32,25 +31,12 @@ LOCO_BFILE = LOCO_FIXTURES / "test"
 class TestPlinkIOErrorPaths:
     """Error-path tests for PLINK I/O validation functions.
 
-    Tests validate_plink_dimensions (truncated .bed, per-extension missing files),
-    validate_genotype_values (out-of-range value counting), and
+    Tests validate_plink_dimensions (per-extension missing files) and
     get_chromosome_partitions (multi-chromosome handling).
+
+    Truncated .bed and genotype value tests live in test_plink_validation.py
+    to avoid duplication.
     """
-
-    def test_truncated_bed_raises(self, tmp_path: Path) -> None:
-        """Truncated .bed raises ValueError with dimension mismatch message."""
-        for ext in (".bed", ".bim", ".fam"):
-            shutil.copy(FIXTURES / f"test{ext}", tmp_path / f"test{ext}")
-
-        bed_path = tmp_path / "test.bed"
-        original_size = bed_path.stat().st_size
-        with open(bed_path, "r+b") as f:
-            f.truncate(original_size - 10)
-
-        with pytest.raises(
-            ValueError, match="dimension mismatch|doesn't match expected"
-        ):
-            validate_plink_dimensions(tmp_path / "test")
 
     def test_missing_bed_raises(self, tmp_path: Path) -> None:
         """Missing .bed (with .bim and .fam present) raises FileNotFoundError."""
@@ -76,16 +62,8 @@ class TestPlinkIOErrorPaths:
         with pytest.raises(FileNotFoundError, match=r"\.fam"):
             validate_plink_dimensions(tmp_path / "test")
 
-    def test_validate_genotype_out_of_range(self) -> None:
-        """Out-of-range values (3.0, -1.0) are counted; 0.0 and NaN are valid."""
-        chunk = np.array([[0.0, 3.0, -1.0, np.nan]], dtype=np.float32)
-        result = validate_genotype_values(chunk)
-        assert result == 2
-
-    def test_validate_genotype_all_valid(self) -> None:
-        """All valid values (0, 1, 2, NaN) return count of 0."""
-        chunk = np.array([[0.0, 1.0, 2.0, np.nan]], dtype=np.float32)
-        assert validate_genotype_values(chunk) == 0
+    # Genotype value validation tests (out-of-range counting, all-valid)
+    # live in test_plink_validation.py::TestValidateGenotypeValues.
 
     def test_multi_chromosome_partitions(self) -> None:
         """get_chromosome_partitions returns correct multi-chromosome partitions.

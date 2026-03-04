@@ -2,8 +2,11 @@
 
 Validates compute_hwe_pvalues for equilibrium, deviation, degenerate,
 vectorized, and textbook cases. Also tests filter composition (SNP list
-+ HWE + MAF/miss filters via boolean AND).
++ HWE + MAF/miss filters via boolean AND). Also tests compute_snp_stats
+for RuntimeWarning suppression on all-NaN columns.
 """
+
+import warnings
 
 import numpy as np
 import pytest
@@ -12,6 +15,7 @@ from jamma.core.snp_filter import (
     apply_snp_list_mask,
     compute_hwe_pvalues,
     compute_snp_filter_mask,
+    compute_snp_stats,
 )
 
 
@@ -209,3 +213,49 @@ class TestFilterComposition:
         # Only SNPs 0 and 4 should survive (in list AND pass HWE)
         surviving = np.where(combined)[0]
         np.testing.assert_array_equal(surviving, [0, 4])
+
+
+@pytest.mark.tier0
+class TestComputeSnpStats:
+    """Tests for compute_snp_stats including all-NaN column handling."""
+
+    def test_all_nan_column_no_runtime_warning(self) -> None:
+        """compute_snp_stats on all-NaN column emits no RuntimeWarning.
+
+        np.errstate(invalid="ignore") does NOT suppress Python-level
+        RuntimeWarnings from nanmean/nanvar. This test verifies the fix
+        uses warnings.catch_warnings instead.
+        """
+        genotypes = np.array(
+            [[0.0, np.nan], [1.0, np.nan], [2.0, np.nan]], dtype=np.float32
+        )
+        # Treat RuntimeWarning as an error; if the fix is correct, no exception
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            col_means, miss_counts, col_vars = compute_snp_stats(genotypes)
+
+    def test_all_nan_column_returns_zero_mean_var(self) -> None:
+        """All-NaN column produces col_mean=0.0 and col_var=0.0."""
+        genotypes = np.array(
+            [[0.0, np.nan], [1.0, np.nan], [2.0, np.nan]], dtype=np.float32
+        )
+        col_means, miss_counts, col_vars = compute_snp_stats(genotypes)
+        # First column: mean=1.0, var=2/3
+        assert col_means[0] == pytest.approx(1.0)
+        # Second column: all-NaN, should yield 0.0
+        assert col_means[1] == 0.0
+        assert col_vars[1] == 0.0
+        assert miss_counts[1] == 3
+
+    def test_normal_column_stats(self) -> None:
+        """compute_snp_stats returns correct mean, miss count, var for normal data."""
+        genotypes = np.array([[0.0, 2.0], [np.nan, 2.0], [2.0, 2.0]], dtype=np.float32)
+        col_means, miss_counts, col_vars = compute_snp_stats(genotypes)
+        # Column 0: values 0, 2 (NaN excluded) -> mean=1.0, miss=1, var=1.0
+        assert col_means[0] == pytest.approx(1.0)
+        assert miss_counts[0] == 1
+        assert col_vars[0] == pytest.approx(1.0)
+        # Column 1: values 2, 2, 2 -> mean=2.0, miss=0, var=0.0
+        assert col_means[1] == pytest.approx(2.0)
+        assert miss_counts[1] == 0
+        assert col_vars[1] == pytest.approx(0.0)

@@ -729,50 +729,25 @@ class TestSafetyMarginCap:
 class TestFormatDuration:
     """Tests for _format_duration human-readable formatting."""
 
-    def test_sub_second(self):
-        assert _format_duration(0.5) == "<1s"
-
-    def test_seconds(self):
-        assert _format_duration(30) == "30s"
-
-    def test_one_second(self):
-        assert _format_duration(1) == "1s"
-
-    def test_just_under_minute(self):
-        assert _format_duration(59) == "59s"
-
-    def test_no_60s_rounding(self):
-        """59.6s must be '59s', not '60s' — truncation not rounding."""
-        assert _format_duration(59.6) == "59s"
-
-    def test_minutes(self):
-        assert _format_duration(120) == "2 min"
-
-    def test_exactly_60_minutes(self):
-        assert _format_duration(3600) == "1h"
-
-    def test_hours_and_minutes(self):
-        assert _format_duration(5400) == "1h 30m"
-
-    def test_exactly_60_seconds(self):
-        """60 seconds is 1 minute, not '60s'."""
-        assert _format_duration(60) == "1 min"
-
-    def test_no_60_minutes_rounding(self):
-        """7199s must be '1h 59m', not '2h 60m' (rounding bug)."""
-        assert _format_duration(7199) == "1h 59m"
-
-    def test_no_60_minutes_rounding_fractional(self):
-        """7199.9s must be '1h 59m' — truncation not rounding."""
-        assert _format_duration(7199.9) == "1h 59m"
-
-    def test_no_60_min_label_at_boundary(self):
-        """3599s must be '59 min', not '60 min' (rounding in minutes branch)."""
-        assert _format_duration(3599) == "59 min"
-
-    def test_no_60_min_label_fractional(self):
-        """3599.5s must be '59 min', not '60 min' — truncation not rounding."""
-        assert _format_duration(3599.5) == "59 min"
-
-    def test_large_duration(self):
-        assert _format_duration(7261) == "2h 1m"
+    @pytest.mark.parametrize(
+        "seconds,expected",
+        [
+            pytest.param(0.5, "<1s", id="sub_second"),
+            pytest.param(1, "1s", id="one_second"),
+            pytest.param(30, "30s", id="seconds"),
+            pytest.param(59, "59s", id="just_under_minute"),
+            pytest.param(59.6, "59s", id="no_60s_rounding"),
+            pytest.param(60, "1 min", id="exactly_60_seconds"),
+            pytest.param(120, "2 min", id="minutes"),
+            pytest.param(3599, "59 min", id="no_60_min_at_boundary"),
+            pytest.param(3599.5, "59 min", id="no_60_min_fractional"),
+            pytest.param(3600, "1h", id="exactly_60_minutes"),
+            pytest.param(5400, "1h 30m", id="hours_and_minutes"),
+            pytest.param(7199, "1h 59m", id="no_60_minutes_rounding"),
+            pytest.param(7199.9, "1h 59m", id="no_60_minutes_rounding_fractional"),
+            pytest.param(7261, "2h 1m", id="large_duration"),
+        ],
+    )
+    def test_format_duration(self, seconds, expected):
+        """_format_duration uses truncation (not rounding) at all boundaries."""
+        assert _format_duration(seconds) == expected

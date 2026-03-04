@@ -6,6 +6,7 @@ Used by both kinship computation and LMM association runners.
 """
 
 import math
+import warnings
 
 import numpy as np
 from loguru import logger
@@ -66,7 +67,11 @@ def compute_snp_stats(
         1-D array of length n_snps.
     """
     miss_counts = np.sum(np.isnan(genotypes), axis=0)
-    with np.errstate(invalid="ignore", divide="ignore"):
+    # Use warnings.catch_warnings to suppress Python-level RuntimeWarning emitted
+    # by nanmean/nanvar on all-NaN slices. np.errstate(invalid="ignore") only
+    # suppresses numpy floating-point error state flags, not Python warnings.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
         col_means = np.nanmean(genotypes, axis=0)
         col_vars = np.nanvar(genotypes, axis=0)
     col_means = np.nan_to_num(col_means, nan=0.0)

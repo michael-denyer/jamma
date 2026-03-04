@@ -286,7 +286,11 @@ def validate_genotype_values(chunk: np.ndarray) -> int:
     """
     # Count values outside {0, 1, 2, NaN}.
     # Valid genotypes are integers in [0, 2]; NaN is missing data (also valid).
-    return int(np.count_nonzero(~(np.isnan(chunk) | np.isin(chunk, (0, 1, 2)))))
+    # Boolean equality checks avoid large temporary allocations from membership
+    # tests when processing 100k x 10k float32 chunks.
+    not_nan = ~np.isnan(chunk)
+    valid_geno = (chunk == 0.0) | (chunk == 1.0) | (chunk == 2.0)
+    return int(np.count_nonzero(not_nan & ~valid_geno))
 
 
 def stream_genotype_chunks(

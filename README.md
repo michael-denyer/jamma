@@ -20,7 +20,7 @@
 - **Fast**: Up to 11x faster than GEMMA 0.98.5 at scale
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
 - **Cross-platform**: Runs on Linux, macOS, and Windows — NumPy backend works everywhere, JAX adds batch acceleration on Linux and ARM Mac
-- **Pure Python + optional C extension**: NumPy + optional JAX stack; C extension with OpenMP for fast Wald tests, JAX for batch MLE optimization
+- **Pure Python + optional C extensions**: NumPy + optional JAX stack; C extensions for DSYEVR eigendecomposition and OpenMP-parallel Wald tests, JAX for batch MLE optimization
 - **Large-scale ready**: Optional [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) wheels (numpy 2.4.2) for >46k sample eigendecomposition
 
 ## Installation
@@ -260,7 +260,7 @@ Best of multiple runs, end-to-end wall clock:
 - [x] Pre-flight memory checks (fail-fast before OOM)
 - [x] RSS memory logging at workflow boundaries
 - [x] Incremental result writing
-- [x] Optional C extension with OpenMP for NumPy LMM acceleration (auto-fallback to pure Python)
+- [x] Optional C extensions: DSYEVR eigendecomposition (O(n) workspace, enables >100k samples) and OpenMP-parallel Wald tests (auto-fallback to pure Python)
 
 ### Planned
 
@@ -268,18 +268,21 @@ Best of multiple runs, end-to-end wall clock:
 
 ## Architecture
 
-JAMMA uses NumPy for data loading, kinship, and eigendecomposition, then splits at LMM into a **JAX backend** (JIT, vmap, sharding) or a **NumPy backend** with an optional C extension for OpenMP-parallel Wald tests.
+JAMMA uses NumPy for data loading and kinship. Eigendecomposition defaults to DSYEVD (via numpy) but falls back to DSYEVR (C extension, O(n) workspace) under memory pressure — critical for >100k samples. At LMM it splits into a **JAX backend** (JIT, vmap, sharding) or a **NumPy backend** with an optional C extension for OpenMP-parallel Wald tests.
 
 ```mermaid
 flowchart TD
     CLI["CLI / gwas()"] --> PIPE["PipelineRunner"]
     PIPE --> LOAD["Load PLINK + Phenotypes<br>(NumPy)"]
     LOAD --> KIN["Kinship<br>(NumPy matmul)"]
-    KIN --> EIG["Eigendecomposition<br>(numpy.linalg.eigh)"]
-    EIG --> DET{"detect_backend()"}
+    KIN --> EIGMEM{"DSYEVD fits<br>in memory?"}
+    EIGMEM -->|yes| EIGD["Eigendecomposition<br>(LAPACK DSYEVD · O(n²) workspace)"]
+    EIGMEM -->|no| EIGR["Eigendecomposition<br>(LAPACK DSYEVR · O(n) workspace)"]
+    EIGD --> DET{"detect_backend()"}
+    EIGR --> DET
     DET -->|"jax"| JAX["JAX Streaming Runner<br>JIT + vmap + sharding"]
     DET -->|"numpy"| NP["NumPy Batch Runner"]
-    NP --> CEXT{"C extension<br>available?"}
+    NP --> CEXT{"C LMM extension<br>available?"}
     CEXT -->|yes| C["C Extension<br>OpenMP + SIMD"]
     CEXT -->|no| PY["Pure Python<br>fallback"]
     JAX --> RES["AssocResult"]

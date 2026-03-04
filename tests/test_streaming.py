@@ -2018,3 +2018,133 @@ class TestRotationOverlapEffectivenessStreaming:
                 f"last_run_timing['{key}'] must be float, got {type(val)}"
             )
             assert val >= 0.0, f"last_run_timing['{key}'] must be >= 0, got {val}"
+
+
+@pytest.mark.tier1
+class TestComputeKinshipStreamingSinglePass:
+    """Tests for the single-pass kinship optimization in compute_kinship_streaming."""
+
+    def test_single_pass_matches_two_pass_result(self, sample_plink_data: Path) -> None:
+        """Single-pass (default filters) matches the full-load reference result."""
+        data = load_plink_binary(sample_plink_data)
+        K_ref = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        # Default filters trigger single-pass path
+        K_single = compute_kinship_streaming(
+            sample_plink_data,
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            ksnps_indices=None,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        np.testing.assert_allclose(
+            K_single,
+            K_ref,
+            rtol=1e-10,
+            atol=1e-14,
+            err_msg="Single-pass kinship must match full-load reference (rtol=1e-10)",
+        )
+
+    def test_two_pass_preserved_for_maf_filter(self, sample_plink_data: Path) -> None:
+        """Two-pass path is used when maf_threshold > 0.0."""
+        data = load_plink_binary(sample_plink_data)
+        K_ref = compute_centered_kinship(
+            data.genotypes.astype(np.float64),
+            maf_threshold=0.05,
+            check_memory=False,
+        )
+
+        K_filtered = compute_kinship_streaming(
+            sample_plink_data,
+            maf_threshold=0.05,
+            miss_threshold=1.0,
+            ksnps_indices=None,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        np.testing.assert_allclose(
+            K_filtered,
+            K_ref,
+            rtol=1e-10,
+            atol=1e-14,
+            err_msg="Two-pass kinship with maf_threshold=0.05 must match full-load",
+        )
+
+    def test_two_pass_preserved_for_miss_filter(self, sample_plink_data: Path) -> None:
+        """Two-pass path is used when miss_threshold < 1.0."""
+        data = load_plink_binary(sample_plink_data)
+        K_ref = compute_centered_kinship(
+            data.genotypes.astype(np.float64),
+            miss_threshold=0.9,
+            check_memory=False,
+        )
+
+        K_filtered = compute_kinship_streaming(
+            sample_plink_data,
+            maf_threshold=0.0,
+            miss_threshold=0.9,
+            ksnps_indices=None,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        np.testing.assert_allclose(
+            K_filtered,
+            K_ref,
+            rtol=1e-10,
+            atol=1e-14,
+            err_msg="Two-pass kinship with miss_threshold=0.9 must match full-load",
+        )
+
+    def test_two_pass_preserved_for_ksnps_restriction(
+        self, sample_plink_data: Path
+    ) -> None:
+        """Two-pass path is used when ksnps_indices is provided."""
+        data = load_plink_binary(sample_plink_data)
+        n_snps = data.genotypes.shape[1]
+        # Restrict to first 200 SNPs
+        ksnps_indices = np.arange(min(200, n_snps))
+
+        K_ksnps = compute_kinship_streaming(
+            sample_plink_data,
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            ksnps_indices=ksnps_indices,
+            check_memory=False,
+            show_progress=False,
+        )
+
+        # Compute reference by subsetting genotypes
+        K_ref = compute_centered_kinship(
+            data.genotypes[:, ksnps_indices].astype(np.float64),
+            check_memory=False,
+        )
+
+        np.testing.assert_allclose(
+            K_ksnps,
+            K_ref,
+            rtol=1e-10,
+            atol=1e-14,
+            err_msg="Two-pass kinship with ksnps_indices must match reference",
+        )
+
+    def test_single_pass_symmetry(self, sample_plink_data: Path) -> None:
+        """Single-pass kinship produces a symmetric matrix."""
+        K = compute_kinship_streaming(
+            sample_plink_data,
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            ksnps_indices=None,
+            check_memory=False,
+            show_progress=False,
+        )
+        np.testing.assert_allclose(
+            K,
+            K.T,
+            err_msg="Single-pass kinship must be symmetric",
+        )

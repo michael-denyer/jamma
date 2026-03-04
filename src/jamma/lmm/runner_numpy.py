@@ -87,6 +87,40 @@ def compute_pipeline_core_split(n_samples: int, total_cores: int) -> tuple[int, 
     return rot, max(1, total_cores - rot)
 
 
+def compute_adaptive_core_split(
+    rot_time: float,
+    compute_time: float,
+    total_cores: int,
+    *,
+    n_samples: int = 0,
+) -> tuple[int, int]:
+    """Compute rotation/compute thread split from measured first-chunk times.
+
+    Allocates threads proportionally to observed rotation vs compute wall time.
+    Falls back to static heuristic when profiling data is degenerate (both
+    times near zero, which happens on small datasets where profiling overhead
+    dominates).
+
+    Args:
+        rot_time: Wall time for first-chunk rotation (UT@G DGEMM), seconds.
+        compute_time: Wall time for first-chunk compute (C extension), seconds.
+        total_cores: Physical core count available.
+        n_samples: Sample count for static fallback (only used when times are
+            degenerate).
+
+    Returns:
+        (rotation_threads, compute_threads) tuple. Both >= 1.
+    """
+    total_time = rot_time + compute_time
+    if total_time < 0.01:  # < 10ms: profiling not meaningful, use static
+        return compute_pipeline_core_split(n_samples, total_cores)
+
+    rot_fraction = rot_time / total_time
+    rot_threads = max(1, min(total_cores - 1, round(total_cores * rot_fraction)))
+    compute_threads = max(1, total_cores - rot_threads)
+    return rot_threads, compute_threads
+
+
 def _compute_chunk_size_numpy(
     n_samples: int,
     n_filtered: int,
@@ -522,13 +556,6 @@ def run_lmm_association_numpy(
         actual_len = chunk_end - chunk_start
         return uab_var_soa, actual_len
 
-    if show_progress and n_chunks > 1:
-        chunk_iterator = progress_iterator(
-            chunk_starts, total=n_chunks, desc="LMM association"
-        )
-    else:
-        chunk_iterator = iter(chunk_starts)
-
     def _compute_and_write(uab_var_soa: np.ndarray, actual_len: int) -> None:
         """Run Wald C extension compute on a chunk and write results.
 
@@ -569,13 +596,79 @@ def run_lmm_association_numpy(
     if use_pipeline:
         # Pipelined: overlap rotation of chunk N+1 with C compute of chunk N.
         # Both operations release the GIL so they run concurrently.
+
+        # --- Profile first chunk for adaptive core split ---
+        # Prepare chunk 0 (rotation) and compute it inline to measure both
+        # stage durations. Re-derive thread split from measured times so
+        # remaining chunks use an empirically correct allocation.
         t_rot_start = time.perf_counter()
-        current = _prepare_chunk(chunk_starts[0])
+        uab_var_soa_first, actual_len_first = _prepare_chunk(chunk_starts[0])
+        t_first_rot = time.perf_counter() - t_rot_start
+        t_rotation_total += t_first_rot
+
+        t_compute_start = time.perf_counter()
+        _compute_and_write(uab_var_soa_first, actual_len_first)
+        t_first_compute = time.perf_counter() - t_compute_start
+        del uab_var_soa_first
+
+        # Re-derive core split from measured times (only if chunks remain and
+        # BLAS is controllable — uncontrollable BLAS ignores thread settings).
+        if n_chunks > 2 and is_blas_controllable():
+            old_rot = pipeline_rot_threads
+            old_omp = pipeline_omp_threads
+            pipeline_rot_threads, pipeline_omp_threads = compute_adaptive_core_split(
+                t_first_rot,
+                t_first_compute,
+                total_cores,
+                n_samples=n_samples,
+            )
+            if (pipeline_rot_threads, pipeline_omp_threads) != (old_rot, old_omp):
+                logger.debug(
+                    f"Adaptive core split: {old_rot}/{old_omp} -> "
+                    f"{pipeline_rot_threads}/{pipeline_omp_threads} "
+                    f"(rot={t_first_rot:.3f}s, compute={t_first_compute:.3f}s)"
+                )
+
+        # Process remaining chunks with the (possibly updated) adaptive split.
+        # remaining_starts is always non-empty: use_pipeline requires
+        # n_chunks >= _MIN_PIPELINE_CHUNKS (30), so at least 29 remain.
+        remaining_starts = chunk_starts[1:]
+
+        # Seed the pipeline by preparing the first remaining chunk.
+        # _prepare_chunk reads pipeline_rot_threads from this scope, so it
+        # uses the updated adaptive split from this point onward.
+        t_rot_start = time.perf_counter()
+        current = _prepare_chunk(remaining_starts[0])
         t_rotation_total += time.perf_counter() - t_rot_start
-        next(chunk_iterator)  # consume first element
+
+        # Progress tracking for the pipeline loop. Two chunks already
+        # processed (profiled chunk + seed chunk), so initialise at 2.
+        pipeline_bar = None
+        if show_progress and n_chunks > 1:
+            import sys
+
+            import progressbar as _pb
+
+            widgets = [
+                "LMM association: ",
+                _pb.Counter(),
+                f"/{n_chunks} ",
+                _pb.Percentage(),
+                " ",
+                _pb.Bar(),
+                " ",
+                _pb.Timer(),
+                " ",
+                _pb.ETA(),
+            ]
+            pipeline_bar = _pb.ProgressBar(
+                max_value=n_chunks, widgets=widgets, fd=sys.stdout
+            )
+            pipeline_bar.start()
+            pipeline_bar.update(2)  # profiled + seeded chunks
 
         with ThreadPoolExecutor(max_workers=1) as executor:
-            for _i, chunk_start in enumerate(chunk_iterator, start=1):
+            for i_chunk, chunk_start in enumerate(remaining_starts[1:], start=3):
                 uab_var_soa, actual_len = current
 
                 # Submit next chunk preparation (runs in background thread)
@@ -602,12 +695,25 @@ def run_lmm_association_numpy(
                     ) from exc
                 t_rotation_total += time.perf_counter() - t_rot_start
 
+                if pipeline_bar is not None:
+                    pipeline_bar.update(i_chunk)
+
             # Process last chunk (no next chunk to overlap with)
             uab_var_soa, actual_len = current
             _compute_and_write(uab_var_soa, actual_len)
             del uab_var_soa
+
+        if pipeline_bar is not None:
+            pipeline_bar.update(n_chunks)
+            pipeline_bar.finish()
     else:
         # Sequential path (non-split modes or single chunk)
+        if show_progress and n_chunks > 1:
+            chunk_iterator = progress_iterator(
+                chunk_starts, total=n_chunks, desc="LMM association"
+            )
+        else:
+            chunk_iterator = iter(chunk_starts)
 
         def _run_lmm_chunk(Uab_batch: np.ndarray) -> dict:
             """Run LMM compute on a Uab batch with BLAS thread control."""

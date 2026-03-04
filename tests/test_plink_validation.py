@@ -69,6 +69,19 @@ class TestValidateGenotypeValues:
         chunk = np.full((3, 4), np.nan, dtype=np.float32)
         assert validate_genotype_values(chunk) == 0
 
+    def test_single_unexpected_value(self) -> None:
+        """Chunk with exactly one unexpected value returns 1."""
+        chunk = np.array([[0.0, 1.0, 2.0], [np.nan, 3.5, 1.0]], dtype=np.float32)
+        assert validate_genotype_values(chunk) == 1
+
+    def test_boundary_values_valid(self) -> None:
+        """Values 0.0, 1.0, 2.0 are all valid; 0.5, 1.5, 2.5 are not."""
+        chunk_valid = np.array([[0.0, 1.0, 2.0]], dtype=np.float32)
+        assert validate_genotype_values(chunk_valid) == 0
+
+        chunk_invalid = np.array([[0.5, 1.5, 2.5]], dtype=np.float32)
+        assert validate_genotype_values(chunk_invalid) == 3
+
 
 @pytest.mark.tier0
 class TestCountLinesFast:

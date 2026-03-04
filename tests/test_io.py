@@ -137,37 +137,8 @@ class TestReadCovariateFile:
         assert covariates.shape == (2, 3)
         np.testing.assert_array_equal(indicator, [1, 1])
 
-    def test_covariate_empty_file_error(self, tmp_path: Path) -> None:
-        """Verify ValueError for empty file."""
-        cov_file = tmp_path / "empty.txt"
-        cov_file.write_text("")
-
-        with pytest.raises(ValueError, match="empty"):
-            read_covariate_file(cov_file)
-
-    def test_covariate_whitespace_only_file_error(self, tmp_path: Path) -> None:
-        """Verify ValueError for file with only whitespace."""
-        cov_file = tmp_path / "whitespace.txt"
-        cov_file.write_text("   \n\t\n  \n")
-
-        with pytest.raises(ValueError, match="empty"):
-            read_covariate_file(cov_file)
-
-    def test_covariate_column_mismatch_error(self, tmp_path: Path) -> None:
-        """Verify ValueError for inconsistent column counts."""
-        cov_file = tmp_path / "covariates.txt"
-        cov_file.write_text("1 35.0 0\n1 42.0\n")  # Row 2 missing column
-
-        with pytest.raises(ValueError, match="column"):
-            read_covariate_file(cov_file)
-
-    def test_covariate_non_numeric_error(self, tmp_path: Path) -> None:
-        """Verify ValueError for non-numeric values (not NA)."""
-        cov_file = tmp_path / "covariates.txt"
-        cov_file.write_text("1 abc 0\n")
-
-        with pytest.raises(ValueError, match="abc"):
-            read_covariate_file(cov_file)
+    # Covariate error-path tests (empty, whitespace, column mismatch, non-numeric)
+    # live in test_error_paths.py::TestCovariateErrorPaths to avoid duplication.
 
     def test_covariate_na_case_sensitive(self, tmp_path: Path) -> None:
         """Verify NA is case-sensitive (lowercase 'na' is invalid)."""

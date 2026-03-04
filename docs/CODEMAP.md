@@ -26,6 +26,7 @@ flowchart TB
         KINSHIP["Kinship Compute [3a]"]
         MISSING["Missing Imputation [3b]"]
         EIGEN["Eigendecomposition [3c]"]
+        EIGACCEL["C Eigen Extension [3c]"]
         LIKE["REML Likelihood [3d]"]
         OPT["Lambda Optimizer [3e]"]
         STATS["Test Statistics [3f]"]
@@ -128,6 +129,9 @@ flowchart TB
     COMPUTENP --> LIKENP
     LIKENP --> SPECIAL
 
+    %% Eigen C extension
+    EIGEN --> EIGACCEL
+
     %% Shared connections
     PREPCOM --> EIGEN
     LIKEJAX --> LIKE
@@ -196,6 +200,8 @@ GEMMA algorithm reimplementation: kinship → eigendecomp → REML → test stat
 | 3a | `_filter_snps()` | MAF, missing rate, monomorphism filters | [compute.py:53](../src/jamma/kinship/compute.py#L53) |
 | 3b | `impute_and_center()` | NaN → mean, then center (in-place for NumPy arrays) | [missing.py:21](../src/jamma/kinship/missing.py#L21) |
 | 3c | `eigendecompose_kinship()` | Memory-aware DSYEVD/DSYEVR dispatch with BLAS thread control | [eigen.py:28](../src/jamma/lmm/eigen.py#L28) |
+| 3c | `eigh_dsyevr()` | C extension: DSYEVR eigendecomposition with O(n) workspace (enables >100k samples) | [_eigen_accel.c](../src/jamma/lmm/_eigen_accel.c) |
+| 3c | `_compile_eigen.py` | Post-install C eigen extension compilation | [_compile_eigen.py](../src/jamma/lmm/_compile_eigen.py) |
 | 3d | `reml_log_likelihood()` | REML ℓ(λ) for variance component estimation | [likelihood.py:262](../src/jamma/lmm/likelihood.py#L262) |
 | 3d | `mle_log_likelihood()` | MLE ℓ(λ) for LRT | [likelihood.py:533](../src/jamma/lmm/likelihood.py#L533) |
 | 3d | `compute_Uab()` | Element-wise products of rotated vectors | [likelihood.py:74](../src/jamma/lmm/likelihood.py#L74) |

@@ -133,7 +133,7 @@ def _lazy_init_dsyevr() -> None:
 
 # For matrices >= this size, use sampled symmetry check instead of full np.allclose.
 # Full check allocates an n*n temporary; at 100k samples that is ~80GB.
-_SAMPLED_SYMMETRY_THRESHOLD = 10_000
+_SAMPLED_SYMMETRY_THRESHOLD = 5_000
 
 # Symmetry check tolerance; matches LAPACK precision expectations.
 _SYMMETRY_ATOL = 1e-11

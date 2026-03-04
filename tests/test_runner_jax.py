@@ -8,7 +8,6 @@ import pytest
 pytest.importorskip("jax")
 
 from jamma.kinship import compute_centered_kinship
-from jamma.lmm.chunk import MAX_SAFE_CHUNK, _compute_chunk_size, auto_tune_chunk_size
 from jamma.lmm.runner_jax import run_lmm_association_jax
 from jamma.validation import compare_assoc_results, load_gemma_assoc
 from tests.conftest import load_phenotypes_from_fam
@@ -66,40 +65,7 @@ def _make_synthetic_gwas_data(
     return genotypes, phenotype, snp_info
 
 
-@pytest.mark.tier0
-class TestChunkSizeComputation:
-    """Tests for chunk size calculation to avoid int32 overflow."""
-
-    def test_small_dataset_no_chunking(self):
-        """Small datasets should not be chunked."""
-        chunk = _compute_chunk_size(n_snps=10_000)
-        assert chunk == 10_000  # Full dataset
-
-    def test_large_dataset_is_chunked(self):
-        """Large datasets should be chunked at MAX_SAFE_CHUNK."""
-        chunk = _compute_chunk_size(n_snps=95_000)
-        assert chunk == MAX_SAFE_CHUNK  # Capped at 50k
-
-    def test_chunk_size_caps_at_max_safe(self):
-        """Chunk size is capped at MAX_SAFE_CHUNK regardless of n_snps."""
-        chunk = _compute_chunk_size(n_snps=100_000)
-        assert chunk == MAX_SAFE_CHUNK
-
-    def test_auto_tune_respects_max_chunk(self):
-        """auto_tune_chunk_size should not exceed MAX_SAFE_CHUNK."""
-        # Even with lots of memory budget, should cap at MAX_SAFE_CHUNK
-        chunk = auto_tune_chunk_size(
-            n_samples=1000, n_filtered=1_000_000, mem_budget_gb=100.0
-        )
-        assert chunk <= MAX_SAFE_CHUNK
-
-    def test_auto_tune_respects_filtered_count(self):
-        """auto_tune_chunk_size should not exceed n_filtered when above min_chunk."""
-        # With n_filtered > min_chunk (1000 default), should respect n_filtered
-        chunk = auto_tune_chunk_size(
-            n_samples=1000, n_filtered=5000, mem_budget_gb=10.0
-        )
-        assert chunk <= 5000
+# Chunk-size computation tests live in test_auto_tune_chunk.py to avoid duplication.
 
 
 @pytest.mark.tier1

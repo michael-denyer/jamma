@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import gc
 import time
+import warnings
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -437,6 +438,70 @@ def compute_loco_kinship(
         yield (chr_name, K_loco)
 
 
+def _kinship_single_pass(
+    bed_path: Path,
+    n_samples: int,
+    n_snps: int,
+    chunk_size: int,
+    show_progress: bool,
+) -> np.ndarray:
+    """Single-pass kinship: compute stats and accumulate in one BED read.
+
+    Only valid when no MAF/missing filters are active (maf_threshold=0.0,
+    miss_threshold>=1.0, ksnps_indices=None). Monomorphism filtering
+    (variance > 0) is applied per-chunk inline, matching the two-pass result.
+
+    Args:
+        bed_path: Path prefix for PLINK files.
+        n_samples: Number of samples.
+        n_snps: Total number of SNPs.
+        chunk_size: Number of SNPs per chunk.
+        show_progress: Whether to show progress bar.
+
+    Returns:
+        Kinship matrix (n_samples, n_samples).
+
+    Raises:
+        ValueError: If no SNPs pass monomorphism filter.
+    """
+    K = np.zeros((n_samples, n_samples), dtype=np.float64)
+    n_filtered = 0
+
+    chunk_iter = stream_genotype_chunks(
+        bed_path, chunk_size=chunk_size, dtype=np.float64, show_progress=False
+    )
+    if show_progress:
+        n_chunks = (n_snps + chunk_size - 1) // chunk_size
+        chunk_iter = progress_iterator(
+            chunk_iter, total=n_chunks, desc="Computing kinship (single-pass)"
+        )
+
+    for chunk, _start, _end in chunk_iter:
+        # Per-chunk monomorphism filter: exclude constant genotype columns.
+        # Suppress RuntimeWarning for all-NaN columns (no valid samples in chunk).
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            col_vars = np.nanvar(chunk, axis=0)
+        poly_mask = col_vars > 0
+        n_poly = np.count_nonzero(poly_mask)
+        if n_poly == 0:
+            continue
+
+        X_chunk = chunk[:, poly_mask]
+        X_centered = impute_and_center(X_chunk)
+        K = _accumulate_kinship(K, X_centered)
+        n_filtered += n_poly
+        del chunk, X_chunk, X_centered
+
+    if n_filtered == 0:
+        raise ValueError(
+            f"No SNPs passed monomorphism filter. Original SNP count: {n_snps}"
+        )
+
+    K /= n_filtered
+    return K
+
+
 def compute_kinship_streaming(
     bed_path: Path,
     chunk_size: int = 10_000,
@@ -522,6 +587,21 @@ def compute_kinship_streaming(
             operation=f"GWAS pipeline (eigendecomp peak: {est.total_peak_gb:.1f}GB)",
         )
 
+    # Single-pass optimization: when no MAF/missing filters are active and
+    # no ksnps restriction, monomorphism filtering can be done inline per-chunk.
+    # This eliminates the stats-only BED read (pass 1), halving I/O at scale
+    # (e.g. ~76 GB saved at 200k samples x 95k SNPs).
+    use_single_pass = (
+        maf_threshold == 0.0 and miss_threshold >= 1.0 and ksnps_indices is None
+    )
+
+    if use_single_pass:
+        logger.debug("Kinship: single-pass mode (no MAF/missing filters)")
+        K = _kinship_single_pass(bed_path, n_samples, n_snps, chunk_size, show_progress)
+        elapsed = time.perf_counter() - start_time
+        logger.info(f"Kinship matrix computed in {elapsed:.2f}s")
+        return K
+
     # === PASS 1: Compute per-SNP statistics for filtering ===
     # Always compute stats for monomorphic filtering (GEMMA behavior)
     all_means = np.zeros(n_snps, dtype=np.float64)
@@ -539,7 +619,8 @@ def compute_kinship_streaming(
 
     for chunk, start, end in stats_iterator:
         chunk_miss_counts = np.sum(np.isnan(chunk), axis=0)
-        with np.errstate(invalid="ignore"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
             chunk_means = np.nanmean(chunk, axis=0)
             chunk_vars = np.nanvar(chunk, axis=0)
         chunk_means = np.nan_to_num(chunk_means, nan=0.0)
@@ -886,7 +967,8 @@ def compute_loco_kinship_streaming(
 
     for chunk, start, end in stats_iterator:
         chunk_miss_counts = np.sum(np.isnan(chunk), axis=0)
-        with np.errstate(invalid="ignore"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
             chunk_means = np.nanmean(chunk, axis=0)
             chunk_vars = np.nanvar(chunk, axis=0)
         chunk_means = np.nan_to_num(chunk_means, nan=0.0)

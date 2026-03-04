@@ -15,37 +15,38 @@ from jamma.io.snp_list import read_snp_list_file, resolve_snp_list_to_indices
 class TestReadSnpListFile:
     """Tests for read_snp_list_file."""
 
-    def test_read_snp_list_basic(self, tmp_path):
-        """Basic file with 3 RS IDs returns correct set."""
+    @pytest.mark.parametrize(
+        "content,expected",
+        [
+            pytest.param(
+                "rs001\nrs002\nrs003\n",
+                {"rs001", "rs002", "rs003"},
+                id="basic",
+            ),
+            pytest.param(
+                "  rs001  \n\trs002\t\n rs003 \n",
+                {"rs001", "rs002", "rs003"},
+                id="strips_whitespace",
+            ),
+            pytest.param(
+                "rs001\n\n\nrs002\n\nrs003\n",
+                {"rs001", "rs002", "rs003"},
+                id="skips_empty_lines",
+            ),
+            pytest.param(
+                "rs123 1 A T\nrs456 2 G C\nrs789 3 T A\n",
+                {"rs123", "rs456", "rs789"},
+                id="first_token_only",
+            ),
+        ],
+    )
+    def test_read_snp_list_parsing(self, tmp_path, content, expected):
+        """read_snp_list_file handles whitespace, empty lines, and extra columns."""
         snp_file = tmp_path / "snps.txt"
-        snp_file.write_text("rs001\nrs002\nrs003\n")
+        snp_file.write_text(content)
 
         result = read_snp_list_file(snp_file)
-        assert result == {"rs001", "rs002", "rs003"}
-
-    def test_read_snp_list_strips_whitespace(self, tmp_path):
-        """Lines with leading/trailing whitespace are stripped."""
-        snp_file = tmp_path / "snps.txt"
-        snp_file.write_text("  rs001  \n\trs002\t\n rs003 \n")
-
-        result = read_snp_list_file(snp_file)
-        assert result == {"rs001", "rs002", "rs003"}
-
-    def test_read_snp_list_skips_empty_lines(self, tmp_path):
-        """Blank lines interspersed are skipped."""
-        snp_file = tmp_path / "snps.txt"
-        snp_file.write_text("rs001\n\n\nrs002\n\nrs003\n")
-
-        result = read_snp_list_file(snp_file)
-        assert result == {"rs001", "rs002", "rs003"}
-
-    def test_read_snp_list_first_token_only(self, tmp_path):
-        """Lines with extra columns use only the first token."""
-        snp_file = tmp_path / "snps.txt"
-        snp_file.write_text("rs123 1 A T\nrs456 2 G C\nrs789 3 T A\n")
-
-        result = read_snp_list_file(snp_file)
-        assert result == {"rs123", "rs456", "rs789"}
+        assert result == expected
 
     def test_read_snp_list_file_not_found(self, tmp_path):
         """Raises FileNotFoundError for missing file."""

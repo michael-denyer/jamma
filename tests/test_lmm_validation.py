@@ -1949,18 +1949,26 @@ class TestMouseHS1940Validation:
     Tests cover all LMM modes (1-4) with and without covariates.
     """
 
-    def test_mouse_hs1940_lrt_no_covar(
-        self, hs1940_data, hs1940_phenotypes, hs1940_kinship
+    @pytest.mark.parametrize(
+        "lmm_mode,reference_path",
+        [
+            pytest.param(2, MOUSE_HS1940_LRT, id="lrt"),
+            pytest.param(3, MOUSE_HS1940_SCORE, id="score"),
+            pytest.param(4, MOUSE_HS1940_ALL, id="all"),
+        ],
+    )
+    def test_mouse_hs1940_no_covar(
+        self, hs1940_data, hs1940_phenotypes, hs1940_kinship, lmm_mode, reference_path
     ):
-        """Mouse HS1940 LRT (mode 2, no covariates) matches GEMMA."""
-        reference_results = load_gemma_assoc(MOUSE_HS1940_LRT)
+        """Mouse HS1940 (no covariates) matches GEMMA for each mode."""
+        reference_results = load_gemma_assoc(reference_path)
 
         jamma_results = run_lmm_association_jax(
             genotypes=hs1940_data.genotypes,
             phenotypes=hs1940_phenotypes,
             kinship=hs1940_kinship,
             snp_info=_build_snp_info(hs1940_data),
-            lmm_mode=2,
+            lmm_mode=lmm_mode,
             show_progress=False,
             check_memory=False,
         )
@@ -1970,53 +1978,26 @@ class TestMouseHS1940Validation:
         )
         assert comparison.passed, _format_comparison_failure(comparison)
 
-    def test_mouse_hs1940_score_no_covar(
-        self, hs1940_data, hs1940_phenotypes, hs1940_kinship
+    @pytest.mark.parametrize(
+        "lmm_mode,reference_path",
+        [
+            pytest.param(1, MOUSE_HS1940_COVAR_WALD, id="wald"),
+            pytest.param(2, MOUSE_HS1940_COVAR_LRT, id="lrt"),
+            pytest.param(3, MOUSE_HS1940_COVAR_SCORE, id="score"),
+            pytest.param(4, MOUSE_HS1940_COVAR_ALL, id="all"),
+        ],
+    )
+    def test_mouse_hs1940_covar(
+        self,
+        hs1940_data,
+        hs1940_phenotypes,
+        hs1940_kinship,
+        hs1940_covariates,
+        lmm_mode,
+        reference_path,
     ):
-        """Mouse HS1940 Score test (mode 3, no covariates) matches GEMMA."""
-        reference_results = load_gemma_assoc(MOUSE_HS1940_SCORE)
-
-        jamma_results = run_lmm_association_jax(
-            genotypes=hs1940_data.genotypes,
-            phenotypes=hs1940_phenotypes,
-            kinship=hs1940_kinship,
-            snp_info=_build_snp_info(hs1940_data),
-            lmm_mode=3,
-            show_progress=False,
-            check_memory=False,
-        )
-
-        comparison = compare_assoc_results(
-            jamma_results, reference_results, config=MOUSE_HS1940_TOLERANCES
-        )
-        assert comparison.passed, _format_comparison_failure(comparison)
-
-    def test_mouse_hs1940_all_no_covar(
-        self, hs1940_data, hs1940_phenotypes, hs1940_kinship
-    ):
-        """Mouse HS1940 all-tests (mode 4, no covariates) matches GEMMA."""
-        reference_results = load_gemma_assoc(MOUSE_HS1940_ALL)
-
-        jamma_results = run_lmm_association_jax(
-            genotypes=hs1940_data.genotypes,
-            phenotypes=hs1940_phenotypes,
-            kinship=hs1940_kinship,
-            snp_info=_build_snp_info(hs1940_data),
-            lmm_mode=4,
-            show_progress=False,
-            check_memory=False,
-        )
-
-        comparison = compare_assoc_results(
-            jamma_results, reference_results, config=MOUSE_HS1940_TOLERANCES
-        )
-        assert comparison.passed, _format_comparison_failure(comparison)
-
-    def test_mouse_hs1940_covar_wald(
-        self, hs1940_data, hs1940_phenotypes, hs1940_kinship, hs1940_covariates
-    ):
-        """Mouse HS1940 Wald (mode 1, with covariates) matches GEMMA."""
-        reference_results = load_gemma_assoc(MOUSE_HS1940_COVAR_WALD)
+        """Mouse HS1940 (with covariates) matches GEMMA for each mode."""
+        reference_results = load_gemma_assoc(reference_path)
 
         jamma_results = run_lmm_association_jax(
             genotypes=hs1940_data.genotypes,
@@ -2024,73 +2005,7 @@ class TestMouseHS1940Validation:
             kinship=hs1940_kinship,
             snp_info=_build_snp_info(hs1940_data),
             covariates=hs1940_covariates,
-            lmm_mode=1,
-            show_progress=False,
-            check_memory=False,
-        )
-
-        comparison = compare_assoc_results(
-            jamma_results, reference_results, config=MOUSE_HS1940_TOLERANCES
-        )
-        assert comparison.passed, _format_comparison_failure(comparison)
-
-    def test_mouse_hs1940_covar_lrt(
-        self, hs1940_data, hs1940_phenotypes, hs1940_kinship, hs1940_covariates
-    ):
-        """Mouse HS1940 LRT (mode 2, with covariates) matches GEMMA."""
-        reference_results = load_gemma_assoc(MOUSE_HS1940_COVAR_LRT)
-
-        jamma_results = run_lmm_association_jax(
-            genotypes=hs1940_data.genotypes,
-            phenotypes=hs1940_phenotypes,
-            kinship=hs1940_kinship,
-            snp_info=_build_snp_info(hs1940_data),
-            covariates=hs1940_covariates,
-            lmm_mode=2,
-            show_progress=False,
-            check_memory=False,
-        )
-
-        comparison = compare_assoc_results(
-            jamma_results, reference_results, config=MOUSE_HS1940_TOLERANCES
-        )
-        assert comparison.passed, _format_comparison_failure(comparison)
-
-    def test_mouse_hs1940_covar_score(
-        self, hs1940_data, hs1940_phenotypes, hs1940_kinship, hs1940_covariates
-    ):
-        """Mouse HS1940 Score (mode 3, with covariates) matches GEMMA."""
-        reference_results = load_gemma_assoc(MOUSE_HS1940_COVAR_SCORE)
-
-        jamma_results = run_lmm_association_jax(
-            genotypes=hs1940_data.genotypes,
-            phenotypes=hs1940_phenotypes,
-            kinship=hs1940_kinship,
-            snp_info=_build_snp_info(hs1940_data),
-            covariates=hs1940_covariates,
-            lmm_mode=3,
-            show_progress=False,
-            check_memory=False,
-        )
-
-        comparison = compare_assoc_results(
-            jamma_results, reference_results, config=MOUSE_HS1940_TOLERANCES
-        )
-        assert comparison.passed, _format_comparison_failure(comparison)
-
-    def test_mouse_hs1940_covar_all(
-        self, hs1940_data, hs1940_phenotypes, hs1940_kinship, hs1940_covariates
-    ):
-        """Mouse HS1940 all-tests (mode 4, with covariates) matches GEMMA."""
-        reference_results = load_gemma_assoc(MOUSE_HS1940_COVAR_ALL)
-
-        jamma_results = run_lmm_association_jax(
-            genotypes=hs1940_data.genotypes,
-            phenotypes=hs1940_phenotypes,
-            kinship=hs1940_kinship,
-            snp_info=_build_snp_info(hs1940_data),
-            covariates=hs1940_covariates,
-            lmm_mode=4,
+            lmm_mode=lmm_mode,
             show_progress=False,
             check_memory=False,
         )

@@ -174,7 +174,7 @@ Supports arbitrary covariates (n_cvt >= 1).
 
 ### JAMMA JAX Path (runner_jax.py)
 
-Supports arbitrary covariates (n_cvt >= 1) since v1.2 (Phase 11).
+Supports arbitrary covariates (n_cvt >= 1) since v1.2.
 
 ### Status: **Aligned**
 

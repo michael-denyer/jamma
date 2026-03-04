@@ -344,134 +344,60 @@ def test_chunk_size_auto_scales_with_memory():
 # ---------------------------------------------------------------------------
 
 
-def test_numpy_runner_wald_synthetic(synthetic_data):
-    """Mode 1 (Wald): NumPy runner matches GEMMA reference on gemma_synthetic."""
+_SYNTHETIC_MODE_REFS = [
+    pytest.param(1, SYNTHETIC_REFERENCE, id="wald"),
+    pytest.param(2, SYNTHETIC_LRT_REFERENCE, id="lrt"),
+    pytest.param(3, SCORE_REFERENCE, id="score"),
+    pytest.param(4, ALL_TESTS_REFERENCE, id="all"),
+]
+
+
+@pytest.mark.parametrize("lmm_mode,reference_path", _SYNTHETIC_MODE_REFS)
+def test_numpy_runner_synthetic(synthetic_data, lmm_mode, reference_path):
+    """NumPy runner matches GEMMA reference on gemma_synthetic for each mode."""
     plink, kinship, phenotypes, snp_info = synthetic_data
     results = run_lmm_association_numpy(
         genotypes=plink.genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,
-        lmm_mode=1,
+        lmm_mode=lmm_mode,
         show_progress=False,
     )
-    reference = load_gemma_assoc(SYNTHETIC_REFERENCE)
+    reference = load_gemma_assoc(reference_path)
     tolerances = ToleranceConfig(lambda_rtol=5e-5)
     comparison = compare_assoc_results(results, reference, tolerances)
     assert comparison.passed, (
-        f"NumPy Wald (synthetic) vs GEMMA comparison failed:\n{comparison}"
+        f"NumPy mode {lmm_mode} (synthetic) vs GEMMA failed:\n{comparison}"
     )
+
+
+_MOUSE_HS1940_MODE_REFS = [
+    pytest.param(2, MOUSE_HS1940_LRT, id="lrt"),
+    pytest.param(3, MOUSE_HS1940_SCORE, id="score"),
+    pytest.param(4, MOUSE_HS1940_ALL, id="all"),
+]
 
 
 @pytest.mark.slow
 @pytest.mark.tier2
-def test_numpy_runner_lrt_mouse_hs1940(mouse_hs1940_data):
-    """Mode 2 (LRT): NumPy runner matches GEMMA on mouse_hs1940 (1410 samples)."""
+@pytest.mark.parametrize("lmm_mode,reference_path", _MOUSE_HS1940_MODE_REFS)
+def test_numpy_runner_mouse_hs1940(mouse_hs1940_data, lmm_mode, reference_path):
+    """NumPy runner matches GEMMA on mouse_hs1940 for each mode."""
     plink, kinship, phenotypes, snp_info = mouse_hs1940_data
     results = run_lmm_association_numpy(
         genotypes=plink.genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,
-        lmm_mode=2,
+        lmm_mode=lmm_mode,
         show_progress=False,
     )
-    reference = load_gemma_assoc(MOUSE_HS1940_LRT)
+    reference = load_gemma_assoc(reference_path)
     comparison = compare_assoc_results(results, reference, NUMPY_GEMMA_TOLERANCES)
     assert comparison.passed, (
-        f"NumPy LRT (mouse_hs1940) vs GEMMA comparison failed:\n{comparison}"
+        f"NumPy mode {lmm_mode} (mouse_hs1940) vs GEMMA failed:\n{comparison}"
     )
-
-
-@pytest.mark.slow
-@pytest.mark.tier2
-def test_numpy_runner_score_mouse_hs1940(mouse_hs1940_data):
-    """Mode 3 (Score): NumPy runner matches GEMMA on mouse_hs1940."""
-    plink, kinship, phenotypes, snp_info = mouse_hs1940_data
-    results = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
-        phenotypes=phenotypes,
-        kinship=kinship,
-        snp_info=snp_info,
-        lmm_mode=3,
-        show_progress=False,
-    )
-    reference = load_gemma_assoc(MOUSE_HS1940_SCORE)
-    comparison = compare_assoc_results(results, reference, NUMPY_GEMMA_TOLERANCES)
-    assert comparison.passed, (
-        f"NumPy Score (mouse_hs1940) vs GEMMA comparison failed:\n{comparison}"
-    )
-
-
-@pytest.mark.slow
-@pytest.mark.tier2
-def test_numpy_runner_all_mouse_hs1940(mouse_hs1940_data):
-    """Mode 4 (All): NumPy runner matches GEMMA on mouse_hs1940 for Wald+LRT+Score."""
-    plink, kinship, phenotypes, snp_info = mouse_hs1940_data
-    results = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
-        phenotypes=phenotypes,
-        kinship=kinship,
-        snp_info=snp_info,
-        lmm_mode=4,
-        show_progress=False,
-    )
-    reference = load_gemma_assoc(MOUSE_HS1940_ALL)
-    comparison = compare_assoc_results(results, reference, NUMPY_GEMMA_TOLERANCES)
-    assert comparison.passed, (
-        f"NumPy All (mouse_hs1940) vs GEMMA comparison failed:\n{comparison}"
-    )
-
-
-def test_numpy_runner_lrt_synthetic(synthetic_data):
-    """Mode 2 (LRT): NumPy runner matches GEMMA gemma_lrt.assoc.txt reference."""
-    plink, kinship, phenotypes, snp_info = synthetic_data
-    results = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
-        phenotypes=phenotypes,
-        kinship=kinship,
-        snp_info=snp_info,
-        lmm_mode=2,
-        show_progress=False,
-    )
-    reference = load_gemma_assoc(SYNTHETIC_LRT_REFERENCE)
-    tolerances = ToleranceConfig(lambda_rtol=5e-5)
-    comparison = compare_assoc_results(results, reference, tolerances)
-    assert comparison.passed, f"NumPy LRT (synthetic) vs GEMMA failed:\n{comparison}"
-
-
-def test_numpy_runner_score_synthetic(synthetic_data):
-    """Mode 3 (Score): NumPy runner matches GEMMA gemma_score.assoc.txt reference."""
-    plink, kinship, phenotypes, snp_info = synthetic_data
-    results = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
-        phenotypes=phenotypes,
-        kinship=kinship,
-        snp_info=snp_info,
-        lmm_mode=3,
-        show_progress=False,
-    )
-    reference = load_gemma_assoc(SCORE_REFERENCE)
-    tolerances = ToleranceConfig(lambda_rtol=5e-5)
-    comparison = compare_assoc_results(results, reference, tolerances)
-    assert comparison.passed, f"NumPy Score (synthetic) vs GEMMA failed:\n{comparison}"
-
-
-def test_numpy_runner_all_synthetic(synthetic_data):
-    """Mode 4 (All): NumPy runner matches GEMMA gemma_all.assoc.txt reference."""
-    plink, kinship, phenotypes, snp_info = synthetic_data
-    results = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
-        phenotypes=phenotypes,
-        kinship=kinship,
-        snp_info=snp_info,
-        lmm_mode=4,
-        show_progress=False,
-    )
-    reference = load_gemma_assoc(ALL_TESTS_REFERENCE)
-    tolerances = ToleranceConfig(lambda_rtol=5e-5)
-    comparison = compare_assoc_results(results, reference, tolerances)
-    assert comparison.passed, f"NumPy All (synthetic) vs GEMMA failed:\n{comparison}"
 
 
 # ---------------------------------------------------------------------------
@@ -491,8 +417,19 @@ def synthetic_data_with_covariates(synthetic_data):
     return plink, kinship, phenotypes, snp_info, covariates
 
 
-def test_numpy_runner_wald_covar_synthetic(synthetic_data_with_covariates):
-    """Mode 1 (Wald) with covariates: NumPy runner matches GEMMA reference."""
+_SYNTHETIC_COVAR_MODE_REFS = [
+    pytest.param(1, COVARIATE_WALD_REFERENCE, id="wald"),
+    pytest.param(2, COVARIATE_LRT_REFERENCE, id="lrt"),
+    pytest.param(3, COVARIATE_SCORE_REFERENCE, id="score"),
+    pytest.param(4, ALL_TESTS_COVAR_REFERENCE, id="all"),
+]
+
+
+@pytest.mark.parametrize("lmm_mode,reference_path", _SYNTHETIC_COVAR_MODE_REFS)
+def test_numpy_runner_covar_synthetic(
+    synthetic_data_with_covariates, lmm_mode, reference_path
+):
+    """NumPy runner with covariates matches GEMMA reference on synthetic data."""
     plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
     results = run_lmm_association_numpy(
         genotypes=plink.genotypes,
@@ -500,74 +437,14 @@ def test_numpy_runner_wald_covar_synthetic(synthetic_data_with_covariates):
         kinship=kinship,
         snp_info=snp_info,
         covariates=covariates,
-        lmm_mode=1,
+        lmm_mode=lmm_mode,
         show_progress=False,
     )
-    reference = load_gemma_assoc(COVARIATE_WALD_REFERENCE)
+    reference = load_gemma_assoc(reference_path)
     tolerances = ToleranceConfig(lambda_rtol=5e-5)
     comparison = compare_assoc_results(results, reference, tolerances)
     assert comparison.passed, (
-        f"NumPy Wald+covar (synthetic) vs GEMMA failed:\n{comparison}"
-    )
-
-
-def test_numpy_runner_lrt_covar_synthetic(synthetic_data_with_covariates):
-    """Mode 2 (LRT) with covariates: NumPy runner matches GEMMA reference."""
-    plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
-    results = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
-        phenotypes=phenotypes,
-        kinship=kinship,
-        snp_info=snp_info,
-        covariates=covariates,
-        lmm_mode=2,
-        show_progress=False,
-    )
-    reference = load_gemma_assoc(COVARIATE_LRT_REFERENCE)
-    tolerances = ToleranceConfig(lambda_rtol=5e-5)
-    comparison = compare_assoc_results(results, reference, tolerances)
-    assert comparison.passed, (
-        f"NumPy LRT+covar (synthetic) vs GEMMA failed:\n{comparison}"
-    )
-
-
-def test_numpy_runner_score_covar_synthetic(synthetic_data_with_covariates):
-    """Mode 3 (Score) with covariates: NumPy runner matches GEMMA reference."""
-    plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
-    results = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
-        phenotypes=phenotypes,
-        kinship=kinship,
-        snp_info=snp_info,
-        covariates=covariates,
-        lmm_mode=3,
-        show_progress=False,
-    )
-    reference = load_gemma_assoc(COVARIATE_SCORE_REFERENCE)
-    tolerances = ToleranceConfig(lambda_rtol=5e-5)
-    comparison = compare_assoc_results(results, reference, tolerances)
-    assert comparison.passed, (
-        f"NumPy Score+covar (synthetic) vs GEMMA failed:\n{comparison}"
-    )
-
-
-def test_numpy_runner_all_covar_synthetic(synthetic_data_with_covariates):
-    """Mode 4 (All) with covariates: NumPy runner matches GEMMA reference."""
-    plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
-    results = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
-        phenotypes=phenotypes,
-        kinship=kinship,
-        snp_info=snp_info,
-        covariates=covariates,
-        lmm_mode=4,
-        show_progress=False,
-    )
-    reference = load_gemma_assoc(ALL_TESTS_COVAR_REFERENCE)
-    tolerances = ToleranceConfig(lambda_rtol=5e-5)
-    comparison = compare_assoc_results(results, reference, tolerances)
-    assert comparison.passed, (
-        f"NumPy All+covar (synthetic) vs GEMMA failed:\n{comparison}"
+        f"NumPy mode {lmm_mode}+covar (synthetic) vs GEMMA failed:\n{comparison}"
     )
 
 
@@ -575,11 +452,21 @@ def test_numpy_runner_all_covar_synthetic(synthetic_data_with_covariates):
 # mouse_hs1940 covariate GEMMA validation tests (slow)
 # ---------------------------------------------------------------------------
 
+_MOUSE_HS1940_COVAR_MODE_REFS = [
+    pytest.param(1, MOUSE_HS1940_COVAR_WALD, id="wald"),
+    pytest.param(2, MOUSE_HS1940_COVAR_LRT, id="lrt"),
+    pytest.param(3, MOUSE_HS1940_COVAR_SCORE, id="score"),
+    pytest.param(4, MOUSE_HS1940_COVAR_ALL, id="all"),
+]
+
 
 @pytest.mark.slow
 @pytest.mark.tier2
-def test_numpy_runner_wald_covar_mouse_hs1940(mouse_hs1940_data_with_covariates):
-    """Mode 1 (Wald) with covariates: NumPy runner matches GEMMA on mouse_hs1940."""
+@pytest.mark.parametrize("lmm_mode,reference_path", _MOUSE_HS1940_COVAR_MODE_REFS)
+def test_numpy_runner_covar_mouse_hs1940(
+    mouse_hs1940_data_with_covariates, lmm_mode, reference_path
+):
+    """NumPy runner with covariates matches GEMMA on mouse_hs1940."""
     plink, kinship, phenotypes, snp_info, covariates = mouse_hs1940_data_with_covariates
     results = run_lmm_association_numpy(
         genotypes=plink.genotypes,
@@ -587,76 +474,13 @@ def test_numpy_runner_wald_covar_mouse_hs1940(mouse_hs1940_data_with_covariates)
         kinship=kinship,
         snp_info=snp_info,
         covariates=covariates,
-        lmm_mode=1,
+        lmm_mode=lmm_mode,
         show_progress=False,
     )
-    reference = load_gemma_assoc(MOUSE_HS1940_COVAR_WALD)
+    reference = load_gemma_assoc(reference_path)
     comparison = compare_assoc_results(results, reference, NUMPY_GEMMA_TOLERANCES)
     assert comparison.passed, (
-        f"NumPy Wald+covar (mouse_hs1940) vs GEMMA failed:\n{comparison}"
-    )
-
-
-@pytest.mark.slow
-@pytest.mark.tier2
-def test_numpy_runner_lrt_covar_mouse_hs1940(mouse_hs1940_data_with_covariates):
-    """Mode 2 (LRT) with covariates: NumPy runner matches GEMMA on mouse_hs1940."""
-    plink, kinship, phenotypes, snp_info, covariates = mouse_hs1940_data_with_covariates
-    results = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
-        phenotypes=phenotypes,
-        kinship=kinship,
-        snp_info=snp_info,
-        covariates=covariates,
-        lmm_mode=2,
-        show_progress=False,
-    )
-    reference = load_gemma_assoc(MOUSE_HS1940_COVAR_LRT)
-    comparison = compare_assoc_results(results, reference, NUMPY_GEMMA_TOLERANCES)
-    assert comparison.passed, (
-        f"NumPy LRT+covar (mouse_hs1940) vs GEMMA failed:\n{comparison}"
-    )
-
-
-@pytest.mark.slow
-@pytest.mark.tier2
-def test_numpy_runner_score_covar_mouse_hs1940(mouse_hs1940_data_with_covariates):
-    """Mode 3 (Score) with covariates: NumPy runner matches GEMMA on mouse_hs1940."""
-    plink, kinship, phenotypes, snp_info, covariates = mouse_hs1940_data_with_covariates
-    results = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
-        phenotypes=phenotypes,
-        kinship=kinship,
-        snp_info=snp_info,
-        covariates=covariates,
-        lmm_mode=3,
-        show_progress=False,
-    )
-    reference = load_gemma_assoc(MOUSE_HS1940_COVAR_SCORE)
-    comparison = compare_assoc_results(results, reference, NUMPY_GEMMA_TOLERANCES)
-    assert comparison.passed, (
-        f"NumPy Score+covar (mouse_hs1940) vs GEMMA failed:\n{comparison}"
-    )
-
-
-@pytest.mark.slow
-@pytest.mark.tier2
-def test_numpy_runner_all_covar_mouse_hs1940(mouse_hs1940_data_with_covariates):
-    """Mode 4 (All) with covariates: NumPy runner matches GEMMA on mouse_hs1940."""
-    plink, kinship, phenotypes, snp_info, covariates = mouse_hs1940_data_with_covariates
-    results = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
-        phenotypes=phenotypes,
-        kinship=kinship,
-        snp_info=snp_info,
-        covariates=covariates,
-        lmm_mode=4,
-        show_progress=False,
-    )
-    reference = load_gemma_assoc(MOUSE_HS1940_COVAR_ALL)
-    comparison = compare_assoc_results(results, reference, NUMPY_GEMMA_TOLERANCES)
-    assert comparison.passed, (
-        f"NumPy All+covar (mouse_hs1940) vs GEMMA failed:\n{comparison}"
+        f"NumPy mode {lmm_mode}+covar (mouse_hs1940) vs GEMMA failed:\n{comparison}"
     )
 
 
@@ -936,3 +760,49 @@ def test_adaptive_core_split():
     # Edge: 1 core — both get 1
     rot, omp = compute_pipeline_core_split(50_000, 1)
     assert rot >= 1 and omp >= 1, f"Single core: rot={rot}, omp={omp}"
+
+
+@pytest.mark.tier1
+def test_compute_adaptive_core_split():
+    """compute_adaptive_core_split allocates threads proportional to measured times."""
+    from jamma.lmm.runner_numpy import compute_adaptive_core_split
+
+    # Rotation-heavy: 80% rotation time -> ~80% of cores for rotation
+    rot, omp = compute_adaptive_core_split(
+        rot_time=0.8, compute_time=0.2, total_cores=8
+    )
+    assert rot == 6 and omp == 2, f"Rotation-heavy: rot={rot}, omp={omp}"
+
+    # Compute-heavy: 20% rotation time -> ~20% of cores for rotation
+    rot, omp = compute_adaptive_core_split(
+        rot_time=0.2, compute_time=0.8, total_cores=8
+    )
+    assert rot == 2 and omp == 6, f"Compute-heavy: rot={rot}, omp={omp}"
+
+    # Balanced: equal times -> 50/50 split
+    rot, omp = compute_adaptive_core_split(
+        rot_time=0.5, compute_time=0.5, total_cores=8
+    )
+    assert rot == 4 and omp == 4, f"Balanced: rot={rot}, omp={omp}"
+
+    # Degenerate: both times near zero -> static fallback
+    rot, omp = compute_adaptive_core_split(
+        rot_time=0.0, compute_time=0.0, total_cores=8, n_samples=50_000
+    )
+    # Static fallback for 50k samples: 50% -> (4, 4)
+    assert rot == 4 and omp == 4, f"Degenerate fallback: rot={rot}, omp={omp}"
+
+    # Always returns (rot >= 1, compute >= 1)
+    for r, c, n in [(0.9, 0.1, 2), (0.1, 0.9, 2), (0.5, 0.5, 2)]:
+        rot, omp = compute_adaptive_core_split(
+            rot_time=r, compute_time=c, total_cores=n
+        )
+        assert rot >= 1 and omp >= 1, (
+            f"Min 1: rot={rot}, omp={omp} (r={r}, c={c}, n={n})"
+        )
+
+    # Clamped: 2 cores, rotation-heavy -> (1, 1) since both must be >= 1
+    rot, omp = compute_adaptive_core_split(
+        rot_time=0.9, compute_time=0.1, total_cores=2
+    )
+    assert rot == 1 and omp == 1, f"Clamped 2-core: rot={rot}, omp={omp}"

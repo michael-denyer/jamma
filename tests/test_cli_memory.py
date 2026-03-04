@@ -206,7 +206,7 @@ class TestCliStreamingRunner:
     """Tests for CLI lmm command JAX streaming runner integration."""
 
     def test_cli_jax_default_uses_streaming_runner(self, tmp_path):
-        """Verify CLI calls run_lmm_association_streaming."""
+        """Verify CLI calls run_lmm_association_streaming when backend=jax."""
         with patch("jamma.lmm.run_lmm_association_streaming") as mock_stream:
             mock_stream.return_value = []
 
@@ -224,6 +224,8 @@ class TestCliStreamingRunner:
                     "-k",
                     str(KINSHIP_FILE),
                     "--no-check-memory",
+                    "--backend",
+                    "jax",
                 ],
             )
 

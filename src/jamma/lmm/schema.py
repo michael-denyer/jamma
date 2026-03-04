@@ -13,6 +13,9 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TypedDict
 
+# LmmMode type alias (kept local to avoid circular imports with compute_numpy)
+LmmMode = int
+
 
 class RunnerTiming(TypedDict, total=False):
     """Timing breakdown from LMM runner execution.
@@ -180,6 +183,54 @@ _HEADER_PREFIX = "chr\trs\tps\tn_miss\tallele1\tallele0\taf"
 HEADERS: dict[str, str] = {
     tt: _HEADER_PREFIX + "\t" + "\t".join(cols) for tt, cols in FORMAT_COLUMNS.items()
 }
+
+
+@dataclass
+class LmmConfig:
+    """Configuration for LMM association runners.
+
+    Groups the common parameters shared by all runner entry points.
+    Not frozen — runners may clamp values internally (e.g., n_refine >= 20).
+
+    Attributes:
+        maf_threshold: Minimum MAF for SNP inclusion.
+        miss_threshold: Maximum missing rate for SNP inclusion.
+        l_min: Minimum lambda for optimization.
+        l_max: Maximum lambda for optimization.
+        n_grid: Grid search resolution for lambda bracketing.
+        n_refine: Golden section iterations (clamped to min 20 internally
+            for ~1e-5 tolerance).
+        use_gpu: Whether to use GPU acceleration (ignored by NumPy backend).
+        check_memory: Check available memory before workflow.
+        show_progress: Show progress bars and GEMMA-style logging.
+        lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
+    """
+
+    maf_threshold: float = 0.01
+    miss_threshold: float = 0.05
+    l_min: float = 1e-5
+    l_max: float = 1e5
+    n_grid: int = 50
+    n_refine: int = 10
+    use_gpu: bool = False
+    check_memory: bool = True
+    show_progress: bool = True
+    lmm_mode: LmmMode = 1
+
+    def __post_init__(self) -> None:
+        if self.lmm_mode not in (1, 2, 3, 4):
+            raise ValueError(
+                f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), "
+                f"got {self.lmm_mode}"
+            )
+        if not 0 <= self.maf_threshold <= 0.5:
+            raise ValueError(
+                f"maf_threshold must be in [0, 0.5], got {self.maf_threshold}"
+            )
+        if not 0 <= self.miss_threshold <= 1:
+            raise ValueError(
+                f"miss_threshold must be in [0, 1], got {self.miss_threshold}"
+            )
 
 
 class LazySnpMeta:

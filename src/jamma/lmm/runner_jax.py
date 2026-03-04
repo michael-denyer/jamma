@@ -38,7 +38,7 @@ from jamma.lmm.results import (
     log_lambda_boundary_warning,
 )
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
-from jamma.lmm.schema import RunnerTiming
+from jamma.lmm.schema import LmmConfig, RunnerTiming
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
 
@@ -67,6 +67,7 @@ def run_lmm_association_jax(
     check_memory: bool = True,
     show_progress: bool = True,
     lmm_mode: int = 1,
+    config: LmmConfig | None = None,
 ) -> list[AssocResult]:
     """Run LMM association tests using JAX-optimized batch processing.
 
@@ -107,6 +108,19 @@ def run_lmm_association_jax(
         ValueError: If only one of eigenvalues/eigenvectors is provided,
             or if no valid samples remain after filtering.
     """
+    # Unpack config if provided (config takes precedence over individual kwargs)
+    if config is not None:
+        maf_threshold = config.maf_threshold
+        miss_threshold = config.miss_threshold
+        l_min = config.l_min
+        l_max = config.l_max
+        n_grid = config.n_grid
+        n_refine = config.n_refine
+        use_gpu = config.use_gpu
+        check_memory = config.check_memory
+        show_progress = config.show_progress
+        lmm_mode = config.lmm_mode
+
     from jamma.core.jax_config import ensure_jax_configured
 
     ensure_jax_configured()

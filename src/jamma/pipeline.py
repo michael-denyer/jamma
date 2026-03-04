@@ -23,9 +23,13 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-from jamma.core.backend import BackendRequest, BackendResolved
+from jamma.core.backend import BackendRequest, BackendResolved, has_jax
 from jamma.core.constants import PHENOTYPE_MISSING
-from jamma.core.memory import StreamingMemoryBreakdown, estimate_streaming_memory
+from jamma.core.memory import (
+    StreamingMemoryBreakdown,
+    estimate_lmm_memory,
+    estimate_streaming_memory,
+)
 from jamma.io.covariate import read_covariate_file
 from jamma.io.plink import get_plink_metadata, validate_plink_dimensions
 from jamma.io.snp_list import read_snp_list_file, resolve_snp_list_to_indices
@@ -39,6 +43,64 @@ from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.schema import PipelineTiming
 from jamma.lmm.stats import AssocResult
+
+
+def _auto_select_backend(n_samples: int, n_snps: int, use_gpu: bool = False) -> str:
+    """Select the optimal compute backend based on memory and hardware.
+
+    Picks numpy+C when the genotype matrix fits in memory and the C extension
+    is available (fast in-memory path). Falls back to JAX streaming for large
+    datasets, or to pure NumPy when neither C extension nor JAX is present.
+
+    This function does NOT import JAX unconditionally — it uses `has_jax()`
+    from core.backend (which is cached and import-safe) so that numpy-only
+    installs never trigger a JAX import at startup.
+
+    Args:
+        n_samples: Number of samples in the dataset.
+        n_snps: Number of SNPs in the dataset.
+        use_gpu: If True and JAX is available, always select 'jax'.
+
+    Returns:
+        'numpy' or 'jax'.
+    """
+    # GPU requires JAX — short-circuit before any memory check
+    if use_gpu and has_jax():
+        logger.info("Backend auto-selection: 'jax' (GPU requested, JAX available)")
+        return "jax"
+
+    # Check C extension availability — import attempt, no side effects
+    c_ext_available = False
+    try:
+        import importlib
+
+        importlib.import_module("jamma.lmm._lmm_accel")
+        c_ext_available = True
+    except (ImportError, AttributeError):
+        pass
+
+    # Check in-memory fit
+    est = estimate_lmm_memory(n_samples, n_snps)
+
+    if c_ext_available and est.sufficient:
+        logger.info(
+            f"Backend auto-selection: 'numpy' "
+            f"(C extension available, {est.total_gb:.1f}GB fits in "
+            f"{est.available_gb:.1f}GB available)"
+        )
+        return "numpy"
+
+    if has_jax():
+        if not c_ext_available:
+            reason = "C extension unavailable"
+        else:
+            reason = f"{est.total_gb:.1f}GB exceeds {est.available_gb:.1f}GB"
+        logger.info(f"Backend auto-selection: 'jax' ({reason}, using streaming)")
+        return "jax"
+
+    # Neither C extension nor JAX — fall back to pure NumPy
+    logger.info("Backend auto-selection: 'numpy' (fallback — no C extension or JAX)")
+    return "numpy"
 
 
 @dataclass
@@ -634,8 +696,22 @@ class PipelineRunner:
 
         from jamma.core.backend import detect_backend, log_backend_selection
 
-        active_backend = detect_backend(self.config.backend)
-        log_backend_selection(active_backend, self.config.backend)
+        if self.config.backend == "auto":
+            # Memory-based auto-selection requires PLINK metadata (n_samples, n_snps).
+            # We load it here (lightweight — reads .fam/.bim header only) so the
+            # backend decision is data-driven rather than JAX-availability-only.
+            from jamma.io.plink import get_plink_metadata as _get_meta
+
+            _meta = _get_meta(self.config.bfile)
+            active_backend = _auto_select_backend(
+                n_samples=_meta["n_samples"],
+                n_snps=_meta["n_snps"],
+                use_gpu=False,
+            )
+            log_backend_selection(active_backend, self.config.backend)
+        else:
+            active_backend = detect_backend(self.config.backend)
+            log_backend_selection(active_backend, self.config.backend)
 
         trace_ctx = contextlib.nullcontext()
         if active_backend == "jax":

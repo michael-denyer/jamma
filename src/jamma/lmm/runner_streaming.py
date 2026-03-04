@@ -51,7 +51,7 @@ from jamma.lmm.results import (
 from jamma.lmm.schema import ACCUM_KEYS as _ACCUM_KEYS
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.schema import LazySnpMeta as _LazySnpMeta
-from jamma.lmm.schema import RunnerTiming
+from jamma.lmm.schema import LmmConfig, RunnerTiming
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
 
@@ -89,6 +89,7 @@ def run_lmm_association_streaming(
     snps_indices: np.ndarray | None = None,
     hwe_threshold: float = 0.0,
     validate_genotypes: bool = True,
+    config: LmmConfig | None = None,
 ) -> tuple[list[AssocResult], int]:
     """Run LMM association tests by streaming genotypes from disk.
 
@@ -134,6 +135,21 @@ def run_lmm_association_streaming(
         MemoryError: If check_memory=True and insufficient memory.
         ValueError: If only one of eigenvalues/eigenvectors is provided.
     """
+    # Unpack config if provided (config takes precedence over individual kwargs).
+    # Streaming-specific params (bed_path, chunk_size, output_path, snps_indices,
+    # hwe_threshold, validate_genotypes) remain as separate kwargs.
+    if config is not None:
+        maf_threshold = config.maf_threshold
+        miss_threshold = config.miss_threshold
+        l_min = config.l_min
+        l_max = config.l_max
+        n_grid = config.n_grid
+        n_refine = config.n_refine
+        use_gpu = config.use_gpu
+        check_memory = config.check_memory
+        show_progress = config.show_progress
+        lmm_mode = config.lmm_mode
+
     start_time = time.perf_counter()
 
     meta = get_plink_metadata(bed_path)

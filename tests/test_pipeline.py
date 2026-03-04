@@ -606,7 +606,9 @@ class TestX64GuaranteedWithPrecomputedEigen:
         jc._jax_configured = False
 
         try:
-            # Step 3: Run pipeline with precomputed eigen (no kinship compute path)
+            # Step 3: Run pipeline with precomputed eigen (no kinship compute path).
+            # Use backend="jax" explicitly — this test validates JAX x64 configuration,
+            # not backend auto-selection (which may pick numpy for small datasets).
             config = PipelineConfig(
                 bfile=sample_plink_data,
                 eigenvalue_file=d_path,
@@ -614,6 +616,7 @@ class TestX64GuaranteedWithPrecomputedEigen:
                 output_dir=tmp_path / "output",
                 check_memory=False,
                 show_progress=False,
+                backend="jax",
             )
             result = PipelineRunner(config).run()
 

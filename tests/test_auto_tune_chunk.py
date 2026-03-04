@@ -477,6 +477,42 @@ class TestComputeSubchunkStarts:
         starts = compute_subchunk_starts(149980, 49992, n_devices=24)
         assert starts == [0, 49992, 99984], "Tail of 4 merged into third sub-chunk"
 
+    def test_derived_ends_cover_all_snps(self):
+        """Ends derived from starts must cover all n_subset SNPs.
+
+        Regression test for bug where starts.pop() merged the tail but
+        _prepare_jax_chunk still capped at start + chunk_size, silently
+        dropping the tail SNPs.
+        """
+        n_subset = 50000
+        chunk_size = 49992
+        n_devices = 24
+        starts = compute_subchunk_starts(n_subset, chunk_size, n_devices)
+        # Derive ends the same way runners do
+        ends = [
+            starts[i + 1] if i + 1 < len(starts) else n_subset
+            for i in range(len(starts))
+        ]
+        # Total coverage must equal n_subset — no dropped SNPs
+        total = sum(e - s for s, e in zip(starts, ends, strict=True))
+        assert total == n_subset, (
+            f"Derived ranges cover {total} SNPs, expected {n_subset}. "
+            f"starts={starts}, ends={ends}"
+        )
+
+    def test_derived_ends_multi_chunk(self):
+        """Multi-chunk case: ends cover everything including merged tail."""
+        n_subset = 149980
+        chunk_size = 49992
+        n_devices = 24
+        starts = compute_subchunk_starts(n_subset, chunk_size, n_devices)
+        ends = [
+            starts[i + 1] if i + 1 < len(starts) else n_subset
+            for i in range(len(starts))
+        ]
+        total = sum(e - s for s, e in zip(starts, ends, strict=True))
+        assert total == n_subset
+
 
 jax = pytest.importorskip("jax")
 

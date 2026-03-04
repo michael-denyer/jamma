@@ -413,14 +413,14 @@ def run_lmm_association_streaming(
             )
 
         def _prepare_jax_chunk(
-            start: int, geno: np.ndarray, total: int
+            start: int, end: int, geno: np.ndarray
         ) -> tuple[np.ndarray, int]:
             """Slice a genotype subset and prepare UtG for device transfer."""
-            geno_slice = geno[:, start : min(start + jax_chunk_size, total)]
+            geno_slice = geno[:, start:end]
             return prepare_utg_chunk(geno_slice, U, placement, rotation_threads)
 
         def _prepare_jax_chunk_timed(
-            start: int, geno: np.ndarray, total: int
+            start: int, end: int, geno: np.ndarray
         ) -> tuple[np.ndarray, int, float]:
             """_prepare_jax_chunk with internal duration measurement.
 
@@ -428,7 +428,7 @@ def run_lmm_association_streaming(
             cannot observe start/end timestamps of background thread work.
             """
             t0 = time.perf_counter()
-            UtG_np, actual_len = _prepare_jax_chunk(start, geno, total)
+            UtG_np, actual_len = _prepare_jax_chunk(start, end, geno)
             return UtG_np, actual_len, time.perf_counter() - t0
 
         # Rotation-compute pipeline: while JAX processes chunk N on XLA, a
@@ -462,6 +462,12 @@ def run_lmm_association_streaming(
                 jax_starts = compute_subchunk_starts(
                     n_subset, jax_chunk_size, placement.n_devices
                 )
+                # Derive end boundaries: next start, or n_subset for last chunk.
+                # Critical when tail is merged — last chunk must extend to n_subset.
+                jax_ends = [
+                    jax_starts[i + 1] if i + 1 < len(jax_starts) else n_subset
+                    for i in range(len(jax_starts))
+                ]
 
                 # Dict-based accumulators for this file chunk
                 accum: dict[str, list] = _init_accumulators(lmm_mode)
@@ -469,7 +475,7 @@ def run_lmm_association_streaming(
                 # Prepare first JAX chunk
                 t_rot_start = time.perf_counter()
                 UtG_np, actual_jax_len = _prepare_jax_chunk(
-                    jax_starts[0], chunk, n_subset
+                    jax_starts[0], jax_ends[0], chunk
                 )
                 t_rot_end = time.perf_counter()
                 rot_dur = t_rot_end - t_rot_start
@@ -492,8 +498,8 @@ def run_lmm_association_streaming(
                         future = executor.submit(
                             _prepare_jax_chunk_timed,
                             jax_starts[i + 1],
+                            jax_ends[i + 1],
                             chunk,
-                            n_subset,
                         )
 
                     # --- JAX compute timing ---

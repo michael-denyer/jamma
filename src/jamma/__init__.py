@@ -1,4 +1,4 @@
-"""JAMMA: JAX-Accelerated Mixed Model Association.
+"""JAMMA: Fast Mixed Model Association for GWAS.
 
 JAMMA provides a Python-based implementation of genome-wide efficient mixed model
 association analysis, targeting exact numerical compatibility with the original

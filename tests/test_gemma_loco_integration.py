@@ -530,3 +530,228 @@ def test_loco_cross_backend_parity_modes_2_3_4(lmm_mode: int) -> None:
                 atol=1e-14,
                 err_msg=f"{label}: p_score mismatch",
             )
+
+
+# ---------------------------------------------------------------------------
+# SC-02: LOCO mode 2/3/4 covariate field layout validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+@pytest.mark.parametrize("lmm_mode", [2, 3, 4])
+def test_loco_mode_234_with_covariates(lmm_mode: int) -> None:
+    """LOCO modes 2/3/4 with covariates produce correct field layouts.
+
+    Exercises the covariate path in _run_lmm_for_chromosome_numpy for LRT,
+    Score, and All modes — code paths not covered by the existing mode 1 tests.
+
+    Field layout assertions per mode:
+    - mode 2 (LRT):   p_lrt not None, p_wald is None
+    - mode 3 (Score): p_score not None, p_wald is None
+    - mode 4 (All):   p_wald, p_lrt, p_score all not None
+
+    Args:
+        lmm_mode: LMM test mode (2=LRT, 3=Score, 4=All).
+    """
+    phenotypes = load_phenotypes_from_fam(PLINK_PREFIX.with_suffix(".fam"))
+    rng = np.random.default_rng(42)
+    covariates = rng.standard_normal((len(phenotypes), 1))
+
+    results, n_tested = run_lmm_loco(
+        bed_path=PLINK_PREFIX,
+        phenotypes=phenotypes,
+        covariates=covariates,
+        lmm_mode=lmm_mode,
+        maf_threshold=0.0,
+        miss_threshold=1.0,
+        show_progress=False,
+        check_memory=False,
+        backend="numpy",
+    )
+
+    assert n_tested > 0, f"mode {lmm_mode}: expected n_tested > 0, got {n_tested}"
+    assert len(results) > 0, f"mode {lmm_mode}: expected non-empty results"
+
+    for r in results:
+        label = f"mode {lmm_mode} SNP {r.rs}"
+        if lmm_mode == 2:
+            assert r.p_lrt is not None, f"{label}: p_lrt is None"
+            assert r.p_wald is None, f"{label}: p_wald should be None for mode 2"
+            assert 0.0 <= r.p_lrt <= 1.0, f"{label}: p_lrt={r.p_lrt} out of [0,1]"
+        elif lmm_mode == 3:
+            assert r.p_score is not None, f"{label}: p_score is None"
+            assert r.p_wald is None, f"{label}: p_wald should be None for mode 3"
+            assert 0.0 <= r.p_score <= 1.0, f"{label}: p_score={r.p_score} out of [0,1]"
+        elif lmm_mode == 4:
+            assert r.p_wald is not None, f"{label}: p_wald is None"
+            assert r.p_lrt is not None, f"{label}: p_lrt is None"
+            assert r.p_score is not None, f"{label}: p_score is None"
+            assert 0.0 <= r.p_wald <= 1.0, f"{label}: p_wald={r.p_wald} out of [0,1]"
+            assert 0.0 <= r.p_lrt <= 1.0, f"{label}: p_lrt={r.p_lrt} out of [0,1]"
+            assert 0.0 <= r.p_score <= 1.0, f"{label}: p_score={r.p_score} out of [0,1]"
+
+
+# ---------------------------------------------------------------------------
+# SC-03: LOCO cross-backend parity for modes 2/3/4 WITH covariates
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+@pytest.mark.requires_jax
+@pytest.mark.parametrize("lmm_mode", [2, 3, 4])
+def test_loco_cross_backend_parity_modes_234_with_covariates(lmm_mode: int) -> None:
+    """JAX and NumPy produce consistent LOCO results for modes 2/3/4 with covariates.
+
+    Extends test_loco_cross_backend_parity_modes_2_3_4 by running with a covariate
+    matrix, exercising the covariate path in both JAX and NumPy LOCO runners.
+
+    Tolerances follow EQUIVALENCE.md calibrated bounds:
+    - beta/se: rtol=1e-2  (lambda propagation × Pab sensitivity)
+    - p-values: rtol=1e-4 (F-CDF / chi2_sf implementation differences)
+
+    Args:
+        lmm_mode: LMM test mode (2=LRT, 3=Score, 4=All).
+    """
+    phenotypes = load_phenotypes_from_fam(PLINK_PREFIX.with_suffix(".fam"))
+    rng = np.random.default_rng(42)
+    covariates = rng.standard_normal((len(phenotypes), 1))
+
+    jax_results, jax_n = run_lmm_loco(
+        bed_path=PLINK_PREFIX,
+        phenotypes=phenotypes,
+        covariates=covariates,
+        lmm_mode=lmm_mode,
+        maf_threshold=0.0,
+        miss_threshold=1.0,
+        show_progress=False,
+        check_memory=False,
+        backend="jax",
+    )
+    numpy_results, numpy_n = run_lmm_loco(
+        bed_path=PLINK_PREFIX,
+        phenotypes=phenotypes,
+        covariates=covariates,
+        lmm_mode=lmm_mode,
+        maf_threshold=0.0,
+        miss_threshold=1.0,
+        show_progress=False,
+        check_memory=False,
+        backend="numpy",
+    )
+
+    assert jax_n == numpy_n, (
+        f"mode {lmm_mode} with covariates: n_tested mismatch — "
+        f"JAX={jax_n}, NumPy={numpy_n}"
+    )
+    assert len(jax_results) == len(numpy_results), (
+        f"mode {lmm_mode} with covariates: result count mismatch — "
+        f"JAX={len(jax_results)}, NumPy={len(numpy_results)}"
+    )
+
+    # Match results by rs_id for field-by-field comparison
+    jax_by_rs = {r.rs: r for r in jax_results}
+    numpy_by_rs = {r.rs: r for r in numpy_results}
+
+    common_rs = set(jax_by_rs) & set(numpy_by_rs)
+    assert len(common_rs) == len(jax_results), (
+        f"mode {lmm_mode} with covariates: rs_id mismatch between backends"
+    )
+
+    for rs in common_rs:
+        jax_r = jax_by_rs[rs]
+        numpy_r = numpy_by_rs[rs]
+        label = f"mode {lmm_mode} with covariates SNP {rs}"
+
+        # beta/se: NaN consistency check then allclose for finite values
+        for field in ("beta", "se"):
+            val_jax = getattr(jax_r, field)
+            val_np = getattr(numpy_r, field)
+            if np.isnan(val_jax):
+                assert np.isnan(val_np), (
+                    f"{label}: JAX {field} is NaN but NumPy is {val_np}"
+                )
+            else:
+                assert not np.isnan(val_np), (
+                    f"{label}: JAX {field} is {val_jax} but NumPy is NaN"
+                )
+                np.testing.assert_allclose(
+                    val_jax,
+                    val_np,
+                    rtol=1e-2,
+                    atol=1e-14,
+                    err_msg=f"{label}: {field} mismatch",
+                )
+
+        if lmm_mode in (2, 4):
+            assert jax_r.p_lrt is not None, f"{label}: JAX p_lrt is None"
+            assert numpy_r.p_lrt is not None, f"{label}: NumPy p_lrt is None"
+            np.testing.assert_allclose(
+                jax_r.p_lrt,
+                numpy_r.p_lrt,
+                rtol=1e-4,
+                atol=1e-14,
+                err_msg=f"{label}: p_lrt mismatch",
+            )
+
+        if lmm_mode in (3, 4):
+            assert jax_r.p_score is not None, f"{label}: JAX p_score is None"
+            assert numpy_r.p_score is not None, f"{label}: NumPy p_score is None"
+            np.testing.assert_allclose(
+                jax_r.p_score,
+                numpy_r.p_score,
+                rtol=1e-4,
+                atol=1e-14,
+                err_msg=f"{label}: p_score mismatch",
+            )
+
+        if lmm_mode == 4:
+            assert jax_r.p_wald is not None, f"{label}: JAX p_wald is None"
+            assert numpy_r.p_wald is not None, f"{label}: NumPy p_wald is None"
+            np.testing.assert_allclose(
+                jax_r.p_wald,
+                numpy_r.p_wald,
+                rtol=1e-4,
+                atol=1e-14,
+                err_msg=f"{label}: p_wald mismatch",
+            )
+
+
+# ---------------------------------------------------------------------------
+# SC-04: Single filtered SNP boundary test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+@pytest.mark.parametrize("backend", ["numpy"])
+def test_loco_single_snp_chromosome(backend: str) -> None:
+    """LOCO with exactly 1 SNP passing filter returns 1 result without error.
+
+    Uses snps_indices=[0] to restrict testing to the very first SNP in the
+    dataset (on chr1). Verifies the boundary case where a chromosome has only
+    one testable SNP after filtering — ensuring LOCO doesn't skip or error on
+    single-SNP chromosomes.
+
+    Args:
+        backend: Runner backend ("numpy" or "jax").
+    """
+    phenotypes = load_phenotypes_from_fam(PLINK_PREFIX.with_suffix(".fam"))
+
+    results, n_tested = run_lmm_loco(
+        bed_path=PLINK_PREFIX,
+        phenotypes=phenotypes,
+        lmm_mode=1,
+        maf_threshold=0.0,
+        miss_threshold=1.0,
+        show_progress=False,
+        check_memory=False,
+        backend=backend,
+        snps_indices=np.array([0]),
+    )
+
+    assert n_tested == 1, f"Expected n_tested=1, got {n_tested}"
+    assert len(results) == 1, f"Expected 1 result, got {len(results)}"
+
+    r = results[0]
+    assert r.p_wald is not None, "p_wald is None for mode 1 single-SNP result"
+    assert not np.isnan(r.beta), "beta is NaN for single-SNP result"
+    assert not np.isnan(r.se), "se is NaN for single-SNP result"

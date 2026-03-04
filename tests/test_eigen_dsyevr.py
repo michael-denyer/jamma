@@ -738,3 +738,156 @@ class TestDsyevrBoundsCheck:
             w, v = eigh_dsyevr(K.copy())
             assert w.shape == (n,)
             np.testing.assert_allclose(w, np.ones(n), rtol=1e-14)
+
+
+@pytest.mark.tier0
+class TestSelectEigenDriver:
+    """Direct unit tests for _select_eigen_driver."""
+
+    # Override module-level skipif — these tests don't need the C extension
+    pytestmark = [pytest.mark.tier0]
+
+    def test_no_dsyevr_always_returns_dsyevd(self):
+        """_select_eigen_driver returns 'dsyevd' when dsyevr_available=False."""
+        from jamma.lmm.eigen import _select_eigen_driver
+
+        # Large n, ample memory, but DSYEVR unavailable
+        assert _select_eigen_driver(50_000, 300.0, dsyevr_available=False) == "dsyevd"
+        # Small n also returns dsyevd
+        assert _select_eigen_driver(100, 300.0, dsyevr_available=False) == "dsyevd"
+        # Even with minimal memory
+        assert _select_eigen_driver(1000, 0.001, dsyevr_available=False) == "dsyevd"
+
+    def test_small_matrix_returns_dsyevd(self):
+        """Small matrix with ample memory returns 'dsyevd'."""
+        from jamma.lmm.eigen import _select_eigen_driver
+
+        # n=100 has trivially small DSYEVD peak — easily fits in 300GB
+        result = _select_eigen_driver(100, 300.0, dsyevr_available=True)
+        assert result == "dsyevd"
+
+    def test_large_matrix_exceeding_budget_returns_dsyevr(self):
+        """Large matrix where DSYEVD would exceed memory returns 'dsyevr'."""
+        from jamma.core.memory import _dsyevd_peak_gb, _memory_margin_gb
+        from jamma.lmm.eigen import _select_eigen_driver
+
+        peak = _dsyevd_peak_gb(46_000)
+        margin = _memory_margin_gb(peak)
+        # Set available memory well below what DSYEVD needs
+        assert _select_eigen_driver(46_000, 1.0, dsyevr_available=True) == "dsyevr"
+        # Sanity check: the threshold is indeed larger than 1.0GB
+        assert peak + margin > 1.0, (
+            f"Expected DSYEVD peak+margin > 1.0 GB for n=46000, got {peak + margin}"
+        )
+
+    def test_boundary_threshold(self):
+        """_select_eigen_driver uses <= for DSYEVD boundary check.
+
+        At exactly peak+margin: DSYEVD selected (condition: peak+margin <= available).
+        At peak+margin-0.001: DSYEVR selected (just below threshold).
+        """
+        from jamma.core.memory import _dsyevd_peak_gb, _memory_margin_gb
+        from jamma.lmm.eigen import _select_eigen_driver
+
+        n = 1000
+        peak = _dsyevd_peak_gb(n)
+        margin = _memory_margin_gb(peak)
+        threshold = peak + margin
+
+        # Exactly at threshold: DSYEVD fits (<=)
+        assert _select_eigen_driver(n, threshold, dsyevr_available=True) == "dsyevd", (
+            f"At exactly threshold={threshold:.6f} GB, expected 'dsyevd'"
+        )
+        # Just below threshold: DSYEVR selected
+        below = threshold - 0.001
+        assert _select_eigen_driver(n, below, dsyevr_available=True) == "dsyevr", (
+            f"At below={below:.6f} GB, expected 'dsyevr'"
+        )
+
+
+@pytest.mark.tier0
+class TestEigenvalueZeroingBoundary:
+    """Boundary tests for eigenvalue zeroing in eigendecompose_kinship.
+
+    The zeroing condition uses strict < (not <=), so eigenvalues at exactly
+    the threshold (1e-10 by default) are NOT zeroed.
+    """
+
+    # Override module-level skipif — these tests don't need the C extension
+    pytestmark = [pytest.mark.tier0]
+
+    def test_eigenvalue_at_threshold_not_zeroed(self):
+        """Eigenvalue at exactly 1e-10 is NOT zeroed (strict < threshold)."""
+        from jamma.lmm.eigen import eigendecompose_kinship
+
+        # Use diagonal matrix to get exact eigenvalues without QR perturbation
+        n = 10
+        target_eval = 1e-10
+        K = np.diag([target_eval] + [1.0] * (n - 1))
+
+        eigenvalues, _ = eigendecompose_kinship(K.copy(), check_memory=False)
+
+        min_eval = np.min(eigenvalues)
+        assert min_eval != 0.0, (
+            f"Eigenvalue at threshold {target_eval} should NOT be zeroed, "
+            f"got {min_eval}"
+        )
+        np.testing.assert_allclose(min_eval, target_eval, rtol=1e-12)
+
+    def test_eigenvalue_below_threshold_zeroed(self):
+        """Eigenvalue at 9e-11 IS zeroed (below strict < threshold of 1e-10)."""
+        from jamma.lmm.eigen import eigendecompose_kinship
+
+        n = 10
+        target_eval = 9e-11  # Below 1e-10 threshold
+        K = np.diag([target_eval] + [1.0] * (n - 1))
+
+        eigenvalues, _ = eigendecompose_kinship(K.copy(), check_memory=False)
+
+        min_eval = np.min(eigenvalues)
+        assert min_eval == 0.0, (
+            f"Eigenvalue {target_eval} should be zeroed (< threshold 1e-10), "
+            f"got {min_eval}"
+        )
+
+    def test_negative_eigenvalue_zeroing_boundary(self):
+        """Negative eigenvalue zeroing uses strict < -threshold.
+
+        -5e-11: abs=5e-11 < 1e-10 -> zeroed by small_mask
+        -1e-10: abs=1e-10, NOT < 1e-10 -> NOT zeroed; -1e-10 not < -1e-10 -> NOT zeroed
+        -2e-10: -2e-10 < -1e-10 -> zeroed by negative eigenvalue path
+        """
+        import warnings
+
+        from jamma.lmm.eigen import eigendecompose_kinship
+
+        def decompose_diagonal(eval_val):
+            n = 10
+            K = np.diag([eval_val] + [1.0] * (n - 1))
+            K = (K + K.T) / 2
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                evals, _ = eigendecompose_kinship(K.copy(), check_memory=False)
+            return np.min(evals)
+
+        # -5e-11: abs = 5e-11 < 1e-10 -> zeroed by small_mask path
+        result_minus_5e11 = decompose_diagonal(-5e-11)
+        assert result_minus_5e11 == 0.0, (
+            f"Eigenvalue -5e-11 should be zeroed (|5e-11| < 1e-10), "
+            f"got {result_minus_5e11}"
+        )
+
+        # -1e-10: abs = 1e-10 NOT < 1e-10; -1e-10 NOT < -1e-10 -> NOT zeroed
+        result_minus_1e10 = decompose_diagonal(-1e-10)
+        assert result_minus_1e10 != 0.0, (
+            f"Eigenvalue -1e-10 should NOT be zeroed "
+            f"(abs not < 1e-10, and not < -1e-10), got {result_minus_1e10}"
+        )
+        np.testing.assert_allclose(result_minus_1e10, -1e-10, rtol=1e-12)
+
+        # -2e-10: -2e-10 < -1e-10 -> zeroed by negative eigenvalue path
+        result_minus_2e10 = decompose_diagonal(-2e-10)
+        assert result_minus_2e10 == 0.0, (
+            f"Eigenvalue -2e-10 should be zeroed (-2e-10 < -1e-10), "
+            f"got {result_minus_2e10}"
+        )

@@ -853,40 +853,58 @@ class TestEigenvalueZeroingBoundary:
     def test_negative_eigenvalue_zeroing_boundary(self):
         """Negative eigenvalue zeroing uses strict < -threshold.
 
-        -5e-11: abs=5e-11 < 1e-10 -> zeroed by small_mask
+        Two-phase zeroing: (1) eigenvalues w < -threshold are zeroed with
+        a UserWarning, then (2) small absolute values |w| < threshold are
+        zeroed silently.
+
+        -5e-11: abs=5e-11 < 1e-10 -> zeroed by phase 2 (small_mask)
         -1e-10: abs=1e-10, NOT < 1e-10 -> NOT zeroed; -1e-10 not < -1e-10 -> NOT zeroed
-        -2e-10: -2e-10 < -1e-10 -> zeroed by negative eigenvalue path
+        -2e-10: -2e-10 < -1e-10 -> zeroed by phase 1 (negative eigenvalue path)
         """
         import warnings
 
         from jamma.lmm.eigen import eigendecompose_kinship
 
-        def decompose_diagonal(eval_val):
+        def decompose_diagonal(eval_val, expect_warning=False):
             n = 10
             K = np.diag([eval_val] + [1.0] * (n - 1))
             K = (K + K.T) / 2
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
                 evals, _ = eigendecompose_kinship(K.copy(), check_memory=False)
+            neg_warnings = [
+                w for w in caught if "negative eigenvalue" in str(w.message).lower()
+            ]
+            if expect_warning:
+                assert len(neg_warnings) == 1, (
+                    f"Expected negative eigenvalue warning for "
+                    f"{eval_val}, got {len(neg_warnings)} warnings: "
+                    f"{[str(w.message) for w in caught]}"
+                )
+            else:
+                assert len(neg_warnings) == 0, (
+                    f"Unexpected negative eigenvalue warning for {eval_val}: "
+                    f"{[str(w.message) for w in neg_warnings]}"
+                )
             return np.min(evals)
 
-        # -5e-11: abs = 5e-11 < 1e-10 -> zeroed by small_mask path
-        result_minus_5e11 = decompose_diagonal(-5e-11)
+        # -5e-11: abs = 5e-11 < 1e-10 -> zeroed by small_mask path (no neg warning)
+        result_minus_5e11 = decompose_diagonal(-5e-11, expect_warning=False)
         assert result_minus_5e11 == 0.0, (
             f"Eigenvalue -5e-11 should be zeroed (|5e-11| < 1e-10), "
             f"got {result_minus_5e11}"
         )
 
         # -1e-10: abs = 1e-10 NOT < 1e-10; -1e-10 NOT < -1e-10 -> NOT zeroed
-        result_minus_1e10 = decompose_diagonal(-1e-10)
+        result_minus_1e10 = decompose_diagonal(-1e-10, expect_warning=False)
         assert result_minus_1e10 != 0.0, (
             f"Eigenvalue -1e-10 should NOT be zeroed "
             f"(abs not < 1e-10, and not < -1e-10), got {result_minus_1e10}"
         )
         np.testing.assert_allclose(result_minus_1e10, -1e-10, rtol=1e-12)
 
-        # -2e-10: -2e-10 < -1e-10 -> zeroed by negative eigenvalue path
-        result_minus_2e10 = decompose_diagonal(-2e-10)
+        # -2e-10: -2e-10 < -1e-10 -> zeroed by negative eigenvalue path (with warning)
+        result_minus_2e10 = decompose_diagonal(-2e-10, expect_warning=True)
         assert result_minus_2e10 == 0.0, (
             f"Eigenvalue -2e-10 should be zeroed (-2e-10 < -1e-10), "
             f"got {result_minus_2e10}"

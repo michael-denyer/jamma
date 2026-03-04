@@ -954,7 +954,8 @@ class TestJaxAllTestsMode:
         expected_lmle = np.array(
             [r.l_mle if r.l_mle is not None else np.nan for r in ref_lrt]
         )
-        # Exclude boundary l_mle values (1e-5 and 1e5) from comparison
+        # Exclude l_mle near lambda bounds (1e-5/1e5): use 1e-4/1e4 margin
+        # to avoid golden-section vs Brent divergence on flat optima
         lmle_boundary_mask = (
             (expected_lmle <= 1e-4)
             | (actual_lmle <= 1e-4)

@@ -2440,3 +2440,53 @@ def test_streaming_output_path_returns_empty_list(
     assert len(disk_results) == n_tested, (
         f"Expected {n_tested} rows in output file, got {len(disk_results)}"
     )
+
+
+@pytest.mark.tier1
+def test_streaming_output_path_mode4_writes_all_columns(
+    sample_plink_data: Path,
+    tmp_path: Path,
+) -> None:
+    """Streaming runner mode 4 with output_path writes Wald+LRT+Score columns to disk.
+
+    Verifies that the mode 4 disk-write path through IncrementalAssocWriter
+    produces the correct column layout (all three test types), not just mode 1.
+    """
+    from jamma.validation import load_gemma_assoc
+
+    data = load_plink_binary(sample_plink_data)
+    geno = data.genotypes.astype(np.float64)
+    n_samples = data.n_samples
+    phenotypes = np.random.default_rng(42).standard_normal(n_samples)
+    kinship = compute_centered_kinship(geno, check_memory=False)
+    snp_info = _build_snp_info(data)
+
+    output_path = tmp_path / "results_mode4.assoc.txt"
+
+    results, n_tested = run_lmm_association_streaming(
+        sample_plink_data,
+        phenotypes,
+        kinship,
+        snp_info,
+        output_path=output_path,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=4,
+    )
+
+    assert results == [], (
+        "Expected empty list when output_path is set "
+        f"(mode 4), got {len(results)} results"
+    )
+    assert n_tested > 0, "Expected some SNPs to be tested (mode 4 output_path)"
+    assert output_path.exists(), f"Expected output file at {output_path}"
+
+    disk_results = load_gemma_assoc(output_path)
+    assert len(disk_results) == n_tested, (
+        f"Expected {n_tested} rows, got {len(disk_results)}"
+    )
+    # Mode 4 should produce all three test types' fields
+    first = disk_results[0]
+    assert first.p_wald is not None, "Mode 4 should include p_wald"
+    assert first.p_lrt is not None, "Mode 4 should include p_lrt"
+    assert first.p_score is not None, "Mode 4 should include p_score"

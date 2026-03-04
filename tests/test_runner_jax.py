@@ -20,6 +20,7 @@ _FIXTURE_ROOT = Path(__file__).parent / "fixtures"
 COVARIATE_FIXTURE_DIR = _FIXTURE_ROOT / "gemma_covariate"
 GEMMA_COVARIATE_SCORE = COVARIATE_FIXTURE_DIR / "gemma_covariate_score.assoc.txt"
 GEMMA_COVARIATE_LRT = COVARIATE_FIXTURE_DIR / "gemma_covariate_lrt.assoc.txt"
+GEMMA_COVARIATE_WALD = COVARIATE_FIXTURE_DIR / "gemma_covariate.assoc.txt"
 
 # GEMMA synthetic fixture paths (used for covariate data)
 FIXTURE_DIR = _FIXTURE_ROOT / "gemma_synthetic"
@@ -869,6 +870,130 @@ class TestJaxAllTestsMode:
                 rtol=1e-10,
                 err_msg=f"logl_H1 mismatch for {rs}",
             )
+
+    @pytest.mark.skipif(
+        not (
+            GEMMA_COVARIATE_WALD.exists()
+            and GEMMA_COVARIATE_LRT.exists()
+            and GEMMA_COVARIATE_SCORE.exists()
+        ),
+        reason="GEMMA covariate fixture files not available",
+    )
+    def test_all_tests_with_covariates_matches_gemma(self):
+        """Mode 4 (All) with covariates matches GEMMA -lmm 1/2/3 -c references.
+
+        Mode 4 runs Wald, LRT, and Score simultaneously. Its Wald output
+        must match GEMMA -lmm 1, its LRT output must match GEMMA -lmm 2,
+        and its Score output must match GEMMA -lmm 3 — all using the same
+        covariate fixture that the individual mode tests use.
+        """
+        from jamma.io import load_plink_binary
+        from jamma.kinship.io import read_kinship_matrix
+        from jamma.validation import ToleranceConfig
+
+        # Load GEMMA synthetic test data (same as covariate fixture)
+        plink = load_plink_binary(FIXTURE_DIR / "test")
+        kinship = read_kinship_matrix(
+            FIXTURE_DIR / "gemma_kinship.cXX.txt", n_samples=plink.n_samples
+        )
+        phenotypes = load_phenotypes_from_fam(FIXTURE_DIR / "test.fam")
+        covariates = np.loadtxt(COVARIATE_FILE)
+
+        snp_info = [
+            {
+                "chr": str(plink.chromosome[i]),
+                "rs": str(plink.sid[i]),
+                "pos": int(plink.bp_position[i]),
+                "a1": str(plink.allele_1[i]),
+                "a0": str(plink.allele_2[i]),
+            }
+            for i in range(plink.n_snps)
+        ]
+
+        results_jax = run_lmm_association_jax(
+            genotypes=plink.genotypes,
+            phenotypes=phenotypes,
+            kinship=kinship,
+            snp_info=snp_info,
+            covariates=covariates,
+            lmm_mode=4,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        # Load all three GEMMA reference files
+        ref_wald = load_gemma_assoc(GEMMA_COVARIATE_WALD)
+        ref_lrt = load_gemma_assoc(GEMMA_COVARIATE_LRT)
+        ref_score = load_gemma_assoc(GEMMA_COVARIATE_SCORE)
+
+        # Compare Wald fields (beta, se, p_wald, l_remle) against mode 1 reference.
+        # Use lambda_rtol=5e-5 for JAX-vs-GEMMA (Brent tolerance differences).
+        config_wald = ToleranceConfig(lambda_rtol=5e-5)
+        cmp_wald = compare_assoc_results(results_jax, ref_wald, config=config_wald)
+        assert cmp_wald.passed, (
+            f"JAX mode 4 Wald vs GEMMA -lmm 1 failed:\n"
+            f"  beta: {cmp_wald.beta.message}\n"
+            f"  se: {cmp_wald.se.message}\n"
+            f"  p_wald: {cmp_wald.p_wald.message}\n"
+            f"  l_remle: {cmp_wald.l_remle.message}"
+        )
+
+        # Compare LRT fields (p_lrt, l_mle) against mode 2 reference.
+        # Note: LRT reference has NaN beta/se by construction; mode 4 has finite
+        # Wald-derived beta/se. Only compare LRT-specific fields directly.
+        # Use relaxed tolerance for LRT (chi-squared amplifies differences).
+        actual_plrt = np.array(
+            [r.p_lrt if r.p_lrt is not None else np.nan for r in results_jax]
+        )
+        expected_plrt = np.array(
+            [r.p_lrt if r.p_lrt is not None else np.nan for r in ref_lrt]
+        )
+        actual_lmle = np.array(
+            [r.l_mle if r.l_mle is not None else np.nan for r in results_jax]
+        )
+        expected_lmle = np.array(
+            [r.l_mle if r.l_mle is not None else np.nan for r in ref_lrt]
+        )
+        # Exclude l_mle near lambda bounds (1e-5/1e5): use 1e-4/1e4 margin
+        # to avoid golden-section vs Brent divergence on flat optima
+        lmle_boundary_mask = (
+            (expected_lmle <= 1e-4)
+            | (actual_lmle <= 1e-4)
+            | (expected_lmle >= 1e4)
+            | (actual_lmle >= 1e4)
+        )
+        np.testing.assert_allclose(
+            actual_plrt,
+            expected_plrt,
+            rtol=5e-3,
+            atol=1e-14,
+            err_msg="JAX mode 4 p_lrt vs GEMMA -lmm 2 mismatch",
+        )
+        if not np.all(lmle_boundary_mask):
+            np.testing.assert_allclose(
+                actual_lmle[~lmle_boundary_mask],
+                expected_lmle[~lmle_boundary_mask],
+                rtol=2e-5,
+                atol=1e-14,
+                err_msg="JAX mode 4 l_mle vs GEMMA -lmm 2 mismatch",
+            )
+
+        # Compare Score p-values against mode 3 reference.
+        # Note: GEMMA Score mode reports Score-statistic-derived beta/se (not Wald),
+        # so only compare p_score directly — mode 4 Wald beta/se differ by design.
+        actual_pscore = np.array(
+            [r.p_score if r.p_score is not None else np.nan for r in results_jax]
+        )
+        expected_pscore = np.array(
+            [r.p_score if r.p_score is not None else np.nan for r in ref_score]
+        )
+        np.testing.assert_allclose(
+            actual_pscore,
+            expected_pscore,
+            rtol=1e-4,
+            atol=1e-14,
+            err_msg="JAX mode 4 p_score vs GEMMA -lmm 3 mismatch",
+        )
 
 
 @pytest.mark.tier1

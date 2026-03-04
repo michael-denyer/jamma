@@ -2356,3 +2356,137 @@ def test_streaming_with_covariates_matches_batch(sample_plink_data: Path) -> Non
     )
 
     _assert_results_match(results_batch, results_stream)
+
+
+@pytest.mark.tier0
+def test_streaming_all_snps_filtered_mode4_returns_zero(
+    sample_plink_data: Path,
+) -> None:
+    """Streaming runner mode 4 with impossible MAF threshold returns zero tested SNPs.
+
+    Verifies that mode 4 (all tests: Wald + LRT + Score) handles the all-filtered
+    edge case correctly, exercising _init_accumulators(lmm_mode=4). maf_threshold=1.0
+    is impossible (MAF is at most 0.5), so all SNPs are filtered out. The runner must
+    handle this gracefully: return empty results and n_tested == 0.
+    """
+    data = load_plink_binary(sample_plink_data)
+    phenotypes = np.random.default_rng(42).standard_normal(data.n_samples)
+    # Kinship is never consumed (all SNPs filtered before eigendecomp),
+    # so use a cheap identity matrix instead of computing the real one.
+    kinship = np.eye(data.n_samples)
+    snp_info = _build_snp_info(data)
+
+    results, n_tested = run_lmm_association_streaming(
+        sample_plink_data,
+        phenotypes,
+        kinship,
+        snp_info,
+        maf_threshold=1.0,  # Impossible threshold; all SNPs filtered
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=4,
+    )
+
+    assert results == [], (
+        f"Expected empty results when all SNPs filtered (mode 4), got {len(results)}"
+    )
+    assert n_tested == 0, (
+        f"Expected n_tested=0 when all SNPs filtered (mode 4), got {n_tested}"
+    )
+
+
+@pytest.mark.tier1
+def test_streaming_output_path_returns_empty_list(
+    sample_plink_data: Path,
+    tmp_path: Path,
+) -> None:
+    """Streaming runner with output_path returns empty list and writes results to disk.
+
+    Verifies that when output_path is provided, the runner:
+    - Returns an empty list (not the actual results)
+    - Returns n_tested > 0 (some SNPs passed filtering)
+    - Writes results to the output file
+    - The file contains the expected number of rows
+    """
+    from jamma.validation import load_gemma_assoc
+
+    data = load_plink_binary(sample_plink_data)
+    geno = data.genotypes.astype(np.float64)
+    n_samples = data.n_samples
+    phenotypes = np.random.default_rng(42).standard_normal(n_samples)
+    # Use real kinship so SNPs pass MAF filtering and are actually tested.
+    kinship = compute_centered_kinship(geno, check_memory=False)
+    snp_info = _build_snp_info(data)
+
+    output_path = tmp_path / "results.assoc.txt"
+
+    results, n_tested = run_lmm_association_streaming(
+        sample_plink_data,
+        phenotypes,
+        kinship,
+        snp_info,
+        output_path=output_path,
+        check_memory=False,
+        show_progress=False,
+    )
+
+    assert results == [], (
+        f"Expected empty list when output_path is set, got {len(results)} results"
+    )
+    assert n_tested > 0, "Expected some SNPs to be tested (output_path mode)"
+    assert output_path.exists(), f"Expected output file to exist at {output_path}"
+
+    disk_results = load_gemma_assoc(output_path)
+    assert len(disk_results) == n_tested, (
+        f"Expected {n_tested} rows in output file, got {len(disk_results)}"
+    )
+
+
+@pytest.mark.tier1
+def test_streaming_output_path_mode4_writes_all_columns(
+    sample_plink_data: Path,
+    tmp_path: Path,
+) -> None:
+    """Streaming runner mode 4 with output_path writes Wald+LRT+Score columns to disk.
+
+    Verifies that the mode 4 disk-write path through IncrementalAssocWriter
+    produces the correct column layout (all three test types), not just mode 1.
+    """
+    from jamma.validation import load_gemma_assoc
+
+    data = load_plink_binary(sample_plink_data)
+    geno = data.genotypes.astype(np.float64)
+    n_samples = data.n_samples
+    phenotypes = np.random.default_rng(42).standard_normal(n_samples)
+    kinship = compute_centered_kinship(geno, check_memory=False)
+    snp_info = _build_snp_info(data)
+
+    output_path = tmp_path / "results_mode4.assoc.txt"
+
+    results, n_tested = run_lmm_association_streaming(
+        sample_plink_data,
+        phenotypes,
+        kinship,
+        snp_info,
+        output_path=output_path,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=4,
+    )
+
+    assert results == [], (
+        "Expected empty list when output_path is set "
+        f"(mode 4), got {len(results)} results"
+    )
+    assert n_tested > 0, "Expected some SNPs to be tested (mode 4 output_path)"
+    assert output_path.exists(), f"Expected output file at {output_path}"
+
+    disk_results = load_gemma_assoc(output_path)
+    assert len(disk_results) == n_tested, (
+        f"Expected {n_tested} rows, got {len(disk_results)}"
+    )
+    # Mode 4 should produce all three test types' fields
+    first = disk_results[0]
+    assert first.p_wald is not None, "Mode 4 should include p_wald"
+    assert first.p_lrt is not None, "Mode 4 should include p_lrt"
+    assert first.p_score is not None, "Mode 4 should include p_score"

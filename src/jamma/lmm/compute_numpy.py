@@ -75,37 +75,15 @@ def _try_import_accel() -> tuple[bool, bool, bool, object, object, object, objec
 
 
 def _auto_recompile() -> bool:
-    """Auto-recompile the C extension and reimport into sys.modules.
+    """Auto-recompile the LMM C extension and reimport into sys.modules."""
+    from jamma.lmm._compile_utils import auto_recompile_c_extension
 
-    Returns True if recompilation succeeded and the new module has the
-    expected ABI version.
-    """
-    from loguru import logger
-
-    try:
-        from jamma.lmm._compile_accel import compile_extension
-    except ImportError:
-        return False
-
-    logger.info(
-        "C extension _lmm_accel needs recompilation (ABI mismatch or missing). "
-        "Compiling now..."
+    return auto_recompile_c_extension(
+        module_name="_lmm_accel",
+        compiler_module="jamma.lmm._compile_accel",
+        sys_module_key="jamma.lmm._lmm_accel",
+        label="LMM",
     )
-
-    if not compile_extension(verbose=False):
-        logger.warning(
-            "Auto-recompilation failed. Falling back to pure-Python. "
-            "To diagnose, run: python -m jamma.lmm._compile_accel"
-        )
-        return False
-
-    # Evict stale module from sys.modules so re-import picks up the new .so
-    import sys
-
-    sys.modules.pop("jamma.lmm._lmm_accel", None)
-
-    logger.info("C extension recompiled successfully.")
-    return True
 
 
 # First attempt
@@ -137,7 +115,8 @@ if not _C_ACCEL_AVAILABLE:
 
         _logger.warning(
             "C extension _lmm_accel not available — using pure-Python path "
-            "(expect 2-5x slower LMM). To compile, run: "
+            "(LMM may be slower without C extension; magnitude depends on "
+            "dataset size and core count). To compile, run: "
             "python -m jamma.lmm._compile_accel"
         )
         del _logger

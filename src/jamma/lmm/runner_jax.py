@@ -12,7 +12,6 @@ import jax
 import numpy as np
 from loguru import logger
 
-from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.core.memory import estimate_lmm_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
@@ -32,6 +31,7 @@ from jamma.lmm.prepare import (
     prepare_utg_chunk,
     resolve_device_placement,
 )
+from jamma.lmm.prepare_common import validate_runner_inputs
 from jamma.lmm.results import (
     _build_results,
     count_lambda_boundary_hits,
@@ -111,26 +111,7 @@ def run_lmm_association_jax(
 
     ensure_jax_configured()
 
-    # Validate eigendecomposition params - must provide both or neither
-    if (eigenvalues is None) != (eigenvectors is None):
-        raise ValueError(
-            "Must provide both eigenvalues and eigenvectors, or neither. "
-            f"Got eigenvalues={eigenvalues is not None}, "
-            f"eigenvectors={eigenvectors is not None}"
-        )
-
-    if kinship is None and eigenvalues is None:
-        raise ValueError(
-            "Either kinship or pre-computed eigendecomposition (eigenvalues + "
-            "eigenvectors) must be provided"
-        )
-
-    if lmm_mode not in (1, 2, 3, 4):
-        raise ValueError(
-            f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
-        )
-
-    # Memory check before workflow
+    # Memory check before workflow (uses genotype shape, runner-specific)
     n_samples, n_snps = genotypes.shape
     start_time = time.perf_counter()
 
@@ -160,43 +141,22 @@ def run_lmm_association_jax(
 
     placement = resolve_device_placement(use_gpu)
 
-    valid_mask = ~np.isnan(phenotypes) & (phenotypes != PHENOTYPE_MISSING)
-    if covariates is not None:
-        valid_covariate = np.all(~np.isnan(covariates), axis=1)
-        valid_mask = valid_mask & valid_covariate
-    if not np.all(valid_mask):
-        genotypes = genotypes[valid_mask, :]
-        phenotypes = phenotypes[valid_mask]
-        if kinship is not None:
-            kinship = kinship[np.ix_(valid_mask, valid_mask)]
-        if covariates is not None:
-            covariates = covariates[valid_mask, :]
+    # Validate inputs and apply sample filtering (shared logic for all runners)
+    setup = validate_runner_inputs(
+        phenotypes, kinship, covariates, eigenvalues, eigenvectors, lmm_mode
+    )
+    phenotypes = setup.phenotypes
+    kinship = setup.kinship
+    covariates = setup.covariates
+    eigenvalues = setup.eigenvalues
+    eigenvectors = setup.eigenvectors
+    n_samples = setup.n_samples
+
+    # Apply the same valid-mask to genotypes (runner-specific: genotypes in memory)
+    if not np.all(setup.valid_mask):
+        genotypes = genotypes[setup.valid_mask, :]
 
     n_samples, n_snps = genotypes.shape
-    if n_samples == 0:
-        raise ValueError(
-            "No valid samples: all phenotypes are missing or -9"
-            + (", or all have missing covariates" if covariates is not None else "")
-        )
-
-    # Validate precomputed eigenpair dimensions against (possibly filtered) n_samples
-    if eigenvalues is not None and eigenvectors is not None:
-        hint = (
-            "Recompute eigenpairs on the filtered kinship, or pass kinship= "
-            "and let JAMMA compute the eigendecomposition."
-        )
-        if eigenvalues.shape[0] != n_samples:
-            raise ValueError(
-                f"eigenvalues length ({eigenvalues.shape[0]}) does not match "
-                f"n_samples ({n_samples}) after removing missing "
-                f"phenotypes/covariates. {hint}"
-            )
-        if eigenvectors.shape != (n_samples, n_samples):
-            raise ValueError(
-                f"eigenvectors shape {eigenvectors.shape} does not match "
-                f"({n_samples}, {n_samples}) after removing missing "
-                f"phenotypes/covariates. {hint}"
-            )
 
     W, n_cvt = _build_covariate_matrix(covariates, n_samples)
 

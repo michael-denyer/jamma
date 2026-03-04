@@ -14,7 +14,6 @@ import jax
 import numpy as np
 from loguru import logger
 
-from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.core.memory import estimate_lmm_streaming_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask
@@ -42,6 +41,7 @@ from jamma.lmm.prepare import (
     prepare_utg_chunk,
     resolve_device_placement,
 )
+from jamma.lmm.prepare_common import validate_runner_inputs
 from jamma.lmm.results import (
     _concat_jax_accumulators,
     _yield_chunk_results,
@@ -136,24 +136,6 @@ def run_lmm_association_streaming(
     """
     start_time = time.perf_counter()
 
-    if (eigenvalues is None) != (eigenvectors is None):
-        raise ValueError(
-            "Must provide both eigenvalues and eigenvectors, or neither. "
-            f"Got eigenvalues={eigenvalues is not None}, "
-            f"eigenvectors={eigenvectors is not None}"
-        )
-
-    if kinship is None and eigenvalues is None:
-        raise ValueError(
-            "Either kinship or pre-computed eigendecomposition (eigenvalues + "
-            "eigenvectors) must be provided"
-        )
-
-    if lmm_mode not in (1, 2, 3, 4):
-        raise ValueError(
-            f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
-        )
-
     meta = get_plink_metadata(bed_path)
     n_samples_total = meta["n_samples"]
     n_snps = meta["n_snps"]
@@ -161,31 +143,17 @@ def run_lmm_association_streaming(
     if snp_info is None:
         snp_info = _LazySnpMeta(meta)
 
-    valid_mask = ~np.isnan(phenotypes) & (phenotypes != PHENOTYPE_MISSING)
-    if covariates is not None:
-        valid_covariate = np.all(~np.isnan(covariates), axis=1)
-        valid_mask = valid_mask & valid_covariate
-    n_valid = int(np.sum(valid_mask))
-    if n_valid == 0:
-        raise ValueError(
-            "No valid samples: all phenotypes are missing or -9"
-            + (", or all have missing covariates" if covariates is not None else "")
-        )
-    if not np.all(valid_mask):
-        phenotypes = phenotypes[valid_mask]
-        if kinship is not None:
-            kinship = kinship[np.ix_(valid_mask, valid_mask)]
-        if covariates is not None:
-            covariates = covariates[valid_mask, :]
-        if eigenvalues is not None and eigenvectors is not None:
-            if eigenvectors.shape[0] != n_valid:
-                raise ValueError(
-                    f"Pre-computed eigenvectors have {eigenvectors.shape[0]} rows "
-                    f"but {n_valid} samples remain after filtering "
-                    f"({n_samples_total - n_valid} removed by missing "
-                    f"phenotype/covariate). Re-run eigendecomposition on the "
-                    f"filtered kinship matrix."
-                )
+    # Validate inputs and apply sample filtering (shared logic for all runners)
+    setup = validate_runner_inputs(
+        phenotypes, kinship, covariates, eigenvalues, eigenvectors, lmm_mode
+    )
+    phenotypes = setup.phenotypes
+    kinship = setup.kinship
+    covariates = setup.covariates
+    eigenvalues = setup.eigenvalues
+    eigenvectors = setup.eigenvectors
+    n_valid = setup.n_samples
+    valid_mask = setup.valid_mask
 
     n_samples = phenotypes.shape[0]
 

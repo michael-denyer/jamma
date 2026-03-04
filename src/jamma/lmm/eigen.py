@@ -13,7 +13,6 @@ kinship matrices (46k+) requires LP64/ILP64 LAPACK. With ILP64 numpy (MKL),
 matrices up to 200k+ are supported.
 """
 
-import sys
 import time
 import warnings
 
@@ -80,29 +79,14 @@ def _try_import_dsyevr() -> tuple[bool, object | None]:
 
 def _auto_recompile_eigen() -> bool:
     """Auto-recompile _eigen_accel and reimport."""
-    try:
-        from jamma.lmm._compile_eigen import compile_extension
-    except ImportError:
-        logger.debug(
-            "_compile_eigen module not available — auto-recompilation not possible"
-        )
-        return False
+    from jamma.lmm._compile_utils import auto_recompile_c_extension
 
-    logger.info(
-        "_eigen_accel needs recompilation (ABI mismatch or missing). Compiling..."
+    return auto_recompile_c_extension(
+        module_name="_eigen_accel",
+        compiler_module="jamma.lmm._compile_eigen",
+        sys_module_key="jamma.lmm._eigen_accel",
+        label="eigendecomp",
     )
-
-    if not compile_extension(verbose=False):
-        logger.warning(
-            "Auto-recompilation of _eigen_accel failed. "
-            "Falling back to DSYEVD. "
-            "To diagnose: python -m jamma.lmm._compile_eigen"
-        )
-        return False
-
-    sys.modules.pop("jamma.lmm._eigen_accel", None)
-    logger.info("_eigen_accel recompiled successfully.")
-    return True
 
 
 # Import-time probe: fast, read-only — no compilation side effects.
@@ -129,6 +113,38 @@ def _lazy_init_dsyevr() -> None:
             "DSYEVR saves ~250GB workspace at 125k samples. "
             "To compile: python -m jamma.lmm._compile_eigen"
         )
+
+
+def _select_eigen_driver(
+    n: int, available_memory_gb: float, dsyevr_available: bool
+) -> str:
+    """Select the eigendecomposition driver based on matrix size and memory.
+
+    Prefers DSYEVD (faster, O(N^2) workspace) when it fits in memory.
+    Falls back to DSYEVR (O(N) workspace, MRRR algorithm) when DSYEVD
+    would exceed available memory. Always returns DSYEVD when the DSYEVR
+    C extension is not available.
+
+    Args:
+        n: Matrix dimension (number of samples).
+        available_memory_gb: Available system memory in gigabytes.
+        dsyevr_available: Whether the DSYEVR C extension is importable.
+
+    Returns:
+        ``"dsyevr"`` if DSYEVR should be used; ``"dsyevd"`` otherwise.
+    """
+    if not dsyevr_available:
+        return "dsyevd"
+
+    dsyevd_peak = _dsyevd_peak_gb(n)
+    margin_gb = _memory_margin_gb(dsyevd_peak)
+    if dsyevd_peak + margin_gb <= available_memory_gb:
+        return "dsyevd"
+
+    # DSYEVD won't fit — DSYEVR has smaller peak regardless of whether it
+    # fits either. Caller handles the OOM-risk warning for the "neither fits"
+    # case.
+    return "dsyevr"
 
 
 # For matrices >= this size, use sampled symmetry check instead of full np.allclose.
@@ -333,34 +349,29 @@ def eigendecompose_kinship(
         f"before_eigendecomp_{n_samples}samples"
     ).available_gb
 
-    use_dsyevr = False
+    driver_choice = _select_eigen_driver(n_samples, available_gb, _DSYEVR_AVAILABLE)
+    use_dsyevr = driver_choice == "dsyevr"
     dsyevd_peak = _dsyevd_peak_gb(n_samples)
     required_gb = dsyevd_peak
 
-    if _DSYEVR_AVAILABLE:
-        margin_gb = _memory_margin_gb(dsyevd_peak)
-        if dsyevd_peak + margin_gb > available_gb:
-            # DSYEVD won't fit — check DSYEVR
-            dsyevr_peak = _dsyevr_peak_gb(n_samples)
-            dsyevr_margin = _memory_margin_gb(dsyevr_peak)
-            if dsyevr_peak + dsyevr_margin <= available_gb:
-                use_dsyevr = True
-                required_gb = dsyevr_peak
-                logger.info(
-                    f"DSYEVD peak ({dsyevd_peak:.1f}GB) exceeds "
-                    f"available memory ({available_gb:.1f}GB). "
-                    f"Using DSYEVR ({dsyevr_peak:.1f}GB)."
-                )
-            else:
-                # Neither fits — use DSYEVR anyway (smaller peak)
-                use_dsyevr = True
-                required_gb = dsyevr_peak
-                logger.warning(
-                    f"Neither DSYEVD ({dsyevd_peak:.1f}GB) nor DSYEVR "
-                    f"({dsyevr_peak:.1f}GB) fits in available memory "
-                    f"({available_gb:.1f}GB). Using DSYEVR (smaller peak). "
-                    f"OOM risk is high."
-                )
+    if use_dsyevr:
+        dsyevr_peak = _dsyevr_peak_gb(n_samples)
+        required_gb = dsyevr_peak
+        dsyevr_margin = _memory_margin_gb(dsyevr_peak)
+        if dsyevr_peak + dsyevr_margin <= available_gb:
+            logger.info(
+                f"DSYEVD peak ({dsyevd_peak:.1f}GB) exceeds "
+                f"available memory ({available_gb:.1f}GB). "
+                f"Using DSYEVR ({dsyevr_peak:.1f}GB)."
+            )
+        else:
+            # Neither fits — use DSYEVR anyway (smaller peak)
+            logger.warning(
+                f"Neither DSYEVD ({dsyevd_peak:.1f}GB) nor DSYEVR "
+                f"({dsyevr_peak:.1f}GB) fits in available memory "
+                f"({available_gb:.1f}GB). Using DSYEVR (smaller peak). "
+                f"OOM risk is high."
+            )
     logger.info(
         f"Eigendecomp memory: estimated {required_gb:.1f}GB, "
         f"available {available_gb:.1f}GB"

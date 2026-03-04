@@ -234,6 +234,7 @@ class TestCliStreamingRunner:
             assert "output_path" in call_kwargs
             assert call_kwargs["output_path"] is not None
             assert str(call_kwargs["output_path"]).endswith(".assoc.txt")
-            # JAX path should pass raw data, not filtered
-            assert call_kwargs["check_memory"] is False
+            # JAX path uses LmmConfig — check_memory=False is inside config
+            config = call_kwargs["config"]
+            assert config.check_memory is False
             assert call_kwargs["snp_info"] is None

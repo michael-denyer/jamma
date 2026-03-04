@@ -41,7 +41,7 @@ from jamma.kinship import (
 from jamma.lmm.chunk import _compute_chunk_size
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
-from jamma.lmm.schema import PipelineTiming
+from jamma.lmm.schema import LmmConfig, PipelineTiming
 from jamma.lmm.stats import AssocResult
 
 
@@ -976,6 +976,16 @@ class PipelineRunner:
 
         ensure_jax_configured()
 
+        lmm_config = LmmConfig(
+            maf_threshold=self.config.maf,
+            miss_threshold=self.config.miss,
+            l_min=self.config.l_min,
+            l_max=self.config.l_max,
+            check_memory=False,  # Already checked above
+            show_progress=self.config.show_progress,
+            lmm_mode=self.config.lmm_mode,
+        )
+
         return run_lmm_association_streaming(
             bed_path=self.config.bfile,
             phenotypes=phenotypes,
@@ -984,17 +994,11 @@ class PipelineRunner:
             covariates=covariates,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            maf_threshold=self.config.maf,
-            miss_threshold=self.config.miss,
-            l_min=self.config.l_min,
-            l_max=self.config.l_max,
             output_path=assoc_path,
-            lmm_mode=self.config.lmm_mode,
-            check_memory=False,  # Already checked above
-            show_progress=self.config.show_progress,
             snps_indices=snps_indices,
             hwe_threshold=self.config.hwe_threshold,
             chunk_size=actual_chunk,
+            config=lmm_config,
         )
 
     def _run_numpy_backend(
@@ -1036,6 +1040,16 @@ class PipelineRunner:
             for i in indices
         ]
 
+        lmm_config = LmmConfig(
+            maf_threshold=self.config.maf,
+            miss_threshold=self.config.miss,
+            l_min=self.config.l_min,
+            l_max=self.config.l_max,
+            check_memory=False,  # Already checked above
+            show_progress=self.config.show_progress,
+            lmm_mode=self.config.lmm_mode,
+        )
+
         assoc_results = run_lmm_association_numpy(
             genotypes=genotypes,
             phenotypes=phenotypes,
@@ -1044,13 +1058,7 @@ class PipelineRunner:
             covariates=covariates,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            maf_threshold=self.config.maf,
-            miss_threshold=self.config.miss,
-            l_min=self.config.l_min,
-            l_max=self.config.l_max,
-            check_memory=False,  # Already checked above
-            show_progress=self.config.show_progress,
-            lmm_mode=self.config.lmm_mode,
+            config=lmm_config,
         )
 
         # Write results to disk in GEMMA format

@@ -4,6 +4,7 @@ Verifies that _compute_chunk_size and auto_tune_chunk_size respect
 MAX_SAFE_CHUNK cap, clamp constraints, and device alignment contracts.
 """
 
+import numpy as np
 import pytest
 
 from jamma.lmm.chunk import (
@@ -475,3 +476,97 @@ class TestComputeSubchunkStarts:
         # 3 * 49992 = 149976, total = 149980, tail = 4 < 24 → merge
         starts = compute_subchunk_starts(149980, 49992, n_devices=24)
         assert starts == [0, 49992, 99984], "Tail of 4 merged into third sub-chunk"
+
+
+jax = pytest.importorskip("jax")
+
+
+@pytest.mark.requires_jax
+@pytest.mark.tier1
+class TestShardingTailRegression:
+    """Regression test for IndivisibleError with multi-device tail sub-chunks.
+
+    When jax_chunk_size doesn't divide the file chunk evenly, the tail
+    sub-chunk can have fewer SNPs than n_devices. Without the
+    compute_subchunk_starts fix, this causes:
+        IndivisibleError: shape=[8, 3] is incompatible with
+        mesh_shape=OrderedDict({'snps': 24})
+
+    These tests verify the fix by running the full JAX compute pipeline
+    on deliberately small sub-chunks that would have triggered the error.
+    """
+
+    def test_tail_subchunk_with_multi_device_sharding(self):
+        """Padded tail sub-chunk must not cause IndivisibleError.
+
+        Simulates the exact scenario: 8 SNPs padded to n_devices,
+        sharded across the mesh, then processed through the full
+        Uab → Iab → golden section pipeline.
+        """
+        import jax.numpy as jnp
+        from jax.sharding import Mesh, NamedSharding
+        from jax.sharding import PartitionSpec as P
+
+        from jamma.lmm.likelihood_jax import (
+            batch_compute_iab,
+            batch_compute_uab,
+            golden_section_optimize_lambda,
+        )
+        from jamma.lmm.prepare import DevicePlacement, prepare_utg_chunk
+
+        n_devices = len(jax.devices("cpu"))
+        if n_devices < 2:
+            pytest.skip("Need >= 2 JAX CPU devices for sharding regression test")
+
+        mesh = Mesh(np.array(jax.devices("cpu")), ("snps",))
+        snp_spec = NamedSharding(mesh, P(None, "snps"))
+        rep_spec = NamedSharding(mesh, P())
+        placement = DevicePlacement(snp=snp_spec, rep=rep_spec, n_devices=n_devices)
+
+        n_samples = 100
+        # Simulate tail: fewer actual SNPs than n_devices
+        n_actual = max(1, n_devices - 2)
+        geno_chunk = np.random.default_rng(42).standard_normal((n_samples, n_actual))
+        U = np.eye(n_samples)
+
+        # prepare_utg_chunk pads to n_devices multiple
+        UtG_np, actual_len = prepare_utg_chunk(
+            geno_chunk, U, placement, rotation_threads=1
+        )
+        assert actual_len == n_actual
+        assert UtG_np.shape[1] % n_devices == 0, (
+            f"UtG not padded to device multiple: {UtG_np.shape[1]}"
+        )
+
+        # device_put with sharding — this is where the old bug manifested
+        UtG_jax = jax.device_put(UtG_np, snp_spec)
+
+        eigenvalues = jax.device_put(jnp.ones(n_samples, dtype=jnp.float64), rep_spec)
+        UtW = jax.device_put(jnp.ones((n_samples, 1), dtype=jnp.float64), rep_spec)
+        Uty = jax.device_put(jnp.ones(n_samples, dtype=jnp.float64), rep_spec)
+
+        # Full compute pipeline — would throw IndivisibleError without fix
+        Uab = batch_compute_uab(1, UtW, Uty, UtG_jax)
+        Iab = batch_compute_iab(1, Uab)
+        lambdas, logls = golden_section_optimize_lambda(1, eigenvalues, Uab, Iab)
+
+        assert lambdas.shape[0] == UtG_np.shape[1]
+        assert logls.shape[0] == UtG_np.shape[1]
+
+    def test_compute_subchunk_starts_prevents_indivisible_tail(self):
+        """Verify compute_subchunk_starts prevents the exact failing scenario.
+
+        With 24 devices and jax_chunk_size=49992, a file chunk of 50000
+        leaves a tail of 8 — too small for 24-way sharding.
+        """
+        # The exact parameters from the production failure
+        starts = compute_subchunk_starts(n_subset=50000, chunk_size=49992, n_devices=24)
+        # Tail was 8, which is < 24, so it must be merged
+        assert len(starts) == 1
+        assert starts == [0]
+
+        # The merged sub-chunk processes all 50000 SNPs
+        # prepare_utg_chunk will pad 50000 to 50016 (next multiple of 24)
+        assert 50000 % 24 != 0  # confirms padding is needed
+        next_multiple = ((50000 + 23) // 24) * 24
+        assert next_multiple == 50016

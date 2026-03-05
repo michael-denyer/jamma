@@ -135,19 +135,31 @@ def run_lmm_association_jax(
         )
 
     if check_memory:
-        est = estimate_lmm_memory(n_samples, n_snps)
+        actual_chunk = _compute_chunk_size(n_snps, n_samples=n_samples)
+        est = estimate_lmm_memory(n_samples, n_snps, lmm_batch_size=actual_chunk)
+        # available reports free system RAM, but this process is already
+        # using memory (eigenvectors, etc.). Subtract current process
+        # usage to get realistic headroom for new allocations.
+        import psutil
+
+        rss_gb = psutil.Process().memory_info().rss / 1e9
+        effective_available = est.available_gb
         logger.info(
             f"LMM memory: estimated {est.total_gb:.1f}GB, "
-            f"available {est.available_gb:.1f}GB"
+            f"available {effective_available:.1f}GB "
+            f"(process using {rss_gb:.1f}GB)"
         )
         if not est.sufficient:
             raise MemoryError(
-                f"Insufficient memory for LMM workflow with {n_samples:,} samples × "
+                f"Insufficient memory for LMM with {n_samples:,} samples × "
                 f"{n_snps:,} SNPs.\n"
-                f"Need: {est.total_gb:.1f}GB, Available: {est.available_gb:.1f}GB\n"
-                f"Breakdown: kinship={est.kinship_gb:.1f}GB, "
-                f"eigenvectors={est.eigenvectors_gb:.1f}GB, "
-                f"genotypes={est.genotypes_gb:.1f}GB"
+                f"Need: {est.total_gb:.1f}GB, "
+                f"Available: {effective_available:.1f}GB "
+                f"(process using {rss_gb:.1f}GB)\n"
+                f"Breakdown: eigenvectors={est.eigenvectors_gb:.1f}GB, "
+                f"genotypes={est.genotypes_gb:.1f}GB, "
+                f"batch buffers={est.lmm_batch_gb:.1f}GB\n"
+                f"Consider: JAMMA_BACKEND=numpy for lower memory usage"
             )
 
     placement = resolve_device_placement(use_gpu)

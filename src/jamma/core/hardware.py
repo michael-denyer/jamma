@@ -14,7 +14,7 @@ import jax
 import numpy as np
 import psutil
 
-from jamma.core.threading import get_blas_thread_count
+from jamma.core.threading import get_blas_backend, get_blas_thread_count
 
 
 def get_hardware_context() -> dict[str, str | int | bool]:
@@ -49,7 +49,7 @@ def get_hardware_context() -> dict[str, str | int | bool]:
         "cpu_model": _get_cpu_model(),
         "cpu_count_physical": psutil.cpu_count(logical=False) or 1,
         "cpu_count_logical": os.cpu_count() or 1,
-        "blas_backend": _get_blas_backend(),
+        "blas_backend": get_blas_backend(),
         "blas_threads": get_blas_thread_count(),
         "jax_version": jax.__version__,
         "jax_backend": jax.default_backend(),
@@ -111,15 +111,3 @@ def _get_cpu_model() -> str:
 
     # Last resort: architecture string
     return platform.machine() or "unknown"
-
-
-def _get_blas_backend() -> str:
-    """Return the BLAS backend name from threadpool_info.
-
-    .. deprecated::
-        Use :func:`jamma.core.threading.get_blas_backend` instead.
-        This wrapper exists for backward compatibility with benchmark scripts.
-    """
-    from jamma.core.threading import get_blas_backend
-
-    return get_blas_backend()

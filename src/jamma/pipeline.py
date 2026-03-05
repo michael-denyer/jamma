@@ -740,7 +740,7 @@ class PipelineRunner:
 
     @staticmethod
     def _log_pipeline_banner(
-        active_backend: str,
+        active_backend: BackendResolved,
         n_samples: int,
         n_snps: int,
     ) -> None:
@@ -781,12 +781,12 @@ class PipelineRunner:
 
             # Respect JAMMA_BLAS_THREADS if set, otherwise use physical
             # core count. We avoid get_blas_thread_count() because it
-            # calls jax.devices() which would freeze the JAX backend
-            # if JAX isn't configured yet.
+            # imports jax unconditionally, crashing numpy-only installs.
+            max_threads = os.cpu_count() or 64
             env_threads = os.environ.get("JAMMA_BLAS_THREADS")
             if env_threads is not None:
                 try:
-                    threads = max(1, int(env_threads))
+                    threads = max(1, min(int(env_threads), max_threads))
                 except ValueError:
                     threads = get_physical_core_count()
             elif is_blas_controllable():

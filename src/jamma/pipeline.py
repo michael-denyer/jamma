@@ -23,7 +23,12 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-from jamma.core.backend import BackendRequest, BackendResolved, has_jax
+from jamma.core.backend import (
+    BackendRequest,
+    BackendResolved,
+    format_pipeline_banner,
+    has_jax,
+)
 from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.core.memory import (
     StreamingMemoryBreakdown,
@@ -733,6 +738,63 @@ class PipelineRunner:
         logger.info(f"## number of phenotypes = {n_phenotypes}")
         logger.info(f"## number of total SNPs/var = {n_snps:,}")
 
+    @staticmethod
+    def _log_pipeline_banner(
+        active_backend: str,
+        n_samples: int,
+        n_snps: int,
+    ) -> None:
+        """Emit a consolidated one-line pipeline configuration banner.
+
+        Gathers runner type, BLAS backend, C extension status, and
+        thread count into a single log line. The eigen driver is not
+        yet known at pipeline start (depends on matrix size), so it
+        is logged later by eigendecompose_kinship.
+
+        Args:
+            active_backend: Resolved backend ("jax" or "numpy").
+            n_samples: Number of analyzed samples (for streaming heuristic).
+            n_snps: Number of SNPs (for streaming heuristic).
+        """
+        from jamma.core.hardware import _get_blas_backend
+        from jamma.core.threading import (
+            get_physical_core_count,
+            is_blas_controllable,
+        )
+        from jamma.lmm._compile_utils import is_c_extension_usable
+
+        c_ext = is_c_extension_usable()
+
+        if active_backend == "jax":
+            # Check streaming vs batch using same heuristic as
+            # _auto_select_backend: streaming when memory insufficient.
+            est = estimate_lmm_memory(n_samples, n_snps)
+            runner = "jax-streaming" if not est.sufficient else "jax-batch"
+        else:
+            runner = "numpy-batch"
+
+        blas = _get_blas_backend()
+
+        # Use physical core count for threads — calling
+        # get_blas_thread_count() would trigger JAX device freeze
+        # if JAX isn't configured yet.
+        if is_blas_controllable():
+            threads = get_physical_core_count()
+        else:
+            # Accelerate or no BLAS — use halved core count
+            # (same logic as runner_numpy.py for OpenMP).
+            cores = get_physical_core_count()
+            threads = max(1, cores // 2)
+
+        banner = format_pipeline_banner(
+            runner=runner,
+            blas=blas,
+            eigen_driver="pending",
+            c_ext=c_ext,
+            threads=threads,
+        )
+        logger.info(banner)
+
     def run(self) -> PipelineResult:
         """Execute the full GWAS pipeline.
 
@@ -753,7 +815,7 @@ class PipelineRunner:
         """
         t_start = time.perf_counter()
 
-        from jamma.core.backend import detect_backend, log_backend_selection
+        from jamma.core.backend import detect_backend
 
         # Resolve env override first: JAMMA_BACKEND takes priority in all paths.
         env_backend = os.environ.get("JAMMA_BACKEND")
@@ -773,8 +835,6 @@ class PipelineRunner:
             )
         else:
             active_backend = detect_backend(requested)
-
-        log_backend_selection(active_backend, self.config.backend, env_backend)
 
         trace_ctx = contextlib.nullcontext()
         if active_backend == "jax":
@@ -847,6 +907,7 @@ class PipelineRunner:
             n_valid = int(np.sum(valid_mask))
             n_cvt = covariates.shape[1] if covariates is not None else 1
             self._log_banner(n_samples, n_valid, n_snps, n_covariates=n_cvt)
+            self._log_pipeline_banner(active_backend, n_valid, n_snps)
 
             t_loco = time.perf_counter()
             results, n_tested = run_lmm_loco(
@@ -940,6 +1001,7 @@ class PipelineRunner:
             n_covariates=n_cvt,
             n_phenotypes=len(pheno_columns),
         )
+        self._log_pipeline_banner(active_backend, n_valid, n_snps)
 
         # Memory preflight: streaming estimate for JAX, in-memory for NumPy
         if active_backend == "jax":

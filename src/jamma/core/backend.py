@@ -122,6 +122,51 @@ def log_backend_selection(
         logger.info(f"Backend: {active} (auto-selected)")
 
 
+_BLAS_DISPLAY: dict[str, str] = {
+    "mkl": "MKL",
+    "openblas": "OpenBLAS",
+    "accelerate": "Accelerate",
+}
+
+
+def format_pipeline_banner(
+    runner: str,
+    blas: str,
+    eigen_driver: str,
+    c_ext: bool,
+    threads: int,
+    jax_devices: int = 0,
+) -> str:
+    """Build a single-line pipeline startup banner.
+
+    Consolidates runner, BLAS backend, eigen driver, C extension status,
+    and thread count into one authoritative log line.
+
+    Args:
+        runner: Runner name (e.g. "numpy-batch", "jax-streaming").
+        blas: BLAS backend identifier from threadpool_info
+            (e.g. "mkl", "openblas").
+        eigen_driver: Eigen driver name (e.g. "DSYEVD", "DSYEVR").
+        c_ext: Whether the C extension is usable.
+        threads: BLAS/OpenMP thread count.
+        jax_devices: Number of JAX CPU devices (0 = not applicable).
+
+    Returns:
+        Formatted banner string.
+
+    Example:
+        >>> format_pipeline_banner("numpy-batch", "mkl", "DSYEVD", True, 48)
+        'Pipeline: numpy-batch | MKL | DSYEVD | C-ext (48 threads)'
+    """
+    blas_display = _BLAS_DISPLAY.get(blas, blas.title())
+    c_ext_str = "C-ext" if c_ext else "no C-ext"
+    jax_suffix = f", {jax_devices} JAX devices" if jax_devices > 0 else ""
+    return (
+        f"Pipeline: {runner} | {blas_display} | {eigen_driver}"
+        f" | {c_ext_str} ({threads} threads{jax_suffix})"
+    )
+
+
 def get_backend_info() -> dict[str, str | bool]:
     """Get information about the compute backend.
 

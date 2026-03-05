@@ -24,7 +24,6 @@ from jamma.core.threading import (
 )
 from jamma.lmm.compute_numpy import (
     _C_ACCEL_AVAILABLE,
-    _C_HAS_OPENMP,
     _C_SPLIT_AVAILABLE,
     LmmMode,
     _compute_lmm_chunk_numpy,
@@ -419,12 +418,6 @@ def run_lmm_association_numpy(
             logger.info(
                 f"  Processing in {n_chunks} chunks ({chunk_size:,} SNPs/chunk)"
             )
-        if _C_ACCEL_AVAILABLE:
-            if _C_HAS_OPENMP:
-                logger.info(f"  C extension active ({omp_threads} OpenMP threads)")
-            else:
-                logger.info("  C extension active (no OpenMP)")
-
     # Pre-allocate result arrays driven by _RESULT_FIELDS mapping
     write_offset = 0
     arrays_out: dict[str, np.ndarray] = {

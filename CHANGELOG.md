@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.2] - 2026-03-05
+
+### Fixed
+
+- Test expected text `.cXX.txt` kinship path but default output is now binary `.cXX.npy`
+
+### Changed
+
+- Updated project logo
+
 ## [2.11.1] - 2026-03-05
 
 ### Fixed

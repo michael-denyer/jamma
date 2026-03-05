@@ -20,6 +20,7 @@
 - **Fast**: Up to 11x faster than GEMMA 0.98.5 at scale
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
 - **Cross-platform**: Runs on Linux, macOS, and Windows — NumPy backend works everywhere, JAX adds batch acceleration on Linux and ARM Mac
+- **Optimized for Intel**: Best performance on Intel CPUs with MKL BLAS. Runs well on Apple Silicon (Accelerate BLAS). Other architectures (AMD, ARM Linux) work correctly but with less BLAS optimization
 - **Pure Python + optional C extensions**: NumPy + optional JAX stack; C extensions for DSYEVR eigendecomposition and OpenMP-parallel Wald tests, JAX for batch MLE optimization
 - **Large-scale ready**: Optional [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) wheels (numpy 2.4.2) for >46k sample eigendecomposition
 
@@ -82,12 +83,16 @@ See the [User Guide](docs/USER_GUIDE.md#linux--windows) for ILP64 verification s
 
 ### Platform Support
 
-| Platform | `pip install jamma` | `pip install jamma[jax]` | Notes |
-|----------|---------------------|--------------------------|-------|
-| Linux x86_64 | JAX (auto-included) | — | Full support; ILP64 for >46k samples |
-| ARM Mac (M1+) | JAX (auto-included) | — | Full support |
-| Intel Mac | NumPy only | Not available | JAX dropped Intel Mac; ILP64 for >46k samples |
-| Windows | NumPy only | Not available | JAX dropped Windows support |
+| Platform | `pip install jamma` | `pip install jamma[jax]` | BLAS | Notes |
+|----------|---------------------|--------------------------|------|-------|
+| Linux x86_64 (Intel) | JAX (auto-included) | — | MKL (optimal) | Best performance; ILP64 for >46k samples |
+| Linux x86_64 (AMD) | JAX (auto-included) | — | OpenBLAS | Works well; MKL also works on AMD but less optimized |
+| ARM Mac (M1+) | JAX (auto-included) | — | Accelerate | Excellent performance via Apple's BLAS |
+| ARM Linux | NumPy only | JAX manual install | OpenBLAS | Works correctly; less BLAS optimization |
+| Intel Mac | NumPy only | Not available | MKL / Accelerate | JAX dropped Intel Mac; ILP64 for >46k samples |
+| Windows | NumPy only | Not available | OpenBLAS | JAX dropped Windows support |
+
+JAMMA's heavy computation (eigendecomposition, matrix multiplication, REML optimization) is BLAS-bound. Intel MKL delivers the best throughput, particularly at scale. Apple Accelerate is a close second on Apple Silicon. OpenBLAS works correctly everywhere but is less tuned for these workloads.
 
 JAX is auto-included on Linux and ARM Mac via platform markers.
 Force a specific backend with `--backend numpy` or `--backend jax`.
@@ -119,14 +124,19 @@ The reader auto-detects format, so existing `.cXX.txt` files still work as `-k` 
 
 ### One-call GWAS (recommended)
 
+The `gwas()` function is the recommended way to run JAMMA from Python. It handles the full pipeline — data loading, kinship computation, eigendecomposition, and LMM association — in a single call. You don't need to compute a kinship matrix separately unless you want to reuse it across runs.
+
 ```python
 from jamma import gwas
 
-# Full pipeline: load data → kinship → eigendecomp → LMM → results
-result = gwas("data/my_study", kinship_file="data/kinship.cXX.txt")
+# Simplest usage: computes kinship internally, no separate kinship step needed
+result = gwas("data/my_study")
 print(f"Tested {result.n_snps_tested} SNPs in {result.timing['total_s']:.1f}s")
 
-# Compute kinship from scratch and save it
+# Or supply a pre-computed kinship matrix to skip recomputation
+result = gwas("data/my_study", kinship_file="data/kinship.cXX.npy")
+
+# Compute kinship from scratch and save it for reuse
 result = gwas("data/my_study", save_kinship=True, output_dir="output")
 
 # With covariates and LRT test

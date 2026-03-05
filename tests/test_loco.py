@@ -5,7 +5,12 @@ symmetry, PSD, trace relationship, manual computation equivalence) and LOCO LMM
 integration (valid results, top hits overlap, file output, CLI, pipeline, API).
 
 Since GEMMA 0.96 does not support -loco, validation relies on mathematical
-properties rather than reference data.
+properties rather than reference data. All tests use lmm_mode=1.
+
+Related LOCO test files:
+- test_gemma_loco_integration.py: GEMMA reference validation, modes 2/3/4
+- test_loco_numpy.py: NumPy-only LOCO paths (no JAX dependency)
+- test_loco_bugs.py: Regression tests for kinship aliasing, ordering, cleanup
 """
 
 from __future__ import annotations

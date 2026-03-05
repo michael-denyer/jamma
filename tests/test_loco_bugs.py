@@ -1,4 +1,10 @@
-"""Tests for LOCO kinship bugs: aliasing, chromosome ordering, partial cleanup."""
+"""Tests for LOCO kinship bugs: aliasing, chromosome ordering, partial cleanup.
+
+Related LOCO test files:
+- test_loco.py: Core LOCO tests (lmm_mode=1, cross-backend parity)
+- test_gemma_loco_integration.py: GEMMA reference validation, modes 2/3/4
+- test_loco_numpy.py: NumPy-only LOCO paths (no JAX dependency)
+"""
 
 import numpy as np
 import pytest

@@ -29,6 +29,11 @@ Fixture data:
 - tests/fixtures/gemma_loco/test_snps.txt - GEMMA annotation file
 - tests/fixtures/gemma_loco/gemma_loco_chr{1,2,3}.assoc.txt - GEMMA LMM results
   with JAMMA LOCO kinship (chr-specific SNPs only, 200/150/150 rows respectively)
+
+Related LOCO test files:
+- test_loco.py: Core LOCO tests (lmm_mode=1, cross-backend parity)
+- test_loco_numpy.py: NumPy-only LOCO paths (no JAX dependency)
+- test_loco_bugs.py: Regression tests for kinship aliasing, ordering, cleanup
 """
 
 from pathlib import Path

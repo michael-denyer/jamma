@@ -4,6 +4,11 @@ Kept in a separate file from test_loco.py because test_loco.py has
 ``pytest.importorskip("jax")`` at module level, which skips the entire
 module when JAX is not installed. Tests here exercise the NumPy backend
 only and must not import JAX.
+
+Related LOCO test files:
+- test_loco.py: Core LOCO tests (lmm_mode=1, cross-backend parity)
+- test_gemma_loco_integration.py: GEMMA reference validation, modes 2/3/4
+- test_loco_bugs.py: Regression tests for kinship aliasing, ordering, cleanup
 """
 
 from __future__ import annotations

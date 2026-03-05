@@ -144,7 +144,7 @@ LOCO analysis processes each chromosome independently: compute K_loco via stream
 
 ### Test Suite
 
-Full test suite passing (`uv run pytest tests/ -x`). Tolerance constants in `src/jamma/validation/tolerances.py` unchanged from v1.3 (kinship tolerance aligned to 1e-8 in v2.5.7).
+Default test suite passing (`uv run pytest tests/ -x`), which excludes `slow` and `tier2` markers per `pyproject.toml` defaults. Run `uv run pytest tests/ -x -m ""` for the full suite including slow/tier2 tests. Tolerance constants in `src/jamma/validation/tolerances.py` unchanged from v1.3 (kinship tolerance aligned to 1e-8 in v2.5.7).
 
 ---
 

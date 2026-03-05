@@ -72,7 +72,7 @@ uv sync
 | Linux x86_64 | JAX (auto-included) | — | Full support; ILP64 for >46k samples |
 | ARM Mac (M1+) | JAX (auto-included) | — | Full support |
 | Intel Mac | NumPy only | Not available | JAX dropped Intel Mac support |
-| Windows | NumPy only | JAX (CPU) | Explicit opt-in via `[jax]` extra |
+| Windows | NumPy only | Not available | JAX dropped Windows support |
 
 ### Backend Selection
 

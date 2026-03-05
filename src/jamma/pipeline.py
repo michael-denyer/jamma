@@ -301,21 +301,10 @@ class PipelineRunner:
     def _compute_valid_mask(
         phenotypes: np.ndarray, covariates: np.ndarray | None
     ) -> np.ndarray:
-        """Compute boolean mask of samples with valid phenotype and covariate values.
+        """Compute boolean mask of samples with valid phenotype and covariate values."""
+        from jamma.lmm.prepare_common import compute_valid_mask
 
-        Args:
-            phenotypes: Phenotype vector (n_samples,).
-            covariates: Covariate matrix (n_samples, n_cvt) or None.
-
-        Returns:
-            Boolean mask array of shape (n_samples,) where True indicates
-            a sample with valid phenotype and covariate values.
-        """
-        valid_mask = ~np.isnan(phenotypes) & (phenotypes != PHENOTYPE_MISSING)
-        if covariates is not None:
-            valid_covariate = np.all(~np.isnan(covariates), axis=1)
-            valid_mask = valid_mask & valid_covariate
-        return valid_mask
+        return compute_valid_mask(phenotypes, covariates)
 
     def validate_inputs(self) -> None:
         """Validate that all required input files exist and parameters are valid.
@@ -766,7 +755,11 @@ class PipelineRunner:
 
         from jamma.core.backend import detect_backend, log_backend_selection
 
-        if self.config.backend == "auto":
+        # Resolve env override first: JAMMA_BACKEND takes priority in all paths.
+        env_backend = os.environ.get("JAMMA_BACKEND")
+        requested = env_backend if env_backend is not None else self.config.backend
+
+        if requested == "auto":
             # Memory-based auto-selection requires PLINK metadata (n_samples, n_snps).
             # We load it here (lightweight — reads .fam/.bim header only) so the
             # backend decision is data-driven rather than JAX-availability-only.
@@ -778,10 +771,10 @@ class PipelineRunner:
                 n_snps=_meta["n_snps"],
                 use_gpu=False,
             )
-            log_backend_selection(active_backend, self.config.backend)
         else:
-            active_backend = detect_backend(self.config.backend)
-            log_backend_selection(active_backend, self.config.backend)
+            active_backend = detect_backend(requested)
+
+        log_backend_selection(active_backend, self.config.backend, env_backend)
 
         trace_ctx = contextlib.nullcontext()
         if active_backend == "jax":
@@ -1032,11 +1025,28 @@ class PipelineRunner:
         total_tested = 0
         all_assoc_paths: list[Path] = []
 
+        # Pre-load PLINK data once for NumPy multi-phenotype runs
+        _plink_data = None
+        if active_backend != "jax" and len(pheno_columns) > 1:
+            from jamma.io import load_plink_binary
+
+            logger.info(
+                "NumPy backend: loading all genotypes into memory "
+                "(for large datasets, use JAX backend: pip install jamma[jax])"
+            )
+            _plink_data = load_plink_binary(self.config.bfile)
+
         prefix = self.config.output_prefix
         for col in pheno_columns:
             if is_multi:
                 logger.info(f"Starting LMM for phenotype column {col}")
-            phenotypes_col = all_pheno_data[col][0]
+            # Mark samples outside the shared intersection as NaN so the
+            # runner computes the same valid_mask used for eigendecomposition.
+            # We pass full-length arrays (not pre-filtered) because the
+            # streaming runner indexes genotypes streamed from disk using
+            # the mask it computes internally.
+            phenotypes_col = all_pheno_data[col][0].copy()
+            phenotypes_col[~valid_mask] = np.nan
 
             if is_multi:
                 col_path = self.config.output_dir / f"{prefix}.pheno{col}.assoc.txt"
@@ -1063,6 +1073,7 @@ class PipelineRunner:
                     eigenvectors,
                     col_path,
                     snps_indices,
+                    plink_data=_plink_data,
                 )
 
             all_results.extend(results)
@@ -1077,11 +1088,9 @@ class PipelineRunner:
         # Pull runner-level rotation timing (JAX backend only)
         runner_timing: dict[str, float] = {}
         if active_backend == "jax":
-            from jamma.lmm.runner_streaming import (
-                last_run_timing as _stream_timing,
-            )
+            from jamma.lmm.runner_streaming import get_last_run_timing
 
-            runner_timing = dict(_stream_timing)
+            runner_timing = get_last_run_timing()
 
         return PipelineResult(
             associations=all_results,
@@ -1154,19 +1163,26 @@ class PipelineRunner:
         eigenvectors: np.ndarray | None,
         assoc_path: Path,
         snps_indices: np.ndarray | None,
+        plink_data: object | None = None,
     ) -> tuple[list[AssocResult], int]:
-        """Run LMM association using the pure-NumPy batch backend."""
+        """Run LMM association using the pure-NumPy batch backend.
+
+        Args:
+            plink_data: Pre-loaded PLINK data. If None, loads from disk.
+                Pass this to avoid reloading genotypes in multi-phenotype runs.
+        """
         from jamma.io import load_plink_binary
         from jamma.lmm import run_lmm_association_numpy
         from jamma.lmm.io import IncrementalAssocWriter
         from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 
-        logger.info(
-            "NumPy backend: loading all genotypes into memory "
-            "(for large datasets, use JAX backend: pip install jamma[jax])"
-        )
+        if plink_data is None:
+            logger.info(
+                "NumPy backend: loading all genotypes into memory "
+                "(for large datasets, use JAX backend: pip install jamma[jax])"
+            )
+            plink_data = load_plink_binary(self.config.bfile)
 
-        plink_data = load_plink_binary(self.config.bfile)
         genotypes = plink_data.genotypes
 
         # Apply snps_indices filter before passing to runner

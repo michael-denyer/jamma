@@ -20,6 +20,26 @@ from jamma.lmm.likelihood import compute_null_model_mle
 from jamma.utils.logging import log_rss_memory
 
 
+def compute_valid_mask(
+    phenotypes: np.ndarray, covariates: np.ndarray | None
+) -> np.ndarray:
+    """Compute boolean mask of samples with valid phenotype and covariate values.
+
+    Args:
+        phenotypes: Phenotype vector (n_samples,).
+        covariates: Covariate matrix (n_samples, n_cvt) or None.
+
+    Returns:
+        Boolean mask array of shape (n_samples,) where True indicates
+        a sample with valid phenotype and covariate values.
+    """
+    valid_mask = ~np.isnan(phenotypes) & (phenotypes != PHENOTYPE_MISSING)
+    if covariates is not None:
+        valid_covariate = np.all(~np.isnan(covariates), axis=1)
+        valid_mask = valid_mask & valid_covariate
+    return valid_mask
+
+
 @dataclass(frozen=True, slots=True)
 class RunnerSetup:
     """Validated and filtered inputs for LMM runners.
@@ -102,10 +122,7 @@ def validate_runner_inputs(
         )
 
     # Compute valid-sample mask from phenotype and covariate NaN
-    valid_mask = ~np.isnan(phenotypes) & (phenotypes != PHENOTYPE_MISSING)
-    if covariates is not None:
-        valid_covariate = np.all(~np.isnan(covariates), axis=1)
-        valid_mask = valid_mask & valid_covariate
+    valid_mask = compute_valid_mask(phenotypes, covariates)
 
     # Apply mask only when needed (avoid a copy if all samples are valid)
     if not np.all(valid_mask):

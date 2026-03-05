@@ -95,31 +95,31 @@ def detect_backend(requested: BackendRequest = "auto") -> BackendResolved:
     return "jax" if has_jax() else "numpy"
 
 
-def log_backend_selection(active: BackendResolved, requested: BackendRequest) -> None:
+def log_backend_selection(
+    active: BackendResolved,
+    requested: BackendRequest,
+    env_override: str | None = None,
+) -> None:
     """Log the selected backend at INFO level.
 
     Args:
         active: The backend that was selected ("jax" or "numpy").
         requested: The originally requested backend ("auto", "jax", or "numpy").
+        env_override: Value of JAMMA_BACKEND if set, None otherwise.
+            Caller passes this so the log reflects what actually drove selection.
 
     Example:
         >>> log_backend_selection("numpy", "auto")
-        # logs: "Backend: numpy"
+        # logs: "Backend: numpy (auto-selected)"
         >>> log_backend_selection("jax", "jax")
         # logs: "Backend: jax (explicitly requested)"
     """
-    env_override = os.environ.get("JAMMA_BACKEND")
-    if env_override:
-        logger.info(f"Backend: {active} (from JAMMA_BACKEND)")
+    if env_override is not None:
+        logger.info(f"Backend: {active} (from JAMMA_BACKEND={env_override})")
     elif requested != "auto":
         logger.info(f"Backend: {active} (explicitly requested)")
-    elif active == "numpy":
-        logger.info(
-            f"Backend: {active} (JAX not installed; "
-            "install with: pip install jamma[jax])"
-        )
     else:
-        logger.info(f"Backend: {active}")
+        logger.info(f"Backend: {active} (auto-selected)")
 
 
 def get_backend_info() -> dict[str, str | bool]:

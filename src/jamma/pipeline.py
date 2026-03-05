@@ -133,10 +133,10 @@ class PipelineConfig:
         loco: If True, use leave-one-chromosome-out analysis. Computes
             per-chromosome kinship internally; mutually exclusive with
             kinship_file in this version.
-        eigenvalue_file: Pre-computed eigenvalue file (.eigenD.txt), or None.
-            Must be paired with eigenvector_file (-d flag).
-        eigenvector_file: Pre-computed eigenvector file (.eigenU.txt), or None.
-            Must be paired with eigenvalue_file (-u flag).
+        eigenvalue_file: Pre-computed eigenvalue file (.eigenD.npy or .eigenD.txt),
+            or None. Must be paired with eigenvector_file (-d flag).
+        eigenvector_file: Pre-computed eigenvector file (.eigenU.npy or .eigenU.txt),
+            or None. Must be paired with eigenvalue_file (-u flag).
         write_eigen: If True, write eigendecomposition files as side effect
             (-eigen flag).
         phenotype_column: 1-based phenotype column index. 1 selects column 6
@@ -168,6 +168,13 @@ class PipelineConfig:
         backend: Compute backend selection: "auto" (default), "jax", or "numpy".
             "auto" uses JAX when installed, falling back to NumPy. "jax" requires
             JAX to be installed. "numpy" forces the pure-NumPy backend.
+        legacy_text: If True, write kinship and eigen files in GEMMA text format
+            (.cXX.txt / .eigenD.txt / .eigenU.txt) instead of binary .npy.
+            Default False writes binary for performance at scale.
+        phenotype_columns: List of 1-based phenotype column indices, or None to
+            derive from phenotype_column. When multiple columns are specified,
+            eigendecomposition is computed once and reused. Mutually exclusive
+            with loco mode for multiple columns.
     """
 
     bfile: Path
@@ -198,6 +205,8 @@ class PipelineConfig:
     cat_columns: list[int] | None = None
     profile_dir: Path | None = None
     backend: BackendRequest = "auto"
+    legacy_text: bool = False
+    phenotype_columns: list[int] | None = None
 
     def __post_init__(self) -> None:
         if os.sep in self.output_prefix or "/" in self.output_prefix:
@@ -208,6 +217,24 @@ class PipelineConfig:
         if self.backend not in ("auto", "jax", "numpy"):
             raise ValueError(
                 f"backend must be 'auto', 'jax', or 'numpy', got {self.backend!r}"
+            )
+        # Derive phenotype_columns from phenotype_column if not set
+        if self.phenotype_columns is None:
+            self.phenotype_columns = [self.phenotype_column]
+        # Keep phenotype_column in sync as first element
+        self.phenotype_column = self.phenotype_columns[0]
+        # Validate no duplicates
+        if len(self.phenotype_columns) != len(set(self.phenotype_columns)):
+            raise ValueError(
+                f"phenotype_columns contains duplicate indices: "
+                f"{self.phenotype_columns}"
+            )
+        # LOCO + multi-phenotype guard
+        if self.loco and len(self.phenotype_columns) > 1:
+            raise ValueError(
+                "LOCO mode (-loco) does not support multi-phenotype "
+                "(-n with multiple columns). "
+                "Run each phenotype separately."
             )
 
 
@@ -221,7 +248,11 @@ class PipelineResult:
         n_samples: Number of samples after phenotype and covariate filtering.
         n_snps_tested: Number of SNPs tested after MAF/missingness/HWE/SNP-list
             filtering.
-        assoc_path: Path to the written association results file.
+        assoc_path: Path to the written association results file. For multi-phenotype
+            runs, this is the last phenotype's output file. Use assoc_paths for
+            the full list.
+        assoc_paths: List of all per-phenotype association result paths. For
+            single-phenotype runs, this is a single-element list matching assoc_path.
         timing: Timing breakdown by pipeline phase (seconds).
         backend: The compute backend used ("jax" or "numpy").
         n_covariates: Number of covariate columns (1 = intercept-only).
@@ -231,6 +262,7 @@ class PipelineResult:
     n_samples: int
     n_snps_tested: int
     assoc_path: Path
+    assoc_paths: list[Path] = field(default_factory=list)
     timing: PipelineTiming = field(default_factory=dict)
     backend: BackendResolved = "numpy"  # Set by PipelineRunner.run()
     n_covariates: int = 1
@@ -419,13 +451,15 @@ class PipelineRunner:
                 "Apply HWE filtering as a pre-processing step."
             )
 
-    def parse_phenotypes(self) -> tuple[np.ndarray, int]:
-        """Parse phenotypes from the .fam file.
+    def _parse_phenotype_column(
+        self, pheno_col: int, *, fam_data: np.ndarray | None = None
+    ) -> tuple[np.ndarray, int]:
+        """Parse a specific phenotype column from the .fam file.
 
-        Uses vectorized parsing: reads the phenotype column, replaces
-        missing indicators ("-9", "NA") with NaN, converts to float64.
-        The column is selected by ``self.config.phenotype_column`` (1-based,
-        matching GEMMA's ``-n`` flag).
+        Args:
+            pheno_col: 1-based phenotype column index.
+            fam_data: Pre-loaded .fam file data as string array. If None,
+                reads from disk (for backward compatibility).
 
         Returns:
             Tuple of (phenotypes array, n_analyzed) where phenotypes has
@@ -434,24 +468,24 @@ class PipelineRunner:
 
         Raises:
             ValueError: If no samples have valid phenotypes, or if
-                phenotype_column is invalid.
+                pheno_col is invalid.
         """
-        pheno_col = self.config.phenotype_column
         if pheno_col < 1:
             raise ValueError(
                 f"phenotype_column must be >= 1 (1-based), got {pheno_col}"
             )
 
-        # Columns 0-4 are FID, IID, father, mother, sex; phenotype 1 is column 5
+        # Columns 0-4 are FID, IID, father, mother, sex
         col_index = 4 + pheno_col
-
         fam_path = f"{self.config.bfile}.fam"
 
-        # Single-pass read: load all columns as strings, then validate and extract
-        try:
-            all_data = np.loadtxt(fam_path, dtype=str, ndmin=2)
-        except (ValueError, OSError) as e:
-            raise ValueError(f"Failed to read .fam file {fam_path}: {e}") from e
+        if fam_data is None:
+            try:
+                all_data = np.loadtxt(fam_path, dtype=str, ndmin=2)
+            except (ValueError, OSError) as e:
+                raise ValueError(f"Failed to read .fam file {fam_path}: {e}") from e
+        else:
+            all_data = fam_data
 
         n_cols = all_data.shape[1]
         if col_index >= n_cols:
@@ -466,7 +500,7 @@ class PipelineRunner:
 
         fam_data = all_data[:, col_index]
         missing_mask = np.isin(fam_data, ["-9", "NA"])
-        fam_data[missing_mask] = "0"  # placeholder for safe float conversion
+        fam_data[missing_mask] = "0"
         phenotypes = fam_data.astype(np.float64)
         phenotypes[missing_mask] = np.nan
 
@@ -477,6 +511,25 @@ class PipelineRunner:
             raise ValueError("No samples with valid phenotypes")
 
         return phenotypes, n_analyzed
+
+    def parse_phenotypes(self) -> tuple[np.ndarray, int]:
+        """Parse phenotypes from the .fam file.
+
+        Uses vectorized parsing: reads the phenotype column, replaces
+        missing indicators ("-9", "NA") with NaN, converts to float64.
+        The column is selected by ``self.config.phenotype_column``
+        (1-based, matching GEMMA's ``-n`` flag).
+
+        Returns:
+            Tuple of (phenotypes array, n_analyzed) where phenotypes has
+            NaN for missing values and n_analyzed is the count of valid
+            (non-NaN, non-missing) phenotypes.
+
+        Raises:
+            ValueError: If no samples have valid phenotypes, or if
+                phenotype_column is invalid.
+        """
+        return self._parse_phenotype_column(self.config.phenotype_column)
 
     def check_memory_requirements(
         self, n_samples: int, n_snps: int, n_cvt: int = 1
@@ -578,11 +631,13 @@ class PipelineRunner:
             K = apply_individual_weights(K, weights)
 
         if self.config.save_kinship:
-            kinship_path = (
+            kinship_base = (
                 self.config.output_dir / f"{self.config.output_prefix}.cXX.txt"
             )
-            write_kinship_matrix(K, kinship_path)
-            logger.info(f"Kinship matrix saved to {kinship_path}")
+            actual_path = write_kinship_matrix(
+                K, kinship_base, legacy_text=self.config.legacy_text
+            )
+            logger.info(f"Kinship matrix saved to {actual_path}")
 
         return K
 
@@ -696,12 +751,13 @@ class PipelineRunner:
         1. Validate inputs
         2. Get PLINK metadata
         3. Check memory requirements
-        4. Parse phenotypes
+        4. Parse phenotypes (all columns, compute mask intersection)
         5. Resolve SNP list files
         6. Prepare output directory
         7. Load covariates (early, for eigen validation)
-        8. Load eigen files or kinship matrix
-        9. Run LMM association (streaming or NumPy batch)
+        8. Load eigen files or kinship matrix (once, shared)
+        9. Per-phenotype loop: run LMM association and write results
+        10. Return aggregated PipelineResult
 
         Returns:
             PipelineResult with associations, counts, output path, and timing.
@@ -772,13 +828,6 @@ class PipelineRunner:
         n_samples = meta["n_samples"]
         n_snps = meta["n_snps"]
 
-        phenotypes, n_analyzed = self.parse_phenotypes()
-        n_filtered = len(phenotypes) - n_analyzed
-        logger.info(
-            f"Analyzing {n_analyzed} samples with valid phenotypes "
-            f"({n_filtered} filtered)"
-        )
-
         snps_indices = self._resolve_snp_list(
             self.config.snps_file, meta["sid"], "-snps"
         )
@@ -790,7 +839,14 @@ class PipelineRunner:
         assoc_path = self.config.output_dir / f"{self.config.output_prefix}.assoc.txt"
 
         # LOCO branch: skip standard kinship, run LOCO orchestrator
+        # (single-phenotype only — guard in __post_init__)
         if self.config.loco:
+            phenotypes, n_analyzed = self.parse_phenotypes()
+            n_filtered = len(phenotypes) - n_analyzed
+            logger.info(
+                f"Analyzing {n_analyzed} samples with valid "
+                f"phenotypes ({n_filtered} filtered)"
+            )
             from jamma.lmm import run_lmm_loco
 
             covariates = self.load_covariates(n_samples)
@@ -828,6 +884,7 @@ class PipelineRunner:
                 n_samples=n_valid,
                 n_snps_tested=n_tested,
                 assoc_path=assoc_path,
+                assoc_paths=[assoc_path],
                 timing={
                     "kinship_s": 0.0,
                     "load_s": 0.0,
@@ -839,23 +896,70 @@ class PipelineRunner:
             )
 
         covariates = self.load_covariates(n_samples)
-        valid_mask = self._compute_valid_mask(phenotypes, covariates)
-        n_valid = int(np.sum(valid_mask))
-        n_cvt = covariates.shape[1] if covariates is not None else 1
-        self._log_banner(n_samples, n_valid, n_snps, n_covariates=n_cvt)
 
-        # Memory preflight: streaming estimate for JAX, in-memory estimate for NumPy
+        # Compute valid mask as intersection across all phenotype columns.
+        # This ensures eigendecomposition uses the same sample set for all
+        # phenotypes. Load .fam data once and extract all columns.
+        pheno_columns = self.config.phenotype_columns
+        fam_path = f"{self.config.bfile}.fam"
+        try:
+            fam_data = np.loadtxt(fam_path, dtype=str, ndmin=2)
+        except (ValueError, OSError) as e:
+            raise ValueError(f"Failed to read .fam file {fam_path}: {e}") from e
+
+        all_pheno_data: dict[int, tuple[np.ndarray, int]] = {}
+        all_masks: list[np.ndarray] = []
+        for col in pheno_columns:
+            pheno, n_anal = self._parse_phenotype_column(col, fam_data=fam_data)
+            all_pheno_data[col] = (pheno, n_anal)
+            mask = self._compute_valid_mask(pheno, covariates)
+            all_masks.append(mask)
+
+        # Intersect all masks for shared eigendecomposition
+        valid_mask = np.all(all_masks, axis=0)
+        n_valid = int(np.sum(valid_mask))
+
+        if n_valid == 0:
+            per_pheno_counts = {
+                col: int(m.sum())
+                for col, m in zip(pheno_columns, all_masks, strict=True)
+            }
+            raise ValueError(
+                f"No samples have valid values across all {len(pheno_columns)} "
+                f"phenotype columns. Per-column valid counts: {per_pheno_counts}"
+            )
+
+        # Warn if intersection excludes samples valid in some phenotypes
+        per_pheno_counts = [int(m.sum()) for m in all_masks]
+        if n_valid < min(per_pheno_counts):
+            logger.warning(
+                f"Sample mask intersection reduced valid samples: "
+                f"per-phenotype counts {per_pheno_counts}, "
+                f"intersection {n_valid}"
+            )
+
+        n_cvt = covariates.shape[1] if covariates is not None else 1
+        is_multi = len(pheno_columns) > 1
+        self._log_banner(
+            n_samples,
+            n_valid,
+            n_snps,
+            n_covariates=n_cvt,
+            n_phenotypes=len(pheno_columns),
+        )
+
+        # Memory preflight: streaming estimate for JAX, in-memory for NumPy
         if active_backend == "jax":
             actual_chunk = _compute_chunk_size(n_snps)
             self.check_memory_requirements(n_valid, n_snps, n_cvt=n_cvt)
         else:
-            # NumPy loads all genotypes into memory; use the runner's own estimate
             from jamma.core.memory import estimate_lmm_memory
 
             if self.config.check_memory:
                 est = estimate_lmm_memory(n_valid, n_snps)
                 logger.info(
-                    f"Memory estimate (NumPy): {est.total_gb:.1f}GB required, "
+                    f"Memory estimate (NumPy): "
+                    f"{est.total_gb:.1f}GB required, "
                     f"{est.available_gb:.1f}GB available"
                 )
                 exceeds_budget = (
@@ -870,18 +974,19 @@ class PipelineRunner:
                     )
                 if not est.sufficient:
                     raise MemoryError(
-                        f"Insufficient memory: need {est.total_gb:.1f}GB, "
+                        f"Insufficient memory: "
+                        f"need {est.total_gb:.1f}GB, "
                         f"have {est.available_gb:.1f}GB. "
                         f"Use --no-check-memory to override."
                     )
             actual_chunk = None  # Not used by NumPy runner
 
+        # Load/compute eigendecomposition ONCE (shared across phenotypes)
         t_kinship = time.perf_counter()
         eigenvalues = None
         eigenvectors = None
 
         if self.config.eigenvalue_file and self.config.eigenvector_file:
-            # Load pre-computed eigendecomposition
             eigenvalues, eigenvectors = read_eigen_files(
                 self.config.eigenvalue_file,
                 self.config.eigenvector_file,
@@ -900,67 +1005,90 @@ class PipelineRunner:
             K = None
         else:
             K = self.load_kinship(n_samples, ksnps_indices=ksnps_indices)
+            # Eigendecompose once at the pipeline level so multi-phenotype
+            # loops reuse the same eigendecomposition.
+            K_valid = K if np.all(valid_mask) else K[np.ix_(valid_mask, valid_mask)]
+            eigenvalues, eigenvectors = eigendecompose_kinship(
+                K_valid, check_memory=self.config.check_memory
+            )
             if self.config.write_eigen:
-                K_valid = K if np.all(valid_mask) else K[np.ix_(valid_mask, valid_mask)]
-                eigenvalues, eigenvectors = eigendecompose_kinship(
-                    K_valid, check_memory=self.config.check_memory
-                )
                 d_path, u_path = write_eigen_files(
                     eigenvalues,
                     eigenvectors,
                     self.config.output_dir,
                     self.config.output_prefix,
+                    legacy_text=self.config.legacy_text,
                 )
                 logger.info(f"Wrote eigenvalues to {d_path}")
                 logger.info(f"Wrote eigenvectors to {u_path}")
-                K = None  # Runner uses eigenvalues/eigenvectors directly
+            K = None  # Runner uses eigen directly
 
         kinship_s = time.perf_counter() - t_kinship
         load_s = time.perf_counter() - t_start
 
+        # Per-phenotype LMM loop
         t_lmm = time.perf_counter()
+        all_results: list[AssocResult] = []
+        total_tested = 0
+        all_assoc_paths: list[Path] = []
 
-        if active_backend == "jax":
-            results, n_tested = self._run_jax_backend(
-                phenotypes,
-                K,
-                covariates,
-                eigenvalues,
-                eigenvectors,
-                assoc_path,
-                snps_indices,
-                actual_chunk,
-            )
-        else:
-            results, n_tested = self._run_numpy_backend(
-                phenotypes,
-                K,
-                covariates,
-                eigenvalues,
-                eigenvectors,
-                assoc_path,
-                snps_indices,
-            )
+        prefix = self.config.output_prefix
+        for col in pheno_columns:
+            if is_multi:
+                logger.info(f"Starting LMM for phenotype column {col}")
+            phenotypes_col = all_pheno_data[col][0]
+
+            if is_multi:
+                col_path = self.config.output_dir / f"{prefix}.pheno{col}.assoc.txt"
+            else:
+                col_path = assoc_path
+
+            if active_backend == "jax":
+                results, n_tested = self._run_jax_backend(
+                    phenotypes_col,
+                    K,
+                    covariates,
+                    eigenvalues,
+                    eigenvectors,
+                    col_path,
+                    snps_indices,
+                    actual_chunk,
+                )
+            else:
+                results, n_tested = self._run_numpy_backend(
+                    phenotypes_col,
+                    K,
+                    covariates,
+                    eigenvalues,
+                    eigenvectors,
+                    col_path,
+                    snps_indices,
+                )
+
+            all_results.extend(results)
+            total_tested += n_tested
+            all_assoc_paths.append(col_path)
+            logger.info(f"Phenotype {col}: {n_tested} SNPs tested -> {col_path}")
 
         lmm_s = time.perf_counter() - t_lmm
-
         total_s = time.perf_counter() - t_start
-        logger.info(f"GWAS complete: {n_tested} SNPs tested in {total_s:.1f}s")
+        logger.info(f"GWAS complete: {total_tested} SNPs tested in {total_s:.1f}s")
 
-        # Pull runner-level rotation timing if available (JAX backend only).
-        # The pipeline always routes through the streaming runner, so we read
-        # runner_streaming.last_run_timing (not runner_jax.last_run_timing).
+        # Pull runner-level rotation timing (JAX backend only)
         runner_timing: dict[str, float] = {}
         if active_backend == "jax":
-            from jamma.lmm.runner_streaming import last_run_timing as _stream_timing
+            from jamma.lmm.runner_streaming import (
+                last_run_timing as _stream_timing,
+            )
 
             runner_timing = dict(_stream_timing)
 
         return PipelineResult(
-            associations=results,
+            associations=all_results,
             n_samples=n_valid,
-            n_snps_tested=n_tested,
-            assoc_path=assoc_path,
+            n_snps_tested=total_tested,
+            assoc_path=all_assoc_paths[-1],
+            assoc_paths=all_assoc_paths,
             timing={
                 "kinship_s": kinship_s,
                 "load_s": load_s,
@@ -970,7 +1098,7 @@ class PipelineRunner:
                 "rotation_exposed_s": runner_timing.get("rotation_exposed_s", 0.0),
             },
             backend=active_backend,
-            n_covariates=covariates.shape[1] if covariates is not None else 1,
+            n_covariates=(covariates.shape[1] if covariates is not None else 1),
         )
 
     def _run_jax_backend(

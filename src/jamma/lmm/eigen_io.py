@@ -1,19 +1,20 @@
-"""Eigendecomposition file I/O in GEMMA format.
+"""Eigendecomposition file I/O — binary .npy default, GEMMA text legacy option.
 
-Read and write eigenvalue (.eigenD.txt) and eigenvector (.eigenU.txt) files
-in GEMMA-compatible format. Used for eigendecomposition reuse across
-multi-phenotype workflows.
+Binary .npy is the default write format for performance at scale.
+At 50k samples, .npy reads take ~3s vs ~4 min for text parsing.
+
+GEMMA text format (.eigenD.txt / .eigenU.txt) remains available via
+legacy_text=True for interoperability with external tools.
+
+Read behaviour:
+- .npy suffix: loads directly via np.load.
+- .txt suffix: checks for .npy sidecar cache (created by write_* or by first
+  text parse) when available. Falls back to text parsing.
 
 Format follows GEMMA param.cpp WriteVector/WriteMatrix:
 - eigenD: one value per line, 10 significant digits (.10g format)
 - eigenU: tab-separated rows, 10 significant digits per value
 - No headers in either file
-
-A .npy binary sidecar cache is written alongside text files after each
-read or write. Subsequent reads use np.load() (~3s at 50k) instead of
-text parsing (~4 min). The cache is invalidated when the text file is
-newer. Cache writes are best-effort — failures (read-only FS, full disk)
-are logged and silently ignored.
 """
 
 from pathlib import Path
@@ -23,9 +24,10 @@ from loguru import logger
 
 from jamma.io.matrix_reader import read_matrix_parallel
 from jamma.io.matrix_writer import write_matrix_parallel
+from jamma.utils.npy_cache import npy_cache_valid
 
 # ---------------------------------------------------------------------------
-# .npy sidecar cache helpers
+# .npy sidecar cache helpers (used for text-format files only)
 # ---------------------------------------------------------------------------
 
 
@@ -37,36 +39,24 @@ def _npy_cache_path(txt_path: Path) -> Path:
     return txt_path.with_suffix(".npy")
 
 
-def _npy_cache_valid(txt_path: Path, npy_path: Path) -> bool:
-    """Check if .npy cache exists and is at least as new as the text file."""
-    if not npy_path.exists():
-        return False
-    try:
-        txt_mtime = txt_path.stat().st_mtime
-        npy_stat = npy_path.stat()
-        return npy_stat.st_mtime >= txt_mtime and npy_stat.st_size > 0
-    except OSError:
-        return False
-
-
 def _write_npy_cache(array: np.ndarray, npy_path: Path) -> None:
     """Write .npy cache, swallowing errors (read-only FS, full disk, etc.)."""
     try:
         np.save(npy_path, array)
     except OSError as e:
-        logger.debug(f"Could not write .npy cache {npy_path}: {e}")
+        logger.warning(f"Could not write .npy cache {npy_path}: {e}")
 
 
 def _load_npy_cache(npy_path: Path) -> np.ndarray | None:
     """Load .npy cache, returning None on corruption or error."""
     try:
         return np.load(npy_path)
-    except Exception as e:
+    except (OSError, ValueError) as e:
         logger.warning(f"Corrupt .npy cache {npy_path}, will re-parse text: {e}")
         try:
             npy_path.unlink()
-        except OSError:
-            pass
+        except OSError as unlink_err:
+            logger.warning(f"Could not remove corrupt cache {npy_path}: {unlink_err}")
         return None
 
 
@@ -76,24 +66,39 @@ def _load_npy_cache(npy_path: Path) -> np.ndarray | None:
 
 
 def read_eigenvalues(path: Path) -> np.ndarray:
-    """Read eigenvalues from a GEMMA .eigenD.txt file.
+    """Read eigenvalues from a .npy or GEMMA .eigenD.txt file.
 
-    Uses .npy sidecar cache when available. The eigenvalue file is small
-    (one value per line), so no parallel parsing is needed.
+    When path suffix is .npy, loads directly via np.load.
+    When path suffix is .txt, uses .npy sidecar cache when available,
+    otherwise parses text. For text format, the file is small (one value
+    per line), so np.loadtxt suffices without parallel parsing.
 
     Args:
-        path: Path to eigenvalue file (one value per line).
+        path: Path to eigenvalue file (.eigenD.npy or .eigenD.txt).
 
     Returns:
         1-D float64 array of eigenvalues, shape (n_samples,).
 
     Raises:
-        ValueError: If file is empty or contains non-numeric data.
+        ValueError: If file is empty, contains non-numeric data, or wrong shape.
     """
     path = Path(path)
+
+    # Direct .npy load
+    if path.suffix == ".npy":
+        logger.info(f"Reading eigenvalues from {path}")
+        data = np.load(path)
+        data = np.atleast_1d(data)
+        if data.ndim != 1:
+            raise ValueError(
+                f"Eigenvalue .npy file has wrong shape {data.shape}: {path}"
+            )
+        return data
+
+    # Text path: try sidecar cache
     npy_path = _npy_cache_path(path)
 
-    if _npy_cache_valid(path, npy_path):
+    if npy_cache_valid(path, npy_path):
         data = _load_npy_cache(npy_path)
         if data is not None:
             logger.info(f"Reading eigenvalues from cache {npy_path}")
@@ -126,13 +131,15 @@ def read_eigenvalues(path: Path) -> np.ndarray:
 
 
 def read_eigenvectors(path: Path) -> np.ndarray:
-    """Read eigenvectors from a GEMMA .eigenU.txt file.
+    """Read eigenvectors from a .npy or GEMMA .eigenU.txt file.
 
-    Uses .npy sidecar cache when available. Falls back to parallel text
-    parsing for large matrices (>= 500 rows), or np.loadtxt for small ones.
+    When path suffix is .npy, loads directly via np.load.
+    When path suffix is .txt, uses .npy sidecar cache when available.
+    Falls back to parallel text parsing for large matrices (>= 500 rows),
+    or np.loadtxt for small ones.
 
     Args:
-        path: Path to eigenvector file (tab-separated matrix).
+        path: Path to eigenvector file (.eigenU.npy or .eigenU.txt).
 
     Returns:
         2-D float64 array of eigenvectors, shape (n_samples, n_samples).
@@ -141,9 +148,22 @@ def read_eigenvectors(path: Path) -> np.ndarray:
         ValueError: If file is empty, non-numeric, or not a square matrix.
     """
     path = Path(path)
+
+    # Direct .npy load
+    if path.suffix == ".npy":
+        logger.info(f"Reading eigenvectors from {path}")
+        data = np.load(path)
+        data = np.atleast_2d(data)
+        if data.ndim != 2 or data.shape[0] != data.shape[1]:
+            raise ValueError(
+                f"Eigenvector .npy file has wrong shape {data.shape}: {path}"
+            )
+        return data
+
+    # Text path: try sidecar cache
     npy_path = _npy_cache_path(path)
 
-    if _npy_cache_valid(path, npy_path):
+    if npy_cache_valid(path, npy_path):
         data = _load_npy_cache(npy_path)
         if data is not None:
             logger.info(f"Reading eigenvectors from cache {npy_path}")
@@ -186,12 +206,13 @@ def read_eigen_files(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Read both eigenvalue and eigenvector files with cross-validation.
 
+    Handles both .npy paths (binary, default) and .txt paths (legacy text).
     Validates that eigenvalue count matches eigenvector dimensions.
     Optionally validates against expected sample count.
 
     Args:
-        eigenD_path: Path to eigenvalue file (.eigenD.txt).
-        eigenU_path: Path to eigenvector file (.eigenU.txt).
+        eigenD_path: Path to eigenvalue file (.eigenD.npy or .eigenD.txt).
+        eigenU_path: Path to eigenvector file (.eigenU.npy or .eigenU.txt).
         n_samples: Expected number of samples (optional validation).
 
     Returns:
@@ -238,39 +259,71 @@ def read_eigen_files(
 # ---------------------------------------------------------------------------
 
 
-def write_eigenvalues(eigenvalues: np.ndarray, path: Path) -> None:
-    """Write eigenvalues in GEMMA .eigenD.txt format.
+def write_eigenvalues(
+    eigenvalues: np.ndarray, path: Path, *, legacy_text: bool = False
+) -> None:
+    """Write eigenvalues in binary .npy format (default) or GEMMA .eigenD.txt.
 
-    Writes one eigenvalue per line using 10 significant digits,
-    matching GEMMA's precision(10) output. Also writes .npy sidecar
-    for fast subsequent reads.
+    Binary format is the default for performance. Use legacy_text=True for
+    GEMMA-compatible output.
+
+    GEMMA text format: one eigenvalue per line, 10 significant digits,
+    matching GEMMA's precision(10) output.
+
+    When legacy_text=True, also writes a .npy sidecar for fast subsequent reads.
 
     Args:
         eigenvalues: 1D array of eigenvalues.
-        path: Output file path (typically .eigenD.txt).
+        path: Output file path. When legacy_text=False (default), path is used
+            as base and .npy suffix is derived. When legacy_text=True, writes
+            to path as-is (typically .eigenD.txt) plus .npy sidecar.
+        legacy_text: If True, write GEMMA text format + sidecar. Default False
+            writes only binary .npy.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Writing eigenvalues to {path}")
-    np.savetxt(path, eigenvalues, fmt="%.10g")
-    _write_npy_cache(eigenvalues, _npy_cache_path(path))
+
+    if legacy_text:
+        logger.info(f"Writing eigenvalues to {path}")
+        np.savetxt(path, eigenvalues, fmt="%.10g")
+        _write_npy_cache(eigenvalues, _npy_cache_path(path))
+    else:
+        npy_path = path.with_suffix(".npy")
+        logger.info(f"Writing eigenvalues to {npy_path}")
+        np.save(npy_path, eigenvalues)
 
 
-def write_eigenvectors(eigenvectors: np.ndarray, path: Path) -> None:
-    """Write eigenvectors in GEMMA .eigenU.txt format.
+def write_eigenvectors(
+    eigenvectors: np.ndarray, path: Path, *, legacy_text: bool = False
+) -> None:
+    """Write eigenvectors in binary .npy format (default) or GEMMA .eigenU.txt.
 
-    Writes tab-separated rows using 10 significant digits per value,
-    matching GEMMA's precision(10) output. Also writes .npy sidecar
-    for fast subsequent reads.
+    Binary format is the default for performance. Use legacy_text=True for
+    GEMMA-compatible output.
+
+    GEMMA text format: tab-separated rows, 10 significant digits per value,
+    matching GEMMA's precision(10) output.
+
+    When legacy_text=True, also writes a .npy sidecar for fast subsequent reads.
 
     Args:
         eigenvectors: 2D array of eigenvectors (n_samples, n_samples).
-        path: Output file path (typically .eigenU.txt).
+        path: Output file path. When legacy_text=False (default), path is used
+            as base and .npy suffix is derived. When legacy_text=True, writes
+            to path as-is (typically .eigenU.txt) plus .npy sidecar.
+        legacy_text: If True, write GEMMA text format + sidecar. Default False
+            writes only binary .npy.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    write_matrix_parallel(eigenvectors, path, fmt="%.10g", delimiter="\t")
-    _write_npy_cache(eigenvectors, _npy_cache_path(path))
+
+    if legacy_text:
+        write_matrix_parallel(eigenvectors, path, fmt="%.10g", delimiter="\t")
+        _write_npy_cache(eigenvectors, _npy_cache_path(path))
+    else:
+        npy_path = path.with_suffix(".npy")
+        logger.info(f"Writing eigenvectors to {npy_path}")
+        np.save(npy_path, eigenvectors)
 
 
 def write_eigen_files(
@@ -278,27 +331,33 @@ def write_eigen_files(
     eigenvectors: np.ndarray,
     output_dir: Path,
     prefix: str = "result",
+    *,
+    legacy_text: bool = False,
 ) -> tuple[Path, Path]:
     """Write both eigenvalue and eigenvector files.
 
-    Convenience wrapper that writes {prefix}.eigenD.txt and
-    {prefix}.eigenU.txt to the specified output directory, plus
-    .npy sidecars for fast reads.
+    Binary .npy is the default format (no text files written). Use
+    legacy_text=True for GEMMA-compatible .txt + .npy sidecar output.
+
+    Binary naming: {prefix}.eigenD.npy and {prefix}.eigenU.npy
+    Text naming: {prefix}.eigenD.txt and {prefix}.eigenU.txt (+ sidecars)
 
     Args:
         eigenvalues: 1D array of eigenvalues.
         eigenvectors: 2D array of eigenvectors.
         output_dir: Directory for output files.
         prefix: Filename prefix (default "result").
+        legacy_text: If True, write GEMMA text format + sidecars. Default False
+            writes only binary .npy.
 
     Returns:
-        Tuple of (eigenD_path, eigenU_path).
+        Tuple of (eigenD_path, eigenU_path). Paths reflect actual files written
+        (.npy by default, .txt with legacy_text=True).
     """
     output_dir = Path(output_dir)
-    eigenD_path = output_dir / f"{prefix}.eigenD.txt"
-    eigenU_path = output_dir / f"{prefix}.eigenU.txt"
-
-    write_eigenvalues(eigenvalues, eigenD_path)
-    write_eigenvectors(eigenvectors, eigenU_path)
-
+    suffix = ".txt" if legacy_text else ".npy"
+    eigenD_path = output_dir / f"{prefix}.eigenD{suffix}"
+    eigenU_path = output_dir / f"{prefix}.eigenU{suffix}"
+    write_eigenvalues(eigenvalues, eigenD_path, legacy_text=legacy_text)
+    write_eigenvectors(eigenvectors, eigenU_path, legacy_text=legacy_text)
     return eigenD_path, eigenU_path

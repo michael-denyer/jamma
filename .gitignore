@@ -31,6 +31,10 @@ venv/
 # General output
 output/
 
+# Old logos
+
+logos/old/
+
 # Planning and claude config (dev-only)
 .planning/
 .claude/

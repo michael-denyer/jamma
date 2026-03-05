@@ -1,4 +1,12 @@
-"""Kinship matrix I/O in GEMMA format."""
+"""Kinship matrix I/O in GEMMA format and binary .npy format.
+
+Binary .npy is the default write format for performance at scale.
+GEMMA text format (.cXX.txt) is available via legacy_text=True for
+interoperability with external tools.
+
+Read behaviour: .npy paths load directly. .txt paths check for a .npy sibling
+(preferred if at least as new as the text file). Falls back to text parsing.
+"""
 
 from collections.abc import Iterator
 from pathlib import Path
@@ -7,21 +15,67 @@ import numpy as np
 from loguru import logger
 
 from jamma.io.matrix_writer import write_matrix_parallel
+from jamma.utils.npy_cache import npy_cache_valid
+
+
+def _validate_kinship(K: np.ndarray, n_samples: int | None, source: str) -> None:
+    """Validate kinship matrix shape and symmetry.
+
+    Args:
+        K: Loaded kinship matrix.
+        n_samples: Expected number of samples (optional).
+        source: Description of where K was loaded from (for error messages).
+
+    Raises:
+        ValueError: If matrix is not square, not symmetric, or dimension mismatch.
+    """
+    if K.ndim != 2 or K.shape[0] != K.shape[1]:
+        raise ValueError(f"Kinship matrix must be square, got shape {K.shape}")
+    if n_samples is not None and K.shape[0] != n_samples:
+        raise ValueError(
+            f"Kinship matrix dimension {K.shape[0]} does not match "
+            f"expected n_samples={n_samples}"
+        )
+    if not np.allclose(K, K.T, rtol=1e-10):
+        raise ValueError("Kinship matrix is not symmetric")
 
 
 def read_kinship_matrix(path: Path, n_samples: int | None = None) -> np.ndarray:
-    """Read kinship matrix from GEMMA .cXX.txt format.
+    """Read kinship matrix from binary .npy or GEMMA .cXX.txt format.
+
+    Auto-detects format based on path suffix and sibling files:
+    - .npy suffix: loads directly via np.load.
+    - .txt suffix: checks for .npy sibling at least as new; uses it if valid,
+      otherwise falls back to text parsing.
 
     Args:
-        path: Path to kinship matrix file (.cXX.txt format)
-        n_samples: Expected number of samples (optional validation)
+        path: Path to kinship matrix file (.cXX.npy or .cXX.txt).
+        n_samples: Expected number of samples (optional validation).
 
     Returns:
-        Kinship matrix as numpy array (n x n)
+        Kinship matrix as numpy array (n x n).
 
     Raises:
-        ValueError: If matrix is not square, not symmetric, or dimension mismatch
+        ValueError: If matrix is not square, not symmetric, or dimension mismatch.
     """
+    path = Path(path)
+
+    # Direct .npy load
+    if path.suffix == ".npy":
+        logger.info(f"Reading kinship matrix from {path}")
+        K = np.load(path)
+        _validate_kinship(K, n_samples, str(path))
+        return K
+
+    # Text path: check for .npy sibling
+    npy_path = path.with_suffix(".npy")
+    if npy_cache_valid(path, npy_path):
+        logger.info(f"Reading kinship matrix from binary cache {npy_path}")
+        K = np.load(npy_path)
+        _validate_kinship(K, n_samples, str(npy_path))
+        return K
+
+    # Fall back to text parse
     logger.info(f"Reading kinship matrix from {path}")
 
     if n_samples is not None and n_samples > 50_000:
@@ -33,29 +87,21 @@ def read_kinship_matrix(path: Path, n_samples: int | None = None) -> np.ndarray:
 
     # Load matrix - handles tab and space separated
     K = np.loadtxt(path, dtype=np.float64)
-
-    # Validate square
-    if K.ndim != 2 or K.shape[0] != K.shape[1]:
-        raise ValueError(f"Kinship matrix must be square, got shape {K.shape}")
-
-    # Validate dimension if n_samples provided
-    if n_samples is not None and K.shape[0] != n_samples:
-        raise ValueError(
-            f"Kinship matrix dimension {K.shape[0]} does not match "
-            f"expected n_samples={n_samples}"
-        )
-
-    # Validate symmetric
-    if not np.allclose(K, K.T, rtol=1e-10):
-        raise ValueError("Kinship matrix is not symmetric")
+    _validate_kinship(K, n_samples, str(path))
 
     return K
 
 
-def write_kinship_matrix(K: np.ndarray, path: Path) -> None:
-    """Write kinship matrix in GEMMA .cXX.txt format.
+def write_kinship_matrix(
+    K: np.ndarray, path: Path, *, legacy_text: bool = False
+) -> Path:
+    """Write kinship matrix in binary .npy format (default) or GEMMA .cXX.txt.
 
-    GEMMA format specifications (from legacy/src/param.cpp:1886-1911):
+    Binary format is the default for performance. At 50k+ samples, .npy I/O
+    takes seconds vs minutes for text. Use legacy_text=True for GEMMA
+    interoperability.
+
+    GEMMA text format specifications (from legacy/src/param.cpp:1886-1911):
     - outfile.precision(10): 10 significant digits using general format
     - Tab separator between values
     - Newline after each row
@@ -64,25 +110,55 @@ def write_kinship_matrix(K: np.ndarray, path: Path) -> None:
 
     Args:
         K: Kinship matrix (n x n), should be symmetric.
-        path: Output file path (typically .cXX.txt).
+        path: Output file path. When legacy_text=False (default), writes to
+            path.with_suffix(".npy"). When legacy_text=True, writes to path
+            (typically .cXX.txt).
+        legacy_text: If True, write GEMMA-compatible text format. Default False
+            writes binary .npy.
+
+    Returns:
+        Path to the file actually written (.npy or .txt).
+
+    Raises:
+        ValueError: If K is not C-contiguous when writing binary (avoids
+            memory doubling from copy at 100k samples).
 
     Example:
-        >>> write_kinship_matrix(K, Path("output/result.cXX.txt"))
+        >>> write_kinship_matrix(K, Path("output/result.cXX.txt"))  # writes .npy
+        >>> write_kinship_matrix(K, Path("output/result.cXX.txt"), legacy_text=True)
     """
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    write_matrix_parallel(K, path, fmt="%.10g", delimiter="\t")
+
+    if legacy_text:
+        write_matrix_parallel(K, path, fmt="%.10g", delimiter="\t")
+        return path
+    else:
+        if not K.flags["C_CONTIGUOUS"]:
+            raise ValueError(
+                "Kinship matrix must be C-contiguous before binary save to avoid "
+                "memory doubling at large sizes. Use np.ascontiguousarray(K) first."
+            )
+        npy_path = path.with_suffix(".npy")
+        np.save(npy_path, K)
+        return npy_path
 
 
 def write_loco_kinship_matrices(
     loco_kinships: Iterator[tuple[str, np.ndarray]],
     output_dir: Path,
     prefix: str = "result",
+    *,
+    legacy_text: bool = False,
 ) -> list[Path]:
     """Write per-chromosome LOCO kinship matrices to disk.
 
     For each (chr_name, K) pair yielded by the iterator, writes the matrix
-    to ``{output_dir}/{prefix}.loco.cXX.chr{chr_name}.txt`` using GEMMA
-    format via ``write_kinship_matrix()``.
+    to the output directory. By default writes binary .npy; use legacy_text=True
+    for GEMMA text format.
+
+    Binary naming: ``{prefix}.loco.cXX.chr{chr_name}.npy``
+    Text naming: ``{prefix}.loco.cXX.chr{chr_name}.txt``
 
     This is a convenience wrapper for the ``gk -loco`` standalone command.
 
@@ -91,6 +167,8 @@ def write_loco_kinship_matrices(
             pairs. Typically produced by ``compute_loco_kinship_streaming()``.
         output_dir: Directory for output files (created if needed).
         prefix: Filename prefix (default "result").
+        legacy_text: If True, write GEMMA text format. Default False writes
+            binary .npy.
 
     Returns:
         List of Paths to the written kinship files.
@@ -107,8 +185,10 @@ def write_loco_kinship_matrices(
     written: list[Path] = []
 
     for chr_name, K in loco_kinships:
-        kinship_path = output_dir / f"{prefix}.loco.cXX.chr{chr_name}.txt"
-        write_kinship_matrix(K, kinship_path)
+        base_path = output_dir / f"{prefix}.loco.cXX.chr{chr_name}.txt"
+        if not legacy_text:
+            K = np.ascontiguousarray(K)
+        kinship_path = write_kinship_matrix(K, base_path, legacy_text=legacy_text)
         written.append(kinship_path)
 
     return written

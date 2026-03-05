@@ -13,7 +13,7 @@
   <img src="https://raw.githubusercontent.com/michael-denyer/jamma/master/logos/JAMMA_Large_Logo_v2.png" alt="JAMMA" width="500">
 </p>
 
-**Fast Mixed Model Association** — A modern Python reimplementation of [GEMMA](https://github.com/genetics-statistics/GEMMA) for genome-wide association studies (GWAS).
+**JAMMA** (High-performance Multi-method Mixed-Model Association) — a modern Python and C reimplementation of [GEMMA](https://github.com/genetics-statistics/GEMMA) for large-scale GWAS.
 
 - **GEMMA-compatible**: Drop-in replacement with identical CLI flags and output formats
 - **Numerical equivalence**: Validated against GEMMA — 100% significance agreement, 100% effect direction agreement
@@ -43,7 +43,7 @@ pip install jamma          # NumPy backend
 pip install 'jamma[jax]'   # + JAX acceleration
 ```
 
-For large-scale GWAS (>46k samples) on **Linux x86_64**, install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first — standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. MKL is x86_64-only; ARM Mac and Windows users are limited to <46k samples. Pre-built ILP64 wheels are available for Python 3.11–3.14:
+For large-scale GWAS (>46k samples) on **x86_64** (Linux or Intel Mac), install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first — standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. MKL is x86_64-only; ARM Mac and Windows users are limited to <46k samples. Pre-built ILP64 wheels are available for Python 3.11–3.14:
 
 **NumPy backend only:**
 
@@ -86,7 +86,7 @@ See the [User Guide](docs/USER_GUIDE.md#linux--windows) for ILP64 verification s
 |----------|---------------------|--------------------------|-------|
 | Linux x86_64 | JAX (auto-included) | — | Full support; ILP64 for >46k samples |
 | ARM Mac (M1+) | JAX (auto-included) | — | Full support |
-| Intel Mac | NumPy only | Not available | JAX dropped Intel Mac support |
+| Intel Mac | NumPy only | Not available | JAX dropped Intel Mac; ILP64 for >46k samples |
 | Windows | NumPy only | Not available | JAX dropped Windows support |
 
 JAX is auto-included on Linux and ARM Mac via platform markers.
@@ -97,16 +97,23 @@ Force a specific backend with `--backend numpy` or `--backend jax`.
 ```bash
 # Compute kinship matrix (centered relatedness)
 jamma -gk 1 -bfile data/my_study -o output
+# Output: output/output.cXX.npy (binary, fast)
+# Add --legacy-text for GEMMA-compatible text format
 
 # Run LMM association (Wald test)
-jamma -lmm 1 -bfile data/my_study -k output/output.cXX.txt -o results
+jamma -lmm 1 -bfile data/my_study -k output/output.cXX.npy -o results
+
+# Multiple phenotypes (eigendecomp computed once, reused)
+jamma -lmm 1 -bfile data/my_study -k output/output.cXX.npy -n "1 2 3" -o results
 ```
 
-Output files match GEMMA format exactly:
+Output files:
 
-- `output.cXX.txt` — Kinship matrix
+- `output.cXX.npy` — Kinship matrix (binary NumPy format; `.cXX.txt` with `--legacy-text`)
 - `results.assoc.txt` — Association results (chr, rs, ps, n_miss, allele1, allele0, af, beta, se, logl_H1, l_remle, p_wald)
 - `results.log.txt` — Run log
+
+The reader auto-detects format, so existing `.cXX.txt` files still work as `-k` input.
 
 ## Python API
 
@@ -128,10 +135,11 @@ result = gwas("data/my_study", kinship_file="k.txt", covariate_file="covars.txt"
 # LOCO analysis (leave-one-chromosome-out)
 result = gwas("data/my_study", loco=True)
 
-# Multi-phenotype with eigendecomp reuse
+# Multi-phenotype with eigendecomp reuse (Python API)
 result = gwas("data/my_study", write_eigen=True, phenotype_column=1)
-result = gwas("data/my_study", eigenvalue_file="output/result.eigenD.txt",
-              eigenvector_file="output/result.eigenU.txt", phenotype_column=2)
+result = gwas("data/my_study", eigenvalue_file="output/result.eigenD.npy",
+              eigenvector_file="output/result.eigenU.npy", phenotype_column=2)
+# Or use the CLI for automatic multi-phenotype: jamma -lmm 1 ... -n "1 2 3"
 
 # SNP filtering
 result = gwas("data/my_study", kinship_file="k.txt", snps_file="snps.txt", hwe=0.001)
@@ -244,7 +252,9 @@ Best of multiple runs, end-to-end wall clock:
 - [x] Score test (`-lmm 3`)
 - [x] All tests mode (`-lmm 4`)
 - [x] LOCO kinship — leave-one-chromosome-out analysis (`-loco`)
-- [x] Eigendecomposition reuse — multi-phenotype workflows (`-d`/`-u`/`-eigen`)
+- [x] Binary `.npy` I/O — default for kinship and eigen files; `--legacy-text` for GEMMA text format
+- [x] Multi-phenotype support — `-n "1 2 3"` with single eigendecomposition reuse
+- [x] Eigendecomposition reuse — manual via `-d`/`-u`/`-eigen`, automatic in multi-phenotype mode
 - [x] Phenotype column selection (`-n`)
 - [x] SNP subset selection for association and kinship (`-snps`/`-ksnps`)
 - [x] HWE QC filtering (`-hwe`)

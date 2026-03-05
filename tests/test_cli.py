@@ -194,13 +194,37 @@ def test_cli_gk_mode_2_succeeds(tmp_path: Path):
     assert result.exit_code == 0, f"gk mode 2 failed: {result.output}"
     assert "standardized" in result.output.lower()
 
-    # Verify output file was created
-    kinship_path = outdir / "result.cXX.txt"
+    # Verify output file was created (binary .npy by default)
+    kinship_path = outdir / "result.cXX.npy"
     assert kinship_path.exists(), "Kinship output file should exist"
 
-    # Verify it has content (100 lines for 100 samples)
-    lines = kinship_path.read_text().strip().split("\n")
-    assert len(lines) == 100, f"Expected 100 lines, got {len(lines)}"
+    # Verify it has correct shape (100x100)
+    import numpy as np
+
+    K = np.load(kinship_path)
+    assert K.shape == (100, 100), f"Expected (100, 100) shape, got {K.shape}"
+
+
+@pytest.mark.tier1
+@pytest.mark.requires_jax
+def test_cli_gk_legacy_text(tmp_path: Path):
+    """--legacy-text flag produces .txt kinship output instead of .npy."""
+    outdir = tmp_path / "output"
+    result = runner.invoke(
+        main,
+        [
+            "-outdir",
+            str(outdir),
+            "-gk",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "--legacy-text",
+        ],
+    )
+    assert result.exit_code == 0
+    assert (outdir / "result.cXX.txt").exists()
+    assert not (outdir / "result.cXX.npy").exists()
 
 
 @pytest.mark.tier1
@@ -249,7 +273,7 @@ def test_lmm_jax_default_mode4(tmp_path: Path):
         main, ["-outdir", str(kinship_dir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
     )
     assert result.exit_code == 0
-    kinship_file = kinship_dir / "result.cXX.txt"
+    kinship_file = kinship_dir / "result.cXX.npy"
 
     # Run LMM mode 4 with JAX (default)
     result = runner.invoke(
@@ -291,7 +315,7 @@ def test_lmm_with_covariate_file(tmp_path: Path):
         main, ["-outdir", str(kinship_dir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
     )
     assert result.exit_code == 0
-    kinship_file = kinship_dir / "result.cXX.txt"
+    kinship_file = kinship_dir / "result.cXX.npy"
     assert kinship_file.exists()
 
     # Create covariate file with correct sample count (100 samples)
@@ -335,7 +359,7 @@ def test_lmm_covariate_file_not_found(tmp_path: Path):
         main, ["-outdir", str(kinship_dir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
     )
     assert result.exit_code == 0
-    kinship_file = kinship_dir / "result.cXX.txt"
+    kinship_file = kinship_dir / "result.cXX.npy"
 
     # Run LMM with nonexistent covariate file
     fake_cov = tmp_path / "nonexistent_covariates.txt"
@@ -371,7 +395,7 @@ def test_lmm_covariate_sample_mismatch(tmp_path: Path):
         main, ["-outdir", str(kinship_dir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
     )
     assert result.exit_code == 0
-    kinship_file = kinship_dir / "result.cXX.txt"
+    kinship_file = kinship_dir / "result.cXX.npy"
 
     # Create covariate file with WRONG sample count (50 instead of 100)
     cov_file = tmp_path / "bad_covariates.txt"
@@ -413,7 +437,7 @@ def test_lmm_covariate_intercept_warning(tmp_path: Path):
         main, ["-outdir", str(kinship_dir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
     )
     assert result.exit_code == 0
-    kinship_file = kinship_dir / "result.cXX.txt"
+    kinship_file = kinship_dir / "result.cXX.npy"
 
     # Create covariate file WITHOUT intercept (first column not all 1s)
     cov_file = tmp_path / "no_intercept.txt"
@@ -549,7 +573,7 @@ def test_lmin_lmax_flags(tmp_path: Path):
         main, ["-outdir", str(kinship_dir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
     )
     assert result.exit_code == 0
-    kinship_file = kinship_dir / "result.cXX.txt"
+    kinship_file = kinship_dir / "result.cXX.npy"
 
     # Run LMM with custom lambda bounds
     result = runner.invoke(
@@ -649,7 +673,7 @@ def test_widv_flag(tmp_path: Path):
         main, ["-outdir", str(kinship_dir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
     )
     assert result.exit_code == 0
-    kinship_file = kinship_dir / "result.cXX.txt"
+    kinship_file = kinship_dir / "result.cXX.npy"
 
     # Create weight file with 100 samples (all 1.0 -- should not change results)
     weight_file = tmp_path / "weights.txt"
@@ -711,7 +735,7 @@ def test_cat_flag(tmp_path: Path):
         main, ["-outdir", str(kinship_dir), "-gk", "1", "-bfile", str(EXAMPLE_BFILE)]
     )
     assert result.exit_code == 0
-    kinship_file = kinship_dir / "result.cXX.txt"
+    kinship_file = kinship_dir / "result.cXX.npy"
 
     # Create covariate file: intercept + varying continuous + categorical(1,2,1,2,...)
     cov_file = tmp_path / "covariates.txt"
@@ -781,6 +805,191 @@ def test_cli_help_shows_cat():
 KINSHIP_FILE = (
     Path(__file__).parent / "fixtures" / "gemma_synthetic" / "gemma_kinship.cXX.txt"
 )
+
+
+# ===========================================================================
+# Multi-phenotype -n parsing tests (Phase 59-02)
+# ===========================================================================
+
+
+@pytest.mark.tier1
+class TestMultiNParsing:
+    """Tests for CLI -n multi-value parsing."""
+
+    def test_multi_n_space_separated(self, tmp_path: Path) -> None:
+        """CLI -n '1 2 3' parses to phenotype_columns=[1, 2, 3]."""
+        from unittest.mock import patch
+
+        outdir = tmp_path / "output"
+        with patch("jamma.cli.PipelineRunner") as mock_runner_cls:
+            mock_runner_cls.return_value.run.return_value = _mock_pipeline_result(
+                outdir
+            )
+            result = runner.invoke(
+                main,
+                [
+                    "-bfile",
+                    str(EXAMPLE_BFILE),
+                    "-lmm",
+                    "1",
+                    "-k",
+                    str(KINSHIP_FILE),
+                    "-n",
+                    "1 2 3",
+                    "-outdir",
+                    str(outdir),
+                    "--no-check-memory",
+                ],
+            )
+            assert result.exit_code == 0, result.output
+            config = mock_runner_cls.call_args[0][0]
+            assert config.phenotype_columns == [1, 2, 3]
+
+    def test_multi_n_comma_separated(self, tmp_path: Path) -> None:
+        """CLI -n '1,2,3' parses to phenotype_columns=[1, 2, 3]."""
+        from unittest.mock import patch
+
+        outdir = tmp_path / "output"
+        with patch("jamma.cli.PipelineRunner") as mock_runner_cls:
+            mock_runner_cls.return_value.run.return_value = _mock_pipeline_result(
+                outdir
+            )
+            result = runner.invoke(
+                main,
+                [
+                    "-bfile",
+                    str(EXAMPLE_BFILE),
+                    "-lmm",
+                    "1",
+                    "-k",
+                    str(KINSHIP_FILE),
+                    "-n",
+                    "1,2,3",
+                    "-outdir",
+                    str(outdir),
+                    "--no-check-memory",
+                ],
+            )
+            assert result.exit_code == 0, result.output
+            config = mock_runner_cls.call_args[0][0]
+            assert config.phenotype_columns == [1, 2, 3]
+
+    def test_single_n_backward_compat(self, tmp_path: Path) -> None:
+        """CLI -n 1 still works as before."""
+        from unittest.mock import patch
+
+        outdir = tmp_path / "output"
+        with patch("jamma.cli.PipelineRunner") as mock_runner_cls:
+            mock_runner_cls.return_value.run.return_value = _mock_pipeline_result(
+                outdir
+            )
+            result = runner.invoke(
+                main,
+                [
+                    "-bfile",
+                    str(EXAMPLE_BFILE),
+                    "-lmm",
+                    "1",
+                    "-k",
+                    str(KINSHIP_FILE),
+                    "-n",
+                    "1",
+                    "-outdir",
+                    str(outdir),
+                    "--no-check-memory",
+                ],
+            )
+            assert result.exit_code == 0, result.output
+            config = mock_runner_cls.call_args[0][0]
+            assert config.phenotype_columns == [1]
+
+    def test_duplicate_n_error(self) -> None:
+        """CLI -n '1 1 3' produces a clear error about duplicates."""
+        result = runner.invoke(
+            main,
+            [
+                "-bfile",
+                str(EXAMPLE_BFILE),
+                "-lmm",
+                "1",
+                "-k",
+                str(KINSHIP_FILE),
+                "-n",
+                "1 1 3",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "duplicate" in result.output.lower()
+
+    def test_invalid_n_error(self) -> None:
+        """CLI -n 'abc' produces a clear error."""
+        result = runner.invoke(
+            main,
+            [
+                "-bfile",
+                str(EXAMPLE_BFILE),
+                "-lmm",
+                "1",
+                "-k",
+                str(KINSHIP_FILE),
+                "-n",
+                "abc",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "integer" in result.output.lower()
+
+    def test_empty_n_error(self) -> None:
+        """CLI -n '' produces a clear error."""
+        result = runner.invoke(
+            main,
+            [
+                "-bfile",
+                str(EXAMPLE_BFILE),
+                "-lmm",
+                "1",
+                "-k",
+                str(KINSHIP_FILE),
+                "-n",
+                "",
+            ],
+        )
+        assert result.exit_code != 0
+
+    def test_multi_n_with_gk_error(self) -> None:
+        """CLI -n '1 2' -gk 1 produces a clear error."""
+        result = runner.invoke(
+            main,
+            [
+                "-bfile",
+                str(EXAMPLE_BFILE),
+                "-gk",
+                "1",
+                "-n",
+                "1 2",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "not supported" in result.output.lower()
+
+
+def _mock_pipeline_result(outdir: Path):
+    """Create a minimal mock PipelineResult for CLI tests."""
+    from jamma.pipeline import PipelineResult
+
+    outdir.mkdir(parents=True, exist_ok=True)
+    assoc_path = outdir / "result.assoc.txt"
+    assoc_path.write_text("chr\trs\tps\tn_miss\tn_obs\n")
+    return PipelineResult(
+        associations=[],
+        n_samples=100,
+        n_snps_tested=500,
+        assoc_path=assoc_path,
+        assoc_paths=[assoc_path],
+        timing={"total_s": 1.0, "load_s": 0.1, "lmm_s": 0.9},
+        backend="numpy",
+        n_covariates=1,
+    )
 
 
 @pytest.mark.tier1

@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.pipeline import PipelineConfig, PipelineRunner
 
 # Fixture paths for gemma_synthetic dataset
@@ -33,6 +34,8 @@ class TestPipelineConfig:
         assert config.check_memory is True
         assert config.show_progress is True
         assert config.mem_budget is None
+        assert config.legacy_text is False
+        assert config.phenotype_columns == [1]
 
     def test_profile_dir_default(self) -> None:
         """profile_dir defaults to None."""
@@ -880,6 +883,266 @@ def test_pipeline_numpy_backend_modes(
     assert result.n_snps_tested > 0
     assert result.assoc_path.exists()
     assert result.backend == "numpy"
+
+
+# ===========================================================================
+# Multi-Phenotype Tests (Phase 59-02)
+# ===========================================================================
+
+
+@pytest.mark.tier1
+class TestMultiPhenotypeConfig:
+    """Tests for PipelineConfig multi-phenotype support."""
+
+    def test_phenotype_columns_default_from_column(self) -> None:
+        """PipelineConfig(phenotype_column=3) has phenotype_columns==[3]."""
+        config = PipelineConfig(bfile=Path("test"), phenotype_column=3)
+        assert config.phenotype_columns == [3]
+
+    def test_phenotype_columns_default_single(self) -> None:
+        """PipelineConfig() has phenotype_columns==[1] by default."""
+        config = PipelineConfig(bfile=Path("test"))
+        assert config.phenotype_columns == [1]
+
+    def test_phenotype_columns_explicit(self) -> None:
+        """PipelineConfig with explicit phenotype_columns overrides phenotype_column."""
+        config = PipelineConfig(bfile=Path("test"), phenotype_columns=[1, 2, 3])
+        assert config.phenotype_columns == [1, 2, 3]
+
+    def test_loco_multi_phenotype_error(self) -> None:
+        """PipelineConfig(loco=True, phenotype_columns=[1,2]) raises ValueError."""
+        with pytest.raises(
+            ValueError, match="LOCO mode.*does not support multi-phenotype"
+        ):
+            PipelineConfig(bfile=Path("test"), loco=True, phenotype_columns=[1, 2])
+
+    def test_loco_single_phenotype_ok(self) -> None:
+        """PipelineConfig(loco=True, phenotype_columns=[1]) is valid."""
+        config = PipelineConfig(bfile=Path("test"), loco=True, phenotype_columns=[1])
+        assert config.phenotype_columns == [1]
+
+
+@pytest.mark.tier1
+class TestMultiPhenotypeOutputNaming:
+    """Tests for multi-phenotype output file naming."""
+
+    def test_single_phenotype_no_suffix(
+        self, sample_plink_data: Path, tmp_path: Path
+    ) -> None:
+        """phenotype_columns=[1] produces result.assoc.txt (no .pheno suffix)."""
+        config = PipelineConfig(
+            bfile=sample_plink_data,
+            phenotype_columns=[1],
+            output_dir=tmp_path / "output",
+            check_memory=False,
+            show_progress=False,
+            backend="numpy",
+        )
+        result = PipelineRunner(config).run()
+        assert result.assoc_path.name == "result.assoc.txt"
+
+    def test_multi_phenotype_output_naming(self, tmp_path: Path) -> None:
+        """Multi-phenotype produces per-pheno output files."""
+        bfile = _copy_plink_genotypes(tmp_path)
+
+        # Write a .fam with 2 phenotype columns
+        n_samples = 100
+        fam_path = tmp_path / "test.fam"
+        with open(fam_path, "w") as f:
+            for i in range(n_samples):
+                pheno1 = 1.0 + i * 0.1
+                pheno2 = 2.0 + i * 0.1
+                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno1}\t{pheno2}\n")
+
+        out = tmp_path / "output"
+        config = PipelineConfig(
+            bfile=bfile,
+            phenotype_columns=[1, 2],
+            output_dir=out,
+            check_memory=False,
+            show_progress=False,
+            backend="numpy",
+        )
+        PipelineRunner(config).run()
+
+        # Both per-phenotype output files should exist
+        assert (out / "result.pheno1.assoc.txt").exists()
+        assert (out / "result.pheno2.assoc.txt").exists()
+        # No plain result.assoc.txt
+        assert not (out / "result.assoc.txt").exists()
+
+
+@pytest.mark.tier1
+class TestMultiPhenotypeSingleEigen:
+    """Tests for eigendecomposition reuse across phenotypes."""
+
+    def test_multi_phenotype_single_eigen(self, tmp_path: Path) -> None:
+        """Multi-phenotype mode calls eigendecompose_kinship exactly once."""
+        bfile = _copy_plink_genotypes(tmp_path)
+
+        # Write a .fam with 2 phenotype columns
+        n_samples = 100
+        fam_path = tmp_path / "test.fam"
+        with open(fam_path, "w") as f:
+            for i in range(n_samples):
+                pheno1 = 1.0 + i * 0.1
+                pheno2 = 2.0 + i * 0.1
+                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno1}\t{pheno2}\n")
+
+        from unittest.mock import patch
+
+        out = tmp_path / "output"
+        config = PipelineConfig(
+            bfile=bfile,
+            phenotype_columns=[1, 2],
+            output_dir=out,
+            check_memory=False,
+            show_progress=False,
+            backend="numpy",
+        )
+
+        with patch(
+            "jamma.pipeline.eigendecompose_kinship",
+            wraps=eigendecompose_kinship,
+        ) as mock_eigen:
+            PipelineRunner(config).run()
+            assert mock_eigen.call_count == 1, (
+                f"eigendecompose_kinship should be called once, "
+                f"got {mock_eigen.call_count}"
+            )
+
+
+@pytest.mark.tier1
+class TestMultiPhenotypeMaskIntersection:
+    """Tests for multi-phenotype missing value mask intersection."""
+
+    def test_multi_phenotype_shared_missing_excluded(self, tmp_path: Path) -> None:
+        """Multi-phenotype with shared missing samples excludes them correctly."""
+        bfile = _copy_plink_genotypes(tmp_path)
+
+        # Write .fam with 2 phenotype columns; samples 0 and 1 missing in BOTH
+        n_samples = 100
+        fam_path = tmp_path / "test.fam"
+        with open(fam_path, "w") as f:
+            for i in range(n_samples):
+                if i < 2:
+                    pheno1 = "NA"
+                    pheno2 = "NA"
+                else:
+                    pheno1 = str(1.0 + i * 0.1)
+                    pheno2 = str(2.0 + i * 0.1)
+                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno1}\t{pheno2}\n")
+
+        out = tmp_path / "output"
+        config = PipelineConfig(
+            bfile=bfile,
+            phenotype_columns=[1, 2],
+            output_dir=out,
+            check_memory=False,
+            show_progress=False,
+            backend="numpy",
+        )
+        result = PipelineRunner(config).run()
+        # Both samples 0 and 1 should be excluded
+        assert result.n_samples == n_samples - 2
+
+    def test_multi_phenotype_all_missing_raises(self, tmp_path: Path) -> None:
+        """Multi-phenotype with complementary missing patterns raises ValueError."""
+        bfile = _copy_plink_genotypes(tmp_path)
+
+        # Write .fam where every sample is missing in at least one phenotype
+        n_samples = 100
+        fam_path = tmp_path / "test.fam"
+        with open(fam_path, "w") as f:
+            for i in range(n_samples):
+                if i % 2 == 0:
+                    pheno1 = "NA"
+                    pheno2 = str(2.0 + i * 0.1)
+                else:
+                    pheno1 = str(1.0 + i * 0.1)
+                    pheno2 = "NA"
+                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno1}\t{pheno2}\n")
+
+        out = tmp_path / "output"
+        config = PipelineConfig(
+            bfile=bfile,
+            phenotype_columns=[1, 2],
+            output_dir=out,
+            check_memory=False,
+            show_progress=False,
+            backend="numpy",
+        )
+        with pytest.raises(ValueError, match="No samples have valid values"):
+            PipelineRunner(config).run()
+
+    def test_assoc_paths_multi_phenotype(self, tmp_path: Path) -> None:
+        """PipelineResult.assoc_paths contains all per-phenotype output files."""
+        bfile = _copy_plink_genotypes(tmp_path)
+
+        n_samples = 100
+        fam_path = tmp_path / "test.fam"
+        with open(fam_path, "w") as f:
+            for i in range(n_samples):
+                pheno1 = 1.0 + i * 0.1
+                pheno2 = 2.0 + i * 0.1
+                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno1}\t{pheno2}\n")
+
+        out = tmp_path / "output"
+        config = PipelineConfig(
+            bfile=bfile,
+            phenotype_columns=[1, 2],
+            output_dir=out,
+            check_memory=False,
+            show_progress=False,
+            backend="numpy",
+        )
+        result = PipelineRunner(config).run()
+        assert len(result.assoc_paths) == 2
+        assert all(p.exists() for p in result.assoc_paths)
+        assert result.assoc_path == result.assoc_paths[-1]
+
+    def test_assoc_paths_single_phenotype(
+        self, sample_plink_data: Path, tmp_path: Path
+    ) -> None:
+        """Single-phenotype run has assoc_paths == [assoc_path]."""
+        config = PipelineConfig(
+            bfile=sample_plink_data,
+            phenotype_columns=[1],
+            output_dir=tmp_path / "output",
+            check_memory=False,
+            show_progress=False,
+            backend="numpy",
+        )
+        result = PipelineRunner(config).run()
+        assert result.assoc_paths == [result.assoc_path]
+
+    def test_duplicate_phenotype_columns_raises(self) -> None:
+        """PipelineConfig rejects duplicate phenotype columns."""
+        with pytest.raises(ValueError, match="duplicate"):
+            PipelineConfig(bfile=Path("test"), phenotype_columns=[1, 1, 3])
+
+    def test_out_of_range_phenotype_column_raises(self, tmp_path: Path) -> None:
+        """Multi-phenotype with out-of-range column index raises ValueError."""
+        bfile = _copy_plink_genotypes(tmp_path)
+
+        # Write .fam with only 1 phenotype column (column index 5)
+        n_samples = 100
+        fam_path = tmp_path / "test.fam"
+        with open(fam_path, "w") as f:
+            for i in range(n_samples):
+                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{1.0 + i * 0.1}\n")
+
+        out = tmp_path / "output"
+        config = PipelineConfig(
+            bfile=bfile,
+            phenotype_columns=[1, 5],
+            output_dir=out,
+            check_memory=False,
+            show_progress=False,
+            backend="numpy",
+        )
+        with pytest.raises(ValueError, match="exceeds available columns"):
+            PipelineRunner(config).run()
 
 
 @pytest.mark.tier1

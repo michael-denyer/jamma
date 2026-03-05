@@ -1403,17 +1403,13 @@ class TestEigenIoRoundTrip:
 
         # Write and read back (fresh dir per Hypothesis example)
         tmp_dir = Path(tempfile.mkdtemp())
-        write_eigen_files(eigenvalues, U, tmp_dir, prefix="test")
-        D_read, U_read = read_eigen_files(
-            tmp_dir / "test.eigenD.txt",
-            tmp_dir / "test.eigenU.txt",
-        )
+        d_path, u_path = write_eigen_files(eigenvalues, U, tmp_dir, prefix="test")
+        D_read, U_read = read_eigen_files(d_path, u_path)
 
         # Reconstruct from round-tripped values
         K_reconstructed = U_read @ np.diag(D_read) @ U_read.T
 
-        # .10g format gives ~10 significant digits; near-zero K entries
-        # have large relative error from rounding, so use atol scaled to K.
+        # Binary .npy is lossless; tolerance handles eigendecomp float precision
         scale = max(np.abs(K_original).max(), 1e-10)
         np.testing.assert_allclose(
             K_original,
@@ -1444,13 +1440,10 @@ class TestEigenIoRoundTrip:
         eigenvalues, U = eigendecompose_kinship(K, threshold=0)
 
         tmp_dir = Path(tempfile.mkdtemp())
-        write_eigen_files(eigenvalues, U, tmp_dir, prefix="test")
-        _, U_read = read_eigen_files(
-            tmp_dir / "test.eigenD.txt",
-            tmp_dir / "test.eigenU.txt",
-        )
+        d_path, u_path = write_eigen_files(eigenvalues, U, tmp_dir, prefix="test")
+        _, U_read = read_eigen_files(d_path, u_path)
 
-        # .10g rounding accumulates through n dot products
+        # Binary .npy is lossless; tolerance handles eigendecomp float precision
         n = U_read.shape[0]
         np.testing.assert_allclose(
             U_read.T @ U_read,
@@ -1469,7 +1462,7 @@ class TestEigenIoRoundTrip:
         max_examples=10, deadline=None, suppress_health_check=[HealthCheck.too_slow]
     )
     def test_eigen_roundtrip_eigenvalue_precision(self, genotypes):
-        """Individual eigenvalues should survive round-trip within .10g precision."""
+        """Individual eigenvalues survive binary round-trip exactly."""
         import tempfile
         from pathlib import Path
 
@@ -1481,16 +1474,59 @@ class TestEigenIoRoundTrip:
         eigenvalues, U = eigendecompose_kinship(K, threshold=0)
 
         tmp_dir = Path(tempfile.mkdtemp())
-        write_eigen_files(eigenvalues, U, tmp_dir, prefix="test")
-        D_read, _ = read_eigen_files(
-            tmp_dir / "test.eigenD.txt",
-            tmp_dir / "test.eigenU.txt",
-        )
+        d_path, u_path = write_eigen_files(eigenvalues, U, tmp_dir, prefix="test")
+        D_read, _ = read_eigen_files(d_path, u_path)
 
-        # .10g format preserves ~10 significant digits
+        # Binary .npy is lossless; small tolerance for float round-trip
         np.testing.assert_allclose(
             eigenvalues,
             D_read,
             rtol=1e-9,
             err_msg="Eigenvalue precision lost in round-trip",
+        )
+
+    @given(
+        genotypes=genotype_matrix(
+            min_samples=10, max_samples=30, min_snps=20, max_snps=40
+        )
+    )
+    @settings(
+        max_examples=10, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_eigen_roundtrip_text_precision(self, genotypes):
+        """Eigenvalues survive legacy text (.10g) round-trip within precision limits."""
+        import tempfile
+        from pathlib import Path
+
+        from jamma.kinship import compute_centered_kinship
+        from jamma.lmm.eigen import eigendecompose_kinship
+        from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+
+        K = compute_centered_kinship(genotypes, check_memory=False)
+        K_original = K.copy()
+        eigenvalues, U = eigendecompose_kinship(K, threshold=0)
+
+        tmp_dir = Path(tempfile.mkdtemp())
+        d_path, u_path = write_eigen_files(
+            eigenvalues, U, tmp_dir, prefix="test", legacy_text=True
+        )
+        D_read, U_read = read_eigen_files(d_path, u_path)
+
+        # .10g format gives ~10 significant digits
+        np.testing.assert_allclose(
+            eigenvalues,
+            D_read,
+            rtol=5e-10,
+            err_msg="Eigenvalue precision lost in text round-trip",
+        )
+
+        # Reconstruction: .10g rounding accumulates through matrix products
+        K_reconstructed = U_read @ np.diag(D_read) @ U_read.T
+        scale = max(np.abs(K_original).max(), 1e-10)
+        np.testing.assert_allclose(
+            K_original,
+            K_reconstructed,
+            rtol=1e-6,
+            atol=scale * 1e-7,
+            err_msg="Text round-trip reconstruction failed",
         )

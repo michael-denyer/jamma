@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Binary `.npy` as default output format for kinship matrices and eigendecomposition
+  files — 10-100x faster I/O at scale. Use `--legacy-text` for GEMMA-compatible text format
+- Multi-phenotype support: `-n "1 2 3"` or `-n "1,2,3"` processes multiple phenotype
+  columns with a single eigendecomposition, saving hours at scale
+
+### Changed
+
+- Kinship output file extension changed from `.cXX.txt` to `.cXX.npy` by default
+- Eigen output files changed from `.eigenD.txt`/`.eigenU.txt` to `.eigenD.npy`/`.eigenU.npy`
+  by default
+
 ## [2.10.1] - 2026-03-03
 
 ### Fixed

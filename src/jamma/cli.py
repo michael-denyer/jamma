@@ -84,12 +84,21 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
 @click.option(
     "-eigen", is_flag=True, default=False, help="Write eigendecomposition files"
 )
-@click.option("-n", type=int, default=1, help="Phenotype column in .fam file (1-based)")
 @click.option(
-    "-d", type=click.Path(), default=None, help="Eigenvalue file (.eigenD.txt)"
+    "-n",
+    type=str,
+    default="1",
+    help=(
+        "Phenotype column(s) in .fam file, 1-based. "
+        "Single value or space/comma-separated: "
+        "-n 1 or -n '1 2 3' or -n '1,2,3'"
+    ),
 )
 @click.option(
-    "-u", type=click.Path(), default=None, help="Eigenvector file (.eigenU.txt)"
+    "-d", type=click.Path(), default=None, help="Eigenvalue file (.eigenD.npy or .txt)"
+)
+@click.option(
+    "-u", type=click.Path(), default=None, help="Eigenvector file (.eigenU.npy or .txt)"
 )
 @click.option("-hwe", type=float, default=0.0, help="HWE p-value threshold")
 @click.option(
@@ -136,6 +145,12 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     type=click.Choice(["auto", "jax", "numpy"], case_sensitive=False),
     default="auto",
     help="Compute backend: auto (default), jax, or numpy.",
+)
+@click.option(
+    "--legacy-text",
+    is_flag=True,
+    default=False,
+    help="Write kinship/eigen files in GEMMA text format instead of binary .npy",
 )
 @click.option(
     "-cat",
@@ -211,6 +226,7 @@ def main(
     mem_budget,
     profile_dir,
     backend,
+    legacy_text,
     cat,
     widv,
     wsnp,
@@ -219,10 +235,9 @@ def main(
     mk,
     mvlmm,
 ):
-    """JAMMA: Mixed Model Association for GWAS.
+    """JAMMA: High-performance Multi-method Mixed-Model Association.
 
-    A modern Python reimplementation of GEMMA targeting exact numerical
-    compatibility with the original C++ implementation.
+    A modern Python and C reimplementation of GEMMA for large-scale GWAS.
     """
     setup_logging(verbose=verbose)
 
@@ -259,6 +274,18 @@ def main(
         if ctx.get_parameter_source("miss") == click.core.ParameterSource.DEFAULT:
             miss = 1.0
 
+    # Parse -n: accept space or comma separated integers
+    try:
+        phenotype_columns = [int(x) for x in n.replace(",", " ").split()]
+    except ValueError as e:
+        raise click.UsageError(f"-n must be integer column indices, got '{n}'") from e
+    if not phenotype_columns:
+        raise click.UsageError("-n requires at least one column index")
+    if len(phenotype_columns) != len(set(phenotype_columns)):
+        raise click.UsageError(
+            f"-n contains duplicate column indices: {phenotype_columns}"
+        )
+
     # Parse -cat option
     cat_columns = None
     if cat is not None:
@@ -273,6 +300,11 @@ def main(
 
     # Dispatch to handler
     if gk is not None:
+        if len(phenotype_columns) > 1:
+            raise click.UsageError(
+                "-n with multiple columns is not supported in -gk mode. "
+                "Kinship computation uses all samples regardless of phenotype."
+            )
         _run_gk(
             bfile=Path(bfile),
             mode=gk,
@@ -282,8 +314,9 @@ def main(
             check_memory=check_memory,
             loco=loco,
             write_eigen=eigen,
-            phenotype_column=n,
+            phenotype_column=phenotype_columns[0],
             ksnps_file=_opt_path(ksnps),
+            legacy_text=legacy_text,
         )
     else:
         _run_lmm(
@@ -300,7 +333,7 @@ def main(
             eigenvalue_file=_opt_path(d),
             eigenvector_file=_opt_path(u),
             write_eigen=eigen,
-            phenotype_column=n,
+            phenotype_columns=phenotype_columns,
             snps_file=_opt_path(snps),
             ksnps_file=_opt_path(ksnps),
             hwe_threshold=hwe,
@@ -310,6 +343,7 @@ def main(
             cat_columns=cat_columns,
             profile_dir=Path(profile_dir) if profile_dir else None,
             backend=backend,
+            legacy_text=legacy_text,
         )
 
 
@@ -325,6 +359,7 @@ def _run_gk(
     write_eigen: bool,
     phenotype_column: int,
     ksnps_file: Path | None,
+    legacy_text: bool = False,
 ) -> None:
     """Run kinship matrix computation."""
     if mode not in (1, 2):
@@ -409,6 +444,7 @@ def _run_gk(
             loco_iter,
             output_dir=config.outdir,
             prefix=config.prefix,
+            legacy_text=legacy_text,
         )
         kinship_time = time.perf_counter() - kinship_start
 
@@ -480,8 +516,8 @@ def _run_gk(
     click.echo(f"{kinship_label.capitalize()} kinship computed in {kinship_time:.2f}s")
 
     # Write kinship matrix
-    kinship_path = config.outdir / f"{config.prefix}.cXX.txt"
-    write_kinship_matrix(K, kinship_path)
+    kinship_base = config.outdir / f"{config.prefix}.cXX.txt"
+    kinship_path = write_kinship_matrix(K, kinship_base, legacy_text=legacy_text)
     click.echo(f"Kinship matrix written to {kinship_path}")
 
     n_samples = K.shape[0]
@@ -498,6 +534,7 @@ def _run_gk(
             eigenvectors,
             config.outdir,
             config.prefix,
+            legacy_text=legacy_text,
         )
         click.echo(f"Eigenvalues written to {d_path}")
         click.echo(f"Eigenvectors written to {u_path}")
@@ -535,7 +572,7 @@ def _run_lmm(
     eigenvalue_file: Path | None,
     eigenvector_file: Path | None,
     write_eigen: bool,
-    phenotype_column: int,
+    phenotype_columns: list[int],
     snps_file: Path | None,
     ksnps_file: Path | None,
     hwe_threshold: float,
@@ -545,6 +582,7 @@ def _run_lmm(
     cat_columns: list[int] | None = None,
     profile_dir: Path | None = None,
     backend: str = "auto",
+    legacy_text: bool = False,
 ) -> None:
     """Run LMM association testing."""
     # Mutual exclusivity check
@@ -575,7 +613,7 @@ def _run_lmm(
         eigenvalue_file=eigenvalue_file,
         eigenvector_file=eigenvector_file,
         write_eigen=write_eigen,
-        phenotype_column=phenotype_column,
+        phenotype_columns=phenotype_columns,
         snps_file=snps_file,
         ksnps_file=ksnps_file,
         hwe_threshold=hwe_threshold,
@@ -585,6 +623,7 @@ def _run_lmm(
         cat_columns=cat_columns,
         profile_dir=profile_dir,
         backend=backend,
+        legacy_text=legacy_text,
     )
 
     # Run pipeline, converting exceptions to CLI-friendly errors

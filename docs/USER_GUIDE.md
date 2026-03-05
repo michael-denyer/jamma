@@ -80,7 +80,7 @@ JAMMA auto-detects the best available backend. Force a specific backend with:
 
 ```bash
 # CLI flag
-jamma -lmm 1 --backend numpy -bfile data/my_study -k kinship.cXX.txt
+jamma -lmm 1 --backend numpy -bfile data/my_study -k kinship.cXX.npy
 
 # Environment variable (overrides CLI flag)
 export JAMMA_BACKEND=numpy
@@ -116,6 +116,7 @@ jamma -gk 1 -bfile data/my_study -o kinship -outdir output
 - `-n INT` — Phenotype column in .fam file (1-based, default: 1)
 - `-maf FLOAT` — MAF threshold (default: 0.0, no filter for gk mode)
 - `-miss FLOAT` — Missing rate threshold (default: 1.0, no filter for gk mode)
+- `--legacy-text` — Write kinship files in GEMMA text format (`.cXX.txt`) instead of binary `.npy`
 - `-o PREFIX` — Output file prefix
 - `-outdir DIR` — Output directory
 
@@ -125,21 +126,48 @@ jamma -gk 1 -bfile data/my_study -o kinship -outdir output
 
 **Output:**
 
-- `output/kinship.cXX.txt` — Kinship matrix (GEMMA format)
+- `output/kinship.cXX.npy` — Kinship matrix (binary NumPy format, default)
 - `output/kinship.log.txt` — Run log
+
+Binary `.npy` is the default output format (10-100x faster I/O at scale). Use
+`--legacy-text` for GEMMA-compatible text format (`.cXX.txt`):
+
+```bash
+# Default: binary .npy output (fast)
+jamma -gk 1 -bfile data/my_study -o kinship -outdir output
+
+# GEMMA-compatible text output
+jamma -gk 1 -bfile data/my_study -o kinship -outdir output --legacy-text
+```
+
+The reader auto-detects format, so existing `.cXX.txt` files still work as `-k` input.
+
+**Using GEMMA-generated files with JAMMA:**
+
+```bash
+# GEMMA produced kinship.cXX.txt — pass it directly to JAMMA
+jamma -lmm 1 -bfile data/my_study -k output/kinship.cXX.txt -o assoc -outdir output
+
+# GEMMA produced eigenvalue/eigenvector files — use -d/-u
+jamma -lmm 1 -bfile data/my_study \
+  -d output/result.eigenD.txt -u output/result.eigenU.txt \
+  -o assoc -outdir output
+```
+
+JAMMA reads GEMMA's text formats natively (space- or tab-separated). No conversion needed.
 
 ### LMM Association Testing (`-lmm`)
 
 Run univariate linear mixed model association tests:
 
 ```bash
-jamma -lmm 1 -bfile data/my_study -k output/kinship.cXX.txt -o assoc -outdir output
+jamma -lmm 1 -bfile data/my_study -k output/kinship.cXX.npy -o assoc -outdir output
 ```
 
 **With covariates:**
 
 ```bash
-jamma -lmm 1 -bfile data/my_study -k output/kinship.cXX.txt \
+jamma -lmm 1 -bfile data/my_study -k output/kinship.cXX.npy \
   -c covariates.txt -o assoc -outdir output
 ```
 
@@ -150,10 +178,10 @@ jamma -lmm 1 -bfile data/my_study -k output/kinship.cXX.txt \
 - `-lmm MODE` — Test type: 1 = Wald (default), 2 = LRT, 3 = Score, 4 = All
 - `-c PATH` — Covariate file (GEMMA format: whitespace-delimited, first column should be intercept)
 - `-loco` — Enable leave-one-chromosome-out analysis (mutually exclusive with `-k`)
-- `-d PATH` — Pre-computed eigenvalue file (.eigenD.txt)
-- `-u PATH` — Pre-computed eigenvector file (.eigenU.txt)
-- `-eigen` — Write eigendecomposition files (.eigenD.txt, .eigenU.txt)
-- `-n INT` — Phenotype column in .fam file (1-based, default: 1)
+- `-d PATH` — Pre-computed eigenvalue file (`.eigenD.npy` or `.eigenD.txt`)
+- `-u PATH` — Pre-computed eigenvector file (`.eigenU.npy` or `.eigenU.txt`)
+- `-eigen` — Write eigendecomposition files (`.eigenD.npy`, `.eigenU.npy`; text with `--legacy-text`)
+- `-n INT|"INT INT ..."` — Phenotype column(s) in .fam file (1-based, default: 1). Multiple columns can be space- or comma-separated (e.g., `-n "1 2 3"` or `-n "1,2,3"`)
 - `-snps PATH` — SNP list file to restrict association testing (one RS ID per line)
 - `-ksnps PATH` — SNP list file to restrict kinship computation (one RS ID per line)
 - `-hwe FLOAT` — HWE p-value threshold; exclude SNPs below this value (default: 0.0, disabled)
@@ -165,6 +193,7 @@ jamma -lmm 1 -bfile data/my_study -k output/kinship.cXX.txt \
 - `-miss FLOAT` — Missing rate threshold (default: 0.05)
 - `--mem-budget GB` — Memory budget in GB (default: available - 10%)
 - `--no-check-memory` — Disable pre-flight memory checks
+- `--legacy-text` — Write kinship and eigen files in GEMMA text format instead of binary `.npy`
 - `--backend auto|jax|numpy` — Force compute backend (default: auto)
 - `--profile-dir DIR` — Directory for XLA profiling traces
 - `-v` / `--verbose` — Verbose output
@@ -208,9 +237,25 @@ Tab-separated file. The first 7 columns are always present; stat columns depend 
 | `p_lrt` | — | yes | — | yes |
 | `p_score` | — | — | yes | yes |
 
-### Kinship Matrix (`.cXX.txt`)
+### Kinship Matrix
 
-Space-separated N×N matrix where N is the number of samples. Compatible with GEMMA format.
+**Binary format (`.cXX.npy`, default):** NumPy binary array. 10-100x faster I/O than
+text at scale. Read with `numpy.load("kinship.cXX.npy")`.
+
+**Text format (`.cXX.txt`, with `--legacy-text`):** Space-separated N×N matrix where
+N is the number of samples. Compatible with GEMMA format.
+
+**Format auto-detection:** When you pass a `.txt` path (e.g., `-k kinship.cXX.txt`),
+JAMMA checks for a `.npy` sibling file with the same stem. If a `.npy` file exists
+and its modification time is at least as recent as the `.txt` file, the `.npy` is
+loaded instead (much faster at scale). If the `.txt` file is newer — for example,
+because you regenerated it with GEMMA — JAMMA ignores the stale `.npy` and re-parses
+the text file. Passing a `.npy` path directly always loads the binary file.
+
+**Important:** If you regenerate a `.txt` file externally (e.g., with GEMMA) and an
+older `.npy` sibling exists from a previous JAMMA run, the `.npy` is automatically
+skipped because the `.txt` is newer. To be safe, delete stale `.npy` files when
+regenerating kinship or eigen files outside JAMMA.
 
 ## LOCO Analysis
 
@@ -228,28 +273,50 @@ jamma -lmm 1 -bfile data/my_study -loco -o loco_results -outdir output
 
 - `-loco` is mutually exclusive with `-k` (kinship is computed internally)
 - `-loco` is mutually exclusive with `-gk 2` (standardized kinship not supported in LOCO mode)
+- `-loco` does not support multi-phenotype (`-n "1 2 3"`). Run each phenotype separately when using `-loco`
 - `-hwe` is not supported with `-loco` (HWE filtering requires a single-pass architecture)
 
 ## Eigendecomposition Reuse
 
-For multi-phenotype workflows, eigendecomposition (O(n^3)) dominates runtime. Save
-and reload eigendecomposition to skip it after the first run:
+For multi-phenotype workflows, eigendecomposition (O(n^3)) dominates runtime.
+
+**Automatic reuse (recommended):** Pass multiple phenotype columns with `-n`. JAMMA
+computes eigendecomposition once and reuses it across all phenotypes:
+
+```bash
+# All three phenotypes in one invocation — eigendecomp computed once
+jamma -lmm 1 -bfile data/my_study -k kinship.cXX.npy \
+  -n "1 2 3" -o results -outdir output
+```
+
+**Manual reuse:** Save eigendecomposition files and reload them in subsequent runs:
 
 ```bash
 # First phenotype: compute kinship + eigen, save both
-jamma -lmm 1 -bfile data/my_study -k kinship.cXX.txt \
+jamma -lmm 1 -bfile data/my_study -k kinship.cXX.npy \
   -eigen -n 1 -o pheno1 -outdir output
 
 # Second phenotype: reuse eigendecomposition (skips kinship + eigen entirely)
 jamma -lmm 1 -bfile data/my_study \
-  -d output/pheno1.eigenD.txt -u output/pheno1.eigenU.txt \
+  -d output/pheno1.eigenD.npy -u output/pheno1.eigenU.npy \
   -n 2 -o pheno2 -outdir output
 ```
 
 **Output files when `-eigen` is used:**
 
-- `output/pheno1.eigenD.txt` — Eigenvalues (one per line)
-- `output/pheno1.eigenU.txt` — Eigenvectors (space-separated N×N matrix)
+- `output/pheno1.eigenD.npy` — Eigenvalues (binary NumPy format)
+- `output/pheno1.eigenU.npy` — Eigenvectors (binary NumPy format)
+
+Use `--legacy-text` to write GEMMA-compatible text files (`.eigenD.txt`, `.eigenU.txt`)
+instead. When `--legacy-text` is used with `-eigen`, JAMMA also writes `.npy` sidecar
+files alongside the text files for faster subsequent reads.
+
+The reader auto-detects format using the same sibling rule as kinship: passing a `.txt`
+path checks for a newer `.npy` sibling first. See [Kinship Matrix](#kinship-matrix) for
+details on the auto-detection logic.
+
+**Note:** `--legacy-text` only affects kinship and eigen file writes. It has no effect
+on association output (`.assoc.txt` is always text format).
 
 ## SNP Filtering
 
@@ -257,7 +324,7 @@ Restrict which SNPs are used for kinship computation and/or association testing:
 
 ```bash
 # Restrict association to specific SNPs
-jamma -lmm 1 -bfile data/my_study -k kinship.cXX.txt \
+jamma -lmm 1 -bfile data/my_study -k kinship.cXX.npy \
   -snps snp_list.txt -o filtered -outdir output
 
 # Restrict kinship computation to specific SNPs
@@ -265,7 +332,7 @@ jamma -gk 1 -bfile data/my_study -ksnps kinship_snps.txt \
   -o kinship -outdir output
 
 # HWE quality control
-jamma -lmm 1 -bfile data/my_study -k kinship.cXX.txt \
+jamma -lmm 1 -bfile data/my_study -k kinship.cXX.npy \
   -hwe 0.001 -o qc -outdir output
 ```
 
@@ -282,13 +349,30 @@ Wigginton exact test.
 For .fam files with multiple phenotype columns, select which to use:
 
 ```bash
-# Use the second phenotype column (column 7 in .fam)
-jamma -lmm 1 -bfile data/my_study -k kinship.cXX.txt \
-  -n 2 -o pheno2 -outdir output
+# Single phenotype (default)
+jamma -lmm 1 -bfile data/my_study -k kinship.cXX.npy -n 1
+
+# Multiple phenotypes (space-separated)
+jamma -lmm 1 -bfile data/my_study -k kinship.cXX.npy -n "1 2 3"
+
+# Multiple phenotypes (comma-separated)
+jamma -lmm 1 -bfile data/my_study -k kinship.cXX.npy -n "1,2,3"
 ```
 
 The `-n` flag uses 1-based indexing matching GEMMA: `-n 1` selects column 6
 (standard phenotype), `-n 2` selects column 7, etc.
+
+**Multi-phenotype mode** computes eigendecomposition once and reuses it across all
+phenotypes. Each phenotype produces a separate output file with `.phenoN.` suffix
+(e.g., `result.pheno1.assoc.txt`, `result.pheno2.assoc.txt`). Single-phenotype runs
+produce output without the suffix (e.g., `result.assoc.txt`).
+
+Samples with missing values (NA/-9) in any selected phenotype column are excluded from
+the analysis (eigendecomposition and association testing). The sample mask is the
+intersection across all phenotype columns, ensuring consistent results.
+
+**Note:** LOCO mode (`-loco`) does not support multi-phenotype. Run each phenotype
+separately when using `-loco`.
 
 ## Python API
 
@@ -317,14 +401,15 @@ result = gwas(
 # LOCO analysis (leave-one-chromosome-out)
 result = gwas("data/my_study", loco=True)
 
-# Multi-phenotype with eigendecomp reuse
+# Multi-phenotype with eigendecomp reuse (Python API)
 result = gwas("data/my_study", write_eigen=True, phenotype_column=1)
 result = gwas(
     "data/my_study",
-    eigenvalue_file="output/result.eigenD.txt",
-    eigenvector_file="output/result.eigenU.txt",
+    eigenvalue_file="output/result.eigenD.npy",
+    eigenvector_file="output/result.eigenU.npy",
     phenotype_column=2,
 )
+# Or use the CLI for automatic multi-phenotype: jamma -lmm 1 ... -n "1 2 3"
 
 # SNP filtering and HWE QC
 result = gwas(

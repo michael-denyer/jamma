@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.1] - 2026-03-05
+
+### Fixed
+
+- Multi-phenotype runs crashed with eigenpair dimension mismatch when phenotype
+  missingness differed across columns — now NaN-stamps samples outside the shared
+  valid_mask intersection so runners compute a consistent mask
+- `JAMMA_BACKEND` environment variable was ignored when `backend="auto"` — now
+  resolved before auto-selection logic
+- Backend logging falsely attributed selection to `JAMMA_BACKEND` when env var was
+  set but not actually honored; removed misleading "JAX not installed" message for
+  memory/C-extension-based NumPy selection
+- NumPy multi-phenotype runs reloaded full genotype matrix per phenotype — now
+  pre-loads PLINK data once
+- Windows + JAX docs contradiction between README and User Guide
+- "Full test suite" claim in PERFORMANCE.md now notes default marker exclusions
+
+### Changed
+
+- Extracted `compute_valid_mask()` to `prepare_common.py` — single source of truth
+  for valid-sample mask logic (was duplicated in pipeline, prepare_common, loco)
+- Added `get_last_run_timing()` accessor for thread-safe timing snapshot
+
 ## [2.11.0] - 2026-03-05
 
 ### Added

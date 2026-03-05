@@ -138,13 +138,13 @@ def run_lmm_association_jax(
         actual_chunk = _compute_chunk_size(n_snps, n_samples=n_samples)
         est = estimate_lmm_memory(n_samples, n_snps, lmm_batch_size=actual_chunk)
         # JAX's XLA allocator creates transient intermediates during matmul
-        # that aren't captured in the static estimate. Apply a 1.5x safety
+        # that aren't captured in the static estimate. Apply a 1.25x safety
         # factor and check against available memory minus current process
         # usage (eigenvectors, eigenvalues, etc. already resident).
         import psutil
 
         rss_gb = psutil.Process().memory_info().rss / 1e9
-        jax_safety_factor = 1.5
+        jax_safety_factor = 1.25
         safe_estimate = est.total_gb * jax_safety_factor
         sufficient = (safe_estimate + rss_gb) < est.available_gb
         headroom = est.available_gb - safe_estimate - rss_gb

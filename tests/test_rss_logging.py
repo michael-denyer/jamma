@@ -39,7 +39,7 @@ class TestLogRssMemory:
 
             # Check stdout for log message (loguru routes to stdout for Databricks)
             captured = capfd.readouterr()
-            assert "RSS memory" in captured.out
+            assert "Process using" in captured.out
             assert "eigendecomp" in captured.out
             assert "before" in captured.out
 

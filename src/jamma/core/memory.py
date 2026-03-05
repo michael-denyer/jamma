@@ -646,13 +646,14 @@ def log_memory_snapshot(label: str = "", level: str = "INFO") -> MemorySnapshot:
 
     Example:
         >>> log_memory_snapshot("before_100k_run")
-        INFO | Memory [before_100k_run]: RSS=89.5GB, Available=160.2GB (35.0% used)
+        INFO | Memory [before_100k_run]: using 89.5GB,
+             160.2GB free of 256.0GB (35.0% used)
     """
     snap = get_memory_snapshot()
     label_str = f" [{label}]" if label else ""
     msg = (
-        f"Memory{label_str}: RSS={snap.rss_gb:.1f}GB, "
-        f"Available={snap.available_gb:.1f}GB/{snap.total_gb:.1f}GB "
+        f"Memory{label_str}: using {snap.rss_gb:.1f}GB, "
+        f"{snap.available_gb:.1f}GB free of {snap.total_gb:.1f}GB "
         f"({snap.percent_used:.1f}% used)"
     )
     logger.log(level, msg)
@@ -683,9 +684,9 @@ def cleanup_memory(clear_jax: bool = True, verbose: bool = True) -> MemorySnapsh
         >>> # After a benchmark run
         >>> del kinship, eigenvectors, results
         >>> cleanup_memory()
-        INFO | Memory [before_cleanup]: RSS=89.5GB, Available=160.2GB/256.0GB
-        INFO | Memory [after_cleanup]: RSS=12.3GB, Available=237.4GB/256.0GB
-        INFO | Freed 77.2GB (RSS reduced from 89.5GB to 12.3GB)
+        INFO | Memory [before_cleanup]: using 89.5GB, 160.2GB free of 256.0GB
+        INFO | Memory [after_cleanup]: using 12.3GB, 237.4GB free of 256.0GB
+        INFO | Freed 77.2GB (process was using 89.5GB, now 12.3GB)
 
     Note:
         For best results, explicitly `del` large arrays before calling
@@ -714,13 +715,13 @@ def cleanup_memory(clear_jax: bool = True, verbose: bool = True) -> MemorySnapsh
         freed_gb = before.rss_gb - after.rss_gb
         if freed_gb > 0.1:  # Only log if meaningful change
             logger.info(
-                f"Freed {freed_gb:.1f}GB (RSS reduced from "
-                f"{before.rss_gb:.1f}GB to {after.rss_gb:.1f}GB)"
+                f"Freed {freed_gb:.1f}GB (process was using "
+                f"{before.rss_gb:.1f}GB, now {after.rss_gb:.1f}GB)"
             )
         elif freed_gb < -0.1:
             logger.warning(
                 f"Memory increased by {-freed_gb:.1f}GB during cleanup "
-                f"(RSS: {before.rss_gb:.1f}GB → {after.rss_gb:.1f}GB)"
+                f"(was {before.rss_gb:.1f}GB, now {after.rss_gb:.1f}GB)"
             )
     else:
         after = get_memory_snapshot()
@@ -804,7 +805,7 @@ def check_memory_before_run(
         f"Memory check for {operation} ({n_samples:,} samples × {n_snps:,} SNPs):"
     )
     logger.info(f"  Estimated peak: {reported_peak:.1f}GB ({driver_note})")
-    logger.info(f"  Current RSS: {snap.rss_gb:.1f}GB")
+    logger.info(f"  Process using: {snap.rss_gb:.1f}GB")
     logger.info(f"  Available: {snap.available_gb:.1f}GB")
 
     # Check if estimated peak exceeds available
@@ -822,7 +823,7 @@ def check_memory_before_run(
         if snap.rss_gb > 10:  # Significant existing memory usage
             raise MemoryError(
                 f"Insufficient memory for {operation}.\n"
-                f"  Current RSS: {snap.rss_gb:.1f}GB (from previous runs?)\n"
+                f"  Process using: {snap.rss_gb:.1f}GB (from previous runs?)\n"
                 f"  Estimated peak: {reported_peak:.1f}GB\n"
                 f"  Available: {snap.available_gb:.1f}GB\n\n"
                 f"Suggestions:\n"

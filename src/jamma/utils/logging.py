@@ -132,12 +132,12 @@ def log_rss_memory(phase: str, checkpoint: str) -> float:
 
     Example:
         >>> log_rss_memory("eigendecomp", "before")
-        INFO     | RSS memory: 12.34GB (phase=eigendecomp, checkpoint=before)
+        INFO     | Process using 12.34GB RAM (phase=eigendecomp, checkpoint=before)
     """
     import psutil
 
     rss_gb = psutil.Process().memory_info().rss / 1e9
     logger.bind(phase=phase, checkpoint=checkpoint).info(
-        f"RSS memory: {rss_gb:.2f}GB (phase={phase}, checkpoint={checkpoint})"
+        f"Process using {rss_gb:.2f}GB RAM (phase={phase}, checkpoint={checkpoint})"
     )
     return rss_gb

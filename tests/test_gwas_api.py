@@ -77,8 +77,8 @@ def test_gwas_save_kinship(tmp_path: Path) -> None:
         check_memory=False,
     )
 
-    # Kinship file should exist and be non-empty
-    kinship_path = tmp_path / "result.cXX.txt"
+    # Kinship file should exist and be non-empty (default is binary .npy)
+    kinship_path = tmp_path / "result.cXX.npy"
     assert kinship_path.exists()
     assert kinship_path.stat().st_size > 0
 

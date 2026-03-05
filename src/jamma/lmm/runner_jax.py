@@ -137,25 +137,32 @@ def run_lmm_association_jax(
     if check_memory:
         actual_chunk = _compute_chunk_size(n_snps, n_samples=n_samples)
         est = estimate_lmm_memory(n_samples, n_snps, lmm_batch_size=actual_chunk)
-        # available reports free system RAM, but this process is already
-        # using memory (eigenvectors, etc.). Subtract current process
-        # usage to get realistic headroom for new allocations.
+        # JAX's XLA allocator creates transient intermediates during matmul
+        # that aren't captured in the static estimate. Apply a 1.5x safety
+        # factor and check against available memory minus current process
+        # usage (eigenvectors, eigenvalues, etc. already resident).
         import psutil
 
         rss_gb = psutil.Process().memory_info().rss / 1e9
-        effective_available = est.available_gb
+        jax_safety_factor = 1.5
+        safe_estimate = est.total_gb * jax_safety_factor
+        sufficient = (safe_estimate + rss_gb) < est.available_gb
+        headroom = est.available_gb - safe_estimate - rss_gb
         logger.info(
-            f"LMM memory: estimated {est.total_gb:.1f}GB, "
-            f"available {effective_available:.1f}GB "
-            f"(process using {rss_gb:.1f}GB)"
+            f"LMM memory: estimated {est.total_gb:.1f}GB "
+            f"(x{jax_safety_factor} safety = {safe_estimate:.0f}GB), "
+            f"process using {rss_gb:.1f}GB, "
+            f"{est.available_gb:.1f}GB available"
         )
-        if not est.sufficient:
+        if not sufficient:
             raise MemoryError(
-                f"Insufficient memory for LMM with {n_samples:,} samples × "
-                f"{n_snps:,} SNPs.\n"
-                f"Need: {est.total_gb:.1f}GB, "
-                f"Available: {effective_available:.1f}GB "
-                f"(process using {rss_gb:.1f}GB)\n"
+                f"Insufficient memory for JAX batch LMM with "
+                f"{n_samples:,} samples × {n_snps:,} SNPs.\n"
+                f"Need: ~{safe_estimate:.0f}GB "
+                f"({est.total_gb:.1f}GB x{jax_safety_factor} JAX safety), "
+                f"process using {rss_gb:.1f}GB, "
+                f"{est.available_gb:.1f}GB available "
+                f"({headroom:.0f}GB shortfall)\n"
                 f"Breakdown: eigenvectors={est.eigenvectors_gb:.1f}GB, "
                 f"genotypes={est.genotypes_gb:.1f}GB, "
                 f"batch buffers={est.lmm_batch_gb:.1f}GB\n"

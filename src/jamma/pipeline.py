@@ -747,53 +747,76 @@ class PipelineRunner:
         """Emit a consolidated one-line pipeline configuration banner.
 
         Gathers runner type, BLAS backend, C extension status, and
-        thread count into a single log line. The eigen driver is not
-        yet known at pipeline start (depends on matrix size), so it
-        is logged later by eigendecompose_kinship.
+        thread count into a single log line. The banner shows "pending"
+        for the eigen driver; the actual driver is logged separately by
+        eigendecompose_kinship once the matrix size is known.
+
+        This method is purely diagnostic — failures are caught and logged
+        as warnings to avoid aborting the GWAS pipeline.
 
         Args:
             active_backend: Resolved backend ("jax" or "numpy").
             n_samples: Number of analyzed samples (for streaming heuristic).
             n_snps: Number of SNPs (for streaming heuristic).
         """
-        from jamma.core.hardware import _get_blas_backend
-        from jamma.core.threading import (
-            get_physical_core_count,
-            is_blas_controllable,
-        )
-        from jamma.lmm._compile_utils import is_c_extension_usable
+        try:
+            from jamma.core.threading import (
+                get_blas_backend,
+                get_physical_core_count,
+                is_blas_controllable,
+            )
+            from jamma.lmm._compile_utils import is_c_extension_usable
 
-        c_ext = is_c_extension_usable()
+            c_ext = is_c_extension_usable()
 
-        if active_backend == "jax":
-            # Check streaming vs batch using same heuristic as
-            # _auto_select_backend: streaming when memory insufficient.
-            est = estimate_lmm_memory(n_samples, n_snps)
-            runner = "jax-streaming" if not est.sufficient else "jax-batch"
-        else:
-            runner = "numpy-batch"
+            if active_backend == "jax":
+                # Check streaming vs batch using same heuristic as
+                # _auto_select_backend: streaming when memory insufficient.
+                est = estimate_lmm_memory(n_samples, n_snps)
+                runner = "jax-streaming" if not est.sufficient else "jax-batch"
+            else:
+                runner = "numpy-batch"
 
-        blas = _get_blas_backend()
+            blas = get_blas_backend()
 
-        # Use physical core count for threads — calling
-        # get_blas_thread_count() would trigger JAX device freeze
-        # if JAX isn't configured yet.
-        if is_blas_controllable():
-            threads = get_physical_core_count()
-        else:
-            # Accelerate or no BLAS — use halved core count
-            # (same logic as runner_numpy.py for OpenMP).
-            cores = get_physical_core_count()
-            threads = max(1, cores // 2)
+            # Respect JAMMA_BLAS_THREADS if set, otherwise use physical
+            # core count. We avoid get_blas_thread_count() because it
+            # calls jax.devices() which would freeze the JAX backend
+            # if JAX isn't configured yet.
+            env_threads = os.environ.get("JAMMA_BLAS_THREADS")
+            if env_threads is not None:
+                try:
+                    threads = max(1, int(env_threads))
+                except ValueError:
+                    threads = get_physical_core_count()
+            elif is_blas_controllable():
+                threads = get_physical_core_count()
+            else:
+                # Accelerate or no BLAS — use halved core count
+                # (same logic as runner_numpy.py for OpenMP).
+                cores = get_physical_core_count()
+                threads = max(1, cores // 2)
 
-        banner = format_pipeline_banner(
-            runner=runner,
-            blas=blas,
-            eigen_driver="pending",
-            c_ext=c_ext,
-            threads=threads,
-        )
-        logger.info(banner)
+            jax_devices = 0
+            if active_backend == "jax":
+                import jax
+
+                from jamma.core.jax_config import is_jax_configured
+
+                if is_jax_configured():
+                    jax_devices = len(jax.devices())
+
+            banner = format_pipeline_banner(
+                runner=runner,
+                blas=blas,
+                eigen_driver="pending",
+                c_ext=c_ext,
+                threads=threads,
+                jax_devices=jax_devices,
+            )
+            logger.info(banner)
+        except Exception as exc:
+            logger.warning(f"Could not build pipeline banner: {exc}")
 
     def run(self) -> PipelineResult:
         """Execute the full GWAS pipeline.
@@ -815,7 +838,7 @@ class PipelineRunner:
         """
         t_start = time.perf_counter()
 
-        from jamma.core.backend import detect_backend
+        from jamma.core.backend import detect_backend, log_backend_selection
 
         # Resolve env override first: JAMMA_BACKEND takes priority in all paths.
         env_backend = os.environ.get("JAMMA_BACKEND")
@@ -835,6 +858,8 @@ class PipelineRunner:
             )
         else:
             active_backend = detect_backend(requested)
+
+        log_backend_selection(active_backend, self.config.backend, env_backend)
 
         trace_ctx = contextlib.nullcontext()
         if active_backend == "jax":

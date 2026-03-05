@@ -13,7 +13,6 @@ import platform
 import jax
 import numpy as np
 import psutil
-from threadpoolctl import threadpool_info
 
 from jamma.core.threading import get_blas_thread_count
 
@@ -117,13 +116,10 @@ def _get_cpu_model() -> str:
 def _get_blas_backend() -> str:
     """Return the BLAS backend name from threadpool_info.
 
-    Iterates over threadpool entries, returns the internal_api of the first
-    entry with user_api == "blas". Returns "unknown" if none found.
-
-    Returns:
-        BLAS backend name (e.g., "mkl", "openblas") or "unknown".
+    .. deprecated::
+        Use :func:`jamma.core.threading.get_blas_backend` instead.
+        This wrapper exists for backward compatibility with benchmark scripts.
     """
-    for entry in threadpool_info():
-        if entry.get("user_api") == "blas":
-            return entry.get("internal_api", "unknown")
-    return "unknown"
+    from jamma.core.threading import get_blas_backend
+
+    return get_blas_backend()

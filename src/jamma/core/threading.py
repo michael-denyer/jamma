@@ -27,6 +27,21 @@ from loguru import logger
 from threadpoolctl import threadpool_info, threadpool_limits
 
 
+def get_blas_backend() -> str:
+    """Return the BLAS backend name from threadpool_info.
+
+    Iterates over threadpool entries, returns the internal_api of the first
+    entry with user_api == "blas". Returns "unknown" if none found.
+
+    Returns:
+        BLAS backend name (e.g., "mkl", "openblas", "accelerate") or "unknown".
+    """
+    for entry in threadpool_info():
+        if entry.get("user_api") == "blas":
+            return entry.get("internal_api", "unknown")
+    return "unknown"
+
+
 def get_physical_core_count() -> int:
     """Return the number of physical CPU cores.
 

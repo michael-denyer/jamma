@@ -144,8 +144,8 @@ def format_pipeline_banner(
 
     Args:
         runner: Runner name (e.g. "numpy-batch", "jax-streaming").
-        blas: BLAS backend identifier from threadpool_info
-            (e.g. "mkl", "openblas").
+        blas: BLAS backend identifier (e.g. "mkl", "openblas",
+            "accelerate").
         eigen_driver: Eigen driver name (e.g. "DSYEVD", "DSYEVR").
         c_ext: Whether the C extension is usable.
         threads: BLAS/OpenMP thread count.

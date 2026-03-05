@@ -2,7 +2,8 @@
 
 Related LOCO test files:
 - test_loco.py: Core LOCO tests (lmm_mode=1, cross-backend parity)
-- test_gemma_loco_integration.py: GEMMA reference validation, modes 2/3/4
+- test_gemma_loco_integration.py: GEMMA ref (mode 1),
+  cross-backend parity (modes 2/3/4)
 - test_loco_numpy.py: NumPy-only LOCO paths (no JAX dependency)
 """
 

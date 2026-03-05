@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Consolidated pipeline startup logging into a single banner line showing runner, BLAS backend, eigen driver, C extension status, and thread count
 - Updated project logo
 
 ## [2.11.1] - 2026-03-05

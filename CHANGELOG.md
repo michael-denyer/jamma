@@ -7,12 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-03-05
+
 ### Added
 
 - Binary `.npy` as default output format for kinship matrices and eigendecomposition
   files — 10-100x faster I/O at scale. Use `--legacy-text` for GEMMA-compatible text format
 - Multi-phenotype support: `-n "1 2 3"` or `-n "1,2,3"` processes multiple phenotype
   columns with a single eigendecomposition, saving hours at scale
+- Shared `npy_cache` module for `.npy` sibling validation logic
 
 ### Changed
 

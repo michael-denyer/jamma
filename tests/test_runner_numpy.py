@@ -181,7 +181,7 @@ def test_numpy_runner_returns_list_of_assoc_result(synthetic_data):
     from jamma.lmm.schema import LmmRunResult
 
     plink, kinship, phenotypes, snp_info = synthetic_data
-    results = run_lmm_association_numpy(
+    run_result = run_lmm_association_numpy(
         genotypes=plink.genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
@@ -189,21 +189,22 @@ def test_numpy_runner_returns_list_of_assoc_result(synthetic_data):
         lmm_mode=1,
         show_progress=False,
     )
-    assert isinstance(results, LmmRunResult), (
-        f"Expected LmmRunResult, got {type(results)}"
+    results = run_result.associations
+    assert isinstance(run_result, LmmRunResult), (
+        f"Expected LmmRunResult, got {type(run_result)}"
     )
     assert len(results) > 0, "Expected at least one result"
     assert isinstance(results[0], AssocResult), (
         f"Expected AssocResult, got {type(results[0])}"
     )
-    assert results.pve is not None, "PVE should be populated"
-    assert 0 <= results.pve <= 1, f"PVE should be in [0, 1], got {results.pve}"
+    assert run_result.pve is not None, "PVE should be populated"
+    assert 0 <= run_result.pve <= 1, f"PVE should be in [0, 1], got {run_result.pve}"
 
 
 def test_numpy_runner_empty_after_filter(synthetic_data):
     """Edge case: returns LmmRunResult with empty associations."""
     plink, kinship, phenotypes, snp_info = synthetic_data
-    results = run_lmm_association_numpy(
+    run_result = run_lmm_association_numpy(
         genotypes=plink.genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
@@ -212,8 +213,9 @@ def test_numpy_runner_empty_after_filter(synthetic_data):
         lmm_mode=1,
         show_progress=False,
     )
+    results = run_result.associations
     assert len(results) == 0, f"Expected empty results, got {len(results)} results"
-    assert results.pve is None, "PVE should be None when no SNPs pass filter"
+    assert run_result.pve is None, "PVE should be None when no SNPs pass filter"
 
 
 # ---------------------------------------------------------------------------
@@ -363,7 +365,7 @@ _SYNTHETIC_MODE_REFS = [
 def test_numpy_runner_synthetic(synthetic_data, lmm_mode, reference_path):
     """NumPy runner matches GEMMA reference on gemma_synthetic for each mode."""
     plink, kinship, phenotypes, snp_info = synthetic_data
-    results = run_lmm_association_numpy(
+    run_result = run_lmm_association_numpy(
         genotypes=plink.genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
@@ -371,6 +373,7 @@ def test_numpy_runner_synthetic(synthetic_data, lmm_mode, reference_path):
         lmm_mode=lmm_mode,
         show_progress=False,
     )
+    results = run_result.associations
     reference = load_gemma_assoc(reference_path)
     tolerances = ToleranceConfig(lambda_rtol=5e-5)
     comparison = compare_assoc_results(results, reference, tolerances)
@@ -392,7 +395,7 @@ _MOUSE_HS1940_MODE_REFS = [
 def test_numpy_runner_mouse_hs1940(mouse_hs1940_data, lmm_mode, reference_path):
     """NumPy runner matches GEMMA on mouse_hs1940 for each mode."""
     plink, kinship, phenotypes, snp_info = mouse_hs1940_data
-    results = run_lmm_association_numpy(
+    run_result = run_lmm_association_numpy(
         genotypes=plink.genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
@@ -400,6 +403,7 @@ def test_numpy_runner_mouse_hs1940(mouse_hs1940_data, lmm_mode, reference_path):
         lmm_mode=lmm_mode,
         show_progress=False,
     )
+    results = run_result.associations
     reference = load_gemma_assoc(reference_path)
     comparison = compare_assoc_results(results, reference, NUMPY_GEMMA_TOLERANCES)
     assert comparison.passed, (
@@ -438,7 +442,7 @@ def test_numpy_runner_covar_synthetic(
 ):
     """NumPy runner with covariates matches GEMMA reference on synthetic data."""
     plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
-    results = run_lmm_association_numpy(
+    run_result = run_lmm_association_numpy(
         genotypes=plink.genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
@@ -447,6 +451,7 @@ def test_numpy_runner_covar_synthetic(
         lmm_mode=lmm_mode,
         show_progress=False,
     )
+    results = run_result.associations
     reference = load_gemma_assoc(reference_path)
     tolerances = ToleranceConfig(lambda_rtol=5e-5)
     comparison = compare_assoc_results(results, reference, tolerances)
@@ -475,7 +480,7 @@ def test_numpy_runner_covar_mouse_hs1940(
 ):
     """NumPy runner with covariates matches GEMMA on mouse_hs1940."""
     plink, kinship, phenotypes, snp_info, covariates = mouse_hs1940_data_with_covariates
-    results = run_lmm_association_numpy(
+    run_result = run_lmm_association_numpy(
         genotypes=plink.genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
@@ -484,6 +489,7 @@ def test_numpy_runner_covar_mouse_hs1940(
         lmm_mode=lmm_mode,
         show_progress=False,
     )
+    results = run_result.associations
     reference = load_gemma_assoc(reference_path)
     comparison = compare_assoc_results(results, reference, NUMPY_GEMMA_TOLERANCES)
     assert comparison.passed, (
@@ -595,7 +601,7 @@ def test_imputation_skipped_on_clean_data():
         for i in range(n_snps)
     ]
 
-    results = run_lmm_association_numpy(
+    run_result = run_lmm_association_numpy(
         genotypes=genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
@@ -606,6 +612,7 @@ def test_imputation_skipped_on_clean_data():
         show_progress=False,
         lmm_mode=1,
     )
+    results = run_result.associations
 
     # Should complete without error and produce valid results
     assert len(results) > 0
@@ -633,7 +640,7 @@ def test_imputation_applies_on_missing_data():
         for i in range(n_snps)
     ]
 
-    results = run_lmm_association_numpy(
+    run_result = run_lmm_association_numpy(
         genotypes=genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
@@ -644,6 +651,7 @@ def test_imputation_applies_on_missing_data():
         show_progress=False,
         lmm_mode=1,
     )
+    results = run_result.associations
 
     assert len(results) > 0
     # With imputation, results should still be finite
@@ -672,7 +680,7 @@ def test_split_uab_all_modes(lmm_mode):
         for i in range(n_snps)
     ]
 
-    results = run_lmm_association_numpy(
+    run_result = run_lmm_association_numpy(
         genotypes=genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
@@ -683,6 +691,7 @@ def test_split_uab_all_modes(lmm_mode):
         show_progress=False,
         lmm_mode=lmm_mode,
     )
+    results = run_result.associations
 
     assert len(results) > 0, f"Mode {lmm_mode} produced no results"
 

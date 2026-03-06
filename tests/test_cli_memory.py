@@ -13,6 +13,7 @@ import pytest
 from click.testing import CliRunner
 
 from jamma.cli import main
+from jamma.lmm.schema import LmmRunResult
 
 runner = CliRunner()
 
@@ -208,7 +209,7 @@ class TestCliStreamingRunner:
     def test_cli_jax_default_uses_streaming_runner(self, tmp_path):
         """Verify CLI calls run_lmm_association_streaming when backend=jax."""
         with patch("jamma.lmm.run_lmm_association_streaming") as mock_stream:
-            mock_stream.return_value = []
+            mock_stream.return_value = (LmmRunResult(associations=[]), 0)
 
             runner.invoke(
                 main,

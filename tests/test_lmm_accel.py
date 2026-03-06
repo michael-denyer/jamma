@@ -980,7 +980,7 @@ def test_pipeline_multi_chunk_correctness():
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
 
     # Run with pipeline enabled (multi-chunk, split C extension)
-    results_pipeline = run_lmm_association_numpy(
+    run_result = run_lmm_association_numpy(
         genotypes=genotypes,
         phenotypes=phenotypes,
         kinship=None,
@@ -994,6 +994,7 @@ def test_pipeline_multi_chunk_correctness():
         lmm_mode=1,
         n_refine=20,
     )
+    results_pipeline = run_result.associations
 
     # Verify we got results for all SNPs (none filtered at maf=0)
     # Some may be filtered by the internal variance check, but most should pass
@@ -1008,7 +1009,7 @@ def test_pipeline_multi_chunk_correctness():
     orig_split = runner_mod._C_SPLIT_AVAILABLE
     try:
         runner_mod._C_SPLIT_AVAILABLE = False
-        results_sequential = run_lmm_association_numpy(
+        run_result = run_lmm_association_numpy(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=None,
@@ -1022,6 +1023,7 @@ def test_pipeline_multi_chunk_correctness():
             lmm_mode=1,
             n_refine=20,
         )
+        results_sequential = run_result.associations
     finally:
         runner_mod._C_SPLIT_AVAILABLE = orig_split
 
@@ -1544,7 +1546,7 @@ def test_general_ncvt_gemma_covariate_match():
         for i in range(plink.n_snps)
     ]
 
-    results = run_lmm_association_numpy(
+    run_result = run_lmm_association_numpy(
         genotypes=plink.genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
@@ -1553,6 +1555,7 @@ def test_general_ncvt_gemma_covariate_match():
         lmm_mode=1,
         show_progress=False,
     )
+    results = run_result.associations
 
     reference = load_gemma_assoc(covariate_dir / "gemma_covariate.assoc.txt")
     tolerances = ToleranceConfig(lambda_rtol=5e-5)

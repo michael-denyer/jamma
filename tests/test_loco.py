@@ -692,13 +692,14 @@ class TestLocoLmmIntegration:
             check_memory=False,
         )
 
-        standard_results, _ = run_lmm_association_streaming(
+        run_result, _ = run_lmm_association_streaming(
             bed_path=MOUSE_HS1940_BFILE,
             phenotypes=phenotypes,
             kinship=K_full,
             check_memory=False,
             show_progress=False,
         )
+        standard_results = run_result.associations
 
         # LOCO LMM results from shared fixture
         loco_results, _, _ = mouse_loco_lmm_results

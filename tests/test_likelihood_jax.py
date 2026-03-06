@@ -10,6 +10,7 @@ import pytest
 pytest.importorskip("jax")
 
 import jax.numpy as jnp
+from jax import vmap
 
 from jamma.lmm.likelihood import (
     calc_pab,
@@ -23,6 +24,7 @@ from jamma.lmm.likelihood_jax import (
     batch_compute_iab,
     batch_compute_uab,
     build_index_table,
+    classify_uab_columns,
     golden_section_optimize_lambda,
     mle_log_likelihood_jax,
     reml_log_likelihood_jax,
@@ -661,4 +663,165 @@ class TestJaxScoreStatsDegenerateSNP:
         assert np.all(np.isnan(np.array(pscores))), (
             f"All p_scores should be NaN for all-degenerate batch, "
             f"got {np.array(pscores)}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# classify_uab_columns + general split tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+class TestClassifyUabColumns:
+    """classify_uab_columns correctly identifies invariant vs varying columns."""
+
+    def test_classify_uab_columns_ncvt1(self):
+        """n_cvt=1: invariant=[0,2,5] (ww,wy,yy), varying=[1,3,4] (wx,xx,xy)."""
+        invariant, varying = classify_uab_columns(1)
+        assert invariant == (0, 2, 5), f"Expected (0,2,5), got {invariant}"
+        assert varying == (1, 3, 4), f"Expected (1,3,4), got {varying}"
+
+    def test_classify_uab_columns_ncvt4(self):
+        """n_cvt=4: 15 invariant + 6 varying, all varying involve genotype index 4."""
+        invariant, varying = classify_uab_columns(4)
+        assert len(invariant) == 15, f"Expected 15 invariant, got {len(invariant)}"
+        assert len(varying) == 6, f"Expected 6 varying, got {len(varying)}"
+
+        # All varying columns must involve genotype (0-based index = n_cvt = 4)
+        table = build_index_table(4)
+        genotype_idx = 4  # 0-based index of X in vectors array
+        for idx in varying:
+            # Find the (a_col, b_col) pair for this linear index
+            pair = next(
+                (a, b) for a, b, lin_idx in table["uab_pairs"] if lin_idx == idx
+            )
+            assert pair[0] == genotype_idx or pair[1] == genotype_idx, (
+                f"Varying column {idx} with pair {pair} doesn't involve genotype"
+            )
+
+        # Invariant columns must NOT involve genotype
+        for idx in invariant:
+            pair = next(
+                (a, b) for a, b, lin_idx in table["uab_pairs"] if lin_idx == idx
+            )
+            assert pair[0] != genotype_idx and pair[1] != genotype_idx, (
+                f"Invariant column {idx} with pair {pair} involves genotype"
+            )
+
+
+@pytest.mark.tier0
+class TestGeneralSplitParity:
+    """General n_cvt split path must match the existing general vmap path."""
+
+    def _make_multi_cvt_data(self, n_cvt=2, n_samples=50, n_snps=10, rng_seed=42):
+        """Create test data for arbitrary n_cvt."""
+        rng = np.random.default_rng(rng_seed)
+        eigenvalues = np.sort(rng.exponential(1.0, size=n_samples))[::-1]
+
+        W = np.column_stack(
+            [np.ones(n_samples)]
+            + [rng.standard_normal(n_samples) for _ in range(n_cvt - 1)]
+        )
+        y = rng.standard_normal(n_samples)
+        U = np.linalg.qr(rng.standard_normal((n_samples, n_samples)))[0]
+
+        UtW = jnp.array(U.T @ W)
+        Uty = jnp.array(U.T @ y)
+
+        G = rng.choice([0.0, 1.0, 2.0], size=(n_samples, n_snps), p=[0.25, 0.5, 0.25])
+        UtG = jnp.array(U.T @ G)
+
+        evals = jnp.array(eigenvalues)
+        Uab = batch_compute_uab(n_cvt, UtW, Uty, UtG)
+        Iab = batch_compute_iab(n_cvt, Uab)
+
+        return evals, Uab, Iab
+
+    def test_grid_reml_general_split_matches_general(self):
+        """_batch_grid_reml_general matches the old general vmap path for n_cvt=2."""
+        from jamma.lmm.likelihood_jax import (
+            _batch_grid_reml_general,
+            _reml_with_precomputed_iab,
+        )
+
+        evals, Uab, Iab = self._make_multi_cvt_data(n_cvt=2)
+        lambdas = jnp.logspace(-5, 5, 50)
+
+        # New split path
+        split_result = _batch_grid_reml_general(2, lambdas, evals, Uab, Iab)
+
+        # Old general path: vmap over lambdas, then over SNPs
+        def reml_for_lambda(lam):
+            return vmap(lambda u, i: _reml_with_precomputed_iab(2, lam, evals, u, i))(
+                Uab, Iab
+            )
+
+        general_result = vmap(reml_for_lambda)(lambdas)
+
+        np.testing.assert_allclose(
+            np.array(split_result),
+            np.array(general_result),
+            rtol=1e-10,
+            err_msg="General split path diverges from general vmap path (n_cvt=2)",
+        )
+
+    @pytest.mark.parametrize("n_cvt", [2, 3, 4])
+    def test_grid_reml_general_split_multiple_ncvt(self, n_cvt):
+        """_batch_grid_reml_general matches for n_cvt=2,3,4."""
+        from jamma.lmm.likelihood_jax import (
+            _batch_grid_reml_general,
+            _reml_with_precomputed_iab,
+        )
+
+        evals, Uab, Iab = self._make_multi_cvt_data(n_cvt=n_cvt)
+        lambdas = jnp.logspace(-5, 5, 30)
+
+        split_result = _batch_grid_reml_general(n_cvt, lambdas, evals, Uab, Iab)
+
+        def reml_for_lambda(lam):
+            return vmap(
+                lambda u, i: _reml_with_precomputed_iab(n_cvt, lam, evals, u, i)
+            )(Uab, Iab)
+
+        general_result = vmap(reml_for_lambda)(lambdas)
+
+        np.testing.assert_allclose(
+            np.array(split_result),
+            np.array(general_result),
+            rtol=1e-10,
+            err_msg=f"General split diverges from general vmap (n_cvt={n_cvt})",
+        )
+
+    def test_golden_section_general_split_matches_general(self):
+        """Golden section general path with split matches existing path for n_cvt=2."""
+        evals, Uab, Iab = self._make_multi_cvt_data(n_cvt=2)
+
+        # The golden_section_optimize_lambda now uses the split path internally
+        # for n_cvt>1. We compare against the old general path result by
+        # computing the old way manually.
+        from jamma.lmm.likelihood_jax import _reml_with_precomputed_iab
+
+        # New path (uses split internally)
+        lambdas_new, logls_new = golden_section_optimize_lambda(
+            2, evals, Uab, Iab, n_grid=50, n_iter=20
+        )
+
+        # Verify results are valid
+        lambdas_np = np.array(lambdas_new)
+        logls_np = np.array(logls_new)
+        assert np.all(np.isfinite(lambdas_np)), f"Non-finite lambdas: {lambdas_np}"
+        assert np.all(np.isfinite(logls_np)), f"Non-finite logls: {logls_np}"
+        assert np.all(lambdas_np >= 1e-5), f"Lambdas below l_min: {lambdas_np}"
+        assert np.all(lambdas_np <= 1e5), f"Lambdas above l_max: {lambdas_np}"
+
+        # Cross-check: evaluate REML at the found lambdas using the old path
+        old_logls = vmap(
+            lambda lam, u, i: _reml_with_precomputed_iab(2, lam, evals, u, i)
+        )(lambdas_new, Uab, Iab)
+
+        np.testing.assert_allclose(
+            logls_np,
+            np.array(old_logls),
+            rtol=1e-10,
+            err_msg="Golden section split logls don't match old path evaluation",
         )

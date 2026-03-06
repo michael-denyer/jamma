@@ -317,26 +317,6 @@ def _compute_null_model_common(
     return logl_H0, lambda_null_mle, Hi_eval_null_np
 
 
-_last_pve: float | None = None
-
-
-def get_last_pve() -> float | None:
-    """Return the PVE from the most recent compute_and_log_pve() call.
-
-    Warning: this is module-level global state. In LOCO workflows, the value
-    reflects the last chromosome processed, not a full-genome estimate.
-    Prefer using the return value of compute_and_log_pve() directly.
-    Not thread-safe — do not call from concurrent runners.
-    """
-    return _last_pve
-
-
-def reset_last_pve() -> None:
-    """Clear the cached PVE value to prevent stale reads."""
-    global _last_pve
-    _last_pve = None
-
-
 def compute_and_log_pve(
     eigenvalues_np: np.ndarray,
     UtW: np.ndarray,
@@ -372,8 +352,6 @@ def compute_and_log_pve(
     )
     trace_K = float(np.sum(eigenvalues_np))
     n = len(eigenvalues_np)
-    global _last_pve
     pve = lambda_remle * trace_K / (lambda_remle * trace_K + n)
-    _last_pve = pve
     logger.info(f"pve estimate in the null model = {pve:.6f}")
     return pve

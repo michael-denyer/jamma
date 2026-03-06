@@ -33,7 +33,6 @@ from jamma.lmm.prepare import (
 )
 from jamma.lmm.prepare_common import (
     compute_and_log_pve,
-    reset_last_pve,
     validate_runner_inputs,
 )
 from jamma.lmm.results import (
@@ -42,8 +41,7 @@ from jamma.lmm.results import (
     log_lambda_boundary_warning,
 )
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
-from jamma.lmm.schema import LmmConfig, RunnerTiming
-from jamma.lmm.stats import AssocResult
+from jamma.lmm.schema import LmmConfig, LmmRunResult, RunnerTiming
 from jamma.utils.logging import log_rss_memory
 
 # Module-level timing from the last run, for direct callers (tests, notebooks).
@@ -72,7 +70,7 @@ def run_lmm_association_jax(
     show_progress: bool = True,
     lmm_mode: int = 1,
     config: LmmConfig | None = None,
-) -> list[AssocResult]:
+) -> LmmRunResult:
     """Run LMM association tests using JAX-optimized batch processing.
 
     Processes all SNPs in parallel via JAX vectorization and JIT compilation.
@@ -105,7 +103,7 @@ def run_lmm_association_jax(
         lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
 
     Returns:
-        List of AssocResult for each SNP that passes filtering.
+        LmmRunResult with per-SNP associations and PVE from null model.
 
     Raises:
         MemoryError: If check_memory=True and insufficient memory.
@@ -207,8 +205,7 @@ def run_lmm_association_jax(
             f"miss<{miss_threshold}). No association tests to run. "
             f"Consider relaxing --maf or --miss thresholds."
         )
-        reset_last_pve()
-        return []
+        return LmmRunResult(associations=[])
 
     # Extract filtered stats as numpy arrays (use allele_freqs for output, not mafs)
     filtered_afs = allele_freqs[snp_indices]
@@ -250,9 +247,9 @@ def run_lmm_association_jax(
         l_max=l_max,
     )
 
-    compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
-
     t_eigen_end = time.perf_counter()
+
+    pve = compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
 
     eigenvalues = jax.device_put(eigenvalues_np, placement.rep)
     UtW_jax = jax.device_put(UtW, placement.rep)
@@ -487,6 +484,9 @@ def run_lmm_association_jax(
         }
     )
 
-    return _build_results(
-        lmm_mode, snp_indices, filtered_afs, filtered_miss, snp_info, arrays_out
+    return LmmRunResult(
+        associations=_build_results(
+            lmm_mode, snp_indices, filtered_afs, filtered_miss, snp_info, arrays_out
+        ),
+        pve=pve,
     )

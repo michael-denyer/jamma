@@ -264,6 +264,39 @@ class LmmConfig:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class LmmRunResult:
+    """Return type for LMM runner functions.
+
+    Bundles per-SNP association results with run-level metadata
+    that was previously communicated via module-level globals.
+
+    Supports list-like access (len, iteration, indexing) over
+    associations for backward compatibility with callers that
+    previously received a plain list[AssocResult].
+
+    Attributes:
+        associations: Per-SNP association results.
+        pve: PVE (proportion of variance explained) from null model REML.
+            None if no SNPs passed filtering (early return).
+    """
+
+    associations: list  # list[AssocResult] -- avoid circular import with stats.py
+    pve: float | None = None
+
+    def __len__(self) -> int:
+        return len(self.associations)
+
+    def __iter__(self):
+        return iter(self.associations)
+
+    def __getitem__(self, idx):
+        return self.associations[idx]
+
+    def __bool__(self) -> bool:
+        return bool(self.associations)
+
+
 class LazySnpMeta:
     """Lazy view over PLINK metadata arrays, avoiding per-SNP dict materialization.
 

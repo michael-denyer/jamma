@@ -43,7 +43,6 @@ from jamma.lmm.prepare import (
 )
 from jamma.lmm.prepare_common import (
     compute_and_log_pve,
-    reset_last_pve,
     validate_runner_inputs,
 )
 from jamma.lmm.results import (
@@ -55,7 +54,7 @@ from jamma.lmm.results import (
 from jamma.lmm.schema import ACCUM_KEYS as _ACCUM_KEYS
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.schema import LazySnpMeta as _LazySnpMeta
-from jamma.lmm.schema import LmmConfig, RunnerTiming
+from jamma.lmm.schema import LmmConfig, LmmRunResult, RunnerTiming
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
 
@@ -103,7 +102,7 @@ def run_lmm_association_streaming(
     hwe_threshold: float = 0.0,
     validate_genotypes: bool = True,
     config: LmmConfig | None = None,
-) -> tuple[list[AssocResult], int]:
+) -> tuple[LmmRunResult, int]:
     """Run LMM association tests by streaming genotypes from disk.
 
     Reads genotypes per-chunk, never allocating the full genotype matrix.
@@ -140,9 +139,10 @@ def run_lmm_association_streaming(
             (default True).
 
     Returns:
-        Tuple of (results, n_tested) where results is a list of AssocResult
-        (empty if output_path is set -- results on disk) and n_tested is the
-        number of SNPs that passed filtering and were tested.
+        Tuple of (LmmRunResult, n_tested) where LmmRunResult contains
+        associations (empty if output_path is set -- results on disk) and
+        PVE from null model. n_tested is the number of SNPs that passed
+        filtering and were tested.
 
     Raises:
         MemoryError: If check_memory=True and insufficient memory.
@@ -311,7 +311,6 @@ def run_lmm_association_streaming(
         )
 
     if n_filtered == 0:
-        reset_last_pve()
         if output_path is not None:
             with IncrementalAssocWriter(
                 output_path, test_type=_TEST_TYPE_MAP[lmm_mode]
@@ -322,7 +321,7 @@ def run_lmm_association_streaming(
             logger.info(
                 f"LMM Association completed in {elapsed:.2f}s (no SNPs passed filter)"
             )
-        return [], 0
+        return LmmRunResult(associations=[]), 0
 
     filtered_afs = allele_freqs[snp_indices]
     filtered_miss = all_miss_counts[snp_indices].astype(int)
@@ -374,12 +373,12 @@ def run_lmm_association_streaming(
             l_max=l_max,
         )
 
-        compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
-
         eigenvalues = jax.device_put(eigenvalues_np, placement.rep)
         UtW_jax = jax.device_put(UtW, placement.rep)
         Uty_jax = jax.device_put(Uty, placement.rep)
     t_eigen_end = time.perf_counter()
+
+    pve = compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
 
     # Invalidate stale timing immediately so callers never see prior-run data
     # if this run raises mid-execution.
@@ -680,4 +679,7 @@ def run_lmm_association_streaming(
     )
 
     n_tested = writer.count if writer is not None else len(all_results)
-    return ([] if output_path is not None else all_results), n_tested
+    return LmmRunResult(
+        associations=[] if output_path is not None else all_results,
+        pve=pve,
+    ), n_tested

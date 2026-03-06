@@ -1090,7 +1090,7 @@ class TestDegenerateSNPPipeline:
             check_memory=False,
         )
 
-        assert results == [], (
+        assert len(results) == 0, (
             f"Expected empty results for all-degenerate SNPs, got {len(results)}"
         )
 

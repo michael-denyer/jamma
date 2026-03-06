@@ -874,7 +874,9 @@ class TestRunLmmAssociationStreaming:
         )
 
         # Verify empty list returned (results on disk)
-        assert results == [], "Should return empty list when output_path is provided"
+        assert len(results) == 0, (
+            "Should return empty results when output_path is provided"
+        )
         assert n_tested > 0, "Should have tested some SNPs"
 
         # Verify file exists and has content
@@ -2294,7 +2296,7 @@ def test_streaming_all_snps_filtered_returns_zero(sample_plink_data: Path) -> No
         show_progress=False,
     )
 
-    assert results == [], (
+    assert len(results) == 0, (
         f"Expected empty results when all SNPs are filtered, got {len(results)}"
     )
     assert n_tested == 0, (
@@ -2387,7 +2389,7 @@ def test_streaming_all_snps_filtered_mode4_returns_zero(
         lmm_mode=4,
     )
 
-    assert results == [], (
+    assert len(results) == 0, (
         f"Expected empty results when all SNPs filtered (mode 4), got {len(results)}"
     )
     assert n_tested == 0, (
@@ -2430,8 +2432,8 @@ def test_streaming_output_path_returns_empty_list(
         show_progress=False,
     )
 
-    assert results == [], (
-        f"Expected empty list when output_path is set, got {len(results)} results"
+    assert len(results) == 0, (
+        f"Expected empty results when output_path is set, got {len(results)} results"
     )
     assert n_tested > 0, "Expected some SNPs to be tested (output_path mode)"
     assert output_path.exists(), f"Expected output file to exist at {output_path}"
@@ -2474,8 +2476,8 @@ def test_streaming_output_path_mode4_writes_all_columns(
         lmm_mode=4,
     )
 
-    assert results == [], (
-        "Expected empty list when output_path is set "
+    assert len(results) == 0, (
+        "Expected empty results when output_path is set "
         f"(mode 4), got {len(results)} results"
     )
     assert n_tested > 0, "Expected some SNPs to be tested (mode 4 output_path)"

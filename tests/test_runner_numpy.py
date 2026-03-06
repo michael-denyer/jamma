@@ -177,7 +177,9 @@ def test_numpy_runner_signature_matches_jax():
 
 
 def test_numpy_runner_returns_list_of_assoc_result(synthetic_data):
-    """Type check: NumPy runner returns list[AssocResult]."""
+    """Type check: NumPy runner returns LmmRunResult with AssocResult items."""
+    from jamma.lmm.schema import LmmRunResult
+
     plink, kinship, phenotypes, snp_info = synthetic_data
     results = run_lmm_association_numpy(
         genotypes=plink.genotypes,
@@ -187,15 +189,19 @@ def test_numpy_runner_returns_list_of_assoc_result(synthetic_data):
         lmm_mode=1,
         show_progress=False,
     )
-    assert isinstance(results, list), f"Expected list, got {type(results)}"
+    assert isinstance(results, LmmRunResult), (
+        f"Expected LmmRunResult, got {type(results)}"
+    )
     assert len(results) > 0, "Expected at least one result"
     assert isinstance(results[0], AssocResult), (
         f"Expected AssocResult, got {type(results[0])}"
     )
+    assert results.pve is not None, "PVE should be populated"
+    assert 0 <= results.pve <= 1, f"PVE should be in [0, 1], got {results.pve}"
 
 
 def test_numpy_runner_empty_after_filter(synthetic_data):
-    """Edge case: returns empty list when all SNPs are filtered out."""
+    """Edge case: returns LmmRunResult with empty associations."""
     plink, kinship, phenotypes, snp_info = synthetic_data
     results = run_lmm_association_numpy(
         genotypes=plink.genotypes,
@@ -206,7 +212,8 @@ def test_numpy_runner_empty_after_filter(synthetic_data):
         lmm_mode=1,
         show_progress=False,
     )
-    assert results == [], f"Expected empty list, got {len(results)} results"
+    assert len(results) == 0, f"Expected empty results, got {len(results)} results"
+    assert results.pve is None, "PVE should be None when no SNPs pass filter"
 
 
 # ---------------------------------------------------------------------------

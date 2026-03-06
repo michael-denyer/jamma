@@ -45,7 +45,6 @@ from jamma.lmm.prepare_common import (
     _compute_null_model_common,
     _eigendecompose_or_reuse,
     compute_and_log_pve,
-    reset_last_pve,
     validate_runner_inputs,
 )
 from jamma.lmm.results import (
@@ -54,8 +53,7 @@ from jamma.lmm.results import (
     log_lambda_boundary_warning,
 )
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
-from jamma.lmm.schema import LmmConfig
-from jamma.lmm.stats import AssocResult
+from jamma.lmm.schema import LmmConfig, LmmRunResult
 from jamma.utils.logging import log_rss_memory
 
 # NumPy has no int32 buffer constraint — allow larger chunks than JAX runner.
@@ -222,7 +220,7 @@ def run_lmm_association_numpy(
     show_progress: bool = True,
     lmm_mode: LmmMode = 1,
     config: LmmConfig | None = None,
-) -> list[AssocResult]:
+) -> LmmRunResult:
     """Run LMM association tests using pure-NumPy batch processing.
 
     Processes SNPs in memory-bounded chunks using BLAS-backed NumPy operations.
@@ -253,7 +251,7 @@ def run_lmm_association_numpy(
         lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
 
     Returns:
-        List of AssocResult for each SNP that passes filtering.
+        LmmRunResult with per-SNP associations and PVE from null model.
 
     Raises:
         MemoryError: If check_memory=True and insufficient memory.
@@ -339,8 +337,7 @@ def run_lmm_association_numpy(
             f"miss<{miss_threshold}). No association tests to run. "
             f"Consider relaxing --maf or --miss thresholds."
         )
-        reset_last_pve()
-        return []
+        return LmmRunResult(associations=[])
 
     # Extract filtered stats as numpy arrays (use allele_freqs for output, not mafs)
     filtered_afs = allele_freqs[snp_indices]
@@ -376,9 +373,9 @@ def run_lmm_association_numpy(
         l_max=l_max,
     )
 
-    compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
-
     t_eigen_end = time.perf_counter()
+
+    pve = compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
 
     n_filtered = len(snp_indices)
 
@@ -883,6 +880,9 @@ def run_lmm_association_numpy(
         logger.info(f"  Total:               {elapsed:.2f}s")
         logger.info(f"LMM Association completed in {elapsed:.2f}s")
 
-    return _build_results(
-        lmm_mode, snp_indices, filtered_afs, filtered_miss, snp_info, arrays_out
+    return LmmRunResult(
+        associations=_build_results(
+            lmm_mode, snp_indices, filtered_afs, filtered_miss, snp_info, arrays_out
+        ),
+        pve=pve,
     )

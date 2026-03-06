@@ -264,7 +264,7 @@ class TestLMMBenchmarks:
         ]
 
         def _run():
-            results = run_lmm_association_jax(
+            run_result = run_lmm_association_jax(
                 genotypes=mouse_plink.genotypes,
                 phenotypes=mouse_phenotypes,
                 kinship=mouse_kinship,
@@ -272,6 +272,7 @@ class TestLMMBenchmarks:
                 show_progress=False,
                 check_memory=False,
             )
+            results = run_result.associations
             return results
 
         result = benchmark.pedantic(
@@ -304,13 +305,14 @@ class TestLMMBenchmarks:
         from jamma.lmm import run_lmm_association_streaming
 
         def _run():
-            results, n_tested = run_lmm_association_streaming(
+            run_result, n_tested = run_lmm_association_streaming(
                 bed_path=_MOUSE_DATA,
                 phenotypes=mouse_phenotypes,
                 kinship=mouse_kinship,
                 show_progress=False,
                 check_memory=False,
             )
+            results = run_result.associations
             return results, n_tested
 
         result = benchmark.pedantic(
@@ -482,7 +484,7 @@ class TestShardedBenchmarks:
         n_devices = len(jax.devices("cpu"))
 
         def _run():
-            results = run_lmm_association_jax(
+            run_result = run_lmm_association_jax(
                 genotypes=mouse_plink.genotypes,
                 phenotypes=mouse_phenotypes,
                 kinship=mouse_kinship,
@@ -490,6 +492,7 @@ class TestShardedBenchmarks:
                 show_progress=False,
                 check_memory=False,
             )
+            results = run_result.associations
             return results
 
         result = benchmark.pedantic(
@@ -529,13 +532,14 @@ class TestShardedBenchmarks:
         n_devices = len(jax.devices("cpu"))
 
         def _run():
-            results, n_tested = run_lmm_association_streaming(
+            run_result, n_tested = run_lmm_association_streaming(
                 bed_path=_MOUSE_DATA,
                 phenotypes=mouse_phenotypes,
                 kinship=mouse_kinship,
                 show_progress=False,
                 check_memory=False,
             )
+            results = run_result.associations
             return results, n_tested
 
         result = benchmark.pedantic(

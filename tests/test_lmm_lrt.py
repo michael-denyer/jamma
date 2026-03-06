@@ -207,9 +207,10 @@ class TestLRTIntegration:
             for i in range(p)
         ]
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             G, y, K, snp_info, lmm_mode=2, show_progress=False, check_memory=False
         )
+        results = run_result.associations
 
         assert len(results) > 0, "Should produce results"
         for r in results:
@@ -231,7 +232,7 @@ class TestLRTIntegration:
         ]
 
         # eigendecomp overwrites K in-place; needs fresh copy per run
-        results_wald = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             G,
             y,
             K.copy(),
@@ -240,7 +241,8 @@ class TestLRTIntegration:
             show_progress=False,
             check_memory=False,
         )
-        results_lrt = run_lmm_association_jax(
+        results_wald = run_result.associations
+        run_result = run_lmm_association_jax(
             G,
             y,
             K.copy(),
@@ -249,6 +251,7 @@ class TestLRTIntegration:
             show_progress=False,
             check_memory=False,
         )
+        results_lrt = run_result.associations
 
         p_wald = np.array([r.p_wald for r in results_wald])
         p_lrt = np.array([r.p_lrt for r in results_lrt])
@@ -309,7 +312,7 @@ class TestGEMMALRTValidation:
         ]
 
         # Run JAMMA LRT
-        jamma_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             plink.genotypes,
             phenotypes,
             K,
@@ -318,6 +321,7 @@ class TestGEMMALRTValidation:
             show_progress=False,
             check_memory=False,
         )
+        jamma_results = run_result.associations
 
         # Load GEMMA reference (need custom loader for LRT format)
         gemma_results = _load_gemma_lrt(gemma_lrt_fixture)

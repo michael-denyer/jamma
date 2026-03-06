@@ -274,6 +274,43 @@ class TestNullModelFormulas:
             err_msg=f"PVE {pve:.6f} != GEMMA {GEMMA_PVE_NULL}",
         )
 
+    def test_lmm_run_result_carries_pve(self, gemma_test_data):
+        """LmmRunResult.pve is populated from REML null model."""
+        data = gemma_test_data
+        snp_info = [
+            {
+                "chr": str(data["plink"].chromosome[i]),
+                "rs": str(data["plink"].sid[i]),
+                "pos": int(data["plink"].bp_position[i]),
+                "a1": str(data["plink"].allele_1[i]),
+                "a0": str(data["plink"].allele_2[i]),
+            }
+            for i in range(data["plink"].n_snps)
+        ]
+
+        run_result = run_lmm_association_jax(
+            data["genotypes"],
+            data["phenotypes"],
+            data["kinship"],
+            snp_info,
+            lmm_mode=1,
+            show_progress=False,
+            check_memory=False,
+        )
+        assert run_result.pve is not None, "LmmRunResult.pve should be populated"
+        assert 0.0 < run_result.pve < 1.0, (
+            f"PVE should be in (0, 1), got {run_result.pve}"
+        )
+        # Verify it matches the GEMMA reference
+        np.testing.assert_allclose(
+            run_result.pve,
+            GEMMA_PVE_NULL,
+            rtol=1e-4,
+            err_msg=(
+                f"LmmRunResult.pve {run_result.pve:.6f} != GEMMA {GEMMA_PVE_NULL}"
+            ),
+        )
+
 
 @pytest.mark.tier1
 class TestWaldTestUnchanged:
@@ -300,7 +337,7 @@ class TestWaldTestUnchanged:
         ]
 
         # Run Wald test (lmm_mode=1)
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             data["genotypes"],
             data["phenotypes"],
             data["kinship"],
@@ -309,6 +346,7 @@ class TestWaldTestUnchanged:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         assert len(results) > 0, "Should produce results"
         for r in results:
@@ -349,7 +387,7 @@ class TestWaldTestUnchanged:
             for i in range(data["plink"].n_snps)
         ]
 
-        jamma_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             data["genotypes"],
             data["phenotypes"],
             data["kinship"],
@@ -358,6 +396,7 @@ class TestWaldTestUnchanged:
             show_progress=False,
             check_memory=False,
         )
+        jamma_results = run_result.associations
 
         # Relaxed tolerances: golden section vs Brent lambda difference
         config = ToleranceConfig.relaxed()

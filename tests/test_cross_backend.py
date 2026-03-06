@@ -74,7 +74,7 @@ class TestCrossBackend:
     def _run_both(self, data, lmm_mode):
         from jamma.lmm.runner_jax import run_lmm_association_jax
 
-        jax_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=data["genotypes"],
             phenotypes=data["phenotypes"],
             kinship=data["kinship"].copy(),
@@ -83,8 +83,9 @@ class TestCrossBackend:
             show_progress=False,
             check_memory=False,
         )
+        jax_results = run_result.associations
 
-        numpy_results = run_lmm_association_numpy(
+        run_result = run_lmm_association_numpy(
             genotypes=data["genotypes"],
             phenotypes=data["phenotypes"],
             kinship=data["kinship"].copy(),
@@ -93,6 +94,7 @@ class TestCrossBackend:
             show_progress=False,
             check_memory=False,
         )
+        numpy_results = run_result.associations
 
         return jax_results, numpy_results
 

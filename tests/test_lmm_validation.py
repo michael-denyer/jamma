@@ -447,7 +447,7 @@ class TestLmmSmallScale:
         """LMM runs without errors on small data."""
         genotypes, phenotypes, kinship, snp_info = small_data
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -455,6 +455,7 @@ class TestLmmSmallScale:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         assert len(results) == genotypes.shape[1]
 
@@ -462,7 +463,7 @@ class TestLmmSmallScale:
         """All p-values are in [0, 1]."""
         genotypes, phenotypes, kinship, snp_info = small_data
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -470,6 +471,7 @@ class TestLmmSmallScale:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         for result in results:
             assert 0.0 <= result.p_wald <= 1.0, f"Invalid p-value: {result.p_wald}"
@@ -478,7 +480,7 @@ class TestLmmSmallScale:
         """All standard errors are positive."""
         genotypes, phenotypes, kinship, snp_info = small_data
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -486,6 +488,7 @@ class TestLmmSmallScale:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         for result in results:
             assert result.se > 0, f"Invalid SE: {result.se}"
@@ -495,7 +498,7 @@ class TestLmmSmallScale:
         genotypes, phenotypes, kinship, snp_info = small_data
 
         # eigendecomp overwrites K in-place; needs fresh copy per run
-        results1 = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship.copy(),
@@ -503,7 +506,8 @@ class TestLmmSmallScale:
             show_progress=False,
             check_memory=False,
         )
-        results2 = run_lmm_association_jax(
+        results1 = run_result.associations
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship.copy(),
@@ -511,6 +515,7 @@ class TestLmmSmallScale:
             show_progress=False,
             check_memory=False,
         )
+        results2 = run_result.associations
 
         for r1, r2 in zip(results1, results2, strict=True):
             assert r1.beta == r2.beta
@@ -557,7 +562,7 @@ class TestLmmWithMissingPhenotypes:
         """LMM handles missing phenotypes without errors."""
         genotypes, phenotypes, kinship, snp_info = data_with_missing
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -565,6 +570,7 @@ class TestLmmWithMissingPhenotypes:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         # Should produce results for all SNPs
         assert len(results) == genotypes.shape[1]
@@ -657,7 +663,7 @@ class TestLmmJaxValidation:
         phenotypes = mouse_phenotypes
         snp_info = _build_snp_info(mouse_data)
 
-        jax_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=reference_kinship,
@@ -667,6 +673,7 @@ class TestLmmJaxValidation:
             show_progress=False,
             check_memory=False,
         )
+        jax_results = run_result.associations
 
         # Build lookup by rs
         ref_by_rs = {r.rs: r for r in reference_results}
@@ -708,7 +715,7 @@ class TestLmmJaxValidation:
         phenotypes = mouse_phenotypes
         snp_info = _build_snp_info(mouse_data)
 
-        jax_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=reference_kinship,
@@ -718,6 +725,7 @@ class TestLmmJaxValidation:
             show_progress=False,
             check_memory=False,
         )
+        jax_results = run_result.associations
 
         # Use relaxed tolerances for JAX since golden section optimization
         # produces slightly different lambda values than Brent's method
@@ -753,7 +761,7 @@ class TestLmmJaxValidation:
             ]
         )
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=reference_kinship,
@@ -762,6 +770,7 @@ class TestLmmJaxValidation:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         # Should produce results
         assert len(results) > 0, "No results with covariates"
@@ -783,7 +792,7 @@ class TestLmmJaxValidation:
         covariates = np.loadtxt(COVARIATE_FILE)
         reference_results = load_gemma_assoc(COVARIATE_REFERENCE_ASSOC)
 
-        jax_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=mouse_data.genotypes,
             phenotypes=mouse_phenotypes,
             kinship=reference_kinship,
@@ -792,6 +801,7 @@ class TestLmmJaxValidation:
             show_progress=False,
             check_memory=False,
         )
+        jax_results = run_result.associations
 
         comparison = compare_assoc_results(
             jax_results, reference_results, config=JAX_GEMMA_TOLERANCES
@@ -808,7 +818,7 @@ class TestLmmJaxValidation:
         n_samples = len(phenotypes)
 
         # eigendecomp overwrites K in-place; needs fresh copy per run
-        results_none = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=reference_kinship.copy(),
@@ -817,8 +827,9 @@ class TestLmmJaxValidation:
             show_progress=False,
             check_memory=False,
         )
+        results_none = run_result.associations
 
-        results_intercept = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=reference_kinship.copy(),
@@ -827,6 +838,7 @@ class TestLmmJaxValidation:
             show_progress=False,
             check_memory=False,
         )
+        results_intercept = run_result.associations
 
         assert len(results_none) == len(results_intercept)
 
@@ -891,7 +903,7 @@ class TestJaxChunkingCorrectness:
             # Run with large cap (single chunk - no chunking)
             # eigendecomp overwrites K in-place; needs fresh copy per run
             chunk_module.MAX_SAFE_CHUNK = 10**6  # Effectively no limit
-            single_chunk_results = run_lmm_association_jax(
+            run_result = run_lmm_association_jax(
                 genotypes=genotypes,
                 phenotypes=phenotypes,
                 kinship=kinship.copy(),
@@ -899,10 +911,11 @@ class TestJaxChunkingCorrectness:
                 check_memory=False,
                 show_progress=False,
             )
+            single_chunk_results = run_result.associations
 
             # Run with small cap (force ~4 chunks with 100 SNPs)
             chunk_module.MAX_SAFE_CHUNK = 25
-            multi_chunk_results = run_lmm_association_jax(
+            run_result = run_lmm_association_jax(
                 genotypes=genotypes,
                 phenotypes=phenotypes,
                 kinship=kinship.copy(),
@@ -910,6 +923,7 @@ class TestJaxChunkingCorrectness:
                 check_memory=False,
                 show_progress=False,
             )
+            multi_chunk_results = run_result.associations
         finally:
             # Restore original value
             chunk_module.MAX_SAFE_CHUNK = original_max
@@ -987,7 +1001,7 @@ class TestLmmCovariateIntegration:
 
         # eigendecomp overwrites K in-place; needs fresh copy per run
         # Run with covariates=None (default intercept-only)
-        results_none = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship.copy(),
@@ -996,10 +1010,11 @@ class TestLmmCovariateIntegration:
             show_progress=False,
             check_memory=False,
         )
+        results_none = run_result.associations
 
         # Run with explicit intercept column
         intercept_only = np.ones((n_samples, 1))
-        results_explicit = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship.copy(),
@@ -1008,6 +1023,7 @@ class TestLmmCovariateIntegration:
             show_progress=False,
             check_memory=False,
         )
+        results_explicit = run_result.associations
 
         # Should have same number of results
         assert len(results_none) == len(results_explicit)
@@ -1055,7 +1071,7 @@ class TestLmmCovariateIntegration:
         rng = np.random.default_rng(123)
 
         # Run with intercept only
-        results_intercept = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -1064,6 +1080,7 @@ class TestLmmCovariateIntegration:
             show_progress=False,
             check_memory=False,
         )
+        results_intercept = run_result.associations
 
         # Run with intercept + a covariate correlated with phenotype
         # (to ensure it has a real effect on the model)
@@ -1074,7 +1091,7 @@ class TestLmmCovariateIntegration:
                 covariate_col,  # Non-trivial covariate
             ]
         )
-        results_with_cov = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -1083,6 +1100,7 @@ class TestLmmCovariateIntegration:
             show_progress=False,
             check_memory=False,
         )
+        results_with_cov = run_result.associations
 
         # Should have same number of results
         assert len(results_intercept) == len(results_with_cov)
@@ -1117,7 +1135,7 @@ class TestLmmCovariateIntegration:
         covariates[10:15, 1] = np.nan
 
         # Run should not error - missing samples excluded
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -1126,6 +1144,7 @@ class TestLmmCovariateIntegration:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         # Should produce results (samples with missing covariates excluded)
         assert len(results) > 0
@@ -1158,7 +1177,7 @@ class TestLmmCovariateValidation:
         """JAMMA LMM with covariates matches GEMMA reference within tolerance."""
         reference_results = load_gemma_assoc(COVARIATE_REFERENCE_ASSOC)
 
-        jamma_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=mouse_data.genotypes,
             phenotypes=mouse_phenotypes,
             kinship=reference_kinship,
@@ -1167,6 +1186,7 @@ class TestLmmCovariateValidation:
             show_progress=False,
             check_memory=False,
         )
+        jamma_results = run_result.associations
 
         comparison = compare_assoc_results(
             jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
@@ -1179,7 +1199,7 @@ class TestLmmCovariateValidation:
         """Beta values with covariates match within tolerance."""
         reference_results = load_gemma_assoc(COVARIATE_REFERENCE_ASSOC)
 
-        jamma_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=mouse_data.genotypes,
             phenotypes=mouse_phenotypes,
             kinship=reference_kinship,
@@ -1188,6 +1208,7 @@ class TestLmmCovariateValidation:
             show_progress=False,
             check_memory=False,
         )
+        jamma_results = run_result.associations
 
         comparison = compare_assoc_results(
             jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
@@ -1202,7 +1223,7 @@ class TestLmmCovariateValidation:
         """P-values with covariates match within tolerance."""
         reference_results = load_gemma_assoc(COVARIATE_REFERENCE_ASSOC)
 
-        jamma_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=mouse_data.genotypes,
             phenotypes=mouse_phenotypes,
             kinship=reference_kinship,
@@ -1211,6 +1232,7 @@ class TestLmmCovariateValidation:
             show_progress=False,
             check_memory=False,
         )
+        jamma_results = run_result.associations
 
         comparison = compare_assoc_results(
             jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
@@ -1262,7 +1284,7 @@ class TestAFSemantics:
         ]
 
         # Run LMM on both orientations
-        results_original = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship_original,
@@ -1270,7 +1292,8 @@ class TestAFSemantics:
             show_progress=False,
             check_memory=False,
         )
-        results_flipped = run_lmm_association_jax(
+        results_original = run_result.associations
+        run_result = run_lmm_association_jax(
             genotypes=genotypes_flipped,
             phenotypes=phenotypes,
             kinship=kinship_flipped,
@@ -1278,6 +1301,7 @@ class TestAFSemantics:
             show_progress=False,
             check_memory=False,
         )
+        results_flipped = run_result.associations
 
         # Both should produce results for all SNPs
         assert len(results_original) == len(results_flipped)
@@ -1358,7 +1382,7 @@ class TestAFSemantics:
             for i in range(n_snps)
         ]
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -1367,6 +1391,7 @@ class TestAFSemantics:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         # Check that we have both AF > 0.5 and AF <= 0.5 in output
         af_values = [r.af for r in results]
@@ -1400,7 +1425,7 @@ class TestLmmScoreValidation:
         """JAMMA Score test matches GEMMA -lmm 3 within tolerance."""
         reference_results = load_gemma_assoc(SCORE_REFERENCE_ASSOC)
 
-        jamma_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=mouse_data.genotypes,
             phenotypes=mouse_phenotypes,
             kinship=reference_kinship,
@@ -1409,6 +1434,7 @@ class TestLmmScoreValidation:
             show_progress=False,
             check_memory=False,
         )
+        jamma_results = run_result.associations
 
         comparison = compare_assoc_results(
             jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
@@ -1421,7 +1447,7 @@ class TestLmmScoreValidation:
         """Score p-values match GEMMA within 1e-8 tolerance."""
         reference_results = load_gemma_assoc(SCORE_REFERENCE_ASSOC)
 
-        jamma_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=mouse_data.genotypes,
             phenotypes=mouse_phenotypes,
             kinship=reference_kinship,
@@ -1430,6 +1456,7 @@ class TestLmmScoreValidation:
             show_progress=False,
             check_memory=False,
         )
+        jamma_results = run_result.associations
 
         comparison = compare_assoc_results(
             jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
@@ -1458,7 +1485,7 @@ class TestLmmScoreValidation:
         snp_info = _build_snp_info(mouse_data)
 
         # Run Wald test
-        wald_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=reference_kinship,
@@ -1467,9 +1494,10 @@ class TestLmmScoreValidation:
             show_progress=False,
             check_memory=False,
         )
+        wald_results = run_result.associations
 
         # Run Score test
-        score_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=reference_kinship,
@@ -1478,6 +1506,7 @@ class TestLmmScoreValidation:
             show_progress=False,
             check_memory=False,
         )
+        score_results = run_result.associations
 
         # Wald should have varying l_remle values (per-SNP optimization)
         wald_lambdas = [r.l_remle for r in wald_results if r.l_remle is not None]
@@ -1535,7 +1564,7 @@ class TestScoreTestProperties:
         genotypes, phenotypes, kinship, snp_info = score_test_data
 
         # Run Score test
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -1544,6 +1573,7 @@ class TestScoreTestProperties:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         # All results should have l_remle=None (Score doesn't report per-SNP lambda)
         for r in results:
@@ -1553,7 +1583,7 @@ class TestScoreTestProperties:
         """All Score p-values are in valid range [0, 1]."""
         genotypes, phenotypes, kinship, snp_info = score_test_data
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -1562,6 +1592,7 @@ class TestScoreTestProperties:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         for r in results:
             assert 0.0 <= r.p_score <= 1.0, f"Invalid p_score: {r.p_score}"
@@ -1570,7 +1601,7 @@ class TestScoreTestProperties:
         """Score test does not compute per-SNP log-likelihood."""
         genotypes, phenotypes, kinship, snp_info = score_test_data
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -1579,6 +1610,7 @@ class TestScoreTestProperties:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         for r in results:
             assert r.logl_H1 is None, "Score test should not have per-SNP logl_H1"
@@ -1588,7 +1620,7 @@ class TestScoreTestProperties:
         """Score test produces p_score field, not p_wald."""
         genotypes, phenotypes, kinship, snp_info = score_test_data
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -1597,6 +1629,7 @@ class TestScoreTestProperties:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         for r in results:
             assert r.p_score is not None, "Score test should produce p_score"
@@ -1625,7 +1658,7 @@ class TestLmmAllTestsValidation:
         """JAMMA -lmm 4 (intercept-only) matches GEMMA reference."""
         reference_results = load_gemma_assoc(ALL_TESTS_REFERENCE)
 
-        jamma_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=mouse_data.genotypes,
             phenotypes=mouse_phenotypes,
             kinship=reference_kinship,
@@ -1634,6 +1667,7 @@ class TestLmmAllTestsValidation:
             show_progress=False,
             check_memory=False,
         )
+        jamma_results = run_result.associations
 
         comparison = compare_assoc_results(
             jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
@@ -1650,7 +1684,7 @@ class TestLmmAllTestsValidation:
         covariates = np.loadtxt(COVARIATE_FILE)
         reference_results = load_gemma_assoc(ALL_TESTS_COVAR_REFERENCE)
 
-        jamma_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=mouse_data.genotypes,
             phenotypes=mouse_phenotypes,
             kinship=reference_kinship,
@@ -1660,6 +1694,7 @@ class TestLmmAllTestsValidation:
             show_progress=False,
             check_memory=False,
         )
+        jamma_results = run_result.associations
 
         comparison = compare_assoc_results(
             jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
@@ -1677,7 +1712,7 @@ class TestLmmAllTestsValidation:
         """
         reference_results = load_gemma_assoc(ALL_TESTS_REFERENCE)
 
-        jamma_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=mouse_data.genotypes,
             phenotypes=mouse_phenotypes,
             kinship=reference_kinship,
@@ -1686,6 +1721,7 @@ class TestLmmAllTestsValidation:
             show_progress=False,
             check_memory=False,
         )
+        jamma_results = run_result.associations
 
         comparison = compare_assoc_results(
             jamma_results, reference_results, config=JAX_GEMMA_TOLERANCES
@@ -1760,7 +1796,7 @@ class TestLmmAllTestsProperties:
         """Mode 4 populates all result fields."""
         genotypes, phenotypes, kinship, snp_info = all_tests_data
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -1769,6 +1805,7 @@ class TestLmmAllTestsProperties:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         for r in results:
             assert r.logl_H1 is not None, f"logl_H1 is None for {r.rs}"
@@ -1784,7 +1821,7 @@ class TestLmmAllTestsProperties:
         """All p-values from mode 4 are in [0, 1]."""
         genotypes, phenotypes, kinship, snp_info = all_tests_data
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -1793,6 +1830,7 @@ class TestLmmAllTestsProperties:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         for r in results:
             assert 0.0 <= r.p_wald <= 1.0, f"Invalid p_wald: {r.p_wald} for {r.rs}"
@@ -1804,7 +1842,7 @@ class TestLmmAllTestsProperties:
         genotypes, phenotypes, kinship, snp_info = all_tests_data
 
         # eigendecomp overwrites K in-place; needs fresh copy per run
-        results1 = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship.copy(),
@@ -1813,7 +1851,8 @@ class TestLmmAllTestsProperties:
             show_progress=False,
             check_memory=False,
         )
-        results2 = run_lmm_association_jax(
+        results1 = run_result.associations
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship.copy(),
@@ -1822,6 +1861,7 @@ class TestLmmAllTestsProperties:
             show_progress=False,
             check_memory=False,
         )
+        results2 = run_result.associations
 
         assert len(results1) == len(results2)
         for r1, r2 in zip(results1, results2, strict=True):
@@ -1836,7 +1876,7 @@ class TestLmmAllTestsProperties:
         genotypes, phenotypes, kinship, snp_info = all_tests_data
 
         # eigendecomp overwrites K in-place; needs fresh copy per run
-        wald_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship.copy(),
@@ -1845,7 +1885,8 @@ class TestLmmAllTestsProperties:
             show_progress=False,
             check_memory=False,
         )
-        all_results = run_lmm_association_jax(
+        wald_results = run_result.associations
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship.copy(),
@@ -1854,6 +1895,7 @@ class TestLmmAllTestsProperties:
             show_progress=False,
             check_memory=False,
         )
+        all_results = run_result.associations
 
         assert len(wald_results) == len(all_results)
         for wald, all_r in zip(wald_results, all_results, strict=True):
@@ -1879,7 +1921,7 @@ class TestLmmAllTestsProperties:
         genotypes, phenotypes, kinship, snp_info = all_tests_data
 
         # eigendecomp overwrites K in-place; needs fresh copy per run
-        score_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship.copy(),
@@ -1888,7 +1930,8 @@ class TestLmmAllTestsProperties:
             show_progress=False,
             check_memory=False,
         )
-        all_results = run_lmm_association_jax(
+        score_results = run_result.associations
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship.copy(),
@@ -1897,6 +1940,7 @@ class TestLmmAllTestsProperties:
             show_progress=False,
             check_memory=False,
         )
+        all_results = run_result.associations
 
         assert len(score_results) == len(all_results)
         for score, all_r in zip(score_results, all_results, strict=True):
@@ -1910,7 +1954,7 @@ class TestLmmAllTestsProperties:
         genotypes, phenotypes, kinship, snp_info = all_tests_data
 
         # eigendecomp overwrites K in-place; needs fresh copy per run
-        lrt_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship.copy(),
@@ -1919,7 +1963,8 @@ class TestLmmAllTestsProperties:
             show_progress=False,
             check_memory=False,
         )
-        all_results = run_lmm_association_jax(
+        lrt_results = run_result.associations
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship.copy(),
@@ -1928,6 +1973,7 @@ class TestLmmAllTestsProperties:
             show_progress=False,
             check_memory=False,
         )
+        all_results = run_result.associations
 
         assert len(lrt_results) == len(all_results)
         for lrt, all_r in zip(lrt_results, all_results, strict=True):
@@ -1963,7 +2009,7 @@ class TestMouseHS1940Validation:
         """Mouse HS1940 (no covariates) matches GEMMA for each mode."""
         reference_results = load_gemma_assoc(reference_path)
 
-        jamma_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=hs1940_data.genotypes,
             phenotypes=hs1940_phenotypes,
             kinship=hs1940_kinship,
@@ -1972,6 +2018,7 @@ class TestMouseHS1940Validation:
             show_progress=False,
             check_memory=False,
         )
+        jamma_results = run_result.associations
 
         comparison = compare_assoc_results(
             jamma_results, reference_results, config=MOUSE_HS1940_TOLERANCES
@@ -1999,7 +2046,7 @@ class TestMouseHS1940Validation:
         """Mouse HS1940 (with covariates) matches GEMMA for each mode."""
         reference_results = load_gemma_assoc(reference_path)
 
-        jamma_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=hs1940_data.genotypes,
             phenotypes=hs1940_phenotypes,
             kinship=hs1940_kinship,
@@ -2009,6 +2056,7 @@ class TestMouseHS1940Validation:
             show_progress=False,
             check_memory=False,
         )
+        jamma_results = run_result.associations
 
         comparison = compare_assoc_results(
             jamma_results, reference_results, config=MOUSE_HS1940_TOLERANCES

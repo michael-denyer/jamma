@@ -124,7 +124,7 @@ class TestGemmaLmmValidation:
             for i in range(n_snps)
         ]
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes,
             phenotypes,
             gemma_kinship,
@@ -134,6 +134,7 @@ class TestGemmaLmmValidation:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         return pd.DataFrame(
             [

@@ -1119,7 +1119,7 @@ class TestFilteringEquivalence:
         # Run with small chunk size (forces multiple chunks)
         # .copy() because eigendecompose_kinship consumes K (in-place eigenvectors)
         with patch("jamma.lmm.runner_jax._compute_chunk_size", return_value=5):
-            results_small = run_lmm_association_jax(
+            run_result = run_lmm_association_jax(
                 genotypes.astype(np.float32),
                 phenotypes,
                 kinship.copy(),
@@ -1129,10 +1129,11 @@ class TestFilteringEquivalence:
                 check_memory=False,
                 show_progress=False,
             )
+            results_small = run_result.associations
 
         # Run with large chunk size (single chunk)
         with patch("jamma.lmm.runner_jax._compute_chunk_size", return_value=50000):
-            results_large = run_lmm_association_jax(
+            run_result = run_lmm_association_jax(
                 genotypes.astype(np.float32),
                 phenotypes,
                 kinship,
@@ -1142,6 +1143,7 @@ class TestFilteringEquivalence:
                 check_memory=False,
                 show_progress=False,
             )
+            results_large = run_result.associations
 
         assert len(results_small) == len(results_large), "Same filtering applied"
         for r_s, r_l in zip(results_small, results_large, strict=True):

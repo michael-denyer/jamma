@@ -84,7 +84,7 @@ class TestJaxRunnerBasic:
         genotypes, phenotype, snp_info = synthetic_data
         kinship = compute_centered_kinship(genotypes)
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
             kinship=kinship,
@@ -92,6 +92,7 @@ class TestJaxRunnerBasic:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         assert len(results) > 0
         assert all(hasattr(r, "beta") for r in results)
@@ -102,7 +103,7 @@ class TestJaxRunnerBasic:
         genotypes, phenotype, snp_info = synthetic_data
         kinship = compute_centered_kinship(genotypes)
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
             kinship=kinship,
@@ -110,6 +111,7 @@ class TestJaxRunnerBasic:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         for r in results:
             if not np.isnan(r.beta):
@@ -128,7 +130,7 @@ class TestJaxRunnerBasic:
         kinship_copy = kinship.copy()
         eigenvalues, eigenvectors = eigendecompose_kinship(kinship)
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
             kinship=kinship_copy,
@@ -138,6 +140,7 @@ class TestJaxRunnerBasic:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         assert len(results) > 0
 
@@ -282,7 +285,7 @@ class TestJaxScoreMode:
         genotypes, phenotype, snp_info = synthetic_data
         kinship = compute_centered_kinship(genotypes)
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
             kinship=kinship,
@@ -291,6 +294,7 @@ class TestJaxScoreMode:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         assert len(results) > 0
 
@@ -320,7 +324,7 @@ class TestJaxScoreMode:
         genotypes, phenotype, snp_info = synthetic_data
         kinship = compute_centered_kinship(genotypes)
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
             kinship=kinship,
@@ -329,6 +333,7 @@ class TestJaxScoreMode:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         assert len(results) > 0, "No results returned"
 
@@ -367,7 +372,7 @@ class TestJaxScoreMode:
             for i in range(plink.n_snps)
         ]
 
-        results_jax = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=plink.genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -377,6 +382,7 @@ class TestJaxScoreMode:
             show_progress=False,
             check_memory=False,
         )
+        results_jax = run_result.associations
 
         reference = load_gemma_assoc(GEMMA_COVARIATE_SCORE)
         comparison = compare_assoc_results(results_jax, reference)
@@ -459,7 +465,7 @@ class TestJaxLrtMode:
         genotypes, phenotype, snp_info = synthetic_data
         kinship = compute_centered_kinship(genotypes)
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
             kinship=kinship,
@@ -468,6 +474,7 @@ class TestJaxLrtMode:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         assert len(results) > 0
 
@@ -489,7 +496,7 @@ class TestJaxLrtMode:
         genotypes, phenotype, snp_info = synthetic_data
         kinship = compute_centered_kinship(genotypes)
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
             kinship=kinship,
@@ -498,6 +505,7 @@ class TestJaxLrtMode:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         assert len(results) > 0, "No results returned"
 
@@ -537,7 +545,7 @@ class TestJaxLrtMode:
             for i in range(plink.n_snps)
         ]
 
-        results_jax = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=plink.genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -547,6 +555,7 @@ class TestJaxLrtMode:
             show_progress=False,
             check_memory=False,
         )
+        results_jax = run_result.associations
 
         reference = load_gemma_assoc(GEMMA_COVARIATE_LRT)
 
@@ -564,7 +573,7 @@ class TestJaxLrtMode:
         genotypes, phenotype, snp_info = synthetic_data
         kinship = compute_centered_kinship(genotypes)
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
             kinship=kinship,
@@ -573,6 +582,7 @@ class TestJaxLrtMode:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         assert len(results) > 0
 
@@ -652,7 +662,7 @@ class TestJaxAllTestsMode:
         genotypes, phenotype, snp_info = synthetic_data
         kinship = compute_centered_kinship(genotypes)
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
             kinship=kinship,
@@ -661,6 +671,7 @@ class TestJaxAllTestsMode:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         assert len(results) > 0
 
@@ -702,7 +713,7 @@ class TestJaxAllTestsMode:
         genotypes, phenotype, snp_info = synthetic_data
         kinship = compute_centered_kinship(genotypes)
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
             kinship=kinship,
@@ -711,6 +722,7 @@ class TestJaxAllTestsMode:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         assert len(results) > 0, "No results returned"
 
@@ -746,7 +758,7 @@ class TestJaxAllTestsMode:
             ]
         )
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
             kinship=kinship,
@@ -756,6 +768,7 @@ class TestJaxAllTestsMode:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         assert len(results) > 0, "JAX mode 4 with covariates returned no results"
 
@@ -779,7 +792,7 @@ class TestJaxAllTestsMode:
         genotypes, phenotype, snp_info = synthetic_data
         kinship = compute_centered_kinship(genotypes)
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
             kinship=kinship,
@@ -788,6 +801,7 @@ class TestJaxAllTestsMode:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         assert len(results) > 0
 
@@ -809,7 +823,7 @@ class TestJaxAllTestsMode:
         kinship_mode4 = kinship.copy()
         kinship_mode1 = kinship.copy()
 
-        results_mode4 = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
             kinship=kinship_mode4,
@@ -818,8 +832,9 @@ class TestJaxAllTestsMode:
             show_progress=False,
             check_memory=False,
         )
+        results_mode4 = run_result.associations
 
-        results_mode1 = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
             kinship=kinship_mode1,
@@ -828,6 +843,7 @@ class TestJaxAllTestsMode:
             show_progress=False,
             check_memory=False,
         )
+        results_mode1 = run_result.associations
 
         m4_by_rs = {r.rs: r for r in results_mode4}
         m1_by_rs = {r.rs: r for r in results_mode1}
@@ -910,7 +926,7 @@ class TestJaxAllTestsMode:
             for i in range(plink.n_snps)
         ]
 
-        results_jax = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=plink.genotypes,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -920,6 +936,7 @@ class TestJaxAllTestsMode:
             show_progress=False,
             check_memory=False,
         )
+        results_jax = run_result.associations
 
         # Load all three GEMMA reference files
         ref_wald = load_gemma_assoc(GEMMA_COVARIATE_WALD)
@@ -1031,7 +1048,7 @@ class TestDegenerateSNPPipeline:
             for j in range(n_snps)
         ]
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
             kinship=kinship,
@@ -1041,6 +1058,7 @@ class TestDegenerateSNPPipeline:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         # The degenerate SNP (rs0) should be absent from results (filtered by variance)
         result_rs_ids = {r.rs for r in results}
@@ -1079,7 +1097,7 @@ class TestDegenerateSNPPipeline:
             for j in range(10)
         ]
 
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
             kinship=kinship,
@@ -1089,6 +1107,7 @@ class TestDegenerateSNPPipeline:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         assert len(results) == 0, (
             f"Expected empty results for all-degenerate SNPs, got {len(results)}"
@@ -1396,7 +1415,7 @@ def test_rotation_compute_overlap_metric_populated() -> None:
         for i in range(n_snps)
     ]
 
-    results = run_lmm_association_jax(
+    run_result = run_lmm_association_jax(
         genotypes=genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
@@ -1407,6 +1426,7 @@ def test_rotation_compute_overlap_metric_populated() -> None:
         show_progress=False,
         lmm_mode=1,
     )
+    results = run_result.associations
 
     assert len(results) > 0
     assert "rotation_s" in last_run_timing, "rotation_s not in last_run_timing"
@@ -1535,7 +1555,7 @@ class TestThreadPoolExecutorOverlapJax:
 
         # Reference: single chunk (no overlap)
         with patch("jamma.lmm.runner_jax._compute_chunk_size", return_value=5000):
-            reference = run_lmm_association_jax(
+            run_result = run_lmm_association_jax(
                 genotypes=genotypes,
                 phenotypes=phenotype,
                 kinship=kinship,
@@ -1543,10 +1563,11 @@ class TestThreadPoolExecutorOverlapJax:
                 show_progress=False,
                 check_memory=False,
             )
+            reference = run_result.associations
 
         # Test: multi-chunk overlap
         with patch("jamma.lmm.runner_jax._compute_chunk_size", return_value=50):
-            results = run_lmm_association_jax(
+            run_result = run_lmm_association_jax(
                 genotypes=genotypes,
                 phenotypes=phenotype,
                 kinship=kinship2,
@@ -1554,6 +1575,7 @@ class TestThreadPoolExecutorOverlapJax:
                 show_progress=False,
                 check_memory=False,
             )
+            results = run_result.associations
 
         assert len(results) == len(reference), (
             f"Expected {len(reference)} results, got {len(results)}"
@@ -1884,7 +1906,7 @@ def test_jax_batch_wald_matches_gemma_synthetic_reference() -> None:
 
     snp_info = _build_snp_info(plink)
 
-    results = run_lmm_association_jax(
+    run_result = run_lmm_association_jax(
         genotypes=plink.genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
@@ -1893,6 +1915,7 @@ def test_jax_batch_wald_matches_gemma_synthetic_reference() -> None:
         show_progress=False,
         check_memory=False,
     )
+    results = run_result.associations
 
     reference = load_gemma_assoc(FIXTURE_DIR / "gemma_assoc.assoc.txt")
 

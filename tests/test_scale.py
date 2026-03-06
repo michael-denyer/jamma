@@ -101,7 +101,7 @@ class TestScaleWorkflow:
         assert K.shape == (n_samples, n_samples)
 
         # Run LMM
-        results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes,
             phenotypes=phenotype,
             kinship=K,
@@ -109,6 +109,7 @@ class TestScaleWorkflow:
             show_progress=False,
             check_memory=False,
         )
+        results = run_result.associations
 
         # Basic validations
         assert len(results) > 0, "Should have results"
@@ -143,7 +144,7 @@ class TestScaleWorkflow:
         np.testing.assert_array_equal(K1, K2)
 
         # LMM results should be identical
-        results1 = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=genotypes1,
             phenotypes=phenotype1,
             kinship=K1,
@@ -151,7 +152,8 @@ class TestScaleWorkflow:
             show_progress=False,
             check_memory=False,
         )
-        results2 = run_lmm_association_jax(
+        results1 = run_result.associations
+        run_result = run_lmm_association_jax(
             genotypes=genotypes2,
             phenotypes=phenotype2,
             kinship=K2,
@@ -159,6 +161,7 @@ class TestScaleWorkflow:
             show_progress=False,
             check_memory=False,
         )
+        results2 = run_result.associations
 
         assert len(results1) == len(results2)
 

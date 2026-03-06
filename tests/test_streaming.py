@@ -623,16 +623,17 @@ class TestRunLmmAssociationStreaming:
         snp_info = _build_snp_info(data)
 
         # Run full-load version
-        results_full = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             data.genotypes.astype(np.float32),
             phenotypes,
             kinship_full,
             snp_info,
             check_memory=False,
         )
+        results_full = run_result.associations
 
         # Run streaming version
-        results_stream, _ = run_lmm_association_streaming(
+        run_result, _ = run_lmm_association_streaming(
             sample_plink_data,
             phenotypes,
             kinship_stream,
@@ -640,6 +641,7 @@ class TestRunLmmAssociationStreaming:
             check_memory=False,
             show_progress=False,
         )
+        results_stream = run_result.associations
 
         # Same number of results
         assert len(results_full) == len(results_stream), (
@@ -684,7 +686,7 @@ class TestRunLmmAssociationStreaming:
         )
 
         # Run streaming without snp_info
-        results, _ = run_lmm_association_streaming(
+        run_result, _ = run_lmm_association_streaming(
             sample_plink_data,
             phenotypes,
             kinship,
@@ -692,6 +694,7 @@ class TestRunLmmAssociationStreaming:
             check_memory=False,
             show_progress=False,
         )
+        results = run_result.associations
 
         # Verify results have correct metadata from first few SNPs
         assert len(results) > 0
@@ -717,7 +720,7 @@ class TestRunLmmAssociationStreaming:
         miss_threshold = 0.01
 
         # Run both versions with same filtering
-        results_full = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             data.genotypes.astype(np.float32),
             phenotypes,
             kinship,
@@ -726,8 +729,9 @@ class TestRunLmmAssociationStreaming:
             miss_threshold=miss_threshold,
             check_memory=False,
         )
+        results_full = run_result.associations
 
-        results_stream, _ = run_lmm_association_streaming(
+        run_result, _ = run_lmm_association_streaming(
             sample_plink_data,
             phenotypes,
             kinship,
@@ -737,6 +741,7 @@ class TestRunLmmAssociationStreaming:
             check_memory=False,
             show_progress=False,
         )
+        results_stream = run_result.associations
 
         # Same number of results (filtering applied identically)
         assert len(results_full) == len(results_stream), (
@@ -764,16 +769,17 @@ class TestRunLmmAssociationStreaming:
         snp_info = _build_snp_info(data)
 
         # Run full-load version (filters internally)
-        results_full = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             data.genotypes.astype(np.float32),
             phenotypes,
             kinship,
             snp_info,
             check_memory=False,
         )
+        results_full = run_result.associations
 
         # Run streaming version
-        results_stream, _ = run_lmm_association_streaming(
+        run_result, _ = run_lmm_association_streaming(
             sample_plink_data,
             phenotypes,
             kinship,
@@ -781,6 +787,7 @@ class TestRunLmmAssociationStreaming:
             check_memory=False,
             show_progress=False,
         )
+        results_stream = run_result.associations
 
         # Should produce same results
         assert len(results_full) == len(results_stream)
@@ -808,7 +815,7 @@ class TestRunLmmAssociationStreaming:
         )
 
         # Run LMM via streaming (no genotype matrix loaded)
-        results, _ = run_lmm_association_streaming(
+        run_result, _ = run_lmm_association_streaming(
             sample_plink_data,
             phenotypes,
             kinship,
@@ -816,6 +823,7 @@ class TestRunLmmAssociationStreaming:
             check_memory=False,
             show_progress=False,
         )
+        results = run_result.associations
 
         # Should produce valid results
         assert len(results) > 0, "Should have results after filtering"
@@ -862,7 +870,7 @@ class TestRunLmmAssociationStreaming:
         # This tests that results are written incrementally, not accumulated
         chunk_size = 100  # Very small to force many file chunks
 
-        results, n_tested = run_lmm_association_streaming(
+        run_result, n_tested = run_lmm_association_streaming(
             sample_plink_data,
             phenotypes,
             kinship,
@@ -872,6 +880,7 @@ class TestRunLmmAssociationStreaming:
             show_progress=False,
             output_path=output_path,
         )
+        results = run_result.associations
 
         # Verify empty list returned (results on disk)
         assert len(results) == 0, (
@@ -951,17 +960,18 @@ class TestChunkEquivalence:
         ]
 
         # Run with full-load JAX (single batch, no streaming)
-        results_single = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             data.genotypes,
             phenotypes,
             kinship_single,
             snp_info,
             check_memory=False,
         )
+        results_single = run_result.associations
 
         # Run with streaming (multiple chunks)
         # Use larger chunk to reduce number of JIT compilations
-        results_multi, _ = run_lmm_association_streaming(
+        run_result, _ = run_lmm_association_streaming(
             sample_plink_data,
             phenotypes,
             kinship_multi,
@@ -969,6 +979,7 @@ class TestChunkEquivalence:
             check_memory=False,
             show_progress=False,
         )
+        results_multi = run_result.associations
 
         # Both should produce same count of results
         assert len(results_single) == len(results_multi)
@@ -1015,7 +1026,7 @@ class TestChunkEquivalence:
 
         for cs in chunk_sizes:
             # eigendecomp overwrites K in-place; needs fresh copy per run
-            results, _ = run_lmm_association_streaming(
+            run_result, _ = run_lmm_association_streaming(
                 sample_plink_data,
                 phenotypes,
                 kinship.copy(),
@@ -1023,6 +1034,7 @@ class TestChunkEquivalence:
                 check_memory=False,
                 show_progress=False,
             )
+            results = run_result.associations
             results_by_chunk[cs] = results
 
         # All chunk sizes should produce identical results within machine precision
@@ -1072,7 +1084,7 @@ def test_streaming_vs_batch_parity(sample_plink_data: Path) -> None:
     snp_info = _build_snp_info(data)
 
     # Batch runner (all genotypes in memory, float64 to match streaming reader)
-    results_batch = run_lmm_association_jax(
+    run_result = run_lmm_association_jax(
         data.genotypes.astype(np.float64),
         phenotypes,
         kinship_batch,
@@ -1080,9 +1092,10 @@ def test_streaming_vs_batch_parity(sample_plink_data: Path) -> None:
         check_memory=False,
         show_progress=False,
     )
+    results_batch = run_result.associations
 
     # Streaming runner with small chunk_size to force multiple file chunks
-    results_stream, _ = run_lmm_association_streaming(
+    run_result, _ = run_lmm_association_streaming(
         sample_plink_data,
         phenotypes,
         kinship_stream,
@@ -1091,6 +1104,7 @@ def test_streaming_vs_batch_parity(sample_plink_data: Path) -> None:
         check_memory=False,
         show_progress=False,
     )
+    results_stream = run_result.associations
 
     # Same number of results (same filtering applied)
     assert len(results_batch) == len(results_stream), (
@@ -1164,7 +1178,7 @@ def test_streaming_lrt_only_matches_batch(sample_plink_data: Path) -> None:
     snp_info = _build_snp_info(data)
 
     # Batch runner with lmm_mode=2
-    results_batch = run_lmm_association_jax(
+    run_result = run_lmm_association_jax(
         data.genotypes.astype(np.float64),
         phenotypes,
         kinship_batch,
@@ -1173,9 +1187,10 @@ def test_streaming_lrt_only_matches_batch(sample_plink_data: Path) -> None:
         show_progress=False,
         lmm_mode=2,
     )
+    results_batch = run_result.associations
 
     # Streaming runner with lmm_mode=2
-    results_stream, _ = run_lmm_association_streaming(
+    run_result, _ = run_lmm_association_streaming(
         sample_plink_data,
         phenotypes,
         kinship_stream,
@@ -1185,6 +1200,7 @@ def test_streaming_lrt_only_matches_batch(sample_plink_data: Path) -> None:
         show_progress=False,
         lmm_mode=2,
     )
+    results_stream = run_result.associations
 
     assert len(results_batch) == len(results_stream), (
         f"Count mismatch: batch={len(results_batch)}, stream={len(results_stream)}"
@@ -1239,7 +1255,7 @@ def test_streaming_score_only_matches_batch(sample_plink_data: Path) -> None:
     snp_info = _build_snp_info(data)
 
     # Batch runner with lmm_mode=3
-    results_batch = run_lmm_association_jax(
+    run_result = run_lmm_association_jax(
         data.genotypes.astype(np.float64),
         phenotypes,
         kinship_batch,
@@ -1248,9 +1264,10 @@ def test_streaming_score_only_matches_batch(sample_plink_data: Path) -> None:
         show_progress=False,
         lmm_mode=3,
     )
+    results_batch = run_result.associations
 
     # Streaming runner with lmm_mode=3
-    results_stream, _ = run_lmm_association_streaming(
+    run_result, _ = run_lmm_association_streaming(
         sample_plink_data,
         phenotypes,
         kinship_stream,
@@ -1260,6 +1277,7 @@ def test_streaming_score_only_matches_batch(sample_plink_data: Path) -> None:
         show_progress=False,
         lmm_mode=3,
     )
+    results_stream = run_result.associations
 
     assert len(results_batch) == len(results_stream), (
         f"Count mismatch: batch={len(results_batch)}, stream={len(results_stream)}"
@@ -1697,7 +1715,7 @@ class TestThreadPoolExecutorOverlapStreaming:
         )
 
         # Reference: single JAX sub-chunk (no overlap)
-        reference, _ = run_lmm_association_streaming(
+        run_result, _ = run_lmm_association_streaming(
             sample_plink_data,
             phenotypes,
             kinship.copy(),
@@ -1706,10 +1724,11 @@ class TestThreadPoolExecutorOverlapStreaming:
             check_memory=False,
             show_progress=False,
         )
+        reference = run_result.associations
 
         # Test: multiple JAX sub-chunks (overlap active)
         with patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=50):
-            results, _ = run_lmm_association_streaming(
+            run_result, _ = run_lmm_association_streaming(
                 sample_plink_data,
                 phenotypes,
                 kinship.copy(),
@@ -1718,6 +1737,7 @@ class TestThreadPoolExecutorOverlapStreaming:
                 check_memory=False,
                 show_progress=False,
             )
+            results = run_result.associations
 
         assert len(results) == len(reference), (
             f"Expected {len(reference)} results, got {len(results)}"
@@ -1920,7 +1940,7 @@ class TestThreadPoolExecutorOverlapStreaming:
         # chunk_size=100 → 5 BED file chunks for 500 SNPs
         # jax_chunk_size=25 → 4 JAX sub-chunks per BED file chunk
         with patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=25):
-            results, n_tested = run_lmm_association_streaming(
+            run_result, n_tested = run_lmm_association_streaming(
                 sample_plink_data,
                 phenotypes,
                 kinship,
@@ -1929,6 +1949,7 @@ class TestThreadPoolExecutorOverlapStreaming:
                 check_memory=False,
                 show_progress=False,
             )
+            results = run_result.associations
 
         assert n_tested > 0, "Should have tested some SNPs"
         assert len(results) > 0, "Should have results"
@@ -2201,7 +2222,7 @@ def test_streaming_all_tests_matches_batch(sample_plink_data: Path) -> None:
 
     snp_info = _build_snp_info(data)
 
-    results_batch = run_lmm_association_jax(
+    run_result = run_lmm_association_jax(
         geno,
         phenotypes,
         kinship_batch,
@@ -2210,8 +2231,9 @@ def test_streaming_all_tests_matches_batch(sample_plink_data: Path) -> None:
         show_progress=False,
         lmm_mode=4,
     )
+    results_batch = run_result.associations
 
-    results_stream, _ = run_lmm_association_streaming(
+    run_result, _ = run_lmm_association_streaming(
         sample_plink_data,
         phenotypes,
         kinship_stream,
@@ -2221,6 +2243,7 @@ def test_streaming_all_tests_matches_batch(sample_plink_data: Path) -> None:
         show_progress=False,
         lmm_mode=4,
     )
+    results_stream = run_result.associations
 
     _assert_results_match(
         results_batch,
@@ -2247,7 +2270,7 @@ def test_streaming_unaligned_chunk_size_matches_batch(sample_plink_data: Path) -
 
     snp_info = _build_snp_info(data)
 
-    results_batch = run_lmm_association_jax(
+    run_result = run_lmm_association_jax(
         geno,
         phenotypes,
         kinship_batch,
@@ -2256,8 +2279,9 @@ def test_streaming_unaligned_chunk_size_matches_batch(sample_plink_data: Path) -
         show_progress=False,
         lmm_mode=1,
     )
+    results_batch = run_result.associations
 
-    results_stream, _ = run_lmm_association_streaming(
+    run_result, _ = run_lmm_association_streaming(
         sample_plink_data,
         phenotypes,
         kinship_stream,
@@ -2267,6 +2291,7 @@ def test_streaming_unaligned_chunk_size_matches_batch(sample_plink_data: Path) -
         show_progress=False,
         lmm_mode=1,
     )
+    results_stream = run_result.associations
 
     _assert_results_match(results_batch, results_stream)
 
@@ -2286,7 +2311,7 @@ def test_streaming_all_snps_filtered_returns_zero(sample_plink_data: Path) -> No
     kinship = np.eye(data.n_samples)
     snp_info = _build_snp_info(data)
 
-    results, n_tested = run_lmm_association_streaming(
+    run_result, n_tested = run_lmm_association_streaming(
         sample_plink_data,
         phenotypes,
         kinship,
@@ -2295,6 +2320,7 @@ def test_streaming_all_snps_filtered_returns_zero(sample_plink_data: Path) -> No
         check_memory=False,
         show_progress=False,
     )
+    results = run_result.associations
 
     assert len(results) == 0, (
         f"Expected empty results when all SNPs are filtered, got {len(results)}"
@@ -2333,7 +2359,7 @@ def test_streaming_with_covariates_matches_batch(sample_plink_data: Path) -> Non
         ]
     )
 
-    results_batch = run_lmm_association_jax(
+    run_result = run_lmm_association_jax(
         geno,
         phenotypes,
         kinship_batch,
@@ -2343,9 +2369,10 @@ def test_streaming_with_covariates_matches_batch(sample_plink_data: Path) -> Non
         show_progress=False,
         lmm_mode=1,
     )
+    results_batch = run_result.associations
 
     # Streaming runner with same covariates
-    results_stream, _ = run_lmm_association_streaming(
+    run_result, _ = run_lmm_association_streaming(
         sample_plink_data,
         phenotypes,
         kinship_stream,
@@ -2356,6 +2383,7 @@ def test_streaming_with_covariates_matches_batch(sample_plink_data: Path) -> Non
         show_progress=False,
         lmm_mode=1,
     )
+    results_stream = run_result.associations
 
     _assert_results_match(results_batch, results_stream)
 
@@ -2378,7 +2406,7 @@ def test_streaming_all_snps_filtered_mode4_returns_zero(
     kinship = np.eye(data.n_samples)
     snp_info = _build_snp_info(data)
 
-    results, n_tested = run_lmm_association_streaming(
+    run_result, n_tested = run_lmm_association_streaming(
         sample_plink_data,
         phenotypes,
         kinship,
@@ -2388,6 +2416,7 @@ def test_streaming_all_snps_filtered_mode4_returns_zero(
         show_progress=False,
         lmm_mode=4,
     )
+    results = run_result.associations
 
     assert len(results) == 0, (
         f"Expected empty results when all SNPs filtered (mode 4), got {len(results)}"
@@ -2422,7 +2451,7 @@ def test_streaming_output_path_returns_empty_list(
 
     output_path = tmp_path / "results.assoc.txt"
 
-    results, n_tested = run_lmm_association_streaming(
+    run_result, n_tested = run_lmm_association_streaming(
         sample_plink_data,
         phenotypes,
         kinship,
@@ -2431,6 +2460,7 @@ def test_streaming_output_path_returns_empty_list(
         check_memory=False,
         show_progress=False,
     )
+    results = run_result.associations
 
     assert len(results) == 0, (
         f"Expected empty results when output_path is set, got {len(results)} results"
@@ -2465,7 +2495,7 @@ def test_streaming_output_path_mode4_writes_all_columns(
 
     output_path = tmp_path / "results_mode4.assoc.txt"
 
-    results, n_tested = run_lmm_association_streaming(
+    run_result, n_tested = run_lmm_association_streaming(
         sample_plink_data,
         phenotypes,
         kinship,
@@ -2475,6 +2505,7 @@ def test_streaming_output_path_mode4_writes_all_columns(
         show_progress=False,
         lmm_mode=4,
     )
+    results = run_result.associations
 
     assert len(results) == 0, (
         "Expected empty results when output_path is set "

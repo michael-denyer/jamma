@@ -191,7 +191,7 @@ def validation_pipeline_data():
         for i in range(plink_data.n_snps)
     ]
 
-    jamma_results = run_lmm_association_jax(
+    run_result = run_lmm_association_jax(
         genotypes=plink_data.genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
@@ -199,6 +199,7 @@ def validation_pipeline_data():
         show_progress=False,
         check_memory=False,
     )
+    jamma_results = run_result.associations
 
     jax_tolerances = ToleranceConfig(lambda_rtol=5e-5)
     comparison = compare_assoc_results(

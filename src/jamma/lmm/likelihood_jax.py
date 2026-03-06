@@ -24,8 +24,7 @@ Type annotations use jaxtyping for shape documentation:
 
 from __future__ import annotations
 
-import functools
-from functools import partial
+from functools import lru_cache, partial
 from typing import TYPE_CHECKING
 
 import jax
@@ -39,7 +38,7 @@ from jamma.lmm.likelihood import (
 )
 
 
-@functools.lru_cache(maxsize=8)
+@lru_cache(maxsize=8)
 def classify_uab_columns(n_cvt: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
     """Classify Uab columns as invariant or SNP-varying.
 
@@ -69,6 +68,37 @@ def classify_uab_columns(n_cvt: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
 
 if TYPE_CHECKING:
     from jaxtyping import Array, Float
+
+
+def _prepare_general_split_inputs(
+    n_cvt: int,
+    eigenvalues,
+    Uab_batch,
+    Iab_batch,
+):
+    """Extract invariant/varying columns and precompute logdet_iab.
+
+    Shared setup for both grid REML and golden section general paths.
+    Factored out to avoid duplicating column extraction and logdet logic.
+
+    Returns:
+        (uab_invariant, uab_varying_batch, logdet_iab, df)
+    """
+    invariant_indices, varying_indices = classify_uab_columns(n_cvt)
+    inv_idx_arr = jnp.array(list(invariant_indices))
+    var_idx_arr = jnp.array(list(varying_indices))
+
+    uab_invariant = Uab_batch[0][:, inv_idx_arr]  # (n_samples, n_inv)
+    uab_varying_batch = Uab_batch[:, :, var_idx_arr]  # (n_snps, n_samples, n_var)
+
+    table = build_index_table(n_cvt)
+    logdet_iab = jnp.zeros(Uab_batch.shape[0], dtype=jnp.float64)
+    for row, col in table["logdet_diag_indices"]:
+        d_iab = Iab_batch[:, row, col]
+        logdet_iab = logdet_iab + jnp.where(d_iab > 0, jnp.log(d_iab), 0.0)
+
+    df = eigenvalues.shape[0] - n_cvt - 1
+    return uab_invariant, uab_varying_batch, logdet_iab, df
 
 
 @partial(jit, static_argnums=(0,))
@@ -672,24 +702,9 @@ def golden_section_optimize_lambda(
 
     else:
         # General n_cvt path: use split invariant/varying optimization
-        invariant_indices, varying_indices = classify_uab_columns(n_cvt)
-        inv_idx_arr = jnp.array(list(invariant_indices))
-        var_idx_arr = jnp.array(list(varying_indices))
-
-        # (n_samples, n_inv)
-        uab_invariant = Uab_batch[0, :, :][:, inv_idx_arr]
-        # (n_snps, n_samples, n_var)
-        uab_varying_batch_gs = Uab_batch[:, :, :][:, :, var_idx_arr]
-
-        n_samples = eigenvalues.shape[0]
-        df_gs = n_samples - n_cvt - 1
-        table_gs = build_index_table(n_cvt)
-
-        # Per-SNP logdet_iab (lambda-independent)
-        logdet_iab_gs = jnp.zeros(Uab_batch.shape[0], dtype=jnp.float64)
-        for row, col in table_gs["logdet_diag_indices"]:
-            d_iab = Iab_batch[:, row, col]
-            logdet_iab_gs = logdet_iab_gs + jnp.where(d_iab > 0, jnp.log(d_iab), 0.0)
+        uab_invariant, uab_varying_batch_gs, logdet_iab_gs, df_gs = (
+            _prepare_general_split_inputs(n_cvt, eigenvalues, Uab_batch, Iab_batch)
+        )
 
         def compute_reml_batch(log_lams):
             lams = jnp.exp(log_lams)
@@ -751,8 +766,7 @@ def _reml_general_split(
     n_index = table["n_index"]
     idx_yy = table["idx_yy"]
     nc_total = n_cvt + 1
-    invariant_indices = classify_uab_columns(n_cvt)[0]
-    varying_indices = classify_uab_columns(n_cvt)[1]
+    invariant_indices, varying_indices = classify_uab_columns(n_cvt)
 
     # Compute varying sums
     varying_sums = jnp.dot(Hi_eval, uab_varying)  # (n_varying,)
@@ -817,32 +831,16 @@ def _batch_grid_reml_general(
     Returns:
         Log-likelihoods (n_grid, n_snps).
     """
-    n_samples = eigenvalues.shape[0]
-    df = n_samples - n_cvt - 1
-    table = build_index_table(n_cvt)
-    invariant_indices, varying_indices = classify_uab_columns(n_cvt)
-
-    # Extract invariant Uab columns from SNP 0 (identical across all SNPs)
-    inv_idx_list = list(invariant_indices)
-    var_idx_list = list(varying_indices)
-    # (n_samples, n_inv)
-    uab_invariant = Uab_batch[0, :, :][:, jnp.array(inv_idx_list)]
-
-    # Extract varying Uab columns per SNP: (n_snps, n_samples, n_var)
-    uab_varying_batch = Uab_batch[:, :, :][:, :, jnp.array(var_idx_list)]
-
-    # Precompute per-SNP logdet_iab (lambda-independent)
-    logdet_iab_all = jnp.zeros(Uab_batch.shape[0], dtype=jnp.float64)
-    for row, col in table["logdet_diag_indices"]:
-        d_iab = Iab_batch[:, row, col]  # (n_snps,)
-        logdet_iab_all = logdet_iab_all + jnp.where(d_iab > 0, jnp.log(d_iab), 0.0)
+    uab_invariant, uab_varying_batch, logdet_iab_all, df = (
+        _prepare_general_split_inputs(n_cvt, eigenvalues, Uab_batch, Iab_batch)
+    )
 
     # Precompute per-lambda invariants
     def compute_lambda_invariants(lam):
         v_temp = lam * eigenvalues + 1.0
         Hi_eval = 1.0 / v_temp
         logdet_h = jnp.sum(jnp.log(jnp.abs(v_temp)))
-        inv_sums = jnp.dot(Hi_eval, uab_invariant)  # (n_inv,)
+        inv_sums = jnp.dot(Hi_eval, uab_invariant)
         return Hi_eval, inv_sums, logdet_h
 
     Hi_eval_grid, inv_sums_grid, logdet_h_grid = vmap(compute_lambda_invariants)(

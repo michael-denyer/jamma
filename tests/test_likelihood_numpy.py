@@ -1445,6 +1445,7 @@ def test_compute_wald_numpy_dispatches_split_ncvt1(compute_wald_data):
 
     with (
         patch.object(cn, "_C_ACCEL_AVAILABLE", False),
+        patch.object(cn, "_C_GENERAL_AVAILABLE", False),
         patch.object(
             cn, "golden_section_optimize_lambda_split_ncvt1_numpy", spy_split2
         ),

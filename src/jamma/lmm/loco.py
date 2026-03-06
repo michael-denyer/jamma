@@ -44,6 +44,8 @@ from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
 from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
     _compute_null_model_common,
+    compute_and_log_pve,
+    get_last_pve,
 )
 from jamma.lmm.results import (
     _yield_chunk_results,
@@ -793,6 +795,7 @@ def run_lmm_loco(
                 ksnps_indices=ksnps_indices,
             )
 
+        first_chr_pve: float | None = None
         for chr_idx, (chr_name, K_loco) in enumerate(loco_iter):
             chr_snp_indices = partitions[chr_name]
 
@@ -894,6 +897,12 @@ def run_lmm_loco(
             if writer is None:
                 all_results.extend(chr_results)
 
+            # Capture PVE from the first chromosome for pipeline reporting.
+            # Each chromosome recomputes PVE with its own K_loco; we report
+            # the first as a representative estimate.
+            if chr_idx == 0:
+                first_chr_pve = get_last_pve()
+
             # Free eigendecomp
             del eigenvalues_np, U
             gc.collect()
@@ -907,6 +916,12 @@ def run_lmm_loco(
 
         if writer is not None and show_progress:
             logger.info(f"Wrote {writer.count:,} results to {output_path}")
+
+    # Restore the first chromosome's PVE so get_last_pve() returns a
+    # representative value, not the last chromosome's (which may be atypical).
+    import jamma.lmm.prepare_common as _pve_mod
+
+    _pve_mod._last_pve = first_chr_pve  # noqa: SLF001
 
     if show_progress:
         elapsed = time.perf_counter() - start_time
@@ -1055,6 +1070,8 @@ def _run_lmm_for_chromosome(
         l_min=l_min,
         l_max=l_max,
     )
+
+    compute_and_log_pve(eigenvalues, UtW, Uty, n_cvt, l_min, l_max)
 
     eigenvalues_jax = jax.device_put(eigenvalues, placement.rep)
     UtW_jax = jax.device_put(UtW, placement.rep)
@@ -1346,6 +1363,8 @@ def _run_lmm_for_chromosome_numpy(
         l_min=l_min,
         l_max=l_max,
     )
+
+    compute_and_log_pve(eigenvalues, UtW, Uty, n_cvt, l_min, l_max)
 
     # Compute chunk size based on RAM budget
     chunk_size = _compute_chunk_size_numpy(n_samples, n_filtered, n_cvt)

@@ -242,15 +242,26 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 ## Performance
 
 Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2 (AC power), GEMMA 0.98.5.
-Best of multiple runs, end-to-end wall clock:
+Best-of runs, end-to-end wall clock:
 
-| Operation | GEMMA 0.98.5 | JAMMA NumPy+C | JAMMA JAX (batch) | JAMMA JAX (streaming) | vs GEMMA |
-|-----------|-------------|--------------|-------------------|----------------------|----------|
-| Kinship (`-gk 1`) | 2.1s | 259ms | 259ms | — | **8.1x** |
-| LMM Wald (`-lmm 1`) | 11.1s | 1.0s | 2.0s | 2.7s | **11.1x** |
-| LMM All (`-lmm 4`) | 20.6s | 5.1s | 2.8s | 4.3s | **7.3x** |
+| Operation | GEMMA 0.98.5 | JAMMA NumPy | JAMMA NumPy+C | JAMMA JAX (batch) | JAMMA JAX (streaming) | C speedup | vs GEMMA |
+|-----------|-------------|-------------|--------------|-------------------|----------------------|-----------|----------|
+| Kinship (`-gk 1`) | 2.2s | 268ms | 268ms | — | — | 1.0x | **8.3x** |
+| LMM Wald (`-lmm 1`) | 11.2s | 4.3s | 1.3s | 2.2s | 2.5s | 3.4x | **8.9x** |
+| LMM All (`-lmm 4`) | 20.7s | 8.0s | 5.9s | 3.2s | 4.2s | 1.4x | **6.6x** |
+| LMM Wald+4cov (`-lmm 1 -c`) | 41.4s | 12.5s | 5.5s | 4.2s | 5.4s | 2.3x | **9.8x** |
 
-**NumPy+C** uses a C extension with OpenMP for Wald-only (`-lmm 1`) — REML optimization is compute-bound and parallelizes well across SNPs. **JAX (batch)** pulls ahead on all-tests (`-lmm 4`) because the additional MLE optimization per SNP benefits from `jax.vmap` batching. **JAX (streaming)** reads genotypes from disk in chunks and is the production code path for large datasets that don't fit in memory.
+**NumPy+C** uses a C extension with OpenMP for Wald (`-lmm 1`) — REML optimization is compute-bound and parallelizes well across SNPs. The C speedup grows with covariates (2.3x with 4 covariates) because the Pab table recursion is more expensive. **JAX (batch)** pulls ahead on all-tests (`-lmm 4`) because the additional MLE optimization per SNP benefits from `jax.vmap` batching. **JAX (streaming)** reads genotypes from disk in chunks and is the production code path for large datasets that don't fit in memory. Kinship is always pure NumPy/BLAS regardless of backend.
+
+### LOCO (Leave-One-Chromosome-Out)
+
+| Backend | LOCO Wald | vs GEMMA |
+|---------|-----------|----------|
+| GEMMA 0.98.5 | 3m44s | 1.0x |
+| JAMMA NumPy+C | **9.0s** | **24.9x** |
+| JAMMA JAX | 13.8s | 16.3x |
+
+The large speedup has two sources: (1) JAMMA computes per-chromosome LOCO kinship via streaming and tests only that chromosome's SNPs, while GEMMA `-loco` tests *all* SNPs against each LOCO kinship (19× redundant work on 19 chromosomes); (2) JAMMA runs all chromosomes in a single process, avoiding 19 cold-start overheads. On this dataset, NumPy+C is faster than JAX because the JIT compilation overhead per chromosome outweighs XLA's compute benefit at 1,940 samples.
 
 ## Supported Features
 

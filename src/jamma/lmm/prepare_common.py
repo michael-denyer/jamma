@@ -16,7 +16,7 @@ from loguru import logger
 
 from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.lmm.eigen import eigendecompose_kinship
-from jamma.lmm.likelihood import compute_null_model_mle
+from jamma.lmm.likelihood import compute_null_model_lambda, compute_null_model_mle
 from jamma.utils.logging import log_rss_memory
 
 
@@ -315,3 +315,65 @@ def _compute_null_model_common(
         Hi_eval_null_np = 1.0 / (lambda_null_mle * eigenvalues_np + 1.0)
 
     return logl_H0, lambda_null_mle, Hi_eval_null_np
+
+
+_last_pve: float | None = None
+
+
+def get_last_pve() -> float | None:
+    """Return the PVE from the most recent compute_and_log_pve() call.
+
+    Warning: this is module-level global state. In LOCO workflows, the value
+    reflects the last chromosome processed, not a full-genome estimate.
+    Prefer using the return value of compute_and_log_pve() directly.
+    Not thread-safe — do not call from concurrent runners.
+    """
+    return _last_pve
+
+
+def reset_last_pve() -> None:
+    """Clear the cached PVE value to prevent stale reads."""
+    global _last_pve
+    _last_pve = None
+
+
+def compute_and_log_pve(
+    eigenvalues_np: np.ndarray,
+    UtW: np.ndarray,
+    Uty: np.ndarray,
+    n_cvt: int,
+    l_min: float = 1e-5,
+    l_max: float = 1e5,
+) -> float:
+    """Compute PVE (proportion of variance explained) from null model REML lambda.
+
+    PVE = lambda * trace(K) / (lambda * trace(K) + n), where lambda = vg/ve
+    is the REML estimate under the null model (no genotype effect) and
+    trace(K) = sum(eigenvalues). This trace-adjusted formula matches GEMMA's
+    CalcPve which accounts for kinship matrices whose trace != n.
+
+    Called by all LMM runners after eigendecomp + rotation, regardless of
+    lmm_mode. The REML null lambda optimization is cheap (single golden
+    section search, ~20 iterations).
+
+    Args:
+        eigenvalues_np: Kinship eigenvalues as numpy array.
+        UtW: Rotated covariates (n_samples, n_cvt).
+        Uty: Rotated phenotype (n_samples,).
+        n_cvt: Number of covariates.
+        l_min: Minimum lambda for optimization.
+        l_max: Maximum lambda for optimization.
+
+    Returns:
+        PVE estimate (float between 0 and 1).
+    """
+    lambda_remle, _logl = compute_null_model_lambda(
+        eigenvalues_np, UtW, Uty, n_cvt, l_min=l_min, l_max=l_max
+    )
+    trace_K = float(np.sum(eigenvalues_np))
+    n = len(eigenvalues_np)
+    global _last_pve
+    pve = lambda_remle * trace_K / (lambda_remle * trace_K + n)
+    _last_pve = pve
+    logger.info(f"pve estimate in the null model = {pve:.6f}")
+    return pve

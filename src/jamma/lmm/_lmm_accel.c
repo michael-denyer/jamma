@@ -1,13 +1,17 @@
 /*
  * _lmm_accel.c — C extension implementing the per-SNP REML Wald pipeline
- * for n_cvt=1 (intercept only).
+ * for n_cvt=1 and general n_cvt.
  *
- * Exported functions: compute_lmm_batch_c, compute_lmm_batch_split_c
+ * Exported functions: compute_lmm_batch_c, compute_lmm_batch_split_c,
+ *                     create_workspace_split_c, compute_lmm_chunk_split_c,
+ *                     create_workspace_general_c, compute_lmm_chunk_general_c
  *
  * Translates the Python/NumPy golden-section REML optimizer + Wald test
  * (likelihood_numpy.py) to C with optional OpenMP parallelism over SNPs.
  *
- * Performance optimizations over the naive per-call approach:
+ * Performance optimizations over the naive per-call approach (n_cvt=1 path;
+ * the general n_cvt path uses table-driven recursion with cached invariant
+ * dot products — see "GENERAL n_cvt support" section below):
  *   1. Fused Pab: single pass over n_samples accumulates all 6 dot products
  *   2. Thread-local hi_eval: one malloc per worker thread, reused across SNPs
  *   3. Pre-computed logdet_iab: lambda-independent log(iab) terms computed once
@@ -54,6 +58,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -64,7 +69,7 @@
 
 /* ABI version: bump when function signatures or array layout expectations change.
  * The Python side checks this at import time to detect stale .so files. */
-#define ABI_VERSION 3  /* v3: workspace API, internal Iab, static OpenMP schedule */
+#define ABI_VERSION 4  /* v4: general n_cvt support (workspace + compute) */
 
 /* Betainc continued fraction constants — matches special.py */
 #define CF_TINY     1.0e-30
@@ -1393,6 +1398,1013 @@ err_input:
 }
 
 /* =========================================================================
+ * GENERAL n_cvt support — table-driven Pab recursion for arbitrary covariates
+ *
+ * Adds new workspace type (lmm_workspace_general_t) and entry points
+ * (create_workspace_general_c, compute_lmm_chunk_general_c) that accept
+ * n_cvt as a parameter. The existing n_cvt=1 code path is unchanged.
+ *
+ * Key design: Python builds the recursion table (via build_pab_table_for_c)
+ * and passes flat int32 arrays. C code just walks the table — no index
+ * computation in C.
+ *
+ * Memory: Per-SNP Pab uses stack buffers (MAX_N_CVT=20 -> MAX_PAB_SIZE=5566
+ * doubles = ~44KB, well within 1MB+ thread stacks).
+ * ========================================================================= */
+
+#define MAX_N_CVT   20
+#define MAX_N_INDEX ((MAX_N_CVT + 3) * (MAX_N_CVT + 2) / 2)  /* 253 for n_cvt=20 */
+#define MAX_N_ROWS  (MAX_N_CVT + 2)                           /* 22 */
+#define MAX_PAB_SIZE (MAX_N_ROWS * MAX_N_INDEX)                /* 5566 */
+
+typedef struct {
+    int index_ab, index_aw, index_bw, index_ww;
+} pab_entry_t;
+
+typedef struct {
+    int n_cvt, n_index, n_rows, n_inv, n_var;
+    int idx_xx, idx_xy, idx_yy;
+    int df;  /* n_samples - n_cvt - 1 */
+    int *invariant_indices;  /* (n_inv,) */
+    int *varying_indices;    /* (n_var,) */
+    int *logdet_diag_rows;   /* (n_cvt+1,) */
+    int *logdet_diag_cols;   /* (n_cvt+1,) */
+    int *level_offsets;      /* (n_rows,) — offset into entries per level */
+    int *level_counts;       /* (n_rows,) — count per level */
+    pab_entry_t *entries;    /* all entries concatenated */
+    int n_entries;
+} pab_table_t;
+
+/* -------------------------------------------------------------------------
+ * calc_pab_general — Table-driven Pab recursion for arbitrary n_cvt.
+ *
+ * Row 0 from row0 array (dot product sums), rows 1..n_rows-1 from entries.
+ * Output in pab[n_rows * n_index], row-major.
+ * ------------------------------------------------------------------------- */
+static void calc_pab_general(
+    const double *row0,
+    const pab_table_t *t,
+    double *pab
+)
+{
+    int ni = t->n_index;
+    /* Copy row 0 */
+    for (int i = 0; i < ni; i++) pab[i] = row0[i];
+
+    /* Recursive projection: rows 1..n_rows-1 */
+    for (int p = 1; p < t->n_rows; p++) {
+        int offset = t->level_offsets[p];
+        int count  = t->level_counts[p];
+        for (int e = 0; e < count; e++) {
+            const pab_entry_t *re = &t->entries[offset + e];
+            double ps_ww = pab[(p - 1) * ni + re->index_ww];
+            /* Match n_cvt=1 paths: zero projection when divisor is zero,
+             * so Px_YY < 0 guard in wald_from_pab catches degeneracy. */
+            double inv_ww = (ps_ww != 0.0) ? 1.0 / ps_ww : 0.0;
+            pab[p * ni + re->index_ab] =
+                pab[(p - 1) * ni + re->index_ab]
+                - pab[(p - 1) * ni + re->index_aw]
+                * pab[(p - 1) * ni + re->index_bw]
+                * inv_ww;
+        }
+    }
+}
+
+/* -------------------------------------------------------------------------
+ * reml_finish_general — REML tail for general n_cvt.
+ *
+ * logdet_pab from logdet_diag entries, P_yy guard, return full REML formula
+ * including logdet_h.
+ * ------------------------------------------------------------------------- */
+static double reml_finish_general(
+    const double *pab,
+    const pab_table_t *t,
+    double logdet_h,
+    double logdet_iab,
+    double reml_const
+)
+{
+    int ni = t->n_index;
+    int df = t->df;
+
+    /* logdet_pab from diagonal entries.  A non-positive diagonal means the
+     * projected matrix is not positive-definite — return NaN so the REML
+     * sentinel mechanism correctly flags this as degenerate. */
+    double logdet_pab = 0.0;
+    for (int d = 0; d < t->n_cvt + 1; d++) {
+        double val = pab[t->logdet_diag_rows[d] * ni + t->logdet_diag_cols[d]];
+        if (val <= 0.0) return (double)NAN;
+        logdet_pab += log(val);
+    }
+    double logdet_hiw = logdet_pab - logdet_iab;
+
+    /* P_yy guard */
+    int nc_total = t->n_cvt + 1;
+    double P_yy = pab[nc_total * ni + t->idx_yy];
+    if (P_yy < 0.0) {
+        P_yy = (double)NAN;
+    } else if (P_yy < P_YY_MIN) {
+        P_yy = P_YY_MIN;
+    }
+
+    return reml_const - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * log(P_yy);
+}
+
+/* -------------------------------------------------------------------------
+ * reml_logl_general_cached — REML using cached grid hi_eval + invariant sums.
+ *
+ * For cached grid points: invariant sums already computed, just compute
+ * varying dot products, reconstruct row0, calc_pab, reml_finish.
+ * ------------------------------------------------------------------------- */
+static double reml_logl_general_cached(
+    const double *inv_sums_cached,
+    const double *uab_var,
+    const double *hi_eval,
+    int n_samples,
+    double logdet_h,
+    double logdet_iab,
+    double reml_const,
+    const pab_table_t *t
+)
+{
+    int ni = t->n_index;
+    int n_var = t->n_var;
+
+    /* Compute varying dot products */
+    double var_sums[MAX_N_INDEX];
+    for (int c = 0; c < n_var; c++) var_sums[c] = 0.0;
+
+    for (int i = 0; i < n_samples; i++) {
+        double h = hi_eval[i];
+        for (int c = 0; c < n_var; c++)
+            var_sums[c] += h * uab_var[c * n_samples + i];
+    }
+
+    /* Reconstruct row 0 */
+    double row0[MAX_N_INDEX];
+    for (int i = 0; i < ni; i++) row0[i] = 0.0;
+    for (int c = 0; c < t->n_inv; c++)
+        row0[t->invariant_indices[c]] = inv_sums_cached[c];
+    for (int c = 0; c < n_var; c++)
+        row0[t->varying_indices[c]] = var_sums[c];
+
+    /* Full Pab via recursion */
+    double pab[MAX_PAB_SIZE];
+    calc_pab_general(row0, t, pab);
+
+    return reml_finish_general(pab, t, logdet_h, logdet_iab, reml_const);
+}
+
+/* -------------------------------------------------------------------------
+ * reml_logl_general_fresh — Full REML evaluation for a specific lambda.
+ *
+ * Computes hi_eval + logdet_h + all dot products in single n_samples pass
+ * (fused loop), then calc_pab + reml_finish.
+ * Used during golden section refinement where lambda is SNP-specific.
+ * ------------------------------------------------------------------------- */
+static double reml_logl_general_fresh(
+    const double *uab_inv,
+    const double *uab_var,
+    const double *eigenvalues,
+    int n_samples,
+    double lambda,
+    double logdet_iab,
+    double reml_const,
+    const pab_table_t *t
+)
+{
+    int ni = t->n_index;
+    int n_inv = t->n_inv;
+    int n_var = t->n_var;
+
+    double logdet_h = 0.0;
+    double inv_sums[MAX_N_INDEX];
+    double var_sums[MAX_N_INDEX];
+    for (int c = 0; c < n_inv; c++) inv_sums[c] = 0.0;
+    for (int c = 0; c < n_var; c++) var_sums[c] = 0.0;
+
+    for (int i = 0; i < n_samples; i++) {
+        double v = lambda * eigenvalues[i] + 1.0;
+        double h = 1.0 / v;
+        logdet_h += log(v);
+        for (int c = 0; c < n_inv; c++)
+            inv_sums[c] += h * uab_inv[c * n_samples + i];
+        for (int c = 0; c < n_var; c++)
+            var_sums[c] += h * uab_var[c * n_samples + i];
+    }
+
+    /* Reconstruct row 0 */
+    double row0[MAX_N_INDEX];
+    for (int i = 0; i < ni; i++) row0[i] = 0.0;
+    for (int c = 0; c < n_inv; c++)
+        row0[t->invariant_indices[c]] = inv_sums[c];
+    for (int c = 0; c < n_var; c++)
+        row0[t->varying_indices[c]] = var_sums[c];
+
+    /* Full Pab via recursion */
+    double pab[MAX_PAB_SIZE];
+    calc_pab_general(row0, t, pab);
+
+    return reml_finish_general(pab, t, logdet_h, logdet_iab, reml_const);
+}
+
+/* -------------------------------------------------------------------------
+ * wald_from_pab_general — Extract Wald stats from general-n_cvt Pab.
+ *
+ * P_XX = Pab[n_cvt, idx_xx], P_XY = Pab[n_cvt, idx_xy],
+ * P_YY = Pab[n_cvt, idx_yy] (pre-genotype-projection),
+ * Px_YY = Pab[n_cvt+1, idx_yy] (fully projected).
+ * Same Wald formula as existing wald_from_pab.
+ * Returns 1 if valid, 0 if degenerate.
+ * ------------------------------------------------------------------------- */
+static int wald_from_pab_general(
+    const double *pab,
+    const pab_table_t *t,
+    double *beta_out, double *se_out, double *f_stat_out
+)
+{
+    int ni = t->n_index;
+    int df = t->df;
+    int nc = t->n_cvt;
+
+    double P_XX  = pab[nc * ni + t->idx_xx];
+    double P_XY  = pab[nc * ni + t->idx_xy];
+    double P_YY  = pab[nc * ni + t->idx_yy];
+    double Px_YY = pab[(nc + 1) * ni + t->idx_yy];
+
+    if (Px_YY < 0.0) {
+        *beta_out = *se_out = *f_stat_out = (double)NAN;
+        return 0;
+    }
+    if (Px_YY < P_YY_MIN) Px_YY = P_YY_MIN;
+
+    if (P_XX <= 0.0) {
+        *beta_out = *se_out = *f_stat_out = (double)NAN;
+        return 0;
+    }
+
+    double beta = P_XY / P_XX;
+    double tau = (double)df / Px_YY;
+    double variance_beta = 1.0 / (tau * P_XX);
+    double variance_safe = (fabs(variance_beta) < 0.001)
+                            ? fabs(variance_beta)
+                            : variance_beta;
+    double se = sqrt(variance_safe);
+    double f_stat = (P_YY - Px_YY) * tau;
+
+    *beta_out   = beta;
+    *se_out     = se;
+    *f_stat_out = f_stat;
+
+    if (!isfinite(f_stat) || !isfinite(beta) || !isfinite(se))
+        return 0;
+
+    return 1;
+}
+
+/* -------------------------------------------------------------------------
+ * golden_section_lambda_general — Grid + golden section for general n_cvt.
+ *
+ * Mirrors golden_section_lambda_ncvt1_split() structure. Grid phase uses
+ * precomputed hi_eval + invariant sums; refinement uses fresh evaluation.
+ * At optimal lambda, computes full Pab and returns it + Wald stats.
+ * ------------------------------------------------------------------------- */
+static double golden_section_lambda_general(
+    const double *uab_inv,
+    const double *uab_var,
+    const double *eigenvalues,
+    int n_samples,
+    const double *lambda_grid,
+    const double *hi_eval_grid,
+    const double *logdet_h_grid,
+    const double *inv_sums_grid,    /* (n_grid, n_inv) */
+    double log_l_min, double step,
+    int n_grid, int n_refine,
+    double logdet_iab,
+    double reml_const,
+    const pab_table_t *t,
+    double *logl_out,
+    double *beta_out, double *se_out, double *f_stat_out,
+    int *is_valid_out
+)
+{
+    const double phi = 0.6180339887498949;
+    int n_inv = t->n_inv;
+
+    /* Stage 1: coarse grid search using cached invariant sums */
+    double best_logl = REML_SENTINEL;
+    int best_idx = 0;
+    for (int g = 0; g < n_grid; g++) {
+        double logl = reml_logl_general_cached(
+            inv_sums_grid + (size_t)g * n_inv,
+            uab_var,
+            hi_eval_grid + (size_t)g * n_samples,
+            n_samples,
+            logdet_h_grid[g],
+            logdet_iab,
+            reml_const,
+            t
+        );
+        if (isnan(logl)) logl = REML_SENTINEL;
+        if (logl > best_logl) {
+            best_logl = logl;
+            best_idx = g;
+        }
+    }
+
+    /* Fully degenerate SNP */
+    if (best_logl == REML_SENTINEL) {
+        *logl_out    = (double)NAN;
+        *beta_out    = (double)NAN;
+        *se_out      = (double)NAN;
+        *f_stat_out  = (double)NAN;
+        *is_valid_out = 0;
+        return lambda_grid[0];
+    }
+
+    /* Bracket around best grid point */
+    int idx_low  = (best_idx > 0) ? best_idx - 1 : 0;
+    int idx_high = (best_idx < n_grid - 1) ? best_idx + 1 : n_grid - 1;
+    double a = log_l_min + idx_low * step;
+    double b = log_l_min + idx_high * step;
+
+    /* Stage 2: golden section refinement (fresh evaluation) */
+    double c = b - phi * (b - a);
+    double d = a + phi * (b - a);
+    double fc = reml_logl_general_fresh(
+        uab_inv, uab_var, eigenvalues, n_samples, exp(c),
+        logdet_iab, reml_const, t);
+    double fd = reml_logl_general_fresh(
+        uab_inv, uab_var, eigenvalues, n_samples, exp(d),
+        logdet_iab, reml_const, t);
+
+    for (int iter = 0; iter < n_refine; iter++) {
+        if (fc > fd) {
+            b = d; d = c; fd = fc;
+            c = b - phi * (b - a);
+            fc = reml_logl_general_fresh(
+                uab_inv, uab_var, eigenvalues, n_samples, exp(c),
+                logdet_iab, reml_const, t);
+        } else {
+            a = c; c = d; fc = fd;
+            d = a + phi * (b - a);
+            fd = reml_logl_general_fresh(
+                uab_inv, uab_var, eigenvalues, n_samples, exp(d),
+                logdet_iab, reml_const, t);
+        }
+    }
+
+    double log_opt = (a + b) / 2.0;
+    double lambda_opt = exp(log_opt);
+
+    /* Final: compute REML logl + Pab at optimal lambda for Wald extraction */
+    {
+        int ni = t->n_index;
+        int n_var = t->n_var;
+
+        double logdet_h = 0.0;
+        double inv_sums_final[MAX_N_INDEX];
+        double var_sums_final[MAX_N_INDEX];
+        for (int cc = 0; cc < n_inv; cc++) inv_sums_final[cc] = 0.0;
+        for (int cc = 0; cc < n_var; cc++) var_sums_final[cc] = 0.0;
+
+        for (int i = 0; i < n_samples; i++) {
+            double v = lambda_opt * eigenvalues[i] + 1.0;
+            double h = 1.0 / v;
+            logdet_h += log(v);
+            for (int cc = 0; cc < n_inv; cc++)
+                inv_sums_final[cc] += h * uab_inv[cc * n_samples + i];
+            for (int cc = 0; cc < n_var; cc++)
+                var_sums_final[cc] += h * uab_var[cc * n_samples + i];
+        }
+
+        double row0[MAX_N_INDEX];
+        for (int i = 0; i < ni; i++) row0[i] = 0.0;
+        for (int cc = 0; cc < n_inv; cc++)
+            row0[t->invariant_indices[cc]] = inv_sums_final[cc];
+        for (int cc = 0; cc < n_var; cc++)
+            row0[t->varying_indices[cc]] = var_sums_final[cc];
+
+        double pab[MAX_PAB_SIZE];
+        calc_pab_general(row0, t, pab);
+
+        *logl_out = reml_finish_general(pab, t, logdet_h, logdet_iab, reml_const);
+        *is_valid_out = wald_from_pab_general(
+            pab, t, beta_out, se_out, f_stat_out);
+    }
+
+    return lambda_opt;
+}
+
+/* -------------------------------------------------------------------------
+ * General workspace struct — persistent cross-chunk state for n_cvt >= 1
+ * ------------------------------------------------------------------------- */
+typedef struct {
+    /* Grid precomputed */
+    double *lambda_grid;    /* (n_grid,) */
+    double *hi_eval_grid;   /* (n_grid * n_samples) */
+    double *logdet_h_grid;  /* (n_grid,) */
+    double *inv_sums_grid;  /* (n_grid * n_inv) — precomputed invariant dot products */
+    /* Fixed params */
+    double *eigenvalues;    /* (n_samples,) — owned copy */
+    double reml_const;
+    int n_samples, n_grid, n_refine;
+    /* Table (owned copy of indices) */
+    pab_table_t table;
+    /* Iab: invariant identity sums (precomputed, reused per-SNP) */
+    double *inv_identity_sums;  /* (n_inv,) — sum of each invariant column at identity */
+    /* F-distribution */
+    double lbeta_ab;
+    double beta_a, beta_b;
+    /* Invariant SoA (reference, not owned — Python holds the array) */
+    const double *uab_inv;
+    PyObject *uab_inv_ref;      /* keeps uab_invariant_soa array alive */
+} lmm_workspace_general_t;
+
+/* PyCapsule destructor for general workspace */
+static void lmm_workspace_general_destructor(PyObject *cap)
+{
+    lmm_workspace_general_t *ws =
+        (lmm_workspace_general_t *)PyCapsule_GetPointer(cap, "lmm_workspace_general");
+    if (!ws) return;
+    free(ws->lambda_grid);
+    free(ws->hi_eval_grid);
+    free(ws->logdet_h_grid);
+    free(ws->inv_sums_grid);
+    free(ws->eigenvalues);
+    free(ws->inv_identity_sums);
+    free(ws->table.invariant_indices);
+    free(ws->table.varying_indices);
+    free(ws->table.logdet_diag_rows);
+    free(ws->table.logdet_diag_cols);
+    free(ws->table.level_offsets);
+    free(ws->table.level_counts);
+    free(ws->table.entries);
+    Py_XDECREF(ws->uab_inv_ref);
+    free(ws);
+}
+
+/* Helper: parse int32 array from Python object, return malloced copy (caller frees) */
+static int *parse_int32_array(PyObject *obj, int expected_len, const char *name)
+{
+    PyArrayObject *arr = (PyArrayObject *)PyArray_FROM_OTF(
+        obj, NPY_INT32, NPY_ARRAY_C_CONTIGUOUS);
+    if (!arr) return NULL;
+    if (PyArray_SIZE(arr) != expected_len) {
+        PyErr_Format(PyExc_ValueError, "%s must have %d elements", name, expected_len);
+        Py_DECREF(arr);
+        return NULL;
+    }
+    int *copy = (int *)malloc((size_t)expected_len * sizeof(int));
+    if (!copy) { Py_DECREF(arr); PyErr_NoMemory(); return NULL; }
+    memcpy(copy, PyArray_DATA(arr), (size_t)expected_len * sizeof(int));
+    Py_DECREF(arr);
+    return copy;
+}
+
+/* -------------------------------------------------------------------------
+ * create_workspace_general_c
+ *
+ * Python signature:
+ *   create_workspace_general_c(
+ *       eigenvalues,      # (n_samples,) float64
+ *       uab_invariant,    # (n_inv, n_samples) float64 — SoA
+ *       n_samples,        # int
+ *       l_min, l_max,     # float
+ *       n_grid, n_refine, n_threads,  # int
+ *       n_cvt,            # int
+ *       invariant_indices, varying_indices,    # (n_inv,) / (n_var,) int32
+ *       logdet_diag_rows, logdet_diag_cols,    # (n_cvt+1,) int32
+ *       level_offsets, level_counts,           # (n_rows,) int32
+ *       entries,           # (n_entries * 4,) int32 stride-4 flat
+ *       idx_xx, idx_xy, idx_yy,  # int
+ *   ) -> PyCapsule wrapping lmm_workspace_general_t
+ * ------------------------------------------------------------------------- */
+static PyObject *create_workspace_general_c_py(
+    PyObject *self, PyObject *args, PyObject *kwargs)
+{
+    static const char *kwlist[] = {
+        "eigenvalues", "uab_invariant", "n_samples",
+        "l_min", "l_max", "n_grid", "n_refine", "n_threads",
+        "n_cvt",
+        "invariant_indices", "varying_indices",
+        "logdet_diag_rows", "logdet_diag_cols",
+        "level_offsets", "level_counts", "entries",
+        "idx_xx", "idx_xy", "idx_yy",
+        NULL
+    };
+
+    PyObject *eigenvalues_obj, *uab_inv_obj;
+    PyObject *inv_idx_obj, *var_idx_obj;
+    PyObject *diag_rows_obj, *diag_cols_obj;
+    PyObject *offsets_obj, *counts_obj, *entries_obj;
+    int n_samples, n_grid, n_refine, n_threads, n_cvt;
+    int idx_xx, idx_xy, idx_yy;
+    double l_min, l_max;
+
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwargs, "OOiddiiiiOOOOOOOiii", (char **)kwlist,
+            &eigenvalues_obj, &uab_inv_obj,
+            &n_samples, &l_min, &l_max, &n_grid, &n_refine, &n_threads,
+            &n_cvt,
+            &inv_idx_obj, &var_idx_obj,
+            &diag_rows_obj, &diag_cols_obj,
+            &offsets_obj, &counts_obj, &entries_obj,
+            &idx_xx, &idx_xy, &idx_yy)) {
+        return NULL;
+    }
+
+    if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
+        return NULL;
+    if (n_cvt < 1 || n_cvt > MAX_N_CVT) {
+        PyErr_Format(PyExc_ValueError,
+            "n_cvt must be 1..%d, got %d", MAX_N_CVT, n_cvt);
+        return NULL;
+    }
+
+    int n_index = (n_cvt + 3) * (n_cvt + 2) / 2;
+    int n_rows  = n_cvt + 2;
+
+    /* Parse invariant_indices to determine n_inv */
+    PyArrayObject *inv_idx_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        inv_idx_obj, NPY_INT32, NPY_ARRAY_C_CONTIGUOUS);
+    if (!inv_idx_arr) return NULL;
+    int n_inv = (int)PyArray_SIZE(inv_idx_arr);
+    Py_DECREF(inv_idx_arr);
+
+    PyArrayObject *var_idx_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        var_idx_obj, NPY_INT32, NPY_ARRAY_C_CONTIGUOUS);
+    if (!var_idx_arr) return NULL;
+    int n_var = (int)PyArray_SIZE(var_idx_arr);
+    Py_DECREF(var_idx_arr);
+
+    if (n_inv + n_var != n_index) {
+        PyErr_Format(PyExc_ValueError,
+            "n_inv (%d) + n_var (%d) != n_index (%d)", n_inv, n_var, n_index);
+        return NULL;
+    }
+
+    /* Parse entries to get total count */
+    PyArrayObject *entries_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        entries_obj, NPY_INT32, NPY_ARRAY_C_CONTIGUOUS);
+    if (!entries_arr) return NULL;
+    int entries_len = (int)PyArray_SIZE(entries_arr);
+    Py_DECREF(entries_arr);
+    if (entries_len % 4 != 0) {
+        PyErr_Format(PyExc_ValueError,
+            "entries length (%d) not a multiple of 4", entries_len);
+        return NULL;
+    }
+    int n_entries = entries_len / 4;
+
+    /* Convert eigenvalues and uab_invariant */
+    PyArrayObject *eigenvalues_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        eigenvalues_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!eigenvalues_arr) return NULL;
+
+    if (PyArray_NDIM(eigenvalues_arr) != 1 ||
+        PyArray_DIM(eigenvalues_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError, "eigenvalues must be shape (n_samples,)");
+        Py_DECREF(eigenvalues_arr);
+        return NULL;
+    }
+    if (validate_eigenvalues(
+            (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0) {
+        Py_DECREF(eigenvalues_arr);
+        return NULL;
+    }
+
+    PyArrayObject *uab_inv_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        uab_inv_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!uab_inv_arr) { Py_DECREF(eigenvalues_arr); return NULL; }
+
+    if (PyArray_NDIM(uab_inv_arr) != 2 ||
+        PyArray_DIM(uab_inv_arr, 0) != n_inv ||
+        PyArray_DIM(uab_inv_arr, 1) != n_samples) {
+        PyErr_Format(PyExc_ValueError,
+            "uab_invariant must be shape (%d, %d)", n_inv, n_samples);
+        Py_DECREF(eigenvalues_arr);
+        Py_DECREF(uab_inv_arr);
+        return NULL;
+    }
+
+    /* Allocate workspace */
+    lmm_workspace_general_t *ws = (lmm_workspace_general_t *)calloc(
+        1, sizeof(lmm_workspace_general_t));
+    if (!ws) {
+        PyErr_NoMemory();
+        Py_DECREF(eigenvalues_arr);
+        Py_DECREF(uab_inv_arr);
+        return NULL;
+    }
+
+    ws->n_samples = n_samples;
+    ws->n_grid = n_grid;
+    ws->n_refine = n_refine;
+
+    /* Fill table */
+    ws->table.n_cvt = n_cvt;
+    ws->table.n_index = n_index;
+    ws->table.n_rows = n_rows;
+    ws->table.n_inv = n_inv;
+    ws->table.n_var = n_var;
+    ws->table.idx_xx = idx_xx;
+    ws->table.idx_xy = idx_xy;
+    ws->table.idx_yy = idx_yy;
+    ws->table.df = n_samples - n_cvt - 1;
+    ws->table.n_entries = n_entries;
+
+    /* Parse index arrays into owned copies — check each immediately to
+     * avoid calling Python/C API with a live exception set. */
+    ws->table.invariant_indices = parse_int32_array(inv_idx_obj, n_inv, "invariant_indices");
+    if (!ws->table.invariant_indices) goto err_ws;
+    ws->table.varying_indices   = parse_int32_array(var_idx_obj, n_var, "varying_indices");
+    if (!ws->table.varying_indices) goto err_ws;
+    ws->table.logdet_diag_rows  = parse_int32_array(diag_rows_obj, n_cvt + 1, "logdet_diag_rows");
+    if (!ws->table.logdet_diag_rows) goto err_ws;
+    ws->table.logdet_diag_cols  = parse_int32_array(diag_cols_obj, n_cvt + 1, "logdet_diag_cols");
+    if (!ws->table.logdet_diag_cols) goto err_ws;
+    ws->table.level_offsets     = parse_int32_array(offsets_obj, n_rows, "level_offsets");
+    if (!ws->table.level_offsets) goto err_ws;
+    ws->table.level_counts      = parse_int32_array(counts_obj, n_rows, "level_counts");
+    if (!ws->table.level_counts) goto err_ws;
+
+    /* Parse entries (stride-4) into pab_entry_t array */
+    {
+        int *raw_entries = parse_int32_array(entries_obj, n_entries * 4, "entries");
+        if (!raw_entries) goto err_ws;
+        ws->table.entries = (pab_entry_t *)malloc(
+            (size_t)n_entries * sizeof(pab_entry_t));
+        if (!ws->table.entries) {
+            free(raw_entries);
+            PyErr_NoMemory();
+            goto err_ws;
+        }
+        for (int i = 0; i < n_entries; i++) {
+            ws->table.entries[i].index_ab = raw_entries[i * 4 + 0];
+            ws->table.entries[i].index_aw = raw_entries[i * 4 + 1];
+            ws->table.entries[i].index_bw = raw_entries[i * 4 + 2];
+            ws->table.entries[i].index_ww = raw_entries[i * 4 + 3];
+        }
+        free(raw_entries);
+    }
+
+    /* Validate all table indices are within [0, n_index) to prevent
+     * out-of-bounds access in the OpenMP parallel loop. A bug in
+     * build_pab_table_for_c() or a stale @lru_cache entry could produce
+     * invalid indices that corrupt stack buffers silently. */
+    for (int i = 0; i < n_inv; i++) {
+        if (ws->table.invariant_indices[i] < 0 ||
+            ws->table.invariant_indices[i] >= n_index) {
+            PyErr_Format(PyExc_ValueError,
+                "invariant_indices[%d] = %d out of range [0, %d)",
+                i, ws->table.invariant_indices[i], n_index);
+            goto err_ws;
+        }
+    }
+    for (int i = 0; i < n_var; i++) {
+        if (ws->table.varying_indices[i] < 0 ||
+            ws->table.varying_indices[i] >= n_index) {
+            PyErr_Format(PyExc_ValueError,
+                "varying_indices[%d] = %d out of range [0, %d)",
+                i, ws->table.varying_indices[i], n_index);
+            goto err_ws;
+        }
+    }
+    for (int d = 0; d < n_cvt + 1; d++) {
+        if (ws->table.logdet_diag_rows[d] < 0 ||
+            ws->table.logdet_diag_rows[d] >= n_rows) {
+            PyErr_Format(PyExc_ValueError,
+                "logdet_diag_rows[%d] = %d out of range [0, %d)",
+                d, ws->table.logdet_diag_rows[d], n_rows);
+            goto err_ws;
+        }
+        if (ws->table.logdet_diag_cols[d] < 0 ||
+            ws->table.logdet_diag_cols[d] >= n_index) {
+            PyErr_Format(PyExc_ValueError,
+                "logdet_diag_cols[%d] = %d out of range [0, %d)",
+                d, ws->table.logdet_diag_cols[d], n_index);
+            goto err_ws;
+        }
+    }
+    /* Validate level_offsets + level_counts don't exceed n_entries */
+    for (int p = 0; p < n_rows; p++) {
+        if (ws->table.level_offsets[p] < 0 ||
+            ws->table.level_counts[p] < 0 ||
+            (int64_t)ws->table.level_offsets[p] + ws->table.level_counts[p] > n_entries) {
+            PyErr_Format(PyExc_ValueError,
+                "level_offsets[%d]=%d + level_counts[%d]=%d exceeds n_entries=%d",
+                p, ws->table.level_offsets[p], p, ws->table.level_counts[p], n_entries);
+            goto err_ws;
+        }
+    }
+    if (idx_xx < 0 || idx_xx >= n_index ||
+        idx_xy < 0 || idx_xy >= n_index ||
+        idx_yy < 0 || idx_yy >= n_index) {
+        PyErr_SetString(PyExc_ValueError, "idx_xx/xy/yy out of range [0, n_index)");
+        goto err_ws;
+    }
+    for (int i = 0; i < n_entries; i++) {
+        const pab_entry_t *e = &ws->table.entries[i];
+        if (e->index_ab < 0 || e->index_ab >= n_index ||
+            e->index_aw < 0 || e->index_aw >= n_index ||
+            e->index_bw < 0 || e->index_bw >= n_index ||
+            e->index_ww < 0 || e->index_ww >= n_index) {
+            PyErr_Format(PyExc_ValueError,
+                "entries[%d] has index out of range [0, %d)", i, n_index);
+            goto err_ws;
+        }
+    }
+
+    /* Copy eigenvalues (owned) */
+    ws->eigenvalues = (double *)malloc((size_t)n_samples * sizeof(double));
+    if (!ws->eigenvalues) { PyErr_NoMemory(); goto err_ws; }
+    memcpy(ws->eigenvalues, PyArray_DATA(eigenvalues_arr),
+           (size_t)n_samples * sizeof(double));
+
+    /* Borrow invariant Uab pointer — keep alive via Py_INCREF */
+    Py_INCREF(uab_inv_arr);
+    ws->uab_inv_ref = (PyObject *)uab_inv_arr;
+    ws->uab_inv = (const double *)PyArray_DATA(uab_inv_arr);
+
+    /* Compute df, reml_const, beta params */
+    int df = ws->table.df;
+    ws->beta_a = (double)df / 2.0;
+    ws->beta_b = 0.5;
+    ws->lbeta_ab = lgamma(ws->beta_a) + lgamma(ws->beta_b)
+                   - lgamma(ws->beta_a + ws->beta_b);
+    ws->reml_const = 0.5 * df * (log((double)df) - log(2.0 * M_PI) - 1.0);
+
+    /* Build lambda grid */
+    double log_l_min = log(l_min);
+    double log_l_max = log(l_max);
+    double step = (log_l_max - log_l_min) / (double)(n_grid - 1);
+
+    ws->lambda_grid = (double *)malloc((size_t)n_grid * sizeof(double));
+    ws->hi_eval_grid = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
+    ws->logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
+    ws->inv_sums_grid = (double *)malloc(
+        (size_t)n_grid * (size_t)n_inv * sizeof(double));
+
+    if (!ws->lambda_grid || !ws->hi_eval_grid ||
+        !ws->logdet_h_grid || !ws->inv_sums_grid) {
+        PyErr_NoMemory();
+        goto err_ws;
+    }
+
+    for (int g = 0; g < n_grid; g++)
+        ws->lambda_grid[g] = exp(log_l_min + g * step);
+
+    /* Precompute hi_eval_grid, logdet_h_grid, and invariant sums */
+    for (int g = 0; g < n_grid; g++) {
+        double lam = ws->lambda_grid[g];
+        double *hi_row = ws->hi_eval_grid + (size_t)g * n_samples;
+        double logdet = 0.0;
+
+        /* First pass: compute hi_eval + logdet_h */
+        for (int i = 0; i < n_samples; i++) {
+            double v = lam * ws->eigenvalues[i] + 1.0;
+            double h = 1.0 / v;
+            hi_row[i] = h;
+            logdet += log(v);
+        }
+        ws->logdet_h_grid[g] = logdet;
+
+        /* Compute invariant dot products for this grid point */
+        double *inv_sums = ws->inv_sums_grid + (size_t)g * n_inv;
+        for (int c = 0; c < n_inv; c++) {
+            double s = 0.0;
+            const double *col = ws->uab_inv + (size_t)c * n_samples;
+            for (int i = 0; i < n_samples; i++)
+                s += hi_row[i] * col[i];
+            inv_sums[c] = s;
+        }
+    }
+
+    /* Precompute invariant identity sums (sum of each invariant Uab column
+     * at identity, i.e. lambda=0, hi=1). These are constant across SNPs
+     * and reused in the per-SNP logdet_iab computation. The varying identity
+     * sums are SNP-dependent (genotype cross-products), so logdet_iab must
+     * be computed per-SNP in compute_lmm_chunk_general_c. */
+    ws->inv_identity_sums = (double *)malloc((size_t)n_inv * sizeof(double));
+    if (!ws->inv_identity_sums) { PyErr_NoMemory(); goto err_ws; }
+    for (int c = 0; c < n_inv; c++) {
+        double s = 0.0;
+        const double *col = ws->uab_inv + (size_t)c * n_samples;
+        for (int i = 0; i < n_samples; i++)
+            s += col[i];
+        ws->inv_identity_sums[c] = s;
+    }
+    /* Wrap in PyCapsule */
+    PyObject *capsule = PyCapsule_New(
+        ws, "lmm_workspace_general", lmm_workspace_general_destructor);
+    if (!capsule) goto err_ws;
+
+    Py_DECREF(eigenvalues_arr);
+    Py_DECREF(uab_inv_arr);
+    return capsule;
+
+err_ws:
+    if (ws) {
+        free(ws->lambda_grid);
+        free(ws->hi_eval_grid);
+        free(ws->logdet_h_grid);
+        free(ws->inv_sums_grid);
+        free(ws->eigenvalues);
+        free(ws->inv_identity_sums);
+        free(ws->table.invariant_indices);
+        free(ws->table.varying_indices);
+        free(ws->table.logdet_diag_rows);
+        free(ws->table.logdet_diag_cols);
+        free(ws->table.level_offsets);
+        free(ws->table.level_counts);
+        free(ws->table.entries);
+        Py_XDECREF(ws->uab_inv_ref);
+        free(ws);
+    }
+    Py_DECREF(eigenvalues_arr);
+    Py_DECREF(uab_inv_arr);
+    return NULL;
+}
+
+/* -------------------------------------------------------------------------
+ * compute_lmm_chunk_general_c
+ *
+ * Per-chunk compute using a pre-built general workspace. OpenMP parallel
+ * over SNPs. Each thread has its own stack-allocated Pab buffers.
+ *
+ * Python signature:
+ *   compute_lmm_chunk_general_c(
+ *       workspace,      # PyCapsule from create_workspace_general_c
+ *       uab_varying,    # (n_snps, n_var, n_samples) float64 — SoA
+ *       n_threads,      # int
+ *   ) -> dict {lambdas, logls, betas, ses, pwalds}
+ * ------------------------------------------------------------------------- */
+static PyObject *compute_lmm_chunk_general_c_py(
+    PyObject *self, PyObject *args, PyObject *kwargs)
+{
+    static const char *kwlist[] = {"workspace", "uab_varying", "n_threads", NULL};
+
+    PyObject *capsule_obj;
+    PyObject *uab_var_obj;
+    int n_threads;
+
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwargs, "OOi", (char **)kwlist,
+            &capsule_obj, &uab_var_obj, &n_threads)) {
+        return NULL;
+    }
+
+    lmm_workspace_general_t *ws = (lmm_workspace_general_t *)PyCapsule_GetPointer(
+        capsule_obj, "lmm_workspace_general");
+    if (!ws) return NULL;
+
+    PyArrayObject *uab_var_arr = NULL;
+    output_arrays_t out = {0};
+    PyObject *result = NULL;
+
+    uab_var_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        uab_var_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!uab_var_arr) return NULL;
+
+    int n_samples = ws->n_samples;
+    int n_var = ws->table.n_var;
+    int n_inv = ws->table.n_inv;
+
+    /* Validate shape: (n_snps, n_var, n_samples) */
+    if (PyArray_NDIM(uab_var_arr) != 3 ||
+        PyArray_DIM(uab_var_arr, 1) != n_var ||
+        PyArray_DIM(uab_var_arr, 2) != n_samples) {
+        PyErr_Format(PyExc_ValueError,
+            "uab_varying must be shape (n_snps, %d, %d)", n_var, n_samples);
+        goto err_input;
+    }
+
+    npy_intp n_snps_raw = PyArray_DIM(uab_var_arr, 0);
+    if (n_snps_raw > INT_MAX) {
+        PyErr_Format(PyExc_OverflowError,
+            "n_snps (%" NPY_INTP_FMT ") exceeds INT_MAX", n_snps_raw);
+        goto err_input;
+    }
+    int n_snps = (int)n_snps_raw;
+
+    if (alloc_output_arrays(&out, n_snps) < 0)
+        goto err_input;
+
+    const double *uab_var_data = (const double *)PyArray_DATA(uab_var_arr);
+
+    double *lambdas = (double *)PyArray_DATA(out.lambdas);
+    double *logls   = (double *)PyArray_DATA(out.logls);
+    double *betas   = (double *)PyArray_DATA(out.betas);
+    double *ses     = (double *)PyArray_DATA(out.ses);
+    double *pwalds  = (double *)PyArray_DATA(out.pwalds);
+
+    int n_grid = ws->n_grid;
+    int n_refine = ws->n_refine;
+    int df = ws->table.df;
+    int n_index = ws->table.n_index;
+    double reml_const = ws->reml_const;
+
+    /* Compute log_l_min and step from lambda_grid */
+    double log_l_min = log(ws->lambda_grid[0]);
+    double step = (n_grid > 1)
+        ? (log(ws->lambda_grid[n_grid - 1]) - log_l_min) / (double)(n_grid - 1)
+        : 0.0;
+
+    /* Clamp n_threads */
+    int actual_threads = 1;
+#ifdef _OPENMP
+    actual_threads = (n_threads < n_snps) ? n_threads : n_snps;
+    if (actual_threads < 1) actual_threads = 1;
+#endif
+
+    Py_BEGIN_ALLOW_THREADS
+
+#ifdef _OPENMP
+    /* Static schedule: per-SNP cost is uniform (same table, n_grid,
+     * n_refine, n_samples).  Matches n_cvt=1 split path rationale. */
+    #pragma omp parallel for schedule(static) num_threads(actual_threads)
+#endif
+    for (int snp = 0; snp < n_snps; snp++) {
+        const double *snp_var = uab_var_data +
+            (size_t)snp * n_var * n_samples;
+
+        /* Compute per-SNP logdet_iab at identity (lambda=0, hi=1).
+         * Row 0: identity-weighted sums = simple column sums.
+         * Invariant sums are precomputed in workspace; only varying
+         * sums (genotype-dependent) need per-SNP computation. */
+        double iab_row0[MAX_N_INDEX];
+        for (int i = 0; i < n_index; i++) iab_row0[i] = 0.0;
+
+        /* Invariant identity sums from precomputed workspace */
+        for (int c = 0; c < n_inv; c++)
+            iab_row0[ws->table.invariant_indices[c]] = ws->inv_identity_sums[c];
+        /* Varying identity sums from this SNP's uab_var */
+        for (int c = 0; c < n_var; c++) {
+            double s = 0.0;
+            const double *col = snp_var + (size_t)c * n_samples;
+            for (int i = 0; i < n_samples; i++)
+                s += col[i];
+            iab_row0[ws->table.varying_indices[c]] = s;
+        }
+
+        /* Compute full Iab Pab recursion */
+        double iab_pab[MAX_PAB_SIZE];
+        calc_pab_general(iab_row0, &ws->table, iab_pab);
+
+        /* logdet_iab from diagonal entries.  Non-positive diagonal → NaN
+         * propagates through golden section and REML sentinel. */
+        double logdet_iab = 0.0;
+        int iab_degenerate = 0;
+        for (int d = 0; d < ws->table.n_cvt + 1; d++) {
+            double val = iab_pab[ws->table.logdet_diag_rows[d] * n_index
+                                 + ws->table.logdet_diag_cols[d]];
+            if (val <= 0.0) { iab_degenerate = 1; break; }
+            logdet_iab += log(val);
+        }
+        if (iab_degenerate) logdet_iab = (double)NAN;
+
+        /* Golden section optimization */
+        double logl_opt, beta, se, f_stat;
+        int is_valid;
+        double lambda_opt = golden_section_lambda_general(
+            ws->uab_inv, snp_var, ws->eigenvalues,
+            n_samples, ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
+            ws->inv_sums_grid,
+            log_l_min, step, n_grid, n_refine,
+            logdet_iab, reml_const, &ws->table,
+            &logl_opt, &beta, &se, &f_stat, &is_valid
+        );
+
+        lambdas[snp] = lambda_opt;
+        logls[snp]   = logl_opt;
+        betas[snp]   = beta;
+        ses[snp]     = se;
+        pwalds[snp]  = f_to_pvalue(
+            f_stat, df, is_valid,
+            ws->beta_a, ws->beta_b, ws->lbeta_ab);
+    }
+
+    Py_END_ALLOW_THREADS
+
+    if (warn_betainc_convergence(betas, pwalds, n_snps) < 0)
+        goto err_output;
+
+    result = build_result_dict(&out);
+    if (!result) goto err_input;
+
+    Py_DECREF(uab_var_arr);
+    return result;
+
+err_output:
+    decref_output_arrays(&out);
+err_input:
+    Py_XDECREF(uab_var_arr);
+    return NULL;
+}
+
+
+/* =========================================================================
  * Python entry points
  * ========================================================================= */
 
@@ -2040,6 +3052,23 @@ static PyMethodDef methods[] = {
         "    dict with keys: lambdas, logls, betas, ses, pwalds\n"
     },
     {
+        "create_workspace_general_c",
+        (PyCFunction)create_workspace_general_c_py,
+        METH_VARARGS | METH_KEYWORDS,
+        "Create a persistent workspace for general n_cvt REML pipeline.\n"
+        "\n"
+        "Precomputes lambda_grid, hi_eval_grid, invariant column sums.\n"
+        "Accepts recursion table arrays from build_pab_table_for_c().\n"
+    },
+    {
+        "compute_lmm_chunk_general_c",
+        (PyCFunction)compute_lmm_chunk_general_c_py,
+        METH_VARARGS | METH_KEYWORDS,
+        "Per-chunk REML Wald for general n_cvt using a pre-built workspace.\n"
+        "\n"
+        "OpenMP parallel over SNPs. Table-driven Pab recursion.\n"
+    },
+    {
         "_get_aligned_alloc_test_ptr",
         (PyCFunction)_get_aligned_alloc_test_ptr,
         METH_VARARGS,
@@ -2051,7 +3080,7 @@ static PyMethodDef methods[] = {
 static struct PyModuleDef module = {
     PyModuleDef_HEAD_INIT,
     "_lmm_accel",
-    "C extension: per-SNP REML Wald pipeline with OpenMP parallelism (n_cvt=1).",
+    "C extension: per-SNP REML Wald pipeline with OpenMP parallelism (n_cvt=1 + general n_cvt).",
     -1,
     methods
 };

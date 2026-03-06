@@ -31,7 +31,11 @@ from jamma.lmm.prepare import (
     prepare_utg_chunk,
     resolve_device_placement,
 )
-from jamma.lmm.prepare_common import validate_runner_inputs
+from jamma.lmm.prepare_common import (
+    compute_and_log_pve,
+    reset_last_pve,
+    validate_runner_inputs,
+)
 from jamma.lmm.results import (
     _build_results,
     count_lambda_boundary_hits,
@@ -203,6 +207,7 @@ def run_lmm_association_jax(
             f"miss<{miss_threshold}). No association tests to run. "
             f"Consider relaxing --maf or --miss thresholds."
         )
+        reset_last_pve()
         return []
 
     # Extract filtered stats as numpy arrays (use allele_freqs for output, not mafs)
@@ -244,6 +249,9 @@ def run_lmm_association_jax(
         l_min=l_min,
         l_max=l_max,
     )
+
+    compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
+
     t_eigen_end = time.perf_counter()
 
     eigenvalues = jax.device_put(eigenvalues_np, placement.rep)

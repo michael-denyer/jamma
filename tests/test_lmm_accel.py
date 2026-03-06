@@ -10,12 +10,15 @@ import pytest
 import jamma.lmm.compute_numpy as compute_numpy
 from jamma.lmm.compute_numpy import (
     _C_ACCEL_AVAILABLE,
+    _C_GENERAL_AVAILABLE,
     _C_SPLIT_AVAILABLE,
     _compute_lmm_chunk_numpy,
     _compute_wald_numpy,
     _compute_wald_split_c,
+    compute_wald_general_c_ws,
     compute_wald_split_c_ws,
     create_lmm_workspace,
+    create_lmm_workspace_general,
 )
 from jamma.lmm.likelihood_numpy import (
     batch_compute_iab_numpy,
@@ -178,10 +181,11 @@ def test_c_vs_python_parity_synthetic(synthetic_wald_data, monkeypatch):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
-def test_c_fallback_when_ncvt_gt1(synthetic_wald_data, monkeypatch):
-    """With n_cvt=2, the C path must not be called (falls back to Python).
+def test_c_fallback_ncvt_gt1_when_general_unavailable(synthetic_wald_data, monkeypatch):
+    """With n_cvt=2 and _C_GENERAL_AVAILABLE=False, falls back to Python.
 
-    Monkeypatches the C function to raise AssertionError if called.
+    Monkeypatches _C_GENERAL_AVAILABLE to False and verifies the n_cvt=1
+    batch C function is NOT called (it doesn't support n_cvt>1).
     """
     eigenvalues, _Uab_batch_ncvt1, n_samples = synthetic_wald_data
     # Rebuild Uab for n_cvt=2 (n_index = (2+3)*(2+2)//2 = 10)
@@ -191,11 +195,14 @@ def test_c_fallback_when_ncvt_gt1(synthetic_wald_data, monkeypatch):
     Uab_batch[:, :, 0] = np.abs(Uab_batch[:, :, 0]) + 0.1
 
     def should_not_be_called(*args, **kwargs):
-        raise AssertionError("C extension should not be called for n_cvt > 1")
+        raise AssertionError(
+            "n_cvt=1 batch C function should not be called for n_cvt > 1"
+        )
 
     monkeypatch.setattr(compute_numpy, "_compute_lmm_batch_c", should_not_be_called)
+    monkeypatch.setattr(compute_numpy, "_C_GENERAL_AVAILABLE", False)
 
-    # Should succeed via the Python path without calling the C function
+    # Should succeed via the Python path without calling any C function
     result = _compute_wald_numpy(
         n_cvt=2,
         eigenvalues=eigenvalues,
@@ -1189,3 +1196,600 @@ class TestCExtensionPerformance:
         np.testing.assert_allclose(
             result_c["lambdas"], result_py["lambdas"], rtol=5e-5, atol=1e-14
         )
+
+
+# =============================================================================
+# Tests for build_pab_table_for_c
+# =============================================================================
+
+
+class TestBuildPabTableForC:
+    """Verify build_pab_table_for_c produces correct flat arrays for C extension."""
+
+    def test_ncvt1_basic_structure(self):
+        """n_cvt=1: returns dict with all expected keys and correct scalar values."""
+        from jamma.lmm.likelihood import build_pab_table_for_c
+
+        t = build_pab_table_for_c(1)
+
+        assert t["n_cvt"] == 1
+        assert t["n_index"] == 6  # (1+3)*(1+2)//2 = 6
+        assert t["n_rows"] == 3  # n_cvt + 2
+        # idx_yy, idx_xx, idx_xy from build_index_table
+        from jamma.lmm.likelihood import build_index_table
+
+        ref = build_index_table(1)
+        assert t["idx_yy"] == ref["idx_yy"]
+        assert t["idx_xx"] == ref["idx_xx"]
+        assert t["idx_xy"] == ref["idx_xy"]
+
+    def test_ncvt2_dimensions(self):
+        """n_cvt=2: n_index=10, n_rows=4, correct inv/var counts."""
+        from jamma.lmm.likelihood import build_pab_table_for_c
+
+        t = build_pab_table_for_c(2)
+
+        assert t["n_index"] == 10
+        assert t["n_rows"] == 4  # n_cvt + 2
+        assert t["n_inv"] == 6
+        assert t["n_var"] == 4
+        assert t["n_inv"] + t["n_var"] == t["n_index"]
+
+    def test_ncvt4_dimensions(self):
+        """n_cvt=4: n_index=21, n_rows=6, correct inv/var counts."""
+        from jamma.lmm.likelihood import build_pab_table_for_c
+
+        t = build_pab_table_for_c(4)
+
+        assert t["n_index"] == 21
+        assert t["n_rows"] == 6  # n_cvt + 2
+        assert t["n_inv"] == 15
+        assert t["n_var"] == 6
+        assert t["n_inv"] + t["n_var"] == t["n_index"]
+
+    def test_invariant_varying_partition(self):
+        """invariant + varying indices partition range(n_index) for n_cvt=1,2,4."""
+        from jamma.lmm.likelihood import build_pab_table_for_c
+
+        for n_cvt in (1, 2, 4):
+            t = build_pab_table_for_c(n_cvt)
+            inv = set(t["invariant_indices"].tolist())
+            var = set(t["varying_indices"].tolist())
+            assert inv & var == set(), f"n_cvt={n_cvt}: overlap in inv/var"
+            assert inv | var == set(range(t["n_index"])), (
+                f"n_cvt={n_cvt}: inv+var doesn't cover range(n_index)"
+            )
+
+    def test_all_arrays_are_int32(self):
+        """All index arrays must be int32 for C extension compatibility."""
+        from jamma.lmm.likelihood import build_pab_table_for_c
+
+        t = build_pab_table_for_c(2)
+        array_keys = [
+            "invariant_indices",
+            "varying_indices",
+            "logdet_diag_rows",
+            "logdet_diag_cols",
+            "level_offsets",
+            "level_counts",
+            "entries",
+        ]
+        for key in array_keys:
+            assert t[key].dtype == np.int32, (
+                f"{key} has dtype {t[key].dtype}, expected int32"
+            )
+
+    def test_level_offsets_index_entries(self):
+        """level_offsets and level_counts correctly index into flat entries array."""
+        from jamma.lmm.likelihood import build_pab_table_for_c
+
+        for n_cvt in (1, 2, 4):
+            t = build_pab_table_for_c(n_cvt)
+            offsets = t["level_offsets"]
+            counts = t["level_counts"]
+            entries = t["entries"]
+
+            # n_cvt+2 levels (0..n_cvt+1)
+            assert len(offsets) == n_cvt + 2
+            assert len(counts) == n_cvt + 2
+
+            # Level 0 has no entries (row 0 comes from dot products)
+            assert counts[0] == 0
+
+            # Total entries must equal entries array length / 4 (stride-4)
+            total_entries = sum(counts)
+            assert len(entries) == total_entries * 4, (
+                f"n_cvt={n_cvt}: entries length {len(entries)} != {total_entries * 4}"
+            )
+
+            # Each level's offset must be consistent
+            running_offset = 0
+            for level in range(n_cvt + 2):
+                assert offsets[level] == running_offset, (
+                    f"n_cvt={n_cvt}, level={level}: "
+                    f"offset {offsets[level]} != {running_offset}"
+                )
+                running_offset += counts[level]
+
+    def test_entries_match_pab_recursion(self):
+        """Flat entries array matches build_index_table pab_recursion content."""
+        from jamma.lmm.likelihood import build_index_table, build_pab_table_for_c
+
+        for n_cvt in (1, 2, 4):
+            t = build_pab_table_for_c(n_cvt)
+            ref = build_index_table(n_cvt)
+            entries = t["entries"]
+            offsets = t["level_offsets"]
+            counts = t["level_counts"]
+
+            for level in range(1, n_cvt + 2):
+                ref_entries = ref["pab_recursion"][level]
+                start = offsets[level] * 4
+                count = counts[level]
+                assert count == len(ref_entries), (
+                    f"n_cvt={n_cvt}, level={level}: count mismatch"
+                )
+                for j, (_, _, idx_ab, idx_aw, idx_bw, idx_ww) in enumerate(ref_entries):
+                    base = start + j * 4
+                    assert entries[base] == idx_ab
+                    assert entries[base + 1] == idx_aw
+                    assert entries[base + 2] == idx_bw
+                    assert entries[base + 3] == idx_ww
+
+    def test_logdet_diag_matches_build_index_table(self):
+        """logdet_diag_rows/cols match build_index_table logdet_diag_indices."""
+        from jamma.lmm.likelihood import build_index_table, build_pab_table_for_c
+
+        for n_cvt in (1, 2, 4):
+            t = build_pab_table_for_c(n_cvt)
+            ref = build_index_table(n_cvt)
+
+            rows = t["logdet_diag_rows"].tolist()
+            cols = t["logdet_diag_cols"].tolist()
+            ref_pairs = ref["logdet_diag_indices"]
+
+            assert len(rows) == len(ref_pairs)
+            for i, (ref_row, ref_col) in enumerate(ref_pairs):
+                assert rows[i] == ref_row, f"n_cvt={n_cvt}, i={i}: row mismatch"
+                assert cols[i] == ref_col, f"n_cvt={n_cvt}, i={i}: col mismatch"
+
+    def test_lru_cached(self):
+        """Same n_cvt returns same object (lru_cache)."""
+        from jamma.lmm.likelihood import build_pab_table_for_c
+
+        t1 = build_pab_table_for_c(2)
+        t2 = build_pab_table_for_c(2)
+        assert t1 is t2
+
+
+# =============================================================================
+# Tests for general n_cvt C extension (C-GEN requirements)
+# =============================================================================
+
+
+def _run_general_ncvt_c_vs_python(data: dict) -> None:
+    """Helper: compare C extension general n_cvt results against Python path.
+
+    Monkeypatches _C_GENERAL_AVAILABLE to False for the Python reference,
+    then compares against C extension results.
+    """
+    n_cvt = data["n_cvt"]
+    eigenvalues = data["eigenvalues"]
+    Uab_batch = data["Uab_batch"]
+    n_samples = data["n_samples"]
+
+    # Python reference path (force fallback)
+    orig = compute_numpy._C_GENERAL_AVAILABLE
+    try:
+        compute_numpy._C_GENERAL_AVAILABLE = False
+        result_py = _compute_wald_numpy(
+            n_cvt,
+            eigenvalues,
+            Uab_batch,
+            n_samples,
+            l_min=1e-5,
+            l_max=1e5,
+            n_grid=50,
+            n_refine=20,
+        )
+    finally:
+        compute_numpy._C_GENERAL_AVAILABLE = orig
+
+    # C extension path
+    result_c = _compute_wald_numpy(
+        n_cvt,
+        eigenvalues,
+        Uab_batch,
+        n_samples,
+        l_min=1e-5,
+        l_max=1e5,
+        n_grid=50,
+        n_refine=20,
+        n_threads=1,
+    )
+
+    for key in ("lambdas", "logls", "betas", "ses"):
+        np.testing.assert_allclose(
+            result_c[key],
+            result_py[key],
+            rtol=1e-10,
+            atol=1e-14,
+            equal_nan=True,
+            err_msg=f"{key}: C vs Python mismatch for n_cvt={n_cvt}",
+        )
+    np.testing.assert_allclose(
+        result_c["pwalds"],
+        result_py["pwalds"],
+        rtol=1e-6,
+        atol=1e-14,
+        equal_nan=True,
+        err_msg=f"pwalds: C vs Python mismatch for n_cvt={n_cvt}",
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+def test_general_ncvt_reml_wald_matches_python_ncvt2(
+    synthetic_covariate_data_ncvt2,
+):
+    """C-GEN-01: C extension Wald results match Python for n_cvt=2."""
+    _run_general_ncvt_c_vs_python(synthetic_covariate_data_ncvt2)
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+def test_general_ncvt_reml_wald_ncvt4(
+    synthetic_covariate_data_ncvt4,
+):
+    """C-GEN-01: C extension Wald results match Python for n_cvt=4."""
+    _run_general_ncvt_c_vs_python(synthetic_covariate_data_ncvt4)
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+def test_general_ncvt_workspace_lifecycle(synthetic_covariate_data_ncvt2):
+    """C-GEN-02: Workspace create/compute/destroy cycle works for n_cvt>1."""
+    from jamma.lmm.likelihood import classify_uab_columns
+
+    data = synthetic_covariate_data_ncvt2
+    n_cvt = data["n_cvt"]
+    eigenvalues = data["eigenvalues"]
+    Uab_batch = data["Uab_batch"]
+    n_samples = data["n_samples"]
+
+    inv_indices, var_indices = classify_uab_columns(n_cvt)
+    # a[0, :, list_idx] -> (n_inv, n_samples) due to numpy advanced indexing
+    uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
+    uab_var_soa = np.ascontiguousarray(
+        Uab_batch[:, :, list(var_indices)].transpose(0, 2, 1)
+    )
+
+    # Create workspace
+    ws = create_lmm_workspace_general(
+        eigenvalues,
+        uab_inv_soa,
+        n_samples,
+        n_cvt,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+    )
+    assert ws is not None
+
+    # Compute first chunk
+    mid = Uab_batch.shape[0] // 2
+    r1 = compute_wald_general_c_ws(ws, uab_var_soa[:mid], 1)
+    assert r1["lambdas"].shape == (mid,)
+
+    # Reuse workspace for second chunk
+    r2 = compute_wald_general_c_ws(ws, uab_var_soa[mid:], 1)
+    assert r2["lambdas"].shape == (Uab_batch.shape[0] - mid,)
+
+    # Full batch
+    r_full = compute_wald_general_c_ws(ws, uab_var_soa, 1)
+    combined = np.concatenate([r1["lambdas"], r2["lambdas"]])
+    np.testing.assert_allclose(
+        combined,
+        r_full["lambdas"],
+        rtol=1e-12,
+        atol=1e-14,
+        err_msg="Chunked vs full workspace mismatch",
+    )
+
+    # Destroy workspace (PyCapsule GC)
+    del ws
+
+
+@pytest.mark.tier1
+@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+def test_general_ncvt_gemma_covariate_match():
+    """C-GEN-03: C extension Wald results match GEMMA reference with covariates.
+
+    End-to-end test: loads gemma_synthetic PLINK data + covariates, runs the
+    NumPy runner (which uses the general C workspace for n_cvt=2 Wald), and
+    compares against GEMMA's covariate reference output.
+    """
+    from pathlib import Path
+
+    from jamma.io import load_plink_binary
+    from jamma.kinship.io import read_kinship_matrix
+    from jamma.lmm.runner_numpy import run_lmm_association_numpy
+    from jamma.validation import (
+        ToleranceConfig,
+        compare_assoc_results,
+        load_gemma_assoc,
+    )
+    from tests.conftest import load_phenotypes_from_fam
+
+    fixture_root = Path(__file__).parent / "fixtures"
+    synthetic_dir = fixture_root / "gemma_synthetic"
+    covariate_dir = fixture_root / "gemma_covariate"
+
+    plink = load_plink_binary(synthetic_dir / "test")
+    kinship = read_kinship_matrix(synthetic_dir / "gemma_kinship.cXX.txt")
+    phenotypes = load_phenotypes_from_fam(synthetic_dir / "test.fam")
+    covariates = np.loadtxt(covariate_dir / "covariates.txt")
+    snp_info = [
+        {
+            "chr": str(plink.chromosome[i]),
+            "rs": plink.sid[i],
+            "pos": plink.bp_position[i],
+            "a1": plink.allele_1[i],
+            "a0": plink.allele_2[i],
+            "maf": 0.0,
+            "n_miss": 0,
+        }
+        for i in range(plink.n_snps)
+    ]
+
+    results = run_lmm_association_numpy(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        covariates=covariates,
+        lmm_mode=1,
+        show_progress=False,
+    )
+
+    reference = load_gemma_assoc(covariate_dir / "gemma_covariate.assoc.txt")
+    tolerances = ToleranceConfig(lambda_rtol=5e-5)
+    comparison = compare_assoc_results(results, reference, tolerances)
+    assert comparison.passed, (
+        f"C extension Wald+covariate vs GEMMA failed:\n{comparison}"
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2):
+    """C-GEN-04: All 4 LMM modes produce results with n_cvt=2 covariates.
+
+    Verifies that _compute_lmm_chunk_numpy with lmm_mode=4 produces non-None
+    results for all output fields when covariates are present. Wald results
+    use the C extension; LRT/Score use the Python fallback.
+    """
+    from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
+    from jamma.lmm.prepare_common import _compute_null_model_common
+
+    data = synthetic_covariate_data_ncvt2
+    n_cvt = data["n_cvt"]
+    eigenvalues = data["eigenvalues"]
+    n_samples = data["n_samples"]
+    UtW = data["UtW"]
+    Uty = data["Uty"]
+    UtG = data["UtG"]
+
+    # Build Uab
+    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+    n_snps = Uab_batch.shape[0]
+
+    # Compute null model for LRT/Score
+    logl_H0, _lambda_mle, Hi_eval_null = _compute_null_model_common(
+        4, eigenvalues, UtW, Uty, n_cvt, False
+    )
+
+    # Mode 4 (All): exercises Wald (C ext), LRT (Python MLE), Score (Python)
+    result = _compute_lmm_chunk_numpy(
+        lmm_mode=4,
+        n_cvt=n_cvt,
+        eigenvalues=eigenvalues,
+        Uab_batch=Uab_batch,
+        n_samples=n_samples,
+        logl_H0=logl_H0,
+        Hi_eval_null=Hi_eval_null,
+        n_threads=1,
+    )
+
+    # All fields must be non-None and have correct shape
+    all_keys = (
+        "lambdas",
+        "logls",
+        "betas",
+        "ses",
+        "pwalds",
+        "lambdas_mle",
+        "p_lrts",
+        "p_scores",
+    )
+    for key in all_keys:
+        assert result[key] is not None, f"{key} is None in mode 4"
+        assert result[key].shape == (n_snps,), (
+            f"{key} shape mismatch: {result[key].shape}"
+        )
+
+    # Finite check (most values should be finite; allow NaN for degenerate SNPs)
+    for key in ("betas", "ses", "pwalds"):
+        n_finite = np.sum(np.isfinite(result[key]))
+        assert n_finite > n_snps * 0.8, f"{key}: only {n_finite}/{n_snps} finite values"
+
+    # Mode 2 (LRT only)
+    result_lrt = _compute_lmm_chunk_numpy(
+        lmm_mode=2,
+        n_cvt=n_cvt,
+        eigenvalues=eigenvalues,
+        Uab_batch=Uab_batch,
+        n_samples=n_samples,
+        logl_H0=logl_H0,
+        n_threads=1,
+    )
+    assert result_lrt["lambdas_mle"] is not None
+    assert result_lrt["p_lrts"] is not None
+    assert result_lrt["lambdas_mle"].shape == (n_snps,)
+
+    # Mode 3 (Score only)
+    result_score = _compute_lmm_chunk_numpy(
+        lmm_mode=3,
+        n_cvt=n_cvt,
+        eigenvalues=eigenvalues,
+        Uab_batch=Uab_batch,
+        n_samples=n_samples,
+        Hi_eval_null=Hi_eval_null,
+        n_threads=1,
+    )
+    assert result_score["p_scores"] is not None
+    assert result_score["betas"] is not None
+    assert result_score["p_scores"].shape == (n_snps,)
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+def test_general_ncvt_openmp_deterministic(synthetic_covariate_data_ncvt2):
+    """C-GEN-05: 1-thread vs N-thread produce identical results for n_cvt>1."""
+    from jamma.core.threading import get_physical_core_count
+
+    n_threads = get_physical_core_count()
+    if n_threads < 2:
+        pytest.skip("Need >=2 cores for multi-threaded test")
+
+    from jamma.lmm.likelihood import classify_uab_columns
+
+    data = synthetic_covariate_data_ncvt2
+    n_cvt = data["n_cvt"]
+    eigenvalues = data["eigenvalues"]
+    Uab_batch = data["Uab_batch"]
+    n_samples = data["n_samples"]
+
+    inv_indices, var_indices = classify_uab_columns(n_cvt)
+    uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
+    uab_var_soa = np.ascontiguousarray(
+        Uab_batch[:, :, list(var_indices)].transpose(0, 2, 1)
+    )
+
+    ws = create_lmm_workspace_general(
+        eigenvalues,
+        uab_inv_soa,
+        n_samples,
+        n_cvt,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+    )
+
+    r1 = compute_wald_general_c_ws(ws, uab_var_soa, 1)
+    rn = compute_wald_general_c_ws(ws, uab_var_soa, n_threads)
+
+    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
+        np.testing.assert_allclose(
+            rn[key],
+            r1[key],
+            rtol=1e-10,
+            atol=1e-14,
+            equal_nan=True,
+            err_msg=f"{key}: general MT vs ST mismatch",
+        )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+def test_general_ncvt_degenerate_snps(synthetic_covariate_data_ncvt2):
+    """C-GEN-06: Constant genotypes produce NaN beta/se/p-value for n_cvt>1."""
+    from jamma.lmm.likelihood import classify_uab_columns
+
+    data = synthetic_covariate_data_ncvt2
+    n_cvt = data["n_cvt"]
+    eigenvalues = data["eigenvalues"]
+    Uab_batch = data["Uab_batch"].copy()
+    n_samples = data["n_samples"]
+
+    inv_indices, var_indices = classify_uab_columns(n_cvt)
+
+    # Make SNPs 0 and 2 degenerate by zeroing all varying columns
+    # (this makes xx=0, causing P_XX <= 0)
+    for snp_idx in [0, 2]:
+        for vi in var_indices:
+            Uab_batch[snp_idx, :, vi] = 0.0
+
+    uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
+    uab_var_soa = np.ascontiguousarray(
+        Uab_batch[:, :, list(var_indices)].transpose(0, 2, 1)
+    )
+
+    ws = create_lmm_workspace_general(
+        eigenvalues,
+        uab_inv_soa,
+        n_samples,
+        n_cvt,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+    )
+    result = compute_wald_general_c_ws(ws, uab_var_soa, 1)
+
+    # Degenerate SNPs should have NaN
+    for snp_idx in [0, 2]:
+        assert np.isnan(result["betas"][snp_idx]), f"SNP {snp_idx}: expected NaN beta"
+        assert np.isnan(result["ses"][snp_idx]), f"SNP {snp_idx}: expected NaN se"
+        assert np.isnan(result["pwalds"][snp_idx]), f"SNP {snp_idx}: expected NaN pwald"
+
+    # Non-degenerate SNPs should have valid results
+    for snp_idx in [1, 3]:
+        assert np.isfinite(result["betas"][snp_idx]), (
+            f"SNP {snp_idx}: expected finite beta"
+        )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+def test_general_ncvt_abi_version():
+    """C-GEN-07: ABI version is bumped to 4 for general n_cvt support."""
+    from jamma.lmm._lmm_accel import ABI_VERSION
+
+    assert ABI_VERSION == 4, f"Expected ABI_VERSION=4, got {ABI_VERSION}"
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+def test_existing_ncvt1_regression(synthetic_wald_data):
+    """C-GEN-08: Existing n_cvt=1 C extension path unchanged with ABI_VERSION=4.
+
+    Ensures the general n_cvt additions (ABI_VERSION bump, new workspace types)
+    did not regress the original n_cvt=1 split-Uab workspace path.
+    """
+    eigenvalues, Uab_batch, n_samples = synthetic_wald_data
+
+    # Use the existing Uab directly for split components
+    uab_varying_soa = np.stack(
+        [Uab_batch[:, :, 1], Uab_batch[:, :, 3], Uab_batch[:, :, 4]], axis=1
+    )
+    uab_inv_soa_direct = np.stack(
+        [Uab_batch[0, :, 0], Uab_batch[0, :, 2], Uab_batch[0, :, 5]], axis=0
+    )
+
+    # Create n_cvt=1 workspace and compute
+    ws = create_lmm_workspace(
+        eigenvalues, uab_inv_soa_direct, n_samples, 1e-5, 1e5, 50, 20, 1
+    )
+    result = compute_wald_split_c_ws(ws, uab_varying_soa, 1)
+
+    # Basic sanity: shapes match, most values finite
+    assert result["lambdas"].shape == (Uab_batch.shape[0],)
+    assert result["betas"].shape == (Uab_batch.shape[0],)
+    n_finite = np.sum(np.isfinite(result["betas"]))
+    assert n_finite > 0, "No finite betas from n_cvt=1 workspace"

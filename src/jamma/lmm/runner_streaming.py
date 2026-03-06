@@ -41,7 +41,11 @@ from jamma.lmm.prepare import (
     prepare_utg_chunk,
     resolve_device_placement,
 )
-from jamma.lmm.prepare_common import validate_runner_inputs
+from jamma.lmm.prepare_common import (
+    compute_and_log_pve,
+    reset_last_pve,
+    validate_runner_inputs,
+)
 from jamma.lmm.results import (
     _concat_jax_accumulators,
     _yield_chunk_results,
@@ -307,6 +311,7 @@ def run_lmm_association_streaming(
         )
 
     if n_filtered == 0:
+        reset_last_pve()
         if output_path is not None:
             with IncrementalAssocWriter(
                 output_path, test_type=_TEST_TYPE_MAP[lmm_mode]
@@ -368,6 +373,8 @@ def run_lmm_association_streaming(
             l_min=l_min,
             l_max=l_max,
         )
+
+        compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
 
         eigenvalues = jax.device_put(eigenvalues_np, placement.rep)
         UtW_jax = jax.device_put(UtW, placement.rep)

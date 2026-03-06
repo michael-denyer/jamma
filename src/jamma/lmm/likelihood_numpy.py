@@ -438,26 +438,49 @@ def batch_compute_uab_split_soa_numpy(
 def compute_uab_invariant_soa(
     UtW: np.ndarray,
     Uty: np.ndarray,
+    n_cvt: int = 1,
 ) -> np.ndarray:
-    """Compute SNP-invariant Uab columns in SoA layout (3, n_samples).
+    """Compute SNP-invariant Uab columns in SoA layout (n_inv, n_samples).
 
-    Rows are [ww, wy, yy]. These columns depend only on UtW and Uty, so they
-    can be computed once per run (before the chunk loop) rather than once per
-    chunk.
+    For n_cvt=1, rows are [ww, wy, yy] (3 rows). For n_cvt>1, invariant
+    columns are identified via classify_uab_columns and extracted from a
+    single representative Uab computed with a zero genotype vector.
+
+    These columns depend only on UtW and Uty, so they can be computed once
+    per run (before the chunk loop) rather than once per chunk.
 
     Args:
-        UtW: Rotated covariates (n_samples, 1).
+        UtW: Rotated covariates (n_samples, n_cvt).
         Uty: Rotated phenotype (n_samples,).
+        n_cvt: Number of covariates (default 1 for backwards compatibility).
 
     Returns:
-        Invariant array (3, n_samples) — rows [ww, wy, yy].
+        Invariant array (n_inv, n_samples) — SoA layout.
     """
+    if n_cvt == 1:
+        n_samples = Uty.shape[0]
+        w = UtW[:, 0]
+        uab_invariant_soa = np.empty((3, n_samples), dtype=np.float64)
+        uab_invariant_soa[0, :] = w * w  # ww
+        uab_invariant_soa[1, :] = w * Uty  # wy
+        uab_invariant_soa[2, :] = Uty * Uty  # yy
+        return uab_invariant_soa
+
+    # General n_cvt: compute full Uab for a zero genotype vector,
+    # then extract invariant columns.
+    from jamma.lmm.likelihood import classify_uab_columns
+
+    inv_indices, _var_indices = classify_uab_columns(n_cvt)
     n_samples = Uty.shape[0]
-    w = UtW[:, 0]
-    uab_invariant_soa = np.empty((3, n_samples), dtype=np.float64)
-    uab_invariant_soa[0, :] = w * w  # ww
-    uab_invariant_soa[1, :] = w * Uty  # wy
-    uab_invariant_soa[2, :] = Uty * Uty  # yy
+
+    # Build a single Uab with zero genotype (invariant columns are
+    # independent of genotype, so the genotype value doesn't matter).
+    UtG_zero = np.zeros((n_samples, 1), dtype=np.float64)
+    Uab_single = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG_zero)
+    # Uab_single shape: (1, n_samples, n_index)
+    # Extract invariant columns: advanced indexing a[0, :, list] groups the
+    # integer (0) and list indices at front -> (n_inv, n_samples) SoA layout.
+    uab_invariant_soa = np.ascontiguousarray(Uab_single[0, :, list(inv_indices)])
     return uab_invariant_soa
 
 
@@ -467,31 +490,39 @@ def batch_compute_uab_varying_soa_numpy(
     Uty: np.ndarray,
     UtG: np.ndarray,
 ) -> np.ndarray:
-    """Compute SNP-varying Uab columns in SoA layout (n_snps, 3, n_samples).
+    """Compute SNP-varying Uab columns in SoA layout (n_snps, n_var, n_samples).
 
-    Rows are [wx, xx, xy]. Generated directly in SoA layout, eliminating the
-    AoS allocation + per-chunk transpose overhead.
+    For n_cvt=1, n_var=3 with rows [wx, xx, xy]. For n_cvt>1, varying columns
+    are identified via classify_uab_columns and extracted from the full Uab batch.
 
     Args:
-        n_cvt: Number of covariates (must be 1).
-        UtW: Rotated covariates (n_samples, 1).
+        n_cvt: Number of covariates.
+        UtW: Rotated covariates (n_samples, n_cvt).
         Uty: Rotated phenotype (n_samples,).
         UtG: Rotated genotypes (n_samples, n_snps).
 
     Returns:
-        Varying array (n_snps, 3, n_samples) — axis-1 rows [wx, xx, xy].
+        Varying array (n_snps, n_var, n_samples) — SoA layout.
     """
-    if n_cvt != 1:
-        raise ValueError("batch_compute_uab_varying_soa_numpy requires n_cvt=1")
-    n_samples, n_snps = UtG.shape
-    w = UtW[:, 0]
-    UtG_T = UtG.T  # (n_snps, n_samples)
+    if n_cvt == 1:
+        n_samples, n_snps = UtG.shape
+        w = UtW[:, 0]
+        UtG_T = UtG.T  # (n_snps, n_samples)
 
-    uab_varying_soa = np.empty((n_snps, 3, n_samples), dtype=np.float64)
-    uab_varying_soa[:, 0, :] = w[None, :] * UtG_T  # wx row
-    uab_varying_soa[:, 1, :] = UtG_T * UtG_T  # xx row
-    uab_varying_soa[:, 2, :] = UtG_T * Uty[None, :]  # xy row
-    return uab_varying_soa
+        uab_varying_soa = np.empty((n_snps, 3, n_samples), dtype=np.float64)
+        uab_varying_soa[:, 0, :] = w[None, :] * UtG_T  # wx row
+        uab_varying_soa[:, 1, :] = UtG_T * UtG_T  # xx row
+        uab_varying_soa[:, 2, :] = UtG_T * Uty[None, :]  # xy row
+        return uab_varying_soa
+
+    # General n_cvt: compute full Uab then extract varying columns
+    from jamma.lmm.likelihood import classify_uab_columns
+
+    _inv_indices, var_indices = classify_uab_columns(n_cvt)
+    Uab_batch = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG)
+    # Uab_batch: (n_snps, n_samples, n_index)
+    # Extract varying columns and transpose to SoA: (n_snps, n_var, n_samples)
+    return np.ascontiguousarray(Uab_batch[:, :, list(var_indices)].transpose(0, 2, 1))
 
 
 def reconstruct_uab_from_soa(

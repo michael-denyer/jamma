@@ -24,11 +24,14 @@ from jamma.core.threading import (
 )
 from jamma.lmm.compute_numpy import (
     _C_ACCEL_AVAILABLE,
+    _C_GENERAL_AVAILABLE,
     _C_SPLIT_AVAILABLE,
     LmmMode,
     _compute_lmm_chunk_numpy,
+    compute_wald_general_c_ws,
     compute_wald_split_c_ws,
     create_lmm_workspace,
+    create_lmm_workspace_general,
 )
 from jamma.lmm.likelihood_numpy import (
     batch_compute_uab_numpy,
@@ -41,6 +44,8 @@ from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
     _compute_null_model_common,
     _eigendecompose_or_reuse,
+    compute_and_log_pve,
+    reset_last_pve,
     validate_runner_inputs,
 )
 from jamma.lmm.results import (
@@ -167,6 +172,13 @@ def _compute_chunk_size_numpy(
             # Non-Wald split: reconstruct_uab_from_soa allocates 6-col Uab
             # while 3-col varying SoA is still live = 9 cols peak
             bytes_per_snp = n_samples * 9 * 8
+    elif use_split and n_cvt > 1:
+        # General split: n_var varying columns + 1 UtG column per SNP.
+        from jamma.lmm.likelihood import classify_uab_columns
+
+        _inv, var = classify_uab_columns(n_cvt)
+        n_var = len(var)
+        bytes_per_snp = n_samples * (n_var + 1) * 8
     else:
         n_index = (n_cvt + 3) * (n_cvt + 2) // 2
         bytes_per_snp = n_samples * n_index * 8
@@ -327,6 +339,7 @@ def run_lmm_association_numpy(
             f"miss<{miss_threshold}). No association tests to run. "
             f"Consider relaxing --maf or --miss thresholds."
         )
+        reset_last_pve()
         return []
 
     # Extract filtered stats as numpy arrays (use allele_freqs for output, not mafs)
@@ -362,13 +375,22 @@ def run_lmm_association_numpy(
         l_min=l_min,
         l_max=l_max,
     )
+
+    compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
+
     t_eigen_end = time.perf_counter()
 
     n_filtered = len(snp_indices)
 
     # Determine split/pipeline eligibility BEFORE chunk sizing so the
-    # budget can use accurate per-SNP accounting (3 Uab columns vs 6).
-    use_split = _C_SPLIT_AVAILABLE and n_cvt == 1
+    # budget can use accurate per-SNP accounting (varying cols vs full Uab).
+    # n_cvt=1: split available for all modes (Wald uses C workspace, others
+    #   reconstruct full Uab from SoA components).
+    # n_cvt>1: split only for Wald (lmm_mode==1) — LRT/Score/All need full Uab
+    #   which can't be reconstructed from the general split components cheaply.
+    use_split = (_C_SPLIT_AVAILABLE and n_cvt == 1) or (
+        _C_GENERAL_AVAILABLE and n_cvt > 1 and lmm_mode == 1
+    )
 
     chunk_size = _compute_chunk_size_numpy(
         n_samples,
@@ -470,7 +492,9 @@ def run_lmm_association_numpy(
     # Precompute SNP-invariant Uab columns once (depends only on UtW, Uty).
     # Eliminates per-chunk reconstruction: uab_invariant_soa is shared across
     # all chunks and referenced via closure by _prepare_chunk.
-    uab_invariant_soa = compute_uab_invariant_soa(UtW, Uty) if use_split else None
+    uab_invariant_soa = (
+        compute_uab_invariant_soa(UtW, Uty, n_cvt) if use_split else None
+    )
 
     # Create persistent C workspace once (before chunk loop).
     # Holds precomputed lambda_grid, hi_eval_grid, logdet_h_grid, grid_inv, and
@@ -479,20 +503,34 @@ def run_lmm_association_numpy(
     # Only create for Wald mode (lmm_mode==1): the C workspace uses
     # compute_wald_split_c_ws which is Wald-specific. LRT/Score/All
     # use _compute_lmm_chunk_numpy instead.
-    lmm_workspace = (
-        create_lmm_workspace(
-            eigenvalues_np,
-            uab_invariant_soa,
-            n_samples,
-            l_min,
-            l_max,
-            n_grid,
-            n_refine,
-            pipeline_omp_threads,
-        )
-        if use_split and lmm_mode == 1
-        else None
-    )
+    if use_split and lmm_mode == 1:
+        if n_cvt == 1:
+            lmm_workspace = create_lmm_workspace(
+                eigenvalues_np,
+                uab_invariant_soa,
+                n_samples,
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+                pipeline_omp_threads,
+            )
+        elif _C_GENERAL_AVAILABLE:
+            lmm_workspace = create_lmm_workspace_general(
+                eigenvalues_np,
+                uab_invariant_soa,
+                n_samples,
+                n_cvt,
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+                pipeline_omp_threads,
+            )
+        else:
+            lmm_workspace = None
+    else:
+        lmm_workspace = None
 
     def _prepare_chunk(chunk_start: int) -> tuple:
         """Slice, impute, rotate, build split Uab in SoA layout.
@@ -527,6 +565,7 @@ def run_lmm_association_numpy(
         Only valid for lmm_mode == 1 (Wald). Called exclusively from the
         pipeline path which gates on lmm_mode == 1.
         """
+        assert lmm_workspace is not None, "pipeline requires workspace"
         if lmm_mode != 1:
             raise RuntimeError(
                 "_compute_and_write requires lmm_mode=1 (Wald), "
@@ -536,12 +575,19 @@ def run_lmm_association_numpy(
 
         t_compute_start = time.perf_counter()
         try:
-            cr = compute_wald_split_c_ws(
-                lmm_workspace,
-                uab_var_soa,
-                pipeline_omp_threads,
-            )
-        except MemoryError:
+            if n_cvt == 1:
+                cr = compute_wald_split_c_ws(
+                    lmm_workspace,
+                    uab_var_soa,
+                    pipeline_omp_threads,
+                )
+            else:
+                cr = compute_wald_general_c_ws(
+                    lmm_workspace,
+                    uab_var_soa,
+                    pipeline_omp_threads,
+                )
+        except (MemoryError, ValueError, TypeError, OverflowError):
             raise
         except Exception as exc:
             raise RuntimeError(
@@ -649,7 +695,7 @@ def run_lmm_association_numpy(
                 t_rot_start = time.perf_counter()
                 try:
                     current = future.result()
-                except MemoryError:
+                except (MemoryError, ValueError, TypeError, OverflowError):
                     raise
                 except Exception as exc:
                     raise RuntimeError(
@@ -699,7 +745,7 @@ def run_lmm_association_numpy(
                         logl_H0=logl_H0,
                         n_threads=omp_threads,
                     )
-                except MemoryError:
+                except (MemoryError, ValueError, TypeError, OverflowError):
                     raise
                 except Exception as exc:
                     raise RuntimeError(
@@ -742,11 +788,33 @@ def run_lmm_association_numpy(
                 if lmm_mode == 1 and lmm_workspace is not None:
                     # Wald: use C workspace (no full Uab needed)
                     with blas_threads(1):
-                        cr = compute_wald_split_c_ws(
-                            lmm_workspace,
-                            uab_var_soa,
-                            omp_threads,
-                        )
+                        try:
+                            if n_cvt == 1:
+                                cr = compute_wald_split_c_ws(
+                                    lmm_workspace,
+                                    uab_var_soa,
+                                    omp_threads,
+                                )
+                            else:
+                                cr = compute_wald_general_c_ws(
+                                    lmm_workspace,
+                                    uab_var_soa,
+                                    omp_threads,
+                                )
+                        except (
+                            MemoryError,
+                            ValueError,
+                            TypeError,
+                            OverflowError,
+                        ):
+                            raise
+                        except Exception as exc:
+                            raise RuntimeError(
+                                f"C extension compute failed at SNP "
+                                f"offset {write_offset}/{n_filtered}. "
+                                f"Processed {write_offset} SNPs "
+                                f"before failure."
+                            ) from exc
                     del uab_var_soa
                 else:
                     # LRT/Score/All: reconstruct full Uab from split components

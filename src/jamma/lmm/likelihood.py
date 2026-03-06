@@ -12,6 +12,10 @@ Key data structures:
 - Pab: 2D matrix (n_cvt+2 x n_index) storing H-inv weighted projections
 - Hi_eval: 1/(lambda * eigenvalues + 1) weighting vector
 
+Key functions for C extension support:
+- classify_uab_columns: splits Uab indices into SNP-invariant and SNP-varying
+- build_pab_table_for_c: flattens recursion data into C-friendly int32 arrays
+
 Reference: Zhou & Stephens (2012) Nature Genetics, Supplementary Information
 """
 
@@ -668,6 +672,104 @@ def _golden_section_minimize(
     opt_val = func(opt_lambda)
 
     return opt_lambda, -opt_val
+
+
+@functools.lru_cache(maxsize=8)
+def classify_uab_columns(n_cvt: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Classify Uab columns as invariant or SNP-varying.
+
+    A column is SNP-varying if its (a_col, b_col) pair involves the genotype
+    (0-based index = n_cvt). Otherwise it is invariant across SNPs.
+
+    Pure Python, lru_cached. No JAX dependency.
+
+    Args:
+        n_cvt: Number of covariates.
+
+    Returns:
+        (invariant_indices, varying_indices) as tuples of linear column indices.
+    """
+    table = build_index_table(n_cvt)
+    genotype_col = n_cvt  # 0-based index of X in vectors array
+    invariant = []
+    varying = []
+    for a_col, b_col, linear_idx in table["uab_pairs"]:
+        if a_col == genotype_col or b_col == genotype_col:
+            varying.append(linear_idx)
+        else:
+            invariant.append(linear_idx)
+    return tuple(invariant), tuple(varying)
+
+
+@functools.lru_cache(maxsize=8)
+def build_pab_table_for_c(n_cvt: int) -> dict:
+    """Build flat C-friendly arrays from build_index_table recursion data.
+
+    Converts the nested Python dicts from build_index_table() and the
+    invariant/varying classification from classify_uab_columns() into
+    flat int32 numpy arrays that the C extension can consume via
+    PyArray_DATA().
+
+    The entries array is stride-4: each entry is
+    [index_ab, index_aw, index_bw, index_ww].
+
+    Level 0 has no entries (row 0 comes from dot products).
+    Levels 1..n_cvt+1 have recursion entries.
+
+    Args:
+        n_cvt: Number of covariates.
+
+    Returns:
+        Dict with scalar and array fields for C extension consumption.
+    """
+    table = build_index_table(n_cvt)
+    inv_indices, var_indices = classify_uab_columns(n_cvt)
+
+    # Flatten pab_recursion into contiguous entries array
+    # Level 0 has no entries; levels 1..n_cvt+1 have entries
+    n_levels = n_cvt + 2  # levels 0..n_cvt+1
+    level_counts_list = [0] * n_levels  # level 0 has 0 entries
+    all_entries = []
+
+    for level in range(1, n_cvt + 2):
+        level_entries = table["pab_recursion"][level]
+        level_counts_list[level] = len(level_entries)
+        for _, _, idx_ab, idx_aw, idx_bw, idx_ww in level_entries:
+            all_entries.extend([idx_ab, idx_aw, idx_bw, idx_ww])
+
+    # Build level_offsets (cumulative)
+    level_offsets_list = []
+    running = 0
+    for count in level_counts_list:
+        level_offsets_list.append(running)
+        running += count
+
+    # Extract logdet_diag_indices
+    diag_rows = [r for r, _ in table["logdet_diag_indices"]]
+    diag_cols = [c for _, c in table["logdet_diag_indices"]]
+
+    def _frozen(data: list[int]) -> np.ndarray:
+        arr = np.array(data, dtype=np.int32)
+        arr.flags.writeable = False
+        return arr
+
+    return {
+        "n_cvt": n_cvt,
+        "n_index": table["n_index"],
+        "n_rows": n_cvt + 2,
+        "n_inv": len(inv_indices),
+        "n_var": len(var_indices),
+        "idx_xx": table["idx_xx"],
+        "idx_xy": table["idx_xy"],
+        "idx_yy": table["idx_yy"],
+        "invariant_indices": _frozen(inv_indices),
+        "varying_indices": _frozen(var_indices),
+        "logdet_diag_rows": _frozen(diag_rows),
+        "logdet_diag_cols": _frozen(diag_cols),
+        "level_offsets": _frozen(level_offsets_list),
+        "level_counts": _frozen(level_counts_list),
+        "entries": _frozen(all_entries),
+    }
 
 
 def compute_null_model_lambda(

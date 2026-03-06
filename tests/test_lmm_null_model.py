@@ -254,6 +254,26 @@ class TestNullModelFormulas:
         assert lambda_null > 0, f"Lambda should be positive, got {lambda_null}"
         assert np.isfinite(logl_null), f"logl should be finite, got {logl_null}"
 
+    def test_pve_matches_gemma(self, gemma_test_data):
+        """PVE from REML null lambda should match GEMMA reference (0.293439).
+
+        GEMMA uses trace-adjusted PVE: vg*trace(K) / (vg*trace(K) + ve*n),
+        which equals lambda*trace(K) / (lambda*trace(K) + n) where
+        trace(K) = sum(eigenvalues).
+        """
+        from jamma.lmm.prepare_common import compute_and_log_pve
+
+        data = gemma_test_data
+        pve = compute_and_log_pve(
+            data["eigenvalues"], data["UtW"], data["Uty"], data["n_cvt"]
+        )
+        np.testing.assert_allclose(
+            pve,
+            GEMMA_PVE_NULL,
+            rtol=1e-4,
+            err_msg=f"PVE {pve:.6f} != GEMMA {GEMMA_PVE_NULL}",
+        )
+
 
 @pytest.mark.tier1
 class TestWaldTestUnchanged:

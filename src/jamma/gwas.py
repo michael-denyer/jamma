@@ -30,12 +30,14 @@ class GWASResult:
         n_snps_tested: Number of SNPs tested after MAF/missingness/HWE/SNP-list
             filtering.
         timing: Timing breakdown with keys 'kinship_s', 'lmm_s', 'total_s'.
+        pve_estimate: PVE (proportion of variance explained) from null model REML.
     """
 
     associations: list[AssocResult]
     n_samples: int
     n_snps_tested: int
     timing: GWASTiming = field(default_factory=dict)
+    pve_estimate: float | None = None
 
 
 def gwas(
@@ -193,4 +195,5 @@ def gwas(
             "lmm_s": pipeline_result.timing["lmm_s"],
             "total_s": pipeline_result.timing["total_s"],
         },
+        pve_estimate=pipeline_result.pve_estimate,
     )

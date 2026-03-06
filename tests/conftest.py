@@ -212,3 +212,71 @@ def validation_pipeline_data():
     }
 
     return result
+
+
+def _build_synthetic_covariate_data(
+    n_cvt: int,
+    n_samples: int = 200,
+    n_snps: int = 50,
+    seed: int = 42,
+) -> dict:
+    """Build synthetic rotated data for C extension testing.
+
+    Generates eigenvalues, rotated covariates (UtW), phenotype (Uty),
+    genotypes (UtG), and computes Uab_batch for the given n_cvt.
+
+    Args:
+        n_cvt: Number of covariates.
+        n_samples: Number of samples.
+        n_snps: Number of SNPs.
+        seed: RNG seed for reproducibility.
+
+    Returns:
+        Dict with keys: eigenvalues, UtW, Uty, UtG, Uab_batch,
+        n_samples, n_snps, n_cvt.
+    """
+    from jamma.lmm.likelihood import compute_Uab
+
+    rng = np.random.default_rng(seed)
+
+    eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))[::-1]  # descending
+    UtW = np.abs(rng.standard_normal((n_samples, n_cvt))) + 0.5
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+
+    # Compute Uab for each SNP
+    n_index = (n_cvt + 3) * (n_cvt + 2) // 2
+    Uab_batch = np.zeros((n_snps, n_samples, n_index), dtype=np.float64)
+    for i in range(n_snps):
+        Uab_batch[i] = compute_Uab(UtW, Uty, UtG[:, i])
+
+    return {
+        "eigenvalues": eigenvalues,
+        "UtW": UtW,
+        "Uty": Uty,
+        "UtG": UtG,
+        "Uab_batch": Uab_batch,
+        "n_samples": n_samples,
+        "n_snps": n_snps,
+        "n_cvt": n_cvt,
+    }
+
+
+@pytest.fixture
+def synthetic_covariate_data_ncvt2() -> dict:
+    """Synthetic data with 2 covariates for C extension testing.
+
+    200 samples, 50 SNPs, 2 covariates. Returns dict with
+    eigenvalues, UtW, Uty, UtG, Uab_batch, n_samples, n_snps, n_cvt.
+    """
+    return _build_synthetic_covariate_data(n_cvt=2, seed=42)
+
+
+@pytest.fixture
+def synthetic_covariate_data_ncvt4() -> dict:
+    """Synthetic data with 4 covariates for C extension testing.
+
+    200 samples, 50 SNPs, 4 covariates. Returns dict with
+    eigenvalues, UtW, Uty, UtG, Uab_batch, n_samples, n_snps, n_cvt.
+    """
+    return _build_synthetic_covariate_data(n_cvt=4, seed=99)

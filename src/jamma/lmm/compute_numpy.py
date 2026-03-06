@@ -1,7 +1,9 @@
 """NumPy mode dispatch for LMM chunk computation.
 
-Dispatches to C extension (_lmm_accel) for n_cvt=1 when available; falls back
-to NumPy batch functions from likelihood_numpy.py. No JAX imports.
+Dispatches to C extension (_lmm_accel) for n_cvt=1 (batch) and n_cvt>1
+(general workspace) when available; falls back to NumPy Python path.
+Also exports split-workspace and general-workspace APIs for direct use
+by runners. No JAX imports.
 
 The caller is responsible for:
 - Computing Uab_batch via batch_compute_uab_numpy (before calling this)
@@ -26,17 +28,30 @@ from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_split_ncvt1_numpy,
 )
 
-_EXPECTED_ABI_VERSION = 3  # Must match ABI_VERSION in _lmm_accel.c
+_EXPECTED_ABI_VERSION = 4  # Must match ABI_VERSION in _lmm_accel.c
 
 
-def _try_import_accel() -> tuple[bool, bool, bool, object, object, object, object]:
+def _try_import_accel() -> tuple[
+    bool,
+    bool,
+    bool,
+    bool,
+    object,
+    object,
+    object,
+    object,
+    object,
+    object,
+]:
     """Attempt to import the C extension and validate ABI version.
 
     Returns:
-        (accel_available, split_available, has_openmp,
+        (accel_available, split_available, general_available, has_openmp,
          compute_batch_c, compute_batch_split_c,
-         create_workspace_split_c, compute_lmm_chunk_split_c)
+         create_workspace_split_c, compute_lmm_chunk_split_c,
+         create_workspace_general_c, compute_lmm_chunk_general_c)
     """
+    _none10 = (False, False, False, False, None, None, None, None, None, None)
     try:
         from jamma.lmm._lmm_accel import ABI_VERSION as abi
         from jamma.lmm._lmm_accel import HAS_OPENMP as has_omp
@@ -50,8 +65,11 @@ def _try_import_accel() -> tuple[bool, bool, bool, object, object, object, objec
         from jamma.lmm._lmm_accel import (
             create_workspace_split_c as ws_create,
         )
-    except ImportError:
-        return False, False, False, None, None, None, None
+    except ImportError as e:
+        from loguru import logger
+
+        logger.debug(f"C extension import failed: {e}")
+        return _none10
     except AttributeError as e:
         from loguru import logger
 
@@ -59,7 +77,7 @@ def _try_import_accel() -> tuple[bool, bool, bool, object, object, object, objec
             f"C extension loaded but missing expected attribute: {e}. "
             "Stale .so may need recompilation."
         )
-        return False, False, False, None, None, None, None
+        return _none10
 
     if abi != _EXPECTED_ABI_VERSION:
         from loguru import logger
@@ -69,9 +87,43 @@ def _try_import_accel() -> tuple[bool, bool, bool, object, object, object, objec
             f"compiled={abi}, expected={_EXPECTED_ABI_VERSION}. "
             "Stale .so needs recompilation."
         )
-        return False, False, False, None, None, None, None
+        return _none10
 
-    return True, True, has_omp, batch_c, batch_split_c, ws_create, ws_chunk
+    # General n_cvt support — expected in ABI v4+
+    try:
+        from jamma.lmm._lmm_accel import (
+            compute_lmm_chunk_general_c as ws_gen_chunk,
+        )
+        from jamma.lmm._lmm_accel import (
+            create_workspace_general_c as ws_gen_create,
+        )
+
+        general_available = True
+    except AttributeError:
+        from loguru import logger
+
+        logger.warning(
+            "C extension reports ABI v4 (general n_cvt) but "
+            "create_workspace_general_c / compute_lmm_chunk_general_c "
+            "not found. Extension may be partially compiled. "
+            "Falling back to Python path for n_cvt > 1."
+        )
+        ws_gen_create = None
+        ws_gen_chunk = None
+        general_available = False
+
+    return (
+        True,
+        True,
+        general_available,
+        has_omp,
+        batch_c,
+        batch_split_c,
+        ws_create,
+        ws_chunk,
+        ws_gen_create,
+        ws_gen_chunk,
+    )
 
 
 def _auto_recompile() -> bool:
@@ -90,11 +142,14 @@ def _auto_recompile() -> bool:
 (
     _C_ACCEL_AVAILABLE,
     _C_SPLIT_AVAILABLE,
+    _C_GENERAL_AVAILABLE,
     _C_HAS_OPENMP,
     _compute_lmm_batch_c,
     _compute_lmm_batch_split_c,
     _create_workspace_split_c,
     _compute_lmm_chunk_split_c,
+    _create_workspace_general_c,
+    _compute_lmm_chunk_general_c,
 ) = _try_import_accel()
 
 if not _C_ACCEL_AVAILABLE:
@@ -103,11 +158,14 @@ if not _C_ACCEL_AVAILABLE:
         (
             _C_ACCEL_AVAILABLE,
             _C_SPLIT_AVAILABLE,
+            _C_GENERAL_AVAILABLE,
             _C_HAS_OPENMP,
             _compute_lmm_batch_c,
             _compute_lmm_batch_split_c,
             _create_workspace_split_c,
             _compute_lmm_chunk_split_c,
+            _create_workspace_general_c,
+            _compute_lmm_chunk_general_c,
         ) = _try_import_accel()
 
     if not _C_ACCEL_AVAILABLE:
@@ -121,6 +179,7 @@ if not _C_ACCEL_AVAILABLE:
         )
         del _logger
         _C_HAS_OPENMP = False
+        _C_GENERAL_AVAILABLE = False
 
 
 class WaldResult(TypedDict):
@@ -288,6 +347,92 @@ def compute_wald_split_c_ws(
     return _compute_lmm_chunk_split_c(workspace, uab_varying_soa, n_threads)
 
 
+def create_lmm_workspace_general(
+    eigenvalues: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+    n_samples: int,
+    n_cvt: int,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+    n_threads: int,
+) -> object:
+    """Create a persistent C workspace for the general n_cvt REML pipeline.
+
+    Builds the Pab recursion table via build_pab_table_for_c(), then passes
+    all flat arrays to the C extension's create_workspace_general_c().
+
+    Args:
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        uab_invariant_soa: Invariant Uab (n_inv, n_samples) — SoA layout.
+        n_samples: Number of samples.
+        n_cvt: Number of covariates.
+        l_min: Minimum lambda.
+        l_max: Maximum lambda.
+        n_grid: Number of coarse grid points.
+        n_refine: Golden section iterations.
+        n_threads: OpenMP thread count.
+
+    Returns:
+        PyCapsule wrapping lmm_workspace_general_t.
+    """
+    if _create_workspace_general_c is None:
+        raise RuntimeError(
+            "General n_cvt C workspace requires the _lmm_accel C extension "
+            "with ABI version 4+. Recompile: python -m jamma.lmm._compile_accel"
+        )
+
+    from jamma.lmm.likelihood import build_pab_table_for_c
+
+    table = build_pab_table_for_c(n_cvt)
+
+    return _create_workspace_general_c(
+        eigenvalues,
+        uab_invariant_soa,
+        n_samples,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        n_threads,
+        n_cvt,
+        table["invariant_indices"],
+        table["varying_indices"],
+        table["logdet_diag_rows"],
+        table["logdet_diag_cols"],
+        table["level_offsets"],
+        table["level_counts"],
+        table["entries"],
+        table["idx_xx"],
+        table["idx_xy"],
+        table["idx_yy"],
+    )
+
+
+def compute_wald_general_c_ws(
+    workspace: object,
+    uab_varying_soa: np.ndarray,
+    n_threads: int,
+) -> WaldResult:
+    """Compute REML Wald for one chunk using a general n_cvt workspace.
+
+    Args:
+        workspace: PyCapsule from create_lmm_workspace_general.
+        uab_varying_soa: SNP-varying Uab (n_snps, n_var, n_samples) — SoA.
+        n_threads: OpenMP thread count.
+
+    Returns:
+        WaldResult with keys: lambdas, logls, betas, ses, pwalds.
+    """
+    if _compute_lmm_chunk_general_c is None:
+        raise RuntimeError(
+            "General n_cvt C chunk compute requires the _lmm_accel C extension "
+            "with ABI version 4+. Recompile: python -m jamma.lmm._compile_accel"
+        )
+    return _compute_lmm_chunk_general_c(workspace, uab_varying_soa, n_threads)
+
+
 def _compute_wald_numpy(
     n_cvt: int,
     eigenvalues: np.ndarray,
@@ -302,9 +447,9 @@ def _compute_wald_numpy(
 ) -> WaldResult:
     """Compute REML-optimized Wald test statistics.
 
-    Dispatches to the C extension for n_cvt=1 when _lmm_accel is importable.
-    For n_cvt=1 without the C extension, uses the split-Uab Python path
-    (invariant/varying separation). Falls back to generic Python path for n_cvt>1.
+    Dispatches to C extension: n_cvt=1 uses the batch path (compute_lmm_batch_c),
+    n_cvt>1 uses the general workspace path. Falls back to Python split path
+    (n_cvt=1) or generic Python path (n_cvt>1) when C extension is unavailable.
 
     Args:
         n_cvt: Number of covariates.
@@ -337,6 +482,48 @@ def _compute_wald_numpy(
             Iab_batch,
             n_threads,
         )
+
+    if _C_GENERAL_AVAILABLE and 1 < n_cvt <= 20:
+        # Use C extension for general n_cvt via split-Uab workspace
+        from jamma.lmm.likelihood import classify_uab_columns
+
+        inv_indices, var_indices = classify_uab_columns(n_cvt)
+
+        # Build invariant SoA from Uab_batch (shared across all SNPs, use SNP 0)
+        # Note: a[0, :, list_idx] returns (n_inv, n_samples) due to numpy advanced
+        # indexing rules (integer + list separated by slice -> grouped at front).
+        inv_list = list(inv_indices)
+        if __debug__ and Uab_batch.shape[0] > 1:
+            # Verify columns classified as invariant are actually constant across SNPs
+            inv_sample = Uab_batch[:, :, inv_list]
+            if not np.allclose(inv_sample, inv_sample[0:1], rtol=1e-12, atol=0):
+                raise RuntimeError(
+                    f"classify_uab_columns({n_cvt}) classified varying columns as "
+                    "invariant — internal error, please report with your n_cvt value"
+                )
+        uab_invariant_soa = np.ascontiguousarray(
+            Uab_batch[0, :, inv_list]  # (n_inv, n_samples)
+        )
+        # Build varying SoA from Uab_batch
+        uab_varying_soa = np.ascontiguousarray(
+            Uab_batch[:, :, list(var_indices)].transpose(
+                0, 2, 1
+            )  # (n_snps, n_var, n_samples)
+        )
+
+        # Create per-call workspace and compute
+        ws = create_lmm_workspace_general(
+            eigenvalues,
+            uab_invariant_soa,
+            n_samples,
+            n_cvt,
+            l_min,
+            l_max,
+            n_grid,
+            n_refine,
+            n_threads,
+        )
+        return compute_wald_general_c_ws(ws, uab_varying_soa, n_threads)
 
     if n_cvt == 1:
         # Python split path for n_cvt=1: separate invariant (ww, wy, yy)

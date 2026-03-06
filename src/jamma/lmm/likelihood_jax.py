@@ -24,7 +24,7 @@ Type annotations use jaxtyping for shape documentation:
 
 from __future__ import annotations
 
-from functools import lru_cache, partial
+from functools import partial
 from typing import TYPE_CHECKING
 
 import jax
@@ -36,35 +36,9 @@ from jamma.lmm.likelihood import (
     build_index_table,
     get_ab_index,  # noqa: F401
 )
-
-
-@lru_cache(maxsize=8)
-def classify_uab_columns(n_cvt: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
-    """Classify Uab columns as invariant or SNP-varying.
-
-    A column is SNP-varying if its (a_col, b_col) pair involves the genotype
-    (0-based index = n_cvt). Otherwise it is invariant across SNPs.
-
-    Pure Python, lru_cached. When called inside JIT with static n_cvt,
-    executes at trace time producing compile-time constants.
-
-    Args:
-        n_cvt: Number of covariates.
-
-    Returns:
-        (invariant_indices, varying_indices) as tuples of linear column indices.
-    """
-    table = build_index_table(n_cvt)
-    genotype_col = n_cvt  # 0-based index of X in vectors array
-    invariant = []
-    varying = []
-    for a_col, b_col, linear_idx in table["uab_pairs"]:
-        if a_col == genotype_col or b_col == genotype_col:
-            varying.append(linear_idx)
-        else:
-            invariant.append(linear_idx)
-    return tuple(invariant), tuple(varying)
-
+from jamma.lmm.likelihood import (
+    classify_uab_columns as classify_uab_columns,  # re-export
+)
 
 if TYPE_CHECKING:
     from jaxtyping import Array, Float

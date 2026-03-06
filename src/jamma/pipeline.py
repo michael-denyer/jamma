@@ -261,6 +261,8 @@ class PipelineResult:
         timing: Timing breakdown by pipeline phase (seconds).
         backend: The compute backend used ("jax" or "numpy").
         n_covariates: Number of covariate columns (1 = intercept-only).
+        pve_estimate: PVE (proportion of variance explained) from null model REML.
+            None if not computed (e.g. LOCO with per-chromosome eigendecomp).
     """
 
     associations: list[AssocResult]
@@ -271,6 +273,7 @@ class PipelineResult:
     timing: PipelineTiming = field(default_factory=dict)
     backend: BackendResolved = "numpy"  # Set by PipelineRunner.run()
     n_covariates: int = 1
+    pve_estimate: float | None = None
 
     def __post_init__(self) -> None:
         if self.backend not in ("jax", "numpy"):
@@ -958,6 +961,8 @@ class PipelineRunner:
             total_s = time.perf_counter() - t_start
             logger.info(f"LOCO GWAS complete: {n_tested} SNPs tested in {total_s:.1f}s")
 
+            from jamma.lmm.prepare_common import get_last_pve
+
             return PipelineResult(
                 associations=results,
                 n_samples=n_valid,
@@ -972,6 +977,7 @@ class PipelineRunner:
                 },
                 backend=active_backend,
                 n_covariates=covariates.shape[1] if covariates is not None else 1,
+                pve_estimate=get_last_pve(),
             )
 
         covariates = self.load_covariates(n_samples)
@@ -1179,6 +1185,11 @@ class PipelineRunner:
 
             runner_timing = get_last_run_timing()
 
+        # Capture PVE from the most recent runner call
+        from jamma.lmm.prepare_common import get_last_pve
+
+        pve = get_last_pve()
+
         return PipelineResult(
             associations=all_results,
             n_samples=n_valid,
@@ -1195,6 +1206,7 @@ class PipelineRunner:
             },
             backend=active_backend,
             n_covariates=(covariates.shape[1] if covariates is not None else 1),
+            pve_estimate=pve,
         )
 
     def _run_jax_backend(

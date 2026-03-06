@@ -38,7 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Streaming and LOCO runners flush each JAX sub-chunk to host/disk immediately,
   reducing peak device memory from O(disk_chunk) to O(jax_chunk)
-- Removed dead code: `strip_and_append`, `_concat_jax_accumulators`,
+
+### Removed
+
+- Dead code: `strip_and_append`, `_concat_jax_accumulators`,
   `_init_accumulators`
 
 ## [2.12.0] - 2026-03-06

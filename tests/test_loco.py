@@ -632,6 +632,67 @@ class TestLocoEdgeCases:
             eigenvalues = np.linalg.eigvalsh(K_loco)
             assert np.all(eigenvalues >= -1e-10)
 
+    def test_loco_pve_fallback_when_first_chr_filtered(self, tmp_path: Path):
+        """PVE falls back to the next chromosome when the first has all SNPs filtered.
+
+        chr1 is entirely monomorphic (MAF=0), so all its SNPs are filtered.
+        chr2 and chr3 are polymorphic. PVE should be computed from chr2 (the
+        first chromosome with passing SNPs) and returned as non-None.
+        """
+        from bed_reader import to_bed
+
+        from jamma.lmm.loco import run_lmm_loco
+
+        rng = np.random.default_rng(99)
+        n_samples = 80
+
+        # chr1: 50 monomorphic SNPs (all filtered at any MAF threshold)
+        geno_chr1 = np.ones((n_samples, 50), dtype=np.float64)
+        # chr2, chr3: 80 polymorphic SNPs each
+        geno_chr2 = rng.integers(0, 3, size=(n_samples, 80)).astype(np.float64)
+        geno_chr3 = rng.integers(0, 3, size=(n_samples, 80)).astype(np.float64)
+
+        genotypes = np.hstack([geno_chr1, geno_chr2, geno_chr3])
+        n_snps = genotypes.shape[1]
+        chromosomes = ["1"] * 50 + ["2"] * 80 + ["3"] * 80
+
+        geno_int = genotypes.astype(np.int8)
+        bed_path = tmp_path / "pve_fallback"
+        to_bed(
+            str(bed_path) + ".bed",
+            geno_int,
+            properties={
+                "iid": [f"s{i}" for i in range(n_samples)],
+                "sid": [f"snp_{i}" for i in range(n_snps)],
+                "chromosome": chromosomes,
+                "bp_position": list(range(1, n_snps + 1)),
+            },
+        )
+
+        phenotypes = rng.standard_normal(n_samples)
+
+        results, n_tested, pve = run_lmm_loco(
+            bed_path=bed_path,
+            phenotypes=phenotypes,
+            lmm_mode=1,
+            maf_threshold=0.01,
+            check_memory=False,
+            show_progress=False,
+            backend="numpy",
+        )
+
+        # PVE must be computed despite chr1 being fully filtered
+        assert pve is not None, "PVE should fall back to a later chromosome"
+        assert 0 < pve < 1, f"PVE out of range: {pve}"
+        assert n_tested > 0
+        assert len(results) == n_tested
+
+        # Results should only come from chr2 and chr3 (chr1 fully filtered)
+        result_chrs = {r.chr for r in results}
+        assert "1" not in result_chrs, "chr1 (monomorphic) should have no results"
+        assert "2" in result_chrs
+        assert "3" in result_chrs
+
 
 # ===========================================================================
 # LMM Integration Tests

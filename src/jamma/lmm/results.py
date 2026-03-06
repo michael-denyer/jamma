@@ -125,13 +125,18 @@ def _chunk_result_to_numpy(
         value = result[key]
         if value is None:
             raise ValueError(f"Chunk result missing required array {key!r}")
+        if value.shape[0] < actual_len:
+            raise ValueError(
+                f"Array {key!r} has {value.shape[0]} elements, "
+                f"but actual_len={actual_len}"
+            )
         sliced[key] = value[:actual_len]
     return jax.device_get(sliced)
 
 
 def _yield_chunk_results(
     lmm_mode: int,
-    chunk_filtered_local_idx: list[int],
+    filtered_indices: list[int],
     snp_indices: np.ndarray,
     filtered_afs: np.ndarray,
     filtered_miss: np.ndarray,
@@ -145,7 +150,8 @@ def _yield_chunk_results(
 
     Args:
         lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
-        chunk_filtered_local_idx: Indices within the filtered SNP arrays.
+        filtered_indices: Indices into snp_indices/filtered_afs/filtered_miss
+            for the SNPs in this sub-chunk.
         snp_indices: Full array of filtered SNP indices.
         filtered_afs: Allele frequencies for filtered SNPs (numpy array).
         filtered_miss: Missing counts for filtered SNPs (numpy int array).
@@ -166,7 +172,7 @@ def _yield_chunk_results(
             f"Missing arrays for lmm_mode={lmm_mode}: {missing_keys}. "
             f"Expected keys: {set(field_map.keys())}, got: {set(arrays.keys())}"
         )
-    for j, local_idx in enumerate(chunk_filtered_local_idx):
+    for j, local_idx in enumerate(filtered_indices):
         snp_idx = snp_indices[local_idx]
         af = float(filtered_afs[local_idx])
         n_miss = int(filtered_miss[local_idx])

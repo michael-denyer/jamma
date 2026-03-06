@@ -1009,17 +1009,17 @@ class TestRunLmmAssociationStreaming:
 
         def _spy_yield_chunk_results(
             lmm_mode,
-            chunk_filtered_local_idx,
+            filtered_indices,
             snp_indices,
             filtered_afs,
             filtered_miss,
             snp_info,
             arrays,
         ):
-            chunk_sizes.append(len(chunk_filtered_local_idx))
+            chunk_sizes.append(len(filtered_indices))
             yield from original_yield_chunk_results(
                 lmm_mode,
-                chunk_filtered_local_idx,
+                filtered_indices,
                 snp_indices,
                 filtered_afs,
                 filtered_miss,

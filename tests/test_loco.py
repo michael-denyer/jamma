@@ -645,7 +645,7 @@ class TestLocoLmmIntegration:
     @pytest.mark.slow
     def test_loco_lmm_produces_valid_results(self, mouse_loco_lmm_results):
         """run_lmm_loco returns valid AssocResults with finite stats."""
-        results, n_tested = mouse_loco_lmm_results
+        results, n_tested, _ = mouse_loco_lmm_results
 
         assert len(results) > 0, "Should produce results"
         assert n_tested == len(results), "n_tested should match result count"
@@ -662,7 +662,7 @@ class TestLocoLmmIntegration:
     @pytest.mark.slow
     def test_loco_lmm_results_have_correct_snp_info(self, mouse_loco_lmm_results):
         """SNP IDs and chromosome assignments match BIM metadata."""
-        results, _ = mouse_loco_lmm_results
+        results, _, _ = mouse_loco_lmm_results
 
         meta = get_plink_metadata(MOUSE_HS1940_BFILE)
         bim_snps = set(meta["sid"])
@@ -701,7 +701,7 @@ class TestLocoLmmIntegration:
         )
 
         # LOCO LMM results from shared fixture
-        loco_results, _ = mouse_loco_lmm_results
+        loco_results, _, _ = mouse_loco_lmm_results
 
         # Get top 100 SNPs by p-value
         standard_sorted = sorted(standard_results, key=lambda r: r.p_wald or 1.0)
@@ -924,7 +924,7 @@ class TestLocoKsnpsWiring:
         # Use first 5000 SNP indices for kinship computation
         ksnps_indices = np.arange(5000)
 
-        results, _ = run_lmm_loco(
+        results, _, _ = run_lmm_loco(
             bed_path=MOUSE_HS1940_BFILE,
             phenotypes=phenotypes,
             lmm_mode=1,
@@ -1418,7 +1418,7 @@ class TestLocoLmmMultiPass:
         bed_path, phenotypes = self._write_synthetic_loco_plink(tmp_path, rng)
 
         # Single-pass: col_chunk_size > max SNPs per chromosome (40)
-        results_single, n_single = run_lmm_loco(
+        results_single, n_single, _ = run_lmm_loco(
             bed_path=bed_path,
             phenotypes=phenotypes,
             lmm_mode=1,
@@ -1428,7 +1428,7 @@ class TestLocoLmmMultiPass:
         )
 
         # Multi-pass: col_chunk_size=2 forces ~20 disk chunks per chromosome
-        results_multi, n_multi = run_lmm_loco(
+        results_multi, n_multi, _ = run_lmm_loco(
             bed_path=bed_path,
             phenotypes=phenotypes,
             lmm_mode=1,
@@ -1643,7 +1643,7 @@ def test_loco_cross_backend_parity(tmp_path: Path) -> None:
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
 
     # Run JAX backend
-    jax_results, jax_n = run_lmm_loco(
+    jax_results, jax_n, _ = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
         lmm_mode=1,
@@ -1653,7 +1653,7 @@ def test_loco_cross_backend_parity(tmp_path: Path) -> None:
     )
 
     # Run NumPy backend
-    numpy_results, numpy_n = run_lmm_loco(
+    numpy_results, numpy_n, _ = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
         lmm_mode=1,

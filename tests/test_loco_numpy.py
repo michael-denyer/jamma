@@ -249,7 +249,7 @@ def test_loco_numpy_no_per_chromosome_bed_reads():
         patch("jamma.io.plink.open_bed", side_effect=counting_open_bed),
         patch("jamma.lmm.loco.open_bed", side_effect=counting_open_bed),
     ):
-        results, n_tested = run_lmm_loco(
+        results, n_tested, _ = run_lmm_loco(
             bed_path=_LOCO_BFILE,
             phenotypes=phenotypes,
             backend="numpy",
@@ -302,7 +302,7 @@ def test_run_lmm_loco_reads_loco_workers_env(monkeypatch):
         return original_warning(msg, *args, **kwargs)
 
     with patch.object(loco_module.logger, "warning", side_effect=capture_warning):
-        results, n_tested = run_lmm_loco(
+        results, n_tested, _ = run_lmm_loco(
             bed_path=_LOCO_BFILE,
             phenotypes=phenotypes,
             backend="numpy",
@@ -332,7 +332,7 @@ def test_loco_numpy_multipass_equivalence():
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
 
     # Single-pass baseline (default behaviour, all chromosomes fit in memory)
-    results_single, n_single = run_lmm_loco(
+    results_single, n_single, _ = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
         backend="numpy",
@@ -358,7 +358,7 @@ def test_loco_numpy_multipass_equivalence():
         "_compute_loco_kinship_streaming_numpy",
         side_effect=patched_fn,
     ):
-        results_multi, n_multi = run_lmm_loco(
+        results_multi, n_multi, _ = run_lmm_loco(
             bed_path=_LOCO_BFILE,
             phenotypes=phenotypes,
             backend="numpy",
@@ -433,7 +433,7 @@ def test_loco_numpy_show_progress_true():
 
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
 
-    results, n_tested = run_lmm_loco(
+    results, n_tested, _ = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
         lmm_mode=1,

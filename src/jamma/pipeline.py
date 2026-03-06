@@ -938,7 +938,7 @@ class PipelineRunner:
             self._log_pipeline_banner(active_backend, n_valid, n_snps)
 
             t_loco = time.perf_counter()
-            results, n_tested = run_lmm_loco(
+            results, n_tested, pve = run_lmm_loco(
                 bed_path=self.config.bfile,
                 phenotypes=phenotypes,
                 covariates=covariates,
@@ -961,8 +961,6 @@ class PipelineRunner:
             total_s = time.perf_counter() - t_start
             logger.info(f"LOCO GWAS complete: {n_tested} SNPs tested in {total_s:.1f}s")
 
-            from jamma.lmm.prepare_common import get_last_pve
-
             return PipelineResult(
                 associations=results,
                 n_samples=n_valid,
@@ -977,7 +975,7 @@ class PipelineRunner:
                 },
                 backend=active_backend,
                 n_covariates=covariates.shape[1] if covariates is not None else 1,
-                pve_estimate=get_last_pve(),
+                pve_estimate=pve,
             )
 
         covariates = self.load_covariates(n_samples)
@@ -1147,7 +1145,7 @@ class PipelineRunner:
                 col_path = assoc_path
 
             if active_backend == "jax":
-                results, n_tested = self._run_jax_backend(
+                run_result, n_tested = self._run_jax_backend(
                     phenotypes_col,
                     K,
                     covariates,
@@ -1158,7 +1156,7 @@ class PipelineRunner:
                     actual_chunk,
                 )
             else:
-                results, n_tested = self._run_numpy_backend(
+                run_result, n_tested = self._run_numpy_backend(
                     phenotypes_col,
                     K,
                     covariates,
@@ -1169,7 +1167,7 @@ class PipelineRunner:
                     plink_data=_plink_data,
                 )
 
-            all_results.extend(results)
+            all_results.extend(run_result.associations)
             total_tested += n_tested
             all_assoc_paths.append(col_path)
             logger.info(f"Phenotype {col}: {n_tested} SNPs tested -> {col_path}")
@@ -1186,9 +1184,7 @@ class PipelineRunner:
             runner_timing = get_last_run_timing()
 
         # Capture PVE from the most recent runner call
-        from jamma.lmm.prepare_common import get_last_pve
-
-        pve = get_last_pve()
+        pve = run_result.pve
 
         return PipelineResult(
             associations=all_results,
@@ -1219,7 +1215,7 @@ class PipelineRunner:
         assoc_path: Path,
         snps_indices: np.ndarray | None,
         actual_chunk: int,
-    ) -> tuple[list[AssocResult], int]:
+    ) -> tuple:
         """Run LMM association using the JAX streaming backend."""
         from jamma.core.jax_config import ensure_jax_configured
         from jamma.lmm import run_lmm_association_streaming
@@ -1263,7 +1259,7 @@ class PipelineRunner:
         assoc_path: Path,
         snps_indices: np.ndarray | None,
         plink_data: object | None = None,
-    ) -> tuple[list[AssocResult], int]:
+    ) -> tuple:
         """Run LMM association using the pure-NumPy batch backend.
 
         Args:
@@ -1311,7 +1307,7 @@ class PipelineRunner:
             lmm_mode=self.config.lmm_mode,
         )
 
-        assoc_results = run_lmm_association_numpy(
+        run_result = run_lmm_association_numpy(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=K,
@@ -1324,16 +1320,19 @@ class PipelineRunner:
 
         # Write results to disk in GEMMA format
         test_type = _TEST_TYPE_MAP[self.config.lmm_mode]
-        logger.info(f"Writing {len(assoc_results)} results to {assoc_path}")
+        n_results = len(run_result.associations)
+        logger.info(f"Writing {n_results} results to {assoc_path}")
         try:
             with IncrementalAssocWriter(assoc_path, test_type=test_type) as writer:
-                writer.write_batch(assoc_results)
+                writer.write_batch(run_result.associations)
         except OSError as e:
             logger.error(
-                f"Failed to write {len(assoc_results)} association results to "
+                f"Failed to write {n_results} association results to "
                 f"{assoc_path}: {e}. Results were computed successfully but could "
                 f"not be saved. Check disk space and file permissions."
             )
             raise
 
-        return [], len(assoc_results)  # Results written to disk
+        from jamma.lmm.schema import LmmRunResult
+
+        return LmmRunResult(associations=[], pve=run_result.pve), n_results

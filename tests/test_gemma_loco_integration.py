@@ -187,7 +187,7 @@ class TestGemmaLocoValidation:
         columns: rs, beta, se, p_wald, l_remle, logl_H1.
         """
         phenotypes = load_phenotypes_from_fam(PLINK_PREFIX.with_suffix(".fam"))
-        results, _n_tested = run_lmm_loco(
+        results, _n_tested, _ = run_lmm_loco(
             bed_path=PLINK_PREFIX,
             phenotypes=phenotypes,
             lmm_mode=1,
@@ -436,7 +436,7 @@ def test_loco_cross_backend_parity_modes_2_3_4(lmm_mode: int) -> None:
     """
     phenotypes = load_phenotypes_from_fam(PLINK_PREFIX.with_suffix(".fam"))
 
-    jax_results, jax_n = run_lmm_loco(
+    jax_results, jax_n, _ = run_lmm_loco(
         bed_path=PLINK_PREFIX,
         phenotypes=phenotypes,
         lmm_mode=lmm_mode,
@@ -446,7 +446,7 @@ def test_loco_cross_backend_parity_modes_2_3_4(lmm_mode: int) -> None:
         check_memory=False,
         backend="jax",
     )
-    numpy_results, numpy_n = run_lmm_loco(
+    numpy_results, numpy_n, _ = run_lmm_loco(
         bed_path=PLINK_PREFIX,
         phenotypes=phenotypes,
         lmm_mode=lmm_mode,
@@ -562,7 +562,7 @@ def test_loco_mode_234_with_covariates(lmm_mode: int) -> None:
     rng = np.random.default_rng(42)
     covariates = rng.standard_normal((len(phenotypes), 1))
 
-    results, n_tested = run_lmm_loco(
+    results, n_tested, _ = run_lmm_loco(
         bed_path=PLINK_PREFIX,
         phenotypes=phenotypes,
         covariates=covariates,
@@ -621,7 +621,7 @@ def test_loco_cross_backend_parity_modes_234_with_covariates(lmm_mode: int) -> N
     rng = np.random.default_rng(42)
     covariates = rng.standard_normal((len(phenotypes), 1))
 
-    jax_results, jax_n = run_lmm_loco(
+    jax_results, jax_n, _ = run_lmm_loco(
         bed_path=PLINK_PREFIX,
         phenotypes=phenotypes,
         covariates=covariates,
@@ -632,7 +632,7 @@ def test_loco_cross_backend_parity_modes_234_with_covariates(lmm_mode: int) -> N
         check_memory=False,
         backend="jax",
     )
-    numpy_results, numpy_n = run_lmm_loco(
+    numpy_results, numpy_n, _ = run_lmm_loco(
         bed_path=PLINK_PREFIX,
         phenotypes=phenotypes,
         covariates=covariates,
@@ -741,7 +741,7 @@ def test_loco_single_snp_chromosome(backend: str) -> None:
     """
     phenotypes = load_phenotypes_from_fam(PLINK_PREFIX.with_suffix(".fam"))
 
-    results, n_tested = run_lmm_loco(
+    results, n_tested, _ = run_lmm_loco(
         bed_path=PLINK_PREFIX,
         phenotypes=phenotypes,
         lmm_mode=1,

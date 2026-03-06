@@ -45,7 +45,6 @@ from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
     _compute_null_model_common,
     compute_and_log_pve,
-    get_last_pve,
 )
 from jamma.lmm.results import (
     _yield_chunk_results,
@@ -620,7 +619,7 @@ def run_lmm_loco(
     l_min: float = 1e-5,
     l_max: float = 1e5,
     backend: str = "jax",
-) -> tuple[list[AssocResult], int]:
+) -> tuple[list[AssocResult], int, float | None]:
     """Run LOCO LMM association: per-chromosome eigendecomp and association.
 
     For each chromosome:
@@ -655,13 +654,14 @@ def run_lmm_loco(
         backend: Compute backend — "jax" (default) or "numpy".
 
     Returns:
-        Tuple of (results, n_tested) where results is a list of AssocResult
-        in biological chromosome order (1-22, X, Y, XY, MT) with original
-        within-chromosome SNP order preserved. Chromosomes that lack
-        leave-one-out kinship (e.g., excluded by -ksnps) use full-kinship
-        fallback and are yielded after all LOCO chromosomes. Empty list
-        if output_path is set. n_tested is the total number of SNPs tested
-        across all chromosomes.
+        Tuple of (results, n_tested, pve) where results is a list of
+        AssocResult in biological chromosome order (1-22, X, Y, XY, MT)
+        with original within-chromosome SNP order preserved. Chromosomes
+        that lack leave-one-out kinship (e.g., excluded by -ksnps) use
+        full-kinship fallback and are yielded after all LOCO chromosomes.
+        Empty list if output_path is set. n_tested is the total number of
+        SNPs tested across all chromosomes. pve is the PVE estimate from
+        the first chromosome's null model (representative estimate).
 
     Raises:
         ValueError: If only one chromosome present, if lmm_mode invalid,
@@ -850,7 +850,7 @@ def run_lmm_loco(
 
             # Run LMM for this chromosome
             if backend == "numpy":
-                chr_results = _run_lmm_for_chromosome_numpy(
+                chr_results, chr_pve = _run_lmm_for_chromosome_numpy(
                     bed_path=bed_path,
                     chr_snp_indices=chr_snp_indices,
                     eigenvalues=eigenvalues_np,
@@ -870,9 +870,10 @@ def run_lmm_loco(
                     writer=writer,
                     chr_name=chr_name,
                     snp_stats_cache=snp_stats_cache,
+                    compute_pve=(chr_idx == 0),
                 )
             else:
-                chr_results = _run_lmm_for_chromosome(
+                chr_results, chr_pve = _run_lmm_for_chromosome(
                     bed_path=bed_path,
                     chr_snp_indices=chr_snp_indices,
                     eigenvalues=eigenvalues_np,
@@ -890,6 +891,7 @@ def run_lmm_loco(
                     snps_global_mask=snps_global_mask,
                     col_chunk_size=col_chunk_size,
                     writer=writer,
+                    compute_pve=(chr_idx == 0),
                 )
 
             # When writer is provided, results are already on disk;
@@ -898,10 +900,8 @@ def run_lmm_loco(
                 all_results.extend(chr_results)
 
             # Capture PVE from the first chromosome for pipeline reporting.
-            # Each chromosome recomputes PVE with its own K_loco; we report
-            # the first as a representative estimate.
             if chr_idx == 0:
-                first_chr_pve = get_last_pve()
+                first_chr_pve = chr_pve
 
             # Free eigendecomp
             del eigenvalues_np, U
@@ -917,18 +917,12 @@ def run_lmm_loco(
         if writer is not None and show_progress:
             logger.info(f"Wrote {writer.count:,} results to {output_path}")
 
-    # Restore the first chromosome's PVE so get_last_pve() returns a
-    # representative value, not the last chromosome's (which may be atypical).
-    import jamma.lmm.prepare_common as _pve_mod
-
-    _pve_mod._last_pve = first_chr_pve  # noqa: SLF001
-
     if show_progress:
         elapsed = time.perf_counter() - start_time
         logger.info(f"LOCO LMM Association completed in {elapsed:.2f}s")
 
     n_tested = writer.count if writer is not None else len(all_results)
-    return ([] if output_path is not None else all_results), n_tested
+    return ([] if output_path is not None else all_results), n_tested, first_chr_pve
 
 
 def _run_lmm_for_chromosome(
@@ -951,7 +945,8 @@ def _run_lmm_for_chromosome(
     snps_global_mask: np.ndarray | None = None,
     col_chunk_size: int = 5_000,
     writer: IncrementalAssocWriter | None = None,
-) -> list[AssocResult]:
+    compute_pve: bool = False,
+) -> tuple[list[AssocResult], float | None]:
     """Run JAX LMM association on a single chromosome's SNPs.
 
     Reads the chromosome's SNPs from the BED file in column chunks
@@ -983,9 +978,13 @@ def _run_lmm_for_chromosome(
         writer: Optional incremental writer for streaming results to disk.
             When provided, results are written directly and an empty list
             is returned. When None, results are accumulated and returned.
+        compute_pve: If True, compute PVE from null model REML lambda.
+            Only set for the first chromosome in the LOCO loop.
 
     Returns:
-        List of AssocResult for this chromosome's SNPs (empty if writer used).
+        Tuple of (results, pve) where results is a list of AssocResult
+        (empty if writer used) and pve is the PVE estimate (None unless
+        compute_pve=True).
     """
     import jax  # noqa: PLC0415
 
@@ -1030,7 +1029,7 @@ def _run_lmm_for_chromosome(
         show_progress,
     )
     if filter_result is None:
-        return []
+        return [], None
 
     (
         _local_filtered_indices,
@@ -1071,7 +1070,9 @@ def _run_lmm_for_chromosome(
         l_max=l_max,
     )
 
-    compute_and_log_pve(eigenvalues, UtW, Uty, n_cvt, l_min, l_max)
+    chr_pve = None
+    if compute_pve:
+        chr_pve = compute_and_log_pve(eigenvalues, UtW, Uty, n_cvt, l_min, l_max)
 
     eigenvalues_jax = jax.device_put(eigenvalues, placement.rep)
     UtW_jax = jax.device_put(UtW, placement.rep)
@@ -1222,7 +1223,7 @@ def _run_lmm_for_chromosome(
             total_at_lmin, total_at_lmax, l_min, l_max, prefix="LOCO "
         )
 
-        return results
+        return results, chr_pve
     finally:
         del eigenvalues_jax, UtW_jax, Uty_jax
 
@@ -1249,7 +1250,8 @@ def _run_lmm_for_chromosome_numpy(
     writer: IncrementalAssocWriter | None = None,
     chr_name: str = "",
     snp_stats_cache: SnpStatsCache | None = None,
-) -> list[AssocResult]:
+    compute_pve: bool = False,
+) -> tuple[list[AssocResult], float | None]:
     """Run NumPy LMM association on a single chromosome's SNPs.
 
     Pure-NumPy implementation — no JAX dependency. Mirrors the structure of
@@ -1283,6 +1285,8 @@ def _run_lmm_for_chromosome_numpy(
         writer: Optional incremental writer for streaming results to disk.
             When provided, results are written directly and an empty list
             is returned. When None, results are accumulated and returned.
+        compute_pve: If True, compute PVE from null model REML lambda.
+            Only set for the first chromosome in the LOCO loop.
         snp_stats_cache: Global SNP statistics from kinship PASS 1 (LOCO-01).
             When provided, per-chromosome stats are extracted by slicing
             cache.col_means[chr_snp_indices] — eliminates a BED re-read.
@@ -1290,7 +1294,9 @@ def _run_lmm_for_chromosome_numpy(
             When None, falls back to _collect_chr_snp_stats (legacy behavior).
 
     Returns:
-        List of AssocResult for this chromosome's SNPs (empty if writer used).
+        Tuple of (results, pve) where results is a list of AssocResult
+        (empty if writer used) and pve is the PVE estimate (None unless
+        compute_pve=True).
     """
     n_samples = phenotypes.shape[0]
     valid_indices = np.where(valid_mask)[0]
@@ -1330,7 +1336,7 @@ def _run_lmm_for_chromosome_numpy(
         show_progress,
     )
     if filter_result is None:
-        return []
+        return [], None
 
     (
         _local_filtered_indices,
@@ -1364,7 +1370,9 @@ def _run_lmm_for_chromosome_numpy(
         l_max=l_max,
     )
 
-    compute_and_log_pve(eigenvalues, UtW, Uty, n_cvt, l_min, l_max)
+    chr_pve = None
+    if compute_pve:
+        chr_pve = compute_and_log_pve(eigenvalues, UtW, Uty, n_cvt, l_min, l_max)
 
     # Compute chunk size based on RAM budget
     chunk_size = _compute_chunk_size_numpy(n_samples, n_filtered, n_cvt)
@@ -1474,4 +1482,4 @@ def _run_lmm_for_chromosome_numpy(
             )
         )
 
-    return results
+    return results, chr_pve

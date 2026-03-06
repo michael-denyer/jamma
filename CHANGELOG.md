@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-03-06
+
+### Fixed
+
+- Streaming memory estimates now distinguish disk chunk size (raw genotype buffer)
+  from JAX sub-chunk size (rotation/Uab/grid buffers), producing accurate LMM
+  phase estimates after per-subchunk flush
+
 ## [3.0.0] - 2026-03-06
 
 ### Breaking

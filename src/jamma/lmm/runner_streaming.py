@@ -177,9 +177,16 @@ def run_lmm_association_streaming(
 
     n_samples = phenotypes.shape[0]
 
-    # Always log memory estimate (useful even without hard check)
+    # Always log memory estimate (useful even without hard check).
+    # jax_chunk_size is computed from n_snps (upper bound; n_filtered unknown
+    # until after pass 1) — same logic as runtime _compute_chunk_size call.
+    est_jax_chunk = _compute_chunk_size(n_snps, n_samples=n_samples, pipeline_buffers=2)
     est = estimate_lmm_streaming_memory(
-        n_samples, n_snps, chunk_size=chunk_size, pipeline_buffers=2
+        n_samples,
+        n_snps,
+        chunk_size=chunk_size,
+        pipeline_buffers=2,
+        jax_chunk_size=est_jax_chunk,
     )
     logger.info(
         f"LMM streaming memory: estimated peak {est.total_peak_gb:.1f}GB, "

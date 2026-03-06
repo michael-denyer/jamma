@@ -551,8 +551,14 @@ class PipelineRunner:
         if not self.config.check_memory:
             return None
 
-        actual_chunk = _compute_chunk_size(n_snps)
-        est = estimate_streaming_memory(n_samples, chunk_size=actual_chunk, n_cvt=n_cvt)
+        disk_chunk = _compute_chunk_size(n_snps)
+        jax_chunk = _compute_chunk_size(n_snps, n_samples=n_samples, pipeline_buffers=2)
+        est = estimate_streaming_memory(
+            n_samples,
+            chunk_size=disk_chunk,
+            n_cvt=n_cvt,
+            jax_chunk_size=jax_chunk,
+        )
 
         logger.info(
             f"Memory estimate: {est.total_peak_gb:.1f}GB required, "

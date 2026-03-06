@@ -643,6 +643,10 @@ class TestRunLmmAssociationStreaming:
         )
         results_stream = run_result.associations
 
+        # PVE should be populated
+        assert run_result.pve is not None, "Streaming runner should return PVE"
+        assert 0 < run_result.pve < 1, f"PVE out of range: {run_result.pve}"
+
         # Same number of results
         assert len(results_full) == len(results_stream), (
             f"Count mismatch: full={len(results_full)}, stream={len(results_stream)}"
@@ -923,6 +927,131 @@ class TestRunLmmAssociationStreaming:
         # This confirms the code handles multiple chunks correctly
         # The exact count depends on filtering, but should be substantial
         assert n_results > 100, f"Expected many results, got {n_results}"
+
+    def test_streaming_output_flushes_each_jax_subchunk(
+        self, sample_plink_data: Path, tmp_path: Path
+    ) -> None:
+        """Disk-write path flushes each JAX sub-chunk instead of batching on device."""
+        import math
+        from unittest.mock import patch
+
+        from jamma.lmm.io import IncrementalAssocWriter
+
+        rng = np.random.default_rng(123)
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = rng.standard_normal(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        batch_sizes: list[int] = []
+        original_write_arrays_batch = IncrementalAssocWriter.write_arrays_batch
+
+        def _spy_write_arrays_batch(
+            self,
+            lmm_mode,
+            snp_indices,
+            snp_info,
+            afs,
+            miss_counts,
+            arrays,
+        ):
+            batch_sizes.append(len(snp_indices))
+            return original_write_arrays_batch(
+                self, lmm_mode, snp_indices, snp_info, afs, miss_counts, arrays
+            )
+
+        with (
+            patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=50),
+            patch.object(
+                IncrementalAssocWriter,
+                "write_arrays_batch",
+                new=_spy_write_arrays_batch,
+            ),
+        ):
+            run_result, n_tested = run_lmm_association_streaming(
+                sample_plink_data,
+                phenotypes,
+                kinship,
+                snp_info=None,
+                chunk_size=500,
+                maf_threshold=0.0,
+                miss_threshold=1.0,
+                check_memory=False,
+                show_progress=False,
+                output_path=tmp_path / "subchunks.assoc.txt",
+            )
+
+        assert run_result.associations == []
+        assert n_tested > 50, "Need multiple JAX sub-chunks for this regression test"
+        assert len(batch_sizes) > 1, "Expected multiple sub-chunk writes"
+        assert sum(batch_sizes) == n_tested
+        assert len(batch_sizes) == math.ceil(n_tested / 50)
+
+    def test_streaming_in_memory_materializes_each_jax_subchunk(
+        self, sample_plink_data: Path
+    ) -> None:
+        """In-memory path converts each JAX sub-chunk before advancing."""
+        import math
+        from unittest.mock import patch
+
+        from jamma.lmm import runner_streaming
+
+        rng = np.random.default_rng(321)
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = rng.standard_normal(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        chunk_sizes: list[int] = []
+        original_yield_chunk_results = runner_streaming._yield_chunk_results
+
+        def _spy_yield_chunk_results(
+            lmm_mode,
+            chunk_filtered_local_idx,
+            snp_indices,
+            filtered_afs,
+            filtered_miss,
+            snp_info,
+            arrays,
+        ):
+            chunk_sizes.append(len(chunk_filtered_local_idx))
+            yield from original_yield_chunk_results(
+                lmm_mode,
+                chunk_filtered_local_idx,
+                snp_indices,
+                filtered_afs,
+                filtered_miss,
+                snp_info,
+                arrays,
+            )
+
+        with (
+            patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=50),
+            patch.object(
+                runner_streaming,
+                "_yield_chunk_results",
+                new=_spy_yield_chunk_results,
+            ),
+        ):
+            run_result, n_tested = run_lmm_association_streaming(
+                sample_plink_data,
+                phenotypes,
+                kinship,
+                snp_info=None,
+                chunk_size=500,
+                maf_threshold=0.0,
+                miss_threshold=1.0,
+                check_memory=False,
+                show_progress=False,
+            )
+
+        assert len(run_result.associations) == n_tested
+        assert n_tested > 50, "Need multiple JAX sub-chunks for this regression test"
+        assert len(chunk_sizes) > 1, "Expected multiple sub-chunk materializations"
+        assert sum(chunk_sizes) == n_tested
+        assert len(chunk_sizes) == math.ceil(n_tested / 50)
 
 
 @pytest.mark.tier1
@@ -2395,7 +2524,7 @@ def test_streaming_all_snps_filtered_mode4_returns_zero(
     """Streaming runner mode 4 with impossible MAF threshold returns zero tested SNPs.
 
     Verifies that mode 4 (all tests: Wald + LRT + Score) handles the all-filtered
-    edge case correctly, exercising _init_accumulators(lmm_mode=4). maf_threshold=1.0
+    edge case correctly for all-tests mode (lmm_mode=4). maf_threshold=1.0
     is impossible (MAF is at most 0.5), so all SNPs are filtered out. The runner must
     handle this gracefully: return empty results and n_tested == 0.
     """

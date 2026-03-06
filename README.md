@@ -204,8 +204,8 @@ snp_info = [
     for i in range(data.n_snps)
 ]
 
-# Returns list[AssocResult] — write to disk via IncrementalAssocWriter
-results = run_lmm_association_numpy(
+# Returns LmmRunResult — access .associations for list[AssocResult], .pve for heritability
+run_result = run_lmm_association_numpy(
     genotypes=data.genotypes,
     phenotypes=phenotypes,
     kinship=None,  # Not needed when eigenvalues/eigenvectors provided
@@ -214,6 +214,7 @@ results = run_lmm_association_numpy(
     eigenvectors=eigenvectors,
     lmm_mode=1,
 )
+results = run_result.associations
 ```
 
 ## Memory Safety

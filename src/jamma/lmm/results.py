@@ -98,22 +98,35 @@ def _build_results(
     return results
 
 
-def _concat_jax_accumulators(
-    lmm_mode: int,
-    accumulators: dict[str, list],
+def _chunk_result_to_numpy(
+    result: dict[str, object | None],
+    keys: tuple[str, ...],
+    actual_len: int,
 ) -> dict[str, np.ndarray]:
-    """Concatenate JAX accumulator lists and transfer to host numpy arrays.
+    """Transfer the active slice of a JAX chunk result to host numpy arrays.
+
+    Used by streaming runners to flush each JAX sub-chunk immediately instead of
+    retaining multiple device-resident result arrays until the enclosing disk
+    chunk completes.
 
     Args:
-        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
-        accumulators: Dict mapping stat names to lists of JAX arrays.
+        result: Dict returned by ``_compute_lmm_chunk``.
+        keys: Mode-specific array keys to materialize on host.
+        actual_len: Number of real (non-padded) SNPs in this sub-chunk.
 
     Returns:
-        Dict mapping stat names to concatenated numpy arrays.
+        Dict mapping each requested key to a numpy array of length
+        ``actual_len``.
     """
-    import jax.numpy as jnp  # lazy — only when JAX runner path executes
+    import jax  # lazy — only when JAX runner path executes
 
-    return {k: np.asarray(jnp.concatenate(v)) for k, v in accumulators.items()}
+    sliced: dict[str, object] = {}
+    for key in keys:
+        value = result[key]
+        if value is None:
+            raise ValueError(f"Chunk result missing required array {key!r}")
+        sliced[key] = value[:actual_len]
+    return jax.device_get(sliced)
 
 
 def _yield_chunk_results(
@@ -127,8 +140,8 @@ def _yield_chunk_results(
 ) -> Generator[AssocResult, None, None]:
     """Yield AssocResult objects for a streaming file chunk.
 
-    Builds one result per filtered SNP in the chunk from the concatenated
-    numpy arrays returned by _concat_jax_accumulators.
+    Builds one result per filtered SNP from the numpy arrays for a single
+    sub-chunk (as returned by ``_chunk_result_to_numpy``).
 
     Args:
         lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
@@ -137,7 +150,7 @@ def _yield_chunk_results(
         filtered_afs: Allele frequencies for filtered SNPs (numpy array).
         filtered_miss: Missing counts for filtered SNPs (numpy int array).
         snp_info: Full SNP metadata list.
-        arrays: Dict of numpy arrays from _concat_jax_accumulators.
+        arrays: Dict of numpy arrays with per-SNP statistics.
 
     Yields:
         AssocResult for each SNP in the chunk.
@@ -192,7 +205,7 @@ def count_lambda_boundary_hits(
 
     Args:
         lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
-        arrays: Dict of numpy arrays from _concat_jax_accumulators.
+        arrays: Dict of numpy arrays with per-SNP statistics.
         l_min: Lower lambda bound.
         l_max: Upper lambda bound.
 

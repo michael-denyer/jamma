@@ -108,7 +108,7 @@ def mouse_full_kinship(mouse_genotypes_and_chrs):
 def mouse_loco_lmm_results():
     """Run LOCO LMM on mouse_hs1940 once and share results (module-scoped).
 
-    Returns (results, n_tested) or skips if data unavailable.
+    Returns (results, n_tested, pve) or skips if data unavailable.
     """
     if not _mouse_hs1940_exists():
         pytest.skip("mouse_hs1940 PLINK data not found")
@@ -1644,7 +1644,7 @@ def test_loco_cross_backend_parity(tmp_path: Path) -> None:
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
 
     # Run JAX backend
-    jax_results, jax_n, _ = run_lmm_loco(
+    jax_results, jax_n, jax_pve = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
         lmm_mode=1,
@@ -1654,7 +1654,7 @@ def test_loco_cross_backend_parity(tmp_path: Path) -> None:
     )
 
     # Run NumPy backend
-    numpy_results, numpy_n, _ = run_lmm_loco(
+    numpy_results, numpy_n, numpy_pve = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
         lmm_mode=1,
@@ -1666,6 +1666,12 @@ def test_loco_cross_backend_parity(tmp_path: Path) -> None:
     assert jax_n == numpy_n, f"SNP count mismatch: JAX={jax_n}, NumPy={numpy_n}"
     assert len(jax_results) == len(numpy_results)
     assert len(jax_results) > 0
+
+    # PVE should be populated and match across backends
+    assert jax_pve is not None, "JAX LOCO should return PVE"
+    assert numpy_pve is not None, "NumPy LOCO should return PVE"
+    assert 0 < jax_pve < 1, f"JAX PVE out of range: {jax_pve}"
+    np.testing.assert_allclose(jax_pve, numpy_pve, rtol=1e-4)
 
     # Compare result arrays
     jax_betas = np.array([r.beta for r in jax_results])

@@ -444,7 +444,7 @@ def run_dataset(
         covar = covariates if spec.use_covariates else None
 
         t0 = time.perf_counter()
-        jamma_results = run_lmm_association_jax(
+        run_result = run_lmm_association_jax(
             genotypes=plink_data.genotypes,
             phenotypes=phenotypes,
             kinship=ref_kinship,
@@ -453,6 +453,7 @@ def run_dataset(
             lmm_mode=spec.lmm_mode,
             **JAX_KWARGS,
         )
+        jamma_results = run_result.associations
         t_elapsed = time.perf_counter() - t0
         timings.append(
             SectionTiming(

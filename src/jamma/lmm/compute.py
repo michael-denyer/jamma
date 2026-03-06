@@ -254,26 +254,6 @@ def block_chunk_result(result: dict[str, jax.Array | None], lmm_mode: int) -> No
             result[key].block_until_ready()
 
 
-def strip_and_append(
-    result: dict[str, jax.Array | None],
-    accum: dict[str, list],
-    actual_len: int,
-) -> None:
-    """Strip padding from chunk result arrays and append to accumulators.
-
-    Transfers only the keys present in accum (which are mode-specific),
-    slicing to actual_len to discard both tail-chunk and device-alignment
-    padding.
-
-    Args:
-        result: Dict returned by _compute_lmm_chunk.
-        accum: Dict of lists (from _init_accumulators) to append to.
-        actual_len: Number of real (non-padded) SNPs in this chunk.
-    """
-    for key in accum:
-        accum[key].append(result[key][:actual_len])
-
-
 def log_jax_error(
     e: Exception,
     *,

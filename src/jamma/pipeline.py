@@ -46,7 +46,7 @@ from jamma.kinship import (
 from jamma.lmm.chunk import _compute_chunk_size
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
-from jamma.lmm.schema import LmmConfig, PipelineTiming
+from jamma.lmm.schema import LmmConfig, LmmRunResult, PipelineTiming
 from jamma.lmm.stats import AssocResult
 
 
@@ -1215,7 +1215,7 @@ class PipelineRunner:
         assoc_path: Path,
         snps_indices: np.ndarray | None,
         actual_chunk: int,
-    ) -> tuple:
+    ) -> tuple[LmmRunResult, int]:
         """Run LMM association using the JAX streaming backend."""
         from jamma.core.jax_config import ensure_jax_configured
         from jamma.lmm import run_lmm_association_streaming
@@ -1259,7 +1259,7 @@ class PipelineRunner:
         assoc_path: Path,
         snps_indices: np.ndarray | None,
         plink_data: object | None = None,
-    ) -> tuple:
+    ) -> tuple[LmmRunResult, int]:
         """Run LMM association using the pure-NumPy batch backend.
 
         Args:
@@ -1332,7 +1332,5 @@ class PipelineRunner:
                 f"not be saved. Check disk space and file permissions."
             )
             raise
-
-        from jamma.lmm.schema import LmmRunResult
 
         return LmmRunResult(associations=[], pve=run_result.pve), n_results

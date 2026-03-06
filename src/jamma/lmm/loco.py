@@ -870,7 +870,7 @@ def run_lmm_loco(
                     writer=writer,
                     chr_name=chr_name,
                     snp_stats_cache=snp_stats_cache,
-                    compute_pve=(chr_idx == 0),
+                    compute_pve=(first_chr_pve is None),
                 )
             else:
                 chr_results, chr_pve = _run_lmm_for_chromosome(
@@ -891,7 +891,7 @@ def run_lmm_loco(
                     snps_global_mask=snps_global_mask,
                     col_chunk_size=col_chunk_size,
                     writer=writer,
-                    compute_pve=(chr_idx == 0),
+                    compute_pve=(first_chr_pve is None),
                 )
 
             # When writer is provided, results are already on disk;
@@ -899,13 +899,24 @@ def run_lmm_loco(
             if writer is None:
                 all_results.extend(chr_results)
 
-            # Capture PVE from the first chromosome for pipeline reporting.
-            if chr_idx == 0:
+            # Capture PVE from the first chromosome that computes it.
+            if first_chr_pve is None and chr_pve is not None:
+                if chr_idx > 0:
+                    logger.info(
+                        f"PVE computed from chromosome {chr_name} "
+                        f"(earlier chromosomes had all SNPs filtered)"
+                    )
                 first_chr_pve = chr_pve
 
             # Free eigendecomp
             del eigenvalues_np, U
             gc.collect()
+
+        if first_chr_pve is None:
+            logger.warning(
+                "PVE could not be computed: all chromosomes had all SNPs "
+                "filtered. Check MAF/missingness thresholds."
+            )
 
         # Clear JIT caches once after all chromosomes (kernels reused across
         # chromosomes since n_samples, n_cvt are identical)
@@ -979,7 +990,8 @@ def _run_lmm_for_chromosome(
             When provided, results are written directly and an empty list
             is returned. When None, results are accumulated and returned.
         compute_pve: If True, compute PVE from null model REML lambda.
-            Only set for the first chromosome in the LOCO loop.
+            Set for each chromosome until PVE is successfully computed
+            (typically the first chromosome with passing SNPs).
 
     Returns:
         Tuple of (results, pve) where results is a list of AssocResult
@@ -996,7 +1008,6 @@ def _run_lmm_for_chromosome(
         _compute_lmm_chunk,
         block_chunk_result,
         log_jax_error,
-        strip_and_append,
     )
     from jamma.lmm.likelihood_jax import batch_compute_uab  # noqa: PLC0415
     from jamma.lmm.prepare import (  # noqa: PLC0415
@@ -1005,8 +1016,8 @@ def _run_lmm_for_chromosome(
         _select_jax_device,
         prepare_utg_chunk,
     )
-    from jamma.lmm.results import _concat_jax_accumulators  # noqa: PLC0415
-    from jamma.lmm.runner_streaming import _init_accumulators  # noqa: PLC0415
+    from jamma.lmm.results import _chunk_result_to_numpy  # noqa: PLC0415
+    from jamma.lmm.schema import ACCUM_KEYS as _ACCUM_KEYS  # noqa: PLC0415
 
     n_samples = phenotypes.shape[0]
     valid_indices = np.where(valid_mask)[0]
@@ -1126,9 +1137,6 @@ def _run_lmm_for_chromosome(
                     for i in range(len(jax_starts))
                 ]
 
-                # Fresh accumulator per disk chunk (flush after each)
-                accum: dict[str, list] = _init_accumulators(lmm_mode)
-
                 # Prepare first JAX chunk
                 UtG_np, actual_jax_len = _prepare_jax_chunk(
                     jax_starts[0], jax_ends[0], geno_disk_chunk
@@ -1178,45 +1186,47 @@ def _run_lmm_for_chromosome(
                         )
                         raise
 
-                    strip_and_append(chunk_result, accum, current_actual_len)
-
-                del geno_disk_chunk
-
-                # Flush this disk chunk's results immediately
-                if any(accum.values()):
-                    arrays = _concat_jax_accumulators(lmm_mode, accum)
-
+                    subchunk_start = disk_start + jax_starts[i]
+                    subchunk_end = subchunk_start + current_actual_len
+                    arrays = _chunk_result_to_numpy(
+                        chunk_result,
+                        _ACCUM_KEYS[lmm_mode],
+                        current_actual_len,
+                    )
                     n_lmin, n_lmax = count_lambda_boundary_hits(
                         lmm_mode, arrays, l_min, l_max
                     )
                     total_at_lmin += n_lmin
                     total_at_lmax += n_lmax
 
-                    n_disk_snps = disk_end - disk_start
                     if writer is not None:
                         writer.write_arrays_batch(
                             lmm_mode,
-                            global_filtered_indices[disk_start:disk_end],
+                            global_filtered_indices[subchunk_start:subchunk_end],
                             snp_info,
-                            filtered_afs[disk_start:disk_end],
-                            filtered_miss[disk_start:disk_end],
+                            filtered_afs[subchunk_start:subchunk_end],
+                            filtered_miss[subchunk_start:subchunk_end],
                             arrays,
                         )
                     else:
-                        disk_chunk_results = list(
+                        subchunk_results = list(
                             _yield_chunk_results(
                                 lmm_mode,
-                                np.arange(n_disk_snps),
-                                global_filtered_indices[disk_start:disk_end],
-                                filtered_afs[disk_start:disk_end],
-                                filtered_miss[disk_start:disk_end],
+                                np.arange(subchunk_start, subchunk_end),
+                                global_filtered_indices,
+                                filtered_afs,
+                                filtered_miss,
                                 snp_info,
                                 arrays,
                             )
                         )
-                        results.extend(disk_chunk_results)
+                        results.extend(subchunk_results)
 
-                    del arrays, accum
+                    del arrays, chunk_result, Uab_batch, current_UtG
+                    if i + 1 >= len(jax_starts):
+                        UtG_jax = None
+
+                del geno_disk_chunk
 
         # Log boundary warnings once per chromosome
         log_lambda_boundary_warning(
@@ -1286,7 +1296,8 @@ def _run_lmm_for_chromosome_numpy(
             When provided, results are written directly and an empty list
             is returned. When None, results are accumulated and returned.
         compute_pve: If True, compute PVE from null model REML lambda.
-            Only set for the first chromosome in the LOCO loop.
+            Set for each chromosome until PVE is successfully computed
+            (typically the first chromosome with passing SNPs).
         snp_stats_cache: Global SNP statistics from kinship PASS 1 (LOCO-01).
             When provided, per-chromosome stats are extracted by slicing
             cache.col_means[chr_snp_indices] — eliminates a BED re-read.

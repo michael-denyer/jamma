@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-03-06
+
+### Breaking
+
+- `LmmRunResult` no longer supports list-like access (`len()`, iteration,
+  indexing, `bool()`). Use `.associations` explicitly:
+
+  ```python
+  # Before (2.x)
+  results = run_lmm_association_numpy(...)
+  for r in results: ...
+
+  # After (3.0)
+  run_result = run_lmm_association_numpy(...)
+  for r in run_result.associations: ...
+  ```
+
+### Added
+
+- `_chunk_result_to_numpy()` — transfers JAX sub-chunk results to host
+  immediately instead of accumulating on device until disk chunk completes
+- PVE capture in LOCO is now robust to filtered first chromosomes — falls back
+  to the next chromosome with passing SNPs
+- Warning logged when PVE cannot be computed (all chromosomes fully filtered)
+- Regression tests for per-sub-chunk flushing (disk-write and in-memory paths)
+- PVE cross-backend parity assertions in LOCO tests
+
+### Changed
+
+- Streaming and LOCO runners flush each JAX sub-chunk to host/disk immediately,
+  reducing peak device memory from O(disk_chunk) to O(jax_chunk)
+- Removed dead code: `strip_and_append`, `_concat_jax_accumulators`,
+  `_init_accumulators`
+
 ## [2.12.0] - 2026-03-06
 
 ### Added

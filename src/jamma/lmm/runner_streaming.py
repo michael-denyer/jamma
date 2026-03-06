@@ -30,7 +30,6 @@ from jamma.lmm.compute import (
     block_chunk_result,
     exposed_rotation_time,
     log_jax_error,
-    strip_and_append,
 )
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.likelihood_jax import batch_compute_uab
@@ -46,7 +45,7 @@ from jamma.lmm.prepare_common import (
     validate_runner_inputs,
 )
 from jamma.lmm.results import (
-    _concat_jax_accumulators,
+    _chunk_result_to_numpy,
     _yield_chunk_results,
     count_lambda_boundary_hits,
     log_lambda_boundary_warning,
@@ -71,11 +70,6 @@ def get_last_run_timing() -> RunnerTiming:
     Safe to call from any thread — returns an independent dict.
     """
     return dict(last_run_timing)
-
-
-def _init_accumulators(lmm_mode: int) -> dict[str, list]:
-    """Create empty accumulator dict for the given mode."""
-    return {k: [] for k in _ACCUM_KEYS[lmm_mode]}
 
 
 def run_lmm_association_streaming(
@@ -459,12 +453,10 @@ def run_lmm_association_streaming(
                 if filt_end <= filt_start:
                     continue
 
-                chunk_filtered_local_idx = np.arange(filt_start, filt_end)
-
                 # Vectorized imputation: broadcast filtered_means to match chunk shape
-                filtered_means_broadcast = filtered_means[
-                    chunk_filtered_local_idx
-                ].reshape(1, -1)
+                filtered_means_broadcast = filtered_means[filt_start:filt_end].reshape(
+                    1, -1
+                )
                 missing_mask = np.isnan(chunk)
                 if missing_mask.any():  # RUN-06: skip O(n*chunk) np.where on clean data
                     chunk = np.where(missing_mask, filtered_means_broadcast, chunk)
@@ -480,9 +472,6 @@ def run_lmm_association_streaming(
                     jax_starts[i + 1] if i + 1 < len(jax_starts) else n_subset
                     for i in range(len(jax_starts))
                 ]
-
-                # Dict-based accumulators for this file chunk
-                accum: dict[str, list] = _init_accumulators(lmm_mode)
 
                 # Prepare first JAX chunk
                 t_rot_start = time.perf_counter()
@@ -585,13 +574,16 @@ def run_lmm_association_streaming(
                         UtG_jax = jax.device_put(UtG_np, placement.snp)
                         del UtG_np  # Safe: JAX holds internal ref
 
-                    strip_and_append(chunk_result, accum, current_actual_len)
+                    subchunk_filtered_start = filt_start + jax_starts[i]
+                    subchunk_filtered_end = subchunk_filtered_start + current_actual_len
 
-                # Concatenate, build results, write/accumulate
-                if any(accum.values()):
                     t_write_start = time.perf_counter()
                     with jax.profiler.TraceAnnotation("result_write"):
-                        arrays = _concat_jax_accumulators(lmm_mode, accum)
+                        arrays = _chunk_result_to_numpy(
+                            chunk_result,
+                            _ACCUM_KEYS[lmm_mode],
+                            current_actual_len,
+                        )
 
                         # Count SNPs converging at lambda bounds
                         chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
@@ -604,17 +596,26 @@ def run_lmm_association_streaming(
                             # Direct array → TSV (no AssocResult construction)
                             writer.write_arrays_batch(
                                 lmm_mode,
-                                snp_indices[filt_start:filt_end],
+                                snp_indices[
+                                    subchunk_filtered_start:subchunk_filtered_end
+                                ],
                                 snp_info,
-                                filtered_afs[filt_start:filt_end],
-                                filtered_miss[filt_start:filt_end],
+                                filtered_afs[
+                                    subchunk_filtered_start:subchunk_filtered_end
+                                ],
+                                filtered_miss[
+                                    subchunk_filtered_start:subchunk_filtered_end
+                                ],
                                 arrays,
                             )
                         else:
                             chunk_results = list(
                                 _yield_chunk_results(
                                     lmm_mode,
-                                    chunk_filtered_local_idx,
+                                    np.arange(
+                                        subchunk_filtered_start,
+                                        subchunk_filtered_end,
+                                    ),
                                     snp_indices,
                                     filtered_afs,
                                     filtered_miss,
@@ -623,7 +624,10 @@ def run_lmm_association_streaming(
                                 )
                             )
                             all_results.extend(chunk_results)
-                        del arrays, accum
+
+                    del arrays, chunk_result, Uab_batch, current_UtG
+                    if future is None:
+                        UtG_jax = None
                     t_write_end = time.perf_counter()
                     t_result_write_total += t_write_end - t_write_start
 

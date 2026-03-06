@@ -269,11 +269,7 @@ class LmmRunResult:
     """Return type for LMM runner functions.
 
     Bundles per-SNP association results with run-level metadata
-    that was previously communicated via module-level globals.
-
-    Supports list-like access (len, iteration, indexing) over
-    associations for backward compatibility with callers that
-    previously received a plain list[AssocResult].
+    such as heritability estimates.
 
     Attributes:
         associations: Per-SNP association results.
@@ -283,18 +279,6 @@ class LmmRunResult:
 
     associations: list  # list[AssocResult] -- avoid circular import with stats.py
     pve: float | None = None
-
-    def __len__(self) -> int:
-        return len(self.associations)
-
-    def __iter__(self):
-        return iter(self.associations)
-
-    def __getitem__(self, idx):
-        return self.associations[idx]
-
-    def __bool__(self) -> bool:
-        return bool(self.associations)
 
 
 class LazySnpMeta:

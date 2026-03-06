@@ -464,14 +464,16 @@ from jamma.lmm.eigen import eigendecompose_kinship
 eigenvalues, eigenvectors = eigendecompose_kinship(K)
 
 # Pure-NumPy runner (no JAX required, loads full genotype matrix)
-results = run_lmm_association_numpy(
+run_result = run_lmm_association_numpy(
     genotypes=data.genotypes,
     phenotypes=phenotypes,
+    kinship=None,  # Not needed when eigenvalues/eigenvectors provided
     snp_info=snp_info,  # list of dicts with chr, rs, pos, a1, a0
     eigenvalues=eigenvalues,
     eigenvectors=eigenvectors,
     lmm_mode=1,  # 1=Wald, 2=LRT, 3=Score, 4=All
 )
+results = run_result.associations  # list[AssocResult]
 ```
 
 Both backends support Wald, LRT, Score, all-tests modes, and LOCO. HWE filtering (`-hwe`) requires the JAX streaming runner.

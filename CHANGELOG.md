@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.12.0] - 2026-03-06
+
+### Added
+
+- Invariant/varying Uab column split for general n_cvt — correctly classifies
+  columns as lambda-invariant or lambda-varying based on covariate structure
+- Consolidated pipeline startup logging into a single banner line
+
+### Fixed
+
+- JAX batch LMM memory estimate used max chunk size instead of actual chunk size,
+  causing unnecessary chunking on smaller datasets
+- JAX batch memory safety factor reduced from 1.5x to 1.25x to avoid over-conservative
+  chunk splitting
+- Pipeline banner logging hardened against missing backend diagnostics
+- Technical RSS labels replaced with plain English in log messages
+
+### Changed
+
+- Extracted `_prepare_general_split_inputs` to deduplicate column setup across
+  Uab split paths
+- Simplified banner formatting code
+
+### Documentation
+
+- Added cross-references between LOCO test files
+- Clarified `gwas()` as recommended API, Intel CPU optimization, platform BLAS details
+
 ## [2.11.2] - 2026-03-05
 
 ### Fixed

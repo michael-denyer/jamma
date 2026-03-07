@@ -225,7 +225,7 @@ def bench_jax_batch(
 
     results: dict[str, float] = {}
 
-    # Warmup run (JIT compilation)
+    # Warmup runs (JIT compilation) — each n_cvt produces a distinct trace
     run_lmm_association_jax(
         genotypes=plink.genotypes,
         phenotypes=phenotypes,
@@ -235,6 +235,17 @@ def bench_jax_batch(
         check_memory=False,
         lmm_mode=1,
     )
+    if covariates_4 is not None:
+        run_lmm_association_jax(
+            genotypes=plink.genotypes,
+            phenotypes=phenotypes,
+            kinship=kinship.copy(),
+            snp_info=snp_info,
+            covariates=covariates_4,
+            show_progress=False,
+            check_memory=False,
+            lmm_mode=1,
+        )
 
     ops: list[tuple[str, int, np.ndarray | None]] = [
         ("lmm_wald", 1, None),
@@ -275,7 +286,7 @@ def bench_jax_streaming(
 
     results: dict[str, float] = {}
 
-    # Warmup run (JIT compilation)
+    # Warmup runs (JIT compilation) — each n_cvt produces a distinct trace
     run_lmm_association_streaming(
         bed_path=_MOUSE_PREFIX,
         phenotypes=phenotypes,
@@ -284,6 +295,16 @@ def bench_jax_streaming(
         check_memory=False,
         lmm_mode=1,
     )
+    if covariates_4 is not None:
+        run_lmm_association_streaming(
+            bed_path=_MOUSE_PREFIX,
+            phenotypes=phenotypes,
+            kinship=kinship.copy(),
+            covariates=covariates_4,
+            show_progress=False,
+            check_memory=False,
+            lmm_mode=1,
+        )
 
     ops: list[tuple[str, int, np.ndarray | None]] = [
         ("lmm_wald", 1, None),

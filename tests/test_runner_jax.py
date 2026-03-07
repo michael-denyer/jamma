@@ -1765,6 +1765,53 @@ class TestThreadPoolExecutorOverlapJax:
                     check_memory=False,
                 )
 
+    def test_clear_caches_runs_on_failure(self):
+        """Failure paths still clear JAX caches before unwinding."""
+        from unittest.mock import patch
+
+        rng = np.random.default_rng(777)
+        n_samples = 50
+        n_snps = 100
+        genotypes = rng.choice([0, 1, 2], size=(n_samples, n_snps)).astype(np.float64)
+        phenotypes = rng.standard_normal(n_samples)
+        kinship = np.eye(n_samples)
+        snp_info = [
+            {"chr": "1", "rs": f"rs{j}", "pos": j * 1000, "a1": "A", "a0": "G"}
+            for j in range(n_snps)
+        ]
+
+        call_count = 0
+        from jamma.lmm import prepare
+
+        original_prepare = prepare.prepare_utg_chunk
+
+        def _failing_prepare(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise ValueError("Simulated BLAS failure in background rotation")
+            return original_prepare(*args, **kwargs)
+
+        with (
+            patch("jamma.lmm.runner_jax._compute_chunk_size", return_value=50),
+            patch(
+                "jamma.lmm.runner_jax.prepare_utg_chunk", side_effect=_failing_prepare
+            ),
+            patch("jamma.lmm.runner_jax.jax.clear_caches") as mock_clear,
+        ):
+            with pytest.raises(RuntimeError, match="Background rotation failed"):
+                run_lmm_association_jax(
+                    genotypes=genotypes,
+                    phenotypes=phenotypes,
+                    kinship=kinship,
+                    snp_info=snp_info,
+                    maf_threshold=0.0,
+                    show_progress=False,
+                    check_memory=False,
+                )
+
+        mock_clear.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # Rotation overlap effectiveness tests (Plan 54-03)

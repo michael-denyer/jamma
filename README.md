@@ -204,7 +204,7 @@ snp_info = [
     for i in range(data.n_snps)
 ]
 
-# Returns LmmRunResult — access .associations for list[AssocResult], .pve for heritability
+# Returns LmmRunResult — .associations for list[AssocResult], .pve for heritability, .pve_se for SE
 run_result = run_lmm_association_numpy(
     genotypes=data.genotypes,
     phenotypes=phenotypes,

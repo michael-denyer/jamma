@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- PVE standard error (`pve_se`) computed via delta method from REML second
+  derivative — available in `LmmRunResult`, `LocoResult`, `PipelineResult`,
+  and `GWASResult`
+- `LocoResult` dataclass replaces raw tuple return from `run_lmm_loco()`,
+  with named fields: `associations`, `n_tested`, `pve`, `pve_se`
+- `finite_difference_dev2()` — numerical REML second derivative via central
+  finite differences; used for `pve_se` computation for all covariate counts
+- `reml_log_likelihood_dev2()` — partial analytical REML second derivative
+  (intercept-only); delegates to `finite_difference_dev2` for n_cvt > 1
+- `calc_ppab()` and `calc_pppab()` — second/third-order projected Pab
+  recursions (ports of GEMMA's `CalcPPab`/`CalcPPPab`)
+- Finite-difference tests validate second derivative for n_cvt=1,2,3,4
+- `jax.clear_caches()` now runs in `finally` blocks across all runners,
+  with defensive `try/except` to avoid masking original exceptions
+
+### Fixed
+
+- `reml_log_likelihood_dev2()` was missing the d²(logdet_hiw)/dλ² term,
+  producing incorrect REML curvature for multi-covariate models (n_cvt > 1).
+  `compute_and_log_pve()` now uses `finite_difference_dev2()` for all n_cvt
+
+### Breaking
+
+- `run_lmm_loco()` returns `LocoResult` dataclass instead of
+  `tuple[list, int, float | None, float | None]`
+
 ## [3.0.1] - 2026-03-06
 
 ### Fixed

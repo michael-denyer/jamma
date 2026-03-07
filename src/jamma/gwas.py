@@ -31,6 +31,8 @@ class GWASResult:
             filtering.
         timing: Timing breakdown with keys 'kinship_s', 'lmm_s', 'total_s'.
         pve_estimate: PVE (proportion of variance explained) from null model REML.
+        pve_se: Standard error of PVE from REML second derivative delta method.
+            None if not computed or likelihood surface is flat.
     """
 
     associations: list[AssocResult]
@@ -38,6 +40,7 @@ class GWASResult:
     n_snps_tested: int
     timing: GWASTiming = field(default_factory=dict)
     pve_estimate: float | None = None
+    pve_se: float | None = None
 
 
 def gwas(
@@ -196,4 +199,5 @@ def gwas(
             "total_s": pipeline_result.timing["total_s"],
         },
         pve_estimate=pipeline_result.pve_estimate,
+        pve_se=pipeline_result.pve_se,
     )

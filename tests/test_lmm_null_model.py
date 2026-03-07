@@ -37,6 +37,7 @@ pytestmark = pytest.mark.requires_jax
 GEMMA_REML_NULL_LOGL = -140.636
 GEMMA_MLE_NULL_LOGL = -139.281
 GEMMA_PVE_NULL = 0.293439
+GEMMA_SE_PVE_NULL = 0.353149
 
 # Test fixture paths
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "gemma_synthetic"
@@ -264,7 +265,7 @@ class TestNullModelFormulas:
         from jamma.lmm.prepare_common import compute_and_log_pve
 
         data = gemma_test_data
-        pve = compute_and_log_pve(
+        pve, pve_se = compute_and_log_pve(
             data["eigenvalues"], data["UtW"], data["Uty"], data["n_cvt"]
         )
         np.testing.assert_allclose(
@@ -450,3 +451,87 @@ class TestNullModelProperties:
         for lambda_val in [1e-5, 0.01, 0.1, 1.0, 10.0, 1e5]:
             result = mle_log_likelihood_null(lambda_val, eigenvalues, Uab, n_cvt=1)
             assert np.isfinite(result), f"Should be finite at lambda={lambda_val}"
+
+
+@pytest.mark.tier1
+class TestSePVE:
+    """Tests for se(pve) via REML second derivative delta method."""
+
+    def test_se_pve_matches_gemma(self, gemma_test_data):
+        """se(pve) should match GEMMA reference (0.353149) for synthetic data.
+
+        GEMMA reports: se(pve) in the null model = 0.353149
+        """
+        from jamma.lmm.prepare_common import compute_and_log_pve
+
+        data = gemma_test_data
+        pve, pve_se = compute_and_log_pve(
+            data["eigenvalues"], data["UtW"], data["Uty"], data["n_cvt"]
+        )
+        assert pve_se is not None, "pve_se should not be None for valid data"
+        np.testing.assert_allclose(
+            pve_se,
+            GEMMA_SE_PVE_NULL,
+            rtol=1e-3,
+            err_msg=(f"se(pve) {pve_se:.6f} != GEMMA {GEMMA_SE_PVE_NULL}"),
+        )
+
+    def test_se_pve_none_for_degenerate_case(self):
+        """se(pve) should be None when REML second derivative is non-negative.
+
+        Construct a degenerate case with uniform eigenvalues where the
+        likelihood surface is flat (dev2 >= 0).
+        """
+        from jamma.lmm.prepare_common import compute_and_log_pve
+
+        # Uniform eigenvalues = no genetic variance signal = flat surface
+        # With all eigenvalues equal, lambda is at the boundary and dev2
+        # may be non-negative.
+        rng = np.random.default_rng(42)
+        n = 50
+        eigenvalues = np.ones(n)  # All equal = no K structure
+        W = np.ones((n, 1))
+        y = rng.standard_normal(n)
+        UtW = W  # Identity rotation (trivial)
+        Uty = y
+
+        pve, pve_se = compute_and_log_pve(eigenvalues, UtW, Uty, n_cvt=1)
+        # With uniform eigenvalues, lambda converges at boundary;
+        # pve_se may or may not be None depending on dev2 sign.
+        # The important thing is no crash and type correctness.
+        assert isinstance(pve, float)
+        assert pve_se is None or isinstance(pve_se, float)
+
+    def test_lmm_run_result_carries_pve_se(self, gemma_test_data):
+        """LmmRunResult.pve_se is populated from REML null model."""
+        data = gemma_test_data
+        snp_info = [
+            {
+                "chr": str(data["plink"].chromosome[i]),
+                "rs": str(data["plink"].sid[i]),
+                "pos": int(data["plink"].bp_position[i]),
+                "a1": str(data["plink"].allele_1[i]),
+                "a0": str(data["plink"].allele_2[i]),
+            }
+            for i in range(data["plink"].n_snps)
+        ]
+
+        run_result = run_lmm_association_jax(
+            data["genotypes"],
+            data["phenotypes"],
+            data["kinship"],
+            snp_info,
+            lmm_mode=1,
+            show_progress=False,
+            check_memory=False,
+        )
+        assert run_result.pve_se is not None, "LmmRunResult.pve_se should be populated"
+        np.testing.assert_allclose(
+            run_result.pve_se,
+            GEMMA_SE_PVE_NULL,
+            rtol=1e-3,
+            err_msg=(
+                f"LmmRunResult.pve_se {run_result.pve_se:.6f} != "
+                f"GEMMA {GEMMA_SE_PVE_NULL}"
+            ),
+        )

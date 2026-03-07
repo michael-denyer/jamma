@@ -646,6 +646,9 @@ class TestRunLmmAssociationStreaming:
         # PVE should be populated
         assert run_result.pve is not None, "Streaming runner should return PVE"
         assert 0 < run_result.pve < 1, f"PVE out of range: {run_result.pve}"
+        assert run_result.pve_se is None or run_result.pve_se > 0, (
+            f"PVE SE should be None or positive, got {run_result.pve_se}"
+        )
 
         # Same number of results
         assert len(results_full) == len(results_stream), (
@@ -2044,6 +2047,50 @@ class TestThreadPoolExecutorOverlapStreaming:
                     check_memory=False,
                     show_progress=False,
                 )
+
+    def test_clear_caches_runs_on_failure(self, sample_plink_data: Path) -> None:
+        """Failure paths still clear JAX caches before unwinding."""
+        from unittest.mock import patch
+
+        rng = np.random.default_rng(777)
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = rng.standard_normal(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+
+        call_count = 0
+        from jamma.lmm import prepare
+
+        original_prepare = prepare.prepare_utg_chunk
+
+        def _failing_prepare(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise ValueError("Simulated BLAS failure in background rotation")
+            return original_prepare(*args, **kwargs)
+
+        with (
+            patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=50),
+            patch(
+                "jamma.lmm.runner_streaming.prepare_utg_chunk",
+                side_effect=_failing_prepare,
+            ),
+            patch("jamma.lmm.runner_streaming.jax.clear_caches") as mock_clear,
+        ):
+            with pytest.raises(RuntimeError, match="Background rotation failed"):
+                run_lmm_association_streaming(
+                    sample_plink_data,
+                    phenotypes,
+                    kinship,
+                    snp_info=None,
+                    chunk_size=500,
+                    check_memory=False,
+                    show_progress=False,
+                )
+
+        mock_clear.assert_called_once()
 
     def test_multi_file_chunk_prev_compute_end_handoff(
         self, sample_plink_data: Path

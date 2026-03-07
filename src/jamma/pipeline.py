@@ -263,6 +263,8 @@ class PipelineResult:
         n_covariates: Number of covariate columns (1 = intercept-only).
         pve_estimate: PVE (proportion of variance explained) from null model REML.
             None if not computed (e.g. LOCO with per-chromosome eigendecomp).
+        pve_se: Standard error of PVE from REML second derivative delta method.
+            None if not computed or likelihood surface is flat.
     """
 
     associations: list[AssocResult]
@@ -274,6 +276,7 @@ class PipelineResult:
     backend: BackendResolved = "numpy"  # Set by PipelineRunner.run()
     n_covariates: int = 1
     pve_estimate: float | None = None
+    pve_se: float | None = None
 
     def __post_init__(self) -> None:
         if self.backend not in ("jax", "numpy"):
@@ -944,7 +947,7 @@ class PipelineRunner:
             self._log_pipeline_banner(active_backend, n_valid, n_snps)
 
             t_loco = time.perf_counter()
-            results, n_tested, pve = run_lmm_loco(
+            loco = run_lmm_loco(
                 bed_path=self.config.bfile,
                 phenotypes=phenotypes,
                 covariates=covariates,
@@ -965,12 +968,14 @@ class PipelineRunner:
             )
             loco_s = time.perf_counter() - t_loco
             total_s = time.perf_counter() - t_start
-            logger.info(f"LOCO GWAS complete: {n_tested} SNPs tested in {total_s:.1f}s")
+            logger.info(
+                f"LOCO GWAS complete: {loco.n_tested} SNPs tested in {total_s:.1f}s"
+            )
 
             return PipelineResult(
-                associations=results,
+                associations=loco.associations,
                 n_samples=n_valid,
-                n_snps_tested=n_tested,
+                n_snps_tested=loco.n_tested,
                 assoc_path=assoc_path,
                 assoc_paths=[assoc_path],
                 timing={
@@ -981,7 +986,8 @@ class PipelineRunner:
                 },
                 backend=active_backend,
                 n_covariates=covariates.shape[1] if covariates is not None else 1,
-                pve_estimate=pve,
+                pve_estimate=loco.pve,
+                pve_se=loco.pve_se,
             )
 
         covariates = self.load_covariates(n_samples)
@@ -1191,6 +1197,7 @@ class PipelineRunner:
 
         # Capture PVE from the most recent runner call
         pve = run_result.pve
+        pve_se = run_result.pve_se
 
         return PipelineResult(
             associations=all_results,
@@ -1209,6 +1216,7 @@ class PipelineRunner:
             backend=active_backend,
             n_covariates=(covariates.shape[1] if covariates is not None else 1),
             pve_estimate=pve,
+            pve_se=pve_se,
         )
 
     def _run_jax_backend(
@@ -1339,4 +1347,6 @@ class PipelineRunner:
             )
             raise
 
-        return LmmRunResult(associations=[], pve=run_result.pve), n_results
+        return LmmRunResult(
+            associations=[], pve=run_result.pve, pve_se=run_result.pve_se
+        ), n_results

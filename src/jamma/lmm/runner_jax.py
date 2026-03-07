@@ -235,258 +235,249 @@ def run_lmm_association_jax(
         n_filtered, placement.n_devices, n_samples=n_samples, pipeline_buffers=2
     )
 
-    logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
-        lmm_mode,
-        eigenvalues_np,
-        UtW,
-        Uty,
-        n_cvt,
-        placement.rep,
-        show_progress,
-        l_min=l_min,
-        l_max=l_max,
-    )
-
-    t_eigen_end = time.perf_counter()
-
-    pve = compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
-
-    eigenvalues = jax.device_put(eigenvalues_np, placement.rep)
-    UtW_jax = jax.device_put(UtW, placement.rep)
-    Uty_jax = jax.device_put(Uty, placement.rep)
-
-    # Process in chunks if needed
-    n_chunks = (n_filtered + chunk_size - 1) // chunk_size
-    if show_progress:
-        from jamma.core.estimates import estimate_lmm_time
-
-        logger.info(f"  Analyzed individuals: {n_samples:,}")
-        logger.info(f"  Analyzed SNPs: {n_filtered:,}")
-        if chunk_size < n_filtered:
-            logger.info(
-                f"  Processing in {n_chunks} chunks ({chunk_size:,} SNPs/chunk)"
-            )
-        est = estimate_lmm_time(n_samples, n_filtered, rotation_threads)
-        logger.info(f"  Estimated time: {est}")
-
-    # Pre-allocate result arrays driven by _RESULT_FIELDS mapping
-    write_offset = 0
-    arrays_out: dict[str, np.ndarray] = {
-        key: np.empty(n_filtered, dtype=np.float64) for key in _RESULT_FIELDS[lmm_mode]
-    }
-
-    # Invalidate stale timing immediately so callers never see prior-run data
-    # if this run raises mid-execution.
-    last_run_timing.clear()
-
-    # Timing accumulators for per-chunk phases
-    t_rotation_total = 0.0
-    t_rotation_exposed_total = 0.0
-    t_jax_compute_total = 0.0
-    t_result_write_total = 0.0
-
-    def _impute_and_prepare(start: int) -> tuple[np.ndarray, int]:
-        """Mean-impute a genotype slice and prepare UtG for device transfer."""
-        chunk_indices = snp_indices[start : start + chunk_size]
-        geno_chunk = genotypes[:, chunk_indices]
-        chunk_means_local = col_means[chunk_indices]
-        missing = np.isnan(geno_chunk)
-        if missing.any():  # RUN-06: skip O(n*chunk) np.where on clean data
-            geno_chunk = np.where(missing, chunk_means_local[None, :], geno_chunk)
-        del missing
-        return prepare_utg_chunk(geno_chunk, U, placement, rotation_threads)
-
-    def _impute_and_prepare_timed(start: int) -> tuple[np.ndarray, int, float]:
-        """_impute_and_prepare with internal duration measurement for background thread.
-
-        Duration is measured inside because the caller on the main thread cannot
-        observe start/end timestamps of work running on the background thread.
-        """
-        t0 = time.perf_counter()
-        UtG_np, actual_len = _impute_and_prepare(start)
-        return UtG_np, actual_len, time.perf_counter() - t0
-
-    chunk_starts = list(range(0, n_filtered, chunk_size))
-
-    # prev_compute_end tracks the perf_counter timestamp of the last JAX compute
-    # sync, used to compute how much rotation time was exposed (not overlapped).
-    prev_compute_end: float | None = None
-
-    # Prepare first chunk (includes BLAS rotation U.T @ G)
-    t_rot_start = time.perf_counter()
-    UtG_np, actual_len = _impute_and_prepare(chunk_starts[0])
-    t_rot_end = time.perf_counter()
-    rot_dur = t_rot_end - t_rot_start
-    t_rotation_total += rot_dur
-    t_rotation_exposed_total += exposed_rotation_time(
-        rot_dur, t_rot_end, prev_compute_end
-    )
-    UtG_jax = jax.device_put(UtG_np, placement.snp)
-    del UtG_np  # Safe: JAX holds internal ref during async transfer
-
-    # Create progress bar iterator
-    if show_progress and n_chunks > 1:
-        chunk_iterator = progress_iterator(
-            enumerate(chunk_starts), total=n_chunks, desc="LMM association"
-        )
-    else:
-        chunk_iterator = enumerate(chunk_starts)
-
-    # Rotation-compute pipeline: while JAX processes chunk N on XLA, a
-    # background thread runs BLAS DGEMM (U.T @ G) for chunk N+1. DGEMM
-    # releases the GIL, so both run truly concurrently. max_workers=1
-    # ensures at most one prefetch is in flight (double-buffering, not
-    # unbounded prefetch). Memory budget is halved via pipeline_buffers=2
-    # to account for two live UtG arrays.
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        for i, _chunk_start in chunk_iterator:
-            actual_chunk_len = actual_len
-            current_UtG = UtG_jax
-
-            # Submit next rotation to BACKGROUND THREAD.
-            # BLAS DGEMM (U.T @ G) releases the GIL and runs concurrently
-            # with JAX compute dispatched below.
-            future = None
-            if i + 1 < len(chunk_starts):
-                future = executor.submit(_impute_and_prepare_timed, chunk_starts[i + 1])
-
-            # --- JAX compute timing ---
-            t_jax_start = time.perf_counter()
-            try:
-                # Batch compute Uab for this chunk (shared across all modes)
-                Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
-
-                cr = _compute_lmm_chunk(
-                    lmm_mode,
-                    n_cvt,
-                    eigenvalues,
-                    Uab_batch,
-                    n_samples,
-                    l_min=l_min,
-                    l_max=l_max,
-                    n_grid=n_grid,
-                    n_refine=n_refine,
-                    Hi_eval_null=Hi_eval_null_jax,
-                    logl_H0=logl_H0,
-                )
-                # Explicit sync before timing result write (np.asarray below also
-                # syncs, but this isolates JAX compute time accurately)
-                block_chunk_result(cr, lmm_mode)
-
-            except Exception as e:
-                # Best-effort cancel: only succeeds if rotation hasn't started.
-                # If already running, executor.__exit__ will wait for completion.
-                if future is not None:
-                    future.cancel()
-                log_jax_error(
-                    e,
-                    chunk_label=f"{i + 1}/{n_chunks}",
-                    chunk_snps=chunk_size,
-                    n_samples=n_samples,
-                    n_cvt=n_cvt,
-                )
-                raise
-
-            t_jax_end = time.perf_counter()
-            t_jax_compute_total += t_jax_end - t_jax_start
-            prev_compute_end = t_jax_end
-
-            # Collect background rotation result (may be ready by now).
-            # future.result() blocks only for the remaining time after JAX sync.
-            if future is not None:
-                try:
-                    UtG_np, actual_len, rot_dur = future.result()
-                except MemoryError:
-                    raise  # Let MemoryError propagate directly for OOM handling
-                except Exception as exc:
-                    raise RuntimeError(
-                        f"Background rotation failed for chunk starting at "
-                        f"index {chunk_starts[i + 1]}. "
-                        f"Processed {write_offset + actual_chunk_len} SNPs "
-                        f"before failure."
-                    ) from exc
-                t_rot_end = time.perf_counter()
-                t_rotation_total += rot_dur
-                # Exposed = time main thread waited for future AFTER JAX sync.
-                # Near zero when JAX compute takes longer than rotation.
-                # Capped at rot_dur to prevent GC/scheduling jitter inflation.
-                t_rotation_exposed_total += min(
-                    rot_dur, max(0.0, t_rot_end - t_jax_end)
-                )
-                UtG_jax = jax.device_put(UtG_np, placement.snp)
-                del UtG_np  # Safe: JAX holds internal ref during async transfer
-
-            # Write results, stripping padding from tail/device-alignment
-            t_write_start = time.perf_counter()
-            s = slice(write_offset, write_offset + actual_chunk_len)
-            for key in arrays_out:
-                arrays_out[key][s] = np.asarray(cr[key][:actual_chunk_len])
-            write_offset += actual_chunk_len
-            t_write_end = time.perf_counter()
-            t_result_write_total += t_write_end - t_write_start
-
-    # Validate all results were written
-    if write_offset != n_filtered:
-        raise RuntimeError(
-            f"Pre-allocated array size mismatch: wrote {write_offset} results,"
-            f" expected {n_filtered}. This is an internal error — please report"
-            f" this issue with your dataset dimensions."
+    eigenvalues_jax = None
+    UtW_jax = None
+    Uty_jax = None
+    try:
+        logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
+            lmm_mode,
+            eigenvalues_np,
+            UtW,
+            Uty,
+            n_cvt,
+            placement.rep,
+            show_progress,
+            l_min=l_min,
+            l_max=l_max,
         )
 
-    # Log memory after all chunks processed
-    if show_progress:
-        log_rss_memory("lmm_jax", "after_all_chunks")
+        t_eigen_end = time.perf_counter()
 
-    # NaN diagnostic: warn if any output arrays contain NaN results
-    for key, arr in arrays_out.items():
-        n_nan = int(np.sum(np.isnan(arr)))
-        if n_nan > 0:
-            logger.warning(
-                f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
-                "check kinship matrix quality"
-            )
+        pve, pve_se = compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
 
-    # Lambda boundary convergence diagnostics
-    n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
-        lmm_mode, arrays_out, l_min, l_max
-    )
-    log_lambda_boundary_warning(n_at_lmin, n_at_lmax, l_min, l_max)
+        eigenvalues_jax = jax.device_put(eigenvalues_np, placement.rep)
+        UtW_jax = jax.device_put(UtW, placement.rep)
+        Uty_jax = jax.device_put(Uty, placement.rep)
 
-    # Explicit cleanup prevents SIGSEGV from GC/JAX thread race conditions
-    del eigenvalues, UtW_jax, Uty_jax
-    jax.clear_caches()
+        # Process in chunks if needed
+        n_chunks = (n_filtered + chunk_size - 1) // chunk_size
+        if show_progress:
+            from jamma.core.estimates import estimate_lmm_time
 
-    # Log completion
-    elapsed = time.perf_counter() - start_time
-    if show_progress:
-        t_eigen = t_eigen_end - t_eigen_start
-        accounted = (
-            t_eigen + t_rotation_total + t_jax_compute_total + t_result_write_total
-        )
-        logger.info("Timing breakdown:")
-        logger.info(f"  Setup (eigen+null):  {t_eigen:.2f}s")
-        logger.info(f"  UT@G rotation:       {t_rotation_total:.2f}s")
-        logger.info(f"  UT@G exposed:        {t_rotation_exposed_total:.2f}s")
-        logger.info(f"  JAX compute:         {t_jax_compute_total:.2f}s")
-        logger.info(f"  Result write:        {t_result_write_total:.2f}s")
-        logger.info("  ----")
-        logger.info(f"  Accounted:           {accounted:.2f}s")
-        logger.info(f"  Total:               {elapsed:.2f}s")
-        logger.info(f"LMM Association completed in {elapsed:.2f}s")
+            logger.info(f"  Analyzed individuals: {n_samples:,}")
+            logger.info(f"  Analyzed SNPs: {n_filtered:,}")
+            if chunk_size < n_filtered:
+                logger.info(
+                    f"  Processing in {n_chunks} chunks ({chunk_size:,} SNPs/chunk)"
+                )
+            est = estimate_lmm_time(n_samples, n_filtered, rotation_threads)
+            logger.info(f"  Estimated time: {est}")
 
-    last_run_timing.clear()
-    last_run_timing.update(
-        {
-            "rotation_s": t_rotation_total,
-            "rotation_exposed_s": t_rotation_exposed_total,
-            "jax_compute_s": t_jax_compute_total,
-            "result_write_s": t_result_write_total,
+        # Pre-allocate result arrays driven by _RESULT_FIELDS mapping
+        write_offset = 0
+        arrays_out: dict[str, np.ndarray] = {
+            key: np.empty(n_filtered, dtype=np.float64)
+            for key in _RESULT_FIELDS[lmm_mode]
         }
-    )
 
-    return LmmRunResult(
-        associations=_build_results(
-            lmm_mode, snp_indices, filtered_afs, filtered_miss, snp_info, arrays_out
-        ),
-        pve=pve,
-    )
+        # Invalidate stale timing immediately so callers never see prior-run data
+        # if this run raises mid-execution.
+        last_run_timing.clear()
+
+        # Timing accumulators for per-chunk phases
+        t_rotation_total = 0.0
+        t_rotation_exposed_total = 0.0
+        t_jax_compute_total = 0.0
+        t_result_write_total = 0.0
+
+        def _impute_and_prepare(start: int) -> tuple[np.ndarray, int]:
+            """Mean-impute a genotype slice and prepare UtG for device transfer."""
+            chunk_indices = snp_indices[start : start + chunk_size]
+            geno_chunk = genotypes[:, chunk_indices]
+            chunk_means_local = col_means[chunk_indices]
+            missing = np.isnan(geno_chunk)
+            if missing.any():  # RUN-06: skip O(n*chunk) np.where on clean data
+                geno_chunk = np.where(missing, chunk_means_local[None, :], geno_chunk)
+            del missing
+            return prepare_utg_chunk(geno_chunk, U, placement, rotation_threads)
+
+        def _impute_and_prepare_timed(start: int) -> tuple[np.ndarray, int, float]:
+            """Measure background-thread preparation time inside the worker."""
+            t0 = time.perf_counter()
+            UtG_np, actual_len = _impute_and_prepare(start)
+            return UtG_np, actual_len, time.perf_counter() - t0
+
+        chunk_starts = list(range(0, n_filtered, chunk_size))
+
+        # prev_compute_end tracks the perf_counter timestamp of the last JAX
+        # compute sync, used to compute how much rotation time was exposed.
+        prev_compute_end: float | None = None
+
+        # Prepare first chunk (includes BLAS rotation U.T @ G)
+        t_rot_start = time.perf_counter()
+        UtG_np, actual_len = _impute_and_prepare(chunk_starts[0])
+        t_rot_end = time.perf_counter()
+        rot_dur = t_rot_end - t_rot_start
+        t_rotation_total += rot_dur
+        t_rotation_exposed_total += exposed_rotation_time(
+            rot_dur, t_rot_end, prev_compute_end
+        )
+        UtG_jax = jax.device_put(UtG_np, placement.snp)
+        del UtG_np  # Safe: JAX holds internal ref during async transfer
+
+        # Create progress bar iterator
+        if show_progress and n_chunks > 1:
+            chunk_iterator = progress_iterator(
+                enumerate(chunk_starts), total=n_chunks, desc="LMM association"
+            )
+        else:
+            chunk_iterator = enumerate(chunk_starts)
+
+        # Rotation-compute pipeline: while JAX processes chunk N on XLA, a
+        # background thread runs BLAS DGEMM (U.T @ G) for chunk N+1.
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            for i, _chunk_start in chunk_iterator:
+                actual_chunk_len = actual_len
+                current_UtG = UtG_jax
+
+                future = None
+                if i + 1 < len(chunk_starts):
+                    future = executor.submit(
+                        _impute_and_prepare_timed, chunk_starts[i + 1]
+                    )
+
+                t_jax_start = time.perf_counter()
+                try:
+                    Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
+
+                    cr = _compute_lmm_chunk(
+                        lmm_mode,
+                        n_cvt,
+                        eigenvalues_jax,
+                        Uab_batch,
+                        n_samples,
+                        l_min=l_min,
+                        l_max=l_max,
+                        n_grid=n_grid,
+                        n_refine=n_refine,
+                        Hi_eval_null=Hi_eval_null_jax,
+                        logl_H0=logl_H0,
+                    )
+                    # Explicit sync before timing result write
+                    block_chunk_result(cr, lmm_mode)
+
+                except Exception as e:
+                    if future is not None:
+                        future.cancel()
+                    log_jax_error(
+                        e,
+                        chunk_label=f"{i + 1}/{n_chunks}",
+                        chunk_snps=chunk_size,
+                        n_samples=n_samples,
+                        n_cvt=n_cvt,
+                    )
+                    raise
+
+                t_jax_end = time.perf_counter()
+                t_jax_compute_total += t_jax_end - t_jax_start
+                prev_compute_end = t_jax_end
+
+                if future is not None:
+                    try:
+                        UtG_np, actual_len, rot_dur = future.result()
+                    except MemoryError:
+                        raise
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"Background rotation failed for chunk starting at "
+                            f"index {chunk_starts[i + 1]}. "
+                            f"Processed {write_offset + actual_chunk_len} SNPs "
+                            f"before failure."
+                        ) from exc
+                    t_rot_end = time.perf_counter()
+                    t_rotation_total += rot_dur
+                    t_rotation_exposed_total += min(
+                        rot_dur, max(0.0, t_rot_end - t_jax_end)
+                    )
+                    UtG_jax = jax.device_put(UtG_np, placement.snp)
+                    del UtG_np  # Safe: JAX holds internal ref during async transfer
+
+                # Write results, stripping padding from tail/device-alignment
+                t_write_start = time.perf_counter()
+                s = slice(write_offset, write_offset + actual_chunk_len)
+                for key in arrays_out:
+                    arrays_out[key][s] = np.asarray(cr[key][:actual_chunk_len])
+                write_offset += actual_chunk_len
+                t_write_end = time.perf_counter()
+                t_result_write_total += t_write_end - t_write_start
+
+        if write_offset != n_filtered:
+            raise RuntimeError(
+                f"Pre-allocated array size mismatch: wrote {write_offset} results,"
+                f" expected {n_filtered}. This is an internal error — please report"
+                f" this issue with your dataset dimensions."
+            )
+
+        if show_progress:
+            log_rss_memory("lmm_jax", "after_all_chunks")
+
+        for key, arr in arrays_out.items():
+            n_nan = int(np.sum(np.isnan(arr)))
+            if n_nan > 0:
+                logger.warning(
+                    f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
+                    "check kinship matrix quality"
+                )
+
+        n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
+            lmm_mode, arrays_out, l_min, l_max
+        )
+        log_lambda_boundary_warning(n_at_lmin, n_at_lmax, l_min, l_max)
+
+        elapsed = time.perf_counter() - start_time
+        if show_progress:
+            t_eigen = t_eigen_end - t_eigen_start
+            accounted = (
+                t_eigen + t_rotation_total + t_jax_compute_total + t_result_write_total
+            )
+            logger.info("Timing breakdown:")
+            logger.info(f"  Setup (eigen+null):  {t_eigen:.2f}s")
+            logger.info(f"  UT@G rotation:       {t_rotation_total:.2f}s")
+            logger.info(f"  UT@G exposed:        {t_rotation_exposed_total:.2f}s")
+            logger.info(f"  JAX compute:         {t_jax_compute_total:.2f}s")
+            logger.info(f"  Result write:        {t_result_write_total:.2f}s")
+            logger.info("  ----")
+            logger.info(f"  Accounted:           {accounted:.2f}s")
+            logger.info(f"  Total:               {elapsed:.2f}s")
+            logger.info(f"LMM Association completed in {elapsed:.2f}s")
+
+        last_run_timing.clear()
+        last_run_timing.update(
+            {
+                "rotation_s": t_rotation_total,
+                "rotation_exposed_s": t_rotation_exposed_total,
+                "jax_compute_s": t_jax_compute_total,
+                "result_write_s": t_result_write_total,
+            }
+        )
+
+        return LmmRunResult(
+            associations=_build_results(
+                lmm_mode,
+                snp_indices,
+                filtered_afs,
+                filtered_miss,
+                snp_info,
+                arrays_out,
+            ),
+            pve=pve,
+            pve_se=pve_se,
+        )
+    finally:
+        # Clear global JAX caches on both success and failure to avoid
+        # retaining compiled executables across repeated runs in one process.
+        del eigenvalues_jax, UtW_jax, Uty_jax
+        try:
+            jax.clear_caches()
+        except Exception:
+            logger.warning("Failed to clear JAX caches during cleanup", exc_info=True)

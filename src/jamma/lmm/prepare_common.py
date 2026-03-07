@@ -16,7 +16,12 @@ from loguru import logger
 
 from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.lmm.eigen import eigendecompose_kinship
-from jamma.lmm.likelihood import compute_null_model_lambda, compute_null_model_mle
+from jamma.lmm.likelihood import (
+    compute_null_model_lambda,
+    compute_null_model_mle,
+    compute_Uab,
+    finite_difference_dev2,
+)
 from jamma.utils.logging import log_rss_memory
 
 
@@ -324,13 +329,18 @@ def compute_and_log_pve(
     n_cvt: int,
     l_min: float = 1e-5,
     l_max: float = 1e5,
-) -> float:
-    """Compute PVE (proportion of variance explained) from null model REML lambda.
+) -> tuple[float, float | None]:
+    """Compute PVE and se(PVE) from null model REML lambda.
 
     PVE = lambda * trace(K) / (lambda * trace(K) + n), where lambda = vg/ve
     is the REML estimate under the null model (no genotype effect) and
     trace(K) = sum(eigenvalues). This trace-adjusted formula matches GEMMA's
     CalcPve which accounts for kinship matrices whose trace != n.
+
+    se(PVE) is computed via the delta method: se(lambda) from the REML
+    second derivative at the optimum, then propagated through the PVE
+    transformation using d(PVE)/d(lambda) = trace_G / (trace_G * lambda + 1)^2
+    where trace_G = trace(K) / n.
 
     Called by all LMM runners after eigendecomp + rotation, regardless of
     lmm_mode. The REML null lambda optimization is cheap (single golden
@@ -345,7 +355,9 @@ def compute_and_log_pve(
         l_max: Maximum lambda for optimization.
 
     Returns:
-        PVE estimate (float between 0 and 1).
+        Tuple of (pve, pve_se) where pve is the PVE estimate (float between
+        0 and 1) and pve_se is the standard error of PVE via delta method
+        (None if the likelihood surface is flat).
     """
     lambda_remle, _logl = compute_null_model_lambda(
         eigenvalues_np, UtW, Uty, n_cvt, l_min=l_min, l_max=l_max
@@ -354,4 +366,43 @@ def compute_and_log_pve(
     n = len(eigenvalues_np)
     pve = lambda_remle * trace_K / (lambda_remle * trace_K + n)
     logger.info(f"pve estimate in the null model = {pve:.6f}")
-    return pve
+
+    # Compute se(pve) via delta method using REML second derivative.
+    # The analytical reml_log_likelihood_dev2 omits d²(logdet_hiw)/dλ²,
+    # which makes it incomplete for all n_cvt. Use finite differences of
+    # reml_log_likelihood_null until the analytical port is completed.
+    Uab = compute_Uab(UtW, Uty, Utx=None)
+    dev2 = finite_difference_dev2(
+        lambda_remle,
+        eigenvalues_np,
+        Uab,
+        n_cvt,
+        l_min=l_min,
+        l_max=l_max,
+    )
+
+    pve_se: float | None = None
+    if dev2 < 0:
+        se_lambda = np.sqrt(-1.0 / dev2)
+        trace_G = trace_K / n
+        # d(PVE)/d(lambda) = trace_G / (trace_G * lambda + 1)^2
+        denom = trace_G * lambda_remle + 1.0
+        pve_se = float(trace_G / (denom * denom) * se_lambda)
+        logger.info(f"se(pve) in the null model = {pve_se:.6g}")
+    elif np.isnan(dev2):
+        logger.error(
+            f"REML second derivative is NaN at lambda={lambda_remle:.6e} — "
+            f"degenerate projection (P_yy likely zero). se(pve) unavailable"
+        )
+    elif dev2 > 0:
+        logger.error(
+            f"REML second derivative is positive ({dev2:.6e}) at lambda="
+            f"{lambda_remle:.6e} — optimum may not be a maximum. se(pve) unavailable"
+        )
+    else:
+        logger.warning(
+            f"REML second derivative is zero at lambda={lambda_remle:.6e} — "
+            f"flat likelihood surface, se(pve) unavailable"
+        )
+
+    return pve, pve_se

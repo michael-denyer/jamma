@@ -275,10 +275,32 @@ class LmmRunResult:
         associations: Per-SNP association results.
         pve: PVE (proportion of variance explained) from null model REML.
             None if no SNPs passed filtering (early return).
+        pve_se: Standard error of PVE from REML second derivative delta method.
+            None if not computed or likelihood surface is flat.
     """
 
     associations: list  # list[AssocResult] -- avoid circular import with stats.py
     pve: float | None = None
+    pve_se: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LocoResult:
+    """Return type for run_lmm_loco.
+
+    Attributes:
+        associations: Per-SNP results in biological chromosome order.
+            Empty list if output_path is set (results written to disk).
+        n_tested: Total number of SNPs tested across all chromosomes.
+        pve: PVE estimate from the first chromosome's null model.
+        pve_se: Standard error of PVE via delta method.
+            None if likelihood surface is flat.
+    """
+
+    associations: list  # list[AssocResult]
+    n_tested: int
+    pve: float | None = None
+    pve_se: float | None = None
 
 
 class LazySnpMeta:

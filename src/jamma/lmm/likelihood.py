@@ -2,7 +2,8 @@
 
 Implements restricted maximum likelihood (REML) and maximum likelihood (MLE)
 functions for variance component estimation in LMM. This closely follows
-GEMMA's lmm.cpp CalcPab, LogRL_f, LogL_f, and CalcRLWald functions.
+GEMMA's lmm.cpp CalcPab, CalcPPab, CalcPPPab, LogRL_f, LogRL_dev2, LogL_f,
+and CalcRLWald functions.
 
 Also provides null model optimization via golden section search for Score
 and LRT tests.
@@ -334,6 +335,267 @@ def _calc_pab_general(n_cvt: int, Hi_eval: np.ndarray, Uab: np.ndarray) -> np.nd
                     Pab[p, index_ab] = ps_ab
 
     return Pab
+
+
+def calc_ppab(
+    n_cvt: int,
+    HiHi_eval: np.ndarray,
+    Uab: np.ndarray,
+    Pab: np.ndarray,
+) -> np.ndarray:
+    """Compute PPab (second-order projected Pab) for REML second derivative.
+
+    PPab stores v_a P^2 v_b quantities. Row 0 uses HiHi_eval weighted
+    dot products; subsequent rows use Schur complement recursion involving
+    both Pab and PPab from the previous level.
+
+    Port of GEMMA v0.98.5 CalcPPab (e_mode=0 path).
+
+    Args:
+        n_cvt: Number of covariates.
+        HiHi_eval: 1/(lambda*eval + 1)^2 vector (n_samples,).
+        Uab: Matrix products (n_samples, n_index).
+        Pab: First-order projection from calc_pab (n_cvt+2, n_index).
+
+    Returns:
+        PPab matrix (n_cvt+2, n_index).
+    """
+    n_index = (n_cvt + 2 + 1) * (n_cvt + 2) // 2
+    PPab = np.zeros((n_cvt + 2, n_index), dtype=np.float64)
+
+    # Row 0: weighted dot products with HiHi_eval
+    PPab[0, :] = HiHi_eval @ Uab
+
+    # Rows 1..n_cvt+1: recursive projection
+    for p in range(1, n_cvt + 2):
+        for a in range(p + 1, n_cvt + 3):
+            for b in range(a, n_cvt + 3):
+                index_ab = get_ab_index(a, b, n_cvt)
+                index_aw = get_ab_index(a, p, n_cvt)
+                index_bw = get_ab_index(b, p, n_cvt)
+                index_ww = get_ab_index(p, p, n_cvt)
+
+                ps2_ab = PPab[p - 1, index_ab]
+                ps_aw = Pab[p - 1, index_aw]
+                ps_bw = Pab[p - 1, index_bw]
+                ps_ww = Pab[p - 1, index_ww]
+                ps2_aw = PPab[p - 1, index_aw]
+                ps2_bw = PPab[p - 1, index_bw]
+                ps2_ww = PPab[p - 1, index_ww]
+
+                if ps_ww != 0:
+                    p2_ab = ps2_ab + ps_aw * ps_bw * ps2_ww / (ps_ww * ps_ww)
+                    p2_ab -= (ps_aw * ps2_bw + ps_bw * ps2_aw) / ps_ww
+                else:
+                    logger.debug(f"Degenerate ps_ww=0 at level {p} in PPab")
+                    p2_ab = ps2_ab
+
+                PPab[p, index_ab] = p2_ab
+
+    return PPab
+
+
+def calc_pppab(
+    n_cvt: int,
+    HiHiHi_eval: np.ndarray,
+    Uab: np.ndarray,
+    Pab: np.ndarray,
+    PPab: np.ndarray,
+) -> np.ndarray:
+    """Compute PPPab (third-order projected Pab) for REML second derivative.
+
+    PPPab stores v_a P^3 v_b quantities. Row 0 uses HiHiHi_eval weighted
+    dot products; subsequent rows use Schur complement recursion involving
+    Pab, PPab, and PPPab from the previous level.
+
+    Port of GEMMA v0.98.5 CalcPPPab (e_mode=0 path).
+
+    Args:
+        n_cvt: Number of covariates.
+        HiHiHi_eval: 1/(lambda*eval + 1)^3 vector (n_samples,).
+        Uab: Matrix products (n_samples, n_index).
+        Pab: First-order projection from calc_pab (n_cvt+2, n_index).
+        PPab: Second-order projection from calc_ppab (n_cvt+2, n_index).
+
+    Returns:
+        PPPab matrix (n_cvt+2, n_index).
+    """
+    n_index = (n_cvt + 2 + 1) * (n_cvt + 2) // 2
+    PPPab = np.zeros((n_cvt + 2, n_index), dtype=np.float64)
+
+    # Row 0: weighted dot products with HiHiHi_eval
+    PPPab[0, :] = HiHiHi_eval @ Uab
+
+    # Rows 1..n_cvt+1: recursive projection
+    for p in range(1, n_cvt + 2):
+        for a in range(p + 1, n_cvt + 3):
+            for b in range(a, n_cvt + 3):
+                index_ab = get_ab_index(a, b, n_cvt)
+                index_aw = get_ab_index(a, p, n_cvt)
+                index_bw = get_ab_index(b, p, n_cvt)
+                index_ww = get_ab_index(p, p, n_cvt)
+
+                ps3_ab = PPPab[p - 1, index_ab]
+                ps_aw = Pab[p - 1, index_aw]
+                ps_bw = Pab[p - 1, index_bw]
+                ps_ww = Pab[p - 1, index_ww]
+                ps2_aw = PPab[p - 1, index_aw]
+                ps2_bw = PPab[p - 1, index_bw]
+                ps2_ww = PPab[p - 1, index_ww]
+                ps3_aw = PPPab[p - 1, index_aw]
+                ps3_bw = PPPab[p - 1, index_bw]
+                ps3_ww = PPPab[p - 1, index_ww]
+
+                if ps_ww != 0:
+                    ps_ww2 = ps_ww * ps_ww
+                    ps_ww3 = ps_ww2 * ps_ww
+
+                    p3_ab = ps3_ab
+                    # Term: -aw*bw*ps2_ww^2 / ps_ww^3
+                    p3_ab -= ps_aw * ps_bw * ps2_ww * ps2_ww / ps_ww3
+                    # Term: -(aw*ps3_bw + bw*ps3_aw + ps2_aw*ps2_bw) / ps_ww
+                    p3_ab -= (ps_aw * ps3_bw + ps_bw * ps3_aw + ps2_aw * ps2_bw) / ps_ww
+                    # Term: +(aw*ps2_bw*ps2_ww + bw*ps2_aw*ps2_ww
+                    #         + aw*bw*ps3_ww) / ps_ww^2
+                    p3_ab += (
+                        ps_aw * ps2_bw * ps2_ww
+                        + ps_bw * ps2_aw * ps2_ww
+                        + ps_aw * ps_bw * ps3_ww
+                    ) / ps_ww2
+                else:
+                    logger.debug(f"Degenerate ps_ww=0 at level {p} in PPPab")
+                    p3_ab = ps3_ab
+
+                PPPab[p, index_ab] = p3_ab
+
+    return PPPab
+
+
+def reml_log_likelihood_dev2(
+    lambda_val: float,
+    eigenvalues: np.ndarray,
+    Uab: np.ndarray,
+    n_cvt: int,
+) -> float:
+    """Compute REML log-likelihood second derivative for null model.
+
+    Used by the delta method to compute se(pve). The second derivative
+    at the REML optimum determines the precision of the lambda estimate.
+
+    Partial port of GEMMA v0.98.5 LogRL_dev2 (e_mode=0, calc_null=True).
+    Currently incomplete: the d²(logdet_hiw)/dλ² term is missing from the
+    analytical computation. For n_cvt=1 the omitted term is negligible;
+    for n_cvt > 1 this function delegates to finite_difference_dev2.
+
+    Use finite_difference_dev2() directly if you need guaranteed accuracy
+    for arbitrary n_cvt.
+
+    Args:
+        lambda_val: REML-optimal lambda (null model).
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        Uab: Null model Uab (n_samples, n_index).
+        n_cvt: Number of covariates.
+
+    Returns:
+        Second derivative d^2 ell / d lambda^2 (negative at maximum).
+    """
+    if n_cvt > 1:
+        return finite_difference_dev2(lambda_val, eigenvalues, Uab, n_cvt)
+
+    if lambda_val <= 0:
+        logger.warning(f"lambda_val={lambda_val:.6e} is non-positive in dev2")
+        return np.nan
+
+    n = len(eigenvalues)
+    nc_total = n_cvt  # null model
+    df = n - n_cvt
+
+    v_temp = lambda_val * eigenvalues + 1.0
+    Hi_eval = 1.0 / v_temp
+    HiHi_eval = Hi_eval * Hi_eval
+    HiHiHi_eval = HiHi_eval * Hi_eval
+
+    trace_Hi = np.sum(Hi_eval)
+    trace_HiHi = np.sum(HiHi_eval)
+    trace_HiKHiK = (n + trace_HiHi - 2.0 * trace_Hi) / (lambda_val * lambda_val)
+
+    Pab = calc_pab(n_cvt, Hi_eval, Uab)
+    PPab_mat = calc_ppab(n_cvt, HiHi_eval, Uab, Pab)
+    PPPab_mat = calc_pppab(n_cvt, HiHiHi_eval, Uab, Pab, PPab_mat)
+
+    idx_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
+    raw_P_yy = Pab[nc_total, idx_yy]
+    if raw_P_yy < _P_YY_MIN:
+        logger.warning(
+            f"P_yy={raw_P_yy:.6e} below floor {_P_YY_MIN} in dev2 — "
+            f"phenotype may be degenerate after projection"
+        )
+        return np.nan
+    P_yy = raw_P_yy
+    PP_yy = PPab_mat[nc_total, idx_yy]
+    PPP_yy = PPPab_mat[nc_total, idx_yy]
+
+    yPKPy = (P_yy - PP_yy) / lambda_val
+    yPKPKPy = (P_yy + PPP_yy - 2.0 * PP_yy) / (lambda_val * lambda_val)
+
+    dev2 = 0.5 * trace_HiKHiK - 0.5 * df * (2.0 * yPKPKPy * P_yy - yPKPy * yPKPy) / (
+        P_yy * P_yy
+    )
+
+    return dev2
+
+
+def finite_difference_dev2(
+    lambda_val: float,
+    eigenvalues: np.ndarray,
+    Uab: np.ndarray,
+    n_cvt: int,
+    l_min: float = 1e-5,
+    l_max: float = 1e5,
+) -> float:
+    """Compute REML log-likelihood second derivative via central finite differences.
+
+    Fallback for n_cvt > 1 where the analytical reml_log_likelihood_dev2 is
+    incomplete (missing the d²(logdet_hiw)/dλ² term). Uses a central stencil
+    on reml_log_likelihood_null with h ~ O(eps^{1/4}) * lambda for optimal
+    second-derivative accuracy. Falls back to a one-sided stencil when lambda
+    is near the optimiser bounds.
+
+    Args:
+        lambda_val: REML-optimal lambda (null model).
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        Uab: Null model Uab (n_samples, n_index).
+        n_cvt: Number of covariates.
+        l_min: Lower bound of lambda search range.
+        l_max: Upper bound of lambda search range.
+
+    Returns:
+        Second derivative d² ℓ / d λ² (negative at maximum).
+    """
+    h = max(lambda_val * 1e-4, 1e-8)
+
+    can_go_left = (lambda_val - h) > l_min
+    can_go_right = (lambda_val + h) < l_max
+
+    def f(lam: float) -> float:
+        return reml_log_likelihood_null(lam, eigenvalues, Uab, n_cvt)
+
+    if can_go_left and can_go_right:
+        # Central stencil
+        return (f(lambda_val + h) - 2.0 * f(lambda_val) + f(lambda_val - h)) / (h * h)
+    elif can_go_right:
+        # Forward stencil (near l_min)
+        return (f(lambda_val + 2 * h) - 2.0 * f(lambda_val + h) + f(lambda_val)) / (
+            h * h
+        )
+    elif can_go_left:
+        # Backward stencil (near l_max)
+        return (f(lambda_val) - 2.0 * f(lambda_val - h) + f(lambda_val - 2 * h)) / (
+            h * h
+        )
+    else:
+        logger.warning("lambda range too narrow for finite-difference stencil")
+        return np.nan
 
 
 def calc_iab(

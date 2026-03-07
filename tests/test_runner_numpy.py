@@ -199,6 +199,9 @@ def test_numpy_runner_returns_list_of_assoc_result(synthetic_data):
     )
     assert run_result.pve is not None, "PVE should be populated"
     assert 0 <= run_result.pve <= 1, f"PVE should be in [0, 1], got {run_result.pve}"
+    assert run_result.pve_se is None or run_result.pve_se > 0, (
+        f"PVE SE should be None or positive, got {run_result.pve_se}"
+    )
 
 
 def test_numpy_runner_empty_after_filter(synthetic_data):

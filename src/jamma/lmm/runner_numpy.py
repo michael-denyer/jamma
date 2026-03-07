@@ -375,7 +375,7 @@ def run_lmm_association_numpy(
 
     t_eigen_end = time.perf_counter()
 
-    pve = compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
+    pve, pve_se = compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
 
     n_filtered = len(snp_indices)
 
@@ -885,4 +885,5 @@ def run_lmm_association_numpy(
             lmm_mode, snp_indices, filtered_afs, filtered_miss, snp_info, arrays_out
         ),
         pve=pve,
+        pve_se=pve_se,
     )

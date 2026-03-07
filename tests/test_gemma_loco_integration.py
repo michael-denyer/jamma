@@ -187,7 +187,7 @@ class TestGemmaLocoValidation:
         columns: rs, beta, se, p_wald, l_remle, logl_H1.
         """
         phenotypes = load_phenotypes_from_fam(PLINK_PREFIX.with_suffix(".fam"))
-        results, _n_tested, _ = run_lmm_loco(
+        loco = run_lmm_loco(
             bed_path=PLINK_PREFIX,
             phenotypes=phenotypes,
             lmm_mode=1,
@@ -197,7 +197,14 @@ class TestGemmaLocoValidation:
             check_memory=False,
         )
 
+        # pve_se may be None when lambda converges at the optimizer boundary
+        # (flat likelihood surface → dev2 ≈ 0). This is correct for synthetic
+        # data with near-zero heritability.
+        if loco.pve_se is not None:
+            assert loco.pve_se > 0, f"pve_se should be positive, got {loco.pve_se}"
+
         # Group by chromosome
+        results = loco.associations
         by_chr: dict[str, list] = {}
         for r in results:
             by_chr.setdefault(r.chr, []).append(r)
@@ -436,7 +443,7 @@ def test_loco_cross_backend_parity_modes_2_3_4(lmm_mode: int) -> None:
     """
     phenotypes = load_phenotypes_from_fam(PLINK_PREFIX.with_suffix(".fam"))
 
-    jax_results, jax_n, _ = run_lmm_loco(
+    jax_loco = run_lmm_loco(
         bed_path=PLINK_PREFIX,
         phenotypes=phenotypes,
         lmm_mode=lmm_mode,
@@ -446,7 +453,7 @@ def test_loco_cross_backend_parity_modes_2_3_4(lmm_mode: int) -> None:
         check_memory=False,
         backend="jax",
     )
-    numpy_results, numpy_n, _ = run_lmm_loco(
+    numpy_loco = run_lmm_loco(
         bed_path=PLINK_PREFIX,
         phenotypes=phenotypes,
         lmm_mode=lmm_mode,
@@ -456,9 +463,12 @@ def test_loco_cross_backend_parity_modes_2_3_4(lmm_mode: int) -> None:
         check_memory=False,
         backend="numpy",
     )
+    jax_results = jax_loco.associations
+    numpy_results = numpy_loco.associations
 
-    assert jax_n == numpy_n, (
-        f"mode {lmm_mode}: n_tested mismatch — JAX={jax_n}, NumPy={numpy_n}"
+    assert jax_loco.n_tested == numpy_loco.n_tested, (
+        f"mode {lmm_mode}: n_tested mismatch — "
+        f"JAX={jax_loco.n_tested}, NumPy={numpy_loco.n_tested}"
     )
     assert len(jax_results) == len(numpy_results), (
         f"mode {lmm_mode}: result count mismatch — JAX={len(jax_results)}, "
@@ -562,7 +572,7 @@ def test_loco_mode_234_with_covariates(lmm_mode: int) -> None:
     rng = np.random.default_rng(42)
     covariates = rng.standard_normal((len(phenotypes), 1))
 
-    results, n_tested, _ = run_lmm_loco(
+    loco = run_lmm_loco(
         bed_path=PLINK_PREFIX,
         phenotypes=phenotypes,
         covariates=covariates,
@@ -573,8 +583,11 @@ def test_loco_mode_234_with_covariates(lmm_mode: int) -> None:
         check_memory=False,
         backend="numpy",
     )
+    results = loco.associations
 
-    assert n_tested > 0, f"mode {lmm_mode}: expected n_tested > 0, got {n_tested}"
+    assert loco.n_tested > 0, (
+        f"mode {lmm_mode}: expected n_tested > 0, got {loco.n_tested}"
+    )
     assert len(results) > 0, f"mode {lmm_mode}: expected non-empty results"
 
     for r in results:
@@ -621,7 +634,7 @@ def test_loco_cross_backend_parity_modes_234_with_covariates(lmm_mode: int) -> N
     rng = np.random.default_rng(42)
     covariates = rng.standard_normal((len(phenotypes), 1))
 
-    jax_results, jax_n, _ = run_lmm_loco(
+    jax_loco = run_lmm_loco(
         bed_path=PLINK_PREFIX,
         phenotypes=phenotypes,
         covariates=covariates,
@@ -632,7 +645,7 @@ def test_loco_cross_backend_parity_modes_234_with_covariates(lmm_mode: int) -> N
         check_memory=False,
         backend="jax",
     )
-    numpy_results, numpy_n, _ = run_lmm_loco(
+    numpy_loco = run_lmm_loco(
         bed_path=PLINK_PREFIX,
         phenotypes=phenotypes,
         covariates=covariates,
@@ -643,10 +656,12 @@ def test_loco_cross_backend_parity_modes_234_with_covariates(lmm_mode: int) -> N
         check_memory=False,
         backend="numpy",
     )
+    jax_results = jax_loco.associations
+    numpy_results = numpy_loco.associations
 
-    assert jax_n == numpy_n, (
+    assert jax_loco.n_tested == numpy_loco.n_tested, (
         f"mode {lmm_mode} with covariates: n_tested mismatch — "
-        f"JAX={jax_n}, NumPy={numpy_n}"
+        f"JAX={jax_loco.n_tested}, NumPy={numpy_loco.n_tested}"
     )
     assert len(jax_results) == len(numpy_results), (
         f"mode {lmm_mode} with covariates: result count mismatch — "
@@ -741,7 +756,7 @@ def test_loco_single_snp_chromosome(backend: str) -> None:
     """
     phenotypes = load_phenotypes_from_fam(PLINK_PREFIX.with_suffix(".fam"))
 
-    results, n_tested, _ = run_lmm_loco(
+    loco = run_lmm_loco(
         bed_path=PLINK_PREFIX,
         phenotypes=phenotypes,
         lmm_mode=1,
@@ -753,10 +768,12 @@ def test_loco_single_snp_chromosome(backend: str) -> None:
         snps_indices=np.array([0]),
     )
 
-    assert n_tested == 1, f"Expected n_tested=1, got {n_tested}"
-    assert len(results) == 1, f"Expected 1 result, got {len(results)}"
+    assert loco.n_tested == 1, f"Expected n_tested=1, got {loco.n_tested}"
+    assert len(loco.associations) == 1, (
+        f"Expected 1 result, got {len(loco.associations)}"
+    )
 
-    r = results[0]
+    r = loco.associations[0]
     assert r.p_wald is not None, "p_wald is None for mode 1 single-SNP result"
     assert not np.isnan(r.beta), "beta is NaN for single-SNP result"
     assert not np.isnan(r.se), "se is NaN for single-SNP result"

@@ -671,7 +671,7 @@ class TestLocoEdgeCases:
 
         phenotypes = rng.standard_normal(n_samples)
 
-        results, n_tested, pve = run_lmm_loco(
+        loco = run_lmm_loco(
             bed_path=bed_path,
             phenotypes=phenotypes,
             lmm_mode=1,
@@ -680,6 +680,7 @@ class TestLocoEdgeCases:
             show_progress=False,
             backend="numpy",
         )
+        results, n_tested, pve = loco.associations, loco.n_tested, loco.pve
 
         # PVE must be computed despite chr1 being fully filtered
         assert pve is not None, "PVE should fall back to a later chromosome"
@@ -706,7 +707,8 @@ class TestLocoLmmIntegration:
     @pytest.mark.slow
     def test_loco_lmm_produces_valid_results(self, mouse_loco_lmm_results):
         """run_lmm_loco returns valid AssocResults with finite stats."""
-        results, n_tested, _ = mouse_loco_lmm_results
+        results = mouse_loco_lmm_results.associations
+        n_tested = mouse_loco_lmm_results.n_tested
 
         assert len(results) > 0, "Should produce results"
         assert n_tested == len(results), "n_tested should match result count"
@@ -723,7 +725,7 @@ class TestLocoLmmIntegration:
     @pytest.mark.slow
     def test_loco_lmm_results_have_correct_snp_info(self, mouse_loco_lmm_results):
         """SNP IDs and chromosome assignments match BIM metadata."""
-        results, _, _ = mouse_loco_lmm_results
+        results = mouse_loco_lmm_results.associations
 
         meta = get_plink_metadata(MOUSE_HS1940_BFILE)
         bim_snps = set(meta["sid"])
@@ -763,7 +765,7 @@ class TestLocoLmmIntegration:
         standard_results = run_result.associations
 
         # LOCO LMM results from shared fixture
-        loco_results, _, _ = mouse_loco_lmm_results
+        loco_results = mouse_loco_lmm_results.associations
 
         # Get top 100 SNPs by p-value
         standard_sorted = sorted(standard_results, key=lambda r: r.p_wald or 1.0)
@@ -986,7 +988,7 @@ class TestLocoKsnpsWiring:
         # Use first 5000 SNP indices for kinship computation
         ksnps_indices = np.arange(5000)
 
-        results, _, _ = run_lmm_loco(
+        loco = run_lmm_loco(
             bed_path=MOUSE_HS1940_BFILE,
             phenotypes=phenotypes,
             lmm_mode=1,
@@ -995,16 +997,16 @@ class TestLocoKsnpsWiring:
             ksnps_indices=ksnps_indices,
         )
 
-        assert len(results) > 0, "Should produce results with ksnps_indices"
+        assert len(loco.associations) > 0, "Should produce results with ksnps_indices"
 
         # Results should still have valid statistics
-        for r in results[:10]:
+        for r in loco.associations[:10]:
             assert 0 < r.p_wald <= 1, f"p_wald={r.p_wald} for {r.rs}"
             assert np.isfinite(r.beta), f"beta not finite for {r.rs}"
             assert np.isfinite(r.se) and r.se > 0, f"se={r.se} for {r.rs}"
 
         # Results should cover multiple chromosomes
-        result_chrs = {r.chr for r in results}
+        result_chrs = {r.chr for r in loco.associations}
         assert len(result_chrs) > 1
 
     @pytest.mark.slow
@@ -1480,7 +1482,7 @@ class TestLocoLmmMultiPass:
         bed_path, phenotypes = self._write_synthetic_loco_plink(tmp_path, rng)
 
         # Single-pass: col_chunk_size > max SNPs per chromosome (40)
-        results_single, n_single, _ = run_lmm_loco(
+        loco_single = run_lmm_loco(
             bed_path=bed_path,
             phenotypes=phenotypes,
             lmm_mode=1,
@@ -1490,7 +1492,7 @@ class TestLocoLmmMultiPass:
         )
 
         # Multi-pass: col_chunk_size=2 forces ~20 disk chunks per chromosome
-        results_multi, n_multi, _ = run_lmm_loco(
+        loco_multi = run_lmm_loco(
             bed_path=bed_path,
             phenotypes=phenotypes,
             lmm_mode=1,
@@ -1498,9 +1500,12 @@ class TestLocoLmmMultiPass:
             show_progress=False,
             col_chunk_size=2,
         )
+        results_single = loco_single.associations
+        results_multi = loco_multi.associations
 
-        assert n_single == n_multi, (
-            f"n_tested mismatch: single={n_single}, multi={n_multi}"
+        assert loco_single.n_tested == loco_multi.n_tested, (
+            f"n_tested mismatch: single={loco_single.n_tested}, "
+            f"multi={loco_multi.n_tested}"
         )
         assert len(results_single) == len(results_multi), (
             f"Result count mismatch: single={len(results_single)}, "
@@ -1705,7 +1710,7 @@ def test_loco_cross_backend_parity(tmp_path: Path) -> None:
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
 
     # Run JAX backend
-    jax_results, jax_n, jax_pve = run_lmm_loco(
+    jax_loco = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
         lmm_mode=1,
@@ -1715,7 +1720,7 @@ def test_loco_cross_backend_parity(tmp_path: Path) -> None:
     )
 
     # Run NumPy backend
-    numpy_results, numpy_n, numpy_pve = run_lmm_loco(
+    numpy_loco = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
         lmm_mode=1,
@@ -1724,15 +1729,19 @@ def test_loco_cross_backend_parity(tmp_path: Path) -> None:
         backend="numpy",
     )
 
-    assert jax_n == numpy_n, f"SNP count mismatch: JAX={jax_n}, NumPy={numpy_n}"
+    assert jax_loco.n_tested == numpy_loco.n_tested, (
+        f"SNP count mismatch: JAX={jax_loco.n_tested}, NumPy={numpy_loco.n_tested}"
+    )
+    jax_results = jax_loco.associations
+    numpy_results = numpy_loco.associations
     assert len(jax_results) == len(numpy_results)
     assert len(jax_results) > 0
 
     # PVE should be populated and match across backends
-    assert jax_pve is not None, "JAX LOCO should return PVE"
-    assert numpy_pve is not None, "NumPy LOCO should return PVE"
-    assert 0 < jax_pve < 1, f"JAX PVE out of range: {jax_pve}"
-    np.testing.assert_allclose(jax_pve, numpy_pve, rtol=1e-4)
+    assert jax_loco.pve is not None, "JAX LOCO should return PVE"
+    assert numpy_loco.pve is not None, "NumPy LOCO should return PVE"
+    assert 0 < jax_loco.pve < 1, f"JAX PVE out of range: {jax_loco.pve}"
+    np.testing.assert_allclose(jax_loco.pve, numpy_loco.pve, rtol=1e-4)
 
     # Compare result arrays
     jax_betas = np.array([r.beta for r in jax_results])

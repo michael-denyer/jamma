@@ -362,6 +362,10 @@ def run_lmm_association_streaming(
             n_filtered, placement.n_devices, n_samples=n_samples, pipeline_buffers=2
         )
 
+    eigenvalues_jax = None
+    UtW_jax = None
+    Uty_jax = None
+    try:
         logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
             lmm_mode,
             eigenvalues_np,
@@ -374,323 +378,293 @@ def run_lmm_association_streaming(
             l_max=l_max,
         )
 
-        eigenvalues = jax.device_put(eigenvalues_np, placement.rep)
+        t_eigen_end = time.perf_counter()
+
+        eigenvalues_jax = jax.device_put(eigenvalues_np, placement.rep)
         UtW_jax = jax.device_put(UtW, placement.rep)
         Uty_jax = jax.device_put(Uty, placement.rep)
-    t_eigen_end = time.perf_counter()
 
-    pve = compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
+        pve, pve_se = compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
 
-    # Invalidate stale timing immediately so callers never see prior-run data
-    # if this run raises mid-execution.
-    last_run_timing.clear()
+        last_run_timing.clear()
 
-    # Timing accumulators for per-chunk phases
-    t_rotation_total = 0.0
-    t_rotation_exposed_total = 0.0
-    t_jax_compute_total = 0.0
-    t_result_write_total = 0.0
+        t_rotation_total = 0.0
+        t_rotation_exposed_total = 0.0
+        t_jax_compute_total = 0.0
+        t_result_write_total = 0.0
 
-    # prev_compute_end persists across file-chunks so the first JAX sub-chunk
-    # rotation of file-chunk N+1 correctly compares against the last compute_end
-    # of file-chunk N.
-    prev_compute_end: float | None = None
+        prev_compute_end: float | None = None
+        all_results: list[AssocResult] = []
+        n_at_lmin = 0
+        n_at_lmax = 0
 
-    # === PASS 2: Association ===
-    # Track results for in-memory mode (when output_path is None)
-    all_results: list[AssocResult] = []
-
-    # Lambda boundary convergence counters
-    n_at_lmin = 0
-    n_at_lmax = 0
-
-    with contextlib.ExitStack() as stack:
-        writer = None
-        if output_path is not None:
-            writer = stack.enter_context(
-                IncrementalAssocWriter(output_path, test_type=_TEST_TYPE_MAP[lmm_mode])
+        with contextlib.ExitStack() as stack:
+            writer = None
+            if output_path is not None:
+                writer = stack.enter_context(
+                    IncrementalAssocWriter(
+                        output_path, test_type=_TEST_TYPE_MAP[lmm_mode]
+                    )
+                )
+            assoc_iterator = stream_genotype_chunks(
+                bed_path,
+                chunk_size=chunk_size,
+                dtype=np.float64,
+                show_progress=False,
+                snp_indices=snp_indices,
             )
-        assoc_iterator = stream_genotype_chunks(
-            bed_path,
-            chunk_size=chunk_size,
-            dtype=np.float64,
-            show_progress=False,
-            snp_indices=snp_indices,
-        )
-        # One-ahead prefetch: read next BED chunk while current is computing (RUN-09)
-        assoc_iterator = prefetch_iterator(assoc_iterator)
-        if show_progress:
-            n_chunks = (n_filtered + chunk_size - 1) // chunk_size
-            assoc_iterator = progress_iterator(
-                assoc_iterator, total=n_chunks, desc="Running LMM association"
-            )
-
-        def _prepare_jax_chunk(
-            start: int, end: int, geno: np.ndarray
-        ) -> tuple[np.ndarray, int]:
-            """Slice a genotype subset and prepare UtG for device transfer."""
-            geno_slice = geno[:, start:end]
-            return prepare_utg_chunk(geno_slice, U, placement, rotation_threads)
-
-        def _prepare_jax_chunk_timed(
-            start: int, end: int, geno: np.ndarray
-        ) -> tuple[np.ndarray, int, float]:
-            """_prepare_jax_chunk with internal duration measurement.
-
-            Duration is measured inside because the caller on the main thread
-            cannot observe start/end timestamps of background thread work.
-            """
-            t0 = time.perf_counter()
-            UtG_np, actual_len = _prepare_jax_chunk(start, end, geno)
-            return UtG_np, actual_len, time.perf_counter() - t0
-
-        # Rotation-compute pipeline: while JAX processes chunk N on XLA, a
-        # background thread runs BLAS DGEMM (U.T @ G) for chunk N+1. DGEMM
-        # releases the GIL, so both run truly concurrently. max_workers=1
-        # ensures at most one prefetch is in flight (double-buffering, not
-        # unbounded prefetch). Memory budget is halved via pipeline_buffers=2
-        # to account for two live UtG arrays.
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            for chunk, filt_start, filt_end in assoc_iterator:
-                # With filtered reads: chunk is already (n_samples, n_filtered_in_chunk)
-                # filt_start/filt_end are indices into snp_indices
-                if needs_sample_filter:
-                    chunk = chunk[valid_mask, :]
-
-                if filt_end <= filt_start:
-                    continue
-
-                # Vectorized imputation: broadcast filtered_means to match chunk shape
-                filtered_means_broadcast = filtered_means[filt_start:filt_end].reshape(
-                    1, -1
+            assoc_iterator = prefetch_iterator(assoc_iterator)
+            if show_progress:
+                n_chunks = (n_filtered + chunk_size - 1) // chunk_size
+                assoc_iterator = progress_iterator(
+                    assoc_iterator, total=n_chunks, desc="Running LMM association"
                 )
-                missing_mask = np.isnan(chunk)
-                if missing_mask.any():  # RUN-06: skip O(n*chunk) np.where on clean data
-                    chunk = np.where(missing_mask, filtered_means_broadcast, chunk)
-                del missing_mask
 
-                n_subset = chunk.shape[1]
-                jax_starts = compute_subchunk_starts(
-                    n_subset, jax_chunk_size, placement.n_devices
-                )
-                # Derive end boundaries: next start, or n_subset for last chunk.
-                # Critical when tail is merged — last chunk must extend to n_subset.
-                jax_ends = [
-                    jax_starts[i + 1] if i + 1 < len(jax_starts) else n_subset
-                    for i in range(len(jax_starts))
-                ]
+            def _prepare_jax_chunk(
+                start: int, end: int, geno: np.ndarray
+            ) -> tuple[np.ndarray, int]:
+                """Slice a genotype subset and prepare UtG for device transfer."""
+                geno_slice = geno[:, start:end]
+                return prepare_utg_chunk(geno_slice, U, placement, rotation_threads)
 
-                # Prepare first JAX chunk
-                t_rot_start = time.perf_counter()
-                UtG_np, actual_jax_len = _prepare_jax_chunk(
-                    jax_starts[0], jax_ends[0], chunk
-                )
-                t_rot_end = time.perf_counter()
-                rot_dur = t_rot_end - t_rot_start
-                t_rotation_total += rot_dur
-                t_rotation_exposed_total += exposed_rotation_time(
-                    rot_dur, t_rot_end, prev_compute_end
-                )
-                UtG_jax = jax.device_put(UtG_np, placement.snp)
-                del UtG_np
+            def _prepare_jax_chunk_timed(
+                start: int, end: int, geno: np.ndarray
+            ) -> tuple[np.ndarray, int, float]:
+                """Measure background-thread preparation time inside the worker."""
+                t0 = time.perf_counter()
+                UtG_np, actual_len = _prepare_jax_chunk(start, end, geno)
+                return UtG_np, actual_len, time.perf_counter() - t0
 
-                for i, _jax_start in enumerate(jax_starts):
-                    current_actual_len = actual_jax_len
-                    current_UtG = UtG_jax
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                for chunk, filt_start, filt_end in assoc_iterator:
+                    if needs_sample_filter:
+                        chunk = chunk[valid_mask, :]
 
-                    # Submit next sub-chunk rotation to BACKGROUND THREAD.
-                    # BLAS DGEMM (U.T @ G) releases the GIL and runs
-                    # concurrently with JAX compute dispatched below.
-                    future = None
-                    if i + 1 < len(jax_starts):
-                        future = executor.submit(
-                            _prepare_jax_chunk_timed,
-                            jax_starts[i + 1],
-                            jax_ends[i + 1],
-                            chunk,
-                        )
+                    if filt_end <= filt_start:
+                        continue
 
-                    # --- JAX compute timing ---
-                    t_jax_start = time.perf_counter()
+                    filtered_means_broadcast = filtered_means[
+                        filt_start:filt_end
+                    ].reshape(1, -1)
+                    missing_mask = np.isnan(chunk)
+                    if missing_mask.any():
+                        chunk = np.where(missing_mask, filtered_means_broadcast, chunk)
+                    del missing_mask
 
-                    try:
-                        with jax.profiler.TraceAnnotation("jax_optimization"):
-                            # Batch compute Uab (shared across all modes)
-                            Uab_batch = batch_compute_uab(
-                                n_cvt, UtW_jax, Uty_jax, current_UtG
+                    n_subset = chunk.shape[1]
+                    jax_starts = compute_subchunk_starts(
+                        n_subset, jax_chunk_size, placement.n_devices
+                    )
+                    jax_ends = [
+                        jax_starts[i + 1] if i + 1 < len(jax_starts) else n_subset
+                        for i in range(len(jax_starts))
+                    ]
+
+                    t_rot_start = time.perf_counter()
+                    UtG_np, actual_jax_len = _prepare_jax_chunk(
+                        jax_starts[0], jax_ends[0], chunk
+                    )
+                    t_rot_end = time.perf_counter()
+                    rot_dur = t_rot_end - t_rot_start
+                    t_rotation_total += rot_dur
+                    t_rotation_exposed_total += exposed_rotation_time(
+                        rot_dur, t_rot_end, prev_compute_end
+                    )
+                    UtG_jax = jax.device_put(UtG_np, placement.snp)
+                    del UtG_np
+
+                    for i, _jax_start in enumerate(jax_starts):
+                        current_actual_len = actual_jax_len
+                        current_UtG = UtG_jax
+
+                        future = None
+                        if i + 1 < len(jax_starts):
+                            future = executor.submit(
+                                _prepare_jax_chunk_timed,
+                                jax_starts[i + 1],
+                                jax_ends[i + 1],
+                                chunk,
                             )
 
-                            chunk_result = _compute_lmm_chunk(
-                                lmm_mode,
-                                n_cvt,
-                                eigenvalues,
-                                Uab_batch,
-                                n_samples,
-                                l_min=l_min,
-                                l_max=l_max,
-                                n_grid=n_grid,
-                                n_refine=n_refine,
-                                Hi_eval_null=Hi_eval_null_jax,
-                                logl_H0=logl_H0,
-                            )
-                            block_chunk_result(chunk_result, lmm_mode)
-                    except Exception as e:
-                        # Best-effort cancel: only succeeds if rotation hasn't
-                        # started. If already running, executor.__exit__ waits.
-                        if future is not None:
-                            future.cancel()
-                        log_jax_error(
-                            e,
-                            chunk_label=f"streaming {i + 1}",
-                            chunk_snps=current_actual_len,
-                            n_samples=n_samples,
-                            n_cvt=n_cvt,
-                        )
-                        raise
+                        t_jax_start = time.perf_counter()
 
-                    t_jax_end = time.perf_counter()
-                    t_jax_compute_total += t_jax_end - t_jax_start
-                    prev_compute_end = t_jax_end
-
-                    # Collect background rotation result (may be ready by now).
-                    # future.result() blocks only for remaining time after JAX.
-                    if future is not None:
                         try:
-                            UtG_np, actual_jax_len, rot_dur = future.result()
-                        except MemoryError:
-                            raise  # Propagate directly for OOM handling
-                        except Exception as exc:
-                            processed = (
-                                writer.count if writer is not None else len(all_results)
-                            )
-                            raise RuntimeError(
-                                f"Background rotation failed for streaming "
-                                f"sub-chunk starting at index "
-                                f"{jax_starts[i + 1]}. "
-                                f"Processed ~{processed} results "
-                                f"before failure."
-                            ) from exc
-                        t_rot_end = time.perf_counter()
-                        t_rotation_total += rot_dur
-                        # Exposed = time main thread waited for future AFTER
-                        # JAX sync. Near zero when JAX dominates.
-                        # Capped at rot_dur to prevent GC/scheduling jitter.
-                        t_rotation_exposed_total += min(
-                            rot_dur, max(0.0, t_rot_end - t_jax_end)
-                        )
-                        UtG_jax = jax.device_put(UtG_np, placement.snp)
-                        del UtG_np  # Safe: JAX holds internal ref
+                            with jax.profiler.TraceAnnotation("jax_optimization"):
+                                Uab_batch = batch_compute_uab(
+                                    n_cvt, UtW_jax, Uty_jax, current_UtG
+                                )
 
-                    subchunk_filtered_start = filt_start + jax_starts[i]
-                    subchunk_filtered_end = subchunk_filtered_start + current_actual_len
-
-                    t_write_start = time.perf_counter()
-                    with jax.profiler.TraceAnnotation("result_write"):
-                        arrays = _chunk_result_to_numpy(
-                            chunk_result,
-                            _ACCUM_KEYS[lmm_mode],
-                            current_actual_len,
-                        )
-
-                        # Count SNPs converging at lambda bounds
-                        chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
-                            lmm_mode, arrays, l_min, l_max
-                        )
-                        n_at_lmin += chunk_lmin
-                        n_at_lmax += chunk_lmax
-
-                        if writer is not None:
-                            # Direct array → TSV (no AssocResult construction)
-                            writer.write_arrays_batch(
-                                lmm_mode,
-                                snp_indices[
-                                    subchunk_filtered_start:subchunk_filtered_end
-                                ],
-                                snp_info,
-                                filtered_afs[
-                                    subchunk_filtered_start:subchunk_filtered_end
-                                ],
-                                filtered_miss[
-                                    subchunk_filtered_start:subchunk_filtered_end
-                                ],
-                                arrays,
-                            )
-                        else:
-                            chunk_results = list(
-                                _yield_chunk_results(
+                                chunk_result = _compute_lmm_chunk(
                                     lmm_mode,
-                                    np.arange(
-                                        subchunk_filtered_start,
-                                        subchunk_filtered_end,
-                                    ),
-                                    snp_indices,
-                                    filtered_afs,
-                                    filtered_miss,
+                                    n_cvt,
+                                    eigenvalues_jax,
+                                    Uab_batch,
+                                    n_samples,
+                                    l_min=l_min,
+                                    l_max=l_max,
+                                    n_grid=n_grid,
+                                    n_refine=n_refine,
+                                    Hi_eval_null=Hi_eval_null_jax,
+                                    logl_H0=logl_H0,
+                                )
+                                block_chunk_result(chunk_result, lmm_mode)
+                        except Exception as e:
+                            if future is not None:
+                                future.cancel()
+                            log_jax_error(
+                                e,
+                                chunk_label=f"streaming {i + 1}",
+                                chunk_snps=current_actual_len,
+                                n_samples=n_samples,
+                                n_cvt=n_cvt,
+                            )
+                            raise
+
+                        t_jax_end = time.perf_counter()
+                        t_jax_compute_total += t_jax_end - t_jax_start
+                        prev_compute_end = t_jax_end
+
+                        if future is not None:
+                            try:
+                                UtG_np, actual_jax_len, rot_dur = future.result()
+                            except MemoryError:
+                                raise
+                            except Exception as exc:
+                                processed = (
+                                    writer.count
+                                    if writer is not None
+                                    else len(all_results)
+                                )
+                                raise RuntimeError(
+                                    f"Background rotation failed for streaming "
+                                    f"sub-chunk starting at index "
+                                    f"{jax_starts[i + 1]}. "
+                                    f"Processed ~{processed} results "
+                                    f"before failure."
+                                ) from exc
+                            t_rot_end = time.perf_counter()
+                            t_rotation_total += rot_dur
+                            t_rotation_exposed_total += min(
+                                rot_dur, max(0.0, t_rot_end - t_jax_end)
+                            )
+                            UtG_jax = jax.device_put(UtG_np, placement.snp)
+                            del UtG_np  # Safe: JAX holds internal ref
+
+                        subchunk_filtered_start = filt_start + jax_starts[i]
+                        subchunk_filtered_end = (
+                            subchunk_filtered_start + current_actual_len
+                        )
+
+                        t_write_start = time.perf_counter()
+                        with jax.profiler.TraceAnnotation("result_write"):
+                            arrays = _chunk_result_to_numpy(
+                                chunk_result,
+                                _ACCUM_KEYS[lmm_mode],
+                                current_actual_len,
+                            )
+
+                            chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
+                                lmm_mode, arrays, l_min, l_max
+                            )
+                            n_at_lmin += chunk_lmin
+                            n_at_lmax += chunk_lmax
+
+                            if writer is not None:
+                                writer.write_arrays_batch(
+                                    lmm_mode,
+                                    snp_indices[
+                                        subchunk_filtered_start:subchunk_filtered_end
+                                    ],
                                     snp_info,
+                                    filtered_afs[
+                                        subchunk_filtered_start:subchunk_filtered_end
+                                    ],
+                                    filtered_miss[
+                                        subchunk_filtered_start:subchunk_filtered_end
+                                    ],
                                     arrays,
                                 )
-                            )
-                            all_results.extend(chunk_results)
+                            else:
+                                chunk_results = list(
+                                    _yield_chunk_results(
+                                        lmm_mode,
+                                        np.arange(
+                                            subchunk_filtered_start,
+                                            subchunk_filtered_end,
+                                        ),
+                                        snp_indices,
+                                        filtered_afs,
+                                        filtered_miss,
+                                        snp_info,
+                                        arrays,
+                                    )
+                                )
+                                all_results.extend(chunk_results)
 
-                    del arrays, chunk_result, Uab_batch, current_UtG
-                    if future is None:
-                        UtG_jax = None
-                    t_write_end = time.perf_counter()
-                    t_result_write_total += t_write_end - t_write_start
+                        del arrays, chunk_result, Uab_batch, current_UtG
+                        if future is None:
+                            UtG_jax = None
+                        t_write_end = time.perf_counter()
+                        t_result_write_total += t_write_end - t_write_start
 
-        if show_progress:
-            log_rss_memory("lmm_streaming", "after_association")
+            if show_progress:
+                log_rss_memory("lmm_streaming", "after_association")
 
-            elapsed = time.perf_counter() - start_time
-            t_io = t_io_end - t_io_start
-            t_snp = t_snp_end - t_snp_start
-            t_eigen = t_eigen_end - t_eigen_start
-            accounted = (
-                t_io
-                + t_snp
-                + t_eigen
-                + t_rotation_total
-                + t_jax_compute_total
-                + t_result_write_total
+                elapsed = time.perf_counter() - start_time
+                t_io = t_io_end - t_io_start
+                t_snp = t_snp_end - t_snp_start
+                t_eigen = t_eigen_end - t_eigen_start
+                accounted = (
+                    t_io
+                    + t_snp
+                    + t_eigen
+                    + t_rotation_total
+                    + t_jax_compute_total
+                    + t_result_write_total
+                )
+                logger.info("Timing breakdown:")
+                logger.info(f"  I/O read (pass 1):   {t_io:.2f}s")
+                logger.info(f"  SNP statistics:      {t_snp:.2f}s")
+                logger.info(f"  Setup (eigen+null):  {t_eigen:.2f}s")
+                logger.info(f"  UT@G rotation:       {t_rotation_total:.2f}s")
+                logger.info(f"  UT@G exposed:        {t_rotation_exposed_total:.2f}s")
+                logger.info(f"  JAX compute:         {t_jax_compute_total:.2f}s")
+                logger.info(f"  Result write:        {t_result_write_total:.2f}s")
+                logger.info("  ----")
+                logger.info(f"  Accounted:           {accounted:.2f}s")
+                logger.info(f"  Total:               {elapsed:.2f}s")
+
+            if writer is not None and show_progress:
+                logger.info(f"Wrote {writer.count:,} results to {output_path}")
+
+            log_lambda_boundary_warning(n_at_lmin, n_at_lmax, l_min, l_max)
+
+            if show_progress:
+                elapsed = time.perf_counter() - start_time
+                logger.info(f"LMM Association completed in {elapsed:.2f}s")
+
+            last_run_timing.clear()
+            last_run_timing.update(
+                {
+                    "rotation_s": t_rotation_total,
+                    "rotation_exposed_s": t_rotation_exposed_total,
+                    "jax_compute_s": t_jax_compute_total,
+                    "result_write_s": t_result_write_total,
+                }
             )
-            logger.info("Timing breakdown:")
-            logger.info(f"  I/O read (pass 1):   {t_io:.2f}s")
-            logger.info(f"  SNP statistics:      {t_snp:.2f}s")
-            logger.info(f"  Setup (eigen+null):  {t_eigen:.2f}s")
-            logger.info(f"  UT@G rotation:       {t_rotation_total:.2f}s")
-            logger.info(f"  UT@G exposed:        {t_rotation_exposed_total:.2f}s")
-            logger.info(f"  JAX compute:         {t_jax_compute_total:.2f}s")
-            logger.info(f"  Result write:        {t_result_write_total:.2f}s")
-            logger.info("  ----")
-            logger.info(f"  Accounted:           {accounted:.2f}s")
-            logger.info(f"  Total:               {elapsed:.2f}s")
 
-        del eigenvalues, UtW_jax, Uty_jax
-
-        if writer is not None and show_progress:
-            logger.info(f"Wrote {writer.count:,} results to {output_path}")
-
-    jax.clear_caches()
-
-    # Emit boundary convergence summary warning
-    log_lambda_boundary_warning(n_at_lmin, n_at_lmax, l_min, l_max)
-
-    if show_progress:
-        elapsed = time.perf_counter() - start_time
-        logger.info(f"LMM Association completed in {elapsed:.2f}s")
-
-    last_run_timing.clear()
-    last_run_timing.update(
-        {
-            "rotation_s": t_rotation_total,
-            "rotation_exposed_s": t_rotation_exposed_total,
-            "jax_compute_s": t_jax_compute_total,
-            "result_write_s": t_result_write_total,
-        }
-    )
-
-    n_tested = writer.count if writer is not None else len(all_results)
-    return LmmRunResult(
-        associations=[] if output_path is not None else all_results,
-        pve=pve,
-    ), n_tested
+            n_tested = writer.count if writer is not None else len(all_results)
+            return (
+                LmmRunResult(
+                    associations=[] if output_path is not None else all_results,
+                    pve=pve,
+                    pve_se=pve_se,
+                ),
+                n_tested,
+            )
+    finally:
+        del eigenvalues_jax, UtW_jax, Uty_jax
+        try:
+            jax.clear_caches()
+        except Exception:
+            logger.warning("Failed to clear JAX caches during cleanup", exc_info=True)

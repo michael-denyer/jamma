@@ -249,7 +249,7 @@ def test_loco_numpy_no_per_chromosome_bed_reads():
         patch("jamma.io.plink.open_bed", side_effect=counting_open_bed),
         patch("jamma.lmm.loco.open_bed", side_effect=counting_open_bed),
     ):
-        results, n_tested, _ = run_lmm_loco(
+        loco = run_lmm_loco(
             bed_path=_LOCO_BFILE,
             phenotypes=phenotypes,
             backend="numpy",
@@ -272,7 +272,7 @@ def test_loco_numpy_no_per_chromosome_bed_reads():
         f"Without cache would be {expected_without_cache}. "
         f"Per-chromosome stats BED reads not fully eliminated."
     )
-    assert n_tested > 0, "Expected SNPs to be tested"
+    assert loco.n_tested > 0, "Expected SNPs to be tested"
 
 
 @pytest.mark.tier1
@@ -302,7 +302,7 @@ def test_run_lmm_loco_reads_loco_workers_env(monkeypatch):
         return original_warning(msg, *args, **kwargs)
 
     with patch.object(loco_module.logger, "warning", side_effect=capture_warning):
-        results, n_tested, _ = run_lmm_loco(
+        loco = run_lmm_loco(
             bed_path=_LOCO_BFILE,
             phenotypes=phenotypes,
             backend="numpy",
@@ -313,7 +313,9 @@ def test_run_lmm_loco_reads_loco_workers_env(monkeypatch):
     assert any("JAMMA_LOCO_WORKERS=4" in msg for msg in logged_warnings), (
         f"Expected 'JAMMA_LOCO_WORKERS=4' in warning messages, got: {logged_warnings}"
     )
-    assert n_tested > 0, "Expected SNPs tested (workers > 1 falls back to sequential)"
+    assert loco.n_tested > 0, (
+        "Expected SNPs tested (workers > 1 falls back to sequential)"
+    )
 
 
 @pytest.mark.tier1
@@ -332,7 +334,7 @@ def test_loco_numpy_multipass_equivalence():
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
 
     # Single-pass baseline (default behaviour, all chromosomes fit in memory)
-    results_single, n_single, _ = run_lmm_loco(
+    loco_single = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
         backend="numpy",
@@ -358,15 +360,19 @@ def test_loco_numpy_multipass_equivalence():
         "_compute_loco_kinship_streaming_numpy",
         side_effect=patched_fn,
     ):
-        results_multi, n_multi, _ = run_lmm_loco(
+        loco_multi = run_lmm_loco(
             bed_path=_LOCO_BFILE,
             phenotypes=phenotypes,
             backend="numpy",
             check_memory=False,
             show_progress=False,
         )
+    results_single = loco_single.associations
+    results_multi = loco_multi.associations
 
-    assert n_single == n_multi, f"n_tested mismatch: {n_single} vs {n_multi}"
+    assert loco_single.n_tested == loco_multi.n_tested, (
+        f"n_tested mismatch: {loco_single.n_tested} vs {loco_multi.n_tested}"
+    )
     assert len(results_single) == len(results_multi), (
         f"result count mismatch: {len(results_single)} vs {len(results_multi)}"
     )
@@ -433,7 +439,7 @@ def test_loco_numpy_show_progress_true():
 
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
 
-    results, n_tested, _ = run_lmm_loco(
+    loco = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
         lmm_mode=1,
@@ -442,5 +448,5 @@ def test_loco_numpy_show_progress_true():
         backend="numpy",
     )
 
-    assert n_tested > 0, "Expected at least one SNP to be tested"
-    assert len(results) > 0, "Expected at least one association result"
+    assert loco.n_tested > 0, "Expected at least one SNP to be tested"
+    assert len(loco.associations) > 0, "Expected at least one association result"

@@ -247,10 +247,10 @@ Best-of runs, end-to-end wall clock:
 
 | Operation | GEMMA 0.98.5 | JAMMA NumPy | JAMMA NumPy+C | JAMMA JAX (batch) | JAMMA JAX (streaming) | C speedup | vs GEMMA |
 |-----------|-------------|-------------|--------------|-------------------|----------------------|-----------|----------|
-| Kinship (`-gk 1`) | 2.2s | 268ms | 268ms | — | — | 1.0x | **8.3x** |
-| LMM Wald (`-lmm 1`) | 11.2s | 4.3s | 1.3s | 2.2s | 2.5s | 3.4x | **8.9x** |
-| LMM All (`-lmm 4`) | 20.7s | 8.0s | 5.9s | 3.2s | 4.2s | 1.4x | **6.6x** |
-| LMM Wald+4cov (`-lmm 1 -c`) | 41.4s | 12.5s | 5.5s | 4.2s | 5.4s | 2.3x | **9.8x** |
+| Kinship (`-gk 1`) | 2.2s | 267ms | 267ms | — | — | 1.0x | **8.4x** |
+| LMM Wald (`-lmm 1`) | 11.3s | 4.7s | 1.3s | 2.2s | 3.2s | 3.7x | **8.9x** |
+| LMM All (`-lmm 4`) | 21.0s | 8.4s | 6.2s | 3.6s | 4.3s | 1.4x | **5.9x** |
+| LMM Wald+4cov (`-lmm 1 -c`) | 42.5s | 14.2s | 5.6s | 4.4s | 10.9s | 2.6x | **9.6x** |
 
 **NumPy+C** uses a C extension with OpenMP for Wald (`-lmm 1`) — REML optimization is compute-bound and parallelizes well across SNPs. The C speedup grows with covariates (2.3x with 4 covariates) because the Pab table recursion is more expensive. **JAX (batch)** pulls ahead on all-tests (`-lmm 4`) because the additional MLE optimization per SNP benefits from `jax.vmap` batching. **JAX (streaming)** reads genotypes from disk in chunks and is the production code path for large datasets that don't fit in memory. Kinship is always pure NumPy/BLAS regardless of backend.
 

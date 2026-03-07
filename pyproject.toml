@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jamma"
-version = "3.0.1"
+version = "3.1.0"
 description = "High-performance Multi-method Mixed-Model Association for large-scale GWAS"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -1,13 +1,14 @@
 /*
- * _lmm_accel.c — C extension implementing the per-SNP REML Wald pipeline
- * for n_cvt=1 and general n_cvt.
+ * _lmm_accel.c — C extension implementing per-SNP REML/MLE pipelines
+ * for Wald, Score, and LRT tests (n_cvt=1 and general n_cvt).
  *
  * Exported functions: compute_lmm_batch_c, compute_lmm_batch_split_c,
  *                     create_workspace_split_c, compute_lmm_chunk_split_c,
- *                     create_workspace_general_c, compute_lmm_chunk_general_c
+ *                     create_workspace_general_c, compute_lmm_chunk_general_c,
+ *                     compute_score_batch_c, compute_lrt_batch_c
  *
- * Translates the Python/NumPy golden-section REML optimizer + Wald test
- * (likelihood_numpy.py) to C with optional OpenMP parallelism over SNPs.
+ * Translates the Python/NumPy golden-section REML/MLE optimizer + Wald/Score/LRT
+ * test pipelines (likelihood_numpy.py) to C with optional OpenMP parallelism.
  *
  * Performance optimizations over the naive per-call approach (n_cvt=1 path;
  * the general n_cvt path uses table-driven recursion with cached invariant
@@ -69,7 +70,7 @@
 
 /* ABI version: bump when function signatures or array layout expectations change.
  * The Python side checks this at import time to detect stale .so files. */
-#define ABI_VERSION 4  /* v4: general n_cvt support (workspace + compute) */
+#define ABI_VERSION 5  /* v5: Score batch + LRT batch (MLE golden section + chi2_sf) */
 
 /* Betainc continued fraction constants — matches special.py */
 #define CF_TINY     1.0e-30
@@ -124,18 +125,19 @@ static int validate_eigenvalues(const double *data, int n_samples)
 
 /* ---------------------------------------------------------------------------
  * warn_betainc_convergence — post-compute scan for NaN p-values where beta
- * is finite (i.e., Wald stats computed fine but betainc CF didn't converge).
+ * is finite (i.e., stats computed fine but betainc CF didn't converge).
+ * Used for Wald and Score p-values.
  *
  * Called after Py_END_ALLOW_THREADS so Python API is available.
  * Returns 0 on success, -1 if the warning was promoted to an exception
  * (e.g. user has simplefilter("error")).
  * ------------------------------------------------------------------------- */
 static int warn_betainc_convergence(
-    const double *betas, const double *pwalds, int n_snps)
+    const double *betas, const double *pvalues, int n_snps)
 {
     int n_betainc_nan = 0;
     for (int i = 0; i < n_snps; i++) {
-        if (isfinite(betas[i]) && !isfinite(pwalds[i]))
+        if (isfinite(betas[i]) && !isfinite(pvalues[i]))
             n_betainc_nan++;
     }
     if (n_betainc_nan > 0) {
@@ -329,6 +331,70 @@ static inline int wald_from_pab(
      * clamps NaN to 1e-10 and returns a bogus near-1 p-value. */
     if (!isfinite(f_stat) || !isfinite(beta) || !isfinite(se))
         return 0;
+
+    return 1;  /* valid */
+}
+
+/* -------------------------------------------------------------------------
+ * score_from_pab
+ *
+ * Score test statistics from a populated pab array (n_cvt=1).
+ *
+ * Reads from two pab levels:
+ *   - Level 1 (pab[1]): P_yy, P_xx, P_xy for Score F-statistic
+ *   - Level 2 (pab[2]): Px_yy for beta/SE computation (same as Wald)
+ *
+ * Key differences from Wald:
+ *   - F = n_samples * P_xy^2 / (P_yy * P_xx) — uses n_samples, not df
+ *   - No per-SNP lambda optimization (uses null-model Hi_eval)
+ *
+ * Returns 1 if valid, 0 if degenerate (P_xx <= 0 or P_yy < 0 or Px_yy < 0
+ * or any output non-finite).
+ * ------------------------------------------------------------------------- */
+static inline int score_from_pab(
+    const double pab[3][6],
+    int n_samples,
+    int df,
+    double *beta_out, double *se_out, double *f_stat_out
+)
+{
+    /* Score extracts at level n_cvt=1 (row 1), NOT n_cvt+1=2 */
+    double P_yy = pab[1][5];
+    double P_xx = pab[1][3];
+    double P_xy = pab[1][4];
+    /* Px_yy at level n_cvt+1=2 for beta/se computation */
+    double Px_yy = pab[2][5];
+
+    if (P_xx <= 0.0 || P_yy < 0.0 || Px_yy < 0.0) {
+        *beta_out   = (double)NAN;
+        *se_out     = (double)NAN;
+        *f_stat_out = (double)NAN;
+        return 0;  /* degenerate */
+    }
+
+    /* Clamp P_yy for F-stat denominator */
+    if (P_yy < P_YY_MIN) P_yy = P_YY_MIN;
+    /* Clamp Px_yy for beta/se */
+    if (Px_yy < P_YY_MIN) Px_yy = P_YY_MIN;
+
+    *beta_out = P_xy / P_xx;
+
+    double tau = (double)df / Px_yy;
+    double variance_beta = 1.0 / (tau * P_xx);
+    double variance_safe = (fabs(variance_beta) < 0.001)
+                            ? fabs(variance_beta)
+                            : variance_beta;
+    *se_out = sqrt(variance_safe);
+
+    /* Score F-statistic: uses n_samples (not df) in numerator */
+    *f_stat_out = (double)n_samples * (P_xy * P_xy) / (P_yy * P_xx);
+
+    if (!isfinite(*f_stat_out) || !isfinite(*beta_out) || !isfinite(*se_out)) {
+        *beta_out   = (double)NAN;
+        *se_out     = (double)NAN;
+        *f_stat_out = (double)NAN;
+        return 0;
+    }
 
     return 1;  /* valid */
 }
@@ -2941,6 +3007,666 @@ err_input:
     return NULL;
 }
 
+/* =========================================================================
+ * MLE (Maximum Likelihood Estimation) helpers for LRT
+ *
+ * Key differences from REML:
+ *   - No Iab parameter or logdet_hiw computation
+ *   - Uses n_samples instead of df = n_samples - n_cvt - 1
+ *   - MLE constant: 0.5 * n * (log(n) - log(2*pi) - 1)
+ * ========================================================================= */
+
+/* -------------------------------------------------------------------------
+ * chi2_sf_c
+ *
+ * Chi-squared survival function for df=1: P(X > x) = erfc(sqrt(x/2)).
+ * Uses C99 erfc() from math.h — no custom implementation needed.
+ * Matches special.py chi2_sf exactly.
+ * ------------------------------------------------------------------------- */
+static inline double chi2_sf_c(double x)
+{
+    if (isnan(x)) return x;          /* NaN propagation */
+    if (x <= 0.0) return 1.0;
+    if (!isfinite(x)) return 0.0;   /* +inf → 0 */
+    return erfc(sqrt(x / 2.0));
+}
+
+/* -------------------------------------------------------------------------
+ * mle_finish
+ *
+ * MLE log-likelihood tail (simpler than REML — no logdet_hiw, no Iab).
+ * logl = mle_const - 0.5 * logdet_h - 0.5 * n * log(P_yy)
+ *
+ * P_yy at level nc_total = n_cvt+1 = 2 (pab[2][5]) — same index as REML.
+ * Uses n_samples (not df).
+ * ------------------------------------------------------------------------- */
+static inline double mle_finish(
+    const double pab[3][6],
+    double logdet_h,
+    int n_samples,
+    double mle_const
+)
+{
+    double P_yy = pab[2][5];
+    if (P_yy < 0.0) return (double)NAN;
+    if (P_yy < P_YY_MIN) P_yy = P_YY_MIN;
+    return mle_const - 0.5 * logdet_h - 0.5 * n_samples * log(P_yy);
+}
+
+/* -------------------------------------------------------------------------
+ * mle_logl_ncvt1
+ *
+ * MLE log-likelihood for one SNP at one lambda (n_cvt=1).
+ * Used during golden section refinement.
+ * Returns MLE log-likelihood.
+ * ------------------------------------------------------------------------- */
+static double mle_logl_ncvt1(
+    const double * restrict uab,
+    const double * restrict eigenvalues,
+    int n_samples,
+    double lambda,
+    double mle_const,
+    double * restrict hi_eval
+)
+{
+    double logdet_h = 0.0;
+    #pragma omp simd reduction(+:logdet_h)
+    for (int i = 0; i < n_samples; i++) {
+        double v = lambda * eigenvalues[i] + 1.0;
+        hi_eval[i] = 1.0 / v;
+        logdet_h += log(v);
+    }
+
+    double pab[3][6];
+    calc_pab_ncvt1(uab, hi_eval, n_samples, pab);
+
+    return mle_finish(pab, logdet_h, n_samples, mle_const);
+}
+
+/* -------------------------------------------------------------------------
+ * mle_logl_ncvt1_cached
+ *
+ * MLE log-likelihood using precomputed hi_eval and logdet_h from
+ * the shared coarse grid cache.
+ * ------------------------------------------------------------------------- */
+static double mle_logl_ncvt1_cached(
+    const double * restrict uab,
+    const double * restrict cached_hi_eval,
+    double cached_logdet_h,
+    int n_samples,
+    double mle_const
+)
+{
+    double pab[3][6];
+    calc_pab_ncvt1(uab, cached_hi_eval, n_samples, pab);
+
+    return mle_finish(pab, cached_logdet_h, n_samples, mle_const);
+}
+
+/* -------------------------------------------------------------------------
+ * golden_section_lambda_mle_ncvt1
+ *
+ * Grid search + golden section refinement for MLE lambda (n_cvt=1).
+ * Structurally identical to golden_section_lambda_ncvt1 but:
+ *   - Uses mle_finish instead of reml_finish
+ *   - No Iab parameter or logdet_iab
+ *   - Uses n_samples instead of df in the likelihood
+ *
+ * Returns optimal lambda; writes logl to *logl_out.
+ * ------------------------------------------------------------------------- */
+static double golden_section_lambda_mle_ncvt1(
+    const double * restrict uab,
+    const double * restrict eigenvalues,
+    int n_samples,
+    const double *lambda_grid,
+    const double *hi_eval_grid,
+    const double *logdet_h_grid,
+    double log_l_min, double step,
+    int n_grid, int n_refine,
+    double mle_const,
+    double * restrict hi_eval, double *logl_out
+)
+{
+    const double phi = 0.6180339887498949;  /* golden ratio - 1 */
+
+    /* Stage 1: coarse grid search using cached hi_eval and logdet_h */
+    double best_logl = REML_SENTINEL;
+    int best_idx = 0;
+    for (int g = 0; g < n_grid; g++) {
+        double logl = mle_logl_ncvt1_cached(
+            uab,
+            hi_eval_grid + (size_t)g * n_samples,
+            logdet_h_grid[g],
+            n_samples, mle_const
+        );
+        if (isnan(logl)) logl = REML_SENTINEL;
+        if (logl > best_logl) {
+            best_logl = logl;
+            best_idx = g;
+        }
+    }
+
+    /* Fully degenerate SNP — all grid evaluations returned NaN */
+    if (best_logl == REML_SENTINEL) {
+        *logl_out = (double)NAN;
+        return (double)NAN;
+    }
+
+    /* Bracket around best grid point */
+    int idx_low = (best_idx > 0) ? best_idx - 1 : 0;
+    int idx_high = (best_idx < n_grid - 1) ? best_idx + 1 : n_grid - 1;
+    double a = log_l_min + idx_low * step;
+    double b = log_l_min + idx_high * step;
+
+    /* Stage 2: golden section refinement */
+    double c = b - phi * (b - a);
+    double d = a + phi * (b - a);
+    double fc = mle_logl_ncvt1(uab, eigenvalues, n_samples,
+                                exp(c), mle_const, hi_eval);
+    double fd = mle_logl_ncvt1(uab, eigenvalues, n_samples,
+                                exp(d), mle_const, hi_eval);
+
+    for (int iter = 0; iter < n_refine; iter++) {
+        if (fc > fd) {
+            b = d; d = c; fd = fc;
+            c = b - phi * (b - a);
+            fc = mle_logl_ncvt1(uab, eigenvalues, n_samples,
+                                 exp(c), mle_const, hi_eval);
+        } else {
+            a = c; c = d; fc = fd;
+            d = a + phi * (b - a);
+            fd = mle_logl_ncvt1(uab, eigenvalues, n_samples,
+                                 exp(d), mle_const, hi_eval);
+        }
+    }
+
+    double log_opt = (a + b) / 2.0;
+    double lambda_opt = exp(log_opt);
+    *logl_out = mle_logl_ncvt1(uab, eigenvalues, n_samples,
+                                lambda_opt, mle_const, hi_eval);
+
+    return lambda_opt;
+}
+
+/* =========================================================================
+ * LRT BATCH — compute_lrt_batch_c
+ *
+ * LRT test with per-SNP MLE optimization + chi2_sf p-value.
+ * ========================================================================= */
+
+/* LRT output: 2 arrays */
+typedef struct {
+    PyArrayObject *lambdas_mle;
+    PyArrayObject *p_lrts;
+} lrt_output_t;
+
+static int alloc_lrt_output(lrt_output_t *out, npy_intp n_snps)
+{
+    npy_intp dims[1] = { n_snps };
+    out->lambdas_mle = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->p_lrts      = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+
+    if (!out->lambdas_mle || !out->p_lrts) {
+        Py_XDECREF(out->lambdas_mle);
+        Py_XDECREF(out->p_lrts);
+        return -1;
+    }
+    return 0;
+}
+
+static void decref_lrt_output(lrt_output_t *out)
+{
+    Py_DECREF(out->lambdas_mle);
+    Py_DECREF(out->p_lrts);
+}
+
+static PyObject *build_lrt_result_dict(lrt_output_t *out)
+{
+    PyObject *result = PyDict_New();
+    if (!result) {
+        decref_lrt_output(out);
+        return NULL;
+    }
+
+    if (PyDict_SetItemString(result, "lambdas_mle", (PyObject *)out->lambdas_mle) < 0 ||
+        PyDict_SetItemString(result, "p_lrts",      (PyObject *)out->p_lrts)      < 0) {
+        Py_DECREF(result);
+        decref_lrt_output(out);
+        return NULL;
+    }
+
+    decref_lrt_output(out);
+    return result;
+}
+
+/* -------------------------------------------------------------------------
+ * compute_lrt_batch_c
+ *
+ * Batch LRT for n_cvt=1 with optional OpenMP.
+ * Per-SNP MLE golden section optimization + chi2_sf for p-value.
+ *
+ * Args: eigenvalues (n_samples,), Uab_batch (n_snps, n_samples, 6),
+ *       n_samples, l_min, l_max, n_grid, n_refine, logl_H0, n_threads
+ * Returns: dict with keys lambdas_mle, p_lrts (each n_snps,)
+ * ------------------------------------------------------------------------- */
+static PyObject *compute_lrt_batch_c(PyObject *self, PyObject *args)
+{
+    PyObject *eigenvalues_obj, *uab_batch_obj;
+    int n_samples, n_grid, n_refine, n_threads;
+    double l_min, l_max, logl_H0;
+
+    if (!PyArg_ParseTuple(args, "OOiddiidi",
+            &eigenvalues_obj, &uab_batch_obj,
+            &n_samples, &l_min, &l_max, &n_grid, &n_refine,
+            &logl_H0, &n_threads))
+        return NULL;
+
+    if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
+        return NULL;
+
+    if (!isfinite(logl_H0)) {
+        PyErr_SetString(PyExc_ValueError,
+            "logl_H0 must be finite (got NaN or Inf from null model)");
+        return NULL;
+    }
+
+    /* Convert inputs to C-contiguous double arrays */
+    PyArrayObject *eigenvalues_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        eigenvalues_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!eigenvalues_arr) return NULL;
+
+    PyArrayObject *uab_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        uab_batch_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!uab_arr) { Py_DECREF(eigenvalues_arr); return NULL; }
+
+    /* Validate shapes */
+    if (PyArray_NDIM(eigenvalues_arr) != 1 ||
+        PyArray_DIM(eigenvalues_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "eigenvalues must be shape (n_samples,)");
+        Py_DECREF(uab_arr); Py_DECREF(eigenvalues_arr); return NULL;
+    }
+    if (PyArray_NDIM(uab_arr) != 3 ||
+        PyArray_DIM(uab_arr, 1) != n_samples ||
+        PyArray_DIM(uab_arr, 2) != 6) {
+        PyErr_SetString(PyExc_ValueError,
+            "Uab_batch must be shape (n_snps, n_samples, 6)");
+        Py_DECREF(uab_arr); Py_DECREF(eigenvalues_arr); return NULL;
+    }
+
+    npy_intp n_snps_raw = PyArray_DIM(uab_arr, 0);
+    if (n_snps_raw > INT_MAX) {
+        PyErr_Format(PyExc_OverflowError,
+            "n_snps (%" NPY_INTP_FMT ") exceeds INT_MAX; split into smaller batches",
+            n_snps_raw);
+        Py_DECREF(uab_arr); Py_DECREF(eigenvalues_arr); return NULL;
+    }
+    int n_snps = (int)n_snps_raw;
+    if (n_snps == 0) {
+        PyErr_SetString(PyExc_ValueError, "n_snps must be > 0");
+        Py_DECREF(uab_arr); Py_DECREF(eigenvalues_arr); return NULL;
+    }
+
+    const double *eigenvalues = (const double *)PyArray_DATA(eigenvalues_arr);
+    const double *uab_batch = (const double *)PyArray_DATA(uab_arr);
+
+    if (validate_eigenvalues(eigenvalues, n_samples) < 0) {
+        Py_DECREF(uab_arr); Py_DECREF(eigenvalues_arr); return NULL;
+    }
+
+    /* Allocate output arrays */
+    lrt_output_t out;
+    if (alloc_lrt_output(&out, (npy_intp)n_snps) < 0) {
+        Py_DECREF(uab_arr); Py_DECREF(eigenvalues_arr);
+        return PyErr_NoMemory();
+    }
+
+    double *out_lambdas_mle = (double *)PyArray_DATA(out.lambdas_mle);
+    double *out_p_lrts      = (double *)PyArray_DATA(out.p_lrts);
+
+    /* Pre-compute MLE constant and grid */
+    double n = (double)n_samples;
+    double mle_const = 0.5 * n * (log(n) - log(2.0 * M_PI) - 1.0);
+
+    double log_l_min = log(l_min);
+    double log_l_max = log(l_max);
+    double step = (log_l_max - log_l_min) / (double)(n_grid - 1);
+
+    /* Build lambda grid */
+    double *lambda_grid = (double *)malloc((size_t)n_grid * sizeof(double));
+    if (!lambda_grid) {
+        decref_lrt_output(&out);
+        Py_DECREF(uab_arr); Py_DECREF(eigenvalues_arr);
+        return PyErr_NoMemory();
+    }
+    for (int g = 0; g < n_grid; g++)
+        lambda_grid[g] = exp(log_l_min + g * step);
+
+    /* Pre-compute hi_eval_grid and logdet_h_grid (shared across SNPs) */
+    double *hi_eval_grid = (double *)malloc(
+        (size_t)n_grid * (size_t)n_samples * sizeof(double));
+    double *logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
+    if (!hi_eval_grid || !logdet_h_grid) {
+        free(lambda_grid);
+        free(hi_eval_grid);
+        free(logdet_h_grid);
+        decref_lrt_output(&out);
+        Py_DECREF(uab_arr); Py_DECREF(eigenvalues_arr);
+        return PyErr_NoMemory();
+    }
+    for (int g = 0; g < n_grid; g++) {
+        double lam = lambda_grid[g];
+        double *hi = hi_eval_grid + (size_t)g * n_samples;
+        double logdet = 0.0;
+        for (int i = 0; i < n_samples; i++) {
+            double v = lam * eigenvalues[i] + 1.0;
+            hi[i] = 1.0 / v;
+            logdet += log(v);
+        }
+        logdet_h_grid[g] = logdet;
+    }
+
+    /* Pre-allocate per-thread hi_eval buffers OUTSIDE the parallel region.
+     * Matches the Wald batch pattern — fail hard with PyErr_NoMemory rather
+     * than silently producing NaN from inside an OpenMP parallel region. */
+    int actual_threads = 1;
+#ifdef _OPENMP
+    if (n_threads > 0) {
+        actual_threads = (n_threads < n_snps) ? n_threads : n_snps;
+    } else {
+        actual_threads = omp_get_max_threads();
+        if (actual_threads > n_snps) actual_threads = n_snps;
+    }
+    if (actual_threads < 1) actual_threads = 1;
+#else
+    (void)n_threads;
+#endif
+
+    double **thread_bufs = (double **)calloc((size_t)actual_threads, sizeof(double *));
+    int alloc_ok = (thread_bufs != NULL);
+    if (alloc_ok) {
+        for (int t = 0; t < actual_threads; t++) {
+            thread_bufs[t] = alloc_aligned_doubles((size_t)n_samples);
+            if (!thread_bufs[t]) { alloc_ok = 0; break; }
+        }
+    }
+    if (!alloc_ok) {
+        if (thread_bufs) {
+            for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]);
+            free(thread_bufs);
+        }
+        free(lambda_grid);
+        free(hi_eval_grid);
+        free(logdet_h_grid);
+        decref_lrt_output(&out);
+        Py_DECREF(uab_arr); Py_DECREF(eigenvalues_arr);
+        return PyErr_NoMemory();
+    }
+
+    Py_BEGIN_ALLOW_THREADS
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) num_threads(actual_threads)
+#endif
+    for (int s = 0; s < n_snps; s++) {
+        int tid = 0;
+#ifdef _OPENMP
+        tid = omp_get_thread_num();
+#endif
+        double *hi_eval_local = thread_bufs[tid];
+        const double *uab = uab_batch + (size_t)s * n_samples * 6;
+
+        double logl_H1;
+        double lam_mle = golden_section_lambda_mle_ncvt1(
+            uab, eigenvalues, n_samples,
+            lambda_grid, hi_eval_grid, logdet_h_grid,
+            log_l_min, step, n_grid, n_refine,
+            mle_const, hi_eval_local, &logl_H1
+        );
+        out_lambdas_mle[s] = lam_mle;
+
+        /* LRT stat = 2*(logl_H1 - logl_H0), clamp >= 0.
+         * NaN logl_H1 (degenerate SNP): NaN-finite=NaN, NaN<0 is false
+         * (IEEE 754), chi2_sf_c(NaN) returns NaN. Correct: degenerate
+         * SNPs get NaN p-value. */
+        double lrt_stat = 2.0 * (logl_H1 - logl_H0);
+        if (lrt_stat < 0.0) lrt_stat = 0.0;
+        out_p_lrts[s] = chi2_sf_c(lrt_stat);
+    }
+
+    Py_END_ALLOW_THREADS
+
+    for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]);
+    free(thread_bufs);
+
+    free(lambda_grid);
+    free(hi_eval_grid);
+    free(logdet_h_grid);
+    Py_DECREF(uab_arr);
+    Py_DECREF(eigenvalues_arr);
+
+    return build_lrt_result_dict(&out);
+}
+
+/* =========================================================================
+ * SCORE BATCH — compute_score_batch_c
+ *
+ * Score test with fixed null-model Hi_eval shared across all SNPs.
+ * No per-SNP lambda optimization — just Pab computation + F-test.
+ * ========================================================================= */
+
+/* Score output: 3 arrays */
+typedef struct {
+    PyArrayObject *betas;
+    PyArrayObject *ses;
+    PyArrayObject *p_scores;
+} score_output_t;
+
+static int alloc_score_output(score_output_t *out, npy_intp n_snps)
+{
+    npy_intp dims[1] = { n_snps };
+    out->betas    = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->ses      = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->p_scores = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+
+    if (!out->betas || !out->ses || !out->p_scores) {
+        Py_XDECREF(out->betas);
+        Py_XDECREF(out->ses);
+        Py_XDECREF(out->p_scores);
+        return -1;
+    }
+    return 0;
+}
+
+static void decref_score_output(score_output_t *out)
+{
+    Py_DECREF(out->betas);
+    Py_DECREF(out->ses);
+    Py_DECREF(out->p_scores);
+}
+
+static PyObject *build_score_result_dict(score_output_t *out)
+{
+    PyObject *result = PyDict_New();
+    if (!result) {
+        decref_score_output(out);
+        return NULL;
+    }
+
+    if (PyDict_SetItemString(result, "betas",    (PyObject *)out->betas)    < 0 ||
+        PyDict_SetItemString(result, "ses",      (PyObject *)out->ses)      < 0 ||
+        PyDict_SetItemString(result, "p_scores", (PyObject *)out->p_scores) < 0) {
+        Py_DECREF(result);
+        decref_score_output(out);
+        return NULL;
+    }
+
+    decref_score_output(out);
+    return result;
+}
+
+/* -------------------------------------------------------------------------
+ * compute_score_batch_c
+ *
+ * Batch Score test for n_cvt=1 with optional OpenMP.
+ *
+ * Args: eigenvalues (n_samples,), Uab_batch (n_snps, n_samples, 6),
+ *       Hi_eval_null (n_samples,), n_samples, n_threads
+ * Returns: dict with keys betas, ses, p_scores (each n_snps,)
+ * ------------------------------------------------------------------------- */
+static PyObject *compute_score_batch_c(PyObject *self, PyObject *args)
+{
+    PyObject *eigenvalues_obj, *uab_batch_obj, *hi_eval_null_obj;
+    int n_samples, n_threads;
+    PyArrayObject *eigenvalues_arr = NULL, *uab_arr = NULL, *hi_eval_null_arr = NULL;
+
+    if (!PyArg_ParseTuple(args, "OOOii",
+            &eigenvalues_obj, &uab_batch_obj, &hi_eval_null_obj,
+            &n_samples, &n_threads))
+        return NULL;
+
+    if (n_samples < 3) {
+        PyErr_SetString(PyExc_ValueError, "n_samples must be >= 3");
+        return NULL;
+    }
+
+    /* Convert inputs to C-contiguous double arrays */
+    eigenvalues_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        eigenvalues_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!eigenvalues_arr) goto err_input;
+
+    uab_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        uab_batch_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!uab_arr) goto err_input;
+
+    hi_eval_null_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        hi_eval_null_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!hi_eval_null_arr) goto err_input;
+
+    /* Validate shapes */
+    if (PyArray_NDIM(eigenvalues_arr) != 1 ||
+        PyArray_DIM(eigenvalues_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "eigenvalues must be shape (n_samples,)");
+        goto err_input;
+    }
+    if (PyArray_NDIM(uab_arr) != 3 ||
+        PyArray_DIM(uab_arr, 1) != n_samples ||
+        PyArray_DIM(uab_arr, 2) != 6) {
+        PyErr_SetString(PyExc_ValueError,
+            "Uab_batch must be shape (n_snps, n_samples, 6)");
+        goto err_input;
+    }
+    if (PyArray_NDIM(hi_eval_null_arr) != 1 ||
+        PyArray_DIM(hi_eval_null_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "Hi_eval_null must be shape (n_samples,)");
+        goto err_input;
+    }
+
+    npy_intp n_snps_raw = PyArray_DIM(uab_arr, 0);
+    if (n_snps_raw > INT_MAX) {
+        PyErr_Format(PyExc_OverflowError,
+            "n_snps (%" NPY_INTP_FMT ") exceeds INT_MAX; split into smaller batches",
+            n_snps_raw);
+        goto err_input;
+    }
+    int n_snps = (int)n_snps_raw;
+    if (n_snps == 0) {
+        PyErr_SetString(PyExc_ValueError, "n_snps must be > 0");
+        goto err_input;
+    }
+
+    const double *eigenvalues = (const double *)PyArray_DATA(eigenvalues_arr);
+    const double *uab_batch = (const double *)PyArray_DATA(uab_arr);
+    const double *hi_eval_null = (const double *)PyArray_DATA(hi_eval_null_arr);
+
+    if (validate_eigenvalues(eigenvalues, n_samples) < 0)
+        goto err_input;
+
+    /* Validate Hi_eval_null for NaN/Inf from failed null model */
+    for (int i = 0; i < n_samples; i++) {
+        if (!isfinite(hi_eval_null[i])) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%g", hi_eval_null[i]);
+            PyErr_Format(PyExc_ValueError,
+                "Hi_eval_null[%d] = %s is not finite. "
+                "Null model optimization may have failed.", i, buf);
+            goto err_input;
+        }
+    }
+
+    /* Allocate output arrays */
+    score_output_t out;
+    if (alloc_score_output(&out, (npy_intp)n_snps) < 0) {
+        PyErr_NoMemory();
+        goto err_input;
+    }
+
+    double *out_betas    = (double *)PyArray_DATA(out.betas);
+    double *out_ses      = (double *)PyArray_DATA(out.ses);
+    double *out_p_scores = (double *)PyArray_DATA(out.p_scores);
+
+    /* Pre-compute F-distribution constants (betainc) */
+    int df = n_samples - 2;  /* n_cvt=1: df = n - n_cvt - 1 */
+    double a = (double)df / 2.0;  /* same convention as Wald: a=df/2, b=0.5 */
+    double b = 0.5;
+    double lbeta_ab = lgamma(a) + lgamma(b) - lgamma(a + b);
+
+    int actual_threads = 1;
+#ifdef _OPENMP
+    if (n_threads > 0) {
+        actual_threads = (n_threads < n_snps) ? n_threads : n_snps;
+    } else {
+        actual_threads = omp_get_max_threads();
+        if (actual_threads > n_snps) actual_threads = n_snps;
+    }
+    if (actual_threads < 1) actual_threads = 1;
+#else
+    (void)n_threads;
+#endif
+
+    Py_BEGIN_ALLOW_THREADS
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) num_threads(actual_threads)
+#endif
+    for (int s = 0; s < n_snps; s++) {
+        const double *uab = uab_batch + (size_t)s * n_samples * 6;
+
+        double pab[3][6];
+        calc_pab_ncvt1(uab, hi_eval_null, n_samples, pab);
+
+        double beta, se, f_stat;
+        int is_valid = score_from_pab(pab, n_samples, df, &beta, &se, &f_stat);
+
+        out_betas[s] = beta;
+        out_ses[s] = se;
+        out_p_scores[s] = f_to_pvalue(f_stat, df, is_valid, a, b, lbeta_ab);
+    }
+
+    Py_END_ALLOW_THREADS
+
+    if (warn_betainc_convergence(out_betas, out_p_scores, n_snps) < 0) {
+        decref_score_output(&out);
+        Py_DECREF(hi_eval_null_arr);
+        Py_DECREF(uab_arr);
+        Py_DECREF(eigenvalues_arr);
+        return NULL;
+    }
+
+    Py_DECREF(hi_eval_null_arr);
+    Py_DECREF(uab_arr);
+    Py_DECREF(eigenvalues_arr);
+    return build_score_result_dict(&out);
+
+err_input:
+    Py_XDECREF(hi_eval_null_arr);
+    Py_XDECREF(uab_arr);
+    Py_XDECREF(eigenvalues_arr);
+    return NULL;
+}
+
 /* -------------------------------------------------------------------------
  * _get_aligned_alloc_test_ptr
  *
@@ -3067,6 +3793,46 @@ static PyMethodDef methods[] = {
         "Per-chunk REML Wald for general n_cvt using a pre-built workspace.\n"
         "\n"
         "OpenMP parallel over SNPs. Table-driven Pab recursion.\n"
+    },
+    {
+        "compute_lrt_batch_c",
+        (PyCFunction)compute_lrt_batch_c,
+        METH_VARARGS,
+        "Batch LRT for n_cvt=1 with optional OpenMP.\n"
+        "\n"
+        "Per-SNP MLE golden section optimization + chi2_sf p-value.\n"
+        "\n"
+        "Args:\n"
+        "    eigenvalues: (n_samples,) float64\n"
+        "    Uab_batch:   (n_snps, n_samples, 6) float64\n"
+        "    n_samples:   int\n"
+        "    l_min:       float\n"
+        "    l_max:       float\n"
+        "    n_grid:      int\n"
+        "    n_refine:    int\n"
+        "    logl_H0:     float, null model MLE log-likelihood\n"
+        "    n_threads:   int\n"
+        "\n"
+        "Returns:\n"
+        "    dict with keys: lambdas_mle, p_lrts — each (n_snps,) float64\n"
+    },
+    {
+        "compute_score_batch_c",
+        (PyCFunction)compute_score_batch_c,
+        METH_VARARGS,
+        "Batch Score test for n_cvt=1 with optional OpenMP.\n"
+        "\n"
+        "Uses fixed null-model Hi_eval (no per-SNP optimization).\n"
+        "\n"
+        "Args:\n"
+        "    eigenvalues:  (n_samples,) float64\n"
+        "    Uab_batch:    (n_snps, n_samples, 6) float64\n"
+        "    Hi_eval_null: (n_samples,) float64 — null-model weights\n"
+        "    n_samples:    int\n"
+        "    n_threads:    int\n"
+        "\n"
+        "Returns:\n"
+        "    dict with keys: betas, ses, p_scores — each (n_snps,) float64\n"
     },
     {
         "_get_aligned_alloc_test_ptr",

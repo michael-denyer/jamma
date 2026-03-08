@@ -67,6 +67,71 @@ _MAX_BUDGET = 40_000_000_000  # 40 GB ceiling
 _MIN_PIPELINE_CHUNKS = 30
 
 
+_ALL_RESULT_KEYS = (
+    "lambdas",
+    "logls",
+    "betas",
+    "ses",
+    "pwalds",
+    "lambdas_mle",
+    "p_lrts",
+    "p_scores",
+)
+
+
+def _compose_mode4_results(
+    wald_cr: dict,
+    n_cvt: int,
+    eigenvalues_np: np.ndarray,
+    Uab_batch: np.ndarray,
+    n_samples: int,
+    *,
+    Hi_eval_null: np.ndarray,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+    logl_H0: float,
+    n_threads: int,
+) -> dict:
+    """Compose mode-4 (All) results from Wald + Score + LRT.
+
+    Calls Score and LRT dispatch separately to avoid redundant Wald
+    computation, then merges non-None values from each test result.
+
+    Merge order matters: Wald is applied last, so its REML-optimized
+    betas/ses overwrite Score's values for the same keys.
+    """
+    score_cr = _compute_lmm_chunk_numpy(
+        3,  # Score only
+        n_cvt,
+        eigenvalues_np,
+        Uab_batch,
+        n_samples,
+        Hi_eval_null=Hi_eval_null,
+        n_threads=n_threads,
+    )
+    lrt_cr = _compute_lmm_chunk_numpy(
+        2,  # LRT only
+        n_cvt,
+        eigenvalues_np,
+        Uab_batch,
+        n_samples,
+        l_min=l_min,
+        l_max=l_max,
+        n_grid=n_grid,
+        n_refine=n_refine,
+        logl_H0=logl_H0,
+        n_threads=n_threads,
+    )
+    cr: dict = {k: None for k in _ALL_RESULT_KEYS}
+    for d in (score_cr, lrt_cr, wald_cr):
+        for k, v in d.items():
+            if v is not None:
+                cr[k] = v
+    return cr
+
+
 def compute_pipeline_core_split(n_samples: int, total_cores: int) -> tuple[int, int]:
     """Compute rotation/compute thread split for the pipeline path.
 
@@ -381,10 +446,10 @@ def run_lmm_association_numpy(
 
     # Determine split/pipeline eligibility BEFORE chunk sizing so the
     # budget can use accurate per-SNP accounting (varying cols vs full Uab).
-    # n_cvt=1: split available for all modes (Wald uses C workspace, others
-    #   reconstruct full Uab from SoA components).
-    # n_cvt>1: split only for Wald (lmm_mode==1) — LRT/Score/All need full Uab
-    #   which can't be reconstructed from the general split components cheaply.
+    # n_cvt=1: split available for all modes — Wald uses C workspace,
+    #   LRT/Score/All reconstruct full Uab from SoA then call C batch.
+    # n_cvt>1: split only for Wald (lmm_mode==1) — reconstruct_uab_from_soa
+    #   is n_cvt=1 only, so non-Wald modes must use full Uab for n_cvt>1.
     use_split = (_C_SPLIT_AVAILABLE and n_cvt == 1) or (
         _C_GENERAL_AVAILABLE and n_cvt > 1 and lmm_mode == 1
     )
@@ -404,7 +469,7 @@ def run_lmm_association_numpy(
     # through U), rotation >> compute per chunk, so the pipeline overlap
     # hides nothing but costs reduced BLAS throughput. Only enable when
     # enough chunks exist for overlap to matter.
-    use_pipeline = use_split and n_chunks >= _MIN_PIPELINE_CHUNKS and lmm_mode == 1
+    use_pipeline = use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
 
     if use_pipeline:
         # Pipeline has 2 chunks alive simultaneously — halve the budget
@@ -417,7 +482,7 @@ def run_lmm_association_numpy(
             pipeline_buffers=2,
         )
         n_chunks = (n_filtered + chunk_size - 1) // chunk_size
-        use_pipeline = use_split and n_chunks >= _MIN_PIPELINE_CHUNKS and lmm_mode == 1
+        use_pipeline = use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
 
     # OpenMP thread count for C extension (set once, reused per chunk).
     # When C extension is active, BLAS threads are set to 1 inside the compute
@@ -497,10 +562,10 @@ def run_lmm_association_numpy(
     # Holds precomputed lambda_grid, hi_eval_grid, logdet_h_grid, grid_inv, and
     # invariant Iab column sums — reused across all chunks without reallocation.
     # PyCapsule is freed automatically when lmm_workspace goes out of scope.
-    # Only create for Wald mode (lmm_mode==1): the C workspace uses
-    # compute_wald_split_c_ws which is Wald-specific. LRT/Score/All
-    # use _compute_lmm_chunk_numpy instead.
-    if use_split and lmm_mode == 1:
+    # Create Wald workspace for modes 1 (Wald) and 4 (All) — both need
+    # REML Wald statistics. Modes 2 (LRT) and 3 (Score) don't need a
+    # Wald workspace; they reconstruct Uab and call C batch functions.
+    if use_split and lmm_mode in (1, 4):
         if n_cvt == 1:
             lmm_workspace = create_lmm_workspace(
                 eigenvalues_np,
@@ -557,41 +622,100 @@ def run_lmm_association_numpy(
         return uab_var_soa, actual_len
 
     def _compute_and_write(uab_var_soa: np.ndarray, actual_len: int) -> None:
-        """Run Wald C extension compute on a chunk and write results.
+        """Run C extension compute on a chunk and write results.
 
-        Only valid for lmm_mode == 1 (Wald). Called exclusively from the
-        pipeline path which gates on lmm_mode == 1.
+        Dispatches by lmm_mode:
+        - Mode 1 (Wald): C workspace path (no Uab reconstruction)
+        - Mode 4 (All): Wald via workspace + Score/LRT via reconstructed Uab
+        - Modes 2, 3 (LRT, Score): Reconstruct Uab, C batch dispatch
         """
-        assert lmm_workspace is not None, "pipeline requires workspace"
-        if lmm_mode != 1:
-            raise RuntimeError(
-                "_compute_and_write requires lmm_mode=1 (Wald), "
-                f"got lmm_mode={lmm_mode}"
-            )
         nonlocal write_offset, t_numpy_compute_total, t_result_write_total
 
         t_compute_start = time.perf_counter()
-        try:
-            if n_cvt == 1:
-                cr = compute_wald_split_c_ws(
-                    lmm_workspace,
-                    uab_var_soa,
-                    pipeline_omp_threads,
-                )
+
+        if lmm_mode in (1, 4) and lmm_workspace is not None:
+            # Wald via workspace
+            try:
+                if n_cvt == 1:
+                    wald_cr = compute_wald_split_c_ws(
+                        lmm_workspace,
+                        uab_var_soa,
+                        pipeline_omp_threads,
+                    )
+                else:
+                    wald_cr = compute_wald_general_c_ws(
+                        lmm_workspace,
+                        uab_var_soa,
+                        pipeline_omp_threads,
+                    )
+            except (MemoryError, ValueError, TypeError, OverflowError):
+                raise
+            except Exception as exc:
+                raise RuntimeError(
+                    f"C extension compute failed at SNP offset "
+                    f"{write_offset}/{n_filtered}. "
+                    f"Processed {write_offset} SNPs before failure."
+                ) from exc
+
+            if lmm_mode == 1:
+                cr = wald_cr
             else:
-                cr = compute_wald_general_c_ws(
-                    lmm_workspace,
-                    uab_var_soa,
-                    pipeline_omp_threads,
-                )
-        except (MemoryError, ValueError, TypeError, OverflowError):
-            raise
-        except Exception as exc:
-            raise RuntimeError(
-                f"C extension compute failed at SNP offset "
-                f"{write_offset}/{n_filtered}. "
-                f"Processed {write_offset} SNPs before failure."
-            ) from exc
+                # Mode 4: Wald from workspace, Score+LRT from reconstructed Uab
+                Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_var_soa)
+                blas_ctx = blas_threads(1) if _C_ACCEL_AVAILABLE else nullcontext()
+                with blas_ctx:
+                    try:
+                        cr = _compose_mode4_results(
+                            wald_cr,
+                            n_cvt,
+                            eigenvalues_np,
+                            Uab_batch,
+                            n_samples,
+                            Hi_eval_null=Hi_eval_null,
+                            l_min=l_min,
+                            l_max=l_max,
+                            n_grid=n_grid,
+                            n_refine=n_refine,
+                            logl_H0=logl_H0,
+                            n_threads=pipeline_omp_threads,
+                        )
+                    except (MemoryError, ValueError, TypeError, OverflowError):
+                        raise
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"C extension compute failed at SNP offset "
+                            f"{write_offset}/{n_filtered}. "
+                            f"Processed {write_offset} SNPs before failure."
+                        ) from exc
+        else:
+            # Modes 2, 3: reconstruct Uab, C batch dispatch
+            Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_var_soa)
+            blas_ctx = blas_threads(1) if _C_ACCEL_AVAILABLE else nullcontext()
+            with blas_ctx:
+                try:
+                    cr = _compute_lmm_chunk_numpy(
+                        lmm_mode,
+                        n_cvt,
+                        eigenvalues_np,
+                        Uab_batch,
+                        n_samples,
+                        l_min=l_min,
+                        l_max=l_max,
+                        n_grid=n_grid,
+                        n_refine=n_refine,
+                        Hi_eval_null=Hi_eval_null,
+                        logl_H0=logl_H0,
+                        n_threads=pipeline_omp_threads,
+                    )
+                except (MemoryError, ValueError, TypeError, OverflowError):
+                    raise
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"C extension compute failed at SNP offset "
+                        f"{write_offset}/{n_filtered}. "
+                        f"Processed {write_offset} SNPs before failure."
+                    ) from exc
+
         t_numpy_compute_total += time.perf_counter() - t_compute_start
 
         t_write_start = time.perf_counter()
@@ -715,7 +839,7 @@ def run_lmm_association_numpy(
             pipeline_bar.update(n_chunks)
             pipeline_bar.finish()
     else:
-        # Sequential path (non-split modes or single chunk)
+        # Sequential path (single chunk or non-pipeline execution)
         if show_progress and n_chunks > 1:
             chunk_iterator = progress_iterator(
                 chunk_starts, total=n_chunks, desc="LMM association"
@@ -813,8 +937,73 @@ def run_lmm_association_numpy(
                                 f"before failure."
                             ) from exc
                     del uab_var_soa
+                elif lmm_mode == 4 and lmm_workspace is not None:
+                    # All: Wald via workspace, Score+LRT via reconstructed Uab.
+                    # Call Score and LRT separately to avoid redundant Wald.
+                    Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_var_soa)
+                    with blas_threads(1):
+                        try:
+                            if n_cvt == 1:
+                                wald_cr = compute_wald_split_c_ws(
+                                    lmm_workspace,
+                                    uab_var_soa,
+                                    omp_threads,
+                                )
+                            else:
+                                wald_cr = compute_wald_general_c_ws(
+                                    lmm_workspace,
+                                    uab_var_soa,
+                                    omp_threads,
+                                )
+                        except (
+                            MemoryError,
+                            ValueError,
+                            TypeError,
+                            OverflowError,
+                        ):
+                            raise
+                        except Exception as exc:
+                            raise RuntimeError(
+                                f"C extension compute failed at SNP "
+                                f"offset {write_offset}/{n_filtered}. "
+                                f"Processed {write_offset} SNPs "
+                                f"before failure."
+                            ) from exc
+                    del uab_var_soa
+                    # Score + LRT via C batch dispatch (no redundant Wald)
+                    with blas_threads(1):
+                        try:
+                            cr = _compose_mode4_results(
+                                wald_cr,
+                                n_cvt,
+                                eigenvalues_np,
+                                Uab_batch,
+                                n_samples,
+                                Hi_eval_null=Hi_eval_null,
+                                l_min=l_min,
+                                l_max=l_max,
+                                n_grid=n_grid,
+                                n_refine=n_refine,
+                                logl_H0=logl_H0,
+                                n_threads=omp_threads,
+                            )
+                        except (
+                            MemoryError,
+                            ValueError,
+                            TypeError,
+                            OverflowError,
+                        ):
+                            raise
+                        except Exception as exc:
+                            raise RuntimeError(
+                                f"C extension compute failed at SNP "
+                                f"offset {write_offset}/{n_filtered}. "
+                                f"Processed {write_offset} SNPs "
+                                f"before failure."
+                            ) from exc
+                    del Uab_batch
                 else:
-                    # LRT/Score/All: reconstruct full Uab from split components
+                    # LRT/Score (modes 2, 3): reconstruct Uab, C batch dispatch
                     Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_var_soa)
                     del uab_var_soa
                     cr = _run_lmm_chunk(Uab_batch)

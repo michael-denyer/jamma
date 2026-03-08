@@ -1,7 +1,8 @@
 """NumPy mode dispatch for LMM chunk computation.
 
-Dispatches to C extension (_lmm_accel) for n_cvt=1 (batch) and n_cvt>1
-(general workspace) when available; falls back to NumPy Python path.
+Dispatches to C extension (_lmm_accel) for Wald (batch/workspace),
+Score (batch), and LRT (batch) when available and n_cvt=1; falls back
+to NumPy Python path for n_cvt>1 or when C functions are unavailable.
 Also exports split-workspace and general-workspace APIs for direct use
 by runners. No JAX imports.
 
@@ -28,7 +29,7 @@ from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_split_ncvt1_numpy,
 )
 
-_EXPECTED_ABI_VERSION = 4  # Must match ABI_VERSION in _lmm_accel.c
+_EXPECTED_ABI_VERSION = 5  # Must match ABI_VERSION in _lmm_accel.c
 
 
 def _try_import_accel() -> tuple[
@@ -42,6 +43,8 @@ def _try_import_accel() -> tuple[
     object,
     object,
     object,
+    object,
+    object,
 ]:
     """Attempt to import the C extension and validate ABI version.
 
@@ -49,9 +52,23 @@ def _try_import_accel() -> tuple[
         (accel_available, split_available, general_available, has_openmp,
          compute_batch_c, compute_batch_split_c,
          create_workspace_split_c, compute_lmm_chunk_split_c,
-         create_workspace_general_c, compute_lmm_chunk_general_c)
+         create_workspace_general_c, compute_lmm_chunk_general_c,
+         compute_score_batch_c, compute_lrt_batch_c)
     """
-    _none10 = (False, False, False, False, None, None, None, None, None, None)
+    _none12 = (
+        False,
+        False,
+        False,
+        False,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
     try:
         from jamma.lmm._lmm_accel import ABI_VERSION as abi
         from jamma.lmm._lmm_accel import HAS_OPENMP as has_omp
@@ -69,7 +86,7 @@ def _try_import_accel() -> tuple[
         from loguru import logger
 
         logger.debug(f"C extension import failed: {e}")
-        return _none10
+        return _none12
     except AttributeError as e:
         from loguru import logger
 
@@ -77,7 +94,7 @@ def _try_import_accel() -> tuple[
             f"C extension loaded but missing expected attribute: {e}. "
             "Stale .so may need recompilation."
         )
-        return _none10
+        return _none12
 
     if abi != _EXPECTED_ABI_VERSION:
         from loguru import logger
@@ -87,9 +104,9 @@ def _try_import_accel() -> tuple[
             f"compiled={abi}, expected={_EXPECTED_ABI_VERSION}. "
             "Stale .so needs recompilation."
         )
-        return _none10
+        return _none12
 
-    # General n_cvt support — expected in ABI v4+
+    # General n_cvt support — expected since ABI v4
     try:
         from jamma.lmm._lmm_accel import (
             compute_lmm_chunk_general_c as ws_gen_chunk,
@@ -103,7 +120,7 @@ def _try_import_accel() -> tuple[
         from loguru import logger
 
         logger.warning(
-            "C extension reports ABI v4 (general n_cvt) but "
+            f"C extension ABI v{abi} but "
             "create_workspace_general_c / compute_lmm_chunk_general_c "
             "not found. Extension may be partially compiled. "
             "Falling back to Python path for n_cvt > 1."
@@ -111,6 +128,33 @@ def _try_import_accel() -> tuple[
         ws_gen_create = None
         ws_gen_chunk = None
         general_available = False
+
+    # Score and LRT batch support — expected in ABI v5+
+    # Import independently so a partial build (one present, one missing)
+    # doesn't disable both.
+    try:
+        from jamma.lmm._lmm_accel import (
+            compute_score_batch_c as score_batch_c,
+        )
+    except AttributeError:
+        from loguru import logger
+
+        logger.warning(
+            "C extension missing compute_score_batch_c. Score will use Python path."
+        )
+        score_batch_c = None
+
+    try:
+        from jamma.lmm._lmm_accel import (
+            compute_lrt_batch_c as lrt_batch_c,
+        )
+    except AttributeError:
+        from loguru import logger
+
+        logger.warning(
+            "C extension missing compute_lrt_batch_c. LRT will use Python path."
+        )
+        lrt_batch_c = None
 
     return (
         True,
@@ -123,6 +167,8 @@ def _try_import_accel() -> tuple[
         ws_chunk,
         ws_gen_create,
         ws_gen_chunk,
+        score_batch_c,
+        lrt_batch_c,
     )
 
 
@@ -150,6 +196,8 @@ def _auto_recompile() -> bool:
     _compute_lmm_chunk_split_c,
     _create_workspace_general_c,
     _compute_lmm_chunk_general_c,
+    _compute_score_batch_c,
+    _compute_lrt_batch_c,
 ) = _try_import_accel()
 
 if not _C_ACCEL_AVAILABLE:
@@ -166,6 +214,8 @@ if not _C_ACCEL_AVAILABLE:
             _compute_lmm_chunk_split_c,
             _create_workspace_general_c,
             _compute_lmm_chunk_general_c,
+            _compute_score_batch_c,
+            _compute_lrt_batch_c,
         ) = _try_import_accel()
 
     if not _C_ACCEL_AVAILABLE:
@@ -433,6 +483,74 @@ def compute_wald_general_c_ws(
     return _compute_lmm_chunk_general_c(workspace, uab_varying_soa, n_threads)
 
 
+def _compute_score_c(
+    eigenvalues: np.ndarray,
+    Uab_batch: np.ndarray,
+    Hi_eval_null: np.ndarray,
+    n_samples: int,
+    n_threads: int,
+) -> dict[str, np.ndarray]:
+    """Compute Score test via C extension (n_cvt=1 only).
+
+    Args:
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        Uab_batch: Pre-computed Uab matrices (n_snps, n_samples, 6).
+        Hi_eval_null: Pre-computed null-model Hi_eval (n_samples,).
+        n_samples: Number of samples.
+        n_threads: OpenMP thread count.
+
+    Returns:
+        Dict with keys: betas, ses, p_scores.
+    """
+    return _compute_score_batch_c(
+        eigenvalues,
+        Uab_batch,
+        Hi_eval_null,
+        n_samples,
+        n_threads,
+    )
+
+
+def _compute_lrt_c(
+    eigenvalues: np.ndarray,
+    Uab_batch: np.ndarray,
+    n_samples: int,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+    logl_H0: float,
+    n_threads: int,
+) -> dict[str, np.ndarray]:
+    """Compute LRT via C extension (n_cvt=1 only).
+
+    Args:
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        Uab_batch: Pre-computed Uab matrices (n_snps, n_samples, 6).
+        n_samples: Number of samples.
+        l_min: Minimum lambda for optimization.
+        l_max: Maximum lambda for optimization.
+        n_grid: Grid search resolution.
+        n_refine: Golden section iterations.
+        logl_H0: Null model MLE log-likelihood (scalar).
+        n_threads: OpenMP thread count.
+
+    Returns:
+        Dict with keys: lambdas_mle, p_lrts.
+    """
+    return _compute_lrt_batch_c(
+        eigenvalues,
+        Uab_batch,
+        n_samples,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        logl_H0,
+        n_threads,
+    )
+
+
 def _compute_wald_numpy(
     n_cvt: int,
     eigenvalues: np.ndarray,
@@ -591,8 +709,12 @@ def _compute_lrt_numpy(
     n_grid: int,
     n_refine: int,
     logl_H0: float,
+    n_threads: int = 1,
 ) -> dict[str, np.ndarray]:
     """Compute MLE-optimized LRT statistics.
+
+    Dispatches to C extension when available and n_cvt=1; otherwise falls
+    back to Python golden section optimizer.
 
     Args:
         n_cvt: Number of covariates.
@@ -603,10 +725,31 @@ def _compute_lrt_numpy(
         n_grid: Grid search resolution.
         n_refine: Golden section iterations (should be >= 20 for 1e-5 tolerance).
         logl_H0: Null model MLE log-likelihood (scalar).
+        n_threads: OpenMP thread count passed to C extension (ignored on Python path).
 
     Returns:
         Dict with keys: lambdas_mle, p_lrts.
     """
+    if _compute_lrt_batch_c is not None and n_cvt == 1:
+        return _compute_lrt_c(
+            eigenvalues,
+            Uab_batch,
+            len(eigenvalues),
+            l_min,
+            l_max,
+            n_grid,
+            n_refine,
+            logl_H0,
+            n_threads,
+        )
+
+    from loguru import logger
+
+    if _compute_lrt_batch_c is None:
+        logger.debug("LRT using Python path (C extension unavailable)")
+    else:
+        logger.debug("LRT using Python path (n_cvt={} > 1)", n_cvt)
+
     lambdas_mle, logls_mle = golden_section_optimize_lambda_mle_numpy(
         n_cvt,
         eigenvalues,
@@ -622,21 +765,44 @@ def _compute_lrt_numpy(
 
 def _compute_score_numpy(
     n_cvt: int,
+    eigenvalues: np.ndarray,
     Hi_eval_null: np.ndarray,
     Uab_batch: np.ndarray,
     n_samples: int,
+    n_threads: int = 1,
 ) -> dict[str, np.ndarray]:
     """Compute Score test statistics (no optimization needed).
 
+    Dispatches to C extension when available and n_cvt=1; otherwise falls
+    back to Python batch Score computation.
+
     Args:
         n_cvt: Number of covariates.
+        eigenvalues: Kinship eigenvalues (n_samples,). Used by C path for validation.
         Hi_eval_null: Pre-computed null-model Hi_eval (n_samples,).
         Uab_batch: Pre-computed Uab matrices (n_snps, n_samples, n_index).
         n_samples: Number of samples.
+        n_threads: OpenMP thread count passed to C extension (ignored on Python path).
 
     Returns:
         Dict with keys: betas, ses, p_scores.
     """
+    if _compute_score_batch_c is not None and n_cvt == 1:
+        return _compute_score_c(
+            eigenvalues,
+            Uab_batch,
+            Hi_eval_null,
+            n_samples,
+            n_threads,
+        )
+
+    from loguru import logger
+
+    if _compute_score_batch_c is None:
+        logger.debug("Score using Python path (C extension unavailable)")
+    else:
+        logger.debug("Score using Python path (n_cvt={} > 1)", n_cvt)
+
     betas, ses, p_scores = batch_calc_score_stats_numpy(
         n_cvt, Hi_eval_null, Uab_batch, n_samples
     )
@@ -675,7 +841,7 @@ def _compute_lmm_chunk_numpy(
         n_refine: Golden section iterations (minimum 20 enforced).
         Hi_eval_null: Pre-computed 1/(lambda_null*eval+1) for Score test.
         logl_H0: Null model MLE log-likelihood for LRT.
-        n_threads: OpenMP thread count passed to C extension for Wald mode.
+        n_threads: OpenMP thread count passed to C extension (Wald, LRT, Score).
 
     Returns:
         Dict with keys: lambdas, logls, betas, ses, pwalds,
@@ -726,16 +892,33 @@ def _compute_lmm_chunk_numpy(
                 n_grid,
                 n_refine,
                 logl_H0,
+                n_threads=n_threads,
             )
         )
 
     elif lmm_mode == 3:
-        result.update(_compute_score_numpy(n_cvt, Hi_eval_null, Uab_batch, n_samples))
+        result.update(
+            _compute_score_numpy(
+                n_cvt,
+                eigenvalues,
+                Hi_eval_null,
+                Uab_batch,
+                n_samples,
+                n_threads=n_threads,
+            )
+        )
 
     elif lmm_mode == 4:
         # Compose all three tests; only take p_scores from Score —
         # Wald provides REML-optimized beta/SE below
-        score_result = _compute_score_numpy(n_cvt, Hi_eval_null, Uab_batch, n_samples)
+        score_result = _compute_score_numpy(
+            n_cvt,
+            eigenvalues,
+            Hi_eval_null,
+            Uab_batch,
+            n_samples,
+            n_threads=n_threads,
+        )
         result["p_scores"] = score_result["p_scores"]
         result.update(
             _compute_lrt_numpy(
@@ -747,6 +930,7 @@ def _compute_lmm_chunk_numpy(
                 n_grid,
                 n_refine,
                 logl_H0,
+                n_threads=n_threads,
             )
         )
         # Pre-compute Iab once for Wald (lambda-independent)

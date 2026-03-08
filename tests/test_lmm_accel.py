@@ -13,6 +13,8 @@ from jamma.lmm.compute_numpy import (
     _C_GENERAL_AVAILABLE,
     _C_SPLIT_AVAILABLE,
     _compute_lmm_chunk_numpy,
+    _compute_lrt_batch_c,
+    _compute_score_batch_c,
     _compute_wald_numpy,
     _compute_wald_split_c,
     compute_wald_general_c_ws,
@@ -21,12 +23,16 @@ from jamma.lmm.compute_numpy import (
     create_lmm_workspace_general,
 )
 from jamma.lmm.likelihood_numpy import (
+    _batch_lrt_pvalues_numpy,
+    batch_calc_score_stats_numpy,
     batch_compute_iab_numpy,
     batch_compute_iab_split_ncvt1,
     batch_compute_iab_split_ncvt1_soa,
     batch_compute_uab_split_numpy,
     batch_compute_uab_varying_soa_numpy,
     compute_uab_invariant_soa,
+    golden_section_optimize_lambda_mle_numpy,
+    golden_section_optimize_lambda_numpy,
 )
 
 
@@ -100,7 +106,6 @@ def test_c_vs_python_parity_synthetic(synthetic_wald_data, monkeypatch):
     # call the generic optimizer directly.
     from jamma.lmm.likelihood_numpy import (
         batch_calc_wald_stats_from_pab_numpy,
-        golden_section_optimize_lambda_numpy,
     )
 
     lambdas_py, logls_py, Pab_py = golden_section_optimize_lambda_numpy(
@@ -1761,16 +1766,16 @@ def test_general_ncvt_degenerate_snps(synthetic_covariate_data_ncvt2):
 @pytest.mark.tier0
 @pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
 def test_general_ncvt_abi_version():
-    """C-GEN-07: ABI version is bumped to 4 for general n_cvt support."""
+    """C-GEN-07: ABI version is bumped to 5 for Score/LRT C kernel support."""
     from jamma.lmm._lmm_accel import ABI_VERSION
 
-    assert ABI_VERSION == 4, f"Expected ABI_VERSION=4, got {ABI_VERSION}"
+    assert ABI_VERSION == 5, f"Expected ABI_VERSION=5, got {ABI_VERSION}"
 
 
 @pytest.mark.tier0
 @pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
 def test_existing_ncvt1_regression(synthetic_wald_data):
-    """C-GEN-08: Existing n_cvt=1 C extension path unchanged with ABI_VERSION=4.
+    """C-GEN-08: Existing n_cvt=1 C extension path unchanged with ABI_VERSION=5.
 
     Ensures the general n_cvt additions (ABI_VERSION bump, new workspace types)
     did not regress the original n_cvt=1 split-Uab workspace path.
@@ -1796,3 +1801,287 @@ def test_existing_ncvt1_regression(synthetic_wald_data):
     assert result["betas"].shape == (Uab_batch.shape[0],)
     n_finite = np.sum(np.isfinite(result["betas"]))
     assert n_finite > 0, "No finite betas from n_cvt=1 workspace"
+
+
+# ---------------------------------------------------------------------------
+# Score and LRT C-vs-Python parity tests (Plan 64-02)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def score_lrt_data(synthetic_wald_data):
+    """Extends synthetic_wald_data with null-model Hi_eval and logl_H0.
+
+    Computes the null-model MLE lambda via golden section on the null Uab
+    (no genotype), then derives Hi_eval_null = 1/(lambda_null*eval + 1)
+    and logl_H0 (null MLE log-likelihood).
+    """
+    eigenvalues, Uab_batch, n_samples = synthetic_wald_data
+    n_cvt = 1
+
+    # Build null Uab: zero genotype columns (wx=0, xx=0, xy=0).
+    # The null model only uses ww, wy, yy columns.
+    Uab_null = np.zeros((1, n_samples, 6), dtype=np.float64)
+    Uab_null[0, :, 0] = Uab_batch[0, :, 0]  # ww (invariant)
+    Uab_null[0, :, 2] = Uab_batch[0, :, 2]  # wy (invariant)
+    Uab_null[0, :, 5] = Uab_batch[0, :, 5]  # yy (invariant)
+
+    # Null MLE lambda optimization
+    lambdas_null, logls_null = golden_section_optimize_lambda_mle_numpy(
+        n_cvt,
+        eigenvalues,
+        Uab_null,
+        l_min=1e-5,
+        l_max=1e5,
+        n_grid=50,
+        n_iter=20,
+    )
+    lambda_null = float(lambdas_null[0])
+    logl_H0 = float(logls_null[0])
+
+    # Hi_eval_null: Score test uses this fixed weight vector
+    Hi_eval_null = 1.0 / (lambda_null * eigenvalues + 1.0)
+
+    return eigenvalues, Uab_batch, n_samples, Hi_eval_null, logl_H0
+
+
+_score_c_available = _C_ACCEL_AVAILABLE and _compute_score_batch_c is not None
+_lrt_c_available = _C_ACCEL_AVAILABLE and _compute_lrt_batch_c is not None
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _score_c_available, reason="Score C extension not available")
+def test_score_c_vs_python_parity(score_lrt_data):
+    """C compute_score_batch_c matches Python batch_calc_score_stats_numpy."""
+    eigenvalues, Uab_batch, n_samples, Hi_eval_null, _ = score_lrt_data
+    n_cvt = 1
+
+    # C path
+    result_c = _compute_score_batch_c(
+        eigenvalues,
+        Uab_batch,
+        Hi_eval_null,
+        n_samples,
+        1,
+    )
+
+    # Python path
+    betas_py, ses_py, p_scores_py = batch_calc_score_stats_numpy(
+        n_cvt,
+        Hi_eval_null,
+        Uab_batch,
+        n_samples,
+    )
+
+    np.testing.assert_allclose(result_c["betas"], betas_py, rtol=1e-10, atol=1e-14)
+    np.testing.assert_allclose(result_c["ses"], ses_py, rtol=1e-10, atol=1e-14)
+    np.testing.assert_allclose(
+        result_c["p_scores"], p_scores_py, rtol=1e-10, atol=1e-14
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _lrt_c_available, reason="LRT C extension not available")
+def test_lrt_c_vs_python_parity(score_lrt_data):
+    """C compute_lrt_batch_c matches Python golden_section_optimize_lambda_mle_numpy."""
+    eigenvalues, Uab_batch, n_samples, _, logl_H0 = score_lrt_data
+    n_cvt = 1
+    l_min, l_max, n_grid, n_refine = 1e-5, 1e5, 50, 20
+
+    # C path
+    result_c = _compute_lrt_batch_c(
+        eigenvalues,
+        Uab_batch,
+        n_samples,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        logl_H0,
+        1,
+    )
+
+    # Python path
+    lambdas_mle_py, logls_mle_py = golden_section_optimize_lambda_mle_numpy(
+        n_cvt,
+        eigenvalues,
+        Uab_batch,
+        l_min=l_min,
+        l_max=l_max,
+        n_grid=n_grid,
+        n_iter=n_refine,
+    )
+    p_lrts_py = _batch_lrt_pvalues_numpy(logls_mle_py, logl_H0)
+
+    np.testing.assert_allclose(
+        result_c["lambdas_mle"],
+        lambdas_mle_py,
+        rtol=1e-6,
+        atol=1e-14,
+    )
+    np.testing.assert_allclose(
+        result_c["p_lrts"],
+        p_lrts_py,
+        rtol=1e-4,
+        atol=1e-14,
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _score_c_available, reason="Score C extension not available")
+def test_score_c_degenerate_snps(score_lrt_data):
+    """Score C returns NaN for constant genotypes (P_xx <= 0)."""
+    eigenvalues, Uab_batch, n_samples, Hi_eval_null, _ = score_lrt_data
+
+    # Create degenerate Uab: constant genotype -> wx=0, xx=0, xy=0
+    Uab_degen = Uab_batch.copy()
+    Uab_degen[0, :, 1] = 0.0  # wx = 0
+    Uab_degen[0, :, 3] = 0.0  # xx = 0
+    Uab_degen[0, :, 4] = 0.0  # xy = 0
+
+    result = _compute_score_batch_c(
+        eigenvalues,
+        Uab_degen,
+        Hi_eval_null,
+        n_samples,
+        1,
+    )
+
+    # First SNP is degenerate: should have NaN beta/se/p_score
+    assert np.isnan(result["betas"][0]), "degenerate SNP should have NaN beta"
+    assert np.isnan(result["ses"][0]), "degenerate SNP should have NaN se"
+    assert np.isnan(result["p_scores"][0]), "degenerate SNP should have NaN p_score"
+
+    # Remaining SNPs should still be finite
+    assert np.all(np.isfinite(result["betas"][1:])), (
+        "non-degenerate SNPs should be finite"
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _lrt_c_available, reason="LRT C extension not available")
+def test_lrt_c_degenerate_snps(score_lrt_data):
+    """LRT C handles degenerate SNPs: p_lrt ~ 1.0 (no signal)."""
+    eigenvalues, Uab_batch, n_samples, _, logl_H0 = score_lrt_data
+
+    # Create degenerate Uab: constant genotype
+    Uab_degen = Uab_batch.copy()
+    Uab_degen[0, :, 1] = 0.0  # wx = 0
+    Uab_degen[0, :, 3] = 0.0  # xx = 0
+    Uab_degen[0, :, 4] = 0.0  # xy = 0
+
+    result = _compute_lrt_batch_c(
+        eigenvalues,
+        Uab_degen,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        logl_H0,
+        1,
+    )
+
+    # Degenerate SNP: MLE logl_H1 ~ logl_H0, so LRT stat ~ 0, p ~ 1.0
+    assert result["p_lrts"][0] >= 0.99, (
+        f"degenerate SNP should have p_lrt ~ 1.0, got {result['p_lrts'][0]}"
+    )
+
+    # Remaining SNPs should be finite
+    assert np.all(np.isfinite(result["p_lrts"][1:])), (
+        "non-degenerate SNPs should be finite"
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _score_c_available, reason="Score C extension not available")
+def test_score_c_multithreaded(score_lrt_data):
+    """Score C with n_threads=4 produces identical output to n_threads=1."""
+    eigenvalues, Uab_batch, n_samples, Hi_eval_null, _ = score_lrt_data
+
+    result_1t = _compute_score_batch_c(
+        eigenvalues,
+        Uab_batch,
+        Hi_eval_null,
+        n_samples,
+        1,
+    )
+    result_4t = _compute_score_batch_c(
+        eigenvalues,
+        Uab_batch,
+        Hi_eval_null,
+        n_samples,
+        4,
+    )
+
+    np.testing.assert_array_equal(result_1t["betas"], result_4t["betas"])
+    np.testing.assert_array_equal(result_1t["ses"], result_4t["ses"])
+    np.testing.assert_array_equal(result_1t["p_scores"], result_4t["p_scores"])
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _lrt_c_available, reason="LRT C extension not available")
+def test_lrt_c_multithreaded(score_lrt_data):
+    """LRT C with n_threads=4 produces identical output to n_threads=1."""
+    eigenvalues, Uab_batch, n_samples, _, logl_H0 = score_lrt_data
+
+    result_1t = _compute_lrt_batch_c(
+        eigenvalues,
+        Uab_batch,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        logl_H0,
+        1,
+    )
+    result_4t = _compute_lrt_batch_c(
+        eigenvalues,
+        Uab_batch,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        logl_H0,
+        4,
+    )
+
+    np.testing.assert_array_equal(result_1t["lambdas_mle"], result_4t["lambdas_mle"])
+    np.testing.assert_array_equal(result_1t["p_lrts"], result_4t["p_lrts"])
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+def test_mode4_all_c_dispatch(score_lrt_data):
+    """Mode 4 (All) returns all 8 keys non-None when C extension available."""
+    eigenvalues, Uab_batch, n_samples, Hi_eval_null, logl_H0 = score_lrt_data
+
+    result = _compute_lmm_chunk_numpy(
+        lmm_mode=4,
+        n_cvt=1,
+        eigenvalues=eigenvalues,
+        Uab_batch=Uab_batch,
+        n_samples=n_samples,
+        Hi_eval_null=Hi_eval_null,
+        logl_H0=logl_H0,
+        n_threads=1,
+    )
+
+    expected_keys = [
+        "lambdas",
+        "logls",
+        "betas",
+        "ses",
+        "pwalds",
+        "lambdas_mle",
+        "p_lrts",
+        "p_scores",
+    ]
+    for key in expected_keys:
+        assert result[key] is not None, f"Mode 4 result['{key}'] should not be None"
+        assert isinstance(result[key], np.ndarray), f"result['{key}'] should be ndarray"
+        assert result[key].shape == (Uab_batch.shape[0],), (
+            f"result['{key}'] shape mismatch: {result[key].shape}"
+        )

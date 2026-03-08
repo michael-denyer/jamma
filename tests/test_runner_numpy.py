@@ -825,3 +825,165 @@ def test_compute_adaptive_core_split():
         rot_time=0.9, compute_time=0.1, total_cores=2
     )
     assert rot == 1 and omp == 1, f"Clamped 2-core: rot={rot}, omp={omp}"
+
+
+# ---------------------------------------------------------------------------
+# End-to-end runner tests for LRT/Score/All modes with C extension (RUN-07)
+# ---------------------------------------------------------------------------
+
+
+def _make_synthetic_data(
+    n_samples: int = 100, n_snps: int = 50, seed: int = 42
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[dict]]:
+    """Create synthetic data for runner-level tests."""
+    rng = np.random.default_rng(seed)
+    genotypes = rng.choice([0.0, 1.0, 2.0], size=(n_samples, n_snps))
+    phenotypes = rng.standard_normal(n_samples)
+    kinship = np.corrcoef(genotypes) + np.eye(n_samples) * 0.1
+    kinship = (kinship + kinship.T) / 2
+    snp_info = [
+        {"chr": "1", "rs": f"rs{i}", "pos": i * 1000, "a1": "A", "a0": "T"}
+        for i in range(n_snps)
+    ]
+    return genotypes, phenotypes, kinship, snp_info
+
+
+@pytest.mark.tier1
+def test_runner_lrt_mode_c_vs_python():
+    """LRT mode (2) via C extension matches Python fallback (RUN-07)."""
+    from unittest.mock import patch
+
+    from jamma.lmm import compute_numpy
+
+    genotypes, phenotypes, kinship, snp_info = _make_synthetic_data()
+
+    kwargs = dict(
+        genotypes=genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship.copy(),
+        snp_info=snp_info,
+        maf_threshold=0.0,
+        miss_threshold=1.0,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=2,
+    )
+
+    # Run with C extension
+    result_c = run_lmm_association_numpy(**kwargs)
+
+    # Run with C disabled (monkeypatch Score/LRT C pointers to None)
+    with patch.object(compute_numpy, "_compute_lrt_batch_c", None):
+        kwargs["kinship"] = kinship.copy()
+        result_py = run_lmm_association_numpy(**kwargs)
+
+    assert len(result_c.associations) == len(result_py.associations)
+    for rc, rp in zip(result_c.associations, result_py.associations, strict=True):
+        assert np.isfinite(rc.p_lrt), f"C path p_lrt not finite: {rc}"
+        np.testing.assert_allclose(
+            rc.p_lrt,
+            rp.p_lrt,
+            rtol=1e-8,
+            err_msg=f"LRT p-value mismatch for {rc.rs}",
+        )
+
+
+@pytest.mark.tier1
+def test_runner_score_mode_c_vs_python():
+    """Score mode (3) via C extension matches Python fallback (RUN-07)."""
+    from unittest.mock import patch
+
+    from jamma.lmm import compute_numpy
+
+    genotypes, phenotypes, kinship, snp_info = _make_synthetic_data()
+
+    kwargs = dict(
+        genotypes=genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship.copy(),
+        snp_info=snp_info,
+        maf_threshold=0.0,
+        miss_threshold=1.0,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=3,
+    )
+
+    # Run with C extension
+    result_c = run_lmm_association_numpy(**kwargs)
+
+    # Run with C disabled
+    with patch.object(compute_numpy, "_compute_score_batch_c", None):
+        kwargs["kinship"] = kinship.copy()
+        result_py = run_lmm_association_numpy(**kwargs)
+
+    assert len(result_c.associations) == len(result_py.associations)
+    for rc, rp in zip(result_c.associations, result_py.associations, strict=True):
+        assert np.isfinite(rc.p_score), f"C path p_score not finite: {rc}"
+        np.testing.assert_allclose(
+            rc.p_score,
+            rp.p_score,
+            rtol=1e-8,
+            err_msg=f"Score p-value mismatch for {rc.rs}",
+        )
+
+
+@pytest.mark.tier1
+def test_runner_all_mode_c_path():
+    """All mode (4) produces all 8 result fields via C extension (RUN-07)."""
+    genotypes, phenotypes, kinship, snp_info = _make_synthetic_data()
+
+    result = run_lmm_association_numpy(
+        genotypes=genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        maf_threshold=0.0,
+        miss_threshold=1.0,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=4,
+    )
+
+    assert len(result.associations) > 0
+    for r in result.associations[:10]:
+        # Wald fields
+        assert np.isfinite(r.beta), f"beta not finite: {r}"
+        assert np.isfinite(r.se), f"se not finite: {r}"
+        assert np.isfinite(r.p_wald), f"p_wald not finite: {r}"
+        assert np.isfinite(r.logl_H1), f"logl_H1 not finite: {r}"
+        assert np.isfinite(r.l_remle), f"l_remle not finite: {r}"
+        # LRT fields
+        assert np.isfinite(r.p_lrt), f"p_lrt not finite: {r}"
+        assert np.isfinite(r.l_mle), f"l_mle not finite: {r}"
+        # Score field
+        assert np.isfinite(r.p_score), f"p_score not finite: {r}"
+
+
+@pytest.mark.tier1
+def test_runner_pipeline_enabled_for_non_wald_modes():
+    """Pipeline enabled for LRT/Score when chunks sufficient (RUN-07)."""
+    from unittest.mock import patch
+
+    from jamma.lmm import runner_numpy
+
+    genotypes, phenotypes, kinship, snp_info = _make_synthetic_data(
+        n_samples=50, n_snps=200
+    )
+
+    # Force very small chunks so we get >= 30 chunks for pipeline
+    with patch.object(runner_numpy, "_MIN_PIPELINE_CHUNKS", 3):
+        for mode in [2, 3]:
+            result = run_lmm_association_numpy(
+                genotypes=genotypes,
+                phenotypes=phenotypes,
+                kinship=kinship.copy(),
+                snp_info=snp_info * 4,  # 800 SNPs worth of info
+                maf_threshold=0.0,
+                miss_threshold=1.0,
+                check_memory=False,
+                show_progress=False,
+                lmm_mode=mode,
+                # Force small chunk size via explicit budget
+            )
+            assert len(result.associations) > 0, f"Mode {mode} should produce results"

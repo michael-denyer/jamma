@@ -27,6 +27,7 @@ from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.io import write_assoc_results
 from jamma.lmm.loco import run_lmm_loco
+from jamma.lmm.runner import ExecutionPlan, run_lmm, select_execution_mode
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.schema import LmmConfig, LmmRunResult
 from jamma.lmm.stats import AssocResult
@@ -41,8 +42,11 @@ if _HAS_JAX:
 
 __all__ = [
     "auto_tune_chunk_size",
+    "ExecutionPlan",
+    "run_lmm",
     "run_lmm_association_numpy",
     "run_lmm_loco",
+    "select_execution_mode",
     "AssocResult",
     "eigendecompose_kinship",
     "LmmConfig",

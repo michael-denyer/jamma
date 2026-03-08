@@ -7,7 +7,7 @@ memory sizes.
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -204,11 +204,63 @@ class TestCliMemoryCheckUnit:
 
 @pytest.mark.tier0
 class TestCliStreamingRunner:
-    """Tests for CLI lmm command JAX streaming runner integration."""
+    """Tests for CLI lmm command JAX runner integration."""
 
-    def test_cli_jax_default_uses_streaming_runner(self, tmp_path):
-        """Verify CLI calls run_lmm_association_streaming when backend=jax."""
-        with patch("jamma.lmm.run_lmm_association_streaming") as mock_stream:
+    def test_cli_jax_small_dataset_uses_batch_runner(self, tmp_path):
+        """Verify CLI calls run_lmm_association_jax (batch) for small datasets.
+
+        With the unified backend selection, small datasets that fit in memory
+        use batch JAX instead of always streaming. The test fixture (100 samples,
+        500 SNPs) is small enough to fit in memory.
+        """
+        with patch("jamma.lmm.run_lmm_association_jax") as mock_batch:
+            mock_batch.return_value = LmmRunResult(associations=[])
+
+            runner.invoke(
+                main,
+                [
+                    "-outdir",
+                    str(tmp_path),
+                    "-o",
+                    "lmm_test",
+                    "-lmm",
+                    "1",
+                    "-bfile",
+                    str(PLINK_PREFIX),
+                    "-k",
+                    str(KINSHIP_FILE),
+                    "--no-check-memory",
+                    "--backend",
+                    "jax",
+                ],
+            )
+
+            assert mock_batch.called
+            call_kwargs = mock_batch.call_args.kwargs
+            # Batch JAX receives genotypes and snp_info
+            assert "genotypes" in call_kwargs
+            assert "snp_info" in call_kwargs
+            # JAX path uses LmmConfig — check_memory=False is inside config
+            config = call_kwargs["config"]
+            assert config.check_memory is False
+
+    def test_cli_jax_large_dataset_uses_streaming_runner(self, tmp_path):
+        """Verify CLI calls run_lmm_association_streaming for large datasets.
+
+        When memory is insufficient, JAX backend falls back to streaming.
+        """
+        insufficient = MagicMock()
+        insufficient.sufficient = False
+        insufficient.total_gb = 500.0
+        insufficient.available_gb = 10.0
+
+        with (
+            patch("jamma.lmm.run_lmm_association_streaming") as mock_stream,
+            patch(
+                "jamma.lmm.runner.estimate_lmm_memory",
+                return_value=insufficient,
+            ),
+        ):
             mock_stream.return_value = (LmmRunResult(associations=[]), 0)
 
             runner.invoke(
@@ -235,7 +287,6 @@ class TestCliStreamingRunner:
             assert "output_path" in call_kwargs
             assert call_kwargs["output_path"] is not None
             assert str(call_kwargs["output_path"]).endswith(".assoc.txt")
-            # JAX path uses LmmConfig — check_memory=False is inside config
             config = call_kwargs["config"]
             assert config.check_memory is False
             assert call_kwargs["snp_info"] is None

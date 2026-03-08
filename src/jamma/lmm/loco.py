@@ -698,6 +698,9 @@ def run_lmm_loco(
             f"Found only {len(unique_chrs)} chromosome(s): {unique_chrs}"
         )
 
+    # Log the actual backend being used (not a re-derived plan, which could diverge)
+    logger.info(f"LOCO backend: {backend}")
+
     if show_progress:
         logger.info("Performing LOCO LMM Association Test")
         logger.info(f"  Total individuals: {n_samples_total:,}")
@@ -843,6 +846,10 @@ def run_lmm_loco(
                 del K_loco_valid
                 gc.collect()
 
+                logger.debug(
+                    f"  chr {chr_name}: {backend} backend, {len(chr_snp_indices)} SNPs"
+                )
+
                 if backend == "numpy":
                     chr_results, chr_pve, chr_pve_se = _run_lmm_for_chromosome_numpy(
                         bed_path=bed_path,
@@ -866,7 +873,9 @@ def run_lmm_loco(
                         snp_stats_cache=snp_stats_cache,
                         compute_pve=(first_chr_pve is None),
                     )
-                else:
+                elif backend == "jax":
+                    # JAX path: always uses streaming internally
+                    # (batch JAX for LOCO is out of scope)
                     chr_results, chr_pve, chr_pve_se = _run_lmm_for_chromosome(
                         bed_path=bed_path,
                         chr_snp_indices=chr_snp_indices,
@@ -886,6 +895,10 @@ def run_lmm_loco(
                         col_chunk_size=col_chunk_size,
                         writer=writer,
                         compute_pve=(first_chr_pve is None),
+                    )
+                else:
+                    raise ValueError(
+                        f"Unknown LOCO backend: {backend!r}. Must be 'numpy' or 'jax'."
                     )
 
                 if writer is None:

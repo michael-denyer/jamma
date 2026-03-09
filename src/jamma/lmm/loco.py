@@ -904,7 +904,9 @@ def run_lmm_loco(
                     )
 
                 # Create eigen output directory before the loop (once, not per-chr).
-                if write_eigen and eigen_dir is not None:
+                # (eigen_dir is guaranteed non-None when write_eigen is True
+                # by the early guard at the top of this function.)
+                if write_eigen:
                     try:
                         eigen_dir.mkdir(parents=True, exist_ok=True)
                     except OSError as e:
@@ -995,7 +997,7 @@ def run_lmm_loco(
                     gc.collect()
 
                     # Write eigen files if requested.
-                    if write_eigen and eigen_dir is not None:
+                    if write_eigen:
                         try:
                             write_eigen_files(
                                 eigenvalues_np,

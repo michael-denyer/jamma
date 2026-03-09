@@ -145,6 +145,10 @@ result = gwas("data/my_study", kinship_file="k.txt", covariate_file="covars.txt"
 # LOCO analysis (leave-one-chromosome-out)
 result = gwas("data/my_study", loco=True)
 
+# LOCO with eigen caching (skip eigendecomp on subsequent runs)
+result = gwas("data/my_study", loco=True, write_eigen=True, eigen_dir="output/eigen")
+result = gwas("data/my_study", loco=True, eigen_dir="output/eigen")  # reuses cache
+
 # Multi-phenotype with eigendecomp reuse (Python API)
 result = gwas("data/my_study", write_eigen=True, phenotype_column=1)
 result = gwas("data/my_study", eigenvalue_file="output/result.eigenD.npy",
@@ -277,6 +281,7 @@ The large speedup has two sources: (1) JAMMA computes per-chromosome LOCO kinshi
 - [x] Binary `.npy` I/O — default for kinship and eigen files; `--legacy-text` for GEMMA text format
 - [x] Multi-phenotype support — `-n "1 2 3"` with single eigendecomposition reuse
 - [x] Eigendecomposition reuse — manual via `-d`/`-u`/`-eigen`, automatic in multi-phenotype mode
+- [x] LOCO eigen caching — `--eigen-dir` saves/loads per-chromosome eigen files across runs
 - [x] Phenotype column selection (`-n`)
 - [x] SNP subset selection for association and kinship (`-snps`/`-ksnps`)
 - [x] HWE QC filtering (`-hwe`)

@@ -5,6 +5,22 @@ All notable changes to JAMMA will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - 2026-03-09
+
+### Added
+
+- LOCO per-chromosome eigen cache (`--eigen-dir`) — saves eigendecomposition
+  results per chromosome and reloads them on subsequent runs, skipping both
+  kinship computation and eigendecomposition entirely
+- `_find_loco_eigen_cache()` helper validates cache completeness before use;
+  partial or missing caches fall back to full compute transparently
+- `-eigen` flag now works with `-lmm -loco` to write per-chromosome eigen files
+  (previously only supported with `-gk`)
+- `write_eigen`, `eigen_dir`, `eigen_prefix` parameters on `run_lmm_loco()`
+- Dimension validation on cached eigen load with chromosome-contextual errors
+- `-d`/`-u` (pre-computed global eigen) now blocked with `-loco` with clear
+  error message directing users to `--eigen-dir`
+
 ## [3.1.0] - 2026-03-07
 
 ### Added

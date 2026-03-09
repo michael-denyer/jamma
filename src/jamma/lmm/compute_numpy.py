@@ -1,13 +1,16 @@
 """NumPy mode dispatch for LMM chunk computation.
 
-Dispatches to C extension (_lmm_accel) for Wald (batch/workspace),
-Score (batch), and LRT (batch) when available and n_cvt=1; falls back
-to NumPy Python path for n_cvt>1 or when C functions are unavailable.
+Dispatches to C extension (_lmm_accel) for Wald (batch/workspace/split),
+Score (batch), LRT (batch), and fused mode-4 when available. Supports
+n_cvt=1 (split/batch paths) and n_cvt>1 up to 20 (general workspace path).
+Falls back to NumPy Python path when C functions are unavailable or n_cvt>20.
 Also exports split-workspace and general-workspace APIs for direct use
 by runners. No JAX imports.
 
 The caller is responsible for:
-- Computing Uab_batch via batch_compute_uab_numpy (before calling this)
+- Computing Uab in the appropriate format: Uab_batch (n_snps, n_samples,
+  n_index) for chunk dispatch, or SoA-layout arrays (uab_varying_soa,
+  uab_invariant_soa) for workspace-based paths.
 - There is no async dispatch in the NumPy backend — results are immediately
   available after the call returns.
 """

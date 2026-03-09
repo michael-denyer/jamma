@@ -4403,9 +4403,12 @@ static PyObject *compute_mode4_chunk_split_c_py(
 
     Py_END_ALLOW_THREADS
 
-    /* Free per-thread scratch buffers */
+    /* Free per-thread scratch buffers before any Python calls that might
+     * raise (warn_betainc_convergence can raise if warnings are errors).
+     * Buffers are only used inside the GIL-released compute loop above. */
     for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]);
     free(thread_bufs);
+    thread_bufs = NULL;
 
     if (warn_betainc_convergence(out_betas, out_pwalds, n_snps) < 0)
         goto err_output;

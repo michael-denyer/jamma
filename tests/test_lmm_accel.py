@@ -2464,3 +2464,35 @@ def test_mode4_fused_degenerate_snps(score_lrt_data):
     assert np.all(np.isfinite(cr["p_lrts"][1:][finite_lrts])), (
         "non-degenerate p_lrts should be finite"
     )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+def test_mode4_fused_rejects_wald_workspace(score_lrt_data):
+    """Passing a Wald (mode=0) workspace to fused mode-4 compute raises ValueError."""
+    from jamma.lmm.compute_numpy import (
+        _C_MODE4_AVAILABLE,
+        _C_SPLIT_AVAILABLE,
+        compute_mode4_split_c_ws,
+        create_lmm_workspace,
+    )
+
+    if not _C_MODE4_AVAILABLE or not _C_SPLIT_AVAILABLE:
+        pytest.skip("Mode-4 fused or split C extension not available")
+
+    eigenvalues, Uab_batch, n_samples, Hi_eval_null, logl_H0 = score_lrt_data
+
+    uab_inv_soa = np.stack(
+        [Uab_batch[0, :, 0], Uab_batch[0, :, 2], Uab_batch[0, :, 5]], axis=0
+    )
+    uab_var_soa = np.stack(
+        [Uab_batch[:, :, 1], Uab_batch[:, :, 3], Uab_batch[:, :, 4]], axis=1
+    )
+
+    # Create a standard Wald workspace (mode=0)
+    wald_ws = create_lmm_workspace(
+        eigenvalues, uab_inv_soa, n_samples, 1e-5, 1e5, 50, 20, 1
+    )
+
+    with pytest.raises(ValueError, match="mode-4 workspace"):
+        compute_mode4_split_c_ws(wald_ws, uab_var_soa, 1)

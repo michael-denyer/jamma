@@ -398,6 +398,40 @@ def test_chunk_size_mode4_fused_uses_4col():
     )
 
 
+@pytest.mark.tier1
+def test_runner_mode4_uses_fused_dispatch():
+    """Mode 4 with C extension uses fused dispatch, not compose fallback."""
+    from unittest.mock import patch
+
+    from jamma.lmm import runner_numpy
+    from jamma.lmm.compute_numpy import _C_MODE4_AVAILABLE
+
+    if not _C_MODE4_AVAILABLE:
+        pytest.skip("Fused mode-4 C extension not available")
+
+    genotypes, phenotypes, kinship, snp_info = _make_synthetic_data()
+
+    with patch.object(
+        runner_numpy,
+        "_compose_mode4_results",
+        wraps=runner_numpy._compose_mode4_results,
+    ) as mock_compose:
+        run_lmm_association_numpy(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=kinship,
+            snp_info=snp_info,
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            check_memory=False,
+            show_progress=False,
+            lmm_mode=4,
+        )
+        assert mock_compose.call_count == 0, (
+            "Fused mode-4 should not fall back to _compose_mode4_results"
+        )
+
+
 # ---------------------------------------------------------------------------
 # GEMMA validation tests
 # ---------------------------------------------------------------------------

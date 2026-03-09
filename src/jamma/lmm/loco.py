@@ -943,8 +943,8 @@ def run_lmm_loco(
                         eigenvalues_np, U = read_eigen_files(
                             d_path, u_path, n_samples=n_valid
                         )
-                    except ValueError as e:
-                        raise ValueError(
+                    except (ValueError, FileNotFoundError) as e:
+                        raise type(e)(
                             f"LOCO eigen cache for chromosome {chr_name}: {e}"
                         ) from e
                 else:

@@ -1,13 +1,16 @@
 """NumPy mode dispatch for LMM chunk computation.
 
-Dispatches to C extension (_lmm_accel) for Wald (batch/workspace),
-Score (batch), and LRT (batch) when available and n_cvt=1; falls back
-to NumPy Python path for n_cvt>1 or when C functions are unavailable.
+Dispatches to C extension (_lmm_accel) for Wald (batch/workspace/split),
+Score (batch), LRT (batch), and fused mode-4 when available. Supports
+n_cvt=1 (split/batch paths) and n_cvt>1 up to 20 (general workspace path).
+Falls back to NumPy Python path when C functions are unavailable or n_cvt>20.
 Also exports split-workspace and general-workspace APIs for direct use
 by runners. No JAX imports.
 
 The caller is responsible for:
-- Computing Uab_batch via batch_compute_uab_numpy (before calling this)
+- Computing Uab in the appropriate format: Uab_batch (n_snps, n_samples,
+  n_index) for chunk dispatch, or SoA-layout arrays (uab_varying_soa,
+  uab_invariant_soa) for workspace-based paths.
 - There is no async dispatch in the NumPy backend — results are immediately
   available after the call returns.
 """
@@ -29,7 +32,7 @@ from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_split_ncvt1_numpy,
 )
 
-_EXPECTED_ABI_VERSION = 5  # Must match ABI_VERSION in _lmm_accel.c
+_EXPECTED_ABI_VERSION = 6  # Must match ABI_VERSION in _lmm_accel.c
 
 
 def _try_import_accel() -> tuple[
@@ -37,6 +40,9 @@ def _try_import_accel() -> tuple[
     bool,
     bool,
     bool,
+    bool,
+    object,
+    object,
     object,
     object,
     object,
@@ -50,16 +56,21 @@ def _try_import_accel() -> tuple[
 
     Returns:
         (accel_available, split_available, general_available, has_openmp,
+         mode4_available,
          compute_batch_c, compute_batch_split_c,
          create_workspace_split_c, compute_lmm_chunk_split_c,
          create_workspace_general_c, compute_lmm_chunk_general_c,
-         compute_score_batch_c, compute_lrt_batch_c)
+         compute_score_batch_c, compute_lrt_batch_c,
+         create_workspace_mode4_split_c, compute_mode4_chunk_split_c)
     """
-    _none12 = (
+    _none15 = (
         False,
         False,
         False,
         False,
+        False,
+        None,
+        None,
         None,
         None,
         None,
@@ -86,7 +97,7 @@ def _try_import_accel() -> tuple[
         from loguru import logger
 
         logger.debug(f"C extension import failed: {e}")
-        return _none12
+        return _none15
     except AttributeError as e:
         from loguru import logger
 
@@ -94,7 +105,7 @@ def _try_import_accel() -> tuple[
             f"C extension loaded but missing expected attribute: {e}. "
             "Stale .so may need recompilation."
         )
-        return _none12
+        return _none15
 
     if abi != _EXPECTED_ABI_VERSION:
         from loguru import logger
@@ -104,7 +115,7 @@ def _try_import_accel() -> tuple[
             f"compiled={abi}, expected={_EXPECTED_ABI_VERSION}. "
             "Stale .so needs recompilation."
         )
-        return _none12
+        return _none15
 
     # General n_cvt support — expected since ABI v4
     try:
@@ -156,11 +167,33 @@ def _try_import_accel() -> tuple[
         )
         lrt_batch_c = None
 
+    # Fused mode-4 workspace support — expected in ABI v6+
+    try:
+        from jamma.lmm._lmm_accel import (
+            compute_mode4_chunk_split_c as mode4_chunk_c,
+        )
+        from jamma.lmm._lmm_accel import (
+            create_workspace_mode4_split_c as mode4_ws_create,
+        )
+
+        mode4_available = True
+    except AttributeError:
+        from loguru import logger
+
+        logger.warning(
+            "C extension missing mode-4 fused functions. "
+            "Mode 4 will use reconstruct+compose fallback."
+        )
+        mode4_ws_create = None
+        mode4_chunk_c = None
+        mode4_available = False
+
     return (
         True,
         True,
         general_available,
         has_omp,
+        mode4_available,
         batch_c,
         batch_split_c,
         ws_create,
@@ -169,6 +202,8 @@ def _try_import_accel() -> tuple[
         ws_gen_chunk,
         score_batch_c,
         lrt_batch_c,
+        mode4_ws_create,
+        mode4_chunk_c,
     )
 
 
@@ -190,6 +225,7 @@ def _auto_recompile() -> bool:
     _C_SPLIT_AVAILABLE,
     _C_GENERAL_AVAILABLE,
     _C_HAS_OPENMP,
+    _C_MODE4_AVAILABLE,
     _compute_lmm_batch_c,
     _compute_lmm_batch_split_c,
     _create_workspace_split_c,
@@ -198,6 +234,8 @@ def _auto_recompile() -> bool:
     _compute_lmm_chunk_general_c,
     _compute_score_batch_c,
     _compute_lrt_batch_c,
+    _create_workspace_mode4_split_c,
+    _compute_mode4_chunk_split_c,
 ) = _try_import_accel()
 
 if not _C_ACCEL_AVAILABLE:
@@ -208,6 +246,7 @@ if not _C_ACCEL_AVAILABLE:
             _C_SPLIT_AVAILABLE,
             _C_GENERAL_AVAILABLE,
             _C_HAS_OPENMP,
+            _C_MODE4_AVAILABLE,
             _compute_lmm_batch_c,
             _compute_lmm_batch_split_c,
             _create_workspace_split_c,
@@ -216,6 +255,8 @@ if not _C_ACCEL_AVAILABLE:
             _compute_lmm_chunk_general_c,
             _compute_score_batch_c,
             _compute_lrt_batch_c,
+            _create_workspace_mode4_split_c,
+            _compute_mode4_chunk_split_c,
         ) = _try_import_accel()
 
     if not _C_ACCEL_AVAILABLE:
@@ -230,6 +271,7 @@ if not _C_ACCEL_AVAILABLE:
         del _logger
         _C_HAS_OPENMP = False
         _C_GENERAL_AVAILABLE = False
+        _C_MODE4_AVAILABLE = False
 
 
 class WaldResult(TypedDict):
@@ -395,6 +437,85 @@ def compute_wald_split_c_ws(
         WaldResult with keys: lambdas, logls, betas, ses, pwalds.
     """
     return _compute_lmm_chunk_split_c(workspace, uab_varying_soa, n_threads)
+
+
+def create_lmm_workspace_mode4(
+    eigenvalues: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+    n_samples: int,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+    n_threads: int,
+    hi_eval_null: np.ndarray,
+    logl_H0: float,
+) -> object:
+    """Create a persistent C workspace for fused mode-4 (Score+Wald+LRT).
+
+    Extends the Wald workspace with null-model Hi_eval and MLE fields,
+    enabling the fused kernel to compute all three test statistics in a
+    single OpenMP loop without Uab reconstruction.
+
+    Args:
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        uab_invariant_soa: Invariant Uab (3, n_samples) -- rows [ww, wy, yy].
+        n_samples: Number of samples.
+        l_min: Minimum lambda.
+        l_max: Maximum lambda.
+        n_grid: Number of coarse grid points.
+        n_refine: Golden section iterations.
+        n_threads: OpenMP thread count.
+        hi_eval_null: Null-model Hi_eval (n_samples,).
+        logl_H0: Null model MLE log-likelihood.
+
+    Returns:
+        PyCapsule wrapping mode-4 lmm_workspace_t.
+    """
+    if _create_workspace_mode4_split_c is None:
+        raise RuntimeError(
+            "Fused mode-4 C workspace requires the _lmm_accel C extension "
+            "with ABI version 6+. Recompile: python -m jamma.lmm._compile_accel"
+        )
+    return _create_workspace_mode4_split_c(
+        eigenvalues,
+        uab_invariant_soa,
+        n_samples,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        n_threads,
+        hi_eval_null,
+        logl_H0,
+    )
+
+
+def compute_mode4_split_c_ws(
+    workspace: object,
+    uab_varying_soa: np.ndarray,
+    n_threads: int,
+) -> dict[str, np.ndarray]:
+    """Compute fused mode-4 (Score+Wald+LRT) for one chunk using a workspace.
+
+    Single-pass fused kernel: no Uab reconstruction, no separate Score/LRT
+    calls. Returns all 8 output arrays directly from the C extension.
+
+    Args:
+        workspace: PyCapsule from create_lmm_workspace_mode4.
+        uab_varying_soa: SNP-varying Uab (n_snps, 3, n_samples) -- SoA layout.
+        n_threads: OpenMP thread count.
+
+    Returns:
+        Dict with keys: lambdas, logls, betas, ses, pwalds,
+        p_scores, lambdas_mle, p_lrts.
+    """
+    if _compute_mode4_chunk_split_c is None:
+        raise RuntimeError(
+            "Fused mode-4 C compute requires the _lmm_accel C extension "
+            "with ABI version 6+. Recompile: python -m jamma.lmm._compile_accel"
+        )
+    return _compute_mode4_chunk_split_c(workspace, uab_varying_soa, n_threads)
 
 
 def create_lmm_workspace_general(

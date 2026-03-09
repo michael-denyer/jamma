@@ -90,3 +90,20 @@ def compute_lrt_batch_c(
     logl_H0: float,
     n_threads: int,
 ) -> dict[str, npt.NDArray[np.float64]]: ...
+def create_workspace_mode4_split_c(
+    eigenvalues: npt.NDArray[np.float64],
+    uab_invariant: npt.NDArray[np.float64],
+    n_samples: int,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+    n_threads: int,
+    hi_eval_null: npt.NDArray[np.float64],
+    logl_H0: float,
+) -> object: ...
+def compute_mode4_chunk_split_c(
+    workspace: object,
+    uab_varying: npt.NDArray[np.float64],
+    n_threads: int,
+) -> dict[str, npt.NDArray[np.float64]]: ...

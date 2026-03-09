@@ -26,13 +26,16 @@ from jamma.core.threading import (
 from jamma.lmm.compute_numpy import (
     _C_ACCEL_AVAILABLE,
     _C_GENERAL_AVAILABLE,
+    _C_MODE4_AVAILABLE,
     _C_SPLIT_AVAILABLE,
     LmmMode,
     _compute_lmm_chunk_numpy,
+    compute_mode4_split_c_ws,
     compute_wald_general_c_ws,
     compute_wald_split_c_ws,
     create_lmm_workspace,
     create_lmm_workspace_general,
+    create_lmm_workspace_mode4,
 )
 from jamma.lmm.likelihood_numpy import (
     batch_compute_uab_numpy,
@@ -199,6 +202,7 @@ def _compute_chunk_size_numpy(
     *,
     use_split: bool = False,
     lmm_mode: int = 1,
+    fused_mode4: bool = False,
     mem_budget_bytes: int | None = None,
     pipeline_buffers: int = 1,
 ) -> int:
@@ -215,6 +219,8 @@ def _compute_chunk_size_numpy(
         lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All). Affects
             memory accounting: Wald uses 4 cols/SNP (3 varying + 1 UtG),
             non-Wald uses 9 cols/SNP (3 varying + 6 reconstructed Uab peak).
+        fused_mode4: If True, mode-4 uses fused C kernel (4-col accounting,
+            same as Wald) instead of reconstruct+compose (9-col).
         mem_budget_bytes: Explicit per-chunk memory budget in bytes.
             None (default) auto-scales with available RAM.
         pipeline_buffers: Number of live chunks (1 for sequential,
@@ -231,8 +237,8 @@ def _compute_chunk_size_numpy(
         raise ValueError(f"pipeline_buffers must be >= 1, got {pipeline_buffers}")
 
     if use_split and n_cvt == 1:
-        if lmm_mode == 1:
-            # Wald split path: 3 varying columns + 1 UtG column per SNP
+        if lmm_mode == 1 or (lmm_mode == 4 and fused_mode4):
+            # Wald split or fused mode-4: 3 varying columns + 1 UtG per SNP
             bytes_per_snp = n_samples * 4 * 8
         else:
             # Non-Wald split: reconstruct_uab_from_soa allocates 6-col Uab
@@ -476,12 +482,17 @@ def run_lmm_association_numpy(
         _C_GENERAL_AVAILABLE and n_cvt > 1 and lmm_mode == 1
     )
 
+    # Fused mode-4: single-pass Score+Wald+LRT from SoA data (no Uab
+    # reconstruction).  Only for n_cvt=1 with mode-4 C kernel available.
+    use_fused_mode4 = use_split and lmm_mode == 4 and n_cvt == 1 and _C_MODE4_AVAILABLE
+
     chunk_size = _compute_chunk_size_numpy(
         n_samples,
         n_filtered,
         n_cvt,
         use_split=use_split,
         lmm_mode=lmm_mode,
+        fused_mode4=use_fused_mode4,
     )
     n_chunks = (n_filtered + chunk_size - 1) // chunk_size
 
@@ -501,6 +512,7 @@ def run_lmm_association_numpy(
             n_cvt,
             use_split=use_split,
             lmm_mode=lmm_mode,
+            fused_mode4=use_fused_mode4,
             pipeline_buffers=2,
         )
         n_chunks = (n_filtered + chunk_size - 1) // chunk_size
@@ -605,8 +617,22 @@ def run_lmm_association_numpy(
     # Create Wald workspace for modes 1 (Wald) and 4 (All) — both need
     # REML Wald statistics. Modes 2 (LRT) and 3 (Score) don't need a
     # Wald workspace; they reconstruct Uab and call C batch functions.
+    # Fused mode-4 workspace extends Wald with null-model fields.
     if use_split and lmm_mode in (1, 4):
-        if n_cvt == 1:
+        if use_fused_mode4:
+            lmm_workspace = create_lmm_workspace_mode4(
+                eigenvalues_np,
+                uab_invariant_soa,
+                n_samples,
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+                pipeline_omp_threads,
+                Hi_eval_null,
+                logl_H0,
+            )
+        elif n_cvt == 1:
             lmm_workspace = create_lmm_workspace(
                 eigenvalues_np,
                 uab_invariant_soa,
@@ -666,7 +692,8 @@ def run_lmm_association_numpy(
 
         Dispatches by lmm_mode:
         - Mode 1 (Wald): C workspace path (no Uab reconstruction)
-        - Mode 4 (All): Wald via workspace + Score/LRT via reconstructed Uab
+        - Mode 4 fused: single-pass Score+Wald+LRT via mode-4 workspace
+        - Mode 4 fallback: Wald via workspace + Score/LRT via reconstructed Uab
         - Modes 2, 3 (LRT, Score): Reconstruct Uab, C batch dispatch
         """
         nonlocal write_offset, t_numpy_compute_total, t_result_write_total
@@ -674,7 +701,23 @@ def run_lmm_association_numpy(
 
         t_compute_start = time.perf_counter()
 
-        if lmm_mode in (1, 4) and lmm_workspace is not None:
+        if use_fused_mode4 and lmm_workspace is not None:
+            # Fused mode-4: single C call for all 8 output arrays
+            try:
+                cr = compute_mode4_split_c_ws(
+                    lmm_workspace,
+                    uab_var_soa,
+                    pipeline_omp_threads,
+                )
+            except (MemoryError, ValueError, TypeError, OverflowError):
+                raise
+            except Exception as exc:
+                raise RuntimeError(
+                    f"C extension compute failed at SNP offset "
+                    f"{write_offset}/{n_filtered}. "
+                    f"Processed {write_offset} SNPs before failure."
+                ) from exc
+        elif lmm_mode in (1, 4) and lmm_workspace is not None:
             # Wald via workspace
             try:
                 if n_cvt == 1:
@@ -701,7 +744,7 @@ def run_lmm_association_numpy(
             if lmm_mode == 1:
                 cr = wald_cr
             else:
-                # Mode 4: Wald from workspace, Score+LRT from reconstructed Uab
+                # Mode 4 fallback: Wald from workspace, Score+LRT from reconstructed Uab
                 Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_var_soa)
                 blas_ctx = blas_threads(1) if _C_ACCEL_AVAILABLE else nullcontext()
                 with blas_ctx:
@@ -973,7 +1016,31 @@ def run_lmm_association_numpy(
                         n_cvt, UtW, Uty, UtG
                     )
                     del UtG
-                    if lmm_mode == 1 and lmm_workspace is not None:
+                    if use_fused_mode4 and lmm_workspace is not None:
+                        # Fused mode-4: single C call for all 8 arrays
+                        with blas_threads(1):
+                            try:
+                                cr = compute_mode4_split_c_ws(
+                                    lmm_workspace,
+                                    uab_var_soa,
+                                    omp_threads,
+                                )
+                            except (
+                                MemoryError,
+                                ValueError,
+                                TypeError,
+                                OverflowError,
+                            ):
+                                raise
+                            except Exception as exc:
+                                raise RuntimeError(
+                                    f"C extension compute failed at SNP "
+                                    f"offset {write_offset}/{n_filtered}. "
+                                    f"Processed {write_offset} SNPs "
+                                    f"before failure."
+                                ) from exc
+                        del uab_var_soa
+                    elif lmm_mode == 1 and lmm_workspace is not None:
                         # Wald: use C workspace (no full Uab needed)
                         with blas_threads(1):
                             try:
@@ -1005,8 +1072,7 @@ def run_lmm_association_numpy(
                                 ) from exc
                         del uab_var_soa
                     elif lmm_mode == 4 and lmm_workspace is not None:
-                        # All: Wald via workspace, Score+LRT via reconstructed Uab.
-                        # Call Score and LRT separately to avoid redundant Wald.
+                        # Mode 4 fallback: Wald workspace + Score/LRT reconstructed Uab
                         Uab_batch = reconstruct_uab_from_soa(
                             uab_invariant_soa, uab_var_soa
                         )

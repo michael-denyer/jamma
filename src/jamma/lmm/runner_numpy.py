@@ -9,6 +9,7 @@ import gc
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
+from pathlib import Path
 
 import numpy as np
 import psutil
@@ -51,8 +52,10 @@ from jamma.lmm.results import (
     _build_results,
     count_lambda_boundary_hits,
     log_lambda_boundary_warning,
+    write_streaming_chunk,
 )
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
+from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.schema import LmmConfig, LmmRunResult
 from jamma.utils.logging import log_rss_memory
 
@@ -285,6 +288,8 @@ def run_lmm_association_numpy(
     show_progress: bool = True,
     lmm_mode: LmmMode = 1,
     config: LmmConfig | None = None,
+    output_path: Path | None = None,
+    clear_caches: bool = True,
 ) -> LmmRunResult:
     """Run LMM association tests using pure-NumPy batch processing.
 
@@ -295,10 +300,11 @@ def run_lmm_association_numpy(
     Args:
         genotypes: Genotype matrix (n_samples, n_snps) with values 0, 1, 2.
         phenotypes: Phenotype vector (n_samples,).
-        kinship: Kinship matrix (n_samples, n_samples). WARNING: may be
-            overwritten in-place during eigendecomposition (buffer reused for
-            eigenvectors). Treat as consumed; pass kinship.copy() if you need
-            the original matrix after this call.
+        kinship: Kinship matrix (n_samples, n_samples) or None when
+            pre-computed eigenvalues/eigenvectors are provided. WARNING: may
+            be overwritten in-place during eigendecomposition (buffer reused
+            for eigenvectors). Treat as consumed; pass kinship.copy() if you
+            need the original matrix after this call.
         snp_info: List of dicts with keys: chr, rs, pos, a1, a0.
         covariates: Covariate matrix (n_samples, n_cvt) or None for intercept-only.
         eigenvalues: Pre-computed eigenvalues (sorted ascending) or None.
@@ -314,9 +320,18 @@ def run_lmm_association_numpy(
         check_memory: Check available memory before workflow.
         show_progress: Show progress bars and GEMMA-style logging.
         lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
+        config: LmmConfig instance. When provided, overrides individual
+            threshold/mode kwargs above.
+        output_path: Path for per-chunk disk streaming. When set, results
+            are written incrementally and the returned LmmRunResult has
+            empty associations and n_tested populated instead.
+        clear_caches: Accepted for signature parity with JAX runners.
+            No-op — NumPy has no compilation caches.
 
     Returns:
         LmmRunResult with per-SNP associations and PVE from null model.
+            When output_path is set, associations is empty (results on
+            disk) and n_tested contains the count of SNPs written.
 
     Raises:
         MemoryError: If check_memory=True and insufficient memory.
@@ -402,7 +417,14 @@ def run_lmm_association_numpy(
             f"miss<{miss_threshold}). No association tests to run. "
             f"Consider relaxing --maf or --miss thresholds."
         )
-        return LmmRunResult(associations=[])
+        if output_path is not None:
+            from jamma.lmm.io import IncrementalAssocWriter
+
+            with IncrementalAssocWriter(
+                output_path, test_type=_TEST_TYPE_MAP[lmm_mode]
+            ):
+                pass  # Header-only file, matching streaming runner behavior
+        return LmmRunResult(associations=[], n_tested=0)
 
     # Extract filtered stats as numpy arrays (use allele_freqs for output, not mafs)
     filtered_afs = allele_freqs[snp_indices]
@@ -502,16 +524,34 @@ def run_lmm_association_numpy(
             logger.info(
                 f"  Processing in {n_chunks} chunks ({chunk_size:,} SNPs/chunk)"
             )
-    # Pre-allocate result arrays driven by _RESULT_FIELDS mapping
+    # Streaming mode: write per-chunk to disk, skip arrays_out allocation.
+    streaming = output_path is not None
+    if streaming:
+        from jamma.lmm.io import IncrementalAssocWriter
+
+        writer_ctx = IncrementalAssocWriter(
+            output_path, test_type=_TEST_TYPE_MAP[lmm_mode]
+        )
+        arrays_out = None
+    else:
+        writer_ctx = None
+        arrays_out = {
+            key: np.empty(n_filtered, dtype=np.float64)
+            for key in _RESULT_FIELDS[lmm_mode]
+        }
+
     write_offset = 0
-    arrays_out: dict[str, np.ndarray] = {
-        key: np.empty(n_filtered, dtype=np.float64) for key in _RESULT_FIELDS[lmm_mode]
-    }
 
     # Timing accumulators for per-chunk phases
     t_rotation_total = 0.0
     t_numpy_compute_total = 0.0
     t_result_write_total = 0.0
+
+    # Per-chunk diagnostic accumulators (used in streaming mode where
+    # arrays_out is not available for post-loop inspection).
+    nan_counts: dict[str, int] = {}
+    n_at_lmin_accum = 0
+    n_at_lmax_accum = 0
 
     chunk_starts = list(range(0, n_filtered, chunk_size))
 
@@ -611,7 +651,7 @@ def run_lmm_association_numpy(
             geno_chunk = np.where(missing, chunk_means[None, :], geno_chunk)
         del missing
 
-        # Rotate — always allocate fresh buffer (no shared UtG_buf in pipeline)
+        # Rotate — fresh buffer each call (pipeline path, not reusing UtG_buf)
         with blas_threads(pipeline_rot_threads):
             UtG = U.T @ geno_chunk
 
@@ -630,6 +670,7 @@ def run_lmm_association_numpy(
         - Modes 2, 3 (LRT, Score): Reconstruct Uab, C batch dispatch
         """
         nonlocal write_offset, t_numpy_compute_total, t_result_write_total
+        nonlocal n_at_lmin_accum, n_at_lmax_accum
 
         t_compute_start = time.perf_counter()
 
@@ -719,311 +760,360 @@ def run_lmm_association_numpy(
         t_numpy_compute_total += time.perf_counter() - t_compute_start
 
         t_write_start = time.perf_counter()
-        s = slice(write_offset, write_offset + actual_len)
-        for key in arrays_out:
-            arrays_out[key][s] = cr[key][:actual_len]
-        write_offset += actual_len
-        t_result_write_total += time.perf_counter() - t_write_start
-
-    if use_pipeline:
-        # Pipelined: overlap rotation of chunk N+1 with C compute of chunk N.
-        # Both operations release the GIL so they run concurrently.
-
-        # --- Profile first chunk for adaptive core split ---
-        # Prepare chunk 0 (rotation) and compute it inline to measure both
-        # stage durations. Re-derive thread split from measured times so
-        # remaining chunks use an empirically correct allocation.
-        t_rot_start = time.perf_counter()
-        uab_var_soa_first, actual_len_first = _prepare_chunk(chunk_starts[0])
-        t_first_rot = time.perf_counter() - t_rot_start
-        t_rotation_total += t_first_rot
-
-        t_compute_start = time.perf_counter()
-        _compute_and_write(uab_var_soa_first, actual_len_first)
-        t_first_compute = time.perf_counter() - t_compute_start
-        del uab_var_soa_first
-
-        # Re-derive core split from measured times (only if chunks remain and
-        # BLAS is controllable — uncontrollable BLAS ignores thread settings).
-        if n_chunks > 2 and is_blas_controllable():
-            old_rot = pipeline_rot_threads
-            old_omp = pipeline_omp_threads
-            pipeline_rot_threads, pipeline_omp_threads = compute_adaptive_core_split(
-                t_first_rot,
-                t_first_compute,
-                total_cores,
-                n_samples=n_samples,
-            )
-            if (pipeline_rot_threads, pipeline_omp_threads) != (old_rot, old_omp):
-                logger.debug(
-                    f"Adaptive core split: {old_rot}/{old_omp} -> "
-                    f"{pipeline_rot_threads}/{pipeline_omp_threads} "
-                    f"(rot={t_first_rot:.3f}s, compute={t_first_compute:.3f}s)"
-                )
-
-        # Process remaining chunks with the (possibly updated) adaptive split.
-        # remaining_starts is always non-empty: use_pipeline requires
-        # n_chunks >= _MIN_PIPELINE_CHUNKS (30), so at least 29 remain.
-        remaining_starts = chunk_starts[1:]
-
-        # Seed the pipeline by preparing the first remaining chunk.
-        # _prepare_chunk reads pipeline_rot_threads from this scope, so it
-        # uses the updated adaptive split from this point onward.
-        t_rot_start = time.perf_counter()
-        current = _prepare_chunk(remaining_starts[0])
-        t_rotation_total += time.perf_counter() - t_rot_start
-
-        # Progress tracking for the pipeline loop. Two chunks already
-        # processed (profiled chunk + seed chunk), so initialise at 2.
-        pipeline_bar = None
-        if show_progress and n_chunks > 1:
-            import sys
-
-            import progressbar as _pb
-
-            widgets = [
-                "LMM association: ",
-                _pb.Counter(),
-                f"/{n_chunks} ",
-                _pb.Percentage(),
-                " ",
-                _pb.Bar(),
-                " ",
-                _pb.Timer(),
-                " ",
-                _pb.ETA(),
-            ]
-            pipeline_bar = _pb.ProgressBar(
-                max_value=n_chunks, widgets=widgets, fd=sys.stdout
-            )
-            pipeline_bar.start()
-            pipeline_bar.update(2)  # profiled + seeded chunks
-
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            for i_chunk, chunk_start in enumerate(remaining_starts[1:], start=3):
-                uab_var_soa, actual_len = current
-
-                # Submit next chunk preparation (runs in background thread)
-                future = executor.submit(_prepare_chunk, chunk_start)
-
-                # C extension compute on current chunk (releases GIL).
-                # Cores are partitioned: rotation gets pipeline_rot_threads,
-                # compute gets pipeline_omp_threads.
-                _compute_and_write(uab_var_soa, actual_len)
-                del uab_var_soa
-
-                # Wait for background preparation to complete
-                t_rot_start = time.perf_counter()
-                try:
-                    current = future.result()
-                except (MemoryError, ValueError, TypeError, OverflowError):
-                    raise
-                except Exception as exc:
-                    raise RuntimeError(
-                        f"Pipeline chunk preparation failed at SNP offset "
-                        f"{write_offset}/{n_filtered} (chunk starting at "
-                        f"index {chunk_start}). "
-                        f"Processed {write_offset} SNPs before failure."
-                    ) from exc
-                t_rotation_total += time.perf_counter() - t_rot_start
-
-                if pipeline_bar is not None:
-                    pipeline_bar.update(i_chunk)
-
-            # Process last chunk (no next chunk to overlap with)
-            uab_var_soa, actual_len = current
-            _compute_and_write(uab_var_soa, actual_len)
-            del uab_var_soa
-
-        if pipeline_bar is not None:
-            pipeline_bar.update(n_chunks)
-            pipeline_bar.finish()
-    else:
-        # Sequential path (single chunk or non-pipeline execution)
-        if show_progress and n_chunks > 1:
-            chunk_iterator = progress_iterator(
-                chunk_starts, total=n_chunks, desc="LMM association"
+        if streaming:
+            chunk_arrays = {
+                key: cr[key][:actual_len] for key in _RESULT_FIELDS[lmm_mode]
+            }
+            n_at_lmin_accum, n_at_lmax_accum = write_streaming_chunk(
+                writer,
+                lmm_mode,
+                snp_indices[write_offset : write_offset + actual_len],
+                snp_info,
+                filtered_afs[write_offset : write_offset + actual_len],
+                filtered_miss[write_offset : write_offset + actual_len],
+                chunk_arrays,
+                l_min,
+                l_max,
+                nan_counts,
+                n_at_lmin_accum,
+                n_at_lmax_accum,
             )
         else:
-            chunk_iterator = iter(chunk_starts)
-
-        def _run_lmm_chunk(Uab_batch: np.ndarray) -> dict:
-            """Run LMM compute on a Uab batch with BLAS thread control."""
-            blas_ctx = blas_threads(1) if _C_ACCEL_AVAILABLE else nullcontext()
-            with blas_ctx:
-                try:
-                    return _compute_lmm_chunk_numpy(
-                        lmm_mode,
-                        n_cvt,
-                        eigenvalues_np,
-                        Uab_batch,
-                        n_samples,
-                        l_min=l_min,
-                        l_max=l_max,
-                        n_grid=n_grid,
-                        n_refine=n_refine,
-                        Hi_eval_null=Hi_eval_null,
-                        logl_H0=logl_H0,
-                        n_threads=omp_threads,
-                    )
-                except (MemoryError, ValueError, TypeError, OverflowError):
-                    raise
-                except Exception as exc:
-                    raise RuntimeError(
-                        f"LMM compute failed at SNP offset "
-                        f"{write_offset}/{n_filtered}. "
-                        f"Processed {write_offset} SNPs "
-                        f"before failure."
-                    ) from exc
-
-        for chunk_start in chunk_iterator:
-            chunk_end = min(chunk_start + chunk_size, n_filtered)
-            chunk_indices = snp_indices[chunk_start:chunk_end]
-            geno_chunk = genotypes[:, chunk_indices]
-
-            # Mean-impute missing genotypes
-            chunk_means = col_means[chunk_indices]
-            missing = np.isnan(geno_chunk)
-            if missing.any():  # RUN-06: skip O(n*chunk) np.where on clean data
-                geno_chunk = np.where(missing, chunk_means[None, :], geno_chunk)
-            del missing, chunk_means
-
-            # Rotate genotypes
-            t_rot_start = time.perf_counter()
-            actual_snps = geno_chunk.shape[1]
-            with blas_threads(rotation_threads):
-                if actual_snps == chunk_size:
-                    np.dot(U.T, geno_chunk, out=UtG_buf)
-                    UtG = UtG_buf
-                else:
-                    UtG = U.T @ geno_chunk
-            t_rotation_total += time.perf_counter() - t_rot_start
-            del geno_chunk
-
-            # Compute
-            t_compute_start = time.perf_counter()
-            if use_split:
-                # Build SoA-layout varying Uab only — invariant was precomputed once.
-                uab_var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG)
-                del UtG
-                if lmm_mode == 1 and lmm_workspace is not None:
-                    # Wald: use C workspace (no full Uab needed)
-                    with blas_threads(1):
-                        try:
-                            if n_cvt == 1:
-                                cr = compute_wald_split_c_ws(
-                                    lmm_workspace,
-                                    uab_var_soa,
-                                    omp_threads,
-                                )
-                            else:
-                                cr = compute_wald_general_c_ws(
-                                    lmm_workspace,
-                                    uab_var_soa,
-                                    omp_threads,
-                                )
-                        except (
-                            MemoryError,
-                            ValueError,
-                            TypeError,
-                            OverflowError,
-                        ):
-                            raise
-                        except Exception as exc:
-                            raise RuntimeError(
-                                f"C extension compute failed at SNP "
-                                f"offset {write_offset}/{n_filtered}. "
-                                f"Processed {write_offset} SNPs "
-                                f"before failure."
-                            ) from exc
-                    del uab_var_soa
-                elif lmm_mode == 4 and lmm_workspace is not None:
-                    # All: Wald via workspace, Score+LRT via reconstructed Uab.
-                    # Call Score and LRT separately to avoid redundant Wald.
-                    Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_var_soa)
-                    with blas_threads(1):
-                        try:
-                            if n_cvt == 1:
-                                wald_cr = compute_wald_split_c_ws(
-                                    lmm_workspace,
-                                    uab_var_soa,
-                                    omp_threads,
-                                )
-                            else:
-                                wald_cr = compute_wald_general_c_ws(
-                                    lmm_workspace,
-                                    uab_var_soa,
-                                    omp_threads,
-                                )
-                        except (
-                            MemoryError,
-                            ValueError,
-                            TypeError,
-                            OverflowError,
-                        ):
-                            raise
-                        except Exception as exc:
-                            raise RuntimeError(
-                                f"C extension compute failed at SNP "
-                                f"offset {write_offset}/{n_filtered}. "
-                                f"Processed {write_offset} SNPs "
-                                f"before failure."
-                            ) from exc
-                    del uab_var_soa
-                    # Score + LRT via C batch dispatch (no redundant Wald)
-                    with blas_threads(1):
-                        try:
-                            cr = _compose_mode4_results(
-                                wald_cr,
-                                n_cvt,
-                                eigenvalues_np,
-                                Uab_batch,
-                                n_samples,
-                                Hi_eval_null=Hi_eval_null,
-                                l_min=l_min,
-                                l_max=l_max,
-                                n_grid=n_grid,
-                                n_refine=n_refine,
-                                logl_H0=logl_H0,
-                                n_threads=omp_threads,
-                            )
-                        except (
-                            MemoryError,
-                            ValueError,
-                            TypeError,
-                            OverflowError,
-                        ):
-                            raise
-                        except Exception as exc:
-                            raise RuntimeError(
-                                f"C extension compute failed at SNP "
-                                f"offset {write_offset}/{n_filtered}. "
-                                f"Processed {write_offset} SNPs "
-                                f"before failure."
-                            ) from exc
-                    del Uab_batch
-                else:
-                    # LRT/Score (modes 2, 3): reconstruct Uab, C batch dispatch
-                    Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_var_soa)
-                    del uab_var_soa
-                    cr = _run_lmm_chunk(Uab_batch)
-                    del Uab_batch
-            else:
-                Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
-                del UtG
-                cr = _run_lmm_chunk(Uab_batch)
-                del Uab_batch
-            t_numpy_compute_total += time.perf_counter() - t_compute_start
-
-            # Write results
-            t_write_start = time.perf_counter()
-            actual_len = chunk_end - chunk_start
             s = slice(write_offset, write_offset + actual_len)
             for key in arrays_out:
                 arrays_out[key][s] = cr[key][:actual_len]
-            write_offset += actual_len
-            t_result_write_total += time.perf_counter() - t_write_start
-            del cr
+        write_offset += actual_len
+        t_result_write_total += time.perf_counter() - t_write_start
+
+    writer_cm = writer_ctx if streaming else nullcontext()
+
+    with writer_cm as writer:
+        if use_pipeline:
+            # Pipelined: overlap rotation of chunk N+1 with C compute of chunk N.
+            # Both operations release the GIL so they run concurrently.
+
+            # --- Profile first chunk for adaptive core split ---
+            # Prepare chunk 0 (rotation) and compute it inline to measure both
+            # stage durations. Re-derive thread split from measured times so
+            # remaining chunks use an empirically correct allocation.
+            t_rot_start = time.perf_counter()
+            uab_var_soa_first, actual_len_first = _prepare_chunk(chunk_starts[0])
+            t_first_rot = time.perf_counter() - t_rot_start
+            t_rotation_total += t_first_rot
+
+            t_compute_start = time.perf_counter()
+            _compute_and_write(uab_var_soa_first, actual_len_first)
+            t_first_compute = time.perf_counter() - t_compute_start
+            del uab_var_soa_first
+
+            # Re-derive core split from measured times (only if chunks remain and
+            # BLAS is controllable — uncontrollable BLAS ignores thread settings).
+            if n_chunks > 2 and is_blas_controllable():
+                old_rot = pipeline_rot_threads
+                old_omp = pipeline_omp_threads
+                pipeline_rot_threads, pipeline_omp_threads = (
+                    compute_adaptive_core_split(
+                        t_first_rot,
+                        t_first_compute,
+                        total_cores,
+                        n_samples=n_samples,
+                    )
+                )
+                if (pipeline_rot_threads, pipeline_omp_threads) != (old_rot, old_omp):
+                    logger.debug(
+                        f"Adaptive core split: {old_rot}/{old_omp} -> "
+                        f"{pipeline_rot_threads}/{pipeline_omp_threads} "
+                        f"(rot={t_first_rot:.3f}s, compute={t_first_compute:.3f}s)"
+                    )
+
+            # Process remaining chunks with the (possibly updated) adaptive split.
+            # remaining_starts is always non-empty: use_pipeline requires
+            # n_chunks >= _MIN_PIPELINE_CHUNKS (30), so at least 29 remain.
+            remaining_starts = chunk_starts[1:]
+
+            # Seed the pipeline by preparing the first remaining chunk.
+            # _prepare_chunk reads pipeline_rot_threads from this scope, so it
+            # uses the updated adaptive split from this point onward.
+            t_rot_start = time.perf_counter()
+            current = _prepare_chunk(remaining_starts[0])
+            t_rotation_total += time.perf_counter() - t_rot_start
+
+            # Progress tracking for the pipeline loop. Two chunks already
+            # processed (profiled chunk + seed chunk), so initialise at 2.
+            pipeline_bar = None
+            if show_progress and n_chunks > 1:
+                import sys
+
+                import progressbar as _pb
+
+                widgets = [
+                    "LMM association: ",
+                    _pb.Counter(),
+                    f"/{n_chunks} ",
+                    _pb.Percentage(),
+                    " ",
+                    _pb.Bar(),
+                    " ",
+                    _pb.Timer(),
+                    " ",
+                    _pb.ETA(),
+                ]
+                pipeline_bar = _pb.ProgressBar(
+                    max_value=n_chunks, widgets=widgets, fd=sys.stdout
+                )
+                pipeline_bar.start()
+                pipeline_bar.update(2)  # profiled + seeded chunks
+
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                for i_chunk, chunk_start in enumerate(remaining_starts[1:], start=3):
+                    uab_var_soa, actual_len = current
+
+                    # Submit next chunk preparation (runs in background thread)
+                    future = executor.submit(_prepare_chunk, chunk_start)
+
+                    # C extension compute on current chunk (releases GIL).
+                    # Cores are partitioned: rotation gets pipeline_rot_threads,
+                    # compute gets pipeline_omp_threads.
+                    _compute_and_write(uab_var_soa, actual_len)
+                    del uab_var_soa
+
+                    # Wait for background preparation to complete
+                    t_rot_start = time.perf_counter()
+                    try:
+                        current = future.result()
+                    except (MemoryError, ValueError, TypeError, OverflowError):
+                        raise
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"Pipeline chunk preparation failed at SNP offset "
+                            f"{write_offset}/{n_filtered} (chunk starting at "
+                            f"index {chunk_start}). "
+                            f"Processed {write_offset} SNPs before failure."
+                        ) from exc
+                    t_rotation_total += time.perf_counter() - t_rot_start
+
+                    if pipeline_bar is not None:
+                        pipeline_bar.update(i_chunk)
+
+                # Process last chunk (no next chunk to overlap with)
+                uab_var_soa, actual_len = current
+                _compute_and_write(uab_var_soa, actual_len)
+                del uab_var_soa
+
+            if pipeline_bar is not None:
+                pipeline_bar.update(n_chunks)
+                pipeline_bar.finish()
+        else:
+            # Sequential path (single chunk or non-pipeline execution)
+            if show_progress and n_chunks > 1:
+                chunk_iterator = progress_iterator(
+                    chunk_starts, total=n_chunks, desc="LMM association"
+                )
+            else:
+                chunk_iterator = iter(chunk_starts)
+
+            def _run_lmm_chunk(Uab_batch: np.ndarray) -> dict:
+                """Run LMM compute on a Uab batch with BLAS thread control."""
+                blas_ctx = blas_threads(1) if _C_ACCEL_AVAILABLE else nullcontext()
+                with blas_ctx:
+                    try:
+                        return _compute_lmm_chunk_numpy(
+                            lmm_mode,
+                            n_cvt,
+                            eigenvalues_np,
+                            Uab_batch,
+                            n_samples,
+                            l_min=l_min,
+                            l_max=l_max,
+                            n_grid=n_grid,
+                            n_refine=n_refine,
+                            Hi_eval_null=Hi_eval_null,
+                            logl_H0=logl_H0,
+                            n_threads=omp_threads,
+                        )
+                    except (MemoryError, ValueError, TypeError, OverflowError):
+                        raise
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"LMM compute failed at SNP offset "
+                            f"{write_offset}/{n_filtered}. "
+                            f"Processed {write_offset} SNPs "
+                            f"before failure."
+                        ) from exc
+
+            for chunk_start in chunk_iterator:
+                chunk_end = min(chunk_start + chunk_size, n_filtered)
+                chunk_indices = snp_indices[chunk_start:chunk_end]
+                geno_chunk = genotypes[:, chunk_indices]
+
+                # Mean-impute missing genotypes
+                chunk_means = col_means[chunk_indices]
+                missing = np.isnan(geno_chunk)
+                if missing.any():  # RUN-06: skip O(n*chunk) np.where on clean data
+                    geno_chunk = np.where(missing, chunk_means[None, :], geno_chunk)
+                del missing, chunk_means
+
+                # Rotate genotypes
+                t_rot_start = time.perf_counter()
+                actual_snps = geno_chunk.shape[1]
+                with blas_threads(rotation_threads):
+                    if actual_snps == chunk_size:
+                        np.dot(U.T, geno_chunk, out=UtG_buf)
+                        UtG = UtG_buf
+                    else:
+                        UtG = U.T @ geno_chunk
+                t_rotation_total += time.perf_counter() - t_rot_start
+                del geno_chunk
+
+                # Compute
+                t_compute_start = time.perf_counter()
+                if use_split:
+                    # Build SoA-layout varying Uab only — invariant precomputed.
+                    uab_var_soa = batch_compute_uab_varying_soa_numpy(
+                        n_cvt, UtW, Uty, UtG
+                    )
+                    del UtG
+                    if lmm_mode == 1 and lmm_workspace is not None:
+                        # Wald: use C workspace (no full Uab needed)
+                        with blas_threads(1):
+                            try:
+                                if n_cvt == 1:
+                                    cr = compute_wald_split_c_ws(
+                                        lmm_workspace,
+                                        uab_var_soa,
+                                        omp_threads,
+                                    )
+                                else:
+                                    cr = compute_wald_general_c_ws(
+                                        lmm_workspace,
+                                        uab_var_soa,
+                                        omp_threads,
+                                    )
+                            except (
+                                MemoryError,
+                                ValueError,
+                                TypeError,
+                                OverflowError,
+                            ):
+                                raise
+                            except Exception as exc:
+                                raise RuntimeError(
+                                    f"C extension compute failed at SNP "
+                                    f"offset {write_offset}/{n_filtered}. "
+                                    f"Processed {write_offset} SNPs "
+                                    f"before failure."
+                                ) from exc
+                        del uab_var_soa
+                    elif lmm_mode == 4 and lmm_workspace is not None:
+                        # All: Wald via workspace, Score+LRT via reconstructed Uab.
+                        # Call Score and LRT separately to avoid redundant Wald.
+                        Uab_batch = reconstruct_uab_from_soa(
+                            uab_invariant_soa, uab_var_soa
+                        )
+                        with blas_threads(1):
+                            try:
+                                if n_cvt == 1:
+                                    wald_cr = compute_wald_split_c_ws(
+                                        lmm_workspace,
+                                        uab_var_soa,
+                                        omp_threads,
+                                    )
+                                else:
+                                    wald_cr = compute_wald_general_c_ws(
+                                        lmm_workspace,
+                                        uab_var_soa,
+                                        omp_threads,
+                                    )
+                            except (
+                                MemoryError,
+                                ValueError,
+                                TypeError,
+                                OverflowError,
+                            ):
+                                raise
+                            except Exception as exc:
+                                raise RuntimeError(
+                                    f"C extension compute failed at SNP "
+                                    f"offset {write_offset}/{n_filtered}. "
+                                    f"Processed {write_offset} SNPs "
+                                    f"before failure."
+                                ) from exc
+                        del uab_var_soa
+                        # Score + LRT via C batch dispatch (no redundant Wald)
+                        with blas_threads(1):
+                            try:
+                                cr = _compose_mode4_results(
+                                    wald_cr,
+                                    n_cvt,
+                                    eigenvalues_np,
+                                    Uab_batch,
+                                    n_samples,
+                                    Hi_eval_null=Hi_eval_null,
+                                    l_min=l_min,
+                                    l_max=l_max,
+                                    n_grid=n_grid,
+                                    n_refine=n_refine,
+                                    logl_H0=logl_H0,
+                                    n_threads=omp_threads,
+                                )
+                            except (
+                                MemoryError,
+                                ValueError,
+                                TypeError,
+                                OverflowError,
+                            ):
+                                raise
+                            except Exception as exc:
+                                raise RuntimeError(
+                                    f"C extension compute failed at SNP "
+                                    f"offset {write_offset}/{n_filtered}. "
+                                    f"Processed {write_offset} SNPs "
+                                    f"before failure."
+                                ) from exc
+                        del Uab_batch
+                    else:
+                        # LRT/Score (modes 2, 3): reconstruct Uab
+                        Uab_batch = reconstruct_uab_from_soa(
+                            uab_invariant_soa, uab_var_soa
+                        )
+                        del uab_var_soa
+                        cr = _run_lmm_chunk(Uab_batch)
+                        del Uab_batch
+                else:
+                    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+                    del UtG
+                    cr = _run_lmm_chunk(Uab_batch)
+                    del Uab_batch
+                t_numpy_compute_total += time.perf_counter() - t_compute_start
+
+                # Write results
+                t_write_start = time.perf_counter()
+                actual_len = chunk_end - chunk_start
+                if streaming:
+                    chunk_arrays = {
+                        key: cr[key][:actual_len] for key in _RESULT_FIELDS[lmm_mode]
+                    }
+                    n_at_lmin_accum, n_at_lmax_accum = write_streaming_chunk(
+                        writer,
+                        lmm_mode,
+                        snp_indices[write_offset : write_offset + actual_len],
+                        snp_info,
+                        filtered_afs[write_offset : write_offset + actual_len],
+                        filtered_miss[write_offset : write_offset + actual_len],
+                        chunk_arrays,
+                        l_min,
+                        l_max,
+                        nan_counts,
+                        n_at_lmin_accum,
+                        n_at_lmax_accum,
+                    )
+                else:
+                    s = slice(write_offset, write_offset + actual_len)
+                    for key in arrays_out:
+                        arrays_out[key][s] = cr[key][:actual_len]
+                write_offset += actual_len
+                t_result_write_total += time.perf_counter() - t_write_start
+                del cr
 
     # Validate all results were written
     if write_offset != n_filtered:
@@ -1037,20 +1127,30 @@ def run_lmm_association_numpy(
     if show_progress:
         log_rss_memory("lmm_numpy", "after_all_chunks")
 
-    # NaN diagnostic: warn if any output arrays contain NaN results
-    for key, arr in arrays_out.items():
-        n_nan = int(np.sum(np.isnan(arr)))
-        if n_nan > 0:
+    # Diagnostics: use accumulated per-chunk counts for streaming,
+    # post-loop arrays_out inspection for non-streaming.
+    if streaming:
+        for key, n_nan in nan_counts.items():
             logger.warning(
                 f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
                 "check kinship matrix quality and available memory"
             )
+        log_lambda_boundary_warning(n_at_lmin_accum, n_at_lmax_accum, l_min, l_max)
+    else:
+        # NaN diagnostic: warn if any output arrays contain NaN results
+        for key, arr in arrays_out.items():
+            n_nan = int(np.sum(np.isnan(arr)))
+            if n_nan > 0:
+                logger.warning(
+                    f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
+                    "check kinship matrix quality and available memory"
+                )
 
-    # Lambda boundary convergence diagnostics
-    n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
-        lmm_mode, arrays_out, l_min, l_max
-    )
-    log_lambda_boundary_warning(n_at_lmin, n_at_lmax, l_min, l_max)
+        # Lambda boundary convergence diagnostics
+        n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
+            lmm_mode, arrays_out, l_min, l_max
+        )
+        log_lambda_boundary_warning(n_at_lmin, n_at_lmax, l_min, l_max)
 
     # Log completion
     elapsed = time.perf_counter() - start_time
@@ -1068,6 +1168,14 @@ def run_lmm_association_numpy(
         logger.info(f"  Accounted:           {accounted:.2f}s")
         logger.info(f"  Total:               {elapsed:.2f}s")
         logger.info(f"LMM Association completed in {elapsed:.2f}s")
+
+    if streaming:
+        return LmmRunResult(
+            associations=[],
+            pve=pve,
+            pve_se=pve_se,
+            n_tested=write_offset,
+        )
 
     return LmmRunResult(
         associations=_build_results(

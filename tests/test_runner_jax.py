@@ -1985,3 +1985,124 @@ def test_jax_batch_wald_matches_gemma_synthetic_reference() -> None:
         f"  p_wald: {comparison.p_wald.message}\n"
         f"  l_remle: {comparison.l_remle.message}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Output path streaming tests (65-03)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+@pytest.mark.parametrize("lmm_mode", [1, 2, 3, 4], ids=["wald", "lrt", "score", "all"])
+def test_output_path_streaming_matches_inmemory(lmm_mode, tmp_path):
+    """Streaming via output_path produces identical results to in-memory."""
+    genotypes, phenotype, snp_info = _make_synthetic_gwas_data(seed=99)
+    kinship = compute_centered_kinship(genotypes)
+
+    common_kwargs = dict(
+        genotypes=genotypes,
+        phenotypes=phenotype,
+        snp_info=snp_info,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=lmm_mode,
+    )
+
+    # In-memory run
+    result_mem = run_lmm_association_jax(kinship=kinship.copy(), **common_kwargs)
+
+    # Streaming run
+    output_file = tmp_path / f"streamed_mode{lmm_mode}.assoc.txt"
+    result_disk = run_lmm_association_jax(
+        kinship=kinship.copy(), output_path=output_file, **common_kwargs
+    )
+
+    # Streaming result has empty associations but populated metadata
+    assert result_disk.associations == [], (
+        "Streaming mode should return empty associations"
+    )
+    assert result_disk.n_tested == len(result_mem.associations), (
+        f"n_tested mismatch: {result_disk.n_tested} vs {len(result_mem.associations)}"
+    )
+
+    # PVE and PVE SE should match
+    assert result_disk.pve is not None
+    np.testing.assert_allclose(
+        result_disk.pve,
+        result_mem.pve,
+        rtol=1e-10,
+        err_msg="PVE mismatch between streaming and in-memory",
+    )
+    if result_mem.pve_se is not None:
+        np.testing.assert_allclose(
+            result_disk.pve_se,
+            result_mem.pve_se,
+            rtol=1e-10,
+            err_msg="PVE SE mismatch between streaming and in-memory",
+        )
+
+    # Load streamed file and compare p-values
+    assert output_file.exists(), f"Streamed output file not created: {output_file}"
+    disk_results = load_gemma_assoc(output_file)
+    assert len(disk_results) == len(result_mem.associations), (
+        f"Streamed file has {len(disk_results)} SNPs, "
+        f"expected {len(result_mem.associations)}"
+    )
+
+    # Compare SNP identifiers and p-values.
+    # Text serialization loses ~7 digits of precision (%.6g format), so
+    # use rtol=1e-6 for file-round-tripped values.
+    file_rtol = 1e-6
+    for r_mem, r_disk in zip(result_mem.associations, disk_results, strict=True):
+        assert r_mem.rs == r_disk.rs, f"SNP order mismatch: {r_mem.rs} vs {r_disk.rs}"
+        if lmm_mode in (1, 3, 4):
+            np.testing.assert_allclose(
+                r_disk.beta,
+                r_mem.beta,
+                rtol=file_rtol,
+                err_msg=f"beta mismatch for {r_mem.rs}",
+            )
+        if lmm_mode in (1, 4):
+            np.testing.assert_allclose(
+                r_disk.p_wald,
+                r_mem.p_wald,
+                rtol=file_rtol,
+                err_msg=f"p_wald mismatch for {r_mem.rs}",
+            )
+        if lmm_mode in (2, 4):
+            np.testing.assert_allclose(
+                r_disk.p_lrt,
+                r_mem.p_lrt,
+                rtol=file_rtol,
+                err_msg=f"p_lrt mismatch for {r_mem.rs}",
+            )
+        if lmm_mode in (3, 4):
+            np.testing.assert_allclose(
+                r_disk.p_score,
+                r_mem.p_score,
+                rtol=file_rtol,
+                err_msg=f"p_score mismatch for {r_mem.rs}",
+            )
+
+
+@pytest.mark.tier1
+def test_output_path_streaming_all_filtered(tmp_path):
+    """Streaming with all SNPs filtered returns empty result, no file created."""
+    genotypes, phenotype, snp_info = _make_synthetic_gwas_data(seed=99)
+    kinship = compute_centered_kinship(genotypes)
+    output_file = tmp_path / "filtered.assoc.txt"
+
+    result = run_lmm_association_jax(
+        genotypes=genotypes,
+        phenotypes=phenotype,
+        kinship=kinship,
+        snp_info=snp_info,
+        maf_threshold=0.99,  # Filters everything
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=1,
+        output_path=output_file,
+    )
+
+    assert result.associations == []
+    assert result.pve is None, "PVE should be None when no SNPs pass filter"

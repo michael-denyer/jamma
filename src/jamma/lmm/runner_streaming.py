@@ -96,6 +96,7 @@ def run_lmm_association_streaming(
     hwe_threshold: float = 0.0,
     validate_genotypes: bool = True,
     config: LmmConfig | None = None,
+    clear_caches: bool = True,
 ) -> tuple[LmmRunResult, int]:
     """Run LMM association tests by streaming genotypes from disk.
 
@@ -131,6 +132,11 @@ def run_lmm_association_streaming(
             removed. 0.0 disables HWE filtering (default).
         validate_genotypes: Check for unexpected genotype values during pass-1
             (default True).
+        config: LmmConfig instance. When provided, overrides individual
+            threshold/mode kwargs above.
+        clear_caches: Clear JAX compilation caches on exit. Set to False
+            when calling repeatedly with identical shapes (e.g. multi-phenotype
+            loops) to avoid redundant JIT recompilation.
 
     Returns:
         Tuple of (LmmRunResult, n_tested) where LmmRunResult contains
@@ -659,12 +665,16 @@ def run_lmm_association_streaming(
                     associations=[] if output_path is not None else all_results,
                     pve=pve,
                     pve_se=pve_se,
+                    n_tested=n_tested if output_path is not None else None,
                 ),
                 n_tested,
             )
     finally:
         del eigenvalues_jax, UtW_jax, Uty_jax
-        try:
-            jax.clear_caches()
-        except Exception:
-            logger.warning("Failed to clear JAX caches during cleanup", exc_info=True)
+        if clear_caches:
+            try:
+                jax.clear_caches()
+            except Exception:
+                logger.warning(
+                    "Failed to clear JAX caches during cleanup", exc_info=True
+                )

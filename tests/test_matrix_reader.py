@@ -14,7 +14,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.io.matrix_reader import read_matrix_parallel
+from jamma.io.matrix_reader import (
+    _scan_chunk_boundaries,
+    read_matrix_parallel,
+)
 
 
 @pytest.mark.tier0
@@ -270,3 +273,100 @@ class TestBlankAndCommentLines:
 
         with pytest.raises(ValueError, match="no data rows"):
             read_matrix_parallel(path, min_rows_for_parallel=500)
+
+
+@pytest.mark.tier0
+class TestBlockCopyMemmap:
+    """Verify block-copy memmap-to-dense path for matrices exceeding block size."""
+
+    def test_2048_rows_block_copy(self, tmp_path: Path) -> None:
+        """2048-row matrix exercises both max_rows parsing and block-copy (>1024)."""
+        rng = np.random.default_rng(2048)
+        matrix = rng.standard_normal((2048, 4))
+        path = tmp_path / "block2048.txt"
+        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
+
+        result = read_matrix_parallel(path, n_workers=2, min_rows_for_parallel=500)
+        expected = np.loadtxt(path, dtype=np.float64)
+        np.testing.assert_array_equal(result, np.atleast_2d(expected))
+        assert result.shape == (2048, 4)
+        assert result.dtype == np.float64
+        assert result.flags["C_CONTIGUOUS"]
+
+
+@pytest.mark.tier0
+class TestBoundedMemoryBehavior:
+    """Verify memory-bounded parsing: no BytesIO buffer, correct block copy."""
+
+    def test_no_bytesio_buffer_in_worker(self) -> None:
+        """Worker function does NOT use BytesIO (f.read() buffer eliminated).
+
+        Structural test: inspects the source of _parse_chunk_to_memmap to
+        confirm BytesIO is not referenced. Cannot mock BytesIO at runtime
+        because multiprocessing spawn internals use io.BytesIO for IPC.
+        """
+        import inspect
+
+        from jamma.io.matrix_reader import _parse_chunk_to_memmap
+
+        source = inspect.getsource(_parse_chunk_to_memmap)
+        assert "BytesIO" not in source, (
+            "_parse_chunk_to_memmap still references BytesIO — "
+            "memory-bounded parsing requires direct file handle with max_rows"
+        )
+        # Also verify it uses max_rows (the bounded-memory approach)
+        assert "max_rows" in source, (
+            "_parse_chunk_to_memmap should use np.loadtxt(max_rows=...) "
+            "for bounded per-worker memory"
+        )
+
+    def test_block_copy_produces_correct_result(self, tmp_path: Path) -> None:
+        """Block-by-block memmap-to-dense copy with known values (>1024 rows)."""
+        # Use np.arange reshaped so every element is uniquely identifiable
+        n_rows, n_cols = 2048, 4
+        matrix = np.arange(n_rows * n_cols, dtype=np.float64).reshape(n_rows, n_cols)
+        path = tmp_path / "block_known.txt"
+        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
+
+        result = read_matrix_parallel(path, n_workers=2, min_rows_for_parallel=500)
+        np.testing.assert_array_equal(result, matrix)
+
+    def test_max_rows_parsing_matches_loadtxt(self, tmp_path: Path) -> None:
+        """max_rows parsing path produces identical values to np.loadtxt."""
+        rng = np.random.default_rng(777)
+        matrix = rng.standard_normal((800, 10))
+        path = tmp_path / "max_rows_parity.txt"
+        np.savetxt(path, matrix, fmt="%.15g", delimiter="\t")
+
+        result = read_matrix_parallel(path, n_workers=4, min_rows_for_parallel=500)
+        expected = np.loadtxt(path, dtype=np.float64)
+        np.testing.assert_array_equal(result, np.atleast_2d(expected))
+
+    def test_worker_receives_n_rows_in_args(self, tmp_path: Path) -> None:
+        """_scan_chunk_boundaries returns 4-element tuples with n_rows."""
+        rng = np.random.default_rng(42)
+        matrix = rng.standard_normal((100, 5))
+        path = tmp_path / "scan_test.txt"
+        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
+
+        n_rows, n_cols, chunks = _scan_chunk_boundaries(path, n_workers=2)
+        assert n_rows == 100
+        assert n_cols == 5
+        assert len(chunks) >= 1
+
+        total_chunk_rows = 0
+        for chunk in chunks:
+            assert len(chunk) == 4, (
+                f"Expected 4-element tuple (start_byte, end_byte, start_row, n_rows), "
+                f"got {len(chunk)} elements"
+            )
+            start_byte, end_byte, start_row, chunk_n_rows = chunk
+            assert start_byte >= 0
+            assert end_byte > start_byte
+            assert start_row >= 0
+            assert chunk_n_rows > 0
+            total_chunk_rows += chunk_n_rows
+
+        assert total_chunk_rows == 100, (
+            f"Sum of chunk n_rows ({total_chunk_rows}) != total rows (100)"
+        )

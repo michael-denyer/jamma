@@ -277,11 +277,21 @@ class LmmRunResult:
             None if no SNPs passed filtering (early return).
         pve_se: Standard error of PVE from REML second derivative delta method.
             None if not computed or likelihood surface is flat.
+        n_tested: Number of SNPs tested. Populated by batch runners
+            (JAX, NumPy) and the streaming runner when output_path is set
+            (associations list is empty). None when associations list is
+            populated (backward compat).
     """
 
     associations: list  # list[AssocResult] -- avoid circular import with stats.py
     pve: float | None = None
     pve_se: float | None = None
+    n_tested: int | None = None
+
+    @property
+    def snp_count(self) -> int:
+        """Number of SNPs tested, from n_tested or len(associations)."""
+        return self.n_tested if self.n_tested is not None else len(self.associations)
 
 
 @dataclass(frozen=True, slots=True)

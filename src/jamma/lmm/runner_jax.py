@@ -7,6 +7,8 @@ Input genotypes must fit in memory; for disk streaming use runner_streaming.py.
 import gc
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
+from pathlib import Path
 
 import jax
 import numpy as np
@@ -39,8 +41,10 @@ from jamma.lmm.results import (
     _build_results,
     count_lambda_boundary_hits,
     log_lambda_boundary_warning,
+    write_streaming_chunk,
 )
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
+from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.schema import LmmConfig, LmmRunResult, RunnerTiming
 from jamma.utils.logging import log_rss_memory
 
@@ -70,6 +74,8 @@ def run_lmm_association_jax(
     show_progress: bool = True,
     lmm_mode: int = 1,
     config: LmmConfig | None = None,
+    output_path: Path | None = None,
+    clear_caches: bool = True,
 ) -> LmmRunResult:
     """Run LMM association tests using JAX-optimized batch processing.
 
@@ -101,9 +107,19 @@ def run_lmm_association_jax(
         check_memory: Check available memory before workflow.
         show_progress: Show progress bars and GEMMA-style logging.
         lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
+        config: LmmConfig instance. When provided, overrides individual
+            threshold/mode kwargs above.
+        output_path: Path for per-chunk disk streaming. When set, results
+            are written incrementally and the returned LmmRunResult has
+            empty associations and n_tested populated instead.
+        clear_caches: Clear JAX compilation caches on exit. Set to False
+            when calling repeatedly with identical shapes (e.g. multi-phenotype
+            loops) to avoid redundant JIT recompilation.
 
     Returns:
         LmmRunResult with per-SNP associations and PVE from null model.
+            When output_path is set, associations is empty (results on
+            disk) and n_tested contains the count of SNPs written.
 
     Raises:
         MemoryError: If check_memory=True and insufficient memory.
@@ -171,6 +187,9 @@ def run_lmm_association_jax(
                 f"Consider: JAMMA_BACKEND=numpy for lower memory usage"
             )
 
+    # Enforce minimum 20 golden section iterations for ~1e-5 lambda tolerance
+    n_refine = max(n_refine, 20)
+
     placement = resolve_device_placement(use_gpu)
 
     # Validate inputs and apply sample filtering (shared logic for all runners)
@@ -205,7 +224,14 @@ def run_lmm_association_jax(
             f"miss<{miss_threshold}). No association tests to run. "
             f"Consider relaxing --maf or --miss thresholds."
         )
-        return LmmRunResult(associations=[])
+        if output_path is not None:
+            from jamma.lmm.io import IncrementalAssocWriter
+
+            with IncrementalAssocWriter(
+                output_path, test_type=_TEST_TYPE_MAP[lmm_mode]
+            ):
+                pass  # Header-only file, matching streaming runner behavior
+        return LmmRunResult(associations=[], n_tested=0)
 
     # Extract filtered stats as numpy arrays (use allele_freqs for output, not mafs)
     filtered_afs = allele_freqs[snp_indices]
@@ -273,12 +299,24 @@ def run_lmm_association_jax(
             est = estimate_lmm_time(n_samples, n_filtered, rotation_threads)
             logger.info(f"  Estimated time: {est}")
 
-        # Pre-allocate result arrays driven by _RESULT_FIELDS mapping
+        # Streaming mode: write per-chunk to disk, skip arrays_out allocation.
+        # Non-streaming: accumulate into arrays_out, build AssocResult list at end.
+        streaming = output_path is not None
+        if streaming:
+            from jamma.lmm.io import IncrementalAssocWriter
+
+            writer_ctx = IncrementalAssocWriter(
+                output_path, test_type=_TEST_TYPE_MAP[lmm_mode]
+            )
+            arrays_out = None
+        else:
+            writer_ctx = None
+            arrays_out = {
+                key: np.empty(n_filtered, dtype=np.float64)
+                for key in _RESULT_FIELDS[lmm_mode]
+            }
+
         write_offset = 0
-        arrays_out: dict[str, np.ndarray] = {
-            key: np.empty(n_filtered, dtype=np.float64)
-            for key in _RESULT_FIELDS[lmm_mode]
-        }
 
         # Invalidate stale timing immediately so callers never see prior-run data
         # if this run raises mid-execution.
@@ -289,6 +327,12 @@ def run_lmm_association_jax(
         t_rotation_exposed_total = 0.0
         t_jax_compute_total = 0.0
         t_result_write_total = 0.0
+
+        # Per-chunk diagnostic accumulators (used in streaming mode where
+        # arrays_out is not available for post-loop inspection).
+        nan_counts: dict[str, int] = {}
+        n_at_lmin_accum = 0
+        n_at_lmax_accum = 0
 
         def _impute_and_prepare(start: int) -> tuple[np.ndarray, int]:
             """Mean-impute a genotype slice and prepare UtG for device transfer."""
@@ -333,9 +377,11 @@ def run_lmm_association_jax(
         else:
             chunk_iterator = enumerate(chunk_starts)
 
+        writer_cm = writer_ctx if streaming else nullcontext()
+
         # Rotation-compute pipeline: while JAX processes chunk N on XLA, a
         # background thread runs BLAS DGEMM (U.T @ G) for chunk N+1.
-        with ThreadPoolExecutor(max_workers=1) as executor:
+        with writer_cm as writer, ThreadPoolExecutor(max_workers=1) as executor:
             for i, _chunk_start in chunk_iterator:
                 actual_chunk_len = actual_len
                 current_UtG = UtG_jax
@@ -404,9 +450,29 @@ def run_lmm_association_jax(
 
                 # Write results, stripping padding from tail/device-alignment
                 t_write_start = time.perf_counter()
-                s = slice(write_offset, write_offset + actual_chunk_len)
-                for key in arrays_out:
-                    arrays_out[key][s] = np.asarray(cr[key][:actual_chunk_len])
+                chunk_arrays = {
+                    key: np.asarray(cr[key][:actual_chunk_len])
+                    for key in _RESULT_FIELDS[lmm_mode]
+                }
+                if streaming:
+                    n_at_lmin_accum, n_at_lmax_accum = write_streaming_chunk(
+                        writer,
+                        lmm_mode,
+                        snp_indices[write_offset : write_offset + actual_chunk_len],
+                        snp_info,
+                        filtered_afs[write_offset : write_offset + actual_chunk_len],
+                        filtered_miss[write_offset : write_offset + actual_chunk_len],
+                        chunk_arrays,
+                        l_min,
+                        l_max,
+                        nan_counts,
+                        n_at_lmin_accum,
+                        n_at_lmax_accum,
+                    )
+                else:
+                    s = slice(write_offset, write_offset + actual_chunk_len)
+                    for key in arrays_out:
+                        arrays_out[key][s] = chunk_arrays[key]
                 write_offset += actual_chunk_len
                 t_write_end = time.perf_counter()
                 t_result_write_total += t_write_end - t_write_start
@@ -421,18 +487,27 @@ def run_lmm_association_jax(
         if show_progress:
             log_rss_memory("lmm_jax", "after_all_chunks")
 
-        for key, arr in arrays_out.items():
-            n_nan = int(np.sum(np.isnan(arr)))
-            if n_nan > 0:
+        # Diagnostics: use accumulated per-chunk counts for streaming,
+        # post-loop arrays_out inspection for non-streaming.
+        if streaming:
+            for key, n_nan in nan_counts.items():
                 logger.warning(
                     f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
-                    "check kinship matrix quality"
+                    "check kinship matrix quality and available memory"
                 )
-
-        n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
-            lmm_mode, arrays_out, l_min, l_max
-        )
-        log_lambda_boundary_warning(n_at_lmin, n_at_lmax, l_min, l_max)
+            log_lambda_boundary_warning(n_at_lmin_accum, n_at_lmax_accum, l_min, l_max)
+        else:
+            for key, arr in arrays_out.items():
+                n_nan = int(np.sum(np.isnan(arr)))
+                if n_nan > 0:
+                    logger.warning(
+                        f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
+                        "check kinship matrix quality and available memory"
+                    )
+            n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
+                lmm_mode, arrays_out, l_min, l_max
+            )
+            log_lambda_boundary_warning(n_at_lmin, n_at_lmax, l_min, l_max)
 
         elapsed = time.perf_counter() - start_time
         if show_progress:
@@ -461,6 +536,14 @@ def run_lmm_association_jax(
             }
         )
 
+        if streaming:
+            return LmmRunResult(
+                associations=[],
+                pve=pve,
+                pve_se=pve_se,
+                n_tested=write_offset,
+            )
+
         return LmmRunResult(
             associations=_build_results(
                 lmm_mode,
@@ -474,10 +557,11 @@ def run_lmm_association_jax(
             pve_se=pve_se,
         )
     finally:
-        # Clear global JAX caches on both success and failure to avoid
-        # retaining compiled executables across repeated runs in one process.
         del eigenvalues_jax, UtW_jax, Uty_jax
-        try:
-            jax.clear_caches()
-        except Exception:
-            logger.warning("Failed to clear JAX caches during cleanup", exc_info=True)
+        if clear_caches:
+            try:
+                jax.clear_caches()
+            except Exception:
+                logger.warning(
+                    "Failed to clear JAX caches during cleanup", exc_info=True
+                )

@@ -1151,6 +1151,7 @@ class PipelineRunner:
                     actual_chunk,
                     plan=plan,
                     plink_data=_plink_data,
+                    clear_caches=False,
                 )
             else:
                 run_result, n_tested = self._run_numpy_backend(
@@ -1168,6 +1169,20 @@ class PipelineRunner:
             total_tested += n_tested
             all_assoc_paths.append(col_path)
             logger.info(f"Phenotype {col}: {n_tested} SNPs tested -> {col_path}")
+
+        # Clear JAX caches once after all phenotypes, not per-phenotype.
+        # Compiled kernels have identical shapes across phenotypes so clearing
+        # inside the loop forces redundant JIT recompilation.
+        if plan.backend == "jax":
+            try:
+                import jax
+
+                jax.clear_caches()
+            except Exception:
+                logger.warning(
+                    "Failed to clear JAX caches after phenotype loop",
+                    exc_info=True,
+                )
 
         lmm_s = time.perf_counter() - t_lmm
         total_s = time.perf_counter() - t_start
@@ -1221,6 +1236,7 @@ class PipelineRunner:
         *,
         plan: ExecutionPlan,
         plink_data: object | None = None,
+        clear_caches: bool = True,
     ) -> tuple[LmmRunResult, int]:
         """Run LMM association using the JAX backend.
 
@@ -1230,6 +1246,8 @@ class PipelineRunner:
             plink_data: Pre-loaded PLINK data for batch mode. If None and
                 batch mode selected, loads from disk.
             plan: ExecutionPlan determining batch vs streaming mode.
+            clear_caches: Clear JAX caches on exit. False for multi-phenotype
+                loops where compiled kernels are reused across iterations.
         """
         from jamma.core.jax_config import ensure_jax_configured
 
@@ -1250,8 +1268,6 @@ class PipelineRunner:
         if plan.mode == "batch":
             from jamma.io import load_plink_binary
             from jamma.lmm import run_lmm_association_jax
-            from jamma.lmm.io import IncrementalAssocWriter
-            from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 
             if plink_data is None:
                 plink_data = load_plink_binary(self.config.bfile)
@@ -1282,26 +1298,11 @@ class PipelineRunner:
                 eigenvalues=eigenvalues,
                 eigenvectors=eigenvectors,
                 config=lmm_config,
+                output_path=assoc_path,
+                clear_caches=clear_caches,
             )
 
-            # Write results to disk in GEMMA format
-            test_type = _TEST_TYPE_MAP[self.config.lmm_mode]
-            n_results = len(run_result.associations)
-            logger.info(f"Writing {n_results} results to {assoc_path}")
-            try:
-                with IncrementalAssocWriter(assoc_path, test_type=test_type) as writer:
-                    writer.write_batch(run_result.associations)
-            except OSError as e:
-                logger.error(
-                    f"Failed to write {n_results} association results to "
-                    f"{assoc_path}: {e}. Results were computed successfully but "
-                    f"could not be saved. Check disk space and file permissions."
-                )
-                raise
-
-            return LmmRunResult(
-                associations=[], pve=run_result.pve, pve_se=run_result.pve_se
-            ), n_results
+            return run_result, run_result.snp_count
 
         # Streaming mode
         if actual_chunk is None:
@@ -1325,6 +1326,7 @@ class PipelineRunner:
             hwe_threshold=self.config.hwe_threshold,
             chunk_size=actual_chunk,
             config=lmm_config,
+            clear_caches=clear_caches,
         )
 
     def _run_numpy_backend(
@@ -1346,8 +1348,6 @@ class PipelineRunner:
         """
         from jamma.io import load_plink_binary
         from jamma.lmm import run_lmm_association_numpy
-        from jamma.lmm.io import IncrementalAssocWriter
-        from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 
         if plink_data is None:
             logger.info(
@@ -1394,23 +1394,7 @@ class PipelineRunner:
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
             config=lmm_config,
+            output_path=assoc_path,
         )
 
-        # Write results to disk in GEMMA format
-        test_type = _TEST_TYPE_MAP[self.config.lmm_mode]
-        n_results = len(run_result.associations)
-        logger.info(f"Writing {n_results} results to {assoc_path}")
-        try:
-            with IncrementalAssocWriter(assoc_path, test_type=test_type) as writer:
-                writer.write_batch(run_result.associations)
-        except OSError as e:
-            logger.error(
-                f"Failed to write {n_results} association results to "
-                f"{assoc_path}: {e}. Results were computed successfully but could "
-                f"not be saved. Check disk space and file permissions."
-            )
-            raise
-
-        return LmmRunResult(
-            associations=[], pve=run_result.pve, pve_se=run_result.pve_se
-        ), n_results
+        return run_result, run_result.snp_count

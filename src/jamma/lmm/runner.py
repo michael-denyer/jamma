@@ -220,7 +220,7 @@ def run_lmm(
         eigenvalues: Pre-computed eigenvalues or None.
         eigenvectors: Pre-computed eigenvectors or None.
         bed_path: PLINK file prefix (required for streaming mode).
-        output_path: Path for incremental result writing (streaming only).
+        output_path: Path for incremental result writing.
         snps_indices: Pre-resolved column indices for -snps restriction.
         hwe_threshold: HWE p-value threshold (streaming only).
         chunk_size: SNPs per disk chunk (streaming only).
@@ -307,9 +307,10 @@ def run_lmm(
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
             config=config,
+            output_path=output_path,
             **common_kwargs if config is None else {},
         )
-        return result, len(result.associations)
+        return result, result.snp_count
 
     if execution_plan.backend == "jax" and execution_plan.mode == "batch":
         if genotypes is None:
@@ -327,9 +328,10 @@ def run_lmm(
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
             config=config,
+            output_path=output_path,
             **common_kwargs if config is None else {},
         )
-        return result, len(result.associations)
+        return result, result.snp_count
 
     if execution_plan.backend == "jax" and execution_plan.mode == "streaming":
         if bed_path is None:

@@ -501,6 +501,172 @@ def test_numpy_runner_covar_mouse_hs1940(
 
 
 # ---------------------------------------------------------------------------
+# LmmRunResult.snp_count property tests (PR-65)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+class TestSnpCount:
+    """Unit tests for LmmRunResult.snp_count property."""
+
+    def test_snp_count_from_n_tested(self):
+        """snp_count returns n_tested when set (streaming mode)."""
+        from jamma.lmm.schema import LmmRunResult
+
+        result = LmmRunResult(associations=[], n_tested=42)
+        assert result.snp_count == 42
+
+    def test_snp_count_from_associations(self):
+        """snp_count falls back to len(associations) when n_tested is None."""
+        from jamma.lmm.schema import LmmRunResult
+
+        result = LmmRunResult(associations=[1, 2, 3])  # dummy items
+        assert result.snp_count == 3
+
+    def test_snp_count_prefers_n_tested_over_associations(self):
+        """n_tested takes priority even if associations is non-empty."""
+        from jamma.lmm.schema import LmmRunResult
+
+        result = LmmRunResult(associations=[1, 2, 3], n_tested=10)
+        assert result.snp_count == 10
+
+
+# ---------------------------------------------------------------------------
+# write_streaming_chunk unit tests (PR-65)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+class TestWriteStreamingChunk:
+    """Unit tests for write_streaming_chunk diagnostic accumulation."""
+
+    def test_nan_counts_accumulated_across_chunks(self):
+        """NaN counts accumulate correctly across multiple chunks."""
+        from unittest.mock import MagicMock
+
+        from jamma.lmm.results import write_streaming_chunk
+
+        writer = MagicMock()
+        nan_counts: dict[str, int] = {}
+
+        # Chunk 1: 2 NaN betas, 1 NaN p_wald
+        chunk1 = {
+            "betas": np.array([np.nan, np.nan, 1.0]),
+            "ses": np.array([0.1, 0.2, 0.3]),
+            "logls": np.array([-10.0, -20.0, -30.0]),
+            "lambdas": np.array([0.5, 0.5, 0.5]),
+            "pwalds": np.array([np.nan, 0.1, 0.2]),
+        }
+        snp_indices = np.array([0, 1, 2])
+        snp_info = [
+            {"chr": "1", "rs": f"rs{i}", "pos": i * 1000, "a1": "A", "a0": "T"}
+            for i in range(10)
+        ]
+        afs = np.array([0.3, 0.3, 0.3])
+        miss = np.array([0, 0, 0])
+
+        lmin, lmax = write_streaming_chunk(
+            writer,
+            1,
+            snp_indices,
+            snp_info,
+            afs,
+            miss,
+            chunk1,
+            1e-5,
+            1e5,
+            nan_counts,
+            0,
+            0,
+        )
+
+        assert nan_counts["betas"] == 2
+        assert nan_counts["pwalds"] == 1
+        assert "ses" not in nan_counts
+
+        # Chunk 2: 1 more NaN beta
+        chunk2 = {
+            "betas": np.array([np.nan, 1.0]),
+            "ses": np.array([0.1, 0.2]),
+            "logls": np.array([-10.0, -20.0]),
+            "lambdas": np.array([0.5, 0.5]),
+            "pwalds": np.array([0.1, 0.2]),
+        }
+        lmin2, lmax2 = write_streaming_chunk(
+            writer,
+            1,
+            snp_indices[:2],
+            snp_info,
+            afs[:2],
+            miss[:2],
+            chunk2,
+            1e-5,
+            1e5,
+            nan_counts,
+            lmin,
+            lmax,
+        )
+
+        assert nan_counts["betas"] == 3  # accumulated across chunks
+        assert writer.write_arrays_batch.call_count == 2
+
+    def test_lambda_boundary_hits_accumulated(self):
+        """Lambda boundary hits accumulate across chunks."""
+        from unittest.mock import MagicMock
+
+        from jamma.lmm.results import write_streaming_chunk
+
+        writer = MagicMock()
+        nan_counts: dict[str, int] = {}
+
+        # Chunk with lambdas at l_min
+        chunk = {
+            "betas": np.array([1.0, 2.0]),
+            "ses": np.array([0.1, 0.2]),
+            "logls": np.array([-10.0, -20.0]),
+            "lambdas": np.array([1e-5, 0.5]),
+            "pwalds": np.array([0.1, 0.2]),
+        }
+        snp_info = [
+            {"chr": "1", "rs": f"rs{i}", "pos": i * 1000, "a1": "A", "a0": "T"}
+            for i in range(10)
+        ]
+        lmin, lmax = write_streaming_chunk(
+            writer,
+            1,
+            np.array([0, 1]),
+            snp_info,
+            np.array([0.3, 0.3]),
+            np.array([0, 0]),
+            chunk,
+            1e-5,
+            1e5,
+            nan_counts,
+            0,
+            0,
+        )
+        assert lmin == 1  # one lambda at l_min
+        assert lmax == 0
+
+        # Second chunk: one more at l_min
+        lmin2, lmax2 = write_streaming_chunk(
+            writer,
+            1,
+            np.array([2, 3]),
+            snp_info,
+            np.array([0.3, 0.3]),
+            np.array([0, 0]),
+            chunk,
+            1e-5,
+            1e5,
+            nan_counts,
+            lmin,
+            lmax,
+        )
+        assert lmin2 == 2  # accumulated
+
+
+# ---------------------------------------------------------------------------
 # Lambda boundary diagnostic tests (REGR-03)
 # ---------------------------------------------------------------------------
 
@@ -987,3 +1153,125 @@ def test_runner_pipeline_enabled_for_non_wald_modes():
                 # Force small chunk size via explicit budget
             )
             assert len(result.associations) > 0, f"Mode {mode} should produce results"
+
+
+# ---------------------------------------------------------------------------
+# Output path streaming tests (65-03)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+@pytest.mark.parametrize("lmm_mode", [1, 2, 3, 4], ids=["wald", "lrt", "score", "all"])
+def test_output_path_streaming_matches_inmemory(lmm_mode, tmp_path):
+    """Streaming via output_path produces identical results to in-memory."""
+    genotypes, phenotypes, kinship, snp_info = _make_synthetic_data()
+
+    common_kwargs = dict(
+        genotypes=genotypes,
+        phenotypes=phenotypes,
+        snp_info=snp_info,
+        maf_threshold=0.0,
+        miss_threshold=1.0,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=lmm_mode,
+    )
+
+    # In-memory run
+    result_mem = run_lmm_association_numpy(kinship=kinship.copy(), **common_kwargs)
+
+    # Streaming run
+    output_file = tmp_path / f"streamed_mode{lmm_mode}.assoc.txt"
+    result_disk = run_lmm_association_numpy(
+        kinship=kinship.copy(), output_path=output_file, **common_kwargs
+    )
+
+    # Streaming result has empty associations but populated metadata
+    assert result_disk.associations == [], (
+        "Streaming mode should return empty associations"
+    )
+    assert result_disk.n_tested == len(result_mem.associations), (
+        f"n_tested mismatch: {result_disk.n_tested} vs {len(result_mem.associations)}"
+    )
+
+    # PVE and PVE SE should match
+    assert result_disk.pve is not None
+    np.testing.assert_allclose(
+        result_disk.pve,
+        result_mem.pve,
+        rtol=1e-10,
+        err_msg="PVE mismatch between streaming and in-memory",
+    )
+    if result_mem.pve_se is not None:
+        np.testing.assert_allclose(
+            result_disk.pve_se,
+            result_mem.pve_se,
+            rtol=1e-10,
+            err_msg="PVE SE mismatch between streaming and in-memory",
+        )
+
+    # Load streamed file and compare p-values
+    assert output_file.exists(), f"Streamed output file not created: {output_file}"
+    disk_results = load_gemma_assoc(output_file)
+    assert len(disk_results) == len(result_mem.associations), (
+        f"Streamed file has {len(disk_results)} SNPs, "
+        f"expected {len(result_mem.associations)}"
+    )
+
+    # Compare SNP identifiers and p-values.
+    # Text serialization loses ~7 digits of precision (%.6g format), so
+    # use rtol=1e-6 for file-round-tripped values.
+    file_rtol = 1e-6
+    for r_mem, r_disk in zip(result_mem.associations, disk_results, strict=True):
+        assert r_mem.rs == r_disk.rs, f"SNP order mismatch: {r_mem.rs} vs {r_disk.rs}"
+        if lmm_mode in (1, 3, 4):
+            np.testing.assert_allclose(
+                r_disk.beta,
+                r_mem.beta,
+                rtol=file_rtol,
+                err_msg=f"beta mismatch for {r_mem.rs}",
+            )
+        if lmm_mode in (1, 4):
+            np.testing.assert_allclose(
+                r_disk.p_wald,
+                r_mem.p_wald,
+                rtol=file_rtol,
+                err_msg=f"p_wald mismatch for {r_mem.rs}",
+            )
+        if lmm_mode in (2, 4):
+            np.testing.assert_allclose(
+                r_disk.p_lrt,
+                r_mem.p_lrt,
+                rtol=file_rtol,
+                err_msg=f"p_lrt mismatch for {r_mem.rs}",
+            )
+        if lmm_mode in (3, 4):
+            np.testing.assert_allclose(
+                r_disk.p_score,
+                r_mem.p_score,
+                rtol=file_rtol,
+                err_msg=f"p_score mismatch for {r_mem.rs}",
+            )
+
+
+@pytest.mark.tier1
+def test_output_path_streaming_all_filtered(tmp_path):
+    """Streaming with all SNPs filtered returns empty result, no file created."""
+    genotypes, phenotypes, kinship, snp_info = _make_synthetic_data()
+    output_file = tmp_path / "filtered.assoc.txt"
+
+    result = run_lmm_association_numpy(
+        genotypes=genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        maf_threshold=0.99,  # Filters everything
+        miss_threshold=1.0,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=1,
+        output_path=output_file,
+    )
+
+    assert result.associations == []
+    assert result.pve is None, "PVE should be None when no SNPs pass filter"

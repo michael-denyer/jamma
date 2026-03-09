@@ -8,10 +8,13 @@ cold reads from ~4 minutes to ~50 seconds on a 48-core machine.
 Uses file-backed numpy.memmap for worker IPC instead of shared memory to avoid
 SIGBUS crashes when Docker's /dev/shm is capped at 64 MB (cpython#114390).
 
-Workers open the source text file at pre-computed byte offsets aligned to newline
-boundaries, parse their chunk via np.loadtxt(BytesIO(raw)), and write the result
-directly into the shared memmap. This keeps IPC overhead near zero regardless of
-matrix size.
+Workers open the source text file at pre-computed byte offsets, seek to the chunk
+start, and parse via np.loadtxt(f, max_rows=N) directly on the file handle. This
+streams line-by-line internally instead of buffering the entire byte range in RAM.
+The memmap-to-dense final copy uses block-by-block transfer (1024 rows at a time)
+so that only a small window of memmap pages is faulted into physical memory at a
+time, significantly reducing peak RSS compared to np.array(mm) which faults the
+entire memmap at once.
 
 Mirrors the conventions in matrix_writer.py: spawn context, file-backed memmap,
 top-level picklable functions, temp dir on same filesystem as input.
@@ -20,7 +23,6 @@ top-level picklable functions, temp dir on same filesystem as input.
 import multiprocessing as mp
 import os
 import tempfile
-from io import BytesIO
 from pathlib import Path
 
 import numpy as np
@@ -36,9 +38,13 @@ def _parse_chunk_to_memmap(args: tuple) -> None:
 
     Must be a top-level function for pickling with spawn context.
 
+    Uses np.loadtxt with max_rows directly on the file handle instead of
+    buffering the entire byte range via f.read(). This streams line-by-line
+    internally, keeping per-worker memory bounded.
+
     Args:
         args: Tuple of (txt_path, memmap_path, shape, dtype_str,
-              start_byte, end_byte, start_row, delimiter).
+              start_byte, end_byte, start_row, n_rows, delimiter).
     """
     (
         txt_path,
@@ -48,21 +54,27 @@ def _parse_chunk_to_memmap(args: tuple) -> None:
         start_byte,
         end_byte,
         start_row,
+        n_rows,
         delimiter,
     ) = args
 
     try:
         with open(txt_path, "rb") as f:
             f.seek(start_byte)
-            raw = f.read(end_byte - start_byte)
-
-        chunk = np.loadtxt(BytesIO(raw), dtype=np.dtype(dtype_str), delimiter=delimiter)
+            chunk = np.loadtxt(
+                f, dtype=np.dtype(dtype_str), delimiter=delimiter, max_rows=n_rows
+            )
         chunk = np.atleast_2d(chunk)
+        if chunk.shape[0] != n_rows:
+            raise RuntimeError(
+                f"Row count mismatch in chunk at byte offset {start_byte}: "
+                f"expected {n_rows} data rows, parsed {chunk.shape[0]}. "
+                f"File may have been modified during read."
+            )
 
         mm = np.memmap(memmap_path, dtype=np.dtype(dtype_str), mode="r+", shape=shape)
-        n_rows = chunk.shape[0]
-        mm[start_row : start_row + n_rows, :] = chunk
-        del mm  # flush
+        mm[start_row : start_row + chunk.shape[0], :] = chunk
+        del mm  # release memmap reference
     except MemoryError:
         raise  # Let parent process handle OOM directly
     except Exception as e:
@@ -83,17 +95,20 @@ def _is_data_line(line: bytes) -> bool:
 
 
 def _count_data_lines_between(f, start: int, end: int) -> int:
-    """Count data lines between byte offsets using line-by-line iteration.
+    """Count data lines between byte offsets using readline iteration.
+
+    Uses f.readline() instead of ``for line in f`` because Python's file
+    iterator uses an internal read-ahead buffer that makes f.tell()
+    unreliable (returns buffer position, not line position).
 
     Avoids materializing the entire byte range in memory — at 200GB files
     with 4 workers, each chunk is ~50GB which would OOM before parsing.
     """
     f.seek(start)
     count = 0
-    for line in f:
-        if f.tell() > end:
-            # Went past the boundary — this last line belongs to the next chunk.
-            # (f.tell() is already past the newline that terminated `line`.)
+    while True:
+        line = f.readline()
+        if not line or f.tell() > end:
             break
         if _is_data_line(line):
             count += 1
@@ -102,12 +117,12 @@ def _count_data_lines_between(f, start: int, end: int) -> int:
 
 def _scan_chunk_boundaries(
     path: Path, n_workers: int, delimiter: str | None = None
-) -> tuple[int, int, list[tuple[int, int, int]]]:
+) -> tuple[int, int, list[tuple[int, int, int, int]]]:
     """Scan a text file to find byte offsets aligned to newline boundaries.
 
-    Single-pass scan: detects column count from first data line and counts
-    total data rows in one read. Chunk row counts use bounded line-by-line
-    iteration to avoid materializing large byte buffers.
+    Two-pass scan: first pass counts total data rows and detects column count;
+    second pass seeks to approximate boundaries and counts per-chunk rows via
+    bounded line-by-line iteration.
 
     Args:
         path: Input text file path.
@@ -116,13 +131,13 @@ def _scan_chunk_boundaries(
 
     Returns:
         Tuple of (n_rows, n_cols, chunks) where each chunk is
-        (start_byte, end_byte, start_row).
+        (start_byte, end_byte, start_row, n_rows_in_chunk).
     """
     file_size = path.stat().st_size
     if file_size == 0:
         raise ValueError(f"Matrix file is empty: {path}")
 
-    # Single pass: find first data line (for column count) and count all data rows.
+    # First pass: find first data line (for column count) and count all data rows.
     first_line = b""
     n_rows = 0
     with open(path, "rb") as f:
@@ -142,7 +157,7 @@ def _scan_chunk_boundaries(
 
     # Compute byte boundaries aligned to newlines
     target_chunk_size = file_size // n_workers
-    chunks: list[tuple[int, int, int]] = []
+    chunks: list[tuple[int, int, int, int]] = []
     current_row = 0
 
     with open(path, "rb") as f:
@@ -162,13 +177,14 @@ def _scan_chunk_boundaries(
             rows_in_chunk = _count_data_lines_between(f, chunk_start, chunk_end)
 
             if rows_in_chunk > 0:
-                chunks.append((chunk_start, chunk_end, current_row))
+                chunks.append((chunk_start, chunk_end, current_row, rows_in_chunk))
                 current_row += rows_in_chunk
                 chunk_start = chunk_end
 
         # Final chunk: everything remaining
         if chunk_start < file_size:
-            chunks.append((chunk_start, file_size, current_row))
+            rows_in_last = n_rows - current_row
+            chunks.append((chunk_start, file_size, current_row, rows_in_last))
 
     return n_rows, n_cols, chunks
 
@@ -185,7 +201,9 @@ def _create_temp_dir(input_path: Path) -> str:
     except OSError as e:
         logger.warning(
             f"Cannot create temp dir in {input_dir} ({e}), "
-            "falling back to system tmpdir"
+            "falling back to system tmpdir. "
+            "If /tmp is RAM-backed (tmpfs), this may increase memory "
+            "usage significantly for large matrices."
         )
         return tempfile.mkdtemp(prefix="jamma_mread_")
 
@@ -251,12 +269,12 @@ def read_matrix_parallel(
     try:
         # Create zero-filled memmap for workers to write into
         mm = np.memmap(memmap_path, dtype=np.float64, mode="w+", shape=shape)
-        del mm  # flush creation, workers open in r+ mode
+        del mm  # release memmap reference creation, workers open in r+ mode
 
         dtype_str = str(np.dtype(np.float64))
         chunk_args = [
-            (str(path), memmap_path, shape, dtype_str, sb, eb, sr, delimiter)
-            for sb, eb, sr in chunks
+            (str(path), memmap_path, shape, dtype_str, sb, eb, sr, nr, delimiter)
+            for sb, eb, sr, nr in chunks
         ]
 
         ctx = mp.get_context("spawn")
@@ -265,14 +283,22 @@ def read_matrix_parallel(
                 for _ in pool.imap(_parse_chunk_to_memmap, chunk_args):
                     pass
             except BaseException as e:
-                logger.opt(exception=e).error(f"Pool error reading {path}: {e}")
                 pool.terminate()
                 pool.join()
+                if not isinstance(e, (KeyboardInterrupt, SystemExit)):
+                    logger.opt(exception=e).error(f"Pool error reading {path}: {e}")
                 raise
 
-        # Copy memmap to contiguous array, then delete memmap
+        # Block-by-block copy: dense output is pre-allocated at full size,
+        # but only ~1024 rows of memmap pages are faulted at a time.  For
+        # matrices larger than physical memory this significantly reduces
+        # peak RSS vs np.array(mm) which faults the entire memmap.
+        result = np.empty(shape, dtype=np.float64)
         mm = np.memmap(memmap_path, dtype=np.float64, mode="r", shape=shape)
-        result = np.array(mm)
+        block_rows = min(1024, shape[0])
+        for start in range(0, shape[0], block_rows):
+            end = min(start + block_rows, shape[0])
+            result[start:end] = mm[start:end]
         del mm
 
         return result

@@ -1119,7 +1119,6 @@ typedef struct {
     double null_s_wy;
     double null_s_yy;
     double null_inv_ww;         /* 1/null_s_ww */
-    double null_pab1_5;         /* P_yy at level 1 under null model */
 } lmm_workspace_t;
 
 /* PyCapsule destructor: free owned allocations, release Python array refs. */
@@ -1132,7 +1131,7 @@ static void lmm_workspace_destructor(PyObject *cap)
     free(ws->hi_eval_grid);
     free(ws->logdet_h_grid);
     free(ws->grid_inv);
-    free(ws->hi_eval_null);  /* NULL-safe: free(NULL) is a no-op */
+    free(ws->hi_eval_null);
     Py_XDECREF(ws->eigenvalues_ref);
     Py_XDECREF(ws->uab_inv_ref);
     free(ws);
@@ -1537,7 +1536,6 @@ static PyObject *create_workspace_mode4_split_c_py(
         ws->null_s_wy   = ns_wy;
         ws->null_s_yy   = ns_yy;
         ws->null_inv_ww  = (ns_ww != 0.0) ? 1.0 / ns_ww : 0.0;
-        ws->null_pab1_5  = ns_yy - ns_wy * ns_wy * ws->null_inv_ww;
     }
 
     /* Wrap in PyCapsule */
@@ -4160,14 +4158,14 @@ static int alloc_mode4_output(mode4_output_t *out, npy_intp n_snps)
 
 static void decref_mode4_output(mode4_output_t *out)
 {
-    Py_DECREF(out->lambdas);
-    Py_DECREF(out->logls);
-    Py_DECREF(out->betas);
-    Py_DECREF(out->ses);
-    Py_DECREF(out->pwalds);
-    Py_DECREF(out->p_scores);
-    Py_DECREF(out->lambdas_mle);
-    Py_DECREF(out->p_lrts);
+    Py_XDECREF(out->lambdas);
+    Py_XDECREF(out->logls);
+    Py_XDECREF(out->betas);
+    Py_XDECREF(out->ses);
+    Py_XDECREF(out->pwalds);
+    Py_XDECREF(out->p_scores);
+    Py_XDECREF(out->lambdas_mle);
+    Py_XDECREF(out->p_lrts);
 }
 
 static PyObject *build_mode4_result_dict(mode4_output_t *out)
@@ -4263,7 +4261,7 @@ static PyObject *compute_mode4_chunk_split_c_py(
     int n_snps = (int)n_snps_raw;
 
     if (alloc_mode4_output(&out, (npy_intp)n_snps) < 0) {
-        PyErr_NoMemory();
+        if (!PyErr_Occurred()) PyErr_NoMemory();
         goto err_input;
     }
 
@@ -4308,6 +4306,7 @@ static PyObject *compute_mode4_chunk_split_c_py(
             free(thread_bufs);
         }
         decref_mode4_output(&out);
+        PyErr_NoMemory();
         goto err_input;
     }
 

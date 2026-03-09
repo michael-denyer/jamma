@@ -2400,3 +2400,67 @@ def test_mode4_fused_lrt_matches_standalone(score_lrt_data):
         equal_nan=True,
         err_msg="p_lrts: fused vs standalone mismatch",
     )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+def test_mode4_fused_degenerate_snps(score_lrt_data):
+    """Fused mode-4 handles degenerate SNPs: NaN Wald/Score, p_lrt ~ 1.0."""
+    from jamma.lmm.compute_numpy import (
+        _C_MODE4_AVAILABLE,
+        compute_mode4_split_c_ws,
+        create_lmm_workspace_mode4,
+    )
+
+    if not _C_MODE4_AVAILABLE:
+        pytest.skip("Mode-4 fused C extension not available")
+
+    eigenvalues, Uab_batch, n_samples, Hi_eval_null, logl_H0 = score_lrt_data
+
+    # Build SoA arrays
+    uab_inv_soa = np.stack(
+        [Uab_batch[0, :, 0], Uab_batch[0, :, 2], Uab_batch[0, :, 5]], axis=0
+    )
+    uab_var_soa = np.stack(
+        [Uab_batch[:, :, 1], Uab_batch[:, :, 3], Uab_batch[:, :, 4]], axis=1
+    )
+
+    # Make first SNP degenerate: constant genotype -> wx=0, xx=0, xy=0
+    uab_var_soa_degen = uab_var_soa.copy()
+    uab_var_soa_degen[0, :, :] = 0.0  # all three varying columns zeroed
+
+    ws = create_lmm_workspace_mode4(
+        eigenvalues,
+        uab_inv_soa,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+        Hi_eval_null,
+        logl_H0,
+    )
+    cr = compute_mode4_split_c_ws(ws, uab_var_soa_degen, 1)
+
+    # Degenerate SNP: Wald and Score outputs should be NaN
+    assert np.isnan(cr["betas"][0]), "degenerate SNP should have NaN beta"
+    assert np.isnan(cr["ses"][0]), "degenerate SNP should have NaN se"
+    assert np.isnan(cr["pwalds"][0]), "degenerate SNP should have NaN p_wald"
+    assert np.isnan(cr["p_scores"][0]), "degenerate SNP should have NaN p_score"
+
+    # LRT: degenerate SNP has no signal, so p_lrt ~ 1.0
+    assert cr["p_lrts"][0] >= 0.99, (
+        f"degenerate SNP should have p_lrt ~ 1.0, got {cr['p_lrts'][0]}"
+    )
+
+    # Remaining SNPs: compare against un-zeroed run to exclude naturally-degenerate ones
+    cr_ref = compute_mode4_split_c_ws(ws, uab_var_soa, 1)
+    finite_betas = np.isfinite(cr_ref["betas"][1:])
+    finite_lrts = np.isfinite(cr_ref["p_lrts"][1:])
+    assert np.all(np.isfinite(cr["betas"][1:][finite_betas])), (
+        "non-degenerate betas should be finite"
+    )
+    assert np.all(np.isfinite(cr["p_lrts"][1:][finite_lrts])), (
+        "non-degenerate p_lrts should be finite"
+    )

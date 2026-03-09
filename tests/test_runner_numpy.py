@@ -351,6 +351,53 @@ def test_chunk_size_auto_scales_with_memory():
     assert chunk_big > chunk_small
 
 
+def test_chunk_size_mode4_fused_uses_4col():
+    """Fused mode-4 uses 4-col accounting (same as Wald split), not 9-col."""
+    # Use large n_samples and n_filtered with moderate budget so chunks
+    # don't hit the _MAX_CHUNK cap (200k).
+    n_samples = 10_000
+    budget = int(5e9)
+
+    # Fused mode-4: 4 cols/SNP
+    fused_chunk = _compute_chunk_size_numpy(
+        n_samples=n_samples,
+        n_filtered=500_000,
+        n_cvt=1,
+        use_split=True,
+        lmm_mode=4,
+        fused_mode4=True,
+        mem_budget_bytes=budget,
+    )
+    # Non-fused mode-4 fallback: 9 cols/SNP
+    fallback_chunk = _compute_chunk_size_numpy(
+        n_samples=n_samples,
+        n_filtered=500_000,
+        n_cvt=1,
+        use_split=True,
+        lmm_mode=4,
+        fused_mode4=False,
+        mem_budget_bytes=budget,
+    )
+    # Wald (mode 1): 4 cols/SNP — should match fused mode-4
+    wald_chunk = _compute_chunk_size_numpy(
+        n_samples=n_samples,
+        n_filtered=500_000,
+        n_cvt=1,
+        use_split=True,
+        lmm_mode=1,
+        mem_budget_bytes=budget,
+    )
+
+    # Fused mode-4 should match Wald (both 4-col)
+    assert fused_chunk == wald_chunk, (
+        f"Fused mode-4 chunk ({fused_chunk}) should match Wald ({wald_chunk})"
+    )
+    # Fused should be larger than fallback (4 cols < 9 cols)
+    assert fused_chunk > fallback_chunk, (
+        f"Fused chunk ({fused_chunk}) should be larger than fallback ({fallback_chunk})"
+    )
+
+
 # ---------------------------------------------------------------------------
 # GEMMA validation tests
 # ---------------------------------------------------------------------------

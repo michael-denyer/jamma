@@ -1351,7 +1351,7 @@ static PyObject *create_workspace_mode4_split_c_py(
     double l_min, l_max, logl_H0;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "OOiddiiOd", (char **)kwlist,
+            args, kwargs, "OOiddiiiOd", (char **)kwlist,
             &eigenvalues_obj, &uab_inv_obj,
             &n_samples, &l_min, &l_max, &n_grid, &n_refine, &n_threads,
             &hi_eval_null_obj, &logl_H0)) {

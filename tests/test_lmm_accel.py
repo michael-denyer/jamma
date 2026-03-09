@@ -2085,3 +2085,65 @@ def test_mode4_all_c_dispatch(score_lrt_data):
         assert result[key].shape == (Uab_batch.shape[0],), (
             f"result['{key}'] shape mismatch: {result[key].shape}"
         )
+
+
+# =============================================================================
+# Fused mode-4 kernel tests (Plan 67-02)
+# =============================================================================
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+def test_mode4_fused_workspace_api(score_lrt_data):
+    """Fused mode-4 workspace creation and compute returns all 8 keys."""
+    from jamma.lmm.compute_numpy import (
+        _C_MODE4_AVAILABLE,
+        compute_mode4_split_c_ws,
+        create_lmm_workspace_mode4,
+    )
+
+    if not _C_MODE4_AVAILABLE:
+        pytest.skip("Mode-4 fused C extension not available")
+
+    eigenvalues, Uab_batch, n_samples, Hi_eval_null, logl_H0 = score_lrt_data
+
+    # Build SoA arrays
+    uab_inv_soa = np.stack(
+        [Uab_batch[0, :, 0], Uab_batch[0, :, 2], Uab_batch[0, :, 5]], axis=0
+    )
+    uab_var_soa = np.stack(
+        [Uab_batch[:, :, 1], Uab_batch[:, :, 3], Uab_batch[:, :, 4]], axis=1
+    )
+
+    ws = create_lmm_workspace_mode4(
+        eigenvalues,
+        uab_inv_soa,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+        Hi_eval_null,
+        logl_H0,
+    )
+    assert ws is not None
+
+    cr = compute_mode4_split_c_ws(ws, uab_var_soa, 1)
+
+    expected_keys = [
+        "lambdas",
+        "logls",
+        "betas",
+        "ses",
+        "pwalds",
+        "lambdas_mle",
+        "p_lrts",
+        "p_scores",
+    ]
+    for key in expected_keys:
+        assert key in cr, f"Missing key '{key}' in fused mode-4 result"
+        assert isinstance(cr[key], np.ndarray), f"result['{key}'] should be ndarray"
+        assert cr[key].shape == (Uab_batch.shape[0],), (
+            f"result['{key}'] shape {cr[key].shape} != ({Uab_batch.shape[0]},)"
+        )

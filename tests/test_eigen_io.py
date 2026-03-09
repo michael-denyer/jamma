@@ -702,7 +702,7 @@ class TestFlagInteractions:
             PipelineRunner(config).validate_inputs()
 
     def test_validate_eigen_with_loco_raises(self, tmp_path: Path) -> None:
-        """Eigen files with -loco raises ValueError."""
+        """Eigen files with -loco raises ValueError (use --eigen-dir instead)."""
         from jamma.pipeline import PipelineConfig, PipelineRunner
 
         d_path = tmp_path / "test.eigenD.txt"

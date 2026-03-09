@@ -85,6 +85,16 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     "-eigen", is_flag=True, default=False, help="Write eigendecomposition files"
 )
 @click.option(
+    "--eigen-dir",
+    type=click.Path(),
+    default=None,
+    help=(
+        "Directory for LOCO per-chromosome eigen cache. When set with "
+        "-lmm -loco, looks for cached eigen files to skip eigendecomp. "
+        "Combined with -eigen, writes eigen files here."
+    ),
+)
+@click.option(
     "-n",
     type=str,
     default="1",
@@ -213,6 +223,7 @@ def main(
     miss,
     loco,
     eigen,
+    eigen_dir,
     n,
     d,
     u,
@@ -333,6 +344,7 @@ def main(
             eigenvalue_file=_opt_path(d),
             eigenvector_file=_opt_path(u),
             write_eigen=eigen,
+            eigen_dir=_opt_path(eigen_dir),
             phenotype_columns=phenotype_columns,
             snps_file=_opt_path(snps),
             ksnps_file=_opt_path(ksnps),
@@ -385,7 +397,10 @@ def _run_gk(
         _cli_error(f"PLINK file not found: {bed_path}")
 
     if write_eigen and loco:
-        _cli_error("-eigen not supported with -loco mode")
+        _cli_error(
+            "-eigen not supported with -gk -loco mode. "
+            "Use -lmm -loco -eigen to write per-chromosome eigen files."
+        )
 
     if mode == 2 and loco:
         _cli_error(
@@ -572,6 +587,7 @@ def _run_lmm(
     eigenvalue_file: Path | None,
     eigenvector_file: Path | None,
     write_eigen: bool,
+    eigen_dir: Path | None,
     phenotype_columns: list[int],
     snps_file: Path | None,
     ksnps_file: Path | None,
@@ -596,6 +612,14 @@ def _run_lmm(
             "(or use -d/-u for pre-computed eigen)"
         )
 
+    # --eigen-dir only makes sense with -loco
+    if eigen_dir is not None and not loco:
+        _cli_error("--eigen-dir is only supported with -loco mode")
+
+    # Default eigen_dir to output_dir when -eigen is set with LOCO
+    if write_eigen and loco and eigen_dir is None:
+        eigen_dir = config.outdir
+
     # Build pipeline config
     pipeline_config = PipelineConfig(
         bfile=bfile,
@@ -613,6 +637,7 @@ def _run_lmm(
         eigenvalue_file=eigenvalue_file,
         eigenvector_file=eigenvector_file,
         write_eigen=write_eigen,
+        eigen_dir=eigen_dir,
         phenotype_columns=phenotype_columns,
         snps_file=snps_file,
         ksnps_file=ksnps_file,

@@ -39,6 +39,7 @@ from jamma.kinship import write_kinship_matrix
 from jamma.kinship.missing import impute_and_center
 from jamma.lmm.compute_numpy import _compute_lmm_chunk_numpy
 from jamma.lmm.eigen import eigendecompose_kinship
+from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
 from jamma.lmm.prepare_common import (
@@ -600,6 +601,59 @@ def _compute_loco_kinship_streaming_numpy(
     return _yield_matrices(), snp_stats_cache
 
 
+def _find_loco_eigen_cache(
+    eigen_dir: Path,
+    prefix: str,
+    chr_names: list[str],
+    *,
+    legacy_text: bool = False,
+) -> dict[str, tuple[Path, Path]] | None:
+    """Check for a complete set of per-chromosome cached eigen files.
+
+    Looks for files named ``{prefix}.loco.chr{chr_name}.eigenD.{ext}`` and
+    ``{prefix}.loco.chr{chr_name}.eigenU.{ext}`` for every chromosome.
+
+    Dimension validation is deferred to the per-chromosome load in
+    ``run_lmm_loco``, where ``read_eigen_files(n_samples=...)`` raises
+    ``ValueError`` on mismatch. This avoids loading all eigen data
+    eagerly just to check dimensions.
+
+    Args:
+        eigen_dir: Directory containing cached eigen files.
+        prefix: Filename prefix (e.g. "result").
+        chr_names: List of chromosome names to check.
+        legacy_text: If True, look for .txt files instead of .npy.
+
+    Returns:
+        Dict mapping chr_name -> (eigenD_path, eigenU_path) if ALL chromosomes
+        have both files. None if ANY chromosome is missing either file.
+    """
+    if not eigen_dir.is_dir():
+        logger.warning(
+            f"eigen_dir is not a directory: {eigen_dir}. Will compute from scratch."
+        )
+        return None
+
+    suffix = ".txt" if legacy_text else ".npy"
+    cache: dict[str, tuple[Path, Path]] = {}
+
+    for ch in chr_names:
+        d_path = eigen_dir / f"{prefix}.loco.chr{ch}.eigenD{suffix}"
+        u_path = eigen_dir / f"{prefix}.loco.chr{ch}.eigenU{suffix}"
+
+        if not d_path.exists() or not u_path.exists():
+            missing = d_path if not d_path.exists() else u_path
+            logger.info(
+                f"LOCO eigen cache incomplete: missing {missing}. "
+                f"Will compute from scratch."
+            )
+            return None
+
+        cache[ch] = (d_path, u_path)
+
+    return cache
+
+
 def run_lmm_loco(
     bed_path: Path,
     phenotypes: np.ndarray,
@@ -619,16 +673,24 @@ def run_lmm_loco(
     l_min: float = 1e-5,
     l_max: float = 1e5,
     backend: str = "jax",
+    write_eigen: bool = False,
+    eigen_dir: Path | None = None,
+    eigen_prefix: str = "result",
 ) -> LocoResult:
     """Run LOCO LMM association: per-chromosome eigendecomp and association.
 
     For each chromosome:
     1. Compute K_loco (kinship excluding that chromosome) via streaming
-    2. Eigendecompose K_loco
-    3. Optionally save K_loco to disk
-    4. Delete K_loco (free n^2*8 bytes)
+    2. Optionally save K_loco to disk
+    3. Subset K_loco to valid samples, delete original
+    4. Eigendecompose K_loco_valid, optionally write eigen cache
     5. Run LMM association on that chromosome's SNPs
     6. Write results to shared output file
+
+    When ``eigen_dir`` points to a directory with a complete set of
+    per-chromosome eigen files (written by a previous run with
+    ``write_eigen=True``), kinship computation and eigendecomposition
+    are skipped entirely — eigen pairs are loaded from disk.
 
     Args:
         bed_path: PLINK file prefix (without .bed/.bim/.fam extension).
@@ -652,6 +714,12 @@ def run_lmm_loco(
         l_min: Minimum lambda for optimization (default 1e-5).
         l_max: Maximum lambda for optimization (default 1e5).
         backend: Compute backend — "jax" (default) or "numpy".
+        write_eigen: If True, write per-chromosome eigen files after
+            eigendecomp. Raises ValueError if eigen_dir is None.
+        eigen_dir: Directory for reading/writing per-chromosome eigen cache.
+            When set, checks for cached files before computing. Combined
+            with write_eigen, writes new files here.
+        eigen_prefix: Prefix for eigen filenames (default "result").
 
     Returns:
         LocoResult with associations in biological chromosome order
@@ -670,6 +738,12 @@ def run_lmm_loco(
     if lmm_mode not in (1, 2, 3, 4):
         raise ValueError(
             f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
+        )
+
+    if write_eigen and eigen_dir is None:
+        raise ValueError(
+            "write_eigen=True requires eigen_dir to be set. "
+            "Pass eigen_dir or use --eigen-dir on the CLI."
         )
 
     # Read LOCO worker count and log configuration (LOCO-08)
@@ -757,94 +831,184 @@ def run_lmm_loco(
             else:
                 snps_global_mask = None
 
-            # Stream LOCO kinship matrices one at a time.
-            # NumPy backend uses pure-NumPy kinship (no JAX dependency);
-            # JAX backend uses JAX matmul for GPU acceleration.
-            if backend == "numpy":
-                # When save_kinship=False and some samples are
-                # invalid, pass valid_indices so kinship is accumulated
-                # at n_valid x n_valid size, avoiding full n_samples^2
-                # materialisation for post-hoc subsetting (LOCO-07).
-                kinship_valid_indices = (
-                    None
-                    if all_samples_valid or save_kinship
-                    else np.where(valid_mask)[0]
+            # Check for cached eigen files before computing kinship.
+            # When write_eigen is True the user explicitly asked to
+            # (re)generate files, so skip the cache and recompute.
+            eigen_cache: dict[str, tuple[Path, Path]] | None = None
+            if eigen_dir is not None and not write_eigen:
+                eigen_cache = _find_loco_eigen_cache(
+                    eigen_dir, eigen_prefix, unique_chrs
                 )
+                if eigen_cache is not None:
+                    logger.info(
+                        f"Found complete LOCO eigen cache in {eigen_dir} "
+                        f"({len(eigen_cache)} chromosomes). "
+                        f"Skipping kinship computation and eigendecomp."
+                    )
+                    if save_kinship:
+                        logger.warning(
+                            "save_kinship ignored when using cached eigen "
+                            "files (kinship is not computed)"
+                        )
+                    if backend == "numpy":
+                        logger.warning(
+                            "Using cached eigen with NumPy backend: SNP "
+                            "filtering will use valid-sample-only statistics "
+                            "(not all-sample stats from kinship pass). This "
+                            "may produce slightly different SNP filter sets "
+                            "compared to the original compute run."
+                        )
 
-                loco_iter, snp_stats_cache = _compute_loco_kinship_streaming_numpy(
-                    bed_path,
-                    maf_threshold=maf_threshold,
-                    miss_threshold=miss_threshold,
-                    check_memory=check_memory,
-                    show_progress=show_progress,
-                    ksnps_indices=ksnps_indices,
-                    valid_indices=kinship_valid_indices,
-                )
-            else:
-                snp_stats_cache = None
-                from jamma.kinship import (  # noqa: PLC0415
-                    compute_loco_kinship_streaming,
-                )
+            # Initialise to None; reassigned inside the compute block when
+            # eigen_cache is None and we actually stream kinship.
+            snp_stats_cache = None
+            kinship_valid_indices = None
+            loco_iter = None
 
-                loco_iter = compute_loco_kinship_streaming(
-                    bed_path,
-                    maf_threshold=maf_threshold,
-                    miss_threshold=miss_threshold,
-                    check_memory=check_memory,
-                    show_progress=show_progress,
-                    ksnps_indices=ksnps_indices,
-                )
+            if eigen_cache is None:
+                # Stream LOCO kinship matrices one at a time.
+                # NumPy backend uses pure-NumPy kinship (no JAX dependency);
+                # JAX backend uses JAX matmul for GPU acceleration.
+                if backend == "numpy":
+                    # When save_kinship=False and some samples are
+                    # invalid, pass valid_indices so kinship is accumulated
+                    # at n_valid x n_valid size, avoiding full n_samples^2
+                    # materialisation for post-hoc subsetting (LOCO-07).
+                    kinship_valid_indices = (
+                        None
+                        if all_samples_valid or save_kinship
+                        else np.where(valid_mask)[0]
+                    )
+
+                    loco_iter, snp_stats_cache = _compute_loco_kinship_streaming_numpy(
+                        bed_path,
+                        maf_threshold=maf_threshold,
+                        miss_threshold=miss_threshold,
+                        check_memory=check_memory,
+                        show_progress=show_progress,
+                        ksnps_indices=ksnps_indices,
+                        valid_indices=kinship_valid_indices,
+                    )
+                else:
+                    from jamma.kinship import (  # noqa: PLC0415
+                        compute_loco_kinship_streaming,
+                    )
+
+                    loco_iter = compute_loco_kinship_streaming(
+                        bed_path,
+                        maf_threshold=maf_threshold,
+                        miss_threshold=miss_threshold,
+                        check_memory=check_memory,
+                        show_progress=show_progress,
+                        ksnps_indices=ksnps_indices,
+                    )
+
+                # Create eigen output directory before the loop (once, not per-chr).
+                if write_eigen and eigen_dir is not None:
+                    try:
+                        eigen_dir.mkdir(parents=True, exist_ok=True)
+                    except OSError as e:
+                        raise OSError(
+                            f"Cannot create eigen cache directory {eigen_dir}: {e}"
+                        ) from e
 
             first_chr_pve: float | None = None
             first_chr_pve_se: float | None = None
-            for chr_idx, (chr_name, K_loco) in enumerate(loco_iter):
+
+            # Iterate: either from cached eigen files or from kinship stream.
+            if eigen_cache is not None:
+                chr_iterator = ((chr_name, None) for chr_name in unique_chrs)
+            else:
+                assert loco_iter is not None, (
+                    "loco_iter must be set when eigen_cache is None"
+                )
+                chr_iterator = loco_iter  # type: ignore[assignment]
+
+            for chr_idx, (chr_name, K_loco) in enumerate(chr_iterator):
                 chr_snp_indices = partitions[chr_name]
 
-                if show_progress:
-                    logger.info(
-                        f"LOCO: chromosome {chr_name} "
-                        f"({chr_idx + 1}/{len(unique_chrs)}), "
-                        f"{len(chr_snp_indices)} SNPs, eigendecomposing..."
-                    )
-
-                if save_kinship and kinship_output_dir is not None:
-                    kinship_path = (
-                        kinship_output_dir
-                        / f"{kinship_output_prefix}.loco.cXX.chr{chr_name}.txt"
-                    )
-                    try:
-                        write_kinship_matrix(K_loco, kinship_path)
-                    except OSError as e:
-                        raise OSError(
-                            f"Failed to save LOCO kinship for chromosome {chr_name} "
-                            f"to {kinship_path}: {e}"
-                        ) from e
+                if eigen_cache is not None:
+                    # Load cached eigen directly — no kinship or eigendecomp.
+                    d_path, u_path = eigen_cache[chr_name]
                     if show_progress:
-                        logger.info(f"  Saved LOCO kinship to {kinship_path}")
-
-                # K_loco is already n_valid x n_valid from numpy
-                # streaming — skip post-hoc subsetting (LOCO-07).
-                if backend == "numpy" and kinship_valid_indices is not None:
-                    if K_loco.shape != (n_valid, n_valid):
-                        raise RuntimeError(
-                            f"Expected K_loco shape ({n_valid}, {n_valid}) from early "
-                            f"subsetting, got {K_loco.shape}"
+                        logger.info(
+                            f"LOCO: chromosome {chr_name} "
+                            f"({chr_idx + 1}/{len(unique_chrs)}), "
+                            f"{len(chr_snp_indices)} SNPs, "
+                            f"loading cached eigen..."
                         )
-                    K_loco_valid = K_loco
-                    del K_loco
-                elif all_samples_valid:
-                    K_loco_valid = K_loco
-                    del K_loco
+                    try:
+                        eigenvalues_np, U = read_eigen_files(
+                            d_path, u_path, n_samples=n_valid
+                        )
+                    except ValueError as e:
+                        raise ValueError(
+                            f"LOCO eigen cache for chromosome {chr_name}: {e}"
+                        ) from e
                 else:
-                    K_loco_valid = K_loco[np.ix_(valid_mask, valid_mask)]
-                    del K_loco
+                    # Standard path: kinship -> eigendecomp
+                    if show_progress:
+                        logger.info(
+                            f"LOCO: chromosome {chr_name} "
+                            f"({chr_idx + 1}/{len(unique_chrs)}), "
+                            f"{len(chr_snp_indices)} SNPs, "
+                            f"eigendecomposing..."
+                        )
+
+                    if save_kinship and kinship_output_dir is not None:
+                        kinship_path = (
+                            kinship_output_dir
+                            / f"{kinship_output_prefix}.loco.cXX.chr{chr_name}.txt"
+                        )
+                        try:
+                            write_kinship_matrix(K_loco, kinship_path)
+                        except OSError as e:
+                            raise OSError(
+                                f"Failed to save LOCO kinship for chromosome "
+                                f"{chr_name} to {kinship_path}: {e}"
+                            ) from e
+                        if show_progress:
+                            logger.info(f"  Saved LOCO kinship to {kinship_path}")
+
+                    # K_loco is already n_valid x n_valid from numpy
+                    # streaming — skip post-hoc subsetting (LOCO-07).
+                    if backend == "numpy" and kinship_valid_indices is not None:
+                        if K_loco.shape != (n_valid, n_valid):
+                            raise RuntimeError(
+                                f"Expected K_loco shape ({n_valid}, {n_valid}) "
+                                f"from early subsetting, got {K_loco.shape}"
+                            )
+                        K_loco_valid = K_loco
+                        del K_loco
+                    elif all_samples_valid:
+                        K_loco_valid = K_loco
+                        del K_loco
+                    else:
+                        K_loco_valid = K_loco[np.ix_(valid_mask, valid_mask)]
+                        del K_loco
+                        gc.collect()
+
+                    eigenvalues_np, U = eigendecompose_kinship(
+                        K_loco_valid, check_memory=check_memory
+                    )
+                    del K_loco_valid
                     gc.collect()
 
-                eigenvalues_np, U = eigendecompose_kinship(
-                    K_loco_valid, check_memory=check_memory
-                )
-                del K_loco_valid
-                gc.collect()
+                    # Write eigen files if requested.
+                    if write_eigen and eigen_dir is not None:
+                        try:
+                            write_eigen_files(
+                                eigenvalues_np,
+                                U,
+                                eigen_dir,
+                                prefix=f"{eigen_prefix}.loco.chr{chr_name}",
+                            )
+                        except OSError as e:
+                            raise OSError(
+                                f"Failed to write LOCO eigen for chromosome "
+                                f"{chr_name} to {eigen_dir}: {e}"
+                            ) from e
+                        logger.info(f"  Wrote LOCO eigen for chr {chr_name}")
 
                 logger.debug(
                     f"  chr {chr_name}: {backend} backend, {len(chr_snp_indices)} SNPs"

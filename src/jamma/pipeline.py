@@ -75,6 +75,9 @@ class PipelineConfig:
             or None. Must be paired with eigenvalue_file (-u flag).
         write_eigen: If True, write eigendecomposition files as side effect
             (-eigen flag).
+        eigen_dir: Directory for LOCO per-chromosome eigen cache. When set
+            with loco mode, looks for cached eigen files to skip eigendecomp.
+            Combined with write_eigen, writes per-chromosome files here.
         phenotype_column: 1-based phenotype column index. 1 selects column 6
             of .fam (standard phenotype), 2 selects column 7, etc. Matches
             GEMMA's -n flag.
@@ -129,6 +132,7 @@ class PipelineConfig:
     eigenvalue_file: Path | None = None
     eigenvector_file: Path | None = None
     write_eigen: bool = False
+    eigen_dir: Path | None = None
     phenotype_column: int = 1
     snps_file: Path | None = None
     ksnps_file: Path | None = None
@@ -294,7 +298,8 @@ class PipelineRunner:
         if has_eigen:
             if self.config.loco:
                 raise ValueError(
-                    "-d/-u (pre-computed eigen) not supported with -loco mode"
+                    "-d/-u (pre-computed eigen) not supported with -loco mode. "
+                    "Use --eigen-dir for per-chromosome eigen caching."
                 )
             if not self.config.eigenvalue_file.exists():
                 raise FileNotFoundError(
@@ -916,6 +921,9 @@ class PipelineRunner:
                 l_min=self.config.l_min,
                 l_max=self.config.l_max,
                 backend=plan.backend,
+                write_eigen=self.config.write_eigen,
+                eigen_dir=self.config.eigen_dir,
+                eigen_prefix=self.config.output_prefix,
             )
             loco_s = time.perf_counter() - t_loco
             total_s = time.perf_counter() - t_start

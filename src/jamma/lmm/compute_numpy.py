@@ -29,7 +29,7 @@ from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_split_ncvt1_numpy,
 )
 
-_EXPECTED_ABI_VERSION = 5  # Must match ABI_VERSION in _lmm_accel.c
+_EXPECTED_ABI_VERSION = 6  # Must match ABI_VERSION in _lmm_accel.c
 
 
 def _try_import_accel() -> tuple[

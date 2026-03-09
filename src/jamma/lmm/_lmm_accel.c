@@ -70,7 +70,7 @@
 
 /* ABI version: bump when function signatures or array layout expectations change.
  * The Python side checks this at import time to detect stale .so files. */
-#define ABI_VERSION 5  /* v5: Score batch + LRT batch (MLE golden section + chi2_sf) */
+#define ABI_VERSION 6  /* v6: Fused mode-4 kernel (Score+LRT+Wald single pass from SoA split) */
 
 /* Betainc continued fraction constants — matches special.py */
 #define CF_TINY     1.0e-30
@@ -1110,6 +1110,16 @@ typedef struct {
     const double *inv_yy;   /* uab_invariant_soa row 2 */
     PyObject *eigenvalues_ref;  /* keeps eigenvalues array alive */
     PyObject *uab_inv_ref;      /* keeps uab_invariant_soa array alive */
+    /* Mode-4 fused fields (only populated when mode=4) */
+    int mode;                   /* 0=Wald-only (default), 4=fused mode-4 */
+    double *hi_eval_null;       /* (n_samples,) null-model Hi_eval, owned */
+    double logl_H0;             /* null MLE log-likelihood */
+    double mle_const;           /* 0.5 * n * (log(n) - log(2*pi) - 1) */
+    double null_s_ww;           /* invariant dot product under null Hi_eval */
+    double null_s_wy;
+    double null_s_yy;
+    double null_inv_ww;         /* 1/null_s_ww */
+    double null_pab1_5;         /* P_yy at level 1 under null model */
 } lmm_workspace_t;
 
 /* PyCapsule destructor: free owned allocations, release Python array refs. */
@@ -1122,6 +1132,7 @@ static void lmm_workspace_destructor(PyObject *cap)
     free(ws->hi_eval_grid);
     free(ws->logdet_h_grid);
     free(ws->grid_inv);
+    free(ws->hi_eval_null);  /* NULL-safe: free(NULL) is a no-op */
     Py_XDECREF(ws->eigenvalues_ref);
     Py_XDECREF(ws->uab_inv_ref);
     free(ws);
@@ -1302,6 +1313,257 @@ err_ws:
 err_input:
     Py_XDECREF(eigenvalues_arr);
     Py_XDECREF(uab_inv_arr);
+    return NULL;
+}
+
+/* -------------------------------------------------------------------------
+ * create_workspace_mode4_split_c
+ *
+ * Create a mode-4 workspace: extends the standard split workspace with
+ * null-model Hi_eval (for Score), MLE constant, and null logl (for LRT).
+ *
+ * Python signature:
+ *   create_workspace_mode4_split_c(
+ *       eigenvalues,      # (n_samples,) float64
+ *       uab_invariant,    # (3, n_samples) float64 — SoA [ww, wy, yy]
+ *       n_samples,        # int
+ *       l_min,            # float
+ *       l_max,            # float
+ *       n_grid,           # int
+ *       n_refine,         # int
+ *       n_threads,        # int
+ *       hi_eval_null,     # (n_samples,) float64 — null-model Hi_eval
+ *       logl_H0,          # float — null MLE log-likelihood
+ *   ) -> PyCapsule wrapping lmm_workspace_t (mode=4)
+ * ------------------------------------------------------------------------- */
+static PyObject *create_workspace_mode4_split_c_py(
+    PyObject *self, PyObject *args, PyObject *kwargs)
+{
+    static const char *kwlist[] = {
+        "eigenvalues", "uab_invariant", "n_samples",
+        "l_min", "l_max", "n_grid", "n_refine", "n_threads",
+        "hi_eval_null", "logl_H0",
+        NULL
+    };
+
+    PyObject *eigenvalues_obj, *uab_inv_obj, *hi_eval_null_obj;
+    int n_samples, n_grid, n_refine, n_threads;
+    double l_min, l_max, logl_H0;
+
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwargs, "OOiddiiOd", (char **)kwlist,
+            &eigenvalues_obj, &uab_inv_obj,
+            &n_samples, &l_min, &l_max, &n_grid, &n_refine, &n_threads,
+            &hi_eval_null_obj, &logl_H0)) {
+        return NULL;
+    }
+
+    if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
+        return NULL;
+
+    if (!isfinite(logl_H0)) {
+        PyErr_SetString(PyExc_ValueError,
+            "logl_H0 must be finite (got NaN or Inf from null model)");
+        return NULL;
+    }
+
+    PyArrayObject *eigenvalues_arr = NULL, *uab_inv_arr = NULL;
+    PyArrayObject *hi_eval_null_arr = NULL;
+    lmm_workspace_t *ws = NULL;
+    PyObject *capsule = NULL;
+
+    eigenvalues_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        eigenvalues_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!eigenvalues_arr) return NULL;
+
+    uab_inv_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        uab_inv_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!uab_inv_arr) goto err_input;
+
+    hi_eval_null_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        hi_eval_null_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!hi_eval_null_arr) goto err_input;
+
+    /* Validate shapes */
+    if (PyArray_NDIM(eigenvalues_arr) != 1 ||
+        PyArray_DIM(eigenvalues_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "eigenvalues must be shape (n_samples,)");
+        goto err_input;
+    }
+    if (PyArray_NDIM(uab_inv_arr) != 2 ||
+        PyArray_DIM(uab_inv_arr, 0) != 3 ||
+        PyArray_DIM(uab_inv_arr, 1) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "uab_invariant must be shape (3, n_samples)");
+        goto err_input;
+    }
+    if (PyArray_NDIM(hi_eval_null_arr) != 1 ||
+        PyArray_DIM(hi_eval_null_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "hi_eval_null must be shape (n_samples,)");
+        goto err_input;
+    }
+
+    if (validate_eigenvalues(
+            (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
+        goto err_input;
+
+    /* Validate Hi_eval_null for NaN/Inf */
+    {
+        const double *hi_null = (const double *)PyArray_DATA(hi_eval_null_arr);
+        for (int i = 0; i < n_samples; i++) {
+            if (!isfinite(hi_null[i])) {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "%g", hi_null[i]);
+                PyErr_Format(PyExc_ValueError,
+                    "hi_eval_null[%d] = %s is not finite. "
+                    "Null model optimization may have failed.", i, buf);
+                goto err_input;
+            }
+        }
+    }
+
+    ws = (lmm_workspace_t *)calloc(1, sizeof(lmm_workspace_t));
+    if (!ws) { PyErr_NoMemory(); goto err_input; }
+
+    /* Fill scalar fields (same as create_workspace_split_c) */
+    ws->n_samples = n_samples;
+    ws->n_grid    = n_grid;
+    ws->n_refine  = n_refine;
+    ws->l_min     = l_min;
+    ws->l_max     = l_max;
+    ws->df        = n_samples - 2;
+
+    ws->beta_a   = (double)ws->df / 2.0;
+    ws->beta_b   = 0.5;
+    ws->lbeta_ab = lgamma(ws->beta_a) + lgamma(ws->beta_b)
+                   - lgamma(ws->beta_a + ws->beta_b);
+
+    ws->log_l_min   = log(l_min);
+    double log_l_max = log(l_max);
+    ws->step        = (log_l_max - ws->log_l_min) / (double)(n_grid - 1);
+    ws->reml_const  = 0.5 * ws->df * (log((double)ws->df)
+                       - log(2.0 * M_PI) - 1.0);
+
+    /* Borrow pointers — arrays kept alive via Py_INCREF */
+    Py_INCREF(eigenvalues_arr);
+    Py_INCREF(uab_inv_arr);
+    ws->eigenvalues_ref = (PyObject *)eigenvalues_arr;
+    ws->uab_inv_ref     = (PyObject *)uab_inv_arr;
+
+    ws->eigenvalues = (const double *)PyArray_DATA(eigenvalues_arr);
+    ws->inv_ww = (const double *)PyArray_DATA(uab_inv_arr);
+    ws->inv_wy = ws->inv_ww + (size_t)n_samples;
+    ws->inv_yy = ws->inv_ww + (size_t)2 * n_samples;
+
+    /* Compute invariant Iab scalar: sum(inv_ww) */
+    {
+        double s_ww = 0.0;
+        for (int i = 0; i < n_samples; i++) s_ww += ws->inv_ww[i];
+        ws->iab_s_ww   = s_ww;
+        ws->iab_inv_ww = (s_ww != 0.0) ? 1.0 / s_ww : 0.0;
+        ws->iab_log_ww = (s_ww > 0.0)  ? log(s_ww)  : 0.0;
+    }
+
+    /* Allocate grid arrays */
+    ws->lambda_grid   = (double *)malloc((size_t)n_grid * sizeof(double));
+    ws->hi_eval_grid  = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
+    ws->logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
+    ws->grid_inv      = (grid_invariant_t *)malloc(
+        (size_t)n_grid * sizeof(grid_invariant_t));
+
+    if (!ws->lambda_grid || !ws->hi_eval_grid ||
+        !ws->logdet_h_grid || !ws->grid_inv) {
+        PyErr_NoMemory();
+        goto err_ws;
+    }
+
+    /* Build lambda grid + invariant dot products */
+    for (int g = 0; g < n_grid; g++) {
+        ws->lambda_grid[g] = exp(ws->log_l_min + g * ws->step);
+    }
+    for (int g = 0; g < n_grid; g++) {
+        double lam    = ws->lambda_grid[g];
+        double *hi_row = ws->hi_eval_grid + (size_t)g * n_samples;
+        double logdet = 0.0;
+        double sw = 0.0, swy = 0.0, sy = 0.0;
+        for (int i = 0; i < n_samples; i++) {
+            double v = lam * ws->eigenvalues[i] + 1.0;
+            double h = 1.0 / v;
+            hi_row[i] = h;
+            logdet += log(v);
+            sw  += h * ws->inv_ww[i];
+            swy += h * ws->inv_wy[i];
+            sy  += h * ws->inv_yy[i];
+        }
+        ws->logdet_h_grid[g] = logdet;
+
+        ws->grid_inv[g].s_ww    = sw;
+        ws->grid_inv[g].s_wy    = swy;
+        ws->grid_inv[g].s_yy    = sy;
+        ws->grid_inv[g].log_s_ww = (sw > 0.0) ? log(sw) : 0.0;
+        ws->grid_inv[g].inv_s_ww = (sw != 0.0) ? 1.0 / sw : 0.0;
+        ws->grid_inv[g].pab1_5   = sy - swy * swy * ws->grid_inv[g].inv_s_ww;
+    }
+
+    /* --- Mode-4 specific fields --- */
+    ws->mode = 4;
+    ws->logl_H0 = logl_H0;
+    ws->mle_const = 0.5 * (double)n_samples
+                    * (log((double)n_samples) - log(2.0 * M_PI) - 1.0);
+
+    /* Copy hi_eval_null into workspace-owned buffer */
+    ws->hi_eval_null = alloc_aligned_doubles((size_t)n_samples);
+    if (!ws->hi_eval_null) {
+        PyErr_NoMemory();
+        goto err_ws;
+    }
+    {
+        const double *src = (const double *)PyArray_DATA(hi_eval_null_arr);
+        memcpy(ws->hi_eval_null, src, (size_t)n_samples * sizeof(double));
+    }
+
+    /* Precompute null-model invariant dot products under hi_eval_null */
+    {
+        double ns_ww = 0.0, ns_wy = 0.0, ns_yy = 0.0;
+        for (int i = 0; i < n_samples; i++) {
+            double h = ws->hi_eval_null[i];
+            ns_ww += h * ws->inv_ww[i];
+            ns_wy += h * ws->inv_wy[i];
+            ns_yy += h * ws->inv_yy[i];
+        }
+        ws->null_s_ww   = ns_ww;
+        ws->null_s_wy   = ns_wy;
+        ws->null_s_yy   = ns_yy;
+        ws->null_inv_ww  = (ns_ww != 0.0) ? 1.0 / ns_ww : 0.0;
+        ws->null_pab1_5  = ns_yy - ns_wy * ns_wy * ws->null_inv_ww;
+    }
+
+    /* Wrap in PyCapsule */
+    capsule = PyCapsule_New(ws, "lmm_workspace", lmm_workspace_destructor);
+    if (!capsule) goto err_ws;
+
+    Py_DECREF(eigenvalues_arr);
+    Py_DECREF(uab_inv_arr);
+    Py_DECREF(hi_eval_null_arr);
+    return capsule;
+
+err_ws:
+    if (ws) {
+        Py_XDECREF(ws->eigenvalues_ref);
+        Py_XDECREF(ws->uab_inv_ref);
+        free(ws->lambda_grid);
+        free(ws->hi_eval_grid);
+        free(ws->logdet_h_grid);
+        free(ws->grid_inv);
+        free(ws->hi_eval_null);
+        free(ws);
+    }
+err_input:
+    Py_XDECREF(eigenvalues_arr);
+    Py_XDECREF(uab_inv_arr);
+    Py_XDECREF(hi_eval_null_arr);
     return NULL;
 }
 
@@ -3188,6 +3450,189 @@ static double golden_section_lambda_mle_ncvt1(
     return lambda_opt;
 }
 
+/* -------------------------------------------------------------------------
+ * mle_logl_ncvt1_cached_split
+ *
+ * MLE log-likelihood from SoA split data using cached grid hi_eval.
+ * Pattern-matches reml_logl_ncvt1_cached_split but:
+ *   - No logdet_iab / logdet_hiw terms
+ *   - Uses n_samples (not df)
+ *   - Uses mle_const (not reml_const)
+ * ------------------------------------------------------------------------- */
+static double mle_logl_ncvt1_cached_split(
+    const double * restrict var_wx,
+    const double * restrict var_xx,
+    const double * restrict var_xy,
+    const double * restrict cached_hi_eval,
+    double cached_logdet_h,
+    const grid_invariant_t *ginv,
+    int n_samples,
+    double mle_const
+)
+{
+    double s_wx = 0.0, s_xx = 0.0, s_xy = 0.0;
+    #pragma omp simd reduction(+:s_wx,s_xx,s_xy)
+    for (int i = 0; i < n_samples; i++) {
+        double h = cached_hi_eval[i];
+        s_wx += h * var_wx[i];
+        s_xx += h * var_xx[i];
+        s_xy += h * var_xy[i];
+    }
+
+    /* Combine with precomputed invariant sums */
+    double pab[3][6];
+    calc_pab_ncvt1_split(ginv->s_ww, s_wx, ginv->s_wy,
+                          s_xx, s_xy, ginv->s_yy, pab);
+
+    return mle_finish(pab, cached_logdet_h, n_samples, mle_const);
+}
+
+/* -------------------------------------------------------------------------
+ * mle_logl_ncvt1_split
+ *
+ * MLE log-likelihood from SoA split data at an arbitrary lambda.
+ * Used during golden section refinement. Computes hi_eval from scratch,
+ * accumulates all 6 dot products (3 invariant + 3 varying), builds Pab.
+ *
+ * hi_eval is a caller-provided scratch buffer of size (n_samples,).
+ * ------------------------------------------------------------------------- */
+static double mle_logl_ncvt1_split(
+    const double * restrict var_wx,
+    const double * restrict var_xx,
+    const double * restrict var_xy,
+    const double * restrict inv_ww,
+    const double * restrict inv_wy,
+    const double * restrict inv_yy,
+    const double * restrict eigenvalues,
+    int n_samples,
+    double lambda,
+    double mle_const,
+    double * restrict hi_eval
+)
+{
+    double logdet_h = 0.0;
+    double s_ww = 0.0, s_wx = 0.0, s_wy = 0.0;
+    double s_xx = 0.0, s_xy = 0.0, s_yy = 0.0;
+
+    #pragma omp simd reduction(+:logdet_h,s_ww,s_wx,s_wy,s_xx,s_xy,s_yy)
+    for (int i = 0; i < n_samples; i++) {
+        double v = lambda * eigenvalues[i] + 1.0;
+        double h = 1.0 / v;
+        hi_eval[i] = h;
+        logdet_h += log(v);
+
+        s_wx += h * var_wx[i];
+        s_xx += h * var_xx[i];
+        s_xy += h * var_xy[i];
+
+        s_ww += h * inv_ww[i];
+        s_wy += h * inv_wy[i];
+        s_yy += h * inv_yy[i];
+    }
+
+    double pab[3][6];
+    calc_pab_ncvt1_split(s_ww, s_wx, s_wy, s_xx, s_xy, s_yy, pab);
+
+    return mle_finish(pab, logdet_h, n_samples, mle_const);
+}
+
+/* -------------------------------------------------------------------------
+ * golden_section_lambda_mle_ncvt1_split
+ *
+ * Grid search + golden section refinement for MLE lambda using SoA split
+ * data. Structurally identical to golden_section_lambda_mle_ncvt1 but
+ * uses split cached/refinement evaluators.
+ *
+ * Returns optimal MLE lambda; writes log-likelihood to *logl_out.
+ * hi_eval is a caller-provided scratch buffer of size (n_samples,).
+ * ------------------------------------------------------------------------- */
+static double golden_section_lambda_mle_ncvt1_split(
+    const double * restrict var_wx,
+    const double * restrict var_xx,
+    const double * restrict var_xy,
+    const double * restrict inv_ww,
+    const double * restrict inv_wy,
+    const double * restrict inv_yy,
+    const double * restrict eigenvalues,
+    int n_samples,
+    const double *lambda_grid,
+    const double *hi_eval_grid,
+    const double *logdet_h_grid,
+    const grid_invariant_t *grid_inv,
+    double log_l_min, double step,
+    int n_grid, int n_refine,
+    double mle_const,
+    double * restrict hi_eval,
+    double *logl_out
+)
+{
+    const double phi = 0.6180339887498949;
+
+    /* Stage 1: coarse grid search using cached split */
+    double best_logl = REML_SENTINEL;
+    int best_idx = 0;
+    for (int g = 0; g < n_grid; g++) {
+        double logl = mle_logl_ncvt1_cached_split(
+            var_wx, var_xx, var_xy,
+            hi_eval_grid + (size_t)g * n_samples,
+            logdet_h_grid[g],
+            &grid_inv[g],
+            n_samples, mle_const
+        );
+        if (isnan(logl)) logl = REML_SENTINEL;
+        if (logl > best_logl) {
+            best_logl = logl;
+            best_idx = g;
+        }
+    }
+
+    /* Fully degenerate SNP */
+    if (best_logl == REML_SENTINEL) {
+        *logl_out = (double)NAN;
+        return (double)NAN;
+    }
+
+    /* Bracket around best grid point */
+    int idx_low = (best_idx > 0) ? best_idx - 1 : 0;
+    int idx_high = (best_idx < n_grid - 1) ? best_idx + 1 : n_grid - 1;
+    double a = log_l_min + idx_low * step;
+    double b = log_l_min + idx_high * step;
+
+    /* Stage 2: golden section refinement */
+    double c = b - phi * (b - a);
+    double d = a + phi * (b - a);
+    double fc = mle_logl_ncvt1_split(var_wx, var_xx, var_xy,
+                                      inv_ww, inv_wy, inv_yy, eigenvalues,
+                                      n_samples, exp(c), mle_const, hi_eval);
+    double fd = mle_logl_ncvt1_split(var_wx, var_xx, var_xy,
+                                      inv_ww, inv_wy, inv_yy, eigenvalues,
+                                      n_samples, exp(d), mle_const, hi_eval);
+
+    for (int iter = 0; iter < n_refine; iter++) {
+        if (fc > fd) {
+            b = d; d = c; fd = fc;
+            c = b - phi * (b - a);
+            fc = mle_logl_ncvt1_split(var_wx, var_xx, var_xy,
+                                       inv_ww, inv_wy, inv_yy, eigenvalues,
+                                       n_samples, exp(c), mle_const, hi_eval);
+        } else {
+            a = c; c = d; fc = fd;
+            d = a + phi * (b - a);
+            fd = mle_logl_ncvt1_split(var_wx, var_xx, var_xy,
+                                       inv_ww, inv_wy, inv_yy, eigenvalues,
+                                       n_samples, exp(d), mle_const, hi_eval);
+        }
+    }
+
+    double log_opt = (a + b) / 2.0;
+    double lambda_opt = exp(log_opt);
+    *logl_out = mle_logl_ncvt1_split(var_wx, var_xx, var_xy,
+                                      inv_ww, inv_wy, inv_yy, eigenvalues,
+                                      n_samples, lambda_opt, mle_const, hi_eval);
+
+    return lambda_opt;
+}
+
 /* =========================================================================
  * LRT BATCH — compute_lrt_batch_c
  *
@@ -3833,6 +4278,30 @@ static PyMethodDef methods[] = {
         "\n"
         "Returns:\n"
         "    dict with keys: betas, ses, p_scores — each (n_snps,) float64\n"
+    },
+    {
+        "create_workspace_mode4_split_c",
+        (PyCFunction)create_workspace_mode4_split_c_py,
+        METH_VARARGS | METH_KEYWORDS,
+        "Create a mode-4 workspace for fused Score+LRT+Wald pipeline.\n"
+        "\n"
+        "Extends the standard split workspace with null-model Hi_eval,\n"
+        "MLE constant, and null log-likelihood for LRT computation.\n"
+        "\n"
+        "Args:\n"
+        "    eigenvalues:   (n_samples,) float64\n"
+        "    uab_invariant: (3, n_samples) float64 — SoA [ww, wy, yy]\n"
+        "    n_samples:     int\n"
+        "    l_min:         float\n"
+        "    l_max:         float\n"
+        "    n_grid:        int\n"
+        "    n_refine:      int\n"
+        "    n_threads:     int\n"
+        "    hi_eval_null:  (n_samples,) float64 — null-model Hi_eval\n"
+        "    logl_H0:       float — null MLE log-likelihood\n"
+        "\n"
+        "Returns:\n"
+        "    PyCapsule wrapping lmm_workspace_t (mode=4)\n"
     },
     {
         "_get_aligned_alloc_test_ptr",

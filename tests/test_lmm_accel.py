@@ -2147,3 +2147,256 @@ def test_mode4_fused_workspace_api(score_lrt_data):
         assert cr[key].shape == (Uab_batch.shape[0],), (
             f"result['{key}'] shape {cr[key].shape} != ({Uab_batch.shape[0]},)"
         )
+
+
+def _build_mode4_soa_and_fused(score_lrt_data):
+    """Helper: build SoA arrays and compute both fused and compose results.
+
+    Returns (fused_cr, compose_cr, eigenvalues, Uab_batch, n_samples,
+             Hi_eval_null, logl_H0, uab_inv_soa, uab_var_soa).
+    """
+    from jamma.lmm.compute_numpy import (
+        compute_mode4_split_c_ws,
+        compute_wald_split_c_ws,
+        create_lmm_workspace,
+        create_lmm_workspace_mode4,
+    )
+
+    eigenvalues, Uab_batch, n_samples, Hi_eval_null, logl_H0 = score_lrt_data
+
+    # Build SoA arrays
+    uab_inv_soa = np.stack(
+        [Uab_batch[0, :, 0], Uab_batch[0, :, 2], Uab_batch[0, :, 5]], axis=0
+    )
+    uab_var_soa = np.stack(
+        [Uab_batch[:, :, 1], Uab_batch[:, :, 3], Uab_batch[:, :, 4]], axis=1
+    )
+
+    # Fused path
+    ws_mode4 = create_lmm_workspace_mode4(
+        eigenvalues,
+        uab_inv_soa,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+        Hi_eval_null,
+        logl_H0,
+    )
+    fused_cr = compute_mode4_split_c_ws(ws_mode4, uab_var_soa, 1)
+
+    # Compose path: Wald workspace + reconstruct + Score/LRT separately
+    from jamma.lmm.likelihood_numpy import reconstruct_uab_from_soa
+    from jamma.lmm.runner_numpy import _compose_mode4_results
+
+    ws_wald = create_lmm_workspace(
+        eigenvalues,
+        uab_inv_soa,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+    )
+    wald_cr = compute_wald_split_c_ws(ws_wald, uab_var_soa, 1)
+    Uab_full = reconstruct_uab_from_soa(uab_inv_soa, uab_var_soa)
+    compose_cr = _compose_mode4_results(
+        wald_cr,
+        1,
+        eigenvalues,
+        Uab_full,
+        n_samples,
+        Hi_eval_null=Hi_eval_null,
+        l_min=1e-5,
+        l_max=1e5,
+        n_grid=50,
+        n_refine=20,
+        logl_H0=logl_H0,
+        n_threads=1,
+    )
+
+    return (
+        fused_cr,
+        compose_cr,
+        eigenvalues,
+        Uab_batch,
+        n_samples,
+        Hi_eval_null,
+        logl_H0,
+        uab_inv_soa,
+        uab_var_soa,
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+def test_mode4_fused_split_parity(score_lrt_data):
+    """Fused C kernel matches compose path (Wald+Score+LRT) within tolerance."""
+    from jamma.lmm.compute_numpy import _C_MODE4_AVAILABLE
+
+    if not _C_MODE4_AVAILABLE:
+        pytest.skip("Mode-4 fused C extension not available")
+
+    fused_cr, compose_cr, *_ = _build_mode4_soa_and_fused(score_lrt_data)
+
+    # Wald outputs: betas, ses, lambdas, logls, pwalds
+    for key in ("lambdas", "logls", "betas", "ses"):
+        np.testing.assert_allclose(
+            fused_cr[key],
+            compose_cr[key],
+            rtol=1e-10,
+            atol=1e-14,
+            equal_nan=True,
+            err_msg=f"{key}: fused vs compose mismatch",
+        )
+    np.testing.assert_allclose(
+        fused_cr["pwalds"],
+        compose_cr["pwalds"],
+        rtol=1e-6,
+        atol=1e-14,
+        equal_nan=True,
+        err_msg="pwalds: fused vs compose mismatch",
+    )
+
+    # Score: p_scores
+    np.testing.assert_allclose(
+        fused_cr["p_scores"],
+        compose_cr["p_scores"],
+        rtol=1e-6,
+        atol=1e-14,
+        equal_nan=True,
+        err_msg="p_scores: fused vs compose mismatch",
+    )
+
+    # LRT: lambdas_mle, p_lrts
+    # lambdas_mle: fused uses SoA split accumulation while standalone uses
+    # full Uab dot products — golden section on flat MLE landscapes can
+    # converge to slightly different optima (~3e-5 relative).
+    np.testing.assert_allclose(
+        fused_cr["lambdas_mle"],
+        compose_cr["lambdas_mle"],
+        rtol=5e-5,
+        atol=1e-14,
+        equal_nan=True,
+        err_msg="lambdas_mle: fused vs compose mismatch",
+    )
+    np.testing.assert_allclose(
+        fused_cr["p_lrts"],
+        compose_cr["p_lrts"],
+        rtol=1e-4,
+        atol=1e-14,
+        equal_nan=True,
+        err_msg="p_lrts: fused vs compose mismatch",
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+def test_mode4_fused_score_matches_standalone(score_lrt_data):
+    """Fused p_scores match standalone compute_score_batch_c on reconstructed Uab.
+
+    Both paths use the same SoA invariant columns (from SNP 0), so the
+    reconstructed Uab fed to standalone Score is consistent with the fused
+    kernel's input. This tests that Score accumulation in the fused loop
+    matches the standalone batch Score function.
+    """
+    from jamma.lmm.compute_numpy import _C_MODE4_AVAILABLE
+    from jamma.lmm.likelihood_numpy import reconstruct_uab_from_soa
+
+    if not _C_MODE4_AVAILABLE:
+        pytest.skip("Mode-4 fused C extension not available")
+    if _compute_score_batch_c is None:
+        pytest.skip("Score C batch not available")
+
+    (
+        fused_cr,
+        _,
+        eigenvalues,
+        _,
+        n_samples,
+        Hi_eval_null,
+        _,
+        uab_inv_soa,
+        uab_var_soa,
+    ) = _build_mode4_soa_and_fused(score_lrt_data)
+
+    # Reconstruct full Uab from the same SoA data the fused kernel uses
+    Uab_reconstructed = reconstruct_uab_from_soa(uab_inv_soa, uab_var_soa)
+
+    # Standalone Score via reconstructed Uab
+    standalone_score = _compute_score_batch_c(
+        eigenvalues,
+        Uab_reconstructed,
+        Hi_eval_null,
+        n_samples,
+        1,
+    )
+
+    np.testing.assert_allclose(
+        fused_cr["p_scores"],
+        standalone_score["p_scores"],
+        rtol=1e-10,
+        atol=1e-14,
+        equal_nan=True,
+        err_msg="p_scores: fused vs standalone mismatch",
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+def test_mode4_fused_lrt_matches_standalone(score_lrt_data):
+    """Fused p_lrts match standalone compute_lrt_batch_c on reconstructed Uab.
+
+    Both paths use the same SoA invariant columns, so the reconstructed Uab
+    is consistent with the fused kernel's input.
+    """
+    from jamma.lmm.compute_numpy import _C_MODE4_AVAILABLE
+    from jamma.lmm.likelihood_numpy import reconstruct_uab_from_soa
+
+    if not _C_MODE4_AVAILABLE:
+        pytest.skip("Mode-4 fused C extension not available")
+    if _compute_lrt_batch_c is None:
+        pytest.skip("LRT C batch not available")
+
+    (fused_cr, _, eigenvalues, _, n_samples, _, logl_H0, uab_inv_soa, uab_var_soa) = (
+        _build_mode4_soa_and_fused(score_lrt_data)
+    )
+
+    # Reconstruct full Uab from the same SoA data
+    Uab_reconstructed = reconstruct_uab_from_soa(uab_inv_soa, uab_var_soa)
+
+    # Standalone LRT via reconstructed Uab
+    standalone_lrt = _compute_lrt_batch_c(
+        eigenvalues,
+        Uab_reconstructed,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        logl_H0,
+        1,
+    )
+
+    # lambdas_mle: fused uses SoA split accumulation, standalone uses full Uab
+    # dot products — golden section on flat MLE landscapes can produce
+    # ~3e-5 relative difference.
+    np.testing.assert_allclose(
+        fused_cr["lambdas_mle"],
+        standalone_lrt["lambdas_mle"],
+        rtol=5e-5,
+        atol=1e-14,
+        equal_nan=True,
+        err_msg="lambdas_mle: fused vs standalone mismatch",
+    )
+    np.testing.assert_allclose(
+        fused_cr["p_lrts"],
+        standalone_lrt["p_lrts"],
+        rtol=1e-4,
+        atol=1e-14,
+        equal_nan=True,
+        err_msg="p_lrts: fused vs standalone mismatch",
+    )

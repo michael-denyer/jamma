@@ -4112,6 +4112,318 @@ err_input:
     return NULL;
 }
 
+/* =========================================================================
+ * FUSED MODE-4 — compute_mode4_chunk_split_c
+ *
+ * Single OpenMP loop computes Wald + Score + LRT from SoA split data.
+ * Eliminates Uab reconstruction and redundant Pab computation.
+ * ========================================================================= */
+
+/* Mode-4 output: 8 arrays */
+typedef struct {
+    PyArrayObject *lambdas;      /* REML lambda */
+    PyArrayObject *logls;        /* REML log-likelihood */
+    PyArrayObject *betas;        /* Wald beta (REML-optimized) */
+    PyArrayObject *ses;          /* Wald SE (REML-optimized) */
+    PyArrayObject *pwalds;       /* Wald p-value */
+    PyArrayObject *p_scores;     /* Score p-value */
+    PyArrayObject *lambdas_mle;  /* MLE lambda */
+    PyArrayObject *p_lrts;       /* LRT p-value */
+} mode4_output_t;
+
+static int alloc_mode4_output(mode4_output_t *out, npy_intp n_snps)
+{
+    npy_intp dims[1] = { n_snps };
+    out->lambdas     = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->logls       = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->betas       = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->ses         = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->pwalds      = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->p_scores    = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->lambdas_mle = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->p_lrts      = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+
+    if (!out->lambdas || !out->logls || !out->betas || !out->ses ||
+        !out->pwalds || !out->p_scores || !out->lambdas_mle || !out->p_lrts) {
+        Py_XDECREF(out->lambdas);
+        Py_XDECREF(out->logls);
+        Py_XDECREF(out->betas);
+        Py_XDECREF(out->ses);
+        Py_XDECREF(out->pwalds);
+        Py_XDECREF(out->p_scores);
+        Py_XDECREF(out->lambdas_mle);
+        Py_XDECREF(out->p_lrts);
+        return -1;
+    }
+    return 0;
+}
+
+static void decref_mode4_output(mode4_output_t *out)
+{
+    Py_DECREF(out->lambdas);
+    Py_DECREF(out->logls);
+    Py_DECREF(out->betas);
+    Py_DECREF(out->ses);
+    Py_DECREF(out->pwalds);
+    Py_DECREF(out->p_scores);
+    Py_DECREF(out->lambdas_mle);
+    Py_DECREF(out->p_lrts);
+}
+
+static PyObject *build_mode4_result_dict(mode4_output_t *out)
+{
+    PyObject *result = PyDict_New();
+    if (!result) {
+        decref_mode4_output(out);
+        return NULL;
+    }
+
+    if (PyDict_SetItemString(result, "lambdas",     (PyObject *)out->lambdas)     < 0 ||
+        PyDict_SetItemString(result, "logls",       (PyObject *)out->logls)       < 0 ||
+        PyDict_SetItemString(result, "betas",       (PyObject *)out->betas)       < 0 ||
+        PyDict_SetItemString(result, "ses",         (PyObject *)out->ses)         < 0 ||
+        PyDict_SetItemString(result, "pwalds",      (PyObject *)out->pwalds)      < 0 ||
+        PyDict_SetItemString(result, "p_scores",    (PyObject *)out->p_scores)    < 0 ||
+        PyDict_SetItemString(result, "lambdas_mle", (PyObject *)out->lambdas_mle) < 0 ||
+        PyDict_SetItemString(result, "p_lrts",      (PyObject *)out->p_lrts)      < 0) {
+        Py_DECREF(result);
+        decref_mode4_output(out);
+        return NULL;
+    }
+
+    decref_mode4_output(out);
+    return result;
+}
+
+/* -------------------------------------------------------------------------
+ * compute_mode4_chunk_split_c
+ *
+ * Fused per-chunk mode-4 compute: Score + Wald + LRT in a single OpenMP
+ * parallel loop from SoA split data. Requires a mode-4 workspace.
+ *
+ * Python signature:
+ *   compute_mode4_chunk_split_c(
+ *       workspace,     # PyCapsule from create_workspace_mode4_split_c
+ *       uab_varying,   # (n_snps, 3, n_samples) float64 — SoA [wx, xx, xy]
+ *       n_threads,     # int
+ *   ) -> dict {lambdas, logls, betas, ses, pwalds, p_scores, lambdas_mle, p_lrts}
+ * ------------------------------------------------------------------------- */
+static PyObject *compute_mode4_chunk_split_c_py(
+    PyObject *self, PyObject *args, PyObject *kwargs)
+{
+    static const char *kwlist[] = {"workspace", "uab_varying", "n_threads", NULL};
+
+    PyObject *capsule_obj;
+    PyObject *uab_var_obj;
+    int n_threads;
+
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwargs, "OOi", (char **)kwlist,
+            &capsule_obj, &uab_var_obj, &n_threads)) {
+        return NULL;
+    }
+
+    lmm_workspace_t *ws = (lmm_workspace_t *)PyCapsule_GetPointer(
+        capsule_obj, "lmm_workspace");
+    if (!ws) return NULL;
+
+    /* Validate workspace mode */
+    if (ws->mode != 4) {
+        PyErr_Format(PyExc_ValueError,
+            "compute_mode4_chunk_split_c requires a mode-4 workspace "
+            "(got mode=%d). Use create_workspace_mode4_split_c.", ws->mode);
+        return NULL;
+    }
+
+    PyArrayObject *uab_var_arr = NULL;
+    mode4_output_t out = {0};
+    PyObject *result = NULL;
+
+    uab_var_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        uab_var_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!uab_var_arr) return NULL;
+
+    int n_samples = ws->n_samples;
+
+    /* Validate shape */
+    if (PyArray_NDIM(uab_var_arr) != 3 ||
+        PyArray_DIM(uab_var_arr, 1) != 3 ||
+        PyArray_DIM(uab_var_arr, 2) != n_samples) {
+        PyErr_Format(PyExc_ValueError,
+            "uab_varying must be shape (n_snps, 3, %d)", n_samples);
+        goto err_input;
+    }
+
+    npy_intp n_snps_raw = PyArray_DIM(uab_var_arr, 0);
+    if (n_snps_raw > INT_MAX) {
+        PyErr_Format(PyExc_OverflowError,
+            "n_snps (%" NPY_INTP_FMT ") exceeds INT_MAX", n_snps_raw);
+        goto err_input;
+    }
+    int n_snps = (int)n_snps_raw;
+
+    if (alloc_mode4_output(&out, (npy_intp)n_snps) < 0) {
+        PyErr_NoMemory();
+        goto err_input;
+    }
+
+    const double *uab_var_data = (const double *)PyArray_DATA(uab_var_arr);
+    const double *inv_ww = ws->inv_ww;
+    const double *inv_wy = ws->inv_wy;
+    const double *inv_yy = ws->inv_yy;
+
+    double *out_lambdas     = (double *)PyArray_DATA(out.lambdas);
+    double *out_logls       = (double *)PyArray_DATA(out.logls);
+    double *out_betas       = (double *)PyArray_DATA(out.betas);
+    double *out_ses         = (double *)PyArray_DATA(out.ses);
+    double *out_pwalds      = (double *)PyArray_DATA(out.pwalds);
+    double *out_p_scores    = (double *)PyArray_DATA(out.p_scores);
+    double *out_lambdas_mle = (double *)PyArray_DATA(out.lambdas_mle);
+    double *out_p_lrts      = (double *)PyArray_DATA(out.p_lrts);
+
+    int n_grid    = ws->n_grid;
+    int n_refine  = ws->n_refine;
+    int df        = ws->df;
+    double reml_const = ws->reml_const;
+
+    /* Clamp n_threads to n_snps */
+    int actual_threads = 1;
+#ifdef _OPENMP
+    actual_threads = (n_threads < n_snps) ? n_threads : n_snps;
+    if (actual_threads < 1) actual_threads = 1;
+#endif
+
+    /* Per-thread scratch buffers for MLE golden section refinement */
+    double **thread_bufs = (double **)calloc((size_t)actual_threads, sizeof(double *));
+    int alloc_ok = (thread_bufs != NULL);
+    if (alloc_ok) {
+        for (int t = 0; t < actual_threads; t++) {
+            thread_bufs[t] = alloc_aligned_doubles((size_t)n_samples);
+            if (!thread_bufs[t]) { alloc_ok = 0; break; }
+        }
+    }
+    if (!alloc_ok) {
+        if (thread_bufs) {
+            for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]);
+            free(thread_bufs);
+        }
+        decref_mode4_output(&out);
+        goto err_input;
+    }
+
+    Py_BEGIN_ALLOW_THREADS
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) num_threads(actual_threads)
+#endif
+    for (int snp = 0; snp < n_snps; snp++) {
+        int tid = 0;
+#ifdef _OPENMP
+        tid = omp_get_thread_num();
+#endif
+        double *hi_eval_local = thread_bufs[tid];
+
+        const double *snp_base = uab_var_data + (size_t)snp * 3 * n_samples;
+        const double *vwx = snp_base;
+        const double *vxx = snp_base + (size_t)n_samples;
+        const double *vxy = snp_base + (size_t)2 * n_samples;
+
+        /* ---- (a) Score: null-model Pab (single pass, no optimization) ---- */
+        {
+            double s_wx = 0.0, s_xx = 0.0, s_xy = 0.0;
+            #pragma omp simd reduction(+:s_wx,s_xx,s_xy)
+            for (int i = 0; i < n_samples; i++) {
+                double h = ws->hi_eval_null[i];
+                s_wx += h * vwx[i];
+                s_xx += h * vxx[i];
+                s_xy += h * vxy[i];
+            }
+
+            double pab_null[3][6];
+            calc_pab_ncvt1_split(ws->null_s_ww, s_wx, ws->null_s_wy,
+                                  s_xx, s_xy, ws->null_s_yy, pab_null);
+
+            double score_beta, score_se, score_f;
+            int score_valid = score_from_pab(pab_null, n_samples, df,
+                                              &score_beta, &score_se, &score_f);
+
+            out_p_scores[snp] = f_to_pvalue(
+                score_f, df, score_valid,
+                ws->beta_a, ws->beta_b, ws->lbeta_ab);
+        }
+
+        /* ---- (b) logdet_iab (same as compute_lmm_chunk_split_c) ---- */
+        double iab_s_wx = 0.0, iab_s_xx = 0.0;
+        #pragma omp simd reduction(+:iab_s_wx,iab_s_xx)
+        for (int i = 0; i < n_samples; i++) {
+            iab_s_wx += vwx[i];
+            iab_s_xx += vxx[i];
+        }
+
+        double iab_p1_xx = iab_s_xx - iab_s_wx * iab_s_wx * ws->iab_inv_ww;
+        double logdet_iab = ws->iab_log_ww
+                            + ((iab_p1_xx > 0.0) ? log(iab_p1_xx) : 0.0);
+
+        /* ---- (c) Wald: REML optimization ---- */
+        double logl_reml, wald_beta, wald_se, wald_f;
+        int wald_valid;
+        double lambda_reml = golden_section_lambda_ncvt1_split(
+            vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
+            ws->eigenvalues, logdet_iab,
+            n_samples, ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
+            ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
+            df, reml_const, &logl_reml, &wald_beta, &wald_se, &wald_f,
+            &wald_valid
+        );
+
+        out_lambdas[snp] = lambda_reml;
+        out_logls[snp]   = logl_reml;
+        out_betas[snp]   = wald_beta;
+        out_ses[snp]     = wald_se;
+        out_pwalds[snp]  = f_to_pvalue(
+            wald_f, df, wald_valid,
+            ws->beta_a, ws->beta_b, ws->lbeta_ab);
+
+        /* ---- (d) LRT: MLE optimization ---- */
+        double logl_H1;
+        double lambda_mle = golden_section_lambda_mle_ncvt1_split(
+            vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
+            ws->eigenvalues, n_samples,
+            ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
+            ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
+            ws->mle_const, hi_eval_local, &logl_H1
+        );
+
+        out_lambdas_mle[snp] = lambda_mle;
+
+        /* LRT stat = 2*(logl_H1 - logl_H0), clamp >= 0 */
+        double lrt_stat = 2.0 * (logl_H1 - ws->logl_H0);
+        if (lrt_stat < 0.0) lrt_stat = 0.0;
+        out_p_lrts[snp] = chi2_sf_c(lrt_stat);
+    }
+
+    Py_END_ALLOW_THREADS
+
+    /* Free per-thread scratch buffers */
+    for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]);
+    free(thread_bufs);
+
+    if (warn_betainc_convergence(out_betas, out_pwalds, n_snps) < 0)
+        goto err_output;
+
+    result = build_mode4_result_dict(&out);
+    if (!result) goto err_input;
+
+    Py_DECREF(uab_var_arr);
+    return result;
+
+err_output:
+    decref_mode4_output(&out);
+err_input:
+    Py_XDECREF(uab_var_arr);
+    return NULL;
+}
+
 /* -------------------------------------------------------------------------
  * _get_aligned_alloc_test_ptr
  *
@@ -4302,6 +4614,24 @@ static PyMethodDef methods[] = {
         "\n"
         "Returns:\n"
         "    PyCapsule wrapping lmm_workspace_t (mode=4)\n"
+    },
+    {
+        "compute_mode4_chunk_split_c",
+        (PyCFunction)compute_mode4_chunk_split_c_py,
+        METH_VARARGS | METH_KEYWORDS,
+        "Fused per-chunk mode-4 compute: Score+Wald+LRT from SoA split data.\n"
+        "\n"
+        "Single OpenMP parallel loop produces all 8 output arrays.\n"
+        "Requires a mode-4 workspace from create_workspace_mode4_split_c.\n"
+        "\n"
+        "Args:\n"
+        "    workspace:    PyCapsule from create_workspace_mode4_split_c\n"
+        "    uab_varying:  (n_snps, 3, n_samples) float64 — SoA [wx, xx, xy]\n"
+        "    n_threads:    int\n"
+        "\n"
+        "Returns:\n"
+        "    dict with keys: lambdas, logls, betas, ses, pwalds, p_scores,\n"
+        "                    lambdas_mle, p_lrts — each (n_snps,) float64\n"
     },
     {
         "_get_aligned_alloc_test_ptr",

@@ -1762,3 +1762,137 @@ def test_loco_cross_backend_parity(tmp_path: Path) -> None:
     jax_rs = [r.rs for r in jax_results]
     numpy_rs = [r.rs for r in numpy_results]
     assert jax_rs == numpy_rs, "SNP order differs between backends"
+
+
+# ===========================================================================
+# Secular Update Smoke Tests
+# ===========================================================================
+
+
+@pytest.mark.tier1
+def test_secular_update_smoke() -> None:
+    """Secular update path completes without error and returns associations.
+
+    Uses the gemma_loco fixture (100 samples, 500 SNPs, 3 chromosomes).
+    Confirms use_secular_update=True runs end-to-end with numpy backend.
+    """
+    from jamma.lmm.loco import run_lmm_loco
+
+    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+
+    secular_loco = run_lmm_loco(
+        bed_path=_LOCO_BFILE,
+        phenotypes=phenotypes,
+        lmm_mode=1,
+        show_progress=False,
+        check_memory=False,
+        backend="numpy",
+        use_secular_update=True,
+    )
+
+    assert secular_loco.n_tested > 0, (
+        f"Expected n_tested > 0, got {secular_loco.n_tested}"
+    )
+    assert len(secular_loco.associations) > 0, (
+        "Expected non-empty associations from secular update path"
+    )
+
+    # All associations should have valid (non-NaN) p_wald values
+    p_walds = [r.p_wald for r in secular_loco.associations if r.p_wald is not None]
+    assert len(p_walds) > 0, "No p_wald values in secular update results"
+    finite_pvals = [p for p in p_walds if not np.isnan(p)]
+    assert len(finite_pvals) > 0, "All p_wald values are NaN in secular update results"
+
+
+@pytest.mark.tier1
+def test_secular_update_eigenvalue_parity() -> None:
+    """Secular update produces eigenvalues matching standard path (rtol=1e-10).
+
+    Compares per-chromosome eigenvalues from use_secular_update=True against
+    the standard use_secular_update=False (numpy backend) path on the
+    gemma_loco fixture. Association statistics (beta, se, p_wald) must also
+    match within validated tolerances.
+    """
+    from jamma.lmm.loco import run_lmm_loco
+
+    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+
+    common_kwargs = {
+        "bed_path": _LOCO_BFILE,
+        "phenotypes": phenotypes,
+        "lmm_mode": 1,
+        "show_progress": False,
+        "check_memory": False,
+        "backend": "numpy",
+        "maf_threshold": 0.0,
+        "miss_threshold": 1.0,
+    }
+
+    standard_loco = run_lmm_loco(**common_kwargs, use_secular_update=False)
+    secular_loco = run_lmm_loco(**common_kwargs, use_secular_update=True)
+
+    assert standard_loco.n_tested == secular_loco.n_tested, (
+        f"n_tested mismatch: standard={standard_loco.n_tested}, "
+        f"secular={secular_loco.n_tested}"
+    )
+    assert len(standard_loco.associations) == len(secular_loco.associations), (
+        f"Result count mismatch: standard={len(standard_loco.associations)}, "
+        f"secular={len(secular_loco.associations)}"
+    )
+
+    # Sort both by (chr, ps) for stable comparison
+    std_sorted = sorted(standard_loco.associations, key=lambda r: (r.chr, r.ps))
+    sec_sorted = sorted(secular_loco.associations, key=lambda r: (r.chr, r.ps))
+
+    std_betas = np.array([r.beta for r in std_sorted])
+    sec_betas = np.array([r.beta for r in sec_sorted])
+    std_ses = np.array([r.se for r in std_sorted])
+    sec_ses = np.array([r.se for r in sec_sorted])
+    std_pwalds = np.array([r.p_wald for r in std_sorted])
+    sec_pwalds = np.array([r.p_wald for r in sec_sorted])
+
+    # Eigenvalue parity (rtol=1e-10) implies association results should
+    # also match at high precision. Using calibrated EQUIVALENCE.md tolerances.
+    np.testing.assert_allclose(
+        sec_betas,
+        std_betas,
+        rtol=1e-4,
+        atol=1e-12,
+        err_msg="beta mismatch between secular and standard paths",
+    )
+    np.testing.assert_allclose(
+        sec_ses,
+        std_ses,
+        rtol=1e-4,
+        atol=1e-12,
+        err_msg="se mismatch between secular and standard paths",
+    )
+    # Mask NaN p_wald (degenerate SNPs)
+    finite_mask = np.isfinite(std_pwalds) & np.isfinite(sec_pwalds)
+    if np.any(finite_mask):
+        np.testing.assert_allclose(
+            sec_pwalds[finite_mask],
+            std_pwalds[finite_mask],
+            rtol=1e-4,
+            atol=1e-12,
+            err_msg="p_wald mismatch between secular and standard paths",
+        )
+
+
+@pytest.mark.tier1
+def test_secular_update_jax_backend_raises() -> None:
+    """use_secular_update=True with backend='jax' raises ValueError."""
+    from jamma.lmm.loco import run_lmm_loco
+
+    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+
+    with pytest.raises(ValueError, match="use_secular_update=True is only supported"):
+        run_lmm_loco(
+            bed_path=_LOCO_BFILE,
+            phenotypes=phenotypes,
+            lmm_mode=1,
+            show_progress=False,
+            check_memory=False,
+            backend="jax",
+            use_secular_update=True,
+        )

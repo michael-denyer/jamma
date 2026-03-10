@@ -924,6 +924,7 @@ class PipelineRunner:
                 write_eigen=self.config.write_eigen,
                 eigen_dir=self.config.eigen_dir,
                 eigen_prefix=self.config.output_prefix,
+                use_secular_update=getattr(self.config, "use_secular_update", False),
             )
             loco_s = time.perf_counter() - t_loco
             total_s = time.perf_counter() - t_start

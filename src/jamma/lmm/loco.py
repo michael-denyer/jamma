@@ -42,6 +42,7 @@ from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
+from jamma.lmm.loco_eigen_update import loco_eigendecompose_from_full
 from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
     _compute_null_model_common,
@@ -240,7 +241,11 @@ def _compute_loco_kinship_streaming_numpy(
     ksnps_indices: np.ndarray | None = None,
     valid_indices: np.ndarray | None = None,
     _max_batch_chrs: int | None = None,
-) -> tuple[Iterator[tuple[str, np.ndarray]], SnpStatsCache]:
+    yield_s_chr: bool = False,
+) -> (
+    tuple[Iterator[tuple[str, np.ndarray]], SnpStatsCache]
+    | tuple[int, Iterator[tuple[str, np.ndarray, int]], SnpStatsCache]
+):
     """Compute LOCO kinship matrices using pure NumPy (no JAX dependency).
 
     Mirrors compute_loco_kinship_streaming from jamma.kinship but uses
@@ -266,12 +271,21 @@ def _compute_loco_kinship_streaming_numpy(
         _max_batch_chrs: Debug override for batch_size_chrs. When set, forces
             multi-pass mode with at most this many chromosomes per pass. Used
             by tests to verify multi-pass equivalence without mocking psutil.
+        yield_s_chr: If True, yield (chr_name, S_chr, p_chr) 3-tuples instead
+            of (chr_name, K_loco) 2-tuples and return (n_filtered, iter,
+            snp_stats_cache). S_chr is the un-normalised chromosome Gram
+            matrix; the caller is responsible for constructing K_loco or
+            using S_chr with loco_eigendecompose_from_full.
 
     Returns:
-        Tuple of (loco_iter, snp_stats_cache) where loco_iter yields
-        (chr_name, K_loco) pairs and snp_stats_cache holds global SNP
-        statistics from PASS 1 for reuse in the association pass (LOCO-01).
-        When valid_indices is provided, K_loco matrices are n_valid x n_valid.
+        When yield_s_chr=False (default): Tuple of (loco_iter, snp_stats_cache)
+        where loco_iter yields (chr_name, K_loco) pairs and snp_stats_cache
+        holds global SNP statistics from PASS 1. K_loco matrices are
+        n_valid x n_valid when valid_indices is provided.
+
+        When yield_s_chr=True: Tuple of (n_filtered, s_chr_iter, snp_stats_cache)
+        where n_filtered is p_full and s_chr_iter yields (chr_name, S_chr, p_chr)
+        3-tuples with the raw (un-normalised) chromosome Gram matrices.
     """
     import psutil
 
@@ -527,11 +541,16 @@ def _compute_loco_kinship_streaming_numpy(
         S_full_buf: np.ndarray,
         batch_S_chr: dict[str, np.ndarray],
         K_loco_buf: np.ndarray,
-    ) -> Iterator[tuple[str, np.ndarray]]:
-        """Yield independent (chr_name, K_loco) pairs, one per chromosome.
+    ) -> Iterator[tuple[str, np.ndarray] | tuple[str, np.ndarray, int]]:
+        """Yield per-chromosome matrices, one per chromosome.
 
+        When yield_s_chr=False (default): yields (chr_name, K_loco) 2-tuples.
         K_loco is computed in-place via buffer reuse, then copied before
         yielding so callers may freely materialise the iterator.
+
+        When yield_s_chr=True: yields (chr_name, S_chr, p_chr) 3-tuples with
+        the raw chromosome Gram matrix (un-normalised). The caller uses
+        S_chr with loco_eigendecompose_from_full.
         """
         for chr_name in sorted(batch_S_chr.keys(), key=chr_sort_key):
             p_chr = n_chr_filtered[chr_name]
@@ -541,13 +560,23 @@ def _compute_loco_kinship_streaming_numpy(
                     f"Cannot compute LOCO kinship: all {n_filtered} filtered SNPs "
                     f"are on chromosome '{chr_name}'."
                 )
-            np.subtract(S_full_buf, batch_S_chr[chr_name], out=K_loco_buf)
-            K_loco_buf /= p_loco
-            logger.debug(
-                f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs retained"
-            )
-            del batch_S_chr[chr_name]
-            yield (chr_name, K_loco_buf.copy())
+            if yield_s_chr:
+                s_chr_copy = batch_S_chr[chr_name].copy()
+                del batch_S_chr[chr_name]
+                logger.debug(
+                    f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs "
+                    f"retained (S_chr mode)"
+                )
+                yield (chr_name, s_chr_copy, p_chr)
+            else:
+                np.subtract(S_full_buf, batch_S_chr[chr_name], out=K_loco_buf)
+                K_loco_buf /= p_loco
+                logger.debug(
+                    f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs "
+                    f"retained"
+                )
+                del batch_S_chr[chr_name]
+                yield (chr_name, K_loco_buf.copy())
 
     def _yield_matrices() -> Iterator[tuple[str, np.ndarray]]:
         nonlocal S_full  # needed: S_full /= n_filtered is augmented assignment
@@ -606,18 +635,34 @@ def _compute_loco_kinship_streaming_numpy(
                 f"{n_batches} passes over {n_chr_with_snps} chromosomes"
             )
 
-        # Yield full kinship for chromosomes with 0 filtered SNPs
+        # Yield full kinship for chromosomes with 0 filtered SNPs.
+        # When yield_s_chr=True: yield (chr_name, zero S_chr, p_chr=0) so
+        # loco_eigendecompose_from_full can handle the degenerate case.
         if chrs_without_snps:
-            S_full /= n_filtered
-            for chr_name in sorted(chrs_without_snps, key=chr_sort_key):
-                logger.debug(
-                    f"LOCO chr {chr_name}: 0 SNPs after filtering, using full kinship"
+            if yield_s_chr:
+                zero_s_chr = np.zeros(
+                    (n_samples_kinship, n_samples_kinship), dtype=np.float64
                 )
-                yield (chr_name, S_full.copy())
+                for chr_name in sorted(chrs_without_snps, key=chr_sort_key):
+                    logger.debug(
+                        f"LOCO chr {chr_name}: 0 SNPs after filtering, "
+                        f"S_chr=0 (secular update uses full kinship)"
+                    )
+                    yield (chr_name, zero_s_chr.copy(), 0)
+            else:
+                S_full /= n_filtered
+                for chr_name in sorted(chrs_without_snps, key=chr_sort_key):
+                    logger.debug(
+                        f"LOCO chr {chr_name}: 0 SNPs after filtering, "
+                        f"using full kinship"
+                    )
+                    yield (chr_name, S_full.copy())
 
     S_full = np.zeros((n_samples_kinship, n_samples_kinship), dtype=np.float64)
     K_loco_buf = np.empty_like(S_full)
 
+    if yield_s_chr:
+        return n_filtered, _yield_matrices(), snp_stats_cache
     return _yield_matrices(), snp_stats_cache
 
 
@@ -696,6 +741,7 @@ def run_lmm_loco(
     write_eigen: bool = False,
     eigen_dir: Path | None = None,
     eigen_prefix: str = "result",
+    use_secular_update: bool = False,
 ) -> LocoResult:
     """Run LOCO LMM association: per-chromosome eigendecomp and association.
 
@@ -740,6 +786,13 @@ def run_lmm_loco(
             When set, checks for cached files before computing. Combined
             with write_eigen, writes new files here.
         eigen_prefix: Prefix for eigen filenames (default "result").
+        use_secular_update: If True and eigen_cache is None, compute the full
+            kinship eigendecomposition once via eigendecompose_kinship(K_full)
+            then derive per-chromosome eigendecompositions via
+            loco_eigendecompose_from_full instead of eigendecomposing each
+            K_loco independently. Only supported with the numpy backend.
+            Raises ValueError if True with backend="jax". Ignored when
+            using cached eigen files (eigen_cache is set).
 
     Returns:
         LocoResult with associations in biological chromosome order
@@ -764,6 +817,12 @@ def run_lmm_loco(
         raise ValueError(
             "write_eigen=True requires eigen_dir to be set. "
             "Pass eigen_dir or use --eigen-dir on the CLI."
+        )
+
+    if use_secular_update and backend != "numpy":
+        raise ValueError(
+            "use_secular_update=True is only supported with backend='numpy'. "
+            f"Got backend={backend!r}."
         )
 
     # Read LOCO worker count and log configuration (LOCO-08)
@@ -884,6 +943,12 @@ def run_lmm_loco(
             snp_stats_cache = None
             kinship_valid_indices = None
             loco_iter = None
+            # Secular update state: set when use_secular_update=True
+            secular_d_full: np.ndarray | None = None
+            secular_U_full: np.ndarray | None = None
+            secular_p_full: int = 0
+            secular_s_chr: dict[str, np.ndarray] = {}
+            secular_p_chr: dict[str, int] = {}
 
             if eigen_cache is None:
                 # Stream LOCO kinship matrices one at a time.
@@ -900,15 +965,62 @@ def run_lmm_loco(
                         else np.where(valid_mask)[0]
                     )
 
-                    loco_iter, snp_stats_cache = _compute_loco_kinship_streaming_numpy(
-                        bed_path,
-                        maf_threshold=maf_threshold,
-                        miss_threshold=miss_threshold,
-                        check_memory=check_memory,
-                        show_progress=show_progress,
-                        ksnps_indices=ksnps_indices,
-                        valid_indices=kinship_valid_indices,
-                    )
+                    if use_secular_update:
+                        # Secular update path: collect S_chr matrices and
+                        # eigendecompose K_full once for all chromosomes.
+                        secular_p_full, s_chr_iter, snp_stats_cache = (
+                            _compute_loco_kinship_streaming_numpy(
+                                bed_path,
+                                maf_threshold=maf_threshold,
+                                miss_threshold=miss_threshold,
+                                check_memory=check_memory,
+                                show_progress=show_progress,
+                                ksnps_indices=ksnps_indices,
+                                valid_indices=kinship_valid_indices,
+                                yield_s_chr=True,
+                            )
+                        )
+                        # Consume iterator to collect all S_chr matrices.
+                        for chr_name_s, s_chr_mat, p_chr_s in s_chr_iter:
+                            secular_s_chr[chr_name_s] = s_chr_mat
+                            secular_p_chr[chr_name_s] = p_chr_s
+                        del s_chr_iter
+
+                        # Compute S_full = sum of all S_chr matrices, then
+                        # eigendecompose K_full = S_full / p_full once.
+                        # K_full = (sum_c S_chr_c) / p_full by definition.
+                        n_kin = next(iter(secular_s_chr.values())).shape[0]
+                        S_full_secular = np.zeros((n_kin, n_kin), dtype=np.float64)
+                        for s_mat in secular_s_chr.values():
+                            S_full_secular += s_mat
+                        K_full_secular = S_full_secular / secular_p_full
+                        del S_full_secular
+
+                        t_kfull = time.perf_counter()
+                        logger.info(
+                            "Secular update: eigendecomposing K_full "
+                            f"(n={n_kin}, p_full={secular_p_full})..."
+                        )
+                        secular_d_full, secular_U_full = eigendecompose_kinship(
+                            K_full_secular, check_memory=check_memory
+                        )
+                        del K_full_secular
+                        logger.info(
+                            f"Secular update: K_full eigendecomp done in "
+                            f"{time.perf_counter() - t_kfull:.3f}s"
+                        )
+                    else:
+                        loco_iter, snp_stats_cache = (
+                            _compute_loco_kinship_streaming_numpy(
+                                bed_path,
+                                maf_threshold=maf_threshold,
+                                miss_threshold=miss_threshold,
+                                check_memory=check_memory,
+                                show_progress=show_progress,
+                                ksnps_indices=ksnps_indices,
+                                valid_indices=kinship_valid_indices,
+                            )
+                        )
                 else:
                     from jamma.kinship import (  # noqa: PLC0415
                         compute_loco_kinship_streaming,
@@ -937,9 +1049,16 @@ def run_lmm_loco(
             first_chr_pve: float | None = None
             first_chr_pve_se: float | None = None
 
-            # Iterate: either from cached eigen files or from kinship stream.
+            # Iterate: either from cached eigen files, kinship stream,
+            # or secular update (pre-collected S_chr + one K_full eigendecomp).
             if eigen_cache is not None:
                 chr_iterator = ((chr_name, None) for chr_name in unique_chrs)
+            elif use_secular_update:
+                # Secular update: iterate over unique_chrs in order; S_chr
+                # and p_chr are in secular_s_chr / secular_p_chr dicts.
+                chr_iterator = (  # type: ignore[assignment]
+                    (chr_name, None) for chr_name in unique_chrs
+                )
             else:
                 assert loco_iter is not None, (
                     "loco_iter must be set when eigen_cache is None"
@@ -967,6 +1086,53 @@ def run_lmm_loco(
                         raise type(e)(
                             f"LOCO eigen cache for chromosome {chr_name}: {e}"
                         ) from e
+                elif use_secular_update:
+                    # Secular update: derive eigendecomposition from K_full.
+                    assert secular_d_full is not None and secular_U_full is not None
+                    if show_progress:
+                        logger.info(
+                            f"LOCO: chromosome {chr_name} "
+                            f"({chr_idx + 1}/{len(unique_chrs)}), "
+                            f"{len(chr_snp_indices)} SNPs, "
+                            f"rotated-basis update..."
+                        )
+                    t_sec = time.perf_counter()
+                    s_chr_c = secular_s_chr.get(chr_name)
+                    p_chr_c = secular_p_chr.get(chr_name, 0)
+                    if s_chr_c is None:
+                        # Chr not in secular dict (not in ksnps) — use K_full eigen
+                        s_chr_c = np.zeros_like(secular_d_full.reshape(1, 1))
+                        s_chr_c = np.zeros(
+                            (secular_d_full.shape[0], secular_d_full.shape[0]),
+                            dtype=np.float64,
+                        )
+                    eigenvalues_np, U = loco_eigendecompose_from_full(
+                        secular_d_full,
+                        secular_U_full,
+                        s_chr_c,
+                        secular_p_full,
+                        p_chr_c,
+                    )
+                    logger.debug(
+                        f"Rotated-basis update for chr {chr_name}: "
+                        f"{time.perf_counter() - t_sec:.3f}s"
+                    )
+
+                    # Optionally write eigen cache for the secular-derived eigen.
+                    if write_eigen:
+                        try:
+                            write_eigen_files(
+                                eigenvalues_np,
+                                U,
+                                eigen_dir,
+                                prefix=f"{eigen_prefix}.loco.chr{chr_name}",
+                            )
+                        except OSError as e:
+                            raise OSError(
+                                f"Failed to write LOCO eigen for chromosome "
+                                f"{chr_name} to {eigen_dir}: {e}"
+                            ) from e
+                        logger.info(f"  Wrote LOCO eigen for chr {chr_name} (secular)")
                 else:
                     # Standard path: kinship -> eigendecomp
                     if show_progress:

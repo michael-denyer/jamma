@@ -17,6 +17,8 @@ import numpy as np
 import pytest
 
 from jamma.lmm.loco_eigen_update import (
+    _apply_vj_to_rows_blocked,
+    _apply_vj_transpose_to_vec_blocked,
     _rank1_update_python,
     loco_eigendecompose_from_full,
     measure_effective_rank,
@@ -560,4 +562,315 @@ def test_mouse_hs1940_r_eff():
         "No chromosome showed r_eff < p_c. "
         "SVD compression ineffective on mouse_hs1940 — secular equation approach "
         "may not be worth implementing."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Delta path tests (Plan 69.3-02)
+# ---------------------------------------------------------------------------
+
+
+def _make_explicit_vj(
+    d: np.ndarray, rho: float, z: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build explicit V_j matrix from a rank-1 update (for test reference).
+
+    Returns (eigenvalues, eigenvectors) where eigenvectors[:, k] is eigenvector k.
+    Uses _rank1_update_python (np.linalg.eigh) as ground truth.
+    """
+    return _rank1_update_python(d, rho, z)
+
+
+def _compute_norm_j(
+    z_unit: np.ndarray, d: np.ndarray, eigenvalues: np.ndarray
+) -> np.ndarray:
+    """Compute norm_j[k] = ||z_unit / (d - eigenvalues[k])||_2 for all k.
+
+    Applies deflation guard: skip terms where |d[l] - eigenvalues[k]| < 1e-300.
+    """
+    n = len(d)
+    norms = np.empty(n)
+    for k in range(n):
+        delta_k = d - eigenvalues[k]
+        # Deflation guard
+        safe = np.abs(delta_k) > 1e-300
+        norm_sq = np.sum((z_unit[safe] / delta_k[safe]) ** 2)
+        norms[k] = np.sqrt(norm_sq) if norm_sq > 0.0 else 0.0
+    return norms
+
+
+def test_apply_vj_to_rows_blocked():
+    """_apply_vj_to_rows_blocked(R, z, d, lam, norm) matches R @ V_j within rtol=1e-10.
+
+    Creates a small n=20 rank-1 problem, computes explicit V_j via eigh,
+    and verifies the blocked Cauchy multiply gives the same result.
+    """
+    rng = np.random.default_rng(seed=42)
+    n = 20
+    d = np.sort(rng.uniform(0.1, 5.0, n))
+    z = rng.standard_normal(n)
+    rho = 0.5
+
+    # Get explicit V_j
+    eigenvalues, V_j = _make_explicit_vj(d, rho, z)
+
+    # Sort (eigh returns ascending so this is usually a no-op, but be explicit)
+    sort_idx = np.argsort(eigenvalues)
+    eigenvalues = eigenvalues[sort_idx]
+    V_j = V_j[:, sort_idx]
+
+    # Compute z_unit and norm_j for the blocked helper
+    z_unit = z / np.linalg.norm(z)
+    norm_j = _compute_norm_j(z_unit, d, eigenvalues)
+
+    # Random row batch R (b=5, n=20)
+    b = 5
+    R = rng.standard_normal((b, n))
+
+    # Reference: R @ V_j
+    R_ref = R @ V_j
+
+    # Test: blocked Cauchy multiply
+    R_blocked = _apply_vj_to_rows_blocked(
+        R, z_unit, d, eigenvalues, norm_j, col_block_size=7
+    )
+
+    np.testing.assert_allclose(
+        R_blocked,
+        R_ref,
+        rtol=1e-10,
+        atol=1e-12,
+        err_msg="_apply_vj_to_rows_blocked does not match R @ V_j",
+    )
+
+
+def test_apply_vj_transpose_to_vec_blocked():
+    """_apply_vj_transpose_to_vec_blocked(v, ...) matches V_j.T @ v (rtol=1e-10)."""
+    rng = np.random.default_rng(seed=99)
+    n = 20
+    d = np.sort(rng.uniform(0.1, 5.0, n))
+    z = rng.standard_normal(n)
+    rho = 0.7
+
+    eigenvalues, V_j = _make_explicit_vj(d, rho, z)
+    sort_idx = np.argsort(eigenvalues)
+    eigenvalues = eigenvalues[sort_idx]
+    V_j = V_j[:, sort_idx]
+
+    z_unit = z / np.linalg.norm(z)
+    norm_j = _compute_norm_j(z_unit, d, eigenvalues)
+
+    # Random vector v (n=20)
+    v = rng.standard_normal(n)
+
+    # Reference: V_j.T @ v
+    v_ref = V_j.T @ v
+
+    # Test: blocked transpose
+    v_blocked = _apply_vj_transpose_to_vec_blocked(
+        v, z_unit, d, eigenvalues, norm_j, col_block_size=7
+    )
+
+    np.testing.assert_allclose(
+        v_blocked,
+        v_ref,
+        rtol=1e-10,
+        atol=1e-12,
+        err_msg="_apply_vj_transpose_to_vec_blocked does not match V_j.T @ v",
+    )
+
+
+def test_delta_path_vs_q_path():
+    """Delta path eigenvalues match Q path within rtol=1e-8 on n=200 synthetic data.
+
+    n_threshold_for_delta=0 forces delta path; n_threshold_for_delta=99999 forces Q
+    path. Also checks eigenvector orthogonality and subspace alignment.
+    """
+    _, d_full, U_full, _, _, p_full, p_chr, X_c = _make_synthetic_dataset(
+        n=200, p=500, p_c=100, seed=42
+    )
+
+    # Force Q path
+    d_q, U_q = secular_eigendecompose_from_full(
+        d_full, U_full, X_c, p_full, p_chr, n_threshold_for_delta=99999
+    )
+
+    # Force delta path
+    d_delta, U_delta = secular_eigendecompose_from_full(
+        d_full, U_full, X_c, p_full, p_chr, n_threshold_for_delta=0
+    )
+
+    # Eigenvalues must match
+    np.testing.assert_allclose(
+        np.sort(d_delta),
+        np.sort(d_q),
+        rtol=1e-8,
+        err_msg="Delta path eigenvalues do not match Q path",
+    )
+
+    # Eigenvectors must be orthogonal
+    deviation = np.max(np.abs(U_delta.T @ U_delta - np.eye(U_delta.shape[0])))
+    assert deviation < 1e-8, (
+        f"Delta path eigenvectors not orthogonal: max|U^T U - I| = {deviation:.2e}"
+    )
+
+    # Eigenvectors span same subspace: each delta column should align with some Q column
+    # Check: for each column, the max |dot product| with any Q-path column > 0.99
+    for k in range(U_delta.shape[1]):
+        dots = np.abs(U_q.T @ U_delta[:, k])
+        assert np.max(dots) > 0.99, (
+            f"Delta path eigenvector {k} does not align with any Q-path eigenvector "
+            f"(max |dot| = {np.max(dots):.4f})"
+        )
+
+
+def test_delta_path_eigenvector_orthogonality():
+    """Delta path eigenvectors satisfy max|U^T U - I| < 1e-8 for n=300 data."""
+    _, d_full, U_full, _, _, p_full, p_chr, X_c = _make_synthetic_dataset(
+        n=300, p=600, p_c=120, seed=7
+    )
+
+    _, U_delta = secular_eigendecompose_from_full(
+        d_full, U_full, X_c, p_full, p_chr, n_threshold_for_delta=0
+    )
+
+    deviation = np.max(np.abs(U_delta.T @ U_delta - np.eye(U_delta.shape[0])))
+    assert deviation < 1e-8, (
+        f"Delta path eigenvectors not orthogonal (n=300): "
+        f"max|U^T U - I| = {deviation:.2e}"
+    )
+
+
+def test_delta_path_trace_identity():
+    """sum(d_delta) matches trace(K_loco) within rtol=1e-6."""
+    _, d_full, U_full, _, K_loco, p_full, p_chr, X_c = _make_synthetic_dataset(
+        n=200, p=500, p_c=100, seed=42
+    )
+
+    d_delta, _ = secular_eigendecompose_from_full(
+        d_full, U_full, X_c, p_full, p_chr, n_threshold_for_delta=0
+    )
+
+    trace_ref = np.trace(K_loco)
+    trace_delta = np.sum(d_delta)
+
+    np.testing.assert_allclose(
+        trace_delta,
+        trace_ref,
+        rtol=1e-6,
+        err_msg=(
+            f"sum(d_delta)={trace_delta:.6f} does not match "
+            f"trace(K_loco)={trace_ref:.6f}"
+        ),
+    )
+
+
+def test_delta_path_threshold_routing(capfd):
+    """n_threshold_for_delta correctly routes n=200 to delta vs Q path.
+
+    We verify routing by checking the result — delta path n_threshold_for_delta=100
+    (n=200 > 100) triggers delta path; n_threshold_for_delta=300 (n=200 <= 300) uses Q.
+    Both produce consistent results (eigenvalues match).
+    """
+    _, d_full, U_full, _, _, p_full, p_chr, X_c = _make_synthetic_dataset(
+        n=200, p=500, p_c=100, seed=42
+    )
+
+    # Delta path: threshold=100 means n=200 > 100 -> delta
+    d_delta, _ = secular_eigendecompose_from_full(
+        d_full, U_full, X_c, p_full, p_chr, n_threshold_for_delta=100
+    )
+
+    # Q path: threshold=300 means n=200 <= 300 -> Q
+    d_q, _ = secular_eigendecompose_from_full(
+        d_full, U_full, X_c, p_full, p_chr, n_threshold_for_delta=300
+    )
+
+    np.testing.assert_allclose(
+        np.sort(d_delta),
+        np.sort(d_q),
+        rtol=1e-8,
+        err_msg="Threshold routing: delta and Q paths produce different eigenvalues",
+    )
+
+
+def test_delta_path_custom_batch_sizes():
+    """Custom row_batch_size and col_block_size produce correct results (rtol=1e-8)."""
+    _, d_full, U_full, _, _, p_full, p_chr, X_c = _make_synthetic_dataset(
+        n=200, p=500, p_c=100, seed=42
+    )
+
+    # Reference: force Q path
+    d_ref, _ = secular_eigendecompose_from_full(
+        d_full, U_full, X_c, p_full, p_chr, n_threshold_for_delta=99999
+    )
+
+    # Delta path with small non-default batch/block sizes
+    d_custom, U_custom = secular_eigendecompose_from_full(
+        d_full,
+        U_full,
+        X_c,
+        p_full,
+        p_chr,
+        n_threshold_for_delta=0,
+        row_batch_size=50,
+        col_block_size=30,
+    )
+
+    np.testing.assert_allclose(
+        np.sort(d_custom),
+        np.sort(d_ref),
+        rtol=1e-8,
+        err_msg="Custom batch sizes: delta path eigenvalues differ from Q path",
+    )
+
+    # Orthogonality check
+    deviation = np.max(np.abs(U_custom.T @ U_custom - np.eye(U_custom.shape[0])))
+    assert deviation < 1e-8, (
+        f"Custom batch sizes: eigenvectors not orthogonal: "
+        f"max|U^T U - I| = {deviation:.2e}"
+    )
+
+
+def test_delta_path_memory():
+    """Delta path peak memory < Q-path peak memory for n=2000 (covers DELTA-03).
+
+    n=2000: Q = np.eye(2000) = 32 MB. Delta path stores 4 * r_eff * n vectors
+    instead of n x n Q matrix, so peak should be noticeably lower.
+    """
+    import tracemalloc
+
+    _, d_full, U_full, _, _, p_full, p_chr, X_c = _make_synthetic_dataset(
+        n=2000, p=4000, p_c=800, seed=99
+    )
+
+    # Measure Q-path peak memory
+    tracemalloc.start()
+    tracemalloc.reset_peak()
+    secular_eigendecompose_from_full(
+        d_full, U_full, X_c, p_full, p_chr, n_threshold_for_delta=99999
+    )
+    _, peak_q = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    # Measure delta-path peak memory
+    tracemalloc.start()
+    tracemalloc.reset_peak()
+    secular_eigendecompose_from_full(
+        d_full, U_full, X_c, p_full, p_chr, n_threshold_for_delta=0
+    )
+    _, peak_delta = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    # Delta path must use less peak memory than Q path
+    assert peak_delta < peak_q, (
+        f"Delta path peak memory ({peak_delta / 1e6:.1f} MB) is not less than "
+        f"Q path peak memory ({peak_q / 1e6:.1f} MB). "
+        f"Delta path must eliminate Q = np.eye(n) allocation."
+    )
+
+    # Sanity check: Q path peak is at least 30 MB (eye(2000) = 32 MB)
+    assert peak_q >= 30 * 1024 * 1024, (
+        f"Q path peak memory ({peak_q / 1e6:.1f} MB) is suspiciously low "
+        f"(expected >= 30 MB for n=2000 Q = np.eye(n))."
     )

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import gc
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from pathlib import Path
@@ -86,7 +87,7 @@ _ALL_RESULT_KEYS = (
 
 
 def _guarded_compute(
-    fn: object,
+    fn: Callable[..., dict],
     *args: object,
     operation: str,
     write_offset: int,
@@ -1150,7 +1151,8 @@ def run_lmm_association_numpy(
         for key, n_nan in nan_counts.items():
             logger.warning(
                 f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
-                "check kinship matrix quality and available memory"
+                "check for degenerate (constant) genotypes "
+                "and kinship matrix quality"
             )
         log_lambda_boundary_warning(n_at_lmin_accum, n_at_lmax_accum, l_min, l_max)
     else:
@@ -1160,7 +1162,8 @@ def run_lmm_association_numpy(
             if n_nan > 0:
                 logger.warning(
                     f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
-                    "check kinship matrix quality and available memory"
+                    "check for degenerate (constant) genotypes "
+                    "and kinship matrix quality"
                 )
 
         # Lambda boundary convergence diagnostics

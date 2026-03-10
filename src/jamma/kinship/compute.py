@@ -1032,17 +1032,25 @@ def compute_loco_kinship_streaming(
     n_chr_with_snps = len(chrs_with_snps)
 
     # Determine memory strategy: single-pass vs multi-pass batching
+    from jamma.core.memory import _dsyevr_peak_gb
+
     matrix_gb = n_samples**2 * 8 / 1e9
     chunk_buffer_gb = n_samples * chunk_size * 8 / 1e9
-    single_pass_gb = matrix_gb * (1 + n_chr_with_snps) + chunk_buffer_gb
+    # S_full + K_loco_buf + all S_chr + chunk buffer
+    single_pass_gb = matrix_gb * (2 + n_chr_with_snps) + chunk_buffer_gb
     available_gb = psutil.virtual_memory().available / 1e9
-    # S_full (numpy, persistent) + batch of S_chr (JAX) + chunk buffer
-    min_required_gb = matrix_gb * 2 + chunk_buffer_gb  # S_full + 1 S_chr + buffer
+    # Minimum: S_full + K_loco_buf + 1 S_chr + chunk buffer + eigendecomp workspace.
+    # Eigendecomp runs while the generator is suspended with S_chr still alive.
+    # Uses DSYEVR peak (smaller driver) — eigendecompose_kinship() falls back
+    # from DSYEVD to DSYEVR under memory pressure, making this self-consistent.
+    eigendecomp_min_gb = _dsyevr_peak_gb(n_samples)
+    min_required_gb = matrix_gb * 3 + chunk_buffer_gb + eigendecomp_min_gb
 
     if check_memory and min_required_gb > available_gb * 0.9:
         raise MemoryError(
             f"Insufficient memory for LOCO kinship: need at least "
-            f"{min_required_gb:.1f}GB for S_full + one S_chr, "
+            f"{min_required_gb:.1f}GB for S_full + K_loco_buf + one S_chr + "
+            f"eigendecomp ({eigendecomp_min_gb:.1f}GB), "
             f"available {available_gb:.1f}GB"
         )
 
@@ -1090,7 +1098,20 @@ def compute_loco_kinship_streaming(
         # First pass holds JAX S_full + batch S_chr + chunk buffer; after
         # conversion, numpy S_full replaces JAX S_full (briefly both exist).
         # Reserve 2x matrix_gb for that transition.
-        usable_gb = available_gb * 0.9 - 2 * matrix_gb - chunk_buffer_gb
+        #
+        # The consumer eigendecomposes each K_loco while the generator is
+        # suspended with remaining S_chr matrices still alive. Reserve
+        # eigendecomp workspace so the batch doesn't exhaust memory before
+        # eigendecomp can run. The reservation covers:
+        #   - K_loco copy yielded to consumer (1 matrix)
+        #   - eigendecomp additional memory beyond K_loco (eigenvectors + workspace)
+        eigendecomp_reserve_gb = _dsyevr_peak_gb(n_samples)
+        usable_gb = (
+            available_gb * 0.9
+            - 2 * matrix_gb
+            - chunk_buffer_gb
+            - eigendecomp_reserve_gb
+        )
         batch_size = max(1, int(usable_gb / matrix_gb))
 
         n_batches = (n_chr_with_snps + batch_size - 1) // batch_size

@@ -579,9 +579,10 @@ def run_lmm_association_streaming(
                             for key, arr in arrays.items():
                                 if arr.dtype.kind != "f":
                                     continue
-                                n_nan = int(np.sum(np.isnan(arr)))
-                                if n_nan > 0:
-                                    nan_counts[key] = nan_counts.get(key, 0) + n_nan
+                                if not np.any(np.isnan(arr)):
+                                    continue
+                                n_nan = int(np.count_nonzero(np.isnan(arr)))
+                                nan_counts[key] = nan_counts.get(key, 0) + n_nan
 
                             if writer is not None:
                                 writer.write_arrays_batch(

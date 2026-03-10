@@ -493,7 +493,8 @@ def run_lmm_association_jax(
             for key, n_nan in nan_counts.items():
                 logger.warning(
                     f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
-                    "check kinship matrix quality and available memory"
+                    "check for degenerate (constant) genotypes "
+                    "and kinship matrix quality"
                 )
             log_lambda_boundary_warning(n_at_lmin_accum, n_at_lmax_accum, l_min, l_max)
         else:
@@ -502,7 +503,8 @@ def run_lmm_association_jax(
                 if n_nan > 0:
                     logger.warning(
                         f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
-                        "check kinship matrix quality and available memory"
+                        "check for degenerate (constant) genotypes "
+                        "and kinship matrix quality"
                     )
             n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
                 lmm_mode, arrays_out, l_min, l_max

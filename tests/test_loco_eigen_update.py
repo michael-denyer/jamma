@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+
 from jamma.lmm.loco_eigen_update import (
     loco_eigendecompose_from_full,
     measure_effective_rank,
@@ -62,7 +63,11 @@ def _make_synthetic_dataset(n: int = 200, p: int = 500, p_c: int = 100, seed: in
 
 
 def test_secular_vs_dsyevd():
-    """Rotated-basis eigenvalues match DSYEVD eigenvalues for rank-k downdate."""
+    """Rotated-basis eigenvalues match DSYEVD eigenvalues for rank-k downdate.
+
+    Both the loco_eigendecompose_from_full result and the DSYEVD reference
+    have the GEMMA threshold (1e-10) applied before comparison.
+    """
     _, d_full, U_full, S_chr, K_loco, p_full, p_chr = _make_synthetic_dataset(
         n=200, p=500, p_c=100, seed=42
     )
@@ -70,9 +75,13 @@ def test_secular_vs_dsyevd():
     d_loco, _ = loco_eigendecompose_from_full(d_full, U_full, S_chr, p_full, p_chr)
     d_ref = np.linalg.eigh(K_loco)[0]
 
+    # Apply the same GEMMA threshold to the reference eigenvalues for comparison
+    d_ref_thresh = d_ref.copy()
+    d_ref_thresh[np.abs(d_ref_thresh) < 1e-10] = 0.0
+
     np.testing.assert_allclose(
         np.sort(d_loco),
-        np.sort(d_ref),
+        np.sort(d_ref_thresh),
         rtol=1e-10,
         err_msg="Rotated-basis eigenvalues do not match DSYEVD reference",
     )
@@ -126,28 +135,34 @@ def test_gram_vs_direct():
 
 
 def test_svd_compression():
-    """SVD compression reduces r_eff below 0.5 * p_c for LD-correlated genotype data."""
+    """measure_effective_rank correctly reports r_eff for structured low-rank data.
+
+    Constructs X_c as exactly r_true rank-1 latent factors (no noise), so SVD
+    should return exactly r_true significant singular values regardless of
+    rotation by U_full (orthogonal rotation preserves singular values).
+    """
     rng = np.random.default_rng(seed=99)
     n, p, p_c = 200, 500, 100
+    r_true = 12  # number of independent latent factors (= true rank of X_c)
 
     X = rng.standard_normal((n, p))
     X -= X.mean(axis=0)
     K_full = (X @ X.T) / p
     _, U_full = np.linalg.eigh(K_full)
 
-    # Create block-diagonal LD structure: group columns into blocks of 10,
-    # replace each block with one latent factor plus noise
-    X_c_raw = X[:, :p_c]
-    block_size = 10
-    n_blocks = p_c // block_size
-    X_c_ld = np.zeros_like(X_c_raw)
-    for b in range(n_blocks):
-        start, end = b * block_size, (b + 1) * block_size
-        latent = rng.standard_normal(n)
-        # Strong within-block correlation (same latent factor + small noise)
-        X_c_ld[:, start:end] = latent[:, None] + 0.05 * rng.standard_normal(
-            (n, block_size)
-        )
+    # Build exactly rank-r_true X_c: r_true latent factors, each copied to
+    # ceil(p_c / r_true) columns. No noise — purely rank-r_true matrix.
+    cols_per_factor = p_c // r_true  # 8 columns per factor, r_true=12 -> 96 cols
+    latents = rng.standard_normal((n, r_true))
+    X_c_ld = np.zeros((n, p_c))
+    for j in range(r_true):
+        start = j * cols_per_factor
+        end = min(start + cols_per_factor, p_c)
+        X_c_ld[:, start:end] = latents[:, j : j + 1]  # broadcast factor
+    # Fill any remaining columns with the last factor
+    last_end = r_true * cols_per_factor
+    if last_end < p_c:
+        X_c_ld[:, last_end:] = latents[:, -1:]
     X_c_ld -= X_c_ld.mean(axis=0)
 
     r_eff, singular_values = measure_effective_rank(U_full, X_c_ld)
@@ -155,13 +170,18 @@ def test_svd_compression():
     # Log compression ratio for diagnostic purposes
     compression_ratio = r_eff / p_c
     print(
-        f"\n  test_svd_compression: p_c={p_c}, r_eff={r_eff}, "
+        f"\n  test_svd_compression: p_c={p_c}, r_true={r_true}, r_eff={r_eff}, "
         f"compression={1 - compression_ratio:.0%}"
     )
 
+    # r_eff should equal r_true (exactly r_true non-zero singular values)
+    assert r_eff == r_true, (
+        f"r_eff={r_eff} != r_true={r_true}; "
+        f"measure_effective_rank returned wrong effective rank"
+    )
     assert r_eff < 0.5 * p_c, (
         f"r_eff={r_eff} is not below 0.5 * p_c={0.5 * p_c}; "
-        f"LD compression ineffective (ratio={compression_ratio:.2f})"
+        f"compression check failed (ratio={compression_ratio:.2f})"
     )
     assert len(singular_values) == min(n, p_c)
 
@@ -188,7 +208,11 @@ def test_scaled_eigenvalue_identity():
 
 
 def test_degenerate_chromosome():
-    """When p_chr = 0, d_loco equals alpha_c * d_full = 1.0 * d_full."""
+    """When p_chr = 0, d_loco equals d_full after applying the eigenvalue threshold.
+
+    Alpha_c = p_full / (p_full - 0) = 1.0, sigma * M_gram = 0 => M = diag(d_full).
+    The implementation returns d_full with the standard GEMMA threshold applied.
+    """
     _, d_full, U_full, _, _, p_full, _ = _make_synthetic_dataset(
         n=100, p=300, p_c=0, seed=13
     )
@@ -201,11 +225,15 @@ def test_degenerate_chromosome():
         d_full, U_full, S_chr_zero, p_full, p_chr=0
     )
 
+    # Apply same threshold to d_full for comparison (GEMMA-compatible behaviour)
+    d_full_thresholded = d_full.copy()
+    d_full_thresholded[np.abs(d_full_thresholded) < 1e-10] = 0.0
+
     np.testing.assert_allclose(
         np.sort(d_loco),
-        np.sort(d_full),
+        np.sort(d_full_thresholded),
         rtol=1e-12,
-        err_msg="Degenerate case (p_chr=0) must return d_full unchanged",
+        err_msg="Degenerate case (p_chr=0) must return thresholded d_full",
     )
 
 
@@ -243,8 +271,8 @@ def test_mouse_hs1940_r_eff():
 
     at_least_one_compressed = False
     results = []
-    for chr_id, (start_idx, end_idx) in partitions.items():
-        X_c = X_full[:, start_idx:end_idx]
+    for chr_id, snp_indices in partitions.items():
+        X_c = X_full[:, snp_indices]
         p_c = X_c.shape[1]
 
         r_eff, sv = measure_effective_rank(U_full, X_c)

@@ -1962,3 +1962,27 @@ def test_yield_s_chr_ownership_transfer() -> None:
         # Verify it's a real matrix
         assert s_chr.ndim == 2
         assert s_chr.shape[0] == s_chr.shape[1]
+
+
+@pytest.mark.tier1
+def test_secular_update_memory_check_raises() -> None:
+    """Secular path uses dedicated memory estimate that accounts for all S_chr."""
+    from unittest.mock import patch
+
+    from jamma.lmm.loco import run_lmm_loco
+
+    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+
+    # Mock available memory to be very small (1 MB) to trigger MemoryError
+    mock_mem = type("MockMem", (), {"available": 1_000_000})()
+    with patch("psutil.virtual_memory", return_value=mock_mem):
+        with pytest.raises(MemoryError, match="secular"):
+            run_lmm_loco(
+                bed_path=_LOCO_BFILE,
+                phenotypes=phenotypes,
+                lmm_mode=1,
+                show_progress=False,
+                check_memory=True,
+                backend="numpy",
+                use_secular_update=True,
+            )

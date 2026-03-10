@@ -422,7 +422,7 @@ def _compute_loco_kinship_streaming_numpy(
     eigendecomp_min_gb = _dsyevr_peak_gb(n_samples_kinship)
     min_required_gb = matrix_gb * 3 + chunk_buffer_gb + eigendecomp_min_gb
 
-    if check_memory and min_required_gb > available_gb * 0.9:
+    if check_memory and not yield_s_chr and min_required_gb > available_gb * 0.9:
         raise MemoryError(
             f"Insufficient memory for NumPy LOCO kinship: need at least "
             f"{min_required_gb:.1f}GB for S_full + K_loco_buf + one S_chr + "
@@ -434,7 +434,28 @@ def _compute_loco_kinship_streaming_numpy(
     # INVARIANT: accumulate_s_full must be True ONLY for the first pass (batch_idx==0).
     # If True for subsequent passes, S_full is accumulated multiple times, corrupting
     # all K_loco matrices — each K_loco would be subtracted from an inflated S_full.
-    if _max_batch_chrs is not None:
+    if yield_s_chr:
+        # Secular path: retains ALL S_chr matrices + K_full accumulator + eigendecomp.
+        # No multi-pass fallback — all S_chr must be in memory for the
+        # per-chromosome eigenvalue update.
+        secular_peak_gb = (
+            matrix_gb * (n_chr_with_snps + 1)  # all S_chr + K_full accumulator
+            + chunk_buffer_gb
+            + eigendecomp_min_gb
+        )
+        if check_memory and secular_peak_gb > available_gb * 0.9:
+            raise MemoryError(
+                f"Insufficient memory for secular LOCO update: need "
+                f"{secular_peak_gb:.1f}GB for {n_chr_with_snps} S_chr matrices "
+                f"({n_chr_with_snps} x {matrix_gb:.2f}GB) + K_full accumulator "
+                f"+ eigendecomp ({eigendecomp_min_gb:.1f}GB), "
+                f"available {available_gb:.1f}GB. "
+                f"Consider using standard LOCO (use_secular_update=False)."
+            )
+        # Secular path is always single-pass (no multi-pass fallback).
+        single_pass = True
+        batch_size_chrs = n_chr_with_snps
+    elif _max_batch_chrs is not None:
         batch_size_chrs = _max_batch_chrs
         single_pass = n_chr_with_snps <= batch_size_chrs
     else:

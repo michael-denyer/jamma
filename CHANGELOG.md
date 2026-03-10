@@ -5,6 +5,23 @@ All notable changes to JAMMA will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- NaN diagnostic accumulation in streaming runner — tracks per-key NaN counts
+  across chunks and logs warnings with actionable advice (degenerate genotypes,
+  kinship quality)
+
+### Changed
+
+- Extract `_guarded_compute` helper to DRY up 8 duplicated try/except error-
+  wrapping blocks in NumPy runner with operation-specific labels for diagnosis
+- Add `dtype.kind` guard on NaN check to prevent diagnostic from crashing on
+  non-float arrays
+- LMM All (`-lmm 4`) NumPy+C: 5.5s → 1.4s on mouse_hs1940 (3.6x faster,
+  14.3x vs GEMMA) — removing per-SNP exception frame overhead from hot loop
+
 ## [3.2.0] - 2026-03-09
 
 ### Added

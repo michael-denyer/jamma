@@ -17,7 +17,7 @@
 
 - **GEMMA-compatible**: Drop-in replacement with identical CLI flags and output formats
 - **Numerical equivalence**: Validated against GEMMA — 100% significance agreement, 100% effect direction agreement
-- **Fast**: Up to 11x faster than GEMMA 0.98.5 at scale
+- **Fast**: Up to 14x faster than GEMMA 0.98.5 at scale
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
 - **Cross-platform**: Runs on Linux, macOS, and Windows — NumPy backend works everywhere, JAX adds batch acceleration on Linux and ARM Mac
 - **Optimized for Intel**: Best performance on Intel CPUs with MKL BLAS. Runs well on Apple Silicon (Accelerate BLAS). Other architectures (AMD, ARM Linux) work correctly but with less BLAS optimization
@@ -253,10 +253,10 @@ Best-of runs, end-to-end wall clock:
 |-----------|-------------|-------------|--------------|-------------------|----------------------|-----------|----------|
 | Kinship (`-gk 1`) | 2.2s | 262ms | 262ms | — | — | 1.0x | **8.5x** |
 | LMM Wald (`-lmm 1`) | 11.3s | 4.2s | 1.2s | 2.1s | 2.6s | 3.4x | **9.2x** |
-| LMM All (`-lmm 4`) | 21.0s | 8.0s | 5.5s | 2.8s | 4.3s | 1.5x | **7.4x** |
-| LMM Wald+4cov (`-lmm 1 -c`) | 41.7s | 12.9s | 5.3s | 4.7s | 7.6s | 2.4x | **8.9x** |
+| LMM All (`-lmm 4`) | 20.7s | 6.0s | 1.4s | 2.8s | 4.2s | 4.2x | **14.3x** |
+| LMM Wald+4cov (`-lmm 1 -c`) | 41.7s | 12.0s | 4.6s | 4.7s | 7.4s | 2.6x | **9.0x** |
 
-**NumPy+C** uses a C extension with OpenMP for Wald (`-lmm 1`) — REML optimization is compute-bound and parallelizes well across SNPs. The C speedup grows with covariates (2.3x with 4 covariates) because the Pab table recursion is more expensive. **JAX (batch)** pulls ahead on all-tests (`-lmm 4`) because the additional MLE optimization per SNP benefits from `jax.vmap` batching. **JAX (streaming)** reads genotypes from disk in chunks and is the production code path for large datasets that don't fit in memory. Kinship is always pure NumPy/BLAS regardless of backend.
+**NumPy+C** uses a C extension with OpenMP for Wald (`-lmm 1`) — REML optimization is compute-bound and parallelizes well across SNPs. The C speedup grows with covariates (2.6x with 4 covariates) because the Pab table recursion is more expensive. NumPy+C is now the fastest backend at all modes including all-tests (`-lmm 4`) at mouse scale (14.3x vs GEMMA). **JAX (batch)** uses `jax.vmap` batching for MLE optimization and is competitive on `-lmm 4`. **JAX (streaming)** reads genotypes from disk in chunks and is the production code path for large datasets that don't fit in memory. Kinship is always pure NumPy/BLAS regardless of backend.
 
 ### LOCO (Leave-One-Chromosome-Out)
 

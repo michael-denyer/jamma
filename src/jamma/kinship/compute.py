@@ -1039,7 +1039,10 @@ def compute_loco_kinship_streaming(
     # S_full + K_loco_buf + all S_chr + chunk buffer
     single_pass_gb = matrix_gb * (2 + n_chr_with_snps) + chunk_buffer_gb
     available_gb = psutil.virtual_memory().available / 1e9
-    # Minimum: S_full + K_loco_buf + 1 S_chr + chunk buffer + eigendecomp workspace.
+    # Minimum: 3 matrices + chunk buffer + eigendecomp workspace.
+    # During accumulation: S_full (JAX) + S_full (numpy, conversion) + 1 S_chr.
+    # During yield: S_full (numpy) + K_loco_buf + remaining S_chr (>= 1).
+    # Both phases require exactly 3 matrices at peak.
     # Eigendecomp runs while the generator is suspended with S_chr still alive.
     # Uses DSYEVR peak (smaller driver) — eigendecompose_kinship() falls back
     # from DSYEVD to DSYEVR under memory pressure, making this self-consistent.
@@ -1103,8 +1106,8 @@ def compute_loco_kinship_streaming(
         # suspended with remaining S_chr matrices still alive. Reserve
         # eigendecomp workspace so the batch doesn't exhaust memory before
         # eigendecomp can run. The reservation covers:
-        #   - K_loco copy yielded to consumer (1 matrix)
-        #   - eigendecomp additional memory beyond K_loco (eigenvectors + workspace)
+        #   - K_loco copy yielded to consumer (1 matrix, becomes eigendecomp input)
+        #   - eigenvectors + DSYEVR workspace (allocated during eigendecomp)
         eigendecomp_reserve_gb = _dsyevr_peak_gb(n_samples)
         usable_gb = (
             available_gb * 0.9

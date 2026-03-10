@@ -431,6 +431,7 @@ def _compute_loco_kinship_streaming_numpy(
             # eigendecomp workspace so the batch doesn't exhaust memory before
             # eigendecomp can run.
             eigendecomp_reserve_gb = _dsyevr_peak_gb(n_samples_kinship)
+            # S_full + K_loco_buf (2 matrices) + chunk buffer + eigendecomp workspace
             usable_gb = (
                 available_gb * 0.9
                 - matrix_gb * 2

@@ -269,6 +269,28 @@ processing one chromosome at a time for memory efficiency.
 jamma -lmm 1 -bfile data/my_study -loco -o loco_results -outdir output
 ```
 
+**Rotated-basis eigenvalue update (Python API):**
+
+For large datasets, the rotated-basis update avoids redundant per-chromosome O(n^3)
+eigendecompositions by deriving LOCO eigenvalues from a single full-kinship
+eigendecomposition. This is available via the Python API:
+
+```python
+from jamma.pipeline import PipelineConfig, PipelineRunner
+
+config = PipelineConfig(
+    bfile=Path("data/my_study"),
+    loco=True,
+    use_secular_update=True,
+    backend="numpy",
+)
+result = PipelineRunner(config).run()
+```
+
+The secular update requires all per-chromosome Gram matrices (S_chr) in memory
+simultaneously, so memory usage is O(C × n^2) where C is the number of chromosomes.
+Only supported with the numpy backend.
+
 **Key constraints:**
 
 - `-loco` is mutually exclusive with `-k` (kinship is computed internally)

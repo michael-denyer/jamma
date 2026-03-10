@@ -524,6 +524,7 @@ Priority order: `JAMMA_BACKEND` env var → `--backend` CLI flag → auto-detect
 | Special functions | [special.py](../src/jamma/lmm/special.py) |
 | Backend detection | [backend.py](../src/jamma/core/backend.py) |
 | LOCO runner | [lmm/loco.py](../src/jamma/lmm/loco.py) |
+| LOCO rotated-basis update | [lmm/loco_eigen_update.py](../src/jamma/lmm/loco_eigen_update.py) |
 | Result writer | [lmm/io.py:99](../src/jamma/lmm/io.py#L99) |
 | Memory estimation | [memory.py:197](../src/jamma/core/memory.py#L197) |
 | Threading | [threading.py:30](../src/jamma/core/threading.py#L30) |

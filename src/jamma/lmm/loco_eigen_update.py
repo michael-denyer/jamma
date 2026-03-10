@@ -109,7 +109,13 @@ def loco_eigendecompose_from_full(
     M.flat[:: n + 1] += alpha_c * d_full
 
     # Eigendecompose M: O(n^3), uses numpy (LAPACK DSYEVD / ILP64-safe)
-    d_loco, V = np.linalg.eigh(M)
+    try:
+        d_loco, V = np.linalg.eigh(M)
+    except np.linalg.LinAlgError as e:
+        raise np.linalg.LinAlgError(
+            f"loco_eigendecompose_from_full: eigendecomposition of rotated "
+            f"matrix failed (n={n}, p_chr={p_chr}, alpha_c={alpha_c:.6f}): {e}"
+        ) from e
 
     # Map eigenvectors back to original basis: U_loco = U_full @ V, O(n^3)
     U_loco = np.matmul(U_full, V)
@@ -182,4 +188,18 @@ def _apply_threshold(d: np.ndarray, threshold: float) -> None:
         d: Eigenvalue array, modified in place.
         threshold: Eigenvalues with |value| < threshold are set to 0.
     """
-    d[np.abs(d) < threshold] = 0.0
+    mask = np.abs(d) < threshold
+    n_zeroed = int(np.sum(mask))
+    if n_zeroed > 0:
+        min_val = float(np.min(d[mask]))
+        logger.debug(
+            f"_apply_threshold: zeroed {n_zeroed}/{len(d)} eigenvalues "
+            f"(threshold={threshold:.1e}, min_zeroed={min_val:.2e})"
+        )
+        if min_val < -threshold * 100:
+            logger.warning(
+                f"_apply_threshold: significantly negative eigenvalue "
+                f"({min_val:.2e}) suggests numerical instability in the "
+                f"rank-k downdate, not just noise"
+            )
+        d[mask] = 0.0

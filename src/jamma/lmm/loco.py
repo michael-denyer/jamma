@@ -435,20 +435,32 @@ def _compute_loco_kinship_streaming_numpy(
     # If True for subsequent passes, S_full is accumulated multiple times, corrupting
     # all K_loco matrices — each K_loco would be subtracted from an inflated S_full.
     if yield_s_chr:
-        # Secular path: retains ALL S_chr matrices + K_full accumulator + eigendecomp.
-        # No multi-pass fallback — all S_chr must be in memory for the
-        # per-chromosome eigenvalue update.
+        # Secular path: retains ALL S_chr + K_full accumulator during streaming,
+        # then K_full eigendecomp, then per-chromosome rotated-basis updates.
+        # No multi-pass fallback — all S_chr must be in memory simultaneously.
+        #
+        # Peak phases (non-overlapping — K_full is freed before per-chr updates):
+        #   Phase 1 (streaming): all S_chr + K_full accumulator + chunk buffer
+        #   Phase 2 (K_full eigen): all S_chr + eigendecomp workspace
+        #   Phase 3 (per-chr update): (C-k) S_chr + d_full + U_full + M + matmul
+        #     temp + U_loco + eigh workspace ≈ (C-k+3) matrices + eigendecomp
+        # Phase 2 dominates when C is large (eigendecomp workspace >> 3 matrices).
+        per_chr_update_gb = matrix_gb * 3 + eigendecomp_min_gb
         secular_peak_gb = (
-            matrix_gb * (n_chr_with_snps + 1)  # all S_chr + K_full accumulator
+            matrix_gb * n_chr_with_snps  # all S_chr (no S_full in secular path)
             + chunk_buffer_gb
-            + eigendecomp_min_gb
+            + max(
+                matrix_gb + eigendecomp_min_gb,  # phase 2: K_full + eigen workspace
+                per_chr_update_gb,  # phase 3: M + temp + U_loco + eigen workspace
+            )
         )
         if check_memory and secular_peak_gb > available_gb * 0.9:
             raise MemoryError(
                 f"Insufficient memory for secular LOCO update: need "
                 f"{secular_peak_gb:.1f}GB for {n_chr_with_snps} S_chr matrices "
-                f"({n_chr_with_snps} x {matrix_gb:.2f}GB) + K_full accumulator "
-                f"+ eigendecomp ({eigendecomp_min_gb:.1f}GB), "
+                f"({n_chr_with_snps} x {matrix_gb:.2f}GB) "
+                f"+ eigendecomp ({eigendecomp_min_gb:.1f}GB) "
+                f"+ per-chr update temporaries ({per_chr_update_gb:.1f}GB), "
                 f"available {available_gb:.1f}GB. "
                 f"Consider using standard LOCO (use_secular_update=False)."
             )
@@ -589,6 +601,9 @@ def _compute_loco_kinship_streaming_numpy(
                 )
                 yield (chr_name, s_chr_mat, p_chr)
             else:
+                assert K_loco_buf is not None, (
+                    "K_loco_buf required when yield_s_chr=False"
+                )
                 np.subtract(S_full_buf, batch_S_chr[chr_name], out=K_loco_buf)
                 K_loco_buf /= p_loco
                 logger.debug(
@@ -598,7 +613,9 @@ def _compute_loco_kinship_streaming_numpy(
                 del batch_S_chr[chr_name]
                 yield (chr_name, K_loco_buf.copy())
 
-    def _yield_matrices() -> Iterator[tuple[str, np.ndarray]]:
+    def _yield_matrices() -> Iterator[
+        tuple[str, np.ndarray] | tuple[str, np.ndarray, int]
+    ]:
         nonlocal S_full  # needed: S_full /= n_filtered is augmented assignment
 
         if single_pass:
@@ -606,7 +623,7 @@ def _compute_loco_kinship_streaming_numpy(
             batch_S_chr = _stream_pass(
                 chrs_with_snps,
                 S_full,
-                accumulate_s_full=True,
+                accumulate_s_full=not yield_s_chr,
                 pass_desc="LOCO: kinship accumulation (NumPy)",
             )
 
@@ -678,13 +695,14 @@ def _compute_loco_kinship_streaming_numpy(
                     )
                     yield (chr_name, S_full.copy())
 
-    S_full = np.zeros((n_samples_kinship, n_samples_kinship), dtype=np.float64)
-
     if yield_s_chr:
-        # Secular path: caller accumulates S_full; skip K_loco_buf (saves 1 matrix).
-        # Set to None so _yield_batch signature is satisfied (never accessed).
+        # Secular path: caller accumulates K_full from S_chr; skip both S_full
+        # and K_loco_buf allocations (saves 2 n^2 matrices).
+        S_full = np.empty(0)  # placeholder — never written in yield_s_chr mode
         K_loco_buf = None  # type: ignore[assignment]
         return n_filtered, _yield_matrices(), snp_stats_cache
+
+    S_full = np.zeros((n_samples_kinship, n_samples_kinship), dtype=np.float64)
 
     K_loco_buf = np.empty_like(S_full)
     return _yield_matrices(), snp_stats_cache
@@ -810,15 +828,14 @@ def run_lmm_loco(
             When set, checks for cached files before computing. Combined
             with write_eigen, writes new files here.
         eigen_prefix: Prefix for eigen filenames (default "result").
-        use_secular_update: If True and no cached per-chromosome eigen files
-            exist in eigen_dir, compute the full kinship eigendecomposition
+        use_secular_update: If True, compute the full kinship eigendecomposition
             once via eigendecompose_kinship(K_full) then derive per-chromosome
             eigendecompositions via loco_eigendecompose_from_full instead of
             eigendecomposing each K_loco independently. Requires O(C * n^2)
             memory where C is the number of chromosomes (all S_chr matrices
             are held simultaneously). Only supported with the numpy backend.
-            Raises ValueError if True with backend="jax" or with
-            save_kinship=True. Ignored when using cached eigen files.
+            Raises ValueError if True with backend="jax", with
+            save_kinship=True, or when cached eigen files exist in eigen_dir.
 
     Returns:
         LocoResult with associations in biological chromosome order
@@ -827,7 +844,9 @@ def run_lmm_loco(
 
     Raises:
         ValueError: If only one chromosome present, if lmm_mode invalid,
-            or if backend is not 'jax' or 'numpy'.
+            if backend is not 'jax' or 'numpy', if use_secular_update=True
+            with backend='jax', with save_kinship=True, or when cached eigen
+            files exist in eigen_dir.
     """
     start_time = time.perf_counter()
 
@@ -959,9 +978,9 @@ def run_lmm_loco(
                     if use_secular_update:
                         raise ValueError(
                             "use_secular_update=True conflicts with cached "
-                            f"eigen files in {eigen_dir}. Remove cached "
-                            "files or pass write_eigen=True to force "
-                            "recomputation with secular update."
+                            f"eigen files in {eigen_dir}. Either remove the "
+                            "cached files, or pass eigen_dir=None to skip "
+                            "the cache and use the secular update path."
                         )
                     if save_kinship:
                         logger.warning(
@@ -1154,11 +1173,15 @@ def run_lmm_loco(
                                 f", p_chr "
                                 f"{'present' if p_chr_c is not None else 'missing'}"
                             )
-                        # Chr not in ksnps — K_loco = K_full
+                        # Both None: chromosome was not yielded by the kinship
+                        # iterator. _yield_matrices already yields zero S_chr for
+                        # chrs_without_snps, so this is unexpected unless there is
+                        # a chromosome name mismatch between BIM and kinship stream.
                         logger.warning(
-                            f"Secular update: chromosome {chr_name} has no "
-                            f"kinship SNPs (not in ksnps). Using full kinship "
-                            f"eigendecomposition (K_loco = K_full)."
+                            f"Secular update: chromosome {chr_name} has no entry "
+                            f"in secular_s_chr (collected {len(secular_s_chr)} "
+                            f"chromosomes, unique_chrs has {len(unique_chrs)}). "
+                            f"Using full kinship eigendecomposition (K_loco = K_full)."
                         )
                         s_chr_c = np.zeros(
                             (secular_d_full.shape[0], secular_d_full.shape[0]),

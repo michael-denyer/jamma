@@ -114,6 +114,10 @@ class PipelineConfig:
             derive from phenotype_column. When multiple columns are specified,
             eigendecomposition is computed once and reused. Mutually exclusive
             with loco mode for multiple columns.
+        use_secular_update: If True with LOCO mode, derive per-chromosome
+            eigendecompositions from one full-kinship eigendecomposition via
+            rotated-basis update instead of independent per-chromosome
+            eigendecomps. Only supported with numpy backend. Default False.
     """
 
     bfile: Path

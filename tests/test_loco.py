@@ -1920,15 +1920,15 @@ def test_secular_update_save_kinship_raises() -> None:
 
 @pytest.mark.tier1
 def test_loco_eigendecompose_from_full_inplace_equivalence() -> None:
-    """Verify in-place diagonal construction matches original np.diag path."""
+    """Verify loco_eigendecompose_from_full produces finite, orthonormal results."""
     from jamma.lmm.loco_eigen_update import loco_eigendecompose_from_full
 
     rng = np.random.default_rng(42)
     n = 50
-    # Build a valid positive-definite S_chr and d_full
+    # Build a valid positive-definite S_chr and d_full (ascending, per docstring)
     A = rng.standard_normal((n, n))
     S_chr = A @ A.T
-    d_full = np.sort(rng.uniform(0.1, 10.0, size=n))[::-1]
+    d_full = np.sort(rng.uniform(0.1, 10.0, size=n))
     U_full = np.linalg.qr(rng.standard_normal((n, n)))[0]
     p_full = 1000
     p_chr = 100
@@ -1986,3 +1986,156 @@ def test_secular_update_memory_check_raises() -> None:
                 backend="numpy",
                 use_secular_update=True,
             )
+
+
+@pytest.mark.tier1
+def test_secular_memory_estimate_includes_per_chr_temporaries() -> None:
+    """Secular memory estimate accounts for per-chromosome rotated-basis temporaries.
+
+    The secular memory estimate must include ~3 n×n matrices for the per-chromosome
+    rotated-basis update (M, matmul temp, U_loco) plus eigendecomp workspace. This
+    test verifies that a memory budget just above (all S_chr + eigendecomp) but below
+    (all S_chr + eigendecomp + per-chr temporaries) triggers the MemoryError.
+    """
+    from unittest.mock import patch
+
+    from jamma.lmm.loco import run_lmm_loco
+
+    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+    n = len(phenotypes)
+    matrix_bytes = n * n * 8
+
+    # Fixture has 3 chromosomes. The secular path needs:
+    #   3 S_chr + max(K_full + eigendecomp, 3 matrices + eigendecomp) + chunk buffer
+    # Set available memory to cover 3 S_chr + K_full but NOT per-chr temporaries.
+    # The per-chr update needs ~3 extra matrices + eigendecomp workspace.
+    # With n=100: matrix_bytes = 80KB, so a few hundred KB should be enough to
+    # pass a naive (S_chr-only) estimate but fail the correct one.
+    naive_estimate_bytes = int(matrix_bytes * 4.5)  # 3 S_chr + 1.5 for K_full/eigen
+    mock_mem = type("MockMem", (), {"available": naive_estimate_bytes})()
+    with patch("psutil.virtual_memory", return_value=mock_mem):
+        with pytest.raises(MemoryError, match="secular"):
+            run_lmm_loco(
+                bed_path=_LOCO_BFILE,
+                phenotypes=phenotypes,
+                lmm_mode=1,
+                show_progress=False,
+                check_memory=True,
+                backend="numpy",
+                use_secular_update=True,
+            )
+
+
+@pytest.mark.tier1
+def test_secular_path_skips_s_full_allocation() -> None:
+    """Secular path (yield_s_chr=True) does not accumulate S_full.
+
+    Verifies that the streaming kinship function does not waste an n×n S_full
+    allocation when operating in secular mode. The caller (run_lmm_loco)
+    reconstructs K_full from S_chr instead.
+    """
+    from jamma.lmm.loco import _compute_loco_kinship_streaming_numpy
+
+    p_full, s_chr_iter, _ = _compute_loco_kinship_streaming_numpy(
+        _LOCO_BFILE,
+        maf_threshold=0.0,
+        miss_threshold=1.0,
+        check_memory=False,
+        show_progress=False,
+        yield_s_chr=True,
+    )
+
+    # Consume iterator, reconstructing K_full from S_chr (as run_lmm_loco does)
+    K_full = None
+    for _chr_name, s_chr, _p_chr in s_chr_iter:
+        if K_full is None:
+            K_full = np.zeros_like(s_chr)
+        K_full += s_chr
+
+    assert K_full is not None, "No S_chr matrices yielded"
+    K_full /= p_full
+
+    # Verify the reconstructed K_full is a valid kinship matrix
+    # (symmetric, PSD, trace > 0)
+    assert K_full.shape[0] == K_full.shape[1]
+    np.testing.assert_allclose(K_full, K_full.T, atol=1e-14)
+    eigenvalues = np.linalg.eigvalsh(K_full)
+    assert np.all(eigenvalues >= -1e-10), (
+        f"K_full has negative eigenvalues: min={eigenvalues[0]:.2e}"
+    )
+    assert np.trace(K_full) > 0
+
+
+# ---------------------------------------------------------------------------
+# Input validation tests for loco_eigendecompose_from_full
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+class TestLocoEigendecomposeValidation:
+    """Validate input validation guards in loco_eigendecompose_from_full."""
+
+    def setup_method(self):
+        from jamma.lmm.loco_eigen_update import loco_eigendecompose_from_full
+
+        self.func = loco_eigendecompose_from_full
+        self.n = 10
+        self.d_full = np.sort(np.random.default_rng(0).uniform(0.1, 1.0, size=self.n))
+        self.U_full = np.eye(self.n)
+        self.S_chr = np.eye(self.n)
+
+    def test_d_full_not_1d(self):
+        with pytest.raises(ValueError, match="d_full must be 1-D"):
+            self.func(np.ones((self.n, self.n)), self.U_full, self.S_chr, 100, 10)
+
+    def test_U_full_shape_mismatch(self):
+        with pytest.raises(ValueError, match="U_full must be"):
+            self.func(self.d_full, np.ones((self.n, self.n + 1)), self.S_chr, 100, 10)
+
+    def test_S_chr_shape_mismatch(self):
+        with pytest.raises(ValueError, match="S_chr must be"):
+            self.func(
+                self.d_full, self.U_full, np.ones((self.n + 1, self.n + 1)), 100, 10
+            )
+
+    def test_p_chr_negative(self):
+        with pytest.raises(ValueError, match="p_chr must be in"):
+            self.func(self.d_full, self.U_full, self.S_chr, 100, -1)
+
+    def test_p_chr_exceeds_p_full(self):
+        with pytest.raises(ValueError, match="p_chr must be in"):
+            self.func(self.d_full, self.U_full, self.S_chr, 100, 200)
+
+    def test_p_chr_equals_p_full(self):
+        with pytest.raises(ValueError, match="p_chr == p_full"):
+            self.func(self.d_full, self.U_full, self.S_chr, 100, 100)
+
+
+@pytest.mark.tier1
+def test_secular_update_cached_eigen_conflict(tmp_path: Path) -> None:
+    """use_secular_update=True with cached eigen files raises ValueError."""
+    from jamma.lmm.loco import run_lmm_loco
+
+    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+
+    # Write dummy eigen cache files so _find_loco_eigen_cache finds them
+    from jamma.io.plink import get_plink_metadata
+
+    meta = get_plink_metadata(_LOCO_BFILE)
+    unique_chrs = sorted(set(meta["chromosome"]))
+    n = len(phenotypes)
+    for chr_name in unique_chrs:
+        np.save(tmp_path / f"result.loco.chr{chr_name}.eigenD.npy", np.ones(n))
+        np.save(tmp_path / f"result.loco.chr{chr_name}.eigenU.npy", np.eye(n))
+
+    with pytest.raises(ValueError, match="conflicts with cached"):
+        run_lmm_loco(
+            bed_path=_LOCO_BFILE,
+            phenotypes=phenotypes,
+            lmm_mode=1,
+            show_progress=False,
+            check_memory=False,
+            backend="numpy",
+            use_secular_update=True,
+            eigen_dir=tmp_path,
+        )

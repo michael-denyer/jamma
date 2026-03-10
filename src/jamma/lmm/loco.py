@@ -399,8 +399,10 @@ def _compute_loco_kinship_streaming_numpy(
     # S_full + K_loco_buf + all S_chr + chunk buffer
     single_pass_gb = matrix_gb * (2 + n_chr_with_snps) + chunk_buffer_gb
     available_gb = psutil.virtual_memory().available / 1e9
-    # Minimum: S_full + K_loco_buf + 1 S_chr + chunk buffer + eigendecomp workspace.
-    # Eigendecomp runs while the generator is suspended with S_chr still alive.
+    # Minimum: 3 matrices (S_full + K_loco_buf + 1 S_chr) + chunk buffer +
+    # eigendecomp workspace. This catches the case where even multi-pass with
+    # batch_size=1 won't fit. Eigendecomp runs while generator is suspended
+    # with S_chr still alive.
     # Uses DSYEVR peak (smaller driver) — eigendecompose_kinship() falls back
     # from DSYEVD to DSYEVR under memory pressure, making this self-consistent.
     eigendecomp_min_gb = _dsyevr_peak_gb(n_samples_kinship)

@@ -85,6 +85,35 @@ _ALL_RESULT_KEYS = (
 )
 
 
+def _guarded_compute(
+    fn: object,
+    *args: object,
+    operation: str,
+    write_offset: int,
+    n_filtered: int,
+    **kwargs: object,
+) -> dict:
+    """Call *fn* with error wrapping that identifies the failed operation.
+
+    Extra positional and keyword arguments are forwarded to *fn*;
+    *operation*, *write_offset*, and *n_filtered* are consumed by the wrapper.
+
+    MemoryError, ValueError, TypeError, and OverflowError propagate unchanged.
+    All other exceptions are wrapped in a RuntimeError whose message includes
+    the *operation* label, *write_offset*, and *n_filtered* for diagnosis.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except (MemoryError, ValueError, TypeError, OverflowError):
+        raise
+    except Exception as exc:
+        raise RuntimeError(
+            f"{operation} failed at SNP offset "
+            f"{write_offset}/{n_filtered}. "
+            f"Processed {write_offset} SNPs before failure."
+        ) from exc
+
+
 def _compose_mode4_results(
     wald_cr: dict,
     n_cvt: int,
@@ -703,43 +732,29 @@ def run_lmm_association_numpy(
 
         if use_fused_mode4 and lmm_workspace is not None:
             # Fused mode-4: single C call for all 8 output arrays
-            try:
-                cr = compute_mode4_split_c_ws(
-                    lmm_workspace,
-                    uab_var_soa,
-                    pipeline_omp_threads,
-                )
-            except (MemoryError, ValueError, TypeError, OverflowError):
-                raise
-            except Exception as exc:
-                raise RuntimeError(
-                    f"C extension compute failed at SNP offset "
-                    f"{write_offset}/{n_filtered}. "
-                    f"Processed {write_offset} SNPs before failure."
-                ) from exc
+            cr = _guarded_compute(
+                compute_mode4_split_c_ws,
+                lmm_workspace,
+                uab_var_soa,
+                pipeline_omp_threads,
+                operation="Fused mode-4 C workspace compute",
+                write_offset=write_offset,
+                n_filtered=n_filtered,
+            )
         elif lmm_mode in (1, 4) and lmm_workspace is not None:
             # Wald via workspace
-            try:
-                if n_cvt == 1:
-                    wald_cr = compute_wald_split_c_ws(
-                        lmm_workspace,
-                        uab_var_soa,
-                        pipeline_omp_threads,
-                    )
-                else:
-                    wald_cr = compute_wald_general_c_ws(
-                        lmm_workspace,
-                        uab_var_soa,
-                        pipeline_omp_threads,
-                    )
-            except (MemoryError, ValueError, TypeError, OverflowError):
-                raise
-            except Exception as exc:
-                raise RuntimeError(
-                    f"C extension compute failed at SNP offset "
-                    f"{write_offset}/{n_filtered}. "
-                    f"Processed {write_offset} SNPs before failure."
-                ) from exc
+            wald_fn = (
+                compute_wald_split_c_ws if n_cvt == 1 else compute_wald_general_c_ws
+            )
+            wald_cr = _guarded_compute(
+                wald_fn,
+                lmm_workspace,
+                uab_var_soa,
+                pipeline_omp_threads,
+                operation="Wald C workspace compute",
+                write_offset=write_offset,
+                n_filtered=n_filtered,
+            )
 
             if lmm_mode == 1:
                 cr = wald_cr
@@ -748,57 +763,47 @@ def run_lmm_association_numpy(
                 Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_var_soa)
                 blas_ctx = blas_threads(1) if _C_ACCEL_AVAILABLE else nullcontext()
                 with blas_ctx:
-                    try:
-                        cr = _compose_mode4_results(
-                            wald_cr,
-                            n_cvt,
-                            eigenvalues_np,
-                            Uab_batch,
-                            n_samples,
-                            Hi_eval_null=Hi_eval_null,
-                            l_min=l_min,
-                            l_max=l_max,
-                            n_grid=n_grid,
-                            n_refine=n_refine,
-                            logl_H0=logl_H0,
-                            n_threads=pipeline_omp_threads,
-                        )
-                    except (MemoryError, ValueError, TypeError, OverflowError):
-                        raise
-                    except Exception as exc:
-                        raise RuntimeError(
-                            f"C extension compute failed at SNP offset "
-                            f"{write_offset}/{n_filtered}. "
-                            f"Processed {write_offset} SNPs before failure."
-                        ) from exc
+                    cr = _guarded_compute(
+                        _compose_mode4_results,
+                        wald_cr,
+                        n_cvt,
+                        eigenvalues_np,
+                        Uab_batch,
+                        n_samples,
+                        Hi_eval_null=Hi_eval_null,
+                        l_min=l_min,
+                        l_max=l_max,
+                        n_grid=n_grid,
+                        n_refine=n_refine,
+                        logl_H0=logl_H0,
+                        n_threads=pipeline_omp_threads,
+                        operation="Mode-4 Score/LRT composition",
+                        write_offset=write_offset,
+                        n_filtered=n_filtered,
+                    )
         else:
             # Modes 2, 3: reconstruct Uab, C batch dispatch
             Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_var_soa)
             blas_ctx = blas_threads(1) if _C_ACCEL_AVAILABLE else nullcontext()
             with blas_ctx:
-                try:
-                    cr = _compute_lmm_chunk_numpy(
-                        lmm_mode,
-                        n_cvt,
-                        eigenvalues_np,
-                        Uab_batch,
-                        n_samples,
-                        l_min=l_min,
-                        l_max=l_max,
-                        n_grid=n_grid,
-                        n_refine=n_refine,
-                        Hi_eval_null=Hi_eval_null,
-                        logl_H0=logl_H0,
-                        n_threads=pipeline_omp_threads,
-                    )
-                except (MemoryError, ValueError, TypeError, OverflowError):
-                    raise
-                except Exception as exc:
-                    raise RuntimeError(
-                        f"C extension compute failed at SNP offset "
-                        f"{write_offset}/{n_filtered}. "
-                        f"Processed {write_offset} SNPs before failure."
-                    ) from exc
+                cr = _guarded_compute(
+                    _compute_lmm_chunk_numpy,
+                    lmm_mode,
+                    n_cvt,
+                    eigenvalues_np,
+                    Uab_batch,
+                    n_samples,
+                    l_min=l_min,
+                    l_max=l_max,
+                    n_grid=n_grid,
+                    n_refine=n_refine,
+                    Hi_eval_null=Hi_eval_null,
+                    logl_H0=logl_H0,
+                    n_threads=pipeline_omp_threads,
+                    operation="Score/LRT C batch dispatch",
+                    write_offset=write_offset,
+                    n_filtered=n_filtered,
+                )
 
         t_numpy_compute_total += time.perf_counter() - t_compute_start
 
@@ -959,30 +964,24 @@ def run_lmm_association_numpy(
                 """Run LMM compute on a Uab batch with BLAS thread control."""
                 blas_ctx = blas_threads(1) if _C_ACCEL_AVAILABLE else nullcontext()
                 with blas_ctx:
-                    try:
-                        return _compute_lmm_chunk_numpy(
-                            lmm_mode,
-                            n_cvt,
-                            eigenvalues_np,
-                            Uab_batch,
-                            n_samples,
-                            l_min=l_min,
-                            l_max=l_max,
-                            n_grid=n_grid,
-                            n_refine=n_refine,
-                            Hi_eval_null=Hi_eval_null,
-                            logl_H0=logl_H0,
-                            n_threads=omp_threads,
-                        )
-                    except (MemoryError, ValueError, TypeError, OverflowError):
-                        raise
-                    except Exception as exc:
-                        raise RuntimeError(
-                            f"LMM compute failed at SNP offset "
-                            f"{write_offset}/{n_filtered}. "
-                            f"Processed {write_offset} SNPs "
-                            f"before failure."
-                        ) from exc
+                    return _guarded_compute(
+                        _compute_lmm_chunk_numpy,
+                        lmm_mode,
+                        n_cvt,
+                        eigenvalues_np,
+                        Uab_batch,
+                        n_samples,
+                        l_min=l_min,
+                        l_max=l_max,
+                        n_grid=n_grid,
+                        n_refine=n_refine,
+                        Hi_eval_null=Hi_eval_null,
+                        logl_H0=logl_H0,
+                        n_threads=omp_threads,
+                        operation="LMM chunk compute",
+                        write_offset=write_offset,
+                        n_filtered=n_filtered,
+                    )
 
             for chunk_start in chunk_iterator:
                 chunk_end = min(chunk_start + chunk_size, n_filtered)
@@ -1019,123 +1018,75 @@ def run_lmm_association_numpy(
                     if use_fused_mode4 and lmm_workspace is not None:
                         # Fused mode-4: single C call for all 8 arrays
                         with blas_threads(1):
-                            try:
-                                cr = compute_mode4_split_c_ws(
-                                    lmm_workspace,
-                                    uab_var_soa,
-                                    omp_threads,
-                                )
-                            except (
-                                MemoryError,
-                                ValueError,
-                                TypeError,
-                                OverflowError,
-                            ):
-                                raise
-                            except Exception as exc:
-                                raise RuntimeError(
-                                    f"C extension compute failed at SNP "
-                                    f"offset {write_offset}/{n_filtered}. "
-                                    f"Processed {write_offset} SNPs "
-                                    f"before failure."
-                                ) from exc
+                            cr = _guarded_compute(
+                                compute_mode4_split_c_ws,
+                                lmm_workspace,
+                                uab_var_soa,
+                                omp_threads,
+                                operation="Fused mode-4 C workspace compute",
+                                write_offset=write_offset,
+                                n_filtered=n_filtered,
+                            )
                         del uab_var_soa
                     elif lmm_mode == 1 and lmm_workspace is not None:
                         # Wald: use C workspace (no full Uab needed)
+                        wald_fn = (
+                            compute_wald_split_c_ws
+                            if n_cvt == 1
+                            else compute_wald_general_c_ws
+                        )
                         with blas_threads(1):
-                            try:
-                                if n_cvt == 1:
-                                    cr = compute_wald_split_c_ws(
-                                        lmm_workspace,
-                                        uab_var_soa,
-                                        omp_threads,
-                                    )
-                                else:
-                                    cr = compute_wald_general_c_ws(
-                                        lmm_workspace,
-                                        uab_var_soa,
-                                        omp_threads,
-                                    )
-                            except (
-                                MemoryError,
-                                ValueError,
-                                TypeError,
-                                OverflowError,
-                            ):
-                                raise
-                            except Exception as exc:
-                                raise RuntimeError(
-                                    f"C extension compute failed at SNP "
-                                    f"offset {write_offset}/{n_filtered}. "
-                                    f"Processed {write_offset} SNPs "
-                                    f"before failure."
-                                ) from exc
+                            cr = _guarded_compute(
+                                wald_fn,
+                                lmm_workspace,
+                                uab_var_soa,
+                                omp_threads,
+                                operation="Wald C workspace compute",
+                                write_offset=write_offset,
+                                n_filtered=n_filtered,
+                            )
                         del uab_var_soa
                     elif lmm_mode == 4 and lmm_workspace is not None:
                         # Mode 4 fallback: Wald workspace + Score/LRT reconstructed Uab
                         Uab_batch = reconstruct_uab_from_soa(
                             uab_invariant_soa, uab_var_soa
                         )
+                        wald_fn = (
+                            compute_wald_split_c_ws
+                            if n_cvt == 1
+                            else compute_wald_general_c_ws
+                        )
                         with blas_threads(1):
-                            try:
-                                if n_cvt == 1:
-                                    wald_cr = compute_wald_split_c_ws(
-                                        lmm_workspace,
-                                        uab_var_soa,
-                                        omp_threads,
-                                    )
-                                else:
-                                    wald_cr = compute_wald_general_c_ws(
-                                        lmm_workspace,
-                                        uab_var_soa,
-                                        omp_threads,
-                                    )
-                            except (
-                                MemoryError,
-                                ValueError,
-                                TypeError,
-                                OverflowError,
-                            ):
-                                raise
-                            except Exception as exc:
-                                raise RuntimeError(
-                                    f"C extension compute failed at SNP "
-                                    f"offset {write_offset}/{n_filtered}. "
-                                    f"Processed {write_offset} SNPs "
-                                    f"before failure."
-                                ) from exc
+                            wald_cr = _guarded_compute(
+                                wald_fn,
+                                lmm_workspace,
+                                uab_var_soa,
+                                omp_threads,
+                                operation="Wald C workspace compute",
+                                write_offset=write_offset,
+                                n_filtered=n_filtered,
+                            )
                         del uab_var_soa
                         # Score + LRT via C batch dispatch (no redundant Wald)
                         with blas_threads(1):
-                            try:
-                                cr = _compose_mode4_results(
-                                    wald_cr,
-                                    n_cvt,
-                                    eigenvalues_np,
-                                    Uab_batch,
-                                    n_samples,
-                                    Hi_eval_null=Hi_eval_null,
-                                    l_min=l_min,
-                                    l_max=l_max,
-                                    n_grid=n_grid,
-                                    n_refine=n_refine,
-                                    logl_H0=logl_H0,
-                                    n_threads=omp_threads,
-                                )
-                            except (
-                                MemoryError,
-                                ValueError,
-                                TypeError,
-                                OverflowError,
-                            ):
-                                raise
-                            except Exception as exc:
-                                raise RuntimeError(
-                                    f"C extension compute failed at SNP "
-                                    f"offset {write_offset}/{n_filtered}. "
-                                    f"Processed {write_offset} SNPs "
-                                    f"before failure."
-                                ) from exc
+                            cr = _guarded_compute(
+                                _compose_mode4_results,
+                                wald_cr,
+                                n_cvt,
+                                eigenvalues_np,
+                                Uab_batch,
+                                n_samples,
+                                Hi_eval_null=Hi_eval_null,
+                                l_min=l_min,
+                                l_max=l_max,
+                                n_grid=n_grid,
+                                n_refine=n_refine,
+                                logl_H0=logl_H0,
+                                n_threads=omp_threads,
+                                operation="Mode-4 Score/LRT composition",
+                                write_offset=write_offset,
+                                n_filtered=n_filtered,
+                            )
                         del Uab_batch
                     else:
                         # LRT/Score (modes 2, 3): reconstruct Uab

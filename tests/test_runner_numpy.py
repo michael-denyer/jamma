@@ -1356,3 +1356,172 @@ def test_output_path_streaming_all_filtered(tmp_path):
 
     assert result.associations == []
     assert result.pve is None, "PVE should be None when no SNPs pass filter"
+
+
+# ---------------------------------------------------------------------------
+# Error message differentiation tests (68-02)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+class TestErrorMessageDifferentiation:
+    """Verify that compute failures produce operation-specific error messages.
+
+    The _guarded_compute helper wraps compute calls and produces distinct
+    RuntimeError messages identifying the failed operation, SNP offset,
+    and total SNP count.
+    """
+
+    def test_fused_mode4_label(self):
+        """Fused mode-4 failure includes 'Fused mode-4' in the message."""
+        from jamma.lmm.runner_numpy import _guarded_compute
+
+        def _boom(*a, **kw):
+            raise OSError("segfault simulation")
+
+        with pytest.raises(RuntimeError, match="Fused mode-4"):
+            _guarded_compute(
+                _boom,
+                operation="Fused mode-4 C workspace compute",
+                write_offset=100,
+                n_filtered=500,
+            )
+
+    def test_wald_label(self):
+        """Wald workspace failure includes 'Wald' in the message."""
+        from jamma.lmm.runner_numpy import _guarded_compute
+
+        def _boom(*a, **kw):
+            raise OSError("segfault simulation")
+
+        with pytest.raises(RuntimeError, match="Wald"):
+            _guarded_compute(
+                _boom,
+                operation="Wald C workspace compute",
+                write_offset=200,
+                n_filtered=1000,
+            )
+
+    def test_score_lrt_label(self):
+        """Score/LRT dispatch failure includes 'Score/LRT' in the message."""
+        from jamma.lmm.runner_numpy import _guarded_compute
+
+        def _boom(*a, **kw):
+            raise OSError("segfault simulation")
+
+        with pytest.raises(RuntimeError, match="Score/LRT"):
+            _guarded_compute(
+                _boom,
+                operation="Score/LRT C batch dispatch",
+                write_offset=50,
+                n_filtered=200,
+            )
+
+    def test_error_includes_snp_offset(self):
+        """Error message includes SNP offset and total count."""
+        from jamma.lmm.runner_numpy import _guarded_compute
+
+        def _boom(*a, **kw):
+            raise OSError("kaboom")
+
+        with pytest.raises(RuntimeError, match=r"300/1000") as exc_info:
+            _guarded_compute(
+                _boom,
+                operation="Wald C workspace compute",
+                write_offset=300,
+                n_filtered=1000,
+            )
+        assert "300 SNPs before failure" in str(exc_info.value)
+
+    def test_memory_error_passes_through(self):
+        """MemoryError is not wrapped in RuntimeError."""
+        from jamma.lmm.runner_numpy import _guarded_compute
+
+        def _oom(*a, **kw):
+            raise MemoryError("out of memory")
+
+        with pytest.raises(MemoryError, match="out of memory"):
+            _guarded_compute(
+                _oom,
+                operation="Wald C workspace compute",
+                write_offset=0,
+                n_filtered=100,
+            )
+
+    def test_value_error_passes_through(self):
+        """ValueError is not wrapped in RuntimeError."""
+        from jamma.lmm.runner_numpy import _guarded_compute
+
+        def _bad(*a, **kw):
+            raise ValueError("bad value")
+
+        with pytest.raises(ValueError, match="bad value"):
+            _guarded_compute(
+                _bad,
+                operation="Wald C workspace compute",
+                write_offset=0,
+                n_filtered=100,
+            )
+
+    def test_type_error_passes_through(self):
+        """TypeError is not wrapped in RuntimeError."""
+        from jamma.lmm.runner_numpy import _guarded_compute
+
+        def _bad(*a, **kw):
+            raise TypeError("wrong type")
+
+        with pytest.raises(TypeError, match="wrong type"):
+            _guarded_compute(
+                _bad,
+                operation="Wald C workspace compute",
+                write_offset=0,
+                n_filtered=100,
+            )
+
+    def test_overflow_error_passes_through(self):
+        """OverflowError is not wrapped in RuntimeError."""
+        from jamma.lmm.runner_numpy import _guarded_compute
+
+        def _bad(*a, **kw):
+            raise OverflowError("overflow")
+
+        with pytest.raises(OverflowError, match="overflow"):
+            _guarded_compute(
+                _bad,
+                operation="Wald C workspace compute",
+                write_offset=0,
+                n_filtered=100,
+            )
+
+    def test_exception_chaining_preserved(self):
+        """The original exception is chained via 'from exc'."""
+        from jamma.lmm.runner_numpy import _guarded_compute
+
+        def _boom(*a, **kw):
+            raise OSError("root cause")
+
+        with pytest.raises(RuntimeError) as exc_info:
+            _guarded_compute(
+                _boom,
+                operation="LMM chunk compute",
+                write_offset=0,
+                n_filtered=100,
+            )
+        assert exc_info.value.__cause__ is not None
+        assert isinstance(exc_info.value.__cause__, OSError)
+        assert "root cause" in str(exc_info.value.__cause__)
+
+    def test_successful_call_returns_result(self):
+        """Successful function call returns result without wrapping."""
+        from jamma.lmm.runner_numpy import _guarded_compute
+
+        def _ok(*a, **kw):
+            return {"betas": [1.0], "ses": [0.1]}
+
+        result = _guarded_compute(
+            _ok,
+            operation="Wald C workspace compute",
+            write_offset=0,
+            n_filtered=100,
+        )
+        assert result == {"betas": [1.0], "ses": [0.1]}

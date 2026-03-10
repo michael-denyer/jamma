@@ -403,6 +403,7 @@ def run_lmm_association_streaming(
         all_results: list[AssocResult] = []
         n_at_lmin = 0
         n_at_lmax = 0
+        nan_counts: dict[str, int] = {}
 
         with contextlib.ExitStack() as stack:
             writer = None
@@ -575,6 +576,13 @@ def run_lmm_association_streaming(
                             n_at_lmin += chunk_lmin
                             n_at_lmax += chunk_lmax
 
+                            for key, arr in arrays.items():
+                                if arr.dtype.kind != "f":
+                                    continue
+                                n_nan = int(np.sum(np.isnan(arr)))
+                                if n_nan > 0:
+                                    nan_counts[key] = nan_counts.get(key, 0) + n_nan
+
                             if writer is not None:
                                 writer.write_arrays_batch(
                                     lmm_mode,
@@ -642,6 +650,13 @@ def run_lmm_association_streaming(
 
             if writer is not None and show_progress:
                 logger.info(f"Wrote {writer.count:,} results to {output_path}")
+
+            for key, n_nan in nan_counts.items():
+                logger.warning(
+                    f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
+                    "check for degenerate (constant) genotypes "
+                    "and kinship matrix quality"
+                )
 
             log_lambda_boundary_warning(n_at_lmin, n_at_lmax, l_min, l_max)
 

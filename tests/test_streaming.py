@@ -2699,3 +2699,175 @@ def test_streaming_output_path_mode4_writes_all_columns(
     assert first.p_wald is not None, "Mode 4 should include p_wald"
     assert first.p_lrt is not None, "Mode 4 should include p_lrt"
     assert first.p_score is not None, "Mode 4 should include p_score"
+
+
+@pytest.mark.tier1
+class TestNaNDiagnostics:
+    """Tests for NaN diagnostic warnings in the streaming runner."""
+
+    def test_nan_warning_emitted_for_nan_pvalues(self, sample_plink_data: Path) -> None:
+        """When chunk results contain NaN p-values, a warning is emitted."""
+        import re
+        from unittest.mock import patch
+
+        import jamma.lmm.runner_streaming as streaming_module
+
+        rng = np.random.default_rng(42)
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = rng.standard_normal(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+        snp_info = _build_snp_info(data)
+
+        original_fn = streaming_module._chunk_result_to_numpy
+
+        def _inject_nan(*args, **kwargs):
+            arrays = original_fn(*args, **kwargs)
+            if "pwalds" in arrays:
+                arr = arrays["pwalds"].copy()
+                arr[0] = np.nan
+                arrays["pwalds"] = arr
+            return arrays
+
+        logged_warnings: list[str] = []
+        original_warning = streaming_module.logger.warning
+
+        def capture_warning(msg, *args, **kwargs):
+            logged_warnings.append(str(msg))
+            return original_warning(msg, *args, **kwargs)
+
+        with (
+            patch.object(
+                streaming_module,
+                "_chunk_result_to_numpy",
+                side_effect=_inject_nan,
+            ),
+            patch.object(
+                streaming_module.logger,
+                "warning",
+                side_effect=capture_warning,
+            ),
+        ):
+            run_lmm_association_streaming(
+                sample_plink_data,
+                phenotypes,
+                kinship,
+                snp_info,
+                check_memory=False,
+                show_progress=False,
+            )
+
+        nan_warnings = [m for m in logged_warnings if "SNPs have NaN pwalds" in m]
+        assert len(nan_warnings) > 0, (
+            "Expected NaN warning for pwalds but none found. "
+            f"All warnings: {logged_warnings}"
+        )
+        # Verify it contains the count format
+        assert re.search(r"\d+/\d+ SNPs have NaN pwalds", nan_warnings[0])
+
+    def test_no_nan_warning_when_clean(self, sample_plink_data: Path) -> None:
+        """When no NaN values are present, no NaN warning is emitted."""
+        from unittest.mock import patch
+
+        import jamma.lmm.runner_streaming as streaming_module
+
+        rng = np.random.default_rng(42)
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = rng.standard_normal(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+        snp_info = _build_snp_info(data)
+
+        logged_warnings: list[str] = []
+        original_warning = streaming_module.logger.warning
+
+        def capture_warning(msg, *args, **kwargs):
+            logged_warnings.append(str(msg))
+            return original_warning(msg, *args, **kwargs)
+
+        with patch.object(
+            streaming_module.logger,
+            "warning",
+            side_effect=capture_warning,
+        ):
+            run_lmm_association_streaming(
+                sample_plink_data,
+                phenotypes,
+                kinship,
+                snp_info,
+                check_memory=False,
+                show_progress=False,
+            )
+
+        nan_warnings = [m for m in logged_warnings if "SNPs have NaN" in m]
+        assert len(nan_warnings) == 0, (
+            f"Expected no NaN warnings for clean data, got: {nan_warnings}"
+        )
+
+    def test_nan_warning_format_matches_batch_runners(
+        self, sample_plink_data: Path
+    ) -> None:
+        """NaN warning format: '{n_nan}/{n_filtered} SNPs have NaN {key}'."""
+        import re
+        from unittest.mock import patch
+
+        import jamma.lmm.runner_streaming as streaming_module
+
+        rng = np.random.default_rng(42)
+        data = load_plink_binary(sample_plink_data)
+        phenotypes = rng.standard_normal(data.n_samples)
+        kinship = compute_centered_kinship(
+            data.genotypes.astype(np.float64), check_memory=False
+        )
+        snp_info = _build_snp_info(data)
+
+        original_fn = streaming_module._chunk_result_to_numpy
+
+        def _inject_nan(*args, **kwargs):
+            arrays = original_fn(*args, **kwargs)
+            if "pwalds" in arrays:
+                arr = arrays["pwalds"].copy()
+                arr[:2] = np.nan
+                arrays["pwalds"] = arr
+            return arrays
+
+        logged_warnings: list[str] = []
+        original_warning = streaming_module.logger.warning
+
+        def capture_warning(msg, *args, **kwargs):
+            logged_warnings.append(str(msg))
+            return original_warning(msg, *args, **kwargs)
+
+        with (
+            patch.object(
+                streaming_module,
+                "_chunk_result_to_numpy",
+                side_effect=_inject_nan,
+            ),
+            patch.object(
+                streaming_module.logger,
+                "warning",
+                side_effect=capture_warning,
+            ),
+        ):
+            run_lmm_association_streaming(
+                sample_plink_data,
+                phenotypes,
+                kinship,
+                snp_info,
+                check_memory=False,
+                show_progress=False,
+            )
+
+        nan_warnings = [m for m in logged_warnings if "SNPs have NaN" in m]
+        assert len(nan_warnings) > 0, "Expected at least one NaN warning"
+
+        # Verify format: "{n_nan}/{n_filtered} SNPs have NaN {key} — ..."
+        pattern = re.compile(r"^\d+/\d+ SNPs have NaN \w+")
+        for msg in nan_warnings:
+            assert pattern.match(msg), (
+                f"NaN warning format mismatch. Expected "
+                f"'{{n}}/{{total}} SNPs have NaN {{key}} ...' but got: {msg}"
+            )

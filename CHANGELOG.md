@@ -5,6 +5,13 @@ All notable changes to JAMMA will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.2] - 2026-03-10
+
+### Fixed
+
+- LOCO `save_kinship` log message showed `.txt` path but `write_kinship_matrix()`
+  actually writes `.npy` (binary default since v2.11). Now logs the actual path written.
+
 ## [3.3.1] - 2026-03-10
 
 ### Fixed

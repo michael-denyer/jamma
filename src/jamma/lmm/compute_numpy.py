@@ -17,7 +17,7 @@ The caller is responsible for:
 
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import Literal, NamedTuple, TypedDict
 
 import numpy as np
 
@@ -35,51 +35,56 @@ from jamma.lmm.likelihood_numpy import (
 _EXPECTED_ABI_VERSION = 6  # Must match ABI_VERSION in _lmm_accel.c
 
 
-def _try_import_accel() -> tuple[
-    bool,
-    bool,
-    bool,
-    bool,
-    bool,
-    object,
-    object,
-    object,
-    object,
-    object,
-    object,
-    object,
-    object,
-    object,
-    object,
-]:
+class AccelImport(NamedTuple):
+    """C extension import result — zero-cost named tuple.
+
+    Fields match the positional unpack at module level. NamedTuple is a tuple
+    subclass, so existing destructuring continues to work unchanged.
+    """
+
+    accel_available: bool
+    split_available: bool
+    general_available: bool
+    has_openmp: bool
+    mode4_available: bool
+    compute_batch_c: object | None
+    compute_batch_split_c: object | None
+    create_workspace_split_c: object | None
+    compute_lmm_chunk_split_c: object | None
+    create_workspace_general_c: object | None
+    compute_lmm_chunk_general_c: object | None
+    compute_score_batch_c: object | None
+    compute_lrt_batch_c: object | None
+    create_workspace_mode4_split_c: object | None
+    compute_mode4_chunk_split_c: object | None
+
+
+_ACCEL_UNAVAILABLE = AccelImport(
+    False,
+    False,
+    False,
+    False,
+    False,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+)
+
+
+def _try_import_accel() -> AccelImport:
     """Attempt to import the C extension and validate ABI version.
 
     Returns:
-        (accel_available, split_available, general_available, has_openmp,
-         mode4_available,
-         compute_batch_c, compute_batch_split_c,
-         create_workspace_split_c, compute_lmm_chunk_split_c,
-         create_workspace_general_c, compute_lmm_chunk_general_c,
-         compute_score_batch_c, compute_lrt_batch_c,
-         create_workspace_mode4_split_c, compute_mode4_chunk_split_c)
+        AccelImport with availability flags and C function references
+        (None when unavailable).
     """
-    _none15 = (
-        False,
-        False,
-        False,
-        False,
-        False,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-    )
     try:
         from jamma.lmm._lmm_accel import ABI_VERSION as abi
         from jamma.lmm._lmm_accel import HAS_OPENMP as has_omp
@@ -97,7 +102,7 @@ def _try_import_accel() -> tuple[
         from loguru import logger
 
         logger.debug(f"C extension import failed: {e}")
-        return _none15
+        return _ACCEL_UNAVAILABLE
     except AttributeError as e:
         from loguru import logger
 
@@ -105,7 +110,7 @@ def _try_import_accel() -> tuple[
             f"C extension loaded but missing expected attribute: {e}. "
             "Stale .so may need recompilation."
         )
-        return _none15
+        return _ACCEL_UNAVAILABLE
 
     if abi != _EXPECTED_ABI_VERSION:
         from loguru import logger
@@ -115,7 +120,7 @@ def _try_import_accel() -> tuple[
             f"compiled={abi}, expected={_EXPECTED_ABI_VERSION}. "
             "Stale .so needs recompilation."
         )
-        return _none15
+        return _ACCEL_UNAVAILABLE
 
     # General n_cvt support — expected since ABI v4
     try:
@@ -188,7 +193,7 @@ def _try_import_accel() -> tuple[
         mode4_chunk_c = None
         mode4_available = False
 
-    return (
+    return AccelImport(
         True,
         True,
         general_available,
@@ -451,7 +456,7 @@ def create_lmm_workspace_mode4(
     hi_eval_null: np.ndarray,
     logl_H0: float,
 ) -> object:
-    """Create a persistent C workspace for fused mode-4 (Score+Wald+LRT).
+    """Create a persistent C workspace for fused mode-4 (Wald/Score/LRT).
 
     Extends the Wald workspace with null-model Hi_eval and MLE fields,
     enabling the fused kernel to compute all three test statistics in a
@@ -496,7 +501,7 @@ def compute_mode4_split_c_ws(
     uab_varying_soa: np.ndarray,
     n_threads: int,
 ) -> dict[str, np.ndarray]:
-    """Compute fused mode-4 (Score+Wald+LRT) for one chunk using a workspace.
+    """Compute fused mode-4 (Wald/Score/LRT) for one chunk using a workspace.
 
     Single-pass fused kernel: no Uab reconstruction, no separate Score/LRT
     calls. Returns all 8 output arrays directly from the C extension.

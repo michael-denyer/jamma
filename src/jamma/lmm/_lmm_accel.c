@@ -5,7 +5,8 @@
  * Exported functions: compute_lmm_batch_c, compute_lmm_batch_split_c,
  *                     create_workspace_split_c, compute_lmm_chunk_split_c,
  *                     create_workspace_general_c, compute_lmm_chunk_general_c,
- *                     compute_score_batch_c, compute_lrt_batch_c
+ *                     compute_score_batch_c, compute_lrt_batch_c,
+ *                     create_workspace_mode4_split_c, compute_mode4_chunk_split_c
  *
  * Translates the Python/NumPy golden-section REML/MLE optimizer + Wald/Score/LRT
  * test pipelines (likelihood_numpy.py) to C with optional OpenMP parallelism.
@@ -70,7 +71,7 @@
 
 /* ABI version: bump when function signatures or array layout expectations change.
  * The Python side checks this at import time to detect stale .so files. */
-#define ABI_VERSION 6  /* v6: Fused mode-4 kernel (Score+LRT+Wald single pass from SoA split) */
+#define ABI_VERSION 6  /* v6: Fused mode-4 kernel (Wald/Score/LRT single pass from SoA split) */
 
 /* Betainc continued fraction constants — matches special.py */
 #define CF_TINY     1.0e-30
@@ -1111,7 +1112,7 @@ typedef struct {
     PyObject *eigenvalues_ref;  /* keeps eigenvalues array alive */
     PyObject *uab_inv_ref;      /* keeps uab_invariant_soa array alive */
     /* Mode-4 fused fields (only populated when mode=4) */
-    int mode;                   /* 0=Wald-only (default), 4=fused mode-4 */
+    int mode;                   /* 0=Wald-only (default from calloc zero-init), 4=fused mode-4 */
     double *hi_eval_null;       /* (n_samples,) null-model Hi_eval, owned */
     double logl_H0;             /* null MLE log-likelihood */
     double mle_const;           /* 0.5 * n * (log(n) - log(2*pi) - 1) */
@@ -4597,7 +4598,7 @@ static PyMethodDef methods[] = {
         "create_workspace_mode4_split_c",
         (PyCFunction)create_workspace_mode4_split_c_py,
         METH_VARARGS | METH_KEYWORDS,
-        "Create a mode-4 workspace for fused Score+LRT+Wald pipeline.\n"
+        "Create a mode-4 workspace for fused Wald/Score/LRT pipeline.\n"
         "\n"
         "Extends the standard split workspace with null-model Hi_eval,\n"
         "MLE constant, and null log-likelihood for LRT computation.\n"
@@ -4621,7 +4622,7 @@ static PyMethodDef methods[] = {
         "compute_mode4_chunk_split_c",
         (PyCFunction)compute_mode4_chunk_split_c_py,
         METH_VARARGS | METH_KEYWORDS,
-        "Fused per-chunk mode-4 compute: Score+Wald+LRT from SoA split data.\n"
+        "Fused per-chunk mode-4 compute: Wald/Score/LRT from SoA split data.\n"
         "\n"
         "Single OpenMP parallel loop produces all 8 output arrays.\n"
         "Requires a mode-4 workspace from create_workspace_mode4_split_c.\n"
@@ -4647,7 +4648,7 @@ static PyMethodDef methods[] = {
 static struct PyModuleDef module = {
     PyModuleDef_HEAD_INIT,
     "_lmm_accel",
-    "C extension: per-SNP REML Wald pipeline with OpenMP parallelism (n_cvt=1 + general n_cvt).",
+    "C extension: per-SNP REML/MLE pipelines (Wald, Score, LRT, fused mode-4) with OpenMP parallelism (n_cvt=1 + general n_cvt).",
     -1,
     methods
 };

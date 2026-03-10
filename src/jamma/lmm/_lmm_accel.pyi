@@ -1,9 +1,15 @@
 """Type stubs for the _lmm_accel C extension."""
 
+from typing import NewType
+
 import numpy as np
 import numpy.typing as npt
 
 from jamma.lmm.compute_numpy import WaldResult
+
+LmmWorkspace = NewType("LmmWorkspace", object)
+LmmWorkspaceGeneral = NewType("LmmWorkspaceGeneral", object)
+Mode4Workspace = NewType("Mode4Workspace", object)
 
 ABI_VERSION: int
 HAS_OPENMP: int
@@ -40,9 +46,9 @@ def create_workspace_split_c(
     n_grid: int,
     n_refine: int,
     n_threads: int,
-) -> object: ...
+) -> LmmWorkspace: ...
 def compute_lmm_chunk_split_c(
-    workspace: object,
+    workspace: LmmWorkspace,
     uab_varying: npt.NDArray[np.float64],
     n_threads: int,
 ) -> WaldResult: ...
@@ -66,9 +72,9 @@ def create_workspace_general_c(
     idx_xx: int,
     idx_xy: int,
     idx_yy: int,
-) -> object: ...
+) -> LmmWorkspaceGeneral: ...
 def compute_lmm_chunk_general_c(
-    workspace: object,
+    workspace: LmmWorkspaceGeneral,
     uab_varying: npt.NDArray[np.float64],
     n_threads: int,
 ) -> WaldResult: ...
@@ -101,9 +107,9 @@ def create_workspace_mode4_split_c(
     n_threads: int,
     hi_eval_null: npt.NDArray[np.float64],
     logl_H0: float,
-) -> object: ...
+) -> Mode4Workspace: ...
 def compute_mode4_chunk_split_c(
-    workspace: object,
+    workspace: Mode4Workspace,
     uab_varying: npt.NDArray[np.float64],
     n_threads: int,
 ) -> dict[str, npt.NDArray[np.float64]]: ...

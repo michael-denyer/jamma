@@ -512,9 +512,22 @@ def run_lmm_association_numpy(
         _C_GENERAL_AVAILABLE and n_cvt > 1 and lmm_mode == 1
     )
 
-    # Fused mode-4: single-pass Score+Wald+LRT from SoA data (no Uab
+    # Fused mode-4: single-pass Wald/Score/LRT from SoA data (no Uab
     # reconstruction).  Only for n_cvt=1 with mode-4 C kernel available.
     use_fused_mode4 = use_split and lmm_mode == 4 and n_cvt == 1 and _C_MODE4_AVAILABLE
+
+    if lmm_mode == 4:
+        if use_fused_mode4:
+            logger.debug("Mode-4 dispatch: fused kernel (Wald/Score/LRT single pass)")
+        else:
+            reason = (
+                "n_cvt > 1"
+                if n_cvt > 1
+                else "fused kernel unavailable"
+                if not _C_MODE4_AVAILABLE
+                else "C split extension unavailable"
+            )
+            logger.debug(f"Mode-4 dispatch: compose fallback ({reason})")
 
     chunk_size = _compute_chunk_size_numpy(
         n_samples,
@@ -711,7 +724,8 @@ def run_lmm_association_numpy(
         with blas_threads(pipeline_rot_threads):
             UtG = U.T @ geno_chunk
 
-        # Build SNP-varying Uab in SoA layout (n_snps, 3, n_samples).
+        # Build SNP-varying Uab in SoA layout (n_snps, n_var, n_samples)
+        # — n_var=3 for n_cvt=1.
         # Invariant part (uab_invariant_soa) is from outer scope — precomputed once.
         uab_var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG)
         actual_len = chunk_end - chunk_start
@@ -722,7 +736,7 @@ def run_lmm_association_numpy(
 
         Dispatches by lmm_mode:
         - Mode 1 (Wald): C workspace path (no Uab reconstruction)
-        - Mode 4 fused: single-pass Score+Wald+LRT via mode-4 workspace
+        - Mode 4 fused: single-pass Wald/Score/LRT via mode-4 workspace
         - Mode 4 fallback: Wald via workspace + Score/LRT via reconstructed Uab
         - Modes 2, 3 (LRT, Score): Reconstruct Uab, C batch dispatch
         """
@@ -887,8 +901,8 @@ def run_lmm_association_numpy(
             current = _prepare_chunk(remaining_starts[0])
             t_rotation_total += time.perf_counter() - t_rot_start
 
-            # Progress tracking for the pipeline loop. Two chunks already
-            # processed (profiled chunk + seed chunk), so initialise at 2.
+            # Progress tracking for the pipeline loop. One chunk fully computed
+            # (profiled), one prepared (rotation only), so initialise at 2.
             pipeline_bar = None
             if show_progress and n_chunks > 1:
                 import sys
@@ -911,7 +925,8 @@ def run_lmm_association_numpy(
                     max_value=n_chunks, widgets=widgets, fd=sys.stdout
                 )
                 pipeline_bar.start()
-                pipeline_bar.update(2)  # profiled + seeded chunks
+                # profiled chunk + seeded (prepared, not computed)
+                pipeline_bar.update(2)
 
             with ThreadPoolExecutor(max_workers=1) as executor:
                 for i_chunk, chunk_start in enumerate(remaining_starts[1:], start=3):

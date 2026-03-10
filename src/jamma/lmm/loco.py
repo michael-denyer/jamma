@@ -980,7 +980,7 @@ def run_lmm_loco(
                     if save_kinship and kinship_output_dir is not None:
                         kinship_path = (
                             kinship_output_dir
-                            / f"{kinship_output_prefix}.loco.cXX.chr{chr_name}.txt"
+                            / f"{kinship_output_prefix}.loco.cXX.chr{chr_name}.npy"
                         )
                         try:
                             actual_path = write_kinship_matrix(K_loco, kinship_path)

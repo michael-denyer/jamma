@@ -147,6 +147,7 @@ class PipelineConfig:
     backend: BackendRequest = "auto"
     legacy_text: bool = False
     phenotype_columns: list[int] | None = None
+    use_secular_update: bool = False
 
     def __post_init__(self) -> None:
         if os.sep in self.output_prefix or "/" in self.output_prefix:
@@ -924,7 +925,7 @@ class PipelineRunner:
                 write_eigen=self.config.write_eigen,
                 eigen_dir=self.config.eigen_dir,
                 eigen_prefix=self.config.output_prefix,
-                use_secular_update=getattr(self.config, "use_secular_update", False),
+                use_secular_update=self.config.use_secular_update,
             )
             loco_s = time.perf_counter() - t_loco
             total_s = time.perf_counter() - t_start

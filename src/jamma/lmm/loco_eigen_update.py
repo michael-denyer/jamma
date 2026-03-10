@@ -14,12 +14,11 @@ where:
 The eigenvalues of M equal the eigenvalues of K_loco_c, and the eigenvectors
 of K_loco_c are U_full @ V where V are the eigenvectors of M.
 
-This avoids constructing K_loco_c explicitly and validates the mathematical
-equivalence that enables future secular equation optimization.
-
-Note: This is O(n^3) — same asymptotic as direct DSYEVD — but is the
-mathematical foundation for the rank-k secular equation optimization in a
-future phase.
+This avoids constructing K_loco_c = (S_full - S_chr) / p_loco explicitly,
+but has the same O(n^3) cost as direct eigendecomposition (with additional
+constant-factor overhead from two extra n x n matmuls). The practical benefit
+comes in a future phase when the rank-k structure of M_gram enables a secular
+equation solver at O(n^2 * r_eff).
 """
 
 from __future__ import annotations
@@ -75,11 +74,16 @@ def loco_eigendecompose_from_full(
         raise ValueError(
             f"p_chr must be in [0, p_full], got p_chr={p_chr}, p_full={p_full}"
         )
+    if p_chr == p_full:
+        raise ValueError(
+            f"p_chr == p_full ({p_full}): cannot exclude all SNPs. "
+            f"The LOCO kinship for this chromosome has no remaining SNPs."
+        )
 
     t0 = time.perf_counter()
 
     if p_chr == 0:
-        # Degenerate case: alpha_c = 1.0, sigma * M_gram = 0.
+        # Degenerate case: alpha_c = 1.0, S_chr = 0 so M_gram = 0.
         # M = diag(d_full), eigenvectors are identity, U_loco = U_full.
         logger.debug(
             "loco_eigendecompose_from_full: p_chr=0, returning d_full unchanged"

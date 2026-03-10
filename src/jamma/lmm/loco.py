@@ -786,13 +786,15 @@ def run_lmm_loco(
             When set, checks for cached files before computing. Combined
             with write_eigen, writes new files here.
         eigen_prefix: Prefix for eigen filenames (default "result").
-        use_secular_update: If True and eigen_cache is None, compute the full
-            kinship eigendecomposition once via eigendecompose_kinship(K_full)
-            then derive per-chromosome eigendecompositions via
-            loco_eigendecompose_from_full instead of eigendecomposing each
-            K_loco independently. Only supported with the numpy backend.
-            Raises ValueError if True with backend="jax". Ignored when
-            using cached eigen files (eigen_cache is set).
+        use_secular_update: If True and no cached per-chromosome eigen files
+            exist in eigen_dir, compute the full kinship eigendecomposition
+            once via eigendecompose_kinship(K_full) then derive per-chromosome
+            eigendecompositions via loco_eigendecompose_from_full instead of
+            eigendecomposing each K_loco independently. Requires O(C * n^2)
+            memory where C is the number of chromosomes (all S_chr matrices
+            are held simultaneously). Only supported with the numpy backend.
+            Raises ValueError if True with backend="jax" or with
+            save_kinship=True. Ignored when using cached eigen files.
 
     Returns:
         LocoResult with associations in biological chromosome order
@@ -823,6 +825,12 @@ def run_lmm_loco(
         raise ValueError(
             "use_secular_update=True is only supported with backend='numpy'. "
             f"Got backend={backend!r}."
+        )
+
+    if use_secular_update and save_kinship:
+        raise ValueError(
+            "save_kinship=True is not supported with use_secular_update=True. "
+            "The secular update path does not materialise K_loco matrices."
         )
 
     # Read LOCO worker count and log configuration (LOCO-08)
@@ -989,6 +997,11 @@ def run_lmm_loco(
                         # Compute S_full = sum of all S_chr matrices, then
                         # eigendecompose K_full = S_full / p_full once.
                         # K_full = (sum_c S_chr_c) / p_full by definition.
+                        if not secular_s_chr:
+                            raise ValueError(
+                                "Secular update: no chromosome Gram matrices were "
+                                "produced. Check SNP filtering and kinship SNP list."
+                            )
                         n_kin = next(iter(secular_s_chr.values())).shape[0]
                         S_full_secular = np.zeros((n_kin, n_kin), dtype=np.float64)
                         for s_mat in secular_s_chr.values():
@@ -1101,7 +1114,6 @@ def run_lmm_loco(
                     p_chr_c = secular_p_chr.get(chr_name, 0)
                     if s_chr_c is None:
                         # Chr not in secular dict (not in ksnps) — use K_full eigen
-                        s_chr_c = np.zeros_like(secular_d_full.reshape(1, 1))
                         s_chr_c = np.zeros(
                             (secular_d_full.shape[0], secular_d_full.shape[0]),
                             dtype=np.float64,

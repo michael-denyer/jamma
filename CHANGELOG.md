@@ -5,6 +5,19 @@ All notable changes to JAMMA will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1] - 2026-03-10
+
+### Fixed
+
+- LOCO multi-pass batch sizing now reserves eigendecomposition workspace memory.
+  Previously the batch sizer allocated too many S_chr matrices per pass, leaving
+  insufficient memory for DSYEVR/DSYEVD when eigendecomp runs while the generator
+  is suspended with remaining S_chr matrices alive (OOM on 85k+ samples, 40 chromosomes)
+- Fix `single_pass_gb` formula in JAX LOCO path — was `matrix_gb * (1 + n_chr)`,
+  now `(2 + n_chr)` to account for K_loco_buf
+- Fix `min_required_gb` to include eigendecomp workspace and K_loco_buf in both
+  JAX and NumPy paths
+
 ## [3.3.0] - 2026-03-10
 
 ### Added

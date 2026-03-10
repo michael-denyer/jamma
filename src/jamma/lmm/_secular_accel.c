@@ -1,7 +1,9 @@
 /*
  * _secular_accel.c — C extension calling LAPACK DLAED4 for rank-1 secular equation.
  *
- * Exported function: rank1_eigenvalue_update(d, rho, z) -> (eigenvalues, eigenvectors)
+ * Exported functions:
+ *   rank1_eigenvalue_update(d, rho, z)   -> (eigenvalues, eigenvectors)
+ *   rank1_eigenvalues_and_norms(d, rho, z) -> (eigenvalues, norms)
  *
  * Computes all eigenvalues and eigenvectors of D + rho * z * z^T where:
  *   D   = diagonal matrix with ascending entries d[0] < d[1] < ... < d[n-1]
@@ -52,7 +54,7 @@
 #endif
 
 /* ABI version: bump when function signatures or array layout expectations change. */
-#define ABI_VERSION 1
+#define ABI_VERSION 2
 
 /* ---------------------------------------------------------------------------
  * DLAED4 function pointer types.
@@ -670,6 +672,244 @@ static PyObject *py_rank1_eigenvalue_update(PyObject *self, PyObject *args)
 
 
 /* ---------------------------------------------------------------------------
+ * py_rank1_eigenvalues_and_norms — like py_rank1_eigenvalue_update but returns
+ * only (eigenvalues, norms) instead of (eigenvalues, eigenvectors).
+ *
+ * Memory: O(n) output vs O(n^2) for full eigenvector matrix. At n=83k, this
+ * avoids allocating a 55 GB eigenvector matrix.
+ *
+ * Args:
+ *   d:   float64 ndarray, shape (n,), ascending diagonal of D
+ *   rho: float scalar, rank-1 weight (positive or negative)
+ *   z:   float64 ndarray, shape (n,), rank-1 update vector (normalized internally)
+ *
+ * Returns:
+ *   (eigenvalues, norms) tuple
+ *   eigenvalues: float64 ndarray, shape (n,), ascending order
+ *   norms:       float64 ndarray, shape (n,), where norms[k] = ||z_unit / delta_k||_2
+ *                for eigenvalue k. This is the normalization factor needed by the
+ *                backward pass Cauchy multiply without materialising eigenvectors.
+ *
+ * The norm formula: after each dlaed4 call, delta[k] = d[k] - eigenvalue[i].
+ *   norm_i = sqrt(sum_k( (z_unit[k] / delta[k])^2 ))
+ * This is exactly 1/||v_i||_unnorm where v_i = z_unit / delta is the unnormalized
+ * eigenvector. The unit eigenvector would be v_i * (1/norm_i).
+ *
+ * Deflation guard: if |delta[k]| < 1e-300, skip that term in norm_sq to prevent
+ * inf/NaN from machine-epsilon poles (z component is effectively deflated by dlaed4).
+ * ------------------------------------------------------------------------- */
+static PyObject *py_rank1_eigenvalues_and_norms(PyObject *self, PyObject *args)
+{
+    PyArrayObject *d_arr = NULL;
+    double rho;
+    PyArrayObject *z_arr = NULL;
+
+    if (!PyArg_ParseTuple(args, "O!dO!", &PyArray_Type, &d_arr, &rho, &PyArray_Type, &z_arr)) {
+        return NULL;
+    }
+
+    /* Check that DLAED4 was resolved at init time */
+    if (!g_dlaed4_lp64 && !g_dlaed4_ilp64) {
+        PyErr_SetString(PyExc_RuntimeError,
+            "DLAED4 symbol not resolved. numpy's LAPACK library could not be found. "
+            "Ensure numpy is installed and its bundled BLAS/LAPACK is accessible.");
+        return NULL;
+    }
+
+    /* ---- Validate inputs -------------------------------------------------- */
+    if (PyArray_NDIM(d_arr) != 1) {
+        PyErr_SetString(PyExc_ValueError, "d must be a 1D array");
+        return NULL;
+    }
+    if (PyArray_TYPE(d_arr) != NPY_FLOAT64) {
+        PyErr_SetString(PyExc_TypeError, "d must be float64");
+        return NULL;
+    }
+
+    npy_intp n = PyArray_DIM(d_arr, 0);
+
+    if (PyArray_NDIM(z_arr) != 1) {
+        PyErr_SetString(PyExc_ValueError, "z must be a 1D array");
+        return NULL;
+    }
+    if (PyArray_TYPE(z_arr) != NPY_FLOAT64) {
+        PyErr_SetString(PyExc_TypeError, "z must be float64");
+        return NULL;
+    }
+    if (PyArray_DIM(z_arr, 0) != n) {
+        PyErr_Format(PyExc_ValueError,
+            "z length %ld must match d length %ld",
+            (long)PyArray_DIM(z_arr, 0), (long)n);
+        return NULL;
+    }
+
+    if (n == 0) {
+        npy_intp zero = 0;
+        PyObject *w_empty = PyArray_SimpleNew(1, &zero, NPY_FLOAT64);
+        PyObject *norms_empty = PyArray_SimpleNew(1, &zero, NPY_FLOAT64);
+        if (!w_empty || !norms_empty) {
+            Py_XDECREF(w_empty); Py_XDECREF(norms_empty);
+            return NULL;
+        }
+        PyObject *result = Py_BuildValue("(OO)", w_empty, norms_empty);
+        Py_DECREF(w_empty); Py_DECREF(norms_empty);
+        return result;
+    }
+
+    /* LP64 overflow guard */
+    if (!g_is_ilp64) {
+        int ln_test = (int)n;
+        if ((npy_intp)ln_test != n) {
+            PyErr_Format(PyExc_OverflowError,
+                "Dimension %ld exceeds LP64 LAPACK int32 limit. "
+                "Install ILP64 numpy for large matrices.",
+                (long)n);
+            return NULL;
+        }
+    }
+
+    /* ---- Get contiguous double pointers ---------------------------------- */
+    PyArrayObject *d_c = (PyArrayObject *)PyArray_ContiguousFromAny(
+        (PyObject *)d_arr, NPY_FLOAT64, 1, 1);
+    if (!d_c) return NULL;
+
+    PyArrayObject *z_c = (PyArrayObject *)PyArray_ContiguousFromAny(
+        (PyObject *)z_arr, NPY_FLOAT64, 1, 1);
+    if (!z_c) { Py_DECREF(d_c); return NULL; }
+
+    double *d_ptr = (double *)PyArray_DATA(d_c);
+    double *z_ptr = (double *)PyArray_DATA(z_c);
+
+    /* ---- Normalize z and adjust rho -------------------------------------- */
+    double z_norm_sq = 0.0;
+    for (npy_intp k = 0; k < n; k++) {
+        z_norm_sq += z_ptr[k] * z_ptr[k];
+    }
+    double z_norm = sqrt(z_norm_sq);
+
+    double rho_eff = rho * z_norm_sq;
+
+    /* Normalize z in-place */
+    if (z_norm > 0.0) {
+        for (npy_intp k = 0; k < n; k++) {
+            z_ptr[k] /= z_norm;
+        }
+    }
+
+    int negative_rho = (rho_eff < 0.0);
+    double rho_pos = negative_rho ? -rho_eff : rho_eff;
+
+    /* ---- Allocate output arrays ------------------------------------------ */
+    npy_intp n_dim = n;
+    PyArrayObject *eigenvalues = (PyArrayObject *)PyArray_SimpleNew(1, &n_dim, NPY_FLOAT64);
+    if (!eigenvalues) {
+        Py_DECREF(d_c); Py_DECREF(z_c);
+        return NULL;
+    }
+
+    PyArrayObject *norms_arr = (PyArrayObject *)PyArray_SimpleNew(1, &n_dim, NPY_FLOAT64);
+    if (!norms_arr) {
+        Py_DECREF(d_c); Py_DECREF(z_c); Py_DECREF(eigenvalues);
+        return NULL;
+    }
+
+    double *w_data = (double *)PyArray_DATA(eigenvalues);
+    double *norms_data = (double *)PyArray_DATA(norms_arr);
+
+    /* ---- Allocate workspace ---------------------------------------------- */
+    double *d_work = (double *)malloc((size_t)n * sizeof(double));
+    double *z_work = (double *)malloc((size_t)n * sizeof(double));
+    double *delta  = (double *)malloc((size_t)n * sizeof(double));
+    double *d_base = (double *)malloc((size_t)n * sizeof(double));
+    double *z_base = (double *)malloc((size_t)n * sizeof(double));
+
+    if (!d_work || !z_work || !delta || !d_base || !z_base) {
+        free(d_work); free(z_work); free(delta); free(d_base); free(z_base);
+        Py_DECREF(d_c); Py_DECREF(z_c); Py_DECREF(eigenvalues); Py_DECREF(norms_arr);
+        return PyErr_NoMemory();
+    }
+
+    /* Prepare d_base and z_base depending on rho sign */
+    if (negative_rho) {
+        for (npy_intp k = 0; k < n; k++) {
+            d_base[k] = -d_ptr[n - 1 - k];
+            z_base[k] = z_ptr[n - 1 - k];
+        }
+    } else {
+        memcpy(d_base, d_ptr, (size_t)n * sizeof(double));
+        memcpy(z_base, z_ptr, (size_t)n * sizeof(double));
+    }
+
+    /* ---- Compute eigenvalues and norms via n dlaed4 calls ---------------- */
+    int error_i = -1;
+    int error_info = 0;
+
+    Py_BEGIN_ALLOW_THREADS
+
+    for (npy_intp i = 0; i < n; i++) {
+        memcpy(d_work, d_base, (size_t)n * sizeof(double));
+        memcpy(z_work, z_base, (size_t)n * sizeof(double));
+
+        double dlam = 0.0;
+        int info = call_dlaed4((int)n, (int)i, d_work, z_work, delta, rho_pos, &dlam);
+
+        if (info != 0) {
+            error_i = (int)i;
+            error_info = info;
+            break;
+        }
+
+        /* Compute norm_sq = sum_k( (z_base[k] / delta[k])^2 )
+         * Deflation guard: skip terms where |delta[k]| < 1e-300 to avoid
+         * inf/NaN from machine-epsilon poles in the denominator. */
+        double norm_sq = 0.0;
+        for (npy_intp k = 0; k < n; k++) {
+            double dk = delta[k];
+            if (dk < -1e-300 || dk > 1e-300) {
+                double val = z_base[k] / dk;
+                norm_sq += val * val;
+            }
+        }
+        double norm_val = (norm_sq > 0.0) ? sqrt(norm_sq) : 0.0;
+
+        if (negative_rho) {
+            /* Negation/reversal identity: eigenvalue dest_i = -dlam (reversed) */
+            npy_intp dest_i = n - 1 - i;
+            w_data[dest_i] = -dlam;
+            norms_data[dest_i] = norm_val;
+        } else {
+            w_data[i] = dlam;
+            norms_data[i] = norm_val;
+        }
+    }
+
+    Py_END_ALLOW_THREADS
+
+    free(d_work); free(z_work); free(delta); free(d_base); free(z_base);
+    Py_DECREF(d_c); Py_DECREF(z_c);
+
+    if (error_i >= 0) {
+        Py_DECREF(eigenvalues); Py_DECREF(norms_arr);
+        if (error_info < 0) {
+            PyErr_Format(PyExc_ValueError,
+                "DLAED4(i=%d): parameter %d is invalid", error_i + 1, -error_info);
+        } else {
+            PyErr_Format(PyExc_RuntimeError,
+                "DLAED4(i=%d) failed to converge (info=%d)", error_i + 1, error_info);
+        }
+        return NULL;
+    }
+
+    /* ---- Return (eigenvalues, norms) ------------------------------------- */
+    PyObject *result = Py_BuildValue("(OO)",
+        (PyObject *)eigenvalues, (PyObject *)norms_arr);
+    Py_DECREF(eigenvalues);
+    Py_DECREF(norms_arr);
+    return result;
+}
+
+
+/* ---------------------------------------------------------------------------
  * Module definition
  * ------------------------------------------------------------------------- */
 static PyMethodDef methods[] = {
@@ -692,6 +932,38 @@ static PyMethodDef methods[] = {
         "    eigenvalues:  float64 ndarray, shape (n,), ascending order.\n"
         "    eigenvectors: float64 ndarray, shape (n, n), C-contiguous.\n"
         "                  eigenvectors[:, j] is the eigenvector for eigenvalues[j].\n"
+        "\n"
+        "Raises:\n"
+        "    ValueError:   d or z are not 1D float64, sizes mismatch, or DLAED4\n"
+        "                  detects invalid parameters.\n"
+        "    RuntimeError: DLAED4 convergence failure or LAPACK symbol not resolved.\n"
+        "    MemoryError:  workspace allocation failure.\n"
+    },
+    {
+        "rank1_eigenvalues_and_norms",
+        py_rank1_eigenvalues_and_norms,
+        METH_VARARGS,
+        "rank1_eigenvalues_and_norms(d, rho, z) -> (eigenvalues, norms)\n"
+        "\n"
+        "Compute eigenvalues and per-eigenvalue norms of D + rho * z * z^T via LAPACK DLAED4.\n"
+        "\n"
+        "Like rank1_eigenvalue_update but returns norms instead of the full eigenvector\n"
+        "matrix. Memory: O(n) output vs O(n^2). At n=83k, avoids a 55 GB allocation.\n"
+        "\n"
+        "Args:\n"
+        "    d:   float64 ndarray, shape (n,), ascending diagonal entries of D.\n"
+        "    rho: float, rank-1 weight (positive or negative).\n"
+        "    z:   float64 ndarray, shape (n,), rank-1 update vector.\n"
+        "         Normalized to unit norm internally; rho is adjusted accordingly.\n"
+        "\n"
+        "Returns:\n"
+        "    (eigenvalues, norms) tuple:\n"
+        "    eigenvalues: float64 ndarray, shape (n,), ascending order.\n"
+        "    norms:       float64 ndarray, shape (n,).\n"
+        "                 norms[k] = ||z_unit / delta_k||_2, where delta_k is the\n"
+        "                 DLAED4 delta output for eigenvalue k. This is the\n"
+        "                 normalization factor for the unnormalized eigenvector\n"
+        "                 z_unit / delta_k, needed by the backward pass Cauchy multiply.\n"
         "\n"
         "Raises:\n"
         "    ValueError:   d or z are not 1D float64, sizes mismatch, or DLAED4\n"

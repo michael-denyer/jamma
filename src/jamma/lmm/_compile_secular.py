@@ -147,7 +147,10 @@ def compile_extension(verbose: bool = True) -> bool:
         for k in mods_to_remove:
             del sys.modules[k]
 
-        from jamma.lmm._secular_accel import rank1_eigenvalue_update  # noqa: F401
+        from jamma.lmm._secular_accel import (  # noqa: F401
+            rank1_eigenvalue_update,
+            rank1_eigenvalues_and_norms,
+        )
 
         _print("Import OK — C extension is active")
         return True

@@ -16,9 +16,10 @@ of K_loco_c are U_full @ V where V are the eigenvectors of M.
 
 This avoids constructing K_loco_c = (S_full - S_chr) / p_loco explicitly,
 but has the same O(n^3) cost as direct eigendecomposition (with additional
-constant-factor overhead from two extra n x n matmuls). The practical benefit
-comes in a future phase when the rank-k structure of M_gram enables a secular
-equation solver at O(n^2 * r_eff).
+constant-factor overhead from three extra n x n matmuls: two for the Gram
+rotation and one for eigenvector back-rotation). The practical benefit comes
+in a future phase when the low-rank structure of M_gram enables a secular
+equation solver at O(n^2 * r_eff) when r_eff << n.
 """
 
 from __future__ import annotations
@@ -28,7 +29,9 @@ import time
 import numpy as np
 from loguru import logger
 
-# Small eigenvalue threshold matching GEMMA's EigenDecomp_Zeroed behaviour
+# Small eigenvalue threshold inspired by GEMMA's EigenDecomp_Zeroed, applied to
+# absolute values to also handle small negative eigenvalues from numerical noise
+# in the rank-k downdate (GEMMA itself zeros non-positive eigenvalues only).
 _DEFAULT_THRESHOLD: float = 1e-10
 
 
@@ -52,8 +55,9 @@ def loco_eigendecompose_from_full(
         S_chr: (n, n) chromosome Gram matrix X_c @ X_c.T.
         p_full: Total number of SNPs used to build K_full.
         p_chr: Number of SNPs on the chromosome being excluded. May be 0.
-        threshold: Eigenvalues with |value| < threshold are zeroed, matching
-            GEMMA's EigenDecomp_Zeroed behaviour. Default: 1e-10.
+        threshold: Eigenvalues with |value| < threshold are zeroed (inspired
+            by GEMMA's EigenDecomp_Zeroed, extended to absolute values to
+            handle numerical noise from the downdate). Default: 1e-10.
 
     Returns:
         Tuple (d_loco, U_loco) where:
@@ -97,11 +101,12 @@ def loco_eigendecompose_from_full(
     sigma = 1.0 / (p_full - p_chr)
 
     # Rotate chromosome Gram matrix into full eigen-basis: O(n^3) BLAS3
-    # M_gram = U_full^T @ S_chr @ U_full, shape (n, n)
-    M_gram = np.matmul(U_full.T, np.matmul(S_chr, U_full))
+    # M = U_full^T @ S_chr @ U_full, shape (n, n), then transform in-place
+    M = np.matmul(U_full.T, np.matmul(S_chr, U_full))
 
-    # Construct rotated matrix M = alpha_c * diag(d_full) - sigma * M_gram
-    M = np.diag(alpha_c * d_full) - sigma * M_gram
+    # M = alpha_c * diag(d_full) - sigma * M  (in-place, avoids np.diag allocation)
+    M *= -sigma
+    M.flat[:: n + 1] += alpha_c * d_full
 
     # Eigendecompose M: O(n^3), uses numpy (LAPACK DSYEVD / ILP64-safe)
     d_loco, V = np.linalg.eigh(M)
@@ -109,7 +114,7 @@ def loco_eigendecompose_from_full(
     # Map eigenvectors back to original basis: U_loco = U_full @ V, O(n^3)
     U_loco = np.matmul(U_full, V)
 
-    # Apply GEMMA threshold to small eigenvalues
+    # Zero near-zero eigenvalues from numerical noise (see _apply_threshold)
     _apply_threshold(d_loco, threshold)
 
     elapsed = time.perf_counter() - t0
@@ -171,7 +176,7 @@ def measure_effective_rank(
 
 
 def _apply_threshold(d: np.ndarray, threshold: float) -> None:
-    """Zero eigenvalues below threshold in-place (GEMMA EigenDecomp_Zeroed).
+    """Zero eigenvalues below threshold in-place (inspired by GEMMA EigenDecomp_Zeroed).
 
     Args:
         d: Eigenvalue array, modified in place.

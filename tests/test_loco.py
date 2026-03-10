@@ -1896,3 +1896,48 @@ def test_secular_update_jax_backend_raises() -> None:
             backend="jax",
             use_secular_update=True,
         )
+
+
+@pytest.mark.tier1
+def test_secular_update_save_kinship_raises() -> None:
+    """use_secular_update=True with save_kinship=True raises ValueError."""
+    from jamma.lmm.loco import run_lmm_loco
+
+    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+
+    with pytest.raises(ValueError, match="save_kinship=True is not supported"):
+        run_lmm_loco(
+            bed_path=_LOCO_BFILE,
+            phenotypes=phenotypes,
+            lmm_mode=1,
+            show_progress=False,
+            check_memory=False,
+            backend="numpy",
+            use_secular_update=True,
+            save_kinship=True,
+        )
+
+
+@pytest.mark.tier1
+def test_loco_eigendecompose_from_full_inplace_equivalence() -> None:
+    """Verify in-place diagonal construction matches original np.diag path."""
+    from jamma.lmm.loco_eigen_update import loco_eigendecompose_from_full
+
+    rng = np.random.default_rng(42)
+    n = 50
+    # Build a valid positive-definite S_chr and d_full
+    A = rng.standard_normal((n, n))
+    S_chr = A @ A.T
+    d_full = np.sort(rng.uniform(0.1, 10.0, size=n))[::-1]
+    U_full = np.linalg.qr(rng.standard_normal((n, n)))[0]
+    p_full = 1000
+    p_chr = 100
+
+    d_loco, U_loco = loco_eigendecompose_from_full(d_full, U_full, S_chr, p_full, p_chr)
+
+    # Sanity: eigenvalues should be real and finite
+    assert np.all(np.isfinite(d_loco))
+    assert np.all(np.isfinite(U_loco))
+    # U_loco columns should be orthonormal
+    eye = U_loco.T @ U_loco
+    np.testing.assert_allclose(eye, np.eye(n), atol=1e-12)

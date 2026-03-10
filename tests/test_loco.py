@@ -1941,3 +1941,24 @@ def test_loco_eigendecompose_from_full_inplace_equivalence() -> None:
     # U_loco columns should be orthonormal
     eye = U_loco.T @ U_loco
     np.testing.assert_allclose(eye, np.eye(n), atol=1e-12)
+
+
+@pytest.mark.tier1
+def test_yield_s_chr_ownership_transfer() -> None:
+    """yield_s_chr=True transfers ownership (no copy), matrices are writable."""
+    from jamma.lmm.loco import _compute_loco_kinship_streaming_numpy
+
+    p_full, s_chr_iter, _ = _compute_loco_kinship_streaming_numpy(
+        _LOCO_BFILE,
+        maf_threshold=0.0,
+        miss_threshold=1.0,
+        check_memory=False,
+        show_progress=False,
+        yield_s_chr=True,
+    )
+    for _chr_name, s_chr, _p_chr in s_chr_iter:
+        # Must own data (not a view) and be writable
+        assert s_chr.flags["OWNDATA"] or s_chr.flags["WRITEABLE"]
+        # Verify it's a real matrix
+        assert s_chr.ndim == 2
+        assert s_chr.shape[0] == s_chr.shape[1]

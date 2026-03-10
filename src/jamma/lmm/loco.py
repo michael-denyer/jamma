@@ -561,13 +561,12 @@ def _compute_loco_kinship_streaming_numpy(
                     f"are on chromosome '{chr_name}'."
                 )
             if yield_s_chr:
-                s_chr_copy = batch_S_chr[chr_name].copy()
-                del batch_S_chr[chr_name]
+                s_chr_mat = batch_S_chr.pop(chr_name)
                 logger.debug(
                     f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs "
                     f"retained (S_chr mode)"
                 )
-                yield (chr_name, s_chr_copy, p_chr)
+                yield (chr_name, s_chr_mat, p_chr)
             else:
                 np.subtract(S_full_buf, batch_S_chr[chr_name], out=K_loco_buf)
                 K_loco_buf /= p_loco
@@ -659,10 +658,14 @@ def _compute_loco_kinship_streaming_numpy(
                     yield (chr_name, S_full.copy())
 
     S_full = np.zeros((n_samples_kinship, n_samples_kinship), dtype=np.float64)
-    K_loco_buf = np.empty_like(S_full)
 
     if yield_s_chr:
+        # Secular path: caller accumulates S_full; skip K_loco_buf (saves 1 matrix).
+        # Set to None so _yield_batch signature is satisfied (never accessed).
+        K_loco_buf = None  # type: ignore[assignment]
         return n_filtered, _yield_matrices(), snp_stats_cache
+
+    K_loco_buf = np.empty_like(S_full)
     return _yield_matrices(), snp_stats_cache
 
 
@@ -932,6 +935,13 @@ def run_lmm_loco(
                         f"({len(eigen_cache)} chromosomes). "
                         f"Skipping kinship computation and eigendecomp."
                     )
+                    if use_secular_update:
+                        raise ValueError(
+                            "use_secular_update=True conflicts with cached "
+                            f"eigen files in {eigen_dir}. Remove cached "
+                            "files or pass write_eigen=True to force "
+                            "recomputation with secular update."
+                        )
                     if save_kinship:
                         logger.warning(
                             "save_kinship ignored when using cached eigen "
@@ -1101,7 +1111,11 @@ def run_lmm_loco(
                         ) from e
                 elif use_secular_update:
                     # Secular update: derive eigendecomposition from K_full.
-                    assert secular_d_full is not None and secular_U_full is not None
+                    if secular_d_full is None or secular_U_full is None:
+                        raise RuntimeError(
+                            f"Secular update for chr {chr_name}: full "
+                            f"eigendecomposition was not computed"
+                        )
                     if show_progress:
                         logger.info(
                             f"LOCO: chromosome {chr_name} "
@@ -1111,13 +1125,27 @@ def run_lmm_loco(
                         )
                     t_sec = time.perf_counter()
                     s_chr_c = secular_s_chr.get(chr_name)
-                    p_chr_c = secular_p_chr.get(chr_name, 0)
-                    if s_chr_c is None:
-                        # Chr not in secular dict (not in ksnps) — use K_full eigen
+                    p_chr_c = secular_p_chr.get(chr_name)
+                    if s_chr_c is None or p_chr_c is None:
+                        if (s_chr_c is None) != (p_chr_c is None):
+                            raise RuntimeError(
+                                f"Secular update internal inconsistency for "
+                                f"chr {chr_name}: S_chr "
+                                f"{'present' if s_chr_c is not None else 'missing'}"
+                                f", p_chr "
+                                f"{'present' if p_chr_c is not None else 'missing'}"
+                            )
+                        # Chr not in ksnps — K_loco = K_full
+                        logger.warning(
+                            f"Secular update: chromosome {chr_name} has no "
+                            f"kinship SNPs (not in ksnps). Using full kinship "
+                            f"eigendecomposition (K_loco = K_full)."
+                        )
                         s_chr_c = np.zeros(
                             (secular_d_full.shape[0], secular_d_full.shape[0]),
                             dtype=np.float64,
                         )
+                        p_chr_c = 0
                     eigenvalues_np, U = loco_eigendecompose_from_full(
                         secular_d_full,
                         secular_U_full,
@@ -1125,6 +1153,8 @@ def run_lmm_loco(
                         secular_p_full,
                         p_chr_c,
                     )
+                    # Free S_chr after eigendecomp (no longer needed)
+                    secular_s_chr.pop(chr_name, None)
                     logger.debug(
                         f"Rotated-basis update for chr {chr_name}: "
                         f"{time.perf_counter() - t_sec:.3f}s"

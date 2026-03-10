@@ -981,14 +981,14 @@ def run_lmm_loco(
                             / f"{kinship_output_prefix}.loco.cXX.chr{chr_name}.txt"
                         )
                         try:
-                            write_kinship_matrix(K_loco, kinship_path)
+                            actual_path = write_kinship_matrix(K_loco, kinship_path)
                         except OSError as e:
                             raise OSError(
                                 f"Failed to save LOCO kinship for chromosome "
                                 f"{chr_name} to {kinship_path}: {e}"
                             ) from e
                         if show_progress:
-                            logger.info(f"  Saved LOCO kinship to {kinship_path}")
+                            logger.info(f"  Saved LOCO kinship to {actual_path}")
 
                     # K_loco is already n_valid x n_valid from numpy
                     # streaming — skip post-hoc subsetting (LOCO-07).

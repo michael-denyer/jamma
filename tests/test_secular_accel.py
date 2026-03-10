@@ -39,7 +39,7 @@ _skip_no_ext = pytest.mark.skipif(
 
 _RNG = np.random.default_rng(42)
 
-_EXPECTED_ABI = 1  # Must match ABI_VERSION in _secular_accel.c
+_EXPECTED_ABI = 2  # Must match ABI_VERSION in _secular_accel.c
 
 
 def _make_rank1_matrix(d: np.ndarray, rho: float, z: np.ndarray) -> np.ndarray:
@@ -257,3 +257,163 @@ def test_rank1_update_z_normalization():
     np.testing.assert_allclose(
         orth, np.eye(n), atol=1e-10, err_msg="Eigenvectors not orthogonal (non-unit z)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Tests for rank1_eigenvalues_and_norms (new function, Plan 69.3-01)
+# ---------------------------------------------------------------------------
+
+
+@_skip_no_ext
+def test_rank1_eigenvalues_and_norms_positive_rho():
+    """rank1_eigenvalues_and_norms eigenvalues match rank1_eigenvalue_update."""
+    rng = np.random.default_rng(100)
+    n = 8
+    d = np.sort(rng.uniform(0.1, 5.0, n))
+    z = rng.standard_normal(n)
+    z = z / np.linalg.norm(z)
+    rho = 0.5
+
+    assert hasattr(_ext, "rank1_eigenvalues_and_norms"), (
+        "_secular_accel missing rank1_eigenvalues_and_norms"
+    )
+
+    vals_norms, norms = _ext.rank1_eigenvalues_and_norms(d, rho, z)
+    vals_ref, _ = _ext.rank1_eigenvalue_update(d, rho, z)
+
+    assert vals_norms.shape == (n,), f"eigenvalues shape: {vals_norms.shape}"
+    assert norms.shape == (n,), f"norms shape: {norms.shape}"
+
+    np.testing.assert_allclose(
+        vals_norms,
+        vals_ref,
+        rtol=1e-12,
+        atol=1e-14,
+        err_msg=(
+            "Eigenvalues mismatch between rank1_eigenvalues_and_norms"
+            " and rank1_eigenvalue_update (positive rho)"
+        ),
+    )
+
+    assert np.all(norms > 0), "All norms must be positive"
+    assert np.all(np.isfinite(norms)), "All norms must be finite"
+
+
+@_skip_no_ext
+def test_rank1_eigenvalues_and_norms_negative_rho():
+    """rank1_eigenvalues_and_norms works for negative rho (LOCO downdate)."""
+    rng = np.random.default_rng(200)
+    n = 6
+    d = np.array([1.0, 2.0, 3.5, 5.0, 7.0, 10.0])
+    z = rng.standard_normal(n)
+    z = z / np.linalg.norm(z)
+    rho = -0.3
+
+    vals_norms, norms = _ext.rank1_eigenvalues_and_norms(d, rho, z)
+    vals_ref, _ = _ext.rank1_eigenvalue_update(d, rho, z)
+
+    assert vals_norms.shape == (n,)
+    assert norms.shape == (n,)
+
+    np.testing.assert_allclose(
+        vals_norms,
+        vals_ref,
+        rtol=1e-12,
+        atol=1e-14,
+        err_msg="Eigenvalues mismatch for negative rho",
+    )
+
+    assert np.all(np.isfinite(norms)), "All norms must be finite (negative rho)"
+    assert np.all(norms > 0), "All norms must be positive (negative rho)"
+
+
+@_skip_no_ext
+def test_rank1_eigenvalues_and_norms_norm_reconstruction():
+    """Norms from rank1_eigenvalues_and_norms match ||z_unit / delta_k||_2."""
+    rng = np.random.default_rng(300)
+    n = 10
+    d = np.sort(rng.uniform(0.5, 10.0, n))
+    z = rng.standard_normal(n)
+    z = z / np.linalg.norm(z)
+    rho = 1.2
+
+    vals_new, norms = _ext.rank1_eigenvalues_and_norms(d, rho, z)
+    vals_old, vecs = _ext.rank1_eigenvalue_update(d, rho, z)
+
+    # Verify eigenvalues agree (sanity check)
+    np.testing.assert_allclose(vals_new, vals_old, rtol=1e-12, atol=1e-14)
+
+    # Each eigenvector column from rank1_eigenvalue_update must be unit norm
+    for j in range(n):
+        col_norm = np.linalg.norm(vecs[:, j])
+        np.testing.assert_allclose(
+            col_norm,
+            1.0,
+            atol=1e-10,
+            err_msg=f"Column {j} of eigenvectors not unit norm",  # noqa: E501
+        )
+
+    # The norms returned by rank1_eigenvalues_and_norms should be positive and finite.
+    # Verify that for each eigenvalue k: norms[k] = ||z_unit / delta_k||_2
+    # where delta_k = d - vals[k] (the secular equation denominator).
+    z_unit = z / np.linalg.norm(z)  # already unit norm, but be explicit
+    for k in range(n):
+        delta_k = d - vals_new[k]
+        expected_norm = np.linalg.norm(z_unit / delta_k)
+        np.testing.assert_allclose(
+            norms[k],
+            expected_norm,
+            rtol=1e-10,
+            err_msg=f"norm[{k}] = {norms[k]:.6e} != expected {expected_norm:.6e}",
+        )
+
+
+@_skip_no_ext
+def test_rank1_eigenvalues_and_norms_deflation():
+    """Deflation (near-equal d values) produces finite norms without inf/NaN."""
+    rng = np.random.default_rng(400)
+    n = 5
+    d = np.array([1.0, 1.0 + 1e-10, 3.0, 3.0 + 1e-10, 6.0])
+    z = rng.standard_normal(n)
+    z = z / np.linalg.norm(z)
+    rho = 0.8
+
+    vals, norms = _ext.rank1_eigenvalues_and_norms(d, rho, z)
+    ref_vals, _ = _eigh_reference(d, rho, z)
+
+    assert np.all(np.isfinite(norms)), (
+        f"Norms contain inf/NaN in deflation case: {norms}"
+    )
+    assert np.all(norms > 0), f"Norms not all positive in deflation case: {norms}"
+
+    np.testing.assert_allclose(
+        vals,
+        ref_vals,
+        rtol=1e-10,
+        atol=1e-12,
+        err_msg="Eigenvalues mismatch (near-degenerate d)",
+    )
+
+
+@_skip_no_ext
+def test_rank1_eigenvalues_and_norms_z_normalization():
+    """Non-unit z is normalized internally by rank1_eigenvalues_and_norms."""
+    d = np.array([0.5, 1.0, 2.0, 4.0, 8.0])
+    z_raw = np.array([1.0, 2.0, 3.0, 0.5, 1.5])
+    rho = 0.4
+
+    ref_vals, _ = _eigh_reference(d, rho, z_raw)
+    vals, norms = _ext.rank1_eigenvalues_and_norms(d, rho, z_raw)
+
+    np.testing.assert_allclose(
+        vals,
+        ref_vals,
+        rtol=1e-12,
+        atol=1e-14,
+        err_msg=(
+            "Eigenvalues mismatch when z is not unit norm (rank1_eigenvalues_and_norms)"
+        ),
+    )
+
+    assert np.all(np.isfinite(norms)), "Norms must be finite for non-unit z"
+    assert np.all(norms > 0), "Norms must be positive for non-unit z"

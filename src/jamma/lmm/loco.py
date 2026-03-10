@@ -998,31 +998,29 @@ def run_lmm_loco(
                                 yield_s_chr=True,
                             )
                         )
-                        # Consume iterator to collect all S_chr matrices.
+                        # Consume iterator: collect S_chr matrices and
+                        # accumulate K_full in one pass. K_full = S_full / p_full.
+                        K_full_secular: np.ndarray | None = None
                         for chr_name_s, s_chr_mat, p_chr_s in s_chr_iter:
                             secular_s_chr[chr_name_s] = s_chr_mat
                             secular_p_chr[chr_name_s] = p_chr_s
+                            if K_full_secular is None:
+                                K_full_secular = np.zeros_like(s_chr_mat)
+                            K_full_secular += s_chr_mat
                         del s_chr_iter
 
-                        # Compute S_full = sum of all S_chr matrices, then
-                        # eigendecompose K_full = S_full / p_full once.
-                        # K_full = (sum_c S_chr_c) / p_full by definition.
-                        if not secular_s_chr:
+                        if K_full_secular is None:
                             raise ValueError(
                                 "Secular update: no chromosome Gram matrices were "
                                 "produced. Check SNP filtering and kinship SNP list."
                             )
-                        n_kin = next(iter(secular_s_chr.values())).shape[0]
-                        S_full_secular = np.zeros((n_kin, n_kin), dtype=np.float64)
-                        for s_mat in secular_s_chr.values():
-                            S_full_secular += s_mat
-                        K_full_secular = S_full_secular / secular_p_full
-                        del S_full_secular
+                        K_full_secular /= secular_p_full
 
                         t_kfull = time.perf_counter()
                         logger.info(
                             "Secular update: eigendecomposing K_full "
-                            f"(n={n_kin}, p_full={secular_p_full})..."
+                            f"(n={K_full_secular.shape[0]}, "
+                            f"p_full={secular_p_full})..."
                         )
                         secular_d_full, secular_U_full = eigendecompose_kinship(
                             K_full_secular, check_memory=check_memory

@@ -163,6 +163,15 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     help="Write kinship/eigen files in GEMMA text format instead of binary .npy",
 )
 @click.option(
+    "--secular",
+    is_flag=True,
+    default=False,
+    help=(
+        "Use secular equation solver for LOCO eigendecomposition. "
+        "Reduces peak memory at 83k+ samples. Requires -loco and --backend numpy."
+    ),
+)
+@click.option(
     "-cat",
     type=str,
     default=None,
@@ -245,6 +254,7 @@ def main(
     vc,
     mk,
     mvlmm,
+    secular,
 ):
     """JAMMA: High-performance Multi-method Mixed-Model Association.
 
@@ -356,6 +366,7 @@ def main(
             profile_dir=Path(profile_dir) if profile_dir else None,
             backend=backend,
             legacy_text=legacy_text,
+            secular=secular,
         )
 
 
@@ -599,8 +610,15 @@ def _run_lmm(
     profile_dir: Path | None = None,
     backend: str = "auto",
     legacy_text: bool = False,
+    secular: bool = False,
 ) -> None:
     """Run LMM association testing."""
+    # Validate --secular requirements before building PipelineConfig
+    if secular and not loco:
+        _cli_error("--secular requires -loco mode")
+    if secular and backend == "jax":
+        _cli_error("--secular requires --backend numpy (not jax)")
+
     # Mutual exclusivity check
     if loco and kinship_file is not None:
         _cli_error("-k and -loco are mutually exclusive")
@@ -649,6 +667,7 @@ def _run_lmm(
         profile_dir=profile_dir,
         backend=backend,
         legacy_text=legacy_text,
+        use_secular_update=secular,
     )
 
     # Run pipeline, converting exceptions to CLI-friendly errors

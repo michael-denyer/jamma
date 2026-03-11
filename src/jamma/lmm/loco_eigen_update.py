@@ -57,8 +57,8 @@ _DEFLATION_FILL: float = 1.0 / _DEFLATION_GUARD  # reciprocal used as safe fill
 _MAX_DLAED4_FALLBACKS: int = 5
 
 # Threshold below which ||q_j|| is treated as degenerate (skip rank-1 update).
-# Two orders below float64 machine epsilon (~2.2e-16) to catch only genuine
-# null-space vectors, not mere numerical noise.
+# Two orders above float64 machine epsilon (~2.2e-16) to catch only genuine
+# null-space vectors while staying safely above the floating-point noise floor.
 _DEGENERATE_NORM_THRESHOLD: float = 1e-14
 
 # Default threshold for |z_unit[l]| below which a column is considered
@@ -690,6 +690,18 @@ def _secular_eigendecompose_delta_path(
         else:
             lambda_j, _ = _rank1_eigenvalues_and_norms_python(
                 d_current, rho_j_eff, q_j_unit
+            )
+
+        # Guard against non-finite eigenvalues from DLAED4 or Python fallback.
+        # A single NaN propagates through stored step data and corrupts the
+        # backward Cauchy reconstruction silently.
+        if not np.all(np.isfinite(lambda_j)):
+            n_bad = int(np.sum(~np.isfinite(lambda_j)))
+            raise RuntimeError(
+                f"Secular delta-path step j={j}/{r_eff}: {n_bad} non-finite "
+                f"eigenvalues detected (n={n}, rho_j_eff={rho_j_eff:.6e}). "
+                f"This indicates numerical instability in the rank-1 update. "
+                f"Re-run without --secular."
             )
 
         # Ensure strict ascending order (DLAED4 guarantees it, but verify FP safety)

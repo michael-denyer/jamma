@@ -646,11 +646,14 @@ static PyObject *py_rank1_eigenvalue_update(PyObject *self, PyObject *args)
 
             /* Eigenvector: v_k = z_base[k] / delta[k], normalized
              * Then reverse: base index k maps to original index n-1-k.
-             * Use d_work as scratch (already modified by dlaed4, no longer needed). */
+             * Use d_work as scratch (already modified by dlaed4, no longer needed).
+             * Deflation guard: skip terms where |delta[k]| < 1e-300 to avoid
+             * inf/NaN from machine-epsilon poles (matching rank1_eigs_norms). */
             double *row = v_data + dest_i * n;  /* row dest_i = eigenvec dest_i */
             double norm_sq = 0.0;
             for (npy_intp k = 0; k < n; k++) {
-                double val = z_base[k] / delta[k];
+                double dk = delta[k];
+                double val = (dk < -1e-300 || dk > 1e-300) ? z_base[k] / dk : 0.0;
                 d_work[k] = val;  /* scratch: store unnormalized component */
                 norm_sq += val * val;
             }
@@ -663,11 +666,14 @@ static PyObject *py_rank1_eigenvalue_update(PyObject *self, PyObject *args)
             w_data[i] = dlam;
 
             /* Eigenvector i: v_i = z_unit / delta, then normalize.
-             * delta[k] = d[k] - dlam for the secular equation (LAWN 89). */
+             * delta[k] = d[k] - dlam for the secular equation (LAWN 89).
+             * Deflation guard: skip terms where |delta[k]| < 1e-300 to avoid
+             * inf/NaN from machine-epsilon poles (matching rank1_eigs_norms). */
             double *row = v_data + i * n;  /* row i = eigenvec i (temporary row-major) */
             double norm_sq = 0.0;
             for (npy_intp k = 0; k < n; k++) {
-                double val = z_ptr[k] / delta[k];
+                double dk = delta[k];
+                double val = (dk < -1e-300 || dk > 1e-300) ? z_ptr[k] / dk : 0.0;
                 row[k] = val;
                 norm_sq += val * val;
             }

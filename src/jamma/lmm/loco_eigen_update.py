@@ -284,6 +284,7 @@ def _apply_vj_to_rows_blocked(
     d_j: np.ndarray,
     lambda_j: np.ndarray,
     norm_j: np.ndarray,
+    deflated: dict[int, int] | None = None,
     col_block_size: int = 1000,
 ) -> np.ndarray:
     """Apply implicit V_j to row batch R without materializing n x n V_j.
@@ -292,12 +293,10 @@ def _apply_vj_to_rows_blocked(
         V_j[l, k] = z_j[l] / (d_j[l] - lambda_j[k]) / norm_j[k]
 
     For deflated eigenvalues (where z_j[l] ≈ 0 and d_j[l] = lambda_j[k]),
-    the Cauchy term z_j[l] / (d_j[l] - lambda_j[k]) is 0/0. The inline
-    deflation guard (see diffs/DEFLATION_FILL below) sets the denominator to
-    1e300, making z_j[l] / 1e300 ≈ 0. This approximation is valid when
-    z_j[l] ≈ 0 but does not explicitly handle deflated columns as e_l — use
-    `_apply_vj_to_rows_blocked_with_deflation` when explicit deflation
-    handling is needed.
+    the Cauchy term is 0/0. Without explicit deflation handling, the inline
+    guard sets the denominator to 1e300, making z_j[l] / 1e300 ≈ 0. When
+    ``deflated`` is provided, deflated columns are explicitly overridden with
+    the correct e_l basis vector.
 
     Uses blocked Cauchy multiply: processes col_block_size columns at a time,
     avoiding materialization of the full n x n Cauchy matrix.
@@ -311,6 +310,8 @@ def _apply_vj_to_rows_blocked(
         norm_j: (n,) normalization factors:
             norm_j[k] = ||z_j / (d_j - lambda_j[k])||_2,
             self-consistent with the Cauchy formula deflation guard.
+        deflated: Optional dict mapping deflated column k -> row index l.
+            When provided, R_new[:, k] = R[:, l] for deflated columns.
         col_block_size: Number of output columns to compute per block (memory control).
 
     Returns:
@@ -323,13 +324,14 @@ def _apply_vj_to_rows_blocked(
     for k_start in range(0, n, col_block_size):
         k_end = min(k_start + col_block_size, n)
         lam_block = lambda_j[k_start:k_end]  # (m,)
-        # C_block[l, k] = 1 / (d_j[l] - lambda_j[k_start + k])  — shape (n, m)
-        # Deflation guard: when d_j[l] = lambda_j[k] (deflated eigenvalue), the
-        # corresponding z_j[l] ≈ 0, so the contribution to V[:,k] is 0/0 ≈ 0.
-        # _cauchy_block sets the diff to 1e300, making A[:,l] / diff ≈ 0.
         C_block = _cauchy_block(d_j, lam_block)
         # DGEMM: (b, n) @ (n, m) -> (b, m); scale by 1/norm_j
         R_new[:, k_start:k_end] = (A @ C_block) * (1.0 / norm_j[k_start:k_end])
+    # Override deflated columns: eigenvector k is e_{row_l}
+    if deflated:
+        for k, row_l in deflated.items():
+            if 0 <= k < n:
+                R_new[:, k] = R[:, row_l]
     return R_new
 
 
@@ -339,6 +341,7 @@ def _apply_vj_transpose_to_vec_blocked(
     d_j: np.ndarray,
     lambda_j: np.ndarray,
     norm_j: np.ndarray,
+    deflated: dict[int, int] | None = None,
     col_block_size: int = 1000,
 ) -> np.ndarray:
     """Apply V_j.T to a single vector v using blocked Cauchy multiply.
@@ -355,6 +358,8 @@ def _apply_vj_transpose_to_vec_blocked(
         d_j: (n,) diagonal at the START of step j (before rank-1 update).
         lambda_j: (n,) eigenvalues AFTER rank-1 update at step j (ascending).
         norm_j: (n,) normalization factors.
+        deflated: Optional dict mapping deflated column k -> row index l.
+            When provided, result[k] = v[l] for deflated positions.
         col_block_size: Number of output elements to compute per block.
 
     Returns:
@@ -366,9 +371,13 @@ def _apply_vj_transpose_to_vec_blocked(
     for k_start in range(0, n, col_block_size):
         k_end = min(k_start + col_block_size, n)
         lam_block = lambda_j[k_start:k_end]  # (m,)
-        # C_block[l, k] = 1 / (d_j[l] - lambda_j[k_start + k])  — shape (n, m)
         C_block = _cauchy_block(d_j, lam_block)
         result[k_start:k_end] = (c @ C_block) / norm_j[k_start:k_end]
+    # Override deflated positions: (V_j.T @ v)[k] = v[row_l]
+    if deflated:
+        for k, row_l in deflated.items():
+            if 0 <= k < n:
+                result[k] = v[row_l]
     return result
 
 
@@ -400,95 +409,19 @@ def _find_deflated_columns(
     deflated_mask = np.abs(z_unit) < tol_z
     deflated_indices = np.where(deflated_mask)[0]
     for idx in deflated_indices:
-        # Find eigenvalue k closest to d[idx]
-        diffs = np.abs(eigenvalues - d[idx])
-        k = int(np.argmin(diffs))
-        rel_tol = 1e-14 * max(abs(d[idx]), 1.0)
-        if diffs[k] < rel_tol:
+        # Find eigenvalue k closest to d[idx] using binary search (O(log n)
+        # vs O(n) argmin per index). eigenvalues is ascending.
+        val = d[idx]
+        k = int(np.searchsorted(eigenvalues, val))
+        # searchsorted gives insertion point; check neighbors for closest
+        if k == len(eigenvalues):
+            k = k - 1
+        elif k > 0 and abs(eigenvalues[k - 1] - val) < abs(eigenvalues[k] - val):
+            k = k - 1
+        rel_tol = 1e-14 * max(abs(val), 1.0)
+        if abs(eigenvalues[k] - val) < rel_tol:
             deflated[k] = int(idx)
     return deflated
-
-
-def _apply_vj_to_rows_blocked_with_deflation(
-    R: np.ndarray,
-    z_j: np.ndarray,
-    d_j: np.ndarray,
-    lambda_j: np.ndarray,
-    norm_j: np.ndarray,
-    deflated: dict[int, int],
-    col_block_size: int = 1000,
-) -> np.ndarray:
-    """Apply implicit V_j to row batch R, with explicit deflation handling.
-
-    For non-deflated columns: uses blocked Cauchy formula.
-    For deflated column k (at position l): applies R[:, l] (Cauchy breaks down).
-
-    Args:
-        R: (b, n) batch of rows.
-        z_j: (n,) unit-norm update vector.
-        d_j: (n,) diagonal before rank-1 update.
-        lambda_j: (n,) eigenvalues after rank-1 update, ascending.
-        norm_j: (n,) self-consistent Cauchy norms.
-        deflated: dict mapping deflated column k -> row index l.
-        col_block_size: Columns per Cauchy block.
-
-    Returns:
-        (b, n) result of R @ V_j.
-    """
-    b, n = R.shape
-    A = R * z_j  # (b, n)
-    R_new = np.empty_like(R)
-    for k_start in range(0, n, col_block_size):
-        k_end = min(k_start + col_block_size, n)
-        lam_block = lambda_j[k_start:k_end]
-        C_block = _cauchy_block(d_j, lam_block)
-        R_new[:, k_start:k_end] = (A @ C_block) * (1.0 / norm_j[k_start:k_end])
-    # Override deflated columns: R_new[:, k] = R[:, row_l] (eigenvector is e_{row_l})
-    for k, row_l in deflated.items():
-        if 0 <= k < n:
-            R_new[:, k] = R[:, row_l]
-    return R_new
-
-
-def _apply_vj_transpose_to_vec_blocked_with_deflation(
-    v: np.ndarray,
-    z_j: np.ndarray,
-    d_j: np.ndarray,
-    lambda_j: np.ndarray,
-    norm_j: np.ndarray,
-    deflated: dict[int, int],
-    col_block_size: int = 1000,
-) -> np.ndarray:
-    """Apply V_j.T to vector v, with explicit deflation handling.
-
-    For non-deflated output positions: uses blocked Cauchy formula.
-    For deflated column k (at position l): (V_j.T @ v)[k] = v[l].
-
-    Args:
-        v: (n,) input vector.
-        z_j: (n,) unit-norm update vector.
-        d_j: (n,) diagonal before rank-1 update.
-        lambda_j: (n,) eigenvalues after rank-1 update, ascending.
-        norm_j: (n,) self-consistent Cauchy norms.
-        deflated: dict mapping deflated column k -> row index l.
-        col_block_size: Output elements per block.
-
-    Returns:
-        (n,) result of V_j.T @ v.
-    """
-    c = z_j * v
-    n = len(v)
-    result = np.empty(n)
-    for k_start in range(0, n, col_block_size):
-        k_end = min(k_start + col_block_size, n)
-        lam_block = lambda_j[k_start:k_end]
-        C_block = _cauchy_block(d_j, lam_block)
-        result[k_start:k_end] = (c @ C_block) / norm_j[k_start:k_end]
-    # Override deflated positions: (V_j.T @ v)[k] = v[row_l]
-    for k, row_l in deflated.items():
-        if 0 <= k < n:
-            result[k] = v[row_l]
-    return result
 
 
 def _compute_cauchy_norms(
@@ -638,14 +571,14 @@ def _secular_eigendecompose_delta_path(
         q_implicit = u_z[:, j].copy()
         for k in range(j):
             if not step_is_identity[k]:
-                q_implicit = _apply_vj_transpose_to_vec_blocked_with_deflation(
+                q_implicit = _apply_vj_transpose_to_vec_blocked(
                     q_implicit,
                     stored_z[k],
                     stored_d[k],
                     stored_lambda[k],
                     stored_norm[k],
-                    stored_deflated[k],
-                    col_block_size,
+                    deflated=stored_deflated[k],
+                    col_block_size=col_block_size,
                 )
 
         norm_q = np.linalg.norm(q_implicit)
@@ -705,9 +638,8 @@ def _secular_eigendecompose_delta_path(
             )
 
         # Ensure strict ascending order (DLAED4 guarantees it, but verify FP safety)
-        sort_idx = np.argsort(lambda_j)
-        if not np.all(sort_idx == np.arange(len(lambda_j))):
-            lambda_j = lambda_j[sort_idx]
+        if not np.all(np.diff(lambda_j) >= 0):
+            lambda_j = lambda_j[np.argsort(lambda_j)]
 
         # Detect deflated columns: where |q_j_unit[l]| ≈ 0 AND lambda[k] = d[l].
         # DLAED4 deflation type 1: q_unit[l] ≈ 0 -> eigenvalue stays at d[l],
@@ -790,19 +722,7 @@ def _secular_eigendecompose_delta_path(
 
     # Post-hoc orthogonality check and optional QR re-orthogonalization (delta path)
     if check_orthogonality:
-        gram = U_loco.T @ U_loco
-        deviation = float(np.max(np.abs(gram - np.eye(n))))
-        logger.debug(
-            f"secular_eigendecompose_from_full: orthogonality check "
-            f"max|U^T U - I| = {deviation:.2e} (n={n}, r_eff={r_eff}, path=delta)"
-        )
-        if deviation > reorth_threshold:
-            logger.warning(
-                f"secular_eigendecompose_from_full: eigenvector orthogonality "
-                f"drift detected: max|U^T U - I| = {deviation:.2e}. "
-                f"Applying QR re-orthogonalization."
-            )
-            U_loco, _ = np.linalg.qr(U_loco, mode="reduced")
+        U_loco = _check_and_reorthogonalize(U_loco, n, r_eff, "delta", reorth_threshold)
 
     # Zero near-zero eigenvalues
     _apply_threshold(d_current, threshold)
@@ -1136,8 +1056,8 @@ def secular_eigendecompose_from_full(
         # Ensure strict ascending order after each update (DLAED4 requires it).
         # The update should already return ascending eigenvalues, but floating point
         # accumulation across many steps can introduce tiny violations.
-        sort_idx = np.argsort(d_new)
-        if not np.all(sort_idx == np.arange(len(d_new))):
+        if not np.all(np.diff(d_new) >= 0):
+            sort_idx = np.argsort(d_new)
             d_new = d_new[sort_idx]
             V_j = V_j[:, sort_idx]
 
@@ -1161,19 +1081,7 @@ def secular_eigendecompose_from_full(
 
     # Post-hoc orthogonality check and optional QR re-orthogonalization (Q path)
     if check_orthogonality:
-        gram = U_loco.T @ U_loco
-        deviation = float(np.max(np.abs(gram - np.eye(n))))
-        logger.debug(
-            f"secular_eigendecompose_from_full: orthogonality check "
-            f"max|U^T U - I| = {deviation:.2e} (n={n}, r_eff={r_eff}, path=Q)"
-        )
-        if deviation > reorth_threshold:
-            logger.warning(
-                f"secular_eigendecompose_from_full: eigenvector orthogonality "
-                f"drift detected: max|U^T U - I| = {deviation:.2e}. "
-                f"Applying QR re-orthogonalization."
-            )
-            U_loco, _ = np.linalg.qr(U_loco, mode="reduced")
+        U_loco = _check_and_reorthogonalize(U_loco, n, r_eff, "Q", reorth_threshold)
 
     # Zero near-zero eigenvalues (same as loco_eigendecompose_from_full)
     _apply_threshold(d_current, threshold)
@@ -1259,3 +1167,38 @@ def _apply_threshold(d: np.ndarray, threshold: float) -> None:
                 f"to verify results match"
             )
         d[mask] = 0.0
+
+
+def _check_and_reorthogonalize(
+    U: np.ndarray,
+    n: int,
+    r_eff: int,
+    path_name: str,
+    reorth_threshold: float,
+) -> np.ndarray:
+    """Check eigenvector orthogonality and apply QR if drift exceeds threshold.
+
+    Args:
+        U: (n, n) eigenvector matrix.
+        n: Matrix dimension.
+        r_eff: Effective rank (for logging).
+        path_name: "Q" or "delta" (for logging).
+        reorth_threshold: max|U^T U - I| above which QR is applied.
+
+    Returns:
+        U, possibly QR-reorthogonalized.
+    """
+    gram = U.T @ U
+    deviation = float(np.max(np.abs(gram - np.eye(n))))
+    logger.debug(
+        f"secular_eigendecompose_from_full: orthogonality check "
+        f"max|U^T U - I| = {deviation:.2e} (n={n}, r_eff={r_eff}, path={path_name})"
+    )
+    if deviation > reorth_threshold:
+        logger.warning(
+            f"secular_eigendecompose_from_full: eigenvector orthogonality "
+            f"drift detected: max|U^T U - I| = {deviation:.2e}. "
+            f"Applying QR re-orthogonalization."
+        )
+        U, _ = np.linalg.qr(U, mode="reduced")
+    return U

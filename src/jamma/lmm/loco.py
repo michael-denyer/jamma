@@ -654,16 +654,15 @@ def _compute_loco_kinship_streaming_numpy(
             _s_full_accumulated = True
 
         _x_c_mode = mode in {LocoStreamingMode.X_C, LocoStreamingMode.X_C_SEQUENTIAL}
+        batch_chr_set = set(batch_chrs)
         if _x_c_mode:
             # X_c mode: collect raw genotype column chunks per chromosome
             batch_X_c_chunks: dict[str, list[np.ndarray]] = {c: [] for c in batch_chrs}
-            batch_chr_set = set(batch_chrs)
         else:
             batch_S_chr: dict[str, np.ndarray] = {
                 c: np.zeros((n_samples_kinship, n_samples_kinship), dtype=np.float64)
                 for c in batch_chrs
             }
-            batch_chr_set = set(batch_chrs)
 
         accum_iter = stream_genotype_chunks(
             bed_path, chunk_size=chunk_size, dtype=np.float64, show_progress=False
@@ -1472,22 +1471,6 @@ def run_lmm_loco(
                     # Sequential secular update: eigenvalues pre-computed by
                     # _secular_chr_iter() and passed as K_loco = (eigenvalues, U).
                     eigenvalues_np, U = K_loco  # type: ignore[misc]
-
-                    # Optionally write eigen cache for the secular-derived eigen.
-                    if write_eigen:
-                        try:
-                            write_eigen_files(
-                                eigenvalues_np,
-                                U,
-                                eigen_dir,
-                                prefix=f"{eigen_prefix}.loco.chr{chr_name}",
-                            )
-                        except OSError as e:
-                            raise OSError(
-                                f"Failed to write LOCO eigen for chromosome "
-                                f"{chr_name} to {eigen_dir}: {e}"
-                            ) from e
-                        logger.info(f"  Wrote LOCO eigen for chr {chr_name} (secular)")
                 else:
                     # Standard path: kinship -> eigendecomp
                     if show_progress:
@@ -1537,21 +1520,21 @@ def run_lmm_loco(
                     del K_loco_valid
                     gc.collect()
 
-                    # Write eigen files if requested.
-                    if write_eigen:
-                        try:
-                            write_eigen_files(
-                                eigenvalues_np,
-                                U,
-                                eigen_dir,
-                                prefix=f"{eigen_prefix}.loco.chr{chr_name}",
-                            )
-                        except OSError as e:
-                            raise OSError(
-                                f"Failed to write LOCO eigen for chromosome "
-                                f"{chr_name} to {eigen_dir}: {e}"
-                            ) from e
-                        logger.info(f"  Wrote LOCO eigen for chr {chr_name}")
+                # Write eigen files if requested (skip for cache-loaded eigen).
+                if write_eigen and eigen_cache is None:
+                    try:
+                        write_eigen_files(
+                            eigenvalues_np,
+                            U,
+                            eigen_dir,
+                            prefix=f"{eigen_prefix}.loco.chr{chr_name}",
+                        )
+                    except OSError as e:
+                        raise OSError(
+                            f"Failed to write LOCO eigen for chromosome "
+                            f"{chr_name} to {eigen_dir}: {e}"
+                        ) from e
+                    logger.info(f"  Wrote LOCO eigen for chr {chr_name}")
 
                 logger.debug(
                     f"  chr {chr_name}: {backend} backend, {len(chr_snp_indices)} SNPs"

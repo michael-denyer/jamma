@@ -100,15 +100,14 @@ def _make_benchmark_data(
 
     d_full, U_full = np.linalg.eigh(K_full)
 
-    # Chromosome X_c: controlled effective rank via latent factors
-    # latents: (n, r_eff), then tile to p_chr = r_eff * 10 columns
+    # Chromosome X_c: controlled effective rank via latent factor model.
+    # X_c = latents @ weights produces a matrix whose column space is
+    # exactly rank r_eff (no noise inflation).
     latents = rng.standard_normal((n, r_eff))
     p_chr = r_eff * 10
-    # Tile latents with small noise to reach p_chr columns
-    n_repeats = (p_chr + r_eff - 1) // r_eff
-    X_c_wide = np.tile(latents, n_repeats)[:, :p_chr]
-    X_c_wide += rng.standard_normal(X_c_wide.shape) * 0.01  # break exact degeneracy
-    X_c = X_c_wide - X_c_wide.mean(axis=0)
+    weights = rng.standard_normal((r_eff, p_chr))
+    X_c = latents @ weights
+    X_c -= X_c.mean(axis=0)
 
     S_chr = X_c @ X_c.T
 

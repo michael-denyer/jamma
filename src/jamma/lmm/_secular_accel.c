@@ -692,8 +692,8 @@ static PyObject *py_rank1_eigenvalue_update(PyObject *self, PyObject *args)
  *
  * The norm formula: after each dlaed4 call, delta[k] = d[k] - eigenvalue[i].
  *   norm_i = sqrt(sum_k( (z_unit[k] / delta[k])^2 ))
- * This is exactly 1/||v_i||_unnorm where v_i = z_unit / delta is the unnormalized
- * eigenvector. The unit eigenvector would be v_i * (1/norm_i).
+ * This is exactly ||v_i||_unnorm where v_i = z_unit / delta is the unnormalized
+ * eigenvector. The unit eigenvector is v_i / norm_i.
  *
  * Deflation guard: if |delta[k]| < 1e-300, skip that term in norm_sq to prevent
  * inf/NaN from machine-epsilon poles (z component is effectively deflated by dlaed4).

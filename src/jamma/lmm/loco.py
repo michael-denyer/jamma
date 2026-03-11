@@ -910,9 +910,10 @@ def run_lmm_loco(
         use_secular_update: If True, compute the full kinship eigendecomposition
             once via eigendecompose_kinship(K_full) then derive per-chromosome
             eigendecompositions via loco_eigendecompose_from_full instead of
-            eigendecomposing each K_loco independently. Requires O(C * n^2)
-            memory where C is the number of chromosomes (all S_chr matrices
-            are held simultaneously). Only supported with the numpy backend.
+            eigendecomposing each K_loco independently. Requires O(n * p_total)
+            memory where p_total is the total filtered SNP count (all
+            per-chromosome X_c matrices held simultaneously). Only supported
+            with the numpy backend.
             Raises ValueError if True with backend="jax", with
             save_kinship=True, or when cached eigen files exist in eigen_dir.
 

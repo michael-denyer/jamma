@@ -16,14 +16,14 @@ of K_loco_c are U_full @ V where V are the eigenvectors of M.
 
 This avoids constructing K_loco_c = (S_full - S_chr) / p_loco explicitly.
 The low-rank structure of M_gram enables a secular equation solver (via LAPACK
-DLAED4) at O(n^2 * r_eff) cost when r_eff << n, versus O(n^3) for direct
-eigendecomposition. Two solver paths are available:
+DLAED4) computing eigenvalues at O(n * r_eff) cost per eigenvalue, versus
+O(n^3) for direct eigendecomposition. Two eigenvector accumulation paths:
 
-- **Q path**: sequential rank-1 updates accumulating full eigenvectors (O(n^2)
-  per step, O(n^2) workspace).
+- **Q path**: sequential rank-1 updates with O(n^2) eigenvector multiply per
+  step, O(n^2) workspace. Total: O(n^2 * r_eff) compute + O(n^2) memory.
 - **Delta path**: forward pass stores eigenvalues + norms only (O(n) per step),
   then backward pass reconstructs U_loco via blocked Cauchy multiply without
-  materializing any (n, n) intermediate matrix.
+  materializing any (n, n) intermediate. Memory savings over Q path at large n.
 """
 
 from __future__ import annotations
@@ -51,6 +51,7 @@ try:
     _SECULAR_ACCEL_AVAILABLE = True
 except ImportError:
     _SECULAR_ACCEL_AVAILABLE = False
+    _rank1_update_c = None  # type: ignore[assignment]
     _rank1_eigs_norms_c = None  # type: ignore[assignment]
     logger.info(
         "C extension _secular_accel not available; "
@@ -417,15 +418,15 @@ def _secular_eigendecompose_delta_path(
       from scratch using stored (z_k, d_k, lambda_k, norm_k_cauchy) data.
       Cauchy norms are self-consistent: norm_k[l] = ||z_k / (d_k - lambda_k[l])||_2,
       ensuring V_k_cauchy is unitary by construction (column l has unit norm).
-      Eigenvalues computed via _rank1_update_c (DLAED4) for accuracy.
+      Eigenvalues computed via _rank1_eigs_norms_c (DLAED4) for accuracy.
       Stores (z_j, d_j, lambda_j, norm_j_cauchy) — total O(4 * r_eff * n) memory.
     - Backward pass: reconstruct U_loco row-batch by row-batch via blocked
       Cauchy matrix multiply using stored (z_j, d_j, lambda_j, norm_j_cauchy).
       With self-consistent Cauchy norms, V_j_cauchy columns are unit-norm by
       construction, giving a proper unitary reconstruction.
 
-    Forward pass cost: O(r_eff^2 * n) — for each step j, apply j previous V_k.T.
-    Backward pass cost: O(n * r_eff * n / batch_size) = O(n^2 * r_eff / batch_size).
+    Forward pass cost: O(r_eff^2 * n) eigenvalue updates + Cauchy transforms.
+    Backward pass cost: O(n^2 * r_eff) — blocked Cauchy multiply across all rows.
     Memory: O(r_eff * n) stored scalars (no Q matrix, no V_j matrices).
 
     Args:
@@ -536,7 +537,8 @@ def _secular_eigendecompose_delta_path(
             q_j_unit, d_current, lambda_j, deflated_j, col_block_size
         )
 
-        # Store step-j data: d BEFORE update (Pitfall 2 — must copy before update)
+        # Store step-j data: d BEFORE update — using d AFTER would give wrong
+        # Cauchy denominators (d_k - lambda_k[l]) in backward pass
         stored_z[j] = q_j_unit
         stored_d[j] = d_current.copy()  # d_j = diagonal BEFORE step j
         stored_lambda[j] = lambda_j
@@ -728,11 +730,11 @@ def secular_eigendecompose_from_full(
         M = alpha_c * diag(d_full) - sigma * Z Z^T
     where Z = U_full^T @ X_c has rank r_eff << n due to LD structure.
     The secular solver applies r_eff sequential rank-1 updates via DLAED4,
-    each costing O(n^2), for a total of O(n^2 * r_eff).
+    each computing eigenvalues at O(n) per eigenvalue.
 
     Two eigenvector accumulation strategies:
     - Q path (n <= n_threshold_for_delta): tracked as n x n matrix Q updated
-      at each step. Memory: O(n^2) per step — fine for small n.
+      at each step via O(n^2) matrix multiply. Memory: O(n^2) — fine for small n.
     - Delta path (n > n_threshold_for_delta): forward pass stores
       (z_j, d_j, lambda_j, norm_j) per step; backward pass reconstructs
       U_loco row-batch by row-batch via blocked Cauchy multiply. Eliminates
@@ -844,7 +846,7 @@ def secular_eigendecompose_from_full(
             t0,
         )
 
-    # Sequential rank-1 updates (RESEARCH.md "Sequential Rank-1 Update Strategy"):
+    # Sequential rank-1 updates:
     # Start: D_0 = alpha_c * d_full (ascending), Q_0 = I_n
     # For j = 0..r_eff-1:
     #   rho_j = -sigma * s[j]^2

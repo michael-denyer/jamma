@@ -287,8 +287,8 @@ config = PipelineConfig(
 result = PipelineRunner(config).run()
 ```
 
-The secular update requires all per-chromosome Gram matrices (S_chr) in memory
-simultaneously, so memory usage is O(C × n^2) where C is the number of chromosomes.
+The secular update requires all per-chromosome genotype matrices (X_c) in memory
+simultaneously, so memory usage is O(n × p_total) where p_total is the total filtered SNP count.
 Only supported with the numpy backend.
 
 **Key constraints:**

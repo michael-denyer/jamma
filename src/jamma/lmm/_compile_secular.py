@@ -106,7 +106,7 @@ def compile_extension(verbose: bool = True) -> bool:
     dl_flags = ["-ldl"] if platform.system() == "Linux" else []
 
     # -march=native is safe here: compiles on the user's own machine.
-    # hatch_build.py omits this flag for portable wheel builds.
+    # Not used in wheel builds (compiled post-install, not by hatch_build.py).
     # No LAPACK link flags — DLAED4 is resolved at runtime via dlopen.
     cmd = [
         cc_cmd,

@@ -450,3 +450,262 @@ def test_loco_numpy_show_progress_true():
 
     assert loco.n_tested > 0, "Expected at least one SNP to be tested"
     assert len(loco.associations) > 0, "Expected at least one association result"
+
+
+@pytest.mark.tier1
+class TestSequentialXcStreaming:
+    """Tests for X_C_SEQUENTIAL mode in _compute_loco_kinship_streaming_numpy.
+
+    The sequential mode does two BED passes per chromosome (one for K_full,
+    one per chromosome for X_c) to reduce peak memory from O(sum_X_c) to
+    O(max_X_c). The function returns a SequentialLocoResult NamedTuple.
+    """
+
+    def setup_method(self):
+        """Skip if fixture not available."""
+        if not _LOCO_BFILE.with_suffix(".bed").exists():
+            pytest.skip("gemma_loco fixture not available")
+
+    def test_return_type_is_4tuple(self):
+        """X_C_SEQUENTIAL mode returns SequentialLocoResult (4-element NamedTuple)."""
+        from jamma.lmm.loco import (
+            LocoStreamingMode,
+            _compute_loco_kinship_streaming_numpy,
+        )
+
+        result = _compute_loco_kinship_streaming_numpy(
+            _LOCO_BFILE,
+            check_memory=False,
+            show_progress=False,
+            mode=LocoStreamingMode.X_C_SEQUENTIAL,
+        )
+
+        assert len(result) == 4, f"Expected 4-tuple, got {len(result)}-tuple"
+        K_full, n_filtered, gen, snp_stats_cache = result
+        assert isinstance(K_full, np.ndarray), (
+            f"K_full should be ndarray, got {type(K_full)}"
+        )
+        assert K_full.ndim == 2, f"K_full should be 2-D, got ndim={K_full.ndim}"
+        assert K_full.shape[0] == K_full.shape[1], "K_full should be square"
+        assert isinstance(n_filtered, int), (
+            f"n_filtered should be int, got {type(n_filtered)}"
+        )
+        assert n_filtered > 0, "n_filtered should be positive"
+        # gen is a generator — don't consume it here, just check it's iterable
+        import types
+
+        assert isinstance(gen, types.GeneratorType), (
+            f"gen should be a generator, got {type(gen)}"
+        )
+
+    def test_kfull_pass1_matches_yield_x_c(self):
+        """K_full from X_C_SEQUENTIAL matches K_full from X_C accumulation.
+
+        The two-pass sequential path should produce K_full = sum(X_c @ X_c.T) / p_full
+        that matches the single-pass X_C accumulation within rtol=1e-12.
+        """
+        from jamma.lmm.loco import (
+            LocoStreamingMode,
+            _compute_loco_kinship_streaming_numpy,
+        )
+
+        # Reference: X_C path
+        p_full_ref, x_c_iter, _ = _compute_loco_kinship_streaming_numpy(
+            _LOCO_BFILE,
+            check_memory=False,
+            show_progress=False,
+            mode=LocoStreamingMode.X_C,
+        )
+        K_full_ref = None
+        for _chr_name, x_c_mat, _p_chr in x_c_iter:
+            if x_c_mat.shape[1] > 0:
+                gram = x_c_mat @ x_c_mat.T
+                if K_full_ref is None:
+                    K_full_ref = np.zeros_like(gram)
+                K_full_ref += gram
+        assert K_full_ref is not None, "X_C path produced no X_c matrices"
+        K_full_ref /= p_full_ref
+
+        # Sequential path
+        seq_result = _compute_loco_kinship_streaming_numpy(
+            _LOCO_BFILE,
+            check_memory=False,
+            show_progress=False,
+            mode=LocoStreamingMode.X_C_SEQUENTIAL,
+        )
+        K_full_seq = seq_result.s_full / seq_result.n_filtered  # unnormalized S_full
+        # Consume generator to avoid resource leaks
+        list(seq_result.generator)
+
+        np.testing.assert_allclose(
+            K_full_seq,
+            K_full_ref,
+            rtol=1e-12,
+            atol=1e-14,
+            err_msg="K_full from X_C_SEQUENTIAL does not match X_C accumulation",
+        )
+
+    def test_sequential_generator_yields_per_chr_tuples(self):
+        """Sequential generator yields (chr_name, X_c, p_chr) tuples in chr order."""
+        from jamma.lmm.loco import (
+            LocoStreamingMode,
+            _compute_loco_kinship_streaming_numpy,
+        )
+
+        seq_result = _compute_loco_kinship_streaming_numpy(
+            _LOCO_BFILE,
+            check_memory=False,
+            show_progress=False,
+            mode=LocoStreamingMode.X_C_SEQUENTIAL,
+        )
+
+        yielded = list(seq_result.generator)
+        assert len(yielded) > 0, "Generator should yield at least one chromosome"
+        for item in yielded:
+            assert len(item) == 3, f"Expected 3-tuple, got {len(item)}-tuple"
+            chr_name, X_c, p_chr = item
+            assert isinstance(chr_name, str), (
+                f"chr_name should be str, got {type(chr_name)}"
+            )
+            assert isinstance(X_c, np.ndarray), (
+                f"X_c should be ndarray, got {type(X_c)}"
+            )
+            assert X_c.ndim == 2, f"X_c should be 2-D, got ndim={X_c.ndim}"
+            assert isinstance(p_chr, int), f"p_chr should be int, got {type(p_chr)}"
+            assert p_chr >= 0, "p_chr should be non-negative"
+            if p_chr > 0:
+                assert X_c.shape[1] == p_chr, (
+                    f"X_c.shape[1]={X_c.shape[1]} != p_chr={p_chr} for chr {chr_name}"
+                )
+
+    def test_sequential_x_c_matches_yield_x_c(self):
+        """Each X_c from sequential generator matches the X_C path exactly."""
+        from jamma.lmm.loco import (
+            LocoStreamingMode,
+            _compute_loco_kinship_streaming_numpy,
+        )
+
+        # Reference: X_C path — collect all X_c
+        _p_full_ref, x_c_iter, _ = _compute_loco_kinship_streaming_numpy(
+            _LOCO_BFILE,
+            check_memory=False,
+            show_progress=False,
+            mode=LocoStreamingMode.X_C,
+        )
+        x_c_ref = {}
+        for chr_name, x_c_mat, _p_chr in x_c_iter:
+            x_c_ref[chr_name] = x_c_mat
+
+        # Sequential path
+        seq_result = _compute_loco_kinship_streaming_numpy(
+            _LOCO_BFILE,
+            check_memory=False,
+            show_progress=False,
+            mode=LocoStreamingMode.X_C_SEQUENTIAL,
+        )
+
+        for chr_name, X_c, _p_chr in seq_result.generator:
+            assert chr_name in x_c_ref, (
+                f"Sequential generator yielded unexpected chr {chr_name}"
+            )
+            np.testing.assert_array_equal(
+                X_c,
+                x_c_ref[chr_name],
+                err_msg=f"X_c mismatch for chr {chr_name}",
+            )
+
+    def test_mode_dispatch_x_c_sequential_vs_x_c(self):
+        """X_C_SEQUENTIAL and X_C modes dispatch correctly (distinct return types)."""
+        from jamma.lmm.loco import (
+            LocoStreamingMode,
+            _compute_loco_kinship_streaming_numpy,
+        )
+
+        # X_C_SEQUENTIAL returns SequentialLocoResult (4-field NamedTuple)
+        seq_result = _compute_loco_kinship_streaming_numpy(
+            _LOCO_BFILE,
+            check_memory=False,
+            show_progress=False,
+            mode=LocoStreamingMode.X_C_SEQUENTIAL,
+        )
+        assert hasattr(seq_result, "s_full"), "X_C_SEQUENTIAL must return NamedTuple"
+        list(seq_result.generator)  # consume generator
+
+        # X_C returns 3-tuple (n_filtered, iter, cache)
+        x_c_result = _compute_loco_kinship_streaming_numpy(
+            _LOCO_BFILE,
+            check_memory=False,
+            show_progress=False,
+            mode=LocoStreamingMode.X_C,
+        )
+        assert len(x_c_result) == 3, "X_C must return 3-tuple"
+        list(x_c_result[1])  # consume iterator
+
+
+@pytest.mark.tier1
+def test_old_boolean_kwargs_raise_typeerror():
+    """Old boolean kwargs raise TypeError after LocoStreamingMode enum refactor.
+
+    After the refactor, the function no longer accepts yield_s_chr, yield_x_c,
+    or yield_x_c_sequential as keyword arguments. Passing them must raise
+    TypeError so callers get a clear error rather than silently ignoring the flag.
+    """
+    if not _LOCO_BFILE.with_suffix(".bed").exists():
+        pytest.skip("gemma_loco fixture not available")
+
+    from jamma.lmm.loco import _compute_loco_kinship_streaming_numpy
+
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        _compute_loco_kinship_streaming_numpy(
+            _LOCO_BFILE,
+            check_memory=False,
+            show_progress=False,
+            yield_s_chr=True,
+        )
+
+
+@pytest.mark.tier1
+def test_sequential_result_named_fields():
+    """SequentialLocoResult has named fields and supports positional unpacking.
+
+    The X_C_SEQUENTIAL mode returns a SequentialLocoResult NamedTuple with
+    .s_full, .n_filtered, .generator, and .snp_stats_cache attributes.
+    Positional unpacking 's, n, g, c = result' must also work unchanged.
+    """
+    if not _LOCO_BFILE.with_suffix(".bed").exists():
+        pytest.skip("gemma_loco fixture not available")
+
+    from jamma.lmm.loco import LocoStreamingMode, _compute_loco_kinship_streaming_numpy
+
+    result = _compute_loco_kinship_streaming_numpy(
+        _LOCO_BFILE,
+        check_memory=False,
+        show_progress=False,
+        mode=LocoStreamingMode.X_C_SEQUENTIAL,
+    )
+
+    # Named field access
+    assert hasattr(result, "s_full"), "SequentialLocoResult missing .s_full"
+    assert hasattr(result, "n_filtered"), "SequentialLocoResult missing .n_filtered"
+    assert hasattr(result, "generator"), "SequentialLocoResult missing .generator"
+    assert hasattr(result, "snp_stats_cache"), (
+        "SequentialLocoResult missing .snp_stats_cache"
+    )
+
+    # Field types
+    assert isinstance(result.s_full, np.ndarray), (
+        f"s_full should be ndarray, got {type(result.s_full)}"
+    )
+    assert isinstance(result.n_filtered, int), (
+        f"n_filtered should be int, got {type(result.n_filtered)}"
+    )
+
+    # Positional unpacking backward compatibility
+    s, n, g, c = result
+    assert np.array_equal(s, result.s_full)
+    assert n == result.n_filtered
+    assert g is result.generator
+    assert c is result.snp_stats_cache
+
+    # Consume generator to avoid resource leaks
+    list(result.generator)

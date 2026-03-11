@@ -286,6 +286,54 @@ class TestPhenotypeColumnSelection:
 
 
 @pytest.mark.tier1
+class TestPipelineConfigSecular:
+    """Tests for PipelineConfig secular update validation."""
+
+    def test_secular_requires_loco(self) -> None:
+        with pytest.raises(ValueError, match="requires loco=True"):
+            PipelineConfig(bfile=Path("test"), use_secular_update=True)
+
+    def test_secular_rejects_jax_backend(self) -> None:
+        with pytest.raises(ValueError, match="requires backend='numpy'"):
+            PipelineConfig(
+                bfile=Path("test"),
+                loco=True,
+                use_secular_update=True,
+                backend="jax",
+            )
+
+    def test_secular_rejects_auto_backend(self) -> None:
+        """backend='auto' (default) rejected — must be explicit 'numpy'."""
+        with pytest.raises(ValueError, match="requires backend='numpy'"):
+            PipelineConfig(
+                bfile=Path("test"),
+                loco=True,
+                use_secular_update=True,
+                backend="auto",
+            )
+
+    def test_secular_accepts_numpy_backend(self) -> None:
+        config = PipelineConfig(
+            bfile=Path("test"),
+            loco=True,
+            use_secular_update=True,
+            backend="numpy",
+        )
+        assert config.use_secular_update is True
+        assert config.backend == "numpy"
+
+    def test_secular_rejects_save_kinship(self) -> None:
+        with pytest.raises(ValueError, match="save_kinship=True is not supported"):
+            PipelineConfig(
+                bfile=Path("test"),
+                loco=True,
+                use_secular_update=True,
+                backend="numpy",
+                save_kinship=True,
+            )
+
+
+@pytest.mark.tier1
 class TestPipelineConfigSnpsFields:
     """Tests for PipelineConfig SNP filtering fields."""
 

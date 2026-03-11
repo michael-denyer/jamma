@@ -114,6 +114,10 @@ class PipelineConfig:
             derive from phenotype_column. When multiple columns are specified,
             eigendecomposition is computed once and reused. Mutually exclusive
             with loco mode for multiple columns.
+        use_secular_update: If True with LOCO mode, derive per-chromosome
+            eigendecompositions from one full-kinship eigendecomposition via
+            rotated-basis update instead of independent per-chromosome
+            eigendecomps. Only supported with numpy backend. Default False.
     """
 
     bfile: Path
@@ -147,6 +151,7 @@ class PipelineConfig:
     backend: BackendRequest = "auto"
     legacy_text: bool = False
     phenotype_columns: list[int] | None = None
+    use_secular_update: bool = False
 
     def __post_init__(self) -> None:
         if os.sep in self.output_prefix or "/" in self.output_prefix:
@@ -175,6 +180,20 @@ class PipelineConfig:
                 "LOCO mode (-loco) does not support multi-phenotype "
                 "(-n with multiple columns). "
                 "Run each phenotype separately."
+            )
+        # Secular update constraints
+        if self.use_secular_update and not self.loco:
+            raise ValueError("use_secular_update=True requires loco=True")
+        if self.use_secular_update and self.backend != "numpy":
+            raise ValueError(
+                "use_secular_update=True requires backend='numpy'. "
+                f"Got backend={self.backend!r}. "
+                "Pass backend='numpy' explicitly."
+            )
+        if self.use_secular_update and self.save_kinship:
+            raise ValueError(
+                "save_kinship=True is not supported with use_secular_update=True. "
+                "The secular update path does not materialise K_loco matrices."
             )
 
 
@@ -924,6 +943,7 @@ class PipelineRunner:
                 write_eigen=self.config.write_eigen,
                 eigen_dir=self.config.eigen_dir,
                 eigen_prefix=self.config.output_prefix,
+                use_secular_update=self.config.use_secular_update,
             )
             loco_s = time.perf_counter() - t_loco
             total_s = time.perf_counter() - t_start

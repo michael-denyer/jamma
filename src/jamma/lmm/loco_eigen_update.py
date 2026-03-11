@@ -34,6 +34,7 @@ eigendecomposition. Two eigenvector accumulation paths:
 from __future__ import annotations
 
 import time
+from typing import NamedTuple
 
 import numpy as np
 from loguru import logger
@@ -55,6 +56,15 @@ _DEFLATION_FILL: float = 1.0 / _DEFLATION_GUARD  # reciprocal used as safe fill
 # for all n eigenvalues); too many indicates a systemic issue.
 _MAX_DLAED4_FALLBACKS: int = 5
 
+# Threshold below which ||q_j|| is treated as degenerate (skip rank-1 update).
+# Two orders below float64 machine epsilon (~2.2e-16) to catch only genuine
+# null-space vectors, not mere numerical noise.
+_DEGENERATE_NORM_THRESHOLD: float = 1e-14
+
+# Default threshold for |z_unit[l]| below which a column is considered
+# deflated in rank-1 secular update (DLAED4 type-1 deflation).
+_DEFLATION_TOL_Z: float = 1e-10
+
 
 class DLAED4ConvergenceError(RuntimeError):
     """DLAED4 failed to converge for a specific eigenvalue.
@@ -72,7 +82,18 @@ class DLAED4ConvergenceError(RuntimeError):
 _EXPECTED_SECULAR_ABI = 2  # Must match ABI_VERSION in _secular_accel.c
 
 
-def _try_import_secular() -> tuple[bool, object | None, object | None]:
+class SecularImport(NamedTuple):
+    """_secular_accel C extension import result."""
+
+    available: bool
+    rank1_update: object | None
+    rank1_eigs_norms: object | None
+
+
+_SECULAR_UNAVAILABLE = SecularImport(False, None, None)
+
+
+def _try_import_secular() -> SecularImport:
     """Import C extension and validate ABI + DLAED4 availability."""
     try:
         from jamma.lmm._secular_accel import ABI_VERSION as abi
@@ -86,14 +107,14 @@ def _try_import_secular() -> tuple[bool, object | None, object | None]:
             "rank-1 secular updates will use Python fallback (O(n^3) per step). "
             "Run 'python -m jamma.lmm._compile_secular' to compile."
         )
-        return False, None, None
+        return _SECULAR_UNAVAILABLE
     except AttributeError as e:
         logger.warning(
             f"_secular_accel loaded but missing attribute: {e}. "
             "Stale .so may need recompilation: "
             "python -m jamma.lmm._compile_secular"
         )
-        return False, None, None
+        return _SECULAR_UNAVAILABLE
 
     if abi != _EXPECTED_SECULAR_ABI:
         logger.warning(
@@ -101,7 +122,7 @@ def _try_import_secular() -> tuple[bool, object | None, object | None]:
             f"expected {_EXPECTED_SECULAR_ABI}. Extension will not be used. "
             f"Recompile with: python -m jamma.lmm._compile_secular"
         )
-        return False, None, None
+        return _SECULAR_UNAVAILABLE
 
     # Probe DLAED4: the extension can import but lack LAPACK symbols.
     # A small test call detects this at import time rather than mid-computation.
@@ -122,17 +143,15 @@ def _try_import_secular() -> tuple[bool, object | None, object | None]:
                 "Disabling C extension — secular solver will use Python fallback "
                 "(significantly slower). Please report this issue."
             )
-        return False, None, None
+        return _SECULAR_UNAVAILABLE
 
-    return True, rank1_eigenvalue_update, rank1_eigenvalues_and_norms
+    return SecularImport(True, rank1_eigenvalue_update, rank1_eigenvalues_and_norms)
 
 
-_SECULAR_ACCEL_AVAILABLE, _rank1_update_c_raw, _rank1_eigs_norms_c_raw = (
-    _try_import_secular()
-)
-if not _SECULAR_ACCEL_AVAILABLE:
-    _rank1_update_c_raw = None  # type: ignore[assignment]
-    _rank1_eigs_norms_c_raw = None  # type: ignore[assignment]
+_secular = _try_import_secular()
+_SECULAR_ACCEL_AVAILABLE = _secular.available
+_rank1_update_c_raw = _secular.rank1_update
+_rank1_eigs_norms_c_raw = _secular.rank1_eigs_norms
 
 
 def _wrap_c_call(fn: object, *args: object) -> object:
@@ -343,7 +362,7 @@ def _find_deflated_columns(
     z_unit: np.ndarray,
     d: np.ndarray,
     eigenvalues: np.ndarray,
-    tol_z: float = 1e-10,
+    tol_z: float = _DEFLATION_TOL_Z,
 ) -> dict[int, int]:
     """Identify deflated eigenvector columns in a rank-1 secular update.
 
@@ -588,7 +607,8 @@ def _secular_eigendecompose_delta_path(
     stored_d = np.empty((r_eff, n))
     stored_lambda = np.empty((r_eff, n))
     stored_norm = np.empty((r_eff, n))
-    # Track which steps are degenerate (norm_q < 1e-14): skip in backward pass
+    # Track which steps are degenerate (norm_q < _DEGENERATE_NORM_THRESHOLD):
+    # skip in backward pass.
     step_is_identity = np.zeros(r_eff, dtype=bool)
     # Track deflation maps: stored_deflated[j] maps deflated column k -> row l
     stored_deflated: list[dict[int, int]] = [{} for _ in range(r_eff)]
@@ -621,7 +641,7 @@ def _secular_eigendecompose_delta_path(
                 )
 
         norm_q = np.linalg.norm(q_implicit)
-        if norm_q < 1e-14:
+        if norm_q < _DEGENERATE_NORM_THRESHOLD:
             # Degenerate: this singular vector is zero in current basis — skip.
             # Mark as identity step: V_j = I, no eigenvalue change.
             step_is_identity[j] = True
@@ -1064,10 +1084,10 @@ def secular_eigendecompose_from_full(
         # Normalize q_j; adjust rho_j to preserve the perturbation magnitude.
         # rank1_update requires unit-norm z; rho_j is adjusted accordingly.
         norm_q = np.linalg.norm(q_j)
-        if norm_q < 1e-14:
-            # Degenerate: ||q_j|| has drifted below 1e-14, indicating severe
-            # floating-point erosion in the accumulated Q matrix. Skip this
-            # near-zero rank-1 update (numerical noise, not meaningful).
+        if norm_q < _DEGENERATE_NORM_THRESHOLD:
+            # Degenerate: ||q_j|| has drifted below _DEGENERATE_NORM_THRESHOLD,
+            # indicating severe floating-point erosion in the accumulated Q matrix.
+            # Skip this near-zero rank-1 update (numerical noise, not meaningful).
             logger.debug(
                 f"secular Q-path step j={j}/{r_eff}: degenerate "
                 f"(norm_q={norm_q:.2e}), skipping rank-1 update"

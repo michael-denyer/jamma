@@ -1236,8 +1236,8 @@ def run_lmm_loco(
             secular_d_full: np.ndarray | None = None
             secular_U_full: np.ndarray | None = None
             secular_p_full: int = 0
-            secular_x_c: dict[str, np.ndarray] = {}  # X_c matrices per chromosome
-            secular_p_chr: dict[str, int] = {}
+            # Sequential generator for the secular path (one X_c at a time)
+            secular_x_c_seq_iter: Iterator[tuple[str, np.ndarray, int]] | None = None
 
             if eigen_cache is None:
                 # Stream LOCO kinship matrices one at a time.
@@ -1255,11 +1255,16 @@ def run_lmm_loco(
                     )
 
                     if use_secular_update:
-                        # Secular update path: collect X_c matrices and
-                        # eigendecompose K_full once for all chromosomes.
-                        # Uses yield_x_c=True to get raw genotype matrices
-                        # (needed for SVD in secular_eigendecompose_from_full).
-                        secular_p_full, x_c_iter, snp_stats_cache = (
+                        # Sequential secular update path: two-pass streaming reduces
+                        # peak memory from O(sum_X_c) to O(max_X_c).
+                        # Pass 1 (inside the function) accumulates S_full synchronously.
+                        # Pass 2 is a lazy generator yielding one X_c at a time.
+                        (
+                            S_full_secular,
+                            secular_p_full,
+                            secular_x_c_seq_iter,
+                            snp_stats_cache,
+                        ) = (  # noqa: E501
                             _compute_loco_kinship_streaming_numpy(
                                 bed_path,
                                 maf_threshold=maf_threshold,
@@ -1268,29 +1273,18 @@ def run_lmm_loco(
                                 show_progress=show_progress,
                                 ksnps_indices=ksnps_indices,
                                 valid_indices=kinship_valid_indices,
-                                yield_x_c=True,
+                                yield_x_c_sequential=True,
                             )
                         )
-                        # Consume iterator: collect X_c matrices and accumulate
-                        # K_full = sum(X_c @ X_c.T) / p_full.
-                        K_full_secular: np.ndarray | None = None
-                        for chr_name_s, x_c_mat, p_chr_s in x_c_iter:
-                            secular_x_c[chr_name_s] = x_c_mat
-                            secular_p_chr[chr_name_s] = p_chr_s
-                            if x_c_mat.shape[1] > 0:
-                                # Skip zero-column X_c (degenerate chromosomes)
-                                gram = x_c_mat @ x_c_mat.T
-                                if K_full_secular is None:
-                                    K_full_secular = np.zeros_like(gram)
-                                K_full_secular += gram
-                        del x_c_iter
+                        # S_full_secular is the unnormalised accumulator from Pass 1.
+                        K_full_secular = S_full_secular / secular_p_full
+                        del S_full_secular
 
-                        if K_full_secular is None:
+                        if K_full_secular.shape[0] == 0:
                             raise ValueError(
-                                "Secular update: no X_c matrices were produced. "
+                                "Secular update: S_full is empty (no SNPs). "
                                 "Check SNP filtering and kinship SNP list."
                             )
-                        K_full_secular /= secular_p_full
 
                         t_kfull = time.perf_counter()
                         logger.info(
@@ -1302,6 +1296,7 @@ def run_lmm_loco(
                             K_full_secular, check_memory=check_memory
                         )
                         del K_full_secular
+                        gc.collect()
                         logger.info(
                             f"Secular update: K_full eigendecomp done in "
                             f"{time.perf_counter() - t_kfull:.3f}s"
@@ -1347,15 +1342,49 @@ def run_lmm_loco(
             first_chr_pve_se: float | None = None
 
             # Iterate: either from cached eigen files, kinship stream,
-            # or secular update (pre-collected S_chr + one K_full eigendecomp).
+            # or secular update (sequential K_full eigendecomp + lazy X_c generator).
             if eigen_cache is not None:
                 chr_iterator = ((chr_name, None) for chr_name in unique_chrs)
             elif use_secular_update:
-                # Secular update: iterate over unique_chrs in order; S_chr
-                # and p_chr are in secular_x_c / secular_p_chr dicts.
-                chr_iterator = (  # type: ignore[assignment]
-                    (chr_name, None) for chr_name in unique_chrs
+                # Sequential secular update: consume x_c_seq_iter one chromosome
+                # at a time. For each (chr_name, X_c, p_chr), compute the
+                # secular eigendecomp inline, free X_c, then yield (chr_name, eigen).
+                assert secular_x_c_seq_iter is not None, (
+                    "secular_x_c_seq_iter must be set for use_secular_update=True"
                 )
+                assert secular_d_full is not None and secular_U_full is not None, (
+                    "secular_d_full/U_full must be set before the chr loop"
+                )
+
+                def _secular_chr_iter() -> Iterator[
+                    tuple[str, tuple[np.ndarray, np.ndarray]]
+                ]:
+                    """Consume sequential X_c generator, yield per-chr eigendecomp."""
+                    for chr_name_s, X_c_s, p_chr_s in secular_x_c_seq_iter:  # type: ignore[union-attr]
+                        t_sec = time.perf_counter()
+                        if show_progress:
+                            chr_snp_indices_s = partitions[chr_name_s]
+                            logger.info(
+                                f"LOCO: chromosome {chr_name_s} "
+                                f"({len(chr_snp_indices_s)} SNPs), "
+                                f"secular equation update..."
+                            )
+                        eigenvalues_s, U_s = secular_eigendecompose_from_full(
+                            secular_d_full,  # type: ignore[arg-type]
+                            secular_U_full,  # type: ignore[arg-type]
+                            X_c_s,
+                            secular_p_full,
+                            p_chr_s,
+                        )
+                        del X_c_s
+                        gc.collect()
+                        logger.debug(
+                            f"Secular equation update for chr {chr_name_s}: "
+                            f"{time.perf_counter() - t_sec:.3f}s"
+                        )
+                        yield (chr_name_s, (eigenvalues_s, U_s))
+
+                chr_iterator = _secular_chr_iter()  # type: ignore[assignment]
             else:
                 assert loco_iter is not None, (
                     "loco_iter must be set when eigen_cache is None"
@@ -1384,56 +1413,9 @@ def run_lmm_loco(
                             f"LOCO eigen cache for chromosome {chr_name}: {e}"
                         ) from e
                 elif use_secular_update:
-                    # Secular update: derive eigendecomposition from K_full
-                    # using the O(n^2 * r_eff) secular equation solver.
-                    if secular_d_full is None or secular_U_full is None:
-                        raise RuntimeError(
-                            f"Secular update for chr {chr_name}: full "
-                            f"eigendecomposition was not computed"
-                        )
-                    if show_progress:
-                        logger.info(
-                            f"LOCO: chromosome {chr_name} "
-                            f"({chr_idx + 1}/{len(unique_chrs)}), "
-                            f"{len(chr_snp_indices)} SNPs, "
-                            f"secular equation update..."
-                        )
-                    t_sec = time.perf_counter()
-                    x_c_c = secular_x_c.get(chr_name)
-                    p_chr_c = secular_p_chr.get(chr_name)
-                    if x_c_c is None or p_chr_c is None:
-                        if (x_c_c is None) != (p_chr_c is None):
-                            raise RuntimeError(
-                                f"Secular update internal inconsistency for "
-                                f"chr {chr_name}: X_c "
-                                f"{'present' if x_c_c is not None else 'missing'}"
-                                f", p_chr "
-                                f"{'present' if p_chr_c is not None else 'missing'}"
-                            )
-                        # Both None: chromosome was not yielded by the kinship
-                        # iterator. _yield_matrices already yields zero X_c for
-                        # chrs_without_snps, so this indicates a chromosome name
-                        # mismatch between BIM and kinship stream.
-                        raise RuntimeError(
-                            f"Secular update: chromosome {chr_name} not found in "
-                            f"collected X_c matrices ({len(secular_x_c)} chromosomes "
-                            f"collected, unique_chrs has {len(unique_chrs)}). "
-                            f"This suggests a chromosome name mismatch between the "
-                            f"BIM file and the kinship SNP list."
-                        )
-                    eigenvalues_np, U = secular_eigendecompose_from_full(
-                        secular_d_full,
-                        secular_U_full,
-                        x_c_c,
-                        secular_p_full,
-                        p_chr_c,
-                    )
-                    # Free X_c after eigendecomp (no longer needed)
-                    secular_x_c.pop(chr_name, None)
-                    logger.debug(
-                        f"Secular equation update for chr {chr_name}: "
-                        f"{time.perf_counter() - t_sec:.3f}s"
-                    )
+                    # Sequential secular update: eigenvalues pre-computed by
+                    # _secular_chr_iter() and passed as K_loco = (eigenvalues, U).
+                    eigenvalues_np, U = K_loco  # type: ignore[misc]
 
                     # Optionally write eigen cache for the secular-derived eigen.
                     if write_eigen:

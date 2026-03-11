@@ -630,3 +630,72 @@ class TestSequentialXcStreaming:
                 yield_x_c_sequential=True,
                 yield_x_c=True,
             )
+
+
+@pytest.mark.tier1
+def test_old_boolean_kwargs_raise_typeerror():
+    """Old boolean kwargs raise TypeError after LocoStreamingMode enum refactor.
+
+    After the refactor, the function no longer accepts yield_s_chr, yield_x_c,
+    or yield_x_c_sequential as keyword arguments. Passing them must raise
+    TypeError so callers get a clear error rather than silently ignoring the flag.
+    """
+    if not _LOCO_BFILE.with_suffix(".bed").exists():
+        pytest.skip("gemma_loco fixture not available")
+
+    from jamma.lmm.loco import _compute_loco_kinship_streaming_numpy
+
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        _compute_loco_kinship_streaming_numpy(
+            _LOCO_BFILE,
+            check_memory=False,
+            show_progress=False,
+            yield_s_chr=True,
+        )
+
+
+@pytest.mark.tier1
+def test_sequential_result_named_fields():
+    """SequentialLocoResult has named fields and supports positional unpacking.
+
+    The X_C_SEQUENTIAL mode returns a SequentialLocoResult NamedTuple with
+    .s_full, .n_filtered, .generator, and .snp_stats_cache attributes.
+    Positional unpacking 's, n, g, c = result' must also work unchanged.
+    """
+    if not _LOCO_BFILE.with_suffix(".bed").exists():
+        pytest.skip("gemma_loco fixture not available")
+
+    from jamma.lmm.loco import LocoStreamingMode, _compute_loco_kinship_streaming_numpy
+
+    result = _compute_loco_kinship_streaming_numpy(
+        _LOCO_BFILE,
+        check_memory=False,
+        show_progress=False,
+        mode=LocoStreamingMode.X_C_SEQUENTIAL,
+    )
+
+    # Named field access
+    assert hasattr(result, "s_full"), "SequentialLocoResult missing .s_full"
+    assert hasattr(result, "n_filtered"), "SequentialLocoResult missing .n_filtered"
+    assert hasattr(result, "generator"), "SequentialLocoResult missing .generator"
+    assert hasattr(result, "snp_stats_cache"), (
+        "SequentialLocoResult missing .snp_stats_cache"
+    )
+
+    # Field types
+    assert isinstance(result.s_full, np.ndarray), (
+        f"s_full should be ndarray, got {type(result.s_full)}"
+    )
+    assert isinstance(result.n_filtered, int), (
+        f"n_filtered should be int, got {type(result.n_filtered)}"
+    )
+
+    # Positional unpacking backward compatibility
+    s, n, g, c = result
+    assert np.array_equal(s, result.s_full)
+    assert n == result.n_filtered
+    assert g is result.generator
+    assert c is result.snp_stats_cache
+
+    # Consume generator to avoid resource leaks
+    list(result.generator)

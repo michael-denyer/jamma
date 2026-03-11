@@ -17,7 +17,9 @@ import gc
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 from bed_reader import open_bed
@@ -100,6 +102,41 @@ class SnpStatsCache:
     def n_snps(self) -> int:
         """Number of SNPs in the cache (unfiltered BIM count)."""
         return self.col_means.shape[0]
+
+
+class LocoStreamingMode(Enum):
+    """Controls what _compute_loco_kinship_streaming_numpy yields.
+
+    Encodes the four mutually-exclusive streaming modes as a sum type.
+    Replaces three boolean flags (yield_s_chr, yield_x_c, yield_x_c_sequential)
+    which encoded only 4 valid states out of 8 possible flag combinations.
+
+    Members:
+        DEFAULT: yields (loco_iter, snp_stats_cache) — (chr_name, K_loco) pairs.
+        S_CHR: yields (n_filtered, s_chr_iter, snp_stats_cache) — raw Gram matrices.
+        X_C: yields (n_filtered, x_c_iter, snp_stats_cache) — genotype columns.
+        X_C_SEQUENTIAL: returns SequentialLocoResult — two-pass O(max_X_c) path.
+    """
+
+    DEFAULT = "default"
+    S_CHR = "s_chr"
+    X_C = "x_c"
+    X_C_SEQUENTIAL = "x_c_sequential"
+
+
+class SequentialLocoResult(NamedTuple):
+    """Return value of _compute_loco_kinship_streaming_numpy(mode=X_C_SEQUENTIAL).
+
+    s_full is the unnormalised kinship accumulator from Pass 1.
+    Divide by n_filtered to obtain K_full (done by caller).
+    NamedTuple subclasses tuple: positional unpacking
+    ``S, n, gen, cache = result`` continues to work unchanged.
+    """
+
+    s_full: np.ndarray
+    n_filtered: int
+    generator: Iterator[tuple[str, np.ndarray, int]]
+    snp_stats_cache: SnpStatsCache
 
 
 def _collect_chr_snp_stats(
@@ -241,13 +278,11 @@ def _compute_loco_kinship_streaming_numpy(
     ksnps_indices: np.ndarray | None = None,
     valid_indices: np.ndarray | None = None,
     _max_batch_chrs: int | None = None,
-    yield_s_chr: bool = False,
-    yield_x_c: bool = False,
-    yield_x_c_sequential: bool = False,
+    mode: LocoStreamingMode = LocoStreamingMode.DEFAULT,
 ) -> (
     tuple[Iterator[tuple[str, np.ndarray]], SnpStatsCache]
     | tuple[int, Iterator[tuple[str, np.ndarray, int]], SnpStatsCache]
-    | tuple[np.ndarray, int, Iterator[tuple[str, np.ndarray, int]], SnpStatsCache]
+    | SequentialLocoResult
 ):
     """Compute LOCO kinship matrices using pure NumPy (no JAX dependency).
 
@@ -274,50 +309,37 @@ def _compute_loco_kinship_streaming_numpy(
         _max_batch_chrs: Debug override for batch_size_chrs. When set, forces
             multi-pass mode with at most this many chromosomes per pass. Used
             by tests to verify multi-pass equivalence without mocking psutil.
-        yield_s_chr: If True, yield (chr_name, S_chr, p_chr) 3-tuples instead
-            of (chr_name, K_loco) 2-tuples and return (n_filtered, iter,
-            snp_stats_cache). S_chr is the un-normalised chromosome Gram
-            matrix; the caller is responsible for constructing K_loco or
-            using S_chr with loco_eigendecompose_from_full.
-        yield_x_c: If True, yield (chr_name, X_c, p_chr) 3-tuples where X_c
-            is the (n, p_chr) centered chromosome genotype matrix. Like
-            yield_s_chr, returns (n_filtered, iter, snp_stats_cache). The
-            caller accumulates K_full as sum(X_c @ X_c.T) / n_filtered.
-            yield_x_c and yield_s_chr are mutually exclusive.
-        yield_x_c_sequential: If True, use a two-pass strategy to reduce peak
-            memory from O(sum_X_c) to O(max_X_c). Pass 1 accumulates S_full
-            and returns K_full = S_full (unnormalised; divide by n_filtered).
-            Pass 2 is a lazy generator that re-reads the BED file once per
-            chromosome, yielding (chr_name, X_c, p_chr) one at a time.
-            Returns a 4-tuple: (S_full, n_filtered, generator, snp_stats_cache).
-            Mutually exclusive with yield_s_chr and yield_x_c.
+        mode: Controls what this function yields. One of:
+            LocoStreamingMode.DEFAULT (default) — yields (loco_iter, snp_stats_cache)
+                where loco_iter yields (chr_name, K_loco) 2-tuples.
+            LocoStreamingMode.S_CHR — yields (n_filtered, s_chr_iter, snp_stats_cache)
+                where s_chr_iter yields (chr_name, S_chr, p_chr) 3-tuples with
+                raw (un-normalised) chromosome Gram matrices.
+            LocoStreamingMode.X_C — yields (n_filtered, x_c_iter, snp_stats_cache)
+                where x_c_iter yields (chr_name, X_c, p_chr) 3-tuples with centered
+                chromosome genotype matrices.
+            LocoStreamingMode.X_C_SEQUENTIAL — returns SequentialLocoResult with
+                .s_full (unnormalised; divide by .n_filtered to get K_full),
+                .n_filtered, .generator (lazy per-chromosome X_c), .snp_stats_cache.
 
     Returns:
-        When yield_s_chr=False and yield_x_c=False and yield_x_c_sequential=False
-        (default): Tuple of (loco_iter, snp_stats_cache) where loco_iter yields
-        (chr_name, K_loco) pairs and snp_stats_cache holds global SNP statistics
-        from PASS 1. K_loco matrices are n_valid x n_valid when valid_indices is
-        provided.
+        When mode=DEFAULT: Tuple of (loco_iter, snp_stats_cache) where loco_iter
+        yields (chr_name, K_loco) pairs and snp_stats_cache holds global SNP
+        statistics from PASS 1. K_loco matrices are n_valid x n_valid when
+        valid_indices is provided.
 
-        When yield_s_chr=True: Tuple of (n_filtered, s_chr_iter, snp_stats_cache)
+        When mode=S_CHR: Tuple of (n_filtered, s_chr_iter, snp_stats_cache)
         where n_filtered is p_full and s_chr_iter yields (chr_name, S_chr, p_chr)
         3-tuples with the raw (un-normalised) chromosome Gram matrices.
 
-        When yield_x_c=True: Tuple of (n_filtered, x_c_iter, snp_stats_cache)
+        When mode=X_C: Tuple of (n_filtered, x_c_iter, snp_stats_cache)
         where n_filtered is p_full and x_c_iter yields (chr_name, X_c, p_chr)
         3-tuples with the centered chromosome genotype matrices.
 
-        When yield_x_c_sequential=True: 4-tuple of
-        (S_full, n_filtered, generator, snp_stats_cache) where S_full is the
-        unnormalised full kinship accumulator (divide by n_filtered to get K_full),
-        and generator lazily yields (chr_name, X_c, p_chr) one chromosome at a time.
+        When mode=X_C_SEQUENTIAL: SequentialLocoResult where .s_full is the
+        unnormalised full kinship accumulator (divide by .n_filtered to get K_full),
+        and .generator lazily yields (chr_name, X_c, p_chr) one chromosome at a time.
     """
-    if yield_s_chr and yield_x_c:
-        raise ValueError("yield_s_chr and yield_x_c are mutually exclusive")
-    if yield_x_c_sequential and (yield_s_chr or yield_x_c):
-        raise ValueError(
-            "yield_x_c_sequential is mutually exclusive with yield_s_chr and yield_x_c"
-        )
     import psutil
 
     start_time = time.perf_counter()
@@ -453,7 +475,7 @@ def _compute_loco_kinship_streaming_numpy(
     eigendecomp_min_gb = _dsyevr_peak_gb(n_samples_kinship)
     min_required_gb = matrix_gb * 3 + chunk_buffer_gb + eigendecomp_min_gb
 
-    _standard_path = not yield_s_chr and not yield_x_c and not yield_x_c_sequential
+    _standard_path = mode == LocoStreamingMode.DEFAULT
     if check_memory and _standard_path and min_required_gb > available_gb * 0.9:
         raise MemoryError(
             f"Insufficient memory for NumPy LOCO kinship: need at least "
@@ -466,7 +488,7 @@ def _compute_loco_kinship_streaming_numpy(
     # INVARIANT: accumulate_s_full must be True ONLY for the first pass (batch_idx==0).
     # If True for subsequent passes, S_full is accumulated multiple times, corrupting
     # all K_loco matrices — each K_loco would be subtracted from an inflated S_full.
-    if yield_x_c_sequential:
+    if mode == LocoStreamingMode.X_C_SEQUENTIAL:
         # Sequential X_c path: two BED passes reduce peak memory from O(sum_X_c)
         # to O(max_X_c). Pass 1 accumulates S_full synchronously; Pass 2 is a
         # lazy generator that re-reads the BED file once per chromosome.
@@ -497,7 +519,7 @@ def _compute_loco_kinship_streaming_numpy(
         # Sequential path: always use single-pass for S_full accumulation (Pass 1).
         single_pass = True
         batch_size_chrs = n_chr_with_snps
-    elif yield_x_c:
+    elif mode == LocoStreamingMode.X_C:
         # X_c path: yields raw genotype matrices (n x p_chr), much smaller than
         # n x n S_chr matrices. Total storage: n * total_snps * 8 bytes (all chrs).
         # Caller accumulates K_full = sum(X_c @ X_c.T) / n_filtered.
@@ -522,7 +544,7 @@ def _compute_loco_kinship_streaming_numpy(
         # X_c path is always single-pass (all chromosomes in one disk read).
         single_pass = True
         batch_size_chrs = n_chr_with_snps
-    elif yield_s_chr:
+    elif mode == LocoStreamingMode.S_CHR:
         # Secular path: retains ALL S_chr + K_full accumulator during streaming,
         # then K_full eigendecomp, then per-chromosome rotated-basis updates.
         # No multi-pass fallback — all S_chr must be in memory simultaneously.
@@ -608,9 +630,11 @@ def _compute_loco_kinship_streaming_numpy(
             pass_desc: Progress bar description string.
 
         Returns:
-            When yield_x_c=False: Dict of {chr_name: S_chr_matrix} for batch_chrs.
-            When yield_x_c=True: Dict of {chr_name: list[X_chr_part]} chunks for
-            batch_chrs. Caller must hstack to form the full X_c matrix.
+            When mode != X_C and mode != X_C_SEQUENTIAL: Dict of
+            {chr_name: S_chr_matrix} for batch_chrs.
+            When mode == X_C or mode == X_C_SEQUENTIAL: Dict of
+            {chr_name: list[X_chr_part]} chunks for batch_chrs.
+            Caller must hstack to form the full X_c matrix.
         """
         nonlocal _s_full_accumulated
         if accumulate_s_full:
@@ -621,7 +645,8 @@ def _compute_loco_kinship_streaming_numpy(
                 )
             _s_full_accumulated = True
 
-        if yield_x_c:
+        _x_c_mode = mode in {LocoStreamingMode.X_C, LocoStreamingMode.X_C_SEQUENTIAL}
+        if _x_c_mode:
             # X_c mode: collect raw genotype column chunks per chromosome
             batch_X_c_chunks: dict[str, list[np.ndarray]] = {c: [] for c in batch_chrs}
             batch_chr_set = set(batch_chrs)
@@ -660,14 +685,14 @@ def _compute_loco_kinship_streaming_numpy(
             target_chrs_in_chunk = set(chunk_chrs) & batch_chr_set
             for chr_name in target_chrs_in_chunk:
                 X_chr_part = X_centered[:, chunk_chrs == chr_name]
-                if yield_x_c:
+                if _x_c_mode:
                     batch_X_c_chunks[chr_name].append(X_chr_part.copy())
                 else:
                     batch_S_chr[chr_name] += X_chr_part @ X_chr_part.T
 
             del X_chunk, X_centered, chunk
 
-        if yield_x_c:
+        if _x_c_mode:
             return batch_X_c_chunks  # type: ignore[return-value]
         return batch_S_chr
 
@@ -678,15 +703,15 @@ def _compute_loco_kinship_streaming_numpy(
     ) -> Iterator[tuple[str, np.ndarray] | tuple[str, np.ndarray, int]]:
         """Yield per-chromosome matrices, one per chromosome.
 
-        When yield_s_chr=False and yield_x_c=False (default): yields (chr_name,
-        K_loco) 2-tuples. K_loco is computed in-place via buffer reuse, then
-        copied before yielding so callers may freely materialise the iterator.
+        When mode=DEFAULT: yields (chr_name, K_loco) 2-tuples. K_loco is
+        computed in-place via buffer reuse, then copied before yielding so
+        callers may freely materialise the iterator.
 
-        When yield_s_chr=True: yields (chr_name, S_chr, p_chr) 3-tuples with
+        When mode=S_CHR: yields (chr_name, S_chr, p_chr) 3-tuples with
         the raw chromosome Gram matrix (un-normalised). The caller uses
         S_chr with loco_eigendecompose_from_full.
 
-        When yield_x_c=True: yields (chr_name, X_c, p_chr) 3-tuples with the
+        When mode=X_C: yields (chr_name, X_c, p_chr) 3-tuples with the
         centered chromosome genotype matrix (n, p_chr). The caller uses X_c
         with secular_eigendecompose_from_full.
         """
@@ -698,7 +723,7 @@ def _compute_loco_kinship_streaming_numpy(
                     f"Cannot compute LOCO kinship: all {n_filtered} filtered SNPs "
                     f"are on chromosome '{chr_name}'."
                 )
-            if yield_x_c:
+            if mode == LocoStreamingMode.X_C:
                 # Concatenate column chunks into full X_c matrix
                 chunks = batch_data.pop(chr_name)  # type: ignore[arg-type]
                 if chunks:
@@ -710,7 +735,7 @@ def _compute_loco_kinship_streaming_numpy(
                     f"retained (X_c mode)"
                 )
                 yield (chr_name, x_c_mat, p_chr)
-            elif yield_s_chr:
+            elif mode == LocoStreamingMode.S_CHR:
                 s_chr_mat = batch_data.pop(chr_name)  # type: ignore[arg-type]
                 logger.debug(
                     f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs "
@@ -718,9 +743,7 @@ def _compute_loco_kinship_streaming_numpy(
                 )
                 yield (chr_name, s_chr_mat, p_chr)
             else:
-                assert K_loco_buf is not None, (
-                    "K_loco_buf required when yield_s_chr=False and yield_x_c=False"
-                )
+                assert K_loco_buf is not None, "K_loco_buf required when mode=DEFAULT"
                 np.subtract(S_full_buf, batch_data[chr_name], out=K_loco_buf)
                 K_loco_buf /= p_loco
                 logger.debug(
@@ -737,12 +760,13 @@ def _compute_loco_kinship_streaming_numpy(
 
         if single_pass:
             # === SINGLE-PASS: one disk read for S_full + S_chr or X_c ===
-            # For yield_s_chr/yield_x_c: S_full is NOT accumulated (placeholder).
+            # For S_CHR/X_C modes: S_full is NOT accumulated (placeholder).
             # Caller constructs K_full from the yielded matrices.
             batch_data = _stream_pass(
                 chrs_with_snps,
                 S_full,
-                accumulate_s_full=not yield_s_chr and not yield_x_c,
+                accumulate_s_full=mode
+                not in {LocoStreamingMode.S_CHR, LocoStreamingMode.X_C},
                 pass_desc="LOCO: kinship accumulation (NumPy)",
             )
 
@@ -792,12 +816,12 @@ def _compute_loco_kinship_streaming_numpy(
             )
 
         # Yield full kinship for chromosomes with 0 filtered SNPs.
-        # When yield_s_chr=True: yield (chr_name, zero S_chr, p_chr=0) so
+        # When mode=S_CHR: yield (chr_name, zero S_chr, p_chr=0) so
         # loco_eigendecompose_from_full can handle the degenerate case.
-        # When yield_x_c=True: yield (chr_name, zero X_c, p_chr=0) so
+        # When mode=X_C: yield (chr_name, zero X_c, p_chr=0) so
         # secular_eigendecompose_from_full can handle the degenerate case.
         if chrs_without_snps:
-            if yield_x_c:
+            if mode == LocoStreamingMode.X_C:
                 zero_x_c = np.zeros((n_samples_kinship, 0), dtype=np.float64)
                 for chr_name in sorted(chrs_without_snps, key=chr_sort_key):
                     logger.debug(
@@ -805,7 +829,7 @@ def _compute_loco_kinship_streaming_numpy(
                         f"X_c=empty (secular solver uses full kinship)"
                     )
                     yield (chr_name, zero_x_c, 0)
-            elif yield_s_chr:
+            elif mode == LocoStreamingMode.S_CHR:
                 zero_s_chr = np.zeros(
                     (n_samples_kinship, n_samples_kinship), dtype=np.float64
                 )
@@ -824,7 +848,7 @@ def _compute_loco_kinship_streaming_numpy(
                     )
                     yield (chr_name, S_full.copy())
 
-    if yield_x_c_sequential:
+    if mode == LocoStreamingMode.X_C_SEQUENTIAL:
         # Sequential two-pass path: Pass 1 (synchronous) accumulates S_full.
         # Pass 2 (lazy generator) re-reads the BED once per chromosome.
         S_full = np.zeros((n_samples_kinship, n_samples_kinship), dtype=np.float64)
@@ -932,12 +956,17 @@ def _compute_loco_kinship_streaming_numpy(
                 )
                 yield (target_chr, zero_x_c, 0)
 
-        return S_full, n_filtered, _yield_x_c_sequential_gen(), snp_stats_cache
+        return SequentialLocoResult(
+            s_full=S_full,
+            n_filtered=n_filtered,
+            generator=_yield_x_c_sequential_gen(),
+            snp_stats_cache=snp_stats_cache,
+        )
 
-    if yield_s_chr or yield_x_c:
+    if mode in {LocoStreamingMode.S_CHR, LocoStreamingMode.X_C}:
         # Secular paths: caller accumulates K_full from yielded matrices.
         # Skip both S_full and K_loco_buf allocations (saves 2 n^2 matrices).
-        S_full = np.empty(0)  # placeholder — never written in yield_s_chr/x_c mode
+        S_full = np.empty(0)  # placeholder — never written in S_CHR/X_C mode
         K_loco_buf = None  # type: ignore[assignment]
         return n_filtered, _yield_matrices(), snp_stats_cache
 
@@ -1268,23 +1297,20 @@ def run_lmm_loco(
                         # peak memory from O(sum_X_c) to O(max_X_c).
                         # Pass 1 (inside the function) accumulates S_full synchronously.
                         # Pass 2 is a lazy generator yielding one X_c at a time.
-                        (
-                            S_full_secular,
-                            secular_p_full,
-                            secular_x_c_seq_iter,
-                            snp_stats_cache,
-                        ) = (  # noqa: E501
-                            _compute_loco_kinship_streaming_numpy(
-                                bed_path,
-                                maf_threshold=maf_threshold,
-                                miss_threshold=miss_threshold,
-                                check_memory=check_memory,
-                                show_progress=show_progress,
-                                ksnps_indices=ksnps_indices,
-                                valid_indices=kinship_valid_indices,
-                                yield_x_c_sequential=True,
-                            )
+                        _seq_result = _compute_loco_kinship_streaming_numpy(
+                            bed_path,
+                            maf_threshold=maf_threshold,
+                            miss_threshold=miss_threshold,
+                            check_memory=check_memory,
+                            show_progress=show_progress,
+                            ksnps_indices=ksnps_indices,
+                            valid_indices=kinship_valid_indices,
+                            mode=LocoStreamingMode.X_C_SEQUENTIAL,
                         )
+                        S_full_secular = _seq_result.s_full
+                        secular_p_full = _seq_result.n_filtered
+                        secular_x_c_seq_iter = _seq_result.generator
+                        snp_stats_cache = _seq_result.snp_stats_cache
                         # Normalise S_full in-place to get K_full, avoiding a
                         # second n×n allocation that the memory estimator must
                         # otherwise budget for.

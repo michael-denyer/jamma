@@ -1341,6 +1341,12 @@ def run_lmm_loco(
                             K_full_secular, check_memory=check_memory
                         )
                         del K_full_secular
+                        # Free the SequentialLocoResult which holds the last
+                        # reference to S_full/K_full (58 GB at 85k samples).
+                        # All needed fields (generator, snp_stats_cache, p_full)
+                        # were extracted above. The generator closure captures
+                        # only _seq_* variables, not s_full, so this is safe.
+                        del _seq_result
                         gc.collect()
                         logger.info(
                             f"Secular update: K_full eigendecomp done in "

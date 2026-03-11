@@ -655,7 +655,7 @@ def test_apply_vj_to_rows_blocked():
 
     # Test: blocked Cauchy multiply
     R_blocked = _apply_vj_to_rows_blocked(
-        R, z_unit, d, eigenvalues, norm_j, col_block_size=7
+        R, z_unit, d, eigenvalues, norm_j, deflated={}, col_block_size=7
     )
 
     np.testing.assert_allclose(
@@ -696,7 +696,7 @@ def test_apply_vj_transpose_to_vec_blocked():
 
     # Test: blocked transpose
     v_blocked = _apply_vj_transpose_to_vec_blocked(
-        v, z_unit, d, eigenvalues, norm_j, col_block_size=7
+        v, z_unit, d, eigenvalues, norm_j, deflated={}, col_block_size=7
     )
 
     np.testing.assert_allclose(

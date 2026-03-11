@@ -5,6 +5,30 @@ All notable changes to JAMMA will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] - 2026-03-11
+
+### Added
+
+- LOCO secular equation solver — O(n^2 * r_eff) eigenvalue perturbation path
+  replacing O(n^3) `np.linalg.eigh` for leave-one-chromosome-out eigendecomposition.
+  Enabled via `--secular` CLI flag or `PipelineConfig(secular=True)`
+- C extension (`_secular_accel.c`) implementing LAPACK DLAED4-based rank-1
+  eigenvalue solver with negative-rho handling via negation/reversal identity
+- Delta-path eigenvector recomputation eliminating 55 GB `Q = np.eye(n)` allocation
+  at n=83k. Two-pass algorithm with blocked Cauchy multiply and pre-allocated buffers
+- `LocoStreamingMode` enum and `SequentialLocoResult` NamedTuple for type-safe
+  streaming mode dispatch in LOCO pipeline
+- `yield_x_c_sequential` streaming mode for one-chromosome-at-a-time secular processing
+- Orthogonality monitoring (`check_orthogonality`) and `reorth_interval` parameter
+  in secular solver for numerical stability tracking
+- `bench_secular.py` benchmark script for secular solver performance profiling
+
+### Changed
+
+- `SecularImport` NamedTuple + named constants for secular solver clarity
+- Extract `_cauchy_block` helper, deduplicating 6 call sites in eigenvector reconstruction
+- Deflation guard in C eigenvector path, NaN check in delta forward pass
+
 ## [3.3.2] - 2026-03-10
 
 ### Fixed

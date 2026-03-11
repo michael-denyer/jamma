@@ -1023,3 +1023,126 @@ def test_lmm_numpy_backend(tmp_path: Path):
     assert assoc_path.exists(), "Association output file should exist"
     lines = assoc_path.read_text().strip().split("\n")
     assert len(lines) > 1, "Association file should have more than just the header line"
+
+
+# ---------------------------------------------------------------------------
+# --secular flag tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+def test_cli_secular_flag_in_help():
+    """--secular appears in --help output."""
+    result = runner.invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "--secular" in result.output
+
+
+@pytest.mark.tier1
+def test_cli_secular_without_loco_errors():
+    """--secular without -loco raises a clear CLI error."""
+    result = runner.invoke(
+        main,
+        [
+            "-lmm",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-k",
+            "fake.txt",
+            "--secular",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "loco" in result.output.lower() or "secular" in result.output.lower()
+
+
+@pytest.mark.tier1
+def test_cli_secular_with_jax_backend_errors():
+    """--secular with --backend jax raises a clear CLI error."""
+    result = runner.invoke(
+        main,
+        [
+            "-lmm",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-loco",
+            "--secular",
+            "--backend",
+            "jax",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "numpy" in result.output.lower() or "secular" in result.output.lower()
+
+
+@pytest.mark.tier1
+def test_cli_secular_flag_accepted_by_parser():
+    """--secular -loco --backend numpy is accepted by the click parser."""
+    from unittest.mock import MagicMock, patch
+
+    mock_result = _mock_pipeline_result(MagicMock(spec=Path))
+
+    with patch("jamma.cli.PipelineRunner") as mock_runner_cls:
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = mock_result
+        mock_runner_cls.return_value = mock_runner
+
+        result = runner.invoke(
+            main,
+            [
+                "-lmm",
+                "1",
+                "-bfile",
+                str(EXAMPLE_BFILE),
+                "-loco",
+                "--secular",
+                "--backend",
+                "numpy",
+            ],
+        )
+
+    # Should not fail due to a click parsing error
+    assert "--secular" not in (result.output or "").lower() or result.exit_code == 0
+    assert result.exit_code != 2, (
+        f"Click parsing failed (exit_code=2):\n{result.output}"
+    )
+
+
+@pytest.mark.tier1
+def test_cli_secular_wires_use_secular_update_to_pipeline():
+    """--secular sets PipelineConfig.use_secular_update=True."""
+    from unittest.mock import MagicMock, patch
+
+    mock_result = _mock_pipeline_result(MagicMock(spec=Path))
+    captured_configs = []
+
+    def _capture_config(config):
+        captured_configs.append(config)
+        mock = MagicMock()
+        mock.run.return_value = mock_result
+        return mock
+
+    with patch("jamma.cli.PipelineRunner", side_effect=_capture_config):
+        runner.invoke(
+            main,
+            [
+                "-lmm",
+                "1",
+                "-bfile",
+                str(EXAMPLE_BFILE),
+                "-loco",
+                "--secular",
+                "--backend",
+                "numpy",
+            ],
+        )
+
+    assert len(captured_configs) == 1, (
+        "PipelineRunner should have been constructed once"
+    )
+    config = captured_configs[0]
+    assert config.use_secular_update is True, (
+        f"Expected use_secular_update=True, got {config.use_secular_update}"
+    )

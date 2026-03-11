@@ -284,7 +284,7 @@ def _apply_vj_to_rows_blocked(
     d_j: np.ndarray,
     lambda_j: np.ndarray,
     norm_j: np.ndarray,
-    deflated: dict[int, int] | None = None,
+    deflated: dict[int, int],
     col_block_size: int = 1000,
 ) -> np.ndarray:
     """Apply implicit V_j to row batch R without materializing n x n V_j.
@@ -295,7 +295,7 @@ def _apply_vj_to_rows_blocked(
     For deflated eigenvalues (where z_j[l] ≈ 0 and d_j[l] = lambda_j[k]),
     the Cauchy term is 0/0. Without explicit deflation handling, the inline
     guard sets the denominator to 1e300, making z_j[l] / 1e300 ≈ 0. When
-    ``deflated`` is provided, deflated columns are explicitly overridden with
+    ``deflated`` is non-empty, deflated columns are explicitly overridden with
     the correct e_l basis vector.
 
     Uses blocked Cauchy multiply: processes col_block_size columns at a time,
@@ -310,8 +310,9 @@ def _apply_vj_to_rows_blocked(
         norm_j: (n,) normalization factors:
             norm_j[k] = ||z_j / (d_j - lambda_j[k])||_2,
             self-consistent with the Cauchy formula deflation guard.
-        deflated: Optional dict mapping deflated column k -> row index l.
-            When provided, R_new[:, k] = R[:, l] for deflated columns.
+        deflated: Dict mapping deflated column k -> row index l.
+            R_new[:, k] = R[:, l] for deflated columns. Pass ``{}`` when
+            no columns are deflated.
         col_block_size: Number of output columns to compute per block (memory control).
 
     Returns:
@@ -341,7 +342,7 @@ def _apply_vj_transpose_to_vec_blocked(
     d_j: np.ndarray,
     lambda_j: np.ndarray,
     norm_j: np.ndarray,
-    deflated: dict[int, int] | None = None,
+    deflated: dict[int, int],
     col_block_size: int = 1000,
 ) -> np.ndarray:
     """Apply V_j.T to a single vector v using blocked Cauchy multiply.
@@ -358,8 +359,9 @@ def _apply_vj_transpose_to_vec_blocked(
         d_j: (n,) diagonal at the START of step j (before rank-1 update).
         lambda_j: (n,) eigenvalues AFTER rank-1 update at step j (ascending).
         norm_j: (n,) normalization factors.
-        deflated: Optional dict mapping deflated column k -> row index l.
-            When provided, result[k] = v[l] for deflated positions.
+        deflated: Dict mapping deflated column k -> row index l.
+            result[k] = v[l] for deflated positions. Pass ``{}`` when
+            no columns are deflated.
         col_block_size: Number of output elements to compute per block.
 
     Returns:
@@ -722,7 +724,7 @@ def _secular_eigendecompose_delta_path(
 
     # Post-hoc orthogonality check and optional QR re-orthogonalization (delta path)
     if check_orthogonality:
-        U_loco = _check_and_reorthogonalize(U_loco, n, r_eff, "delta", reorth_threshold)
+        U_loco = _check_and_reorthogonalize(U_loco, r_eff, "delta", reorth_threshold)
 
     # Zero near-zero eigenvalues
     _apply_threshold(d_current, threshold)
@@ -1081,7 +1083,7 @@ def secular_eigendecompose_from_full(
 
     # Post-hoc orthogonality check and optional QR re-orthogonalization (Q path)
     if check_orthogonality:
-        U_loco = _check_and_reorthogonalize(U_loco, n, r_eff, "Q", reorth_threshold)
+        U_loco = _check_and_reorthogonalize(U_loco, r_eff, "Q", reorth_threshold)
 
     # Zero near-zero eigenvalues (same as loco_eigendecompose_from_full)
     _apply_threshold(d_current, threshold)
@@ -1171,7 +1173,6 @@ def _apply_threshold(d: np.ndarray, threshold: float) -> None:
 
 def _check_and_reorthogonalize(
     U: np.ndarray,
-    n: int,
     r_eff: int,
     path_name: str,
     reorth_threshold: float,
@@ -1180,7 +1181,6 @@ def _check_and_reorthogonalize(
 
     Args:
         U: (n, n) eigenvector matrix.
-        n: Matrix dimension.
         r_eff: Effective rank (for logging).
         path_name: "Q" or "delta" (for logging).
         reorth_threshold: max|U^T U - I| above which QR is applied.
@@ -1188,6 +1188,7 @@ def _check_and_reorthogonalize(
     Returns:
         U, possibly QR-reorthogonalized.
     """
+    n = U.shape[0]
     gram = U.T @ U
     deviation = float(np.max(np.abs(gram - np.eye(n))))
     logger.debug(

@@ -5,6 +5,17 @@ All notable changes to JAMMA will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.1] - 2026-03-11
+
+### Changed
+
+- Make `deflated` a required parameter in blocked Cauchy multiply functions,
+  preventing silent fallback to approximate 0/0 handling
+- Remove redundant `n` parameter from `_check_and_reorthogonalize` helper
+- Replace O(n) `argmin` with O(log n) `searchsorted` in deflated column detection
+- Lazy `argsort` — check `np.diff >= 0` before sorting eigenvalues
+- Deduplicate eigen write block and `batch_chr_set` in LOCO orchestrator
+
 ## [3.4.0] - 2026-03-11
 
 ### Added

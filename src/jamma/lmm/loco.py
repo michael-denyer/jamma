@@ -243,9 +243,11 @@ def _compute_loco_kinship_streaming_numpy(
     _max_batch_chrs: int | None = None,
     yield_s_chr: bool = False,
     yield_x_c: bool = False,
+    yield_x_c_sequential: bool = False,
 ) -> (
     tuple[Iterator[tuple[str, np.ndarray]], SnpStatsCache]
     | tuple[int, Iterator[tuple[str, np.ndarray, int]], SnpStatsCache]
+    | tuple[np.ndarray, int, Iterator[tuple[str, np.ndarray, int]], SnpStatsCache]
 ):
     """Compute LOCO kinship matrices using pure NumPy (no JAX dependency).
 
@@ -282,12 +284,20 @@ def _compute_loco_kinship_streaming_numpy(
             yield_s_chr, returns (n_filtered, iter, snp_stats_cache). The
             caller accumulates K_full as sum(X_c @ X_c.T) / n_filtered.
             yield_x_c and yield_s_chr are mutually exclusive.
+        yield_x_c_sequential: If True, use a two-pass strategy to reduce peak
+            memory from O(sum_X_c) to O(max_X_c). Pass 1 accumulates S_full
+            and returns K_full = S_full (unnormalised; divide by n_filtered).
+            Pass 2 is a lazy generator that re-reads the BED file once per
+            chromosome, yielding (chr_name, X_c, p_chr) one at a time.
+            Returns a 4-tuple: (S_full, n_filtered, generator, snp_stats_cache).
+            Mutually exclusive with yield_s_chr and yield_x_c.
 
     Returns:
-        When yield_s_chr=False and yield_x_c=False (default): Tuple of
-        (loco_iter, snp_stats_cache) where loco_iter yields (chr_name, K_loco)
-        pairs and snp_stats_cache holds global SNP statistics from PASS 1.
-        K_loco matrices are n_valid x n_valid when valid_indices is provided.
+        When yield_s_chr=False and yield_x_c=False and yield_x_c_sequential=False
+        (default): Tuple of (loco_iter, snp_stats_cache) where loco_iter yields
+        (chr_name, K_loco) pairs and snp_stats_cache holds global SNP statistics
+        from PASS 1. K_loco matrices are n_valid x n_valid when valid_indices is
+        provided.
 
         When yield_s_chr=True: Tuple of (n_filtered, s_chr_iter, snp_stats_cache)
         where n_filtered is p_full and s_chr_iter yields (chr_name, S_chr, p_chr)
@@ -296,9 +306,18 @@ def _compute_loco_kinship_streaming_numpy(
         When yield_x_c=True: Tuple of (n_filtered, x_c_iter, snp_stats_cache)
         where n_filtered is p_full and x_c_iter yields (chr_name, X_c, p_chr)
         3-tuples with the centered chromosome genotype matrices.
+
+        When yield_x_c_sequential=True: 4-tuple of
+        (S_full, n_filtered, generator, snp_stats_cache) where S_full is the
+        unnormalised full kinship accumulator (divide by n_filtered to get K_full),
+        and generator lazily yields (chr_name, X_c, p_chr) one chromosome at a time.
     """
     if yield_s_chr and yield_x_c:
         raise ValueError("yield_s_chr and yield_x_c are mutually exclusive")
+    if yield_x_c_sequential and (yield_s_chr or yield_x_c):
+        raise ValueError(
+            "yield_x_c_sequential is mutually exclusive with yield_s_chr and yield_x_c"
+        )
     import psutil
 
     start_time = time.perf_counter()
@@ -434,7 +453,7 @@ def _compute_loco_kinship_streaming_numpy(
     eigendecomp_min_gb = _dsyevr_peak_gb(n_samples_kinship)
     min_required_gb = matrix_gb * 3 + chunk_buffer_gb + eigendecomp_min_gb
 
-    _standard_path = not yield_s_chr and not yield_x_c
+    _standard_path = not yield_s_chr and not yield_x_c and not yield_x_c_sequential
     if check_memory and _standard_path and min_required_gb > available_gb * 0.9:
         raise MemoryError(
             f"Insufficient memory for NumPy LOCO kinship: need at least "
@@ -447,7 +466,29 @@ def _compute_loco_kinship_streaming_numpy(
     # INVARIANT: accumulate_s_full must be True ONLY for the first pass (batch_idx==0).
     # If True for subsequent passes, S_full is accumulated multiple times, corrupting
     # all K_loco matrices — each K_loco would be subtracted from an inflated S_full.
-    if yield_x_c:
+    if yield_x_c_sequential:
+        # Sequential X_c path: two BED passes reduce peak memory from O(sum_X_c) to
+        # O(max_X_c). Pass 1 accumulates S_full synchronously; Pass 2 is a lazy
+        # generator that re-reads the BED file once per chromosome.
+        #
+        # Peak memory: S_full (matrix_gb) + one X_c (max_chr_gb) + chunk buffer.
+        # Memory for K_full eigendecomp is separate (caller's responsibility).
+        max_chr_snps = max(n_chr_filtered.values()) if n_chr_filtered else 0
+        max_chr_gb = max_chr_snps * n_samples_kinship * 8 / 1e9
+        seq_peak_gb = matrix_gb + max_chr_gb + chunk_buffer_gb
+        if check_memory and seq_peak_gb > available_gb * 0.9:
+            raise MemoryError(
+                f"Insufficient memory for sequential X_c LOCO path: need "
+                f"{seq_peak_gb:.1f}GB for S_full ({matrix_gb:.2f}GB) + "
+                f"one X_c (max {max_chr_snps} SNPs = {max_chr_gb:.2f}GB) + "
+                f"chunk buffer ({chunk_buffer_gb:.2f}GB), "
+                f"available {available_gb:.1f}GB. "
+                f"Consider using standard LOCO (use_secular_update=False)."
+            )
+        # Sequential path: always use single-pass for S_full accumulation (Pass 1).
+        single_pass = True
+        batch_size_chrs = n_chr_with_snps
+    elif yield_x_c:
         # X_c path: yields raw genotype matrices (n x p_chr), much smaller than
         # n x n S_chr matrices. Total storage: n * total_snps * 8 bytes (all chrs).
         # Caller accumulates K_full = sum(X_c @ X_c.T) / n_filtered.
@@ -773,6 +814,116 @@ def _compute_loco_kinship_streaming_numpy(
                         f"using full kinship"
                     )
                     yield (chr_name, S_full.copy())
+
+    if yield_x_c_sequential:
+        # Sequential two-pass path: Pass 1 (synchronous) accumulates S_full.
+        # Pass 2 (lazy generator) re-reads the BED once per chromosome.
+        S_full = np.zeros((n_samples_kinship, n_samples_kinship), dtype=np.float64)
+        # Pass 1: accumulate S_full only (batch_chrs=[] skips per-chromosome data).
+        _stream_pass(
+            [],
+            S_full,
+            accumulate_s_full=True,
+            pass_desc="LOCO: S_full accumulation (sequential, pass 1)",
+        )
+        elapsed_p1 = time.perf_counter() - start_time
+        logger.info(f"LOCO sequential pass 1 (S_full) complete in {elapsed_p1:.2f}s")
+
+        # Capture variables for the generator closure (snp_indices is already in scope).
+        _seq_chrs_with_snps = list(chrs_with_snps)
+        _seq_chrs_without_snps = list(chrs_without_snps)
+        _seq_n_chr_filtered = dict(n_chr_filtered)
+        _seq_n_samples_kinship = n_samples_kinship
+        _seq_chromosomes = chromosomes
+        _seq_snp_indices = snp_indices
+
+        def _yield_x_c_sequential_gen() -> Iterator[tuple[str, np.ndarray, int]]:
+            """Lazy generator: re-reads BED once per chromosome (Pass 2).
+
+            Yields (chr_name, X_c, p_chr) one chromosome at a time.
+            Only one X_c is live at a time — O(max_X_c) peak memory.
+            """
+            zero_x_c = np.zeros((_seq_n_samples_kinship, 0), dtype=np.float64)
+
+            # Yield chromosomes with SNPs (one BED scan per chromosome)
+            for target_chr in sorted(_seq_chrs_with_snps, key=chr_sort_key):
+                p_chr = _seq_n_chr_filtered[target_chr]
+                # Collect columns belonging to this chromosome
+                target_chr_mask = _seq_chromosomes[_seq_snp_indices] == target_chr
+                chr_local_indices = np.where(target_chr_mask)[0]
+                # chr_local_indices are positions within snp_indices array.
+                # We need the actual global BED column indices for this chromosome.
+                target_chr_global_indices = _seq_snp_indices[chr_local_indices]
+
+                if len(target_chr_global_indices) == 0:
+                    logger.debug(
+                        f"LOCO sequential chr {target_chr}: 0 SNPs, yielding empty X_c"
+                    )
+                    yield (target_chr, zero_x_c, 0)
+                    continue
+
+                # One full BED scan to collect X_c columns for this chromosome.
+                # Each chunk: extract columns matching this chromosome.
+                x_c_chunks: list[np.ndarray] = []
+                chr_accum_iter = stream_genotype_chunks(
+                    bed_path,
+                    chunk_size=chunk_size,
+                    dtype=np.float64,
+                    show_progress=False,
+                )
+                if show_progress:
+                    chr_accum_iter = progress_iterator(
+                        chr_accum_iter,
+                        total=n_chunks,
+                        desc=f"LOCO: X_c chr {target_chr} (sequential pass 2)",
+                    )
+                for chunk, file_start, file_end in chr_accum_iter:
+                    # Find filtered SNPs in this chunk
+                    left = np.searchsorted(_seq_snp_indices, file_start, side="left")
+                    right = np.searchsorted(_seq_snp_indices, file_end, side="left")
+                    chunk_snp_global = _seq_snp_indices[left:right]
+                    if len(chunk_snp_global) == 0:
+                        del chunk
+                        continue
+                    # Filter to columns belonging to target_chr
+                    chunk_chrs = _seq_chromosomes[chunk_snp_global]
+                    chr_mask_in_chunk = chunk_chrs == target_chr
+                    if not np.any(chr_mask_in_chunk):
+                        del chunk
+                        continue
+                    # Global indices of this chromosome's SNPs in this chunk
+                    chr_global_in_chunk = chunk_snp_global[chr_mask_in_chunk]
+                    local_in_chunk = chr_global_in_chunk - file_start
+                    X_chunk = chunk[:, local_in_chunk].astype(np.float64)
+                    if valid_indices is not None:
+                        X_chunk = X_chunk[valid_indices, :]
+                    X_centered = impute_and_center(X_chunk)
+                    x_c_chunks.append(X_centered)
+                    del X_chunk, X_centered, chunk
+
+                if x_c_chunks:
+                    X_c = np.hstack(x_c_chunks)
+                else:
+                    X_c = zero_x_c
+                del x_c_chunks
+
+                logger.debug(
+                    f"LOCO sequential chr {target_chr}: {p_chr} SNPs, "
+                    f"X_c shape={X_c.shape}"
+                )
+                yield (target_chr, X_c, p_chr)
+                del X_c
+                gc.collect()
+
+            # Yield chromosomes with 0 filtered SNPs
+            for target_chr in sorted(_seq_chrs_without_snps, key=chr_sort_key):
+                logger.debug(
+                    f"LOCO sequential chr {target_chr}: 0 SNPs after filtering, "
+                    f"yielding empty X_c (secular solver uses full kinship)"
+                )
+                yield (target_chr, zero_x_c, 0)
+
+        return S_full, n_filtered, _yield_x_c_sequential_gen(), snp_stats_cache
 
     if yield_s_chr or yield_x_c:
         # Secular paths: caller accumulates K_full from yielded matrices.

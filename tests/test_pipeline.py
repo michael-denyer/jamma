@@ -322,6 +322,16 @@ class TestPipelineConfigSecular:
         assert config.use_secular_update is True
         assert config.backend == "numpy"
 
+    def test_secular_rejects_save_kinship(self) -> None:
+        with pytest.raises(ValueError, match="save_kinship=True is not supported"):
+            PipelineConfig(
+                bfile=Path("test"),
+                loco=True,
+                use_secular_update=True,
+                backend="numpy",
+                save_kinship=True,
+            )
+
 
 @pytest.mark.tier1
 class TestPipelineConfigSnpsFields:

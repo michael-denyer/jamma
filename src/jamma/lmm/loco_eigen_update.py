@@ -20,11 +20,15 @@ DLAED4) computing all n eigenvalues at O(n^2) cost per rank-1 update
 (O(n) per eigenvalue via DLAED4), versus O(n^3) for direct
 eigendecomposition. Two eigenvector accumulation paths:
 
-- **Q path**: sequential rank-1 updates with O(n^2) eigenvector multiply per
-  step, O(n^2) workspace. Total: O(n^2 * r_eff) compute + O(n^2) memory.
+- **Q path**: sequential rank-1 updates with O(n^3) eigenvector multiply
+  (DGEMM on (n, n) Q matrix) per step. Total: O(n^3 * r_eff) compute,
+  O(n^2) memory. Wins over direct eigh when r_eff constant factor is
+  favorable (secular DGEMM cheaper than full tridiagonal eigensolver).
 - **Delta path**: forward pass stores eigenvalues + norms only (O(n) per step),
-  then backward pass reconstructs U_loco via blocked Cauchy multiply without
-  materializing any (n, n) intermediate. Memory savings over Q path at large n.
+  then backward pass reconstructs U_loco via blocked Cauchy multiply.
+  Compute: O(n^3 * r_eff) same as Q path. Memory: O(r_eff * n) stored
+  intermediates (no Q matrix, no V_j matrices) — the key advantage at
+  large n (eliminates 55 GB Q = np.eye(n) at n=83k).
 """
 
 from __future__ import annotations
@@ -38,6 +42,16 @@ from loguru import logger
 # absolute values to also handle small negative eigenvalues from numerical noise
 # in the rank-k downdate (GEMMA itself zeros non-positive eigenvalues only).
 _DEFAULT_THRESHOLD: float = 1e-10
+
+# Guard against division by zero at deflation poles in Cauchy formulas.
+# When |d[l] - eigenvalue[k]| < this value, the term is set to zero (the
+# corresponding z[l] ≈ 0 at deflation points, so the contribution vanishes).
+_DEFLATION_GUARD: float = 1e-300
+_DEFLATION_FILL: float = 1.0 / _DEFLATION_GUARD  # reciprocal used as safe fill
+
+# Maximum DLAED4-to-Python fallbacks before aborting secular path.
+# Each fallback is O(n^3) vs O(n^2); too many indicates a systemic issue.
+_MAX_DLAED4_FALLBACKS: int = 5
 
 # ---------------------------------------------------------------------------
 # C extension for rank-1 eigenvalue update via LAPACK DLAED4
@@ -55,9 +69,9 @@ def _try_import_secular() -> tuple[bool, object | None, object | None]:
             rank1_eigenvalues_and_norms,
         )
     except ImportError as e:
-        logger.info(
+        logger.warning(
             f"C extension _secular_accel not available ({e}); "
-            "rank-1 secular updates will use Python fallback. "
+            "rank-1 secular updates will use Python fallback (O(n^3) per step). "
             "Run 'python -m jamma.lmm._compile_secular' to compile."
         )
         return False, None, None
@@ -90,8 +104,12 @@ def _try_import_secular() -> tuple[bool, object | None, object | None]:
                 "(LAPACK not found). Using Python fallback. "
                 "Ensure numpy is linked against a LAPACK library."
             )
-            return False, None, None
-        raise  # Unexpected error — propagate
+        else:
+            logger.error(
+                f"_secular_accel DLAED4 probe failed with unexpected error: {e}. "
+                "Disabling C extension."
+            )
+        return False, None, None
 
     return True, rank1_eigenvalue_update, rank1_eigenvalues_and_norms
 
@@ -110,9 +128,10 @@ def _rank1_update_python(
     """Pure Python fallback for rank-1 eigenvalue update via np.linalg.eigh.
 
     Computes eigenvalues and eigenvectors of D + rho * z @ z.T where D =
-    diag(d). This is O(n^3) and only used when the C extension (_secular_accel)
-    is unavailable. The C extension uses LAPACK DLAED4 (O(n) per eigenvalue,
-    O(n^2) per rank-1 update).
+    diag(d). This is O(n^3) and used when the C extension (_secular_accel) is
+    unavailable or as a fallback when DLAED4 fails to converge on a specific
+    step. The C extension uses LAPACK DLAED4 (O(n) per eigenvalue, O(n^2)
+    per rank-1 update).
 
     Args:
         d: (n,) ascending diagonal elements.
@@ -147,8 +166,8 @@ def _rank1_eigenvalues_and_norms_python(
     Args:
         d: (n,) ascending diagonal elements.
         rho: Scalar multiplier (can be negative for LOCO downdate).
-        z: (n,) rank-1 update vector (used as-is; caller is responsible
-            for adjusting rho if z is rescaled).
+        z: (n,) rank-1 update vector. Normalized to unit norm internally;
+            rho is adjusted by ||z||^2 accordingly.
 
     Returns:
         Tuple (eigenvalues, norms) both shape (n,) ascending.
@@ -158,15 +177,21 @@ def _rank1_eigenvalues_and_norms_python(
     rho_eff = rho * (z_norm**2)
 
     M = np.diag(d) + rho_eff * np.outer(z_unit, z_unit)
-    eigenvalues, _ = np.linalg.eigh(M)
+    try:
+        eigenvalues, _ = np.linalg.eigh(M)
+    except np.linalg.LinAlgError as e:
+        raise np.linalg.LinAlgError(
+            f"rank1_eigenvalues_and_norms_python: eigh failed on {len(d)}-dim "
+            f"matrix (rho={rho:.6e}): {e}"
+        ) from e
 
     # Compute norms: norm_j[k] = ||z_unit / (d - eigenvalues[k])||_2
-    # Deflation guard: skip terms where |delta| < 1e-300
+    # Deflation guard: skip terms where |delta| < _DEFLATION_GUARD
     n = len(d)
     norms = np.empty(n)
     for k in range(n):
         delta_k = d - eigenvalues[k]
-        safe = np.abs(delta_k) > 1e-300
+        safe = np.abs(delta_k) > _DEFLATION_GUARD
         norm_sq = np.sum((z_unit[safe] / delta_k[safe]) ** 2)
         norms[k] = np.sqrt(norm_sq) if norm_sq > 0.0 else 0.0
 
@@ -223,7 +248,7 @@ def _apply_vj_to_rows_blocked(
         # Deflation guard: when d_j[l] = lambda_j[k] (deflated eigenvalue), the
         # corresponding z_j[l] ≈ 0, so the contribution to V[:,k] is 0/0 ≈ 0.
         # Setting the diff to 1e300 makes A[:,l] / diff ≈ z_j[l] / 1e300 ≈ 0.
-        diffs = np.where(np.abs(diffs) > 1e-300, diffs, 1e300)
+        diffs = np.where(np.abs(diffs) > _DEFLATION_GUARD, diffs, _DEFLATION_FILL)
         C_block = 1.0 / diffs
         # DGEMM: (b, n) @ (n, m) -> (b, m); scale by 1/norm_j
         R_new[:, k_start:k_end] = (A @ C_block) * (1.0 / norm_j[k_start:k_end])
@@ -266,7 +291,7 @@ def _apply_vj_transpose_to_vec_blocked(
         # C_block[l, k] = 1 / (d_j[l] - lambda_j[k_start + k])  — shape (n, m)
         diffs = d_j[:, np.newaxis] - lam_block  # (n, m)
         # Deflation guard: avoid division by zero at pole locations
-        diffs = np.where(np.abs(diffs) > 1e-300, diffs, 1e300)
+        diffs = np.where(np.abs(diffs) > _DEFLATION_GUARD, diffs, _DEFLATION_FILL)
         C_block = 1.0 / diffs
         result[k_start:k_end] = (c @ C_block) / norm_j[k_start:k_end]
     return result
@@ -342,7 +367,7 @@ def _apply_vj_to_rows_blocked_with_deflation(
         k_end = min(k_start + col_block_size, n)
         lam_block = lambda_j[k_start:k_end]
         diffs = d_j[:, np.newaxis] - lam_block
-        diffs = np.where(np.abs(diffs) > 1e-300, diffs, 1e300)
+        diffs = np.where(np.abs(diffs) > _DEFLATION_GUARD, diffs, _DEFLATION_FILL)
         C_block = 1.0 / diffs
         R_new[:, k_start:k_end] = (A @ C_block) * (1.0 / norm_j[k_start:k_end])
     # Override deflated columns: R_new[:, k] = R[:, row_l] (eigenvector is e_{row_l})
@@ -385,7 +410,7 @@ def _apply_vj_transpose_to_vec_blocked_with_deflation(
         k_end = min(k_start + col_block_size, n)
         lam_block = lambda_j[k_start:k_end]
         diffs = d_j[:, np.newaxis] - lam_block
-        diffs = np.where(np.abs(diffs) > 1e-300, diffs, 1e300)
+        diffs = np.where(np.abs(diffs) > _DEFLATION_GUARD, diffs, _DEFLATION_FILL)
         C_block = 1.0 / diffs
         result[k_start:k_end] = (c @ C_block) / norm_j[k_start:k_end]
     # Override deflated positions: (V_j.T @ v)[k] = v[row_l]
@@ -436,7 +461,7 @@ def _compute_cauchy_norms(
         # diffs[l, k] = d[l] - eigenvalues[k_start + k], shape (n, m)
         diffs = d[:, np.newaxis] - lam_block  # (n, m)
         # Deflation guard
-        diffs = np.where(np.abs(diffs) > 1e-300, diffs, 1e300)
+        diffs = np.where(np.abs(diffs) > _DEFLATION_GUARD, diffs, _DEFLATION_FILL)
         ratios = z_unit[:, np.newaxis] / diffs  # (n, m)
         norm_sq = np.sum(ratios**2, axis=0)  # (m,)
         norms[k_start:k_end] = np.sqrt(norm_sq)
@@ -479,8 +504,10 @@ def _secular_eigendecompose_delta_path(
 
     Forward pass cost: O(r_eff^2 * n^2) Cauchy transforms
       + O(r_eff * n^2) eigenvalue updates.
-    Backward pass cost: O(n^2 * r_eff) — blocked Cauchy multiply across all rows.
-    Memory: O(r_eff * n) stored scalars (no Q matrix, no V_j matrices).
+    Backward pass cost: O(n^3 * r_eff) — blocked Cauchy multiply across all
+      n rows (each step applies an implicit (n, n) matrix to all rows).
+    Memory: O(4 * r_eff * n) stored intermediates + O(batch * n) row buffers
+      (no Q matrix, no V_j matrices).
 
     Args:
         d_full: (n,) full eigenvalues, ascending.
@@ -560,12 +587,21 @@ def _secular_eigendecompose_delta_path(
             try:
                 lambda_j, _ = _rank1_eigs_norms_c(d_current, rho_j_eff, q_j_unit)
             except RuntimeError as e:
+                if "DLAED4" not in str(e) and "convergence" not in str(e).lower():
+                    raise  # Non-DLAED4 RuntimeError — propagate
                 n_fallbacks += 1
                 logger.warning(
                     f"DLAED4 failure at secular delta step j={j}/{r_eff} "
                     f"(n={n}): {e}. Falling back to Python eigh for this step "
                     f"(O(n^3) instead of O(n^2))."
                 )
+                if n_fallbacks > _MAX_DLAED4_FALLBACKS:
+                    raise RuntimeError(
+                        f"DLAED4 fell back to Python eigh on "
+                        f"{n_fallbacks}/{r_eff} delta-path steps (n={n}). "
+                        f"This indicates a systemic issue with the C extension. "
+                        f"Re-run without --secular or investigate the C extension."
+                    ) from e
                 lambda_j, _ = _rank1_eigenvalues_and_norms_python(
                     d_current, rho_j_eff, q_j_unit
                 )
@@ -645,7 +681,11 @@ def _secular_eigendecompose_delta_path(
                 k_end = min(k_start + col_block_size, n)
                 lam_block = lam_j[k_start:k_end]
                 diffs = d_j[:, np.newaxis] - lam_block
-                diffs = np.where(np.abs(diffs) > 1e-300, diffs, 1e300)
+                diffs = np.where(
+                    np.abs(diffs) > _DEFLATION_GUARD,
+                    diffs,
+                    _DEFLATION_FILL,
+                )
                 C_block = 1.0 / diffs
                 R_out[:, k_start:k_end] = (A @ C_block) * (
                     1.0 / norm_j_arr[k_start:k_end]
@@ -783,8 +823,10 @@ def secular_eigendecompose_from_full(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Secular equation solver for LOCO eigenvalue update.
 
-    Complexity: O(n^2 * r_eff) backward pass + O(r_eff^2 * n^2) forward pass.
-    When r_eff << n (typical due to LD compression), backward pass dominates.
+    Complexity: O(n^3 * r_eff) compute for both Q and delta paths (DGEMM or
+    blocked Cauchy multiply per step). Delta path saves O(n^2) memory by
+    eliminating the Q matrix. When r_eff << n, wins over direct eigh via
+    favorable constant factors (secular DGEMM vs full tridiagonal solver).
 
     Replaces the O(n^3) np.linalg.eigh(M) call in loco_eigendecompose_from_full
     with a secular equation solver that exploits the low-rank structure of the
@@ -798,7 +840,7 @@ def secular_eigendecompose_from_full(
 
     Two eigenvector accumulation strategies:
     - Q path (n <= n_threshold_for_delta): tracked as n x n matrix Q updated
-      at each step via O(n^2) matrix multiply. Memory: O(n^2) — fine for small n.
+      at each step via O(n^3) DGEMM. Memory: O(n^2) — fine for small n.
     - Delta path (n > n_threshold_for_delta): forward pass stores
       (z_j, d_j, lambda_j, norm_j) per step; backward pass reconstructs
       U_loco row-batch by row-batch via blocked Cauchy multiply. Eliminates
@@ -952,12 +994,21 @@ def secular_eigendecompose_from_full(
             try:
                 d_new, V_j = _rank1_update_c(d_current, rho_j_eff, q_j_unit)
             except RuntimeError as e:
+                if "DLAED4" not in str(e) and "convergence" not in str(e).lower():
+                    raise  # Non-DLAED4 RuntimeError — propagate
                 n_fallbacks += 1
                 logger.warning(
                     f"DLAED4 failure at secular Q step j={j}/{r_eff} "
                     f"(n={n}): {e}. Falling back to Python eigh for this step "
                     f"(O(n^3) instead of O(n^2))."
                 )
+                if n_fallbacks > _MAX_DLAED4_FALLBACKS:
+                    raise RuntimeError(
+                        f"DLAED4 fell back to Python eigh on "
+                        f"{n_fallbacks}/{r_eff} Q-path steps (n={n}). "
+                        f"This indicates a systemic issue with the C extension. "
+                        f"Re-run without --secular or investigate the C extension."
+                    ) from e
                 d_new, V_j = _rank1_update_python(d_current, rho_j_eff, q_j_unit)
         else:
             d_new, V_j = _rank1_update_python(d_current, rho_j_eff, q_j_unit)

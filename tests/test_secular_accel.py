@@ -37,7 +37,7 @@ _skip_no_ext = pytest.mark.skipif(
 # Helpers
 # ---------------------------------------------------------------------------
 
-_RNG = np.random.default_rng(42)
+_RNG = np.random.default_rng(42)  # Legacy — avoid in new tests; use per-test RNG
 
 _EXPECTED_ABI = 2  # Must match ABI_VERSION in _secular_accel.c
 
@@ -85,9 +85,10 @@ def test_secular_accel_import_and_abi():
 @_skip_no_ext
 def test_rank1_update_positive_rho():
     """rank1_eigenvalue_update with positive rho matches np.linalg.eigh (rtol=1e-12)."""
+    rng = np.random.default_rng(100)
     n = 8
-    d = np.sort(_RNG.uniform(0.1, 5.0, n))
-    z = _RNG.standard_normal(n)
+    d = np.sort(rng.uniform(0.1, 5.0, n))
+    z = rng.standard_normal(n)
     z = z / np.linalg.norm(z)  # unit norm
     rho = 0.5
 
@@ -124,10 +125,11 @@ def test_rank1_update_positive_rho():
 @_skip_no_ext
 def test_rank1_update_negative_rho():
     """rank1_eigenvalue_update with negative rho (downdate) matches np.linalg.eigh."""
+    rng = np.random.default_rng(101)
     n = 6
     # Wider spread to avoid degenerate case
     d = np.array([1.0, 2.0, 3.5, 5.0, 7.0, 10.0])
-    z = _RNG.standard_normal(n)
+    z = rng.standard_normal(n)
     z = z / np.linalg.norm(z)
     rho = -0.3
 
@@ -161,10 +163,11 @@ def test_rank1_update_negative_rho():
 @_skip_no_ext
 def test_rank1_update_near_degenerate_d():
     """dlaed4 handles near-equal d values without info != 0 (deflation)."""
+    rng = np.random.default_rng(102)
     n = 5
     # Two pairs of near-equal elements
     d = np.array([1.0, 1.0 + 1e-10, 3.0, 3.0 + 1e-10, 6.0])
-    z = _RNG.standard_normal(n)
+    z = rng.standard_normal(n)
     z = z / np.linalg.norm(z)
     rho = 0.8
 
@@ -200,9 +203,10 @@ def test_rank1_update_near_degenerate_d():
 @_skip_no_ext
 def test_eigenvectors_orthogonal_larger():
     """Eigenvectors satisfy V^T V = I within 1e-10 for n=20."""
+    rng = np.random.default_rng(103)
     n = 20
-    d = np.sort(_RNG.uniform(0.5, 20.0, n))
-    z = _RNG.standard_normal(n)
+    d = np.sort(rng.uniform(0.5, 20.0, n))
+    z = rng.standard_normal(n)
     z = z / np.linalg.norm(z)
     rho = 1.5
 
@@ -483,6 +487,30 @@ class TestCExtensionEdgeCases:
         np.testing.assert_allclose(vals, [expected], rtol=1e-14)
         assert len(norms) == 1
         assert np.isfinite(norms[0])
+
+    def test_rank1_update_rho_zero(self) -> None:
+        """rho=0 returns eigenvalues=d and eigenvectors=I."""
+        d = np.array([1.0, 2.0, 3.0, 4.0])
+        z = np.array([0.5, 0.5, 0.5, 0.5])
+        vals, vecs = _ext.rank1_eigenvalue_update(d, 0.0, z)
+        np.testing.assert_allclose(vals, d, rtol=1e-14)
+        np.testing.assert_allclose(vecs, np.eye(4), atol=1e-14)
+
+    def test_rank1_eigs_norms_rho_zero(self) -> None:
+        """rho=0 returns eigenvalues=d and norms=0."""
+        d = np.array([1.0, 2.0, 3.0, 4.0])
+        z = np.array([0.5, 0.5, 0.5, 0.5])
+        vals, norms = _ext.rank1_eigenvalues_and_norms(d, 0.0, z)
+        np.testing.assert_allclose(vals, d, rtol=1e-14)
+        np.testing.assert_allclose(norms, 0.0, atol=1e-14)
+
+    def test_rank1_update_z_zero(self) -> None:
+        """z=0 vector returns eigenvalues=d and eigenvectors=I."""
+        d = np.array([1.0, 2.0, 3.0])
+        z = np.zeros(3)
+        vals, vecs = _ext.rank1_eigenvalue_update(d, 1.0, z)
+        np.testing.assert_allclose(vals, d, rtol=1e-14)
+        np.testing.assert_allclose(vecs, np.eye(3), atol=1e-14)
 
     def test_rank1_update_does_not_mutate_z(self) -> None:
         """C extension must not modify caller's z array."""

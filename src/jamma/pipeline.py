@@ -190,6 +190,11 @@ class PipelineConfig:
                 f"Got backend={self.backend!r}. "
                 "Pass backend='numpy' explicitly."
             )
+        if self.use_secular_update and self.save_kinship:
+            raise ValueError(
+                "save_kinship=True is not supported with use_secular_update=True. "
+                "The secular update path does not materialise K_loco matrices."
+            )
 
 
 @dataclass

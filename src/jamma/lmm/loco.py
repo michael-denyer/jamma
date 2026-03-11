@@ -497,14 +497,20 @@ def _compute_loco_kinship_streaming_numpy(
         #   Phase 1 (eigendecomp): S_full/K_full (in-place /=) + eigendecomp
         #     workspace + chunk buffer.
         #   Phase 2 (per-chr secular): U_full + d_full + one X_c + secular
-        #     workspace (~3 n-vectors for Cauchy/deflation intermediates).
+        #     workspace (4 * r_eff * n for stored intermediates in delta path,
+        #     plus row-batch buffers). r_eff estimated from max chromosome SNPs.
         # Phase 1 dominates because eigendecomp workspace >> one X_c.
         max_chr_snps = max(n_chr_filtered.values()) if n_chr_filtered else 0
         max_chr_gb = max_chr_snps * n_samples_kinship * 8 / 1e9
         # Phase 1 peak: K_full (in-place from S_full) + eigendecomp workspace
         phase1_gb = matrix_gb + eigendecomp_min_gb + chunk_buffer_gb
         # Phase 2 peak: U_full + d_full + one X_c + secular workspace
-        phase2_gb = matrix_gb + max_chr_gb + 3 * n_samples_kinship * 8 / 1e9
+        # Secular workspace: 4 arrays of (r_eff, n) for stored intermediates
+        # + 3 arrays of (batch, n) for row buffers. r_eff <= max_chr_snps.
+        r_eff_estimate = max_chr_snps  # upper bound; LD compression reduces this
+        secular_stored_gb = 4 * r_eff_estimate * n_samples_kinship * 8 / 1e9
+        secular_buffers_gb = 3 * 1000 * n_samples_kinship * 8 / 1e9  # batch=1000
+        phase2_gb = matrix_gb + max_chr_gb + secular_stored_gb + secular_buffers_gb
         seq_peak_gb = max(phase1_gb, phase2_gb)
         if check_memory and seq_peak_gb > available_gb * 0.9:
             raise MemoryError(
@@ -512,7 +518,9 @@ def _compute_loco_kinship_streaming_numpy(
                 f"{seq_peak_gb:.1f}GB — phase 1: K_full ({matrix_gb:.2f}GB) "
                 f"+ eigendecomp ({eigendecomp_min_gb:.1f}GB) + chunk buffer "
                 f"({chunk_buffer_gb:.2f}GB); phase 2: U_full "
-                f"({matrix_gb:.2f}GB) + max X_c ({max_chr_gb:.2f}GB). "
+                f"({matrix_gb:.2f}GB) + max X_c ({max_chr_gb:.2f}GB) + "
+                f"secular workspace ({secular_stored_gb:.2f}GB stored + "
+                f"{secular_buffers_gb:.2f}GB buffers). "
                 f"Available {available_gb:.1f}GB. "
                 f"Consider using standard LOCO (use_secular_update=False)."
             )
@@ -1419,7 +1427,7 @@ def run_lmm_loco(
                                 secular_p_full,
                                 p_chr_s,
                             )
-                        except (np.linalg.LinAlgError, ValueError) as e:
+                        except (np.linalg.LinAlgError, ValueError, RuntimeError) as e:
                             raise type(e)(
                                 f"Secular eigendecomposition failed for chromosome "
                                 f"{chr_name_s} (p_chr={p_chr_s}): {e}"

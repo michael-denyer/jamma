@@ -10,7 +10,9 @@ Or from a Databricks/Jupyter notebook cell:
     compile_extension()
 
 Requires: gcc (or cc), Python development headers, numpy >= 2.0.
-No OpenMP needed — DLAED4 calls are sequential; each solves a single eigenvalue.
+No OpenMP used — while the n DLAED4 calls are independent, each requires its
+own working copies of d and z, and the sequential implementation is already
+fast (O(n^2) total).
 
 No LAPACK link flags needed — the extension discovers LAPACK at runtime via
 dlopen (resolves dlaed4_64_ or dlaed4_ from numpy's bundled BLAS/LAPACK).
@@ -152,9 +154,20 @@ def compile_extension(verbose: bool = True) -> bool:
             del sys.modules[k]
 
         from jamma.lmm._secular_accel import (  # noqa: F401
+            ABI_VERSION,
             rank1_eigenvalue_update,
             rank1_eigenvalues_and_norms,
         )
+        from jamma.lmm.loco_eigen_update import _EXPECTED_SECULAR_ABI
+
+        if ABI_VERSION != _EXPECTED_SECULAR_ABI:
+            _print(
+                f"WARNING: ABI mismatch — compiled ABI_VERSION="
+                f"{ABI_VERSION}, expected {_EXPECTED_SECULAR_ABI}. "
+                f"Extension will be ignored at runtime. Update "
+                f"_secular_accel.c ABI_VERSION or _EXPECTED_SECULAR_ABI."
+            )
+            return False
 
         _print("Import OK — C extension is active")
         return True

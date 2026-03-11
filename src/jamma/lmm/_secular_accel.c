@@ -526,6 +526,41 @@ static PyObject *py_rank1_eigenvalue_update(PyObject *self, PyObject *args)
     int negative_rho = (rho_eff < 0.0);
     double rho_pos = negative_rho ? -rho_eff : rho_eff;
 
+    /* ---- Degenerate rho: perturbation vanishes → eigenvalues = d, V = I --- */
+    if (rho_pos < 1e-300) {
+        npy_intp n_dim = n;
+        PyArrayObject *eigenvalues = (PyArrayObject *)PyArray_SimpleNew(1, &n_dim, NPY_FLOAT64);
+        if (!eigenvalues) { Py_DECREF(d_c); Py_DECREF(z_c); return NULL; }
+
+        npy_intp ev_dims[2] = {n, n};
+        PyArrayObject *eigenvectors = (PyArrayObject *)PyArray_SimpleNew(2, ev_dims, NPY_FLOAT64);
+        if (!eigenvectors) {
+            Py_DECREF(d_c); Py_DECREF(z_c); Py_DECREF(eigenvalues);
+            return NULL;
+        }
+
+        double *w_data = (double *)PyArray_DATA(eigenvalues);
+        double *v_data = (double *)PyArray_DATA(eigenvectors);
+        memcpy(w_data, (double *)PyArray_DATA(d_c), (size_t)n * sizeof(double));
+        memset(v_data, 0, (size_t)n * (size_t)n * sizeof(double));
+        for (npy_intp i = 0; i < n; i++) v_data[i * n + i] = 1.0;
+
+        Py_DECREF(d_c); Py_DECREF(z_c);
+
+        /* Transpose eigenvectors to column-major (same as normal path) */
+        PyArray_Dims perm = { (npy_intp[]){1, 0}, 2 };
+        PyObject *ev_T = PyArray_Transpose(eigenvectors, &perm);
+        Py_DECREF(eigenvectors);
+        if (!ev_T) { Py_DECREF(eigenvalues); return NULL; }
+        PyObject *ev_contig = PyArray_NewCopy((PyArrayObject *)ev_T, NPY_CORDER);
+        Py_DECREF(ev_T);
+        if (!ev_contig) { Py_DECREF(eigenvalues); return NULL; }
+
+        PyObject *result = Py_BuildValue("(OO)", eigenvalues, ev_contig);
+        Py_DECREF(eigenvalues); Py_DECREF(ev_contig);
+        return result;
+    }
+
     /* ---- Allocate output arrays ------------------------------------------ */
     npy_intp n_dim = n;
     PyArrayObject *eigenvalues = (PyArrayObject *)PyArray_SimpleNew(1, &n_dim, NPY_FLOAT64);
@@ -583,7 +618,9 @@ static PyObject *py_rank1_eigenvalue_update(PyObject *self, PyObject *args)
     Py_BEGIN_ALLOW_THREADS
 
     for (npy_intp i = 0; i < n; i++) {
-        /* Restore working copies for each call (dlaed4 may modify them) */
+        /* Restore working copies for each call.  DLAED4 documents d and z as
+         * input-only, but defensive copy protects against non-conformant
+         * LAPACK implementations. */
         memcpy(d_work, d_base, (size_t)n * sizeof(double));
         memcpy(z_work, z_base, (size_t)n * sizeof(double));
 
@@ -814,6 +851,28 @@ static PyObject *py_rank1_eigenvalues_and_norms(PyObject *self, PyObject *args)
 
     int negative_rho = (rho_eff < 0.0);
     double rho_pos = negative_rho ? -rho_eff : rho_eff;
+
+    /* ---- Degenerate rho: perturbation vanishes → eigenvalues = d, norms = 0 */
+    if (rho_pos < 1e-300) {
+        npy_intp n_dim = n;
+        PyArrayObject *eigenvalues = (PyArrayObject *)PyArray_SimpleNew(1, &n_dim, NPY_FLOAT64);
+        if (!eigenvalues) { Py_DECREF(d_c); Py_DECREF(z_c); return NULL; }
+
+        PyArrayObject *norms_arr = (PyArrayObject *)PyArray_SimpleNew(1, &n_dim, NPY_FLOAT64);
+        if (!norms_arr) {
+            Py_DECREF(d_c); Py_DECREF(z_c); Py_DECREF(eigenvalues);
+            return NULL;
+        }
+
+        memcpy((double *)PyArray_DATA(eigenvalues),
+               (double *)PyArray_DATA(d_c), (size_t)n * sizeof(double));
+        memset((double *)PyArray_DATA(norms_arr), 0, (size_t)n * sizeof(double));
+
+        Py_DECREF(d_c); Py_DECREF(z_c);
+        PyObject *result = Py_BuildValue("(OO)", eigenvalues, norms_arr);
+        Py_DECREF(eigenvalues); Py_DECREF(norms_arr);
+        return result;
+    }
 
     /* ---- Allocate output arrays ------------------------------------------ */
     npy_intp n_dim = n;

@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 
 from jamma.lmm.loco_eigen_update import (
+    _MAX_DLAED4_FALLBACKS,
     _apply_vj_to_rows_blocked,
     _apply_vj_transpose_to_vec_blocked,
     _find_deflated_columns,
@@ -1194,6 +1195,69 @@ def test_secular_q_path_dlaed4_fallback() -> None:
         )
 
     np.testing.assert_allclose(d_fallback, d_ref, rtol=1e-10, atol=1e-14)
+
+
+def test_secular_q_path_dlaed4_fallback_abort() -> None:
+    """Q path aborts when DLAED4 fallbacks exceed _MAX_DLAED4_FALLBACKS."""
+    rng = np.random.default_rng(78)
+    n = 20
+    # p_chr must produce r_eff > _MAX_DLAED4_FALLBACKS so the counter triggers
+    p_chr = _MAX_DLAED4_FALLBACKS + 3
+    p_full = 50
+
+    d_full = np.sort(rng.random(n))
+    K = rng.standard_normal((n, n))
+    K = K @ K.T / n
+    U_full = np.linalg.eigh(K)[1]
+    X_c = rng.standard_normal((n, p_chr))
+
+    with (
+        patch("jamma.lmm.loco_eigen_update._SECULAR_ACCEL_AVAILABLE", True),
+        patch(
+            "jamma.lmm.loco_eigen_update._rank1_update_c",
+            side_effect=RuntimeError("mocked DLAED4 failure"),
+        ),
+        pytest.raises(RuntimeError, match="systemic issue"),
+    ):
+        secular_eigendecompose_from_full(
+            d_full,
+            U_full,
+            X_c,
+            p_full,
+            p_chr,
+            n_threshold_for_delta=n + 1,  # force Q path
+        )
+
+
+def test_secular_delta_path_dlaed4_fallback_abort() -> None:
+    """Delta path aborts when DLAED4 fallbacks exceed _MAX_DLAED4_FALLBACKS."""
+    rng = np.random.default_rng(79)
+    n = 20
+    p_chr = _MAX_DLAED4_FALLBACKS + 3
+    p_full = 50
+
+    d_full = np.sort(rng.random(n))
+    K = rng.standard_normal((n, n))
+    K = K @ K.T / n
+    U_full = np.linalg.eigh(K)[1]
+    X_c = rng.standard_normal((n, p_chr))
+
+    with (
+        patch("jamma.lmm.loco_eigen_update._SECULAR_ACCEL_AVAILABLE", True),
+        patch(
+            "jamma.lmm.loco_eigen_update._rank1_eigs_norms_c",
+            side_effect=RuntimeError("mocked DLAED4 failure"),
+        ),
+        pytest.raises(RuntimeError, match="systemic issue"),
+    ):
+        secular_eigendecompose_from_full(
+            d_full,
+            U_full,
+            X_c,
+            p_full,
+            p_chr,
+            n_threshold_for_delta=0,  # force delta path
+        )
 
 
 # ---------------------------------------------------------------------------

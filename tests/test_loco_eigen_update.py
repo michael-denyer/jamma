@@ -928,10 +928,10 @@ _GEMMA_LOCO_BFILE = _FIXTURE_ROOT / "gemma_loco" / "test"
 
 @pytest.mark.tier1
 def test_run_lmm_loco_secular_uses_sequential_path():
-    """run_lmm_loco(use_secular_update=True) uses sequential streaming path.
+    """run_lmm_loco(use_secular_update=True) uses X_C_SEQUENTIAL streaming mode.
 
-    Verifies that the secular path calls yield_x_c_sequential=True (not
-    yield_x_c=True), so secular_x_c dict is not populated. The sequential
+    Verifies that the secular path calls mode=LocoStreamingMode.X_C_SEQUENTIAL
+    (not mode=X_C), so the two-pass sequential path is used. The sequential
     path passes K_full directly from _compute_loco_kinship_streaming_numpy.
     """
     if not _GEMMA_LOCO_BFILE.with_suffix(".bed").exists():
@@ -940,10 +940,11 @@ def test_run_lmm_loco_secular_uses_sequential_path():
     from unittest.mock import patch
 
     import jamma.lmm.loco as loco_module
+    from jamma.lmm.loco import LocoStreamingMode
 
     _LOCO_BFILE = _GEMMA_LOCO_BFILE
 
-    # Track calls to _compute_loco_kinship_streaming_numpy to verify flag
+    # Track calls to _compute_loco_kinship_streaming_numpy to verify mode
     call_kwargs: list[dict] = []
     original_fn = loco_module._compute_loco_kinship_streaming_numpy
 
@@ -969,16 +970,19 @@ def test_run_lmm_loco_secular_uses_sequential_path():
             use_secular_update=True,
         )
 
-    # At least one call should use yield_x_c_sequential=True
-    sequential_calls = [kw for kw in call_kwargs if kw.get("yield_x_c_sequential")]
+    # At least one call should use mode=LocoStreamingMode.X_C_SEQUENTIAL
+    sequential_calls = [
+        kw for kw in call_kwargs if kw.get("mode") == LocoStreamingMode.X_C_SEQUENTIAL
+    ]
     assert len(sequential_calls) > 0, (
-        f"Expected at least one call with yield_x_c_sequential=True, "
-        f"got calls: {call_kwargs}"
+        f"Expected at least one call with mode=X_C_SEQUENTIAL, got calls: {call_kwargs}"
     )
-    # No call should use yield_x_c=True (old path)
-    old_path_calls = [kw for kw in call_kwargs if kw.get("yield_x_c")]
+    # No call should use mode=X_C (old non-sequential accumulation path)
+    old_path_calls = [
+        kw for kw in call_kwargs if kw.get("mode") == LocoStreamingMode.X_C
+    ]
     assert len(old_path_calls) == 0, (
-        f"Expected no calls with yield_x_c=True (old accumulation path), "
+        f"Expected no calls with mode=X_C (old accumulation path), "
         f"but found: {old_path_calls}"
     )
     assert loco.n_tested > 0, "Expected SNPs to be tested"

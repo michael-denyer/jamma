@@ -454,12 +454,11 @@ def test_loco_numpy_show_progress_true():
 
 @pytest.mark.tier1
 class TestSequentialXcStreaming:
-    """Tests for yield_x_c_sequential mode in _compute_loco_kinship_streaming_numpy.
+    """Tests for X_C_SEQUENTIAL mode in _compute_loco_kinship_streaming_numpy.
 
     The sequential mode does two BED passes per chromosome (one for K_full,
     one per chromosome for X_c) to reduce peak memory from O(sum_X_c) to
-    O(max_X_c). The function returns a 4-tuple:
-    (K_full, n_filtered, generator, snp_stats_cache).
+    O(max_X_c). The function returns a SequentialLocoResult NamedTuple.
     """
 
     def setup_method(self):
@@ -468,14 +467,17 @@ class TestSequentialXcStreaming:
             pytest.skip("gemma_loco fixture not available")
 
     def test_return_type_is_4tuple(self):
-        """yield_x_c_sequential=True returns (K_full, n_filtered, generator, cache)."""
-        from jamma.lmm.loco import _compute_loco_kinship_streaming_numpy
+        """X_C_SEQUENTIAL mode returns SequentialLocoResult (4-element NamedTuple)."""
+        from jamma.lmm.loco import (
+            LocoStreamingMode,
+            _compute_loco_kinship_streaming_numpy,
+        )
 
         result = _compute_loco_kinship_streaming_numpy(
             _LOCO_BFILE,
             check_memory=False,
             show_progress=False,
-            yield_x_c_sequential=True,
+            mode=LocoStreamingMode.X_C_SEQUENTIAL,
         )
 
         assert len(result) == 4, f"Expected 4-tuple, got {len(result)}-tuple"
@@ -497,19 +499,22 @@ class TestSequentialXcStreaming:
         )
 
     def test_kfull_pass1_matches_yield_x_c(self):
-        """K_full from yield_x_c_sequential matches K_full from yield_x_c accumulation.
+        """K_full from X_C_SEQUENTIAL matches K_full from X_C accumulation.
 
         The two-pass sequential path should produce K_full = sum(X_c @ X_c.T) / p_full
-        that matches the single-pass yield_x_c accumulation within rtol=1e-12.
+        that matches the single-pass X_C accumulation within rtol=1e-12.
         """
-        from jamma.lmm.loco import _compute_loco_kinship_streaming_numpy
+        from jamma.lmm.loco import (
+            LocoStreamingMode,
+            _compute_loco_kinship_streaming_numpy,
+        )
 
-        # Reference: yield_x_c path
+        # Reference: X_C path
         p_full_ref, x_c_iter, _ = _compute_loco_kinship_streaming_numpy(
             _LOCO_BFILE,
             check_memory=False,
             show_progress=False,
-            yield_x_c=True,
+            mode=LocoStreamingMode.X_C,
         )
         K_full_ref = None
         for _chr_name, x_c_mat, _p_chr in x_c_iter:
@@ -518,42 +523,43 @@ class TestSequentialXcStreaming:
                 if K_full_ref is None:
                     K_full_ref = np.zeros_like(gram)
                 K_full_ref += gram
-        assert K_full_ref is not None, "yield_x_c path produced no X_c matrices"
+        assert K_full_ref is not None, "X_C path produced no X_c matrices"
         K_full_ref /= p_full_ref
 
         # Sequential path
-        K_full_seq, n_filtered_seq, gen, _ = _compute_loco_kinship_streaming_numpy(
+        seq_result = _compute_loco_kinship_streaming_numpy(
             _LOCO_BFILE,
             check_memory=False,
             show_progress=False,
-            yield_x_c_sequential=True,
+            mode=LocoStreamingMode.X_C_SEQUENTIAL,
         )
-        K_full_seq = K_full_seq / n_filtered_seq  # function returns unnormalized S_full
+        K_full_seq = seq_result.s_full / seq_result.n_filtered  # unnormalized S_full
         # Consume generator to avoid resource leaks
-        list(gen)
+        list(seq_result.generator)
 
         np.testing.assert_allclose(
             K_full_seq,
             K_full_ref,
             rtol=1e-12,
             atol=1e-14,
-            err_msg=(
-                "K_full from yield_x_c_sequential does not match yield_x_c accumulation"
-            ),
+            err_msg="K_full from X_C_SEQUENTIAL does not match X_C accumulation",
         )
 
     def test_sequential_generator_yields_per_chr_tuples(self):
         """Sequential generator yields (chr_name, X_c, p_chr) tuples in chr order."""
-        from jamma.lmm.loco import _compute_loco_kinship_streaming_numpy
+        from jamma.lmm.loco import (
+            LocoStreamingMode,
+            _compute_loco_kinship_streaming_numpy,
+        )
 
-        _K_full, _n_filtered, gen, _ = _compute_loco_kinship_streaming_numpy(
+        seq_result = _compute_loco_kinship_streaming_numpy(
             _LOCO_BFILE,
             check_memory=False,
             show_progress=False,
-            yield_x_c_sequential=True,
+            mode=LocoStreamingMode.X_C_SEQUENTIAL,
         )
 
-        yielded = list(gen)
+        yielded = list(seq_result.generator)
         assert len(yielded) > 0, "Generator should yield at least one chromosome"
         for item in yielded:
             assert len(item) == 3, f"Expected 3-tuple, got {len(item)}-tuple"
@@ -573,29 +579,32 @@ class TestSequentialXcStreaming:
                 )
 
     def test_sequential_x_c_matches_yield_x_c(self):
-        """Each X_c from sequential generator matches the yield_x_c path exactly."""
-        from jamma.lmm.loco import _compute_loco_kinship_streaming_numpy
+        """Each X_c from sequential generator matches the X_C path exactly."""
+        from jamma.lmm.loco import (
+            LocoStreamingMode,
+            _compute_loco_kinship_streaming_numpy,
+        )
 
-        # Reference: yield_x_c path — collect all X_c
+        # Reference: X_C path — collect all X_c
         _p_full_ref, x_c_iter, _ = _compute_loco_kinship_streaming_numpy(
             _LOCO_BFILE,
             check_memory=False,
             show_progress=False,
-            yield_x_c=True,
+            mode=LocoStreamingMode.X_C,
         )
         x_c_ref = {}
         for chr_name, x_c_mat, _p_chr in x_c_iter:
             x_c_ref[chr_name] = x_c_mat
 
         # Sequential path
-        _K_full, _n_filtered, gen, _ = _compute_loco_kinship_streaming_numpy(
+        seq_result = _compute_loco_kinship_streaming_numpy(
             _LOCO_BFILE,
             check_memory=False,
             show_progress=False,
-            yield_x_c_sequential=True,
+            mode=LocoStreamingMode.X_C_SEQUENTIAL,
         )
 
-        for chr_name, X_c, _p_chr in gen:
+        for chr_name, X_c, _p_chr in seq_result.generator:
             assert chr_name in x_c_ref, (
                 f"Sequential generator yielded unexpected chr {chr_name}"
             )
@@ -605,31 +614,32 @@ class TestSequentialXcStreaming:
                 err_msg=f"X_c mismatch for chr {chr_name}",
             )
 
-    def test_mutual_exclusion_with_yield_s_chr(self):
-        """yield_x_c_sequential=True and yield_s_chr=True raises ValueError."""
-        from jamma.lmm.loco import _compute_loco_kinship_streaming_numpy
+    def test_mode_dispatch_x_c_sequential_vs_x_c(self):
+        """X_C_SEQUENTIAL and X_C modes dispatch correctly (distinct return types)."""
+        from jamma.lmm.loco import (
+            LocoStreamingMode,
+            _compute_loco_kinship_streaming_numpy,
+        )
 
-        with pytest.raises(ValueError, match="mutually exclusive"):
-            _compute_loco_kinship_streaming_numpy(
-                _LOCO_BFILE,
-                check_memory=False,
-                show_progress=False,
-                yield_x_c_sequential=True,
-                yield_s_chr=True,
-            )
+        # X_C_SEQUENTIAL returns SequentialLocoResult (4-field NamedTuple)
+        seq_result = _compute_loco_kinship_streaming_numpy(
+            _LOCO_BFILE,
+            check_memory=False,
+            show_progress=False,
+            mode=LocoStreamingMode.X_C_SEQUENTIAL,
+        )
+        assert hasattr(seq_result, "s_full"), "X_C_SEQUENTIAL must return NamedTuple"
+        list(seq_result.generator)  # consume generator
 
-    def test_mutual_exclusion_with_yield_x_c(self):
-        """yield_x_c_sequential=True and yield_x_c=True raises ValueError."""
-        from jamma.lmm.loco import _compute_loco_kinship_streaming_numpy
-
-        with pytest.raises(ValueError, match="mutually exclusive"):
-            _compute_loco_kinship_streaming_numpy(
-                _LOCO_BFILE,
-                check_memory=False,
-                show_progress=False,
-                yield_x_c_sequential=True,
-                yield_x_c=True,
-            )
+        # X_C returns 3-tuple (n_filtered, iter, cache)
+        x_c_result = _compute_loco_kinship_streaming_numpy(
+            _LOCO_BFILE,
+            check_memory=False,
+            show_progress=False,
+            mode=LocoStreamingMode.X_C,
+        )
+        assert len(x_c_result) == 3, "X_C must return 3-tuple"
+        list(x_c_result[1])  # consume iterator
 
 
 @pytest.mark.tier1

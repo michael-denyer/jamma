@@ -1945,8 +1945,8 @@ def test_loco_eigendecompose_from_full_inplace_equivalence() -> None:
 
 @pytest.mark.tier1
 def test_yield_s_chr_ownership_transfer() -> None:
-    """yield_s_chr=True transfers ownership (no copy), matrices are writable."""
-    from jamma.lmm.loco import _compute_loco_kinship_streaming_numpy
+    """S_CHR mode transfers ownership (no copy), matrices are writable."""
+    from jamma.lmm.loco import LocoStreamingMode, _compute_loco_kinship_streaming_numpy
 
     p_full, s_chr_iter, _ = _compute_loco_kinship_streaming_numpy(
         _LOCO_BFILE,
@@ -1954,7 +1954,7 @@ def test_yield_s_chr_ownership_transfer() -> None:
         miss_threshold=1.0,
         check_memory=False,
         show_progress=False,
-        yield_s_chr=True,
+        mode=LocoStreamingMode.S_CHR,
     )
     for _chr_name, s_chr, _p_chr in s_chr_iter:
         # Must own data (not a view) and be writable
@@ -2028,13 +2028,13 @@ def test_secular_memory_estimate_includes_per_chr_temporaries() -> None:
 
 @pytest.mark.tier1
 def test_secular_path_skips_s_full_allocation() -> None:
-    """Secular path (yield_s_chr=True) does not accumulate S_full.
+    """S_CHR mode does not accumulate S_full.
 
     Verifies that the streaming kinship function does not waste an n×n S_full
-    allocation when operating in secular mode. The caller (run_lmm_loco)
+    allocation when operating in S_CHR mode. The caller (run_lmm_loco)
     reconstructs K_full from S_chr instead.
     """
-    from jamma.lmm.loco import _compute_loco_kinship_streaming_numpy
+    from jamma.lmm.loco import LocoStreamingMode, _compute_loco_kinship_streaming_numpy
 
     p_full, s_chr_iter, _ = _compute_loco_kinship_streaming_numpy(
         _LOCO_BFILE,
@@ -2042,7 +2042,7 @@ def test_secular_path_skips_s_full_allocation() -> None:
         miss_threshold=1.0,
         check_memory=False,
         show_progress=False,
-        yield_s_chr=True,
+        mode=LocoStreamingMode.S_CHR,
     )
 
     # Consume iterator, reconstructing K_full from S_chr (as run_lmm_loco does)

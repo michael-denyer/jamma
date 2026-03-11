@@ -50,8 +50,19 @@ _DEFLATION_GUARD: float = 1e-300
 _DEFLATION_FILL: float = 1.0 / _DEFLATION_GUARD  # reciprocal used as safe fill
 
 # Maximum DLAED4-to-Python fallbacks before aborting secular path.
-# Each fallback is O(n^3) vs O(n^2); too many indicates a systemic issue.
+# Each fallback uses np.linalg.eigh (O(n^3)) instead of DLAED4 (O(n^2)
+# for all n eigenvalues); too many indicates a systemic issue.
 _MAX_DLAED4_FALLBACKS: int = 5
+
+
+class DLAED4ConvergenceError(RuntimeError):
+    """DLAED4 failed to converge for a specific eigenvalue.
+
+    Raised by the thin Python wrappers around the C extension when DLAED4
+    returns info > 0 (convergence failure). Caught by the secular solver's
+    fallback logic to trigger per-step Python eigh recovery.
+    """
+
 
 # ---------------------------------------------------------------------------
 # C extension for rank-1 eigenvalue update via LAPACK DLAED4
@@ -97,7 +108,7 @@ def _try_import_secular() -> tuple[bool, object | None, object | None]:
         _test_d = np.array([1.0, 2.0, 3.0])
         _test_z = np.array([1.0, 1.0, 1.0])
         rank1_eigenvalues_and_norms(_test_d, 0.1, _test_z)
-    except RuntimeError as e:
+    except (RuntimeError, ValueError) as e:
         if "not resolved" in str(e):
             logger.warning(
                 "_secular_accel imported but DLAED4 symbol not resolved "
@@ -114,10 +125,39 @@ def _try_import_secular() -> tuple[bool, object | None, object | None]:
     return True, rank1_eigenvalue_update, rank1_eigenvalues_and_norms
 
 
-_SECULAR_ACCEL_AVAILABLE, _rank1_update_c, _rank1_eigs_norms_c = _try_import_secular()
+_SECULAR_ACCEL_AVAILABLE, _rank1_update_c_raw, _rank1_eigs_norms_c_raw = (
+    _try_import_secular()
+)
 if not _SECULAR_ACCEL_AVAILABLE:
-    _rank1_update_c = None  # type: ignore[assignment]
-    _rank1_eigs_norms_c = None  # type: ignore[assignment]
+    _rank1_update_c_raw = None  # type: ignore[assignment]
+    _rank1_eigs_norms_c_raw = None  # type: ignore[assignment]
+
+
+def _wrap_c_call(fn: object, *args: object) -> object:
+    """Call a C extension function, converting DLAED4 RuntimeErrors.
+
+    The C extension raises RuntimeError for DLAED4 convergence failures
+    (info > 0) and ValueError for parameter errors (info < 0). This wrapper
+    converts the convergence RuntimeErrors to DLAED4ConvergenceError so the
+    fallback logic can catch them by type instead of string-matching.
+    """
+    try:
+        return fn(*args)  # type: ignore[operator]
+    except RuntimeError as e:
+        msg = str(e)
+        if "DLAED4" in msg and ("converge" in msg.lower() or "info=" in msg):
+            raise DLAED4ConvergenceError(msg) from e
+        raise  # Non-DLAED4 RuntimeError — propagate as-is
+
+
+def _rank1_update_c(d: np.ndarray, rho: float, z: np.ndarray) -> tuple:
+    """Wrapped C extension rank-1 eigenvalue update."""
+    return _wrap_c_call(_rank1_update_c_raw, d, rho, z)  # type: ignore[return-value]
+
+
+def _rank1_eigs_norms_c(d: np.ndarray, rho: float, z: np.ndarray) -> tuple:
+    """Wrapped C extension rank-1 eigenvalues and norms."""
+    return _wrap_c_call(_rank1_eigs_norms_c_raw, d, rho, z)  # type: ignore[return-value]
 
 
 def _rank1_update_python(
@@ -212,12 +252,12 @@ def _apply_vj_to_rows_blocked(
         V_j[l, k] = z_j[l] / (d_j[l] - lambda_j[k]) / norm_j[k]
 
     For deflated eigenvalues (where z_j[l] ≈ 0 and d_j[l] = lambda_j[k]),
-    the column is handled as a standard-basis vector e_l: the deflated component
-    contributes R[:, l] * z_j[l] / 0 which blows up, but since z_j[l] ≈ 0 the
-    term is 0/0. The `_compute_cauchy_norms` function handles this by setting the
-    deflation guard on the d_j[l] - lambda_j[k] = 0 term to 1e300, making the
-    contribution effectively zero. The remaining (non-deflated) terms correctly
-    reconstruct the deflated eigenvector.
+    the Cauchy term z_j[l] / (d_j[l] - lambda_j[k]) is 0/0. The inline
+    deflation guard (see diffs/DEFLATION_FILL below) sets the denominator to
+    1e300, making z_j[l] / 1e300 ≈ 0. This approximation is valid when
+    z_j[l] ≈ 0 but does not explicitly handle deflated columns as e_l — use
+    `_apply_vj_to_rows_blocked_with_deflation` when explicit deflation
+    handling is needed.
 
     Uses blocked Cauchy multiply: processes col_block_size columns at a time,
     avoiding materialization of the full n x n Cauchy matrix.
@@ -487,6 +527,8 @@ def _secular_eigendecompose_delta_path(
     row_batch_size: int,
     col_block_size: int,
     t0: float,
+    check_orthogonality: bool = False,
+    reorth_threshold: float = 1e-6,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Delta-path secular eigendecomposition for large n (no Q = np.eye(n) allocation).
 
@@ -586,9 +628,7 @@ def _secular_eigendecompose_delta_path(
         if _SECULAR_ACCEL_AVAILABLE:
             try:
                 lambda_j, _ = _rank1_eigs_norms_c(d_current, rho_j_eff, q_j_unit)
-            except RuntimeError as e:
-                if "DLAED4" not in str(e) and "convergence" not in str(e).lower():
-                    raise  # Non-DLAED4 RuntimeError — propagate
+            except DLAED4ConvergenceError as e:
                 n_fallbacks += 1
                 logger.warning(
                     f"DLAED4 failure at secular delta step j={j}/{r_eff} "
@@ -699,6 +739,22 @@ def _secular_eigendecompose_delta_path(
             cur = 1 - cur
 
         U_loco[row_start:row_end, :] = R
+
+    # Post-hoc orthogonality check and optional QR re-orthogonalization (delta path)
+    if check_orthogonality:
+        gram = U_loco.T @ U_loco
+        deviation = float(np.max(np.abs(gram - np.eye(n))))
+        logger.debug(
+            f"secular_eigendecompose_from_full: orthogonality check "
+            f"max|U^T U - I| = {deviation:.2e} (n={n}, r_eff={r_eff}, path=delta)"
+        )
+        if deviation > reorth_threshold:
+            logger.warning(
+                f"secular_eigendecompose_from_full: eigenvector orthogonality "
+                f"drift detected: max|U^T U - I| = {deviation:.2e}. "
+                f"Applying QR re-orthogonalization."
+            )
+            U_loco, _ = np.linalg.qr(U_loco, mode="reduced")
 
     # Zero near-zero eigenvalues
     _apply_threshold(d_current, threshold)
@@ -820,6 +876,9 @@ def secular_eigendecompose_from_full(
     n_threshold_for_delta: int = 5000,
     row_batch_size: int = 1000,
     col_block_size: int = 1000,
+    check_orthogonality: bool = False,
+    reorth_interval: int | None = None,
+    reorth_threshold: float = 1e-6,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Secular equation solver for LOCO eigenvalue update.
 
@@ -866,6 +925,14 @@ def secular_eigendecompose_from_full(
             Default: 1000. Lower values reduce peak memory at cost of more loops.
         col_block_size: Number of output columns per Cauchy block (delta path only).
             Default: 1000. Lower values reduce peak memory at cost of more DGEMM calls.
+        check_orthogonality: If True, compute max|U^T U - I| after eigenvector
+            reconstruction and log via logger.debug. If deviation > reorth_threshold,
+            applies QR re-orthogonalization and logs a warning. Default: False.
+        reorth_interval: Q path only. If not None, apply QR re-orthogonalization to
+            the accumulated Q matrix every reorth_interval steps. Reduces drift from
+            floating-point accumulation across many steps. Default: None (disabled).
+        reorth_threshold: Deviation threshold above which post-hoc QR is applied when
+            check_orthogonality=True. Default: 1e-6.
 
     Returns:
         Tuple (d_loco, U_loco) where:
@@ -956,6 +1023,8 @@ def secular_eigendecompose_from_full(
             row_batch_size,
             col_block_size,
             t0,
+            check_orthogonality=check_orthogonality,
+            reorth_threshold=reorth_threshold,
         )
 
     # Sequential rank-1 updates:
@@ -982,8 +1051,13 @@ def secular_eigendecompose_from_full(
         # rank1_update requires unit-norm z; rho_j is adjusted accordingly.
         norm_q = np.linalg.norm(q_j)
         if norm_q < 1e-14:
-            # Degenerate: this singular vector is orthogonal to all current basis
-            # vectors. Skip this rank-1 update (eigenvalues unchanged for this step).
+            # Degenerate: ||q_j|| has drifted below 1e-14, indicating severe
+            # floating-point erosion in the accumulated Q matrix. Skip this
+            # near-zero rank-1 update (numerical noise, not meaningful).
+            logger.debug(
+                f"secular Q-path step j={j}/{r_eff}: degenerate "
+                f"(norm_q={norm_q:.2e}), skipping rank-1 update"
+            )
             continue
         rho_j_eff = rho_j * norm_q**2
         q_j_unit = q_j / norm_q
@@ -993,9 +1067,7 @@ def secular_eigendecompose_from_full(
         if _SECULAR_ACCEL_AVAILABLE:
             try:
                 d_new, V_j = _rank1_update_c(d_current, rho_j_eff, q_j_unit)
-            except RuntimeError as e:
-                if "DLAED4" not in str(e) and "convergence" not in str(e).lower():
-                    raise  # Non-DLAED4 RuntimeError — propagate
+            except DLAED4ConvergenceError as e:
                 n_fallbacks += 1
                 logger.warning(
                     f"DLAED4 failure at secular Q step j={j}/{r_eff} "
@@ -1025,6 +1097,10 @@ def secular_eigendecompose_from_full(
         # Accumulate: Q_{j+1} = Q_j @ V_j
         Q = Q @ V_j
 
+        # Periodic QR re-orthogonalization to limit drift across many steps
+        if reorth_interval is not None and (j + 1) % reorth_interval == 0:
+            Q, _ = np.linalg.qr(Q, mode="reduced")
+
     if n_fallbacks > 0:
         logger.warning(
             f"DLAED4 fell back to Python eigh on {n_fallbacks}/{r_eff} Q-path "
@@ -1034,6 +1110,22 @@ def secular_eigendecompose_from_full(
 
     # Back-rotate: U_loco = U_full @ Q
     U_loco = np.matmul(U_full, Q)
+
+    # Post-hoc orthogonality check and optional QR re-orthogonalization (Q path)
+    if check_orthogonality:
+        gram = U_loco.T @ U_loco
+        deviation = float(np.max(np.abs(gram - np.eye(n))))
+        logger.debug(
+            f"secular_eigendecompose_from_full: orthogonality check "
+            f"max|U^T U - I| = {deviation:.2e} (n={n}, r_eff={r_eff}, path=Q)"
+        )
+        if deviation > reorth_threshold:
+            logger.warning(
+                f"secular_eigendecompose_from_full: eigenvector orthogonality "
+                f"drift detected: max|U^T U - I| = {deviation:.2e}. "
+                f"Applying QR re-orthogonalization."
+            )
+            U_loco, _ = np.linalg.qr(U_loco, mode="reduced")
 
     # Zero near-zero eigenvalues (same as loco_eigendecompose_from_full)
     _apply_threshold(d_current, threshold)

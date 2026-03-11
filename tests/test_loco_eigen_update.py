@@ -21,6 +21,7 @@ from jamma.lmm.loco_eigen_update import (
     _apply_vj_to_rows_blocked,
     _apply_vj_transpose_to_vec_blocked,
     _find_deflated_columns,
+    _rank1_eigenvalues_and_norms_python,
     _rank1_update_python,
     loco_eigendecompose_from_full,
     measure_effective_rank,
@@ -1177,12 +1178,12 @@ def test_secular_q_path_dlaed4_fallback() -> None:
     # Get reference result with no mocking
     d_ref, U_ref = secular_eigendecompose_from_full(d_full, U_full, X_c, p_full, p_chr)
 
-    # Mock C extension to always raise RuntimeError, forcing Python fallback
+    # Mock C extension to always raise DLAED4ConvergenceError, forcing Python fallback
     with (
         patch("jamma.lmm.loco_eigen_update._SECULAR_ACCEL_AVAILABLE", True),
         patch(
-            "jamma.lmm.loco_eigen_update._rank1_update_c",
-            side_effect=RuntimeError("mocked DLAED4 failure"),
+            "jamma.lmm.loco_eigen_update._rank1_update_c_raw",
+            side_effect=RuntimeError("DLAED4(i=1) failed to converge (info=1)"),
         ),
     ):
         d_fallback, U_fallback = secular_eigendecompose_from_full(
@@ -1214,8 +1215,8 @@ def test_secular_q_path_dlaed4_fallback_abort() -> None:
     with (
         patch("jamma.lmm.loco_eigen_update._SECULAR_ACCEL_AVAILABLE", True),
         patch(
-            "jamma.lmm.loco_eigen_update._rank1_update_c",
-            side_effect=RuntimeError("mocked DLAED4 failure"),
+            "jamma.lmm.loco_eigen_update._rank1_update_c_raw",
+            side_effect=RuntimeError("DLAED4(i=1) failed to converge (info=1)"),
         ),
         pytest.raises(RuntimeError, match="systemic issue"),
     ):
@@ -1245,8 +1246,8 @@ def test_secular_delta_path_dlaed4_fallback_abort() -> None:
     with (
         patch("jamma.lmm.loco_eigen_update._SECULAR_ACCEL_AVAILABLE", True),
         patch(
-            "jamma.lmm.loco_eigen_update._rank1_eigs_norms_c",
-            side_effect=RuntimeError("mocked DLAED4 failure"),
+            "jamma.lmm.loco_eigen_update._rank1_eigs_norms_c_raw",
+            side_effect=RuntimeError("DLAED4(i=1) failed to converge (info=1)"),
         ),
         pytest.raises(RuntimeError, match="systemic issue"),
     ):
@@ -1285,3 +1286,360 @@ def test_find_deflated_columns_no_deflation() -> None:
     eigenvalues = np.array([0.9, 2.1, 3.2])
     result = _find_deflated_columns(z_unit, d, eigenvalues)
     assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# Python fallback norms verification (Important #6)
+# ---------------------------------------------------------------------------
+
+
+def test_rank1_eigenvalues_and_norms_python_matches_c() -> None:
+    """Python fallback eigenvalues+norms match C extension output."""
+    from jamma.lmm.loco_eigen_update import (
+        _SECULAR_ACCEL_AVAILABLE,
+        _rank1_eigs_norms_c,
+    )
+
+    if not _SECULAR_ACCEL_AVAILABLE:
+        pytest.skip("C extension not available")
+
+    rng = np.random.default_rng(90)
+    n = 30
+    d = np.sort(rng.random(n) * 10)
+    z = rng.standard_normal(n)
+    rho = 0.5
+
+    evals_c, norms_c = _rank1_eigs_norms_c(d, rho, z)
+    evals_py, norms_py = _rank1_eigenvalues_and_norms_python(d, rho, z)
+
+    np.testing.assert_allclose(evals_py, evals_c, rtol=1e-10, atol=1e-14)
+    np.testing.assert_allclose(norms_py, norms_c, rtol=1e-6, atol=1e-14)
+
+
+def test_rank1_eigenvalues_and_norms_python_near_degenerate() -> None:
+    """Python fallback handles near-degenerate d (deflation guard active)."""
+    # Two nearly identical d values force the deflation guard path
+    d = np.array([1.0, 1.0 + 1e-15, 3.0, 5.0])
+    z = np.array([0.5, 1e-16, 0.5, 0.5])  # z[1] ~ 0 triggers deflation
+    rho = -0.3
+
+    evals, norms = _rank1_eigenvalues_and_norms_python(d, rho, z)
+
+    assert evals.shape == (4,)
+    assert norms.shape == (4,)
+    assert np.all(np.isfinite(evals)), "Eigenvalues should be finite"
+    assert np.all(np.isfinite(norms)), "Norms should be finite"
+    assert np.all(norms >= 0), "Norms should be non-negative"
+
+
+# ---------------------------------------------------------------------------
+# Non-DLAED4 RuntimeError propagation (Important #7)
+# ---------------------------------------------------------------------------
+
+
+def test_non_dlaed4_runtime_error_propagates_q_path() -> None:
+    """Non-DLAED4 RuntimeErrors propagate immediately, not caught as fallback."""
+    rng = np.random.default_rng(91)
+    n = 20
+    p_chr = 5
+    p_full = 50
+
+    d_full = np.sort(rng.random(n))
+    K = rng.standard_normal((n, n))
+    K = K @ K.T / n
+    U_full = np.linalg.eigh(K)[1]
+    X_c = rng.standard_normal((n, p_chr))
+
+    with (
+        patch("jamma.lmm.loco_eigen_update._SECULAR_ACCEL_AVAILABLE", True),
+        patch(
+            "jamma.lmm.loco_eigen_update._rank1_update_c_raw",
+            side_effect=RuntimeError("unexpected memory corruption"),
+        ),
+        pytest.raises(RuntimeError, match="unexpected memory corruption"),
+    ):
+        secular_eigendecompose_from_full(
+            d_full,
+            U_full,
+            X_c,
+            p_full,
+            p_chr,
+            n_threshold_for_delta=n + 1,  # force Q path
+        )
+
+
+def test_non_dlaed4_runtime_error_propagates_delta_path() -> None:
+    """Non-DLAED4 RuntimeErrors propagate on delta path too."""
+    rng = np.random.default_rng(92)
+    n = 20
+    p_chr = 5
+    p_full = 50
+
+    d_full = np.sort(rng.random(n))
+    K = rng.standard_normal((n, n))
+    K = K @ K.T / n
+    U_full = np.linalg.eigh(K)[1]
+    X_c = rng.standard_normal((n, p_chr))
+
+    with (
+        patch("jamma.lmm.loco_eigen_update._SECULAR_ACCEL_AVAILABLE", True),
+        patch(
+            "jamma.lmm.loco_eigen_update._rank1_eigs_norms_c_raw",
+            side_effect=RuntimeError("unexpected memory corruption"),
+        ),
+        pytest.raises(RuntimeError, match="unexpected memory corruption"),
+    ):
+        secular_eigendecompose_from_full(
+            d_full,
+            U_full,
+            X_c,
+            p_full,
+            p_chr,
+            n_threshold_for_delta=0,  # force delta path
+        )
+
+
+# ---------------------------------------------------------------------------
+# Delta path single-fallback recovery (Important #8)
+# ---------------------------------------------------------------------------
+
+
+def test_secular_delta_path_dlaed4_single_fallback_recovery() -> None:
+    """Delta path recovers correctly from a single DLAED4 failure."""
+    rng = np.random.default_rng(93)
+    n = 20
+    p_chr = 5
+    p_full = 50
+
+    d_full = np.sort(rng.random(n))
+    K = rng.standard_normal((n, n))
+    K = K @ K.T / n
+    U_full = np.linalg.eigh(K)[1]
+    X_c = rng.standard_normal((n, p_chr))
+
+    # Reference: no mocking
+    d_ref, U_ref = secular_eigendecompose_from_full(
+        d_full,
+        U_full,
+        X_c,
+        p_full,
+        p_chr,
+        n_threshold_for_delta=0,
+    )
+
+    # Mock C extension to fail on first call only, then succeed
+    call_count = 0
+    original_fn = None
+
+    # Get the raw C function if available
+    from jamma.lmm.loco_eigen_update import _rank1_eigs_norms_c_raw
+
+    if _rank1_eigs_norms_c_raw is None:
+        pytest.skip("C extension not available")
+    original_fn = _rank1_eigs_norms_c_raw
+
+    def fail_once(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("DLAED4(i=3) failed to converge (info=1)")
+        return original_fn(*args, **kwargs)
+
+    with (
+        patch("jamma.lmm.loco_eigen_update._SECULAR_ACCEL_AVAILABLE", True),
+        patch(
+            "jamma.lmm.loco_eigen_update._rank1_eigs_norms_c_raw",
+            side_effect=fail_once,
+        ),
+    ):
+        d_fallback, U_fallback = secular_eigendecompose_from_full(
+            d_full,
+            U_full,
+            X_c,
+            p_full,
+            p_chr,
+            n_threshold_for_delta=0,  # force delta path
+        )
+
+    np.testing.assert_allclose(d_fallback, d_ref, rtol=1e-10, atol=1e-14)
+
+
+# ---------------------------------------------------------------------------
+# Orthogonality monitoring and re-orthogonalization (Plan 69.5-01)
+# ---------------------------------------------------------------------------
+
+
+def test_orthogonality_param_accepted():
+    """ORTH-01: check_orthogonality=True runs without error, returns valid (d, U)."""
+    _, d_full, U_full, _, _, p_full, p_chr, X_c = _make_synthetic_dataset(
+        n=200, p=500, p_c=100, seed=42
+    )
+
+    # Default path (Q path for n=200)
+    d_ref, U_ref = secular_eigendecompose_from_full(d_full, U_full, X_c, p_full, p_chr)
+
+    # Same call with check_orthogonality=True — must not raise
+    d_orth, U_orth = secular_eigendecompose_from_full(
+        d_full, U_full, X_c, p_full, p_chr, check_orthogonality=True
+    )
+
+    # Results must be numerically identical (flag is diagnostic only)
+    np.testing.assert_allclose(
+        np.sort(d_orth),
+        np.sort(d_ref),
+        rtol=1e-10,
+        err_msg="check_orthogonality=True changed eigenvalue results",
+    )
+
+
+def test_orthogonality_log_deviation():
+    """ORTH-02: check_orthogonality=True logs deviation via loguru debug."""
+    import re
+
+    import jamma.lmm.loco_eigen_update as _mod
+
+    _, d_full, U_full, _, _, p_full, p_chr, X_c = _make_synthetic_dataset(
+        n=200, p=500, p_c=100, seed=42
+    )
+
+    logged_messages: list[str] = []
+
+    def _capture_debug(msg, *args, **kwargs):
+        logged_messages.append(str(msg))
+
+    with patch.object(_mod.logger, "debug", side_effect=_capture_debug):
+        secular_eigendecompose_from_full(
+            d_full, U_full, X_c, p_full, p_chr, check_orthogonality=True
+        )
+
+    # At least one debug message must contain "orthogonality check"
+    orth_msgs = [m for m in logged_messages if "orthogonality check" in m]
+    assert len(orth_msgs) > 0, (
+        f"Expected a debug log containing 'orthogonality check', "
+        f"got messages: {logged_messages}"
+    )
+
+    # The deviation value must be < 1e-8 for n=200, r_eff~50
+    deviation_values: list[float] = []
+    for msg in orth_msgs:
+        match = re.search(r"max\|U\^T U - I\| = ([0-9.e+\-]+)", msg)
+        if match:
+            deviation_values.append(float(match.group(1)))
+
+    assert len(deviation_values) > 0, (
+        f"Could not parse deviation from log messages: {orth_msgs}"
+    )
+    for dev in deviation_values:
+        assert dev < 1e-8, f"Orthogonality deviation {dev:.2e} exceeds 1e-8 for n=200"
+
+
+def test_reorth_q_path():
+    """ORTH-03: Q path reorth_interval=10 gives tighter orthogonality at n=300."""
+    import re
+
+    import jamma.lmm.loco_eigen_update as _mod
+
+    _, d_full, U_full, _, _, p_full, p_chr, X_c = _make_synthetic_dataset(
+        n=300, p=600, p_c=120, seed=7
+    )
+
+    # Capture deviation from run with check_orthogonality=True, no reorth
+    logged_no_reorth: list[str] = []
+    logged_with_reorth: list[str] = []
+
+    def _capture_no_reorth(msg, *args, **kwargs):
+        logged_no_reorth.append(str(msg))
+
+    def _capture_with_reorth(msg, *args, **kwargs):
+        logged_with_reorth.append(str(msg))
+
+    def _extract_deviation(messages: list[str]) -> float | None:
+        for m in messages:
+            match = re.search(r"max\|U\^T U - I\| = ([0-9.e+\-]+)", m)
+            if match and "orthogonality check" in m:
+                return float(match.group(1))
+        return None
+
+    with patch.object(_mod.logger, "debug", side_effect=_capture_no_reorth):
+        secular_eigendecompose_from_full(
+            d_full,
+            U_full,
+            X_c,
+            p_full,
+            p_chr,
+            check_orthogonality=True,
+            n_threshold_for_delta=99999,  # force Q path
+        )
+
+    with patch.object(_mod.logger, "debug", side_effect=_capture_with_reorth):
+        secular_eigendecompose_from_full(
+            d_full,
+            U_full,
+            X_c,
+            p_full,
+            p_chr,
+            check_orthogonality=True,
+            reorth_interval=10,
+            n_threshold_for_delta=99999,  # force Q path
+        )
+
+    dev_no_reorth = _extract_deviation(logged_no_reorth)
+    dev_with_reorth = _extract_deviation(logged_with_reorth)
+
+    assert dev_no_reorth is not None, (
+        f"No orthogonality deviation found in no-reorth logs: {logged_no_reorth}"
+    )
+    assert dev_with_reorth is not None, (
+        f"No orthogonality deviation found in reorth logs: {logged_with_reorth}"
+    )
+
+    # reorth_interval should produce tighter or equal deviation (< 1e-10 target)
+    assert dev_with_reorth < 1e-10, (
+        f"reorth_interval=10 deviation {dev_with_reorth:.2e} exceeds 1e-10"
+    )
+    # The re-orth run should not be worse than the non-reorth run
+    assert dev_with_reorth <= dev_no_reorth * 10, (
+        f"Unexpected: reorth deviation {dev_with_reorth:.2e} is much worse than "
+        f"no-reorth deviation {dev_no_reorth:.2e}"
+    )
+
+
+def test_reorth_delta_path_posthoc():
+    """ORTH-04: Delta path post-hoc QR triggers when reorth_threshold=0.0."""
+    import jamma.lmm.loco_eigen_update as _mod
+
+    _, d_full, U_full, _, _, p_full, p_chr, X_c = _make_synthetic_dataset(
+        n=200, p=500, p_c=100, seed=42
+    )
+
+    warning_messages: list[str] = []
+
+    def _capture_warning(msg, *args, **kwargs):
+        warning_messages.append(str(msg))
+
+    # Force delta path via n_threshold_for_delta=0
+    # reorth_threshold=0.0 means any deviation > 0 triggers QR re-orthogonalization
+    with patch.object(_mod.logger, "warning", side_effect=_capture_warning):
+        d_orth, U_orth = secular_eigendecompose_from_full(
+            d_full,
+            U_full,
+            X_c,
+            p_full,
+            p_chr,
+            n_threshold_for_delta=0,  # force delta path
+            check_orthogonality=True,
+            reorth_threshold=0.0,  # any deviation triggers re-orth
+        )
+
+    # logger.warning should have been called with "re-orthogonalization"
+    reorth_msgs = [m for m in warning_messages if "re-orthogonalization" in m]
+    assert len(reorth_msgs) > 0, (
+        f"Expected a warning log containing 're-orthogonalization', "
+        f"got warnings: {warning_messages}"
+    )
+
+    # After QR, eigenvectors must be near-orthogonal
+    deviation = float(np.max(np.abs(U_orth.T @ U_orth - np.eye(U_orth.shape[0]))))
+    assert deviation < 1e-12, (
+        f"Post-QR eigenvectors not orthogonal: max|U^T U - I| = {deviation:.2e}"
+    )

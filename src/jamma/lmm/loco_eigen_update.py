@@ -40,10 +40,14 @@ _DEFAULT_THRESHOLD: float = 1e-10
 
 try:
     from jamma.lmm._secular_accel import rank1_eigenvalue_update as _rank1_update_c
+    from jamma.lmm._secular_accel import (
+        rank1_eigenvalues_and_norms as _rank1_eigs_norms_c,
+    )
 
     _SECULAR_ACCEL_AVAILABLE = True
 except ImportError:
     _SECULAR_ACCEL_AVAILABLE = False
+    _rank1_eigs_norms_c = None  # type: ignore[assignment]
 
 
 def _rank1_update_python(
@@ -68,6 +72,522 @@ def _rank1_update_python(
     """
     M = np.diag(d) + rho * np.outer(z, z)
     return np.linalg.eigh(M)
+
+
+def _rank1_eigenvalues_and_norms_python(
+    d: np.ndarray,
+    rho: float,
+    z: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Pure Python fallback for eigenvalues+norms of D + rho * z @ z.T.
+
+    Computes eigenvalues via np.linalg.eigh (O(n^3) fallback) then computes
+    norm_j[k] = ||z_unit / (d - eigenvalues[k])||_2 for each k.
+
+    Args:
+        d: (n,) ascending diagonal elements.
+        rho: Scalar multiplier (can be negative for LOCO downdate).
+        z: (n,) rank-1 update vector (normalised internally).
+
+    Returns:
+        Tuple (eigenvalues, norms) both shape (n,) ascending.
+    """
+    z_norm = np.linalg.norm(z)
+    z_unit = z / z_norm if z_norm > 0.0 else z.copy()
+    rho_eff = rho * (z_norm**2)
+
+    M = np.diag(d) + rho_eff * np.outer(z_unit, z_unit)
+    eigenvalues, _ = np.linalg.eigh(M)
+
+    # Compute norms: norm_j[k] = ||z_unit / (d - eigenvalues[k])||_2
+    # Deflation guard: skip terms where |delta| < 1e-300
+    n = len(d)
+    norms = np.empty(n)
+    for k in range(n):
+        delta_k = d - eigenvalues[k]
+        safe = np.abs(delta_k) > 1e-300
+        norm_sq = np.sum((z_unit[safe] / delta_k[safe]) ** 2)
+        norms[k] = np.sqrt(norm_sq) if norm_sq > 0.0 else 0.0
+
+    return eigenvalues, norms
+
+
+def _apply_vj_to_rows_blocked(
+    R: np.ndarray,
+    z_j: np.ndarray,
+    d_j: np.ndarray,
+    lambda_j: np.ndarray,
+    norm_j: np.ndarray,
+    col_block_size: int = 1000,
+) -> np.ndarray:
+    """Apply implicit V_j to row batch R without materializing n x n V_j.
+
+    Computes R @ V_j where:
+        V_j[l, k] = z_j[l] / (d_j[l] - lambda_j[k]) / norm_j[k]
+
+    For deflated eigenvalues (where z_j[l] ≈ 0 and d_j[l] = lambda_j[k]),
+    the column is handled as a standard-basis vector e_l: the deflated component
+    contributes R[:, l] * z_j[l] / 0 which blows up, but since z_j[l] ≈ 0 the
+    term is 0/0. The `_compute_cauchy_norms` function handles this by setting the
+    deflation guard on the d_j[l] - lambda_j[k] = 0 term to 1e300, making the
+    contribution effectively zero. The remaining (non-deflated) terms correctly
+    reconstruct the deflated eigenvector.
+
+    Uses blocked Cauchy multiply: processes col_block_size columns at a time,
+    avoiding materialization of the full n x n Cauchy matrix.
+
+    Args:
+        R: (b, n) batch of b rows of the current accumulation matrix.
+        z_j: (n,) unit-norm update vector for step j (may have near-zero components
+            for deflated indices).
+        d_j: (n,) diagonal at the START of step j (before rank-1 update).
+        lambda_j: (n,) eigenvalues AFTER rank-1 update at step j (ascending).
+        norm_j: (n,) normalization factors:
+            norm_j[k] = ||z_j / (d_j - lambda_j[k])||_2,
+            self-consistent with the Cauchy formula deflation guard.
+        col_block_size: Number of output columns to compute per block (memory control).
+
+    Returns:
+        (b, n) result of R @ V_j.
+    """
+    b, n = R.shape
+    # A[i, l] = R[i, l] * z_j[l] — elementwise broadcast
+    A = R * z_j  # (b, n)
+    R_new = np.empty_like(R)
+    for k_start in range(0, n, col_block_size):
+        k_end = min(k_start + col_block_size, n)
+        lam_block = lambda_j[k_start:k_end]  # (m,)
+        # C_block[l, k] = 1 / (d_j[l] - lambda_j[k_start + k])  — shape (n, m)
+        diffs = d_j[:, np.newaxis] - lam_block  # (n, m)
+        # Deflation guard: when d_j[l] = lambda_j[k] (deflated eigenvalue), the
+        # corresponding z_j[l] ≈ 0, so the contribution to V[:,k] is 0/0 ≈ 0.
+        # Setting the diff to 1e300 makes A[:,l] / diff ≈ z_j[l] / 1e300 ≈ 0.
+        diffs = np.where(np.abs(diffs) > 1e-300, diffs, 1e300)
+        C_block = 1.0 / diffs
+        # DGEMM: (b, n) @ (n, m) -> (b, m); scale by 1/norm_j
+        R_new[:, k_start:k_end] = (A @ C_block) * (1.0 / norm_j[k_start:k_end])
+    return R_new
+
+
+def _apply_vj_transpose_to_vec_blocked(
+    v: np.ndarray,
+    z_j: np.ndarray,
+    d_j: np.ndarray,
+    lambda_j: np.ndarray,
+    norm_j: np.ndarray,
+    col_block_size: int = 1000,
+) -> np.ndarray:
+    """Apply V_j.T to a single vector v using blocked Cauchy multiply.
+
+    Computes (V_j.T @ v) where:
+        (V_j.T @ v)[k] = (1/norm_j[k]) * sum_l (z_j[l] * v[l]) / (d_j[l] - lambda_j[k])
+
+    Used in the delta-path forward pass to project u_z[:,j] into the current
+    eigenbasis without materializing Q.
+
+    Args:
+        v: (n,) input vector.
+        z_j: (n,) unit-norm update vector for step j.
+        d_j: (n,) diagonal at the START of step j (before rank-1 update).
+        lambda_j: (n,) eigenvalues AFTER rank-1 update at step j (ascending).
+        norm_j: (n,) normalization factors.
+        col_block_size: Number of output elements to compute per block.
+
+    Returns:
+        (n,) result of V_j.T @ v.
+    """
+    c = z_j * v  # (n,) elementwise: c[l] = z_j[l] * v[l]
+    n = len(v)
+    result = np.empty(n)
+    for k_start in range(0, n, col_block_size):
+        k_end = min(k_start + col_block_size, n)
+        lam_block = lambda_j[k_start:k_end]  # (m,)
+        # C_block[l, k] = 1 / (d_j[l] - lambda_j[k_start + k])  — shape (n, m)
+        diffs = d_j[:, np.newaxis] - lam_block  # (n, m)
+        # Deflation guard: avoid division by zero at pole locations
+        diffs = np.where(np.abs(diffs) > 1e-300, diffs, 1e300)
+        C_block = 1.0 / diffs
+        result[k_start:k_end] = (c @ C_block) / norm_j[k_start:k_end]
+    return result
+
+
+def _find_deflated_columns(
+    z_unit: np.ndarray,
+    d: np.ndarray,
+    eigenvalues: np.ndarray,
+    tol_z: float = 1e-10,
+) -> dict[int, int]:
+    """Identify deflated eigenvector columns in a rank-1 secular update.
+
+    A column k is deflated when z_unit[l] ≈ 0 AND eigenvalues[k] = d[l] (i.e.,
+    the k-th eigenvalue coincides with d[l], meaning the k-th eigenvector is e_l).
+    This matches DLAED4's "Type 1" deflation: when |z[l]| is below a threshold,
+    the corresponding eigenvalue stays at d[l] and eigenvector = e_l.
+
+    Args:
+        z_unit: (n,) unit-norm update vector.
+        d: (n,) diagonal before rank-1 update.
+        eigenvalues: (n,) eigenvalues after rank-1 update, ascending.
+        tol_z: Threshold below which z_unit[l] is considered deflated.
+
+    Returns:
+        Dict mapping column index k to row index l: deflated eigenvector at
+        column k is e_l. Empty dict if no deflation detected.
+    """
+    n = len(d)
+    deflated: dict[int, int] = {}
+    # Build a set of deflated d-indices: where |z_unit[idx]| < tol_z
+    for idx in range(n):
+        if abs(z_unit[idx]) < tol_z:
+            # Find eigenvalue k that equals d[idx]
+            for k in range(n):
+                if eigenvalues[k] == d[idx]:
+                    deflated[k] = idx
+                    break
+    return deflated
+
+
+def _apply_vj_to_rows_blocked_with_deflation(
+    R: np.ndarray,
+    z_j: np.ndarray,
+    d_j: np.ndarray,
+    lambda_j: np.ndarray,
+    norm_j: np.ndarray,
+    deflated: dict[int, int],
+    col_block_size: int = 1000,
+) -> np.ndarray:
+    """Apply implicit V_j to row batch R, with explicit deflation handling.
+
+    For non-deflated columns: uses blocked Cauchy formula.
+    For deflated column k (at position l): applies R[:, l] (Cauchy breaks down).
+
+    Args:
+        R: (b, n) batch of rows.
+        z_j: (n,) unit-norm update vector.
+        d_j: (n,) diagonal before rank-1 update.
+        lambda_j: (n,) eigenvalues after rank-1 update, ascending.
+        norm_j: (n,) self-consistent Cauchy norms.
+        deflated: dict mapping deflated column k -> row index l.
+        col_block_size: Columns per Cauchy block.
+
+    Returns:
+        (b, n) result of R @ V_j.
+    """
+    b, n = R.shape
+    A = R * z_j  # (b, n)
+    R_new = np.empty_like(R)
+    for k_start in range(0, n, col_block_size):
+        k_end = min(k_start + col_block_size, n)
+        lam_block = lambda_j[k_start:k_end]
+        diffs = d_j[:, np.newaxis] - lam_block
+        diffs = np.where(np.abs(diffs) > 1e-300, diffs, 1e300)
+        C_block = 1.0 / diffs
+        R_new[:, k_start:k_end] = (A @ C_block) * (1.0 / norm_j[k_start:k_end])
+    # Override deflated columns: R_new[:, k] = R[:, row_l] (eigenvector is e_{row_l})
+    for k, row_l in deflated.items():
+        if 0 <= k < n:
+            R_new[:, k] = R[:, row_l]
+    return R_new
+
+
+def _apply_vj_transpose_to_vec_blocked_with_deflation(
+    v: np.ndarray,
+    z_j: np.ndarray,
+    d_j: np.ndarray,
+    lambda_j: np.ndarray,
+    norm_j: np.ndarray,
+    deflated: dict[int, int],
+    col_block_size: int = 1000,
+) -> np.ndarray:
+    """Apply V_j.T to vector v, with explicit deflation handling.
+
+    For non-deflated output positions: uses blocked Cauchy formula.
+    For deflated column k (at position l): (V_j.T @ v)[k] = v[l].
+
+    Args:
+        v: (n,) input vector.
+        z_j: (n,) unit-norm update vector.
+        d_j: (n,) diagonal before rank-1 update.
+        lambda_j: (n,) eigenvalues after rank-1 update, ascending.
+        norm_j: (n,) self-consistent Cauchy norms.
+        deflated: dict mapping deflated column k -> row index l.
+        col_block_size: Output elements per block.
+
+    Returns:
+        (n,) result of V_j.T @ v.
+    """
+    c = z_j * v
+    n = len(v)
+    result = np.empty(n)
+    for k_start in range(0, n, col_block_size):
+        k_end = min(k_start + col_block_size, n)
+        lam_block = lambda_j[k_start:k_end]
+        diffs = d_j[:, np.newaxis] - lam_block
+        diffs = np.where(np.abs(diffs) > 1e-300, diffs, 1e300)
+        C_block = 1.0 / diffs
+        result[k_start:k_end] = (c @ C_block) / norm_j[k_start:k_end]
+    # Override deflated positions: (V_j.T @ v)[k] = v[row_l]
+    for k, row_l in deflated.items():
+        if 0 <= k < n:
+            result[k] = v[row_l]
+    return result
+
+
+def _compute_cauchy_norms(
+    z_unit: np.ndarray,
+    d: np.ndarray,
+    eigenvalues: np.ndarray,
+    deflated: dict[int, int] | None = None,
+    col_block_size: int = 1000,
+) -> np.ndarray:
+    """Compute norm_j[k] = ||z_unit / (d - eigenvalues[k])||_2 for all k.
+
+    These norms are consistent with the blocked Cauchy formula in
+    _apply_vj_to_rows_blocked: using these norms guarantees that Cauchy
+    eigenvector columns are unit-norm by construction.
+
+    Deflation guard: terms where |d[l] - eigenvalues[k]| < 1e-300 are
+    treated as zero (deflated), contributing zero to the norm.
+
+    For deflated columns (k in deflated dict), the norm is set to 1.0 since
+    the eigenvector is e_l (unit norm), and the Cauchy formula is not used.
+
+    Uses blocked computation to avoid materializing the full (n, n) Cauchy
+    matrix. Processes col_block_size columns at a time.
+
+    Args:
+        z_unit: (n,) unit-norm update vector.
+        d: (n,) diagonal before rank-1 update.
+        eigenvalues: (n,) eigenvalues after rank-1 update, ascending.
+        deflated: Optional dict mapping deflated column k -> row index l.
+            If provided, norm[k] is set to 1.0 for deflated columns.
+        col_block_size: Number of columns to process per block. Default: 1000.
+
+    Returns:
+        (n,) norms, all positive.
+    """
+    n = len(d)
+    norms = np.empty(n)
+    for k_start in range(0, n, col_block_size):
+        k_end = min(k_start + col_block_size, n)
+        lam_block = eigenvalues[k_start:k_end]  # (m,)
+        # diffs[l, k] = d[l] - eigenvalues[k_start + k], shape (n, m)
+        diffs = d[:, np.newaxis] - lam_block  # (n, m)
+        # Deflation guard
+        diffs = np.where(np.abs(diffs) > 1e-300, diffs, 1e300)
+        ratios = z_unit[:, np.newaxis] / diffs  # (n, m)
+        norm_sq = np.sum(ratios**2, axis=0)  # (m,)
+        norms[k_start:k_end] = np.sqrt(norm_sq)
+    # Guard against zero norm (degenerate all-deflated case)
+    norms = np.where(norms > 0, norms, 1.0)
+    # For deflated columns: eigenvector is e_l (unit norm), so norm = 1.0
+    if deflated:
+        for k in deflated:
+            norms[k] = 1.0
+    return norms
+
+
+def _secular_eigendecompose_delta_path(
+    d_full: np.ndarray,
+    U_full: np.ndarray,
+    u_z: np.ndarray,
+    s: np.ndarray,
+    alpha_c: float,
+    sigma: float,
+    n: int,
+    r_eff: int,
+    threshold: float,
+    row_batch_size: int,
+    col_block_size: int,
+    t0: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Delta-path secular eigendecomposition for large n (no Q = np.eye(n) allocation).
+
+    Two-pass algorithm:
+    - Forward pass: for each step j, compute q_j = V_{j-1}.T @ ... @ V_0.T @ u_z[:,j]
+      from scratch using stored (z_k, d_k, lambda_k, norm_k_cauchy) data.
+      Cauchy norms are self-consistent: norm_k[l] = ||z_k / (d_k - lambda_k[l])||_2,
+      ensuring V_k_cauchy is unitary by construction (column l has unit norm).
+      Eigenvalues computed via _rank1_update_c (DLAED4) for accuracy.
+      Stores (z_j, d_j, lambda_j, norm_j_cauchy) — total O(4 * r_eff * n) memory.
+    - Backward pass: reconstruct U_loco row-batch by row-batch via blocked
+      Cauchy matrix multiply using stored (z_j, d_j, lambda_j, norm_j_cauchy).
+      With self-consistent Cauchy norms, V_j_cauchy columns are unit-norm by
+      construction, giving a proper unitary reconstruction.
+
+    Forward pass cost: O(r_eff^2 * n) — for each step j, apply j previous V_k.T.
+    Backward pass cost: O(n * r_eff * n / batch_size) = O(n^2 * r_eff / batch_size).
+    Memory: O(r_eff * n) stored scalars (no Q matrix, no V_j matrices).
+
+    Args:
+        d_full: (n,) full eigenvalues, ascending.
+        U_full: (n, n) full eigenvectors.
+        u_z: (n, r_eff) left singular vectors of Z = U_full.T @ X_c.
+        s: (r_eff,) singular values (descending).
+        alpha_c: Scaling factor p_full / (p_full - p_chr).
+        sigma: Downdate weight 1 / (p_full - p_chr).
+        n: Problem dimension.
+        r_eff: Effective rank.
+        threshold: Eigenvalue threshold for zeroing near-zero values.
+        row_batch_size: Number of rows to process per backward-pass batch.
+        col_block_size: Number of output columns per Cauchy block.
+        t0: Start time for elapsed logging.
+
+    Returns:
+        Tuple (d_loco, U_loco).
+    """
+    # Pre-allocate step storage for forward pass
+    stored_z = np.empty((r_eff, n))
+    stored_d = np.empty((r_eff, n))
+    stored_lambda = np.empty((r_eff, n))
+    stored_norm = np.empty((r_eff, n))
+    # Track which steps are degenerate (norm_q < 1e-14): skip in backward pass
+    step_is_identity = np.zeros(r_eff, dtype=bool)
+    # Track deflation maps: stored_deflated[j] maps deflated column k -> row l
+    stored_deflated: list[dict[int, int]] = [{} for _ in range(r_eff)]
+
+    d_current = alpha_c * d_full.copy()
+
+    # Forward pass: for each step j, compute q_j = V_{j-1}^T @ ... @ V_0^T @ u_z[:,j]
+    # by applying all stored V_k^T using the Cauchy formula with self-consistent norms
+    # and explicit deflation handling.
+    #
+    # Self-consistent norms: norm_k[l] = ||z_k / (d_k - lambda_k[l])||_2 (same
+    # denominators as the Cauchy formula), so V_k_cauchy[:,l] has unit norm.
+    # Deflation-aware: when z_k[l] ≈ 0 and lambda_k[m] = d_k[l], V_k[:,m] = e_l.
+    for j in range(r_eff):
+        rho_j = -sigma * s[j] ** 2
+
+        # Project u_z[:,j] through all previous V_k^T (k=0..j-1) using stored data
+        q_implicit = u_z[:, j].copy()
+        for k in range(j):
+            if not step_is_identity[k]:
+                q_implicit = _apply_vj_transpose_to_vec_blocked_with_deflation(
+                    q_implicit,
+                    stored_z[k],
+                    stored_d[k],
+                    stored_lambda[k],
+                    stored_norm[k],
+                    stored_deflated[k],
+                    col_block_size,
+                )
+
+        norm_q = np.linalg.norm(q_implicit)
+        if norm_q < 1e-14:
+            # Degenerate: this singular vector is zero in current basis — skip.
+            # Mark as identity step: V_j = I, no eigenvalue change.
+            step_is_identity[j] = True
+            stored_z[j] = np.zeros(n)  # unused in backward pass
+            stored_d[j] = d_current.copy()  # unused in backward pass
+            stored_lambda[j] = d_current.copy()  # unused in backward pass
+            stored_norm[j] = np.ones(n)  # unused in backward pass
+            # stored_deflated[j] stays {}
+            continue
+
+        rho_j_eff = rho_j * norm_q**2
+        q_j_unit = q_implicit / norm_q
+
+        # Eigenvalues via rank-1 update (DLAED4 or Python fallback)
+        if _SECULAR_ACCEL_AVAILABLE:
+            try:
+                lambda_j, _ = _rank1_update_c(d_current, rho_j_eff, q_j_unit)
+            except RuntimeError:
+                logger.debug(
+                    f"_secular_eigendecompose_delta_path: DLAED4 convergence failure "
+                    f"at step j={j}, falling back to Python eigh"
+                )
+                lambda_j, _ = _rank1_update_python(d_current, rho_j_eff, q_j_unit)
+        else:
+            lambda_j, _ = _rank1_update_python(d_current, rho_j_eff, q_j_unit)
+
+        # Ensure strict ascending order (DLAED4 guarantees it, but verify FP safety)
+        sort_idx = np.argsort(lambda_j)
+        if not np.all(sort_idx == np.arange(len(lambda_j))):
+            lambda_j = lambda_j[sort_idx]
+
+        # Detect deflated columns: where |q_j_unit[l]| ≈ 0 AND lambda[k] = d[l].
+        # DLAED4 deflation type 1: q_unit[l] ≈ 0 -> eigenvalue stays at d[l],
+        # eigenvector = e_l. The Cauchy formula breaks down at these poles.
+        deflated_j = _find_deflated_columns(q_j_unit, d_current, lambda_j)
+
+        # Compute Cauchy-consistent norms with deflation handling:
+        # norm_j[k] = ||z_j / (d_j - lambda_j[k])||_2 (self-consistent with Cauchy),
+        # but set to 1.0 for deflated columns (eigenvector is e_l, unit norm).
+        norm_j = _compute_cauchy_norms(
+            q_j_unit, d_current, lambda_j, deflated_j, col_block_size
+        )
+
+        # Store step-j data: d BEFORE update (Pitfall 2 — must copy before update)
+        stored_z[j] = q_j_unit
+        stored_d[j] = d_current.copy()  # d_j = diagonal BEFORE step j
+        stored_lambda[j] = lambda_j
+        stored_norm[j] = norm_j
+        stored_deflated[j] = deflated_j
+
+        d_current = lambda_j
+
+    # Backward pass: reconstruct U_loco row-batch by row-batch using Cauchy formula.
+    # For each row batch R from U_full, apply R = R @ V_j for j=0..r_eff-1.
+    # V_j is implicit: V_j[l,k] = z_j[l] / (d_j[l] - lambda_j[k]) / norm_j[k].
+    # Deflated columns use e_l convention: R_new[:,k] = R[:,l].
+    #
+    # Pre-allocate buffers to avoid per-step allocation (memory-critical for
+    # large n: two (b, n) row buffers + one (b, n) A buffer).
+    U_loco = np.empty_like(U_full)
+    b_max = min(row_batch_size, n)
+    R_buf0 = np.empty((b_max, n))
+    R_buf1 = np.empty((b_max, n))
+    A_buf = np.empty((b_max, n))
+
+    for row_start in range(0, n, row_batch_size):
+        row_end = min(row_start + row_batch_size, n)
+        b = row_end - row_start
+        R = R_buf0[:b]
+        R[:] = U_full[row_start:row_end, :]
+        cur = 0  # tracks which buffer R points to (0 or 1)
+
+        for j in range(r_eff):
+            if step_is_identity[j]:
+                continue
+            z_j = stored_z[j]
+            d_j = stored_d[j]
+            lam_j = stored_lambda[j]
+            norm_j_arr = stored_norm[j]
+            defl_j = stored_deflated[j]
+
+            R_out = (R_buf1 if cur == 0 else R_buf0)[:b]
+            A = A_buf[:b]
+            np.multiply(R, z_j, out=A)  # A[i, l] = R[i, l] * z_j[l]
+
+            for k_start in range(0, n, col_block_size):
+                k_end = min(k_start + col_block_size, n)
+                lam_block = lam_j[k_start:k_end]
+                diffs = d_j[:, np.newaxis] - lam_block
+                diffs = np.where(np.abs(diffs) > 1e-300, diffs, 1e300)
+                C_block = 1.0 / diffs
+                R_out[:, k_start:k_end] = (A @ C_block) * (
+                    1.0 / norm_j_arr[k_start:k_end]
+                )
+            # Override deflated columns: eigenvector k is e_{row_l}
+            for k, row_l in defl_j.items():
+                if 0 <= k < n:
+                    R_out[:, k] = R[:, row_l]
+
+            R = R_out
+            cur = 1 - cur
+
+        U_loco[row_start:row_end, :] = R
+
+    # Zero near-zero eigenvalues
+    _apply_threshold(d_current, threshold)
+
+    elapsed = time.perf_counter() - t0
+    logger.debug(
+        f"secular_eigendecompose_from_full: n={n}, r_eff={r_eff}, "
+        f"delta path, elapsed={elapsed:.3f}s"
+    )
+
+    return d_current, U_loco
 
 
 def loco_eigendecompose_from_full(
@@ -175,6 +695,9 @@ def secular_eigendecompose_from_full(
     p_chr: int,
     threshold_ratio: float = 1e-8,
     threshold: float = _DEFAULT_THRESHOLD,
+    n_threshold_for_delta: int = 5000,
+    row_batch_size: int = 1000,
+    col_block_size: int = 1000,
 ) -> tuple[np.ndarray, np.ndarray]:
     """O(n^2 * r_eff) secular equation solver for LOCO eigenvalue update.
 
@@ -188,9 +711,14 @@ def secular_eigendecompose_from_full(
     The secular solver applies r_eff sequential rank-1 updates via DLAED4,
     each costing O(n^2), for a total of O(n^2 * r_eff).
 
-    For full Q accumulation, eigenvectors are tracked as an n x n matrix Q
-    updated at each step. This is fine for n <= ~5000 (see RESEARCH.md Pitfall 5
-    for the 83k-scale optimization that is explicitly deferred).
+    Two eigenvector accumulation strategies:
+    - Q path (n <= n_threshold_for_delta): tracked as n x n matrix Q updated
+      at each step. Memory: O(n^2) per step — fine for small n.
+    - Delta path (n > n_threshold_for_delta): forward pass stores
+      (z_j, d_j, lambda_j, norm_j) per step; backward pass reconstructs
+      U_loco row-batch by row-batch via blocked Cauchy multiply. Eliminates
+      the Q = np.eye(n) allocation (55 GB at n=83k), reducing peak memory
+      from ~110 GB to ~58 GB.
 
     When the C extension (_secular_accel) is unavailable, falls back to
     _rank1_update_python (O(n^3) per step, same result).
@@ -205,6 +733,12 @@ def secular_eigendecompose_from_full(
             considered negligible (effective rank cutoff). Default: 1e-8.
         threshold: Eigenvalues with |value| < threshold are zeroed (inspired
             by GEMMA's EigenDecomp_Zeroed). Default: 1e-10.
+        n_threshold_for_delta: Use delta path when n > this value; use Q path
+            when n <= this value. Default: 5000.
+        row_batch_size: Number of rows per backward-pass batch (delta path only).
+            Default: 1000. Lower values reduce peak memory at cost of more loops.
+        col_block_size: Number of output columns per Cauchy block (delta path only).
+            Default: 1000. Lower values reduce peak memory at cost of more DGEMM calls.
 
     Returns:
         Tuple (d_loco, U_loco) where:
@@ -269,6 +803,27 @@ def secular_eigendecompose_from_full(
 
     u_z = u_z[:, :r_eff]
     s = s[:r_eff]
+
+    # Route to delta path for large n (avoids Q = np.eye(n) allocation)
+    if n > n_threshold_for_delta:
+        logger.debug(
+            f"secular_eigendecompose_from_full: n={n} > n_threshold_for_delta="
+            f"{n_threshold_for_delta}, using delta path"
+        )
+        return _secular_eigendecompose_delta_path(
+            d_full,
+            U_full,
+            u_z,
+            s,
+            alpha_c,
+            sigma,
+            n,
+            r_eff,
+            threshold,
+            row_batch_size,
+            col_block_size,
+            t0,
+        )
 
     # Choose rank-1 update function: C extension or Python fallback
     _rank1_fn = _rank1_update_c if _SECULAR_ACCEL_AVAILABLE else _rank1_update_python

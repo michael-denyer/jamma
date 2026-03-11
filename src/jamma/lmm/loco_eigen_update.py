@@ -487,18 +487,26 @@ def _secular_eigendecompose_delta_path(
         rho_j_eff = rho_j * norm_q**2
         q_j_unit = q_implicit / norm_q
 
-        # Eigenvalues via rank-1 update (DLAED4 or Python fallback)
+        # Eigenvalues-only via rank-1 update (DLAED4 or Python fallback).
+        # Use _rank1_eigs_norms_c (O(n) output) instead of _rank1_update_c
+        # (which returns a full n x n eigenvector matrix — 55 GB at n=83k).
+        # The delta path computes its own Cauchy norms afterward, so we
+        # discard the C norms.
         if _SECULAR_ACCEL_AVAILABLE:
             try:
-                lambda_j, _ = _rank1_update_c(d_current, rho_j_eff, q_j_unit)
+                lambda_j, _ = _rank1_eigs_norms_c(d_current, rho_j_eff, q_j_unit)
             except RuntimeError:
                 logger.debug(
                     f"_secular_eigendecompose_delta_path: DLAED4 convergence failure "
                     f"at step j={j}, falling back to Python eigh"
                 )
-                lambda_j, _ = _rank1_update_python(d_current, rho_j_eff, q_j_unit)
+                lambda_j, _ = _rank1_eigenvalues_and_norms_python(
+                    d_current, rho_j_eff, q_j_unit
+                )
         else:
-            lambda_j, _ = _rank1_update_python(d_current, rho_j_eff, q_j_unit)
+            lambda_j, _ = _rank1_eigenvalues_and_norms_python(
+                d_current, rho_j_eff, q_j_unit
+            )
 
         # Ensure strict ascending order (DLAED4 guarantees it, but verify FP safety)
         sort_idx = np.argsort(lambda_j)
@@ -824,9 +832,6 @@ def secular_eigendecompose_from_full(
             col_block_size,
             t0,
         )
-
-    # Choose rank-1 update function: C extension or Python fallback
-    _rank1_fn = _rank1_update_c if _SECULAR_ACCEL_AVAILABLE else _rank1_update_python
 
     # Sequential rank-1 updates (RESEARCH.md "Sequential Rank-1 Update Strategy"):
     # Start: D_0 = alpha_c * d_full (ascending), Q_0 = I_n

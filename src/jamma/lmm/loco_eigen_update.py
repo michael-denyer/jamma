@@ -259,6 +259,25 @@ def _rank1_eigenvalues_and_norms_python(
     return eigenvalues, norms
 
 
+def _cauchy_block(d: np.ndarray, lam_block: np.ndarray) -> np.ndarray:
+    """Compute guarded Cauchy matrix C[l, k] = 1 / (d[l] - lam_block[k]).
+
+    Applies deflation guard: when |d[l] - lam_block[k]| < _DEFLATION_GUARD,
+    sets denominator to _DEFLATION_FILL (~1e300), making the entry ~0.
+    This handles deflated eigenvalue poles where z_j[l] ~ 0 by construction.
+
+    Args:
+        d: (n,) diagonal values before rank-1 update.
+        lam_block: (m,) block of eigenvalues.
+
+    Returns:
+        (n, m) guarded Cauchy block.
+    """
+    diffs = d[:, np.newaxis] - lam_block
+    diffs = np.where(np.abs(diffs) > _DEFLATION_GUARD, diffs, _DEFLATION_FILL)
+    return 1.0 / diffs
+
+
 def _apply_vj_to_rows_blocked(
     R: np.ndarray,
     z_j: np.ndarray,
@@ -305,12 +324,10 @@ def _apply_vj_to_rows_blocked(
         k_end = min(k_start + col_block_size, n)
         lam_block = lambda_j[k_start:k_end]  # (m,)
         # C_block[l, k] = 1 / (d_j[l] - lambda_j[k_start + k])  — shape (n, m)
-        diffs = d_j[:, np.newaxis] - lam_block  # (n, m)
         # Deflation guard: when d_j[l] = lambda_j[k] (deflated eigenvalue), the
         # corresponding z_j[l] ≈ 0, so the contribution to V[:,k] is 0/0 ≈ 0.
-        # Setting the diff to 1e300 makes A[:,l] / diff ≈ z_j[l] / 1e300 ≈ 0.
-        diffs = np.where(np.abs(diffs) > _DEFLATION_GUARD, diffs, _DEFLATION_FILL)
-        C_block = 1.0 / diffs
+        # _cauchy_block sets the diff to 1e300, making A[:,l] / diff ≈ 0.
+        C_block = _cauchy_block(d_j, lam_block)
         # DGEMM: (b, n) @ (n, m) -> (b, m); scale by 1/norm_j
         R_new[:, k_start:k_end] = (A @ C_block) * (1.0 / norm_j[k_start:k_end])
     return R_new
@@ -350,10 +367,7 @@ def _apply_vj_transpose_to_vec_blocked(
         k_end = min(k_start + col_block_size, n)
         lam_block = lambda_j[k_start:k_end]  # (m,)
         # C_block[l, k] = 1 / (d_j[l] - lambda_j[k_start + k])  — shape (n, m)
-        diffs = d_j[:, np.newaxis] - lam_block  # (n, m)
-        # Deflation guard: avoid division by zero at pole locations
-        diffs = np.where(np.abs(diffs) > _DEFLATION_GUARD, diffs, _DEFLATION_FILL)
-        C_block = 1.0 / diffs
+        C_block = _cauchy_block(d_j, lam_block)
         result[k_start:k_end] = (c @ C_block) / norm_j[k_start:k_end]
     return result
 
@@ -427,9 +441,7 @@ def _apply_vj_to_rows_blocked_with_deflation(
     for k_start in range(0, n, col_block_size):
         k_end = min(k_start + col_block_size, n)
         lam_block = lambda_j[k_start:k_end]
-        diffs = d_j[:, np.newaxis] - lam_block
-        diffs = np.where(np.abs(diffs) > _DEFLATION_GUARD, diffs, _DEFLATION_FILL)
-        C_block = 1.0 / diffs
+        C_block = _cauchy_block(d_j, lam_block)
         R_new[:, k_start:k_end] = (A @ C_block) * (1.0 / norm_j[k_start:k_end])
     # Override deflated columns: R_new[:, k] = R[:, row_l] (eigenvector is e_{row_l})
     for k, row_l in deflated.items():
@@ -470,9 +482,7 @@ def _apply_vj_transpose_to_vec_blocked_with_deflation(
     for k_start in range(0, n, col_block_size):
         k_end = min(k_start + col_block_size, n)
         lam_block = lambda_j[k_start:k_end]
-        diffs = d_j[:, np.newaxis] - lam_block
-        diffs = np.where(np.abs(diffs) > _DEFLATION_GUARD, diffs, _DEFLATION_FILL)
-        C_block = 1.0 / diffs
+        C_block = _cauchy_block(d_j, lam_block)
         result[k_start:k_end] = (c @ C_block) / norm_j[k_start:k_end]
     # Override deflated positions: (V_j.T @ v)[k] = v[row_l]
     for k, row_l in deflated.items():
@@ -519,11 +529,9 @@ def _compute_cauchy_norms(
     for k_start in range(0, n, col_block_size):
         k_end = min(k_start + col_block_size, n)
         lam_block = eigenvalues[k_start:k_end]  # (m,)
-        # diffs[l, k] = d[l] - eigenvalues[k_start + k], shape (n, m)
-        diffs = d[:, np.newaxis] - lam_block  # (n, m)
-        # Deflation guard
-        diffs = np.where(np.abs(diffs) > _DEFLATION_GUARD, diffs, _DEFLATION_FILL)
-        ratios = z_unit[:, np.newaxis] / diffs  # (n, m)
+        # C_block[l, k] = 1 / (d[l] - eigenvalues[k_start + k]), shape (n, m)
+        C_block = _cauchy_block(d, lam_block)
+        ratios = z_unit[:, np.newaxis] * C_block  # (n, m)
         norm_sq = np.sum(ratios**2, axis=0)  # (m,)
         norms[k_start:k_end] = np.sqrt(norm_sq)
     # Guard against zero norm (degenerate all-deflated case)
@@ -754,13 +762,7 @@ def _secular_eigendecompose_delta_path(
             for k_start in range(0, n, col_block_size):
                 k_end = min(k_start + col_block_size, n)
                 lam_block = lam_j[k_start:k_end]
-                diffs = d_j[:, np.newaxis] - lam_block
-                diffs = np.where(
-                    np.abs(diffs) > _DEFLATION_GUARD,
-                    diffs,
-                    _DEFLATION_FILL,
-                )
-                C_block = 1.0 / diffs
+                C_block = _cauchy_block(d_j, lam_block)
                 R_out[:, k_start:k_end] = (A @ C_block) * (
                     1.0 / norm_j_arr[k_start:k_end]
                 )

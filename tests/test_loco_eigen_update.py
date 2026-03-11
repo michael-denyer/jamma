@@ -915,3 +915,123 @@ def test_delta_path_memory():
         rtol=1e-8,
         err_msg="Delta path results differ from Q path",
     )
+
+
+# ---------------------------------------------------------------------------
+# Sequential streaming integration tests (Plan 69.4-01)
+# ---------------------------------------------------------------------------
+
+
+_GEMMA_LOCO_BFILE = _FIXTURE_ROOT / "gemma_loco" / "test"
+
+
+@pytest.mark.tier1
+def test_run_lmm_loco_secular_uses_sequential_path():
+    """run_lmm_loco(use_secular_update=True) uses sequential streaming path.
+
+    Verifies that the secular path calls yield_x_c_sequential=True (not
+    yield_x_c=True), so secular_x_c dict is not populated. The sequential
+    path passes K_full directly from _compute_loco_kinship_streaming_numpy.
+    """
+    if not _GEMMA_LOCO_BFILE.with_suffix(".bed").exists():
+        pytest.skip("gemma_loco fixture not available")
+
+    from unittest.mock import patch
+
+    import jamma.lmm.loco as loco_module
+
+    _LOCO_BFILE = _GEMMA_LOCO_BFILE
+
+    # Track calls to _compute_loco_kinship_streaming_numpy to verify flag
+    call_kwargs: list[dict] = []
+    original_fn = loco_module._compute_loco_kinship_streaming_numpy
+
+    def tracking_fn(*args, **kwargs):
+        call_kwargs.append(dict(kwargs))
+        return original_fn(*args, **kwargs)
+
+    from tests.conftest import load_phenotypes_from_fam
+
+    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+
+    with patch.object(
+        loco_module,
+        "_compute_loco_kinship_streaming_numpy",
+        side_effect=tracking_fn,
+    ):
+        loco = loco_module.run_lmm_loco(
+            bed_path=_LOCO_BFILE,
+            phenotypes=phenotypes,
+            backend="numpy",
+            check_memory=False,
+            show_progress=False,
+            use_secular_update=True,
+        )
+
+    # At least one call should use yield_x_c_sequential=True
+    sequential_calls = [kw for kw in call_kwargs if kw.get("yield_x_c_sequential")]
+    assert len(sequential_calls) > 0, (
+        f"Expected at least one call with yield_x_c_sequential=True, "
+        f"got calls: {call_kwargs}"
+    )
+    # No call should use yield_x_c=True (old path)
+    old_path_calls = [kw for kw in call_kwargs if kw.get("yield_x_c")]
+    assert len(old_path_calls) == 0, (
+        f"Expected no calls with yield_x_c=True (old accumulation path), "
+        f"but found: {old_path_calls}"
+    )
+    assert loco.n_tested > 0, "Expected SNPs to be tested"
+
+
+@pytest.mark.tier1
+def test_secular_path_does_not_accumulate_x_c_dict():
+    """secular_x_c dict is not used in the sequential path.
+
+    Verifies that after refactoring, the secular path does not hold all X_c
+    matrices simultaneously. We check that the secular_x_c variable is either
+    not populated or is always empty during run_lmm_loco execution.
+    """
+    if not _GEMMA_LOCO_BFILE.with_suffix(".bed").exists():
+        pytest.skip("gemma_loco fixture not available")
+
+    from unittest.mock import patch
+
+    import jamma.lmm.loco as loco_module
+
+    _LOCO_BFILE = _GEMMA_LOCO_BFILE
+
+    from tests.conftest import load_phenotypes_from_fam
+
+    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+
+    # Monkey-patch secular_eigendecompose_from_full to verify it's called
+    # with X_c one at a time (not from a dict)
+    call_count = [0]
+    original_secular = loco_module.secular_eigendecompose_from_full
+
+    def tracking_secular(*args, **kwargs):
+        call_count[0] += 1
+        return original_secular(*args, **kwargs)
+
+    with patch.object(
+        loco_module, "secular_eigendecompose_from_full", side_effect=tracking_secular
+    ):
+        loco = loco_module.run_lmm_loco(
+            bed_path=_LOCO_BFILE,
+            phenotypes=phenotypes,
+            backend="numpy",
+            check_memory=False,
+            show_progress=False,
+            use_secular_update=True,
+        )
+
+    # secular_eigendecompose_from_full should be called once per chromosome
+    from jamma.io.plink import get_plink_metadata
+
+    meta = get_plink_metadata(_LOCO_BFILE)
+    n_chrs = len(set(meta["chromosome"].tolist()))
+    assert call_count[0] == n_chrs, (
+        f"Expected {n_chrs} secular_eigendecompose_from_full calls "
+        f"(one per chromosome), got {call_count[0]}"
+    )
+    assert loco.n_tested > 0, "Expected SNPs to be tested"

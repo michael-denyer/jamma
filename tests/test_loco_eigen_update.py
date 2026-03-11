@@ -1707,3 +1707,93 @@ def test_delta_path_orthogonality_high_r_eff():
             "reference within rtol=1e-5"
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Tier2 scale test: n=2000, r_eff=200 (BENCH-03, Plan 69.5-02)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier2
+def test_secular_speedup_correctness_at_scale():
+    """BENCH-03: Secular solver produces correct eigenvalues and orthogonal
+    eigenvectors at n=2000, r_eff=200 (Q path since n < default 5000 threshold).
+
+    Validates correctness at moderate scale for planning 83k production runs.
+    Both solvers must agree on eigenvalues within rtol=1e-5 and produce
+    orthogonal eigenvectors with max|U^T U - I| < 1e-6.
+
+    Wall-clock times are printed for informational purposes only. No speedup
+    assertion is made — at n=2000, DSYEVD typically wins; secular advantage
+    is expected only at n >> 5000 with small r_eff/n ratio.
+    """
+    import time as _time
+
+    rng = np.random.default_rng(42)
+    n = 2000
+    r_eff = 200
+    p_full = n * 10  # 20000 total SNPs
+    p_chr = r_eff * 10  # 2000 chromosome SNPs
+
+    # Generate full kinship matrix
+    X_all = rng.standard_normal((n, p_full))
+    X_all -= X_all.mean(axis=0)
+    K_full = (X_all @ X_all.T) / p_full
+    d_full, U_full = np.linalg.eigh(K_full)
+
+    # Generate chromosome X_c with controlled effective rank via latent factors
+    latents = rng.standard_normal((n, r_eff))
+    n_repeats = (p_chr + r_eff - 1) // r_eff
+    X_c_wide = np.tile(latents, n_repeats)[:, :p_chr]
+    X_c_wide += rng.standard_normal(X_c_wide.shape) * 0.01
+    X_c = X_c_wide - X_c_wide.mean(axis=0)
+    S_chr = X_c @ X_c.T
+
+    # Run secular solver (Q path: n=2000 < default threshold of 5000)
+    t0 = _time.perf_counter()
+    d_secular, U_secular = secular_eigendecompose_from_full(
+        d_full, U_full, X_c, p_full, p_chr
+    )
+    t_secular = _time.perf_counter() - t0
+
+    # Run DSYEVD baseline
+    t0 = _time.perf_counter()
+    d_dsyevd, U_dsyevd = loco_eigendecompose_from_full(
+        d_full, U_full, S_chr, p_full, p_chr
+    )
+    t_dsyevd = _time.perf_counter() - t0
+
+    print(
+        f"\n[BENCH-03] n={n}, r_eff={r_eff}: "
+        f"secular={t_secular:.2f}s, dsyevd={t_dsyevd:.2f}s "
+        f"(speedup={t_dsyevd / t_secular:.2f}x)"
+    )
+
+    # Apply same threshold to DSYEVD reference eigenvalues
+    d_ref_thresh = d_dsyevd.copy()
+    d_ref_thresh[np.abs(d_ref_thresh) < 1e-10] = 0.0
+
+    # Eigenvalue agreement within rtol=1e-5
+    np.testing.assert_allclose(
+        np.sort(d_secular),
+        np.sort(d_ref_thresh),
+        rtol=1e-5,
+        err_msg=(
+            f"BENCH-03: secular eigenvalues at n={n}, r_eff={r_eff} "
+            "do not match DSYEVD within rtol=1e-5"
+        ),
+    )
+
+    # Secular eigenvectors: orthogonality < 1e-6
+    sec_orth = float(np.max(np.abs(U_secular.T @ U_secular - np.eye(n))))
+    assert sec_orth < 1e-6, (
+        f"BENCH-03: secular eigenvectors not orthogonal at n={n}, r_eff={r_eff}: "
+        f"max|U^T U - I| = {sec_orth:.2e} (expected < 1e-6)"
+    )
+
+    # DSYEVD eigenvectors: orthogonality < 1e-6
+    dsy_orth = float(np.max(np.abs(U_dsyevd.T @ U_dsyevd - np.eye(n))))
+    assert dsy_orth < 1e-6, (
+        f"BENCH-03: dsyevd eigenvectors not orthogonal at n={n}, r_eff={r_eff}: "
+        f"max|U^T U - I| = {dsy_orth:.2e} (expected < 1e-6)"
+    )

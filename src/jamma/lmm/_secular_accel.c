@@ -12,8 +12,8 @@
  *
  * Algorithm: n calls to LAPACK DLAED4, one per eigenvalue. Each DLAED4 call
  * solves the secular equation for the i-th eigenvalue using deflation and the
- * Bunch-Kaufman algorithm (LAWN 89). This is the numerically stable reference
- * implementation used inside LAPACK's DSYEVD divide-and-conquer.
+ * Li algorithm (LAWN 89, Ren-Cang Li 1993). This is the numerically stable
+ * reference implementation used inside LAPACK's DSYEVD divide-and-conquer.
  *
  * Negative rho handling:
  *   DLAED4 requires rho > 0. For negative rho, we exploit the identity:

@@ -1200,7 +1200,7 @@ def run_lmm_loco(
                 chr_iterator = ((chr_name, None) for chr_name in unique_chrs)
             elif use_secular_update:
                 # Secular update: iterate over unique_chrs in order; S_chr
-                # and p_chr are in secular_s_chr / secular_p_chr dicts.
+                # and p_chr are in secular_x_c / secular_p_chr dicts.
                 chr_iterator = (  # type: ignore[assignment]
                     (chr_name, None) for chr_name in unique_chrs
                 )
@@ -1260,19 +1260,15 @@ def run_lmm_loco(
                             )
                         # Both None: chromosome was not yielded by the kinship
                         # iterator. _yield_matrices already yields zero X_c for
-                        # chrs_without_snps, so this is unexpected unless there is
-                        # a chromosome name mismatch between BIM and kinship stream.
-                        logger.warning(
-                            f"Secular update: chromosome {chr_name} has no entry "
-                            f"in secular_x_c (collected {len(secular_x_c)} "
-                            f"chromosomes, unique_chrs has {len(unique_chrs)}). "
-                            f"Using full kinship eigendecomposition (K_loco = K_full)."
+                        # chrs_without_snps, so this indicates a chromosome name
+                        # mismatch between BIM and kinship stream.
+                        raise RuntimeError(
+                            f"Secular update: chromosome {chr_name} not found in "
+                            f"collected X_c matrices ({len(secular_x_c)} chromosomes "
+                            f"collected, unique_chrs has {len(unique_chrs)}). "
+                            f"This suggests a chromosome name mismatch between the "
+                            f"BIM file and the kinship SNP list."
                         )
-                        x_c_c = np.zeros(
-                            (secular_d_full.shape[0], 0),
-                            dtype=np.float64,
-                        )
-                        p_chr_c = 0
                     eigenvalues_np, U = secular_eigendecompose_from_full(
                         secular_d_full,
                         secular_U_full,

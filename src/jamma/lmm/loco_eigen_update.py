@@ -14,12 +14,16 @@ where:
 The eigenvalues of M equal the eigenvalues of K_loco_c, and the eigenvectors
 of K_loco_c are U_full @ V where V are the eigenvectors of M.
 
-This avoids constructing K_loco_c = (S_full - S_chr) / p_loco explicitly,
-but has the same O(n^3) cost as direct eigendecomposition (with additional
-constant-factor overhead from three extra n x n matmuls: two for the Gram
-rotation and one for eigenvector back-rotation). The practical benefit comes
-in a future phase when the low-rank structure of M_gram enables a secular
-equation solver at O(n^2 * r_eff) when r_eff << n.
+This avoids constructing K_loco_c = (S_full - S_chr) / p_loco explicitly.
+The low-rank structure of M_gram enables a secular equation solver (via LAPACK
+DLAED4) at O(n^2 * r_eff) cost when r_eff << n, versus O(n^3) for direct
+eigendecomposition. Two solver paths are available:
+
+- **Q path**: sequential rank-1 updates accumulating full eigenvectors (O(n^2)
+  per step, O(n^2) workspace).
+- **Delta path**: forward pass stores eigenvalues + norms only (O(n) per step),
+  then backward pass reconstructs U_loco via blocked Cauchy multiply without
+  materializing any (n, n) intermediate matrix.
 """
 
 from __future__ import annotations
@@ -48,6 +52,11 @@ try:
 except ImportError:
     _SECULAR_ACCEL_AVAILABLE = False
     _rank1_eigs_norms_c = None  # type: ignore[assignment]
+    logger.info(
+        "C extension _secular_accel not available; "
+        "rank-1 secular updates will use Python fallback. "
+        "Run 'python -m jamma.lmm._compile_secular' to compile."
+    )
 
 
 def _rank1_update_python(
@@ -495,10 +504,12 @@ def _secular_eigendecompose_delta_path(
         if _SECULAR_ACCEL_AVAILABLE:
             try:
                 lambda_j, _ = _rank1_eigs_norms_c(d_current, rho_j_eff, q_j_unit)
-            except RuntimeError:
+            except RuntimeError as e:
+                if "not resolved" in str(e):
+                    raise  # Environmental problem — don't silently degrade
                 logger.debug(
                     f"_secular_eigendecompose_delta_path: DLAED4 convergence failure "
-                    f"at step j={j}, falling back to Python eigh"
+                    f"at step j={j} ({e}), falling back to Python eigh"
                 )
                 lambda_j, _ = _rank1_eigenvalues_and_norms_python(
                     d_current, rho_j_eff, q_j_unit
@@ -867,10 +878,12 @@ def secular_eigendecompose_from_full(
         if _SECULAR_ACCEL_AVAILABLE:
             try:
                 d_new, V_j = _rank1_update_c(d_current, rho_j_eff, q_j_unit)
-            except RuntimeError:
+            except RuntimeError as e:
+                if "not resolved" in str(e):
+                    raise  # Environmental problem — don't silently degrade
                 logger.debug(
                     f"secular_eigendecompose_from_full: DLAED4 convergence failure "
-                    f"at step j={j}, falling back to Python eigh for this step"
+                    f"at step j={j} ({e}), falling back to Python eigh for this step"
                 )
                 d_new, V_j = _rank1_update_python(d_current, rho_j_eff, q_j_unit)
         else:

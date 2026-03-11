@@ -1643,3 +1643,67 @@ def test_reorth_delta_path_posthoc():
     assert deviation < 1e-12, (
         f"Post-QR eigenvectors not orthogonal: max|U^T U - I| = {deviation:.2e}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Tier2 scale test: n=1000, r_eff=100 (ORTH-05, Plan 69.5-01)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier2
+def test_delta_path_orthogonality_high_r_eff():
+    """ORTH-05: Delta path orthogonality drift < 1e-6 at n=1000, r_eff=100.
+
+    Empirically confirms the secular solver maintains eigenvector orthogonality
+    at larger scale (n=1000 with ~100 effective rank-1 updates).
+    Also verifies eigenvalue accuracy vs DSYEVD reference within rtol=1e-5.
+    """
+    rng = np.random.default_rng(99)
+    n = 1000
+    p = 2000  # total SNPs
+    p_c = 100  # chromosome SNPs (gives r_eff ~ 100)
+
+    # Build dataset matching _make_synthetic_dataset pattern
+    X = rng.standard_normal((n, p))
+    X -= X.mean(axis=0)
+    K_full = (X @ X.T) / p
+    X_c = X[:, :p_c]  # first p_c columns are the chromosome
+
+    # Reference LOCO kinship (used for eigenvalue accuracy check)
+    S_chr = X_c @ X_c.T
+    K_loco = (X @ X.T - S_chr) / (p - p_c)
+
+    d_full, U_full = np.linalg.eigh(K_full)
+
+    # Delta path via n_threshold_for_delta=0
+    d_loco, U_loco = secular_eigendecompose_from_full(
+        d_full,
+        U_full,
+        X_c,
+        p_full=p,
+        p_chr=p_c,
+        n_threshold_for_delta=0,
+        check_orthogonality=True,
+    )
+
+    # ORTH-05: orthogonality drift must be < 1e-6
+    deviation = float(np.max(np.abs(U_loco.T @ U_loco - np.eye(n))))
+    assert deviation < 1e-6, (
+        f"Delta path orthogonality drift at n=1000, r_eff~100: "
+        f"max|U^T U - I| = {deviation:.2e} (expected < 1e-6)"
+    )
+
+    # Eigenvalue accuracy vs DSYEVD reference within rtol=1e-5
+    d_ref = np.linalg.eigh(K_loco)[0]
+    d_ref_thresh = d_ref.copy()
+    d_ref_thresh[np.abs(d_ref_thresh) < 1e-10] = 0.0
+
+    np.testing.assert_allclose(
+        np.sort(d_loco),
+        np.sort(d_ref_thresh),
+        rtol=1e-5,
+        err_msg=(
+            "Delta path eigenvalues at n=1000 do not match DSYEVD "
+            "reference within rtol=1e-5"
+        ),
+    )

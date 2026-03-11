@@ -6,7 +6,7 @@
  *   rank1_eigenvalues_and_norms(d, rho, z) -> (eigenvalues, norms)
  *
  * Computes all eigenvalues and eigenvectors of D + rho * z * z^T where:
- *   D   = diagonal matrix with ascending entries d[0] < d[1] < ... < d[n-1]
+ *   D   = diagonal matrix with ascending entries d[0] <= d[1] <= ... <= d[n-1]
  *   rho = scalar (positive or negative)
  *   z   = rank-1 update vector (will be normalized to unit norm internally)
  *

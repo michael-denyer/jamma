@@ -332,7 +332,8 @@ def main() -> None:
     print()
     print(
         "Note: At n=83k with r_eff=300 (typical GWAS), secular solver is expected to"
-        " outperform DSYEVD based on O(n^2*r_eff) eigenvalue + O(n^3) backward pass"
+        " outperform DSYEVD based on O(n^2*r_eff) eigenvalue + O(n^3*r_eff)"
+        " eigenvector pass"
         " vs O(n^3) full tridiagonal eigensolver with larger constant. At moderate n"
         " (<5000), DSYEVD's highly optimised tridiagonal solver typically wins. The"
         " secular advantage is memory-driven at large n: the delta path avoids"

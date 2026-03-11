@@ -44,8 +44,9 @@ from loguru import logger
 _DEFAULT_THRESHOLD: float = 1e-10
 
 # Guard against division by zero at deflation poles in Cauchy formulas.
-# When |d[l] - eigenvalue[k]| < this value, the term is set to zero (the
-# corresponding z[l] ≈ 0 at deflation points, so the contribution vanishes).
+# When |d[l] - eigenvalue[k]| < this value, the denominator is inflated to
+# 1e300, making the term negligibly small (the corresponding z[l] ≈ 0 at
+# deflation points, so the contribution vanishes).
 _DEFLATION_GUARD: float = 1e-300
 _DEFLATION_FILL: float = 1.0 / _DEFLATION_GUARD  # reciprocal used as safe fill
 
@@ -118,7 +119,8 @@ def _try_import_secular() -> tuple[bool, object | None, object | None]:
         else:
             logger.error(
                 f"_secular_accel DLAED4 probe failed with unexpected error: {e}. "
-                "Disabling C extension."
+                "Disabling C extension — secular solver will use Python fallback "
+                "(significantly slower). Please report this issue."
             )
         return False, None, None
 
@@ -506,7 +508,20 @@ def _compute_cauchy_norms(
         norm_sq = np.sum(ratios**2, axis=0)  # (m,)
         norms[k_start:k_end] = np.sqrt(norm_sq)
     # Guard against zero norm (degenerate all-deflated case)
-    norms = np.where(norms > 0, norms, 1.0)
+    zero_mask = norms <= 0
+    if np.any(zero_mask):
+        non_deflated_zeros = [
+            int(i)
+            for i in np.where(zero_mask)[0]
+            if deflated is None or i not in deflated
+        ]
+        if non_deflated_zeros:
+            logger.warning(
+                f"_compute_cauchy_norms: {len(non_deflated_zeros)} non-deflated "
+                f"columns have zero norm (indices: {non_deflated_zeros[:5]}). "
+                f"This may indicate numerical instability."
+            )
+        norms[zero_mask] = 1.0
     # For deflated columns: eigenvector is e_l (unit norm), so norm = 1.0
     if deflated:
         for k in deflated:
@@ -610,11 +625,10 @@ def _secular_eigendecompose_delta_path(
             # Degenerate: this singular vector is zero in current basis — skip.
             # Mark as identity step: V_j = I, no eigenvalue change.
             step_is_identity[j] = True
-            stored_z[j] = np.zeros(n)  # unused in backward pass
-            stored_d[j] = d_current.copy()  # unused in backward pass
-            stored_lambda[j] = d_current.copy()  # unused in backward pass
-            stored_norm[j] = np.ones(n)  # unused in backward pass
-            # stored_deflated[j] stays {}
+            stored_z[j] = np.zeros(n)
+            stored_d[j] = d_current.copy()
+            stored_lambda[j] = d_current.copy()
+            stored_norm[j] = np.ones(n)
             continue
 
         rho_j_eff = rho_j * norm_q**2
@@ -1207,6 +1221,7 @@ def _apply_threshold(d: np.ndarray, threshold: float) -> None:
             logger.warning(
                 f"_apply_threshold: significantly negative eigenvalue "
                 f"({min_val:.2e}) suggests numerical instability in the "
-                f"rank-k downdate, not just noise"
+                f"rank-k downdate, not just noise. Re-run without --secular "
+                f"to verify results match"
             )
         d[mask] = 0.0

@@ -129,8 +129,8 @@ class SequentialLocoResult(NamedTuple):
 
     s_full is the unnormalised kinship accumulator from Pass 1.
     Divide by n_filtered to obtain K_full (done by caller).
-    NamedTuple subclasses tuple: positional unpacking
-    ``S, n, gen, cache = result`` continues to work unchanged.
+    NamedTuple subclasses tuple, so positional unpacking
+    ``S, n, gen, cache = result`` works directly.
     """
 
     s_full: np.ndarray

@@ -528,34 +528,62 @@ def batch_compute_uab_varying_soa_numpy(
 def reconstruct_uab_from_soa(
     uab_invariant_soa: np.ndarray,
     uab_varying_soa: np.ndarray,
+    n_cvt: int = 1,
 ) -> np.ndarray:
     """Reconstruct full Uab matrix from split SoA components.
 
-    Combines invariant columns [ww, wy, yy] with per-SNP varying columns
-    [wx, xx, xy] into the standard Uab layout (n_snps, n_samples, n_index=6).
+    For n_cvt=1: combines invariant columns [ww, wy, yy] with per-SNP varying
+    columns [wx, xx, xy] into the standard layout (n_snps, n_samples, 6).
 
-    The column ordering matches batch_compute_uab_numpy for n_cvt=1:
-    index 0: ww, 1: wx, 2: wy, 3: xx, 4: xy, 5: yy
+    For n_cvt>1: uses classify_uab_columns(n_cvt) to determine which linear
+    column indices are invariant vs varying, then places each column at its
+    correct index in the output array. Invariant columns are broadcast across
+    all SNPs; varying columns are placed per-SNP from uab_varying_soa.
 
     Args:
-        uab_invariant_soa: Shape (3, n_samples) — rows [ww, wy, yy].
-        uab_varying_soa: Shape (n_snps, 3, n_samples) — axis-1 rows [wx, xx, xy].
+        uab_invariant_soa: Shape (n_inv, n_samples) — one row per invariant column.
+        uab_varying_soa: Shape (n_snps, n_var, n_samples) — one axis-1 row per
+            varying column.
+        n_cvt: Number of covariates. Default 1 preserves backward compatibility.
 
     Returns:
-        Full Uab array (n_snps, n_samples, 6) matching batch_compute_uab_numpy layout.
+        Full Uab array (n_snps, n_samples, n_index) matching
+        batch_compute_uab_numpy layout.
     """
     n_snps, _, n_samples = uab_varying_soa.shape
-    Uab = np.empty((n_snps, n_samples, 6), dtype=np.float64)
 
-    # Invariant columns — broadcast across all SNPs
-    Uab[:, :, 0] = uab_invariant_soa[0]  # ww
-    Uab[:, :, 2] = uab_invariant_soa[1]  # wy
-    Uab[:, :, 5] = uab_invariant_soa[2]  # yy
+    if n_cvt == 1:
+        # Fast path: hardcoded 6-column layout — zero overhead for common case.
+        # n_cvt=1 column order: 0=ww, 1=wx, 2=wy, 3=xx, 4=xy, 5=yy
+        Uab = np.empty((n_snps, n_samples, 6), dtype=np.float64)
 
-    # Varying columns — per-SNP
-    Uab[:, :, 1] = uab_varying_soa[:, 0, :]  # wx
-    Uab[:, :, 3] = uab_varying_soa[:, 1, :]  # xx
-    Uab[:, :, 4] = uab_varying_soa[:, 2, :]  # xy
+        # Invariant columns — broadcast across all SNPs
+        Uab[:, :, 0] = uab_invariant_soa[0]  # ww
+        Uab[:, :, 2] = uab_invariant_soa[1]  # wy
+        Uab[:, :, 5] = uab_invariant_soa[2]  # yy
+
+        # Varying columns — per-SNP
+        Uab[:, :, 1] = uab_varying_soa[:, 0, :]  # wx
+        Uab[:, :, 3] = uab_varying_soa[:, 1, :]  # xx
+        Uab[:, :, 4] = uab_varying_soa[:, 2, :]  # xy
+
+        return Uab
+
+    # General path for n_cvt > 1: use classify_uab_columns to get index mapping.
+    # Function-level import avoids circular import (Phase 60 decision).
+    from jamma.lmm.likelihood import classify_uab_columns
+
+    inv_indices, var_indices = classify_uab_columns(n_cvt)
+    n_index = (n_cvt + 3) * (n_cvt + 2) // 2  # total Uab columns
+    Uab = np.empty((n_snps, n_samples, n_index), dtype=np.float64)
+
+    # Place invariant columns (broadcast across all SNPs)
+    for row_i, col_idx in enumerate(inv_indices):
+        Uab[:, :, col_idx] = uab_invariant_soa[row_i]
+
+    # Place varying columns (per-SNP from SoA axis-1)
+    for row_i, col_idx in enumerate(var_indices):
+        Uab[:, :, col_idx] = uab_varying_soa[:, row_i, :]
 
     return Uab
 

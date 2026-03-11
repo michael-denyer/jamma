@@ -57,6 +57,8 @@ class AccelImport(NamedTuple):
     compute_lrt_batch_c: object | None
     create_workspace_mode4_split_c: object | None
     compute_mode4_chunk_split_c: object | None
+    compute_score_batch_general_c: object | None
+    compute_lrt_batch_general_c: object | None
 
 
 _ACCEL_UNAVAILABLE = AccelImport(
@@ -65,6 +67,8 @@ _ACCEL_UNAVAILABLE = AccelImport(
     False,
     False,
     False,
+    None,
+    None,
     None,
     None,
     None,
@@ -193,6 +197,33 @@ def _try_import_accel() -> AccelImport:
         mode4_chunk_c = None
         mode4_available = False
 
+    # General n_cvt Score/LRT batch support — expected in ABI v7+
+    try:
+        from jamma.lmm._lmm_accel import (
+            compute_score_batch_general_c as score_batch_general_c,
+        )
+    except AttributeError:
+        from loguru import logger
+
+        logger.warning(
+            "C extension missing compute_score_batch_general_c. "
+            "Score for n_cvt>1 will use Python path."
+        )
+        score_batch_general_c = None
+
+    try:
+        from jamma.lmm._lmm_accel import (
+            compute_lrt_batch_general_c as lrt_batch_general_c,
+        )
+    except AttributeError:
+        from loguru import logger
+
+        logger.warning(
+            "C extension missing compute_lrt_batch_general_c. "
+            "LRT for n_cvt>1 will use Python path."
+        )
+        lrt_batch_general_c = None
+
     return AccelImport(
         True,
         True,
@@ -209,6 +240,8 @@ def _try_import_accel() -> AccelImport:
         lrt_batch_c,
         mode4_ws_create,
         mode4_chunk_c,
+        score_batch_general_c,
+        lrt_batch_general_c,
     )
 
 
@@ -241,6 +274,8 @@ def _auto_recompile() -> bool:
     _compute_lrt_batch_c,
     _create_workspace_mode4_split_c,
     _compute_mode4_chunk_split_c,
+    _compute_score_batch_general_c,
+    _compute_lrt_batch_general_c,
 ) = _try_import_accel()
 
 if not _C_ACCEL_AVAILABLE:
@@ -262,6 +297,8 @@ if not _C_ACCEL_AVAILABLE:
             _compute_lrt_batch_c,
             _create_workspace_mode4_split_c,
             _compute_mode4_chunk_split_c,
+            _compute_score_batch_general_c,
+            _compute_lrt_batch_general_c,
         ) = _try_import_accel()
 
     if not _C_ACCEL_AVAILABLE:
@@ -839,8 +876,11 @@ def _compute_lrt_numpy(
 ) -> dict[str, np.ndarray]:
     """Compute MLE-optimized LRT statistics.
 
-    Dispatches to C extension when available and n_cvt=1; otherwise falls
-    back to Python golden section optimizer.
+    Dispatches to C extension when available:
+    - n_cvt=1: uses the per-SNP batch path (compute_lrt_batch_c).
+    - n_cvt>1: uses the general batch path (compute_lrt_batch_general_c) with
+      pab_table_dict built from build_pab_table_for_c(n_cvt).
+    Falls back to Python golden section optimizer when C is unavailable.
 
     Args:
         n_cvt: Number of covariates.
@@ -869,12 +909,32 @@ def _compute_lrt_numpy(
             n_threads,
         )
 
+    if _compute_lrt_batch_general_c is not None and n_cvt > 1:
+        from jamma.lmm.likelihood import build_pab_table_for_c
+
+        pab_table_dict = build_pab_table_for_c(n_cvt)
+        return _compute_lrt_batch_general_c(
+            eigenvalues,
+            Uab_batch,
+            len(eigenvalues),
+            n_cvt,
+            pab_table_dict,
+            l_min,
+            l_max,
+            n_grid,
+            n_refine,
+            logl_H0,
+            n_threads,
+        )
+
     from loguru import logger
 
     if _compute_lrt_batch_c is None:
         logger.debug("LRT using Python path (C extension unavailable)")
     else:
-        logger.debug("LRT using Python path (n_cvt={} > 1)", n_cvt)
+        logger.debug(
+            "LRT using Python path (n_cvt={} > 1, general C unavailable)", n_cvt
+        )
 
     lambdas_mle, logls_mle = golden_section_optimize_lambda_mle_numpy(
         n_cvt,
@@ -899,8 +959,11 @@ def _compute_score_numpy(
 ) -> dict[str, np.ndarray]:
     """Compute Score test statistics (no optimization needed).
 
-    Dispatches to C extension when available and n_cvt=1; otherwise falls
-    back to Python batch Score computation.
+    Dispatches to C extension when available:
+    - n_cvt=1: uses the per-SNP batch path (compute_score_batch_c).
+    - n_cvt>1: uses the general batch path (compute_score_batch_general_c) with
+      pab_table_dict built from build_pab_table_for_c(n_cvt).
+    Falls back to Python batch Score when C is unavailable.
 
     Args:
         n_cvt: Number of covariates.
@@ -922,12 +985,28 @@ def _compute_score_numpy(
             n_threads,
         )
 
+    if _compute_score_batch_general_c is not None and n_cvt > 1:
+        from jamma.lmm.likelihood import build_pab_table_for_c
+
+        pab_table_dict = build_pab_table_for_c(n_cvt)
+        return _compute_score_batch_general_c(
+            eigenvalues,
+            Uab_batch,
+            Hi_eval_null,
+            n_samples,
+            n_cvt,
+            pab_table_dict,
+            n_threads,
+        )
+
     from loguru import logger
 
     if _compute_score_batch_c is None:
         logger.debug("Score using Python path (C extension unavailable)")
     else:
-        logger.debug("Score using Python path (n_cvt={} > 1)", n_cvt)
+        logger.debug(
+            "Score using Python path (n_cvt={} > 1, general C unavailable)", n_cvt
+        )
 
     betas, ses, p_scores = batch_calc_score_stats_numpy(
         n_cvt, Hi_eval_null, Uab_batch, n_samples

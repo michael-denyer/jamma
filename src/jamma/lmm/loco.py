@@ -1385,13 +1385,19 @@ def run_lmm_loco(
                                 f"({len(chr_snp_indices_s)} SNPs), "
                                 f"secular equation update..."
                             )
-                        eigenvalues_s, U_s = secular_eigendecompose_from_full(
-                            secular_d_full,  # type: ignore[arg-type]
-                            secular_U_full,  # type: ignore[arg-type]
-                            X_c_s,
-                            secular_p_full,
-                            p_chr_s,
-                        )
+                        try:
+                            eigenvalues_s, U_s = secular_eigendecompose_from_full(
+                                secular_d_full,  # type: ignore[arg-type]
+                                secular_U_full,  # type: ignore[arg-type]
+                                X_c_s,
+                                secular_p_full,
+                                p_chr_s,
+                            )
+                        except (np.linalg.LinAlgError, ValueError) as e:
+                            raise type(e)(
+                                f"Secular eigendecomposition failed for chromosome "
+                                f"{chr_name_s} (p_chr={p_chr_s}): {e}"
+                            ) from e
                         del X_c_s
                         gc.collect()
                         logger.debug(

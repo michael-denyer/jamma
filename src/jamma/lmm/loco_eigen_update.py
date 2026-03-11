@@ -117,15 +117,21 @@ def _rank1_update_python(
     Args:
         d: (n,) ascending diagonal elements.
         rho: Scalar multiplier (can be negative for LOCO downdate).
-        z: (n,) rank-1 update vector (used as-is; rho * z @ z.T is
-            invariant to scaling, so normalization is not needed).
+        z: (n,) rank-1 update vector (used as-is; caller is responsible
+            for adjusting rho if z is rescaled).
 
     Returns:
         Tuple (eigenvalues, eigenvectors) where eigenvalues are ascending and
         eigenvectors are columns of the (n, n) matrix.
     """
     M = np.diag(d) + rho * np.outer(z, z)
-    return np.linalg.eigh(M)
+    try:
+        return np.linalg.eigh(M)
+    except np.linalg.LinAlgError as e:
+        raise np.linalg.LinAlgError(
+            f"rank1_update_python: eigh failed on {len(d)}-dim matrix "
+            f"(rho={rho:.6e}): {e}"
+        ) from e
 
 
 def _rank1_eigenvalues_and_norms_python(
@@ -141,8 +147,8 @@ def _rank1_eigenvalues_and_norms_python(
     Args:
         d: (n,) ascending diagonal elements.
         rho: Scalar multiplier (can be negative for LOCO downdate).
-        z: (n,) rank-1 update vector (used as-is; rho * z @ z.T is
-            invariant to scaling, so normalization is not needed).
+        z: (n,) rank-1 update vector (used as-is; caller is responsible
+            for adjusting rho if z is rescaled).
 
     Returns:
         Tuple (eigenvalues, norms) both shape (n,) ascending.
@@ -289,16 +295,17 @@ def _find_deflated_columns(
         Dict mapping column index k to row index l: deflated eigenvector at
         column k is e_l. Empty dict if no deflation detected.
     """
-    n = len(d)
     deflated: dict[int, int] = {}
-    # Build a set of deflated d-indices: where |z_unit[idx]| < tol_z
-    for idx in range(n):
-        if abs(z_unit[idx]) < tol_z:
-            # Find eigenvalue k that equals d[idx]
-            for k in range(n):
-                if abs(eigenvalues[k] - d[idx]) < 1e-14 * max(abs(d[idx]), 1.0):
-                    deflated[k] = idx
-                    break
+    # Find deflated d-indices: where |z_unit[idx]| < tol_z
+    deflated_mask = np.abs(z_unit) < tol_z
+    deflated_indices = np.where(deflated_mask)[0]
+    for idx in deflated_indices:
+        # Find eigenvalue k closest to d[idx]
+        diffs = np.abs(eigenvalues - d[idx])
+        k = int(np.argmin(diffs))
+        rel_tol = 1e-14 * max(abs(d[idx]), 1.0)
+        if diffs[k] < rel_tol:
+            deflated[k] = int(idx)
     return deflated
 
 
@@ -462,7 +469,7 @@ def _secular_eigendecompose_delta_path(
     - Forward pass: for each step j, compute q_j = V_{j-1}.T @ ... @ V_0.T @ u_z[:,j]
       from scratch using stored (z_k, d_k, lambda_k, norm_k_cauchy) data.
       Cauchy norms are self-consistent: norm_k[l] = ||z_k / (d_k - lambda_k[l])||_2,
-      ensuring V_k_cauchy is unitary by construction (column l has unit norm).
+      ensuring V_k_cauchy is unitary by construction (column k has unit norm).
       Eigenvalues computed via _rank1_eigs_norms_c (DLAED4) for accuracy.
       Stores (z_j, d_j, lambda_j, norm_j_cauchy) — total O(4 * r_eff * n) memory.
     - Backward pass: reconstruct U_loco row-batch by row-batch via blocked
@@ -503,6 +510,7 @@ def _secular_eigendecompose_delta_path(
     stored_deflated: list[dict[int, int]] = [{} for _ in range(r_eff)]
 
     d_current = alpha_c * d_full.copy()
+    n_fallbacks = 0
 
     # Forward pass: for each step j, compute q_j = V_{j-1}^T @ ... @ V_0^T @ u_z[:,j]
     # by applying all stored V_k^T using the Cauchy formula with self-consistent norms
@@ -552,10 +560,11 @@ def _secular_eigendecompose_delta_path(
             try:
                 lambda_j, _ = _rank1_eigs_norms_c(d_current, rho_j_eff, q_j_unit)
             except RuntimeError as e:
+                n_fallbacks += 1
                 logger.warning(
                     f"DLAED4 failure at secular delta step j={j}/{r_eff} "
                     f"(n={n}): {e}. Falling back to Python eigh for this step "
-                    f"(O(n^3) instead of O(n^2)). If this repeats, check input data."
+                    f"(O(n^3) instead of O(n^2))."
                 )
                 lambda_j, _ = _rank1_eigenvalues_and_norms_python(
                     d_current, rho_j_eff, q_j_unit
@@ -591,6 +600,13 @@ def _secular_eigendecompose_delta_path(
         stored_deflated[j] = deflated_j
 
         d_current = lambda_j
+
+    if n_fallbacks > 0:
+        logger.warning(
+            f"DLAED4 fell back to Python eigh on {n_fallbacks}/{r_eff} delta-path "
+            f"steps (n={n}). Each fallback is O(n^3) instead of O(n^2). "
+            f"Check input data if this is unexpected."
+        )
 
     # Backward pass: reconstruct U_loco row-batch by row-batch using Cauchy formula.
     # For each row batch R from U_full, apply R = R @ V_j for j=0..r_eff-1.
@@ -850,7 +866,13 @@ def secular_eigendecompose_from_full(
     # Z = U_full^T @ X_c, shape (n, p_chr) — rotated chromosome genotypes
     # Thin SVD of Z to get r_eff singular vectors
     Z = np.matmul(U_full.T, X_c)
-    u_z, s, _ = np.linalg.svd(Z, full_matrices=False)
+    try:
+        u_z, s, _ = np.linalg.svd(Z, full_matrices=False)
+    except np.linalg.LinAlgError as e:
+        raise np.linalg.LinAlgError(
+            f"SVD of rotated chromosome genotype matrix Z (shape {Z.shape}) "
+            f"failed in secular_eigendecompose_from_full: {e}"
+        ) from e
 
     # Effective rank: singular values above threshold_ratio * s_max
     if len(s) == 0 or s[0] == 0.0:
@@ -904,6 +926,7 @@ def secular_eigendecompose_from_full(
     # Final: d_loco = D_{r_eff}, U_loco = U_full @ Q_{r_eff}
     d_current = alpha_c * d_full.copy()
     Q = np.eye(n)  # accumulated eigenvector rotation matrix, starts as identity
+    n_fallbacks = 0
 
     for j in range(r_eff):
         rho_j = -sigma * s[j] ** 2
@@ -929,10 +952,11 @@ def secular_eigendecompose_from_full(
             try:
                 d_new, V_j = _rank1_update_c(d_current, rho_j_eff, q_j_unit)
             except RuntimeError as e:
+                n_fallbacks += 1
                 logger.warning(
                     f"DLAED4 failure at secular Q step j={j}/{r_eff} "
                     f"(n={n}): {e}. Falling back to Python eigh for this step "
-                    f"(O(n^3) instead of O(n^2)). If this repeats, check input data."
+                    f"(O(n^3) instead of O(n^2))."
                 )
                 d_new, V_j = _rank1_update_python(d_current, rho_j_eff, q_j_unit)
         else:
@@ -949,6 +973,13 @@ def secular_eigendecompose_from_full(
         d_current = d_new
         # Accumulate: Q_{j+1} = Q_j @ V_j
         Q = Q @ V_j
+
+    if n_fallbacks > 0:
+        logger.warning(
+            f"DLAED4 fell back to Python eigh on {n_fallbacks}/{r_eff} Q-path "
+            f"steps (n={n}). Each fallback is O(n^3) instead of O(n^2). "
+            f"Check input data if this is unexpected."
+        )
 
     # Back-rotate: U_loco = U_full @ Q
     U_loco = np.matmul(U_full, Q)

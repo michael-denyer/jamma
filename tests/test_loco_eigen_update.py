@@ -19,6 +19,7 @@ import pytest
 from jamma.lmm.loco_eigen_update import (
     _apply_vj_to_rows_blocked,
     _apply_vj_transpose_to_vec_blocked,
+    _find_deflated_columns,
     _rank1_update_python,
     loco_eigendecompose_from_full,
     measure_effective_rank,
@@ -1035,3 +1036,184 @@ def test_secular_path_does_not_accumulate_x_c_dict():
         f"(one per chromosome), got {call_count[0]}"
     )
     assert loco.n_tested > 0, "Expected SNPs to be tested"
+
+
+# ---------------------------------------------------------------------------
+# Input validation tests for loco_eigendecompose_from_full
+# ---------------------------------------------------------------------------
+
+
+class TestLocoEigendecomposeValidation:
+    """Tests for ValueError guards in loco_eigendecompose_from_full."""
+
+    def setup_method(self) -> None:
+        n = 10
+        rng = np.random.default_rng(99)
+        self.n = n
+        self.d_full = np.sort(rng.random(n))
+        K = rng.standard_normal((n, n))
+        K = K @ K.T / n
+        self.U_full = np.linalg.eigh(K)[1]
+        self.S_chr = rng.standard_normal((n, n))
+        self.S_chr = self.S_chr @ self.S_chr.T / n
+        self.p_full = 100
+        self.p_chr = 20
+
+    def test_d_full_not_1d(self) -> None:
+        with pytest.raises(ValueError, match="d_full must be 1-D"):
+            loco_eigendecompose_from_full(
+                np.ones((3, 3)), self.U_full, self.S_chr, self.p_full, self.p_chr
+            )
+
+    def test_u_full_wrong_shape(self) -> None:
+        with pytest.raises(ValueError, match="U_full must be"):
+            loco_eigendecompose_from_full(
+                self.d_full, np.ones((5, 5)), self.S_chr, self.p_full, self.p_chr
+            )
+
+    def test_s_chr_wrong_shape(self) -> None:
+        with pytest.raises(ValueError, match="S_chr must be"):
+            loco_eigendecompose_from_full(
+                self.d_full, self.U_full, np.ones((5, 5)), self.p_full, self.p_chr
+            )
+
+    def test_p_chr_negative(self) -> None:
+        with pytest.raises(ValueError, match="p_chr must be in"):
+            loco_eigendecompose_from_full(
+                self.d_full, self.U_full, self.S_chr, self.p_full, -1
+            )
+
+    def test_p_chr_exceeds_p_full(self) -> None:
+        with pytest.raises(ValueError, match="p_chr must be in"):
+            loco_eigendecompose_from_full(
+                self.d_full, self.U_full, self.S_chr, 100, 200
+            )
+
+    def test_p_chr_equals_p_full(self) -> None:
+        with pytest.raises(ValueError, match="cannot exclude all SNPs"):
+            loco_eigendecompose_from_full(
+                self.d_full, self.U_full, self.S_chr, 100, 100
+            )
+
+
+# ---------------------------------------------------------------------------
+# Input validation tests for secular_eigendecompose_from_full
+# ---------------------------------------------------------------------------
+
+
+class TestSecularEigendecomposeValidation:
+    """Tests for ValueError guards in secular_eigendecompose_from_full."""
+
+    def setup_method(self) -> None:
+        n = 10
+        rng = np.random.default_rng(99)
+        self.n = n
+        self.d_full = np.sort(rng.random(n))
+        K = rng.standard_normal((n, n))
+        K = K @ K.T / n
+        self.U_full = np.linalg.eigh(K)[1]
+        self.X_c = rng.standard_normal((n, 5))
+        self.p_full = 100
+        self.p_chr = 5
+
+    def test_d_full_not_1d(self) -> None:
+        with pytest.raises(ValueError, match="d_full must be 1-D"):
+            secular_eigendecompose_from_full(
+                np.ones((3, 3)), self.U_full, self.X_c, self.p_full, self.p_chr
+            )
+
+    def test_u_full_wrong_shape(self) -> None:
+        with pytest.raises(ValueError, match="U_full must be"):
+            secular_eigendecompose_from_full(
+                self.d_full, np.ones((5, 5)), self.X_c, self.p_full, self.p_chr
+            )
+
+    def test_x_c_wrong_shape(self) -> None:
+        with pytest.raises(ValueError, match="X_c must be"):
+            secular_eigendecompose_from_full(
+                self.d_full, self.U_full, np.ones((5, 3)), self.p_full, self.p_chr
+            )
+
+    def test_p_chr_negative(self) -> None:
+        with pytest.raises(ValueError, match="p_chr must be in"):
+            secular_eigendecompose_from_full(
+                self.d_full, self.U_full, self.X_c, self.p_full, -1
+            )
+
+    def test_p_chr_exceeds_p_full(self) -> None:
+        with pytest.raises(ValueError, match="p_chr must be in"):
+            secular_eigendecompose_from_full(
+                self.d_full, self.U_full, self.X_c, 100, 200
+            )
+
+    def test_p_chr_equals_p_full(self) -> None:
+        with pytest.raises(ValueError, match="cannot exclude all SNPs"):
+            secular_eigendecompose_from_full(self.d_full, self.U_full, self.X_c, 5, 5)
+
+
+# ---------------------------------------------------------------------------
+# DLAED4 fallback path test
+# ---------------------------------------------------------------------------
+
+
+def test_secular_q_path_dlaed4_fallback() -> None:
+    """C extension RuntimeError falls back to Python eigh."""
+    rng = np.random.default_rng(77)
+    n = 20
+    p_chr = 5
+    p_full = 50
+
+    d_full = np.sort(rng.random(n))
+    K = rng.standard_normal((n, n))
+    K = K @ K.T / n
+    U_full = np.linalg.eigh(K)[1]
+    X_c = rng.standard_normal((n, p_chr))
+
+    # Get reference result with no mocking
+    d_ref, U_ref = secular_eigendecompose_from_full(d_full, U_full, X_c, p_full, p_chr)
+
+    # Mock C extension to always raise RuntimeError, forcing Python fallback
+    with (
+        patch("jamma.lmm.loco_eigen_update._SECULAR_ACCEL_AVAILABLE", True),
+        patch(
+            "jamma.lmm.loco_eigen_update._rank1_update_c",
+            side_effect=RuntimeError("mocked DLAED4 failure"),
+        ),
+    ):
+        d_fallback, U_fallback = secular_eigendecompose_from_full(
+            d_full,
+            U_full,
+            X_c,
+            p_full,
+            p_chr,
+            n_threshold_for_delta=n + 1,  # force Q path
+        )
+
+    np.testing.assert_allclose(d_fallback, d_ref, rtol=1e-10, atol=1e-14)
+
+
+# ---------------------------------------------------------------------------
+# _find_deflated_columns vectorized correctness
+# ---------------------------------------------------------------------------
+
+
+def test_find_deflated_columns_basic() -> None:
+    """Vectorized _find_deflated_columns matches expected deflation detection."""
+    d = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    # z_unit[1] ≈ 0 -> eigenvalue 2.0 should be deflated
+    z_unit = np.array([0.5, 1e-15, 0.5, 0.5, 0.5])
+    eigenvalues = np.array([0.9, 2.0, 3.1, 4.2, 5.3])
+
+    result = _find_deflated_columns(z_unit, d, eigenvalues)
+    # eigenvalues[1] == d[1] == 2.0, and z_unit[1] ≈ 0
+    assert 1 in result
+    assert result[1] == 1
+
+
+def test_find_deflated_columns_no_deflation() -> None:
+    """No deflation when all z_unit entries are above threshold."""
+    d = np.array([1.0, 2.0, 3.0])
+    z_unit = np.array([0.5, 0.5, 0.5])
+    eigenvalues = np.array([0.9, 2.1, 3.2])
+    result = _find_deflated_columns(z_unit, d, eigenvalues)
+    assert result == {}

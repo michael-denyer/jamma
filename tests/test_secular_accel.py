@@ -417,3 +417,99 @@ def test_rank1_eigenvalues_and_norms_z_normalization():
 
     assert np.all(np.isfinite(norms)), "Norms must be finite for non-unit z"
     assert np.all(norms > 0), "Norms must be positive for non-unit z"
+
+
+# ---------------------------------------------------------------------------
+# C extension edge cases: input validation & mutation safety
+# ---------------------------------------------------------------------------
+
+
+@_skip_no_ext
+class TestCExtensionEdgeCases:
+    """Tests for C extension input validation and edge cases."""
+
+    def test_rank1_update_wrong_dtype_int32(self) -> None:
+        """C extension rejects int32 arrays."""
+        d = np.array([1.0, 2.0, 3.0], dtype=np.int32)
+        z = np.array([1.0, 1.0, 1.0], dtype=np.float64)
+        with pytest.raises(TypeError):
+            _ext.rank1_eigenvalue_update(d, 0.5, z)
+
+    def test_rank1_update_wrong_dtype_float32(self) -> None:
+        """C extension rejects float32 arrays."""
+        d = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        z = np.array([1.0, 1.0, 1.0], dtype=np.float64)
+        with pytest.raises(TypeError):
+            _ext.rank1_eigenvalue_update(d, 0.5, z)
+
+    def test_rank1_update_2d_array(self) -> None:
+        """C extension rejects 2-D arrays."""
+        d = np.array([[1.0, 2.0], [3.0, 4.0]])
+        z = np.array([1.0, 1.0])
+        with pytest.raises(ValueError):
+            _ext.rank1_eigenvalue_update(d, 0.5, z)
+
+    def test_rank1_update_size_mismatch(self) -> None:
+        """C extension rejects mismatched array lengths."""
+        d = np.array([1.0, 2.0, 3.0])
+        z = np.array([1.0, 1.0])
+        with pytest.raises(ValueError):
+            _ext.rank1_eigenvalue_update(d, 0.5, z)
+
+    def test_rank1_update_n1(self) -> None:
+        """C extension handles n=1 (degenerate secular equation)."""
+        d = np.array([2.0])
+        z = np.array([1.0])
+        rho = 0.5
+        vals, vecs = _ext.rank1_eigenvalue_update(d, rho, z)
+        expected = d[0] + rho  # D + rho*z*z^T = [[2.5]]
+        np.testing.assert_allclose(vals, [expected], rtol=1e-14)
+        assert vecs.shape == (1, 1)
+
+    def test_rank1_eigs_norms_wrong_dtype(self) -> None:
+        """rank1_eigenvalues_and_norms rejects non-float64 arrays."""
+        d = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        z = np.array([1.0, 1.0, 1.0], dtype=np.float64)
+        with pytest.raises(TypeError):
+            _ext.rank1_eigenvalues_and_norms(d, 0.5, z)
+
+    def test_rank1_eigs_norms_n1(self) -> None:
+        """rank1_eigenvalues_and_norms handles n=1."""
+        d = np.array([2.0])
+        z = np.array([1.0])
+        rho = 0.5
+        vals, norms = _ext.rank1_eigenvalues_and_norms(d, rho, z)
+        expected = d[0] + rho
+        np.testing.assert_allclose(vals, [expected], rtol=1e-14)
+        assert len(norms) == 1
+        assert np.isfinite(norms[0])
+
+    def test_rank1_update_does_not_mutate_z(self) -> None:
+        """C extension must not modify caller's z array."""
+        rng = np.random.default_rng(42)
+        d = np.sort(rng.random(10))
+        z = rng.standard_normal(10)
+        z_copy = z.copy()
+        _ext.rank1_eigenvalue_update(d, 0.5, z)
+        np.testing.assert_array_equal(z, z_copy, err_msg="z was mutated")
+
+    def test_rank1_eigs_norms_does_not_mutate_z(self) -> None:
+        """rank1_eigenvalues_and_norms must not modify caller's z array."""
+        rng = np.random.default_rng(42)
+        d = np.sort(rng.random(10))
+        z = rng.standard_normal(10)
+        z_copy = z.copy()
+        _ext.rank1_eigenvalues_and_norms(d, 0.5, z)
+        np.testing.assert_array_equal(z, z_copy, err_msg="z was mutated")
+
+    def test_rank1_update_non_contiguous(self) -> None:
+        """C extension handles non-contiguous arrays (e.g., sliced)."""
+        rng = np.random.default_rng(42)
+        d_full = np.sort(rng.random(20))
+        d = d_full[::2]  # non-contiguous stride-2 view
+        z = rng.standard_normal(20)[::2]
+        assert not d.flags["C_CONTIGUOUS"]
+        # Should not crash — PyArray_ContiguousFromAny handles the copy
+        vals, vecs = _ext.rank1_eigenvalue_update(d, 0.5, z)
+        assert len(vals) == len(d)
+        assert vecs.shape == (len(d), len(d))

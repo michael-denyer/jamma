@@ -130,7 +130,11 @@ def compile_extension(verbose: bool = True) -> bool:
     ]
 
     _print(f"Compiling: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    except (FileNotFoundError, PermissionError) as e:
+        _print(f"ERROR: failed to execute compiler: {e}")
+        return False
 
     if result.returncode != 0:
         _print(f"ERROR: compilation failed:\n{result.stderr}")

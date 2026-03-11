@@ -184,9 +184,11 @@ class PipelineConfig:
         # Secular update constraints
         if self.use_secular_update and not self.loco:
             raise ValueError("use_secular_update=True requires loco=True")
-        if self.use_secular_update and self.backend == "jax":
+        if self.use_secular_update and self.backend != "numpy":
             raise ValueError(
-                "use_secular_update=True requires backend='numpy' (not 'jax')"
+                "use_secular_update=True requires backend='numpy'. "
+                f"Got backend={self.backend!r}. "
+                "Pass backend='numpy' explicitly."
             )
 
 

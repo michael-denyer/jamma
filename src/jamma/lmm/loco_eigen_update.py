@@ -43,22 +43,63 @@ _DEFAULT_THRESHOLD: float = 1e-10
 # C extension for rank-1 eigenvalue update via LAPACK DLAED4
 # ---------------------------------------------------------------------------
 
-try:
-    from jamma.lmm._secular_accel import rank1_eigenvalue_update as _rank1_update_c
-    from jamma.lmm._secular_accel import (
-        rank1_eigenvalues_and_norms as _rank1_eigs_norms_c,
-    )
+_EXPECTED_SECULAR_ABI = 2  # Must match ABI_VERSION in _secular_accel.c
 
-    _SECULAR_ACCEL_AVAILABLE = True
-except ImportError as e:
-    _SECULAR_ACCEL_AVAILABLE = False
+
+def _try_import_secular() -> tuple[bool, object | None, object | None]:
+    """Import C extension and validate ABI + DLAED4 availability."""
+    try:
+        from jamma.lmm._secular_accel import ABI_VERSION as abi
+        from jamma.lmm._secular_accel import (
+            rank1_eigenvalue_update,
+            rank1_eigenvalues_and_norms,
+        )
+    except ImportError as e:
+        logger.info(
+            f"C extension _secular_accel not available ({e}); "
+            "rank-1 secular updates will use Python fallback. "
+            "Run 'python -m jamma.lmm._compile_secular' to compile."
+        )
+        return False, None, None
+    except AttributeError as e:
+        logger.warning(
+            f"_secular_accel loaded but missing attribute: {e}. "
+            "Stale .so may need recompilation: "
+            "python -m jamma.lmm._compile_secular"
+        )
+        return False, None, None
+
+    if abi != _EXPECTED_SECULAR_ABI:
+        logger.warning(
+            f"_secular_accel ABI mismatch: extension has ABI_VERSION={abi}, "
+            f"expected {_EXPECTED_SECULAR_ABI}. Extension will not be used. "
+            f"Recompile with: python -m jamma.lmm._compile_secular"
+        )
+        return False, None, None
+
+    # Probe DLAED4: the extension can import but lack LAPACK symbols.
+    # A small test call detects this at import time rather than mid-computation.
+    try:
+        _test_d = np.array([1.0, 2.0, 3.0])
+        _test_z = np.array([1.0, 1.0, 1.0])
+        rank1_eigenvalues_and_norms(_test_d, 0.1, _test_z)
+    except RuntimeError as e:
+        if "not resolved" in str(e):
+            logger.warning(
+                "_secular_accel imported but DLAED4 symbol not resolved "
+                "(LAPACK not found). Using Python fallback. "
+                "Ensure numpy is linked against a LAPACK library."
+            )
+            return False, None, None
+        raise  # Unexpected error — propagate
+
+    return True, rank1_eigenvalue_update, rank1_eigenvalues_and_norms
+
+
+_SECULAR_ACCEL_AVAILABLE, _rank1_update_c, _rank1_eigs_norms_c = _try_import_secular()
+if not _SECULAR_ACCEL_AVAILABLE:
     _rank1_update_c = None  # type: ignore[assignment]
     _rank1_eigs_norms_c = None  # type: ignore[assignment]
-    logger.info(
-        f"C extension _secular_accel not available ({e}); "
-        "rank-1 secular updates will use Python fallback. "
-        "Run 'python -m jamma.lmm._compile_secular' to compile."
-    )
 
 
 def _rank1_update_python(
@@ -511,10 +552,8 @@ def _secular_eigendecompose_delta_path(
             try:
                 lambda_j, _ = _rank1_eigs_norms_c(d_current, rho_j_eff, q_j_unit)
             except RuntimeError as e:
-                if "not resolved" in str(e):
-                    raise  # Environmental problem — don't silently degrade
                 logger.warning(
-                    f"DLAED4 convergence failure at secular step j={j}/{r_eff} "
+                    f"DLAED4 failure at secular delta step j={j}/{r_eff} "
                     f"(n={n}): {e}. Falling back to Python eigh for this step "
                     f"(O(n^3) instead of O(n^2)). If this repeats, check input data."
                 )
@@ -890,10 +929,8 @@ def secular_eigendecompose_from_full(
             try:
                 d_new, V_j = _rank1_update_c(d_current, rho_j_eff, q_j_unit)
             except RuntimeError as e:
-                if "not resolved" in str(e):
-                    raise  # Environmental problem — don't silently degrade
                 logger.warning(
-                    f"DLAED4 convergence failure at secular step j={j}/{r_eff} "
+                    f"DLAED4 failure at secular Q step j={j}/{r_eff} "
                     f"(n={n}): {e}. Falling back to Python eigh for this step "
                     f"(O(n^3) instead of O(n^2)). If this repeats, check input data."
                 )

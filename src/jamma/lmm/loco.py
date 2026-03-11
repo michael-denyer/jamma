@@ -467,22 +467,31 @@ def _compute_loco_kinship_streaming_numpy(
     # If True for subsequent passes, S_full is accumulated multiple times, corrupting
     # all K_loco matrices — each K_loco would be subtracted from an inflated S_full.
     if yield_x_c_sequential:
-        # Sequential X_c path: two BED passes reduce peak memory from O(sum_X_c) to
-        # O(max_X_c). Pass 1 accumulates S_full synchronously; Pass 2 is a lazy
-        # generator that re-reads the BED file once per chromosome.
+        # Sequential X_c path: two BED passes reduce peak memory from O(sum_X_c)
+        # to O(max_X_c). Pass 1 accumulates S_full synchronously; Pass 2 is a
+        # lazy generator that re-reads the BED file once per chromosome.
         #
-        # Peak memory: S_full (matrix_gb) + one X_c (max_chr_gb) + chunk buffer.
-        # Memory for K_full eigendecomp is separate (caller's responsibility).
+        # Peak memory phases (non-overlapping):
+        #   Phase 1 (eigendecomp): S_full/K_full (in-place /=) + eigendecomp
+        #     workspace + chunk buffer.
+        #   Phase 2 (per-chr secular): U_full + d_full + one X_c + secular
+        #     workspace (~3 n-vectors for Cauchy/deflation intermediates).
+        # Phase 1 dominates because eigendecomp workspace >> one X_c.
         max_chr_snps = max(n_chr_filtered.values()) if n_chr_filtered else 0
         max_chr_gb = max_chr_snps * n_samples_kinship * 8 / 1e9
-        seq_peak_gb = matrix_gb + max_chr_gb + chunk_buffer_gb
+        # Phase 1 peak: K_full (in-place from S_full) + eigendecomp workspace
+        phase1_gb = matrix_gb + eigendecomp_min_gb + chunk_buffer_gb
+        # Phase 2 peak: U_full + d_full + one X_c + secular workspace
+        phase2_gb = matrix_gb + max_chr_gb + 3 * n_samples_kinship * 8 / 1e9
+        seq_peak_gb = max(phase1_gb, phase2_gb)
         if check_memory and seq_peak_gb > available_gb * 0.9:
             raise MemoryError(
                 f"Insufficient memory for sequential X_c LOCO path: need "
-                f"{seq_peak_gb:.1f}GB for S_full ({matrix_gb:.2f}GB) + "
-                f"one X_c (max {max_chr_snps} SNPs = {max_chr_gb:.2f}GB) + "
-                f"chunk buffer ({chunk_buffer_gb:.2f}GB), "
-                f"available {available_gb:.1f}GB. "
+                f"{seq_peak_gb:.1f}GB — phase 1: K_full ({matrix_gb:.2f}GB) "
+                f"+ eigendecomp ({eigendecomp_min_gb:.1f}GB) + chunk buffer "
+                f"({chunk_buffer_gb:.2f}GB); phase 2: U_full "
+                f"({matrix_gb:.2f}GB) + max X_c ({max_chr_gb:.2f}GB). "
+                f"Available {available_gb:.1f}GB. "
                 f"Consider using standard LOCO (use_secular_update=False)."
             )
         # Sequential path: always use single-pass for S_full accumulation (Pass 1).
@@ -1276,9 +1285,12 @@ def run_lmm_loco(
                                 yield_x_c_sequential=True,
                             )
                         )
-                        # S_full_secular is the unnormalised accumulator from Pass 1.
-                        K_full_secular = S_full_secular / secular_p_full
-                        del S_full_secular
+                        # Normalise S_full in-place to get K_full, avoiding a
+                        # second n×n allocation that the memory estimator must
+                        # otherwise budget for.
+                        S_full_secular /= secular_p_full
+                        K_full_secular = S_full_secular
+                        del S_full_secular  # just drops the name, no dealloc
 
                         if K_full_secular.shape[0] == 0:
                             raise ValueError(

@@ -1060,11 +1060,11 @@ def run_lmm_loco(
         eigen_prefix: Prefix for eigen filenames (default "result").
         use_secular_update: If True, compute the full kinship eigendecomposition
             once via eigendecompose_kinship(K_full) then derive per-chromosome
-            eigendecompositions via loco_eigendecompose_from_full instead of
-            eigendecomposing each K_loco independently. Requires O(n * p_total)
-            memory where p_total is the total filtered SNP count (all
-            per-chromosome X_c matrices held simultaneously). Only supported
-            with the numpy backend.
+            eigendecompositions via secular_eigendecompose_from_full instead of
+            eigendecomposing each K_loco independently. Uses sequential
+            streaming (one chromosome at a time) with peak memory O(n^2)
+            for K_full/U_full plus O(n * max_p_chr) for the largest single
+            chromosome. Only supported with the numpy backend.
             Raises ValueError if True with backend="jax", with
             save_kinship=True, or when cached eigen files exist in eigen_dir.
 
@@ -1349,12 +1349,16 @@ def run_lmm_loco(
                 # Sequential secular update: consume x_c_seq_iter one chromosome
                 # at a time. For each (chr_name, X_c, p_chr), compute the
                 # secular eigendecomp inline, free X_c, then yield (chr_name, eigen).
-                assert secular_x_c_seq_iter is not None, (
-                    "secular_x_c_seq_iter must be set for use_secular_update=True"
-                )
-                assert secular_d_full is not None and secular_U_full is not None, (
-                    "secular_d_full/U_full must be set before the chr loop"
-                )
+                if secular_x_c_seq_iter is None:
+                    raise RuntimeError(
+                        "Internal error: secular_x_c_seq_iter not initialized. "
+                        "This indicates a bug in the secular update path setup."
+                    )
+                if secular_d_full is None or secular_U_full is None:
+                    raise RuntimeError(
+                        "Internal error: secular_d_full/U_full not initialized. "
+                        "This indicates a bug in the secular update path setup."
+                    )
 
                 def _secular_chr_iter() -> Iterator[
                     tuple[str, tuple[np.ndarray, np.ndarray]]

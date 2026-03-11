@@ -16,8 +16,9 @@ of K_loco_c are U_full @ V where V are the eigenvectors of M.
 
 This avoids constructing K_loco_c = (S_full - S_chr) / p_loco explicitly.
 The low-rank structure of M_gram enables a secular equation solver (via LAPACK
-DLAED4) computing eigenvalues at O(n * r_eff) cost per eigenvalue, versus
-O(n^3) for direct eigendecomposition. Two eigenvector accumulation paths:
+DLAED4) computing all n eigenvalues at O(n^2) cost per rank-1 update
+(O(n) per eigenvalue via DLAED4), versus O(n^3) for direct
+eigendecomposition. Two eigenvector accumulation paths:
 
 - **Q path**: sequential rank-1 updates with O(n^2) eigenvector multiply per
   step, O(n^2) workspace. Total: O(n^2 * r_eff) compute + O(n^2) memory.
@@ -49,12 +50,12 @@ try:
     )
 
     _SECULAR_ACCEL_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     _SECULAR_ACCEL_AVAILABLE = False
     _rank1_update_c = None  # type: ignore[assignment]
     _rank1_eigs_norms_c = None  # type: ignore[assignment]
     logger.info(
-        "C extension _secular_accel not available; "
+        f"C extension _secular_accel not available ({e}); "
         "rank-1 secular updates will use Python fallback. "
         "Run 'python -m jamma.lmm._compile_secular' to compile."
     )
@@ -69,12 +70,14 @@ def _rank1_update_python(
 
     Computes eigenvalues and eigenvectors of D + rho * z @ z.T where D =
     diag(d). This is O(n^3) and only used when the C extension (_secular_accel)
-    is unavailable. The C extension uses LAPACK DLAED4 (O(n^2) per call).
+    is unavailable. The C extension uses LAPACK DLAED4 (O(n) per eigenvalue,
+    O(n^2) per rank-1 update).
 
     Args:
         d: (n,) ascending diagonal elements.
         rho: Scalar multiplier (can be negative for LOCO downdate).
-        z: (n,) rank-1 update vector (normalised internally).
+        z: (n,) rank-1 update vector (used as-is; rho * z @ z.T is
+            invariant to scaling, so normalization is not needed).
 
     Returns:
         Tuple (eigenvalues, eigenvectors) where eigenvalues are ascending and
@@ -97,7 +100,8 @@ def _rank1_eigenvalues_and_norms_python(
     Args:
         d: (n,) ascending diagonal elements.
         rho: Scalar multiplier (can be negative for LOCO downdate).
-        z: (n,) rank-1 update vector (normalised internally).
+        z: (n,) rank-1 update vector (used as-is; rho * z @ z.T is
+            invariant to scaling, so normalization is not needed).
 
     Returns:
         Tuple (eigenvalues, norms) both shape (n,) ascending.
@@ -251,7 +255,7 @@ def _find_deflated_columns(
         if abs(z_unit[idx]) < tol_z:
             # Find eigenvalue k that equals d[idx]
             for k in range(n):
-                if eigenvalues[k] == d[idx]:
+                if abs(eigenvalues[k] - d[idx]) < 1e-14 * max(abs(d[idx]), 1.0):
                     deflated[k] = idx
                     break
     return deflated
@@ -425,7 +429,8 @@ def _secular_eigendecompose_delta_path(
       With self-consistent Cauchy norms, V_j_cauchy columns are unit-norm by
       construction, giving a proper unitary reconstruction.
 
-    Forward pass cost: O(r_eff^2 * n) eigenvalue updates + Cauchy transforms.
+    Forward pass cost: O(r_eff^2 * n^2) Cauchy transforms
+      + O(r_eff * n^2) eigenvalue updates.
     Backward pass cost: O(n^2 * r_eff) — blocked Cauchy multiply across all rows.
     Memory: O(r_eff * n) stored scalars (no Q matrix, no V_j matrices).
 
@@ -508,9 +513,10 @@ def _secular_eigendecompose_delta_path(
             except RuntimeError as e:
                 if "not resolved" in str(e):
                     raise  # Environmental problem — don't silently degrade
-                logger.debug(
-                    f"_secular_eigendecompose_delta_path: DLAED4 convergence failure "
-                    f"at step j={j} ({e}), falling back to Python eigh"
+                logger.warning(
+                    f"DLAED4 convergence failure at secular step j={j}/{r_eff} "
+                    f"(n={n}): {e}. Falling back to Python eigh for this step "
+                    f"(O(n^3) instead of O(n^2)). If this repeats, check input data."
                 )
                 lambda_j, _ = _rank1_eigenvalues_and_norms_python(
                     d_current, rho_j_eff, q_j_unit
@@ -720,7 +726,10 @@ def secular_eigendecompose_from_full(
     row_batch_size: int = 1000,
     col_block_size: int = 1000,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """O(n^2 * r_eff) secular equation solver for LOCO eigenvalue update.
+    """Secular equation solver for LOCO eigenvalue update.
+
+    Complexity: O(n^2 * r_eff) backward pass + O(r_eff^2 * n^2) forward pass.
+    When r_eff << n (typical due to LD compression), backward pass dominates.
 
     Replaces the O(n^3) np.linalg.eigh(M) call in loco_eigendecompose_from_full
     with a secular equation solver that exploits the low-rank structure of the
@@ -883,9 +892,10 @@ def secular_eigendecompose_from_full(
             except RuntimeError as e:
                 if "not resolved" in str(e):
                     raise  # Environmental problem — don't silently degrade
-                logger.debug(
-                    f"secular_eigendecompose_from_full: DLAED4 convergence failure "
-                    f"at step j={j} ({e}), falling back to Python eigh for this step"
+                logger.warning(
+                    f"DLAED4 convergence failure at secular step j={j}/{r_eff} "
+                    f"(n={n}): {e}. Falling back to Python eigh for this step "
+                    f"(O(n^3) instead of O(n^2)). If this repeats, check input data."
                 )
                 d_new, V_j = _rank1_update_python(d_current, rho_j_eff, q_j_unit)
         else:

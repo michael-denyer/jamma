@@ -181,6 +181,13 @@ class PipelineConfig:
                 "(-n with multiple columns). "
                 "Run each phenotype separately."
             )
+        # Secular update constraints
+        if self.use_secular_update and not self.loco:
+            raise ValueError("use_secular_update=True requires loco=True")
+        if self.use_secular_update and self.backend == "jax":
+            raise ValueError(
+                "use_secular_update=True requires backend='numpy' (not 'jax')"
+            )
 
 
 @dataclass

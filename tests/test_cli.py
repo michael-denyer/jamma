@@ -1078,6 +1078,25 @@ def test_cli_secular_with_jax_backend_errors():
 
 
 @pytest.mark.tier1
+def test_cli_secular_with_auto_backend_errors():
+    """--secular with --backend auto (default) raises a clear CLI error."""
+    result = runner.invoke(
+        main,
+        [
+            "-lmm",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-loco",
+            "--secular",
+            # --backend defaults to "auto"
+        ],
+    )
+    assert result.exit_code == 1
+    assert "numpy" in result.output.lower() or "secular" in result.output.lower()
+
+
+@pytest.mark.tier1
 def test_cli_secular_flag_accepted_by_parser():
     """--secular -loco --backend numpy is accepted by the click parser."""
     from unittest.mock import MagicMock, patch

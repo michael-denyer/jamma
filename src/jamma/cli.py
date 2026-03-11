@@ -616,8 +616,8 @@ def _run_lmm(
     # Validate --secular requirements before building PipelineConfig
     if secular and not loco:
         _cli_error("--secular requires -loco mode")
-    if secular and backend == "jax":
-        _cli_error("--secular requires --backend numpy (not jax)")
+    if secular and backend in ("jax", "auto"):
+        _cli_error("--secular requires --backend numpy explicitly")
 
     # Mutual exclusivity check
     if loco and kinship_file is not None:

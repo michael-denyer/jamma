@@ -143,7 +143,11 @@ static int scan_dir_for_lapack(const char *dirpath) {
                 continue;
 
             char fullpath[4096];
-            snprintf(fullpath, sizeof(fullpath), "%s/%s", dirpath, entry->d_name);
+            int pathlen = snprintf(fullpath, sizeof(fullpath), "%s/%s", dirpath, entry->d_name);
+            if (pathlen >= (int)sizeof(fullpath)) {
+                if (dbg) fprintf(stderr, "_secular_accel:   path too long, skipping: %s/%s\n", dirpath, entry->d_name);
+                continue;
+            }
 
             if (dbg) fprintf(stderr, "_secular_accel:   trying dlopen: %s\n", fullpath);
             void *handle = dlopen(fullpath, RTLD_LAZY | RTLD_GLOBAL);
@@ -483,8 +487,15 @@ static PyObject *py_rank1_eigenvalue_update(PyObject *self, PyObject *args)
         (PyObject *)d_arr, NPY_FLOAT64, 1, 1);
     if (!d_c) return NULL;
 
-    PyArrayObject *z_c = (PyArrayObject *)PyArray_ContiguousFromAny(
+    /* Always copy z to avoid mutating the caller's array. When z_arr is
+     * already contiguous float64, ContiguousFromAny returns the same object
+     * (refcount bump, no copy), and the in-place normalization below would
+     * corrupt the caller's data. NewCopy guarantees a fresh buffer. */
+    PyArrayObject *z_tmp1 = (PyArrayObject *)PyArray_ContiguousFromAny(
         (PyObject *)z_arr, NPY_FLOAT64, 1, 1);
+    if (!z_tmp1) { Py_DECREF(d_c); return NULL; }
+    PyArrayObject *z_c = (PyArrayObject *)PyArray_NewCopy(z_tmp1, NPY_CORDER);
+    Py_DECREF(z_tmp1);
     if (!z_c) { Py_DECREF(d_c); return NULL; }
 
     double *d_ptr = (double *)PyArray_DATA(d_c);
@@ -501,7 +512,7 @@ static PyObject *py_rank1_eigenvalue_update(PyObject *self, PyObject *args)
      *   rho_eff * z_unit @ z_unit^T = rho * z_orig @ z_orig^T */
     double rho_eff = rho * z_norm_sq;
 
-    /* Normalize z in-place */
+    /* Normalize z in the copied buffer (caller's array is untouched) */
     if (z_norm > 0.0) {
         for (npy_intp k = 0; k < n; k++) {
             z_ptr[k] /= z_norm;
@@ -773,8 +784,13 @@ static PyObject *py_rank1_eigenvalues_and_norms(PyObject *self, PyObject *args)
         (PyObject *)d_arr, NPY_FLOAT64, 1, 1);
     if (!d_c) return NULL;
 
-    PyArrayObject *z_c = (PyArrayObject *)PyArray_ContiguousFromAny(
+    /* Always copy z to avoid mutating the caller's array (see comment in
+     * py_rank1_eigenvalue_update for rationale). */
+    PyArrayObject *z_tmp2 = (PyArrayObject *)PyArray_ContiguousFromAny(
         (PyObject *)z_arr, NPY_FLOAT64, 1, 1);
+    if (!z_tmp2) { Py_DECREF(d_c); return NULL; }
+    PyArrayObject *z_c = (PyArrayObject *)PyArray_NewCopy(z_tmp2, NPY_CORDER);
+    Py_DECREF(z_tmp2);
     if (!z_c) { Py_DECREF(d_c); return NULL; }
 
     double *d_ptr = (double *)PyArray_DATA(d_c);
@@ -789,7 +805,7 @@ static PyObject *py_rank1_eigenvalues_and_norms(PyObject *self, PyObject *args)
 
     double rho_eff = rho * z_norm_sq;
 
-    /* Normalize z in-place */
+    /* Normalize z in the copied buffer (caller's array is untouched) */
     if (z_norm > 0.0) {
         for (npy_intp k = 0; k < n; k++) {
             z_ptr[k] /= z_norm;

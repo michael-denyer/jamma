@@ -324,7 +324,7 @@ Uses **streaming subtraction**: computes the full kinship matrix K once, then de
 
 The streaming approach produces mathematically identical LOCO kinship matrices while using constant memory (one K_loco at a time). This is critical for large-sample GWAS where materializing 22 copies of an n×n matrix is infeasible.
 
-**Rotated-basis eigenvalue update** (`use_secular_update=True`): an alternative path that eigendecomposes K_full once and derives per-chromosome eigenvalues via M = alpha_c × diag(d_full) - sigma × U_full^T × S_chr × U_full. This avoids C independent O(n^3) eigendecompositions at the cost of holding all per-chromosome genotype matrices X_c in memory simultaneously (O(n × p_total)). The math is equivalent — validated against GEMMA within calibrated tolerances. See `loco_eigen_update.py`.
+**Rotated-basis eigenvalue update** (`use_secular_update=True`): an alternative path that eigendecomposes K_full once and derives per-chromosome eigenvalues via M = alpha_c × diag(d_full) - sigma × U_full^T × S_chr × U_full. This avoids C independent O(n^3) eigendecompositions at the cost of two BED file passes (one for K_full accumulation, one for sequential per-chromosome processing). The math is equivalent — validated against GEMMA within calibrated tolerances. See `loco_eigen_update.py`.
 
 ---
 

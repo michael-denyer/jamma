@@ -6,6 +6,7 @@
  *                     create_workspace_split_c, compute_lmm_chunk_split_c,
  *                     create_workspace_general_c, compute_lmm_chunk_general_c,
  *                     compute_score_batch_c, compute_lrt_batch_c,
+ *                     compute_score_batch_general_c, compute_lrt_batch_general_c,
  *                     create_workspace_mode4_split_c, compute_mode4_chunk_split_c
  *
  * Translates the Python/NumPy golden-section REML/MLE optimizer + Wald/Score/LRT
@@ -71,7 +72,7 @@
 
 /* ABI version: bump when function signatures or array layout expectations change.
  * The Python side checks this at import time to detect stale .so files. */
-#define ABI_VERSION 6  /* v6: Fused mode-4 kernel (Wald/Score/LRT single pass from SoA split) */
+#define ABI_VERSION 7  /* v7: General n_cvt Score and LRT batch kernels */
 
 /* Betainc continued fraction constants — matches special.py */
 #define CF_TINY     1.0e-30
@@ -4112,6 +4113,787 @@ err_input:
 }
 
 /* =========================================================================
+ * GENERAL n_cvt SCORE BATCH — compute_score_batch_general_c
+ *
+ * Score test for arbitrary n_cvt using table-driven Pab recursion.
+ * Mirrors compute_score_batch_c (n_cvt=1) but uses calc_pab_general.
+ * ========================================================================= */
+
+/* -------------------------------------------------------------------------
+ * score_from_pab_general — Score statistics from general-n_cvt Pab.
+ *
+ * Score differs from Wald:
+ *   - F = n_samples * P_xy^2 / (P_yy * P_xx)  [not (P_yy - Px_yy) * tau]
+ *   - Degenerate guard checks P_XX <= 0 || P_YY < 0 || Px_YY < 0
+ *   - Px_yy at level n_cvt+1 used only for beta/se, not F-stat
+ *
+ * Returns 1 if valid, 0 if degenerate.
+ * ------------------------------------------------------------------------- */
+static int score_from_pab_general(
+    const double *pab,
+    const pab_table_t *t,
+    int n_samples,
+    double *beta_out, double *se_out, double *f_stat_out
+)
+{
+    int ni = t->n_index;
+    int df = t->df;
+    int nc = t->n_cvt;
+
+    /* Score: extract at level n_cvt (row nc), NOT n_cvt+1 */
+    double P_XX  = pab[nc * ni + t->idx_xx];
+    double P_XY  = pab[nc * ni + t->idx_xy];
+    double P_YY  = pab[nc * ni + t->idx_yy];
+    /* Px_yy at level n_cvt+1 for beta/se */
+    double Px_YY = pab[(nc + 1) * ni + t->idx_yy];
+
+    if (P_XX <= 0.0 || P_YY < 0.0 || Px_YY < 0.0) {
+        *beta_out = *se_out = *f_stat_out = (double)NAN;
+        return 0;
+    }
+
+    /* Clamp for numerical stability */
+    if (P_YY < P_YY_MIN) P_YY = P_YY_MIN;
+    if (Px_YY < P_YY_MIN) Px_YY = P_YY_MIN;
+
+    double beta = P_XY / P_XX;
+    double tau = (double)df / Px_YY;
+    double variance_beta = 1.0 / (tau * P_XX);
+    double variance_safe = (fabs(variance_beta) < 0.001)
+                            ? fabs(variance_beta)
+                            : variance_beta;
+    double se = sqrt(variance_safe);
+
+    /* Score F-statistic: uses n_samples (not df) in numerator */
+    double f_stat = (double)n_samples * (P_XY * P_XY) / (P_YY * P_XX);
+
+    *beta_out   = beta;
+    *se_out     = se;
+    *f_stat_out = f_stat;
+
+    if (!isfinite(f_stat) || !isfinite(beta) || !isfinite(se)) {
+        *beta_out = *se_out = *f_stat_out = (double)NAN;
+        return 0;
+    }
+
+    return 1;
+}
+
+/* -------------------------------------------------------------------------
+ * parse_pab_table_from_dict — Parse a Python dict (from build_pab_table_for_c)
+ * into a heap-allocated pab_table_t.
+ *
+ * The dict must have keys: n_cvt, n_index, n_rows, n_inv, n_var, idx_xx,
+ * idx_xy, idx_yy, invariant_indices, varying_indices, logdet_diag_rows,
+ * logdet_diag_cols, level_offsets, level_counts, entries.
+ *
+ * Returns 0 on success, -1 on failure (exception set).
+ * Caller must call free_pab_table(t) to release all owned fields.
+ * ------------------------------------------------------------------------- */
+static void free_pab_table(pab_table_t *t);
+
+static int parse_pab_table_from_dict(PyObject *dict, pab_table_t *t, int n_samples)
+{
+    /* Read scalar integers from dict */
+#define GETINT(key, field) do { \
+    PyObject *v = PyDict_GetItemString(dict, key); \
+    if (!v) { PyErr_Format(PyExc_KeyError, "pab_table_dict missing key '%s'", key); return -1; } \
+    (field) = (int)PyLong_AsLong(v); \
+    if (PyErr_Occurred()) { PyErr_Format(PyExc_TypeError, "pab_table_dict key '%s' must be int", key); return -1; } \
+} while(0)
+
+    GETINT("n_cvt",   t->n_cvt);
+    GETINT("n_index", t->n_index);
+    GETINT("n_rows",  t->n_rows);
+    GETINT("n_inv",   t->n_inv);
+    GETINT("n_var",   t->n_var);
+    GETINT("idx_xx",  t->idx_xx);
+    GETINT("idx_xy",  t->idx_xy);
+    GETINT("idx_yy",  t->idx_yy);
+#undef GETINT
+
+    t->df = n_samples - t->n_cvt - 1;
+
+    /* Validate basic integrity */
+    if (t->n_cvt < 1 || t->n_cvt > MAX_N_CVT) {
+        PyErr_Format(PyExc_ValueError, "n_cvt must be 1..%d, got %d", MAX_N_CVT, t->n_cvt);
+        return -1;
+    }
+    if (t->n_rows < 1 || t->n_rows > MAX_N_ROWS) {
+        PyErr_Format(PyExc_ValueError, "n_rows must be 1..%d, got %d", MAX_N_ROWS, t->n_rows);
+        return -1;
+    }
+    if (t->n_inv + t->n_var != t->n_index) {
+        PyErr_Format(PyExc_ValueError, "n_inv (%d) + n_var (%d) != n_index (%d)",
+                     t->n_inv, t->n_var, t->n_index);
+        return -1;
+    }
+    if (t->idx_xx < 0 || t->idx_xx >= t->n_index ||
+        t->idx_xy < 0 || t->idx_xy >= t->n_index ||
+        t->idx_yy < 0 || t->idx_yy >= t->n_index) {
+        PyErr_Format(PyExc_ValueError,
+            "idx_xx/xy/yy out of range [0, %d): got %d, %d, %d",
+            t->n_index, t->idx_xx, t->idx_xy, t->idx_yy);
+        return -1;
+    }
+
+    /* Initialise all pointer fields to NULL so free_pab_table is safe on partial init */
+    t->invariant_indices = NULL;
+    t->varying_indices   = NULL;
+    t->logdet_diag_rows  = NULL;
+    t->logdet_diag_cols  = NULL;
+    t->level_offsets     = NULL;
+    t->level_counts      = NULL;
+    t->entries           = NULL;
+
+    /* Parse array fields — free_pab_table on failure (safe: pointers NULL-init'd) */
+#define GETARR(key, field, len) do { \
+    PyObject *obj = PyDict_GetItemString(dict, key); \
+    if (!obj) { PyErr_Format(PyExc_KeyError, "pab_table_dict missing key '%s'", key); free_pab_table(t); return -1; } \
+    (field) = parse_int32_array(obj, (len), key); \
+    if (!(field)) { free_pab_table(t); return -1; } \
+} while(0)
+
+    GETARR("invariant_indices", t->invariant_indices, t->n_inv);
+    GETARR("varying_indices",   t->varying_indices,   t->n_var);
+    GETARR("logdet_diag_rows",  t->logdet_diag_rows,  t->n_cvt + 1);
+    GETARR("logdet_diag_cols",  t->logdet_diag_cols,  t->n_cvt + 1);
+    GETARR("level_offsets",     t->level_offsets,      t->n_rows);
+    GETARR("level_counts",      t->level_counts,       t->n_rows);
+#undef GETARR
+
+    /* Parse entries (stride-4 flat int32 array) */
+    {
+        PyObject *entries_obj = PyDict_GetItemString(dict, "entries");
+        if (!entries_obj) {
+            PyErr_SetString(PyExc_KeyError, "pab_table_dict missing key 'entries'");
+            free_pab_table(t);
+            return -1;
+        }
+        PyArrayObject *entries_arr = (PyArrayObject *)PyArray_FROM_OTF(
+            entries_obj, NPY_INT32, NPY_ARRAY_C_CONTIGUOUS);
+        if (!entries_arr) { free_pab_table(t); return -1; }
+        int entries_len = (int)PyArray_SIZE(entries_arr);
+        Py_DECREF(entries_arr);
+        if (entries_len % 4 != 0) {
+            PyErr_Format(PyExc_ValueError,
+                "entries length (%d) not a multiple of 4", entries_len);
+            free_pab_table(t);
+            return -1;
+        }
+        t->n_entries = entries_len / 4;
+
+        int *raw = parse_int32_array(entries_obj, entries_len, "entries");
+        if (!raw) { free_pab_table(t); return -1; }
+        t->entries = (pab_entry_t *)malloc((size_t)t->n_entries * sizeof(pab_entry_t));
+        if (!t->entries) {
+            free(raw);
+            PyErr_NoMemory();
+            free_pab_table(t);
+            return -1;
+        }
+        for (int i = 0; i < t->n_entries; i++) {
+            t->entries[i].index_ab = raw[i * 4 + 0];
+            t->entries[i].index_aw = raw[i * 4 + 1];
+            t->entries[i].index_bw = raw[i * 4 + 2];
+            t->entries[i].index_ww = raw[i * 4 + 3];
+        }
+        free(raw);
+
+        /* Validate entry indices are in range [0, n_index) */
+        for (int i = 0; i < t->n_entries; i++) {
+            if (t->entries[i].index_ab < 0 || t->entries[i].index_ab >= t->n_index ||
+                t->entries[i].index_aw < 0 || t->entries[i].index_aw >= t->n_index ||
+                t->entries[i].index_bw < 0 || t->entries[i].index_bw >= t->n_index ||
+                t->entries[i].index_ww < 0 || t->entries[i].index_ww >= t->n_index) {
+                PyErr_Format(PyExc_ValueError,
+                    "entries[%d] has out-of-range index (n_index=%d)", i, t->n_index);
+                free_pab_table(t);
+                return -1;
+            }
+        }
+
+        /* Validate level_offsets/level_counts don't exceed n_entries */
+        for (int p = 0; p < t->n_rows; p++) {
+            if (t->level_offsets[p] < 0 ||
+                t->level_counts[p] < 0 ||
+                t->level_offsets[p] + t->level_counts[p] > t->n_entries) {
+                PyErr_Format(PyExc_ValueError,
+                    "level_offsets[%d]=%d + level_counts[%d]=%d exceeds n_entries=%d",
+                    p, t->level_offsets[p], p, t->level_counts[p], t->n_entries);
+                free_pab_table(t);
+                return -1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+/* -------------------------------------------------------------------------
+ * free_pab_table — Release all heap-allocated fields of a pab_table_t.
+ * Does NOT free the struct itself (caller manages that).
+ * ------------------------------------------------------------------------- */
+static void free_pab_table(pab_table_t *t)
+{
+    free(t->invariant_indices);
+    free(t->varying_indices);
+    free(t->logdet_diag_rows);
+    free(t->logdet_diag_cols);
+    free(t->level_offsets);
+    free(t->level_counts);
+    free(t->entries);
+}
+
+/* -------------------------------------------------------------------------
+ * compute_score_batch_general_c
+ *
+ * Batch Score test for arbitrary n_cvt.
+ *
+ * Args: eigenvalues (n_samples,), Uab_batch (n_snps, n_samples, n_index),
+ *       Hi_eval_null (n_samples,), n_samples, n_cvt, pab_table_dict, n_threads
+ * Returns: dict with keys betas, ses, p_scores (each n_snps,)
+ * ------------------------------------------------------------------------- */
+static PyObject *compute_score_batch_general_c(PyObject *self, PyObject *args)
+{
+    PyObject *eigenvalues_obj, *uab_batch_obj, *hi_eval_null_obj, *pab_table_dict;
+    int n_samples, n_cvt, n_threads;
+    PyArrayObject *eigenvalues_arr = NULL, *uab_arr = NULL, *hi_eval_null_arr = NULL;
+
+    if (!PyArg_ParseTuple(args, "OOOiiOi",
+            &eigenvalues_obj, &uab_batch_obj, &hi_eval_null_obj,
+            &n_samples, &n_cvt,
+            &pab_table_dict, &n_threads))
+        return NULL;
+
+    if (n_samples < 3) {
+        PyErr_SetString(PyExc_ValueError, "n_samples must be >= 3");
+        return NULL;
+    }
+    if (n_cvt < 1 || n_cvt > MAX_N_CVT) {
+        PyErr_Format(PyExc_ValueError, "n_cvt must be 1..%d, got %d", MAX_N_CVT, n_cvt);
+        return NULL;
+    }
+    if (!PyDict_Check(pab_table_dict)) {
+        PyErr_SetString(PyExc_TypeError, "pab_table_dict must be a dict");
+        return NULL;
+    }
+
+    /* Convert inputs */
+    eigenvalues_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        eigenvalues_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!eigenvalues_arr) goto err_input_score_gen;
+
+    uab_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        uab_batch_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!uab_arr) goto err_input_score_gen;
+
+    hi_eval_null_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        hi_eval_null_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!hi_eval_null_arr) goto err_input_score_gen;
+
+    /* Validate shapes */
+    if (PyArray_NDIM(eigenvalues_arr) != 1 ||
+        PyArray_DIM(eigenvalues_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError, "eigenvalues must be shape (n_samples,)");
+        goto err_input_score_gen;
+    }
+    if (PyArray_NDIM(hi_eval_null_arr) != 1 ||
+        PyArray_DIM(hi_eval_null_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError, "Hi_eval_null must be shape (n_samples,)");
+        goto err_input_score_gen;
+    }
+    if (PyArray_NDIM(uab_arr) != 3 ||
+        PyArray_DIM(uab_arr, 1) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "Uab_batch must be shape (n_snps, n_samples, n_index)");
+        goto err_input_score_gen;
+    }
+
+    {
+        npy_intp n_snps_raw = PyArray_DIM(uab_arr, 0);
+        if (n_snps_raw > INT_MAX || n_snps_raw == 0) {
+            PyErr_SetString(PyExc_ValueError, "n_snps must be > 0 and <= INT_MAX");
+            goto err_input_score_gen;
+        }
+        int n_snps = (int)n_snps_raw;
+        int n_index_arr = (int)PyArray_DIM(uab_arr, 2);
+
+        /* Parse pab_table from dict */
+        pab_table_t table;
+        if (parse_pab_table_from_dict(pab_table_dict, &table, n_samples) < 0)
+            goto err_input_score_gen;
+
+        if (table.n_index != n_index_arr) {
+            PyErr_Format(PyExc_ValueError,
+                "Uab_batch n_index=%d doesn't match pab_table n_index=%d",
+                n_index_arr, table.n_index);
+            free_pab_table(&table);
+            goto err_input_score_gen;
+        }
+
+        const double *eigenvalues  = (const double *)PyArray_DATA(eigenvalues_arr);
+        const double *uab_batch    = (const double *)PyArray_DATA(uab_arr);
+        const double *hi_eval_null = (const double *)PyArray_DATA(hi_eval_null_arr);
+
+        if (validate_eigenvalues(eigenvalues, n_samples) < 0) {
+            free_pab_table(&table);
+            goto err_input_score_gen;
+        }
+
+        /* Validate Hi_eval_null */
+        for (int i = 0; i < n_samples; i++) {
+            if (!isfinite(hi_eval_null[i])) {
+                PyErr_Format(PyExc_ValueError,
+                    "Hi_eval_null[%d] = %g is not finite.", i, hi_eval_null[i]);
+                free_pab_table(&table);
+                goto err_input_score_gen;
+            }
+        }
+
+        /* Allocate outputs */
+        score_output_t out;
+        if (alloc_score_output(&out, (npy_intp)n_snps) < 0) {
+            free_pab_table(&table);
+            PyErr_NoMemory();
+            goto err_input_score_gen;
+        }
+
+        double *out_betas    = (double *)PyArray_DATA(out.betas);
+        double *out_ses      = (double *)PyArray_DATA(out.ses);
+        double *out_p_scores = (double *)PyArray_DATA(out.p_scores);
+
+        /* F-distribution constants (shared across all SNPs) */
+        int df = n_samples - n_cvt - 1;
+        double a = (double)df / 2.0;
+        double b = 0.5;
+        double lbeta_ab = lgamma(a) + lgamma(b) - lgamma(a + b);
+
+        int actual_threads = 1;
+#ifdef _OPENMP
+        if (n_threads > 0) {
+            actual_threads = (n_threads < n_snps) ? n_threads : n_snps;
+        } else {
+            actual_threads = omp_get_max_threads();
+            if (actual_threads > n_snps) actual_threads = n_snps;
+        }
+        if (actual_threads < 1) actual_threads = 1;
+#else
+        (void)n_threads;
+#endif
+
+        Py_BEGIN_ALLOW_THREADS
+
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(static) num_threads(actual_threads)
+#endif
+        for (int s = 0; s < n_snps; s++) {
+            const double *uab_snp = uab_batch + (size_t)s * n_samples * table.n_index;
+
+            /* Compute row0: dot products of Hi_eval_null with each Uab column */
+            double row0[MAX_N_INDEX];
+            for (int c = 0; c < table.n_index; c++) row0[c] = 0.0;
+            for (int i = 0; i < n_samples; i++) {
+                double h = hi_eval_null[i];
+                for (int c = 0; c < table.n_index; c++)
+                    row0[c] += h * uab_snp[i * table.n_index + c];
+            }
+
+            /* Full Pab via table-driven recursion */
+            double pab[MAX_PAB_SIZE];
+            calc_pab_general(row0, &table, pab);
+
+            double beta, se, f_stat;
+            int is_valid = score_from_pab_general(pab, &table, n_samples,
+                                                  &beta, &se, &f_stat);
+
+            out_betas[s]    = beta;
+            out_ses[s]      = se;
+            out_p_scores[s] = f_to_pvalue(f_stat, df, is_valid, a, b, lbeta_ab);
+        }
+
+        Py_END_ALLOW_THREADS
+
+        free_pab_table(&table);
+
+        if (warn_betainc_convergence(out_betas, out_p_scores, n_snps) < 0) {
+            decref_score_output(&out);
+            Py_DECREF(hi_eval_null_arr);
+            Py_DECREF(uab_arr);
+            Py_DECREF(eigenvalues_arr);
+            return NULL;
+        }
+
+        Py_DECREF(hi_eval_null_arr);
+        Py_DECREF(uab_arr);
+        Py_DECREF(eigenvalues_arr);
+        return build_score_result_dict(&out);
+    }
+
+err_input_score_gen:
+    Py_XDECREF(hi_eval_null_arr);
+    Py_XDECREF(uab_arr);
+    Py_XDECREF(eigenvalues_arr);
+    return NULL;
+}
+
+/* =========================================================================
+ * GENERAL n_cvt LRT BATCH — compute_lrt_batch_general_c
+ *
+ * LRT test for arbitrary n_cvt using table-driven Pab recursion.
+ * Mirrors compute_lrt_batch_c (n_cvt=1) but uses mle_logl_general.
+ * ========================================================================= */
+
+/* -------------------------------------------------------------------------
+ * mle_logl_general — MLE log-likelihood for one SNP at one lambda (general n_cvt).
+ *
+ * MLE formula: -0.5 * n * log(P_yy_full) - 0.5 * logdet_h + mle_const
+ * where P_yy_full is at level n_cvt+1 (fully projected).
+ *
+ * Uses full Uab row (n_samples * n_index) in AoS layout.
+ * ------------------------------------------------------------------------- */
+static double mle_logl_general(
+    const double *uab_snp,     /* (n_samples, n_index) row-major */
+    const double *eigenvalues,
+    int n_samples,
+    double lambda,
+    double mle_const,
+    const pab_table_t *t
+)
+{
+    int ni = t->n_index;
+
+    double logdet_h = 0.0;
+    double row0[MAX_N_INDEX];
+    for (int c = 0; c < ni; c++) row0[c] = 0.0;
+
+    for (int i = 0; i < n_samples; i++) {
+        double v = lambda * eigenvalues[i] + 1.0;
+        double h = 1.0 / v;
+        logdet_h += log(v);
+        for (int c = 0; c < ni; c++)
+            row0[c] += h * uab_snp[i * ni + c];
+    }
+
+    double pab[MAX_PAB_SIZE];
+    calc_pab_general(row0, t, pab);
+
+    /* P_yy_full at level n_cvt+1 (fully projected) */
+    int nc = t->n_cvt;
+    double P_yy = pab[(nc + 1) * ni + t->idx_yy];
+    if (P_yy < 0.0) return (double)NAN;
+    if (P_yy < P_YY_MIN) P_yy = P_YY_MIN;
+
+    return mle_const - 0.5 * logdet_h - 0.5 * (double)n_samples * log(P_yy);
+}
+
+/* -------------------------------------------------------------------------
+ * mle_logl_general_cached — MLE using cached hi_eval for coarse grid search.
+ * ------------------------------------------------------------------------- */
+static double mle_logl_general_cached(
+    const double *uab_snp,
+    const double *cached_hi_eval,
+    double cached_logdet_h,
+    int n_samples,
+    double mle_const,
+    const pab_table_t *t
+)
+{
+    int ni = t->n_index;
+
+    double row0[MAX_N_INDEX];
+    for (int c = 0; c < ni; c++) row0[c] = 0.0;
+
+    for (int i = 0; i < n_samples; i++) {
+        double h = cached_hi_eval[i];
+        for (int c = 0; c < ni; c++)
+            row0[c] += h * uab_snp[i * ni + c];
+    }
+
+    double pab[MAX_PAB_SIZE];
+    calc_pab_general(row0, t, pab);
+
+    int nc = t->n_cvt;
+    double P_yy = pab[(nc + 1) * ni + t->idx_yy];
+    if (P_yy < 0.0) return (double)NAN;
+    if (P_yy < P_YY_MIN) P_yy = P_YY_MIN;
+
+    return mle_const - 0.5 * cached_logdet_h - 0.5 * (double)n_samples * log(P_yy);
+}
+
+/* -------------------------------------------------------------------------
+ * golden_section_lambda_mle_general — Grid + golden section for MLE (general n_cvt).
+ *
+ * Mirrors golden_section_lambda_mle_ncvt1 but uses mle_logl_general.
+ * Returns optimal lambda; writes logl to *logl_out.
+ * ------------------------------------------------------------------------- */
+static double golden_section_lambda_mle_general(
+    const double *uab_snp,
+    const double *eigenvalues,
+    int n_samples,
+    const double *lambda_grid,
+    const double *hi_eval_grid,
+    const double *logdet_h_grid,
+    double log_l_min, double step,
+    int n_grid, int n_refine,
+    double mle_const,
+    const pab_table_t *t,
+    double *logl_out
+)
+{
+    const double phi = 0.6180339887498949;
+
+    /* Stage 1: coarse grid search using cached hi_eval */
+    double best_logl = REML_SENTINEL;
+    int best_idx = 0;
+    for (int g = 0; g < n_grid; g++) {
+        double logl = mle_logl_general_cached(
+            uab_snp,
+            hi_eval_grid + (size_t)g * n_samples,
+            logdet_h_grid[g],
+            n_samples, mle_const, t
+        );
+        if (isnan(logl)) logl = REML_SENTINEL;
+        if (logl > best_logl) {
+            best_logl = logl;
+            best_idx = g;
+        }
+    }
+
+    if (best_logl == REML_SENTINEL) {
+        *logl_out = (double)NAN;
+        return (double)NAN;
+    }
+
+    /* Bracket */
+    int idx_low  = (best_idx > 0) ? best_idx - 1 : 0;
+    int idx_high = (best_idx < n_grid - 1) ? best_idx + 1 : n_grid - 1;
+    double a = log_l_min + idx_low * step;
+    double b = log_l_min + idx_high * step;
+
+    /* Stage 2: golden section refinement */
+    double c = b - phi * (b - a);
+    double d = a + phi * (b - a);
+    double fc = mle_logl_general(uab_snp, eigenvalues, n_samples, exp(c), mle_const, t);
+    double fd = mle_logl_general(uab_snp, eigenvalues, n_samples, exp(d), mle_const, t);
+
+    for (int iter = 0; iter < n_refine; iter++) {
+        if (fc > fd) {
+            b = d; d = c; fd = fc;
+            c = b - phi * (b - a);
+            fc = mle_logl_general(uab_snp, eigenvalues, n_samples, exp(c), mle_const, t);
+        } else {
+            a = c; c = d; fc = fd;
+            d = a + phi * (b - a);
+            fd = mle_logl_general(uab_snp, eigenvalues, n_samples, exp(d), mle_const, t);
+        }
+    }
+
+    double log_opt = (a + b) / 2.0;
+    double lambda_opt = exp(log_opt);
+    *logl_out = mle_logl_general(uab_snp, eigenvalues, n_samples, lambda_opt, mle_const, t);
+
+    return lambda_opt;
+}
+
+/* -------------------------------------------------------------------------
+ * compute_lrt_batch_general_c
+ *
+ * Batch LRT for arbitrary n_cvt with optional OpenMP.
+ *
+ * Args: eigenvalues (n_samples,), Uab_batch (n_snps, n_samples, n_index),
+ *       n_samples, n_cvt, pab_table_dict, l_min, l_max, n_grid, n_refine,
+ *       logl_H0, n_threads
+ * Returns: dict with keys lambdas_mle, p_lrts (each n_snps,)
+ * ------------------------------------------------------------------------- */
+static PyObject *compute_lrt_batch_general_c(PyObject *self, PyObject *args)
+{
+    PyObject *eigenvalues_obj, *uab_batch_obj, *pab_table_dict;
+    int n_samples, n_cvt, n_grid, n_refine, n_threads;
+    double l_min, l_max, logl_H0;
+    PyArrayObject *eigenvalues_arr = NULL, *uab_arr = NULL;
+
+    if (!PyArg_ParseTuple(args, "OOiiOddiidi",
+            &eigenvalues_obj, &uab_batch_obj,
+            &n_samples, &n_cvt,
+            &pab_table_dict,
+            &l_min, &l_max,
+            &n_grid, &n_refine,
+            &logl_H0, &n_threads))
+        return NULL;
+
+    if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
+        return NULL;
+    if (n_cvt < 1 || n_cvt > MAX_N_CVT) {
+        PyErr_Format(PyExc_ValueError, "n_cvt must be 1..%d, got %d", MAX_N_CVT, n_cvt);
+        return NULL;
+    }
+    if (!isfinite(logl_H0)) {
+        PyErr_SetString(PyExc_ValueError,
+            "logl_H0 must be finite (got NaN or Inf from null model)");
+        return NULL;
+    }
+    if (!PyDict_Check(pab_table_dict)) {
+        PyErr_SetString(PyExc_TypeError, "pab_table_dict must be a dict");
+        return NULL;
+    }
+
+    eigenvalues_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        eigenvalues_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!eigenvalues_arr) goto err_input_lrt_gen;
+
+    uab_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        uab_batch_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!uab_arr) goto err_input_lrt_gen;
+
+    if (PyArray_NDIM(eigenvalues_arr) != 1 ||
+        PyArray_DIM(eigenvalues_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError, "eigenvalues must be shape (n_samples,)");
+        goto err_input_lrt_gen;
+    }
+    if (PyArray_NDIM(uab_arr) != 3 ||
+        PyArray_DIM(uab_arr, 1) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "Uab_batch must be shape (n_snps, n_samples, n_index)");
+        goto err_input_lrt_gen;
+    }
+
+    {
+        npy_intp n_snps_raw = PyArray_DIM(uab_arr, 0);
+        if (n_snps_raw > INT_MAX || n_snps_raw == 0) {
+            PyErr_SetString(PyExc_ValueError, "n_snps must be > 0 and <= INT_MAX");
+            goto err_input_lrt_gen;
+        }
+        int n_snps = (int)n_snps_raw;
+        int n_index_arr = (int)PyArray_DIM(uab_arr, 2);
+
+        /* Parse pab_table */
+        pab_table_t table;
+        if (parse_pab_table_from_dict(pab_table_dict, &table, n_samples) < 0)
+            goto err_input_lrt_gen;
+
+        if (table.n_index != n_index_arr) {
+            PyErr_Format(PyExc_ValueError,
+                "Uab_batch n_index=%d doesn't match pab_table n_index=%d",
+                n_index_arr, table.n_index);
+            free_pab_table(&table);
+            goto err_input_lrt_gen;
+        }
+
+        const double *eigenvalues = (const double *)PyArray_DATA(eigenvalues_arr);
+        const double *uab_batch   = (const double *)PyArray_DATA(uab_arr);
+
+        if (validate_eigenvalues(eigenvalues, n_samples) < 0) {
+            free_pab_table(&table);
+            goto err_input_lrt_gen;
+        }
+
+        /* Allocate outputs */
+        lrt_output_t out;
+        if (alloc_lrt_output(&out, (npy_intp)n_snps) < 0) {
+            free_pab_table(&table);
+            PyErr_NoMemory();
+            goto err_input_lrt_gen;
+        }
+
+        double *out_lambdas_mle = (double *)PyArray_DATA(out.lambdas_mle);
+        double *out_p_lrts      = (double *)PyArray_DATA(out.p_lrts);
+
+        /* Pre-compute MLE constant and lambda grid */
+        double n = (double)n_samples;
+        double mle_const = 0.5 * n * (log(n) - log(2.0 * M_PI) - 1.0);
+
+        double log_l_min = log(l_min);
+        double log_l_max = log(l_max);
+        double step = (log_l_max - log_l_min) / (double)(n_grid - 1);
+
+        double *lambda_grid = (double *)malloc((size_t)n_grid * sizeof(double));
+        if (!lambda_grid) {
+            decref_lrt_output(&out);
+            free_pab_table(&table);
+            Py_DECREF(uab_arr); Py_DECREF(eigenvalues_arr);
+            return PyErr_NoMemory();
+        }
+        for (int g = 0; g < n_grid; g++)
+            lambda_grid[g] = exp(log_l_min + g * step);
+
+        /* Pre-compute hi_eval_grid and logdet_h_grid */
+        double *hi_eval_grid = (double *)malloc(
+            (size_t)n_grid * (size_t)n_samples * sizeof(double));
+        double *logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
+        if (!hi_eval_grid || !logdet_h_grid) {
+            free(lambda_grid); free(hi_eval_grid); free(logdet_h_grid);
+            decref_lrt_output(&out);
+            free_pab_table(&table);
+            Py_DECREF(uab_arr); Py_DECREF(eigenvalues_arr);
+            return PyErr_NoMemory();
+        }
+        for (int g = 0; g < n_grid; g++) {
+            double lam = lambda_grid[g];
+            double *hi = hi_eval_grid + (size_t)g * n_samples;
+            double logdet = 0.0;
+            for (int i = 0; i < n_samples; i++) {
+                double v = lam * eigenvalues[i] + 1.0;
+                hi[i] = 1.0 / v;
+                logdet += log(v);
+            }
+            logdet_h_grid[g] = logdet;
+        }
+
+        int actual_threads = 1;
+#ifdef _OPENMP
+        if (n_threads > 0) {
+            actual_threads = (n_threads < n_snps) ? n_threads : n_snps;
+        } else {
+            actual_threads = omp_get_max_threads();
+            if (actual_threads > n_snps) actual_threads = n_snps;
+        }
+        if (actual_threads < 1) actual_threads = 1;
+#else
+        (void)n_threads;
+#endif
+
+        Py_BEGIN_ALLOW_THREADS
+
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(static) num_threads(actual_threads)
+#endif
+        for (int s = 0; s < n_snps; s++) {
+            const double *uab_snp = uab_batch + (size_t)s * n_samples * table.n_index;
+
+            double logl_H1;
+            double lam_mle = golden_section_lambda_mle_general(
+                uab_snp, eigenvalues, n_samples,
+                lambda_grid, hi_eval_grid, logdet_h_grid,
+                log_l_min, step, n_grid, n_refine,
+                mle_const, &table, &logl_H1
+            );
+            out_lambdas_mle[s] = lam_mle;
+
+            double lrt_stat = 2.0 * (logl_H1 - logl_H0);
+            if (lrt_stat < 0.0) lrt_stat = 0.0;
+            out_p_lrts[s] = chi2_sf_c(lrt_stat);
+        }
+
+        Py_END_ALLOW_THREADS
+
+        free(lambda_grid);
+        free(hi_eval_grid);
+        free(logdet_h_grid);
+        free_pab_table(&table);
+
+        Py_DECREF(uab_arr);
+        Py_DECREF(eigenvalues_arr);
+        return build_lrt_result_dict(&out);
+    }
+
+err_input_lrt_gen:
+    Py_XDECREF(uab_arr);
+    Py_XDECREF(eigenvalues_arr);
+    return NULL;
+}
+
+/* =========================================================================
  * FUSED MODE-4 — compute_mode4_chunk_split_c
  *
  * Single OpenMP loop computes Wald + Score + LRT from SoA split data.
@@ -4593,6 +5375,50 @@ static PyMethodDef methods[] = {
         "\n"
         "Returns:\n"
         "    dict with keys: betas, ses, p_scores — each (n_snps,) float64\n"
+    },
+    {
+        "compute_score_batch_general_c",
+        (PyCFunction)compute_score_batch_general_c,
+        METH_VARARGS,
+        "Batch Score test for arbitrary n_cvt with optional OpenMP.\n"
+        "\n"
+        "Uses fixed null-model Hi_eval and table-driven Pab recursion.\n"
+        "\n"
+        "Args:\n"
+        "    eigenvalues:   (n_samples,) float64\n"
+        "    Uab_batch:     (n_snps, n_samples, n_index) float64\n"
+        "    Hi_eval_null:  (n_samples,) float64 — null-model weights\n"
+        "    n_samples:     int\n"
+        "    n_cvt:         int\n"
+        "    pab_table_dict: dict from build_pab_table_for_c(n_cvt)\n"
+        "    n_threads:     int\n"
+        "\n"
+        "Returns:\n"
+        "    dict with keys: betas, ses, p_scores — each (n_snps,) float64\n"
+    },
+    {
+        "compute_lrt_batch_general_c",
+        (PyCFunction)compute_lrt_batch_general_c,
+        METH_VARARGS,
+        "Batch LRT for arbitrary n_cvt with optional OpenMP.\n"
+        "\n"
+        "Per-SNP MLE golden section + chi2_sf using table-driven Pab recursion.\n"
+        "\n"
+        "Args:\n"
+        "    eigenvalues:   (n_samples,) float64\n"
+        "    Uab_batch:     (n_snps, n_samples, n_index) float64\n"
+        "    n_samples:     int\n"
+        "    n_cvt:         int\n"
+        "    pab_table_dict: dict from build_pab_table_for_c(n_cvt)\n"
+        "    l_min:         float\n"
+        "    l_max:         float\n"
+        "    n_grid:        int\n"
+        "    n_refine:      int\n"
+        "    logl_H0:       float — null model MLE log-likelihood\n"
+        "    n_threads:     int\n"
+        "\n"
+        "Returns:\n"
+        "    dict with keys: lambdas_mle, p_lrts — each (n_snps,) float64\n"
     },
     {
         "create_workspace_mode4_split_c",

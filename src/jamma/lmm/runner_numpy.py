@@ -86,6 +86,78 @@ _ALL_RESULT_KEYS = (
 )
 
 
+def _select_wald_fn(n_cvt: int):
+    """Return the C workspace Wald compute function appropriate for n_cvt.
+
+    Args:
+        n_cvt: Number of covariates.
+
+    Returns:
+        compute_wald_split_c_ws for n_cvt=1; compute_wald_general_c_ws for n_cvt>1.
+    """
+    return compute_wald_split_c_ws if n_cvt == 1 else compute_wald_general_c_ws
+
+
+def _create_wald_workspace_for_ncvt(
+    n_cvt: int,
+    eigenvalues: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+    n_samples: int,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+    n_threads: int,
+) -> object:
+    """Create the appropriate C Wald workspace for any n_cvt.
+
+    Dispatches to create_lmm_workspace (split, n_cvt=1) or
+    create_lmm_workspace_general (general, n_cvt>1). Returns None if the
+    required C extension is unavailable.
+
+    Args:
+        n_cvt: Number of covariates.
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        uab_invariant_soa: Invariant Uab SoA array (n_inv, n_samples).
+        n_samples: Number of samples.
+        l_min: Minimum lambda.
+        l_max: Maximum lambda.
+        n_grid: Coarse grid resolution.
+        n_refine: Golden section iterations.
+        n_threads: OpenMP thread count.
+
+    Returns:
+        C PyCapsule workspace, or None if extension unavailable.
+    """
+    if n_cvt == 1:
+        return create_lmm_workspace(
+            eigenvalues,
+            uab_invariant_soa,
+            n_samples,
+            l_min,
+            l_max,
+            n_grid,
+            n_refine,
+            n_threads,
+        )
+    if _C_GENERAL_AVAILABLE:
+        return create_lmm_workspace_general(
+            eigenvalues,
+            uab_invariant_soa,
+            n_samples,
+            n_cvt,
+            l_min,
+            l_max,
+            n_grid,
+            n_refine,
+            n_threads,
+        )
+    logger.debug(
+        "Wald workspace unavailable for n_cvt={} (general C extension missing)", n_cvt
+    )
+    return None
+
+
 def _guarded_compute(
     fn: Callable[..., dict],
     *args: object,
@@ -275,12 +347,18 @@ def _compute_chunk_size_numpy(
             # while 3-col varying SoA is still live = 9 cols peak
             bytes_per_snp = n_samples * 9 * 8
     elif use_split and n_cvt > 1:
-        # General split: n_var varying columns + 1 UtG column per SNP.
         from jamma.lmm.likelihood import classify_uab_columns
 
         _inv, var = classify_uab_columns(n_cvt)
         n_var = len(var)
-        bytes_per_snp = n_samples * (n_var + 1) * 8
+        if lmm_mode == 1:
+            # Wald: workspace path, no Uab reconstruction
+            bytes_per_snp = n_samples * (n_var + 1) * 8
+        else:
+            # Score/LRT/All: reconstruct_uab_from_soa allocates (n_snps,
+            # n_samples, n_index) while varying SoA is still live.
+            n_index = (n_cvt + 3) * (n_cvt + 2) // 2
+            bytes_per_snp = n_samples * (n_var + n_index) * 8
     else:
         n_index = (n_cvt + 3) * (n_cvt + 2) // 2
         bytes_per_snp = n_samples * n_index * 8
@@ -506,10 +584,10 @@ def run_lmm_association_numpy(
     # budget can use accurate per-SNP accounting (varying cols vs full Uab).
     # n_cvt=1: split available for all modes — Wald uses C workspace,
     #   LRT/Score/All reconstruct full Uab from SoA then call C batch.
-    # n_cvt>1: split only for Wald (lmm_mode==1) — reconstruct_uab_from_soa
-    #   is n_cvt=1 only, so non-Wald modes must use full Uab for n_cvt>1.
+    # n_cvt>1: split available for all modes — reconstruct_uab_from_soa now
+    #   handles general n_cvt, and Score/LRT dispatch calls C general batch.
     use_split = (_C_SPLIT_AVAILABLE and n_cvt == 1) or (
-        _C_GENERAL_AVAILABLE and n_cvt > 1 and lmm_mode == 1
+        _C_GENERAL_AVAILABLE and n_cvt > 1
     )
 
     # Fused mode-4: single-pass Wald/Score/LRT from SoA data (no Uab
@@ -675,31 +753,18 @@ def run_lmm_association_numpy(
                 Hi_eval_null,
                 logl_H0,
             )
-        elif n_cvt == 1:
-            lmm_workspace = create_lmm_workspace(
-                eigenvalues_np,
-                uab_invariant_soa,
-                n_samples,
-                l_min,
-                l_max,
-                n_grid,
-                n_refine,
-                pipeline_omp_threads,
-            )
-        elif _C_GENERAL_AVAILABLE:
-            lmm_workspace = create_lmm_workspace_general(
-                eigenvalues_np,
-                uab_invariant_soa,
-                n_samples,
-                n_cvt,
-                l_min,
-                l_max,
-                n_grid,
-                n_refine,
-                pipeline_omp_threads,
-            )
         else:
-            lmm_workspace = None
+            lmm_workspace = _create_wald_workspace_for_ncvt(
+                n_cvt,
+                eigenvalues_np,
+                uab_invariant_soa,
+                n_samples,
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+                pipeline_omp_threads,
+            )
     else:
         lmm_workspace = None
 
@@ -758,9 +823,7 @@ def run_lmm_association_numpy(
             )
         elif lmm_mode in (1, 4) and lmm_workspace is not None:
             # Wald via workspace
-            wald_fn = (
-                compute_wald_split_c_ws if n_cvt == 1 else compute_wald_general_c_ws
-            )
+            wald_fn = _select_wald_fn(n_cvt)
             wald_cr = _guarded_compute(
                 wald_fn,
                 lmm_workspace,
@@ -775,7 +838,9 @@ def run_lmm_association_numpy(
                 cr = wald_cr
             else:
                 # Mode 4 fallback: Wald from workspace, Score+LRT from reconstructed Uab
-                Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_var_soa)
+                Uab_batch = reconstruct_uab_from_soa(
+                    uab_invariant_soa, uab_var_soa, n_cvt=n_cvt
+                )
                 blas_ctx = blas_threads(1) if _C_ACCEL_AVAILABLE else nullcontext()
                 with blas_ctx:
                     cr = _guarded_compute(
@@ -798,7 +863,9 @@ def run_lmm_association_numpy(
                     )
         else:
             # Modes 2, 3: reconstruct Uab, C batch dispatch
-            Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_var_soa)
+            Uab_batch = reconstruct_uab_from_soa(
+                uab_invariant_soa, uab_var_soa, n_cvt=n_cvt
+            )
             blas_ctx = blas_threads(1) if _C_ACCEL_AVAILABLE else nullcontext()
             with blas_ctx:
                 cr = _guarded_compute(
@@ -1046,14 +1113,9 @@ def run_lmm_association_numpy(
                         del uab_var_soa
                     elif lmm_mode == 1 and lmm_workspace is not None:
                         # Wald: use C workspace (no full Uab needed)
-                        wald_fn = (
-                            compute_wald_split_c_ws
-                            if n_cvt == 1
-                            else compute_wald_general_c_ws
-                        )
                         with blas_threads(1):
                             cr = _guarded_compute(
-                                wald_fn,
+                                _select_wald_fn(n_cvt),
                                 lmm_workspace,
                                 uab_var_soa,
                                 omp_threads,
@@ -1065,16 +1127,11 @@ def run_lmm_association_numpy(
                     elif lmm_mode == 4 and lmm_workspace is not None:
                         # Mode 4 fallback: Wald workspace + Score/LRT reconstructed Uab
                         Uab_batch = reconstruct_uab_from_soa(
-                            uab_invariant_soa, uab_var_soa
-                        )
-                        wald_fn = (
-                            compute_wald_split_c_ws
-                            if n_cvt == 1
-                            else compute_wald_general_c_ws
+                            uab_invariant_soa, uab_var_soa, n_cvt=n_cvt
                         )
                         with blas_threads(1):
                             wald_cr = _guarded_compute(
-                                wald_fn,
+                                _select_wald_fn(n_cvt),
                                 lmm_workspace,
                                 uab_var_soa,
                                 omp_threads,
@@ -1107,7 +1164,7 @@ def run_lmm_association_numpy(
                     else:
                         # LRT/Score (modes 2, 3): reconstruct Uab
                         Uab_batch = reconstruct_uab_from_soa(
-                            uab_invariant_soa, uab_var_soa
+                            uab_invariant_soa, uab_var_soa, n_cvt=n_cvt
                         )
                         del uab_var_soa
                         cr = _run_lmm_chunk(Uab_batch)

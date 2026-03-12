@@ -1525,3 +1525,92 @@ class TestErrorMessageDifferentiation:
             n_filtered=100,
         )
         assert result == {"betas": [1.0], "ses": [0.1]}
+
+
+# ---------------------------------------------------------------------------
+# n_cvt>1 C general path integration tests (Plan 70-02)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+def test_runner_numpy_ncvt2_mode2_c_dispatch(synthetic_data_with_covariates):
+    """LRT (mode 2) with n_cvt=2 uses C general path and matches GEMMA reference.
+
+    Verifies the full path: use_split=True -> SoA split -> reconstruct(n_cvt=2)
+    -> _compute_lrt_numpy -> compute_lrt_batch_general_c.
+    """
+    from jamma.lmm import compute_numpy as cn
+
+    plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
+
+    if cn._compute_lrt_batch_general_c is None:
+        pytest.skip("compute_lrt_batch_general_c not available")
+
+    run_result = run_lmm_association_numpy(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        covariates=covariates,
+        lmm_mode=2,
+        show_progress=False,
+    )
+    results = run_result.associations
+    assert len(results) > 0, "Expected at least one LRT result with n_cvt=2"
+
+    # Verify LRT fields are populated
+    for r in results:
+        assert r.p_lrt is not None, "p_lrt should be populated for mode 2"
+        assert np.isfinite(r.p_lrt) or np.isnan(r.p_lrt), (
+            f"p_lrt should be finite or NaN, got {r.p_lrt}"
+        )
+
+    # Compare against GEMMA reference
+    reference = load_gemma_assoc(COVARIATE_LRT_REFERENCE)
+    tolerances = ToleranceConfig(lambda_rtol=5e-5)
+    comparison = compare_assoc_results(results, reference, tolerances)
+    assert comparison.passed, (
+        f"NumPy mode 2+covar (n_cvt=2) vs GEMMA failed:\n{comparison}"
+    )
+
+
+@pytest.mark.tier0
+def test_runner_numpy_ncvt2_mode3_c_dispatch(synthetic_data_with_covariates):
+    """Score (mode 3) with n_cvt=2 uses C general path and matches GEMMA reference.
+
+    Verifies the full path: use_split=True -> SoA split -> reconstruct(n_cvt=2)
+    -> _compute_score_numpy -> compute_score_batch_general_c.
+    """
+    from jamma.lmm import compute_numpy as cn
+
+    plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
+
+    if cn._compute_score_batch_general_c is None:
+        pytest.skip("compute_score_batch_general_c not available")
+
+    run_result = run_lmm_association_numpy(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        covariates=covariates,
+        lmm_mode=3,
+        show_progress=False,
+    )
+    results = run_result.associations
+    assert len(results) > 0, "Expected at least one Score result with n_cvt=2"
+
+    # Verify Score fields are populated
+    for r in results:
+        assert r.p_score is not None, "p_score should be populated for mode 3"
+        assert np.isfinite(r.p_score) or np.isnan(r.p_score), (
+            f"p_score should be finite or NaN, got {r.p_score}"
+        )
+
+    # Compare against GEMMA reference
+    reference = load_gemma_assoc(COVARIATE_SCORE_REFERENCE)
+    tolerances = ToleranceConfig(lambda_rtol=5e-5)
+    comparison = compare_assoc_results(results, reference, tolerances)
+    assert comparison.passed, (
+        f"NumPy mode 3+covar (n_cvt=2) vs GEMMA failed:\n{comparison}"
+    )

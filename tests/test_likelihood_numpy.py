@@ -2078,3 +2078,200 @@ def test_scalar_vs_batch_reml_single_snp_lambda_and_logl_parity():
             "disagree beyond rtol=1e-10"
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# reconstruct_uab_from_soa generalization for n_cvt > 1 (Plan 70-02)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+def test_reconstruct_uab_from_soa_ncvt1_backward_compat():
+    """reconstruct_uab_from_soa without n_cvt arg produces correct n_cvt=1 output."""
+    from jamma.lmm.likelihood_numpy import reconstruct_uab_from_soa
+
+    rng = np.random.default_rng(42)
+    n_samples, n_snps = 50, 8
+    UtW = np.ones((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+
+    Uab_ref = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+
+    # Build SoA for n_cvt=1
+    inv_soa = np.stack([Uab_ref[0, :, 0], Uab_ref[0, :, 2], Uab_ref[0, :, 5]])  # (3, n)
+    var_soa = np.stack(
+        [Uab_ref[:, :, 1], Uab_ref[:, :, 3], Uab_ref[:, :, 4]], axis=1
+    )  # (n_snps, 3, n)
+
+    # Old signature (no n_cvt) should still work
+    Uab_recon = reconstruct_uab_from_soa(inv_soa, var_soa)
+    np.testing.assert_allclose(
+        Uab_recon,
+        Uab_ref,
+        rtol=1e-14,
+        atol=0,
+        err_msg="reconstruct_uab_from_soa backward compat (no n_cvt) failed",
+    )
+
+
+@pytest.mark.tier0
+def test_reconstruct_uab_from_soa_ncvt2():
+    """reconstruct_uab_from_soa with n_cvt=2 round-trips via classify_uab_columns."""
+    from jamma.lmm.likelihood import classify_uab_columns
+    from jamma.lmm.likelihood_numpy import reconstruct_uab_from_soa
+
+    rng = np.random.default_rng(7)
+    n_samples, n_snps = 40, 6
+    n_cvt = 2
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+
+    # Full reference Uab
+    Uab_ref = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+    # n_index = (n_cvt+3)*(n_cvt+2)//2 = 5*4//2 = 10
+
+    inv_indices, var_indices = classify_uab_columns(n_cvt)
+
+    # Build invariant SoA from first SNP's Uab (all SNPs share invariant columns)
+    inv_list = list(inv_indices)
+    uab_invariant_soa = np.ascontiguousarray(
+        Uab_ref[0, :, inv_list]
+    )  # (n_inv, n_samples)
+
+    # Build varying SoA
+    uab_varying_soa = np.ascontiguousarray(
+        Uab_ref[:, :, list(var_indices)].transpose(0, 2, 1)
+    )  # (n_snps, n_var, n_samples)
+
+    # Reconstruct should match Uab_ref
+    Uab_recon = reconstruct_uab_from_soa(
+        uab_invariant_soa, uab_varying_soa, n_cvt=n_cvt
+    )
+    np.testing.assert_allclose(
+        Uab_recon,
+        Uab_ref,
+        rtol=1e-14,
+        atol=0,
+        err_msg="reconstruct_uab_from_soa failed to round-trip for n_cvt=2",
+    )
+
+
+@pytest.mark.tier0
+def test_reconstruct_uab_from_soa_ncvt4():
+    """reconstruct_uab_from_soa with n_cvt=4 matches batch_compute_uab_numpy."""
+    from jamma.lmm.likelihood import classify_uab_columns
+    from jamma.lmm.likelihood_numpy import reconstruct_uab_from_soa
+
+    rng = np.random.default_rng(13)
+    n_samples, n_snps = 30, 5
+    n_cvt = 4
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+
+    # Full reference Uab
+    Uab_ref = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+    # n_index = (4+3)*(4+2)//2 = 7*6//2 = 21
+
+    inv_indices, var_indices = classify_uab_columns(n_cvt)
+
+    inv_list = list(inv_indices)
+    uab_invariant_soa = np.ascontiguousarray(Uab_ref[0, :, inv_list])
+    uab_varying_soa = np.ascontiguousarray(
+        Uab_ref[:, :, list(var_indices)].transpose(0, 2, 1)
+    )
+
+    Uab_recon = reconstruct_uab_from_soa(
+        uab_invariant_soa, uab_varying_soa, n_cvt=n_cvt
+    )
+    np.testing.assert_allclose(
+        Uab_recon,
+        Uab_ref,
+        rtol=1e-14,
+        atol=0,
+        err_msg="reconstruct_uab_from_soa failed to round-trip for n_cvt=4",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Score/LRT C dispatch via general C path for n_cvt > 1 (Plan 70-02)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+def test_compute_score_numpy_ncvt2_uses_c_path(synthetic_data):
+    """_compute_score_numpy dispatches to C general path for n_cvt=2.
+
+    Verifies C general path is called, not Python fallback.
+    Skipped gracefully when general C function is not available.
+    """
+    from unittest.mock import patch
+
+    from jamma.lmm import compute_numpy as cn
+    from jamma.lmm.compute_numpy import _compute_score_numpy
+
+    if cn._compute_score_batch_general_c is None:
+        pytest.skip("compute_score_batch_general_c not available")
+
+    eigenvalues, UtW_ncvt1, Uty, UtG = synthetic_data
+    n_samples = len(eigenvalues)
+    n_cvt = 2
+    UtW = np.column_stack([UtW_ncvt1, Uty])  # add second covariate
+
+    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+    lambda_null = 0.1
+    Hi_eval_null = 1.0 / (lambda_null * eigenvalues + 1.0)
+
+    call_log: list[str] = []
+
+    original_fn = cn._compute_score_batch_general_c
+
+    def spy_general(*args, **kwargs):
+        call_log.append("general_c")
+        return original_fn(*args, **kwargs)
+
+    with patch.object(cn, "_compute_score_batch_general_c", side_effect=spy_general):
+        _compute_score_numpy(n_cvt, eigenvalues, Hi_eval_null, Uab_batch, n_samples)
+
+    assert "general_c" in call_log, (
+        "_compute_score_numpy did not call _compute_score_batch_general_c for n_cvt=2"
+    )
+
+
+@pytest.mark.tier0
+def test_compute_lrt_numpy_ncvt2_uses_c_path(synthetic_data):
+    """_compute_lrt_numpy dispatches to C general path for n_cvt=2.
+
+    Verifies C general path is called, not Python fallback.
+    Skipped gracefully when general C function is not available.
+    """
+    from unittest.mock import patch
+
+    from jamma.lmm import compute_numpy as cn
+    from jamma.lmm.compute_numpy import _compute_lrt_numpy
+
+    if cn._compute_lrt_batch_general_c is None:
+        pytest.skip("compute_lrt_batch_general_c not available")
+
+    eigenvalues, UtW_ncvt1, Uty, UtG = synthetic_data
+    n_cvt = 2
+    UtW = np.column_stack([UtW_ncvt1, Uty])
+
+    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+    logl_H0 = -30.0
+
+    call_log: list[str] = []
+    original_fn = cn._compute_lrt_batch_general_c
+
+    def spy_general(*args, **kwargs):
+        call_log.append("general_c")
+        return original_fn(*args, **kwargs)
+
+    with patch.object(cn, "_compute_lrt_batch_general_c", side_effect=spy_general):
+        _compute_lrt_numpy(n_cvt, eigenvalues, Uab_batch, 1e-5, 1e5, 50, 20, logl_H0)
+
+    assert "general_c" in call_log, (
+        "_compute_lrt_numpy did not call _compute_lrt_batch_general_c for n_cvt=2"
+    )

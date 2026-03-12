@@ -3,9 +3,10 @@
 Writes ``src/jamma/_build_meta.py`` at build time so the release date is
 available at runtime via ``jamma.__release_date__`` without manual upkeep.
 
-Also compiles two C extensions if a C compiler is available:
+Also compiles three C extensions if a C compiler is available:
   - ``src/jamma/lmm/_lmm_accel.c``: per-SNP REML Wald pipeline (with OpenMP)
   - ``src/jamma/lmm/_eigen_accel.c``: DSYEVR eigendecomposition (no OpenMP)
+  - ``src/jamma/lmm/_secular_accel.c``: DLAED4 rank-1 secular updates (no OpenMP)
 
 If compilation fails for any reason, a warning is logged and a pure-Python
 wheel is produced as a graceful fallback — jamma is fully functional without
@@ -46,6 +47,7 @@ class CustomBuildHook(BuildHookInterface):
         # _lmm_accel is more critical — compile first so its errors are visible.
         self._compile_c_extension(build_data)
         self._compile_eigen_extension(build_data)
+        self._compile_secular_extension(build_data)
 
     def _preflight_c_build(self):
         """Verify build prerequisites and return compiler/include information.
@@ -408,5 +410,84 @@ class CustomBuildHook(BuildHookInterface):
 
         # pure_python and infer_tag may already be set by _compile_c_extension.
         # Set them unconditionally — idempotent (same values).
+        build_data["pure_python"] = False
+        build_data["infer_tag"] = True
+
+    def _compile_secular_extension(self, build_data):
+        """Compile _secular_accel.c -> _secular_accel{EXT_SUFFIX}.
+
+        No OpenMP flags — DLAED4 calls are sequential (each needs its own workspace).
+        No LAPACK link flags — resolves dlaed4_64_ or dlaed4_ at runtime via dlopen.
+
+        On any compilation failure, logs a warning and returns without raising.
+
+        Args:
+            build_data: Hatchling build data dict. Updated with force_include
+                entry mapping the compiled .so into the wheel.
+        """
+        preflight = self._preflight_c_build()
+        if preflight is None:
+            return
+        cc_cmd, cc_extra, python_inc, numpy_inc, ldflags = preflight
+
+        src = Path(self.root) / "src" / "jamma" / "lmm" / "_secular_accel.c"
+        if not src.exists():
+            print(
+                f"WARNING: C source {src} not found — skipping secular C extension "
+                "compilation (pure-Python fallback). If building from sdist, "
+                "verify the archive is complete.",
+                file=sys.stderr,
+            )
+            return
+
+        ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
+        out_name = f"_secular_accel{ext_suffix}"
+        out_path = Path(self.root) / "src" / "jamma" / "lmm" / out_name
+
+        # dlopen needs -ldl on Linux (macOS has dlopen in libSystem)
+        dl_flags = ["-ldl"] if platform.system() == "Linux" else []
+
+        # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3)
+        extra_cflags = os.environ.get("CFLAGS", "").split()
+
+        cmd = [
+            cc_cmd,
+            *cc_extra,
+            "-O3",
+            "-ftree-vectorize",
+            "-fno-math-errno",
+            "-fno-trapping-math",
+            *extra_cflags,
+            "-fno-finite-math-only",  # override -Ofast in CFLAGS
+            "-fPIC",
+            "-shared",
+            "-std=c99",
+            f"-I{python_inc}",
+            f"-I{numpy_inc}",
+            str(src),
+            "-o",
+            str(out_path),
+            "-lm",
+            *dl_flags,
+            *ldflags,
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(
+                "WARNING: secular C extension compilation failed "
+                "(pure-Python fallback will be used):\n"
+                f"  Command: {' '.join(cmd)}\n"
+                f"  Error: {result.stderr[:2000]}",
+                file=sys.stderr,
+            )
+            return
+
+        print(f"Secular C extension compiled: {out_path}", file=sys.stderr)
+
+        build_data.setdefault("force_include", {})
+        dist_path = f"jamma/lmm/{out_name}"
+        build_data["force_include"][str(out_path)] = dist_path
+
         build_data["pure_python"] = False
         build_data["infer_tag"] = True

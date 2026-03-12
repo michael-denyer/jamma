@@ -61,6 +61,12 @@ _MAX_DLAED4_FALLBACKS: int = 5
 # null-space vectors while staying safely above the floating-point noise floor.
 _DEGENERATE_NORM_THRESHOLD: float = 1e-14
 
+# Maximum n for Python fallback rank-1 update (allocates n×n dense matrix).
+# Above this, np.diag(d) + np.outer(z, z) is prohibitively large:
+#   n=10k → 800 MB, n=50k → 20 GB, n=85k → 58 GB per call.
+# The delta path calls this r_eff times, so total is r_eff × n² × 8 bytes.
+_MAX_PYTHON_FALLBACK_N: int = 10_000
+
 # Default threshold for |z_unit[l]| below which a column is considered
 # deflated in rank-1 secular update (DLAED4 type-1 deflation).
 _DEFLATION_TOL_Z: float = 1e-10
@@ -203,7 +209,18 @@ def _rank1_update_python(
     Returns:
         Tuple (eigenvalues, eigenvectors) where eigenvalues are ascending and
         eigenvectors are columns of the (n, n) matrix.
+
+    Raises:
+        MemoryError: If n > _MAX_PYTHON_FALLBACK_N (allocates n×n dense matrix).
     """
+    n = len(d)
+    if n > _MAX_PYTHON_FALLBACK_N:
+        mem_gb = n * n * 8 / 1e9
+        raise MemoryError(
+            f"Python fallback rank-1 update requires {mem_gb:.0f} GB "
+            f"(n={n:,} dense matrix) — not viable. "
+            f"Compile the C extension: python -m jamma.lmm._compile_secular"
+        )
     M = np.diag(d) + rho * np.outer(z, z)
     try:
         return np.linalg.eigh(M)
@@ -232,7 +249,18 @@ def _rank1_eigenvalues_and_norms_python(
 
     Returns:
         Tuple (eigenvalues, norms) both shape (n,) ascending.
+
+    Raises:
+        MemoryError: If n > _MAX_PYTHON_FALLBACK_N (allocates n×n dense matrix).
     """
+    n = len(d)
+    if n > _MAX_PYTHON_FALLBACK_N:
+        mem_gb = n * n * 8 / 1e9
+        raise MemoryError(
+            f"Python fallback rank-1 update requires {mem_gb:.0f} GB "
+            f"(n={n:,} dense matrix) — not viable. "
+            f"Compile the C extension: python -m jamma.lmm._compile_secular"
+        )
     z_norm = np.linalg.norm(z)
     z_unit = z / z_norm if z_norm > 0.0 else z.copy()
     rho_eff = rho * (z_norm**2)

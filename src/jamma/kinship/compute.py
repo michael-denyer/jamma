@@ -818,6 +818,7 @@ def _stream_s_full_and_chr(
     show_progress: bool,
     desc: str,
     S_full_accum: bool = True,
+    valid_indices: np.ndarray | None = None,
 ) -> tuple[jnp.ndarray | None, dict[str, jnp.ndarray]]:
     """Stream genotypes and accumulate S_full and/or per-chromosome S_chr.
 
@@ -833,18 +834,23 @@ def _stream_s_full_and_chr(
         desc: Progress bar description.
         S_full_accum: If True, also accumulate S_full. Set False for
             multi-pass batches after S_full is already computed.
+        valid_indices: Row indices (into the full n_samples axis) to retain
+            before accumulation. When provided, S_full and S_chr are accumulated
+            at shape (n_valid, n_valid) rather than (n_samples, n_samples),
+            where n_valid = len(valid_indices). When None, all samples are used.
 
     Returns:
-        (S_full or None, dict of chr_name -> S_chr)
+        (S_full or None, dict of chr_name -> S_chr). Matrix dimension is
+        n_valid x n_valid when valid_indices is provided, otherwise
+        n_samples x n_samples.
     """
     import jax.numpy as jnp
 
-    S_full = (
-        jnp.zeros((n_samples, n_samples), dtype=jnp.float64) if S_full_accum else None
-    )
+    n_out = len(valid_indices) if valid_indices is not None else n_samples
+    S_full = jnp.zeros((n_out, n_out), dtype=jnp.float64) if S_full_accum else None
     chr_set = set(chr_subset)
     S_chr: dict[str, jnp.ndarray] = {
-        c: jnp.zeros((n_samples, n_samples), dtype=jnp.float64) for c in chr_subset
+        c: jnp.zeros((n_out, n_out), dtype=jnp.float64) for c in chr_subset
     }
 
     n_chunks = (n_snps + chunk_size - 1) // chunk_size
@@ -874,6 +880,12 @@ def _stream_s_full_and_chr(
         X_chunk = jnp.array(chunk[:, chunk_filtered_local])
         X_centered = impute_and_center(X_chunk)
 
+        # Subset rows to valid samples before accumulation.
+        # This avoids materialising an n_samples x n_samples matrix when
+        # only n_valid samples are needed (e.g. after phenotype filtering).
+        if valid_indices is not None:
+            X_centered = X_centered[valid_indices, :]
+
         if S_full is not None:
             S_full = S_full + jnp.matmul(X_centered, X_centered.T)
             S_full.block_until_ready()
@@ -894,6 +906,7 @@ def compute_loco_kinship_streaming(
     check_memory: bool = True,
     show_progress: bool = True,
     ksnps_indices: np.ndarray | None = None,
+    valid_indices: np.ndarray | None = None,
 ) -> Iterator[tuple[str, np.ndarray]]:
     """Compute LOCO kinship matrices from disk-streamed genotypes.
 
@@ -917,10 +930,17 @@ def compute_loco_kinship_streaming(
         check_memory: If True (default), check available memory before allocation.
         show_progress: If True (default), show progress bar during iteration.
         ksnps_indices: Pre-resolved column indices for -ksnps restriction, or None.
+        valid_indices: Row indices (into the full n_samples axis) to retain before
+            accumulation. When provided, each yielded K_loco has shape
+            (n_valid, n_valid) where n_valid = len(valid_indices), eliminating
+            the post-hoc np.ix_ copy. When None, K_loco has shape
+            (n_samples, n_samples) (default, backward-compatible).
 
     Yields:
         Tuple of (chr_name, K_loco) where chr_name is the chromosome being
-        excluded and K_loco is the LOCO kinship matrix (n_samples, n_samples).
+        excluded and K_loco is the LOCO kinship matrix. Shape is
+        (n_valid, n_valid) when valid_indices is provided, otherwise
+        (n_samples, n_samples).
 
     Raises:
         MemoryError: If check_memory=True and insufficient memory for even
@@ -1080,6 +1100,7 @@ def compute_loco_kinship_streaming(
             chunk_size,
             show_progress,
             desc="LOCO: kinship accumulation",
+            valid_indices=valid_indices,
         )
 
         S_full_np = np.array(S_full_jax)
@@ -1139,6 +1160,7 @@ def compute_loco_kinship_streaming(
             chunk_size,
             show_progress,
             desc=f"LOCO: pass 1/{n_batches} (S_full + {len(first_batch)} chr)",
+            valid_indices=valid_indices,
         )
 
         S_full_np = np.array(S_full_jax)
@@ -1170,6 +1192,7 @@ def compute_loco_kinship_streaming(
                     f"LOCO: pass {batch_idx + 1}/{n_batches} ({len(batch_chrs)} chr)"
                 ),
                 S_full_accum=False,
+                valid_indices=valid_indices,
             )
 
             yield from _yield_loco_matrices(

@@ -1425,6 +1425,137 @@ class TestLocoMultiPass:
 
 
 # ===========================================================================
+# valid_indices Parameter Tests
+# ===========================================================================
+
+
+@pytest.mark.tier1
+class TestLocoStreamingValidIndices:
+    """Verify compute_loco_kinship_streaming honours valid_indices parameter.
+
+    When valid_indices is provided, K_loco matrices must be (n_valid, n_valid)
+    and must match post-hoc subsetting of the full (n_samples, n_samples) result.
+    """
+
+    @staticmethod
+    def _write_synthetic_plink(
+        genotypes: np.ndarray,
+        chromosomes: np.ndarray,
+        tmp_path: Path,
+        name: str = "synthetic",
+    ) -> Path:
+        """Write synthetic genotype data to PLINK binary files."""
+        from bed_reader import to_bed
+
+        n_samples, n_snps = genotypes.shape
+        geno_int = genotypes.copy()
+        geno_int[np.isnan(geno_int)] = -127
+        geno_int = geno_int.astype(np.int8)
+
+        bed_path = tmp_path / name
+        to_bed(
+            str(bed_path) + ".bed",
+            geno_int,
+            properties={
+                "iid": [f"sample_{i}" for i in range(n_samples)],
+                "sid": [f"snp_{i}" for i in range(n_snps)],
+                "chromosome": chromosomes.tolist(),
+                "bp_position": list(range(1, n_snps + 1)),
+            },
+        )
+        return bed_path
+
+    def test_loco_kinship_streaming_valid_indices(
+        self, synthetic_multi_chr, tmp_path: Path
+    ):
+        """K_loco with valid_indices matches post-hoc subsetting of full K_loco.
+
+        Validates three behaviours:
+        1. With valid_indices=None: shape is (n_samples, n_samples).
+        2. With valid_indices provided: shape is (n_valid, n_valid).
+        3. K_loco_valid == K_loco_full[np.ix_(valid_indices, valid_indices)]
+           within rtol=1e-12 for every chromosome.
+        """
+        genotypes, chromosomes = synthetic_multi_chr
+        n_samples = genotypes.shape[0]
+        bed_path = self._write_synthetic_plink(genotypes, chromosomes, tmp_path)
+
+        # Use every other sample as the valid subset
+        valid_indices = np.arange(0, n_samples, 2)
+        n_valid = len(valid_indices)
+
+        # Full run (no subsetting)
+        K_loco_full = dict(
+            compute_loco_kinship_streaming(
+                bed_path,
+                check_memory=False,
+                show_progress=False,
+            )
+        )
+
+        # Subsetted run (valid_indices provided)
+        K_loco_valid = dict(
+            compute_loco_kinship_streaming(
+                bed_path,
+                check_memory=False,
+                show_progress=False,
+                valid_indices=valid_indices,
+            )
+        )
+
+        assert set(K_loco_full.keys()) == set(K_loco_valid.keys()), (
+            "valid_indices run must yield same chromosome set as full run"
+        )
+
+        for chr_name in K_loco_full:
+            K_full = K_loco_full[chr_name]
+            K_sub = K_loco_valid[chr_name]
+
+            # Shape: full run → (n_samples, n_samples)
+            assert K_full.shape == (n_samples, n_samples), (
+                f"Full K_loco shape wrong for {chr_name}: {K_full.shape}"
+            )
+
+            # Shape: subsetted run → (n_valid, n_valid)
+            assert K_sub.shape == (n_valid, n_valid), (
+                f"valid_indices K_loco shape wrong for {chr_name}: {K_sub.shape}, "
+                f"expected ({n_valid}, {n_valid})"
+            )
+
+            # Numerical parity: subsetting inside must match post-hoc subsetting
+            K_expected = K_full[np.ix_(valid_indices, valid_indices)]
+            np.testing.assert_allclose(
+                K_sub,
+                K_expected,
+                rtol=1e-12,
+                atol=1e-14,
+                err_msg=(f"K_loco_valid != K_loco_full[np.ix_(...)] for {chr_name}"),
+            )
+
+    def test_loco_kinship_streaming_valid_indices_none_unchanged(
+        self, synthetic_multi_chr, tmp_path: Path
+    ):
+        """valid_indices=None preserves original (n_samples, n_samples) behaviour."""
+        genotypes, chromosomes = synthetic_multi_chr
+        n_samples = genotypes.shape[0]
+        bed_path = self._write_synthetic_plink(genotypes, chromosomes, tmp_path)
+
+        K_loco = dict(
+            compute_loco_kinship_streaming(
+                bed_path,
+                check_memory=False,
+                show_progress=False,
+                valid_indices=None,
+            )
+        )
+
+        for chr_name, K in K_loco.items():
+            assert K.shape == (n_samples, n_samples), (
+                f"valid_indices=None changed shape for {chr_name}: {K.shape}"
+            )
+
+
+# ===========================================================================
 # Multi-Pass LOCO LMM Tests
 # ===========================================================================
 

@@ -878,13 +878,13 @@ def _stream_s_full_and_chr(
             continue
 
         X_chunk = jnp.array(chunk[:, chunk_filtered_local])
-        X_centered = impute_and_center(X_chunk)
 
-        # Subset rows to valid samples before accumulation.
-        # This avoids materialising an n_samples x n_samples matrix when
-        # only n_valid samples are needed (e.g. after phenotype filtering).
+        # Subset rows to valid samples before centering.
+        # Centering must use the valid-sample mean (not the full-sample mean)
+        # to match the NumPy LOCO backend and GEMMA's behaviour.
         if valid_indices is not None:
-            X_centered = X_centered[valid_indices, :]
+            X_chunk = X_chunk[valid_indices, :]
+        X_centered = impute_and_center(X_chunk)
 
         if S_full is not None:
             S_full = S_full + jnp.matmul(X_centered, X_centered.T)
@@ -960,6 +960,16 @@ def compute_loco_kinship_streaming(
     n_samples = meta["n_samples"]
     n_snps = meta["n_snps"]
     chromosomes = meta["chromosome"]
+
+    # Validate valid_indices early — JAX silently clamps OOB indices.
+    if valid_indices is not None:
+        if len(valid_indices) == 0:
+            raise ValueError("valid_indices must not be empty")
+        if valid_indices.min() < 0 or valid_indices.max() >= n_samples:
+            raise ValueError(
+                f"valid_indices out of bounds: min={valid_indices.min()}, "
+                f"max={valid_indices.max()}, n_samples={n_samples}"
+            )
 
     # Derive partitions from already-loaded metadata — avoids re-opening BED (LOCO-04)
     partitions = partitions_from_metadata(meta)
@@ -1054,7 +1064,9 @@ def compute_loco_kinship_streaming(
     # Determine memory strategy: single-pass vs multi-pass batching
     from jamma.core.memory import _dsyevr_peak_gb
 
-    matrix_gb = n_samples**2 * 8 / 1e9
+    # When valid_indices is provided, matrices are n_valid x n_valid (not n_samples).
+    n_mat = len(valid_indices) if valid_indices is not None else n_samples
+    matrix_gb = n_mat**2 * 8 / 1e9
     chunk_buffer_gb = n_samples * chunk_size * 8 / 1e9
     # S_full + K_loco_buf + all S_chr + chunk buffer
     single_pass_gb = matrix_gb * (2 + n_chr_with_snps) + chunk_buffer_gb
@@ -1069,7 +1081,7 @@ def compute_loco_kinship_streaming(
     # Eigendecomp runs while the generator is suspended with S_chr still alive.
     # Uses DSYEVR peak (smaller driver) — eigendecompose_kinship() falls back
     # from DSYEVD to DSYEVR under memory pressure, making this self-consistent.
-    eigendecomp_min_gb = _dsyevr_peak_gb(n_samples)
+    eigendecomp_min_gb = _dsyevr_peak_gb(n_mat)
     min_required_gb = matrix_gb * 3 + chunk_buffer_gb + eigendecomp_min_gb
 
     if check_memory and min_required_gb > available_gb * 0.9:

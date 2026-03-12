@@ -914,3 +914,30 @@ class TestBatchGridMleSnpsOuter:
             rtol=1e-10,
             err_msg="_batch_grid_mle SNPs-outer diverges for single lambda",
         )
+
+    def test_batch_grid_mle_degenerate_snp_parity(self):
+        """Degenerate SNP (all-zero Uab) produces identical results in both impls.
+
+        All-zero Uab triggers the P_yy clamping path (_P_YY_MIN floor).
+        Verifies the _mle_log_likelihood_hi clamping matches mle_log_likelihood_jax.
+        """
+        eigenvalues, Uab_batch, lambdas = self._make_data(n_cvt=1, n_snps=5, n_grid=10)
+
+        # Make SNP 2 degenerate: zero out its Uab so P_yy hits the _P_YY_MIN floor
+        Uab_batch = Uab_batch.at[2, :, :].set(0.0)
+
+        old = self._batch_grid_mle_lambda_outer(1, lambdas, eigenvalues, Uab_batch)
+        new = _batch_grid_mle(1, lambdas, eigenvalues, Uab_batch)
+
+        old_np, new_np = np.array(old), np.array(new)
+
+        # Both implementations must agree on all SNPs including the degenerate one
+        np.testing.assert_allclose(
+            new_np,
+            old_np,
+            rtol=1e-10,
+            err_msg=(
+                "_batch_grid_mle SNPs-outer diverges from lambda-outer "
+                "with degenerate SNP"
+            ),
+        )

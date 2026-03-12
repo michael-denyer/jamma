@@ -1602,6 +1602,23 @@ class TestLocoStreamingValidIndices:
                 )
             )
 
+    def test_loco_kinship_streaming_unsorted_valid_indices_raises(
+        self, synthetic_multi_chr, tmp_path: Path
+    ):
+        """Unsorted valid_indices raises ValueError."""
+        genotypes, chromosomes = synthetic_multi_chr
+        bed_path = self._write_synthetic_plink(genotypes, chromosomes, tmp_path)
+
+        with pytest.raises(ValueError, match="strictly increasing"):
+            dict(
+                compute_loco_kinship_streaming(
+                    bed_path,
+                    check_memory=False,
+                    show_progress=False,
+                    valid_indices=np.array([3, 1, 2]),
+                )
+            )
+
     def test_loco_kinship_streaming_valid_indices_none_unchanged(
         self, synthetic_multi_chr, tmp_path: Path
     ):

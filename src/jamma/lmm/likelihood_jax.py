@@ -269,6 +269,7 @@ def mle_log_likelihood_jax(
 
 def _mle_log_likelihood_hi(
     n_cvt: int,
+    idx_yy: int,
     Hi_eval: Float[Array, " n"],
     logdet_h: Float[Array, ""],
     Uab: Float[Array, "n ni"],
@@ -279,15 +280,9 @@ def _mle_log_likelihood_hi(
     pre-computed Hi_eval and logdet_h instead of lambda_val, avoiding
     redundant recomputation across SNPs at the same grid point.
 
-    Not @jit decorated: called inside vmap from _batch_grid_mle; JIT
-    propagates from the outer @jit on _batch_optimize_lambda_grid_mle.
-
-    Do NOT use this function in place of mle_log_likelihood_jax for
-    golden-section or other single-SNP callers — the caller would have
-    to manage Hi_eval/logdet_h precomputation manually.
-
     Args:
         n_cvt: Number of covariates.
+        idx_yy: Pre-computed index for Pab[n_cvt+1, idx_yy] (from build_index_table).
         Hi_eval: Pre-computed 1 / (lambda * eigenvalues + 1) (n_samples,).
         logdet_h: Pre-computed sum(log|lambda * eigenvalues + 1|) scalar.
         Uab: Pre-computed Uab matrix (n_samples, n_index).
@@ -297,8 +292,6 @@ def _mle_log_likelihood_hi(
     """
     n = Hi_eval.shape[0]
     nc_total = n_cvt + 1
-    table = build_index_table(n_cvt)
-    idx_yy = table["idx_yy"]
 
     Pab = calc_pab_jax(n_cvt, Hi_eval, Uab)
 
@@ -1278,11 +1271,14 @@ def _batch_grid_mle(
     # Hi_eval_grid: (n_grid, n_samples)
     # logdet_h_grid: (n_grid,)
 
+    # Precompute index table once — avoids rebuilding inside vmap closure.
+    idx_yy = build_index_table(n_cvt)["idx_yy"]
+
     # Step 2: vmap over SNPs (outer), lambdas (inner)
     # Each SNP's Uab is read once; Hi_eval_grid/logdet_h_grid stay in cache.
     def mle_for_snp(Uab):
         def mle_at_lambda(Hi_eval, logdet_h):
-            return _mle_log_likelihood_hi(n_cvt, Hi_eval, logdet_h, Uab)
+            return _mle_log_likelihood_hi(n_cvt, idx_yy, Hi_eval, logdet_h, Uab)
 
         return vmap(mle_at_lambda)(Hi_eval_grid, logdet_h_grid)
 

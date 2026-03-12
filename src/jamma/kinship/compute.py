@@ -807,6 +807,37 @@ def _yield_loco_matrices(
         yield (chr_name, K_loco)
 
 
+def _validate_valid_indices(valid_indices: np.ndarray, n_samples: int) -> None:
+    """Validate valid_indices for emptiness, bounds, duplicates, and ordering.
+
+    JAX silently clamps OOB indices, so we must validate before any JAX
+    indexing operation.
+
+    Args:
+        valid_indices: Array of sample indices to keep.
+        n_samples: Total number of samples (upper bound for indices).
+
+    Raises:
+        ValueError: If indices are empty, out of bounds, duplicated, or unsorted.
+    """
+    if len(valid_indices) == 0:
+        raise ValueError("valid_indices must not be empty")
+    if valid_indices.min() < 0 or valid_indices.max() >= n_samples:
+        raise ValueError(
+            f"valid_indices out of bounds: min={valid_indices.min()}, "
+            f"max={valid_indices.max()}, n_samples={n_samples}"
+        )
+    n_unique = len(np.unique(valid_indices))
+    if len(valid_indices) != n_unique:
+        raise ValueError(
+            f"valid_indices contains {len(valid_indices) - n_unique} duplicates"
+        )
+    if not np.all(np.diff(valid_indices) > 0):
+        raise ValueError(
+            "valid_indices must be strictly increasing (sorted, no duplicates)"
+        )
+
+
 def _stream_s_full_and_chr(
     bed_path: Path,
     n_samples: int,
@@ -848,18 +879,7 @@ def _stream_s_full_and_chr(
 
     # Validate here (not just in caller) — JAX silently clamps OOB indices.
     if valid_indices is not None:
-        if len(valid_indices) == 0:
-            raise ValueError("valid_indices must not be empty")
-        if valid_indices.min() < 0 or valid_indices.max() >= n_samples:
-            raise ValueError(
-                f"valid_indices out of bounds: min={valid_indices.min()}, "
-                f"max={valid_indices.max()}, n_samples={n_samples}"
-            )
-        if len(valid_indices) != len(np.unique(valid_indices)):
-            raise ValueError(
-                f"valid_indices contains "
-                f"{len(valid_indices) - len(np.unique(valid_indices))} duplicates"
-            )
+        _validate_valid_indices(valid_indices, n_samples)
 
     n_out = len(valid_indices) if valid_indices is not None else n_samples
     S_full = jnp.zeros((n_out, n_out), dtype=jnp.float64) if S_full_accum else None
@@ -978,18 +998,7 @@ def compute_loco_kinship_streaming(
 
     # Validate valid_indices early — JAX silently clamps OOB indices.
     if valid_indices is not None:
-        if len(valid_indices) == 0:
-            raise ValueError("valid_indices must not be empty")
-        if valid_indices.min() < 0 or valid_indices.max() >= n_samples:
-            raise ValueError(
-                f"valid_indices out of bounds: min={valid_indices.min()}, "
-                f"max={valid_indices.max()}, n_samples={n_samples}"
-            )
-        if len(valid_indices) != len(np.unique(valid_indices)):
-            raise ValueError(
-                f"valid_indices contains "
-                f"{len(valid_indices) - len(np.unique(valid_indices))} duplicates"
-            )
+        _validate_valid_indices(valid_indices, n_samples)
 
     # Derive partitions from already-loaded metadata — avoids re-opening BED (LOCO-04)
     partitions = partitions_from_metadata(meta)

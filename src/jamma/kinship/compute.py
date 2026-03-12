@@ -807,6 +807,37 @@ def _yield_loco_matrices(
         yield (chr_name, K_loco)
 
 
+def _validate_valid_indices(valid_indices: np.ndarray, n_samples: int) -> None:
+    """Validate valid_indices for emptiness, bounds, duplicates, and ordering.
+
+    JAX silently clamps OOB indices, so we must validate before any JAX
+    indexing operation.
+
+    Args:
+        valid_indices: Array of sample indices to keep.
+        n_samples: Total number of samples (upper bound for indices).
+
+    Raises:
+        ValueError: If indices are empty, out of bounds, duplicated, or unsorted.
+    """
+    if len(valid_indices) == 0:
+        raise ValueError("valid_indices must not be empty")
+    if valid_indices.min() < 0 or valid_indices.max() >= n_samples:
+        raise ValueError(
+            f"valid_indices out of bounds: min={valid_indices.min()}, "
+            f"max={valid_indices.max()}, n_samples={n_samples}"
+        )
+    n_unique = len(np.unique(valid_indices))
+    if len(valid_indices) != n_unique:
+        raise ValueError(
+            f"valid_indices contains {len(valid_indices) - n_unique} duplicates"
+        )
+    if not np.all(np.diff(valid_indices) > 0):
+        raise ValueError(
+            "valid_indices must be strictly increasing (sorted, no duplicates)"
+        )
+
+
 def _stream_s_full_and_chr(
     bed_path: Path,
     n_samples: int,
@@ -818,6 +849,7 @@ def _stream_s_full_and_chr(
     show_progress: bool,
     desc: str,
     S_full_accum: bool = True,
+    valid_indices: np.ndarray | None = None,
 ) -> tuple[jnp.ndarray | None, dict[str, jnp.ndarray]]:
     """Stream genotypes and accumulate S_full and/or per-chromosome S_chr.
 
@@ -833,18 +865,27 @@ def _stream_s_full_and_chr(
         desc: Progress bar description.
         S_full_accum: If True, also accumulate S_full. Set False for
             multi-pass batches after S_full is already computed.
+        valid_indices: Row indices (into the full n_samples axis) to retain
+            before accumulation. When provided, S_full and S_chr are accumulated
+            at shape (n_valid, n_valid) rather than (n_samples, n_samples),
+            where n_valid = len(valid_indices). When None, all samples are used.
 
     Returns:
-        (S_full or None, dict of chr_name -> S_chr)
+        (S_full or None, dict of chr_name -> S_chr). Matrix dimension is
+        n_valid x n_valid when valid_indices is provided, otherwise
+        n_samples x n_samples.
     """
     import jax.numpy as jnp
 
-    S_full = (
-        jnp.zeros((n_samples, n_samples), dtype=jnp.float64) if S_full_accum else None
-    )
+    # Validate here (not just in caller) — JAX silently clamps OOB indices.
+    if valid_indices is not None:
+        _validate_valid_indices(valid_indices, n_samples)
+
+    n_out = len(valid_indices) if valid_indices is not None else n_samples
+    S_full = jnp.zeros((n_out, n_out), dtype=jnp.float64) if S_full_accum else None
     chr_set = set(chr_subset)
     S_chr: dict[str, jnp.ndarray] = {
-        c: jnp.zeros((n_samples, n_samples), dtype=jnp.float64) for c in chr_subset
+        c: jnp.zeros((n_out, n_out), dtype=jnp.float64) for c in chr_subset
     }
 
     n_chunks = (n_snps + chunk_size - 1) // chunk_size
@@ -872,6 +913,12 @@ def _stream_s_full_and_chr(
             continue
 
         X_chunk = jnp.array(chunk[:, chunk_filtered_local])
+
+        # Subset rows to valid samples before centering.
+        # Centering must use the valid-sample mean (not the full-sample mean)
+        # to match the NumPy LOCO backend and GEMMA's behaviour.
+        if valid_indices is not None:
+            X_chunk = X_chunk[valid_indices, :]
         X_centered = impute_and_center(X_chunk)
 
         if S_full is not None:
@@ -894,6 +941,7 @@ def compute_loco_kinship_streaming(
     check_memory: bool = True,
     show_progress: bool = True,
     ksnps_indices: np.ndarray | None = None,
+    valid_indices: np.ndarray | None = None,
 ) -> Iterator[tuple[str, np.ndarray]]:
     """Compute LOCO kinship matrices from disk-streamed genotypes.
 
@@ -917,10 +965,17 @@ def compute_loco_kinship_streaming(
         check_memory: If True (default), check available memory before allocation.
         show_progress: If True (default), show progress bar during iteration.
         ksnps_indices: Pre-resolved column indices for -ksnps restriction, or None.
+        valid_indices: Row indices (into the full n_samples axis) to retain before
+            accumulation. When provided, each yielded K_loco has shape
+            (n_valid, n_valid) where n_valid = len(valid_indices), eliminating
+            the post-hoc np.ix_ copy. When None, K_loco has shape
+            (n_samples, n_samples) (default, backward-compatible).
 
     Yields:
         Tuple of (chr_name, K_loco) where chr_name is the chromosome being
-        excluded and K_loco is the LOCO kinship matrix (n_samples, n_samples).
+        excluded and K_loco is the LOCO kinship matrix. Shape is
+        (n_valid, n_valid) when valid_indices is provided, otherwise
+        (n_samples, n_samples).
 
     Raises:
         MemoryError: If check_memory=True and insufficient memory for even
@@ -940,6 +995,10 @@ def compute_loco_kinship_streaming(
     n_samples = meta["n_samples"]
     n_snps = meta["n_snps"]
     chromosomes = meta["chromosome"]
+
+    # Validate valid_indices early — JAX silently clamps OOB indices.
+    if valid_indices is not None:
+        _validate_valid_indices(valid_indices, n_samples)
 
     # Derive partitions from already-loaded metadata — avoids re-opening BED (LOCO-04)
     partitions = partitions_from_metadata(meta)
@@ -1034,7 +1093,11 @@ def compute_loco_kinship_streaming(
     # Determine memory strategy: single-pass vs multi-pass batching
     from jamma.core.memory import _dsyevr_peak_gb
 
-    matrix_gb = n_samples**2 * 8 / 1e9
+    # When valid_indices is provided, matrices are n_valid x n_valid (not n_samples).
+    n_mat = len(valid_indices) if valid_indices is not None else n_samples
+    matrix_gb = n_mat**2 * 8 / 1e9
+    # Chunk buffer is n_samples (full disk read) regardless of valid_indices;
+    # subsetting happens after load.
     chunk_buffer_gb = n_samples * chunk_size * 8 / 1e9
     # S_full + K_loco_buf + all S_chr + chunk buffer
     single_pass_gb = matrix_gb * (2 + n_chr_with_snps) + chunk_buffer_gb
@@ -1049,7 +1112,7 @@ def compute_loco_kinship_streaming(
     # Eigendecomp runs while the generator is suspended with S_chr still alive.
     # Uses DSYEVR peak (smaller driver) — eigendecompose_kinship() falls back
     # from DSYEVD to DSYEVR under memory pressure, making this self-consistent.
-    eigendecomp_min_gb = _dsyevr_peak_gb(n_samples)
+    eigendecomp_min_gb = _dsyevr_peak_gb(n_mat)
     min_required_gb = matrix_gb * 3 + chunk_buffer_gb + eigendecomp_min_gb
 
     if check_memory and min_required_gb > available_gb * 0.9:
@@ -1080,6 +1143,7 @@ def compute_loco_kinship_streaming(
             chunk_size,
             show_progress,
             desc="LOCO: kinship accumulation",
+            valid_indices=valid_indices,
         )
 
         S_full_np = np.array(S_full_jax)
@@ -1139,6 +1203,7 @@ def compute_loco_kinship_streaming(
             chunk_size,
             show_progress,
             desc=f"LOCO: pass 1/{n_batches} (S_full + {len(first_batch)} chr)",
+            valid_indices=valid_indices,
         )
 
         S_full_np = np.array(S_full_jax)
@@ -1170,6 +1235,7 @@ def compute_loco_kinship_streaming(
                     f"LOCO: pass {batch_idx + 1}/{n_batches} ({len(batch_chrs)} chr)"
                 ),
                 S_full_accum=False,
+                valid_indices=valid_indices,
             )
 
             yield from _yield_loco_matrices(

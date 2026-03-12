@@ -1425,6 +1425,224 @@ class TestLocoMultiPass:
 
 
 # ===========================================================================
+# valid_indices Parameter Tests
+# ===========================================================================
+
+
+@pytest.mark.tier1
+class TestLocoStreamingValidIndices:
+    """Verify compute_loco_kinship_streaming honours valid_indices parameter.
+
+    When valid_indices is provided, K_loco matrices must be (n_valid, n_valid)
+    and must match post-hoc subsetting of the full (n_samples, n_samples) result.
+    """
+
+    @staticmethod
+    def _write_synthetic_plink(
+        genotypes: np.ndarray,
+        chromosomes: np.ndarray,
+        tmp_path: Path,
+        name: str = "synthetic",
+    ) -> Path:
+        """Write synthetic genotype data to PLINK binary files."""
+        from bed_reader import to_bed
+
+        n_samples, n_snps = genotypes.shape
+        geno_int = genotypes.copy()
+        geno_int[np.isnan(geno_int)] = -127
+        geno_int = geno_int.astype(np.int8)
+
+        bed_path = tmp_path / name
+        to_bed(
+            str(bed_path) + ".bed",
+            geno_int,
+            properties={
+                "iid": [f"sample_{i}" for i in range(n_samples)],
+                "sid": [f"snp_{i}" for i in range(n_snps)],
+                "chromosome": chromosomes.tolist(),
+                "bp_position": list(range(1, n_snps + 1)),
+            },
+        )
+        return bed_path
+
+    def test_loco_kinship_streaming_valid_indices(
+        self, synthetic_multi_chr, tmp_path: Path
+    ):
+        """K_loco with valid_indices matches NumPy backend with same valid_indices.
+
+        Validates:
+        1. With valid_indices provided: shape is (n_valid, n_valid).
+        2. JAX K_loco matches NumPy K_loco (both center over valid samples only).
+
+        Note: K_loco_valid != K_full[np.ix_(valid_indices, valid_indices)] because
+        centering uses valid-sample means (correct for LOCO), not all-sample means.
+        """
+        from jamma.lmm.loco import _compute_loco_kinship_streaming_numpy
+
+        genotypes, chromosomes = synthetic_multi_chr
+        n_samples = genotypes.shape[0]
+        bed_path = self._write_synthetic_plink(genotypes, chromosomes, tmp_path)
+
+        # Use every other sample as the valid subset
+        valid_indices = np.arange(0, n_samples, 2)
+        n_valid = len(valid_indices)
+
+        # JAX subsetted run
+        K_loco_jax = dict(
+            compute_loco_kinship_streaming(
+                bed_path,
+                check_memory=False,
+                show_progress=False,
+                valid_indices=valid_indices,
+            )
+        )
+
+        # NumPy reference (subsets before centering — known correct)
+        loco_iter, _stats = _compute_loco_kinship_streaming_numpy(
+            bed_path,
+            check_memory=False,
+            show_progress=False,
+            valid_indices=valid_indices,
+        )
+        K_loco_numpy = dict(loco_iter)
+
+        assert set(K_loco_jax.keys()) == set(K_loco_numpy.keys()), (
+            "JAX and NumPy backends must yield the same chromosome set"
+        )
+
+        for chr_name in K_loco_jax:
+            K_jax = K_loco_jax[chr_name]
+            K_np = K_loco_numpy[chr_name]
+
+            # Shape: both must be (n_valid, n_valid)
+            assert K_jax.shape == (n_valid, n_valid), (
+                f"JAX K_loco shape wrong for {chr_name}: {K_jax.shape}"
+            )
+            assert K_np.shape == (n_valid, n_valid), (
+                f"NumPy K_loco shape wrong for {chr_name}: {K_np.shape}"
+            )
+
+            # Numerical parity: JAX must match NumPy (both center over valid only)
+            np.testing.assert_allclose(
+                K_jax,
+                K_np,
+                rtol=1e-10,
+                atol=1e-14,
+                err_msg=(
+                    f"JAX vs NumPy K_loco mismatch for {chr_name} with valid_indices"
+                ),
+            )
+
+    def test_loco_kinship_streaming_empty_valid_indices_raises(
+        self, synthetic_multi_chr, tmp_path: Path
+    ):
+        """Empty valid_indices raises ValueError."""
+        genotypes, chromosomes = synthetic_multi_chr
+        bed_path = self._write_synthetic_plink(genotypes, chromosomes, tmp_path)
+
+        with pytest.raises(ValueError, match="must not be empty"):
+            dict(
+                compute_loco_kinship_streaming(
+                    bed_path,
+                    check_memory=False,
+                    show_progress=False,
+                    valid_indices=np.array([], dtype=int),
+                )
+            )
+
+    def test_loco_kinship_streaming_oob_valid_indices_raises(
+        self, synthetic_multi_chr, tmp_path: Path
+    ):
+        """Out-of-bounds valid_indices raises ValueError."""
+        genotypes, chromosomes = synthetic_multi_chr
+        n_samples = genotypes.shape[0]
+        bed_path = self._write_synthetic_plink(genotypes, chromosomes, tmp_path)
+
+        with pytest.raises(ValueError, match="out of bounds"):
+            dict(
+                compute_loco_kinship_streaming(
+                    bed_path,
+                    check_memory=False,
+                    show_progress=False,
+                    valid_indices=np.array([0, n_samples]),
+                )
+            )
+
+    def test_loco_kinship_streaming_negative_valid_indices_raises(
+        self, synthetic_multi_chr, tmp_path: Path
+    ):
+        """Negative valid_indices raises ValueError."""
+        genotypes, chromosomes = synthetic_multi_chr
+        bed_path = self._write_synthetic_plink(genotypes, chromosomes, tmp_path)
+
+        with pytest.raises(ValueError, match="out of bounds"):
+            dict(
+                compute_loco_kinship_streaming(
+                    bed_path,
+                    check_memory=False,
+                    show_progress=False,
+                    valid_indices=np.array([-1, 0, 1]),
+                )
+            )
+
+    def test_loco_kinship_streaming_duplicate_valid_indices_raises(
+        self, synthetic_multi_chr, tmp_path: Path
+    ):
+        """Duplicate valid_indices raises ValueError."""
+        genotypes, chromosomes = synthetic_multi_chr
+        bed_path = self._write_synthetic_plink(genotypes, chromosomes, tmp_path)
+
+        with pytest.raises(ValueError, match="duplicates"):
+            dict(
+                compute_loco_kinship_streaming(
+                    bed_path,
+                    check_memory=False,
+                    show_progress=False,
+                    valid_indices=np.array([0, 1, 1, 2]),
+                )
+            )
+
+    def test_loco_kinship_streaming_unsorted_valid_indices_raises(
+        self, synthetic_multi_chr, tmp_path: Path
+    ):
+        """Unsorted valid_indices raises ValueError."""
+        genotypes, chromosomes = synthetic_multi_chr
+        bed_path = self._write_synthetic_plink(genotypes, chromosomes, tmp_path)
+
+        with pytest.raises(ValueError, match="strictly increasing"):
+            dict(
+                compute_loco_kinship_streaming(
+                    bed_path,
+                    check_memory=False,
+                    show_progress=False,
+                    valid_indices=np.array([3, 1, 2]),
+                )
+            )
+
+    def test_loco_kinship_streaming_valid_indices_none_unchanged(
+        self, synthetic_multi_chr, tmp_path: Path
+    ):
+        """valid_indices=None preserves original (n_samples, n_samples) behaviour."""
+        genotypes, chromosomes = synthetic_multi_chr
+        n_samples = genotypes.shape[0]
+        bed_path = self._write_synthetic_plink(genotypes, chromosomes, tmp_path)
+
+        K_loco = dict(
+            compute_loco_kinship_streaming(
+                bed_path,
+                check_memory=False,
+                show_progress=False,
+                valid_indices=None,
+            )
+        )
+
+        for chr_name, K in K_loco.items():
+            assert K.shape == (n_samples, n_samples), (
+                f"valid_indices=None changed shape for {chr_name}: {K.shape}"
+            )
+
+
+# ===========================================================================
 # Multi-Pass LOCO LMM Tests
 # ===========================================================================
 

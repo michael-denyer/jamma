@@ -4123,9 +4123,9 @@ err_input:
  * score_from_pab_general — Score statistics from general-n_cvt Pab.
  *
  * Score differs from Wald:
- *   - Extracts P_yy, P_xx, P_xy at level n_cvt (covariates only)
- *   - F = n_samples * P_xy^2 / (P_yy * P_xx)   [n_samples, not df]
- *   - Px_yy at level n_cvt+1 for beta/se computation
+ *   - F = n_samples * P_xy^2 / (P_yy * P_xx)  [not (P_yy - Px_yy) * tau]
+ *   - Degenerate guard checks P_XX <= 0 || P_YY < 0 || Px_YY < 0
+ *   - Px_yy at level n_cvt+1 used only for beta/se, not F-stat
  *
  * Returns 1 if valid, 0 if degenerate.
  * ------------------------------------------------------------------------- */
@@ -4184,12 +4184,14 @@ static int score_from_pab_general(
  * into a heap-allocated pab_table_t.
  *
  * The dict must have keys: n_cvt, n_index, n_rows, n_inv, n_var, idx_xx,
- * idx_xy, idx_yy, df, invariant_indices, varying_indices, logdet_diag_rows,
+ * idx_xy, idx_yy, invariant_indices, varying_indices, logdet_diag_rows,
  * logdet_diag_cols, level_offsets, level_counts, entries.
  *
  * Returns 0 on success, -1 on failure (exception set).
  * Caller must call free_pab_table(t) to release all owned fields.
  * ------------------------------------------------------------------------- */
+static void free_pab_table(pab_table_t *t);
+
 static int parse_pab_table_from_dict(PyObject *dict, pab_table_t *t, int n_samples)
 {
     /* Read scalar integers from dict */
@@ -4217,9 +4219,21 @@ static int parse_pab_table_from_dict(PyObject *dict, pab_table_t *t, int n_sampl
         PyErr_Format(PyExc_ValueError, "n_cvt must be 1..%d, got %d", MAX_N_CVT, t->n_cvt);
         return -1;
     }
+    if (t->n_rows < 1 || t->n_rows > MAX_N_ROWS) {
+        PyErr_Format(PyExc_ValueError, "n_rows must be 1..%d, got %d", MAX_N_ROWS, t->n_rows);
+        return -1;
+    }
     if (t->n_inv + t->n_var != t->n_index) {
         PyErr_Format(PyExc_ValueError, "n_inv (%d) + n_var (%d) != n_index (%d)",
                      t->n_inv, t->n_var, t->n_index);
+        return -1;
+    }
+    if (t->idx_xx < 0 || t->idx_xx >= t->n_index ||
+        t->idx_xy < 0 || t->idx_xy >= t->n_index ||
+        t->idx_yy < 0 || t->idx_yy >= t->n_index) {
+        PyErr_Format(PyExc_ValueError,
+            "idx_xx/xy/yy out of range [0, %d): got %d, %d, %d",
+            t->n_index, t->idx_xx, t->idx_xy, t->idx_yy);
         return -1;
     }
 
@@ -4232,12 +4246,12 @@ static int parse_pab_table_from_dict(PyObject *dict, pab_table_t *t, int n_sampl
     t->level_counts      = NULL;
     t->entries           = NULL;
 
-    /* Parse array fields */
+    /* Parse array fields — free_pab_table on failure (safe: pointers NULL-init'd) */
 #define GETARR(key, field, len) do { \
     PyObject *obj = PyDict_GetItemString(dict, key); \
-    if (!obj) { PyErr_Format(PyExc_KeyError, "pab_table_dict missing key '%s'", key); return -1; } \
+    if (!obj) { PyErr_Format(PyExc_KeyError, "pab_table_dict missing key '%s'", key); free_pab_table(t); return -1; } \
     (field) = parse_int32_array(obj, (len), key); \
-    if (!(field)) return -1; \
+    if (!(field)) { free_pab_table(t); return -1; } \
 } while(0)
 
     GETARR("invariant_indices", t->invariant_indices, t->n_inv);
@@ -4253,26 +4267,29 @@ static int parse_pab_table_from_dict(PyObject *dict, pab_table_t *t, int n_sampl
         PyObject *entries_obj = PyDict_GetItemString(dict, "entries");
         if (!entries_obj) {
             PyErr_SetString(PyExc_KeyError, "pab_table_dict missing key 'entries'");
+            free_pab_table(t);
             return -1;
         }
         PyArrayObject *entries_arr = (PyArrayObject *)PyArray_FROM_OTF(
             entries_obj, NPY_INT32, NPY_ARRAY_C_CONTIGUOUS);
-        if (!entries_arr) return -1;
+        if (!entries_arr) { free_pab_table(t); return -1; }
         int entries_len = (int)PyArray_SIZE(entries_arr);
         Py_DECREF(entries_arr);
         if (entries_len % 4 != 0) {
             PyErr_Format(PyExc_ValueError,
                 "entries length (%d) not a multiple of 4", entries_len);
+            free_pab_table(t);
             return -1;
         }
         t->n_entries = entries_len / 4;
 
         int *raw = parse_int32_array(entries_obj, entries_len, "entries");
-        if (!raw) return -1;
+        if (!raw) { free_pab_table(t); return -1; }
         t->entries = (pab_entry_t *)malloc((size_t)t->n_entries * sizeof(pab_entry_t));
         if (!t->entries) {
             free(raw);
             PyErr_NoMemory();
+            free_pab_table(t);
             return -1;
         }
         for (int i = 0; i < t->n_entries; i++) {
@@ -4282,6 +4299,32 @@ static int parse_pab_table_from_dict(PyObject *dict, pab_table_t *t, int n_sampl
             t->entries[i].index_ww = raw[i * 4 + 3];
         }
         free(raw);
+
+        /* Validate entry indices are in range [0, n_index) */
+        for (int i = 0; i < t->n_entries; i++) {
+            if (t->entries[i].index_ab < 0 || t->entries[i].index_ab >= t->n_index ||
+                t->entries[i].index_aw < 0 || t->entries[i].index_aw >= t->n_index ||
+                t->entries[i].index_bw < 0 || t->entries[i].index_bw >= t->n_index ||
+                t->entries[i].index_ww < 0 || t->entries[i].index_ww >= t->n_index) {
+                PyErr_Format(PyExc_ValueError,
+                    "entries[%d] has out-of-range index (n_index=%d)", i, t->n_index);
+                free_pab_table(t);
+                return -1;
+            }
+        }
+
+        /* Validate level_offsets/level_counts don't exceed n_entries */
+        for (int p = 0; p < t->n_rows; p++) {
+            if (t->level_offsets[p] < 0 ||
+                t->level_counts[p] < 0 ||
+                t->level_offsets[p] + t->level_counts[p] > t->n_entries) {
+                PyErr_Format(PyExc_ValueError,
+                    "level_offsets[%d]=%d + level_counts[%d]=%d exceeds n_entries=%d",
+                    p, t->level_offsets[p], p, t->level_counts[p], t->n_entries);
+                free_pab_table(t);
+                return -1;
+            }
+        }
     }
 
     return 0;

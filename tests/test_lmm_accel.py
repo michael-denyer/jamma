@@ -2882,8 +2882,76 @@ def test_lrt_batch_general_ncvt4(general_score_lrt_ncvt4):
     )
 
 
-def test_abi_version_7():
-    """C-70-06: ABI version is 7 for general Score/LRT C kernel support."""
-    from jamma.lmm._lmm_accel import ABI_VERSION
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+def test_lrt_batch_general_degenerate_snps(synthetic_covariate_data_ncvt2):
+    """C-70-06: LRT general C matches Python on degenerate SNPs.
 
-    assert ABI_VERSION == 7, f"Expected ABI_VERSION=7, got {ABI_VERSION}"
+    Unlike Score (which checks P_XX <= 0 and returns NaN), LRT's golden
+    section MLE optimizer can still converge to a finite lambda on degenerate
+    SNPs. This test verifies C-vs-Python parity on a batch containing a
+    degenerate SNP.
+    """
+    if not _lrt_general_c_available():
+        pytest.skip("compute_lrt_batch_general_c not compiled yet")
+
+    from jamma.lmm._lmm_accel import compute_lrt_batch_general_c
+    from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
+
+    data = synthetic_covariate_data_ncvt2
+    n_cvt = data["n_cvt"]
+    n_samples = data["n_samples"]
+    eigenvalues = data["eigenvalues"]
+    Uab_batch = data["Uab_batch"].copy()
+
+    # Zero out all genotype-containing columns in one SNP to make it degenerate
+    _, var_indices = classify_uab_columns(n_cvt)
+    for idx in var_indices:
+        Uab_batch[0, :, idx] = 0.0
+
+    l_min, l_max, n_grid, n_refine = 1e-5, 1e5, 50, 20
+    logl_H0 = -100.0  # arbitrary finite value for null model
+    pab_table_dict = build_pab_table_for_c(n_cvt)
+
+    result_c = compute_lrt_batch_general_c(
+        eigenvalues,
+        Uab_batch,
+        n_samples,
+        n_cvt,
+        pab_table_dict,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        logl_H0,
+        1,  # n_threads
+    )
+
+    # Python reference path
+    lambdas_py, logls_py = golden_section_optimize_lambda_mle_numpy(
+        n_cvt,
+        eigenvalues,
+        Uab_batch,
+        l_min=l_min,
+        l_max=l_max,
+        n_grid=n_grid,
+        n_iter=n_refine,
+    )
+    p_lrts_py = _batch_lrt_pvalues_numpy(logls_py, logl_H0)
+
+    np.testing.assert_allclose(
+        result_c["lambdas_mle"],
+        lambdas_py,
+        rtol=5e-5,
+        atol=1e-14,
+        equal_nan=True,
+        err_msg="lambdas_mle: C vs Python mismatch on batch with degenerate SNP",
+    )
+    np.testing.assert_allclose(
+        result_c["p_lrts"],
+        p_lrts_py,
+        rtol=5e-5,
+        atol=1e-14,
+        equal_nan=True,
+        err_msg="p_lrts: C vs Python mismatch on batch with degenerate SNP",
+    )

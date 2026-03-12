@@ -152,6 +152,9 @@ def _create_wald_workspace_for_ncvt(
             n_refine,
             n_threads,
         )
+    logger.debug(
+        "Wald workspace unavailable for n_cvt={} (general C extension missing)", n_cvt
+    )
     return None
 
 
@@ -344,12 +347,18 @@ def _compute_chunk_size_numpy(
             # while 3-col varying SoA is still live = 9 cols peak
             bytes_per_snp = n_samples * 9 * 8
     elif use_split and n_cvt > 1:
-        # General split: n_var varying columns + 1 UtG column per SNP.
         from jamma.lmm.likelihood import classify_uab_columns
 
         _inv, var = classify_uab_columns(n_cvt)
         n_var = len(var)
-        bytes_per_snp = n_samples * (n_var + 1) * 8
+        if lmm_mode == 1:
+            # Wald: workspace path, no Uab reconstruction
+            bytes_per_snp = n_samples * (n_var + 1) * 8
+        else:
+            # Score/LRT/All: reconstruct_uab_from_soa allocates (n_snps,
+            # n_samples, n_index) while varying SoA is still live.
+            n_index = (n_cvt + 3) * (n_cvt + 2) // 2
+            bytes_per_snp = n_samples * (n_var + n_index) * 8
     else:
         n_index = (n_cvt + 3) * (n_cvt + 2) // 2
         bytes_per_snp = n_samples * n_index * 8

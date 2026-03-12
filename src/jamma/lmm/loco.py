@@ -1275,7 +1275,6 @@ def run_lmm_loco(
             # Initialise to None; reassigned inside the compute block when
             # eigen_cache is None and we actually stream kinship.
             snp_stats_cache = None
-            kinship_valid_indices = None
             loco_iter = None
             # Secular update state: set when use_secular_update=True
             secular_d_full: np.ndarray | None = None
@@ -1284,21 +1283,19 @@ def run_lmm_loco(
             # Sequential generator for the secular path (one X_c at a time)
             secular_x_c_seq_iter: Iterator[tuple[str, np.ndarray, int]] | None = None
 
+            # When save_kinship=False and some samples are invalid, pass
+            # valid_indices so kinship is accumulated at n_valid x n_valid size,
+            # avoiding full n_samples^2 materialisation for post-hoc subsetting
+            # (LOCO-07). Applies to both numpy and JAX backends.
+            kinship_valid_indices = (
+                None if all_samples_valid or save_kinship else np.where(valid_mask)[0]
+            )
+
             if eigen_cache is None:
                 # Stream LOCO kinship matrices one at a time.
                 # NumPy backend uses pure-NumPy kinship (no JAX dependency);
                 # JAX backend uses JAX matmul for GPU acceleration.
                 if backend == "numpy":
-                    # When save_kinship=False and some samples are
-                    # invalid, pass valid_indices so kinship is accumulated
-                    # at n_valid x n_valid size, avoiding full n_samples^2
-                    # materialisation for post-hoc subsetting (LOCO-07).
-                    kinship_valid_indices = (
-                        None
-                        if all_samples_valid or save_kinship
-                        else np.where(valid_mask)[0]
-                    )
-
                     if use_secular_update:
                         # Sequential secular update path: two-pass streaming reduces
                         # peak memory from O(sum_X_c) to O(max_X_c).
@@ -1376,6 +1373,7 @@ def run_lmm_loco(
                         check_memory=check_memory,
                         show_progress=show_progress,
                         ksnps_indices=ksnps_indices,
+                        valid_indices=kinship_valid_indices,
                     )
 
                 # Create eigen output directory before the loop (once, not per-chr).
@@ -1502,9 +1500,10 @@ def run_lmm_loco(
                         if show_progress:
                             logger.info(f"  Saved LOCO kinship to {actual_path}")
 
-                    # K_loco is already n_valid x n_valid from numpy
-                    # streaming — skip post-hoc subsetting (LOCO-07).
-                    if backend == "numpy" and kinship_valid_indices is not None:
+                    # K_loco is already n_valid x n_valid from early subsetting
+                    # (both numpy and JAX backends pass valid_indices to the
+                    # kinship streamer) — skip post-hoc np.ix_ copy (LOCO-07).
+                    if kinship_valid_indices is not None:
                         if K_loco.shape != (n_valid, n_valid):
                             raise RuntimeError(
                                 f"Expected K_loco shape ({n_valid}, {n_valid}) "

@@ -5,6 +5,16 @@ All notable changes to JAMMA will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.1] - 2026-03-12
+
+### Fixed
+
+- Ship `_secular_accel.c` C extension in wheel — was missing from
+  `hatch_build.py`, causing Databricks to fall back to Python rank-1 update
+  which allocates n×n dense matrices (58 GB at n=85k) and segfaults
+- Guard Python fallback rank-1 updates with `MemoryError` at n > 10k to fail
+  fast with actionable message instead of silent segfault
+
 ## [3.5.0] - 2026-03-12
 
 ### Added

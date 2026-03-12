@@ -7,9 +7,9 @@ GEMMA text format (.eigenD.txt / .eigenU.txt) remains available via
 legacy_text=True for interoperability with external tools.
 
 Read behaviour:
-- .npy suffix: loads directly via np.load.
-- .txt suffix: checks for .npy sidecar cache (created by write_* or by first
-  text parse) when available. Falls back to text parsing.
+- .npy suffix: loads eagerly via np.load (full read into RAM).
+- .txt suffix: checks for .npy sidecar cache (memory-mapped, demand-paged via
+  mmap_mode='r') when available. Falls back to text parsing.
 
 Format follows GEMMA param.cpp WriteVector/WriteMatrix:
 - eigenD: one value per line, 10 significant digits (.10g format)
@@ -17,6 +17,7 @@ Format follows GEMMA param.cpp WriteVector/WriteMatrix:
 - No headers in either file
 """
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -40,17 +41,43 @@ def _npy_cache_path(txt_path: Path) -> Path:
 
 
 def _write_npy_cache(array: np.ndarray, npy_path: Path) -> None:
-    """Write .npy cache, swallowing errors (read-only FS, full disk, etc.)."""
+    """Write .npy cache atomically via .tmp.npy sibling + os.replace.
+
+    Swallows filesystem errors (read-only FS, full disk, etc.) to avoid
+    aborting the caller. The atomic rename prevents corrupt .npy sidecars
+    from partial writes on power loss or process kill.
+
+    The temp file uses the same directory as the target so os.replace is
+    guaranteed to be atomic (same filesystem). It has a .npy suffix so
+    np.save does not append one automatically.
+    """
+    # Use stem + ".tmp.npy" so np.save doesn't append an extra .npy suffix.
+    # E.g. "foo.eigenD.npy" → temp "foo.eigenD.tmp.npy".
+    tmp_path = npy_path.parent / (npy_path.stem + ".tmp.npy")
+    rename_done = False
     try:
-        np.save(npy_path, array)
+        np.save(tmp_path, array)
+        os.replace(tmp_path, npy_path)
+        rename_done = True
     except OSError as e:
         logger.warning(f"Could not write .npy cache {npy_path}: {e}")
+    finally:
+        if not rename_done:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError as cleanup_err:
+                logger.debug(f"Could not remove temp file {tmp_path}: {cleanup_err}")
 
 
 def _load_npy_cache(npy_path: Path) -> np.ndarray | None:
-    """Load .npy cache, returning None on corruption or error."""
+    """Load .npy cache as a read-only memory-mapped array.
+
+    Returns a read-only memory-mapped array. Pages are loaded on demand by
+    the OS, so only accessed regions consume physical RAM. Returns None on
+    corruption or error, triggering a text re-parse in the caller.
+    """
     try:
-        return np.load(npy_path)
+        return np.load(npy_path, mmap_mode="r")
     except (OSError, ValueError) as e:
         logger.warning(f"Corrupt .npy cache {npy_path}, will re-parse text: {e}")
         try:
@@ -77,7 +104,9 @@ def read_eigenvalues(path: Path) -> np.ndarray:
         path: Path to eigenvalue file (.eigenD.npy or .eigenD.txt).
 
     Returns:
-        1-D float64 array of eigenvalues, shape (n_samples,).
+        1-D float64 array of eigenvalues, shape (n_samples,). May be a
+        read-only ``np.memmap`` when loaded from the .npy sidecar cache
+        (mmap_mode='r'); callers must not mutate the array in-place.
 
     Raises:
         ValueError: If file is empty, contains non-numeric data, or wrong shape.
@@ -142,7 +171,9 @@ def read_eigenvectors(path: Path) -> np.ndarray:
         path: Path to eigenvector file (.eigenU.npy or .eigenU.txt).
 
     Returns:
-        2-D float64 array of eigenvectors, shape (n_samples, n_samples).
+        2-D float64 array of eigenvectors, shape (n_samples, n_samples). May
+        be a read-only ``np.memmap`` when loaded from the .npy sidecar cache
+        (mmap_mode='r'); callers must not mutate the array in-place.
 
     Raises:
         ValueError: If file is empty, non-numeric, or not a square matrix.

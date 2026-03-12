@@ -19,6 +19,8 @@ import pytest
 
 from jamma.lmm.eigen import _DSYEVR_AVAILABLE
 from jamma.lmm.eigen_io import (
+    _load_npy_cache,
+    _write_npy_cache,
     read_eigen_files,
     read_eigenvalues,
     read_eigenvectors,
@@ -447,6 +449,151 @@ class TestNpyCache:
 
         np.testing.assert_allclose(loaded_d, eigenvalues, rtol=1e-9)
         np.testing.assert_allclose(loaded_u, eigenvectors, rtol=1e-9)
+
+    def test_cache_load_is_read_only(self, tmp_path: Path) -> None:
+        """Cache-loaded eigenvalues are read-only (mmap_mode='r' from _load_npy_cache).
+
+        write_eigenvalues with legacy_text=True writes both the .txt file and
+        a .npy sidecar via _write_npy_cache. Subsequent read_eigenvalues uses
+        _load_npy_cache which returns np.load(..., mmap_mode='r').
+        np.atleast_1d on a read-only memmap returns the same object unchanged.
+        """
+        d_path = tmp_path / "test.eigenD.txt"
+        write_eigenvalues(np.array([1.0, 2.0, 3.0]), d_path, legacy_text=True)
+
+        # read_eigenvalues will use the .npy sidecar via _load_npy_cache
+        result = read_eigenvalues(d_path)
+
+        assert not result.flags.writeable, (
+            "Cache-loaded eigenvalues should be read-only (mmap_mode='r'); "
+            f"flags.writeable={result.flags.writeable}"
+        )
+
+    def test_cache_load_returns_memmap(self, tmp_path: Path) -> None:
+        """_load_npy_cache returns np.memmap instance (demand-paged, not eager)."""
+        arr = np.array([1.0, 2.0, 3.0])
+        npy_path = tmp_path / "test.eigenD.npy"
+        _write_npy_cache(arr, npy_path)
+
+        result = _load_npy_cache(npy_path)
+        assert result is not None
+        assert isinstance(result, np.memmap), (
+            f"Expected np.memmap from _load_npy_cache, got {type(result).__name__}"
+        )
+        np.testing.assert_array_equal(result, arr)
+
+    def test_cache_load_structural_mmap_mode(self) -> None:
+        """_load_npy_cache uses mmap_mode='r' to enable demand-paged OS loading.
+
+        Structural test: inspects source to ensure mmap_mode keyword is present.
+        Catches regressions where someone replaces mmap_mode='r' with eager load.
+        """
+        import inspect
+
+        source = inspect.getsource(_load_npy_cache)
+        assert "mmap_mode" in source, (
+            "_load_npy_cache should use mmap_mode='r' for demand-paged loading"
+        )
+
+
+# =============================================================================
+# Atomic .npy cache write tests
+# =============================================================================
+
+
+@pytest.mark.tier0
+class TestAtomicCacheWrite:
+    """Verify _write_npy_cache uses atomic rename and leaves no temp files."""
+
+    def test_no_partial_npy_on_normal_write(self, tmp_path: Path) -> None:
+        """Normal write_eigenvalues leaves .npy file and no .tmp.npy artifact."""
+        d_path = tmp_path / "test.eigenD.txt"
+        write_eigenvalues(np.ones(5), d_path, legacy_text=True)
+
+        npy_path = d_path.with_suffix(".npy")
+        assert npy_path.exists(), ".eigenD.npy sidecar should exist after write"
+
+        # No .tmp.npy temp file should remain
+        tmp_npy = tmp_path / (npy_path.stem + ".tmp.npy")
+        assert not tmp_npy.exists(), (
+            f"Temp file {tmp_npy.name} should not exist after atomic rename completed"
+        )
+
+        # Verify content is correct
+        loaded = np.load(npy_path)
+        np.testing.assert_array_equal(loaded, np.ones(5))
+
+    def test_atomic_write_no_tmp_leftover(self, tmp_path: Path) -> None:
+        """write_eigenvectors with legacy_text leaves no .tmp.npy in directory."""
+        u_path = tmp_path / "test.eigenU.txt"
+        write_eigenvectors(np.eye(5), u_path, legacy_text=True)
+
+        npy_path = u_path.with_suffix(".npy")
+        assert npy_path.exists(), ".eigenU.npy sidecar should exist after write"
+
+        # Verify no temp artifact in directory
+        tmp_files = [
+            f.name for f in tmp_path.iterdir() if f.is_file() and ".tmp.npy" in f.name
+        ]
+        assert tmp_files == [], (
+            f"Found unexpected .tmp.npy files after write: {tmp_files}"
+        )
+
+    def test_write_npy_cache_directly(self, tmp_path: Path) -> None:
+        """_write_npy_cache writes .npy file atomically and cleans up temp."""
+        arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        npy_path = tmp_path / "direct.eigenD.npy"
+
+        _write_npy_cache(arr, npy_path)
+
+        assert npy_path.exists(), "_write_npy_cache should create .npy file"
+
+        # No .tmp.npy artifact should remain
+        tmp_npy = tmp_path / (npy_path.stem + ".tmp.npy")
+        assert not tmp_npy.exists(), (
+            f"Temp file {tmp_npy.name} should not exist after _write_npy_cache"
+        )
+
+        # Verify content round-trips correctly
+        loaded = np.load(npy_path)
+        np.testing.assert_array_equal(loaded, arr)
+
+    def test_write_npy_cache_error_cleans_tmp(self, tmp_path: Path) -> None:
+        """_write_npy_cache cleans up .tmp.npy when os.replace fails."""
+        from unittest.mock import patch
+
+        arr = np.array([1.0, 2.0, 3.0])
+        npy_path = tmp_path / "fail.eigenD.npy"
+        tmp_npy = tmp_path / "fail.eigenD.tmp.npy"
+
+        with patch("jamma.lmm.eigen_io.os.replace", side_effect=OSError("mock")):
+            _write_npy_cache(arr, npy_path)
+
+        # The target .npy should not exist (rename failed)
+        assert not npy_path.exists(), "Target .npy should not exist after failed rename"
+        # The temp .tmp.npy should be cleaned up
+        assert not tmp_npy.exists(), (
+            f"Temp file {tmp_npy.name} should be cleaned up after os.replace failure"
+        )
+
+    def test_structural_atomic_write(self) -> None:
+        """_write_npy_cache source contains os.replace and .tmp.npy pattern.
+
+        Structural test: catches regressions where someone replaces the atomic
+        pattern with a direct np.save (which would allow corrupt .npy sidecars
+        on process kill or power loss).
+        """
+        import inspect
+
+        source = inspect.getsource(_write_npy_cache)
+        assert "os.replace" in source, (
+            "_write_npy_cache should use os.replace for atomic rename; "
+            "direct np.save would allow corrupt sidecars on process kill"
+        )
+        assert ".tmp.npy" in source, (
+            "_write_npy_cache should write to a .tmp.npy sibling before rename; "
+            "this pattern was not found in source"
+        )
 
 
 # =============================================================================

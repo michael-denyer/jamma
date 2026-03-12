@@ -941,3 +941,18 @@ class TestBatchGridMleSnpsOuter:
                 "with degenerate SNP"
             ),
         )
+
+    def test_batch_grid_mle_single_snp_parity(self):
+        """Edge case: n_snps=1 — .T transpose must not silently broadcast."""
+        eigenvalues, Uab_batch, lambdas = self._make_data(n_cvt=1, n_snps=1, n_grid=20)
+
+        old = self._batch_grid_mle_lambda_outer(1, lambdas, eigenvalues, Uab_batch)
+        new = _batch_grid_mle(1, lambdas, eigenvalues, Uab_batch)
+
+        assert new.shape == (20, 1), f"Expected (20, 1), got {new.shape}"
+        np.testing.assert_allclose(
+            np.array(new),
+            np.array(old),
+            rtol=1e-10,
+            err_msg="_batch_grid_mle SNPs-outer diverges for single SNP",
+        )

@@ -201,6 +201,38 @@ def calc_pab_jax(
     return Pab
 
 
+def _mle_logl_from_pab(
+    n: int,
+    nc_total: int,
+    idx_yy: int,
+    Pab: Float[Array, "nc ni"],
+    logdet_h: Float[Array, ""],
+) -> Float[Array, ""]:
+    """Compute MLE log-likelihood from Pab and logdet_h.
+
+    Shared kernel used by both mle_log_likelihood_jax and
+    _mle_log_likelihood_hi to avoid duplicating the P_yy clamping
+    and MLE formula.
+
+    Args:
+        n: Number of samples.
+        nc_total: n_cvt + 1.
+        idx_yy: Index into Pab for P_yy.
+        Pab: Projected variance components matrix.
+        logdet_h: Log-determinant of H.
+
+    Returns:
+        MLE log-likelihood value.
+    """
+    # Negative P_yy → NaN (numerical breakdown); near-zero → clamp to avoid log(0)
+    P_yy = Pab[nc_total, idx_yy]
+    P_yy = jnp.where(P_yy < 0.0, jnp.nan, P_yy)
+    P_yy = jnp.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
+
+    c = 0.5 * n * (jnp.log(n) - jnp.log(2 * jnp.pi) - 1.0)
+    return c - 0.5 * logdet_h - 0.5 * n * jnp.log(P_yy)
+
+
 @partial(jit, static_argnums=(0,))
 def mle_log_likelihood_jax(
     n_cvt: int,
@@ -232,17 +264,7 @@ def mle_log_likelihood_jax(
 
     Pab = calc_pab_jax(n_cvt, Hi_eval, Uab)
 
-    # P_yy after projecting out covariates and genotype
-    # Negative P_yy → NaN (numerical breakdown); near-zero → clamp to avoid log(0)
-    P_yy = Pab[nc_total, idx_yy]
-    P_yy = jnp.where(P_yy < 0.0, jnp.nan, P_yy)
-    P_yy = jnp.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
-
-    # MLE formula (NO logdet_hiw, uses n not df)
-    c = 0.5 * n * (jnp.log(n) - jnp.log(2 * jnp.pi) - 1.0)
-    f = c - 0.5 * logdet_h - 0.5 * n * jnp.log(P_yy)
-
-    return f
+    return _mle_logl_from_pab(n, nc_total, idx_yy, Pab, logdet_h)
 
 
 def _mle_log_likelihood_hi(
@@ -257,11 +279,15 @@ def _mle_log_likelihood_hi(
     pre-computed Hi_eval and logdet_h instead of lambda_val, avoiding
     redundant recomputation across SNPs at the same grid point.
 
+    Not @jit decorated: called inside vmap from _batch_grid_mle; JIT
+    propagates from the outer @jit on _batch_optimize_lambda_grid_mle.
+
     Do NOT use this function in place of mle_log_likelihood_jax for
-    golden-section or other single-SNP callers — use mle_log_likelihood_jax.
+    golden-section or other single-SNP callers — the caller would have
+    to manage Hi_eval/logdet_h precomputation manually.
 
     Args:
-        n_cvt: Number of covariates (static, triggers recompilation).
+        n_cvt: Number of covariates.
         Hi_eval: Pre-computed 1 / (lambda * eigenvalues + 1) (n_samples,).
         logdet_h: Pre-computed sum(log|lambda * eigenvalues + 1|) scalar.
         Uab: Pre-computed Uab matrix (n_samples, n_index).
@@ -276,14 +302,7 @@ def _mle_log_likelihood_hi(
 
     Pab = calc_pab_jax(n_cvt, Hi_eval, Uab)
 
-    P_yy = Pab[nc_total, idx_yy]
-    P_yy = jnp.where(P_yy < 0.0, jnp.nan, P_yy)
-    P_yy = jnp.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
-
-    c = 0.5 * n * (jnp.log(n) - jnp.log(2 * jnp.pi) - 1.0)
-    f = c - 0.5 * logdet_h - 0.5 * n * jnp.log(P_yy)
-
-    return f
+    return _mle_logl_from_pab(n, nc_total, idx_yy, Pab, logdet_h)
 
 
 @jit
@@ -1287,7 +1306,8 @@ def golden_section_optimize_lambda_mle(
     LRT (-lmm 2) which requires per-SNP MLE lambda optimization.
 
     Key differences from the REML optimizer:
-    - Uses mle_log_likelihood_jax instead of _reml_with_precomputed_iab
+    - Grid search uses _batch_grid_mle (SNPs-outer via _mle_log_likelihood_hi);
+      golden section refinement uses mle_log_likelihood_jax
     - No Iab_batch argument (MLE has no logdet_hiw term)
     - Returns MLE log-likelihoods (not REML)
 

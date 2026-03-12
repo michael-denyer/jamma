@@ -846,6 +846,21 @@ def _stream_s_full_and_chr(
     """
     import jax.numpy as jnp
 
+    # Validate here (not just in caller) — JAX silently clamps OOB indices.
+    if valid_indices is not None:
+        if len(valid_indices) == 0:
+            raise ValueError("valid_indices must not be empty")
+        if valid_indices.min() < 0 or valid_indices.max() >= n_samples:
+            raise ValueError(
+                f"valid_indices out of bounds: min={valid_indices.min()}, "
+                f"max={valid_indices.max()}, n_samples={n_samples}"
+            )
+        if len(valid_indices) != len(np.unique(valid_indices)):
+            raise ValueError(
+                f"valid_indices contains "
+                f"{len(valid_indices) - len(np.unique(valid_indices))} duplicates"
+            )
+
     n_out = len(valid_indices) if valid_indices is not None else n_samples
     S_full = jnp.zeros((n_out, n_out), dtype=jnp.float64) if S_full_accum else None
     chr_set = set(chr_subset)
@@ -970,6 +985,11 @@ def compute_loco_kinship_streaming(
                 f"valid_indices out of bounds: min={valid_indices.min()}, "
                 f"max={valid_indices.max()}, n_samples={n_samples}"
             )
+        if len(valid_indices) != len(np.unique(valid_indices)):
+            raise ValueError(
+                f"valid_indices contains "
+                f"{len(valid_indices) - len(np.unique(valid_indices))} duplicates"
+            )
 
     # Derive partitions from already-loaded metadata — avoids re-opening BED (LOCO-04)
     partitions = partitions_from_metadata(meta)
@@ -1067,6 +1087,8 @@ def compute_loco_kinship_streaming(
     # When valid_indices is provided, matrices are n_valid x n_valid (not n_samples).
     n_mat = len(valid_indices) if valid_indices is not None else n_samples
     matrix_gb = n_mat**2 * 8 / 1e9
+    # Chunk buffer is n_samples (full disk read) regardless of valid_indices;
+    # subsetting happens after load.
     chunk_buffer_gb = n_samples * chunk_size * 8 / 1e9
     # S_full + K_loco_buf + all S_chr + chunk buffer
     single_pass_gb = matrix_gb * (2 + n_chr_with_snps) + chunk_buffer_gb

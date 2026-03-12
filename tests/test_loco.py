@@ -1533,6 +1533,75 @@ class TestLocoStreamingValidIndices:
                 ),
             )
 
+    def test_loco_kinship_streaming_empty_valid_indices_raises(
+        self, synthetic_multi_chr, tmp_path: Path
+    ):
+        """Empty valid_indices raises ValueError."""
+        genotypes, chromosomes = synthetic_multi_chr
+        bed_path = self._write_synthetic_plink(genotypes, chromosomes, tmp_path)
+
+        with pytest.raises(ValueError, match="must not be empty"):
+            dict(
+                compute_loco_kinship_streaming(
+                    bed_path,
+                    check_memory=False,
+                    show_progress=False,
+                    valid_indices=np.array([], dtype=int),
+                )
+            )
+
+    def test_loco_kinship_streaming_oob_valid_indices_raises(
+        self, synthetic_multi_chr, tmp_path: Path
+    ):
+        """Out-of-bounds valid_indices raises ValueError."""
+        genotypes, chromosomes = synthetic_multi_chr
+        n_samples = genotypes.shape[0]
+        bed_path = self._write_synthetic_plink(genotypes, chromosomes, tmp_path)
+
+        with pytest.raises(ValueError, match="out of bounds"):
+            dict(
+                compute_loco_kinship_streaming(
+                    bed_path,
+                    check_memory=False,
+                    show_progress=False,
+                    valid_indices=np.array([0, n_samples]),
+                )
+            )
+
+    def test_loco_kinship_streaming_negative_valid_indices_raises(
+        self, synthetic_multi_chr, tmp_path: Path
+    ):
+        """Negative valid_indices raises ValueError."""
+        genotypes, chromosomes = synthetic_multi_chr
+        bed_path = self._write_synthetic_plink(genotypes, chromosomes, tmp_path)
+
+        with pytest.raises(ValueError, match="out of bounds"):
+            dict(
+                compute_loco_kinship_streaming(
+                    bed_path,
+                    check_memory=False,
+                    show_progress=False,
+                    valid_indices=np.array([-1, 0, 1]),
+                )
+            )
+
+    def test_loco_kinship_streaming_duplicate_valid_indices_raises(
+        self, synthetic_multi_chr, tmp_path: Path
+    ):
+        """Duplicate valid_indices raises ValueError."""
+        genotypes, chromosomes = synthetic_multi_chr
+        bed_path = self._write_synthetic_plink(genotypes, chromosomes, tmp_path)
+
+        with pytest.raises(ValueError, match="duplicates"):
+            dict(
+                compute_loco_kinship_streaming(
+                    bed_path,
+                    check_memory=False,
+                    show_progress=False,
+                    valid_indices=np.array([0, 1, 1, 2]),
+                )
+            )
+
     def test_loco_kinship_streaming_valid_indices_none_unchanged(
         self, synthetic_multi_chr, tmp_path: Path
     ):

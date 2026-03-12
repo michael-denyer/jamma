@@ -78,6 +78,8 @@ def select_execution_mode(
     n_snps: int,
     *,
     requested: BackendRequest = "auto",
+    n_cvt: int = 1,
+    lmm_mode: int = 1,
 ) -> ExecutionPlan:
     """Select the optimal execution backend and mode.
 
@@ -85,7 +87,8 @@ def select_execution_mode(
     ExecutionPlan rather than a bare string.
 
     Selection priority (when requested="auto"):
-    1. C extension available + memory sufficient -> numpy-batch
+    1. C extension available + memory sufficient + (n_cvt=1 or C general available)
+       -> numpy-batch
     2. JAX available -> jax-batch (if fits) or jax-streaming (if not)
     3. Fallback -> numpy-batch
 
@@ -97,6 +100,12 @@ def select_execution_mode(
         n_samples: Number of samples in the dataset.
         n_snps: Number of SNPs in the dataset.
         requested: Requested backend ("auto", "jax", or "numpy").
+        n_cvt: Number of covariates (including intercept). Used to select
+            accurate memory estimates (Uab is larger with more covariates)
+            and to guard against numpy-batch when the C general extension is
+            unavailable for n_cvt > 1.
+        lmm_mode: LMM test type (1=Wald, 2=LRT, 3=Score, 4=All). Accepted
+            for API symmetry with ``run_lmm()``; not used in selection logic.
 
     Returns:
         ExecutionPlan with backend, mode, and reason.
@@ -121,7 +130,7 @@ def select_execution_mode(
                 "Backend 'jax' was explicitly requested but JAX is not installed. "
                 "Install JAX with: pip install jamma[jax]"
             )
-        est = estimate_lmm_memory(n_samples, n_snps)
+        est = estimate_lmm_memory(n_samples, n_snps, n_cvt=n_cvt)
         if est.sufficient:
             return ExecutionPlan(
                 "jax",
@@ -137,22 +146,31 @@ def select_execution_mode(
 
     # Auto selection
     c_ext_available = is_c_extension_usable()
-    est = estimate_lmm_memory(n_samples, n_snps)
+    est = estimate_lmm_memory(n_samples, n_snps, n_cvt=n_cvt)
 
-    # Prefer numpy+C when genotypes fit in memory
+    # Prefer numpy+C when genotypes fit in memory and C handles the n_cvt case.
+    # When n_cvt > 1 we need the C general extension; if it's absent the Python
+    # loop fallback is slower than JAX, so fall through to the JAX check below.
     if c_ext_available and est.sufficient:
-        return ExecutionPlan(
-            "numpy",
-            "batch",
-            f"C extension available, {est.total_gb:.1f}GB fits in "
-            f"{est.available_gb:.1f}GB available",
+        from jamma.lmm.compute_numpy import (
+            _C_GENERAL_AVAILABLE,  # deferred: circular dep
         )
+
+        c_handles_n_cvt = n_cvt <= 1 or _C_GENERAL_AVAILABLE
+        if c_handles_n_cvt:
+            return ExecutionPlan(
+                "numpy",
+                "batch",
+                f"C extension available, {est.total_gb:.1f}GB fits in "
+                f"{est.available_gb:.1f}GB available",
+            )
 
     # JAX available: pick batch or streaming by memory
     if has_jax():
         if est.sufficient:
-            # C extension is necessarily unavailable here — the c_ext + sufficient
-            # case already returned numpy-batch above.
+            # C extension is necessarily unavailable (or insufficient for n_cvt)
+            # here — the c_ext + sufficient + c_handles_n_cvt case already returned
+            # numpy-batch above.
             return ExecutionPlan("jax", "batch", "C extension unavailable")
         return ExecutionPlan(
             "jax",
@@ -263,10 +281,12 @@ def run_lmm(
             else (phenotypes.shape[0] if phenotypes is not None else 0)
         )
         n_snps = genotypes.shape[1] if genotypes is not None else 0
+        n_cvt = covariates.shape[1] if covariates is not None else 1
         execution_plan = select_execution_mode(
             n_samples,
             n_snps,
             requested="auto",
+            n_cvt=n_cvt,
         )
 
     logger.info(

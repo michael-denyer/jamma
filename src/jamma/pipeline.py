@@ -18,6 +18,7 @@ import contextlib
 import os
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -261,6 +262,33 @@ class PipelineRunner:
 
     def __init__(self, config: PipelineConfig) -> None:
         self.config = config
+
+    def _emit_telemetry(self, result: PipelineResult, plan: ExecutionPlan) -> None:
+        """Emit benchmark telemetry record. Never raises."""
+        try:
+            import jamma
+            from jamma.core.telemetry import (
+                BenchmarkRecord,
+                append_benchmark_record,
+            )
+
+            record: BenchmarkRecord = {
+                "timestamp": datetime.now(UTC).isoformat(),
+                "jamma_version": jamma.__version__,
+                "n_samples": result.n_samples,
+                "n_snps": result.n_snps_tested,
+                "n_cvt": result.n_covariates,
+                "backend": plan.runner_name,
+                "lmm_mode": self.config.lmm_mode,
+                "loco": self.config.loco,
+                "kinship_s": result.timing.get("kinship_s"),
+                "lmm_s": result.timing.get("lmm_s"),
+                "total_s": result.timing.get("total_s"),
+                "rotation_s": result.timing.get("rotation_s"),
+            }
+            append_benchmark_record(record)
+        except Exception:
+            logger.warning("Telemetry emission failed", exc_info=True)
 
     @staticmethod
     def _compute_valid_mask(
@@ -951,7 +979,7 @@ class PipelineRunner:
                 f"LOCO GWAS complete: {loco.n_tested} SNPs tested in {total_s:.1f}s"
             )
 
-            return PipelineResult(
+            result = PipelineResult(
                 associations=loco.associations,
                 n_samples=n_valid,
                 n_snps_tested=loco.n_tested,
@@ -968,6 +996,8 @@ class PipelineRunner:
                 pve_estimate=loco.pve,
                 pve_se=loco.pve_se,
             )
+            self._emit_telemetry(result, plan)
+            return result
 
         covariates = self.load_covariates(n_samples)
 
@@ -1024,8 +1054,9 @@ class PipelineRunner:
 
         # Re-evaluate the plan with actual n_valid (initial plan may have used
         # raw n_samples from PLINK header; valid_mask filtering can reduce it).
+        # Pass n_cvt so memory estimates account for larger Uab at n_cvt>1.
         initial_plan = plan
-        plan = select_execution_mode(n_valid, n_snps, requested=requested)
+        plan = select_execution_mode(n_valid, n_snps, requested=requested, n_cvt=n_cvt)
         if plan != initial_plan:
             # Mode changes (batch↔streaming) are expected when sample filtering
             # reduces n_valid. Backend changes (jax↔numpy) are not safe because
@@ -1231,7 +1262,7 @@ class PipelineRunner:
         pve = run_result.pve
         pve_se = run_result.pve_se
 
-        return PipelineResult(
+        result = PipelineResult(
             associations=all_results,
             n_samples=n_valid,
             n_snps_tested=total_tested,
@@ -1250,6 +1281,8 @@ class PipelineRunner:
             pve_estimate=pve,
             pve_se=pve_se,
         )
+        self._emit_telemetry(result, plan)
+        return result
 
     def _run_jax_backend(
         self,

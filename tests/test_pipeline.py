@@ -1226,3 +1226,100 @@ def test_pipeline_numpy_with_snps_file(sample_plink_data: Path, tmp_path: Path) 
     assert result.n_snps_tested < total_snps
     assert result.assoc_path.exists()
     assert result.backend == "numpy"
+
+
+@pytest.mark.tier1
+def test_pipeline_re_evaluation_passes_n_cvt(
+    tmp_path: Path, sample_plink_data: Path
+) -> None:
+    """BCKAUTO-04: Re-evaluation passes n_cvt from loaded covariates."""
+    from unittest.mock import patch
+
+    from jamma.lmm.runner import select_execution_mode
+
+    n_samples = 100  # gemma_synthetic fixture has 100 samples
+
+    # Write a covariate file with 2 columns (intercept + one covariate).
+    # GEMMA format: whitespace-separated values, one row per sample, no header.
+    cov_path = tmp_path / "covariates.txt"
+    rng = np.random.default_rng(42)
+    cov_data = np.column_stack([np.ones(n_samples), rng.standard_normal(n_samples)])
+    np.savetxt(str(cov_path), cov_data, fmt="%.6f")
+
+    kinship_file = sample_plink_data.parent / "gemma_kinship.cXX.txt"
+    out = tmp_path / "output_ncvt"
+    out.mkdir()
+
+    # Spy on select_execution_mode to capture all call kwargs
+    calls: list[dict] = []
+    original_sem = select_execution_mode
+
+    def spy_sem(*args, **kwargs):
+        calls.append(kwargs.copy())
+        return original_sem(*args, **kwargs)
+
+    config = PipelineConfig(
+        bfile=sample_plink_data,
+        kinship_file=kinship_file,
+        covariate_file=cov_path,
+        lmm_mode=1,
+        maf=0.0,
+        miss=1.0,
+        output_dir=out,
+        check_memory=False,
+        show_progress=False,
+        backend="numpy",
+    )
+    with patch("jamma.pipeline.select_execution_mode", side_effect=spy_sem):
+        PipelineRunner(config).run()
+
+    # The re-evaluation call (post-covariate-load) must have n_cvt=2
+    assert any(c.get("n_cvt", 1) == 2 for c in calls), (
+        f"No call to select_execution_mode had n_cvt=2; calls={calls}"
+    )
+
+
+@pytest.mark.tier1
+def test_pipeline_emits_telemetry(tmp_path: Path, sample_plink_data: Path) -> None:
+    """Telemetry record is emitted with expected fields after a pipeline run."""
+    from unittest.mock import patch
+
+    from jamma.core.telemetry import append_benchmark_record
+
+    records: list[dict] = []
+    original_append = append_benchmark_record
+
+    def spy_append(record, **kwargs):
+        records.append(dict(record))
+        return original_append(record, **kwargs)
+
+    kinship_file = sample_plink_data.parent / "gemma_kinship.cXX.txt"
+    out = tmp_path / "output_tel"
+    out.mkdir()
+
+    config = PipelineConfig(
+        bfile=sample_plink_data,
+        kinship_file=kinship_file,
+        lmm_mode=1,
+        maf=0.0,
+        miss=1.0,
+        output_dir=out,
+        check_memory=False,
+        show_progress=False,
+        backend="numpy",
+    )
+    with patch("jamma.core.telemetry.append_benchmark_record", side_effect=spy_append):
+        PipelineRunner(config).run()
+
+    assert len(records) == 1, f"Expected 1 telemetry record, got {len(records)}"
+    rec = records[0]
+    # Required fields
+    assert "timestamp" in rec
+    assert "jamma_version" in rec
+    assert rec["n_samples"] > 0
+    assert rec["n_snps"] > 0
+    assert "backend" in rec
+    # Optional but expected from pipeline
+    assert rec["lmm_mode"] == 1
+    assert rec["loco"] is False
+    assert "total_s" in rec

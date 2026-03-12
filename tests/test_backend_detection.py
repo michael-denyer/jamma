@@ -366,3 +366,109 @@ class TestExecutionMode:
         assert plan1.backend == "jax"
         assert plan2.backend == "numpy"
         assert plan1 != plan2  # Pipeline guard would raise RuntimeError
+
+    # -- n_cvt-aware selection (BCKAUTO-01, -02, -03) --
+
+    def test_n_cvt_affects_memory(self):
+        """BCKAUTO-01: select_execution_mode passes n_cvt to estimate_lmm_memory."""
+        calls = []
+
+        def capturing_estimate(n_samples, n_snps, **kwargs):
+            calls.append(kwargs)
+            m = MagicMock()
+            m.sufficient = True
+            m.total_gb = 1.0
+            m.available_gb = 100.0
+            return m
+
+        with (
+            patch(
+                "jamma.lmm.runner.estimate_lmm_memory",
+                side_effect=capturing_estimate,
+            ),
+            patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
+            patch("jamma.lmm.runner.has_jax", return_value=True),
+        ):
+            select_execution_mode(1000, 10000, n_cvt=4)
+
+        # At least one call should have n_cvt=4
+        assert any(c.get("n_cvt") == 4 for c in calls), (
+            f"n_cvt=4 not passed to estimate_lmm_memory; calls={calls}"
+        )
+
+    def test_no_c_general_prefers_jax_for_n_cvt_gt1(self):
+        """BCKAUTO-02: No C general + n_cvt>1 -> jax-batch (not numpy-batch)."""
+        with (
+            patch(
+                "jamma.lmm.runner.estimate_lmm_memory",
+                return_value=_make_sufficient_estimate(),
+            ),
+            patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
+            patch("jamma.lmm.runner.has_jax", return_value=True),
+            patch(
+                "jamma.lmm.compute_numpy._C_GENERAL_AVAILABLE",
+                False,
+                create=True,
+            ),
+        ):
+            plan_n_cvt4 = select_execution_mode(1000, 10000, n_cvt=4)
+            plan_n_cvt1 = select_execution_mode(1000, 10000, n_cvt=1)
+
+        # n_cvt=4 without C general -> fall through to JAX
+        assert plan_n_cvt4.backend == "jax"
+        assert plan_n_cvt4.mode == "batch"
+        # n_cvt=1 still uses numpy-batch (C extension handles n_cvt=1)
+        assert plan_n_cvt1.backend == "numpy"
+        assert plan_n_cvt1.mode == "batch"
+
+    def test_c_general_n_cvt_numpy_batch(self):
+        """BCKAUTO-03: C general available + n_cvt>1 + sufficient -> numpy-batch."""
+        with (
+            patch(
+                "jamma.lmm.runner.estimate_lmm_memory",
+                return_value=_make_sufficient_estimate(),
+            ),
+            patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
+            patch("jamma.lmm.runner.has_jax", return_value=True),
+            patch(
+                "jamma.lmm.compute_numpy._C_GENERAL_AVAILABLE",
+                True,
+                create=True,
+            ),
+        ):
+            plan = select_execution_mode(1000, 10000, n_cvt=4)
+
+        assert plan.backend == "numpy"
+        assert plan.mode == "batch"
+
+    # -- run_lmm n_cvt forwarding (BCKAUTO-05) --
+
+    def test_run_lmm_forwards_n_cvt(self):
+        """BCKAUTO-05: run_lmm auto-selection forwards n_cvt from covariates."""
+        from jamma.lmm.runner import run_lmm
+
+        calls = []
+        original_sem = select_execution_mode
+
+        def capturing_sem(n_samples, n_snps, **kwargs):
+            calls.append(kwargs)
+            return original_sem(n_samples, n_snps, **kwargs)
+
+        import numpy as np
+
+        geno = np.zeros((10, 5))
+        pheno = np.zeros(10)
+        cov = np.zeros((10, 3))  # 3 covariates
+
+        with patch(
+            "jamma.lmm.runner.select_execution_mode",
+            side_effect=capturing_sem,
+        ):
+            try:
+                run_lmm(genotypes=geno, phenotypes=pheno, covariates=cov)
+            except Exception:
+                pass  # We only care about the select_execution_mode call
+
+        assert any(c.get("n_cvt") == 3 for c in calls), (
+            f"n_cvt=3 not passed to select_execution_mode; calls={calls}"
+        )

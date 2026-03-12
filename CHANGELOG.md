@@ -5,6 +5,18 @@ All notable changes to JAMMA will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] - 2026-03-12
+
+### Added
+
+- Benchmark telemetry module (`core/telemetry.py`) — appends structured JSONL
+  run records to `~/.jamma/benchmarks.jsonl` with `JAMMA_NO_TELEMETRY` opt-out
+- `n_cvt`-aware backend selection — `select_execution_mode` accounts for
+  covariate count in memory estimates and falls through to JAX when C general
+  extension is unavailable for `n_cvt > 1`
+- Telemetry emission from `PipelineRunner.run()` via `_emit_telemetry()` helper
+  (both LOCO and standard paths)
+
 ## [3.4.1] - 2026-03-11
 
 ### Changed

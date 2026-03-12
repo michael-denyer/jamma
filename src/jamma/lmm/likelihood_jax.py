@@ -245,6 +245,47 @@ def mle_log_likelihood_jax(
     return f
 
 
+def _mle_log_likelihood_hi(
+    n_cvt: int,
+    Hi_eval: Float[Array, " n"],
+    logdet_h: Float[Array, ""],
+    Uab: Float[Array, "n ni"],
+) -> Float[Array, ""]:
+    """MLE log-likelihood given pre-computed Hi_eval and logdet_h.
+
+    Internal helper for _batch_grid_mle SNPs-outer pattern. Accepts
+    pre-computed Hi_eval and logdet_h instead of lambda_val, avoiding
+    redundant recomputation across SNPs at the same grid point.
+
+    Do NOT use this function in place of mle_log_likelihood_jax for
+    golden-section or other single-SNP callers — use mle_log_likelihood_jax.
+
+    Args:
+        n_cvt: Number of covariates (static, triggers recompilation).
+        Hi_eval: Pre-computed 1 / (lambda * eigenvalues + 1) (n_samples,).
+        logdet_h: Pre-computed sum(log|lambda * eigenvalues + 1|) scalar.
+        Uab: Pre-computed Uab matrix (n_samples, n_index).
+
+    Returns:
+        MLE log-likelihood value.
+    """
+    n = Hi_eval.shape[0]
+    nc_total = n_cvt + 1
+    table = build_index_table(n_cvt)
+    idx_yy = table["idx_yy"]
+
+    Pab = calc_pab_jax(n_cvt, Hi_eval, Uab)
+
+    P_yy = Pab[nc_total, idx_yy]
+    P_yy = jnp.where(P_yy < 0.0, jnp.nan, P_yy)
+    P_yy = jnp.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
+
+    c = 0.5 * n * (jnp.log(n) - jnp.log(2 * jnp.pi) - 1.0)
+    f = c - 0.5 * logdet_h - 0.5 * n * jnp.log(P_yy)
+
+    return f
+
+
 @jit
 def calc_lrt_pvalue_jax(
     logl_H1: Float[Array, ""],
@@ -1191,8 +1232,14 @@ def _batch_grid_mle(
     MLE counterpart of _batch_grid_reml_with_iab. Key difference: no Iab
     argument needed because MLE has no logdet_hiw term.
 
+    Uses SNPs-outer/lambdas-inner vmap pattern: per-lambda invariants
+    (Hi_eval, logdet_h) are precomputed once for all n_grid points, then
+    each SNP's Uab is read once while evaluating across all lambdas. This
+    reduces memory traffic from O(n_grid * n_snps * n) to O(n_snps * n)
+    reads of Uab_batch.
+
     Args:
-        n_cvt: Number of covariates (passed through to mle_log_likelihood_jax).
+        n_cvt: Number of covariates (passed through to _mle_log_likelihood_hi).
         lambdas: Grid of lambda values (n_grid,).
         eigenvalues: Eigenvalues (n_samples,).
         Uab_batch: Uab matrices (n_snps, n_samples, n_index).
@@ -1201,12 +1248,27 @@ def _batch_grid_mle(
         Log-likelihoods (n_grid, n_snps).
     """
 
-    def mle_for_lambda(lam):
-        return vmap(lambda Uab: mle_log_likelihood_jax(n_cvt, lam, eigenvalues, Uab))(
-            Uab_batch
-        )
+    # Step 1: Precompute per-lambda invariants — cheap (n_grid * n_samples scalars)
+    def compute_lambda_invariants(lam):
+        v_temp = lam * eigenvalues + 1.0
+        Hi_eval = 1.0 / v_temp
+        logdet_h = jnp.sum(jnp.log(jnp.abs(v_temp)))
+        return Hi_eval, logdet_h
 
-    return vmap(mle_for_lambda)(lambdas)
+    Hi_eval_grid, logdet_h_grid = vmap(compute_lambda_invariants)(lambdas)
+    # Hi_eval_grid: (n_grid, n_samples)
+    # logdet_h_grid: (n_grid,)
+
+    # Step 2: vmap over SNPs (outer), lambdas (inner)
+    # Each SNP's Uab is read once; Hi_eval_grid/logdet_h_grid stay in cache.
+    def mle_for_snp(Uab):
+        def mle_at_lambda(Hi_eval, logdet_h):
+            return _mle_log_likelihood_hi(n_cvt, Hi_eval, logdet_h, Uab)
+
+        return vmap(mle_at_lambda)(Hi_eval_grid, logdet_h_grid)
+
+    all_logls = vmap(mle_for_snp)(Uab_batch)
+    return all_logls.T  # (n_grid, n_snps)
 
 
 @partial(jit, static_argnums=(0, 3, 4, 5, 6))

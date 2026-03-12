@@ -18,6 +18,7 @@ from jamma.lmm.likelihood import (
     reml_log_likelihood,
 )
 from jamma.lmm.likelihood_jax import (
+    _batch_grid_mle,
     _batch_grid_reml_ncvt1,
     batch_calc_score_stats,
     batch_calc_wald_stats,
@@ -824,4 +825,92 @@ class TestGeneralSplitParity:
             np.array(old_logls),
             rtol=1e-10,
             err_msg="Golden section split logls don't match old path evaluation",
+        )
+
+
+class TestBatchGridMleSnpsOuter:
+    """Parity tests for the SNPs-outer/lambdas-inner refactor of _batch_grid_mle."""
+
+    def _batch_grid_mle_lambda_outer(self, n_cvt, lambdas, eigenvalues, Uab_batch):
+        """Reference: original lambda-outer vmap implementation."""
+
+        def mle_for_lambda(lam):
+            return vmap(
+                lambda Uab: mle_log_likelihood_jax(n_cvt, lam, eigenvalues, Uab)
+            )(Uab_batch)
+
+        return vmap(mle_for_lambda)(lambdas)
+
+    def _make_data(self, n_cvt, n_samples=100, n_snps=50, n_grid=20, seed=7):
+        rng = np.random.default_rng(seed)
+        eigenvalues = np.abs(rng.standard_normal(n_samples)).astype(np.float64)
+        eigenvalues /= eigenvalues.sum()
+
+        table = build_index_table(n_cvt)
+        n_index = table["n_index"]
+        Uab_batch = rng.standard_normal((n_snps, n_samples, n_index)).astype(np.float64)
+
+        lambdas = np.logspace(-3, 3, n_grid).astype(np.float64)
+        return (
+            jnp.array(eigenvalues),
+            jnp.array(Uab_batch),
+            jnp.array(lambdas),
+        )
+
+    def test_batch_grid_mle_snps_outer_parity_ncvt1(self):
+        """SNPs-outer matches lambda-outer at rtol=1e-10, n_cvt=1."""
+        eigenvalues, Uab_batch, lambdas = self._make_data(n_cvt=1)
+
+        old = self._batch_grid_mle_lambda_outer(1, lambdas, eigenvalues, Uab_batch)
+        new = _batch_grid_mle(1, lambdas, eigenvalues, Uab_batch)
+
+        assert new.shape == old.shape, f"Shape mismatch: {new.shape} vs {old.shape}"
+        np.testing.assert_allclose(
+            np.array(new),
+            np.array(old),
+            rtol=1e-10,
+            err_msg="_batch_grid_mle SNPs-outer diverges from lambda-outer (n_cvt=1)",
+        )
+
+    def test_batch_grid_mle_snps_outer_parity_ncvt4(self):
+        """SNPs-outer matches lambda-outer at rtol=1e-10, n_cvt=4."""
+        eigenvalues, Uab_batch, lambdas = self._make_data(n_cvt=4)
+
+        old = self._batch_grid_mle_lambda_outer(4, lambdas, eigenvalues, Uab_batch)
+        new = _batch_grid_mle(4, lambdas, eigenvalues, Uab_batch)
+
+        assert new.shape == old.shape, f"Shape mismatch: {new.shape} vs {old.shape}"
+        np.testing.assert_allclose(
+            np.array(new),
+            np.array(old),
+            rtol=1e-10,
+            err_msg="_batch_grid_mle SNPs-outer diverges from lambda-outer (n_cvt=4)",
+        )
+
+    def test_batch_grid_mle_output_shape(self):
+        """Output shape is (n_grid, n_snps) for both old and new implementations."""
+        n_snps, n_grid = 50, 20
+        eigenvalues, Uab_batch, lambdas = self._make_data(
+            n_cvt=1, n_snps=n_snps, n_grid=n_grid
+        )
+
+        result = _batch_grid_mle(1, lambdas, eigenvalues, Uab_batch)
+        assert result.shape == (n_grid, n_snps), (
+            f"Expected ({n_grid}, {n_snps}), got {result.shape}"
+        )
+
+    def test_batch_grid_mle_single_lambda(self):
+        """Edge case: n_grid=1 (single lambda) produces correct result."""
+        eigenvalues, Uab_batch, _ = self._make_data(n_cvt=1, n_snps=10, n_grid=1)
+        lambdas = jnp.array([1.0])
+
+        old = self._batch_grid_mle_lambda_outer(1, lambdas, eigenvalues, Uab_batch)
+        new = _batch_grid_mle(1, lambdas, eigenvalues, Uab_batch)
+
+        assert new.shape == (1, 10)
+        np.testing.assert_allclose(
+            np.array(new),
+            np.array(old),
+            rtol=1e-10,
+            err_msg="_batch_grid_mle SNPs-outer diverges for single lambda",
         )

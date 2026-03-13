@@ -6,11 +6,14 @@
  * microkernel function pointers.  jblas_init() is idempotent: repeated calls
  * are safe and cheap (guarded by a static flag).
  *
- * Phase 77 status:
- *   - AVX2 path: fully wired (ddot_avx2, daxpy_avx2, dscal_avx2)
- *   - NEON path: detected but dispatches to generic (microkernels in Phase 78)
- *   - dgemm: NULL (Phase 78)
+ * Current status:
+ *   - AVX2 path: fully wired (ddot, dnrm2, daxpy, dscal, dgemv)
+ *   - NEON path: detected but dispatches to generic (microkernels not yet implemented)
+ *   - dgemm: stub (raises NotImplementedError until C implementation is added)
  */
+
+#include <stdio.h>
+#include <stdlib.h>
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <numpy/arrayobject.h>  /* npy_intp */
@@ -93,6 +96,21 @@ static int _detect_neon(void) {
 #endif /* __aarch64__ */
 
 /* ---------------------------------------------------------------------------
+ * dgemm stub — safe trap until C implementation is added
+ * ---------------------------------------------------------------------------
+ */
+static void _dgemm_stub(
+    npy_intp m, npy_intp n, npy_intp k,
+    const double *A, const double *B, double *C)
+{
+    (void)m; (void)n; (void)k; (void)A; (void)B; (void)C;
+    /* This should never be called — pymodule.c does not expose dgemm yet.
+     * If it is called, the caller has bypassed the Python layer. */
+    fprintf(stderr, "FATAL: jblas_dispatch.dgemm called but not implemented\n");
+    abort();
+}
+
+/* ---------------------------------------------------------------------------
  * jblas_init — Detect ISA and populate dispatch table
  * ---------------------------------------------------------------------------
  */
@@ -119,12 +137,12 @@ int jblas_init(void) {
 
 #elif defined(__aarch64__)
     if (_detect_neon()) {
-        /* NEON microkernels arrive in Phase 78; use generic for now */
+        /* NEON microkernels not yet implemented; use generic for now */
         _isa_name = "NEON";
     } else {
         _isa_name = "generic";
     }
-    /* Point all dispatch slots to generic — Phase 78 will swap in NEON */
+    /* Point all dispatch slots to generic until NEON microkernels are added */
     jblas_dispatch.ddot  = jblas_ddot_generic;
     jblas_dispatch.dnrm2 = jblas_dnrm2_generic;
     jblas_dispatch.daxpy = jblas_daxpy_generic;
@@ -140,8 +158,8 @@ int jblas_init(void) {
     jblas_dispatch.dgemv = jblas_dgemv_generic;
 #endif
 
-    /* dgemm is not implemented until Phase 78 */
-    jblas_dispatch.dgemm = NULL;
+    /* dgemm not yet implemented — stub traps accidental calls */
+    jblas_dispatch.dgemm = _dgemm_stub;
 
     _initialized = 1;
     return 0;

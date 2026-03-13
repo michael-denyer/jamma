@@ -92,8 +92,7 @@ double jblas_ddot_avx2(
     __m256d sum256 = _mm256_add_pd(_mm256_add_pd(acc0, acc1),
                                    _mm256_add_pd(acc2, acc3));
 
-    /* Horizontal reduction of sum256 -> scalar */
-    /* hadd: [a0+a1, a2+a3, b0+b1, b2+b3] where a=low128, b=high128 */
+    /* Horizontal reduction: 256->128 (lo+hi), then 128-bit hadd to scalar */
     __m128d lo = _mm256_castpd256_pd128(sum256);
     __m128d hi = _mm256_extractf128_pd(sum256, 1);
     __m128d s = _mm_add_pd(lo, hi);

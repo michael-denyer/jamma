@@ -3,7 +3,8 @@
  *
  * Exposes the five jblas BLAS primitives (ddot, dnrm2, daxpy, dscal, dgemv)
  * to Python via the NumPy buffer protocol.  Arrays are accessed via
- * PyArray_FROM_OTF for zero-copy double* extraction where possible.
+ * PyArray_FROM_OTF for contiguous double* extraction (copies non-contiguous
+ * or non-float64 inputs as needed).
  *
  * Module-level constants:
  *   jblas_isa   — active ISA string ("AVX2", "NEON", or "generic")

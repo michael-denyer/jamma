@@ -3,7 +3,7 @@
  *
  * Declares the ISA dispatch table, jblas_init(), and function signatures for
  * Level 1/2 BLAS primitives (ddot, dnrm2, daxpy, dscal, dgemv) plus Level 3
- * (dgemm, implemented in Phase 78).
+ * (dgemm, stub until C implementation is added).
  *
  * ABI version bump required if any function signature or struct layout changes.
  */
@@ -53,8 +53,7 @@ typedef void (*jblas_dgemv_fn)(
     const double *x,
     double       *y);
 
-/* dgemm: C = A*B.  A is (m x k), B is (k x n), C is (m x n). Row-major.
- * Implemented in Phase 78; pointer will be NULL until then. */
+/* dgemm: C = A*B.  A is (m x k), B is (k x n), C is (m x n). Row-major. */
 typedef void (*jblas_dgemm_fn)(
     npy_intp m, npy_intp n, npy_intp k,
     const double *A,
@@ -72,7 +71,7 @@ typedef struct {
     jblas_daxpy_fn daxpy;
     jblas_dscal_fn dscal;
     jblas_dgemv_fn dgemv;
-    jblas_dgemm_fn dgemm;  /* NULL until Phase 78 */
+    jblas_dgemm_fn dgemm;
 } jblas_dispatch_t;
 
 extern jblas_dispatch_t jblas_dispatch;
@@ -170,10 +169,10 @@ void jblas_dgemv_avx2(
 #endif /* __x86_64__ */
 
 /* ---------------------------------------------------------------------------
- * AArch64 NEON microkernel declarations (Phase 78)
+ * AArch64 NEON microkernel declarations
  * ---------------------------------------------------------------------------
  * Prototypes declared here so jblas_init() can reference them without
- * conditional compilation in platform.c.  Implementations arrive in Phase 78.
+ * conditional compilation in platform.c.  Implementations not yet available.
  */
 
 #if defined(__aarch64__)

@@ -13,8 +13,8 @@ Requires: gcc (or cc), Python development headers, numpy >= 2.0.
 OpenMP support is optional — falls back to single-threaded if unavailable.
 
 The jblas extension compiles per-file to enable different compiler flags per
-source group (e.g. AVX2 SIMD files vs portable LAPACK files in Phase 80).
-For Phase 77, all sources use the same flags except for the x86_64/aarch64
+source group (e.g. AVX2 SIMD files vs portable LAPACK files).
+Currently all sources use the same flags except for the x86_64/aarch64
 ISA split for -mavx2/-mfma.
 """
 
@@ -92,7 +92,7 @@ def compile_extension(verbose: bool = True) -> bool:
     """Compile jblas C sources into a shared library in the installed package.
 
     Performs per-file compile-then-link to enable different compiler flags
-    per source group. For Phase 77, all sources use the same base flags with
+    per source group. Currently all sources use the same base flags with
     an x86_64/aarch64 ISA split for -mavx2/-mfma.
 
     Args:
@@ -116,7 +116,7 @@ def compile_extension(verbose: bool = True) -> bool:
         _print("  Package may be incomplete — reinstall from source.")
         return False
 
-    # All Level 1/2 BLAS source files (Phase 77)
+    # All Level 1/2 BLAS source files
     source_files = [
         jblas_src_dir / "platform.c",
         jblas_src_dir / "ddot.c",
@@ -185,14 +185,14 @@ def compile_extension(verbose: bool = True) -> bool:
 
     # ISA-specific flags
     # On x86_64: -mavx2 -mfma for intrinsics in ddot.c, daxpy.c, dscal.c.
-    # On aarch64: no extra SIMD flags for Phase 77 (generics only).
+    # On aarch64: no extra SIMD flags (generics only).
     machine = platform.machine()
     arch_flags: list[str] = []
     if machine in ("x86_64", "AMD64"):
         arch_flags = ["-mavx2", "-mfma"]
         _print(f"ISA: x86_64 — adding {arch_flags}")
     elif machine == "aarch64":
-        _print("ISA: aarch64 — no extra SIMD flags (Phase 77 generics)")
+        _print("ISA: aarch64 — no extra SIMD flags (generics only)")
     else:
         _print(f"ISA: {machine} — no extra SIMD flags")
 

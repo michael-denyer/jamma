@@ -6,7 +6,9 @@
  *   jblas_dscal_avx2    — x86_64 AVX2 with broadcast alpha and vectorised multiply
  *
  * Special cases:
- *   alpha == 0.0  → zero the vector (sets all elements to exactly 0.0)
+ *   alpha == 0.0  → zero the vector via memset (sets all elements to +0.0,
+ *                    matching reference BLAS; note: differs from NumPy's
+ *                    x *= 0.0 which preserves NaN)
  *   alpha == 1.0  → no-op (return immediately)
  *
  * Both variants short-circuit on n <= 0.  AVX2 processes 16 doubles per

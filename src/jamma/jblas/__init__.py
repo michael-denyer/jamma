@@ -10,7 +10,7 @@ Exports:
     daxpy: In-place y += alpha * x.
     dscal: In-place x *= alpha.
     dgemv: Matrix-vector product A @ x.
-    dgemm: Matrix-matrix product A @ B (Phase 78 will implement C version).
+    dgemm: Matrix-matrix product A @ B (NumPy fallback; C implementation planned).
     jblas_isa: String identifying the active ISA ("AVX2", "NEON", "generic",
         or "numpy-fallback").
     HAS_C_EXTENSION: True if the compiled C extension is loaded.
@@ -18,6 +18,8 @@ Exports:
 """
 
 from __future__ import annotations
+
+import warnings
 
 try:
     from jamma.jblas._jblas import (  # noqa: F401
@@ -32,11 +34,10 @@ try:
 
     HAS_C_EXTENSION: bool = True
 
-    # dgemm is implemented in Phase 78; expose it from C extension when present.
+    # dgemm C implementation not yet available; expose from C extension when present.
     try:
         from jamma.jblas._jblas import dgemm  # noqa: F401
     except ImportError:
-        # C extension does not yet expose dgemm (pre-Phase-78 wheel); use fallback.
         import numpy as _np
 
         def dgemm(A: _np.ndarray, B: _np.ndarray) -> _np.ndarray:
@@ -51,7 +52,13 @@ try:
             """
             return _np.matmul(A, B)
 
-except ImportError:
+except ImportError as _exc:
+    warnings.warn(
+        f"jblas C extension not available ({_exc}); "
+        "using NumPy fallback (slower). "
+        "Run 'python -m jamma.jblas._compile_jblas' to compile.",
+        stacklevel=2,
+    )
     # C extension not available — use NumPy-backed fallback with identical signatures.
     HAS_C_EXTENSION = False
     HAS_OPENMP: bool = False

@@ -11,7 +11,7 @@
  *
  * Implements:
  *   jblas_dnrm2_generic — Blue algorithm, fully portable
- *   jblas_dnrm2_avx2    — dispatches to generic (SIMD dnrm2 deferred to Phase 78)
+ *   jblas_dnrm2_avx2    — dispatches to generic (SIMD dnrm2 not yet optimised)
  *
  * Reference: Blue, J.L. (1978) "A portable Fortran program to find the
  * Euclidean norm of a vector", ACM TOMS 4(1):15-23.
@@ -100,7 +100,7 @@ double jblas_dnrm2_generic(
  * AVX2 stub (x86_64 only) — dispatches to generic
  *
  * A SIMD dnrm2 with Blue algorithm is complex to implement correctly and
- * dnrm2 is not on the hot path (dgemm dominates in Phase 78+).  The dispatch
+ * dnrm2 is not on the hot path (dgemm dominates at scale).  The dispatch
  * pointer points here but the implementation falls through to generic.
  * ---------------------------------------------------------------------------
  */

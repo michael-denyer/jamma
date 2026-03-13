@@ -530,12 +530,12 @@ class CustomBuildHook(BuildHookInterface):
             )
             return
 
-        # All jblas source files (Phase 77: Level 1/2 BLAS primitives + Python module)
+        # All jblas source files (Level 1/2 BLAS primitives + Python module).
         # The AVX2 intrinsic code in ddot.c, daxpy.c, dscal.c is guarded by
         # #if defined(__x86_64__). On x86_64 we compile all sources with -mavx2 -mfma
         # so the intrinsic calls compile correctly.
-        # Phase 78 will introduce separate avx2_sources with dedicated flags;
-        # Phase 80 will introduce lapack_sources that must NOT get -mavx2.
+        # Future phases will introduce separate avx2_sources with dedicated flags
+        # and lapack_sources that must NOT get -mavx2.
         source_files = [
             jblas_src / "platform.c",
             jblas_src / "ddot.c",
@@ -556,7 +556,7 @@ class CustomBuildHook(BuildHookInterface):
             return
 
         # On x86_64: add AVX2/FMA flags so intrinsics in ddot.c, daxpy.c,
-        # dscal.c compile. On aarch64: no SIMD flags needed for Phase 77.
+        # dscal.c compile. On aarch64: no SIMD flags needed (generics only).
         machine = platform.machine()
         arch_flags: list[str] = []
         if machine in ("x86_64", "AMD64"):

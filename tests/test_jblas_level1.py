@@ -15,7 +15,7 @@ for both because jamma.jblas transparently dispatches.
 import numpy as np
 import pytest
 
-from jamma.jblas import daxpy, ddot, dgemv, dnrm2, dscal
+from jamma.jblas import HAS_C_EXTENSION, daxpy, ddot, dgemm, dgemv, dnrm2, dscal
 
 _RNG = np.random.default_rng(42)
 
@@ -132,6 +132,29 @@ class TestDnrm2:
             # NumPy fallback matches np.linalg.norm (should also be > 0).
             np.testing.assert_allclose(result, expected, rtol=1e-14)
 
+    @pytest.mark.tier0
+    @pytest.mark.skipif(not HAS_C_EXTENSION, reason="C extension not compiled")
+    def test_mixed_magnitude(self):
+        """Blue algorithm: mixed big+medium and small+medium accumulator combining.
+
+        Exercises the branches where n_big > 0 && n_med > 0 and
+        n_sml > 0 && n_med > 0 in the Blue three-accumulator algorithm.
+        """
+        # big + medium: 1e200 dominates, 1.0 is medium-scale.
+        # np.linalg.norm overflows here, so compare against known value:
+        # sqrt(1e200^2 + 1.0^2) = 1e200 * sqrt(1 + 1e-400) ≈ 1e200
+        x_big = np.array([1e200, 1.0])
+        result_big = dnrm2(x_big)
+        assert np.isfinite(result_big), f"overflow in big+medium: {result_big}"
+        np.testing.assert_allclose(result_big, 1e200, rtol=1e-14)
+
+        # small + medium: 1e-200 is tiny, 1.0 is medium-scale.
+        # sqrt(1e-200^2 + 1.0^2) ≈ 1.0
+        x_sml = np.array([1e-200, 1.0])
+        result_sml = dnrm2(x_sml)
+        assert result_sml > 0.0, f"underflow in small+medium: {result_sml}"
+        np.testing.assert_allclose(result_sml, 1.0, rtol=1e-14)
+
 
 class TestDaxpy:
     """daxpy: in-place y += alpha * x (BL1-03)."""
@@ -225,7 +248,7 @@ class TestDgemv:
     def test_rectangular(self):
         """100x50 rectangular matrix-vector product.
 
-        Uses rtol=1e-12 rather than 1e-14: the C extension implements dgemv
+        Uses rtol=2e-12 rather than 1e-14: the C extension implements dgemv
         as row-by-row ddot calls with sequential FP accumulation, while NumPy
         A @ x uses a BLAS dgemv with a different (potentially pairwise or
         SIMD-reordered) accumulation, leading to ~1 ULP per element of FP
@@ -237,3 +260,107 @@ class TestDgemv:
         result = dgemv(A, x)
         np.testing.assert_allclose(result, A @ x, rtol=2e-12)
         assert result.shape == (100,)
+
+
+class TestDgemm:
+    """dgemm: matrix-matrix product A @ B (BL3-01)."""
+
+    @pytest.mark.tier0
+    def test_basic(self):
+        """Small matrix multiplication agrees with NumPy."""
+        A = _RNG.standard_normal((4, 3))
+        B = _RNG.standard_normal((3, 5))
+        result = dgemm(A, B)
+        np.testing.assert_allclose(result, A @ B, rtol=1e-14)
+        assert result.shape == (4, 5)
+
+    @pytest.mark.tier0
+    def test_square(self):
+        """Square matrix multiplication."""
+        A = _RNG.standard_normal((10, 10))
+        B = _RNG.standard_normal((10, 10))
+        result = dgemm(A, B)
+        np.testing.assert_allclose(result, A @ B, rtol=1e-13)
+
+    @pytest.mark.tier0
+    def test_identity(self):
+        """Multiplying by identity returns the original matrix."""
+        A = _RNG.standard_normal((5, 5))
+        eye = np.eye(5)
+        np.testing.assert_allclose(dgemm(A, eye), A, rtol=1e-14)
+        np.testing.assert_allclose(dgemm(eye, A), A, rtol=1e-14)
+
+
+@pytest.mark.skipif(not HAS_C_EXTENSION, reason="C extension not compiled")
+class TestInputValidation:
+    """Input validation error paths in the C extension."""
+
+    @pytest.mark.tier0
+    def test_ddot_wrong_ndim(self):
+        """ddot rejects 2-D arrays."""
+        x = np.ones((2, 3))
+        y = np.ones(6)
+        with pytest.raises(ValueError, match="1-D"):
+            ddot(x, y)
+
+    @pytest.mark.tier0
+    def test_ddot_length_mismatch(self):
+        """ddot rejects vectors of different lengths."""
+        x = np.ones(3)
+        y = np.ones(5)
+        with pytest.raises(ValueError, match="same length"):
+            ddot(x, y)
+
+    @pytest.mark.tier0
+    def test_daxpy_wrong_ndim(self):
+        """daxpy rejects 2-D arrays."""
+        x = np.ones((2, 3))
+        y = np.ones(6)
+        with pytest.raises(ValueError, match="1-D"):
+            daxpy(1.0, x, y)
+
+    @pytest.mark.tier0
+    def test_daxpy_length_mismatch(self):
+        """daxpy rejects vectors of different lengths."""
+        x = np.ones(3)
+        y = np.ones(5)
+        with pytest.raises(ValueError, match="same length"):
+            daxpy(1.0, x, y)
+
+    @pytest.mark.tier0
+    def test_dgemv_A_wrong_ndim(self):
+        """dgemv rejects 1-D array as A."""
+        A = np.ones(6)
+        x = np.ones(3)
+        with pytest.raises(ValueError, match="2-D"):
+            dgemv(A, x)
+
+    @pytest.mark.tier0
+    def test_dgemv_x_wrong_ndim(self):
+        """dgemv rejects 2-D array as x."""
+        A = np.ones((3, 4))
+        x = np.ones((4, 1))
+        with pytest.raises(ValueError, match="1-D"):
+            dgemv(A, x)
+
+    @pytest.mark.tier0
+    def test_dgemv_shape_mismatch(self):
+        """dgemv rejects shape-mismatched A and x."""
+        A = np.ones((3, 4))
+        x = np.ones(5)
+        with pytest.raises(ValueError, match="columns"):
+            dgemv(A, x)
+
+    @pytest.mark.tier0
+    def test_dnrm2_wrong_ndim(self):
+        """dnrm2 rejects 2-D arrays."""
+        x = np.ones((2, 3))
+        with pytest.raises(ValueError, match="1-D"):
+            dnrm2(x)
+
+    @pytest.mark.tier0
+    def test_dscal_wrong_ndim(self):
+        """dscal rejects 2-D arrays."""
+        x = np.ones((2, 3))
+        with pytest.raises(ValueError, match="1-D"):
+            dscal(1.0, x)

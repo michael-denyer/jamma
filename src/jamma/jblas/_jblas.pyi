@@ -8,6 +8,9 @@ fallbacks with identical signatures.
 import numpy as np
 
 # Module-level constants set at PyInit__jblas time.
+ABI_VERSION: int
+"""JBLAS ABI version number for compatibility checking."""
+
 jblas_isa: str
 """Active ISA name: "AVX2", "NEON", or "generic"."""
 
@@ -75,7 +78,7 @@ def dgemv(A: np.ndarray, x: np.ndarray) -> np.ndarray:
 def dgemm(A: np.ndarray, B: np.ndarray) -> np.ndarray:
     """Compute matrix-matrix product A @ B.
 
-    Implemented in Phase 78. Available only in post-Phase-78 wheels.
+    C implementation planned. Currently uses NumPy fallback via __init__.py.
 
     Args:
         A: Left matrix, shape (m, k), float64, C-contiguous.

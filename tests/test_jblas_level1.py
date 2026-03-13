@@ -476,3 +476,106 @@ class TestInputValidation:
         B = np.ones((5, 2))
         with pytest.raises(ValueError, match="columns"):
             dgemm(A, B)
+
+    @pytest.mark.tier0
+    def test_daxpy_non_float64_y_rejected(self):
+        """daxpy fallback rejects non-float64 y to prevent silent precision loss."""
+        if HAS_C_EXTENSION:
+            pytest.skip("C extension coerces dtypes via PyArray_FROM_OTF")
+        x = np.ones(5, dtype=np.float64)
+        y = np.ones(5, dtype=np.float32)
+        with pytest.raises(TypeError, match="float64"):
+            daxpy(1.0, x, y)
+
+    @pytest.mark.tier0
+    def test_dscal_non_float64_rejected(self):
+        """dscal fallback rejects non-float64 input."""
+        if HAS_C_EXTENSION:
+            pytest.skip("C extension coerces dtypes via PyArray_FROM_OTF")
+        x = np.ones(5, dtype=np.float32)
+        with pytest.raises(TypeError, match="float64"):
+            dscal(2.0, x)
+
+
+class TestNaNPropagation:
+    """NaN/Inf propagation: ensure special values are not silently swallowed."""
+
+    @pytest.mark.tier0
+    def test_ddot_nan(self):
+        """ddot with NaN input must return NaN."""
+        x = np.array([1.0, np.nan, 3.0])
+        y = np.array([1.0, 1.0, 1.0])
+        assert np.isnan(ddot(x, y))
+
+    @pytest.mark.tier0
+    def test_ddot_inf(self):
+        """ddot with Inf input propagates correctly."""
+        x = np.array([np.inf, 1.0])
+        y = np.array([1.0, 1.0])
+        assert np.isinf(ddot(x, y))
+
+    @pytest.mark.tier0
+    def test_dnrm2_nan(self):
+        """dnrm2 with NaN input must return NaN."""
+        x = np.array([1.0, np.nan, 3.0])
+        assert np.isnan(dnrm2(x))
+
+    @pytest.mark.tier0
+    def test_daxpy_nan_propagates(self):
+        """daxpy with NaN in x must propagate NaN into y."""
+        x = np.array([1.0, np.nan, 3.0])
+        y = np.array([1.0, 1.0, 1.0])
+        daxpy(1.0, x, y)
+        assert np.isnan(y[1]), f"NaN not propagated: y={y}"
+
+    @pytest.mark.tier0
+    def test_dgemv_nan_propagates(self):
+        """dgemv with NaN in A propagates to affected rows."""
+        A = np.array([[1.0, 2.0], [np.nan, 1.0]])
+        x = np.array([1.0, 1.0])
+        result = dgemv(A, x)
+        np.testing.assert_allclose(result[0], 3.0, rtol=1e-14)
+        assert np.isnan(result[1]), f"NaN not propagated: result={result}"
+
+
+class TestDtypeAndContiguity:
+    """Verify correct handling of non-float64 and non-contiguous inputs."""
+
+    @pytest.mark.tier0
+    def test_ddot_float32_input(self):
+        """ddot accepts float32 input (coerced to float64)."""
+        rng = np.random.default_rng(701)
+        x = rng.standard_normal(50).astype(np.float32)
+        y = rng.standard_normal(50).astype(np.float32)
+        result = ddot(x, y)
+        expected = float(np.dot(x.astype(np.float64), y.astype(np.float64)))
+        np.testing.assert_allclose(result, expected, rtol=1e-6)
+
+    @pytest.mark.tier0
+    def test_dnrm2_int_input(self):
+        """dnrm2 accepts integer input (coerced to float64)."""
+        x = np.array([3, 4], dtype=np.int64)
+        np.testing.assert_allclose(dnrm2(x), 5.0, rtol=1e-14)
+
+    @pytest.mark.tier0
+    def test_dgemv_fortran_order(self):
+        """dgemv produces correct results for Fortran-order matrix."""
+        rng = np.random.default_rng(702)
+        A_c = rng.standard_normal((10, 5))
+        A_f = np.asfortranarray(A_c)
+        x = rng.standard_normal(5)
+        result = dgemv(A_f, x)
+        expected = A_c @ x
+        np.testing.assert_allclose(result, expected, rtol=1e-14)
+
+    @pytest.mark.tier0
+    def test_ddot_sliced_arrays(self):
+        """ddot works with non-contiguous sliced arrays."""
+        rng = np.random.default_rng(703)
+        x_full = rng.standard_normal(100)
+        y_full = rng.standard_normal(100)
+        x = x_full[::2]  # stride-2 slice
+        y = y_full[::2]
+        result = ddot(x, y)
+        expected = float(np.dot(x.astype(np.float64), y.astype(np.float64)))
+        np.testing.assert_allclose(result, expected, rtol=1e-14)

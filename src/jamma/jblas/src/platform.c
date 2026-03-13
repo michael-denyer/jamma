@@ -138,12 +138,13 @@ int jblas_init(void) {
 
 #elif defined(__aarch64__)
     if (_detect_neon()) {
-        /* NEON microkernels not yet implemented; use generic for now */
-        _isa_name = "NEON";
+        /* NEON detected but microkernels not yet implemented; report generic
+         * to avoid misleading callers into thinking SIMD is active. */
+        _isa_name = "generic";
     } else {
         _isa_name = "generic";
     }
-    /* Point all dispatch slots to generic until NEON microkernels are added */
+    /* All dispatch slots use generic until NEON microkernels are added */
     jblas_dispatch.ddot  = jblas_ddot_generic;
     jblas_dispatch.dnrm2 = jblas_dnrm2_generic;
     jblas_dispatch.daxpy = jblas_daxpy_generic;

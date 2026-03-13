@@ -1,8 +1,8 @@
 """jblas: JAMMA's self-contained BLAS compute layer.
 
 Provides Level 1/2 BLAS primitives (ddot, dnrm2, daxpy, dscal, dgemv) and
-Level 3 BLAS (dgemm) via a C extension when available, falling back to NumPy
-when the C extension has not been compiled.
+Level 3 BLAS (dgemm via NumPy; C implementation planned) via a C extension
+when available, falling back to NumPy when the C extension has not been compiled.
 
 Exports:
     ddot: Inner product of two double vectors.
@@ -143,6 +143,8 @@ except ImportError as _exc:
                 f"daxpy: x and y must have the same length, "
                 f"got {x.shape[0]} and {y.shape[0]}"
             )
+        if y.dtype != _np.float64:
+            raise TypeError(f"daxpy: y must be float64, got {y.dtype}")
         y += alpha * _np.asarray(x, dtype=_np.float64)
 
     def dscal(alpha: float, x: _np.ndarray) -> None:

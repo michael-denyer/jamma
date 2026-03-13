@@ -8,7 +8,7 @@
  * Special cases:
  *   alpha == 0.0  → zero the vector via memset (sets all elements to +0.0,
  *                    matching reference BLAS; note: differs from NumPy's
- *                    x *= 0.0 which preserves NaN)
+ *                    x *= 0.0 which produces NaN per IEEE 754: NaN*0=NaN, Inf*0=NaN)
  *   alpha == 1.0  → no-op (return immediately)
  *
  * Both variants short-circuit on n <= 0.  AVX2 processes 16 doubles per

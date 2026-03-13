@@ -12,10 +12,9 @@ Or from a Databricks/Jupyter notebook cell:
 Requires: gcc (or cc), Python development headers, numpy >= 2.0.
 OpenMP support is optional — falls back to single-threaded if unavailable.
 
-The jblas extension compiles per-file to enable different compiler flags per
-source group (e.g. AVX2 SIMD files vs portable generic files).
-Currently all sources use the same flags except for the x86_64/aarch64
-ISA split for -mavx2/-mfma.
+The jblas extension compiles per-file to enable per-source-group compiler flags
+in future phases (e.g. LAPACK files needing -ldl).  Currently all sources use
+the same flags; the x86_64/aarch64 ISA split is handled by #if guards in C.
 """
 
 from __future__ import annotations
@@ -346,6 +345,9 @@ def compile_extension(verbose: bool = True) -> bool:
     except OSError as e:
         _print(f"ERROR: compiled but import failed (OSError): {e}")
         _print("  Check that all shared library dependencies are available.")
+        return False
+    except Exception as e:
+        _print(f"ERROR: compiled but import failed ({type(e).__name__}): {e}")
         return False
 
 

@@ -6,7 +6,8 @@
  *   jblas_ddot_avx2    — x86_64 AVX2 with 4-accumulator FMA unroll (x86_64 only)
  *
  * The AVX2 path processes 16 doubles per iteration using four __m256d
- * accumulators to hide FMA latency (throughput-bound at ~4 GFLOP/s/GHz).
+ * accumulators to hide FMA latency (throughput-bound at ~4 GFLOP/s/GHz for
+ * DRAM-resident vectors; higher for cache-resident data).
  * Strided inputs fall back to the generic scalar path.
  */
 

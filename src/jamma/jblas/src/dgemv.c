@@ -20,7 +20,7 @@
 #include "jblas.h"
 
 /* ---------------------------------------------------------------------------
- * Generic implementation — row-by-row dispatch through ddot
+ * Generic implementation — row-by-row delegation to ddot
  * ---------------------------------------------------------------------------
  */
 void jblas_dgemv_generic(

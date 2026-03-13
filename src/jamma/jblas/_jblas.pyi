@@ -5,19 +5,26 @@ When the C extension is not available, jamma.jblas.__init__ provides NumPy-backe
 fallbacks with identical signatures.
 """
 
+from typing import Final, Literal
+
 import numpy as np
+import numpy.typing as npt
 
 # Module-level constants set at PyInit__jblas time.
-ABI_VERSION: int
+ABI_VERSION: Final[int]
 """JBLAS ABI version number for compatibility checking."""
 
-jblas_isa: str
-"""Active ISA name: "AVX2", "NEON", or "generic"."""
+jblas_isa: Final[Literal["AVX2", "generic"]]
+"""Active ISA name: "AVX2" or "generic"."""
 
-HAS_OPENMP: bool
-"""True if the extension was compiled with OpenMP support."""
+HAS_OPENMP: Final[bool]
+"""True if the extension was compiled with OpenMP support.
 
-def ddot(x: np.ndarray, y: np.ndarray) -> float:
+Currently informational only — Level 1/2 kernels are single-threaded.
+OpenMP parallelism is planned for dgemm (Level 3) in a future phase.
+"""
+
+def ddot(x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]) -> float:
     """Compute inner product of two double vectors.
 
     Args:
@@ -29,7 +36,7 @@ def ddot(x: np.ndarray, y: np.ndarray) -> float:
     """
     ...
 
-def dnrm2(x: np.ndarray) -> float:
+def dnrm2(x: npt.NDArray[np.float64]) -> float:
     """Compute Euclidean norm of a double vector.
 
     Uses the Blue (1978) three-accumulator algorithm to avoid overflow and
@@ -43,7 +50,7 @@ def dnrm2(x: np.ndarray) -> float:
     """
     ...
 
-def daxpy(alpha: float, x: np.ndarray, y: np.ndarray) -> None:
+def daxpy(alpha: float, x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]) -> None:
     """Compute y += alpha * x in-place.
 
     Args:
@@ -54,7 +61,7 @@ def daxpy(alpha: float, x: np.ndarray, y: np.ndarray) -> None:
     """
     ...
 
-def dscal(alpha: float, x: np.ndarray) -> None:
+def dscal(alpha: float, x: npt.NDArray[np.float64]) -> None:
     """Compute x *= alpha in-place.
 
     Args:
@@ -63,7 +70,9 @@ def dscal(alpha: float, x: np.ndarray) -> None:
     """
     ...
 
-def dgemv(A: np.ndarray, x: np.ndarray) -> np.ndarray:
+def dgemv(
+    A: npt.NDArray[np.float64], x: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
     """Compute matrix-vector product A @ x.
 
     Args:

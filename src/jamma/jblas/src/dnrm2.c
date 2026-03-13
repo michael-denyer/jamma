@@ -4,7 +4,7 @@
  * Implements the Blue (1978) three-accumulator algorithm for overflow and
  * underflow protection.  The naïve sqrt(ddot(x,x)) overflows when any
  * element exceeds sqrt(DBL_MAX) ≈ 1.34e+154 and underflows to zero when
- * all elements are below sqrt(DBL_MIN/DBL_EPSILON) ≈ 1.49e-154.
+ * all elements are below 2^-511 ≈ 1.49e-154 (Blue's underflow threshold).
  *
  * Blue's algorithm maintains three partial sums (small, medium, big) and
  * combines them in a single pass without intermediate overflow.
@@ -29,11 +29,11 @@
  * sml_bound: scale factor for small accumulators (prevents underflow)
  * big_bound: scale factor for large accumulators (prevents overflow)
  *
- *   sml_bound = sqrt(DBL_MIN / DBL_EPSILON)   ≈ 1.4916e-154
- *   big_bound = sqrt(DBL_MAX)                  ≈ 1.3408e+154
+ *   sml_bound = ibeta^floor((iemin-1)/2) = 2^-511  ≈ 1.4917e-154
+ *   big_bound = sqrt(DBL_MAX)                      ≈ 1.3408e+154
  * ---------------------------------------------------------------------------
  */
-static const double _DNRM2_SML_BOUND = 1.4916681462400413e-154;  /* sqrt(DBL_MIN/DBL_EPSILON) */
+static const double _DNRM2_SML_BOUND = 1.4916681462400413e-154;  /* 2^-511, Blue's underflow threshold */
 static const double _DNRM2_BIG_BOUND = 1.3407807929942596e+154;  /* sqrt(DBL_MAX) */
 
 /* ---------------------------------------------------------------------------

@@ -317,7 +317,9 @@ PyInit__jblas(void)
         return NULL;
     }
 
-    /* HAS_OPENMP: True if compiled with OpenMP */
+    /* HAS_OPENMP: True if compiled with OpenMP. Currently informational only —
+     * Level 1/2 kernels are single-threaded. OpenMP parallelism is planned for
+     * dgemm (Level 3) in a future phase. */
 #ifdef _OPENMP
     int has_openmp = 1;
 #else

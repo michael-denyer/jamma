@@ -748,6 +748,69 @@ class TestWriteStreamingChunk:
 
 
 # ---------------------------------------------------------------------------
+# Multi-chunk equivalence test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+def test_numpy_multi_chunk_pvalue_equivalence(monkeypatch):
+    """p-values are identical regardless of chunk_size (single vs. multi-chunk).
+
+    Forces multi-chunk mode by monkeypatching _compute_chunk_size_numpy to
+    return 50, then compares p_wald against a single-chunk run.  Pre-computed
+    eigendecomp is passed to both calls to avoid repeated O(n^3) work and to
+    ensure the only difference is the chunking path.
+    """
+    if not MOUSE_HS1940_DATA.with_suffix(".bed").exists():
+        pytest.skip("mouse_hs1940 fixture not available")
+
+    plink = load_plink_binary(MOUSE_HS1940_DATA)
+    kinship = read_kinship_matrix(MOUSE_HS1940_KINSHIP)
+    phenotypes = load_phenotypes_from_fam(MOUSE_HS1940_DATA.with_suffix(".fam"))
+    snp_info = _build_snp_info(plink)
+
+    # Filter to valid (non-NaN) samples then pre-compute eigendecomp once
+    # on the filtered kinship — passed to both runs so the only variable is
+    # the chunking path.
+    valid_mask = ~np.isnan(phenotypes)
+    kinship_filtered = kinship[np.ix_(valid_mask, valid_mask)]
+    eigenvalues, eigenvectors = np.linalg.eigh(kinship_filtered)
+
+    common_kwargs = dict(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes,
+        kinship=None,  # pre-computed eigen supplied; skip internal eigh
+        snp_info=snp_info,
+        eigenvalues=eigenvalues,
+        eigenvectors=eigenvectors,
+        lmm_mode=1,
+        check_memory=False,
+        show_progress=False,
+        output_path=None,
+    )
+
+    # Single-chunk run (no monkeypatching — default chunk_size fits all SNPs)
+    result_single = run_lmm_association_numpy(**common_kwargs)
+
+    # Multi-chunk run: force chunk_size=50 so the batch loop iterates many times
+    monkeypatch.setattr(
+        "jamma.lmm.runner_numpy._compute_chunk_size_numpy",
+        lambda *args, **kwargs: 50,
+    )
+    result_multi = run_lmm_association_numpy(**common_kwargs)
+
+    p_single = np.array([r.p_wald for r in result_single.associations])
+    p_multi = np.array([r.p_wald for r in result_multi.associations])
+
+    np.testing.assert_allclose(
+        p_single,
+        p_multi,
+        rtol=1e-10,
+        err_msg="p_wald values differ between single-chunk and multi-chunk runs",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Lambda boundary diagnostic tests (REGR-03)
 # ---------------------------------------------------------------------------
 

@@ -546,3 +546,37 @@ class TestMemmapLifecycle:
     def test_cleanup_temp_memmap_nonexistent_paths(self) -> None:
         """_cleanup_temp_memmap does not raise when files/dirs are already gone."""
         _cleanup_temp_memmap("/nonexistent/dir", "/nonexistent/dir/matrix.dat")
+
+    def test_copy_false_os_error_during_memmap_creation(self, tmp_path: Path) -> None:
+        """OSError during memmap creation propagates cleanly (no hang, no silent drop).
+
+        Patches np.memmap so the initial w+ creation at parallel parse time
+        raises OSError("No space left on device").  The caller receives either
+        the raw OSError or a RuntimeError wrapping it — either is acceptable.
+        """
+        from unittest.mock import patch
+
+        rng = np.random.default_rng(50)
+        matrix = rng.standard_normal((600, 3))
+        path = tmp_path / "os_error_test.txt"
+        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
+
+        with patch(
+            "jamma.io.matrix_reader.np.memmap",
+            side_effect=OSError("No space left on device"),
+        ):
+            with pytest.raises((RuntimeError, OSError)):
+                read_matrix_parallel(path, copy=False, min_rows_for_parallel=500)
+
+    def test_cleanup_temp_memmap_permission_error(self) -> None:
+        """_cleanup_temp_memmap does not raise when os.unlink raises PermissionError.
+
+        Cleanup errors (PermissionError, OSError) are swallowed so that GC
+        finalizers and exception handling paths never themselves raise.
+        """
+        import os
+        from unittest.mock import patch
+
+        with patch.object(os, "unlink", side_effect=PermissionError("denied")):
+            # Must not raise even though os.unlink will fail
+            _cleanup_temp_memmap("/nonexistent/dir", "/nonexistent/dir/matrix.dat")

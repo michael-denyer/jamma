@@ -841,6 +841,68 @@ def test_pipeline_numpy_backend(sample_plink_data: Path, output_dir: Path) -> No
 
 
 @pytest.mark.tier1
+def test_pipeline_pve_se_populated(sample_plink_data: Path, output_dir: Path) -> None:
+    """PipelineResult.pve_estimate is in (0, 1) and pve_se is None or positive."""
+    kinship_file = sample_plink_data.parent / "gemma_kinship.cXX.txt"
+    config = PipelineConfig(
+        bfile=sample_plink_data,
+        kinship_file=kinship_file,
+        lmm_mode=1,
+        output_dir=output_dir,
+        check_memory=False,
+        show_progress=False,
+        backend="numpy",
+    )
+    result = PipelineRunner(config).run()
+
+    assert result.pve_estimate is not None, (
+        "pve_estimate should be populated after a standard run"
+    )
+    assert 0 < result.pve_estimate < 1, (
+        f"pve_estimate should be in (0, 1), got {result.pve_estimate}"
+    )
+    assert result.pve_se is None or result.pve_se > 0, (
+        f"pve_se should be None or positive, got {result.pve_se}"
+    )
+
+
+@pytest.mark.tier1
+def test_pipeline_output_path_content_matches_n_tested(
+    sample_plink_data: Path, output_dir: Path
+) -> None:
+    """Disk file line count matches n_snps_tested and path formula is correct."""
+    from jamma.validation import load_gemma_assoc
+
+    kinship_file = sample_plink_data.parent / "gemma_kinship.cXX.txt"
+    config = PipelineConfig(
+        bfile=sample_plink_data,
+        kinship_file=kinship_file,
+        lmm_mode=1,
+        output_dir=output_dir,
+        check_memory=False,
+        show_progress=False,
+        backend="numpy",
+    )
+    result = PipelineRunner(config).run()
+
+    expected_path = config.output_dir / f"{config.output_prefix}.assoc.txt"
+    assert result.assoc_path.exists(), "assoc_path file should exist on disk"
+    assert result.assoc_path == expected_path, (
+        f"assoc_path {result.assoc_path} does not match expected {expected_path}"
+    )
+    assert result.assoc_paths == [result.assoc_path], (
+        f"assoc_paths should be a single-element list for single-phenotype runs, "
+        f"got {result.assoc_paths}"
+    )
+
+    disk_results = load_gemma_assoc(result.assoc_path)
+    assert len(disk_results) == result.n_snps_tested, (
+        f"Disk file has {len(disk_results)} rows but "
+        f"n_snps_tested={result.n_snps_tested}"
+    )
+
+
+@pytest.mark.tier1
 def test_pipeline_loco_numpy(tmp_path: Path) -> None:
     """LOCO + NumPy backend completes end-to-end without error."""
     # gemma_loco fixture: 100 samples, 500 SNPs across 3 chromosomes

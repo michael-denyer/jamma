@@ -414,6 +414,43 @@ class TestRemlLogLikelihoodDev2:
             se_lambda = np.sqrt(-1.0 / dev2)
             assert np.isfinite(se_lambda)
 
+    def test_analytical_dev2_vs_finite_difference_dev2_ncvt1(
+        self, synthetic_null_model
+    ):
+        """Analytical dev2 (n_cvt=1) matches finite_difference_dev2 within rtol=5e-3.
+
+        The analytical path (reml_log_likelihood_dev2 with n_cvt=1) omits the
+        d^2(logdet_hiw)/dlambda^2 term (see likelihood.py near the n_cvt=1
+        branch).  finite_difference_dev2 approximates the full second derivative
+        numerically via a central stencil (h=lam*1e-4) on reml_log_likelihood_null,
+        implicitly capturing all terms.  This test pins the approximation error
+        upper bound at 0.5%.
+
+        This is distinct from test_dev2_matches_finite_differences (above),
+        which uses a hand-rolled stencil with h=lam*1e-3.  The present test
+        explicitly calls finite_difference_dev2 to compare the two code paths
+        and document their agreement.
+        """
+        data = synthetic_null_model
+        lam = data["lambda_remle"]
+        eigenvalues = data["eigenvalues"]
+        Uab = data["Uab"]
+        n_cvt = 1  # analytical path; n_cvt=1 uses closed-form formula
+
+        dev2_analytical = reml_log_likelihood_dev2(lam, eigenvalues, Uab, n_cvt)
+        dev2_finite_diff = finite_difference_dev2(lam, eigenvalues, Uab, n_cvt)
+
+        np.testing.assert_allclose(
+            dev2_analytical,
+            dev2_finite_diff,
+            rtol=5e-3,
+            err_msg=(
+                f"Analytical dev2={dev2_analytical:.8e} vs "
+                f"finite_difference_dev2={dev2_finite_diff:.8e}: "
+                f"approximation error exceeds 0.5% bound"
+            ),
+        )
+
 
 # --- finite_difference_dev2 tests ---
 

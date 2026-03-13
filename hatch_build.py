@@ -537,9 +537,10 @@ class CustomBuildHook(BuildHookInterface):
             )
             return
 
-        # jblas source files split into two groups:
+        # jblas source files split into three groups:
         # - baseline: portable C compiled without SIMD flags (runs on any x86_64)
         # - simd: files using AVX2 intrinsics, compiled with -mavx2 -mfma
+        # - kernels: ISA-specific microkernel files (required on target platform)
         # This ensures the baseline manylinux_x86_64 wheel doesn't SIGILL on
         # older CPUs that lack AVX2.  Runtime CPUID dispatch in platform.c
         # selects the appropriate kernels.
@@ -548,15 +549,44 @@ class CustomBuildHook(BuildHookInterface):
             jblas_src / "dnrm2.c",
             jblas_src / "dgemv.c",
             jblas_src / "pymodule.c",
+            jblas_src / "dgemm.c",  # blocking framework
+            jblas_src / "dgemm_generic.c",  # generic scalar microkernel
         ]
         simd_sources = [
             jblas_src / "ddot.c",
             jblas_src / "daxpy.c",
             jblas_src / "dscal.c",
         ]
-        source_files = baseline_sources + simd_sources
 
-        missing = [s for s in source_files if not s.exists()]
+        # Kernel directory — required on the matching platform, optional elsewhere.
+        jblas_kernels = Path(self.root) / "src" / "jamma" / "jblas" / "kernels"
+        avx2_kernel_sources: list[Path] = []
+        neon_kernel_sources: list[Path] = []
+        machine = platform.machine()
+        if jblas_kernels.is_dir():
+            avx2_src = jblas_kernels / "dgemm_avx2.c"
+            neon_src = jblas_kernels / "dgemm_neon.c"
+            if avx2_src.exists():
+                avx2_kernel_sources.append(avx2_src)
+            elif machine in ("x86_64", "AMD64"):
+                raise SystemExit(
+                    f"ERROR: AVX2 dgemm kernel required on "
+                    f"{machine} but not found at {avx2_src}"
+                )
+            if neon_src.exists():
+                neon_kernel_sources.append(neon_src)
+            elif machine in ("aarch64", "arm64"):
+                raise SystemExit(
+                    f"ERROR: NEON dgemm kernel required on "
+                    f"{machine} but not found at {neon_src}"
+                )
+
+        source_files = (
+            baseline_sources + simd_sources + avx2_kernel_sources + neon_kernel_sources
+        )
+
+        # Only fail on missing baseline + simd sources; kernel files checked above
+        missing = [s for s in (baseline_sources + simd_sources) if not s.exists()]
         if missing:
             print(
                 f"WARNING: jblas source files missing: {missing} — "
@@ -644,12 +674,19 @@ class CustomBuildHook(BuildHookInterface):
         use_omp = bool(omp_flags)
 
         simd_source_set = set(str(s) for s in simd_sources)
+        avx2_kernel_set = set(str(s) for s in avx2_kernel_sources)
 
         try:
             for src in source_files:
                 obj_file = tmp_dir / (src.stem + ".o")
-                # Only SIMD sources (ddot, daxpy, dscal) get AVX2/FMA flags
-                extra_simd = simd_flags if str(src) in simd_source_set else []
+                # SIMD sources (ddot, daxpy, dscal) and AVX2 kernel files get
+                # -mavx2 -mfma; NEON kernel files get no extra flags (NEON is
+                # baseline on aarch64); baseline sources get no SIMD flags.
+                extra_simd = (
+                    simd_flags
+                    if (str(src) in simd_source_set or str(src) in avx2_kernel_set)
+                    else []
+                )
                 cmd_compile = [
                     cc_cmd,
                     *cc_extra,
@@ -685,7 +722,11 @@ class CustomBuildHook(BuildHookInterface):
                 compile_failed = False
                 for src in source_files:
                     obj_file = tmp_dir / (src.stem + "_noomp.o")
-                    extra_simd = simd_flags if str(src) in simd_source_set else []
+                    extra_simd = (
+                        simd_flags
+                        if (str(src) in simd_source_set or str(src) in avx2_kernel_set)
+                        else []
+                    )
                     cmd_compile = [
                         cc_cmd,
                         *cc_extra,

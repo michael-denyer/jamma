@@ -116,22 +116,58 @@ def compile_extension(verbose: bool = True) -> bool:
         _print("  Package may be incomplete — reinstall from source.")
         return False
 
-    # Source files split into baseline (portable) and SIMD (AVX2 intrinsics).
-    # Only SIMD sources get -mavx2/-mfma to avoid SIGILL on older x86_64 CPUs.
+    # Source files split into three groups:
+    # - baseline: portable C compiled without SIMD flags (runs on any x86_64)
+    # - simd: files using AVX2 intrinsics, compiled with -mavx2/-mfma
+    # - kernels: ISA-specific microkernel files (required on target platform)
+    # Only SIMD sources and AVX2 kernels get -mavx2/-mfma to avoid SIGILL on
+    # older x86_64 CPUs.  NEON kernels get no extra flags (NEON is baseline on
+    # aarch64).
     baseline_sources = [
         jblas_src_dir / "platform.c",
         jblas_src_dir / "dnrm2.c",
         jblas_src_dir / "dgemv.c",
         jblas_src_dir / "pymodule.c",
+        jblas_src_dir / "dgemm.c",  # blocking framework
+        jblas_src_dir / "dgemm_generic.c",  # generic scalar microkernel
     ]
     simd_sources = [
         jblas_src_dir / "ddot.c",
         jblas_src_dir / "daxpy.c",
         jblas_src_dir / "dscal.c",
     ]
-    source_files = baseline_sources + simd_sources
 
-    missing = [str(s) for s in source_files if not s.exists()]
+    # Kernel sources — required on the matching platform, optional elsewhere.
+    # Missing a kernel on its target platform produces a linker error later;
+    # fail fast here with a clear message instead.
+    jblas_kernels_dir = jblas_dir / "kernels"
+    avx2_kernel_sources: list[Path] = []
+    neon_kernel_sources: list[Path] = []
+    if jblas_kernels_dir.is_dir():
+        avx2_src = jblas_kernels_dir / "dgemm_avx2.c"
+        neon_src = jblas_kernels_dir / "dgemm_neon.c"
+        if avx2_src.exists():
+            avx2_kernel_sources.append(avx2_src)
+        elif platform.machine() in ("x86_64", "AMD64"):
+            _print(
+                "ERROR: AVX2 dgemm kernel required on "
+                f"x86_64 but not found at {avx2_src}"
+            )
+            return False
+        if neon_src.exists():
+            neon_kernel_sources.append(neon_src)
+        elif platform.machine() in ("aarch64", "arm64"):
+            _print(
+                "ERROR: NEON dgemm kernel required on "
+                f"{platform.machine()} but not found at {neon_src}"
+            )
+            return False
+
+    source_files = (
+        baseline_sources + simd_sources + avx2_kernel_sources + neon_kernel_sources
+    )
+
+    missing = [str(s) for s in (baseline_sources + simd_sources) if not s.exists()]
     if missing:
         _print(f"ERROR: jblas source files missing: {missing}")
         return False
@@ -197,7 +233,7 @@ def compile_extension(verbose: bool = True) -> bool:
         simd_flags = ["-mavx2", "-mfma"]
         _print(f"ISA: x86_64 — SIMD sources get {simd_flags}")
     elif machine in ("aarch64", "arm64"):
-        _print("ISA: aarch64/arm64 — no extra SIMD flags (generics only)")
+        _print("ISA: aarch64/arm64 — NEON is baseline (no extra SIMD flags needed)")
     else:
         _print(f"ISA: {machine} — no extra SIMD flags")
 
@@ -253,6 +289,7 @@ def compile_extension(verbose: bool = True) -> bool:
     ]
 
     simd_source_set = set(str(s) for s in simd_sources)
+    avx2_kernel_set = set(str(s) for s in avx2_kernel_sources)
 
     # OpenMP compile-time flags (exclude link-only flags like -lomp/-liomp5)
     omp_compile: list[str] = []
@@ -274,7 +311,13 @@ def compile_extension(verbose: bool = True) -> bool:
         try:
             for src in source_files:
                 obj_file = tmp_dir / f"{src.stem}{suffix}.o"
-                extra_simd = simd_flags if str(src) in simd_source_set else []
+                # SIMD sources and AVX2 kernel files get -mavx2/-mfma;
+                # NEON kernel files and baseline sources get no SIMD flags.
+                extra_simd = (
+                    simd_flags
+                    if (str(src) in simd_source_set or str(src) in avx2_kernel_set)
+                    else []
+                )
                 cmd = [
                     cc_cmd,
                     *cc_extra,

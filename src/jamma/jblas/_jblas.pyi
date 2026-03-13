@@ -14,14 +14,14 @@ import numpy.typing as npt
 ABI_VERSION: Final[int]
 """JBLAS ABI version number for compatibility checking."""
 
-jblas_isa: Final[Literal["AVX2", "generic"]]
-"""Active ISA name: "AVX2" or "generic"."""
+jblas_isa: Final[Literal["AVX2", "NEON", "generic"]]
+"""Active ISA name: "AVX2", "NEON", or "generic"."""
 
 HAS_OPENMP: Final[bool]
 """True if the extension was compiled with OpenMP support.
 
-Currently informational only — Level 1/2 kernels are single-threaded.
-OpenMP parallelism is planned for dgemm (Level 3) in a future phase.
+Level 1/2 kernels are single-threaded; dgemm (Level 3) uses OpenMP
+parallel-for over the IC loop when OpenMP is available.
 """
 
 def ddot(x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]) -> float:
@@ -84,6 +84,21 @@ def dgemv(
     """
     ...
 
-# NOTE: dgemm is not yet exported by the C extension. It is provided as a
-# NumPy fallback via __init__.py.  Do not add a stub here until the C
-# implementation is wired into pymodule.c.
+def dgemm(
+    A: npt.NDArray[np.float64],
+    B: npt.NDArray[np.float64],
+    transa: str = ...,
+    transb: str = ...,
+) -> npt.NDArray[np.float64]:
+    """Compute matrix-matrix product with optional transpose.
+
+    Args:
+        A: Left matrix, float64, C-contiguous.
+        B: Right matrix, float64, C-contiguous.
+        transa: 'N' (no transpose) or 'T' (transpose A).
+        transb: 'N' (no transpose) or 'T' (transpose B).
+
+    Returns:
+        Result matrix C = op(A) @ op(B), float64.
+    """
+    ...

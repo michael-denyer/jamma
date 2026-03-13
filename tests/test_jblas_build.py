@@ -21,7 +21,7 @@ from jamma.jblas import (
     jblas_isa,
 )
 
-_VALID_ISA_STRINGS = {"AVX2", "generic", "numpy-fallback"}
+_VALID_ISA_STRINGS = {"AVX2", "NEON", "generic", "numpy-fallback"}
 
 
 @pytest.mark.tier0
@@ -134,3 +134,25 @@ def test_all_exports_present():
     }
     missing = expected - set(jblas.__all__)
     assert not missing, f"Missing exports: {missing}"
+
+
+@pytest.mark.tier0
+def test_abi_version():
+    """ABI_VERSION is 2 (bumped for dgemm microkernel typedef and blocking params)."""
+    from jamma.jblas import ABI_VERSION
+
+    assert ABI_VERSION == 2, f"Expected ABI_VERSION=2, got {ABI_VERSION}"
+
+
+@pytest.mark.tier0
+def test_dgemm_exported():
+    """dgemm is callable and C extension exports it when available."""
+    from jamma.jblas import HAS_C_EXTENSION, dgemm
+
+    assert callable(dgemm)
+    if HAS_C_EXTENSION:
+        from jamma.jblas import _jblas  # type: ignore[import]
+
+        assert callable(getattr(_jblas, "dgemm", None)), (
+            "C extension loaded but does not export 'dgemm'."
+        )

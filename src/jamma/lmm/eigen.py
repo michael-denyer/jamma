@@ -400,7 +400,10 @@ def eigendecompose_kinship(
 
     driver = "DSYEVR via _eigen_accel" if use_dsyevr else "DSYEVD via numpy.linalg.eigh"
     logger.info(f"Eigendecomp: {driver}, threads={n_threads}")
-    logger.info(f"  Estimated time: {estimate_eigendecomp_time(n_samples, n_threads)}")
+    logger.info(
+        f"  Estimated time: "
+        f"{estimate_eigendecomp_time(n_samples, n_threads, use_dsyevr=use_dsyevr)}"
+    )
 
     start_time = time.perf_counter()
     try:

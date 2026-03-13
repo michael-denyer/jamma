@@ -1,18 +1,22 @@
 """Wall clock time estimates for GWAS pipeline phases.
 
 Estimates are based on FLOP scaling from a reference benchmark
-(125k samples, 91k SNPs, 48 cores, MKL ILP64 on Intel Xeon 8573C).
+(125k samples, 91k SNPs, 48 cores, MKL ILP64 on Intel Xeon 8573C,
+intercept-only model with no additional covariates).
 
 Each estimate is: startup_constant + scaling_term. The startup constant
 accounts for LAPACK/BLAS init, thread pool creation, and I/O overhead
 that dominates small datasets. The scaling term follows the algorithmic
 complexity (O(n³) for eigendecomp, O(n²m) for kinship/LMM).
 
+These are minimum estimates — they do not account for covariates,
+memory pressure, or I/O contention, all of which increase wall time.
+
 Accuracy is roughly ±30% for 10k–125k samples. Larger datasets may
 underestimate (memory pressure grows super-linearly).
 
 Reference benchmark from PERFORMANCE.md (Azure E96ds_v6):
-  125k (v2.5): kinship 2,011s, eigendecomp 8,465s, LMM 1,131s
+  125k (v2.5): kinship 2,011s, eigendecomp 8,465s (DSYEVD), LMM 1,131s
 """
 
 from __future__ import annotations
@@ -49,6 +53,12 @@ _STARTUP_LMM_SECS = 3.0  # genotype I/O + UT@G first chunk + progress init
 _EIGEN_BW_THRESHOLD = 3_500
 _EIGEN_BW_PENALTY = 1.5  # divisor below threshold (reference includes penalty)
 
+# DSYEVR (MRRR algorithm) is ~1.5x slower than DSYEVD (divide-and-conquer)
+# at the same matrix size. Empirically measured at 85k samples / 91k SNPs:
+# DSYEVR took ~1.5x the DSYEVD time. This trades O(N) workspace for higher
+# per-element compute cost.
+_DSYEVR_TIME_MULTIPLIER = 1.5
+
 
 def _format_duration(seconds: float) -> str:
     """Format seconds into human-readable duration."""
@@ -76,13 +86,16 @@ def estimate_kinship_time(
     Kinship is O(n² × m) batched dgemm. Scales quadratically with
     samples, linearly with SNPs, roughly inversely with core count.
 
+    This is a minimum estimate — memory pressure and I/O contention
+    are not accounted for.
+
     Args:
         n_samples: Number of samples.
         n_snps: Number of SNPs.
         n_cores: Physical core count. None auto-detects.
 
     Returns:
-        Human-readable estimate string like "~24 min".
+        Human-readable minimum estimate string like ">=24 min".
     """
     if n_cores is None:
         n_cores = get_physical_core_count()
@@ -95,27 +108,38 @@ def estimate_kinship_time(
         _STARTUP_KINSHIP_SECS
         + _REF_KINSHIP_SECS * sample_ratio * snp_ratio * core_ratio
     )
-    return f"~{_format_duration(est)}"
+    return f">={_format_duration(est)}"
 
 
 def estimate_eigendecomp_time(
     n_samples: int,
     n_cores: int | None = None,
+    *,
+    use_dsyevr: bool = False,
 ) -> str:
     """Estimate eigendecomposition wall time.
 
-    Eigendecomp (dsyevd) is O(n³). Scales cubically with samples,
-    roughly inversely with core count. Above ~3,500 samples, eigenvector
-    matrices exceed L3 cache and memory bandwidth becomes the bottleneck.
-    Below ~3,500, estimates are reduced by ~33% to account for the
-    compute-bound regime being faster than the BW-bound reference.
+    Eigendecomp is O(n³). Scales cubically with samples, roughly
+    inversely with core count. The reference benchmark used DSYEVD
+    (divide-and-conquer). DSYEVR (MRRR algorithm) is ~1.5x slower
+    but uses O(N) workspace instead of O(N²).
+
+    Above ~3,500 samples, eigenvector matrices exceed L3 cache and
+    memory bandwidth becomes the bottleneck. Below ~3,500, estimates
+    are reduced by ~33% to account for the compute-bound regime being
+    faster than the BW-bound reference.
+
+    This is a minimum estimate — covariates and memory pressure are
+    not accounted for.
 
     Args:
         n_samples: Number of samples.
         n_cores: Physical core count. None auto-detects.
+        use_dsyevr: Whether DSYEVR driver is selected. Applies 1.5x
+            multiplier vs the DSYEVD reference.
 
     Returns:
-        Human-readable estimate string like "~2h 21m".
+        Human-readable minimum estimate string like ">=2h 21m".
     """
     if n_cores is None:
         n_cores = get_physical_core_count()
@@ -130,8 +154,12 @@ def estimate_eigendecomp_time(
     if n_samples <= _EIGEN_BW_THRESHOLD:
         est /= _EIGEN_BW_PENALTY
 
+    # DSYEVR is slower than DSYEVD — apply empirical multiplier.
+    if use_dsyevr:
+        est *= _DSYEVR_TIME_MULTIPLIER
+
     est += _STARTUP_EIGEN_SECS
-    return f"~{_format_duration(est)}"
+    return f">={_format_duration(est)}"
 
 
 def estimate_lmm_time(
@@ -145,13 +173,16 @@ def estimate_lmm_time(
     Same scaling as kinship, but with different constant factor
     (JAX compute per chunk adds overhead).
 
+    This is a minimum estimate — covariates increase per-SNP Pab
+    computation cost, and memory pressure adds further overhead.
+
     Args:
         n_samples: Number of samples.
         n_snps: Number of filtered SNPs.
         n_cores: Physical core count. None auto-detects.
 
     Returns:
-        Human-readable estimate string like "~20 min".
+        Human-readable minimum estimate string like ">=20 min".
     """
     if n_cores is None:
         n_cores = get_physical_core_count()
@@ -161,4 +192,4 @@ def estimate_lmm_time(
     core_ratio = _REF_CORES / n_cores
 
     est = _STARTUP_LMM_SECS + _REF_LMM_SECS * sample_ratio * snp_ratio * core_ratio
-    return f"~{_format_duration(est)}"
+    return f">={_format_duration(est)}"

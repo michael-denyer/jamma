@@ -7,9 +7,9 @@
  * are safe and cheap (guarded by a static flag).
  *
  * Current status:
- *   - AVX2 path: fully wired (ddot, dnrm2, daxpy, dscal, dgemv)
- *   - NEON path: detected but dispatches to generic (microkernels not yet implemented)
- *   - dgemm: stub (aborts with fatal error if called from C; Python layer uses NumPy fallback)
+ *   - AVX2 path: fully wired (ddot, dnrm2, daxpy, dscal, dgemv, dgemm 6x8)
+ *   - NEON path: dgemm 8x4 wired; level 1/2 still dispatch to generic
+ *   - dgemm: three-level Goto/BLIS blocking loop, ISA microkernel dispatched
  */
 
 #include <stdio.h>
@@ -111,22 +111,6 @@ static int _detect_neon(void) {
 #endif /* __aarch64__ */
 
 /* ---------------------------------------------------------------------------
- * dgemm stub — safe trap until C implementation is added
- * ---------------------------------------------------------------------------
- */
-static void _dgemm_stub(
-    npy_intp m, npy_intp n, npy_intp k,
-    const double *A, const double *B, double *C)
-{
-    (void)m; (void)n; (void)k; (void)A; (void)B; (void)C;
-    /* This should never be called — pymodule.c does not expose dgemm yet.
-     * If it is called, the caller has bypassed the Python layer. */
-    fprintf(stderr, "FATAL: jblas_dispatch.dgemm called but not implemented\n");
-    fflush(stderr);
-    abort();
-}
-
-/* ---------------------------------------------------------------------------
  * jblas_init — Detect ISA and populate dispatch table.
  *
  * Thread safety: called from PyInit__jblas under the GIL during module import.
@@ -138,8 +122,18 @@ int jblas_init(void) {
     if (_initialized)
         return 0;
 
+    /* Cache ISA detection result once — avoid redundant CPUID/hwcap calls */
 #if defined(__x86_64__) || defined(_M_X64)
-    if (_detect_avx2()) {
+    int has_simd = _detect_avx2();
+#elif defined(__aarch64__)
+    int has_simd = _detect_neon();
+#else
+    int has_simd = 0;
+#endif
+
+    /* Wire Level 1/2 dispatch table */
+#if defined(__x86_64__) || defined(_M_X64)
+    if (has_simd) {
         _isa_name = "AVX2";
         jblas_dispatch.ddot  = jblas_ddot_avx2;
         jblas_dispatch.dnrm2 = jblas_dnrm2_avx2;
@@ -156,14 +150,15 @@ int jblas_init(void) {
     }
 
 #elif defined(__aarch64__)
-    if (_detect_neon()) {
-        /* NEON detected but microkernels not yet implemented; report generic
-         * to avoid misleading callers into thinking SIMD is active. */
-        _isa_name = "generic";
+    if (has_simd) {
+        /* NEON has a dgemm 8x4 microkernel (Phase 78).
+         * Level 1/2 NEON microkernels are planned for a future phase;
+         * those dispatch slots still use generic. */
+        _isa_name = "NEON";
     } else {
         _isa_name = "generic";
     }
-    /* All dispatch slots use generic until NEON microkernels are added */
+    /* Level 1/2: always use generic on aarch64 until NEON L1/L2 implemented */
     jblas_dispatch.ddot  = jblas_ddot_generic;
     jblas_dispatch.dnrm2 = jblas_dnrm2_generic;
     jblas_dispatch.daxpy = jblas_daxpy_generic;
@@ -179,8 +174,38 @@ int jblas_init(void) {
     jblas_dispatch.dgemv = jblas_dgemv_generic;
 #endif
 
-    /* dgemm not yet implemented — stub traps accidental calls */
-    jblas_dispatch.dgemm = _dgemm_stub;
+    /* Set ISA-specific dgemm blocking parameters.  If no SIMD ISA was
+     * detected, dgemm.c generic defaults (MR=4, NR=4, etc.) apply. */
+    if (has_simd) {
+#if defined(__x86_64__) || defined(_M_X64)
+        /* AVX2 blocking: MR=6, NR=8, KC=256, MC=72, NC=4096 */
+        JBLAS_MR = 6; JBLAS_NR = 8;
+        JBLAS_KC = 256; JBLAS_MC = 72; JBLAS_NC = 4096;
+#elif defined(__aarch64__)
+        /* NEON blocking: MR=8, NR=4, KC=256, MC=64, NC=4096 */
+        JBLAS_MR = 8; JBLAS_NR = 4;
+        JBLAS_KC = 256; JBLAS_MC = 64; JBLAS_NC = 4096;
+#endif
+    }
+
+    /* Initialise dgemm workspace (allocates packed_A/B using blocking params) */
+    if (jblas_dgemm_init() != 0) {
+        /* Allocation failure makes dgemm unusable.  Fail init so
+         * __init__.py falls back to NumPy for ALL operations. */
+        return -1;
+    }
+
+    /* Wire ISA-specific dgemm microkernel (jblas_dgemm_init set generic) */
+    if (has_simd) {
+#if defined(__x86_64__) || defined(_M_X64)
+        jblas_dgemm_microkernel = jblas_dgemm_micro_avx2;
+#elif defined(__aarch64__)
+        jblas_dgemm_microkernel = jblas_dgemm_micro_neon;
+#endif
+    }
+
+    /* Wire blocking dispatch wrapper into the dispatch table */
+    jblas_dispatch.dgemm = jblas_dgemm_dispatch_fn;
 
     _initialized = 1;
     return 0;

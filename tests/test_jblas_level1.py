@@ -511,7 +511,8 @@ class TestInputValidation:
         """dgemm rejects inner dimension mismatch."""
         A = np.ones((3, 4))
         B = np.ones((5, 2))
-        with pytest.raises(ValueError, match="columns"):
+        # C extension reports "inner dimensions mismatch"; fallback reports "columns"
+        with pytest.raises(ValueError, match="columns|mismatch"):
             dgemm(A, B)
 
     @pytest.mark.tier0

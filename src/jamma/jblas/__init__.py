@@ -1,8 +1,9 @@
 """jblas: JAMMA's self-contained BLAS compute layer.
 
 Provides Level 1/2 BLAS primitives (ddot, dnrm2, daxpy, dscal, dgemv) and
-Level 3 BLAS (dgemm via NumPy; C implementation planned) via a C extension
-when available, falling back to NumPy when the C extension has not been compiled.
+Level 3 BLAS (dgemm — C implementation with AVX2/NEON microkernels) via a C
+extension when available, falling back to NumPy when the C extension has not
+been compiled.
 
 Exports:
     ddot: Inner product of two double vectors.
@@ -10,10 +11,9 @@ Exports:
     daxpy: In-place y += alpha * x.
     dscal: In-place x *= alpha.
     dgemv: Matrix-vector product A @ x.
-    dgemm: Matrix-matrix product A @ B (NumPy fallback; C implementation planned).
-    jblas_isa: String identifying the active ISA ("AVX2", "generic",
-        or "numpy-fallback").  NEON detection is present on aarch64 but
-        dispatches to generic until NEON microkernels are implemented.
+    dgemm: Matrix-matrix product op(A) @ op(B) with optional transpose support.
+    jblas_isa: String identifying the active ISA ("AVX2", "NEON", "generic",
+        or "numpy-fallback").
     ABI_VERSION: Integer ABI version (0 when using NumPy fallback).
     HAS_C_EXTENSION: True if the compiled C extension is loaded.
     HAS_OPENMP: True if the C extension was compiled with OpenMP support.
@@ -32,6 +32,7 @@ try:
         HAS_OPENMP,
         daxpy,
         ddot,
+        dgemm,
         dgemv,
         dnrm2,
         dscal,
@@ -39,41 +40,6 @@ try:
     )
 
     HAS_C_EXTENSION: bool = True
-
-    # dgemm C implementation not yet available; expose from C extension when present.
-    try:
-        from jamma.jblas._jblas import dgemm  # noqa: F401
-    except ImportError:
-        import numpy as _np
-
-        def dgemm(A: _np.ndarray, B: _np.ndarray) -> _np.ndarray:
-            """Compute matrix-matrix product A @ B.
-
-            Args:
-                A: Left matrix, shape (m, k), float64, C-contiguous.
-                B: Right matrix, shape (k, n), float64, C-contiguous.
-
-            Returns:
-                Result matrix, shape (m, n), float64.
-
-            Raises:
-                ValueError: If A or B is not 2-D, or inner dimensions don't match.
-            """
-            if A.ndim != 2:
-                raise ValueError(f"dgemm: A must be a 2-D array, got {A.ndim}-D")
-            if B.ndim != 2:
-                raise ValueError(f"dgemm: B must be a 2-D array, got {B.ndim}-D")
-            if A.shape[1] != B.shape[0]:
-                raise ValueError(
-                    f"dgemm: A columns ({A.shape[1]}) must match B rows ({B.shape[0]})"
-                )
-            return _np.asarray(
-                _np.matmul(
-                    A.astype(_np.float64, copy=False),
-                    B.astype(_np.float64, copy=False),
-                ),
-                dtype=_np.float64,
-            )
 
 except ImportError as _exc:
     if _so_exists:
@@ -215,15 +181,22 @@ except ImportError as _exc:
             dtype=_np.float64,
         )
 
-    def dgemm(A: _np.ndarray, B: _np.ndarray) -> _np.ndarray:
-        """Compute matrix-matrix product A @ B.
+    def dgemm(
+        A: _np.ndarray,
+        B: _np.ndarray,
+        transa: str = "N",
+        transb: str = "N",
+    ) -> _np.ndarray:
+        """Compute matrix-matrix product op(A) @ op(B).
 
         Args:
-            A: Left matrix, shape (m, k), float64, C-contiguous.
-            B: Right matrix, shape (k, n), float64, C-contiguous.
+            A: Left matrix, float64, C-contiguous.
+            B: Right matrix, float64, C-contiguous.
+            transa: 'N' (no transpose) or 'T' (transpose A).
+            transb: 'N' (no transpose) or 'T' (transpose B).
 
         Returns:
-            Result matrix, shape (m, n), float64.
+            Result matrix C = op(A) @ op(B), float64.
 
         Raises:
             ValueError: If A or B is not 2-D, or inner dimensions don't match.
@@ -232,14 +205,29 @@ except ImportError as _exc:
             raise ValueError(f"dgemm: A must be a 2-D array, got {A.ndim}-D")
         if B.ndim != 2:
             raise ValueError(f"dgemm: B must be a 2-D array, got {B.ndim}-D")
-        if A.shape[1] != B.shape[0]:
+        if not isinstance(transa, str):
+            raise TypeError(
+                f"dgemm: transa must be a string, got {type(transa).__name__}"
+            )
+        if not isinstance(transb, str):
+            raise TypeError(
+                f"dgemm: transb must be a string, got {type(transb).__name__}"
+            )
+        if transa.upper() not in ("N", "T"):
+            raise ValueError(f"dgemm: transa must be 'N' or 'T', got '{transa}'")
+        if transb.upper() not in ("N", "T"):
+            raise ValueError(f"dgemm: transb must be 'N' or 'T', got '{transb}'")
+        _A = A.T if transa.upper() == "T" else A
+        _B = B.T if transb.upper() == "T" else B
+        if _A.shape[1] != _B.shape[0]:
             raise ValueError(
-                f"dgemm: A columns ({A.shape[1]}) must match B rows ({B.shape[0]})"
+                f"dgemm: op(A) columns ({_A.shape[1]}) must match "
+                f"op(B) rows ({_B.shape[0]})"
             )
         return _np.asarray(
             _np.matmul(
-                A.astype(_np.float64, copy=False),
-                B.astype(_np.float64, copy=False),
+                _A.astype(_np.float64, copy=False),
+                _B.astype(_np.float64, copy=False),
             ),
             dtype=_np.float64,
         )

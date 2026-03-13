@@ -75,16 +75,6 @@ def dgemv(A: np.ndarray, x: np.ndarray) -> np.ndarray:
     """
     ...
 
-def dgemm(A: np.ndarray, B: np.ndarray) -> np.ndarray:
-    """Compute matrix-matrix product A @ B.
-
-    C implementation planned. Currently uses NumPy fallback via __init__.py.
-
-    Args:
-        A: Left matrix, shape (m, k), float64, C-contiguous.
-        B: Right matrix, shape (k, n), float64, C-contiguous.
-
-    Returns:
-        Result matrix, shape (m, n), float64.
-    """
-    ...
+# NOTE: dgemm is not yet exported by the C extension. It is provided as a
+# NumPy fallback via __init__.py.  Do not add a stub here until the C
+# implementation is wired into pymodule.c.

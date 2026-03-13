@@ -7,7 +7,7 @@ Also compiles four C extensions if a C compiler is available:
   - ``src/jamma/lmm/_lmm_accel.c``: per-SNP REML Wald pipeline (with OpenMP)
   - ``src/jamma/lmm/_eigen_accel.c``: DSYEVR eigendecomposition (no OpenMP)
   - ``src/jamma/lmm/_secular_accel.c``: DLAED4 rank-1 secular updates (no OpenMP)
-  - ``src/jamma/jblas/src/*.c``: jblas BLAS/LAPACK layer (with OpenMP)
+  - ``src/jamma/jblas/src/*.c``: jblas BLAS compute layer (with OpenMP)
 
 If compilation fails for any reason, a warning is logged and a pure-Python
 wheel is produced as a graceful fallback — jamma is fully functional without
@@ -643,6 +643,10 @@ class CustomBuildHook(BuildHookInterface):
                 print(f"jblas compile: {' '.join(cmd_compile)}", file=sys.stderr)
                 result = subprocess.run(cmd_compile, capture_output=True, text=True)
                 if result.returncode != 0:
+                    print(
+                        f"jblas compile failed on {src.name}:",
+                        file=sys.stderr,
+                    )
                     if result.stderr:
                         print(result.stderr, file=sys.stderr)
                     compile_failed = True

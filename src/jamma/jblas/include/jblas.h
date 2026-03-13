@@ -169,10 +169,11 @@ void jblas_dgemv_avx2(
 #endif /* __x86_64__ */
 
 /* ---------------------------------------------------------------------------
- * AArch64 NEON microkernel declarations
+ * AArch64 NEON microkernel declarations (forward declarations only)
  * ---------------------------------------------------------------------------
- * Prototypes declared here so jblas_init() can reference them without
- * conditional compilation in platform.c.  Implementations not yet available.
+ * WARNING: These are declarations only — no .c file provides definitions yet.
+ * Do not wire into jblas_dispatch until implementations exist; platform.c
+ * currently dispatches to generic on aarch64.
  */
 
 #if defined(__aarch64__)

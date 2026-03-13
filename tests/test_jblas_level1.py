@@ -17,8 +17,6 @@ import pytest
 
 from jamma.jblas import HAS_C_EXTENSION, daxpy, ddot, dgemm, dgemv, dnrm2, dscal
 
-_RNG = np.random.default_rng(42)
-
 
 class TestDdot:
     """ddot: inner product of two double vectors (BL1-01)."""
@@ -26,22 +24,41 @@ class TestDdot:
     @pytest.mark.tier0
     def test_small(self):
         """n=1: single-element dot product."""
-        x = _RNG.standard_normal(1)
-        y = _RNG.standard_normal(1)
+        rng = np.random.default_rng(101)
+        x = rng.standard_normal(1)
+        y = rng.standard_normal(1)
         np.testing.assert_allclose(ddot(x, y), np.dot(x, y), rtol=1e-14, atol=1e-14)
 
     @pytest.mark.tier0
     def test_medium(self):
         """n=100: typical small vector."""
-        x = _RNG.standard_normal(100)
-        y = _RNG.standard_normal(100)
+        rng = np.random.default_rng(102)
+        x = rng.standard_normal(100)
+        y = rng.standard_normal(100)
         np.testing.assert_allclose(ddot(x, y), np.dot(x, y), rtol=1e-14, atol=1e-14)
 
     @pytest.mark.tier0
     def test_large(self):
         """n=10000: exercises SIMD unroll paths."""
-        x = _RNG.standard_normal(10_000)
-        y = _RNG.standard_normal(10_000)
+        rng = np.random.default_rng(103)
+        x = rng.standard_normal(10_000)
+        y = rng.standard_normal(10_000)
+        np.testing.assert_allclose(ddot(x, y), np.dot(x, y), rtol=1e-14, atol=1e-14)
+
+    @pytest.mark.tier0
+    @pytest.mark.parametrize("n", [3, 4, 15, 16, 17])
+    def test_simd_boundaries(self, n: int):
+        """Boundary sizes for AVX2 (16-wide) and generic (4-wide) unrolls.
+
+        n=3: generic tail only (n < 4).
+        n=4: exactly one generic unroll, zero tail.
+        n=15: AVX2 scalar tail only (no full 16-wide iteration).
+        n=16: exactly one AVX2 iteration, zero tail.
+        n=17: one AVX2 iteration plus one tail element.
+        """
+        rng = np.random.default_rng(n)
+        x = rng.standard_normal(n)
+        y = rng.standard_normal(n)
         np.testing.assert_allclose(ddot(x, y), np.dot(x, y), rtol=1e-14, atol=1e-14)
 
     @pytest.mark.tier0
@@ -65,25 +82,34 @@ class TestDnrm2:
     @pytest.mark.tier0
     def test_small(self):
         """n=1: single-element norm."""
-        x = _RNG.standard_normal(1)
+        rng = np.random.default_rng(201)
+        x = rng.standard_normal(1)
         np.testing.assert_allclose(dnrm2(x), np.linalg.norm(x), rtol=1e-14, atol=1e-14)
 
     @pytest.mark.tier0
     def test_medium(self):
         """n=100: typical small vector."""
-        x = _RNG.standard_normal(100)
+        rng = np.random.default_rng(202)
+        x = rng.standard_normal(100)
         np.testing.assert_allclose(dnrm2(x), np.linalg.norm(x), rtol=1e-14, atol=1e-14)
 
     @pytest.mark.tier0
     def test_large(self):
         """n=10000: exercises main loop path."""
-        x = _RNG.standard_normal(10_000)
+        rng = np.random.default_rng(203)
+        x = rng.standard_normal(10_000)
         np.testing.assert_allclose(dnrm2(x), np.linalg.norm(x), rtol=1e-14, atol=1e-14)
 
     @pytest.mark.tier0
     def test_zero_vector(self):
         """Zero vector has norm 0."""
         x = np.zeros(100)
+        assert dnrm2(x) == 0.0
+
+    @pytest.mark.tier0
+    def test_empty(self):
+        """Empty vector has norm 0."""
+        x = np.array([], dtype=np.float64)
         assert dnrm2(x) == 0.0
 
     @pytest.mark.tier0
@@ -162,8 +188,9 @@ class TestDaxpy:
     @pytest.mark.tier0
     def test_basic(self):
         """Standard daxpy: y = y + 2.0*x."""
-        x = _RNG.standard_normal(100)
-        y = _RNG.standard_normal(100)
+        rng = np.random.default_rng(301)
+        x = rng.standard_normal(100)
+        y = rng.standard_normal(100)
         y_orig = y.copy()
         daxpy(2.0, x, y)
         np.testing.assert_allclose(y, y_orig + 2.0 * x, rtol=1e-14)
@@ -171,16 +198,25 @@ class TestDaxpy:
     @pytest.mark.tier0
     def test_alpha_zero(self):
         """alpha=0: y must be unchanged."""
-        x = _RNG.standard_normal(100)
-        y = _RNG.standard_normal(100)
+        rng = np.random.default_rng(302)
+        x = rng.standard_normal(100)
+        y = rng.standard_normal(100)
         y_orig = y.copy()
         daxpy(0.0, x, y)
         np.testing.assert_array_equal(y, y_orig)
 
     @pytest.mark.tier0
-    @pytest.mark.parametrize("n", [1, 100, 10_000])
+    def test_empty(self):
+        """Empty vectors: no-op."""
+        x = np.array([], dtype=np.float64)
+        y = np.array([], dtype=np.float64)
+        daxpy(1.0, x, y)
+        assert len(y) == 0
+
+    @pytest.mark.tier0
+    @pytest.mark.parametrize("n", [1, 15, 16, 17, 100, 10_000])
     def test_sizes(self, n: int):
-        """daxpy correctness at n=1, 100, 10000.
+        """daxpy correctness at various sizes including SIMD boundaries.
 
         Uses rtol=1e-13: the C extension does y[i] += alpha * x[i] (two-step
         FP: multiply then add with rounding in each step), while the NumPy
@@ -204,7 +240,8 @@ class TestDscal:
     @pytest.mark.tier0
     def test_basic(self):
         """Standard dscal: x = 3.0 * x."""
-        x = _RNG.standard_normal(100)
+        rng = np.random.default_rng(401)
+        x = rng.standard_normal(100)
         x_orig = x.copy()
         dscal(3.0, x)
         np.testing.assert_allclose(x, x_orig * 3.0, rtol=1e-14)
@@ -212,17 +249,47 @@ class TestDscal:
     @pytest.mark.tier0
     def test_alpha_zero(self):
         """alpha=0: x becomes all zeros."""
-        x = _RNG.standard_normal(100)
+        rng = np.random.default_rng(402)
+        x = rng.standard_normal(100)
         dscal(0.0, x)
         np.testing.assert_array_equal(x, np.zeros(100))
 
     @pytest.mark.tier0
+    def test_alpha_zero_with_nan(self):
+        """alpha=0 with NaN: both C extension and fallback produce +0.0.
+
+        Reference BLAS (and the C extension) use memset → NaN becomes +0.0.
+        The fallback matches by using x[:] = 0.0 instead of x *= 0.0.
+        """
+        x = np.array([1.0, np.nan, np.inf, -np.inf, 0.0])
+        dscal(0.0, x)
+        np.testing.assert_array_equal(x, np.zeros(5))
+
+    @pytest.mark.tier0
     def test_alpha_one(self):
         """alpha=1: x is unchanged."""
-        x = _RNG.standard_normal(100)
+        rng = np.random.default_rng(403)
+        x = rng.standard_normal(100)
         x_orig = x.copy()
         dscal(1.0, x)
         np.testing.assert_array_equal(x, x_orig)
+
+    @pytest.mark.tier0
+    def test_empty(self):
+        """Empty vector: no-op."""
+        x = np.array([], dtype=np.float64)
+        dscal(2.0, x)
+        assert len(x) == 0
+
+    @pytest.mark.tier0
+    @pytest.mark.parametrize("n", [3, 4, 15, 16, 17])
+    def test_simd_boundaries(self, n: int):
+        """Boundary sizes for AVX2 (16-wide) and generic (4-wide) unrolls."""
+        rng = np.random.default_rng(n + 400)
+        x = rng.standard_normal(n)
+        x_orig = x.copy()
+        dscal(2.5, x)
+        np.testing.assert_allclose(x, x_orig * 2.5, rtol=1e-14)
 
 
 class TestDgemv:
@@ -239,8 +306,9 @@ class TestDgemv:
     @pytest.mark.tier0
     def test_medium(self):
         """10x10 matrix-vector product."""
-        A = _RNG.standard_normal((10, 10))
-        x = _RNG.standard_normal(10)
+        rng = np.random.default_rng(502)
+        A = rng.standard_normal((10, 10))
+        x = rng.standard_normal(10)
         result = dgemv(A, x)
         np.testing.assert_allclose(result, A @ x, rtol=1e-14)
 
@@ -255,11 +323,28 @@ class TestDgemv:
         disagreement across 50 additions. The result is numerically correct —
         the tolerance is calibrated to scalar-accumulation vs BLAS-level precision.
         """
-        A = _RNG.standard_normal((100, 50))
-        x = _RNG.standard_normal(50)
+        rng = np.random.default_rng(503)
+        A = rng.standard_normal((100, 50))
+        x = rng.standard_normal(50)
         result = dgemv(A, x)
         np.testing.assert_allclose(result, A @ x, rtol=2e-12)
         assert result.shape == (100,)
+
+    @pytest.mark.tier0
+    def test_empty_rows(self):
+        """m=0: empty result vector."""
+        A = np.zeros((0, 5), dtype=np.float64)
+        x = np.ones(5)
+        result = dgemv(A, x)
+        assert result.shape == (0,)
+
+    @pytest.mark.tier0
+    def test_empty_cols(self):
+        """n=0: returns m-length vector (values undefined for zero-length dot)."""
+        A = np.zeros((3, 0), dtype=np.float64)
+        x = np.array([], dtype=np.float64)
+        result = dgemv(A, x)
+        assert result.shape == (3,)
 
 
 class TestDgemm:
@@ -268,8 +353,9 @@ class TestDgemm:
     @pytest.mark.tier0
     def test_basic(self):
         """Small matrix multiplication agrees with NumPy."""
-        A = _RNG.standard_normal((4, 3))
-        B = _RNG.standard_normal((3, 5))
+        rng = np.random.default_rng(601)
+        A = rng.standard_normal((4, 3))
+        B = rng.standard_normal((3, 5))
         result = dgemm(A, B)
         np.testing.assert_allclose(result, A @ B, rtol=1e-14)
         assert result.shape == (4, 5)
@@ -277,23 +363,24 @@ class TestDgemm:
     @pytest.mark.tier0
     def test_square(self):
         """Square matrix multiplication."""
-        A = _RNG.standard_normal((10, 10))
-        B = _RNG.standard_normal((10, 10))
+        rng = np.random.default_rng(602)
+        A = rng.standard_normal((10, 10))
+        B = rng.standard_normal((10, 10))
         result = dgemm(A, B)
         np.testing.assert_allclose(result, A @ B, rtol=1e-13)
 
     @pytest.mark.tier0
     def test_identity(self):
         """Multiplying by identity returns the original matrix."""
-        A = _RNG.standard_normal((5, 5))
+        rng = np.random.default_rng(603)
+        A = rng.standard_normal((5, 5))
         eye = np.eye(5)
         np.testing.assert_allclose(dgemm(A, eye), A, rtol=1e-14)
         np.testing.assert_allclose(dgemm(eye, A), A, rtol=1e-14)
 
 
-@pytest.mark.skipif(not HAS_C_EXTENSION, reason="C extension not compiled")
 class TestInputValidation:
-    """Input validation error paths in the C extension."""
+    """Input validation error paths (C extension and NumPy fallback)."""
 
     @pytest.mark.tier0
     def test_ddot_wrong_ndim(self):

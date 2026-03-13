@@ -21,7 +21,10 @@ Exports:
 
 from __future__ import annotations
 
+import importlib.util
 import warnings
+
+_so_exists = importlib.util.find_spec("jamma.jblas._jblas") is not None
 
 try:
     from jamma.jblas._jblas import (  # noqa: F401
@@ -73,12 +76,22 @@ try:
             )
 
 except ImportError as _exc:
-    warnings.warn(
-        f"jblas C extension not available ({_exc}); "
-        "using NumPy fallback (slower). "
-        "Run 'python -m jamma.jblas._compile_jblas' to compile.",
-        stacklevel=2,
-    )
+    if _so_exists:
+        # .so exists but failed to load — ABI mismatch, missing shared lib, etc.
+        warnings.warn(
+            f"jblas C extension found but failed to load ({_exc}); "
+            "this usually indicates an ABI mismatch or missing shared library. "
+            "Falling back to NumPy (slower). "
+            "Reinstall jamma or run 'python -m jamma.jblas._compile_jblas'.",
+            stacklevel=2,
+        )
+    else:
+        warnings.warn(
+            f"jblas C extension not compiled ({_exc}); "
+            "using NumPy fallback (slower). "
+            "Run 'python -m jamma.jblas._compile_jblas' to compile.",
+            stacklevel=2,
+        )
     # C extension not available — use NumPy-backed fallback with identical signatures.
     ABI_VERSION: int = 0
     HAS_C_EXTENSION = False

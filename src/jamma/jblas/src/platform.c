@@ -127,7 +127,11 @@ static void _dgemm_stub(
 }
 
 /* ---------------------------------------------------------------------------
- * jblas_init — Detect ISA and populate dispatch table
+ * jblas_init — Detect ISA and populate dispatch table.
+ *
+ * Thread safety: called from PyInit__jblas under the GIL during module import.
+ * No additional synchronization is needed; fork() children inherit the
+ * already-initialized state.
  * ---------------------------------------------------------------------------
  */
 int jblas_init(void) {

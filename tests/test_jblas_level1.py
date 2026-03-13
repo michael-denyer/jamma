@@ -377,6 +377,45 @@ class TestDgemm:
         np.testing.assert_allclose(dgemm(A, eye), A, rtol=1e-14)
         np.testing.assert_allclose(dgemm(eye, A), A, rtol=1e-14)
 
+    @pytest.mark.tier0
+    def test_nan_propagates(self):
+        """dgemm with NaN in A propagates to affected output entries."""
+        A = np.array([[1.0, 2.0], [np.nan, 1.0], [3.0, 4.0]])
+        B = np.array([[1.0], [1.0]])
+        result = dgemm(A, B)
+        np.testing.assert_allclose(result[0, 0], 3.0, rtol=1e-14)
+        assert np.isnan(result[1, 0]), f"NaN not propagated: result={result}"
+        np.testing.assert_allclose(result[2, 0], 7.0, rtol=1e-14)
+
+    @pytest.mark.tier0
+    def test_fortran_order(self):
+        """dgemm produces correct results for Fortran-order inputs."""
+        rng = np.random.default_rng(604)
+        A = np.asfortranarray(rng.standard_normal((8, 5)))
+        B = np.asfortranarray(rng.standard_normal((5, 6)))
+        result = dgemm(A, B)
+        expected = np.ascontiguousarray(A) @ np.ascontiguousarray(B)
+        np.testing.assert_allclose(result, expected, rtol=1e-13)
+
+    @pytest.mark.tier0
+    def test_empty_inner(self):
+        """dgemm with zero inner dimension returns zero matrix."""
+        A = np.zeros((3, 0), dtype=np.float64)
+        B = np.zeros((0, 4), dtype=np.float64)
+        result = dgemm(A, B)
+        assert result.shape == (3, 4)
+        np.testing.assert_array_equal(result, np.zeros((3, 4)))
+
+    @pytest.mark.tier0
+    def test_float32_coercion(self):
+        """dgemm accepts float32 input (coerced to float64)."""
+        rng = np.random.default_rng(605)
+        A = rng.standard_normal((6, 4)).astype(np.float32)
+        B = rng.standard_normal((4, 3)).astype(np.float32)
+        result = dgemm(A, B)
+        expected = A.astype(np.float64) @ B.astype(np.float64)
+        np.testing.assert_allclose(result, expected, rtol=1e-6)
+
 
 class TestInputValidation:
     """Input validation error paths (C extension and NumPy fallback)."""
@@ -534,6 +573,30 @@ class TestNaNPropagation:
         result = dgemv(A, x)
         np.testing.assert_allclose(result[0], 3.0, rtol=1e-14)
         assert np.isnan(result[1]), f"NaN not propagated: result={result}"
+
+    @pytest.mark.tier0
+    def test_dscal_nan_propagates(self):
+        """dscal with NaN in input propagates when alpha != 0."""
+        x = np.array([1.0, np.nan, 3.0])
+        dscal(2.0, x)
+        np.testing.assert_allclose(x[0], 2.0, rtol=1e-14)
+        assert np.isnan(x[1]), f"NaN not propagated: x={x}"
+        np.testing.assert_allclose(x[2], 6.0, rtol=1e-14)
+
+    @pytest.mark.tier0
+    def test_daxpy_nan_alpha(self):
+        """daxpy with NaN alpha makes all y elements NaN."""
+        x = np.array([1.0, 2.0, 3.0])
+        y = np.array([1.0, 1.0, 1.0])
+        daxpy(float("nan"), x, y)
+        assert np.all(np.isnan(y)), f"NaN alpha not propagated: y={y}"
+
+    @pytest.mark.tier0
+    def test_dscal_nan_alpha(self):
+        """dscal with NaN alpha makes all elements NaN."""
+        x = np.array([1.0, 2.0, 3.0])
+        dscal(float("nan"), x)
+        assert np.all(np.isnan(x)), f"NaN alpha not propagated: x={x}"
 
 
 class TestDtypeAndContiguity:

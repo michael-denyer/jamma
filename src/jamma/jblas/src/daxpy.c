@@ -7,7 +7,7 @@
  *
  * Both variants short-circuit on alpha == 0.0 (no mutation needed).
  * The AVX2 path processes 16 doubles per iteration using four __m256d
- * lanes; strided inputs fall back to generic.
+ * registers; strided inputs fall back to generic.
  */
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION

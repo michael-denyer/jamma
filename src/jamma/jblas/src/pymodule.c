@@ -7,7 +7,7 @@
  * or non-float64 inputs as needed).
  *
  * Module-level constants:
- *   jblas_isa   — active ISA string ("AVX2", "NEON", or "generic")
+ *   jblas_isa   — active ISA string ("AVX2" or "generic")
  *   HAS_OPENMP  — True if compiled with OpenMP (-fopenmp)
  *   ABI_VERSION — integer (JBLAS_ABI_VERSION from jblas.h)
  *
@@ -121,6 +121,7 @@ py_daxpy(PyObject *self, PyObject *args)
         oy, NPY_DOUBLE, NPY_ARRAY_INOUT_ARRAY2);
     if (!ax || !ay) {
         Py_XDECREF(ax);
+        if (ay) PyArray_DiscardWritebackIfCopy(ay);
         Py_XDECREF(ay);
         return NULL;
     }

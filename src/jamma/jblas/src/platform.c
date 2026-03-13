@@ -37,12 +37,27 @@ static const char *_isa_name = "generic";
 #include <cpuid.h>
 
 /**
+ * _xgetbv_asm — Read extended control register via inline assembly.
+ *
+ * We use inline ASM instead of the _xgetbv() intrinsic because platform.c
+ * is compiled without -mavx2/-mxsave (baseline source), and the intrinsic
+ * requires <immintrin.h> + -mxsave.  The XGETBV instruction is available
+ * on any CPU that advertises OSXSAVE (CPUID leaf 1, ECX bit 27), which we
+ * check before calling this.
+ */
+static unsigned long long _xgetbv_asm(unsigned int index) {
+    unsigned int eax, edx;
+    __asm__ __volatile__("xgetbv" : "=a"(eax), "=d"(edx) : "c"(index));
+    return ((unsigned long long)edx << 32) | eax;
+}
+
+/**
  * _detect_avx2 — Return 1 if AVX2 is available and enabled by the OS.
  *
  * Checks:
  *   1. CPUID leaf 7, subleaf 0, EBX bit 5 = AVX2
  *   2. CPUID leaf 1, ECX bit 27 = OSXSAVE (OS has enabled XSAVE)
- *   3. _xgetbv(0) bits 1:2 = YMM state saved by OS (required for AVX/AVX2)
+ *   3. XGETBV(0) bits 1:2 = YMM state saved by OS (required for AVX/AVX2)
  */
 static int _detect_avx2(void) {
     unsigned int eax, ebx, ecx, edx;
@@ -54,7 +69,7 @@ static int _detect_avx2(void) {
     if (!((ecx >> 27) & 1))
         return 0;
     /* Check YMM state: XCR0 bits 1:2 (SSE + AVX state) */
-    unsigned long long xcr0 = _xgetbv(0);
+    unsigned long long xcr0 = _xgetbv_asm(0);
     if ((xcr0 & 0x6) != 0x6)
         return 0;
 

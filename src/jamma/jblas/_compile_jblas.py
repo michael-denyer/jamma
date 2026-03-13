@@ -116,16 +116,20 @@ def compile_extension(verbose: bool = True) -> bool:
         _print("  Package may be incomplete — reinstall from source.")
         return False
 
-    # All Level 1/2 BLAS source files
-    source_files = [
+    # Source files split into baseline (portable) and SIMD (AVX2 intrinsics).
+    # Only SIMD sources get -mavx2/-mfma to avoid SIGILL on older x86_64 CPUs.
+    baseline_sources = [
         jblas_src_dir / "platform.c",
-        jblas_src_dir / "ddot.c",
         jblas_src_dir / "dnrm2.c",
-        jblas_src_dir / "daxpy.c",
-        jblas_src_dir / "dscal.c",
         jblas_src_dir / "dgemv.c",
         jblas_src_dir / "pymodule.c",
     ]
+    simd_sources = [
+        jblas_src_dir / "ddot.c",
+        jblas_src_dir / "daxpy.c",
+        jblas_src_dir / "dscal.c",
+    ]
+    source_files = baseline_sources + simd_sources
 
     missing = [str(s) for s in source_files if not s.exists()]
     if missing:
@@ -183,16 +187,17 @@ def compile_extension(verbose: bool = True) -> bool:
         _print("ERROR: Windows is not supported for C extension compilation")
         return False
 
-    # ISA-specific flags
-    # On x86_64: -mavx2 -mfma for intrinsics in ddot.c, daxpy.c, dscal.c.
-    # On aarch64: no extra SIMD flags (generics only).
+    # ISA-specific flags — applied only to SIMD sources (ddot.c, daxpy.c, dscal.c).
+    # Baseline sources (platform.c, pymodule.c, etc.) are compiled without SIMD
+    # flags so the extension runs on any x86_64 CPU; runtime CPUID dispatch in
+    # platform.c selects the appropriate kernels.
     machine = platform.machine()
-    arch_flags: list[str] = []
+    simd_flags: list[str] = []
     if machine in ("x86_64", "AMD64"):
-        arch_flags = ["-mavx2", "-mfma"]
-        _print(f"ISA: x86_64 — adding {arch_flags}")
-    elif machine == "aarch64":
-        _print("ISA: aarch64 — no extra SIMD flags (generics only)")
+        simd_flags = ["-mavx2", "-mfma"]
+        _print(f"ISA: x86_64 — SIMD sources get {simd_flags}")
+    elif machine in ("aarch64", "arm64"):
+        _print("ISA: aarch64/arm64 — no extra SIMD flags (generics only)")
     else:
         _print(f"ISA: {machine} — no extra SIMD flags")
 
@@ -206,14 +211,22 @@ def compile_extension(verbose: bool = True) -> bool:
                 text=True,
                 stderr=subprocess.DEVNULL,
             ).strip()
-            omp_flags = [
-                f"-I{prefix}/include",
-                f"-L{prefix}/lib",
-                "-Xpreprocessor",
-                "-fopenmp",
-                "-lomp",
-            ]
-            _print(f"OpenMP: Homebrew libomp at {prefix}")
+            lib_dir = Path(prefix) / "lib"
+            if lib_dir.is_dir():
+                omp_flags = [
+                    f"-I{prefix}/include",
+                    f"-L{prefix}/lib",
+                    "-Xpreprocessor",
+                    "-fopenmp",
+                    "-lomp",
+                ]
+                _print(f"OpenMP: Homebrew libomp at {prefix}")
+            else:
+                _print(
+                    f"OpenMP: Homebrew prefix {prefix} exists but lib/ not found. "
+                    "Extension will be single-threaded. "
+                    "Install for parallelism: brew install libomp"
+                )
         except (FileNotFoundError, subprocess.CalledProcessError):
             _print(
                 "OpenMP not available (libomp not found via Homebrew). "
@@ -224,7 +237,7 @@ def compile_extension(verbose: bool = True) -> bool:
     else:
         omp_flags = _detect_linux_openmp_flags(cc_cmd, _print)
 
-    # Base compile flags (shared by all source files)
+    # Base compile flags (shared by all source files — no SIMD flags here)
     base_cflags = [
         "-O3",
         "-ftree-vectorize",
@@ -232,13 +245,14 @@ def compile_extension(verbose: bool = True) -> bool:
         "-fno-trapping-math",
         "-funroll-loops",
         "-fno-finite-math-only",  # ensure isnan() works correctly
-        *arch_flags,
         "-fPIC",
         "-std=c11",
         f"-I{python_inc}",
         f"-I{numpy_inc}",
         f"-I{jblas_inc_dir}",
     ]
+
+    simd_source_set = set(str(s) for s in simd_sources)
 
     # OpenMP compile-time flags (exclude link-only flags like -lomp/-liomp5)
     omp_compile: list[str] = []
@@ -260,10 +274,12 @@ def compile_extension(verbose: bool = True) -> bool:
         try:
             for src in source_files:
                 obj_file = tmp_dir / f"{src.stem}{suffix}.o"
+                extra_simd = simd_flags if str(src) in simd_source_set else []
                 cmd = [
                     cc_cmd,
                     *cc_extra,
                     *base_cflags,
+                    *extra_simd,
                     *extra_compile,
                     "-c",
                     str(src),
@@ -327,9 +343,10 @@ def compile_extension(verbose: bool = True) -> bool:
 
     _print(f"Compiled: {out}")
 
-    # Verify import
+    # Verify import — evict both _jblas and the parent jamma.jblas package
+    # so the freshly compiled extension is loaded instead of the cached fallback.
     try:
-        mods_to_remove = [k for k in sys.modules if k.startswith("jamma.jblas._jblas")]
+        mods_to_remove = [k for k in sys.modules if k.startswith("jamma.jblas")]
         for k in mods_to_remove:
             del sys.modules[k]
 
@@ -337,6 +354,7 @@ def compile_extension(verbose: bool = True) -> bool:
 
         _print(f"Import OK — jblas_isa={jblas_isa!r}, HAS_OPENMP={HAS_OPENMP}")
         _print("C extension is active")
+        _print("Reloaded jamma.jblas — HAS_C_EXTENSION is now True in this process.")
         return True
     except ImportError as e:
         _print(f"ERROR: compiled but import failed (ImportError): {e}")

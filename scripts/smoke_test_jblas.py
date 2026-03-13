@@ -40,7 +40,7 @@ if not isinstance(jblas_isa, str):
     print(f"FAIL: jblas_isa is {type(jblas_isa)}, expected str", file=sys.stderr)
     sys.exit(1)
 
-valid_isa = {"AVX2", "NEON", "generic"}
+valid_isa = {"AVX2", "generic"}
 if jblas_isa not in valid_isa:
     print(f"FAIL: jblas_isa {jblas_isa!r} not in {valid_isa}", file=sys.stderr)
     sys.exit(1)

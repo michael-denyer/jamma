@@ -1,15 +1,14 @@
 """Level 1/2 BLAS correctness tests for jamma.jblas.
 
-Tests all 5 operations against NumPy reference at rtol=1e-14:
-- TestDdot: inner product (BL1-01)
-- TestDnrm2: Euclidean norm with overflow/underflow protection (BL1-02)
-- TestDaxpy: in-place y += alpha*x (BL1-03)
-- TestDscal: in-place x *= alpha (BL1-04)
-- TestDgemv: matrix-vector product (BL2-01)
+Tests all operations against NumPy reference at rtol=1e-14:
+- TestDdot: inner product
+- TestDnrm2: Euclidean norm with overflow/underflow protection
+- TestDaxpy: in-place y += alpha*x
+- TestDscal: in-place x *= alpha
+- TestDgemv: matrix-vector product
 
-All tests run against the NumPy fallback path in Wave 0 and against the
-C extension in Wave 1 (after Plan 02 compiles it) — the same test file works
-for both because jamma.jblas transparently dispatches.
+Tests run against whichever backend is active — NumPy fallback or C extension.
+The same test file works for both because jamma.jblas transparently dispatches.
 """
 
 import numpy as np
@@ -19,7 +18,7 @@ from jamma.jblas import HAS_C_EXTENSION, daxpy, ddot, dgemm, dgemv, dnrm2, dscal
 
 
 class TestDdot:
-    """ddot: inner product of two double vectors (BL1-01)."""
+    """ddot: inner product of two double vectors."""
 
     @pytest.mark.tier0
     def test_small(self):
@@ -77,7 +76,7 @@ class TestDdot:
 
 
 class TestDnrm2:
-    """dnrm2: Euclidean norm (BL1-02)."""
+    """dnrm2: Euclidean norm."""
 
     @pytest.mark.tier0
     def test_small(self):
@@ -116,13 +115,12 @@ class TestDnrm2:
     def test_overflow_protection(self):
         """Blue algorithm: verify dnrm2 agrees with np.linalg.norm for large values.
 
-        The C extension (Plan 02) will implement the Blue (1978) three-accumulator
-        algorithm to avoid overflow, so it will return a finite result even when
-        np.linalg.norm overflows. The NumPy fallback simply delegates to
-        np.linalg.norm, so both return the same value (which may be inf on some
-        NumPy builds). This test verifies agreement, not finiteness, for the
-        fallback path. A separate overflow_protection_c_only test (guarded by
-        HAS_C_EXTENSION) will assert finiteness after Plan 02.
+        The C extension implements the Blue (1978) three-accumulator algorithm
+        to avoid overflow, returning a finite result even when np.linalg.norm
+        overflows.  The NumPy fallback simply delegates to np.linalg.norm, so
+        both return the same value (which may be inf on some NumPy builds).
+        This test verifies agreement for the fallback path and finiteness for
+        the C extension path.
         """
         from jamma.jblas import HAS_C_EXTENSION
 
@@ -183,7 +181,7 @@ class TestDnrm2:
 
 
 class TestDaxpy:
-    """daxpy: in-place y += alpha * x (BL1-03)."""
+    """daxpy: in-place y += alpha * x."""
 
     @pytest.mark.tier0
     def test_basic(self):
@@ -235,7 +233,7 @@ class TestDaxpy:
 
 
 class TestDscal:
-    """dscal: in-place x *= alpha (BL1-04)."""
+    """dscal: in-place x *= alpha."""
 
     @pytest.mark.tier0
     def test_basic(self):
@@ -293,7 +291,7 @@ class TestDscal:
 
 
 class TestDgemv:
-    """dgemv: matrix-vector product A @ x (BL2-01)."""
+    """dgemv: matrix-vector product A @ x."""
 
     @pytest.mark.tier0
     def test_small(self):
@@ -349,7 +347,7 @@ class TestDgemv:
 
 
 class TestDgemm:
-    """dgemm: matrix-matrix product A @ B (BL3-01)."""
+    """dgemm: matrix-matrix product A @ B."""
 
     @pytest.mark.tier0
     def test_basic(self):

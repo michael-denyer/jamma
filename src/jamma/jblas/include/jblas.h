@@ -94,7 +94,8 @@ int jblas_init(void);
 /**
  * jblas_isa_name — Return the active ISA as a C string.
  *
- * Returns: "AVX2", "NEON", or "generic" (never NULL).
+ * Returns: "AVX2" or "generic" (never NULL).  NEON detection is present on
+ * aarch64 but reports "generic" until NEON microkernels are implemented.
  */
 const char *jblas_isa_name(void);
 

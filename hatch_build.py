@@ -225,13 +225,20 @@ class CustomBuildHook(BuildHookInterface):
                     text=True,
                     stderr=subprocess.DEVNULL,
                 ).strip()
-                omp_flags = [
-                    f"-I{prefix}/include",
-                    f"-L{prefix}/lib",
-                    "-Xpreprocessor",
-                    "-fopenmp",
-                    "-lomp",
-                ]
+                if Path(prefix, "lib").is_dir():
+                    omp_flags = [
+                        f"-I{prefix}/include",
+                        f"-L{prefix}/lib",
+                        "-Xpreprocessor",
+                        "-fopenmp",
+                        "-lomp",
+                    ]
+                else:
+                    print(
+                        f"OpenMP: Homebrew prefix {prefix} exists but lib/ not found. "
+                        "C extension will be single-threaded.",
+                        file=sys.stderr,
+                    )
             except (FileNotFoundError, subprocess.CalledProcessError):
                 # No Homebrew libomp — compile single-threaded C (still faster
                 # than Python loops; _OPENMP is undefined so #pragma is skipped)
@@ -530,20 +537,24 @@ class CustomBuildHook(BuildHookInterface):
             )
             return
 
-        # All jblas source files (Level 1/2 BLAS primitives + Python module).
-        # The AVX2 intrinsic code in ddot.c, daxpy.c, dscal.c is guarded by
-        # #if defined(__x86_64__). On x86_64 we compile all sources with -mavx2 -mfma
-        # so the intrinsic calls compile correctly.
-        # Future phases may introduce separate source groups with dedicated flags.
-        source_files = [
+        # jblas source files split into two groups:
+        # - baseline: portable C compiled without SIMD flags (runs on any x86_64)
+        # - simd: files using AVX2 intrinsics, compiled with -mavx2 -mfma
+        # This ensures the baseline manylinux_x86_64 wheel doesn't SIGILL on
+        # older CPUs that lack AVX2.  Runtime CPUID dispatch in platform.c
+        # selects the appropriate kernels.
+        baseline_sources = [
             jblas_src / "platform.c",
-            jblas_src / "ddot.c",
             jblas_src / "dnrm2.c",
-            jblas_src / "daxpy.c",
-            jblas_src / "dscal.c",
             jblas_src / "dgemv.c",
             jblas_src / "pymodule.c",
         ]
+        simd_sources = [
+            jblas_src / "ddot.c",
+            jblas_src / "daxpy.c",
+            jblas_src / "dscal.c",
+        ]
+        source_files = baseline_sources + simd_sources
 
         missing = [s for s in source_files if not s.exists()]
         if missing:
@@ -554,12 +565,13 @@ class CustomBuildHook(BuildHookInterface):
             )
             return
 
-        # On x86_64: add AVX2/FMA flags so intrinsics in ddot.c, daxpy.c,
-        # dscal.c compile. On aarch64: no SIMD flags needed (generics only).
+        # On x86_64: AVX2/FMA flags are applied only to simd_sources (ddot.c,
+        # daxpy.c, dscal.c).  Baseline sources (platform.c, pymodule.c, etc.)
+        # are compiled without SIMD flags so the wheel runs on any x86_64 CPU.
         machine = platform.machine()
-        arch_flags: list[str] = []
+        simd_flags: list[str] = []
         if machine in ("x86_64", "AMD64"):
-            arch_flags = ["-mavx2", "-mfma"]
+            simd_flags = ["-mavx2", "-mfma"]
 
         # Platform-specific OpenMP flags
         omp_flags: list[str] = []
@@ -570,13 +582,20 @@ class CustomBuildHook(BuildHookInterface):
                     text=True,
                     stderr=subprocess.DEVNULL,
                 ).strip()
-                omp_flags = [
-                    f"-I{prefix}/include",
-                    f"-L{prefix}/lib",
-                    "-Xpreprocessor",
-                    "-fopenmp",
-                    "-lomp",
-                ]
+                if Path(prefix, "lib").is_dir():
+                    omp_flags = [
+                        f"-I{prefix}/include",
+                        f"-L{prefix}/lib",
+                        "-Xpreprocessor",
+                        "-fopenmp",
+                        "-lomp",
+                    ]
+                else:
+                    print(
+                        f"OpenMP: Homebrew prefix {prefix} exists but lib/ not found. "
+                        "jblas C extension will be single-threaded.",
+                        file=sys.stderr,
+                    )
             except (FileNotFoundError, subprocess.CalledProcessError):
                 print(
                     "OpenMP not available on macOS (libomp not found). "
@@ -589,7 +608,7 @@ class CustomBuildHook(BuildHookInterface):
         # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3)
         extra_cflags = os.environ.get("CFLAGS", "").split()
 
-        # Base compile flags shared by all source files
+        # Base compile flags shared by all source files (no SIMD flags here)
         base_cflags = [
             "-O3",
             "-ftree-vectorize",
@@ -598,7 +617,6 @@ class CustomBuildHook(BuildHookInterface):
             "-funroll-loops",
             *extra_cflags,
             "-fno-finite-math-only",  # override -Ofast; isnan() must work
-            *arch_flags,
             "-fPIC",
             "-std=c11",
             f"-I{python_inc}",
@@ -625,13 +643,18 @@ class CustomBuildHook(BuildHookInterface):
         compile_failed = False
         use_omp = bool(omp_flags)
 
+        simd_source_set = set(str(s) for s in simd_sources)
+
         try:
             for src in source_files:
                 obj_file = tmp_dir / (src.stem + ".o")
+                # Only SIMD sources (ddot, daxpy, dscal) get AVX2/FMA flags
+                extra_simd = simd_flags if str(src) in simd_source_set else []
                 cmd_compile = [
                     cc_cmd,
                     *cc_extra,
                     *base_cflags,
+                    *extra_simd,
                     *omp_compile,
                     "-c",
                     str(src),
@@ -662,10 +685,12 @@ class CustomBuildHook(BuildHookInterface):
                 compile_failed = False
                 for src in source_files:
                     obj_file = tmp_dir / (src.stem + "_noomp.o")
+                    extra_simd = simd_flags if str(src) in simd_source_set else []
                     cmd_compile = [
                         cc_cmd,
                         *cc_extra,
                         *base_cflags,
+                        *extra_simd,
                         "-c",
                         str(src),
                         "-o",

@@ -11,8 +11,10 @@ Exports:
     dscal: In-place x *= alpha.
     dgemv: Matrix-vector product A @ x.
     dgemm: Matrix-matrix product A @ B (NumPy fallback; C implementation planned).
-    jblas_isa: String identifying the active ISA ("AVX2", "NEON", "generic",
-        or "numpy-fallback").
+    jblas_isa: String identifying the active ISA ("AVX2", "generic",
+        or "numpy-fallback").  NEON detection is present on aarch64 but
+        dispatches to generic until NEON microkernels are implemented.
+    ABI_VERSION: Integer ABI version (0 when using NumPy fallback).
     HAS_C_EXTENSION: True if the compiled C extension is loaded.
     HAS_OPENMP: True if the C extension was compiled with OpenMP support.
 """
@@ -23,6 +25,7 @@ import warnings
 
 try:
     from jamma.jblas._jblas import (  # noqa: F401
+        ABI_VERSION,
         HAS_OPENMP,
         daxpy,
         ddot,
@@ -61,7 +64,13 @@ try:
                 raise ValueError(
                     f"dgemm: A columns ({A.shape[1]}) must match B rows ({B.shape[0]})"
                 )
-            return _np.matmul(A, B)
+            return _np.asarray(
+                _np.matmul(
+                    A.astype(_np.float64, copy=False),
+                    B.astype(_np.float64, copy=False),
+                ),
+                dtype=_np.float64,
+            )
 
 except ImportError as _exc:
     warnings.warn(
@@ -71,6 +80,7 @@ except ImportError as _exc:
         stacklevel=2,
     )
     # C extension not available — use NumPy-backed fallback with identical signatures.
+    ABI_VERSION: int = 0
     HAS_C_EXTENSION = False
     HAS_OPENMP: bool = False
     jblas_isa: str = "numpy-fallback"
@@ -223,6 +233,7 @@ except ImportError as _exc:
 
 
 __all__ = [
+    "ABI_VERSION",
     "ddot",
     "dnrm2",
     "daxpy",

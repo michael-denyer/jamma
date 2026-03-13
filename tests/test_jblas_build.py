@@ -1,11 +1,9 @@
 """Build and import verification tests for jamma.jblas.
 
-Covers BUILD-01 through BUILD-06 requirements:
-- Import succeeds (BUILD-03)
-- ISA detection returns valid string (BUILD-02)
-- HAS_C_EXTENSION and HAS_OPENMP are bools (BUILD-03)
-- Fallback functions have correct signatures (BUILD-05)
-- OpenMP parallel ddot gives correct result (BUILD-06) — skipped when no C extension
+- Import succeeds and module constants have correct types
+- ISA detection returns a valid string
+- All fallback functions have correct signatures
+- OpenMP parallel ddot gives correct result (skipped when no C extension)
 """
 
 import numpy as np
@@ -23,7 +21,7 @@ from jamma.jblas import (
     jblas_isa,
 )
 
-_VALID_ISA_STRINGS = {"AVX2", "NEON", "generic", "numpy-fallback"}
+_VALID_ISA_STRINGS = {"AVX2", "generic", "numpy-fallback"}
 
 
 @pytest.mark.tier0
@@ -123,6 +121,7 @@ def test_openmp_ddot():
 def test_all_exports_present():
     """All documented exports are present in jamma.jblas.__all__."""
     expected = {
+        "ABI_VERSION",
         "ddot",
         "dnrm2",
         "daxpy",

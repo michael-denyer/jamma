@@ -76,7 +76,7 @@ jobs:
           uv run python -m jamma.jblas._compile_jblas
 
       - name: Run tests
-        run: uv run pytest ${{ matrix.pytest_args || '-m "not tier2 and not slow"' }} -v -n auto -o 'addopts=' --cov=src/jamma --cov-report=term-missing --cov-report=json ${{ matrix.cov_threshold }}
+        run: uv run pytest ${{ matrix.pytest_args || '-m "not tier2 and not slow"' }} -v -n 3 -o 'addopts=' --cov=src/jamma --cov-report=term-missing --cov-report=json ${{ matrix.cov_threshold }}
 
       - name: Check per-module coverage minimums
         if: matrix.name == 'Linux + JAX'

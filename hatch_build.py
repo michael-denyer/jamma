@@ -534,8 +534,7 @@ class CustomBuildHook(BuildHookInterface):
         # The AVX2 intrinsic code in ddot.c, daxpy.c, dscal.c is guarded by
         # #if defined(__x86_64__). On x86_64 we compile all sources with -mavx2 -mfma
         # so the intrinsic calls compile correctly.
-        # Future phases will introduce separate avx2_sources with dedicated flags
-        # and lapack_sources that must NOT get -mavx2.
+        # Future phases may introduce separate source groups with dedicated flags.
         source_files = [
             jblas_src / "platform.c",
             jblas_src / "ddot.c",

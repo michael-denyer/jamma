@@ -340,11 +340,12 @@ class TestDgemv:
 
     @pytest.mark.tier0
     def test_empty_cols(self):
-        """n=0: returns m-length vector (values undefined for zero-length dot)."""
+        """n=0: returns m-length zero vector."""
         A = np.zeros((3, 0), dtype=np.float64)
         x = np.array([], dtype=np.float64)
         result = dgemv(A, x)
         assert result.shape == (3,)
+        np.testing.assert_array_equal(result, np.zeros(3))
 
 
 class TestDgemm:
@@ -451,3 +452,27 @@ class TestInputValidation:
         x = np.ones((2, 3))
         with pytest.raises(ValueError, match="1-D"):
             dscal(1.0, x)
+
+    @pytest.mark.tier0
+    def test_dgemm_A_wrong_ndim(self):
+        """dgemm rejects 1-D array as A."""
+        A = np.ones(6)
+        B = np.ones((3, 2))
+        with pytest.raises(ValueError, match="2-D"):
+            dgemm(A, B)
+
+    @pytest.mark.tier0
+    def test_dgemm_B_wrong_ndim(self):
+        """dgemm rejects 1-D array as B."""
+        A = np.ones((2, 3))
+        B = np.ones(3)
+        with pytest.raises(ValueError, match="2-D"):
+            dgemm(A, B)
+
+    @pytest.mark.tier0
+    def test_dgemm_shape_mismatch(self):
+        """dgemm rejects inner dimension mismatch."""
+        A = np.ones((3, 4))
+        B = np.ones((5, 2))
+        with pytest.raises(ValueError, match="columns"):
+            dgemm(A, B)

@@ -9,7 +9,7 @@
  * Current status:
  *   - AVX2 path: fully wired (ddot, dnrm2, daxpy, dscal, dgemv)
  *   - NEON path: detected but dispatches to generic (microkernels not yet implemented)
- *   - dgemm: stub (raises NotImplementedError until C implementation is added)
+ *   - dgemm: stub (aborts with fatal error if called from C; Python layer uses NumPy fallback)
  */
 
 #include <stdio.h>
@@ -107,6 +107,7 @@ static void _dgemm_stub(
     /* This should never be called — pymodule.c does not expose dgemm yet.
      * If it is called, the caller has bypassed the Python layer. */
     fprintf(stderr, "FATAL: jblas_dispatch.dgemm called but not implemented\n");
+    fflush(stderr);
     abort();
 }
 

@@ -49,7 +49,18 @@ try:
 
             Returns:
                 Result matrix, shape (m, n), float64.
+
+            Raises:
+                ValueError: If A or B is not 2-D, or inner dimensions don't match.
             """
+            if A.ndim != 2:
+                raise ValueError(f"dgemm: A must be a 2-D array, got {A.ndim}-D")
+            if B.ndim != 2:
+                raise ValueError(f"dgemm: B must be a 2-D array, got {B.ndim}-D")
+            if A.shape[1] != B.shape[0]:
+                raise ValueError(
+                    f"dgemm: A columns ({A.shape[1]}) must match B rows ({B.shape[0]})"
+                )
             return _np.matmul(A, B)
 
 except ImportError as _exc:
@@ -88,7 +99,12 @@ except ImportError as _exc:
                 f"ddot: x and y must have the same length, "
                 f"got {x.shape[0]} and {y.shape[0]}"
             )
-        return float(_np.dot(x, y))
+        return float(
+            _np.dot(
+                x.astype(_np.float64, copy=False),
+                y.astype(_np.float64, copy=False),
+            )
+        )
 
     def dnrm2(x: _np.ndarray) -> float:
         """Compute Euclidean norm of a double vector.
@@ -104,7 +120,7 @@ except ImportError as _exc:
         """
         if x.ndim != 1:
             raise ValueError(f"dnrm2: x must be a 1-D array, got {x.ndim}-D")
-        return float(_np.linalg.norm(x))
+        return float(_np.linalg.norm(x.astype(_np.float64, copy=False)))
 
     def daxpy(alpha: float, x: _np.ndarray, y: _np.ndarray) -> None:
         """Compute y += alpha * x in-place.
@@ -127,7 +143,7 @@ except ImportError as _exc:
                 f"daxpy: x and y must have the same length, "
                 f"got {x.shape[0]} and {y.shape[0]}"
             )
-        y += alpha * x
+        y += alpha * _np.asarray(x, dtype=_np.float64)
 
     def dscal(alpha: float, x: _np.ndarray) -> None:
         """Compute x *= alpha in-place.
@@ -141,6 +157,8 @@ except ImportError as _exc:
         """
         if x.ndim != 1:
             raise ValueError(f"dscal: x must be a 1-D array, got {x.ndim}-D")
+        if x.dtype != _np.float64:
+            raise TypeError(f"dscal: x must be float64, got {x.dtype}")
         if alpha == 0.0:
             x[:] = 0.0  # Match reference BLAS: NaN/Inf → +0.0
         else:
@@ -167,7 +185,10 @@ except ImportError as _exc:
             raise ValueError(
                 f"dgemv: A columns ({A.shape[1]}) must match x length ({x.shape[0]})"
             )
-        return A @ x
+        return _np.asarray(
+            A.astype(_np.float64, copy=False) @ x.astype(_np.float64, copy=False),
+            dtype=_np.float64,
+        )
 
     def dgemm(A: _np.ndarray, B: _np.ndarray) -> _np.ndarray:
         """Compute matrix-matrix product A @ B.
@@ -178,8 +199,25 @@ except ImportError as _exc:
 
         Returns:
             Result matrix, shape (m, n), float64.
+
+        Raises:
+            ValueError: If A or B is not 2-D, or inner dimensions don't match.
         """
-        return _np.matmul(A, B)
+        if A.ndim != 2:
+            raise ValueError(f"dgemm: A must be a 2-D array, got {A.ndim}-D")
+        if B.ndim != 2:
+            raise ValueError(f"dgemm: B must be a 2-D array, got {B.ndim}-D")
+        if A.shape[1] != B.shape[0]:
+            raise ValueError(
+                f"dgemm: A columns ({A.shape[1]}) must match B rows ({B.shape[0]})"
+            )
+        return _np.asarray(
+            _np.matmul(
+                A.astype(_np.float64, copy=False),
+                B.astype(_np.float64, copy=False),
+            ),
+            dtype=_np.float64,
+        )
 
 
 __all__ = [

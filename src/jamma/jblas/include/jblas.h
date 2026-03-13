@@ -169,13 +169,14 @@ void jblas_dgemv_avx2(
 #endif /* __x86_64__ */
 
 /* ---------------------------------------------------------------------------
- * AArch64 NEON microkernel declarations (forward declarations only)
+ * AArch64 NEON microkernel declarations — DISABLED
  * ---------------------------------------------------------------------------
- * WARNING: These are declarations only — no .c file provides definitions yet.
- * Do not wire into jblas_dispatch until implementations exist; platform.c
- * currently dispatches to generic on aarch64.
+ * No .c file provides definitions yet.  Uncomment when NEON implementations
+ * are added and wire into jblas_dispatch in platform.c.  Until then, aarch64
+ * dispatches to the generic (portable C) kernels.
  */
 
+#if 0  /* Enable when NEON implementations exist */
 #if defined(__aarch64__)
 
 double jblas_ddot_neon(
@@ -205,3 +206,4 @@ void jblas_dgemv_neon(
     double       *y);
 
 #endif /* __aarch64__ */
+#endif /* NEON disabled */

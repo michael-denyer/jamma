@@ -282,7 +282,7 @@ static struct PyModuleDef jblasmodule = {
     PyModuleDef_HEAD_INIT,
     "_jblas",   /* module name */
     NULL,       /* module docstring (brief description in __init__.py) */
-    -1,         /* per-interpreter module state (-1 = global state) */
+    -1,         /* global state, no sub-interpreter support */
     JblasMethods
 };
 
@@ -293,11 +293,17 @@ static struct PyModuleDef jblasmodule = {
 PyMODINIT_FUNC
 PyInit__jblas(void)
 {
-    /* Must be called before any NumPy C API usage */
+    /* import_array() returns NULL on failure in numpy 2.x + Python 3.
+     * _preflight_c_build() in hatch_build.py refuses to compile against
+     * numpy 1.x, so the macro's return-on-failure is guaranteed. */
     import_array();
 
     /* Detect ISA and populate dispatch table */
-    jblas_init();
+    if (jblas_init() != 0) {
+        PyErr_SetString(PyExc_ImportError,
+            "_jblas: ISA dispatch table initialisation failed");
+        return NULL;
+    }
 
     PyObject *m = PyModule_Create(&jblasmodule);
     if (!m)

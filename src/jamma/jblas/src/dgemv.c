@@ -5,14 +5,15 @@
  * No alpha/beta/transpose for this internal primitive.
  *
  * Implements:
- *   jblas_dgemv_generic — row-by-row dispatch to jblas_dispatch.ddot
- *   jblas_dgemv_avx2    — delegates to generic (ddot AVX2 gives the speedup)
+ *   jblas_dgemv_generic — row-by-row calls to jblas_ddot_generic
+ *   jblas_dgemv_avx2    — row-by-row calls to jblas_ddot_avx2
  *
  * Strategy: each row of y is a dot product of the corresponding row of A with
- * x.  By dispatching through jblas_dispatch.ddot, this function automatically
- * benefits from the AVX2 ddot microkernel when available — no separate SIMD
- * path is needed for dgemv itself.
+ * x.  Both implementations call their ddot directly (not through the dispatch
+ * table) so they are self-contained — no dependency on jblas_init().
  */
+
+#include <string.h>  /* memset */
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <numpy/arrayobject.h>  /* npy_intp */
@@ -28,18 +29,22 @@ void jblas_dgemv_generic(
         const double *x,
         double       *y)
 {
-    if (m <= 0 || n <= 0)
+    if (m <= 0)
         return;
+    if (n <= 0) {
+        memset(y, 0, (size_t)m * sizeof(double));
+        return;
+    }
 
     for (npy_intp i = 0; i < m; i++)
-        y[i] = jblas_dispatch.ddot(n, A + i * n, 1, x, 1);
+        y[i] = jblas_ddot_generic(n, A + i * n, 1, x, 1);
 }
 
 /* ---------------------------------------------------------------------------
- * AVX2 stub (x86_64 only) — delegates to generic
+ * AVX2 implementation (x86_64 only) — row-by-row jblas_ddot_avx2
  *
- * The performance benefit for dgemv comes from the dispatch.ddot call being
- * AVX2-accelerated, not from a separate SIMD path in dgemv itself.
+ * Same structure as generic but calls jblas_ddot_avx2 directly for SIMD
+ * speedup on each row dot product.
  * ---------------------------------------------------------------------------
  */
 #if defined(__x86_64__)
@@ -50,7 +55,15 @@ void jblas_dgemv_avx2(
         const double *x,
         double       *y)
 {
-    jblas_dgemv_generic(m, n, A, x, y);
+    if (m <= 0)
+        return;
+    if (n <= 0) {
+        memset(y, 0, (size_t)m * sizeof(double));
+        return;
+    }
+
+    for (npy_intp i = 0; i < m; i++)
+        y[i] = jblas_ddot_avx2(n, A + i * n, 1, x, 1);
 }
 
 #endif /* __x86_64__ */

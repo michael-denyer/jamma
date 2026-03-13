@@ -13,13 +13,14 @@ Requires: gcc (or cc), Python development headers, numpy >= 2.0.
 OpenMP support is optional — falls back to single-threaded if unavailable.
 
 The jblas extension compiles per-file to enable different compiler flags per
-source group (e.g. AVX2 SIMD files vs portable LAPACK files).
+source group (e.g. AVX2 SIMD files vs portable generic files).
 Currently all sources use the same flags except for the x86_64/aarch64
 ISA split for -mavx2/-mfma.
 """
 
 from __future__ import annotations
 
+import os
 import platform
 import shutil
 import subprocess
@@ -150,7 +151,7 @@ def compile_extension(verbose: bool = True) -> bool:
     _print(f"numpy {np.__version__} OK")
 
     # Compiler
-    cc_name = sysconfig.get_config_var("CC") or "cc"
+    cc_name = os.environ.get("CC") or sysconfig.get_config_var("CC") or "cc"
     cc_cmd = cc_name.split()[0]
     cc_extra = cc_name.split()[1:]
 

@@ -1008,6 +1008,19 @@ def _compute_score_numpy(
             "Score using Python path (n_cvt={} > 1, general C unavailable)", n_cvt
         )
 
+    if not np.all(np.isfinite(Hi_eval_null)):
+        bad_idx = np.where(~np.isfinite(Hi_eval_null))[0]
+        raise ValueError(
+            f"Hi_eval_null has {len(bad_idx)} non-finite value(s) at indices "
+            f"{bad_idx[:5].tolist()}. Null model optimization may have failed."
+        )
+    if np.any(Hi_eval_null <= 0):
+        bad_idx = np.where(Hi_eval_null <= 0)[0]
+        raise ValueError(
+            f"Hi_eval_null has {len(bad_idx)} non-positive value(s) at indices "
+            f"{bad_idx[:5].tolist()}. Check kinship matrix conditioning."
+        )
+
     betas, ses, p_scores = batch_calc_score_stats_numpy(
         n_cvt, Hi_eval_null, Uab_batch, n_samples
     )

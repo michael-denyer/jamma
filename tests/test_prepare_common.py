@@ -251,6 +251,182 @@ def test_compute_null_model_common_score_returns_hi_eval():
 
 
 @pytest.mark.tier0
+def test_compute_null_model_common_rejects_negative_eigenvalues(monkeypatch):
+    """_compute_null_model_common raises ValueError on non-positive Hi_eval_null.
+
+    Injects eigenvalue=-10.0 and mocks optimizer to return lambda=1000,
+    so lambda*eval+1 = 1000*(-10)+1 < 0.
+    """
+    import unittest.mock as mock
+
+    from jamma.lmm import prepare_common
+
+    rng = np.random.default_rng(99)
+    n_samples = 50
+    # One eigenvalue is strongly negative so lambda*eval+1 < 0
+    eigenvalues_np = np.sort(np.abs(rng.standard_normal(n_samples)) + 0.1)
+    eigenvalues_np[0] = -10.0  # negative eigenvalue (FP noise from degenerate kinship)
+
+    UtW = np.ones((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+
+    # Mock the MLE optimizer to return a large lambda (1000) so lambda*eval+1 < 0
+    # for the negative eigenvalue: 1000*(-10)+1 = -9999
+    monkeypatch.setattr(
+        prepare_common,
+        "compute_null_model_mle",
+        mock.Mock(return_value=(1000.0, -50.0)),
+    )
+
+    with pytest.raises(ValueError, match="non-positive"):
+        prepare_common._compute_null_model_common(
+            lmm_mode=3,
+            eigenvalues_np=eigenvalues_np,
+            UtW=UtW,
+            Uty=Uty,
+            n_cvt=1,
+            show_progress=False,
+        )
+
+
+@pytest.mark.tier0
+def test_compute_null_model_common_rejects_nan_hi_eval_null(monkeypatch):
+    """_compute_null_model_common raises ValueError on non-finite Hi_eval_null.
+
+    Mocks optimizer to return NaN lambda, producing NaN Hi_eval_null.
+    """
+    import unittest.mock as mock
+
+    from jamma.lmm import prepare_common
+
+    rng = np.random.default_rng(100)
+    n_samples = 50
+    eigenvalues_np = np.sort(np.abs(rng.standard_normal(n_samples)) + 0.1)
+    UtW = np.ones((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+
+    monkeypatch.setattr(
+        prepare_common,
+        "compute_null_model_mle",
+        mock.Mock(return_value=(float("nan"), -50.0)),
+    )
+
+    with pytest.raises(ValueError, match="non-finite"):
+        prepare_common._compute_null_model_common(
+            lmm_mode=3,
+            eigenvalues_np=eigenvalues_np,
+            UtW=UtW,
+            Uty=Uty,
+            n_cvt=1,
+            show_progress=False,
+        )
+
+
+@pytest.mark.tier0
+def test_compute_null_model_common_accepts_near_zero_eigenvalues():
+    """_compute_null_model_common does NOT raise for near-zero non-negative eigenvalues.
+
+    With eigenvalue=1e-15 and any realistic lambda, lambda*eval+1 is positive.
+    """
+    rng = np.random.default_rng(42)
+    n_samples = 50
+    eigenvalues_np = np.sort(np.abs(rng.standard_normal(n_samples)) + 0.1)
+    eigenvalues_np[0] = 1e-15  # near-zero but non-negative
+
+    UtW = np.ones((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+
+    # Should not raise — 1e-15 is positive so Hi_eval_null[0] > 0
+    logl_H0, lam, Hi_eval = _compute_null_model_common(
+        lmm_mode=3,
+        eigenvalues_np=eigenvalues_np,
+        UtW=UtW,
+        Uty=Uty,
+        n_cvt=1,
+        show_progress=False,
+    )
+    assert Hi_eval is not None
+    assert np.all(Hi_eval > 0), (
+        "All Hi_eval_null should be positive for non-negative eigenvalues"
+    )
+
+
+@pytest.mark.tier0
+def test_compute_score_numpy_rejects_negative_hi_eval_null(monkeypatch):
+    """Python fallback Score path rejects non-positive Hi_eval_null."""
+    import jamma.lmm.compute_numpy as compute_numpy
+
+    rng = np.random.default_rng(101)
+    n_samples, n_snps, n_cvt = 50, 5, 1
+
+    eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
+    Hi_eval_null = 1.0 / (0.5 * eigenvalues + 1.0)
+    n_uab = (n_cvt + 2) * (n_cvt + 3) // 2
+    Uab_batch = np.ones((n_snps, n_samples, n_uab), dtype=np.float64)
+
+    hi_bad = Hi_eval_null.copy()
+    hi_bad[2] = -0.5
+
+    # Force Python fallback by hiding C extension
+    monkeypatch.setattr(compute_numpy, "_compute_score_batch_c", None)
+    monkeypatch.setattr(compute_numpy, "_compute_score_batch_general_c", None)
+
+    with pytest.raises(ValueError, match="non-positive"):
+        compute_numpy._compute_score_numpy(
+            n_cvt, eigenvalues, hi_bad, Uab_batch, n_samples
+        )
+
+
+@pytest.mark.tier0
+@pytest.mark.requires_jax
+def test_compute_score_jax_rejects_negative_hi_eval_null():
+    """JAX Score path rejects non-positive Hi_eval_null."""
+    import jax.numpy as jnp
+
+    from jamma.lmm.compute import _compute_score
+
+    rng = np.random.default_rng(103)
+    n_samples, n_snps, n_cvt = 50, 5, 1
+
+    eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
+    Hi_eval_null = 1.0 / (0.5 * eigenvalues + 1.0)
+    n_uab = (n_cvt + 2) * (n_cvt + 3) // 2
+    Uab_batch = jnp.ones((n_snps, n_samples, n_uab), dtype=jnp.float64)
+
+    hi_bad = Hi_eval_null.copy()
+    hi_bad[2] = -0.5
+
+    with pytest.raises(ValueError, match="non-positive"):
+        _compute_score(n_cvt, jnp.array(hi_bad), Uab_batch, n_samples)
+
+
+@pytest.mark.tier0
+def test_compute_score_numpy_rejects_nan_hi_eval_null(monkeypatch):
+    """Python fallback Score path rejects NaN Hi_eval_null."""
+    import jamma.lmm.compute_numpy as compute_numpy
+
+    rng = np.random.default_rng(102)
+    n_samples, n_snps, n_cvt = 50, 5, 1
+
+    eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
+    Hi_eval_null = 1.0 / (0.5 * eigenvalues + 1.0)
+    n_uab = (n_cvt + 2) * (n_cvt + 3) // 2
+    Uab_batch = np.ones((n_snps, n_samples, n_uab), dtype=np.float64)
+
+    hi_bad = Hi_eval_null.copy()
+    hi_bad[0] = np.nan
+
+    # Force Python fallback by hiding C extension
+    monkeypatch.setattr(compute_numpy, "_compute_score_batch_c", None)
+    monkeypatch.setattr(compute_numpy, "_compute_score_batch_general_c", None)
+
+    with pytest.raises(ValueError, match="non-finite"):
+        compute_numpy._compute_score_numpy(
+            n_cvt, eigenvalues, hi_bad, Uab_batch, n_samples
+        )
+
+
+@pytest.mark.tier0
 def test_eigenvector_shape_mismatch_raises():
     """T7: Mismatched eigenvector dimensions raise ValueError in the runner."""
     from jamma.lmm.runner_numpy import run_lmm_association_numpy

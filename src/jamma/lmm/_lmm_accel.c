@@ -1410,7 +1410,7 @@ static PyObject *create_workspace_mode4_split_c_py(
             (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
         goto err_input;
 
-    /* Validate Hi_eval_null for NaN/Inf */
+    /* Validate Hi_eval_null for NaN/Inf and non-positive values */
     {
         const double *hi_null = (const double *)PyArray_DATA(hi_eval_null_arr);
         for (int i = 0; i < n_samples; i++) {
@@ -1418,8 +1418,15 @@ static PyObject *create_workspace_mode4_split_c_py(
                 char buf[64];
                 snprintf(buf, sizeof(buf), "%g", hi_null[i]);
                 PyErr_Format(PyExc_ValueError,
-                    "hi_eval_null[%d] = %s is not finite. "
+                    "Hi_eval_null[%d] = %s is not finite. "
                     "Null model optimization may have failed.", i, buf);
+                goto err_input;
+            }
+            if (hi_null[i] <= 0.0) {
+                PyErr_Format(PyExc_ValueError,
+                    "Hi_eval_null[%d] = %g is not positive. "
+                    "Check kinship matrix conditioning.",
+                    i, hi_null[i]);
                 goto err_input;
             }
         }
@@ -4029,7 +4036,7 @@ static PyObject *compute_score_batch_c(PyObject *self, PyObject *args)
     if (validate_eigenvalues(eigenvalues, n_samples) < 0)
         goto err_input;
 
-    /* Validate Hi_eval_null for NaN/Inf from failed null model */
+    /* Validate Hi_eval_null for NaN/Inf and non-positive values */
     for (int i = 0; i < n_samples; i++) {
         if (!isfinite(hi_eval_null[i])) {
             char buf[64];
@@ -4037,6 +4044,13 @@ static PyObject *compute_score_batch_c(PyObject *self, PyObject *args)
             PyErr_Format(PyExc_ValueError,
                 "Hi_eval_null[%d] = %s is not finite. "
                 "Null model optimization may have failed.", i, buf);
+            goto err_input;
+        }
+        if (hi_eval_null[i] <= 0.0) {
+            PyErr_Format(PyExc_ValueError,
+                "Hi_eval_null[%d] = %g is not positive. "
+                "Check kinship matrix conditioning.",
+                i, hi_eval_null[i]);
             goto err_input;
         }
     }
@@ -4441,11 +4455,19 @@ static PyObject *compute_score_batch_general_c(PyObject *self, PyObject *args)
             goto err_input_score_gen;
         }
 
-        /* Validate Hi_eval_null */
+        /* Validate Hi_eval_null for NaN/Inf and non-positive values */
         for (int i = 0; i < n_samples; i++) {
             if (!isfinite(hi_eval_null[i])) {
                 PyErr_Format(PyExc_ValueError,
                     "Hi_eval_null[%d] = %g is not finite.", i, hi_eval_null[i]);
+                free_pab_table(&table);
+                goto err_input_score_gen;
+            }
+            if (hi_eval_null[i] <= 0.0) {
+                PyErr_Format(PyExc_ValueError,
+                    "Hi_eval_null[%d] = %g is not positive. "
+                    "Check kinship matrix conditioning.",
+                    i, hi_eval_null[i]);
                 free_pab_table(&table);
                 goto err_input_score_gen;
             }

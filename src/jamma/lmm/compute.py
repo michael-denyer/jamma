@@ -98,6 +98,11 @@ def _compute_score(
     n_samples: int,
 ) -> dict[str, jax.Array]:
     """Compute Score test statistics (no optimization needed)."""
+    if jnp.any(Hi_eval_null <= 0):
+        raise ValueError(
+            "Hi_eval_null contains non-positive values. "
+            "Check kinship matrix conditioning."
+        )
     betas, ses, p_scores = batch_calc_score_stats(
         n_cvt, Hi_eval_null, Uab_batch, n_samples
     )

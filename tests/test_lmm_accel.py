@@ -2955,3 +2955,171 @@ def test_lrt_batch_general_degenerate_snps(synthetic_covariate_data_ncvt2):
         equal_nan=True,
         err_msg="p_lrts: C vs Python mismatch on batch with degenerate SNP",
     )
+
+
+# ---------------------------------------------------------------------------
+# Hi_eval_null positivity guards (Plan 76-01)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+class TestHiEvalNullPositivity:
+    """C extension rejects non-positive hi_eval_null values at all three sites."""
+
+    def test_mode4_workspace_rejects_zero_hi_eval_null(self, score_lrt_data):
+        """create_workspace_mode4_split_c raises ValueError on zero hi_eval_null."""
+        from jamma.lmm._lmm_accel import create_workspace_mode4_split_c
+
+        eigenvalues, Uab_batch, n_samples, Hi_eval_null, logl_H0 = score_lrt_data
+        uab_inv_soa = np.stack(
+            [Uab_batch[0, :, 0], Uab_batch[0, :, 2], Uab_batch[0, :, 5]], axis=0
+        )
+
+        hi_bad = Hi_eval_null.copy()
+        hi_bad[5] = 0.0  # inject zero
+
+        with pytest.raises(ValueError, match="not positive"):
+            create_workspace_mode4_split_c(
+                eigenvalues,
+                uab_inv_soa,
+                n_samples,
+                1e-5,
+                1e5,
+                50,
+                20,
+                1,
+                hi_bad,
+                logl_H0,
+            )
+
+    def test_mode4_workspace_rejects_negative_hi_eval_null(self, score_lrt_data):
+        """create_workspace_mode4_split_c raises ValueError on negative hi_eval_null."""
+        from jamma.lmm._lmm_accel import create_workspace_mode4_split_c
+
+        eigenvalues, Uab_batch, n_samples, Hi_eval_null, logl_H0 = score_lrt_data
+        uab_inv_soa = np.stack(
+            [Uab_batch[0, :, 0], Uab_batch[0, :, 2], Uab_batch[0, :, 5]], axis=0
+        )
+
+        hi_bad = Hi_eval_null.copy()
+        hi_bad[10] = -0.5  # inject negative value
+
+        with pytest.raises(ValueError, match="not positive"):
+            create_workspace_mode4_split_c(
+                eigenvalues,
+                uab_inv_soa,
+                n_samples,
+                1e-5,
+                1e5,
+                50,
+                20,
+                1,
+                hi_bad,
+                logl_H0,
+            )
+
+    def test_score_batch_c_rejects_negative_hi_eval_null(self, score_lrt_data):
+        """compute_score_batch_c raises ValueError when hi_eval_null is negative."""
+        from jamma.lmm._lmm_accel import compute_score_batch_c
+
+        eigenvalues, Uab_batch, n_samples, Hi_eval_null, _ = score_lrt_data
+
+        hi_bad = Hi_eval_null.copy()
+        hi_bad[3] = -1.0  # inject negative value
+
+        with pytest.raises(ValueError, match="not positive"):
+            compute_score_batch_c(
+                eigenvalues,
+                Uab_batch,
+                hi_bad,
+                n_samples,
+                1,
+            )
+
+    def test_score_batch_c_rejects_zero_hi_eval_null(self, score_lrt_data):
+        """compute_score_batch_c raises ValueError when hi_eval_null is zero."""
+        from jamma.lmm._lmm_accel import compute_score_batch_c
+
+        eigenvalues, Uab_batch, n_samples, Hi_eval_null, _ = score_lrt_data
+
+        hi_bad = Hi_eval_null.copy()
+        hi_bad[3] = 0.0  # inject zero
+
+        with pytest.raises(ValueError, match="not positive"):
+            compute_score_batch_c(
+                eigenvalues,
+                Uab_batch,
+                hi_bad,
+                n_samples,
+                1,
+            )
+
+    def test_score_batch_general_c_rejects_negative_hi_eval_null(self):
+        """compute_score_batch_general_c raises ValueError on negative hi_eval_null."""
+        try:
+            from jamma.lmm._lmm_accel import compute_score_batch_general_c
+        except ImportError:
+            pytest.skip("compute_score_batch_general_c not compiled yet")
+
+        from jamma.lmm.likelihood import build_pab_table_for_c
+
+        rng = np.random.default_rng(77)
+        n_samples, n_snps, n_cvt = 80, 10, 2
+
+        eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
+        lambda_null = 0.5
+        Hi_eval_null = 1.0 / (lambda_null * eigenvalues + 1.0)
+
+        # Build Uab_batch for n_cvt=2
+        n_uab = (n_cvt + 2) * (n_cvt + 3) // 2
+        Uab_batch = np.ones((n_snps, n_samples, n_uab), dtype=np.float64)
+        pab_table_dict = build_pab_table_for_c(n_cvt)
+
+        hi_bad = Hi_eval_null.copy()
+        hi_bad[0] = -2.0  # inject negative value
+
+        with pytest.raises(ValueError, match="not positive"):
+            compute_score_batch_general_c(
+                eigenvalues,
+                Uab_batch,
+                hi_bad,
+                n_samples,
+                n_cvt,
+                pab_table_dict,
+                1,
+            )
+
+    def test_score_batch_general_c_rejects_zero_hi_eval_null(self):
+        """compute_score_batch_general_c raises ValueError on zero hi_eval_null."""
+        try:
+            from jamma.lmm._lmm_accel import compute_score_batch_general_c
+        except ImportError:
+            pytest.skip("compute_score_batch_general_c not compiled yet")
+
+        from jamma.lmm.likelihood import build_pab_table_for_c
+
+        rng = np.random.default_rng(78)
+        n_samples, n_snps, n_cvt = 80, 10, 2
+
+        eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
+        lambda_null = 0.5
+        Hi_eval_null = 1.0 / (lambda_null * eigenvalues + 1.0)
+
+        n_uab = (n_cvt + 2) * (n_cvt + 3) // 2
+        Uab_batch = np.ones((n_snps, n_samples, n_uab), dtype=np.float64)
+        pab_table_dict = build_pab_table_for_c(n_cvt)
+
+        hi_bad = Hi_eval_null.copy()
+        hi_bad[0] = 0.0  # inject zero
+
+        with pytest.raises(ValueError, match="not positive"):
+            compute_score_batch_general_c(
+                eigenvalues,
+                Uab_batch,
+                hi_bad,
+                n_samples,
+                n_cvt,
+                pab_table_dict,
+                1,
+            )

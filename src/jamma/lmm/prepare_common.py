@@ -318,6 +318,20 @@ def _compute_null_model_common(
     Hi_eval_null_np = None
     if lmm_mode in (3, 4):
         Hi_eval_null_np = 1.0 / (lambda_null_mle * eigenvalues_np + 1.0)
+        if not np.all(np.isfinite(Hi_eval_null_np)):
+            bad_idx = np.where(~np.isfinite(Hi_eval_null_np))[0]
+            raise ValueError(
+                f"Hi_eval_null has {len(bad_idx)} non-finite value(s) at indices "
+                f"{bad_idx[:5].tolist()}. lambda_null_mle={lambda_null_mle:.6g}. "
+                "Null model optimization may have failed."
+            )
+        if not np.all(Hi_eval_null_np > 0):
+            bad_idx = np.where(~(Hi_eval_null_np > 0))[0]
+            raise ValueError(
+                f"Hi_eval_null has {len(bad_idx)} non-positive value(s) at indices "
+                f"{bad_idx[:5].tolist()}. lambda_null_mle={lambda_null_mle:.6g}. "
+                "Check kinship matrix for negative eigenvalues."
+            )
 
     return logl_H0, lambda_null_mle, Hi_eval_null_np
 

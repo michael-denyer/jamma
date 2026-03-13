@@ -3,10 +3,11 @@
 Writes ``src/jamma/_build_meta.py`` at build time so the release date is
 available at runtime via ``jamma.__release_date__`` without manual upkeep.
 
-Also compiles three C extensions if a C compiler is available:
+Also compiles four C extensions if a C compiler is available:
   - ``src/jamma/lmm/_lmm_accel.c``: per-SNP REML Wald pipeline (with OpenMP)
   - ``src/jamma/lmm/_eigen_accel.c``: DSYEVR eigendecomposition (no OpenMP)
   - ``src/jamma/lmm/_secular_accel.c``: DLAED4 rank-1 secular updates (no OpenMP)
+  - ``src/jamma/jblas/src/*.c``: jblas BLAS compute layer (with OpenMP)
 
 If compilation fails for any reason, a warning is logged and a pure-Python
 wheel is produced as a graceful fallback — jamma is fully functional without
@@ -20,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import tempfile
 from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
@@ -48,6 +50,7 @@ class CustomBuildHook(BuildHookInterface):
         self._compile_c_extension(build_data)
         self._compile_eigen_extension(build_data)
         self._compile_secular_extension(build_data)
+        self._compile_jblas_extension(build_data)
 
     def _preflight_c_build(self):
         """Verify build prerequisites and return compiler/include information.
@@ -222,13 +225,20 @@ class CustomBuildHook(BuildHookInterface):
                     text=True,
                     stderr=subprocess.DEVNULL,
                 ).strip()
-                omp_flags = [
-                    f"-I{prefix}/include",
-                    f"-L{prefix}/lib",
-                    "-Xpreprocessor",
-                    "-fopenmp",
-                    "-lomp",
-                ]
+                if Path(prefix, "lib").is_dir():
+                    omp_flags = [
+                        f"-I{prefix}/include",
+                        f"-L{prefix}/lib",
+                        "-Xpreprocessor",
+                        "-fopenmp",
+                        "-lomp",
+                    ]
+                else:
+                    print(
+                        f"OpenMP: Homebrew prefix {prefix} exists but lib/ not found. "
+                        "C extension will be single-threaded.",
+                        file=sys.stderr,
+                    )
             except (FileNotFoundError, subprocess.CalledProcessError):
                 # No Homebrew libomp — compile single-threaded C (still faster
                 # than Python loops; _OPENMP is undefined so #pragma is skipped)
@@ -489,5 +499,262 @@ class CustomBuildHook(BuildHookInterface):
         dist_path = f"jamma/lmm/{out_name}"
         build_data["force_include"][str(out_path)] = dist_path
 
+        build_data["pure_python"] = False
+        build_data["infer_tag"] = True
+
+    def _compile_jblas_extension(self, build_data):
+        """Compile jblas C sources -> _jblas{EXT_SUFFIX} via per-file compile-then-link.
+
+        Compiles each C source file in src/jamma/jblas/src/ individually to a
+        temporary object file, then links them into a single shared library.
+        This enables per-file compiler flag groups (e.g. AVX2 files vs LAPACK files
+        with distinct flag sets in future phases).
+
+        OpenMP support is attempted:
+          - macOS: -Xpreprocessor -fopenmp via Homebrew libomp
+          - Linux: -fopenmp (libgomp or libiomp5 auto-detected)
+
+        On any compilation failure, logs a warning and returns without raising.
+        The compiled .so is written to src/jamma/jblas/.
+
+        Args:
+            build_data: Hatchling build data dict. Updated with force_include
+                entry mapping the compiled .so into the wheel.
+        """
+        preflight = self._preflight_c_build()
+        if preflight is None:
+            return
+        cc_cmd, cc_extra, python_inc, numpy_inc, ldflags = preflight
+
+        jblas_src = Path(self.root) / "src" / "jamma" / "jblas" / "src"
+        jblas_inc = Path(self.root) / "src" / "jamma" / "jblas" / "include"
+
+        if not jblas_src.is_dir():
+            print(
+                f"WARNING: jblas source directory {jblas_src} not found — "
+                "skipping jblas C extension compilation (NumPy fallback).",
+                file=sys.stderr,
+            )
+            return
+
+        # jblas source files split into two groups:
+        # - baseline: portable C compiled without SIMD flags (runs on any x86_64)
+        # - simd: files using AVX2 intrinsics, compiled with -mavx2 -mfma
+        # This ensures the baseline manylinux_x86_64 wheel doesn't SIGILL on
+        # older CPUs that lack AVX2.  Runtime CPUID dispatch in platform.c
+        # selects the appropriate kernels.
+        baseline_sources = [
+            jblas_src / "platform.c",
+            jblas_src / "dnrm2.c",
+            jblas_src / "dgemv.c",
+            jblas_src / "pymodule.c",
+        ]
+        simd_sources = [
+            jblas_src / "ddot.c",
+            jblas_src / "daxpy.c",
+            jblas_src / "dscal.c",
+        ]
+        source_files = baseline_sources + simd_sources
+
+        missing = [s for s in source_files if not s.exists()]
+        if missing:
+            print(
+                f"WARNING: jblas source files missing: {missing} — "
+                "skipping jblas C extension compilation (NumPy fallback).",
+                file=sys.stderr,
+            )
+            return
+
+        # On x86_64: AVX2/FMA flags are applied only to simd_sources (ddot.c,
+        # daxpy.c, dscal.c).  Baseline sources (platform.c, pymodule.c, etc.)
+        # are compiled without SIMD flags so the wheel runs on any x86_64 CPU.
+        machine = platform.machine()
+        simd_flags: list[str] = []
+        if machine in ("x86_64", "AMD64"):
+            simd_flags = ["-mavx2", "-mfma"]
+
+        # Platform-specific OpenMP flags
+        omp_flags: list[str] = []
+        if platform.system() == "Darwin":
+            try:
+                prefix = subprocess.check_output(
+                    ["brew", "--prefix", "libomp"],
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                ).strip()
+                if Path(prefix, "lib").is_dir():
+                    omp_flags = [
+                        f"-I{prefix}/include",
+                        f"-L{prefix}/lib",
+                        "-Xpreprocessor",
+                        "-fopenmp",
+                        "-lomp",
+                    ]
+                else:
+                    print(
+                        f"OpenMP: Homebrew prefix {prefix} exists but lib/ not found. "
+                        "jblas C extension will be single-threaded.",
+                        file=sys.stderr,
+                    )
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                print(
+                    "OpenMP not available on macOS (libomp not found). "
+                    "jblas C extension will be single-threaded.",
+                    file=sys.stderr,
+                )
+        else:
+            omp_flags = self._detect_linux_openmp_flags(cc_cmd)
+
+        # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3)
+        extra_cflags = os.environ.get("CFLAGS", "").split()
+
+        # Base compile flags shared by all source files (no SIMD flags here)
+        base_cflags = [
+            "-O3",
+            "-ftree-vectorize",
+            "-fno-math-errno",
+            "-fno-trapping-math",
+            "-funroll-loops",
+            *extra_cflags,
+            "-fno-finite-math-only",  # override -Ofast; isnan() must work
+            "-fPIC",
+            "-std=c11",
+            f"-I{python_inc}",
+            f"-I{numpy_inc}",
+            f"-I{jblas_inc}",
+        ]
+
+        # OpenMP flags for compile step: -I/-L/-Xpreprocessor/-fopenmp but not link libs
+        omp_compile: list[str] = []
+        for flag in omp_flags:
+            if flag.startswith("-I") or flag.startswith("-L") or flag.startswith("-Wl"):
+                omp_compile.append(flag)
+            elif flag in ("-Xpreprocessor", "-fopenmp"):
+                omp_compile.append(flag)
+            # -lomp, -liomp5 are link-only; skip for compile step
+
+        ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
+        out_name = f"_jblas{ext_suffix}"
+        out_path = Path(self.root) / "src" / "jamma" / "jblas" / out_name
+
+        # Compile each source file to a .o in a temporary directory
+        tmp_dir = Path(tempfile.mkdtemp(prefix="jblas_build_"))
+        obj_files: list[Path] = []
+        compile_failed = False
+        use_omp = bool(omp_flags)
+
+        simd_source_set = set(str(s) for s in simd_sources)
+
+        try:
+            for src in source_files:
+                obj_file = tmp_dir / (src.stem + ".o")
+                # Only SIMD sources (ddot, daxpy, dscal) get AVX2/FMA flags
+                extra_simd = simd_flags if str(src) in simd_source_set else []
+                cmd_compile = [
+                    cc_cmd,
+                    *cc_extra,
+                    *base_cflags,
+                    *extra_simd,
+                    *omp_compile,
+                    "-c",
+                    str(src),
+                    "-o",
+                    str(obj_file),
+                ]
+                # Print compile command to stderr for build-log assertions (CI grep)
+                print(f"jblas compile: {' '.join(cmd_compile)}", file=sys.stderr)
+                result = subprocess.run(cmd_compile, capture_output=True, text=True)
+                if result.returncode != 0:
+                    print(
+                        f"jblas compile failed on {src.name}:",
+                        file=sys.stderr,
+                    )
+                    if result.stderr:
+                        print(result.stderr, file=sys.stderr)
+                    compile_failed = True
+                    break
+                obj_files.append(obj_file)
+
+            if compile_failed and use_omp:
+                # Retry without OpenMP compile flags
+                print(
+                    "jblas OpenMP compilation failed, retrying without OpenMP...",
+                    file=sys.stderr,
+                )
+                obj_files.clear()
+                compile_failed = False
+                for src in source_files:
+                    obj_file = tmp_dir / (src.stem + "_noomp.o")
+                    extra_simd = simd_flags if str(src) in simd_source_set else []
+                    cmd_compile = [
+                        cc_cmd,
+                        *cc_extra,
+                        *base_cflags,
+                        *extra_simd,
+                        "-c",
+                        str(src),
+                        "-o",
+                        str(obj_file),
+                    ]
+                    print(
+                        f"jblas compile (no OMP): {' '.join(cmd_compile)}",
+                        file=sys.stderr,
+                    )
+                    result = subprocess.run(cmd_compile, capture_output=True, text=True)
+                    if result.returncode != 0:
+                        print(
+                            "WARNING: jblas C extension compilation failed on "
+                            f"{src.name} (NumPy fallback will be used):\n"
+                            f"  Error: {result.stderr[:1000]}",
+                            file=sys.stderr,
+                        )
+                        compile_failed = True
+                        break
+                    obj_files.append(obj_file)
+                # No OMP runtime to link if compile retry dropped OMP flags
+                omp_flags = []
+
+            if compile_failed:
+                print(
+                    "WARNING: jblas C extension compilation failed "
+                    "(NumPy fallback will be used).",
+                    file=sys.stderr,
+                )
+                return
+
+            # Link all object files into the shared library
+            cmd_link = [
+                cc_cmd,
+                *cc_extra,
+                "-shared",
+                "-fPIC",
+                *[str(o) for o in obj_files],
+                "-o",
+                str(out_path),
+                "-lm",
+                *omp_flags,
+                *ldflags,
+            ]
+            print(f"jblas link: {' '.join(cmd_link)}", file=sys.stderr)
+            result_link = subprocess.run(cmd_link, capture_output=True, text=True)
+            if result_link.returncode != 0:
+                print(
+                    "WARNING: jblas C extension link failed "
+                    "(NumPy fallback will be used):\n"
+                    f"  Command: {' '.join(cmd_link)}\n"
+                    f"  Error: {result_link.stderr[:2000]}",
+                    file=sys.stderr,
+                )
+                return
+
+        finally:
+            # Clean up temporary object files
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        print(f"jblas C extension compiled: {out_path}", file=sys.stderr)
+
+        # Register the compiled .so for wheel inclusion
+        build_data.setdefault("force_include", {})
+        build_data["force_include"][str(out_path)] = f"jamma/jblas/{out_name}"
         build_data["pure_python"] = False
         build_data["infer_tag"] = True

@@ -1414,8 +1414,8 @@ static PyObject *create_workspace_mode4_split_c_py(
     {
         const double *hi_null = (const double *)PyArray_DATA(hi_eval_null_arr);
         for (int i = 0; i < n_samples; i++) {
+            char buf[64];
             if (!isfinite(hi_null[i])) {
-                char buf[64];
                 snprintf(buf, sizeof(buf), "%g", hi_null[i]);
                 PyErr_Format(PyExc_ValueError,
                     "Hi_eval_null[%d] = %s is not finite. "
@@ -4039,8 +4039,8 @@ static PyObject *compute_score_batch_c(PyObject *self, PyObject *args)
 
     /* Validate Hi_eval_null for NaN/Inf and non-positive values */
     for (int i = 0; i < n_samples; i++) {
+        char buf[64];
         if (!isfinite(hi_eval_null[i])) {
-            char buf[64];
             snprintf(buf, sizeof(buf), "%g", hi_eval_null[i]);
             PyErr_Format(PyExc_ValueError,
                 "Hi_eval_null[%d] = %s is not finite. "

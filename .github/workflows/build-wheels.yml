@@ -36,7 +36,8 @@ jobs:
           # Smoke test: import + numerical sanity (catches ABI mismatches)
           CIBW_TEST_COMMAND: >-
             python {project}/scripts/smoke_test_c_extension.py &&
-            python {project}/scripts/smoke_test_eigen_extension.py
+            python {project}/scripts/smoke_test_eigen_extension.py &&
+            python {project}/scripts/smoke_test_jblas.py
           # Install test deps (numpy required for import)
           CIBW_TEST_REQUIRES: "numpy"
 
@@ -63,7 +64,8 @@ jobs:
           # Same smoke tests as baseline wheels
           CIBW_TEST_COMMAND: >-
             python {project}/scripts/smoke_test_c_extension.py &&
-            python {project}/scripts/smoke_test_eigen_extension.py
+            python {project}/scripts/smoke_test_eigen_extension.py &&
+            python {project}/scripts/smoke_test_jblas.py
           CIBW_TEST_REQUIRES: "numpy"
 
       - name: Verify AVX2 instructions in wheels
@@ -87,7 +89,18 @@ jobs:
               echo "FAIL: no AVX2 instructions found in $so"
               exit 1
             fi
-            echo "OK: AVX2 instructions verified in $(basename "$whl")"
+            echo "OK: AVX2 instructions verified in $(basename "$whl") [_lmm_accel]"
+            # Verify _jblas.so also contains AVX2 instructions
+            jblas_so=$(find "$tmpdir" -name '_jblas*.so' | head -1)
+            if [ -z "$jblas_so" ]; then
+              echo "FAIL: no _jblas .so found in $(basename "$whl")"
+              exit 1
+            fi
+            if ! objdump -d "$jblas_so" | grep -q 'vfmadd\|vmulpd\|vaddpd'; then
+              echo "FAIL: no AVX2 instructions in $jblas_so"
+              exit 1
+            fi
+            echo "OK: AVX2 instructions verified in $(basename "$whl") [_jblas]"
             rm -rf "$tmpdir"
           done
 

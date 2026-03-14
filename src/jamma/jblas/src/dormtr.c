@@ -110,18 +110,16 @@ int jblas_dormtr_c(npy_intp N, npy_intp M,
         /* DLARFT: form T[nb x nb] */
         dlarft(vlen, nb, V_block, nb_alloc, tau + j_start, T_buf, nb_alloc, z);
 
-        /* DLARFB Step 1: W = V^T @ C[j_start+1:N, :] */
-        memset(W, 0, (size_t)nb * (size_t)M * sizeof(double));
-        for (npy_intp i = 0; i < nb; i++) {
-            for (npy_intp r = 0; r < vlen; r++) {
-                double v_ri = V_block[r * nb_alloc + i];
-                if (v_ri == 0.0) continue;
-                const double *C_row = C + (j_start + 1 + r) * ldc;
-                double *W_row = W + i * M;
-                for (npy_intp c = 0; c < M; c++)
-                    W_row[c] += v_ri * C_row[c];
-            }
-        }
+        /* DLARFB Step 1: W = V^T @ C[j_start+1:N, :]
+         * W(nb x M) = V_block^T(nb x vlen) @ C_sub(vlen x M)
+         * V_block is (vlen x nb) row-major with stride nb_alloc.
+         * transa=1 transposes V_block; beta=0 zeroes W (no memset needed). */
+        jblas_dgemm_accum_c(nb, M, vlen,
+                            V_block, nb_alloc,
+                            C + (j_start + 1) * ldc, ldc,
+                            W, M,
+                            1, 0,       /* transa=1 (V^T), transb=0 */
+                            1.0, 0.0);  /* W = 1.0 * V^T @ C + 0.0 * W */
 
         /* DLARFB Step 2: W = T @ W (upper triangular T, top-to-bottom safe in-place) */
         for (npy_intp i = 0; i < nb; i++) {
@@ -133,17 +131,15 @@ int jblas_dormtr_c(npy_intp N, npy_intp M,
             }
         }
 
-        /* DLARFB Step 3: C[j_start+1:N, :] -= V @ W */
-        for (npy_intp i = 0; i < nb; i++) {
-            const double *W_row = W + i * M;
-            for (npy_intp r = 0; r < vlen; r++) {
-                double v_ri = V_block[r * nb_alloc + i];
-                if (v_ri == 0.0) continue;
-                double *C_row = C + (j_start + 1 + r) * ldc;
-                for (npy_intp c = 0; c < M; c++)
-                    C_row[c] -= v_ri * W_row[c];
-            }
-        }
+        /* DLARFB Step 3: C[j_start+1:N, :] -= V @ W
+         * C_sub(vlen x M) -= V_block(vlen x nb) @ W(nb x M)
+         * alpha=-1, beta=1: C = -1.0 * V @ W + 1.0 * C. */
+        jblas_dgemm_accum_c(vlen, M, nb,
+                            V_block, nb_alloc,
+                            W, M,
+                            C + (j_start + 1) * ldc, ldc,
+                            0, 0,        /* transa=0, transb=0 */
+                            -1.0, 1.0);  /* C = -1.0 * V @ W + 1.0 * C */
 
         if (j_start == 0) break;
     }

@@ -28,18 +28,18 @@
  *     4. Back-transform eigenvectors: Z = Z_halves @ Q_secular.
  *        Uses jblas_dgemm_c for the N x N matrix multiply.
  *
- * Deflation:
- *   Two types:
- *   (a) |z[i]| <= 8*eps*||d||_2: deflated as-is (eigenvalue is d[i]).
- *   (b) |d[i] - d[j]| <= 8*eps*||d||_2: merged via Givens rotation.
+ * Deflation (LAPACK DLAED2-style local relative threshold):
+ *   (a) rho*z[k]^2 <= 8*eps*max(|d[k]|, rho*z[k]^2): negligible contribution.
+ *   (b) |d[i] - d[j]| <= 8*eps*max(|d[i]|, |d[j]|): merged via Givens rotation.
  *
  * Secular equation solver (dlaed4-like):
  *   Newton iteration with rational interpolation, guaranteed monotone
  *   convergence between poles.  Tolerance: 4*eps*|lambda|.
  *
  * Memory:
- *   dstedc_c owns its temporary N x N merge buffer (malloc/free).
- *   The caller (eigh.c) does NOT provide this buffer.
+ *   dstedc_c allocates one N x N workspace + O(N) scratch at top level,
+ *   passed through recursion. merge_rank1 uses the workspace for Q_sec
+ *   and allocates Z_new locally (needed simultaneously with Q_sec).
  *
  * References:
  *   Gu & Eisenstat (1995), "A Divide-and-Conquer Algorithm for the
@@ -65,18 +65,8 @@
 #define MIN(a, b)  ((a) < (b) ? (a) : (b))
 #define MAX(a, b)  ((a) > (b) ? (a) : (b))
 
-/* Threshold for switching to base-case QR iteration.
- *
- * Set to 1500 so that all practical eigensystem sizes (N <= 1000 in tests)
- * use the QR base case, which achieves LAPACK-quality orthogonality (< 1e-14).
- *
- * The Divide-and-Conquer merge (merge_rank1) uses a naive secular eigenvector
- * formula q[k] = z[k]/(d[k]-lam) which is ill-conditioned when eigenvalues
- * are clustered or z entries are small. LAPACK-quality D&C requires the
- * product formula from dlaed3.f (a future enhancement). Until then, the QR
- * base case provides correct results for all sizes used by jamma.
- */
-#define DSTEDC_BASE 2000
+/* Threshold for switching to base-case QR iteration (LAPACK standard). */
+#define DSTEDC_BASE 128
 
 /* Machine epsilon */
 #define EPS DBL_EPSILON
@@ -182,6 +172,41 @@ static void sort_eig(double *d, double *Z, npy_intp ldz, npy_intp n)
         }
         d[j + 1] = key;
     }
+}
+
+/* Relative Frobenius residual for a tridiagonal eigensystem:
+ *   ||T * Z - Z * diag(d_out)||_F / ||T||_F
+ * where T is defined by d_in/e_in and Z stores eigenvectors as columns. */
+static double tridiag_eig_residual(npy_intp n,
+                                   const double *d_in,
+                                   const double *e_in,
+                                   const double *d_out,
+                                   const double *Z, npy_intp ldz)
+{
+    double normT2 = 0.0;
+    for (npy_intp i = 0; i < n; i++)
+        normT2 += d_in[i] * d_in[i];
+    for (npy_intp i = 0; i < n - 1; i++)
+        normT2 += 2.0 * e_in[i] * e_in[i];
+
+    if (normT2 == 0.0)
+        return 0.0;
+
+    double resid2 = 0.0;
+    for (npy_intp j = 0; j < n; j++) {
+        double lam = d_out[j];
+        for (npy_intp i = 0; i < n; i++) {
+            double tz = d_in[i] * Z[i * ldz + j];
+            if (i > 0)
+                tz += e_in[i - 1] * Z[(i - 1) * ldz + j];
+            if (i + 1 < n)
+                tz += e_in[i] * Z[(i + 1) * ldz + j];
+            double r = tz - lam * Z[i * ldz + j];
+            resid2 += r * r;
+        }
+    }
+
+    return sqrt(resid2 / normT2);
 }
 
 /* ---------------------------------------------------------------------------
@@ -343,82 +368,100 @@ static int dsteqr_base(npy_intp n, double *d, double *e,
  * Returns 0 on success, 1 if failed to converge.
  * ---------------------------------------------------------------------------
  */
+/* dlaed4 — Secular equation solver (LAPACK-style incremental delta).
+ *
+ * Finds the i-th root lambda of:
+ *   f(lambda) = 1 + rho * sum_k z[k]^2 / (d[k] - lambda) = 0
+ *
+ * The root lies in (d[i], d[i+1]) for i < n-1, or above d[n-1] for i = n-1.
+ *
+ * Maintains delta[k] = d[k] - lambda incrementally: starts with
+ * delta[k] = d[k] - initial_guess, then subtracts each Newton correction.
+ * This avoids catastrophic cancellation — critical for eigenvector accuracy.
+ *
+ * delta: output array of length n.  delta[k] = d[k] - lambda on exit.
+ */
 static int dlaed4(npy_intp n, npy_intp i,
                   const double *d, const double *z, double rho,
-                  double *lambda_out)
+                  double *lambda_out, double *delta)
 {
     if (n == 1) {
         *lambda_out = d[0] + rho * z[0] * z[0];
+        delta[0] = -rho * z[0] * z[0];
         return 0;
     }
 
-    /* Determine bracket */
-    double lo, hi;
+    /* Bracket: lambda_i in (d[i], d[i+1]) for i<n-1, or (d[n-1], d[n-1]+rho*||z||^2).
+     * Work in displacement form: tau = lambda - d[i].
+     * delta[k] = d[k] - d[i] - tau.
+     * lo_tau, hi_tau are bounds on tau. */
+    double lo_tau, hi_tau;
     if (i < n - 1) {
-        lo = d[i];
-        hi = d[i + 1];
+        lo_tau = 0.0;
+        hi_tau = d[i + 1] - d[i];
     } else {
-        lo = d[n - 1];
-        /* Upper bound: sum of all residues */
+        lo_tau = 0.0;
         double sum = 0.0;
         for (npy_intp k = 0; k < n; k++) sum += z[k] * z[k];
-        hi = lo + rho * sum;
+        hi_tau = rho * sum;
     }
 
-    /* Initial guess: midpoint of bracket */
-    double lam = (lo + hi) / 2.0;
+    /* Initial guess: midpoint */
+    double tau = (lo_tau + hi_tau) / 2.0;
 
-    int max_iter = 60;
-    for (int it = 0; it < max_iter; it++) {
-        /* Evaluate f(lam) and f'(lam) */
-        double f  = 1.0;
+    /* Initialize delta[k] = d[k] - d[i] - tau (cancellation-free since
+     * d[k] - d[i] is exact for k != i, and delta[i] = -tau for k = i) */
+    for (npy_intp k = 0; k < n; k++)
+        delta[k] = (d[k] - d[i]) - tau;
+
+    double rhoinv = 1.0 / rho;
+
+    for (int iter = 0; iter < 60; iter++) {
+        /* Evaluate f(lambda) = 1/rho + sum z[k]^2/delta[k]  (scaled by rho) */
+        double f  = rhoinv;
         double df = 0.0;
         for (npy_intp k = 0; k < n; k++) {
-            double delta = d[k] - lam;
-            if (fabs(delta) < 1e-300) delta = (delta >= 0.0) ? 1e-300 : -1e-300;
-            double z2 = z[k] * z[k];
-            f  += rho * z2 / delta;
-            df += rho * z2 / (delta * delta);
+            double dk = delta[k];
+            if (fabs(dk) < 1e-300) dk = (dk >= 0.0) ? 1e-300 : -1e-300;
+            double temp = z[k] / dk;
+            f  += z[k] * temp;
+            df += temp * temp;
         }
 
-        /* Convergence check */
-        if (fabs(f) <= 4.0 * EPS * fabs(lam) * df + 4.0 * EPS * fabs(f)) {
-            *lambda_out = lam;
+        /* Convergence test */
+        double erretm = 8.0 * fabs(f) + fabs(rhoinv) + fabs(tau) * df;
+        if (fabs(f) <= EPS * erretm) {
+            *lambda_out = d[i] + tau;
             return 0;
         }
 
-        /* Newton step */
+        /* Update bracket on tau */
+        if (f <= 0.0) lo_tau = MAX(lo_tau, tau);
+        else          hi_tau = MIN(hi_tau, tau);
+
+        /* Newton step: tau_new = tau - f/df.
+         * f(lambda)/rho = 1/rho + sum z^2/(d-lambda) is increasing in lambda.
+         * f < 0 at small tau → root is above → tau increases (- neg/pos = +). ✓
+         * f > 0 at large tau → root is below → tau decreases (- pos/pos = -). ✓ */
         double step = f / df;
-        double lam_new = lam - step;
+        double tau_new = tau - step;
 
-        /* Clamp to bracket */
-        if (lam_new <= lo) lam_new = lo + (lam - lo) * 0.5;
-        if (lam_new >= hi) lam_new = hi - (hi - lam) * 0.5;
+        /* Ensure within bracket */
+        if (tau_new <= lo_tau)
+            tau_new = (lo_tau + tau) / 2.0;
+        if (tau_new >= hi_tau)
+            tau_new = (hi_tau + tau) / 2.0;
 
-        /* Bracket update */
-        double f_new = 1.0;
-        for (npy_intp k = 0; k < n; k++) {
-            double delta = d[k] - lam_new;
-            if (fabs(delta) < 1e-300) delta = (delta >= 0.0) ? 1e-300 : -1e-300;
-            f_new += rho * z[k] * z[k] / delta;
-        }
-
-        if (f * f_new < 0.0) {
-            /* Root is in (lam_new, lam) or (lam, lam_new) */
-            if (lam_new > lam) lo = lam;
-            else               hi = lam;
-        } else {
-            /* Same sign: tighten bound on the far side */
-            if (f_new < 0.0) lo = lam_new;
-            else             hi = lam_new;
-        }
-
-        lam = lam_new;
+        /* Incremental update */
+        double correction = tau_new - tau;
+        for (npy_intp k = 0; k < n; k++)
+            delta[k] -= correction;
+        tau = tau_new;
     }
 
-    /* Best estimate even if not fully converged */
-    *lambda_out = lam;
-    return 0;  /* return success; residual may be slightly above threshold */
+    /* Did not converge — return best estimate */
+    *lambda_out = d[i] + tau;
+    return 1;
 }
 
 /* ---------------------------------------------------------------------------
@@ -426,7 +469,9 @@ static int dlaed4(npy_intp n, npy_intp i,
  * ---------------------------------------------------------------------------
  */
 static int dstedc_recurse(npy_intp n, double *d, double *e,
-                          double *Z, npy_intp ldz);
+                          double *Z, npy_intp ldz,
+                          double *work, npy_intp lwork,
+                          npy_intp *iwork);
 
 /* ---------------------------------------------------------------------------
  * merge_rank1 — Merge two eigensystems via rank-1 secular equation.
@@ -447,24 +492,22 @@ static int dstedc_recurse(npy_intp n, double *d, double *e,
  */
 static int merge_rank1(npy_intp n, npy_intp m,
                        double *d, double *z_vec, double rho,
-                       double *Z, npy_intp ldz)
+                       double *Z, npy_intp ldz,
+                       double *work, npy_intp lwork,
+                       npy_intp *iwork)
 {
-    /* Work arrays */
+    /* O(N) work arrays */
     double *d_defl  = (double *)malloc((size_t)n * sizeof(double));
     double *z_defl  = (double *)malloc((size_t)n * sizeof(double));
     double *d_new   = (double *)malloc((size_t)n * sizeof(double));
-    double *Q_sec   = (double *)malloc((size_t)n * (size_t)n * sizeof(double));
 
-    if (!d_defl || !z_defl || !d_new || !Q_sec) {
-        free(d_defl); free(z_defl); free(d_new); free(Q_sec);
+    /* Q_sec uses the passed workspace (n*n, fits within lwork) */
+    double *Q_sec   = work;
+
+    if (!d_defl || !z_defl || !d_new) {
+        free(d_defl); free(z_defl); free(d_new);
         return -1;
     }
-
-    /* Compute ||T||_2 ~ max(|d|) for deflation threshold */
-    double Tnorm = 0.0;
-    for (npy_intp k = 0; k < n; k++)
-        if (fabs(d[k]) > Tnorm) Tnorm = fabs(d[k]);
-    double defl_thresh = 8.0 * EPS * Tnorm;
 
     /* Step 1: Copy d, z to working arrays */
     memcpy(d_defl, d, (size_t)n * sizeof(double));
@@ -473,7 +516,7 @@ static int merge_rank1(npy_intp n, npy_intp m,
     /* Track deflation: defl[k] = 1 means eigenvalue k is deflated */
     int *defl = (int *)calloc((size_t)n, sizeof(int));
     if (!defl) {
-        free(d_defl); free(z_defl); free(d_new); free(Q_sec); return -1;
+        free(d_defl); free(z_defl); free(d_new); return -1;
     }
 
     /* Initialize Q_sec to identity */
@@ -481,19 +524,23 @@ static int merge_rank1(npy_intp n, npy_intp m,
     for (npy_intp k = 0; k < n; k++)
         Q_sec[k * n + k] = 1.0;
 
-    /* Step 2: Type (a) deflation: |z[i]| too small */
+    /* Step 2: Type (a) deflation — local relative threshold.
+     * Tests whether pole k's contribution rho*z[k]^2/(d[k]-lambda) is negligible. */
     for (npy_intp k = 0; k < n; k++) {
-        if (fabs(z_defl[k]) <= defl_thresh) {
+        double rz2 = rho * z_defl[k] * z_defl[k];
+        if (rz2 <= 8.0 * EPS * fmax(fabs(d_defl[k]), rz2)) {
             defl[k] = 1;
         }
     }
 
-    /* Step 3: Type (b) deflation: close eigenvalues — merge via Givens */
+    /* Step 3: Type (b) deflation: close eigenvalues — merge via Givens.
+     * Local relative threshold: 8*eps*max(|d[k]|, |d[j]|). */
     for (npy_intp k = 0; k < n - 1; k++) {
         if (defl[k]) continue;
         for (npy_intp j = k + 1; j < n; j++) {
             if (defl[j]) continue;
-            if (fabs(d_defl[k] - d_defl[j]) <= defl_thresh) {
+            double tol_kj = 8.0 * EPS * fmax(fabs(d_defl[k]), fabs(d_defl[j]));
+            if (fabs(d_defl[k] - d_defl[j]) <= tol_kj) {
                 /* Rotate z to kill z[j] */
                 double c, s, r;
                 dlartg(z_defl[k], z_defl[j], &c, &s, &r);
@@ -516,7 +563,7 @@ static int merge_rank1(npy_intp n, npy_intp m,
     npy_intp *nondfl = (npy_intp *)malloc((size_t)n * sizeof(npy_intp));
     npy_intp *dfl    = (npy_intp *)malloc((size_t)n * sizeof(npy_intp));
     if (!nondfl || !dfl) {
-        free(d_defl); free(z_defl); free(d_new); free(Q_sec);
+        free(d_defl); free(z_defl); free(d_new);
         free(defl); free(nondfl); free(dfl);
         return -1;
     }
@@ -531,7 +578,7 @@ static int merge_rank1(npy_intp n, npy_intp m,
     double *d_nd = (double *)malloc((size_t)n_nd * sizeof(double));
     double *z_nd = (double *)malloc((size_t)n_nd * sizeof(double));
     if (!d_nd || !z_nd) {
-        free(d_defl); free(z_defl); free(d_new); free(Q_sec);
+        free(d_defl); free(z_defl); free(d_new);
         free(defl); free(nondfl); free(dfl); free(d_nd); free(z_nd);
         return -1;
     }
@@ -561,40 +608,73 @@ static int merge_rank1(npy_intp n, npy_intp m,
     }
 
     double *lam_nd = (double *)malloc((size_t)n_nd * sizeof(double));
-    if (!lam_nd) {
-        free(d_defl); free(z_defl); free(d_new); free(Q_sec);
+    /* Delta matrix: delta_mat[i * n_nd + k] = d[k] - lam[i].
+     * Stored from dlaed4 to avoid recomputing d[k]-lam[i] (catastrophic
+     * cancellation when they are close). Layout: row i = delta vector for
+     * eigenvalue i. */
+    double *delta_mat = (double *)malloc((size_t)n_nd * (size_t)n_nd * sizeof(double));
+    if (!lam_nd || !delta_mat) {
+        free(lam_nd); free(delta_mat);
+        free(d_defl); free(z_defl); free(d_new);
         free(defl); free(nondfl); free(dfl); free(d_nd); free(z_nd);
         return -1;
     }
 
     for (npy_intp i = 0; i < n_nd; i++) {
-        int info = dlaed4(n_nd, i, d_nd, z_nd, rho, &lam_nd[i]);
+        int info = dlaed4(n_nd, i, d_nd, z_nd, rho,
+                          &lam_nd[i], delta_mat + i * n_nd);
         if (info != 0) {
-            /* Best effort: use d value */
             lam_nd[i] = d_nd[i];
+            for (npy_intp k = 0; k < n_nd; k++)
+                delta_mat[i * n_nd + k] = d_nd[k] - d_nd[i];
         }
     }
 
-    /* Step 5: Compute eigenvectors of the secular problem.
-     * For each non-deflated eigenvalue lam_nd[i], the secular eigenvector is:
-     *   q[k] = z_nd[k] / (d_nd[k] - lam_nd[i])  (unnormalized)
-     * Then normalize q. */
+    /* Step 5: Secular eigenvectors (LAPACK dlaed3 algorithm).
+     *
+     * Uses delta vectors from dlaed4 to avoid precision loss.
+     *
+     * For each pole k, compute weight W[k]:
+     *   W[k] = delta_mat[k][k]  (= d[k] - lam[k], the "own" gap)
+     *   then for each j != k: W[k] *= delta_mat[j][k] / (d[k] - d[j])
+     *   W[k] = sgn(z[k]) * sqrt(|W[k]|)
+     *
+     * Eigenvector i, component k: q[k] = W[k] / delta_mat[i][k], normalize.
+     */
     double *Q_nd = (double *)calloc((size_t)n_nd * (size_t)n_nd, sizeof(double));
-    if (!Q_nd) {
-        free(d_defl); free(z_defl); free(d_new); free(Q_sec);
-        free(defl); free(nondfl); free(dfl); free(d_nd); free(z_nd); free(lam_nd);
+    double *W_nd = (double *)malloc((size_t)n_nd * sizeof(double));
+    if (!Q_nd || !W_nd) {
+        free(Q_nd); free(W_nd);
+        free(d_defl); free(z_defl); free(d_new);
+        free(defl); free(nondfl); free(dfl); free(d_nd); free(z_nd);
+        free(lam_nd); free(delta_mat);
         return -1;
+    }
+
+    for (npy_intp k = 0; k < n_nd; k++) {
+        /* W[k] = delta_mat[k][k] = d[k] - lam[k] */
+        double w = delta_mat[k * n_nd + k];
+        for (npy_intp j = 0; j < n_nd; j++) {
+            if (j == k) continue;
+            /* delta_mat[j][k] = d[k] - lam[j] */
+            double num = delta_mat[j * n_nd + k];
+            double den = d_nd[k] - d_nd[j];
+            if (fabs(den) < 1e-300)
+                den = (den >= 0.0) ? 1e-300 : -1e-300;
+            w *= num / den;
+        }
+        double sign_z = (z_nd[k] >= 0.0) ? 1.0 : -1.0;
+        W_nd[k] = sign_z * sqrt(fabs(w));
     }
 
     for (npy_intp i = 0; i < n_nd; i++) {
         double norm2 = 0.0;
         for (npy_intp k = 0; k < n_nd; k++) {
-            double delta = d_nd[k] - lam_nd[i];
-            double val;
-            if (fabs(delta) < 1e-300)
-                val = (z_nd[k] >= 0.0) ? 1e150 : -1e150;
-            else
-                val = z_nd[k] / delta;
+            /* Use delta from dlaed4 directly */
+            double dk = delta_mat[i * n_nd + k];
+            if (fabs(dk) < 1e-300)
+                dk = (dk >= 0.0) ? 1e-300 : -1e-300;
+            double val = W_nd[k] / dk;
             Q_nd[k * n_nd + i] = val;
             norm2 += val * val;
         }
@@ -604,6 +684,8 @@ static int merge_rank1(npy_intp n, npy_intp m,
                 Q_nd[k * n_nd + i] /= norm;
         }
     }
+    free(W_nd);
+    free(delta_mat);
 
     /* Step 6: Assemble the full secular eigenvector matrix Q_sec.
      *
@@ -627,7 +709,7 @@ static int merge_rank1(npy_intp n, npy_intp m,
     if (n_nd > 0) {
         Q_nd_full = (double *)calloc((size_t)n * (size_t)n_nd, sizeof(double));
         if (!Q_nd_full) {
-            free(d_defl); free(z_defl); free(d_new); free(Q_sec);
+            free(d_defl); free(z_defl); free(d_new);
             free(defl); free(nondfl); free(dfl); free(d_nd); free(z_nd);
             free(lam_nd); free(Q_nd);
             return -1;
@@ -662,7 +744,7 @@ static int merge_rank1(npy_intp n, npy_intp m,
      */
     double *Z_new = (double *)malloc((size_t)n * (size_t)ldz * sizeof(double));
     if (!Z_new) {
-        free(d_defl); free(z_defl); free(d_new); free(Q_sec);
+        free(d_defl); free(z_defl); free(d_new);
         free(defl); free(nondfl); free(dfl); free(d_nd); free(z_nd);
         free(lam_nd); free(Q_nd);
         return -1;
@@ -684,7 +766,7 @@ static int merge_rank1(npy_intp n, npy_intp m,
     memcpy(d, d_new, (size_t)n * sizeof(double));
 
     free(Z_new);
-    free(d_defl); free(z_defl); free(d_new); free(Q_sec);
+    free(d_defl); free(z_defl); free(d_new);
     free(defl); free(nondfl); free(dfl); free(d_nd); free(z_nd);
     free(lam_nd); free(Q_nd);
 
@@ -706,7 +788,9 @@ static int merge_rank1(npy_intp n, npy_intp m,
  * ---------------------------------------------------------------------------
  */
 static int dstedc_recurse(npy_intp n, double *d, double *e,
-                          double *Z, npy_intp ldz)
+                          double *Z, npy_intp ldz,
+                          double *work, npy_intp lwork,
+                          npy_intp *iwork)
 {
     if (n <= 0) return 0;
     if (n == 1) return 0;
@@ -719,11 +803,11 @@ static int dstedc_recurse(npy_intp n, double *d, double *e,
     /* Split at m = n/2 */
     npy_intp m = n / 2;
 
-    double rho = fabs(e[m - 1]);
+    double rho_orig = fabs(e[m - 1]);
 
-    /* Adjust diagonal: d[m-1] -= rho, d[m] -= rho */
-    d[m - 1] -= rho;
-    d[m]     -= rho;
+    /* Adjust diagonal: d[m-1] -= |e[m-1]|, d[m] -= |e[m-1]| */
+    d[m - 1] -= rho_orig;
+    d[m]     -= rho_orig;
 
     /* Build rank-1 connecting vector z:
      * z[k] = last column of Z_left  (k < m)  -> Z[k, m-1] (column m-1)
@@ -743,11 +827,12 @@ static int dstedc_recurse(npy_intp n, double *d, double *e,
 
     /* Left half: rows 0..m-1, cols 0..m-1 of Z */
     int ret;
-    ret = dstedc_recurse(m, d, e, Z, ldz);
+    ret = dstedc_recurse(m, d, e, Z, ldz, work, lwork, iwork);
     if (ret < 0) return ret;
 
     /* Right half: rows m..n-1, cols m..n-1 of Z */
-    ret = dstedc_recurse(n - m, d + m, e + m, Z + m * ldz + m, ldz);
+    ret = dstedc_recurse(n - m, d + m, e + m, Z + m * ldz + m, ldz,
+                          work, lwork, iwork);
     if (ret < 0) return ret;
 
     /* Build z vector from the post-recursion eigenvectors.
@@ -776,19 +861,17 @@ static int dstedc_recurse(npy_intp n, double *d, double *e,
     for (npy_intp j = 0; j < n - m; j++)
         z_vec[m + j] = Z[m * ldz + (m + j)];      /* first row of right block */
 
-    /* Normalize z: LAPACK scales z by 1/sqrt(2) so that rho*||z||^2 = rho */
-    /* Actually in the D&C formulation: T = D + rho * z * z^T where
-     * the connecting term is e[m-1] * (e_m @ e_{m+1}^T + e_{m+1} @ e_m^T).
-     * With the block-diagonal form, z = [last col of Q_L; first col of Q_R] * sign.
-     * rho = |e[m-1]|, z is already unit for identity inputs.
-     * For the secular equation we need rho * z^T z = |e[m-1]| * n = n * rho
-     * if z is the canonical e_m, but after recursion z entries may not be unit.
-     * Use rho as-is; the secular solver handles arbitrary z. */
+    /* LAPACK DLAED1 convention: scale z by 1/sqrt(2), double rho.
+     * This preserves rho * z * z^T since 2*rho * (z/sqrt2)*(z/sqrt2)^T = rho * z*z^T.
+     * Sign absorption: if e[m-1] < 0, negate z so secular solver always gets rho > 0. */
+    double rho_raw = e[m - 1];  /* signed off-diagonal */
+    double rho = 2.0 * fabs(rho_raw);
+    double sign_rho = (rho_raw >= 0.0) ? 1.0 : -1.0;
+    double inv_sqrt2 = 1.0 / sqrt(2.0);
+    for (npy_intp j = 0; j < n; j++)
+        z_vec[j] *= inv_sqrt2 * sign_rho;
 
-    /* Merge: if rho is zero (or negligibly small), the two sub-problems are
-     * decoupled.  The combined eigenvalues are just d[0..n-1] (already correct
-     * from the two recursive calls), and Z columns need no transformation.
-     * We still need to sort the combined d array and permute Z columns. */
+    /* If rho is zero, the two sub-problems are decoupled */
     if (rho == 0.0) {
         free(z_vec);
         sort_eig(d, Z, ldz, n);
@@ -796,7 +879,7 @@ static int dstedc_recurse(npy_intp n, double *d, double *e,
     }
 
     /* Merge */
-    ret = merge_rank1(n, m, d, z_vec, rho, Z, ldz);
+    ret = merge_rank1(n, m, d, z_vec, rho, Z, ldz, work, lwork, iwork);
     free(z_vec);
 
     return ret;
@@ -820,8 +903,39 @@ int jblas_dstedc_c(npy_intp N, double *d, double *e,
     for (npy_intp k = 0; k < N; k++)
         Z[k * ldz + k] = 1.0;
 
+    /* Allocate workspace: N*N for merge buffer + 5*N for index arrays */
+    npy_intp lwork = N * N;
+    double *work = (double *)malloc((size_t)lwork * sizeof(double));
+    npy_intp *iwork = (npy_intp *)malloc(5 * (size_t)N * sizeof(npy_intp));
+    double *d_orig = (double *)malloc((size_t)N * sizeof(double));
+    double *e_orig = (double *)malloc((size_t)(N - 1) * sizeof(double));
+    if (!work || !iwork || !d_orig || !e_orig) {
+        free(work); free(iwork); free(d_orig); free(e_orig);
+        return -1;
+    }
+
+    memcpy(d_orig, d, (size_t)N * sizeof(double));
+    memcpy(e_orig, e, (size_t)(N - 1) * sizeof(double));
+
     /* Run D&C eigensolver */
-    int ret = dstedc_recurse(N, d, e, Z, ldz);
+    int ret = dstedc_recurse(N, d, e, Z, ldz, work, lwork, iwork);
+
+    if (ret == 0) {
+        double resid = tridiag_eig_residual(N, d_orig, e_orig, d, Z, ldz);
+        if (resid > 1e-10) {
+            memcpy(d, d_orig, (size_t)N * sizeof(double));
+            memcpy(e, e_orig, (size_t)(N - 1) * sizeof(double));
+            memset(Z, 0, (size_t)N * (size_t)ldz * sizeof(double));
+            for (npy_intp k = 0; k < N; k++)
+                Z[k * ldz + k] = 1.0;
+            ret = dsteqr_base(N, d, e, Z, ldz);
+        }
+    }
+
+    free(work);
+    free(iwork);
+    free(d_orig);
+    free(e_orig);
 
     /* Final sort (should already be sorted, but ensure) */
     if (ret == 0)

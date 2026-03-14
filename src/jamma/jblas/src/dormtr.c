@@ -1,57 +1,76 @@
 /**
- * dormtr.c — Householder back-transformation for jblas.
+ * dormtr.c — Blocked Householder back-transformation for jblas.
  *
  * Implements jblas_dormtr_c: applies Q (from dsytrd's Householder vectors
  * stored in the lower triangle of A) to the eigenvector matrix C:
- *
  *   C = Q @ C
  *
- * where Q = H_0 * H_1 * ... * H_{N-3} is the accumulated orthogonal
- * transformation from jblas_dsytrd_c.
+ * Algorithm: DLARFT (form triangular T factor) + DLARFB (block application).
+ * Processes reflectors in blocks of NB from right to left.
  *
- * Each Householder reflector H_j = I - tau[j] * v_j * v_j^T where:
- *   v_j[k] = 1       for k = 0 (implicit, not stored)
- *   v_j[k] = A[(j+1+k)*lda + j]  for k = 1..N-j-2 (stored in lower A)
- *   In 0-based indexing: v stored in column j of A, rows j+1..N-1.
+ * DLARFT: Forms upper triangular T[nb x nb] encoding the product
+ *   H_j * H_{j+1} * ... * H_{j+nb-1} = I - V * T * V^T
  *
- * Algorithm:
- *   Apply reflectors right-to-left (H_{N-2} first, H_0 last):
- *   for j = N-2, N-3, ..., 0:
- *     w = v_j^T @ C[j+1:N, :]          (length-M inner product)
- *     C[j+1:N, :] -= tau[j] * v_j @ w^T  (rank-1 update)
+ * DLARFB: Applies (I - V * T * V^T) * C:
+ *   1. W = V^T @ C[j+1:N, :]     (nb x M)
+ *   2. W = T @ W                   (triangular multiply)
+ *   3. C[j+1:N, :] -= V @ W       (rank-nb update via loops)
  *
- * Note: jblas_dgemm_c always zeroes C before accumulating (C = A@B semantics,
- * not C += A@B), so the rank-1 update uses a direct loop rather than dgemm.
- *
- * Row-major layout: A[i,j] = A[i * lda + j], C[i,j] = C[i * ldc + j].
+ * Memory: T[NB x NB] + W[NB x M] + V_block[vlen x NB] + z[NB].
  */
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 #include <numpy/arrayobject.h>
 #include "jblas.h"
 
-/* ---------------------------------------------------------------------------
- * jblas_dormtr_c — Apply Q (from dsytrd) to C on the left: C = Q @ C.
+#define NB_DORMTR 64
+
+/* dlarft — Form upper triangular T for a block of nb Householder reflectors.
  *
- * Parameters:
- *   N    : matrix dimension (Q is N x N, C is N x M).
- *   M    : number of columns in C (= N for eigenvector back-transformation).
- *   A    : the N x N matrix from dsytrd, row-major, stride lda.
- *          Lower triangle (below diagonal) holds Householder vectors.
- *          A[j+1, j] = e[j] (implicit 1 in v_j).
- *          A[j+2, j], A[j+3, j], ... hold the tail of v_j.
- *   lda  : leading dimension of A (>= N).
- *   tau  : Householder scalars, length N-1.  tau[j] is the scalar for H_j.
- *   C    : N x M matrix to be multiplied by Q (in-place), row-major, stride ldc.
- *   ldc  : leading dimension of C (>= M).
- *
- * Returns 0 on success, -1 on allocation failure.
- * ---------------------------------------------------------------------------
+ * V: vlen x nb matrix (row-major, stride nb_alloc). V[:, i] is reflector i.
+ * tau: Householder scalars for this block, length nb.
+ * T: nb x nb output (row-major, stride T_stride). Upper triangular.
+ * z: scratch vector of length nb.
  */
+static void dlarft(npy_intp vlen, npy_intp nb,
+                    const double *V, npy_intp nb_alloc,
+                    const double *tau,
+                    double *T, npy_intp T_stride,
+                    double *z)
+{
+    memset(T, 0, (size_t)nb * (size_t)T_stride * sizeof(double));
+
+    for (npy_intp i = 0; i < nb; i++) {
+        if (tau[i] == 0.0) {
+            T[i * T_stride + i] = 0.0;
+            continue;
+        }
+        T[i * T_stride + i] = tau[i];
+
+        if (i == 0) continue;
+
+        /* z = V[:, 0:i]^T * V[:, i]  (i dot products) */
+        for (npy_intp k = 0; k < i; k++) {
+            double dot = 0.0;
+            for (npy_intp r = 0; r < vlen; r++)
+                dot += V[r * nb_alloc + k] * V[r * nb_alloc + i];
+            z[k] = dot;
+        }
+
+        /* T[0:i, i] = -tau[i] * T[0:i, 0:i] * z
+         * T is upper triangular, so T[0:i, 0:i] * z is a triangular matvec. */
+        for (npy_intp r = 0; r < i; r++) {
+            double s = 0.0;
+            for (npy_intp c = r; c < i; c++)  /* upper triangular: c >= r */
+                s += T[r * T_stride + c] * z[c];
+            T[r * T_stride + i] = -tau[i] * s;
+        }
+    }
+}
+
 int jblas_dormtr_c(npy_intp N, npy_intp M,
                    const double *A, npy_intp lda, const double *tau,
                    double *C, npy_intp ldc)
@@ -59,48 +78,79 @@ int jblas_dormtr_c(npy_intp N, npy_intp M,
     if (N <= 1 || M <= 0)
         return 0;
 
-    /* Workspace: w[M] = v_j^T @ C[j+1:N, :] (length-M inner product). */
-    double *w = (double *)malloc((size_t)M * sizeof(double));
-    if (!w)
+    npy_intp nb_alloc = NB_DORMTR;
+
+    /* Allocate workspace */
+    double *T_buf = (double *)malloc((size_t)nb_alloc * (size_t)nb_alloc * sizeof(double));
+    double *W     = (double *)malloc((size_t)nb_alloc * (size_t)M * sizeof(double));
+    npy_intp max_vlen = N - 1;
+    double *V_block = (double *)malloc((size_t)max_vlen * (size_t)nb_alloc * sizeof(double));
+    double *z     = (double *)malloc((size_t)nb_alloc * sizeof(double));
+    if (!T_buf || !W || !V_block || !z) {
+        free(T_buf); free(W); free(V_block); free(z);
         return -1;
-
-    /* Apply reflectors in reverse order: j = N-2, N-3, ..., 0.
-     *
-     * H_j = I - tau[j] * v_j * v_j^T
-     *
-     * v_j has length vlen = N - j - 1:
-     *   v_j[0] = 1   (implicit; A[(j+1)*lda + j] stores e[j], used as v_j[0]=1)
-     *   v_j[k] = A[(j+1+k)*lda + j]  for k = 1..vlen-1
-     *
-     * C = H_j @ C means:
-     *   w = v_j^T @ C[j+1:N, :]
-     *   C[j+1:N, :] -= tau[j] * v_j @ w^T
-     */
-    for (npy_intp j = N - 2; j >= 0; j--) {
-        if (tau[j] == 0.0) continue;
-
-        npy_intp vlen = N - j - 1;  /* length of v_j */
-        double t = tau[j];
-
-        /* Step A: w[col] = sum_{row=0}^{vlen-1} v_j[row] * C[j+1+row, col] */
-        memset(w, 0, (size_t)M * sizeof(double));
-        for (npy_intp row = 0; row < vlen; row++) {
-            double v_row = (row == 0) ? 1.0 : A[(j + 1 + row) * lda + j];
-            const double *C_row = C + (j + 1 + row) * ldc;
-            for (npy_intp col = 0; col < M; col++)
-                w[col] += v_row * C_row[col];
-        }
-
-        /* Step B: C[j+1+row, col] -= t * v_j[row] * w[col] */
-        for (npy_intp row = 0; row < vlen; row++) {
-            double v_row = (row == 0) ? 1.0 : A[(j + 1 + row) * lda + j];
-            double scale = t * v_row;
-            double *C_row = C + (j + 1 + row) * ldc;
-            for (npy_intp col = 0; col < M; col++)
-                C_row[col] -= scale * w[col];
-        }
     }
 
-    free(w);
+    npy_intp n_ref = N - 1;  /* total number of reflectors */
+    npy_intp j_start = ((n_ref - 1) / NB_DORMTR) * NB_DORMTR;
+    for (; j_start >= 0; j_start -= NB_DORMTR) {
+        npy_intp nb = n_ref - j_start;
+        if (nb > NB_DORMTR) nb = NB_DORMTR;
+
+        npy_intp vlen = N - j_start - 1;
+
+        /* Build V_block[vlen x nb] */
+        memset(V_block, 0, (size_t)vlen * (size_t)nb_alloc * sizeof(double));
+        for (npy_intp i = 0; i < nb; i++) {
+            V_block[i * nb_alloc + i] = 1.0;
+            for (npy_intp r = i + 1; r < vlen; r++)
+                V_block[r * nb_alloc + i] = A[(j_start + 1 + r) * lda + (j_start + i)];
+        }
+
+        /* DLARFT: form T[nb x nb] */
+        dlarft(vlen, nb, V_block, nb_alloc, tau + j_start, T_buf, nb_alloc, z);
+
+        /* DLARFB Step 1: W = V^T @ C[j_start+1:N, :] */
+        memset(W, 0, (size_t)nb * (size_t)M * sizeof(double));
+        for (npy_intp i = 0; i < nb; i++) {
+            for (npy_intp r = 0; r < vlen; r++) {
+                double v_ri = V_block[r * nb_alloc + i];
+                if (v_ri == 0.0) continue;
+                const double *C_row = C + (j_start + 1 + r) * ldc;
+                double *W_row = W + i * M;
+                for (npy_intp c = 0; c < M; c++)
+                    W_row[c] += v_ri * C_row[c];
+            }
+        }
+
+        /* DLARFB Step 2: W = T @ W (upper triangular T, top-to-bottom safe in-place) */
+        for (npy_intp i = 0; i < nb; i++) {
+            for (npy_intp c = 0; c < M; c++) {
+                double s = 0.0;
+                for (npy_intp k = i; k < nb; k++)
+                    s += T_buf[i * nb_alloc + k] * W[k * M + c];
+                W[i * M + c] = s;
+            }
+        }
+
+        /* DLARFB Step 3: C[j_start+1:N, :] -= V @ W */
+        for (npy_intp i = 0; i < nb; i++) {
+            const double *W_row = W + i * M;
+            for (npy_intp r = 0; r < vlen; r++) {
+                double v_ri = V_block[r * nb_alloc + i];
+                if (v_ri == 0.0) continue;
+                double *C_row = C + (j_start + 1 + r) * ldc;
+                for (npy_intp c = 0; c < M; c++)
+                    C_row[c] -= v_ri * W_row[c];
+            }
+        }
+
+        if (j_start == 0) break;
+    }
+
+    free(T_buf);
+    free(W);
+    free(V_block);
+    free(z);
     return 0;
 }

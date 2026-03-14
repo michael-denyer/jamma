@@ -18,7 +18,7 @@
 /* Bump this constant whenever the public ABI changes (new fields in
  * jblas_dispatch_t, changed function signatures, etc.). pymodule.c exposes
  * this as a Python-level integer so callers can guard against ABI mismatches. */
-#define JBLAS_ABI_VERSION 4
+#define JBLAS_ABI_VERSION 5
 
 /* ---------------------------------------------------------------------------
  * Function-pointer typedefs for ISA-dispatched microkernels
@@ -153,6 +153,62 @@ void jblas_pack_A(const double *A, npy_intp lda,
 void jblas_pack_B(const double *B, npy_intp ldb,
                   npy_intp kc, npy_intp nr, double *packed,
                   int nr_param, int trans);
+
+/* ---------------------------------------------------------------------------
+ * Workspace struct for mutex-free GEMM (caller-managed buffers)
+ * ---------------------------------------------------------------------------
+ * Allows concurrent DGEMM calls (e.g. DSTEDC recursion) without mutex
+ * serialisation.  Each workspace owns its own packed_A and packed_B buffers.
+ */
+typedef struct {
+    double  *packed_B;   /* KC * NC doubles, 64-byte aligned */
+    double  *packed_A;   /* n_threads * MC * KC doubles, 64-byte aligned */
+    int      n_threads;
+} jblas_workspace_t;
+
+int  jblas_workspace_alloc(jblas_workspace_t *ws, int n_threads);
+void jblas_workspace_free(jblas_workspace_t *ws);
+
+/* ---------------------------------------------------------------------------
+ * Accumulate GEMM: C = alpha * op(A) * op(B) + beta * C
+ * ---------------------------------------------------------------------------
+ * beta=0: zeroes C before accumulation (same as jblas_dgemm_c).
+ * beta=1: accumulates into existing C (for rank-k updates, DORMTR, etc.).
+ * alpha: scales the product; common values are 1.0 and -1.0.
+ *
+ * Uses the global mutex + global packed_A/B workspace.
+ */
+void jblas_dgemm_accum_c(npy_intp M, npy_intp N, npy_intp K,
+                          const double *A, npy_intp lda,
+                          const double *B, npy_intp ldb,
+                          double *C, npy_intp ldc,
+                          int transa, int transb,
+                          double alpha, double beta);
+
+/* ---------------------------------------------------------------------------
+ * Workspace-explicit GEMM: C = alpha * op(A) * op(B) + beta * C
+ * ---------------------------------------------------------------------------
+ * Same as jblas_dgemm_accum_c but uses a caller-owned workspace instead
+ * of the global packed_A/B + mutex.  No locking — safe for concurrent use
+ * (e.g. inside DSTEDC recursive D&C).
+ */
+void jblas_dgemm_ws(npy_intp M, npy_intp N, npy_intp K,
+                    const double *A, npy_intp lda,
+                    const double *B, npy_intp ldb,
+                    double *C, npy_intp ldc,
+                    int transa, int transb,
+                    double alpha, double beta,
+                    jblas_workspace_t *ws);
+
+/* ---------------------------------------------------------------------------
+ * Thread control API
+ * ---------------------------------------------------------------------------
+ * jblas_get_n_threads: returns current thread count.
+ * jblas_set_n_threads: sets thread count, clamped to init-time maximum
+ *   (prevents packed_A OOB access).  Returns previous count, or -1 on error.
+ */
+int  jblas_get_n_threads(void);
+int  jblas_set_n_threads(int n);
 
 /* ---------------------------------------------------------------------------
  * dsyrk and dsyr2k function declarations

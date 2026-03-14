@@ -4,9 +4,9 @@
  * Implements jblas_dstedc_c: computes all eigenvalues and eigenvectors of a
  * real symmetric tridiagonal matrix T given by diagonal d[N] and off-diagonal
  * e[N-1].  On input Z is N x N identity.  On output d contains the eigenvalues
- * in ascending order and Z contains the corresponding eigenvectors as rows
- * (row-major: Z[i,j] is the j-th component of eigenvector i; equivalently
- * eigenvector for eigenvalue d[k] is column k of Z.T — the caller convention
+ * in ascending order and Z contains the corresponding eigenvectors as columns
+ * (row-major: Z[i,j] is the i-th component of eigenvector j; equivalently
+ * eigenvector for eigenvalue d[k] is column k of Z — the caller convention
  * matches LAPACK dstedc with COMPZ='I').
  *
  * NOTE ON ROW-MAJOR CONVENTION:
@@ -16,10 +16,10 @@
  *   column is Z[0*ldz+k], Z[1*ldz+k], ... Z[(N-1)*ldz+k].
  *
  * Algorithm:
- *   Base case (N <= 25): Implicit QR iteration (Francis shift) on the
+ *   Base case (N <= DSTEDC_BASE, currently 128): Implicit QR iteration (Francis shift) on the
  *   tridiagonal matrix.  Eigenvectors are accumulated via Givens rotations.
  *
- *   Recursive case (N > 25): Divide-and-conquer a la Gu & Eisenstat (1995).
+ *   Recursive case (N > DSTEDC_BASE): Divide-and-conquer a la Gu & Eisenstat (1995).
  *     1. Split at m = N/2; adjust d[m-1] -= |rho|, d[m] -= |rho|.
  *     2. Recurse on left half [0..m-1] and right half [m..N-1].
  *     3. Merge via rank-1 secular equation:
@@ -39,7 +39,10 @@
  * Memory:
  *   dstedc_c allocates one N x N workspace + O(N) scratch at top level,
  *   passed through recursion. merge_rank1 uses the workspace for Q_sec
- *   and allocates Z_new locally (needed simultaneously with Q_sec).
+ *   (N x N) and additionally allocates Z_new (N x N), delta_mat (up to
+ *   N_nd x N_nd), Q_nd (N_nd x N_nd), and Q_nd_full (N x N_nd) locally.
+ *   Peak merge-step memory is ~5 * N^2 doubles (~40 bytes/element).
+ *   For N=100k, expect ~400 GB peak during the top-level merge.
  *
  * References:
  *   Gu & Eisenstat (1995), "A Divide-and-Conquer Algorithm for the
@@ -48,9 +51,10 @@
  *   LAPACK Working Note 89.
  */
 
-/* Prevent -ffast-math from being applied to this translation unit.
- * Deflation uses IEEE 754 isnan/isinf and the secular equation solver
- * depends on correct infinity arithmetic near the poles. */
+/* Hint to conforming compilers that FENV access is required.
+ * Note: GCC/Clang largely ignore this pragma when -ffast-math is set.
+ * The primary defense against -ffast-math is the lapack_sources compile
+ * group in hatch_build.py (verified by test_lapack_no_ffast_math). */
 #pragma STDC FENV_ACCESS ON
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
@@ -84,7 +88,9 @@
  *   From -s*a + c*b = 0: s/c = b/a  (for |a| >= |b|, use c as pivot)
  *                         c/s = a/b  (for |b| > |a|, use s as pivot)
  *
- * Sign convention: r >= 0 (LAPACK dlartg convention: r = hypot(a,b)).
+ * Sign convention: r >= 0 always (enforced by sign flip). Note: LAPACK
+ * dlartg uses r = sigma * hypot(a,b) where sigma depends on the larger
+ * component; this implementation differs by guaranteeing non-negative r.
  */
 static void dlartg(double a, double b, double *c, double *s, double *r)
 {
@@ -238,11 +244,11 @@ static int dsteqr_base(npy_intp n, double *d, double *e,
     memcpy(diag, d, (size_t)n * sizeof(double));
     memcpy(offd, e, (size_t)(n - 1) * sizeof(double));
 
-    int max_iter = 30 * (int)n;
+    npy_intp max_iter = 30 * n;
     npy_intp l1 = 0;
     int converged = 0;
 
-    for (int iter = 0; iter < max_iter; iter++) {
+    for (npy_intp iter = 0; iter < max_iter; iter++) {
         if (l1 >= n - 1) {
             converged = 1;
             break;
@@ -345,29 +351,6 @@ static int dsteqr_base(npy_intp n, double *d, double *e,
     return converged ? 0 : (int)n;
 }
 
-/* ---------------------------------------------------------------------------
- * dlaed4 — Secular equation solver.
- *
- * Finds the i-th root lambda of:
- *   f(lambda) = 1 + rho * sum_k z[k]^2 / (d[k] - lambda) = 0
- *
- * The root lies in (d[i], d[i+1]) for i < n-1, or (d[n-1], d[n-1]+rho*||z||^2)
- * for i = n-1 (rho > 0 case).
- *
- * Algorithm: Rational interpolation (Gu/Li) with Newton correction.
- * Guaranteed to converge in the open interval (d[i], d[i+1]).
- *
- * Parameters:
- *   n    : number of poles.
- *   i    : index of the desired root (0-based).
- *   d    : distinct poles in ascending order, length n.
- *   z    : weight vector (z[k]^2 is the residue at pole d[k]).
- *   rho  : positive scalar (sign already absorbed, must be > 0).
- *   lambda_out : output root.
- *
- * Returns 0 on success, 1 if failed to converge.
- * ---------------------------------------------------------------------------
- */
 /* dlaed4 — Secular equation solver (LAPACK-style incremental delta).
  *
  * Finds the i-th root lambda of:
@@ -620,14 +603,21 @@ static int merge_rank1(npy_intp n, npy_intp m,
         return -1;
     }
 
+    int n_secular_failures = 0;
     for (npy_intp i = 0; i < n_nd; i++) {
         int info = dlaed4(n_nd, i, d_nd, z_nd, rho,
                           &lam_nd[i], delta_mat + i * n_nd);
         if (info != 0) {
+            n_secular_failures++;
             lam_nd[i] = d_nd[i];
             for (npy_intp k = 0; k < n_nd; k++)
                 delta_mat[i * n_nd + k] = d_nd[k] - d_nd[i];
         }
+    }
+    if (n_secular_failures > 0) {
+        fprintf(stderr, "jblas dstedc: %d/%ld secular equation(s) "
+                "failed to converge at merge size %ld\n",
+                n_secular_failures, (long)n_nd, (long)n);
     }
 
     /* Step 5: Secular eigenvectors (LAPACK dlaed3 algorithm).
@@ -828,12 +818,12 @@ static int dstedc_recurse(npy_intp n, double *d, double *e,
     /* Left half: rows 0..m-1, cols 0..m-1 of Z */
     int ret;
     ret = dstedc_recurse(m, d, e, Z, ldz, work, lwork, iwork);
-    if (ret < 0) return ret;
+    if (ret != 0) return ret;
 
     /* Right half: rows m..n-1, cols m..n-1 of Z */
     ret = dstedc_recurse(n - m, d + m, e + m, Z + m * ldz + m, ldz,
                           work, lwork, iwork);
-    if (ret < 0) return ret;
+    if (ret != 0) return ret;
 
     /* Build z vector from the post-recursion eigenvectors.
      *
@@ -923,12 +913,23 @@ int jblas_dstedc_c(npy_intp N, double *d, double *e,
     if (ret == 0) {
         double resid = tridiag_eig_residual(N, d_orig, e_orig, d, Z, ldz);
         if (resid > 1e-10) {
-            memcpy(d, d_orig, (size_t)N * sizeof(double));
-            memcpy(e, e_orig, (size_t)(N - 1) * sizeof(double));
-            memset(Z, 0, (size_t)N * (size_t)ldz * sizeof(double));
-            for (npy_intp k = 0; k < N; k++)
-                Z[k * ldz + k] = 1.0;
-            ret = dsteqr_base(N, d, e, Z, ldz);
+            fprintf(stderr, "jblas dstedc: D&C residual %.2e exceeds 1e-10 "
+                    "(N=%ld)\n", resid, (long)N);
+            if (N > 5000) {
+                fprintf(stderr, "jblas dstedc: N=%ld too large for QR "
+                        "fallback (O(N^3) Givens); returning error\n",
+                        (long)N);
+                ret = -2;
+            } else {
+                fprintf(stderr, "jblas dstedc: falling back to QR "
+                        "iteration (N=%ld)\n", (long)N);
+                memcpy(d, d_orig, (size_t)N * sizeof(double));
+                memcpy(e, e_orig, (size_t)(N - 1) * sizeof(double));
+                memset(Z, 0, (size_t)N * (size_t)ldz * sizeof(double));
+                for (npy_intp k = 0; k < N; k++)
+                    Z[k * ldz + k] = 1.0;
+                ret = dsteqr_base(N, d, e, Z, ldz);
+            }
         }
     }
 

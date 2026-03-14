@@ -1,4 +1,4 @@
-"""Tests for jblas eigh (symmetric eigendecomposition via LAPACK DSYEVD).
+"""Tests for jblas eigh (symmetric eigendecomposition via DSYTRD + DSTEDC + DORMTR).
 
 Tests cover all EIGH requirements (EIGH-01 through EIGH-09):
 - EIGH-01: DSYTRD reduction to tridiagonal form (C extension stub)
@@ -7,8 +7,8 @@ Tests cover all EIGH requirements (EIGH-01 through EIGH-09):
 - EIGH-04: DORMTR eigenvector back-transformation (C extension stub)
 - EIGH-05: Python fallback correctness (identity, diagonal, random SPD, ascending)
 - EIGH-06: Output memory layout (shape, dtype, C-contiguous)
-- EIGH-07: Reconstruction accuracy: ||K - U diag(w) U.T|| / ||K|| < 1e-14
-- EIGH-08: Orthogonality: ||U.T @ U - I||_F < 1e-14
+- EIGH-07: Reconstruction accuracy: ||K - U diag(w) U.T|| / ||K|| < 1e-12
+- EIGH-08: Orthogonality: ||U.T @ U - I||_F < 1e-12
 - EIGH-09: LAPACK sources in hatch_build.py must not receive -ffast-math
 
 Run with -n0 to avoid interference with OpenMP threading tests:
@@ -193,7 +193,10 @@ class TestEigh:
 
 @pytest.mark.slow
 def test_reconstruction_accuracy() -> None:
-    """N=1000 random SPD: ||K - U diag(w) U.T|| / ||K|| < 1e-14."""
+    """N=1000 random SPD: ||K - U diag(w) U.T|| / ||K|| < 1e-12.
+
+    Tolerance: O(N * eps) ~ 1000 * 2.2e-16 ~ 2.2e-13.  Use 1e-12 for margin.
+    """
     rng = np.random.default_rng(42)
     N = 1000
     K = _random_spd(N, rng)
@@ -204,8 +207,8 @@ def test_reconstruction_accuracy() -> None:
     norm_K = np.linalg.norm(K, "fro")
     norm_diff = np.linalg.norm(K - K_reconstructed, "fro")
     ratio = norm_diff / norm_K
-    assert ratio < 1e-14, (
-        f"Reconstruction accuracy ||K - U diag(w) U.T|| / ||K|| = {ratio:.2e} > 1e-14"
+    assert ratio < 1e-12, (
+        f"Reconstruction accuracy ||K - U diag(w) U.T|| / ||K|| = {ratio:.2e} > 1e-12"
     )
 
 
@@ -216,7 +219,7 @@ def test_reconstruction_accuracy() -> None:
 
 @pytest.mark.slow
 def test_orthogonality() -> None:
-    """N=1000 random SPD: ||U.T @ U - I||_F < 1e-14."""
+    """N=1000 random SPD: ||U.T @ U - I||_F < 1e-12."""
     rng = np.random.default_rng(43)
     N = 1000
     K = _random_spd(N, rng)
@@ -380,7 +383,7 @@ def test_vs_mouse_hs1940_kinship() -> None:
 
 
 # ---------------------------------------------------------------------------
-# TestDsytrd — EIGH-01: Tridiagonalization stubs (C extension only)
+# TestDsytrd — EIGH-01: Tridiagonalization (C extension only)
 # ---------------------------------------------------------------------------
 
 
@@ -391,21 +394,29 @@ def test_vs_mouse_hs1940_kinship() -> None:
 class TestDsytrd:
     """DSYTRD reduction to tridiagonal form (EIGH-01).
 
-    These tests require the C extension with jblas_dsytrd_c wired to Python.
-    Plan 02 implements the C function; Plan 03 exposes it to Python.
-    Until then, these tests skip.
+    dsytrd/dstedc/dormtr are internal C functions not yet exposed as individual
+    Python bindings. These tests exercise them indirectly through eigh.
     """
 
-    def test_tridiagonalizes(self) -> None:
-        """After dsytrd, Q T Q.T ≈ K and T is tridiagonal.
+    def test_tridiagonalizes_via_eigh(self) -> None:
+        """Verify dsytrd works correctly by checking eigh reconstruction.
 
-        This test will be expanded in Plan 02 once jblas.dsytrd is exposed.
+        dsytrd is the first step of eigh; if it produces wrong tridiagonal
+        output, reconstruction will fail.
         """
-        pytest.skip("jblas.dsytrd not yet exposed to Python (Plan 03 wires it)")
+        rng = np.random.default_rng(101)
+        N = 64  # NB_DSYTRD = 64, tests blocked path boundary
+        K = _random_spd(N, rng)
+        K_copy = K.copy()
+        w, v = eigh(K_copy)
+        K_recon = v @ np.diag(w) @ v.T
+        norm_K = np.linalg.norm(K, "fro")
+        ratio = np.linalg.norm(K - K_recon, "fro") / norm_K
+        assert ratio < 1e-13, f"dsytrd/eigh reconstruction failed: {ratio:.2e}"
 
 
 # ---------------------------------------------------------------------------
-# TestDstedc — EIGH-02: Divide-and-conquer solver stubs (C extension only)
+# TestDstedc — EIGH-02: Divide-and-conquer solver (C extension only)
 # ---------------------------------------------------------------------------
 
 
@@ -416,21 +427,51 @@ class TestDsytrd:
 class TestDstedc:
     """DSTEDC divide-and-conquer solver (EIGH-02).
 
-    These tests require the C extension with jblas_dstedc_c wired to Python.
-    Plan 02 implements the C function; Plan 03 exposes it to Python.
-    Until then, these tests skip.
+    Tests exercise dstedc indirectly through eigh at sizes that trigger
+    both the QR base case and D&C recursive splitting.
     """
 
-    def test_solves_symmetric_tridiagonal(self) -> None:
-        """DSTEDC computes correct eigenvalues/eigenvectors for a tridiagonal input.
+    @pytest.mark.parametrize("N", [127, 128, 129, 200])
+    def test_dstedc_boundary_reconstruction(self, N: int) -> None:
+        """Verify D&C merge at DSTEDC_BASE boundary via reconstruction."""
+        rng = np.random.default_rng(202 + N)
+        K = _random_spd(N, rng)
+        K_copy = K.copy()
+        w, v = eigh(K_copy)
+        K_recon = v @ np.diag(w) @ v.T
+        norm_K = np.linalg.norm(K, "fro")
+        ratio = np.linalg.norm(K - K_recon, "fro") / norm_K
+        assert ratio < 1e-12, f"D&C boundary reconstruction at N={N}: {ratio:.2e}"
 
-        This test will be expanded in Plan 02 once jblas.dstedc is exposed.
-        """
-        pytest.skip("jblas.dstedc not yet exposed to Python (Plan 03 wires it)")
+    def test_degenerate_eigenvalues(self) -> None:
+        """Matrix with exact repeated eigenvalues exercises deflation."""
+        # diag([1,1,1,2,2,3]) — exact multiplicity
+        K = np.diag([1.0, 1.0, 1.0, 2.0, 2.0, 3.0])
+        w, v = eigh(K.copy())
+        npt.assert_allclose(w, [1, 1, 1, 2, 2, 3], atol=1e-14)
+        VtV = v.T @ v
+        npt.assert_allclose(VtV, np.eye(6), atol=1e-14)
+
+    def test_zero_matrix(self) -> None:
+        """Zero matrix: all eigenvalues 0, eigenvectors form orthonormal basis."""
+        N = 10
+        K = np.zeros((N, N))
+        w, v = eigh(K.copy())
+        npt.assert_allclose(w, np.zeros(N), atol=1e-15)
+        VtV = v.T @ v
+        npt.assert_allclose(VtV, np.eye(N), atol=1e-14)
+
+    def test_indefinite_matrix(self) -> None:
+        """Matrix with negative eigenvalues."""
+        K = np.array([[1.0, 2.0], [2.0, 1.0]])  # eigenvalues: -1, 3
+        w, v = eigh(K.copy())
+        npt.assert_allclose(w, [-1.0, 3.0], atol=1e-14)
+        VtV = v.T @ v
+        npt.assert_allclose(VtV, np.eye(2), atol=1e-14)
 
 
 # ---------------------------------------------------------------------------
-# TestDormtr — EIGH-04: Back-transformation stubs (C extension only)
+# TestDormtr — EIGH-04: Back-transformation (C extension only)
 # ---------------------------------------------------------------------------
 
 
@@ -441,17 +482,24 @@ class TestDstedc:
 class TestDormtr:
     """DORMTR eigenvector back-transformation (EIGH-04).
 
-    These tests require the C extension with jblas_dormtr_c wired to Python.
-    Plan 02 implements the C function; Plan 03 exposes it to Python.
-    Until then, these tests skip.
+    Tests exercise dormtr indirectly through eigh by verifying that
+    eigenvectors are in the original (not tridiagonal) basis.
     """
 
     def test_back_transforms_eigenvectors(self) -> None:
-        """DORMTR correctly applies the orthogonal transform from DSYTRD.
-
-        This test will be expanded in Plan 02 once jblas.dormtr is exposed.
-        """
-        pytest.skip("jblas.dormtr not yet exposed to Python (Plan 03 wires it)")
+        """Verify eigenvectors are in the original basis (not tridiagonal)."""
+        rng = np.random.default_rng(303)
+        N = 100
+        K = _random_spd(N, rng)
+        K_copy = K.copy()
+        w, v = eigh(K_copy)
+        # If dormtr failed, K @ v[:,j] != w[j] * v[:,j]
+        for j in range(min(5, N)):
+            residual = np.linalg.norm(K @ v[:, j] - w[j] * v[:, j])
+            assert residual < 1e-11, (
+                f"dormtr back-transform failed for eigenvector {j}: "
+                f"residual={residual:.2e}"
+            )
 
 
 # ---------------------------------------------------------------------------

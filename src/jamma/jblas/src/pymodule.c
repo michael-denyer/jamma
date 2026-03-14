@@ -599,12 +599,19 @@ py_eigh(PyObject *self, PyObject *args)
 
     int ret;
     Py_BEGIN_ALLOW_THREADS
+    /* ldk = ldz = N: safe because PyArray_FROM_OTF/SimpleNew guarantee C-contiguous */
     ret = jblas_eigh_c(N, pK, N, pW, pU, N);
     Py_END_ALLOW_THREADS
 
     if (ret != 0) {
-        PyErr_Format(PyExc_RuntimeError,
-            "jblas eigh: convergence failure (returned %d)", ret);
+        if (ret == -1 || ret == -2) {
+            PyErr_Format(PyExc_MemoryError,
+                "jblas eigh: workspace allocation failed (returned %d) — "
+                "matrix too large for available memory", ret);
+        } else {
+            PyErr_Format(PyExc_RuntimeError,
+                "jblas eigh: convergence failure (returned %d)", ret);
+        }
         Py_DECREF(aW); Py_DECREF(aU);
         PyArray_DiscardWritebackIfCopy(aK);
         Py_DECREF(aK);

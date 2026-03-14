@@ -80,22 +80,17 @@ int jblas_eigh_c(npy_intp N,
         return ret;
     }
 
-    /* Step 3: Initialize eigenvectors to identity */
-    memset(eigenvectors, 0, (size_t)N * (size_t)ldz * sizeof(double));
-    for (npy_intp k = 0; k < N; k++)
-        eigenvectors[k * ldz + k] = 1.0;
-
-    /* Step 4: D&C tridiagonal eigensolver
-     * On input: d[N] diagonal, e[N-1] off-diagonal, Z = identity.
+    /* Step 3: D&C tridiagonal eigensolver
+     * On input: d[N] diagonal, e[N-1] off-diagonal.
      * On output: d[N] eigenvalues (ascending), Z columns = eigenvectors of T.
-     * dstedc reinitializes Z to identity internally. */
+     * dstedc initializes Z to identity internally. */
     ret = jblas_dstedc_c(N, d, e, eigenvectors, ldz);
     if (ret != 0) {
         free(d); free(e); free(tau);
         return ret;
     }
 
-    /* Step 5: Back-transformation: eigenvectors of T -> eigenvectors of K
+    /* Step 4: Back-transformation: eigenvectors of T -> eigenvectors of K
      * C = Q @ C  where Q is encoded in K's lower triangle + tau. */
     ret = jblas_dormtr_c(N, N, K, ldk, tau, eigenvectors, ldz);
     if (ret != 0) {
@@ -103,10 +98,10 @@ int jblas_eigh_c(npy_intp N,
         return ret;
     }
 
-    /* Step 6: Copy eigenvalues to output */
+    /* Step 5: Copy eigenvalues to output */
     memcpy(eigenvalues, d, (size_t)N * sizeof(double));
 
-    /* Step 7: Free workspace (d, e, tau only — dstedc owned its merge buffer) */
+    /* Step 6: Free workspace (d, e, tau only — dstedc owned its merge buffer) */
     free(d);
     free(e);
     free(tau);

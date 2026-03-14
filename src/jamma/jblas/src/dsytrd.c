@@ -101,6 +101,7 @@ static void dsymv_lower(npy_intp n, double alpha,
     }
 }
 
+#ifdef JBLAS_DEBUG
 /* Known-good unblocked fallback retained for reference/debugging. */
 static int dsytrd_unblocked(npy_intp N, double *A, npy_intp lda,
                             double *d, double *e, double *tau)
@@ -162,6 +163,7 @@ static int dsytrd_unblocked(npy_intp N, double *A, npy_intp lda,
     free(w);
     return 0;
 }
+#endif /* JBLAS_DEBUG */
 
 /* dlatrd_panel — Factor nb columns of the symmetric matrix, producing V and W.
  *

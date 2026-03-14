@@ -15,7 +15,7 @@ Exports:
     dgemm: Matrix-matrix product op(A) @ op(B) with optional transpose support.
     dsyrk: Symmetric rank-k update K = X @ X.T.
     dsyr2k: Symmetric rank-2k update C -= A @ B.T + B @ A.T.
-    eigh: Eigenvalues and eigenvectors of a symmetric matrix (LAPACK DSYEVD).
+    eigh: Eigenvalues and eigenvectors of a symmetric matrix (DSYTRD + DSTEDC + DORMTR).
     jblas_isa: String identifying the active ISA ("AVX2", "NEON", "generic",
         or "numpy-fallback").
     ABI_VERSION: Integer ABI version (0 when using NumPy fallback).
@@ -350,7 +350,11 @@ except ImportError as _exc:
         if K.shape[0] != K.shape[1]:
             raise ValueError(f"eigh: K must be square, got shape {K.shape}")
         K64 = _np.asarray(K, dtype=_np.float64)
-        return _np.linalg.eigh(K64)
+        w, v = _np.linalg.eigh(K64)
+        # Match C extension contract: K is overwritten as scratch
+        if K.dtype == _np.float64 and K.flags["WRITEABLE"]:
+            K[:] = 0.0
+        return w, v
 
 
 __all__ = [

@@ -81,13 +81,17 @@ static void dlarfg(npy_intp n, double *alpha, double *x, npy_intp incx,
     *alpha = beta;
 }
 
-/* dsymv_lower — symmetric matrix-vector product for lower-triangle storage.
+/* DSYMV_MIRROR_THRESHOLD — maximum dimension for mirror+GEMV path.
+ * Above this, the temp buffer exceeds ~128MB; fall back to scalar. */
+#define DSYMV_MIRROR_THRESHOLD 4096
+
+/* dsymv_lower_scalar — symmetric matrix-vector product (scalar fallback).
  * y = alpha * A * x, where A[n x n] is symmetric, lower triangle stored.
  * x has stride incx, y is contiguous (stride 1). */
-static void dsymv_lower(npy_intp n, double alpha,
-                         const double *A, npy_intp lda,
-                         const double *x, npy_intp incx,
-                         double *y)
+static void dsymv_lower_scalar(npy_intp n, double alpha,
+                                const double *A, npy_intp lda,
+                                const double *x, npy_intp incx,
+                                double *y)
 {
     for (npy_intp i = 0; i < n; i++) {
         double s = 0.0;
@@ -98,6 +102,52 @@ static void dsymv_lower(npy_intp n, double alpha,
         for (npy_intp j = i + 1; j < n; j++)
             s += A[j * lda + i] * x[j * incx];
         y[i] = alpha * s;
+    }
+}
+
+/* dsymv_lower — symmetric matrix-vector product for lower-triangle storage.
+ * y = alpha * A * x, where A[n x n] is symmetric, lower triangle stored.
+ * x has stride incx, y is contiguous (stride 1).
+ *
+ * For n <= DSYMV_MIRROR_THRESHOLD and unit stride x, uses the mirror+GEMV
+ * approach: mirrors the lower triangle to the upper triangle in a temp
+ * buffer, then calls the ISA-dispatched dgemv for sequential memory access.
+ * Falls back to scalar for large n or non-unit stride. */
+static void dsymv_lower(npy_intp n, double alpha,
+                         const double *A, npy_intp lda,
+                         const double *x, npy_intp incx,
+                         double *y,
+                         double *mirror_buf)
+{
+    /* Scalar fallback for large n or no mirror buffer */
+    if (n > DSYMV_MIRROR_THRESHOLD || mirror_buf == NULL) {
+        dsymv_lower_scalar(n, alpha, A, lda, x, incx, y);
+        return;
+    }
+
+    /* Mirror lower triangle of A into mirror_buf (dense, lda_sym = n).
+     * Copy lower triangle and reflect to upper for a fully symmetric buffer. */
+    for (npy_intp i = 0; i < n; i++) {
+        for (npy_intp j = 0; j <= i; j++) {
+            double val = A[i * lda + j];
+            mirror_buf[i * n + j] = val;
+            mirror_buf[j * n + i] = val;
+        }
+    }
+
+    /* Copy strided x to contiguous buffer (reuse space after mirror_buf).
+     * mirror_buf is n*n doubles; x_buf starts at offset n*n. */
+    double *x_buf = mirror_buf + n * n;
+    for (npy_intp i = 0; i < n; i++)
+        x_buf[i] = x[i * incx];
+
+    /* y = A_sym * x via ISA-dispatched dgemv (sequential access pattern) */
+    jblas_dispatch.dgemv(n, n, mirror_buf, x_buf, y);
+
+    /* Scale by alpha (dgemv has no alpha parameter) */
+    if (alpha != 1.0) {
+        for (npy_intp i = 0; i < n; i++)
+            y[i] *= alpha;
     }
 }
 
@@ -133,7 +183,7 @@ static int dsytrd_unblocked(npy_intp N, double *A, npy_intp lda,
         dsymv_lower(m, tau[j],
                     A + (j + 1) * lda + (j + 1), lda,
                     A + (j + 1) * lda + j, lda,
-                    p);
+                    p, NULL);
         A[(j + 1) * lda + j] = saved_e;
 
         double dot_pv = 0.0;
@@ -184,7 +234,7 @@ static void dlatrd_panel(double *A, npy_intp lda, npy_intp N,
                           npy_intp j, npy_intp nb,
                           double *d, double *e, double *tau,
                           double *V, double *W, npy_intp nb_alloc,
-                          double *p)
+                          double *p, double *mirror_buf)
 {
     npy_intp m_panel = N - j - 1;  /* total trailing rows for this panel */
 
@@ -265,7 +315,8 @@ static void dlatrd_panel(double *A, npy_intp lda, npy_intp N,
         dsymv_lower(m, tau[col],
                      A + (col + 1) * lda + (col + 1), lda,
                      A + (col + 1) * lda + col, lda,
-                     p + off);
+                     p + off,
+                     mirror_buf);
 
         /* Restore A[col+1, col] */
         A[(col + 1) * lda + col] = saved_e;
@@ -326,8 +377,18 @@ int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
     double *V = (double *)calloc((size_t)m_panel * (size_t)nb_alloc, sizeof(double));
     double *W = (double *)calloc((size_t)m_panel * (size_t)nb_alloc, sizeof(double));
     double *p = (double *)malloc((size_t)m_panel * sizeof(double));
+
+    /* Mirror buffer for GEMV-backed dsymv_lower: n*n (mirror) + n (x_buf).
+     * Allocated once and reused for all dsymv_lower calls within the panel.
+     * NULL if m_panel exceeds the mirror threshold (scalar fallback). */
+    double *mirror_buf = NULL;
+    if (m_panel <= DSYMV_MIRROR_THRESHOLD) {
+        mirror_buf = (double *)malloc(
+            ((size_t)m_panel * (size_t)m_panel + (size_t)m_panel) * sizeof(double));
+    }
+
     if (!V || !W || !p) {
-        free(V); free(W); free(p);
+        free(V); free(W); free(p); free(mirror_buf);
         return -1;
     }
 
@@ -339,7 +400,7 @@ int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
         memset(W, 0, (size_t)m_panel * (size_t)nb_alloc * sizeof(double));
 
         /* DLATRD: factor nb columns */
-        dlatrd_panel(A, lda, N, j, nb, d, e, tau, V, W, nb_alloc, p);
+        dlatrd_panel(A, lda, N, j, nb, d, e, tau, V, W, nb_alloc, p, mirror_buf);
 
         /* Trailing dsyr2k update on the unreduced block A[j+nb:N, j+nb:N].
          *
@@ -361,5 +422,6 @@ int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
     free(V);
     free(W);
     free(p);
+    free(mirror_buf);
     return 0;
 }

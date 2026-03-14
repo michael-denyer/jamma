@@ -454,7 +454,9 @@ static int dlaed4(npy_intp n, npy_intp i,
 static int dstedc_recurse(npy_intp n, double *d, double *e,
                           double *Z, npy_intp ldz,
                           double *work, npy_intp lwork,
-                          npy_intp *iwork);
+                          npy_intp *iwork,
+                          jblas_workspace_t *ws,
+                          double *merge_scratch);
 
 /* ---------------------------------------------------------------------------
  * merge_rank1 — Merge two eigensystems via rank-1 secular equation.
@@ -477,7 +479,9 @@ static int merge_rank1(npy_intp n, npy_intp m,
                        double *d, double *z_vec, double rho,
                        double *Z, npy_intp ldz,
                        double *work, npy_intp lwork,
-                       npy_intp *iwork)
+                       npy_intp *iwork,
+                       jblas_workspace_t *ws,
+                       double *merge_scratch)
 {
     /* O(N) work arrays */
     double *d_defl  = (double *)malloc((size_t)n * sizeof(double));
@@ -694,25 +698,44 @@ static int merge_rank1(npy_intp n, npy_intp m,
      * then write them back. Deflated columns of Q_sec are already correct.
      */
 
-    /* Temporary buffer for new non-deflated columns: n rows x n_nd cols */
-    double *Q_nd_full = NULL;
+    /* Compute non-deflated columns: Q_total[:,nondfl[i]] = Q_b[:,nondfl] @ Q_nd[:,i]
+     * Gather Q_b columns indexed by nondfl[] into contiguous Q_b_cols, then GEMM.
+     * Use merge_scratch as temporary (size N*N >= n*n_nd always). */
     if (n_nd > 0) {
-        Q_nd_full = (double *)calloc((size_t)n * (size_t)n_nd, sizeof(double));
+        /* Q_b_cols: n rows x n_nd cols — gather nondfl columns of Q_sec */
+        double *Q_b_cols = merge_scratch;  /* reuse scratch (n*n_nd <= N*N) */
+        for (npy_intp j = 0; j < n_nd; j++) {
+            npy_intp src_col = nondfl[j];
+            for (npy_intp row = 0; row < n; row++)
+                Q_b_cols[row * n_nd + j] = Q_sec[row * n + src_col];
+        }
+
+        /* Q_nd_full = Q_b_cols(n x n_nd) @ Q_nd(n_nd x n_nd)
+         * Result into merge_scratch offset past Q_b_cols.
+         * But Q_b_cols IS merge_scratch, so we need a separate output area.
+         * Allocate Q_nd_full locally (n x n_nd). */
+        double *Q_nd_full = (double *)calloc((size_t)n * (size_t)n_nd, sizeof(double));
         if (!Q_nd_full) {
             free(d_defl); free(z_defl); free(d_new);
             free(defl); free(nondfl); free(dfl); free(d_nd); free(z_nd);
             free(lam_nd); free(Q_nd);
             return -1;
         }
-        /* Q_nd_full[row, i] = sum_k Q_b[row, nondfl[k]] * Q_nd[k, i] */
-        for (npy_intp row = 0; row < n; row++) {
-            for (npy_intp i = 0; i < n_nd; i++) {
-                double s = 0.0;
-                for (npy_intp k = 0; k < n_nd; k++)
-                    s += Q_sec[row * n + nondfl[k]] * Q_nd[k * n_nd + i];
-                Q_nd_full[row * n_nd + i] = s;
-            }
+
+        if (ws) {
+            jblas_dgemm_ws(n, n_nd, n_nd,
+                           Q_b_cols, n_nd,
+                           Q_nd, n_nd,
+                           Q_nd_full, n_nd,
+                           0, 0, 1.0, 0.0, ws);
+        } else {
+            jblas_dgemm_c(n, n_nd, n_nd,
+                          Q_b_cols, n_nd,
+                          Q_nd, n_nd,
+                          Q_nd_full, n_nd,
+                          0, 0);
         }
+
         /* Write updated non-deflated columns back into Q_sec */
         for (npy_intp row = 0; row < n; row++) {
             for (npy_intp i = 0; i < n_nd; i++)
@@ -730,23 +753,33 @@ static int merge_rank1(npy_intp n, npy_intp m,
     /* Step 7: Back-transform Z: Z_new = Z_old @ Q_sec
      * Both Z and Q_sec are n x n row-major.
      * Z_new[i,j] = sum_k Z_old[i,k] * Q_sec[k,j]
-     * Use jblas_dgemm_c: M=n, N=n, K=n, transa=0, transb=0.
-     */
-    double *Z_new = (double *)malloc((size_t)n * (size_t)ldz * sizeof(double));
-    if (!Z_new) {
-        free(d_defl); free(z_defl); free(d_new);
-        free(defl); free(nondfl); free(dfl); free(d_nd); free(z_nd);
-        free(lam_nd); free(Q_nd);
-        return -1;
+     *
+     * Use merge_scratch as Z_new (size N*N >= n*ldz since n<=N and ldz=N).
+     * If merge_scratch is NULL, fall back to malloc. */
+    double *Z_new;
+    int Z_new_malloced = 0;
+    if (merge_scratch) {
+        Z_new = merge_scratch;
+    } else {
+        Z_new = (double *)malloc((size_t)n * (size_t)ldz * sizeof(double));
+        if (!Z_new) {
+            free(d_defl); free(z_defl); free(d_new);
+            free(defl); free(nondfl); free(dfl); free(d_nd); free(z_nd);
+            free(lam_nd); free(Q_nd);
+            return -1;
+        }
+        Z_new_malloced = 1;
     }
 
-    /* jblas_dgemm_c(M, N, K, A, lda, B, ldb, C, ldc, transa, transb)
-     * C = A @ B: Z_new = Z @ Q_sec */
-    jblas_dgemm_c(n, n, n,
-                  Z, ldz,
-                  Q_sec, n,
-                  Z_new, ldz,
-                  0, 0);
+    if (ws) {
+        jblas_dgemm_ws(n, n, n,
+                       Z, ldz, Q_sec, n, Z_new, ldz,
+                       0, 0, 1.0, 0.0, ws);
+    } else {
+        jblas_dgemm_c(n, n, n,
+                      Z, ldz, Q_sec, n, Z_new, ldz,
+                      0, 0);
+    }
 
     /* Copy Z_new back to Z */
     for (npy_intp row = 0; row < n; row++)
@@ -755,7 +788,7 @@ static int merge_rank1(npy_intp n, npy_intp m,
     /* Copy d_new back to d */
     memcpy(d, d_new, (size_t)n * sizeof(double));
 
-    free(Z_new);
+    if (Z_new_malloced) free(Z_new);
     free(d_defl); free(z_defl); free(d_new);
     free(defl); free(nondfl); free(dfl); free(d_nd); free(z_nd);
     free(lam_nd); free(Q_nd);
@@ -780,7 +813,9 @@ static int merge_rank1(npy_intp n, npy_intp m,
 static int dstedc_recurse(npy_intp n, double *d, double *e,
                           double *Z, npy_intp ldz,
                           double *work, npy_intp lwork,
-                          npy_intp *iwork)
+                          npy_intp *iwork,
+                          jblas_workspace_t *ws,
+                          double *merge_scratch)
 {
     if (n <= 0) return 0;
     if (n == 1) return 0;
@@ -817,12 +852,13 @@ static int dstedc_recurse(npy_intp n, double *d, double *e,
 
     /* Left half: rows 0..m-1, cols 0..m-1 of Z */
     int ret;
-    ret = dstedc_recurse(m, d, e, Z, ldz, work, lwork, iwork);
+    ret = dstedc_recurse(m, d, e, Z, ldz, work, lwork, iwork,
+                          ws, merge_scratch);
     if (ret != 0) return ret;
 
     /* Right half: rows m..n-1, cols m..n-1 of Z */
     ret = dstedc_recurse(n - m, d + m, e + m, Z + m * ldz + m, ldz,
-                          work, lwork, iwork);
+                          work, lwork, iwork, ws, merge_scratch);
     if (ret != 0) return ret;
 
     /* Build z vector from the post-recursion eigenvectors.
@@ -869,7 +905,8 @@ static int dstedc_recurse(npy_intp n, double *d, double *e,
     }
 
     /* Merge */
-    ret = merge_rank1(n, m, d, z_vec, rho, Z, ldz, work, lwork, iwork);
+    ret = merge_rank1(n, m, d, z_vec, rho, Z, ldz, work, lwork, iwork,
+                      ws, merge_scratch);
     free(z_vec);
 
     return ret;
@@ -883,7 +920,8 @@ static int dstedc_recurse(npy_intp n, double *d, double *e,
  * ---------------------------------------------------------------------------
  */
 int jblas_dstedc_c(npy_intp N, double *d, double *e,
-                   double *Z, npy_intp ldz)
+                   double *Z, npy_intp ldz,
+                   jblas_workspace_t *ws)
 {
     if (N <= 0) return 0;
     if (N == 1) return 0;
@@ -893,14 +931,18 @@ int jblas_dstedc_c(npy_intp N, double *d, double *e,
     for (npy_intp k = 0; k < N; k++)
         Z[k * ldz + k] = 1.0;
 
-    /* Allocate workspace: N*N for merge buffer + 5*N for index arrays */
+    /* Allocate workspace: N*N for merge buffer + 5*N for index arrays.
+     * Also allocate a single N*N merge scratch buffer passed through
+     * recursion to avoid per-merge malloc in merge_rank1. */
     npy_intp lwork = N * N;
     double *work = (double *)malloc((size_t)lwork * sizeof(double));
     npy_intp *iwork = (npy_intp *)malloc(5 * (size_t)N * sizeof(npy_intp));
     double *d_orig = (double *)malloc((size_t)N * sizeof(double));
     double *e_orig = (double *)malloc((size_t)(N - 1) * sizeof(double));
-    if (!work || !iwork || !d_orig || !e_orig) {
+    double *merge_scratch = (double *)malloc((size_t)N * (size_t)N * sizeof(double));
+    if (!work || !iwork || !d_orig || !e_orig || !merge_scratch) {
         free(work); free(iwork); free(d_orig); free(e_orig);
+        free(merge_scratch);
         return -1;
     }
 
@@ -908,7 +950,8 @@ int jblas_dstedc_c(npy_intp N, double *d, double *e,
     memcpy(e_orig, e, (size_t)(N - 1) * sizeof(double));
 
     /* Run D&C eigensolver */
-    int ret = dstedc_recurse(N, d, e, Z, ldz, work, lwork, iwork);
+    int ret = dstedc_recurse(N, d, e, Z, ldz, work, lwork, iwork,
+                              ws, merge_scratch);
 
     if (ret == 0) {
         double resid = tridiag_eig_residual(N, d_orig, e_orig, d, Z, ldz);
@@ -937,6 +980,7 @@ int jblas_dstedc_c(npy_intp N, double *d, double *e,
     free(iwork);
     free(d_orig);
     free(e_orig);
+    free(merge_scratch);
 
     /* Final sort (should already be sorted, but ensure) */
     if (ret == 0)

@@ -238,6 +238,20 @@ void jblas_dsyrk_c(npy_intp N, npy_intp K,
                    double *C, npy_intp ldc);
 
 /**
+ * jblas_dsyrk_lower_c — Symmetric rank-k update: C = X @ X.T (lower only).
+ *
+ * Identical to jblas_dsyrk_c but:
+ *   1. Only zeroes the lower triangle of C (not the full matrix).
+ *   2. Skips the mirror step — upper triangle is NOT filled.
+ *
+ * Saves O(N^2) wasted writes for callers that only read the lower triangle
+ * (e.g. eigensolver-internal paths, kinship computation).
+ */
+void jblas_dsyrk_lower_c(npy_intp N, npy_intp K,
+                          const double *X, npy_intp ldx,
+                          double *C, npy_intp ldc);
+
+/**
  * jblas_dsyr2k_c — Symmetric rank-2k update: C -= A @ B.T + B @ A.T.
  *
  * Applies two half-product subtractions to all elements of C (full-matrix
@@ -283,7 +297,8 @@ int jblas_eigh_c(npy_intp N,
 int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
                    double *d, double *e, double *tau);
 int jblas_dstedc_c(npy_intp N, double *d, double *e,
-                   double *Z, npy_intp ldz);
+                   double *Z, npy_intp ldz,
+                   jblas_workspace_t *ws);
 int jblas_dormtr_c(npy_intp N, npy_intp M,
                    const double *A, npy_intp lda, const double *tau,
                    double *C, npy_intp ldc);

@@ -83,8 +83,18 @@ int jblas_eigh_c(npy_intp N,
     /* Step 3: D&C tridiagonal eigensolver
      * On input: d[N] diagonal, e[N-1] off-diagonal.
      * On output: d[N] eigenvalues (ascending), Z columns = eigenvectors of T.
-     * dstedc initializes Z to identity internally. */
-    ret = jblas_dstedc_c(N, d, e, eigenvectors, ldz);
+     * dstedc initializes Z to identity internally.
+     *
+     * Allocate a workspace for DSTEDC's merge-level GEMMs so they use
+     * caller-owned buffers instead of the global mutex path.  Thread count
+     * matches init-time jblas_n_threads so merge GEMMs benefit from
+     * threading.  If allocation fails, pass NULL (dstedc falls back to
+     * global mutex path). */
+    jblas_workspace_t dstedc_ws;
+    int ws_ok = jblas_workspace_alloc(&dstedc_ws, jblas_n_threads);
+    ret = jblas_dstedc_c(N, d, e, eigenvectors, ldz,
+                          ws_ok == 0 ? &dstedc_ws : NULL);
+    if (ws_ok == 0) jblas_workspace_free(&dstedc_ws);
     if (ret != 0) {
         free(d); free(e); free(tau);
         return ret;

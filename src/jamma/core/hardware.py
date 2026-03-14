@@ -10,11 +10,24 @@ from __future__ import annotations
 import os
 import platform
 
-import jax
 import numpy as np
 import psutil
 
 from jamma.core.threading import get_blas_backend, get_blas_thread_count
+
+try:
+    import jax
+except ImportError as _exc:
+    import importlib.util as _ilu
+    import warnings
+
+    if _ilu.find_spec("jax") is not None:
+        warnings.warn(
+            f"JAX package found but failed to import ({_exc}); "
+            "hardware context will report JAX as unavailable.",
+            stacklevel=1,
+        )
+    jax = None
 
 
 def get_hardware_context() -> dict[str, str | int | bool]:
@@ -51,10 +64,12 @@ def get_hardware_context() -> dict[str, str | int | bool]:
         "cpu_count_logical": os.cpu_count() or 1,
         "blas_backend": get_blas_backend(),
         "blas_threads": get_blas_thread_count(),
-        "jax_version": jax.__version__,
-        "jax_backend": jax.default_backend(),
-        "jax_device_count": len(jax.devices()),
-        "jax_x64_enabled": bool(jax.config.jax_enable_x64),
+        "jax_version": jax.__version__ if jax is not None else "not installed",
+        "jax_backend": jax.default_backend() if jax is not None else "none",
+        "jax_device_count": len(jax.devices()) if jax is not None else 0,
+        "jax_x64_enabled": bool(jax.config.jax_enable_x64)
+        if jax is not None
+        else False,
         "numpy_version": np.__version__,
         "platform": platform.platform(),
         "python_version": platform.python_version(),
@@ -75,6 +90,11 @@ def assert_x64_precision() -> None:
         >>> configure_jax()
         >>> assert_x64_precision()  # passes silently
     """
+    if jax is None:
+        raise RuntimeError(
+            "JAX is not installed. "
+            "Benchmarks require JAX with x64 precision for GEMMA-equivalent results."
+        )
     if not jax.config.jax_enable_x64:
         raise RuntimeError(
             "JAX 64-bit precision is not enabled. "

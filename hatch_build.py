@@ -551,6 +551,8 @@ class CustomBuildHook(BuildHookInterface):
             jblas_src / "pymodule.c",
             jblas_src / "dgemm.c",  # blocking framework
             jblas_src / "dgemm_generic.c",  # generic scalar microkernel
+            jblas_src / "dsyrk.c",  # symmetric rank-k update
+            jblas_src / "dsyr2k.c",  # symmetric rank-2k update
         ]
         simd_sources = [
             jblas_src / "ddot.c",

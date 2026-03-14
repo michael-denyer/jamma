@@ -62,8 +62,10 @@
  * threads can enter jblas_dgemm_c simultaneously.  Both packed_B (shared across
  * all threads) and packed_A (per-thread within one call, but shared across
  * concurrent calls) would race without serialisation.
- * Internal OpenMP parallelism still works (it parallelises the IC loop). */
-static pthread_mutex_t dgemm_mutex = PTHREAD_MUTEX_INITIALIZER;
+ * Internal OpenMP parallelism still works (it parallelises the IC loop).
+ * Non-static so dsyrk.c and dsyr2k.c can share the same lock (they all use
+ * the shared jblas_packed_B workspace). */
+pthread_mutex_t jblas_dgemm_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* ---------------------------------------------------------------------------
  * Utility macros
@@ -334,7 +336,7 @@ void jblas_dgemm_c(npy_intp M, npy_intp N, npy_intp K,
         abort();  /* programming error — py_dgemm guards this; C callers must too */
     }
 
-    int lock_err = pthread_mutex_lock(&dgemm_mutex);
+    int lock_err = pthread_mutex_lock(&jblas_dgemm_mutex);
     if (lock_err != 0) {
         fprintf(stderr,
             "FATAL: jblas_dgemm_c: pthread_mutex_lock failed (errno=%d)\n",
@@ -445,7 +447,7 @@ void jblas_dgemm_c(npy_intp M, npy_intp N, npy_intp K,
         }
     }
 
-    int unlock_err = pthread_mutex_unlock(&dgemm_mutex);
+    int unlock_err = pthread_mutex_unlock(&jblas_dgemm_mutex);
     if (unlock_err != 0) {
         fprintf(stderr,
             "FATAL: jblas_dgemm_c: pthread_mutex_unlock failed (errno=%d)\n",

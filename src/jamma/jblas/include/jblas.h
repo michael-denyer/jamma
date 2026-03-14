@@ -3,7 +3,8 @@
  *
  * Declares the ISA dispatch table, jblas_init(), and function signatures for
  * Level 1/2 BLAS primitives (ddot, dnrm2, daxpy, dscal, dgemv) plus Level 3
- * (dgemm with three-level Goto/BLIS blocking and ISA-dispatched microkernels).
+ * (dgemm, dsyrk, dsyr2k with three-level Goto/BLIS blocking and
+ * ISA-dispatched microkernels).
  *
  * ABI version bump required if any function signature or struct layout changes.
  */
@@ -11,12 +12,13 @@
 #pragma once
 
 #include <stddef.h>             /* size_t */
+#include <pthread.h>            /* pthread_mutex_t — shared across dgemm/dsyrk/dsyr2k */
 #include <numpy/arrayobject.h>  /* npy_intp */
 
 /* Bump this constant whenever the public ABI changes (new fields in
  * jblas_dispatch_t, changed function signatures, etc.). pymodule.c exposes
  * this as a Python-level integer so callers can guard against ABI mismatches. */
-#define JBLAS_ABI_VERSION 2
+#define JBLAS_ABI_VERSION 3
 
 /* ---------------------------------------------------------------------------
  * Function-pointer typedefs for ISA-dispatched microkernels
@@ -112,6 +114,9 @@ extern double *jblas_packed_A;
 extern double *jblas_packed_B;
 extern int     jblas_n_threads; /* Thread count at init time */
 
+/* Mutex shared by dgemm, dsyrk, and dsyr2k — all use jblas_packed_B. */
+extern pthread_mutex_t jblas_dgemm_mutex;
+
 /* ---------------------------------------------------------------------------
  * dgemm function declarations
  * ---------------------------------------------------------------------------
@@ -148,6 +153,54 @@ void jblas_pack_A(const double *A, npy_intp lda,
 void jblas_pack_B(const double *B, npy_intp ldb,
                   npy_intp kc, npy_intp nr, double *packed,
                   int nr_param, int trans);
+
+/* ---------------------------------------------------------------------------
+ * dsyrk and dsyr2k function declarations
+ * ---------------------------------------------------------------------------
+ */
+
+/**
+ * jblas_dsyrk_c — Symmetric rank-k update: C = X @ X.T (lower triangle, then mirror).
+ *
+ * Computes the N×N symmetric matrix C = X @ X.T using lower-triangle tile
+ * skipping (both A and B panels are packed from the same source matrix X).
+ * After all tiles are accumulated, mirrors the lower triangle to fill the
+ * upper triangle (BL3-06).
+ *
+ * C is zeroed before accumulation; the caller provides a pre-allocated N×N
+ * output buffer (zero-initialised is fine, the function overwrites it).
+ *
+ * N    : number of rows/columns of C and rows of X.
+ * K    : number of columns of X.
+ * X    : input matrix, row-major, shape (N, K), leading dimension ldx.
+ * ldx  : leading dimension of X (>= K).
+ * C    : output matrix, row-major, shape (N, N), leading dimension ldc.
+ * ldc  : leading dimension of C (>= N).
+ */
+void jblas_dsyrk_c(npy_intp N, npy_intp K,
+                   const double *X, npy_intp ldx,
+                   double *C, npy_intp ldc);
+
+/**
+ * jblas_dsyr2k_c — Symmetric rank-2k update: C -= A @ B.T + B @ A.T.
+ *
+ * Applies two half-product subtractions to all elements of C (full-matrix
+ * update).  Both triangles are updated for correctness when C is not
+ * symmetric, matching the NumPy fallback contract.
+ *
+ * N    : number of rows/columns of C, and rows of A and B.
+ * K    : number of columns of A and B.
+ * A    : first factor, row-major, shape (N, K), leading dimension lda.
+ * lda  : leading dimension of A (>= K).
+ * B    : second factor, row-major, shape (N, K), leading dimension ldb.
+ * ldb  : leading dimension of B (>= K).
+ * C    : in/out matrix, row-major, shape (N, N), leading dimension ldc.
+ * ldc  : leading dimension of C (>= N).
+ */
+void jblas_dsyr2k_c(npy_intp N, npy_intp K,
+                    const double *A, npy_intp lda,
+                    const double *B, npy_intp ldb,
+                    double *C, npy_intp ldc);
 
 /* ---------------------------------------------------------------------------
  * Initialisation and introspection

@@ -106,8 +106,16 @@ def get_blas_thread_count() -> int:
 
     # Lazy import — calling jax.devices() before configure_jax() would
     # permanently freeze the backend at 1 device.
-    import jax
+    try:
+        import jax
+    except ImportError:
+        # NumPy-only install — no JAX available.
+        n = max(1, min(physical_cores, max_threads))
+        logger.debug(f"BLAS threads: {n} (JAX not installed)")
+        return n
 
+    # JAX is importable — jax_config must also be importable (it's part of
+    # jamma, not an optional dependency).  Let ImportError propagate if broken.
     from jamma.core.jax_config import is_jax_configured
 
     if not is_jax_configured():

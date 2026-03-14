@@ -1,9 +1,9 @@
 """jblas: JAMMA's self-contained BLAS compute layer.
 
 Provides Level 1/2 BLAS primitives (ddot, dnrm2, daxpy, dscal, dgemv) and
-Level 3 BLAS (dgemm — C implementation with AVX2/NEON microkernels) via a C
-extension when available, falling back to NumPy when the C extension has not
-been compiled.
+Level 3 BLAS (dgemm — C implementation with AVX2/NEON microkernels, dsyrk and
+dsyr2k for symmetric rank-k updates) via a C extension when available, falling
+back to NumPy when the C extension has not been compiled.
 
 Exports:
     ddot: Inner product of two double vectors.
@@ -12,11 +12,18 @@ Exports:
     dscal: In-place x *= alpha.
     dgemv: Matrix-vector product A @ x.
     dgemm: Matrix-matrix product op(A) @ op(B) with optional transpose support.
+    dsyrk: Symmetric rank-k update K = X @ X.T.
+    dsyr2k: Symmetric rank-2k update C -= A @ B.T + B @ A.T.
     jblas_isa: String identifying the active ISA ("AVX2", "NEON", "generic",
         or "numpy-fallback").
     ABI_VERSION: Integer ABI version (0 when using NumPy fallback).
     HAS_C_EXTENSION: True if the compiled C extension is loaded.
     HAS_OPENMP: True if the C extension was compiled with OpenMP support.
+    JBLAS_MR: Microkernel row tile size (ISA-specific; generic fallback: 4).
+    JBLAS_NR: Microkernel column tile size (ISA-specific; generic fallback: 4).
+    JBLAS_KC: KC blocking depth (ISA-specific; generic fallback: 128).
+    JBLAS_MC: MC row panel size (ISA-specific; generic fallback: 32).
+    JBLAS_NC: NC column panel size (ISA-specific; generic fallback: 1024).
 """
 
 from __future__ import annotations
@@ -30,12 +37,19 @@ try:
     from jamma.jblas._jblas import (  # noqa: F401
         ABI_VERSION,
         HAS_OPENMP,
+        JBLAS_KC,
+        JBLAS_MC,
+        JBLAS_MR,
+        JBLAS_NC,
+        JBLAS_NR,
         daxpy,
         ddot,
         dgemm,
         dgemv,
         dnrm2,
         dscal,
+        dsyr2k,
+        dsyrk,
         jblas_isa,
     )
 
@@ -63,6 +77,14 @@ except ImportError as _exc:
     HAS_C_EXTENSION = False
     HAS_OPENMP: bool = False
     jblas_isa: str = "numpy-fallback"
+
+    # Blocking parameters: generic defaults (matches jblas generic ISA).
+    # Tests that import these should guard on HAS_C_EXTENSION.
+    JBLAS_MR: int = 4
+    JBLAS_NR: int = 4
+    JBLAS_KC: int = 128
+    JBLAS_MC: int = 32
+    JBLAS_NC: int = 1024
 
     import numpy as _np
 
@@ -232,6 +254,80 @@ except ImportError as _exc:
             dtype=_np.float64,
         )
 
+    def dsyrk(X: _np.ndarray) -> _np.ndarray:
+        """Compute symmetric rank-k update: K = X @ X.T.
+
+        Computes the full symmetric matrix K = X @ X.T, filling both
+        lower and upper triangles.  Uses the lower-triangle-only tile
+        computation path in the C extension for efficiency (saves ~50%
+        tile iterations vs dgemm).  This NumPy fallback computes the
+        full product directly.
+
+        Args:
+            X: Input matrix, shape (N, K), float64.
+
+        Returns:
+            Symmetric result matrix K, shape (N, N), float64.
+
+        Raises:
+            ValueError: If X is not 2-D.
+        """
+        if X.ndim != 2:
+            raise ValueError(f"dsyrk: X must be a 2-D array, got {X.ndim}-D")
+        X64 = _np.ascontiguousarray(X, dtype=_np.float64)
+        result = _np.dot(X64, X64.T)
+        # Mirror lower to upper to guarantee bitwise symmetry,
+        # matching the C extension contract.
+        il = _np.tril_indices_from(result, -1)
+        result.T[il] = result[il]
+        return result
+
+    def dsyr2k(C: _np.ndarray, A: _np.ndarray, B: _np.ndarray) -> _np.ndarray:
+        """Compute symmetric rank-2k update: result = C - A @ B.T - B @ A.T.
+
+        Returns a new array; the input C is not modified.  Both the C
+        extension and this NumPy fallback update the full matrix.
+
+        Args:
+            C: Symmetric matrix, shape (N, N), float64.
+            A: First factor, shape (N, K), float64.
+            B: Second factor, shape (N, K), float64.
+
+        Returns:
+            Updated result (new array), shape (N, N), float64.
+
+        Raises:
+            ValueError: If C is not 2-D square, or A/B are not 2-D, or
+                dimensions are inconsistent.
+        """
+        if C.ndim != 2:
+            raise ValueError(f"dsyr2k: C must be a 2-D array, got {C.ndim}-D")
+        if C.shape[0] != C.shape[1]:
+            raise ValueError(f"dsyr2k: C must be square, got shape {C.shape}")
+        if A.ndim != 2:
+            raise ValueError(f"dsyr2k: A must be a 2-D array, got {A.ndim}-D")
+        if B.ndim != 2:
+            raise ValueError(f"dsyr2k: B must be a 2-D array, got {B.ndim}-D")
+        N = C.shape[0]
+        if A.shape[0] != N:
+            raise ValueError(
+                f"dsyr2k: A rows ({A.shape[0]}) must match C dimension ({N})"
+            )
+        if B.shape[0] != N:
+            raise ValueError(
+                f"dsyr2k: B rows ({B.shape[0]}) must match C dimension ({N})"
+            )
+        if A.shape[1] != B.shape[1]:
+            raise ValueError(
+                f"dsyr2k: A columns ({A.shape[1]}) must match B columns ({B.shape[1]})"
+            )
+        C64 = _np.asarray(C, dtype=_np.float64).copy()
+        A64 = _np.asarray(A, dtype=_np.float64)
+        B64 = _np.asarray(B, dtype=_np.float64)
+        C64 -= A64 @ B64.T
+        C64 -= B64 @ A64.T
+        return C64
+
 
 __all__ = [
     "ABI_VERSION",
@@ -241,7 +337,14 @@ __all__ = [
     "dscal",
     "dgemv",
     "dgemm",
+    "dsyrk",
+    "dsyr2k",
     "jblas_isa",
     "HAS_C_EXTENSION",
     "HAS_OPENMP",
+    "JBLAS_MR",
+    "JBLAS_NR",
+    "JBLAS_KC",
+    "JBLAS_MC",
+    "JBLAS_NC",
 ]

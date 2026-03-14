@@ -20,9 +20,16 @@ jblas_isa: Final[Literal["AVX2", "NEON", "generic"]]
 HAS_OPENMP: Final[bool]
 """True if the extension was compiled with OpenMP support.
 
-Level 1/2 kernels are single-threaded; dgemm (Level 3) uses OpenMP
-parallel-for over the IC loop when OpenMP is available.
+Level 1/2 kernels are single-threaded; Level 3 (dgemm, dsyrk, dsyr2k) uses
+OpenMP parallel-for over the IC loop when OpenMP is available.
 """
+
+# Blocking parameters (ISA-dependent, set by jblas_init()).
+JBLAS_MR: Final[int]
+JBLAS_NR: Final[int]
+JBLAS_KC: Final[int]
+JBLAS_MC: Final[int]
+JBLAS_NC: Final[int]
 
 def ddot(x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]) -> float:
     """Compute inner product of two double vectors.
@@ -100,5 +107,35 @@ def dgemm(
 
     Returns:
         Result matrix C = op(A) @ op(B), float64.
+    """
+    ...
+
+def dsyrk(X: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Compute symmetric rank-k update: C = X @ X.T.
+
+    Args:
+        X: Input matrix, shape (N, K), float64, C-contiguous.
+
+    Returns:
+        Symmetric result matrix, shape (N, N), float64.
+    """
+    ...
+
+def dsyr2k(
+    C: npt.NDArray[np.float64],
+    A: npt.NDArray[np.float64],
+    B: npt.NDArray[np.float64],
+) -> npt.NDArray[np.float64]:
+    """Compute symmetric rank-2k update: result = C - A @ B.T - B @ A.T.
+
+    Returns a new array; the input C is not modified.
+
+    Args:
+        C: Symmetric matrix, shape (N, N), float64, C-contiguous.
+        A: First factor, shape (N, K), float64, C-contiguous.
+        B: Second factor, shape (N, K), float64, C-contiguous.
+
+    Returns:
+        Updated result (new array), shape (N, N), float64.
     """
     ...

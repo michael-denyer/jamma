@@ -276,13 +276,18 @@ def read_matrix_parallel(
         raise ValueError(f"Matrix file is empty: {path}")
 
     # Quick row count to decide parallel vs serial.
-    # Read the first line to get bytes-per-line, then extrapolate.
+    # Read the first data line to get bytes-per-line, then extrapolate.
     # Previous 64KB sample approach failed for wide matrices (75k+ columns
     # produce ~1.5MB lines, so no newline appeared in the sample).
+    # Skip comment lines (starting with '#') to avoid inflated line length.
     with open(path, "rb") as f:
         first_line = f.readline()
         if not first_line:
             raise ValueError(f"Matrix file is empty: {path}")
+        while first_line.startswith(b"#"):
+            first_line = f.readline()
+            if not first_line:
+                raise ValueError(f"Matrix file contains only comments: {path}")
         bytes_per_line = len(first_line)
     n_rows_approx = max(1, file_size // bytes_per_line)
 

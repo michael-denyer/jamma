@@ -92,36 +92,38 @@ def _reference_dgemm(
 class TestDgemmCorrectness:
     """Basic correctness tests for dgemm vs NumPy matmul reference."""
 
-    rng = np.random.default_rng(42)
-
     def test_square_small(self) -> None:
         """10x10 @ 10x10, rtol=1e-12."""
-        A = self.rng.standard_normal((10, 10))
-        B = self.rng.standard_normal((10, 10))
+        rng = np.random.default_rng(42)
+        A = rng.standard_normal((10, 10))
+        B = rng.standard_normal((10, 10))
         result = dgemm(A, B)
         expected = _reference_dgemm(A, B)
         npt.assert_allclose(result, expected, rtol=1e-12)
 
     def test_square_medium(self) -> None:
         """200x200 @ 200x200 (K triggers blocking on AVX2)."""
-        A = self.rng.standard_normal((200, 200))
-        B = self.rng.standard_normal((200, 200))
+        rng = np.random.default_rng(43)
+        A = rng.standard_normal((200, 200))
+        B = rng.standard_normal((200, 200))
         result = dgemm(A, B)
         expected = _reference_dgemm(A, B)
         npt.assert_allclose(result, expected, rtol=1e-10)
 
     def test_rectangular_tall_skinny(self) -> None:
         """500x50 @ 50x300 (tall skinny A)."""
-        A = self.rng.standard_normal((500, 50))
-        B = self.rng.standard_normal((50, 300))
+        rng = np.random.default_rng(44)
+        A = rng.standard_normal((500, 50))
+        B = rng.standard_normal((50, 300))
         result = dgemm(A, B)
         expected = _reference_dgemm(A, B)
         npt.assert_allclose(result, expected, rtol=1e-10)
 
     def test_rectangular_wide(self) -> None:
         """50x500 @ 500x50 (wide A, K=500 triggers multi-pass blocking)."""
-        A = self.rng.standard_normal((50, 500))
-        B = self.rng.standard_normal((500, 50))
+        rng = np.random.default_rng(45)
+        A = rng.standard_normal((50, 500))
+        B = rng.standard_normal((500, 50))
         result = dgemm(A, B)
         expected = _reference_dgemm(A, B)
         npt.assert_allclose(result, expected, rtol=1e-10)
@@ -136,14 +138,16 @@ class TestDgemmCorrectness:
 
     def test_identity(self) -> None:
         """Identity matrix @ A == A."""
-        A = self.rng.standard_normal((50, 50))
+        rng = np.random.default_rng(46)
+        A = rng.standard_normal((50, 50))
         eye = np.eye(50)
         result = dgemm(eye, A)
         npt.assert_allclose(result, A, rtol=1e-14)
 
     def test_zero_matrix(self) -> None:
         """0 @ A == 0 (zero matrix on left)."""
-        A = self.rng.standard_normal((30, 30))
+        rng = np.random.default_rng(47)
+        A = rng.standard_normal((30, 30))
         Z = np.zeros((30, 30))
         result = dgemm(Z, A)
         npt.assert_array_equal(result, np.zeros((30, 30)))
@@ -213,31 +217,33 @@ class TestDgemmBoundary:
     as well as MC and KC boundaries.
     """
 
-    rng = np.random.default_rng(42)
-
     @pytest.mark.parametrize("size", BOUNDARY_SIZES)
     def test_boundary_sizes(self, size: int) -> None:
         """Square M=N=K at each boundary size.
 
-        Uses rtol=1e-12 for small matrices (< 256) and rtol=1e-10 for large
-        matrices.  The NEON/generic blocking loop accumulates partial sums in
-        a different order from NumPy's BLAS, so larger matrices exhibit larger
-        relative rounding differences (~2e-10 at N=1000).
+        Uses per-test RNG seed to avoid order-dependence under xdist/randomly.
+        At large N (>=256) near-zero expected values cause large relative error
+        from normal FP accumulation differences, so we add atol=1e-12 alongside
+        rtol=2e-9.
         """
-        A = self.rng.standard_normal((size, size))
-        B = self.rng.standard_normal((size, size))
+        rng = np.random.default_rng(42 + size)
+        A = rng.standard_normal((size, size))
+        B = rng.standard_normal((size, size))
         result = dgemm(A, B)
         expected = _reference_dgemm(A, B)
-        # For large matrices blocking-order FP diff can reach ~1.2e-9 on NEON;
-        # rtol=2e-9 gives a safe margin across random seeds.
-        rtol = 2e-9 if size >= 256 else 1e-12
-        npt.assert_allclose(result, expected, rtol=rtol)
+        # Large matrices: blocking-order FP diff reaches ~4e-13 absolute;
+        # near-zero expected values inflate rdiff, so atol handles those.
+        if size >= 256:
+            npt.assert_allclose(result, expected, rtol=2e-9, atol=1e-12)
+        else:
+            npt.assert_allclose(result, expected, rtol=1e-12)
 
     @pytest.mark.parametrize("m", [5, 6, 7])
     def test_mr_boundary_avx2(self, m: int) -> None:
         """M = MR-1/MR/MR+1 for AVX2 (MR=6), K=256, N=8."""
-        A = self.rng.standard_normal((m, 256))
-        B = self.rng.standard_normal((256, 8))
+        rng = np.random.default_rng(100 + m)
+        A = rng.standard_normal((m, 256))
+        B = rng.standard_normal((256, 8))
         result = dgemm(A, B)
         expected = _reference_dgemm(A, B)
         npt.assert_allclose(result, expected, rtol=1e-10)
@@ -245,8 +251,9 @@ class TestDgemmBoundary:
     @pytest.mark.parametrize("m", [7, 8, 9])
     def test_mr_boundary_neon(self, m: int) -> None:
         """M = MR-1/MR/MR+1 for NEON (MR=8), K=256, N=4."""
-        A = self.rng.standard_normal((m, 256))
-        B = self.rng.standard_normal((256, 4))
+        rng = np.random.default_rng(200 + m)
+        A = rng.standard_normal((m, 256))
+        B = rng.standard_normal((256, 4))
         result = dgemm(A, B)
         expected = _reference_dgemm(A, B)
         npt.assert_allclose(result, expected, rtol=1e-10)
@@ -254,8 +261,9 @@ class TestDgemmBoundary:
     @pytest.mark.parametrize("n", [3, 4, 7, 8, 9])
     def test_nr_boundary(self, n: int) -> None:
         """N at NR boundaries (NR=8 for AVX2, NR=4 for NEON), M=6, K=256."""
-        A = self.rng.standard_normal((6, 256))
-        B = self.rng.standard_normal((256, n))
+        rng = np.random.default_rng(300 + n)
+        A = rng.standard_normal((6, 256))
+        B = rng.standard_normal((256, n))
         result = dgemm(A, B)
         expected = _reference_dgemm(A, B)
         npt.assert_allclose(result, expected, rtol=1e-10)
@@ -263,8 +271,9 @@ class TestDgemmBoundary:
     @pytest.mark.parametrize("m", [71, 72, 73])
     def test_mc_boundary(self, m: int) -> None:
         """M = MC-1/MC/MC+1 for AVX2 (MC=72), K=256, N=8."""
-        A = self.rng.standard_normal((m, 256))
-        B = self.rng.standard_normal((256, 8))
+        rng = np.random.default_rng(400 + m)
+        A = rng.standard_normal((m, 256))
+        B = rng.standard_normal((256, 8))
         result = dgemm(A, B)
         expected = _reference_dgemm(A, B)
         npt.assert_allclose(result, expected, rtol=1e-10)
@@ -272,16 +281,18 @@ class TestDgemmBoundary:
     @pytest.mark.parametrize("k", [255, 256, 257])
     def test_kc_boundary(self, k: int) -> None:
         """K = KC-1/KC/KC+1 (KC=256), M=72, N=8."""
-        A = self.rng.standard_normal((72, k))
-        B = self.rng.standard_normal((k, 8))
+        rng = np.random.default_rng(500 + k)
+        A = rng.standard_normal((72, k))
+        B = rng.standard_normal((k, 8))
         result = dgemm(A, B)
         expected = _reference_dgemm(A, B)
         npt.assert_allclose(result, expected, rtol=1e-10)
 
     def test_prime_dimensions(self) -> None:
         """M=97, N=83, K=131 (all prime, no clean blocking)."""
-        A = self.rng.standard_normal((97, 131))
-        B = self.rng.standard_normal((131, 83))
+        rng = np.random.default_rng(600)
+        A = rng.standard_normal((97, 131))
+        B = rng.standard_normal((131, 83))
         result = dgemm(A, B)
         expected = _reference_dgemm(A, B)
         npt.assert_allclose(result, expected, rtol=1e-10)
@@ -298,14 +309,14 @@ class TestDgemmTranspose:
     Uses the real transa/transb kwargs now that the C extension supports them.
     """
 
-    rng = np.random.default_rng(42)
     _sizes = [(100, 100, 100), (73, 128, 64), (6, 256, 256)]
 
     @pytest.mark.parametrize("m,n,k", _sizes)
     def test_nn(self, m: int, n: int, k: int) -> None:
         """NN: A @ B (no transpose)."""
-        A = self.rng.standard_normal((m, k))
-        B = self.rng.standard_normal((k, n))
+        rng = np.random.default_rng(700 + m * 1000 + n * 10 + k)
+        A = rng.standard_normal((m, k))
+        B = rng.standard_normal((k, n))
         result = dgemm(A, B, transa="N", transb="N")
         expected = _reference_dgemm(A, B, transa="N", transb="N")
         npt.assert_allclose(result, expected, rtol=1e-10)
@@ -313,10 +324,11 @@ class TestDgemmTranspose:
     @pytest.mark.parametrize("m,n,k", _sizes)
     def test_tn(self, m: int, n: int, k: int) -> None:
         """TN: op(A)=A.T @ B where A is (k x m), so op(A) is (m x k)."""
-        A_T_shape = self.rng.standard_normal(
+        rng = np.random.default_rng(800 + m * 1000 + n * 10 + k)
+        A_T_shape = rng.standard_normal(
             (k, m)
         )  # shape (k, m) — will be transposed by dgemm
-        B = self.rng.standard_normal((k, n))
+        B = rng.standard_normal((k, n))
         result = dgemm(A_T_shape, B, transa="T", transb="N")
         expected = _reference_dgemm(A_T_shape, B, transa="T", transb="N")
         npt.assert_allclose(result, expected, rtol=1e-10)
@@ -324,8 +336,9 @@ class TestDgemmTranspose:
     @pytest.mark.parametrize("m,n,k", _sizes)
     def test_nt(self, m: int, n: int, k: int) -> None:
         """NT: A @ op(B)=B.T where B is (n x k), so op(B) is (k x n)."""
-        A = self.rng.standard_normal((m, k))
-        B_T_shape = self.rng.standard_normal(
+        rng = np.random.default_rng(900 + m * 1000 + n * 10 + k)
+        A = rng.standard_normal((m, k))
+        B_T_shape = rng.standard_normal(
             (n, k)
         )  # shape (n, k) — will be transposed by dgemm
         result = dgemm(A, B_T_shape, transa="N", transb="T")
@@ -335,8 +348,9 @@ class TestDgemmTranspose:
     @pytest.mark.parametrize("m,n,k", _sizes)
     def test_tt(self, m: int, n: int, k: int) -> None:
         """TT: op(A)=A.T @ op(B)=B.T — both pack routines use trans=1."""
-        A_T_shape = self.rng.standard_normal((k, m))
-        B_T_shape = self.rng.standard_normal((n, k))
+        rng = np.random.default_rng(1000 + m * 1000 + n * 10 + k)
+        A_T_shape = rng.standard_normal((k, m))
+        B_T_shape = rng.standard_normal((n, k))
         result = dgemm(A_T_shape, B_T_shape, transa="T", transb="T")
         expected = _reference_dgemm(A_T_shape, B_T_shape, transa="T", transb="T")
         npt.assert_allclose(result, expected, rtol=1e-10)
@@ -563,6 +577,20 @@ class TestDgemmValidation:
         B = np.eye(3, dtype=np.float64)
         with pytest.raises((ValueError, IndexError)):
             dgemm(A, B, transa="")
+
+    def test_multichar_transa_rejected(self) -> None:
+        """Multi-character transa like 'transpose' must be rejected."""
+        A = np.eye(3, dtype=np.float64)
+        B = np.eye(3, dtype=np.float64)
+        with pytest.raises(ValueError, match="transa"):
+            dgemm(A, B, transa="transpose")
+
+    def test_multichar_transb_rejected(self) -> None:
+        """Multi-character transb like 'TT' must be rejected."""
+        A = np.eye(3, dtype=np.float64)
+        B = np.eye(3, dtype=np.float64)
+        with pytest.raises(ValueError, match="transb"):
+            dgemm(A, B, transb="TT")
 
     def test_output_contiguity_and_dtype(self) -> None:
         """Output is C-contiguous float64."""

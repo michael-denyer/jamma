@@ -1,17 +1,22 @@
 /**
  * pymodule.c — Python C extension module _jblas.
  *
- * Exposes the six jblas BLAS primitives (ddot, dnrm2, daxpy, dscal, dgemv,
- * dgemm) to Python via the NumPy buffer protocol.  Arrays are accessed via
- * PyArray_FROM_OTF for contiguous double* extraction (copies non-contiguous
- * or non-float64 inputs as needed).
+ * Exposes the jblas BLAS primitives (ddot, dnrm2, daxpy, dscal, dgemv,
+ * dgemm, dsyrk, dsyr2k) to Python via the NumPy buffer protocol.  Arrays are
+ * accessed via PyArray_FROM_OTF for contiguous double* extraction (copies
+ * non-contiguous or non-float64 inputs as needed).
  *
  * Module-level constants:
  *   jblas_isa   — active ISA string ("AVX2", "NEON", or "generic")
  *   HAS_OPENMP  — True if compiled with OpenMP (-fopenmp)
  *   ABI_VERSION — integer (JBLAS_ABI_VERSION from jblas.h)
+ *   JBLAS_MR    — microkernel row tile size (set by platform.c after ISA detection)
+ *   JBLAS_NR    — microkernel column tile size
+ *   JBLAS_KC    — KC blocking depth
+ *   JBLAS_MC    — MC row panel size
+ *   JBLAS_NC    — NC column panel size
  *
- * Exported functions: ddot, dnrm2, daxpy, dscal, dgemv, dgemm
+ * Exported functions: ddot, dnrm2, daxpy, dscal, dgemv, dgemm, dsyrk, dsyr2k
  *
  * Patterns follow _lmm_accel.c: PyArray_FROM_OTF with NPY_ARRAY_IN_ARRAY for
  * read-only inputs, NPY_ARRAY_INOUT_ARRAY2 for in-place writeable outputs.
@@ -272,7 +277,17 @@ py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs)
             &oA, &oB, &transa_str, &transb_str))
         return NULL;
 
-    /* Validate transpose flags: only 'N'/'n' and 'T'/'t' are accepted. */
+    /* Validate transpose flags: exactly one char, 'N'/'n' or 'T'/'t'. */
+    if (transa_str[0] == '\0' || transa_str[1] != '\0') {
+        PyErr_Format(PyExc_ValueError,
+            "dgemm: transa must be 'N' or 'T', got '%s'", transa_str);
+        return NULL;
+    }
+    if (transb_str[0] == '\0' || transb_str[1] != '\0') {
+        PyErr_Format(PyExc_ValueError,
+            "dgemm: transb must be 'N' or 'T', got '%s'", transb_str);
+        return NULL;
+    }
     char ta = transa_str[0];
     char tb = transb_str[0];
     if (ta != 'N' && ta != 'n' && ta != 'T' && ta != 't') {
@@ -368,6 +383,177 @@ py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs)
 }
 
 /* ---------------------------------------------------------------------------
+ * py_dsyrk — symmetric rank-k update K = X @ X.T
+ *
+ * Signature: dsyrk(X: ndarray) -> ndarray
+ * X must be 2-D C-contiguous float64 of shape (N, K).
+ * Returns a new 2-D float64 array of shape (N, N), bitwise symmetric.
+ * ---------------------------------------------------------------------------
+ */
+static PyObject *
+py_dsyrk(PyObject *self, PyObject *args)
+{
+    PyObject *oX;
+    if (!PyArg_ParseTuple(args, "O", &oX))
+        return NULL;
+
+    PyArrayObject *aX = (PyArrayObject *)PyArray_FROM_OTF(
+        oX, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+    if (!aX)
+        return NULL;
+
+    if (PyArray_NDIM(aX) != 2) {
+        PyErr_SetString(PyExc_ValueError,
+            "dsyrk: X must be a 2-D array");
+        Py_DECREF(aX);
+        return NULL;
+    }
+
+    npy_intp N = PyArray_DIM(aX, 0);
+    npy_intp K = PyArray_DIM(aX, 1);
+
+    /* Guard: workspace must be allocated (jblas_init succeeded).
+     * Check BEFORE allocating the N×N output to avoid a large allocation
+     * that would be immediately freed on failure. */
+    if (!jblas_packed_A || !jblas_packed_B) {
+        PyErr_SetString(PyExc_RuntimeError,
+            "dsyrk: workspace allocation failed during jblas init; "
+            "reduce OMP_NUM_THREADS or use the numpy fallback");
+        Py_DECREF(aX);
+        return NULL;
+    }
+
+    npy_intp dims[2] = {N, N};
+    /* Use SimpleNew (uninitialized) — jblas_dsyrk_c zeroes C before accumulating. */
+    PyArrayObject *aC = (PyArrayObject *)PyArray_SimpleNew(2, dims, NPY_DOUBLE);
+    if (!aC) {
+        Py_DECREF(aX);
+        return NULL;
+    }
+
+    const double *pX = (const double *)PyArray_DATA(aX);
+    double       *pC = (double *)PyArray_DATA(aC);
+
+    Py_BEGIN_ALLOW_THREADS
+    /* ldx = K, ldc = N: safe because PyArray_FROM_OTF guarantees C-contiguous layout */
+    jblas_dsyrk_c(N, K, pX, K, pC, N);
+    Py_END_ALLOW_THREADS
+
+    Py_DECREF(aX);
+    return (PyObject *)aC;
+}
+
+/* ---------------------------------------------------------------------------
+ * py_dsyr2k — symmetric rank-2k update: result = C - A @ B.T - B @ A.T
+ *
+ * Signature: dsyr2k(C: ndarray, A: ndarray, B: ndarray) -> ndarray
+ * C must be 2-D float64 of shape (N, N); A and B must be (N, K).
+ * Returns a new 2-D float64 array of shape (N, N).
+ * The input C is not modified.
+ * ---------------------------------------------------------------------------
+ */
+static PyObject *
+py_dsyr2k(PyObject *self, PyObject *args)
+{
+    PyObject *oC, *oA, *oB;
+    if (!PyArg_ParseTuple(args, "OOO", &oC, &oA, &oB))
+        return NULL;
+
+    PyArrayObject *aC_in = (PyArrayObject *)PyArray_FROM_OTF(
+        oC, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+    PyArrayObject *aA = (PyArrayObject *)PyArray_FROM_OTF(
+        oA, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+    PyArrayObject *aB = (PyArrayObject *)PyArray_FROM_OTF(
+        oB, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+    if (!aC_in || !aA || !aB) {
+        Py_XDECREF(aC_in);
+        Py_XDECREF(aA);
+        Py_XDECREF(aB);
+        return NULL;
+    }
+
+    if (PyArray_NDIM(aC_in) != 2) {
+        PyErr_SetString(PyExc_ValueError, "dsyr2k: C must be a 2-D array");
+        goto err_dsyr2k;
+    }
+    if (PyArray_DIM(aC_in, 0) != PyArray_DIM(aC_in, 1)) {
+        PyErr_Format(PyExc_ValueError,
+            "dsyr2k: C must be square, got shape (%ld, %ld)",
+            (long)PyArray_DIM(aC_in, 0), (long)PyArray_DIM(aC_in, 1));
+        goto err_dsyr2k;
+    }
+    if (PyArray_NDIM(aA) != 2) {
+        PyErr_SetString(PyExc_ValueError, "dsyr2k: A must be a 2-D array");
+        goto err_dsyr2k;
+    }
+    if (PyArray_NDIM(aB) != 2) {
+        PyErr_SetString(PyExc_ValueError, "dsyr2k: B must be a 2-D array");
+        goto err_dsyr2k;
+    }
+
+    {
+        npy_intp N = PyArray_DIM(aC_in, 0);
+        npy_intp K = PyArray_DIM(aA, 1);
+
+        if (PyArray_DIM(aA, 0) != N) {
+            PyErr_Format(PyExc_ValueError,
+                "dsyr2k: A rows (%ld) must match C dimension (%ld)",
+                (long)PyArray_DIM(aA, 0), (long)N);
+            goto err_dsyr2k;
+        }
+        if (PyArray_DIM(aB, 0) != N) {
+            PyErr_Format(PyExc_ValueError,
+                "dsyr2k: B rows (%ld) must match C dimension (%ld)",
+                (long)PyArray_DIM(aB, 0), (long)N);
+            goto err_dsyr2k;
+        }
+        if (PyArray_DIM(aB, 1) != K) {
+            PyErr_Format(PyExc_ValueError,
+                "dsyr2k: A columns (%ld) must match B columns (%ld)",
+                (long)K, (long)PyArray_DIM(aB, 1));
+            goto err_dsyr2k;
+        }
+
+        /* Create output: copy C into a new C-contiguous array */
+        PyArrayObject *aC_out = (PyArrayObject *)PyArray_NewCopy(aC_in, NPY_CORDER);
+        if (!aC_out)
+            goto err_dsyr2k;
+
+        /* Guard: workspace must be allocated */
+        if (!jblas_packed_A || !jblas_packed_B) {
+            PyErr_SetString(PyExc_RuntimeError,
+                "dsyr2k: workspace allocation failed during jblas init; "
+                "reduce OMP_NUM_THREADS or use the numpy fallback");
+            Py_DECREF(aC_out);
+            goto err_dsyr2k;
+        }
+
+        const double *pA = (const double *)PyArray_DATA(aA);
+        const double *pB = (const double *)PyArray_DATA(aB);
+        double       *pC = (double *)PyArray_DATA(aC_out);
+
+        Py_BEGIN_ALLOW_THREADS
+        /* jblas_dsyr2k_c subtracts A @ B.T + B @ A.T from all elements of pC
+         * (full-matrix update, no mirror step).
+         * lda = ldb = K, ldc = N: safe because PyArray_FROM_OTF guarantees
+         * C-contiguous layout. */
+        jblas_dsyr2k_c(N, K, pA, K, pB, K, pC, N);
+        Py_END_ALLOW_THREADS
+
+        Py_DECREF(aC_in);
+        Py_DECREF(aA);
+        Py_DECREF(aB);
+        return (PyObject *)aC_out;
+    }
+
+err_dsyr2k:
+    Py_XDECREF(aC_in);
+    Py_XDECREF(aA);
+    Py_XDECREF(aB);
+    return NULL;
+}
+
+/* ---------------------------------------------------------------------------
  * Method table
  * ---------------------------------------------------------------------------
  */
@@ -390,6 +576,12 @@ static PyMethodDef JblasMethods[] = {
     {"dgemm", (PyCFunction)py_dgemm, METH_VARARGS | METH_KEYWORDS,
         "dgemm(A, B, transa='N', transb='N') -> ndarray\n"
         "Matrix-matrix product C = op(A) @ op(B)."},
+    {"dsyrk", py_dsyrk, METH_VARARGS,
+        "dsyrk(X) -> ndarray\n"
+        "Symmetric rank-k update: K = X @ X.T (float64)."},
+    {"dsyr2k", py_dsyr2k, METH_VARARGS,
+        "dsyr2k(C, A, B) -> ndarray\n"
+        "Symmetric rank-2k update: C - A @ B.T - B @ A.T (float64)."},
     {NULL, NULL, 0, NULL}
 };
 
@@ -457,6 +649,25 @@ PyInit__jblas(void)
         Py_XDECREF(abi);
         Py_DECREF(m);
         return NULL;
+    }
+
+    /* Blocking parameters: set by platform.c during jblas_init().
+     * Exposed so Python tests can verify tile-skip counts analytically
+     * without C instrumentation. */
+    if (PyModule_AddIntConstant(m, "JBLAS_MR", JBLAS_MR) < 0) {
+        Py_DECREF(m); return NULL;
+    }
+    if (PyModule_AddIntConstant(m, "JBLAS_NR", JBLAS_NR) < 0) {
+        Py_DECREF(m); return NULL;
+    }
+    if (PyModule_AddIntConstant(m, "JBLAS_KC", JBLAS_KC) < 0) {
+        Py_DECREF(m); return NULL;
+    }
+    if (PyModule_AddIntConstant(m, "JBLAS_MC", JBLAS_MC) < 0) {
+        Py_DECREF(m); return NULL;
+    }
+    if (PyModule_AddIntConstant(m, "JBLAS_NC", JBLAS_NC) < 0) {
+        Py_DECREF(m); return NULL;
     }
 
     return m;

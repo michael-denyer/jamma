@@ -138,10 +138,10 @@ def test_all_exports_present():
 
 @pytest.mark.tier0
 def test_abi_version():
-    """ABI_VERSION is 2 (bumped for dgemm microkernel typedef and blocking params)."""
+    """ABI_VERSION is 4 (bumped for eigh: dsytrd, dstedc, dormtr, eigh entry point)."""
     from jamma.jblas import ABI_VERSION
 
-    assert ABI_VERSION == 2, f"Expected ABI_VERSION=2, got {ABI_VERSION}"
+    assert ABI_VERSION == 4, f"Expected ABI_VERSION=4, got {ABI_VERSION}"
 
 
 @pytest.mark.tier0

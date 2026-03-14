@@ -124,4 +124,5 @@ dev = [
     "ruff>=0.15.0",
     "pre-commit>=3.7.0",
     "pyyaml>=6.0.3",
+    "hatchling>=1.29.0",
 ]

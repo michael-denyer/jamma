@@ -53,7 +53,9 @@ try:
         dsyr2k,
         dsyrk,
         eigh,
+        get_n_threads,
         jblas_isa,
+        set_n_threads,
     )
 
     HAS_C_EXTENSION: bool = True
@@ -356,6 +358,35 @@ except ImportError as _exc:
             K[:] = 0.0
         return w, v
 
+    import os as _os
+
+    # Mutable container for fallback thread state (closures can't rebind
+    # names in enclosing except-block scope, but can mutate a list).
+    _fallback_thread_state = [_os.cpu_count() or 1]
+
+    def get_n_threads() -> int:
+        """Get current jblas thread count (fallback: os.cpu_count())."""
+        return _fallback_thread_state[0]
+
+    def set_n_threads(n: int) -> int:
+        """Set jblas thread count (fallback: clamped to os.cpu_count()).
+
+        Args:
+            n: Desired thread count (must be >= 1).
+
+        Returns:
+            Previous thread count.
+
+        Raises:
+            ValueError: If n < 1.
+        """
+        if n < 1:
+            raise ValueError("set_n_threads: n must be >= 1")
+        old = _fallback_thread_state[0]
+        max_threads = _os.cpu_count() or 1
+        _fallback_thread_state[0] = min(n, max_threads)
+        return old
+
 
 __all__ = [
     "ABI_VERSION",
@@ -368,6 +399,8 @@ __all__ = [
     "dsyrk",
     "dsyr2k",
     "eigh",
+    "get_n_threads",
+    "set_n_threads",
     "jblas_isa",
     "HAS_C_EXTENSION",
     "HAS_OPENMP",

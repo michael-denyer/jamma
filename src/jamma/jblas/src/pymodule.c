@@ -627,6 +627,41 @@ py_eigh(PyObject *self, PyObject *args)
 }
 
 /* ---------------------------------------------------------------------------
+ * py_set_n_threads — Set jblas thread count (clamped to init-time max).
+ *
+ * Signature: set_n_threads(n: int) -> int
+ * Returns the previous thread count.
+ * Raises ValueError if n < 1.
+ * ---------------------------------------------------------------------------
+ */
+static PyObject *
+py_set_n_threads(PyObject *self, PyObject *args)
+{
+    int n;
+    if (!PyArg_ParseTuple(args, "i", &n))
+        return NULL;
+    int old = jblas_set_n_threads(n);
+    if (old < 0) {
+        PyErr_SetString(PyExc_ValueError, "set_n_threads: n must be >= 1");
+        return NULL;
+    }
+    return PyLong_FromLong(old);
+}
+
+/* ---------------------------------------------------------------------------
+ * py_get_n_threads — Get current jblas thread count.
+ *
+ * Signature: get_n_threads() -> int
+ * ---------------------------------------------------------------------------
+ */
+static PyObject *
+py_get_n_threads(PyObject *self, PyObject *args)
+{
+    (void)args;  /* unused */
+    return PyLong_FromLong(jblas_get_n_threads());
+}
+
+/* ---------------------------------------------------------------------------
  * Method table
  * ---------------------------------------------------------------------------
  */
@@ -659,6 +694,12 @@ static PyMethodDef JblasMethods[] = {
         "eigh(K) -> (eigenvalues, eigenvectors)\n"
         "Compute all eigenvalues and eigenvectors of symmetric K.\n"
         "K is overwritten as scratch."},
+    {"set_n_threads", py_set_n_threads, METH_VARARGS,
+        "set_n_threads(n) -> int\n"
+        "Set jblas thread count (clamped to init max). Returns old count."},
+    {"get_n_threads", py_get_n_threads, METH_NOARGS,
+        "get_n_threads() -> int\n"
+        "Get current jblas thread count."},
     {NULL, NULL, 0, NULL}
 };
 

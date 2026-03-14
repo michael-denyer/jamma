@@ -2,7 +2,8 @@
  * pymodule.c — Python C extension module _jblas.
  *
  * Exposes the jblas BLAS primitives (ddot, dnrm2, daxpy, dscal, dgemv,
- * dgemm, dsyrk, dsyr2k) to Python via the NumPy buffer protocol.  Arrays are
+ * dgemm, dsyrk, dsyr2k) and LAPACK eigh to Python via the NumPy buffer
+ * protocol.  Arrays are
  * accessed via PyArray_FROM_OTF for contiguous double* extraction (copies
  * non-contiguous or non-float64 inputs as needed).
  *
@@ -16,7 +17,7 @@
  *   JBLAS_MC    — MC row panel size
  *   JBLAS_NC    — NC column panel size
  *
- * Exported functions: ddot, dnrm2, daxpy, dscal, dgemv, dgemm, dsyrk, dsyr2k
+ * Exported functions: ddot, dnrm2, daxpy, dscal, dgemv, dgemm, dsyrk, dsyr2k, eigh
  *
  * Patterns follow _lmm_accel.c: PyArray_FROM_OTF with NPY_ARRAY_IN_ARRAY for
  * read-only inputs, NPY_ARRAY_INOUT_ARRAY2 for in-place writeable outputs.
@@ -554,6 +555,71 @@ err_dsyr2k:
 }
 
 /* ---------------------------------------------------------------------------
+ * py_eigh — compute eigenvalues and eigenvectors of symmetric matrix
+ *
+ * Signature: eigh(K: ndarray) -> tuple[ndarray, ndarray]
+ * K must be 2-D C-contiguous float64 of shape (N, N). K is overwritten.
+ * Returns (eigenvalues, eigenvectors).
+ * ---------------------------------------------------------------------------
+ */
+static PyObject *
+py_eigh(PyObject *self, PyObject *args)
+{
+    PyObject *oK;
+    if (!PyArg_ParseTuple(args, "O", &oK))
+        return NULL;
+
+    PyArrayObject *aK = (PyArrayObject *)PyArray_FROM_OTF(
+        oK, NPY_DOUBLE, NPY_ARRAY_INOUT_ARRAY2);
+    if (!aK) return NULL;
+
+    if (PyArray_NDIM(aK) != 2 || PyArray_DIM(aK,0) != PyArray_DIM(aK,1)) {
+        PyErr_SetString(PyExc_ValueError, "eigh: K must be 2-D square float64");
+        PyArray_DiscardWritebackIfCopy(aK);
+        Py_DECREF(aK);
+        return NULL;
+    }
+
+    npy_intp N = PyArray_DIM(aK, 0);
+    double *pK = (double *)PyArray_DATA(aK);
+
+    /* Allocate eigenvalues (N,) and eigenvectors (N, N) */
+    PyArrayObject *aW = (PyArrayObject *)PyArray_SimpleNew(1, &N, NPY_DOUBLE);
+    npy_intp dims2[2] = {N, N};
+    PyArrayObject *aU = (PyArrayObject *)PyArray_SimpleNew(2, dims2, NPY_DOUBLE);
+    if (!aW || !aU) {
+        Py_XDECREF(aW); Py_XDECREF(aU);
+        PyArray_DiscardWritebackIfCopy(aK);
+        Py_DECREF(aK);
+        return NULL;
+    }
+
+    double *pW = (double *)PyArray_DATA(aW);
+    double *pU = (double *)PyArray_DATA(aU);
+
+    int ret;
+    Py_BEGIN_ALLOW_THREADS
+    ret = jblas_eigh_c(N, pK, N, pW, pU, N);
+    Py_END_ALLOW_THREADS
+
+    if (ret != 0) {
+        PyErr_Format(PyExc_RuntimeError,
+            "jblas eigh: convergence failure (returned %d)", ret);
+        Py_DECREF(aW); Py_DECREF(aU);
+        PyArray_DiscardWritebackIfCopy(aK);
+        Py_DECREF(aK);
+        return NULL;
+    }
+
+    PyArray_ResolveWritebackIfCopy(aK);
+    Py_DECREF(aK);
+
+    /* Py_BuildValue("(NN)", ...) steals references — correct for new objects */
+    PyObject *result = Py_BuildValue("(NN)", aW, aU);
+    return result;
+}
+
+/* ---------------------------------------------------------------------------
  * Method table
  * ---------------------------------------------------------------------------
  */
@@ -582,6 +648,10 @@ static PyMethodDef JblasMethods[] = {
     {"dsyr2k", py_dsyr2k, METH_VARARGS,
         "dsyr2k(C, A, B) -> ndarray\n"
         "Symmetric rank-2k update: C - A @ B.T - B @ A.T (float64)."},
+    {"eigh", py_eigh, METH_VARARGS,
+        "eigh(K) -> (eigenvalues, eigenvectors)\n"
+        "Compute all eigenvalues and eigenvectors of symmetric K.\n"
+        "K is overwritten as scratch."},
     {NULL, NULL, 0, NULL}
 };
 

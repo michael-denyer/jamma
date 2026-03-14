@@ -559,6 +559,15 @@ class CustomBuildHook(BuildHookInterface):
             jblas_src / "daxpy.c",
             jblas_src / "dscal.c",
         ]
+        # LAPACK sources: strict IEEE 754 required for secular equation deflation.
+        # Compiled with -O2 only — MUST NOT get -ffast-math, -Ofast,
+        # -ffinite-math-only, or -funroll-loops.
+        lapack_sources = [
+            jblas_src / "dsytrd.c",
+            jblas_src / "dstedc.c",
+            jblas_src / "dormtr.c",
+            jblas_src / "eigh.c",
+        ]
 
         # Kernel directory — required on the matching platform, optional elsewhere.
         jblas_kernels = Path(self.root) / "src" / "jamma" / "jblas" / "kernels"
@@ -584,11 +593,19 @@ class CustomBuildHook(BuildHookInterface):
                 )
 
         source_files = (
-            baseline_sources + simd_sources + avx2_kernel_sources + neon_kernel_sources
+            baseline_sources
+            + simd_sources
+            + avx2_kernel_sources
+            + neon_kernel_sources
+            + lapack_sources
         )
 
-        # Only fail on missing baseline + simd sources; kernel files checked above
-        missing = [s for s in (baseline_sources + simd_sources) if not s.exists()]
+        # Only fail on missing baseline + simd + lapack sources; kernels checked above
+        missing = [
+            s
+            for s in (baseline_sources + simd_sources + lapack_sources)
+            if not s.exists()
+        ]
         if missing:
             print(
                 f"WARNING: jblas source files missing: {missing} — "
@@ -677,29 +694,51 @@ class CustomBuildHook(BuildHookInterface):
 
         simd_source_set = set(str(s) for s in simd_sources)
         avx2_kernel_set = set(str(s) for s in avx2_kernel_sources)
+        lapack_source_set = set(str(s) for s in lapack_sources)
 
         try:
             for src in source_files:
                 obj_file = tmp_dir / (src.stem + ".o")
-                # SIMD sources (ddot, daxpy, dscal) and AVX2 kernel files get
-                # -mavx2 -mfma; NEON kernel files get no extra flags (NEON is
-                # baseline on aarch64); baseline sources get no SIMD flags.
-                extra_simd = (
-                    simd_flags
-                    if (str(src) in simd_source_set or str(src) in avx2_kernel_set)
-                    else []
-                )
-                cmd_compile = [
-                    cc_cmd,
-                    *cc_extra,
-                    *base_cflags,
-                    *extra_simd,
-                    *omp_compile,
-                    "-c",
-                    str(src),
-                    "-o",
-                    str(obj_file),
-                ]
+                if str(src) in lapack_source_set:
+                    # LAPACK: strict IEEE 754 — override base_cflags optimization.
+                    # Remove -O3, -funroll-loops, -ftree-vectorize from base flags.
+                    # Exclude extra_cflags (env var like CFLAGS=-Ofast would
+                    # reintroduce -ffast-math). Use only -O2 -fPIC -std=c11 + includes.
+                    cmd_compile = [
+                        cc_cmd,
+                        *cc_extra,
+                        "-O2",
+                        "-fPIC",
+                        "-std=c11",
+                        f"-I{python_inc}",
+                        f"-I{numpy_inc}",
+                        f"-I{jblas_inc}",
+                        *omp_compile,
+                        "-c",
+                        str(src),
+                        "-o",
+                        str(obj_file),
+                    ]
+                else:
+                    # SIMD sources (ddot, daxpy, dscal) and AVX2 kernel files get
+                    # -mavx2 -mfma; NEON kernel files get no extra flags (NEON is
+                    # baseline on aarch64); baseline sources get no SIMD flags.
+                    extra_simd = (
+                        simd_flags
+                        if (str(src) in simd_source_set or str(src) in avx2_kernel_set)
+                        else []
+                    )
+                    cmd_compile = [
+                        cc_cmd,
+                        *cc_extra,
+                        *base_cflags,
+                        *extra_simd,
+                        *omp_compile,
+                        "-c",
+                        str(src),
+                        "-o",
+                        str(obj_file),
+                    ]
                 # Print compile command to stderr for build-log assertions (CI grep)
                 print(f"jblas compile: {' '.join(cmd_compile)}", file=sys.stderr)
                 result = subprocess.run(cmd_compile, capture_output=True, text=True)
@@ -724,21 +763,40 @@ class CustomBuildHook(BuildHookInterface):
                 compile_failed = False
                 for src in source_files:
                     obj_file = tmp_dir / (src.stem + "_noomp.o")
-                    extra_simd = (
-                        simd_flags
-                        if (str(src) in simd_source_set or str(src) in avx2_kernel_set)
-                        else []
-                    )
-                    cmd_compile = [
-                        cc_cmd,
-                        *cc_extra,
-                        *base_cflags,
-                        *extra_simd,
-                        "-c",
-                        str(src),
-                        "-o",
-                        str(obj_file),
-                    ]
+                    if str(src) in lapack_source_set:
+                        cmd_compile = [
+                            cc_cmd,
+                            *cc_extra,
+                            "-O2",
+                            "-fPIC",
+                            "-std=c11",
+                            f"-I{python_inc}",
+                            f"-I{numpy_inc}",
+                            f"-I{jblas_inc}",
+                            "-c",
+                            str(src),
+                            "-o",
+                            str(obj_file),
+                        ]
+                    else:
+                        extra_simd = (
+                            simd_flags
+                            if (
+                                str(src) in simd_source_set
+                                or str(src) in avx2_kernel_set
+                            )
+                            else []
+                        )
+                        cmd_compile = [
+                            cc_cmd,
+                            *cc_extra,
+                            *base_cflags,
+                            *extra_simd,
+                            "-c",
+                            str(src),
+                            "-o",
+                            str(obj_file),
+                        ]
                     print(
                         f"jblas compile (no OMP): {' '.join(cmd_compile)}",
                         file=sys.stderr,

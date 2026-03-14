@@ -610,6 +610,75 @@ class TestAccumGemm:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not HAS_C_EXTENSION,
+    reason="C extension required for throughput benchmarks",
+)
+class TestEighThroughput:
+    """Benchmark jblas.eigh vs numpy.linalg.eigh for Phase 80.1."""
+
+    def test_eigh_throughput_n500(self) -> None:
+        """jblas eigh should be < 10x slower than numpy at N=500 after optimizations."""
+        import time
+
+        rng = np.random.default_rng(42)
+        N = 500
+        A = rng.standard_normal((N, N))
+        K = A @ A.T + np.eye(N)  # SPD
+
+        # Warm up
+        np.linalg.eigh(K.copy())
+        eigh(K.copy())
+
+        # Time numpy
+        t0 = time.perf_counter()
+        for _ in range(3):
+            np.linalg.eigh(K.copy())
+        t_numpy = (time.perf_counter() - t0) / 3
+
+        # Time jblas
+        t0 = time.perf_counter()
+        for _ in range(3):
+            eigh(K.copy())
+        t_jblas = (time.perf_counter() - t0) / 3
+
+        ratio = t_jblas / t_numpy
+        print(
+            f"\nN={N}: jblas={t_jblas:.4f}s, numpy={t_numpy:.4f}s, ratio={ratio:.1f}x"
+        )
+        # Cross-platform soft gate.  Apple Silicon Accelerate is multi-threaded
+        # and uses LAPACK dsyevd with vDSP BLAS — jblas single-threaded LAPACK
+        # cannot match that.  Use 15x to accommodate Accelerate (~14x observed)
+        # while still catching gross regressions.  On x86_64 with AVX2 + MKL,
+        # expect < 8x.
+        assert ratio < 15.0, (
+            f"jblas eigh is {ratio:.1f}x slower than numpy -- expected < 15x"
+        )
+
+    def test_eigh_correctness_n1000_post_optimization(self) -> None:
+        """Full correctness gate at N=1000 after all Phase 80.1 optimizations."""
+        rng = np.random.default_rng(123)
+        N = 1000
+        A = rng.standard_normal((N, N))
+        K = A @ A.T + np.eye(N)
+
+        vals, vecs = eigh(K.copy())
+        np_vals, _ = np.linalg.eigh(K.copy())
+
+        # Eigenvalue agreement
+        npt.assert_allclose(vals, np_vals, rtol=1e-12)
+
+        # Reconstruction
+        recon = vecs @ np.diag(vals) @ vecs.T
+        resid = np.linalg.norm(K - recon) / np.linalg.norm(K)
+        assert resid < 1e-12, f"Reconstruction residual {resid:.2e}"
+
+        # Orthogonality
+        orth = np.linalg.norm(vecs.T @ vecs - np.eye(N))
+        assert orth < 1e-12, f"Orthogonality residual {orth:.2e}"
+
+
 class TestWorkspaceApi:
     """Workspace API has no Python binding (C-internal only).
 

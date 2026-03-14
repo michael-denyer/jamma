@@ -18,7 +18,7 @@
 /* Bump this constant whenever the public ABI changes (new fields in
  * jblas_dispatch_t, changed function signatures, etc.). pymodule.c exposes
  * this as a Python-level integer so callers can guard against ABI mismatches. */
-#define JBLAS_ABI_VERSION 3
+#define JBLAS_ABI_VERSION 4
 
 /* ---------------------------------------------------------------------------
  * Function-pointer typedefs for ISA-dispatched microkernels
@@ -201,6 +201,36 @@ void jblas_dsyr2k_c(npy_intp N, npy_intp K,
                     const double *A, npy_intp lda,
                     const double *B, npy_intp ldb,
                     double *C, npy_intp ldc);
+
+/* ---------------------------------------------------------------------------
+ * eigh function declarations (LAPACK eigendecomposition)
+ * ---------------------------------------------------------------------------
+ */
+
+/**
+ * jblas_eigh_c — compute all eigenvalues and eigenvectors of symmetric K.
+ *
+ * K is N x N, row-major, lower triangle used. K is overwritten as scratch.
+ * eigenvalues: caller-allocated N doubles (ascending order on return).
+ * eigenvectors: caller-allocated N x N doubles, row-major. U[:,j] is the
+ *               eigenvector for eigenvalues[j].
+ *
+ * Returns 0 on success, -1 on allocation failure, positive i if the
+ * D&C secular solver failed to converge for eigenvalue i.
+ */
+int jblas_eigh_c(npy_intp N,
+                 double *K, npy_intp ldk,
+                 double *eigenvalues,
+                 double *eigenvectors, npy_intp ldz);
+
+/* Internal LAPACK-layer functions (called by jblas_eigh_c, not Python-facing) */
+int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
+                   double *d, double *e, double *tau);
+int jblas_dstedc_c(npy_intp N, double *d, double *e,
+                   double *Z, npy_intp ldz);
+int jblas_dormtr_c(npy_intp N, npy_intp M,
+                   const double *A, npy_intp lda, const double *tau,
+                   double *C, npy_intp ldc);
 
 /* ---------------------------------------------------------------------------
  * Initialisation and introspection

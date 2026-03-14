@@ -2,8 +2,9 @@
 
 Provides Level 1/2 BLAS primitives (ddot, dnrm2, daxpy, dscal, dgemv) and
 Level 3 BLAS (dgemm — C implementation with AVX2/NEON microkernels, dsyrk and
-dsyr2k for symmetric rank-k updates) via a C extension when available, falling
-back to NumPy when the C extension has not been compiled.
+dsyr2k for symmetric rank-k updates) plus LAPACK eigendecomposition (eigh) via
+a C extension when available, falling back to NumPy when the C extension has
+not been compiled.
 
 Exports:
     ddot: Inner product of two double vectors.
@@ -14,6 +15,7 @@ Exports:
     dgemm: Matrix-matrix product op(A) @ op(B) with optional transpose support.
     dsyrk: Symmetric rank-k update K = X @ X.T.
     dsyr2k: Symmetric rank-2k update C -= A @ B.T + B @ A.T.
+    eigh: Eigenvalues and eigenvectors of a symmetric matrix (LAPACK DSYEVD).
     jblas_isa: String identifying the active ISA ("AVX2", "NEON", "generic",
         or "numpy-fallback").
     ABI_VERSION: Integer ABI version (0 when using NumPy fallback).
@@ -50,6 +52,7 @@ try:
         dscal,
         dsyr2k,
         dsyrk,
+        eigh,
         jblas_isa,
     )
 
@@ -328,6 +331,27 @@ except ImportError as _exc:
         C64 -= B64 @ A64.T
         return C64
 
+    def eigh(K: _np.ndarray) -> tuple[_np.ndarray, _np.ndarray]:
+        """Compute eigenvalues and eigenvectors of a symmetric matrix.
+
+        Args:
+            K: Symmetric matrix, shape (N, N), float64. Overwritten as scratch.
+
+        Returns:
+            Tuple of (eigenvalues, eigenvectors) where eigenvalues is shape (N,)
+            ascending, eigenvectors is shape (N, N) with columns as unit eigenvectors.
+
+        Raises:
+            ValueError: If K is not 2-D square float64.
+            numpy.linalg.LinAlgError: If convergence fails.
+        """
+        if K.ndim != 2:
+            raise ValueError(f"eigh: K must be a 2-D array, got {K.ndim}-D")
+        if K.shape[0] != K.shape[1]:
+            raise ValueError(f"eigh: K must be square, got shape {K.shape}")
+        K64 = _np.asarray(K, dtype=_np.float64)
+        return _np.linalg.eigh(K64)
+
 
 __all__ = [
     "ABI_VERSION",
@@ -339,6 +363,7 @@ __all__ = [
     "dgemm",
     "dsyrk",
     "dsyr2k",
+    "eigh",
     "jblas_isa",
     "HAS_C_EXTENSION",
     "HAS_OPENMP",

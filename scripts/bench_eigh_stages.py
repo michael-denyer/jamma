@@ -10,6 +10,7 @@ Usage:
 from __future__ import annotations
 
 import ctypes
+import os
 import time
 
 import numpy as np
@@ -174,9 +175,13 @@ def bench_jblas_stages(
 
 
 def main() -> None:
-    sizes = [200, 500, 1000]
+    sizes = [200, 500, 1000, 4096, 10000, 20000]
+    # VALID-05 also specifies 46k, but that requires ILP64 MKL numpy (LP64 int32
+    # overflow at ~46k x 46k). Run on ILP64 systems with JBLAS_BENCH_MAX_GB=200.
     n_runs = 3
     rng = np.random.default_rng(42)
+
+    MAX_MATRIX_GB = float(os.environ.get("JBLAS_BENCH_MAX_GB", "8.0"))
 
     # Load C functions
     so_path = _find_jblas_so()
@@ -208,6 +213,16 @@ def main() -> None:
     all_stages: dict[int, dict[str, float]] = {}
 
     for N in sizes:
+        matrix_gb = (N * N * 8 * 3) / (1024**3)  # K + eigvecs + workspace
+        if matrix_gb > MAX_MATRIX_GB:
+            limit = MAX_MATRIX_GB
+            print(
+                f"\n--- N={N} skipped "
+                f"(estimated {matrix_gb:.1f} GB > {limit:.1f} GB limit) ---"
+            )
+            print(f"    Set JBLAS_BENCH_MAX_GB={matrix_gb + 1:.0f} to enable")
+            continue
+
         K = _random_spd(N, rng)
 
         # Warmup

@@ -243,6 +243,13 @@ static void dlatrd_panel(double *A, npy_intp lda, npy_intp N,
         npy_intp m   = N - col - 1;    /* trailing size for this column */
         npy_intp off = m_panel - m;    /* offset into V/W for this column's v */
 
+        /* KNOWN BOTTLENECK: The deferred rank-2 update loop below is O(nb*m) per
+         * column — a scalar bottleneck. Converting this to BLAS would require
+         * restructuring dlatrd_panel to use a full DSYR2K trailing update rather
+         * than column-by-column deferred application. Left as scalar for Phase 81+
+         * consideration; the primary dsytrd bottleneck (dsymv_lower) is already
+         * BLAS-backed via mirror+GEMV above. */
+
         /* Apply deferred rank-2 updates to column col before reading it.
          * The trailing update A -= V*W^T + W*V^T has not been applied yet;
          * we must update A[col, col] and A[col+1:N, col] using previous

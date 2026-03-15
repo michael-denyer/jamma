@@ -30,7 +30,7 @@ blas_backend: Final[
         "system-BLAS-LP64",
     ]
 ]
-"""Active dgemm backend identifier."""
+"""Active dgemm backend. ILP64 > jblas-own > LP64 (LP64 not wired by default)."""
 
 blas_is_ilp64: Final[int]
 """1 if the active dgemm backend uses ILP64 (64-bit int) parameters, 0 otherwise."""

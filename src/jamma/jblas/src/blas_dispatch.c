@@ -1,18 +1,20 @@
 /**
- * blas_dispatch.c -- Three-tier dgemm discovery and dispatch wrapper.
+ * blas_dispatch.c -- BLAS dgemm discovery and dispatch wrapper.
  *
- * At jblas init time, discovers external dgemm implementations in this order:
- *   1. System BLAS (MKL, OpenBLAS, Accelerate -- via numpy's bundled libs)
- *   2. Bundled BLIS (dlopen'd from a known path relative to the extension .so)
- *   3. jblas own blocking dgemm (the default, already set by platform.c)
+ * Dispatch priority (consistency with GEMMA over raw speed):
+ *   1. System BLAS ILP64 (MKL-ILP64, OpenBLAS-ILP64) — best: fast + consistent
+ *   2. jblas own blocking dgemm — consistent, no integer overflow concerns
+ *   3. System BLAS LP64 (Accelerate, MKL-LP64, OpenBLAS-LP64) — last resort,
+ *      with a one-shot warning.  LP64 backends use different FP accumulation
+ *      order than jblas/GEMMA, so results may differ slightly.
  *
  * When an external dgemm is found, replaces jblas_dispatch.dgemm with a
  * wrapper that converts row-major C = A*B into the Fortran column-major
  * convention expected by the external library.
  *
- * ILP64 / LP64 detection uses the same dlopen+dlsym pattern proven in
- * _eigen_accel.c: try ILP64-suffixed symbols first, fall back to LP64.
- * LP64 dimensions are guarded against int32 overflow at N > 46340.
+ * ILP64 / LP64 detection uses dlopen+dlsym: try ILP64-suffixed symbols first,
+ * fall back to LP64.  LP64 dimensions are guarded against int32 overflow
+ * at N > 46340.
  *
  * The dlopen machinery is Unix-only (#if !defined(_WIN32)); on Windows
  * blas_dispatch_init() returns 0 immediately (no external dispatch).
@@ -544,21 +546,47 @@ static void _dgemm_external_wrapper(
 int blas_dispatch_init(void) {
     int dbg = _debug_enabled();
 
-    /* Try system BLAS first */
-    if (discover_system_blas()) {
-        if (dbg) fprintf(stderr, "jblas_dispatch: using %s for dgemm\n", g_backend_name);
+    /* Step 1: Discover what's available (system BLAS + bundled BLIS).
+     * This populates g_dgemm_ilp64/g_dgemm_lp64 but does NOT wire
+     * the dispatch table yet. */
+    int found_system = discover_system_blas();
+    int found_blis = 0;
+    if (!found_system)
+        found_blis = discover_bundled_blis();
+
+    /* Step 2: Wire dispatch table with priority:
+     *   ILP64 > jblas-own > LP64
+     *
+     * ILP64 is both fast and consistent (64-bit integers, same precision).
+     * jblas-own is consistent with GEMMA (same blocking/accumulation order).
+     * LP64 is fast but uses different FP accumulation than jblas/GEMMA. */
+
+    if ((found_system || found_blis) && g_is_ilp64) {
+        /* ILP64 system BLAS — best option */
+        if (dbg) fprintf(stderr, "jblas_dispatch: using %s (ILP64) for dgemm\n", g_backend_name);
         jblas_dispatch.dgemm = _dgemm_external_wrapper;
         return 0;
     }
 
-    /* Try bundled BLIS */
-    if (discover_bundled_blis()) {
-        if (dbg) fprintf(stderr, "jblas_dispatch: using BLIS for dgemm\n");
-        jblas_dispatch.dgemm = _dgemm_external_wrapper;
+    if ((found_system || found_blis) && !g_is_ilp64) {
+        /* LP64 found but not ILP64 — prefer jblas-own for consistency,
+         * but keep LP64 wired up as fallback via _dgemm_external_wrapper
+         * so the overflow guard path (which would be a no-op for jblas-own)
+         * is never hit.  Instead, use jblas-own as the primary dispatch. */
+        if (dbg) fprintf(stderr, "jblas_dispatch: LP64 %s available but preferring jblas-own for consistency\n",
+                         g_backend_name);
+        fprintf(stderr,
+            "jblas_dispatch: INFO: LP64 BLAS (%s) detected but not used — "
+            "jblas own dgemm preferred for numerical consistency with GEMMA. "
+            "Install ILP64 numpy for faster external BLAS dispatch.\n",
+            g_backend_name);
+        /* Reset backend name — LP64 is available but not active */
+        g_backend_name = "jblas-own";
+        /* jblas-own stays in dispatch table (default from platform.c) */
         return 0;
     }
 
-    /* No external dgemm found -- jblas own dgemm stays in dispatch table */
+    /* No external dgemm found — jblas own stays */
     if (dbg) fprintf(stderr, "jblas_dispatch: no external dgemm found, using jblas-own\n");
     return 0;
 }
@@ -572,7 +600,9 @@ int blas_is_ilp64(void) {
 }
 
 int blas_has_external(void) {
-    return g_dgemm_lp64 != NULL || g_dgemm_ilp64 != NULL;
+    /* Only true when external BLAS is actually wired into the dispatch table
+     * (i.e., ILP64 found).  LP64-only discovery does not wire dispatch. */
+    return jblas_dispatch.dgemm != jblas_dgemm_dispatch_fn;
 }
 
 /* ---------------------------------------------------------------------------

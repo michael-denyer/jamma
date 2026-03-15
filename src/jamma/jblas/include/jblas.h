@@ -110,6 +110,10 @@ int blas_dispatch_init(void);
  * Never returns NULL. */
 const char *blas_backend_name(void);
 
+/* Returns 1 if the external dgemm uses ILP64 (64-bit integer) parameters,
+ * 0 if LP64 (32-bit integer) or no external dgemm was found. */
+int blas_is_ilp64(void);
+
 /* ---------------------------------------------------------------------------
  * dgemm microkernel function pointer
  * ---------------------------------------------------------------------------

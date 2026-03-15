@@ -505,6 +505,10 @@ const char *blas_backend_name(void) {
     return g_backend_name;
 }
 
+int blas_is_ilp64(void) {
+    return g_is_ilp64;
+}
+
 #else /* _WIN32 */
 
 /* Windows: no external dispatch -- always use jblas own dgemm */
@@ -514,6 +518,10 @@ int blas_dispatch_init(void) {
 
 const char *blas_backend_name(void) {
     return "jblas-own";
+}
+
+int blas_is_ilp64(void) {
+    return 0;
 }
 
 #endif /* !_WIN32 */

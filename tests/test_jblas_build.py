@@ -148,10 +148,10 @@ def test_all_exports_present():
 
 @pytest.mark.tier0
 def test_abi_version():
-    """ABI_VERSION is 5 (bumped for accum GEMM, workspace struct, thread API)."""
+    """ABI_VERSION is 6 (bumped for blas_dispatch, blas_is_ilp64)."""
     from jamma.jblas import ABI_VERSION
 
-    assert ABI_VERSION == 5, f"Expected ABI_VERSION=5, got {ABI_VERSION}"
+    assert ABI_VERSION == 6, f"Expected ABI_VERSION=6, got {ABI_VERSION}"
 
 
 @pytest.mark.tier0

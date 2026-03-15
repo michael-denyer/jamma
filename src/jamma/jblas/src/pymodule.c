@@ -794,5 +794,10 @@ PyInit__jblas(void)
         Py_DECREF(m); return NULL;
     }
 
+    /* blas_is_ilp64: 1 if external dgemm uses ILP64 (64-bit) integers, 0 otherwise */
+    if (PyModule_AddIntConstant(m, "blas_is_ilp64", blas_is_ilp64()) < 0) {
+        Py_DECREF(m); return NULL;
+    }
+
     return m;
 }

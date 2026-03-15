@@ -509,6 +509,101 @@ int blas_is_ilp64(void) {
     return g_is_ilp64;
 }
 
+int blas_has_external(void) {
+    return g_dgemm_lp64 != NULL || g_dgemm_ilp64 != NULL;
+}
+
+/* ---------------------------------------------------------------------------
+ * Full-signature external dgemm wrapper
+ * ---------------------------------------------------------------------------
+ * Row-major: C(M×N) = alpha * op_r(A)(M×K) * op_r(B)(K×N) + beta * C
+ *
+ * Converts to Fortran column-major by exploiting the identity:
+ *   C^T = alpha * op(B^T) * op(A^T) + beta * C^T
+ * So: dgemm(transb_row, transa_row, N, M, K, alpha,
+ *           B_ptr, ldb_row, A_ptr, lda_row, beta, C_ptr, ldc_row)
+ */
+/* Returns 1 on success, 0 if LP64 overflow guard triggered (caller must
+ * fall back to jblas own dgemm). */
+static int _dgemm_external_full(
+    npy_intp M, npy_intp N, npy_intp K,
+    const double *A, npy_intp lda,
+    const double *B, npy_intp ldb,
+    double       *C, npy_intp ldc,
+    int transa, int transb,
+    double alpha, double beta)
+{
+    /* LP64 overflow guard */
+    if (!g_is_ilp64 &&
+        (M > LP64_DIM_MAX || N > LP64_DIM_MAX || K > LP64_DIM_MAX ||
+         lda > LP64_DIM_MAX || ldb > LP64_DIM_MAX || ldc > LP64_DIM_MAX)) {
+        int dbg = _debug_enabled();
+        if (dbg)
+            fprintf(stderr,
+                "jblas_dispatch: LP64 overflow guard (full): "
+                "M=%ld N=%ld K=%ld, falling back to jblas own dgemm\n",
+                (long)M, (long)N, (long)K);
+        return 0;
+    }
+
+    /* Row-major to column-major: swap A↔B, M↔N, transpose flags, strides */
+    const char *transa_f = transb ? "T" : "N";
+    const char *transb_f = transa ? "T" : "N";
+
+    if (g_is_ilp64) {
+        const long long lM = (long long)M, lN = (long long)N, lK = (long long)K;
+        const long long llda = (long long)lda, lldb = (long long)ldb;
+        const long long lldc = (long long)ldc;
+        g_dgemm_ilp64(transa_f, transb_f, &lN, &lM, &lK,
+                       &alpha, B, &lldb, A, &llda,
+                       &beta,  C, &lldc);
+    } else {
+        const int iM = (int)M, iN = (int)N, iK = (int)K;
+        const int ilda = (int)lda, ildb = (int)ldb, ildc = (int)ldc;
+        g_dgemm_lp64(transa_f, transb_f, &iN, &iM, &iK,
+                      &alpha, B, &ildb, A, &ilda,
+                      &beta,  C, &ildc);
+    }
+    return 1;
+}
+
+/* ---------------------------------------------------------------------------
+ * Public full-signature dispatch API
+ * ---------------------------------------------------------------------------
+ */
+
+void jblas_dgemm_ext(npy_intp M, npy_intp N, npy_intp K,
+                     const double *A, npy_intp lda,
+                     const double *B, npy_intp ldb,
+                     double *C, npy_intp ldc,
+                     int transa, int transb)
+{
+    if ((g_dgemm_lp64 || g_dgemm_ilp64) &&
+        _dgemm_external_full(M, N, K, A, lda, B, ldb, C, ldc,
+                             transa, transb, 1.0, 0.0)) {
+        return;
+    }
+    /* No external BLAS, or LP64 overflow guard triggered */
+    jblas_dgemm_c(M, N, K, A, lda, B, ldb, C, ldc, transa, transb);
+}
+
+void jblas_dgemm_ext_ws(npy_intp M, npy_intp N, npy_intp K,
+                        const double *A, npy_intp lda,
+                        const double *B, npy_intp ldb,
+                        double *C, npy_intp ldc,
+                        int transa, int transb,
+                        double alpha, double beta,
+                        jblas_workspace_t *ws)
+{
+    if ((g_dgemm_lp64 || g_dgemm_ilp64) &&
+        _dgemm_external_full(M, N, K, A, lda, B, ldb, C, ldc,
+                             transa, transb, alpha, beta)) {
+        return;
+    }
+    jblas_dgemm_ws(M, N, K, A, lda, B, ldb, C, ldc,
+                   transa, transb, alpha, beta, ws);
+}
+
 #else /* _WIN32 */
 
 /* Windows: no external dispatch -- always use jblas own dgemm */
@@ -522,6 +617,31 @@ const char *blas_backend_name(void) {
 
 int blas_is_ilp64(void) {
     return 0;
+}
+
+int blas_has_external(void) {
+    return 0;
+}
+
+void jblas_dgemm_ext(npy_intp M, npy_intp N, npy_intp K,
+                     const double *A, npy_intp lda,
+                     const double *B, npy_intp ldb,
+                     double *C, npy_intp ldc,
+                     int transa, int transb)
+{
+    jblas_dgemm_c(M, N, K, A, lda, B, ldb, C, ldc, transa, transb);
+}
+
+void jblas_dgemm_ext_ws(npy_intp M, npy_intp N, npy_intp K,
+                        const double *A, npy_intp lda,
+                        const double *B, npy_intp ldb,
+                        double *C, npy_intp ldc,
+                        int transa, int transb,
+                        double alpha, double beta,
+                        jblas_workspace_t *ws)
+{
+    jblas_dgemm_ws(M, N, K, A, lda, B, ldb, C, ldc,
+                   transa, transb, alpha, beta, ws);
 }
 
 #endif /* !_WIN32 */

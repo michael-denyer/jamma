@@ -248,9 +248,15 @@ class CustomBuildHook(BuildHookInterface):
                     file=sys.stderr,
                 )
 
-        # Register BLIS binary for wheel inclusion
+        # Register BLIS binary for wheel inclusion.
+        # Use generic name (libblis.so / libblis.dylib) so that
+        # blas_dispatch.c's discover_bundled_blis() can find it at runtime
+        # regardless of the platform-specific asset name.
         build_data.setdefault("force_include", {})
-        dist_path = f"jamma/jblas/libs/{blis_path.name}"
+        generic_name = (
+            "libblis.dylib" if platform.system() == "Darwin" else "libblis.so"
+        )
+        dist_path = f"jamma/jblas/libs/{generic_name}"
         build_data["force_include"][str(blis_path)] = dist_path
         print(
             f"BLIS bundled: {blis_path} -> {dist_path}",

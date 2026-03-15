@@ -357,9 +357,9 @@ py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs)
     const double *pB = (const double *)PyArray_DATA(aB);
     double       *pC = (double *)PyArray_DATA(aC);
 
-    /* Guard: if dgemm workspace allocation failed during init, the packed
-     * buffers are NULL and jblas_dgemm_c would segfault.  Raise instead. */
-    if (!jblas_packed_A || !jblas_packed_B) {
+    /* Guard: if no external BLAS and dgemm workspace allocation failed during
+     * init, the packed buffers are NULL and jblas_dgemm_c would segfault. */
+    if (!blas_has_external() && (!jblas_packed_A || !jblas_packed_B)) {
         PyErr_SetString(PyExc_RuntimeError,
             "dgemm: workspace allocation failed during jblas init; "
             "reduce OMP_NUM_THREADS or use the numpy fallback");
@@ -372,10 +372,11 @@ py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs)
     npy_intp ldb = PyArray_DIM(aB, 1);
 
     /* Release the GIL for the O(N^3) C/OpenMP computation.  Safe because
-     * jblas_dgemm_c operates purely on C double arrays; the PyArray refs
-     * (aA, aB, aC) keep the buffers alive for the duration. */
+     * jblas_dgemm_ext operates purely on C double arrays; the PyArray refs
+     * (aA, aB, aC) keep the buffers alive for the duration.
+     * jblas_dgemm_ext routes to system BLAS when available, else jblas own. */
     Py_BEGIN_ALLOW_THREADS
-    jblas_dgemm_c(M, N, K_a, pA, lda, pB, ldb, pC, N, transa, transb);
+    jblas_dgemm_ext(M, N, K_a, pA, lda, pB, ldb, pC, N, transa, transb);
     Py_END_ALLOW_THREADS
 
     Py_DECREF(aA);

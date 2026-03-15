@@ -800,17 +800,17 @@ static int merge_rank1(npy_intp n, npy_intp m,
         }
 
         if (ws) {
-            jblas_dgemm_ws(n, n_nd, n_nd,
-                           Q_b_cols, n_nd,
-                           Q_nd, n_nd,
-                           Q_nd_full, n_nd,
-                           0, 0, 1.0, 0.0, ws);
+            jblas_dgemm_ext_ws(n, n_nd, n_nd,
+                               Q_b_cols, n_nd,
+                               Q_nd, n_nd,
+                               Q_nd_full, n_nd,
+                               0, 0, 1.0, 0.0, ws);
         } else {
-            jblas_dgemm_c(n, n_nd, n_nd,
-                          Q_b_cols, n_nd,
-                          Q_nd, n_nd,
-                          Q_nd_full, n_nd,
-                          0, 0);
+            jblas_dgemm_ext(n, n_nd, n_nd,
+                            Q_b_cols, n_nd,
+                            Q_nd, n_nd,
+                            Q_nd_full, n_nd,
+                            0, 0);
         }
 
         /* Write updated non-deflated columns back into Q_sec */
@@ -849,13 +849,13 @@ static int merge_rank1(npy_intp n, npy_intp m,
     }
 
     if (ws) {
-        jblas_dgemm_ws(n, n, n,
-                       Z, ldz, Q_sec, n, Z_new, ldz,
-                       0, 0, 1.0, 0.0, ws);
+        jblas_dgemm_ext_ws(n, n, n,
+                           Z, ldz, Q_sec, n, Z_new, ldz,
+                           0, 0, 1.0, 0.0, ws);
     } else {
-        jblas_dgemm_c(n, n, n,
-                      Z, ldz, Q_sec, n, Z_new, ldz,
-                      0, 0);
+        jblas_dgemm_ext(n, n, n,
+                        Z, ldz, Q_sec, n, Z_new, ldz,
+                        0, 0);
     }
 
     /* Copy Z_new back to Z */

@@ -603,8 +603,8 @@ void jblas_workspace_free(jblas_workspace_t *ws) {
  * Assumes row-major layout with natural leading dimensions (lda=K, ldb=N,
  * ldc=N).  Always passes transa=transb=0 (no transpose).
  *
- * Note: py_dgemm bypasses this wrapper and calls jblas_dgemm_c directly
- * with the caller's transpose flags and physical leading dimensions.
+ * Note: py_dgemm and dstedc use jblas_dgemm_ext() / jblas_dgemm_ext_ws()
+ * which route to external BLAS when available, falling back to jblas_dgemm_c.
  * ---------------------------------------------------------------------------
  */
 static void _dgemm_dispatch(npy_intp m, npy_intp n, npy_intp k,

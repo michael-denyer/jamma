@@ -114,6 +114,39 @@ const char *blas_backend_name(void);
  * 0 if LP64 (32-bit integer) or no external dgemm was found. */
 int blas_is_ilp64(void);
 
+/* Returns 1 if an external dgemm (system BLAS or BLIS) was discovered. */
+int blas_has_external(void);
+
+/* ---------------------------------------------------------------------------
+ * Full-signature dispatch: external BLAS when available, jblas-own otherwise.
+ *
+ * These are the correct entry points for callers that need transpose flags,
+ * custom leading dimensions, or alpha/beta.  The simplified dispatch table
+ * (jblas_dispatch.dgemm) only handles the NN natural-stride case.
+ *
+ * Row-major convention: C(M x N) = alpha * op(A)(M x K) * op(B)(K x N) + beta * C
+ * transa/transb: 0 = no transpose, 1 = transpose.
+ * ---------------------------------------------------------------------------
+ */
+
+/* C = op(A) * op(B), zeroes C first.  Uses global workspace + mutex. */
+void jblas_dgemm_ext(npy_intp M, npy_intp N, npy_intp K,
+                     const double *A, npy_intp lda,
+                     const double *B, npy_intp ldb,
+                     double *C, npy_intp ldc,
+                     int transa, int transb);
+
+/* C = alpha * op(A) * op(B) + beta * C.  Uses caller-owned workspace (no mutex).
+ * Falls back to jblas_dgemm_ws when no external BLAS.  When external BLAS is
+ * active, ws is ignored (external BLAS manages its own threading/memory). */
+void jblas_dgemm_ext_ws(npy_intp M, npy_intp N, npy_intp K,
+                        const double *A, npy_intp lda,
+                        const double *B, npy_intp ldb,
+                        double *C, npy_intp ldc,
+                        int transa, int transb,
+                        double alpha, double beta,
+                        jblas_workspace_t *ws);
+
 /* ---------------------------------------------------------------------------
  * dgemm microkernel function pointer
  * ---------------------------------------------------------------------------

@@ -38,9 +38,10 @@
  * ---------------------------------------------------------------------------
  */
 static int g_is_ilp64 = 0;
-static jblas_dgemm_lp64_fn  g_dgemm_lp64  = NULL;
-static jblas_dgemm_ilp64_fn g_dgemm_ilp64 = NULL;
-static jblas_cblas_dgemm_fn g_cblas_dgemm  = NULL;  /* preferred over Fortran */
+static jblas_dgemm_lp64_fn       g_dgemm_lp64       = NULL;
+static jblas_dgemm_ilp64_fn      g_dgemm_ilp64      = NULL;
+static jblas_cblas_dgemm_fn      g_cblas_dgemm       = NULL;  /* LP64 CBLAS */
+static jblas_cblas_dgemm_ilp64_fn g_cblas_dgemm_ilp64 = NULL;  /* ILP64 CBLAS (Accelerate) */
 static const char *g_backend_name = "jblas-own";
 static void *g_blas_handle = NULL;
 
@@ -96,6 +97,16 @@ static const char *ilp64_dgemm_names[] = {
     "dgemm64_",               /* OpenBLAS INTERFACE64=1 */
     NULL
 };
+/* Apple Accelerate ILP64 (macOS 13.3+): uses $NEWLAPACK$ILP64 suffix.
+ * Fortran interface has no trailing underscore. */
+static const char *accel_ilp64_dgemm_names[] = {
+    "dgemm$NEWLAPACK$ILP64",
+    NULL
+};
+static const char *accel_ilp64_cblas_names[] = {
+    "cblas_dgemm$NEWLAPACK$ILP64",
+    NULL
+};
 static const char *lp64_dgemm_names[] = {
     "dgemm_",                 /* Standard Fortran / Accelerate */
     NULL
@@ -110,7 +121,7 @@ static const char *lp64_dgemm_names[] = {
 static int try_resolve_dgemm(void *handle, const char *lib_path) {
     int dbg = _debug_enabled();
 
-    /* Try ILP64 symbols first */
+    /* Try ILP64 symbols first (MKL, OpenBLAS) */
     for (const char **name = ilp64_dgemm_names; *name; name++) {
         void *sym = dlsym(handle, *name);
         if (sym) {
@@ -118,6 +129,26 @@ static int try_resolve_dgemm(void *handle, const char *lib_path) {
             g_dgemm_ilp64 = (jblas_dgemm_ilp64_fn)sym;
             g_is_ilp64 = 1;
             g_backend_name = _detect_backend_name(lib_path, 1);
+            return 1;
+        }
+    }
+
+    /* Try Apple Accelerate ILP64 (macOS 13.3+) — prefer CBLAS for row-major */
+    for (const char **name = accel_ilp64_cblas_names; *name; name++) {
+        void *sym = dlsym(handle, *name);
+        if (sym) {
+            if (dbg) fprintf(stderr, "jblas_dispatch:   resolved %s (Accelerate ILP64 CBLAS)\n", *name);
+            g_cblas_dgemm_ilp64 = (jblas_cblas_dgemm_ilp64_fn)sym;
+            g_is_ilp64 = 1;
+            g_backend_name = "Accelerate-ILP64";
+            /* Also try Fortran interface as fallback */
+            for (const char **fn = accel_ilp64_dgemm_names; *fn; fn++) {
+                void *fsym = dlsym(handle, *fn);
+                if (fsym) {
+                    g_dgemm_ilp64 = (jblas_dgemm_ilp64_fn)fsym;
+                    if (dbg) fprintf(stderr, "jblas_dispatch:   also resolved %s\n", *fn);
+                }
+            }
             return 1;
         }
     }
@@ -509,6 +540,16 @@ static void _dgemm_external_wrapper(
 
     /* Prefer CBLAS: row-major native, no swap needed.
      * CBLAS requires ld >= max(dim, 1) even for zero-size matrices. */
+    if (g_cblas_dgemm_ilp64) {
+        long lk = k > 0 ? (long)k : 1;
+        long ln = n > 0 ? (long)n : 1;
+        g_cblas_dgemm_ilp64(JBLAS_CblasRowMajor,
+                            JBLAS_CblasNoTrans, JBLAS_CblasNoTrans,
+                            (long)m, (long)n, (long)k,
+                            alpha, A, lk, B, ln,
+                            beta,  C, ln);
+        return;
+    }
     if (g_cblas_dgemm) {
         int ik = k > 0 ? (int)k : 1;
         int in_ = n > 0 ? (int)n : 1;
@@ -634,6 +675,18 @@ static int _dgemm_external_full(
      *   lda >= max(cols_of_A, 1): NoTrans → K, Trans → M.
      *   ldb >= max(cols_of_B, 1): NoTrans → N, Trans → K.
      *   ldc >= max(N, 1) always. */
+    if (g_cblas_dgemm_ilp64) {
+        int ta = transa ? JBLAS_CblasTrans : JBLAS_CblasNoTrans;
+        int tb = transb ? JBLAS_CblasTrans : JBLAS_CblasNoTrans;
+        long llda = (long)(lda > 0 ? lda : 1);
+        long lldb = (long)(ldb > 0 ? ldb : 1);
+        long lldc = (long)(ldc > 0 ? ldc : 1);
+        g_cblas_dgemm_ilp64(JBLAS_CblasRowMajor, ta, tb,
+                            (long)M, (long)N, (long)K,
+                            alpha, A, llda, B, lldb,
+                            beta,  C, lldc);
+        return 1;
+    }
     if (g_cblas_dgemm) {
         int ta = transa ? JBLAS_CblasTrans : JBLAS_CblasNoTrans;
         int tb = transb ? JBLAS_CblasTrans : JBLAS_CblasNoTrans;

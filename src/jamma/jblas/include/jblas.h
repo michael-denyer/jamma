@@ -101,7 +101,11 @@ typedef void (*jblas_dgemm_ilp64_fn)(
 
 /* CBLAS C-interface dgemm: handles row-major natively (no A/B swap needed).
  * Preferred over Fortran interface when available — Accelerate/MKL can
- * choose optimal algorithm for the memory layout. */
+ * choose optimal algorithm for the memory layout.
+ *
+ * LP64 CBLAS uses int for dimensions; ILP64 CBLAS (e.g. Accelerate
+ * $NEWLAPACK$ILP64) uses long.  On LP64 platforms long==int==32-bit,
+ * on ILP64 platforms long==64-bit.  We use separate typedefs. */
 enum { JBLAS_CblasRowMajor = 101, JBLAS_CblasNoTrans = 111, JBLAS_CblasTrans = 112 };
 typedef void (*jblas_cblas_dgemm_fn)(
     int order, int transa, int transb,
@@ -109,6 +113,12 @@ typedef void (*jblas_cblas_dgemm_fn)(
     double alpha, const double *a, int lda,
     const double *b, int ldb,
     double beta, double *c, int ldc);
+typedef void (*jblas_cblas_dgemm_ilp64_fn)(
+    int order, int transa, int transb,
+    long m, long n, long k,
+    double alpha, const double *a, long lda,
+    const double *b, long ldb,
+    double beta, double *c, long ldc);
 
 /* Initialise external BLAS dispatch: system BLAS -> bundled BLIS -> own kernels.
  * Called from jblas_init() after ISA detection and dgemm_init().
@@ -118,7 +128,8 @@ int blas_dispatch_init(void);
 
 /* Returns a string identifying the active dgemm backend:
  *   "MKL-ILP64", "MKL-LP64", "OpenBLAS-ILP64", "OpenBLAS-LP64",
- *   "Accelerate", "BLIS", "jblas-own", "system-BLAS-ILP64", "system-BLAS-LP64"
+ *   "Accelerate", "Accelerate-ILP64", "BLIS", "jblas-own",
+ *   "system-BLAS-ILP64", "system-BLAS-LP64"
  * Never returns NULL. */
 const char *blas_backend_name(void);
 

@@ -24,6 +24,7 @@ blas_backend: Final[
         "OpenBLAS-ILP64",
         "OpenBLAS-LP64",
         "Accelerate",
+        "Accelerate-ILP64",
         "BLIS",
         "jblas-own",
         "system-BLAS-ILP64",

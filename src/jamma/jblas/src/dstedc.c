@@ -666,8 +666,8 @@ static void dlaed6(int kniter, int orgati,
  *   - ORGATI: evaluate secular function at midpoint of (d[i], d[i+1]).
  *     Choose d[i] or d[i+1] as origin depending on sign.
  *   - Initial guess via stabilized quadratic from the two central poles.
- *   - Iteration: PSI/PHI split with A/B/C rational interpolation step.
- *     SWTCH3 triggers dlaed6 three-pole solver when poles are clustered.
+ *   - Iteration: PSI/PHI split with Newton step; bisection safeguard.
+ *     SWTCH3 detects clustered 3-pole cases and invokes dlaed6.
  *   - Incremental delta maintenance: delta[k] -= eta each iteration.
  *
  * delta: output array of length n.  delta[k] = d[k] - lambda on exit.
@@ -840,8 +840,76 @@ static int dlaed4(npy_intp n, npy_intp i,
             if (w_val <= 0.0) dltlb = fmax(dltlb, tau);
             else              dltub = fmin(dltub, tau);
 
-            /* Newton step */
-            double eta = -w_val / dw;
+            /* SWTCH3: detect 3-pole clustering.
+             * Evaluate secular function without the centre pole nearest
+             * to the origin. If sign differs from w_val, three poles
+             * dominate and dlaed6 should be used instead of Newton. */
+            int swtch3 = 0;
+            if (orgati) {
+                double w_without = w_val - zz0;
+                swtch3 = (w_without * w_val < 0.0) ? 1 : 0;
+            } else {
+                double w_without = w_val - zz1;
+                swtch3 = (w_without * w_val < 0.0) ? 1 : 0;
+            }
+
+            double eta;
+            if (swtch3) {
+                /* 3-pole case: use dlaed6 cubic rational solver.
+                 * Build the 3-element subset for dlaed6.
+                 * finit = w_val minus the 3 poles' contributions. */
+                double d3[3], z2_3[3];
+                int have_3_poles = 0;
+                double finit_3 = 0.0;
+
+                if (orgati && psi_end > 0) {
+                    npy_intp p0 = psi_end - 1;
+                    d3[0] = delta[p0];
+                    d3[1] = delta[cp0];
+                    d3[2] = delta[cp1];
+                    z2_3[0] = z[p0] * z[p0];
+                    z2_3[1] = z[cp0] * z[cp0];
+                    z2_3[2] = z[cp1] * z[cp1];
+                    /* finit = w_val minus contributions of these 3 poles */
+                    finit_3 = w_val - z2_3[0] / d3[0]
+                                    - z2_3[1] / d3[1]
+                                    - z2_3[2] / d3[2];
+                    have_3_poles = 1;
+                } else if (!orgati && phi_start < n) {
+                    d3[0] = delta[cp0];
+                    d3[1] = delta[cp1];
+                    d3[2] = delta[phi_start];
+                    z2_3[0] = z[cp0] * z[cp0];
+                    z2_3[1] = z[cp1] * z[cp1];
+                    z2_3[2] = z[phi_start] * z[phi_start];
+                    finit_3 = w_val - z2_3[0] / d3[0]
+                                    - z2_3[1] / d3[1]
+                                    - z2_3[2] / d3[2];
+                    have_3_poles = 1;
+                }
+
+                if (have_3_poles) {
+                    double tau6;
+                    int info6;
+                    double newton_eta = -w_val / dw;
+                    dlaed6(40, orgati, d3, z2_3, finit_3, &tau6, &info6);
+                    /* Use dlaed6 result only if it succeeded and produces
+                     * a step in the same direction as Newton (sign agreement)
+                     * with reasonable magnitude (<= 3x Newton step).
+                     * Otherwise fall back to Newton. */
+                    if (info6 == 0 && tau6 * newton_eta > 0.0
+                        && fabs(tau6) <= 3.0 * fabs(newton_eta)) {
+                        eta = tau6;
+                    } else {
+                        eta = newton_eta;
+                    }
+                } else {
+                    eta = -w_val / dw;  /* Newton fallback */
+                }
+            } else {
+                /* Standard case: Newton step */
+                eta = -w_val / dw;
+            }
 
             /* Safeguard: keep tau + eta in [dltlb, dltub] */
             if (tau + eta <= dltlb)
@@ -1180,10 +1248,9 @@ static int merge_rank1(npy_intp n, npy_intp m,
      *
      * Eigenvector i, component k: q[k] = W[k] / delta_mat[i][k], normalize.
      *
-     * NOTE: The weight product is still ill-conditioned for near-degenerate
-     * poles at N >= 200.  The QR fallback in jblas_dstedc_c catches these.
-     * LAPACK uses a more sophisticated multi-pass algorithm with iterative
-     * refinement which we have not implemented.
+     * NOTE: The weight product uses LAPACK's delta_mat subtraction technique
+     * for denominators (see below).  The QR fallback in jblas_dstedc_c
+     * catches any remaining precision issues.
      */
     double *Q_nd = (double *)calloc((size_t)n_nd * (size_t)n_nd, sizeof(double));
     double *W_nd = (double *)malloc((size_t)n_nd * sizeof(double));

@@ -28,11 +28,13 @@ from pathlib import Path
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 # BLIS prebuilt binary repository and asset naming convention.
-# The BLIS repo ships ILP64 binaries (built with -b 64 -i 64, exports dgemm64_).
+# The BLIS repo ships ILP64 binaries (built with -b 64 -i 64).
+# BLIS uses same symbol names (dgemm_, cblas_dgemm) but with 64-bit int args.
+# blas_dispatch.c detects ILP64 via bli_info_get_int_type_size().
 BLIS_REPO = "michael-denyer/blis-prebuilt"
 BLIS_VERSION = "v0.2.0"
 BLIS_ASSETS = {
-    ("Linux", "x86_64"): "libblis-x86_64.so",  # intel64 multi-config
+    ("Linux", "x86_64"): "libblis-x86_64.so",  # haswell config
     ("Linux", "AMD64"): "libblis-x86_64.so",  # alias
     ("Darwin", "arm64"): "libblis-firestorm.dylib",  # Apple Silicon
     ("Darwin", "x86_64"): "libblis-haswell.dylib",  # Intel Mac

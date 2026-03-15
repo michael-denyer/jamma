@@ -21,6 +21,9 @@ blas_backend: Final[str]
 """Active dgemm backend: "MKL-ILP64", "MKL-LP64", "OpenBLAS-ILP64",
 "OpenBLAS-LP64", "Accelerate", "BLIS", "jblas-own", etc."""
 
+blas_is_ilp64: Final[int]
+"""1 if the active dgemm backend uses ILP64 (64-bit int) parameters, 0 if LP64."""
+
 HAS_OPENMP: Final[bool]
 """True if the extension was compiled with OpenMP support.
 

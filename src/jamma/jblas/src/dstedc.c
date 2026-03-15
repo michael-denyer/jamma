@@ -78,7 +78,9 @@
 /* Threshold for switching to base-case QR iteration.
  * LAPACK uses SMLSIZ ~25; 64 provides a balance between QR base case
  * size and number of D&C merge levels.  Previously 128 as a workaround
- * for secular solver convergence failures; lowered after PSI/PHI rewrite. */
+ * for secular solver convergence failures; lowered after PSI/PHI rewrite.
+ * Sweep of {25,32,48,64,96,128} showed no meaningful difference (QR
+ * fallback from dlaed3 residuals dominates); 64 retained as standard. */
 #define DSTEDC_BASE 64
 
 /* Machine epsilon */

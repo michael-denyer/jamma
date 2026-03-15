@@ -18,7 +18,7 @@
 /* Bump this constant whenever the public ABI changes (new fields in
  * jblas_dispatch_t, changed function signatures, etc.). pymodule.c exposes
  * this as a Python-level integer so callers can guard against ABI mismatches. */
-#define JBLAS_ABI_VERSION 5
+#define JBLAS_ABI_VERSION 6
 
 /* ---------------------------------------------------------------------------
  * Function-pointer typedefs for ISA-dispatched microkernels
@@ -77,6 +77,38 @@ typedef struct {
 } jblas_dispatch_t;
 
 extern jblas_dispatch_t jblas_dispatch;
+
+/* ---------------------------------------------------------------------------
+ * External BLAS dispatch (system BLAS / bundled BLIS discovery)
+ * ---------------------------------------------------------------------------
+ */
+
+/* Fortran-style dgemm function pointer types for dlopen'd BLAS */
+typedef void (*jblas_dgemm_lp64_fn)(
+    const char *transa, const char *transb,
+    const int *m, const int *n, const int *k,
+    const double *alpha, const double *a, const int *lda,
+    const double *b, const int *ldb,
+    const double *beta, double *c, const int *ldc);
+
+typedef void (*jblas_dgemm_ilp64_fn)(
+    const char *transa, const char *transb,
+    const long long *m, const long long *n, const long long *k,
+    const double *alpha, const double *a, const long long *lda,
+    const double *b, const long long *ldb,
+    const double *beta, double *c, const long long *ldc);
+
+/* Initialise external BLAS dispatch: system BLAS -> bundled BLIS -> own kernels.
+ * Called from jblas_init() after ISA detection and dgemm_init().
+ * If an external dgemm is found, replaces jblas_dispatch.dgemm with a wrapper.
+ * Returns 0 always (discovery failure is not fatal -- falls back to own dgemm). */
+int blas_dispatch_init(void);
+
+/* Returns a string identifying the active dgemm backend:
+ *   "MKL-ILP64", "MKL-LP64", "OpenBLAS-ILP64", "OpenBLAS-LP64",
+ *   "Accelerate", "BLIS", "jblas-own", "system-BLAS-ILP64", "system-BLAS-LP64"
+ * Never returns NULL. */
+const char *blas_backend_name(void);
 
 /* ---------------------------------------------------------------------------
  * dgemm microkernel function pointer

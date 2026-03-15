@@ -1242,15 +1242,16 @@ static int merge_rank1(npy_intp n, npy_intp m,
      *
      * For each pole k, compute weight W[k]:
      *   W[k] = delta_mat[k][k]  (= d[k] - lam[k], the "own" gap)
-     *   then for each j != k: W[k] *= delta_mat[j][k] / (d[k] - d[j])
+     *   then for each j != k:
+     *     numerator:   delta_mat[j][k]  (= d[k] - lam[j], from dlaed4)
+     *     denominator: delta_mat[j][k] - delta_mat[j][j]
+     *       Algebraically = d[k] - d[j], but computed via dlaed4 deltas
+     *       to avoid catastrophic cancellation when d[k] ~ d[j].
+     *       This is the LAPACK dlaed3 technique (reference: dlaed3.f).
      *   W[k] = sgn(z[k]) * sqrt(-W[k])   (product MUST be negative by
      *          interlacing theorem; positive signals a precision issue)
      *
      * Eigenvector i, component k: q[k] = W[k] / delta_mat[i][k], normalize.
-     *
-     * NOTE: The weight product uses LAPACK's delta_mat subtraction technique
-     * for denominators (see below).  The QR fallback in jblas_dstedc_c
-     * catches any remaining precision issues.
      */
     double *Q_nd = (double *)calloc((size_t)n_nd * (size_t)n_nd, sizeof(double));
     double *W_nd = (double *)malloc((size_t)n_nd * sizeof(double));
@@ -1267,11 +1268,14 @@ static int merge_rank1(npy_intp n, npy_intp m,
         double w = delta_mat[k * n_nd + k];
         for (npy_intp j = 0; j < n_nd; j++) {
             if (j == k) continue;
-            /* delta_mat[j][k] = d[k] - lam[j];
-             * den = d[k] - d[j] is never zero for non-deflated eigenvalues
-             * (deflation already handled close eigenvalues via Givens) */
+            /* delta_mat[j][k] = d[k] - lam[j] (from dlaed4, full precision)
+             * den = delta_mat[j][k] - delta_mat[j][j]
+             *     = (d[k] - lam[j]) - (d[j] - lam[j])
+             *     = d[k] - d[j]   algebraically
+             * but computed via dlaed4 deltas for numerical stability
+             * when d[k] ~ d[j] (LAPACK dlaed3 technique). */
             double num = delta_mat[j * n_nd + k];
-            double den = d_nd[k] - d_nd[j];
+            double den = delta_mat[j * n_nd + k] - delta_mat[j * n_nd + j];
             w *= num / den;
         }
         /* Product MUST be negative (eigenvalue interlacing theorem).

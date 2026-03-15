@@ -445,6 +445,201 @@ static int dsteqr_base(npy_intp n, double *d, double *e,
     return converged ? 0 : (int)n;
 }
 
+/* dlaed5 — Analytical N=2 secular equation solver.
+ *
+ * Solves 1/rho + z[0]^2/(d[0]-lambda) + z[1]^2/(d[1]-lambda) = 0
+ * analytically for the i-th root (i=0 or 1).
+ *
+ * Reference: LAPACK dlaed5.f
+ */
+static int dlaed5(npy_intp n, npy_intp i,
+                  const double *d, const double *z, double rho,
+                  double *lambda_out, double *delta)
+{
+    (void)n;  /* always 2 */
+    double del = d[1] - d[0];  /* gap, positive since d sorted ascending */
+    double tau;
+
+    if (i == 0) {
+        /* First root: lies in (d[0], d[1]) */
+        double b = del + (z[0] * z[0] + z[1] * z[1]) / rho;
+        double c = z[1] * z[1] * del / rho;
+        /* Stabilized quadratic: tau = 2c/(b+sqrt(b^2-4c)) avoids cancellation */
+        double disc = b * b - 4.0 * c;
+        if (disc < 0.0) disc = 0.0;
+        tau = 2.0 * c / (b + sqrt(disc));
+        *lambda_out = d[0] + tau;
+        delta[0] = -tau;
+        delta[1] = del - tau;
+    } else {
+        /* Second root: lies above d[1] (for rho > 0) */
+        double b = -del + (z[0] * z[0] + z[1] * z[1]) / rho;
+        double c = -z[0] * z[0] * del / rho;
+        /* tau < 0 (displacement from d[1] is negative... actually for i=1,
+         * root is above d[1], so tau > 0 from d[1]).
+         * LAPACK: tau = 2c / (b - sqrt(b^2 - 4c)) */
+        double disc = b * b - 4.0 * c;
+        if (disc < 0.0) disc = 0.0;
+        double sq = sqrt(disc);
+        if (b >= 0.0)
+            tau = 2.0 * c / (b + sq);
+        else
+            tau = (b - sq) / 2.0;
+        /* The root is d[1] + tau, but tau computation from LAPACK dlaed5 for
+         * i=1 uses: W = 1/rho + z1^2/(del+tau) + z2^2/tau
+         * where tau is displacement from d[1]. For rho > 0, root > d[n-1]. */
+        *lambda_out = d[1] + tau;
+        delta[0] = -(del + tau);  /* d[0] - lambda = d[0] - d[1] - tau = -(del+tau) */
+        delta[1] = -tau;
+    }
+    return 0;
+}
+
+/* dlaed6 — Three-pole cubic rational solver for secular equation.
+ *
+ * Solves the equation:
+ *   finit + z2[0]/(delta0[0]-tau) + z2[1]/(delta0[1]-tau) + z2[2]/(delta0[2]-tau) = 0
+ *
+ * where finit already includes 1/rho and the contribution from all other poles.
+ * z2[k] = z[k]^2, delta0[k] = initial delta values for the 3 active poles.
+ *
+ * The solver uses Newton iteration with safeguarding on the rational function.
+ *
+ * Parameters:
+ *   kniter: max iterations (typically 40)
+ *   orgati: 1 if origin is left pole, 0 if right
+ *   rho: secular equation rho
+ *   d3: the 3 pole distances (delta values at entry)
+ *   z2: z-squared values for the 3 poles
+ *   finit: initial function value (without the 3 poles)
+ *   tau_out: output displacement
+ *   info_out: 0 on success, 1 on failure
+ *
+ * Reference: LAPACK dlaed6.f
+ */
+static void dlaed6(int kniter, int orgati,
+                   const double d3[3], const double z2[3],
+                   double finit,
+                   double *tau_out, int *info_out)
+{
+    *info_out = 0;
+    const int MAXIT = (kniter > 0) ? kniter : 40;
+    const double SMALL = 2.0 * EPS;  /* convergence factor */
+
+    /* The function is:
+     *   f(tau) = finit + z2[0]/(d3[0]-tau) + z2[1]/(d3[1]-tau) + z2[2]/(d3[2]-tau)
+     *
+     * We need to find tau such that f(tau) = 0.
+     * tau must stay within the bracket defined by the poles. */
+
+    double a, b, c_val, fc, df, ddf;
+    double lbd, ubd;
+
+    /* Determine bracket from pole positions.
+     * For orgati=1 (origin at left): tau in (0, d3[1]) or (0, d3[2])
+     * For orgati=0 (origin at right): tau in (d3[0], 0) or (d3[1], 0) */
+    if (orgati) {
+        lbd = 0.0;
+        /* Upper bound: min positive delta */
+        ubd = d3[2];
+        if (d3[1] > 0.0 && d3[1] < ubd) ubd = d3[1];
+        if (d3[0] > 0.0 && d3[0] < ubd) ubd = d3[0];
+    } else {
+        ubd = 0.0;
+        /* Lower bound: max negative delta */
+        lbd = d3[0];
+        if (d3[1] < 0.0 && d3[1] > lbd) lbd = d3[1];
+        if (d3[2] < 0.0 && d3[2] > lbd) lbd = d3[2];
+    }
+
+    double tau = 0.0;
+
+    /* Evaluate f(0), f'(0), f''(0) for initial step */
+    fc = finit;
+    df = 0.0;
+    ddf = 0.0;
+    for (int k = 0; k < 3; k++) {
+        double tmp = 1.0 / d3[k];
+        double tmp2 = z2[k] * tmp;
+        fc += tmp2;
+        tmp2 *= tmp;
+        df += tmp2;
+        tmp2 *= tmp;
+        ddf += tmp2;
+    }
+
+    /* If f(0) is already close enough, return 0 */
+    if (fabs(fc) < SMALL) {
+        *tau_out = tau;
+        return;
+    }
+
+    /* Newton iteration with cubic rational safeguarding */
+    for (int iter = 0; iter < MAXIT; iter++) {
+        /* Newton step: eta = -fc / df (first order)
+         * Halley step: eta = -fc / (df - 0.5*fc*ddf/df) (second order)
+         * Use Halley when safe. */
+        double eta;
+        if (fabs(df) < 1e-300) {
+            *info_out = 1;
+            break;
+        }
+
+        /* Use Halley's method for faster convergence */
+        double halley_denom = df - 0.5 * fc * ddf / df;
+        if (fabs(halley_denom) > fabs(df) * 0.1) {
+            eta = -fc / halley_denom;
+        } else {
+            eta = -fc / df;
+        }
+
+        /* Safeguard: keep tau + eta within bracket */
+        double tau_new = tau + eta;
+        if (tau_new <= lbd) {
+            eta = (lbd - tau) * 0.5;
+            tau_new = tau + eta;
+        }
+        if (tau_new >= ubd) {
+            eta = (ubd - tau) * 0.5;
+            tau_new = tau + eta;
+        }
+
+        tau = tau_new;
+
+        /* Evaluate f(tau), f'(tau), f''(tau) */
+        fc = finit;
+        df = 0.0;
+        ddf = 0.0;
+        for (int k = 0; k < 3; k++) {
+            double tmp = 1.0 / (d3[k] - tau);
+            double tmp2 = z2[k] * tmp;
+            fc += tmp2;
+            tmp2 *= tmp;
+            df += tmp2;
+            tmp2 *= tmp;
+            ddf += tmp2;
+        }
+
+        /* Update bracket */
+        if (fc < 0.0) {
+            if (tau > lbd) lbd = tau;
+        } else {
+            if (tau < ubd) ubd = tau;
+        }
+
+        /* Convergence check */
+        double erretm = SMALL * (fabs(finit) + fabs(fc));
+        if (fabs(fc) <= 8.0 * EPS * erretm || fabs(ubd - lbd) <= SMALL * fabs(tau)) {
+            *tau_out = tau;
+            return;
+        }
+    }
+
+    /* Did not converge */
+    *tau_out = tau;
+    *info_out = 1;
+}
+
 /* dlaed4 — Secular equation solver with PSI/PHI-split evaluation.
  *
  * Finds the i-th root lambda of:

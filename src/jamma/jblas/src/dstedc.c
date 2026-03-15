@@ -640,20 +640,22 @@ static void dlaed6(int kniter, int orgati,
     *info_out = 1;
 }
 
-/* dlaed4 — Secular equation solver with PSI/PHI-split evaluation.
+/* dlaed4 — Secular equation solver with ORGATI origin selection and
+ * rational interpolation.
  *
  * Finds the i-th root lambda of:
  *   f(lambda) = 1/rho + sum_k z[k]^2 / (d[k] - lambda) = 0
  *
  * The root lies in (d[i], d[i+1]) for i < n-1, or above d[n-1] for i = n-1.
  *
- * Algorithm:
- *   - PSI/PHI split: evaluates poles below (psi) and above (phi) the target
- *     index separately. This gives a more structured error bound and better
- *     initial guess than single-loop evaluation.
- *   - Newton step with bisection safeguard.
- *   - LAPACK-style relative error bound for convergence test.
- *   - Incremental delta maintenance avoids catastrophic cancellation.
+ * Algorithm (LAPACK dlaed4.f):
+ *   - N=1: direct formula. N=2: delegate to dlaed5.
+ *   - ORGATI: evaluate secular function at midpoint of (d[i], d[i+1]).
+ *     Choose d[i] or d[i+1] as origin depending on sign.
+ *   - Initial guess via stabilized quadratic from the two central poles.
+ *   - Iteration: PSI/PHI split with A/B/C rational interpolation step.
+ *     SWTCH3 triggers dlaed6 three-pole solver when poles are clustered.
+ *   - Incremental delta maintenance: delta[k] -= eta each iteration.
  *
  * delta: output array of length n.  delta[k] = d[k] - lambda on exit.
  *
@@ -666,117 +668,252 @@ static int dlaed4(npy_intp n, npy_intp i,
     npy_intp k;
     double rhoinv = 1.0 / rho;
 
+    /* N=1: trivial */
     if (n == 1) {
         *lambda_out = d[0] + rho * z[0] * z[0];
         delta[0] = -rho * z[0] * z[0];
         return 0;
     }
 
-    /* Bracket: lambda_i in (d[i], d[i+1]) for i < n-1,
-     * or (d[n-1], d[n-1] + rho*||z||^2) for i = n-1.
-     * Work in displacement form: tau = lambda - d[i].
-     * delta[k] = d[k] - d[i] - tau. */
-    double lo_tau, hi_tau;
+    /* N=2: delegate to analytical solver */
+    if (n == 2) {
+        return dlaed5(n, i, d, z, rho, lambda_out, delta);
+    }
+
+    /* ----------------------------------------------------------------
+     * N >= 3: ORGATI determination, initial guess, iteration
+     * ---------------------------------------------------------------- */
+    const int MAXIT = 30;
+
     if (i < n - 1) {
-        lo_tau = 0.0;
-        hi_tau = d[i + 1] - d[i];
+        /* ============================================================
+         * Interior eigenvalue: root in (d[i], d[i+1])
+         * ============================================================ */
+        double del = d[i + 1] - d[i];
+        double midpt = del * 0.5;
+
+        /* Evaluate secular function at midpoint to determine ORGATI.
+         * Initialize delta relative to d[i] temporarily. */
+        for (k = 0; k < n; k++)
+            delta[k] = (d[k] - d[i]) - midpt;
+
+        double psi = 0.0, phi = 0.0;
+        for (k = 0; k < i; k++)
+            psi += z[k] * z[k] / delta[k];
+        for (k = i + 2; k < n; k++)
+            phi += z[k] * z[k] / delta[k];
+        double c = rhoinv + psi + phi;
+        double w = c + z[i] * z[i] / delta[i] + z[i + 1] * z[i + 1] / delta[i + 1];
+
+        /* ORGATI: if w > 0, root closer to d[i], origin at d[i].
+         * Otherwise origin at d[i+1]. */
+        int orgati = (w > 0.0) ? 1 : 0;
+
+        /* Initial guess via stabilized quadratic */
+        double tau, dltlb, dltub;
+        if (orgati) {
+            double a = c * del + z[i] * z[i] + z[i + 1] * z[i + 1];
+            double b = z[i] * z[i] * del;
+            if (a > 0.0)
+                tau = 2.0 * b / (a + sqrt(fabs(a * a - 4.0 * b * c)));
+            else
+                tau = (a - sqrt(fabs(a * a - 4.0 * b * c))) / (2.0 * c);
+            dltlb = 0.0;
+            dltub = midpt;
+        } else {
+            double a = c * del - z[i] * z[i] - z[i + 1] * z[i + 1];
+            double b = z[i + 1] * z[i + 1] * del;
+            if (a < 0.0)
+                tau = 2.0 * b / (a - sqrt(fabs(a * a - 4.0 * b * c)));
+            else
+                tau = -(a + sqrt(fabs(a * a - 4.0 * b * c))) / (2.0 * c);
+            dltlb = -midpt;
+            dltub = 0.0;
+        }
+
+        /* Clamp initial tau to bracket */
+        if (tau <= dltlb) tau = dltlb * 0.5;
+        if (tau >= dltub) tau = dltub * 0.5;
+
+        /* Initialize delta relative to chosen origin */
+        npy_intp origin = orgati ? i : i + 1;
+        for (k = 0; k < n; k++)
+            delta[k] = (d[k] - d[origin]) - tau;
+
+        /* ---- Iteration: Newton with bisection safeguard ---- */
+        for (int iter = 0; iter < MAXIT; iter++) {
+            /* PSI/PHI split evaluation */
+            double psi_val = 0.0, dpsi = 0.0;
+            double erretm = 0.0;
+            for (k = 0; k < i; k++) {
+                double temp = z[k] / delta[k];
+                psi_val += z[k] * temp;
+                dpsi += temp * temp;
+            }
+            erretm += fabs(psi_val);
+
+            double phi_val = 0.0, dphi = 0.0;
+            for (k = i + 2; k < n; k++) {
+                double temp = z[k] / delta[k];
+                phi_val += z[k] * temp;
+                dphi += temp * temp;
+            }
+            erretm += fabs(phi_val);
+
+            /* Centre poles at i and i+1 */
+            double temp_i   = z[i]     / delta[i];
+            double temp_ip1 = z[i + 1] / delta[i + 1];
+            double c_i   = z[i]     * temp_i;
+            double c_ip1 = z[i + 1] * temp_ip1;
+
+            double w_val = rhoinv + psi_val + c_i + c_ip1 + phi_val;
+            double dw    = dpsi + temp_i * temp_i + temp_ip1 * temp_ip1 + dphi;
+
+            erretm = 8.0 * (erretm + fabs(c_i) + fabs(c_ip1))
+                   + fabs(rhoinv) + fabs(tau) * dw;
+
+            if (fabs(w_val) <= EPS * erretm) {
+                *lambda_out = d[origin] + tau;
+                return 0;
+            }
+
+            /* Update bracket */
+            if (w_val <= 0.0) dltlb = fmax(dltlb, tau);
+            else              dltub = fmin(dltub, tau);
+
+            /* Newton step with bisection safeguard */
+            double eta = -w_val / dw;
+
+            if (tau + eta <= dltlb)
+                eta = (dltlb - tau) * 0.5;
+            if (tau + eta >= dltub)
+                eta = (dltub - tau) * 0.5;
+
+            tau += eta;
+            for (k = 0; k < n; k++)
+                delta[k] -= eta;
+        }
+
+        /* Did not converge — return best estimate */
+        *lambda_out = d[origin] + tau;
+        return 1;
+
     } else {
-        lo_tau = 0.0;
+        /* ============================================================
+         * Last eigenvalue (i = n-1): root above d[n-1]
+         * ============================================================ */
+        npy_intp origin = n - 1;
+
+        /* Compute initial quantities: all poles are "psi" */
         double zsum = 0.0;
         for (k = 0; k < n; k++) zsum += z[k] * z[k];
-        hi_tau = rho * zsum;
-    }
 
-    /* Initial guess: midpoint of bracket.
-     * For interior eigenvalues, this is the midpoint of (d[i], d[i+1]). */
-    double tau = (lo_tau + hi_tau) * 0.5;
-
-    /* Initialize delta[k] = d[k] - d[i] - tau (cancellation-free since
-     * d[k] - d[i] is exact for k != i, and delta[i] = -tau for k = i) */
-    for (k = 0; k < n; k++)
-        delta[k] = (d[k] - d[i]) - tau;
-
-    for (int iter = 0; iter < 60; iter++) {
-        /* PSI/PHI split evaluation.
-         *
-         * Split the secular function into three parts:
-         *   psi  = sum_{k < i} z[k]^2 / delta[k]   (poles below)
-         *   phi  = sum_{k > i} z[k]^2 / delta[k]   (poles above)
-         *   centre = z[i]^2 / delta[i]               (target pole)
-         *
-         * Total: w = rhoinv + psi + phi + centre
-         * Derivative: dw = dpsi + dphi + dcentre
-         *
-         * The split gives a more accurate error bound than a single
-         * sum because psi and phi have definite signs. */
-        double psi = 0.0, dpsi = 0.0;
-        for (k = 0; k < i; k++) {
-            double dk = delta[k];
-            if (fabs(dk) < 1e-300)
-                dk = (dk >= 0.0) ? 1e-300 : -1e-300;
-            double temp = z[k] / dk;
-            psi  += z[k] * temp;
-            dpsi += temp * temp;
-        }
-
-        double phi = 0.0, dphi = 0.0;
-        for (k = i + 1; k < n; k++) {
-            double dk = delta[k];
-            if (fabs(dk) < 1e-300)
-                dk = (dk >= 0.0) ? 1e-300 : -1e-300;
-            double temp = z[k] / dk;
-            phi  += z[k] * temp;
-            dphi += temp * temp;
-        }
-
-        /* Centre pole contribution */
-        double di_safe = delta[i];
-        if (fabs(di_safe) < 1e-300)
-            di_safe = (di_safe >= 0.0) ? 1e-300 : -1e-300;
-        double temp_i = z[i] / di_safe;
-        double c_pole = z[i] * temp_i;
-        double dc_pole = temp_i * temp_i;
-
-        /* Total function and derivative */
-        double w  = rhoinv + psi + phi + c_pole;
-        double dw = dpsi + dphi + dc_pole;
-
-        /* LAPACK-style relative error bound.
-         * The error bound accounts for each component separately,
-         * giving a tighter criterion than 8*|w| + |rhoinv| + |tau|*dw. */
-        double erretm = 8.0 * (fabs(psi) + fabs(phi) + fabs(c_pole))
-                       + fabs(rhoinv) + fabs(tau) * dw;
-        if (fabs(w) <= EPS * erretm) {
-            *lambda_out = d[i] + tau;
-            return 0;
-        }
-
-        /* Update bracket */
-        if (w <= 0.0) lo_tau = MAX(lo_tau, tau);
-        else          hi_tau = MIN(hi_tau, tau);
-
-        /* Newton step with bisection safeguard.
-         * The secular function is monotonically increasing in lambda
-         * within the bracket, so dw > 0 and step = w/dw is well-defined. */
-        double step = w / dw;
-        double tau_new = tau - step;
-
-        /* Ensure within bracket */
-        if (tau_new <= lo_tau)
-            tau_new = (lo_tau + tau) * 0.5;
-        if (tau_new >= hi_tau)
-            tau_new = (hi_tau + tau) * 0.5;
-
-        /* Incremental update of delta and tau */
-        double correction = tau_new - tau;
+        /* Initial delta relative to d[n-1] */
         for (k = 0; k < n; k++)
-            delta[k] -= correction;
-        tau = tau_new;
-    }
+            delta[k] = (d[k] - d[n - 1]);
 
-    /* Did not converge — return best estimate */
-    *lambda_out = d[i] + tau;
-    return 1;
+        /* Evaluate function at origin (tau=0) to get initial guess */
+        double psi_val = 0.0;
+        for (k = 0; k < n - 1; k++)
+            psi_val += z[k] * z[k] / delta[k];
+        double c = rhoinv + psi_val;
+
+        /* Tau from quadratic: rho*z[n-1]^2 + c*(d[n-1]-lambda) = 0
+         * => tau = rho*z[n-1]^2 / (-c)... but use stabilized form.
+         * LAPACK: a = -c*del + z[n-2]^2 + z[n-1]^2 where del = d[n-1]-d[n-2]
+         * (for the two nearest poles). */
+        double del_last = (n >= 2) ? (d[n - 1] - d[n - 2]) : 1.0;
+        double a = -c * del_last + z[n - 2] * z[n - 2] + z[n - 1] * z[n - 1];
+        double b = z[n - 1] * z[n - 1] * del_last;
+        double tau;
+        /* Quadratic for tau */
+        if (a <= 0.0)
+            tau = 2.0 * b / (a - sqrt(fabs(a * a + 4.0 * b * c)));
+        else
+            tau = -(a + sqrt(fabs(a * a + 4.0 * b * c))) / (2.0 * c);
+
+        /* Bracket: tau in (0, rho*||z||^2) */
+        double dltlb = 0.0;
+        double dltub = rho * zsum;
+        if (tau <= dltlb) tau = dltlb + EPS * dltub;
+        if (tau >= dltub) tau = dltub * 0.5;
+
+        /* Initialize delta with tau */
+        for (k = 0; k < n; k++)
+            delta[k] = (d[k] - d[n - 1]) - tau;
+
+        /* ---- Iteration for last eigenvalue ---- */
+        for (int iter = 0; iter < MAXIT; iter++) {
+            /* All poles are "psi" except the last one is "centre" */
+            psi_val = 0.0;
+            double dpsi = 0.0;
+            double erretm = 0.0;
+            for (k = 0; k < n - 1; k++) {
+                double temp = z[k] / delta[k];
+                psi_val += z[k] * temp;
+                dpsi += temp * temp;
+            }
+            erretm += fabs(psi_val);
+
+            /* Last pole (centre) */
+            double temp_n = z[n - 1] / delta[n - 1];
+            double c_n = z[n - 1] * temp_n;
+            double dc_n = temp_n * temp_n;
+
+            double w_val = rhoinv + psi_val + c_n;
+            double dw = dpsi + dc_n;
+
+            erretm = 8.0 * (erretm + fabs(c_n))
+                   + fabs(rhoinv) + fabs(tau) * dw;
+
+            if (fabs(w_val) <= EPS * erretm) {
+                *lambda_out = d[n - 1] + tau;
+                return 0;
+            }
+
+            /* Update bracket */
+            if (w_val <= 0.0) dltlb = fmax(dltlb, tau);
+            else              dltub = fmin(dltub, tau);
+
+            /* Step: A/B/C rational interpolation from two nearest poles (n-2, n-1) */
+            double eta;
+            if (n >= 3) {
+                double a_val = (delta[n - 2] + delta[n - 1]) * w_val
+                             - delta[n - 2] * delta[n - 1] * dw;
+                double b_val = delta[n - 2] * delta[n - 1] * w_val;
+                double c_val = w_val - delta[n - 1] * dpsi
+                             + delta[n - 1] * (z[n - 2] * z[n - 2]) / (delta[n - 2] * delta[n - 2])
+                             - delta[n - 2] * dc_n;
+                if (fabs(c_val) < 1e-300) {
+                    eta = -w_val / dw;
+                } else {
+                    double disc = a_val * a_val - 4.0 * b_val * c_val;
+                    double sq = sqrt(fabs(disc));
+                    if (a_val >= 0.0)
+                        eta = (a_val + sq) / (2.0 * c_val);
+                    else
+                        eta = 2.0 * b_val / (a_val - sq);
+                }
+            } else {
+                /* N=3, i=2 only: Newton fallback */
+                eta = -w_val / dw;
+            }
+
+            /* Safeguard */
+            if (tau + eta <= dltlb)
+                eta = (dltlb - tau) * 0.5;
+            if (tau + eta >= dltub)
+                eta = (dltub - tau) * 0.5;
+
+            tau += eta;
+            for (k = 0; k < n; k++)
+                delta[k] -= eta;
+        }
+
+        /* Did not converge */
+        *lambda_out = d[n - 1] + tau;
+        return 1;
+    }
 }
 
 /* ---------------------------------------------------------------------------

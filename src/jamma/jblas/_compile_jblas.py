@@ -130,6 +130,17 @@ def compile_extension(verbose: bool = True) -> bool:
         jblas_src_dir / "pymodule.c",
         jblas_src_dir / "dgemm.c",  # blocking framework
         jblas_src_dir / "dgemm_generic.c",  # generic scalar microkernel
+        jblas_src_dir / "blas_dispatch.c",  # external BLAS discovery
+        jblas_src_dir / "dsyrk.c",
+        jblas_src_dir / "dsyr2k.c",
+    ]
+    # LAPACK sources: strict IEEE 754 required for secular equation deflation.
+    # Compiled with -O2 -fno-fast-math — MUST NOT get -ffast-math or -funroll-loops.
+    lapack_sources = [
+        jblas_src_dir / "dsytrd.c",
+        jblas_src_dir / "dstedc.c",
+        jblas_src_dir / "dormtr.c",
+        jblas_src_dir / "eigh.c",
     ]
     simd_sources = [
         jblas_src_dir / "ddot.c",
@@ -164,7 +175,11 @@ def compile_extension(verbose: bool = True) -> bool:
             return False
 
     source_files = (
-        baseline_sources + simd_sources + avx2_kernel_sources + neon_kernel_sources
+        baseline_sources
+        + lapack_sources
+        + simd_sources
+        + avx2_kernel_sources
+        + neon_kernel_sources
     )
 
     missing = [str(s) for s in (baseline_sources + simd_sources) if not s.exists()]
@@ -240,6 +255,8 @@ def compile_extension(verbose: bool = True) -> bool:
     # OpenMP detection
     omp_flags: list[str] = []
     ldflags: list[str] = []
+    if platform.system() == "Linux":
+        ldflags.append("-ldl")  # dlopen/dlsym for blas_dispatch.c
     if platform.system() == "Darwin":
         try:
             prefix = subprocess.check_output(
@@ -290,6 +307,18 @@ def compile_extension(verbose: bool = True) -> bool:
 
     simd_source_set = set(str(s) for s in simd_sources)
     avx2_kernel_set = set(str(s) for s in avx2_kernel_sources)
+    lapack_source_set = set(str(s) for s in lapack_sources)
+    # LAPACK sources: strict IEEE 754, no -ffast-math, -O2 only.
+    lapack_cflags = [
+        "-O2",
+        "-fno-fast-math",
+        "-fno-finite-math-only",
+        "-fPIC",
+        "-std=c11",
+        f"-I{python_inc}",
+        f"-I{numpy_inc}",
+        f"-I{jblas_inc_dir}",
+    ]
 
     # OpenMP compile-time flags (exclude link-only flags like -lomp/-liomp5)
     omp_compile: list[str] = []
@@ -311,17 +340,24 @@ def compile_extension(verbose: bool = True) -> bool:
         try:
             for src in source_files:
                 obj_file = tmp_dir / f"{src.stem}{suffix}.o"
-                # SIMD sources and AVX2 kernel files get -mavx2/-mfma;
-                # NEON kernel files and baseline sources get no SIMD flags.
-                extra_simd = (
-                    simd_flags
-                    if (str(src) in simd_source_set or str(src) in avx2_kernel_set)
-                    else []
-                )
+                src_str = str(src)
+                if src_str in lapack_source_set:
+                    # LAPACK sources: strict IEEE 754, no SIMD flags.
+                    cflags = lapack_cflags
+                    extra_simd: list[str] = []
+                else:
+                    cflags = base_cflags
+                    # SIMD sources and AVX2 kernel files get -mavx2/-mfma;
+                    # NEON kernel files and baseline sources get no SIMD flags.
+                    extra_simd = (
+                        simd_flags
+                        if (src_str in simd_source_set or src_str in avx2_kernel_set)
+                        else []
+                    )
                 cmd = [
                     cc_cmd,
                     *cc_extra,
-                    *base_cflags,
+                    *cflags,
                     *extra_simd,
                     *extra_compile,
                     "-c",

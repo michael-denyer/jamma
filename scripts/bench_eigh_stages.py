@@ -23,11 +23,22 @@ def _find_jblas_so() -> str:
     return mod.__file__
 
 
+class _EighStatus(ctypes.Structure):
+    """ctypes mirror of jblas_eigh_status_t."""
+
+    _fields_ = [
+        ("dstedc_ws_fallback", ctypes.c_int),
+        ("dsytrd_mirror_fallback", ctypes.c_int),
+        ("secular_failures", ctypes.c_int),
+        ("qr_fallback", ctypes.c_int),
+    ]
+
+
 def _load_c_functions(so_path: str) -> tuple:
     """Load jblas C functions via ctypes for per-stage benchmarking.
 
     Returns:
-        Tuple of (dsytrd, dstedc, dormtr) ctypes function objects.
+        Tuple of (dsytrd, dstedc, dormtr, eigh) ctypes function objects.
     """
     lib = ctypes.CDLL(so_path)
 
@@ -72,7 +83,20 @@ def _load_c_functions(so_path: str) -> tuple:
         ctypes.c_longlong,  # npy_intp ldc
     ]
 
-    return dsytrd, dstedc, dormtr
+    # jblas_eigh_c for status reporting
+    eigh_c = lib.jblas_eigh_c
+    eigh_c.restype = ctypes.c_int
+    eigh_c.argtypes = [
+        ctypes.c_longlong,  # npy_intp N
+        ctypes.c_void_p,  # double *K
+        ctypes.c_longlong,  # npy_intp ldk
+        ctypes.c_void_p,  # double *eigenvalues
+        ctypes.c_void_p,  # double *eigenvectors
+        ctypes.c_longlong,  # npy_intp ldz
+        ctypes.POINTER(_EighStatus),  # jblas_eigh_status_t *status
+    ]
+
+    return dsytrd, dstedc, dormtr, eigh_c
 
 
 def _ptr(arr: np.ndarray) -> ctypes.c_void_p:
@@ -188,7 +212,7 @@ def main() -> None:
     # Load C functions
     so_path = _find_jblas_so()
     print(f"jblas .so: {so_path}")
-    dsytrd_fn, dstedc_fn, dormtr_fn = _load_c_functions(so_path)
+    dsytrd_fn, dstedc_fn, dormtr_fn, eigh_c_fn = _load_c_functions(so_path)
 
     # Check jblas is using C extension
     from jamma.jblas import HAS_C_EXTENSION, jblas_isa
@@ -250,6 +274,21 @@ def main() -> None:
 
         ratio = t_jblas / t_numpy
 
+        # Run eigh_c with status to report secular failures and QR fallback
+        K_status = K.copy()
+        eigenvalues = np.empty(N, dtype=np.float64)
+        eigenvectors = np.empty((N, N), dtype=np.float64)
+        status = _EighStatus()
+        eigh_c_fn(
+            N,
+            _ptr(K_status),
+            N,
+            _ptr(eigenvalues),
+            _ptr(eigenvectors),
+            N,
+            ctypes.byref(status),
+        )
+
         print(
             f"{N:>6}  "
             f"{t_numpy:>10.4f}s  "
@@ -259,7 +298,9 @@ def main() -> None:
             f"{stages['dormtr']:>8.4f}s  "
             f"{stages['total_staged']:>10.4f}s  "
             f"{ratio:>6.1f}x  "
-            f"{bottleneck:>8} ({bottleneck_pct:.0f}%)"
+            f"{bottleneck:>8} ({bottleneck_pct:.0f}%)  "
+            f"sec_fail={status.secular_failures}  "
+            f"qr_fb={status.qr_fallback}"
         )
 
     # Detailed breakdown from already-collected data

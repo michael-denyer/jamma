@@ -17,6 +17,7 @@ Run with -n0 to avoid interference with OpenMP threading tests:
 
 from __future__ import annotations
 
+import ctypes
 import inspect
 
 import numpy as np
@@ -845,3 +846,239 @@ class TestEighErrors:
         K = np.ones((3, 3, 3), dtype=np.float64)
         with pytest.raises(ValueError):
             eigh(K)
+
+
+# ---------------------------------------------------------------------------
+# ctypes helpers for direct C function access
+# ---------------------------------------------------------------------------
+
+
+def _find_jblas_so() -> str:
+    """Find the _jblas shared library path."""
+    import jamma.jblas._jblas as mod
+
+    return mod.__file__
+
+
+class _EighStatus(ctypes.Structure):
+    """ctypes mirror of jblas_eigh_status_t."""
+
+    _fields_ = [
+        ("dstedc_ws_fallback", ctypes.c_int),
+        ("dsytrd_mirror_fallback", ctypes.c_int),
+        ("secular_failures", ctypes.c_int),
+        ("qr_fallback", ctypes.c_int),
+    ]
+
+
+def _load_jblas_eigh_c():
+    """Load jblas_eigh_c via ctypes.
+
+    Returns:
+        Callable with signature matching jblas_eigh_c.
+    """
+    so_path = _find_jblas_so()
+    lib = ctypes.CDLL(so_path)
+
+    fn = lib.jblas_eigh_c
+    fn.restype = ctypes.c_int
+    fn.argtypes = [
+        ctypes.c_longlong,  # npy_intp N
+        ctypes.c_void_p,  # double *K
+        ctypes.c_longlong,  # npy_intp ldk
+        ctypes.c_void_p,  # double *eigenvalues
+        ctypes.c_void_p,  # double *eigenvectors
+        ctypes.c_longlong,  # npy_intp ldz
+        ctypes.POINTER(_EighStatus),  # jblas_eigh_status_t *status
+    ]
+    return fn
+
+
+def _ptr(arr: np.ndarray) -> ctypes.c_void_p:
+    """Get ctypes void pointer to numpy array data."""
+    return ctypes.c_void_p(arr.ctypes.data)
+
+
+def _call_eigh_with_status(
+    K: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, _EighStatus]:
+    """Call jblas_eigh_c via ctypes, returning eigenvalues, eigenvectors, status.
+
+    Args:
+        K: Symmetric matrix (N x N, float64, C-contiguous). Modified in place.
+
+    Returns:
+        Tuple of (eigenvalues, eigenvectors, status).
+    """
+    N = K.shape[0]
+    eigenvalues = np.empty(N, dtype=np.float64)
+    eigenvectors = np.empty((N, N), dtype=np.float64)
+    status = _EighStatus()
+
+    fn = _load_jblas_eigh_c()
+    ret = fn(
+        N, _ptr(K), N, _ptr(eigenvalues), _ptr(eigenvectors), N, ctypes.byref(status)
+    )
+    assert ret == 0, f"jblas_eigh_c returned {ret}"
+    return eigenvalues, eigenvectors, status
+
+
+# ---------------------------------------------------------------------------
+# TestDstedcNoQRFallback — no QR fallback at N=200, 500, 1000
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not HAS_C_EXTENSION,
+    reason="C extension required for QR fallback detection",
+)
+class TestDstedcNoQRFallback:
+    """Verify jblas eigh completes without QR fallback at various sizes."""
+
+    @pytest.mark.xfail(
+        reason="dlaed4 rewrite pending — secular failures trigger QR fallback at N=200",
+        strict=False,
+    )
+    def test_no_qr_fallback_n200(self) -> None:
+        """N=200: no QR fallback, no secular failures, correct reconstruction."""
+        rng = np.random.default_rng(42)
+        N = 200
+        K = _random_spd(N, rng)
+        K_copy = K.copy()
+        w, v, status = _call_eigh_with_status(K_copy)
+
+        assert status.qr_fallback == 0, f"QR fallback triggered at N={N}"
+        assert status.secular_failures == 0, (
+            f"{status.secular_failures} secular failures at N={N}"
+        )
+        _assert_reconstruction(K, w, v, 1e-12, f"NoQRFallback N={N}")
+        _assert_orthogonality(v, 1e-12, f"NoQRFallback N={N}")
+
+    @pytest.mark.slow
+    @pytest.mark.xfail(
+        reason="dlaed4 rewrite pending — secular failures trigger QR fallback at N=500",
+        strict=False,
+    )
+    def test_no_qr_fallback_n500(self) -> None:
+        """N=500: no QR fallback, no secular failures, correct reconstruction."""
+        rng = np.random.default_rng(42)
+        N = 500
+        K = _random_spd(N, rng)
+        K_copy = K.copy()
+        w, v, status = _call_eigh_with_status(K_copy)
+
+        assert status.qr_fallback == 0, f"QR fallback triggered at N={N}"
+        assert status.secular_failures == 0, (
+            f"{status.secular_failures} secular failures at N={N}"
+        )
+        _assert_reconstruction(K, w, v, 1e-12, f"NoQRFallback N={N}")
+        _assert_orthogonality(v, 1e-12, f"NoQRFallback N={N}")
+
+    @pytest.mark.slow
+    @pytest.mark.xfail(
+        reason="dlaed4 rewrite pending — secular failures at N=1000",
+        strict=False,
+    )
+    def test_no_qr_fallback_n1000(self) -> None:
+        """N=1000: no QR fallback, no secular failures, correct reconstruction."""
+        rng = np.random.default_rng(42)
+        N = 1000
+        K = _random_spd(N, rng)
+        K_copy = K.copy()
+        w, v, status = _call_eigh_with_status(K_copy)
+
+        assert status.qr_fallback == 0, f"QR fallback triggered at N={N}"
+        assert status.secular_failures == 0, (
+            f"{status.secular_failures} secular failures at N={N}"
+        )
+        _assert_reconstruction(K, w, v, 1e-12, f"NoQRFallback N={N}")
+        _assert_orthogonality(v, 1e-12, f"NoQRFallback N={N}")
+
+
+# ---------------------------------------------------------------------------
+# TestDlaed4Convergence — dlaed4 convergence on difficult inputs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not HAS_C_EXTENSION,
+    reason="C extension required for dlaed4 convergence tests",
+)
+class TestDlaed4Convergence:
+    """Test dlaed4 convergence on known-difficult secular equation inputs.
+
+    These tests exercise dlaed4 indirectly through jblas_eigh_c by
+    constructing symmetric tridiagonal matrices that produce difficult
+    patterns. Since T is already tridiagonal, dsytrd is a no-op and
+    dstedc exercises the solver directly.
+    """
+
+    @pytest.mark.xfail(
+        reason="dlaed4 rewrite pending in Task 2",
+        strict=False,
+    )
+    def test_clustered_eigenvalues(self) -> None:
+        """Clustered eigenvalues: d values within 1e-10 of each other.
+
+        Constructs a tridiagonal matrix whose eigenvalues cluster tightly,
+        stressing the secular solver's ability to separate close poles.
+        """
+        N = 50
+        # Construct a tridiagonal matrix with clustered eigenvalues
+        # Use near-constant diagonal with small off-diagonal perturbation
+        d = np.ones(N) + np.arange(N) * 1e-10
+        e = np.full(N - 1, 1e-12)
+        K = np.diag(d) + np.diag(e, 1) + np.diag(e, -1)
+        K_copy = K.copy()
+
+        w, v, status = _call_eigh_with_status(K_copy)
+        assert status.secular_failures == 0, (
+            f"{status.secular_failures} secular failures on clustered eigenvalues"
+        )
+        assert status.qr_fallback == 0, "QR fallback triggered on clustered eigenvalues"
+        _assert_reconstruction(K, w, v, 1e-12, "Clustered eigenvalues")
+
+    @pytest.mark.xfail(
+        reason="dlaed4 rewrite pending in Task 2",
+        strict=False,
+    )
+    def test_large_gap_ratio(self) -> None:
+        """Large gap ratio: eigenvalues spanning many orders of magnitude.
+
+        Tridiagonal matrix with diagonal spanning 1e-15 to O(1).
+        """
+        N = 20
+        d = np.logspace(-15, 0, N)
+        e = np.full(N - 1, 1e-8)
+        K = np.diag(d) + np.diag(e, 1) + np.diag(e, -1)
+        K_copy = K.copy()
+
+        w, v, status = _call_eigh_with_status(K_copy)
+        assert status.secular_failures == 0, (
+            f"{status.secular_failures} secular failures on large gap ratio"
+        )
+        assert status.qr_fallback == 0, "QR fallback triggered on large gap ratio"
+        _assert_reconstruction(K, w, v, 1e-10, "Large gap ratio")
+
+    @pytest.mark.xfail(
+        reason="dlaed4 rewrite pending in Task 2",
+        strict=False,
+    )
+    def test_boundary_eigenvalue(self) -> None:
+        """Boundary eigenvalue: stress the i=n-1 case (above largest pole).
+
+        Tridiagonal matrix with strong off-diagonal to push the last
+        eigenvalue well above d[n-1].
+        """
+        N = 30
+        d = np.arange(1.0, N + 1.0)
+        e = np.full(N - 1, 2.0)
+        K = np.diag(d) + np.diag(e, 1) + np.diag(e, -1)
+        K_copy = K.copy()
+
+        w, v, status = _call_eigh_with_status(K_copy)
+        assert status.secular_failures == 0, (
+            f"{status.secular_failures} secular failures on boundary eigenvalue"
+        )
+        assert status.qr_fallback == 0, "QR fallback triggered on boundary eigenvalue"
+        _assert_reconstruction(K, w, v, 1e-12, "Boundary eigenvalue")

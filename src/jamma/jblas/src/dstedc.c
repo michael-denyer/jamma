@@ -958,21 +958,14 @@ int jblas_dstedc_c(npy_intp N, double *d, double *e,
         if (resid > 1e-10) {
             fprintf(stderr, "jblas dstedc: D&C residual %.2e exceeds 1e-10 "
                     "(N=%ld)\n", resid, (long)N);
-            if (N > 5000) {
-                fprintf(stderr, "jblas dstedc: N=%ld too large for QR "
-                        "fallback (O(N^3) Givens); returning error\n",
-                        (long)N);
-                ret = -2;
-            } else {
-                fprintf(stderr, "jblas dstedc: falling back to QR "
-                        "iteration (N=%ld)\n", (long)N);
-                memcpy(d, d_orig, (size_t)N * sizeof(double));
-                memcpy(e, e_orig, (size_t)(N - 1) * sizeof(double));
-                memset(Z, 0, (size_t)N * (size_t)ldz * sizeof(double));
-                for (npy_intp k = 0; k < N; k++)
-                    Z[k * ldz + k] = 1.0;
-                ret = dsteqr_base(N, d, e, Z, ldz);
-            }
+            fprintf(stderr, "jblas dstedc: falling back to QR "
+                    "iteration (N=%ld)\n", (long)N);
+            memcpy(d, d_orig, (size_t)N * sizeof(double));
+            memcpy(e, e_orig, (size_t)(N - 1) * sizeof(double));
+            memset(Z, 0, (size_t)N * (size_t)ldz * sizeof(double));
+            for (npy_intp k = 0; k < N; k++)
+                Z[k * ldz + k] = 1.0;
+            ret = dsteqr_base(N, d, e, Z, ldz);
         }
     }
 

@@ -125,4 +125,5 @@ dev = [
     "pre-commit>=3.7.0",
     "pyyaml>=6.0.3",
     "hatchling>=1.29.0",
+    "editables>=0.5",
 ]

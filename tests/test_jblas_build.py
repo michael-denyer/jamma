@@ -128,9 +128,19 @@ def test_all_exports_present():
         "dscal",
         "dgemv",
         "dgemm",
+        "dsyrk",
+        "dsyr2k",
+        "eigh",
+        "get_n_threads",
+        "set_n_threads",
         "jblas_isa",
         "HAS_C_EXTENSION",
         "HAS_OPENMP",
+        "JBLAS_MR",
+        "JBLAS_NR",
+        "JBLAS_KC",
+        "JBLAS_MC",
+        "JBLAS_NC",
     }
     missing = expected - set(jblas.__all__)
     assert not missing, f"Missing exports: {missing}"

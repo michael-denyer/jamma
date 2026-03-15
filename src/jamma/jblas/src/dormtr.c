@@ -14,7 +14,7 @@
  * DLARFB: Applies (I - V * T * V^T) * C:
  *   1. W = V^T @ C[j+1:N, :]     (nb x M)
  *   2. W = T @ W                   (triangular multiply)
- *   3. C[j+1:N, :] -= V @ W       (rank-nb update via loops)
+ *   3. C[j+1:N, :] -= V @ W       (GEMM: alpha=-1, beta=1)
  *
  * Memory: T[NB x NB] + W[NB x M] + V_block[vlen x NB] + z[NB].
  */

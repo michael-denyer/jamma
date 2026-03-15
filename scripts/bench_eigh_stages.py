@@ -170,6 +170,8 @@ def bench_jblas_stages(
         "dsytrd": best_dsytrd,
         "dstedc": best_dstedc,
         "dormtr": best_dormtr,
+        # Note: total_staged sums per-stage bests across independent runs,
+        # so it may understate actual single-run wall time.
         "total_staged": best_dsytrd + best_dstedc + best_dormtr,
     }
 

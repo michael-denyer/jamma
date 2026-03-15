@@ -3,7 +3,8 @@
  *
  * Implements jblas_dstedc_c: computes all eigenvalues and eigenvectors of a
  * real symmetric tridiagonal matrix T given by diagonal d[N] and off-diagonal
- * e[N-1].  On input Z is N x N identity.  On output d contains the eigenvalues
+ * e[N-1].  Z is caller-allocated N x N (jblas_dstedc_c initializes it to
+ * identity internally).  On output d contains the eigenvalues
  * in ascending order and Z contains the corresponding eigenvectors as columns
  * (row-major: Z[i,j] is the i-th component of eigenvector j; equivalently
  * eigenvector for eigenvalue d[k] is column k of Z — the caller convention
@@ -19,7 +20,7 @@
  *   Base case (N <= DSTEDC_BASE, currently 128): Implicit QR iteration (Francis shift) on the
  *   tridiagonal matrix.  Eigenvectors are accumulated via Givens rotations.
  *
- *   Recursive case (N > DSTEDC_BASE): Divide-and-conquer a la Gu & Eisenstat (1995).
+ *   Recursive case (N > DSTEDC_BASE): Divide-and-conquer a la Cuppen (1981).
  *     1. Split at m = N/2; adjust d[m-1] -= |rho|, d[m] -= |rho|.
  *     2. Recurse on left half [0..m-1] and right half [m..N-1].
  *     3. Merge via rank-1 secular equation:
@@ -45,8 +46,8 @@
  *   For N=100k, expect ~400 GB peak during the top-level merge.
  *
  * References:
- *   Gu & Eisenstat (1995), "A Divide-and-Conquer Algorithm for the
- *   Symmetric Tridiagonal Eigenproblem."
+ *   Cuppen (1981), "A Divide and Conquer Method for the Symmetric
+ *   Tridiagonal Eigenproblem."
  *   Li (1994), "Solving Secular Equations Stably and Efficiently."
  *   LAPACK Working Note 89.
  */
@@ -69,7 +70,9 @@
 #define MIN(a, b)  ((a) < (b) ? (a) : (b))
 #define MAX(a, b)  ((a) > (b) ? (a) : (b))
 
-/* Threshold for switching to base-case QR iteration (LAPACK standard). */
+/* Threshold for switching to base-case QR iteration.
+ * LAPACK uses SMLSIZ ~25; 128 chosen for larger QR batches to reduce
+ * D&C merge overhead. */
 #define DSTEDC_BASE 128
 
 /* Machine epsilon */
@@ -155,20 +158,21 @@ static void apply_givens_col(double *Z, npy_intp ldz, npy_intp n,
 }
 
 /* ---------------------------------------------------------------------------
- * Simple insertion sort for eigenvalues + permute eigenvectors accordingly
+ * Eigenvalue/eigenvector sorting
  * ---------------------------------------------------------------------------
  */
-static void sort_eig(double *d, double *Z, npy_intp ldz, npy_intp n)
+
+/** Insertion sort for small N (base case, N <= DSTEDC_BASE).
+ *  O(N^2) comparisons with O(N) column swaps per inversion — fine for N <= 128. */
+static void sort_eig_insertion(double *d, double *Z, npy_intp ldz, npy_intp n)
 {
     for (npy_intp i = 1; i < n; i++) {
         double key = d[i];
         npy_intp j = i - 1;
         while (j >= 0 && d[j] > key) {
-            /* Swap d[j] and d[j+1] */
             double tmp = d[j];
             d[j] = d[j + 1];
             d[j + 1] = tmp;
-            /* Swap columns j and j+1 in Z */
             for (npy_intp k = 0; k < n; k++) {
                 double tz = Z[k * ldz + j];
                 Z[k * ldz + j] = Z[k * ldz + j + 1];
@@ -178,6 +182,78 @@ static void sort_eig(double *d, double *Z, npy_intp ldz, npy_intp n)
         }
         d[j + 1] = key;
     }
+}
+
+/** Index-based sort for large N: argsort + single-pass permutation copy.
+ *  O(N log N) sort + O(N^2) permutation copy — avoids O(N^3) of insertion sort.
+ *  Falls back to insertion sort if index allocation fails. */
+static void sort_eig(double *d, double *Z, npy_intp ldz, npy_intp n)
+{
+    if (n <= DSTEDC_BASE) {
+        sort_eig_insertion(d, Z, ldz, n);
+        return;
+    }
+
+    /* Argsort: build index array, sort by eigenvalue */
+    npy_intp *idx = (npy_intp *)malloc((size_t)n * sizeof(npy_intp));
+    double *d_tmp = (double *)malloc((size_t)n * sizeof(double));
+    double *z_col = (double *)malloc((size_t)n * sizeof(double));
+    if (!idx || !d_tmp || !z_col) {
+        free(idx); free(d_tmp); free(z_col);
+        sort_eig_insertion(d, Z, ldz, n);  /* fallback */
+        return;
+    }
+
+    for (npy_intp i = 0; i < n; i++) idx[i] = i;
+
+    /* Shell sort on idx by d[idx[i]] — O(N^(4/3)) worst case, no recursion. */
+    npy_intp gap = 1;
+    while (gap < n / 3) gap = gap * 3 + 1;
+    for (; gap > 0; gap /= 3) {
+        for (npy_intp i = gap; i < n; i++) {
+            npy_intp tmp_idx = idx[i];
+            double tmp_val = d[tmp_idx];
+            npy_intp j = i;
+            while (j >= gap && d[idx[j - gap]] > tmp_val) {
+                idx[j] = idx[j - gap];
+                j -= gap;
+            }
+            idx[j] = tmp_idx;
+        }
+    }
+
+    /* Permute eigenvalues */
+    for (npy_intp i = 0; i < n; i++) d_tmp[i] = d[idx[i]];
+    memcpy(d, d_tmp, (size_t)n * sizeof(double));
+
+    /* Permute eigenvector columns via cycle-following (O(N^2) total, O(N) extra memory).
+     * For each cycle j → idx[j] → idx[idx[j]] → ... → j, we want:
+     *   result[:,j] = original[:,idx[j]] for all j in the cycle.
+     * Save original[:,j], shift columns backward along the cycle, then place saved. */
+    for (npy_intp j = 0; j < n; j++) {
+        if (idx[j] == j) continue;
+        /* Save column at cycle start position j */
+        for (npy_intp k = 0; k < n; k++)
+            z_col[k] = Z[k * ldz + j];
+        /* Follow the cycle: each position gets the column from its idx */
+        npy_intp dst = j;
+        npy_intp src = idx[j];
+        while (src != j) {
+            for (npy_intp k = 0; k < n; k++)
+                Z[k * ldz + dst] = Z[k * ldz + src];
+            idx[dst] = dst;
+            dst = src;
+            src = idx[src];
+        }
+        /* Last position in cycle gets the saved start column */
+        for (npy_intp k = 0; k < n; k++)
+            Z[k * ldz + dst] = z_col[k];
+        idx[dst] = dst;
+    }
+
+    free(idx);
+    free(d_tmp);
+    free(z_col);
 }
 
 /* Relative Frobenius residual for a tridiagonal eigensystem:
@@ -400,7 +476,7 @@ static int dlaed4(npy_intp n, npy_intp i,
     double rhoinv = 1.0 / rho;
 
     for (int iter = 0; iter < 60; iter++) {
-        /* Evaluate f(lambda) = 1/rho + sum z[k]^2/delta[k]  (scaled by rho) */
+        /* Evaluate g(lambda) = 1/rho + sum z[k]^2/delta[k] where g = f/rho */
         double f  = rhoinv;
         double df = 0.0;
         for (npy_intp k = 0; k < n; k++) {
@@ -620,7 +696,8 @@ static int merge_rank1(npy_intp n, npy_intp m,
     }
     if (n_secular_failures > 0) {
         fprintf(stderr, "jblas dstedc: %d/%ld secular equation(s) "
-                "failed to converge at merge size %ld\n",
+                "failed to converge at merge size %ld — using fallback "
+                "eigenvalues (residual check will catch bad results)\n",
                 n_secular_failures, (long)n_nd, (long)n);
     }
 
@@ -953,20 +1030,33 @@ int jblas_dstedc_c(npy_intp N, double *d, double *e,
     int ret = dstedc_recurse(N, d, e, Z, ldz, work, lwork, iwork,
                               ws, merge_scratch);
 
-    if (ret == 0) {
+    /* Check if D&C result needs QR fallback: either D&C returned non-zero
+     * (convergence or secular equation failure), or the residual is bad. */
+    int need_fallback = 0;
+    if (ret != 0) {
+        fprintf(stderr, "jblas dstedc: D&C returned %d (N=%ld), "
+                "attempting QR fallback\n", ret, (long)N);
+        need_fallback = 1;
+    } else {
         double resid = tridiag_eig_residual(N, d_orig, e_orig, d, Z, ldz);
         if (resid > 1e-10) {
             fprintf(stderr, "jblas dstedc: D&C residual %.2e exceeds 1e-10 "
-                    "(N=%ld)\n", resid, (long)N);
-            fprintf(stderr, "jblas dstedc: falling back to QR "
-                    "iteration (N=%ld)\n", (long)N);
-            memcpy(d, d_orig, (size_t)N * sizeof(double));
-            memcpy(e, e_orig, (size_t)(N - 1) * sizeof(double));
-            memset(Z, 0, (size_t)N * (size_t)ldz * sizeof(double));
-            for (npy_intp k = 0; k < N; k++)
-                Z[k * ldz + k] = 1.0;
-            ret = dsteqr_base(N, d, e, Z, ldz);
+                    "(N=%ld), attempting QR fallback\n", resid, (long)N);
+            need_fallback = 1;
         }
+    }
+
+    if (need_fallback) {
+        if (N > 2000) {
+            fprintf(stderr, "jblas dstedc: QR fallback on N=%ld — "
+                    "this is O(N^3) and may take minutes\n", (long)N);
+        }
+        memcpy(d, d_orig, (size_t)N * sizeof(double));
+        memcpy(e, e_orig, (size_t)(N - 1) * sizeof(double));
+        memset(Z, 0, (size_t)N * (size_t)ldz * sizeof(double));
+        for (npy_intp k = 0; k < N; k++)
+            Z[k * ldz + k] = 1.0;
+        ret = dsteqr_base(N, d, e, Z, ldz);
     }
 
     free(work);

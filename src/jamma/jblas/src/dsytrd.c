@@ -392,6 +392,12 @@ int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
     if (m_panel <= DSYMV_MIRROR_THRESHOLD) {
         mirror_buf = (double *)malloc(
             ((size_t)m_panel * (size_t)m_panel + (size_t)m_panel) * sizeof(double));
+        if (!mirror_buf) {
+            fprintf(stderr, "jblas dsytrd: mirror buffer allocation failed "
+                    "(N=%ld, %zu bytes) — falling back to scalar dsymv\n",
+                    (long)N,
+                    ((size_t)m_panel * (size_t)m_panel + (size_t)m_panel) * sizeof(double));
+        }
     }
 
     if (!V || !W || !p) {

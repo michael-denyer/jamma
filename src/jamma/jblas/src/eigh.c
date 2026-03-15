@@ -11,7 +11,7 @@
  *
  * On exit:
  *   eigenvalues[k]    = k-th eigenvalue (ascending)
- *   eigenvectors[i,j] = j-th component of k-th eigenvector, column k of Z
+ *   eigenvectors[i,j] = i-th component of j-th eigenvector, column j of Z
  *                       (row-major: eigenvectors[row*ldz + col])
  *
  * Memory:
@@ -92,6 +92,11 @@ int jblas_eigh_c(npy_intp N,
      * global mutex path). */
     jblas_workspace_t dstedc_ws;
     int ws_ok = jblas_workspace_alloc(&dstedc_ws, jblas_n_threads);
+    if (ws_ok != 0) {
+        fprintf(stderr, "jblas eigh: dstedc workspace allocation failed "
+                "(N=%ld, %d threads) — using global mutex path (slower)\n",
+                (long)N, jblas_n_threads);
+    }
     ret = jblas_dstedc_c(N, d, e, eigenvectors, ldz,
                           ws_ok == 0 ? &dstedc_ws : NULL);
     if (ws_ok == 0) jblas_workspace_free(&dstedc_ws);

@@ -604,7 +604,7 @@ py_eigh(PyObject *self, PyObject *args)
     Py_END_ALLOW_THREADS
 
     if (ret != 0) {
-        if (ret == -1 || ret == -2) {
+        if (ret < 0) {
             PyErr_Format(PyExc_MemoryError,
                 "jblas eigh: workspace allocation failed (returned %d) — "
                 "matrix too large for available memory", ret);

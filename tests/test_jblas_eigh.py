@@ -185,6 +185,26 @@ class TestEigh:
         with pytest.raises(ValueError, match="2-D|ndim"):
             eigh(K)
 
+    def test_empty_matrix(self) -> None:
+        """eigh on 0x0 matrix returns empty eigenvalues and eigenvectors."""
+        K = np.zeros((0, 0), dtype=np.float64)
+        w, v = eigh(K)
+        assert w.shape == (0,), f"Expected (0,) eigenvalues, got {w.shape}"
+        assert v.shape == (0, 0), f"Expected (0,0) eigenvectors, got {v.shape}"
+
+    def test_fortran_order_input(self) -> None:
+        """eigh on Fortran-order input produces correct results."""
+        rng = np.random.default_rng(99)
+        N = 20
+        K = _random_spd(N, rng)
+        K_f = np.asfortranarray(K.copy())
+        w, v = eigh(K_f)
+        # Reconstruction check
+        K_recon = v @ np.diag(w) @ v.T
+        norm_K = np.linalg.norm(K, "fro")
+        ratio = np.linalg.norm(K - K_recon, "fro") / norm_K
+        assert ratio < 1e-13, f"Fortran-order reconstruction: {ratio:.2e}"
+
 
 # ---------------------------------------------------------------------------
 # test_reconstruction_accuracy — EIGH-07
@@ -508,7 +528,7 @@ class TestDormtr:
 
 
 # ---------------------------------------------------------------------------
-# TestThreadControl — thread control API (EIGH-07 workspace prerequisite)
+# TestThreadControl — thread control API
 # ---------------------------------------------------------------------------
 
 
@@ -545,6 +565,11 @@ class TestThreadControl:
         """set_n_threads(0) raises ValueError."""
         with pytest.raises(ValueError):
             set_n_threads(0)
+
+    def test_set_n_threads_rejects_negative(self) -> None:
+        """set_n_threads(-1) raises ValueError."""
+        with pytest.raises(ValueError):
+            set_n_threads(-1)
 
 
 # ---------------------------------------------------------------------------
@@ -584,8 +609,8 @@ class TestAccumGemm:
     def test_eigh_still_correct_n500(self) -> None:
         """eigh on 500x500 random SPD: full pipeline test.
 
-        At N=500, this exercises the full DSYTRD + DSTEDC (QR base case)
-        + DORMTR pipeline.  Verifies _dgemm_core refactor is sound.
+        At N=500, this exercises the full DSYTRD + DSTEDC (D&C with QR
+        base case) + DORMTR pipeline.  Verifies _dgemm_core refactor is sound.
         """
         rng = np.random.default_rng(5002)
         N = 500
@@ -682,7 +707,7 @@ class TestEighThroughput:
 class TestWorkspaceApi:
     """Workspace API has no Python binding (C-internal only).
 
-    Tested indirectly: if eigh works at N > DSTEDC_BASE (2000), the GEMM
+    Tested indirectly: if eigh works at N > DSTEDC_BASE (128), the GEMM
     calls inside dstedc are functioning with workspace buffers.
     The TestAccumGemm tests above cover the _dgemm_core refactor path.
     """
@@ -712,7 +737,6 @@ def test_lapack_no_ffast_math() -> None:
     that a 'lapack_sources' group exists and that -ffast-math is not applied
     to LAPACK source files.
 
-    The test is skipped until Plan 03 adds the lapack_sources group.
     """
     import importlib.util
     import sys

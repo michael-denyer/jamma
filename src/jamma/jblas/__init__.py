@@ -345,7 +345,9 @@ except ImportError as _exc:
 
         Raises:
             ValueError: If K is not 2-D square float64.
-            numpy.linalg.LinAlgError: If convergence fails.
+            numpy.linalg.LinAlgError: If convergence fails (NumPy fallback).
+            RuntimeError: If convergence fails (C extension).
+            MemoryError: If workspace allocation fails (C extension).
         """
         if K.ndim != 2:
             raise ValueError(f"eigh: K must be a 2-D array, got {K.ndim}-D")

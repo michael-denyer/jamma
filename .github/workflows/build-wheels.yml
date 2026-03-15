@@ -21,7 +21,7 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p src/jamma/jblas/libs
-          gh release download v0.1.0 \
+          gh release download v0.2.0 \
             --repo michael-denyer/blis-prebuilt \
             --pattern "libblis-*" \
             --dir src/jamma/jblas/libs/ \
@@ -90,7 +90,7 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p src/jamma/jblas/libs
-          gh release download v0.1.0 \
+          gh release download v0.2.0 \
             --repo michael-denyer/blis-prebuilt \
             --pattern "libblis-*" \
             --dir src/jamma/jblas/libs/ \

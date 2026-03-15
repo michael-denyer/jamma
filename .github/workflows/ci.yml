@@ -52,8 +52,20 @@ jobs:
             install_args: "--extra jax --extra dev"
             name: "ARM Mac + JAX"
             cov_threshold: "--cov-fail-under=80"
+          - os: ubuntu-latest
+            python-version: "3.12"
+            install_args: "--extra jax --extra dev"
+            name: "Linux + MKL ILP64"
+            ilp64_numpy: true
+            cov_threshold: "--cov-fail-under=80"
+          - os: ubuntu-latest
+            python-version: "3.12"
+            install_args: "--extra jax --extra dev"
+            name: "Linux + BLIS ILP64"
+            blis_ilp64: true
+            cov_threshold: "--cov-fail-under=80"
     name: ${{ matrix.name }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -66,6 +78,33 @@ jobs:
       - name: Install dependencies
         run: uv sync ${{ matrix.install_args }}
 
+      - name: Install MKL ILP64 numpy
+        if: matrix.ilp64_numpy
+        run: |
+          uv run pip install numpy \
+            --extra-index-url https://michael-denyer.github.io/numpy-mkl \
+            --force-reinstall --upgrade
+          uv run python -c "
+          import numpy as np
+          cfg = np.show_config('dicts')
+          blas = cfg.get('Build Dependencies', {}).get('blas', {})
+          print(f'numpy BLAS: {blas}')
+          "
+
+      - name: Download BLIS ILP64 binary
+        if: matrix.blis_ilp64
+        run: |
+          mkdir -p src/jamma/jblas/libs
+          gh release download v0.2.0 \
+            --repo michael-denyer/blis-prebuilt \
+            --pattern "libblis-x86_64.so" \
+            --dir src/jamma/jblas/libs/
+          mv src/jamma/jblas/libs/libblis-x86_64.so src/jamma/jblas/libs/libblis.so
+          echo "BLIS ILP64 binary ready:"
+          ls -lh src/jamma/jblas/libs/
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Compile C extensions
         run: |
           uv run python -m jamma.lmm._compile_accel
@@ -74,6 +113,15 @@ jobs:
       - name: Compile jblas extension
         run: |
           uv run python -m jamma.jblas._compile_jblas
+
+      - name: Verify BLAS backend
+        run: |
+          uv run python -c "
+          from jamma.jblas import blas_backend, blas_is_ilp64, HAS_C_EXTENSION
+          print(f'HAS_C_EXTENSION={HAS_C_EXTENSION}')
+          print(f'blas_backend={blas_backend}')
+          print(f'blas_is_ilp64={blas_is_ilp64}')
+          "
 
       - name: Run tests
         run: uv run pytest ${{ matrix.pytest_args || '-m "not tier2 and not slow and not benchmark"' }} -v -n 3 -o 'addopts=' --cov=src/jamma --cov-report=term-missing --cov-report=json ${{ matrix.cov_threshold }}

@@ -128,7 +128,7 @@ int blas_dispatch_init(void);
 
 /* Returns a string identifying the active dgemm backend:
  *   "MKL-ILP64", "MKL-LP64", "OpenBLAS-ILP64", "OpenBLAS-LP64",
- *   "Accelerate", "Accelerate-ILP64", "BLIS", "jblas-own",
+ *   "Accelerate", "Accelerate-ILP64", "BLIS", "BLIS-ILP64", "jblas-own",
  *   "system-BLAS-ILP64", "system-BLAS-LP64"
  * Never returns NULL. */
 const char *blas_backend_name(void);

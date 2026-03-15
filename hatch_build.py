@@ -28,9 +28,9 @@ from pathlib import Path
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 # BLIS prebuilt binary repository and asset naming convention.
-# The BLIS repo ships multi-config binaries (e.g. haswell+skx for x86_64).
+# The BLIS repo ships ILP64 binaries (built with -b 64 -i 64, exports dgemm64_).
 BLIS_REPO = "michael-denyer/blis-prebuilt"
-BLIS_VERSION = "v0.1.0"
+BLIS_VERSION = "v0.2.0"
 BLIS_ASSETS = {
     ("Linux", "x86_64"): "libblis-x86_64.so",  # intel64 multi-config
     ("Linux", "AMD64"): "libblis-x86_64.so",  # alias

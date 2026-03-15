@@ -98,7 +98,7 @@ static const char *_detect_backend_name(const char *lib_path, int is_ilp64) {
 static const char *ilp64_dgemm_names[] = {
     "dgemm_64_",              /* MKL ILP64 */
     "scipy_dgemm_64_",        /* scipy-openblas64 */
-    "dgemm64_",               /* OpenBLAS INTERFACE64=1 */
+    "dgemm64_",               /* OpenBLAS INTERFACE64=1, BLIS -b 64 */
     NULL
 };
 /* Apple Accelerate ILP64 (macOS 13.3+): uses $NEWLAPACK$ILP64 suffix.
@@ -481,9 +481,9 @@ static int discover_bundled_blis(void) {
     }
 
     if (try_resolve_dgemm(handle, blis_path)) {
-        g_backend_name = "BLIS";
+        g_backend_name = g_is_ilp64 ? "BLIS-ILP64" : "BLIS";
         g_blas_handle = handle;
-        if (dbg) fprintf(stderr, "jblas_dispatch: resolved dgemm from bundled BLIS\n");
+        if (dbg) fprintf(stderr, "jblas_dispatch: resolved dgemm from bundled BLIS (ilp64=%d)\n", g_is_ilp64);
         return 1;
     }
 

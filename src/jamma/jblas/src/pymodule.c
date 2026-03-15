@@ -747,6 +747,12 @@ PyInit__jblas(void)
         return NULL;
     }
 
+    /* blas_backend: identifies which dgemm backend is active */
+    if (PyModule_AddStringConstant(m, "blas_backend", blas_backend_name()) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
+
     /* HAS_OPENMP: True if compiled with OpenMP. Level 1/2 kernels are
      * single-threaded; dgemm (Level 3) uses OpenMP parallel-for. */
 #ifdef _OPENMP

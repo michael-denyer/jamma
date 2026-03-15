@@ -211,6 +211,11 @@ int jblas_init(void) {
     /* Wire blocking dispatch wrapper into the dispatch table */
     jblas_dispatch.dgemm = jblas_dgemm_dispatch_fn;
 
+    /* Try to upgrade dgemm to system BLAS / bundled BLIS.
+     * blas_dispatch_init() may replace jblas_dispatch.dgemm with an
+     * external wrapper.  Falls through to jblas own dgemm on failure. */
+    blas_dispatch_init();
+
     /* Record init-time thread count for clamping in jblas_set_n_threads */
     _init_max_threads = jblas_n_threads;
 

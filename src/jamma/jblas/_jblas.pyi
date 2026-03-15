@@ -17,6 +17,10 @@ ABI_VERSION: Final[int]
 jblas_isa: Final[Literal["AVX2", "NEON", "generic"]]
 """Active ISA name: "AVX2", "NEON", or "generic"."""
 
+blas_backend: Final[str]
+"""Active dgemm backend: "MKL-ILP64", "MKL-LP64", "OpenBLAS-ILP64",
+"OpenBLAS-LP64", "Accelerate", "BLIS", "jblas-own", etc."""
+
 HAS_OPENMP: Final[bool]
 """True if the extension was compiled with OpenMP support.
 

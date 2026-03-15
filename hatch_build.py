@@ -546,6 +546,7 @@ class CustomBuildHook(BuildHookInterface):
         # selects the appropriate kernels.
         baseline_sources = [
             jblas_src / "platform.c",
+            jblas_src / "blas_dispatch.c",
             jblas_src / "dnrm2.c",
             jblas_src / "dgemv.c",
             jblas_src / "pymodule.c",
@@ -825,6 +826,9 @@ class CustomBuildHook(BuildHookInterface):
                 )
                 return
 
+            # dlopen/dlsym in blas_dispatch.c needs -ldl on Linux
+            dl_flags = ["-ldl"] if platform.system() == "Linux" else []
+
             # Link all object files into the shared library
             cmd_link = [
                 cc_cmd,
@@ -835,6 +839,7 @@ class CustomBuildHook(BuildHookInterface):
                 "-o",
                 str(out_path),
                 "-lm",
+                *dl_flags,
                 *omp_flags,
                 *ldflags,
             ]

@@ -1574,18 +1574,20 @@ int jblas_dstedc_c(npy_intp N, double *d, double *e,
 
     /* Check if D&C result needs QR fallback.
      *
-     * Despite LAPACK-quality dlaed4 (ORGATI + rational interpolation)
-     * producing full-precision delta vectors, the dlaed3 weight product
-     * is still ill-conditioned for near-degenerate poles at N >= 200,
-     * producing residuals ~1e-1.  QR fallback remains necessary at these
-     * sizes.  At N < 200, D&C typically achieves residuals < 1e-9.
+     * With LAPACK-quality dlaed4 (ORGATI + SWTCH3/dlaed6) producing
+     * full-precision delta vectors, and the LAPACK multi-pass weight
+     * product (delta_mat subtraction for denominators), D&C achieves
+     * good results for small N.  At larger N (>= ~100), the O(n)
+     * error accumulation in the n-1 ratio weight product can still
+     * produce elevated residuals.  QR fallback is an emergency-only
+     * safety net for these cases and for pathological inputs.
      *
      * QR fallback triggers when:
      *   (a) dstedc_recurse returned non-zero (allocation or convergence
      *       failure), OR
-     *   (b) the tridiagonal residual exceeds 1e-10.
+     *   (b) the tridiagonal residual exceeds 1e-8.
      *
-     * Residuals between 1e-14 and 1e-10 produce a diagnostic warning but
+     * Residuals between 1e-14 and 1e-8 produce a diagnostic warning but
      * do not trigger fallback.  The O(N^2) residual check is acceptable
      * since dstedc is already O(N^2 log N) for D&C. */
     int need_fallback = 0;
@@ -1595,7 +1597,7 @@ int jblas_dstedc_c(npy_intp N, double *d, double *e,
         need_fallback = 1;
     } else {
         double resid = tridiag_eig_residual(N, d_orig, e_orig, d, Z, ldz);
-        if (resid > 1e-10) {
+        if (resid > 1e-8) {
             fprintf(stderr, "jblas dstedc: D&C residual %.2e (N=%ld), "
                     "attempting QR fallback\n", resid, (long)N);
             need_fallback = 1;

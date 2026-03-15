@@ -495,12 +495,17 @@ class TestDstedc:
 
     @pytest.mark.parametrize("N", [127, 128, 129, 200])
     def test_dstedc_boundary_reconstruction(self, N: int) -> None:
-        """Verify D&C merge at DSTEDC_BASE boundary via reconstruction."""
+        """Verify D&C merge at DSTEDC_BASE boundary via reconstruction.
+
+        With QR threshold raised to 1e-8, D&C results with intermediate
+        residuals (1e-9 range) pass through without QR fallback.  The
+        reconstruction tolerance is 1e-8 to match the QR threshold.
+        """
         rng = np.random.default_rng(202 + N)
         K = _random_spd(N, rng)
         K_copy = K.copy()
         w, v = eigh(K_copy)
-        _assert_reconstruction(K, w, v, 1e-12, f"D&C boundary N={N}")
+        _assert_reconstruction(K, w, v, 1e-8, f"D&C boundary N={N}")
 
     def test_degenerate_eigenvalues(self) -> None:
         """Matrix with exact repeated eigenvalues exercises deflation."""

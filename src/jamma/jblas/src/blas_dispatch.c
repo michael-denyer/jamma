@@ -38,6 +38,7 @@
 static int g_is_ilp64 = 0;
 static jblas_dgemm_lp64_fn  g_dgemm_lp64  = NULL;
 static jblas_dgemm_ilp64_fn g_dgemm_ilp64 = NULL;
+static jblas_cblas_dgemm_fn g_cblas_dgemm  = NULL;  /* preferred over Fortran */
 static const char *g_backend_name = "jblas-own";
 static void *g_blas_handle = NULL;
 
@@ -115,6 +116,14 @@ static int try_resolve_dgemm(void *handle, const char *lib_path) {
             g_dgemm_lp64 = (jblas_dgemm_lp64_fn)sym;
             g_is_ilp64 = 0;
             g_backend_name = _detect_backend_name(lib_path, 0);
+
+            /* Also try cblas_dgemm — row-major native, no A/B swap needed.
+             * Accelerate/MKL can choose optimal algorithm for the layout. */
+            void *cblas_sym = dlsym(handle, "cblas_dgemm");
+            if (cblas_sym) {
+                g_cblas_dgemm = (jblas_cblas_dgemm_fn)cblas_sym;
+                if (dbg) fprintf(stderr, "jblas_dispatch:   also resolved cblas_dgemm\n");
+            }
             return 1;
         }
     }
@@ -456,6 +465,19 @@ static void _dgemm_external_wrapper(
     const double alpha = 1.0;
     const double beta  = 0.0;
 
+    /* Prefer CBLAS: row-major native, no swap needed.
+     * CBLAS requires ld >= max(dim, 1) even for zero-size matrices. */
+    if (g_cblas_dgemm) {
+        int ik = k > 0 ? (int)k : 1;
+        int in_ = n > 0 ? (int)n : 1;
+        g_cblas_dgemm(JBLAS_CblasRowMajor,
+                      JBLAS_CblasNoTrans, JBLAS_CblasNoTrans,
+                      (int)m, (int)n, (int)k,
+                      alpha, A, ik, B, in_,
+                      beta,  C, in_);
+        return;
+    }
+
     if (g_is_ilp64) {
         const long long lm = (long long)m;
         const long long ln = (long long)n;
@@ -546,7 +568,23 @@ static int _dgemm_external_full(
         return 0;
     }
 
-    /* Row-major to column-major: swap A↔B, M↔N, transpose flags, strides */
+    /* Prefer CBLAS C interface: handles row-major natively, no A/B swap.
+     * Accelerate/MKL can choose optimal algorithm for the access pattern.
+     * CBLAS requires lda >= max(K,1), ldb >= max(N,1), ldc >= max(N,1). */
+    if (g_cblas_dgemm) {
+        int ta = transa ? JBLAS_CblasTrans : JBLAS_CblasNoTrans;
+        int tb = transb ? JBLAS_CblasTrans : JBLAS_CblasNoTrans;
+        int ilda = (int)(lda > 0 ? lda : 1);
+        int ildb = (int)(ldb > 0 ? ldb : 1);
+        int ildc = (int)(ldc > 0 ? ldc : 1);
+        g_cblas_dgemm(JBLAS_CblasRowMajor, ta, tb,
+                      (int)M, (int)N, (int)K,
+                      alpha, A, ilda, B, ildb,
+                      beta,  C, ildc);
+        return 1;
+    }
+
+    /* Fortran interface fallback: row-major → column-major swap */
     const char *transa_f = transb ? "T" : "N";
     const char *transb_f = transa ? "T" : "N";
 

@@ -227,9 +227,9 @@ class CustomBuildHook(BuildHookInterface):
             return
 
         # macOS: set @loader_path install_name so delocate leaves it in place.
-        # blas_dispatch.c expects BLIS at <extension_dir>/libs/<name>.
+        # blas_dispatch.c expects BLIS at <extension_dir>/libs/libblis.dylib.
         if platform.system() == "Darwin" and blis_path.suffix == ".dylib":
-            install_name = f"@loader_path/libs/{blis_path.name}"
+            install_name = "@loader_path/libs/libblis.dylib"
             try:
                 subprocess.run(
                     ["install_name_tool", "-id", install_name, str(blis_path)],

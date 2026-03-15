@@ -480,10 +480,46 @@ static int discover_bundled_blis(void) {
         return 0;
     }
 
+    /* BLIS with -b 64 exports dgemm_ with 64-bit int args (same symbol name,
+     * different ABI).  try_resolve_dgemm finds dgemm_ and classifies as LP64.
+     * Check bli_info_get_int_type_size() to detect the true integer width. */
+    typedef long (*bli_info_int_size_fn)(void);
+    bli_info_int_size_fn get_int_size =
+        (bli_info_int_size_fn)dlsym(handle, "bli_info_get_int_type_size");
+    int blis_is_ilp64 = (get_int_size && get_int_size() == 64);
+
+    if (dbg) fprintf(stderr, "jblas_dispatch: BLIS bli_info_get_int_type_size=%s%s\n",
+                     get_int_size ? "" : "(not found)",
+                     blis_is_ilp64 ? "64" : get_int_size ? "32" : "");
+
+    if (blis_is_ilp64) {
+        /* BLIS ILP64: dgemm_ takes 64-bit int pointers — resolve as ILP64 */
+        void *sym = dlsym(handle, "dgemm_");
+        if (sym) {
+            g_dgemm_ilp64 = (jblas_dgemm_ilp64_fn)sym;
+            g_dgemm_lp64 = NULL;
+            g_is_ilp64 = 1;
+            g_backend_name = "BLIS-ILP64";
+            g_blas_handle = handle;
+
+            /* Also resolve cblas_dgemm for row-major native dispatch.
+             * BLIS cblas_dgemm with -b 64 takes int64_t params. */
+            void *cblas_sym = dlsym(handle, "cblas_dgemm");
+            if (cblas_sym) {
+                g_cblas_dgemm_ilp64 = (jblas_cblas_dgemm_ilp64_fn)cblas_sym;
+                if (dbg) fprintf(stderr, "jblas_dispatch:   also resolved cblas_dgemm (ILP64)\n");
+            }
+
+            if (dbg) fprintf(stderr, "jblas_dispatch: resolved dgemm from bundled BLIS-ILP64\n");
+            return 1;
+        }
+    }
+
+    /* LP64 BLIS or ILP64 without dgemm_ — try normal resolution */
     if (try_resolve_dgemm(handle, blis_path)) {
-        g_backend_name = g_is_ilp64 ? "BLIS-ILP64" : "BLIS";
+        g_backend_name = "BLIS";
         g_blas_handle = handle;
-        if (dbg) fprintf(stderr, "jblas_dispatch: resolved dgemm from bundled BLIS (ilp64=%d)\n", g_is_ilp64);
+        if (dbg) fprintf(stderr, "jblas_dispatch: resolved dgemm from bundled BLIS (LP64)\n");
         return 1;
     }
 

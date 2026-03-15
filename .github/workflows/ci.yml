@@ -98,7 +98,8 @@ jobs:
           gh release download v0.2.0 \
             --repo michael-denyer/blis-prebuilt \
             --pattern "libblis-x86_64.so" \
-            --dir src/jamma/jblas/libs/
+            --dir src/jamma/jblas/libs/ \
+            --clobber
           mv src/jamma/jblas/libs/libblis-x86_64.so src/jamma/jblas/libs/libblis.so
           echo "BLIS ILP64 binary ready:"
           ls -lh src/jamma/jblas/libs/

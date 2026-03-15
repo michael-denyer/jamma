@@ -2,9 +2,10 @@
  * jblas.h — Public C API for the JAMMA BLAS compute layer.
  *
  * Declares the ISA dispatch table, jblas_init(), and function signatures for
- * Level 1/2 BLAS primitives (ddot, dnrm2, daxpy, dscal, dgemv) plus Level 3
+ * Level 1/2 BLAS primitives (ddot, dnrm2, daxpy, dscal, dgemv), Level 3
  * (dgemm, dsyrk, dsyr2k with three-level Goto/BLIS blocking and
- * ISA-dispatched microkernels).
+ * ISA-dispatched microkernels), and LAPACK eigendecomposition (eigh via
+ * DSYTRD + DSTEDC + DORMTR).
  *
  * ABI version bump required if any function signature or struct layout changes.
  */
@@ -18,7 +19,7 @@
 /* Bump this constant whenever the public ABI changes (new fields in
  * jblas_dispatch_t, changed function signatures, etc.). pymodule.c exposes
  * this as a Python-level integer so callers can guard against ABI mismatches. */
-#define JBLAS_ABI_VERSION 3
+#define JBLAS_ABI_VERSION 6
 
 /* ---------------------------------------------------------------------------
  * Function-pointer typedefs for ISA-dispatched microkernels
@@ -77,6 +78,62 @@ typedef struct {
 } jblas_dispatch_t;
 
 extern jblas_dispatch_t jblas_dispatch;
+
+/* ---------------------------------------------------------------------------
+ * External BLAS dispatch (system BLAS / bundled BLIS discovery)
+ * ---------------------------------------------------------------------------
+ */
+
+/* Fortran-style dgemm function pointer types for dlopen'd BLAS */
+typedef void (*jblas_dgemm_lp64_fn)(
+    const char *transa, const char *transb,
+    const int *m, const int *n, const int *k,
+    const double *alpha, const double *a, const int *lda,
+    const double *b, const int *ldb,
+    const double *beta, double *c, const int *ldc);
+
+typedef void (*jblas_dgemm_ilp64_fn)(
+    const char *transa, const char *transb,
+    const long long *m, const long long *n, const long long *k,
+    const double *alpha, const double *a, const long long *lda,
+    const double *b, const long long *ldb,
+    const double *beta, double *c, const long long *ldc);
+
+/* CBLAS C-interface dgemm: handles row-major natively (no A/B swap needed).
+ * Preferred over Fortran interface when available — Accelerate/MKL can
+ * choose optimal algorithm for the memory layout. */
+enum { JBLAS_CblasRowMajor = 101, JBLAS_CblasNoTrans = 111, JBLAS_CblasTrans = 112 };
+typedef void (*jblas_cblas_dgemm_fn)(
+    int order, int transa, int transb,
+    int m, int n, int k,
+    double alpha, const double *a, int lda,
+    const double *b, int ldb,
+    double beta, double *c, int ldc);
+
+/* Initialise external BLAS dispatch: system BLAS -> bundled BLIS -> own kernels.
+ * Called from jblas_init() after ISA detection and dgemm_init().
+ * If an external dgemm is found, replaces jblas_dispatch.dgemm with a wrapper.
+ * Returns 0 always (discovery failure is not fatal -- falls back to own dgemm). */
+int blas_dispatch_init(void);
+
+/* Returns a string identifying the active dgemm backend:
+ *   "MKL-ILP64", "MKL-LP64", "OpenBLAS-ILP64", "OpenBLAS-LP64",
+ *   "Accelerate", "BLIS", "jblas-own", "system-BLAS-ILP64", "system-BLAS-LP64"
+ * Never returns NULL. */
+const char *blas_backend_name(void);
+
+/* Returns 1 if the external dgemm uses ILP64 (64-bit integer) parameters,
+ * 0 if LP64 (32-bit integer) or no external dgemm was found. */
+int blas_is_ilp64(void);
+
+/* Returns 1 if an external dgemm (system BLAS or BLIS) was discovered. */
+int blas_has_external(void);
+
+/* LP64 overflow tracking: incremented when dimensions exceed LP64_DIM_MAX
+ * and the fallback to jblas-own dgemm is used.  py_eigh resets before the
+ * computation and checks after to issue a Python warning. */
+int  blas_dispatch_lp64_overflow_count(void);
+void blas_dispatch_reset_lp64_overflow(void);
 
 /* ---------------------------------------------------------------------------
  * dgemm microkernel function pointer
@@ -155,6 +212,91 @@ void jblas_pack_B(const double *B, npy_intp ldb,
                   int nr_param, int trans);
 
 /* ---------------------------------------------------------------------------
+ * Workspace struct for mutex-free GEMM (caller-managed buffers)
+ * ---------------------------------------------------------------------------
+ * Allows concurrent DGEMM calls (e.g. DSTEDC recursion) without mutex
+ * serialisation.  Each workspace owns its own packed_A and packed_B buffers.
+ */
+typedef struct {
+    double  *packed_B;   /* KC * NC doubles, 64-byte aligned */
+    double  *packed_A;   /* n_threads * MC * KC doubles, 64-byte aligned */
+    int      n_threads;
+} jblas_workspace_t;
+
+int  jblas_workspace_alloc(jblas_workspace_t *ws, int n_threads);
+void jblas_workspace_free(jblas_workspace_t *ws);
+
+/* ---------------------------------------------------------------------------
+ * Accumulate GEMM: C = alpha * op(A) * op(B) + beta * C
+ * ---------------------------------------------------------------------------
+ * beta=0: zeroes C before accumulation (same as jblas_dgemm_c).
+ * beta=1: accumulates into existing C (for rank-k updates, DORMTR, etc.).
+ * alpha: scales the product; common values are 1.0 and -1.0.
+ *
+ * Uses the global mutex + global packed_A/B workspace.
+ */
+void jblas_dgemm_accum_c(npy_intp M, npy_intp N, npy_intp K,
+                          const double *A, npy_intp lda,
+                          const double *B, npy_intp ldb,
+                          double *C, npy_intp ldc,
+                          int transa, int transb,
+                          double alpha, double beta);
+
+/* ---------------------------------------------------------------------------
+ * Workspace-explicit GEMM: C = alpha * op(A) * op(B) + beta * C
+ * ---------------------------------------------------------------------------
+ * Same as jblas_dgemm_accum_c but uses a caller-owned workspace instead
+ * of the global packed_A/B + mutex.  No locking — safe for concurrent use
+ * (e.g. inside DSTEDC recursive D&C).
+ */
+void jblas_dgemm_ws(npy_intp M, npy_intp N, npy_intp K,
+                    const double *A, npy_intp lda,
+                    const double *B, npy_intp ldb,
+                    double *C, npy_intp ldc,
+                    int transa, int transb,
+                    double alpha, double beta,
+                    jblas_workspace_t *ws);
+
+/* ---------------------------------------------------------------------------
+ * Full-signature dispatch: external BLAS when available, jblas-own otherwise.
+ * ---------------------------------------------------------------------------
+ * These are the correct entry points for callers that need transpose flags,
+ * custom leading dimensions, or alpha/beta.  The simplified dispatch table
+ * (jblas_dispatch.dgemm) only handles the NN natural-stride case.
+ *
+ * Row-major convention: C(M x N) = alpha * op(A)(M x K) * op(B)(K x N) + beta * C
+ * transa/transb: 0 = no transpose, 1 = transpose.
+ */
+
+/* C = op(A) * op(B), zeroes C first.  Uses global workspace + mutex. */
+void jblas_dgemm_ext(npy_intp M, npy_intp N, npy_intp K,
+                     const double *A, npy_intp lda,
+                     const double *B, npy_intp ldb,
+                     double *C, npy_intp ldc,
+                     int transa, int transb);
+
+/* C = alpha * op(A) * op(B) + beta * C.  Uses caller-owned workspace (no mutex).
+ * Falls back to jblas_dgemm_ws when no external BLAS.  When external BLAS is
+ * active, ws is ignored (external BLAS manages its own threading/memory). */
+void jblas_dgemm_ext_ws(npy_intp M, npy_intp N, npy_intp K,
+                        const double *A, npy_intp lda,
+                        const double *B, npy_intp ldb,
+                        double *C, npy_intp ldc,
+                        int transa, int transb,
+                        double alpha, double beta,
+                        jblas_workspace_t *ws);
+
+/* ---------------------------------------------------------------------------
+ * Thread control API
+ * ---------------------------------------------------------------------------
+ * jblas_get_n_threads: returns current thread count.
+ * jblas_set_n_threads: sets thread count, clamped to init-time maximum
+ *   (prevents packed_A OOB access).  Returns previous count, or -1 on error.
+ */
+int  jblas_get_n_threads(void);
+int  jblas_set_n_threads(int n);
+
+/* ---------------------------------------------------------------------------
  * dsyrk and dsyr2k function declarations
  * ---------------------------------------------------------------------------
  */
@@ -182,6 +324,20 @@ void jblas_dsyrk_c(npy_intp N, npy_intp K,
                    double *C, npy_intp ldc);
 
 /**
+ * jblas_dsyrk_lower_c — Symmetric rank-k update: C = X @ X.T (lower only).
+ *
+ * Identical to jblas_dsyrk_c but:
+ *   1. Only zeroes the lower triangle of C (not the full matrix).
+ *   2. Skips the mirror step — upper triangle is NOT filled.
+ *
+ * Saves O(N^2) wasted writes for callers that only read the lower triangle
+ * (e.g. eigensolver-internal paths, kinship computation).
+ */
+void jblas_dsyrk_lower_c(npy_intp N, npy_intp K,
+                          const double *X, npy_intp ldx,
+                          double *C, npy_intp ldc);
+
+/**
  * jblas_dsyr2k_c — Symmetric rank-2k update: C -= A @ B.T + B @ A.T.
  *
  * Applies two half-product subtractions to all elements of C (full-matrix
@@ -201,6 +357,52 @@ void jblas_dsyr2k_c(npy_intp N, npy_intp K,
                     const double *A, npy_intp lda,
                     const double *B, npy_intp ldb,
                     double *C, npy_intp ldc);
+
+/* ---------------------------------------------------------------------------
+ * eigh status struct (populated during eigh, checked by py_eigh for warnings)
+ * ---------------------------------------------------------------------------
+ */
+typedef struct {
+    int dstedc_ws_fallback;      /* 1 if dstedc workspace alloc failed (global mutex path) */
+    int dsytrd_mirror_fallback;  /* 1 if dsytrd mirror buffer alloc failed (scalar dsymv) */
+    int secular_failures;        /* count of secular equation non-convergences */
+    int qr_fallback;             /* 1 if QR fallback was used */
+} jblas_eigh_status_t;
+
+/* ---------------------------------------------------------------------------
+ * eigh function declarations (LAPACK eigendecomposition)
+ * ---------------------------------------------------------------------------
+ */
+
+/**
+ * jblas_eigh_c — compute all eigenvalues and eigenvectors of symmetric K.
+ *
+ * K is N x N, row-major, lower triangle used. K is overwritten as scratch.
+ * eigenvalues: caller-allocated N doubles (ascending order on return).
+ * eigenvectors: caller-allocated N x N doubles, row-major. U[:,j] is the
+ *               eigenvector for eigenvalues[j].
+ * status: if non-NULL, populated with diagnostic flags (fallbacks, failures).
+ *
+ * Returns 0 on success, -1 on allocation failure, positive i if the
+ * D&C secular solver failed to converge for eigenvalue i.
+ */
+int jblas_eigh_c(npy_intp N,
+                 double *K, npy_intp ldk,
+                 double *eigenvalues,
+                 double *eigenvectors, npy_intp ldz,
+                 jblas_eigh_status_t *status);
+
+/* Internal LAPACK-layer functions (called by jblas_eigh_c, not Python-facing) */
+int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
+                   double *d, double *e, double *tau,
+                   jblas_eigh_status_t *status);
+int jblas_dstedc_c(npy_intp N, double *d, double *e,
+                   double *Z, npy_intp ldz,
+                   jblas_workspace_t *ws,
+                   jblas_eigh_status_t *status);
+int jblas_dormtr_c(npy_intp N, npy_intp M,
+                   const double *A, npy_intp lda, const double *tau,
+                   double *C, npy_intp ldc);
 
 /* ---------------------------------------------------------------------------
  * Initialisation and introspection

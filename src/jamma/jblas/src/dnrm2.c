@@ -52,7 +52,7 @@ double jblas_dnrm2_generic(
     double asml = 0.0;  /* sum of (x/sml_bound)^2 for |x| < sml_bound */
     double amed = 0.0;  /* sum of x^2 for sml_bound <= |x| <= big_bound */
     double abig = 0.0;  /* sum of (x/big_bound)^2 for |x| > big_bound */
-    int n_sml = 0, n_med = 0, n_big = 0;
+    npy_intp n_sml = 0, n_med = 0, n_big = 0;
 
     for (npy_intp i = 0; i < n; i++) {
         double ax = fabs(x[i * incx]);

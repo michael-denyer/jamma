@@ -156,11 +156,6 @@ int jblas_dgemm_init(void) {
         return -1;
     }
 
-    /* Redundant with the file-scope initializer of jblas_dgemm_microkernel
-     * above — kept for defensive clarity.  platform.c overwrites with the
-     * ISA-specific microkernel after this returns. */
-    jblas_dgemm_microkernel = jblas_dgemm_micro_generic;
-
     return 0;
 }
 
@@ -288,61 +283,54 @@ void jblas_pack_B(const double *B, npy_intp ldb,
 }
 
 /* ---------------------------------------------------------------------------
- * jblas_dgemm_c — Three-level blocking DGEMM.
+ * _dgemm_core — Shared implementation for all GEMM variants.
  *
- * Computes C = op(A) * op(B) where:
- *   op(A) is M x K,  op(B) is K x N,  C is M x N.
- *   transa=0: op(A)=A, transa=1: op(A)=A^T
- *   transb=0: op(B)=B, transb=1: op(B)=B^T
+ * Computes C = alpha * op(A) * op(B) + beta * C using three-level blocking.
  *
- * All arrays are row-major.  lda, ldb, ldc are leading dimensions (column
- * count of the physical stored matrix, regardless of transpose).
+ * Parameters:
+ *   M, N, K, A, lda, B, ldb, C, ldc, transa, transb — standard GEMM args.
+ *   alpha  — scalar multiplier for the product (applied during A packing).
+ *   beta   — scalar multiplier for C before accumulation.
+ *            beta=0: C is zeroed. beta=1: C is left untouched. Other: C *= beta.
+ *   packed_A_base — pre-allocated packing workspace for A (n_threads * MC * KC).
+ *   packed_B_buf  — pre-allocated packing workspace for B (KC * NC).
+ *   n_threads     — number of threads to use (determines packed_A slicing).
  *
- * Note: The physical dimensions of A in memory are:
- *   transa=0: A is M x K (lda >= K)
- *   transa=1: A is K x M (lda >= M)
- * And for B:
- *   transb=0: B is K x N (ldb >= N)
- *   transb=1: B is N x K (ldb >= K)
+ * Caller is responsible for providing valid workspace pointers and any
+ * mutex serialisation.
  * ---------------------------------------------------------------------------
  */
-void jblas_dgemm_c(npy_intp M, npy_intp N, npy_intp K,
-                   const double *A, npy_intp lda,
-                   const double *B, npy_intp ldb,
-                   double *C, npy_intp ldc,
-                   int transa, int transb)
+static void _dgemm_core(npy_intp M, npy_intp N, npy_intp K,
+                         const double *A, npy_intp lda,
+                         const double *B, npy_intp ldb,
+                         double *C, npy_intp ldc,
+                         int transa, int transb,
+                         double alpha, double beta,
+                         double *packed_A_base, double *packed_B_buf,
+                         int n_threads)
 {
-    /* Zero-initialize C first so every early-return path leaves C zeroed,
-     * not full of garbage.  Negative M/N are rejected below, but a negative
-     * M with positive ldc would be an overrun — guard that first. */
+    /* Negative dimensions are a programming error */
     if (M < 0 || N < 0 || K < 0) {
-        fprintf(stderr, "FATAL: jblas_dgemm_c: negative dimension M=%ld N=%ld K=%ld\n",
+        fprintf(stderr, "FATAL: _dgemm_core: negative dimension M=%ld N=%ld K=%ld\n",
                 (long)M, (long)N, (long)K);
-        abort();  /* programming error — unreachable from Python API */
+        abort();
     }
 
-    /* Zero-initialize C */
-    for (npy_intp i = 0; i < M; i++) {
-        memset(C + i * ldc, 0, (size_t)N * sizeof(double));
+    /* Apply beta to C before accumulation */
+    if (beta == 0.0) {
+        for (npy_intp i = 0; i < M; i++) {
+            memset(C + i * ldc, 0, (size_t)N * sizeof(double));
+        }
+    } else if (beta != 1.0) {
+        for (npy_intp i = 0; i < M; i++) {
+            for (npy_intp j = 0; j < N; j++) {
+                C[i * ldc + j] *= beta;
+            }
+        }
     }
 
     if (M == 0 || N == 0 || K == 0)
         return;
-
-    if (!jblas_packed_A || !jblas_packed_B) {
-        fprintf(stderr,
-            "FATAL: jblas_dgemm_c called but workspace not allocated "
-            "(jblas_dgemm_init() failed or was never called)\n");
-        abort();  /* programming error — py_dgemm guards this; C callers must too */
-    }
-
-    int lock_err = pthread_mutex_lock(&jblas_dgemm_mutex);
-    if (lock_err != 0) {
-        fprintf(stderr,
-            "FATAL: jblas_dgemm_c: pthread_mutex_lock failed (errno=%d)\n",
-            lock_err);
-        abort();
-    }
 
     int MR = JBLAS_MR;
     int NR = JBLAS_NR;
@@ -358,46 +346,53 @@ void jblas_dgemm_c(npy_intp M, npy_intp N, npy_intp K,
         for (npy_intp pc = 0; pc < K; pc += KC) {
             npy_intp kc_actual = MIN(KC, K - pc);
 
-            /* Pack B panel: kc_actual x nr_actual → jblas_packed_B
-             * B pointer offset depends on transpose:
-             *   transb=0: B physical row pc, column jc → B + pc*ldb + jc
-             *   transb=1: B physical row jc, column pc → B + jc*ldb + pc */
+            /* Pack B panel: kc_actual x nr_actual → packed_B_buf */
             const double *B_panel = transb ? (B + jc * ldb + pc)
                                            : (B + pc * ldb + jc);
             jblas_pack_B(B_panel, ldb, kc_actual, nr_actual,
-                         jblas_packed_B, NR, transb);
+                         packed_B_buf, NR, transb);
 
-            /* Inner loop: partition M into MC-tall row panels (OpenMP parallel).
-             * Clamp to jblas_n_threads to prevent OOB packed_A access if
-             * omp_set_num_threads() was called after jblas_dgemm_init(). */
+            /* Inner loop: partition M into MC-tall row panels (OpenMP parallel) */
 #ifdef _OPENMP
-            #pragma omp parallel for schedule(static) num_threads(jblas_n_threads)
+            #pragma omp parallel for schedule(static) num_threads(n_threads)
 #endif
             for (npy_intp ic = 0; ic < M; ic += MC) {
                 npy_intp mc_actual = MIN(MC, M - ic);
 
 #ifdef _OPENMP
                 int tid = omp_get_thread_num();
-                if (tid >= jblas_n_threads) {
+                if (tid >= n_threads) {
                     fprintf(stderr,
                         "FATAL: OpenMP thread %d exceeds allocated workspace "
-                        "for %d threads\n", tid, jblas_n_threads);
+                        "for %d threads\n", tid, n_threads);
                     abort();
                 }
 #else
                 int tid = 0;
 #endif
-                double *packed_A_ptr = jblas_packed_A +
+                double *packed_A_ptr = packed_A_base +
                     (size_t)tid * (size_t)MC * (size_t)KC;
 
-                /* Pack A panel: mc_actual x kc_actual → packed_A_ptr
-                 * A pointer offset depends on transpose:
-                 *   transa=0: A physical row ic, column pc → A + ic*lda + pc
-                 *   transa=1: A physical row pc, column ic → A + pc*lda + ic */
+                /* Pack A panel with alpha scaling */
                 const double *A_panel = transa ? (A + pc * lda + ic)
                                                : (A + ic * lda + pc);
                 jblas_pack_A(A_panel, lda, mc_actual, kc_actual,
                              packed_A_ptr, MR, transa);
+
+                /* Apply alpha during packing: scale packed_A by alpha.
+                 * For alpha=1.0 (common case), skip entirely.
+                 * This avoids touching the hot microkernel loop. */
+                if (alpha != 1.0) {
+                    npy_intp n_strips = CEIL_DIV(mc_actual, MR);
+                    npy_intp pack_size = n_strips * (npy_intp)MR * kc_actual;
+                    if (alpha == -1.0) {
+                        for (npy_intp i = 0; i < pack_size; i++)
+                            packed_A_ptr[i] = -packed_A_ptr[i];
+                    } else {
+                        for (npy_intp i = 0; i < pack_size; i++)
+                            packed_A_ptr[i] *= alpha;
+                    }
+                }
 
                 /* Microkernel loop: MR x NR tiles within mc_actual x nr_actual */
                 npy_intp n_mr_strips = CEIL_DIV(mc_actual, MR);
@@ -407,34 +402,28 @@ void jblas_dgemm_c(npy_intp M, npy_intp N, npy_intp K,
                     npy_intp jr      = jr_s * NR;
                     npy_intp nr_tile = MIN(NR, nr_actual - jr);
 
-                    /* Pointer into packed B for this NR strip */
-                    const double *pB_strip = jblas_packed_B +
+                    const double *pB_strip = packed_B_buf +
                         (size_t)jr_s * (size_t)kc_actual * (size_t)NR;
 
                     for (npy_intp ir_s = 0; ir_s < n_mr_strips; ir_s++) {
                         npy_intp ir      = ir_s * MR;
                         npy_intp mr_tile = MIN(MR, mc_actual - ir);
 
-                        /* Pointer into packed A for this MR strip */
                         const double *pA_strip = packed_A_ptr +
                             (size_t)ir_s * (size_t)kc_actual * (size_t)MR;
 
-                        /* Target C tile: C[ic+ir, jc+jr] */
                         double *C_tile = C + (ic + ir) * ldc + (jc + jr);
 
                         if (mr_tile == MR && nr_tile == NR) {
-                            /* Full tile: microkernel writes directly to C */
                             jblas_dgemm_microkernel(kc_actual, pA_strip, pB_strip,
                                                     C_tile, ldc);
                         } else {
-                            /* Tail tile: accumulate into scratch, add valid portion to C */
                             double scratch[MAX_MR * MAX_NR];
                             memset(scratch, 0, sizeof(scratch));
 
                             jblas_dgemm_microkernel(kc_actual, pA_strip, pB_strip,
                                                     scratch, NR);
 
-                            /* Copy valid mr_tile x nr_tile subblock from scratch to C */
                             for (npy_intp r = 0; r < mr_tile; r++) {
                                 for (npy_intp c = 0; c < nr_tile; c++) {
                                     C_tile[r * ldc + c] += scratch[r * NR + c];
@@ -446,6 +435,38 @@ void jblas_dgemm_c(npy_intp M, npy_intp N, npy_intp K,
             }
         }
     }
+}
+
+/* ---------------------------------------------------------------------------
+ * jblas_dgemm_c — Three-level blocking DGEMM: C = op(A) * op(B).
+ *
+ * Zeroes C, then accumulates product.  Uses global mutex + workspace.
+ * ---------------------------------------------------------------------------
+ */
+void jblas_dgemm_c(npy_intp M, npy_intp N, npy_intp K,
+                   const double *A, npy_intp lda,
+                   const double *B, npy_intp ldb,
+                   double *C, npy_intp ldc,
+                   int transa, int transb)
+{
+    if (!jblas_packed_A || !jblas_packed_B) {
+        fprintf(stderr,
+            "FATAL: jblas_dgemm_c called but workspace not allocated "
+            "(jblas_dgemm_init() failed or was never called)\n");
+        abort();
+    }
+
+    int lock_err = pthread_mutex_lock(&jblas_dgemm_mutex);
+    if (lock_err != 0) {
+        fprintf(stderr,
+            "FATAL: jblas_dgemm_c: pthread_mutex_lock failed (errno=%d)\n",
+            lock_err);
+        abort();
+    }
+
+    _dgemm_core(M, N, K, A, lda, B, ldb, C, ldc,
+                transa, transb, 1.0, 0.0,
+                jblas_packed_A, jblas_packed_B, jblas_n_threads);
 
     int unlock_err = pthread_mutex_unlock(&jblas_dgemm_mutex);
     if (unlock_err != 0) {
@@ -457,14 +478,128 @@ void jblas_dgemm_c(npy_intp M, npy_intp N, npy_intp K,
 }
 
 /* ---------------------------------------------------------------------------
+ * jblas_dgemm_accum_c — Accumulate GEMM: C = alpha * op(A) * op(B) + beta * C.
+ *
+ * Uses global mutex + workspace.
+ * ---------------------------------------------------------------------------
+ */
+void jblas_dgemm_accum_c(npy_intp M, npy_intp N, npy_intp K,
+                          const double *A, npy_intp lda,
+                          const double *B, npy_intp ldb,
+                          double *C, npy_intp ldc,
+                          int transa, int transb,
+                          double alpha, double beta)
+{
+    if (!jblas_packed_A || !jblas_packed_B) {
+        fprintf(stderr,
+            "FATAL: jblas_dgemm_accum_c called but workspace not allocated\n");
+        abort();
+    }
+
+    int lock_err = pthread_mutex_lock(&jblas_dgemm_mutex);
+    if (lock_err != 0) {
+        fprintf(stderr,
+            "FATAL: jblas_dgemm_accum_c: pthread_mutex_lock failed (errno=%d)\n",
+            lock_err);
+        abort();
+    }
+
+    _dgemm_core(M, N, K, A, lda, B, ldb, C, ldc,
+                transa, transb, alpha, beta,
+                jblas_packed_A, jblas_packed_B, jblas_n_threads);
+
+    int unlock_err = pthread_mutex_unlock(&jblas_dgemm_mutex);
+    if (unlock_err != 0) {
+        fprintf(stderr,
+            "FATAL: jblas_dgemm_accum_c: pthread_mutex_unlock failed (errno=%d)\n",
+            unlock_err);
+        abort();
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * jblas_dgemm_ws — Workspace-explicit GEMM (no mutex).
+ *
+ * C = alpha * op(A) * op(B) + beta * C using caller-owned workspace.
+ * ---------------------------------------------------------------------------
+ */
+void jblas_dgemm_ws(npy_intp M, npy_intp N, npy_intp K,
+                    const double *A, npy_intp lda,
+                    const double *B, npy_intp ldb,
+                    double *C, npy_intp ldc,
+                    int transa, int transb,
+                    double alpha, double beta,
+                    jblas_workspace_t *ws)
+{
+    if (!ws || !ws->packed_A || !ws->packed_B) {
+        fprintf(stderr,
+            "FATAL: jblas_dgemm_ws called with NULL workspace\n");
+        abort();
+    }
+
+    _dgemm_core(M, N, K, A, lda, B, ldb, C, ldc,
+                transa, transb, alpha, beta,
+                ws->packed_A, ws->packed_B, ws->n_threads);
+}
+
+/* ---------------------------------------------------------------------------
+ * jblas_workspace_alloc — Allocate a caller-managed GEMM workspace.
+ *
+ * Allocates packed_B (KC * NC doubles, 64-byte aligned) and packed_A
+ * (n_threads * MC * KC doubles, 64-byte aligned).
+ *
+ * Returns 0 on success, -1 on allocation failure.
+ * ---------------------------------------------------------------------------
+ */
+int jblas_workspace_alloc(jblas_workspace_t *ws, int n_threads) {
+    if (!ws || n_threads < 1) return -1;
+
+    ws->n_threads = n_threads;
+
+    size_t b_bytes = ALIGN_UP(
+        (size_t)JBLAS_KC * (size_t)JBLAS_NC * sizeof(double), 64);
+    ws->packed_B = (double *)aligned_alloc(64, b_bytes);
+    if (!ws->packed_B) {
+        ws->packed_A = NULL;
+        ws->n_threads = 0;
+        return -1;
+    }
+
+    size_t a_bytes = ALIGN_UP(
+        (size_t)n_threads * (size_t)JBLAS_MC * (size_t)JBLAS_KC * sizeof(double), 64);
+    ws->packed_A = (double *)aligned_alloc(64, a_bytes);
+    if (!ws->packed_A) {
+        free(ws->packed_B);
+        ws->packed_B = NULL;
+        ws->n_threads = 0;
+        return -1;
+    }
+
+    return 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * jblas_workspace_free — Free workspace buffers and zero the struct.
+ * ---------------------------------------------------------------------------
+ */
+void jblas_workspace_free(jblas_workspace_t *ws) {
+    if (!ws) return;
+    free(ws->packed_A);
+    free(ws->packed_B);
+    ws->packed_A = NULL;
+    ws->packed_B = NULL;
+    ws->n_threads = 0;
+}
+
+/* ---------------------------------------------------------------------------
  * _dgemm_dispatch — Simplified no-transpose wrapper matching jblas_dgemm_fn
  * signature for the dispatch table (jblas_dispatch.dgemm).
  *
  * Assumes row-major layout with natural leading dimensions (lda=K, ldb=N,
  * ldc=N).  Always passes transa=transb=0 (no transpose).
  *
- * Note: py_dgemm bypasses this wrapper and calls jblas_dgemm_c directly
- * with the caller's transpose flags and physical leading dimensions.
+ * Note: py_dgemm and dstedc use jblas_dgemm_ext() / jblas_dgemm_ext_ws()
+ * which route to external BLAS when available, falling back to jblas_dgemm_c.
  * ---------------------------------------------------------------------------
  */
 static void _dgemm_dispatch(npy_intp m, npy_intp n, npy_intp k,

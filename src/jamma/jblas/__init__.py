@@ -2,8 +2,9 @@
 
 Provides Level 1/2 BLAS primitives (ddot, dnrm2, daxpy, dscal, dgemv) and
 Level 3 BLAS (dgemm — C implementation with AVX2/NEON microkernels, dsyrk and
-dsyr2k for symmetric rank-k updates) via a C extension when available, falling
-back to NumPy when the C extension has not been compiled.
+dsyr2k for symmetric rank-k updates) plus LAPACK eigendecomposition (eigh) via
+a C extension when available, falling back to NumPy when the C extension has
+not been compiled.
 
 Exports:
     ddot: Inner product of two double vectors.
@@ -14,6 +15,7 @@ Exports:
     dgemm: Matrix-matrix product op(A) @ op(B) with optional transpose support.
     dsyrk: Symmetric rank-k update K = X @ X.T.
     dsyr2k: Symmetric rank-2k update C -= A @ B.T + B @ A.T.
+    eigh: Eigenvalues and eigenvectors of a symmetric matrix (DSYTRD + DSTEDC + DORMTR).
     jblas_isa: String identifying the active ISA ("AVX2", "NEON", "generic",
         or "numpy-fallback").
     ABI_VERSION: Integer ABI version (0 when using NumPy fallback).
@@ -42,6 +44,8 @@ try:
         JBLAS_MR,
         JBLAS_NC,
         JBLAS_NR,
+        blas_backend,
+        blas_is_ilp64,
         daxpy,
         ddot,
         dgemm,
@@ -50,7 +54,10 @@ try:
         dscal,
         dsyr2k,
         dsyrk,
+        eigh,
+        get_n_threads,
         jblas_isa,
+        set_n_threads,
     )
 
     HAS_C_EXTENSION: bool = True
@@ -77,6 +84,8 @@ except ImportError as _exc:
     HAS_C_EXTENSION = False
     HAS_OPENMP: bool = False
     jblas_isa: str = "numpy-fallback"
+    blas_backend: str = "numpy-fallback"
+    blas_is_ilp64: int = 0
 
     # Blocking parameters: generic defaults (matches jblas generic ISA).
     # Tests that import these should guard on HAS_C_EXTENSION.
@@ -258,10 +267,10 @@ except ImportError as _exc:
         """Compute symmetric rank-k update: K = X @ X.T.
 
         Computes the full symmetric matrix K = X @ X.T, filling both
-        lower and upper triangles.  Uses the lower-triangle-only tile
-        computation path in the C extension for efficiency (saves ~50%
-        tile iterations vs dgemm).  This NumPy fallback computes the
-        full product directly.
+        lower and upper triangles.  The C extension uses a lower-triangle-only
+        tile computation path for efficiency (saves ~50% tile iterations vs
+        dgemm); this NumPy fallback computes the full product directly via
+        np.dot.
 
         Args:
             X: Input matrix, shape (N, K), float64.
@@ -328,9 +337,71 @@ except ImportError as _exc:
         C64 -= B64 @ A64.T
         return C64
 
+    def eigh(K: _np.ndarray) -> tuple[_np.ndarray, _np.ndarray]:
+        """Compute eigenvalues and eigenvectors of a symmetric matrix.
+
+        Args:
+            K: Symmetric matrix, shape (N, N), float64. Overwritten as scratch.
+
+        Returns:
+            Tuple of (eigenvalues, eigenvectors) where eigenvalues is shape (N,)
+            ascending, eigenvectors is shape (N, N) with columns as unit eigenvectors.
+
+        Raises:
+            ValueError: If K is not 2-D square float64.
+            RuntimeError: If convergence fails.
+            MemoryError: If workspace allocation fails (C extension).
+        """
+        if K.ndim != 2:
+            raise ValueError(f"eigh: K must be a 2-D array, got {K.ndim}-D")
+        if K.shape[0] != K.shape[1]:
+            raise ValueError(f"eigh: K must be square, got shape {K.shape}")
+        K64 = _np.asarray(K, dtype=_np.float64)
+        try:
+            w, v = _np.linalg.eigh(K64)
+        except _np.linalg.LinAlgError as exc:
+            raise RuntimeError(f"jblas eigh (numpy fallback): {exc}") from exc
+        # Match C extension contract: K is overwritten as scratch.
+        # The C extension uses K for Householder vectors during dsytrd;
+        # the content is not meaningful to callers.
+        if K.dtype == _np.float64 and K.flags["WRITEABLE"]:
+            K[:] = 0.0
+        return w, v
+
+    import os as _os
+
+    # Mutable container for fallback thread state (closures can't rebind
+    # names in enclosing except-block scope, but can mutate a list).
+    _fallback_thread_state = [_os.cpu_count() or 1]
+
+    def get_n_threads() -> int:
+        """Get current jblas thread count (fallback: os.cpu_count())."""
+        return _fallback_thread_state[0]
+
+    def set_n_threads(n: int) -> int:
+        """Set jblas thread count (fallback: clamped to os.cpu_count()).
+
+        Args:
+            n: Desired thread count (must be >= 1).
+
+        Returns:
+            Previous thread count.
+
+        Raises:
+            ValueError: If n < 1.
+        """
+        if n < 1:
+            raise ValueError("set_n_threads: n must be >= 1")
+        old = _fallback_thread_state[0]
+        max_threads = _os.cpu_count() or 1
+        _fallback_thread_state[0] = min(n, max_threads)
+        return old
+
 
 __all__ = [
     "ABI_VERSION",
+    "blas_backend",
+    "blas_is_ilp64",
     "ddot",
     "dnrm2",
     "daxpy",
@@ -339,6 +410,9 @@ __all__ = [
     "dgemm",
     "dsyrk",
     "dsyr2k",
+    "eigh",
+    "get_n_threads",
+    "set_n_threads",
     "jblas_isa",
     "HAS_C_EXTENSION",
     "HAS_OPENMP",

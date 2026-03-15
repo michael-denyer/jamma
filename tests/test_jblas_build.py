@@ -128,9 +128,21 @@ def test_all_exports_present():
         "dscal",
         "dgemv",
         "dgemm",
+        "dsyrk",
+        "dsyr2k",
+        "eigh",
+        "get_n_threads",
+        "set_n_threads",
+        "blas_backend",
+        "blas_is_ilp64",
         "jblas_isa",
         "HAS_C_EXTENSION",
         "HAS_OPENMP",
+        "JBLAS_MR",
+        "JBLAS_NR",
+        "JBLAS_KC",
+        "JBLAS_MC",
+        "JBLAS_NC",
     }
     missing = expected - set(jblas.__all__)
     assert not missing, f"Missing exports: {missing}"
@@ -138,10 +150,10 @@ def test_all_exports_present():
 
 @pytest.mark.tier0
 def test_abi_version():
-    """ABI_VERSION is 2 (bumped for dgemm microkernel typedef and blocking params)."""
+    """ABI_VERSION is 6 (bumped for blas_dispatch, blas_is_ilp64)."""
     from jamma.jblas import ABI_VERSION
 
-    assert ABI_VERSION == 2, f"Expected ABI_VERSION=2, got {ABI_VERSION}"
+    assert ABI_VERSION == 6, f"Expected ABI_VERSION=6, got {ABI_VERSION}"
 
 
 @pytest.mark.tier0

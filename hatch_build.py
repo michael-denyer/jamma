@@ -22,9 +22,21 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
+import urllib.request
 from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
+
+# BLIS prebuilt binary repository and asset naming convention.
+# The BLIS repo ships multi-config binaries (e.g. haswell+skx for x86_64).
+BLIS_REPO = "michael-denyer/blis-prebuilt"
+BLIS_VERSION = "v0.1.0"
+BLIS_ASSETS = {
+    ("Linux", "x86_64"): "libblis-x86_64.so",  # intel64 multi-config
+    ("Linux", "AMD64"): "libblis-x86_64.so",  # alias
+    ("Darwin", "arm64"): "libblis-firestorm.dylib",  # Apple Silicon
+    ("Darwin", "x86_64"): "libblis-haswell.dylib",  # Intel Mac
+}
 
 
 class CustomBuildHook(BuildHookInterface):
@@ -128,6 +140,128 @@ class CustomBuildHook(BuildHookInterface):
             ldflags = ["-undefined", "dynamic_lookup"]
 
         return (cc_cmd, cc_extra, python_inc, numpy_inc, ldflags)
+
+    def _fetch_blis_binary(self, build_data) -> Path | None:
+        """Fetch a prebuilt BLIS shared library from GitHub Release assets.
+
+        Checks for a pre-downloaded binary via JBLAS_BLIS_PATH env var first,
+        then attempts to download from the BLIS prebuilt repo. Returns None
+        (non-fatal) if the binary cannot be obtained.
+
+        Args:
+            build_data: Hatchling build data dict (unused, kept for API symmetry).
+
+        Returns:
+            Path to the BLIS binary, or None if unavailable.
+        """
+        # Allow CI to provide a pre-downloaded binary
+        env_path = os.environ.get("JBLAS_BLIS_PATH")
+        if env_path:
+            blis = Path(env_path)
+            if blis.is_file():
+                print(f"Using pre-downloaded BLIS: {blis}", file=sys.stderr)
+                return blis
+            print(
+                f"WARNING: JBLAS_BLIS_PATH={env_path} does not exist — "
+                "falling back to download.",
+                file=sys.stderr,
+            )
+
+        key = (platform.system(), platform.machine())
+        asset_name = BLIS_ASSETS.get(key)
+        if asset_name is None:
+            print(
+                f"WARNING: No BLIS binary available for platform {key} — "
+                "jblas own dgemm will be used.",
+                file=sys.stderr,
+            )
+            return None
+
+        libs_dir = Path(self.root) / "src" / "jamma" / "jblas" / "libs"
+        target = libs_dir / asset_name
+
+        # Skip download if already present (repeated builds)
+        if target.is_file():
+            print(f"BLIS binary already present: {target}", file=sys.stderr)
+            return target
+
+        url = (
+            f"https://github.com/{BLIS_REPO}/releases/download/"
+            f"{BLIS_VERSION}/{asset_name}"
+        )
+        libs_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            print(f"Downloading BLIS from {url} ...", file=sys.stderr)
+            urllib.request.urlretrieve(url, target)
+            print(f"BLIS downloaded: {target}", file=sys.stderr)
+            return target
+        except Exception as exc:
+            print(
+                f"WARNING: BLIS download failed ({exc}) — "
+                "jblas own dgemm will be used.",
+                file=sys.stderr,
+            )
+            # Clean up partial download
+            if target.exists():
+                target.unlink()
+            return None
+
+    def _bundle_blis(self, build_data) -> None:
+        """Fetch and bundle BLIS shared library into the wheel.
+
+        On macOS, sets @loader_path install_name to prevent delocate from
+        moving the dylib to .dylibs/ (which would break blas_dispatch.c's
+        dlopen path).
+
+        Args:
+            build_data: Hatchling build data dict. Updated with force_include
+                if BLIS binary is available.
+        """
+        blis_path = self._fetch_blis_binary(build_data)
+        if blis_path is None:
+            print(
+                "BLIS not bundled (jblas own dgemm will be used).",
+                file=sys.stderr,
+            )
+            return
+
+        # macOS: set @loader_path install_name so delocate leaves it in place.
+        # blas_dispatch.c expects BLIS at <extension_dir>/libs/libblis.dylib.
+        if platform.system() == "Darwin" and blis_path.suffix == ".dylib":
+            install_name = "@loader_path/libs/libblis.dylib"
+            try:
+                subprocess.run(
+                    ["install_name_tool", "-id", install_name, str(blis_path)],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                print(
+                    f"Set BLIS install_name to {install_name}",
+                    file=sys.stderr,
+                )
+            except Exception as exc:
+                print(
+                    f"WARNING: install_name_tool failed ({exc}) — "
+                    "delocate may move the dylib.",
+                    file=sys.stderr,
+                )
+
+        # Register BLIS binary for wheel inclusion.
+        # Use generic name (libblis.so / libblis.dylib) so that
+        # blas_dispatch.c's discover_bundled_blis() can find it at runtime
+        # regardless of the platform-specific asset name.
+        build_data.setdefault("force_include", {})
+        generic_name = (
+            "libblis.dylib" if platform.system() == "Darwin" else "libblis.so"
+        )
+        dist_path = f"jamma/jblas/libs/{generic_name}"
+        build_data["force_include"][str(blis_path)] = dist_path
+        print(
+            f"BLIS bundled: {blis_path} -> {dist_path}",
+            file=sys.stderr,
+        )
 
     def _detect_linux_openmp_flags(self, cc_cmd: str) -> list[str]:
         """Detect the best OpenMP flags for Linux.
@@ -546,6 +680,7 @@ class CustomBuildHook(BuildHookInterface):
         # selects the appropriate kernels.
         baseline_sources = [
             jblas_src / "platform.c",
+            jblas_src / "blas_dispatch.c",
             jblas_src / "dnrm2.c",
             jblas_src / "dgemv.c",
             jblas_src / "pymodule.c",
@@ -558,6 +693,15 @@ class CustomBuildHook(BuildHookInterface):
             jblas_src / "ddot.c",
             jblas_src / "daxpy.c",
             jblas_src / "dscal.c",
+        ]
+        # LAPACK sources: strict IEEE 754 required for secular equation deflation.
+        # Compiled with -O2 only — MUST NOT get -ffast-math, -Ofast,
+        # -ffinite-math-only, or -funroll-loops.
+        lapack_sources = [
+            jblas_src / "dsytrd.c",
+            jblas_src / "dstedc.c",
+            jblas_src / "dormtr.c",
+            jblas_src / "eigh.c",
         ]
 
         # Kernel directory — required on the matching platform, optional elsewhere.
@@ -584,11 +728,19 @@ class CustomBuildHook(BuildHookInterface):
                 )
 
         source_files = (
-            baseline_sources + simd_sources + avx2_kernel_sources + neon_kernel_sources
+            baseline_sources
+            + simd_sources
+            + avx2_kernel_sources
+            + neon_kernel_sources
+            + lapack_sources
         )
 
-        # Only fail on missing baseline + simd sources; kernel files checked above
-        missing = [s for s in (baseline_sources + simd_sources) if not s.exists()]
+        # Only fail on missing baseline + simd + lapack sources; kernels checked above
+        missing = [
+            s
+            for s in (baseline_sources + simd_sources + lapack_sources)
+            if not s.exists()
+        ]
         if missing:
             print(
                 f"WARNING: jblas source files missing: {missing} — "
@@ -677,29 +829,53 @@ class CustomBuildHook(BuildHookInterface):
 
         simd_source_set = set(str(s) for s in simd_sources)
         avx2_kernel_set = set(str(s) for s in avx2_kernel_sources)
+        lapack_source_set = set(str(s) for s in lapack_sources)
 
         try:
             for src in source_files:
                 obj_file = tmp_dir / (src.stem + ".o")
-                # SIMD sources (ddot, daxpy, dscal) and AVX2 kernel files get
-                # -mavx2 -mfma; NEON kernel files get no extra flags (NEON is
-                # baseline on aarch64); baseline sources get no SIMD flags.
-                extra_simd = (
-                    simd_flags
-                    if (str(src) in simd_source_set or str(src) in avx2_kernel_set)
-                    else []
-                )
-                cmd_compile = [
-                    cc_cmd,
-                    *cc_extra,
-                    *base_cflags,
-                    *extra_simd,
-                    *omp_compile,
-                    "-c",
-                    str(src),
-                    "-o",
-                    str(obj_file),
-                ]
+                if str(src) in lapack_source_set:
+                    # LAPACK: strict IEEE 754 — override base_cflags optimization.
+                    # Remove -O3, -funroll-loops, -ftree-vectorize from base flags.
+                    # Exclude extra_cflags (env var like CFLAGS=-Ofast would
+                    # reintroduce -ffast-math). Use only -O2 -fPIC -std=c11 + includes.
+                    cmd_compile = [
+                        cc_cmd,
+                        *cc_extra,
+                        "-O2",
+                        "-fno-fast-math",
+                        "-fno-finite-math-only",
+                        "-fPIC",
+                        "-std=c11",
+                        f"-I{python_inc}",
+                        f"-I{numpy_inc}",
+                        f"-I{jblas_inc}",
+                        *omp_compile,
+                        "-c",
+                        str(src),
+                        "-o",
+                        str(obj_file),
+                    ]
+                else:
+                    # SIMD sources (ddot, daxpy, dscal) and AVX2 kernel files get
+                    # -mavx2 -mfma; NEON kernel files get no extra flags (NEON is
+                    # baseline on aarch64); baseline sources get no SIMD flags.
+                    extra_simd = (
+                        simd_flags
+                        if (str(src) in simd_source_set or str(src) in avx2_kernel_set)
+                        else []
+                    )
+                    cmd_compile = [
+                        cc_cmd,
+                        *cc_extra,
+                        *base_cflags,
+                        *extra_simd,
+                        *omp_compile,
+                        "-c",
+                        str(src),
+                        "-o",
+                        str(obj_file),
+                    ]
                 # Print compile command to stderr for build-log assertions (CI grep)
                 print(f"jblas compile: {' '.join(cmd_compile)}", file=sys.stderr)
                 result = subprocess.run(cmd_compile, capture_output=True, text=True)
@@ -724,21 +900,42 @@ class CustomBuildHook(BuildHookInterface):
                 compile_failed = False
                 for src in source_files:
                     obj_file = tmp_dir / (src.stem + "_noomp.o")
-                    extra_simd = (
-                        simd_flags
-                        if (str(src) in simd_source_set or str(src) in avx2_kernel_set)
-                        else []
-                    )
-                    cmd_compile = [
-                        cc_cmd,
-                        *cc_extra,
-                        *base_cflags,
-                        *extra_simd,
-                        "-c",
-                        str(src),
-                        "-o",
-                        str(obj_file),
-                    ]
+                    if str(src) in lapack_source_set:
+                        cmd_compile = [
+                            cc_cmd,
+                            *cc_extra,
+                            "-O2",
+                            "-fno-fast-math",
+                            "-fno-finite-math-only",
+                            "-fPIC",
+                            "-std=c11",
+                            f"-I{python_inc}",
+                            f"-I{numpy_inc}",
+                            f"-I{jblas_inc}",
+                            "-c",
+                            str(src),
+                            "-o",
+                            str(obj_file),
+                        ]
+                    else:
+                        extra_simd = (
+                            simd_flags
+                            if (
+                                str(src) in simd_source_set
+                                or str(src) in avx2_kernel_set
+                            )
+                            else []
+                        )
+                        cmd_compile = [
+                            cc_cmd,
+                            *cc_extra,
+                            *base_cflags,
+                            *extra_simd,
+                            "-c",
+                            str(src),
+                            "-o",
+                            str(obj_file),
+                        ]
                     print(
                         f"jblas compile (no OMP): {' '.join(cmd_compile)}",
                         file=sys.stderr,
@@ -765,6 +962,9 @@ class CustomBuildHook(BuildHookInterface):
                 )
                 return
 
+            # dlopen/dlsym in blas_dispatch.c needs -ldl on Linux
+            dl_flags = ["-ldl"] if platform.system() == "Linux" else []
+
             # Link all object files into the shared library
             cmd_link = [
                 cc_cmd,
@@ -775,6 +975,7 @@ class CustomBuildHook(BuildHookInterface):
                 "-o",
                 str(out_path),
                 "-lm",
+                *dl_flags,
                 *omp_flags,
                 *ldflags,
             ]
@@ -801,3 +1002,6 @@ class CustomBuildHook(BuildHookInterface):
         build_data["force_include"][str(out_path)] = f"jamma/jblas/{out_name}"
         build_data["pure_python"] = False
         build_data["infer_tag"] = True
+
+        # Bundle BLIS shared library (independent of jblas .so compilation)
+        self._bundle_blis(build_data)

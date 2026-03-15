@@ -28,6 +28,10 @@ static int _initialized = 0;
 /* Active ISA name — set during jblas_init() */
 static const char *_isa_name = "generic";
 
+/* Maximum thread count from init time — jblas_set_n_threads clamps to this
+ * to prevent packed_A OOB access (Pitfall 5). */
+static int _init_max_threads = 0;
+
 /* ---------------------------------------------------------------------------
  * x86_64 AVX2 detection
  * ---------------------------------------------------------------------------
@@ -207,6 +211,14 @@ int jblas_init(void) {
     /* Wire blocking dispatch wrapper into the dispatch table */
     jblas_dispatch.dgemm = jblas_dgemm_dispatch_fn;
 
+    /* Try to upgrade dgemm to system BLAS / bundled BLIS.
+     * blas_dispatch_init() may replace jblas_dispatch.dgemm with an
+     * external wrapper.  Falls through to jblas own dgemm on failure. */
+    blas_dispatch_init();
+
+    /* Record init-time thread count for clamping in jblas_set_n_threads */
+    _init_max_threads = jblas_n_threads;
+
     _initialized = 1;
     return 0;
 }
@@ -217,4 +229,22 @@ int jblas_init(void) {
  */
 const char *jblas_isa_name(void) {
     return _isa_name;
+}
+
+/* ---------------------------------------------------------------------------
+ * Thread control API
+ * ---------------------------------------------------------------------------
+ */
+
+int jblas_get_n_threads(void) {
+    return __atomic_load_n(&jblas_n_threads, __ATOMIC_RELAXED);
+}
+
+int jblas_set_n_threads(int n) {
+    if (n < 1) return -1;
+    int old = __atomic_load_n(&jblas_n_threads, __ATOMIC_RELAXED);
+    /* Clamp to init-time allocation to prevent packed_A OOB (Pitfall 5) */
+    int clamped = (n > _init_max_threads) ? _init_max_threads : n;
+    __atomic_store_n(&jblas_n_threads, clamped, __ATOMIC_RELAXED);
+    return old;
 }

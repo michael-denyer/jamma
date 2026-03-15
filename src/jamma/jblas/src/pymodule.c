@@ -2,7 +2,8 @@
  * pymodule.c — Python C extension module _jblas.
  *
  * Exposes the jblas BLAS primitives (ddot, dnrm2, daxpy, dscal, dgemv,
- * dgemm, dsyrk, dsyr2k) to Python via the NumPy buffer protocol.  Arrays are
+ * dgemm, dsyrk, dsyr2k) and LAPACK eigh to Python via the NumPy buffer
+ * protocol.  Arrays are
  * accessed via PyArray_FROM_OTF for contiguous double* extraction (copies
  * non-contiguous or non-float64 inputs as needed).
  *
@@ -16,7 +17,7 @@
  *   JBLAS_MC    — MC row panel size
  *   JBLAS_NC    — NC column panel size
  *
- * Exported functions: ddot, dnrm2, daxpy, dscal, dgemv, dgemm, dsyrk, dsyr2k
+ * Exported functions: ddot, dnrm2, daxpy, dscal, dgemv, dgemm, dsyrk, dsyr2k, eigh
  *
  * Patterns follow _lmm_accel.c: PyArray_FROM_OTF with NPY_ARRAY_IN_ARRAY for
  * read-only inputs, NPY_ARRAY_INOUT_ARRAY2 for in-place writeable outputs.
@@ -25,6 +26,8 @@
 #define PY_SSIZE_T_CLEAN
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <Python.h>
+#include <stdio.h>
+#include <string.h>
 #include <numpy/arrayobject.h>
 #include "jblas.h"
 
@@ -356,9 +359,9 @@ py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs)
     const double *pB = (const double *)PyArray_DATA(aB);
     double       *pC = (double *)PyArray_DATA(aC);
 
-    /* Guard: if dgemm workspace allocation failed during init, the packed
-     * buffers are NULL and jblas_dgemm_c would segfault.  Raise instead. */
-    if (!jblas_packed_A || !jblas_packed_B) {
+    /* Guard: if no external BLAS and dgemm workspace allocation failed during
+     * init, the packed buffers are NULL and jblas_dgemm_c would segfault. */
+    if (!blas_has_external() && (!jblas_packed_A || !jblas_packed_B)) {
         PyErr_SetString(PyExc_RuntimeError,
             "dgemm: workspace allocation failed during jblas init; "
             "reduce OMP_NUM_THREADS or use the numpy fallback");
@@ -371,10 +374,11 @@ py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs)
     npy_intp ldb = PyArray_DIM(aB, 1);
 
     /* Release the GIL for the O(N^3) C/OpenMP computation.  Safe because
-     * jblas_dgemm_c operates purely on C double arrays; the PyArray refs
-     * (aA, aB, aC) keep the buffers alive for the duration. */
+     * jblas_dgemm_ext operates purely on C double arrays; the PyArray refs
+     * (aA, aB, aC) keep the buffers alive for the duration.
+     * jblas_dgemm_ext routes to system BLAS when available, else jblas own. */
     Py_BEGIN_ALLOW_THREADS
-    jblas_dgemm_c(M, N, K_a, pA, lda, pB, ldb, pC, N, transa, transb);
+    jblas_dgemm_ext(M, N, K_a, pA, lda, pB, ldb, pC, N, transa, transb);
     Py_END_ALLOW_THREADS
 
     Py_DECREF(aA);
@@ -554,6 +558,178 @@ err_dsyr2k:
 }
 
 /* ---------------------------------------------------------------------------
+ * py_eigh — compute eigenvalues and eigenvectors of symmetric matrix
+ *
+ * Signature: eigh(K: ndarray) -> tuple[ndarray, ndarray]
+ * K must be 2-D C-contiguous float64 of shape (N, N). K is overwritten.
+ * Returns (eigenvalues, eigenvectors).
+ * ---------------------------------------------------------------------------
+ */
+static PyObject *
+py_eigh(PyObject *self, PyObject *args)
+{
+    PyObject *oK;
+    if (!PyArg_ParseTuple(args, "O", &oK))
+        return NULL;
+
+    PyArrayObject *aK = (PyArrayObject *)PyArray_FROM_OTF(
+        oK, NPY_DOUBLE, NPY_ARRAY_INOUT_ARRAY2);
+    if (!aK) return NULL;
+
+    if (PyArray_NDIM(aK) != 2 || PyArray_DIM(aK,0) != PyArray_DIM(aK,1)) {
+        PyErr_SetString(PyExc_ValueError, "eigh: K must be 2-D square float64");
+        PyArray_DiscardWritebackIfCopy(aK);
+        Py_DECREF(aK);
+        return NULL;
+    }
+
+    npy_intp N = PyArray_DIM(aK, 0);
+    double *pK = (double *)PyArray_DATA(aK);
+
+    /* Allocate eigenvalues (N,) and eigenvectors (N, N) */
+    PyArrayObject *aW = (PyArrayObject *)PyArray_SimpleNew(1, &N, NPY_DOUBLE);
+    npy_intp dims2[2] = {N, N};
+    PyArrayObject *aU = (PyArrayObject *)PyArray_SimpleNew(2, dims2, NPY_DOUBLE);
+    if (!aW || !aU) {
+        Py_XDECREF(aW); Py_XDECREF(aU);
+        PyArray_DiscardWritebackIfCopy(aK);
+        Py_DECREF(aK);
+        return NULL;
+    }
+
+    double *pW = (double *)PyArray_DATA(aW);
+    double *pU = (double *)PyArray_DATA(aU);
+
+    /* Initialize status struct and reset LP64 overflow counter */
+    jblas_eigh_status_t eigh_status;
+    memset(&eigh_status, 0, sizeof(eigh_status));
+    blas_dispatch_reset_lp64_overflow();
+
+    int ret;
+    Py_BEGIN_ALLOW_THREADS
+    /* ldk = ldz = N: safe because PyArray_FROM_OTF/SimpleNew guarantee C-contiguous */
+    ret = jblas_eigh_c(N, pK, N, pW, pU, N, &eigh_status);
+    Py_END_ALLOW_THREADS
+
+    if (ret != 0) {
+        if (ret < 0) {
+            PyErr_Format(PyExc_MemoryError,
+                "jblas eigh: workspace allocation failed (returned %d) — "
+                "matrix too large for available memory", ret);
+        } else {
+            PyErr_Format(PyExc_RuntimeError,
+                "jblas eigh: convergence failure (returned %d)", ret);
+        }
+        Py_DECREF(aW); Py_DECREF(aU);
+        PyArray_DiscardWritebackIfCopy(aK);
+        Py_DECREF(aK);
+        return NULL;
+    }
+
+    /* Surface performance fallbacks and diagnostic warnings to Python.
+     * These are non-fatal but important for users to understand why eigh
+     * may be running slower than expected. */
+    if (eigh_status.dstedc_ws_fallback) {
+        if (PyErr_WarnEx(PyExc_RuntimeWarning,
+                "jblas eigh: dstedc workspace allocation failed — "
+                "using global mutex path (significantly slower for large matrices). "
+                "Reduce matrix size or free memory.", 1) < 0) {
+            Py_DECREF(aW); Py_DECREF(aU);
+            PyArray_DiscardWritebackIfCopy(aK);
+            Py_DECREF(aK);
+            return NULL;
+        }
+    }
+    if (eigh_status.dsytrd_mirror_fallback) {
+        if (PyErr_WarnEx(PyExc_RuntimeWarning,
+                "jblas eigh: dsytrd mirror buffer allocation failed — "
+                "using scalar dsymv (slower tridiagonalization). "
+                "Reduce matrix size or free memory.", 1) < 0) {
+            Py_DECREF(aW); Py_DECREF(aU);
+            PyArray_DiscardWritebackIfCopy(aK);
+            Py_DECREF(aK);
+            return NULL;
+        }
+    }
+    if (eigh_status.secular_failures > 0) {
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+            "jblas eigh: %d secular equation(s) failed to converge — "
+            "eigenvalues may have reduced accuracy for near-degenerate modes",
+            eigh_status.secular_failures);
+        if (PyErr_WarnEx(PyExc_RuntimeWarning, msg, 1) < 0) {
+            Py_DECREF(aW); Py_DECREF(aU);
+            PyArray_DiscardWritebackIfCopy(aK);
+            Py_DECREF(aK);
+            return NULL;
+        }
+    }
+    if (eigh_status.qr_fallback) {
+        if (PyErr_WarnEx(PyExc_RuntimeWarning,
+                "jblas eigh: D&C eigensolver failed residual check — "
+                "fell back to QR iteration (much slower for large matrices)", 1) < 0) {
+            Py_DECREF(aW); Py_DECREF(aU);
+            PyArray_DiscardWritebackIfCopy(aK);
+            Py_DECREF(aK);
+            return NULL;
+        }
+    }
+    if (blas_dispatch_lp64_overflow_count() > 0) {
+        if (PyErr_WarnEx(PyExc_RuntimeWarning,
+                "jblas eigh: LP64 overflow guard triggered during GEMM — "
+                "fell back to jblas own dgemm (much slower). "
+                "Install ILP64 numpy for large matrices.", 1) < 0) {
+            Py_DECREF(aW); Py_DECREF(aU);
+            PyArray_DiscardWritebackIfCopy(aK);
+            Py_DECREF(aK);
+            return NULL;
+        }
+    }
+
+    PyArray_ResolveWritebackIfCopy(aK);
+    Py_DECREF(aK);
+
+    /* Py_BuildValue("(NN)", ...) steals references — correct for new objects */
+    PyObject *result = Py_BuildValue("(NN)", aW, aU);
+    return result;
+}
+
+/* ---------------------------------------------------------------------------
+ * py_set_n_threads — Set jblas thread count (clamped to init-time max).
+ *
+ * Signature: set_n_threads(n: int) -> int
+ * Returns the previous thread count.
+ * Raises ValueError if n < 1.
+ * ---------------------------------------------------------------------------
+ */
+static PyObject *
+py_set_n_threads(PyObject *self, PyObject *args)
+{
+    int n;
+    if (!PyArg_ParseTuple(args, "i", &n))
+        return NULL;
+    int old = jblas_set_n_threads(n);
+    if (old < 0) {
+        PyErr_SetString(PyExc_ValueError, "set_n_threads: n must be >= 1");
+        return NULL;
+    }
+    return PyLong_FromLong(old);
+}
+
+/* ---------------------------------------------------------------------------
+ * py_get_n_threads — Get current jblas thread count.
+ *
+ * Signature: get_n_threads() -> int
+ * ---------------------------------------------------------------------------
+ */
+static PyObject *
+py_get_n_threads(PyObject *self, PyObject *args)
+{
+    (void)args;  /* unused */
+    return PyLong_FromLong(jblas_get_n_threads());
+}
+
+/* ---------------------------------------------------------------------------
  * Method table
  * ---------------------------------------------------------------------------
  */
@@ -582,6 +758,16 @@ static PyMethodDef JblasMethods[] = {
     {"dsyr2k", py_dsyr2k, METH_VARARGS,
         "dsyr2k(C, A, B) -> ndarray\n"
         "Symmetric rank-2k update: C - A @ B.T - B @ A.T (float64)."},
+    {"eigh", py_eigh, METH_VARARGS,
+        "eigh(K) -> (eigenvalues, eigenvectors)\n"
+        "Compute all eigenvalues and eigenvectors of symmetric K.\n"
+        "K is overwritten as scratch."},
+    {"set_n_threads", py_set_n_threads, METH_VARARGS,
+        "set_n_threads(n) -> int\n"
+        "Set jblas thread count (clamped to init max). Returns old count."},
+    {"get_n_threads", py_get_n_threads, METH_NOARGS,
+        "get_n_threads() -> int\n"
+        "Get current jblas thread count."},
     {NULL, NULL, 0, NULL}
 };
 
@@ -629,6 +815,12 @@ PyInit__jblas(void)
         return NULL;
     }
 
+    /* blas_backend: identifies which dgemm backend is active */
+    if (PyModule_AddStringConstant(m, "blas_backend", blas_backend_name()) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
+
     /* HAS_OPENMP: True if compiled with OpenMP. Level 1/2 kernels are
      * single-threaded; dgemm (Level 3) uses OpenMP parallel-for. */
 #ifdef _OPENMP
@@ -667,6 +859,11 @@ PyInit__jblas(void)
         Py_DECREF(m); return NULL;
     }
     if (PyModule_AddIntConstant(m, "JBLAS_NC", JBLAS_NC) < 0) {
+        Py_DECREF(m); return NULL;
+    }
+
+    /* blas_is_ilp64: 1 if external dgemm uses ILP64 (64-bit) integers, 0 otherwise */
+    if (PyModule_AddIntConstant(m, "blas_is_ilp64", blas_is_ilp64()) < 0) {
         Py_DECREF(m); return NULL;
     }
 

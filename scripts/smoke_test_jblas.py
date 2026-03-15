@@ -19,6 +19,8 @@ import numpy as np
 try:
     from jamma.jblas._jblas import (
         HAS_OPENMP,
+        blas_backend,
+        blas_is_ilp64,
         daxpy,
         ddot,
         dgemm,
@@ -35,6 +37,7 @@ except ImportError as exc:
     sys.exit(1)
 
 print(f"_jblas OK, ISA={jblas_isa!r}, OpenMP={bool(HAS_OPENMP)}")
+print(f"BLAS dispatch: backend={blas_backend!r}, ilp64={blas_is_ilp64}")
 
 # Step 2: Sanity-check constant types.
 if not isinstance(jblas_isa, str):

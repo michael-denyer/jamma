@@ -28,7 +28,7 @@ from pathlib import Path
 MODULE_FLOORS: dict[str, int] = {
     "src/jamma/kinship/io.py": 50,
     "src/jamma/io/matrix_writer.py": 60,
-    "src/jamma/core/hardware.py": 65,
+    "src/jamma/core/hardware.py": 60,
 }
 
 

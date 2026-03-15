@@ -24,6 +24,9 @@ src/jamma/_build_meta.py
 *.so
 *.dylib
 
+# BLIS prebuilt binaries (downloaded at build time by hatch_build.py)
+src/jamma/jblas/libs/
+
 # Virtual environments
 .venv/
 venv/

@@ -22,9 +22,21 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
+import urllib.request
 from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
+
+# BLIS prebuilt binary repository and asset naming convention.
+# The BLIS repo ships multi-config binaries (e.g. haswell+skx for x86_64).
+BLIS_REPO = "michael-denyer/blis-prebuilt"
+BLIS_VERSION = "v0.1.0"
+BLIS_ASSETS = {
+    ("Linux", "x86_64"): "libblis-x86_64.so",  # intel64 multi-config
+    ("Linux", "AMD64"): "libblis-x86_64.so",  # alias
+    ("Darwin", "arm64"): "libblis-firestorm.dylib",  # Apple Silicon
+    ("Darwin", "x86_64"): "libblis-haswell.dylib",  # Intel Mac
+}
 
 
 class CustomBuildHook(BuildHookInterface):
@@ -128,6 +140,122 @@ class CustomBuildHook(BuildHookInterface):
             ldflags = ["-undefined", "dynamic_lookup"]
 
         return (cc_cmd, cc_extra, python_inc, numpy_inc, ldflags)
+
+    def _fetch_blis_binary(self, build_data) -> Path | None:
+        """Fetch a prebuilt BLIS shared library from GitHub Release assets.
+
+        Checks for a pre-downloaded binary via JBLAS_BLIS_PATH env var first,
+        then attempts to download from the BLIS prebuilt repo. Returns None
+        (non-fatal) if the binary cannot be obtained.
+
+        Args:
+            build_data: Hatchling build data dict (unused, kept for API symmetry).
+
+        Returns:
+            Path to the BLIS binary, or None if unavailable.
+        """
+        # Allow CI to provide a pre-downloaded binary
+        env_path = os.environ.get("JBLAS_BLIS_PATH")
+        if env_path:
+            blis = Path(env_path)
+            if blis.is_file():
+                print(f"Using pre-downloaded BLIS: {blis}", file=sys.stderr)
+                return blis
+            print(
+                f"WARNING: JBLAS_BLIS_PATH={env_path} does not exist — "
+                "falling back to download.",
+                file=sys.stderr,
+            )
+
+        key = (platform.system(), platform.machine())
+        asset_name = BLIS_ASSETS.get(key)
+        if asset_name is None:
+            print(
+                f"WARNING: No BLIS binary available for platform {key} — "
+                "jblas own dgemm will be used.",
+                file=sys.stderr,
+            )
+            return None
+
+        libs_dir = Path(self.root) / "src" / "jamma" / "jblas" / "libs"
+        target = libs_dir / asset_name
+
+        # Skip download if already present (repeated builds)
+        if target.is_file():
+            print(f"BLIS binary already present: {target}", file=sys.stderr)
+            return target
+
+        url = (
+            f"https://github.com/{BLIS_REPO}/releases/download/"
+            f"{BLIS_VERSION}/{asset_name}"
+        )
+        libs_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            print(f"Downloading BLIS from {url} ...", file=sys.stderr)
+            urllib.request.urlretrieve(url, target)
+            print(f"BLIS downloaded: {target}", file=sys.stderr)
+            return target
+        except Exception as exc:
+            print(
+                f"WARNING: BLIS download failed ({exc}) — "
+                "jblas own dgemm will be used.",
+                file=sys.stderr,
+            )
+            # Clean up partial download
+            if target.exists():
+                target.unlink()
+            return None
+
+    def _bundle_blis(self, build_data) -> None:
+        """Fetch and bundle BLIS shared library into the wheel.
+
+        On macOS, sets @loader_path install_name to prevent delocate from
+        moving the dylib to .dylibs/ (which would break blas_dispatch.c's
+        dlopen path).
+
+        Args:
+            build_data: Hatchling build data dict. Updated with force_include
+                if BLIS binary is available.
+        """
+        blis_path = self._fetch_blis_binary(build_data)
+        if blis_path is None:
+            print(
+                "BLIS not bundled (jblas own dgemm will be used).",
+                file=sys.stderr,
+            )
+            return
+
+        # macOS: set @loader_path install_name so delocate leaves it in place.
+        # blas_dispatch.c expects BLIS at <extension_dir>/libs/<name>.
+        if platform.system() == "Darwin" and blis_path.suffix == ".dylib":
+            install_name = f"@loader_path/libs/{blis_path.name}"
+            try:
+                subprocess.run(
+                    ["install_name_tool", "-id", install_name, str(blis_path)],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                print(
+                    f"Set BLIS install_name to {install_name}",
+                    file=sys.stderr,
+                )
+            except Exception as exc:
+                print(
+                    f"WARNING: install_name_tool failed ({exc}) — "
+                    "delocate may move the dylib.",
+                    file=sys.stderr,
+                )
+
+        # Register BLIS binary for wheel inclusion
+        build_data.setdefault("force_include", {})
+        dist_path = f"jamma/jblas/libs/{blis_path.name}"
+        build_data["force_include"][str(blis_path)] = dist_path
+        print(
+            f"BLIS bundled: {blis_path} -> {dist_path}",
+            file=sys.stderr,
+        )
 
     def _detect_linux_openmp_flags(self, cc_cmd: str) -> list[str]:
         """Detect the best OpenMP flags for Linux.
@@ -866,3 +994,6 @@ class CustomBuildHook(BuildHookInterface):
         build_data["force_include"][str(out_path)] = f"jamma/jblas/{out_name}"
         build_data["pure_python"] = False
         build_data["infer_tag"] = True
+
+        # Bundle BLIS shared library (independent of jblas .so compilation)
+        self._bundle_blis(build_data)

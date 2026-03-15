@@ -461,35 +461,48 @@ static int dlaed5(npy_intp n, npy_intp i,
     double tau;
 
     if (i == 0) {
-        /* First root: lies in (d[0], d[1]) */
-        double b = del + (z[0] * z[0] + z[1] * z[1]) / rho;
-        double c = z[1] * z[1] * del / rho;
-        /* Stabilized quadratic: tau = 2c/(b+sqrt(b^2-4c)) avoids cancellation */
-        double disc = b * b - 4.0 * c;
-        if (disc < 0.0) disc = 0.0;
-        tau = 2.0 * c / (b + sqrt(disc));
-        *lambda_out = d[0] + tau;
-        delta[0] = -tau;
-        delta[1] = del - tau;
+        /* First root: lies in (d[0], d[1]).
+         * LAPACK I=1: W-test determines which quadratic formulation to use.
+         * Reference: LAPACK dlaed5.f */
+        double w = 1.0 + 2.0 * rho * (z[1] * z[1] - z[0] * z[0]) / del;
+        if (w > 0.0) {
+            /* Root closer to d[0]: tau as displacement from d[0] */
+            double b = del + rho * (z[0] * z[0] + z[1] * z[1]);
+            double c = rho * z[0] * z[0] * del;
+            double disc = b * b - 4.0 * c;
+            if (disc < 0.0) disc = 0.0;
+            tau = 2.0 * c / (b + sqrt(disc));
+            *lambda_out = d[0] + tau;
+            delta[0] = -tau;
+            delta[1] = del - tau;
+        } else {
+            /* Root closer to d[1]: tau as displacement from d[1], tau < 0 */
+            double b = -del + rho * (z[0] * z[0] + z[1] * z[1]);
+            double c = rho * z[1] * z[1] * del;
+            double disc = b * b + 4.0 * c;
+            if (b > 0.0)
+                tau = -2.0 * c / (b + sqrt(disc));
+            else
+                tau = (b - sqrt(disc)) / 2.0;
+            *lambda_out = d[1] + tau;
+            delta[0] = -(del + tau);  /* d[0] - lambda */
+            delta[1] = -tau;          /* d[1] - lambda */
+        }
     } else {
-        /* Second root: lies above d[1] (for rho > 0) */
-        double b = -del + (z[0] * z[0] + z[1] * z[1]) / rho;
-        double c = -z[0] * z[0] * del / rho;
-        /* tau < 0 (displacement from d[1] is negative... actually for i=1,
-         * root is above d[1], so tau > 0 from d[1]).
-         * LAPACK: tau = 2c / (b - sqrt(b^2 - 4c)) */
-        double disc = b * b - 4.0 * c;
+        /* Second root: lies above d[1] (rho > 0).
+         * LAPACK I=2: single quadratic, tau > 0 from d[1].
+         * Reference: LAPACK dlaed5.f */
+        double b = -del + rho * (z[0] * z[0] + z[1] * z[1]);
+        double c = rho * z[1] * z[1] * del;
+        double disc = b * b + 4.0 * c;
         if (disc < 0.0) disc = 0.0;
         double sq = sqrt(disc);
-        if (b >= 0.0)
-            tau = 2.0 * c / (b + sq);
+        if (b > 0.0)
+            tau = (b + sq) / 2.0;
         else
-            tau = (b - sq) / 2.0;
-        /* The root is d[1] + tau, but tau computation from LAPACK dlaed5 for
-         * i=1 uses: W = 1/rho + z1^2/(del+tau) + z2^2/tau
-         * where tau is displacement from d[1]. For rho > 0, root > d[n-1]. */
+            tau = 2.0 * c / (-b + sq);
         *lambda_out = d[1] + tau;
-        delta[0] = -(del + tau);  /* d[0] - lambda = d[0] - d[1] - tau = -(del+tau) */
+        delta[0] = -(del + tau);
         delta[1] = -tau;
     }
     return 0;

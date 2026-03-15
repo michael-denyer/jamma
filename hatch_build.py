@@ -831,51 +831,72 @@ class CustomBuildHook(BuildHookInterface):
         avx2_kernel_set = set(str(s) for s in avx2_kernel_sources)
         lapack_source_set = set(str(s) for s in lapack_sources)
 
+        # Strict IEEE 754 flags for LAPACK sources (secular equation deflation
+        # uses infinity arithmetic that -ffast-math breaks).
+        lapack_cflags = [
+            "-O2",
+            "-fno-fast-math",
+            "-fno-finite-math-only",
+            "-fPIC",
+            "-std=c11",
+            f"-I{python_inc}",
+            f"-I{numpy_inc}",
+            f"-I{jblas_inc}",
+        ]
+
+        def _jblas_compile_cmd(
+            src: Path,
+            obj_file: Path,
+            omp_compile_flags: list[str],
+        ) -> list[str]:
+            """Build the compile command for a single jblas source file.
+
+            LAPACK sources get strict IEEE 754 flags (no -ffast-math).
+            SIMD/AVX2 sources get -mavx2 -mfma. Baseline sources get base_cflags.
+
+            Args:
+                src: Source file path.
+                obj_file: Output object file path.
+                omp_compile_flags: OpenMP compile-only flags (empty to disable).
+
+            Returns:
+                Compiler command as a list of strings.
+            """
+            if str(src) in lapack_source_set:
+                return [
+                    cc_cmd,
+                    *cc_extra,
+                    *lapack_cflags,
+                    *omp_compile_flags,
+                    "-c",
+                    str(src),
+                    "-o",
+                    str(obj_file),
+                ]
+            # SIMD sources (ddot, daxpy, dscal) and AVX2 kernel files get
+            # -mavx2 -mfma; NEON kernel files get no extra flags (NEON is
+            # baseline on aarch64); baseline sources get no SIMD flags.
+            extra_simd = (
+                simd_flags
+                if (str(src) in simd_source_set or str(src) in avx2_kernel_set)
+                else []
+            )
+            return [
+                cc_cmd,
+                *cc_extra,
+                *base_cflags,
+                *extra_simd,
+                *omp_compile_flags,
+                "-c",
+                str(src),
+                "-o",
+                str(obj_file),
+            ]
+
         try:
             for src in source_files:
                 obj_file = tmp_dir / (src.stem + ".o")
-                if str(src) in lapack_source_set:
-                    # LAPACK: strict IEEE 754 — override base_cflags optimization.
-                    # Remove -O3, -funroll-loops, -ftree-vectorize from base flags.
-                    # Exclude extra_cflags (env var like CFLAGS=-Ofast would
-                    # reintroduce -ffast-math). Use only -O2 -fPIC -std=c11 + includes.
-                    cmd_compile = [
-                        cc_cmd,
-                        *cc_extra,
-                        "-O2",
-                        "-fno-fast-math",
-                        "-fno-finite-math-only",
-                        "-fPIC",
-                        "-std=c11",
-                        f"-I{python_inc}",
-                        f"-I{numpy_inc}",
-                        f"-I{jblas_inc}",
-                        *omp_compile,
-                        "-c",
-                        str(src),
-                        "-o",
-                        str(obj_file),
-                    ]
-                else:
-                    # SIMD sources (ddot, daxpy, dscal) and AVX2 kernel files get
-                    # -mavx2 -mfma; NEON kernel files get no extra flags (NEON is
-                    # baseline on aarch64); baseline sources get no SIMD flags.
-                    extra_simd = (
-                        simd_flags
-                        if (str(src) in simd_source_set or str(src) in avx2_kernel_set)
-                        else []
-                    )
-                    cmd_compile = [
-                        cc_cmd,
-                        *cc_extra,
-                        *base_cflags,
-                        *extra_simd,
-                        *omp_compile,
-                        "-c",
-                        str(src),
-                        "-o",
-                        str(obj_file),
-                    ]
+                cmd_compile = _jblas_compile_cmd(src, obj_file, omp_compile)
                 # Print compile command to stderr for build-log assertions (CI grep)
                 print(f"jblas compile: {' '.join(cmd_compile)}", file=sys.stderr)
                 result = subprocess.run(cmd_compile, capture_output=True, text=True)
@@ -900,42 +921,7 @@ class CustomBuildHook(BuildHookInterface):
                 compile_failed = False
                 for src in source_files:
                     obj_file = tmp_dir / (src.stem + "_noomp.o")
-                    if str(src) in lapack_source_set:
-                        cmd_compile = [
-                            cc_cmd,
-                            *cc_extra,
-                            "-O2",
-                            "-fno-fast-math",
-                            "-fno-finite-math-only",
-                            "-fPIC",
-                            "-std=c11",
-                            f"-I{python_inc}",
-                            f"-I{numpy_inc}",
-                            f"-I{jblas_inc}",
-                            "-c",
-                            str(src),
-                            "-o",
-                            str(obj_file),
-                        ]
-                    else:
-                        extra_simd = (
-                            simd_flags
-                            if (
-                                str(src) in simd_source_set
-                                or str(src) in avx2_kernel_set
-                            )
-                            else []
-                        )
-                        cmd_compile = [
-                            cc_cmd,
-                            *cc_extra,
-                            *base_cflags,
-                            *extra_simd,
-                            "-c",
-                            str(src),
-                            "-o",
-                            str(obj_file),
-                        ]
+                    cmd_compile = _jblas_compile_cmd(src, obj_file, [])
                     print(
                         f"jblas compile (no OMP): {' '.join(cmd_compile)}",
                         file=sys.stderr,

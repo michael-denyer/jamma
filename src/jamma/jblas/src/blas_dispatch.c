@@ -456,6 +456,34 @@ static int discover_bundled_blis(void) {
 }
 
 /* ---------------------------------------------------------------------------
+ * LP64 overflow guard — shared by both the simplified and full-signature
+ * dispatch wrappers.  Returns 1 if overflow detected (caller must fall back
+ * to jblas own dgemm), 0 if dimensions fit in int32.
+ * ---------------------------------------------------------------------------
+ */
+static int _lp64_overflow_guard(npy_intp M, npy_intp N, npy_intp K,
+                                npy_intp lda, npy_intp ldb, npy_intp ldc)
+{
+    if (g_is_ilp64)
+        return 0;
+    if (M <= LP64_DIM_MAX && N <= LP64_DIM_MAX && K <= LP64_DIM_MAX &&
+        lda <= LP64_DIM_MAX && ldb <= LP64_DIM_MAX && ldc <= LP64_DIM_MAX)
+        return 0;
+
+    __atomic_add_fetch(&g_lp64_overflow_count, 1, __ATOMIC_RELAXED);
+    static int warned = 0;
+    if (!warned) {
+        warned = 1;
+        fprintf(stderr,
+            "jblas_dispatch: WARNING: LP64 overflow guard triggered "
+            "(M=%ld N=%ld K=%ld > %d). Falling back to jblas own dgemm "
+            "which is much slower. Install ILP64 numpy for large matrices.\n",
+            (long)M, (long)N, (long)K, LP64_DIM_MAX);
+    }
+    return 1;
+}
+
+/* ---------------------------------------------------------------------------
  * Row-major wrapper: converts C = A * B to Fortran dgemm convention
  * ---------------------------------------------------------------------------
  * For row-major C = A*B, call Fortran dgemm as:
@@ -469,20 +497,7 @@ static void _dgemm_external_wrapper(
     const double *B,
     double       *C)
 {
-    /* LP64 overflow guard: dimensions must fit in int32 */
-    if (!g_is_ilp64 &&
-        (m > LP64_DIM_MAX || n > LP64_DIM_MAX || k > LP64_DIM_MAX)) {
-        __atomic_add_fetch(&g_lp64_overflow_count, 1, __ATOMIC_RELAXED);
-        static int warned = 0;
-        if (!warned) {
-            warned = 1;
-            fprintf(stderr,
-                "jblas_dispatch: WARNING: LP64 overflow guard triggered "
-                "(m=%ld n=%ld k=%ld > %d). Falling back to jblas own dgemm "
-                "which is much slower. Install ILP64 numpy for large matrices.\n",
-                (long)m, (long)n, (long)k, LP64_DIM_MAX);
-        }
-        /* Fall back to jblas own blocking dgemm */
+    if (_lp64_overflow_guard(m, n, k, k, n, n)) {
         jblas_dgemm_dispatch_fn(m, n, k, A, B, C);
         return;
     }
@@ -580,22 +595,8 @@ static int _dgemm_external_full(
     int transa, int transb,
     double alpha, double beta)
 {
-    /* LP64 overflow guard */
-    if (!g_is_ilp64 &&
-        (M > LP64_DIM_MAX || N > LP64_DIM_MAX || K > LP64_DIM_MAX ||
-         lda > LP64_DIM_MAX || ldb > LP64_DIM_MAX || ldc > LP64_DIM_MAX)) {
-        __atomic_add_fetch(&g_lp64_overflow_count, 1, __ATOMIC_RELAXED);
-        static int warned = 0;
-        if (!warned) {
-            warned = 1;
-            fprintf(stderr,
-                "jblas_dispatch: WARNING: LP64 overflow guard triggered "
-                "(M=%ld N=%ld K=%ld). Falling back to jblas own dgemm "
-                "which is much slower. Install ILP64 numpy for large matrices.\n",
-                (long)M, (long)N, (long)K);
-        }
+    if (_lp64_overflow_guard(M, N, K, lda, ldb, ldc))
         return 0;
-    }
 
     /* Prefer CBLAS C interface: handles row-major natively, no A/B swap.
      * Accelerate/MKL can choose optimal algorithm for the access pattern.

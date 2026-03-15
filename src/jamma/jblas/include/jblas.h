@@ -402,7 +402,8 @@ int jblas_dstedc_c(npy_intp N, double *d, double *e,
                    jblas_eigh_status_t *status);
 int jblas_dormtr_c(npy_intp N, npy_intp M,
                    const double *A, npy_intp lda, const double *tau,
-                   double *C, npy_intp ldc);
+                   double *C, npy_intp ldc,
+                   jblas_workspace_t *ws);
 
 /* ---------------------------------------------------------------------------
  * Initialisation and introspection

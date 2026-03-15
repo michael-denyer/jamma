@@ -538,6 +538,30 @@ static int dlaed4(npy_intp n, npy_intp i,
 }
 
 /* ---------------------------------------------------------------------------
+ * GEMM dispatch helper: uses workspace-explicit path when ws is available,
+ * otherwise falls back to global-mutex path.  Avoids repeating the
+ * ws ? ext_ws : ext pattern at every GEMM call site in merge_rank1.
+ * ---------------------------------------------------------------------------
+ */
+static void dgemm_dispatch(npy_intp M, npy_intp N, npy_intp K,
+                            const double *A, npy_intp lda,
+                            const double *B, npy_intp ldb,
+                            double *C, npy_intp ldc,
+                            int transa, int transb,
+                            double alpha, double beta,
+                            jblas_workspace_t *ws)
+{
+    if (ws) {
+        jblas_dgemm_ext_ws(M, N, K, A, lda, B, ldb, C, ldc,
+                           transa, transb, alpha, beta, ws);
+    } else {
+        /* Global-mutex path: jblas_dgemm_ext only supports alpha=1, beta=0.
+         * All merge_rank1 calls use those values. */
+        jblas_dgemm_ext(M, N, K, A, lda, B, ldb, C, ldc, transa, transb);
+    }
+}
+
+/* ---------------------------------------------------------------------------
  * Forward declaration for recursion
  * ---------------------------------------------------------------------------
  */
@@ -817,19 +841,9 @@ static int merge_rank1(npy_intp n, npy_intp m,
             return -1;
         }
 
-        if (ws) {
-            jblas_dgemm_ext_ws(n, n_nd, n_nd,
-                               Q_b_cols, n_nd,
-                               Q_nd, n_nd,
-                               Q_nd_full, n_nd,
-                               0, 0, 1.0, 0.0, ws);
-        } else {
-            jblas_dgemm_ext(n, n_nd, n_nd,
-                            Q_b_cols, n_nd,
-                            Q_nd, n_nd,
-                            Q_nd_full, n_nd,
-                            0, 0);
-        }
+        dgemm_dispatch(n, n_nd, n_nd,
+                       Q_b_cols, n_nd, Q_nd, n_nd, Q_nd_full, n_nd,
+                       0, 0, 1.0, 0.0, ws);
 
         /* Write updated non-deflated columns back into Q_sec */
         for (npy_intp row = 0; row < n; row++) {
@@ -866,15 +880,9 @@ static int merge_rank1(npy_intp n, npy_intp m,
         Z_new_malloced = 1;
     }
 
-    if (ws) {
-        jblas_dgemm_ext_ws(n, n, n,
-                           Z, ldz, Q_sec, n, Z_new, ldz,
-                           0, 0, 1.0, 0.0, ws);
-    } else {
-        jblas_dgemm_ext(n, n, n,
-                        Z, ldz, Q_sec, n, Z_new, ldz,
-                        0, 0);
-    }
+    dgemm_dispatch(n, n, n,
+                   Z, ldz, Q_sec, n, Z_new, ldz,
+                   0, 0, 1.0, 0.0, ws);
 
     /* Copy Z_new back to Z */
     for (npy_intp row = 0; row < n; row++)

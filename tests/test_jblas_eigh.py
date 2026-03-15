@@ -26,6 +26,67 @@ import pytest
 from jamma.jblas import HAS_C_EXTENSION, eigh, get_n_threads, set_n_threads
 
 # ---------------------------------------------------------------------------
+# Assertion helpers — reconstruction and orthogonality checks
+# ---------------------------------------------------------------------------
+
+
+def _assert_reconstruction(
+    K: np.ndarray,
+    w: np.ndarray,
+    v: np.ndarray,
+    tol: float,
+    label: str = "",
+) -> float:
+    """Assert ||K - V diag(w) V.T||_F / ||K||_F < tol.
+
+    Args:
+        K: Original matrix (before eigh overwrites it).
+        w: Eigenvalues from eigh.
+        v: Eigenvectors from eigh.
+        tol: Maximum allowed relative reconstruction error.
+        label: Optional label for the assertion message.
+
+    Returns:
+        The computed relative reconstruction error.
+    """
+    K_recon = v @ np.diag(w) @ v.T
+    norm_K = np.linalg.norm(K, "fro")
+    if norm_K == 0.0:
+        ratio = np.linalg.norm(K_recon, "fro")
+    else:
+        ratio = np.linalg.norm(K - K_recon, "fro") / norm_K
+    msg = f"Reconstruction error {ratio:.2e} > {tol}"
+    if label:
+        msg = f"{label}: {msg}"
+    assert ratio < tol, msg
+    return ratio
+
+
+def _assert_orthogonality(
+    v: np.ndarray,
+    tol: float,
+    label: str = "",
+) -> float:
+    """Assert ||V.T @ V - I||_F < tol.
+
+    Args:
+        v: Eigenvectors from eigh, shape (N, N).
+        tol: Maximum allowed orthogonality error.
+        label: Optional label for the assertion message.
+
+    Returns:
+        The computed orthogonality error.
+    """
+    N = v.shape[1]
+    norm_off = np.linalg.norm(v.T @ v - np.eye(N), "fro")
+    msg = f"Orthogonality error {norm_off:.2e} > {tol}"
+    if label:
+        msg = f"{label}: {msg}"
+    assert norm_off < tol, msg
+    return norm_off
+
+
+# ---------------------------------------------------------------------------
 # Boundary size parameters
 # ---------------------------------------------------------------------------
 
@@ -199,11 +260,7 @@ class TestEigh:
         K = _random_spd(N, rng)
         K_f = np.asfortranarray(K.copy())
         w, v = eigh(K_f)
-        # Reconstruction check
-        K_recon = v @ np.diag(w) @ v.T
-        norm_K = np.linalg.norm(K, "fro")
-        ratio = np.linalg.norm(K - K_recon, "fro") / norm_K
-        assert ratio < 1e-13, f"Fortran-order reconstruction: {ratio:.2e}"
+        _assert_reconstruction(K, w, v, 1e-13, "Fortran-order")
 
 
 # ---------------------------------------------------------------------------
@@ -222,14 +279,7 @@ def test_reconstruction_accuracy() -> None:
     K = _random_spd(N, rng)
     K_copy = K.copy()
     w, v = eigh(K_copy)
-    # Reconstruct: K_reconstructed = v @ diag(w) @ v.T
-    K_reconstructed = v @ np.diag(w) @ v.T
-    norm_K = np.linalg.norm(K, "fro")
-    norm_diff = np.linalg.norm(K - K_reconstructed, "fro")
-    ratio = norm_diff / norm_K
-    assert ratio < 1e-12, (
-        f"Reconstruction accuracy ||K - U diag(w) U.T|| / ||K|| = {ratio:.2e} > 1e-12"
-    )
+    _assert_reconstruction(K, w, v, 1e-12, "EIGH-07 N=1000")
 
 
 # ---------------------------------------------------------------------------
@@ -245,9 +295,7 @@ def test_orthogonality() -> None:
     K = _random_spd(N, rng)
     K_copy = K.copy()
     _, v = eigh(K_copy)
-    VtV = v.T @ v
-    norm_off = np.linalg.norm(VtV - np.eye(N), "fro")
-    assert norm_off < 1e-12, f"Orthogonality ||U.T @ U - I||_F = {norm_off:.2e} > 1e-12"
+    _assert_orthogonality(v, 1e-12, "EIGH-08 N=1000")
 
 
 # ---------------------------------------------------------------------------
@@ -334,22 +382,8 @@ def test_block_diagonal_stress() -> None:
     K_copy = K.copy()
     w, v = eigh(K_copy)
 
-    # Reconstruction accuracy
-    K_reconstructed = v @ np.diag(w) @ v.T
-    norm_K = np.linalg.norm(K, "fro")
-    norm_diff = np.linalg.norm(K - K_reconstructed, "fro")
-    ratio = norm_diff / norm_K
-    assert ratio < 1e-13, (
-        f"Block-diagonal reconstruction: ||K - U diag(w) U.T|| / ||K||"
-        f" = {ratio:.2e} > 1e-13"
-    )
-
-    # Orthogonality
-    VtV = v.T @ v
-    norm_off = np.linalg.norm(VtV - np.eye(N), "fro")
-    assert norm_off < 3e-13, (
-        f"Block-diagonal orthogonality: ||U.T @ U - I||_F = {norm_off:.2e} > 3e-13"
-    )
+    _assert_reconstruction(K, w, v, 1e-13, "Block-diagonal")
+    _assert_orthogonality(v, 3e-13, "Block-diagonal")
 
 
 # ---------------------------------------------------------------------------
@@ -408,21 +442,8 @@ def test_vs_mouse_hs1940_kinship() -> None:
         err_msg="jblas eigh eigenvalues differ from np.linalg.eigh on mouse_hs1940",
     )
 
-    # Verify orthogonality of eigenvectors
-    VtV = v_jblas.T @ v_jblas
-    orth_norm = np.linalg.norm(VtV - np.eye(K.shape[0]), "fro")
-    assert orth_norm < 1e-5, (
-        f"Kinship eigenvector orthogonality ||V.T V - I||_F = {orth_norm:.2e} > 1e-5"
-    )
-
-    # Verify reconstruction: K ≈ V @ diag(w) @ V.T
-    K_reconstructed = v_jblas @ np.diag(w_jblas) @ v_jblas.T
-    norm_K = np.linalg.norm(K, "fro")
-    reconstruction_err = np.linalg.norm(K - K_reconstructed, "fro") / norm_K
-    assert reconstruction_err < 1e-4, (
-        f"Kinship reconstruction ||K - V W V.T||_F / ||K||_F"
-        f" = {reconstruction_err:.2e} > 1e-4"
-    )
+    _assert_orthogonality(v_jblas, 1e-5, "Kinship")
+    _assert_reconstruction(K, w_jblas, v_jblas, 1e-4, "Kinship")
 
 
 # ---------------------------------------------------------------------------
@@ -452,10 +473,7 @@ class TestDsytrd:
         K = _random_spd(N, rng)
         K_copy = K.copy()
         w, v = eigh(K_copy)
-        K_recon = v @ np.diag(w) @ v.T
-        norm_K = np.linalg.norm(K, "fro")
-        ratio = np.linalg.norm(K - K_recon, "fro") / norm_K
-        assert ratio < 1e-13, f"dsytrd/eigh reconstruction failed: {ratio:.2e}"
+        _assert_reconstruction(K, w, v, 1e-13, "dsytrd/eigh")
 
 
 # ---------------------------------------------------------------------------
@@ -481,10 +499,7 @@ class TestDstedc:
         K = _random_spd(N, rng)
         K_copy = K.copy()
         w, v = eigh(K_copy)
-        K_recon = v @ np.diag(w) @ v.T
-        norm_K = np.linalg.norm(K, "fro")
-        ratio = np.linalg.norm(K - K_recon, "fro") / norm_K
-        assert ratio < 1e-12, f"D&C boundary reconstruction at N={N}: {ratio:.2e}"
+        _assert_reconstruction(K, w, v, 1e-12, f"D&C boundary N={N}")
 
     def test_degenerate_eigenvalues(self) -> None:
         """Matrix with exact repeated eigenvalues exercises deflation."""
@@ -617,16 +632,8 @@ class TestAccumGemm:
         K_copy = K.copy()
         w, v = eigh(K_copy)
 
-        # Reconstruction
-        K_recon = v @ np.diag(w) @ v.T
-        norm_K = np.linalg.norm(K, "fro")
-        ratio = np.linalg.norm(K - K_recon, "fro") / norm_K
-        assert ratio < 1e-12, f"Reconstruction at N=100: {ratio:.2e}"
-
-        # Orthogonality
-        VtV = v.T @ v
-        orth = np.linalg.norm(VtV - np.eye(N), "fro")
-        assert orth < 1e-12, f"Orthogonality at N=100: {orth:.2e}"
+        _assert_reconstruction(K, w, v, 1e-12, "AccumGemm N=100")
+        _assert_orthogonality(v, 1e-12, "AccumGemm N=100")
 
     @pytest.mark.slow
     def test_eigh_still_correct_n500(self) -> None:
@@ -641,16 +648,8 @@ class TestAccumGemm:
         K_copy = K.copy()
         w, v = eigh(K_copy)
 
-        # Reconstruction
-        K_recon = v @ np.diag(w) @ v.T
-        norm_K = np.linalg.norm(K, "fro")
-        ratio = np.linalg.norm(K - K_recon, "fro") / norm_K
-        assert ratio < 1e-12, f"Reconstruction at N=500: {ratio:.2e}"
-
-        # Orthogonality
-        VtV = v.T @ v
-        orth = np.linalg.norm(VtV - np.eye(N), "fro")
-        assert orth < 1e-12, f"Orthogonality at N=500: {orth:.2e}"
+        _assert_reconstruction(K, w, v, 1e-12, "AccumGemm N=500")
+        _assert_orthogonality(v, 1e-12, "AccumGemm N=500")
 
 
 # ---------------------------------------------------------------------------
@@ -717,14 +716,8 @@ class TestEighThroughput:
         # Eigenvalue agreement
         npt.assert_allclose(vals, np_vals, rtol=1e-12)
 
-        # Reconstruction
-        recon = vecs @ np.diag(vals) @ vecs.T
-        resid = np.linalg.norm(K - recon) / np.linalg.norm(K)
-        assert resid < 1e-12, f"Reconstruction residual {resid:.2e}"
-
-        # Orthogonality
-        orth = np.linalg.norm(vecs.T @ vecs - np.eye(N))
-        assert orth < 1e-12, f"Orthogonality residual {orth:.2e}"
+        _assert_reconstruction(K, vals, vecs, 1e-12, "N=1000 post-opt")
+        _assert_orthogonality(vecs, 1e-12, "N=1000 post-opt")
 
 
 class TestWorkspaceApi:
@@ -742,10 +735,7 @@ class TestWorkspaceApi:
             K = _random_spd(N, rng)
             K_copy = K.copy()
             w, v = eigh(K_copy)
-            K_recon = v @ np.diag(w) @ v.T
-            norm_K = np.linalg.norm(K, "fro")
-            ratio = np.linalg.norm(K - K_recon, "fro") / norm_K
-            assert ratio < 1e-12, f"Workspace indirect test at N={N}: {ratio:.2e}"
+            _assert_reconstruction(K, w, v, 1e-12, f"Workspace N={N}")
 
 
 # ---------------------------------------------------------------------------

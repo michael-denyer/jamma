@@ -387,19 +387,20 @@ int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
     double *p = (double *)malloc((size_t)m_panel * sizeof(double));
 
     /* Mirror buffer for GEMV-backed dsymv_lower: n*n (mirror) + n (x_buf).
-     * Allocated once and reused for all dsymv_lower calls within the panel.
-     * NULL if m_panel exceeds the mirror threshold (scalar fallback). */
-    double *mirror_buf = NULL;
-    if (m_panel <= DSYMV_MIRROR_THRESHOLD) {
-        mirror_buf = (double *)malloc(
-            ((size_t)m_panel * (size_t)m_panel + (size_t)m_panel) * sizeof(double));
-        if (!mirror_buf) {
-            fprintf(stderr, "jblas dsytrd: mirror buffer allocation failed "
-                    "(N=%ld, %zu bytes) — falling back to scalar dsymv\n",
-                    (long)N,
-                    ((size_t)m_panel * (size_t)m_panel + (size_t)m_panel) * sizeof(double));
-            if (status) status->dsytrd_mirror_fallback = 1;
-        }
+     * Allocated once for the largest sub-problem size that fits the threshold.
+     * When m_panel > DSYMV_MIRROR_THRESHOLD, later panels will have smaller
+     * sub-problems (down to m_panel - NB_DSYTRD per panel) that may still
+     * benefit from the mirror+GEMV path.  Allocate for the threshold size. */
+    npy_intp mirror_dim = (m_panel <= DSYMV_MIRROR_THRESHOLD)
+                         ? m_panel : DSYMV_MIRROR_THRESHOLD;
+    double *mirror_buf = (double *)malloc(
+        ((size_t)mirror_dim * (size_t)mirror_dim + (size_t)mirror_dim) * sizeof(double));
+    if (!mirror_buf) {
+        fprintf(stderr, "jblas dsytrd: mirror buffer allocation failed "
+                "(N=%ld, %zu bytes) — falling back to scalar dsymv\n",
+                (long)N,
+                ((size_t)mirror_dim * (size_t)mirror_dim + (size_t)mirror_dim) * sizeof(double));
+        if (status) status->dsytrd_mirror_fallback = 1;
     }
 
     if (!V || !W || !p) {

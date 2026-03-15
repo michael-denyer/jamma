@@ -87,30 +87,34 @@ int jblas_eigh_c(npy_intp N,
      * On output: d[N] eigenvalues (ascending), Z columns = eigenvectors of T.
      * dstedc initializes Z to identity internally.
      *
-     * Allocate a workspace for DSTEDC's merge-level GEMMs so they use
-     * caller-owned buffers instead of the global mutex path.  Thread count
-     * matches init-time jblas_n_threads so merge GEMMs benefit from
-     * threading.  If allocation fails, pass NULL (dstedc falls back to
-     * global mutex path). */
-    jblas_workspace_t dstedc_ws;
-    int ws_ok = jblas_workspace_alloc(&dstedc_ws, jblas_n_threads);
+     * Allocate a GEMM workspace shared by both dstedc and dormtr.  This avoids
+     * a redundant alloc+free between steps: dstedc uses it for merge-level
+     * GEMMs, then dormtr reuses it for back-transformation GEMMs.  Thread
+     * count matches init-time jblas_n_threads so GEMMs benefit from threading.
+     * If allocation fails, pass NULL (both fall back to global mutex path). */
+    jblas_workspace_t gemm_ws;
+    int ws_ok = jblas_workspace_alloc(&gemm_ws, jblas_n_threads);
     if (ws_ok != 0) {
-        fprintf(stderr, "jblas eigh: dstedc workspace allocation failed "
+        fprintf(stderr, "jblas eigh: GEMM workspace allocation failed "
                 "(N=%ld, %d threads) — using global mutex path (slower)\n",
                 (long)N, jblas_n_threads);
         if (status) status->dstedc_ws_fallback = 1;
     }
-    ret = jblas_dstedc_c(N, d, e, eigenvectors, ldz,
-                          ws_ok == 0 ? &dstedc_ws : NULL, status);
-    if (ws_ok == 0) jblas_workspace_free(&dstedc_ws);
+    jblas_workspace_t *ws_ptr = ws_ok == 0 ? &gemm_ws : NULL;
+
+    ret = jblas_dstedc_c(N, d, e, eigenvectors, ldz, ws_ptr, status);
     if (ret != 0) {
+        if (ws_ok == 0) jblas_workspace_free(&gemm_ws);
         free(d); free(e); free(tau);
         return ret;
     }
 
     /* Step 4: Back-transformation: eigenvectors of T -> eigenvectors of K
-     * C = Q @ C  where Q is encoded in K's lower triangle + tau. */
-    ret = jblas_dormtr_c(N, N, K, ldk, tau, eigenvectors, ldz);
+     * C = Q @ C  where Q is encoded in K's lower triangle + tau.
+     * Reuses the GEMM workspace from dstedc so dormtr routes through external
+     * BLAS dispatch (MKL/Accelerate) instead of the global-mutex path. */
+    ret = jblas_dormtr_c(N, N, K, ldk, tau, eigenvectors, ldz, ws_ptr);
+    if (ws_ok == 0) jblas_workspace_free(&gemm_ws);
     if (ret != 0) {
         free(d); free(e); free(tau);
         return ret;

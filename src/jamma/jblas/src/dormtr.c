@@ -73,7 +73,8 @@ static void dlarft(npy_intp vlen, npy_intp nb,
 
 int jblas_dormtr_c(npy_intp N, npy_intp M,
                    const double *A, npy_intp lda, const double *tau,
-                   double *C, npy_intp ldc)
+                   double *C, npy_intp ldc,
+                   jblas_workspace_t *ws)
 {
     if (N <= 1 || M <= 0)
         return 0;
@@ -120,13 +121,24 @@ int jblas_dormtr_c(npy_intp N, npy_intp M,
         /* DLARFB Step 1: W = V^T @ C[j_start+1:N, :]
          * W(nb x M) = V_block^T(nb x vlen) @ C_sub(vlen x M)
          * V_block is (vlen x nb) row-major with stride nb_alloc.
-         * transa=1 transposes V_block; beta=0 zeroes W (no memset needed). */
-        jblas_dgemm_accum_c(nb, M, vlen,
-                            V_block, nb_alloc,
-                            C + (j_start + 1) * ldc, ldc,
-                            W, M,
-                            1, 0,       /* transa=1 (V^T), transb=0 */
-                            1.0, 0.0);  /* W = 1.0 * V^T @ C + 0.0 * W */
+         * transa=1 transposes V_block; beta=0 zeroes W (no memset needed).
+         * Route through external BLAS dispatch when available (MKL/Accelerate). */
+        if (ws) {
+            jblas_dgemm_ext_ws(nb, M, vlen,
+                               V_block, nb_alloc,
+                               C + (j_start + 1) * ldc, ldc,
+                               W, M,
+                               1, 0,       /* transa=1 (V^T), transb=0 */
+                               1.0, 0.0,   /* W = 1.0 * V^T @ C + 0.0 * W */
+                               ws);
+        } else {
+            jblas_dgemm_accum_c(nb, M, vlen,
+                                V_block, nb_alloc,
+                                C + (j_start + 1) * ldc, ldc,
+                                W, M,
+                                1, 0,       /* transa=1 (V^T), transb=0 */
+                                1.0, 0.0);  /* W = 1.0 * V^T @ C + 0.0 * W */
+        }
 
         /* DLARFB Step 2: W = T @ W (upper triangular T).
          * Safe in-place: row i reads W[k,...] for k >= i; the k=i value is
@@ -143,13 +155,24 @@ int jblas_dormtr_c(npy_intp N, npy_intp M,
 
         /* DLARFB Step 3: C[j_start+1:N, :] -= V @ W
          * C_sub(vlen x M) -= V_block(vlen x nb) @ W(nb x M)
-         * alpha=-1, beta=1: C = -1.0 * V @ W + 1.0 * C. */
-        jblas_dgemm_accum_c(vlen, M, nb,
-                            V_block, nb_alloc,
-                            W, M,
-                            C + (j_start + 1) * ldc, ldc,
-                            0, 0,        /* transa=0, transb=0 */
-                            -1.0, 1.0);  /* C = -1.0 * V @ W + 1.0 * C */
+         * alpha=-1, beta=1: C = -1.0 * V @ W + 1.0 * C.
+         * Route through external BLAS dispatch when available. */
+        if (ws) {
+            jblas_dgemm_ext_ws(vlen, M, nb,
+                               V_block, nb_alloc,
+                               W, M,
+                               C + (j_start + 1) * ldc, ldc,
+                               0, 0,        /* transa=0, transb=0 */
+                               -1.0, 1.0,   /* C = -1.0 * V @ W + 1.0 * C */
+                               ws);
+        } else {
+            jblas_dgemm_accum_c(vlen, M, nb,
+                                V_block, nb_alloc,
+                                W, M,
+                                C + (j_start + 1) * ldc, ldc,
+                                0, 0,        /* transa=0, transb=0 */
+                                -1.0, 1.0);  /* C = -1.0 * V @ W + 1.0 * C */
+        }
 
         if (j_start == 0) break;
     }

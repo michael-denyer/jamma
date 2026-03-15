@@ -628,28 +628,21 @@ py_eigh(PyObject *self, PyObject *args)
 
     /* Surface performance fallbacks and diagnostic warnings to Python.
      * These are non-fatal but important for users to understand why eigh
-     * may be running slower than expected. */
+     * may be running slower than expected.  Uses goto for shared cleanup
+     * on warning-promotion-to-error (filters.simplefilter("error")). */
     if (eigh_status.dstedc_ws_fallback) {
         if (PyErr_WarnEx(PyExc_RuntimeWarning,
                 "jblas eigh: dstedc workspace allocation failed — "
                 "using global mutex path (significantly slower for large matrices). "
-                "Reduce matrix size or free memory.", 1) < 0) {
-            Py_DECREF(aW); Py_DECREF(aU);
-            PyArray_DiscardWritebackIfCopy(aK);
-            Py_DECREF(aK);
-            return NULL;
-        }
+                "Reduce matrix size or free memory.", 1) < 0)
+            goto warn_error;
     }
     if (eigh_status.dsytrd_mirror_fallback) {
         if (PyErr_WarnEx(PyExc_RuntimeWarning,
                 "jblas eigh: dsytrd mirror buffer allocation failed — "
                 "using scalar dsymv (slower tridiagonalization). "
-                "Reduce matrix size or free memory.", 1) < 0) {
-            Py_DECREF(aW); Py_DECREF(aU);
-            PyArray_DiscardWritebackIfCopy(aK);
-            Py_DECREF(aK);
-            return NULL;
-        }
+                "Reduce matrix size or free memory.", 1) < 0)
+            goto warn_error;
     }
     if (eigh_status.secular_failures > 0) {
         char msg[256];
@@ -657,33 +650,21 @@ py_eigh(PyObject *self, PyObject *args)
             "jblas eigh: %d secular equation(s) failed to converge — "
             "eigenvalues may have reduced accuracy for near-degenerate modes",
             eigh_status.secular_failures);
-        if (PyErr_WarnEx(PyExc_RuntimeWarning, msg, 1) < 0) {
-            Py_DECREF(aW); Py_DECREF(aU);
-            PyArray_DiscardWritebackIfCopy(aK);
-            Py_DECREF(aK);
-            return NULL;
-        }
+        if (PyErr_WarnEx(PyExc_RuntimeWarning, msg, 1) < 0)
+            goto warn_error;
     }
     if (eigh_status.qr_fallback) {
         if (PyErr_WarnEx(PyExc_RuntimeWarning,
                 "jblas eigh: D&C eigensolver failed residual check — "
-                "fell back to QR iteration (much slower for large matrices)", 1) < 0) {
-            Py_DECREF(aW); Py_DECREF(aU);
-            PyArray_DiscardWritebackIfCopy(aK);
-            Py_DECREF(aK);
-            return NULL;
-        }
+                "fell back to QR iteration (much slower for large matrices)", 1) < 0)
+            goto warn_error;
     }
     if (blas_dispatch_lp64_overflow_count() > 0) {
         if (PyErr_WarnEx(PyExc_RuntimeWarning,
                 "jblas eigh: LP64 overflow guard triggered during GEMM — "
                 "fell back to jblas own dgemm (much slower). "
-                "Install ILP64 numpy for large matrices.", 1) < 0) {
-            Py_DECREF(aW); Py_DECREF(aU);
-            PyArray_DiscardWritebackIfCopy(aK);
-            Py_DECREF(aK);
-            return NULL;
-        }
+                "Install ILP64 numpy for large matrices.", 1) < 0)
+            goto warn_error;
     }
 
     PyArray_ResolveWritebackIfCopy(aK);
@@ -692,6 +673,13 @@ py_eigh(PyObject *self, PyObject *args)
     /* Py_BuildValue("(NN)", ...) steals references — correct for new objects */
     PyObject *result = Py_BuildValue("(NN)", aW, aU);
     return result;
+
+warn_error:
+    Py_DECREF(aW);
+    Py_DECREF(aU);
+    PyArray_DiscardWritebackIfCopy(aK);
+    Py_DECREF(aK);
+    return NULL;
 }
 
 /* ---------------------------------------------------------------------------

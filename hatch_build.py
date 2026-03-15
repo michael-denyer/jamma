@@ -37,7 +37,7 @@ BLIS_ASSETS = {
     ("Linux", "x86_64"): "libblis-x86_64.so",  # haswell config
     ("Linux", "AMD64"): "libblis-x86_64.so",  # alias
     ("Darwin", "arm64"): "libblis-firestorm.dylib",  # Apple Silicon
-    ("Darwin", "x86_64"): "libblis-haswell.dylib",  # Intel Mac
+    # Intel Mac: no BLIS binary — Accelerate provides ILP64 via $NEWLAPACK$ILP64
 }
 
 

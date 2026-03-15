@@ -17,6 +17,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Download BLIS binary
+        continue-on-error: true
+        run: |
+          mkdir -p src/jamma/jblas/libs
+          gh release download v0.1.0 \
+            --repo michael-denyer/blis-prebuilt \
+            --pattern "libblis-*" \
+            --dir src/jamma/jblas/libs/ \
+            || echo "BLIS download failed (expected if repo not ready)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.3.1
         env:
@@ -41,6 +53,28 @@ jobs:
           # Install test deps (numpy required for import)
           CIBW_TEST_REQUIRES: "numpy"
 
+      - name: Verify wheel contents
+        shell: bash
+        run: |
+          shopt -s nullglob
+          wheels=(./wheelhouse/*.whl)
+          if [ ${#wheels[@]} -eq 0 ]; then
+            echo "FAIL: no wheels found"
+            exit 1
+          fi
+          for whl in "${wheels[@]}"; do
+            tmpdir=$(mktemp -d)
+            unzip -q "$whl" -d "$tmpdir"
+            # Check for BLIS binary in wheel
+            blis=$(find "$tmpdir" -path '*/jblas/libs/libblis*' | head -1)
+            if [ -n "$blis" ]; then
+              echo "OK: BLIS bundled in $(basename "$whl"): $(basename "$blis")"
+            else
+              echo "INFO: No BLIS in $(basename "$whl") (jblas own dgemm will be used)"
+            fi
+            rm -rf "$tmpdir"
+          done
+
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}
@@ -51,6 +85,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download BLIS binary
+        continue-on-error: true
+        run: |
+          mkdir -p src/jamma/jblas/libs
+          gh release download v0.1.0 \
+            --repo michael-denyer/blis-prebuilt \
+            --pattern "libblis-*" \
+            --dir src/jamma/jblas/libs/ \
+            || echo "BLIS download failed (expected if repo not ready)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build AVX2-optimized wheels
         uses: pypa/cibuildwheel@v3.3.1

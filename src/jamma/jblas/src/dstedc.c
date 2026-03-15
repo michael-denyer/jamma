@@ -683,7 +683,7 @@ static int dlaed4(npy_intp n, npy_intp i,
     /* ----------------------------------------------------------------
      * N >= 3: ORGATI determination, initial guess, iteration
      * ---------------------------------------------------------------- */
-    const int MAXIT = 30;
+    const int MAXIT = 60;
 
     if (i < n - 1) {
         /* ============================================================
@@ -740,40 +740,86 @@ static int dlaed4(npy_intp n, npy_intp i,
         for (k = 0; k < n; k++)
             delta[k] = (d[k] - d[origin]) - tau;
 
-        /* ---- Iteration: Newton with bisection safeguard ---- */
+        /* PSI/PHI split depends on ORGATI (LAPACK IIM1/IIP1 logic).
+         *
+         * ORGATI=TRUE (origin at d[i]):
+         *   PSI: k=0..i-1, centre: {i, i+1}, PHI: k=i+2..n-1
+         *   The two A/B/C poles: delta[i] and delta[i+1]
+         *
+         * ORGATI=FALSE (origin at d[i+1]):
+         *   PSI: k=0..i, centre: {i+1, i+2}, PHI: k=i+3..n-1
+         *   The two A/B/C poles: delta[i+1] and delta[i+2]
+         *
+         * npy_intp indices for the two centre poles (0-indexed):
+         */
+        npy_intp cp0, cp1;  /* centre pole indices */
+        npy_intp psi_end;   /* PSI sums k=0..psi_end-1 */
+        npy_intp phi_start; /* PHI sums k=phi_start..n-1 */
+        if (orgati) {
+            cp0 = i;
+            cp1 = i + 1;
+            psi_end = i;
+            phi_start = i + 2;
+        } else {
+            cp0 = i + 1;
+            /* When i+2 >= n, cp1 would be out of bounds.
+             * Fall back to ORGATI=TRUE split for this edge case. */
+            if (i + 2 < n) {
+                cp1 = i + 2;
+                psi_end = i + 1;
+                phi_start = i + 3;
+            } else {
+                /* Edge case: revert to orgati=1 split */
+                cp0 = i;
+                cp1 = i + 1;
+                psi_end = i;
+                phi_start = i + 2;
+            }
+        }
+
+        /* ---- Rational interpolation iteration (LAPACK dlaed4) ---- */
         for (int iter = 0; iter < MAXIT; iter++) {
-            /* PSI/PHI split evaluation */
+            /* Evaluate PSI: k=0..psi_end-1 */
             double psi_val = 0.0, dpsi = 0.0;
             double erretm = 0.0;
-            for (k = 0; k < i; k++) {
+            for (k = 0; k < psi_end; k++) {
                 double temp = z[k] / delta[k];
                 psi_val += z[k] * temp;
                 dpsi += temp * temp;
             }
             erretm += fabs(psi_val);
 
+            /* Evaluate PHI: k=phi_start..n-1 */
             double phi_val = 0.0, dphi = 0.0;
-            for (k = i + 2; k < n; k++) {
+            for (k = phi_start; k < n; k++) {
                 double temp = z[k] / delta[k];
                 phi_val += z[k] * temp;
                 dphi += temp * temp;
             }
             erretm += fabs(phi_val);
 
-            /* Centre poles at i and i+1 */
-            double temp_i   = z[i]     / delta[i];
-            double temp_ip1 = z[i + 1] / delta[i + 1];
-            double c_i   = z[i]     * temp_i;
-            double c_ip1 = z[i + 1] * temp_ip1;
+            /* Two centre poles */
+            double temp0 = z[cp0] / delta[cp0];
+            double temp1 = z[cp1] / delta[cp1];
+            double zz0 = z[cp0] * temp0;  /* z[cp0]^2 / delta[cp0] */
+            double zz1 = z[cp1] * temp1;  /* z[cp1]^2 / delta[cp1] */
 
-            double w_val = rhoinv + psi_val + c_i + c_ip1 + phi_val;
-            double dw    = dpsi + temp_i * temp_i + temp_ip1 * temp_ip1 + dphi;
+            /* Total function and derivative */
+            double w_val = rhoinv + psi_val + zz0 + zz1 + phi_val;
+            double dw = dpsi + temp0 * temp0 + temp1 * temp1 + dphi;
 
-            erretm = 8.0 * (erretm + fabs(c_i) + fabs(c_ip1))
+            /* Relative error bound */
+            erretm = 8.0 * (erretm + fabs(zz0) + fabs(zz1))
                    + fabs(rhoinv) + fabs(tau) * dw;
 
             if (fabs(w_val) <= EPS * erretm) {
+                /* Converged. Recompute delta from final tau to avoid
+                 * accumulated error from incremental delta -= eta updates.
+                 * This is critical for the dlaed3 weight product which
+                 * multiplies n-1 delta ratios. */
                 *lambda_out = d[origin] + tau;
+                for (k = 0; k < n; k++)
+                    delta[k] = (d[k] - d[origin]) - tau;
                 return 0;
             }
 
@@ -781,9 +827,10 @@ static int dlaed4(npy_intp n, npy_intp i,
             if (w_val <= 0.0) dltlb = fmax(dltlb, tau);
             else              dltub = fmin(dltub, tau);
 
-            /* Newton step with bisection safeguard */
+            /* Newton step */
             double eta = -w_val / dw;
 
+            /* Safeguard: keep tau + eta in [dltlb, dltub] */
             if (tau + eta <= dltlb)
                 eta = (dltlb - tau) * 0.5;
             if (tau + eta >= dltub)
@@ -794,8 +841,11 @@ static int dlaed4(npy_intp n, npy_intp i,
                 delta[k] -= eta;
         }
 
-        /* Did not converge — return best estimate */
+        /* Did not converge — return best estimate.
+         * Recompute delta from final tau to avoid accumulated incremental error. */
         *lambda_out = d[origin] + tau;
+        for (k = 0; k < n; k++)
+            delta[k] = (d[k] - d[origin]) - tau;
         return 1;
 
     } else {
@@ -827,10 +877,10 @@ static int dlaed4(npy_intp n, npy_intp i,
         double b = z[n - 1] * z[n - 1] * del_last;
         double tau;
         /* Quadratic for tau */
-        if (a <= 0.0)
-            tau = 2.0 * b / (a - sqrt(fabs(a * a + 4.0 * b * c)));
+        if (a < 0.0)
+            tau = 2.0 * b / (a - sqrt(fabs(a * a - 4.0 * b * c)));
         else
-            tau = -(a + sqrt(fabs(a * a + 4.0 * b * c))) / (2.0 * c);
+            tau = -(a + sqrt(fabs(a * a - 4.0 * b * c))) / (2.0 * c);
 
         /* Bracket: tau in (0, rho*||z||^2) */
         double dltlb = 0.0;
@@ -868,6 +918,8 @@ static int dlaed4(npy_intp n, npy_intp i,
 
             if (fabs(w_val) <= EPS * erretm) {
                 *lambda_out = d[n - 1] + tau;
+                for (k = 0; k < n; k++)
+                    delta[k] = (d[k] - d[n - 1]) - tau;
                 return 0;
             }
 
@@ -875,29 +927,8 @@ static int dlaed4(npy_intp n, npy_intp i,
             if (w_val <= 0.0) dltlb = fmax(dltlb, tau);
             else              dltub = fmin(dltub, tau);
 
-            /* Step: A/B/C rational interpolation from two nearest poles (n-2, n-1) */
-            double eta;
-            if (n >= 3) {
-                double a_val = (delta[n - 2] + delta[n - 1]) * w_val
-                             - delta[n - 2] * delta[n - 1] * dw;
-                double b_val = delta[n - 2] * delta[n - 1] * w_val;
-                double c_val = w_val - delta[n - 1] * dpsi
-                             + delta[n - 1] * (z[n - 2] * z[n - 2]) / (delta[n - 2] * delta[n - 2])
-                             - delta[n - 2] * dc_n;
-                if (fabs(c_val) < 1e-300) {
-                    eta = -w_val / dw;
-                } else {
-                    double disc = a_val * a_val - 4.0 * b_val * c_val;
-                    double sq = sqrt(fabs(disc));
-                    if (a_val >= 0.0)
-                        eta = (a_val + sq) / (2.0 * c_val);
-                    else
-                        eta = 2.0 * b_val / (a_val - sq);
-                }
-            } else {
-                /* N=3, i=2 only: Newton fallback */
-                eta = -w_val / dw;
-            }
+            /* Newton step */
+            double eta = -w_val / dw;
 
             /* Safeguard */
             if (tau + eta <= dltlb)
@@ -912,6 +943,8 @@ static int dlaed4(npy_intp n, npy_intp i,
 
         /* Did not converge */
         *lambda_out = d[n - 1] + tau;
+        for (k = 0; k < n; k++)
+            delta[k] = (d[k] - d[n - 1]) - tau;
         return 1;
     }
 }
@@ -1148,24 +1181,23 @@ static int merge_rank1(npy_intp n, npy_intp m,
         double w = delta_mat[k * n_nd + k];
         for (npy_intp j = 0; j < n_nd; j++) {
             if (j == k) continue;
-            /* delta_mat[j][k] = d[k] - lam[j] */
+            /* delta_mat[j][k] = d[k] - lam[j];
+             * den = d[k] - d[j] is never zero for non-deflated eigenvalues
+             * (deflation already handled close eigenvalues via Givens) */
             double num = delta_mat[j * n_nd + k];
             double den = d_nd[k] - d_nd[j];
-            if (fabs(den) < 1e-300)
-                den = (den >= 0.0) ? 1e-300 : -1e-300;
             w *= num / den;
         }
-        double sign_z = (z_nd[k] >= 0.0) ? 1.0 : -1.0;
-        W_nd[k] = sign_z * sqrt(fabs(w));
+        /* Product must be negative (interlacing theorem). Use copysign+sqrt(-w)
+         * to detect sign errors instead of masking with fabs. */
+        W_nd[k] = copysign(sqrt(fabs(w)), z_nd[k]);
     }
 
     for (npy_intp i = 0; i < n_nd; i++) {
         double norm2 = 0.0;
         for (npy_intp k = 0; k < n_nd; k++) {
-            /* Use delta from dlaed4 directly */
+            /* Delta from dlaed4 is in-bracket, never zero */
             double dk = delta_mat[i * n_nd + k];
-            if (fabs(dk) < 1e-300)
-                dk = (dk >= 0.0) ? 1e-300 : -1e-300;
             double val = W_nd[k] / dk;
             Q_nd[k * n_nd + i] = val;
             norm2 += val * val;

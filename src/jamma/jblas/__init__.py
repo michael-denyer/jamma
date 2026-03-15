@@ -267,10 +267,10 @@ except ImportError as _exc:
         """Compute symmetric rank-k update: K = X @ X.T.
 
         Computes the full symmetric matrix K = X @ X.T, filling both
-        lower and upper triangles.  Uses the lower-triangle-only tile
-        computation path in the C extension for efficiency (saves ~50%
-        tile iterations vs dgemm).  This NumPy fallback computes the
-        full product directly.
+        lower and upper triangles.  The C extension uses a lower-triangle-only
+        tile computation path for efficiency (saves ~50% tile iterations vs
+        dgemm); this NumPy fallback computes the full product directly via
+        np.dot.
 
         Args:
             X: Input matrix, shape (N, K), float64.

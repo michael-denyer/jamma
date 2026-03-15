@@ -17,7 +17,8 @@
  * Memory:
  *   Workspace: d[N], e[N], tau[N-1] — allocated and freed here.
  *   K is overwritten with the Householder vectors from dsytrd.
- *   dstedc owns its own internal N x N merge buffer (malloc/free inside).
+ *   dstedc allocates its own internal workspace: 2*N*N (work + merge_scratch)
+ *   + O(N) (d_orig, e_orig, iwork) — all malloc'd and freed inside.
  *   eigh does NOT allocate the merge buffer — it belongs to dstedc.
  *
  * Error propagation:
@@ -45,7 +46,8 @@
 int jblas_eigh_c(npy_intp N,
                  double *K, npy_intp ldk,
                  double *eigenvalues,
-                 double *eigenvectors, npy_intp ldz)
+                 double *eigenvectors, npy_intp ldz,
+                 jblas_eigh_status_t *status)
 {
     if (N <= 0) return 0;
 
@@ -74,7 +76,7 @@ int jblas_eigh_c(npy_intp N,
     }
 
     /* Step 2: Tridiagonalization: K -> T, Householder vectors in K's lower triangle */
-    int ret = jblas_dsytrd_c(N, K, ldk, d, e, tau);
+    int ret = jblas_dsytrd_c(N, K, ldk, d, e, tau, status);
     if (ret != 0) {
         free(d); free(e); free(tau);
         return ret;
@@ -96,9 +98,10 @@ int jblas_eigh_c(npy_intp N,
         fprintf(stderr, "jblas eigh: dstedc workspace allocation failed "
                 "(N=%ld, %d threads) — using global mutex path (slower)\n",
                 (long)N, jblas_n_threads);
+        if (status) status->dstedc_ws_fallback = 1;
     }
     ret = jblas_dstedc_c(N, d, e, eigenvectors, ldz,
-                          ws_ok == 0 ? &dstedc_ws : NULL);
+                          ws_ok == 0 ? &dstedc_ws : NULL, status);
     if (ws_ok == 0) jblas_workspace_free(&dstedc_ws);
     if (ret != 0) {
         free(d); free(e); free(tau);

@@ -38,12 +38,15 @@
  *   between poles via bracket clamping.  Tolerance: 4*eps*|lambda|.
  *
  * Memory:
- *   dstedc_c allocates one N x N workspace + O(N) scratch at top level,
- *   passed through recursion. merge_rank1 uses the workspace for Q_sec
- *   (N x N) and additionally allocates Z_new (N x N), delta_mat (up to
- *   N_nd x N_nd), Q_nd (N_nd x N_nd), and Q_nd_full (N x N_nd) locally.
+ *   dstedc_c allocates its own internal workspace: 2*N*N (work + merge_scratch)
+ *   + O(N) (d_orig, e_orig, iwork), passed through recursion.
+ *   merge_rank1 uses the workspace for Q_sec (N x N) and additionally allocates
+ *   Z_new (N x N), delta_mat (up to N_nd x N_nd), Q_nd (N_nd x N_nd), and
+ *   Q_nd_full (N x N_nd) locally.
  *   Peak merge-step memory is ~6 * N^2 doubles (~48 bytes/element):
  *   Z (caller), work=Q_sec, merge_scratch=Z_new, delta_mat, Q_nd, Q_nd_full.
+ *   This is the worst case (no deflation); with deflation, delta_mat/Q_nd are
+ *   n_nd * n_nd where n_nd < N, reducing peak memory.
  *   For N=100k, expect ~480 GB peak during the top-level merge.
  *
  * References:
@@ -201,6 +204,14 @@ static void sort_eig(double *d, double *Z, npy_intp ldz, npy_intp n)
     double *z_col = (double *)malloc((size_t)n * sizeof(double));
     if (!idx || !d_tmp || !z_col) {
         free(idx); free(d_tmp); free(z_col);
+        if (n > 10000) {
+            /* O(N^2) insertion sort at this scale will never complete in
+             * reasonable time — treat as fatal rather than silently hanging. */
+            fprintf(stderr, "jblas dstedc: sort_eig allocation failed for n=%ld "
+                    "(O(n^2) insertion sort would be impractical), aborting\n",
+                    (long)n);
+            abort();
+        }
         fprintf(stderr, "jblas dstedc: sort_eig allocation failed for n=%ld, "
                 "falling back to O(n^2) insertion sort\n", (long)n);
         sort_eig_insertion(d, Z, ldz, n);  /* fallback */
@@ -368,7 +379,7 @@ static int dsteqr_base(npy_intp n, double *d, double *e,
          *   1. Compute Givens (c,s) to zero the bulge y.
          *   2. Update prev off-diagonal (offd[m-1] = r for m > l1).
          *   3. Apply G^T T G to the 2x2 block [m, m+1].
-         *   4. Propagate bulge: x = new_offd[m], y = -s * offd[m+1].
+         *   4. Propagate bulge: x = new_offd[m], y = +s * offd[m+1].
          *   5. Apply G to Z columns m and m+1.
          */
         double x = diag[l1] - shift;
@@ -535,7 +546,8 @@ static int dstedc_recurse(npy_intp n, double *d, double *e,
                           double *work, npy_intp lwork,
                           npy_intp *iwork,
                           jblas_workspace_t *ws,
-                          double *merge_scratch);
+                          double *merge_scratch,
+                          jblas_eigh_status_t *status);
 
 /* ---------------------------------------------------------------------------
  * merge_rank1 — Merge two eigensystems via rank-1 secular equation.
@@ -560,7 +572,8 @@ static int merge_rank1(npy_intp n, npy_intp m,
                        double *work, npy_intp lwork,
                        npy_intp *iwork,
                        jblas_workspace_t *ws,
-                       double *merge_scratch)
+                       double *merge_scratch,
+                       jblas_eigh_status_t *status)
 {
     /* O(N) work arrays */
     double *d_defl  = (double *)malloc((size_t)n * sizeof(double));
@@ -703,6 +716,7 @@ static int merge_rank1(npy_intp n, npy_intp m,
                 "failed to converge at merge size %ld — using best estimates "
                 "(residual check will trigger QR fallback if needed)\n",
                 n_secular_failures, (long)n_nd, (long)n);
+        if (status) status->secular_failures += n_secular_failures;
     }
 
     /* Step 5: Secular eigenvectors (LAPACK dlaed3 algorithm).
@@ -896,7 +910,8 @@ static int dstedc_recurse(npy_intp n, double *d, double *e,
                           double *work, npy_intp lwork,
                           npy_intp *iwork,
                           jblas_workspace_t *ws,
-                          double *merge_scratch)
+                          double *merge_scratch,
+                          jblas_eigh_status_t *status)
 {
     if (n <= 0) return 0;
     if (n == 1) return 0;
@@ -934,12 +949,12 @@ static int dstedc_recurse(npy_intp n, double *d, double *e,
     /* Left half: rows 0..m-1, cols 0..m-1 of Z */
     int ret;
     ret = dstedc_recurse(m, d, e, Z, ldz, work, lwork, iwork,
-                          ws, merge_scratch);
+                          ws, merge_scratch, status);
     if (ret != 0) return ret;
 
     /* Right half: rows m..n-1, cols m..n-1 of Z */
     ret = dstedc_recurse(n - m, d + m, e + m, Z + m * ldz + m, ldz,
-                          work, lwork, iwork, ws, merge_scratch);
+                          work, lwork, iwork, ws, merge_scratch, status);
     if (ret != 0) return ret;
 
     /* Build z vector from the post-recursion eigenvectors.
@@ -987,7 +1002,7 @@ static int dstedc_recurse(npy_intp n, double *d, double *e,
 
     /* Merge */
     ret = merge_rank1(n, m, d, z_vec, rho, Z, ldz, work, lwork, iwork,
-                      ws, merge_scratch);
+                      ws, merge_scratch, status);
     free(z_vec);
 
     return ret;
@@ -1002,7 +1017,8 @@ static int dstedc_recurse(npy_intp n, double *d, double *e,
  */
 int jblas_dstedc_c(npy_intp N, double *d, double *e,
                    double *Z, npy_intp ldz,
-                   jblas_workspace_t *ws)
+                   jblas_workspace_t *ws,
+                   jblas_eigh_status_t *status)
 {
     if (N <= 0) return 0;
     if (N == 1) return 0;
@@ -1032,7 +1048,7 @@ int jblas_dstedc_c(npy_intp N, double *d, double *e,
 
     /* Run D&C eigensolver */
     int ret = dstedc_recurse(N, d, e, Z, ldz, work, lwork, iwork,
-                              ws, merge_scratch);
+                              ws, merge_scratch, status);
 
     /* Check if D&C result needs QR fallback: either D&C returned non-zero
      * (convergence or secular equation failure), or the residual is bad. */
@@ -1058,6 +1074,7 @@ int jblas_dstedc_c(npy_intp N, double *d, double *e,
                     "skipping QR fallback (same allocation will fail)\n",
                     (long)N);
         } else {
+            if (status) status->qr_fallback = 1;
             if (N > 2000) {
                 fprintf(stderr, "jblas dstedc: QR fallback on N=%ld — "
                         "this is O(N^3) and may take a very long time\n",
@@ -1078,7 +1095,9 @@ int jblas_dstedc_c(npy_intp N, double *d, double *e,
     free(e_orig);
     free(merge_scratch);
 
-    /* Final sort (should already be sorted, but ensure) */
+    /* Final sort: D&C merge and QR fallback both sort internally, but
+     * the QR fallback path re-runs dsteqr_base on the full matrix which
+     * may not produce globally sorted output when N > DSTEDC_BASE. */
     if (ret == 0)
         sort_eig(d, Z, ldz, N);
 

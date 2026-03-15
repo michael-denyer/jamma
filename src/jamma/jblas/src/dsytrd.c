@@ -370,7 +370,8 @@ static void dlatrd_panel(double *A, npy_intp lda, npy_intp N,
  *
  * Returns 0 on success, -1 on allocation failure. */
 int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
-                   double *d, double *e, double *tau)
+                   double *d, double *e, double *tau,
+                   jblas_eigh_status_t *status)
 {
     if (N <= 0) return 0;
     if (N == 1) { d[0] = A[0]; return 0; }
@@ -397,6 +398,7 @@ int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
                     "(N=%ld, %zu bytes) — falling back to scalar dsymv\n",
                     (long)N,
                     ((size_t)m_panel * (size_t)m_panel + (size_t)m_panel) * sizeof(double));
+            if (status) status->dsytrd_mirror_fallback = 1;
         }
     }
 

@@ -194,3 +194,79 @@ class TestILP64Awareness:
         from jamma.jblas import blas_is_ilp64 as ilp64
 
         assert ilp64 == blas_is_ilp64
+
+
+# ---------------------------------------------------------------------------
+# dsyrk correctness tests
+# ---------------------------------------------------------------------------
+
+
+class TestDsyrk:
+    """Direct correctness tests for dsyrk (symmetric rank-k update)."""
+
+    @pytest.mark.parametrize("N,K", [(1, 1), (3, 5), (5, 3), (10, 10), (7, 1)])
+    def test_dsyrk_vs_numpy(self, N, K):
+        """dsyrk(X) should equal X @ X.T for various shapes."""
+        from jamma.jblas import dsyrk
+
+        rng = np.random.default_rng(42 + N * 100 + K)
+        X = rng.standard_normal((N, K))
+        result = dsyrk(X)
+        expected = X @ X.T
+        np.testing.assert_allclose(result, expected, rtol=1e-12, atol=1e-14)
+
+    def test_dsyrk_bitwise_symmetric(self):
+        """dsyrk result must be bitwise symmetric (result[i,j] == result[j,i])."""
+        from jamma.jblas import dsyrk
+
+        rng = np.random.default_rng(99)
+        X = rng.standard_normal((8, 5))
+        result = dsyrk(X)
+        np.testing.assert_array_equal(result, result.T)
+
+    def test_dsyrk_empty(self):
+        """dsyrk with N=0 should return empty matrix."""
+        from jamma.jblas import dsyrk
+
+        X = np.empty((0, 5), dtype=np.float64)
+        result = dsyrk(X)
+        assert result.shape == (0, 0)
+
+    def test_dsyrk_single_column(self):
+        """dsyrk with K=1 should produce an outer product."""
+        from jamma.jblas import dsyrk
+
+        X = np.array([[1.0], [2.0], [3.0]])
+        result = dsyrk(X)
+        expected = np.array([[1, 2, 3], [2, 4, 6], [3, 6, 9]], dtype=np.float64)
+        np.testing.assert_allclose(result, expected, atol=1e-14)
+
+
+# ---------------------------------------------------------------------------
+# dgemm shape validation tests
+# ---------------------------------------------------------------------------
+
+
+class TestDgemmShapeValidation:
+    """Verify dgemm raises on incompatible shapes."""
+
+    def test_incompatible_inner_dims(self):
+        """dgemm should raise ValueError on inner dimension mismatch."""
+        from jamma.jblas import dgemm
+
+        A = np.ones((3, 4), dtype=np.float64)
+        B = np.ones((5, 6), dtype=np.float64)  # 4 != 5
+        with pytest.raises(ValueError, match="mismatch"):
+            dgemm(A, B)
+
+    def test_incompatible_transposed(self):
+        """dgemm should raise ValueError on transposed inner mismatch."""
+        from jamma.jblas import dgemm
+
+        A = np.ones((3, 4), dtype=np.float64)
+        B = np.ones((3, 4), dtype=np.float64)
+        # op(A) = A.T (4x3), op(B) = B (3x4) → 3 != 3 → should work
+        # But: op(A) = A (3x4), op(B) = B.T (4x3) → 4 != 4 → should work
+        # Test: op(A) = A.T (4x3), op(B) = B.T (4x3) → 3 != 4 → error
+        with pytest.raises(ValueError):
+            dgemm(A, B, transa="T", transb="T")

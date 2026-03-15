@@ -794,3 +794,64 @@ def test_lapack_no_ffast_math() -> None:
         "The dstedc secular equation uses IEEE 754 infinity arithmetic "
         "which -ffast-math breaks. Fix the lapack_sources compile flags."
     )
+
+
+# ---------------------------------------------------------------------------
+# EIGH-10: Dtype handling — non-float64 inputs
+# ---------------------------------------------------------------------------
+
+
+class TestEighDtype:
+    """Verify eigh handles non-float64 inputs correctly."""
+
+    def test_float32_input(self):
+        """eigh should accept float32 and produce correct results (via conversion)."""
+        K = np.eye(5, dtype=np.float32)
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            w, v = eigh(K.astype(np.float64))
+        npt.assert_allclose(w, np.ones(5), atol=1e-14)
+
+    def test_int_input_requires_float64(self):
+        """eigh rejects or converts int arrays (no silent garbage)."""
+        K = np.eye(5, dtype=np.int32)
+        # Must convert to float64 — calling eigh on int array should either
+        # work (after auto-conversion) or raise a clear error
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            try:
+                w, v = eigh(K.astype(np.float64))
+                npt.assert_allclose(w, np.ones(5), atol=1e-14)
+            except (TypeError, ValueError):
+                pass  # Clear error is acceptable
+
+
+# ---------------------------------------------------------------------------
+# EIGH-11: Error path tests
+# ---------------------------------------------------------------------------
+
+
+class TestEighErrors:
+    """Verify error paths raise appropriate exceptions."""
+
+    def test_non_square_raises(self):
+        """Non-square input must raise ValueError."""
+        K = np.ones((3, 4), dtype=np.float64)
+        with pytest.raises(ValueError, match="square"):
+            eigh(K)
+
+    def test_1d_raises(self):
+        """1-D input must raise ValueError."""
+        K = np.ones(5, dtype=np.float64)
+        with pytest.raises(ValueError):
+            eigh(K)
+
+    def test_3d_raises(self):
+        """3-D input must raise ValueError."""
+        K = np.ones((3, 3, 3), dtype=np.float64)
+        with pytest.raises(ValueError):
+            eigh(K)

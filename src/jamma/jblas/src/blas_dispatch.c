@@ -45,6 +45,18 @@ static void *g_blas_handle = NULL;
 /* LP64 overflow guard: floor(sqrt(2^31 - 1)) */
 #define LP64_DIM_MAX 46340
 
+/* LP64 overflow counter: incremented when dimensions exceed LP64_DIM_MAX
+ * and the fallback to jblas-own dgemm is used.  Resettable by py_eigh. */
+static int g_lp64_overflow_count = 0;
+
+int blas_dispatch_lp64_overflow_count(void) {
+    return __atomic_load_n(&g_lp64_overflow_count, __ATOMIC_RELAXED);
+}
+
+void blas_dispatch_reset_lp64_overflow(void) {
+    __atomic_store_n(&g_lp64_overflow_count, 0, __ATOMIC_RELAXED);
+}
+
 /* ---------------------------------------------------------------------------
  * Debug flag
  * ---------------------------------------------------------------------------
@@ -189,11 +201,18 @@ static int scan_dir_for_blas(const char *dirpath) {
  * ---------------------------------------------------------------------------
  */
 static void force_numpy_blas_load(void) {
+    int dbg = _debug_enabled();
     PyObject *np = PyImport_ImportModule("numpy");
-    if (!np) { PyErr_Clear(); return; }
+    if (!np) {
+        if (dbg) fprintf(stderr, "jblas_dispatch: force_numpy_blas_load: numpy import failed\n");
+        PyErr_Clear(); return;
+    }
 
     PyObject *linalg = PyObject_GetAttrString(np, "linalg");
-    if (!linalg) { PyErr_Clear(); Py_DECREF(np); return; }
+    if (!linalg) {
+        if (dbg) fprintf(stderr, "jblas_dispatch: force_numpy_blas_load: numpy.linalg not found\n");
+        PyErr_Clear(); Py_DECREF(np); return;
+    }
 
     PyObject *eigh = PyObject_GetAttrString(linalg, "eigh");
     PyObject *eye = PyObject_GetAttrString(np, "eye");
@@ -213,10 +232,12 @@ static void force_numpy_blas_load(void) {
         if (eigh_result) {
             Py_DECREF(eigh_result);
         } else {
+            if (dbg) fprintf(stderr, "jblas_dispatch: force_numpy_blas_load: eigh(eye(2)) failed\n");
             PyErr_Clear();
         }
         Py_DECREF(eye_result);
     } else {
+        if (dbg) fprintf(stderr, "jblas_dispatch: force_numpy_blas_load: eye(2) failed\n");
         PyErr_Clear();
     }
 
@@ -451,6 +472,7 @@ static void _dgemm_external_wrapper(
     /* LP64 overflow guard: dimensions must fit in int32 */
     if (!g_is_ilp64 &&
         (m > LP64_DIM_MAX || n > LP64_DIM_MAX || k > LP64_DIM_MAX)) {
+        __atomic_add_fetch(&g_lp64_overflow_count, 1, __ATOMIC_RELAXED);
         static int warned = 0;
         if (!warned) {
             warned = 1;
@@ -562,6 +584,7 @@ static int _dgemm_external_full(
     if (!g_is_ilp64 &&
         (M > LP64_DIM_MAX || N > LP64_DIM_MAX || K > LP64_DIM_MAX ||
          lda > LP64_DIM_MAX || ldb > LP64_DIM_MAX || ldc > LP64_DIM_MAX)) {
+        __atomic_add_fetch(&g_lp64_overflow_count, 1, __ATOMIC_RELAXED);
         static int warned = 0;
         if (!warned) {
             warned = 1;
@@ -576,7 +599,10 @@ static int _dgemm_external_full(
 
     /* Prefer CBLAS C interface: handles row-major natively, no A/B swap.
      * Accelerate/MKL can choose optimal algorithm for the access pattern.
-     * CBLAS requires lda >= max(K,1), ldb >= max(N,1), ldc >= max(N,1). */
+     * CBLAS leading dimension rules (row-major):
+     *   lda >= max(cols_of_A, 1): NoTrans → K, Trans → M.
+     *   ldb >= max(cols_of_B, 1): NoTrans → N, Trans → K.
+     *   ldc >= max(N, 1) always. */
     if (g_cblas_dgemm) {
         int ta = transa ? JBLAS_CblasTrans : JBLAS_CblasNoTrans;
         int tb = transb ? JBLAS_CblasTrans : JBLAS_CblasNoTrans;

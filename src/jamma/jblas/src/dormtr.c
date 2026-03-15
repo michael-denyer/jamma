@@ -87,6 +87,13 @@ int jblas_dormtr_c(npy_intp N, npy_intp M,
     double *V_block = (double *)malloc((size_t)max_vlen * (size_t)nb_alloc * sizeof(double));
     double *z     = (double *)malloc((size_t)nb_alloc * sizeof(double));
     if (!T_buf || !W || !V_block || !z) {
+        fprintf(stderr, "jblas dormtr: workspace allocation failed "
+                "(N=%ld, M=%ld, NB=%d, needed ~%zu bytes for T+W+V+z)\n",
+                (long)N, (long)M, NB_DORMTR,
+                (size_t)nb_alloc * (size_t)nb_alloc * sizeof(double) +
+                (size_t)nb_alloc * (size_t)M * sizeof(double) +
+                (size_t)max_vlen * (size_t)nb_alloc * sizeof(double) +
+                (size_t)nb_alloc * sizeof(double));
         free(T_buf); free(W); free(V_block); free(z);
         return -1;
     }

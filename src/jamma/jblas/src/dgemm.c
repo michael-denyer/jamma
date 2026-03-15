@@ -156,11 +156,6 @@ int jblas_dgemm_init(void) {
         return -1;
     }
 
-    /* Redundant with the file-scope initializer of jblas_dgemm_microkernel
-     * above — kept for defensive clarity.  platform.c overwrites with the
-     * ISA-specific microkernel after this returns. */
-    jblas_dgemm_microkernel = jblas_dgemm_micro_generic;
-
     return 0;
 }
 

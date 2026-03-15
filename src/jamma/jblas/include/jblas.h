@@ -129,6 +129,12 @@ int blas_is_ilp64(void);
 /* Returns 1 if an external dgemm (system BLAS or BLIS) was discovered. */
 int blas_has_external(void);
 
+/* LP64 overflow tracking: incremented when dimensions exceed LP64_DIM_MAX
+ * and the fallback to jblas-own dgemm is used.  py_eigh resets before the
+ * computation and checks after to issue a Python warning. */
+int  blas_dispatch_lp64_overflow_count(void);
+void blas_dispatch_reset_lp64_overflow(void);
+
 /* ---------------------------------------------------------------------------
  * dgemm microkernel function pointer
  * ---------------------------------------------------------------------------
@@ -353,6 +359,17 @@ void jblas_dsyr2k_c(npy_intp N, npy_intp K,
                     double *C, npy_intp ldc);
 
 /* ---------------------------------------------------------------------------
+ * eigh status struct (populated during eigh, checked by py_eigh for warnings)
+ * ---------------------------------------------------------------------------
+ */
+typedef struct {
+    int dstedc_ws_fallback;      /* 1 if dstedc workspace alloc failed (global mutex path) */
+    int dsytrd_mirror_fallback;  /* 1 if dsytrd mirror buffer alloc failed (scalar dsymv) */
+    int secular_failures;        /* count of secular equation non-convergences */
+    int qr_fallback;             /* 1 if QR fallback was used */
+} jblas_eigh_status_t;
+
+/* ---------------------------------------------------------------------------
  * eigh function declarations (LAPACK eigendecomposition)
  * ---------------------------------------------------------------------------
  */
@@ -364,6 +381,7 @@ void jblas_dsyr2k_c(npy_intp N, npy_intp K,
  * eigenvalues: caller-allocated N doubles (ascending order on return).
  * eigenvectors: caller-allocated N x N doubles, row-major. U[:,j] is the
  *               eigenvector for eigenvalues[j].
+ * status: if non-NULL, populated with diagnostic flags (fallbacks, failures).
  *
  * Returns 0 on success, -1 on allocation failure, positive i if the
  * D&C secular solver failed to converge for eigenvalue i.
@@ -371,14 +389,17 @@ void jblas_dsyr2k_c(npy_intp N, npy_intp K,
 int jblas_eigh_c(npy_intp N,
                  double *K, npy_intp ldk,
                  double *eigenvalues,
-                 double *eigenvectors, npy_intp ldz);
+                 double *eigenvectors, npy_intp ldz,
+                 jblas_eigh_status_t *status);
 
 /* Internal LAPACK-layer functions (called by jblas_eigh_c, not Python-facing) */
 int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
-                   double *d, double *e, double *tau);
+                   double *d, double *e, double *tau,
+                   jblas_eigh_status_t *status);
 int jblas_dstedc_c(npy_intp N, double *d, double *e,
                    double *Z, npy_intp ldz,
-                   jblas_workspace_t *ws);
+                   jblas_workspace_t *ws,
+                   jblas_eigh_status_t *status);
 int jblas_dormtr_c(npy_intp N, npy_intp M,
                    const double *A, npy_intp lda, const double *tau,
                    double *C, npy_intp ldc);

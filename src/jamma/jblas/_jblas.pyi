@@ -17,12 +17,23 @@ ABI_VERSION: Final[int]
 jblas_isa: Final[Literal["AVX2", "NEON", "generic"]]
 """Active ISA name: "AVX2", "NEON", or "generic"."""
 
-blas_backend: Final[str]
-"""Active dgemm backend: "MKL-ILP64", "MKL-LP64", "OpenBLAS-ILP64",
-"OpenBLAS-LP64", "Accelerate", "BLIS", "jblas-own", etc."""
+blas_backend: Final[
+    Literal[
+        "MKL-ILP64",
+        "MKL-LP64",
+        "OpenBLAS-ILP64",
+        "OpenBLAS-LP64",
+        "Accelerate",
+        "BLIS",
+        "jblas-own",
+        "system-BLAS-ILP64",
+        "system-BLAS-LP64",
+    ]
+]
+"""Active dgemm backend identifier."""
 
-blas_is_ilp64: Final[int]
-"""1 if the active dgemm backend uses ILP64 (64-bit int) parameters, 0 if LP64."""
+blas_is_ilp64: Final[bool]
+"""True if the active dgemm backend uses ILP64 (64-bit int) parameters."""
 
 HAS_OPENMP: Final[bool]
 """True if the extension was compiled with OpenMP support.
@@ -101,8 +112,8 @@ def dgemv(
 def dgemm(
     A: npt.NDArray[np.float64],
     B: npt.NDArray[np.float64],
-    transa: str = ...,
-    transb: str = ...,
+    transa: Literal["N", "T", "n", "t"] = ...,
+    transb: Literal["N", "T", "n", "t"] = ...,
 ) -> npt.NDArray[np.float64]:
     """Compute matrix-matrix product with optional transpose.
 
@@ -181,6 +192,9 @@ def set_n_threads(n: int) -> int:
         n: Desired thread count (must be >= 1).
 
     Returns:
-        Previous thread count, or -1 if n < 1.
+        Previous thread count.
+
+    Raises:
+        ValueError: If n < 1.
     """
     ...

@@ -34,9 +34,9 @@
  *   (b) |d[i] - d[j]| <= 8*eps*max(|d[i]|, |d[j]|): merged via Givens rotation.
  *
  * Secular equation solver (LAPACK dlaed4 algorithm):
- *   PSI/PHI-split evaluation with Newton iteration and bisection safeguard.
- *   Converges reliably in the bracket (d[i], d[i+1]) for each root.
- *   LAPACK-style relative error bound for convergence test.
+ *   ORGATI origin selection, rational interpolation with dlaed5 (N=2) and
+ *   dlaed6 (3-pole) helpers.  Produces full-precision delta vectors for
+ *   dlaed3 weight product.
  *
  * Memory:
  *   dstedc_c allocates its own internal workspace: 2*N*N (work + merge_scratch)
@@ -1162,9 +1162,15 @@ static int merge_rank1(npy_intp n, npy_intp m,
      * For each pole k, compute weight W[k]:
      *   W[k] = delta_mat[k][k]  (= d[k] - lam[k], the "own" gap)
      *   then for each j != k: W[k] *= delta_mat[j][k] / (d[k] - d[j])
-     *   W[k] = sgn(z[k]) * sqrt(|W[k]|)
+     *   W[k] = sgn(z[k]) * sqrt(-W[k])   (product MUST be negative by
+     *          interlacing theorem; positive signals a precision issue)
      *
      * Eigenvector i, component k: q[k] = W[k] / delta_mat[i][k], normalize.
+     *
+     * NOTE: The weight product is still ill-conditioned for near-degenerate
+     * poles at N >= 200.  The QR fallback in jblas_dstedc_c catches these.
+     * LAPACK uses a more sophisticated multi-pass algorithm with iterative
+     * refinement which we have not implemented.
      */
     double *Q_nd = (double *)calloc((size_t)n_nd * (size_t)n_nd, sizeof(double));
     double *W_nd = (double *)malloc((size_t)n_nd * sizeof(double));
@@ -1188,9 +1194,22 @@ static int merge_rank1(npy_intp n, npy_intp m,
             double den = d_nd[k] - d_nd[j];
             w *= num / den;
         }
-        /* Product must be negative (interlacing theorem). Use copysign+sqrt(-w)
-         * to detect sign errors instead of masking with fabs. */
-        W_nd[k] = copysign(sqrt(fabs(w)), z_nd[k]);
+        /* Product MUST be negative (eigenvalue interlacing theorem).
+         * A positive product indicates a bug in dlaed4 deltas.
+         * Small positive values from FP rounding are tolerated with sqrt(fabs),
+         * but large positive values trigger a diagnostic warning. */
+        if (w > 0.0) {
+            /* FP rounding can make the product slightly positive.
+             * Warn if it's large enough to indicate a real problem. */
+            if (w > 1e-100) {
+                fprintf(stderr, "jblas dlaed3: positive weight product w=%.2e "
+                        "at pole k=%ld (n_nd=%ld) -- interlacing violated\n",
+                        w, (long)k, (long)n_nd);
+            }
+            W_nd[k] = copysign(sqrt(fabs(w)), z_nd[k]);
+        } else {
+            W_nd[k] = copysign(sqrt(-w), z_nd[k]);
+        }
     }
 
     for (npy_intp i = 0; i < n_nd; i++) {
@@ -1471,22 +1490,20 @@ int jblas_dstedc_c(npy_intp N, double *d, double *e,
 
     /* Check if D&C result needs QR fallback.
      *
-     * With the PSI/PHI-split dlaed4 solver, secular equation convergence
-     * is reliable (typically zero failures).  However the D&C eigenvector
-     * formula (dlaed3-style W/delta weight product) can produce moderate
-     * tridiagonal residuals (~1e-1) even with perfect eigenvalues, due to
-     * ill-conditioning in the weight product for near-degenerate poles.
-     * This is a known limitation of the naive dlaed3 formula — LAPACK uses
-     * a more sophisticated multi-pass algorithm with iterative refinement.
+     * Despite LAPACK-quality dlaed4 (ORGATI + rational interpolation)
+     * producing full-precision delta vectors, the dlaed3 weight product
+     * is still ill-conditioned for near-degenerate poles at N >= 200,
+     * producing residuals ~1e-1.  QR fallback remains necessary at these
+     * sizes.  At N < 200, D&C typically achieves residuals < 1e-9.
      *
      * QR fallback triggers when:
      *   (a) dstedc_recurse returned non-zero (allocation or convergence
      *       failure), OR
-     *   (b) the tridiagonal residual exceeds tolerance (unconditional).
+     *   (b) the tridiagonal residual exceeds 1e-10.
      *
-     * The unconditional residual check ensures reconstruction accuracy
-     * regardless of eigenvector formula quality.  The O(N^2) cost is
-     * acceptable since dstedc is already O(N^2 log N) for D&C. */
+     * Residuals between 1e-14 and 1e-10 produce a diagnostic warning but
+     * do not trigger fallback.  The O(N^2) residual check is acceptable
+     * since dstedc is already O(N^2 log N) for D&C. */
     int need_fallback = 0;
     if (ret != 0) {
         fprintf(stderr, "jblas dstedc: D&C returned %d (N=%ld), "
@@ -1498,6 +1515,10 @@ int jblas_dstedc_c(npy_intp N, double *d, double *e,
             fprintf(stderr, "jblas dstedc: D&C residual %.2e (N=%ld), "
                     "attempting QR fallback\n", resid, (long)N);
             need_fallback = 1;
+        } else if (resid > 1e-14) {
+            fprintf(stderr, "jblas dstedc: D&C residual %.2e (N=%ld) -- "
+                    "above machine epsilon but below QR threshold\n",
+                    resid, (long)N);
         }
     }
 

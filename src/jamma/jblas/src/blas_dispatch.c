@@ -91,7 +91,7 @@ static const char *_detect_backend_name(const char *lib_path, int is_ilp64) {
 static const char *ilp64_dgemm_names[] = {
     "dgemm_64_",              /* MKL ILP64 */
     "scipy_dgemm_64_",        /* scipy-openblas64 */
-    "dgemm64_",               /* OpenBLAS SYMBOLSUFFIX=64_ */
+    "dgemm64_",               /* OpenBLAS INTERFACE64=1 */
     NULL
 };
 static const char *lp64_dgemm_names[] = {
@@ -712,6 +712,13 @@ void jblas_dgemm_ext_ws(npy_intp M, npy_intp N, npy_intp K,
 {
     jblas_dgemm_ws(M, N, K, A, lda, B, ldb, C, ldc,
                    transa, transb, alpha, beta, ws);
+}
+
+int blas_dispatch_lp64_overflow_count(void) {
+    return 0;
+}
+
+void blas_dispatch_reset_lp64_overflow(void) {
 }
 
 #endif /* !_WIN32 */

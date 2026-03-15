@@ -32,8 +32,8 @@ blas_backend: Final[
 ]
 """Active dgemm backend identifier."""
 
-blas_is_ilp64: Final[bool]
-"""True if the active dgemm backend uses ILP64 (64-bit int) parameters."""
+blas_is_ilp64: Final[int]
+"""1 if the active dgemm backend uses ILP64 (64-bit int) parameters, 0 otherwise."""
 
 HAS_OPENMP: Final[bool]
 """True if the extension was compiled with OpenMP support.

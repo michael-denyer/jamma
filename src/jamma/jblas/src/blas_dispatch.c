@@ -20,6 +20,10 @@
  * blas_dispatch_init() returns 0 immediately (no external dispatch).
  */
 
+/* _GNU_SOURCE required on Linux for Dl_info and dladdr (used in
+ * discover_bundled_blis).  Must be defined before any includes. */
+#define _GNU_SOURCE
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

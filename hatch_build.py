@@ -905,6 +905,8 @@ class CustomBuildHook(BuildHookInterface):
                             cc_cmd,
                             *cc_extra,
                             "-O2",
+                            "-fno-fast-math",
+                            "-fno-finite-math-only",
                             "-fPIC",
                             "-std=c11",
                             f"-I{python_inc}",

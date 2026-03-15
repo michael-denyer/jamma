@@ -255,6 +255,29 @@ def test_orthogonality() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("bad_value", [np.nan, np.inf, -np.inf])
+def test_eigh_nan_inf_input(bad_value: float) -> None:
+    """eigh should not silently produce garbage for NaN/Inf input.
+
+    Either raises an error or propagates NaN in eigenvalues — both are
+    acceptable as long as the result is not silently wrong finite values.
+    """
+    N = 10
+    K = np.eye(N, dtype=np.float64)
+    K[3, 3] = bad_value
+    K_copy = K.copy()
+    try:
+        w, v = eigh(K_copy)
+        # If it didn't raise, eigenvalues must contain NaN/Inf — not
+        # silently finite values from a corrupted decomposition.
+        assert not np.all(np.isfinite(w)), (
+            f"eigh produced all-finite eigenvalues from input containing "
+            f"{bad_value} — expected NaN/Inf propagation or an exception"
+        )
+    except (RuntimeError, np.linalg.LinAlgError, ValueError):
+        pass  # Raising is acceptable
+
+
 def test_eigh_memory_layout() -> None:
     """eigh returns (eigenvalues shape (N,), eigenvectors shape (N,N)).
 

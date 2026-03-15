@@ -133,6 +133,8 @@ def test_all_exports_present():
         "eigh",
         "get_n_threads",
         "set_n_threads",
+        "blas_backend",
+        "blas_is_ilp64",
         "jblas_isa",
         "HAS_C_EXTENSION",
         "HAS_OPENMP",

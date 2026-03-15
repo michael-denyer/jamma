@@ -2,9 +2,10 @@
  * jblas.h — Public C API for the JAMMA BLAS compute layer.
  *
  * Declares the ISA dispatch table, jblas_init(), and function signatures for
- * Level 1/2 BLAS primitives (ddot, dnrm2, daxpy, dscal, dgemv) plus Level 3
+ * Level 1/2 BLAS primitives (ddot, dnrm2, daxpy, dscal, dgemv), Level 3
  * (dgemm, dsyrk, dsyr2k with three-level Goto/BLIS blocking and
- * ISA-dispatched microkernels).
+ * ISA-dispatched microkernels), and LAPACK eigendecomposition (eigh via
+ * DSYTRD + DSTEDC + DORMTR).
  *
  * ABI version bump required if any function signature or struct layout changes.
  */

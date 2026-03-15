@@ -121,7 +121,10 @@ int jblas_dormtr_c(npy_intp N, npy_intp M,
                             1, 0,       /* transa=1 (V^T), transb=0 */
                             1.0, 0.0);  /* W = 1.0 * V^T @ C + 0.0 * W */
 
-        /* DLARFB Step 2: W = T @ W (upper triangular T, top-to-bottom safe in-place) */
+        /* DLARFB Step 2: W = T @ W (upper triangular T).
+         * Safe in-place: row i reads W[k,...] for k >= i; the k=i value is
+         * consumed in the sum before the write, and k > i rows are not yet
+         * overwritten (top-to-bottom processing order). */
         for (npy_intp i = 0; i < nb; i++) {
             for (npy_intp c = 0; c < M; c++) {
                 double s = 0.0;

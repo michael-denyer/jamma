@@ -34,22 +34,23 @@
  *   (b) |d[i] - d[j]| <= 8*eps*max(|d[i]|, |d[j]|): merged via Givens rotation.
  *
  * Secular equation solver (dlaed4-like):
- *   Newton iteration with rational interpolation, guaranteed monotone
- *   convergence between poles.  Tolerance: 4*eps*|lambda|.
+ *   Newton iteration with bisection safeguard, converging monotonically
+ *   between poles via bracket clamping.  Tolerance: 4*eps*|lambda|.
  *
  * Memory:
  *   dstedc_c allocates one N x N workspace + O(N) scratch at top level,
  *   passed through recursion. merge_rank1 uses the workspace for Q_sec
  *   (N x N) and additionally allocates Z_new (N x N), delta_mat (up to
  *   N_nd x N_nd), Q_nd (N_nd x N_nd), and Q_nd_full (N x N_nd) locally.
- *   Peak merge-step memory is ~5 * N^2 doubles (~40 bytes/element).
- *   For N=100k, expect ~400 GB peak during the top-level merge.
+ *   Peak merge-step memory is ~6 * N^2 doubles (~48 bytes/element):
+ *   Z (caller), work=Q_sec, merge_scratch=Z_new, delta_mat, Q_nd, Q_nd_full.
+ *   For N=100k, expect ~480 GB peak during the top-level merge.
  *
  * References:
  *   Cuppen (1981), "A Divide and Conquer Method for the Symmetric
  *   Tridiagonal Eigenproblem."
- *   Li (1994), "Solving Secular Equations Stably and Efficiently."
- *   LAPACK Working Note 89.
+ *   Li (1994), "Solving Secular Equations Stably and Efficiently",
+ *   LAPACK Working Note 70.
  */
 
 /* Hint to conforming compilers that FENV access is required.
@@ -200,6 +201,8 @@ static void sort_eig(double *d, double *Z, npy_intp ldz, npy_intp n)
     double *z_col = (double *)malloc((size_t)n * sizeof(double));
     if (!idx || !d_tmp || !z_col) {
         free(idx); free(d_tmp); free(z_col);
+        fprintf(stderr, "jblas dstedc: sort_eig allocation failed for n=%ld, "
+                "falling back to O(n^2) insertion sort\n", (long)n);
         sort_eig_insertion(d, Z, ldz, n);  /* fallback */
         return;
     }
@@ -689,15 +692,16 @@ static int merge_rank1(npy_intp n, npy_intp m,
                           &lam_nd[i], delta_mat + i * n_nd);
         if (info != 0) {
             n_secular_failures++;
-            lam_nd[i] = d_nd[i];
-            for (npy_intp k = 0; k < n_nd; k++)
-                delta_mat[i * n_nd + k] = d_nd[k] - d_nd[i];
+            /* dlaed4 already stored its best estimate in lam_nd[i] and
+             * delta_mat row i.  Keep them — they are closer to the true root
+             * than the pole value d_nd[i].  The residual check in
+             * jblas_dstedc_c will trigger QR fallback if results are bad. */
         }
     }
     if (n_secular_failures > 0) {
         fprintf(stderr, "jblas dstedc: %d/%ld secular equation(s) "
-                "failed to converge at merge size %ld — using fallback "
-                "eigenvalues (residual check will catch bad results)\n",
+                "failed to converge at merge size %ld — using best estimates "
+                "(residual check will trigger QR fallback if needed)\n",
                 n_secular_failures, (long)n_nd, (long)n);
     }
 
@@ -1047,16 +1051,25 @@ int jblas_dstedc_c(npy_intp N, double *d, double *e,
     }
 
     if (need_fallback) {
-        if (N > 2000) {
-            fprintf(stderr, "jblas dstedc: QR fallback on N=%ld — "
-                    "this is O(N^3) and may take minutes\n", (long)N);
+        /* Skip QR retry if D&C failed due to allocation error — QR will
+         * also fail with the same malloc limitation. */
+        if (ret == -1) {
+            fprintf(stderr, "jblas dstedc: D&C allocation failure (N=%ld), "
+                    "skipping QR fallback (same allocation will fail)\n",
+                    (long)N);
+        } else {
+            if (N > 2000) {
+                fprintf(stderr, "jblas dstedc: QR fallback on N=%ld — "
+                        "this is O(N^3) and may take a very long time\n",
+                        (long)N);
+            }
+            memcpy(d, d_orig, (size_t)N * sizeof(double));
+            memcpy(e, e_orig, (size_t)(N - 1) * sizeof(double));
+            memset(Z, 0, (size_t)N * (size_t)ldz * sizeof(double));
+            for (npy_intp k = 0; k < N; k++)
+                Z[k * ldz + k] = 1.0;
+            ret = dsteqr_base(N, d, e, Z, ldz);
         }
-        memcpy(d, d_orig, (size_t)N * sizeof(double));
-        memcpy(e, e_orig, (size_t)(N - 1) * sizeof(double));
-        memset(Z, 0, (size_t)N * (size_t)ldz * sizeof(double));
-        for (npy_intp k = 0; k < N; k++)
-            Z[k * ldz + k] = 1.0;
-        ret = dsteqr_base(N, d, e, Z, ldz);
     }
 
     free(work);

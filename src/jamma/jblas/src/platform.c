@@ -237,13 +237,14 @@ const char *jblas_isa_name(void) {
  */
 
 int jblas_get_n_threads(void) {
-    return jblas_n_threads;
+    return __atomic_load_n(&jblas_n_threads, __ATOMIC_RELAXED);
 }
 
 int jblas_set_n_threads(int n) {
     if (n < 1) return -1;
-    int old = jblas_n_threads;
+    int old = __atomic_load_n(&jblas_n_threads, __ATOMIC_RELAXED);
     /* Clamp to init-time allocation to prevent packed_A OOB (Pitfall 5) */
-    jblas_n_threads = (n > _init_max_threads) ? _init_max_threads : n;
+    int clamped = (n > _init_max_threads) ? _init_max_threads : n;
+    __atomic_store_n(&jblas_n_threads, clamped, __ATOMIC_RELAXED);
     return old;
 }

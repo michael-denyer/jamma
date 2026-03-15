@@ -451,12 +451,15 @@ static void _dgemm_external_wrapper(
     /* LP64 overflow guard: dimensions must fit in int32 */
     if (!g_is_ilp64 &&
         (m > LP64_DIM_MAX || n > LP64_DIM_MAX || k > LP64_DIM_MAX)) {
-        int dbg = _debug_enabled();
-        if (dbg)
+        static int warned = 0;
+        if (!warned) {
+            warned = 1;
             fprintf(stderr,
-                "jblas_dispatch: LP64 overflow guard: m=%ld n=%ld k=%ld > %d, "
-                "falling back to jblas own dgemm\n",
+                "jblas_dispatch: WARNING: LP64 overflow guard triggered "
+                "(m=%ld n=%ld k=%ld > %d). Falling back to jblas own dgemm "
+                "which is much slower. Install ILP64 numpy for large matrices.\n",
                 (long)m, (long)n, (long)k, LP64_DIM_MAX);
+        }
         /* Fall back to jblas own blocking dgemm */
         jblas_dgemm_dispatch_fn(m, n, k, A, B, C);
         return;
@@ -559,12 +562,15 @@ static int _dgemm_external_full(
     if (!g_is_ilp64 &&
         (M > LP64_DIM_MAX || N > LP64_DIM_MAX || K > LP64_DIM_MAX ||
          lda > LP64_DIM_MAX || ldb > LP64_DIM_MAX || ldc > LP64_DIM_MAX)) {
-        int dbg = _debug_enabled();
-        if (dbg)
+        static int warned = 0;
+        if (!warned) {
+            warned = 1;
             fprintf(stderr,
-                "jblas_dispatch: LP64 overflow guard (full): "
-                "M=%ld N=%ld K=%ld, falling back to jblas own dgemm\n",
+                "jblas_dispatch: WARNING: LP64 overflow guard triggered "
+                "(M=%ld N=%ld K=%ld). Falling back to jblas own dgemm "
+                "which is much slower. Install ILP64 numpy for large matrices.\n",
                 (long)M, (long)N, (long)K);
+        }
         return 0;
     }
 

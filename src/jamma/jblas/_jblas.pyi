@@ -146,3 +146,41 @@ def dsyr2k(
         Updated result (new array), shape (N, N), float64.
     """
     ...
+
+def eigh(
+    K: npt.NDArray[np.float64],
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Compute eigenvalues and eigenvectors of a symmetric matrix.
+
+    K is overwritten as scratch (Householder vectors from dsytrd).
+
+    Args:
+        K: Symmetric matrix, shape (N, N), float64, C-contiguous.
+
+    Returns:
+        Tuple of (eigenvalues, eigenvectors) where eigenvalues is shape (N,)
+        ascending, eigenvectors is shape (N, N) with columns as unit eigenvectors.
+
+    Raises:
+        ValueError: If K is not 2-D square float64.
+        RuntimeError: If convergence fails.
+        MemoryError: If workspace allocation fails.
+    """
+    ...
+
+def get_n_threads() -> int:
+    """Get the current jblas thread count for Level 3 operations."""
+    ...
+
+def set_n_threads(n: int) -> int:
+    """Set the jblas thread count for Level 3 operations.
+
+    Clamped to the init-time maximum (prevents packed_A out-of-bounds).
+
+    Args:
+        n: Desired thread count (must be >= 1).
+
+    Returns:
+        Previous thread count, or -1 if n < 1.
+    """
+    ...

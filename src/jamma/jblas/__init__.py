@@ -349,8 +349,7 @@ except ImportError as _exc:
 
         Raises:
             ValueError: If K is not 2-D square float64.
-            numpy.linalg.LinAlgError: If convergence fails (NumPy fallback).
-            RuntimeError: If convergence fails (C extension).
+            RuntimeError: If convergence fails.
             MemoryError: If workspace allocation fails (C extension).
         """
         if K.ndim != 2:
@@ -358,8 +357,13 @@ except ImportError as _exc:
         if K.shape[0] != K.shape[1]:
             raise ValueError(f"eigh: K must be square, got shape {K.shape}")
         K64 = _np.asarray(K, dtype=_np.float64)
-        w, v = _np.linalg.eigh(K64)
-        # Match C extension contract: K is overwritten as scratch
+        try:
+            w, v = _np.linalg.eigh(K64)
+        except _np.linalg.LinAlgError as exc:
+            raise RuntimeError(f"jblas eigh (numpy fallback): {exc}") from exc
+        # Match C extension contract: K is overwritten as scratch.
+        # The C extension uses K for Householder vectors during dsytrd;
+        # the content is not meaningful to callers.
         if K.dtype == _np.float64 and K.flags["WRITEABLE"]:
             K[:] = 0.0
         return w, v

@@ -1255,3 +1255,49 @@ def test_dsyrk_throughput() -> None:
             f"NEON: throughput assertion skipped (Apple Accelerate is multi-threaded; "
             f"jblas ratio={ratio:.3f}x vs np.matmul)"
         )
+
+
+# ---------------------------------------------------------------------------
+# TestDsyrkVendorDispatch — vendor dsyrk dispatch parity tests (Phase 80.5)
+# ---------------------------------------------------------------------------
+
+
+class TestDsyrkVendorDispatch:
+    """Verify dsyrk produces correct results regardless of vendor dispatch path."""
+
+    def test_dsyrk_vendor_parity_small(self):
+        """dsyrk result matches numpy at N=10, K=5."""
+        rng = np.random.default_rng(42)
+        X = np.ascontiguousarray(rng.standard_normal((10, 5)), dtype=np.float64)
+        K = dsyrk(X)
+        expected = X @ X.T
+        npt.assert_allclose(K, expected, rtol=1e-12)
+
+    def test_dsyrk_vendor_parity_medium(self):
+        """dsyrk result matches numpy at N=200, K=100."""
+        rng = np.random.default_rng(123)
+        X = np.ascontiguousarray(rng.standard_normal((200, 100)), dtype=np.float64)
+        K = dsyrk(X)
+        expected = X @ X.T
+        npt.assert_allclose(K, expected, rtol=1e-12)
+
+    def test_dsyrk_vendor_symmetry(self):
+        """Vendor dsyrk produces bitwise-symmetric result."""
+        rng = np.random.default_rng(456)
+        X = np.ascontiguousarray(rng.standard_normal((50, 30)), dtype=np.float64)
+        K = dsyrk(X)
+        # Bitwise symmetry: K[i,j] == K[j,i] exactly
+        npt.assert_array_equal(K, K.T)
+
+    def test_dsyrk_vendor_parity_boundary_sizes(self):
+        """dsyrk matches numpy at MR-1, MR, MR+1 boundary sizes."""
+        from jamma.jblas import JBLAS_MR
+
+        rng = np.random.default_rng(789)
+        for n in [JBLAS_MR - 1, JBLAS_MR, JBLAS_MR + 1, 1, 2]:
+            if n < 1:
+                continue
+            X = np.ascontiguousarray(rng.standard_normal((n, 10)), dtype=np.float64)
+            K = dsyrk(X)
+            expected = X @ X.T
+            npt.assert_allclose(K, expected, rtol=1e-12, err_msg=f"Failed at N={n}")

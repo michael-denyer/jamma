@@ -51,18 +51,81 @@ int jblas_eigh_c(npy_intp N,
 {
     if (N <= 0) return 0;
 
+    if (N == 1) {
+        eigenvalues[0]       = K[0];
+        eigenvectors[0]      = 1.0;
+        return 0;
+    }
+
+    /* --- Vendor dsyevd fast path ---
+     * When vendor LAPACK dsyevd is available (Accelerate, MKL), call it
+     * directly instead of the three-step dsytrd+dstedc+dormtr pipeline.
+     * Vendor dsyevd is production-hardened, multithreaded, and handles
+     * edge cases that our D&C implementation may not.
+     *
+     * jblas_dsyevd_ext returns:
+     *   0:  success — K contains eigenvectors (row-major), eigenvalues filled
+     *  -2:  no vendor dsyevd available — fall through to jblas pipeline
+     *  -1:  allocation failure
+     *  >0:  LAPACK dsyevd convergence failure
+     *
+     * We work on a tightly-packed N×N copy (K_work) because dsyevd
+     * overwrites in-place and the caller's K/eigenvectors may have
+     * ldk > N or ldz > N (padded rows).  Stride-aware copy in/out.
+     */
+    {
+        double *K_work = (double *)malloc((size_t)N * (size_t)N * sizeof(double));
+        if (K_work) {
+            /* Stride-aware copy: K (ldk stride) → K_work (N stride) */
+            if (ldk == N) {
+                memcpy(K_work, K, (size_t)N * (size_t)N * sizeof(double));
+            } else {
+                for (npy_intp i = 0; i < N; i++)
+                    memcpy(K_work + i * N, K + i * ldk, (size_t)N * sizeof(double));
+            }
+            int ext_ret = jblas_dsyevd_ext(N, K_work, N, eigenvalues);
+            if (ext_ret == JBLAS_EXT_SUCCESS) {
+                /* Success: K_work now contains row-major eigenvectors (N stride).
+                 * Copy to eigenvectors output buffer (ldz stride). */
+                if (ldz == N) {
+                    memcpy(eigenvectors, K_work, (size_t)N * (size_t)N * sizeof(double));
+                } else {
+                    for (npy_intp i = 0; i < N; i++)
+                        memcpy(eigenvectors + i * ldz, K_work + i * N,
+                               (size_t)N * sizeof(double));
+                }
+                free(K_work);
+                return 0;
+            }
+            free(K_work);
+            if (ext_ret != JBLAS_EXT_UNAVAILABLE) {
+                /* Vendor dsyevd failed (not "unavailable") — return error.
+                 * Don't fall through: if vendor LAPACK fails, our D&C
+                 * would likely also fail on the same matrix. */
+                return ext_ret;
+            }
+            /* ext_ret == -2: no vendor dsyevd — fall through to jblas pipeline */
+        } else {
+            /* K_work malloc failed — fall through to jblas pipeline.
+             * NOTE: dstedc needs 2*N*N internally, so it will likely also
+             * fail for truly memory-constrained cases. */
+            fprintf(stderr,
+                "jblas_eigh_c: vendor dsyevd work copy allocation failed "
+                "(N=%ld, %.1f GB needed) — trying jblas pipeline\n",
+                (long)N,
+                (double)((size_t)N * (size_t)N * sizeof(double)) / (1024.0*1024*1024));
+            if (status) status->vendor_dsyevd_skipped = 1;
+        }
+    }
+
+    /* --- jblas three-step pipeline (fallback) --- */
+
     /* Guard: workspace must be initialized (jblas_init() called) */
     if (!jblas_packed_A) {
         fprintf(stderr,
             "jblas_eigh_c: workspace not allocated "
             "(jblas_dgemm_init() not called or failed)\n");
         return -1;
-    }
-
-    if (N == 1) {
-        eigenvalues[0]       = K[0];
-        eigenvectors[0]      = 1.0;
-        return 0;
     }
 
     /* Step 1: Allocate workspace d[N], e[N], tau[N-1] */

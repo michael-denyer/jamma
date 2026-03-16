@@ -1210,3 +1210,112 @@ class TestDlaed4Convergence:
                 f"QR fallback {status.qr_fallback} at N={N} -- z-vector sign fix "
                 f"should eliminate QR fallback at all sizes"
             )
+
+
+# ---------------------------------------------------------------------------
+# Vendor dsyevd dispatch tests
+# ---------------------------------------------------------------------------
+
+
+class TestEighVendorDispatch:
+    """Verify eigh produces correct results via vendor dsyevd or jblas pipeline."""
+
+    def test_eigh_vendor_reconstruction_accuracy(self):
+        """Reconstruction ||K - UDU.T||/||K|| < 1e-13 on random SPD matrix."""
+        rng = np.random.default_rng(42)
+        A = rng.standard_normal((100, 100))
+        K = np.ascontiguousarray(A @ A.T + np.eye(100), dtype=np.float64)
+        K_orig = K.copy()
+        w, v = eigh(K)
+        recon = v @ np.diag(w) @ v.T
+        rel_err = np.linalg.norm(K_orig - recon) / np.linalg.norm(K_orig)
+        assert rel_err < 1e-13, f"Reconstruction error {rel_err:.2e}"
+
+    def test_eigh_vendor_orthogonality(self):
+        """Orthogonality ||U.T U - I|| < 1e-13 on random SPD matrix."""
+        rng = np.random.default_rng(123)
+        A = rng.standard_normal((100, 100))
+        K = np.ascontiguousarray(A @ A.T + np.eye(100), dtype=np.float64)
+        w, v = eigh(K)
+        orth_err = np.linalg.norm(v.T @ v - np.eye(100))
+        assert orth_err < 1e-13, f"Orthogonality error {orth_err:.2e}"
+
+    def test_eigh_vendor_eigenvalue_ascending(self):
+        """Eigenvalues are ascending."""
+        rng = np.random.default_rng(456)
+        A = rng.standard_normal((50, 50))
+        K = np.ascontiguousarray(A @ A.T + np.eye(50), dtype=np.float64)
+        w, v = eigh(K)
+        assert np.all(np.diff(w) >= 0), "Eigenvalues not ascending"
+
+    def test_eigh_vendor_matches_numpy(self):
+        """Eigenvalues match numpy.linalg.eigh within rtol=1e-12."""
+        rng = np.random.default_rng(789)
+        A = rng.standard_normal((50, 50))
+        K = np.ascontiguousarray(A @ A.T + np.eye(50), dtype=np.float64)
+        K_copy = K.copy()
+        w_jblas, _ = eigh(K)
+        w_numpy, _ = np.linalg.eigh(K_copy)
+        npt.assert_allclose(w_jblas, w_numpy, rtol=1e-12)
+
+    def test_eigh_vendor_degenerate_eigenvalues(self):
+        """Stress test: block-diagonal with repeated eigenvalues."""
+        N = 100
+        # 5 blocks of 20 with identical eigenvalues within each block
+        blocks = []
+        for i in range(5):
+            rng = np.random.default_rng(i)
+            Q, _ = np.linalg.qr(rng.standard_normal((20, 20)))
+            lam = (i + 1) * np.ones(20)
+            blocks.append(Q @ np.diag(lam) @ Q.T)
+        K = np.ascontiguousarray(
+            np.block(
+                [
+                    [blocks[i] if i == j else np.zeros((20, 20)) for j in range(5)]
+                    for i in range(5)
+                ]
+            ),
+            dtype=np.float64,
+        )
+        K_orig = K.copy()
+        w, v = eigh(K)
+        recon = v @ np.diag(w) @ v.T
+        rel_err = np.linalg.norm(K_orig - recon) / np.linalg.norm(K_orig)
+        assert rel_err < 1e-12, (
+            f"Reconstruction error on degenerate matrix: {rel_err:.2e}"
+        )
+        orth_err = np.linalg.norm(v.T @ v - np.eye(N))
+        assert orth_err < 1e-12, (
+            f"Orthogonality error on degenerate matrix: {orth_err:.2e}"
+        )
+
+    def test_eigh_vendor_size_1(self):
+        """Size-1 matrix: edge case."""
+        K = np.array([[3.14]], dtype=np.float64)
+        w, v = eigh(K)
+        assert abs(w[0] - 3.14) < 1e-15
+        assert abs(v[0, 0] - 1.0) < 1e-15
+
+
+# ---------------------------------------------------------------------------
+# Backend reporting consistency tests
+# ---------------------------------------------------------------------------
+
+
+class TestEighBackendReporting:
+    """Verify blas_has_dsyevd is consistent with backend."""
+
+    def test_has_lapack_consistent_with_backend(self):
+        from jamma.jblas import blas_backend, blas_has_dsyevd
+
+        if blas_backend in ("Accelerate-ILP64", "MKL-ILP64"):
+            assert blas_has_dsyevd == 1, (
+                f"Backend {blas_backend} should have LAPACK "
+                f"but blas_has_dsyevd={blas_has_dsyevd}"
+            )
+        # BLIS-ILP64 and jblas-own should NOT have LAPACK
+        if blas_backend in ("BLIS-ILP64", "jblas-own"):
+            assert blas_has_dsyevd == 0, (
+                f"Backend {blas_backend} should not have LAPACK "
+                f"but blas_has_dsyevd={blas_has_dsyevd}"
+            )

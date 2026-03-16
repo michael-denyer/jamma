@@ -19,7 +19,7 @@
 /* Bump this constant whenever the public ABI changes (new fields in
  * jblas_dispatch_t, changed function signatures, etc.). pymodule.c exposes
  * this as a Python-level integer so callers can guard against ABI mismatches. */
-#define JBLAS_ABI_VERSION 7
+#define JBLAS_ABI_VERSION 8
 
 /* ---------------------------------------------------------------------------
  * Function-pointer typedefs for ISA-dispatched microkernels
@@ -103,10 +103,11 @@ typedef void (*jblas_dgemm_ilp64_fn)(
  * Preferred over Fortran interface when available — Accelerate/MKL can
  * choose optimal algorithm for the memory layout.
  *
- * LP64 CBLAS uses int for dimensions; ILP64 CBLAS (e.g. Accelerate
- * $NEWLAPACK$ILP64) uses long.  On LP64 platforms long==int==32-bit,
- * on ILP64 platforms long==64-bit.  We use separate typedefs. */
+ * LP64 CBLAS uses int (32-bit) for dimensions.  ILP64 CBLAS (e.g.
+ * Accelerate $NEWLAPACK$ILP64) uses long (64-bit on LP64 platforms
+ * like macOS arm64 and Linux x86_64).  We use separate typedefs. */
 enum { JBLAS_CblasRowMajor = 101, JBLAS_CblasNoTrans = 111, JBLAS_CblasTrans = 112 };
+enum { JBLAS_CblasUpper = 121, JBLAS_CblasLower = 122 };
 typedef void (*jblas_cblas_dgemm_fn)(
     int order, int transa, int transb,
     int m, int n, int k,
@@ -119,6 +120,58 @@ typedef void (*jblas_cblas_dgemm_ilp64_fn)(
     double alpha, const double *a, long lda,
     const double *b, long ldb,
     double beta, double *c, long ldc);
+
+/* Fortran dsyrk: dsyrk_(uplo, trans, n, k, alpha, a, lda, beta, c, ldc) */
+typedef void (*jblas_dsyrk_lp64_fn)(
+    const char *uplo, const char *trans,
+    const int *n, const int *k,
+    const double *alpha, const double *a, const int *lda,
+    const double *beta, double *c, const int *ldc);
+
+typedef void (*jblas_dsyrk_ilp64_fn)(
+    const char *uplo, const char *trans,
+    const long long *n, const long long *k,
+    const double *alpha, const double *a, const long long *lda,
+    const double *beta, double *c, const long long *ldc);
+
+/* CBLAS dsyrk: cblas_dsyrk(order, uplo, trans, n, k, alpha, a, lda, beta, c, ldc) */
+typedef void (*jblas_cblas_dsyrk_fn)(
+    int order, int uplo, int trans,
+    int n, int k,
+    double alpha, const double *a, int lda,
+    double beta, double *c, int ldc);
+
+typedef void (*jblas_cblas_dsyrk_ilp64_fn)(
+    int order, int uplo, int trans,
+    long n, long k,
+    double alpha, const double *a, long lda,
+    double beta, double *c, long ldc);
+
+/* LAPACK dsyevd (Fortran): dsyevd_(jobz, uplo, n, a, lda, w, work, lwork, iwork, liwork, info) */
+typedef void (*jblas_dsyevd_lp64_fn)(
+    const char *jobz, const char *uplo,
+    const int *n, double *a, const int *lda,
+    double *w, double *work, const int *lwork,
+    int *iwork, const int *liwork, int *info);
+
+typedef void (*jblas_dsyevd_ilp64_fn)(
+    const char *jobz, const char *uplo,
+    const long long *n, double *a, const long long *lda,
+    double *w, double *work, const long long *lwork,
+    long long *iwork, const long long *liwork, long long *info);
+
+/* LAPACKE dsyevd (C interface): handles row-major natively, no manual transpose.
+ * lapack_int is int for LP64 builds, long long for MKL ILP64 (int64_t for
+ * OpenBLAS ILP64).  Used as fallback when Fortran ILP64 symbols are unavailable
+ * — Fortran is preferred because its suffixed symbol names (dsyevd_64_,
+ * dsyevd$NEWLAPACK$ILP64) are unambiguous for LP64/ILP64. */
+enum { JBLAS_LAPACK_ROW_MAJOR = 101, JBLAS_LAPACK_COL_MAJOR = 102 };
+typedef int (*jblas_lapacke_dsyevd_lp64_fn)(
+    int matrix_layout, char jobz, char uplo,
+    int n, double *a, int lda, double *w);
+typedef long long (*jblas_lapacke_dsyevd_ilp64_fn)(
+    int matrix_layout, char jobz, char uplo,
+    long long n, double *a, long long lda, double *w);
 
 /* Initialise external BLAS dispatch: system BLAS -> bundled BLIS -> own kernels.
  * Called from jblas_init() after ISA detection and dgemm_init().
@@ -298,6 +351,41 @@ void jblas_dgemm_ext_ws(npy_intp M, npy_intp N, npy_intp K,
                         jblas_workspace_t *ws);
 
 /* ---------------------------------------------------------------------------
+ * Vendor-dispatch dsyrk / dsyevd API
+ * ---------------------------------------------------------------------------
+ */
+
+/* Vendor-dispatch dsyrk: C = X @ X.T (lower triangle + mirror).
+ * Routes to vendor cblas_dsyrk when available, else jblas_dsyrk_c. */
+void jblas_dsyrk_ext(npy_intp N, npy_intp K,
+                     const double *X, npy_intp ldx,
+                     double *C, npy_intp ldc);
+
+/* Returns 1 if vendor dsyrk is available (cblas_dsyrk resolved), 0 otherwise. */
+int blas_has_dsyrk(void);
+
+/* Returns 1 if vendor dsyevd is available, 0 otherwise. */
+int blas_has_dsyevd(void);
+
+/* Returns 1 if LAPACKE C interface for dsyevd is available (MKL).
+ * When true, jblas_dsyevd_ext uses row-major LAPACKE — no transpose needed. */
+int blas_has_lapacke_dsyevd(void);
+
+/* Return codes for jblas_dsyevd_ext (and future vendor-dispatch functions). */
+#define JBLAS_EXT_SUCCESS      0   /* Operation succeeded */
+#define JBLAS_EXT_ALLOC_FAIL  -1   /* Workspace allocation failed */
+#define JBLAS_EXT_UNAVAILABLE -2   /* No vendor routine available — use jblas pipeline */
+
+/* Vendor-dispatch dsyevd for eigh.
+ * Routes to vendor dsyevd when available, else returns JBLAS_EXT_UNAVAILABLE.
+ * K: N x N row-major symmetric matrix (overwritten with eigenvectors in row-major on success).
+ * eigenvalues: N doubles, ascending on success.
+ * Returns JBLAS_EXT_SUCCESS, JBLAS_EXT_UNAVAILABLE, JBLAS_EXT_ALLOC_FAIL,
+ * or positive LAPACK info on convergence/argument error. */
+int jblas_dsyevd_ext(npy_intp N, double *K, npy_intp ldk,
+                     double *eigenvalues);
+
+/* ---------------------------------------------------------------------------
  * Thread control API
  * ---------------------------------------------------------------------------
  * jblas_get_n_threads: returns current thread count.
@@ -401,6 +489,7 @@ typedef struct {
     int dsytrd_mirror_fallback;  /* 1 if dsytrd mirror buffer alloc failed (scalar dsymv) */
     int secular_failures;        /* count of secular equation non-convergences */
     int qr_fallback;             /* 1 if QR fallback was used */
+    int vendor_dsyevd_skipped;   /* 1 if vendor dsyevd copy buffer alloc failed */
 } jblas_eigh_status_t;
 
 /* ---------------------------------------------------------------------------

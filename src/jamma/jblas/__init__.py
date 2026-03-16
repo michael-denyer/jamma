@@ -45,6 +45,9 @@ try:
         JBLAS_NC,
         JBLAS_NR,
         blas_backend,
+        blas_has_dsyevd,
+        blas_has_dsyrk,
+        blas_has_lapacke_dsyevd,
         blas_is_ilp64,
         daxpy,
         ddot,
@@ -86,6 +89,9 @@ except ImportError as _exc:
     jblas_isa: str = "numpy-fallback"
     blas_backend: str = "numpy-fallback"
     blas_is_ilp64: int = 0
+    blas_has_dsyrk: int = 0
+    blas_has_dsyevd: int = 0
+    blas_has_lapacke_dsyevd: int = 0
 
     # Blocking parameters: generic defaults (matches jblas generic ISA).
     # Tests that import these should guard on HAS_C_EXTENSION.
@@ -401,6 +407,9 @@ except ImportError as _exc:
 __all__ = [
     "ABI_VERSION",
     "blas_backend",
+    "blas_has_dsyrk",
+    "blas_has_dsyevd",
+    "blas_has_lapacke_dsyevd",
     "blas_is_ilp64",
     "ddot",
     "dnrm2",

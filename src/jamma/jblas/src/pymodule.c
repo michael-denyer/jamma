@@ -418,8 +418,9 @@ py_dsyrk(PyObject *self, PyObject *args)
 
     /* Guard: workspace must be allocated (jblas_init succeeded).
      * Check BEFORE allocating the N×N output to avoid a large allocation
-     * that would be immediately freed on failure. */
-    if (!jblas_packed_A || !jblas_packed_B) {
+     * that would be immediately freed on failure.
+     * Skip guard if vendor dsyrk is available (doesn't need jblas workspace). */
+    if (!blas_has_dsyrk() && (!jblas_packed_A || !jblas_packed_B)) {
         PyErr_SetString(PyExc_RuntimeError,
             "dsyrk: workspace allocation failed during jblas init; "
             "reduce OMP_NUM_THREADS or use the numpy fallback");
@@ -439,8 +440,9 @@ py_dsyrk(PyObject *self, PyObject *args)
     double       *pC = (double *)PyArray_DATA(aC);
 
     Py_BEGIN_ALLOW_THREADS
-    /* ldx = K, ldc = N: safe because PyArray_FROM_OTF guarantees C-contiguous layout */
-    jblas_dsyrk_c(N, K, pX, K, pC, N);
+    /* ldx = K, ldc = N: safe because PyArray_FROM_OTF guarantees C-contiguous layout.
+     * jblas_dsyrk_ext routes to vendor cblas_dsyrk when available, else jblas_dsyrk_c. */
+    jblas_dsyrk_ext(N, K, pX, K, pC, N);
     Py_END_ALLOW_THREADS
 
     Py_DECREF(aX);
@@ -612,10 +614,14 @@ py_eigh(PyObject *self, PyObject *args)
     Py_END_ALLOW_THREADS
 
     if (ret != 0) {
-        if (ret < 0) {
+        if (ret == JBLAS_EXT_ALLOC_FAIL) {
             PyErr_Format(PyExc_MemoryError,
-                "jblas eigh: workspace allocation failed (returned %d) — "
-                "matrix too large for available memory", ret);
+                "jblas eigh: workspace allocation failed — "
+                "matrix too large for available memory");
+        } else if (ret < 0) {
+            PyErr_Format(PyExc_RuntimeError,
+                "jblas eigh: illegal argument to vendor LAPACK (info=%d) — "
+                "this is a jblas bug, please report it", ret);
         } else {
             PyErr_Format(PyExc_RuntimeError,
                 "jblas eigh: convergence failure (returned %d)", ret);
@@ -657,6 +663,13 @@ py_eigh(PyObject *self, PyObject *args)
         if (PyErr_WarnEx(PyExc_RuntimeWarning,
                 "jblas eigh: D&C eigensolver failed residual check — "
                 "fell back to QR iteration (much slower for large matrices)", 1) < 0)
+            goto warn_error;
+    }
+    if (eigh_status.vendor_dsyevd_skipped) {
+        if (PyErr_WarnEx(PyExc_RuntimeWarning,
+                "jblas eigh: vendor dsyevd work buffer allocation failed — "
+                "using jblas D&C pipeline instead. "
+                "Free memory or reduce matrix size.", 1) < 0)
             goto warn_error;
     }
     if (blas_dispatch_lp64_overflow_count() > 0) {
@@ -852,6 +865,22 @@ PyInit__jblas(void)
 
     /* blas_is_ilp64: 1 if external dgemm uses ILP64 (64-bit) integers, 0 otherwise */
     if (PyModule_AddIntConstant(m, "blas_is_ilp64", blas_is_ilp64()) < 0) {
+        Py_DECREF(m); return NULL;
+    }
+
+    /* blas_has_dsyrk: 1 if vendor cblas_dsyrk is available, 0 otherwise */
+    if (PyModule_AddIntConstant(m, "blas_has_dsyrk", blas_has_dsyrk()) < 0) {
+        Py_DECREF(m); return NULL;
+    }
+
+    /* blas_has_dsyevd: 1 if vendor LAPACK dsyevd is available, 0 otherwise */
+    if (PyModule_AddIntConstant(m, "blas_has_dsyevd", blas_has_dsyevd()) < 0) {
+        Py_DECREF(m); return NULL;
+    }
+
+    /* blas_has_lapacke_dsyevd: 1 if LAPACKE C interface for dsyevd is available (MKL).
+     * When true, dsyevd uses row-major LAPACKE — no eigenvector transpose needed. */
+    if (PyModule_AddIntConstant(m, "blas_has_lapacke_dsyevd", blas_has_lapacke_dsyevd()) < 0) {
         Py_DECREF(m); return NULL;
     }
 

@@ -134,6 +134,9 @@ def test_all_exports_present():
         "get_n_threads",
         "set_n_threads",
         "blas_backend",
+        "blas_has_dsyrk",
+        "blas_has_dsyevd",
+        "blas_has_lapacke_dsyevd",
         "blas_is_ilp64",
         "jblas_isa",
         "HAS_C_EXTENSION",
@@ -150,10 +153,10 @@ def test_all_exports_present():
 
 @pytest.mark.tier0
 def test_abi_version():
-    """ABI_VERSION is 7 (bumped for workspace-explicit symmetric BLAS + dsytrd ws)."""
+    """ABI_VERSION is 8 (bumped for dsyrk/dsyevd vendor dispatch typedefs)."""
     from jamma.jblas import ABI_VERSION
 
-    assert ABI_VERSION == 7, f"Expected ABI_VERSION=7, got {ABI_VERSION}"
+    assert ABI_VERSION == 8, f"Expected ABI_VERSION=8, got {ABI_VERSION}"
 
 
 @pytest.mark.tier0

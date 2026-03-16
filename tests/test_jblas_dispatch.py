@@ -272,3 +272,128 @@ class TestDgemmShapeValidation:
         # Test: op(A) = A.T (4x3), op(B) = B.T (4x3) → 3 != 4 → error
         with pytest.raises(ValueError):
             dgemm(A, B, transa="T", transb="T")
+
+
+# ---------------------------------------------------------------------------
+# Capability-based selection tests (Phase 80.5)
+# ---------------------------------------------------------------------------
+
+
+class TestCapabilityBasedSelection:
+    """Verify discover-all-then-select-best dispatch model."""
+
+    def test_discover_all_no_short_circuit(self):
+        """blas_dispatch.c must NOT short-circuit BLIS discovery.
+
+        The old code had `if (!found_system) found_blis = discover_bundled_blis()`
+        which prevented BLIS-ILP64 from being discovered when LP64 Accelerate
+        was found first. The refactored code must discover all three paths
+        unconditionally.
+        """
+        import pathlib
+
+        dispatch_src = (
+            pathlib.Path(__file__).resolve().parent.parent
+            / "src"
+            / "jamma"
+            / "jblas"
+            / "src"
+            / "blas_dispatch.c"
+        )
+        source = dispatch_src.read_text()
+
+        # The short-circuit pattern must not appear
+        assert "if (!found_system)" not in source, (
+            "blas_dispatch.c still contains short-circuit pattern "
+            "'if (!found_system)' — BLIS discovery must run unconditionally"
+        )
+
+        # All three discovery calls must appear
+        assert "discover_system_blas(" in source
+        assert "discover_pip_mkl(" in source
+        assert "discover_bundled_blis(" in source
+
+        # The candidate struct must exist
+        assert "blas_candidate_t" in source
+        assert "select_best_backend" in source
+
+    def test_dsyrk_ext_matches_jblas_own(self):
+        """dsyrk produces correct results via vendor or jblas-own path."""
+        from jamma.jblas import dsyrk
+
+        rng = np.random.default_rng(555)
+        X = rng.standard_normal((50, 30))
+        result = dsyrk(X)
+        expected = X @ X.T
+        np.testing.assert_allclose(result, expected, rtol=1e-12, atol=1e-14)
+
+    def test_eigh_ext_matches_numpy(self):
+        """eigh produces correct eigendecomposition (vendor or jblas pipeline)."""
+        from jamma.jblas import eigh
+
+        rng = np.random.default_rng(777)
+        A = rng.standard_normal((50, 50))
+        K = A @ A.T  # SPD matrix
+        K_copy = K.copy()  # eigh overwrites input
+
+        w, v = eigh(K_copy)
+
+        # Verify reconstruction: ||K - v @ diag(w) @ v.T|| / ||K|| < 1e-13
+        reconstructed = v @ np.diag(w) @ v.T
+        rel_err = np.linalg.norm(K - reconstructed) / np.linalg.norm(K)
+        assert rel_err < 1e-13, f"Reconstruction error {rel_err:.2e} too large"
+
+        # Verify orthogonality: ||v.T @ v - I|| < 1e-13
+        orth_err = np.linalg.norm(v.T @ v - np.eye(50))
+        assert orth_err < 1e-13, f"Orthogonality error {orth_err:.2e} too large"
+
+
+# ---------------------------------------------------------------------------
+# TestCapabilityFlags — blas_has_dsyrk / blas_has_dsyevd (Phase 80.5)
+# ---------------------------------------------------------------------------
+
+
+class TestCapabilityFlags:
+    """Verify blas_has_dsyrk and blas_has_dsyevd are exposed."""
+
+    def test_blas_has_dsyrk_is_int(self):
+        from jamma.jblas import blas_has_dsyrk
+
+        assert isinstance(blas_has_dsyrk, int)
+        assert blas_has_dsyrk in (0, 1)
+
+    def test_blas_has_dsyevd_is_int(self):
+        from jamma.jblas import blas_has_dsyevd
+
+        assert isinstance(blas_has_dsyevd, int)
+        assert blas_has_dsyevd in (0, 1)
+
+    def test_blas_has_lapacke_dsyevd_is_int(self):
+        from jamma.jblas import blas_has_lapacke_dsyevd
+
+        assert isinstance(blas_has_lapacke_dsyevd, int)
+        assert blas_has_lapacke_dsyevd in (0, 1)
+
+    def test_dsyrk_capability_consistent_with_backend(self):
+        """If backend is ILP64, dsyrk should also be available."""
+        from jamma.jblas import blas_backend, blas_has_dsyrk
+
+        if "ILP64" in blas_backend or "Accelerate" in blas_backend:
+            # Vendor ILP64 should have dsyrk
+            assert blas_has_dsyrk == 1, (
+                f"Backend {blas_backend} is ILP64 but blas_has_dsyrk=0"
+            )
+
+    def test_lapacke_dsyevd_consistent_with_backend(self):
+        """Accelerate has no LAPACKE; MKL does."""
+        from jamma.jblas import blas_backend, blas_has_lapacke_dsyevd
+
+        if blas_backend == "Accelerate-ILP64":
+            assert blas_has_lapacke_dsyevd == 0, (
+                "Accelerate should not have LAPACKE but "
+                f"blas_has_lapacke_dsyevd={blas_has_lapacke_dsyevd}"
+            )
+        if blas_backend in ("BLIS-ILP64", "jblas-own"):
+            assert blas_has_lapacke_dsyevd == 0, (
+                f"Backend {blas_backend} should not have LAPACKE"
+            )

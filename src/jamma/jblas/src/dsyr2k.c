@@ -95,7 +95,9 @@
 static void _dsyr2k_half(npy_intp N, npy_intp K,
                          const double *P, npy_intp ldp,
                          const double *Q, npy_intp ldq,
-                         double *C, npy_intp ldc)
+                         double *C, npy_intp ldc,
+                         double *packed_A, double *packed_B,
+                         int n_threads)
 {
     int MR = JBLAS_MR;
     int NR = JBLAS_NR;
@@ -109,7 +111,7 @@ static void _dsyr2k_half(npy_intp N, npy_intp K,
 
         /* JC loop: partition N into NC-wide column panels.
          * Hoisted outside IC to pack B once per (pc, jc) pair before the
-         * OpenMP parallel region — prevents data races on jblas_packed_B. */
+         * OpenMP parallel region — prevents data races on packed_B. */
         for (npy_intp jc = 0; jc < N; jc += NC) {
             npy_intp nc_actual = MIN(NC, N - jc);
 
@@ -117,30 +119,30 @@ static void _dsyr2k_half(npy_intp N, npy_intp K,
              * trans=1 reads Q.T: B[k, j] = Q[jc+j, pc+k].
              * Pointer starts at Q row jc, column pc. */
             jblas_pack_B(Q + jc * ldq + pc, ldq,
-                         kc_actual, nc_actual, jblas_packed_B, NR, 1);
+                         kc_actual, nc_actual, packed_B, NR, 1);
 
             npy_intp n_nr_strips = CEIL_DIV(nc_actual, NR);
 
             /* IC loop (OpenMP parallel): partition N into MC-tall row panels.
-             * Clamped to jblas_n_threads to prevent OOB packed_A access. */
+             * Clamped to n_threads to prevent OOB packed_A access. */
 #ifdef _OPENMP
-            #pragma omp parallel for schedule(static) num_threads(jblas_n_threads)
+            #pragma omp parallel for schedule(static) num_threads(n_threads)
 #endif
             for (npy_intp ic = 0; ic < N; ic += MC) {
                 npy_intp mc_actual = MIN(MC, N - ic);
 
 #ifdef _OPENMP
                 int tid = omp_get_thread_num();
-                if (tid >= jblas_n_threads) {
+                if (tid >= n_threads) {
                     fprintf(stderr,
                         "FATAL: OpenMP thread %d exceeds allocated workspace "
-                        "for %d threads\n", tid, jblas_n_threads);
+                        "for %d threads\n", tid, n_threads);
                     abort();
                 }
 #else
                 int tid = 0;
 #endif
-                double *packed_A_ptr = jblas_packed_A +
+                double *packed_A_ptr = packed_A +
                     (size_t)tid * (size_t)MC * (size_t)KC;
 
                 /* Pack P panel: P rows [ic, ic+mc_actual), cols [pc, pc+kc_actual).
@@ -164,7 +166,7 @@ static void _dsyr2k_half(npy_intp N, npy_intp K,
                     npy_intp jr      = jr_s * NR;
                     npy_intp nr_tile = MIN(NR, nc_actual - jr);
 
-                    const double *pB_strip = jblas_packed_B +
+                    const double *pB_strip = packed_B +
                         (size_t)jr_s * (size_t)kc_actual * (size_t)NR;
 
                     /* IR loop: MR strips within the IC row panel */
@@ -255,10 +257,12 @@ void jblas_dsyr2k_c(npy_intp N, npy_intp K,
     }
 
     /* Pass 1: C -= A @ B.T */
-    _dsyr2k_half(N, K, A, lda, B, ldb, C, ldc);
+    _dsyr2k_half(N, K, A, lda, B, ldb, C, ldc,
+                 jblas_packed_A, jblas_packed_B, jblas_n_threads);
 
     /* Pass 2: C -= B @ A.T */
-    _dsyr2k_half(N, K, B, ldb, A, lda, C, ldc);
+    _dsyr2k_half(N, K, B, ldb, A, lda, C, ldc,
+                 jblas_packed_A, jblas_packed_B, jblas_n_threads);
 
     int unlock_err = pthread_mutex_unlock(&jblas_dgemm_mutex);
     if (unlock_err != 0) {
@@ -267,4 +271,43 @@ void jblas_dsyr2k_c(npy_intp N, npy_intp K,
             unlock_err);
         abort();
     }
+}
+
+/* ---------------------------------------------------------------------------
+ * jblas_dsyr2k_ws — Workspace-explicit symmetric rank-2k update (no mutex).
+ *
+ * Same computation as jblas_dsyr2k_c but uses caller-owned workspace.
+ * Safe for concurrent use (e.g. inside eigensolver dsytrd).
+ * ---------------------------------------------------------------------------
+ */
+void jblas_dsyr2k_ws(npy_intp N, npy_intp K,
+                      const double *A, npy_intp lda,
+                      const double *B, npy_intp ldb,
+                      double *C, npy_intp ldc,
+                      jblas_workspace_t *ws)
+{
+    if (N < 0 || K < 0) {
+        fprintf(stderr,
+            "FATAL: jblas_dsyr2k_ws: negative dimension N=%ld K=%ld\n",
+            (long)N, (long)K);
+        abort();
+    }
+
+    if (N == 0 || K == 0)
+        return;
+
+    if (!ws || !ws->packed_A || !ws->packed_B || ws->n_threads < 1) {
+        fprintf(stderr,
+            "FATAL: jblas_dsyr2k_ws called with invalid workspace "
+            "(n_threads=%d)\n", ws ? ws->n_threads : -1);
+        abort();
+    }
+
+    /* Pass 1: C -= A @ B.T */
+    _dsyr2k_half(N, K, A, lda, B, ldb, C, ldc,
+                 ws->packed_A, ws->packed_B, ws->n_threads);
+
+    /* Pass 2: C -= B @ A.T */
+    _dsyr2k_half(N, K, B, ldb, A, lda, C, ldc,
+                 ws->packed_A, ws->packed_B, ws->n_threads);
 }

@@ -243,13 +243,6 @@ static void dlatrd_panel(double *A, npy_intp lda, npy_intp N,
         npy_intp m   = N - col - 1;    /* trailing size for this column */
         npy_intp off = m_panel - m;    /* offset into V/W for this column's v */
 
-        /* KNOWN BOTTLENECK: The deferred rank-2 update loop below is O(nb*m) per
-         * column — a scalar bottleneck. Converting this to BLAS would require
-         * restructuring dlatrd_panel to use a full DSYR2K trailing update rather
-         * than column-by-column deferred application. Left as scalar for Phase 81+
-         * consideration; the primary dsytrd bottleneck (dsymv_lower) is already
-         * BLAS-backed via mirror+GEMV above. */
-
         /* Apply deferred rank-2 updates to column col before reading it.
          * The trailing update A -= V*W^T + W*V^T has not been applied yet;
          * we must update A[col, col] and A[col+1:N, col] using previous
@@ -257,27 +250,42 @@ static void dlatrd_panel(double *A, npy_intp lda, npy_intp N,
         if (i > 0) {
             /* V/W row for A[col, col] is (i - 1).
              * V/W rows for A[col+1:N, col] are i..m_panel-1. */
-
-            /* Update diagonal: A[col,col] -= 2 * sum_{prev} V_diag * W_diag */
             npy_intp diag_vw = i - 1;  /* V/W row index for diagonal */
+
+            /* Pre-gather diagonal V/W values into contiguous stack vectors.
+             * These are the W[diag,prev] and V[diag,prev] values that the
+             * sub-diagonal update needs for every row k.  Pre-gathering
+             * eliminates repeated strided loads from the V/W matrices and
+             * keeps the inner loop's multiplicands in L1 cache. */
+            double temp1[NB_DSYTRD];  /* w_diag values (max 64 doubles = 512 bytes) */
+            double temp2[NB_DSYTRD];  /* v_diag values */
             for (npy_intp prev = 0; prev < i; prev++) {
-                double v_d = V[diag_vw * nb_alloc + prev];
-                double w_d = W[diag_vw * nb_alloc + prev];
-                A[col * lda + col] -= 2.0 * v_d * w_d;
+                temp1[prev] = W[diag_vw * nb_alloc + prev];
+                temp2[prev] = V[diag_vw * nb_alloc + prev];
             }
 
-            /* Update sub-diagonal: A[col+1+k, col] -= V[off+k,prev]*W[diag,prev]
-             *                                       + W[off+k,prev]*V[diag,prev]
-             * off = i, so V/W rows off..m_panel-1 = rows for A[col+1..N-1]. */
+            /* Update diagonal: A[col,col] -= 2 * sum_{prev} V_diag * W_diag */
             for (npy_intp prev = 0; prev < i; prev++) {
-                double w_d = W[diag_vw * nb_alloc + prev];
-                double v_d = V[diag_vw * nb_alloc + prev];
-                for (npy_intp k = 0; k < m; k++) {
-                    npy_intp vw_row = off + k;  /* = i + k */
-                    A[(col + 1 + k) * lda + col] -=
-                        V[vw_row * nb_alloc + prev] * w_d
-                      + W[vw_row * nb_alloc + prev] * v_d;
+                A[col * lda + col] -= 2.0 * temp2[prev] * temp1[prev];
+            }
+
+            /* Fused sub-diagonal update: single pass over rows, accumulating
+             * dot products against the pre-gathered temp vectors.
+             *
+             * Original code had prev as outer loop, k as inner — this loads
+             * w_d/v_d once per prev but streams through V/W rows i times.
+             * Fused version has k as outer loop with a single pass through
+             * V/W rows, accumulating sum_v and sum_w across all prev columns.
+             * The inner loop over prev vectorizes naturally since temp1/temp2
+             * are contiguous and small enough for L1 cache. */
+            for (npy_intp k = 0; k < m; k++) {
+                double sum_v = 0.0, sum_w = 0.0;
+                npy_intp vw_row = off + k;
+                for (npy_intp prev = 0; prev < i; prev++) {
+                    sum_v += V[vw_row * nb_alloc + prev] * temp1[prev];
+                    sum_w += W[vw_row * nb_alloc + prev] * temp2[prev];
                 }
+                A[(col + 1 + k) * lda + col] -= sum_v + sum_w;
             }
         }
 
@@ -368,9 +376,14 @@ static void dlatrd_panel(double *A, npy_intp lda, npy_intp N,
  * tridiagonal form and Householder scalars; the lower triangle of A
  * holds the Householder vectors.
  *
+ * ws: optional caller-owned workspace for dsyr2k trailing updates.
+ *     If non-NULL, uses jblas_dsyr2k_ws (no mutex contention).
+ *     If NULL, falls back to jblas_dsyr2k_c (global mutex path).
+ *
  * Returns 0 on success, -1 on allocation failure. */
 int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
                    double *d, double *e, double *tau,
+                   jblas_workspace_t *ws,
                    jblas_eigh_status_t *status)
 {
     if (N <= 0) return 0;
@@ -425,10 +438,18 @@ int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
          * Using nb here would skip that row/col and leave the next panel stale. */
         npy_intp m_trail = N - j - nb;
         if (m_trail > 0) {
-            jblas_dsyr2k_c(m_trail, nb,
-                           V + (nb - 1) * nb_alloc, nb_alloc,
-                           W + (nb - 1) * nb_alloc, nb_alloc,
-                           A + (j + nb) * lda + (j + nb), lda);
+            if (ws) {
+                jblas_dsyr2k_ws(m_trail, nb,
+                                V + (nb - 1) * nb_alloc, nb_alloc,
+                                W + (nb - 1) * nb_alloc, nb_alloc,
+                                A + (j + nb) * lda + (j + nb), lda,
+                                ws);
+            } else {
+                jblas_dsyr2k_c(m_trail, nb,
+                               V + (nb - 1) * nb_alloc, nb_alloc,
+                               W + (nb - 1) * nb_alloc, nb_alloc,
+                               A + (j + nb) * lda + (j + nb), lda);
+            }
         }
     }
 

@@ -59,6 +59,111 @@
 #define MAX_NR  8
 
 /* ---------------------------------------------------------------------------
+ * _dsyrk_core — Core symmetric rank-k loop with explicit workspace.
+ *
+ * Computes the lower triangle of C = X @ X.T using three-level Goto/BLIS
+ * blocking.  Does NOT zero C or mirror — caller handles those.
+ *
+ * packed_A, packed_B, n_threads: caller-owned workspace buffers.
+ * ---------------------------------------------------------------------------
+ */
+static void _dsyrk_core(npy_intp N, npy_intp K,
+                         const double *X, npy_intp ldx,
+                         double *C, npy_intp ldc,
+                         double *packed_A, double *packed_B,
+                         int n_threads)
+{
+    int MR = JBLAS_MR;
+    int NR = JBLAS_NR;
+    int KC = JBLAS_KC;
+    int MC = JBLAS_MC;
+    int NC = JBLAS_NC;
+
+    /* PC outer loop: partition K into KC-deep blocks */
+    for (npy_intp pc = 0; pc < K; pc += KC) {
+        npy_intp kc_actual = MIN(KC, K - pc);
+
+        for (npy_intp jc = 0; jc < N; jc += NC) {
+            npy_intp nc_actual = MIN(NC, N - jc);
+
+            jblas_pack_B(X + jc * ldx + pc, ldx,
+                         kc_actual, nc_actual, packed_B, NR, 1);
+
+            npy_intp n_nr_strips = CEIL_DIV(nc_actual, NR);
+
+#ifdef _OPENMP
+            #pragma omp parallel for schedule(static) num_threads(n_threads)
+#endif
+            for (npy_intp ic = 0; ic < N; ic += MC) {
+                npy_intp mc_actual = MIN(MC, N - ic);
+
+                if (jc > ic + mc_actual - 1)
+                    continue;
+
+#ifdef _OPENMP
+                int tid = omp_get_thread_num();
+                if (tid >= n_threads) {
+                    fprintf(stderr,
+                        "FATAL: OpenMP thread %d exceeds allocated workspace "
+                        "for %d threads\n", tid, n_threads);
+                    abort();
+                }
+#else
+                int tid = 0;
+#endif
+                double *packed_A_ptr = packed_A +
+                    (size_t)tid * (size_t)MC * (size_t)KC;
+
+                jblas_pack_A(X + ic * ldx + pc, ldx,
+                             mc_actual, kc_actual, packed_A_ptr, MR, 0);
+
+                npy_intp n_mr_strips = CEIL_DIV(mc_actual, MR);
+
+                for (npy_intp jr_s = 0; jr_s < n_nr_strips; jr_s++) {
+                    npy_intp jr      = jr_s * NR;
+                    npy_intp nr_tile = MIN(NR, nc_actual - jr);
+                    npy_intp col_abs = jc + jr;
+
+                    const double *pB_strip = packed_B +
+                        (size_t)jr_s * (size_t)kc_actual * (size_t)NR;
+
+                    for (npy_intp ir_s = 0; ir_s < n_mr_strips; ir_s++) {
+                        npy_intp ir      = ir_s * MR;
+                        npy_intp mr_tile = MIN(MR, mc_actual - ir);
+                        npy_intp row_abs = ic + ir;
+
+                        if (col_abs > row_abs + mr_tile - 1)
+                            continue;
+
+                        const double *pA_strip = packed_A_ptr +
+                            (size_t)ir_s * (size_t)kc_actual * (size_t)MR;
+
+                        double *C_tile = C + row_abs * ldc + col_abs;
+
+                        if (mr_tile == MR && nr_tile == NR) {
+                            jblas_dgemm_microkernel(kc_actual, pA_strip, pB_strip,
+                                                    C_tile, ldc);
+                        } else {
+                            double scratch[MAX_MR * MAX_NR];
+                            memset(scratch, 0, sizeof(scratch));
+
+                            jblas_dgemm_microkernel(kc_actual, pA_strip, pB_strip,
+                                                    scratch, NR);
+
+                            for (npy_intp r = 0; r < mr_tile; r++) {
+                                for (npy_intp c = 0; c < nr_tile; c++) {
+                                    C_tile[r * ldc + c] += scratch[r * NR + c];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* ---------------------------------------------------------------------------
  * jblas_dsyrk_c — Symmetric rank-k update: C = X @ X.T (lower then mirror)
  *
  * N    : number of rows/columns of C and rows of X.
@@ -104,124 +209,8 @@ void jblas_dsyrk_c(npy_intp N, npy_intp K,
         abort();
     }
 
-    int MR = JBLAS_MR;
-    int NR = JBLAS_NR;
-    int KC = JBLAS_KC;
-    int MC = JBLAS_MC;
-    int NC = JBLAS_NC;
-
-    /* PC outer loop: partition K into KC-deep blocks */
-    for (npy_intp pc = 0; pc < K; pc += KC) {
-        npy_intp kc_actual = MIN(KC, K - pc);
-
-        /* JC loop: partition N into NC-wide column panels.
-         * Hoisted outside IC to pack B once per (pc, jc) pair before the
-         * OpenMP parallel region — prevents data races on jblas_packed_B. */
-        for (npy_intp jc = 0; jc < N; jc += NC) {
-            npy_intp nc_actual = MIN(NC, N - jc);
-
-            /* Pack B panel: X rows [jc, jc+nc_actual), columns [pc, pc+kc_actual)
-             * trans=1 reads X.T: B[k, j] = X[jc+j, pc+k] = X[(jc+j)*ldx + (pc+k)]
-             * Pointer starts at X row jc, column pc. */
-            jblas_pack_B(X + jc * ldx + pc, ldx,
-                         kc_actual, nc_actual, jblas_packed_B, NR, 1);
-
-            npy_intp n_nr_strips = CEIL_DIV(nc_actual, NR);
-
-            /* IC loop (OpenMP parallel): partition N into MC-tall row panels.
-             * Clamped to jblas_n_threads to prevent OOB packed_A access. */
-#ifdef _OPENMP
-            #pragma omp parallel for schedule(static) num_threads(jblas_n_threads)
-#endif
-            for (npy_intp ic = 0; ic < N; ic += MC) {
-                npy_intp mc_actual = MIN(MC, N - ic);
-
-                /* Diagonal skip at IC level:
-                 * If the entire IC row panel is below the diagonal for this
-                 * JC column panel, skip.  The last column in the JC panel is
-                 * jc + nc_actual - 1.  If ic > that index, all rows in
-                 * [ic, ic+mc_actual) are below the last JC column — but that
-                 * means lower triangle, which we DO want.  Instead, skip if
-                 * jc > ic + mc_actual - 1 (entire JC panel is above diagonal
-                 * for this IC row panel). */
-                if (jc > ic + mc_actual - 1)
-                    continue;
-
-#ifdef _OPENMP
-                int tid = omp_get_thread_num();
-                if (tid >= jblas_n_threads) {
-                    fprintf(stderr,
-                        "FATAL: OpenMP thread %d exceeds allocated workspace "
-                        "for %d threads\n", tid, jblas_n_threads);
-                    abort();
-                }
-#else
-                int tid = 0;
-#endif
-                double *packed_A_ptr = jblas_packed_A +
-                    (size_t)tid * (size_t)MC * (size_t)KC;
-
-                /* Pack A panel: X rows [ic, ic+mc_actual), columns [pc, pc+kc_actual)
-                 * trans=0 reads X in row-major order. */
-                jblas_pack_A(X + ic * ldx + pc, ldx,
-                             mc_actual, kc_actual, packed_A_ptr, MR, 0);
-
-                npy_intp n_mr_strips = CEIL_DIV(mc_actual, MR);
-
-                /* JR loop: NR strips within the JC column panel */
-                for (npy_intp jr_s = 0; jr_s < n_nr_strips; jr_s++) {
-                    npy_intp jr      = jr_s * NR;
-                    npy_intp nr_tile = MIN(NR, nc_actual - jr);
-                    npy_intp col_abs = jc + jr;  /* absolute column of this NR strip */
-
-                    /* Packed B strip pointer — jr is relative to JC panel start,
-                     * so jr_s indexes directly (no subtraction needed). */
-                    const double *pB_strip = jblas_packed_B +
-                        (size_t)jr_s * (size_t)kc_actual * (size_t)NR;
-
-                    /* IR loop: MR strips within the IC row panel */
-                    for (npy_intp ir_s = 0; ir_s < n_mr_strips; ir_s++) {
-                        npy_intp ir      = ir_s * MR;
-                        npy_intp mr_tile = MIN(MR, mc_actual - ir);
-                        npy_intp row_abs = ic + ir;  /* absolute row of this MR strip */
-
-                        /* Diagonal skip at tile level:
-                         * Skip if all columns of this tile are above the last
-                         * row of the MR strip, i.e., col_abs > row_abs + mr_tile - 1. */
-                        if (col_abs > row_abs + mr_tile - 1)
-                            continue;
-
-                        /* Packed A strip pointer */
-                        const double *pA_strip = packed_A_ptr +
-                            (size_t)ir_s * (size_t)kc_actual * (size_t)MR;
-
-                        /* Target C tile: C[row_abs, col_abs] */
-                        double *C_tile = C + row_abs * ldc + col_abs;
-
-                        if (mr_tile == MR && nr_tile == NR) {
-                            /* Full tile: microkernel accumulates directly to C */
-                            jblas_dgemm_microkernel(kc_actual, pA_strip, pB_strip,
-                                                    C_tile, ldc);
-                        } else {
-                            /* Tail tile: accumulate into scratch, add valid
-                             * portion to C. */
-                            double scratch[MAX_MR * MAX_NR];
-                            memset(scratch, 0, sizeof(scratch));
-
-                            jblas_dgemm_microkernel(kc_actual, pA_strip, pB_strip,
-                                                    scratch, NR);
-
-                            for (npy_intp r = 0; r < mr_tile; r++) {
-                                for (npy_intp c = 0; c < nr_tile; c++) {
-                                    C_tile[r * ldc + c] += scratch[r * NR + c];
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    _dsyrk_core(N, K, X, ldx, C, ldc,
+                jblas_packed_A, jblas_packed_B, jblas_n_threads);
 
     int unlock_err = pthread_mutex_unlock(&jblas_dgemm_mutex);
     if (unlock_err != 0) {
@@ -231,12 +220,51 @@ void jblas_dsyrk_c(npy_intp N, npy_intp K,
         abort();
     }
 
-    /* Mirror lower triangle to upper triangle.
-     * In row-major, element (i, j) is at C[i*ldc + j].
-     * The lower triangle (i >= j) was accumulated above.
-     * Copy lower to upper: for each i < j, set C[i*ldc + j] = C[j*ldc + i].
-     *   C[j*ldc + i]  — row j, col i, j > i → lower triangle (source)
-     *   C[i*ldc + j]  — row i, col j, j > i → upper triangle (dest)   */
+    /* Mirror lower triangle to upper triangle. */
+    for (npy_intp i = 0; i < N; i++) {
+        for (npy_intp j = i + 1; j < N; j++) {
+            C[i * ldc + j] = C[j * ldc + i];
+        }
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * jblas_dsyrk_ws — Workspace-explicit symmetric rank-k update (no mutex).
+ *
+ * Same computation as jblas_dsyrk_c but uses caller-owned workspace.
+ * Safe for concurrent use (e.g. inside eigensolver).
+ * ---------------------------------------------------------------------------
+ */
+void jblas_dsyrk_ws(npy_intp N, npy_intp K,
+                     const double *X, npy_intp ldx,
+                     double *C, npy_intp ldc,
+                     jblas_workspace_t *ws)
+{
+    if (N < 0 || K < 0) {
+        fprintf(stderr,
+            "FATAL: jblas_dsyrk_ws: negative dimension N=%ld K=%ld\n",
+            (long)N, (long)K);
+        abort();
+    }
+
+    for (npy_intp i = 0; i < N; i++) {
+        memset(C + i * ldc, 0, (size_t)N * sizeof(double));
+    }
+
+    if (N == 0 || K == 0)
+        return;
+
+    if (!ws || !ws->packed_A || !ws->packed_B || ws->n_threads < 1) {
+        fprintf(stderr,
+            "FATAL: jblas_dsyrk_ws called with invalid workspace "
+            "(n_threads=%d)\n", ws ? ws->n_threads : -1);
+        abort();
+    }
+
+    _dsyrk_core(N, K, X, ldx, C, ldc,
+                ws->packed_A, ws->packed_B, ws->n_threads);
+
+    /* Mirror lower triangle to upper triangle. */
     for (npy_intp i = 0; i < N; i++) {
         for (npy_intp j = i + 1; j < N; j++) {
             C[i * ldc + j] = C[j * ldc + i];
@@ -297,96 +325,8 @@ void jblas_dsyrk_lower_c(npy_intp N, npy_intp K,
         abort();
     }
 
-    int MR = JBLAS_MR;
-    int NR = JBLAS_NR;
-    int KC = JBLAS_KC;
-    int MC = JBLAS_MC;
-    int NC = JBLAS_NC;
-
-    /* PC outer loop: partition K into KC-deep blocks */
-    for (npy_intp pc = 0; pc < K; pc += KC) {
-        npy_intp kc_actual = MIN(KC, K - pc);
-
-        for (npy_intp jc = 0; jc < N; jc += NC) {
-            npy_intp nc_actual = MIN(NC, N - jc);
-
-            jblas_pack_B(X + jc * ldx + pc, ldx,
-                         kc_actual, nc_actual, jblas_packed_B, NR, 1);
-
-            npy_intp n_nr_strips = CEIL_DIV(nc_actual, NR);
-
-#ifdef _OPENMP
-            #pragma omp parallel for schedule(static) num_threads(jblas_n_threads)
-#endif
-            for (npy_intp ic = 0; ic < N; ic += MC) {
-                npy_intp mc_actual = MIN(MC, N - ic);
-
-                /* Diagonal skip: skip if JC panel entirely above diagonal */
-                if (jc > ic + mc_actual - 1)
-                    continue;
-
-#ifdef _OPENMP
-                int tid = omp_get_thread_num();
-                if (tid >= jblas_n_threads) {
-                    fprintf(stderr,
-                        "FATAL: OpenMP thread %d exceeds allocated workspace "
-                        "for %d threads\n", tid, jblas_n_threads);
-                    abort();
-                }
-#else
-                int tid = 0;
-#endif
-                double *packed_A_ptr = jblas_packed_A +
-                    (size_t)tid * (size_t)MC * (size_t)KC;
-
-                jblas_pack_A(X + ic * ldx + pc, ldx,
-                             mc_actual, kc_actual, packed_A_ptr, MR, 0);
-
-                npy_intp n_mr_strips = CEIL_DIV(mc_actual, MR);
-
-                for (npy_intp jr_s = 0; jr_s < n_nr_strips; jr_s++) {
-                    npy_intp jr      = jr_s * NR;
-                    npy_intp nr_tile = MIN(NR, nc_actual - jr);
-                    npy_intp col_abs = jc + jr;
-
-                    const double *pB_strip = jblas_packed_B +
-                        (size_t)jr_s * (size_t)kc_actual * (size_t)NR;
-
-                    for (npy_intp ir_s = 0; ir_s < n_mr_strips; ir_s++) {
-                        npy_intp ir      = ir_s * MR;
-                        npy_intp mr_tile = MIN(MR, mc_actual - ir);
-                        npy_intp row_abs = ic + ir;
-
-                        /* Diagonal skip at tile level */
-                        if (col_abs > row_abs + mr_tile - 1)
-                            continue;
-
-                        const double *pA_strip = packed_A_ptr +
-                            (size_t)ir_s * (size_t)kc_actual * (size_t)MR;
-
-                        double *C_tile = C + row_abs * ldc + col_abs;
-
-                        if (mr_tile == MR && nr_tile == NR) {
-                            jblas_dgemm_microkernel(kc_actual, pA_strip, pB_strip,
-                                                    C_tile, ldc);
-                        } else {
-                            double scratch[MAX_MR * MAX_NR];
-                            memset(scratch, 0, sizeof(scratch));
-
-                            jblas_dgemm_microkernel(kc_actual, pA_strip, pB_strip,
-                                                    scratch, NR);
-
-                            for (npy_intp r = 0; r < mr_tile; r++) {
-                                for (npy_intp c = 0; c < nr_tile; c++) {
-                                    C_tile[r * ldc + c] += scratch[r * NR + c];
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    _dsyrk_core(N, K, X, ldx, C, ldc,
+                jblas_packed_A, jblas_packed_B, jblas_n_threads);
 
     int unlock_err = pthread_mutex_unlock(&jblas_dgemm_mutex);
     if (unlock_err != 0) {
@@ -395,6 +335,44 @@ void jblas_dsyrk_lower_c(npy_intp N, npy_intp K,
             unlock_err);
         abort();
     }
+
+    /* No mirror step — only the lower triangle is valid. */
+}
+
+/* ---------------------------------------------------------------------------
+ * jblas_dsyrk_lower_ws — Workspace-explicit lower-only rank-k update (no mutex).
+ *
+ * Same as jblas_dsyrk_lower_c but uses caller-owned workspace.
+ * ---------------------------------------------------------------------------
+ */
+void jblas_dsyrk_lower_ws(npy_intp N, npy_intp K,
+                            const double *X, npy_intp ldx,
+                            double *C, npy_intp ldc,
+                            jblas_workspace_t *ws)
+{
+    if (N < 0 || K < 0) {
+        fprintf(stderr,
+            "FATAL: jblas_dsyrk_lower_ws: negative dimension N=%ld K=%ld\n",
+            (long)N, (long)K);
+        abort();
+    }
+
+    for (npy_intp i = 0; i < N; i++) {
+        memset(C + i * ldc, 0, (size_t)(i + 1) * sizeof(double));
+    }
+
+    if (N == 0 || K == 0)
+        return;
+
+    if (!ws || !ws->packed_A || !ws->packed_B || ws->n_threads < 1) {
+        fprintf(stderr,
+            "FATAL: jblas_dsyrk_lower_ws called with invalid workspace "
+            "(n_threads=%d)\n", ws ? ws->n_threads : -1);
+        abort();
+    }
+
+    _dsyrk_core(N, K, X, ldx, C, ldc,
+                ws->packed_A, ws->packed_B, ws->n_threads);
 
     /* No mirror step — only the lower triangle is valid. */
 }

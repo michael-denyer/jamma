@@ -75,23 +75,11 @@ int jblas_eigh_c(npy_intp N,
         return -1;
     }
 
-    /* Step 2: Tridiagonalization: K -> T, Householder vectors in K's lower triangle */
-    int ret = jblas_dsytrd_c(N, K, ldk, d, e, tau, status);
-    if (ret != 0) {
-        free(d); free(e); free(tau);
-        return ret;
-    }
-
-    /* Step 3: D&C tridiagonal eigensolver
-     * On input: d[N] diagonal, e[N-1] off-diagonal.
-     * On output: d[N] eigenvalues (ascending), Z columns = eigenvectors of T.
-     * dstedc initializes Z to identity internally.
-     *
-     * Allocate a GEMM workspace shared by both dstedc and dormtr.  This avoids
-     * a redundant alloc+free between steps: dstedc uses it for merge-level
-     * GEMMs, then dormtr reuses it for back-transformation GEMMs.  Thread
-     * count matches init-time jblas_n_threads so GEMMs benefit from threading.
-     * If allocation fails, pass NULL (both fall back to global mutex path). */
+    /* Allocate a GEMM workspace shared by dsytrd, dstedc, and dormtr.
+     * This avoids mutex serialisation in dsytrd's trailing dsyr2k updates
+     * and in dstedc/dormtr merge-level GEMMs.  Thread count matches
+     * init-time jblas_n_threads.  If allocation fails, pass NULL (all
+     * three stages fall back to the global mutex path). */
     jblas_workspace_t gemm_ws;
     int ws_ok = jblas_workspace_alloc(&gemm_ws, jblas_n_threads);
     if (ws_ok != 0) {
@@ -102,6 +90,18 @@ int jblas_eigh_c(npy_intp N,
     }
     jblas_workspace_t *ws_ptr = ws_ok == 0 ? &gemm_ws : NULL;
 
+    /* Step 2: Tridiagonalization: K -> T, Householder vectors in K's lower triangle */
+    int ret = jblas_dsytrd_c(N, K, ldk, d, e, tau, ws_ptr, status);
+    if (ret != 0) {
+        if (ws_ok == 0) jblas_workspace_free(&gemm_ws);
+        free(d); free(e); free(tau);
+        return ret;
+    }
+
+    /* Step 3: D&C tridiagonal eigensolver
+     * On input: d[N] diagonal, e[N-1] off-diagonal.
+     * On output: d[N] eigenvalues (ascending), Z columns = eigenvectors of T.
+     * dstedc initializes Z to identity internally. */
     ret = jblas_dstedc_c(N, d, e, eigenvectors, ldz, ws_ptr, status);
     if (ret != 0) {
         if (ws_ok == 0) jblas_workspace_free(&gemm_ws);

@@ -150,10 +150,10 @@ def test_all_exports_present():
 
 @pytest.mark.tier0
 def test_abi_version():
-    """ABI_VERSION is 6 (bumped for blas_dispatch, blas_is_ilp64)."""
+    """ABI_VERSION is 7 (bumped for workspace-explicit symmetric BLAS + dsytrd ws)."""
     from jamma.jblas import ABI_VERSION
 
-    assert ABI_VERSION == 6, f"Expected ABI_VERSION=6, got {ABI_VERSION}"
+    assert ABI_VERSION == 7, f"Expected ABI_VERSION=7, got {ABI_VERSION}"
 
 
 @pytest.mark.tier0

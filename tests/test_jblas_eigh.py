@@ -152,7 +152,7 @@ def _random_spd(N: int, rng: np.random.Generator) -> np.ndarray:
 class TestEigh:
     """eigh must produce correct eigenvalues/eigenvectors (EIGH-05)."""
 
-    @pytest.mark.parametrize("N", [1, 3, 10, 100])
+    @pytest.mark.parametrize("N", [1, 2, 3, 10, 100])
     def test_identity(self, N: int) -> None:
         """eigh(eye(N)) returns all-ones eigenvalues and orthogonal eigenvectors."""
         K = np.eye(N)
@@ -171,7 +171,7 @@ class TestEigh:
             err_msg=f"Identity eigenvectors not orthogonal at N={N}",
         )
 
-    @pytest.mark.parametrize("N", [1, 5, 50])
+    @pytest.mark.parametrize("N", [1, 2, 5, 50])
     def test_diagonal(self, N: int) -> None:
         """eigh(diag(d)) returns sorted d as eigenvalues, permuted identity columns."""
         rng = np.random.default_rng(42 + N)
@@ -506,11 +506,11 @@ class TestDstedc:
     def test_dstedc_boundary_reconstruction(self, N: int) -> None:
         """Verify D&C merge at DSTEDC_BASE boundary via reconstruction.
 
-        After Phase 80.4 (A/B/C rational interpolation + delta_mat weight
-        product), D&C achieves ~1e-9 residuals at N <= ~127 without QR
-        fallback.  At N >= ~128, QR fallback ensures machine-precision
-        results.  Tolerance is 1e-8 to accept both D&C-direct and
-        QR-fallback paths.
+        With DSTEDC_BASE=64, D&C merge kicks in at N >= 65.  After
+        Phase 80.4 (A/B/C rational interpolation + delta_mat weight
+        product), D&C achieves ~1e-9 residuals without QR fallback.
+        Tolerance is 1e-8 to accept both D&C-direct and QR-fallback
+        paths.
         """
         rng = np.random.default_rng(202 + N)
         K = _random_spd(N, rng)
@@ -749,7 +749,7 @@ class TestEighThroughput:
 class TestWorkspaceApi:
     """Workspace API has no Python binding (C-internal only).
 
-    Tested indirectly: if eigh works at N > DSTEDC_BASE (128), the GEMM
+    Tested indirectly: if eigh works at N > DSTEDC_BASE (64), the GEMM
     calls inside dstedc are functioning with workspace buffers.
     The TestAccumGemm tests above cover the _dgemm_core refactor path.
     """
@@ -1061,6 +1061,33 @@ class TestDlaed4Convergence:
     at all sizes without QR fallback.
     """
 
+    @pytest.mark.parametrize(
+        "K",
+        [
+            np.array([[3.0, 1.0], [1.0, 5.0]]),  # well-separated
+            np.array([[1.0, 0.5], [0.5, 1.0]]),  # close eigenvalues
+            np.array([[1e-10, 1e-11], [1e-11, 2e-10]]),  # tiny scale
+            np.array([[1e10, 1e9], [1e9, 2e10]]),  # huge scale
+        ],
+        ids=["well-separated", "close", "tiny-scale", "huge-scale"],
+    )
+    def test_dlaed5_both_roots(self, K: np.ndarray) -> None:
+        """N=2 exercises dlaed5 (analytical 2-pole secular solver).
+
+        dlaed4 delegates all N=2 cases to dlaed5, which has three branches
+        (i=0 w>0, i=0 w<=0, i=1). Every D&C merge at DSTEDC_BASE boundary
+        involves 2-pole sub-problems, so dlaed5 correctness is critical.
+        """
+        K_copy = K.copy()
+        w, v, status = _call_eigh_with_status(K_copy)
+        assert status.secular_failures == 0, (
+            f"{status.secular_failures} secular failures on N=2 matrix"
+        )
+        _assert_reconstruction(K, w, v, 1e-12, "dlaed5")
+        _assert_orthogonality(v, 1e-12, "dlaed5")
+        # Eigenvalues ascending
+        assert w[0] <= w[1] + 1e-14, f"Eigenvalues not ascending: {w}"
+
     def test_clustered_eigenvalues(self) -> None:
         """Clustered eigenvalues: d values within 1e-10 of each other.
 
@@ -1115,6 +1142,36 @@ class TestDlaed4Convergence:
             f"{status.secular_failures} secular failures on boundary eigenvalue"
         )
         _assert_reconstruction(K, w, v, 1e-12, "Boundary eigenvalue")
+
+    def test_negative_rho_zvector_sign(self) -> None:
+        """Regression: z-vector sign with negative off-diagonal (rho < 0).
+
+        Constructs a tridiagonal matrix where e[m-1] < 0 at a D&C split
+        point, forcing sign_rho = -1 in dstedc_recurse. The z-vector sign
+        fix (apply sign_rho only to the right half, matching LAPACK DLAED2)
+        is critical — applying it to all of z produces 5-13% residual errors.
+
+        Uses N=130 to ensure at least one D&C merge above DSTEDC_BASE=64.
+        """
+        N = 130
+        d = np.linspace(1.0, 10.0, N)
+        e = np.full(N - 1, 0.5)
+        # Make e[mid-1] negative to force sign_rho = -1 at the split point
+        mid = N // 2
+        e[mid - 1] = -0.5
+        K = np.diag(d) + np.diag(e, 1) + np.diag(e, -1)
+        K_copy = K.copy()
+
+        w, v, status = _call_eigh_with_status(K_copy)
+        assert status.secular_failures == 0, (
+            f"{status.secular_failures} secular failures with negative rho"
+        )
+        assert status.qr_fallback == 0, (
+            f"QR fallback {status.qr_fallback} with negative rho — "
+            f"z-vector sign fix should handle this without fallback"
+        )
+        _assert_reconstruction(K, w, v, 1e-8, "Negative rho z-vector")
+        _assert_orthogonality(v, 1e-8, "Negative rho z-vector")
 
     def test_delta_quality_via_reconstruction(self) -> None:
         """Verify dlaed4 delta precision via reconstruction accuracy.

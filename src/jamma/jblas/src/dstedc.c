@@ -75,6 +75,21 @@
 #define MIN(a, b)  ((a) < (b) ? (a) : (b))
 #define MAX(a, b)  ((a) > (b) ? (a) : (b))
 
+/* Guard macro for PSI/PHI evaluation loops in dlaed4.
+ * If delta[k] is exactly zero (tau landed on a pole due to FP rounding),
+ * return the current best estimate rather than producing Inf/NaN.
+ * LAPACK dlaed4.f relies on bracketing to prevent this, but accumulated
+ * eta steps can cancel delta to zero in edge cases. */
+#define DLAED4_CHECK_DELTA_ZERO(delta_k, origin, n, d, tau, lambda_out, delta) \
+    do { \
+        if ((delta_k) == 0.0) { \
+            *(lambda_out) = d[(origin)] + (tau); \
+            for (npy_intp _zk = 0; _zk < (n); _zk++) \
+                (delta)[_zk] = (d[_zk] - d[(origin)]) - (tau); \
+            return 0; \
+        } \
+    } while (0)
+
 /* Threshold for switching to base-case QR iteration.
  * LAPACK uses SMLSIZ ~25; 64 provides a balance between QR base case
  * size and number of D&C merge levels.  Previously 128 as a workaround
@@ -516,12 +531,12 @@ static int dlaed5(npy_intp n, npy_intp i,
  * where finit already includes 1/rho and the contribution from all other poles.
  * z2[k] = z[k]^2, delta0[k] = initial delta values for the 3 active poles.
  *
- * The solver uses Newton iteration with safeguarding on the rational function.
+ * The solver uses Halley's method (second-order rational) with Newton
+ * fallback and bracket safeguarding.
  *
  * Parameters:
  *   kniter: max iterations (typically 40)
  *   orgati: 1 if origin is left pole, 0 if right
- *   rho: secular equation rho
  *   d3: the 3 pole distances (delta values at entry)
  *   z2: z-squared values for the 3 poles
  *   finit: initial function value (without the 3 poles)
@@ -797,6 +812,7 @@ static int dlaed4(npy_intp n, npy_intp i,
         /* First PSI/PHI/W evaluation (LAPACK lines 542-600) */
         double dpsi = 0.0, psi_val = 0.0, erretm = 0.0;
         for (k = 0; k < psi_end; k++) {
+            DLAED4_CHECK_DELTA_ZERO(delta[k], origin, n, d, tau, lambda_out, delta);
             double temp = z[k] / delta[k];
             psi_val += z[k] * temp;
             dpsi += temp * temp;
@@ -806,6 +822,7 @@ static int dlaed4(npy_intp n, npy_intp i,
 
         double dphi = 0.0, phi_val = 0.0;
         for (k = n - 1; k >= phi_start; k--) {
+            DLAED4_CHECK_DELTA_ZERO(delta[k], origin, n, d, tau, lambda_out, delta);
             double temp = z[k] / delta[k];
             phi_val += z[k] * temp;
             dphi += temp * temp;
@@ -830,6 +847,7 @@ static int dlaed4(npy_intp n, npy_intp i,
         int swtch = 0;
         double prew;
         {
+            DLAED4_CHECK_DELTA_ZERO(delta[ii], origin, n, d, tau, lambda_out, delta);
             double temp_ii = z[ii] / delta[ii];
             dw = dpsi + dphi + temp_ii * temp_ii;
             double temp_contrib = z[ii] * temp_ii;  /* LAPACK's TEMP */
@@ -861,9 +879,11 @@ static int dlaed4(npy_intp n, npy_intp i,
                  * poles bounding the gap: delta[i] and delta[i+1] (0-based). */
                 double C_val;
                 if (orgati) {
+                    DLAED4_CHECK_DELTA_ZERO(delta[i], origin, n, d, tau, lambda_out, delta);
                     C_val = w_val - delta[i + 1] * dw
                           - (d[i] - d[i + 1]) * (z[i] / delta[i]) * (z[i] / delta[i]);
                 } else {
+                    DLAED4_CHECK_DELTA_ZERO(delta[i + 1], origin, n, d, tau, lambda_out, delta);
                     C_val = w_val - delta[i] * dw
                           - (d[i + 1] - d[i]) * (z[i + 1] / delta[i + 1]) * (z[i + 1] / delta[i + 1]);
                 }
@@ -891,6 +911,7 @@ static int dlaed4(npy_intp n, npy_intp i,
                 double zz[3];
                 double C_3;
                 if (orgati) {
+                    DLAED4_CHECK_DELTA_ZERO(delta[iim1], origin, n, d, tau, lambda_out, delta);
                     double t1 = z[iim1] / delta[iim1];
                     t1 = t1 * t1;
                     C_3 = temp_rhoinv_psi_phi - delta[iip1] * (dpsi + dphi)
@@ -898,6 +919,7 @@ static int dlaed4(npy_intp n, npy_intp i,
                     zz[0] = z[iim1] * z[iim1];
                     zz[2] = delta[iip1] * delta[iip1] * ((dpsi - t1) + dphi);
                 } else {
+                    DLAED4_CHECK_DELTA_ZERO(delta[iip1], origin, n, d, tau, lambda_out, delta);
                     double t1 = z[iip1] / delta[iip1];
                     t1 = t1 * t1;
                     C_3 = temp_rhoinv_psi_phi - delta[iim1] * (dpsi + dphi)
@@ -942,6 +964,7 @@ static int dlaed4(npy_intp n, npy_intp i,
             /* Re-evaluate PSI/PHI/W after first step (LAPACK lines 694-720) */
             dpsi = 0.0; psi_val = 0.0; erretm = 0.0;
             for (k = 0; k < psi_end; k++) {
+                DLAED4_CHECK_DELTA_ZERO(delta[k], origin, n, d, tau + eta, lambda_out, delta);
                 double t = z[k] / delta[k];
                 psi_val += z[k] * t;
                 dpsi += t * t;
@@ -951,6 +974,7 @@ static int dlaed4(npy_intp n, npy_intp i,
 
             dphi = 0.0; phi_val = 0.0;
             for (k = n - 1; k >= phi_start; k--) {
+                DLAED4_CHECK_DELTA_ZERO(delta[k], origin, n, d, tau + eta, lambda_out, delta);
                 double t = z[k] / delta[k];
                 phi_val += z[k] * t;
                 dphi += t * t;
@@ -958,6 +982,7 @@ static int dlaed4(npy_intp n, npy_intp i,
             }
 
             {
+                DLAED4_CHECK_DELTA_ZERO(delta[ii], origin, n, d, tau + eta, lambda_out, delta);
                 double temp_ii = z[ii] / delta[ii];
                 dw = dpsi + dphi + temp_ii * temp_ii;
                 double temp_contrib = z[ii] * temp_ii;
@@ -992,6 +1017,7 @@ static int dlaed4(npy_intp n, npy_intp i,
 
             /* Compute step (LAPACK lines 752-887) */
             double eta;
+            DLAED4_CHECK_DELTA_ZERO(delta[ii], origin, n, d, tau, lambda_out, delta);
             dw = dpsi + dphi + (z[ii] / delta[ii]) * (z[ii] / delta[ii]);
 
             if (!swtch3) {
@@ -999,15 +1025,18 @@ static int dlaed4(npy_intp n, npy_intp i,
                 if (!swtch) {
                     /* Normal case: C from gap-bounding poles */
                     if (orgati) {
+                        DLAED4_CHECK_DELTA_ZERO(delta[i], origin, n, d, tau, lambda_out, delta);
                         C_val = w_val - delta[i + 1] * dw
                               - (d[i] - d[i + 1]) * (z[i] / delta[i]) * (z[i] / delta[i]);
                     } else {
+                        DLAED4_CHECK_DELTA_ZERO(delta[i + 1], origin, n, d, tau, lambda_out, delta);
                         C_val = w_val - delta[i] * dw
                               - (d[i + 1] - d[i]) * (z[i + 1] / delta[i + 1]) * (z[i + 1] / delta[i + 1]);
                     }
                 } else {
                     /* SWTCH: move II-th pole to PSI or PHI side.
                      * LAPACK lines 770-781. */
+                    DLAED4_CHECK_DELTA_ZERO(delta[ii], origin, n, d, tau, lambda_out, delta);
                     double t_ii = z[ii] / delta[ii];
                     if (orgati) {
                         /* Move II-th pole into PSI */
@@ -1056,6 +1085,7 @@ static int dlaed4(npy_intp n, npy_intp i,
                     zz[2] = delta[iip1] * delta[iip1] * dphi;
                 } else {
                     if (orgati) {
+                        DLAED4_CHECK_DELTA_ZERO(delta[iim1], origin, n, d, tau, lambda_out, delta);
                         double t1 = z[iim1] / delta[iim1];
                         t1 = t1 * t1;
                         C_3 = temp_rpf - delta[iip1] * (dpsi + dphi)
@@ -1063,6 +1093,7 @@ static int dlaed4(npy_intp n, npy_intp i,
                         zz[0] = z[iim1] * z[iim1];
                         zz[2] = delta[iip1] * delta[iip1] * ((dpsi - t1) + dphi);
                     } else {
+                        DLAED4_CHECK_DELTA_ZERO(delta[iip1], origin, n, d, tau, lambda_out, delta);
                         double t1 = z[iip1] / delta[iip1];
                         t1 = t1 * t1;
                         C_3 = temp_rpf - delta[iim1] * (dpsi + dphi)
@@ -1114,6 +1145,7 @@ static int dlaed4(npy_intp n, npy_intp i,
             /* Re-evaluate PSI/PHI/W (LAPACK lines 924-944) */
             dpsi = 0.0; psi_val = 0.0; erretm = 0.0;
             for (k = 0; k < psi_end; k++) {
+                DLAED4_CHECK_DELTA_ZERO(delta[k], origin, n, d, tau, lambda_out, delta);
                 double t = z[k] / delta[k];
                 psi_val += z[k] * t;
                 dpsi += t * t;
@@ -1123,6 +1155,7 @@ static int dlaed4(npy_intp n, npy_intp i,
 
             dphi = 0.0; phi_val = 0.0;
             for (k = n - 1; k >= phi_start; k--) {
+                DLAED4_CHECK_DELTA_ZERO(delta[k], origin, n, d, tau, lambda_out, delta);
                 double t = z[k] / delta[k];
                 phi_val += z[k] * t;
                 dphi += t * t;
@@ -1130,6 +1163,7 @@ static int dlaed4(npy_intp n, npy_intp i,
             }
 
             {
+                DLAED4_CHECK_DELTA_ZERO(delta[ii], origin, n, d, tau, lambda_out, delta);
                 double t = z[ii] / delta[ii];
                 double temp_contrib = z[ii] * t;
                 dw = dpsi + dphi + t * t;
@@ -1222,6 +1256,7 @@ static int dlaed4(npy_intp n, npy_intp i,
         psi_val = 0.0;
         double erretm = 0.0;
         for (k = 0; k < ii_last + 1; k++) {
+            DLAED4_CHECK_DELTA_ZERO(delta[k], origin, n, d, tau, lambda_out, delta);
             double temp = z[k] / delta[k];
             psi_val += z[k] * temp;
             dpsi += temp * temp;
@@ -1229,6 +1264,7 @@ static int dlaed4(npy_intp n, npy_intp i,
         }
         erretm = fabs(erretm);
 
+        DLAED4_CHECK_DELTA_ZERO(delta[n - 1], origin, n, d, tau, lambda_out, delta);
         double temp_phi = z[n - 1] / delta[n - 1];
         double phi_val = z[n - 1] * temp_phi;
         double dphi = temp_phi * temp_phi;
@@ -1300,6 +1336,7 @@ static int dlaed4(npy_intp n, npy_intp i,
             /* Re-evaluate PSI/PHI (LAPACK lines 375-400) */
             dpsi = 0.0; psi_val = 0.0; erretm = 0.0;
             for (k = 0; k < ii_last + 1; k++) {
+                DLAED4_CHECK_DELTA_ZERO(delta[k], origin, n, d, tau, lambda_out, delta);
                 double t = z[k] / delta[k];
                 psi_val += z[k] * t;
                 dpsi += t * t;
@@ -1307,6 +1344,7 @@ static int dlaed4(npy_intp n, npy_intp i,
             }
             erretm = fabs(erretm);
 
+            DLAED4_CHECK_DELTA_ZERO(delta[n - 1], origin, n, d, tau, lambda_out, delta);
             temp_phi = z[n - 1] / delta[n - 1];
             phi_val = z[n - 1] * temp_phi;
             dphi = temp_phi * temp_phi;
@@ -1370,6 +1408,7 @@ static int dlaed4(npy_intp n, npy_intp i,
             /* Re-evaluate PSI/PHI */
             dpsi = 0.0; psi_val = 0.0; erretm = 0.0;
             for (k = 0; k < ii_last + 1; k++) {
+                DLAED4_CHECK_DELTA_ZERO(delta[k], origin, n, d, tau, lambda_out, delta);
                 double t = z[k] / delta[k];
                 psi_val += z[k] * t;
                 dpsi += t * t;
@@ -1377,6 +1416,7 @@ static int dlaed4(npy_intp n, npy_intp i,
             }
             erretm = fabs(erretm);
 
+            DLAED4_CHECK_DELTA_ZERO(delta[n - 1], origin, n, d, tau, lambda_out, delta);
             temp_phi = z[n - 1] / delta[n - 1];
             phi_val = z[n - 1] * temp_phi;
             dphi = temp_phi * temp_phi;
@@ -1414,6 +1454,12 @@ static void dgemm_dispatch(npy_intp M, npy_intp N, npy_intp K,
     } else {
         /* Global-mutex path: jblas_dgemm_ext only supports alpha=1, beta=0.
          * All merge_rank1 calls use those values. */
+        if (alpha != 1.0 || beta != 0.0) {
+            fprintf(stderr, "FATAL: dgemm_dispatch: non-ws path requires "
+                    "alpha=1, beta=0 but got alpha=%.1f, beta=%.1f\n",
+                    alpha, beta);
+            abort();
+        }
         jblas_dgemm_ext(M, N, K, A, lda, B, ldb, C, ldc, transa, transb);
     }
 }
@@ -1640,12 +1686,14 @@ static int merge_rank1(npy_intp n, npy_intp m,
              * when d[k] ~ d[j] (LAPACK dlaed3 technique). */
             double num = delta_mat[j * n_nd + k];
             double den = delta_mat[j * n_nd + k] - delta_mat[j * n_nd + j];
-            if (den == 0.0) {
+            if (fabs(den) < DBL_MIN) {
                 /* Near-duplicate eigenvalues that deflation missed.
-                 * Skip this factor — treat as zero contribution. */
-                fprintf(stderr, "jblas dlaed3: zero denominator at k=%ld j=%ld "
-                        "(deflation gap too tight)\n", (long)k, (long)j);
-                continue;
+                 * Clamp to DBL_MIN preserving sign to avoid Inf/NaN
+                 * while keeping the factor's directional contribution. */
+                fprintf(stderr, "jblas dlaed3: near-zero denominator at k=%ld j=%ld "
+                        "(|den|=%.2e, deflation gap too tight)\n",
+                        (long)k, (long)j, fabs(den));
+                den = copysign(DBL_MIN, den != 0.0 ? den : 1.0);
             }
             w *= num / den;
         }

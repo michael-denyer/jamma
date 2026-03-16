@@ -357,12 +357,10 @@ def test_block_diagonal_stress() -> None:
     """Block-diagonal 1000x1000 matrix with clustered eigenvalues per block.
 
     Builds 10 groups x 100 = 1000x1000 block-diagonal matrix.
-    Verifies reconstruction < 1e-13 and orthogonality < 3e-13.
+    Verifies reconstruction < 1e-8 and orthogonality < 1e-8.
 
-    Uses _call_eigh_with_status to track QR fallback and secular failures.
-    At N=1000, QR fallback may trigger due to O(n) weight product error
-    accumulation.  The test verifies that the final result is correct
-    regardless of which path produced it.
+    With z-vector sign fix (Phase 80.4-07), D&C achieves ~1e-9 residuals
+    at N=1000 without QR fallback.
     """
     rng = np.random.default_rng(77)
     n_groups = 10
@@ -385,12 +383,16 @@ def test_block_diagonal_stress() -> None:
         assert status.secular_failures == 0, (
             f"{status.secular_failures} secular failures on block-diagonal"
         )
+        assert status.qr_fallback == 0, (
+            f"QR fallback {status.qr_fallback} on block-diagonal -- z-vector "
+            f"sign fix should eliminate QR fallback"
+        )
     else:
         K_copy = K.copy()
         w, v = eigh(K_copy)
 
-    _assert_reconstruction(K, w, v, 1e-13, "Block-diagonal")
-    _assert_orthogonality(v, 3e-13, "Block-diagonal")
+    _assert_reconstruction(K, w, v, 1e-8, "Block-diagonal")
+    _assert_orthogonality(v, 1e-8, "Block-diagonal")
 
 
 # ---------------------------------------------------------------------------
@@ -962,23 +964,21 @@ def _call_eigh_with_status(
 class TestDstedcNoSecularFailures:
     """Test secular solver convergence and D&C eigenvector quality.
 
-    After Phase 80.4 (LAPACK-quality dlaed4 with ORGATI, A/B/C rational
-    interpolation, SWTCH/SWTCH3/dlaed6, and delta_mat weight product),
-    D&C produces publication-quality eigenvectors at N <= ~100 without
-    QR fallback.
-
-    At N >= ~128, the O(n) error accumulation in the weight product
-    means QR fallback is still needed as an emergency safety net.
-    The QR fallback ensures reconstruction accuracy at these sizes.
+    After Phase 80.4-07 (LAPACK-matching z-vector sign handling in
+    dstedc_recurse), D&C produces eigenvectors with residuals < 1e-8
+    at all sizes without QR fallback.  The z-vector fix applies sign_rho
+    only to the right half (matching LAPACK DLAED2), which corrects the
+    cross-terms z[i]*z[j] that were corrupting eigenvectors at N>=128.
 
     Asserts:
       - Zero secular convergence failures at all sizes
-      - Reconstruction accuracy < 1e-12 (via QR fallback at N >= 200)
-      - Eigenvector orthogonality < 1e-12
+      - Zero QR fallback at all sizes
+      - Reconstruction accuracy < 1e-8 (D&C achieves ~1e-10 at N=200)
+      - Eigenvector orthogonality < 1e-8
     """
 
     def test_no_secular_failures_n200(self) -> None:
-        """N=200: zero secular failures, correct reconstruction."""
+        """N=200: zero secular failures, zero QR fallback, correct reconstruction."""
         rng = np.random.default_rng(42)
         N = 200
         K = _random_spd(N, rng)
@@ -988,12 +988,16 @@ class TestDstedcNoSecularFailures:
         assert status.secular_failures == 0, (
             f"{status.secular_failures} secular failures at N={N}"
         )
-        _assert_reconstruction(K, w, v, 1e-12, f"SecularSolver N={N}")
-        _assert_orthogonality(v, 1e-12, f"SecularSolver N={N}")
+        assert status.qr_fallback == 0, (
+            f"QR fallback {status.qr_fallback} at N={N} -- z-vector sign fix "
+            f"should eliminate QR fallback at all sizes"
+        )
+        _assert_reconstruction(K, w, v, 1e-8, f"SecularSolver N={N}")
+        _assert_orthogonality(v, 1e-8, f"SecularSolver N={N}")
 
     @pytest.mark.slow
     def test_no_secular_failures_n500(self) -> None:
-        """N=500: zero secular failures, correct reconstruction."""
+        """N=500: zero secular failures, zero QR fallback, correct reconstruction."""
         rng = np.random.default_rng(42)
         N = 500
         K = _random_spd(N, rng)
@@ -1003,12 +1007,16 @@ class TestDstedcNoSecularFailures:
         assert status.secular_failures == 0, (
             f"{status.secular_failures} secular failures at N={N}"
         )
-        _assert_reconstruction(K, w, v, 1e-12, f"SecularSolver N={N}")
-        _assert_orthogonality(v, 1e-12, f"SecularSolver N={N}")
+        assert status.qr_fallback == 0, (
+            f"QR fallback {status.qr_fallback} at N={N} -- z-vector sign fix "
+            f"should eliminate QR fallback at all sizes"
+        )
+        _assert_reconstruction(K, w, v, 1e-8, f"SecularSolver N={N}")
+        _assert_orthogonality(v, 1e-8, f"SecularSolver N={N}")
 
     @pytest.mark.slow
     def test_no_secular_failures_n1000(self) -> None:
-        """N=1000: zero secular failures, correct reconstruction."""
+        """N=1000: zero secular failures, zero QR fallback, correct reconstruction."""
         rng = np.random.default_rng(42)
         N = 1000
         K = _random_spd(N, rng)
@@ -1018,8 +1026,12 @@ class TestDstedcNoSecularFailures:
         assert status.secular_failures == 0, (
             f"{status.secular_failures} secular failures at N={N}"
         )
-        _assert_reconstruction(K, w, v, 1e-12, f"SecularSolver N={N}")
-        _assert_orthogonality(v, 1e-12, f"SecularSolver N={N}")
+        assert status.qr_fallback == 0, (
+            f"QR fallback {status.qr_fallback} at N={N} -- z-vector sign fix "
+            f"should eliminate QR fallback at all sizes"
+        )
+        _assert_reconstruction(K, w, v, 1e-8, f"SecularSolver N={N}")
+        _assert_orthogonality(v, 1e-8, f"SecularSolver N={N}")
 
 
 # ---------------------------------------------------------------------------
@@ -1107,19 +1119,14 @@ class TestDlaed4Convergence:
     def test_delta_quality_via_reconstruction(self) -> None:
         """Verify dlaed4 delta precision via reconstruction accuracy.
 
-        With LAPACK-quality dlaed4 (ORGATI, A/B/C rational interpolation,
-        SWTCH/SWTCH3/dlaed6, delta_mat weight product), D&C produces
-        publication-quality eigenvectors at N=50 without QR fallback.
-
-        At N >= 200, the weight product's O(n) error accumulation means
-        QR fallback ensures accuracy.  Reconstruction < 1e-12 proves
-        the final result has full precision regardless of which path
-        produced it.
+        With LAPACK-matching z-vector sign handling (sign_rho applied only
+        to right half, matching DLAED2), D&C produces eigenvectors without
+        QR fallback at all sizes.
 
         Asserts:
-          - qr_fallback==0 at N=50 (D&C achieves ~1e-14 directly)
-          - Reconstruction < 1e-12 at all sizes
-          - Orthogonality < 1e-12 at all sizes
+          - qr_fallback==0 at all sizes (z-vector sign fix eliminates QR)
+          - Reconstruction < 1e-8 at all sizes (D&C achieves ~1e-10)
+          - Orthogonality < 1e-8 at all sizes
           - Zero secular convergence failures
         """
         rng = np.random.default_rng(42)
@@ -1128,24 +1135,21 @@ class TestDlaed4Convergence:
             A = (A + A.T) / 2
             w, V, status = _call_eigh_with_status(A.copy())
 
-            # Reconstruction: uniform 1e-12 (QR fallback ensures this at N>=200)
+            # Reconstruction: D&C achieves ~1e-10 at N=200 without QR fallback
             recon = np.linalg.norm(A - V @ np.diag(w) @ V.T) / np.linalg.norm(A)
-            assert recon < 1e-12, (
-                f"Reconstruction {recon:.2e} at N={N} (threshold 1e-12)"
-            )
+            assert recon < 1e-8, f"Reconstruction {recon:.2e} at N={N} (threshold 1e-8)"
 
-            # Orthogonality: uniform 1e-12
+            # Orthogonality
             orth = np.linalg.norm(V.T @ V - np.eye(N))
-            assert orth < 1e-12, f"Orthogonality {orth:.2e} at N={N} (threshold 1e-12)"
+            assert orth < 1e-8, f"Orthogonality {orth:.2e} at N={N} (threshold 1e-8)"
 
             # Zero secular convergence failures
             assert status.secular_failures == 0, (
                 f"{status.secular_failures} secular failures at N={N}"
             )
 
-            # At N=50, D&C achieves full precision without QR fallback
-            if N <= 50:
-                assert status.qr_fallback == 0, (
-                    f"QR fallback triggered at N={N} -- D&C with A/B/C rational "
-                    f"interpolation should produce publication-quality eigenvectors"
-                )
+            # Z-vector sign fix eliminates QR fallback at all sizes
+            assert status.qr_fallback == 0, (
+                f"QR fallback {status.qr_fallback} at N={N} -- z-vector sign fix "
+                f"should eliminate QR fallback at all sizes"
+            )

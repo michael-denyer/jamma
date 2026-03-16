@@ -1864,7 +1864,16 @@ static int dstedc_recurse(npy_intp n, double *d, double *e,
     double rho = 2.0 * fabs(rho_raw);
     double sign_rho = (rho_raw >= 0.0) ? 1.0 : -1.0;
     double inv_sqrt2 = 1.0 / sqrt(2.0);
-    for (npy_intp j = 0; j < n; j++)
+    /* Left half: scale only (no sign flip).
+     * Right half: scale AND apply sign_rho.
+     * Matches LAPACK DLAED2: IF(RHO.LT.ZERO) CALL DSCAL(N2,-ONE,Z(N1+1),1)
+     * Only the right half (Q_R rows) gets negated when rho < 0.
+     * Applying sign_rho to ALL of z preserves z^2 (eigenvalues correct)
+     * but flips cross-terms z[i]*z[j] for i<m, j>=m, corrupting
+     * eigenvectors with residuals of 0.05-0.13 at N>=128. */
+    for (npy_intp j = 0; j < m; j++)
+        z_vec[j] *= inv_sqrt2;
+    for (npy_intp j = m; j < n; j++)
         z_vec[j] *= inv_sqrt2 * sign_rho;
 
     /* If rho is zero, the two sub-problems are decoupled */

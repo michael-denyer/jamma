@@ -296,9 +296,10 @@ void jblas_dsyr2k_ws(npy_intp N, npy_intp K,
     if (N == 0 || K == 0)
         return;
 
-    if (!ws || !ws->packed_A || !ws->packed_B) {
+    if (!ws || !ws->packed_A || !ws->packed_B || ws->n_threads < 1) {
         fprintf(stderr,
-            "FATAL: jblas_dsyr2k_ws called with NULL workspace\n");
+            "FATAL: jblas_dsyr2k_ws called with invalid workspace "
+            "(n_threads=%d)\n", ws ? ws->n_threads : -1);
         abort();
     }
 

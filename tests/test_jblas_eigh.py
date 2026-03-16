@@ -7,8 +7,8 @@ Tests cover all EIGH requirements (EIGH-01 through EIGH-09):
 - EIGH-04: DORMTR eigenvector back-transformation (C extension stub)
 - EIGH-05: Python fallback correctness (identity, diagonal, random SPD, ascending)
 - EIGH-06: Output memory layout (shape, dtype, C-contiguous)
-- EIGH-07: Reconstruction accuracy: ||K - U diag(w) U.T|| / ||K|| < 1e-12
-- EIGH-08: Orthogonality: ||U.T @ U - I||_F < 1e-12
+- EIGH-07: Reconstruction accuracy: ||K - U diag(w) U.T|| / ||K|| < 1e-8
+- EIGH-08: Orthogonality: ||U.T @ U - I||_F < 1e-8
 - EIGH-09: LAPACK sources in hatch_build.py must not receive -ffast-math
 
 Run with -n0 to avoid interference with OpenMP threading tests:

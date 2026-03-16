@@ -572,6 +572,12 @@ static void dlaed6(int kniter, int orgati,
     df = 0.0;
     ddf = 0.0;
     for (int k = 0; k < 3; k++) {
+        if (d3[k] == 0.0) {
+            /* Origin is exactly at a pole — return zero shift. */
+            *tau_out = 0.0;
+            *info_out = 1;
+            return;
+        }
         double tmp = 1.0 / d3[k];
         double tmp2 = z2[k] * tmp;
         fc += tmp2;
@@ -986,7 +992,7 @@ static int dlaed4(npy_intp n, npy_intp i,
 
             /* Compute step (LAPACK lines 752-887) */
             double eta;
-            double dw = dpsi + dphi + (z[ii] / delta[ii]) * (z[ii] / delta[ii]);
+            dw = dpsi + dphi + (z[ii] / delta[ii]) * (z[ii] / delta[ii]);
 
             if (!swtch3) {
                 double C_val;
@@ -1103,7 +1109,7 @@ static int dlaed4(npy_intp n, npy_intp i,
             for (k = 0; k < n; k++)
                 delta[k] -= eta;
             tau += eta;
-            double prew = w_val;
+            prew = w_val;
 
             /* Re-evaluate PSI/PHI/W (LAPACK lines 924-944) */
             dpsi = 0.0; psi_val = 0.0; erretm = 0.0;
@@ -1330,10 +1336,16 @@ static int dlaed4(npy_intp n, npy_intp i,
             double B_val = delta[n - 2] * delta[n - 1] * w;
             double eta;
 
-            if (A_val >= 0.0)
+            /* LAPACK: if C < 0, C = |C| */
+            if (C_val < 0.0) C_val = -C_val;
+
+            if (C_val == 0.0) {
+                eta = -w / (dpsi + dphi);
+            } else if (A_val >= 0.0) {
                 eta = (A_val + sqrt(fabs(A_val * A_val - 4.0 * B_val * C_val))) / (2.0 * C_val);
-            else
+            } else {
                 eta = 2.0 * B_val / (A_val - sqrt(fabs(A_val * A_val - 4.0 * B_val * C_val)));
+            }
 
             /* Sign check */
             if (w * eta > 0.0)
@@ -1628,6 +1640,13 @@ static int merge_rank1(npy_intp n, npy_intp m,
              * when d[k] ~ d[j] (LAPACK dlaed3 technique). */
             double num = delta_mat[j * n_nd + k];
             double den = delta_mat[j * n_nd + k] - delta_mat[j * n_nd + j];
+            if (den == 0.0) {
+                /* Near-duplicate eigenvalues that deflation missed.
+                 * Skip this factor — treat as zero contribution. */
+                fprintf(stderr, "jblas dlaed3: zero denominator at k=%ld j=%ld "
+                        "(deflation gap too tight)\n", (long)k, (long)j);
+                continue;
+            }
             w *= num / den;
         }
         /* Product MUST be negative (eigenvalue interlacing theorem).

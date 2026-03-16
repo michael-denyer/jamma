@@ -1147,94 +1147,231 @@ static int dlaed4(npy_intp n, npy_intp i,
     } else {
         /* ============================================================
          * Last eigenvalue (i = n-1): root above d[n-1]
+         * LAPACK dlaed4.f lines 175-440 (I=N case).
+         *
+         * Structure: PSI k=0..n-2 (II=n-2 in 0-based), centre k=n-1.
+         * A/B/C rational step uses DELTA(N-1) and DELTA(N) in LAPACK
+         * 1-based = delta[n-2] and delta[n-1] in C.
          * ============================================================ */
         npy_intp origin = n - 1;
+        npy_intp ii_last = n - 2;  /* LAPACK II = N-1 (1-based) = n-2 (0-based) */
 
-        /* Compute initial quantities: all poles are "psi" */
-        double zsum = 0.0;
-        for (k = 0; k < n; k++) zsum += z[k] * z[k];
-
-        /* Initial delta relative to d[n-1] */
+        /* LAPACK: initial guess via midpoint evaluation.
+         * Delta at midpoint rho/2: delta[k] = (d[k] - d[n-1]) - rho/2 */
+        double midpt = rho / 2.0;
         for (k = 0; k < n; k++)
-            delta[k] = (d[k] - d[n - 1]);
+            delta[k] = (d[k] - d[n - 1]) - midpt;
 
-        /* Evaluate function at origin (tau=0) to get initial guess */
         double psi_val = 0.0;
-        for (k = 0; k < n - 1; k++)
+        for (k = 0; k < n - 2; k++)
             psi_val += z[k] * z[k] / delta[k];
         double c = rhoinv + psi_val;
+        double w = c + z[n - 2] * z[n - 2] / delta[n - 2]
+                     + z[n - 1] * z[n - 1] / delta[n - 1];
 
-        /* Tau from quadratic: rho*z[n-1]^2 + c*(d[n-1]-lambda) = 0
-         * => tau = rho*z[n-1]^2 / (-c)... but use stabilized form.
-         * LAPACK: a = -c*del + z[n-2]^2 + z[n-1]^2 where del = d[n-1]-d[n-2]
-         * (for the two nearest poles). */
-        double del_last = (n >= 2) ? (d[n - 1] - d[n - 2]) : 1.0;
-        double a = -c * del_last + z[n - 2] * z[n - 2] + z[n - 1] * z[n - 1];
-        double b = z[n - 1] * z[n - 1] * del_last;
-        double tau;
-        /* Quadratic for tau */
-        if (a < 0.0)
-            tau = 2.0 * b / (a - sqrt(fabs(a * a - 4.0 * b * c)));
-        else
-            tau = -(a + sqrt(fabs(a * a - 4.0 * b * c))) / (2.0 * c);
+        double tau, dltlb, dltub;
+        double del_last = d[n - 1] - d[n - 2];
 
-        /* Bracket: tau in (0, rho*||z||^2) */
-        double dltlb = 0.0;
-        double dltub = rho * zsum;
-        if (tau <= dltlb) tau = dltlb + EPS * dltub;
+        if (w <= 0.0) {
+            /* Root in [d[n-1]+rho/2, d[n-1]+rho).
+             * LAPACK: special handling for W<=0 at midpoint. */
+            double temp_w = z[n - 2] * z[n - 2] / (d[n - 1] - d[n - 2] + rho)
+                          + z[n - 1] * z[n - 1] / rho;
+            if (c <= temp_w) {
+                tau = rho;
+            } else {
+                double a = -c * del_last + z[n - 2] * z[n - 2] + z[n - 1] * z[n - 1];
+                double b = z[n - 1] * z[n - 1] * del_last;
+                if (a < 0.0)
+                    tau = 2.0 * b / (sqrt(a * a + 4.0 * b * c) - a);
+                else
+                    tau = (a + sqrt(a * a + 4.0 * b * c)) / (2.0 * c);
+            }
+            dltlb = midpt;
+            dltub = rho;
+        } else {
+            /* Root in (d[n-1], d[n-1]+rho/2].
+             * Standard quadratic. */
+            double a = -c * del_last + z[n - 2] * z[n - 2] + z[n - 1] * z[n - 1];
+            double b = z[n - 1] * z[n - 1] * del_last;
+            if (a < 0.0)
+                tau = 2.0 * b / (sqrt(a * a + 4.0 * b * c) - a);
+            else
+                tau = (a + sqrt(a * a + 4.0 * b * c)) / (2.0 * c);
+            dltlb = 0.0;
+            dltub = midpt;
+        }
+
+        /* Clamp tau to bracket */
+        if (tau <= dltlb) tau = dltlb + EPS * (dltub - dltlb);
         if (tau >= dltub) tau = dltub * 0.5;
 
         /* Initialize delta with tau */
         for (k = 0; k < n; k++)
             delta[k] = (d[k] - d[n - 1]) - tau;
 
-        /* ---- Iteration for last eigenvalue ---- */
-        for (int iter = 0; iter < MAXIT; iter++) {
-            /* All poles are "psi" except the last one is "centre" */
-            psi_val = 0.0;
-            double dpsi = 0.0;
-            double erretm = 0.0;
-            for (k = 0; k < n - 1; k++) {
-                double temp = z[k] / delta[k];
-                psi_val += z[k] * temp;
-                dpsi += temp * temp;
+        /* First evaluation: PSI (k=0..n-2), PHI (k=n-1 only).
+         * LAPACK dlaed4.f lines 270-300. */
+        double dpsi = 0.0;
+        psi_val = 0.0;
+        double erretm = 0.0;
+        for (k = 0; k < ii_last + 1; k++) {
+            double temp = z[k] / delta[k];
+            psi_val += z[k] * temp;
+            dpsi += temp * temp;
+            erretm += psi_val;  /* running sum like LAPACK */
+        }
+        erretm = fabs(erretm);
+
+        double temp_phi = z[n - 1] / delta[n - 1];
+        double phi_val = z[n - 1] * temp_phi;
+        double dphi = temp_phi * temp_phi;
+        erretm = 8.0 * (-phi_val - psi_val) + erretm - phi_val
+               + fabs(rhoinv) + fabs(tau) * (dpsi + dphi);
+
+        w = rhoinv + phi_val + psi_val;
+
+        /* Test for convergence */
+        if (fabs(w) <= EPS * erretm) {
+            *lambda_out = d[n - 1] + tau;
+            for (k = 0; k < n; k++)
+                delta[k] = (d[k] - d[n - 1]) - tau;
+            return 0;
+        }
+
+        if (w <= 0.0) dltlb = fmax(dltlb, tau);
+        else          dltub = fmin(dltub, tau);
+
+        /* First step: A/B/C rational interpolation.
+         * LAPACK dlaed4.f lines 310-370 (NITER=2 step).
+         * Uses delta[n-2] and delta[n-1] as the two nearest poles. */
+        {
+            double C_val = w - delta[n - 2] * dpsi - delta[n - 1] * dphi;
+            double A_val = (delta[n - 2] + delta[n - 1]) * w
+                         - delta[n - 2] * delta[n - 1] * (dpsi + dphi);
+            double B_val = delta[n - 2] * delta[n - 1] * w;
+            double eta;
+
+            /* LAPACK: if C < 0, C = |C| */
+            if (C_val < 0.0) C_val = -C_val;
+
+            if (C_val == 0.0) {
+                eta = -w / (dpsi + dphi);
+            } else if (A_val >= 0.0) {
+                eta = (A_val + sqrt(fabs(A_val * A_val - 4.0 * B_val * C_val))) / (2.0 * C_val);
+            } else {
+                eta = 2.0 * B_val / (A_val - sqrt(fabs(A_val * A_val - 4.0 * B_val * C_val)));
             }
-            erretm += fabs(psi_val);
 
-            /* Last pole (centre) */
-            double temp_n = z[n - 1] / delta[n - 1];
-            double c_n = z[n - 1] * temp_n;
-            double dc_n = temp_n * temp_n;
+            /* Sign check */
+            if (w * eta > 0.0)
+                eta = -w / (dpsi + dphi);
 
-            double w_val = rhoinv + psi_val + c_n;
-            double dw = dpsi + dc_n;
+            /* Safeguard for first step: geometric mean (LAPACK lines 340-360) */
+            {
+                double temp_tau = tau + eta;
+                if (temp_tau > dltub || temp_tau < dltlb) {
+                    double eta1 = -w / (dpsi + dphi);
+                    double temp_tau1 = tau + eta1;
+                    double eta2;
+                    if (w < 0.0)
+                        eta2 = (dltub - tau) / 2.0;
+                    else
+                        eta2 = (dltlb - tau) / 2.0;
+                    if (dltlb <= temp_tau1 && temp_tau1 <= dltub) {
+                        eta = copysign(1.0, eta1) * sqrt(fabs(eta1)) * sqrt(fabs(eta2));
+                    } else {
+                        eta = eta2;
+                    }
+                }
+            }
 
-            erretm = 8.0 * (erretm + fabs(c_n))
-                   + fabs(rhoinv) + fabs(tau) * dw;
+            /* Apply step */
+            for (k = 0; k < n; k++)
+                delta[k] -= eta;
+            tau += eta;
 
-            if (fabs(w_val) <= EPS * erretm) {
+            /* Re-evaluate PSI/PHI (LAPACK lines 375-400) */
+            dpsi = 0.0; psi_val = 0.0; erretm = 0.0;
+            for (k = 0; k < ii_last + 1; k++) {
+                double t = z[k] / delta[k];
+                psi_val += z[k] * t;
+                dpsi += t * t;
+                erretm += psi_val;
+            }
+            erretm = fabs(erretm);
+
+            temp_phi = z[n - 1] / delta[n - 1];
+            phi_val = z[n - 1] * temp_phi;
+            dphi = temp_phi * temp_phi;
+            erretm = 8.0 * (-phi_val - psi_val) + erretm - phi_val
+                   + fabs(rhoinv) + fabs(tau) * (dpsi + dphi);
+
+            w = rhoinv + phi_val + psi_val;
+        }
+
+        /* ---- Main iteration loop (LAPACK lines 405-440) ---- */
+        for (int iter = 2; iter < MAXIT; iter++) {
+            /* Test for convergence */
+            if (fabs(w) <= EPS * erretm) {
                 *lambda_out = d[n - 1] + tau;
                 for (k = 0; k < n; k++)
                     delta[k] = (d[k] - d[n - 1]) - tau;
                 return 0;
             }
 
-            /* Update bracket */
-            if (w_val <= 0.0) dltlb = fmax(dltlb, tau);
-            else              dltub = fmin(dltub, tau);
+            if (w <= 0.0) dltlb = fmax(dltlb, tau);
+            else          dltub = fmin(dltub, tau);
 
-            /* Newton step */
-            double eta = -w_val / dw;
+            /* A/B/C rational step (LAPACK lines 415-425) */
+            double C_val = w - delta[n - 2] * dpsi - delta[n - 1] * dphi;
+            double A_val = (delta[n - 2] + delta[n - 1]) * w
+                         - delta[n - 2] * delta[n - 1] * (dpsi + dphi);
+            double B_val = delta[n - 2] * delta[n - 1] * w;
+            double eta;
 
-            /* Safeguard */
-            if (tau + eta <= dltlb)
-                eta = (dltlb - tau) * 0.5;
-            if (tau + eta >= dltub)
-                eta = (dltub - tau) * 0.5;
+            if (A_val >= 0.0)
+                eta = (A_val + sqrt(fabs(A_val * A_val - 4.0 * B_val * C_val))) / (2.0 * C_val);
+            else
+                eta = 2.0 * B_val / (A_val - sqrt(fabs(A_val * A_val - 4.0 * B_val * C_val)));
 
-            tau += eta;
+            /* Sign check */
+            if (w * eta > 0.0)
+                eta = -w / (dpsi + dphi);
+
+            /* Safeguard: simple bisection for main loop (LAPACK lines 430-435) */
+            {
+                double temp_tau = tau + eta;
+                if (temp_tau > dltub || temp_tau < dltlb) {
+                    if (w < 0.0)
+                        eta = (dltub - tau) / 2.0;
+                    else
+                        eta = (dltlb - tau) / 2.0;
+                }
+            }
+
+            /* Apply step */
             for (k = 0; k < n; k++)
                 delta[k] -= eta;
+            tau += eta;
+
+            /* Re-evaluate PSI/PHI */
+            dpsi = 0.0; psi_val = 0.0; erretm = 0.0;
+            for (k = 0; k < ii_last + 1; k++) {
+                double t = z[k] / delta[k];
+                psi_val += z[k] * t;
+                dpsi += t * t;
+                erretm += psi_val;
+            }
+            erretm = fabs(erretm);
+
+            temp_phi = z[n - 1] / delta[n - 1];
+            phi_val = z[n - 1] * temp_phi;
+            dphi = temp_phi * temp_phi;
+            erretm = 8.0 * (-phi_val - psi_val) + erretm - phi_val
+                   + fabs(rhoinv) + fabs(tau) * (dpsi + dphi);
+
+            w = rhoinv + phi_val + psi_val;
         }
 
         /* Did not converge */

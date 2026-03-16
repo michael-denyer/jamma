@@ -19,7 +19,7 @@
 /* Bump this constant whenever the public ABI changes (new fields in
  * jblas_dispatch_t, changed function signatures, etc.). pymodule.c exposes
  * this as a Python-level integer so callers can guard against ABI mismatches. */
-#define JBLAS_ABI_VERSION 6
+#define JBLAS_ABI_VERSION 7
 
 /* ---------------------------------------------------------------------------
  * Function-pointer typedefs for ISA-dispatched microkernels
@@ -368,6 +368,29 @@ void jblas_dsyr2k_c(npy_intp N, npy_intp K,
                     const double *A, npy_intp lda,
                     const double *B, npy_intp ldb,
                     double *C, npy_intp ldc);
+
+/**
+ * Workspace-explicit symmetric BLAS variants (no mutex).
+ *
+ * Same algorithms as the mutex-based _c variants but use caller-owned
+ * packed_A/packed_B workspace.  Safe for concurrent use from within the
+ * eigensolver (dsytrd trailing update, etc.).
+ */
+void jblas_dsyrk_ws(npy_intp N, npy_intp K,
+                     const double *X, npy_intp ldx,
+                     double *C, npy_intp ldc,
+                     jblas_workspace_t *ws);
+
+void jblas_dsyrk_lower_ws(npy_intp N, npy_intp K,
+                            const double *X, npy_intp ldx,
+                            double *C, npy_intp ldc,
+                            jblas_workspace_t *ws);
+
+void jblas_dsyr2k_ws(npy_intp N, npy_intp K,
+                      const double *A, npy_intp lda,
+                      const double *B, npy_intp ldb,
+                      double *C, npy_intp ldc,
+                      jblas_workspace_t *ws);
 
 /* ---------------------------------------------------------------------------
  * eigh status struct (populated during eigh, checked by py_eigh for warnings)

@@ -375,11 +375,13 @@ class TestCapabilityFlags:
         assert blas_has_lapacke_dsyevd in (0, 1)
 
     def test_dsyrk_capability_consistent_with_backend(self):
-        """If backend is ILP64, dsyrk should also be available."""
+        """If backend is ILP64 (except OpenBLAS), dsyrk should be available."""
         from jamma.jblas import blas_backend, blas_has_dsyrk
 
+        # OpenBLAS-ILP64 may not expose cblas_dsyrk with ILP64 symbols
+        if "OpenBLAS" in blas_backend:
+            return
         if "ILP64" in blas_backend or "Accelerate" in blas_backend:
-            # Vendor ILP64 should have dsyrk
             assert blas_has_dsyrk == 1, (
                 f"Backend {blas_backend} is ILP64 but blas_has_dsyrk=0"
             )

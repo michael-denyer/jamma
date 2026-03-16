@@ -958,6 +958,224 @@ class TestDsyrkDsyr2kThreadSafety:
 
 
 # ---------------------------------------------------------------------------
+# TestWorkspaceExplicitParity — _ws variants produce identical results
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not HAS_C_EXTENSION, reason="Workspace-explicit tests require C extension"
+)
+class TestWorkspaceExplicitParity:
+    """Workspace-explicit _ws variants match mutex-based _c variants.
+
+    Uses ctypes to call the C functions directly with an allocated
+    workspace.  The _ws variants use the same algorithm and core loop
+    -- only the buffer ownership differs -- so results must be bitwise
+    identical.
+    """
+
+    @staticmethod
+    def _load_lib():
+        """Load the jblas shared library via ctypes."""
+        import ctypes
+        from pathlib import Path
+
+        so_dir = Path(__file__).resolve().parent.parent / "src" / "jamma" / "jblas"
+        so_files = list(so_dir.glob("_jblas*.so")) + list(so_dir.glob("_jblas*.pyd"))
+        assert so_files, f"No _jblas shared library found in {so_dir}"
+        return ctypes.CDLL(str(so_files[0]))
+
+    @staticmethod
+    def _alloc_workspace(lib):
+        """Allocate a jblas_workspace_t via the C API.
+
+        Returns (ws_bytes, ws_ptr) where ws_bytes is the backing ctypes buffer
+        and ws_ptr is a void pointer to it.
+        """
+        import ctypes
+
+        # jblas_workspace_t: { double *packed_B, double *packed_A, int n_threads }
+        # On 64-bit: 8 + 8 + 4 = 20 bytes, padded to 24 typically
+        # Use 32 bytes to be safe
+        ws_bytes = (ctypes.c_char * 32)()
+        ws_ptr = ctypes.cast(ws_bytes, ctypes.c_void_p)
+
+        alloc_fn = lib.jblas_workspace_alloc
+        alloc_fn.restype = ctypes.c_int
+        alloc_fn.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        ret = alloc_fn(ws_ptr, 1)
+        assert ret == 0, "jblas_workspace_alloc failed"
+        return ws_bytes, ws_ptr
+
+    @staticmethod
+    def _free_workspace(lib, ws_ptr):
+        """Free a jblas_workspace_t."""
+        import ctypes
+
+        free_fn = lib.jblas_workspace_free
+        free_fn.restype = None
+        free_fn.argtypes = [ctypes.c_void_p]
+        free_fn(ws_ptr)
+
+    @staticmethod
+    def _ptr(arr):
+        """Get ctypes void pointer to numpy array data."""
+        import ctypes
+
+        return ctypes.c_void_p(arr.ctypes.data)
+
+    def test_dsyrk_ws_parity(self) -> None:
+        """jblas_dsyrk_ws produces bitwise-identical output to jblas_dsyrk_c."""
+        import ctypes
+
+        lib = self._load_lib()
+        N, K = 100, 50
+        rng = np.random.default_rng(12345)
+        X = np.ascontiguousarray(rng.standard_normal((N, K)), dtype=np.float64)
+
+        # Call mutex-based dsyrk_c
+        C_mutex = np.zeros((N, N), dtype=np.float64)
+        dsyrk_c = lib.jblas_dsyrk_c
+        dsyrk_c.restype = None
+        dsyrk_c.argtypes = [
+            ctypes.c_longlong,
+            ctypes.c_longlong,
+            ctypes.c_void_p,
+            ctypes.c_longlong,
+            ctypes.c_void_p,
+            ctypes.c_longlong,
+        ]
+        dsyrk_c(N, K, self._ptr(X), K, self._ptr(C_mutex), N)
+
+        # Call workspace-explicit dsyrk_ws
+        C_ws = np.zeros((N, N), dtype=np.float64)
+        ws_bytes, ws_ptr = self._alloc_workspace(lib)
+        dsyrk_ws = lib.jblas_dsyrk_ws
+        dsyrk_ws.restype = None
+        dsyrk_ws.argtypes = [
+            ctypes.c_longlong,
+            ctypes.c_longlong,
+            ctypes.c_void_p,
+            ctypes.c_longlong,
+            ctypes.c_void_p,
+            ctypes.c_longlong,
+            ctypes.c_void_p,
+        ]
+        dsyrk_ws(N, K, self._ptr(X), K, self._ptr(C_ws), N, ws_ptr)
+        self._free_workspace(lib, ws_ptr)
+
+        npt.assert_array_equal(
+            C_mutex,
+            C_ws,
+            err_msg="dsyrk_ws result differs from dsyrk_c — must be bitwise identical",
+        )
+
+    def test_dsyr2k_ws_parity(self) -> None:
+        """jblas_dsyr2k_ws produces bitwise-identical output to jblas_dsyr2k_c."""
+        import ctypes
+
+        lib = self._load_lib()
+        N, K = 100, 50
+        rng = np.random.default_rng(67890)
+        A = np.ascontiguousarray(rng.standard_normal((N, K)), dtype=np.float64)
+        B = np.ascontiguousarray(rng.standard_normal((N, K)), dtype=np.float64)
+        C_init = np.ascontiguousarray(rng.standard_normal((N, N)), dtype=np.float64)
+
+        # Call mutex-based dsyr2k_c
+        C_mutex = C_init.copy()
+        dsyr2k_c = lib.jblas_dsyr2k_c
+        dsyr2k_c.restype = None
+        dsyr2k_c.argtypes = [
+            ctypes.c_longlong,
+            ctypes.c_longlong,
+            ctypes.c_void_p,
+            ctypes.c_longlong,
+            ctypes.c_void_p,
+            ctypes.c_longlong,
+            ctypes.c_void_p,
+            ctypes.c_longlong,
+        ]
+        dsyr2k_c(N, K, self._ptr(A), K, self._ptr(B), K, self._ptr(C_mutex), N)
+
+        # Call workspace-explicit dsyr2k_ws
+        C_ws = C_init.copy()
+        ws_bytes, ws_ptr = self._alloc_workspace(lib)
+        dsyr2k_ws = lib.jblas_dsyr2k_ws
+        dsyr2k_ws.restype = None
+        dsyr2k_ws.argtypes = [
+            ctypes.c_longlong,
+            ctypes.c_longlong,
+            ctypes.c_void_p,
+            ctypes.c_longlong,
+            ctypes.c_void_p,
+            ctypes.c_longlong,
+            ctypes.c_void_p,
+            ctypes.c_longlong,
+            ctypes.c_void_p,
+        ]
+        dsyr2k_ws(N, K, self._ptr(A), K, self._ptr(B), K, self._ptr(C_ws), N, ws_ptr)
+        self._free_workspace(lib, ws_ptr)
+
+        npt.assert_array_equal(
+            C_mutex,
+            C_ws,
+            err_msg="dsyr2k_ws differs from dsyr2k_c",
+        )
+
+    def test_dsyrk_lower_ws_parity(self) -> None:
+        """jblas_dsyrk_lower_ws lower triangle matches jblas_dsyrk_ws lower triangle."""
+        import ctypes
+
+        lib = self._load_lib()
+        N, K = 100, 50
+        rng = np.random.default_rng(11111)
+        X = np.ascontiguousarray(rng.standard_normal((N, K)), dtype=np.float64)
+
+        ws_bytes, ws_ptr = self._alloc_workspace(lib)
+
+        # Call dsyrk_ws (full matrix with mirror)
+        C_full = np.zeros((N, N), dtype=np.float64)
+        dsyrk_ws = lib.jblas_dsyrk_ws
+        dsyrk_ws.restype = None
+        dsyrk_ws.argtypes = [
+            ctypes.c_longlong,
+            ctypes.c_longlong,
+            ctypes.c_void_p,
+            ctypes.c_longlong,
+            ctypes.c_void_p,
+            ctypes.c_longlong,
+            ctypes.c_void_p,
+        ]
+        dsyrk_ws(N, K, self._ptr(X), K, self._ptr(C_full), N, ws_ptr)
+
+        # Call dsyrk_lower_ws (lower triangle only)
+        C_lower = np.zeros((N, N), dtype=np.float64)
+        dsyrk_lower_ws = lib.jblas_dsyrk_lower_ws
+        dsyrk_lower_ws.restype = None
+        dsyrk_lower_ws.argtypes = [
+            ctypes.c_longlong,
+            ctypes.c_longlong,
+            ctypes.c_void_p,
+            ctypes.c_longlong,
+            ctypes.c_void_p,
+            ctypes.c_longlong,
+            ctypes.c_void_p,
+        ]
+        dsyrk_lower_ws(N, K, self._ptr(X), K, self._ptr(C_lower), N, ws_ptr)
+
+        self._free_workspace(lib, ws_ptr)
+
+        # Lower triangle of both must be bitwise identical
+        lower_full = np.tril(C_full)
+        lower_only = np.tril(C_lower)
+        npt.assert_array_equal(
+            lower_full,
+            lower_only,
+            err_msg="dsyrk_lower_ws lower triangle differs from dsyrk_ws",
+        )
+
+
+# ---------------------------------------------------------------------------
 # TestDsyrkThroughput — benchmark scaffold (skipped without C extension)
 # ---------------------------------------------------------------------------
 

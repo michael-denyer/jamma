@@ -43,7 +43,8 @@ def _load_c_functions(so_path: str) -> tuple:
     lib = ctypes.CDLL(so_path)
 
     # int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
-    #                    double *d, double *e, double *tau)
+    #                    double *d, double *e, double *tau,
+    #                    jblas_workspace_t *ws, jblas_eigh_status_t *status)
     dsytrd = lib.jblas_dsytrd_c
     dsytrd.restype = ctypes.c_int
     dsytrd.argtypes = [
@@ -53,6 +54,8 @@ def _load_c_functions(so_path: str) -> tuple:
         ctypes.c_void_p,  # double *d
         ctypes.c_void_p,  # double *e
         ctypes.c_void_p,  # double *tau
+        ctypes.c_void_p,  # jblas_workspace_t *ws (NULL = global mutex)
+        ctypes.c_void_p,  # jblas_eigh_status_t *status (NULL = no status)
     ]
 
     # int jblas_dstedc_c(npy_intp N, double *d, double *e,
@@ -163,7 +166,7 @@ def bench_jblas_stages(
         )
 
         t0 = time.perf_counter()
-        ret = dsytrd_fn(N, _ptr(K_copy), N, _ptr(d), _ptr(e), _ptr(tau))
+        ret = dsytrd_fn(N, _ptr(K_copy), N, _ptr(d), _ptr(e), _ptr(tau), None, None)
         t_dsytrd = time.perf_counter() - t0
         assert ret == 0, f"dsytrd failed with ret={ret}"
         best_dsytrd = min(best_dsytrd, t_dsytrd)

@@ -376,9 +376,14 @@ static void dlatrd_panel(double *A, npy_intp lda, npy_intp N,
  * tridiagonal form and Householder scalars; the lower triangle of A
  * holds the Householder vectors.
  *
+ * ws: optional caller-owned workspace for dsyr2k trailing updates.
+ *     If non-NULL, uses jblas_dsyr2k_ws (no mutex contention).
+ *     If NULL, falls back to jblas_dsyr2k_c (global mutex path).
+ *
  * Returns 0 on success, -1 on allocation failure. */
 int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
                    double *d, double *e, double *tau,
+                   jblas_workspace_t *ws,
                    jblas_eigh_status_t *status)
 {
     if (N <= 0) return 0;
@@ -433,10 +438,18 @@ int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
          * Using nb here would skip that row/col and leave the next panel stale. */
         npy_intp m_trail = N - j - nb;
         if (m_trail > 0) {
-            jblas_dsyr2k_c(m_trail, nb,
-                           V + (nb - 1) * nb_alloc, nb_alloc,
-                           W + (nb - 1) * nb_alloc, nb_alloc,
-                           A + (j + nb) * lda + (j + nb), lda);
+            if (ws) {
+                jblas_dsyr2k_ws(m_trail, nb,
+                                V + (nb - 1) * nb_alloc, nb_alloc,
+                                W + (nb - 1) * nb_alloc, nb_alloc,
+                                A + (j + nb) * lda + (j + nb), lda,
+                                ws);
+            } else {
+                jblas_dsyr2k_c(m_trail, nb,
+                               V + (nb - 1) * nb_alloc, nb_alloc,
+                               W + (nb - 1) * nb_alloc, nb_alloc,
+                               A + (j + nb) * lda + (j + nb), lda);
+            }
         }
     }
 

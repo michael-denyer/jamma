@@ -429,6 +429,7 @@ int jblas_eigh_c(npy_intp N,
 /* Internal LAPACK-layer functions (called by jblas_eigh_c, not Python-facing) */
 int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
                    double *d, double *e, double *tau,
+                   jblas_workspace_t *ws,
                    jblas_eigh_status_t *status);
 int jblas_dstedc_c(npy_intp N, double *d, double *e,
                    double *Z, npy_intp ldz,

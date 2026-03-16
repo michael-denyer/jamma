@@ -1054,11 +1054,10 @@ class TestDlaed4Convergence:
     With LAPACK-quality dlaed4 (ORGATI origin selection, A/B/C rational
     interpolation for quadratic convergence, SWTCH/SWTCH3/dlaed6 for
     clustered poles, and delta_mat weight product for full relative
-    precision), secular convergence is reliable (zero failures) and
-    D&C achieves ~1e-9 residuals at N <= 100 without QR fallback.
-
-    At N >= ~128, the O(n) error accumulation in the weight product
-    means QR fallback is still needed as an emergency safety net.
+    precision) and LAPACK-matching z-vector sign handling (sign_rho
+    applied only to right half, matching DLAED2), secular convergence
+    is reliable (zero failures) and D&C achieves < 1e-8 residuals
+    at all sizes without QR fallback.
     """
 
     def test_clustered_eigenvalues(self) -> None:

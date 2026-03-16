@@ -666,8 +666,13 @@ static void dlaed6(int kniter, int orgati,
  *   - ORGATI: evaluate secular function at midpoint of (d[i], d[i+1]).
  *     Choose d[i] or d[i+1] as origin depending on sign.
  *   - Initial guess via stabilized quadratic from the two central poles.
- *   - Iteration: PSI/PHI split with Newton step; bisection safeguard.
- *     SWTCH3 detects clustered 3-pole cases and invokes dlaed6.
+ *   - Single-centre-pole PSI/PHI split with LAPACK II/IIM1/IIP1 indexing.
+ *   - A/B/C rational interpolation as primary step (quadratic convergence).
+ *     Newton step used only as fallback when A/B/C produces wrong-sign step.
+ *   - SWTCH3: detects 3-pole clustering, dispatches to dlaed6.
+ *   - SWTCH: detects slow convergence, adjusts C computation.
+ *   - Geometric mean safeguard: combines Newton and bisection when
+ *     rational step is out of bracket but Newton is in bracket.
  *   - Incremental delta maintenance: delta[k] -= eta each iteration.
  *
  * delta: output array of length n.  delta[k] = d[k] - lambda on exit.
@@ -753,83 +758,222 @@ static int dlaed4(npy_intp n, npy_intp i,
         for (k = 0; k < n; k++)
             delta[k] = (d[k] - d[origin]) - tau;
 
-        /* PSI/PHI split depends on ORGATI (LAPACK IIM1/IIP1 logic).
+        /* LAPACK IIM1/IIP1/II indexing (all 0-based C indices).
+         * Maps from LAPACK 1-based (I is eigenvalue index = our i+1):
+         *   ORGATI=TRUE:  II=i,   IIM1=i-1, IIP1=i+1
+         *   ORGATI=FALSE: II=i+1, IIM1=i,   IIP1=i+2
          *
-         * ORGATI=TRUE (origin at d[i]):
-         *   PSI: k=0..i-1, centre: {i, i+1}, PHI: k=i+2..n-1
-         *   The two A/B/C poles: delta[i] and delta[i+1]
-         *
-         * ORGATI=FALSE (origin at d[i+1]):
-         *   PSI: k=0..i, centre: {i+1, i+2}, PHI: k=i+3..n-1
-         *   The two A/B/C poles: delta[i+1] and delta[i+2]
-         *
-         * npy_intp indices for the two centre poles (0-indexed):
+         * Single centre pole (II) with PSI below and PHI above:
+         *   orgati:  PSI k=0..i-1, centre k=i, PHI k=i+1..n-1
+         *   !orgati: PSI k=0..i,   centre k=i+1, PHI k=i+2..n-1
          */
-        npy_intp cp0, cp1;  /* centre pole indices */
+        npy_intp ii, iim1, iip1;
+        if (orgati) {
+            ii = i;
+            iim1 = i - 1;
+            iip1 = i + 1;
+        } else {
+            ii = i + 1;
+            iim1 = i;
+            iip1 = i + 2;
+        }
+
         npy_intp psi_end;   /* PSI sums k=0..psi_end-1 */
         npy_intp phi_start; /* PHI sums k=phi_start..n-1 */
         if (orgati) {
-            cp0 = i;
-            cp1 = i + 1;
-            psi_end = i;
-            phi_start = i + 2;
+            psi_end = i;       /* k=0..i-1 */
+            phi_start = i + 1; /* k=i+1..n-1 */
         } else {
-            cp0 = i + 1;
-            /* When i+2 >= n, cp1 would be out of bounds.
-             * Fall back to ORGATI=TRUE split for this edge case. */
-            if (i + 2 < n) {
-                cp1 = i + 2;
-                psi_end = i + 1;
-                phi_start = i + 3;
-            } else {
-                /* Edge case: revert to orgati=1 split */
-                cp0 = i;
-                cp1 = i + 1;
-                psi_end = i;
-                phi_start = i + 2;
-            }
+            psi_end = i + 1;   /* k=0..i */
+            phi_start = i + 2; /* k=i+2..n-1 */
         }
 
-        /* ---- Rational interpolation iteration (LAPACK dlaed4) ---- */
-        for (int iter = 0; iter < MAXIT; iter++) {
-            /* Evaluate PSI: k=0..psi_end-1 */
-            double psi_val = 0.0, dpsi = 0.0;
-            double erretm = 0.0;
+        /* First PSI/PHI/W evaluation (LAPACK lines 542-600) */
+        double dpsi = 0.0, psi_val = 0.0, erretm = 0.0;
+        for (k = 0; k < psi_end; k++) {
+            double temp = z[k] / delta[k];
+            psi_val += z[k] * temp;
+            dpsi += temp * temp;
+            erretm += psi_val;  /* running sum, not fabs — matches LAPACK */
+        }
+        erretm = fabs(erretm);
+
+        double dphi = 0.0, phi_val = 0.0;
+        for (k = n - 1; k >= phi_start; k--) {
+            double temp = z[k] / delta[k];
+            phi_val += z[k] * temp;
+            dphi += temp * temp;
+            erretm += phi_val;  /* running sum like LAPACK */
+        }
+
+        /* W without centre pole = RHOINV + PSI + PHI */
+        double w_val = rhoinv + phi_val + psi_val;
+
+        /* SWTCH3 detection (LAPACK lines 568-576) */
+        int swtch3 = 0;
+        if (orgati) {
+            if (w_val < 0.0) swtch3 = 1;
+        } else {
+            if (w_val > 0.0) swtch3 = 1;
+        }
+        if (ii == 0 || ii == n - 1)
+            swtch3 = 0;
+
+        /* Add centre pole contribution (LAPACK lines 578-583) */
+        double dw;
+        int swtch = 0;
+        double prew;
+        {
+            double temp_ii = z[ii] / delta[ii];
+            dw = dpsi + dphi + temp_ii * temp_ii;
+            double temp_contrib = z[ii] * temp_ii;  /* LAPACK's TEMP */
+            w_val += temp_contrib;
+            erretm = 8.0 * (phi_val - psi_val) + erretm + 2.0 * fabs(rhoinv)
+                   + 3.0 * fabs(temp_contrib) + fabs(tau) * dw;
+        }
+
+        /* Test for convergence (LAPACK lines 585-592) */
+        if (fabs(w_val) <= EPS * erretm) {
+            *lambda_out = d[origin] + tau;
+            for (k = 0; k < n; k++)
+                delta[k] = (d[k] - d[origin]) - tau;
+            return 0;
+        }
+
+        /* Update bracket */
+        if (w_val <= 0.0) dltlb = fmax(dltlb, tau);
+        else              dltub = fmin(dltub, tau);
+
+        /* ---- First step: A/B/C rational interpolation ---- */
+        /* LAPACK lines 599-662: NITER=2 step computation */
+        {
+            double eta;
+
+            if (!swtch3) {
+                /* Non-SWTCH3: A/B/C from two gap-bounding poles.
+                 * LAPACK uses DELTA(I) and DELTA(IP1) which are the
+                 * poles bounding the gap: delta[i] and delta[i+1] (0-based). */
+                double C_val;
+                if (orgati) {
+                    C_val = w_val - delta[i + 1] * dw
+                          - (d[i] - d[i + 1]) * (z[i] / delta[i]) * (z[i] / delta[i]);
+                } else {
+                    C_val = w_val - delta[i] * dw
+                          - (d[i + 1] - d[i]) * (z[i + 1] / delta[i + 1]) * (z[i + 1] / delta[i + 1]);
+                }
+                double A_val = (delta[i] + delta[i + 1]) * w_val
+                             - delta[i] * delta[i + 1] * dw;
+                double B_val = delta[i] * delta[i + 1] * w_val;
+
+                if (C_val == 0.0) {
+                    if (A_val == 0.0) {
+                        if (orgati)
+                            A_val = z[i] * z[i] + delta[i + 1] * delta[i + 1] * (dpsi + dphi);
+                        else
+                            A_val = z[i + 1] * z[i + 1] + delta[i] * delta[i] * (dpsi + dphi);
+                    }
+                    eta = B_val / A_val;
+                } else if (A_val <= 0.0) {
+                    eta = (A_val - sqrt(fabs(A_val * A_val - 4.0 * B_val * C_val))) / (2.0 * C_val);
+                } else {
+                    eta = 2.0 * B_val / (A_val + sqrt(fabs(A_val * A_val - 4.0 * B_val * C_val)));
+                }
+            } else {
+                /* SWTCH3: three-pole interpolation via dlaed6.
+                 * LAPACK lines 630-660. */
+                double temp_rhoinv_psi_phi = rhoinv + psi_val + phi_val;
+                double zz[3];
+                double C_3;
+                if (orgati) {
+                    double t1 = z[iim1] / delta[iim1];
+                    t1 = t1 * t1;
+                    C_3 = temp_rhoinv_psi_phi - delta[iip1] * (dpsi + dphi)
+                        - (d[iim1] - d[iip1]) * t1;
+                    zz[0] = z[iim1] * z[iim1];
+                    zz[2] = delta[iip1] * delta[iip1] * ((dpsi - t1) + dphi);
+                } else {
+                    double t1 = z[iip1] / delta[iip1];
+                    t1 = t1 * t1;
+                    C_3 = temp_rhoinv_psi_phi - delta[iim1] * (dpsi + dphi)
+                        - (d[iip1] - d[iim1]) * t1;
+                    zz[0] = delta[iim1] * delta[iim1] * (dpsi + (dphi - t1));
+                    zz[2] = z[iip1] * z[iip1];
+                }
+                zz[1] = z[ii] * z[ii];
+
+                double d3[3] = { delta[iim1], delta[ii], delta[iip1] };
+                int info6;
+                dlaed6(40, orgati, d3, zz, C_3, &eta, &info6);
+                if (info6 != 0) {
+                    /* dlaed6 failed — fall back to Newton step */
+                    eta = -w_val / dw;
+                }
+            }
+
+            /* Sign check: eta*w should be < 0 (LAPACK line 670) */
+            if (w_val * eta >= 0.0)
+                eta = -w_val / dw;
+
+            /* Safeguard for first step (LAPACK lines 672-685):
+             * Simple bisection if out of bracket. */
+            {
+                double temp_tau = tau + eta;
+                if (temp_tau > dltub || temp_tau < dltlb) {
+                    if (w_val < 0.0)
+                        eta = (dltub - tau) / 2.0;
+                    else
+                        eta = (dltlb - tau) / 2.0;
+                }
+            }
+
+            /* Save w for SWTCH detection (LAPACK line 688: PREW = W) */
+            prew = w_val;
+
+            /* Apply step */
+            for (k = 0; k < n; k++)
+                delta[k] -= eta;
+
+            /* Re-evaluate PSI/PHI/W after first step (LAPACK lines 694-720) */
+            dpsi = 0.0; psi_val = 0.0; erretm = 0.0;
             for (k = 0; k < psi_end; k++) {
-                double temp = z[k] / delta[k];
-                psi_val += z[k] * temp;
-                dpsi += temp * temp;
+                double t = z[k] / delta[k];
+                psi_val += z[k] * t;
+                dpsi += t * t;
+                erretm += psi_val;
             }
-            erretm += fabs(psi_val);
+            erretm = fabs(erretm);
 
-            /* Evaluate PHI: k=phi_start..n-1 */
-            double phi_val = 0.0, dphi = 0.0;
-            for (k = phi_start; k < n; k++) {
-                double temp = z[k] / delta[k];
-                phi_val += z[k] * temp;
-                dphi += temp * temp;
+            dphi = 0.0; phi_val = 0.0;
+            for (k = n - 1; k >= phi_start; k--) {
+                double t = z[k] / delta[k];
+                phi_val += z[k] * t;
+                dphi += t * t;
+                erretm += phi_val;
             }
-            erretm += fabs(phi_val);
 
-            /* Two centre poles */
-            double temp0 = z[cp0] / delta[cp0];
-            double temp1 = z[cp1] / delta[cp1];
-            double zz0 = z[cp0] * temp0;  /* z[cp0]^2 / delta[cp0] */
-            double zz1 = z[cp1] * temp1;  /* z[cp1]^2 / delta[cp1] */
+            {
+                double temp_ii = z[ii] / delta[ii];
+                dw = dpsi + dphi + temp_ii * temp_ii;
+                double temp_contrib = z[ii] * temp_ii;
+                w_val = rhoinv + phi_val + psi_val + temp_contrib;
+                erretm = 8.0 * (phi_val - psi_val) + erretm + 2.0 * fabs(rhoinv)
+                       + 3.0 * fabs(temp_contrib) + fabs(tau + eta) * dw;
+            }
 
-            /* Total function and derivative */
-            double w_val = rhoinv + psi_val + zz0 + zz1 + phi_val;
-            double dw = dpsi + temp0 * temp0 + temp1 * temp1 + dphi;
+            /* SWTCH detection (LAPACK lines 722-728) */
+            if (orgati) {
+                if (-w_val > fabs(prew) / 10.0) swtch = 1;
+            } else {
+                if (w_val > fabs(prew) / 10.0) swtch = 1;
+            }
 
-            /* Relative error bound */
-            erretm = 8.0 * (erretm + fabs(zz0) + fabs(zz1))
-                   + fabs(rhoinv) + fabs(tau) * dw;
+            tau += eta;
+        }
 
+        /* ---- Main iteration loop (LAPACK lines 736-944) ---- */
+        for (int iter = 2; iter < MAXIT; iter++) {
+            /* Test for convergence */
             if (fabs(w_val) <= EPS * erretm) {
-                /* Converged. Recompute delta from final tau to avoid
-                 * accumulated error from incremental delta -= eta updates.
-                 * This is critical for the dlaed3 weight product which
-                 * multiplies n-1 delta ratios. */
                 *lambda_out = d[origin] + tau;
                 for (k = 0; k < n; k++)
                     delta[k] = (d[k] - d[origin]) - tau;
@@ -840,86 +984,157 @@ static int dlaed4(npy_intp n, npy_intp i,
             if (w_val <= 0.0) dltlb = fmax(dltlb, tau);
             else              dltub = fmin(dltub, tau);
 
-            /* SWTCH3: detect 3-pole clustering.
-             * Evaluate secular function without the centre pole nearest
-             * to the origin. If sign differs from w_val, three poles
-             * dominate and dlaed6 should be used instead of Newton. */
-            int swtch3 = 0;
-            if (orgati) {
-                double w_without = w_val - zz0;
-                swtch3 = (w_without * w_val < 0.0) ? 1 : 0;
-            } else {
-                double w_without = w_val - zz1;
-                swtch3 = (w_without * w_val < 0.0) ? 1 : 0;
-            }
-
+            /* Compute step (LAPACK lines 752-887) */
             double eta;
-            if (swtch3) {
-                /* 3-pole case: use dlaed6 cubic rational solver.
-                 * Build the 3-element subset for dlaed6.
-                 * finit = w_val minus the 3 poles' contributions. */
-                double d3[3], z2_3[3];
-                int have_3_poles = 0;
-                double finit_3 = 0.0;
+            double dw = dpsi + dphi + (z[ii] / delta[ii]) * (z[ii] / delta[ii]);
 
-                if (orgati && psi_end > 0) {
-                    npy_intp p0 = psi_end - 1;
-                    d3[0] = delta[p0];
-                    d3[1] = delta[cp0];
-                    d3[2] = delta[cp1];
-                    z2_3[0] = z[p0] * z[p0];
-                    z2_3[1] = z[cp0] * z[cp0];
-                    z2_3[2] = z[cp1] * z[cp1];
-                    /* finit = w_val minus contributions of these 3 poles */
-                    finit_3 = w_val - z2_3[0] / d3[0]
-                                    - z2_3[1] / d3[1]
-                                    - z2_3[2] / d3[2];
-                    have_3_poles = 1;
-                } else if (!orgati && phi_start < n) {
-                    d3[0] = delta[cp0];
-                    d3[1] = delta[cp1];
-                    d3[2] = delta[phi_start];
-                    z2_3[0] = z[cp0] * z[cp0];
-                    z2_3[1] = z[cp1] * z[cp1];
-                    z2_3[2] = z[phi_start] * z[phi_start];
-                    finit_3 = w_val - z2_3[0] / d3[0]
-                                    - z2_3[1] / d3[1]
-                                    - z2_3[2] / d3[2];
-                    have_3_poles = 1;
-                }
-
-                if (have_3_poles) {
-                    double tau6;
-                    int info6;
-                    double newton_eta = -w_val / dw;
-                    dlaed6(40, orgati, d3, z2_3, finit_3, &tau6, &info6);
-                    /* Use dlaed6 result only if it succeeded and produces
-                     * a step in the same direction as Newton (sign agreement)
-                     * with reasonable magnitude (<= 3x Newton step).
-                     * Otherwise fall back to Newton. */
-                    if (info6 == 0 && tau6 * newton_eta > 0.0
-                        && fabs(tau6) <= 3.0 * fabs(newton_eta)) {
-                        eta = tau6;
+            if (!swtch3) {
+                double C_val;
+                if (!swtch) {
+                    /* Normal case: C from gap-bounding poles */
+                    if (orgati) {
+                        C_val = w_val - delta[i + 1] * dw
+                              - (d[i] - d[i + 1]) * (z[i] / delta[i]) * (z[i] / delta[i]);
                     } else {
-                        eta = newton_eta;
+                        C_val = w_val - delta[i] * dw
+                              - (d[i + 1] - d[i]) * (z[i + 1] / delta[i + 1]) * (z[i + 1] / delta[i + 1]);
                     }
                 } else {
-                    eta = -w_val / dw;  /* Newton fallback */
+                    /* SWTCH: move II-th pole to PSI or PHI side.
+                     * LAPACK lines 770-781. */
+                    double t_ii = z[ii] / delta[ii];
+                    if (orgati) {
+                        /* Move II-th pole into PSI */
+                        double dpsi_adj = dpsi + t_ii * t_ii;
+                        C_val = w_val - delta[i] * dpsi_adj - delta[i + 1] * dphi;
+                    } else {
+                        /* Move II-th pole into PHI */
+                        double dphi_adj = dphi + t_ii * t_ii;
+                        C_val = w_val - delta[i] * dpsi - delta[i + 1] * dphi_adj;
+                    }
+                }
+
+                double A_val = (delta[i] + delta[i + 1]) * w_val
+                             - delta[i] * delta[i + 1] * dw;
+                double B_val = delta[i] * delta[i + 1] * w_val;
+
+                if (C_val == 0.0) {
+                    if (A_val == 0.0) {
+                        if (!swtch) {
+                            if (orgati)
+                                A_val = z[i] * z[i] + delta[i + 1] * delta[i + 1] * (dpsi + dphi);
+                            else
+                                A_val = z[i + 1] * z[i + 1] + delta[i] * delta[i] * (dpsi + dphi);
+                        } else {
+                            A_val = delta[i] * delta[i] * dpsi
+                                  + delta[i + 1] * delta[i + 1] * dphi;
+                        }
+                    }
+                    eta = B_val / A_val;
+                } else if (A_val <= 0.0) {
+                    eta = (A_val - sqrt(fabs(A_val * A_val - 4.0 * B_val * C_val))) / (2.0 * C_val);
+                } else {
+                    eta = 2.0 * B_val / (A_val + sqrt(fabs(A_val * A_val - 4.0 * B_val * C_val)));
                 }
             } else {
-                /* Standard case: Newton step */
-                eta = -w_val / dw;
+                /* SWTCH3: three-pole interpolation via dlaed6.
+                 * LAPACK lines 845-887. */
+                double temp_rpf = rhoinv + psi_val + phi_val;
+                double zz[3];
+                double C_3;
+
+                if (swtch) {
+                    /* SWTCH + SWTCH3: simplified form (LAPACK lines 848-851) */
+                    C_3 = temp_rpf - delta[iim1] * dpsi - delta[iip1] * dphi;
+                    zz[0] = delta[iim1] * delta[iim1] * dpsi;
+                    zz[2] = delta[iip1] * delta[iip1] * dphi;
+                } else {
+                    if (orgati) {
+                        double t1 = z[iim1] / delta[iim1];
+                        t1 = t1 * t1;
+                        C_3 = temp_rpf - delta[iip1] * (dpsi + dphi)
+                            - (d[iim1] - d[iip1]) * t1;
+                        zz[0] = z[iim1] * z[iim1];
+                        zz[2] = delta[iip1] * delta[iip1] * ((dpsi - t1) + dphi);
+                    } else {
+                        double t1 = z[iip1] / delta[iip1];
+                        t1 = t1 * t1;
+                        C_3 = temp_rpf - delta[iim1] * (dpsi + dphi)
+                            - (d[iip1] - d[iim1]) * t1;
+                        zz[0] = delta[iim1] * delta[iim1] * (dpsi + (dphi - t1));
+                        zz[2] = z[iip1] * z[iip1];
+                    }
+                }
+                zz[1] = z[ii] * z[ii];
+
+                double d3[3] = { delta[iim1], delta[ii], delta[iip1] };
+                int info6;
+                dlaed6(40, orgati, d3, zz, C_3, &eta, &info6);
+                if (info6 != 0) {
+                    /* dlaed6 failed — fall back to Newton step */
+                    eta = -w_val / dw;
+                }
             }
 
-            /* Safeguard: keep tau + eta in [dltlb, dltub] */
-            if (tau + eta <= dltlb)
-                eta = (dltlb - tau) * 0.5;
-            if (tau + eta >= dltub)
-                eta = (dltub - tau) * 0.5;
+            /* Sign check (LAPACK line 895) */
+            if (w_val * eta >= 0.0)
+                eta = -w_val / dw;
 
-            tau += eta;
+            /* Geometric mean safeguard (LAPACK lines 897-917) */
+            {
+                double temp_tau = tau + eta;
+                if (temp_tau > dltub || temp_tau < dltlb) {
+                    double eta1 = -w_val / dw;
+                    double temp_tau1 = tau + eta1;
+                    double eta2;
+                    if (w_val < 0.0)
+                        eta2 = (dltub - tau) / 2.0;
+                    else
+                        eta2 = (dltlb - tau) / 2.0;
+                    if (dltlb <= temp_tau1 && temp_tau1 <= dltub) {
+                        eta = copysign(1.0, eta1) * sqrt(fabs(eta1)) * sqrt(fabs(eta2));
+                    } else {
+                        eta = eta2;
+                    }
+                }
+            }
+
+            /* Apply step */
             for (k = 0; k < n; k++)
                 delta[k] -= eta;
+            tau += eta;
+            double prew = w_val;
+
+            /* Re-evaluate PSI/PHI/W (LAPACK lines 924-944) */
+            dpsi = 0.0; psi_val = 0.0; erretm = 0.0;
+            for (k = 0; k < psi_end; k++) {
+                double t = z[k] / delta[k];
+                psi_val += z[k] * t;
+                dpsi += t * t;
+                erretm += psi_val;
+            }
+            erretm = fabs(erretm);
+
+            dphi = 0.0; phi_val = 0.0;
+            for (k = n - 1; k >= phi_start; k--) {
+                double t = z[k] / delta[k];
+                phi_val += z[k] * t;
+                dphi += t * t;
+                erretm += phi_val;
+            }
+
+            {
+                double t = z[ii] / delta[ii];
+                double temp_contrib = z[ii] * t;
+                dw = dpsi + dphi + t * t;
+                w_val = rhoinv + phi_val + psi_val + temp_contrib;
+                erretm = 8.0 * (phi_val - psi_val) + erretm + 2.0 * fabs(rhoinv)
+                       + 3.0 * fabs(temp_contrib) + fabs(tau) * dw;
+            }
+
+            /* SWTCH update (LAPACK line 943) */
+            if (w_val * prew > 0.0 && fabs(w_val) > fabs(prew) / 10.0)
+                swtch = !swtch;
         }
 
         /* Did not converge — return best estimate.

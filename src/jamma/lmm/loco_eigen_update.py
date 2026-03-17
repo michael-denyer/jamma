@@ -38,6 +38,8 @@ import time
 import numpy as np
 from loguru import logger
 
+from jamma import jlinalg
+
 # Small eigenvalue threshold inspired by GEMMA's EigenDecomp_Zeroed, applied to
 # absolute values to also handle small negative eigenvalues from numerical noise
 # in the rank-k downdate (GEMMA itself zeros non-positive eigenvalues only).
@@ -837,8 +839,11 @@ def secular_eigendecompose_from_full(
     # Thin SVD of Z to get r_eff singular vectors
     Z = np.matmul(U_full.T, X_c)
     try:
-        u_z, s, _ = np.linalg.svd(Z, full_matrices=False)
-    except np.linalg.LinAlgError as e:
+        if jlinalg.blas_has_dgesvd and Z.shape[0] >= Z.shape[1]:
+            u_z, s, _ = jlinalg.svd(Z)
+        else:
+            u_z, s, _ = np.linalg.svd(Z, full_matrices=False)
+    except (np.linalg.LinAlgError, ValueError) as e:
         raise np.linalg.LinAlgError(
             f"SVD of rotated chromosome genotype matrix Z (shape {Z.shape}) "
             f"failed in secular_eigendecompose_from_full: {e}"
@@ -940,7 +945,10 @@ def secular_eigendecompose_from_full(
 
         # Periodic QR re-orthogonalization to limit drift across many steps
         if reorth_interval is not None and (j + 1) % reorth_interval == 0:
-            Q, _ = np.linalg.qr(Q, mode="reduced")
+            if jlinalg.blas_has_dgeqrf:
+                Q, _ = jlinalg.qr(Q)
+            else:
+                Q, _ = np.linalg.qr(Q, mode="reduced")
 
     if n_fallbacks > 0:
         logger.warning(
@@ -996,7 +1004,10 @@ def measure_effective_rank(
     Z = np.matmul(U_full.T, X_c)
 
     # Thin SVD of Z: returns singular values only (no U_z or V_z needed)
-    s = np.linalg.svd(Z, compute_uv=False)
+    if jlinalg.blas_has_dgesvd and Z.shape[1] > 0 and Z.shape[0] >= Z.shape[1]:
+        s = jlinalg.svd(Z, compute_uv=False)
+    else:
+        s = np.linalg.svd(Z, compute_uv=False)
 
     # Effective rank: number of singular values above threshold
     if len(s) == 0 or s[0] == 0.0:
@@ -1072,5 +1083,8 @@ def _check_and_reorthogonalize(
             f"drift detected: max|U^T U - I| = {deviation:.2e}. "
             f"Applying QR re-orthogonalization."
         )
-        U, _ = np.linalg.qr(U, mode="reduced")
+        if jlinalg.blas_has_dgeqrf:
+            U, _ = jlinalg.qr(U)
+        else:
+            U, _ = np.linalg.qr(U, mode="reduced")
     return U

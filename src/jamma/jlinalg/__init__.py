@@ -49,6 +49,8 @@ try:
         JLINALG_NC,
         JLINALG_NR,
         blas_backend,
+        blas_has_dgeqrf,
+        blas_has_dgesvd,
         blas_has_dsyevd,
         blas_has_dsyevr,
         blas_has_dsyrk,
@@ -65,7 +67,9 @@ try:
         eigh,
         get_n_threads,
         jlinalg_isa,
+        qr,
         set_n_threads,
+        svd,
     )
 
     HAS_C_EXTENSION: bool = True
@@ -98,6 +102,8 @@ except ImportError as _exc:
     blas_has_dsyevd: int = 0
     blas_has_dsyevr: int = 0
     blas_has_lapacke_dsyevd: int = 0
+    blas_has_dgeqrf: int = 0
+    blas_has_dgesvd: int = 0
 
     # Blocking parameters: generic defaults (matches jlinalg generic ISA).
     # Tests that import these should guard on HAS_C_EXTENSION.
@@ -377,6 +383,47 @@ except ImportError as _exc:
             K[:] = 0.0
         return w, v
 
+    def qr(A: _np.ndarray) -> tuple[_np.ndarray, _np.ndarray]:
+        """Compute reduced QR factorization.
+
+        Args:
+            A: Input matrix, shape (m, n), float64.
+
+        Returns:
+            Tuple (Q, R) where Q is (m, n) orthogonal and R is (n, n) upper triangular.
+        """
+        if A.ndim != 2:
+            raise ValueError(f"qr: A must be a 2-D array, got {A.ndim}-D")
+        Q, R = _np.linalg.qr(A.astype(_np.float64, copy=False), mode="reduced")
+        return Q, R
+
+    def svd(
+        A: _np.ndarray, compute_uv: bool = True
+    ) -> tuple[_np.ndarray, _np.ndarray, _np.ndarray] | _np.ndarray:
+        """Compute reduced SVD of a tall-skinny matrix.
+
+        Args:
+            A: Input matrix, shape (m, n) with m >= n, float64.
+            compute_uv: If True, return (U, s, Vh). If False, return s only.
+
+        Returns:
+            If compute_uv=True: (U, s, Vh) where U is (m, n), s is (n,), Vh is (n, n).
+            If compute_uv=False: s only, shape (n,).
+
+        Raises:
+            ValueError: If m < n.
+        """
+        if A.ndim != 2:
+            raise ValueError(f"svd: A must be a 2-D array, got {A.ndim}-D")
+        if A.shape[0] < A.shape[1]:
+            raise ValueError(f"svd: requires m >= n (tall-skinny), got shape {A.shape}")
+        A64 = A.astype(_np.float64, copy=False)
+        if compute_uv:
+            U, s, Vh = _np.linalg.svd(A64, full_matrices=False)
+            return U, s, Vh
+        else:
+            return _np.linalg.svd(A64, compute_uv=False)
+
     import os as _os
 
     # Mutable container for fallback thread state (closures can't rebind
@@ -410,6 +457,8 @@ except ImportError as _exc:
 __all__ = [
     "ABI_VERSION",
     "blas_backend",
+    "blas_has_dgeqrf",
+    "blas_has_dgesvd",
     "blas_has_dsyevd",
     "blas_has_dsyevr",
     "blas_has_dsyrk",
@@ -425,7 +474,9 @@ __all__ = [
     "dsyr2k",
     "eigh",
     "get_n_threads",
+    "qr",
     "set_n_threads",
+    "svd",
     "jlinalg_isa",
     "HAS_C_EXTENSION",
     "HAS_OPENMP",

@@ -66,11 +66,25 @@ static jlinalg_lapacke_dsyevd_ilp64_fn  g_lapacke_dsyevd_ilp64  = NULL;
 static jlinalg_dsyevr_lp64_fn       g_dsyevr_lp64       = NULL;
 static jlinalg_dsyevr_ilp64_fn      g_dsyevr_ilp64      = NULL;
 
+/* dgeqrf dispatch pointers (Fortran) */
+static jlinalg_dgeqrf_lp64_fn  g_dgeqrf_lp64  = NULL;
+static jlinalg_dgeqrf_ilp64_fn g_dgeqrf_ilp64 = NULL;
+
+/* dorgqr dispatch pointers (Fortran) */
+static jlinalg_dorgqr_lp64_fn  g_dorgqr_lp64  = NULL;
+static jlinalg_dorgqr_ilp64_fn g_dorgqr_ilp64 = NULL;
+
+/* dgesvd dispatch pointers (Fortran) */
+static jlinalg_dgesvd_lp64_fn  g_dgesvd_lp64  = NULL;
+static jlinalg_dgesvd_ilp64_fn g_dgesvd_ilp64 = NULL;
+
 /* Capability flags */
 static int g_has_dsyrk  = 0;
 static int g_has_dsyevd = 0;
 static int g_has_lapacke_dsyevd = 0;
 static int g_has_dsyevr = 0;
+static int g_has_dgeqrf = 0;
+static int g_has_dgesvd = 0;
 
 /* LP64 overflow guard: floor(sqrt(2^31 - 1)) */
 #define LP64_DIM_MAX 46340
@@ -146,6 +160,17 @@ typedef struct {
     jlinalg_dsyevr_lp64_fn           dsyevr_lp64;
     jlinalg_dsyevr_ilp64_fn          dsyevr_ilp64;
     int     has_dsyevr;
+    /* dgeqrf (Fortran) */
+    jlinalg_dgeqrf_lp64_fn  dgeqrf_lp64;
+    jlinalg_dgeqrf_ilp64_fn dgeqrf_ilp64;
+    int     has_dgeqrf;
+    /* dorgqr (Fortran) */
+    jlinalg_dorgqr_lp64_fn  dorgqr_lp64;
+    jlinalg_dorgqr_ilp64_fn dorgqr_ilp64;
+    /* dgesvd (Fortran) */
+    jlinalg_dgesvd_lp64_fn  dgesvd_lp64;
+    jlinalg_dgesvd_ilp64_fn dgesvd_ilp64;
+    int     has_dgesvd;
 } blas_candidate_t;
 
 /* ---------------------------------------------------------------------------
@@ -436,6 +461,139 @@ static void try_resolve_dsyevr(void *handle, blas_candidate_t *c, int is_blis) {
 }
 
 /* ---------------------------------------------------------------------------
+ * Symbol resolution — dgeqrf (QR factorization)
+ * ---------------------------------------------------------------------------
+ */
+static void try_resolve_dgeqrf(void *handle, blas_candidate_t *c, int is_blis) {
+    int dbg = _debug_enabled();
+
+    /* BLIS has no LAPACK — skip */
+    if (is_blis)
+        return;
+
+    if (c->is_ilp64) {
+#ifdef __APPLE__
+        void *sym = dlsym(handle, "dgeqrf$NEWLAPACK$ILP64");
+        if (sym) {
+            c->dgeqrf_ilp64 = (jlinalg_dgeqrf_ilp64_fn)sym;
+            c->has_dgeqrf = 1;
+            if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved dgeqrf$NEWLAPACK$ILP64\n");
+        }
+        return;
+#endif
+        void *sym64 = dlsym(handle, "dgeqrf_64_");
+        if (sym64) {
+            c->dgeqrf_ilp64 = (jlinalg_dgeqrf_ilp64_fn)sym64;
+            c->has_dgeqrf = 1;
+            if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved dgeqrf_64_\n");
+            return;
+        }
+        void *sym64b = dlsym(handle, "dgeqrf64_");
+        if (sym64b) {
+            c->dgeqrf_ilp64 = (jlinalg_dgeqrf_ilp64_fn)sym64b;
+            c->has_dgeqrf = 1;
+            if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved dgeqrf64_\n");
+            return;
+        }
+        return;
+    }
+
+    /* LP64 Fortran dgeqrf */
+    void *fsym = dlsym(handle, "dgeqrf_");
+    if (fsym) {
+        c->dgeqrf_lp64 = (jlinalg_dgeqrf_lp64_fn)fsym;
+        c->has_dgeqrf = 1;
+        if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved dgeqrf_ (LP64)\n");
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * Symbol resolution — dorgqr (generate Q from Householder reflectors)
+ * ---------------------------------------------------------------------------
+ */
+static void try_resolve_dorgqr(void *handle, blas_candidate_t *c, int is_blis) {
+    int dbg = _debug_enabled();
+
+    if (is_blis)
+        return;
+
+    if (c->is_ilp64) {
+#ifdef __APPLE__
+        void *sym = dlsym(handle, "dorgqr$NEWLAPACK$ILP64");
+        if (sym) {
+            c->dorgqr_ilp64 = (jlinalg_dorgqr_ilp64_fn)sym;
+            if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved dorgqr$NEWLAPACK$ILP64\n");
+        }
+        return;
+#endif
+        void *sym64 = dlsym(handle, "dorgqr_64_");
+        if (sym64) {
+            c->dorgqr_ilp64 = (jlinalg_dorgqr_ilp64_fn)sym64;
+            if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved dorgqr_64_\n");
+            return;
+        }
+        void *sym64b = dlsym(handle, "dorgqr64_");
+        if (sym64b) {
+            c->dorgqr_ilp64 = (jlinalg_dorgqr_ilp64_fn)sym64b;
+            if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved dorgqr64_\n");
+            return;
+        }
+        return;
+    }
+
+    void *fsym = dlsym(handle, "dorgqr_");
+    if (fsym) {
+        c->dorgqr_lp64 = (jlinalg_dorgqr_lp64_fn)fsym;
+        if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved dorgqr_ (LP64)\n");
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * Symbol resolution — dgesvd (SVD)
+ * ---------------------------------------------------------------------------
+ */
+static void try_resolve_dgesvd(void *handle, blas_candidate_t *c, int is_blis) {
+    int dbg = _debug_enabled();
+
+    if (is_blis)
+        return;
+
+    if (c->is_ilp64) {
+#ifdef __APPLE__
+        void *sym = dlsym(handle, "dgesvd$NEWLAPACK$ILP64");
+        if (sym) {
+            c->dgesvd_ilp64 = (jlinalg_dgesvd_ilp64_fn)sym;
+            c->has_dgesvd = 1;
+            if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved dgesvd$NEWLAPACK$ILP64\n");
+        }
+        return;
+#endif
+        void *sym64 = dlsym(handle, "dgesvd_64_");
+        if (sym64) {
+            c->dgesvd_ilp64 = (jlinalg_dgesvd_ilp64_fn)sym64;
+            c->has_dgesvd = 1;
+            if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved dgesvd_64_\n");
+            return;
+        }
+        void *sym64b = dlsym(handle, "dgesvd64_");
+        if (sym64b) {
+            c->dgesvd_ilp64 = (jlinalg_dgesvd_ilp64_fn)sym64b;
+            c->has_dgesvd = 1;
+            if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved dgesvd64_\n");
+            return;
+        }
+        return;
+    }
+
+    void *fsym = dlsym(handle, "dgesvd_");
+    if (fsym) {
+        c->dgesvd_lp64 = (jlinalg_dgesvd_lp64_fn)fsym;
+        c->has_dgesvd = 1;
+        if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved dgesvd_ (LP64)\n");
+    }
+}
+
+/* ---------------------------------------------------------------------------
  * Directory scanning (populates candidate)
  * ---------------------------------------------------------------------------
  */
@@ -480,6 +638,9 @@ static int scan_dir_for_blas_candidate(const char *dirpath, blas_candidate_t *c)
             try_resolve_dsyrk(handle, c, 0);
             try_resolve_dsyevd(handle, c, 0);
             try_resolve_dsyevr(handle, c, 0);
+            try_resolve_dgeqrf(handle, c, 0);
+            try_resolve_dorgqr(handle, c, 0);
+            try_resolve_dgesvd(handle, c, 0);
             closedir(dir);
             return 1;
         }
@@ -586,6 +747,9 @@ static int scan_proc_maps_for_blas_candidate(blas_candidate_t *c) {
             try_resolve_dsyrk(handle, c, 0);
             try_resolve_dsyevd(handle, c, 0);
             try_resolve_dsyevr(handle, c, 0);
+            try_resolve_dgeqrf(handle, c, 0);
+            try_resolve_dorgqr(handle, c, 0);
+            try_resolve_dgesvd(handle, c, 0);
             fclose(fp);
             return 1;
         }
@@ -615,6 +779,9 @@ static void discover_system_blas(blas_candidate_t *c) {
         try_resolve_dsyrk(RTLD_DEFAULT, c, 0);
         try_resolve_dsyevd(RTLD_DEFAULT, c, 0);
         try_resolve_dsyevr(RTLD_DEFAULT, c, 0);
+        try_resolve_dgeqrf(RTLD_DEFAULT, c, 0);
+        try_resolve_dorgqr(RTLD_DEFAULT, c, 0);
+        try_resolve_dgesvd(RTLD_DEFAULT, c, 0);
         return;
     }
 
@@ -627,6 +794,9 @@ static void discover_system_blas(blas_candidate_t *c) {
         try_resolve_dsyrk(RTLD_DEFAULT, c, 0);
         try_resolve_dsyevd(RTLD_DEFAULT, c, 0);
         try_resolve_dsyevr(RTLD_DEFAULT, c, 0);
+        try_resolve_dgeqrf(RTLD_DEFAULT, c, 0);
+        try_resolve_dorgqr(RTLD_DEFAULT, c, 0);
+        try_resolve_dgesvd(RTLD_DEFAULT, c, 0);
         return;
     }
 
@@ -819,6 +989,9 @@ static void discover_pip_mkl(blas_candidate_t *c) {
                     try_resolve_dsyrk(RTLD_DEFAULT, c, 0);
                     try_resolve_dsyevd(RTLD_DEFAULT, c, 0);
                     try_resolve_dsyevr(RTLD_DEFAULT, c, 0);
+                    try_resolve_dgeqrf(RTLD_DEFAULT, c, 0);
+                    try_resolve_dorgqr(RTLD_DEFAULT, c, 0);
+                    try_resolve_dgesvd(RTLD_DEFAULT, c, 0);
                     if (dbg) fprintf(stderr, "jlinalg_dispatch: pip-mkl -- resolved (ilp64=%d, lapack=%d)\n",
                                      c->is_ilp64, c->has_lapack);
                     Py_DECREF(libs_str);
@@ -1166,6 +1339,24 @@ int blas_dispatch_init(void) {
             if (dbg) fprintf(stderr, "jlinalg_dispatch: vendor dsyevr wired (memory-pressure fallback)\n");
         }
 
+        /* Wire dgeqrf + dorgqr — only if BOTH are available */
+        if (best->has_dgeqrf && (best->dorgqr_ilp64 || best->dorgqr_lp64)) {
+            g_dgeqrf_lp64 = best->dgeqrf_lp64;
+            g_dgeqrf_ilp64 = best->dgeqrf_ilp64;
+            g_dorgqr_lp64 = best->dorgqr_lp64;
+            g_dorgqr_ilp64 = best->dorgqr_ilp64;
+            g_has_dgeqrf = 1;
+            if (dbg) fprintf(stderr, "jlinalg_dispatch: vendor dgeqrf + dorgqr wired\n");
+        }
+
+        /* Wire dgesvd */
+        if (best->has_dgesvd) {
+            g_dgesvd_lp64 = best->dgesvd_lp64;
+            g_dgesvd_ilp64 = best->dgesvd_ilp64;
+            g_has_dgesvd = 1;
+            if (dbg) fprintf(stderr, "jlinalg_dispatch: vendor dgesvd wired\n");
+        }
+
         return 0;
     }
 
@@ -1206,6 +1397,8 @@ int blas_has_dsyrk(void)  { return g_has_dsyrk; }
 int blas_has_dsyevd(void) { return g_has_dsyevd; }
 int blas_has_lapacke_dsyevd(void) { return g_has_lapacke_dsyevd; }
 int blas_has_dsyevr(void) { return g_has_dsyevr && g_is_ilp64; }
+int blas_has_dgeqrf(void) { return g_has_dgeqrf && g_is_ilp64; }
+int blas_has_dgesvd(void) { return g_has_dgesvd && g_is_ilp64; }
 
 /* ---------------------------------------------------------------------------
  * jlinalg_dsyrk_ext — Vendor-dispatch dsyrk: C = X @ X.T
@@ -1447,6 +1640,115 @@ int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk,
 }
 
 /* ---------------------------------------------------------------------------
+ * jlinalg_dgeqrf_ext — Vendor-dispatch QR factorization (dgeqrf)
+ * ---------------------------------------------------------------------------
+ */
+int jlinalg_dgeqrf_ext(npy_intp m, npy_intp n, double *A_col, npy_intp lda, double *tau)
+{
+    if (!g_has_dgeqrf || !g_is_ilp64)
+        return JLINALG_EXT_UNAVAILABLE;
+
+    if (g_dgeqrf_ilp64) {
+        long long lm = (long long)m, ln = (long long)n;
+        long long llda = (long long)lda;
+        long long info = 0;
+
+        /* Workspace query */
+        long long lwork = -1;
+        double work_query;
+        g_dgeqrf_ilp64(&lm, &ln, A_col, &llda, tau, &work_query, &lwork, &info);
+        if (info != 0) return _info_to_int(info, m);
+
+        lwork = (long long)work_query + 1;
+        double *work = (double *)malloc((size_t)lwork * sizeof(double));
+        if (!work) return JLINALG_EXT_ALLOC_FAIL;
+
+        g_dgeqrf_ilp64(&lm, &ln, A_col, &llda, tau, work, &lwork, &info);
+        free(work);
+        if (info != 0) return _info_to_int(info, m);
+        return JLINALG_EXT_SUCCESS;
+    }
+    return JLINALG_EXT_UNAVAILABLE;
+}
+
+/* ---------------------------------------------------------------------------
+ * jlinalg_dorgqr_ext — Vendor-dispatch generate Q from Householder (dorgqr)
+ * ---------------------------------------------------------------------------
+ */
+int jlinalg_dorgqr_ext(npy_intp m, npy_intp n, double *A_col, npy_intp lda, const double *tau)
+{
+    if (!g_has_dgeqrf || !g_is_ilp64)
+        return JLINALG_EXT_UNAVAILABLE;
+
+    if (g_dorgqr_ilp64) {
+        long long lm = (long long)m, ln = (long long)n, lk = (long long)n;
+        long long llda = (long long)lda;
+        long long info = 0;
+
+        /* Workspace query */
+        long long lwork = -1;
+        double work_query;
+        g_dorgqr_ilp64(&lm, &ln, &lk, A_col, &llda, tau, &work_query, &lwork, &info);
+        if (info != 0) return _info_to_int(info, m);
+
+        lwork = (long long)work_query + 1;
+        double *work = (double *)malloc((size_t)lwork * sizeof(double));
+        if (!work) return JLINALG_EXT_ALLOC_FAIL;
+
+        g_dorgqr_ilp64(&lm, &ln, &lk, A_col, &llda, tau, work, &lwork, &info);
+        free(work);
+        if (info != 0) return _info_to_int(info, m);
+        return JLINALG_EXT_SUCCESS;
+    }
+    return JLINALG_EXT_UNAVAILABLE;
+}
+
+/* ---------------------------------------------------------------------------
+ * jlinalg_dgesvd_ext — Vendor-dispatch SVD (dgesvd)
+ * ---------------------------------------------------------------------------
+ */
+int jlinalg_dgesvd_ext(npy_intp m, npy_intp n,
+                       double *A_col, npy_intp lda,
+                       double *s,
+                       double *U_col, npy_intp ldu,
+                       double *Vt_col, npy_intp ldvt,
+                       int compute_uv)
+{
+    if (!g_has_dgesvd || !g_is_ilp64)
+        return JLINALG_EXT_UNAVAILABLE;
+
+    if (g_dgesvd_ilp64) {
+        const char *jobu  = compute_uv ? "S" : "N";
+        const char *jobvt = compute_uv ? "S" : "N";
+        long long lm = (long long)m, ln = (long long)n;
+        long long llda = (long long)lda;
+        long long lldu = (long long)ldu;
+        long long lldvt = (long long)ldvt;
+        long long info = 0;
+
+        /* Workspace query */
+        long long lwork = -1;
+        double work_query;
+        g_dgesvd_ilp64(jobu, jobvt, &lm, &ln, A_col, &llda,
+                        s, U_col, &lldu, Vt_col, &lldvt,
+                        &work_query, &lwork, &info);
+        if (info != 0) return _info_to_int(info, m);
+
+        lwork = (long long)work_query + 1;
+        double *work = (double *)malloc((size_t)lwork * sizeof(double));
+        if (!work) return JLINALG_EXT_ALLOC_FAIL;
+
+        g_dgesvd_ilp64(jobu, jobvt, &lm, &ln, A_col, &llda,
+                        s, U_col, &lldu, Vt_col, &lldvt,
+                        work, &lwork, &info);
+        free(work);
+        if (info != 0) return _info_to_int(info, m);
+        return JLINALG_EXT_SUCCESS;
+    }
+    return JLINALG_EXT_UNAVAILABLE;
+}
+
+/* ---------------------------------------------------------------------------
  * Full-signature external dgemm wrapper
  * ---------------------------------------------------------------------------
  */
@@ -1577,6 +1879,35 @@ int blas_has_dsyevr(void) {
 
 int blas_has_lapacke_dsyevd(void) {
     return 0;
+}
+
+int blas_has_dgeqrf(void) {
+    return 0;
+}
+
+int blas_has_dgesvd(void) {
+    return 0;
+}
+
+int jlinalg_dgeqrf_ext(npy_intp m, npy_intp n, double *A_col, npy_intp lda, double *tau) {
+    (void)m; (void)n; (void)A_col; (void)lda; (void)tau;
+    return JLINALG_EXT_UNAVAILABLE;
+}
+
+int jlinalg_dorgqr_ext(npy_intp m, npy_intp n, double *A_col, npy_intp lda, const double *tau) {
+    (void)m; (void)n; (void)A_col; (void)lda; (void)tau;
+    return JLINALG_EXT_UNAVAILABLE;
+}
+
+int jlinalg_dgesvd_ext(npy_intp m, npy_intp n,
+                       double *A_col, npy_intp lda,
+                       double *s,
+                       double *U_col, npy_intp ldu,
+                       double *Vt_col, npy_intp ldvt,
+                       int compute_uv) {
+    (void)m; (void)n; (void)A_col; (void)lda; (void)s;
+    (void)U_col; (void)ldu; (void)Vt_col; (void)ldvt; (void)compute_uv;
+    return JLINALG_EXT_UNAVAILABLE;
 }
 
 int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk,

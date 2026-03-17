@@ -710,6 +710,287 @@ warn_error:
 }
 
 /* ---------------------------------------------------------------------------
+ * py_qr — reduced QR factorization via vendor LAPACK dgeqrf + dorgqr
+ *
+ * Signature: qr(A: ndarray) -> tuple[ndarray, ndarray]
+ * A must be 2-D float64 of shape (m, n) with m >= n.
+ * Returns (Q, R) where Q is (m, n) and R is (n, n) upper triangular.
+ * ---------------------------------------------------------------------------
+ */
+static PyObject *
+py_qr(PyObject *self, PyObject *args)
+{
+    PyObject *oA;
+    if (!PyArg_ParseTuple(args, "O", &oA))
+        return NULL;
+
+    PyArrayObject *aA = (PyArrayObject *)PyArray_FROM_OTF(
+        oA, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+    if (!aA) return NULL;
+
+    if (PyArray_NDIM(aA) != 2) {
+        PyErr_SetString(PyExc_ValueError, "qr: A must be a 2-D array");
+        Py_DECREF(aA);
+        return NULL;
+    }
+
+    npy_intp m = PyArray_DIM(aA, 0);
+    npy_intp n = PyArray_DIM(aA, 1);
+    if (m < 1 || n < 1) {
+        PyErr_SetString(PyExc_ValueError, "qr: A must have positive dimensions");
+        Py_DECREF(aA);
+        return NULL;
+    }
+    if (m < n) {
+        PyErr_Format(PyExc_ValueError,
+            "qr: requires m >= n (tall-skinny), got shape (%ld, %ld)",
+            (long)m, (long)n);
+        Py_DECREF(aA);
+        return NULL;
+    }
+
+    npy_intp minmn = m < n ? m : n;
+    const double *pA = (const double *)PyArray_DATA(aA);
+
+    /* Allocate column-major work buffer and transpose row-major A into it */
+    double *A_col = (double *)malloc((size_t)m * (size_t)n * sizeof(double));
+    double *tau = (double *)malloc((size_t)minmn * sizeof(double));
+    if (!A_col || !tau) {
+        free(A_col); free(tau);
+        Py_DECREF(aA);
+        PyErr_NoMemory();
+        return NULL;
+    }
+
+    /* Row-major -> column-major transpose */
+    for (npy_intp i = 0; i < m; i++)
+        for (npy_intp j = 0; j < n; j++)
+            A_col[j * m + i] = pA[i * n + j];
+
+    int ret;
+    Py_BEGIN_ALLOW_THREADS
+    ret = jlinalg_dgeqrf_ext(m, n, A_col, m, tau);
+    Py_END_ALLOW_THREADS
+
+    if (ret != JLINALG_EXT_SUCCESS) {
+        free(A_col); free(tau);
+        Py_DECREF(aA);
+        if (ret == JLINALG_EXT_UNAVAILABLE)
+            PyErr_SetString(PyExc_ValueError, "qr: vendor LAPACK not available");
+        else if (ret == JLINALG_EXT_ALLOC_FAIL)
+            PyErr_NoMemory();
+        else
+            PyErr_Format(LinAlgError, "qr: dgeqrf failed (info=%d)", ret);
+        return NULL;
+    }
+
+    /* Extract R from upper triangle of A_col BEFORE dorgqr overwrites it.
+     * R is n x n upper triangular (row-major output). */
+    npy_intp rdims[2] = {n, n};
+    PyArrayObject *aR = (PyArrayObject *)PyArray_ZEROS(2, rdims, NPY_DOUBLE, 0);
+    if (!aR) {
+        free(A_col); free(tau);
+        Py_DECREF(aA);
+        return NULL;
+    }
+    double *pR = (double *)PyArray_DATA(aR);
+    /* A_col is col-major: A_col[i + j*m] = element (i,j).
+     * R[i][j] for i <= j, i,j in [0,n) */
+    for (npy_intp j = 0; j < n; j++)
+        for (npy_intp i = 0; i <= j && i < n; i++)
+            pR[i * n + j] = A_col[i + j * m];
+
+    /* Now generate Q from Householder vectors */
+    int ret2;
+    Py_BEGIN_ALLOW_THREADS
+    ret2 = jlinalg_dorgqr_ext(m, n, A_col, m, tau);
+    Py_END_ALLOW_THREADS
+
+    free(tau);
+
+    if (ret2 != JLINALG_EXT_SUCCESS) {
+        free(A_col);
+        Py_DECREF(aA); Py_DECREF(aR);
+        if (ret2 == JLINALG_EXT_UNAVAILABLE)
+            PyErr_SetString(PyExc_ValueError, "qr: vendor LAPACK not available for dorgqr");
+        else if (ret2 == JLINALG_EXT_ALLOC_FAIL)
+            PyErr_NoMemory();
+        else
+            PyErr_Format(LinAlgError, "qr: dorgqr failed (info=%d)", ret2);
+        return NULL;
+    }
+
+    /* Transpose Q from col-major A_col to row-major output (m x n) */
+    npy_intp qdims[2] = {m, n};
+    PyArrayObject *aQ = (PyArrayObject *)PyArray_SimpleNew(2, qdims, NPY_DOUBLE);
+    if (!aQ) {
+        free(A_col);
+        Py_DECREF(aA); Py_DECREF(aR);
+        return NULL;
+    }
+    double *pQ = (double *)PyArray_DATA(aQ);
+    for (npy_intp i = 0; i < m; i++)
+        for (npy_intp j = 0; j < n; j++)
+            pQ[i * n + j] = A_col[j * m + i];
+
+    free(A_col);
+    Py_DECREF(aA);
+
+    PyObject *result = PyTuple_Pack(2, (PyObject *)aQ, (PyObject *)aR);
+    Py_DECREF(aQ);
+    Py_DECREF(aR);
+    return result;
+}
+
+/* ---------------------------------------------------------------------------
+ * py_svd — reduced SVD via vendor LAPACK dgesvd
+ *
+ * Signature: svd(A, compute_uv=True) -> (U, s, Vh) or s
+ * A must be 2-D float64 of shape (m, n) with m >= n.
+ * Returns (U, s, Vh) where U is (m, n), s is (n,), Vh is (n, n).
+ * If compute_uv=False, returns s only.
+ * ---------------------------------------------------------------------------
+ */
+static PyObject *
+py_svd(PyObject *self, PyObject *args, PyObject *kwargs)
+{
+    static char *kwlist[] = {"A", "compute_uv", NULL};
+    PyObject *oA;
+    int compute_uv = 1;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|p", kwlist,
+                                      &oA, &compute_uv))
+        return NULL;
+
+    PyArrayObject *aA = (PyArrayObject *)PyArray_FROM_OTF(
+        oA, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+    if (!aA) return NULL;
+
+    if (PyArray_NDIM(aA) != 2) {
+        PyErr_SetString(PyExc_ValueError, "svd: A must be a 2-D array");
+        Py_DECREF(aA);
+        return NULL;
+    }
+
+    npy_intp m = PyArray_DIM(aA, 0);
+    npy_intp n = PyArray_DIM(aA, 1);
+    if (m < n) {
+        PyErr_Format(PyExc_ValueError,
+            "svd: requires m >= n (tall-skinny), got shape (%ld, %ld)",
+            (long)m, (long)n);
+        Py_DECREF(aA);
+        return NULL;
+    }
+    if (m < 1 || n < 1) {
+        PyErr_SetString(PyExc_ValueError, "svd: A must have positive dimensions");
+        Py_DECREF(aA);
+        return NULL;
+    }
+
+    const double *pA = (const double *)PyArray_DATA(aA);
+
+    /* Allocate column-major work buffer and transpose */
+    double *A_col = (double *)malloc((size_t)m * (size_t)n * sizeof(double));
+    if (!A_col) {
+        Py_DECREF(aA);
+        PyErr_NoMemory();
+        return NULL;
+    }
+    for (npy_intp i = 0; i < m; i++)
+        for (npy_intp j = 0; j < n; j++)
+            A_col[j * m + i] = pA[i * n + j];
+
+    /* Allocate singular values array */
+    PyArrayObject *aS = (PyArrayObject *)PyArray_SimpleNew(1, &n, NPY_DOUBLE);
+    if (!aS) {
+        free(A_col); Py_DECREF(aA);
+        return NULL;
+    }
+    double *pS = (double *)PyArray_DATA(aS);
+
+    if (compute_uv) {
+        double *U_col = (double *)malloc((size_t)m * (size_t)n * sizeof(double));
+        double *Vt_col = (double *)malloc((size_t)n * (size_t)n * sizeof(double));
+        if (!U_col || !Vt_col) {
+            free(U_col); free(Vt_col); free(A_col);
+            Py_DECREF(aA); Py_DECREF(aS);
+            PyErr_NoMemory();
+            return NULL;
+        }
+
+        int ret;
+        Py_BEGIN_ALLOW_THREADS
+        ret = jlinalg_dgesvd_ext(m, n, A_col, m, pS, U_col, m, Vt_col, n, 1);
+        Py_END_ALLOW_THREADS
+
+        free(A_col);
+
+        if (ret != JLINALG_EXT_SUCCESS) {
+            free(U_col); free(Vt_col);
+            Py_DECREF(aA); Py_DECREF(aS);
+            if (ret == JLINALG_EXT_UNAVAILABLE)
+                PyErr_SetString(PyExc_ValueError, "svd: vendor LAPACK not available");
+            else if (ret == JLINALG_EXT_ALLOC_FAIL)
+                PyErr_NoMemory();
+            else
+                PyErr_Format(LinAlgError, "svd: dgesvd failed (info=%d)", ret);
+            return NULL;
+        }
+
+        /* Transpose U_col (col-major m x n) -> row-major U (m x n) */
+        npy_intp udims[2] = {m, n};
+        PyArrayObject *aU = (PyArrayObject *)PyArray_SimpleNew(2, udims, NPY_DOUBLE);
+        /* Transpose Vt_col (col-major n x n) -> row-major Vh (n x n) */
+        npy_intp vdims[2] = {n, n};
+        PyArrayObject *aVh = (PyArrayObject *)PyArray_SimpleNew(2, vdims, NPY_DOUBLE);
+        if (!aU || !aVh) {
+            Py_XDECREF(aU); Py_XDECREF(aVh);
+            free(U_col); free(Vt_col);
+            Py_DECREF(aA); Py_DECREF(aS);
+            return NULL;
+        }
+
+        double *pU = (double *)PyArray_DATA(aU);
+        for (npy_intp i = 0; i < m; i++)
+            for (npy_intp j = 0; j < n; j++)
+                pU[i * n + j] = U_col[j * m + i];
+
+        double *pVh = (double *)PyArray_DATA(aVh);
+        for (npy_intp i = 0; i < n; i++)
+            for (npy_intp j = 0; j < n; j++)
+                pVh[i * n + j] = Vt_col[j * n + i];
+
+        free(U_col); free(Vt_col);
+        Py_DECREF(aA);
+
+        PyObject *result = PyTuple_Pack(3, (PyObject *)aU, (PyObject *)aS, (PyObject *)aVh);
+        Py_DECREF(aU); Py_DECREF(aS); Py_DECREF(aVh);
+        return result;
+    } else {
+        /* compute_uv=False: singular values only */
+        int ret;
+        Py_BEGIN_ALLOW_THREADS
+        ret = jlinalg_dgesvd_ext(m, n, A_col, m, pS, NULL, 1, NULL, 1, 0);
+        Py_END_ALLOW_THREADS
+
+        free(A_col);
+        Py_DECREF(aA);
+
+        if (ret != JLINALG_EXT_SUCCESS) {
+            Py_DECREF(aS);
+            if (ret == JLINALG_EXT_UNAVAILABLE)
+                PyErr_SetString(PyExc_ValueError, "svd: vendor LAPACK not available");
+            else if (ret == JLINALG_EXT_ALLOC_FAIL)
+                PyErr_NoMemory();
+            else
+                PyErr_Format(LinAlgError, "svd: dgesvd failed (info=%d)", ret);
+            return NULL;
+        }
+        return (PyObject *)aS;
+    }
+}
+
+/* ---------------------------------------------------------------------------
  * py_set_n_threads — Set jlinalg thread count (clamped to init-time max).
  *
  * Signature: set_n_threads(n: int) -> int
@@ -777,6 +1058,14 @@ static PyMethodDef JlinalgMethods[] = {
         "eigh(K) -> (eigenvalues, eigenvectors)\n"
         "Compute all eigenvalues and eigenvectors of symmetric K.\n"
         "K is overwritten as scratch."},
+    {"qr", py_qr, METH_VARARGS,
+        "qr(A) -> (Q, R)\n"
+        "Reduced QR factorization via vendor LAPACK dgeqrf + dorgqr.\n"
+        "Q is (m, n), R is (n, n) upper triangular."},
+    {"svd", (PyCFunction)py_svd, METH_VARARGS | METH_KEYWORDS,
+        "svd(A, compute_uv=True) -> (U, s, Vh) or s\n"
+        "Reduced SVD via vendor LAPACK dgesvd. Tall-skinny only (m >= n).\n"
+        "U is (m, n), s is (n,), Vh is (n, n)."},
     {"set_n_threads", py_set_n_threads, METH_VARARGS,
         "set_n_threads(n) -> int\n"
         "Set jlinalg thread count (clamped to init max). Returns old count."},
@@ -914,6 +1203,14 @@ PyInit__jlinalg(void)
 
     /* blas_has_dsyevr: 1 if vendor LAPACK dsyevr is available (memory-pressure fallback). */
     if (PyModule_AddIntConstant(m, "blas_has_dsyevr", blas_has_dsyevr()) < 0) {
+        Py_DECREF(m); return NULL;
+    }
+    /* blas_has_dgeqrf: 1 if vendor LAPACK dgeqrf + dorgqr available for QR. */
+    if (PyModule_AddIntConstant(m, "blas_has_dgeqrf", blas_has_dgeqrf()) < 0) {
+        Py_DECREF(m); return NULL;
+    }
+    /* blas_has_dgesvd: 1 if vendor LAPACK dgesvd available for SVD. */
+    if (PyModule_AddIntConstant(m, "blas_has_dgesvd", blas_has_dgesvd()) < 0) {
         Py_DECREF(m); return NULL;
     }
 

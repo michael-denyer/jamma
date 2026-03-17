@@ -86,7 +86,7 @@ jamma -lmm 1 --backend numpy -bfile data/my_study -k kinship.cXX.npy
 export JAMMA_BACKEND=numpy
 ```
 
-Priority: `JAMMA_BACKEND` env var → `--backend` flag → auto-detect (try JAX, fall back to NumPy).
+Priority: `JAMMA_BACKEND` env var → `--backend` flag → auto-detect (C+NumPy if C extension available, else JAX, else NumPy fallback).
 
 ## Input Data Format
 
@@ -194,7 +194,7 @@ jamma -lmm 1 -bfile data/my_study -k output/kinship.cXX.npy \
 - `--mem-budget GB` — Memory budget in GB (default: available - 10%)
 - `--no-check-memory` — Disable pre-flight memory checks
 - `--legacy-text` — Write kinship and eigen files in GEMMA text format instead of binary `.npy`
-- `--backend auto|jax|numpy` — Force compute backend (default: auto)
+- `--backend auto|jax|numpy|numpy-streaming|jax-streaming` — Force compute backend (default: auto)
 - `--profile-dir DIR` — Directory for XLA profiling traces
 - `-v` / `--verbose` — Verbose output
 - `--version` — Show version and exit
@@ -361,9 +361,10 @@ jamma -lmm 1 -bfile data/my_study -k kinship.cXX.npy \
 
 **SNP list file format:** One SNP RS ID per line (first whitespace-delimited token used).
 
-**HWE filtering:** JAMMA uses a chi-squared goodness-of-fit test (df=1) via JAX.
+**HWE filtering:** JAMMA uses a chi-squared goodness-of-fit test (df=1) via pure NumPy.
 SNPs with p-value below the threshold are excluded from association testing.
-**Note:** HWE filtering requires the JAX backend (`pip install 'jamma[jax]'`).
+HWE filtering is supported on all streaming backends (`numpy-streaming`, `jax-streaming`)
+and both batch backends.
 See [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md) for differences from GEMMA's
 Wigginton exact test.
 
@@ -504,7 +505,7 @@ pve = run_result.pve               # heritability estimate
 pve_se = run_result.pve_se         # SE of PVE via delta method (None if flat likelihood)
 ```
 
-Both backends support Wald, LRT, Score, all-tests modes, and LOCO. HWE filtering (`-hwe`) requires the JAX streaming runner.
+All backends support Wald, LRT, Score, all-tests modes, and LOCO. HWE filtering (`-hwe`) is supported on all backends except `numpy` batch.
 
 ## Large-Scale Eigendecomposition (>46k samples)
 
@@ -635,7 +636,7 @@ coordination overhead that outweighs parallelism gains.
 
 | Variable | Default | Description |
 | -------- | ------- | ----------- |
-| `JAMMA_BACKEND` | auto-detect | Force backend: `numpy` or `jax`. Auto-detect tries JAX first. |
+| `JAMMA_BACKEND` | auto-detect | Force backend: `auto`, `numpy`, `jax`, `numpy-streaming`, or `jax-streaming`. Auto-detect prefers C+NumPy, then JAX, then NumPy fallback. |
 | `JAMMA_JAX_DEVICES` | `physical_cores // 2` | Number of virtual CPU devices for JAX SNP-batch sharding. |
 | `JAMMA_BLAS_THREADS` | `physical_cores // n_devices` | Thread count for NumPy BLAS operations (eigendecomp, matmul). Controls MKL/OpenBLAS via `threadpoolctl`, not OpenMP. **Linux only** — has no effect on macOS Accelerate. |
 | `JAMMA_LOCO_WORKERS` | `1` | Parallel chromosome workers in LOCO mode. Each worker holds a full K_loco matrix (`n_samples² × 8` bytes), so increase with caution. |

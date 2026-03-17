@@ -24,7 +24,7 @@ bugs), see [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md).
 | p_score | Yes | CDF implementation | O(1e-5) | 4.14e-7 |
 | p_lrt | Yes | MLE subtraction amplification | O(eps * amplification) | 1.56e-3 |
 
-*logl_H1 worst case on mouse_hs1940 (1,410 samples, 10,768 SNPs). On synthetic
+*logl_H1 worst case on mouse_hs1940 (1,940 samples, 12,226 SNPs). On synthetic
 data the max is < 1e-6. Divergence arises from weak-signal SNPs with flat MLE
 surfaces where golden section and Brent settle on different optima.*
 
@@ -310,11 +310,11 @@ uv run python scripts/demonstrate_equivalence.py
 | GEMMA Function (lmm.cpp) | JAMMA Function | Location |
 |--------------------------|----------------|----------|
 | `CalcKin` | `compute_centered_kinship` | kinship/compute.py |
-| `GetabIndex` | `get_ab_index` | lmm/likelihood.py:144 |
-| `CalcUab` | `compute_Uab` | lmm/likelihood.py:165 |
-| `CalcPab` | `calc_pab` | lmm/likelihood.py:264 |
-| `LogRL_f` | `reml_log_likelihood` | lmm/likelihood.py:356 |
-| `LogL_f` | `mle_log_likelihood` | lmm/likelihood.py:715 |
+| `GetabIndex` | `get_ab_index` | lmm/likelihood.py:149 |
+| `CalcUab` | `compute_Uab` | lmm/likelihood.py:170 |
+| `CalcPab` | `calc_pab` | lmm/likelihood.py:269 |
+| `LogRL_f` | `reml_log_likelihood` | lmm/likelihood.py:622 |
+| `LogL_f` | `mle_log_likelihood` | lmm/likelihood.py:1079 |
 | `CalcLambda` | `golden_section_optimize_lambda` | lmm/likelihood_jax.py |
 | `CalcRLWald` | `calc_wald_test` | lmm/stats.py:99 |
 | `CalcRLScore` | `calc_score_test` | lmm/stats.py:229 |

@@ -25,7 +25,7 @@ from typing import Literal
 import numpy as np
 from loguru import logger
 
-from jamma.core.backend import has_jax
+from jamma.core.backend import BackendRequest, has_jax
 from jamma.core.memory import estimate_lmm_memory
 from jamma.lmm._compile_utils import is_c_extension_usable
 from jamma.lmm.schema import LmmConfig, LmmRunResult
@@ -84,7 +84,7 @@ def select_execution_mode(
     n_samples: int,
     n_snps: int,
     *,
-    requested: str = "auto",
+    requested: BackendRequest = "auto",
     n_cvt: int = 1,
     lmm_mode: int = 1,
 ) -> ExecutionPlan:
@@ -132,7 +132,7 @@ def select_execution_mode(
             )
         return ExecutionPlan("jax", "streaming", "Explicit jax-streaming request")
 
-    _valid_requests = ("auto", "jax", "numpy")
+    _valid_requests = ("auto", "jax", "numpy", "numpy-streaming", "jax-streaming")
     if requested not in _valid_requests:
         raise ValueError(
             f"Unknown backend {requested!r}. Must be one of {_valid_requests}."
@@ -423,6 +423,12 @@ def run_lmm(
             run_lmm_association_numpy_streaming,
         )
 
+        # numpy-streaming doesn't accept use_gpu — filter it out
+        streaming_kwargs = (
+            {k: v for k, v in common_kwargs.items() if k != "use_gpu"}
+            if config is None
+            else {}
+        )
         result, n_tested = run_lmm_association_numpy_streaming(
             bed_path=bed_path,
             phenotypes=phenotypes,
@@ -437,7 +443,7 @@ def run_lmm(
             chunk_size=chunk_size,
             validate_genotypes=validate_genotypes,
             config=config,
-            **common_kwargs if config is None else {},
+            **streaming_kwargs,
         )
         return result, n_tested
 

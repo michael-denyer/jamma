@@ -838,10 +838,11 @@ class PipelineRunner:
         requested = env_backend if env_backend is not None else self.config.backend
 
         # Fail fast: HWE + explicit numpy is always invalid, before touching disk.
-        if self.config.hwe_threshold > 0 and requested in ("numpy", "numpy-streaming"):
+        if self.config.hwe_threshold > 0 and requested == "numpy":
             raise ValueError(
-                "HWE filtering (--hwe) is not yet supported with the NumPy backend. "
-                "Use the JAX backend (pip install jamma[jax]) or set --hwe 0."
+                "HWE filtering (--hwe) is not supported with the NumPy "
+                "batch backend. Use --backend numpy-streaming, the JAX "
+                "backend (pip install jamma[jax]), or set --hwe 0."
             )
 
         # PLINK metadata is lightweight (reads .fam/.bim header only) and needed

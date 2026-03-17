@@ -27,12 +27,14 @@ class RunnerTiming(TypedDict, total=False):
         rotation_s: Total UT@G rotation time (seconds).
         rotation_exposed_s: Rotation time exposed (not overlapped) by compute.
         jax_compute_s: Total JAX compute time (seconds).
+        numpy_compute_s: Total NumPy/C compute time (seconds).
         result_write_s: Total result write time (seconds).
     """
 
     rotation_s: float
     rotation_exposed_s: float
     jax_compute_s: float
+    numpy_compute_s: float
     result_write_s: float
 
 

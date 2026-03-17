@@ -5,8 +5,8 @@ Two-pass disk streaming using C extension compute path:
   Pass 2: Association per chunk via C workspace (float64, compute-heavy).
 
 Never allocates the full genotype matrix. Uses jlinalg.dgemm for rotation
-and the _lmm_accel C workspace for Brent-optimized REML/MLE. No JAX
-dependency.
+and the _lmm_accel C workspace for golden-section-optimized REML/MLE.
+No JAX dependency.
 """
 
 from __future__ import annotations
@@ -114,7 +114,7 @@ def run_lmm_association_numpy_streaming(
 
     Two-pass disk streaming: pass 1 computes SNP statistics for filtering,
     pass 2 runs C extension compute per chunk. Uses jlinalg.dgemm for
-    eigenrotation and _lmm_accel C workspace for Brent-optimized REML/MLE.
+    eigenrotation and _lmm_accel C workspace for golden-section-optimized REML/MLE.
 
     Args:
         bed_path: PLINK file prefix (without .bed/.bim/.fam extension).
@@ -223,9 +223,18 @@ def run_lmm_association_numpy_streaming(
         # Compute stats for this chunk
         chunk_miss_counts = np.sum(np.isnan(chunk), axis=0)
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
+            warnings.simplefilter("ignore", RuntimeWarning)  # "Mean of empty slice"
             chunk_means = np.nanmean(chunk, axis=0)
             chunk_vars = np.nanvar(chunk, axis=0)
+        # NaN from all-missing SNPs is expected; NaN from other causes (overflow) is not
+        expected_all_nan = chunk_miss_counts == chunk.shape[0]
+        unexpected_nan = np.isnan(chunk_means) & ~expected_all_nan
+        if unexpected_nan.any():
+            logger.warning(
+                f"Pass-1: {unexpected_nan.sum()} SNPs in chunk [{start}:{end}] "
+                "produced NaN mean (not from all-missing data) — check for "
+                "overflow or invalid genotype values"
+            )
         chunk_means = np.nan_to_num(chunk_means, nan=0.0)
         chunk_vars = np.nan_to_num(chunk_vars, nan=0.0)
 

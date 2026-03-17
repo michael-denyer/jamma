@@ -242,7 +242,7 @@ Batch SNP processing with JIT compilation and vmap vectorization. Requires JAX (
 | 4a | `batch_compute_uab()` | vmap across SNP dimension | [likelihood_jax.py:387](../src/jamma/lmm/likelihood_jax.py#L387) |
 | 4a | `golden_section_optimize_lambda()` | Grid search + 20 golden section iterations | [likelihood_jax.py:537](../src/jamma/lmm/likelihood_jax.py#L537) |
 | 4b | `run_lmm_association_jax()` | Full-load JAX batch runner | [runner_jax.py](../src/jamma/lmm/runner_jax.py) |
-| 4c | `run_lmm_association_streaming()` | Streaming from disk, O(n² + n×chunk) | [runner_streaming.py:69](../src/jamma/lmm/runner_streaming.py#L69) |
+| 4c | `run_lmm_association_streaming()` | JAX streaming from disk, O(n² + n×chunk) | [runner_jax_streaming.py:75](../src/jamma/lmm/runner_jax_streaming.py#L75) |
 | 4d | `run_lmm_loco()` | LOCO: per-chromosome kinship → eigen → LMM | [lmm/loco.py](../src/jamma/lmm/loco.py) |
 | 4e | `DevicePlacement` | CPU/GPU device + sharding configuration | [lmm/prepare.py:129](../src/jamma/lmm/prepare.py#L129) |
 | 4e | `resolve_device_placement()` | Select device and set up NamedSharding | [lmm/prepare.py:162](../src/jamma/lmm/prepare.py#L162) |
@@ -271,6 +271,9 @@ Pure-NumPy LMM implementation with zero JAX dependency. Works on all platforms (
 | 4Nc | `compute_lmm_chunk_numpy()` | Per-chunk dispatch for NumPy backend | [compute_numpy.py](../src/jamma/lmm/compute_numpy.py) |
 | 4Nd | `compute_wald_stats_workspace()` | C extension: OpenMP Wald test with workspace API | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
 | 4Nd | `_compile_accel.py` | Post-install C extension compilation | [_compile_accel.py](../src/jamma/lmm/_compile_accel.py) |
+| 4Ne | `run_lmm_association_numpy_streaming()` | NumPy disk streaming (two-pass, C extension) | [runner_numpy_streaming.py:89](../src/jamma/lmm/runner_numpy_streaming.py#L89) |
+| 4Nf | `select_execution_mode()` | Unified backend+mode selection | [runner.py:83](../src/jamma/lmm/runner.py#L83) |
+| 4Nf | `run_lmm()` | Unified dispatch to all runners | [runner.py:233](../src/jamma/lmm/runner.py#L233) |
 
 ---
 
@@ -439,7 +442,7 @@ flowchart TD
 
     subgraph JAX["JAX Backend (requires JAX)"]
         direction TB
-        RJ["runner_jax / runner_streaming"]
+        RJ["runner_jax / runner_jax_streaming"]
         CJ["compute.py"]
         LJ["likelihood_jax.py"]
         PJ["prepare.py<br>(device sharding)"]
@@ -447,7 +450,7 @@ flowchart TD
 
     subgraph NP["NumPy Backend (no JAX)"]
         direction TB
-        RN["runner_numpy"]
+        RN["runner_numpy / runner_numpy_streaming"]
         CN["compute_numpy.py"]
         LN["likelihood_numpy.py"]
         SP["special.py<br>(stdlib betainc/chi2)"]
@@ -479,8 +482,8 @@ Priority order: `JAMMA_BACKEND` env var → `--backend` CLI flag → auto-detect
 | All tests (`-lmm 4`) | Yes | Yes |
 | C extension acceleration | N/A | Yes (n_cvt=1, auto-fallback) |
 | LOCO (`-loco`) | Yes | Yes |
-| HWE filtering (`-hwe`) | Yes | No |
-| Disk streaming | Yes | No (full load) |
+| HWE filtering (`-hwe`) | Yes | Yes (streaming and batch) |
+| Disk streaming | Yes | Yes (runner_numpy_streaming.py) |
 | CPU device sharding | Yes | N/A |
 | GPU acceleration | Yes | N/A |
 

@@ -262,9 +262,9 @@ Best-of runs, end-to-end wall clock:
 
 | Backend | LOCO Wald | vs GEMMA |
 |---------|-----------|----------|
-| GEMMA 0.98.5 | 3m36s | 1.0x |
-| JAMMA NumPy+C | **7.7s** | **28.2x** |
-| JAMMA JAX | 13.0s | 16.6x |
+| GEMMA 0.98.5 | 4m1s | 1.0x |
+| JAMMA NumPy+C | **7.6s** | **31.8x** |
+| JAMMA JAX | 11.7s | 20.7x |
 
 The large speedup has two sources: (1) JAMMA computes per-chromosome LOCO kinship via streaming and tests only that chromosome's SNPs, while GEMMA `-loco` tests *all* SNPs against each LOCO kinship (19× redundant work on 19 chromosomes); (2) JAMMA runs all chromosomes in a single process, avoiding 19 cold-start overheads. On this dataset, NumPy+C is faster than JAX because the JIT compilation overhead per chromosome outweighs XLA's compute benefit at 1,940 samples.
 

@@ -160,6 +160,10 @@ def run_lmm_association_streaming(
         use_gpu, check_memory = kw["use_gpu"], kw["check_memory"]
         show_progress, lmm_mode = kw["show_progress"], kw["lmm_mode"]
 
+    from jamma.core.jax_config import ensure_jax_configured
+
+    ensure_jax_configured()
+
     start_time = time.perf_counter()
 
     meta = get_plink_metadata(bed_path)

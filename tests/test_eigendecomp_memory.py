@@ -84,26 +84,26 @@ class TestEigendecompMemoryEstimate:
     """Tests for memory estimation function."""
 
     def test_estimate_200k_samples(self):
-        """200k samples: K + U + K_work + DSYEVD workspace ~1600GB."""
+        """200k samples: K + U + DSYEVD workspace ~1280GB."""
         n_samples = 200_000
         estimate = estimate_eigendecomp_memory(n_samples)
-        # K (320GB) + U (320GB) + K_work (320GB) + DSYEVD workspace (~640GB) = ~1600GB
-        assert 1595 < estimate < 1605
+        # K (320GB) + U (320GB) + DSYEVD workspace (~640GB) = ~1280GB
+        assert 1275 < estimate < 1285
 
     def test_estimate_100k_samples(self):
-        """100k samples: K + U + K_work + DSYEVD workspace ~400GB."""
+        """100k samples: K + U + DSYEVD workspace ~320GB."""
         n_samples = 100_000
         estimate = estimate_eigendecomp_memory(n_samples)
-        # K (80GB) + U (80GB) + K_work (80GB) + DSYEVD workspace (~160GB) = ~400GB
-        assert 395 < estimate < 405
+        # K (80GB) + U (80GB) + DSYEVD workspace (~160GB) = ~320GB
+        assert 315 < estimate < 325
 
     def test_per_driver_peaks(self):
         """Per-driver peak helpers return correct values."""
         n = 200_000
-        # DSYEVD: K (320GB) + U (320GB) + K_work (320GB) + workspace (~640GB) = ~1600GB
-        assert 1595 < _dsyevd_peak_gb(n) < 1605
-        # DSYEVR: K (320GB) + U (320GB) + Z_col (320GB) + workspace (~0.06GB) = ~960GB
-        assert 955 < _dsyevr_peak_gb(n) < 965
+        # DSYEVD: K (320GB) + U (320GB) + workspace (~640GB) = ~1280GB
+        assert 1275 < _dsyevd_peak_gb(n) < 1285
+        # DSYEVR: K (320GB) + U (320GB) + workspace (~0.06GB) = ~640GB
+        assert 639 < _dsyevr_peak_gb(n) < 641
 
     def test_estimate_scales_quadratically(self):
         """Memory scales quadratically (kinship term dominates workspace)."""
@@ -207,10 +207,10 @@ class TestEigendecompPreflightCheck:
         np.testing.assert_allclose(K_ref, K_reconstructed, rtol=1e-10, atol=1e-14)
 
     def test_estimate_always_includes_eigenvector_allocation(self):
-        """Memory estimate includes K + U + K_work staging + DSYEVD workspace."""
+        """Memory estimate includes K + U + DSYEVD workspace."""
         est = estimate_eigendecomp_memory(200_000)
-        # K (320GB) + U (320GB) + K_work (320GB) + DSYEVD workspace (~640GB) = ~1600GB
-        assert 1595 < est < 1605
+        # K (320GB) + U (320GB) + DSYEVD workspace (~640GB) = ~1280GB
+        assert 1275 < est < 1285
 
 
 @pytest.mark.tier0
@@ -309,13 +309,13 @@ class TestDsyevdWorkspaceAccuracy:
             )
 
     def test_peak_components_do_not_double_count(self):
-        """_dsyevd_peak_gb = K + U + K_work (staging) + workspace. No overlap."""
+        """_dsyevd_peak_gb = K + U + workspace. No overlap."""
         n = 10_000
         kinship_gb = n**2 * 8 / 1e9
         workspace_gb = _dsyevd_workspace_gb(n)
-        # jlinalg.eigh: K + U + K_work staging copy + workspace
+        # jlinalg.eigh: K + U + workspace
         peak = _dsyevd_peak_gb(n)
-        assert peak == pytest.approx(3 * kinship_gb + workspace_gb, rel=0.01)
+        assert peak == pytest.approx(2 * kinship_gb + workspace_gb, rel=0.01)
 
     @pytest.mark.parametrize("n", [100, 1000, 10_000])
     def test_workspace_is_within_10pct_of_formula(self, n):

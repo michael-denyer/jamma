@@ -451,6 +451,283 @@ def compile_extension(verbose: bool = True) -> bool:
         return False
 
 
+def compile_test_harness(verbose: bool = True) -> Path:
+    """Compile the Unity C test harness into a standalone binary.
+
+    Compiles test_boundaries.c + unity.c + all jlinalg .c source files into
+    a single test executable (not a shared library).  Uses the same compiler
+    flags and per-file SIMD/LAPACK flag split as the main extension.
+
+    Args:
+        verbose: Print progress and diagnostics to stderr.
+
+    Returns:
+        Path to the compiled test binary.
+
+    Raises:
+        RuntimeError: If compilation fails.
+    """
+
+    def _print(*args: object) -> None:
+        if verbose:
+            print(*args, file=sys.stderr, flush=True)
+
+    jlinalg_dir = Path(__file__).parent
+    jlinalg_src_dir = jlinalg_dir / "src"
+    jlinalg_inc_dir = jlinalg_dir / "include"
+    tests_dir = jlinalg_dir / "tests"
+    unity_dir = tests_dir / "unity"
+
+    # Verify Unity framework is vendored
+    for f in ("unity.h", "unity.c", "unity_internals.h"):
+        if not (unity_dir / f).exists():
+            raise RuntimeError(f"Unity framework file missing: {unity_dir / f}")
+
+    # Source files: same as main extension minus pymodule.c (no Python API)
+    # plus test_boundaries.c and unity.c
+    baseline_sources = [
+        jlinalg_src_dir / "platform.c",
+        jlinalg_src_dir / "dnrm2.c",
+        jlinalg_src_dir / "dgemv.c",
+        jlinalg_src_dir / "dgemm.c",
+        jlinalg_src_dir / "dgemm_generic.c",
+        jlinalg_src_dir / "blas_dispatch.c",
+        jlinalg_src_dir / "dsyrk.c",
+        jlinalg_src_dir / "dsyr2k.c",
+    ]
+    lapack_sources = [
+        jlinalg_src_dir / "dsytrd.c",
+        jlinalg_src_dir / "dstedc.c",
+        jlinalg_src_dir / "dormtr.c",
+        jlinalg_src_dir / "eigh.c",
+    ]
+    simd_sources = [
+        jlinalg_src_dir / "ddot.c",
+        jlinalg_src_dir / "daxpy.c",
+        jlinalg_src_dir / "dscal.c",
+    ]
+
+    # Kernel sources
+    jlinalg_kernels_dir = jlinalg_dir / "kernels"
+    avx2_kernel_sources: list[Path] = []
+    neon_kernel_sources: list[Path] = []
+    if jlinalg_kernels_dir.is_dir():
+        avx2_src = jlinalg_kernels_dir / "dgemm_avx2.c"
+        neon_src = jlinalg_kernels_dir / "dgemm_neon.c"
+        if avx2_src.exists():
+            avx2_kernel_sources.append(avx2_src)
+        if neon_src.exists():
+            neon_kernel_sources.append(neon_src)
+
+    # Test-specific sources
+    test_sources = [
+        tests_dir / "test_boundaries.c",
+        unity_dir / "unity.c",
+    ]
+
+    all_sources = (
+        baseline_sources
+        + lapack_sources
+        + simd_sources
+        + avx2_kernel_sources
+        + neon_kernel_sources
+        + test_sources
+    )
+
+    # NumPy headers (for npy_intp)
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise RuntimeError("numpy not installed -- required for test harness") from exc
+
+    numpy_inc = np.get_include()
+    python_inc = sysconfig.get_config_var("INCLUDEPY") or ""
+
+    # Compiler
+    cc_name = os.environ.get("CC") or sysconfig.get_config_var("CC") or "cc"
+    cc_cmd = cc_name.split()[0]
+    cc_extra = cc_name.split()[1:]
+
+    # ISA-specific flags
+    machine = platform.machine()
+    simd_flags: list[str] = []
+    if machine in ("x86_64", "AMD64"):
+        simd_flags = ["-mavx2", "-mfma"]
+    # aarch64: NEON is baseline, no extra flags needed
+
+    # Link against libpython (blas_dispatch.c uses Python C API for numpy discovery)
+    python_libdir = sysconfig.get_config_var("LIBDIR") or ""
+    python_version = sysconfig.get_config_var("VERSION") or ""
+
+    # OpenMP detection (same as compile_extension)
+    omp_flags: list[str] = []
+    ldflags: list[str] = ["-lm"]
+    if python_libdir:
+        ldflags.extend([f"-L{python_libdir}", f"-lpython{python_version}"])
+        ldflags.append(f"-Wl,-rpath,{python_libdir}")
+    if platform.system() == "Linux":
+        ldflags.append("-ldl")
+    if platform.system() == "Darwin":
+        try:
+            prefix = subprocess.check_output(
+                ["brew", "--prefix", "libomp"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+            lib_dir = Path(prefix) / "lib"
+            if lib_dir.is_dir():
+                omp_flags = [
+                    f"-I{prefix}/include",
+                    f"-L{prefix}/lib",
+                    "-Xpreprocessor",
+                    "-fopenmp",
+                    "-lomp",
+                ]
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass
+    else:
+        omp_flags = _detect_linux_openmp_flags(cc_cmd, _print)
+
+    # Base compile flags
+    base_cflags = [
+        "-O3",
+        "-ftree-vectorize",
+        "-fno-math-errno",
+        "-fno-trapping-math",
+        "-funroll-loops",
+        "-fno-finite-math-only",
+        "-std=c11",
+        f"-I{python_inc}",
+        f"-I{numpy_inc}",
+        f"-I{jlinalg_inc_dir}",
+    ]
+
+    lapack_cflags = [
+        "-O2",
+        "-fno-fast-math",
+        "-fno-finite-math-only",
+        "-std=c11",
+        f"-I{python_inc}",
+        f"-I{numpy_inc}",
+        f"-I{jlinalg_inc_dir}",
+    ]
+
+    simd_source_set = set(str(s) for s in simd_sources)
+    avx2_kernel_set = set(str(s) for s in avx2_kernel_sources)
+    lapack_source_set = set(str(s) for s in lapack_sources)
+
+    # OMP compile-only flags
+    omp_compile: list[str] = []
+    for flag in omp_flags:
+        if flag.startswith("-I") or flag.startswith("-L") or flag.startswith("-Wl"):
+            omp_compile.append(flag)
+        elif flag in ("-Xpreprocessor", "-fopenmp"):
+            omp_compile.append(flag)
+
+    # Compile each source to .o.  Mirrors compile_extension's OpenMP retry:
+    # first attempt with OpenMP, retry single-threaded if compilation fails.
+    def _compile_all(
+        current_omp_compile: list[str],
+    ) -> list[Path] | None:
+        """Compile all sources, return obj file list or None on failure."""
+        td = Path(tempfile.mkdtemp(prefix="jlinalg_test_"))
+        objs: list[Path] = []
+        try:
+            for src in all_sources:
+                if not src.exists():
+                    raise RuntimeError(f"Required source file not found: {src}")
+
+                obj_file = td / f"{src.stem}.o"
+                src_str = str(src)
+
+                if src_str in lapack_source_set:
+                    cflags = lapack_cflags
+                    extra_simd: list[str] = []
+                else:
+                    cflags = base_cflags
+                    extra_simd = (
+                        simd_flags
+                        if (src_str in simd_source_set or src_str in avx2_kernel_set)
+                        else []
+                    )
+
+                # Test sources and Unity need double precision + include path
+                extra_inc: list[str] = []
+                if "test_boundaries.c" in src.name:
+                    extra_inc = [f"-I{tests_dir}", "-DUNITY_INCLUDE_DOUBLE"]
+                elif "unity.c" in src.name:
+                    extra_inc = ["-DUNITY_INCLUDE_DOUBLE"]
+
+                cmd = [
+                    cc_cmd,
+                    *cc_extra,
+                    *cflags,
+                    *extra_simd,
+                    *current_omp_compile,
+                    *extra_inc,
+                    "-c",
+                    str(src),
+                    "-o",
+                    str(obj_file),
+                ]
+                _print(f"compile: {' '.join(cmd)}")
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    _print(f"Compile failed for {src.name}:")
+                    _print(result.stderr)
+                    shutil.rmtree(td, ignore_errors=True)
+                    return None
+                objs.append(obj_file)
+        except Exception:
+            shutil.rmtree(td, ignore_errors=True)
+            raise
+        return objs
+
+    # First attempt: with OpenMP
+    use_omp = bool(omp_flags)
+    current_omp_link = omp_flags
+    obj_files = _compile_all(omp_compile)
+
+    if obj_files is None and use_omp:
+        _print(
+            "OpenMP compilation failed, retrying without OpenMP (single-threaded)..."
+        )
+        obj_files = _compile_all([])
+        current_omp_link = []  # no OMP runtime to link
+
+    if obj_files is None:
+        raise RuntimeError("jlinalg test harness compilation failed")
+
+    try:
+        # Link into executable
+        out = tests_dir / "test_boundaries"
+        if platform.system() == "Windows":
+            out = out.with_suffix(".exe")
+
+        cmd_link = [
+            cc_cmd,
+            *cc_extra,
+            *[str(o) for o in obj_files],
+            "-o",
+            str(out),
+            *current_omp_link,
+            *ldflags,
+        ]
+        _print(f"link: {' '.join(cmd_link)}")
+        result_link = subprocess.run(cmd_link, capture_output=True, text=True)
+        if result_link.returncode != 0:
+            raise RuntimeError(f"Link failed:\n{result_link.stderr}")
+
+        _print(f"Test harness compiled: {out}")
+        return out
+
+    finally:
+        # Clean up obj files (they live in a temp dir from the last _compile_all call)
+        if obj_files:
+            td = obj_files[0].parent
+            shutil.rmtree(td, ignore_errors=True)
+
+
 if __name__ == "__main__":
     success = compile_extension()
     sys.exit(0 if success else 1)

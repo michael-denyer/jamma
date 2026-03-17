@@ -69,59 +69,84 @@ int jlinalg_eigh_c(npy_intp N,
      *  -1:  allocation failure
      *  >0:  LAPACK dsyevd convergence failure
      *
-     * We work on a tightly-packed N×N copy (K_work) because dsyevd
-     * overwrites in-place and the caller's K/eigenvectors may have
-     * ldk > N or ldz > N (padded rows).  Stride-aware copy in/out.
+     * When both input and output are tightly packed (ldk == ldz == N), reuse
+     * the caller-owned eigenvectors buffer as the in-place vendor workspace.
+     * This avoids the extra N×N K_work allocation on the Python path.
+     * Padded rows still require a tight staging copy because row-major with
+     * ldk/ldz > N cannot be reinterpreted safely as the vendor's packed
+     * column-major layout.
      */
     {
-        double *K_work = (double *)malloc((size_t)N * (size_t)N * sizeof(double));
-        if (K_work) {
-            /* Stride-aware copy: K (ldk stride) → K_work (N stride) */
-            if (ldk == N) {
-                memcpy(K_work, K, (size_t)N * (size_t)N * sizeof(double));
-            } else {
-                for (npy_intp i = 0; i < N; i++)
-                    memcpy(K_work + i * N, K + i * ldk, (size_t)N * sizeof(double));
-            }
-            int ext_ret = jlinalg_dsyevd_ext(N, K_work, N, eigenvalues);
-            if (ext_ret == JLINALG_EXT_SUCCESS) {
-                /* Success: K_work now contains row-major eigenvectors (N stride).
-                 * Copy to eigenvectors output buffer (ldz stride). */
-                if (ldz == N) {
-                    memcpy(eigenvectors, K_work, (size_t)N * (size_t)N * sizeof(double));
-                } else {
-                    for (npy_intp i = 0; i < N; i++)
-                        memcpy(eigenvectors + i * ldz, K_work + i * N,
-                               (size_t)N * sizeof(double));
-                }
-                free(K_work);
+        if (ldk == N && ldz == N) {
+            if (K != eigenvectors)
+                memcpy(eigenvectors, K, (size_t)N * (size_t)N * sizeof(double));
+            int ext_ret = jlinalg_dsyevd_ext(N, eigenvectors, N, eigenvalues);
+            if (ext_ret == JLINALG_EXT_SUCCESS)
                 return 0;
-            }
-            free(K_work);
-            if (ext_ret != JLINALG_EXT_UNAVAILABLE) {
-                /* Vendor dsyevd failed (not "unavailable") — return error.
-                 * Don't fall through: if vendor LAPACK fails, our D&C
-                 * would likely also fail on the same matrix. */
+            if (ext_ret == JLINALG_EXT_ALLOC_FAIL) {
+                /* DSYEVD workspace alloc failed — restore K into eigenvectors
+                 * (dsyevd_ext may have clobbered it) and fall through to DSYEVR
+                 * which needs far less workspace (O(N) vs O(N^2)). */
+                if (K != eigenvectors)
+                    memcpy(eigenvectors, K, (size_t)N * (size_t)N * sizeof(double));
+                fprintf(stderr,
+                    "jlinalg_eigh_c: vendor dsyevd workspace allocation failed "
+                    "(N=%ld) — falling through to dsyevr\n", (long)N);
+                if (status) status->vendor_lapack_skipped = 1;
+            } else if (ext_ret != JLINALG_EXT_UNAVAILABLE) {
+                /* Convergence or argument failure — don't fall through */
                 return ext_ret;
             }
-            /* ext_ret == -2: no vendor dsyevd — fall through to jlinalg pipeline */
         } else {
-            /* K_work malloc failed — fall through to jlinalg pipeline.
-             * NOTE: dstedc needs 2*N*N internally, so it will likely also
-             * fail for truly memory-constrained cases. */
-            fprintf(stderr,
-                "jlinalg_eigh_c: vendor dsyevd work copy allocation failed "
-                "(N=%ld, %.1f GB needed) — trying jlinalg pipeline\n",
-                (long)N,
-                (double)((size_t)N * (size_t)N * sizeof(double)) / (1024.0*1024*1024));
-            if (status) status->vendor_lapack_skipped = 1;
+            double *K_work = (double *)malloc((size_t)N * (size_t)N * sizeof(double));
+            if (K_work) {
+                /* Stride-aware copy: K (ldk stride) → K_work (N stride) */
+                if (ldk == N) {
+                    memcpy(K_work, K, (size_t)N * (size_t)N * sizeof(double));
+                } else {
+                    for (npy_intp i = 0; i < N; i++)
+                        memcpy(K_work + i * N, K + i * ldk, (size_t)N * sizeof(double));
+                }
+                int ext_ret = jlinalg_dsyevd_ext(N, K_work, N, eigenvalues);
+                if (ext_ret == JLINALG_EXT_SUCCESS) {
+                    /* Success: K_work now contains row-major eigenvectors (N stride).
+                     * Copy to eigenvectors output buffer (ldz stride). */
+                    if (ldz == N) {
+                        memcpy(eigenvectors, K_work, (size_t)N * (size_t)N * sizeof(double));
+                    } else {
+                        for (npy_intp i = 0; i < N; i++)
+                            memcpy(eigenvectors + i * ldz, K_work + i * N,
+                                   (size_t)N * sizeof(double));
+                    }
+                    free(K_work);
+                    return 0;
+                }
+                free(K_work);
+                if (ext_ret != JLINALG_EXT_UNAVAILABLE) {
+                    /* Vendor dsyevd failed (not "unavailable") — return error.
+                     * Don't fall through: if vendor LAPACK fails, our D&C
+                     * would likely also fail on the same matrix. */
+                    return ext_ret;
+                }
+                /* ext_ret == -2: no vendor dsyevd — fall through to jlinalg pipeline */
+            } else {
+                /* K_work malloc failed — fall through to jlinalg pipeline.
+                 * NOTE: dstedc needs 2*N*N internally, so it will likely also
+                 * fail for truly memory-constrained cases. */
+                fprintf(stderr,
+                    "jlinalg_eigh_c: vendor dsyevd work copy allocation failed "
+                    "(N=%ld, %.1f GB needed) — trying jlinalg pipeline\n",
+                    (long)N,
+                    (double)((size_t)N * (size_t)N * sizeof(double)) / (1024.0*1024*1024));
+                if (status) status->vendor_lapack_skipped = 1;
+            }
         }
     }
 
     /* --- Vendor dsyevr fast path (memory-pressure fallback) ---
      * DSYEVR uses O(N) workspace (vs O(N^2) for DSYEVD).  Try it when:
      *   - vendor dsyevd was unavailable, OR
-     *   - K_work malloc failed (dsyevd needs N x N copy, dsyevr does not)
+     *   - dsyevd workspace allocation failed (tight-pack or K_work path)
      * DSYEVR writes eigenvectors into a separate Z buffer, so it operates
      * directly on the caller's K and eigenvectors buffers. */
     if (blas_has_dsyevr()) {

@@ -17,6 +17,8 @@ from loguru import logger
 from jamma.io.matrix_writer import write_matrix_parallel
 from jamma.utils.npy_cache import npy_cache_valid
 
+_SYMMETRY_RTOL = 1e-10
+
 
 def _validate_kinship(K: np.ndarray, n_samples: int | None, source: str) -> None:
     """Validate kinship matrix shape and symmetry.
@@ -36,7 +38,7 @@ def _validate_kinship(K: np.ndarray, n_samples: int | None, source: str) -> None
             f"Kinship matrix dimension {K.shape[0]} does not match "
             f"expected n_samples={n_samples}"
         )
-    if not np.allclose(K, K.T, rtol=1e-10):
+    if not np.allclose(K, K.T, rtol=_SYMMETRY_RTOL):
         raise ValueError("Kinship matrix is not symmetric")
 
 

@@ -223,6 +223,19 @@ class TestReadKinshipValidation:
         with pytest.raises(ValueError, match="symmetric"):
             read_kinship_matrix(path)
 
+    def test_read_kinship_single_off_diagonal_asymmetry_detected(self, tmp_path):
+        """A single asymmetric entry is caught by the exact symmetry check."""
+        from jamma.kinship import read_kinship_matrix
+
+        n = 50
+        K = np.eye(n, dtype=np.float64)
+        K[1, 2] = 0.5  # asymmetric: K[1,2] != K[2,1]
+        path = tmp_path / "sneaky_asymm.cXX.npy"
+        np.save(path, K)
+
+        with pytest.raises(ValueError, match="symmetric"):
+            read_kinship_matrix(path)
+
     def test_read_kinship_dimension_mismatch_raises(self, tmp_path):
         """Correct symmetric 5x5 matrix with n_samples=10 raises dimension error."""
         from jamma.kinship import read_kinship_matrix

@@ -24,6 +24,10 @@ src/jamma/_build_meta.py
 *.so
 *.dylib
 
+# Compiled Unity test binary (built by _compile_jlinalg.py:compile_test_harness)
+src/jamma/jlinalg/tests/test_boundaries
+src/jamma/jlinalg/tests/test_boundaries.exe
+
 # BLIS prebuilt binaries (downloaded at build time by hatch_build.py)
 src/jamma/jlinalg/libs/
 

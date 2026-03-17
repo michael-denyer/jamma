@@ -24,7 +24,7 @@ class TestMemoryEstimation:
     """Tests for estimate_workflow_memory function."""
 
     def test_memory_breakdown_200k(self):
-        """Memory estimate for 200k samples - peak during eigendecomp ~1600GB."""
+        """Memory estimate for 200k samples - peak during eigendecomp ~1280GB."""
         est = estimate_workflow_memory(200_000, 95_000)
 
         # Kinship: 200k^2 * 8 / 1e9 = 320GB
@@ -45,9 +45,9 @@ class TestMemoryEstimation:
             f"DSYEVD workspace should be ~640GB at 200k, "
             f"got {est.eigendecomp_workspace_gb:.2f}GB"
         )
-        # Peak: K + U + K_work + DSYEVD workspace = 320+320+320+640 = ~1600GB
-        assert 1590 < est.total_gb < 1610, (
-            f"Expected ~1600GB (K+U+K_work+workspace), got {est.total_gb}"
+        # Peak: K + U + DSYEVD workspace = 320+320+640 = ~1280GB
+        assert 1270 < est.total_gb < 1290, (
+            f"Expected ~1280GB (K+U+workspace), got {est.total_gb}"
         )
 
     def test_memory_breakdown_10k(self):

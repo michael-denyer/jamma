@@ -65,38 +65,27 @@ def _eigendecomp_eigvec_gb(kinship_gb: float) -> float:
 def _dsyevd_peak_gb(n: int) -> float:
     """Peak memory (GB) for DSYEVD eigendecomposition.
 
-    jlinalg_eigh_c mallocs a K_work staging copy before calling vendor DSYEVD,
-    so peak is: K (caller) + U (caller) + K_work (staging) + DSYEVD workspace.
+    On the Python path, jlinalg.eigh reuses the caller-owned eigenvector buffer
+    as the vendor DSYEVD work/output array, so peak is:
+    K (caller scratch) + U (caller output) + DSYEVD workspace.
     """
     if n < 0:
         raise ValueError(f"n_samples must be >= 0, got {n}")
     kinship_gb = _square_matrix_gb(n)
-    k_work_gb = kinship_gb  # staging copy in eigh.c line 77
-    return (
-        kinship_gb
-        + _eigendecomp_eigvec_gb(kinship_gb)
-        + k_work_gb
-        + _dsyevd_workspace_gb(n)
-    )
+    return kinship_gb + _eigendecomp_eigvec_gb(kinship_gb) + _dsyevd_workspace_gb(n)
 
 
 def _dsyevr_peak_gb(n: int) -> float:
     """Peak memory (GB) for DSYEVR eigendecomposition.
 
-    jlinalg_dsyevr_ext allocates a col-major Z_col buffer for LAPACK output,
-    so peak is: K (overwritten as scratch) + U (caller output)
-    + Z_col (transpose staging) + O(N).
+    On the Python path, jlinalg_dsyevr_ext writes vendor output directly into
+    the caller-owned eigenvector buffer and transposes in place, so peak is:
+    K (overwritten as scratch) + U (caller output) + O(N).
     """
     if n < 0:
         raise ValueError(f"n_samples must be >= 0, got {n}")
     kinship_gb = _square_matrix_gb(n)
-    z_col_gb = kinship_gb  # col-major staging in blas_dispatch.c line 1408
-    return (
-        kinship_gb
-        + _eigendecomp_eigvec_gb(kinship_gb)
-        + z_col_gb
-        + _dsyevr_workspace_gb(n)
-    )
+    return kinship_gb + _eigendecomp_eigvec_gb(kinship_gb) + _dsyevr_workspace_gb(n)
 
 
 def estimate_eigendecomp_memory(n_samples: int) -> float:
@@ -108,11 +97,10 @@ def estimate_eigendecomp_memory(n_samples: int) -> float:
 
     jlinalg.eigh DSYEVD path allocates:
     - K (caller scratch): n^2 * 8 bytes
-    - U (caller eigenvectors): n^2 * 8 bytes
-    - K_work (staging copy in eigh.c): n^2 * 8 bytes
+    - U (caller eigenvectors/work buffer): n^2 * 8 bytes
     - workspace (DSYEVD O(n^2))
 
-    For 200k samples: 320GB + 320GB + 320GB + ~640GB = ~1600GB
+    For 200k samples: 320GB + 320GB + ~640GB = ~1280GB
 
     Args:
         n_samples: Number of samples (individuals).
@@ -231,7 +219,7 @@ def estimate_workflow_memory(
     peak_kinship = genotypes_gb * 2 + kinship_gb
 
     # Phase 2 (eigendecomp): use _dsyevd_peak_gb which accounts for
-    # K + U + K_work staging copy + DSYEVD workspace.
+    # K + U + DSYEVD workspace.
     peak_eigendecomp = _dsyevd_peak_gb(n_samples)
 
     # Phase 3 (LMM): eigenvectors + genotypes + working
@@ -455,7 +443,7 @@ def estimate_streaming_memory(
     # Peak memory calculation by workflow phase
     peak_kinship = kinship_gb + chunk_gb
     # Eigendecomp: use _dsyevd_peak_gb which accounts for
-    # K + U + K_work staging copy + DSYEVD workspace.
+    # K + U + DSYEVD workspace.
     peak_eigendecomp = _dsyevd_peak_gb(n_samples)
     peak_lmm = (
         eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb + uab_iab_gb

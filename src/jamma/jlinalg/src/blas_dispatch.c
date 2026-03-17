@@ -1518,7 +1518,12 @@ int jlinalg_dsyevd_ext(npy_intp N, double *K, npy_intp ldk,
         liwork = iwork_query;
         double *work = (double *)malloc((size_t)lwork * sizeof(double));
         long long *iwork = (long long *)malloc((size_t)liwork * sizeof(long long));
-        if (!work || !iwork) { free(work); free(iwork); return JLINALG_EXT_ALLOC_FAIL; }
+        if (!work || !iwork) {
+            /* CRITICAL: ALLOC_FAIL must be returned BEFORE K is modified.
+             * eigh.c relies on K being unmodified when K == eigenvectors
+             * so it can fall through to DSYEVR with the original data. */
+            free(work); free(iwork); return JLINALG_EXT_ALLOC_FAIL;
+        }
 
         /* Compute: UPLO='U' because row-major lower = col-major upper.
          * The matrix is symmetric so A = A^T — no input transpose needed,
@@ -1597,10 +1602,14 @@ int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk,
         double *work = (double *)malloc((size_t)lwork * sizeof(double));
         long long *iwork = (long long *)malloc((size_t)liwork * sizeof(long long));
         long long *isuppz = (long long *)malloc((size_t)(2 * N) * sizeof(long long));
-        /* Z buffer for Fortran col-major output (N x N, tight stride) */
-        double *Z_col = (double *)malloc((size_t)N * (size_t)N * sizeof(double));
+        /* Reuse the caller's tightly packed output buffer when possible. */
+        int use_output_as_z = (ldz == N && eigenvectors != K);
+        double *Z_col = use_output_as_z
+            ? eigenvectors
+            : (double *)malloc((size_t)N * (size_t)N * sizeof(double));
         if (!work || !iwork || !isuppz || !Z_col) {
-            free(work); free(iwork); free(isuppz); free(Z_col);
+            free(work); free(iwork); free(isuppz);
+            if (!use_output_as_z) free(Z_col);
             return JLINALG_EXT_ALLOC_FAIL;
         }
 
@@ -1613,7 +1622,7 @@ int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk,
         free(iwork);
         free(isuppz);
         if (info != 0) {
-            free(Z_col);
+            if (!use_output_as_z) free(Z_col);
             return _info_to_int(info, N);
         }
 
@@ -1622,17 +1631,29 @@ int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk,
             fprintf(stderr,
                 "jlinalg_dsyevr_ext: expected %lld eigenvalues but DSYEVR found %lld "
                 "(range='A', N=%lld) — vendor LAPACK ABI mismatch or bug\n", n, m_out, n);
-            free(Z_col);
+            if (!use_output_as_z) free(Z_col);
             return JLINALG_EXT_COUNT_MISMATCH;
         }
 
-        /* Transpose col-major Z to row-major eigenvectors.
-         * Z_col is col-major: Z_col[i + j*N] = component i of eigvec j.
-         * eigenvectors is row-major: eigenvectors[i*ldz + j] = component i of eigvec j. */
-        for (npy_intp i = 0; i < N; i++)
-            for (npy_intp j = 0; j < N; j++)
-                eigenvectors[i * ldz + j] = Z_col[i + j * N];
-        free(Z_col);
+        if (use_output_as_z) {
+            /* DSYEVR wrote col-major data into a tight contiguous buffer.
+             * Interpreted as row-major, that is the transpose of what Python
+             * expects. Transpose in-place to restore row-major columnwise form. */
+            for (npy_intp i = 0; i < N; i++)
+                for (npy_intp j = i + 1; j < N; j++) {
+                    double tmp = eigenvectors[i * ldz + j];
+                    eigenvectors[i * ldz + j] = eigenvectors[j * ldz + i];
+                    eigenvectors[j * ldz + i] = tmp;
+                }
+        } else {
+            /* Transpose col-major Z to row-major eigenvectors.
+             * Z_col is col-major: Z_col[i + j*N] = component i of eigvec j.
+             * eigenvectors is row-major: eigenvectors[i*ldz + j] = component i of eigvec j. */
+            for (npy_intp i = 0; i < N; i++)
+                for (npy_intp j = 0; j < N; j++)
+                    eigenvectors[i * ldz + j] = Z_col[i + j * N];
+            free(Z_col);
+        }
         return JLINALG_EXT_SUCCESS;
     }
 

@@ -467,24 +467,25 @@ class TestDgemmThreadSafety:
 )
 @pytest.mark.benchmark
 def test_dgemm_throughput() -> None:
-    """1000x1000 dgemm: jlinalg must match at least 80% of np.matmul throughput.
+    """VALID-07: dgemm achieves >0.9x throughput vs OpenBLAS on jamma rotation sizes.
 
-    Prints GFLOPS for both implementations.  This test is skipped when the
-    C extension is not compiled.
+    Tests at N=1410 (mouse_hs1940 rotation size) — the primary JAMMA workload.
+    Prints GFLOPS for both implementations.  Skipped when the C extension is
+    not compiled.
 
-    The 0.8x assertion is only enforced on AVX2 hardware where jlinalg uses its
-    fully optimised 6x8 FMA microkernel.  The threshold is conservative
-    (0.8 not 0.9) because shared CI runners have noisy neighbour effects.
-    On NEON and generic paths, the comparison target (NumPy's BLAS backend)
-    varies by platform (Apple Accelerate on macOS, OpenBLAS on Linux); we
-    report the ratio but do not fail on it.
+    The 0.9x assertion is only enforced on AVX2 hardware where jlinalg uses its
+    fully optimised 6x8 FMA microkernel.  On NEON and generic paths, the
+    comparison target (NumPy's BLAS backend) varies by platform (Apple
+    Accelerate on macOS, OpenBLAS on Linux); we report the ratio but do not
+    fail on it.
     """
     import time
 
     from jamma.jlinalg import jlinalg_isa as _isa
 
     rng = np.random.default_rng(42)
-    M = N = K = 1000
+    # N=1410: mouse_hs1940 rotation size (primary jamma workload)
+    M = N = K = 1410
     A = rng.standard_normal((M, K))
     B = rng.standard_normal((K, N))
 
@@ -492,38 +493,42 @@ def test_dgemm_throughput() -> None:
     _ = dgemm(A, B)
     _ = np.matmul(A, B)
 
-    # Time jlinalg
+    # Time jlinalg: best of 5
     n_iters = 5
-    t0 = time.perf_counter()
+    best_jlinalg = float("inf")
     for _ in range(n_iters):
+        t0 = time.perf_counter()
         dgemm(A, B)
-    t_jlinalg = (time.perf_counter() - t0) / n_iters
+        best_jlinalg = min(best_jlinalg, time.perf_counter() - t0)
 
-    # Time NumPy
-    t0 = time.perf_counter()
+    # Time NumPy: best of 5
+    best_numpy = float("inf")
     for _ in range(n_iters):
+        t0 = time.perf_counter()
         np.matmul(A, B)
-    t_numpy = (time.perf_counter() - t0) / n_iters
+        best_numpy = min(best_numpy, time.perf_counter() - t0)
 
     flops = 2.0 * M * N * K
-    gflops_jlinalg = flops / t_jlinalg / 1e9
-    gflops_numpy = flops / t_numpy / 1e9
+    gflops_jlinalg = flops / best_jlinalg / 1e9
+    gflops_numpy = flops / best_numpy / 1e9
+    ratio = best_numpy / best_jlinalg
 
-    print(f"\njlinalg dgemm: {gflops_jlinalg:.1f} GFLOPS ({t_jlinalg * 1000:.1f} ms)")
-    print(f"np.matmul:   {gflops_numpy:.1f} GFLOPS ({t_numpy * 1000:.1f} ms)")
-    print(f"Ratio:       {gflops_jlinalg / gflops_numpy:.3f} (ISA: {_isa})")
+    jl_ms = best_jlinalg * 1000
+    np_ms = best_numpy * 1000
+    print(f"\njlinalg dgemm N={M}: {gflops_jlinalg:.1f} GF ({jl_ms:.1f} ms)")
+    print(f"np.matmul:        {gflops_numpy:.1f} GF ({np_ms:.1f} ms)")
+    print(f"Ratio:            {ratio:.3f} (ISA: {_isa})")
 
-    ratio = t_numpy / t_jlinalg
-
-    # Only enforce 0.8x target on AVX2 hardware; NEON and generic paths are not
-    # expected to match multi-threaded Accelerate/MKL-backed np.matmul.
-    # 0.8 (not 0.9) accounts for shared CI runner noise.
+    # VALID-07: enforce 0.9x target on AVX2 hardware; NEON and generic paths
+    # are not expected to match multi-threaded Accelerate/MKL-backed np.matmul.
     if _isa == "AVX2":
-        assert ratio >= 0.8, (
-            f"jlinalg dgemm is less than 80% of np.matmul throughput on AVX2: "
+        assert ratio >= 0.9, (
+            f"jlinalg dgemm is less than 90% of np.matmul throughput on AVX2: "
             f"ratio={ratio:.3f}, jlinalg={gflops_jlinalg:.1f} GFLOPS, "
             f"numpy={gflops_numpy:.1f} GFLOPS"
         )
+    elif _isa in ("NEON", "generic"):
+        print(f"{_isa}: throughput assertion skipped (ratio={ratio:.3f}x vs np.matmul)")
 
 
 # ---------------------------------------------------------------------------

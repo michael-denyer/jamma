@@ -758,6 +758,8 @@ def _yield_loco_matrices(
     n_chr_filtered: dict[str, int],
     n_filtered: int,
     K_loco_buf: np.ndarray | None = None,
+    *,
+    copy_output: bool = True,
 ) -> Iterator[tuple[str, np.ndarray]]:
     """Compute and yield LOCO kinship matrices from S_full and per-chr accumulators.
 
@@ -770,10 +772,14 @@ def _yield_loco_matrices(
         n_chr_filtered: Count of filtered SNPs per chromosome.
         n_filtered: Total number of filtered SNPs.
         K_loco_buf: Pre-allocated workspace (n_samples, n_samples) for K_loco.
-            When provided, np.subtract(out=) avoids a temporary, then the
-            result is copied before yielding so callers may freely
-            materialise the iterator. When None, a new array is allocated
-            per chromosome (legacy behavior).
+            When provided, np.subtract(out=) avoids a temporary. When None,
+            a new array is allocated per chromosome (legacy behavior).
+        copy_output: If True (default), the buffer is copied before yielding
+            so callers may freely materialise the iterator (e.g. ``dict()``
+            or ``list()``). If False, the yielded array is the shared
+            ``K_loco_buf`` itself — callers MUST fully consume each matrix
+            before advancing the iterator, as the next iteration overwrites
+            the buffer.
 
     Yields:
         (chr_name, K_loco) pairs in biological chromosome order.
@@ -794,11 +800,12 @@ def _yield_loco_matrices(
 
         if K_loco_buf is not None:
             # In-place subtraction avoids a temporary array (LOCO-03).
-            # Copy before yielding so callers that materialise the full
-            # iterator (dict / list) get independent arrays.
+            # Copy before yielding only when the caller may materialise the
+            # iterator. Sequential internal consumers can safely reuse the
+            # buffer and avoid one extra n x n allocation per chromosome.
             np.subtract(S_full_np, np.asarray(S_chr[chr_name]), out=K_loco_buf)
             K_loco_buf /= p_loco
-            K_loco = K_loco_buf.copy()
+            K_loco = K_loco_buf.copy() if copy_output else K_loco_buf
         else:
             K_loco = (S_full_np - np.asarray(S_chr[chr_name])) / p_loco
         logger.debug(
@@ -943,6 +950,7 @@ def compute_loco_kinship_streaming(
     show_progress: bool = True,
     ksnps_indices: np.ndarray | None = None,
     valid_indices: np.ndarray | None = None,
+    _copy_yielded_matrices: bool = True,
 ) -> Iterator[tuple[str, np.ndarray]]:
     """Compute LOCO kinship matrices from disk-streamed genotypes.
 
@@ -1159,7 +1167,12 @@ def compute_loco_kinship_streaming(
 
         K_loco_buf = np.empty_like(S_full_np)
         yield from _yield_loco_matrices(
-            S_full_np, S_chr, n_chr_filtered, n_filtered, K_loco_buf
+            S_full_np,
+            S_chr,
+            n_chr_filtered,
+            n_filtered,
+            K_loco_buf,
+            copy_output=_copy_yielded_matrices,
         )
         yield from _yield_full_kinship_fallback(
             S_full_np, chrs_without_snps, n_filtered
@@ -1213,7 +1226,12 @@ def compute_loco_kinship_streaming(
 
         K_loco_buf = np.empty_like(S_full_np)
         yield from _yield_loco_matrices(
-            S_full_np, S_chr, n_chr_filtered, n_filtered, K_loco_buf
+            S_full_np,
+            S_chr,
+            n_chr_filtered,
+            n_filtered,
+            K_loco_buf,
+            copy_output=_copy_yielded_matrices,
         )
         del S_chr
         gc.collect()
@@ -1240,7 +1258,12 @@ def compute_loco_kinship_streaming(
             )
 
             yield from _yield_loco_matrices(
-                S_full_np, S_chr, n_chr_filtered, n_filtered, K_loco_buf
+                S_full_np,
+                S_chr,
+                n_chr_filtered,
+                n_filtered,
+                K_loco_buf,
+                copy_output=_copy_yielded_matrices,
             )
             del S_chr
             gc.collect()

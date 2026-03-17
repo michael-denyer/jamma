@@ -465,6 +465,7 @@ def _run_gk(
             check_memory=check_memory,
             show_progress=True,
             ksnps_indices=ksnps_indices,
+            _copy_yielded_matrices=False,
         )
         written_paths = write_loco_kinship_matrices(
             loco_iter,

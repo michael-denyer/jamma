@@ -327,6 +327,23 @@ flowchart TD
 
 Both backends share the same core algorithms ([likelihood.py](src/jamma/lmm/likelihood.py), [prepare_common.py](src/jamma/lmm/prepare_common.py)) and produce identical results. Backend-specific files follow a naming convention: `*_jax.py` / `*_numpy.py`.
 
+### jlinalg: Controlled C Compute Layer
+
+JAMMA includes **jlinalg**, a controlled C compute layer that provides the specific BLAS and LAPACK operations needed for GWAS (dgemm, dsyrk, eigh, QR, SVD). jlinalg dispatches to vendor BLAS (MKL-ILP64, Accelerate-ILP64) when available and falls back to its own C implementations with AVX2/NEON microkernels. This eliminates numpy BLAS compatibility issues (LP64 integer overflow at >46k samples, scipy ILP64 incompatibility).
+
+```mermaid
+graph TD
+    A["jamma CLI / Python API"] --> B["LMM Pipeline"]
+    B --> C["jlinalg Python API"]
+    C --> D{"C Extension"}
+    D -->|Loaded| E["Vendor Dispatch<br/>MKL-ILP64 / Accelerate-ILP64"]
+    D -->|Loaded| F["jlinalg Own<br/>AVX2 / NEON kernels"]
+    D -->|Not loaded| G["NumPy Fallback"]
+    B --> H["_lmm_accel.c<br/>Wald/Score/LRT"]
+```
+
+jlinalg provides symmetric BLAS specialization (dsyrk tile-skipping for ~50% fewer tile iterations than dgemm) and vendor LAPACK dispatch (DSYEVD/DSYEVR) for eigendecomposition. See the [jlinalg Architecture](docs/JLINALG_ARCHITECTURE.md) doc for layer diagrams, microkernel details, and the contributing guide.
+
 See [Code Map](docs/CODEMAP.md) for the full architecture diagram with source links.
 
 ## Documentation
@@ -337,6 +354,8 @@ See [Code Map](docs/CODEMAP.md) for the full architecture diagram with source li
 - [Equivalence Proof](docs/EQUIVALENCE.md) — Mathematical proofs and empirical validation against GEMMA
 - [GEMMA Divergences](docs/GEMMA_DIVERGENCES.md) — Known differences from GEMMA
 - [Performance](docs/PERFORMANCE.md) — Bottleneck analysis, scale validation, configuration guide
+- [jlinalg Architecture](docs/JLINALG_ARCHITECTURE.md) — C compute layer design, vendor dispatch, microkernel tutorial
+- [jlinalg Algorithms](docs/JLINALG_ALGORITHMS.md) — Cache blocking, D&C eigendecomposition, SVD
 - [Contributing](CONTRIBUTING.md) — Development setup, testing, and PR guidelines
 - [Changelog](CHANGELOG.md) — Version history
 

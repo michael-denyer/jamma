@@ -24,7 +24,13 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from jamma.jlinalg import HAS_C_EXTENSION, eigh, get_n_threads, set_n_threads
+from jamma.jlinalg import (
+    HAS_C_EXTENSION,
+    blas_has_dsyevd,
+    eigh,
+    get_n_threads,
+    set_n_threads,
+)
 
 # ---------------------------------------------------------------------------
 # Assertion helpers — reconstruction and orthogonality checks
@@ -454,6 +460,52 @@ def test_vs_mouse_hs1940_kinship() -> None:
 
     _assert_orthogonality(v_jlinalg, 1e-5, "Kinship")
     _assert_reconstruction(K, w_jlinalg, v_jlinalg, 1e-4, "Kinship")
+
+
+# VALID-03: Sign ambiguity in eigenvectors.
+# All eigenvector comparisons in this module use reconstruction checks
+# (||K - V diag(w) V^T||_F / ||K||_F) and orthogonality checks
+# (||V^T V - I||_F) rather than element-wise comparison.  This is the
+# correct approach because eigenvectors are unique only up to sign (and
+# up to rotation within degenerate eigenspaces).  Reconstruction and
+# orthogonality are sign-invariant, making them robust to implementation
+# differences between jlinalg and NumPy/LAPACK.
+
+
+@pytest.mark.skipif(
+    not HAS_C_EXTENSION or not blas_has_dsyevd,
+    reason="Requires vendor DSYEVD (ILP64 LAPACK) — jlinalg D&C path has looser bounds",
+)
+def test_mouse_hs1940_eigendecomp_strict() -> None:
+    """VALID-08: strict eigendecomp on real mouse_hs1940 kinship data.
+
+    Tighter tolerances than test_vs_mouse_hs1940_kinship to validate the
+    vendor LAPACK eigensolver quality on real data.  The vendor DSYEVD/DSYEVR
+    path (Accelerate, MKL-ILP64) achieves orthogonality < 1e-12 on this
+    1940 x 1940 kinship matrix.  The jlinalg D&C path has conditioning-
+    dependent error that exceeds this threshold, so this test is gated on
+    vendor LAPACK availability.
+    """
+    import os
+
+    kinship_path = os.path.join(
+        os.path.dirname(__file__),
+        "fixtures",
+        "kinship",
+        "mouse_hs1940.cXX.txt",
+    )
+    K = np.loadtxt(kinship_path)
+    K_copy = K.copy()
+
+    w, v = eigh(K_copy)
+
+    # VALID-08 requirement: orthogonality < 1e-12
+    ortho_err = _assert_orthogonality(v, 1e-12, "mouse_hs1940 strict")
+
+    # Reconstruction: < 1e-8 (same as existing test, but confirms on C path)
+    recon_err = _assert_reconstruction(K, w, v, 1e-8, "mouse_hs1940 strict")
+
+    print(f"mouse_hs1940 strict: ortho={ortho_err:.3e}, recon={recon_err:.3e}")
 
 
 # ---------------------------------------------------------------------------

@@ -36,6 +36,7 @@ Related LOCO test files:
 - test_loco_bugs.py: Regression tests for kinship aliasing, ordering, cleanup
 """
 
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -43,14 +44,35 @@ import pandas as pd
 import pytest
 from scipy.stats import spearmanr
 
+from jamma.jlinalg import HAS_C_EXTENSION, blas_backend
 from tests.conftest import load_phenotypes_from_fam
 
 pytest.importorskip("jax")
 
 from jamma.lmm.loco import run_lmm_loco
 
+_log = logging.getLogger(__name__)
+
+# VALID-04: GEMMA parity tests require jlinalg C extension to validate
+# the actual compute path. Skip with clear message when unavailable.
 # LOCO requires JAX backend (eigendecomp + batch Uab)
-pytestmark = pytest.mark.requires_jax
+pytestmark = [
+    pytest.mark.requires_jax,
+    pytest.mark.skipif(
+        not HAS_C_EXTENSION,
+        reason="jlinalg C extension not compiled - GEMMA parity requires C path",
+    ),
+]
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _log_jlinalg_backend():
+    """VALID-04: confirm jlinalg C extension is the active compute path."""
+    _log.info(
+        "GEMMA LOCO parity test running with jlinalg C extension active "
+        f"(backend: {blas_backend})"
+    )
+
 
 # Fixture paths
 _FIXTURE_ROOT = Path(__file__).parent / "fixtures"

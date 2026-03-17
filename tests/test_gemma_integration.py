@@ -15,6 +15,7 @@ The synthetic data has:
 - Phenotype: 0.5 * genotype[SNP0] + noise, standardized
 """
 
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +23,7 @@ import pandas as pd
 import pytest
 from scipy.stats import spearmanr
 
+from jamma.jlinalg import HAS_C_EXTENSION, blas_backend
 from tests.conftest import load_phenotypes_from_fam
 
 pytest.importorskip("jax")
@@ -31,7 +33,27 @@ from jamma.kinship import compute_centered_kinship
 from jamma.lmm.runner_jax import run_lmm_association_jax
 from jamma.validation import load_gemma_kinship
 
-pytestmark = pytest.mark.requires_jax
+_log = logging.getLogger(__name__)
+
+# VALID-04: GEMMA parity tests require jlinalg C extension to validate
+# the actual compute path. Skip with clear message when unavailable.
+pytestmark = [
+    pytest.mark.requires_jax,
+    pytest.mark.skipif(
+        not HAS_C_EXTENSION,
+        reason="jlinalg C extension not compiled - GEMMA parity requires C path",
+    ),
+]
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _log_jlinalg_backend():
+    """VALID-04: confirm jlinalg C extension is the active compute path."""
+    _log.info(
+        "GEMMA parity test running with jlinalg C extension active "
+        f"(backend: {blas_backend})"
+    )
+
 
 # Fixture paths
 _FIXTURE_ROOT = Path(__file__).parent / "fixtures"

@@ -279,6 +279,7 @@ def _compute_loco_kinship_streaming_numpy(
     valid_indices: np.ndarray | None = None,
     _max_batch_chrs: int | None = None,
     mode: LocoStreamingMode = LocoStreamingMode.DEFAULT,
+    _copy_yielded_matrices: bool = True,
 ) -> (
     tuple[Iterator[tuple[str, np.ndarray]], SnpStatsCache]
     | tuple[int, Iterator[tuple[str, np.ndarray, int]], SnpStatsCache]
@@ -758,7 +759,10 @@ def _compute_loco_kinship_streaming_numpy(
                     f"retained"
                 )
                 del batch_data[chr_name]
-                yield (chr_name, K_loco_buf.copy())
+                yield (
+                    chr_name,
+                    K_loco_buf.copy() if _copy_yielded_matrices else K_loco_buf,
+                )
 
     def _yield_matrices() -> Iterator[
         tuple[str, np.ndarray] | tuple[str, np.ndarray, int]
@@ -1369,6 +1373,7 @@ def run_lmm_loco(
                                 show_progress=show_progress,
                                 ksnps_indices=ksnps_indices,
                                 valid_indices=kinship_valid_indices,
+                                _copy_yielded_matrices=False,
                             )
                         )
                 else:
@@ -1384,6 +1389,7 @@ def run_lmm_loco(
                         show_progress=show_progress,
                         ksnps_indices=ksnps_indices,
                         valid_indices=kinship_valid_indices,
+                        _copy_yielded_matrices=False,
                     )
 
                 # Create eigen output directory before the loop (once, not per-chr).

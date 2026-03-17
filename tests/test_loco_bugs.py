@@ -174,6 +174,89 @@ class TestYieldLocoMatricesAliasing:
         )
 
 
+@pytest.mark.requires_jax
+class TestYieldLocoMatricesNoCopy:
+    """Verify copy_output=False yields correct results when consumed sequentially."""
+
+    def test_sequential_consumption_produces_correct_values(self):
+        """Each yielded matrix is correct when consumed before advancing."""
+        import jax.numpy as jnp
+
+        n = 10
+        S_full = np.eye(n, dtype=np.float64) * 3.0
+        chr_names = ["1", "2", "3"]
+
+        def _make_s_chr():
+            return {
+                name: jnp.eye(n, dtype=jnp.float64) * (i + 1)
+                for i, name in enumerate(chr_names)
+            }
+
+        n_chr_filtered = {name: 10 for name in chr_names}
+        K_loco_buf = np.empty((n, n), dtype=np.float64)
+
+        # Compute reference with copy_output=True (safe materialization).
+        # _yield_loco_matrices del's S_chr entries, so each call needs its own.
+        reference = dict(
+            _yield_loco_matrices(
+                S_full,
+                _make_s_chr(),
+                n_chr_filtered,
+                n_filtered=30,
+                K_loco_buf=K_loco_buf.copy(),
+            )
+        )
+
+        # Consume copy_output=False one at a time, snapshotting each.
+        sequential_results = {}
+        for chr_name, K_loco in _yield_loco_matrices(
+            S_full,
+            _make_s_chr(),
+            n_chr_filtered,
+            n_filtered=30,
+            K_loco_buf=K_loco_buf,
+            copy_output=False,
+        ):
+            sequential_results[chr_name] = K_loco.copy()
+
+        for chr_name in reference:
+            np.testing.assert_array_equal(
+                sequential_results[chr_name],
+                reference[chr_name],
+                err_msg=f"chr {chr_name} mismatch with copy_output=False",
+            )
+
+    def test_materialized_iterator_aliases_all_to_last(self):
+        """dict() materialization with copy_output=False shows the aliasing hazard."""
+        import jax.numpy as jnp
+
+        n = 10
+        S_full = np.eye(n, dtype=np.float64) * 3.0
+        chr_names = ["1", "2", "3"]
+        S_chr = {
+            name: jnp.eye(n, dtype=jnp.float64) * (i + 1)
+            for i, name in enumerate(chr_names)
+        }
+        n_chr_filtered = {name: 10 for name in chr_names}
+        K_loco_buf = np.empty((n, n), dtype=np.float64)
+
+        # Materializing with copy_output=False: all values share the buffer
+        # and equal the last chromosome's result.
+        results = dict(
+            _yield_loco_matrices(
+                S_full,
+                S_chr,
+                n_chr_filtered,
+                n_filtered=30,
+                K_loco_buf=K_loco_buf,
+                copy_output=False,
+            )
+        )
+        # All entries point to the same underlying buffer.
+        assert results["1"].base is results["3"].base or results["1"] is results["3"]
+        assert np.array_equal(results["1"], results["3"])
+
+
 class TestFallbackOrderingBiological:
     """Verify _yield_full_kinship_fallback produces biological order."""
 

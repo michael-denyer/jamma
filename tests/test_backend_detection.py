@@ -289,10 +289,12 @@ class TestExecutionMode:
         plan2 = ExecutionPlan(backend="numpy", mode="batch", reason="test")
         assert plan2.runner_name == "numpy-batch"
 
-    def test_numpy_streaming_is_invalid(self):
-        """ExecutionPlan rejects numpy-streaming (no streaming NumPy runner)."""
-        with pytest.raises(ValueError, match="Invalid execution plan"):
-            ExecutionPlan(backend="numpy", mode="streaming", reason="test")
+    def test_numpy_streaming_is_valid(self):
+        """ExecutionPlan accepts numpy-streaming (numpy streaming runner available)."""
+        plan = ExecutionPlan(backend="numpy", mode="streaming", reason="test")
+        assert plan.backend == "numpy"
+        assert plan.mode == "streaming"
+        assert plan.runner_name == "numpy-streaming"
 
     def test_empty_reason_is_invalid(self):
         """ExecutionPlan rejects empty reason string."""

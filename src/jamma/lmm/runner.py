@@ -30,7 +30,14 @@ from jamma.core.memory import estimate_lmm_memory
 from jamma.lmm._compile_utils import is_c_extension_usable
 from jamma.lmm.schema import LmmConfig, LmmRunResult
 
-_VALID_PLANS = frozenset({("jax", "batch"), ("jax", "streaming"), ("numpy", "batch")})
+_VALID_PLANS = frozenset(
+    {
+        ("jax", "batch"),
+        ("jax", "streaming"),
+        ("numpy", "batch"),
+        ("numpy", "streaming"),
+    }
+)
 
 
 @dataclass(frozen=True, slots=True, eq=False)

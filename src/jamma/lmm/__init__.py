@@ -7,6 +7,7 @@ Modules:
 - runner_jax: Batch processing (genotypes in memory, requires JAX)
 - runner_jax_streaming: Disk streaming (genotypes per chunk, requires JAX)
 - runner_numpy: Pure-NumPy batch runner (no JAX required)
+- runner_numpy_streaming: Disk streaming with C extension (no JAX required)
 - chunk: Chunk size computation
 - prepare: JAX-specific setup (device sharding, placement)
 - prepare_common: Shared setup (covariates, eigendecomp, null model)
@@ -29,6 +30,7 @@ from jamma.lmm.io import write_assoc_results
 from jamma.lmm.loco import run_lmm_loco
 from jamma.lmm.runner import ExecutionPlan, run_lmm, select_execution_mode
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
+from jamma.lmm.runner_numpy_streaming import run_lmm_association_numpy_streaming
 from jamma.lmm.schema import LmmConfig, LmmRunResult
 from jamma.lmm.stats import AssocResult
 
@@ -45,6 +47,7 @@ __all__ = [
     "ExecutionPlan",
     "run_lmm",
     "run_lmm_association_numpy",
+    "run_lmm_association_numpy_streaming",
     "run_lmm_loco",
     "select_execution_mode",
     "AssocResult",

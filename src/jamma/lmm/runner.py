@@ -25,7 +25,7 @@ from typing import Literal
 import numpy as np
 from loguru import logger
 
-from jamma.core.backend import BackendRequest, has_jax
+from jamma.core.backend import has_jax
 from jamma.core.memory import estimate_lmm_memory
 from jamma.lmm._compile_utils import is_c_extension_usable
 from jamma.lmm.schema import LmmConfig, LmmRunResult
@@ -84,7 +84,7 @@ def select_execution_mode(
     n_samples: int,
     n_snps: int,
     *,
-    requested: BackendRequest = "auto",
+    requested: str = "auto",
     n_cvt: int = 1,
     lmm_mode: int = 1,
 ) -> ExecutionPlan:
@@ -96,17 +96,21 @@ def select_execution_mode(
     Selection priority (when requested="auto"):
     1. C extension available + memory sufficient + (n_cvt=1 or C general available)
        -> numpy-batch
-    2. JAX available -> jax-batch (if fits) or jax-streaming (if not)
-    3. Fallback -> numpy-batch
+    2. C extension available + memory insufficient + C handles n_cvt
+       -> numpy-streaming
+    3. JAX available -> jax-batch (if fits) or jax-streaming (if not)
+    4. Fallback -> numpy-batch
 
     When requested is "numpy" or "jax", the backend is forced but the mode
     (batch vs streaming) is still determined by memory availability (for JAX).
-    NumPy always uses batch mode (no streaming NumPy runner exists).
+    Compound values "numpy-streaming" and "jax-streaming" force the exact
+    backend and mode combination.
 
     Args:
         n_samples: Number of samples in the dataset.
         n_snps: Number of SNPs in the dataset.
-        requested: Requested backend ("auto", "jax", or "numpy").
+        requested: Requested backend ("auto", "jax", "numpy",
+            "numpy-streaming", or "jax-streaming").
         n_cvt: Number of covariates (including intercept). Used to select
             accurate memory estimates (Uab is larger with more covariates)
             and to guard against numpy-batch when the C general extension is
@@ -117,6 +121,17 @@ def select_execution_mode(
     Returns:
         ExecutionPlan with backend, mode, and reason.
     """
+    # Handle compound backend requests from CLI (e.g., "numpy-streaming")
+    if requested == "numpy-streaming":
+        return ExecutionPlan("numpy", "streaming", "Explicit numpy-streaming request")
+    if requested == "jax-streaming":
+        if not has_jax():
+            raise ValueError(
+                "Backend 'jax-streaming' was explicitly requested but JAX is not "
+                "installed. Install JAX with: pip install jamma[jax]"
+            )
+        return ExecutionPlan("jax", "streaming", "Explicit jax-streaming request")
+
     _valid_requests = ("auto", "jax", "numpy")
     if requested not in _valid_requests:
         raise ValueError(
@@ -170,6 +185,21 @@ def select_execution_mode(
                 "batch",
                 f"C extension available, {est.total_gb:.1f}GB fits in "
                 f"{est.available_gb:.1f}GB available",
+            )
+
+    # C extension available but genotypes don't fit -- stream from disk
+    if c_ext_available and not est.sufficient:
+        from jamma.lmm.compute_numpy import (
+            _C_GENERAL_AVAILABLE as _cga,  # deferred: circular dep
+        )
+
+        c_handles_n_cvt = n_cvt <= 1 or _cga
+        if c_handles_n_cvt:
+            return ExecutionPlan(
+                "numpy",
+                "streaming",
+                f"C extension available, {est.total_gb:.1f}GB exceeds "
+                f"{est.available_gb:.1f}GB available, using NumPy streaming",
             )
 
     # JAX available: pick batch or streaming by memory
@@ -366,6 +396,34 @@ def run_lmm(
         from jamma.lmm.runner_jax_streaming import run_lmm_association_streaming
 
         result, n_tested = run_lmm_association_streaming(
+            bed_path=bed_path,
+            phenotypes=phenotypes,
+            kinship=kinship,
+            snp_info=snp_info,
+            covariates=covariates,
+            eigenvalues=eigenvalues,
+            eigenvectors=eigenvectors,
+            output_path=output_path,
+            snps_indices=snps_indices,
+            hwe_threshold=hwe_threshold,
+            chunk_size=chunk_size,
+            validate_genotypes=validate_genotypes,
+            config=config,
+            **common_kwargs if config is None else {},
+        )
+        return result, n_tested
+
+    if execution_plan.backend == "numpy" and execution_plan.mode == "streaming":
+        if bed_path is None:
+            raise ValueError(
+                "NumPy streaming mode requires bed_path (PLINK .bed file path). "
+                "Provide bed_path or use an in-memory backend."
+            )
+        from jamma.lmm.runner_numpy_streaming import (
+            run_lmm_association_numpy_streaming,
+        )
+
+        result, n_tested = run_lmm_association_numpy_streaming(
             bed_path=bed_path,
             phenotypes=phenotypes,
             kinship=kinship,

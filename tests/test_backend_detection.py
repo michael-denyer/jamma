@@ -153,14 +153,28 @@ class TestExecutionMode:
         assert plan.backend == "numpy"
         assert plan.mode == "batch"
 
-    def test_auto_jax_memory_insufficient_returns_jax_streaming(self):
-        """auto + JAX + memory insufficient -> jax-streaming."""
+    def test_auto_c_ext_memory_insufficient_returns_numpy_streaming(self):
+        """auto + C ext + memory insufficient -> numpy-streaming."""
         with (
             patch(
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_insufficient_estimate(),
             ),
             patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
+            patch("jamma.lmm.runner.has_jax", return_value=True),
+        ):
+            plan = select_execution_mode(200_000, 100_000)
+        assert plan.backend == "numpy"
+        assert plan.mode == "streaming"
+
+    def test_auto_no_c_ext_memory_insufficient_returns_jax_streaming(self):
+        """auto + no C ext + JAX + memory insufficient -> jax-streaming."""
+        with (
+            patch(
+                "jamma.lmm.runner.estimate_lmm_memory",
+                return_value=_make_insufficient_estimate(),
+            ),
+            patch("jamma.lmm.runner.is_c_extension_usable", return_value=False),
             patch("jamma.lmm.runner.has_jax", return_value=True),
         ):
             plan = select_execution_mode(200_000, 100_000)
@@ -271,6 +285,27 @@ class TestExecutionMode:
 
         config = PipelineConfig(bfile="/tmp/test", backend="jax")
         assert config.backend == "jax"
+
+    # -- Compound backend requests --
+
+    def test_explicit_numpy_streaming_returns_numpy_streaming(self):
+        """explicit 'numpy-streaming' -> numpy-streaming directly."""
+        plan = select_execution_mode(100, 1000, requested="numpy-streaming")
+        assert plan.backend == "numpy"
+        assert plan.mode == "streaming"
+
+    def test_explicit_jax_streaming_returns_jax_streaming(self):
+        """explicit 'jax-streaming' -> jax-streaming directly."""
+        with patch("jamma.lmm.runner.has_jax", return_value=True):
+            plan = select_execution_mode(100, 1000, requested="jax-streaming")
+        assert plan.backend == "jax"
+        assert plan.mode == "streaming"
+
+    def test_explicit_jax_streaming_absent_raises(self):
+        """explicit 'jax-streaming' + JAX not installed -> ValueError."""
+        with patch("jamma.lmm.runner.has_jax", return_value=False):
+            with pytest.raises(ValueError, match="JAX is not installed"):
+                select_execution_mode(100, 1000, requested="jax-streaming")
 
     # -- Input validation --
 

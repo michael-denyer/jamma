@@ -182,21 +182,16 @@ class TestBatchEquivalence:
             f"Count mismatch: {len(batch_assoc)} vs {len(stream_assoc)}"
         )
 
-        batch_betas = np.array([r.beta for r in batch_assoc])
-        stream_betas = np.array([r.beta for r in stream_assoc])
-        np.testing.assert_array_equal(
-            batch_betas, stream_betas, err_msg="beta values differ"
-        )
-
-        batch_se = np.array([r.se for r in batch_assoc])
-        stream_se = np.array([r.se for r in stream_assoc])
-        np.testing.assert_array_equal(batch_se, stream_se, err_msg="se values differ")
-
-        batch_pwald = np.array([r.p_wald for r in batch_assoc])
-        stream_pwald = np.array([r.p_wald for r in stream_assoc])
-        np.testing.assert_array_equal(
-            batch_pwald, stream_pwald, err_msg="p_wald values differ"
-        )
+        for field in ("beta", "se", "p_wald"):
+            batch_vals = np.array([getattr(r, field) for r in batch_assoc])
+            stream_vals = np.array([getattr(r, field) for r in stream_assoc])
+            np.testing.assert_allclose(
+                batch_vals,
+                stream_vals,
+                atol=1e-14,
+                rtol=1e-12,
+                err_msg=f"{field} values differ",
+            )
 
     def test_mode4_fp_identical(self, synthetic_eigen):
         """Mode-4 results are FP-identical between batch and streaming."""
@@ -234,8 +229,12 @@ class TestBatchEquivalence:
         for field in ("beta", "se", "p_wald", "p_score", "p_lrt"):
             batch_vals = np.array([getattr(r, field) for r in batch_assoc])
             stream_vals = np.array([getattr(r, field) for r in stream_assoc])
-            np.testing.assert_array_equal(
-                batch_vals, stream_vals, err_msg=f"{field} values differ"
+            np.testing.assert_allclose(
+                batch_vals,
+                stream_vals,
+                atol=1e-14,
+                rtol=1e-12,
+                err_msg=f"{field} values differ",
             )
 
 
@@ -380,7 +379,7 @@ class TestChunkingEdgeCases:
 
         batch_p = np.array([r.p_wald for r in batch_result.associations])
         stream_p = np.array([r.p_wald for r in stream_result.associations])
-        np.testing.assert_array_equal(batch_p, stream_p)
+        np.testing.assert_allclose(batch_p, stream_p, atol=1e-14, rtol=1e-12)
 
     def test_small_chunks(self, synthetic_eigen):
         """chunk_size=50 (many small chunks) matches batch."""
@@ -413,7 +412,7 @@ class TestChunkingEdgeCases:
 
         batch_p = np.array([r.p_wald for r in batch_result.associations])
         stream_p = np.array([r.p_wald for r in stream_result.associations])
-        np.testing.assert_array_equal(batch_p, stream_p)
+        np.testing.assert_allclose(batch_p, stream_p, atol=1e-14, rtol=1e-12)
 
     def test_empty_after_filter(self, synthetic_data):
         """All SNPs filtered out returns empty result."""

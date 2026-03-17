@@ -1,21 +1,20 @@
-"""Smoke test for the _eigen_accel C extension — used by cibuildwheel.
+"""Smoke test for jlinalg.eigh — used by cibuildwheel.
 
 Verifies:
 1. The compiled C extension imports successfully (ABI match)
-2. LAPACK was discovered via dlopen (IS_ILP64 is set)
-3. eigh_dsyevr produces correct eigenvalues on a known matrix
+2. eigh produces correct eigenvalues on a known matrix
 """
 
 import numpy as np
 
-from jamma.lmm._eigen_accel import ABI_VERSION, IS_ILP64, eigh_dsyevr
+from jamma.jlinalg._jlinalg import ABI_VERSION, blas_backend, eigh
 
-print(f"_eigen_accel OK, ABI={ABI_VERSION}, IS_ILP64={IS_ILP64}")
+print(f"_jlinalg OK, ABI={ABI_VERSION}, backend={blas_backend}")
 
 # Test with identity matrix (eigenvalues should be all 1.0)
 n = 100
 K = np.eye(n, dtype=np.float64)
-w, v = eigh_dsyevr(K)
+w, v = eigh(K)
 
 assert w.shape == (n,), f"Expected ({n},) eigenvalues, got {w.shape}"
 assert v.shape == (n, n), f"Expected ({n},{n}) eigenvectors, got {v.shape}"
@@ -27,7 +26,7 @@ rng = np.random.default_rng(42)
 A = rng.standard_normal((50, 50))
 K_spd = (A @ A.T) / 50
 K_ref = K_spd.copy()
-w2, v2 = eigh_dsyevr(K_spd)
+w2, v2 = eigh(K_spd)
 
 # Reconstruction check
 K_recon = v2 @ np.diag(w2) @ v2.T

@@ -518,8 +518,8 @@ Install numpy-mkl using the commands in [Linux / Windows](#linux--windows) above
 
 > **Note:** scipy does not support ILP64 — it hardcodes `ilp64=False` in
 > `get_lapack_funcs()` ([scipy#23351](https://github.com/scipy/scipy/issues/23351)).
-> JAMMA uses `numpy.linalg.eigh` which correctly uses ILP64 when numpy is built
-> with ILP64 MKL.
+> JAMMA uses `jlinalg.eigh` which dispatches to vendor DSYEVD/DSYEVR via the jlinalg
+> C layer, correctly using ILP64 when an ILP64 BLAS backend is available.
 
 **Verify ILP64 is active:**
 
@@ -742,10 +742,10 @@ print(jax.devices())  # Should show GPU if available
 
 JAMMA runs a pre-flight memory check before kinship and eigendecomposition. The
 check estimates peak memory (dominated by eigendecomposition: K + U + workspace)
-and applies a 10% safety margin based on empirical benchmarks. When the DSYEVR C
-extension is compiled, JAMMA automatically falls back from DSYEVD (faster, O(N^2)
-workspace) to DSYEVR (slower, O(N) workspace) when DSYEVD won't fit — this can
-increase the maximum sample count by ~40% for a given machine size.
+and applies a 10% safety margin based on empirical benchmarks. When vendor DSYEVR
+is available (via jlinalg BLAS dispatch), JAMMA automatically falls back from DSYEVD
+(faster, O(N²) workspace) to DSYEVR (slower, O(N) workspace) when DSYEVD won't
+fit — this can increase the maximum sample count by ~40% for a given machine size.
 
 **Approximate sample limits by machine size:**
 

@@ -84,26 +84,26 @@ class TestEigendecompMemoryEstimate:
     """Tests for memory estimation function."""
 
     def test_estimate_200k_samples(self):
-        """200k samples: estimate defaults to DSYEVD in-place ~960GB."""
+        """200k samples: K + U + K_work + DSYEVD workspace ~1600GB."""
         n_samples = 200_000
         estimate = estimate_eigendecomp_memory(n_samples)
-        # K/U shared (320GB) + DSYEVD workspace (~640GB) = ~960GB
-        assert 955 < estimate < 965
+        # K (320GB) + U (320GB) + K_work (320GB) + DSYEVD workspace (~640GB) = ~1600GB
+        assert 1595 < estimate < 1605
 
     def test_estimate_100k_samples(self):
-        """100k samples: estimate defaults to DSYEVD in-place ~240GB."""
+        """100k samples: K + U + K_work + DSYEVD workspace ~400GB."""
         n_samples = 100_000
         estimate = estimate_eigendecomp_memory(n_samples)
-        # K/U shared (80GB) + DSYEVD workspace (~160GB) = ~240GB
-        assert 235 < estimate < 245
+        # K (80GB) + U (80GB) + K_work (80GB) + DSYEVD workspace (~160GB) = ~400GB
+        assert 395 < estimate < 405
 
     def test_per_driver_peaks(self):
         """Per-driver peak helpers return correct values."""
         n = 200_000
-        # DSYEVD in-place: K (320GB) + workspace (~640GB) = ~960GB
-        assert 955 < _dsyevd_peak_gb(n) < 965
-        # DSYEVR: K (320GB) + Z (320GB) + workspace (~0.06GB) = ~640GB
-        assert 635 < _dsyevr_peak_gb(n) < 645
+        # DSYEVD: K (320GB) + U (320GB) + K_work (320GB) + workspace (~640GB) = ~1600GB
+        assert 1595 < _dsyevd_peak_gb(n) < 1605
+        # DSYEVR: K (320GB) + U (320GB) + Z_col (320GB) + workspace (~0.06GB) = ~960GB
+        assert 955 < _dsyevr_peak_gb(n) < 965
 
     def test_estimate_scales_quadratically(self):
         """Memory scales quadratically (kinship term dominates workspace)."""
@@ -184,114 +184,33 @@ class TestEigendecompPreflightCheck:
             has_need = "Need" in error_msg or "required" in error_msg.lower()
             assert has_need
 
-    def test_inplace_reuses_k_buffer(self):
-        """_eigh_inplace reuses K's memory buffer when called directly."""
-        from jamma.lmm.eigen import _eigh_inplace
-
-        try:
-            from numpy.linalg import _umath_linalg  # noqa: F401
-        except (ImportError, AttributeError):
-            pytest.skip("_umath_linalg.eigh_lo unavailable; in-place path not testable")
-
+    def test_jlinalg_eigh_returns_correct_results(self):
+        """jlinalg.eigh returns correct eigendecomp via eigendecompose_kinship."""
         n = 50
-        rng = np.random.default_rng(42)
-        A = rng.standard_normal((n, n))
-        K = (A @ A.T) / n
-        K_ptr = K.ctypes.data
-
-        # Call _eigh_inplace directly (eigendecompose_kinship prefers DSYEVD now)
-        eigenvalues, eigenvectors = _eigh_inplace(K)
-
-        assert eigenvectors.ctypes.data == K_ptr, (
-            "eigenvectors should reuse K's buffer; got new allocation"
-        )
-
-    def test_fallback_when_gufunc_unavailable(self):
-        """_eigh_inplace falls back to np.linalg.eigh when gufunc unavailable."""
-        from jamma.lmm.eigen import _eigh_inplace
-
-        n = 30
         rng = np.random.default_rng(42)
         A = rng.standard_normal((n, n))
         K = (A @ A.T) / n
         K_ref = K.copy()
 
-        with patch("jamma.lmm.eigen._eigh_lo", None):
-            eigenvalues, eigenvectors = _eigh_inplace(K.copy())
+        with (
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_proc,
+        ):
+            mock_vm.return_value.available = 1e12
+            mock_vm.return_value.total = 1e12
+            mock_proc.return_value.memory_info.return_value.rss = 1e9
+            mock_proc.return_value.memory_info.return_value.vms = 2e9
 
-        # Verify correctness: reconstruction K = U @ diag(w) @ U.T
+            eigenvalues, eigenvectors = eigendecompose_kinship(K, check_memory=False)
+
         K_reconstructed = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
         np.testing.assert_allclose(K_ref, K_reconstructed, rtol=1e-10, atol=1e-14)
 
-    def test_eigh_inplace_rejects_non_float64(self):
-        """_eigh_inplace raises TypeError for non-float64 input."""
-        from jamma.lmm.eigen import _eigh_inplace
-
-        K = np.eye(10, dtype=np.float32)
-        with pytest.raises(TypeError, match="float64"):
-            _eigh_inplace(K)
-
-    def test_eigh_inplace_rejects_readonly_array(self):
-        """_eigh_inplace raises ValueError for read-only arrays."""
-        from jamma.lmm.eigen import _eigh_inplace
-
-        K = np.eye(10, dtype=np.float64)
-        K.flags.writeable = False
-        with pytest.raises(ValueError, match="writeable"):
-            _eigh_inplace(K)
-
-    def test_buffer_mismatch_clears_inplace_flag(self, monkeypatch):
-        """Buffer mismatch sets INPLACE_EIGEN_AVAILABLE to False."""
-        import jamma.lmm.eigen as eigen_mod
-
-        # monkeypatch auto-restores on teardown, even on unexpected exceptions
-        monkeypatch.setattr(eigen_mod, "INPLACE_EIGEN_AVAILABLE", True)
-
-        n = 20
-        rng = np.random.default_rng(99)
-        A = rng.standard_normal((n, n))
-        K = (A @ A.T) / n
-
-        # Mock _eigh_lo to return correct results but in a NEW buffer
-        # (simulates gufunc ignoring `out=` parameter)
-        def fake_eigh_lo(K_in, *, signature=None, out=None):
-            eigenvalues_out, _ = out
-            w, v = np.linalg.eigh(K_in)
-            eigenvalues_out[:] = w
-            # Return eigenvectors in a NEW allocation (not K_in's buffer)
-            return w, v.copy()
-
-        with patch("jamma.lmm.eigen._eigh_lo", fake_eigh_lo):
-            eigenvalues, eigenvectors = eigen_mod._eigh_inplace(K)
-
-        # The flag should now be False
-        assert eigen_mod.INPLACE_EIGEN_AVAILABLE is False, (
-            "INPLACE_EIGEN_AVAILABLE should be set False on buffer mismatch"
-        )
-
-        # Results should still be correct
-        K_ref = (A @ A.T) / n
-        K_reconstructed = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
-        np.testing.assert_allclose(K_ref, K_reconstructed, rtol=1e-10, atol=1e-14)
-
-        # Memory estimator should now see the flag as False
-        from jamma.core.memory import _inplace_eigen_available
-
-        assert _inplace_eigen_available() is False
-
-    def test_fallback_estimate_includes_eigenvector_allocation(self):
-        """When in-place unavailable, memory estimate adds eigenvector buffer."""
-        # _inplace_eigen_available=False: np.linalg.eigh allocates K and U
-        with patch("jamma.core.memory._inplace_eigen_available", return_value=False):
-            est = estimate_eigendecomp_memory(200_000)
-            # K (320GB) + U (320GB) + DSYEVD workspace (~640GB) = ~1280GB
-            assert 1275 < est < 1285
-
-        # _inplace_eigen_available=True: in-place DSYEVD (K/U shared)
-        with patch("jamma.core.memory._inplace_eigen_available", return_value=True):
-            est = estimate_eigendecomp_memory(200_000)
-            # K/U shared (320GB) + DSYEVD workspace (~640GB) = ~960GB
-            assert 955 < est < 965
+    def test_estimate_always_includes_eigenvector_allocation(self):
+        """Memory estimate includes K + U + K_work staging + DSYEVD workspace."""
+        est = estimate_eigendecomp_memory(200_000)
+        # K (320GB) + U (320GB) + K_work (320GB) + DSYEVD workspace (~640GB) = ~1600GB
+        assert 1595 < est < 1605
 
 
 @pytest.mark.tier0
@@ -390,16 +309,13 @@ class TestDsyevdWorkspaceAccuracy:
             )
 
     def test_peak_components_do_not_double_count(self):
-        """_dsyevd_peak_gb = K + eigvec(if not inplace) + workspace. No overlap."""
+        """_dsyevd_peak_gb = K + U + K_work (staging) + workspace. No overlap."""
         n = 10_000
         kinship_gb = n**2 * 8 / 1e9
         workspace_gb = _dsyevd_workspace_gb(n)
-        with patch("jamma.core.memory._inplace_eigen_available", return_value=True):
-            peak = _dsyevd_peak_gb(n)
-            assert peak == pytest.approx(kinship_gb + workspace_gb, rel=0.01)
-        with patch("jamma.core.memory._inplace_eigen_available", return_value=False):
-            peak = _dsyevd_peak_gb(n)
-            assert peak == pytest.approx(2 * kinship_gb + workspace_gb, rel=0.01)
+        # jlinalg.eigh: K + U + K_work staging copy + workspace
+        peak = _dsyevd_peak_gb(n)
+        assert peak == pytest.approx(3 * kinship_gb + workspace_gb, rel=0.01)
 
     @pytest.mark.parametrize("n", [100, 1000, 10_000])
     def test_workspace_is_within_10pct_of_formula(self, n):
@@ -424,7 +340,7 @@ class TestPreFlightDsyevrAware:
         dsyevr_peak = _dsyevr_peak_gb(n_samples)
         available_gb = (dsyevr_peak + dsyevd_peak) / 2
         with (
-            patch("jamma.lmm.eigen._DSYEVR_AVAILABLE", True),
+            patch("jamma.jlinalg.blas_has_dsyevr", 1),
             patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
             patch("jamma.core.memory.psutil.Process") as mock_proc,
         ):
@@ -442,7 +358,7 @@ class TestPreFlightDsyevrAware:
         dsyevr_peak = _dsyevr_peak_gb(n_samples)
         available_gb = dsyevr_peak * 0.5
         with (
-            patch("jamma.lmm.eigen._DSYEVR_AVAILABLE", True),
+            patch("jamma.jlinalg.blas_has_dsyevr", 1),
             patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
             patch("jamma.core.memory.psutil.Process") as mock_proc,
         ):
@@ -458,7 +374,7 @@ class TestPreFlightDsyevrAware:
         n_samples = 1_000
         n_snps = 1_000
         with (
-            patch("jamma.lmm.eigen._DSYEVR_AVAILABLE", True),
+            patch("jamma.jlinalg.blas_has_dsyevr", 1),
             patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
             patch("jamma.core.memory.psutil.Process") as mock_proc,
         ):
@@ -469,14 +385,14 @@ class TestPreFlightDsyevrAware:
             result = check_memory_before_run(n_samples, n_snps)
             assert result is True
 
-    def test_no_import_error_when_eigen_unavailable(self):
-        """Pre-flight check works even if jamma.lmm.eigen is not importable."""
+    def test_no_import_error_when_jlinalg_unavailable(self):
+        """Pre-flight check works even if jamma.jlinalg is not importable."""
         import sys
 
         n_samples = 100
         n_snps = 100
         with (
-            patch.dict(sys.modules, {"jamma.lmm.eigen": None}),
+            patch.dict(sys.modules, {"jamma.jlinalg": None}),
             patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
             patch("jamma.core.memory.psutil.Process") as mock_proc,
         ):

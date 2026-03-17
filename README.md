@@ -21,7 +21,7 @@
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
 - **Cross-platform**: Runs on Linux, macOS, and Windows — NumPy backend works everywhere, JAX adds batch acceleration on Linux and ARM Mac
 - **Optimized for Intel**: Best performance on Intel CPUs with MKL BLAS. Runs well on Apple Silicon (Accelerate BLAS). Other architectures (AMD, ARM Linux) work correctly but with less BLAS optimization
-- **Pure Python + optional C extensions**: NumPy + optional JAX stack; C extensions for DSYEVR eigendecomposition and OpenMP-parallel Wald tests, JAX for batch MLE optimization
+- **Pure Python + jlinalg + optional C extensions**: NumPy + optional JAX stack; jlinalg C layer for vendor BLAS dispatch (DSYEVD/DSYEVR eigendecomposition, DSYRK, DGEMM) and OpenMP-parallel Wald tests, JAX for batch MLE optimization
 - **Large-scale ready**: Optional [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) wheels (numpy 2.4.2) for >46k sample eigendecomposition
 
 ## Installation
@@ -246,7 +246,7 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 
 ## Performance
 
-Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2 (AC power), GEMMA 0.98.5.
+Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2, GEMMA 0.98.5.
 Best-of runs, end-to-end wall clock:
 
 | Operation | GEMMA 0.98.5 | JAMMA NumPy | JAMMA NumPy+C | JAMMA JAX (batch) | JAMMA JAX (streaming) | C speedup | vs GEMMA |
@@ -297,7 +297,8 @@ The large speedup has two sources: (1) JAMMA computes per-chromosome LOCO kinshi
 - [x] Pre-flight memory checks (fail-fast before OOM)
 - [x] RSS memory logging at workflow boundaries
 - [x] Incremental result writing
-- [x] Optional C extensions: DSYEVR eigendecomposition (O(n) workspace, enables >100k samples) and OpenMP-parallel Wald tests (auto-fallback to pure Python)
+- [x] jlinalg C layer: vendor BLAS dispatch for eigendecomposition (DSYEVD default, DSYEVR O(n) workspace fallback under memory pressure), DSYRK, DGEMM, plus jlinalg D&C fallback when no vendor LAPACK available
+- [x] Optional C extension: OpenMP-parallel Wald tests (auto-fallback to pure Python)
 
 ### Planned
 
@@ -305,18 +306,15 @@ The large speedup has two sources: (1) JAMMA computes per-chromosome LOCO kinshi
 
 ## Architecture
 
-JAMMA uses NumPy for data loading and kinship. Eigendecomposition defaults to DSYEVD (via numpy) but falls back to DSYEVR (C extension, O(n) workspace) under memory pressure — critical for >100k samples. At LMM it splits into a **JAX backend** (JIT, vmap, sharding) or a **NumPy backend** with an optional C extension for OpenMP-parallel Wald tests.
+JAMMA uses NumPy for data loading and kinship. Eigendecomposition uses `jlinalg.eigh` which dispatches to vendor DSYEVD (default) or DSYEVR (O(n) workspace, under memory pressure) via the jlinalg C layer, with a jlinalg D&C fallback when no vendor LAPACK is available. At LMM it splits into a **JAX backend** (JIT, vmap, sharding) or a **NumPy backend** with an optional C extension for OpenMP-parallel Wald tests.
 
 ```mermaid
 flowchart TD
     CLI["CLI / gwas()"] --> PIPE["PipelineRunner"]
     PIPE --> LOAD["Load PLINK + Phenotypes<br>(NumPy)"]
     LOAD --> KIN["Kinship<br>(NumPy matmul)"]
-    KIN --> EIGMEM{"DSYEVD fits<br>in memory?"}
-    EIGMEM -->|yes| EIGD["Eigendecomposition<br>(LAPACK DSYEVD · O(n²) workspace)"]
-    EIGMEM -->|no| EIGR["Eigendecomposition<br>(LAPACK DSYEVR · O(n) workspace)"]
-    EIGD --> DET{"detect_backend()"}
-    EIGR --> DET
+    KIN --> EIG["Eigendecomposition<br>(jlinalg.eigh · vendor DSYEVD/DSYEVR dispatch)"]
+    EIG --> DET{"detect_backend()"}
     DET -->|"jax"| JAX["JAX Streaming Runner<br>JIT + vmap + sharding"]
     DET -->|"numpy"| NP["NumPy Batch Runner"]
     NP --> CEXT{"C LMM extension<br>available?"}

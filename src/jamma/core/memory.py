@@ -47,80 +47,56 @@ def _check_available(total_gb: float) -> tuple[float, bool]:
     return available_gb, (total_gb + margin_gb) < available_gb
 
 
-_inplace_import_warned = False
-
-
-def _inplace_eigen_available() -> bool:
-    """Check if in-place eigendecomp is available (lazy import to avoid circularity).
-
-    Called by memory estimation functions to determine whether peak estimates
-    should include separate eigenvector allocation.
-
-    Not cached because INPLACE_EIGEN_AVAILABLE can be set to False at runtime
-    if the gufunc's buffer reuse fails (see _eigh_inplace).
-    """
-    global _inplace_import_warned
-    try:
-        from jamma.lmm.eigen import INPLACE_EIGEN_AVAILABLE
-
-        return INPLACE_EIGEN_AVAILABLE
-    except ImportError:
-        # Covers both module-not-found and attribute-not-found (from-import
-        # raises ImportError for both cases).  Log only once to avoid noise
-        # in LOCO runs that call this per-chromosome.
-        if not _inplace_import_warned:
-            _inplace_import_warned = True
-            logger.warning(
-                "Could not import INPLACE_EIGEN_AVAILABLE from jamma.lmm.eigen; "
-                "memory estimates will include separate eigenvector allocation. "
-                "This may indicate a broken installation."
-            )
-        return False
-
-
 def _eigendecomp_workspace_gb(n: int) -> float:
     """Return eigendecomp workspace in GB (DSYEVD, the default driver)."""
     return _dsyevd_workspace_gb(n)
 
 
 def _eigendecomp_eigvec_gb(kinship_gb: float) -> float:
-    """Return eigenvector memory (GB) for eigendecomp (DSYEVD, the default).
+    """Return eigenvector memory (GB) for eigendecomp.
 
-    DSYEVD in-place overwrites K with eigenvectors (no extra allocation).
-    np.linalg.eigh fallback allocates a separate eigenvector array.
-
-    Note: DSYEVR (used under memory pressure) allocates a separate
-    F-contiguous Z array, but its total peak is lower because workspace
-    is O(N) not O(N^2). The dispatch decision happens in
-    eigendecompose_kinship(), not here.
+    jlinalg.eigh always allocates a separate eigenvector array (K is used
+    as scratch for Householder vectors during DSYTRD, eigenvectors are
+    returned in a new buffer).
     """
-    if _inplace_eigen_available():
-        return 0.0
     return kinship_gb
 
 
 def _dsyevd_peak_gb(n: int) -> float:
     """Peak memory (GB) for DSYEVD eigendecomposition.
 
-    DSYEVD in-place: K (shared with U) + O(N^2) workspace.
-    DSYEVD fallback: K + U (separate) + O(N^2) workspace.
+    jlinalg_eigh_c mallocs a K_work staging copy before calling vendor DSYEVD,
+    so peak is: K (caller) + U (caller) + K_work (staging) + DSYEVD workspace.
     """
     if n < 0:
         raise ValueError(f"n_samples must be >= 0, got {n}")
     kinship_gb = _square_matrix_gb(n)
-    return kinship_gb + _eigendecomp_eigvec_gb(kinship_gb) + _dsyevd_workspace_gb(n)
+    k_work_gb = kinship_gb  # staging copy in eigh.c line 77
+    return (
+        kinship_gb
+        + _eigendecomp_eigvec_gb(kinship_gb)
+        + k_work_gb
+        + _dsyevd_workspace_gb(n)
+    )
 
 
 def _dsyevr_peak_gb(n: int) -> float:
     """Peak memory (GB) for DSYEVR eigendecomposition.
 
-    DSYEVR always allocates a separate F-contiguous Z array (K + Z coexist),
-    but workspace is O(N) not O(N^2).
+    jlinalg_dsyevr_ext allocates a col-major Z_col buffer for LAPACK output,
+    so peak is: K (overwritten as scratch) + U (caller output)
+    + Z_col (transpose staging) + O(N).
     """
     if n < 0:
         raise ValueError(f"n_samples must be >= 0, got {n}")
     kinship_gb = _square_matrix_gb(n)
-    return 2 * kinship_gb + _dsyevr_workspace_gb(n)
+    z_col_gb = kinship_gb  # col-major staging in blas_dispatch.c line 1408
+    return (
+        kinship_gb
+        + _eigendecomp_eigvec_gb(kinship_gb)
+        + z_col_gb
+        + _dsyevr_workspace_gb(n)
+    )
 
 
 def estimate_eigendecomp_memory(n_samples: int) -> float:
@@ -130,17 +106,13 @@ def estimate_eigendecomp_memory(n_samples: int) -> float:
     used under memory pressure, actual consumption will be lower — this
     is intentionally conservative for pre-flight budget planning.
 
-    DSYEVD in-place (default when gufunc available):
-    - K/U (shared buffer): n^2 * 8 bytes [kinship overwritten with eigenvectors]
+    jlinalg.eigh DSYEVD path allocates:
+    - K (caller scratch): n^2 * 8 bytes
+    - U (caller eigenvectors): n^2 * 8 bytes
+    - K_work (staging copy in eigh.c): n^2 * 8 bytes
     - workspace (DSYEVD O(n^2))
 
-    DSYEVD fallback (when gufunc unavailable):
-    - K (input): n^2 * 8 bytes
-    - U (output eigenvectors): n^2 * 8 bytes
-    - workspace (DSYEVD O(n^2))
-
-    For 200k samples (DSYEVD in-place):  320GB + ~640GB = ~960GB
-    For 200k samples (DSYEVD fallback): 320GB + 320GB + ~640GB = ~1280GB
+    For 200k samples: 320GB + 320GB + 320GB + ~640GB = ~1600GB
 
     Args:
         n_samples: Number of samples (individuals).
@@ -258,11 +230,9 @@ def estimate_workflow_memory(
     # kinship accumulation in _compute_kinship_inmemory
     peak_kinship = genotypes_gb * 2 + kinship_gb
 
-    # Phase 2 (eigendecomp): K + workspace + eigenvectors (driver-dependent)
-    # (genotypes can be freed during eigendecomp if not needed for LMM)
-    peak_eigendecomp = (
-        kinship_gb + _eigendecomp_eigvec_gb(kinship_gb) + eigendecomp_workspace_gb
-    )
+    # Phase 2 (eigendecomp): use _dsyevd_peak_gb which accounts for
+    # K + U + K_work staging copy + DSYEVD workspace.
+    peak_eigendecomp = _dsyevd_peak_gb(n_samples)
 
     # Phase 3 (LMM): eigenvectors + genotypes + working
     # (kinship freed, eigenvalues are small ~n*8 bytes)
@@ -356,8 +326,7 @@ class StreamingMemoryBreakdown(NamedTuple):
 
     All values in GB. Peak memory is the maximum across workflow phases:
     1. Kinship accumulation: kinship + chunk
-    2. Eigendecomposition: K/U shared buffer + workspace (typically peak;
-       eigenvectors overwrite K in-place when gufunc available)
+    2. Eigendecomposition: K + U (separate) + workspace (typically peak)
     3. LMM: eigenvectors + chunk + rotation buffer + grid REML
 
     The key difference from full-load estimation is that genotypes are
@@ -370,7 +339,7 @@ class StreamingMemoryBreakdown(NamedTuple):
     chunk_gb: float  # n * chunk_size * 8 bytes (float64 for precision)
     rotation_buffer_gb: float  # n * chunk_size * 8 * pipeline_buffers bytes for UtG
     grid_reml_gb: float  # n_grid * chunk_size * 8 bytes for Grid REML intermediate
-    total_peak_gb: float  # Max of phases (eigendecomp is typically peak)
+    total_peak_gb: float  # Max of phases (eigendecomp typically peak)
     available_gb: float  # Current available system memory
     sufficient: bool  # Whether available exceeds total plus margin (10% capped at 10GB)
 
@@ -442,13 +411,12 @@ def estimate_streaming_memory(
 
     For 200k samples, 10k chunk, n_grid=50:
     - Kinship accumulation: 320GB + 16GB = 336GB
-    - Eigendecomp (in-place): 320GB + ~640GB = ~960GB (PEAK, K/U shared buffer)
-    - Eigendecomp (fallback): 320GB + 320GB + ~640GB = ~1280GB
+    - Eigendecomp: 320GB + 320GB + ~640GB = ~1280GB (PEAK)
     - LMM: 320GB + 16GB + 16GB + Uab/Iab
 
-    Note: Eigendecomposition cannot be streamed. With in-place eigendecomp,
-    K's buffer is reused for eigenvectors (saving one n²×8 allocation), but
-    DSYEVD's O(n²) workspace still dominates peak memory.
+    Note: Eigendecomposition cannot be streamed. jlinalg.eigh allocates
+    separate eigenvectors (K is used as scratch), so peak includes both
+    K and U plus the O(n²) DSYEVD workspace.
 
     Args:
         n_samples: Number of samples (individuals).
@@ -486,10 +454,9 @@ def estimate_streaming_memory(
 
     # Peak memory calculation by workflow phase
     peak_kinship = kinship_gb + chunk_gb
-    # Eigendecomp: K + workspace + eigenvectors (driver-dependent)
-    peak_eigendecomp = (
-        kinship_gb + _eigendecomp_eigvec_gb(kinship_gb) + eigendecomp_workspace_gb
-    )
+    # Eigendecomp: use _dsyevd_peak_gb which accounts for
+    # K + U + K_work staging copy + DSYEVD workspace.
+    peak_eigendecomp = _dsyevd_peak_gb(n_samples)
     peak_lmm = (
         eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb + uab_iab_gb
     )
@@ -798,15 +765,17 @@ def check_memory_before_run(
     reported_peak = est.total_peak_gb
     driver_note = "eigendecomp phase"
     try:
-        from jamma.lmm.eigen import _DSYEVR_AVAILABLE
+        from jamma import jlinalg
+
+        _dsyevr_available = bool(jlinalg.blas_has_dsyevr)
     except ImportError:
-        _DSYEVR_AVAILABLE = False
+        _dsyevr_available = False
         logger.debug(
-            "Could not import _DSYEVR_AVAILABLE from jamma.lmm.eigen; "
+            "Could not import jlinalg; "
             "pre-flight check will use DSYEVD peak estimate only."
         )
 
-    if _DSYEVR_AVAILABLE:
+    if _dsyevr_available:
         dsyevd_peak = _dsyevd_peak_gb(n_samples)
         margin = _memory_margin_gb(dsyevd_peak)
         if dsyevd_peak + margin > snap.available_gb:

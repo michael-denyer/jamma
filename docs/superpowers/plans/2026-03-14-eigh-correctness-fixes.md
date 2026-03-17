@@ -6,13 +6,13 @@
 
 **Architecture:** Four independent file rewrites. dsytrd gets DLATRD panel factorization + dsyr2k trailing update. dormtr gets WY blocked application via DLARFT/DLARFB + dgemm. dstedc gets correct deflation, z-vector normalization, dlaed3 product formula for secular eigenvectors, and top-level workspace allocation. eigh gets documentation fixes only.
 
-**Tech Stack:** C11, numpy C API, jblas BLAS primitives (dgemm, dsyr2k, ddot, daxpy, dscal, dgemv)
+**Tech Stack:** C11, numpy C API, jlinalg BLAS primitives (dgemm, dsyr2k, ddot, daxpy, dscal, dgemv)
 
 **Spec:** `docs/superpowers/specs/2026-03-14-eigh-correctness-fixes-design.md`
 
 **Test commands:**
-- Fast eigh tests: `uv run pytest tests/test_jblas_eigh.py -x -n0 -v -k "not slow and not mouse"`
-- Slow eigh tests: `uv run pytest tests/test_jblas_eigh.py -x -n0 -v`
+- Fast eigh tests: `uv run pytest tests/test_jlinalg_eigh.py -x -n0 -v -k "not slow and not mouse"`
+- Slow eigh tests: `uv run pytest tests/test_jlinalg_eigh.py -x -n0 -v`
 - Full suite: `uv run pytest tests/ -x`
 
 **CRITICAL RULES:**
@@ -28,29 +28,29 @@
 
 ### Task 1: Rewrite dsytrd.c with blocked algorithm
 
-This is a full rewrite of `src/jamma/jblas/src/dsytrd.c`. The file currently implements an unblocked dsytd2-style algorithm. Replace with LAPACK's blocked scheme: DLATRD panel factorization + dsyr2k trailing update.
+This is a full rewrite of `src/jamma/jlinalg/src/dsytrd.c`. The file currently implements an unblocked dsytd2-style algorithm. Replace with LAPACK's blocked scheme: DLATRD panel factorization + dsyr2k trailing update.
 
 **Files:**
-- Rewrite: `src/jamma/jblas/src/dsytrd.c`
-- Test: `tests/test_jblas_eigh.py` (existing tests validate correctness)
+- Rewrite: `src/jamma/jlinalg/src/dsytrd.c`
+- Test: `tests/test_jlinalg_eigh.py` (existing tests validate correctness)
 
-**Available BLAS primitives** (from `jblas.h`, use via `jblas_dispatch.*` or direct `jblas_*_c` calls):
-- `jblas_dispatch.ddot(n, x, 1, y, 1)` — dot product
-- `jblas_dispatch.daxpy(n, alpha, x, 1, y, 1)` — y += alpha*x
-- `jblas_dispatch.dscal(n, alpha, x, 1)` — x *= alpha
-- `jblas_dispatch.dgemv(m, n, A, x, y)` — y = A*x (row-major, no transpose)
-- `jblas_dgemm_c(M, N, K, A, lda, B, ldb, C, ldc, transa, transb)` — C = op(A)*op(B)
-- `jblas_dsyr2k_c(N, K, A, lda, B, ldb, C, ldc)` — C -= A*B^T + B*A^T
+**Available BLAS primitives** (from `jlinalg.h`, use via `jlinalg_dispatch.*` or direct `jlinalg_*_c` calls):
+- `jlinalg_dispatch.ddot(n, x, 1, y, 1)` — dot product
+- `jlinalg_dispatch.daxpy(n, alpha, x, 1, y, 1)` — y += alpha*x
+- `jlinalg_dispatch.dscal(n, alpha, x, 1)` — x *= alpha
+- `jlinalg_dispatch.dgemv(m, n, A, x, y)` — y = A*x (row-major, no transpose)
+- `jlinalg_dgemm_c(M, N, K, A, lda, B, ldb, C, ldc, transa, transb)` — C = op(A)*op(B)
+- `jlinalg_dsyr2k_c(N, K, A, lda, B, ldb, C, ldc)` — C -= A*B^T + B*A^T
 
 **Key design decisions:**
 - NB=64 (block size constant, tunable)
 - `dsymv_lower` is a static helper within this file (not in dispatch table). It computes `y = alpha * A * x` where A is symmetric, lower triangle stored in row-major. Must handle the full trailing submatrix using symmetry: for row i, col k, access `A[max(i,k)*lda + min(i,k)]` for lower, `A[min(i,k)*lda + max(i,k)]` for upper — but since A is stored with both triangles updated by the rank-2k step, we can just read A directly in the trailing submatrix.
 - `dlarfg` is preserved from current code (it's correct)
-- The rank-2k trailing update uses `jblas_dsyr2k_c` which does `C -= A*B^T + B*A^T`. The DLATRD algorithm produces V and W such that `A_trail -= V*W^T + W*V^T`, which matches dsyr2k's sign convention exactly.
+- The rank-2k trailing update uses `jlinalg_dsyr2k_c` which does `C -= A*B^T + B*A^T`. The DLATRD algorithm produces V and W such that `A_trail -= V*W^T + W*V^T`, which matches dsyr2k's sign convention exactly.
 
 - [ ] **Step 1: Read the current dsytrd.c and understand the structure**
 
-Read `src/jamma/jblas/src/dsytrd.c`. Note: `dlarfg` (lines 54-81) is correct and will be preserved. Everything else gets rewritten.
+Read `src/jamma/jlinalg/src/dsytrd.c`. Note: `dlarfg` (lines 54-81) is correct and will be preserved. Everything else gets rewritten.
 
 - [ ] **Step 2: Write the new dsytrd.c**
 
@@ -58,9 +58,9 @@ Replace the entire file with the blocked implementation. The structure is:
 
 ```c
 /**
- * dsytrd.c — Blocked Householder tridiagonalization for jblas.
+ * dsytrd.c — Blocked Householder tridiagonalization for jlinalg.
  *
- * Implements jblas_dsytrd_c: reduces a symmetric N x N matrix A (stored
+ * Implements jlinalg_dsytrd_c: reduces a symmetric N x N matrix A (stored
  * row-major, lower triangle used) to tridiagonal form T via orthogonal
  * similarity A = Q T Q^T.
  *
@@ -108,13 +108,13 @@ Key implementation details:
 
 **V/W population**: After dlarfg, the Householder vector is stored in column j+i of A with stride lda (one element per row, non-contiguous). Copy v into V[:,i] immediately — this is what LAPACK's DLATRD does. Then use V[:,i] (stride nb_alloc) for all subsequent BLAS operations.
 
-**Trailing dsyr2k update**: After DLATRD completes nb columns, `V + nb * nb_alloc` is the trailing portion as a contiguous `m_trail x nb` row-major submatrix. `jblas_dsyr2k_c(m_trail, nb, V_trail, nb_alloc, W_trail, nb_alloc, A_trail, lda)` does `A_trail -= V_trail * W_trail^T + W_trail * V_trail^T`.
+**Trailing dsyr2k update**: After DLATRD completes nb columns, `V + nb * nb_alloc` is the trailing portion as a contiguous `m_trail x nb` row-major submatrix. `jlinalg_dsyr2k_c(m_trail, nb, V_trail, nb_alloc, W_trail, nb_alloc, A_trail, lda)` does `A_trail -= V_trail * W_trail^T + W_trail * V_trail^T`.
 
 Here is the complete rewrite. Note this is ~300 lines replacing the current ~190 lines:
 
 ```c
 /**
- * dsytrd.c — Blocked Householder tridiagonalization for jblas.
+ * dsytrd.c — Blocked Householder tridiagonalization for jlinalg.
  * [header comment as above]
  */
 
@@ -124,7 +124,7 @@ Here is the complete rewrite. Note this is ~300 lines replacing the current ~190
 #include <string.h>
 #include <stdio.h>
 #include <numpy/arrayobject.h>
-#include "jblas.h"
+#include "jlinalg.h"
 
 #define NB_DSYTRD 64
 
@@ -265,8 +265,8 @@ static void dlatrd_panel(double *A, npy_intp lda, npy_intp N,
     }
 }
 
-/* jblas_dsytrd_c — public API */
-int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
+/* jlinalg_dsytrd_c — public API */
+int jlinalg_dsytrd_c(npy_intp N, double *A, npy_intp lda,
                    double *d, double *e, double *tau)
 {
     if (N <= 0) return 0;
@@ -308,7 +308,7 @@ int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
              * m_panel rows. The first row of V corresponds to row j+1 in A.
              * Row nb of V corresponds to row j+nb+1 in A = first row of trailing.
              * So V_trail = V + nb * nb_alloc, with m_trail rows, nb columns. */
-            jblas_dsyr2k_c(m_trail, nb,
+            jlinalg_dsyr2k_c(m_trail, nb,
                            V + nb * nb_alloc, nb_alloc,
                            W + nb * nb_alloc, nb_alloc,
                            A + (j + nb + 1) * lda + (j + nb + 1), lda);
@@ -333,7 +333,7 @@ int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
 
 ```bash
 uv run pip install -e . --no-build-isolation 2>&1 | tail -5
-uv run pytest tests/test_jblas_eigh.py -x -n0 -v -k "not slow and not mouse"
+uv run pytest tests/test_jlinalg_eigh.py -x -n0 -v -k "not slow and not mouse"
 ```
 
 Expected: All fast eigh tests pass. If any fail, debug the dsytrd implementation (most likely: V/W indexing, dsymv symmetry access, or rank-2k trailing offset).
@@ -341,7 +341,7 @@ Expected: All fast eigh tests pass. If any fail, debug the dsytrd implementation
 - [ ] **Step 4: Run slow tests including mouse_hs1940**
 
 ```bash
-uv run pytest tests/test_jblas_eigh.py -x -n0 -v
+uv run pytest tests/test_jlinalg_eigh.py -x -n0 -v
 ```
 
 Expected: All tests pass. The mouse_hs1940 test (N=1940) exercises the blocked path (30 panels of 64 + 1 tail of 14).
@@ -349,12 +349,12 @@ Expected: All tests pass. The mouse_hs1940 test (N=1940) exercises the blocked p
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/jamma/jblas/src/dsytrd.c
+git add src/jamma/jlinalg/src/dsytrd.c
 git commit -m "fix(80): dsytrd — blocked DLATRD + dsyr2k trailing update
 
 Replace unblocked dsytd2-style algorithm with LAPACK's blocked scheme.
 NB=64 panel factorization via DLATRD, trailing rank-2k update via
-jblas_dsyr2k_c. Static dsymv_lower helper for symmetric matrix-vector
+jlinalg_dsyr2k_c. Static dsymv_lower helper for symmetric matrix-vector
 product within panel factorization."
 ```
 
@@ -364,11 +364,11 @@ product within panel factorization."
 
 ### Task 2: Rewrite dormtr.c with WY blocked algorithm
 
-Full rewrite of `src/jamma/jblas/src/dormtr.c`. Currently applies per-reflector rank-1 updates. Replace with DLARFT (form triangular T factor) + DLARFB (block reflector application via dgemm).
+Full rewrite of `src/jamma/jlinalg/src/dormtr.c`. Currently applies per-reflector rank-1 updates. Replace with DLARFT (form triangular T factor) + DLARFB (block reflector application via dgemm).
 
 **Files:**
-- Rewrite: `src/jamma/jblas/src/dormtr.c`
-- Test: `tests/test_jblas_eigh.py` (existing tests)
+- Rewrite: `src/jamma/jlinalg/src/dormtr.c`
+- Test: `tests/test_jlinalg_eigh.py` (existing tests)
 
 **Key design decisions:**
 - NB must match dsytrd's NB (64). Use same `#define NB_DORMTR 64`.
@@ -399,15 +399,15 @@ step 2: W = T @ W                   — triangular multiply (nb x nb * nb x M)
 step 3: C[j+1:N, :] -= V @ W       — dgemm(V, W, temp) then subtract
 ```
 
-For step 3, since `jblas_dgemm_c` computes C = A*B (overwriting C, no alpha/beta), we cannot use dgemm directly for the subtract. Instead, loop directly — nb rank-1 updates, each touching vlen x M elements, with sequential memory access for good cache behavior. No extra N^2 memory needed.
+For step 3, since `jlinalg_dgemm_c` computes C = A*B (overwriting C, no alpha/beta), we cannot use dgemm directly for the subtract. Instead, loop directly — nb rank-1 updates, each touching vlen x M elements, with sequential memory access for good cache behavior. No extra N^2 memory needed.
 
 - [ ] **Step 1: Write the new dormtr.c**
 
 ```c
 /**
- * dormtr.c — Blocked Householder back-transformation for jblas.
+ * dormtr.c — Blocked Householder back-transformation for jlinalg.
  *
- * Implements jblas_dormtr_c: applies Q (from dsytrd's Householder vectors
+ * Implements jlinalg_dormtr_c: applies Q (from dsytrd's Householder vectors
  * stored in the lower triangle of A) to the eigenvector matrix C:
  *   C = Q @ C
  *
@@ -430,7 +430,7 @@ For step 3, since `jblas_dgemm_c` computes C = A*B (overwriting C, no alpha/beta
 #include <stdlib.h>
 #include <string.h>
 #include <numpy/arrayobject.h>
-#include "jblas.h"
+#include "jlinalg.h"
 
 #define NB_DORMTR 64
 
@@ -478,7 +478,7 @@ static void dlarft(npy_intp vlen, npy_intp nb,
     }
 }
 
-int jblas_dormtr_c(npy_intp N, npy_intp M,
+int jlinalg_dormtr_c(npy_intp N, npy_intp M,
                    const double *A, npy_intp lda, const double *tau,
                    double *C, npy_intp ldc)
 {
@@ -590,7 +590,7 @@ int jblas_dormtr_c(npy_intp N, npy_intp M,
 
 ```bash
 uv run pip install -e . --no-build-isolation 2>&1 | tail -5
-uv run pytest tests/test_jblas_eigh.py -x -n0 -v -k "not slow and not mouse"
+uv run pytest tests/test_jlinalg_eigh.py -x -n0 -v -k "not slow and not mouse"
 ```
 
 Expected: All fast tests pass. If not, debug dormtr (most likely: V_block indexing, DLARFT T computation, or DLARFB step 2 in-place correctness).
@@ -598,7 +598,7 @@ Expected: All fast tests pass. If not, debug dormtr (most likely: V_block indexi
 - [ ] **Step 3: Run full eigh tests**
 
 ```bash
-uv run pytest tests/test_jblas_eigh.py -x -n0 -v
+uv run pytest tests/test_jlinalg_eigh.py -x -n0 -v
 ```
 
 Expected: All tests pass.
@@ -606,7 +606,7 @@ Expected: All tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/jamma/jblas/src/dormtr.c
+git add src/jamma/jlinalg/src/dormtr.c
 git commit -m "fix(80): dormtr — WY blocked via DLARFT/DLARFB
 
 Replace per-reflector rank-1 updates with blocked WY algorithm.
@@ -621,7 +621,7 @@ products. NB=64 matching dsytrd."
 
 ### Task 3: Fix dstedc divide-and-conquer merge
 
-This is the most complex task. Fix four issues in `src/jamma/jblas/src/dstedc.c`:
+This is the most complex task. Fix four issues in `src/jamma/jlinalg/src/dstedc.c`:
 1. Lower DSTEDC_BASE from 2000 to 25
 2. Fix deflation threshold to LAPACK-style local tolerance
 3. Add z-vector 1/sqrt(2) normalization
@@ -629,8 +629,8 @@ This is the most complex task. Fix four issues in `src/jamma/jblas/src/dstedc.c`
 5. Top-level workspace allocation (single N x N buffer passed through recursion)
 
 **Files:**
-- Modify: `src/jamma/jblas/src/dstedc.c`
-- Test: `tests/test_jblas_eigh.py` (existing tests)
+- Modify: `src/jamma/jlinalg/src/dstedc.c`
+- Test: `tests/test_jlinalg_eigh.py` (existing tests)
 
 **Key design decisions:**
 
@@ -673,7 +673,7 @@ for (k = 0; k < n_nd; k++) {
 This is O(n_nd^2) per eigenvalue, O(n_nd^3) total — same as the naive formula but numerically stable because both numerator and denominator products involve differences of similar magnitude.
 
 **Memory — top-level allocation:**
-`jblas_dstedc_c` allocates:
+`jlinalg_dstedc_c` allocates:
 - `work`: N x N doubles (single workspace buffer for merge)
 - `iwork`: 5*N npy_intp (permutation + scratch indices)
 - These are passed to `dstedc_recurse` and `merge_rank1` via parameters.
@@ -809,9 +809,9 @@ for (npy_intp i = 0; i < n_nd; i++) {
 
 - [ ] **Step 5: Implement top-level workspace allocation**
 
-Modify `jblas_dstedc_c` to allocate workspace and pass to `dstedc_recurse`:
+Modify `jlinalg_dstedc_c` to allocate workspace and pass to `dstedc_recurse`:
 ```c
-int jblas_dstedc_c(npy_intp N, double *d, double *e,
+int jlinalg_dstedc_c(npy_intp N, double *d, double *e,
                    double *Z, npy_intp ldz)
 {
     if (N <= 0 || N == 1) return 0;
@@ -877,7 +877,7 @@ Let's use option 2: pass one N*N workspace for Q_sec, malloc Z_new locally.
 
 ```bash
 uv run pip install -e . --no-build-isolation 2>&1 | tail -5
-uv run pytest tests/test_jblas_eigh.py -x -n0 -v -k "not slow and not mouse"
+uv run pytest tests/test_jlinalg_eigh.py -x -n0 -v -k "not slow and not mouse"
 ```
 
 This is the critical step. With DSTEDC_BASE=25, the D&C path is now live for all N > 25 tests (N=31, 63, 64, 65, 71, 72, 73, 100, 127, 128, 129, 200). If any fail, the merge implementation has a bug.
@@ -890,7 +890,7 @@ Expected failure modes if something is wrong:
 - [ ] **Step 7: Run slow tests**
 
 ```bash
-uv run pytest tests/test_jblas_eigh.py -x -n0 -v
+uv run pytest tests/test_jlinalg_eigh.py -x -n0 -v
 ```
 
 Expected: All pass. Mouse_hs1940 (N=1940) exercises D&C with ~78 levels of recursion.
@@ -908,7 +908,7 @@ Expected: All 2208+ tests pass.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add src/jamma/jblas/src/dstedc.c
+git add src/jamma/jlinalg/src/dstedc.c
 git commit -m "fix(80): dstedc — correct D&C merge with LAPACK-style deflation
 
 Lower DSTEDC_BASE from 2000 to 25, enabling divide-and-conquer for
@@ -927,7 +927,7 @@ replaces per-merge malloc/free."
 ### Task 4: Update eigh.c documentation and run final verification
 
 **Files:**
-- Modify: `src/jamma/jblas/src/eigh.c` (documentation only)
+- Modify: `src/jamma/jlinalg/src/eigh.c` (documentation only)
 - Test: full test suite
 
 - [ ] **Step 1: Update eigh.c header comment**
@@ -963,7 +963,7 @@ Expected: All tests pass.
 - [ ] **Step 3: Run benchmarks to verify no performance regression**
 
 ```bash
-uv run pytest tests/test_jblas_eigh.py -x -n0 -v --benchmark-only -m benchmark 2>/dev/null || echo "No benchmark tests — skip"
+uv run pytest tests/test_jlinalg_eigh.py -x -n0 -v --benchmark-only -m benchmark 2>/dev/null || echo "No benchmark tests — skip"
 ```
 
 If no benchmark tests exist, run a quick manual timing:
@@ -971,7 +971,7 @@ If no benchmark tests exist, run a quick manual timing:
 uv run python -c "
 import numpy as np
 import time
-from jamma.jblas import eigh
+from jamma.jlinalg import eigh
 
 rng = np.random.default_rng(42)
 for N in [100, 500, 1000]:
@@ -991,7 +991,7 @@ Expected: Reconstruction < 1e-14, orthogonality < 1e-14 for all sizes.
 - [ ] **Step 4: Commit documentation update**
 
 ```bash
-git add src/jamma/jblas/src/eigh.c
+git add src/jamma/jlinalg/src/eigh.c
 git commit -m "docs(80): eigh — update memory model documentation
 
 Document actual peak memory: 3N^2 + O(N), comprising input K,

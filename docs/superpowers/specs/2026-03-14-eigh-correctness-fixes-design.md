@@ -13,7 +13,7 @@ The implementation passes all tests because QR is correct, but the D&C path (the
 
 ## Scope
 
-Fix all four C source files. No changes to jblas.h, pymodule.c, or `__init__.py`.
+Fix all four C source files. No changes to jlinalg.h, pymodule.c, or `__init__.py`.
 
 ## Design
 
@@ -104,7 +104,7 @@ for each eigenvalue lambda[i]:
 This avoids the `1/(d[k]-lambda)` singularity entirely.
 
 **Memory — top-level allocation:**
-`jblas_dstedc_c` allocates one N×N workspace buffer and passes it through recursion. `merge_rank1` receives workspace pointer instead of malloc/free per call. Additional O(N) work arrays (d_defl, z_defl, permutation, etc.) allocated once at top level.
+`jlinalg_dstedc_c` allocates one N×N workspace buffer and passes it through recursion. `merge_rank1` receives workspace pointer instead of malloc/free per call. Additional O(N) work arrays (d_defl, z_defl, permutation, etc.) allocated once at top level.
 
 ### 4. eigh.c — Documentation only
 
@@ -123,17 +123,17 @@ Existing tests should pass without tolerance changes for synthetic data. The mou
 
 | File | Change |
 |------|--------|
-| `src/jamma/jblas/src/dsytrd.c` | Rewrite: blocked DLATRD + dsyr2k |
-| `src/jamma/jblas/src/dormtr.c` | Rewrite: WY blocked via DLARFT/DLARFB + dgemm |
-| `src/jamma/jblas/src/dstedc.c` | Fix: deflation, z normalization, product formula, memory |
-| `src/jamma/jblas/src/eigh.c` | Documentation update only |
-| `tests/test_jblas_eigh.py` | Potential tolerance adjustments for real-data test |
+| `src/jamma/jlinalg/src/dsytrd.c` | Rewrite: blocked DLATRD + dsyr2k |
+| `src/jamma/jlinalg/src/dormtr.c` | Rewrite: WY blocked via DLARFT/DLARFB + dgemm |
+| `src/jamma/jlinalg/src/dstedc.c` | Fix: deflation, z normalization, product formula, memory |
+| `src/jamma/jlinalg/src/eigh.c` | Documentation update only |
+| `tests/test_jlinalg_eigh.py` | Potential tolerance adjustments for real-data test |
 
 ### Files NOT Modified
 
 | File | Reason |
 |------|--------|
-| `jblas.h` | Public API unchanged |
+| `jlinalg.h` | Public API unchanged |
 | `pymodule.c` | Python wrapper unchanged |
 | `__init__.py` | Fallback unchanged |
 | `hatch_build.py` | Build flags unchanged |

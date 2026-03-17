@@ -259,9 +259,9 @@ class TestEstimateStreamingMemory:
             f"Expected ~0.004GB grid_reml, got {est.grid_reml_gb}"
         )
 
-        # Peak is eigendecomp: ~960GB (K/U shared + DSYEVD workspace)
-        assert 950 < est.total_peak_gb < 970, (
-            f"Expected ~960GB peak (eigendecomp with DSYEVD), got {est.total_peak_gb}"
+        # Peak: K + U + K_work + DSYEVD workspace = 320+320+320+640 = ~1600GB
+        assert 1590 < est.total_peak_gb < 1610, (
+            f"Expected ~1600GB peak (K+U+K_work+workspace), got {est.total_peak_gb}"
         )
 
     def test_chunk_size_affects_chunk_gb(self) -> None:

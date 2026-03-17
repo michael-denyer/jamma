@@ -20,11 +20,11 @@ jobs:
       - name: Download BLIS binary
         continue-on-error: true
         run: |
-          mkdir -p src/jamma/jblas/libs
+          mkdir -p src/jamma/jlinalg/libs
           gh release download v0.2.0 \
             --repo michael-denyer/blis-prebuilt \
             --pattern "libblis-*" \
-            --dir src/jamma/jblas/libs/ \
+            --dir src/jamma/jlinalg/libs/ \
             || echo "BLIS download failed (expected if repo not ready)"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -49,7 +49,7 @@ jobs:
           CIBW_TEST_COMMAND: >-
             python {project}/scripts/smoke_test_c_extension.py &&
             python {project}/scripts/smoke_test_eigen_extension.py &&
-            python {project}/scripts/smoke_test_jblas.py
+            python {project}/scripts/smoke_test_jlinalg.py
           # Install test deps (numpy required for import)
           CIBW_TEST_REQUIRES: "numpy"
 
@@ -66,11 +66,11 @@ jobs:
             tmpdir=$(mktemp -d)
             unzip -q "$whl" -d "$tmpdir"
             # Check for BLIS binary in wheel
-            blis=$(find "$tmpdir" -path '*/jblas/libs/libblis*' | head -1)
+            blis=$(find "$tmpdir" -path '*/jlinalg/libs/libblis*' | head -1)
             if [ -n "$blis" ]; then
               echo "OK: BLIS bundled in $(basename "$whl"): $(basename "$blis")"
             else
-              echo "INFO: No BLIS in $(basename "$whl") (jblas own dgemm will be used)"
+              echo "INFO: No BLIS in $(basename "$whl") (jlinalg own dgemm will be used)"
             fi
             rm -rf "$tmpdir"
           done
@@ -89,11 +89,11 @@ jobs:
       - name: Download BLIS binary
         continue-on-error: true
         run: |
-          mkdir -p src/jamma/jblas/libs
+          mkdir -p src/jamma/jlinalg/libs
           gh release download v0.2.0 \
             --repo michael-denyer/blis-prebuilt \
             --pattern "libblis-*" \
-            --dir src/jamma/jblas/libs/ \
+            --dir src/jamma/jlinalg/libs/ \
             || echo "BLIS download failed (expected if repo not ready)"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -111,7 +111,7 @@ jobs:
           CIBW_TEST_COMMAND: >-
             python {project}/scripts/smoke_test_c_extension.py &&
             python {project}/scripts/smoke_test_eigen_extension.py &&
-            python {project}/scripts/smoke_test_jblas.py
+            python {project}/scripts/smoke_test_jlinalg.py
           CIBW_TEST_REQUIRES: "numpy"
 
       - name: Verify AVX2 instructions in wheels
@@ -136,17 +136,17 @@ jobs:
               exit 1
             fi
             echo "OK: AVX2 instructions verified in $(basename "$whl") [_lmm_accel]"
-            # Verify _jblas.so also contains AVX2 instructions
-            jblas_so=$(find "$tmpdir" -name '_jblas*.so' | head -1)
-            if [ -z "$jblas_so" ]; then
-              echo "FAIL: no _jblas .so found in $(basename "$whl")"
+            # Verify _jlinalg.so also contains AVX2 instructions
+            jlinalg_so=$(find "$tmpdir" -name '_jlinalg*.so' | head -1)
+            if [ -z "$jlinalg_so" ]; then
+              echo "FAIL: no _jlinalg .so found in $(basename "$whl")"
               exit 1
             fi
-            if ! objdump -d "$jblas_so" | grep -q 'vfmadd\|vmulpd\|vaddpd'; then
-              echo "FAIL: no AVX2 instructions in $jblas_so"
+            if ! objdump -d "$jlinalg_so" | grep -q 'vfmadd\|vmulpd\|vaddpd'; then
+              echo "FAIL: no AVX2 instructions in $jlinalg_so"
               exit 1
             fi
-            echo "OK: AVX2 instructions verified in $(basename "$whl") [_jblas]"
+            echo "OK: AVX2 instructions verified in $(basename "$whl") [_jlinalg]"
             rm -rf "$tmpdir"
           done
 

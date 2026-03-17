@@ -1152,6 +1152,16 @@ def run_lmm_loco(
             "The secular update path does not materialise K_loco matrices."
         )
 
+    if use_secular_update:
+        from jamma.lmm.loco_eigen_update import _SECULAR_ACCEL_AVAILABLE
+
+        if not _SECULAR_ACCEL_AVAILABLE:
+            logger.warning(
+                "The _secular_accel C extension has been removed. "
+                "--secular will use Python fallback (O(n^3) per step), "
+                "which hard-fails above 10,000 samples."
+            )
+
     # Read LOCO worker count and log configuration (LOCO-08)
     loco_workers = get_loco_worker_count()
     if loco_workers > 1:

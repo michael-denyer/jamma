@@ -1,8 +1,8 @@
-"""CI smoke test: assert both C extensions compiled and loaded.
+"""CI smoke test: assert C extensions compiled and loaded.
 
 In CI (where the compile step runs before tests), these tests fail hard if
-either extension can't be imported. This prevents the skipif guards in
-test_lmm_accel.py and test_eigen_dsyevr.py from silently hiding breakage.
+the extension can't be imported. This prevents the skipif guards in
+test_lmm_accel.py from silently hiding breakage.
 
 Locally (CI env var not set), these tests skip — developers who haven't
 compiled the extensions aren't blocked.
@@ -26,15 +26,6 @@ class TestCExtensionsAvailable:
 
         assert _C_ACCEL_AVAILABLE, (
             "_lmm_accel C extension not available in CI. "
-            "The 'Compile C extensions' step may have failed silently."
-        )
-
-    def test_eigen_accel_available(self):
-        """_eigen_accel C extension must be compiled and importable in CI."""
-        from jamma.lmm.eigen import _DSYEVR_AVAILABLE
-
-        assert _DSYEVR_AVAILABLE, (
-            "_eigen_accel C extension not available in CI. "
             "The 'Compile C extensions' step may have failed silently."
         )
 
@@ -68,17 +59,3 @@ class TestCExtensionsAvailable:
 
         result = compute_lmm_batch_c(eigenvalues, Uab, Iab, n, 1e-5, 1e5, 50, 20, n_cvt)
         assert np.isfinite(result["lambdas"]).all()
-
-    def test_eigen_accel_numerical_sanity(self):
-        """_eigen_accel (DSYEVR) produces correct eigenvalues for identity."""
-        import numpy as np
-
-        from jamma.lmm._eigen_accel import eigh_dsyevr
-
-        n = 50
-        K = np.eye(n, dtype=np.float64)
-        w, v = eigh_dsyevr(K)
-
-        assert w.shape == (n,)
-        assert v.shape == (n, n)
-        np.testing.assert_allclose(w, np.ones(n), rtol=1e-14)

@@ -5,6 +5,39 @@ All notable changes to JAMMA will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Eigendecomposition now uses jlinalg.eigh** — replaced the legacy `_eigen_accel`
+  C extension and `numpy._umath_linalg.eigh_lo` gufunc cascade with unified
+  `jlinalg.eigh`, which dispatches to vendor DSYEVD/DSYEVR or the jlinalg D&C
+  pipeline depending on available BLAS backends
+- Add DSYEVR vendor dispatch to jlinalg C layer — memory-pressure fallback with
+  O(N) workspace vs O(N²) for DSYEVD, ILP64-only
+- Wire `jlinalg.dsyrk` into kinship and `jlinalg.dgemm` into prepare
+- Expose `jlinalg.blas_has_dsyevr` capability flag
+- `jlinalg.eigh` now raises `numpy.linalg.LinAlgError` (not `RuntimeError`) on
+  convergence failure
+- Memory estimator simplified: removed `_inplace_eigen_available()` check since
+  jlinalg.eigh always allocates separate eigenvectors
+- DSYEVR availability check in `check_memory_before_run()` now queries
+  `jlinalg.blas_has_dsyevr` instead of importing from `eigen.py`
+- **Rename `jblas` package to `jlinalg`** — the package now covers BLAS, LAPACK,
+  and LAPACKE dispatch (not just BLAS), so `jlinalg` ("JAMMA linear algebra")
+  better reflects its scope. All imports, C function prefixes (`jlinalg_*`),
+  macros (`JLINALG_*`), and file paths updated.
+
+### Removed
+
+- Delete legacy `_eigen_accel` C extension and `_secular_accel` C extension
+  source + compile script (`_secular_accel.c`, `_compile_secular.py`);
+  LOCO secular path now always uses Python fallback
+- Remove `INPLACE_EIGEN_AVAILABLE` flag and `_eigh_inplace()` gufunc path
+- Remove `_DSYEVR_AVAILABLE`, `_try_import_dsyevr()`, `_lazy_init_dsyevr()`,
+  `_select_eigen_driver()`, `_eigh_dsyevr()` from `eigen.py`
+- Remove `_inplace_eigen_available()` from `memory.py`
+
 ## [3.5.1] - 2026-03-12
 
 ### Fixed

@@ -34,7 +34,6 @@ eigendecomposition. Two eigenvector accumulation paths:
 from __future__ import annotations
 
 import time
-from typing import NamedTuple
 
 import numpy as np
 from loguru import logger
@@ -51,10 +50,6 @@ _DEFAULT_THRESHOLD: float = 1e-10
 _DEFLATION_GUARD: float = 1e-300
 _DEFLATION_FILL: float = 1.0 / _DEFLATION_GUARD  # reciprocal used as safe fill
 
-# Maximum DLAED4-to-Python fallbacks before aborting secular path.
-# Each fallback uses np.linalg.eigh (O(n^3)) instead of DLAED4 (O(n^2)
-# for all n eigenvalues); too many indicates a systemic issue.
-_MAX_DLAED4_FALLBACKS: int = 5
 
 # Threshold below which ||q_j|| is treated as degenerate (skip rank-1 update).
 # Two orders above float64 machine epsilon (~2.2e-16) to catch only genuine
@@ -72,119 +67,14 @@ _MAX_PYTHON_FALLBACK_N: int = 10_000
 _DEFLATION_TOL_Z: float = 1e-10
 
 
-class DLAED4ConvergenceError(RuntimeError):
-    """DLAED4 failed to converge for a specific eigenvalue.
-
-    Raised by the thin Python wrappers around the C extension when DLAED4
-    returns info > 0 (convergence failure). Caught by the secular solver's
-    fallback logic to trigger per-step Python eigh recovery.
-    """
-
-
 # ---------------------------------------------------------------------------
-# C extension for rank-1 eigenvalue update via LAPACK DLAED4
+# The _secular_accel C extension was removed in v4.0 (PR #57). The LOCO
+# secular path now always uses the Python fallback (_rank1_update_python).
+# _SECULAR_ACCEL_AVAILABLE is retained as a constant so call sites in this
+# module and loco.py continue to work without structural changes.
 # ---------------------------------------------------------------------------
 
-_EXPECTED_SECULAR_ABI = 2  # Must match ABI_VERSION in _secular_accel.c
-
-
-class SecularImport(NamedTuple):
-    """_secular_accel C extension import result."""
-
-    available: bool
-    rank1_update: object | None
-    rank1_eigs_norms: object | None
-
-
-_SECULAR_UNAVAILABLE = SecularImport(False, None, None)
-
-
-def _try_import_secular() -> SecularImport:
-    """Import C extension and validate ABI + DLAED4 availability."""
-    try:
-        from jamma.lmm._secular_accel import ABI_VERSION as abi
-        from jamma.lmm._secular_accel import (
-            rank1_eigenvalue_update,
-            rank1_eigenvalues_and_norms,
-        )
-    except ImportError as e:
-        logger.warning(
-            f"C extension _secular_accel not available ({e}); "
-            "rank-1 secular updates will use Python fallback (O(n^3) per step). "
-            "Run 'python -m jamma.lmm._compile_secular' to compile."
-        )
-        return _SECULAR_UNAVAILABLE
-    except AttributeError as e:
-        logger.warning(
-            f"_secular_accel loaded but missing attribute: {e}. "
-            "Stale .so may need recompilation: "
-            "python -m jamma.lmm._compile_secular"
-        )
-        return _SECULAR_UNAVAILABLE
-
-    if abi != _EXPECTED_SECULAR_ABI:
-        logger.warning(
-            f"_secular_accel ABI mismatch: extension has ABI_VERSION={abi}, "
-            f"expected {_EXPECTED_SECULAR_ABI}. Extension will not be used. "
-            f"Recompile with: python -m jamma.lmm._compile_secular"
-        )
-        return _SECULAR_UNAVAILABLE
-
-    # Probe DLAED4: the extension can import but lack LAPACK symbols.
-    # A small test call detects this at import time rather than mid-computation.
-    try:
-        _test_d = np.array([1.0, 2.0, 3.0])
-        _test_z = np.array([1.0, 1.0, 1.0])
-        rank1_eigenvalues_and_norms(_test_d, 0.1, _test_z)
-    except (RuntimeError, ValueError) as e:
-        if "not resolved" in str(e):
-            logger.warning(
-                "_secular_accel imported but DLAED4 symbol not resolved "
-                "(LAPACK not found). Using Python fallback. "
-                "Ensure numpy is linked against a LAPACK library."
-            )
-        else:
-            logger.error(
-                f"_secular_accel DLAED4 probe failed with unexpected error: {e}. "
-                "Disabling C extension — secular solver will use Python fallback "
-                "(significantly slower). Please report this issue."
-            )
-        return _SECULAR_UNAVAILABLE
-
-    return SecularImport(True, rank1_eigenvalue_update, rank1_eigenvalues_and_norms)
-
-
-_secular = _try_import_secular()
-_SECULAR_ACCEL_AVAILABLE = _secular.available
-_rank1_update_c_raw = _secular.rank1_update
-_rank1_eigs_norms_c_raw = _secular.rank1_eigs_norms
-
-
-def _wrap_c_call(fn: object, *args: object) -> object:
-    """Call a C extension function, converting DLAED4 RuntimeErrors.
-
-    The C extension raises RuntimeError for DLAED4 convergence failures
-    (info > 0) and ValueError for parameter errors (info < 0). This wrapper
-    converts the convergence RuntimeErrors to DLAED4ConvergenceError so the
-    fallback logic can catch them by type instead of string-matching.
-    """
-    try:
-        return fn(*args)  # type: ignore[operator]
-    except RuntimeError as e:
-        msg = str(e)
-        if "DLAED4" in msg and ("converge" in msg.lower() or "info=" in msg):
-            raise DLAED4ConvergenceError(msg) from e
-        raise  # Non-DLAED4 RuntimeError — propagate as-is
-
-
-def _rank1_update_c(d: np.ndarray, rho: float, z: np.ndarray) -> tuple:
-    """Wrapped C extension rank-1 eigenvalue update."""
-    return _wrap_c_call(_rank1_update_c_raw, d, rho, z)  # type: ignore[return-value]
-
-
-def _rank1_eigs_norms_c(d: np.ndarray, rho: float, z: np.ndarray) -> tuple:
-    """Wrapped C extension rank-1 eigenvalues and norms."""
-    return _wrap_c_call(_rank1_eigs_norms_c_raw, d, rho, z)  # type: ignore[return-value]
+_SECULAR_ACCEL_AVAILABLE: bool = False
 
 
 def _rank1_update_python(
@@ -192,13 +82,10 @@ def _rank1_update_python(
     rho: float,
     z: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Pure Python fallback for rank-1 eigenvalue update via np.linalg.eigh.
+    """Rank-1 eigenvalue update via np.linalg.eigh.
 
     Computes eigenvalues and eigenvectors of D + rho * z @ z.T where D =
-    diag(d). This is O(n^3) and used when the C extension (_secular_accel) is
-    unavailable or as a fallback when DLAED4 fails to converge on a specific
-    step. The C extension uses LAPACK DLAED4 (O(n) per eigenvalue, O(n^2)
-    per rank-1 update).
+    diag(d). This is O(n^3) per call.
 
     Args:
         d: (n,) ascending diagonal elements.
@@ -219,7 +106,7 @@ def _rank1_update_python(
         raise MemoryError(
             f"Python fallback rank-1 update requires {mem_gb:.0f} GB "
             f"(n={n:,} dense matrix) — not viable. "
-            f"Compile the C extension: python -m jamma.lmm._compile_secular"
+            f"C extension required for n > {_MAX_PYTHON_FALLBACK_N:,}"
         )
     M = np.diag(d) + rho * np.outer(z, z)
     try:
@@ -259,7 +146,7 @@ def _rank1_eigenvalues_and_norms_python(
         raise MemoryError(
             f"Python fallback rank-1 update requires {mem_gb:.0f} GB "
             f"(n={n:,} dense matrix) — not viable. "
-            f"Compile the C extension: python -m jamma.lmm._compile_secular"
+            f"C extension required for n > {_MAX_PYTHON_FALLBACK_N:,}"
         )
     z_norm = np.linalg.norm(z)
     z_unit = z / z_norm if z_norm > 0.0 else z.copy()
@@ -542,7 +429,7 @@ def _secular_eigendecompose_delta_path(
       from scratch using stored (z_k, d_k, lambda_k, norm_k_cauchy) data.
       Cauchy norms are self-consistent: norm_k[l] = ||z_k / (d_k - lambda_k[l])||_2,
       ensuring V_k_cauchy is unitary by construction (column k has unit norm).
-      Eigenvalues computed via _rank1_eigs_norms_c (DLAED4) for accuracy.
+      Eigenvalues computed via np.linalg.eigh on the rank-1 updated matrix.
       Stores (z_j, d_j, lambda_j, norm_j_cauchy) — total O(4 * r_eff * n) memory.
     - Backward pass: reconstruct U_loco row-batch by row-batch via blocked
       Cauchy matrix multiply using stored (z_j, d_j, lambda_j, norm_j_cauchy).
@@ -625,35 +512,12 @@ def _secular_eigendecompose_delta_path(
         rho_j_eff = rho_j * norm_q**2
         q_j_unit = q_implicit / norm_q
 
-        # Eigenvalues-only via rank-1 update (DLAED4 or Python fallback).
-        # Use _rank1_eigs_norms_c (O(n) output) instead of _rank1_update_c
-        # (which returns a full n x n eigenvector matrix — 55 GB at n=83k).
+        # Eigenvalues-only via rank-1 update (Python fallback).
         # The delta path computes its own Cauchy norms afterward, so we
-        # discard the C norms.
-        if _SECULAR_ACCEL_AVAILABLE:
-            try:
-                lambda_j, _ = _rank1_eigs_norms_c(d_current, rho_j_eff, q_j_unit)
-            except DLAED4ConvergenceError as e:
-                n_fallbacks += 1
-                logger.warning(
-                    f"DLAED4 failure at secular delta step j={j}/{r_eff} "
-                    f"(n={n}): {e}. Falling back to Python eigh for this step "
-                    f"(O(n^3) instead of O(n^2))."
-                )
-                if n_fallbacks > _MAX_DLAED4_FALLBACKS:
-                    raise RuntimeError(
-                        f"DLAED4 fell back to Python eigh on "
-                        f"{n_fallbacks}/{r_eff} delta-path steps (n={n}). "
-                        f"This indicates a systemic issue with the C extension. "
-                        f"Re-run without --secular or investigate the C extension."
-                    ) from e
-                lambda_j, _ = _rank1_eigenvalues_and_norms_python(
-                    d_current, rho_j_eff, q_j_unit
-                )
-        else:
-            lambda_j, _ = _rank1_eigenvalues_and_norms_python(
-                d_current, rho_j_eff, q_j_unit
-            )
+        # discard the norms from the Python eigh.
+        lambda_j, _ = _rank1_eigenvalues_and_norms_python(
+            d_current, rho_j_eff, q_j_unit
+        )
 
         # Guard against non-finite eigenvalues from DLAED4 or Python fallback.
         # A single NaN propagates through stored step data and corrupts the
@@ -904,8 +768,7 @@ def secular_eigendecompose_from_full(
       the Q = np.eye(n) allocation (55 GB at n=83k), reducing peak memory
       from ~110 GB to ~58 GB.
 
-    When the C extension (_secular_accel) is unavailable, falls back to
-    _rank1_update_python (O(n^3) per step, same result).
+    Rank-1 updates use _rank1_update_python (np.linalg.eigh, O(n^3) per step).
 
     Args:
         d_full: (n,) eigenvalues of K_full, ascending order.
@@ -1061,27 +924,7 @@ def secular_eigendecompose_from_full(
         q_j_unit = q_j / norm_q
 
         # Rank-1 update: (D_{j+1}, V_j) for D_j + rho_j_eff * q_j * q_j^T
-        # DLAED4 convergence failure falls back to Python eigh for this step.
-        if _SECULAR_ACCEL_AVAILABLE:
-            try:
-                d_new, V_j = _rank1_update_c(d_current, rho_j_eff, q_j_unit)
-            except DLAED4ConvergenceError as e:
-                n_fallbacks += 1
-                logger.warning(
-                    f"DLAED4 failure at secular Q step j={j}/{r_eff} "
-                    f"(n={n}): {e}. Falling back to Python eigh for this step "
-                    f"(O(n^3) instead of O(n^2))."
-                )
-                if n_fallbacks > _MAX_DLAED4_FALLBACKS:
-                    raise RuntimeError(
-                        f"DLAED4 fell back to Python eigh on "
-                        f"{n_fallbacks}/{r_eff} Q-path steps (n={n}). "
-                        f"This indicates a systemic issue with the C extension. "
-                        f"Re-run without --secular or investigate the C extension."
-                    ) from e
-                d_new, V_j = _rank1_update_python(d_current, rho_j_eff, q_j_unit)
-        else:
-            d_new, V_j = _rank1_update_python(d_current, rho_j_eff, q_j_unit)
+        d_new, V_j = _rank1_update_python(d_current, rho_j_eff, q_j_unit)
 
         # Ensure strict ascending order after each update (DLAED4 requires it).
         # The update should already return ascending eigenvalues, but floating point

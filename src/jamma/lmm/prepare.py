@@ -16,6 +16,7 @@ from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from loguru import logger
 
+from jamma import jlinalg
 from jamma.core.threading import blas_threads
 from jamma.lmm.likelihood_jax import golden_section_optimize_lambda
 from jamma.lmm.prepare_common import (
@@ -221,7 +222,7 @@ def prepare_utg_chunk(
 
     with blas_threads(rotation_threads):
         with jax.profiler.TraceAnnotation("dgemm_rotation"):
-            UtG_chunk = np.ascontiguousarray(U.T @ geno_chunk)
+            UtG_chunk = jlinalg.dgemm(U, geno_chunk, transa="T")
 
     # Pad to device-count multiple for even NamedSharding distribution
     n_devices = placement.n_devices

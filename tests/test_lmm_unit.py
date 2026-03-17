@@ -143,7 +143,7 @@ class TestEigendecomposition:
         K = np.eye(10)
 
         with patch(
-            "jamma.lmm.eigen._eigh_inplace",
+            "jamma.lmm.eigen.jlinalg.eigh",
             side_effect=numpy.linalg.LinAlgError("SVD did not converge"),
         ):
             with pytest.raises(numpy.linalg.LinAlgError, match="SVD did not converge"):

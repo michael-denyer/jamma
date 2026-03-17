@@ -10,7 +10,7 @@ where X_c is the centered genotype matrix with missing values imputed
 to per-SNP mean, and p is the number of SNPs.
 
 The standard (non-LOCO) kinship computation and in-memory LOCO kinship
-use numpy.matmul exclusively, so JAX is never initialized during kinship
+use jlinalg.dsyrk exclusively, so JAX is never initialized during kinship
 or eigendecomp phases. The streaming LOCO function
 (compute_loco_kinship_streaming) uses JAX for GPU-accelerated accumulation.
 
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 import psutil
 from loguru import logger
 
+from jamma import jlinalg
 from jamma.core.memory import (
     check_memory_available,
     estimate_eigendecomp_memory,
@@ -61,9 +62,9 @@ def _ensure_float64(arr: np.ndarray) -> np.ndarray:
 def _accumulate_kinship(K: np.ndarray, X_centered: np.ndarray) -> np.ndarray:
     """Accumulate kinship contribution from centered SNP batch.
 
-    Uses numpy.matmul (backed by MKL/OpenBLAS dgemm) with in-place
-    accumulation. The non-LOCO kinship path uses this exclusively so
-    that JAX is never initialized during kinship computation.
+    Uses jlinalg.dsyrk (symmetric rank-k update) with in-place accumulation.
+    The non-LOCO kinship path uses this exclusively so that JAX is never
+    initialized during kinship computation.
 
     Args:
         K: Current kinship matrix accumulator (n_samples, n_samples)
@@ -72,7 +73,7 @@ def _accumulate_kinship(K: np.ndarray, X_centered: np.ndarray) -> np.ndarray:
     Returns:
         Updated kinship matrix with batch contribution added.
     """
-    K += np.matmul(X_centered, X_centered.T)
+    K += jlinalg.dsyrk(X_centered)
     return K
 
 
@@ -406,7 +407,7 @@ def compute_loco_kinship(
     for _, start in batch_iter:
         end = min(start + batch_size, n_filtered)
         batch = X_centered[:, start:end]
-        S_full += np.matmul(batch, batch.T)
+        S_full += jlinalg.dsyrk(batch)
 
     # Compute per-chromosome LOCO kinship via subtraction
     unique_chrs = sorted(set(chr_filtered))
@@ -426,7 +427,7 @@ def compute_loco_kinship(
 
         # Compute chromosome contribution S_c
         X_chr = X_centered[:, chr_mask]
-        S_chr = np.matmul(X_chr, X_chr.T)
+        S_chr = jlinalg.dsyrk(X_chr)
 
         # K_loco = (S_full - S_c) / p_loco
         K_loco = (S_full - S_chr) / p_loco

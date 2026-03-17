@@ -24,7 +24,7 @@ class TestMemoryEstimation:
     """Tests for estimate_workflow_memory function."""
 
     def test_memory_breakdown_200k(self):
-        """Memory estimate for 200k samples - peak during eigendecomp ~960GB."""
+        """Memory estimate for 200k samples - peak during eigendecomp ~1600GB."""
         est = estimate_workflow_memory(200_000, 95_000)
 
         # Kinship: 200k^2 * 8 / 1e9 = 320GB
@@ -45,9 +45,9 @@ class TestMemoryEstimation:
             f"DSYEVD workspace should be ~640GB at 200k, "
             f"got {est.eigendecomp_workspace_gb:.2f}GB"
         )
-        # Peak is during eigendecomp: K/U shared buffer + workspace = ~960GB
-        assert 950 < est.total_gb < 970, (
-            f"Expected ~960GB (eigendecomp peak with DSYEVD), got {est.total_gb}"
+        # Peak: K + U + K_work + DSYEVD workspace = 320+320+320+640 = ~1600GB
+        assert 1590 < est.total_gb < 1610, (
+            f"Expected ~1600GB (K+U+K_work+workspace), got {est.total_gb}"
         )
 
     def test_memory_breakdown_10k(self):
@@ -601,95 +601,6 @@ class TestGateCorrectnessRunnerStreaming:
 
             est = estimate_lmm_streaming_memory(100_000, 95_000)
             assert est.sufficient is False
-
-
-@pytest.mark.tier0
-class TestInplaceEigenAvailableHelper:
-    """Tests for _inplace_eigen_available() helper function."""
-
-    def test_returns_false_and_logs_on_import_error(self, monkeypatch):
-        """_inplace_eigen_available logs warning when import fails."""
-        import jamma.core.memory as mem_mod
-        from jamma.core.memory import _inplace_eigen_available
-
-        # Use monkeypatch for auto-restore between tests (pytest-randomly safe)
-        monkeypatch.setattr(mem_mod, "_inplace_import_warned", False)
-
-        with patch("jamma.core.memory.logger") as mock_logger:
-            # Make the import inside _inplace_eigen_available raise ImportError
-            with patch.dict("sys.modules", {"jamma.lmm.eigen": None}):
-                result = _inplace_eigen_available()
-
-            assert result is False
-            mock_logger.warning.assert_called_once()
-            call_args = mock_logger.warning.call_args[0][0]
-            assert "Could not import" in call_args
-
-    def test_returns_false_on_missing_attribute(self, monkeypatch):
-        """_inplace_eigen_available returns False when attribute absent from module.
-
-        Python's ``from X import Y`` raises ImportError (not AttributeError)
-        when Y doesn't exist in X, so this exercises the same except branch.
-        """
-        import types
-
-        import jamma.core.memory as mem_mod
-        from jamma.core.memory import _inplace_eigen_available
-
-        # Use monkeypatch for auto-restore between tests (pytest-randomly safe)
-        monkeypatch.setattr(mem_mod, "_inplace_import_warned", False)
-
-        # Module exists but INPLACE_EIGEN_AVAILABLE attribute is missing
-        fake_module = types.ModuleType("jamma.lmm.eigen")
-
-        with patch("jamma.core.memory.logger") as mock_logger:
-            with patch.dict("sys.modules", {"jamma.lmm.eigen": fake_module}):
-                result = _inplace_eigen_available()
-
-            assert result is False
-            mock_logger.warning.assert_called_once()
-            call_args = mock_logger.warning.call_args[0][0]
-            assert "Could not import" in call_args
-
-
-@pytest.mark.tier0
-class TestMemoryEstimatorFallbackPath:
-    """Verify memory estimates differ correctly when in-place eigen unavailable."""
-
-    def test_workflow_fallback_adds_eigenvector_allocation(self):
-        """Fallback path includes separate eigenvector allocation in peak.
-
-        Eigendecomp peak dominates at 200k — DSYEVD workspace ~640GB makes
-        eigendecomp phase larger than LMM phase.
-        """
-
-        with patch("jamma.core.memory._inplace_eigen_available", return_value=True):
-            est_inplace = estimate_workflow_memory(200_000, 95_000)
-
-        with patch("jamma.core.memory._inplace_eigen_available", return_value=False):
-            est_fallback = estimate_workflow_memory(200_000, 95_000)
-
-        # Fallback should be ~320GB higher (one extra n^2*8 allocation)
-        diff = est_fallback.total_gb - est_inplace.total_gb
-        assert 315 < diff < 325, (
-            f"Fallback should add ~320GB for eigenvectors, got {diff:.1f}GB"
-        )
-
-    def test_streaming_fallback_adds_eigenvector_allocation(self):
-        """Streaming fallback path includes separate eigenvector allocation."""
-
-        from jamma.core.memory import estimate_streaming_memory
-
-        with patch("jamma.core.memory._inplace_eigen_available", return_value=True):
-            est_inplace = estimate_streaming_memory(200_000)
-
-        with patch("jamma.core.memory._inplace_eigen_available", return_value=False):
-            est_fallback = estimate_streaming_memory(200_000)
-
-        diff = est_fallback.total_peak_gb - est_inplace.total_peak_gb
-        assert 315 < diff < 325, (
-            f"Fallback should add ~320GB for eigenvectors, got {diff:.1f}GB"
-        )
 
 
 @pytest.mark.tier0

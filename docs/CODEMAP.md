@@ -26,7 +26,7 @@ flowchart TB
         KINSHIP["Kinship Compute [3a]"]
         MISSING["Missing Imputation [3b]"]
         EIGEN["Eigendecomposition [3c]"]
-        EIGACCEL["C Eigen Extension [3c]"]
+        JLINALG["jlinalg C Layer [3c']"]
         LIKE["REML Likelihood [3d]"]
         OPT["Lambda Optimizer [3e]"]
         STATS["Test Statistics [3f]"]
@@ -129,8 +129,8 @@ flowchart TB
     COMPUTENP --> LIKENP
     LIKENP --> SPECIAL
 
-    %% Eigen C extension
-    EIGEN --> EIGACCEL
+    %% jlinalg C layer for eigendecomp
+    EIGEN --> JLINALG
 
     %% Shared connections
     PREPCOM --> EIGEN
@@ -202,9 +202,11 @@ GEMMA algorithm reimplementation: kinship → eigendecomp → REML → test stat
 | 3a | `compute_kinship_streaming()` | 2-pass streaming (stats → accumulate) | [compute.py:505](../src/jamma/kinship/compute.py#L505) |
 | 3a | `_filter_snps()` | MAF, missing rate, monomorphism filters | [compute.py:79](../src/jamma/kinship/compute.py#L79) |
 | 3b | `impute_and_center()` | NaN → mean, then center (in-place for NumPy arrays) | [missing.py:21](../src/jamma/kinship/missing.py#L21) |
-| 3c | `eigendecompose_kinship()` | Memory-aware DSYEVD/DSYEVR dispatch with BLAS thread control | [eigen.py:264](../src/jamma/lmm/eigen.py#L264) |
-| 3c | `eigh_dsyevr()` | C extension: DSYEVR eigendecomposition with O(n) workspace (enables >100k samples) | [_eigen_accel.c](../src/jamma/lmm/_eigen_accel.c) |
-| 3c | `_compile_eigen.py` | Post-install C eigen extension compilation | [_compile_eigen.py](../src/jamma/lmm/_compile_eigen.py) |
+| 3c | `eigendecompose_kinship()` | Eigendecomp via `jlinalg.eigh` with BLAS thread control | [eigen.py](../src/jamma/lmm/eigen.py) |
+| 3c' | `jlinalg.eigh()` | Vendor DSYEVD/DSYEVR dispatch + jlinalg D&C fallback | [jlinalg/\_\_init\_\_.py](../src/jamma/jlinalg/__init__.py) |
+| 3c' | `jlinalg_dsyevd_ext()` | C: vendor DSYEVD dispatch (O(n²) workspace) | [blas_dispatch.c](../src/jamma/jlinalg/src/blas_dispatch.c) |
+| 3c' | `jlinalg_dsyevr_ext()` | C: vendor DSYEVR dispatch (O(n) workspace, memory-pressure fallback) | [blas_dispatch.c](../src/jamma/jlinalg/src/blas_dispatch.c) |
+| 3c' | `eigh.c` | jlinalg D&C eigendecomposition (no vendor LAPACK required) | [eigh.c](../src/jamma/jlinalg/src/eigh.c) |
 | 3d | `reml_log_likelihood()` | REML ℓ(λ) for variance component estimation | [likelihood.py:356](../src/jamma/lmm/likelihood.py#L356) |
 | 3d | `mle_log_likelihood()` | MLE ℓ(λ) for LRT | [likelihood.py:715](../src/jamma/lmm/likelihood.py#L715) |
 | 3d | `compute_Uab()` | Element-wise products of rotated vectors | [likelihood.py:165](../src/jamma/lmm/likelihood.py#L165) |
@@ -505,7 +507,7 @@ Priority order: `JAMMA_BACKEND` env var → `--backend` CLI flag → auto-detect
 | Eigen I/O | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
 | Matrix writer | [io/matrix_writer.py:91](../src/jamma/io/matrix_writer.py#L91) |
 | Kinship compute | [compute.py:204](../src/jamma/kinship/compute.py#L204) |
-| Eigendecomposition | [eigen.py:264](../src/jamma/lmm/eigen.py#L264) |
+| Eigendecomposition | [eigen.py](../src/jamma/lmm/eigen.py) |
 | REML likelihood | [likelihood.py:356](../src/jamma/lmm/likelihood.py#L356) |
 | Lambda optimization | [likelihood_jax.py:537](../src/jamma/lmm/likelihood_jax.py#L537) |
 | Wald/Score/LRT tests | [stats.py:99](../src/jamma/lmm/stats.py#L99) |

@@ -1,6 +1,6 @@
-"""Benchmark jblas eigh stages (DSYTRD, DSTEDC, DORMTR) vs numpy.linalg.eigh.
+"""Benchmark jlinalg eigh stages (DSYTRD, DSTEDC, DORMTR) vs numpy.linalg.eigh.
 
-Times each stage of the jblas three-step eigendecomposition independently
+Times each stage of the jlinalg three-step eigendecomposition independently
 and compares total wall-clock time against numpy's LAPACK dsyevd.
 
 Usage:
@@ -16,15 +16,15 @@ import time
 import numpy as np
 
 
-def _find_jblas_so() -> str:
-    """Find the _jblas shared library path."""
-    import jamma.jblas._jblas as mod
+def _find_jlinalg_so() -> str:
+    """Find the _jlinalg shared library path."""
+    import jamma.jlinalg._jlinalg as mod
 
     return mod.__file__
 
 
 class _EighStatus(ctypes.Structure):
-    """ctypes mirror of jblas_eigh_status_t."""
+    """ctypes mirror of jlinalg_eigh_status_t."""
 
     _fields_ = [
         ("dstedc_ws_fallback", ctypes.c_int),
@@ -35,17 +35,17 @@ class _EighStatus(ctypes.Structure):
 
 
 def _load_c_functions(so_path: str) -> tuple:
-    """Load jblas C functions via ctypes for per-stage benchmarking.
+    """Load jlinalg C functions via ctypes for per-stage benchmarking.
 
     Returns:
         Tuple of (dsytrd, dstedc, dormtr, eigh) ctypes function objects.
     """
     lib = ctypes.CDLL(so_path)
 
-    # int jblas_dsytrd_c(npy_intp N, double *A, npy_intp lda,
+    # int jlinalg_dsytrd_c(npy_intp N, double *A, npy_intp lda,
     #                    double *d, double *e, double *tau,
-    #                    jblas_workspace_t *ws, jblas_eigh_status_t *status)
-    dsytrd = lib.jblas_dsytrd_c
+    #                    jlinalg_workspace_t *ws, jlinalg_eigh_status_t *status)
+    dsytrd = lib.jlinalg_dsytrd_c
     dsytrd.restype = ctypes.c_int
     dsytrd.argtypes = [
         ctypes.c_longlong,  # npy_intp N
@@ -54,13 +54,13 @@ def _load_c_functions(so_path: str) -> tuple:
         ctypes.c_void_p,  # double *d
         ctypes.c_void_p,  # double *e
         ctypes.c_void_p,  # double *tau
-        ctypes.c_void_p,  # jblas_workspace_t *ws (NULL = global mutex)
-        ctypes.c_void_p,  # jblas_eigh_status_t *status (NULL = no status)
+        ctypes.c_void_p,  # jlinalg_workspace_t *ws (NULL = global mutex)
+        ctypes.c_void_p,  # jlinalg_eigh_status_t *status (NULL = no status)
     ]
 
-    # int jblas_dstedc_c(npy_intp N, double *d, double *e,
-    #                    double *Z, npy_intp ldz, jblas_workspace_t *ws)
-    dstedc = lib.jblas_dstedc_c
+    # int jlinalg_dstedc_c(npy_intp N, double *d, double *e,
+    #                    double *Z, npy_intp ldz, jlinalg_workspace_t *ws)
+    dstedc = lib.jlinalg_dstedc_c
     dstedc.restype = ctypes.c_int
     dstedc.argtypes = [
         ctypes.c_longlong,  # npy_intp N
@@ -68,13 +68,13 @@ def _load_c_functions(so_path: str) -> tuple:
         ctypes.c_void_p,  # double *e
         ctypes.c_void_p,  # double *Z
         ctypes.c_longlong,  # npy_intp ldz
-        ctypes.c_void_p,  # jblas_workspace_t *ws (NULL = use global mutex)
+        ctypes.c_void_p,  # jlinalg_workspace_t *ws (NULL = use global mutex)
     ]
 
-    # int jblas_dormtr_c(npy_intp N, npy_intp M,
+    # int jlinalg_dormtr_c(npy_intp N, npy_intp M,
     #                    const double *A, npy_intp lda, const double *tau,
     #                    double *C, npy_intp ldc)
-    dormtr = lib.jblas_dormtr_c
+    dormtr = lib.jlinalg_dormtr_c
     dormtr.restype = ctypes.c_int
     dormtr.argtypes = [
         ctypes.c_longlong,  # npy_intp N
@@ -86,8 +86,8 @@ def _load_c_functions(so_path: str) -> tuple:
         ctypes.c_longlong,  # npy_intp ldc
     ]
 
-    # jblas_eigh_c for status reporting
-    eigh_c = lib.jblas_eigh_c
+    # jlinalg_eigh_c for status reporting
+    eigh_c = lib.jlinalg_eigh_c
     eigh_c.restype = ctypes.c_int
     eigh_c.argtypes = [
         ctypes.c_longlong,  # npy_intp N
@@ -96,7 +96,7 @@ def _load_c_functions(so_path: str) -> tuple:
         ctypes.c_void_p,  # double *eigenvalues
         ctypes.c_void_p,  # double *eigenvectors
         ctypes.c_longlong,  # npy_intp ldz
-        ctypes.POINTER(_EighStatus),  # jblas_eigh_status_t *status
+        ctypes.POINTER(_EighStatus),  # jlinalg_eigh_status_t *status
     ]
 
     return dsytrd, dstedc, dormtr, eigh_c
@@ -126,9 +126,9 @@ def bench_numpy_eigh(K: np.ndarray, n_runs: int) -> float:
     return best
 
 
-def bench_jblas_eigh(K: np.ndarray, n_runs: int) -> float:
-    """Time jblas eigh (full) over n_runs, return best time."""
-    from jamma.jblas import eigh
+def bench_jlinalg_eigh(K: np.ndarray, n_runs: int) -> float:
+    """Time jlinalg eigh (full) over n_runs, return best time."""
+    from jamma.jlinalg import eigh
 
     best = float("inf")
     for _ in range(n_runs):
@@ -140,14 +140,14 @@ def bench_jblas_eigh(K: np.ndarray, n_runs: int) -> float:
     return best
 
 
-def bench_jblas_stages(
+def bench_jlinalg_stages(
     K: np.ndarray,
     dsytrd_fn,
     dstedc_fn,
     dormtr_fn,
     n_runs: int,
 ) -> dict[str, float]:
-    """Time each jblas eigh stage individually. Return dict of best times."""
+    """Time each jlinalg eigh stage individually. Return dict of best times."""
     N = K.shape[0]
 
     best_dsytrd = float("inf")
@@ -206,21 +206,21 @@ def bench_jblas_stages(
 def main() -> None:
     sizes = [200, 500, 1000, 4096, 10000, 20000]
     # VALID-05 also specifies 46k, but that requires ILP64 MKL numpy (LP64 int32
-    # overflow at ~46k x 46k). Run on ILP64 systems with JBLAS_BENCH_MAX_GB=200.
+    # overflow at ~46k x 46k). Run on ILP64 systems with JLINALG_BENCH_MAX_GB=200.
     n_runs = 3
     rng = np.random.default_rng(42)
 
-    MAX_MATRIX_GB = float(os.environ.get("JBLAS_BENCH_MAX_GB", "8.0"))
+    MAX_MATRIX_GB = float(os.environ.get("JLINALG_BENCH_MAX_GB", "8.0"))
 
     # Load C functions
-    so_path = _find_jblas_so()
-    print(f"jblas .so: {so_path}")
+    so_path = _find_jlinalg_so()
+    print(f"jlinalg .so: {so_path}")
     dsytrd_fn, dstedc_fn, dormtr_fn, eigh_c_fn = _load_c_functions(so_path)
 
-    # Check jblas is using C extension
-    from jamma.jblas import HAS_C_EXTENSION, jblas_isa
+    # Check jlinalg is using C extension
+    from jamma.jlinalg import HAS_C_EXTENSION, jlinalg_isa
 
-    print(f"HAS_C_EXTENSION: {HAS_C_EXTENSION}, ISA: {jblas_isa}")
+    print(f"HAS_C_EXTENSION: {HAS_C_EXTENSION}, ISA: {jlinalg_isa}")
     print("numpy BLAS config:")
     try:
         config = np.show_config(mode="dicts")
@@ -233,7 +233,7 @@ def main() -> None:
 
     # Header
     print(
-        f"{'N':>6}  {'numpy eigh':>11}  {'jblas eigh':>11}  "
+        f"{'N':>6}  {'numpy eigh':>11}  {'jlinalg eigh':>11}  "
         f"{'dsytrd':>9}  {'dstedc':>9}  {'dormtr':>9}  "
         f"{'staged tot':>11}  {'ratio':>7}  {'bottleneck':>12}"
     )
@@ -249,21 +249,21 @@ def main() -> None:
                 f"\n--- N={N} skipped "
                 f"(estimated {matrix_gb:.1f} GB > {limit:.1f} GB limit) ---"
             )
-            print(f"    Set JBLAS_BENCH_MAX_GB={matrix_gb + 1:.0f} to enable")
+            print(f"    Set JLINALG_BENCH_MAX_GB={matrix_gb + 1:.0f} to enable")
             continue
 
         K = _random_spd(N, rng)
 
         # Warmup
         _ = np.linalg.eigh(K.copy())
-        from jamma.jblas import eigh
+        from jamma.jlinalg import eigh
 
         _ = eigh(K.copy())
 
         # Benchmark
         t_numpy = bench_numpy_eigh(K, n_runs)
-        t_jblas = bench_jblas_eigh(K, n_runs)
-        stages = bench_jblas_stages(K, dsytrd_fn, dstedc_fn, dormtr_fn, n_runs)
+        t_jlinalg = bench_jlinalg_eigh(K, n_runs)
+        stages = bench_jlinalg_stages(K, dsytrd_fn, dstedc_fn, dormtr_fn, n_runs)
         all_stages[N] = stages
 
         # Identify bottleneck
@@ -275,7 +275,7 @@ def main() -> None:
         bottleneck = max(stage_times, key=stage_times.get)
         bottleneck_pct = stage_times[bottleneck] / stages["total_staged"] * 100
 
-        ratio = t_jblas / t_numpy
+        ratio = t_jlinalg / t_numpy
 
         # Run eigh_c with status to report secular failures and QR fallback
         K_status = K.copy()
@@ -295,7 +295,7 @@ def main() -> None:
         print(
             f"{N:>6}  "
             f"{t_numpy:>10.4f}s  "
-            f"{t_jblas:>10.4f}s  "
+            f"{t_jlinalg:>10.4f}s  "
             f"{stages['dsytrd']:>8.4f}s  "
             f"{stages['dstedc']:>8.4f}s  "
             f"{stages['dormtr']:>8.4f}s  "
@@ -308,7 +308,7 @@ def main() -> None:
 
     # Detailed breakdown from already-collected data
     print()
-    print("Stage breakdown (% of jblas staged total):")
+    print("Stage breakdown (% of jlinalg staged total):")
     print(f"{'N':>6}  {'dsytrd %':>9}  {'dstedc %':>9}  {'dormtr %':>9}")
     print("-" * 42)
 

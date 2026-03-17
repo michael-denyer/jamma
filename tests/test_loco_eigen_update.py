@@ -17,7 +17,6 @@ import numpy as np
 import pytest
 
 from jamma.lmm.loco_eigen_update import (
-    _MAX_DLAED4_FALLBACKS,
     _apply_vj_to_rows_blocked,
     _apply_vj_transpose_to_vec_blocked,
     _find_deflated_columns,
@@ -1158,110 +1157,6 @@ class TestSecularEigendecomposeValidation:
 
 
 # ---------------------------------------------------------------------------
-# DLAED4 fallback path test
-# ---------------------------------------------------------------------------
-
-
-def test_secular_q_path_dlaed4_fallback() -> None:
-    """C extension RuntimeError falls back to Python eigh."""
-    rng = np.random.default_rng(77)
-    n = 20
-    p_chr = 5
-    p_full = 50
-
-    d_full = np.sort(rng.random(n))
-    K = rng.standard_normal((n, n))
-    K = K @ K.T / n
-    U_full = np.linalg.eigh(K)[1]
-    X_c = rng.standard_normal((n, p_chr))
-
-    # Get reference result with no mocking
-    d_ref, U_ref = secular_eigendecompose_from_full(d_full, U_full, X_c, p_full, p_chr)
-
-    # Mock C extension to always raise DLAED4ConvergenceError, forcing Python fallback
-    with (
-        patch("jamma.lmm.loco_eigen_update._SECULAR_ACCEL_AVAILABLE", True),
-        patch(
-            "jamma.lmm.loco_eigen_update._rank1_update_c_raw",
-            side_effect=RuntimeError("DLAED4(i=1) failed to converge (info=1)"),
-        ),
-    ):
-        d_fallback, U_fallback = secular_eigendecompose_from_full(
-            d_full,
-            U_full,
-            X_c,
-            p_full,
-            p_chr,
-            n_threshold_for_delta=n + 1,  # force Q path
-        )
-
-    np.testing.assert_allclose(d_fallback, d_ref, rtol=1e-10, atol=1e-14)
-
-
-def test_secular_q_path_dlaed4_fallback_abort() -> None:
-    """Q path aborts when DLAED4 fallbacks exceed _MAX_DLAED4_FALLBACKS."""
-    rng = np.random.default_rng(78)
-    n = 20
-    # p_chr must produce r_eff > _MAX_DLAED4_FALLBACKS so the counter triggers
-    p_chr = _MAX_DLAED4_FALLBACKS + 3
-    p_full = 50
-
-    d_full = np.sort(rng.random(n))
-    K = rng.standard_normal((n, n))
-    K = K @ K.T / n
-    U_full = np.linalg.eigh(K)[1]
-    X_c = rng.standard_normal((n, p_chr))
-
-    with (
-        patch("jamma.lmm.loco_eigen_update._SECULAR_ACCEL_AVAILABLE", True),
-        patch(
-            "jamma.lmm.loco_eigen_update._rank1_update_c_raw",
-            side_effect=RuntimeError("DLAED4(i=1) failed to converge (info=1)"),
-        ),
-        pytest.raises(RuntimeError, match="systemic issue"),
-    ):
-        secular_eigendecompose_from_full(
-            d_full,
-            U_full,
-            X_c,
-            p_full,
-            p_chr,
-            n_threshold_for_delta=n + 1,  # force Q path
-        )
-
-
-def test_secular_delta_path_dlaed4_fallback_abort() -> None:
-    """Delta path aborts when DLAED4 fallbacks exceed _MAX_DLAED4_FALLBACKS."""
-    rng = np.random.default_rng(79)
-    n = 20
-    p_chr = _MAX_DLAED4_FALLBACKS + 3
-    p_full = 50
-
-    d_full = np.sort(rng.random(n))
-    K = rng.standard_normal((n, n))
-    K = K @ K.T / n
-    U_full = np.linalg.eigh(K)[1]
-    X_c = rng.standard_normal((n, p_chr))
-
-    with (
-        patch("jamma.lmm.loco_eigen_update._SECULAR_ACCEL_AVAILABLE", True),
-        patch(
-            "jamma.lmm.loco_eigen_update._rank1_eigs_norms_c_raw",
-            side_effect=RuntimeError("DLAED4(i=1) failed to converge (info=1)"),
-        ),
-        pytest.raises(RuntimeError, match="systemic issue"),
-    ):
-        secular_eigendecompose_from_full(
-            d_full,
-            U_full,
-            X_c,
-            p_full,
-            p_chr,
-            n_threshold_for_delta=0,  # force delta path
-        )
-
-
-# ---------------------------------------------------------------------------
 # _find_deflated_columns vectorized correctness
 # ---------------------------------------------------------------------------
 
@@ -1289,31 +1184,8 @@ def test_find_deflated_columns_no_deflation() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Python fallback norms verification (Important #6)
+# Python fallback norms verification
 # ---------------------------------------------------------------------------
-
-
-def test_rank1_eigenvalues_and_norms_python_matches_c() -> None:
-    """Python fallback eigenvalues+norms match C extension output."""
-    from jamma.lmm.loco_eigen_update import (
-        _SECULAR_ACCEL_AVAILABLE,
-        _rank1_eigs_norms_c,
-    )
-
-    if not _SECULAR_ACCEL_AVAILABLE:
-        pytest.skip("C extension not available")
-
-    rng = np.random.default_rng(90)
-    n = 30
-    d = np.sort(rng.random(n) * 10)
-    z = rng.standard_normal(n)
-    rho = 0.5
-
-    evals_c, norms_c = _rank1_eigs_norms_c(d, rho, z)
-    evals_py, norms_py = _rank1_eigenvalues_and_norms_python(d, rho, z)
-
-    np.testing.assert_allclose(evals_py, evals_c, rtol=1e-10, atol=1e-14)
-    np.testing.assert_allclose(norms_py, norms_c, rtol=1e-6, atol=1e-14)
 
 
 def test_rank1_eigenvalues_and_norms_python_near_degenerate() -> None:
@@ -1330,138 +1202,6 @@ def test_rank1_eigenvalues_and_norms_python_near_degenerate() -> None:
     assert np.all(np.isfinite(evals)), "Eigenvalues should be finite"
     assert np.all(np.isfinite(norms)), "Norms should be finite"
     assert np.all(norms >= 0), "Norms should be non-negative"
-
-
-# ---------------------------------------------------------------------------
-# Non-DLAED4 RuntimeError propagation (Important #7)
-# ---------------------------------------------------------------------------
-
-
-def test_non_dlaed4_runtime_error_propagates_q_path() -> None:
-    """Non-DLAED4 RuntimeErrors propagate immediately, not caught as fallback."""
-    rng = np.random.default_rng(91)
-    n = 20
-    p_chr = 5
-    p_full = 50
-
-    d_full = np.sort(rng.random(n))
-    K = rng.standard_normal((n, n))
-    K = K @ K.T / n
-    U_full = np.linalg.eigh(K)[1]
-    X_c = rng.standard_normal((n, p_chr))
-
-    with (
-        patch("jamma.lmm.loco_eigen_update._SECULAR_ACCEL_AVAILABLE", True),
-        patch(
-            "jamma.lmm.loco_eigen_update._rank1_update_c_raw",
-            side_effect=RuntimeError("unexpected memory corruption"),
-        ),
-        pytest.raises(RuntimeError, match="unexpected memory corruption"),
-    ):
-        secular_eigendecompose_from_full(
-            d_full,
-            U_full,
-            X_c,
-            p_full,
-            p_chr,
-            n_threshold_for_delta=n + 1,  # force Q path
-        )
-
-
-def test_non_dlaed4_runtime_error_propagates_delta_path() -> None:
-    """Non-DLAED4 RuntimeErrors propagate on delta path too."""
-    rng = np.random.default_rng(92)
-    n = 20
-    p_chr = 5
-    p_full = 50
-
-    d_full = np.sort(rng.random(n))
-    K = rng.standard_normal((n, n))
-    K = K @ K.T / n
-    U_full = np.linalg.eigh(K)[1]
-    X_c = rng.standard_normal((n, p_chr))
-
-    with (
-        patch("jamma.lmm.loco_eigen_update._SECULAR_ACCEL_AVAILABLE", True),
-        patch(
-            "jamma.lmm.loco_eigen_update._rank1_eigs_norms_c_raw",
-            side_effect=RuntimeError("unexpected memory corruption"),
-        ),
-        pytest.raises(RuntimeError, match="unexpected memory corruption"),
-    ):
-        secular_eigendecompose_from_full(
-            d_full,
-            U_full,
-            X_c,
-            p_full,
-            p_chr,
-            n_threshold_for_delta=0,  # force delta path
-        )
-
-
-# ---------------------------------------------------------------------------
-# Delta path single-fallback recovery (Important #8)
-# ---------------------------------------------------------------------------
-
-
-def test_secular_delta_path_dlaed4_single_fallback_recovery() -> None:
-    """Delta path recovers correctly from a single DLAED4 failure."""
-    rng = np.random.default_rng(93)
-    n = 20
-    p_chr = 5
-    p_full = 50
-
-    d_full = np.sort(rng.random(n))
-    K = rng.standard_normal((n, n))
-    K = K @ K.T / n
-    U_full = np.linalg.eigh(K)[1]
-    X_c = rng.standard_normal((n, p_chr))
-
-    # Reference: no mocking
-    d_ref, U_ref = secular_eigendecompose_from_full(
-        d_full,
-        U_full,
-        X_c,
-        p_full,
-        p_chr,
-        n_threshold_for_delta=0,
-    )
-
-    # Mock C extension to fail on first call only, then succeed
-    call_count = 0
-    original_fn = None
-
-    # Get the raw C function if available
-    from jamma.lmm.loco_eigen_update import _rank1_eigs_norms_c_raw
-
-    if _rank1_eigs_norms_c_raw is None:
-        pytest.skip("C extension not available")
-    original_fn = _rank1_eigs_norms_c_raw
-
-    def fail_once(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise RuntimeError("DLAED4(i=3) failed to converge (info=1)")
-        return original_fn(*args, **kwargs)
-
-    with (
-        patch("jamma.lmm.loco_eigen_update._SECULAR_ACCEL_AVAILABLE", True),
-        patch(
-            "jamma.lmm.loco_eigen_update._rank1_eigs_norms_c_raw",
-            side_effect=fail_once,
-        ),
-    ):
-        d_fallback, U_fallback = secular_eigendecompose_from_full(
-            d_full,
-            U_full,
-            X_c,
-            p_full,
-            p_chr,
-            n_threshold_for_delta=0,  # force delta path
-        )
-
-    np.testing.assert_allclose(d_fallback, d_ref, rtol=1e-10, atol=1e-14)
 
 
 # ---------------------------------------------------------------------------

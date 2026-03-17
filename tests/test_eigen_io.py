@@ -17,7 +17,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.lmm.eigen import _DSYEVR_AVAILABLE
 from jamma.lmm.eigen_io import (
     _load_npy_cache,
     _write_npy_cache,
@@ -594,56 +593,6 @@ class TestAtomicCacheWrite:
             "_write_npy_cache should write to a .tmp.npy sibling before rename; "
             "this pattern was not found in source"
         )
-
-
-# =============================================================================
-# DSYEVR I/O round-trip tests
-# =============================================================================
-
-
-@pytest.mark.tier0
-class TestDsyevrEigenIORoundtrip:
-    """Verify eigen I/O round-trip with DSYEVR-produced F-order eigenvectors."""
-
-    @pytest.mark.skipif(not _DSYEVR_AVAILABLE, reason="DSYEVR C extension not compiled")
-    def test_eigen_io_roundtrip_dsyevr_eigenvectors(self, tmp_path: Path) -> None:
-        """DSYEVR F-order eigenvectors survive write/read and reconstruct K.
-
-        DSYEVR (MRRR algorithm) returns eigenvectors in F-order (Fortran-
-        contiguous). Eigen I/O must preserve these correctly through the
-        text format round-trip.
-        """
-        rng = np.random.default_rng(42)
-        n = 30
-        A = rng.standard_normal((n, n))
-        K = (A @ A.T) / n
-        K_ref = K.copy()
-
-        # Produce F-order eigenvectors via DSYEVR C extension
-        from jamma.lmm._eigen_accel import eigh_dsyevr as _eigh_dsyevr_impl
-
-        w_dsyevr, v_dsyevr = _eigh_dsyevr_impl(K.copy())
-
-        # Eigenvectors from DSYEVR are F-contiguous (LAPACK column-major convention)
-        assert v_dsyevr.flags["F_CONTIGUOUS"], (
-            "Expected F-contiguous eigenvectors from DSYEVR, "
-            f"got C={v_dsyevr.flags['C_CONTIGUOUS']} F={v_dsyevr.flags['F_CONTIGUOUS']}"
-        )
-
-        # Write via eigen I/O
-        d_path, u_path = write_eigen_files(
-            w_dsyevr, v_dsyevr, tmp_path, prefix="dsyevr_rt"
-        )
-
-        # Read back
-        w_loaded, v_loaded = read_eigen_files(d_path, u_path)
-
-        # Eigenvalues must match closely
-        np.testing.assert_allclose(w_loaded, w_dsyevr, rtol=1e-9)
-
-        # Eigenvectors via reconstruction (sign convention may differ per column)
-        K_recon = v_loaded @ np.diag(w_loaded) @ v_loaded.T
-        np.testing.assert_allclose(K_recon, K_ref, rtol=1e-8, atol=1e-14)
 
 
 # =============================================================================

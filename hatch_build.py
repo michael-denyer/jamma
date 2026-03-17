@@ -3,11 +3,9 @@
 Writes ``src/jamma/_build_meta.py`` at build time so the release date is
 available at runtime via ``jamma.__release_date__`` without manual upkeep.
 
-Also compiles four C extensions if a C compiler is available:
+Also compiles two C extensions if a C compiler is available:
   - ``src/jamma/lmm/_lmm_accel.c``: per-SNP REML Wald pipeline (with OpenMP)
-  - ``src/jamma/lmm/_eigen_accel.c``: DSYEVR eigendecomposition (no OpenMP)
-  - ``src/jamma/lmm/_secular_accel.c``: DLAED4 rank-1 secular updates (no OpenMP)
-  - ``src/jamma/jblas/src/*.c``: jblas BLAS compute layer (with OpenMP)
+  - ``src/jamma/jlinalg/src/*.c``: jlinalg BLAS compute layer (with OpenMP)
 
 If compilation fails for any reason, a warning is logged and a pure-Python
 wheel is produced as a graceful fallback — jamma is fully functional without
@@ -62,9 +60,7 @@ class CustomBuildHook(BuildHookInterface):
         # Compile C extensions (graceful fallback if unavailable).
         # _lmm_accel is more critical — compile first so its errors are visible.
         self._compile_c_extension(build_data)
-        self._compile_eigen_extension(build_data)
-        self._compile_secular_extension(build_data)
-        self._compile_jblas_extension(build_data)
+        self._compile_jlinalg_extension(build_data)
 
     def _preflight_c_build(self):
         """Verify build prerequisites and return compiler/include information.
@@ -146,7 +142,7 @@ class CustomBuildHook(BuildHookInterface):
     def _fetch_blis_binary(self, build_data) -> Path | None:
         """Fetch a prebuilt BLIS shared library from GitHub Release assets.
 
-        Checks for a pre-downloaded binary via JBLAS_BLIS_PATH env var first,
+        Checks for a pre-downloaded binary via JLINALG_BLIS_PATH env var first,
         then attempts to download from the BLIS prebuilt repo. Returns None
         (non-fatal) if the binary cannot be obtained.
 
@@ -157,14 +153,14 @@ class CustomBuildHook(BuildHookInterface):
             Path to the BLIS binary, or None if unavailable.
         """
         # Allow CI to provide a pre-downloaded binary
-        env_path = os.environ.get("JBLAS_BLIS_PATH")
+        env_path = os.environ.get("JLINALG_BLIS_PATH")
         if env_path:
             blis = Path(env_path)
             if blis.is_file():
                 print(f"Using pre-downloaded BLIS: {blis}", file=sys.stderr)
                 return blis
             print(
-                f"WARNING: JBLAS_BLIS_PATH={env_path} does not exist — "
+                f"WARNING: JLINALG_BLIS_PATH={env_path} does not exist — "
                 "falling back to download.",
                 file=sys.stderr,
             )
@@ -174,12 +170,12 @@ class CustomBuildHook(BuildHookInterface):
         if asset_name is None:
             print(
                 f"WARNING: No BLIS binary available for platform {key} — "
-                "jblas own dgemm will be used.",
+                "jlinalg own dgemm will be used.",
                 file=sys.stderr,
             )
             return None
 
-        libs_dir = Path(self.root) / "src" / "jamma" / "jblas" / "libs"
+        libs_dir = Path(self.root) / "src" / "jamma" / "jlinalg" / "libs"
         target = libs_dir / asset_name
 
         # Skip download if already present (repeated builds)
@@ -201,7 +197,7 @@ class CustomBuildHook(BuildHookInterface):
         except Exception as exc:
             print(
                 f"WARNING: BLIS download failed ({exc}) — "
-                "jblas own dgemm will be used.",
+                "jlinalg own dgemm will be used.",
                 file=sys.stderr,
             )
             # Clean up partial download
@@ -223,7 +219,7 @@ class CustomBuildHook(BuildHookInterface):
         blis_path = self._fetch_blis_binary(build_data)
         if blis_path is None:
             print(
-                "BLIS not bundled (jblas own dgemm will be used).",
+                "BLIS not bundled (jlinalg own dgemm will be used).",
                 file=sys.stderr,
             )
             return
@@ -258,7 +254,7 @@ class CustomBuildHook(BuildHookInterface):
         generic_name = (
             "libblis.dylib" if platform.system() == "Darwin" else "libblis.so"
         )
-        dist_path = f"jamma/jblas/libs/{generic_name}"
+        dist_path = f"jamma/jlinalg/libs/{generic_name}"
         build_data["force_include"][str(blis_path)] = dist_path
         print(
             f"BLIS bundled: {blis_path} -> {dist_path}",
@@ -472,176 +468,12 @@ class CustomBuildHook(BuildHookInterface):
         build_data["pure_python"] = False
         build_data["infer_tag"] = True
 
-    def _compile_eigen_extension(self, build_data):
-        """Compile _eigen_accel.c -> _eigen_accel{EXT_SUFFIX} if compiler is available.
+    def _compile_jlinalg_extension(self, build_data):
+        """Compile jlinalg C sources -> _jlinalg{EXT_SUFFIX}.
 
-        No OpenMP flags — DSYEVR is a single LAPACK call; MKL/OpenBLAS handles
-        threading internally.
+        Per-file compile-then-link.
 
-        No LAPACK link flags — the extension discovers LAPACK at runtime via
-        dlopen (resolves dsyevr_64_ or dsyevr_ from numpy's bundled BLAS).
-        This makes the compiled .so portable across numpy builds and eliminates
-        auditwheel issues on Linux.
-
-        On any compilation failure, logs a warning and returns without raising.
-
-        Args:
-            build_data: Hatchling build data dict. Updated with force_include
-                entry mapping the compiled .so into the wheel.
-        """
-        preflight = self._preflight_c_build()
-        if preflight is None:
-            return
-        cc_cmd, cc_extra, python_inc, numpy_inc, ldflags = preflight
-
-        src = Path(self.root) / "src" / "jamma" / "lmm" / "_eigen_accel.c"
-        if not src.exists():
-            print(
-                f"WARNING: C source {src} not found — skipping eigen C extension "
-                "compilation (pure-Python fallback). If building from sdist, "
-                "verify the archive is complete.",
-                file=sys.stderr,
-            )
-            return
-
-        ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
-        out_name = f"_eigen_accel{ext_suffix}"
-        out_path = Path(self.root) / "src" / "jamma" / "lmm" / out_name
-
-        # dlopen needs -ldl on Linux (macOS has dlopen in libSystem)
-        dl_flags = ["-ldl"] if platform.system() == "Linux" else []
-
-        # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3)
-        extra_cflags = os.environ.get("CFLAGS", "").split()
-
-        cmd = [
-            cc_cmd,
-            *cc_extra,
-            "-O3",
-            "-ftree-vectorize",
-            "-fno-math-errno",
-            "-fno-trapping-math",
-            *extra_cflags,
-            "-fno-finite-math-only",  # override -Ofast in CFLAGS
-            "-fPIC",
-            "-shared",
-            "-std=c99",
-            f"-I{python_inc}",
-            f"-I{numpy_inc}",
-            str(src),
-            "-o",
-            str(out_path),
-            "-lm",
-            *dl_flags,
-            *ldflags,
-        ]
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(
-                "WARNING: eigen C extension compilation failed "
-                "(pure-Python fallback will be used):\n"
-                f"  Command: {' '.join(cmd)}\n"
-                f"  Error: {result.stderr[:2000]}",
-                file=sys.stderr,
-            )
-            return
-
-        print(f"Eigen C extension compiled: {out_path}", file=sys.stderr)
-
-        # Register the compiled .so as a forced wheel inclusion.
-        build_data.setdefault("force_include", {})
-        dist_path = f"jamma/lmm/{out_name}"
-        build_data["force_include"][str(out_path)] = dist_path
-
-        # pure_python and infer_tag may already be set by _compile_c_extension.
-        # Set them unconditionally — idempotent (same values).
-        build_data["pure_python"] = False
-        build_data["infer_tag"] = True
-
-    def _compile_secular_extension(self, build_data):
-        """Compile _secular_accel.c -> _secular_accel{EXT_SUFFIX}.
-
-        No OpenMP flags — DLAED4 calls are sequential (each needs its own workspace).
-        No LAPACK link flags — resolves dlaed4_64_ or dlaed4_ at runtime via dlopen.
-
-        On any compilation failure, logs a warning and returns without raising.
-
-        Args:
-            build_data: Hatchling build data dict. Updated with force_include
-                entry mapping the compiled .so into the wheel.
-        """
-        preflight = self._preflight_c_build()
-        if preflight is None:
-            return
-        cc_cmd, cc_extra, python_inc, numpy_inc, ldflags = preflight
-
-        src = Path(self.root) / "src" / "jamma" / "lmm" / "_secular_accel.c"
-        if not src.exists():
-            print(
-                f"WARNING: C source {src} not found — skipping secular C extension "
-                "compilation (pure-Python fallback). If building from sdist, "
-                "verify the archive is complete.",
-                file=sys.stderr,
-            )
-            return
-
-        ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
-        out_name = f"_secular_accel{ext_suffix}"
-        out_path = Path(self.root) / "src" / "jamma" / "lmm" / out_name
-
-        # dlopen needs -ldl on Linux (macOS has dlopen in libSystem)
-        dl_flags = ["-ldl"] if platform.system() == "Linux" else []
-
-        # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3)
-        extra_cflags = os.environ.get("CFLAGS", "").split()
-
-        cmd = [
-            cc_cmd,
-            *cc_extra,
-            "-O3",
-            "-ftree-vectorize",
-            "-fno-math-errno",
-            "-fno-trapping-math",
-            *extra_cflags,
-            "-fno-finite-math-only",  # override -Ofast in CFLAGS
-            "-fPIC",
-            "-shared",
-            "-std=c99",
-            f"-I{python_inc}",
-            f"-I{numpy_inc}",
-            str(src),
-            "-o",
-            str(out_path),
-            "-lm",
-            *dl_flags,
-            *ldflags,
-        ]
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(
-                "WARNING: secular C extension compilation failed "
-                "(pure-Python fallback will be used):\n"
-                f"  Command: {' '.join(cmd)}\n"
-                f"  Error: {result.stderr[:2000]}",
-                file=sys.stderr,
-            )
-            return
-
-        print(f"Secular C extension compiled: {out_path}", file=sys.stderr)
-
-        build_data.setdefault("force_include", {})
-        dist_path = f"jamma/lmm/{out_name}"
-        build_data["force_include"][str(out_path)] = dist_path
-
-        build_data["pure_python"] = False
-        build_data["infer_tag"] = True
-
-    def _compile_jblas_extension(self, build_data):
-        """Compile jblas C sources -> _jblas{EXT_SUFFIX} via per-file compile-then-link.
-
-        Compiles each C source file in src/jamma/jblas/src/ individually to a
+        Compiles each C source file in src/jamma/jlinalg/src/ individually to a
         temporary object file, then links them into a single shared library.
         This enables per-file compiler flag groups (e.g. AVX2 files vs LAPACK files
         with distinct flag sets in future phases).
@@ -651,7 +483,7 @@ class CustomBuildHook(BuildHookInterface):
           - Linux: -fopenmp (libgomp or libiomp5 auto-detected)
 
         On any compilation failure, logs a warning and returns without raising.
-        The compiled .so is written to src/jamma/jblas/.
+        The compiled .so is written to src/jamma/jlinalg/.
 
         Args:
             build_data: Hatchling build data dict. Updated with force_include
@@ -662,18 +494,18 @@ class CustomBuildHook(BuildHookInterface):
             return
         cc_cmd, cc_extra, python_inc, numpy_inc, ldflags = preflight
 
-        jblas_src = Path(self.root) / "src" / "jamma" / "jblas" / "src"
-        jblas_inc = Path(self.root) / "src" / "jamma" / "jblas" / "include"
+        jlinalg_src = Path(self.root) / "src" / "jamma" / "jlinalg" / "src"
+        jlinalg_inc = Path(self.root) / "src" / "jamma" / "jlinalg" / "include"
 
-        if not jblas_src.is_dir():
+        if not jlinalg_src.is_dir():
             print(
-                f"WARNING: jblas source directory {jblas_src} not found — "
-                "skipping jblas C extension compilation (NumPy fallback).",
+                f"WARNING: jlinalg source directory {jlinalg_src} not found — "
+                "skipping jlinalg C extension compilation (NumPy fallback).",
                 file=sys.stderr,
             )
             return
 
-        # jblas source files split into three groups:
+        # jlinalg source files split into three groups:
         # - baseline: portable C compiled without SIMD flags (runs on any x86_64)
         # - simd: files using AVX2 intrinsics, compiled with -mavx2 -mfma
         # - kernels: ISA-specific microkernel files (required on target platform)
@@ -681,39 +513,39 @@ class CustomBuildHook(BuildHookInterface):
         # older CPUs that lack AVX2.  Runtime CPUID dispatch in platform.c
         # selects the appropriate kernels.
         baseline_sources = [
-            jblas_src / "platform.c",
-            jblas_src / "blas_dispatch.c",
-            jblas_src / "dnrm2.c",
-            jblas_src / "dgemv.c",
-            jblas_src / "pymodule.c",
-            jblas_src / "dgemm.c",  # blocking framework
-            jblas_src / "dgemm_generic.c",  # generic scalar microkernel
-            jblas_src / "dsyrk.c",  # symmetric rank-k update
-            jblas_src / "dsyr2k.c",  # symmetric rank-2k update
+            jlinalg_src / "platform.c",
+            jlinalg_src / "blas_dispatch.c",
+            jlinalg_src / "dnrm2.c",
+            jlinalg_src / "dgemv.c",
+            jlinalg_src / "pymodule.c",
+            jlinalg_src / "dgemm.c",  # blocking framework
+            jlinalg_src / "dgemm_generic.c",  # generic scalar microkernel
+            jlinalg_src / "dsyrk.c",  # symmetric rank-k update
+            jlinalg_src / "dsyr2k.c",  # symmetric rank-2k update
         ]
         simd_sources = [
-            jblas_src / "ddot.c",
-            jblas_src / "daxpy.c",
-            jblas_src / "dscal.c",
+            jlinalg_src / "ddot.c",
+            jlinalg_src / "daxpy.c",
+            jlinalg_src / "dscal.c",
         ]
         # LAPACK sources: strict IEEE 754 required for secular equation deflation.
         # Compiled with -O2 only — MUST NOT get -ffast-math, -Ofast,
         # -ffinite-math-only, or -funroll-loops.
         lapack_sources = [
-            jblas_src / "dsytrd.c",
-            jblas_src / "dstedc.c",
-            jblas_src / "dormtr.c",
-            jblas_src / "eigh.c",
+            jlinalg_src / "dsytrd.c",
+            jlinalg_src / "dstedc.c",
+            jlinalg_src / "dormtr.c",
+            jlinalg_src / "eigh.c",
         ]
 
         # Kernel directory — required on the matching platform, optional elsewhere.
-        jblas_kernels = Path(self.root) / "src" / "jamma" / "jblas" / "kernels"
+        jlinalg_kernels = Path(self.root) / "src" / "jamma" / "jlinalg" / "kernels"
         avx2_kernel_sources: list[Path] = []
         neon_kernel_sources: list[Path] = []
         machine = platform.machine()
-        if jblas_kernels.is_dir():
-            avx2_src = jblas_kernels / "dgemm_avx2.c"
-            neon_src = jblas_kernels / "dgemm_neon.c"
+        if jlinalg_kernels.is_dir():
+            avx2_src = jlinalg_kernels / "dgemm_avx2.c"
+            neon_src = jlinalg_kernels / "dgemm_neon.c"
             if avx2_src.exists():
                 avx2_kernel_sources.append(avx2_src)
             elif machine in ("x86_64", "AMD64"):
@@ -745,8 +577,8 @@ class CustomBuildHook(BuildHookInterface):
         ]
         if missing:
             print(
-                f"WARNING: jblas source files missing: {missing} — "
-                "skipping jblas C extension compilation (NumPy fallback).",
+                f"WARNING: jlinalg source files missing: {missing} — "
+                "skipping jlinalg C extension compilation (NumPy fallback).",
                 file=sys.stderr,
             )
             return
@@ -779,13 +611,13 @@ class CustomBuildHook(BuildHookInterface):
                 else:
                     print(
                         f"OpenMP: Homebrew prefix {prefix} exists but lib/ not found. "
-                        "jblas C extension will be single-threaded.",
+                        "jlinalg C extension will be single-threaded.",
                         file=sys.stderr,
                     )
             except (FileNotFoundError, subprocess.CalledProcessError):
                 print(
                     "OpenMP not available on macOS (libomp not found). "
-                    "jblas C extension will be single-threaded.",
+                    "jlinalg C extension will be single-threaded.",
                     file=sys.stderr,
                 )
         else:
@@ -807,7 +639,7 @@ class CustomBuildHook(BuildHookInterface):
             "-std=c11",
             f"-I{python_inc}",
             f"-I{numpy_inc}",
-            f"-I{jblas_inc}",
+            f"-I{jlinalg_inc}",
         ]
 
         # OpenMP flags for compile step: -I/-L/-Xpreprocessor/-fopenmp but not link libs
@@ -820,11 +652,11 @@ class CustomBuildHook(BuildHookInterface):
             # -lomp, -liomp5 are link-only; skip for compile step
 
         ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
-        out_name = f"_jblas{ext_suffix}"
-        out_path = Path(self.root) / "src" / "jamma" / "jblas" / out_name
+        out_name = f"_jlinalg{ext_suffix}"
+        out_path = Path(self.root) / "src" / "jamma" / "jlinalg" / out_name
 
         # Compile each source file to a .o in a temporary directory
-        tmp_dir = Path(tempfile.mkdtemp(prefix="jblas_build_"))
+        tmp_dir = Path(tempfile.mkdtemp(prefix="jlinalg_build_"))
         obj_files: list[Path] = []
         compile_failed = False
         use_omp = bool(omp_flags)
@@ -843,15 +675,15 @@ class CustomBuildHook(BuildHookInterface):
             "-std=c11",
             f"-I{python_inc}",
             f"-I{numpy_inc}",
-            f"-I{jblas_inc}",
+            f"-I{jlinalg_inc}",
         ]
 
-        def _jblas_compile_cmd(
+        def _jlinalg_compile_cmd(
             src: Path,
             obj_file: Path,
             omp_compile_flags: list[str],
         ) -> list[str]:
-            """Build the compile command for a single jblas source file.
+            """Build the compile command for a single jlinalg source file.
 
             LAPACK sources get strict IEEE 754 flags (no -ffast-math).
             SIMD/AVX2 sources get -mavx2 -mfma. Baseline sources get base_cflags.
@@ -898,13 +730,13 @@ class CustomBuildHook(BuildHookInterface):
         try:
             for src in source_files:
                 obj_file = tmp_dir / (src.stem + ".o")
-                cmd_compile = _jblas_compile_cmd(src, obj_file, omp_compile)
+                cmd_compile = _jlinalg_compile_cmd(src, obj_file, omp_compile)
                 # Print compile command to stderr for build-log assertions (CI grep)
-                print(f"jblas compile: {' '.join(cmd_compile)}", file=sys.stderr)
+                print(f"jlinalg compile: {' '.join(cmd_compile)}", file=sys.stderr)
                 result = subprocess.run(cmd_compile, capture_output=True, text=True)
                 if result.returncode != 0:
                     print(
-                        f"jblas compile failed on {src.name}:",
+                        f"jlinalg compile failed on {src.name}:",
                         file=sys.stderr,
                     )
                     if result.stderr:
@@ -916,22 +748,22 @@ class CustomBuildHook(BuildHookInterface):
             if compile_failed and use_omp:
                 # Retry without OpenMP compile flags
                 print(
-                    "jblas OpenMP compilation failed, retrying without OpenMP...",
+                    "jlinalg OpenMP compilation failed, retrying without OpenMP...",
                     file=sys.stderr,
                 )
                 obj_files.clear()
                 compile_failed = False
                 for src in source_files:
                     obj_file = tmp_dir / (src.stem + "_noomp.o")
-                    cmd_compile = _jblas_compile_cmd(src, obj_file, [])
+                    cmd_compile = _jlinalg_compile_cmd(src, obj_file, [])
                     print(
-                        f"jblas compile (no OMP): {' '.join(cmd_compile)}",
+                        f"jlinalg compile (no OMP): {' '.join(cmd_compile)}",
                         file=sys.stderr,
                     )
                     result = subprocess.run(cmd_compile, capture_output=True, text=True)
                     if result.returncode != 0:
                         print(
-                            "WARNING: jblas C extension compilation failed on "
+                            "WARNING: jlinalg C extension compilation failed on "
                             f"{src.name} (NumPy fallback will be used):\n"
                             f"  Error: {result.stderr[:1000]}",
                             file=sys.stderr,
@@ -944,7 +776,7 @@ class CustomBuildHook(BuildHookInterface):
 
             if compile_failed:
                 print(
-                    "WARNING: jblas C extension compilation failed "
+                    "WARNING: jlinalg C extension compilation failed "
                     "(NumPy fallback will be used).",
                     file=sys.stderr,
                 )
@@ -967,11 +799,11 @@ class CustomBuildHook(BuildHookInterface):
                 *omp_flags,
                 *ldflags,
             ]
-            print(f"jblas link: {' '.join(cmd_link)}", file=sys.stderr)
+            print(f"jlinalg link: {' '.join(cmd_link)}", file=sys.stderr)
             result_link = subprocess.run(cmd_link, capture_output=True, text=True)
             if result_link.returncode != 0:
                 print(
-                    "WARNING: jblas C extension link failed "
+                    "WARNING: jlinalg C extension link failed "
                     "(NumPy fallback will be used):\n"
                     f"  Command: {' '.join(cmd_link)}\n"
                     f"  Error: {result_link.stderr[:2000]}",
@@ -983,13 +815,13 @@ class CustomBuildHook(BuildHookInterface):
             # Clean up temporary object files
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
-        print(f"jblas C extension compiled: {out_path}", file=sys.stderr)
+        print(f"jlinalg C extension compiled: {out_path}", file=sys.stderr)
 
         # Register the compiled .so for wheel inclusion
         build_data.setdefault("force_include", {})
-        build_data["force_include"][str(out_path)] = f"jamma/jblas/{out_name}"
+        build_data["force_include"][str(out_path)] = f"jamma/jlinalg/{out_name}"
         build_data["pure_python"] = False
         build_data["infer_tag"] = True
 
-        # Bundle BLIS shared library (independent of jblas .so compilation)
+        # Bundle BLIS shared library (independent of jlinalg .so compilation)
         self._bundle_blis(build_data)

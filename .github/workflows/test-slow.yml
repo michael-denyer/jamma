@@ -24,7 +24,10 @@ jobs:
       - name: Compile C extensions
         run: |
           uv run python -m jamma.lmm._compile_accel
-          uv run python -m jamma.lmm._compile_eigen
+
+      - name: Compile jlinalg extension
+        run: |
+          uv run python -m jamma.jlinalg._compile_jlinalg
 
       - name: Run slow and tier2 tests
         run: uv run pytest -m "tier2 or slow" -v -o 'addopts=' --no-cov

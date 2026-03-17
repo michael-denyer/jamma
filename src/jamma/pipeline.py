@@ -736,10 +736,15 @@ class PipelineRunner:
 
     def _check_hwe_support(self, plan: ExecutionPlan) -> None:
         """Raise if HWE filtering requested but backend doesn't support it."""
-        if self.config.hwe_threshold > 0 and plan.backend == "numpy":
+        if (
+            self.config.hwe_threshold > 0
+            and plan.backend == "numpy"
+            and plan.mode == "batch"
+        ):
             raise ValueError(
-                "HWE filtering (--hwe) is not yet supported with the NumPy backend. "
-                "Use the JAX backend (pip install jamma[jax]) or set --hwe 0."
+                "HWE filtering (--hwe) is not supported with the NumPy "
+                "batch backend. Use --backend numpy-streaming, the JAX "
+                "backend (pip install jamma[jax]), or set --hwe 0."
             )
 
     @staticmethod

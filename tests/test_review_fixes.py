@@ -582,5 +582,5 @@ def test_pipeline_hwe_numpy_raises() -> None:
         hwe_threshold=0.001,
     )
     runner = PipelineRunner(config)
-    with pytest.raises(ValueError, match="HWE filtering.*not yet supported.*NumPy"):
+    with pytest.raises(ValueError, match="HWE filtering.*not supported.*NumPy.*batch"):
         runner.run()

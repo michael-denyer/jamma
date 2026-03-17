@@ -1250,7 +1250,7 @@ class PipelineRunner:
         # Pull runner-level rotation timing (JAX backend only)
         runner_timing: dict[str, float] = {}
         if plan.backend == "jax" and plan.mode == "streaming":
-            from jamma.lmm.runner_streaming import get_last_run_timing
+            from jamma.lmm.runner_jax_streaming import get_last_run_timing
 
             runner_timing = get_last_run_timing()
         elif plan.backend == "jax" and plan.mode == "batch":

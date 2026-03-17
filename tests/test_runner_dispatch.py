@@ -88,7 +88,7 @@ class TestUnifiedDispatcher:
         stub_result = self._stub_run_result(3)
 
         with patch(
-            "jamma.lmm.runner_streaming.run_lmm_association_streaming",
+            "jamma.lmm.runner_jax_streaming.run_lmm_association_streaming",
             return_value=(stub_result, 3),
         ) as mock_stream:
             result, n_tested = run_lmm(

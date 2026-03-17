@@ -225,7 +225,7 @@ def test_clear_caches_not_in_chunk_loop():
 
     runner_files = [
         Path("src/jamma/lmm/runner_jax.py"),
-        Path("src/jamma/lmm/runner_streaming.py"),
+        Path("src/jamma/lmm/runner_jax_streaming.py"),
     ]
 
     for fpath in runner_files:

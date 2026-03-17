@@ -380,7 +380,7 @@ class TestImportIsolation:
         To intentionally add a new file, update _JAX_IMPORT_ALLOWLIST below.
         """
         _JAX_IMPORT_ALLOWLIST = {
-            "runner_streaming.py",
+            "runner_jax_streaming.py",
             "runner_jax.py",
             "likelihood_jax.py",
             "prepare.py",

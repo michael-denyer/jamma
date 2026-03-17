@@ -1,7 +1,7 @@
 """Shared LMM chunk computation.
 
 Encapsulates the mode-specific dispatch logic (modes 1-4) that is
-shared across runner_jax.py, runner_streaming.py, and loco.py.
+shared across runner_jax.py, runner_jax_streaming.py, and loco.py.
 
 The caller is responsible for:
 - Computing Uab_batch via batch_compute_uab (before calling this)

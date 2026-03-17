@@ -266,7 +266,7 @@ class IncrementalAssocWriter:
             snp_indices: Global SNP indices for snp_info lookup.
             snp_info: SNP metadata list (dict-like per element). Each element
                 must provide keys: chr, rs, pos, a1, a0 (not ps/allele1/allele0).
-                Typically a _LazySnpMeta instance from runner_streaming.
+                Typically a _LazySnpMeta instance from runner_jax_streaming.
             afs: Allele frequencies, one per SNP in this batch.
             miss_counts: Missing counts, one per SNP in this batch.
             arrays: Stat arrays keyed by array_key names, same length.

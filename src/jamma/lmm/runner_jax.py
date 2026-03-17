@@ -1,7 +1,7 @@
 """JAX-optimized batch LMM association runner.
 
 Batch-optimized LMM association testing on CPU (XLA) or GPU (JAX).
-Input genotypes must fit in memory; for disk streaming use runner_streaming.py.
+Input genotypes must fit in memory; for disk streaming use runner_jax_streaming.py.
 """
 
 import gc
@@ -49,7 +49,7 @@ from jamma.lmm.schema import LmmConfig, LmmRunResult, RunnerTiming
 from jamma.utils.logging import log_rss_memory
 
 # Module-level timing from the last run, for direct callers (tests, notebooks).
-# The pipeline reads runner_streaming.last_run_timing for the JAX streaming path.
+# The pipeline reads runner_jax_streaming.last_run_timing for the JAX streaming path.
 # Not thread-safe: concurrent calls will corrupt this dict.
 # Cleared at function entry; repopulated at function exit on success.
 last_run_timing: RunnerTiming = {}

@@ -5,7 +5,7 @@ Core algorithm follows Zhou & Stephens (2012) Nature Genetics.
 
 Modules:
 - runner_jax: Batch processing (genotypes in memory, requires JAX)
-- runner_streaming: Disk streaming (genotypes per chunk, requires JAX)
+- runner_jax_streaming: Disk streaming (genotypes per chunk, requires JAX)
 - runner_numpy: Pure-NumPy batch runner (no JAX required)
 - chunk: Chunk size computation
 - prepare: JAX-specific setup (device sharding, placement)
@@ -38,7 +38,7 @@ _HAS_JAX = has_jax()
 
 if _HAS_JAX:
     from jamma.lmm.runner_jax import run_lmm_association_jax
-    from jamma.lmm.runner_streaming import run_lmm_association_streaming
+    from jamma.lmm.runner_jax_streaming import run_lmm_association_streaming
 
 __all__ = [
     "auto_tune_chunk_size",

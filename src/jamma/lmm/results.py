@@ -4,7 +4,7 @@ Constructs AssocResult objects from computed statistics for each
 test mode (Wald, Score, LRT, All). Used by batch runners (JAX and NumPy)
 in both in-memory and output_path streaming modes via ``write_streaming_chunk``
 (which wraps ``IncrementalAssocWriter.write_arrays_batch`` with diagnostic
-accumulation). The disk-streaming runner (runner_streaming.py) calls
+accumulation). The disk-streaming runner (runner_jax_streaming.py) calls
 ``write_arrays_batch`` directly, bypassing this module's write path.
 """
 
@@ -254,7 +254,7 @@ def write_streaming_chunk(
     """Write a chunk to disk and accumulate diagnostics.
 
     Used by the batch JAX and NumPy runners when output_path is set.
-    The disk-streaming runner (runner_streaming.py) handles its own
+    The disk-streaming runner (runner_jax_streaming.py) handles its own
     write/diagnostic loop inline.
 
     Args:

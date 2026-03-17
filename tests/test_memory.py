@@ -576,7 +576,7 @@ class TestGateCorrectnessRunnerJax:
 
 @pytest.mark.tier0
 class TestGateCorrectnessRunnerStreaming:
-    """Tests that runner_streaming.py memory gate correctly blocks/passes."""
+    """Tests that runner_jax_streaming.py memory gate correctly blocks/passes."""
 
     def test_streaming_gate_passes_with_ample_memory(self):
         """Memory check should pass when plenty of memory is available."""

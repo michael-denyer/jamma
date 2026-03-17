@@ -356,7 +356,7 @@ def run_lmm(
     if execution_plan.backend == "jax" and execution_plan.mode == "streaming":
         if bed_path is None:
             raise ValueError("jax-streaming mode requires bed_path, but bed_path=None")
-        from jamma.lmm.runner_streaming import run_lmm_association_streaming
+        from jamma.lmm.runner_jax_streaming import run_lmm_association_streaming
 
         result, n_tested = run_lmm_association_streaming(
             bed_path=bed_path,

@@ -965,7 +965,9 @@ class TestRunLmmAssociationStreaming:
             )
 
         with (
-            patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=50),
+            patch(
+                "jamma.lmm.runner_jax_streaming._compute_chunk_size", return_value=50
+            ),
             patch.object(
                 IncrementalAssocWriter,
                 "write_arrays_batch",
@@ -998,7 +1000,7 @@ class TestRunLmmAssociationStreaming:
         import math
         from unittest.mock import patch
 
-        from jamma.lmm import runner_streaming
+        from jamma.lmm import runner_jax_streaming
 
         rng = np.random.default_rng(321)
         data = load_plink_binary(sample_plink_data)
@@ -1008,7 +1010,7 @@ class TestRunLmmAssociationStreaming:
         )
 
         chunk_sizes: list[int] = []
-        original_yield_chunk_results = runner_streaming._yield_chunk_results
+        original_yield_chunk_results = runner_jax_streaming._yield_chunk_results
 
         def _spy_yield_chunk_results(
             lmm_mode,
@@ -1031,9 +1033,11 @@ class TestRunLmmAssociationStreaming:
             )
 
         with (
-            patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=50),
+            patch(
+                "jamma.lmm.runner_jax_streaming._compute_chunk_size", return_value=50
+            ),
             patch.object(
-                runner_streaming,
+                runner_jax_streaming,
                 "_yield_chunk_results",
                 new=_spy_yield_chunk_results,
             ),
@@ -1461,7 +1465,7 @@ def test_streaming_score_only_matches_batch(sample_plink_data: Path) -> None:
 
 @pytest.mark.tier1
 class TestExposedRotationDiagnostic:
-    """Tests for the UT@G exposed rotation timing diagnostic in runner_streaming."""
+    """Tests for the UT@G exposed rotation timing diagnostic in runner_jax_streaming."""
 
     def test_single_chunk_exposed_equals_total(self, sample_plink_data: Path) -> None:
         """Single-chunk run: exposed rotation should equal total rotation.
@@ -1470,7 +1474,7 @@ class TestExposedRotationDiagnostic:
         are processed. The first (and only) rotation has no prior compute to
         overlap with, so exposed == total.
         """
-        from jamma.lmm.runner_streaming import last_run_timing
+        from jamma.lmm.runner_jax_streaming import last_run_timing
 
         rng = np.random.default_rng(42)
         data = load_plink_binary(sample_plink_data)
@@ -1509,7 +1513,7 @@ class TestExposedRotationDiagnostic:
         Whether or not actual overlap occurs, the invariant exposed <= total
         must always hold. Uses a small chunk_size to force multiple chunks.
         """
-        from jamma.lmm.runner_streaming import last_run_timing
+        from jamma.lmm.runner_jax_streaming import last_run_timing
 
         rng = np.random.default_rng(42)
         data = load_plink_binary(sample_plink_data)
@@ -1541,7 +1545,7 @@ class TestExposedRotationDiagnostic:
 
     def test_timing_keys_present_after_run(self, sample_plink_data: Path) -> None:
         """last_run_timing dict contains all four expected timing keys."""
-        from jamma.lmm.runner_streaming import last_run_timing
+        from jamma.lmm.runner_jax_streaming import last_run_timing
 
         rng = np.random.default_rng(42)
         data = load_plink_binary(sample_plink_data)
@@ -1748,7 +1752,7 @@ def test_prefetch_iterator_single_item() -> None:
 @pytest.mark.tier1
 @pytest.mark.requires_jax
 class TestThreadPoolExecutorOverlapStreaming:
-    """Tests for ThreadPoolExecutor-based rotation-compute overlap in runner_streaming.
+    """Tests for ThreadPoolExecutor rotation-compute overlap in runner_jax_streaming.
 
     Verifies that BLAS rotation for JAX sub-chunk N+1 runs concurrently
     with JAX compute for sub-chunk N using a background thread.
@@ -1764,7 +1768,7 @@ class TestThreadPoolExecutorOverlapStreaming:
         """
         from unittest.mock import patch
 
-        from jamma.lmm.runner_streaming import last_run_timing
+        from jamma.lmm.runner_jax_streaming import last_run_timing
 
         rng = np.random.default_rng(42)
         data = load_plink_binary(sample_plink_data)
@@ -1774,7 +1778,9 @@ class TestThreadPoolExecutorOverlapStreaming:
         )
 
         # Force small jax_chunk_size so 500 SNPs → many sub-chunks
-        with patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=50):
+        with patch(
+            "jamma.lmm.runner_jax_streaming._compute_chunk_size", return_value=50
+        ):
             _, _ = run_lmm_association_streaming(
                 sample_plink_data,
                 phenotypes,
@@ -1802,7 +1808,7 @@ class TestThreadPoolExecutorOverlapStreaming:
         When jax_chunk_size >= all SNPs in the file chunk, there is only one
         JAX sub-chunk and no overlap is possible.
         """
-        from jamma.lmm.runner_streaming import last_run_timing
+        from jamma.lmm.runner_jax_streaming import last_run_timing
 
         rng = np.random.default_rng(42)
         data = load_plink_binary(sample_plink_data)
@@ -1859,7 +1865,9 @@ class TestThreadPoolExecutorOverlapStreaming:
         reference = run_result.associations
 
         # Test: multiple JAX sub-chunks (overlap active)
-        with patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=50):
+        with patch(
+            "jamma.lmm.runner_jax_streaming._compute_chunk_size", return_value=50
+        ):
             run_result, _ = run_lmm_association_streaming(
                 sample_plink_data,
                 phenotypes,
@@ -1910,7 +1918,7 @@ class TestThreadPoolExecutorOverlapStreaming:
         )
 
         with patch(
-            "jamma.lmm.runner_streaming._compute_chunk_size", return_value=1000
+            "jamma.lmm.runner_jax_streaming._compute_chunk_size", return_value=1000
         ) as mock_chunk:
             _, _ = run_lmm_association_streaming(
                 sample_plink_data,
@@ -1933,17 +1941,17 @@ class TestThreadPoolExecutorOverlapStreaming:
         )
 
     def test_threadpoolexecutor_used_in_streaming_runner(self) -> None:
-        """runner_streaming imports and uses ThreadPoolExecutor."""
+        """runner_jax_streaming imports and uses ThreadPoolExecutor."""
         import inspect
 
-        from jamma.lmm import runner_streaming
+        from jamma.lmm import runner_jax_streaming
 
-        source = inspect.getsource(runner_streaming)
+        source = inspect.getsource(runner_jax_streaming)
         assert "ThreadPoolExecutor" in source, (
-            "runner_streaming must use ThreadPoolExecutor for rotation-compute overlap"
+            "runner_jax_streaming must use ThreadPoolExecutor for overlap"
         )
         assert "executor.submit" in source, (
-            "runner_streaming must submit rotation work to background thread"
+            "runner_jax_streaming must submit rotation work to background thread"
         )
 
     def test_background_rotation_failure_propagates(
@@ -1978,9 +1986,11 @@ class TestThreadPoolExecutorOverlapStreaming:
             return original_prepare(*args, **kwargs)
 
         with (
-            patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=50),
             patch(
-                "jamma.lmm.runner_streaming.prepare_utg_chunk",
+                "jamma.lmm.runner_jax_streaming._compute_chunk_size", return_value=50
+            ),
+            patch(
+                "jamma.lmm.runner_jax_streaming.prepare_utg_chunk",
                 side_effect=_failing_prepare,
             ),
         ):
@@ -2031,9 +2041,11 @@ class TestThreadPoolExecutorOverlapStreaming:
             return original_prepare(*args, **kwargs)
 
         with (
-            patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=50),
             patch(
-                "jamma.lmm.runner_streaming.prepare_utg_chunk",
+                "jamma.lmm.runner_jax_streaming._compute_chunk_size", return_value=50
+            ),
+            patch(
+                "jamma.lmm.runner_jax_streaming.prepare_utg_chunk",
                 side_effect=_oom_prepare,
             ),
         ):
@@ -2072,12 +2084,14 @@ class TestThreadPoolExecutorOverlapStreaming:
             return original_prepare(*args, **kwargs)
 
         with (
-            patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=50),
             patch(
-                "jamma.lmm.runner_streaming.prepare_utg_chunk",
+                "jamma.lmm.runner_jax_streaming._compute_chunk_size", return_value=50
+            ),
+            patch(
+                "jamma.lmm.runner_jax_streaming.prepare_utg_chunk",
                 side_effect=_failing_prepare,
             ),
-            patch("jamma.lmm.runner_streaming.jax.clear_caches") as mock_clear,
+            patch("jamma.lmm.runner_jax_streaming.jax.clear_caches") as mock_clear,
         ):
             with pytest.raises(RuntimeError, match="Background rotation failed"):
                 run_lmm_association_streaming(
@@ -2104,7 +2118,7 @@ class TestThreadPoolExecutorOverlapStreaming:
         """
         from unittest.mock import patch
 
-        from jamma.lmm.runner_streaming import last_run_timing
+        from jamma.lmm.runner_jax_streaming import last_run_timing
 
         rng = np.random.default_rng(42)
         data = load_plink_binary(sample_plink_data)
@@ -2115,7 +2129,9 @@ class TestThreadPoolExecutorOverlapStreaming:
 
         # chunk_size=100 → 5 BED file chunks for 500 SNPs
         # jax_chunk_size=25 → 4 JAX sub-chunks per BED file chunk
-        with patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=25):
+        with patch(
+            "jamma.lmm.runner_jax_streaming._compute_chunk_size", return_value=25
+        ):
             run_result, n_tested = run_lmm_association_streaming(
                 sample_plink_data,
                 phenotypes,
@@ -2165,7 +2181,7 @@ class TestRotationOverlapEffectivenessStreaming:
         """
         from unittest.mock import patch
 
-        from jamma.lmm.runner_streaming import last_run_timing
+        from jamma.lmm.runner_jax_streaming import last_run_timing
 
         rng = np.random.default_rng(54)
         data = load_plink_binary(sample_plink_data)
@@ -2175,7 +2191,9 @@ class TestRotationOverlapEffectivenessStreaming:
         )
 
         # Force jax_chunk_size=25 so 500 SNPs → 20 JAX sub-chunks
-        with patch("jamma.lmm.runner_streaming._compute_chunk_size", return_value=25):
+        with patch(
+            "jamma.lmm.runner_jax_streaming._compute_chunk_size", return_value=25
+        ):
             _, _ = run_lmm_association_streaming(
                 sample_plink_data,
                 phenotypes,
@@ -2207,7 +2225,7 @@ class TestRotationOverlapEffectivenessStreaming:
         Verifies that last_run_timing is fully populated with all expected
         keys and all values are valid (float, >= 0).
         """
-        from jamma.lmm.runner_streaming import last_run_timing
+        from jamma.lmm.runner_jax_streaming import last_run_timing
 
         rng = np.random.default_rng(42)
         data = load_plink_binary(sample_plink_data)
@@ -2710,7 +2728,7 @@ class TestNaNDiagnostics:
         import re
         from unittest.mock import patch
 
-        import jamma.lmm.runner_streaming as streaming_module
+        import jamma.lmm.runner_jax_streaming as streaming_module
 
         rng = np.random.default_rng(42)
         data = load_plink_binary(sample_plink_data)
@@ -2770,7 +2788,7 @@ class TestNaNDiagnostics:
         """When no NaN values are present, no NaN warning is emitted."""
         from unittest.mock import patch
 
-        import jamma.lmm.runner_streaming as streaming_module
+        import jamma.lmm.runner_jax_streaming as streaming_module
 
         rng = np.random.default_rng(42)
         data = load_plink_binary(sample_plink_data)
@@ -2813,7 +2831,7 @@ class TestNaNDiagnostics:
         import re
         from unittest.mock import patch
 
-        import jamma.lmm.runner_streaming as streaming_module
+        import jamma.lmm.runner_jax_streaming as streaming_module
 
         rng = np.random.default_rng(42)
         data = load_plink_binary(sample_plink_data)

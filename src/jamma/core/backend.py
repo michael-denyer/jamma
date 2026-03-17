@@ -18,7 +18,7 @@ from typing import Literal
 
 from loguru import logger
 
-BackendRequest = Literal["auto", "jax", "numpy"]
+BackendRequest = Literal["auto", "jax", "numpy", "numpy-streaming", "jax-streaming"]
 BackendResolved = Literal["jax", "numpy"]
 
 

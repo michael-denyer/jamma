@@ -1031,6 +1031,88 @@ def test_lmm_numpy_backend(tmp_path: Path):
 
 
 @pytest.mark.tier1
+def test_cli_backend_numpy_streaming_accepted():
+    """CLI accepts --backend numpy-streaming."""
+    result = runner.invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "numpy-streaming" in result.output
+
+
+@pytest.mark.tier1
+def test_cli_backend_jax_streaming_accepted():
+    """CLI accepts --backend jax-streaming."""
+    result = runner.invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "jax-streaming" in result.output
+
+
+@pytest.mark.tier1
+def test_cli_backend_numpy_streaming_wires_to_pipeline():
+    """--backend numpy-streaming is passed through to PipelineConfig."""
+    from unittest.mock import MagicMock, patch
+
+    mock_result = _mock_pipeline_result(MagicMock(spec=Path))
+    captured_configs = []
+
+    def _capture_config(config):
+        captured_configs.append(config)
+        mock = MagicMock()
+        mock.run.return_value = mock_result
+        return mock
+
+    with patch("jamma.cli.PipelineRunner", side_effect=_capture_config):
+        runner.invoke(
+            main,
+            [
+                "-lmm",
+                "1",
+                "-bfile",
+                str(EXAMPLE_BFILE),
+                "-k",
+                str(KINSHIP_FILE),
+                "--backend",
+                "numpy-streaming",
+                "--no-check-memory",
+            ],
+        )
+
+    assert len(captured_configs) == 1
+    assert captured_configs[0].backend == "numpy-streaming"
+
+
+@pytest.mark.tier1
+def test_cli_secular_with_numpy_streaming_accepted():
+    """--secular with --backend numpy-streaming is accepted."""
+    from unittest.mock import MagicMock, patch
+
+    mock_result = _mock_pipeline_result(MagicMock(spec=Path))
+
+    with patch("jamma.cli.PipelineRunner") as mock_runner_cls:
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = mock_result
+        mock_runner_cls.return_value = mock_runner
+
+        result = runner.invoke(
+            main,
+            [
+                "-lmm",
+                "1",
+                "-bfile",
+                str(EXAMPLE_BFILE),
+                "-loco",
+                "--secular",
+                "--backend",
+                "numpy-streaming",
+            ],
+        )
+
+    # Should not fail due to secular validation
+    assert result.exit_code != 2, (
+        f"Click parsing failed (exit_code=2):\n{result.output}"
+    )
+
+
+@pytest.mark.tier1
 def test_cli_secular_flag_in_help():
     """--secular appears in --help output."""
     result = runner.invoke(main, ["--help"])

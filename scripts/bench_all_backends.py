@@ -334,6 +334,44 @@ def bench_jax_streaming(
 
 
 # ---------------------------------------------------------------------------
+# JAMMA NumPy streaming benchmark
+# ---------------------------------------------------------------------------
+def bench_numpy_streaming(
+    phenotypes, kinship, covariates_4, runs: int
+) -> dict[str, float]:
+    """Benchmark NumPy streaming backend (disk I/O + C extension)."""
+    from jamma.lmm.runner_numpy_streaming import run_lmm_association_numpy_streaming
+
+    results: dict[str, float] = {}
+
+    ops: list[tuple[str, int, np.ndarray | None]] = [
+        ("lmm_wald", 1, None),
+        ("lmm_all", 4, None),
+    ]
+    if covariates_4 is not None:
+        ops.append(("lmm_wald_c4", 1, covariates_4))
+
+    for op, mode, covars in ops:
+        best = float("inf")
+        for _ in range(runs):
+            t0 = time.perf_counter()
+            run_lmm_association_numpy_streaming(
+                bed_path=_MOUSE_PREFIX,
+                phenotypes=phenotypes,
+                kinship=kinship.copy(),
+                covariates=covars,
+                show_progress=False,
+                check_memory=False,
+                lmm_mode=mode,
+            )
+            elapsed = time.perf_counter() - t0
+            best = min(best, elapsed)
+        results[op] = best
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Kinship benchmark
 # ---------------------------------------------------------------------------
 def bench_kinship(plink, runs: int) -> dict[str, float]:
@@ -459,6 +497,14 @@ def main():
     )
     timings["jax_batch"] = jax_times
 
+    # --- NumPy streaming ---
+    print("Benchmarking NumPy streaming...", flush=True)
+    numpy_streaming_times = bench_numpy_streaming(
+        phenotypes, kinship, covariates_4, args.runs
+    )
+    numpy_streaming_times["kinship"] = None  # streaming doesn't do kinship
+    timings["numpy_streaming"] = numpy_streaming_times
+
     # --- JAX streaming ---
     print("Benchmarking JAX streaming...", flush=True)
     streaming_times = bench_jax_streaming(phenotypes, kinship, covariates_4, args.runs)
@@ -471,6 +517,7 @@ def main():
     gemma = timings["gemma"]
     npy_pure = timings["numpy_pure"]
     npy = timings["numpy"]
+    npy_s = timings["numpy_streaming"]
     jax_b = timings["jax_batch"]
     jax_s = timings["jax_streaming"]
 
@@ -495,6 +542,7 @@ def main():
     def _best_jamma(op: str) -> float | None:
         candidates = [
             npy.get(op),
+            npy_s.get(op),
             jax_b.get(op),
             jax_s.get(op),
         ]
@@ -517,12 +565,12 @@ def main():
     # Header
     hdr = (
         "| Operation | GEMMA 0.98.5 | JAMMA NumPy | JAMMA NumPy+C"
-        " | JAMMA JAX (batch) | JAMMA JAX (streaming)"
+        " | JAMMA NumPy+C (stream) | JAMMA JAX (batch) | JAMMA JAX (streaming)"
         " | C speedup | vs GEMMA |"
     )
     sep = (
         "|-----------|-------------|-------------|--------------|"
-        "-------------------|----------------------|"
+        "------------------------|-------------------|----------------------|"
         "-----------|----------|"
     )
     print(hdr)
@@ -534,6 +582,7 @@ def main():
         print(
             f"| {label} | {_cell(gemma.get(op))}"
             f" | {_cell(npy_pure.get(op))} | {_cell(npy.get(op))}"
+            f" | {_cell(npy_s.get(op))}"
             f" | {_cell(jax_b.get(op))} | {_cell(jax_s.get(op))}"
             f" | {_c_speedup(op)} | {vs} |"
         )

@@ -152,9 +152,12 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
 )
 @click.option(
     "--backend",
-    type=click.Choice(["auto", "jax", "numpy"], case_sensitive=False),
+    type=click.Choice(
+        ["auto", "jax", "numpy", "numpy-streaming", "jax-streaming"],
+        case_sensitive=False,
+    ),
     default="auto",
-    help="Compute backend: auto (default), jax, or numpy.",
+    help="Compute backend: auto, jax, numpy, numpy-streaming, or jax-streaming.",
 )
 @click.option(
     "--legacy-text",
@@ -168,7 +171,8 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     default=False,
     help=(
         "Use secular equation solver for LOCO eigendecomposition. "
-        "Reduces peak memory at 83k+ samples. Requires -loco and --backend numpy."
+        "Reduces peak memory at 83k+ samples. Requires -loco and --backend numpy "
+        "or numpy-streaming."
     ),
 )
 @click.option(
@@ -617,8 +621,10 @@ def _run_lmm(
     # Validate --secular requirements before building PipelineConfig
     if secular and not loco:
         _cli_error("--secular requires -loco mode")
-    if secular and backend in ("jax", "auto"):
-        _cli_error("--secular requires --backend numpy explicitly")
+    if secular and backend in ("jax", "jax-streaming", "auto"):
+        _cli_error(
+            "--secular requires --backend numpy or --backend numpy-streaming explicitly"
+        )
 
     # Mutual exclusivity check
     if loco and kinship_file is not None:

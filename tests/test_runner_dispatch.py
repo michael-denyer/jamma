@@ -174,6 +174,38 @@ class TestUnifiedDispatcher:
                 kinship=np.eye(10),
             )
 
+    def test_numpy_streaming_calls_numpy_streaming_runner(self):
+        """numpy-streaming plan calls run_lmm_association_numpy_streaming."""
+        plan = ExecutionPlan(backend="numpy", mode="streaming", reason="test")
+        stub_result = self._stub_run_result(3)
+
+        with patch(
+            "jamma.lmm.runner_numpy_streaming.run_lmm_association_numpy_streaming",
+            return_value=(stub_result, 3),
+        ) as mock_np_stream:
+            result, n_tested = run_lmm(
+                execution_plan=plan,
+                bed_path=Path("/tmp/test"),
+                phenotypes=np.zeros(10),
+                kinship=np.eye(10),
+            )
+
+        mock_np_stream.assert_called_once()
+        assert isinstance(result, LmmRunResult)
+        assert n_tested == 3
+
+    def test_numpy_streaming_no_bed_path_raises(self):
+        """numpy-streaming but bed_path=None -> ValueError."""
+        plan = ExecutionPlan(backend="numpy", mode="streaming", reason="test")
+
+        with pytest.raises(ValueError, match="bed_path"):
+            run_lmm(
+                execution_plan=plan,
+                bed_path=None,
+                phenotypes=np.zeros(10),
+                kinship=np.eye(10),
+            )
+
     def test_auto_select_no_data_raises(self):
         """Auto-select with no genotypes and no phenotypes gives clear error."""
         with pytest.raises(ValueError, match="at least genotypes or phenotypes"):

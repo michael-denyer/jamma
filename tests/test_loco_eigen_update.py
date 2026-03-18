@@ -1390,7 +1390,7 @@ def test_reorth_delta_path_posthoc():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier2
+@pytest.mark.tier3
 def test_delta_path_orthogonality_high_r_eff():
     """ORTH-05: Delta path orthogonality drift < 1e-6 at n=1000, r_eff=100.
 
@@ -1454,7 +1454,7 @@ def test_delta_path_orthogonality_high_r_eff():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier2
+@pytest.mark.tier3
 def test_secular_speedup_correctness_at_scale():
     """BENCH-03: Secular solver produces correct eigenvalues and orthogonal
     eigenvectors at n=2000, r_eff=200 (Q path since n < default 5000 threshold).

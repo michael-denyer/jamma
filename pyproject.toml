@@ -95,6 +95,7 @@ markers = [
     "tier0: fast unit tests (<5s), no external dependencies, no GEMMA reference",
     "tier1: parity tests (<60s), validates against GEMMA reference data",
     "tier2: scale tests (memory/time intensive), requires large memory or long runtime",
+    "tier3: heavy scale tests (>60s on CI), run locally only — excluded from CI slow tests",
     "slow: alias for tier2, marks tests as slow (deselect with '-m \"not slow\"')",
     "benchmark: marks tests that require pytest-benchmark (run with '--benchmark-only')",
     "requires_jax: mark test to run only when JAX is installed (auto-skipped on NumPy-only environments)",

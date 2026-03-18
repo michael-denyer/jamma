@@ -521,7 +521,7 @@ Priority order: `JAMMA_BACKEND` env var → `--backend` CLI flag → auto-detect
 | Chunk compute | [lmm/compute.py:107](../src/jamma/lmm/compute.py#L107) |
 | Result building | [lmm/results.py:43](../src/jamma/lmm/results.py#L43) |
 | JAX batch runner | [runner_jax.py](../src/jamma/lmm/runner_jax.py) |
-| Streaming runner | [runner_streaming.py:69](../src/jamma/lmm/runner_streaming.py#L69) |
+| JAX streaming runner | [runner_jax_streaming.py](../src/jamma/lmm/runner_jax_streaming.py) |
 | NumPy batch runner | [runner_numpy.py](../src/jamma/lmm/runner_numpy.py) |
 | NumPy likelihood | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | NumPy chunk compute | [compute_numpy.py](../src/jamma/lmm/compute_numpy.py) |

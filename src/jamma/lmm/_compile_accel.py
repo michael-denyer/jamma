@@ -81,11 +81,12 @@ def _detect_linux_openmp_flags(cc_cmd: str, _print: object = print) -> list[str]
     return ["-fopenmp"]
 
 
-def compile_extension(verbose: bool = True, diagnose: bool = False) -> bool:
+def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
     """Compile _lmm_accel.c into a shared library in the installed package.
 
     Args:
-        verbose: Print progress and diagnostics to stdout.
+        verbose: Print per-command compile details to stdout. When False
+            (default), only errors and a one-line summary are printed.
         diagnose: Print GCC vectorization report showing which loops were
             SIMD-vectorized. Use to verify AVX-512 codegen on target hardware.
 
@@ -94,6 +95,11 @@ def compile_extension(verbose: bool = True, diagnose: bool = False) -> bool:
     """
 
     def _print(*args: object) -> None:
+        """Always print (errors, results)."""
+        print(*args, flush=True)
+
+    def _detail(*args: object) -> None:
+        """Print only when verbose."""
         if verbose:
             print(*args, flush=True)
 
@@ -119,7 +125,7 @@ def compile_extension(verbose: bool = True, diagnose: bool = False) -> bool:
         )
         return False
 
-    _print(f"numpy {np.__version__} OK")
+    _detail(f"numpy {np.__version__} OK")
 
     # Compiler
     cc_name = sysconfig.get_config_var("CC") or "cc"
@@ -131,7 +137,7 @@ def compile_extension(verbose: bool = True, diagnose: bool = False) -> bool:
         _print(f"ERROR: C compiler '{cc_cmd}' not found on PATH")
         _print("  Install: apt-get install -y gcc")
         return False
-    _print(f"Compiler: {cc_path}")
+    _detail(f"Compiler: {cc_path}")
 
     # Python headers
     python_inc = sysconfig.get_config_var("INCLUDEPY") or ""
@@ -140,14 +146,14 @@ def compile_extension(verbose: bool = True, diagnose: bool = False) -> bool:
         _print(f"ERROR: Python.h not found at {python_inc}")
         _print("  Install: apt-get install -y python3-dev")
         return False
-    _print(f"Python.h: {python_h}")
+    _detail(f"Python.h: {python_h}")
 
     # Output path
     ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
     out = lmm_dir / f"_lmm_accel{ext_suffix}"
 
     numpy_inc = np.get_include()
-    _print(f"NumPy include: {numpy_inc}")
+    _detail(f"NumPy include: {numpy_inc}")
 
     # Windows/MSVC is not supported — JAMMA targets Linux/macOS only
     if platform.system() == "Windows":
@@ -182,7 +188,7 @@ def compile_extension(verbose: bool = True, diagnose: bool = False) -> bool:
         # Prefer Intel OpenMP (libiomp5) when available — avoids libgomp/libiomp5
         # dual-runtime conflict on systems with MKL numpy. libiomp5 ships with
         # intel-openmp or MKL packages.
-        omp_flags = _detect_linux_openmp_flags(cc_cmd, _print)
+        omp_flags = _detect_linux_openmp_flags(cc_cmd, _detail)
 
     # -march=native is safe here: compiles on the user's own machine.
     # hatch_build.py omits this flag for portable wheel builds.
@@ -223,7 +229,7 @@ def compile_extension(verbose: bool = True, diagnose: bool = False) -> bool:
         *ldflags,
     ]
 
-    _print(f"Compiling: {' '.join(cmd)}")
+    _detail(f"Compiling: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if diagnose and (result.stderr or result.stdout):
@@ -245,7 +251,7 @@ def compile_extension(verbose: bool = True, diagnose: bool = False) -> bool:
         _print(f"ERROR: compilation failed:\n{result.stderr}")
         return False
 
-    _print(f"Compiled: {out}")
+    _detail(f"Compiled: {out}")
 
     # Verify import
     try:
@@ -258,7 +264,8 @@ def compile_extension(verbose: bool = True, diagnose: bool = False) -> bool:
 
         from jamma.lmm._lmm_accel import compute_lmm_batch_c  # noqa: F401
 
-        _print("Import OK — C extension is active")
+        omp_status = "OpenMP" if omp_flags else "single-threaded"
+        _print(f"_lmm_accel compiled OK ({omp_status})")
         return True
     except ImportError as e:
         _print(f"ERROR: compiled but import failed (ImportError): {e}")
@@ -271,5 +278,5 @@ def compile_extension(verbose: bool = True, diagnose: bool = False) -> bool:
 
 
 if __name__ == "__main__":
-    success = compile_extension()
+    success = compile_extension(verbose=True)
     sys.exit(0 if success else 1)

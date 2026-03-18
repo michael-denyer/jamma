@@ -90,7 +90,7 @@ def _detect_linux_openmp_flags(cc_cmd: str, _print: object = print) -> list[str]
     return ["-fopenmp"]
 
 
-def compile_extension(verbose: bool = True) -> bool:
+def compile_extension(verbose: bool = False) -> bool:
     """Compile jlinalg C sources into a shared library in the installed package.
 
     Performs per-file compile-then-link to enable different compiler flags
@@ -98,13 +98,19 @@ def compile_extension(verbose: bool = True) -> bool:
     an x86_64/aarch64 ISA split for -mavx2/-mfma.
 
     Args:
-        verbose: Print progress and diagnostics to stderr.
+        verbose: Print per-command compile details to stderr. When False
+            (default), only errors and a one-line summary are printed.
 
     Returns:
         True if compilation succeeded, False otherwise.
     """
 
     def _print(*args: object) -> None:
+        """Always print (errors, results)."""
+        print(*args, file=sys.stderr, flush=True)
+
+    def _detail(*args: object) -> None:
+        """Print only when verbose."""
         if verbose:
             print(*args, file=sys.stderr, flush=True)
 
@@ -204,7 +210,7 @@ def compile_extension(verbose: bool = True) -> bool:
         )
         return False
 
-    _print(f"numpy {np.__version__} OK")
+    _detail(f"numpy {np.__version__} OK")
 
     # Compiler
     cc_name = os.environ.get("CC") or sysconfig.get_config_var("CC") or "cc"
@@ -217,7 +223,7 @@ def compile_extension(verbose: bool = True) -> bool:
         _print("  Install: apt-get install -y gcc  (Linux)")
         _print("  Install: xcode-select --install  (macOS)")
         return False
-    _print(f"Compiler: {cc_path}")
+    _detail(f"Compiler: {cc_path}")
 
     # Python headers
     python_inc = sysconfig.get_config_var("INCLUDEPY") or ""
@@ -226,14 +232,14 @@ def compile_extension(verbose: bool = True) -> bool:
         _print(f"ERROR: Python.h not found at {python_inc}")
         _print("  Install: apt-get install -y python3-dev  (Linux)")
         return False
-    _print(f"Python.h: {python_h}")
+    _detail(f"Python.h: {python_h}")
 
     # Output path (next to __init__.py in the installed package)
     ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
     out = jlinalg_dir / f"_jlinalg{ext_suffix}"
     numpy_inc = np.get_include()
-    _print(f"NumPy include: {numpy_inc}")
-    _print(f"Output: {out}")
+    _detail(f"NumPy include: {numpy_inc}")
+    _detail(f"Output: {out}")
 
     # Windows is not supported
     if platform.system() == "Windows":
@@ -248,11 +254,11 @@ def compile_extension(verbose: bool = True) -> bool:
     simd_flags: list[str] = []
     if machine in ("x86_64", "AMD64"):
         simd_flags = ["-mavx2", "-mfma"]
-        _print(f"ISA: x86_64 — SIMD sources get {simd_flags}")
+        _detail(f"ISA: x86_64 — SIMD sources get {simd_flags}")
     elif machine in ("aarch64", "arm64"):
-        _print("ISA: aarch64/arm64 — NEON is baseline (no extra SIMD flags needed)")
+        _detail("ISA: aarch64/arm64 — NEON is baseline (no extra SIMD flags needed)")
     else:
-        _print(f"ISA: {machine} — no extra SIMD flags")
+        _detail(f"ISA: {machine} — no extra SIMD flags")
 
     # OpenMP detection
     omp_flags: list[str] = []
@@ -275,7 +281,7 @@ def compile_extension(verbose: bool = True) -> bool:
                     "-fopenmp",
                     "-lomp",
                 ]
-                _print(f"OpenMP: Homebrew libomp at {prefix}")
+                _detail(f"OpenMP: Homebrew libomp at {prefix}")
             else:
                 _print(
                     f"OpenMP: Homebrew prefix {prefix} exists but lib/ not found. "
@@ -290,7 +296,7 @@ def compile_extension(verbose: bool = True) -> bool:
             )
         ldflags = ["-undefined", "dynamic_lookup"]
     else:
-        omp_flags = _detect_linux_openmp_flags(cc_cmd, _print)
+        omp_flags = _detect_linux_openmp_flags(cc_cmd, _detail)
 
     # Base compile flags (shared by all source files — no SIMD flags here)
     base_cflags = [
@@ -367,7 +373,7 @@ def compile_extension(verbose: bool = True) -> bool:
                     "-o",
                     str(obj_file),
                 ]
-                _print(f"compile: {' '.join(cmd)}")
+                _detail(f"compile: {' '.join(cmd)}")
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 if result.returncode != 0:
                     _print(f"Compile failed for {src.name}:")
@@ -413,7 +419,7 @@ def compile_extension(verbose: bool = True) -> bool:
             *current_omp,
             *ldflags,
         ]
-        _print(f"link: {' '.join(cmd_link)}")
+        _detail(f"link: {' '.join(cmd_link)}")
         result_link = subprocess.run(cmd_link, capture_output=True, text=True)
         if result_link.returncode != 0 and current_omp:
             _print(
@@ -431,7 +437,7 @@ def compile_extension(verbose: bool = True) -> bool:
                 "-lm",
                 *ldflags,
             ]
-            _print(f"link: {' '.join(cmd_link_noomp)}")
+            _detail(f"link: {' '.join(cmd_link_noomp)}")
             result_link = subprocess.run(cmd_link_noomp, capture_output=True, text=True)
         if result_link.returncode != 0:
             _print(f"ERROR: link failed:\n{result_link.stderr}")
@@ -440,7 +446,7 @@ def compile_extension(verbose: bool = True) -> bool:
         if tmp_dir is not None:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    _print(f"Compiled: {out}")
+    _detail(f"Compiled: {out}")
 
     # Verify import — evict both _jlinalg and the parent jamma.jlinalg package
     # so the freshly compiled extension is loaded instead of the cached fallback.
@@ -451,9 +457,8 @@ def compile_extension(verbose: bool = True) -> bool:
 
         from jamma.jlinalg._jlinalg import HAS_OPENMP, jlinalg_isa  # noqa: F401
 
-        _print(f"Import OK — jlinalg_isa={jlinalg_isa!r}, HAS_OPENMP={HAS_OPENMP}")
-        _print("C extension is active")
-        _print("Reloaded jamma.jlinalg — HAS_C_EXTENSION is now True in this process.")
+        omp_status = "OpenMP" if HAS_OPENMP else "single-threaded"
+        _print(f"jlinalg compiled OK (ISA={jlinalg_isa}, {omp_status})")
         return True
     except ImportError as e:
         _print(f"ERROR: compiled but import failed (ImportError): {e}")
@@ -749,5 +754,5 @@ def compile_test_harness(verbose: bool = True) -> Path:
 
 
 if __name__ == "__main__":
-    success = compile_extension()
+    success = compile_extension(verbose=True)
     sys.exit(0 if success else 1)

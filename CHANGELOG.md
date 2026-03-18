@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.2] - 2026-03-18
+
+### Changed
+
+- C extension compile scripts now default to quiet output — only errors and a
+  one-line summary are printed. Pass `verbose=True` for full per-command detail.
+
 ## [4.0.1] - 2026-03-18
 
 ### Fixed

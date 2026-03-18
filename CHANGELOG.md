@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.1] - 2026-03-18
+
+### Fixed
+
+- Link Intel OpenMP (libiomp5) by full path in C extension compile scripts — numpy
+  bundles versioned names like `libiomp5-2f035e84.so` with no unversioned symlink,
+  so `-liomp5` fails at link time
+- Add OpenMP link fallback in jlinalg compile — retries without OpenMP flags if
+  linking fails, producing a single-threaded build instead of a hard error
+
 ### Changed
 
 - **Eigendecomposition now uses jlinalg.eigh** — replaced the legacy `_eigen_accel`

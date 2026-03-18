@@ -64,9 +64,11 @@ def _detect_linux_openmp_flags(cc_cmd: str, _print: object = print) -> list[str]
             for lib in d.iterdir():
                 if "libiomp5" in lib.name and ".so" in lib.name:
                     _print(f"Intel OpenMP found: {lib}")
+                    # Link by full path — numpy bundles versioned names like
+                    # libiomp5-2f035e84.so with no unversioned symlink, so
+                    # -liomp5 fails at link time.
                     return [
-                        f"-L{d}",
-                        "-liomp5",
+                        str(lib),
                         f"-Wl,-rpath,{d}",
                         "-fopenmp",
                     ]
@@ -413,6 +415,24 @@ def compile_extension(verbose: bool = True) -> bool:
         ]
         _print(f"link: {' '.join(cmd_link)}")
         result_link = subprocess.run(cmd_link, capture_output=True, text=True)
+        if result_link.returncode != 0 and current_omp:
+            _print(
+                f"OpenMP link failed:\n{result_link.stderr}"
+                "\nRetrying link without OpenMP (single-threaded)..."
+            )
+            cmd_link_noomp = [
+                cc_cmd,
+                *cc_extra,
+                "-shared",
+                "-fPIC",
+                *[str(o) for o in obj_files],
+                "-o",
+                str(out),
+                "-lm",
+                *ldflags,
+            ]
+            _print(f"link: {' '.join(cmd_link_noomp)}")
+            result_link = subprocess.run(cmd_link_noomp, capture_output=True, text=True)
         if result_link.returncode != 0:
             _print(f"ERROR: link failed:\n{result_link.stderr}")
             return False

@@ -55,9 +55,11 @@ def _detect_linux_openmp_flags(cc_cmd: str, _print: object = print) -> list[str]
             for lib in d.iterdir():
                 if "libiomp5" in lib.name and ".so" in lib.name:
                     _print(f"Intel OpenMP found: {lib}")
+                    # Link by full path — numpy bundles versioned names like
+                    # libiomp5-2f035e84.so with no unversioned symlink, so
+                    # -liomp5 fails at link time.
                     return [
-                        f"-L{d}",
-                        "-liomp5",
+                        str(lib),
                         f"-Wl,-rpath,{d}",
                         "-fopenmp",
                     ]

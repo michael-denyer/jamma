@@ -38,6 +38,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_select_eigen_driver()`, `_eigh_dsyevr()` from `eigen.py`
 - Remove `_inplace_eigen_available()` from `memory.py`
 
+## [4.0.0] - 2026-03-18
+
+### Added
+
+- **NumPy streaming runner** — disk-streaming LMM association using the C
+  extension, matching the JAX streaming runner's two-pass architecture
+  (float32 stats pass then float64 compute pass) with incremental I/O
+- Wire numpy-streaming into pipeline, CLI (`--backend numpy-streaming`),
+  backend selection, and benchmark suite
+
+### Fixed
+
+- Thread-safe P_yy warning deduplication — replace global `bool` flags with
+  `threading.local()` in `likelihood.py` and `likelihood_numpy.py`
+- Add `get_last_run_timing()` accessor to `runner_jax.py` matching the
+  pattern in streaming runners; pipeline uses accessor instead of directly
+  importing the mutable module-level dict
+- Inline `_calc_pab_general` into `calc_pab`, removing unnecessary
+  indirection layer
+- Use keyword arguments for `AccelImport` NamedTuple construction to prevent
+  positional field mismatch in the 17-field type
+- Narrow `_check_hwe_support` to numpy-batch only (was incorrectly guarding
+  all numpy paths)
+
+### Changed
+
+- Exclude `tier3` marker from default pytest addopts — the 22-minute
+  `test_secular_speedup_correctness_at_scale` was running on every invocation
+- Mark eigendecomp symmetry check tests and LOCO eigen cache integration
+  tests as `slow` (15–35s each)
+
 ## [3.5.1] - 2026-03-12
 
 ### Fixed

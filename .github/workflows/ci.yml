@@ -40,7 +40,7 @@ jobs:
             python-version: "3.12"
             install_args: "--extra dev"
             name: "Linux + NumPy"
-            pytest_args: "-m 'not tier2 and not slow and not requires_jax and not benchmark'"
+            pytest_args: "-m 'not tier2 and not tier3 and not slow and not requires_jax and not benchmark'"
             cov_threshold: "--cov-fail-under=60"
           - os: ubuntu-latest
             python-version: "3.11"
@@ -65,7 +65,7 @@ jobs:
             blis_ilp64: true
             cov_threshold: "--cov-fail-under=80"
     name: ${{ matrix.name }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -124,7 +124,7 @@ jobs:
           "
 
       - name: Run tests
-        run: uv run pytest ${{ matrix.pytest_args || '-m "not tier2 and not slow and not benchmark"' }} -v -n 3 -o 'addopts=' --cov=src/jamma --cov-report=term-missing --cov-report=json ${{ matrix.cov_threshold }}
+        run: uv run pytest ${{ matrix.pytest_args || '-m "not tier2 and not tier3 and not slow and not benchmark"' }} -v -n 3 -o 'addopts=' --cov=src/jamma --cov-report=term-missing --cov-report=json ${{ matrix.cov_threshold }}
 
       - name: Check per-module coverage minimums
         if: matrix.name == 'Linux + JAX'

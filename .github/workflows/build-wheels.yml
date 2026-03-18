@@ -42,9 +42,11 @@ jobs:
           CIBW_ARCHS_LINUX: "x86_64"
           # Install libgomp in manylinux_2_28 container (AlmaLinux 8, dnf)
           CIBW_BEFORE_BUILD_LINUX: "dnf install -y libgomp"
-          # macOS: no libomp install — C extension compiles single-threaded
-          # (still faster than Python loops; users can build from source with
-          # brew install libomp for OpenMP support)
+          # Exclude bundled BLIS from auditwheel/delocate repair — BLIS is
+          # loaded via dlopen at runtime, not linked. The prebuilt binary
+          # may target a newer glibc/macOS than the wheel's platform tag.
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair --exclude libblis.so -w {dest_dir} {wheel}"
+          CIBW_REPAIR_WHEEL_COMMAND_MACOS: "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v -e libblis {wheel}"
           # Smoke test: import + numerical sanity (catches ABI mismatches)
           CIBW_TEST_COMMAND: >-
             python {project}/scripts/smoke_test_c_extension.py &&
@@ -107,6 +109,8 @@ jobs:
           CIBW_ENVIRONMENT_LINUX: 'CFLAGS="-march=x86-64-v3 -mavx2"'
           # Install libgomp in manylinux container (AlmaLinux 8, dnf)
           CIBW_BEFORE_BUILD_LINUX: "dnf install -y libgomp"
+          # Exclude bundled BLIS from auditwheel repair (dlopen'd at runtime)
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair --exclude libblis.so -w {dest_dir} {wheel}"
           # Same smoke tests as baseline wheels
           CIBW_TEST_COMMAND: >-
             python {project}/scripts/smoke_test_c_extension.py &&

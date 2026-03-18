@@ -124,6 +124,7 @@ class TestFindLocoEigenCache:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(
     not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not available"
 )
@@ -177,6 +178,7 @@ class TestLocoWriteEigen:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(
     not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not available"
 )

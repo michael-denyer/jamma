@@ -149,6 +149,7 @@ class TestEigendecomposition:
             with pytest.raises(numpy.linalg.LinAlgError, match="SVD did not converge"):
                 eigendecompose_kinship(K, check_memory=False)
 
+    @pytest.mark.slow
     def test_check_symmetry_sampled_triggers_for_large_matrix(self):
         """For n >= _SAMPLED_SYMMETRY_THRESHOLD, the sampled check is used."""
         from unittest.mock import patch
@@ -164,6 +165,7 @@ class TestEigendecomposition:
             eigendecompose_kinship(K, check_memory=False)
             mock_sampled.assert_called_once()
 
+    @pytest.mark.slow
     def test_check_symmetry_sampled_not_called_for_small_matrix(self):
         """For n < _SAMPLED_SYMMETRY_THRESHOLD, the full allclose check is used."""
         from unittest.mock import patch

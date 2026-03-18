@@ -241,11 +241,13 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
                 _print(f"  {line}")
         _print("=== End Report ===\n")
 
+    compiled_with_omp = bool(omp_flags)
     if result.returncode != 0 and omp_flags:
         _print(f"OpenMP compilation failed: {result.stderr.strip()}")
         _print("Retrying without OpenMP (single-threaded)...")
         cmd_no_omp = [x for x in cmd if x not in omp_flags]
         result = subprocess.run(cmd_no_omp, capture_output=True, text=True)
+        compiled_with_omp = False
 
     if result.returncode != 0:
         _print(f"ERROR: compilation failed:\n{result.stderr}")
@@ -264,7 +266,7 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
 
         from jamma.lmm._lmm_accel import compute_lmm_batch_c  # noqa: F401
 
-        omp_status = "OpenMP" if omp_flags else "single-threaded"
+        omp_status = "OpenMP" if compiled_with_omp else "single-threaded"
         _print(f"_lmm_accel compiled OK ({omp_status})")
         return True
     except ImportError as e:

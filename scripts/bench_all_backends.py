@@ -282,7 +282,7 @@ def bench_jax_streaming(
     phenotypes, kinship, covariates_4, runs: int
 ) -> dict[str, float]:
     """Benchmark JAX streaming backend."""
-    from jamma.lmm.runner_streaming import run_lmm_association_streaming
+    from jamma.lmm.runner_jax_streaming import run_lmm_association_streaming
 
     results: dict[str, float] = {}
 

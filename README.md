@@ -249,14 +249,14 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 Benchmark on mouse_hs1940 (1,940 samples × 12,226 SNPs), Apple M2, GEMMA 0.98.5.
 Best-of runs, end-to-end wall clock:
 
-| Operation | GEMMA 0.98.5 | JAMMA NumPy | JAMMA NumPy+C | JAMMA JAX (batch) | JAMMA JAX (streaming) | C speedup | vs GEMMA |
-|-----------|-------------|-------------|--------------|-------------------|----------------------|-----------|----------|
-| Kinship (`-gk 1`) | 2.2s | 262ms | 262ms | — | — | 1.0x | **8.5x** |
-| LMM Wald (`-lmm 1`) | 11.3s | 4.2s | 1.2s | 2.1s | 2.6s | 3.4x | **9.2x** |
-| LMM All (`-lmm 4`) | 20.7s | 6.0s | 1.4s | 2.8s | 4.2s | 4.2x | **14.3x** |
-| LMM Wald+4cov (`-lmm 1 -c`) | 41.7s | 12.0s | 4.6s | 4.7s | 7.4s | 2.6x | **9.0x** |
+| Operation | GEMMA 0.98.5 | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | JAMMA JAX (batch) | JAMMA JAX (streaming) | C speedup | vs GEMMA |
+|-----------|-------------|-------------|--------------|------------------------|-------------------|----------------------|-----------|----------|
+| Kinship (`-gk 1`) | 2.2s | 262ms | 262ms | — | — | — | 1.0x | **8.5x** |
+| LMM Wald (`-lmm 1`) | 11.3s | 4.1s | 1.1s | 1.2s | 2.1s | 2.6s | 3.7x | **10.3x** |
+| LMM All (`-lmm 4`) | 20.7s | 6.0s | 1.4s | 1.6s | 2.8s | 4.2s | 4.3x | **14.8x** |
+| LMM Wald+4cov (`-lmm 1 -c`) | 41.7s | 9.1s | 4.6s | 7.1s | 4.1s | 6.6s | 2.0x | **10.2x** |
 
-**NumPy+C** uses a C extension with OpenMP for Wald (`-lmm 1`) — REML optimization is compute-bound and parallelizes well across SNPs. The C speedup grows with covariates (2.6x with 4 covariates) because the Pab table recursion is more expensive. NumPy+C is now the fastest backend at all modes including all-tests (`-lmm 4`) at mouse scale (14.3x vs GEMMA). **JAX (batch)** uses `jax.vmap` batching for MLE optimization and is competitive on `-lmm 4`. **JAX (streaming)** reads genotypes from disk in chunks and is the production code path for large datasets that don't fit in memory. Kinship is always pure NumPy/BLAS regardless of backend.
+**NumPy+C** uses a C extension with OpenMP for Wald (`-lmm 1`) — REML optimization is compute-bound and parallelizes well across SNPs. The C speedup grows with covariates (2.0x with 4 covariates) because the Pab table recursion is more expensive. NumPy+C is the fastest backend at all modes including all-tests (`-lmm 4`) at mouse scale (14.8x vs GEMMA). **NumPy+C (stream)** reads genotypes from disk in chunks — slightly slower than batch but the production code path for large datasets that don't fit in memory. **JAX (batch)** uses `jax.vmap` batching for MLE optimization and wins on covariate-heavy workloads (10.2x vs GEMMA). **JAX (streaming)** is the JAX equivalent of disk-streaming. Kinship is always pure NumPy/BLAS regardless of backend.
 
 ### LOCO (Leave-One-Chromosome-Out)
 

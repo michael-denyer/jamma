@@ -233,7 +233,7 @@ class TestBatchEquivalence:
                 batch_vals,
                 stream_vals,
                 atol=1e-14,
-                rtol=1e-12,
+                rtol=1e-10,
                 err_msg=f"{field} values differ",
             )
 

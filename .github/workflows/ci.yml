@@ -119,3 +119,27 @@ jobs:
 
       - name: Run tests
         run: uv run pytest ${{ matrix.pytest_args || '-m "not tier2 and not tier3 and not slow and not benchmark"' }} -v -n 3 -o 'addopts='
+
+  coverage:
+    name: Coverage (slipcover)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra jax --extra dev
+
+      - name: Compile C extensions
+        run: |
+          uv run python -m jamma.lmm._compile_accel
+          uv run python -m jamma.jlinalg._compile_jlinalg
+
+      - name: Run tests with slipcover
+        run: uv run slipcover --source src/jamma --fail-under 80 -m pytest -m "not tier2 and not tier3 and not slow and not benchmark" -v -n0 -o 'addopts='

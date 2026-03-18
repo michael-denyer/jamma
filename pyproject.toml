@@ -80,6 +80,7 @@ dev = [
     "pandas>=2.0.0",
     "ruff>=0.15.0",
     "pre-commit>=3.7.0",
+    "slipcover>=1.0.17",
 ]
 
 [project.scripts]

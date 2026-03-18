@@ -21,6 +21,7 @@ Reference: likelihood_jax.py (ported to NumPy in this module).
 
 from __future__ import annotations
 
+import threading
 from typing import NamedTuple
 
 import numpy as np
@@ -64,16 +65,15 @@ class SplitUabSoA(NamedTuple):
     """
 
 
-# Module-level flag to deduplicate _guard_P_yy warning — fires hundreds of
+# Thread-local flag to deduplicate _guard_P_yy warning — fires hundreds of
 # times per run (once per grid eval + golden section iter per chunk) which
 # buries the meaningful first warning under identical log spam.
-_p_yy_warned = False
+_p_yy_state = threading.local()
 
 
 def reset_p_yy_warned() -> None:
     """Reset the P_yy warning flag so each LMM run gets its own warning."""
-    global _p_yy_warned  # noqa: PLW0603
-    _p_yy_warned = False
+    _p_yy_state.warned = False
 
 
 def _guard_P_yy(P_yy: np.ndarray) -> np.ndarray:
@@ -88,14 +88,13 @@ def _guard_P_yy(P_yy: np.ndarray) -> np.ndarray:
     Returns:
         Guarded P_yy with same shape.
     """
-    global _p_yy_warned  # noqa: PLW0603
     n_negative = int(np.sum(P_yy < 0.0))
-    if n_negative > 0 and not _p_yy_warned:
+    if n_negative > 0 and not getattr(_p_yy_state, "warned", False):
         logger.warning(
             f"{n_negative} SNPs have negative P_yy — numerical breakdown. "
             "Kinship matrix may not be positive semi-definite."
         )
-        _p_yy_warned = True
+        _p_yy_state.warned = True
     P_yy = np.where(P_yy < 0.0, np.nan, P_yy)
     return np.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
 

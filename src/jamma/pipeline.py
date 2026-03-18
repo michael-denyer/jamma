@@ -1276,9 +1276,9 @@ class PipelineRunner:
 
             runner_timing = get_last_run_timing()
         elif plan.backend == "jax" and plan.mode == "batch":
-            from jamma.lmm.runner_jax import last_run_timing as _jax_timing
+            from jamma.lmm.runner_jax import get_last_run_timing as _jax_timing
 
-            runner_timing = dict(_jax_timing)
+            runner_timing = _jax_timing()
         elif plan.backend == "numpy" and plan.mode == "streaming":
             from jamma.lmm.runner_numpy_streaming import (
                 get_last_run_timing as _np_stream_timing,

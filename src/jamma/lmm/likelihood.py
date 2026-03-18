@@ -23,6 +23,7 @@ Reference: Zhou & Stephens (2012) Nature Genetics, Supplementary Information
 from __future__ import annotations
 
 import functools
+import threading
 from collections.abc import Callable
 
 import numpy as np
@@ -30,15 +31,14 @@ from loguru import logger
 
 _P_YY_MIN = 1e-8
 
-# Module-level flag — deduplicates _clamp_p_yy warning across all calls
+# Thread-local flag — deduplicates _clamp_p_yy warning across all calls
 # within a single LMM run. Reset at run start via reset_scalar_p_yy_warned().
-_scalar_p_yy_warned = False
+_scalar_p_yy_state = threading.local()
 
 
 def reset_scalar_p_yy_warned() -> None:
     """Reset the scalar P_yy warning flag so each LMM run gets its own warning."""
-    global _scalar_p_yy_warned  # noqa: PLW0603
-    _scalar_p_yy_warned = False
+    _scalar_p_yy_state.warned = False
 
 
 def _clamp_p_yy(P_yy: float, lambda_val: float) -> float:
@@ -58,15 +58,14 @@ def _clamp_p_yy(P_yy: float, lambda_val: float) -> float:
     Returns:
         Clamped P_yy, or NaN for negative values (signals invalid region).
     """
-    global _scalar_p_yy_warned  # noqa: PLW0603
     if P_yy < 0:
-        if not _scalar_p_yy_warned:
+        if not getattr(_scalar_p_yy_state, "warned", False):
             logger.warning(
                 f"Negative P_yy ({P_yy:.6e}) at lambda={lambda_val:.6e} — "
                 "numerical breakdown (subsequent occurrences suppressed). "
                 "The kinship matrix may not be positive semi-definite."
             )
-            _scalar_p_yy_warned = True
+            _scalar_p_yy_state.warned = True
         return float("nan")  # np.log(nan) = nan, optimizer avoids
     if P_yy < _P_YY_MIN:
         return _P_YY_MIN
@@ -297,14 +296,6 @@ def calc_pab(
 
     Returns:
         Pab matrix (n_cvt+2, n_index)
-    """
-    return _calc_pab_general(n_cvt, Hi_eval, Uab)
-
-
-def _calc_pab_general(n_cvt: int, Hi_eval: np.ndarray, Uab: np.ndarray) -> np.ndarray:
-    """General Pab computation for arbitrary n_cvt.
-
-    Row 0 is vectorized; subsequent rows use the recursive formula.
     """
     n_index = (n_cvt + 2 + 1) * (n_cvt + 2) // 2
     Pab = np.zeros((n_cvt + 2, n_index), dtype=np.float64)

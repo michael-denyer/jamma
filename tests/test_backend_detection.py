@@ -79,6 +79,21 @@ class TestDetectBackend:
         with pytest.raises(ValueError, match="Unknown backend"):
             detect_backend("auto")
 
+    def test_compound_numpy_streaming_resolves(self):
+        """detect_backend('numpy-streaming') resolves to 'numpy'."""
+        result = detect_backend("numpy-streaming")
+        assert result == "numpy"
+
+    def test_compound_jax_streaming_resolves(self):
+        """detect_backend('jax-streaming') resolves to base backend."""
+        # jax-streaming resolves to 'jax' — but JAX may not be installed,
+        # so this may raise ValueError about JAX not installed (which is fine).
+        try:
+            result = detect_backend("jax-streaming")
+            assert result == "jax"
+        except ValueError as e:
+            assert "JAX is not installed" in str(e)
+
 
 @pytest.mark.tier0
 class TestDetectBackendJaxAbsent:
@@ -290,9 +305,16 @@ class TestExecutionMode:
 
     def test_explicit_numpy_streaming_returns_numpy_streaming(self):
         """explicit 'numpy-streaming' -> numpy-streaming directly."""
-        plan = select_execution_mode(100, 1000, requested="numpy-streaming")
+        with patch("jamma.lmm.runner.is_c_extension_usable", return_value=True):
+            plan = select_execution_mode(100, 1000, requested="numpy-streaming")
         assert plan.backend == "numpy"
         assert plan.mode == "streaming"
+
+    def test_explicit_numpy_streaming_no_c_ext_raises(self):
+        """explicit 'numpy-streaming' + no C extension -> ValueError."""
+        with patch("jamma.lmm.runner.is_c_extension_usable", return_value=False):
+            with pytest.raises(ValueError, match="C extension"):
+                select_execution_mode(100, 1000, requested="numpy-streaming")
 
     def test_explicit_jax_streaming_returns_jax_streaming(self):
         """explicit 'jax-streaming' -> jax-streaming directly."""
@@ -457,6 +479,25 @@ class TestExecutionMode:
         # n_cvt=1 still uses numpy-batch (C extension handles n_cvt=1)
         assert plan_n_cvt1.backend == "numpy"
         assert plan_n_cvt1.mode == "batch"
+
+    def test_no_c_general_n_cvt_gt1_insufficient_falls_to_jax_streaming(self):
+        """C ext + no C general + n_cvt>1 + insufficient -> jax-streaming."""
+        with (
+            patch(
+                "jamma.lmm.runner.estimate_lmm_memory",
+                return_value=_make_insufficient_estimate(),
+            ),
+            patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
+            patch("jamma.lmm.runner.has_jax", return_value=True),
+            patch(
+                "jamma.lmm.compute_numpy._C_GENERAL_AVAILABLE",
+                False,
+                create=True,
+            ),
+        ):
+            plan = select_execution_mode(200_000, 100_000, n_cvt=3)
+        assert plan.backend == "jax"
+        assert plan.mode == "streaming"
 
     def test_c_general_n_cvt_numpy_batch(self):
         """BCKAUTO-03: C general available + n_cvt>1 + sufficient -> numpy-batch."""

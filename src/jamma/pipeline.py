@@ -186,11 +186,11 @@ class PipelineConfig:
         # Secular update constraints
         if self.use_secular_update and not self.loco:
             raise ValueError("use_secular_update=True requires loco=True")
-        if self.use_secular_update and self.backend != "numpy":
+        if self.use_secular_update and self.backend not in ("numpy", "numpy-streaming"):
             raise ValueError(
-                "use_secular_update=True requires backend='numpy'. "
-                f"Got backend={self.backend!r}. "
-                "Pass backend='numpy' explicitly."
+                "use_secular_update=True requires a NumPy backend "
+                "('numpy' or 'numpy-streaming'). "
+                f"Got backend={self.backend!r}."
             )
         if self.use_secular_update and self.save_kinship:
             raise ValueError(
@@ -1441,7 +1441,8 @@ class PipelineRunner:
         if plink_data is None:
             logger.info(
                 "NumPy backend: loading all genotypes into memory "
-                "(for large datasets, use JAX backend: pip install jamma[jax])"
+                "(for large datasets, use --backend numpy-streaming "
+                "or install JAX: pip install jamma[jax])"
             )
             plink_data = load_plink_binary(self.config.bfile)
 

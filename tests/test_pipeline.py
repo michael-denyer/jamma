@@ -294,7 +294,7 @@ class TestPipelineConfigSecular:
             PipelineConfig(bfile=Path("test"), use_secular_update=True)
 
     def test_secular_rejects_jax_backend(self) -> None:
-        with pytest.raises(ValueError, match="requires backend='numpy'"):
+        with pytest.raises(ValueError, match="requires a NumPy backend"):
             PipelineConfig(
                 bfile=Path("test"),
                 loco=True,
@@ -304,7 +304,7 @@ class TestPipelineConfigSecular:
 
     def test_secular_rejects_auto_backend(self) -> None:
         """backend='auto' (default) rejected — must be explicit 'numpy'."""
-        with pytest.raises(ValueError, match="requires backend='numpy'"):
+        with pytest.raises(ValueError, match="requires a NumPy backend"):
             PipelineConfig(
                 bfile=Path("test"),
                 loco=True,

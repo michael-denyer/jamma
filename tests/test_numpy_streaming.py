@@ -143,10 +143,10 @@ class TestNumpyStreamingGemmaParity:
 
 @pytest.mark.tier1
 class TestBatchEquivalence:
-    """NumPy streaming results are FP-identical to NumPy batch (SC-02)."""
+    """NumPy streaming results match NumPy batch within BLAS tolerance (SC-02)."""
 
     def test_mode1_fp_identical(self, synthetic_eigen):
-        """Wald results are FP-identical between batch and streaming."""
+        """Wald results match between batch and streaming within BLAS tolerance."""
         plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
         # Batch run
@@ -194,7 +194,7 @@ class TestBatchEquivalence:
             )
 
     def test_mode4_fp_identical(self, synthetic_eigen):
-        """Mode-4 results are FP-identical between batch and streaming."""
+        """Mode-4 results match between batch and streaming within BLAS tolerance."""
         plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
         snp_info = _build_snp_info(plink)

@@ -584,3 +584,24 @@ def test_pipeline_hwe_numpy_raises() -> None:
     runner = PipelineRunner(config)
     with pytest.raises(ValueError, match="HWE filtering.*not supported.*NumPy.*batch"):
         runner.run()
+
+
+@pytest.mark.tier0
+def test_check_hwe_support_accepts_numpy_streaming() -> None:
+    """HWE filtering with numpy-streaming does NOT raise."""
+    from pathlib import Path
+
+    from jamma.lmm.runner import ExecutionPlan
+    from jamma.pipeline import PipelineConfig, PipelineRunner
+
+    plan = ExecutionPlan("numpy", "streaming", "test")
+
+    config = PipelineConfig(
+        bfile=Path("dummy"),
+        lmm_mode=1,
+        backend="numpy-streaming",
+        hwe_threshold=0.001,
+    )
+    runner = PipelineRunner(config)
+    # Should not raise — numpy-streaming supports HWE
+    runner._check_hwe_support(plan)

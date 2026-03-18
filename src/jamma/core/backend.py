@@ -73,10 +73,17 @@ def detect_backend(requested: BackendRequest = "auto") -> BackendResolved:
     env_override = os.environ.get("JAMMA_BACKEND")
     effective = env_override if env_override is not None else requested
 
+    # Compound requests (e.g. "numpy-streaming") are valid BackendRequest
+    # values but resolve to a base backend here.
+    _compound_map = {"numpy-streaming": "numpy", "jax-streaming": "jax"}
+    if effective in _compound_map:
+        effective = _compound_map[effective]
+
     valid = ("auto", "jax", "numpy")
     if effective not in valid:
         raise ValueError(
-            f"Unknown backend {effective!r}. Must be one of {valid}. "
+            f"Unknown backend {effective!r}. Must be one of {valid} "
+            f"(or 'numpy-streaming', 'jax-streaming'). "
             "Set JAMMA_BACKEND or pass requested= explicitly."
         )
 

@@ -24,7 +24,7 @@ bugs), see [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md).
 | p_score | Yes | CDF implementation | O(1e-5) | 4.14e-7 |
 | p_lrt | Yes | MLE subtraction amplification | O(eps * amplification) | 1.56e-3 |
 
-*logl_H1 worst case on mouse_hs1940 (1,940 samples, 12,226 SNPs). On synthetic
+*logl_H1 worst case on mouse_hs1940 (1,940 total / 1,410 analyzed samples, 12,226 total / 10,768 analyzed SNPs). On synthetic
 data the max is < 1e-6. Divergence arises from weak-signal SNPs with flat MLE
 surfaces where golden section and Brent settle on different optima.*
 

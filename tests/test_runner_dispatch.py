@@ -194,6 +194,27 @@ class TestUnifiedDispatcher:
         assert isinstance(result, LmmRunResult)
         assert n_tested == 3
 
+    def test_numpy_streaming_excludes_use_gpu(self):
+        """numpy-streaming dispatch filters out use_gpu from kwargs."""
+        plan = ExecutionPlan(backend="numpy", mode="streaming", reason="test")
+        stub_result = self._stub_run_result(3)
+
+        with patch(
+            "jamma.lmm.runner_numpy_streaming.run_lmm_association_numpy_streaming",
+            return_value=(stub_result, 3),
+        ) as mock_np_stream:
+            run_lmm(
+                execution_plan=plan,
+                bed_path=Path("/tmp/test"),
+                phenotypes=np.zeros(10),
+                kinship=np.eye(10),
+                use_gpu=True,
+            )
+
+        call_kwargs = mock_np_stream.call_args
+        # use_gpu should not appear in either positional or keyword args
+        assert "use_gpu" not in call_kwargs.kwargs
+
     def test_numpy_streaming_no_bed_path_raises(self):
         """numpy-streaming but bed_path=None -> ValueError."""
         plan = ExecutionPlan(backend="numpy", mode="streaming", reason="test")

@@ -228,11 +228,14 @@ def run_lmm_association_numpy_streaming(
             chunk_vars = np.nanvar(chunk, axis=0)
         # NaN from all-missing SNPs is expected; NaN from other causes (overflow) is not
         expected_all_nan = chunk_miss_counts == chunk.shape[0]
-        unexpected_nan = np.isnan(chunk_means) & ~expected_all_nan
-        if unexpected_nan.any():
+        unexpected_nan_mean = np.isnan(chunk_means) & ~expected_all_nan
+        unexpected_nan_var = np.isnan(chunk_vars) & ~expected_all_nan
+        if unexpected_nan_mean.any() or unexpected_nan_var.any():
+            n_mean = unexpected_nan_mean.sum()
+            n_var = unexpected_nan_var.sum()
             logger.warning(
-                f"Pass-1: {unexpected_nan.sum()} SNPs in chunk [{start}:{end}] "
-                "produced NaN mean (not from all-missing data) — check for "
+                f"Pass-1: chunk [{start}:{end}] has unexpected NaN "
+                f"(mean: {n_mean}, var: {n_var}) — check for "
                 "overflow or invalid genotype values"
             )
         chunk_means = np.nan_to_num(chunk_means, nan=0.0)

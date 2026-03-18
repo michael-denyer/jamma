@@ -1106,9 +1106,9 @@ def test_cli_secular_with_numpy_streaming_accepted():
             ],
         )
 
-    # Should not fail due to secular validation
-    assert result.exit_code != 2, (
-        f"Click parsing failed (exit_code=2):\n{result.output}"
+    # Should not fail — PipelineRunner is mocked, so exit_code should be 0
+    assert result.exit_code == 0, (
+        f"Unexpected failure (exit_code={result.exit_code}):\n{result.output}"
     )
 
 
@@ -1172,6 +1172,26 @@ def test_cli_secular_with_auto_backend_errors():
             "-loco",
             "--secular",
             # --backend defaults to "auto"
+        ],
+    )
+    assert result.exit_code == 1
+    assert "numpy" in result.output.lower() or "secular" in result.output.lower()
+
+
+@pytest.mark.tier1
+def test_cli_secular_with_jax_streaming_backend_errors():
+    """--secular with --backend jax-streaming raises a clear CLI error."""
+    result = runner.invoke(
+        main,
+        [
+            "-lmm",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-loco",
+            "--secular",
+            "--backend",
+            "jax-streaming",
         ],
     )
     assert result.exit_code == 1

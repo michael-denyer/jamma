@@ -363,8 +363,8 @@ jamma -lmm 1 -bfile data/my_study -k kinship.cXX.npy \
 
 **HWE filtering:** JAMMA uses a chi-squared goodness-of-fit test (df=1) via pure NumPy.
 SNPs with p-value below the threshold are excluded from association testing.
-HWE filtering is supported on all streaming backends (`numpy-streaming`, `jax-streaming`)
-and both batch backends.
+HWE filtering is supported on streaming backends (`numpy-streaming`, `jax-streaming`)
+only; it is not available on batch backends.
 See [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md) for differences from GEMMA's
 Wigginton exact test.
 
@@ -505,7 +505,7 @@ pve = run_result.pve               # heritability estimate
 pve_se = run_result.pve_se         # SE of PVE via delta method (None if flat likelihood)
 ```
 
-All backends support Wald, LRT, Score, all-tests modes, and LOCO. HWE filtering (`-hwe`) is supported on all backends except `numpy` batch.
+All backends support Wald, LRT, Score, all-tests modes, and LOCO. HWE filtering (`-hwe`) is supported on streaming backends only (`numpy-streaming`, `jax-streaming`).
 
 ## Large-Scale Eigendecomposition (>46k samples)
 

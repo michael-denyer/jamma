@@ -191,7 +191,7 @@ Uses **Brent's method** (GSL `gsl_min_fminimizer_brent`) — a hybrid algorithm
 combining inverse quadratic interpolation with golden section fallback. Variable
 iteration count per SNP; serial execution.
 
-### JAMMA (likelihood_jax.py:624-765)
+### JAMMA (likelihood_jax.py:624)
 
 Uses **grid search (50 log-spaced points) + golden section refinement (20
 iterations)** via `lax.fori_loop`. All SNPs in a chunk are optimized

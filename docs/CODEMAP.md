@@ -482,7 +482,7 @@ Priority order: `JAMMA_BACKEND` env var → `--backend` CLI flag → auto-detect
 | All tests (`-lmm 4`) | Yes | Yes |
 | C extension acceleration | N/A | Yes (n_cvt=1, auto-fallback) |
 | LOCO (`-loco`) | Yes | Yes |
-| HWE filtering (`-hwe`) | Yes | Yes (streaming and batch) |
+| HWE filtering (`-hwe`) | Yes (streaming only) | Yes (streaming only) |
 | Disk streaming | Yes | Yes (runner_numpy_streaming.py) |
 | CPU device sharding | Yes | N/A |
 | GPU acceleration | Yes | N/A |

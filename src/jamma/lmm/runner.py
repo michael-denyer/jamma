@@ -11,7 +11,8 @@ Components:
   return types to (LmmRunResult, int).
 
 The pipeline (pipeline.py) uses select_execution_mode() for plan selection but
-dispatches via its own _run_jax_backend/_run_numpy_backend methods, which handle
+dispatches via its own _run_jax_backend/_run_numpy_backend/_run_numpy_streaming_backend
+methods, which handle
 PLINK loading, incremental writing, and timing at a higher abstraction level.
 run_lmm() is the public API for programmatic callers with pre-loaded data.
 """
@@ -101,8 +102,8 @@ def select_execution_mode(
     3. JAX available -> jax-batch (if fits) or jax-streaming (if not)
     4. Fallback -> numpy-batch
 
-    When requested is "numpy" or "jax", the backend is forced but the mode
-    (batch vs streaming) is still determined by memory availability (for JAX).
+    When requested is "numpy", batch mode is always used. When requested is
+    "jax", batch vs streaming is determined by memory availability.
     Compound values "numpy-streaming" and "jax-streaming" force the exact
     backend and mode combination.
 
@@ -123,6 +124,13 @@ def select_execution_mode(
     """
     # Handle compound backend requests from CLI (e.g., "numpy-streaming")
     if requested == "numpy-streaming":
+        if not is_c_extension_usable():
+            raise ValueError(
+                "Backend 'numpy-streaming' requires the C extension but it is "
+                "not available. Compile it with: uv run python -c "
+                "'from jamma.jlinalg._compile_jlinalg import compile_extension; "
+                "compile_extension()'"
+            )
         return ExecutionPlan("numpy", "streaming", "Explicit numpy-streaming request")
     if requested == "jax-streaming":
         if not has_jax():
@@ -221,7 +229,8 @@ def select_execution_mode(
         logger.warning(
             f"No C extension or JAX available. Dataset requires ~{est.total_gb:.1f}GB "
             f"but only {est.available_gb:.1f}GB available. "
-            "Install JAX for streaming support: pip install jamma[jax]"
+            "Install JAX (pip install jamma[jax]) or compile the C extension "
+            "for streaming support"
         )
     return ExecutionPlan(
         "numpy",
@@ -261,8 +270,9 @@ def run_lmm(
 ) -> tuple[LmmRunResult, int]:
     """Unified LMM entry point that dispatches to the correct runner.
 
-    Routes to run_lmm_association_numpy, run_lmm_association_jax, or
-    run_lmm_association_streaming based on the ExecutionPlan. If no plan
+    Routes to run_lmm_association_numpy, run_lmm_association_jax,
+    run_lmm_association_streaming, or run_lmm_association_numpy_streaming
+    based on the ExecutionPlan. If no plan
     is provided, auto-selects via select_execution_mode().
 
     Args:

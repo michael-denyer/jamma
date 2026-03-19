@@ -2240,6 +2240,168 @@ def test_compute_score_numpy_ncvt2_uses_c_path(synthetic_data):
     )
 
 
+# ---------------------------------------------------------------------------
+# General n_cvt vectorized Uab parity tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+@pytest.mark.parametrize("n_cvt", [2, 3, 4])
+def test_vectorized_general_uab_parity(n_cvt):
+    """Vectorized _batch_compute_uab_general_numpy matches reference per-SNP loop."""
+    from jamma.lmm.likelihood import build_index_table
+    from jamma.lmm.likelihood_numpy import _batch_compute_uab_general_numpy
+
+    rng = np.random.default_rng(99)
+    n_samples, n_snps = 60, 15
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+
+    # Reference: per-SNP loop (the old implementation)
+    table = build_index_table(n_cvt)
+    n_index = table["n_index"]
+    Uab_ref = np.zeros((n_snps, n_samples, n_index), dtype=np.float64)
+    vectors_base = np.column_stack([UtW, np.zeros(n_samples), Uty])
+    for snp_idx in range(n_snps):
+        vectors = vectors_base.copy()
+        vectors[:, n_cvt] = UtG[:, snp_idx]
+        for a_col, b_col, idx in table["uab_pairs"]:
+            Uab_ref[snp_idx, :, idx] = vectors[:, a_col] * vectors[:, b_col]
+
+    # Vectorized implementation
+    Uab_vec = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG)
+
+    np.testing.assert_allclose(
+        Uab_vec,
+        Uab_ref,
+        rtol=1e-14,
+        atol=1e-14,
+        err_msg=f"Vectorized general Uab (n_cvt={n_cvt}) does not match per-SNP loop",
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.parametrize("n_cvt", [2, 3, 4])
+def test_direct_soa_varying_general_parity(n_cvt):
+    """_batch_compute_uab_varying_general_numpy matches extract-from-full-Uab."""
+    from jamma.lmm.likelihood import classify_uab_columns
+    from jamma.lmm.likelihood_numpy import (
+        _batch_compute_uab_general_numpy,
+        _batch_compute_uab_varying_general_numpy,
+    )
+
+    rng = np.random.default_rng(101)
+    n_samples, n_snps = 60, 15
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+
+    # Reference: compute full Uab then extract varying columns to SoA
+    _inv_indices, var_indices = classify_uab_columns(n_cvt)
+    Uab_full = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG)
+    ref_soa = np.ascontiguousarray(Uab_full[:, :, list(var_indices)].transpose(0, 2, 1))
+
+    # Direct SoA varying
+    direct_soa = _batch_compute_uab_varying_general_numpy(n_cvt, UtW, Uty, UtG)
+
+    np.testing.assert_allclose(
+        direct_soa,
+        ref_soa,
+        rtol=1e-14,
+        atol=1e-14,
+        err_msg=f"Direct SoA varying (n_cvt={n_cvt}) does not match extract-from-full",
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.parametrize("n_cvt", [2, 3, 4])
+def test_invariant_columns_constant_across_snps(n_cvt):
+    """Uab columns classified as invariant are actually constant across SNPs."""
+    from jamma.lmm.likelihood import classify_uab_columns
+    from jamma.lmm.likelihood_numpy import _batch_compute_uab_general_numpy
+
+    rng = np.random.default_rng(123)
+    n_samples, n_snps = 40, 20
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+
+    inv_indices, _var_indices = classify_uab_columns(n_cvt)
+    Uab = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG)
+
+    for col_idx in inv_indices:
+        first_snp = Uab[0, :, col_idx]
+        for snp_i in range(1, n_snps):
+            np.testing.assert_array_equal(
+                Uab[snp_i, :, col_idx],
+                first_snp,
+                err_msg=(
+                    f"Invariant column {col_idx} differs at SNP {snp_i} (n_cvt={n_cvt})"
+                ),
+            )
+
+
+@pytest.mark.tier0
+@pytest.mark.parametrize("n_cvt", [2, 3, 4])
+def test_batch_compute_uab_varying_soa_general_uses_direct_path(n_cvt):
+    """batch_compute_uab_varying_soa_numpy general path uses direct computation."""
+    rng = np.random.default_rng(55)
+    n_samples, n_snps = 50, 10
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+
+    # The function should produce identical results regardless of path
+    var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG)
+
+    # Reference: full Uab -> extract varying -> SoA
+    from jamma.lmm.likelihood import classify_uab_columns
+    from jamma.lmm.likelihood_numpy import _batch_compute_uab_general_numpy
+
+    _inv, var_indices = classify_uab_columns(n_cvt)
+    Uab_full = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG)
+    ref_soa = np.ascontiguousarray(Uab_full[:, :, list(var_indices)].transpose(0, 2, 1))
+
+    np.testing.assert_allclose(
+        var_soa,
+        ref_soa,
+        rtol=1e-14,
+        atol=1e-14,
+        err_msg=f"batch_compute_uab_varying_soa_numpy general (n_cvt={n_cvt}) mismatch",
+    )
+
+
+@pytest.mark.tier0
+def test_general_uab_no_per_snp_loop():
+    """_batch_compute_uab_general_numpy must not contain per-SNP Python loop."""
+    import inspect
+
+    from jamma.lmm.likelihood_numpy import _batch_compute_uab_general_numpy
+
+    source = inspect.getsource(_batch_compute_uab_general_numpy)
+    assert "vectors_base.copy()" not in source, (
+        "_batch_compute_uab_general_numpy still contains vectors_base.copy()"
+    )
+    assert "for snp_idx in range(n_snps)" not in source, (
+        "_batch_compute_uab_general_numpy still contains per-SNP Python loop"
+    )
+
+
+@pytest.mark.tier0
+def test_varying_soa_general_path_calls_direct():
+    """batch_compute_uab_varying_soa_numpy general path must call direct function."""
+    import inspect
+
+    from jamma.lmm.likelihood_numpy import batch_compute_uab_varying_soa_numpy
+
+    source = inspect.getsource(batch_compute_uab_varying_soa_numpy)
+    assert "_batch_compute_uab_varying_general_numpy" in source, (
+        "batch_compute_uab_varying_soa_numpy does not call "
+        "_batch_compute_uab_varying_general_numpy"
+    )
+
+
 @pytest.mark.tier0
 def test_compute_lrt_numpy_ncvt2_uses_c_path(synthetic_data):
     """_compute_lrt_numpy dispatches to C general path for n_cvt=2.

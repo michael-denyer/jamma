@@ -146,12 +146,22 @@ class CustomBuildHook(BuildHookInterface):
         then attempts to download from the BLIS prebuilt repo. Returns None
         (non-fatal) if the binary cannot be obtained.
 
+        Set JLINALG_SKIP_BLIS=1 to skip BLIS entirely (e.g. on Linux CI where
+        the prebuilt .so targets a newer glibc than manylinux_2_28 allows).
+
         Args:
             build_data: Hatchling build data dict (unused, kept for API symmetry).
 
         Returns:
             Path to the BLIS binary, or None if unavailable.
         """
+        if os.environ.get("JLINALG_SKIP_BLIS", "").strip() == "1":
+            print(
+                "JLINALG_SKIP_BLIS=1 — skipping BLIS bundling.",
+                file=sys.stderr,
+            )
+            return None
+
         # Allow CI to provide a pre-downloaded binary
         env_path = os.environ.get("JLINALG_BLIS_PATH")
         if env_path:

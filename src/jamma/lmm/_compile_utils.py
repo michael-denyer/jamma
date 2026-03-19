@@ -20,7 +20,7 @@ def is_c_extension_usable() -> bool:
     the lightweight probe used by the auto-backend selector.
 
     Returns:
-        True if _lmm_accel imports successfully and exposes _C_ABI_VERSION.
+        True if _lmm_accel imports successfully and exposes ABI_VERSION.
     """
     from loguru import logger
 
@@ -36,9 +36,9 @@ def is_c_extension_usable() -> bool:
         )
         return False
 
-    if not hasattr(mod, "_C_ABI_VERSION"):
+    if not hasattr(mod, "ABI_VERSION"):
         logger.debug(
-            "C extension imported but missing _C_ABI_VERSION — "
+            "C extension imported but missing ABI_VERSION — "
             "likely stale; run: python -m jamma.lmm._compile_accel"
         )
         return False

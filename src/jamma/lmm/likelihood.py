@@ -304,7 +304,6 @@ def calc_pab(
     Pab[0, :] = Hi_eval @ Uab
 
     # Rows 1 to n_cvt+1: Recursive projection
-    n_degenerate = 0
     for p in range(1, n_cvt + 2):
         for a in range(p + 1, n_cvt + 3):
             for b in range(a, n_cvt + 3):
@@ -321,11 +320,7 @@ def calc_pab(
                 if ps_ww != 0:
                     Pab[p, index_ab] = ps_ab - ps_aw * ps_bw / ps_ww
                 else:
-                    n_degenerate += 1
                     Pab[p, index_ab] = ps_ab
-
-    if n_degenerate > 0:
-        logger.debug(f"Pab: {n_degenerate} degenerate ps_ww=0 entries guarded")
 
     return Pab
 
@@ -360,7 +355,6 @@ def calc_ppab(
     PPab[0, :] = HiHi_eval @ Uab
 
     # Rows 1..n_cvt+1: recursive projection
-    n_degenerate = 0
     for p in range(1, n_cvt + 2):
         for a in range(p + 1, n_cvt + 3):
             for b in range(a, n_cvt + 3):
@@ -381,13 +375,9 @@ def calc_ppab(
                     p2_ab = ps2_ab + ps_aw * ps_bw * ps2_ww / (ps_ww * ps_ww)
                     p2_ab -= (ps_aw * ps2_bw + ps_bw * ps2_aw) / ps_ww
                 else:
-                    n_degenerate += 1
                     p2_ab = ps2_ab
 
                 PPab[p, index_ab] = p2_ab
-
-    if n_degenerate > 0:
-        logger.debug(f"PPab: {n_degenerate} degenerate ps_ww=0 entries guarded")
 
     return PPab
 
@@ -424,7 +414,6 @@ def calc_pppab(
     PPPab[0, :] = HiHiHi_eval @ Uab
 
     # Rows 1..n_cvt+1: recursive projection
-    n_degenerate = 0
     for p in range(1, n_cvt + 2):
         for a in range(p + 1, n_cvt + 3):
             for b in range(a, n_cvt + 3):
@@ -461,13 +450,9 @@ def calc_pppab(
                         + ps_aw * ps_bw * ps3_ww
                     ) / ps_ww2
                 else:
-                    n_degenerate += 1
                     p3_ab = ps3_ab
 
                 PPPab[p, index_ab] = p3_ab
-
-    if n_degenerate > 0:
-        logger.debug(f"PPPab: {n_degenerate} degenerate ps_ww=0 entries guarded")
 
     return PPPab
 

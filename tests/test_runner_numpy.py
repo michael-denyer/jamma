@@ -410,8 +410,8 @@ def test_runner_mode4_uses_fused_dispatch():
 
     with patch.object(
         runner_numpy,
-        "_compose_mode4_results",
-        wraps=runner_numpy._compose_mode4_results,
+        "_compose_mode4_from_split",
+        wraps=runner_numpy._compose_mode4_from_split,
     ) as mock_compose:
         run_lmm_association_numpy(
             genotypes=genotypes,
@@ -425,7 +425,7 @@ def test_runner_mode4_uses_fused_dispatch():
             lmm_mode=4,
         )
         assert mock_compose.call_count == 0, (
-            "Fused mode-4 should not fall back to _compose_mode4_results"
+            "Fused mode-4 should not fall back to _compose_mode4_from_split"
         )
 
 

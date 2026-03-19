@@ -38,9 +38,6 @@ from jamma.lmm.compute_numpy import (
     _C_MODE4_AVAILABLE,
     _C_SPLIT_AVAILABLE,
     _compute_lmm_chunk_numpy,
-    _compute_lrt_split_numpy,
-    _compute_score_split_numpy,
-    compute_mode4_split_c_ws,
     create_lmm_workspace_mode4,
 )
 from jamma.lmm.io import IncrementalAssocWriter
@@ -62,9 +59,8 @@ from jamma.lmm.results import (
     log_lambda_boundary_warning,
 )
 from jamma.lmm.runner_numpy import (
-    _compose_mode4_from_split,
     _create_wald_workspace_for_ncvt,
-    _select_wald_fn,
+    dispatch_soa_split,
 )
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
@@ -477,61 +473,24 @@ def run_lmm_association_numpy_streaming(
             if use_split:
                 uab_var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG)
 
-                # Dispatch by mode and workspace availability
-                if use_fused_mode4 and lmm_workspace is not None:
-                    cr = compute_mode4_split_c_ws(
-                        lmm_workspace, uab_var_soa, omp_threads
+                with blas_threads(1):
+                    cr = dispatch_soa_split(
+                        lmm_mode,
+                        use_fused_mode4,
+                        lmm_workspace,
+                        n_cvt,
+                        eigenvalues_np,
+                        uab_var_soa,
+                        uab_invariant_soa,
+                        n_samples,
+                        Hi_eval_null=Hi_eval_null,
+                        l_min=l_min,
+                        l_max=l_max,
+                        n_grid=n_grid,
+                        n_refine=n_refine,
+                        logl_H0=logl_H0,
+                        n_threads=omp_threads,
                     )
-                elif lmm_mode in (1, 4) and lmm_workspace is not None:
-                    wald_fn = _select_wald_fn(n_cvt)
-                    wald_cr = wald_fn(lmm_workspace, uab_var_soa, omp_threads)
-
-                    if lmm_mode == 1:
-                        cr = wald_cr
-                    else:
-                        # Mode 4 fallback: Wald from workspace, Score+LRT
-                        # from SoA split dispatch (no Uab reconstruction)
-                        cr = _compose_mode4_from_split(
-                            wald_cr,
-                            n_cvt,
-                            eigenvalues_np,
-                            uab_var_soa,
-                            uab_invariant_soa,
-                            n_samples,
-                            Hi_eval_null=Hi_eval_null,
-                            l_min=l_min,
-                            l_max=l_max,
-                            n_grid=n_grid,
-                            n_refine=n_refine,
-                            logl_H0=logl_H0,
-                            n_threads=omp_threads,
-                        )
-                else:
-                    # Modes 2 (LRT), 3 (Score): SoA split dispatch
-                    if lmm_mode == 2:
-                        cr = _compute_lrt_split_numpy(
-                            n_cvt,
-                            eigenvalues_np,
-                            uab_var_soa,
-                            uab_invariant_soa,
-                            n_samples,
-                            l_min,
-                            l_max,
-                            n_grid,
-                            n_refine,
-                            logl_H0,
-                            omp_threads,
-                        )
-                    else:
-                        cr = _compute_score_split_numpy(
-                            n_cvt,
-                            eigenvalues_np,
-                            Hi_eval_null,
-                            uab_var_soa,
-                            uab_invariant_soa,
-                            n_samples,
-                            omp_threads,
-                        )
             else:
                 # No split: compute full Uab
                 Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
@@ -657,54 +616,3 @@ def run_lmm_association_numpy_streaming(
             ),
             n_tested,
         )
-
-
-def _compose_mode4_results(
-    wald_cr: dict,
-    n_cvt: int,
-    eigenvalues: np.ndarray,
-    Uab_batch: np.ndarray,
-    n_samples: int,
-    *,
-    Hi_eval_null: np.ndarray,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    logl_H0: float,
-    n_threads: int,
-) -> dict[str, np.ndarray]:
-    """Compose mode-4 results from Wald workspace + Score/LRT batch dispatch.
-
-    Takes Wald results from the workspace path and adds Score and LRT
-    results computed from reconstructed Uab via C batch functions.
-    """
-    from jamma.lmm.compute_numpy import _compute_lrt_numpy, _compute_score_numpy
-
-    cr = dict(wald_cr)
-
-    score_result = _compute_score_numpy(
-        n_cvt,
-        eigenvalues,
-        Hi_eval_null,
-        Uab_batch,
-        n_samples,
-        n_threads=n_threads,
-    )
-    cr["p_scores"] = score_result["p_scores"]
-
-    lrt_result = _compute_lrt_numpy(
-        n_cvt,
-        eigenvalues,
-        Uab_batch,
-        l_min,
-        l_max,
-        n_grid,
-        n_refine,
-        logl_H0,
-        n_threads=n_threads,
-    )
-    cr["lambdas_mle"] = lrt_result["lambdas_mle"]
-    cr["p_lrts"] = lrt_result["p_lrts"]
-
-    return cr

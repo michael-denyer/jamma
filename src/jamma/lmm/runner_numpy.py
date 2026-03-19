@@ -188,59 +188,6 @@ def _guarded_compute(
         ) from exc
 
 
-def _compose_mode4_results(
-    wald_cr: dict,
-    n_cvt: int,
-    eigenvalues_np: np.ndarray,
-    Uab_batch: np.ndarray,
-    n_samples: int,
-    *,
-    Hi_eval_null: np.ndarray,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    logl_H0: float,
-    n_threads: int,
-) -> dict:
-    """Compose mode-4 (All) results from Wald + Score + LRT.
-
-    Calls Score and LRT dispatch separately to avoid redundant Wald
-    computation, then merges non-None values from each test result.
-
-    Merge order matters: Wald is applied last, so its REML-optimized
-    betas/ses overwrite Score's values for the same keys.
-    """
-    score_cr = _compute_lmm_chunk_numpy(
-        3,  # Score only
-        n_cvt,
-        eigenvalues_np,
-        Uab_batch,
-        n_samples,
-        Hi_eval_null=Hi_eval_null,
-        n_threads=n_threads,
-    )
-    lrt_cr = _compute_lmm_chunk_numpy(
-        2,  # LRT only
-        n_cvt,
-        eigenvalues_np,
-        Uab_batch,
-        n_samples,
-        l_min=l_min,
-        l_max=l_max,
-        n_grid=n_grid,
-        n_refine=n_refine,
-        logl_H0=logl_H0,
-        n_threads=n_threads,
-    )
-    cr: dict = {k: None for k in _ALL_RESULT_KEYS}
-    for d in (score_cr, lrt_cr, wald_cr):
-        for k, v in d.items():
-            if v is not None:
-                cr[k] = v
-    return cr
-
-
 def _compose_mode4_from_split(
     wald_cr: dict,
     n_cvt: int,
@@ -259,8 +206,7 @@ def _compose_mode4_from_split(
 ) -> dict:
     """Compose mode-4 results from Wald + SoA-split Score + LRT.
 
-    Like _compose_mode4_results but uses split dispatch to avoid
-    reconstruct_uab_from_soa. Merge order: Score, LRT, then Wald
+    Merge order: Score, LRT, then Wald
     (Wald's REML betas/ses overwrite Score's values).
     """
     score_cr = _compute_score_split_numpy(
@@ -291,6 +237,103 @@ def _compose_mode4_from_split(
             if v is not None:
                 cr[k] = v
     return cr
+
+
+def dispatch_soa_split(
+    lmm_mode: int,
+    use_fused_mode4: bool,
+    lmm_workspace: object | None,
+    n_cvt: int,
+    eigenvalues_np: np.ndarray,
+    uab_var_soa: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+    n_samples: int,
+    *,
+    Hi_eval_null: np.ndarray,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+    logl_H0: float,
+    n_threads: int,
+) -> dict:
+    """Dispatch SoA split computation by lmm_mode.
+
+    Centralises the mode dispatch decision tree used by all three runner
+    paths (pipeline, sequential, streaming). Does NOT manage BLAS thread
+    pinning or error wrapping — callers handle those concerns.
+
+    Args:
+        lmm_mode: 1=Wald, 2=LRT, 3=Score, 4=All.
+        use_fused_mode4: True when fused mode-4 C kernel is available.
+        lmm_workspace: C workspace capsule (None when unavailable).
+        n_cvt: Number of covariates.
+        eigenvalues_np: Kinship eigenvalues (n_samples,).
+        uab_var_soa: SNP-varying Uab SoA (n_snps, n_var, n_samples).
+        uab_invariant_soa: SNP-invariant Uab SoA (n_inv, n_samples).
+        n_samples: Number of samples.
+        Hi_eval_null: Pre-computed null-model Hi_eval (n_samples,).
+        l_min: Lambda lower bound for MLE optimisation.
+        l_max: Lambda upper bound for MLE optimisation.
+        n_grid: Grid search resolution.
+        n_refine: Golden section iterations.
+        logl_H0: Null model MLE log-likelihood.
+        n_threads: OpenMP thread count.
+
+    Returns:
+        Dict of result arrays (keys depend on lmm_mode).
+    """
+    if use_fused_mode4 and lmm_workspace is not None:
+        return compute_mode4_split_c_ws(lmm_workspace, uab_var_soa, n_threads)
+
+    if lmm_mode in (1, 4) and lmm_workspace is not None:
+        wald_fn = _select_wald_fn(n_cvt)
+        wald_cr = wald_fn(lmm_workspace, uab_var_soa, n_threads)
+        if lmm_mode == 1:
+            return wald_cr
+        return _compose_mode4_from_split(
+            wald_cr,
+            n_cvt,
+            eigenvalues_np,
+            uab_var_soa,
+            uab_invariant_soa,
+            n_samples,
+            Hi_eval_null=Hi_eval_null,
+            l_min=l_min,
+            l_max=l_max,
+            n_grid=n_grid,
+            n_refine=n_refine,
+            logl_H0=logl_H0,
+            n_threads=n_threads,
+        )
+
+    if lmm_mode == 3:
+        return _compute_score_split_numpy(
+            n_cvt,
+            eigenvalues_np,
+            Hi_eval_null,
+            uab_var_soa,
+            uab_invariant_soa,
+            n_samples,
+            n_threads,
+        )
+
+    if lmm_mode == 2:
+        return _compute_lrt_split_numpy(
+            n_cvt,
+            eigenvalues_np,
+            uab_var_soa,
+            uab_invariant_soa,
+            n_samples,
+            l_min,
+            l_max,
+            n_grid,
+            n_refine,
+            logl_H0,
+            n_threads,
+        )
+
+    raise ValueError(f"Unexpected lmm_mode={lmm_mode} in SoA split dispatch")
 
 
 def compute_pipeline_core_split(n_samples: int, total_cores: int) -> tuple[int, int]:
@@ -632,9 +675,10 @@ def run_lmm_association_numpy(
     # Determine split/pipeline eligibility BEFORE chunk sizing so the
     # budget can use accurate per-SNP accounting (varying cols vs full Uab).
     # n_cvt=1: split available for all modes — Wald uses C workspace,
-    #   LRT/Score/All reconstruct full Uab from SoA then call C batch.
-    # n_cvt>1: split available for all modes — reconstruct_uab_from_soa now
-    #   handles general n_cvt, and Score/LRT dispatch calls C general batch.
+    #   LRT/Score use SoA-native C split dispatch, mode-4 uses either
+    #   fused kernel or Wald workspace + SoA split Score/LRT.
+    # n_cvt>1: Wald uses general C workspace. LRT/Score/mode-4 fall back
+    #   to reconstruct_uab_from_soa + C general batch dispatch.
     use_split = (_C_SPLIT_AVAILABLE and n_cvt == 1) or (
         _C_GENERAL_AVAILABLE and n_cvt > 1
     )
@@ -861,91 +905,35 @@ def run_lmm_association_numpy(
         Dispatches by lmm_mode:
         - Mode 1 (Wald): C workspace path (no Uab reconstruction)
         - Mode 4 fused: single-pass Wald/Score/LRT via mode-4 workspace
-        - Mode 4 fallback: Wald via workspace + Score/LRT via reconstructed Uab
-        - Modes 2, 3 (LRT, Score): Reconstruct Uab, C batch dispatch
+        - Mode 4 fallback: Wald via workspace + Score/LRT via SoA split dispatch
+        - Modes 2, 3 (LRT, Score): SoA split dispatch (no Uab reconstruction)
         """
         nonlocal write_offset, t_numpy_compute_total, t_result_write_total
         nonlocal n_at_lmin_accum, n_at_lmax_accum
 
         t_compute_start = time.perf_counter()
 
-        if use_fused_mode4 and lmm_workspace is not None:
-            # Fused mode-4: single C call for all 8 output arrays
-            cr = _guarded_compute(
-                compute_mode4_split_c_ws,
-                lmm_workspace,
-                uab_var_soa,
-                pipeline_omp_threads,
-                operation="Fused mode-4 C workspace compute",
-                write_offset=write_offset,
-                n_filtered=n_filtered,
-            )
-        elif lmm_mode in (1, 4) and lmm_workspace is not None:
-            # Wald via workspace
-            wald_fn = _select_wald_fn(n_cvt)
-            wald_cr = _guarded_compute(
-                wald_fn,
-                lmm_workspace,
-                uab_var_soa,
-                pipeline_omp_threads,
-                operation="Wald C workspace compute",
-                write_offset=write_offset,
-                n_filtered=n_filtered,
-            )
-
-            if lmm_mode == 1:
-                cr = wald_cr
-            else:
-                # Mode 4 fallback: Wald from workspace, Score+LRT from SoA split
-                cr = _compose_mode4_from_split(
-                    wald_cr,
-                    n_cvt,
-                    eigenvalues_np,
-                    uab_var_soa,
-                    uab_invariant_soa,
-                    n_samples,
-                    Hi_eval_null=Hi_eval_null,
-                    l_min=l_min,
-                    l_max=l_max,
-                    n_grid=n_grid,
-                    n_refine=n_refine,
-                    logl_H0=logl_H0,
-                    n_threads=pipeline_omp_threads,
-                )
-        else:
-            # Modes 2, 3: SoA split dispatch (no Uab reconstruction for n_cvt=1)
-            if lmm_mode == 3:
-                cr = _guarded_compute(
-                    _compute_score_split_numpy,
-                    n_cvt,
-                    eigenvalues_np,
-                    Hi_eval_null,
-                    uab_var_soa,
-                    uab_invariant_soa,
-                    n_samples,
-                    pipeline_omp_threads,
-                    operation="Score SoA split dispatch",
-                    write_offset=write_offset,
-                    n_filtered=n_filtered,
-                )
-            elif lmm_mode == 2:
-                cr = _guarded_compute(
-                    _compute_lrt_split_numpy,
-                    n_cvt,
-                    eigenvalues_np,
-                    uab_var_soa,
-                    uab_invariant_soa,
-                    n_samples,
-                    l_min,
-                    l_max,
-                    n_grid,
-                    n_refine,
-                    logl_H0,
-                    pipeline_omp_threads,
-                    operation="LRT SoA split dispatch",
-                    write_offset=write_offset,
-                    n_filtered=n_filtered,
-                )
+        cr = _guarded_compute(
+            dispatch_soa_split,
+            lmm_mode,
+            use_fused_mode4,
+            lmm_workspace,
+            n_cvt,
+            eigenvalues_np,
+            uab_var_soa,
+            uab_invariant_soa,
+            n_samples,
+            Hi_eval_null=Hi_eval_null,
+            l_min=l_min,
+            l_max=l_max,
+            n_grid=n_grid,
+            n_refine=n_refine,
+            logl_H0=logl_H0,
+            n_threads=pipeline_omp_threads,
+            operation="SoA split dispatch",
+            write_offset=write_offset,
+            n_filtered=n_filtered,
+        )
 
         t_numpy_compute_total += time.perf_counter() - t_compute_start
 
@@ -1160,46 +1148,12 @@ def run_lmm_association_numpy(
                         n_cvt, UtW, Uty, UtG, out=_out
                     )
                     del UtG
-                    if use_fused_mode4 and lmm_workspace is not None:
-                        # Fused mode-4: single C call for all 8 arrays
-                        with blas_threads(1):
-                            cr = _guarded_compute(
-                                compute_mode4_split_c_ws,
-                                lmm_workspace,
-                                uab_var_soa,
-                                omp_threads,
-                                operation="Fused mode-4 C workspace compute",
-                                write_offset=write_offset,
-                                n_filtered=n_filtered,
-                            )
-                        del uab_var_soa
-                    elif lmm_mode == 1 and lmm_workspace is not None:
-                        # Wald: use C workspace (no full Uab needed)
-                        with blas_threads(1):
-                            cr = _guarded_compute(
-                                _select_wald_fn(n_cvt),
-                                lmm_workspace,
-                                uab_var_soa,
-                                omp_threads,
-                                operation="Wald C workspace compute",
-                                write_offset=write_offset,
-                                n_filtered=n_filtered,
-                            )
-                        del uab_var_soa
-                    elif lmm_mode == 4 and lmm_workspace is not None:
-                        # Mode 4 fallback: Wald workspace + Score/LRT from SoA split
-                        with blas_threads(1):
-                            wald_cr = _guarded_compute(
-                                _select_wald_fn(n_cvt),
-                                lmm_workspace,
-                                uab_var_soa,
-                                omp_threads,
-                                operation="Wald C workspace compute",
-                                write_offset=write_offset,
-                                n_filtered=n_filtered,
-                            )
-                        cr = _compose_mode4_from_split(
-                            wald_cr,
+                    with blas_threads(1):
+                        cr = _guarded_compute(
+                            dispatch_soa_split,
+                            lmm_mode,
+                            use_fused_mode4,
+                            lmm_workspace,
                             n_cvt,
                             eigenvalues_np,
                             uab_var_soa,
@@ -1212,58 +1166,11 @@ def run_lmm_association_numpy(
                             n_refine=n_refine,
                             logl_H0=logl_H0,
                             n_threads=omp_threads,
+                            operation="SoA split dispatch",
+                            write_offset=write_offset,
+                            n_filtered=n_filtered,
                         )
-                        del uab_var_soa
-                    elif lmm_mode == 3:
-                        # Score: SoA split dispatch (no Uab reconstruction)
-                        with blas_threads(1):
-                            cr = _guarded_compute(
-                                _compute_score_split_numpy,
-                                n_cvt,
-                                eigenvalues_np,
-                                Hi_eval_null,
-                                uab_var_soa,
-                                uab_invariant_soa,
-                                n_samples,
-                                omp_threads,
-                                operation="Score SoA split dispatch",
-                                write_offset=write_offset,
-                                n_filtered=n_filtered,
-                            )
-                        del uab_var_soa
-                    elif lmm_mode == 2:
-                        # LRT: SoA split dispatch (no Uab reconstruction)
-                        with blas_threads(1):
-                            cr = _guarded_compute(
-                                _compute_lrt_split_numpy,
-                                n_cvt,
-                                eigenvalues_np,
-                                uab_var_soa,
-                                uab_invariant_soa,
-                                n_samples,
-                                l_min,
-                                l_max,
-                                n_grid,
-                                n_refine,
-                                logl_H0,
-                                omp_threads,
-                                operation="LRT SoA split dispatch",
-                                write_offset=write_offset,
-                                n_filtered=n_filtered,
-                            )
-                        del uab_var_soa
-                    else:
-                        # Fallback for any remaining modes
-                        from jamma.lmm.likelihood_numpy import (
-                            reconstruct_uab_from_soa as _reconstruct,
-                        )
-
-                        Uab_batch = _reconstruct(
-                            uab_invariant_soa, uab_var_soa, n_cvt=n_cvt
-                        )
-                        del uab_var_soa
-                        cr = _run_lmm_chunk(Uab_batch)
-                        del Uab_batch
+                    del uab_var_soa
                 else:
                     Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
                     del UtG

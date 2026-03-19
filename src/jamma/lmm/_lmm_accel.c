@@ -7,7 +7,8 @@
  *                     create_workspace_general_c, compute_lmm_chunk_general_c,
  *                     compute_score_batch_c, compute_lrt_batch_c,
  *                     compute_score_batch_general_c, compute_lrt_batch_general_c,
- *                     create_workspace_mode4_split_c, compute_mode4_chunk_split_c
+ *                     create_workspace_mode4_split_c, compute_mode4_chunk_split_c,
+ *                     compute_score_split_c, compute_lrt_split_c
  *
  * Translates the Python/NumPy golden-section REML/MLE optimizer + Wald/Score/LRT
  * test pipelines (likelihood_numpy.py) to C with optional OpenMP parallelism.
@@ -72,7 +73,7 @@
 
 /* ABI version: bump when function signatures or array layout expectations change.
  * The Python side checks this at import time to detect stale .so files. */
-#define ABI_VERSION 7  /* v7: General n_cvt Score and LRT batch kernels */
+#define ABI_VERSION 7  /* v7: General n_cvt Score/LRT batch kernels (+score/lrt split, additive) */
 
 /* Betainc continued fraction constants — matches special.py */
 #define CF_TINY     1.0e-30

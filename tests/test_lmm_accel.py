@@ -2187,9 +2187,8 @@ def _build_mode4_soa_and_fused(score_lrt_data):
     )
     fused_cr = compute_mode4_split_c_ws(ws_mode4, uab_var_soa, 1)
 
-    # Compose path: Wald workspace + reconstruct + Score/LRT separately
-    from jamma.lmm.likelihood_numpy import reconstruct_uab_from_soa
-    from jamma.lmm.runner_numpy import _compose_mode4_results
+    # Compose path: Wald workspace + SoA split Score/LRT
+    from jamma.lmm.runner_numpy import _compose_mode4_from_split
 
     ws_wald = create_lmm_workspace(
         eigenvalues,
@@ -2202,12 +2201,12 @@ def _build_mode4_soa_and_fused(score_lrt_data):
         1,
     )
     wald_cr = compute_wald_split_c_ws(ws_wald, uab_var_soa, 1)
-    Uab_full = reconstruct_uab_from_soa(uab_inv_soa, uab_var_soa)
-    compose_cr = _compose_mode4_results(
+    compose_cr = _compose_mode4_from_split(
         wald_cr,
         1,
         eigenvalues,
-        Uab_full,
+        uab_var_soa,
+        uab_inv_soa,
         n_samples,
         Hi_eval_null=Hi_eval_null,
         l_min=1e-5,

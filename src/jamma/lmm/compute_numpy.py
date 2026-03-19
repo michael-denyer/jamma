@@ -234,6 +234,12 @@ def _try_import_accel() -> AccelImport:
             compute_score_split_c as score_split_c,
         )
     except AttributeError:
+        from loguru import logger
+
+        logger.warning(
+            "C extension missing compute_score_split_c. "
+            "Score split will fall back to reconstruct_uab_from_soa."
+        )
         score_split_c = None
 
     try:
@@ -241,6 +247,12 @@ def _try_import_accel() -> AccelImport:
             compute_lrt_split_c as lrt_split_c,
         )
     except AttributeError:
+        from loguru import logger
+
+        logger.warning(
+            "C extension missing compute_lrt_split_c. "
+            "LRT split will fall back to reconstruct_uab_from_soa."
+        )
         lrt_split_c = None
 
     return AccelImport(
@@ -339,9 +351,6 @@ if not _C_ACCEL_AVAILABLE:
         _C_HAS_OPENMP = False
         _C_GENERAL_AVAILABLE = False
         _C_MODE4_AVAILABLE = False
-
-_C_SCORE_SPLIT_AVAILABLE = _compute_score_split_c is not None
-_C_LRT_SPLIT_AVAILABLE = _compute_lrt_split_c is not None
 
 
 class WaldResult(TypedDict):

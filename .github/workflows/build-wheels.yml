@@ -21,11 +21,20 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p src/jamma/jlinalg/libs
-          gh release download v0.2.0 \
-            --repo michael-denyer/blis-prebuilt \
-            --pattern "libblis-*" \
-            --dir src/jamma/jlinalg/libs/ \
-            || echo "BLIS download failed (expected if repo not ready)"
+          # Download only the platform-appropriate BLIS binary.
+          # The prebuilt libblis-x86_64.so targets glibc 2.39 (Ubuntu 24.04),
+          # which is too recent for manylinux_2_28. auditwheel rejects wheels
+          # containing .so files with too-recent glibc symbols, even with
+          # --exclude. Skip BLIS on Linux — it's dlopen'd at runtime, optional.
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            gh release download v0.2.0 \
+              --repo michael-denyer/blis-prebuilt \
+              --pattern "libblis-firestorm.dylib" \
+              --dir src/jamma/jlinalg/libs/ \
+              || echo "BLIS download failed (expected if repo not ready)"
+          else
+            echo "Skipping BLIS on Linux (glibc version mismatch with manylinux_2_28)"
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -48,8 +57,7 @@ jobs:
           # Install libgomp in manylinux_2_28 container (AlmaLinux 8, dnf)
           CIBW_BEFORE_BUILD_LINUX: "dnf install -y libgomp"
           # Exclude bundled BLIS from auditwheel/delocate repair — BLIS is
-          # loaded via dlopen at runtime, not linked. The prebuilt binary
-          # may target a newer glibc/macOS than the wheel's platform tag.
+          # loaded via dlopen at runtime, not linked.
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair --exclude libblis.so -w {dest_dir} {wheel}"
           CIBW_REPAIR_WHEEL_COMMAND_MACOS: "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v -e libblis {wheel}"
           # Smoke test: import + numerical sanity (catches ABI mismatches)
@@ -97,11 +105,20 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p src/jamma/jlinalg/libs
-          gh release download v0.2.0 \
-            --repo michael-denyer/blis-prebuilt \
-            --pattern "libblis-*" \
-            --dir src/jamma/jlinalg/libs/ \
-            || echo "BLIS download failed (expected if repo not ready)"
+          # Download only the platform-appropriate BLIS binary.
+          # The prebuilt libblis-x86_64.so targets glibc 2.39 (Ubuntu 24.04),
+          # which is too recent for manylinux_2_28. auditwheel rejects wheels
+          # containing .so files with too-recent glibc symbols, even with
+          # --exclude. Skip BLIS on Linux — it's dlopen'd at runtime, optional.
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            gh release download v0.2.0 \
+              --repo michael-denyer/blis-prebuilt \
+              --pattern "libblis-firestorm.dylib" \
+              --dir src/jamma/jlinalg/libs/ \
+              || echo "BLIS download failed (expected if repo not ready)"
+          else
+            echo "Skipping BLIS on Linux (glibc version mismatch with manylinux_2_28)"
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

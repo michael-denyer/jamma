@@ -861,9 +861,8 @@ def test_pipeline_pve_se_populated(sample_plink_data: Path, output_dir: Path) ->
     assert 0 < result.pve_estimate < 1, (
         f"pve_estimate should be in (0, 1), got {result.pve_estimate}"
     )
-    assert result.pve_se is None or result.pve_se > 0, (
-        f"pve_se should be None or positive, got {result.pve_se}"
-    )
+    assert result.pve_se is not None, "pve_se should be populated for synthetic data"
+    assert result.pve_se > 0, f"pve_se should be positive, got {result.pve_se}"
 
 
 @pytest.mark.tier1

@@ -339,7 +339,10 @@ class TestStreamingMechanics:
 
         assert result.pve is not None
         assert 0 <= result.pve <= 1
-        assert result.pve_se is None or result.pve_se > 0
+        assert result.pve_se is not None, (
+            "PVE SE should be populated for synthetic data"
+        )
+        assert result.pve_se > 0
 
 
 # ---------------------------------------------------------------------------

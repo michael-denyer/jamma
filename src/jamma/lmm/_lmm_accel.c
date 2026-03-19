@@ -4925,7 +4925,7 @@ err_input_lrt_gen:
 /* =========================================================================
  * FUSED MODE-4 — compute_mode4_chunk_split_c
  *
- * Single OpenMP loop computes Wald + Score + LRT from SoA split data.
+ * Single OpenMP loop computes Score + Wald + LRT from SoA split data.
  * Eliminates Uab reconstruction and redundant Pab computation.
  * ========================================================================= */
 

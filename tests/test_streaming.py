@@ -646,8 +646,11 @@ class TestRunLmmAssociationStreaming:
         # PVE should be populated
         assert run_result.pve is not None, "Streaming runner should return PVE"
         assert 0 < run_result.pve < 1, f"PVE out of range: {run_result.pve}"
-        assert run_result.pve_se is None or run_result.pve_se > 0, (
-            f"PVE SE should be None or positive, got {run_result.pve_se}"
+        assert run_result.pve_se is not None, (
+            "PVE SE should be populated for synthetic data"
+        )
+        assert run_result.pve_se > 0, (
+            f"PVE SE should be positive, got {run_result.pve_se}"
         )
 
         # Same number of results

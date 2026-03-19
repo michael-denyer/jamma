@@ -511,8 +511,8 @@ def reml_log_likelihood_dev2(
     Port of GEMMA v0.98.5 LogRL_dev2 (e_mode=0, calc_null=True).
     The trace and yPKPy terms are computed analytically from Pab/PPab/PPPab.
     The logdet_hiw second derivative uses a local finite-difference stencil
-    on the logdet_hiw function alone (2 extra calc_pab calls, not 3 full
-    likelihood evaluations).
+    on the logdet_hiw function alone (3 lightweight calc_pab + calc_iab
+    evaluations, not 3 full likelihood evaluations).
 
     Args:
         lambda_val: REML-optimal lambda (null model).
@@ -545,14 +545,13 @@ def reml_log_likelihood_dev2(
     PPPab_mat = calc_pppab(n_cvt, HiHiHi_eval, Uab, Pab, PPab_mat)
 
     idx_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
-    raw_P_yy = Pab[nc_total, idx_yy]
-    if raw_P_yy < _P_YY_MIN:
+    P_yy = Pab[nc_total, idx_yy]
+    if P_yy < _P_YY_MIN:
         logger.warning(
-            f"P_yy={raw_P_yy:.6e} below floor {_P_YY_MIN} in dev2 "
+            f"P_yy={P_yy:.6e} below floor {_P_YY_MIN} in dev2 "
             f"— phenotype may be degenerate after projection"
         )
         return np.nan
-    P_yy = raw_P_yy
     PP_yy = PPab_mat[nc_total, idx_yy]
     PPP_yy = PPPab_mat[nc_total, idx_yy]
 

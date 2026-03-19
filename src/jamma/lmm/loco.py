@@ -1657,17 +1657,9 @@ def run_lmm_loco(
             )
     finally:
         if backend == "jax":
-            _cleanup_jax_caches()
+            from jamma.lmm.compute import cleanup_jax_caches  # noqa: PLC0415
 
-
-def _cleanup_jax_caches() -> None:
-    """Best-effort JAX cache cleanup."""
-    try:
-        import jax  # noqa: PLC0415
-
-        jax.clear_caches()
-    except Exception:
-        logger.warning("Failed to clear JAX caches during cleanup", exc_info=True)
+            cleanup_jax_caches()
 
 
 @dataclass
@@ -2123,31 +2115,28 @@ def _run_lmm_for_chromosome(
         compute_pve=True), and pve_se is the standard error of PVE (None
         unless compute_pve=True and likelihood surface is not flat).
     """
-    try:
-        return _run_lmm_for_chromosome_jax_impl(
-            bed_path,
-            chr_snp_indices,
-            eigenvalues,
-            eigenvectors,
-            phenotypes,
-            covariates,
-            snp_info,
-            maf_threshold,
-            miss_threshold,
-            lmm_mode,
-            valid_mask,
-            show_progress,
-            l_min,
-            l_max,
-            n_grid,
-            n_refine,
-            snps_global_mask,
-            col_chunk_size,
-            writer,
-            compute_pve,
-        )
-    finally:
-        _cleanup_jax_caches()
+    return _run_lmm_for_chromosome_jax_impl(
+        bed_path,
+        chr_snp_indices,
+        eigenvalues,
+        eigenvectors,
+        phenotypes,
+        covariates,
+        snp_info,
+        maf_threshold,
+        miss_threshold,
+        lmm_mode,
+        valid_mask,
+        show_progress,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        snps_global_mask,
+        col_chunk_size,
+        writer,
+        compute_pve,
+    )
 
 
 def _run_lmm_for_chromosome_numpy(

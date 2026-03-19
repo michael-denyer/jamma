@@ -22,6 +22,7 @@ from jamma.lmm.chunk import _compute_chunk_size
 from jamma.lmm.compute import (
     _compute_lmm_chunk,
     block_chunk_result,
+    cleanup_jax_caches,
     exposed_rotation_time,
     log_jax_error,
 )
@@ -65,14 +66,6 @@ def get_last_run_timing() -> RunnerTiming:
     Safe to call from any thread — returns a copy, not the live dict.
     """
     return dict(last_run_timing)
-
-
-def _cleanup_jax_caches() -> None:
-    """Best-effort JAX cache cleanup."""
-    try:
-        jax.clear_caches()
-    except Exception:
-        logger.warning("Failed to clear JAX caches during cleanup", exc_info=True)
 
 
 def _run_lmm_jax_batch_impl(
@@ -618,4 +611,4 @@ def run_lmm_association_jax(
         )
     finally:
         if clear_caches:
-            _cleanup_jax_caches()
+            cleanup_jax_caches()

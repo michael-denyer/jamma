@@ -764,11 +764,11 @@ def check_memory_before_run(
     try:
         from jamma import jlinalg
 
-        _has_dsyevr = bool(jlinalg.blas_has_dsyevr)
-        _has_dsyevd = bool(jlinalg.blas_has_dsyevd)
-    except (ImportError, AttributeError):
+        _has_dsyevr = bool(getattr(jlinalg, "blas_has_dsyevr", False))
+        _has_dsyevd = bool(getattr(jlinalg, "blas_has_dsyevd", False))
+    except ImportError:
         logger.debug(
-            "Could not import jlinalg or detect LAPACK drivers; "
+            "Could not import jlinalg; "
             "pre-flight check will use conservative DSYEVD estimate."
         )
 

@@ -86,9 +86,9 @@ int jlinalg_eigh_c(npy_intp N,
             if (ext_ret == JLINALG_EXT_ALLOC_FAIL) {
                 /* DSYEVD workspace alloc failed — fall through to DSYEVR.
                  * ALLOC_FAIL only occurs on the Fortran path before K is
-                 * touched (workspace query fails), so K/eigenvectors are
-                 * still pristine.  When K == eigenvectors the memcpy is a
-                 * no-op (src==dst). */
+                 * touched (workspace malloc fails after query), so
+                 * K/eigenvectors are still pristine.  When K == eigenvectors
+                 * the memcpy is a no-op (src==dst). */
                 if (K != eigenvectors)
                     memcpy(eigenvectors, K, (size_t)N * (size_t)N * sizeof(double));
                 fprintf(stderr,

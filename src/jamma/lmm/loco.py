@@ -56,9 +56,7 @@ from jamma.lmm.results import (
     log_lambda_boundary_warning,
 )
 from jamma.lmm.runner_numpy import _compute_chunk_size_numpy
-from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
-from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
-from jamma.lmm.schema import LazySnpMeta, LocoResult
+from jamma.lmm.schema import RESULT_FIELDS, TEST_TYPE_MAP, LazySnpMeta, LocoResult
 from jamma.lmm.stats import AssocResult
 from jamma.utils import chr_sort_key
 
@@ -1225,7 +1223,7 @@ def run_lmm_loco(
     # Build SNP metadata for result construction (lazy -- no upfront dict allocation)
     snp_info = LazySnpMeta(meta)
 
-    test_type = _TEST_TYPE_MAP[lmm_mode]
+    test_type = TEST_TYPE_MAP[lmm_mode]
 
     if output_path is None and n_snps_total > 100_000:
         logger.warning(
@@ -2128,7 +2126,7 @@ def _run_lmm_for_chromosome_numpy(
     # Pre-allocate result arrays
     write_offset = 0
     arrays_out: dict[str, np.ndarray] = {
-        key: np.empty(n_filtered, dtype=np.float64) for key in _RESULT_FIELDS[lmm_mode]
+        key: np.empty(n_filtered, dtype=np.float64) for key in RESULT_FIELDS[lmm_mode]
     }
     results: list[AssocResult] = []
 

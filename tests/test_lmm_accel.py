@@ -2497,6 +2497,94 @@ def test_mode4_fused_rejects_wald_workspace(score_lrt_data):
         compute_mode4_split_c_ws(wald_ws, uab_var_soa, 1)
 
 
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+def test_mode4_fused_multithreaded_parity(score_lrt_data):
+    """Multi-threaded fused mode-4 results must match single-threaded results.
+
+    The fused mode-4 kernel dispatches Score/LRT/Wald in a single pass over
+    SNPs. This test verifies that OpenMP parallelism does not introduce race
+    conditions or thread-local state corruption in the fused kernel path.
+    """
+    from jamma.core.threading import get_physical_core_count
+    from jamma.lmm.compute_numpy import (
+        _C_MODE4_AVAILABLE,
+        compute_mode4_split_c_ws,
+        create_lmm_workspace_mode4,
+    )
+
+    if not _C_MODE4_AVAILABLE:
+        pytest.skip("Mode-4 fused C extension not available")
+
+    n_threads = get_physical_core_count()
+    if n_threads < 2:
+        pytest.skip("Need >=2 cores for multi-threaded test")
+
+    eigenvalues, Uab_batch, n_samples, Hi_eval_null, logl_H0 = score_lrt_data
+
+    # Build SoA arrays (same pattern as _build_mode4_soa_and_fused)
+    uab_inv_soa = np.stack(
+        [Uab_batch[0, :, 0], Uab_batch[0, :, 2], Uab_batch[0, :, 5]], axis=0
+    )
+    uab_var_soa = np.stack(
+        [Uab_batch[:, :, 1], Uab_batch[:, :, 3], Uab_batch[:, :, 4]], axis=1
+    )
+
+    # Single-threaded computation
+    ws_1t = create_lmm_workspace_mode4(
+        eigenvalues,
+        uab_inv_soa,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+        Hi_eval_null,
+        logl_H0,
+    )
+    cr_1t = compute_mode4_split_c_ws(ws_1t, uab_var_soa, 1)
+
+    # Multi-threaded computation
+    ws_mt = create_lmm_workspace_mode4(
+        eigenvalues,
+        uab_inv_soa,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+        Hi_eval_null,
+        logl_H0,
+    )
+    cr_mt = compute_mode4_split_c_ws(ws_mt, uab_var_soa, n_threads)
+
+    # All 8 result keys must match at tight tolerance
+    expected_keys = [
+        "lambdas",
+        "logls",
+        "betas",
+        "ses",
+        "pwalds",
+        "lambdas_mle",
+        "p_lrts",
+        "p_scores",
+    ]
+    for key in expected_keys:
+        assert key in cr_1t, f"Missing key '{key}' in single-threaded result"
+        assert key in cr_mt, f"Missing key '{key}' in multi-threaded result"
+        np.testing.assert_allclose(
+            cr_mt[key],
+            cr_1t[key],
+            rtol=1e-12,
+            err_msg=(
+                f"Multi-threaded mode-4 '{key}' diverges from single-threaded "
+                f"at n_threads={n_threads}"
+            ),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Score and LRT general n_cvt C batch kernel tests (Plan 70-01)
 # ---------------------------------------------------------------------------

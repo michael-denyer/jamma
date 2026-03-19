@@ -9,6 +9,7 @@ GEMMA Reference (mouse_hs1940.log.txt):
 """
 
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -283,24 +284,75 @@ class TestRemlLogLikelihoodDev2:
             err_msg=f"se(pve)={pve_se:.6f} vs GEMMA={GEMMA_SE_PVE}",
         )
 
-    def test_ncvt2_delegates_to_finite_diff(self):
-        """For n_cvt>1, reml_log_likelihood_dev2 delegates to finite_difference_dev2."""
+    @pytest.mark.parametrize("n_cvt", [2, 3, 4])
+    def test_analytical_dev2_vs_finite_difference_ncvt_general(self, n_cvt):
+        """Analytical dev2 matches finite_difference_dev2 within rtol=1e-4 for n_cvt>1.
+
+        Verifies that reml_log_likelihood_dev2 computes analytically (does NOT
+        delegate to finite_difference_dev2) and produces results matching the
+        finite-difference oracle.
+        """
         n = 200
-        n_cvt = 4
-        rng = np.random.default_rng(200)
-        eigenvalues = rng.uniform(0.5, 3.0, size=n)
+        rng = np.random.default_rng(42)
+        eigenvalues = np.sort(rng.exponential(1.0, n))[::-1]
         UtW = rng.standard_normal((n, n_cvt))
         Uty = np.sqrt(eigenvalues) * rng.standard_normal(n) + rng.standard_normal(n)
 
         lam, _ = compute_null_model_lambda(eigenvalues, UtW, Uty, n_cvt)
         Uab = compute_Uab(UtW, Uty, Utx=None)
 
-        dev2_wrapper = reml_log_likelihood_dev2(lam, eigenvalues, Uab, n_cvt)
-        dev2_direct = finite_difference_dev2(lam, eigenvalues, Uab, n_cvt)
+        # Get the oracle value BEFORE patching
+        dev2_oracle = finite_difference_dev2(lam, eigenvalues, Uab, n_cvt)
 
-        assert dev2_wrapper == dev2_direct, (
-            f"n_cvt>1 should delegate: wrapper={dev2_wrapper}, direct={dev2_direct}"
+        # Now verify analytical path does NOT call finite_difference_dev2
+        with patch(
+            "jamma.lmm.likelihood.finite_difference_dev2",
+            side_effect=AssertionError(
+                "analytical path should not call finite_difference_dev2"
+            ),
+        ):
+            dev2_analytical = reml_log_likelihood_dev2(lam, eigenvalues, Uab, n_cvt)
+
+        np.testing.assert_allclose(
+            dev2_analytical,
+            dev2_oracle,
+            rtol=1e-4,
+            err_msg=(
+                f"n_cvt={n_cvt}: analytical dev2={dev2_analytical:.8e} vs "
+                f"oracle={dev2_oracle:.8e}"
+            ),
         )
+
+    def test_analytical_dev2_does_not_delegate_ncvt2(self):
+        """Structural: dev2 does NOT delegate to finite_difference_dev2."""
+        n = 100
+        n_cvt = 2
+        rng = np.random.default_rng(99)
+        eigenvalues = rng.uniform(0.5, 3.0, size=n)
+        UtW = rng.standard_normal((n, n_cvt))
+        Uty = rng.standard_normal(n)
+        Uab = compute_Uab(UtW, Uty, Utx=None)
+
+        with patch(
+            "jamma.lmm.likelihood.finite_difference_dev2",
+            side_effect=AssertionError("should not be called"),
+        ):
+            dev2 = reml_log_likelihood_dev2(0.5, eigenvalues, Uab, n_cvt)
+
+        assert np.isfinite(dev2), f"Expected finite dev2, got {dev2}"
+
+    def test_analytical_dev2_ncvt2_lambda_near_bounds(self):
+        """n_cvt=2 with lambda near lower bound (1e-5) produces finite result."""
+        n = 100
+        n_cvt = 2
+        rng = np.random.default_rng(77)
+        eigenvalues = rng.uniform(0.5, 3.0, size=n)
+        UtW = rng.standard_normal((n, n_cvt))
+        Uty = rng.standard_normal(n)
+        Uab = compute_Uab(UtW, Uty, Utx=None)
+
+        dev2 = reml_log_likelihood_dev2(1e-5, eigenvalues, Uab, n_cvt)
+        assert np.isfinite(dev2), f"dev2 should be finite at lambda=1e-5, got {dev2}"
 
     def test_dev2_negative_for_synthetic(self, synthetic_null_model):
         """dev2 negative for synthetic data too (confirming general behavior)."""

@@ -355,15 +355,21 @@ except ImportError as _exc:
         C64 -= B64 @ A64.T
         return C64
 
-    def eigh(K: _np.ndarray) -> tuple[_np.ndarray, _np.ndarray]:
+    def eigh(K: _np.ndarray, inplace: bool = False) -> tuple[_np.ndarray, _np.ndarray]:
         """Compute eigenvalues and eigenvectors of a symmetric matrix.
 
         Args:
-            K: Symmetric matrix, shape (N, N), float64. Overwritten as scratch.
+            K: Symmetric matrix, shape (N, N), float64. When inplace=False,
+                overwritten as scratch. When inplace=True, overwritten with
+                eigenvectors (must be C-contiguous, writeable, float64).
+            inplace: If True, overwrite K with eigenvectors in-place and return
+                K as the eigenvector array (no separate N*N allocation).
+                Default False for backward compatibility.
 
         Returns:
             Tuple of (eigenvalues, eigenvectors) where eigenvalues is shape (N,)
             ascending, eigenvectors is shape (N, N) with columns as unit eigenvectors.
+            When inplace=True, eigenvectors IS the input K array.
 
         Raises:
             ValueError: If K is not 2-D square float64.
@@ -374,14 +380,26 @@ except ImportError as _exc:
             raise ValueError(f"eigh: K must be a 2-D array, got {K.ndim}-D")
         if K.shape[0] != K.shape[1]:
             raise ValueError(f"eigh: K must be square, got shape {K.shape}")
+        if inplace:
+            if K.dtype != _np.float64:
+                raise ValueError(f"eigh: inplace=True requires float64, got {K.dtype}")
+            if not K.flags["C_CONTIGUOUS"]:
+                raise ValueError("eigh: inplace=True requires a C-contiguous array")
+            if not K.flags["WRITEABLE"]:
+                raise ValueError("eigh: inplace=True requires a writeable array")
         K64 = _np.asarray(K, dtype=_np.float64)
         w, v = _np.linalg.eigh(K64)
-        # Match C extension contract: K is overwritten as scratch.
-        # The C extension uses K for Householder vectors during dsytrd;
-        # the content is not meaningful to callers.
-        if K.dtype == _np.float64 and K.flags["WRITEABLE"]:
-            K[:] = 0.0
-        return w, v
+        if inplace:
+            # Copy eigenvectors into K and return K as the eigenvector array.
+            # numpy.linalg.eigh always allocates a new array for v, so we
+            # copy v back into K to match the C extension's in-place contract.
+            K[:] = v
+            return w, K
+        else:
+            # Match C extension contract: K is overwritten as scratch.
+            if K.dtype == _np.float64 and K.flags["WRITEABLE"]:
+                K[:] = 0.0
+            return w, v
 
     def qr(A: _np.ndarray) -> tuple[_np.ndarray, _np.ndarray]:
         """Compute reduced QR factorization.

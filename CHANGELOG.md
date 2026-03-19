@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `jlinalg.eigh` gains `inplace` keyword — when `inplace=True`, eigenvectors are
+  written directly into the input K buffer, avoiding one N×N allocation (~125 GB
+  savings at 125k samples). Requires vendor DSYEVD (ILP64 BLAS).
+- `eigendecompose_kinship` automatically uses `inplace=True` when vendor DSYEVD is
+  available and DSYEVD fits in memory
+- Memory estimator (`check_memory_before_run`) accounts for in-place path, producing
+  tighter estimates when vendor DSYEVD is available
+- Add `_dsyevd_inplace_peak_gb` memory estimator for the in-place eigendecomp path
+
+### Fixed
+
+- Remove unused `null_inv_ww` variable in `compute_score_split_c` (_lmm_accel.c)
+- Document FP tolerance rationale in streaming NumPy test
+
 ## [4.0.3] - 2026-03-18
 
 ### Fixed
@@ -1477,7 +1493,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
+[4.0.3]: https://github.com/michael-denyer/jamma/compare/v4.0.2...v4.0.3
+[4.0.2]: https://github.com/michael-denyer/jamma/compare/v4.0.1...v4.0.2
+[4.0.1]: https://github.com/michael-denyer/jamma/compare/v4.0.0...v4.0.1
+[4.0.0]: https://github.com/michael-denyer/jamma/compare/v3.5.1...v4.0.0
+[3.5.1]: https://github.com/michael-denyer/jamma/compare/v3.5.0...v3.5.1
+[3.5.0]: https://github.com/michael-denyer/jamma/compare/v3.4.1...v3.5.0
+[3.4.1]: https://github.com/michael-denyer/jamma/compare/v3.4.0...v3.4.1
+[3.4.0]: https://github.com/michael-denyer/jamma/compare/v3.3.2...v3.4.0
+[3.3.2]: https://github.com/michael-denyer/jamma/compare/v3.3.1...v3.3.2
+[3.3.1]: https://github.com/michael-denyer/jamma/compare/v3.3.0...v3.3.1
 [3.3.0]: https://github.com/michael-denyer/jamma/compare/v3.2.0...v3.3.0
+[3.2.0]: https://github.com/michael-denyer/jamma/compare/v3.1.0...v3.2.0
+[3.1.0]: https://github.com/michael-denyer/jamma/compare/v3.0.1...v3.1.0
+[3.0.1]: https://github.com/michael-denyer/jamma/compare/v3.0.0...v3.0.1
+[3.0.0]: https://github.com/michael-denyer/jamma/compare/v2.12.0...v3.0.0
+[2.12.0]: https://github.com/michael-denyer/jamma/compare/v2.11.2...v2.12.0
+[2.11.2]: https://github.com/michael-denyer/jamma/compare/v2.11.1...v2.11.2
+[2.11.1]: https://github.com/michael-denyer/jamma/compare/v2.11.0...v2.11.1
+[2.11.0]: https://github.com/michael-denyer/jamma/compare/v2.10.1...v2.11.0
+[2.10.1]: https://github.com/michael-denyer/jamma/compare/v2.10.0...v2.10.1
+[2.10.0]: https://github.com/michael-denyer/jamma/compare/v2.9.6...v2.10.0
+[2.9.6]: https://github.com/michael-denyer/jamma/compare/v2.9.5...v2.9.6
+[2.9.5]: https://github.com/michael-denyer/jamma/compare/v2.9.4...v2.9.5
+[2.9.4]: https://github.com/michael-denyer/jamma/compare/v2.9.3...v2.9.4
+[2.9.3]: https://github.com/michael-denyer/jamma/compare/v2.9.2...v2.9.3
+[2.9.2]: https://github.com/michael-denyer/jamma/compare/v2.9.1...v2.9.2
+[2.9.1]: https://github.com/michael-denyer/jamma/compare/v2.9.0...v2.9.1
+[2.9.0]: https://github.com/michael-denyer/jamma/compare/v2.8.3...v2.9.0
+[2.8.3]: https://github.com/michael-denyer/jamma/compare/v2.8.2...v2.8.3
+[2.8.2]: https://github.com/michael-denyer/jamma/compare/v2.8.1...v2.8.2
 [2.8.1]: https://github.com/michael-denyer/jamma/compare/v2.8.0...v2.8.1
 [2.8.0]: https://github.com/michael-denyer/jamma/compare/v2.7.1...v2.8.0
 [2.7.1]: https://github.com/michael-denyer/jamma/compare/v2.7.0...v2.7.1

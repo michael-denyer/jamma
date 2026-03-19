@@ -53,21 +53,38 @@ def _eigendecomp_workspace_gb(n: int) -> float:
 
 
 def _eigendecomp_eigvec_gb(kinship_gb: float) -> float:
-    """Return eigenvector memory (GB) for eigendecomp.
+    """Return eigenvector memory (GB) for eigendecomp (non-inplace path).
 
-    jlinalg.eigh always allocates a separate eigenvector array (K is used
-    as scratch for Householder vectors during DSYTRD, eigenvectors are
-    returned in a new buffer).
+    In the default (non-inplace) path, jlinalg.eigh allocates a separate
+    eigenvector array and K is consumed as scratch during the computation.
+
+    When inplace=True, eigenvectors are written into K directly and this
+    separate allocation is avoided — see _dsyevd_inplace_peak_gb.
     """
     return kinship_gb
 
 
+def _dsyevd_inplace_peak_gb(n: int) -> float:
+    """Peak memory (GB) for in-place DSYEVD eigendecomposition.
+
+    When inplace=True, K is reused as the eigenvector output buffer.
+    Peak is: K (input/output) + DSYEVD workspace. No separate U allocation.
+    Saves one full N x N matrix compared to the default path.
+    """
+    if n < 0:
+        raise ValueError(f"n_samples must be >= 0, got {n}")
+    return _square_matrix_gb(n) + _dsyevd_workspace_gb(n)
+
+
 def _dsyevd_peak_gb(n: int) -> float:
-    """Peak memory (GB) for DSYEVD eigendecomposition.
+    """Peak memory (GB) for DSYEVD eigendecomposition (non-inplace, conservative).
 
     On the Python path, jlinalg.eigh reuses the caller-owned eigenvector buffer
     as the vendor DSYEVD work/output array, so peak is:
     K (caller scratch) + U (caller output) + DSYEVD workspace.
+
+    Use _dsyevd_inplace_peak_gb for the in-place estimate when K is reused
+    as the eigenvector buffer.
     """
     if n < 0:
         raise ValueError(f"n_samples must be >= 0, got {n}")
@@ -750,6 +767,7 @@ def check_memory_before_run(
     # EIGEN-01: When DSYEVR is available and DSYEVD won't fit, report
     # DSYEVR peak instead. This mirrors eigendecompose_kinship()'s driver
     # selection logic and prevents spurious OOM aborts.
+    # When DSYEVD fits, use in-place estimate (K reused as eigenvector buffer).
     reported_peak = est.total_peak_gb
     driver_note = "eigendecomp phase"
     try:
@@ -763,23 +781,55 @@ def check_memory_before_run(
             "pre-flight check will use DSYEVD peak estimate only."
         )
 
-    if _dsyevr_available:
-        dsyevd_peak = _dsyevd_peak_gb(n_samples)
-        margin = _memory_margin_gb(dsyevd_peak)
-        if dsyevd_peak + margin > snap.available_gb:
-            # DSYEVD won't fit — eigendecompose_kinship() will select DSYEVR
-            dsyevr_peak = _dsyevr_peak_gb(n_samples)
-            # Recompute total_peak with DSYEVR instead of DSYEVD
-            peak_kinship = est.kinship_gb + est.chunk_gb
-            peak_lmm = (
-                est.eigenvectors_gb
-                + est.chunk_gb
-                + est.rotation_buffer_gb
-                + est.grid_reml_gb
-                + _uab_iab_gb(n_samples, jax_chunk)
-            )
-            reported_peak = max(peak_kinship, dsyevr_peak, peak_lmm)
-            driver_note = "eigendecomp phase, DSYEVR selected"
+    dsyevd_peak = _dsyevd_peak_gb(n_samples)
+    margin = _memory_margin_gb(dsyevd_peak)
+
+    # Check whether vendor DSYEVD is available — inplace is only safe with it.
+    _has_dsyevd = False
+    try:
+        _has_dsyevd = bool(jlinalg.blas_has_dsyevd)
+    except (ImportError, NameError, AttributeError):
+        logger.debug(
+            "Could not detect vendor DSYEVD; "
+            "pre-flight check will use conservative (non-inplace) estimate."
+        )
+
+    if _dsyevr_available and dsyevd_peak + margin > snap.available_gb:
+        # DSYEVD won't fit — eigendecompose_kinship() will select DSYEVR
+        dsyevr_peak = _dsyevr_peak_gb(n_samples)
+        # Recompute total_peak with DSYEVR instead of DSYEVD
+        peak_kinship = est.kinship_gb + est.chunk_gb
+        peak_lmm = (
+            est.eigenvectors_gb
+            + est.chunk_gb
+            + est.rotation_buffer_gb
+            + est.grid_reml_gb
+            + _uab_iab_gb(n_samples, jax_chunk)
+        )
+        reported_peak = max(peak_kinship, dsyevr_peak, peak_lmm)
+        driver_note = "eigendecomp phase, DSYEVR selected"
+    elif _has_dsyevd and dsyevd_peak + margin <= snap.available_gb:
+        # DSYEVD fits and vendor DSYEVD available — inplace=True saves one N×N
+        inplace_peak = _dsyevd_inplace_peak_gb(n_samples)
+        peak_kinship = est.kinship_gb + est.chunk_gb
+        peak_lmm = (
+            est.eigenvectors_gb
+            + est.chunk_gb
+            + est.rotation_buffer_gb
+            + est.grid_reml_gb
+            + _uab_iab_gb(n_samples, jax_chunk)
+        )
+        reported_peak = max(peak_kinship, inplace_peak, peak_lmm)
+        driver_note = "eigendecomp phase, DSYEVD in-place"
+    elif dsyevd_peak + margin > snap.available_gb:
+        # DSYEVD won't fit and DSYEVR unavailable — use conservative estimate
+        reported_peak = dsyevd_peak
+        driver_note = "eigendecomp phase, DSYEVD (DSYEVR unavailable, memory tight)"
+        logger.warning(
+            f"DSYEVD peak ({dsyevd_peak:.1f}GB) may exceed available memory "
+            f"({snap.available_gb:.1f}GB) and DSYEVR is not available. "
+            f"Run may OOM."
+        )
 
     logger.info(
         f"Memory check for {operation} ({n_samples:,} samples × {n_snps:,} SNPs):"

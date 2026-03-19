@@ -446,6 +446,7 @@ int blas_has_dgesvd(void);
 #define JLINALG_EXT_UNAVAILABLE    -2   /* No vendor routine available — use jlinalg pipeline */
 #define JLINALG_EXT_COUNT_MISMATCH -3   /* DSYEVR returned fewer eigenvalues than expected (ABI mismatch) */
 #define JLINALG_EXT_INTERNAL_ERROR -4   /* Internal logic error (e.g. unsupported dgemm parameters) */
+#define JLINALG_EXT_INPLACE_UNSUPPORTED -5  /* inplace=True requires vendor LAPACK (DSYEVD/DSYEVR) */
 
 /* Vendor-dispatch dsyevd for eigh.
  * Routes to vendor dsyevd when available, else returns JLINALG_EXT_UNAVAILABLE.

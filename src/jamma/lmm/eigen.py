@@ -20,6 +20,7 @@ from threadpoolctl import threadpool_info
 
 from jamma import jlinalg
 from jamma.core.memory import (
+    _dsyevd_inplace_peak_gb,
     _dsyevd_peak_gb,
     _dsyevr_peak_gb,
     _memory_margin_gb,
@@ -96,6 +97,8 @@ def eigendecompose_kinship(
         ValueError: If kinship matrix is not square or has invalid shape.
         MemoryError: If matrix is too large to decompose.
         numpy.linalg.LinAlgError: If eigendecomposition fails to converge.
+        RuntimeError: If eigendecomposition fails internally or inplace
+            mode is unavailable (no vendor DSYEVD/DSYEVR).
     """
     n_samples = K.shape[0]
     n_elements = n_samples * n_samples
@@ -125,18 +128,43 @@ def eigendecompose_kinship(
     ).available_gb
 
     # Estimate based on what jlinalg.eigh will actually use:
-    # - DSYEVD peak if it fits (or DSYEVR unavailable)
-    # - DSYEVR peak if DSYEVD won't fit and DSYEVR is available
+    # - DSYEVD in-place if it fits (K reused as eigenvector buffer)
+    # - DSYEVR if DSYEVD won't fit and DSYEVR is available
     dsyevd_peak = _dsyevd_peak_gb(n_samples)
-    required_gb = dsyevd_peak
+    # Inplace is only safe on the vendor DSYEVD path (not D&C pipeline,
+    # not numpy fallback). Guard against backends that lack vendor DSYEVD.
+    # Also requires K to be C-contiguous, writeable, float64 — otherwise the
+    # C layer's PyArray_FROM_OTF creates a copy, defeating memory savings and
+    # making the inplace peak estimate wrong.
+    use_inplace = (
+        bool(jlinalg.blas_has_dsyevd)
+        and K.dtype == np.float64
+        and K.flags["C_CONTIGUOUS"]
+        and K.flags["WRITEABLE"]
+    )
+    required_gb = _dsyevd_inplace_peak_gb(n_samples) if use_inplace else dsyevd_peak
+    use_dsyevr = False
 
-    if jlinalg.blas_has_dsyevr:
-        margin = _memory_margin_gb(dsyevd_peak)
-        if dsyevd_peak + margin > available_gb:
+    margin = _memory_margin_gb(dsyevd_peak)
+    if dsyevd_peak + margin > available_gb:
+        if jlinalg.blas_has_dsyevr:
             required_gb = _dsyevr_peak_gb(n_samples)
+            use_inplace = False
+            use_dsyevr = True
             logger.info(
                 f"DSYEVD peak ({dsyevd_peak:.1f}GB) exceeds available memory; "
                 f"using DSYEVR estimate ({required_gb:.1f}GB)"
+            )
+        elif use_inplace:
+            # DSYEVD memory-constrained, no DSYEVR fallback. Use conservative
+            # (non-inplace) estimate — DSYEVD workspace alloc may fail at runtime,
+            # and the D&C pipeline rejects inplace mode.
+            use_inplace = False
+            required_gb = dsyevd_peak
+            logger.warning(
+                f"DSYEVD peak ({dsyevd_peak:.1f}GB) may exceed available memory "
+                f"({available_gb:.1f}GB) and DSYEVR is not available. "
+                f"Using conservative estimate."
             )
 
     logger.info(
@@ -164,16 +192,18 @@ def eigendecompose_kinship(
 
     from jamma.core.estimates import estimate_eigendecomp_time
 
-    logger.info(f"Eigendecomp: jlinalg.eigh, threads={n_threads}")
+    logger.info(
+        f"Eigendecomp: jlinalg.eigh, threads={n_threads}, inplace={use_inplace}"
+    )
     logger.info(
         f"  Estimated time: "
-        f"{estimate_eigendecomp_time(n_samples, n_threads, use_dsyevr=False)}"
+        f"{estimate_eigendecomp_time(n_samples, n_threads, use_dsyevr=use_dsyevr)}"
     )
 
     start_time = time.perf_counter()
     try:
         with blas_threads(n_threads):
-            eigenvalues, eigenvectors = jlinalg.eigh(K)
+            eigenvalues, eigenvectors = jlinalg.eigh(K, inplace=use_inplace)
     except MemoryError:
         logger.error(
             f"MemoryError during eigendecomposition of "

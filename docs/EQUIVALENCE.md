@@ -87,16 +87,19 @@ The formula is identical. Differences arise only from FP accumulation order.
 Both decompose `K = U * D * U'` where `D = diag(d_1, ..., d_n)`.
 
 - **GEMMA**: LAPACK `dsyevd` via GSL
-- **JAMMA**: LAPACK `dsyevd` via `numpy.linalg.eigh`
+- **JAMMA**: LAPACK `dsyevd`/`dsyevr` via `jlinalg.eigh` (vendor BLAS dispatch)
 
-Both call the same LAPACK routine. Eigenvectors may differ by sign (unique only
-up to sign), but all downstream computation uses `U'y`, `U'W`, `U'x` which are
-invariant to consistent sign flips.
+Both call the same LAPACK routines. JAMMA defaults to DSYEVD (faster, O(N²)
+workspace) and falls back to DSYEVR (slower, O(N) workspace) when DSYEVD won't
+fit in memory. Both drivers produce equivalent results within LAPACK backward
+error bounds. Eigenvectors may differ by sign (unique only up to sign), but all
+downstream computation uses `U'y`, `U'W`, `U'x` which are invariant to
+consistent sign flips.
 
 **Bound**: LAPACK backward error `O(n * eps_mach * ||K||)`, giving eigenvalue
 accuracy of `O(10^-13)`.
 
-**Note**: JAMMA uses numpy (not JAX) because JAX's int32 buffer indexing
+**Note**: JAMMA uses jlinalg (not JAX) because JAX's int32 buffer indexing
 overflows at ~46k x 46k matrices. See
 [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md#7-eigendecomposition-implementation).
 
@@ -310,16 +313,16 @@ uv run python scripts/demonstrate_equivalence.py
 | GEMMA Function (lmm.cpp) | JAMMA Function | Location |
 |--------------------------|----------------|----------|
 | `CalcKin` | `compute_centered_kinship` | kinship/compute.py |
-| `GetabIndex` | `get_ab_index` | lmm/likelihood.py:149 |
-| `CalcUab` | `compute_Uab` | lmm/likelihood.py:170 |
-| `CalcPab` | `calc_pab` | lmm/likelihood.py:269 |
-| `LogRL_f` | `reml_log_likelihood` | lmm/likelihood.py:622 |
-| `LogL_f` | `mle_log_likelihood` | lmm/likelihood.py:1079 |
+| `GetabIndex` | `get_ab_index` | lmm/likelihood.py |
+| `CalcUab` | `compute_Uab` | lmm/likelihood.py |
+| `CalcPab` | `calc_pab` | lmm/likelihood.py |
+| `LogRL_f` | `reml_log_likelihood` | lmm/likelihood.py |
+| `LogL_f` | `mle_log_likelihood` | lmm/likelihood.py |
 | `CalcLambda` | `golden_section_optimize_lambda` | lmm/likelihood_jax.py |
-| `CalcRLWald` | `calc_wald_test` | lmm/stats.py:99 |
-| `CalcRLScore` | `calc_score_test` | lmm/stats.py:229 |
-| `gsl_cdf_fdist_Q` | `f_sf` (via `betainc`) | lmm/stats.py:67 |
-| `gsl_cdf_chisq_Q` | `chi2_sf` (via `jamma.lmm.special`, Cephes erfc) | lmm/stats.py:224 |
+| `CalcRLWald` | `calc_wald_test` | lmm/stats.py |
+| `CalcRLScore` | `calc_score_test` | lmm/stats.py |
+| `gsl_cdf_fdist_Q` | `f_sf` (via `betainc`) | lmm/stats.py |
+| `gsl_cdf_chisq_Q` | `chi2_sf` (via `jamma.lmm.special`, Cephes erfc) | lmm/stats.py |
 
 ---
 
@@ -345,4 +348,4 @@ Reference data: `tests/fixtures/`
 
 ---
 
-*Last updated: 2026-03-04*
+*Last updated: 2026-03-19*

@@ -72,7 +72,7 @@ p_wald = gsl_cdf_fdist_Q((P_yy - Px_yy) * tau, 1.0, df);
 
 **Behavior**: No guards. Division by zero produces `inf` or `NaN` depending on numerator.
 
-### JAMMA (stats.py:137-155)
+### JAMMA (`calc_wald_test` in stats.py)
 ```python
 if P_xx <= 0.0:
     return float("nan"), float("nan"), float("nan")
@@ -263,7 +263,10 @@ for full error bounds and empirical validation results.
 
 ## 7. Eigendecomposition Implementation
 
-GEMMA uses GSL (GNU Scientific Library) for eigendecomposition. JAMMA uses `numpy.linalg.eigh` (LAPACK) instead of JAX's `jnp.linalg.eigh`.
+GEMMA uses GSL (GNU Scientific Library) for eigendecomposition (always DSYEVD).
+JAMMA uses `jlinalg.eigh` which dispatches to vendor DSYEVD/DSYEVR via the
+jlinalg C layer, with a jlinalg D&C fallback when no vendor LAPACK is available.
+JAX's `jnp.linalg.eigh` is not used.
 
 **Rationale:** JAX uses int32 buffer indexing internally, which overflows at ~2.1 billion elements (~46k × 46k matrix). For large-sample GWAS (50k+), the kinship matrix exceeds this limit, causing:
 
@@ -272,9 +275,16 @@ JaxRuntimeError: INVALID_ARGUMENT: Buffer Definition Event:
 Value (=5000300001) exceeds the maximum representable value of the desired type
 ```
 
-numpy's LAPACK binding supports large matrices without this limitation.
+jlinalg dispatches to vendor LAPACK (ILP64 when available) and supports large
+matrices without this limitation.
 
-**Performance:** numpy's LAPACK-based eigh is highly optimized (multi-threaded, vectorized). The eigendecomposition is O(n³) and runs once per dataset, so it's not the performance bottleneck. The JAX-accelerated SNP processing dominates runtime for large datasets.
+**DSYEVD vs DSYEVR:** JAMMA defaults to DSYEVD (faster, O(N²) workspace) and
+falls back to DSYEVR (slower, O(N) workspace) when DSYEVD won't fit in memory.
+GEMMA always uses DSYEVD. Both LAPACK drivers produce equivalent results within
+backward error bounds (`O(n * eps_mach * ||K||)`). The DSYEVR fallback can
+increase the maximum sample count by ~40% for a given machine size.
+
+**Performance:** Vendor LAPACK eigh is highly optimized (multi-threaded, vectorized). The eigendecomposition is O(n³) and runs once per dataset, so it's not the performance bottleneck. The JAX-accelerated SNP processing dominates runtime for large datasets.
 
 ---
 
@@ -286,7 +296,7 @@ Uses the **Wigginton exact test** — a permutation-based exact test for Hardy-W
 
 ### JAMMA
 
-Uses a **chi-squared goodness-of-fit test** (df=1) computed via JAX's `jax.scipy.stats.chi2.sf`. The chi-squared test compares observed genotype counts to expected counts under HWE.
+Uses a **chi-squared goodness-of-fit test** (df=1) computed via `math.erfc` (stdlib) vectorized over SNPs — no JAX or scipy dependency. The chi-squared test compares observed genotype counts to expected counts under HWE. Implementation is in `core/snp_filter.py:compute_hwe_pvalues`.
 
 ### Divergence Impact
 
@@ -408,7 +418,7 @@ text compatibility is preserved via `--legacy-text` and the auto-detecting reade
 | Monomorphic detection | Count-based | Variance-based | Aligned (equivalent) |
 | JAX covariates | n_cvt >= 1 | n_cvt >= 1 | Aligned (since v1.2) |
 | Lambda optimizer | Brent (serial) | Golden section (vectorized, assumes unimodal) | < 1e-4 relative; see §6 |
-| Eigendecomp library | GSL | numpy LAPACK | Large-sample support (ILP64) |
+| Eigendecomp library | GSL (DSYEVD only) | jlinalg (vendor DSYEVD/DSYEVR dispatch) | Large-sample support (ILP64), DSYEVR fallback |
 | HWE test | Wigginton exact | Chi-squared (df=1) | Identical for large n |
 | LOCO kinship | Materialized all | Streaming subtraction | Same math, lower memory |
 | LOCO + external kinship | Silently uses full K | Rejects (mutual exclusion) | Correctness guard |

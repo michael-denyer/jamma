@@ -566,16 +566,24 @@ err_dsyr2k:
 /* ---------------------------------------------------------------------------
  * py_eigh — compute eigenvalues and eigenvectors of symmetric matrix
  *
- * Signature: eigh(K: ndarray) -> tuple[ndarray, ndarray]
- * K must be 2-D C-contiguous float64 of shape (N, N). K is overwritten.
- * Returns (eigenvalues, eigenvectors).
+ * Signature: eigh(K: ndarray, inplace: bool = False) -> tuple[ndarray, ndarray]
+ * K must be 2-D C-contiguous float64 of shape (N, N).
+ *
+ * When inplace=False (default): K is used as scratch; a fresh N×N eigenvector
+ * array is allocated and returned.  Backward compatible with existing callers.
+ *
+ * When inplace=True: K is overwritten in-place with eigenvectors.  No separate
+ * N×N allocation is made (only the N eigenvalues).  The returned eigenvector
+ * array IS K.  This saves N²×8 bytes at 125k scale (~125 GB).
  * ---------------------------------------------------------------------------
  */
 static PyObject *
-py_eigh(PyObject *self, PyObject *args)
+py_eigh(PyObject *self, PyObject *args, PyObject *kwds)
 {
     PyObject *oK;
-    if (!PyArg_ParseTuple(args, "O", &oK))
+    int inplace = 0;
+    static char *kwlist[] = {"K", "inplace", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|p", kwlist, &oK, &inplace))
         return NULL;
 
     PyArrayObject *aK = (PyArrayObject *)PyArray_FROM_OTF(
@@ -592,19 +600,48 @@ py_eigh(PyObject *self, PyObject *args)
     npy_intp N = PyArray_DIM(aK, 0);
     double *pK = (double *)PyArray_DATA(aK);
 
-    /* Allocate eigenvalues (N,) and eigenvectors (N, N) */
+    /* Allocate eigenvalues (N,) — always needed */
     PyArrayObject *aW = (PyArrayObject *)PyArray_SimpleNew(1, &N, NPY_DOUBLE);
-    npy_intp dims2[2] = {N, N};
-    PyArrayObject *aU = (PyArrayObject *)PyArray_SimpleNew(2, dims2, NPY_DOUBLE);
-    if (!aW || !aU) {
-        Py_XDECREF(aW); Py_XDECREF(aU);
+    if (!aW) {
         PyArray_DiscardWritebackIfCopy(aK);
         Py_DECREF(aK);
         return NULL;
     }
 
+    /* Reject inplace when FROM_OTF created a temporary copy (non-float64,
+     * non-C-contiguous, or read-only input).  WRITEBACKIFCOPY means aK is a
+     * copy that would be written back on resolve — the returned eigenvector
+     * array would NOT be the caller's original K, violating the buffer
+     * identity contract and defeating the memory-saving goal. */
+    if (inplace && (PyArray_FLAGS(aK) & NPY_ARRAY_WRITEBACKIFCOPY)) {
+        PyErr_SetString(PyExc_ValueError,
+            "eigh: inplace=True requires a C-contiguous, writeable, float64 array. "
+            "The input was converted to a temporary copy.");
+        Py_DECREF(aW);
+        PyArray_DiscardWritebackIfCopy(aK);
+        Py_DECREF(aK);
+        return NULL;
+    }
+
+    /* Eigenvector buffer: when inplace=True, reuse K directly (no N×N alloc).
+     * When inplace=False (default), allocate a separate N×N array. */
+    PyArrayObject *aU = NULL;
+    double *pU;
+    if (inplace) {
+        pU = pK;  /* K and eigenvectors share the same buffer */
+    } else {
+        npy_intp dims2[2] = {N, N};
+        aU = (PyArrayObject *)PyArray_SimpleNew(2, dims2, NPY_DOUBLE);
+        if (!aU) {
+            Py_DECREF(aW);
+            PyArray_DiscardWritebackIfCopy(aK);
+            Py_DECREF(aK);
+            return NULL;
+        }
+        pU = (double *)PyArray_DATA(aU);
+    }
+
     double *pW = (double *)PyArray_DATA(aW);
-    double *pU = (double *)PyArray_DATA(aU);
 
     /* Initialize status struct and reset LP64 overflow counter */
     jlinalg_eigh_status_t eigh_status;
@@ -613,12 +650,21 @@ py_eigh(PyObject *self, PyObject *args)
 
     int ret;
     Py_BEGIN_ALLOW_THREADS
-    /* ldk = ldz = N: safe because PyArray_FROM_OTF/SimpleNew guarantee C-contiguous */
+    /* ldk = ldz = N: safe because PyArray_FROM_OTF/SimpleNew guarantee C-contiguous.
+     * When inplace=True, pK == pU so jlinalg_eigh_c receives K==eigenvectors.
+     * This is safe on the vendor DSYEVD/DSYEVR paths.  The D&C pipeline
+     * (dsytrd+dstedc+dormtr) rejects K==eigenvectors with an error because
+     * dstedc would overwrite the Householder reflectors that dormtr needs. */
     ret = jlinalg_eigh_c(N, pK, N, pW, pU, N, &eigh_status);
     Py_END_ALLOW_THREADS
 
     if (ret != 0) {
-        if (ret == JLINALG_EXT_ALLOC_FAIL) {
+        if (ret == JLINALG_EXT_INPLACE_UNSUPPORTED) {
+            PyErr_Format(PyExc_RuntimeError,
+                "jlinalg eigh: inplace=True requires vendor LAPACK "
+                "(DSYEVD or DSYEVR); neither is available. "
+                "Use inplace=False or install ILP64 numpy.");
+        } else if (ret == JLINALG_EXT_ALLOC_FAIL) {
             PyErr_Format(PyExc_MemoryError,
                 "jlinalg eigh: workspace allocation failed — "
                 "matrix too large for available memory");
@@ -640,7 +686,8 @@ py_eigh(PyObject *self, PyObject *args)
             PyErr_Format(LinAlgError,
                 "jlinalg eigh: convergence failure (returned %d)", ret);
         }
-        Py_DECREF(aW); Py_DECREF(aU);
+        Py_DECREF(aW);
+        Py_XDECREF(aU);
         PyArray_DiscardWritebackIfCopy(aK);
         Py_DECREF(aK);
         return NULL;
@@ -648,21 +695,40 @@ py_eigh(PyObject *self, PyObject *args)
 
     /* Surface performance fallbacks and diagnostic warnings to Python.
      * These are non-fatal but important for users to understand why eigh
-     * may be running slower than expected.  Uses goto for shared cleanup
-     * on warning-promotion-to-error (filters.simplefilter("error")). */
+     * may be running slower than expected.
+     *
+     * When inplace=False, if a warning is promoted to error
+     * (warnings.simplefilter("error")), goto warn_error aborts and
+     * DiscardWritebackIfCopy prevents K from being modified.
+     *
+     * When inplace=True, K has ALREADY been overwritten with eigenvectors.
+     * We cannot undo this — returning NULL would give the caller a corrupted
+     * K buffer AND no results.  So we clear the promoted error and continue
+     * returning the (valid) results.  The warning content is lost, but the
+     * computation succeeded and the caller gets usable data. */
+
+/* Helper macro: emit a warning, and on promotion-to-error either abort
+ * (inplace=False, buffer unmodified) or clear and continue (inplace=True,
+ * buffer already consumed). */
+#define EMIT_STATUS_WARNING(msg)                                 \
+    do {                                                         \
+        if (PyErr_WarnEx(PyExc_RuntimeWarning, (msg), 1) < 0) { \
+            if (inplace) { PyErr_Clear(); }                      \
+            else          { goto warn_error; }                   \
+        }                                                        \
+    } while (0)
+
     if (eigh_status.dstedc_ws_fallback) {
-        if (PyErr_WarnEx(PyExc_RuntimeWarning,
+        EMIT_STATUS_WARNING(
                 "jlinalg eigh: dstedc workspace allocation failed — "
                 "using global mutex path (significantly slower for large matrices). "
-                "Reduce matrix size or free memory.", 1) < 0)
-            goto warn_error;
+                "Reduce matrix size or free memory.");
     }
     if (eigh_status.dsytrd_mirror_fallback) {
-        if (PyErr_WarnEx(PyExc_RuntimeWarning,
+        EMIT_STATUS_WARNING(
                 "jlinalg eigh: dsytrd mirror buffer allocation failed — "
                 "using scalar dsymv (slower tridiagonalization). "
-                "Reduce matrix size or free memory.", 1) < 0)
-            goto warn_error;
+                "Reduce matrix size or free memory.");
     }
     if (eigh_status.secular_failures > 0) {
         char msg[256];
@@ -670,40 +736,52 @@ py_eigh(PyObject *self, PyObject *args)
             "jlinalg eigh: %d secular equation(s) failed to converge — "
             "eigenvalues may have reduced accuracy for near-degenerate modes",
             eigh_status.secular_failures);
-        if (PyErr_WarnEx(PyExc_RuntimeWarning, msg, 1) < 0)
-            goto warn_error;
+        EMIT_STATUS_WARNING(msg);
     }
     if (eigh_status.qr_fallback) {
-        if (PyErr_WarnEx(PyExc_RuntimeWarning,
+        EMIT_STATUS_WARNING(
                 "jlinalg eigh: D&C eigensolver failed residual check — "
-                "fell back to QR iteration (much slower for large matrices)", 1) < 0)
-            goto warn_error;
+                "fell back to QR iteration (much slower for large matrices)");
     }
     if (eigh_status.vendor_lapack_skipped) {
-        if (PyErr_WarnEx(PyExc_RuntimeWarning,
+        EMIT_STATUS_WARNING(
                 "jlinalg eigh: vendor LAPACK work buffer allocation failed — "
                 "using jlinalg D&C pipeline instead. "
-                "Free memory or reduce matrix size.", 1) < 0)
-            goto warn_error;
+                "Free memory or reduce matrix size.");
     }
     if (blas_dispatch_lp64_overflow_count() > 0) {
-        if (PyErr_WarnEx(PyExc_RuntimeWarning,
+        EMIT_STATUS_WARNING(
                 "jlinalg eigh: LP64 overflow guard triggered during GEMM — "
                 "fell back to jlinalg own dgemm (much slower). "
-                "Install ILP64 numpy for large matrices.", 1) < 0)
-            goto warn_error;
+                "Install ILP64 numpy for large matrices.");
     }
 
-    PyArray_ResolveWritebackIfCopy(aK);
-    Py_DECREF(aK);
+#undef EMIT_STATUS_WARNING
 
-    /* Py_BuildValue("(NN)", ...) steals references — correct for new objects */
-    PyObject *result = Py_BuildValue("(NN)", aW, aU);
+    /* Commit K's writeback AFTER all warnings have passed.  If a warning is
+     * promoted to error (warnings.simplefilter("error")), goto warn_error
+     * calls DiscardWritebackIfCopy so K is NOT modified in the caller's view.
+     * When inplace=True, WRITEBACKIFCOPY is rejected at entry (line 616),
+     * so ResolveWritebackIfCopy is a no-op. */
+    PyArray_ResolveWritebackIfCopy(aK);
+
+    PyObject *result;
+    if (inplace) {
+        /* In-place: eigenvectors live in K.  Py_BuildValue("(NN)", ...) steals
+         * both references.  aK's refcount: FROM_OTF gave us one ref, the caller's
+         * Python variable holds another.  Stealing our ref is correct — the tuple
+         * and the caller's variable each hold one ref. */
+        result = Py_BuildValue("(NN)", aW, (PyObject *)aK);
+    } else {
+        Py_DECREF(aK);  /* done with K */
+        /* Py_BuildValue("(NN)", ...) steals references — correct for new objects */
+        result = Py_BuildValue("(NN)", aW, aU);
+    }
     return result;
 
 warn_error:
     Py_DECREF(aW);
-    Py_DECREF(aU);
+    Py_XDECREF(aU);
     PyArray_DiscardWritebackIfCopy(aK);
     Py_DECREF(aK);
     return NULL;
@@ -1054,10 +1132,12 @@ static PyMethodDef JlinalgMethods[] = {
     {"dsyr2k", py_dsyr2k, METH_VARARGS,
         "dsyr2k(C, A, B) -> ndarray\n"
         "Symmetric rank-2k update: C - A @ B.T - B @ A.T (float64)."},
-    {"eigh", py_eigh, METH_VARARGS,
-        "eigh(K) -> (eigenvalues, eigenvectors)\n"
+    {"eigh", (PyCFunction)py_eigh, METH_VARARGS | METH_KEYWORDS,
+        "eigh(K, inplace=False) -> (eigenvalues, eigenvectors)\n"
         "Compute all eigenvalues and eigenvectors of symmetric K.\n"
-        "K is overwritten as scratch."},
+        "When inplace=False (default), K is scratch and a fresh eigenvector\n"
+        "array is returned.  When inplace=True, K is overwritten with\n"
+        "eigenvectors in-place (no separate N*N allocation)."},
     {"qr", py_qr, METH_VARARGS,
         "qr(A) -> (Q, R)\n"
         "Reduced QR factorization via vendor LAPACK dgeqrf + dorgqr.\n"

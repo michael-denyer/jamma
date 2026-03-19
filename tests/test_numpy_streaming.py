@@ -233,6 +233,9 @@ class TestBatchEquivalence:
                 batch_vals,
                 stream_vals,
                 atol=1e-14,
+                # SoA-split dispatch accumulates Pab dot products in a
+                # different order than pre-materialised full-Uab rows,
+                # producing FP differences up to ~1e-11.
                 rtol=1e-10,
                 err_msg=f"{field} values differ",
             )

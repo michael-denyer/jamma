@@ -5371,8 +5371,6 @@ static PyObject *compute_score_split_c(PyObject *self, PyObject *args)
         null_s_wy += h * inv_wy[i];
         null_s_yy += h * inv_yy[i];
     }
-    double null_inv_ww = (null_s_ww != 0.0) ? 1.0 / null_s_ww : 0.0;
-
     /* Allocate output arrays */
     score_output_t out;
     if (alloc_score_output(&out, (npy_intp)n_snps) < 0) {

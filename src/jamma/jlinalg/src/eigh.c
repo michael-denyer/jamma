@@ -85,8 +85,19 @@ int jlinalg_eigh_c(npy_intp N,
                 return 0;
             if (ext_ret == JLINALG_EXT_ALLOC_FAIL) {
                 /* DSYEVD workspace alloc failed — restore K into eigenvectors
-                 * (dsyevd_ext may have clobbered it) and fall through to DSYEVR
-                 * which needs far less workspace (O(N) vs O(N^2)). */
+                 * and fall through to DSYEVR (O(N) workspace vs O(N^2)).
+                 *
+                 * When K == eigenvectors (in-place mode from py_eigh), K is
+                 * still pristine because ALLOC_FAIL can only come from the
+                 * Fortran path: the workspace query (LWORK=-1) runs before the
+                 * compute call, and malloc failure returns ALLOC_FAIL before K
+                 * is touched (see the CRITICAL: ALLOC_FAIL comment block
+                 * in jlinalg_dsyevd_ext, blas_dispatch.c).
+                 * The LAPACKE path cannot return ALLOC_FAIL — it manages its
+                 * own workspace internally and returns a LAPACK info code on
+                 * failure (caught by the ext_ret != UNAVAILABLE check below).
+                 * The memcpy is skipped (src==dst) and the DSYEVR fallback
+                 * below can safely read from the unmodified buffer. */
                 if (K != eigenvectors)
                     memcpy(eigenvectors, K, (size_t)N * (size_t)N * sizeof(double));
                 fprintf(stderr,
@@ -147,8 +158,9 @@ int jlinalg_eigh_c(npy_intp N,
      * DSYEVR uses O(N) workspace (vs O(N^2) for DSYEVD).  Try it when:
      *   - vendor dsyevd was unavailable, OR
      *   - dsyevd workspace allocation failed (tight-pack or K_work path)
-     * DSYEVR writes eigenvectors into a separate Z buffer, so it operates
-     * directly on the caller's K and eigenvectors buffers. */
+     * DSYEVR reads K directly (no work copy needed).  When K != eigenvectors,
+     * it writes into the caller's eigenvectors buffer; when K == eigenvectors,
+     * jlinalg_dsyevr_ext allocates a temporary Z_col internally. */
     if (blas_has_dsyevr()) {
         int evr_ret = jlinalg_dsyevr_ext(N, K, ldk, eigenvalues, eigenvectors, ldz);
         if (evr_ret == JLINALG_EXT_SUCCESS)
@@ -166,6 +178,19 @@ int jlinalg_eigh_c(npy_intp N,
     }
 
     /* --- jlinalg three-step pipeline (fallback) --- */
+
+    /* Guard: K == eigenvectors (inplace mode) is NOT safe for the D&C pipeline.
+     * dsytrd writes Householder reflectors into K, then dstedc overwrites
+     * eigenvectors (same buffer) with the tridiagonal eigenvectors, destroying
+     * the reflectors that dormtr needs for back-transformation.
+     * Inplace is only safe on the vendor dsyevd/dsyevr paths above. */
+    if (K == eigenvectors) {
+        fprintf(stderr,
+            "jlinalg_eigh_c: inplace mode (K==eigenvectors) reached D&C pipeline "
+            "(vendor DSYEVD and DSYEVR both unavailable or failed, N=%ld). "
+            "Inplace is only safe with vendor LAPACK drivers.\n", (long)N);
+        return JLINALG_EXT_INPLACE_UNSUPPORTED;
+    }
 
     /* Guard: workspace must be initialized (jlinalg_init() called) */
     if (!jlinalg_packed_A) {

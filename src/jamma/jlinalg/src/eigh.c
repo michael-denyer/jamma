@@ -84,20 +84,11 @@ int jlinalg_eigh_c(npy_intp N,
             if (ext_ret == JLINALG_EXT_SUCCESS)
                 return 0;
             if (ext_ret == JLINALG_EXT_ALLOC_FAIL) {
-                /* DSYEVD workspace alloc failed — restore K into eigenvectors
-                 * and fall through to DSYEVR (O(N) workspace vs O(N^2)).
-                 *
-                 * When K == eigenvectors (in-place mode from py_eigh), K is
-                 * still pristine because ALLOC_FAIL can only come from the
-                 * Fortran path: the workspace query (LWORK=-1) runs before the
-                 * compute call, and malloc failure returns ALLOC_FAIL before K
-                 * is touched (see the CRITICAL: ALLOC_FAIL comment block
-                 * in jlinalg_dsyevd_ext, blas_dispatch.c).
-                 * The LAPACKE path cannot return ALLOC_FAIL — it manages its
-                 * own workspace internally and returns a LAPACK info code on
-                 * failure (caught by the ext_ret != UNAVAILABLE check below).
-                 * The memcpy is skipped (src==dst) and the DSYEVR fallback
-                 * below can safely read from the unmodified buffer. */
+                /* DSYEVD workspace alloc failed — fall through to DSYEVR.
+                 * ALLOC_FAIL only occurs on the Fortran path before K is
+                 * touched (workspace query fails), so K/eigenvectors are
+                 * still pristine.  When K == eigenvectors the memcpy is a
+                 * no-op (src==dst). */
                 if (K != eigenvectors)
                     memcpy(eigenvectors, K, (size_t)N * (size_t)N * sizeof(double));
                 fprintf(stderr,

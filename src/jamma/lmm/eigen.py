@@ -127,15 +127,10 @@ def eigendecompose_kinship(
         f"before_eigendecomp_{n_samples}samples"
     ).available_gb
 
-    # Estimate based on what jlinalg.eigh will actually use:
-    # - DSYEVD in-place if it fits (K reused as eigenvector buffer)
-    # - DSYEVR if DSYEVD won't fit and DSYEVR is available
+    # Decide eigendecomp driver: inplace DSYEVD > DSYEVD > DSYEVR.
+    # Inplace requires vendor DSYEVD and a C-contiguous writeable float64 K
+    # (otherwise PyArray_FROM_OTF copies, defeating memory savings).
     dsyevd_peak = _dsyevd_peak_gb(n_samples)
-    # Inplace is only safe on the vendor DSYEVD path (not D&C pipeline,
-    # not numpy fallback). Guard against backends that lack vendor DSYEVD.
-    # Also requires K to be C-contiguous, writeable, float64 — otherwise the
-    # C layer's PyArray_FROM_OTF creates a copy, defeating memory savings and
-    # making the inplace peak estimate wrong.
     use_inplace = (
         bool(jlinalg.blas_has_dsyevd)
         and K.dtype == np.float64
@@ -156,9 +151,7 @@ def eigendecompose_kinship(
                 f"using DSYEVR estimate ({required_gb:.1f}GB)"
             )
         elif use_inplace:
-            # DSYEVD memory-constrained, no DSYEVR fallback. Use conservative
-            # (non-inplace) estimate — DSYEVD workspace alloc may fail at runtime,
-            # and the D&C pipeline rejects inplace mode.
+            # No DSYEVR and DSYEVD may not fit — fall back to conservative estimate.
             use_inplace = False
             required_gb = dsyevd_peak
             logger.warning(

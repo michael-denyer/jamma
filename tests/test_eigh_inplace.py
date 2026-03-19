@@ -15,13 +15,18 @@ from jamma.core.memory import (
 )
 from jamma.jlinalg import HAS_C_EXTENSION, blas_has_dsyevd
 
-# In-place correctness and buffer identity tests require vendor DSYEVD.
-# Without it, jlinalg.eigh(inplace=True) raises RuntimeError from the
-# D&C pipeline guard (K==eigenvectors is unsafe for dsytrd+dstedc+dormtr).
+# In-place requires vendor DSYEVD — the D&C pipeline rejects K==eigenvectors.
 _skip_no_dsyevd = pytest.mark.skipif(
     not HAS_C_EXTENSION or not blas_has_dsyevd,
     reason="Requires C extension with vendor DSYEVD for inplace mode",
 )
+
+
+def _make_symmetric(n: int, seed: int = 42) -> np.ndarray:
+    """Create a random symmetric positive-definite matrix."""
+    rng = np.random.RandomState(seed)
+    X = rng.randn(n, n)
+    return np.ascontiguousarray(X @ X.T)
 
 
 @_skip_no_dsyevd
@@ -32,27 +37,22 @@ class TestEighInplaceCorrectness:
     def test_eigh_inplace_correctness(self):
         """Eigenvalues/eigenvectors from inplace path match numpy within rtol=1e-12."""
         n = 200
-        rng = np.random.RandomState(42)
-        X = rng.randn(n, n)
-        K = X @ X.T
-        K_copy = K.copy()
+        K = _make_symmetric(n)
+        K_ref = K.copy()
 
         w_inplace, v_inplace = jlinalg.eigh(K, inplace=True)
-        w_ref, v_ref = np.linalg.eigh(K_copy)
+        w_ref, _ = np.linalg.eigh(K_ref)
 
-        # Eigenvalues match
         np.testing.assert_allclose(w_inplace, w_ref, rtol=1e-12, atol=1e-14)
 
         # Eigenvector orthogonality: V.T @ V = I
         eye_check = v_inplace.T @ v_inplace
         np.testing.assert_allclose(eye_check, np.eye(n), atol=1e-12, rtol=0)
 
-        # Reconstruction: K_orig @ V ~= V @ diag(w)
-        K_orig = K_copy.copy()
-        lhs = K_orig @ v_inplace
+        # Reconstruction: K_ref @ V ~= V @ diag(w)
+        lhs = K_ref @ v_inplace
         rhs = v_inplace * w_inplace[np.newaxis, :]
-        norm_K = np.linalg.norm(K_orig)
-        np.testing.assert_allclose(lhs, rhs, atol=1e-10 * norm_K, rtol=0)
+        np.testing.assert_allclose(lhs, rhs, atol=1e-10 * np.linalg.norm(K_ref), rtol=0)
 
 
 @_skip_no_dsyevd
@@ -62,36 +62,24 @@ class TestEighInplaceBufferIdentity:
 
     def test_eigh_inplace_returns_same_buffer(self):
         """When inplace=True, eigenvectors share memory with input K."""
-        rng = np.random.RandomState(42)
-        X = rng.randn(50, 50)
-        K = X @ X.T
-        K = np.ascontiguousarray(K)
-
-        w, v = jlinalg.eigh(K, inplace=True)
+        K = _make_symmetric(50)
+        _, v = jlinalg.eigh(K, inplace=True)
         assert v.ctypes.data == K.ctypes.data, (
             "inplace=True should return eigenvectors in the same buffer as K"
         )
 
     def test_eigh_default_returns_separate_buffer(self):
         """Default (no inplace arg) returns eigenvectors in a new buffer."""
-        rng = np.random.RandomState(42)
-        X = rng.randn(50, 50)
-        K = X @ X.T
-        K = np.ascontiguousarray(K)
-
-        w, v = jlinalg.eigh(K)
+        K = _make_symmetric(50)
+        _, v = jlinalg.eigh(K)
         assert v.ctypes.data != K.ctypes.data, (
             "default eigh should return eigenvectors in a separate buffer"
         )
 
     def test_eigh_inplace_false_returns_separate_buffer(self):
         """Explicit inplace=False returns eigenvectors in a new buffer."""
-        rng = np.random.RandomState(42)
-        X = rng.randn(50, 50)
-        K = X @ X.T
-        K = np.ascontiguousarray(K)
-
-        w, v = jlinalg.eigh(K, inplace=False)
+        K = _make_symmetric(50)
+        _, v = jlinalg.eigh(K, inplace=False)
         assert v.ctypes.data != K.ctypes.data, (
             "inplace=False should return eigenvectors in a separate buffer"
         )

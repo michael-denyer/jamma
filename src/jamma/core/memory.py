@@ -55,11 +55,7 @@ def _eigendecomp_workspace_gb(n: int) -> float:
 def _eigendecomp_eigvec_gb(kinship_gb: float) -> float:
     """Return eigenvector memory (GB) for eigendecomp (non-inplace path).
 
-    In the default (non-inplace) path, jlinalg.eigh allocates a separate
-    eigenvector array and K is consumed as scratch during the computation.
-
-    When inplace=True, eigenvectors are written into K directly and this
-    separate allocation is avoided — see _dsyevd_inplace_peak_gb.
+    The in-place path avoids this allocation — see _dsyevd_inplace_peak_gb.
     """
     return kinship_gb
 
@@ -77,14 +73,9 @@ def _dsyevd_inplace_peak_gb(n: int) -> float:
 
 
 def _dsyevd_peak_gb(n: int) -> float:
-    """Peak memory (GB) for DSYEVD eigendecomposition (non-inplace, conservative).
+    """Peak memory (GB) for DSYEVD eigendecomposition (non-inplace).
 
-    On the Python path, jlinalg.eigh reuses the caller-owned eigenvector buffer
-    as the vendor DSYEVD work/output array, so peak is:
-    K (caller scratch) + U (caller output) + DSYEVD workspace.
-
-    Use _dsyevd_inplace_peak_gb for the in-place estimate when K is reused
-    as the eigenvector buffer.
+    Peak is: K (scratch) + U (eigenvectors) + DSYEVD workspace.
     """
     if n < 0:
         raise ValueError(f"n_samples must be >= 0, got {n}")
@@ -764,65 +755,46 @@ def check_memory_before_run(
     )
     snap = get_memory_snapshot()
 
-    # EIGEN-01: When DSYEVR is available and DSYEVD won't fit, report
-    # DSYEVR peak instead. This mirrors eigendecompose_kinship()'s driver
-    # selection logic and prevents spurious OOM aborts.
-    # When DSYEVD fits, use in-place estimate (K reused as eigenvector buffer).
+    # EIGEN-01: Mirror eigendecompose_kinship()'s driver selection to report
+    # the correct peak estimate and prevent spurious OOM aborts.
     reported_peak = est.total_peak_gb
     driver_note = "eigendecomp phase"
+    _has_dsyevr = False
+    _has_dsyevd = False
     try:
         from jamma import jlinalg
 
-        _dsyevr_available = bool(jlinalg.blas_has_dsyevr)
-    except ImportError:
-        _dsyevr_available = False
+        _has_dsyevr = bool(jlinalg.blas_has_dsyevr)
+        _has_dsyevd = bool(jlinalg.blas_has_dsyevd)
+    except (ImportError, AttributeError):
         logger.debug(
-            "Could not import jlinalg; "
-            "pre-flight check will use DSYEVD peak estimate only."
+            "Could not import jlinalg or detect LAPACK drivers; "
+            "pre-flight check will use conservative DSYEVD estimate."
         )
 
     dsyevd_peak = _dsyevd_peak_gb(n_samples)
     margin = _memory_margin_gb(dsyevd_peak)
+    dsyevd_fits = dsyevd_peak + margin <= snap.available_gb
 
-    # Check whether vendor DSYEVD is available — inplace is only safe with it.
-    _has_dsyevd = False
-    try:
-        _has_dsyevd = bool(jlinalg.blas_has_dsyevd)
-    except (ImportError, NameError, AttributeError):
-        logger.debug(
-            "Could not detect vendor DSYEVD; "
-            "pre-flight check will use conservative (non-inplace) estimate."
-        )
+    # Shared non-eigendecomp phase peaks (kinship build, LMM association).
+    peak_kinship = est.kinship_gb + est.chunk_gb
+    peak_lmm = (
+        est.eigenvectors_gb
+        + est.chunk_gb
+        + est.rotation_buffer_gb
+        + est.grid_reml_gb
+        + _uab_iab_gb(n_samples, jax_chunk)
+    )
 
-    if _dsyevr_available and dsyevd_peak + margin > snap.available_gb:
-        # DSYEVD won't fit — eigendecompose_kinship() will select DSYEVR
+    if not dsyevd_fits and _has_dsyevr:
         dsyevr_peak = _dsyevr_peak_gb(n_samples)
-        # Recompute total_peak with DSYEVR instead of DSYEVD
-        peak_kinship = est.kinship_gb + est.chunk_gb
-        peak_lmm = (
-            est.eigenvectors_gb
-            + est.chunk_gb
-            + est.rotation_buffer_gb
-            + est.grid_reml_gb
-            + _uab_iab_gb(n_samples, jax_chunk)
-        )
         reported_peak = max(peak_kinship, dsyevr_peak, peak_lmm)
         driver_note = "eigendecomp phase, DSYEVR selected"
-    elif _has_dsyevd and dsyevd_peak + margin <= snap.available_gb:
-        # DSYEVD fits and vendor DSYEVD available — inplace=True saves one N×N
+    elif dsyevd_fits and _has_dsyevd:
         inplace_peak = _dsyevd_inplace_peak_gb(n_samples)
-        peak_kinship = est.kinship_gb + est.chunk_gb
-        peak_lmm = (
-            est.eigenvectors_gb
-            + est.chunk_gb
-            + est.rotation_buffer_gb
-            + est.grid_reml_gb
-            + _uab_iab_gb(n_samples, jax_chunk)
-        )
         reported_peak = max(peak_kinship, inplace_peak, peak_lmm)
         driver_note = "eigendecomp phase, DSYEVD in-place"
-    elif dsyevd_peak + margin > snap.available_gb:
-        # DSYEVD won't fit and DSYEVR unavailable — use conservative estimate
+    elif not dsyevd_fits:
         reported_peak = dsyevd_peak
         driver_note = "eigendecomp phase, DSYEVD (DSYEVR unavailable, memory tight)"
         logger.warning(

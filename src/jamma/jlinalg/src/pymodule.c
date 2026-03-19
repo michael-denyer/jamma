@@ -693,23 +693,10 @@ py_eigh(PyObject *self, PyObject *args, PyObject *kwds)
         return NULL;
     }
 
-    /* Surface performance fallbacks and diagnostic warnings to Python.
-     * These are non-fatal but important for users to understand why eigh
-     * may be running slower than expected.
-     *
-     * When inplace=False, if a warning is promoted to error
-     * (warnings.simplefilter("error")), goto warn_error aborts and
-     * DiscardWritebackIfCopy prevents K from being modified.
-     *
-     * When inplace=True, K has ALREADY been overwritten with eigenvectors.
-     * We cannot undo this — returning NULL would give the caller a corrupted
-     * K buffer AND no results.  So we clear the promoted error and continue
-     * returning the (valid) results.  The warning content is lost, but the
-     * computation succeeded and the caller gets usable data. */
-
-/* Helper macro: emit a warning, and on promotion-to-error either abort
- * (inplace=False, buffer unmodified) or clear and continue (inplace=True,
- * buffer already consumed). */
+    /* Surface performance fallback warnings to Python (non-fatal).
+     * When inplace=True, K is already overwritten — we cannot undo it, so
+     * promoted-to-error warnings are cleared and results returned anyway.
+     * When inplace=False, promoted warnings abort via goto warn_error. */
 #define EMIT_STATUS_WARNING(msg)                                 \
     do {                                                         \
         if (PyErr_WarnEx(PyExc_RuntimeWarning, (msg), 1) < 0) { \
@@ -758,23 +745,17 @@ py_eigh(PyObject *self, PyObject *args, PyObject *kwds)
 
 #undef EMIT_STATUS_WARNING
 
-    /* Commit K's writeback AFTER all warnings have passed.  If a warning is
-     * promoted to error (warnings.simplefilter("error")), goto warn_error
-     * calls DiscardWritebackIfCopy so K is NOT modified in the caller's view.
-     * When inplace=True, WRITEBACKIFCOPY is rejected at entry (line 616),
-     * so ResolveWritebackIfCopy is a no-op. */
+    /* Commit writeback after warnings pass (no-op when inplace=True since
+     * WRITEBACKIFCOPY is rejected at entry). */
     PyArray_ResolveWritebackIfCopy(aK);
 
+    /* Build result tuple.  Py_BuildValue("(NN)") steals references. */
     PyObject *result;
     if (inplace) {
-        /* In-place: eigenvectors live in K.  Py_BuildValue("(NN)", ...) steals
-         * both references.  aK's refcount: FROM_OTF gave us one ref, the caller's
-         * Python variable holds another.  Stealing our ref is correct — the tuple
-         * and the caller's variable each hold one ref. */
+        /* Eigenvectors live in K — return aK as the eigenvector array. */
         result = Py_BuildValue("(NN)", aW, (PyObject *)aK);
     } else {
-        Py_DECREF(aK);  /* done with K */
-        /* Py_BuildValue("(NN)", ...) steals references — correct for new objects */
+        Py_DECREF(aK);
         result = Py_BuildValue("(NN)", aW, aU);
     }
     return result;

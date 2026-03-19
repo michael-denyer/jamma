@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-03-19
+
 ### Changed
 
 - `jlinalg.eigh` gains `inplace` keyword — when `inplace=True`, eigenvectors are
@@ -1493,6 +1495,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
+[4.1.0]: https://github.com/michael-denyer/jamma/compare/v4.0.3...v4.1.0
 [4.0.3]: https://github.com/michael-denyer/jamma/compare/v4.0.2...v4.0.3
 [4.0.2]: https://github.com/michael-denyer/jamma/compare/v4.0.1...v4.0.2
 [4.0.1]: https://github.com/michael-denyer/jamma/compare/v4.0.0...v4.0.1

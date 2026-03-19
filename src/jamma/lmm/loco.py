@@ -1657,14 +1657,269 @@ def run_lmm_loco(
             )
     finally:
         if backend == "jax":
-            import jax
+            _cleanup_jax_caches()
 
-            try:
-                jax.clear_caches()
-            except Exception:
-                logger.warning(
-                    "Failed to clear JAX caches during cleanup", exc_info=True
+
+def _cleanup_jax_caches() -> None:
+    """Best-effort JAX cache cleanup."""
+    try:
+        import jax  # noqa: PLC0415
+
+        jax.clear_caches()
+    except Exception:
+        logger.warning("Failed to clear JAX caches during cleanup", exc_info=True)
+
+
+def _run_lmm_for_chromosome_jax_impl(
+    bed_path: Path,
+    chr_snp_indices: np.ndarray,
+    eigenvalues: np.ndarray,
+    eigenvectors: np.ndarray,
+    phenotypes: np.ndarray,
+    covariates: np.ndarray | None,
+    snp_info: list,
+    maf_threshold: float,
+    miss_threshold: float,
+    lmm_mode: int,
+    valid_mask: np.ndarray,
+    show_progress: bool,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+    snps_global_mask: np.ndarray | None,
+    col_chunk_size: int,
+    writer: IncrementalAssocWriter | None,
+    compute_pve: bool,
+) -> tuple[list[AssocResult], float | None, float | None]:
+    """Core JAX LOCO per-chromosome implementation without cleanup wrapper."""
+    import jax  # noqa: PLC0415
+
+    from jamma.lmm.chunk import (  # noqa: PLC0415
+        _compute_chunk_size,
+        compute_subchunk_starts,
+    )
+    from jamma.lmm.compute import (  # noqa: PLC0415
+        _compute_lmm_chunk,
+        block_chunk_result,
+        log_jax_error,
+    )
+    from jamma.lmm.likelihood_jax import batch_compute_uab  # noqa: PLC0415
+    from jamma.lmm.prepare import (  # noqa: PLC0415
+        DevicePlacement,
+        _compute_null_model,
+        _select_jax_device,
+        prepare_utg_chunk,
+    )
+    from jamma.lmm.results import _chunk_result_to_numpy  # noqa: PLC0415
+    from jamma.lmm.schema import ACCUM_KEYS  # noqa: PLC0415
+
+    n_samples = phenotypes.shape[0]
+    valid_indices = np.where(valid_mask)[0]
+
+    # === PASS 1: Chunked SNP statistics + filtering ===
+    col_means, miss_counts, col_vars, n_unexpected = _collect_chr_snp_stats(
+        bed_path, chr_snp_indices, valid_indices, col_chunk_size
+    )
+
+    filter_result = _filter_chr_snps(
+        col_means,
+        miss_counts,
+        col_vars,
+        n_samples,
+        maf_threshold,
+        miss_threshold,
+        chr_snp_indices,
+        snps_global_mask,
+        n_unexpected,
+        show_progress,
+    )
+    if filter_result is None:
+        return [], None, None
+
+    (
+        _local_filtered_indices,
+        global_filtered_indices,
+        filtered_afs,
+        filtered_miss,
+        filtered_means_all,
+    ) = filter_result
+    n_filtered = len(global_filtered_indices)
+
+    # === PASS 2: Chunked association ===
+    # Eigendecomp setup
+    W, n_cvt = _build_covariate_matrix(covariates, n_samples)
+
+    # Rotation is pure BLAS — use all physical cores, not the JAX-reduced
+    # count from get_blas_thread_count(). JAX isn't running during rotation.
+    rotation_threads = get_physical_core_count()
+
+    with blas_threads(rotation_threads):
+        UtW = eigenvectors.T @ W
+        Uty = eigenvectors.T @ phenotypes
+
+    # LOCO intentionally uses single-device mode — each chromosome's
+    # association pass has fewer SNPs, so multi-device sharding overhead
+    # outweighs the parallelism benefit.
+    device = _select_jax_device(use_gpu=False)
+    placement = DevicePlacement(snp=device, rep=device, n_devices=1)
+
+    logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
+        lmm_mode,
+        eigenvalues,
+        UtW,
+        Uty,
+        n_cvt,
+        placement.rep,
+        show_progress=False,
+        l_min=l_min,
+        l_max=l_max,
+    )
+
+    chr_pve = None
+    chr_pve_se = None
+    if compute_pve:
+        chr_pve, chr_pve_se = compute_and_log_pve(
+            eigenvalues, UtW, Uty, n_cvt, l_min, l_max
+        )
+
+    eigenvalues_jax = jax.device_put(eigenvalues, placement.rep)
+    UtW_jax = jax.device_put(UtW, placement.rep)
+    Uty_jax = jax.device_put(Uty, placement.rep)
+
+    jax_chunk_size = _compute_chunk_size(
+        n_filtered, n_devices=placement.n_devices, n_samples=n_samples
+    )
+
+    def _prepare_jax_chunk(
+        start: int, end: int, geno: np.ndarray
+    ) -> tuple[np.ndarray, int]:
+        """Slice a genotype subset and prepare UtG for device transfer."""
+        geno_slice = geno[:, start:end]
+        return prepare_utg_chunk(geno_slice, eigenvectors, placement, rotation_threads)
+
+    total_at_lmin = 0
+    total_at_lmax = 0
+    results: list[AssocResult] = []
+
+    bed_file = Path(f"{bed_path}.bed")
+    with open_bed(bed_file) as bed:
+        for disk_start in range(0, n_filtered, col_chunk_size):
+            disk_end = min(disk_start + col_chunk_size, n_filtered)
+            disk_col_indices = global_filtered_indices[disk_start:disk_end]
+
+            geno_disk_chunk = bed.read(
+                index=np.s_[valid_indices, disk_col_indices],
+                dtype=np.float64,
+            )
+
+            chunk_filtered_means = filtered_means_all[disk_start:disk_end]
+            filtered_means_broadcast = chunk_filtered_means.reshape(1, -1)
+            missing_mask = np.isnan(geno_disk_chunk)
+            geno_disk_chunk = np.where(
+                missing_mask, filtered_means_broadcast, geno_disk_chunk
+            )
+
+            n_disk_subset = geno_disk_chunk.shape[1]
+            jax_starts = compute_subchunk_starts(
+                n_disk_subset, jax_chunk_size, placement.n_devices
+            )
+            jax_ends = [
+                jax_starts[i + 1] if i + 1 < len(jax_starts) else n_disk_subset
+                for i in range(len(jax_starts))
+            ]
+
+            UtG_np, actual_jax_len = _prepare_jax_chunk(
+                jax_starts[0], jax_ends[0], geno_disk_chunk
+            )
+            UtG_jax = jax.device_put(UtG_np, placement.snp)
+            del UtG_np
+
+            for i, _jax_start in enumerate(jax_starts):
+                current_actual_len = actual_jax_len
+                current_UtG = UtG_jax
+
+                if i + 1 < len(jax_starts):
+                    UtG_np, actual_jax_len = _prepare_jax_chunk(
+                        jax_starts[i + 1], jax_ends[i + 1], geno_disk_chunk
+                    )
+                    UtG_jax = jax.device_put(UtG_np, placement.snp)
+                    del UtG_np
+
+                try:
+                    Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
+
+                    chunk_result = _compute_lmm_chunk(
+                        lmm_mode,
+                        n_cvt,
+                        eigenvalues_jax,
+                        Uab_batch,
+                        n_samples,
+                        l_min=l_min,
+                        l_max=l_max,
+                        n_grid=n_grid,
+                        n_refine=n_refine,
+                        Hi_eval_null=Hi_eval_null_jax,
+                        logl_H0=logl_H0,
+                    )
+                    block_chunk_result(chunk_result, lmm_mode)
+                except Exception as e:
+                    log_jax_error(
+                        e,
+                        chunk_label=f"LOCO {i + 1}",
+                        chunk_snps=current_actual_len,
+                        n_samples=n_samples,
+                        n_cvt=n_cvt,
+                    )
+                    raise
+
+                subchunk_start = disk_start + jax_starts[i]
+                subchunk_end = subchunk_start + current_actual_len
+                arrays = _chunk_result_to_numpy(
+                    chunk_result,
+                    ACCUM_KEYS[lmm_mode],
+                    current_actual_len,
                 )
+                n_lmin, n_lmax = count_lambda_boundary_hits(
+                    lmm_mode, arrays, l_min, l_max
+                )
+                total_at_lmin += n_lmin
+                total_at_lmax += n_lmax
+
+                if writer is not None:
+                    writer.write_arrays_batch(
+                        lmm_mode,
+                        global_filtered_indices[subchunk_start:subchunk_end],
+                        snp_info,
+                        filtered_afs[subchunk_start:subchunk_end],
+                        filtered_miss[subchunk_start:subchunk_end],
+                        arrays,
+                    )
+                else:
+                    subchunk_results = list(
+                        _yield_chunk_results(
+                            lmm_mode,
+                            np.arange(subchunk_start, subchunk_end),
+                            global_filtered_indices,
+                            filtered_afs,
+                            filtered_miss,
+                            snp_info,
+                            arrays,
+                        )
+                    )
+                    results.extend(subchunk_results)
+
+                del arrays, chunk_result, Uab_batch, current_UtG
+                if i + 1 >= len(jax_starts):
+                    UtG_jax = None
+
+            del geno_disk_chunk
+
+    log_lambda_boundary_warning(
+        total_at_lmin, total_at_lmax, l_min, l_max, prefix="LOCO "
+    )
+
+    return results, chr_pve, chr_pve_se
 
 
 def _run_lmm_for_chromosome(
@@ -1730,243 +1985,31 @@ def _run_lmm_for_chromosome(
         compute_pve=True), and pve_se is the standard error of PVE (None
         unless compute_pve=True and likelihood surface is not flat).
     """
-    import jax  # noqa: PLC0415
-
-    from jamma.lmm.chunk import (  # noqa: PLC0415
-        _compute_chunk_size,
-        compute_subchunk_starts,
-    )
-    from jamma.lmm.compute import (  # noqa: PLC0415
-        _compute_lmm_chunk,
-        block_chunk_result,
-        log_jax_error,
-    )
-    from jamma.lmm.likelihood_jax import batch_compute_uab  # noqa: PLC0415
-    from jamma.lmm.prepare import (  # noqa: PLC0415
-        DevicePlacement,
-        _compute_null_model,
-        _select_jax_device,
-        prepare_utg_chunk,
-    )
-    from jamma.lmm.results import _chunk_result_to_numpy  # noqa: PLC0415
-    from jamma.lmm.schema import ACCUM_KEYS as _ACCUM_KEYS  # noqa: PLC0415
-
-    n_samples = phenotypes.shape[0]
-    valid_indices = np.where(valid_mask)[0]
-
-    # === PASS 1: Chunked SNP statistics + filtering ===
-    col_means, miss_counts, col_vars, n_unexpected = _collect_chr_snp_stats(
-        bed_path, chr_snp_indices, valid_indices, col_chunk_size
-    )
-
-    filter_result = _filter_chr_snps(
-        col_means,
-        miss_counts,
-        col_vars,
-        n_samples,
-        maf_threshold,
-        miss_threshold,
-        chr_snp_indices,
-        snps_global_mask,
-        n_unexpected,
-        show_progress,
-    )
-    if filter_result is None:
-        return [], None, None
-
-    (
-        _local_filtered_indices,
-        global_filtered_indices,
-        filtered_afs,
-        filtered_miss,
-        filtered_means_all,
-    ) = filter_result
-    n_filtered = len(global_filtered_indices)
-
-    # === PASS 2: Chunked association ===
-    # Eigendecomp setup
-    W, n_cvt = _build_covariate_matrix(covariates, n_samples)
-
-    # Rotation is pure BLAS — use all physical cores, not the JAX-reduced
-    # count from get_blas_thread_count(). JAX isn't running during rotation.
-    rotation_threads = get_physical_core_count()
-
-    with blas_threads(rotation_threads):
-        UtW = eigenvectors.T @ W
-        Uty = eigenvectors.T @ phenotypes
-
-    # LOCO intentionally uses single-device mode — each chromosome's
-    # association pass has fewer SNPs, so multi-device sharding overhead
-    # outweighs the parallelism benefit.
-    device = _select_jax_device(use_gpu=False)
-    placement = DevicePlacement(snp=device, rep=device, n_devices=1)
-
-    eigenvalues_jax = None
-    UtW_jax = None
-    Uty_jax = None
     try:
-        logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
-            lmm_mode,
+        return _run_lmm_for_chromosome_jax_impl(
+            bed_path,
+            chr_snp_indices,
             eigenvalues,
-            UtW,
-            Uty,
-            n_cvt,
-            placement.rep,
-            show_progress=False,
-            l_min=l_min,
-            l_max=l_max,
+            eigenvectors,
+            phenotypes,
+            covariates,
+            snp_info,
+            maf_threshold,
+            miss_threshold,
+            lmm_mode,
+            valid_mask,
+            show_progress,
+            l_min,
+            l_max,
+            n_grid,
+            n_refine,
+            snps_global_mask,
+            col_chunk_size,
+            writer,
+            compute_pve,
         )
-
-        chr_pve = None
-        chr_pve_se = None
-        if compute_pve:
-            chr_pve, chr_pve_se = compute_and_log_pve(
-                eigenvalues, UtW, Uty, n_cvt, l_min, l_max
-            )
-
-        eigenvalues_jax = jax.device_put(eigenvalues, placement.rep)
-        UtW_jax = jax.device_put(UtW, placement.rep)
-        Uty_jax = jax.device_put(Uty, placement.rep)
-
-        jax_chunk_size = _compute_chunk_size(
-            n_filtered, n_devices=placement.n_devices, n_samples=n_samples
-        )
-
-        def _prepare_jax_chunk(
-            start: int, end: int, geno: np.ndarray
-        ) -> tuple[np.ndarray, int]:
-            """Slice a genotype subset and prepare UtG for device transfer."""
-            geno_slice = geno[:, start:end]
-            return prepare_utg_chunk(
-                geno_slice, eigenvectors, placement, rotation_threads
-            )
-
-        total_at_lmin = 0
-        total_at_lmax = 0
-        results: list[AssocResult] = []
-
-        bed_file = Path(f"{bed_path}.bed")
-        with open_bed(bed_file) as bed:
-            for disk_start in range(0, n_filtered, col_chunk_size):
-                disk_end = min(disk_start + col_chunk_size, n_filtered)
-                disk_col_indices = global_filtered_indices[disk_start:disk_end]
-
-                geno_disk_chunk = bed.read(
-                    index=np.s_[valid_indices, disk_col_indices],
-                    dtype=np.float64,
-                )
-
-                chunk_filtered_means = filtered_means_all[disk_start:disk_end]
-                filtered_means_broadcast = chunk_filtered_means.reshape(1, -1)
-                missing_mask = np.isnan(geno_disk_chunk)
-                geno_disk_chunk = np.where(
-                    missing_mask, filtered_means_broadcast, geno_disk_chunk
-                )
-
-                n_disk_subset = geno_disk_chunk.shape[1]
-                jax_starts = compute_subchunk_starts(
-                    n_disk_subset, jax_chunk_size, placement.n_devices
-                )
-                jax_ends = [
-                    jax_starts[i + 1] if i + 1 < len(jax_starts) else n_disk_subset
-                    for i in range(len(jax_starts))
-                ]
-
-                UtG_np, actual_jax_len = _prepare_jax_chunk(
-                    jax_starts[0], jax_ends[0], geno_disk_chunk
-                )
-                UtG_jax = jax.device_put(UtG_np, placement.snp)
-                del UtG_np
-
-                for i, _jax_start in enumerate(jax_starts):
-                    current_actual_len = actual_jax_len
-                    current_UtG = UtG_jax
-
-                    if i + 1 < len(jax_starts):
-                        UtG_np, actual_jax_len = _prepare_jax_chunk(
-                            jax_starts[i + 1], jax_ends[i + 1], geno_disk_chunk
-                        )
-                        UtG_jax = jax.device_put(UtG_np, placement.snp)
-                        del UtG_np
-
-                    try:
-                        Uab_batch = batch_compute_uab(
-                            n_cvt, UtW_jax, Uty_jax, current_UtG
-                        )
-
-                        chunk_result = _compute_lmm_chunk(
-                            lmm_mode,
-                            n_cvt,
-                            eigenvalues_jax,
-                            Uab_batch,
-                            n_samples,
-                            l_min=l_min,
-                            l_max=l_max,
-                            n_grid=n_grid,
-                            n_refine=n_refine,
-                            Hi_eval_null=Hi_eval_null_jax,
-                            logl_H0=logl_H0,
-                        )
-                        block_chunk_result(chunk_result, lmm_mode)
-                    except Exception as e:
-                        log_jax_error(
-                            e,
-                            chunk_label=f"LOCO {i + 1}",
-                            chunk_snps=current_actual_len,
-                            n_samples=n_samples,
-                            n_cvt=n_cvt,
-                        )
-                        raise
-
-                    subchunk_start = disk_start + jax_starts[i]
-                    subchunk_end = subchunk_start + current_actual_len
-                    arrays = _chunk_result_to_numpy(
-                        chunk_result,
-                        _ACCUM_KEYS[lmm_mode],
-                        current_actual_len,
-                    )
-                    n_lmin, n_lmax = count_lambda_boundary_hits(
-                        lmm_mode, arrays, l_min, l_max
-                    )
-                    total_at_lmin += n_lmin
-                    total_at_lmax += n_lmax
-
-                    if writer is not None:
-                        writer.write_arrays_batch(
-                            lmm_mode,
-                            global_filtered_indices[subchunk_start:subchunk_end],
-                            snp_info,
-                            filtered_afs[subchunk_start:subchunk_end],
-                            filtered_miss[subchunk_start:subchunk_end],
-                            arrays,
-                        )
-                    else:
-                        subchunk_results = list(
-                            _yield_chunk_results(
-                                lmm_mode,
-                                np.arange(subchunk_start, subchunk_end),
-                                global_filtered_indices,
-                                filtered_afs,
-                                filtered_miss,
-                                snp_info,
-                                arrays,
-                            )
-                        )
-                        results.extend(subchunk_results)
-
-                    del arrays, chunk_result, Uab_batch, current_UtG
-                    if i + 1 >= len(jax_starts):
-                        UtG_jax = None
-
-                del geno_disk_chunk
-
-        log_lambda_boundary_warning(
-            total_at_lmin, total_at_lmax, l_min, l_max, prefix="LOCO "
-        )
-
-        return results, chr_pve, chr_pve_se
     finally:
-        del eigenvalues_jax, UtW_jax, Uty_jax
+        _cleanup_jax_caches()
 
 
 def _run_lmm_for_chromosome_numpy(

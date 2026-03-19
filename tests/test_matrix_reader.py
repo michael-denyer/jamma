@@ -580,3 +580,73 @@ class TestMemmapLifecycle:
         with patch.object(os, "unlink", side_effect=PermissionError("denied")):
             # Must not raise even though os.unlink will fail
             _cleanup_temp_memmap("/nonexistent/dir", "/nonexistent/dir/matrix.dat")
+
+
+@pytest.mark.tier0
+class TestParseChunkRowCountMismatch:
+    """Verify _parse_chunk_to_memmap raises on row-count mismatch."""
+
+    def test_parse_chunk_row_count_mismatch(self, tmp_path: Path) -> None:
+        """Row-count mismatch raises RuntimeError."""
+        from jamma.io.matrix_reader import _parse_chunk_to_memmap
+
+        # Create a 5-row, 3-column file
+        matrix = np.ones((5, 3), dtype=np.float64)
+        txt_path = tmp_path / "short.txt"
+        np.savetxt(txt_path, matrix, fmt="%.6f", delimiter="\t")
+
+        # Create a memmap target with shape (10, 3) — deliberately wrong
+        mm_path = str(tmp_path / "matrix.dat")
+        mm = np.memmap(mm_path, dtype=np.float64, mode="w+", shape=(10, 3))
+        del mm
+
+        file_size = txt_path.stat().st_size
+        # Pass n_rows=10 but file only has 5 rows — triggers row-count mismatch
+        args = (
+            str(txt_path),
+            mm_path,
+            (10, 3),
+            "float64",
+            0,
+            file_size,
+            0,
+            10,
+            "\t",
+        )
+        with pytest.raises(RuntimeError, match="Row count mismatch"):
+            _parse_chunk_to_memmap(args)
+
+
+@pytest.mark.tier0
+class TestMultiWorkerCorrectness:
+    """Verify multi-worker and single-worker parsing produces correct results."""
+
+    def test_read_matrix_parallel_bounded_memory(self, tmp_path: Path) -> None:
+        """Multi-worker parses and reassembles 1000x20 matrix."""
+        rng = np.random.default_rng(314)
+        matrix = rng.standard_normal((1000, 20))
+        path = tmp_path / "bounded.txt"
+        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
+
+        result = read_matrix_parallel(
+            path, n_workers=2, delimiter="\t", min_rows_for_parallel=500
+        )
+        assert result.shape == (1000, 20)
+        assert result.dtype == np.float64
+        np.testing.assert_array_equal(
+            result, np.atleast_2d(np.loadtxt(path, dtype=np.float64))
+        )
+
+    def test_read_matrix_parallel_large_chunk(self, tmp_path: Path) -> None:
+        """Single worker (n_workers=1) handles degenerate single-chunk case."""
+        rng = np.random.default_rng(271)
+        matrix = rng.standard_normal((500, 10))
+        path = tmp_path / "single_chunk.txt"
+        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
+
+        result = read_matrix_parallel(
+            path, n_workers=1, delimiter="\t", min_rows_for_parallel=200
+        )
+        assert result.shape == (500, 10)
+        expected = np.loadtxt(path, dtype=np.float64)
+        np.testing.assert_array_equal(result, np.atleast_2d(expected))

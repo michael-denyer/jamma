@@ -71,7 +71,7 @@ _MIN_BUDGET = 2_000_000_000  # 2 GB floor (original default)
 _MAX_BUDGET = 40_000_000_000  # 40 GB ceiling
 
 # Minimum number of chunks before pipelined execution is worthwhile.
-_MIN_PIPELINE_CHUNKS = 30
+_MIN_PIPELINE_CHUNKS = 8
 
 
 _ALL_RESULT_KEYS = (
@@ -695,6 +695,16 @@ def run_lmm_association_numpy(
         None if use_pipeline else np.empty((n_samples, chunk_size), dtype=np.float64)
     )
 
+    # Pre-allocate SoA varying buffer for sequential path (reuse across chunks).
+    # Shape: (chunk_size, n_var, n_samples) where n_var=3 for n_cvt=1.
+    if use_split and not use_pipeline:
+        from jamma.lmm.likelihood import classify_uab_columns
+
+        n_var = 3 if n_cvt == 1 else len(classify_uab_columns(n_cvt)[1])
+        uab_var_buf = np.empty((chunk_size, n_var, n_samples), dtype=np.float64)
+    else:
+        uab_var_buf = None
+
     # Pipeline thread budget: partition physical cores between concurrent
     # BLAS rotation (background) and C extension compute (foreground) to
     # prevent oversubscription. Without partitioning, both use all cores
@@ -958,7 +968,7 @@ def run_lmm_association_numpy(
 
             # Process remaining chunks with the (possibly updated) adaptive split.
             # remaining_starts is always non-empty: use_pipeline requires
-            # n_chunks >= _MIN_PIPELINE_CHUNKS (30), so at least 29 remain.
+            # n_chunks >= _MIN_PIPELINE_CHUNKS (8), so at least 7 remain.
             remaining_starts = chunk_starts[1:]
 
             # Seed the pipeline by preparing the first remaining chunk.
@@ -1094,8 +1104,10 @@ def run_lmm_association_numpy(
                 t_compute_start = time.perf_counter()
                 if use_split:
                     # Build SoA-layout varying Uab only — invariant precomputed.
+                    # Reuse pre-allocated buffer when chunk is full-sized.
+                    _out = uab_var_buf if actual_snps == chunk_size else None
                     uab_var_soa = batch_compute_uab_varying_soa_numpy(
-                        n_cvt, UtW, Uty, UtG
+                        n_cvt, UtW, Uty, UtG, out=_out
                     )
                     del UtG
                     if use_fused_mode4 and lmm_workspace is not None:

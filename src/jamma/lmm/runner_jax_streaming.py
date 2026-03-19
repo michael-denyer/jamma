@@ -28,6 +28,7 @@ from jamma.lmm.chunk import _compute_chunk_size, compute_subchunk_starts
 from jamma.lmm.compute import (
     _compute_lmm_chunk,
     block_chunk_result,
+    cleanup_jax_caches,
     exposed_rotation_time,
     log_jax_error,
 )
@@ -50,10 +51,14 @@ from jamma.lmm.results import (
     count_lambda_boundary_hits,
     log_lambda_boundary_warning,
 )
-from jamma.lmm.schema import ACCUM_KEYS as _ACCUM_KEYS
-from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
-from jamma.lmm.schema import LazySnpMeta as _LazySnpMeta
-from jamma.lmm.schema import LmmConfig, LmmRunResult, RunnerTiming
+from jamma.lmm.schema import (
+    ACCUM_KEYS,
+    TEST_TYPE_MAP,
+    LazySnpMeta,
+    LmmConfig,
+    LmmRunResult,
+    RunnerTiming,
+)
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
 
@@ -72,82 +77,32 @@ def get_last_run_timing() -> RunnerTiming:
     return dict(last_run_timing)
 
 
-def run_lmm_association_streaming(
+def _run_lmm_jax_streaming_impl(
     bed_path: Path,
     phenotypes: np.ndarray,
-    kinship: np.ndarray | None = None,
-    snp_info: list | None = None,
-    covariates: np.ndarray | None = None,
-    eigenvalues: np.ndarray | None = None,
-    eigenvectors: np.ndarray | None = None,
-    maf_threshold: float = 0.01,
-    miss_threshold: float = 0.05,
-    l_min: float = 1e-5,
-    l_max: float = 1e5,
-    n_grid: int = 50,
-    n_refine: int = 10,
-    chunk_size: int = 10_000,
-    use_gpu: bool = False,
-    check_memory: bool = True,
-    show_progress: bool = True,
-    output_path: Path | None = None,
-    lmm_mode: int = 1,
-    snps_indices: np.ndarray | None = None,
-    hwe_threshold: float = 0.0,
-    validate_genotypes: bool = True,
-    config: LmmConfig | None = None,
-    clear_caches: bool = True,
+    kinship: np.ndarray | None,
+    snp_info: list | None,
+    covariates: np.ndarray | None,
+    eigenvalues: np.ndarray | None,
+    eigenvectors: np.ndarray | None,
+    maf_threshold: float,
+    miss_threshold: float,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+    chunk_size: int,
+    use_gpu: bool,
+    check_memory: bool,
+    show_progress: bool,
+    output_path: Path | None,
+    lmm_mode: int,
+    snps_indices: np.ndarray | None,
+    hwe_threshold: float,
+    validate_genotypes: bool,
+    config: LmmConfig | None,
 ) -> tuple[LmmRunResult, int]:
-    """Run LMM association tests by streaming genotypes from disk.
-
-    Reads genotypes per-chunk, never allocating the full genotype matrix.
-    Two-pass: (1) SNP statistics for filtering, (2) association per chunk.
-
-    Args:
-        bed_path: PLINK file prefix (without .bed/.bim/.fam extension).
-        phenotypes: Phenotype vector (n_samples,).
-        kinship: Kinship matrix (n_samples, n_samples), or None when
-            pre-computed eigenvalues and eigenvectors are provided. WARNING:
-            may be overwritten in-place during eigendecomposition (buffer
-            reused for eigenvectors). Treat as consumed; pass kinship.copy()
-            if you need the original matrix.
-        snp_info: List of SNP metadata dicts, or None to build from PLINK.
-        covariates: Covariate matrix (n_samples, n_cvt) or None for intercept-only.
-        eigenvalues: Pre-computed eigenvalues (sorted ascending) or None.
-        eigenvectors: Pre-computed eigenvectors or None.
-        maf_threshold: Minimum MAF for SNP inclusion.
-        miss_threshold: Maximum missing rate for SNP inclusion.
-        l_min: Minimum lambda for optimization.
-        l_max: Maximum lambda for optimization.
-        n_grid: Grid search resolution for lambda bracketing.
-        n_refine: Golden section iterations for lambda refinement.
-        chunk_size: Number of SNPs per disk chunk (default: 10,000).
-        use_gpu: Whether to use GPU acceleration.
-        check_memory: Check available memory before workflow.
-        show_progress: Show progress bars and GEMMA-style logging.
-        output_path: Path for incremental result writing, or None for in-memory.
-        lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
-        snps_indices: Pre-resolved column indices for -snps restriction, or None.
-        hwe_threshold: HWE p-value threshold; SNPs with p < threshold are
-            removed. 0.0 disables HWE filtering (default).
-        validate_genotypes: Check for unexpected genotype values during pass-1
-            (default True).
-        config: LmmConfig instance. When provided, overrides individual
-            threshold/mode kwargs above.
-        clear_caches: Clear JAX compilation caches on exit. Set to False
-            when calling repeatedly with identical shapes (e.g. multi-phenotype
-            loops) to avoid redundant JIT recompilation.
-
-    Returns:
-        Tuple of (LmmRunResult, n_tested) where LmmRunResult contains
-        associations (empty if output_path is set -- results on disk) and
-        PVE from null model. n_tested is the number of SNPs that passed
-        filtering and were tested.
-
-    Raises:
-        MemoryError: If check_memory=True and insufficient memory.
-        ValueError: If only one of eigenvalues/eigenvectors is provided.
-    """
+    """Core streaming LMM implementation without cleanup wrapper."""
     # Unpack config if provided (config takes precedence over individual kwargs).
     # Streaming-specific params (bed_path, chunk_size, output_path, snps_indices,
     # hwe_threshold, validate_genotypes) remain as separate kwargs.
@@ -171,7 +126,7 @@ def run_lmm_association_streaming(
     n_snps = meta["n_snps"]
 
     if snp_info is None:
-        snp_info = _LazySnpMeta(meta)
+        snp_info = LazySnpMeta(meta)
 
     # Validate inputs and apply sample filtering (shared logic for all runners)
     setup = validate_runner_inputs(
@@ -323,9 +278,7 @@ def run_lmm_association_streaming(
 
     if n_filtered == 0:
         if output_path is not None:
-            with IncrementalAssocWriter(
-                output_path, test_type=_TEST_TYPE_MAP[lmm_mode]
-            ):
+            with IncrementalAssocWriter(output_path, test_type=TEST_TYPE_MAP[lmm_mode]):
                 pass  # Context manager writes header, no data rows
         if show_progress:
             elapsed = time.perf_counter() - start_time
@@ -372,329 +325,417 @@ def run_lmm_association_streaming(
             n_filtered, placement.n_devices, n_samples=n_samples, pipeline_buffers=2
         )
 
-    eigenvalues_jax = None
-    UtW_jax = None
-    Uty_jax = None
-    try:
-        logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
-            lmm_mode,
-            eigenvalues_np,
-            UtW,
-            Uty,
-            n_cvt,
-            placement.rep,
-            show_progress,
-            l_min=l_min,
-            l_max=l_max,
-        )
+    logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
+        lmm_mode,
+        eigenvalues_np,
+        UtW,
+        Uty,
+        n_cvt,
+        placement.rep,
+        show_progress,
+        l_min=l_min,
+        l_max=l_max,
+    )
 
-        t_eigen_end = time.perf_counter()
+    t_eigen_end = time.perf_counter()
 
-        eigenvalues_jax = jax.device_put(eigenvalues_np, placement.rep)
-        UtW_jax = jax.device_put(UtW, placement.rep)
-        Uty_jax = jax.device_put(Uty, placement.rep)
+    eigenvalues_jax = jax.device_put(eigenvalues_np, placement.rep)
+    UtW_jax = jax.device_put(UtW, placement.rep)
+    Uty_jax = jax.device_put(Uty, placement.rep)
 
-        pve, pve_se = compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
+    pve, pve_se = compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
 
-        last_run_timing.clear()
+    last_run_timing.clear()
 
-        t_rotation_total = 0.0
-        t_rotation_exposed_total = 0.0
-        t_jax_compute_total = 0.0
-        t_result_write_total = 0.0
+    t_rotation_total = 0.0
+    t_rotation_exposed_total = 0.0
+    t_jax_compute_total = 0.0
+    t_result_write_total = 0.0
 
-        prev_compute_end: float | None = None
-        all_results: list[AssocResult] = []
-        n_at_lmin = 0
-        n_at_lmax = 0
-        nan_counts: dict[str, int] = {}
+    prev_compute_end: float | None = None
+    all_results: list[AssocResult] = []
+    n_at_lmin = 0
+    n_at_lmax = 0
+    nan_counts: dict[str, int] = {}
 
-        with contextlib.ExitStack() as stack:
-            writer = None
-            if output_path is not None:
-                writer = stack.enter_context(
-                    IncrementalAssocWriter(
-                        output_path, test_type=_TEST_TYPE_MAP[lmm_mode]
-                    )
-                )
-            assoc_iterator = stream_genotype_chunks(
-                bed_path,
-                chunk_size=chunk_size,
-                dtype=np.float64,
-                show_progress=False,
-                snp_indices=snp_indices,
+    with contextlib.ExitStack() as stack:
+        writer = None
+        if output_path is not None:
+            writer = stack.enter_context(
+                IncrementalAssocWriter(output_path, test_type=TEST_TYPE_MAP[lmm_mode])
             )
-            assoc_iterator = prefetch_iterator(assoc_iterator)
-            if show_progress:
-                n_chunks = (n_filtered + chunk_size - 1) // chunk_size
-                assoc_iterator = progress_iterator(
-                    assoc_iterator, total=n_chunks, desc="Running LMM association"
+        assoc_iterator = stream_genotype_chunks(
+            bed_path,
+            chunk_size=chunk_size,
+            dtype=np.float64,
+            show_progress=False,
+            snp_indices=snp_indices,
+        )
+        assoc_iterator = prefetch_iterator(assoc_iterator)
+        if show_progress:
+            n_chunks = (n_filtered + chunk_size - 1) // chunk_size
+            assoc_iterator = progress_iterator(
+                assoc_iterator, total=n_chunks, desc="Running LMM association"
+            )
+
+        def _prepare_jax_chunk(
+            start: int, end: int, geno: np.ndarray
+        ) -> tuple[np.ndarray, int]:
+            """Slice a genotype subset and prepare UtG for device transfer."""
+            geno_slice = geno[:, start:end]
+            return prepare_utg_chunk(geno_slice, U, placement, rotation_threads)
+
+        def _prepare_jax_chunk_timed(
+            start: int, end: int, geno: np.ndarray
+        ) -> tuple[np.ndarray, int, float]:
+            """Measure background-thread preparation time inside the worker."""
+            t0 = time.perf_counter()
+            UtG_np, actual_len = _prepare_jax_chunk(start, end, geno)
+            return UtG_np, actual_len, time.perf_counter() - t0
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            for chunk, filt_start, filt_end in assoc_iterator:
+                if needs_sample_filter:
+                    chunk = chunk[valid_mask, :]
+
+                if filt_end <= filt_start:
+                    continue
+
+                filtered_means_broadcast = filtered_means[filt_start:filt_end].reshape(
+                    1, -1
                 )
+                missing_mask = np.isnan(chunk)
+                if missing_mask.any():
+                    chunk = np.where(missing_mask, filtered_means_broadcast, chunk)
+                del missing_mask
 
-            def _prepare_jax_chunk(
-                start: int, end: int, geno: np.ndarray
-            ) -> tuple[np.ndarray, int]:
-                """Slice a genotype subset and prepare UtG for device transfer."""
-                geno_slice = geno[:, start:end]
-                return prepare_utg_chunk(geno_slice, U, placement, rotation_threads)
+                n_subset = chunk.shape[1]
+                jax_starts = compute_subchunk_starts(
+                    n_subset, jax_chunk_size, placement.n_devices
+                )
+                jax_ends = [
+                    jax_starts[i + 1] if i + 1 < len(jax_starts) else n_subset
+                    for i in range(len(jax_starts))
+                ]
 
-            def _prepare_jax_chunk_timed(
-                start: int, end: int, geno: np.ndarray
-            ) -> tuple[np.ndarray, int, float]:
-                """Measure background-thread preparation time inside the worker."""
-                t0 = time.perf_counter()
-                UtG_np, actual_len = _prepare_jax_chunk(start, end, geno)
-                return UtG_np, actual_len, time.perf_counter() - t0
+                t_rot_start = time.perf_counter()
+                UtG_np, actual_jax_len = _prepare_jax_chunk(
+                    jax_starts[0], jax_ends[0], chunk
+                )
+                t_rot_end = time.perf_counter()
+                rot_dur = t_rot_end - t_rot_start
+                t_rotation_total += rot_dur
+                t_rotation_exposed_total += exposed_rotation_time(
+                    rot_dur, t_rot_end, prev_compute_end
+                )
+                UtG_jax = jax.device_put(UtG_np, placement.snp)
+                del UtG_np
 
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                for chunk, filt_start, filt_end in assoc_iterator:
-                    if needs_sample_filter:
-                        chunk = chunk[valid_mask, :]
+                for i, _jax_start in enumerate(jax_starts):
+                    current_actual_len = actual_jax_len
+                    current_UtG = UtG_jax
 
-                    if filt_end <= filt_start:
-                        continue
-
-                    filtered_means_broadcast = filtered_means[
-                        filt_start:filt_end
-                    ].reshape(1, -1)
-                    missing_mask = np.isnan(chunk)
-                    if missing_mask.any():
-                        chunk = np.where(missing_mask, filtered_means_broadcast, chunk)
-                    del missing_mask
-
-                    n_subset = chunk.shape[1]
-                    jax_starts = compute_subchunk_starts(
-                        n_subset, jax_chunk_size, placement.n_devices
-                    )
-                    jax_ends = [
-                        jax_starts[i + 1] if i + 1 < len(jax_starts) else n_subset
-                        for i in range(len(jax_starts))
-                    ]
-
-                    t_rot_start = time.perf_counter()
-                    UtG_np, actual_jax_len = _prepare_jax_chunk(
-                        jax_starts[0], jax_ends[0], chunk
-                    )
-                    t_rot_end = time.perf_counter()
-                    rot_dur = t_rot_end - t_rot_start
-                    t_rotation_total += rot_dur
-                    t_rotation_exposed_total += exposed_rotation_time(
-                        rot_dur, t_rot_end, prev_compute_end
-                    )
-                    UtG_jax = jax.device_put(UtG_np, placement.snp)
-                    del UtG_np
-
-                    for i, _jax_start in enumerate(jax_starts):
-                        current_actual_len = actual_jax_len
-                        current_UtG = UtG_jax
-
-                        future = None
-                        if i + 1 < len(jax_starts):
-                            future = executor.submit(
-                                _prepare_jax_chunk_timed,
-                                jax_starts[i + 1],
-                                jax_ends[i + 1],
-                                chunk,
-                            )
-
-                        t_jax_start = time.perf_counter()
-
-                        try:
-                            with jax.profiler.TraceAnnotation("jax_optimization"):
-                                Uab_batch = batch_compute_uab(
-                                    n_cvt, UtW_jax, Uty_jax, current_UtG
-                                )
-
-                                chunk_result = _compute_lmm_chunk(
-                                    lmm_mode,
-                                    n_cvt,
-                                    eigenvalues_jax,
-                                    Uab_batch,
-                                    n_samples,
-                                    l_min=l_min,
-                                    l_max=l_max,
-                                    n_grid=n_grid,
-                                    n_refine=n_refine,
-                                    Hi_eval_null=Hi_eval_null_jax,
-                                    logl_H0=logl_H0,
-                                )
-                                block_chunk_result(chunk_result, lmm_mode)
-                        except Exception as e:
-                            if future is not None:
-                                future.cancel()
-                            log_jax_error(
-                                e,
-                                chunk_label=f"streaming {i + 1}",
-                                chunk_snps=current_actual_len,
-                                n_samples=n_samples,
-                                n_cvt=n_cvt,
-                            )
-                            raise
-
-                        t_jax_end = time.perf_counter()
-                        t_jax_compute_total += t_jax_end - t_jax_start
-                        prev_compute_end = t_jax_end
-
-                        if future is not None:
-                            try:
-                                UtG_np, actual_jax_len, rot_dur = future.result()
-                            except MemoryError:
-                                raise
-                            except Exception as exc:
-                                processed = (
-                                    writer.count
-                                    if writer is not None
-                                    else len(all_results)
-                                )
-                                raise RuntimeError(
-                                    f"Background rotation failed for streaming "
-                                    f"sub-chunk starting at index "
-                                    f"{jax_starts[i + 1]}. "
-                                    f"Processed ~{processed} results "
-                                    f"before failure."
-                                ) from exc
-                            t_rot_end = time.perf_counter()
-                            t_rotation_total += rot_dur
-                            t_rotation_exposed_total += min(
-                                rot_dur, max(0.0, t_rot_end - t_jax_end)
-                            )
-                            UtG_jax = jax.device_put(UtG_np, placement.snp)
-                            del UtG_np  # Safe: JAX holds internal ref
-
-                        subchunk_filtered_start = filt_start + jax_starts[i]
-                        subchunk_filtered_end = (
-                            subchunk_filtered_start + current_actual_len
+                    future = None
+                    if i + 1 < len(jax_starts):
+                        future = executor.submit(
+                            _prepare_jax_chunk_timed,
+                            jax_starts[i + 1],
+                            jax_ends[i + 1],
+                            chunk,
                         )
 
-                        t_write_start = time.perf_counter()
-                        with jax.profiler.TraceAnnotation("result_write"):
-                            arrays = _chunk_result_to_numpy(
-                                chunk_result,
-                                _ACCUM_KEYS[lmm_mode],
-                                current_actual_len,
+                    t_jax_start = time.perf_counter()
+
+                    try:
+                        with jax.profiler.TraceAnnotation("jax_optimization"):
+                            Uab_batch = batch_compute_uab(
+                                n_cvt, UtW_jax, Uty_jax, current_UtG
                             )
 
-                            chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
-                                lmm_mode, arrays, l_min, l_max
+                            chunk_result = _compute_lmm_chunk(
+                                lmm_mode,
+                                n_cvt,
+                                eigenvalues_jax,
+                                Uab_batch,
+                                n_samples,
+                                l_min=l_min,
+                                l_max=l_max,
+                                n_grid=n_grid,
+                                n_refine=n_refine,
+                                Hi_eval_null=Hi_eval_null_jax,
+                                logl_H0=logl_H0,
                             )
-                            n_at_lmin += chunk_lmin
-                            n_at_lmax += chunk_lmax
+                            block_chunk_result(chunk_result, lmm_mode)
+                    except Exception as e:
+                        if future is not None:
+                            future.cancel()
+                        log_jax_error(
+                            e,
+                            chunk_label=f"streaming {i + 1}",
+                            chunk_snps=current_actual_len,
+                            n_samples=n_samples,
+                            n_cvt=n_cvt,
+                        )
+                        raise
 
-                            for key, arr in arrays.items():
-                                if arr.dtype.kind != "f":
-                                    continue
-                                if not np.any(np.isnan(arr)):
-                                    continue
-                                n_nan = int(np.count_nonzero(np.isnan(arr)))
-                                nan_counts[key] = nan_counts.get(key, 0) + n_nan
+                    t_jax_end = time.perf_counter()
+                    t_jax_compute_total += t_jax_end - t_jax_start
+                    prev_compute_end = t_jax_end
 
-                            if writer is not None:
-                                writer.write_arrays_batch(
+                    if future is not None:
+                        try:
+                            UtG_np, actual_jax_len, rot_dur = future.result()
+                        except MemoryError:
+                            raise
+                        except Exception as exc:
+                            processed = (
+                                writer.count if writer is not None else len(all_results)
+                            )
+                            raise RuntimeError(
+                                f"Background rotation failed for streaming "
+                                f"sub-chunk starting at index "
+                                f"{jax_starts[i + 1]}. "
+                                f"Processed ~{processed} results "
+                                f"before failure."
+                            ) from exc
+                        t_rot_end = time.perf_counter()
+                        t_rotation_total += rot_dur
+                        t_rotation_exposed_total += min(
+                            rot_dur, max(0.0, t_rot_end - t_jax_end)
+                        )
+                        UtG_jax = jax.device_put(UtG_np, placement.snp)
+                        del UtG_np  # Safe: JAX holds internal ref
+
+                    subchunk_filtered_start = filt_start + jax_starts[i]
+                    subchunk_filtered_end = subchunk_filtered_start + current_actual_len
+
+                    t_write_start = time.perf_counter()
+                    with jax.profiler.TraceAnnotation("result_write"):
+                        arrays = _chunk_result_to_numpy(
+                            chunk_result,
+                            ACCUM_KEYS[lmm_mode],
+                            current_actual_len,
+                        )
+
+                        chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
+                            lmm_mode, arrays, l_min, l_max
+                        )
+                        n_at_lmin += chunk_lmin
+                        n_at_lmax += chunk_lmax
+
+                        for key, arr in arrays.items():
+                            if arr.dtype.kind != "f":
+                                continue
+                            if not np.any(np.isnan(arr)):
+                                continue
+                            n_nan = int(np.count_nonzero(np.isnan(arr)))
+                            nan_counts[key] = nan_counts.get(key, 0) + n_nan
+
+                        if writer is not None:
+                            writer.write_arrays_batch(
+                                lmm_mode,
+                                snp_indices[
+                                    subchunk_filtered_start:subchunk_filtered_end
+                                ],
+                                snp_info,
+                                filtered_afs[
+                                    subchunk_filtered_start:subchunk_filtered_end
+                                ],
+                                filtered_miss[
+                                    subchunk_filtered_start:subchunk_filtered_end
+                                ],
+                                arrays,
+                            )
+                        else:
+                            chunk_results = list(
+                                _yield_chunk_results(
                                     lmm_mode,
-                                    snp_indices[
-                                        subchunk_filtered_start:subchunk_filtered_end
-                                    ],
+                                    np.arange(
+                                        subchunk_filtered_start,
+                                        subchunk_filtered_end,
+                                    ),
+                                    snp_indices,
+                                    filtered_afs,
+                                    filtered_miss,
                                     snp_info,
-                                    filtered_afs[
-                                        subchunk_filtered_start:subchunk_filtered_end
-                                    ],
-                                    filtered_miss[
-                                        subchunk_filtered_start:subchunk_filtered_end
-                                    ],
                                     arrays,
                                 )
-                            else:
-                                chunk_results = list(
-                                    _yield_chunk_results(
-                                        lmm_mode,
-                                        np.arange(
-                                            subchunk_filtered_start,
-                                            subchunk_filtered_end,
-                                        ),
-                                        snp_indices,
-                                        filtered_afs,
-                                        filtered_miss,
-                                        snp_info,
-                                        arrays,
-                                    )
-                                )
-                                all_results.extend(chunk_results)
+                            )
+                            all_results.extend(chunk_results)
 
-                        del arrays, chunk_result, Uab_batch, current_UtG
-                        if future is None:
-                            UtG_jax = None
-                        t_write_end = time.perf_counter()
-                        t_result_write_total += t_write_end - t_write_start
+                    del arrays, chunk_result, Uab_batch, current_UtG
+                    if future is None:
+                        UtG_jax = None
+                    t_write_end = time.perf_counter()
+                    t_result_write_total += t_write_end - t_write_start
 
-            if show_progress:
-                log_rss_memory("lmm_streaming", "after_association")
+        if show_progress:
+            log_rss_memory("lmm_streaming", "after_association")
 
-                elapsed = time.perf_counter() - start_time
-                t_io = t_io_end - t_io_start
-                t_snp = t_snp_end - t_snp_start
-                t_eigen = t_eigen_end - t_eigen_start
-                accounted = (
-                    t_io
-                    + t_snp
-                    + t_eigen
-                    + t_rotation_total
-                    + t_jax_compute_total
-                    + t_result_write_total
-                )
-                logger.info("Timing breakdown:")
-                logger.info(f"  I/O read (pass 1):   {t_io:.2f}s")
-                logger.info(f"  SNP statistics:      {t_snp:.2f}s")
-                logger.info(f"  Setup (eigen+null):  {t_eigen:.2f}s")
-                logger.info(f"  UT@G rotation:       {t_rotation_total:.2f}s")
-                logger.info(f"  UT@G exposed:        {t_rotation_exposed_total:.2f}s")
-                logger.info(f"  JAX compute:         {t_jax_compute_total:.2f}s")
-                logger.info(f"  Result write:        {t_result_write_total:.2f}s")
-                logger.info("  ----")
-                logger.info(f"  Accounted:           {accounted:.2f}s")
-                logger.info(f"  Total:               {elapsed:.2f}s")
+            elapsed = time.perf_counter() - start_time
+            t_io = t_io_end - t_io_start
+            t_snp = t_snp_end - t_snp_start
+            t_eigen = t_eigen_end - t_eigen_start
+            accounted = (
+                t_io
+                + t_snp
+                + t_eigen
+                + t_rotation_total
+                + t_jax_compute_total
+                + t_result_write_total
+            )
+            logger.info("Timing breakdown:")
+            logger.info(f"  I/O read (pass 1):   {t_io:.2f}s")
+            logger.info(f"  SNP statistics:      {t_snp:.2f}s")
+            logger.info(f"  Setup (eigen+null):  {t_eigen:.2f}s")
+            logger.info(f"  UT@G rotation:       {t_rotation_total:.2f}s")
+            logger.info(f"  UT@G exposed:        {t_rotation_exposed_total:.2f}s")
+            logger.info(f"  JAX compute:         {t_jax_compute_total:.2f}s")
+            logger.info(f"  Result write:        {t_result_write_total:.2f}s")
+            logger.info("  ----")
+            logger.info(f"  Accounted:           {accounted:.2f}s")
+            logger.info(f"  Total:               {elapsed:.2f}s")
 
-            if writer is not None and show_progress:
-                logger.info(f"Wrote {writer.count:,} results to {output_path}")
+        if writer is not None and show_progress:
+            logger.info(f"Wrote {writer.count:,} results to {output_path}")
 
-            for key, n_nan in nan_counts.items():
-                logger.warning(
-                    f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
-                    "check for degenerate (constant) genotypes "
-                    "and kinship matrix quality"
-                )
-
-            log_lambda_boundary_warning(n_at_lmin, n_at_lmax, l_min, l_max)
-
-            if show_progress:
-                elapsed = time.perf_counter() - start_time
-                logger.info(f"LMM Association completed in {elapsed:.2f}s")
-
-            last_run_timing.clear()
-            last_run_timing.update(
-                {
-                    "rotation_s": t_rotation_total,
-                    "rotation_exposed_s": t_rotation_exposed_total,
-                    "jax_compute_s": t_jax_compute_total,
-                    "result_write_s": t_result_write_total,
-                }
+        for key, n_nan in nan_counts.items():
+            logger.warning(
+                f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
+                "check for degenerate (constant) genotypes "
+                "and kinship matrix quality"
             )
 
-            n_tested = writer.count if writer is not None else len(all_results)
-            return (
-                LmmRunResult(
-                    associations=[] if output_path is not None else all_results,
-                    pve=pve,
-                    pve_se=pve_se,
-                    n_tested=n_tested if output_path is not None else None,
-                ),
-                n_tested,
-            )
+        log_lambda_boundary_warning(n_at_lmin, n_at_lmax, l_min, l_max)
+
+        if show_progress:
+            elapsed = time.perf_counter() - start_time
+            logger.info(f"LMM Association completed in {elapsed:.2f}s")
+
+        last_run_timing.clear()
+        last_run_timing.update(
+            {
+                "rotation_s": t_rotation_total,
+                "rotation_exposed_s": t_rotation_exposed_total,
+                "jax_compute_s": t_jax_compute_total,
+                "result_write_s": t_result_write_total,
+            }
+        )
+
+        n_tested = writer.count if writer is not None else len(all_results)
+        return (
+            LmmRunResult(
+                associations=[] if output_path is not None else all_results,
+                pve=pve,
+                pve_se=pve_se,
+                n_tested=n_tested if output_path is not None else None,
+            ),
+            n_tested,
+        )
+
+
+def run_lmm_association_streaming(
+    bed_path: Path,
+    phenotypes: np.ndarray,
+    kinship: np.ndarray | None = None,
+    snp_info: list | None = None,
+    covariates: np.ndarray | None = None,
+    eigenvalues: np.ndarray | None = None,
+    eigenvectors: np.ndarray | None = None,
+    maf_threshold: float = 0.01,
+    miss_threshold: float = 0.05,
+    l_min: float = 1e-5,
+    l_max: float = 1e5,
+    n_grid: int = 50,
+    n_refine: int = 10,
+    chunk_size: int = 10_000,
+    use_gpu: bool = False,
+    check_memory: bool = True,
+    show_progress: bool = True,
+    output_path: Path | None = None,
+    lmm_mode: int = 1,
+    snps_indices: np.ndarray | None = None,
+    hwe_threshold: float = 0.0,
+    validate_genotypes: bool = True,
+    config: LmmConfig | None = None,
+    clear_caches: bool = True,
+) -> tuple[LmmRunResult, int]:
+    """Run LMM association tests by streaming genotypes from disk.
+
+    Reads genotypes per-chunk, never allocating the full genotype matrix.
+    Two-pass: (1) SNP statistics for filtering, (2) association per chunk.
+
+    Args:
+        bed_path: PLINK file prefix (without .bed/.bim/.fam extension).
+        phenotypes: Phenotype vector (n_samples,).
+        kinship: Kinship matrix (n_samples, n_samples), or None when
+            pre-computed eigenvalues and eigenvectors are provided. WARNING:
+            may be overwritten in-place during eigendecomposition (buffer
+            reused for eigenvectors). Treat as consumed; pass kinship.copy()
+            if you need the original matrix.
+        snp_info: List of SNP metadata dicts, or None to build from PLINK.
+        covariates: Covariate matrix (n_samples, n_cvt) or None for intercept-only.
+        eigenvalues: Pre-computed eigenvalues (sorted ascending) or None.
+        eigenvectors: Pre-computed eigenvectors or None.
+        maf_threshold: Minimum MAF for SNP inclusion.
+        miss_threshold: Maximum missing rate for SNP inclusion.
+        l_min: Minimum lambda for optimization.
+        l_max: Maximum lambda for optimization.
+        n_grid: Grid search resolution for lambda bracketing.
+        n_refine: Golden section iterations for lambda refinement.
+        chunk_size: Number of SNPs per disk chunk (default: 10,000).
+        use_gpu: Whether to use GPU acceleration.
+        check_memory: Check available memory before workflow.
+        show_progress: Show progress bars and GEMMA-style logging.
+        output_path: Path for incremental result writing, or None for in-memory.
+        lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
+        snps_indices: Pre-resolved column indices for -snps restriction, or None.
+        hwe_threshold: HWE p-value threshold; SNPs with p < threshold are
+            removed. 0.0 disables HWE filtering (default).
+        validate_genotypes: Check for unexpected genotype values during pass-1
+            (default True).
+        config: LmmConfig instance. When provided, overrides individual
+            threshold/mode kwargs above.
+        clear_caches: Clear JAX compilation caches on exit. Set to False
+            when calling repeatedly with identical shapes (e.g. multi-phenotype
+            loops) to avoid redundant JIT recompilation.
+
+    Returns:
+        Tuple of (LmmRunResult, n_tested) where LmmRunResult contains
+        associations (empty if output_path is set -- results on disk) and
+        PVE from null model. n_tested is the number of SNPs that passed
+        filtering and were tested.
+
+    Raises:
+        MemoryError: If check_memory=True and insufficient memory.
+        ValueError: If only one of eigenvalues/eigenvectors is provided.
+    """
+    try:
+        return _run_lmm_jax_streaming_impl(
+            bed_path,
+            phenotypes,
+            kinship,
+            snp_info,
+            covariates,
+            eigenvalues,
+            eigenvectors,
+            maf_threshold,
+            miss_threshold,
+            l_min,
+            l_max,
+            n_grid,
+            n_refine,
+            chunk_size,
+            use_gpu,
+            check_memory,
+            show_progress,
+            output_path,
+            lmm_mode,
+            snps_indices,
+            hwe_threshold,
+            validate_genotypes,
+            config,
+        )
     finally:
-        del eigenvalues_jax, UtW_jax, Uty_jax
         if clear_caches:
-            try:
-                jax.clear_caches()
-            except Exception:
-                logger.warning(
-                    "Failed to clear JAX caches during cleanup", exc_info=True
-                )
+            cleanup_jax_caches()

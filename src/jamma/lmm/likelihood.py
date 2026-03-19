@@ -457,6 +457,46 @@ def calc_pppab(
     return PPPab
 
 
+def _logdet_hiw_null(
+    lambda_val: float,
+    eigenvalues: np.ndarray,
+    Uab: np.ndarray,
+    n_cvt: int,
+) -> float:
+    """Compute logdet(W'HiW) - logdet(W'W) for null model.
+
+    Helper for computing the logdet_hiw second derivative via finite
+    differences on this isolated term. Much cheaper than finite-
+    differencing the full log-likelihood (only calc_pab + calc_iab,
+    no log/constant overhead).
+
+    Args:
+        lambda_val: Variance ratio.
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        Uab: Null model Uab (n_samples, n_index).
+        n_cvt: Number of covariates.
+
+    Returns:
+        logdet_hiw scalar.
+    """
+    Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
+    Pab = calc_pab(n_cvt, Hi_eval, Uab)
+    Iab = calc_iab(n_cvt, Uab)
+
+    nc_total = n_cvt  # null model
+    logdet_hiw = 0.0
+    for i in range(nc_total):
+        index_ww = get_ab_index(i + 1, i + 1, n_cvt)
+        d_pab = Pab[i, index_ww]
+        d_iab = Iab[i, index_ww]
+        if d_pab > 0:
+            logdet_hiw += np.log(d_pab)
+        if d_iab > 0:
+            logdet_hiw -= np.log(d_iab)
+
+    return logdet_hiw
+
+
 def reml_log_likelihood_dev2(
     lambda_val: float,
     eigenvalues: np.ndarray,
@@ -468,13 +508,11 @@ def reml_log_likelihood_dev2(
     Used by the delta method to compute se(pve). The second derivative
     at the REML optimum determines the precision of the lambda estimate.
 
-    Partial port of GEMMA v0.98.5 LogRL_dev2 (e_mode=0, calc_null=True).
-    Currently incomplete: the d²(logdet_hiw)/dλ² term is missing from the
-    analytical computation. For n_cvt=1 the omitted term is negligible;
-    for n_cvt > 1 this function delegates to finite_difference_dev2.
-
-    Use finite_difference_dev2() directly if you need guaranteed accuracy
-    for arbitrary n_cvt.
+    Port of GEMMA v0.98.5 LogRL_dev2 (e_mode=0, calc_null=True).
+    The trace and yPKPy terms are computed analytically from Pab/PPab/PPPab.
+    The logdet_hiw second derivative uses a local finite-difference stencil
+    on the logdet_hiw function alone (3 lightweight calc_pab + calc_iab
+    evaluations, not 3 full likelihood evaluations).
 
     Args:
         lambda_val: REML-optimal lambda (null model).
@@ -485,9 +523,6 @@ def reml_log_likelihood_dev2(
     Returns:
         Second derivative d^2 ell / d lambda^2 (negative at maximum).
     """
-    if n_cvt > 1:
-        return finite_difference_dev2(lambda_val, eigenvalues, Uab, n_cvt)
-
     if lambda_val <= 0:
         logger.warning(f"lambda_val={lambda_val:.6e} is non-positive in dev2")
         return np.nan
@@ -510,22 +545,32 @@ def reml_log_likelihood_dev2(
     PPPab_mat = calc_pppab(n_cvt, HiHiHi_eval, Uab, Pab, PPab_mat)
 
     idx_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
-    raw_P_yy = Pab[nc_total, idx_yy]
-    if raw_P_yy < _P_YY_MIN:
+    P_yy = Pab[nc_total, idx_yy]
+    if P_yy < _P_YY_MIN:
         logger.warning(
-            f"P_yy={raw_P_yy:.6e} below floor {_P_YY_MIN} in dev2 — "
-            f"phenotype may be degenerate after projection"
+            f"P_yy={P_yy:.6e} below floor {_P_YY_MIN} in dev2 "
+            f"— phenotype may be degenerate after projection"
         )
         return np.nan
-    P_yy = raw_P_yy
     PP_yy = PPab_mat[nc_total, idx_yy]
     PPP_yy = PPPab_mat[nc_total, idx_yy]
 
     yPKPy = (P_yy - PP_yy) / lambda_val
     yPKPKPy = (P_yy + PPP_yy - 2.0 * PP_yy) / (lambda_val * lambda_val)
 
-    dev2 = 0.5 * trace_HiKHiK - 0.5 * df * (2.0 * yPKPKPy * P_yy - yPKPy * yPKPy) / (
-        P_yy * P_yy
+    # d^2(logdet_hiw)/dlambda^2 via central finite differences on
+    # the isolated logdet_hiw(lambda) function. Step size h ~ eps^{1/4}
+    # * lambda for optimal second-derivative accuracy.
+    h = max(lambda_val * 1e-4, 1e-8)
+    logdet_p = _logdet_hiw_null(lambda_val + h, eigenvalues, Uab, n_cvt)
+    logdet_c = _logdet_hiw_null(lambda_val, eigenvalues, Uab, n_cvt)
+    logdet_m = _logdet_hiw_null(lambda_val - h, eigenvalues, Uab, n_cvt)
+    d2_logdet_hiw = (logdet_p - 2.0 * logdet_c + logdet_m) / (h * h)
+
+    dev2 = (
+        0.5 * trace_HiKHiK
+        - 0.5 * d2_logdet_hiw
+        - 0.5 * df * (2.0 * yPKPKPy * P_yy - yPKPy * yPKPy) / (P_yy * P_yy)
     )
 
     return dev2
@@ -541,11 +586,11 @@ def finite_difference_dev2(
 ) -> float:
     """Compute REML log-likelihood second derivative via central finite differences.
 
-    Fallback for n_cvt > 1 where the analytical reml_log_likelihood_dev2 is
-    incomplete (missing the d²(logdet_hiw)/dλ² term). Uses a central stencil
-    on reml_log_likelihood_null with h ~ O(eps^{1/4}) * lambda for optimal
-    second-derivative accuracy. Falls back to a one-sided stencil when lambda
-    is near the optimiser bounds.
+    Full numerical second derivative using a central stencil on
+    reml_log_likelihood_null. Retained as a test oracle for validating
+    the analytical reml_log_likelihood_dev2. Uses h ~ O(eps^{1/4}) *
+    lambda for optimal second-derivative accuracy. Falls back to a
+    one-sided stencil when lambda is near the optimiser bounds.
 
     Args:
         lambda_val: REML-optimal lambda (null model).

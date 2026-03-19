@@ -24,6 +24,15 @@ from jamma.lmm.likelihood_jax import (
 )
 from jamma.lmm.prepare import _grid_optimize_lambda_batched
 
+
+def cleanup_jax_caches() -> None:
+    """Best-effort JAX cache cleanup."""
+    try:
+        jax.clear_caches()
+    except Exception:
+        logger.warning("Failed to clear JAX caches during cleanup", exc_info=True)
+
+
 # Which keys to sync on per mode (last-computed arrays for timing accuracy)
 _SYNC_KEYS = {
     1: ("pwalds",),

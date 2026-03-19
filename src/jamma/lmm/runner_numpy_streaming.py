@@ -38,6 +38,8 @@ from jamma.lmm.compute_numpy import (
     _C_MODE4_AVAILABLE,
     _C_SPLIT_AVAILABLE,
     _compute_lmm_chunk_numpy,
+    _compute_lrt_split_numpy,
+    _compute_score_split_numpy,
     compute_mode4_split_c_ws,
     create_lmm_workspace_mode4,
 )
@@ -46,7 +48,6 @@ from jamma.lmm.likelihood_numpy import (
     batch_compute_uab_numpy,
     batch_compute_uab_varying_soa_numpy,
     compute_uab_invariant_soa,
-    reconstruct_uab_from_soa,
 )
 from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
@@ -61,6 +62,7 @@ from jamma.lmm.results import (
     log_lambda_boundary_warning,
 )
 from jamma.lmm.runner_numpy import (
+    _compose_mode4_from_split,
     _create_wald_workspace_for_ncvt,
     _select_wald_fn,
 )
@@ -487,16 +489,14 @@ def run_lmm_association_numpy_streaming(
                     if lmm_mode == 1:
                         cr = wald_cr
                     else:
-                        # Mode 4 fallback: Wald from workspace, Score+LRT from
-                        # reconstructed Uab
-                        Uab_batch = reconstruct_uab_from_soa(
-                            uab_invariant_soa, uab_var_soa, n_cvt=n_cvt
-                        )
-                        cr = _compose_mode4_results(
+                        # Mode 4 fallback: Wald from workspace, Score+LRT
+                        # from SoA split dispatch (no Uab reconstruction)
+                        cr = _compose_mode4_from_split(
                             wald_cr,
                             n_cvt,
                             eigenvalues_np,
-                            Uab_batch,
+                            uab_var_soa,
+                            uab_invariant_soa,
                             n_samples,
                             Hi_eval_null=Hi_eval_null,
                             l_min=l_min,
@@ -507,24 +507,31 @@ def run_lmm_association_numpy_streaming(
                             n_threads=omp_threads,
                         )
                 else:
-                    # Modes 2, 3: reconstruct Uab, C batch dispatch
-                    Uab_batch = reconstruct_uab_from_soa(
-                        uab_invariant_soa, uab_var_soa, n_cvt=n_cvt
-                    )
-                    cr = _compute_lmm_chunk_numpy(
-                        lmm_mode,
-                        n_cvt,
-                        eigenvalues_np,
-                        Uab_batch,
-                        n_samples,
-                        l_min=l_min,
-                        l_max=l_max,
-                        n_grid=n_grid,
-                        n_refine=n_refine,
-                        Hi_eval_null=Hi_eval_null,
-                        logl_H0=logl_H0,
-                        n_threads=omp_threads,
-                    )
+                    # Modes 2 (LRT), 3 (Score): SoA split dispatch
+                    if lmm_mode == 2:
+                        cr = _compute_lrt_split_numpy(
+                            n_cvt,
+                            eigenvalues_np,
+                            uab_var_soa,
+                            uab_invariant_soa,
+                            n_samples,
+                            l_min,
+                            l_max,
+                            n_grid,
+                            n_refine,
+                            logl_H0,
+                            omp_threads,
+                        )
+                    else:
+                        cr = _compute_score_split_numpy(
+                            n_cvt,
+                            eigenvalues_np,
+                            Hi_eval_null,
+                            uab_var_soa,
+                            uab_invariant_soa,
+                            n_samples,
+                            omp_threads,
+                        )
             else:
                 # No split: compute full Uab
                 Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)

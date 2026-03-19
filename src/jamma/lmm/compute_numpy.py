@@ -59,6 +59,8 @@ class AccelImport(NamedTuple):
     compute_mode4_chunk_split_c: object | None
     compute_score_batch_general_c: object | None
     compute_lrt_batch_general_c: object | None
+    compute_score_split_c: object | None
+    compute_lrt_split_c: object | None
 
 
 _ACCEL_UNAVAILABLE = AccelImport(
@@ -79,6 +81,8 @@ _ACCEL_UNAVAILABLE = AccelImport(
     compute_mode4_chunk_split_c=None,
     compute_score_batch_general_c=None,
     compute_lrt_batch_general_c=None,
+    compute_score_split_c=None,
+    compute_lrt_split_c=None,
 )
 
 
@@ -224,6 +228,21 @@ def _try_import_accel() -> AccelImport:
         )
         lrt_batch_general_c = None
 
+    # SoA-native Score/LRT split support — additive, ABI_VERSION unchanged
+    try:
+        from jamma.lmm._lmm_accel import (
+            compute_score_split_c as score_split_c,
+        )
+    except AttributeError:
+        score_split_c = None
+
+    try:
+        from jamma.lmm._lmm_accel import (
+            compute_lrt_split_c as lrt_split_c,
+        )
+    except AttributeError:
+        lrt_split_c = None
+
     return AccelImport(
         accel_available=True,
         split_available=True,
@@ -242,6 +261,8 @@ def _try_import_accel() -> AccelImport:
         compute_mode4_chunk_split_c=mode4_chunk_c,
         compute_score_batch_general_c=score_batch_general_c,
         compute_lrt_batch_general_c=lrt_batch_general_c,
+        compute_score_split_c=score_split_c,
+        compute_lrt_split_c=lrt_split_c,
     )
 
 
@@ -276,6 +297,8 @@ def _auto_recompile() -> bool:
     _compute_mode4_chunk_split_c,
     _compute_score_batch_general_c,
     _compute_lrt_batch_general_c,
+    _compute_score_split_c,
+    _compute_lrt_split_c,
 ) = _try_import_accel()
 
 if not _C_ACCEL_AVAILABLE:
@@ -299,6 +322,8 @@ if not _C_ACCEL_AVAILABLE:
             _compute_mode4_chunk_split_c,
             _compute_score_batch_general_c,
             _compute_lrt_batch_general_c,
+            _compute_score_split_c,
+            _compute_lrt_split_c,
         ) = _try_import_accel()
 
     if not _C_ACCEL_AVAILABLE:
@@ -314,6 +339,9 @@ if not _C_ACCEL_AVAILABLE:
         _C_HAS_OPENMP = False
         _C_GENERAL_AVAILABLE = False
         _C_MODE4_AVAILABLE = False
+
+_C_SCORE_SPLIT_AVAILABLE = _compute_score_split_c is not None
+_C_LRT_SPLIT_AVAILABLE = _compute_lrt_split_c is not None
 
 
 class WaldResult(TypedDict):
@@ -1025,6 +1053,122 @@ def _compute_score_numpy(
         n_cvt, Hi_eval_null, Uab_batch, n_samples
     )
     return {"betas": betas, "ses": ses, "p_scores": p_scores}
+
+
+def _compute_score_split_numpy(
+    n_cvt: int,
+    eigenvalues: np.ndarray,
+    Hi_eval_null: np.ndarray,
+    uab_varying_soa: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+    n_samples: int,
+    n_threads: int = 1,
+) -> dict[str, np.ndarray]:
+    """Compute Score test from SoA split data (no full Uab reconstruction).
+
+    Dispatches to C extension when available (n_cvt=1). Falls back to
+    reconstruct_uab_from_soa + _compute_score_numpy when C is unavailable
+    or n_cvt > 1.
+
+    Args:
+        n_cvt: Number of covariates.
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        Hi_eval_null: Pre-computed null-model Hi_eval (n_samples,).
+        uab_varying_soa: SNP-varying Uab (n_snps, 3, n_samples) SoA.
+        uab_invariant_soa: SNP-invariant Uab (3, n_samples) SoA.
+        n_samples: Number of samples.
+        n_threads: OpenMP thread count.
+
+    Returns:
+        Dict with keys: betas, ses, p_scores.
+    """
+    if _compute_score_split_c is not None and n_cvt == 1:
+        return _compute_score_split_c(
+            eigenvalues,
+            uab_varying_soa,
+            uab_invariant_soa,
+            Hi_eval_null,
+            n_samples,
+            n_threads,
+        )
+
+    # Fallback: reconstruct full Uab and use batch dispatch
+    from jamma.lmm.likelihood_numpy import reconstruct_uab_from_soa
+
+    Uab_batch = reconstruct_uab_from_soa(
+        uab_invariant_soa, uab_varying_soa, n_cvt=n_cvt
+    )
+    return _compute_score_numpy(
+        n_cvt, eigenvalues, Hi_eval_null, Uab_batch, n_samples, n_threads
+    )
+
+
+def _compute_lrt_split_numpy(
+    n_cvt: int,
+    eigenvalues: np.ndarray,
+    uab_varying_soa: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+    n_samples: int,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+    logl_H0: float,
+    n_threads: int = 1,
+) -> dict[str, np.ndarray]:
+    """Compute LRT from SoA split data (no full Uab reconstruction).
+
+    Dispatches to C extension when available (n_cvt=1). Falls back to
+    reconstruct_uab_from_soa + _compute_lrt_numpy when C is unavailable
+    or n_cvt > 1.
+
+    Args:
+        n_cvt: Number of covariates.
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        uab_varying_soa: SNP-varying Uab (n_snps, 3, n_samples) SoA.
+        uab_invariant_soa: SNP-invariant Uab (3, n_samples) SoA.
+        n_samples: Number of samples.
+        l_min: Minimum lambda for optimization.
+        l_max: Maximum lambda for optimization.
+        n_grid: Grid search resolution.
+        n_refine: Golden section iterations.
+        logl_H0: Null model MLE log-likelihood.
+        n_threads: OpenMP thread count.
+
+    Returns:
+        Dict with keys: lambdas_mle, p_lrts.
+    """
+    if _compute_lrt_split_c is not None and n_cvt == 1:
+        return _compute_lrt_split_c(
+            eigenvalues,
+            uab_varying_soa,
+            uab_invariant_soa,
+            n_samples,
+            l_min,
+            l_max,
+            n_grid,
+            n_refine,
+            logl_H0,
+            n_threads,
+        )
+
+    # Fallback: reconstruct full Uab and use batch dispatch
+    from jamma.lmm.likelihood_numpy import reconstruct_uab_from_soa
+
+    Uab_batch = reconstruct_uab_from_soa(
+        uab_invariant_soa, uab_varying_soa, n_cvt=n_cvt
+    )
+    return _compute_lrt_numpy(
+        n_cvt,
+        eigenvalues,
+        Uab_batch,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        logl_H0,
+        n_threads,
+    )
 
 
 def _compute_lmm_chunk_numpy(

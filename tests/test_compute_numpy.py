@@ -19,13 +19,12 @@ from jamma.lmm.compute_numpy import (
     _compute_lrt_numpy,
     _compute_score_numpy,
 )
+from jamma.lmm.likelihood import compute_null_model_mle
 from jamma.lmm.likelihood_numpy import (
     batch_compute_uab_numpy,
     batch_compute_uab_varying_soa_numpy,
     compute_uab_invariant_soa,
 )
-from jamma.lmm.prepare_common import _compute_null_model_common
-from tests.conftest import load_phenotypes_from_fam
 
 # ---------------------------------------------------------------------------
 # Fixture paths
@@ -41,12 +40,12 @@ MOUSE_HS1940_KINSHIP = MOUSE_HS1940_DIR / "mouse_hs1940_kinship.cXX.txt"
 def mouse_data():
     """Load mouse_hs1940 fixture and prepare eigendecomposition + Uab arrays.
 
-    Returns dict with eigenvalues, eigenvectors, UtW, Uty, genotypes,
-    col_means, uab_invariant_soa, and a small Uab batch for parity tests.
+    Uses a synthetic phenotype with known signal to ensure a well-conditioned
+    MLE null model (finite logl_H0). The mouse_hs1940 column-1 phenotype
+    produces a degenerate MLE landscape (NaN logl_H0 at boundary lambda).
     """
     plink_data = load_plink_binary(str(MOUSE_HS1940_DATA))
     genotypes = plink_data.genotypes
-    phenotypes = load_phenotypes_from_fam(Path(str(MOUSE_HS1940_DATA) + ".fam"))
     K = read_kinship_matrix(str(MOUSE_HS1940_KINSHIP))
 
     n_samples = genotypes.shape[0]
@@ -54,6 +53,13 @@ def mouse_data():
 
     # Eigendecomposition
     eigenvalues, U = np.linalg.eigh(K)
+
+    # Generate synthetic phenotype with genetic signal (ensures finite MLE null)
+    rng = np.random.default_rng(42)
+    # y = K @ beta + noise, where beta is random — ensures non-degenerate null
+    phenotypes = K @ rng.standard_normal(n_samples) * 0.5 + rng.standard_normal(
+        n_samples
+    )
 
     # Build intercept-only covariate matrix
     W = np.ones((n_samples, 1))
@@ -80,15 +86,9 @@ def mouse_data():
     uab_var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG)
     uab_inv_soa = compute_uab_invariant_soa(UtW, Uty, n_cvt=n_cvt)
 
-    # Null model for Score/LRT (lmm_mode=4 computes all needed fields)
-    logl_H0, lambda_null_mle, Hi_eval_null = _compute_null_model_common(
-        lmm_mode=4,
-        eigenvalues_np=eigenvalues,
-        UtW=UtW,
-        Uty=Uty,
-        n_cvt=n_cvt,
-        show_progress=False,
-    )
+    # Null model MLE for Score/LRT
+    lambda_null_mle, logl_H0 = compute_null_model_mle(eigenvalues, UtW, Uty, n_cvt)
+    Hi_eval_null = 1.0 / (lambda_null_mle * eigenvalues + 1.0)
 
     return {
         "eigenvalues": eigenvalues,

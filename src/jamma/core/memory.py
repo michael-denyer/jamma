@@ -226,8 +226,10 @@ def estimate_workflow_memory(
     # kinship accumulation in _compute_kinship_inmemory
     peak_kinship = genotypes_gb * 2 + kinship_gb
 
-    # Phase 2 (eigendecomp): use _dsyevd_peak_gb which accounts for
-    # K + U + DSYEVD workspace.
+    # Phase 2 (eigendecomp): conservative non-inplace estimate (K + U +
+    # workspace).  Inplace DSYEVD saves one N×N matrix but requires vendor
+    # detection at runtime — check_memory_before_run() uses the tighter
+    # _dsyevd_inplace_peak_gb() when available.
     peak_eigendecomp = _dsyevd_peak_gb(n_samples)
 
     # Phase 3 (LMM): eigenvectors + genotypes + working
@@ -450,8 +452,10 @@ def estimate_streaming_memory(
 
     # Peak memory calculation by workflow phase
     peak_kinship = kinship_gb + chunk_gb
-    # Eigendecomp: use _dsyevd_peak_gb which accounts for
-    # K + U + DSYEVD workspace.
+    # Eigendecomp: conservative non-inplace estimate (K + U + workspace).
+    # Inplace DSYEVD saves one N×N matrix but requires vendor detection at
+    # runtime — check_memory_before_run() uses the tighter
+    # _dsyevd_inplace_peak_gb() when available.
     peak_eigendecomp = _dsyevd_peak_gb(n_samples)
     peak_lmm = (
         eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb + uab_iab_gb

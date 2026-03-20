@@ -47,6 +47,7 @@ logos/old/
 # Planning and claude config (dev-only)
 .planning/
 .claude/
+.mcp.json
 CLAUDE.md
 docs/plans
 

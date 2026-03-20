@@ -301,9 +301,11 @@ class CustomBuildHook(BuildHookInterface):
                             f"Intel OpenMP found: {lib}",
                             file=sys.stderr,
                         )
+                        # Link by full path — numpy bundles versioned names
+                        # like libiomp5-2f035e84.so with no unversioned
+                        # symlink, so -liomp5 fails at link time.
                         return [
-                            f"-L{d}",
-                            "-liomp5",
+                            str(lib),
                             f"-Wl,-rpath,{d}",
                             "-fopenmp",
                         ]

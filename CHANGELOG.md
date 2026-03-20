@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.1] - 2026-03-20
+
+### Fixed
+
+- Link Intel OpenMP by full path in hatch_build.py — numpy bundles versioned
+  names like `libiomp5-2f035e84.so` with no unversioned symlink, so `-liomp5`
+  fails at link time
+
 ## [4.2.0] - 2026-03-20
 
 ### Changed

@@ -211,9 +211,9 @@ class TestLazyEigen:
         """N=500, M=50 target parity (self-consistent D&C U).
 
         At N=500 the indirect path (build U then U.T @ target) accumulates
-        more FP error than the direct rotate path. Max relative diff ~1e-10
-        from the extra N x N matmul in the reference. rtol=1e-9 is still
-        very tight and confirms correctness.
+        more FP error than the direct rotate path. Max relative diff ~4e-9
+        on CI (Linux OpenBLAS) from the extra N x N matmul in the reference.
+        rtol=5e-9 is still very tight and confirms correctness.
         """
         from jamma.lmm.eigen import eigendecompose_kinship_lazy
 
@@ -230,7 +230,7 @@ class TestLazyEigen:
         result_lazy = lazy.rotate(target)
         result_std = U.T @ target
 
-        np.testing.assert_allclose(result_lazy, result_std, rtol=1e-9)
+        np.testing.assert_allclose(result_lazy, result_std, rtol=5e-9)
 
 
 @pytest.mark.tier0

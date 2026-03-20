@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-03-20
+
+### Changed
+
+- Fused Uab compute — reduces peak memory for NumPy batch and streaming runners
+  by computing Uab in a single pass instead of separate U.T @ W and U.T @ y steps
+- Complete analytical dev2 for all n_cvt values (previously only n_cvt=1)
+- Deduplicate cleanup_jax_caches and fix per-chromosome cache clearing in LOCO
+- Extract shared PASS 1 + setup into _loco_chr_common for LOCO runners
+- Extract try/finally bodies to _impl() helpers in JAX runners
+- Remove private import aliasing in loco.py
+
+### Fixed
+
+- Decouple DSYEVR/DSYEVD attribute checks in pre-flight memory estimate
+- Relax eigh inplace eigenvalue tolerance from 1e-12 to 5e-12 for CI stability
+- Relax pve_se assertion for synthetic data with no signal
+- Fix flaky memory test and add mode-4 threading parity test
+
+### Removed
+
+- Lazy eigendecomposition (phases 89, 89.1) — dstedc workspace (3N²) exceeds
+  DSYEVR memory at scale, making the lazy path unviable for 100k+ samples
+
 ## [4.1.0] - 2026-03-19
 
 ### Changed

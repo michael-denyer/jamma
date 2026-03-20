@@ -128,12 +128,14 @@ class LazyEigen:
         Also frees V if still present, since V is unusable without
         Householder state.
         """
+        n_matrices = 1 + (1 if self._V is not None else 0)
         self._K_householder = None
         self._tau = None
         self._V = None
+        reclaimed_gb = n_matrices * self.n * self.n * 8 / 1e9
         logger.debug(
             "LazyEigen: freed Householder state (reclaimed {:.1f} GB)",
-            self.n * self.n * 8 / 1e9,
+            reclaimed_gb,
         )
 
     @property

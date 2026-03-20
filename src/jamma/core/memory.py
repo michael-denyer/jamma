@@ -97,15 +97,12 @@ def _dsyevr_peak_gb(n: int) -> float:
 
 
 def _lazy_eigen_post_peak_gb(n: int) -> float:
-    """Post-eigendecomp memory with lazy rotation (no U materialized).
+    """LazyEigen persistent state during rotation phase.
 
-    During eigendecomp: same peak as standard D&C pipeline (_dsyevd_peak_gb).
-    After eigendecomp: K_householder (N^2) + V (N^2) + tau (N) + eigenvalues (N).
-    After V freed: K_householder (N^2) + tau (N) + eigenvalues (N).
-    After all freed: eigenvalues (N) only.
-
-    Returns the persistent state size (K_householder + V + tau + eigenvalues)
-    that exists between eigendecomp and the end of all rotations.
+    Returns the size of K_householder (N^2) + V (N^2) + tau (N-1) +
+    eigenvalues (N) that is live while rotate() calls are in progress.
+    V is freed after the last rotation; K_householder after that.
+    Does NOT include per-call temporaries (see estimate_lmm_lazy_memory).
     """
     bytes_per_double = 8
     # K_householder (N^2) + V (N^2) + tau (N-1, rounded to N) + eigenvalues (N)
@@ -144,8 +141,10 @@ def estimate_lmm_lazy_memory(
     eigen_peak = _dsyevd_peak_gb(n_samples)
 
     # Phase 2: Rotation — K_householder (N^2) + V (N^2) + per-chunk UtG (N * chunk)
+    #   + rotate_via_householder temp buffer (N * chunk) for in-place dormtr copy
     rotation_phase = _lazy_eigen_post_peak_gb(n_samples)
-    rotation_phase += n_samples * chunk_size * bytes_per_double / 1e9
+    utg_chunk_gb = n_samples * chunk_size * bytes_per_double / 1e9
+    rotation_phase += 2 * utg_chunk_gb  # output + temp copy inside C extension
 
     # Phase 3: LMM association — no persistent U, just eigenvalues + rotated + batch
     eigenvalues_gb = n_samples * bytes_per_double / 1e9

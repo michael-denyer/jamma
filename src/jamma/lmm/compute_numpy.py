@@ -32,7 +32,7 @@ from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_split_ncvt1_numpy,
 )
 
-_EXPECTED_ABI_VERSION = 7  # Must match ABI_VERSION in _lmm_accel.c
+_EXPECTED_ABI_VERSION = 8  # Must match ABI_VERSION in _lmm_accel.c
 
 
 class AccelImport(NamedTuple):
@@ -61,6 +61,10 @@ class AccelImport(NamedTuple):
     compute_lrt_batch_general_c: object | None
     compute_score_split_c: object | None
     compute_lrt_split_c: object | None
+    create_workspace_fused_c: object | None
+    compute_lmm_chunk_fused_c: object | None
+    create_workspace_mode4_fused_c: object | None
+    compute_mode4_chunk_fused_c: object | None
 
 
 _ACCEL_UNAVAILABLE = AccelImport(
@@ -83,6 +87,10 @@ _ACCEL_UNAVAILABLE = AccelImport(
     compute_lrt_batch_general_c=None,
     compute_score_split_c=None,
     compute_lrt_split_c=None,
+    create_workspace_fused_c=None,
+    compute_lmm_chunk_fused_c=None,
+    create_workspace_mode4_fused_c=None,
+    compute_mode4_chunk_fused_c=None,
 )
 
 
@@ -111,14 +119,6 @@ def _try_import_accel() -> AccelImport:
 
         logger.debug(f"C extension import failed: {e}")
         return _ACCEL_UNAVAILABLE
-    except AttributeError as e:
-        from loguru import logger
-
-        logger.warning(
-            f"C extension loaded but missing expected attribute: {e}. "
-            "Stale .so may need recompilation."
-        )
-        return _ACCEL_UNAVAILABLE
 
     if abi != _EXPECTED_ABI_VERSION:
         from loguru import logger
@@ -140,7 +140,7 @@ def _try_import_accel() -> AccelImport:
         )
 
         general_available = True
-    except AttributeError:
+    except ImportError:
         from loguru import logger
 
         logger.warning(
@@ -160,7 +160,7 @@ def _try_import_accel() -> AccelImport:
         from jamma.lmm._lmm_accel import (
             compute_score_batch_c as score_batch_c,
         )
-    except AttributeError:
+    except ImportError:
         from loguru import logger
 
         logger.warning(
@@ -172,7 +172,7 @@ def _try_import_accel() -> AccelImport:
         from jamma.lmm._lmm_accel import (
             compute_lrt_batch_c as lrt_batch_c,
         )
-    except AttributeError:
+    except ImportError:
         from loguru import logger
 
         logger.warning(
@@ -190,7 +190,7 @@ def _try_import_accel() -> AccelImport:
         )
 
         mode4_available = True
-    except AttributeError:
+    except ImportError:
         from loguru import logger
 
         logger.warning(
@@ -206,7 +206,7 @@ def _try_import_accel() -> AccelImport:
         from jamma.lmm._lmm_accel import (
             compute_score_batch_general_c as score_batch_general_c,
         )
-    except AttributeError:
+    except ImportError:
         from loguru import logger
 
         logger.warning(
@@ -219,7 +219,7 @@ def _try_import_accel() -> AccelImport:
         from jamma.lmm._lmm_accel import (
             compute_lrt_batch_general_c as lrt_batch_general_c,
         )
-    except AttributeError:
+    except ImportError:
         from loguru import logger
 
         logger.warning(
@@ -233,7 +233,7 @@ def _try_import_accel() -> AccelImport:
         from jamma.lmm._lmm_accel import (
             compute_score_split_c as score_split_c,
         )
-    except AttributeError:
+    except ImportError:
         from loguru import logger
 
         logger.warning(
@@ -246,7 +246,7 @@ def _try_import_accel() -> AccelImport:
         from jamma.lmm._lmm_accel import (
             compute_lrt_split_c as lrt_split_c,
         )
-    except AttributeError:
+    except ImportError:
         from loguru import logger
 
         logger.warning(
@@ -254,6 +254,39 @@ def _try_import_accel() -> AccelImport:
             "LRT split will fall back to reconstruct_uab_from_soa."
         )
         lrt_split_c = None
+
+    # Fused Uab workspace support — expected in ABI v8+
+    try:
+        from jamma.lmm._lmm_accel import (
+            compute_lmm_chunk_fused_c as ws_fused_chunk,
+        )
+        from jamma.lmm._lmm_accel import (
+            compute_mode4_chunk_fused_c as ws_fused_mode4,
+        )
+        from jamma.lmm._lmm_accel import (
+            create_workspace_fused_c as ws_fused_create,
+        )
+        from jamma.lmm._lmm_accel import (
+            create_workspace_mode4_fused_c as ws_fused_mode4_create,
+        )
+    except ImportError:
+        from loguru import logger
+
+        if abi >= 8:
+            logger.error(
+                f"C extension ABI v{abi} validated but fused Uab symbols missing. "
+                "This indicates build corruption — recompile: "
+                "python -m jamma.lmm._compile_accel"
+            )
+        else:
+            logger.debug(
+                f"C extension ABI v{abi} < 8: fused Uab not available, "
+                "falling back to SoA path."
+            )
+        ws_fused_create = None
+        ws_fused_chunk = None
+        ws_fused_mode4_create = None
+        ws_fused_mode4 = None
 
     return AccelImport(
         accel_available=True,
@@ -275,6 +308,10 @@ def _try_import_accel() -> AccelImport:
         compute_lrt_batch_general_c=lrt_batch_general_c,
         compute_score_split_c=score_split_c,
         compute_lrt_split_c=lrt_split_c,
+        create_workspace_fused_c=ws_fused_create,
+        compute_lmm_chunk_fused_c=ws_fused_chunk,
+        create_workspace_mode4_fused_c=ws_fused_mode4_create,
+        compute_mode4_chunk_fused_c=ws_fused_mode4,
     )
 
 
@@ -311,6 +348,10 @@ def _auto_recompile() -> bool:
     _compute_lrt_batch_general_c,
     _compute_score_split_c,
     _compute_lrt_split_c,
+    _create_workspace_fused_c,
+    _compute_lmm_chunk_fused_c,
+    _create_workspace_mode4_fused_c,
+    _compute_mode4_chunk_fused_c,
 ) = _try_import_accel()
 
 if not _C_ACCEL_AVAILABLE:
@@ -336,6 +377,10 @@ if not _C_ACCEL_AVAILABLE:
             _compute_lrt_batch_general_c,
             _compute_score_split_c,
             _compute_lrt_split_c,
+            _create_workspace_fused_c,
+            _compute_lmm_chunk_fused_c,
+            _create_workspace_mode4_fused_c,
+            _compute_mode4_chunk_fused_c,
         ) = _try_import_accel()
 
     if not _C_ACCEL_AVAILABLE:
@@ -351,6 +396,9 @@ if not _C_ACCEL_AVAILABLE:
         _C_HAS_OPENMP = False
         _C_GENERAL_AVAILABLE = False
         _C_MODE4_AVAILABLE = False
+
+_C_FUSED_AVAILABLE = _create_workspace_fused_c is not None
+_C_MODE4_FUSED_AVAILABLE = _create_workspace_mode4_fused_c is not None
 
 
 class WaldResult(TypedDict):
@@ -595,6 +643,156 @@ def compute_mode4_split_c_ws(
             "with ABI version 6+. Recompile: python -m jamma.lmm._compile_accel"
         )
     return _compute_mode4_chunk_split_c(workspace, uab_varying_soa, n_threads)
+
+
+def create_lmm_workspace_fused(
+    eigenvalues: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+    w: np.ndarray,
+    Uty: np.ndarray,
+    n_samples: int,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+    n_threads: int,
+) -> object:
+    """Create fused workspace that holds w/Uty for on-the-fly Uab computation.
+
+    Args:
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        uab_invariant_soa: Invariant Uab (3, n_samples) -- SoA [ww, wy, yy].
+        w: UtW[:,0] (n_samples,).
+        Uty: Rotated phenotype (n_samples,).
+        n_samples: Number of samples.
+        l_min: Minimum lambda.
+        l_max: Maximum lambda.
+        n_grid: Number of coarse grid points.
+        n_refine: Golden section iterations.
+        n_threads: OpenMP thread count.
+
+    Returns:
+        PyCapsule wrapping lmm_workspace_t (fused).
+    """
+    if _create_workspace_fused_c is None:
+        raise RuntimeError(
+            "Fused C workspace requires the _lmm_accel C extension "
+            "with ABI version 8+. Recompile: python -m jamma.lmm._compile_accel"
+        )
+    return _create_workspace_fused_c(
+        eigenvalues,
+        uab_invariant_soa,
+        w,
+        Uty,
+        n_samples,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        n_threads,
+    )
+
+
+def compute_wald_fused_c_ws(
+    workspace: object,
+    utg_t: np.ndarray,
+    n_threads: int,
+) -> WaldResult:
+    """Compute REML Wald from UtG_T directly -- no uab_varying_soa needed.
+
+    Args:
+        workspace: PyCapsule from create_lmm_workspace_fused.
+        utg_t: Rotated genotypes transposed (n_snps, n_samples).
+        n_threads: OpenMP thread count.
+
+    Returns:
+        WaldResult dict with lambdas, logls, betas, ses, pwalds.
+    """
+    if _compute_lmm_chunk_fused_c is None:
+        raise RuntimeError(
+            "Fused C compute requires the _lmm_accel C extension "
+            "with ABI version 8+. Recompile: python -m jamma.lmm._compile_accel"
+        )
+    return _compute_lmm_chunk_fused_c(workspace, utg_t, n_threads)
+
+
+def create_lmm_workspace_mode4_fused(
+    eigenvalues: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+    w: np.ndarray,
+    Uty: np.ndarray,
+    n_samples: int,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+    n_threads: int,
+    *,
+    hi_eval_null: np.ndarray,
+    logl_H0: float,
+) -> object:
+    """Create fused mode-4 workspace with w/Uty + null model for Score/LRT.
+
+    Args:
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        uab_invariant_soa: Invariant Uab (3, n_samples) -- SoA [ww, wy, yy].
+        w: UtW[:,0] (n_samples,).
+        Uty: Rotated phenotype (n_samples,).
+        n_samples: Number of samples.
+        l_min: Minimum lambda.
+        l_max: Maximum lambda.
+        n_grid: Number of coarse grid points.
+        n_refine: Golden section iterations.
+        n_threads: OpenMP thread count.
+        hi_eval_null: Null-model Hi_eval (n_samples,).
+        logl_H0: Null MLE log-likelihood.
+
+    Returns:
+        PyCapsule wrapping lmm_workspace_t (mode=4, fused).
+    """
+    if _create_workspace_mode4_fused_c is None:
+        raise RuntimeError(
+            "Fused mode-4 C workspace requires the _lmm_accel C extension "
+            "with ABI version 8+. Recompile: python -m jamma.lmm._compile_accel"
+        )
+    return _create_workspace_mode4_fused_c(
+        eigenvalues,
+        uab_invariant_soa,
+        w,
+        Uty,
+        n_samples,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        n_threads,
+        hi_eval_null,
+        logl_H0,
+    )
+
+
+def compute_mode4_fused_c_ws(
+    workspace: object,
+    utg_t: np.ndarray,
+    n_threads: int,
+) -> dict:
+    """Compute fused mode-4 from UtG_T directly -- no uab_varying_soa needed.
+
+    Args:
+        workspace: PyCapsule from create_lmm_workspace_mode4_fused.
+        utg_t: Rotated genotypes transposed (n_snps, n_samples).
+        n_threads: OpenMP thread count.
+
+    Returns:
+        Dict with lambdas, logls, betas, ses, pwalds, p_scores,
+        lambdas_mle, p_lrts.
+    """
+    if _compute_mode4_chunk_fused_c is None:
+        raise RuntimeError(
+            "Fused mode-4 C compute requires the _lmm_accel C extension "
+            "with ABI version 8+. Recompile: python -m jamma.lmm._compile_accel"
+        )
+    return _compute_mode4_chunk_fused_c(workspace, utg_t, n_threads)
 
 
 def create_lmm_workspace_general(

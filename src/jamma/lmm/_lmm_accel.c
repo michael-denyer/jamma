@@ -73,7 +73,7 @@
 
 /* ABI version: bump when function signatures or array layout expectations change.
  * The Python side checks this at import time to detect stale .so files. */
-#define ABI_VERSION 7  /* v7: General n_cvt Score/LRT batch kernels (+score/lrt split, additive) */
+#define ABI_VERSION 8  /* v8: Fused Uab -- workspace holds w/Uty, chunk accepts UtG_T */
 
 /* Betainc continued fraction constants — matches special.py */
 #define CF_TINY     1.0e-30
@@ -1122,6 +1122,11 @@ typedef struct {
     double null_s_wy;
     double null_s_yy;
     double null_inv_ww;         /* 1/null_s_ww */
+    /* Fused Uab fields -- w and Uty stored for on-the-fly wx/xx/xy computation */
+    const double *w;          /* UtW[:,0] for n_cvt=1 -- (n_samples,) borrowed */
+    const double *Uty;        /* rotated phenotype -- (n_samples,) borrowed */
+    PyObject *w_ref;          /* keeps w array alive */
+    PyObject *Uty_ref;        /* keeps Uty array alive */
 } lmm_workspace_t;
 
 /* PyCapsule destructor: free owned allocations, release Python array refs. */
@@ -1137,6 +1142,8 @@ static void lmm_workspace_destructor(PyObject *cap)
     free(ws->hi_eval_null);
     Py_XDECREF(ws->eigenvalues_ref);
     Py_XDECREF(ws->uab_inv_ref);
+    Py_XDECREF(ws->w_ref);
+    Py_XDECREF(ws->Uty_ref);
     free(ws);
 }
 
@@ -5239,6 +5246,998 @@ err_input:
 }
 
 /* =========================================================================
+ * FUSED Uab — workspace holds w/Uty, chunk accepts UtG_T directly
+ *
+ * Eliminates the (n_snps, 3, n_samples) uab_varying_soa intermediate
+ * allocation by computing wx/xx/xy products on-the-fly from UtG_T columns
+ * in thread-local scratch buffers. Same FP operations in the same order
+ * as the SoA path — results are bitwise-identical.
+ * ========================================================================= */
+
+/* -------------------------------------------------------------------------
+ * create_workspace_fused_c
+ *
+ * Identical to create_workspace_split_c but with 2 additional parameters:
+ *   w   (ndarray, shape (n_samples,)) — UtW[:,0]
+ *   Uty (ndarray, shape (n_samples,)) — rotated phenotype
+ *
+ * Python signature:
+ *   create_workspace_fused_c(
+ *       eigenvalues,      # (n_samples,) float64
+ *       uab_invariant,    # (3, n_samples) float64 — SoA [ww, wy, yy]
+ *       w,                # (n_samples,) float64 — UtW[:,0]
+ *       Uty,              # (n_samples,) float64 — rotated phenotype
+ *       n_samples,        # int
+ *       l_min,            # float
+ *       l_max,            # float
+ *       n_grid,           # int
+ *       n_refine,         # int
+ *       n_threads,        # int
+ *   ) -> PyCapsule wrapping lmm_workspace_t
+ * ------------------------------------------------------------------------- */
+static PyObject *create_workspace_fused_c_py(
+    PyObject *self, PyObject *args, PyObject *kwargs)
+{
+    static const char *kwlist[] = {
+        "eigenvalues", "uab_invariant", "w", "Uty",
+        "n_samples", "l_min", "l_max", "n_grid", "n_refine", "n_threads",
+        NULL
+    };
+
+    PyObject *eigenvalues_obj, *uab_inv_obj, *w_obj, *Uty_obj;
+    int n_samples, n_grid, n_refine, n_threads;
+    double l_min, l_max;
+
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwargs, "OOOOiddiii", (char **)kwlist,
+            &eigenvalues_obj, &uab_inv_obj, &w_obj, &Uty_obj,
+            &n_samples, &l_min, &l_max, &n_grid, &n_refine, &n_threads)) {
+        return NULL;
+    }
+
+    if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
+        return NULL;
+
+    PyArrayObject *eigenvalues_arr = NULL, *uab_inv_arr = NULL;
+    PyArrayObject *w_arr = NULL, *Uty_arr = NULL;
+    lmm_workspace_t *ws = NULL;
+    PyObject *capsule = NULL;
+
+    eigenvalues_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        eigenvalues_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!eigenvalues_arr) return NULL;
+
+    uab_inv_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        uab_inv_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!uab_inv_arr) goto err_input;
+
+    w_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        w_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!w_arr) goto err_input;
+
+    Uty_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        Uty_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!Uty_arr) goto err_input;
+
+    /* Validate shapes */
+    if (PyArray_NDIM(eigenvalues_arr) != 1 ||
+        PyArray_DIM(eigenvalues_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "eigenvalues must be shape (n_samples,)");
+        goto err_input;
+    }
+    if (PyArray_NDIM(uab_inv_arr) != 2 ||
+        PyArray_DIM(uab_inv_arr, 0) != 3 ||
+        PyArray_DIM(uab_inv_arr, 1) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "uab_invariant must be shape (3, n_samples)");
+        goto err_input;
+    }
+    if (PyArray_NDIM(w_arr) != 1 ||
+        PyArray_DIM(w_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "w must be shape (n_samples,)");
+        goto err_input;
+    }
+    if (PyArray_NDIM(Uty_arr) != 1 ||
+        PyArray_DIM(Uty_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "Uty must be shape (n_samples,)");
+        goto err_input;
+    }
+
+    if (validate_eigenvalues(
+            (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
+        goto err_input;
+
+    ws = (lmm_workspace_t *)calloc(1, sizeof(lmm_workspace_t));
+    if (!ws) { PyErr_NoMemory(); goto err_input; }
+
+    /* Fill scalar fields (same as create_workspace_split_c) */
+    ws->n_samples = n_samples;
+    ws->n_grid    = n_grid;
+    ws->n_refine  = n_refine;
+    ws->l_min     = l_min;
+    ws->l_max     = l_max;
+    ws->df        = n_samples - 2;
+
+    ws->beta_a   = (double)ws->df / 2.0;
+    ws->beta_b   = 0.5;
+    ws->lbeta_ab = lgamma(ws->beta_a) + lgamma(ws->beta_b)
+                   - lgamma(ws->beta_a + ws->beta_b);
+
+    ws->log_l_min   = log(l_min);
+    double log_l_max = log(l_max);
+    ws->step        = (log_l_max - ws->log_l_min) / (double)(n_grid - 1);
+    ws->reml_const  = 0.5 * ws->df * (log((double)ws->df)
+                       - log(2.0 * M_PI) - 1.0);
+
+    /* Borrow pointers — arrays kept alive via Py_INCREF */
+    Py_INCREF(eigenvalues_arr);
+    Py_INCREF(uab_inv_arr);
+    ws->eigenvalues_ref = (PyObject *)eigenvalues_arr;
+    ws->uab_inv_ref     = (PyObject *)uab_inv_arr;
+
+    ws->eigenvalues = (const double *)PyArray_DATA(eigenvalues_arr);
+    ws->inv_ww = (const double *)PyArray_DATA(uab_inv_arr);
+    ws->inv_wy = ws->inv_ww + (size_t)n_samples;
+    ws->inv_yy = ws->inv_ww + (size_t)2 * n_samples;
+
+    /* Store w and Uty for fused on-the-fly Uab computation */
+    Py_INCREF(w_arr);
+    Py_INCREF(Uty_arr);
+    ws->w = (const double *)PyArray_DATA(w_arr);
+    ws->Uty = (const double *)PyArray_DATA(Uty_arr);
+    ws->w_ref = (PyObject *)w_arr;
+    ws->Uty_ref = (PyObject *)Uty_arr;
+
+    /* Compute invariant Iab scalar: sum(inv_ww) */
+    {
+        double s_ww = 0.0;
+        for (int i = 0; i < n_samples; i++) s_ww += ws->inv_ww[i];
+        ws->iab_s_ww   = s_ww;
+        ws->iab_inv_ww = (s_ww != 0.0) ? 1.0 / s_ww : 0.0;
+        ws->iab_log_ww = (s_ww > 0.0)  ? log(s_ww)  : 0.0;
+    }
+
+    /* Allocate grid arrays */
+    ws->lambda_grid   = (double *)malloc((size_t)n_grid * sizeof(double));
+    ws->hi_eval_grid  = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
+    ws->logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
+    ws->grid_inv      = (grid_invariant_t *)malloc(
+        (size_t)n_grid * sizeof(grid_invariant_t));
+
+    if (!ws->lambda_grid || !ws->hi_eval_grid ||
+        !ws->logdet_h_grid || !ws->grid_inv) {
+        PyErr_NoMemory();
+        goto err_ws;
+    }
+
+    /* Build lambda grid + invariant dot products */
+    for (int g = 0; g < n_grid; g++) {
+        ws->lambda_grid[g] = exp(ws->log_l_min + g * ws->step);
+    }
+    for (int g = 0; g < n_grid; g++) {
+        double lam    = ws->lambda_grid[g];
+        double *hi_row = ws->hi_eval_grid + (size_t)g * n_samples;
+        double logdet = 0.0;
+        double sw = 0.0, swy = 0.0, sy = 0.0;
+        for (int i = 0; i < n_samples; i++) {
+            double v = lam * ws->eigenvalues[i] + 1.0;
+            double h = 1.0 / v;
+            hi_row[i] = h;
+            logdet += log(v);
+            sw  += h * ws->inv_ww[i];
+            swy += h * ws->inv_wy[i];
+            sy  += h * ws->inv_yy[i];
+        }
+        ws->logdet_h_grid[g] = logdet;
+
+        ws->grid_inv[g].s_ww    = sw;
+        ws->grid_inv[g].s_wy    = swy;
+        ws->grid_inv[g].s_yy    = sy;
+        ws->grid_inv[g].log_s_ww = (sw > 0.0) ? log(sw) : 0.0;
+        ws->grid_inv[g].inv_s_ww = (sw != 0.0) ? 1.0 / sw : 0.0;
+        ws->grid_inv[g].pab1_5   = sy - swy * swy * ws->grid_inv[g].inv_s_ww;
+    }
+
+    /* Wrap in PyCapsule */
+    capsule = PyCapsule_New(ws, "lmm_workspace", lmm_workspace_destructor);
+    if (!capsule) goto err_ws;
+
+    /* Release local refs — capsule now owns ws->*_ref via destructor */
+    Py_DECREF(eigenvalues_arr);
+    Py_DECREF(uab_inv_arr);
+    Py_DECREF(w_arr);
+    Py_DECREF(Uty_arr);
+    return capsule;
+
+err_ws:
+    if (ws) {
+        Py_XDECREF(ws->eigenvalues_ref);
+        Py_XDECREF(ws->uab_inv_ref);
+        Py_XDECREF(ws->w_ref);
+        Py_XDECREF(ws->Uty_ref);
+        free(ws->lambda_grid);
+        free(ws->hi_eval_grid);
+        free(ws->logdet_h_grid);
+        free(ws->grid_inv);
+        free(ws);
+    }
+err_input:
+    Py_XDECREF(eigenvalues_arr);
+    Py_XDECREF(uab_inv_arr);
+    Py_XDECREF(w_arr);
+    Py_XDECREF(Uty_arr);
+    return NULL;
+}
+
+/* -------------------------------------------------------------------------
+ * compute_lmm_chunk_fused_c
+ *
+ * Fused per-chunk Wald compute: accepts UtG_T (n_snps, n_samples) and
+ * computes wx/xx/xy on-the-fly from w/Uty stored in workspace.
+ * Same FP operations as compute_lmm_chunk_split_c — bitwise-identical.
+ *
+ * Python signature:
+ *   compute_lmm_chunk_fused_c(
+ *       workspace,   # PyCapsule from create_workspace_fused_c
+ *       utg_t,       # (n_snps, n_samples) float64 — UtG.T
+ *       n_threads,   # int
+ *   ) -> dict {lambdas, logls, betas, ses, pwalds}  each (n_snps,) float64
+ * ------------------------------------------------------------------------- */
+static PyObject *compute_lmm_chunk_fused_c_py(
+    PyObject *self, PyObject *args, PyObject *kwargs)
+{
+    static const char *kwlist[] = {"workspace", "utg_t", "n_threads", NULL};
+
+    PyObject *capsule_obj;
+    PyObject *utg_t_obj;
+    int n_threads;
+
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwargs, "OOi", (char **)kwlist,
+            &capsule_obj, &utg_t_obj, &n_threads)) {
+        return NULL;
+    }
+
+    lmm_workspace_t *ws = (lmm_workspace_t *)PyCapsule_GetPointer(
+        capsule_obj, "lmm_workspace");
+    if (!ws) return NULL;
+
+    /* Validate workspace has w/Uty (fused workspace) */
+    if (!ws->w || !ws->Uty) {
+        PyErr_SetString(PyExc_ValueError,
+            "compute_lmm_chunk_fused_c requires a fused workspace "
+            "(w/Uty pointers are NULL). Use create_workspace_fused_c.");
+        return NULL;
+    }
+
+    PyArrayObject *utg_t_arr = NULL;
+    output_arrays_t out = {0};
+    PyObject *result = NULL;
+
+    utg_t_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        utg_t_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!utg_t_arr) return NULL;
+
+    int n_samples = ws->n_samples;
+
+    /* Validate shape: must be 2D (n_snps, n_samples) */
+    if (PyArray_NDIM(utg_t_arr) != 2 ||
+        PyArray_DIM(utg_t_arr, 1) != n_samples) {
+        PyErr_Format(PyExc_ValueError,
+            "utg_t must be shape (n_snps, %d), got (%d, %d)",
+            n_samples,
+            (int)(PyArray_NDIM(utg_t_arr) >= 1 ? PyArray_DIM(utg_t_arr, 0) : -1),
+            (int)(PyArray_NDIM(utg_t_arr) >= 2 ? PyArray_DIM(utg_t_arr, 1) : -1));
+        goto err_input;
+    }
+
+    npy_intp n_snps_raw = PyArray_DIM(utg_t_arr, 0);
+    if (n_snps_raw > INT_MAX) {
+        PyErr_Format(PyExc_OverflowError,
+            "n_snps (%" NPY_INTP_FMT ") exceeds INT_MAX", n_snps_raw);
+        goto err_input;
+    }
+    int n_snps = (int)n_snps_raw;
+
+    if (alloc_output_arrays(&out, n_snps) < 0)
+        goto err_input;
+
+    const double *utg_t_data = (const double *)PyArray_DATA(utg_t_arr);
+    const double *inv_ww = ws->inv_ww;
+    const double *inv_wy = ws->inv_wy;
+    const double *inv_yy = ws->inv_yy;
+    const double *w_ptr = ws->w;
+    const double *Uty_ptr = ws->Uty;
+
+    double *lambdas = (double *)PyArray_DATA(out.lambdas);
+    double *logls   = (double *)PyArray_DATA(out.logls);
+    double *betas   = (double *)PyArray_DATA(out.betas);
+    double *ses     = (double *)PyArray_DATA(out.ses);
+    double *pwalds  = (double *)PyArray_DATA(out.pwalds);
+
+    int n_grid    = ws->n_grid;
+    int n_refine  = ws->n_refine;
+    int df        = ws->df;
+    double reml_const = ws->reml_const;
+
+    /* Clamp n_threads to n_snps */
+    int actual_threads = 1;
+#ifdef _OPENMP
+    actual_threads = (n_threads < n_snps) ? n_threads : n_snps;
+    if (actual_threads < 1) actual_threads = 1;
+#endif
+
+    /* Per-thread scratch buffers for on-the-fly wx/xx/xy computation */
+    double **scratch_wx = (double **)calloc((size_t)actual_threads, sizeof(double *));
+    double **scratch_xx = (double **)calloc((size_t)actual_threads, sizeof(double *));
+    double **scratch_xy = (double **)calloc((size_t)actual_threads, sizeof(double *));
+    int alloc_ok = (scratch_wx != NULL && scratch_xx != NULL && scratch_xy != NULL);
+    if (alloc_ok) {
+        for (int t = 0; t < actual_threads; t++) {
+            scratch_wx[t] = alloc_aligned_doubles((size_t)n_samples);
+            scratch_xx[t] = alloc_aligned_doubles((size_t)n_samples);
+            scratch_xy[t] = alloc_aligned_doubles((size_t)n_samples);
+            if (!scratch_wx[t] || !scratch_xx[t] || !scratch_xy[t]) {
+                alloc_ok = 0;
+                break;
+            }
+        }
+    }
+    if (!alloc_ok) {
+        if (scratch_wx) { for (int t = 0; t < actual_threads; t++) free(scratch_wx[t]); free(scratch_wx); }
+        if (scratch_xx) { for (int t = 0; t < actual_threads; t++) free(scratch_xx[t]); free(scratch_xx); }
+        if (scratch_xy) { for (int t = 0; t < actual_threads; t++) free(scratch_xy[t]); free(scratch_xy); }
+        decref_output_arrays(&out);
+        PyErr_NoMemory();
+        goto err_input;
+    }
+
+    Py_BEGIN_ALLOW_THREADS
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) num_threads(actual_threads)
+#endif
+    for (int snp = 0; snp < n_snps; snp++) {
+        int tid = 0;
+#ifdef _OPENMP
+        tid = omp_get_thread_num();
+#endif
+        double *vwx = scratch_wx[tid];
+        double *vxx = scratch_xx[tid];
+        double *vxy = scratch_xy[tid];
+
+        const double *x = utg_t_data + (size_t)snp * n_samples;
+
+        /* Compute wx/xx/xy on-the-fly — same operations as SoA path */
+        for (int i = 0; i < n_samples; i++) {
+            vwx[i] = w_ptr[i] * x[i];
+            vxx[i] = x[i] * x[i];
+            vxy[i] = x[i] * Uty_ptr[i];
+        }
+
+        /* From here, identical to compute_lmm_chunk_split_c per-SNP body */
+        double iab_s_wx = 0.0, iab_s_xx = 0.0;
+        #pragma omp simd reduction(+:iab_s_wx,iab_s_xx)
+        for (int i = 0; i < n_samples; i++) {
+            iab_s_wx += vwx[i];
+            iab_s_xx += vxx[i];
+        }
+
+        double iab_p1_xx = iab_s_xx - iab_s_wx * iab_s_wx * ws->iab_inv_ww;
+        double logdet_iab = ws->iab_log_ww
+                            + ((iab_p1_xx > 0.0) ? log(iab_p1_xx) : 0.0);
+
+        double logl_opt, beta, se, f_stat;
+        int is_valid;
+        double lambda_opt = golden_section_lambda_ncvt1_split(
+            vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
+            ws->eigenvalues, logdet_iab,
+            n_samples, ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
+            ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
+            df, reml_const, &logl_opt, &beta, &se, &f_stat, &is_valid
+        );
+
+        lambdas[snp] = lambda_opt;
+        logls[snp]   = logl_opt;
+        betas[snp]   = beta;
+        ses[snp]     = se;
+
+        pwalds[snp] = f_to_pvalue(
+            f_stat, df, is_valid,
+            ws->beta_a, ws->beta_b, ws->lbeta_ab);
+    }
+
+    Py_END_ALLOW_THREADS
+
+    /* Free scratch buffers */
+    for (int t = 0; t < actual_threads; t++) {
+        free(scratch_wx[t]);
+        free(scratch_xx[t]);
+        free(scratch_xy[t]);
+    }
+    free(scratch_wx);
+    free(scratch_xx);
+    free(scratch_xy);
+
+    if (warn_betainc_convergence(betas, pwalds, n_snps) < 0)
+        goto err_output;
+
+    result = build_result_dict(&out);
+    if (!result) goto err_input;
+
+    Py_DECREF(utg_t_arr);
+    return result;
+
+err_output:
+    decref_output_arrays(&out);
+err_input:
+    Py_XDECREF(utg_t_arr);
+    return NULL;
+}
+
+/* -------------------------------------------------------------------------
+ * create_workspace_mode4_fused_c
+ *
+ * Mode-4 fused workspace: extends standard mode-4 workspace with w/Uty
+ * for on-the-fly Uab computation from UtG_T.
+ *
+ * Python signature:
+ *   create_workspace_mode4_fused_c(
+ *       eigenvalues,      # (n_samples,) float64
+ *       uab_invariant,    # (3, n_samples) float64 — SoA [ww, wy, yy]
+ *       w,                # (n_samples,) float64 — UtW[:,0]
+ *       Uty,              # (n_samples,) float64 — rotated phenotype
+ *       n_samples,        # int
+ *       l_min,            # float
+ *       l_max,            # float
+ *       n_grid,           # int
+ *       n_refine,         # int
+ *       n_threads,        # int
+ *       hi_eval_null,     # (n_samples,) float64 — null-model Hi_eval
+ *       logl_H0,          # float — null MLE log-likelihood
+ *   ) -> PyCapsule wrapping lmm_workspace_t (mode=4)
+ * ------------------------------------------------------------------------- */
+static PyObject *create_workspace_mode4_fused_c_py(
+    PyObject *self, PyObject *args, PyObject *kwargs)
+{
+    static const char *kwlist[] = {
+        "eigenvalues", "uab_invariant", "w", "Uty",
+        "n_samples", "l_min", "l_max", "n_grid", "n_refine", "n_threads",
+        "hi_eval_null", "logl_H0",
+        NULL
+    };
+
+    PyObject *eigenvalues_obj, *uab_inv_obj, *w_obj, *Uty_obj;
+    PyObject *hi_eval_null_obj;
+    int n_samples, n_grid, n_refine, n_threads;
+    double l_min, l_max, logl_H0;
+
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwargs, "OOOOiddiiiOd", (char **)kwlist,
+            &eigenvalues_obj, &uab_inv_obj, &w_obj, &Uty_obj,
+            &n_samples, &l_min, &l_max, &n_grid, &n_refine, &n_threads,
+            &hi_eval_null_obj, &logl_H0)) {
+        return NULL;
+    }
+
+    if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
+        return NULL;
+
+    if (!isfinite(logl_H0)) {
+        PyErr_SetString(PyExc_ValueError,
+            "logl_H0 must be finite (got NaN or Inf from null model)");
+        return NULL;
+    }
+
+    PyArrayObject *eigenvalues_arr = NULL, *uab_inv_arr = NULL;
+    PyArrayObject *w_arr = NULL, *Uty_arr = NULL;
+    PyArrayObject *hi_eval_null_arr = NULL;
+    lmm_workspace_t *ws = NULL;
+    PyObject *capsule = NULL;
+
+    eigenvalues_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        eigenvalues_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!eigenvalues_arr) return NULL;
+
+    uab_inv_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        uab_inv_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!uab_inv_arr) goto err_input;
+
+    w_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        w_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!w_arr) goto err_input;
+
+    Uty_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        Uty_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!Uty_arr) goto err_input;
+
+    hi_eval_null_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        hi_eval_null_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!hi_eval_null_arr) goto err_input;
+
+    /* Validate shapes */
+    if (PyArray_NDIM(eigenvalues_arr) != 1 ||
+        PyArray_DIM(eigenvalues_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "eigenvalues must be shape (n_samples,)");
+        goto err_input;
+    }
+    if (PyArray_NDIM(uab_inv_arr) != 2 ||
+        PyArray_DIM(uab_inv_arr, 0) != 3 ||
+        PyArray_DIM(uab_inv_arr, 1) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "uab_invariant must be shape (3, n_samples)");
+        goto err_input;
+    }
+    if (PyArray_NDIM(w_arr) != 1 ||
+        PyArray_DIM(w_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "w must be shape (n_samples,)");
+        goto err_input;
+    }
+    if (PyArray_NDIM(Uty_arr) != 1 ||
+        PyArray_DIM(Uty_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "Uty must be shape (n_samples,)");
+        goto err_input;
+    }
+    if (PyArray_NDIM(hi_eval_null_arr) != 1 ||
+        PyArray_DIM(hi_eval_null_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "hi_eval_null must be shape (n_samples,)");
+        goto err_input;
+    }
+
+    if (validate_eigenvalues(
+            (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
+        goto err_input;
+
+    /* Validate Hi_eval_null for NaN/Inf and non-positive values */
+    {
+        const double *hi_null = (const double *)PyArray_DATA(hi_eval_null_arr);
+        for (int i = 0; i < n_samples; i++) {
+            char buf[64];
+            if (!isfinite(hi_null[i])) {
+                snprintf(buf, sizeof(buf), "%g", hi_null[i]);
+                PyErr_Format(PyExc_ValueError,
+                    "Hi_eval_null[%d] = %s is not finite. "
+                    "Null model optimization may have failed.", i, buf);
+                goto err_input;
+            }
+            if (hi_null[i] <= 0.0) {
+                snprintf(buf, sizeof(buf), "%g", hi_null[i]);
+                PyErr_Format(PyExc_ValueError,
+                    "Hi_eval_null[%d] = %s is not positive. "
+                    "Check kinship matrix conditioning.",
+                    i, buf);
+                goto err_input;
+            }
+        }
+    }
+
+    ws = (lmm_workspace_t *)calloc(1, sizeof(lmm_workspace_t));
+    if (!ws) { PyErr_NoMemory(); goto err_input; }
+
+    /* Fill scalar fields */
+    ws->n_samples = n_samples;
+    ws->n_grid    = n_grid;
+    ws->n_refine  = n_refine;
+    ws->l_min     = l_min;
+    ws->l_max     = l_max;
+    ws->df        = n_samples - 2;
+
+    ws->beta_a   = (double)ws->df / 2.0;
+    ws->beta_b   = 0.5;
+    ws->lbeta_ab = lgamma(ws->beta_a) + lgamma(ws->beta_b)
+                   - lgamma(ws->beta_a + ws->beta_b);
+
+    ws->log_l_min   = log(l_min);
+    double log_l_max_m4 = log(l_max);
+    ws->step        = (log_l_max_m4 - ws->log_l_min) / (double)(n_grid - 1);
+    ws->reml_const  = 0.5 * ws->df * (log((double)ws->df)
+                       - log(2.0 * M_PI) - 1.0);
+
+    /* Borrow pointers */
+    Py_INCREF(eigenvalues_arr);
+    Py_INCREF(uab_inv_arr);
+    ws->eigenvalues_ref = (PyObject *)eigenvalues_arr;
+    ws->uab_inv_ref     = (PyObject *)uab_inv_arr;
+
+    ws->eigenvalues = (const double *)PyArray_DATA(eigenvalues_arr);
+    ws->inv_ww = (const double *)PyArray_DATA(uab_inv_arr);
+    ws->inv_wy = ws->inv_ww + (size_t)n_samples;
+    ws->inv_yy = ws->inv_ww + (size_t)2 * n_samples;
+
+    /* Store w and Uty for fused on-the-fly Uab computation */
+    Py_INCREF(w_arr);
+    Py_INCREF(Uty_arr);
+    ws->w = (const double *)PyArray_DATA(w_arr);
+    ws->Uty = (const double *)PyArray_DATA(Uty_arr);
+    ws->w_ref = (PyObject *)w_arr;
+    ws->Uty_ref = (PyObject *)Uty_arr;
+
+    /* Compute invariant Iab scalar */
+    {
+        double s_ww = 0.0;
+        for (int i = 0; i < n_samples; i++) s_ww += ws->inv_ww[i];
+        ws->iab_s_ww   = s_ww;
+        ws->iab_inv_ww = (s_ww != 0.0) ? 1.0 / s_ww : 0.0;
+        ws->iab_log_ww = (s_ww > 0.0)  ? log(s_ww)  : 0.0;
+    }
+
+    /* Allocate grid arrays */
+    ws->lambda_grid   = (double *)malloc((size_t)n_grid * sizeof(double));
+    ws->hi_eval_grid  = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
+    ws->logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
+    ws->grid_inv      = (grid_invariant_t *)malloc(
+        (size_t)n_grid * sizeof(grid_invariant_t));
+
+    if (!ws->lambda_grid || !ws->hi_eval_grid ||
+        !ws->logdet_h_grid || !ws->grid_inv) {
+        PyErr_NoMemory();
+        goto err_ws;
+    }
+
+    /* Build lambda grid + invariant dot products */
+    for (int g = 0; g < n_grid; g++) {
+        ws->lambda_grid[g] = exp(ws->log_l_min + g * ws->step);
+    }
+    for (int g = 0; g < n_grid; g++) {
+        double lam    = ws->lambda_grid[g];
+        double *hi_row = ws->hi_eval_grid + (size_t)g * n_samples;
+        double logdet = 0.0;
+        double sw = 0.0, swy = 0.0, sy = 0.0;
+        for (int i = 0; i < n_samples; i++) {
+            double v = lam * ws->eigenvalues[i] + 1.0;
+            double h = 1.0 / v;
+            hi_row[i] = h;
+            logdet += log(v);
+            sw  += h * ws->inv_ww[i];
+            swy += h * ws->inv_wy[i];
+            sy  += h * ws->inv_yy[i];
+        }
+        ws->logdet_h_grid[g] = logdet;
+
+        ws->grid_inv[g].s_ww    = sw;
+        ws->grid_inv[g].s_wy    = swy;
+        ws->grid_inv[g].s_yy    = sy;
+        ws->grid_inv[g].log_s_ww = (sw > 0.0) ? log(sw) : 0.0;
+        ws->grid_inv[g].inv_s_ww = (sw != 0.0) ? 1.0 / sw : 0.0;
+        ws->grid_inv[g].pab1_5   = sy - swy * swy * ws->grid_inv[g].inv_s_ww;
+    }
+
+    /* Mode-4 specific fields */
+    ws->mode = 4;
+    ws->logl_H0 = logl_H0;
+    ws->mle_const = 0.5 * (double)n_samples
+                    * (log((double)n_samples) - log(2.0 * M_PI) - 1.0);
+
+    /* Copy hi_eval_null into workspace-owned buffer */
+    ws->hi_eval_null = alloc_aligned_doubles((size_t)n_samples);
+    if (!ws->hi_eval_null) {
+        PyErr_NoMemory();
+        goto err_ws;
+    }
+    {
+        const double *src = (const double *)PyArray_DATA(hi_eval_null_arr);
+        memcpy(ws->hi_eval_null, src, (size_t)n_samples * sizeof(double));
+    }
+
+    /* Precompute null-model invariant dot products */
+    {
+        double ns_ww = 0.0, ns_wy = 0.0, ns_yy = 0.0;
+        for (int i = 0; i < n_samples; i++) {
+            double h = ws->hi_eval_null[i];
+            ns_ww += h * ws->inv_ww[i];
+            ns_wy += h * ws->inv_wy[i];
+            ns_yy += h * ws->inv_yy[i];
+        }
+        ws->null_s_ww   = ns_ww;
+        ws->null_s_wy   = ns_wy;
+        ws->null_s_yy   = ns_yy;
+        ws->null_inv_ww  = (ns_ww != 0.0) ? 1.0 / ns_ww : 0.0;
+    }
+
+    /* Wrap in PyCapsule */
+    capsule = PyCapsule_New(ws, "lmm_workspace", lmm_workspace_destructor);
+    if (!capsule) goto err_ws;
+
+    Py_DECREF(eigenvalues_arr);
+    Py_DECREF(uab_inv_arr);
+    Py_DECREF(w_arr);
+    Py_DECREF(Uty_arr);
+    Py_DECREF(hi_eval_null_arr);
+    return capsule;
+
+err_ws:
+    if (ws) {
+        Py_XDECREF(ws->eigenvalues_ref);
+        Py_XDECREF(ws->uab_inv_ref);
+        Py_XDECREF(ws->w_ref);
+        Py_XDECREF(ws->Uty_ref);
+        free(ws->lambda_grid);
+        free(ws->hi_eval_grid);
+        free(ws->logdet_h_grid);
+        free(ws->grid_inv);
+        free(ws->hi_eval_null);
+        free(ws);
+    }
+err_input:
+    Py_XDECREF(eigenvalues_arr);
+    Py_XDECREF(uab_inv_arr);
+    Py_XDECREF(w_arr);
+    Py_XDECREF(Uty_arr);
+    Py_XDECREF(hi_eval_null_arr);
+    return NULL;
+}
+
+/* -------------------------------------------------------------------------
+ * compute_mode4_chunk_fused_c
+ *
+ * Fused per-chunk mode-4 compute: Score + Wald + LRT from UtG_T directly.
+ * Same as compute_mode4_chunk_split_c but computes wx/xx/xy on-the-fly.
+ *
+ * Python signature:
+ *   compute_mode4_chunk_fused_c(
+ *       workspace,   # PyCapsule from create_workspace_mode4_fused_c
+ *       utg_t,       # (n_snps, n_samples) float64 — UtG.T
+ *       n_threads,   # int
+ *   ) -> dict {lambdas, logls, betas, ses, pwalds, p_scores, lambdas_mle, p_lrts}
+ * ------------------------------------------------------------------------- */
+static PyObject *compute_mode4_chunk_fused_c_py(
+    PyObject *self, PyObject *args, PyObject *kwargs)
+{
+    static const char *kwlist[] = {"workspace", "utg_t", "n_threads", NULL};
+
+    PyObject *capsule_obj;
+    PyObject *utg_t_obj;
+    int n_threads;
+
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwargs, "OOi", (char **)kwlist,
+            &capsule_obj, &utg_t_obj, &n_threads)) {
+        return NULL;
+    }
+
+    lmm_workspace_t *ws = (lmm_workspace_t *)PyCapsule_GetPointer(
+        capsule_obj, "lmm_workspace");
+    if (!ws) return NULL;
+
+    /* Validate workspace mode and fused fields */
+    if (ws->mode != 4) {
+        PyErr_Format(PyExc_ValueError,
+            "compute_mode4_chunk_fused_c requires a mode-4 workspace "
+            "(got mode=%d). Use create_workspace_mode4_fused_c.", ws->mode);
+        return NULL;
+    }
+    if (!ws->w || !ws->Uty) {
+        PyErr_SetString(PyExc_ValueError,
+            "compute_mode4_chunk_fused_c requires a fused workspace "
+            "(w/Uty pointers are NULL). Use create_workspace_mode4_fused_c.");
+        return NULL;
+    }
+
+    PyArrayObject *utg_t_arr = NULL;
+    mode4_output_t out = {0};
+    PyObject *result = NULL;
+
+    utg_t_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        utg_t_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!utg_t_arr) return NULL;
+
+    int n_samples = ws->n_samples;
+
+    /* Validate shape: must be 2D (n_snps, n_samples) */
+    if (PyArray_NDIM(utg_t_arr) != 2 ||
+        PyArray_DIM(utg_t_arr, 1) != n_samples) {
+        PyErr_Format(PyExc_ValueError,
+            "utg_t must be shape (n_snps, %d)", n_samples);
+        goto err_input;
+    }
+
+    npy_intp n_snps_raw = PyArray_DIM(utg_t_arr, 0);
+    if (n_snps_raw > INT_MAX) {
+        PyErr_Format(PyExc_OverflowError,
+            "n_snps (%" NPY_INTP_FMT ") exceeds INT_MAX", n_snps_raw);
+        goto err_input;
+    }
+    int n_snps = (int)n_snps_raw;
+
+    if (alloc_mode4_output(&out, (npy_intp)n_snps) < 0) {
+        if (!PyErr_Occurred()) PyErr_NoMemory();
+        goto err_input;
+    }
+
+    const double *utg_t_data = (const double *)PyArray_DATA(utg_t_arr);
+    const double *inv_ww = ws->inv_ww;
+    const double *inv_wy = ws->inv_wy;
+    const double *inv_yy = ws->inv_yy;
+    const double *w_ptr = ws->w;
+    const double *Uty_ptr = ws->Uty;
+
+    double *out_lambdas     = (double *)PyArray_DATA(out.lambdas);
+    double *out_logls       = (double *)PyArray_DATA(out.logls);
+    double *out_betas       = (double *)PyArray_DATA(out.betas);
+    double *out_ses         = (double *)PyArray_DATA(out.ses);
+    double *out_pwalds      = (double *)PyArray_DATA(out.pwalds);
+    double *out_p_scores    = (double *)PyArray_DATA(out.p_scores);
+    double *out_lambdas_mle = (double *)PyArray_DATA(out.lambdas_mle);
+    double *out_p_lrts      = (double *)PyArray_DATA(out.p_lrts);
+
+    int n_grid    = ws->n_grid;
+    int n_refine  = ws->n_refine;
+    int df        = ws->df;
+    double reml_const = ws->reml_const;
+
+    /* Clamp n_threads to n_snps */
+    int actual_threads = 1;
+#ifdef _OPENMP
+    actual_threads = (n_threads < n_snps) ? n_threads : n_snps;
+    if (actual_threads < 1) actual_threads = 1;
+#endif
+
+    /* Per-thread scratch buffers:
+     * - 3 for wx/xx/xy on-the-fly computation
+     * - 1 for MLE golden section refinement (hi_eval_local) */
+    double **scratch_wx = (double **)calloc((size_t)actual_threads, sizeof(double *));
+    double **scratch_xx = (double **)calloc((size_t)actual_threads, sizeof(double *));
+    double **scratch_xy = (double **)calloc((size_t)actual_threads, sizeof(double *));
+    double **thread_bufs = (double **)calloc((size_t)actual_threads, sizeof(double *));
+    int alloc_ok = (scratch_wx != NULL && scratch_xx != NULL &&
+                    scratch_xy != NULL && thread_bufs != NULL);
+    if (alloc_ok) {
+        for (int t = 0; t < actual_threads; t++) {
+            scratch_wx[t] = alloc_aligned_doubles((size_t)n_samples);
+            scratch_xx[t] = alloc_aligned_doubles((size_t)n_samples);
+            scratch_xy[t] = alloc_aligned_doubles((size_t)n_samples);
+            thread_bufs[t] = alloc_aligned_doubles((size_t)n_samples);
+            if (!scratch_wx[t] || !scratch_xx[t] || !scratch_xy[t] || !thread_bufs[t]) {
+                alloc_ok = 0;
+                break;
+            }
+        }
+    }
+    if (!alloc_ok) {
+        if (scratch_wx) { for (int t = 0; t < actual_threads; t++) free(scratch_wx[t]); free(scratch_wx); }
+        if (scratch_xx) { for (int t = 0; t < actual_threads; t++) free(scratch_xx[t]); free(scratch_xx); }
+        if (scratch_xy) { for (int t = 0; t < actual_threads; t++) free(scratch_xy[t]); free(scratch_xy); }
+        if (thread_bufs) { for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]); free(thread_bufs); }
+        decref_mode4_output(&out);
+        PyErr_NoMemory();
+        goto err_input;
+    }
+
+    Py_BEGIN_ALLOW_THREADS
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) num_threads(actual_threads)
+#endif
+    for (int snp = 0; snp < n_snps; snp++) {
+        int tid = 0;
+#ifdef _OPENMP
+        tid = omp_get_thread_num();
+#endif
+        double *vwx = scratch_wx[tid];
+        double *vxx = scratch_xx[tid];
+        double *vxy = scratch_xy[tid];
+        double *hi_eval_local = thread_bufs[tid];
+
+        const double *x = utg_t_data + (size_t)snp * n_samples;
+
+        /* Compute wx/xx/xy on-the-fly */
+        for (int i = 0; i < n_samples; i++) {
+            vwx[i] = w_ptr[i] * x[i];
+            vxx[i] = x[i] * x[i];
+            vxy[i] = x[i] * Uty_ptr[i];
+        }
+
+        /* ---- (a) Score: null-model Pab ---- */
+        {
+            double s_wx = 0.0, s_xx = 0.0, s_xy = 0.0;
+            #pragma omp simd reduction(+:s_wx,s_xx,s_xy)
+            for (int i = 0; i < n_samples; i++) {
+                double h = ws->hi_eval_null[i];
+                s_wx += h * vwx[i];
+                s_xx += h * vxx[i];
+                s_xy += h * vxy[i];
+            }
+
+            double pab_null[3][6];
+            calc_pab_ncvt1_split(ws->null_s_ww, s_wx, ws->null_s_wy,
+                                  s_xx, s_xy, ws->null_s_yy, pab_null);
+
+            double score_beta, score_se, score_f;
+            int score_valid = score_from_pab(pab_null, n_samples, df,
+                                              &score_beta, &score_se, &score_f);
+
+            out_p_scores[snp] = f_to_pvalue(
+                score_f, df, score_valid,
+                ws->beta_a, ws->beta_b, ws->lbeta_ab);
+        }
+
+        /* ---- (b) logdet_iab ---- */
+        double iab_s_wx = 0.0, iab_s_xx = 0.0;
+        #pragma omp simd reduction(+:iab_s_wx,iab_s_xx)
+        for (int i = 0; i < n_samples; i++) {
+            iab_s_wx += vwx[i];
+            iab_s_xx += vxx[i];
+        }
+
+        double iab_p1_xx = iab_s_xx - iab_s_wx * iab_s_wx * ws->iab_inv_ww;
+        double logdet_iab = ws->iab_log_ww
+                            + ((iab_p1_xx > 0.0) ? log(iab_p1_xx) : 0.0);
+
+        /* ---- (c) Wald: REML optimization ---- */
+        double logl_reml, wald_beta, wald_se, wald_f;
+        int wald_valid;
+        double lambda_reml = golden_section_lambda_ncvt1_split(
+            vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
+            ws->eigenvalues, logdet_iab,
+            n_samples, ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
+            ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
+            df, reml_const, &logl_reml, &wald_beta, &wald_se, &wald_f,
+            &wald_valid
+        );
+
+        out_lambdas[snp] = lambda_reml;
+        out_logls[snp]   = logl_reml;
+        out_betas[snp]   = wald_beta;
+        out_ses[snp]     = wald_se;
+        out_pwalds[snp]  = f_to_pvalue(
+            wald_f, df, wald_valid,
+            ws->beta_a, ws->beta_b, ws->lbeta_ab);
+
+        /* ---- (d) LRT: MLE optimization ---- */
+        double logl_H1;
+        double lambda_mle = golden_section_lambda_mle_ncvt1_split(
+            vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
+            ws->eigenvalues, n_samples,
+            ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
+            ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
+            ws->mle_const, hi_eval_local, &logl_H1
+        );
+
+        out_lambdas_mle[snp] = lambda_mle;
+
+        double lrt_stat = 2.0 * (logl_H1 - ws->logl_H0);
+        if (lrt_stat < 0.0) lrt_stat = 0.0;
+        out_p_lrts[snp] = chi2_sf_c(lrt_stat);
+    }
+
+    Py_END_ALLOW_THREADS
+
+    /* Free per-thread scratch buffers */
+    for (int t = 0; t < actual_threads; t++) {
+        free(scratch_wx[t]);
+        free(scratch_xx[t]);
+        free(scratch_xy[t]);
+        free(thread_bufs[t]);
+    }
+    free(scratch_wx);
+    free(scratch_xx);
+    free(scratch_xy);
+    free(thread_bufs);
+
+    if (warn_betainc_convergence(out_betas, out_pwalds, n_snps) < 0)
+        goto err_output;
+
+    result = build_mode4_result_dict(&out);
+    if (!result) goto err_input;
+
+    Py_DECREF(utg_t_arr);
+    return result;
+
+err_output:
+    decref_mode4_output(&out);
+err_input:
+    Py_XDECREF(utg_t_arr);
+    return NULL;
+}
+
+/* =========================================================================
  * SoA-NATIVE SCORE SPLIT — compute_score_split_c
  *
  * Score test accepting SoA split data (uab_varying_soa + uab_invariant_soa)
@@ -6013,6 +7012,90 @@ static PyMethodDef methods[] = {
         "\n"
         "Returns:\n"
         "    dict with keys: lambdas_mle, p_lrts — each (n_snps,) float64\n"
+    },
+    {
+        "create_workspace_fused_c",
+        (PyCFunction)create_workspace_fused_c_py,
+        METH_VARARGS | METH_KEYWORDS,
+        "Create a fused workspace holding w/Uty for on-the-fly Uab computation.\n"
+        "\n"
+        "Eliminates the (n_snps, 3, n_samples) uab_varying_soa intermediate\n"
+        "by computing wx/xx/xy from UtG_T columns in thread-local scratch.\n"
+        "\n"
+        "Args:\n"
+        "    eigenvalues:   (n_samples,) float64\n"
+        "    uab_invariant: (3, n_samples) float64 — SoA [ww, wy, yy]\n"
+        "    w:             (n_samples,) float64 — UtW[:,0]\n"
+        "    Uty:           (n_samples,) float64 — rotated phenotype\n"
+        "    n_samples:     int\n"
+        "    l_min:         float\n"
+        "    l_max:         float\n"
+        "    n_grid:        int\n"
+        "    n_refine:      int\n"
+        "    n_threads:     int\n"
+        "\n"
+        "Returns:\n"
+        "    PyCapsule wrapping lmm_workspace_t (fused)\n"
+    },
+    {
+        "compute_lmm_chunk_fused_c",
+        (PyCFunction)compute_lmm_chunk_fused_c_py,
+        METH_VARARGS | METH_KEYWORDS,
+        "Fused per-chunk REML Wald from UtG_T directly.\n"
+        "\n"
+        "Computes wx/xx/xy on-the-fly from UtG_T and w/Uty in workspace.\n"
+        "Bitwise-identical to compute_lmm_chunk_split_c.\n"
+        "\n"
+        "Args:\n"
+        "    workspace:  PyCapsule from create_workspace_fused_c\n"
+        "    utg_t:      (n_snps, n_samples) float64 — UtG.T\n"
+        "    n_threads:  int\n"
+        "\n"
+        "Returns:\n"
+        "    dict with keys: lambdas, logls, betas, ses, pwalds\n"
+    },
+    {
+        "create_workspace_mode4_fused_c",
+        (PyCFunction)create_workspace_mode4_fused_c_py,
+        METH_VARARGS | METH_KEYWORDS,
+        "Create a fused mode-4 workspace with w/Uty + null model.\n"
+        "\n"
+        "Extends fused workspace with Hi_eval_null, logl_H0 for Score/LRT.\n"
+        "\n"
+        "Args:\n"
+        "    eigenvalues:   (n_samples,) float64\n"
+        "    uab_invariant: (3, n_samples) float64 — SoA [ww, wy, yy]\n"
+        "    w:             (n_samples,) float64 — UtW[:,0]\n"
+        "    Uty:           (n_samples,) float64 — rotated phenotype\n"
+        "    n_samples:     int\n"
+        "    l_min:         float\n"
+        "    l_max:         float\n"
+        "    n_grid:        int\n"
+        "    n_refine:      int\n"
+        "    n_threads:     int\n"
+        "    hi_eval_null:  (n_samples,) float64 — null-model Hi_eval\n"
+        "    logl_H0:       float — null MLE log-likelihood\n"
+        "\n"
+        "Returns:\n"
+        "    PyCapsule wrapping lmm_workspace_t (mode=4, fused)\n"
+    },
+    {
+        "compute_mode4_chunk_fused_c",
+        (PyCFunction)compute_mode4_chunk_fused_c_py,
+        METH_VARARGS | METH_KEYWORDS,
+        "Fused per-chunk mode-4 compute from UtG_T directly.\n"
+        "\n"
+        "Score + Wald + LRT with on-the-fly wx/xx/xy computation.\n"
+        "Bitwise-identical to compute_mode4_chunk_split_c.\n"
+        "\n"
+        "Args:\n"
+        "    workspace:  PyCapsule from create_workspace_mode4_fused_c\n"
+        "    utg_t:      (n_snps, n_samples) float64 — UtG.T\n"
+        "    n_threads:  int\n"
+        "\n"
+        "Returns:\n"
+        "    dict with keys: lambdas, logls, betas, ses, pwalds, p_scores,\n"
+        "                    lambdas_mle, p_lrts — each (n_snps,) float64\n"
     },
     {
         "_get_aligned_alloc_test_ptr",

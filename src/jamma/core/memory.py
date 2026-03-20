@@ -141,21 +141,34 @@ class MemoryBreakdown(NamedTuple):
     sufficient: bool  # Whether available exceeds total plus margin (10% capped at 10GB)
 
 
-def _uab_iab_gb(n_samples: int, chunk_size: int, n_cvt: int = 1) -> float:
-    """Estimate Uab_batch + Iab_batch memory (GB) for LMM JAX computation.
+def _uab_iab_gb(
+    n_samples: int,
+    chunk_size: int,
+    n_cvt: int = 1,
+    *,
+    use_fused: bool = False,
+) -> float:
+    """Estimate per-chunk LMM intermediate memory (GB).
 
-    These are the dominant intermediate buffers created during batch LMM:
-    - Uab_batch: (chunk_size, n_samples, n_index) float64
-    - Iab_batch: (chunk_size, n_cvt+2, n_index) float64  [Wald/All modes]
+    Standard path: Uab_batch (chunk_size, n_samples, n_index) +
+    Iab_batch (chunk_size, n_cvt+2, n_index).
+
+    Fused path (n_cvt=1 only): UtG_T contiguous copy (chunk_size, n_samples).
+    No Uab/Iab batch arrays -- the C workspace computes them on-the-fly.
 
     Args:
         n_samples: Number of samples.
-        chunk_size: SNPs per JAX chunk.
+        chunk_size: SNPs per chunk.
         n_cvt: Number of covariates (default 1).
+        use_fused: If True and n_cvt==1, use fused Uab estimate
+            (UtG_T only, eliminates Uab_batch and Iab_batch).
 
     Returns:
         Combined memory in GB.
     """
+    if use_fused and n_cvt == 1:
+        # Fused path: only UtG_T = (chunk_size, n_samples) float64
+        return chunk_size * n_samples * 8 / 1e9
     n_index = (n_cvt + 3) * (n_cvt + 2) // 2
     uab_bytes = chunk_size * n_samples * n_index * 8
     iab_bytes = chunk_size * (n_cvt + 2) * n_index * 8
@@ -448,7 +461,9 @@ def estimate_streaming_memory(
         n_samples, chunk_size, n_grid, pipeline_buffers, jax_chunk_size
     )
 
-    uab_iab_gb = _uab_iab_gb(n_samples, jax_chunk_size, n_cvt)
+    # Don't use fused estimate: callers (pipeline, kinship, check_memory_before_run)
+    # don't know the backend or lmm_mode.  Fused only applies to NumPy modes 1/4.
+    uab_iab_gb = _uab_iab_gb(n_samples, jax_chunk_size, n_cvt, use_fused=False)
 
     # Peak memory calculation by workflow phase
     peak_kinship = kinship_gb + chunk_gb
@@ -528,7 +543,9 @@ def estimate_lmm_streaming_memory(
         n_samples, chunk_size, n_grid, pipeline_buffers, jax_chunk_size
     )
 
-    uab_iab_gb = _uab_iab_gb(n_samples, jax_chunk_size, n_cvt)
+    # Don't use fused estimate: this is called by runner_jax_streaming which
+    # never uses the fused path, and doesn't know lmm_mode.
+    uab_iab_gb = _uab_iab_gb(n_samples, jax_chunk_size, n_cvt, use_fused=False)
     total_peak_gb = (
         eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb + uab_iab_gb
     )
@@ -781,13 +798,16 @@ def check_memory_before_run(
     dsyevd_fits = dsyevd_peak + margin <= snap.available_gb
 
     # Shared non-eigendecomp phase peaks (kinship build, LMM association).
+    # Don't use fused estimate here: we don't know lmm_mode, and fused only
+    # applies to modes 1/4.  Using the standard (larger) estimate is safe —
+    # it may overestimate for modes 1/4 but never underestimates for 2/3.
     peak_kinship = est.kinship_gb + est.chunk_gb
     peak_lmm = (
         est.eigenvectors_gb
         + est.chunk_gb
         + est.rotation_buffer_gb
         + est.grid_reml_gb
-        + _uab_iab_gb(n_samples, jax_chunk)
+        + _uab_iab_gb(n_samples, jax_chunk, use_fused=False)
     )
 
     if not dsyevd_fits and _has_dsyevr:

@@ -1766,10 +1766,10 @@ def test_general_ncvt_degenerate_snps(synthetic_covariate_data_ncvt2):
 @pytest.mark.tier0
 @pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
 def test_general_ncvt_abi_version():
-    """C-GEN-07: ABI version is 7 for general n_cvt Score/LRT C kernel support."""
+    """C-GEN-07: ABI version is 8 for fused Uab workspace support."""
     from jamma.lmm._lmm_accel import ABI_VERSION
 
-    assert ABI_VERSION == 7, f"Expected ABI_VERSION=7, got {ABI_VERSION}"
+    assert ABI_VERSION == 8, f"Expected ABI_VERSION=8, got {ABI_VERSION}"
 
 
 @pytest.mark.tier0
@@ -3210,3 +3210,363 @@ class TestHiEvalNullPositivity:
                 pab_table_dict,
                 1,
             )
+
+
+# =============================================================================
+# Fused Uab parity tests (Plan 88-01)
+# =============================================================================
+
+_fused_c_available = (
+    _C_ACCEL_AVAILABLE
+    and hasattr(compute_numpy, "_C_FUSED_AVAILABLE")
+    and compute_numpy._C_FUSED_AVAILABLE
+)
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _fused_c_available, reason="Fused C extension not available")
+class TestFusedParity:
+    """Verify fused Uab path produces identical results to SoA path."""
+
+    @pytest.fixture
+    def fused_data(self, split_wald_data):
+        """Prepare data for both SoA and fused paths."""
+        eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
+        w = UtW[:, 0].copy()
+        utg_t = np.ascontiguousarray(UtG.T)
+        uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
+        uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
+        return eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples
+
+    def test_fused_workspace_creation(self, fused_data):
+        """create_workspace_fused_c returns a PyCapsule."""
+        from jamma.lmm.compute_numpy import create_lmm_workspace_fused
+
+        eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
+        ws = create_lmm_workspace_fused(
+            eigenvalues,
+            uab_inv_soa,
+            w,
+            Uty,
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            20,
+            1,
+        )
+        assert ws is not None
+
+    def test_wald_parity(self, fused_data):
+        """Fused Wald produces bitwise-identical results to SoA Wald."""
+        from jamma.lmm.compute_numpy import (
+            compute_wald_fused_c_ws,
+            create_lmm_workspace_fused,
+        )
+
+        eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples = fused_data
+
+        # SoA path
+        ws_soa = create_lmm_workspace(
+            eigenvalues,
+            uab_inv_soa,
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            20,
+            1,
+        )
+        soa_result = compute_wald_split_c_ws(ws_soa, uab_var_soa, 1)
+
+        # Fused path
+        ws_fused = create_lmm_workspace_fused(
+            eigenvalues,
+            uab_inv_soa,
+            w,
+            Uty,
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            20,
+            1,
+        )
+        fused_result = compute_wald_fused_c_ws(ws_fused, utg_t, 1)
+
+        for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
+            np.testing.assert_array_equal(
+                soa_result[key],
+                fused_result[key],
+                err_msg=f"Wald {key}: fused vs SoA mismatch (should be bitwise)",
+            )
+
+    def test_wald_parity_multithreaded(self, fused_data):
+        """Fused Wald with multiple threads matches SoA path."""
+        from jamma.lmm.compute_numpy import (
+            compute_wald_fused_c_ws,
+            create_lmm_workspace_fused,
+        )
+
+        eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples = fused_data
+
+        ws_soa = create_lmm_workspace(
+            eigenvalues,
+            uab_inv_soa,
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            20,
+            1,
+        )
+        soa_result = compute_wald_split_c_ws(ws_soa, uab_var_soa, 1)
+
+        ws_fused = create_lmm_workspace_fused(
+            eigenvalues,
+            uab_inv_soa,
+            w,
+            Uty,
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            20,
+            1,
+        )
+        fused_result = compute_wald_fused_c_ws(ws_fused, utg_t, 4)
+
+        for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
+            np.testing.assert_array_equal(
+                soa_result[key],
+                fused_result[key],
+                err_msg=f"Wald {key}: fused(4t) vs SoA mismatch",
+            )
+
+    def test_mode4_fused_workspace_creation(self, fused_data, score_lrt_data):
+        """create_workspace_mode4_fused_c returns a PyCapsule."""
+        from jamma.lmm.compute_numpy import create_lmm_workspace_mode4_fused
+
+        eigenvalues, w, Uty, _, uab_inv_soa, _, n_samples = fused_data
+        _, _, _, Hi_eval_null, logl_H0 = score_lrt_data
+
+        ws = create_lmm_workspace_mode4_fused(
+            eigenvalues,
+            uab_inv_soa,
+            w,
+            Uty,
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            20,
+            1,
+            hi_eval_null=Hi_eval_null,
+            logl_H0=logl_H0,
+        )
+        assert ws is not None
+
+    def test_mode4_parity(self, fused_data, score_lrt_data):
+        """Fused mode-4 produces bitwise-identical results to SoA mode-4."""
+        from jamma.lmm.compute_numpy import (
+            _C_MODE4_AVAILABLE,
+            compute_mode4_fused_c_ws,
+            compute_mode4_split_c_ws,
+            create_lmm_workspace_mode4,
+            create_lmm_workspace_mode4_fused,
+        )
+
+        if not _C_MODE4_AVAILABLE:
+            pytest.skip("Mode-4 split C extension not available")
+
+        eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples = fused_data
+        _, _, _, Hi_eval_null, logl_H0 = score_lrt_data
+
+        # SoA path
+        ws_soa = create_lmm_workspace_mode4(
+            eigenvalues,
+            uab_inv_soa,
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            20,
+            1,
+            Hi_eval_null,
+            logl_H0,
+        )
+        soa_result = compute_mode4_split_c_ws(ws_soa, uab_var_soa, 1)
+
+        # Fused path
+        ws_fused = create_lmm_workspace_mode4_fused(
+            eigenvalues,
+            uab_inv_soa,
+            w,
+            Uty,
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            20,
+            1,
+            hi_eval_null=Hi_eval_null,
+            logl_H0=logl_H0,
+        )
+        fused_result = compute_mode4_fused_c_ws(ws_fused, utg_t, 1)
+
+        for key in (
+            "lambdas",
+            "logls",
+            "betas",
+            "ses",
+            "pwalds",
+            "p_scores",
+            "lambdas_mle",
+            "p_lrts",
+        ):
+            np.testing.assert_array_equal(
+                soa_result[key],
+                fused_result[key],
+                err_msg=f"Mode-4 {key}: fused vs SoA mismatch (should be bitwise)",
+            )
+
+    def test_fused_wrong_utg_t_shape(self, fused_data):
+        """Fused compute raises ValueError for wrong UtG_T shape."""
+        from jamma.lmm.compute_numpy import (
+            compute_wald_fused_c_ws,
+            create_lmm_workspace_fused,
+        )
+
+        eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
+
+        ws = create_lmm_workspace_fused(
+            eigenvalues,
+            uab_inv_soa,
+            w,
+            Uty,
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            20,
+            1,
+        )
+
+        # 3D instead of 2D
+        bad_utg = utg_t.reshape(utg_t.shape[0], 1, utg_t.shape[1])
+        with pytest.raises(ValueError, match="utg_t"):
+            compute_wald_fused_c_ws(ws, bad_utg, 1)
+
+    def test_fused_workspace_refcount(self, fused_data):
+        """w and Uty arrays not garbage collected while workspace alive."""
+        import gc
+        import sys
+
+        from jamma.lmm.compute_numpy import create_lmm_workspace_fused
+
+        eigenvalues, w, Uty, _, uab_inv_soa, _, n_samples = fused_data
+
+        # Make copies that we can track
+        w_tracked = w.copy()
+        Uty_tracked = Uty.copy()
+        initial_w_ref = sys.getrefcount(w_tracked)
+        initial_Uty_ref = sys.getrefcount(Uty_tracked)
+
+        ws = create_lmm_workspace_fused(
+            eigenvalues,
+            uab_inv_soa,
+            w_tracked,
+            Uty_tracked,
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            20,
+            1,
+        )
+
+        # Workspace should hold a reference to w and Uty
+        assert sys.getrefcount(w_tracked) > initial_w_ref
+        assert sys.getrefcount(Uty_tracked) > initial_Uty_ref
+
+        del ws
+        gc.collect()
+
+        # After workspace destruction, refcounts should be back to initial
+        assert sys.getrefcount(w_tracked) == initial_w_ref
+        assert sys.getrefcount(Uty_tracked) == initial_Uty_ref
+
+    def test_fused_degenerate_snps(self, fused_data):
+        """Fused Wald handles degenerate (constant) SNPs: NaN beta/se/pwald."""
+        from jamma.lmm.compute_numpy import (
+            compute_wald_fused_c_ws,
+            create_lmm_workspace_fused,
+        )
+
+        eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
+
+        # Make first SNP degenerate: constant genotype -> all zeros after rotation
+        utg_t_degen = utg_t.copy()
+        utg_t_degen[0, :] = 0.0
+
+        ws = create_lmm_workspace_fused(
+            eigenvalues,
+            uab_inv_soa,
+            w,
+            Uty,
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            20,
+            1,
+        )
+        cr = compute_wald_fused_c_ws(ws, utg_t_degen, 1)
+
+        # Degenerate SNP: should produce NaN
+        assert np.isnan(cr["betas"][0]), "degenerate SNP should have NaN beta"
+        assert np.isnan(cr["ses"][0]), "degenerate SNP should have NaN se"
+        assert np.isnan(cr["pwalds"][0]), "degenerate SNP should have NaN p_wald"
+
+        # Non-degenerate SNPs should still be valid (compare against reference)
+        ws_ref = create_lmm_workspace_fused(
+            eigenvalues,
+            uab_inv_soa,
+            w,
+            Uty,
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            20,
+            1,
+        )
+        cr_ref = compute_wald_fused_c_ws(ws_ref, utg_t, 1)
+        finite_mask = np.isfinite(cr_ref["betas"][1:])
+        assert np.all(np.isfinite(cr["betas"][1:][finite_mask])), (
+            "non-degenerate betas should be finite"
+        )
+
+    def test_fused_rejects_split_workspace(self, fused_data):
+        """compute_wald_fused_c_ws rejects a non-fused (split) workspace."""
+        from jamma.lmm.compute_numpy import compute_wald_fused_c_ws
+
+        eigenvalues, _, _, utg_t, uab_inv_soa, _, n_samples = fused_data
+
+        # Create a split (non-fused) workspace — w/Uty will be NULL
+        ws_split = create_lmm_workspace(
+            eigenvalues,
+            uab_inv_soa,
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            20,
+            1,
+        )
+        with pytest.raises(ValueError, match="[Ff]used"):
+            compute_wald_fused_c_ws(ws_split, utg_t, 1)
+
+    def test_fused_available_flag(self):
+        """_C_FUSED_AVAILABLE flag is True when C extension has fused functions."""
+        assert compute_numpy._C_FUSED_AVAILABLE is True

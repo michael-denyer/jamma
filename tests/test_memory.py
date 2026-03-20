@@ -16,7 +16,10 @@ from jamma.core import (
     log_memory_snapshot,
 )
 from jamma.core.estimates import _format_duration
-from jamma.core.memory import _uab_iab_gb, estimate_lmm_memory
+from jamma.core.memory import (
+    _uab_iab_gb,
+    estimate_lmm_memory,
+)
 
 
 @pytest.mark.tier0
@@ -472,7 +475,7 @@ class TestMemoryEstimateVsActualAllocation:
         )
 
     def test_streaming_lmm_estimate_covers_uab_iab(self):
-        """Streaming LMM estimate must include Uab/Iab in total_peak_gb."""
+        """Streaming LMM estimate must include eigenvectors + per-chunk buffers."""
         from jamma.core.memory import estimate_lmm_streaming_memory
 
         n_samples = 10_000
@@ -480,13 +483,16 @@ class TestMemoryEstimateVsActualAllocation:
 
         est = estimate_lmm_streaming_memory(n_samples, 95_000, chunk_size=chunk_size)
 
-        # Minimum must include eigenvectors + Uab/Iab
-        uab_iab_gb = _uab_iab_gb(n_samples, chunk_size, n_cvt=1)
+        # Minimum must include eigenvectors + per-chunk intermediate buffers.
+        # Estimators always use standard (non-fused) estimate since they don't
+        # know the backend or lmm_mode.
+        uab_iab_gb = _uab_iab_gb(n_samples, chunk_size, n_cvt=1, use_fused=False)
         eigenvectors_gb = n_samples**2 * 8 / 1e9
 
         assert est.total_peak_gb >= eigenvectors_gb + uab_iab_gb, (
             f"total_peak_gb ({est.total_peak_gb:.4f}GB) should be >= "
-            f"eigenvectors ({eigenvectors_gb:.4f}GB) + Uab/Iab ({uab_iab_gb:.4f}GB)"
+            f"eigenvectors ({eigenvectors_gb:.4f}GB) + "
+            f"per-chunk ({uab_iab_gb:.4f}GB)"
         )
 
 
@@ -668,3 +674,33 @@ class TestFormatDuration:
     def test_format_duration(self, seconds, expected):
         """_format_duration uses truncation (not rounding) at all boundaries."""
         assert _format_duration(seconds) == expected
+
+
+@pytest.mark.tier0
+class TestUabIabGbFused:
+    """Tests for fused Uab memory estimation."""
+
+    def test_uab_iab_gb_fused_n_cvt1(self):
+        """Fused path memory is chunk * n_samples * 8 bytes (UtG_T only)."""
+        result = _uab_iab_gb(1000, 500, n_cvt=1, use_fused=True)
+        expected = 500 * 1000 * 8 / 1e9
+        assert result == pytest.approx(expected)
+
+    def test_uab_iab_gb_fused_n_cvt_gt1_unchanged(self):
+        """Fused path with n_cvt>1 falls back to standard calculation."""
+        fused = _uab_iab_gb(1000, 500, n_cvt=2, use_fused=True)
+        standard = _uab_iab_gb(1000, 500, n_cvt=2, use_fused=False)
+        assert fused == standard
+
+    def test_uab_iab_gb_fused_vs_standard_reduction(self):
+        """Fused n_cvt=1 is strictly less than standard n_cvt=1."""
+        fused = _uab_iab_gb(1000, 500, n_cvt=1, use_fused=True)
+        standard = _uab_iab_gb(1000, 500, n_cvt=1, use_fused=False)
+        assert fused < standard
+
+    def test_uab_iab_gb_default_not_fused(self):
+        """Default use_fused=False preserves existing behavior."""
+        result = _uab_iab_gb(1000, 500, n_cvt=1)
+        n_index = (1 + 3) * (1 + 2) // 2  # 6
+        expected = (500 * 1000 * n_index * 8 + 500 * 3 * n_index * 8) / 1e9
+        assert result == pytest.approx(expected)

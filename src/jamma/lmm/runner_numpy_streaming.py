@@ -34,11 +34,17 @@ from jamma.io.plink import (
 )
 from jamma.lmm.compute_numpy import (
     _C_ACCEL_AVAILABLE,
+    _C_FUSED_AVAILABLE,
     _C_GENERAL_AVAILABLE,
     _C_MODE4_AVAILABLE,
+    _C_MODE4_FUSED_AVAILABLE,
     _C_SPLIT_AVAILABLE,
     _compute_lmm_chunk_numpy,
+    compute_mode4_fused_c_ws,
+    compute_wald_fused_c_ws,
+    create_lmm_workspace_fused,
     create_lmm_workspace_mode4,
+    create_lmm_workspace_mode4_fused,
 )
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.likelihood_numpy import (
@@ -60,6 +66,7 @@ from jamma.lmm.results import (
 )
 from jamma.lmm.runner_numpy import (
     _create_wald_workspace_for_ncvt,
+    _guarded_compute,
     dispatch_soa_split,
 )
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
@@ -363,6 +370,15 @@ def run_lmm_association_numpy_streaming(
     )
     use_fused_mode4 = use_split and lmm_mode == 4 and n_cvt == 1 and _C_MODE4_AVAILABLE
 
+    # Fused Uab path: skip uab_varying_soa, pass UtG_T directly to C workspace.
+    # Requires use_split (workspace + invariant SoA infrastructure).
+    use_fused = (
+        use_split
+        and _C_FUSED_AVAILABLE
+        and n_cvt == 1
+        and (lmm_mode == 1 or (lmm_mode == 4 and _C_MODE4_FUSED_AVAILABLE))
+    )
+
     # OpenMP thread count
     if _C_ACCEL_AVAILABLE:
         cores = get_physical_core_count()
@@ -375,9 +391,38 @@ def run_lmm_association_numpy_streaming(
         compute_uab_invariant_soa(UtW, Uty, n_cvt) if use_split else None
     )
 
-    # Create persistent C workspace
+    # Create persistent C workspace (fused or split)
     if use_split and lmm_mode in (1, 4):
-        if use_fused_mode4:
+        w = UtW[:, 0].copy() if use_fused else None
+        if use_fused and lmm_mode == 4:
+            lmm_workspace = create_lmm_workspace_mode4_fused(
+                eigenvalues_np,
+                uab_invariant_soa,
+                w,
+                Uty,
+                n_samples,
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+                omp_threads,
+                hi_eval_null=Hi_eval_null,
+                logl_H0=logl_H0,
+            )
+        elif use_fused:
+            lmm_workspace = create_lmm_workspace_fused(
+                eigenvalues_np,
+                uab_invariant_soa,
+                w,
+                Uty,
+                n_samples,
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+                omp_threads,
+            )
+        elif use_fused_mode4:
             lmm_workspace = create_lmm_workspace_mode4(
                 eigenvalues_np,
                 uab_invariant_soa,
@@ -467,10 +512,30 @@ def run_lmm_association_numpy_streaming(
 
             actual_len = filt_end - filt_start
 
-            # Build varying Uab in SoA layout
+            # Compute association statistics
             t_compute_start = time.perf_counter()
 
-            if use_split:
+            if use_fused:
+                # Fused path: pass UtG_T directly to C workspace.
+                utg_t = np.ascontiguousarray(UtG.T)
+                del UtG
+                fused_fn = (
+                    compute_mode4_fused_c_ws
+                    if lmm_mode == 4
+                    else compute_wald_fused_c_ws
+                )
+                with blas_threads(1):
+                    cr = _guarded_compute(
+                        fused_fn,
+                        lmm_workspace,
+                        utg_t,
+                        omp_threads,
+                        operation="Fused Uab dispatch (streaming)",
+                        write_offset=filt_start,
+                        n_filtered=n_filtered,
+                    )
+                del utg_t
+            elif use_split:
                 uab_var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG)
 
                 with blas_threads(1):

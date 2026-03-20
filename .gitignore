@@ -10,7 +10,8 @@ htmlcov/
 coverage.json
 .hypothesis/
 
-# Linting
+# Caches
+.cache/
 .ruff_cache/
 
 # Distribution / packaging

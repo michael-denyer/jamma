@@ -17,7 +17,9 @@
  *   JLINALG_MC    — MC row panel size
  *   JLINALG_NC    — NC column panel size
  *
- * Exported functions: ddot, dnrm2, daxpy, dscal, dgemv, dgemm, dsyrk, dsyr2k, eigh
+ * Exported functions: ddot, dnrm2, daxpy, dscal, dgemv, dgemm, dsyrk, dsyr2k,
+ *   eigh, eigh_factored, rotate_via_householder, qr, svd, set_n_threads,
+ *   get_n_threads
  *
  * Patterns follow _lmm_accel.c: PyArray_FROM_OTF with NPY_ARRAY_IN_ARRAY for
  * read-only inputs, NPY_ARRAY_INOUT_ARRAY2 for in-place writeable outputs.
@@ -1085,6 +1087,243 @@ py_get_n_threads(PyObject *self, PyObject *args)
 }
 
 /* ---------------------------------------------------------------------------
+ * py_eigh_factored — factored eigendecomposition (no U matrix)
+ *
+ * Signature: eigh_factored(K) -> (eigenvalues, tau, V)
+ * K must be 2-D C-contiguous float64 of shape (N, N).
+ * K is modified in-place (contains Householder vectors after call).
+ * Returns (eigenvalues, tau, V) where:
+ *   eigenvalues: (N,) ascending
+ *   tau: (N-1,) Householder scalars
+ *   V: (N, N) tridiagonal eigenvectors (row-major)
+ * ---------------------------------------------------------------------------
+ */
+static PyObject *
+py_eigh_factored(PyObject *self, PyObject *args)
+{
+    PyObject *oK;
+    if (!PyArg_ParseTuple(args, "O", &oK))
+        return NULL;
+
+    PyArrayObject *aK = (PyArrayObject *)PyArray_FROM_OTF(
+        oK, NPY_DOUBLE, NPY_ARRAY_INOUT_ARRAY2);
+    if (!aK) return NULL;
+
+    if (PyArray_NDIM(aK) != 2 || PyArray_DIM(aK, 0) != PyArray_DIM(aK, 1)) {
+        PyErr_SetString(PyExc_ValueError,
+            "eigh_factored: K must be 2-D square float64");
+        PyArray_DiscardWritebackIfCopy(aK);
+        Py_DECREF(aK);
+        return NULL;
+    }
+
+    npy_intp N = PyArray_DIM(aK, 0);
+    double *pK = (double *)PyArray_DATA(aK);
+
+    /* Allocate eigenvalues (N,) */
+    PyArrayObject *aW = (PyArrayObject *)PyArray_SimpleNew(1, &N, NPY_DOUBLE);
+    if (!aW) {
+        PyArray_DiscardWritebackIfCopy(aK);
+        Py_DECREF(aK);
+        return NULL;
+    }
+
+    /* Allocate tau (N-1,) */
+    npy_intp tau_len = N > 1 ? N - 1 : 0;
+    PyArrayObject *aTau = (PyArrayObject *)PyArray_SimpleNew(1, &tau_len, NPY_DOUBLE);
+    if (!aTau) {
+        Py_DECREF(aW);
+        PyArray_DiscardWritebackIfCopy(aK);
+        Py_DECREF(aK);
+        return NULL;
+    }
+
+    /* Allocate V (N, N) */
+    npy_intp dims2[2] = {N, N};
+    PyArrayObject *aV = (PyArrayObject *)PyArray_SimpleNew(2, dims2, NPY_DOUBLE);
+    if (!aV) {
+        Py_DECREF(aW); Py_DECREF(aTau);
+        PyArray_DiscardWritebackIfCopy(aK);
+        Py_DECREF(aK);
+        return NULL;
+    }
+
+    double *pW = (double *)PyArray_DATA(aW);
+    double *pTau = (double *)PyArray_DATA(aTau);
+    double *pV = (double *)PyArray_DATA(aV);
+
+    jlinalg_eigh_status_t eigh_status;
+    memset(&eigh_status, 0, sizeof(eigh_status));
+
+    int ret;
+    Py_BEGIN_ALLOW_THREADS
+    ret = jlinalg_eigh_factored_c(N, pK, N, pW, pTau, pV, N, &eigh_status);
+    Py_END_ALLOW_THREADS
+
+    if (ret != 0) {
+        if (ret == JLINALG_EXT_UNAVAILABLE) {
+            PyErr_SetString(PyExc_NotImplementedError,
+                "eigh_factored: jlinalg D&C pipeline not available "
+                "(workspace not initialized)");
+        } else if (ret == -1) {
+            PyErr_SetString(PyExc_MemoryError,
+                "eigh_factored: workspace allocation failed");
+        } else {
+            PyErr_Format(LinAlgError,
+                "eigh_factored: convergence failure (returned %d)", ret);
+        }
+        Py_DECREF(aW); Py_DECREF(aTau); Py_DECREF(aV);
+        PyArray_DiscardWritebackIfCopy(aK);
+        Py_DECREF(aK);
+        return NULL;
+    }
+
+    /* Commit K writeback (Householder vectors written in-place) */
+    PyArray_ResolveWritebackIfCopy(aK);
+    Py_DECREF(aK);
+
+    return Py_BuildValue("(NNN)", aW, aTau, aV);
+}
+
+/* ---------------------------------------------------------------------------
+ * py_rotate_via_householder — compute V.T @ (Q^T @ target)
+ *
+ * Signature: rotate_via_householder(K_householder, tau, V, target) -> result
+ * K_householder: (N, N) C-contiguous float64 (Householder vectors, NOT modified)
+ * tau: (N-1,) float64 Householder scalars
+ * V: (N, N) C-contiguous float64 (tridiagonal eigenvectors)
+ * target: (N, M) C-contiguous float64
+ * Returns result: (N, M) float64 = V.T @ (Q^T @ target)
+ * ---------------------------------------------------------------------------
+ */
+static PyObject *
+py_rotate_via_householder(PyObject *self, PyObject *args)
+{
+    PyObject *oKh, *oTau, *oV, *oTarget;
+    if (!PyArg_ParseTuple(args, "OOOO", &oKh, &oTau, &oV, &oTarget))
+        return NULL;
+
+    PyArrayObject *aKh = (PyArrayObject *)PyArray_FROM_OTF(
+        oKh, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+    PyArrayObject *aTau = (PyArrayObject *)PyArray_FROM_OTF(
+        oTau, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+    PyArrayObject *aV = (PyArrayObject *)PyArray_FROM_OTF(
+        oV, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+    PyArrayObject *aTarget = (PyArrayObject *)PyArray_FROM_OTF(
+        oTarget, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+    if (!aKh || !aTau || !aV || !aTarget) {
+        Py_XDECREF(aKh); Py_XDECREF(aTau);
+        Py_XDECREF(aV); Py_XDECREF(aTarget);
+        return NULL;
+    }
+
+    /* Validate shapes */
+    if (PyArray_NDIM(aKh) != 2 || PyArray_DIM(aKh, 0) != PyArray_DIM(aKh, 1)) {
+        PyErr_SetString(PyExc_ValueError,
+            "rotate_via_householder: K_householder must be 2-D square");
+        goto err_rotate;
+    }
+    npy_intp N = PyArray_DIM(aKh, 0);
+
+    if (PyArray_NDIM(aTau) != 1 || PyArray_SIZE(aTau) != N - 1) {
+        PyErr_Format(PyExc_ValueError,
+            "rotate_via_householder: tau must have length %ld, got %ld",
+            (long)(N - 1), (long)PyArray_SIZE(aTau));
+        goto err_rotate;
+    }
+    if (PyArray_NDIM(aV) != 2 || PyArray_DIM(aV, 0) != N || PyArray_DIM(aV, 1) != N) {
+        PyErr_SetString(PyExc_ValueError,
+            "rotate_via_householder: V must be (N, N)");
+        goto err_rotate;
+    }
+    if (PyArray_NDIM(aTarget) != 2 || PyArray_DIM(aTarget, 0) != N) {
+        PyErr_Format(PyExc_ValueError,
+            "rotate_via_householder: target must be (N, M) with N=%ld", (long)N);
+        goto err_rotate;
+    }
+    npy_intp M_cols = PyArray_DIM(aTarget, 1);
+
+    {
+        const double *pKh = (const double *)PyArray_DATA(aKh);
+        const double *pTau = (const double *)PyArray_DATA(aTau);
+        const double *pV = (const double *)PyArray_DATA(aV);
+        const double *pTarget = (const double *)PyArray_DATA(aTarget);
+
+        /* Allocate temp (N, M) copy of target for dormtr_transpose to modify */
+        double *temp = (double *)malloc((size_t)N * (size_t)M_cols * sizeof(double));
+        if (!temp) {
+            PyErr_NoMemory();
+            goto err_rotate;
+        }
+        memcpy(temp, pTarget, (size_t)N * (size_t)M_cols * sizeof(double));
+
+        /* Allocate output (N, M) for V.T @ temp */
+        npy_intp result_dims[2] = {N, M_cols};
+        PyArrayObject *aResult = (PyArrayObject *)PyArray_ZEROS(2, result_dims, NPY_DOUBLE, 0);
+        if (!aResult) {
+            free(temp);
+            goto err_rotate;
+        }
+        double *pResult = (double *)PyArray_DATA(aResult);
+
+        /* Guard: if no external BLAS and dgemm workspace allocation failed during
+         * init, the packed buffers are NULL and jlinalg_dgemm_ext would segfault. */
+        if (!blas_has_external() && (!jlinalg_packed_A || !jlinalg_packed_B)) {
+            free(temp);
+            Py_DECREF(aResult);
+            PyErr_SetString(PyExc_RuntimeError,
+                "rotate_via_householder: jlinalg workspace not initialized "
+                "(dgemm buffers are NULL)");
+            goto err_rotate;
+        }
+
+        int ret;
+        Py_BEGIN_ALLOW_THREADS
+
+        /* Step 1: temp = Q^T @ target via dormtr_transpose */
+        ret = jlinalg_dormtr_transpose_c(N, M_cols, pKh, N, pTau, temp, M_cols, NULL);
+        if (ret == 0) {
+            /* Step 2: result = V.T @ temp via dgemm */
+            /* V is (N, N) row-major, temp is (N, M) row-major.
+             * We want V.T @ temp: (N, N)^T @ (N, M) = (N, M).
+             * transa=1 (transpose V), transb=0. */
+            jlinalg_dgemm_ext(N, M_cols, N,
+                            pV, N,
+                            temp, M_cols,
+                            pResult, M_cols,
+                            1, 0);  /* transa=1, transb=0 */
+        }
+
+        Py_END_ALLOW_THREADS
+
+        free(temp);
+
+        if (ret != 0) {
+            Py_DECREF(aResult);
+            if (ret == -1) {
+                PyErr_Format(PyExc_MemoryError,
+                    "rotate_via_householder: dormtr_transpose workspace "
+                    "allocation failed (N=%ld, M=%ld)", (long)N, (long)M_cols);
+            } else {
+                PyErr_Format(PyExc_RuntimeError,
+                    "rotate_via_householder: dormtr_transpose returned "
+                    "error %d (N=%ld, M=%ld)", ret, (long)N, (long)M_cols);
+            }
+            goto err_rotate;
+        }
+
+        Py_DECREF(aKh); Py_DECREF(aTau);
+        Py_DECREF(aV); Py_DECREF(aTarget);
+        return (PyObject *)aResult;
+    }
+
+err_rotate:
+    Py_XDECREF(aKh); Py_XDECREF(aTau);
+    Py_XDECREF(aV); Py_XDECREF(aTarget);
+    return NULL;
+}
+
+/* ---------------------------------------------------------------------------
  * Method table
  * ---------------------------------------------------------------------------
  */
@@ -1127,6 +1366,15 @@ static PyMethodDef JlinalgMethods[] = {
         "svd(A, compute_uv=True) -> (U, s, Vh) or s\n"
         "Reduced SVD via vendor LAPACK dgesvd. Tall-skinny only (m >= n).\n"
         "U is (m, n), s is (n,), Vh is (n, n)."},
+    {"eigh_factored", py_eigh_factored, METH_VARARGS,
+        "eigh_factored(K) -> (eigenvalues, tau, V)\n"
+        "Factored eigendecomposition: dsytrd + dstedc without dormtr.\n"
+        "K is overwritten with Householder vectors in-place.\n"
+        "Returns (eigenvalues, tau, V) for lazy rotation via rotate_via_householder."},
+    {"rotate_via_householder", py_rotate_via_householder, METH_VARARGS,
+        "rotate_via_householder(K_householder, tau, V, target) -> result\n"
+        "Compute V.T @ (Q^T @ target) without forming U.\n"
+        "Q is encoded in K_householder + tau from eigh_factored."},
     {"set_n_threads", py_set_n_threads, METH_VARARGS,
         "set_n_threads(n) -> int\n"
         "Set jlinalg thread count (clamped to init max). Returns old count."},

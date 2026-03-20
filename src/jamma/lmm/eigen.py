@@ -245,3 +245,130 @@ def eigendecompose_kinship(
         )
 
     return eigenvalues, eigenvectors
+
+
+def eigendecompose_kinship_lazy(
+    K: np.ndarray, threshold: float = 1e-10, *, check_memory: bool = True
+):
+    """Factored eigendecomposition -- returns LazyEigen without forming U.
+
+    Same eigenvalue processing as eigendecompose_kinship (threshold zeroing,
+    warnings), but uses the jlinalg D&C pipeline to retain Householder state
+    instead of forming the full eigenvector matrix.
+
+    Only available when jlinalg C extension is compiled and the D&C pipeline
+    is active (vendor LAPACK must be skipped). If the D&C pipeline is not
+    available, raises NotImplementedError.
+
+    Args:
+        K: Symmetric kinship matrix (n_samples, n_samples). Overwritten on exit
+            with Householder vectors from dsytrd.
+        threshold: Eigenvalues below this are zeroed (default: 1e-10).
+        check_memory: If True, check available memory before eigendecomp.
+
+    Returns:
+        LazyEigen object with rotate() method for on-demand rotation.
+
+    Raises:
+        NotImplementedError: If jlinalg C extension or D&C pipeline unavailable.
+        ValueError: If kinship matrix is not square or has invalid shape.
+        MemoryError: If matrix too large.
+        numpy.linalg.LinAlgError: If eigendecomp fails to converge.
+    """
+    from jamma.lmm.lazy_eigen import LazyEigen
+
+    if not jlinalg.HAS_C_EXTENSION:
+        raise NotImplementedError(
+            "eigendecompose_kinship_lazy requires jlinalg C extension. "
+            "Use eigendecompose_kinship() instead."
+        )
+
+    n = K.shape[0]
+    if K.ndim != 2 or K.shape[1] != n:
+        raise ValueError(f"Kinship matrix must be square, got shape {K.shape}")
+
+    if check_memory:
+        check_memory_available(
+            _dsyevd_peak_gb(n),
+            operation=f"lazy eigendecomposition of {n:,}x{n:,} kinship matrix",
+        )
+
+    # Symmetry check (same as eigendecompose_kinship)
+    if n >= _SAMPLED_SYMMETRY_THRESHOLD:
+        _check_symmetry_sampled(K, n)
+    else:
+        max_asym = float(np.max(np.abs(K - K.T)))
+        if max_asym > _SYMMETRY_ATOL:
+            logger.warning(
+                "Kinship matrix is not symmetric (max asymmetry: %.2e).",
+                max_asym,
+            )
+
+    log_memory_snapshot("before lazy eigendecomp")
+
+    t0 = time.perf_counter()
+    try:
+        eigenvalues, tau, V = jlinalg.eigh_factored(K)
+    except NotImplementedError as exc:
+        raise NotImplementedError(
+            "eigh_factored not available (likely vendor LAPACK active, "
+            "D&C pipeline not reachable). Use eigendecompose_kinship()."
+        ) from exc
+    except MemoryError:
+        logger.error(
+            f"MemoryError during lazy eigendecomposition of "
+            f"{n:,}x{n:,} matrix. "
+            f"Estimated memory: ~{_dsyevd_peak_gb(n):.1f} GB. "
+            f"Consider using a machine with more RAM or reducing sample size."
+        )
+        raise
+    except np.linalg.LinAlgError as e:
+        logger.error(
+            f"Lazy eigendecomposition convergence failure: {e}. "
+            f"Kinship matrix may not be positive semi-definite."
+        )
+        raise
+    except RuntimeError as e:
+        logger.error(
+            f"Lazy eigendecomposition failed with internal error: {e}. "
+            f"This may indicate a jlinalg bug — please report it."
+        )
+        raise
+
+    elapsed = time.perf_counter() - t0
+    logger.info(
+        "Lazy eigendecomposition completed in {:.1f}s (N={})",
+        elapsed,
+        n,
+    )
+
+    log_memory_snapshot("after lazy eigendecomp")
+
+    # Apply eigenvalue threshold zeroing (same as eigendecompose_kinship)
+    abs_evals = np.abs(eigenvalues)
+    n_negative = int(np.sum(eigenvalues < -threshold))
+    if n_negative > 0:
+        warnings.warn(
+            f"Kinship matrix has {n_negative} negative eigenvalue(s). "
+            "Zeroing them (matrix not positive semi-definite).",
+            stacklevel=2,
+        )
+        eigenvalues[eigenvalues < -threshold] = 0.0
+
+    small_mask = abs_evals < threshold
+    n_zero = int(np.sum(small_mask))
+    eigenvalues[small_mask] = 0.0
+
+    if n_zero > 1:
+        warnings.warn(
+            f"Kinship matrix has {n_zero} eigenvalues close to zero. "
+            "Matrix may be rank-deficient.",
+            stacklevel=2,
+        )
+
+    return LazyEigen(
+        eigenvalues=eigenvalues,
+        K_householder=K,  # K now contains Householder vectors
+        tau=tau,
+        V=V,
+    )

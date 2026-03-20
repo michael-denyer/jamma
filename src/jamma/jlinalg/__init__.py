@@ -65,9 +65,11 @@ try:
         dsyr2k,
         dsyrk,
         eigh,
+        eigh_factored,
         get_n_threads,
         jlinalg_isa,
         qr,
+        rotate_via_householder,
         set_n_threads,
         svd,
     )
@@ -401,6 +403,34 @@ except ImportError as _exc:
                 K[:] = 0.0
             return w, v
 
+    def eigh_factored(
+        K: _np.ndarray,
+    ) -> tuple[_np.ndarray, _np.ndarray, _np.ndarray]:
+        """Factored eigendecomp: returns (eigenvalues, tau, V) without forming U.
+
+        Fallback: not available without C extension. Vendor LAPACK does not
+        expose Householder vectors from dsytrd.
+        """
+        raise NotImplementedError(
+            "eigh_factored requires jlinalg C extension with D&C pipeline. "
+            "NumPy fallback not supported (vendor LAPACK does not expose "
+            "Householder vectors)."
+        )
+
+    def rotate_via_householder(
+        K_householder: _np.ndarray,
+        tau: _np.ndarray,
+        V: _np.ndarray,
+        target: _np.ndarray,
+    ) -> _np.ndarray:
+        """Compute V.T @ (Q^T @ target) without forming U.
+
+        Fallback: not available without C extension.
+        """
+        raise NotImplementedError(
+            "rotate_via_householder requires jlinalg C extension."
+        )
+
     def qr(A: _np.ndarray) -> tuple[_np.ndarray, _np.ndarray]:
         """Compute reduced QR factorization.
 
@@ -491,8 +521,10 @@ __all__ = [
     "dsyrk",
     "dsyr2k",
     "eigh",
+    "eigh_factored",
     "get_n_threads",
     "qr",
+    "rotate_via_householder",
     "set_n_threads",
     "svd",
     "jlinalg_isa",

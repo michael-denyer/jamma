@@ -51,3 +51,13 @@ docs/plans
 # Beads issue tracker
 .beads/
 AGENTS.md
+
+# MCP config
+.mcp.json
+.mcp.local.json
+
+# clangd compile database (machine-specific absolute paths)
+compile_commands.json
+
+# Cache directories
+.cache/

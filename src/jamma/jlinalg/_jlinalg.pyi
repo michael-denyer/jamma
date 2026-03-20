@@ -162,6 +162,7 @@ def dsyr2k(
 
 def eigh(
     K: npt.NDArray[np.float64],
+    inplace: bool = ...,
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     """Compute eigenvalues and eigenvectors of a symmetric matrix.
 
@@ -179,6 +180,50 @@ def eigh(
         numpy.linalg.LinAlgError: If convergence fails.
         RuntimeError: If illegal argument detected (internal jlinalg bug).
         MemoryError: If workspace allocation fails.
+    """
+    ...
+
+def eigh_factored(
+    K: npt.NDArray[np.float64],
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Factored eigendecomposition: dsytrd + dstedc without dormtr.
+
+    K is overwritten in-place with Householder vectors (lower triangle).
+
+    Args:
+        K: Symmetric matrix, shape (N, N), float64, C-contiguous.
+
+    Returns:
+        Tuple of (eigenvalues, tau, V) where:
+        - eigenvalues: shape (N,), ascending
+        - tau: shape (N-1,), Householder scalars
+        - V: shape (N, N), tridiagonal eigenvectors (row-major)
+
+    Raises:
+        NotImplementedError: If D&C pipeline not available.
+        numpy.linalg.LinAlgError: If convergence fails.
+        MemoryError: If workspace allocation fails.
+    """
+    ...
+
+def rotate_via_householder(
+    K_householder: npt.NDArray[np.float64],
+    tau: npt.NDArray[np.float64],
+    V: npt.NDArray[np.float64],
+    target: npt.NDArray[np.float64],
+) -> npt.NDArray[np.float64]:
+    """Compute V.T @ (Q^T @ target) without forming U.
+
+    Q is encoded in K_householder + tau from eigh_factored.
+
+    Args:
+        K_householder: (N, N) Householder vectors from eigh_factored (not modified).
+        tau: (N-1,) Householder scalars from eigh_factored.
+        V: (N, N) tridiagonal eigenvectors from eigh_factored.
+        target: (N, M) columns to rotate, C-contiguous float64.
+
+    Returns:
+        Result array, shape (N, M), float64 = V.T @ (Q^T @ target).
     """
     ...
 

@@ -183,3 +183,115 @@ int jlinalg_dormtr_c(npy_intp N, npy_intp M,
     free(z);
     return 0;
 }
+
+/* ---------------------------------------------------------------------------
+ * jlinalg_dormtr_transpose_c — Apply Q^T to C.
+ *
+ * Same algorithm as jlinalg_dormtr_c but processes reflectors left-to-right
+ * (j=0 to n_ref-1 in blocks of NB) and uses T^T instead of T in Step 2.
+ * This implements the LAPACK DORMTR with side='L', trans='T'.
+ * ---------------------------------------------------------------------------
+ */
+int jlinalg_dormtr_transpose_c(npy_intp N, npy_intp M,
+                   const double *A, npy_intp lda, const double *tau,
+                   double *C, npy_intp ldc,
+                   jlinalg_workspace_t *ws)
+{
+    if (N <= 1 || M <= 0)
+        return 0;
+
+    npy_intp nb_alloc = NB_DORMTR;
+
+    /* Allocate workspace */
+    double *T_buf = (double *)malloc((size_t)nb_alloc * (size_t)nb_alloc * sizeof(double));
+    double *W     = (double *)malloc((size_t)nb_alloc * (size_t)M * sizeof(double));
+    npy_intp max_vlen = N - 1;
+    double *V_block = (double *)malloc((size_t)max_vlen * (size_t)nb_alloc * sizeof(double));
+    double *z     = (double *)malloc((size_t)nb_alloc * sizeof(double));
+    if (!T_buf || !W || !V_block || !z) {
+        fprintf(stderr, "jlinalg dormtr_transpose: workspace allocation failed "
+                "(N=%ld, M=%ld, NB=%d, needed ~%zu bytes for T+W+V+z)\n",
+                (long)N, (long)M, NB_DORMTR,
+                (size_t)nb_alloc * (size_t)nb_alloc * sizeof(double) +
+                (size_t)nb_alloc * (size_t)M * sizeof(double) +
+                (size_t)max_vlen * (size_t)nb_alloc * sizeof(double) +
+                (size_t)nb_alloc * sizeof(double));
+        free(T_buf); free(W); free(V_block); free(z);
+        return -1;
+    }
+
+    npy_intp n_ref = N - 1;  /* total number of reflectors */
+
+    /* Process reflectors left-to-right (transpose direction) */
+    for (npy_intp j_start = 0; j_start < n_ref; j_start += NB_DORMTR) {
+        npy_intp nb = n_ref - j_start;
+        if (nb > NB_DORMTR) nb = NB_DORMTR;
+
+        npy_intp vlen = N - j_start - 1;
+
+        /* Build V_block[vlen x nb] */
+        memset(V_block, 0, (size_t)vlen * (size_t)nb_alloc * sizeof(double));
+        for (npy_intp i = 0; i < nb; i++) {
+            V_block[i * nb_alloc + i] = 1.0;
+            for (npy_intp r = i + 1; r < vlen; r++)
+                V_block[r * nb_alloc + i] = A[(j_start + 1 + r) * lda + (j_start + i)];
+        }
+
+        /* DLARFT: form T[nb x nb] (same T formation as forward direction) */
+        dlarft(vlen, nb, V_block, nb_alloc, tau + j_start, T_buf, nb_alloc, z);
+
+        /* DLARFB Step 1: W = V^T @ C[j_start+1:N, :]
+         * Same as forward direction. */
+        if (ws) {
+            jlinalg_dgemm_ext_ws(nb, M, vlen,
+                               V_block, nb_alloc,
+                               C + (j_start + 1) * ldc, ldc,
+                               W, M,
+                               1, 0,       /* transa=1 (V^T), transb=0 */
+                               1.0, 0.0,
+                               ws);
+        } else {
+            jlinalg_dgemm_accum_c(nb, M, vlen,
+                                V_block, nb_alloc,
+                                C + (j_start + 1) * ldc, ldc,
+                                W, M,
+                                1, 0,
+                                1.0, 0.0);
+        }
+
+        /* DLARFB Step 2: W = T^T @ W (T^T is lower triangular).
+         * Process rows bottom-to-top for correct in-place triangular multiply. */
+        for (npy_intp i = nb - 1; i >= 0; i--) {
+            for (npy_intp c = 0; c < M; c++) {
+                double s = 0.0;
+                for (npy_intp k = 0; k <= i; k++)  /* T^T[i,k] = T[k,i]; T upper tri so k <= i */
+                    s += T_buf[k * nb_alloc + i] * W[k * M + c];
+                W[i * M + c] = s;
+            }
+        }
+
+        /* DLARFB Step 3: C[j_start+1:N, :] -= V @ W (same as forward) */
+        if (ws) {
+            jlinalg_dgemm_ext_ws(vlen, M, nb,
+                               V_block, nb_alloc,
+                               W, M,
+                               C + (j_start + 1) * ldc, ldc,
+                               0, 0,
+                               -1.0, 1.0,
+                               ws);
+        } else {
+            jlinalg_dgemm_accum_c(vlen, M, nb,
+                                V_block, nb_alloc,
+                                W, M,
+                                C + (j_start + 1) * ldc, ldc,
+                                0, 0,
+                                -1.0, 1.0);
+        }
+    }
+
+    free(T_buf);
+    free(W);
+    free(V_block);
+    free(z);
+    return 0;
+}

@@ -131,7 +131,9 @@ def test_all_exports_present():
         "dsyrk",
         "dsyr2k",
         "eigh",
+        "eigh_factored",
         "qr",
+        "rotate_via_householder",
         "svd",
         "get_n_threads",
         "set_n_threads",
@@ -158,10 +160,10 @@ def test_all_exports_present():
 
 @pytest.mark.tier0
 def test_abi_version():
-    """ABI_VERSION is 10 (bumped for QR/SVD vendor dispatch)."""
+    """ABI_VERSION is 11 (bumped for eigh_factored/rotate_via_householder)."""
     from jamma.jlinalg import ABI_VERSION
 
-    assert ABI_VERSION == 10, f"Expected ABI_VERSION=10, got {ABI_VERSION}"
+    assert ABI_VERSION == 11, f"Expected ABI_VERSION=11, got {ABI_VERSION}"
 
 
 @pytest.mark.tier0

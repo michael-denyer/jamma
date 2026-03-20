@@ -256,3 +256,89 @@ int jlinalg_eigh_c(npy_intp N,
 
     return 0;
 }
+
+/* ---------------------------------------------------------------------------
+ * jlinalg_eigh_factored_c — Factored eigendecomposition (no U matrix).
+ *
+ * Runs dsytrd + dstedc but NOT dormtr. Returns:
+ *   - eigenvalues[N]: ascending eigenvalues
+ *   - K: overwritten with Householder vectors in lower triangle (from dsytrd)
+ *   - tau[N-1]: Householder scalars (caller-allocated)
+ *   - V[N x N]: tridiagonal eigenvectors (caller-allocated, row-major)
+ *
+ * Only works with jlinalg D&C pipeline. Returns JLINALG_EXT_UNAVAILABLE
+ * when workspace is not initialized.
+ * ---------------------------------------------------------------------------
+ */
+int jlinalg_eigh_factored_c(npy_intp N,
+                 double *K, npy_intp ldk,
+                 double *eigenvalues,
+                 double *tau,
+                 double *V, npy_intp ldv,
+                 jlinalg_eigh_status_t *status)
+{
+    if (N <= 0) return 0;
+
+    if (N == 1) {
+        eigenvalues[0] = K[0];
+        /* No Householder vectors for N=1; tau is empty, V is 1x1 identity. */
+        V[0] = 1.0;
+        return 0;
+    }
+
+    /* Guard: workspace must be initialized (jlinalg_init() called) */
+    if (!jlinalg_packed_A) {
+        fprintf(stderr,
+            "jlinalg_eigh_factored_c: workspace not allocated "
+            "(jlinalg_dgemm_init() not called or failed)\n");
+        return JLINALG_EXT_UNAVAILABLE;
+    }
+
+    /* Allocate d[N], e[N] — tau is caller-allocated */
+    double *d = (double *)malloc((size_t)N * sizeof(double));
+    double *e = (double *)malloc((size_t)N * sizeof(double));
+
+    if (!d || !e) {
+        free(d); free(e);
+        return -1;
+    }
+
+    /* Allocate a GEMM workspace shared by dsytrd and dstedc. */
+    jlinalg_workspace_t gemm_ws;
+    int ws_ok = jlinalg_workspace_alloc(&gemm_ws, jlinalg_n_threads);
+    if (ws_ok != 0) {
+        fprintf(stderr, "jlinalg eigh_factored: GEMM workspace allocation failed "
+                "(N=%ld, %d threads) — using global mutex path\n",
+                (long)N, jlinalg_n_threads);
+        if (status) status->dstedc_ws_fallback = 1;
+    }
+    jlinalg_workspace_t *ws_ptr = ws_ok == 0 ? &gemm_ws : NULL;
+
+    /* Step 1: Tridiagonalization: K -> T, Householder vectors in K's lower triangle.
+     * tau is caller-allocated (length N-1). */
+    int ret = jlinalg_dsytrd_c(N, K, ldk, d, e, tau, ws_ptr, status);
+    if (ret != 0) {
+        if (ws_ok == 0) jlinalg_workspace_free(&gemm_ws);
+        free(d); free(e);
+        return ret;
+    }
+
+    /* Step 2: D&C tridiagonal eigensolver.
+     * On input: d[N] diagonal, e[N-1] off-diagonal.
+     * On output: d[N] eigenvalues (ascending), V columns = eigenvectors of T. */
+    ret = jlinalg_dstedc_c(N, d, e, V, ldv, ws_ptr, status);
+    if (ws_ok == 0) jlinalg_workspace_free(&gemm_ws);
+    if (ret != 0) {
+        free(d); free(e);
+        return ret;
+    }
+
+    /* Step 3: Copy eigenvalues to output */
+    memcpy(eigenvalues, d, (size_t)N * sizeof(double));
+
+    /* Step 4: Free workspace — dormtr is NOT called, K retains Householder vectors */
+    free(d);
+    free(e);
+
+    return 0;
+}

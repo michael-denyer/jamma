@@ -37,59 +37,35 @@ _SAMPLED_SYMMETRY_THRESHOLD = 5_000
 _SYMMETRY_ATOL = 1e-11
 
 
-def _check_symmetry(K: np.ndarray, n: int) -> None:
-    """Check kinship symmetry, using sampled check for large matrices.
+def _check_symmetry_sampled(
+    K: np.ndarray, n: int, *, atol: float = _SYMMETRY_ATOL
+) -> None:
+    """Check kinship symmetry via deterministic strided row sampling.
 
-    For small matrices (< _SAMPLED_SYMMETRY_THRESHOLD), uses full
-    np.allclose. For large matrices, samples every sqrt(n)-th row
-    to avoid an N^2 temporary.
+    Samples every sqrt(n)-th row and compares it against the
+    corresponding column. Total work: O(n*sqrt(n)), no n*n temporary.
+    Every column is covered at least once, so systematic asymmetry
+    (e.g. from non-deterministic BLAS accumulation order) is caught.
 
     jlinalg.eigh reads only the lower triangle, so asymmetry is
     harmless — this check is purely diagnostic.
+
+    Args:
+        K: Square matrix (n, n).
+        n: Matrix dimension (== K.shape[0]).
+        atol: Absolute tolerance for element-wise comparison.
     """
-    if n >= _SAMPLED_SYMMETRY_THRESHOLD:
-        stride = max(1, int(np.sqrt(n)))
-        max_asym = float(np.max(np.abs(K[::stride, :] - K[:, ::stride].T)))
-        if max_asym > _SYMMETRY_ATOL:
-            logger.warning(
-                "Kinship matrix is not symmetric (sampled max asymmetry: %.2e). "
-                "jlinalg.eigh will use lower triangle only.",
-                max_asym,
-            )
-    else:
-        if not np.allclose(K, K.T, atol=_SYMMETRY_ATOL, rtol=0):
-            logger.warning(
-                "Kinship matrix is not symmetric (max asymmetry: %.2e). "
-                "jlinalg.eigh will use lower triangle only.",
-                np.max(np.abs(K - K.T)),
-            )
+    stride = max(1, int(np.sqrt(n)))
+    # K[::stride, :] selects sampled rows; K[:, ::stride].T gives corresponding
+    # columns transposed to the same shape. Temporary is (n/stride, n) — ~0.5 GB
+    # at 100k vs 80 GB for full K - K.T.
+    max_asym = float(np.max(np.abs(K[::stride, :] - K[:, ::stride].T)))
 
-
-def _threshold_eigenvalues(eigenvalues: np.ndarray, threshold: float) -> None:
-    """Zero small and negative eigenvalues in-place (GEMMA EigenDecomp_Zeroed).
-
-    Warns if negative eigenvalues are found (matrix not positive semi-definite)
-    or if more than one eigenvalue is near zero (rank-deficient).
-    """
-    abs_evals = np.abs(eigenvalues)
-    n_negative = int(np.sum(eigenvalues < -threshold))
-    if n_negative > 0:
-        warnings.warn(
-            f"Kinship matrix has {n_negative} negative eigenvalue(s). "
-            "Zeroing them (matrix not positive semi-definite).",
-            stacklevel=3,
-        )
-        eigenvalues[eigenvalues < -threshold] = 0.0
-
-    small_mask = abs_evals < threshold
-    n_zero = int(np.sum(small_mask))
-    eigenvalues[small_mask] = 0.0
-
-    if n_zero > 1:
-        warnings.warn(
-            f"Kinship matrix has {n_zero} eigenvalues close to zero. "
-            "Matrix may be rank-deficient.",
-            stacklevel=3,
+    if max_asym > atol:
+        logger.warning(
+            "Kinship matrix is not symmetric (sampled max asymmetry: %.2e). "
+            "jlinalg.eigh will use lower triangle only.",
+            max_asym,
         )
 
 
@@ -131,7 +107,15 @@ def eigendecompose_kinship(
         raise ValueError(f"Kinship matrix must be square, got shape {K.shape}")
 
     # Symmetry check
-    _check_symmetry(K, n_samples)
+    if n_samples < _SAMPLED_SYMMETRY_THRESHOLD:
+        if not np.allclose(K, K.T, atol=_SYMMETRY_ATOL, rtol=0):
+            logger.warning(
+                "Kinship matrix is not symmetric (max asymmetry: %.2e). "
+                "jlinalg.eigh will use lower triangle only.",
+                np.max(np.abs(K - K.T)),
+            )
+    else:
+        _check_symmetry_sampled(K, n_samples, atol=_SYMMETRY_ATOL)
 
     logger.info(f"Eigendecomposing kinship matrix ({n_samples:,} x {n_samples:,})")
     logger.debug(
@@ -238,104 +222,26 @@ def eigendecompose_kinship(
     logger.info(f"Eigendecomposition completed in {elapsed:.2f} seconds")
     log_memory_snapshot(f"after_eigendecomp_{n_samples}samples")
 
-    _threshold_eigenvalues(eigenvalues, threshold)
+    # Threshold small eigenvalues (GEMMA EigenDecomp_Zeroed behavior)
+    abs_evals = np.abs(eigenvalues)
+    n_negative = int(np.sum(eigenvalues < -threshold))
+    if n_negative > 0:
+        warnings.warn(
+            f"Kinship matrix has {n_negative} negative eigenvalue(s). "
+            "Zeroing them (matrix not positive semi-definite).",
+            stacklevel=2,
+        )
+        eigenvalues[eigenvalues < -threshold] = 0.0
+
+    small_mask = abs_evals < threshold
+    n_zero = int(np.sum(small_mask))
+    eigenvalues[small_mask] = 0.0
+
+    if n_zero > 1:
+        warnings.warn(
+            f"Kinship matrix has {n_zero} eigenvalues close to zero. "
+            "Matrix may be rank-deficient.",
+            stacklevel=2,
+        )
 
     return eigenvalues, eigenvectors
-
-
-def eigendecompose_kinship_lazy(
-    K: np.ndarray, threshold: float = 1e-10, *, check_memory: bool = True
-):
-    """Factored eigendecomposition -- returns LazyEigen without forming U.
-
-    Same eigenvalue processing as eigendecompose_kinship (threshold zeroing,
-    warnings), but uses the jlinalg D&C pipeline to retain Householder state
-    instead of forming the full eigenvector matrix.
-
-    Only available when jlinalg C extension is compiled and the D&C pipeline
-    is active (vendor LAPACK must be skipped). If the D&C pipeline is not
-    available, raises NotImplementedError.
-
-    Args:
-        K: Symmetric kinship matrix (n_samples, n_samples). Overwritten on exit
-            with Householder vectors from dsytrd.
-        threshold: Eigenvalues below this are zeroed (default: 1e-10).
-        check_memory: If True, check available memory before eigendecomp.
-
-    Returns:
-        LazyEigen object with rotate() method for on-demand rotation.
-
-    Raises:
-        NotImplementedError: If jlinalg C extension or D&C pipeline unavailable.
-        ValueError: If kinship matrix is not square or has invalid shape.
-        MemoryError: If matrix too large.
-        numpy.linalg.LinAlgError: If eigendecomp fails to converge.
-    """
-    from jamma.lmm.lazy_eigen import LazyEigen
-
-    if not jlinalg.HAS_C_EXTENSION:
-        raise NotImplementedError(
-            "eigendecompose_kinship_lazy requires jlinalg C extension. "
-            "Use eigendecompose_kinship() instead."
-        )
-
-    n = K.shape[0]
-    if K.ndim != 2 or K.shape[1] != n:
-        raise ValueError(f"Kinship matrix must be square, got shape {K.shape}")
-
-    if check_memory:
-        check_memory_available(
-            _dsyevd_peak_gb(n),
-            operation=f"lazy eigendecomposition of {n:,}x{n:,} kinship matrix",
-        )
-
-    _check_symmetry(K, n)
-
-    log_memory_snapshot("before lazy eigendecomp")
-
-    t0 = time.perf_counter()
-    try:
-        eigenvalues, tau, V = jlinalg.eigh_factored(K)
-    except NotImplementedError as exc:
-        raise NotImplementedError(
-            "eigh_factored not available (likely vendor LAPACK active, "
-            "D&C pipeline not reachable). Use eigendecompose_kinship()."
-        ) from exc
-    except MemoryError:
-        logger.error(
-            f"MemoryError during lazy eigendecomposition of "
-            f"{n:,}x{n:,} matrix. "
-            f"Estimated memory: ~{_dsyevd_peak_gb(n):.1f} GB. "
-            f"Consider using a machine with more RAM or reducing sample size."
-        )
-        raise
-    except np.linalg.LinAlgError as e:
-        logger.error(
-            f"Lazy eigendecomposition convergence failure: {e}. "
-            f"Kinship matrix may not be positive semi-definite."
-        )
-        raise
-    except RuntimeError as e:
-        logger.error(
-            f"Lazy eigendecomposition failed with internal error: {e}. "
-            f"This may indicate a jlinalg bug — please report it."
-        )
-        raise
-
-    elapsed = time.perf_counter() - t0
-    logger.info(
-        "Lazy eigendecomposition completed in {:.1f}s (N={})",
-        elapsed,
-        n,
-    )
-
-    log_memory_snapshot("after lazy eigendecomp")
-
-    _threshold_eigenvalues(eigenvalues, threshold)
-
-    return LazyEigen(
-        eigenvalues=eigenvalues,
-        K_householder=K,  # K now contains Householder vectors
-        tau=tau,
-        V=V,
-    )

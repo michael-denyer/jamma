@@ -19,7 +19,7 @@
 /* Bump this constant whenever the public ABI changes (new fields in
  * jlinalg_dispatch_t, changed function signatures, etc.). pymodule.c exposes
  * this as a Python-level integer so callers can guard against ABI mismatches. */
-#define JLINALG_ABI_VERSION 11
+#define JLINALG_ABI_VERSION 10
 
 /* ---------------------------------------------------------------------------
  * Function-pointer typedefs for ISA-dispatched microkernels
@@ -623,24 +623,6 @@ int jlinalg_eigh_c(npy_intp N,
                  double *eigenvectors, npy_intp ldz,
                  jlinalg_eigh_status_t *status);
 
-/* jlinalg_eigh_factored_c — factored eigendecomposition (no eigenvector matrix).
- *
- * Runs dsytrd + dstedc but NOT dormtr. Returns:
- *   - eigenvalues[N]: ascending eigenvalues
- *   - K: overwritten with Householder vectors in lower triangle (from dsytrd)
- *   - tau[N-1]: Householder scalars (caller-allocated)
- *   - V[N x N]: tridiagonal eigenvectors (caller-allocated, row-major)
- *
- * Only works on jlinalg D&C pipeline. Returns JLINALG_EXT_UNAVAILABLE (-2) when
- * jlinalg_packed_A is NULL (workspace not initialized).
- */
-int jlinalg_eigh_factored_c(npy_intp N,
-                 double *K, npy_intp ldk,
-                 double *eigenvalues,
-                 double *tau,
-                 double *V, npy_intp ldv,
-                 jlinalg_eigh_status_t *status);
-
 /* Internal LAPACK-layer functions (called by jlinalg_eigh_c, not Python-facing) */
 int jlinalg_dsytrd_c(npy_intp N, double *A, npy_intp lda,
                    double *d, double *e, double *tau,
@@ -651,10 +633,6 @@ int jlinalg_dstedc_c(npy_intp N, double *d, double *e,
                    jlinalg_workspace_t *ws,
                    jlinalg_eigh_status_t *status);
 int jlinalg_dormtr_c(npy_intp N, npy_intp M,
-                   const double *A, npy_intp lda, const double *tau,
-                   double *C, npy_intp ldc,
-                   jlinalg_workspace_t *ws);
-int jlinalg_dormtr_transpose_c(npy_intp N, npy_intp M,
                    const double *A, npy_intp lda, const double *tau,
                    double *C, npy_intp ldc,
                    jlinalg_workspace_t *ws);

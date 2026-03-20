@@ -96,68 +96,6 @@ def _dsyevr_peak_gb(n: int) -> float:
     return kinship_gb + _eigendecomp_eigvec_gb(kinship_gb) + _dsyevr_workspace_gb(n)
 
 
-def _lazy_eigen_post_peak_gb(n: int) -> float:
-    """LazyEigen persistent state during rotation phase.
-
-    Returns the size of K_householder (N^2) + V (N^2) + tau (N-1) +
-    eigenvalues (N) that is live while rotate() calls are in progress.
-    V is freed after the last rotation; K_householder after that.
-    Does NOT include per-call temporaries (see estimate_lmm_lazy_memory).
-    """
-    bytes_per_double = 8
-    # K_householder (N^2) + V (N^2) + tau (N-1, rounded to N) + eigenvalues (N)
-    total_bytes = (2 * n * n + 2 * n) * bytes_per_double
-    return total_bytes / 1e9
-
-
-def estimate_lmm_lazy_memory(
-    n_samples: int,
-    chunk_size: int = 1000,
-    *,
-    n_cvt: int = 1,
-) -> float:
-    """Estimate peak memory (GB) for LMM with lazy eigendecomp.
-
-    Three phases, peak is max across all:
-    1. Eigendecomp: same as standard D&C (_dsyevd_peak_gb).
-    2. Rotation: K_householder (N^2) + V (N^2) + per-chunk UtG (N * chunk).
-    3. LMM association: eigenvalues (N) + rotated vectors (3N) +
-       UtG chunk (N * chunk) + Uab/Iab batches.
-
-    The key savings vs standard path come in phase 3: no persistent U (N^2).
-    K_householder and V are freed after rotation completes.
-
-    Args:
-        n_samples: Number of samples.
-        chunk_size: SNPs per chunk for UtG rotation and LMM batching.
-        n_cvt: Number of covariates (default 1).
-
-    Returns:
-        Estimated peak memory in GB (max across all phases).
-    """
-    bytes_per_double = 8
-
-    # Phase 1: Eigendecomp peak (same as standard D&C)
-    eigen_peak = _dsyevd_peak_gb(n_samples)
-
-    # Phase 2: Rotation — K_householder (N^2) + V (N^2) + per-chunk UtG (N * chunk)
-    #   + rotate_via_householder temp buffer (N * chunk) for in-place dormtr copy
-    rotation_phase = _lazy_eigen_post_peak_gb(n_samples)
-    utg_chunk_gb = n_samples * chunk_size * bytes_per_double / 1e9
-    rotation_phase += 2 * utg_chunk_gb  # output + temp copy inside C extension
-
-    # Phase 3: LMM association — no persistent U, just eigenvalues + rotated + batch
-    eigenvalues_gb = n_samples * bytes_per_double / 1e9
-    lmm_rotated_gb = n_samples * bytes_per_double * 3 / 1e9  # UtW, Uty, eval_copy
-    lmm_batch_gb = (
-        n_samples * chunk_size * bytes_per_double / 1e9  # UtG chunk
-        + _uab_iab_gb(n_samples, chunk_size, n_cvt)  # Uab + Iab
-    )
-    lmm_phase = eigenvalues_gb + lmm_rotated_gb + lmm_batch_gb
-
-    return max(eigen_peak, rotation_phase, lmm_phase)
-
-
 def estimate_eigendecomp_memory(n_samples: int) -> float:
     """Estimate peak memory (GB) for eigendecomposition of kinship matrix.
 

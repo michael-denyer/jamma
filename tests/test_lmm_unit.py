@@ -149,11 +149,41 @@ class TestEigendecomposition:
             with pytest.raises(numpy.linalg.LinAlgError, match="SVD did not converge"):
                 eigendecompose_kinship(K, check_memory=False)
 
-    def test_check_symmetry_warns_on_asymmetric_matrix(self):
-        """_check_symmetry issues a warning for an asymmetric matrix."""
+    @pytest.mark.slow
+    def test_check_symmetry_sampled_triggers_for_large_matrix(self):
+        """For n >= _SAMPLED_SYMMETRY_THRESHOLD, the sampled check is used."""
+        from unittest.mock import patch
+
+        from jamma.lmm.eigen import _SAMPLED_SYMMETRY_THRESHOLD
+
+        # Build a symmetric matrix just over the threshold size.
+        # Use an identity matrix (perfectly symmetric, fast to construct).
+        n = _SAMPLED_SYMMETRY_THRESHOLD + 1
+        K = np.eye(n)
+
+        with patch("jamma.lmm.eigen._check_symmetry_sampled") as mock_sampled:
+            eigendecompose_kinship(K, check_memory=False)
+            mock_sampled.assert_called_once()
+
+    @pytest.mark.slow
+    def test_check_symmetry_sampled_not_called_for_small_matrix(self):
+        """For n < _SAMPLED_SYMMETRY_THRESHOLD, the full allclose check is used."""
+        from unittest.mock import patch
+
+        from jamma.lmm.eigen import _SAMPLED_SYMMETRY_THRESHOLD
+
+        n = _SAMPLED_SYMMETRY_THRESHOLD - 1
+        K = np.eye(n)
+
+        with patch("jamma.lmm.eigen._check_symmetry_sampled") as mock_sampled:
+            eigendecompose_kinship(K, check_memory=False)
+            mock_sampled.assert_not_called()
+
+    def test_check_symmetry_sampled_warns_on_asymmetric_matrix(self):
+        """_check_symmetry_sampled issues a warning for an asymmetric matrix."""
         from loguru import logger
 
-        from jamma.lmm.eigen import _check_symmetry
+        from jamma.lmm.eigen import _check_symmetry_sampled
 
         n = 10_000
         rng = np.random.default_rng(0)
@@ -169,18 +199,18 @@ class TestEigendecomposition:
 
         sink_id = logger.add(_capture, level="WARNING")
         try:
-            _check_symmetry(K, n)
+            _check_symmetry_sampled(K, n)
         finally:
             logger.remove(sink_id)
 
         assert len(warning_messages) >= 1
         assert "symmetric" in warning_messages[0].lower()
 
-    def test_check_symmetry_silent_on_symmetric_matrix(self):
-        """_check_symmetry issues no warning for a symmetric matrix."""
+    def test_check_symmetry_sampled_silent_on_symmetric_matrix(self):
+        """_check_symmetry_sampled issues no warning for a symmetric matrix."""
         from loguru import logger
 
-        from jamma.lmm.eigen import _check_symmetry
+        from jamma.lmm.eigen import _check_symmetry_sampled
 
         n = 10_000
         rng = np.random.default_rng(1)
@@ -195,7 +225,7 @@ class TestEigendecomposition:
 
         sink_id = logger.add(_capture, level="WARNING")
         try:
-            _check_symmetry(K, n)
+            _check_symmetry_sampled(K, n)
         finally:
             logger.remove(sink_id)
 

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-03-21
+
+### Added
+
+- Fused general C kernels for arbitrary n_cvt Wald test — eliminates Python-level
+  Uab reconstruction loop for multi-covariate models (n_cvt ≥ 2)
+- Availability flags (`_C_FUSED_GENERAL_AVAILABLE`, `_C_MODE4_FUSED_GENERAL_AVAILABLE`)
+  with workspace creation and dispatch functions
+- Runner integration test for n_cvt=2 end-to-end fused vs non-fused validation
+
+### Changed
+
+- Batch and streaming runners auto-dispatch fused general path when n_cvt ≥ 2
+  and C extension is available
+- Updated PERFORMANCE.md and time estimates to v4.2.0 benchmarks (2h 29m at 125k)
+- Removed DSYEVR time multiplier — empirically comparable to DSYEVD at scale
+
+### Fixed
+
+- Input validation hardening — bounds checks on table indices, var columns,
+  n_snps in C kernels
+- Mode-4 fused general disabled at dispatch level due to NaN lambda_mle bug
+
 ## [4.2.1] - 2026-03-20
 
 ### Fixed

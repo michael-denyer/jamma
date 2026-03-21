@@ -646,10 +646,10 @@ def run_lmm_association_numpy_streaming(
                 chunk = chunk[valid_mask, :]
 
             # Mean-impute NaN
-            chunk_means_broadcast = filtered_means[filt_start:filt_end].reshape(1, -1)
+            chunk_means = filtered_means[filt_start:filt_end]
             missing_mask = np.isnan(chunk)
             if missing_mask.any():
-                chunk = np.where(missing_mask, chunk_means_broadcast, chunk)
+                chunk[missing_mask] = np.take(chunk_means, np.where(missing_mask)[1])
             del missing_mask
 
             # Rotate — control both external BLAS (via threadpoolctl) and

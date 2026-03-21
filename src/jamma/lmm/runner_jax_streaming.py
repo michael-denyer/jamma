@@ -401,12 +401,10 @@ def _run_lmm_jax_streaming_impl(
                 if filt_end <= filt_start:
                     continue
 
-                filtered_means_broadcast = filtered_means[filt_start:filt_end].reshape(
-                    1, -1
-                )
+                chunk_means = filtered_means[filt_start:filt_end]
                 missing_mask = np.isnan(chunk)
                 if missing_mask.any():
-                    chunk = np.where(missing_mask, filtered_means_broadcast, chunk)
+                    chunk[missing_mask] = np.take(chunk_means, np.where(missing_mask)[1])
                 del missing_mask
 
                 n_subset = chunk.shape[1]

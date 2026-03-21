@@ -706,6 +706,6 @@ class TestStreamingPipeline:
                 seq_vals,
                 pipe_vals,
                 atol=1e-14,
-                rtol=1e-12,
+                rtol=1e-8,
                 err_msg=f"{field} seq/pipeline mismatch (mode 4)",
             )

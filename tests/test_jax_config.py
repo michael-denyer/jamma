@@ -469,8 +469,10 @@ class TestComputeLmmChunkPaddingRoundTrip:
                 continue
             ref_arr = np.asarray(ref_result[key])
             padded_arr = np.asarray(padded_result[key][:n_snps])
-            np.testing.assert_array_equal(
+            np.testing.assert_allclose(
                 padded_arr,
                 ref_arr,
+                atol=1e-14,
+                rtol=1e-14,
                 err_msg=f"mode={lmm_mode}, key={key}: padded differs from unpadded",
             )

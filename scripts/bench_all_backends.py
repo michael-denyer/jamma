@@ -33,6 +33,7 @@ _MOUSE_PREFIX = _MOUSE_DIR / "mouse_hs1940"
 _MOUSE_KINSHIP = _MOUSE_DIR / "mouse_hs1940_kinship.cXX.txt"
 _MOUSE_COVAR_4 = _MOUSE_DIR / "covariates_4.txt"
 _DEFAULT_GEMMA = Path.home() / ".local" / "bin" / "gemma"
+_DEFAULT_GEMMA_ACCEL = Path.home() / ".local" / "bin" / "gemma-accelerate"
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +404,12 @@ def main():
         help=f"Path to GEMMA binary (default: auto-detect at {_DEFAULT_GEMMA})",
     )
     parser.add_argument(
+        "--gemma-accelerate-path",
+        type=Path,
+        default=None,
+        help=f"Path to Accelerate GEMMA (default: {_DEFAULT_GEMMA_ACCEL})",
+    )
+    parser.add_argument(
         "--runs",
         type=int,
         default=1,
@@ -410,7 +417,7 @@ def main():
     )
     args = parser.parse_args()
 
-    # Resolve GEMMA path
+    # Resolve GEMMA paths
     gemma_path = args.gemma_path
     if gemma_path is None:
         if _DEFAULT_GEMMA.exists():
@@ -419,6 +426,10 @@ def main():
             found = shutil.which("gemma")
             if found:
                 gemma_path = Path(found)
+
+    gemma_accel_path = args.gemma_accelerate_path
+    if gemma_accel_path is None and _DEFAULT_GEMMA_ACCEL.exists():
+        gemma_accel_path = _DEFAULT_GEMMA_ACCEL
 
     # Validate data exists
     if not _MOUSE_PREFIX.with_suffix(".bed").exists():
@@ -464,13 +475,21 @@ def main():
     # Collect results: {backend: {op: seconds}}
     timings: dict[str, dict[str, float | None]] = {}
 
-    # --- GEMMA ---
+    # --- GEMMA (OpenBLAS) ---
     if gemma_path:
-        print(f"Benchmarking GEMMA ({gemma_path})...", flush=True)
+        print(f"Benchmarking GEMMA OpenBLAS ({gemma_path})...", flush=True)
         timings["gemma"] = bench_gemma(gemma_path, args.runs)
     else:
         print("GEMMA not found, skipping (use --gemma-path to specify)")
         timings["gemma"] = {"kinship": None, "lmm_wald": None, "lmm_all": None}
+
+    # --- GEMMA (Accelerate) ---
+    if gemma_accel_path:
+        print(f"Benchmarking GEMMA Accelerate ({gemma_accel_path})...", flush=True)
+        timings["gemma_accel"] = bench_gemma(gemma_accel_path, args.runs)
+    else:
+        print("GEMMA Accelerate not found, skipping (use --gemma-accelerate-path)")
+        timings["gemma_accel"] = {"kinship": None, "lmm_wald": None, "lmm_all": None}
 
     # --- Kinship (JAMMA) ---
     print("Benchmarking kinship (JAMMA)...", flush=True)
@@ -515,6 +534,7 @@ def main():
 
     # --- Print results table ---
     gemma = timings["gemma"]
+    gemma_a = timings["gemma_accel"]
     npy_pure = timings["numpy_pure"]
     npy = timings["numpy"]
     npy_s = timings["numpy_streaming"]
@@ -524,8 +544,9 @@ def main():
     def _cell(t: float | None) -> str:
         return _fmt(t) if t is not None else "—"
 
-    def _vs(t: float | None, op: str) -> str:
-        g = gemma.get(op)
+    def _vs(t: float | None, op: str, *, ref: dict = None) -> str:
+        src = ref if ref is not None else gemma
+        g = src.get(op)
         if g is None or t is None:
             return "—"
         return f"{g / t:.1f}x"
@@ -564,27 +585,30 @@ def main():
 
     # Header
     hdr = (
-        "| Operation | GEMMA 0.98.5 | JAMMA NumPy | JAMMA NumPy+C"
+        "| Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy"
+        " | JAMMA NumPy+C"
         " | JAMMA NumPy+C (stream) | JAMMA JAX (batch) | JAMMA JAX (streaming)"
-        " | C speedup | vs GEMMA |"
+        " | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |"
     )
     sep = (
-        "|-----------|-------------|-------------|--------------|"
+        "|-----------|-----------------|-------------------|-------------|--------------|"
         "------------------------|-------------------|----------------------|"
-        "-----------|----------|"
+        "-----------|---------------|------------------|"
     )
     print(hdr)
     print(sep)
 
     for label, op in rows:
         best = _best_jamma(op)
-        vs = _vs(best, op) if best else "—"
+        vs_ob = _vs(best, op) if best else "—"
+        vs_ac = _vs(best, op, ref=gemma_a) if best else "—"
         print(
             f"| {label} | {_cell(gemma.get(op))}"
+            f" | {_cell(gemma_a.get(op))}"
             f" | {_cell(npy_pure.get(op))} | {_cell(npy.get(op))}"
             f" | {_cell(npy_s.get(op))}"
             f" | {_cell(jax_b.get(op))} | {_cell(jax_s.get(op))}"
-            f" | {_c_speedup(op)} | {vs} |"
+            f" | {_c_speedup(op)} | {vs_ob} | {vs_ac} |"
         )
 
     print()

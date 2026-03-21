@@ -1052,7 +1052,7 @@ def build_pab_table_for_c(n_cvt: int) -> dict:
     genotype_col = n_cvt  # 0-based index of X in vectors array
     var_a_list = []
     var_b_list = []
-    for a_col, b_col, linear_idx in table["uab_pairs"]:
+    for a_col, b_col, _linear_idx in table["uab_pairs"]:
         if a_col == genotype_col or b_col == genotype_col:
             var_a_list.append(a_col)
             var_b_list.append(b_col)

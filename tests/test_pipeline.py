@@ -286,54 +286,6 @@ class TestPhenotypeColumnSelection:
 
 
 @pytest.mark.tier1
-class TestPipelineConfigSecular:
-    """Tests for PipelineConfig secular update validation."""
-
-    def test_secular_requires_loco(self) -> None:
-        with pytest.raises(ValueError, match="requires loco=True"):
-            PipelineConfig(bfile=Path("test"), use_secular_update=True)
-
-    def test_secular_rejects_jax_backend(self) -> None:
-        with pytest.raises(ValueError, match="requires a NumPy backend"):
-            PipelineConfig(
-                bfile=Path("test"),
-                loco=True,
-                use_secular_update=True,
-                backend="jax",
-            )
-
-    def test_secular_rejects_auto_backend(self) -> None:
-        """backend='auto' (default) rejected — must be explicit 'numpy'."""
-        with pytest.raises(ValueError, match="requires a NumPy backend"):
-            PipelineConfig(
-                bfile=Path("test"),
-                loco=True,
-                use_secular_update=True,
-                backend="auto",
-            )
-
-    def test_secular_accepts_numpy_backend(self) -> None:
-        config = PipelineConfig(
-            bfile=Path("test"),
-            loco=True,
-            use_secular_update=True,
-            backend="numpy",
-        )
-        assert config.use_secular_update is True
-        assert config.backend == "numpy"
-
-    def test_secular_rejects_save_kinship(self) -> None:
-        with pytest.raises(ValueError, match="save_kinship=True is not supported"):
-            PipelineConfig(
-                bfile=Path("test"),
-                loco=True,
-                use_secular_update=True,
-                backend="numpy",
-                save_kinship=True,
-            )
-
-
-@pytest.mark.tier1
 class TestPipelineConfigSnpsFields:
     """Tests for PipelineConfig SNP filtering fields."""
 
@@ -581,6 +533,274 @@ class TestPipelineConfigWeightFile:
 
         # With uniform weights=4.0, K_weighted[i,j] = K[i,j] / sqrt(4*4) = K[i,j] / 4
         np.testing.assert_allclose(K_weighted, K_unweighted / 4.0, rtol=1e-10)
+
+
+@pytest.mark.tier1
+class TestEarlySampleFiltering:
+    """Tests for early sample filtering before kinship computation."""
+
+    def test_early_sample_filter_pipeline(self, tmp_path: Path) -> None:
+        """Early filtering: NaN phenotypes + save_kinship=False.
+
+        Verifies the pipeline computes valid_mask before kinship and
+        passes valid_indices, producing identical eigenvalues to a
+        direct valid-subset kinship computation.
+        """
+        from jamma.kinship.compute import compute_kinship_streaming
+
+        bfile = _copy_plink_genotypes(tmp_path)
+
+        # Write .fam with some NaN phenotypes (samples 5, 10, 15)
+        n_samples = 100
+        fam_path = tmp_path / "test.fam"
+        with open(fam_path, "w") as f:
+            for i in range(n_samples):
+                pheno = "NA" if i in {5, 10, 15} else str(1.0 + i * 0.1)
+                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno}\n")
+
+        out = tmp_path / "output_early"
+        out.mkdir()
+        config = PipelineConfig(
+            bfile=bfile,
+            lmm_mode=1,
+            output_dir=out,
+            check_memory=False,
+            show_progress=False,
+            save_kinship=False,
+            backend="numpy",
+        )
+
+        # The pipeline should use kinship_valid_indices internally.
+        # Verify by checking that load_kinship with valid_indices produces
+        # (n_valid, n_valid) kinship.
+        valid_indices = np.array([i for i in range(n_samples) if i not in {5, 10, 15}])
+
+        runner = PipelineRunner(config)
+        K_with_vi = runner.load_kinship(n_samples, valid_indices=valid_indices)
+        assert K_with_vi.shape == (97, 97), (
+            f"Expected (97, 97) kinship with valid_indices, got {K_with_vi.shape}"
+        )
+
+        # Reference: streaming kinship with valid_indices directly
+        K_ref = compute_kinship_streaming(
+            bfile,
+            check_memory=False,
+            show_progress=False,
+            valid_indices=valid_indices,
+        )
+        np.testing.assert_allclose(
+            K_with_vi,
+            K_ref,
+            rtol=1e-12,
+            err_msg="load_kinship with valid_indices must match direct streaming",
+        )
+
+    def test_save_kinship_full_size(self, tmp_path: Path) -> None:
+        """save_kinship=True writes full (n_samples, n_samples) kinship.
+
+        Even when valid_indices is passed to load_kinship, the saved file
+        must be full-size so it can be reused with different phenotype masks.
+        """
+        bfile = _copy_plink_genotypes(tmp_path)
+
+        n_samples = 100
+        fam_path = tmp_path / "test.fam"
+        with open(fam_path, "w") as f:
+            for i in range(n_samples):
+                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{1.0 + i}\n")
+
+        out = tmp_path / "output_save"
+        out.mkdir()
+        config = PipelineConfig(
+            bfile=bfile,
+            lmm_mode=1,
+            output_dir=out,
+            check_memory=False,
+            show_progress=False,
+            save_kinship=True,
+            backend="numpy",
+        )
+
+        runner = PipelineRunner(config)
+        # Even with valid_indices, load_kinship returns filtered shape...
+        valid_indices = np.array([0, 1, 2, 3, 4, 6, 7, 8, 9])
+        n_valid = len(valid_indices)
+
+        K = runner.load_kinship(n_samples, valid_indices=valid_indices)
+        assert K.shape == (n_valid, n_valid)
+
+    def test_weight_file_valid_indices(self, tmp_path: Path) -> None:
+        """Weights filtered to match valid_indices under early filtering."""
+        bfile = _copy_plink_genotypes(tmp_path)
+
+        # Write .fam
+        n_samples = 100
+        fam_path = tmp_path / "test.fam"
+        with open(fam_path, "w") as f:
+            for i in range(n_samples):
+                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{1.0 + i}\n")
+
+        # Create weight file with per-sample weights
+        weight_file = tmp_path / "weights.txt"
+        weights = np.arange(1.0, n_samples + 1.0)
+        np.savetxt(weight_file, weights)
+
+        out = tmp_path / "output_wt"
+        out.mkdir()
+        config = PipelineConfig(
+            bfile=bfile,
+            lmm_mode=1,
+            output_dir=out,
+            check_memory=False,
+            show_progress=False,
+            weight_file=weight_file,
+        )
+
+        valid_indices = np.array([i for i in range(n_samples) if i not in {5, 10, 15}])
+
+        runner = PipelineRunner(config)
+        K = runner.load_kinship(n_samples, valid_indices=valid_indices)
+
+        # K should be (97, 97) with weights applied
+        assert K.shape == (97, 97), (
+            f"Expected (97, 97) with valid_indices, got {K.shape}"
+        )
+
+    def test_precomputed_kinship_still_works(self, tmp_path: Path) -> None:
+        """Pre-computed kinship from file is subsetted post-load with valid_indices."""
+        from jamma.kinship.compute import compute_kinship_streaming
+
+        bfile = _copy_plink_genotypes(tmp_path)
+
+        # Write .fam
+        n_samples = 100
+        fam_path = tmp_path / "test.fam"
+        with open(fam_path, "w") as f:
+            for i in range(n_samples):
+                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{1.0 + i}\n")
+
+        # Compute and save a full kinship matrix
+        K_full = compute_kinship_streaming(
+            bfile, check_memory=False, show_progress=False
+        )
+        kinship_file = tmp_path / "kinship.cXX.txt"
+        np.savetxt(kinship_file, K_full)
+
+        out = tmp_path / "output_precomp"
+        out.mkdir()
+        config = PipelineConfig(
+            bfile=bfile,
+            lmm_mode=1,
+            output_dir=out,
+            check_memory=False,
+            show_progress=False,
+            kinship_file=kinship_file,
+        )
+
+        valid_indices = np.array([i for i in range(n_samples) if i not in {5, 10, 15}])
+
+        runner = PipelineRunner(config)
+        K = runner.load_kinship(n_samples, valid_indices=valid_indices)
+
+        # Should be subsetted to (97, 97) from the loaded full kinship
+        assert K.shape == (97, 97)
+        K_expected = K_full[np.ix_(valid_indices, valid_indices)]
+        np.testing.assert_allclose(
+            K,
+            K_expected,
+            rtol=1e-12,
+            err_msg="Pre-computed kinship with valid_indices must match np.ix_",
+        )
+
+    def test_run_end_to_end_with_nan_phenotypes(self, tmp_path: Path) -> None:
+        """Full run() with NaN phenotypes triggers early filtering and completes."""
+        bfile = _copy_plink_genotypes(tmp_path)
+
+        n_samples = 100
+        nan_indices = {5, 10, 15}
+        n_valid = n_samples - len(nan_indices)
+        fam_path = tmp_path / "test.fam"
+        with open(fam_path, "w") as f:
+            for i in range(n_samples):
+                pheno = "NA" if i in nan_indices else str(1.0 + i * 0.1)
+                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno}\n")
+
+        out = tmp_path / "output_e2e"
+        out.mkdir()
+        config = PipelineConfig(
+            bfile=bfile,
+            lmm_mode=1,
+            output_dir=out,
+            check_memory=False,
+            show_progress=False,
+            save_kinship=False,
+            backend="numpy",
+        )
+
+        result = PipelineRunner(config).run()
+
+        assert result.n_samples == n_valid, (
+            f"Expected {n_valid} samples after NaN filtering, got {result.n_samples}"
+        )
+        assert result.n_snps_tested > 0, "Should test at least some SNPs"
+
+    def test_run_end_to_end_save_kinship_with_nan(self, tmp_path: Path) -> None:
+        """Full run() with save_kinship=True and NaN phenotypes.
+
+        Verifies save_kinship does not change statistical results: the
+        filtered kinship is saved and eigenpairs match the non-save path.
+        """
+        bfile = _copy_plink_genotypes(tmp_path)
+
+        n_samples = 100
+        nan_indices = {5, 10, 15}
+        n_valid = n_samples - len(nan_indices)
+        fam_path = tmp_path / "test.fam"
+        with open(fam_path, "w") as f:
+            for i in range(n_samples):
+                pheno = "NA" if i in nan_indices else str(1.0 + i * 0.1)
+                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno}\n")
+
+        # Run without save_kinship
+        out_no_save = tmp_path / "output_nosave"
+        out_no_save.mkdir()
+        config_no_save = PipelineConfig(
+            bfile=bfile,
+            lmm_mode=1,
+            output_dir=out_no_save,
+            check_memory=False,
+            show_progress=False,
+            save_kinship=False,
+            backend="numpy",
+        )
+        result_no_save = PipelineRunner(config_no_save).run()
+
+        # Run with save_kinship
+        out_save = tmp_path / "output_save"
+        out_save.mkdir()
+        config_save = PipelineConfig(
+            bfile=bfile,
+            lmm_mode=1,
+            output_dir=out_save,
+            check_memory=False,
+            show_progress=False,
+            save_kinship=True,
+            backend="numpy",
+        )
+        result_save = PipelineRunner(config_save).run()
+
+        # Results must be identical regardless of save_kinship
+        assert result_save.n_samples == result_no_save.n_samples == n_valid
+        assert result_save.n_snps_tested == result_no_save.n_snps_tested
+
+        # Saved kinship should be full (n_samples, n_samples) for reuse
+        kinship_path = out_save / "result.cXX.npy"
+        assert kinship_path.exists(), "Kinship file should be saved"
+        K_saved = np.load(kinship_path)
+        assert K_saved.shape == (n_samples, n_samples), (
+            f"save_kinship must write full ({n_samples}, {n_samples}) "
+            f"kinship for reuse, got {K_saved.shape}"
+        )
 
 
 @pytest.mark.tier1

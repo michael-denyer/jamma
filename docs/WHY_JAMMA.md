@@ -12,6 +12,7 @@ JAMMA delivers the same statistical results as GEMMA while solving practical pro
 | **Installation** | C++ compilation required | `pip install jamma` |
 | **Error Messages** | Segfault or cryptic | Clear, actionable |
 | **Numerical Results** | Reference | Equivalent ([proof](EQUIVALENCE.md)) |
+| **Sample Filtering** | Kinship always n_samples × n_samples | Kinship at n_valid × n_valid when samples are dropped |
 
 ---
 
@@ -47,6 +48,7 @@ Suggestion: Use a larger instance or streaming mode.
 - Clear breakdown of where memory goes
 - Actionable suggestions for resolution
 - RSS logging at workflow boundaries for debugging
+- Early sample filtering: when samples are dropped due to phenotype or covariate missingness, kinship is accumulated at (n_valid × n_valid) size directly — the full (n_samples × n_samples) matrix is never allocated
 
 ---
 

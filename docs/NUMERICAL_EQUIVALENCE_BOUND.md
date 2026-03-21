@@ -48,7 +48,11 @@ We write `ΔX = X_JAMMA − X_GEMMA` for differences in outputs.
 ## Assumptions
 
 1. **Identical preprocessing**: missing imputation, centering, and SNP filtering
-   are identical, so both pipelines start from the same `Xc`.
+   are identical, so both pipelines start from the same `Xc`. When early sample
+   filtering is active (`valid_indices`), JAMMA accumulates kinship on `Xc[S,:]`
+   (where S is the set of valid sample indices)
+   directly rather than subsetting the full matrix post-hoc; these are algebraically
+   and numerically equivalent, so the bound holds unchanged.
 2. **Float64 everywhere**: JAX is configured with `jax_enable_x64 = True`.
 3. **Stable BLAS/LAPACK**: matrix multiplication and eigendecomposition are
    backward stable in the standard IEEE-754 model.

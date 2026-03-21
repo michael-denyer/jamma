@@ -78,6 +78,12 @@ The formula is identical. Differences arise only from FP accumulation order.
 **Bound**: `|K_JAMMA - K_GEMMA| <= O(p * eps_mach)`. With p <= 10^6:
 `O(10^6 * 2^-52) ~ O(10^-10)`.
 
+**Early sample filtering**: When `valid_indices` is provided (samples excluded due to
+missing phenotype/covariate data), JAMMA accumulates `K` at `(n_valid, n_valid)` size
+directly rather than computing the full `(n_samples, n_samples)` matrix and subsetting.
+This is algebraically identical and produces the same FP result — the same dot products
+over the same rows. No change to the kinship tolerance bound.
+
 **Observed**: max relative difference = 4.66e-10.
 
 ---

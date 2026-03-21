@@ -334,7 +334,7 @@ Uses **streaming subtraction**: computes the full kinship matrix K once, then de
 
 The streaming approach produces mathematically identical LOCO kinship matrices while using constant memory (one K_loco at a time). This is critical for large-sample GWAS where materializing 22 copies of an n×n matrix is infeasible.
 
-**Rotated-basis eigenvalue update** (`use_secular_update=True`): an alternative path that eigendecomposes K_full once and derives per-chromosome eigenvalues via M = alpha_c × diag(d_full) - sigma × U_full^T × S_chr × U_full. This avoids one O(n^3) eigendecomposition per chromosome (typically 22) at the cost of 1 + C BED file passes in sequential streaming mode (one for K_full accumulation, then one per chromosome for X_c construction). The math is equivalent — validated against GEMMA within calibrated tolerances. See `loco_eigen_update.py`.
+The streaming approach produces mathematically identical LOCO kinship matrices while requiring only constant memory (one K_loco buffer at a time).
 
 ---
 
@@ -407,6 +407,38 @@ text compatibility is preserved via `--legacy-text` and the auto-detecting reade
 
 ---
 
+## 12. Early Sample Filtering in Kinship Computation
+
+### GEMMA
+
+GEMMA computes kinship over all samples in the PLINK `.fam` file, regardless of
+phenotype or covariate missingness. Sample exclusion is applied downstream during
+LMM — the kinship matrix is always n_samples × n_samples.
+
+### JAMMA
+
+When `save_kinship=False` and some samples have missing phenotype or covariates,
+JAMMA passes `valid_indices` to `compute_kinship_streaming`, which subsets each
+genotype chunk to the valid rows before accumulation. The resulting kinship matrix
+has shape (n_valid, n_valid) and is never expanded to n_samples × n_samples.
+
+When `save_kinship=True`, JAMMA computes the full n_samples × n_samples kinship
+so the saved file is reusable across phenotype masks. In that case behavior matches
+GEMMA.
+
+### Divergence Impact
+
+| Condition | GEMMA | JAMMA |
+|-----------|-------|-------|
+| All samples valid | n × n | n × n |
+| Some missing, save_kinship=False | n × n (masked later) | n_valid × n_valid |
+| Some missing, save_kinship=True | n × n | n × n |
+
+The kinship values themselves are identical — only the matrix dimensions differ in
+the `save_kinship=False` path. This is a memory optimization, not a numerical change.
+
+---
+
 ## Summary Table
 
 | Feature | GEMMA Behavior | JAMMA Behavior | Impact |
@@ -423,6 +455,7 @@ text compatibility is preserved via `--legacy-text` and the auto-detecting reade
 | LOCO kinship | Materialized all | Streaming subtraction | Same math, lower memory |
 | LOCO + external kinship | Silently uses full K | Rejects (mutual exclusion) | Correctness guard |
 | Default file format | Text (`.cXX.txt`, `.eigenD.txt`) | Binary `.npy` (`--legacy-text` for text) | GEMMA files read natively |
+| Early sample filtering | Kinship always n × n | Kinship at n_valid × n_valid when save_kinship=False | Memory saving only; values identical |
 
 ---
 

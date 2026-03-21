@@ -2396,6 +2396,212 @@ class TestComputeKinshipStreamingSinglePass:
         )
 
 
+@pytest.mark.tier1
+class TestComputeKinshipStreamingValidIndices:
+    """Tests for valid_indices parameter on kinship streaming functions."""
+
+    def test_single_pass_valid_indices(self, sample_plink_data: Path) -> None:
+        """Single-pass valid_indices: (n_valid, n_valid) matching direct computation."""
+        from jamma.kinship.compute import _kinship_single_pass
+
+        meta = get_plink_metadata(sample_plink_data)
+        n_samples = meta["n_samples"]
+        n_snps = meta["n_snps"]
+
+        # Drop samples 5, 10, 15
+        valid_indices = np.array([i for i in range(n_samples) if i not in {5, 10, 15}])
+
+        # Reference: load full genotypes, subset samples, compute kinship on subset
+        data = load_plink_binary(sample_plink_data)
+        geno_valid = data.genotypes[valid_indices, :].astype(np.float64)
+        K_ref = compute_centered_kinship(geno_valid, check_memory=False)
+
+        K_direct = _kinship_single_pass(
+            sample_plink_data,
+            n_samples,
+            n_snps,
+            chunk_size=5000,
+            show_progress=False,
+            valid_indices=valid_indices,
+        )
+
+        assert K_direct.shape == (len(valid_indices), len(valid_indices))
+        np.testing.assert_allclose(
+            K_direct,
+            K_ref,
+            rtol=1e-12,
+            atol=1e-14,
+            err_msg="Single-pass valid_indices must match valid-sample kinship",
+        )
+
+    def test_single_pass_valid_indices_none(self, sample_plink_data: Path) -> None:
+        """Single-pass valid_indices=None: (n_samples, n_samples)."""
+        from jamma.kinship.compute import _kinship_single_pass
+
+        meta = get_plink_metadata(sample_plink_data)
+        n_samples = meta["n_samples"]
+        n_snps = meta["n_snps"]
+
+        K_default = _kinship_single_pass(
+            sample_plink_data, n_samples, n_snps, chunk_size=5000, show_progress=False
+        )
+        K_none = _kinship_single_pass(
+            sample_plink_data,
+            n_samples,
+            n_snps,
+            chunk_size=5000,
+            show_progress=False,
+            valid_indices=None,
+        )
+
+        assert K_default.shape == (n_samples, n_samples)
+        np.testing.assert_array_equal(K_default, K_none)
+
+    def test_streaming_valid_indices_parity(self, sample_plink_data: Path) -> None:
+        """Streaming valid_indices matches valid-sample-only computation."""
+        meta = get_plink_metadata(sample_plink_data)
+        n_samples = meta["n_samples"]
+
+        valid_indices = np.array([i for i in range(n_samples) if i not in {5, 10, 15}])
+
+        # Reference: load full genotypes, subset samples, compute kinship on subset
+        data = load_plink_binary(sample_plink_data)
+        geno_valid = data.genotypes[valid_indices, :].astype(np.float64)
+        K_ref = compute_centered_kinship(geno_valid, check_memory=False)
+
+        K_direct = compute_kinship_streaming(
+            sample_plink_data,
+            check_memory=False,
+            show_progress=False,
+            valid_indices=valid_indices,
+        )
+
+        assert K_direct.shape == (len(valid_indices), len(valid_indices))
+        np.testing.assert_allclose(
+            K_direct,
+            K_ref,
+            rtol=1e-12,
+            atol=1e-14,
+            err_msg="Streaming with valid_indices must match valid-sample-only kinship",
+        )
+
+    def test_streaming_valid_indices_two_pass(self, sample_plink_data: Path) -> None:
+        """Two-pass streaming with valid_indices produces parity."""
+        meta = get_plink_metadata(sample_plink_data)
+        n_samples = meta["n_samples"]
+
+        valid_indices = np.array([i for i in range(n_samples) if i not in {5, 10, 15}])
+
+        # Reference: load full genotypes, subset samples, compute kinship on subset
+        # with maf filter applied to valid-sample-only statistics
+        data = load_plink_binary(sample_plink_data)
+        geno_valid = data.genotypes[valid_indices, :].astype(np.float64)
+        K_ref = compute_centered_kinship(
+            geno_valid, maf_threshold=0.05, check_memory=False
+        )
+
+        K_direct = compute_kinship_streaming(
+            sample_plink_data,
+            maf_threshold=0.05,
+            check_memory=False,
+            show_progress=False,
+            valid_indices=valid_indices,
+        )
+
+        assert K_direct.shape == (len(valid_indices), len(valid_indices))
+        np.testing.assert_allclose(
+            K_direct,
+            K_ref,
+            rtol=1e-12,
+            atol=1e-14,
+            err_msg="Two-pass valid_indices must match valid-sample kinship",
+        )
+
+    def test_streaming_valid_indices_shape(self, sample_plink_data: Path) -> None:
+        """Result shape is (len(valid_indices), len(valid_indices))."""
+        valid_indices = np.array([0, 2, 3, 7, 20])
+        K = compute_kinship_streaming(
+            sample_plink_data,
+            check_memory=False,
+            show_progress=False,
+            valid_indices=valid_indices,
+        )
+        assert K.shape == (5, 5)
+
+    def test_streaming_valid_indices_with_ksnps(self, sample_plink_data: Path) -> None:
+        """valid_indices + ksnps_indices: both dimensions restricted."""
+        meta = get_plink_metadata(sample_plink_data)
+        n_samples = meta["n_samples"]
+        n_snps = meta["n_snps"]
+
+        valid_indices = np.array([i for i in range(n_samples) if i not in {5, 10, 15}])
+        ksnps_indices = np.arange(min(200, n_snps))
+
+        # Reference: load full genotypes, subset both dimensions, compute kinship
+        data = load_plink_binary(sample_plink_data)
+        geno_sub = data.genotypes[np.ix_(valid_indices, ksnps_indices)].astype(
+            np.float64
+        )
+        K_ref = compute_centered_kinship(geno_sub, check_memory=False)
+
+        K_direct = compute_kinship_streaming(
+            sample_plink_data,
+            check_memory=False,
+            show_progress=False,
+            valid_indices=valid_indices,
+            ksnps_indices=ksnps_indices,
+        )
+
+        assert K_direct.shape == (len(valid_indices), len(valid_indices))
+        np.testing.assert_allclose(
+            K_direct,
+            K_ref,
+            rtol=1e-12,
+            atol=1e-14,
+            err_msg="valid_indices + ksnps_indices must match doubly-restricted",
+        )
+
+    def test_streaming_empty_valid_indices(self, sample_plink_data: Path) -> None:
+        """Empty valid_indices raises ValueError."""
+        with pytest.raises(ValueError, match="must not be empty"):
+            compute_kinship_streaming(
+                sample_plink_data,
+                check_memory=False,
+                show_progress=False,
+                valid_indices=np.array([], dtype=np.intp),
+            )
+
+    def test_streaming_oob_valid_indices(self, sample_plink_data: Path) -> None:
+        """Out-of-bounds valid_indices raises ValueError."""
+        with pytest.raises(ValueError, match="out of bounds"):
+            compute_kinship_streaming(
+                sample_plink_data,
+                check_memory=False,
+                show_progress=False,
+                valid_indices=np.array([0, 1, 9999]),
+            )
+
+    def test_streaming_duplicate_valid_indices(self, sample_plink_data: Path) -> None:
+        """Duplicate valid_indices raises ValueError."""
+        with pytest.raises(ValueError, match="duplicates"):
+            compute_kinship_streaming(
+                sample_plink_data,
+                check_memory=False,
+                show_progress=False,
+                valid_indices=np.array([0, 0, 1, 2]),
+            )
+
+    def test_streaming_unsorted_valid_indices(self, sample_plink_data: Path) -> None:
+        """Unsorted valid_indices raises ValueError."""
+        with pytest.raises(ValueError, match="strictly increasing"):
+            compute_kinship_streaming(
+                sample_plink_data,
+                check_memory=False,
+                show_progress=False,
+                valid_indices=np.array([3, 1, 0, 2]),
+            )
+
+
 # ---------------------------------------------------------------------------
 # SC-02: Streaming runner mode 4, all-filtered, and covariate tests
 # ---------------------------------------------------------------------------

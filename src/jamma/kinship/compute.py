@@ -445,6 +445,7 @@ def _kinship_single_pass(
     n_snps: int,
     chunk_size: int,
     show_progress: bool,
+    valid_indices: np.ndarray | None = None,
 ) -> np.ndarray:
     """Single-pass kinship: compute stats and accumulate in one BED read.
 
@@ -458,14 +459,22 @@ def _kinship_single_pass(
         n_snps: Total number of SNPs.
         chunk_size: Number of SNPs per chunk.
         show_progress: Whether to show progress bar.
+        valid_indices: Optional array of sample indices to keep. When provided,
+            the kinship matrix is accumulated at (n_valid, n_valid) size directly,
+            avoiding allocation of the full (n_samples, n_samples) matrix.
 
     Returns:
-        Kinship matrix (n_samples, n_samples).
+        Kinship matrix (n_out, n_out) where n_out = len(valid_indices) or n_samples.
 
     Raises:
+        ValueError: If valid_indices is empty, out of bounds, or unsorted.
         ValueError: If no SNPs pass monomorphism filter.
     """
-    K = np.zeros((n_samples, n_samples), dtype=np.float64)
+    if valid_indices is not None:
+        _validate_valid_indices(valid_indices, n_samples)
+
+    n_out = len(valid_indices) if valid_indices is not None else n_samples
+    K = np.zeros((n_out, n_out), dtype=np.float64)
     n_filtered = 0
 
     chunk_iter = stream_genotype_chunks(
@@ -478,6 +487,10 @@ def _kinship_single_pass(
         )
 
     for chunk, _start, _end in chunk_iter:
+        # Early valid-sample subsetting: compute stats on valid samples only.
+        if valid_indices is not None:
+            chunk = chunk[valid_indices, :]
+
         # Per-chunk monomorphism filter: exclude constant genotype columns.
         # Suppress RuntimeWarning for all-NaN columns (no valid samples in chunk).
         with warnings.catch_warnings():
@@ -511,6 +524,7 @@ def compute_kinship_streaming(
     check_memory: bool = True,
     show_progress: bool = True,
     ksnps_indices: np.ndarray | None = None,
+    valid_indices: np.ndarray | None = None,
 ) -> np.ndarray:
     """Compute centered relatedness matrix from disk-streamed genotypes.
 
@@ -548,9 +562,13 @@ def compute_kinship_streaming(
             and raise MemoryError if insufficient.
         show_progress: If True (default), show progress bar during iteration.
         ksnps_indices: Pre-resolved column indices for -ksnps restriction, or None.
+        valid_indices: Optional array of sample indices to keep. When provided,
+            the kinship matrix is accumulated at (n_valid, n_valid) size directly,
+            avoiding allocation of the full (n_samples, n_samples) matrix.
 
     Returns:
-        Kinship matrix (n_samples, n_samples), symmetric, scaled by n_filtered_snps.
+        Kinship matrix (n_out, n_out) where n_out = len(valid_indices) or n_samples.
+        Symmetric, scaled by n_filtered_snps.
 
     Raises:
         MemoryError: If check_memory=True and insufficient memory available.
@@ -570,16 +588,27 @@ def compute_kinship_streaming(
     n_samples = meta["n_samples"]
     n_snps = meta["n_snps"]
 
+    if valid_indices is not None:
+        _validate_valid_indices(valid_indices, n_samples)
+
     from jamma.core.estimates import estimate_kinship_time
 
+    n_out = len(valid_indices) if valid_indices is not None else n_samples
+
     logger.info("Computing Kinship Matrix")
-    logger.info(f"  Individuals: {n_samples:,}")
+    logger.info(
+        f"  Individuals: {n_out:,}"
+        + (f" (filtered from {n_samples:,})" if n_out != n_samples else "")
+    )
     logger.info(f"  SNPs: {n_snps:,}")
     logger.info(f"  Chunk size: {chunk_size:,}")
-    logger.info(f"  Estimated time: {estimate_kinship_time(n_samples, n_snps)}")
+    logger.info(f"  Estimated time: {estimate_kinship_time(n_out, n_snps)}")
 
-    # Memory check before allocation
-    # Check against full pipeline peak (eigendecomp) since it always follows kinship.
+    # Memory check before allocation.
+    # Use n_samples (not n_out): stream_genotype_chunks reads full BED rows
+    # at (n_samples, chunk_size), subsetting to valid_indices happens after
+    # allocation. Eigendecomp and kinship accumulator use n_out, but passing
+    # n_samples is conservative and safe.
     if check_memory:
         est = estimate_streaming_memory(n_samples, chunk_size=chunk_size)
         check_memory_available(
@@ -598,7 +627,14 @@ def compute_kinship_streaming(
 
     if use_single_pass:
         logger.debug("Kinship: single-pass mode (no MAF/missing filters)")
-        K = _kinship_single_pass(bed_path, n_samples, n_snps, chunk_size, show_progress)
+        K = _kinship_single_pass(
+            bed_path,
+            n_samples,
+            n_snps,
+            chunk_size,
+            show_progress,
+            valid_indices=valid_indices,
+        )
         elapsed = time.perf_counter() - start_time
         logger.info(f"Kinship matrix computed in {elapsed:.2f}s")
         return K
@@ -619,6 +655,9 @@ def compute_kinship_streaming(
         )
 
     for chunk, start, end in stats_iterator:
+        # Early valid-sample subsetting: compute stats on valid samples only.
+        if valid_indices is not None:
+            chunk = chunk[valid_indices, :]
         chunk_miss_counts = np.sum(np.isnan(chunk), axis=0)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
@@ -633,7 +672,8 @@ def compute_kinship_streaming(
         del chunk  # Free ~1.6GB per chunk at scale before next iteration
 
     # Compute filters (free source arrays immediately after deriving values)
-    miss_rates = all_miss_counts / n_samples
+    n_denom = len(valid_indices) if valid_indices is not None else n_samples
+    miss_rates = all_miss_counts / n_denom
     del all_miss_counts
     allele_freqs = all_means / 2.0
     del all_means
@@ -672,7 +712,7 @@ def compute_kinship_streaming(
     snp_indices = np.where(snp_mask)[0]
 
     # Initialize kinship accumulator (numpy — no JAX device memory)
-    K = np.zeros((n_samples, n_samples), dtype=np.float64)
+    K = np.zeros((n_out, n_out), dtype=np.float64)
 
     # === PASS 2: Accumulate kinship from filtered SNPs ===
     n_chunks = (n_snps + chunk_size - 1) // chunk_size
@@ -694,6 +734,11 @@ def compute_kinship_streaming(
 
         if len(chunk_filtered_indices) == 0:
             continue
+
+        # Early valid-sample subsetting for pass 2 (rows before columns
+        # to avoid allocating an (n_samples, n_filtered_cols) intermediate).
+        if valid_indices is not None:
+            chunk = chunk[valid_indices, :]
 
         # Extract only filtered columns (float64 for numerical accuracy)
         X_chunk = np.asarray(chunk[:, chunk_filtered_indices], dtype=np.float64)
@@ -1013,13 +1058,23 @@ def compute_loco_kinship_streaming(
     partitions = partitions_from_metadata(meta)
     unique_chrs = sorted(partitions.keys(), key=chr_sort_key)
 
+    n_samples_display = len(valid_indices) if valid_indices is not None else n_samples
     logger.info("Computing LOCO Kinship (streaming)")
-    logger.info(f"  Individuals: {n_samples:,}")
+    if valid_indices is not None:
+        logger.info(
+            f"  Individuals: {n_samples_display:,} (filtered from {n_samples:,})"
+        )
+    else:
+        logger.info(f"  Individuals: {n_samples:,}")
     logger.info(f"  SNPs: {n_snps:,}")
     logger.info(f"  Chromosomes: {len(unique_chrs)}")
     logger.info(f"  Chunk size: {chunk_size:,}")
 
     # === PASS 1: Compute per-SNP statistics for filtering ===
+    # Stats are computed on ALL samples (not valid_indices subset). This is
+    # intentional: SNP filter decisions (MAF, missingness) should use the full
+    # population to match GEMMA's behaviour. valid_indices only affects PASS 2
+    # kinship accumulation, not which SNPs are included.
     all_means = np.zeros(n_snps, dtype=np.float64)
     all_miss_counts = np.zeros(n_snps, dtype=np.int32)
     all_vars = np.zeros(n_snps, dtype=np.float64)

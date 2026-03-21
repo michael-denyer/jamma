@@ -76,7 +76,12 @@ Eigendecomp dominates the increase: O(n³) scaling from 90k→125k is ~2.1× (DS
 
 The NumPy backend includes an optional C extension (`_lmm_accel.c`) with OpenMP parallelism
 that replaces the Python loop over SNPs for Wald test computation. The extension uses a
-workspace API (pre-allocated per-thread buffers) and SoA Uab layout with invariant precompute.
+workspace API (pre-allocated per-thread buffers). The primary path (fused kernel) takes
+utg_t in (n_snps, n_samples) layout directly from DGEMM TRANSA, computing wx/xx/xy
+on-the-fly without a separate SoA Uab buffer. The SoA Uab layout with invariant precompute
+is retained as a fallback when the fused C extension is unavailable. Mean imputation of
+missing genotypes is done in-place on the chunk buffer (no copy), so the per-chunk memory
+footprint equals the rotation output buffer only.
 
 ### C Extension vs JAX Backend (E96ds_v6, 48 cores, synthetic data)
 
@@ -199,8 +204,8 @@ All three pipeline phases are dominated by BLAS/LAPACK calls. No Python-level op
 | Phase | Bottleneck | Notes |
 |-------|-----------|-------|
 | Eigendecomp (54%) | LAPACK dsyevd — O(n³) | Single call, irreducible. 90k at 32 cores ≈ 3,100s |
-| Kinship (25%) | JAX-batched dgemm | Already JIT-compiled matrix multiply |
-| LMM Association (21%) | JAX JIT + golden section per SNP | Rotation is a single dgemm per chunk |
+| Kinship (25%) | jlinalg DGEMM (chunked) | Multi-threaded BLAS matrix multiply |
+| LMM Association (21%) | C extension + OpenMP (golden section per SNP) | Rotation is a single dgemm per chunk (utg_t, DGEMM TRANSA) |
 
 ### What v1.4 Did Not Change
 
@@ -218,11 +223,16 @@ All three pipeline phases are dominated by BLAS/LAPACK calls. No Python-level op
 
 RAM requirements are for the full pipeline (kinship + eigendecomp + LMM). Eigendecomp is the memory peak: K matrix (n²×8 bytes) + eigenvectors (n²×8 bytes) must coexist. At 125k this is ~252 GB + 252 GB = 504 GB; the process peaked at 381 GB RSS with 768 GB physical. Scaling beyond 125k on 768 GB is not feasible — at 150k the eigendecomp alone would require ~720 GB (DSYEVR), leaving nothing for LMM.
 
-### CPU Device Sharding
+Note: with early sample filtering (phenotype missingness), `n` in these formulae is
+the number of valid samples (non-missing phenotype), which may be smaller than the
+BED file sample count.
 
-JAMMA uses JAX `NamedSharding` to partition SNP batches across virtual CPU
+### CPU Device Sharding (JAX Backend Only)
+
+The JAX backend uses JAX `NamedSharding` to partition SNP batches across virtual CPU
 devices, parallelising the per-SNP REML grid search and golden-section
-refinement.
+refinement. The default production backend is NumPy+C (auto-selected);
+use `--backend jax` to enable JAX sharding.
 
 **Current optimisation target: Intel x86_64 Linux** (Databricks / HPC).
 The heuristics are calibrated for MKL-backed numpy on Intel Xeon hardware.

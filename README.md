@@ -17,7 +17,7 @@
 
 - **GEMMA-compatible**: Drop-in replacement with identical CLI flags and output formats
 - **Numerical equivalence**: Validated against GEMMA — 100% significance agreement, 100% effect direction agreement
-- **Fast**: Up to 15x faster than GEMMA 0.98.5
+- **Fast**: Up to 17x faster than GEMMA 0.98.5
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
 - **Cross-platform**: Runs on Linux, macOS, and Windows — NumPy backend works everywhere, JAX adds batch acceleration on Linux and ARM Mac
 - **Optimized for Intel**: Best performance on Intel CPUs with MKL BLAS. Runs well on Apple Silicon (Accelerate BLAS). Other architectures (AMD, ARM Linux) work correctly but with less BLAS optimization
@@ -251,12 +251,12 @@ Best-of runs, end-to-end wall clock:
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | JAMMA JAX (batch) | JAMMA JAX (streaming) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-------------------|----------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 2.2s | 2.1s | 262ms | 262ms | — | — | — | 1.0x | **8.4x** | **8.0x** |
-| LMM Wald (`-lmm 1`) | 11.3s | 8.2s | 4.1s | 1.1s | 1.2s | 2.1s | 2.6s | 3.7x | **10.3x** | **7.5x** |
-| LMM All (`-lmm 4`) | 20.7s | 15.1s | 6.0s | 1.4s | 1.6s | 2.8s | 4.2s | 4.3x | **14.8x** | **10.8x** |
-| LMM Wald+4cov (`-lmm 1 -c`) | 41.7s | 20.0s | 9.1s | 3.0s | 3.5s | 4.1s | 6.6s | 3.0x | **13.9x** | **6.7x** |
+| Kinship (`-gk 1`) | 2.2s | 1.7s | 262ms | 262ms | — | — | — | 1.0x | **8.4x** | **6.5x** |
+| LMM Wald (`-lmm 1`) | 11.3s | 7.8s | 4.1s | 1.0s | 1.2s | 2.1s | 2.5s | 4.1x | **11.3x** | **7.8x** |
+| LMM All (`-lmm 4`) | 20.7s | 14.2s | 6.0s | 1.3s | 1.5s | 2.8s | 4.2s | 4.6x | **15.9x** | **10.9x** |
+| LMM Wald+4cov (`-lmm 1 -c`) | 41.4s | 18.8s | 9.1s | 2.5s | 2.6s | 4.1s | 5.2s | 3.6x | **16.6x** | **7.5x** |
 
-GEMMA (Accelerate) is GEMMA 0.98.5 compiled against Apple's Accelerate framework instead of Homebrew OpenBLAS — **1.5–2.3x faster** due to AMX-accelerated BLAS, with identical numerical results. **NumPy+C** uses a C extension with OpenMP for Wald (`-lmm 1`) — REML optimization is compute-bound and parallelizes well across SNPs. The C speedup grows with covariates because the Pab table recursion is more expensive. NumPy+C is the fastest backend at all modes including all-tests (`-lmm 4`) at mouse scale. **NumPy+C (stream)** reads genotypes from disk in chunks — slightly slower than batch but the production code path for large datasets that don't fit in memory. **JAX (batch)** uses `jax.vmap` batching for MLE optimization. **JAX (streaming)** is the JAX equivalent of disk-streaming. Kinship is always pure NumPy/BLAS regardless of backend.
+GEMMA (Accelerate) is GEMMA 0.98.5 compiled against Apple's Accelerate framework instead of Homebrew OpenBLAS — **1.3–2.2x faster** due to AMX-accelerated BLAS, with identical numerical results. **NumPy+C** uses a C extension with OpenMP for Wald (`-lmm 1`) — REML optimization is compute-bound and parallelizes well across SNPs. The C speedup grows with covariates because the Pab table recursion is more expensive. NumPy+C is the fastest backend at all modes including all-tests (`-lmm 4`) at mouse scale. **NumPy+C (stream)** reads genotypes from disk in chunks — slightly slower than batch but the production code path for large datasets that don't fit in memory. **JAX (batch)** uses `jax.vmap` batching for MLE optimization. **JAX (streaming)** is the JAX equivalent of disk-streaming. Kinship is always pure NumPy/BLAS regardless of backend.
 
 ### LOCO (Leave-One-Chromosome-Out)
 
@@ -297,6 +297,8 @@ The large speedup has two sources: (1) JAMMA computes per-chromosome LOCO kinshi
 - [x] Pre-flight memory checks (fail-fast before OOM)
 - [x] RSS memory logging at workflow boundaries
 - [x] Incremental result writing
+- [x] In-place mean imputation for missing genotypes (per-chunk, zero-copy)
+- [x] Early sample filtering — kinship accumulated at filtered size when phenotype missingness is present
 - [x] jlinalg C layer: vendor BLAS dispatch for eigendecomposition (DSYEVD default, DSYEVR O(n) workspace fallback under memory pressure), DSYRK, DGEMM, plus jlinalg D&C fallback when no vendor LAPACK available
 - [x] Optional C extension: OpenMP-parallel Wald tests (auto-fallback to pure Python)
 
@@ -306,7 +308,7 @@ The large speedup has two sources: (1) JAMMA computes per-chromosome LOCO kinshi
 
 ## Architecture
 
-JAMMA uses NumPy for data loading and kinship. Eigendecomposition uses `jlinalg.eigh` which dispatches to vendor DSYEVD (default) or DSYEVR (O(n) workspace, under memory pressure) via the jlinalg C layer, with a jlinalg D&C fallback when no vendor LAPACK is available. At LMM it splits into a **JAX backend** (JIT, vmap, sharding) or a **NumPy backend** with an optional C extension for OpenMP-parallel Wald tests.
+JAMMA uses NumPy for data loading and kinship. Eigendecomposition uses `jlinalg.eigh` which dispatches to vendor DSYEVD (default) or DSYEVR (O(n) workspace, under memory pressure) via the jlinalg C layer, with a jlinalg D&C fallback when no vendor LAPACK is available. At LMM it splits into a **JAX backend** (JIT, vmap, sharding; batch or streaming) or a **NumPy backend** with an optional C extension for OpenMP-parallel Wald tests (batch or two-pass disk streaming). Mode is auto-selected based on available memory.
 
 ```mermaid
 flowchart TD
@@ -315,12 +317,18 @@ flowchart TD
     LOAD --> KIN["Kinship<br>(NumPy matmul)"]
     KIN --> EIG["Eigendecomposition<br>(jlinalg.eigh · vendor DSYEVD/DSYEVR dispatch)"]
     EIG --> DET{"detect_backend()"}
-    DET -->|"jax"| JAX["JAX Streaming Runner<br>JIT + vmap + sharding"]
-    DET -->|"numpy"| NP["NumPy Batch Runner"]
-    NP --> CEXT{"C LMM extension<br>available?"}
+    DET -->|"jax"| JAXM{"memory?"}
+    JAXM -->|"fits"| JAXB["JAX Batch Runner<br>JIT + vmap"]
+    JAXM -->|"large"| JAXS["JAX Streaming Runner<br>JIT + vmap + sharding"]
+    DET -->|"numpy"| NPM{"memory?"}
+    NPM -->|"fits"| NP["NumPy Batch Runner"]
+    NPM -->|"large"| NPS["NumPy Streaming Runner<br>two-pass disk streaming"]
+    NP --> CEXT{"C extension?"}
+    NPS --> CEXT
     CEXT -->|yes| C["C Extension<br>OpenMP + SIMD"]
     CEXT -->|no| PY["Pure Python<br>fallback"]
-    JAX --> RES["AssocResult"]
+    JAXB --> RES["AssocResult"]
+    JAXS --> RES
     C --> RES
     PY --> RES
 ```

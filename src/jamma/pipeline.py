@@ -115,10 +115,6 @@ class PipelineConfig:
             derive from phenotype_column. When multiple columns are specified,
             eigendecomposition is computed once and reused. Mutually exclusive
             with loco mode for multiple columns.
-        use_secular_update: If True with LOCO mode, derive per-chromosome
-            eigendecompositions from one full-kinship eigendecomposition via
-            rotated-basis update instead of independent per-chromosome
-            eigendecomps. Only supported with numpy backend. Default False.
     """
 
     bfile: Path
@@ -152,7 +148,6 @@ class PipelineConfig:
     backend: BackendRequest = "auto"
     legacy_text: bool = False
     phenotype_columns: list[int] | None = None
-    use_secular_update: bool = False
 
     def __post_init__(self) -> None:
         if os.sep in self.output_prefix or "/" in self.output_prefix:
@@ -182,20 +177,6 @@ class PipelineConfig:
                 "LOCO mode (-loco) does not support multi-phenotype "
                 "(-n with multiple columns). "
                 "Run each phenotype separately."
-            )
-        # Secular update constraints
-        if self.use_secular_update and not self.loco:
-            raise ValueError("use_secular_update=True requires loco=True")
-        if self.use_secular_update and self.backend not in ("numpy", "numpy-streaming"):
-            raise ValueError(
-                "use_secular_update=True requires a NumPy backend "
-                "('numpy' or 'numpy-streaming'). "
-                f"Got backend={self.backend!r}."
-            )
-        if self.use_secular_update and self.save_kinship:
-            raise ValueError(
-                "save_kinship=True is not supported with use_secular_update=True. "
-                "The secular update path does not materialise K_loco matrices."
             )
 
 
@@ -575,6 +556,7 @@ class PipelineRunner:
         self,
         n_samples: int,
         ksnps_indices: np.ndarray | None = None,
+        valid_indices: np.ndarray | None = None,
     ) -> np.ndarray:
         """Load or compute the kinship matrix.
 
@@ -591,13 +573,26 @@ class PipelineRunner:
             n_samples: Number of samples (for validation of loaded kinship).
             ksnps_indices: Optional SNP indices to restrict kinship computation.
                 Ignored when loading pre-computed kinship from file.
+            valid_indices: Optional array of sample indices to keep. When provided,
+                computed kinship is accumulated at (n_valid, n_valid) size directly;
+                pre-computed kinship loaded from file is subsetted post-load via
+                np.ix_. Must be sorted, unique, and within [0, n_samples).
 
         Returns:
-            Kinship matrix of shape (n_samples, n_samples).
+            Kinship matrix of shape (n_out, n_out) where n_out = len(valid_indices)
+            or n_samples.
         """
+        if valid_indices is not None:
+            from jamma.kinship.compute import _validate_valid_indices
+
+            _validate_valid_indices(valid_indices, n_samples)
+
         if self.config.kinship_file is not None:
             logger.info(f"Loading kinship from {self.config.kinship_file}")
             K = read_kinship_matrix(self.config.kinship_file, n_samples=n_samples)
+            # Pre-computed kinship is full-size; subset post-load
+            if valid_indices is not None:
+                K = K[np.ix_(valid_indices, valid_indices)]
         else:
             logger.info("Computing kinship from genotypes")
             K = compute_kinship_streaming(
@@ -605,6 +600,7 @@ class PipelineRunner:
                 check_memory=False,
                 show_progress=self.config.show_progress,
                 ksnps_indices=ksnps_indices,
+                valid_indices=valid_indices,
             )
 
         # Apply individual weights before eigendecomposition
@@ -617,6 +613,9 @@ class PipelineRunner:
                     f"Weight file has {len(weights)} entries but expected "
                     f"{n_samples} (matching sample count)"
                 )
+            # Filter weights to match valid samples
+            if valid_indices is not None:
+                weights = weights[valid_indices]
             logger.info(f"Applying individual weights from {self.config.weight_file}")
             K = apply_individual_weights(K, weights)
 
@@ -980,7 +979,6 @@ class PipelineRunner:
                 write_eigen=self.config.write_eigen,
                 eigen_dir=self.config.eigen_dir,
                 eigen_prefix=self.config.output_prefix,
-                use_secular_update=self.config.use_secular_update,
             )
             loco_s = time.perf_counter() - t_loco
             total_s = time.perf_counter() - t_start
@@ -1153,13 +1151,40 @@ class PipelineRunner:
                 )
             K = None
         else:
-            K = self.load_kinship(n_samples, ksnps_indices=ksnps_indices)
-            # Eigendecompose once at the pipeline level so multi-phenotype
-            # loops reuse the same eigendecomposition.
-            K_valid = K if np.all(valid_mask) else K[np.ix_(valid_mask, valid_mask)]
-            eigenvalues, eigenvectors = eigendecompose_kinship(
-                K_valid, check_memory=self.config.check_memory
+            # Early sample filtering: when save_kinship=False and some
+            # samples are invalid, pass valid_indices so kinship is
+            # accumulated at (n_valid, n_valid) size directly, avoiding
+            # allocation of the full (n_samples, n_samples) matrix.
+            # When save_kinship=True, compute full-size kinship so the
+            # saved file is reusable across different phenotype masks.
+            all_valid = np.all(valid_mask)
+            kinship_valid_indices = (
+                None
+                if all_valid or self.config.save_kinship
+                else np.where(valid_mask)[0]
             )
+            K = self.load_kinship(
+                n_samples,
+                ksnps_indices=ksnps_indices,
+                valid_indices=kinship_valid_indices,
+            )
+            if kinship_valid_indices is not None:
+                # K is already (n_valid, n_valid) — eigendecompose directly.
+                n_valid = int(np.sum(valid_mask))
+                if K.shape != (n_valid, n_valid):
+                    raise ValueError(
+                        f"Kinship shape {K.shape} != expected ({n_valid}, {n_valid}) "
+                        f"after early sample filtering"
+                    )
+                eigenvalues, eigenvectors = eigendecompose_kinship(
+                    K, check_memory=self.config.check_memory
+                )
+            else:
+                # K is full-size; subset if needed (save_kinship=True or all_valid)
+                K_valid = K if all_valid else K[np.ix_(valid_mask, valid_mask)]
+                eigenvalues, eigenvectors = eigendecompose_kinship(
+                    K_valid, check_memory=self.config.check_memory
+                )
             if self.config.write_eigen:
                 d_path, u_path = write_eigen_files(
                     eigenvalues,

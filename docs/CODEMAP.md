@@ -159,7 +159,7 @@ Two user-facing entry points: the `gwas()` API for programmatic use and the CLI 
 | 1a | `_run_lmm()` | LMM association (`-lmm 1/2/3/4`) | [cli.py](../src/jamma/cli.py) |
 | 1b | `gwas()` | One-call GWAS pipeline (load → kinship → LMM → results) | [gwas.py:40](../src/jamma/gwas.py#L40) |
 | 1b | `GWASResult` | Pipeline result dataclass (associations, timing, counts) | [gwas.py:22](../src/jamma/gwas.py#L22) |
-| 1c | `PipelineRunner` | Shared orchestration (validate → parse → memory → kinship → LMM) | [pipeline.py](../src/jamma/pipeline.py) |
+| 1c | `PipelineRunner` | Shared orchestration (validate → parse → memory → kinship → LMM); passes `valid_indices` for early sample filtering when `save_kinship=False` | [pipeline.py](../src/jamma/pipeline.py) |
 | 1c | `PipelineConfig` | Pipeline configuration dataclass (all CLI flags) | [pipeline.py](../src/jamma/pipeline.py) |
 
 ---
@@ -198,10 +198,11 @@ GEMMA algorithm reimplementation: kinship → eigendecomp → REML → test stat
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 3a | `compute_centered_kinship()` | K = (1/p) × Xc × Xc' in batches of 10k SNPs | [compute.py:204](../src/jamma/kinship/compute.py#L204) |
-| 3a | `compute_kinship_streaming()` | 2-pass streaming (stats → accumulate) | [compute.py:505](../src/jamma/kinship/compute.py#L505) |
+| 3a | `compute_centered_kinship()` | K = (1/p) × Xc × Xc' in batches of 10k SNPs | [compute.py:205](../src/jamma/kinship/compute.py#L205) |
+| 3a | `compute_kinship_streaming()` | 2-pass streaming (stats → accumulate); accepts `valid_indices` for early sample filtering | [compute.py:519](../src/jamma/kinship/compute.py#L519) |
 | 3a | `_filter_snps()` | MAF, missing rate, monomorphism filters | [compute.py:79](../src/jamma/kinship/compute.py#L79) |
 | 3b | `impute_and_center()` | NaN → mean, then center (in-place for NumPy arrays) | [missing.py:21](../src/jamma/kinship/missing.py#L21) |
+| 3b | `impute_missing_inplace()` | In-place NaN → col-mean for genotype chunks (used by all runners) | [lmm/impute.py:6](../src/jamma/lmm/impute.py#L6) |
 | 3c | `eigendecompose_kinship()` | Eigendecomp via `jlinalg.eigh` with BLAS thread control | [eigen.py](../src/jamma/lmm/eigen.py) |
 | 3c' | `jlinalg.eigh()` | Vendor DSYEVD/DSYEVR dispatch + jlinalg D&C fallback | [jlinalg/\_\_init\_\_.py](../src/jamma/jlinalg/__init__.py) |
 | 3c' | `jlinalg_dsyevd_ext()` | C: vendor DSYEVD dispatch (O(n²) workspace) | [blas_dispatch.c](../src/jamma/jlinalg/src/blas_dispatch.c) |
@@ -246,7 +247,7 @@ Batch SNP processing with JIT compilation and vmap vectorization. Requires JAX (
 | 4d | `run_lmm_loco()` | LOCO: per-chromosome kinship → eigen → LMM | [lmm/loco.py](../src/jamma/lmm/loco.py) |
 | 4e | `DevicePlacement` | CPU/GPU device + sharding configuration | [lmm/prepare.py:129](../src/jamma/lmm/prepare.py#L129) |
 | 4e | `resolve_device_placement()` | Select device and set up NamedSharding | [lmm/prepare.py:162](../src/jamma/lmm/prepare.py#L162) |
-| 4e | `prepare_utg_chunk()` | Rotate genotype chunk: U.T @ G with device transfer | [lmm/prepare.py:187](../src/jamma/lmm/prepare.py#L187) |
+| 4e | `prepare_utg_chunk()` | Rotate genotype chunk via dgemm TRANSA → utg_t (n_snps, n_samples) | [lmm/prepare.py:188](../src/jamma/lmm/prepare.py#L188) |
 | 4f | `_compute_chunk_size()` | MAX_SAFE_CHUNK cap with device alignment | [lmm/chunk.py:49](../src/jamma/lmm/chunk.py#L49) |
 | 4f | `auto_tune_chunk_size()` | Chunk size auto-tuning for memory/performance | [lmm/chunk.py:122](../src/jamma/lmm/chunk.py#L122) |
 | 4g | `_compute_lmm_chunk()` | Per-chunk Wald/LRT/Score computation | [lmm/compute.py:107](../src/jamma/lmm/compute.py#L107) |
@@ -260,7 +261,7 @@ Batch SNP processing with JIT compilation and vmap vectorization. Requires JAX (
 
 ### [4N] NumPy Backend
 
-Pure-NumPy LMM implementation with zero JAX dependency. Works on all platforms (Intel Mac, Windows, Linux). Uses `np.vectorize` for batch operations and stdlib-only special functions for p-value computation. Optional C extension (`_lmm_accel.c`) provides OpenMP-parallelized Wald test with workspace API for n_cvt=1, with automatic fallback to pure Python.
+Pure-NumPy LMM implementation with zero JAX dependency. Works on all platforms (Intel Mac, Windows, Linux). Uses `np.vectorize` for batch operations and stdlib-only special functions for p-value computation. Optional C extension (`_lmm_accel.c`) provides OpenMP-parallelized Wald test with workspace API for n_cvt=1, with automatic fallback to pure Python. The disk-streaming runner (`runner_numpy_streaming.py`) is a full pipeline-capable runner supporting all LMM modes, HWE filtering, SNP lists, in-place mean imputation, and early sample filtering.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
@@ -271,7 +272,7 @@ Pure-NumPy LMM implementation with zero JAX dependency. Works on all platforms (
 | 4Nc | `compute_lmm_chunk_numpy()` | Per-chunk dispatch for NumPy backend | [compute_numpy.py](../src/jamma/lmm/compute_numpy.py) |
 | 4Nd | `compute_wald_stats_workspace()` | C extension: OpenMP Wald test with workspace API | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
 | 4Nd | `_compile_accel.py` | Post-install C extension compilation | [_compile_accel.py](../src/jamma/lmm/_compile_accel.py) |
-| 4Ne | `run_lmm_association_numpy_streaming()` | NumPy disk streaming (two-pass, C extension) | [runner_numpy_streaming.py:89](../src/jamma/lmm/runner_numpy_streaming.py#L89) |
+| 4Ne | `run_lmm_association_numpy_streaming()` | NumPy disk streaming (two-pass, full pipeline support, C extension) | [runner_numpy_streaming.py:103](../src/jamma/lmm/runner_numpy_streaming.py#L103) |
 | 4Nf | `select_execution_mode()` | Unified backend+mode selection | [runner.py:83](../src/jamma/lmm/runner.py#L83) |
 | 4Nf | `run_lmm()` | Unified dispatch to all runners | [runner.py:233](../src/jamma/lmm/runner.py#L233) |
 
@@ -529,7 +530,6 @@ Priority order: `JAMMA_BACKEND` env var → `--backend` CLI flag → auto-detect
 | Special functions | [special.py](../src/jamma/lmm/special.py) |
 | Backend detection | [backend.py](../src/jamma/core/backend.py) |
 | LOCO runner | [lmm/loco.py](../src/jamma/lmm/loco.py) |
-| LOCO rotated-basis update | [lmm/loco_eigen_update.py](../src/jamma/lmm/loco_eigen_update.py) |
 | Result writer | [lmm/io.py:99](../src/jamma/lmm/io.py#L99) |
 | Memory estimation | [memory.py:197](../src/jamma/core/memory.py#L197) |
 | Threading | [threading.py:30](../src/jamma/core/threading.py#L30) |

@@ -269,29 +269,6 @@ processing one chromosome at a time for memory efficiency.
 jamma -lmm 1 -bfile data/my_study -loco -o loco_results -outdir output
 ```
 
-**Rotated-basis eigenvalue update (Python API):**
-
-For large datasets, the rotated-basis update avoids redundant per-chromosome O(n^3)
-eigendecompositions by deriving LOCO eigenvalues from a single full-kinship
-eigendecomposition. This is available via the Python API:
-
-```python
-from jamma.pipeline import PipelineConfig, PipelineRunner
-
-config = PipelineConfig(
-    bfile=Path("data/my_study"),
-    loco=True,
-    use_secular_update=True,
-    backend="numpy",
-)
-result = PipelineRunner(config).run()
-```
-
-The secular update uses a two-pass strategy: pass 1 accumulates K_full, pass 2
-re-reads one chromosome at a time. Peak memory is O(n^2) for K_full/U_full plus
-O(n × max_p_chr) for the largest single chromosome's genotype matrix.
-Only supported with the numpy backend.
-
 **Key constraints:**
 
 - `-loco` is mutually exclusive with `-k` (kinship is computed internally)
@@ -392,8 +369,14 @@ phenotypes. Each phenotype produces a separate output file with `.phenoN.` suffi
 produce output without the suffix (e.g., `result.assoc.txt`).
 
 Samples with missing values (NA/-9) in any selected phenotype column are excluded from
-the analysis (eigendecomposition and association testing). The sample mask is the
-intersection across all phenotype columns, ensuring consistent results.
+the analysis. The sample mask is the intersection across all phenotype columns,
+ensuring consistent results.
+
+**Early sample filtering:** When samples are excluded due to missing phenotype or
+covariate data, JAMMA filters them before kinship computation (not after). The kinship
+matrix is accumulated at (n_valid × n_valid) size directly, avoiding a full
+(n_samples × n_samples) allocation. This reduces peak memory proportionally to the
+number of excluded samples.
 
 **Note:** LOCO mode (`-loco`) does not support multi-phenotype. Run each phenotype
 separately when using `-loco`.
@@ -627,10 +610,10 @@ coordination overhead that outweighs parallelism gains.
 
 ### General Tips
 
-1. **Use JAX backend** for large datasets (>1000 samples) — JIT compilation and device sharding provide substantial speedups
-2. **NumPy backend** works on all platforms and requires no extra dependencies — suitable for smaller datasets or platforms without JAX support (Intel Mac)
+1. **Use JAX backend** for large datasets (>1000 samples) without a C extension — JIT compilation and device sharding provide substantial speedups
+2. **NumPy backend** (batch or streaming) works on all platforms and requires no extra JAX dependencies — the C extension enables streaming for arbitrarily large datasets with full pipeline support (LOCO, multi-phenotype, HWE filtering)
 3. **Batch processing**: JAMMA automatically batches kinship computation
-4. **Memory**: For very large datasets, consider sample subsetting
+4. **Memory**: For very large datasets, use a streaming backend (`numpy-streaming` or `jax-streaming`) — auto-selected when batch mode won't fit in memory
 
 ## Environment Variables
 
@@ -761,6 +744,9 @@ fit — this can increase the maximum sample count by ~40% for a given machine s
 
 These limits assume the streaming pipeline (CLI default). Actual limits depend on
 available memory at runtime — other processes reduce headroom.
+
+**In-place imputation:** JAMMA imputes missing genotypes in-place (no extra copy),
+so imputation does not add a full genotype matrix to peak memory.
 
 **If the pre-flight check rejects your run:**
 

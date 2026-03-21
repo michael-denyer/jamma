@@ -124,6 +124,12 @@ def batch_compute_uab_numpy(
     Returns:
         Uab matrices (n_snps, n_samples, n_index).
     """
+    if UtG.shape[0] != UtW.shape[0]:
+        raise ValueError(
+            f"UtG shape {UtG.shape} has {UtG.shape[0]} rows but expected "
+            f"{UtW.shape[0]} (n_samples from UtW). "
+            f"Pass (n_samples, n_snps), not (n_snps, n_samples)."
+        )
     if n_cvt == 1:
         return _batch_compute_uab_ncvt1_numpy(UtW, Uty, UtG)
     return _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG)
@@ -216,7 +222,7 @@ def _batch_compute_uab_varying_general_numpy(
     n_cvt: int,
     UtW: np.ndarray,
     Uty: np.ndarray,
-    UtG: np.ndarray,
+    utg_t: np.ndarray,
 ) -> np.ndarray:
     """Direct SoA varying Uab for general n_cvt -- no full Uab materialization.
 
@@ -225,8 +231,8 @@ def _batch_compute_uab_varying_general_numpy(
     pair involves the genotype (0-based index = n_cvt).
 
     For each varying pair:
-    - Both involve genotype (xx): UtG.T * UtG.T
-    - One involves genotype (wx_i, xy): covariate/phenotype * UtG.T
+    - Both involve genotype (xx): utg_t * utg_t
+    - One involves genotype (wx_i, xy): covariate/phenotype * utg_t
 
     This avoids materializing the full (n_snps, n_samples, n_index) Uab.
 
@@ -234,7 +240,8 @@ def _batch_compute_uab_varying_general_numpy(
         n_cvt: Number of covariates (> 1).
         UtW: Rotated covariates (n_samples, n_cvt).
         Uty: Rotated phenotype (n_samples,).
-        UtG: Rotated genotypes (n_samples, n_snps).
+        utg_t: Rotated genotypes (n_snps, n_samples). C-contiguous layout
+            from jlinalg.dgemm(chunk, U, transa="T").
 
     Returns:
         Varying Uab in SoA layout (n_snps, n_var, n_samples).
@@ -243,7 +250,7 @@ def _batch_compute_uab_varying_general_numpy(
 
     _inv_indices, var_indices = classify_uab_columns(n_cvt)
     table = build_index_table(n_cvt)
-    n_samples, n_snps = UtG.shape
+    n_snps, n_samples = utg_t.shape
     n_var = len(var_indices)
     genotype_col = n_cvt  # 0-based index of X in vectors array
 
@@ -254,8 +261,6 @@ def _batch_compute_uab_varying_general_numpy(
     # vectors[j] = UtW[:, j] for j < n_cvt, vectors[n_cvt+1] = Uty
     vectors = np.column_stack([UtW, np.zeros(n_samples), Uty])  # (n_samples, n_cvt+2)
 
-    UtG_T = UtG.T  # (n_snps, n_samples)
-
     result = np.empty((n_snps, n_var, n_samples), dtype=np.float64)
 
     for a_col, b_col, linear_idx in table["uab_pairs"]:
@@ -265,13 +270,13 @@ def _batch_compute_uab_varying_general_numpy(
 
         if a_col == genotype_col and b_col == genotype_col:
             # xx case: genotype * genotype
-            result[:, row, :] = UtG_T * UtG_T
+            result[:, row, :] = utg_t * utg_t
         elif a_col == genotype_col:
             # genotype * other (b_col is covariate or phenotype)
-            result[:, row, :] = UtG_T * vectors[:, b_col][None, :]
+            result[:, row, :] = utg_t * vectors[:, b_col][None, :]
         else:
             # other * genotype (a_col is covariate or phenotype, b_col is genotype)
-            result[:, row, :] = vectors[:, a_col][None, :] * UtG_T
+            result[:, row, :] = vectors[:, a_col][None, :] * utg_t
 
     return result
 
@@ -476,7 +481,7 @@ def batch_compute_uab_split_soa_numpy(
     n_cvt: int,
     UtW: np.ndarray,
     Uty: np.ndarray,
-    UtG: np.ndarray,
+    utg_t: np.ndarray,
 ) -> SplitUabSoA:
     """Compute split Uab in SoA layout — eliminates per-chunk AoS->SoA transpose.
 
@@ -488,7 +493,8 @@ def batch_compute_uab_split_soa_numpy(
         n_cvt: Number of covariates (must be 1).
         UtW: Rotated covariates (n_samples, 1).
         Uty: Rotated phenotype (n_samples,).
-        UtG: Rotated genotypes (n_samples, n_snps).
+        utg_t: Rotated genotypes (n_snps, n_samples). C-contiguous layout
+            from jlinalg.dgemm(chunk, U, transa="T").
 
     Returns:
         SplitUabSoA(varying, invariant) where:
@@ -498,7 +504,7 @@ def batch_compute_uab_split_soa_numpy(
     if n_cvt != 1:
         raise ValueError("batch_compute_uab_split_soa_numpy requires n_cvt=1")
     inv = compute_uab_invariant_soa(UtW, Uty)
-    var = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG)
+    var = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t)
     return SplitUabSoA(var, inv)
 
 
@@ -555,7 +561,7 @@ def batch_compute_uab_varying_soa_numpy(
     n_cvt: int,
     UtW: np.ndarray,
     Uty: np.ndarray,
-    UtG: np.ndarray,
+    utg_t: np.ndarray,
     out: np.ndarray | None = None,
 ) -> np.ndarray:
     """Compute SNP-varying Uab columns in SoA layout (n_snps, n_var, n_samples).
@@ -567,7 +573,8 @@ def batch_compute_uab_varying_soa_numpy(
         n_cvt: Number of covariates.
         UtW: Rotated covariates (n_samples, n_cvt).
         Uty: Rotated phenotype (n_samples,).
-        UtG: Rotated genotypes (n_samples, n_snps).
+        utg_t: Rotated genotypes (n_snps, n_samples). C-contiguous layout
+            from jlinalg.dgemm(chunk, U, transa="T").
         out: Optional pre-allocated output buffer (n_snps, n_var, n_samples).
             When provided and shape matches, writes directly into it to avoid
             allocation. Only used for n_cvt=1 path.
@@ -575,23 +582,28 @@ def batch_compute_uab_varying_soa_numpy(
     Returns:
         Varying array (n_snps, n_var, n_samples) — SoA layout.
     """
+    if utg_t.shape[1] != UtW.shape[0]:
+        raise ValueError(
+            f"utg_t shape {utg_t.shape} has {utg_t.shape[1]} columns but "
+            f"expected {UtW.shape[0]} (n_samples from UtW). "
+            f"Pass (n_snps, n_samples), not (n_samples, n_snps)."
+        )
     if n_cvt == 1:
-        n_samples, n_snps = UtG.shape
+        n_snps, n_samples = utg_t.shape
         w = UtW[:, 0]
-        UtG_T = UtG.T  # (n_snps, n_samples)
 
         expected_shape = (n_snps, 3, n_samples)
         if out is not None and out.shape == expected_shape:
             uab_varying_soa = out
         else:
             uab_varying_soa = np.empty(expected_shape, dtype=np.float64)
-        uab_varying_soa[:, 0, :] = w[None, :] * UtG_T  # wx row
-        uab_varying_soa[:, 1, :] = UtG_T * UtG_T  # xx row
-        uab_varying_soa[:, 2, :] = UtG_T * Uty[None, :]  # xy row
+        uab_varying_soa[:, 0, :] = w[None, :] * utg_t  # wx row
+        uab_varying_soa[:, 1, :] = utg_t * utg_t  # xx row
+        uab_varying_soa[:, 2, :] = utg_t * Uty[None, :]  # xy row
         return uab_varying_soa
 
     # General n_cvt: direct SoA varying without full Uab materialization
-    return _batch_compute_uab_varying_general_numpy(n_cvt, UtW, Uty, UtG)
+    return _batch_compute_uab_varying_general_numpy(n_cvt, UtW, Uty, utg_t)
 
 
 def reconstruct_uab_from_soa(

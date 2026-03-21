@@ -192,13 +192,13 @@ class TestLMMBenchmarks:
         with blas_threads():
             UtW = U.T @ W
             Uty = U.T @ phenotypes
-            UtG = np.ascontiguousarray(U.T @ genotypes_imp)
+            utg_t = np.ascontiguousarray((U.T @ genotypes_imp).T)
 
         device = jax.devices("cpu")[0]
         eigenvalues_jax = jax.device_put(eigenvalues, device)
         UtW_jax = jax.device_put(UtW, device)
         Uty_jax = jax.device_put(Uty, device)
-        UtG_jax = jax.device_put(UtG, device)
+        utg_t_jax = jax.device_put(utg_t, device)
 
         from jamma.lmm.compute import _compute_lmm_chunk, block_chunk_result
         from jamma.lmm.likelihood_jax import batch_compute_uab
@@ -206,16 +206,16 @@ class TestLMMBenchmarks:
         n_cvt = 1
 
         # JIT warmup: run on a small slice to compile
-        _warmup_UtG = UtG_jax[:, :10]
-        _warmup_Uab = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, _warmup_UtG)
+        _warmup_utg_t = utg_t_jax[:10, :]
+        _warmup_Uab = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, _warmup_utg_t)
         _warmup_cr = _compute_lmm_chunk(
             1, n_cvt, eigenvalues_jax, _warmup_Uab, len(phenotypes)
         )
         block_chunk_result(_warmup_cr, 1)
-        del _warmup_UtG, _warmup_Uab, _warmup_cr
+        del _warmup_utg_t, _warmup_Uab, _warmup_cr
 
         def _run():
-            Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, UtG_jax)
+            Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, utg_t_jax)
             cr = _compute_lmm_chunk(
                 1, n_cvt, eigenvalues_jax, Uab_batch, len(phenotypes)
             )
@@ -229,7 +229,7 @@ class TestLMMBenchmarks:
             iterations=1,
         )
 
-        n_snps = UtG_jax.shape[1]
+        n_snps = utg_t_jax.shape[0]
         benchmark.extra_info.update(hw_ctx)
         benchmark.extra_info["stage"] = "jax_optimization"
         benchmark.extra_info["n_samples"] = len(phenotypes)
@@ -364,10 +364,10 @@ class TestShardedBenchmarks:
     def test_jax_optimization_sharded_benchmark(
         self, benchmark, mouse_plink, mouse_phenotypes, mouse_eigen
     ):
-        """Benchmark JAX optimization with explicit NamedSharding on UtG.
+        """Benchmark JAX optimization with explicit NamedSharding on utg_t.
 
         Mirrors ``TestLMMBenchmarks.test_jax_optimization_benchmark`` but
-        places UtG using ``snp_spec`` (sharded on SNP axis) and shared arrays
+        places utg_t using ``snp_spec`` (sharded on SNP axis) and shared arrays
         using ``rep_spec`` (replicated). JIT warmup uses the same sharding
         configuration so the compiled kernel matches the timed run.
 
@@ -395,18 +395,18 @@ class TestShardedBenchmarks:
         with blas_threads():
             UtW = U.T @ W
             Uty = U.T @ phenotypes
-            UtG = np.ascontiguousarray(U.T @ genotypes_imp)
+            utg_t = np.ascontiguousarray((U.T @ genotypes_imp).T)
 
         snp_spec, rep_spec = _setup_cpu_sharding()
         device = jax.devices("cpu")[0]
         n_devices = len(jax.devices("cpu"))
-        n_snps = UtG.shape[1]
+        n_snps = utg_t.shape[0]
 
-        # Pad UtG to device-count multiple for even sharding distribution
+        # Pad utg_t SNP axis (axis 0) to device-count multiple
         use_sharding = snp_spec is not None
         if use_sharding and n_snps % n_devices != 0:
             dev_pad = n_devices - (n_snps % n_devices)
-            UtG = np.pad(UtG, ((0, 0), (0, dev_pad)), mode="constant")
+            utg_t = np.pad(utg_t, ((0, dev_pad), (0, 0)), mode="constant")
 
         effective_snp_spec = snp_spec if use_sharding else device
         effective_rep_spec = rep_spec if use_sharding else device
@@ -414,22 +414,22 @@ class TestShardedBenchmarks:
         eigenvalues_jax = jax.device_put(eigenvalues, effective_rep_spec)
         UtW_jax = jax.device_put(UtW, effective_rep_spec)
         Uty_jax = jax.device_put(Uty, effective_rep_spec)
-        UtG_jax = jax.device_put(UtG, effective_snp_spec)
+        utg_t_jax = jax.device_put(utg_t, effective_snp_spec)
 
         n_cvt = 1
 
         # JIT warmup: use same sharding config so compiled kernel matches timed run.
         warmup_n = n_devices if use_sharding else 10
-        _warmup_UtG = jax.device_put(UtG[:, :warmup_n], effective_snp_spec)
-        _warmup_Uab = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, _warmup_UtG)
+        _warmup_utg_t = jax.device_put(utg_t[:warmup_n, :], effective_snp_spec)
+        _warmup_Uab = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, _warmup_utg_t)
         _warmup_cr = _compute_lmm_chunk(
             1, n_cvt, eigenvalues_jax, _warmup_Uab, len(phenotypes)
         )
         block_chunk_result(_warmup_cr, 1)
-        del _warmup_UtG, _warmup_Uab, _warmup_cr
+        del _warmup_utg_t, _warmup_Uab, _warmup_cr
 
         def _run():
-            Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, UtG_jax)
+            Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, utg_t_jax)
             cr = _compute_lmm_chunk(
                 1, n_cvt, eigenvalues_jax, Uab_batch, len(phenotypes)
             )
@@ -635,13 +635,13 @@ class TestXLACacheVerification:
         with blas_threads():
             UtW = U.T @ W
             Uty = U.T @ phenotypes
-            UtG = np.ascontiguousarray(U.T @ genotypes_imp[:, :100])
+            utg_t = np.ascontiguousarray((U.T @ genotypes_imp[:, :100]).T)
 
         device = jax.devices("cpu")[0]
         eigenvalues_jax = jax.device_put(eigenvalues, device)
         UtW_jax = jax.device_put(UtW, device)
         Uty_jax = jax.device_put(Uty, device)
-        UtG_jax = jax.device_put(UtG, device)
+        utg_t_jax = jax.device_put(utg_t, device)
 
         from jamma.lmm.compute import _compute_lmm_chunk, block_chunk_result
         from jamma.lmm.likelihood_jax import batch_compute_uab
@@ -653,14 +653,14 @@ class TestXLACacheVerification:
 
         # First run (cold JIT)
         t1_start = time.perf_counter()
-        Uab1 = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, UtG_jax)
+        Uab1 = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, utg_t_jax)
         cr1 = _compute_lmm_chunk(1, n_cvt, eigenvalues_jax, Uab1, len(phenotypes))
         block_chunk_result(cr1, 1)
         t1_cold = time.perf_counter() - t1_start
 
         # Second run (warm JIT / cache hit)
         t2_start = time.perf_counter()
-        Uab2 = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, UtG_jax)
+        Uab2 = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, utg_t_jax)
         cr2 = _compute_lmm_chunk(1, n_cvt, eigenvalues_jax, Uab2, len(phenotypes))
         block_chunk_result(cr2, 1)
         t2_warm = time.perf_counter() - t2_start

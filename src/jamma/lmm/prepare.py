@@ -33,7 +33,7 @@ def _setup_cpu_sharding() -> tuple[NamedSharding | None, NamedSharding | None]:
     or if sharding setup fails.
 
     Returns:
-        snp_spec: Sharding for UtG (n_samples, n_snps) — shard on SNP axis.
+        snp_spec: Sharding for utg_t (n_snps, n_samples) — shard on SNP axis.
         rep_spec: Sharding for eigenvalues, UtW, Uty, Hi_eval_null — replicated
             on all devices.
     """
@@ -43,7 +43,7 @@ def _setup_cpu_sharding() -> tuple[NamedSharding | None, NamedSharding | None]:
 
     try:
         mesh = Mesh(np.array(cpu_devices), ("snps",))
-        snp_spec = NamedSharding(mesh, P(None, "snps"))
+        snp_spec = NamedSharding(mesh, P("snps", None))
         rep_spec = NamedSharding(mesh, P())
         return snp_spec, rep_spec
     except (RuntimeError, TypeError, ValueError) as e:
@@ -197,7 +197,7 @@ def prepare_utg_chunk(
     responsible for mean-imputation of missing values before calling this.
 
     Steps:
-    1. Rotate: UtG = U.T @ geno_chunk (BLAS matmul).
+    1. Rotate: utg_t = geno_chunk.T @ U via jlinalg.dgemm(geno_chunk, U, transa='T').
     2. Pad to device-count multiple for even NamedSharding distribution.
 
     Tail chunks (fewer SNPs than a full chunk) pass their actual width
@@ -208,11 +208,12 @@ def prepare_utg_chunk(
         geno_chunk: Mean-imputed genotype chunk (n_samples, n_snps_actual).
         U: Eigenvector matrix for rotation (n_samples, n_samples).
         placement: Resolved device placement (for device-alignment padding).
-        rotation_threads: BLAS thread count for U.T @ G rotation.
+        rotation_threads: BLAS thread count for rotation.
 
     Returns:
-        Tuple of (UtG_chunk_np, actual_len) where UtG_chunk_np is ready for
-        jax.device_put and actual_len is the number of real (non-padded) SNPs.
+        Tuple of (utg_t_chunk, actual_len) where utg_t_chunk is
+        (n_snps, n_samples) C-contiguous and actual_len is the number
+        of real (non-padded) SNPs.
     """
     actual_len = geno_chunk.shape[1]
 
@@ -222,15 +223,15 @@ def prepare_utg_chunk(
 
     with blas_threads(rotation_threads):
         with jax.profiler.TraceAnnotation("dgemm_rotation"):
-            UtG_chunk = jlinalg.dgemm(U, geno_chunk, transa="T")
+            utg_t_chunk = jlinalg.dgemm(geno_chunk, U, transa="T")
 
-    # Pad to device-count multiple for even NamedSharding distribution
+    # Pad SNP axis (axis 0) to device-count multiple for even NamedSharding distribution
     n_devices = placement.n_devices
-    if n_devices > 1 and UtG_chunk.shape[1] % n_devices != 0:
-        dev_pad = n_devices - (UtG_chunk.shape[1] % n_devices)
-        UtG_chunk = np.pad(UtG_chunk, ((0, 0), (0, dev_pad)), mode="constant")
+    if n_devices > 1 and utg_t_chunk.shape[0] % n_devices != 0:
+        dev_pad = n_devices - (utg_t_chunk.shape[0] % n_devices)
+        utg_t_chunk = np.pad(utg_t_chunk, ((0, dev_pad), (0, 0)), mode="constant")
 
-    return UtG_chunk, actual_len
+    return utg_t_chunk, actual_len
 
 
 def _grid_optimize_lambda_batched(

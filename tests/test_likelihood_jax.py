@@ -358,10 +358,10 @@ class TestNcvt1FastPathParity:
         Uty = jnp.array(U.T @ y)
 
         G = rng.choice([0.0, 1.0, 2.0], size=(n_samples, n_snps), p=[0.25, 0.5, 0.25])
-        UtG = jnp.array(U.T @ G)
+        utg_t = jnp.array((U.T @ G).T)  # (n_snps, n_samples)
 
         evals = jnp.array(eigenvalues)
-        Uab = batch_compute_uab(1, UtW, Uty, UtG)
+        Uab = batch_compute_uab(1, UtW, Uty, utg_t)
         Iab = batch_compute_iab(1, Uab)
 
         return evals, Uab, Iab
@@ -455,10 +455,10 @@ class TestJaxBatchDegenerateSNP:
         x_valid = rng.choice([0.0, 1.0, 2.0], size=n_samples, p=[0.25, 0.5, 0.25])
         x_degen = np.zeros(n_samples)
         G = np.column_stack([x_valid, x_degen])
-        UtG = jnp.array(U.T @ G)
+        utg_t = jnp.array((U.T @ G).T)  # (n_snps, n_samples)
 
         evals = jnp.array(eigenvalues)
-        Uab = batch_compute_uab(1, UtW, Uty, UtG)
+        Uab = batch_compute_uab(1, UtW, Uty, utg_t)
         Iab = batch_compute_iab(1, Uab)
 
         return evals, Uab, Iab, n_samples
@@ -526,10 +526,10 @@ class TestJaxBatchDegenerateSNP:
 
         UtW = jnp.array(U.T @ W)
         Uty = jnp.array(U.T @ y)
-        UtG_degen = jnp.zeros((n_samples, n_snps))  # constant genotype
+        utg_t_degen = jnp.zeros((n_snps, n_samples))  # constant genotype
 
         evals = jnp.array(eigenvalues)
-        Uab = batch_compute_uab(1, UtW, Uty, UtG_degen)
+        Uab = batch_compute_uab(1, UtW, Uty, utg_t_degen)
         Iab = batch_compute_iab(1, Uab)
 
         lambdas, logls = golden_section_optimize_lambda(
@@ -593,10 +593,10 @@ class TestJaxScoreStatsDegenerateSNP:
         x_valid = rng.choice([0.0, 1.0, 2.0], size=n_samples, p=[0.25, 0.5, 0.25])
         x_degen = np.zeros(n_samples)
         G = np.column_stack([x_valid, x_degen])
-        UtG = jnp.array(U.T @ G)
+        utg_t = jnp.array((U.T @ G).T)  # (n_snps, n_samples)
 
         evals = jnp.array(eigenvalues)
-        Uab = batch_compute_uab(1, UtW, Uty, UtG)
+        Uab = batch_compute_uab(1, UtW, Uty, utg_t)
 
         # Null-model lambda: use l_min as a simple fixed null
         lambda_null = 1e-5
@@ -645,10 +645,10 @@ class TestJaxScoreStatsDegenerateSNP:
 
         UtW = jnp.array(U.T @ W)
         Uty = jnp.array(U.T @ y)
-        UtG_degen = jnp.zeros((n_samples, n_snps))
+        utg_t_degen = jnp.zeros((n_snps, n_samples))
 
         evals = jnp.array(eigenvalues)
-        Uab = batch_compute_uab(1, UtW, Uty, UtG_degen)
+        Uab = batch_compute_uab(1, UtW, Uty, utg_t_degen)
 
         lambda_null = 1e-5
         Hi_eval_null = 1.0 / (lambda_null * evals + 1.0)
@@ -730,10 +730,10 @@ class TestGeneralSplitParity:
         Uty = jnp.array(U.T @ y)
 
         G = rng.choice([0.0, 1.0, 2.0], size=(n_samples, n_snps), p=[0.25, 0.5, 0.25])
-        UtG = jnp.array(U.T @ G)
+        utg_t = jnp.array((U.T @ G).T)  # (n_snps, n_samples)
 
         evals = jnp.array(eigenvalues)
-        Uab = batch_compute_uab(n_cvt, UtW, Uty, UtG)
+        Uab = batch_compute_uab(n_cvt, UtW, Uty, utg_t)
         Iab = batch_compute_iab(n_cvt, Uab)
 
         return evals, Uab, Iab
@@ -956,3 +956,21 @@ class TestBatchGridMleSnpsOuter:
             rtol=1e-10,
             err_msg="_batch_grid_mle SNPs-outer diverges for single SNP",
         )
+
+
+# ---------------------------------------------------------------------------
+# Shape validation guard tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+def test_batch_compute_uab_jax_rejects_wrong_layout():
+    """batch_compute_uab raises ValueError when given old (n_samples, n_snps) layout."""
+    rng = np.random.default_rng(99)
+    n_samples, n_snps = 50, 10
+    UtW = jnp.array(rng.standard_normal((n_samples, 1)))
+    Uty = jnp.array(rng.standard_normal(n_samples))
+    UtG = jnp.array(rng.standard_normal((n_samples, n_snps)))  # wrong layout
+
+    with pytest.raises(ValueError, match="Pass \\(n_snps, n_samples\\)"):
+        batch_compute_uab(1, UtW, Uty, UtG)

@@ -381,7 +381,7 @@ def _run_lmm_jax_streaming_impl(
         def _prepare_jax_chunk(
             start: int, end: int, geno: np.ndarray
         ) -> tuple[np.ndarray, int]:
-            """Slice a genotype subset and prepare UtG for device transfer."""
+            """Slice a genotype subset and prepare utg_t for device transfer."""
             geno_slice = geno[:, start:end]
             return prepare_utg_chunk(geno_slice, U, placement, rotation_threads)
 
@@ -390,8 +390,8 @@ def _run_lmm_jax_streaming_impl(
         ) -> tuple[np.ndarray, int, float]:
             """Measure background-thread preparation time inside the worker."""
             t0 = time.perf_counter()
-            UtG_np, actual_len = _prepare_jax_chunk(start, end, geno)
-            return UtG_np, actual_len, time.perf_counter() - t0
+            utg_t_np, actual_len = _prepare_jax_chunk(start, end, geno)
+            return utg_t_np, actual_len, time.perf_counter() - t0
 
         with ThreadPoolExecutor(max_workers=1) as executor:
             for chunk, filt_start, filt_end in assoc_iterator:
@@ -419,7 +419,7 @@ def _run_lmm_jax_streaming_impl(
                 ]
 
                 t_rot_start = time.perf_counter()
-                UtG_np, actual_jax_len = _prepare_jax_chunk(
+                utg_t_np, actual_jax_len = _prepare_jax_chunk(
                     jax_starts[0], jax_ends[0], chunk
                 )
                 t_rot_end = time.perf_counter()
@@ -428,12 +428,12 @@ def _run_lmm_jax_streaming_impl(
                 t_rotation_exposed_total += exposed_rotation_time(
                     rot_dur, t_rot_end, prev_compute_end
                 )
-                UtG_jax = jax.device_put(UtG_np, placement.snp)
-                del UtG_np
+                utg_t_jax = jax.device_put(utg_t_np, placement.snp)
+                del utg_t_np
 
                 for i, _jax_start in enumerate(jax_starts):
                     current_actual_len = actual_jax_len
-                    current_UtG = UtG_jax
+                    current_utg_t = utg_t_jax
 
                     future = None
                     if i + 1 < len(jax_starts):
@@ -449,7 +449,7 @@ def _run_lmm_jax_streaming_impl(
                     try:
                         with jax.profiler.TraceAnnotation("jax_optimization"):
                             Uab_batch = batch_compute_uab(
-                                n_cvt, UtW_jax, Uty_jax, current_UtG
+                                n_cvt, UtW_jax, Uty_jax, current_utg_t
                             )
 
                             chunk_result = _compute_lmm_chunk(
@@ -484,7 +484,7 @@ def _run_lmm_jax_streaming_impl(
 
                     if future is not None:
                         try:
-                            UtG_np, actual_jax_len, rot_dur = future.result()
+                            utg_t_np, actual_jax_len, rot_dur = future.result()
                         except MemoryError:
                             raise
                         except Exception as exc:
@@ -503,8 +503,8 @@ def _run_lmm_jax_streaming_impl(
                         t_rotation_exposed_total += min(
                             rot_dur, max(0.0, t_rot_end - t_jax_end)
                         )
-                        UtG_jax = jax.device_put(UtG_np, placement.snp)
-                        del UtG_np  # Safe: JAX holds internal ref
+                        utg_t_jax = jax.device_put(utg_t_np, placement.snp)
+                        del utg_t_np  # Safe: JAX holds internal ref
 
                     subchunk_filtered_start = filt_start + jax_starts[i]
                     subchunk_filtered_end = subchunk_filtered_start + current_actual_len
@@ -563,9 +563,9 @@ def _run_lmm_jax_streaming_impl(
                             )
                             all_results.extend(chunk_results)
 
-                    del arrays, chunk_result, Uab_batch, current_UtG
+                    del arrays, chunk_result, Uab_batch, current_utg_t
                     if future is None:
-                        UtG_jax = None
+                        utg_t_jax = None
                     t_write_end = time.perf_counter()
                     t_result_write_total += t_write_end - t_write_start
 

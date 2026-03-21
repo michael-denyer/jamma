@@ -557,7 +557,7 @@ class TestShardingTailRegression:
             pytest.skip("Need >= 2 JAX CPU devices for sharding regression test")
 
         mesh = Mesh(np.array(jax.devices("cpu")), ("snps",))
-        snp_spec = NamedSharding(mesh, P(None, "snps"))
+        snp_spec = NamedSharding(mesh, P("snps", None))
         rep_spec = NamedSharding(mesh, P())
         placement = DevicePlacement(snp=snp_spec, rep=rep_spec, n_devices=n_devices)
 
@@ -567,29 +567,29 @@ class TestShardingTailRegression:
         geno_chunk = np.random.default_rng(42).standard_normal((n_samples, n_actual))
         U = np.eye(n_samples)
 
-        # prepare_utg_chunk pads to n_devices multiple
-        UtG_np, actual_len = prepare_utg_chunk(
+        # prepare_utg_chunk pads to n_devices multiple (axis 0 = SNPs)
+        utg_t_np, actual_len = prepare_utg_chunk(
             geno_chunk, U, placement, rotation_threads=1
         )
         assert actual_len == n_actual
-        assert UtG_np.shape[1] % n_devices == 0, (
-            f"UtG not padded to device multiple: {UtG_np.shape[1]}"
+        assert utg_t_np.shape[0] % n_devices == 0, (
+            f"utg_t not padded to device multiple: {utg_t_np.shape[0]}"
         )
 
         # device_put with sharding — this is where the old bug manifested
-        UtG_jax = jax.device_put(UtG_np, snp_spec)
+        utg_t_jax = jax.device_put(utg_t_np, snp_spec)
 
         eigenvalues = jax.device_put(jnp.ones(n_samples, dtype=jnp.float64), rep_spec)
         UtW = jax.device_put(jnp.ones((n_samples, 1), dtype=jnp.float64), rep_spec)
         Uty = jax.device_put(jnp.ones(n_samples, dtype=jnp.float64), rep_spec)
 
         # Full compute pipeline — would throw IndivisibleError without fix
-        Uab = batch_compute_uab(1, UtW, Uty, UtG_jax)
+        Uab = batch_compute_uab(1, UtW, Uty, utg_t_jax)
         Iab = batch_compute_iab(1, Uab)
         lambdas, logls = golden_section_optimize_lambda(1, eigenvalues, Uab, Iab)
 
-        assert lambdas.shape[0] == UtG_np.shape[1]
-        assert logls.shape[0] == UtG_np.shape[1]
+        assert lambdas.shape[0] == utg_t_np.shape[0]
+        assert logls.shape[0] == utg_t_np.shape[0]
 
     def test_compute_subchunk_starts_prevents_indivisible_tail(self):
         """Verify compute_subchunk_starts prevents the exact failing scenario.

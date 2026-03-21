@@ -1049,7 +1049,7 @@ def test_reconstruct_uab_from_soa_matches_direct():
 
     # Split construction + reconstruction
     invariant = compute_uab_invariant_soa(UtW, Uty)
-    varying = batch_compute_uab_varying_soa_numpy(n_cvt=1, UtW=UtW, Uty=Uty, UtG=UtG)
+    varying = batch_compute_uab_varying_soa_numpy(n_cvt=1, UtW=UtW, Uty=Uty, utg_t=UtG.T)
     Uab_reconstructed = reconstruct_uab_from_soa(invariant, varying)
 
     np.testing.assert_allclose(

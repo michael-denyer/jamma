@@ -55,7 +55,7 @@ def profile_compute(
     eigenvalues: jax.Array,
     UtW: jax.Array,
     Uty: jax.Array,
-    UtG: jax.Array,
+    utg_t: jax.Array,
     n_samples: int,
     n_cvt: int,
     warmup: bool = False,
@@ -64,7 +64,7 @@ def profile_compute(
 
     # Stage 1: batch_compute_uab
     t0 = time.perf_counter()
-    Uab_batch = batch_compute_uab(n_cvt, UtW, Uty, UtG)
+    Uab_batch = batch_compute_uab(n_cvt, UtW, Uty, utg_t)
     Uab_batch.block_until_ready()
     t_uab = time.perf_counter() - t0
 
@@ -205,9 +205,9 @@ def run_profile(label, genotypes, phenotypes, kinship, n_runs):
     W, n_cvt = _build_covariate_matrix(None, n_samples)
     UtW = U.T @ W
     Uty = U.T @ phenotypes
-    UtG = U.T @ genotypes_filtered
+    utg_t = (U.T @ genotypes_filtered).T  # (n_snps, n_samples)
 
-    n_filtered = UtG.shape[1]
+    n_filtered = utg_t.shape[0]
     uab_cols = (n_cvt + 3) * (n_cvt + 2) // 2
     uab_mb = n_filtered * n_samples * uab_cols * 8 / 1e6
     print(f"  Filtered SNPs: {n_filtered:,}, n_cvt={n_cvt}")
@@ -216,12 +216,12 @@ def run_profile(label, genotypes, phenotypes, kinship, n_runs):
     eigenvalues_jax = jnp.array(eigenvalues_np)
     UtW_jax = jnp.array(UtW)
     Uty_jax = jnp.array(Uty)
-    UtG_jax = jnp.array(UtG)
+    utg_t_jax = jnp.array(utg_t)
 
     # Warmup
     print("  Warmup (JIT)...", end=" ", flush=True)
     profile_compute(
-        eigenvalues_jax, UtW_jax, Uty_jax, UtG_jax, n_samples, n_cvt, warmup=True
+        eigenvalues_jax, UtW_jax, Uty_jax, utg_t_jax, n_samples, n_cvt, warmup=True
     )
     print("done")
 
@@ -231,7 +231,7 @@ def run_profile(label, genotypes, phenotypes, kinship, n_runs):
 
     # Profile: UT@G rotation
     t0 = time.perf_counter()
-    _UtG = U.T @ genotypes_filtered
+    _utg_t = (U.T @ genotypes_filtered).T
     t_rotation = time.perf_counter() - t0
     print(f"  UT@G rotation:        {t_rotation:7.3f}s")
 
@@ -239,7 +239,7 @@ def run_profile(label, genotypes, phenotypes, kinship, n_runs):
     all_results = []
     for _i in range(n_runs):
         r = profile_compute(
-            eigenvalues_jax, UtW_jax, Uty_jax, UtG_jax, n_samples, n_cvt
+            eigenvalues_jax, UtW_jax, Uty_jax, utg_t_jax, n_samples, n_cvt
         )
         all_results.append(r)
 

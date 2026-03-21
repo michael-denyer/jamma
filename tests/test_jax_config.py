@@ -333,46 +333,46 @@ class TestMultiDevicePaddingRoundTrip:
         return n_samples, n_cvt, UtW, Uty
 
     def test_padded_uab_matches_unpadded(self, synthetic_lmm_inputs):
-        """batch_compute_uab on zero-padded UtG must match unpadded for real columns."""
+        """batch_compute_uab on zero-padded utg_t must match unpadded for real rows."""
         n_samples, n_cvt, UtW, Uty = synthetic_lmm_inputs
         rng = np.random.default_rng(123)
         n_snps = 7  # deliberately not divisible by 2, 4, or 8
         n_devices = 4
 
-        UtG = jnp.array(rng.standard_normal((n_samples, n_snps)), dtype=jnp.float64)
+        utg_t = jnp.array(rng.standard_normal((n_snps, n_samples)), dtype=jnp.float64)
 
         # Unpadded reference
-        Uab_ref = batch_compute_uab(n_cvt, UtW, Uty, UtG)
+        Uab_ref = batch_compute_uab(n_cvt, UtW, Uty, utg_t)
         Uab_ref_np = np.asarray(Uab_ref)
 
-        # Pad to n_devices multiple (same logic as runner_jax._prepare_chunk)
+        # Pad SNP axis (axis 0) to n_devices multiple
         dev_pad = n_devices - (n_snps % n_devices)
-        UtG_padded = jnp.pad(UtG, ((0, 0), (0, dev_pad)), mode="constant")
-        assert UtG_padded.shape[1] % n_devices == 0
+        utg_t_padded = jnp.pad(utg_t, ((0, dev_pad), (0, 0)), mode="constant")
+        assert utg_t_padded.shape[0] % n_devices == 0
 
         # Padded computation
-        Uab_padded = batch_compute_uab(n_cvt, UtW, Uty, UtG_padded)
+        Uab_padded = batch_compute_uab(n_cvt, UtW, Uty, utg_t_padded)
         Uab_padded_np = np.asarray(Uab_padded)
 
         # Slice to actual_len — must be bitwise identical (zero-padding
-        # cannot affect independent per-column computations)
+        # cannot affect independent per-row computations)
         np.testing.assert_array_equal(
             Uab_padded_np[:n_snps],
             Uab_ref_np,
             err_msg="Padded Uab[:actual_len] differs from unpadded reference",
         )
 
-    def test_padding_columns_produce_deterministic_zeros(self, synthetic_lmm_inputs):
-        """Zero-padded columns must produce deterministic Uab (no NaN/Inf)."""
+    def test_padding_rows_produce_deterministic_zeros(self, synthetic_lmm_inputs):
+        """Zero-padded rows must produce deterministic Uab (no NaN/Inf)."""
         n_samples, n_cvt, UtW, Uty = synthetic_lmm_inputs
         n_devices = 4
-        n_snps_padded = n_devices * 3  # 12 columns, all zero
+        n_snps_padded = n_devices * 3  # 12 rows, all zero
 
-        UtG_zeros = jnp.zeros((n_samples, n_snps_padded), dtype=jnp.float64)
-        Uab_zeros = batch_compute_uab(n_cvt, UtW, Uty, UtG_zeros)
+        utg_t_zeros = jnp.zeros((n_snps_padded, n_samples), dtype=jnp.float64)
+        Uab_zeros = batch_compute_uab(n_cvt, UtW, Uty, utg_t_zeros)
         Uab_np = np.asarray(Uab_zeros)
 
-        assert np.all(np.isfinite(Uab_np)), "Zero-column Uab contains NaN or Inf"
+        assert np.all(np.isfinite(Uab_np)), "Zero-row Uab contains NaN or Inf"
 
     @pytest.mark.parametrize(
         "n_snps,n_devices",
@@ -390,21 +390,21 @@ class TestMultiDevicePaddingRoundTrip:
         n_samples, n_cvt, UtW, Uty = synthetic_lmm_inputs
         rng = np.random.default_rng(n_snps * 100 + n_devices)
 
-        UtG = jnp.array(rng.standard_normal((n_samples, n_snps)), dtype=jnp.float64)
+        utg_t = jnp.array(rng.standard_normal((n_snps, n_samples)), dtype=jnp.float64)
 
         # Reference: no padding
-        Uab_ref = np.asarray(batch_compute_uab(n_cvt, UtW, Uty, UtG))
+        Uab_ref = np.asarray(batch_compute_uab(n_cvt, UtW, Uty, utg_t))
 
-        # Padded version
+        # Padded version (pad SNP axis = axis 0)
         remainder = n_snps % n_devices
         if remainder != 0:
             dev_pad = n_devices - remainder
-            UtG_padded = jnp.pad(UtG, ((0, 0), (0, dev_pad)), mode="constant")
+            utg_t_padded = jnp.pad(utg_t, ((0, dev_pad), (0, 0)), mode="constant")
         else:
-            UtG_padded = UtG
+            utg_t_padded = utg_t
 
-        assert UtG_padded.shape[1] % n_devices == 0
-        Uab_padded = np.asarray(batch_compute_uab(n_cvt, UtW, Uty, UtG_padded))
+        assert utg_t_padded.shape[0] % n_devices == 0
+        Uab_padded = np.asarray(batch_compute_uab(n_cvt, UtW, Uty, utg_t_padded))
 
         np.testing.assert_array_equal(
             Uab_padded[:n_snps],
@@ -447,18 +447,18 @@ class TestComputeLmmChunkPaddingRoundTrip:
         n_snps = 7
         n_devices = 4
 
-        UtG = jnp.array(rng.standard_normal((n_samples, n_snps)), dtype=jnp.float64)
+        utg_t = jnp.array(rng.standard_normal((n_snps, n_samples)), dtype=jnp.float64)
 
         # Unpadded reference
-        Uab_ref = batch_compute_uab(n_cvt, UtW, Uty, UtG)
+        Uab_ref = batch_compute_uab(n_cvt, UtW, Uty, utg_t)
         ref_result = _compute_lmm_chunk(
             lmm_mode, n_cvt, eigenvalues, Uab_ref, n_samples
         )
 
-        # Padded version
+        # Padded version (pad SNP axis = axis 0)
         dev_pad = n_devices - (n_snps % n_devices)
-        UtG_padded = jnp.pad(UtG, ((0, 0), (0, dev_pad)), mode="constant")
-        Uab_padded = batch_compute_uab(n_cvt, UtW, Uty, UtG_padded)
+        utg_t_padded = jnp.pad(utg_t, ((0, dev_pad), (0, 0)), mode="constant")
+        Uab_padded = batch_compute_uab(n_cvt, UtW, Uty, utg_t_padded)
         padded_result = _compute_lmm_chunk(
             lmm_mode, n_cvt, eigenvalues, Uab_padded, n_samples
         )

@@ -1920,7 +1920,7 @@ def _run_lmm_for_chromosome_jax_impl(
     def _prepare_jax_chunk(
         start: int, end: int, geno: np.ndarray
     ) -> tuple[np.ndarray, int]:
-        """Slice a genotype subset and prepare UtG for device transfer."""
+        """Slice a genotype subset and prepare utg_t for device transfer."""
         geno_slice = geno[:, start:end]
         return prepare_utg_chunk(
             geno_slice, eigenvectors, placement, ctx.rotation_threads
@@ -1957,26 +1957,26 @@ def _run_lmm_for_chromosome_jax_impl(
                 for i in range(len(jax_starts))
             ]
 
-            UtG_np, actual_jax_len = _prepare_jax_chunk(
+            utg_t_np, actual_jax_len = _prepare_jax_chunk(
                 jax_starts[0], jax_ends[0], geno_disk_chunk
             )
-            UtG_jax = jax.device_put(UtG_np, placement.snp)
-            del UtG_np
+            utg_t_jax = jax.device_put(utg_t_np, placement.snp)
+            del utg_t_np
 
             for i, _jax_start in enumerate(jax_starts):
                 current_actual_len = actual_jax_len
-                current_UtG = UtG_jax
+                current_utg_t = utg_t_jax
 
                 if i + 1 < len(jax_starts):
-                    UtG_np, actual_jax_len = _prepare_jax_chunk(
+                    utg_t_np, actual_jax_len = _prepare_jax_chunk(
                         jax_starts[i + 1], jax_ends[i + 1], geno_disk_chunk
                     )
-                    UtG_jax = jax.device_put(UtG_np, placement.snp)
-                    del UtG_np
+                    utg_t_jax = jax.device_put(utg_t_np, placement.snp)
+                    del utg_t_np
 
                 try:
                     Uab_batch = batch_compute_uab(
-                        ctx.n_cvt, UtW_jax, Uty_jax, current_UtG
+                        ctx.n_cvt, UtW_jax, Uty_jax, current_utg_t
                     )
 
                     chunk_result = _compute_lmm_chunk(
@@ -2039,9 +2039,9 @@ def _run_lmm_for_chromosome_jax_impl(
                     )
                     results.extend(subchunk_results)
 
-                del arrays, chunk_result, Uab_batch, current_UtG
+                del arrays, chunk_result, Uab_batch, current_utg_t
                 if i + 1 >= len(jax_starts):
-                    UtG_jax = None
+                    utg_t_jax = None
 
             del geno_disk_chunk
 

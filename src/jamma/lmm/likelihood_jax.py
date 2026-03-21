@@ -475,7 +475,7 @@ def batch_compute_uab(
     n_cvt: int,
     UtW: Float[Array, "n nc"],
     Uty: Float[Array, " n"],
-    UtG: Float[Array, "n p"],
+    utg_t: Float[Array, "p n"],
 ) -> Float[Array, "p n ni"]:
     """Compute Uab matrices for all SNPs at once.
 
@@ -490,23 +490,29 @@ def batch_compute_uab(
         n_cvt: Number of covariates (static, triggers recompilation).
         UtW: Rotated covariates (n_samples, n_cvt).
         Uty: Rotated phenotype (n_samples,).
-        UtG: Rotated genotypes for all SNPs (n_samples, n_snps).
+        utg_t: Rotated genotypes (n_snps, n_samples). Pre-transposed
+            layout from prepare_utg_chunk.
 
     Returns:
         Uab matrices (n_snps, n_samples, n_index).
     """
+    if utg_t.shape[1] != UtW.shape[0]:
+        raise ValueError(
+            f"utg_t shape {utg_t.shape} has {utg_t.shape[1]} columns but "
+            f"expected {UtW.shape[0]} (n_samples from UtW). "
+            f"Pass (n_snps, n_samples), not (n_samples, n_snps)."
+        )
     if n_cvt == 1:
         # Fast path: explicit broadcasting avoids vmap overhead
-        n_samples, n_snps = UtG.shape
+        n_snps, n_samples = utg_t.shape
         w = UtW[:, 0]
-        UtG_T = UtG.T  # (n_snps, n_samples)
 
         ww = w * w
         wy = w * Uty
         yy = Uty * Uty
-        wx = w[None, :] * UtG_T
-        xx = UtG_T * UtG_T
-        xy = UtG_T * Uty[None, :]
+        wx = w[None, :] * utg_t
+        xx = utg_t * utg_t
+        xy = utg_t * Uty[None, :]
 
         return jnp.stack(
             [
@@ -520,8 +526,8 @@ def batch_compute_uab(
             axis=-1,
         )
 
-    # General path: vmap over SNPs
-    return vmap(lambda utx: compute_uab_jax(n_cvt, UtW, Uty, utx))(UtG.T)
+    # General path: vmap over SNPs (axis 0 = n_snps, each row is n_samples)
+    return vmap(lambda utx: compute_uab_jax(n_cvt, UtW, Uty, utx))(utg_t)
 
 
 @partial(jit, static_argnums=(0,))

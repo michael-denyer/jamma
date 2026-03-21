@@ -16,6 +16,7 @@ import numpy as np
 import psutil
 from loguru import logger
 
+from jamma import jlinalg
 from jamma.core.memory import estimate_lmm_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
@@ -425,12 +426,12 @@ def _compute_chunk_size_numpy(
         n_cvt: Number of covariates.
         use_split: If True, use split Uab accounting instead of full Uab.
         lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All). Affects
-            memory accounting: Wald uses 4 cols/SNP (3 varying + 1 UtG),
+            memory accounting: Wald uses 4 cols/SNP (3 varying + 1 utg_t),
             non-Wald uses 9 cols/SNP (3 varying + 6 reconstructed Uab peak).
         fused_mode4: If True, mode-4 uses fused C kernel (4-col accounting,
             same as Wald) instead of reconstruct+compose (9-col).
         use_fused_general: If True, fused general path is active (n_cvt>=2);
-            only UtG + UtG_T are allocated (no uab_varying_soa).
+            only utg_t is allocated (single buffer, no uab_varying_soa).
         mem_budget_bytes: Explicit per-chunk memory budget in bytes.
             None (default) auto-scales with available RAM.
         pipeline_buffers: Number of live chunks (1 for sequential,
@@ -447,17 +448,18 @@ def _compute_chunk_size_numpy(
         raise ValueError(f"pipeline_buffers must be >= 1, got {pipeline_buffers}")
 
     if use_split and n_cvt == 1:
-        if _C_FUSED_AVAILABLE and lmm_mode in (1, 4):
-            # Fused path: UtG_T contiguous copy only, no uab_varying_soa.
-            # UtG (n_samples, chunk) is the rotation output.
-            # UtG_T = np.ascontiguousarray(UtG.T) is (chunk, n_samples).
-            # Peak = UtG + UtG_T = 2 * n_samples * chunk * 8.
-            # UtG freed after UtG_T creation, so sustained = 1x.
-            # Use 2x for peak accounting.
-            bytes_per_snp = n_samples * 2 * 8
+        if _C_FUSED_AVAILABLE and (
+            lmm_mode == 1 or (lmm_mode == 4 and _C_MODE4_FUSED_AVAILABLE)
+        ):
+            # Fused path: jlinalg.dgemm(chunk, U, transa="T") produces
+            # C-contiguous utg_t (n_snps, n_samples) directly — single buffer.
+            # No intermediate allocation or contiguous copy.
+            # Mode 4 only uses fused when _C_MODE4_FUSED_AVAILABLE; otherwise
+            # it falls back to split SoA which needs 4x buffers.
+            bytes_per_snp = n_samples * 8
         else:
             # SoA split paths (Wald, Score, LRT, mode-4):
-            # 3 varying SoA columns + 1 UtG per SNP, no Uab reconstruction.
+            # 3 varying SoA columns + 1 utg_t per SNP, no Uab reconstruction.
             bytes_per_snp = n_samples * 4 * 8
     elif use_split and n_cvt > 1:
         from jamma.lmm.likelihood import classify_uab_columns
@@ -465,9 +467,9 @@ def _compute_chunk_size_numpy(
         _inv, var = classify_uab_columns(n_cvt)
         n_var = len(var)
         if use_fused_general:
-            # Fused general path: only UtG + UtG_T, no uab_varying_soa.
-            # Peak = UtG + UtG_T = 2 * n_samples * chunk * 8.
-            bytes_per_snp = n_samples * 2 * 8
+            # Fused general path: jlinalg.dgemm produces utg_t directly.
+            # Single buffer, no intermediate allocation or contiguous copy.
+            bytes_per_snp = n_samples * 8
         elif lmm_mode == 1:
             # Wald: workspace path, no Uab reconstruction
             bytes_per_snp = n_samples * (n_var + 1) * 8
@@ -712,7 +714,7 @@ def run_lmm_association_numpy(
     # reconstruction).  Only for n_cvt=1 with mode-4 C kernel available.
     use_fused_mode4 = use_split and lmm_mode == 4 and n_cvt == 1 and _C_MODE4_AVAILABLE
 
-    # Fused Uab path: skip uab_varying_soa entirely, pass UtG_T directly to
+    # Fused Uab path: skip uab_varying_soa entirely, pass utg_t directly to
     # C workspace which computes wx/xx/xy on-the-fly.
     # n_cvt=1: uses fused (ABI v8) kernel.
     # n_cvt>=2: uses fused general (ABI v9) kernel.
@@ -735,12 +737,12 @@ def run_lmm_association_numpy(
 
     if use_fused and not use_fused_general:
         logger.debug(
-            "Fused Uab path active: UtG_T passed directly to C workspace "
+            "Fused Uab path active: utg_t passed directly to C workspace "
             f"(mode={lmm_mode}, eliminates uab_varying_soa buffer)"
         )
     elif use_fused_general:
         logger.debug(
-            "Fused general Uab path active: UtG_T passed directly to C workspace "
+            "Fused general Uab path active: utg_t passed directly to C workspace "
             f"(n_cvt={n_cvt}, n_var={n_cvt + 2})"
         )
 
@@ -845,13 +847,6 @@ def run_lmm_association_numpy(
 
     chunk_starts = list(range(0, n_filtered, chunk_size))
 
-    # Pre-allocate rotation output buffer for sequential path only.
-    # Pipeline path allocates per-chunk buffers because the background thread
-    # writes UtG for chunk N+1 while the foreground thread still reads chunk N.
-    UtG_buf = (
-        None if use_pipeline else np.empty((n_samples, chunk_size), dtype=np.float64)
-    )
-
     # Pre-allocate SoA varying buffer for sequential path (reuse across chunks).
     # Shape: (chunk_size, n_var, n_samples) where n_var=3 for n_cvt=1.
     # Not needed when fused path is active (no uab_varying_soa computed).
@@ -906,7 +901,7 @@ def run_lmm_association_numpy(
     # Create Wald workspace for modes 1 (Wald) and 4 (All) — both need
     # REML Wald statistics. Modes 2 (LRT) and 3 (Score) don't need a
     # Wald workspace; they reconstruct Uab and call C batch functions.
-    # Fused workspace stores w/Uty for on-the-fly Uab computation from UtG_T.
+    # Fused workspace stores w/Uty for on-the-fly Uab computation from utg_t.
     # Fused mode-4 workspace extends fused with null-model fields.
     if use_split and lmm_mode in (1, 4):
         if use_fused_general:
@@ -1005,7 +1000,7 @@ def run_lmm_association_numpy(
     def _prepare_chunk(chunk_start: int) -> tuple:
         """Slice, impute, rotate, build chunk data for compute dispatch.
 
-        BLAS operations release the GIL. Returns either UtG_T (fused path)
+        BLAS operations release the GIL. Returns either utg_t (fused path)
         or SoA-layout varying Uab (split path). Invariant Uab is precomputed
         once in outer scope (uab_invariant_soa).
         """
@@ -1020,27 +1015,26 @@ def run_lmm_association_numpy(
             geno_chunk = np.where(missing, chunk_means[None, :], geno_chunk)
         del missing
 
-        # Rotate — fresh buffer each call (pipeline path, not reusing UtG_buf)
+        # Rotate — jlinalg.dgemm(chunk, U, transa="T") produces
+        # C-contiguous (n_snps, n_samples) directly, no intermediate UtG.
         with blas_threads(pipeline_rot_threads):
-            UtG = U.T @ geno_chunk
+            utg_t = jlinalg.dgemm(geno_chunk, U, transa="T")
 
         actual_len = chunk_end - chunk_start
 
         if use_fused:
-            # Fused path: pass UtG_T directly to C workspace. No uab_varying_soa.
-            utg_t = np.ascontiguousarray(UtG.T)
-            del UtG
+            # Fused path: pass utg_t directly to C workspace. No uab_varying_soa.
             return utg_t, actual_len
 
         # Split SoA path: build SNP-varying Uab in SoA layout.
-        uab_var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG)
+        uab_var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t)
         return uab_var_soa, actual_len
 
     def _compute_and_write(chunk_data: np.ndarray, actual_len: int) -> None:
         """Run C extension compute on a chunk and write results.
 
         Dispatches by path:
-        - Fused (use_fused): chunk_data is UtG_T, dispatched to fused C workspace
+        - Fused (use_fused): chunk_data is utg_t, dispatched to fused C workspace
         - SoA split: chunk_data is uab_var_soa, dispatched to dispatch_soa_split
         """
         nonlocal write_offset, t_numpy_compute_total, t_result_write_total
@@ -1287,24 +1281,19 @@ def run_lmm_association_numpy(
                     geno_chunk = np.where(missing, chunk_means[None, :], geno_chunk)
                 del missing, chunk_means
 
-                # Rotate genotypes
+                # Rotate genotypes — jlinalg.dgemm(chunk, U, transa="T")
+                # produces C-contiguous (n_snps, n_samples) directly.
                 t_rot_start = time.perf_counter()
                 actual_snps = geno_chunk.shape[1]
                 with blas_threads(rotation_threads):
-                    if actual_snps == chunk_size:
-                        np.dot(U.T, geno_chunk, out=UtG_buf)
-                        UtG = UtG_buf
-                    else:
-                        UtG = U.T @ geno_chunk
+                    utg_t = jlinalg.dgemm(geno_chunk, U, transa="T")
                 t_rotation_total += time.perf_counter() - t_rot_start
                 del geno_chunk
 
                 # Compute
                 t_compute_start = time.perf_counter()
                 if use_fused:
-                    # Fused path: pass UtG_T directly to C workspace.
-                    utg_t = np.ascontiguousarray(UtG.T)
-                    del UtG
+                    # Fused path: utg_t already in correct layout.
                     if use_fused_general:
                         # Mode-4 fused general restricted at dispatch
                         if lmm_mode != 1:
@@ -1336,9 +1325,9 @@ def run_lmm_association_numpy(
                     # Reuse pre-allocated buffer when chunk is full-sized.
                     _out = uab_var_buf if actual_snps == chunk_size else None
                     uab_var_soa = batch_compute_uab_varying_soa_numpy(
-                        n_cvt, UtW, Uty, UtG, out=_out
+                        n_cvt, UtW, Uty, utg_t, out=_out
                     )
-                    del UtG
+                    del utg_t
                     with blas_threads(1):
                         cr = _guarded_compute(
                             dispatch_soa_split,
@@ -1363,8 +1352,9 @@ def run_lmm_association_numpy(
                         )
                     del uab_var_soa
                 else:
-                    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
-                    del UtG
+                    # Non-split full Uab path: utg_t.T gives (n_samples, n_snps) view
+                    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, utg_t.T)
+                    del utg_t
                     cr = _run_lmm_chunk(Uab_batch)
                     del Uab_batch
                 t_numpy_compute_total += time.perf_counter() - t_compute_start

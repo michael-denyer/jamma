@@ -632,7 +632,7 @@ def test_split_c_vs_full_c_parity(split_wald_data):
 
     # Split path — use SoA layout (no per-call transpose since Task 1 changes)
     uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
-    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
+    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
     split_iab = batch_compute_iab_split_ncvt1_soa(uab_var_soa, uab_inv_soa)
     result_split = _compute_wald_split_c(
         eigenvalues,
@@ -703,7 +703,7 @@ def test_split_c_multithreaded_parity(split_wald_data):
 
     eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
     uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
-    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
+    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
     iab = batch_compute_iab_split_ncvt1_soa(uab_var_soa, uab_inv_soa)
 
     r1 = _compute_wald_split_c(
@@ -787,7 +787,7 @@ def test_workspace_api_matches_legacy_split(split_wald_data):
     eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
 
     uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
-    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
+    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
     iab = batch_compute_iab_split_ncvt1_soa(uab_var_soa, uab_inv_soa)
 
     # Legacy path (with Iab_batch passed explicitly)
@@ -830,7 +830,7 @@ def test_workspace_reuse_across_chunks(split_wald_data):
     eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
 
     uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
-    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
+    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
 
     # Create workspace once (before "chunk loop")
     ws = create_lmm_workspace(eigenvalues, uab_inv_soa, n_samples, 1e-5, 1e5, 50, 20, 1)
@@ -879,7 +879,7 @@ def test_workspace_multithreaded_parity(split_wald_data):
 
     eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
     uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
-    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
+    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
 
     ws = create_lmm_workspace(eigenvalues, uab_inv_soa, n_samples, 1e-5, 1e5, 50, 20, 1)
     r1 = compute_wald_split_c_ws(ws, uab_var_soa, 1)
@@ -942,7 +942,7 @@ def test_workspace_nonfinite_eigenvalues(split_wald_data, bad_value):
 
     # Wrong uab_varying shape for chunk compute
     ws = create_lmm_workspace(eigenvalues, uab_inv_soa, n_samples, 1e-5, 1e5, 50, 20, 1)
-    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
+    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
     with pytest.raises(ValueError, match="uab_varying"):
         compute_wald_split_c_ws(ws, uab_var_soa.transpose(0, 2, 1), 1)
 
@@ -3235,7 +3235,7 @@ class TestFusedParity:
         w = UtW[:, 0].copy()
         utg_t = np.ascontiguousarray(UtG.T)
         uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
-        uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
+        uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
         return eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples
 
     def test_fused_workspace_creation(self, fused_data):
@@ -4059,7 +4059,7 @@ def test_fused_ncvt1_regression(split_wald_data):
     w = UtW[:, 0].copy()
     utg_t = np.ascontiguousarray(UtG.T)
     uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
-    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
+    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
 
     # SoA reference
     ws_soa = create_lmm_workspace(

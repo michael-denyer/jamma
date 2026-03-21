@@ -1356,13 +1356,16 @@ def test_prepare_utg_chunk_no_tail_padding():
     device = jax.devices("cpu")[0]
     placement = DevicePlacement(snp=device, rep=device, n_devices=1)
 
-    UtG, actual_len = prepare_utg_chunk(geno, U, placement, rotation_threads=1)
+    utg_t, actual_len = prepare_utg_chunk(geno, U, placement, rotation_threads=1)
 
     assert actual_len == actual_snps
-    # UtG should have actual_snps columns, NOT chunk_size columns
-    assert UtG.shape[1] == actual_snps, (
-        f"Expected {actual_snps} columns (no padding), got {UtG.shape[1]}. "
+    # utg_t should have actual_snps rows (axis 0), NOT chunk_size
+    assert utg_t.shape[0] == actual_snps, (
+        f"Expected {actual_snps} rows (no padding), got {utg_t.shape[0]}. "
         f"Tail chunk should not be padded to chunk_size={chunk_size}."
+    )
+    assert utg_t.shape[1] == n_samples, (
+        f"Expected {n_samples} columns (samples), got {utg_t.shape[1]}."
     )
 
 
@@ -1382,10 +1385,11 @@ def test_prepare_utg_chunk_full_chunk_no_change():
     device = jax.devices("cpu")[0]
     placement = DevicePlacement(snp=device, rep=device, n_devices=1)
 
-    UtG, actual_len = prepare_utg_chunk(geno, U, placement, rotation_threads=1)
+    utg_t, actual_len = prepare_utg_chunk(geno, U, placement, rotation_threads=1)
 
     assert actual_len == chunk_size
-    assert UtG.shape[1] == chunk_size
+    assert utg_t.shape[0] == chunk_size
+    assert utg_t.shape[1] == n_samples
 
 
 @pytest.mark.tier1

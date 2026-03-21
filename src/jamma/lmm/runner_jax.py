@@ -293,7 +293,7 @@ def _run_lmm_jax_batch_impl(
     n_at_lmax_accum = 0
 
     def _impute_and_prepare(start: int) -> tuple[np.ndarray, int]:
-        """Mean-impute a genotype slice and prepare UtG for device transfer."""
+        """Mean-impute a genotype slice and prepare utg_t for device transfer."""
         chunk_indices = snp_indices[start : start + chunk_size]
         geno_chunk = genotypes[:, chunk_indices]
         chunk_means_local = col_means[chunk_indices]
@@ -306,8 +306,8 @@ def _run_lmm_jax_batch_impl(
     def _impute_and_prepare_timed(start: int) -> tuple[np.ndarray, int, float]:
         """Measure background-thread preparation time inside the worker."""
         t0 = time.perf_counter()
-        UtG_np, actual_len = _impute_and_prepare(start)
-        return UtG_np, actual_len, time.perf_counter() - t0
+        utg_t_np, actual_len = _impute_and_prepare(start)
+        return utg_t_np, actual_len, time.perf_counter() - t0
 
     chunk_starts = list(range(0, n_filtered, chunk_size))
 
@@ -317,15 +317,15 @@ def _run_lmm_jax_batch_impl(
 
     # Prepare first chunk (includes BLAS rotation U.T @ G)
     t_rot_start = time.perf_counter()
-    UtG_np, actual_len = _impute_and_prepare(chunk_starts[0])
+    utg_t_np, actual_len = _impute_and_prepare(chunk_starts[0])
     t_rot_end = time.perf_counter()
     rot_dur = t_rot_end - t_rot_start
     t_rotation_total += rot_dur
     t_rotation_exposed_total += exposed_rotation_time(
         rot_dur, t_rot_end, prev_compute_end
     )
-    UtG_jax = jax.device_put(UtG_np, placement.snp)
-    del UtG_np  # Safe: JAX holds internal ref during async transfer
+    utg_t_jax = jax.device_put(utg_t_np, placement.snp)
+    del utg_t_np  # Safe: JAX holds internal ref during async transfer
 
     # Create progress bar iterator
     if show_progress and n_chunks > 1:
@@ -342,7 +342,7 @@ def _run_lmm_jax_batch_impl(
     with writer_cm as writer, ThreadPoolExecutor(max_workers=1) as executor:
         for i, _chunk_start in chunk_iterator:
             actual_chunk_len = actual_len
-            current_UtG = UtG_jax
+            current_utg_t = utg_t_jax
 
             future = None
             if i + 1 < len(chunk_starts):
@@ -350,7 +350,7 @@ def _run_lmm_jax_batch_impl(
 
             t_jax_start = time.perf_counter()
             try:
-                Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_UtG)
+                Uab_batch = batch_compute_uab(n_cvt, UtW_jax, Uty_jax, current_utg_t)
 
                 cr = _compute_lmm_chunk(
                     lmm_mode,
@@ -386,7 +386,7 @@ def _run_lmm_jax_batch_impl(
 
             if future is not None:
                 try:
-                    UtG_np, actual_len, rot_dur = future.result()
+                    utg_t_np, actual_len, rot_dur = future.result()
                 except MemoryError:
                     raise
                 except Exception as exc:
@@ -401,8 +401,8 @@ def _run_lmm_jax_batch_impl(
                 t_rotation_exposed_total += min(
                     rot_dur, max(0.0, t_rot_end - t_jax_end)
                 )
-                UtG_jax = jax.device_put(UtG_np, placement.snp)
-                del UtG_np  # Safe: JAX holds internal ref during async transfer
+                utg_t_jax = jax.device_put(utg_t_np, placement.snp)
+                del utg_t_np  # Safe: JAX holds internal ref during async transfer
 
             # Write results, stripping padding from tail/device-alignment
             t_write_start = time.perf_counter()

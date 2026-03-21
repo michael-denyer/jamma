@@ -373,7 +373,7 @@ def run_lmm_association_numpy_streaming(
     )
     use_fused_mode4 = use_split and lmm_mode == 4 and n_cvt == 1 and _C_MODE4_AVAILABLE
 
-    # Fused Uab path: skip uab_varying_soa, pass UtG_T directly to C workspace.
+    # Fused Uab path: skip uab_varying_soa, pass utg_t directly to C workspace.
     # Requires use_split (workspace + invariant SoA infrastructure).
     use_fused = use_split and (
         # n_cvt=1 fast path (existing)
@@ -552,15 +552,13 @@ def run_lmm_association_numpy_streaming(
 
             t_rot_start = time.perf_counter()
             with blas_threads(rotation_threads):
-                if use_fused:
-                    # Avoid two large copies:
-                    # 1. passing U.T to jlinalg.dgemm would force a contiguous
-                    #    O(n^2) copy of the eigenvector matrix in the C wrapper
-                    # 2. materializing UtG and then np.ascontiguousarray(UtG.T)
-                    #    would allocate a second n_samples x chunk buffer
+                if use_fused or use_split:
+                    # dgemm(chunk, U, transa="T") produces C-contiguous utg_t
+                    # (n_snps, n_samples) directly — avoids O(n^2) eigenvector
+                    # copy and intermediate transpose buffer.
                     utg_t = jlinalg.dgemm(chunk, U, transa="T")
-                    UtG = None
                 else:
+                    # Non-split full Uab path needs (n_samples, n_snps)
                     UtG = jlinalg.dgemm(U, chunk, transa="T")
                     utg_t = None
             t_rot_end = time.perf_counter()
@@ -601,7 +599,10 @@ def run_lmm_association_numpy_streaming(
                     )
                 del utg_t
             elif use_split:
-                uab_var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG)
+                uab_var_soa = batch_compute_uab_varying_soa_numpy(
+                    n_cvt, UtW, Uty, utg_t
+                )
+                del utg_t
 
                 with blas_threads(1):
                     cr = dispatch_soa_split(

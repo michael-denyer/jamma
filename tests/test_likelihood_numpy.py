@@ -107,7 +107,7 @@ def test_batch_uab_matches_jax(synthetic_data):
 
     Uab_numpy = batch_compute_uab_numpy(1, UtW, Uty, UtG)
     Uab_jax = np.asarray(
-        batch_compute_uab(1, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG))
+        batch_compute_uab(1, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG.T))
     )
 
     assert Uab_numpy.shape == (n_snps, 50, 6), f"Wrong shape: {Uab_numpy.shape}"
@@ -142,7 +142,9 @@ def test_batch_pab_matches_jax(synthetic_data):
     Uab_batch_np = batch_compute_uab_numpy(1, UtW, Uty, UtG)
     Pab_numpy = batch_compute_pab_numpy(1, Hi_eval, Uab_batch_np)
 
-    Uab_batch_jax = batch_compute_uab(1, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG))
+    Uab_batch_jax = batch_compute_uab(
+        1, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG.T)
+    )
     Hi_eval_jax = jnp.array(Hi_eval)
     Pab_jax = np.asarray(
         vmap(lambda Uab: calc_pab_jax(1, Hi_eval_jax, Uab))(Uab_batch_jax)
@@ -175,7 +177,9 @@ def test_batch_iab_matches_jax(synthetic_data):
     Uab_batch_np = batch_compute_uab_numpy(1, UtW, Uty, UtG)
     Iab_numpy = batch_compute_iab_numpy(1, Uab_batch_np)
 
-    Uab_batch_jax = batch_compute_uab(1, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG))
+    Uab_batch_jax = batch_compute_uab(
+        1, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG.T)
+    )
     Iab_jax = np.asarray(batch_compute_iab(1, Uab_batch_jax))
 
     np.testing.assert_allclose(
@@ -213,7 +217,9 @@ def test_golden_section_reml_matches_jax(synthetic_data):
         1, eigenvalues, Uab_batch_np, Iab_batch_np
     )
 
-    Uab_batch_jax = batch_compute_uab(1, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG))
+    Uab_batch_jax = batch_compute_uab(
+        1, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG.T)
+    )
     Iab_batch_jax = batch_compute_iab(1, Uab_batch_jax)
     lambdas_jax, logls_jax = golden_section_optimize_lambda(
         1, jnp.array(eigenvalues), Uab_batch_jax, Iab_batch_jax
@@ -262,7 +268,9 @@ def test_golden_section_mle_matches_jax(synthetic_data):
         1, eigenvalues, Uab_batch_np
     )
 
-    Uab_batch_jax = batch_compute_uab(1, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG))
+    Uab_batch_jax = batch_compute_uab(
+        1, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG.T)
+    )
     lambdas_jax, logls_jax = golden_section_optimize_lambda_mle(
         1, jnp.array(eigenvalues), Uab_batch_jax
     )
@@ -320,7 +328,9 @@ def test_wald_stats_match_jax(synthetic_data):
         1, lambdas_np, eigenvalues, Uab_batch_np, n_samples
     )
 
-    Uab_batch_jax = batch_compute_uab(1, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG))
+    Uab_batch_jax = batch_compute_uab(
+        1, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG.T)
+    )
     Iab_batch_jax = batch_compute_iab(1, Uab_batch_jax)
     lambdas_jax, _ = golden_section_optimize_lambda(
         1, jnp.array(eigenvalues), Uab_batch_jax, Iab_batch_jax
@@ -376,7 +386,9 @@ def test_score_stats_match_jax(synthetic_data):
         1, Hi_eval_null, Uab_batch_np, n_samples
     )
 
-    Uab_batch_jax = batch_compute_uab(1, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG))
+    Uab_batch_jax = batch_compute_uab(
+        1, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG.T)
+    )
     betas_jax, ses_jax, pscores_jax = batch_calc_score_stats(
         1, jnp.array(Hi_eval_null), Uab_batch_jax, n_samples
     )
@@ -430,7 +442,9 @@ def test_lrt_pvalues_match_jax(synthetic_data):
     )
     plrts_np = _batch_lrt_pvalues_numpy(logls_mle_np, logl_H0)
 
-    Uab_batch_jax = batch_compute_uab(1, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG))
+    Uab_batch_jax = batch_compute_uab(
+        1, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG.T)
+    )
     _, logls_mle_jax = golden_section_optimize_lambda_mle(
         1, jnp.array(eigenvalues), Uab_batch_jax
     )
@@ -804,7 +818,7 @@ def test_batch_uab_multi_covariate_matches_jax():
 
     Uab_numpy = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
     Uab_jax = np.asarray(
-        batch_compute_uab(n_cvt, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG))
+        batch_compute_uab(n_cvt, jnp.array(UtW), jnp.array(Uty), jnp.array(UtG.T))
     )
 
     # n_index = (n_cvt + 3) * (n_cvt + 2) // 2 = 6 * 5 // 2 = 15
@@ -958,7 +972,7 @@ def split_uab_data():
     UtG = rng.standard_normal((n_samples, n_snps))
 
     uab_invariant_soa = compute_uab_invariant_soa(UtW, Uty)
-    uab_varying_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
+    uab_varying_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
 
     Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
@@ -1758,7 +1772,7 @@ def test_split_ncvt1_fallback_degenerate_snps_wald_nan():
     UtG_degen = np.zeros((n, n_snps))  # constant genotype -> P_XX = 0
 
     uab_invariant_soa = compute_uab_invariant_soa(UtW, Uty)
-    uab_varying_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG_degen)
+    uab_varying_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG_degen.T)
     iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
         uab_invariant_soa
     )
@@ -1827,7 +1841,7 @@ def test_split_ncvt1_fallback_mixed_degenerate_valid():
     UtG[:, 3] = rng.standard_normal(n)  # valid
 
     uab_invariant_soa = compute_uab_invariant_soa(UtW, Uty)
-    uab_varying_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
+    uab_varying_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
     iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
         uab_invariant_soa
     )
@@ -2302,8 +2316,8 @@ def test_direct_soa_varying_general_parity(n_cvt):
     Uab_full = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG)
     ref_soa = np.ascontiguousarray(Uab_full[:, :, list(var_indices)].transpose(0, 2, 1))
 
-    # Direct SoA varying
-    direct_soa = _batch_compute_uab_varying_general_numpy(n_cvt, UtW, Uty, UtG)
+    # Direct SoA varying — utg_t is (n_snps, n_samples)
+    direct_soa = _batch_compute_uab_varying_general_numpy(n_cvt, UtW, Uty, UtG.T)
 
     np.testing.assert_allclose(
         direct_soa,
@@ -2353,7 +2367,7 @@ def test_batch_compute_uab_varying_soa_general_uses_direct_path(n_cvt):
     UtG = rng.standard_normal((n_samples, n_snps))
 
     # The function should produce identical results regardless of path
-    var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG)
+    var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG.T)
 
     # Reference: full Uab -> extract varying -> SoA
     from jamma.lmm.likelihood import classify_uab_columns
@@ -2437,3 +2451,34 @@ def test_compute_lrt_numpy_ncvt2_uses_c_path(synthetic_data):
     assert "general_c" in call_log, (
         "_compute_lrt_numpy did not call _compute_lrt_batch_general_c for n_cvt=2"
     )
+
+
+# ---------------------------------------------------------------------------
+# Shape validation guard tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+def test_batch_compute_uab_numpy_rejects_wrong_layout():
+    """batch_compute_uab_numpy raises ValueError when given (n_snps, n_samples)."""
+    rng = np.random.default_rng(99)
+    n_samples, n_snps = 50, 10
+    UtW = rng.standard_normal((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+    utg_t = rng.standard_normal((n_snps, n_samples))  # wrong layout for this fn
+
+    with pytest.raises(ValueError, match="Pass \\(n_samples, n_snps\\)"):
+        batch_compute_uab_numpy(1, UtW, Uty, utg_t)
+
+
+@pytest.mark.tier0
+def test_batch_compute_uab_varying_soa_rejects_wrong_layout():
+    """batch_compute_uab_varying_soa_numpy raises ValueError when given old layout."""
+    rng = np.random.default_rng(99)
+    n_samples, n_snps = 50, 10
+    UtW = rng.standard_normal((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))  # wrong layout for this fn
+
+    with pytest.raises(ValueError, match="Pass \\(n_snps, n_samples\\)"):
+        batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)

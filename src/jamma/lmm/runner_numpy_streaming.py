@@ -550,10 +550,19 @@ def run_lmm_association_numpy_streaming(
                 chunk = np.where(missing_mask, chunk_means_broadcast, chunk)
             del missing_mask
 
-            # Rotate: UtG = U.T @ chunk via jlinalg.dgemm
             t_rot_start = time.perf_counter()
             with blas_threads(rotation_threads):
-                UtG = jlinalg.dgemm(U.T, chunk)
+                if use_fused:
+                    # Avoid two large copies:
+                    # 1. passing U.T to jlinalg.dgemm would force a contiguous
+                    #    O(n^2) copy of the eigenvector matrix in the C wrapper
+                    # 2. materializing UtG and then np.ascontiguousarray(UtG.T)
+                    #    would allocate a second n_samples x chunk buffer
+                    utg_t = jlinalg.dgemm(chunk, U, transa="T")
+                    UtG = None
+                else:
+                    UtG = jlinalg.dgemm(U, chunk, transa="T")
+                    utg_t = None
             t_rot_end = time.perf_counter()
             t_rotation_total += t_rot_end - t_rot_start
 
@@ -563,9 +572,8 @@ def run_lmm_association_numpy_streaming(
             t_compute_start = time.perf_counter()
 
             if use_fused:
-                # Fused path: pass UtG_T directly to C workspace.
-                utg_t = np.ascontiguousarray(UtG.T)
-                del UtG
+                # Fused path: rotation already produced the required
+                # (chunk, n_samples) C-contiguous layout directly.
                 if use_fused_general:
                     # Mode-4 fused general is restricted at dispatch (lmm_mode==1 only)
                     if lmm_mode != 1:

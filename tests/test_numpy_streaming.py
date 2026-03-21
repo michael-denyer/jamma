@@ -6,6 +6,7 @@ streaming mechanics (SC-03), and chunking edge cases (SC-04).
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import numpy as np
@@ -70,6 +71,75 @@ NUMPY_GEMMA_TOLERANCES = ToleranceConfig(
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+def test_streaming_runner_avoids_transposed_u_copy_in_jlinalg_dgemm():
+    """Hot path must use transa='T', not pass U.T into jlinalg.dgemm.
+
+    jlinalg's C binding copies non-contiguous inputs to C-contiguous buffers.
+    Passing U.T would therefore materialize an O(n^2) copy of the eigenvector
+    matrix inside the streaming chunk loop.
+    """
+    source = (
+        Path(__file__).parent.parent
+        / "src"
+        / "jamma"
+        / "lmm"
+        / "runner_numpy_streaming.py"
+    ).read_text()
+    tree = ast.parse(source)
+
+    saw_transa_t = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+
+        func = node.func
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "jlinalg"
+            and func.attr == "dgemm"
+        ):
+            if len(node.args) >= 2:
+                assert not (
+                    isinstance(node.args[0], ast.Attribute)
+                    and isinstance(node.args[0].value, ast.Name)
+                    and node.args[0].value.id == "U"
+                    and node.args[0].attr == "T"
+                ), "streaming runner must not pass U.T directly into jlinalg.dgemm"
+            if (
+                len(node.args) >= 2
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id == "U"
+                and isinstance(node.args[1], ast.Name)
+                and node.args[1].id == "chunk"
+            ):
+                for kw in node.keywords:
+                    if (
+                        kw.arg == "transa"
+                        and isinstance(kw.value, ast.Constant)
+                        and kw.value.value == "T"
+                    ):
+                        saw_transa_t = True
+
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "np"
+            and func.attr == "ascontiguousarray"
+            and len(node.args) == 1
+            and isinstance(node.args[0], ast.Attribute)
+            and node.args[0].attr == "T"
+            and isinstance(node.args[0].value, ast.Name)
+            and node.args[0].value.id == "UtG"
+        ):
+            pytest.fail(
+                "streaming runner must not materialize np.ascontiguousarray(UtG.T)"
+            )
+
+    assert saw_transa_t
 
 
 @pytest.fixture

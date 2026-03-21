@@ -32,7 +32,7 @@ from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_split_ncvt1_numpy,
 )
 
-_EXPECTED_ABI_VERSION = 8  # Must match ABI_VERSION in _lmm_accel.c
+_EXPECTED_ABI_VERSION = 9  # Must match ABI_VERSION in _lmm_accel.c
 
 
 class AccelImport(NamedTuple):
@@ -65,6 +65,10 @@ class AccelImport(NamedTuple):
     compute_lmm_chunk_fused_c: object | None
     create_workspace_mode4_fused_c: object | None
     compute_mode4_chunk_fused_c: object | None
+    create_workspace_fused_general_c: object | None
+    compute_lmm_chunk_fused_general_c: object | None
+    create_workspace_mode4_fused_general_c: object | None
+    compute_mode4_chunk_fused_general_c: object | None
 
 
 _ACCEL_UNAVAILABLE = AccelImport(
@@ -91,6 +95,10 @@ _ACCEL_UNAVAILABLE = AccelImport(
     compute_lmm_chunk_fused_c=None,
     create_workspace_mode4_fused_c=None,
     compute_mode4_chunk_fused_c=None,
+    create_workspace_fused_general_c=None,
+    compute_lmm_chunk_fused_general_c=None,
+    create_workspace_mode4_fused_general_c=None,
+    compute_mode4_chunk_fused_general_c=None,
 )
 
 
@@ -288,6 +296,39 @@ def _try_import_accel() -> AccelImport:
         ws_fused_mode4_create = None
         ws_fused_mode4 = None
 
+    # Fused general Uab workspace support — expected in ABI v9+
+    try:
+        from jamma.lmm._lmm_accel import (
+            compute_lmm_chunk_fused_general_c as ws_fused_gen_chunk,
+        )
+        from jamma.lmm._lmm_accel import (
+            compute_mode4_chunk_fused_general_c as ws_fused_gen_mode4,
+        )
+        from jamma.lmm._lmm_accel import (
+            create_workspace_fused_general_c as ws_fused_gen_create,
+        )
+        from jamma.lmm._lmm_accel import (
+            create_workspace_mode4_fused_general_c as ws_fused_gen_mode4_create,
+        )
+    except ImportError:
+        from loguru import logger
+
+        if abi >= 9:
+            logger.error(
+                f"C extension ABI v{abi} validated but fused general symbols missing. "
+                "This indicates build corruption — recompile: "
+                "python -m jamma.lmm._compile_accel"
+            )
+        else:
+            logger.debug(
+                f"C extension ABI v{abi} < 9: fused general Uab not available, "
+                "falling back to non-fused general path."
+            )
+        ws_fused_gen_create = None
+        ws_fused_gen_chunk = None
+        ws_fused_gen_mode4_create = None
+        ws_fused_gen_mode4 = None
+
     return AccelImport(
         accel_available=True,
         split_available=True,
@@ -312,6 +353,10 @@ def _try_import_accel() -> AccelImport:
         compute_lmm_chunk_fused_c=ws_fused_chunk,
         create_workspace_mode4_fused_c=ws_fused_mode4_create,
         compute_mode4_chunk_fused_c=ws_fused_mode4,
+        create_workspace_fused_general_c=ws_fused_gen_create,
+        compute_lmm_chunk_fused_general_c=ws_fused_gen_chunk,
+        create_workspace_mode4_fused_general_c=ws_fused_gen_mode4_create,
+        compute_mode4_chunk_fused_general_c=ws_fused_gen_mode4,
     )
 
 
@@ -352,6 +397,10 @@ def _auto_recompile() -> bool:
     _compute_lmm_chunk_fused_c,
     _create_workspace_mode4_fused_c,
     _compute_mode4_chunk_fused_c,
+    _create_workspace_fused_general_c,
+    _compute_lmm_chunk_fused_general_c,
+    _create_workspace_mode4_fused_general_c,
+    _compute_mode4_chunk_fused_general_c,
 ) = _try_import_accel()
 
 if not _C_ACCEL_AVAILABLE:
@@ -381,6 +430,10 @@ if not _C_ACCEL_AVAILABLE:
             _compute_lmm_chunk_fused_c,
             _create_workspace_mode4_fused_c,
             _compute_mode4_chunk_fused_c,
+            _create_workspace_fused_general_c,
+            _compute_lmm_chunk_fused_general_c,
+            _create_workspace_mode4_fused_general_c,
+            _compute_mode4_chunk_fused_general_c,
         ) = _try_import_accel()
 
     if not _C_ACCEL_AVAILABLE:
@@ -399,6 +452,10 @@ if not _C_ACCEL_AVAILABLE:
 
 _C_FUSED_AVAILABLE = _create_workspace_fused_c is not None
 _C_MODE4_FUSED_AVAILABLE = _create_workspace_mode4_fused_c is not None
+_C_FUSED_GENERAL_AVAILABLE = _create_workspace_fused_general_c is not None
+# Available but intentionally not wired into runners yet — mode-4 fused general
+# produces NaN lambda_mle for n_cvt >= 2. Will be used when that bug is fixed.
+_C_MODE4_FUSED_GENERAL_AVAILABLE = _create_workspace_mode4_fused_general_c is not None
 
 
 class WaldResult(TypedDict):
@@ -793,6 +850,238 @@ def compute_mode4_fused_c_ws(
             "with ABI version 8+. Recompile: python -m jamma.lmm._compile_accel"
         )
     return _compute_mode4_chunk_fused_c(workspace, utg_t, n_threads)
+
+
+def create_lmm_workspace_fused_general(
+    eigenvalues: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+    UtW: np.ndarray,
+    Uty: np.ndarray,
+    n_samples: int,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+    n_threads: int,
+    *,
+    n_cvt: int,
+    invariant_indices: np.ndarray,
+    varying_indices: np.ndarray,
+    logdet_diag_rows: np.ndarray,
+    logdet_diag_cols: np.ndarray,
+    level_offsets: np.ndarray,
+    level_counts: np.ndarray,
+    entries: np.ndarray,
+    idx_xx: int,
+    idx_xy: int,
+    idx_yy: int,
+    var_a_cols: np.ndarray,
+    var_b_cols: np.ndarray,
+) -> object:
+    """Create fused general workspace for n_cvt >= 2 Wald computation.
+
+    Stores UtW (transposed to column-major), Uty, and var_a/b_cols for
+    on-the-fly varying Uab computation from UtG_T.
+
+    Args:
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        uab_invariant_soa: Invariant Uab (n_inv, n_samples) -- SoA layout.
+        UtW: Rotated covariates (n_samples, n_cvt).
+        Uty: Rotated phenotype (n_samples,).
+        n_samples: Number of samples.
+        l_min: Minimum lambda.
+        l_max: Maximum lambda.
+        n_grid: Number of coarse grid points.
+        n_refine: Golden section iterations.
+        n_threads: OpenMP thread count.
+        n_cvt: Number of covariates.
+        invariant_indices: Invariant column indices (n_inv,) int32.
+        varying_indices: Varying column indices (n_var,) int32.
+        logdet_diag_rows: Logdet diagonal rows (n_cvt+1,) int32.
+        logdet_diag_cols: Logdet diagonal cols (n_cvt+1,) int32.
+        level_offsets: Level offsets (n_rows,) int32.
+        level_counts: Level counts (n_rows,) int32.
+        entries: Recursion entries (n_entries*4,) int32 stride-4.
+        idx_xx: Genotype-genotype index.
+        idx_xy: Genotype-phenotype index.
+        idx_yy: Phenotype-phenotype index.
+        var_a_cols: Column a for each varying pair (n_var,) int32.
+        var_b_cols: Column b for each varying pair (n_var,) int32.
+
+    Returns:
+        PyCapsule wrapping lmm_workspace_general_t (fused).
+    """
+    if _create_workspace_fused_general_c is None:
+        raise RuntimeError(
+            "Fused general C workspace requires the _lmm_accel C extension "
+            "with ABI version 9+. Recompile: python -m jamma.lmm._compile_accel"
+        )
+    return _create_workspace_fused_general_c(
+        eigenvalues,
+        uab_invariant_soa,
+        UtW,
+        Uty,
+        n_samples,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        n_threads,
+        n_cvt,
+        invariant_indices,
+        varying_indices,
+        logdet_diag_rows,
+        logdet_diag_cols,
+        level_offsets,
+        level_counts,
+        entries,
+        idx_xx,
+        idx_xy,
+        idx_yy,
+        var_a_cols,
+        var_b_cols,
+    )
+
+
+def compute_wald_fused_general_c_ws(
+    workspace: object,
+    utg_t: np.ndarray,
+    n_threads: int,
+) -> WaldResult:
+    """Compute REML Wald from UtG_T using fused general workspace.
+
+    Args:
+        workspace: PyCapsule from create_lmm_workspace_fused_general.
+        utg_t: Rotated genotypes transposed (n_snps, n_samples).
+        n_threads: OpenMP thread count.
+
+    Returns:
+        WaldResult dict with lambdas, logls, betas, ses, pwalds.
+    """
+    if _compute_lmm_chunk_fused_general_c is None:
+        raise RuntimeError(
+            "Fused general C compute requires the _lmm_accel C extension "
+            "with ABI version 9+. Recompile: python -m jamma.lmm._compile_accel"
+        )
+    return _compute_lmm_chunk_fused_general_c(workspace, utg_t, n_threads)
+
+
+def create_lmm_workspace_mode4_fused_general(
+    eigenvalues: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+    UtW: np.ndarray,
+    Uty: np.ndarray,
+    n_samples: int,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+    n_threads: int,
+    *,
+    n_cvt: int,
+    invariant_indices: np.ndarray,
+    varying_indices: np.ndarray,
+    logdet_diag_rows: np.ndarray,
+    logdet_diag_cols: np.ndarray,
+    level_offsets: np.ndarray,
+    level_counts: np.ndarray,
+    entries: np.ndarray,
+    idx_xx: int,
+    idx_xy: int,
+    idx_yy: int,
+    var_a_cols: np.ndarray,
+    var_b_cols: np.ndarray,
+    hi_eval_null: np.ndarray,
+    logl_H0: float,
+) -> object:
+    """Create mode-4 fused general workspace for n_cvt >= 2.
+
+    Args:
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        uab_invariant_soa: Invariant Uab (n_inv, n_samples) -- SoA layout.
+        UtW: Rotated covariates (n_samples, n_cvt).
+        Uty: Rotated phenotype (n_samples,).
+        n_samples: Number of samples.
+        l_min: Minimum lambda.
+        l_max: Maximum lambda.
+        n_grid: Number of coarse grid points.
+        n_refine: Golden section iterations.
+        n_threads: OpenMP thread count.
+        n_cvt: Number of covariates.
+        invariant_indices: Invariant column indices (n_inv,) int32.
+        varying_indices: Varying column indices (n_var,) int32.
+        logdet_diag_rows: Logdet diagonal rows (n_cvt+1,) int32.
+        logdet_diag_cols: Logdet diagonal cols (n_cvt+1,) int32.
+        level_offsets: Level offsets (n_rows,) int32.
+        level_counts: Level counts (n_rows,) int32.
+        entries: Recursion entries (n_entries*4,) int32 stride-4.
+        idx_xx: Genotype-genotype index.
+        idx_xy: Genotype-phenotype index.
+        idx_yy: Phenotype-phenotype index.
+        var_a_cols: Column a for each varying pair (n_var,) int32.
+        var_b_cols: Column b for each varying pair (n_var,) int32.
+        hi_eval_null: Null-model Hi_eval (n_samples,).
+        logl_H0: Null MLE log-likelihood.
+
+    Returns:
+        PyCapsule wrapping lmm_workspace_general_t (mode=4, fused).
+    """
+    if _create_workspace_mode4_fused_general_c is None:
+        raise RuntimeError(
+            "Fused general mode-4 C workspace requires the _lmm_accel C extension "
+            "with ABI version 9+. Recompile: python -m jamma.lmm._compile_accel"
+        )
+    return _create_workspace_mode4_fused_general_c(
+        eigenvalues,
+        uab_invariant_soa,
+        UtW,
+        Uty,
+        n_samples,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        n_threads,
+        n_cvt,
+        invariant_indices,
+        varying_indices,
+        logdet_diag_rows,
+        logdet_diag_cols,
+        level_offsets,
+        level_counts,
+        entries,
+        idx_xx,
+        idx_xy,
+        idx_yy,
+        var_a_cols,
+        var_b_cols,
+        hi_eval_null,
+        logl_H0,
+    )
+
+
+def compute_mode4_fused_general_c_ws(
+    workspace: object,
+    utg_t: np.ndarray,
+    n_threads: int,
+) -> dict:
+    """Compute mode-4 (Wald+Score+LRT) from UtG_T using fused general workspace.
+
+    Args:
+        workspace: PyCapsule from create_lmm_workspace_mode4_fused_general.
+        utg_t: Rotated genotypes transposed (n_snps, n_samples).
+        n_threads: OpenMP thread count.
+
+    Returns:
+        Dict with lambdas, logls, betas, ses, pwalds, p_scores,
+        lambdas_mle, p_lrts.
+    """
+    if _compute_mode4_chunk_fused_general_c is None:
+        raise RuntimeError(
+            "Fused general mode-4 C compute requires the _lmm_accel C extension "
+            "with ABI version 9+. Recompile: python -m jamma.lmm._compile_accel"
+        )
+    return _compute_mode4_chunk_fused_general_c(workspace, utg_t, n_threads)
 
 
 def create_lmm_workspace_general(

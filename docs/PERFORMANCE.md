@@ -1,75 +1,74 @@
 # Performance Summary
 
-## v2.10 — 125k Scale (Latest)
+## v4.2.0 — 125k Scale (Latest)
 
-v2.10.1 at 125,632 samples on 91,586 real SNPs. **~9x faster than GEMMA** (3h 4m vs ~27h). 8% faster than v2.5 thanks to rotation-compute overlap (Phase 54) and C extension improvements. Perfect GEMMA equivalence.
+v4.2.0 at 125,632 samples on 91,586 real SNPs. **~10x faster than GEMMA** (2h 29m vs ~27h). 19% faster than v2.10.1 thanks to jlinalg eigendecomp and C extension LMM improvements. Eigendecomp used DSYEVR (memory-constrained fallback from DSYEVD).
 
 **Note**: GEMMA was compiled with default OpenBLAS, not MKL. Building GEMMA against ILP64 MKL is non-trivial (requires Makefile patches and ILP64 linking for matrices >46k). The comparison reflects typical deployment: GEMMA as-distributed vs JAMMA with ILP64 numpy-mkl.
 
-### 125k Real Data Benchmark (v2.10.1, Databricks)
+### 125k Real Data Benchmark (v4.2.0, Databricks)
 
-Hardware: Azure E96ds_v6 (Intel Xeon Platinum 8573C, 48 physical / 96 logical cores, 672 GB RAM). numpy 2.4.2 with MKL ILP64, JAX, Python 3.12, Databricks Runtime 16.4 LTS.
+Hardware: Azure E96ds_v6 (Intel Xeon Platinum 8573C, 48 physical / 96 logical cores, 672 GB RAM). numpy 2.4.2 with MKL ILP64, Python 3.12, Databricks Runtime 16.4 LTS.
 
 | Phase | Time | % of Total |
 |-------|------|-----------|
-| Kinship compute | 2,047s (34 min) | 19% |
-| Kinship write | 556s (9 min) | 5% |
-| Eigen + LMM | 8,437s (2h 21m) | 76% |
-| **Total** | **~11,040s (3h 4m)** | **100%** |
+| Kinship compute | 1,591s (27 min) | 18% |
+| Eigendecomp (DSYEVR) | 6,427s (1h 47m) | 72% |
+| LMM (C ext) | 887s (15 min) | 10% |
+| **Total** | **~8,942s (2h 29m)** | **100%** |
 
-Throughput: 11 SNPs/sec (eigen+LMM), 8.3 SNPs/sec end-to-end.
+Throughput: 12.5 SNPs/sec (eigen+LMM), 10.2 SNPs/sec end-to-end. Peak RSS: 380.6 GB (after eigendecomp), 320.6 GB (LMM phase).
 
-### 125k Validation: JAMMA vs GEMMA
+### 125k Validation: JAMMA vs GEMMA (v4.2.0)
 
 | Metric | Result |
 |--------|--------|
 | **Kinship Spearman rho** | 1.00000000 |
 | Kinship max abs diff | 5.00e-11 |
 | Kinship mean abs diff | 1.24e-12 |
-| Kinship max relative diff | 8.49e-07 |
+| Kinship max relative diff | 3.50e-06 |
 | Kinship Frobenius relative | 1.45e-10 |
 | **Association Spearman rho (-log10 p)** | 1.000000 |
 | Significance agree (p < 0.05) | 91,586/91,586 (100%) |
 | Significance agree (p < 5e-8) | 91,586/91,586 (100%) |
 | Effect direction agreement | 100.0% |
-| Max relative p-value diff | 9.66e-04 |
+| Max relative p-value diff | 9.14e-04 |
 
 ### Progression: 125k benchmarks across versions
 
 All runs on the same hardware (E96ds_v6) and dataset (125,632 × 91,586).
 
-| Phase | v2.10.1 (latest) | v2.5.6 (1 dev) | v2.5.6 (24 dev) | v2.10 vs v2.5 (1 dev) |
-|-------|-----------------|----------------|-----------------|----------------------|
-| Kinship compute | 2,047s | 2,068s | 2,011s | -1% |
-| Kinship write | 556s | 575s | 547s | -3% |
-| Eigen+LMM | 8,437s | 9,365s | 9,699s | **-10%** |
-| **Pipeline total** | **11,040s** | **12,008s** | **12,257s** | **-8%** |
+| Phase | v4.2.0 (latest) | v2.10.1 | v2.5.6 (1 dev) | v4.2 vs v2.10 |
+|-------|----------------|---------|----------------|---------------|
+| Kinship compute | 1,591s | 2,047s | 2,068s | **-22%** |
+| Eigendecomp | 6,427s | — | — | — |
+| LMM (C ext) | 887s | — | — | — |
+| Eigen+LMM | 7,314s | 8,437s | 9,365s | **-13%** |
+| **Pipeline total** | **8,942s** | **11,040s** | **12,008s** | **-19%** |
 
-v2.10.1 is 968s (16 min) faster than the best prior run. Improvement is in the eigen+LMM phase — kinship is unchanged (same DGEMM). Multi-device sharding (24 dev) was net negative due to eigendecomp regression (+23%); v2.10 runs on 1 device.
+v4.2.0 is 2,098s (35 min) faster than v2.10.1. Kinship is 22% faster (jlinalg DGEMM improvements). Eigen+LMM is 13% faster despite using DSYEVR (memory-constrained fallback) instead of DSYEVD. LMM alone dropped from ~2,000s (JAX) to 887s (C ext with 48 OpenMP threads).
 
 ### Scaling from 90k to 125k
 
-| Phase | v2.3 (90k, 32 cores) | v2.10 (125k, 48 cores) |
+| Phase | v2.3 (90k, 32 cores) | v4.2.0 (125k, 48 cores) |
 |-------|------|-----------|
-| Kinship compute | 1,440s (24 min) | 2,047s (34 min) |
-| Kinship write | — | 556s (9 min) |
-| Eigen+LMM | 4,325s (72 min) | 8,437s (2h 21m) |
-| **Total** | **5,764s (96 min)** | **11,040s (3h 4m)** |
+| Kinship compute | 1,440s (24 min) | 1,591s (27 min) |
+| Eigendecomp | 3,114s (52 min) | 6,427s (1h 47m) |
+| LMM | 1,211s (20 min) | 887s (15 min) |
+| **Total** | **5,764s (96 min)** | **8,942s (2h 29m)** |
 
-Eigendecomp dominates the increase: O(n³) scaling from 90k→125k is ~2.7×, plus memory bandwidth saturation at 125k (the 126 GB eigenvector matrices exceed L3 cache).
+Eigendecomp dominates the increase: O(n³) scaling from 90k→125k is ~2.1× (DSYEVR). LMM actually got faster at 125k than 90k was at v2.3 thanks to the C extension replacing JAX. The 126 GB eigenvector matrices exceed L3 cache, making eigendecomp memory-bandwidth bound.
 
-### Full Pipeline Scaling (v2.10.1, 95k SNPs, 48 cores)
+### Full Pipeline Scaling (v4.2.0, 95k SNPs, 48 cores)
 
-| Phase | 50k×95k | 75k×95k |
-|-------|---------|---------|
-| Kinship compute | 289s (5 min) | 561s (9 min) |
-| Eigendecomp (DSYEVD) | 495s (8 min) | 1,380s (23 min) |
-| LMM (C ext) | 448s (7 min) | 611s (10 min) |
-| **Total (C ext)** | **1,240s (21 min)** | **2,576s (43 min)** |
-| LMM (JAX) | 502s (8 min) | 693s (12 min) |
-| **Total (JAX)** | **1,299s (22 min)** | **2,650s (44 min)** |
+| Phase | 5k×95k | 20k×95k | 50k×95k | 75k×95k | 125k×92k (real) |
+|-------|--------|---------|---------|---------|-----------------|
+| Kinship compute | 12s | 73s (1 min) | 298s (5 min) | 510s (9 min) | 1,591s (27 min) |
+| Eigendecomp | 1s | 46s | 481s (8 min) | 1,313s (22 min) | 6,427s (1h 47m)† |
+| LMM (C ext) | 12s | 58s (1 min) | 218s (4 min) | 420s (7 min) | 887s (15 min) |
+| **Total (C ext)** | **26s** | **178s (3 min)** | **1,003s (17 min)** | **2,255s (38 min)** | **8,942s (2h 29m)** |
 
-Eigendecomp scales O(n³): 495s at 50k → 1,380s at 75k (2.8× for 1.5× samples). LMM scales roughly O(n²) due to rotation dominance.
+†125k used DSYEVR (memory-constrained fallback); all others used DSYEVD. Eigendecomp scales O(n³): 481s at 50k → 1,313s at 75k (2.7× for 1.5× samples). LMM scales roughly O(n²) due to rotation dominance.
 
 ---
 
@@ -94,22 +93,25 @@ workspace API (pre-allocated per-thread buffers) and SoA Uab layout with invaria
 
 | Scale    | C ext LMM | JAX LMM | C ext Speedup |
 |----------|-----------|---------|---------------|
-| 5k×95k   | 19.8s     | 31.8s   | **1.6x**      |
-| 20k×95k  | 94.0s     | 145.0s  | **1.5x**      |
-| 50k×95k  | 448.0s    | 502.0s  | **1.1x**      |
-| 75k×95k  | 611.0s    | 693.0s  | **1.1x**      |
+| 5k×95k   | 11.5s     | 31.8s   | **2.8x**      |
+| 20k×95k  | 56.6s     | 145.0s  | **2.6x**      |
+| 50k×95k  | 216.8s    | 502.0s  | **2.3x**      |
+| 75k×95k  | 418.3s    | 693.0s  | **1.7x**      |
 
-The C extension wins at all scales but the gap narrows at large n where UT@G rotation
-(identical DGEMM in both backends) dominates. At small SNP counts (5k), the speedup is
-clearer because compute is a larger fraction of total time. At 95k SNPs with large samples,
-rotation dominates both backends and ratios converge to ~1.1x.
+The C extension wins at all scales. v4.2.0 widened the gap significantly vs prior versions
+(2.3–2.8× at small/medium scales vs ~1.5× previously) thanks to jlinalg and C extension
+improvements. The gap narrows at 75k where UT@G rotation (identical DGEMM in both backends)
+becomes a larger fraction of total time.
 
 ### C Extension Scaling (LMM timing breakdown, 95k SNPs)
 
 | Scale    | UT@G Rotation | Compute  | LMM Total | RSS      |
 |----------|---------------|----------|-----------|----------|
-| 50k×95k  | 148.7s        | 218.0s   | 446.1s    | 53.4 GB  |
-| 75k×95k  | 274.6s        | 220.9s   | 609.0s    | 93.4 GB  |
+| 5k×95k   | 2.8s          | 3.6s     | 11.5s     | 6.6 GB   |
+| 20k×95k  | 22.5s         | 15.2s    | 56.6s     | 27.0 GB  |
+| 50k×95k  | 125.8s        | 44.8s    | 216.8s    | 60.3 GB  |
+| 75k×95k  | 285.1s        | 61.3s    | 418.3s    | 95.1 GB  |
+| 125k×92k | 652.0s        | 93.1s    | 882.1s    | 320.6 GB |
 
 ### C Extension Scaling (LMM timing breakdown, 5k SNPs)
 
@@ -120,7 +122,7 @@ rotation dominates both backends and ratios converge to ~1.1x.
 | 50k×5k   | 6.23s         | 5.23s    | 14.4s     | 24.6 GB  |
 | 75k×5k   | 13.59s        | 8.81s    | 26.9s     | 51.4 GB  |
 
-Compute scales O(n_samples). Rotation scales O(n² × n_snps) and dominates at 50k+.
+Compute scales O(n_samples). Rotation scales O(n² × n_snps) and dominates at 20k+.
 Both use MKL DGEMM with 48 threads.
 
 ---
@@ -212,7 +214,9 @@ All three pipeline phases are dominated by BLAS/LAPACK calls. No Python-level op
 | Small | ≤10k | 8 GB | Any | |
 | Medium | 10–50k | 64 GB | LP64 or ILP64 | |
 | Large | 50–100k | 256 GB | ILP64 required | 85k validated (v1.4) |
-| XLarge | 100–125k | 672 GB+ | ILP64 required | 125k validated (v2.5) |
+| XLarge | 100–125k | 768 GB | ILP64 required | 125k validated (v4.2.0), peak ~560 GB |
+
+RAM requirements are for the full pipeline (kinship + eigendecomp + LMM). Eigendecomp is the memory peak: K matrix (n²×8 bytes) + eigenvectors (n²×8 bytes) must coexist. At 125k this is ~252 GB + 252 GB = 504 GB; the process peaked at 381 GB RSS with 768 GB physical. Scaling beyond 125k on 768 GB is not feasible — at 150k the eigendecomp alone would require ~720 GB (DSYEVR), leaving nothing for LMM.
 
 ### CPU Device Sharding
 
@@ -258,4 +262,4 @@ See [USER_GUIDE.md](USER_GUIDE.md) for installation instructions and [GEMMA_DIVE
 Full test suite passing. Kinship tolerance aligned from 1e-10 to 1e-8 in v2.5.7 to match EQUIVALENCE.md bounds. All other tolerance constants in `src/jamma/validation/tolerances.py` unchanged from v1.3.
 
 ---
-*Last updated: 2026-03-04*
+*Last updated: 2026-03-20*

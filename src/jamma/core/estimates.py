@@ -1,63 +1,59 @@
 """Wall clock time estimates for GWAS pipeline phases.
 
-Estimates are based on FLOP scaling from a reference benchmark
-(125k samples, 91k SNPs, 48 cores, MKL ILP64 on Intel Xeon 8573C,
-intercept-only model with no additional covariates).
+Polynomial models fitted to v4.2.0 benchmarks on Azure E96ds_v6
+(48 physical cores, MKL ILP64, Intel Xeon 8573C). Five data points:
+5k, 20k, 50k, 75k, 125k samples at ~95k SNPs.
 
-Each estimate is: startup_constant + scaling_term. The startup constant
-accounts for LAPACK/BLAS init, thread pool creation, and I/O overhead
-that dominates small datasets. The scaling term follows the algorithmic
-complexity (O(n³) for eigendecomp, O(n²m) for kinship/LMM).
+Models use n_k = n_samples / 1000 for numerical stability:
+  - Kinship:    a*n_k² + b*n_k  (× m/m_ref × cores_ref/cores)
+  - Eigendecomp: c * n_k^alpha  (× cores_ref/cores)  [power law]
+  - LMM:        a*n_k² + b*n_k  (× m/m_ref × cores_ref/cores)
 
-These are minimum estimates — they do not account for covariates,
-memory pressure, or I/O contention, all of which increase wall time.
+Kinship and LMM coefficients fitted via weighted NNLS (weight=1/actual)
+to equalize relative error across scales. Eigendecomp uses a power law
+(exponent ~2.72) because polynomials fit poorly — cache regime
+transitions cause non-integer effective scaling.
 
-Accuracy is roughly ±30% for 10k–125k samples. Larger datasets may
-underestimate (memory pressure grows super-linearly).
+These are minimum estimates (prefixed with >=). Max relative error
+is ~14% for kinship, ~13% for eigendecomp, ~8% for LMM across
+the 5k–125k calibration range.
 
-Reference benchmark from PERFORMANCE.md (Azure E96ds_v6):
-  125k (v2.5): kinship 2,011s, eigendecomp 8,465s (DSYEVD), LMM 1,131s
+Benchmark data (E96ds_v6, 48 cores, v4.2.0):
+  n=5k:   kinship=12.1s,  eigen=0.91s,    LMM=11.5s
+  n=20k:  kinship=73.5s,  eigen=46.1s,    LMM=56.6s
+  n=50k:  kinship=298.4s, eigen=480.6s,   LMM=216.8s
+  n=75k:  kinship=510.0s, eigen=1312.8s,  LMM=418.3s
+  n=125k: kinship=1591s,  eigen=6427s,    LMM=882s
 """
 
 from __future__ import annotations
 
 from jamma.core.threading import get_physical_core_count
 
-# Reference benchmark: 125,632 samples, 91,586 SNPs
-# Measured on Azure E96ds_v6 (Xeon Platinum 8573C, 48 physical cores),
-# MKL ILP64, JAX 0.9.0, v2.5.5 with psutil threading fix active.
-# All 48 physical cores used for BLAS (eigendecomp, rotation).
-_REF_SAMPLES = 125_632
-_REF_SNPS = 91_586
 _REF_CORES = 48
+_REF_SNPS = 91_586
 
-_REF_KINSHIP_SECS = 2_011.0  # 34 min
-_REF_EIGEN_SECS = 8_465.0  # 2h 21m
-_REF_LMM_SECS = 1_131.0  # 19 min
+# Kinship: a*n_k^2 + b*n_k (SNP-normalized)
+# Weighted NNLS fit (weight=1/actual), no constant term.
+# Max error: +13.6% at 75k, most points within 3%.
+_KINSHIP_A = 0.072956  # n_k^2 coefficient (DGEMM scaling)
+_KINSHIP_B = 1.975440  # n_k coefficient (SNP stats + I/O scaling)
 
-# Fixed startup costs (seconds) — LAPACK/BLAS init, thread pool creation,
-# workspace allocation, genotype I/O overhead. These dominate small datasets
-# where the O(n³)/O(n²m) scaling term is near zero.
-# Calibrated from sharding benchmarks (1.4k–20k samples, 32 threads):
-#   eigendecomp 1.4k=0.11s, kinship small=0.08s, LMM small=0.84s
-_STARTUP_KINSHIP_SECS = 2.0  # genotype I/O + SNP stats + first dgemm call
-_STARTUP_EIGEN_SECS = 1.0  # LAPACK dsyevd workspace allocation
-_STARTUP_LMM_SECS = 3.0  # genotype I/O + UT@G first chunk + progress init
+# Eigendecomp: c * n_k^alpha (power law)
+# Log-linear OLS fit. Max error: +12.8% at 75k, -11.3% at 20k.
+# Power law fits better than any polynomial because BLAS efficiency
+# varies with matrix size (cache-bound at small n, BW-bound at large n),
+# giving an effective exponent of ~2.72 instead of the theoretical 3.0.
+_EIGEN_COEFF = 0.012007  # coefficient
+_EIGEN_ALPHA = 2.7152  # exponent
 
-# Memory bandwidth saturation threshold for eigendecomp.
-# The eigenvector matrix is n×n×8 bytes. L3 cache on modern Xeons is ~100 MB
-# per socket. Above ~3,500 samples (3500²×8 = 98 MB), the working set exceeds
-# L3 and eigendecomp becomes memory-bandwidth-bound. The reference (125k) is
-# deeply BW-bound. Datasets below ~3,500 samples are compute-bound and faster
-# per-FLOP than the reference predicts, so we reduce the estimate.
-_EIGEN_BW_THRESHOLD = 3_500
-_EIGEN_BW_PENALTY = 1.5  # divisor below threshold (reference includes penalty)
-
-# DSYEVR (MRRR algorithm) is ~1.5x slower than DSYEVD (divide-and-conquer)
-# at the same matrix size. Empirically measured at 85k samples / 91k SNPs:
-# DSYEVR took ~1.5x the DSYEVD time. This trades O(N) workspace for higher
-# per-element compute cost.
-_DSYEVR_TIME_MULTIPLIER = 1.5
+# LMM: a*n_k^2 + b*n_k (SNP-normalized)
+# Weighted NNLS fit (weight=1/actual), no constant term.
+# Max error: +8.4% at 20k, most points within 4%.
+# The n_k^2 term captures UT@G rotation (DGEMM) + eigen load overhead.
+# The n_k term captures Wald test compute (C extension) + genotype I/O.
+_LMM_A = 0.042075  # n_k^2 coefficient
+_LMM_B = 1.984495  # n_k coefficient
 
 
 def _format_duration(seconds: float) -> str:
@@ -83,8 +79,9 @@ def estimate_kinship_time(
 ) -> str:
     """Estimate kinship computation wall time.
 
-    Kinship is O(n² × m) batched dgemm. Scales quadratically with
-    samples, linearly with SNPs, roughly inversely with core count.
+    Polynomial model: a*n_k² + b*n_k, scaled by SNP ratio and core ratio.
+    The quadratic term captures DGEMM accumulation, the linear term
+    captures SNP statistics and I/O overhead.
 
     This is a minimum estimate — memory pressure and I/O contention
     are not accounted for.
@@ -95,19 +92,16 @@ def estimate_kinship_time(
         n_cores: Physical core count. None auto-detects.
 
     Returns:
-        Human-readable minimum estimate string like ">=24 min".
+        Human-readable minimum estimate string like ">=5 min".
     """
     if n_cores is None:
         n_cores = get_physical_core_count()
 
-    sample_ratio = (n_samples / _REF_SAMPLES) ** 2
+    n_k = n_samples / 1000
     snp_ratio = n_snps / _REF_SNPS
     core_ratio = _REF_CORES / n_cores
 
-    est = (
-        _STARTUP_KINSHIP_SECS
-        + _REF_KINSHIP_SECS * sample_ratio * snp_ratio * core_ratio
-    )
+    est = (_KINSHIP_A * n_k**2 + _KINSHIP_B * n_k) * snp_ratio * core_ratio
     return f">={_format_duration(est)}"
 
 
@@ -119,46 +113,31 @@ def estimate_eigendecomp_time(
 ) -> str:
     """Estimate eigendecomposition wall time.
 
-    Eigendecomp is O(n³). Scales cubically with samples, roughly
-    inversely with core count. The reference benchmark used DSYEVD
-    (divide-and-conquer). DSYEVR (MRRR algorithm) is ~1.5x slower
-    but uses O(N) workspace instead of O(N²).
+    Power law model: c * n_k^alpha, scaled by core ratio. The exponent
+    (~2.72) is sub-cubic because BLAS efficiency varies with matrix size:
+    small matrices are cache-bound (faster per-FLOP), large matrices are
+    memory-bandwidth-bound.
 
-    Above ~3,500 samples, eigenvector matrices exceed L3 cache and
-    memory bandwidth becomes the bottleneck. Below ~3,500, estimates
-    are reduced by ~33% to account for the compute-bound regime being
-    faster than the BW-bound reference.
+    DSYEVR and DSYEVD perform comparably at these scales — no driver-
+    specific multiplier is applied.
 
-    This is a minimum estimate — covariates and memory pressure are
-    not accounted for.
+    This is a minimum estimate — memory pressure is not accounted for.
 
     Args:
         n_samples: Number of samples.
         n_cores: Physical core count. None auto-detects.
-        use_dsyevr: Whether DSYEVR driver is selected. Applies 1.5x
-            multiplier vs the DSYEVD reference.
+        use_dsyevr: Accepted for API compatibility. No multiplier applied.
 
     Returns:
-        Human-readable minimum estimate string like ">=2h 21m".
+        Human-readable minimum estimate string like ">=1h 47m".
     """
     if n_cores is None:
         n_cores = get_physical_core_count()
 
-    sample_ratio = (n_samples / _REF_SAMPLES) ** 3
+    n_k = n_samples / 1000
     core_ratio = _REF_CORES / n_cores
 
-    est = _REF_EIGEN_SECS * sample_ratio * core_ratio
-
-    # Reference already includes BW penalty (125k > threshold).
-    # For smaller datasets that are compute-bound, remove the penalty.
-    if n_samples <= _EIGEN_BW_THRESHOLD:
-        est /= _EIGEN_BW_PENALTY
-
-    # DSYEVR is slower than DSYEVD — apply empirical multiplier.
-    if use_dsyevr:
-        est *= _DSYEVR_TIME_MULTIPLIER
-
-    est += _STARTUP_EIGEN_SECS
+    est = _EIGEN_COEFF * n_k**_EIGEN_ALPHA * core_ratio
     return f">={_format_duration(est)}"
 
 
@@ -169,9 +148,9 @@ def estimate_lmm_time(
 ) -> str:
     """Estimate LMM association wall time.
 
-    LMM is dominated by the U.T @ G rotation which is O(n² × m).
-    Same scaling as kinship, but with different constant factor
-    (JAX compute per chunk adds overhead).
+    Polynomial model: a*n_k² + b*n_k, scaled by SNP ratio and core ratio.
+    The quadratic term captures UT@G rotation (DGEMM) and eigen/genotype
+    loading. The linear term captures Wald test compute (C extension).
 
     This is a minimum estimate — covariates increase per-SNP Pab
     computation cost, and memory pressure adds further overhead.
@@ -182,14 +161,14 @@ def estimate_lmm_time(
         n_cores: Physical core count. None auto-detects.
 
     Returns:
-        Human-readable minimum estimate string like ">=20 min".
+        Human-readable minimum estimate string like ">=15 min".
     """
     if n_cores is None:
         n_cores = get_physical_core_count()
 
-    sample_ratio = (n_samples / _REF_SAMPLES) ** 2
+    n_k = n_samples / 1000
     snp_ratio = n_snps / _REF_SNPS
     core_ratio = _REF_CORES / n_cores
 
-    est = _STARTUP_LMM_SECS + _REF_LMM_SECS * sample_ratio * snp_ratio * core_ratio
+    est = (_LMM_A * n_k**2 + _LMM_B * n_k) * snp_ratio * core_ratio
     return f">={_format_duration(est)}"

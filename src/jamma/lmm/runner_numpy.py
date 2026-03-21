@@ -27,6 +27,7 @@ from jamma.core.threading import (
 from jamma.lmm.compute_numpy import (
     _C_ACCEL_AVAILABLE,
     _C_FUSED_AVAILABLE,
+    _C_FUSED_GENERAL_AVAILABLE,
     _C_GENERAL_AVAILABLE,
     _C_MODE4_AVAILABLE,
     _C_MODE4_FUSED_AVAILABLE,
@@ -38,10 +39,12 @@ from jamma.lmm.compute_numpy import (
     compute_mode4_fused_c_ws,
     compute_mode4_split_c_ws,
     compute_wald_fused_c_ws,
+    compute_wald_fused_general_c_ws,
     compute_wald_general_c_ws,
     compute_wald_split_c_ws,
     create_lmm_workspace,
     create_lmm_workspace_fused,
+    create_lmm_workspace_fused_general,
     create_lmm_workspace_general,
     create_lmm_workspace_mode4,
     create_lmm_workspace_mode4_fused,
@@ -407,6 +410,7 @@ def _compute_chunk_size_numpy(
     use_split: bool = False,
     lmm_mode: int = 1,
     fused_mode4: bool = False,
+    use_fused_general: bool = False,
     mem_budget_bytes: int | None = None,
     pipeline_buffers: int = 1,
 ) -> int:
@@ -425,6 +429,8 @@ def _compute_chunk_size_numpy(
             non-Wald uses 9 cols/SNP (3 varying + 6 reconstructed Uab peak).
         fused_mode4: If True, mode-4 uses fused C kernel (4-col accounting,
             same as Wald) instead of reconstruct+compose (9-col).
+        use_fused_general: If True, fused general path is active (n_cvt>=2);
+            only UtG + UtG_T are allocated (no uab_varying_soa).
         mem_budget_bytes: Explicit per-chunk memory budget in bytes.
             None (default) auto-scales with available RAM.
         pipeline_buffers: Number of live chunks (1 for sequential,
@@ -458,7 +464,11 @@ def _compute_chunk_size_numpy(
 
         _inv, var = classify_uab_columns(n_cvt)
         n_var = len(var)
-        if lmm_mode == 1:
+        if use_fused_general:
+            # Fused general path: only UtG + UtG_T, no uab_varying_soa.
+            # Peak = UtG + UtG_T = 2 * n_samples * chunk * 8.
+            bytes_per_snp = n_samples * 2 * 8
+        elif lmm_mode == 1:
             # Wald: workspace path, no Uab reconstruction
             bytes_per_snp = n_samples * (n_var + 1) * 8
         else:
@@ -703,33 +713,48 @@ def run_lmm_association_numpy(
     use_fused_mode4 = use_split and lmm_mode == 4 and n_cvt == 1 and _C_MODE4_AVAILABLE
 
     # Fused Uab path: skip uab_varying_soa entirely, pass UtG_T directly to
-    # C workspace which computes wx/xx/xy on-the-fly. Only for n_cvt=1 with
-    # modes 1 (Wald) or 4 (All with mode-4 fused kernel).
+    # C workspace which computes wx/xx/xy on-the-fly.
+    # n_cvt=1: uses fused (ABI v8) kernel.
+    # n_cvt>=2: uses fused general (ABI v9) kernel.
     # Requires use_split (workspace + invariant SoA infrastructure).
     # Modes 2/3 (Score/LRT only) don't use workspace, so no fused benefit.
-    use_fused = (
-        use_split
-        and _C_FUSED_AVAILABLE
-        and n_cvt == 1
-        and (lmm_mode == 1 or (lmm_mode == 4 and _C_MODE4_FUSED_AVAILABLE))
+    use_fused = use_split and (
+        # n_cvt=1 fast path (existing)
+        (
+            n_cvt == 1
+            and _C_FUSED_AVAILABLE
+            and (lmm_mode == 1 or (lmm_mode == 4 and _C_MODE4_FUSED_AVAILABLE))
+        )
+        or
+        # General n_cvt path: Wald-only (mode 1).
+        # Mode-4 fused general LRT has a known bug producing NaN lambda_mle;
+        # mode-4 n_cvt>=2 falls back to compose (Wald workspace + batch Score/LRT).
+        (n_cvt >= 2 and _C_FUSED_GENERAL_AVAILABLE and lmm_mode == 1)
     )
+    use_fused_general = use_fused and n_cvt >= 2
 
-    if use_fused:
+    if use_fused and not use_fused_general:
         logger.debug(
             "Fused Uab path active: UtG_T passed directly to C workspace "
             f"(mode={lmm_mode}, eliminates uab_varying_soa buffer)"
         )
+    elif use_fused_general:
+        logger.debug(
+            "Fused general Uab path active: UtG_T passed directly to C workspace "
+            f"(n_cvt={n_cvt}, n_var={n_cvt + 2})"
+        )
 
     if lmm_mode == 4:
         if use_fused:
+            variant = "fused general" if use_fused_general else "fused"
             logger.debug(
-                "Mode-4 dispatch: fused Uab kernel (Wald/Score/LRT single pass)"
+                f"Mode-4 dispatch: {variant} Uab kernel (Wald/Score/LRT single pass)"
             )
         elif use_fused_mode4:
             logger.debug("Mode-4 dispatch: fused kernel (Wald/Score/LRT single pass)")
         else:
             reason = (
-                "n_cvt > 1"
+                "fused general kernel unavailable"
                 if n_cvt > 1
                 else "fused kernel unavailable"
                 if not _C_MODE4_AVAILABLE
@@ -744,6 +769,7 @@ def run_lmm_association_numpy(
         use_split=use_split,
         lmm_mode=lmm_mode,
         fused_mode4=use_fused_mode4,
+        use_fused_general=use_fused_general,
     )
     n_chunks = (n_filtered + chunk_size - 1) // chunk_size
 
@@ -764,6 +790,7 @@ def run_lmm_association_numpy(
             use_split=use_split,
             lmm_mode=lmm_mode,
             fused_mode4=use_fused_mode4,
+            use_fused_general=use_fused_general,
             pipeline_buffers=2,
         )
         n_chunks = (n_filtered + chunk_size - 1) // chunk_size
@@ -882,8 +909,43 @@ def run_lmm_association_numpy(
     # Fused workspace stores w/Uty for on-the-fly Uab computation from UtG_T.
     # Fused mode-4 workspace extends fused with null-model fields.
     if use_split and lmm_mode in (1, 4):
-        w = UtW[:, 0].copy() if use_fused else None
-        if use_fused and lmm_mode == 4:
+        if use_fused_general:
+            # Fused general Wald workspace: UtW + Uty for on-the-fly dot products
+            from jamma.lmm.likelihood import build_pab_table_for_c
+
+            pab_c = build_pab_table_for_c(n_cvt)
+            lmm_workspace = create_lmm_workspace_fused_general(
+                eigenvalues_np,
+                uab_invariant_soa,
+                UtW,
+                Uty,
+                n_samples,
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+                pipeline_omp_threads,
+                n_cvt=n_cvt,
+                **{
+                    k: pab_c[k]
+                    for k in [
+                        "invariant_indices",
+                        "varying_indices",
+                        "logdet_diag_rows",
+                        "logdet_diag_cols",
+                        "level_offsets",
+                        "level_counts",
+                        "entries",
+                        "idx_xx",
+                        "idx_xy",
+                        "idx_yy",
+                        "var_a_cols",
+                        "var_b_cols",
+                    ]
+                },
+            )
+        elif use_fused and lmm_mode == 4:
+            w = UtW[:, 0].copy()
             lmm_workspace = create_lmm_workspace_mode4_fused(
                 eigenvalues_np,
                 uab_invariant_soa,
@@ -899,6 +961,7 @@ def run_lmm_association_numpy(
                 logl_H0=logl_H0,
             )
         elif use_fused:
+            w = UtW[:, 0].copy()
             lmm_workspace = create_lmm_workspace_fused(
                 eigenvalues_np,
                 uab_invariant_soa,
@@ -986,15 +1049,27 @@ def run_lmm_association_numpy(
         t_compute_start = time.perf_counter()
 
         if use_fused:
-            fused_fn = (
-                compute_mode4_fused_c_ws if lmm_mode == 4 else compute_wald_fused_c_ws
-            )
+            if use_fused_general:
+                # Mode-4 fused general is restricted at dispatch (lmm_mode==1 only)
+                if lmm_mode != 1:
+                    raise ValueError(
+                        "Mode-4 fused general disabled (NaN lambda_mle bug)"
+                    )
+                fused_fn = compute_wald_fused_general_c_ws
+                op_label = "Fused general Uab dispatch"
+            else:
+                fused_fn = (
+                    compute_mode4_fused_c_ws
+                    if lmm_mode == 4
+                    else compute_wald_fused_c_ws
+                )
+                op_label = "Fused Uab dispatch"
             cr = _guarded_compute(
                 fused_fn,
                 lmm_workspace,
                 chunk_data,
                 pipeline_omp_threads,
-                operation="Fused Uab dispatch",
+                operation=op_label,
                 write_offset=write_offset,
                 n_filtered=n_filtered,
             )
@@ -1230,18 +1305,28 @@ def run_lmm_association_numpy(
                     # Fused path: pass UtG_T directly to C workspace.
                     utg_t = np.ascontiguousarray(UtG.T)
                     del UtG
-                    fused_fn = (
-                        compute_mode4_fused_c_ws
-                        if lmm_mode == 4
-                        else compute_wald_fused_c_ws
-                    )
+                    if use_fused_general:
+                        # Mode-4 fused general restricted at dispatch
+                        if lmm_mode != 1:
+                            raise ValueError(
+                                "Mode-4 fused general disabled (NaN lambda_mle bug)"
+                            )
+                        fused_fn = compute_wald_fused_general_c_ws
+                        op_label = "Fused general Uab dispatch"
+                    else:
+                        fused_fn = (
+                            compute_mode4_fused_c_ws
+                            if lmm_mode == 4
+                            else compute_wald_fused_c_ws
+                        )
+                        op_label = "Fused Uab dispatch"
                     with blas_threads(1):
                         cr = _guarded_compute(
                             fused_fn,
                             lmm_workspace,
                             utg_t,
                             omp_threads,
-                            operation="Fused Uab dispatch",
+                            operation=op_label,
                             write_offset=write_offset,
                             n_filtered=n_filtered,
                         )

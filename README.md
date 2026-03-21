@@ -229,7 +229,7 @@ Unlike GEMMA, JAMMA includes pre-flight memory checks that prevent out-of-memory
 from jamma.core.memory import estimate_workflow_memory
 
 # Check memory requirements BEFORE loading data
-estimate = estimate_workflow_memory(n_samples=200_000, n_snps=95_000)
+estimate = estimate_workflow_memory(n_samples=125_000, n_snps=95_000)
 print(f"Peak memory: {estimate.total_gb:.1f}GB")
 print(f"Available: {estimate.available_gb:.1f}GB")
 print(f"Sufficient: {estimate.sufficient}")

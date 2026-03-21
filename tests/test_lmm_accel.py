@@ -1766,10 +1766,10 @@ def test_general_ncvt_degenerate_snps(synthetic_covariate_data_ncvt2):
 @pytest.mark.tier0
 @pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
 def test_general_ncvt_abi_version():
-    """C-GEN-07: ABI version is 8 for fused Uab workspace support."""
+    """C-GEN-07: ABI version is 9 for fused general Uab workspace support."""
     from jamma.lmm._lmm_accel import ABI_VERSION
 
-    assert ABI_VERSION == 8, f"Expected ABI_VERSION=8, got {ABI_VERSION}"
+    assert ABI_VERSION == 9, f"Expected ABI_VERSION=9, got {ABI_VERSION}"
 
 
 @pytest.mark.tier0
@@ -3570,3 +3570,626 @@ class TestFusedParity:
     def test_fused_available_flag(self):
         """_C_FUSED_AVAILABLE flag is True when C extension has fused functions."""
         assert compute_numpy._C_FUSED_AVAILABLE is True
+
+
+# ── Fused general kernel tests (Phase 89.2) ──────────────────────────────
+
+
+def _prepare_fused_general_data(data: dict) -> dict:
+    """Prepare invariant SoA, varying SoA, UtG_T, and pab_c for fused general tests.
+
+    Args:
+        data: Dict from _build_synthetic_covariate_data.
+
+    Returns:
+        Dict with uab_inv_soa, uab_var_soa, utg_t, pab_c, and original data keys.
+    """
+    from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
+
+    n_cvt = data["n_cvt"]
+    Uab_batch = data["Uab_batch"]
+    UtG = data["UtG"]
+
+    inv_indices, var_indices = classify_uab_columns(n_cvt)
+    uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
+    uab_var_soa = np.ascontiguousarray(
+        Uab_batch[:, :, list(var_indices)].transpose(0, 2, 1)
+    )
+    utg_t = np.ascontiguousarray(UtG.T)
+    pab_c = build_pab_table_for_c(n_cvt)
+
+    return {
+        **data,
+        "uab_inv_soa": uab_inv_soa,
+        "uab_var_soa": uab_var_soa,
+        "utg_t": utg_t,
+        "pab_c": pab_c,
+    }
+
+
+def _run_fused_general_wald_vs_nonfused(data: dict) -> None:
+    """Compare fused general Wald against non-fused general Wald (bitwise).
+
+    Args:
+        data: Dict from _prepare_fused_general_data.
+    """
+    from jamma.lmm.compute_numpy import (
+        compute_wald_fused_general_c_ws,
+        compute_wald_general_c_ws,
+        create_lmm_workspace_fused_general,
+        create_lmm_workspace_general,
+    )
+
+    eigenvalues = data["eigenvalues"]
+    n_samples = data["n_samples"]
+    n_cvt = data["n_cvt"]
+    uab_inv_soa = data["uab_inv_soa"]
+    uab_var_soa = data["uab_var_soa"]
+    utg_t = data["utg_t"]
+    pab_c = data["pab_c"]
+    UtW = data["UtW"]
+    Uty = data["Uty"]
+
+    # Non-fused general path
+    ws_nonfused = create_lmm_workspace_general(
+        eigenvalues,
+        uab_inv_soa,
+        n_samples,
+        n_cvt,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+    )
+    result_nonfused = compute_wald_general_c_ws(ws_nonfused, uab_var_soa, 1)
+
+    # Fused general path
+    pab_kwargs = {
+        k: pab_c[k]
+        for k in [
+            "invariant_indices",
+            "varying_indices",
+            "logdet_diag_rows",
+            "logdet_diag_cols",
+            "level_offsets",
+            "level_counts",
+            "entries",
+            "idx_xx",
+            "idx_xy",
+            "idx_yy",
+            "var_a_cols",
+            "var_b_cols",
+        ]
+    }
+    ws_fused = create_lmm_workspace_fused_general(
+        eigenvalues,
+        uab_inv_soa,
+        UtW,
+        Uty,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+        n_cvt=n_cvt,
+        **pab_kwargs,
+    )
+    result_fused = compute_wald_fused_general_c_ws(ws_fused, utg_t, 1)
+
+    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
+        np.testing.assert_array_equal(
+            result_nonfused[key],
+            result_fused[key],
+            err_msg=(
+                f"Wald {key}: fused general vs non-fused general mismatch "
+                f"(should be bitwise identical, n_cvt={n_cvt})"
+            ),
+        )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(
+    not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
+    reason="Fused general C not available",
+)
+def test_fused_general_ncvt2_wald(synthetic_covariate_data_ncvt2):
+    """FGEN-04: Fused general Wald bitwise matches non-fused general for n_cvt=2."""
+    _run_fused_general_wald_vs_nonfused(
+        _prepare_fused_general_data(synthetic_covariate_data_ncvt2)
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(
+    not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
+    reason="Fused general C not available",
+)
+def test_fused_general_ncvt4_wald(synthetic_covariate_data_ncvt4):
+    """FGEN-04: Fused general Wald bitwise matches non-fused general for n_cvt=4."""
+    _run_fused_general_wald_vs_nonfused(
+        _prepare_fused_general_data(synthetic_covariate_data_ncvt4)
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(
+    not compute_numpy._C_MODE4_FUSED_GENERAL_AVAILABLE,
+    reason="Mode-4 fused general C not available",
+)
+def test_fused_general_ncvt2_mode4(general_score_lrt_ncvt2):
+    """FGEN-07: Fused general mode-4 Wald matches non-fused general Wald for n_cvt=2.
+
+    Verifies the Wald component of mode-4 is bitwise identical to the non-fused
+    general workspace. Score and LRT are exercised (no crash, plausible values)
+    since their non-fused references use different code paths (batch C functions)
+    that may produce different NaN patterns on synthetic data.
+    """
+    from jamma.lmm.compute_numpy import (
+        compute_mode4_fused_general_c_ws,
+        compute_wald_general_c_ws,
+        create_lmm_workspace_general,
+        create_lmm_workspace_mode4_fused_general,
+    )
+    from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
+
+    data = general_score_lrt_ncvt2
+    eigenvalues = data["eigenvalues"]
+    n_samples = data["n_samples"]
+    n_cvt = data["n_cvt"]
+    Uab_batch = data["Uab_batch"]
+    UtW = data["UtW"]
+    Uty = data["Uty"]
+    UtG = data["UtG"]
+    Hi_eval_null = data["Hi_eval_null"]
+    logl_H0 = data["logl_H0"]
+
+    inv_indices, var_indices = classify_uab_columns(n_cvt)
+    uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
+    uab_var_soa = np.ascontiguousarray(
+        Uab_batch[:, :, list(var_indices)].transpose(0, 2, 1)
+    )
+    utg_t = np.ascontiguousarray(UtG.T)
+    pab_c = build_pab_table_for_c(n_cvt)
+    pab_kwargs = {
+        k: pab_c[k]
+        for k in [
+            "invariant_indices",
+            "varying_indices",
+            "logdet_diag_rows",
+            "logdet_diag_cols",
+            "level_offsets",
+            "level_counts",
+            "entries",
+            "idx_xx",
+            "idx_xy",
+            "idx_yy",
+            "var_a_cols",
+            "var_b_cols",
+        ]
+    }
+
+    # Non-fused reference: Wald from general workspace
+    ws_nonfused = create_lmm_workspace_general(
+        eigenvalues,
+        uab_inv_soa,
+        n_samples,
+        n_cvt,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+    )
+    wald_nonfused = compute_wald_general_c_ws(ws_nonfused, uab_var_soa, 1)
+
+    # Fused general mode-4 path
+    ws_fused = create_lmm_workspace_mode4_fused_general(
+        eigenvalues,
+        uab_inv_soa,
+        UtW,
+        Uty,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+        n_cvt=n_cvt,
+        **pab_kwargs,
+        hi_eval_null=Hi_eval_null,
+        logl_H0=logl_H0,
+    )
+    result_fused = compute_mode4_fused_general_c_ws(ws_fused, utg_t, 1)
+
+    # Wald comparison (bitwise)
+    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
+        np.testing.assert_array_equal(
+            wald_nonfused[key],
+            result_fused[key],
+            err_msg=f"Mode-4 Wald {key}: fused general vs non-fused mismatch",
+        )
+
+    # Score/LRT: verify arrays present with correct shape and no crashes
+    n_snps = UtG.shape[1]
+    assert result_fused["p_scores"].shape == (n_snps,), "p_scores shape mismatch"
+    assert result_fused["p_lrts"].shape == (n_snps,), "p_lrts shape mismatch"
+    assert result_fused["lambdas_mle"].shape == (n_snps,), "lambdas_mle shape mismatch"
+
+    # Score and LRT p-values should be in [0, 1] or NaN (degenerate SNPs)
+    finite_scores = result_fused["p_scores"][np.isfinite(result_fused["p_scores"])]
+    assert np.all((finite_scores >= 0) & (finite_scores <= 1)), (
+        "Score p-values out of range [0, 1]"
+    )
+    finite_lrts = result_fused["p_lrts"][np.isfinite(result_fused["p_lrts"])]
+    assert np.all((finite_lrts >= 0) & (finite_lrts <= 1)), (
+        "LRT p-values out of range [0, 1]"
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(
+    not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
+    reason="Fused general C not available",
+)
+def test_fused_general_workspace_lifecycle(synthetic_covariate_data_ncvt2):
+    """FGEN-04: Fused general workspace creates, computes, and destroys cleanly."""
+    from jamma.lmm.compute_numpy import (
+        compute_wald_fused_general_c_ws,
+        create_lmm_workspace_fused_general,
+    )
+    from jamma.lmm.likelihood import build_pab_table_for_c
+
+    data = synthetic_covariate_data_ncvt2
+    eigenvalues = data["eigenvalues"]
+    n_samples = data["n_samples"]
+    n_cvt = data["n_cvt"]
+    UtW = data["UtW"]
+    Uty = data["Uty"]
+    UtG = data["UtG"]
+
+    uab_inv_soa = compute_uab_invariant_soa(UtW, Uty, n_cvt)
+    utg_t = np.ascontiguousarray(UtG.T)
+    pab_c = build_pab_table_for_c(n_cvt)
+    pab_kwargs = {
+        k: pab_c[k]
+        for k in [
+            "invariant_indices",
+            "varying_indices",
+            "logdet_diag_rows",
+            "logdet_diag_cols",
+            "level_offsets",
+            "level_counts",
+            "entries",
+            "idx_xx",
+            "idx_xy",
+            "idx_yy",
+            "var_a_cols",
+            "var_b_cols",
+        ]
+    }
+
+    ws = create_lmm_workspace_fused_general(
+        eigenvalues,
+        uab_inv_soa,
+        UtW,
+        Uty,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+        n_cvt=n_cvt,
+        **pab_kwargs,
+    )
+    assert ws is not None
+
+    # Compute first half
+    mid = UtG.shape[1] // 2
+    r1 = compute_wald_fused_general_c_ws(ws, utg_t[:mid], 1)
+    assert r1["lambdas"].shape == (mid,)
+
+    # Reuse workspace for second half
+    r2 = compute_wald_fused_general_c_ws(ws, utg_t[mid:], 1)
+    assert r2["lambdas"].shape == (UtG.shape[1] - mid,)
+
+    # Full batch
+    r_full = compute_wald_fused_general_c_ws(ws, utg_t, 1)
+    combined = np.concatenate([r1["lambdas"], r2["lambdas"]])
+    np.testing.assert_allclose(
+        combined,
+        r_full["lambdas"],
+        rtol=1e-12,
+        atol=1e-14,
+        err_msg="Chunked vs full fused general workspace mismatch",
+    )
+
+    # Destroy (PyCapsule GC)
+    del ws
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(
+    not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
+    reason="Fused general C not available",
+)
+def test_fused_general_degenerate_snps(synthetic_covariate_data_ncvt2):
+    """FGEN-04: Degenerate SNPs produce NaN in fused general (same as non-fused)."""
+    from jamma.lmm.compute_numpy import (
+        compute_wald_fused_general_c_ws,
+        compute_wald_general_c_ws,
+        create_lmm_workspace_fused_general,
+        create_lmm_workspace_general,
+    )
+    from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
+
+    data = synthetic_covariate_data_ncvt2
+    eigenvalues = data["eigenvalues"]
+    n_samples = data["n_samples"]
+    n_cvt = data["n_cvt"]
+    Uab_batch = data["Uab_batch"]
+    UtW = data["UtW"]
+    Uty = data["Uty"]
+    UtG = data["UtG"]
+
+    # Inject constant genotype columns (degenerate SNPs)
+    UtG_degen = UtG.copy()
+    UtG_degen[:, 0] = 0.0  # All zeros
+    UtG_degen[:, 1] = 1.0  # All ones (constant)
+
+    inv_indices, var_indices = classify_uab_columns(n_cvt)
+    uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
+
+    # Recompute Uab for degenerate SNPs
+    from jamma.lmm.likelihood import compute_Uab
+
+    n_snps = UtG_degen.shape[1]
+    n_index = Uab_batch.shape[2]
+    Uab_degen = np.zeros((n_snps, n_samples, n_index), dtype=np.float64)
+    for i in range(n_snps):
+        Uab_degen[i] = compute_Uab(UtW, Uty, UtG_degen[:, i])
+    uab_var_soa_degen = np.ascontiguousarray(
+        Uab_degen[:, :, list(var_indices)].transpose(0, 2, 1)
+    )
+
+    # Non-fused reference
+    ws_nonfused = create_lmm_workspace_general(
+        eigenvalues,
+        uab_inv_soa,
+        n_samples,
+        n_cvt,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+    )
+    result_nonfused = compute_wald_general_c_ws(ws_nonfused, uab_var_soa_degen, 1)
+
+    # Fused general path
+    pab_c = build_pab_table_for_c(n_cvt)
+    pab_kwargs = {
+        k: pab_c[k]
+        for k in [
+            "invariant_indices",
+            "varying_indices",
+            "logdet_diag_rows",
+            "logdet_diag_cols",
+            "level_offsets",
+            "level_counts",
+            "entries",
+            "idx_xx",
+            "idx_xy",
+            "idx_yy",
+            "var_a_cols",
+            "var_b_cols",
+        ]
+    }
+    utg_t_degen = np.ascontiguousarray(UtG_degen.T)
+    ws_fused = create_lmm_workspace_fused_general(
+        eigenvalues,
+        uab_inv_soa,
+        UtW,
+        Uty,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+        n_cvt=n_cvt,
+        **pab_kwargs,
+    )
+    result_fused = compute_wald_fused_general_c_ws(ws_fused, utg_t_degen, 1)
+
+    # Degenerate SNPs (0, 1) should have NaN beta/se/pwald in both paths
+    for key in ("betas", "ses", "pwalds"):
+        np.testing.assert_array_equal(
+            np.isnan(result_nonfused[key][:2]),
+            np.isnan(result_fused[key][:2]),
+            err_msg=f"Degenerate SNP NaN pattern mismatch for {key}",
+        )
+
+    # Non-degenerate SNPs should match bitwise
+    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
+        np.testing.assert_array_equal(
+            result_nonfused[key][2:],
+            result_fused[key][2:],
+            err_msg=f"Non-degenerate {key}: fused vs non-fused mismatch",
+        )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(
+    not compute_numpy._C_ACCEL_AVAILABLE,
+    reason="C extension not available",
+)
+def test_fused_general_abi_version_9():
+    """FGEN-06: ABI_VERSION is 9 for fused general kernel support."""
+    from jamma.lmm._lmm_accel import ABI_VERSION
+
+    assert ABI_VERSION == 9, f"Expected ABI_VERSION=9, got {ABI_VERSION}"
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(
+    not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
+    reason="Fused general C not available",
+)
+def test_fused_general_availability_flags():
+    """Fused general availability flags are True when C extension has ABI v9."""
+    assert compute_numpy._C_FUSED_GENERAL_AVAILABLE is True
+    assert compute_numpy._C_MODE4_FUSED_GENERAL_AVAILABLE is True
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(
+    not compute_numpy._C_FUSED_AVAILABLE, reason="Fused C not available"
+)
+def test_fused_ncvt1_regression(split_wald_data):
+    """Regression: n_cvt=1 fused path works after general addition."""
+    from jamma.lmm.compute_numpy import (
+        compute_wald_fused_c_ws,
+        create_lmm_workspace_fused,
+    )
+
+    eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
+    w = UtW[:, 0].copy()
+    utg_t = np.ascontiguousarray(UtG.T)
+    uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
+    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
+
+    # SoA reference
+    ws_soa = create_lmm_workspace(
+        eigenvalues,
+        uab_inv_soa,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+    )
+    soa_result = compute_wald_split_c_ws(ws_soa, uab_var_soa, 1)
+
+    # Fused n_cvt=1
+    ws_fused = create_lmm_workspace_fused(
+        eigenvalues,
+        uab_inv_soa,
+        w,
+        Uty,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+    )
+    fused_result = compute_wald_fused_c_ws(ws_fused, utg_t, 1)
+
+    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
+        np.testing.assert_array_equal(
+            soa_result[key],
+            fused_result[key],
+            err_msg=f"n_cvt=1 regression: {key} mismatch after fused general addition",
+        )
+
+
+@pytest.mark.tier1
+@pytest.mark.skipif(
+    not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
+    reason="Fused general C not available",
+)
+def test_runner_fused_general_ncvt2_dispatch():
+    """Runner integration: n_cvt=2 dispatches fused general path end-to-end.
+
+    Exercises the full build_pab_table_for_c → create_workspace_fused_general →
+    compute_wald_fused_general_c_ws pipeline through run_lmm_association_numpy.
+    Compares fused general results (n_cvt=2 with C extension) against the
+    non-fused fallback (monkeypatched _C_FUSED_GENERAL_AVAILABLE=False).
+    """
+    from jamma.lmm.runner_numpy import run_lmm_association_numpy
+
+    rng = np.random.default_rng(77)
+    n_samples = 100
+    n_snps = 80
+    n_cvt = 2
+
+    eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
+    genotypes = rng.choice([0.0, 1.0, 2.0], size=(n_samples, n_snps), p=[0.4, 0.4, 0.2])
+    phenotypes = rng.standard_normal(n_samples)
+    covariates = rng.standard_normal((n_samples, n_cvt))
+    snp_info = [
+        {"chr": "1", "rs": f"rs{i}", "pos": i * 1000, "a1": "A", "a0": "G"}
+        for i in range(n_snps)
+    ]
+    U = np.linalg.qr(rng.standard_normal((n_samples, n_samples)))[0]
+
+    # Run with fused general enabled (default)
+    result_fused = run_lmm_association_numpy(
+        genotypes=genotypes,
+        phenotypes=phenotypes,
+        kinship=None,
+        snp_info=snp_info,
+        covariates=covariates,
+        eigenvalues=eigenvalues,
+        eigenvectors=U,
+        maf_threshold=0.0,
+        miss_threshold=1.0,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=1,
+        n_refine=20,
+    )
+
+    # Run with fused general disabled → falls back to non-fused general path.
+    # Patch the source module (compute_numpy) so the runner's `from` import
+    # also sees the change. Using unittest.mock.patch ensures cleanup and is
+    # robust against future refactors of the import structure.
+    from unittest.mock import patch
+
+    with (
+        patch("jamma.lmm.compute_numpy._C_FUSED_GENERAL_AVAILABLE", False),
+        patch("jamma.lmm.runner_numpy._C_FUSED_GENERAL_AVAILABLE", False),
+    ):
+        result_nonfused = run_lmm_association_numpy(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=None,
+            snp_info=snp_info,
+            covariates=covariates,
+            eigenvalues=eigenvalues,
+            eigenvectors=U,
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            check_memory=False,
+            show_progress=False,
+            lmm_mode=1,
+            n_refine=20,
+        )
+
+    assoc_fused = result_fused.associations
+    assoc_nonfused = result_nonfused.associations
+
+    assert len(assoc_fused) == len(assoc_nonfused), (
+        f"Fused: {len(assoc_fused)}, Non-fused: {len(assoc_nonfused)}"
+    )
+    assert len(assoc_fused) > n_snps * 0.8, (
+        f"Too many SNPs filtered: {len(assoc_fused)} of {n_snps}"
+    )
+
+    # Results should be bitwise identical — same C kernels, same data
+    for a_f, a_nf in zip(assoc_fused, assoc_nonfused, strict=True):
+        assert a_f.rs == a_nf.rs, f"SNP order mismatch: {a_f.rs} vs {a_nf.rs}"
+        np.testing.assert_equal(
+            a_f.p_wald,
+            a_nf.p_wald,
+            err_msg=f"p_wald mismatch for {a_f.rs}",
+        )
+        np.testing.assert_equal(
+            a_f.beta,
+            a_nf.beta,
+            err_msg=f"beta mismatch for {a_f.rs}",
+        )

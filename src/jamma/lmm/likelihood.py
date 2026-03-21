@@ -1046,6 +1046,17 @@ def build_pab_table_for_c(n_cvt: int) -> dict:
         arr.flags.writeable = False
         return arr
 
+    # Extract (a_col, b_col) pairs for each varying column — needed by
+    # fused general C kernels to compute dot products on-the-fly from
+    # UtW/Uty/UtG_T instead of a pre-materialized Uab tensor.
+    genotype_col = n_cvt  # 0-based index of X in vectors array
+    var_a_list = []
+    var_b_list = []
+    for a_col, b_col, linear_idx in table["uab_pairs"]:
+        if a_col == genotype_col or b_col == genotype_col:
+            var_a_list.append(a_col)
+            var_b_list.append(b_col)
+
     return {
         "n_cvt": n_cvt,
         "n_index": table["n_index"],
@@ -1062,6 +1073,8 @@ def build_pab_table_for_c(n_cvt: int) -> dict:
         "level_offsets": _frozen(level_offsets_list),
         "level_counts": _frozen(level_counts_list),
         "entries": _frozen(all_entries),
+        "var_a_cols": _frozen(var_a_list),
+        "var_b_cols": _frozen(var_b_list),
     }
 
 

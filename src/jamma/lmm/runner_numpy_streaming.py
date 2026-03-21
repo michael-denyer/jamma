@@ -35,6 +35,7 @@ from jamma.io.plink import (
 from jamma.lmm.compute_numpy import (
     _C_ACCEL_AVAILABLE,
     _C_FUSED_AVAILABLE,
+    _C_FUSED_GENERAL_AVAILABLE,
     _C_GENERAL_AVAILABLE,
     _C_MODE4_AVAILABLE,
     _C_MODE4_FUSED_AVAILABLE,
@@ -42,7 +43,9 @@ from jamma.lmm.compute_numpy import (
     _compute_lmm_chunk_numpy,
     compute_mode4_fused_c_ws,
     compute_wald_fused_c_ws,
+    compute_wald_fused_general_c_ws,
     create_lmm_workspace_fused,
+    create_lmm_workspace_fused_general,
     create_lmm_workspace_mode4,
     create_lmm_workspace_mode4_fused,
 )
@@ -372,12 +375,20 @@ def run_lmm_association_numpy_streaming(
 
     # Fused Uab path: skip uab_varying_soa, pass UtG_T directly to C workspace.
     # Requires use_split (workspace + invariant SoA infrastructure).
-    use_fused = (
-        use_split
-        and _C_FUSED_AVAILABLE
-        and n_cvt == 1
-        and (lmm_mode == 1 or (lmm_mode == 4 and _C_MODE4_FUSED_AVAILABLE))
+    use_fused = use_split and (
+        # n_cvt=1 fast path (existing)
+        (
+            n_cvt == 1
+            and _C_FUSED_AVAILABLE
+            and (lmm_mode == 1 or (lmm_mode == 4 and _C_MODE4_FUSED_AVAILABLE))
+        )
+        or
+        # General n_cvt path: Wald-only (mode 1).
+        # Mode-4 fused general LRT has a known bug producing NaN lambda_mle;
+        # mode-4 n_cvt>=2 falls back to compose (Wald workspace + batch Score/LRT).
+        (n_cvt >= 2 and _C_FUSED_GENERAL_AVAILABLE and lmm_mode == 1)
     )
+    use_fused_general = use_fused and n_cvt >= 2
 
     # OpenMP thread count
     if _C_ACCEL_AVAILABLE:
@@ -393,8 +404,43 @@ def run_lmm_association_numpy_streaming(
 
     # Create persistent C workspace (fused or split)
     if use_split and lmm_mode in (1, 4):
-        w = UtW[:, 0].copy() if use_fused else None
-        if use_fused and lmm_mode == 4:
+        if use_fused_general:
+            # Fused general Wald workspace: UtW + Uty for on-the-fly dot products
+            from jamma.lmm.likelihood import build_pab_table_for_c
+
+            pab_c = build_pab_table_for_c(n_cvt)
+            lmm_workspace = create_lmm_workspace_fused_general(
+                eigenvalues_np,
+                uab_invariant_soa,
+                UtW,
+                Uty,
+                n_samples,
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+                omp_threads,
+                n_cvt=n_cvt,
+                **{
+                    k: pab_c[k]
+                    for k in [
+                        "invariant_indices",
+                        "varying_indices",
+                        "logdet_diag_rows",
+                        "logdet_diag_cols",
+                        "level_offsets",
+                        "level_counts",
+                        "entries",
+                        "idx_xx",
+                        "idx_xy",
+                        "idx_yy",
+                        "var_a_cols",
+                        "var_b_cols",
+                    ]
+                },
+            )
+        elif use_fused and lmm_mode == 4:
+            w = UtW[:, 0].copy()
             lmm_workspace = create_lmm_workspace_mode4_fused(
                 eigenvalues_np,
                 uab_invariant_soa,
@@ -410,6 +456,7 @@ def run_lmm_association_numpy_streaming(
                 logl_H0=logl_H0,
             )
         elif use_fused:
+            w = UtW[:, 0].copy()
             lmm_workspace = create_lmm_workspace_fused(
                 eigenvalues_np,
                 uab_invariant_soa,
@@ -519,18 +566,28 @@ def run_lmm_association_numpy_streaming(
                 # Fused path: pass UtG_T directly to C workspace.
                 utg_t = np.ascontiguousarray(UtG.T)
                 del UtG
-                fused_fn = (
-                    compute_mode4_fused_c_ws
-                    if lmm_mode == 4
-                    else compute_wald_fused_c_ws
-                )
+                if use_fused_general:
+                    # Mode-4 fused general is restricted at dispatch (lmm_mode==1 only)
+                    if lmm_mode != 1:
+                        raise ValueError(
+                            "Mode-4 fused general disabled (NaN lambda_mle bug)"
+                        )
+                    fused_fn = compute_wald_fused_general_c_ws
+                    op_label = "Fused general Uab dispatch (streaming)"
+                else:
+                    fused_fn = (
+                        compute_mode4_fused_c_ws
+                        if lmm_mode == 4
+                        else compute_wald_fused_c_ws
+                    )
+                    op_label = "Fused Uab dispatch (streaming)"
                 with blas_threads(1):
                     cr = _guarded_compute(
                         fused_fn,
                         lmm_workspace,
                         utg_t,
                         omp_threads,
-                        operation="Fused Uab dispatch (streaming)",
+                        operation=op_label,
                         write_offset=filt_start,
                         n_filtered=n_filtered,
                     )

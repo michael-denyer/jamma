@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.3.1] - 2026-03-21
+
+### Added
+
+- Pipeline machinery for NumPy streaming runner — overlaps DGEMM rotation of
+  chunk N+1 with C extension compute of chunk N via ThreadPoolExecutor
+  double-buffering, with adaptive core splitting and memory-aware chunk sizing
+
+### Changed
+
+- Swap utg_t layout to (n_snps, n_samples) for direct DGEMM TRANSA — eliminates
+  post-rotation transpose in batch and streaming NumPy runners
+- Add GEMMA Accelerate to backend comparison benchmark
+
+### Fixed
+
+- Avoid O(n²) eigenvector copy in streaming chunk loop
+- Rename unused loop variable to satisfy linter
+
 ## [4.3.0] - 2026-03-21
 
 ### Added

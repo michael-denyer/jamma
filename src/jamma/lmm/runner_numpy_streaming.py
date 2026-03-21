@@ -15,6 +15,7 @@ import contextlib
 import gc
 import time
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -68,8 +69,12 @@ from jamma.lmm.results import (
     log_lambda_boundary_warning,
 )
 from jamma.lmm.runner_numpy import (
+    _MIN_PIPELINE_CHUNKS,
+    _compute_chunk_size_numpy,
     _create_wald_workspace_for_ncvt,
     _guarded_compute,
+    compute_adaptive_core_split,
+    compute_pipeline_core_split,
     dispatch_soa_split,
 )
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
@@ -92,6 +97,29 @@ def get_last_run_timing() -> RunnerTiming:
     Safe to call from any thread -- returns an independent dict.
     """
     return dict(last_run_timing)
+
+
+def _create_progress_bar(label: str, total: int):
+    """Create and start a progressbar with standard LMM widgets."""
+    import sys
+
+    import progressbar as _pb
+
+    widgets = [
+        f"{label}: ",
+        _pb.Counter(),
+        f"/{total} ",
+        _pb.Percentage(),
+        " ",
+        _pb.Bar(),
+        " ",
+        _pb.Timer(),
+        " ",
+        _pb.ETA(),
+    ]
+    bar = _pb.ProgressBar(max_value=total, widgets=widgets, fd=sys.stdout)
+    bar.start()
+    return bar
 
 
 def run_lmm_association_numpy_streaming(
@@ -390,12 +418,76 @@ def run_lmm_association_numpy_streaming(
     )
     use_fused_general = use_fused and n_cvt >= 2
 
+    # Auto-scale chunk_size from RAM when user provided default (10_000).
+    # After pass-1 we know n_filtered and can compute optimal chunk size.
+    auto_scaled = chunk_size == 10_000
+    if auto_scaled:
+        chunk_size = _compute_chunk_size_numpy(
+            n_samples,
+            n_filtered,
+            n_cvt,
+            use_split=use_split,
+            lmm_mode=lmm_mode,
+            fused_mode4=use_fused_mode4,
+            use_fused_general=use_fused_general,
+        )
+
+    n_chunks = (n_filtered + chunk_size - 1) // chunk_size
+
+    # Pipeline overlaps rotation(N+1) with compute(N) using an adaptive core
+    # split. Only enable when enough chunks exist for overlap to matter.
+    use_pipeline = use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
+
+    if use_pipeline:
+        # Pipeline keeps 2 chunks alive simultaneously -- halve the memory
+        # budget to avoid OOM.
+        if auto_scaled:
+            chunk_size = _compute_chunk_size_numpy(
+                n_samples,
+                n_filtered,
+                n_cvt,
+                use_split=use_split,
+                lmm_mode=lmm_mode,
+                fused_mode4=use_fused_mode4,
+                use_fused_general=use_fused_general,
+                pipeline_buffers=2,
+            )
+        else:
+            # User-specified chunk_size: halve it to account for double-
+            # buffering rather than recomputing from RAM (which would
+            # discard the user's sizing intent).
+            chunk_size = max(1, chunk_size // 2)
+        n_chunks = (n_filtered + chunk_size - 1) // chunk_size
+        use_pipeline = use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
+
+    if use_pipeline:
+        logger.debug(f"Pipeline mode: overlapping rotation/compute ({n_chunks} chunks)")
+
     # OpenMP thread count
     if _C_ACCEL_AVAILABLE:
         cores = get_physical_core_count()
         omp_threads = max(1, cores // 2) if not is_blas_controllable() else cores
     else:
         omp_threads = 1
+
+    # Pipeline thread budget: partition physical cores between concurrent
+    # BLAS rotation (background) and C extension compute (foreground).
+    if use_pipeline:
+        total_cores = get_physical_core_count()
+        if is_blas_controllable():
+            pipeline_rot_threads, pipeline_omp_threads = compute_pipeline_core_split(
+                n_samples, total_cores
+            )
+            logger.debug(
+                f"Pipeline core split: {pipeline_rot_threads} rotation, "
+                f"{pipeline_omp_threads} compute (n_samples={n_samples:,})"
+            )
+        else:
+            pipeline_omp_threads = max(1, total_cores // 2)
+            pipeline_rot_threads = total_cores
+    else:
+        pipeline_omp_threads = omp_threads
+        pipeline_rot_threads = rotation_threads
 
     # Precompute SNP-invariant Uab columns once
     uab_invariant_soa = (
@@ -419,7 +511,7 @@ def run_lmm_association_numpy_streaming(
                 l_max,
                 n_grid,
                 n_refine,
-                omp_threads,
+                pipeline_omp_threads,
                 n_cvt=n_cvt,
                 **{
                     k: pab_c[k]
@@ -451,7 +543,7 @@ def run_lmm_association_numpy_streaming(
                 l_max,
                 n_grid,
                 n_refine,
-                omp_threads,
+                pipeline_omp_threads,
                 hi_eval_null=Hi_eval_null,
                 logl_H0=logl_H0,
             )
@@ -467,7 +559,7 @@ def run_lmm_association_numpy_streaming(
                 l_max,
                 n_grid,
                 n_refine,
-                omp_threads,
+                pipeline_omp_threads,
             )
         elif use_fused_mode4:
             lmm_workspace = create_lmm_workspace_mode4(
@@ -478,7 +570,7 @@ def run_lmm_association_numpy_streaming(
                 l_max,
                 n_grid,
                 n_refine,
-                omp_threads,
+                pipeline_omp_threads,
                 Hi_eval_null,
                 logl_H0,
             )
@@ -492,7 +584,7 @@ def run_lmm_association_numpy_streaming(
                 l_max,
                 n_grid,
                 n_refine,
-                omp_threads,
+                pipeline_omp_threads,
             )
     else:
         lmm_workspace = None
@@ -520,24 +612,34 @@ def run_lmm_association_numpy_streaming(
                 IncrementalAssocWriter(output_path, test_type=_TEST_TYPE_MAP[lmm_mode])
             )
 
-        assoc_iterator = stream_genotype_chunks(
-            bed_path,
-            chunk_size=chunk_size,
-            dtype=np.float64,
-            show_progress=False,
-            snp_indices=snp_indices,
-        )
-        if show_progress:
-            n_chunks_p2 = (n_filtered + chunk_size - 1) // chunk_size
-            assoc_iterator = progress_iterator(
-                assoc_iterator,
-                total=n_chunks_p2,
-                desc="Running LMM (NumPy streaming)",
+        chunk_iter = iter(
+            stream_genotype_chunks(
+                bed_path,
+                chunk_size=chunk_size,
+                dtype=np.float64,
+                show_progress=False,
+                snp_indices=snp_indices,
             )
+        )
 
-        for chunk, filt_start, filt_end in assoc_iterator:
+        write_offset = 0  # Cumulative SNP offset for error diagnostics
+
+        def _prepare_chunk() -> tuple | None:
+            """Read next chunk from disk, filter, impute, rotate.
+
+            Returns (data, filt_start, filt_end, actual_len) or None at
+            exhaustion. The dgemm rotation releases the GIL, enabling
+            true parallelism with _compute_and_write's C extension
+            compute in the pipeline path. Pre-rotation NumPy work
+            (filtering, imputation) is lightweight and GIL-serialized.
+            """
+            try:
+                chunk, filt_start, filt_end = next(chunk_iter)
+            except StopIteration:
+                return None
+
             if filt_end <= filt_start:
-                continue
+                return (None, filt_start, filt_end, 0)
 
             # Apply sample filtering
             if needs_sample_filter:
@@ -550,30 +652,54 @@ def run_lmm_association_numpy_streaming(
                 chunk = np.where(missing_mask, chunk_means_broadcast, chunk)
             del missing_mask
 
-            t_rot_start = time.perf_counter()
-            with blas_threads(rotation_threads):
-                if use_fused or use_split:
-                    # dgemm(chunk, U, transa="T") produces C-contiguous utg_t
-                    # (n_snps, n_samples) directly — avoids O(n^2) eigenvector
-                    # copy and intermediate transpose buffer.
-                    utg_t = jlinalg.dgemm(chunk, U, transa="T")
-                else:
-                    # Non-split full Uab path needs (n_samples, n_snps)
-                    UtG = jlinalg.dgemm(U, chunk, transa="T")
-                    utg_t = None
-            t_rot_end = time.perf_counter()
-            t_rotation_total += t_rot_end - t_rot_start
+            # Rotate — control both external BLAS (via threadpoolctl) and
+            # jlinalg-own dgemm (via set_n_threads) to avoid oversubscription
+            # when pipeline overlaps rotation with compute.
+            old_jl_threads = jlinalg.set_n_threads(pipeline_rot_threads)
+            try:
+                with blas_threads(pipeline_rot_threads):
+                    if use_fused or use_split:
+                        utg_t = jlinalg.dgemm(chunk, U, transa="T")
+                    else:
+                        UtG = jlinalg.dgemm(U, chunk, transa="T")
+                        utg_t = None
+            finally:
+                jlinalg.set_n_threads(old_jl_threads)
+            del chunk
 
             actual_len = filt_end - filt_start
 
-            # Compute association statistics
+            if use_fused:
+                return (utg_t, filt_start, filt_end, actual_len)
+
+            if use_split:
+                uab_var_soa = batch_compute_uab_varying_soa_numpy(
+                    n_cvt, UtW, Uty, utg_t
+                )
+                del utg_t
+                return (uab_var_soa, filt_start, filt_end, actual_len)
+
+            # Non-split full Uab
+            Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+            return (Uab_batch, filt_start, filt_end, actual_len)
+
+        def _compute_and_write(prepared: tuple) -> None:
+            """Run C extension compute on prepared chunk data and write results.
+
+            Dispatches by path (fused / split SoA / full Uab) and accumulates
+            diagnostics and timing.
+            """
+            nonlocal write_offset, t_numpy_compute_total, t_result_write_total
+            nonlocal n_at_lmin, n_at_lmax
+
+            chunk_data, filt_start, filt_end, actual_len = prepared
+            if chunk_data is None:
+                return
+
             t_compute_start = time.perf_counter()
 
             if use_fused:
-                # Fused path: rotation already produced the required
-                # (chunk, n_samples) C-contiguous layout directly.
                 if use_fused_general:
-                    # Mode-4 fused general is restricted at dispatch (lmm_mode==1 only)
                     if lmm_mode != 1:
                         raise ValueError(
                             "Mode-4 fused general disabled (NaN lambda_mle bug)"
@@ -591,19 +717,13 @@ def run_lmm_association_numpy_streaming(
                     cr = _guarded_compute(
                         fused_fn,
                         lmm_workspace,
-                        utg_t,
-                        omp_threads,
+                        chunk_data,
+                        pipeline_omp_threads,
                         operation=op_label,
-                        write_offset=filt_start,
+                        write_offset=write_offset,
                         n_filtered=n_filtered,
                     )
-                del utg_t
             elif use_split:
-                uab_var_soa = batch_compute_uab_varying_soa_numpy(
-                    n_cvt, UtW, Uty, utg_t
-                )
-                del utg_t
-
                 with blas_threads(1):
                     cr = dispatch_soa_split(
                         lmm_mode,
@@ -611,7 +731,7 @@ def run_lmm_association_numpy_streaming(
                         lmm_workspace,
                         n_cvt,
                         eigenvalues_np,
-                        uab_var_soa,
+                        chunk_data,
                         uab_invariant_soa,
                         n_samples,
                         Hi_eval_null=Hi_eval_null,
@@ -620,16 +740,14 @@ def run_lmm_association_numpy_streaming(
                         n_grid=n_grid,
                         n_refine=n_refine,
                         logl_H0=logl_H0,
-                        n_threads=omp_threads,
+                        n_threads=pipeline_omp_threads,
                     )
             else:
-                # No split: compute full Uab
-                Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
                 cr = _compute_lmm_chunk_numpy(
                     lmm_mode,
                     n_cvt,
                     eigenvalues_np,
-                    Uab_batch,
+                    chunk_data,
                     n_samples,
                     l_min=l_min,
                     l_max=l_max,
@@ -637,18 +755,17 @@ def run_lmm_association_numpy_streaming(
                     n_refine=n_refine,
                     Hi_eval_null=Hi_eval_null,
                     logl_H0=logl_H0,
-                    n_threads=omp_threads,
+                    n_threads=pipeline_omp_threads,
                 )
 
             t_numpy_compute_total += time.perf_counter() - t_compute_start
 
-            # Build result arrays for this chunk
+            # Build result arrays and accumulate diagnostics
             t_write_start = time.perf_counter()
             chunk_arrays = {
                 key: cr[key][:actual_len] for key in _RESULT_FIELDS[lmm_mode]
             }
 
-            # Accumulate diagnostics
             chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
                 lmm_mode, chunk_arrays, l_min, l_max
             )
@@ -682,7 +799,136 @@ def run_lmm_association_numpy_streaming(
                 )
                 all_results.extend(chunk_results)
 
+            write_offset += actual_len
             t_result_write_total += time.perf_counter() - t_write_start
+
+        if use_pipeline:
+            # --- Profile first chunk for adaptive core split ---
+            t_rot_start = time.perf_counter()
+            first = _prepare_chunk()
+            t_first_rot = time.perf_counter() - t_rot_start
+            t_rotation_total += t_first_rot
+
+            if first is not None:
+                t_compute_start = time.perf_counter()
+                _compute_and_write(first)
+                t_first_compute = time.perf_counter() - t_compute_start
+                del first
+
+                # Adaptive core split from measured times. Closures
+                # _prepare_chunk and _compute_and_write look up these
+                # variables in the enclosing scope, so reassignment
+                # here takes effect on subsequent calls.
+                if n_chunks > 2 and is_blas_controllable():
+                    old_rot, old_omp = pipeline_rot_threads, pipeline_omp_threads
+                    pipeline_rot_threads, pipeline_omp_threads = (
+                        compute_adaptive_core_split(
+                            t_first_rot,
+                            t_first_compute,
+                            total_cores,
+                            n_samples=n_samples,
+                        )
+                    )
+                    if (pipeline_rot_threads, pipeline_omp_threads) != (
+                        old_rot,
+                        old_omp,
+                    ):
+                        logger.debug(
+                            f"Adaptive core split: {old_rot}/{old_omp} -> "
+                            f"{pipeline_rot_threads}/{pipeline_omp_threads} "
+                            f"(rot={t_first_rot:.3f}s, "
+                            f"compute={t_first_compute:.3f}s)"
+                        )
+
+                # Seed pipeline with next chunk
+                t_rot_start = time.perf_counter()
+                current = _prepare_chunk()
+                t_rotation_total += time.perf_counter() - t_rot_start
+
+                # Progress bar (manual update, not iterator-based)
+                pipeline_bar = (
+                    _create_progress_bar("LMM association (streaming)", n_chunks)
+                    if show_progress and n_chunks > 1
+                    else None
+                )
+                if pipeline_bar is not None:
+                    pipeline_bar.update(2)
+
+                # Pipeline loop: overlap rotation(N+1) with compute(N)
+                try:
+                    with ThreadPoolExecutor(max_workers=1) as executor:
+                        for i_chunk in range(2, n_chunks):
+                            if current is None:
+                                break
+                            chunk_data_tuple = current
+
+                            future = executor.submit(_prepare_chunk)
+
+                            _compute_and_write(chunk_data_tuple)
+
+                            t_rot_start = time.perf_counter()
+                            try:
+                                current = future.result()
+                            except (
+                                MemoryError,
+                                ValueError,
+                                TypeError,
+                                OverflowError,
+                                OSError,
+                            ):
+                                raise
+                            except Exception as exc:
+                                raise RuntimeError(
+                                    f"Pipeline chunk preparation failed at offset "
+                                    f"{write_offset}/{n_filtered}: {exc}"
+                                ) from exc
+                            t_rotation_total += time.perf_counter() - t_rot_start
+
+                            if pipeline_bar is not None:
+                                pipeline_bar.update(i_chunk + 1)
+
+                        # Last chunk
+                        if current is not None:
+                            _compute_and_write(current)
+                finally:
+                    if pipeline_bar is not None:
+                        try:
+                            pipeline_bar.update(n_chunks)
+                            pipeline_bar.finish()
+                        except Exception:
+                            pass  # Don't mask the real exception
+        else:
+            # Sequential path (existing behavior, using closures)
+            seq_bar = (
+                _create_progress_bar("Running LMM (NumPy streaming)", n_chunks)
+                if show_progress and n_chunks > 1
+                else None
+            )
+
+            try:
+                i_seq = 0
+                while True:
+                    t_rot_start = time.perf_counter()
+                    prepared = _prepare_chunk()
+                    t_rotation_total += time.perf_counter() - t_rot_start
+                    if prepared is None:
+                        break
+                    _compute_and_write(prepared)
+                    i_seq += 1
+                    if seq_bar is not None:
+                        seq_bar.update(i_seq)
+            finally:
+                if seq_bar is not None:
+                    try:
+                        seq_bar.finish()
+                    except Exception:
+                        pass  # Don't mask the real exception
+
+        if write_offset < n_filtered:
+            logger.warning(
+                f"Processed {write_offset}/{n_filtered} SNPs -- "
+                f"stream exhausted early (expected {n_filtered})"
+            )
 
         # === Post-loop diagnostics ===
         if show_progress:

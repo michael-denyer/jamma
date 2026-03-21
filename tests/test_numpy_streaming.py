@@ -506,3 +506,206 @@ class TestChunkingEdgeCases:
 
         assert result.associations == []
         assert n_tested == 0
+
+
+# ---------------------------------------------------------------------------
+# SC-05: Pipeline Machinery Tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+class TestStreamingPipeline:
+    """Pipeline overlapping rotation/compute in NumPy streaming runner (SC-05)."""
+
+    def test_streaming_pipeline_activates(self, synthetic_eigen):
+        """Pipeline activates with chunk_size=1 (forces >= 8 chunks)."""
+        import io
+
+        from loguru import logger as _logger
+
+        plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
+
+        # Capture DEBUG log output
+        log_buffer = io.StringIO()
+        sink_id = _logger.add(log_buffer, level="DEBUG", format="{message}")
+        try:
+            result, n_tested = run_lmm_association_numpy_streaming(
+                bed_path=SYNTHETIC_DATA,
+                phenotypes=phenotypes,
+                kinship=None,
+                eigenvalues=eigenvalues,
+                eigenvectors=eigenvectors,
+                lmm_mode=1,
+                chunk_size=1,
+                show_progress=False,
+                check_memory=False,
+            )
+        finally:
+            _logger.remove(sink_id)
+
+        log_text = log_buffer.getvalue()
+        assert "Pipeline mode" in log_text, (
+            f"Expected 'Pipeline mode' in log output, got: {log_text[:500]}"
+        )
+        assert n_tested > 0
+
+    def test_streaming_pipeline_parity(self, synthetic_eigen):
+        """Pipeline (chunk_size=1) matches sequential (chunk_size=100_000)."""
+        plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
+
+        # Sequential: single chunk (no pipeline)
+        seq_result, n_seq = run_lmm_association_numpy_streaming(
+            bed_path=SYNTHETIC_DATA,
+            phenotypes=phenotypes,
+            kinship=None,
+            eigenvalues=eigenvalues,
+            eigenvectors=eigenvectors.copy(),
+            lmm_mode=1,
+            chunk_size=100_000,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        # Pipeline: many chunks
+        pipe_result, n_pipe = run_lmm_association_numpy_streaming(
+            bed_path=SYNTHETIC_DATA,
+            phenotypes=phenotypes,
+            kinship=None,
+            eigenvalues=eigenvalues,
+            eigenvectors=eigenvectors.copy(),
+            lmm_mode=1,
+            chunk_size=1,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        assert n_seq == n_pipe, f"Count mismatch: {n_seq} vs {n_pipe}"
+
+        seq_assoc = seq_result.associations
+        pipe_assoc = pipe_result.associations
+        for field in ("beta", "se", "p_wald"):
+            seq_vals = np.array([getattr(r, field) for r in seq_assoc])
+            pipe_vals = np.array([getattr(r, field) for r in pipe_assoc])
+            np.testing.assert_allclose(
+                seq_vals,
+                pipe_vals,
+                atol=1e-14,
+                rtol=1e-12,
+                err_msg=f"{field} values differ between sequential and pipeline",
+            )
+
+    def test_streaming_auto_chunk_sizing(self, synthetic_eigen):
+        """Auto chunk sizing runs without error (default chunk_size=10_000)."""
+        plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
+
+        result, n_tested = run_lmm_association_numpy_streaming(
+            bed_path=SYNTHETIC_DATA,
+            phenotypes=phenotypes,
+            kinship=None,
+            eigenvalues=eigenvalues,
+            eigenvectors=eigenvectors,
+            lmm_mode=1,
+            chunk_size=10_000,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        assert n_tested > 0
+
+    def test_streaming_pipeline_output_path_parity(self, tmp_path, synthetic_eigen):
+        """Pipeline with output_path produces same disk results as sequential."""
+        plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
+
+        # Sequential: single chunk -> disk
+        seq_file = tmp_path / "seq.assoc.txt"
+        seq_result, n_seq = run_lmm_association_numpy_streaming(
+            bed_path=SYNTHETIC_DATA,
+            phenotypes=phenotypes,
+            kinship=None,
+            eigenvalues=eigenvalues,
+            eigenvectors=eigenvectors.copy(),
+            lmm_mode=1,
+            chunk_size=100_000,
+            show_progress=False,
+            check_memory=False,
+            output_path=seq_file,
+        )
+
+        # Pipeline: many chunks -> disk
+        pipe_file = tmp_path / "pipe.assoc.txt"
+        pipe_result, n_pipe = run_lmm_association_numpy_streaming(
+            bed_path=SYNTHETIC_DATA,
+            phenotypes=phenotypes,
+            kinship=None,
+            eigenvalues=eigenvalues,
+            eigenvectors=eigenvectors.copy(),
+            lmm_mode=1,
+            chunk_size=1,
+            show_progress=False,
+            check_memory=False,
+            output_path=pipe_file,
+        )
+
+        assert n_seq == n_pipe
+        assert seq_result.associations == []
+        assert pipe_result.associations == []
+
+        seq_loaded = load_gemma_assoc(seq_file)
+        pipe_loaded = load_gemma_assoc(pipe_file)
+        assert len(seq_loaded) == len(pipe_loaded) == n_seq
+
+        for field in ("beta", "se", "p_wald"):
+            seq_vals = np.array([getattr(r, field) for r in seq_loaded])
+            pipe_vals = np.array([getattr(r, field) for r in pipe_loaded])
+            np.testing.assert_allclose(
+                seq_vals,
+                pipe_vals,
+                atol=1e-14,
+                rtol=1e-12,
+                err_msg=f"{field} disk values differ between sequential and pipeline",
+            )
+
+    def test_streaming_pipeline_mode4_parity(self, synthetic_eigen):
+        """Pipeline (chunk_size=1) with lmm_mode=4 matches sequential."""
+        plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
+
+        # Sequential: single chunk
+        seq_result, n_seq = run_lmm_association_numpy_streaming(
+            bed_path=SYNTHETIC_DATA,
+            phenotypes=phenotypes,
+            kinship=None,
+            eigenvalues=eigenvalues,
+            eigenvectors=eigenvectors.copy(),
+            lmm_mode=4,
+            chunk_size=100_000,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        # Pipeline: many chunks
+        pipe_result, n_pipe = run_lmm_association_numpy_streaming(
+            bed_path=SYNTHETIC_DATA,
+            phenotypes=phenotypes,
+            kinship=None,
+            eigenvalues=eigenvalues,
+            eigenvectors=eigenvectors.copy(),
+            lmm_mode=4,
+            chunk_size=1,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        assert n_seq == n_pipe, f"Count mismatch: {n_seq} vs {n_pipe}"
+
+        seq_assoc = seq_result.associations
+        pipe_assoc = pipe_result.associations
+        for field in ("beta", "se", "p_wald", "p_lrt", "p_score"):
+            seq_vals = np.array([getattr(r, field) for r in seq_assoc])
+            pipe_vals = np.array([getattr(r, field) for r in pipe_assoc])
+            np.testing.assert_allclose(
+                seq_vals,
+                pipe_vals,
+                atol=1e-14,
+                rtol=1e-12,
+                err_msg=f"{field} seq/pipeline mismatch (mode 4)",
+            )

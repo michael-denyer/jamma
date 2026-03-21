@@ -298,8 +298,8 @@ def _run_lmm_jax_batch_impl(
         geno_chunk = genotypes[:, chunk_indices]
         chunk_means_local = col_means[chunk_indices]
         missing = np.isnan(geno_chunk)
-        if missing.any():  # RUN-06: skip O(n*chunk) np.where on clean data
-            geno_chunk = np.where(missing, chunk_means_local[None, :], geno_chunk)
+        if missing.any():  # RUN-06: skip imputation on clean data
+            geno_chunk[missing] = np.take(chunk_means_local, np.where(missing)[1])
         del missing
         return prepare_utg_chunk(geno_chunk, U, placement, rotation_threads)
 

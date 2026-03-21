@@ -1011,8 +1011,8 @@ def run_lmm_association_numpy(
         # Mean-impute
         chunk_means = col_means[chunk_indices]
         missing = np.isnan(geno_chunk)
-        if missing.any():  # RUN-06: skip O(n*chunk) np.where on clean data
-            geno_chunk = np.where(missing, chunk_means[None, :], geno_chunk)
+        if missing.any():  # RUN-06: skip imputation on clean data
+            geno_chunk[missing] = np.take(chunk_means, np.where(missing)[1])
         del missing
 
         # Rotate — jlinalg.dgemm(chunk, U, transa="T") produces
@@ -1277,8 +1277,8 @@ def run_lmm_association_numpy(
                 # Mean-impute missing genotypes
                 chunk_means = col_means[chunk_indices]
                 missing = np.isnan(geno_chunk)
-                if missing.any():  # RUN-06: skip O(n*chunk) np.where on clean data
-                    geno_chunk = np.where(missing, chunk_means[None, :], geno_chunk)
+                if missing.any():  # RUN-06: skip imputation on clean data
+                    geno_chunk[missing] = np.take(chunk_means, np.where(missing)[1])
                 del missing, chunk_means
 
                 # Rotate genotypes — jlinalg.dgemm(chunk, U, transa="T")

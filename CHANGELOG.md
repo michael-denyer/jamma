@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.4.0] - 2026-03-21
+
+### Added
+
+- Early sample filtering via `valid_indices` — missing-phenotype samples are
+  excluded before kinship accumulation rather than post-hoc, avoiding full n×n
+  matrix materialisation (kinship streaming, LOCO NumPy, LOCO JAX, PipelineRunner)
+- Input validation (`_validate_valid_indices`) for LOCO NumPy kinship streamer
+- Filtered sample count in LOCO log messages for both NumPy and JAX backends
+
+### Removed
+
+- Secular equation solver and LOCO streaming modes (`S_CHR`, `X_C`,
+  `X_C_SEQUENTIAL`) — superseded by streaming LOCO with better memory
+  characteristics
+- `--secular` CLI flag and `use_secular_update` config option
+- `loco_eigen_update.py` (1090 lines) and associated tests (~2200 lines)
+
+### Fixed
+
+- Replace `assert` with `raise ValueError` for kinship shape validation in
+  pipeline (assert stripped by `python -O`)
+- Remove stale documentation references to deleted secular update feature
+
 ## [4.3.1] - 2026-03-21
 
 ### Added

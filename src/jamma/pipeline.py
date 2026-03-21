@@ -1168,23 +1168,17 @@ class PipelineRunner:
                 ksnps_indices=ksnps_indices,
                 valid_indices=kinship_valid_indices,
             )
-            if kinship_valid_indices is not None:
-                # K is already (n_valid, n_valid) — eigendecompose directly.
-                n_valid = int(np.sum(valid_mask))
-                if K.shape != (n_valid, n_valid):
-                    raise ValueError(
-                        f"Kinship shape {K.shape} != expected ({n_valid}, {n_valid}) "
-                        f"after early sample filtering"
-                    )
-                eigenvalues, eigenvectors = eigendecompose_kinship(
-                    K, check_memory=self.config.check_memory
-                )
-            else:
-                # K is full-size; subset if needed (save_kinship=True or all_valid)
-                K_valid = K if all_valid else K[np.ix_(valid_mask, valid_mask)]
-                eigenvalues, eigenvectors = eigendecompose_kinship(
-                    K_valid, check_memory=self.config.check_memory
-                )
+            # When kinship_valid_indices was passed, K is already
+            # (n_valid, n_valid). Otherwise K is full-size and may need
+            # subsetting (save_kinship=True with invalid samples).
+            K_valid = (
+                K
+                if (kinship_valid_indices is not None or all_valid)
+                else K[np.ix_(valid_mask, valid_mask)]
+            )
+            eigenvalues, eigenvectors = eigendecompose_kinship(
+                K_valid, check_memory=self.config.check_memory
+            )
             if self.config.write_eigen:
                 d_path, u_path = write_eigen_files(
                     eigenvalues,

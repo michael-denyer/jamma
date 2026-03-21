@@ -1058,14 +1058,12 @@ def compute_loco_kinship_streaming(
     partitions = partitions_from_metadata(meta)
     unique_chrs = sorted(partitions.keys(), key=chr_sort_key)
 
-    n_samples_display = len(valid_indices) if valid_indices is not None else n_samples
+    n_out = len(valid_indices) if valid_indices is not None else n_samples
     logger.info("Computing LOCO Kinship (streaming)")
-    if valid_indices is not None:
-        logger.info(
-            f"  Individuals: {n_samples_display:,} (filtered from {n_samples:,})"
-        )
-    else:
-        logger.info(f"  Individuals: {n_samples:,}")
+    logger.info(
+        f"  Individuals: {n_out:,}"
+        + (f" (filtered from {n_samples:,})" if n_out != n_samples else "")
+    )
     logger.info(f"  SNPs: {n_snps:,}")
     logger.info(f"  Chromosomes: {len(unique_chrs)}")
     logger.info(f"  Chunk size: {chunk_size:,}")

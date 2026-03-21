@@ -290,14 +290,12 @@ def _compute_loco_kinship_streaming_numpy(
     partitions = partitions_from_metadata(meta)
     unique_chrs = sorted(partitions.keys(), key=chr_sort_key)
 
-    n_samples_display = len(valid_indices) if valid_indices is not None else n_samples
+    n_samples_kinship = len(valid_indices) if valid_indices is not None else n_samples
     logger.info("Computing LOCO Kinship (streaming, NumPy)")
-    if valid_indices is not None:
-        logger.info(
-            f"  Individuals: {n_samples_display:,} (filtered from {n_samples:,})"
-        )
-    else:
-        logger.info(f"  Individuals: {n_samples:,}")
+    logger.info(
+        f"  Individuals: {n_samples_kinship:,}"
+        + (f" (filtered from {n_samples:,})" if n_samples_kinship != n_samples else "")
+    )
     logger.info(f"  SNPs: {n_snps:,}")
     logger.info(f"  Chromosomes: {len(unique_chrs)}")
     logger.info(f"  Chunk size: {chunk_size:,}")
@@ -403,9 +401,6 @@ def _compute_loco_kinship_streaming_numpy(
         )
 
     # Memory strategy: single-pass vs multi-pass chromosome batching (LOCO-02).
-    # n_samples_kinship is the size of kinship matrices — either n_valid (when
-    # valid_indices is provided for early subsetting) or full n_samples (LOCO-07).
-    n_samples_kinship = len(valid_indices) if valid_indices is not None else n_samples
     from jamma.core.memory import _dsyevr_peak_gb
 
     matrix_gb = n_samples_kinship**2 * 8 / 1e9

@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-from jamma.core.progress import progress_iterator
+from jamma.core.progress import create_progress_bar, progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask
 from jamma.core.threading import (
     blas_threads,
@@ -50,6 +50,7 @@ from jamma.lmm.compute_numpy import (
     create_lmm_workspace_mode4,
     create_lmm_workspace_mode4_fused,
 )
+from jamma.lmm.impute import impute_missing_inplace
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.likelihood_numpy import (
     batch_compute_uab_numpy,
@@ -97,29 +98,6 @@ def get_last_run_timing() -> RunnerTiming:
     Safe to call from any thread -- returns an independent dict.
     """
     return dict(last_run_timing)
-
-
-def _create_progress_bar(label: str, total: int):
-    """Create and start a progressbar with standard LMM widgets."""
-    import sys
-
-    import progressbar as _pb
-
-    widgets = [
-        f"{label}: ",
-        _pb.Counter(),
-        f"/{total} ",
-        _pb.Percentage(),
-        " ",
-        _pb.Bar(),
-        " ",
-        _pb.Timer(),
-        " ",
-        _pb.ETA(),
-    ]
-    bar = _pb.ProgressBar(max_value=total, widgets=widgets, fd=sys.stdout)
-    bar.start()
-    return bar
 
 
 def run_lmm_association_numpy_streaming(
@@ -646,11 +624,7 @@ def run_lmm_association_numpy_streaming(
                 chunk = chunk[valid_mask, :]
 
             # Mean-impute NaN
-            chunk_means = filtered_means[filt_start:filt_end]
-            missing_mask = np.isnan(chunk)
-            if missing_mask.any():
-                chunk[missing_mask] = np.take(chunk_means, np.where(missing_mask)[1])
-            del missing_mask
+            impute_missing_inplace(chunk, filtered_means[filt_start:filt_end])
 
             # Rotate — control both external BLAS (via threadpoolctl) and
             # jlinalg-own dgemm (via set_n_threads) to avoid oversubscription
@@ -847,7 +821,7 @@ def run_lmm_association_numpy_streaming(
 
                 # Progress bar (manual update, not iterator-based)
                 pipeline_bar = (
-                    _create_progress_bar("LMM association (streaming)", n_chunks)
+                    create_progress_bar(n_chunks, "LMM association (streaming)")
                     if show_progress and n_chunks > 1
                     else None
                 )
@@ -898,9 +872,9 @@ def run_lmm_association_numpy_streaming(
                         except Exception:
                             pass  # Don't mask the real exception
         else:
-            # Sequential path (existing behavior, using closures)
+            # Sequential fallback when too few chunks for pipeline overlap
             seq_bar = (
-                _create_progress_bar("Running LMM (NumPy streaming)", n_chunks)
+                create_progress_bar(n_chunks, "Running LMM (NumPy streaming)")
                 if show_progress and n_chunks > 1
                 else None
             )

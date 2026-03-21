@@ -26,6 +26,7 @@ from jamma.lmm.compute import (
     exposed_rotation_time,
     log_jax_error,
 )
+from jamma.lmm.impute import impute_missing_inplace
 from jamma.lmm.likelihood_jax import batch_compute_uab
 from jamma.lmm.prepare import (
     _build_covariate_matrix,
@@ -296,11 +297,7 @@ def _run_lmm_jax_batch_impl(
         """Mean-impute a genotype slice and prepare utg_t for device transfer."""
         chunk_indices = snp_indices[start : start + chunk_size]
         geno_chunk = genotypes[:, chunk_indices]
-        chunk_means_local = col_means[chunk_indices]
-        missing = np.isnan(geno_chunk)
-        if missing.any():  # RUN-06: skip imputation on clean data
-            geno_chunk[missing] = np.take(chunk_means_local, np.where(missing)[1])
-        del missing
+        impute_missing_inplace(geno_chunk, col_means[chunk_indices])
         return prepare_utg_chunk(geno_chunk, U, placement, rotation_threads)
 
     def _impute_and_prepare_timed(start: int) -> tuple[np.ndarray, int, float]:

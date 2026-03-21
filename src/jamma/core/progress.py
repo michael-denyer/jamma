@@ -10,6 +10,37 @@ from collections.abc import Iterator
 import progressbar
 
 
+def create_progress_bar(total: int, desc: str = "") -> progressbar.ProgressBar:
+    """Create and start a progressbar with standard JAMMA widgets.
+
+    Use this when you need manual ``bar.update(n)`` / ``bar.finish()``
+    control (e.g. pipeline loops).  For simple iterator wrapping, prefer
+    :func:`progress_iterator` instead.
+
+    Args:
+        total: Total number of items.
+        desc: Optional description prefix.
+
+    Returns:
+        A started ProgressBar instance. Caller must call ``bar.finish()``.
+    """
+    widgets = [
+        f"{desc}: " if desc else "",
+        progressbar.Counter(),
+        f"/{total} ",
+        progressbar.Percentage(),
+        " ",
+        progressbar.Bar(),
+        " ",
+        progressbar.Timer(),
+        " ",
+        progressbar.ETA(),
+    ]
+    bar = progressbar.ProgressBar(max_value=total, widgets=widgets, fd=sys.stdout)
+    bar.start()
+    return bar
+
+
 def progress_iterator(iterable: Iterator, total: int, desc: str = "") -> Iterator:
     """Wrap iterator with progressbar2 progress display.
 
@@ -28,20 +59,7 @@ def progress_iterator(iterable: Iterator, total: int, desc: str = "") -> Iterato
     Yields:
         Items from the wrapped iterator.
     """
-    widgets = [
-        f"{desc}: " if desc else "",
-        progressbar.Counter(),
-        f"/{total} ",
-        progressbar.Percentage(),
-        " ",
-        progressbar.Bar(),
-        " ",
-        progressbar.Timer(),
-        " ",
-        progressbar.ETA(),
-    ]
-    bar = progressbar.ProgressBar(max_value=total, widgets=widgets, fd=sys.stdout)
-    bar.start()
+    bar = create_progress_bar(total, desc)
     try:
         for i, item in enumerate(iterable):
             yield item

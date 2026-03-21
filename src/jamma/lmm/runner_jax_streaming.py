@@ -32,6 +32,7 @@ from jamma.lmm.compute import (
     exposed_rotation_time,
     log_jax_error,
 )
+from jamma.lmm.impute import impute_missing_inplace
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.likelihood_jax import batch_compute_uab
 from jamma.lmm.prepare import (
@@ -401,11 +402,7 @@ def _run_lmm_jax_streaming_impl(
                 if filt_end <= filt_start:
                     continue
 
-                chunk_means = filtered_means[filt_start:filt_end]
-                missing_mask = np.isnan(chunk)
-                if missing_mask.any():
-                    chunk[missing_mask] = np.take(chunk_means, np.where(missing_mask)[1])
-                del missing_mask
+                impute_missing_inplace(chunk, filtered_means[filt_start:filt_end])
 
                 n_subset = chunk.shape[1]
                 jax_starts = compute_subchunk_starts(

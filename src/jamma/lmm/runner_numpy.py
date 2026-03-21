@@ -18,7 +18,7 @@ from loguru import logger
 
 from jamma import jlinalg
 from jamma.core.memory import estimate_lmm_memory
-from jamma.core.progress import progress_iterator
+from jamma.core.progress import create_progress_bar, progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.core.threading import (
     blas_threads,
@@ -50,6 +50,7 @@ from jamma.lmm.compute_numpy import (
     create_lmm_workspace_mode4,
     create_lmm_workspace_mode4_fused,
 )
+from jamma.lmm.impute import impute_missing_inplace
 from jamma.lmm.likelihood_numpy import (
     batch_compute_uab_numpy,
     batch_compute_uab_varying_soa_numpy,
@@ -1009,11 +1010,7 @@ def run_lmm_association_numpy(
         geno_chunk = genotypes[:, chunk_indices]
 
         # Mean-impute
-        chunk_means = col_means[chunk_indices]
-        missing = np.isnan(geno_chunk)
-        if missing.any():  # RUN-06: skip imputation on clean data
-            geno_chunk[missing] = np.take(chunk_means, np.where(missing)[1])
-        del missing
+        impute_missing_inplace(geno_chunk, col_means[chunk_indices])
 
         # Rotate — jlinalg.dgemm(chunk, U, transa="T") produces
         # C-contiguous (n_snps, n_samples) directly, no intermediate UtG.
@@ -1175,26 +1172,7 @@ def run_lmm_association_numpy(
             # (profiled), one prepared (rotation only), so initialise at 2.
             pipeline_bar = None
             if show_progress and n_chunks > 1:
-                import sys
-
-                import progressbar as _pb
-
-                widgets = [
-                    "LMM association: ",
-                    _pb.Counter(),
-                    f"/{n_chunks} ",
-                    _pb.Percentage(),
-                    " ",
-                    _pb.Bar(),
-                    " ",
-                    _pb.Timer(),
-                    " ",
-                    _pb.ETA(),
-                ]
-                pipeline_bar = _pb.ProgressBar(
-                    max_value=n_chunks, widgets=widgets, fd=sys.stdout
-                )
-                pipeline_bar.start()
+                pipeline_bar = create_progress_bar(n_chunks, "LMM association")
                 # profiled chunk + seeded (prepared, not computed)
                 pipeline_bar.update(2)
 
@@ -1275,11 +1253,7 @@ def run_lmm_association_numpy(
                 geno_chunk = genotypes[:, chunk_indices]
 
                 # Mean-impute missing genotypes
-                chunk_means = col_means[chunk_indices]
-                missing = np.isnan(geno_chunk)
-                if missing.any():  # RUN-06: skip imputation on clean data
-                    geno_chunk[missing] = np.take(chunk_means, np.where(missing)[1])
-                del missing, chunk_means
+                impute_missing_inplace(geno_chunk, col_means[chunk_indices])
 
                 # Rotate genotypes — jlinalg.dgemm(chunk, U, transa="T")
                 # produces C-contiguous (n_snps, n_samples) directly.

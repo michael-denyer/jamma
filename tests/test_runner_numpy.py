@@ -970,6 +970,114 @@ def test_imputation_applies_on_missing_data():
         assert np.isfinite(r.beta), f"beta is not finite: {r.beta}"
 
 
+@pytest.mark.tier1
+def test_inplace_imputation_does_not_corrupt_source():
+    """In-place mean imputation on chunk must not mutate the source genotypes array.
+
+    The batch runners slice genotypes with fancy indexing (integer array),
+    which guarantees a copy.  This test documents that invariant so a future
+    refactor to contiguous slicing doesn't silently corrupt subsequent chunks.
+    """
+    rng = np.random.default_rng(99)
+    n_samples, n_snps = 80, 30
+
+    genotypes = rng.choice([0.0, 1.0, 2.0], size=(n_samples, n_snps))
+    # Sprinkle NaNs
+    genotypes[0, 0] = np.nan
+    genotypes[3, 5] = np.nan
+    genotypes[7, 29] = np.nan
+
+    original = genotypes.copy()
+
+    phenotypes = rng.standard_normal(n_samples)
+    kinship = np.eye(n_samples, dtype=np.float64)
+    snp_info = [
+        {"chr": "1", "rs": f"rs{i}", "pos": i * 1000, "a1": "A", "a0": "T"}
+        for i in range(n_snps)
+    ]
+
+    run_lmm_association_numpy(
+        genotypes=genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        maf_threshold=0.0,
+        miss_threshold=1.0,
+        check_memory=False,
+        show_progress=False,
+        lmm_mode=1,
+    )
+
+    # Source array must be untouched — NaNs still present
+    np.testing.assert_array_equal(
+        genotypes,
+        original,
+        err_msg="In-place imputation corrupted the source genotypes array",
+    )
+
+
+@pytest.mark.tier1
+def test_inplace_imputation_preserves_dtype():
+    """In-place imputation must preserve the chunk's dtype.
+
+    nanmean returns the same dtype as the input, so both chunk and means
+    are float32 (or float64).  The in-place pattern must not change dtype.
+    """
+    for dtype in [np.float32, np.float64]:
+        chunk = np.array(
+            [[0.0, np.nan], [1.0, 2.0], [2.0, 1.0]],
+            dtype=dtype,
+        )
+        chunk_means = np.nanmean(chunk, axis=0)
+        assert chunk_means.dtype == dtype
+
+        missing = np.isnan(chunk)
+        chunk[missing] = np.take(chunk_means, np.where(missing)[1])
+
+        assert chunk.dtype == dtype, (
+            f"Expected {dtype} after imputation, got {chunk.dtype}"
+        )
+        np.testing.assert_allclose(chunk[0, 1], 1.5, rtol=1e-6)
+
+
+@pytest.mark.tier1
+def test_inplace_imputation_replaces_nan_with_column_mean():
+    """Verify the np.take imputation pattern fills NaN positions with column means.
+
+    Directly tests the pattern used by all LMM runners:
+        chunk[missing] = np.take(chunk_means, np.where(missing)[1])
+    """
+    chunk = np.array(
+        [
+            [0.0, np.nan, 2.0],
+            [1.0, 1.0, np.nan],
+            [2.0, 2.0, 1.0],
+            [np.nan, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    chunk_means = np.nanmean(chunk, axis=0)  # [1.0, 1.0, 1.0]
+
+    missing = np.isnan(chunk)
+    assert missing.any()
+    chunk[missing] = np.take(chunk_means, np.where(missing)[1])
+
+    # No NaNs remain
+    assert not np.any(np.isnan(chunk)), "NaNs remain after imputation"
+
+    # Each formerly-NaN position holds the column mean
+    expected = np.array(
+        [
+            [0.0, 1.0, 2.0],
+            [1.0, 1.0, 1.0],
+            [2.0, 2.0, 1.0],
+            [1.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    np.testing.assert_array_equal(chunk, expected)
+
+
 # ---------------------------------------------------------------------------
 # Split-Uab all modes and reconstruct_uab_from_soa tests (RUN-01)
 # ---------------------------------------------------------------------------
@@ -1049,7 +1157,9 @@ def test_reconstruct_uab_from_soa_matches_direct():
 
     # Split construction + reconstruction
     invariant = compute_uab_invariant_soa(UtW, Uty)
-    varying = batch_compute_uab_varying_soa_numpy(n_cvt=1, UtW=UtW, Uty=Uty, utg_t=UtG.T)
+    varying = batch_compute_uab_varying_soa_numpy(
+        n_cvt=1, UtW=UtW, Uty=Uty, utg_t=UtG.T
+    )
     Uab_reconstructed = reconstruct_uab_from_soa(invariant, varying)
 
     np.testing.assert_allclose(

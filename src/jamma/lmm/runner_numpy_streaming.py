@@ -246,15 +246,6 @@ def run_lmm_association_numpy_streaming(
             all_n_bb[start:end] if hwe_threshold > 0 else None,
         )
 
-        # Sanity check: detect overflow or corrupt genotype data
-        chunk_means = all_means[start:end]
-        if not np.all(np.isfinite(chunk_means)):
-            n_bad = np.sum(~np.isfinite(chunk_means))
-            logger.warning(
-                f"Pass-1: chunk [{start}:{end}] has {n_bad} non-finite mean "
-                "values — check for overflow or invalid genotype values"
-            )
-
         if validate_genotypes:
             n_unexpected_total += validate_genotype_values(chunk)
 

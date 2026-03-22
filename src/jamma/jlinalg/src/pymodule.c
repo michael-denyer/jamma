@@ -1104,23 +1104,19 @@ py_compute_snp_stats_chunk(PyObject *self, PyObject *args)
         return NULL;
 
     /* Extract data array — accept both float32 and float64.
-     * First probe the dtype, then convert with the correct typenum to ensure
-     * native byte order (NPY_ARRAY_C_CONTIGUOUS alone does not byteswap). */
-    PyArrayObject *a_probe = (PyArrayObject *)PyArray_FROM_OTF(
+     * NPY_NOTYPE preserves original dtype; NPY_ARRAY_C_CONTIGUOUS ensures
+     * contiguity and native byte order. Single conversion, no re-probe. */
+    PyArrayObject *a_data = (PyArrayObject *)PyArray_FROM_OTF(
         o_data, NPY_NOTYPE, NPY_ARRAY_C_CONTIGUOUS);
-    if (!a_probe) return NULL;
+    if (!a_data) return NULL;
 
-    int dtype = PyArray_TYPE(a_probe);
-    Py_DECREF(a_probe);
+    int dtype = PyArray_TYPE(a_data);
     if (dtype != NPY_FLOAT32 && dtype != NPY_FLOAT64) {
+        Py_DECREF(a_data);
         PyErr_SetString(PyExc_TypeError,
             "compute_snp_stats_chunk: data must be float32 or float64");
         return NULL;
     }
-    /* Re-convert with explicit typenum to force native-endian + contiguous */
-    PyArrayObject *a_data = (PyArrayObject *)PyArray_FROM_OTF(
-        o_data, dtype, NPY_ARRAY_C_CONTIGUOUS);
-    if (!a_data) return NULL;
     if (PyArray_NDIM(a_data) != 2) {
         Py_DECREF(a_data);
         PyErr_SetString(PyExc_ValueError,

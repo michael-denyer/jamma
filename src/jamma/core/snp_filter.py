@@ -10,6 +10,8 @@ import math
 import numpy as np
 from loguru import logger
 
+from jamma.jlinalg import compute_snp_stats_chunk
+
 # Chi-squared SF with df=1: P(X > x) = erfc(sqrt(x/2))
 # Uses np.vectorize(math.erfc) since numpy has no built-in erfc.
 # HWE runs once per GWAS (not per-chunk), so vectorize overhead is negligible.
@@ -67,8 +69,6 @@ def compute_snp_stats(
         Tuple of (col_means, miss_counts, col_vars) where each is a
         1-D array of length n_snps.
     """
-    from jamma.jlinalg import compute_snp_stats_chunk
-
     n_snps = genotypes.shape[1]
     col_means = np.zeros(n_snps, dtype=np.float64)
     miss_counts = np.zeros(n_snps, dtype=np.intp)

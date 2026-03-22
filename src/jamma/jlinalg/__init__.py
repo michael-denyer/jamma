@@ -145,7 +145,8 @@ except ImportError as _exc:
             n_ab: Output array (n_snps,), int64 (None to skip HWE).
             n_bb: Output array (n_snps,), int64 (None to skip HWE).
         """
-        mc = _np.sum(_np.isnan(data), axis=0)
+        is_nan = _np.isnan(data)
+        mc = _np.sum(is_nan, axis=0)
         with _warnings.catch_warnings():
             _warnings.simplefilter("ignore", RuntimeWarning)
             m = _np.nanmean(data, axis=0)
@@ -156,7 +157,7 @@ except ImportError as _exc:
         miss_counts[:] = mc
         variances[:] = v
         if n_aa is not None and n_ab is not None and n_bb is not None:
-            valid = ~_np.isnan(data)
+            valid = ~is_nan
             n_aa[:] = _np.sum((data == 0) & valid, axis=0)
             n_ab[:] = _np.sum((data == 1) & valid, axis=0)
             n_bb[:] = _np.sum((data == 2) & valid, axis=0)

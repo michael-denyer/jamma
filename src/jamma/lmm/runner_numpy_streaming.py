@@ -14,7 +14,6 @@ from __future__ import annotations
 import contextlib
 import gc
 import time
-import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -33,6 +32,7 @@ from jamma.io.plink import (
     stream_genotype_chunks,
     validate_genotype_values,
 )
+from jamma.jlinalg import compute_snp_stats_chunk
 from jamma.lmm.compute_numpy import (
     _C_ACCEL_AVAILABLE,
     _C_FUSED_AVAILABLE,
@@ -205,10 +205,10 @@ def run_lmm_association_numpy_streaming(
 
     needs_sample_filter = not np.all(valid_mask)
 
-    # === PASS 1: SNP statistics (lightweight, float32) ===
+    # === PASS 1: SNP statistics (single-pass C kernel) ===
     t_io_start = time.perf_counter()
     all_means = np.zeros(n_snps, dtype=np.float64)
-    all_miss_counts = np.zeros(n_snps, dtype=np.int32)
+    all_miss_counts = np.zeros(n_snps, dtype=np.intp)
     all_vars = np.zeros(n_snps, dtype=np.float64)
 
     # HWE genotype count accumulators (only when threshold > 0)
@@ -234,37 +234,26 @@ def run_lmm_association_numpy_streaming(
         if needs_sample_filter:
             chunk = chunk[valid_mask, :]
 
-        # Compute stats for this chunk
-        chunk_miss_counts = np.sum(np.isnan(chunk), axis=0)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)  # "Mean of empty slice"
-            chunk_means = np.nanmean(chunk, axis=0)
-            chunk_vars = np.nanvar(chunk, axis=0)
-        # NaN from all-missing SNPs is expected; NaN from other causes (overflow) is not
-        expected_all_nan = chunk_miss_counts == chunk.shape[0]
-        unexpected_nan_mean = np.isnan(chunk_means) & ~expected_all_nan
-        unexpected_nan_var = np.isnan(chunk_vars) & ~expected_all_nan
-        if unexpected_nan_mean.any() or unexpected_nan_var.any():
-            n_mean = unexpected_nan_mean.sum()
-            n_var = unexpected_nan_var.sum()
+        # Single-pass SNP stats: mean, miss_count, variance, optional HWE counts
+        chunk = np.ascontiguousarray(chunk)
+        compute_snp_stats_chunk(
+            chunk,
+            all_means[start:end],
+            all_miss_counts[start:end],
+            all_vars[start:end],
+            all_n_aa[start:end] if hwe_threshold > 0 else None,
+            all_n_ab[start:end] if hwe_threshold > 0 else None,
+            all_n_bb[start:end] if hwe_threshold > 0 else None,
+        )
+
+        # Sanity check: detect overflow or corrupt genotype data
+        chunk_means = all_means[start:end]
+        if not np.all(np.isfinite(chunk_means)):
+            n_bad = np.sum(~np.isfinite(chunk_means))
             logger.warning(
-                f"Pass-1: chunk [{start}:{end}] has unexpected NaN "
-                f"(mean: {n_mean}, var: {n_var}) — check for "
-                "overflow or invalid genotype values"
+                f"Pass-1: chunk [{start}:{end}] has {n_bad} non-finite mean "
+                "values — check for overflow or invalid genotype values"
             )
-        chunk_means = np.nan_to_num(chunk_means, nan=0.0)
-        chunk_vars = np.nan_to_num(chunk_vars, nan=0.0)
-
-        all_means[start:end] = chunk_means
-        all_miss_counts[start:end] = chunk_miss_counts
-        all_vars[start:end] = chunk_vars
-
-        # Accumulate HWE genotype counts
-        if hwe_threshold > 0:
-            valid_geno = ~np.isnan(chunk)
-            all_n_aa[start:end] += np.sum((chunk == 0) & valid_geno, axis=0)
-            all_n_ab[start:end] += np.sum((chunk == 1) & valid_geno, axis=0)
-            all_n_bb[start:end] += np.sum((chunk == 2) & valid_geno, axis=0)
 
         if validate_genotypes:
             n_unexpected_total += validate_genotype_values(chunk)

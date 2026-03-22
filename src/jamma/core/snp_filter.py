@@ -6,7 +6,6 @@ Used by both kinship computation and LMM association runners.
 """
 
 import math
-import warnings
 
 import numpy as np
 from loguru import logger
@@ -57,7 +56,9 @@ def compute_snp_stats(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute per-SNP mean, missing count, and variance.
 
-    Handles all-NaN columns gracefully by replacing NaN outputs with 0.0.
+    Handles all-NaN columns gracefully (returns 0.0 for mean and variance).
+    Delegates to compute_snp_stats_chunk (C kernel with NumPy fallback)
+    for numerical consistency with streaming runners.
 
     Args:
         genotypes: Genotype matrix (n_samples, n_snps) with NaN for missing.
@@ -66,16 +67,14 @@ def compute_snp_stats(
         Tuple of (col_means, miss_counts, col_vars) where each is a
         1-D array of length n_snps.
     """
-    miss_counts = np.sum(np.isnan(genotypes), axis=0)
-    # Use warnings.catch_warnings to suppress Python-level RuntimeWarning emitted
-    # by nanmean/nanvar on all-NaN slices. np.errstate(invalid="ignore") only
-    # suppresses numpy floating-point error state flags, not Python warnings.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        col_means = np.nanmean(genotypes, axis=0)
-        col_vars = np.nanvar(genotypes, axis=0)
-    col_means = np.nan_to_num(col_means, nan=0.0)
-    col_vars = np.nan_to_num(col_vars, nan=0.0)
+    from jamma.jlinalg import compute_snp_stats_chunk
+
+    n_snps = genotypes.shape[1]
+    col_means = np.zeros(n_snps, dtype=np.float64)
+    miss_counts = np.zeros(n_snps, dtype=np.intp)
+    col_vars = np.zeros(n_snps, dtype=np.float64)
+    data = np.ascontiguousarray(genotypes)
+    compute_snp_stats_chunk(data, col_means, miss_counts, col_vars)
     return col_means, miss_counts, col_vars
 
 

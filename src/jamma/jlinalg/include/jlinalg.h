@@ -13,13 +13,14 @@
 #pragma once
 
 #include <stddef.h>             /* size_t */
+#include <stdint.h>             /* int32_t, int64_t — snp_stats output types */
 #include <pthread.h>            /* pthread_mutex_t — shared across dgemm/dsyrk/dsyr2k */
 #include <numpy/arrayobject.h>  /* npy_intp */
 
 /* Bump this constant whenever the public ABI changes (new fields in
  * jlinalg_dispatch_t, changed function signatures, etc.). pymodule.c exposes
  * this as a Python-level integer so callers can guard against ABI mismatches. */
-#define JLINALG_ABI_VERSION 10
+#define JLINALG_ABI_VERSION 11
 
 /* ---------------------------------------------------------------------------
  * Function-pointer typedefs for ISA-dispatched microkernels
@@ -636,6 +637,17 @@ int jlinalg_dormtr_c(npy_intp N, npy_intp M,
                    const double *A, npy_intp lda, const double *tau,
                    double *C, npy_intp ldc,
                    jlinalg_workspace_t *ws);
+
+/* ---------------------------------------------------------------------------
+ * snp_stats: single-pass per-SNP statistics (mean, variance, miss, HWE)
+ * ---------------------------------------------------------------------------
+ */
+void snp_stats_chunk_f32(const float *data, npy_intp n_samples, npy_intp n_snps_chunk,
+                         double *means, npy_intp *miss_counts, double *variances,
+                         int64_t *n_aa, int64_t *n_ab, int64_t *n_bb, int compute_hwe);
+void snp_stats_chunk_f64(const double *data, npy_intp n_samples, npy_intp n_snps_chunk,
+                         double *means, npy_intp *miss_counts, double *variances,
+                         int64_t *n_aa, int64_t *n_ab, int64_t *n_bb, int compute_hwe);
 
 /* ---------------------------------------------------------------------------
  * Initialisation and introspection

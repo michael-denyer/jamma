@@ -44,7 +44,7 @@ pip install jamma          # NumPy backend
 pip install 'jamma[jax]'   # + JAX acceleration
 ```
 
-For large-scale GWAS (>46k samples) on **x86_64** (Linux or Intel Mac), install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first — standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. MKL is x86_64-only; ARM Mac and Windows users are limited to <46k samples. Pre-built ILP64 wheels are available for Python 3.11–3.14:
+For large-scale GWAS (>46k samples) on **x86_64** (Linux or Intel Mac), install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first — standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. MKL is x86_64-only; Windows users are limited to <46k samples (ARM Mac uses Accelerate-ILP64 natively). Pre-built ILP64 wheels are available for Python 3.11–3.14:
 
 **NumPy backend only:**
 
@@ -87,10 +87,10 @@ See the [User Guide](docs/USER_GUIDE.md#linux--windows) for ILP64 verification s
 |----------|---------------------|--------------------------|------|-------|
 | Linux x86_64 (Intel) | JAX (auto-included) | — | MKL (optimal) | Best performance; ILP64 for >46k samples |
 | Linux x86_64 (AMD) | JAX (auto-included) | — | OpenBLAS | Works well; MKL also works on AMD but less optimized |
-| ARM Mac (M1+) | JAX (auto-included) | — | Accelerate | Excellent performance via Apple's BLAS |
+| ARM Mac (M1+) | JAX (auto-included) | — | Accelerate | Excellent performance; ILP64 via Accelerate for >46k samples |
 | ARM Linux | NumPy only | JAX manual install | OpenBLAS | Works correctly; less BLAS optimization |
 | Intel Mac | NumPy only | Not available | MKL / Accelerate | JAX dropped Intel Mac; ILP64 for >46k samples |
-| Windows | NumPy only | Not available | OpenBLAS | JAX dropped Windows support |
+| Windows | NumPy only | Not available | OpenBLAS | JAX dropped Windows support; limited to <46k samples |
 
 JAMMA's heavy computation (eigendecomposition, matrix multiplication, REML optimization) is BLAS-bound. Intel MKL delivers the best throughput, particularly at scale. Apple Accelerate is a close second on Apple Silicon. OpenBLAS works correctly everywhere but is less tuned for these workloads.
 
@@ -251,10 +251,10 @@ Best-of runs, end-to-end wall clock:
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | JAMMA JAX (batch) | JAMMA JAX (streaming) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-------------------|----------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 2.2s | 1.7s | 262ms | 262ms | — | — | — | 1.0x | **8.4x** | **6.5x** |
-| LMM Wald (`-lmm 1`) | 11.3s | 7.8s | 4.1s | 1.0s | 1.2s | 2.1s | 2.5s | 4.1x | **11.3x** | **7.8x** |
-| LMM All (`-lmm 4`) | 20.7s | 14.2s | 6.0s | 1.3s | 1.5s | 2.8s | 4.2s | 4.6x | **15.9x** | **10.9x** |
-| LMM Wald+4cov (`-lmm 1 -c`) | 41.4s | 18.8s | 9.1s | 2.5s | 2.6s | 4.1s | 5.2s | 3.6x | **16.6x** | **7.5x** |
+| Kinship (`-gk 1`) | 2.1s | 1.7s | 262ms | 262ms | — | — | — | 1.0x | **8.0x** | **6.5x** |
+| LMM Wald (`-lmm 1`) | 11.1s | 7.6s | 3.9s | 989ms | 1.1s | 2.0s | 2.5s | 3.9x | **11.2x** | **7.7x** |
+| LMM All (`-lmm 4`) | 20.5s | 13.9s | 5.9s | 1.3s | 1.4s | 2.8s | 4.1s | 4.5x | **15.8x** | **10.7x** |
+| LMM Wald+4cov (`-lmm 1 -c`) | 40.8s | 18.8s | 9.1s | 2.4s | 2.6s | 4.1s | 5.1s | 3.8x | **17.0x** | **7.8x** |
 
 GEMMA (Accelerate) is GEMMA 0.98.5 compiled against Apple's Accelerate framework instead of Homebrew OpenBLAS — **1.3–2.2x faster** due to AMX-accelerated BLAS, with identical numerical results. **NumPy+C** uses a C extension with OpenMP for Wald (`-lmm 1`) — REML optimization is compute-bound and parallelizes well across SNPs. The C speedup grows with covariates because the Pab table recursion is more expensive. NumPy+C is the fastest backend at all modes including all-tests (`-lmm 4`) at mouse scale. **NumPy+C (stream)** reads genotypes from disk in chunks — slightly slower than batch but the production code path for large datasets that don't fit in memory. **JAX (batch)** uses `jax.vmap` batching for MLE optimization. **JAX (streaming)** is the JAX equivalent of disk-streaming. Kinship is always pure NumPy/BLAS regardless of backend.
 
@@ -262,9 +262,9 @@ GEMMA (Accelerate) is GEMMA 0.98.5 compiled against Apple's Accelerate framework
 
 | Backend | LOCO Wald | vs GEMMA |
 |---------|-----------|----------|
-| GEMMA 0.98.5 | 4m1s | 1.0x |
-| JAMMA NumPy+C | **7.6s** | **31.8x** |
-| JAMMA JAX | 11.7s | 20.7x |
+| GEMMA 0.98.5 | 3m31s | 1.0x |
+| JAMMA NumPy+C | **7.3s** | **28.8x** |
+| JAMMA JAX | 11.6s | 18.1x |
 
 The large speedup has two sources: (1) JAMMA computes per-chromosome LOCO kinship via streaming and tests only that chromosome's SNPs, while GEMMA `-loco` tests *all* SNPs against each LOCO kinship (19× redundant work on 19 chromosomes); (2) JAMMA runs all chromosomes in a single process, avoiding 19 cold-start overheads. On this dataset, NumPy+C is faster than JAX because the JIT compilation overhead per chromosome outweighs XLA's compute benefit at 1,940 samples.
 

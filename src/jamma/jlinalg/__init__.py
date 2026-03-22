@@ -30,6 +30,8 @@ Exports:
     JLINALG_KC: KC blocking depth (ISA-specific; generic fallback: 128).
     JLINALG_MC: MC row panel size (ISA-specific; generic fallback: 32).
     JLINALG_NC: NC column panel size (ISA-specific; generic fallback: 1024).
+    compute_snp_stats_chunk: Single-pass per-SNP statistics (mean, variance,
+        miss count, optional HWE genotype counts).
 """
 
 from __future__ import annotations
@@ -56,6 +58,7 @@ try:
         blas_has_dsyrk,
         blas_has_lapacke_dsyevd,
         blas_is_ilp64,
+        compute_snp_stats_chunk,
         daxpy,
         ddot,
         dgemm,
@@ -113,7 +116,50 @@ except ImportError as _exc:
     JLINALG_MC: int = 32
     JLINALG_NC: int = 1024
 
+    import warnings as _warnings
+
     import numpy as _np
+
+    def compute_snp_stats_chunk(
+        data: _np.ndarray,
+        means: _np.ndarray,
+        miss_counts: _np.ndarray,
+        variances: _np.ndarray,
+        n_aa: _np.ndarray | None = None,
+        n_ab: _np.ndarray | None = None,
+        n_bb: _np.ndarray | None = None,
+    ) -> None:
+        """NumPy fallback for per-SNP statistics into pre-allocated output arrays.
+
+        Computes mean, variance (population), and missing count per column.
+        Optionally counts genotype values (0, 1, 2) for HWE testing.
+
+        Note: this fallback uses multiple NumPy passes; the C kernel is single-pass.
+
+        Args:
+            data: Genotype matrix (n_samples, n_snps), float32 or float64, C-contiguous.
+            means: Output array (n_snps,), float64.
+            miss_counts: Output array (n_snps,), intp.
+            variances: Output array (n_snps,), float64.
+            n_aa: Output array (n_snps,), int64 (None to skip HWE).
+            n_ab: Output array (n_snps,), int64 (None to skip HWE).
+            n_bb: Output array (n_snps,), int64 (None to skip HWE).
+        """
+        mc = _np.sum(_np.isnan(data), axis=0)
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("ignore", RuntimeWarning)
+            m = _np.nanmean(data, axis=0)
+            v = _np.nanvar(data, axis=0)
+        m = _np.nan_to_num(m, nan=0.0)
+        v = _np.nan_to_num(v, nan=0.0)
+        means[:] = m
+        miss_counts[:] = mc
+        variances[:] = v
+        if n_aa is not None and n_ab is not None and n_bb is not None:
+            valid = ~_np.isnan(data)
+            n_aa[:] = _np.sum((data == 0) & valid, axis=0)
+            n_ab[:] = _np.sum((data == 1) & valid, axis=0)
+            n_bb[:] = _np.sum((data == 2) & valid, axis=0)
 
     def ddot(x: _np.ndarray, y: _np.ndarray) -> float:
         """Compute inner product of two double vectors.
@@ -475,6 +521,7 @@ except ImportError as _exc:
 __all__ = [
     "ABI_VERSION",
     "blas_backend",
+    "compute_snp_stats_chunk",
     "blas_has_dgeqrf",
     "blas_has_dgesvd",
     "blas_has_dsyevd",

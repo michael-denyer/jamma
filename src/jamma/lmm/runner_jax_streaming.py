@@ -24,6 +24,7 @@ from jamma.io.plink import (
     stream_genotype_chunks,
     validate_genotype_values,
 )
+from jamma.jlinalg import compute_snp_stats_chunk
 from jamma.lmm.chunk import _compute_chunk_size, compute_subchunk_starts
 from jamma.lmm.compute import (
     _compute_lmm_chunk,
@@ -182,7 +183,7 @@ def _run_lmm_jax_streaming_impl(
     # === PASS 1: SNP statistics (without loading all genotypes) ===
     t_io_start = time.perf_counter()
     all_means = np.zeros(n_snps, dtype=np.float64)
-    all_miss_counts = np.zeros(n_snps, dtype=np.int32)
+    all_miss_counts = np.zeros(n_snps, dtype=np.intp)
     all_vars = np.zeros(n_snps, dtype=np.float64)
 
     # HWE genotype count accumulators (only when threshold > 0)
@@ -209,24 +210,17 @@ def _run_lmm_jax_streaming_impl(
             if needs_sample_filter:
                 chunk = chunk[valid_mask, :]
 
-            # Compute stats for this chunk
-            chunk_miss_counts = np.sum(np.isnan(chunk), axis=0)
-            with np.errstate(invalid="ignore"):
-                chunk_means = np.nanmean(chunk, axis=0)
-                chunk_vars = np.nanvar(chunk, axis=0)
-            chunk_means = np.nan_to_num(chunk_means, nan=0.0)
-            chunk_vars = np.nan_to_num(chunk_vars, nan=0.0)
-
-            all_means[start:end] = chunk_means
-            all_miss_counts[start:end] = chunk_miss_counts
-            all_vars[start:end] = chunk_vars
-
-            # Accumulate HWE genotype counts (no extra disk pass)
-            if hwe_threshold > 0:
-                valid_geno = ~np.isnan(chunk)
-                all_n_aa[start:end] += np.sum((chunk == 0) & valid_geno, axis=0)
-                all_n_ab[start:end] += np.sum((chunk == 1) & valid_geno, axis=0)
-                all_n_bb[start:end] += np.sum((chunk == 2) & valid_geno, axis=0)
+            # Single-pass C kernel: mean, miss_count, variance, optional HWE counts
+            chunk = np.ascontiguousarray(chunk)
+            compute_snp_stats_chunk(
+                chunk,
+                all_means[start:end],
+                all_miss_counts[start:end],
+                all_vars[start:end],
+                all_n_aa[start:end] if hwe_threshold > 0 else None,
+                all_n_ab[start:end] if hwe_threshold > 0 else None,
+                all_n_bb[start:end] if hwe_threshold > 0 else None,
+            )
 
             if validate_genotypes:
                 n_unexpected_total += validate_genotype_values(chunk)

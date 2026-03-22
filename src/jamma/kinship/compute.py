@@ -50,6 +50,7 @@ from jamma.io.plink import (
     partitions_from_metadata,
     stream_genotype_chunks,
 )
+from jamma.jlinalg import compute_snp_stats_chunk
 from jamma.kinship.missing import impute_and_center, impute_center_and_standardize
 from jamma.utils import chr_sort_key
 
@@ -642,7 +643,7 @@ def compute_kinship_streaming(
     # === PASS 1: Compute per-SNP statistics for filtering ===
     # Always compute stats for monomorphic filtering (GEMMA behavior)
     all_means = np.zeros(n_snps, dtype=np.float64)
-    all_miss_counts = np.zeros(n_snps, dtype=np.int32)
+    all_miss_counts = np.zeros(n_snps, dtype=np.intp)
     all_vars = np.zeros(n_snps, dtype=np.float64)
 
     stats_iterator = stream_genotype_chunks(
@@ -658,17 +659,13 @@ def compute_kinship_streaming(
         # Early valid-sample subsetting: compute stats on valid samples only.
         if valid_indices is not None:
             chunk = chunk[valid_indices, :]
-        chunk_miss_counts = np.sum(np.isnan(chunk), axis=0)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            chunk_means = np.nanmean(chunk, axis=0)
-            chunk_vars = np.nanvar(chunk, axis=0)
-        chunk_means = np.nan_to_num(chunk_means, nan=0.0)
-        chunk_vars = np.nan_to_num(chunk_vars, nan=0.0)
-
-        all_means[start:end] = chunk_means
-        all_miss_counts[start:end] = chunk_miss_counts
-        all_vars[start:end] = chunk_vars
+        chunk = np.ascontiguousarray(chunk)
+        compute_snp_stats_chunk(
+            chunk,
+            all_means[start:end],
+            all_miss_counts[start:end],
+            all_vars[start:end],
+        )
         del chunk  # Free ~1.6GB per chunk at scale before next iteration
 
     # Compute filters (free source arrays immediately after deriving values)
@@ -1074,7 +1071,7 @@ def compute_loco_kinship_streaming(
     # population to match GEMMA's behaviour. valid_indices only affects PASS 2
     # kinship accumulation, not which SNPs are included.
     all_means = np.zeros(n_snps, dtype=np.float64)
-    all_miss_counts = np.zeros(n_snps, dtype=np.int32)
+    all_miss_counts = np.zeros(n_snps, dtype=np.intp)
     all_vars = np.zeros(n_snps, dtype=np.float64)
 
     stats_iterator = stream_genotype_chunks(
@@ -1087,17 +1084,13 @@ def compute_loco_kinship_streaming(
         )
 
     for chunk, start, end in stats_iterator:
-        chunk_miss_counts = np.sum(np.isnan(chunk), axis=0)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            chunk_means = np.nanmean(chunk, axis=0)
-            chunk_vars = np.nanvar(chunk, axis=0)
-        chunk_means = np.nan_to_num(chunk_means, nan=0.0)
-        chunk_vars = np.nan_to_num(chunk_vars, nan=0.0)
-
-        all_means[start:end] = chunk_means
-        all_miss_counts[start:end] = chunk_miss_counts
-        all_vars[start:end] = chunk_vars
+        chunk = np.ascontiguousarray(chunk)
+        compute_snp_stats_chunk(
+            chunk,
+            all_means[start:end],
+            all_miss_counts[start:end],
+            all_vars[start:end],
+        )
         del chunk  # Free ~1.6GB per chunk at scale before next iteration
 
     # Compute filters

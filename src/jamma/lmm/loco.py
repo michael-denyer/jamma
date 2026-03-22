@@ -35,6 +35,7 @@ from jamma.io.plink import (
     stream_genotype_chunks,
     validate_genotype_values,
 )
+from jamma.jlinalg import compute_snp_stats_chunk
 from jamma.kinship import write_kinship_matrix
 from jamma.kinship.missing import impute_and_center
 from jamma.lmm.compute_numpy import _compute_lmm_chunk_numpy
@@ -121,7 +122,7 @@ def _collect_chr_snp_stats(
     """
     n_chr_snps = len(chr_snp_indices)
     col_means = np.zeros(n_chr_snps, dtype=np.float64)
-    miss_counts = np.zeros(n_chr_snps, dtype=np.int32)
+    miss_counts = np.zeros(n_chr_snps, dtype=np.intp)
     col_vars = np.zeros(n_chr_snps, dtype=np.float64)
     n_unexpected_total = 0
 
@@ -138,16 +139,13 @@ def _collect_chr_snp_stats(
 
             n_unexpected_total += validate_genotype_values(geno_chunk)
 
-            chunk_miss = np.sum(np.isnan(geno_chunk), axis=0)
-            with np.errstate(invalid="ignore"):
-                chunk_means = np.nanmean(geno_chunk, axis=0)
-                chunk_vars = np.nanvar(geno_chunk, axis=0)
-            chunk_means = np.nan_to_num(chunk_means, nan=0.0)
-            chunk_vars = np.nan_to_num(chunk_vars, nan=0.0)
-
-            col_means[chunk_start:chunk_end] = chunk_means
-            miss_counts[chunk_start:chunk_end] = chunk_miss
-            col_vars[chunk_start:chunk_end] = chunk_vars
+            geno_chunk = np.ascontiguousarray(geno_chunk)
+            compute_snp_stats_chunk(
+                geno_chunk,
+                col_means[chunk_start:chunk_end],
+                miss_counts[chunk_start:chunk_end],
+                col_vars[chunk_start:chunk_end],
+            )
 
             del geno_chunk
 
@@ -313,7 +311,7 @@ def _compute_loco_kinship_streaming_numpy(
     # compute_kinship_streaming subsets in PASS 1 because it's standalone
     # kinship where the caller has already decided which samples matter.
     all_means = np.zeros(n_snps, dtype=np.float64)
-    all_miss_counts = np.zeros(n_snps, dtype=np.int32)
+    all_miss_counts = np.zeros(n_snps, dtype=np.intp)
     all_vars = np.zeros(n_snps, dtype=np.float64)
     n_unexpected_total = 0
 
@@ -327,16 +325,13 @@ def _compute_loco_kinship_streaming_numpy(
 
     for chunk, start, end in stats_iterator:
         n_unexpected_total += validate_genotype_values(chunk)
-        chunk_miss_counts = np.sum(np.isnan(chunk), axis=0)
-        with np.errstate(invalid="ignore"):
-            chunk_means = np.nanmean(chunk, axis=0)
-            chunk_vars = np.nanvar(chunk, axis=0)
-        chunk_means = np.nan_to_num(chunk_means, nan=0.0)
-        chunk_vars = np.nan_to_num(chunk_vars, nan=0.0)
-
-        all_means[start:end] = chunk_means
-        all_miss_counts[start:end] = chunk_miss_counts
-        all_vars[start:end] = chunk_vars
+        chunk = np.ascontiguousarray(chunk)
+        compute_snp_stats_chunk(
+            chunk,
+            all_means[start:end],
+            all_miss_counts[start:end],
+            all_vars[start:end],
+        )
         del chunk
 
     if n_unexpected_total > 0:

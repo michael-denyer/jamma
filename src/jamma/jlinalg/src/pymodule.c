@@ -1085,6 +1085,181 @@ py_get_n_threads(PyObject *self, PyObject *args)
 }
 
 /* ---------------------------------------------------------------------------
+ * py_compute_snp_stats_chunk — Single-pass per-SNP statistics.
+ *
+ * Signature: compute_snp_stats_chunk(data, means, miss_counts, vars
+ *                                    [, n_aa, n_ab, n_bb])
+ * ---------------------------------------------------------------------------
+ */
+static PyObject *
+py_compute_snp_stats_chunk(PyObject *self, PyObject *args)
+{
+    (void)self;
+    PyObject *o_data, *o_means, *o_miss, *o_vars;
+    PyObject *o_naa = Py_None, *o_nab = Py_None, *o_nbb = Py_None;
+
+    if (!PyArg_ParseTuple(args, "OOOO|OOO",
+            &o_data, &o_means, &o_miss, &o_vars,
+            &o_naa, &o_nab, &o_nbb))
+        return NULL;
+
+    /* Extract data array — accept both float32 and float64.
+     * First probe the dtype, then convert with the correct typenum to ensure
+     * native byte order (NPY_ARRAY_C_CONTIGUOUS alone does not byteswap). */
+    PyArrayObject *a_probe = (PyArrayObject *)PyArray_FROM_OTF(
+        o_data, NPY_NOTYPE, NPY_ARRAY_C_CONTIGUOUS);
+    if (!a_probe) return NULL;
+
+    int dtype = PyArray_TYPE(a_probe);
+    Py_DECREF(a_probe);
+    if (dtype != NPY_FLOAT32 && dtype != NPY_FLOAT64) {
+        PyErr_SetString(PyExc_TypeError,
+            "compute_snp_stats_chunk: data must be float32 or float64");
+        return NULL;
+    }
+    /* Re-convert with explicit typenum to force native-endian + contiguous */
+    PyArrayObject *a_data = (PyArrayObject *)PyArray_FROM_OTF(
+        o_data, dtype, NPY_ARRAY_C_CONTIGUOUS);
+    if (!a_data) return NULL;
+    if (PyArray_NDIM(a_data) != 2) {
+        Py_DECREF(a_data);
+        PyErr_SetString(PyExc_ValueError,
+            "compute_snp_stats_chunk: data must be 2-D");
+        return NULL;
+    }
+
+    npy_intp n_samples = PyArray_DIM(a_data, 0);
+    npy_intp n_snps = PyArray_DIM(a_data, 1);
+
+    /* Validate HWE args: all-None or all-array, not a mix */
+    int naa_none = (o_naa == Py_None);
+    int nab_none = (o_nab == Py_None);
+    int nbb_none = (o_nbb == Py_None);
+    int n_hwe_none = naa_none + nab_none + nbb_none;
+    if (n_hwe_none != 0 && n_hwe_none != 3) {
+        Py_DECREF(a_data);
+        PyErr_SetString(PyExc_ValueError,
+            "compute_snp_stats_chunk: n_aa, n_ab, n_bb must all be arrays "
+            "or all None");
+        return NULL;
+    }
+
+    /* Extract output arrays with INOUT for writeable access */
+    PyArrayObject *a_means = (PyArrayObject *)PyArray_FROM_OTF(
+        o_means, NPY_DOUBLE, NPY_ARRAY_INOUT_ARRAY2);
+    PyArrayObject *a_miss = (PyArrayObject *)PyArray_FROM_OTF(
+        o_miss, NPY_INTP, NPY_ARRAY_INOUT_ARRAY2);
+    PyArrayObject *a_vars = (PyArrayObject *)PyArray_FROM_OTF(
+        o_vars, NPY_DOUBLE, NPY_ARRAY_INOUT_ARRAY2);
+
+    if (!a_means || !a_miss || !a_vars) {
+        Py_DECREF(a_data);
+        if (a_means) PyArray_DiscardWritebackIfCopy(a_means);
+        if (a_miss)  PyArray_DiscardWritebackIfCopy(a_miss);
+        if (a_vars)  PyArray_DiscardWritebackIfCopy(a_vars);
+        Py_XDECREF(a_means); Py_XDECREF(a_miss); Py_XDECREF(a_vars);
+        return NULL;
+    }
+
+    /* Validate output array sizes match data columns */
+    if (PyArray_SIZE(a_means) < n_snps ||
+        PyArray_SIZE(a_miss) < n_snps ||
+        PyArray_SIZE(a_vars) < n_snps) {
+        PyErr_Format(PyExc_ValueError,
+            "compute_snp_stats_chunk: output arrays must have at least %zd "
+            "elements (data has %zd columns), got means=%zd, miss=%zd, "
+            "vars=%zd",
+            (Py_ssize_t)n_snps, (Py_ssize_t)n_snps,
+            (Py_ssize_t)PyArray_SIZE(a_means),
+            (Py_ssize_t)PyArray_SIZE(a_miss),
+            (Py_ssize_t)PyArray_SIZE(a_vars));
+        Py_DECREF(a_data);
+        PyArray_DiscardWritebackIfCopy(a_means);
+        PyArray_DiscardWritebackIfCopy(a_miss);
+        PyArray_DiscardWritebackIfCopy(a_vars);
+        Py_DECREF(a_means); Py_DECREF(a_miss); Py_DECREF(a_vars);
+        return NULL;
+    }
+
+    /* HWE arrays (optional — None means no HWE) */
+    int compute_hwe = 0;
+    PyArrayObject *a_naa = NULL, *a_nab = NULL, *a_nbb = NULL;
+    int64_t *naa_ptr = NULL, *nab_ptr = NULL, *nbb_ptr = NULL;
+    if (n_hwe_none == 0) {
+        compute_hwe = 1;
+        a_naa = (PyArrayObject *)PyArray_FROM_OTF(o_naa, NPY_INT64, NPY_ARRAY_INOUT_ARRAY2);
+        a_nab = (PyArrayObject *)PyArray_FROM_OTF(o_nab, NPY_INT64, NPY_ARRAY_INOUT_ARRAY2);
+        a_nbb = (PyArrayObject *)PyArray_FROM_OTF(o_nbb, NPY_INT64, NPY_ARRAY_INOUT_ARRAY2);
+        if (!a_naa || !a_nab || !a_nbb) {
+            Py_DECREF(a_data);
+            PyArray_DiscardWritebackIfCopy(a_means);
+            PyArray_DiscardWritebackIfCopy(a_miss);
+            PyArray_DiscardWritebackIfCopy(a_vars);
+            Py_DECREF(a_means); Py_DECREF(a_miss); Py_DECREF(a_vars);
+            if (a_naa) PyArray_DiscardWritebackIfCopy(a_naa);
+            if (a_nab) PyArray_DiscardWritebackIfCopy(a_nab);
+            if (a_nbb) PyArray_DiscardWritebackIfCopy(a_nbb);
+            Py_XDECREF(a_naa); Py_XDECREF(a_nab); Py_XDECREF(a_nbb);
+            return NULL;
+        }
+        if (PyArray_SIZE(a_naa) < n_snps ||
+            PyArray_SIZE(a_nab) < n_snps ||
+            PyArray_SIZE(a_nbb) < n_snps) {
+            PyErr_Format(PyExc_ValueError,
+                "compute_snp_stats_chunk: HWE arrays must have at least %zd "
+                "elements, got n_aa=%zd, n_ab=%zd, n_bb=%zd",
+                (Py_ssize_t)n_snps,
+                (Py_ssize_t)PyArray_SIZE(a_naa),
+                (Py_ssize_t)PyArray_SIZE(a_nab),
+                (Py_ssize_t)PyArray_SIZE(a_nbb));
+            Py_DECREF(a_data);
+            PyArray_DiscardWritebackIfCopy(a_means);
+            PyArray_DiscardWritebackIfCopy(a_miss);
+            PyArray_DiscardWritebackIfCopy(a_vars);
+            Py_DECREF(a_means); Py_DECREF(a_miss); Py_DECREF(a_vars);
+            PyArray_DiscardWritebackIfCopy(a_naa);
+            PyArray_DiscardWritebackIfCopy(a_nab);
+            PyArray_DiscardWritebackIfCopy(a_nbb);
+            Py_DECREF(a_naa); Py_DECREF(a_nab); Py_DECREF(a_nbb);
+            return NULL;
+        }
+        naa_ptr = (int64_t *)PyArray_DATA(a_naa);
+        nab_ptr = (int64_t *)PyArray_DATA(a_nab);
+        nbb_ptr = (int64_t *)PyArray_DATA(a_nbb);
+    }
+
+    /* Dispatch based on dtype — release GIL for the C kernel */
+    Py_BEGIN_ALLOW_THREADS
+    if (dtype == NPY_FLOAT32) {
+        snp_stats_chunk_f32(
+            (const float *)PyArray_DATA(a_data), n_samples, n_snps,
+            (double *)PyArray_DATA(a_means), (npy_intp *)PyArray_DATA(a_miss),
+            (double *)PyArray_DATA(a_vars),
+            naa_ptr, nab_ptr, nbb_ptr, compute_hwe);
+    } else {
+        snp_stats_chunk_f64(
+            (const double *)PyArray_DATA(a_data), n_samples, n_snps,
+            (double *)PyArray_DATA(a_means), (npy_intp *)PyArray_DATA(a_miss),
+            (double *)PyArray_DATA(a_vars),
+            naa_ptr, nab_ptr, nbb_ptr, compute_hwe);
+    }
+    Py_END_ALLOW_THREADS
+
+    /* Resolve INOUT arrays */
+    PyArray_ResolveWritebackIfCopy(a_means);
+    PyArray_ResolveWritebackIfCopy(a_miss);
+    PyArray_ResolveWritebackIfCopy(a_vars);
+    if (a_naa) PyArray_ResolveWritebackIfCopy(a_naa);
+    if (a_nab) PyArray_ResolveWritebackIfCopy(a_nab);
+    if (a_nbb) PyArray_ResolveWritebackIfCopy(a_nbb);
+
+    Py_DECREF(a_data);
+    Py_DECREF(a_means); Py_DECREF(a_miss); Py_DECREF(a_vars);
+    Py_XDECREF(a_naa); Py_XDECREF(a_nab); Py_XDECREF(a_nbb);
+    Py_RETURN_NONE;
+}
+
+/* ---------------------------------------------------------------------------
  * Method table
  * ---------------------------------------------------------------------------
  */
@@ -1133,6 +1308,9 @@ static PyMethodDef JlinalgMethods[] = {
     {"get_n_threads", py_get_n_threads, METH_NOARGS,
         "get_n_threads() -> int\n"
         "Get current jlinalg thread count."},
+    {"compute_snp_stats_chunk", py_compute_snp_stats_chunk, METH_VARARGS,
+        "compute_snp_stats_chunk(data, means, miss_counts, vars[, n_aa, n_ab, n_bb])\n"
+        "Single-pass per-SNP statistics into pre-allocated output arrays."},
     {NULL, NULL, 0, NULL}
 };
 

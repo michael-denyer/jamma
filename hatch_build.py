@@ -534,6 +534,7 @@ class CustomBuildHook(BuildHookInterface):
             jlinalg_src / "dgemm_generic.c",  # generic scalar microkernel
             jlinalg_src / "dsyrk.c",  # symmetric rank-k update
             jlinalg_src / "dsyr2k.c",  # symmetric rank-2k update
+            jlinalg_src / "snp_stats.c",  # single-pass SNP statistics
         ]
         simd_sources = [
             jlinalg_src / "ddot.c",

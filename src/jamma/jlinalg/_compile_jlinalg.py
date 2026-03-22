@@ -141,6 +141,7 @@ def compile_extension(verbose: bool = False) -> bool:
         jlinalg_src_dir / "blas_dispatch.c",  # external BLAS discovery
         jlinalg_src_dir / "dsyrk.c",
         jlinalg_src_dir / "dsyr2k.c",
+        jlinalg_src_dir / "snp_stats.c",
     ]
     # LAPACK sources: strict IEEE 754 required for secular equation deflation.
     # Compiled with -O2 -fno-fast-math — MUST NOT get -ffast-math or -funroll-loops.
@@ -519,6 +520,7 @@ def compile_test_harness(verbose: bool = True) -> Path:
         jlinalg_src_dir / "blas_dispatch.c",
         jlinalg_src_dir / "dsyrk.c",
         jlinalg_src_dir / "dsyr2k.c",
+        jlinalg_src_dir / "snp_stats.c",
     ]
     lapack_sources = [
         jlinalg_src_dir / "dsytrd.c",

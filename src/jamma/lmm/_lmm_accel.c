@@ -8,7 +8,8 @@
  *                     compute_score_batch_c, compute_lrt_batch_c,
  *                     compute_score_batch_general_c, compute_lrt_batch_general_c,
  *                     create_workspace_mode4_split_c, compute_mode4_chunk_split_c,
- *                     compute_score_split_c, compute_lrt_split_c
+ *                     compute_score_split_c, compute_lrt_split_c,
+ *                     compute_score_fused_c, compute_lrt_fused_c
  *
  * Translates the Python/NumPy golden-section REML/MLE optimizer + Wald/Score/LRT
  * test pipelines (likelihood_numpy.py) to C with optional OpenMP parallelism.
@@ -74,7 +75,7 @@
 
 /* ABI version: bump when function signatures or array layout expectations change.
  * The Python side checks this at import time to detect stale .so files. */
-#define ABI_VERSION 9  /* v9: Fused general Uab -- general n_cvt fused kernels */
+#define ABI_VERSION 10  /* v10: Fused Score/LRT from utg_t (no uab_varying_soa) */
 
 /* Betainc continued fraction constants — matches special.py */
 #define CF_TINY     1.0e-30
@@ -7707,6 +7708,267 @@ err_input_score_split:
 }
 
 /* =========================================================================
+ * FUSED SCORE — compute_score_fused_c
+ *
+ * Score test accepting utg_t directly instead of pre-materialized
+ * uab_varying_soa. Computes wx/xx/xy dot products on-the-fly from
+ * utg_t columns, eliminating the 3x intermediate buffer.
+ * ========================================================================= */
+
+/* -------------------------------------------------------------------------
+ * compute_score_fused_c
+ *
+ * Args: utg_t (n_snps, n_samples), w (n_samples,), Uty (n_samples,),
+ *       Hi_eval_null (n_samples,), uab_invariant_soa (3, n_samples),
+ *       eigenvalues (n_samples,), n_samples, n_threads
+ * Returns: dict with keys betas, ses, p_scores (each n_snps,)
+ * ------------------------------------------------------------------------- */
+static PyObject *compute_score_fused_c(PyObject *self, PyObject *args)
+{
+    PyObject *utg_t_obj, *w_obj, *Uty_obj, *hi_eval_null_obj;
+    PyObject *uab_inv_obj, *eigenvalues_obj;
+    int n_samples, n_threads;
+    PyArrayObject *utg_t_arr = NULL, *w_arr = NULL, *Uty_arr = NULL;
+    PyArrayObject *hi_eval_null_arr = NULL, *uab_inv_arr = NULL;
+    PyArrayObject *eigenvalues_arr = NULL;
+
+    if (!PyArg_ParseTuple(args, "OOOOOOii",
+            &utg_t_obj, &w_obj, &Uty_obj, &hi_eval_null_obj,
+            &uab_inv_obj, &eigenvalues_obj, &n_samples, &n_threads))
+        return NULL;
+
+    if (n_samples < 3) {
+        PyErr_SetString(PyExc_ValueError, "n_samples must be >= 3");
+        return NULL;
+    }
+
+    /* Convert inputs to C-contiguous double arrays */
+    utg_t_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        utg_t_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!utg_t_arr) goto err_input_score_fused;
+
+    w_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        w_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!w_arr) goto err_input_score_fused;
+
+    Uty_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        Uty_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!Uty_arr) goto err_input_score_fused;
+
+    hi_eval_null_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        hi_eval_null_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!hi_eval_null_arr) goto err_input_score_fused;
+
+    uab_inv_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        uab_inv_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!uab_inv_arr) goto err_input_score_fused;
+
+    eigenvalues_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        eigenvalues_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!eigenvalues_arr) goto err_input_score_fused;
+
+    /* Validate shapes */
+    if (PyArray_NDIM(utg_t_arr) != 2 ||
+        PyArray_DIM(utg_t_arr, 1) != n_samples) {
+        PyErr_Format(PyExc_ValueError,
+            "utg_t must be shape (n_snps, %d)", n_samples);
+        goto err_input_score_fused;
+    }
+    if (PyArray_NDIM(w_arr) != 1 || PyArray_DIM(w_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError, "w must be shape (n_samples,)");
+        goto err_input_score_fused;
+    }
+    if (PyArray_NDIM(Uty_arr) != 1 || PyArray_DIM(Uty_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError, "Uty must be shape (n_samples,)");
+        goto err_input_score_fused;
+    }
+    if (PyArray_NDIM(hi_eval_null_arr) != 1 ||
+        PyArray_DIM(hi_eval_null_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "Hi_eval_null must be shape (n_samples,)");
+        goto err_input_score_fused;
+    }
+    if (PyArray_NDIM(uab_inv_arr) != 2 ||
+        PyArray_DIM(uab_inv_arr, 0) != 3 ||
+        PyArray_DIM(uab_inv_arr, 1) != n_samples) {
+        PyErr_Format(PyExc_ValueError,
+            "uab_invariant_soa must be shape (3, %d)", n_samples);
+        goto err_input_score_fused;
+    }
+    if (PyArray_NDIM(eigenvalues_arr) != 1 ||
+        PyArray_DIM(eigenvalues_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "eigenvalues must be shape (n_samples,)");
+        goto err_input_score_fused;
+    }
+
+    npy_intp n_snps_raw = PyArray_DIM(utg_t_arr, 0);
+    if (n_snps_raw > INT_MAX) {
+        PyErr_Format(PyExc_OverflowError,
+            "n_snps (%" NPY_INTP_FMT ") exceeds INT_MAX; split into smaller batches",
+            n_snps_raw);
+        goto err_input_score_fused;
+    }
+    int n_snps = (int)n_snps_raw;
+    if (n_snps == 0) {
+        PyErr_SetString(PyExc_ValueError, "n_snps must be > 0");
+        goto err_input_score_fused;
+    }
+
+    const double *utg_t_data = (const double *)PyArray_DATA(utg_t_arr);
+    const double *w_data = (const double *)PyArray_DATA(w_arr);
+    const double *Uty_data = (const double *)PyArray_DATA(Uty_arr);
+    const double *hi_eval_null = (const double *)PyArray_DATA(hi_eval_null_arr);
+    const double *uab_inv_data = (const double *)PyArray_DATA(uab_inv_arr);
+    const double *eigenvalues = (const double *)PyArray_DATA(eigenvalues_arr);
+
+    if (validate_eigenvalues(eigenvalues, n_samples) < 0)
+        goto err_input_score_fused;
+
+    /* Validate Hi_eval_null */
+    for (int i = 0; i < n_samples; i++) {
+        char buf[64];
+        if (!isfinite(hi_eval_null[i])) {
+            snprintf(buf, sizeof(buf), "%g", hi_eval_null[i]);
+            PyErr_Format(PyExc_ValueError,
+                "Hi_eval_null[%d] = %s is not finite. "
+                "Null model optimization may have failed.", i, buf);
+            goto err_input_score_fused;
+        }
+        if (hi_eval_null[i] <= 0.0) {
+            snprintf(buf, sizeof(buf), "%g", hi_eval_null[i]);
+            PyErr_Format(PyExc_ValueError,
+                "Hi_eval_null[%d] = %s is not positive. "
+                "Check kinship matrix conditioning.", i, buf);
+            goto err_input_score_fused;
+        }
+    }
+
+    /* Invariant SoA pointers: rows [ww, wy, yy] */
+    const double *inv_ww = uab_inv_data;
+    const double *inv_wy = uab_inv_data + (size_t)n_samples;
+    const double *inv_yy = uab_inv_data + (size_t)2 * n_samples;
+
+    /* Precompute SNP-invariant vectors: h_null * w and h_null * Uty */
+    double *h_null_w = alloc_aligned_doubles((size_t)n_samples);
+    double *h_null_Uty = alloc_aligned_doubles((size_t)n_samples);
+    if (!h_null_w || !h_null_Uty) {
+        free(h_null_w);
+        free(h_null_Uty);
+        PyErr_NoMemory();
+        goto err_input_score_fused;
+    }
+    for (int i = 0; i < n_samples; i++) {
+        h_null_w[i]   = hi_eval_null[i] * w_data[i];
+        h_null_Uty[i] = hi_eval_null[i] * Uty_data[i];
+    }
+
+    /* Pre-compute invariant null-model dot products (shared across SNPs) */
+    double null_s_ww = 0.0, null_s_wy = 0.0, null_s_yy = 0.0;
+    for (int i = 0; i < n_samples; i++) {
+        double h = hi_eval_null[i];
+        null_s_ww += h * inv_ww[i];
+        null_s_wy += h * inv_wy[i];
+        null_s_yy += h * inv_yy[i];
+    }
+
+    /* Allocate output arrays */
+    score_output_t out;
+    if (alloc_score_output(&out, (npy_intp)n_snps) < 0) {
+        free(h_null_w);
+        free(h_null_Uty);
+        PyErr_NoMemory();
+        goto err_input_score_fused;
+    }
+
+    double *out_betas    = (double *)PyArray_DATA(out.betas);
+    double *out_ses      = (double *)PyArray_DATA(out.ses);
+    double *out_p_scores = (double *)PyArray_DATA(out.p_scores);
+
+    /* Pre-compute F-distribution constants */
+    int df = n_samples - 2;  /* n_cvt=1: df = n - n_cvt - 1 */
+    double a = (double)df / 2.0;
+    double b = 0.5;
+    double lbeta_ab = lgamma(a) + lgamma(b) - lgamma(a + b);
+
+    int actual_threads = 1;
+#ifdef _OPENMP
+    if (n_threads > 0) {
+        actual_threads = (n_threads < n_snps) ? n_threads : n_snps;
+    } else {
+        actual_threads = omp_get_max_threads();
+        if (actual_threads > n_snps) actual_threads = n_snps;
+    }
+    if (actual_threads < 1) actual_threads = 1;
+#else
+    (void)n_threads;
+#endif
+
+    Py_BEGIN_ALLOW_THREADS
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) num_threads(actual_threads)
+#endif
+    for (int s = 0; s < n_snps; s++) {
+        const double *x = utg_t_data + (size_t)s * n_samples;
+
+        /* Compute varying null-model dot products on-the-fly from utg_t */
+        double s_wx = 0.0, s_xx = 0.0, s_xy = 0.0;
+        #pragma omp simd reduction(+:s_wx,s_xx,s_xy)
+        for (int i = 0; i < n_samples; i++) {
+            s_wx += h_null_w[i]   * x[i];
+            s_xx += hi_eval_null[i] * x[i] * x[i];
+            s_xy += h_null_Uty[i] * x[i];
+        }
+
+        /* Build Pab from split sums */
+        double pab[3][6];
+        calc_pab_ncvt1_split(null_s_ww, s_wx, null_s_wy,
+                              s_xx, s_xy, null_s_yy, pab);
+
+        double beta, se, f_stat;
+        int is_valid = score_from_pab(pab, n_samples, df, &beta, &se, &f_stat);
+
+        out_betas[s] = beta;
+        out_ses[s] = se;
+        out_p_scores[s] = f_to_pvalue(f_stat, df, is_valid, a, b, lbeta_ab);
+    }
+
+    Py_END_ALLOW_THREADS
+
+    free(h_null_w);
+    free(h_null_Uty);
+
+    if (warn_betainc_convergence(out_betas, out_p_scores, n_snps) < 0) {
+        decref_score_output(&out);
+        Py_DECREF(eigenvalues_arr);
+        Py_DECREF(uab_inv_arr);
+        Py_DECREF(hi_eval_null_arr);
+        Py_DECREF(Uty_arr);
+        Py_DECREF(w_arr);
+        Py_DECREF(utg_t_arr);
+        return NULL;
+    }
+
+    Py_DECREF(eigenvalues_arr);
+    Py_DECREF(uab_inv_arr);
+    Py_DECREF(hi_eval_null_arr);
+    Py_DECREF(Uty_arr);
+    Py_DECREF(w_arr);
+    Py_DECREF(utg_t_arr);
+    return build_score_result_dict(&out);
+
+err_input_score_fused:
+    Py_XDECREF(eigenvalues_arr);
+    Py_XDECREF(uab_inv_arr);
+    Py_XDECREF(hi_eval_null_arr);
+    Py_XDECREF(Uty_arr);
+    Py_XDECREF(w_arr);
+    Py_XDECREF(utg_t_arr);
+    return NULL;
+}
+
+/* =========================================================================
  * SoA-NATIVE LRT SPLIT — compute_lrt_split_c
  *
  * LRT test accepting SoA split data (uab_varying_soa + uab_invariant_soa)
@@ -7962,6 +8224,305 @@ err_input_lrt_split:
     Py_XDECREF(uab_inv_arr);
     Py_XDECREF(uab_var_arr);
     Py_XDECREF(eigenvalues_arr);
+    return NULL;
+}
+
+/* =========================================================================
+ * FUSED LRT — compute_lrt_fused_c
+ *
+ * LRT test accepting utg_t directly instead of pre-materialized
+ * uab_varying_soa. Computes wx/xx/xy on-the-fly from utg_t columns
+ * into per-thread scratch, then calls the existing golden section function.
+ * ========================================================================= */
+
+/* -------------------------------------------------------------------------
+ * compute_lrt_fused_c
+ *
+ * Args: utg_t (n_snps, n_samples), w (n_samples,), Uty (n_samples,),
+ *       eigenvalues (n_samples,), uab_invariant_soa (3, n_samples),
+ *       n_samples, l_min, l_max, n_grid, n_refine, logl_H0, n_threads
+ * Returns: dict with keys lambdas_mle, p_lrts (each n_snps,)
+ * ------------------------------------------------------------------------- */
+static PyObject *compute_lrt_fused_c(PyObject *self, PyObject *args)
+{
+    PyObject *utg_t_obj, *w_obj, *Uty_obj, *eigenvalues_obj, *uab_inv_obj;
+    int n_samples, n_grid, n_refine, n_threads;
+    double l_min, l_max, logl_H0;
+
+    if (!PyArg_ParseTuple(args, "OOOOOiddiidi",
+            &utg_t_obj, &w_obj, &Uty_obj, &eigenvalues_obj, &uab_inv_obj,
+            &n_samples, &l_min, &l_max, &n_grid, &n_refine,
+            &logl_H0, &n_threads))
+        return NULL;
+
+    if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
+        return NULL;
+
+    if (!isfinite(logl_H0)) {
+        PyErr_SetString(PyExc_ValueError,
+            "logl_H0 must be finite (got NaN or Inf from null model)");
+        return NULL;
+    }
+
+    PyArrayObject *utg_t_arr = NULL, *w_arr = NULL, *Uty_arr = NULL;
+    PyArrayObject *eigenvalues_arr = NULL, *uab_inv_arr = NULL;
+
+    utg_t_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        utg_t_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!utg_t_arr) goto err_input_lrt_fused;
+
+    w_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        w_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!w_arr) goto err_input_lrt_fused;
+
+    Uty_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        Uty_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!Uty_arr) goto err_input_lrt_fused;
+
+    eigenvalues_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        eigenvalues_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!eigenvalues_arr) goto err_input_lrt_fused;
+
+    uab_inv_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        uab_inv_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!uab_inv_arr) goto err_input_lrt_fused;
+
+    /* Validate shapes */
+    if (PyArray_NDIM(utg_t_arr) != 2 ||
+        PyArray_DIM(utg_t_arr, 1) != n_samples) {
+        PyErr_Format(PyExc_ValueError,
+            "utg_t must be shape (n_snps, %d)", n_samples);
+        goto err_input_lrt_fused;
+    }
+    if (PyArray_NDIM(w_arr) != 1 || PyArray_DIM(w_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError, "w must be shape (n_samples,)");
+        goto err_input_lrt_fused;
+    }
+    if (PyArray_NDIM(Uty_arr) != 1 || PyArray_DIM(Uty_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError, "Uty must be shape (n_samples,)");
+        goto err_input_lrt_fused;
+    }
+    if (PyArray_NDIM(eigenvalues_arr) != 1 ||
+        PyArray_DIM(eigenvalues_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "eigenvalues must be shape (n_samples,)");
+        goto err_input_lrt_fused;
+    }
+    if (PyArray_NDIM(uab_inv_arr) != 2 ||
+        PyArray_DIM(uab_inv_arr, 0) != 3 ||
+        PyArray_DIM(uab_inv_arr, 1) != n_samples) {
+        PyErr_Format(PyExc_ValueError,
+            "uab_invariant_soa must be shape (3, %d)", n_samples);
+        goto err_input_lrt_fused;
+    }
+
+    npy_intp n_snps_raw = PyArray_DIM(utg_t_arr, 0);
+    if (n_snps_raw > INT_MAX) {
+        PyErr_Format(PyExc_OverflowError,
+            "n_snps (%" NPY_INTP_FMT ") exceeds INT_MAX; split into smaller batches",
+            n_snps_raw);
+        goto err_input_lrt_fused;
+    }
+    int n_snps = (int)n_snps_raw;
+    if (n_snps == 0) {
+        PyErr_SetString(PyExc_ValueError, "n_snps must be > 0");
+        goto err_input_lrt_fused;
+    }
+
+    const double *utg_t_data = (const double *)PyArray_DATA(utg_t_arr);
+    const double *w_data = (const double *)PyArray_DATA(w_arr);
+    const double *Uty_data = (const double *)PyArray_DATA(Uty_arr);
+    const double *eigenvalues = (const double *)PyArray_DATA(eigenvalues_arr);
+    const double *uab_inv_data = (const double *)PyArray_DATA(uab_inv_arr);
+
+    if (validate_eigenvalues(eigenvalues, n_samples) < 0)
+        goto err_input_lrt_fused;
+
+    /* Invariant SoA pointers: rows [ww, wy, yy] */
+    const double *inv_ww = uab_inv_data;
+    const double *inv_wy = uab_inv_data + (size_t)n_samples;
+    const double *inv_yy = uab_inv_data + (size_t)2 * n_samples;
+
+    /* Allocate output arrays */
+    lrt_output_t out;
+    if (alloc_lrt_output(&out, (npy_intp)n_snps) < 0) {
+        PyErr_NoMemory();
+        goto err_input_lrt_fused;
+    }
+
+    double *out_lambdas_mle = (double *)PyArray_DATA(out.lambdas_mle);
+    double *out_p_lrts      = (double *)PyArray_DATA(out.p_lrts);
+
+    /* MLE constant and grid */
+    double n = (double)n_samples;
+    double mle_const = 0.5 * n * (log(n) - log(2.0 * M_PI) - 1.0);
+
+    double log_l_min = log(l_min);
+    double log_l_max = log(l_max);
+    double step = (log_l_max - log_l_min) / (double)(n_grid - 1);
+
+    /* Build lambda grid */
+    double *lambda_grid = (double *)malloc((size_t)n_grid * sizeof(double));
+    if (!lambda_grid) {
+        decref_lrt_output(&out);
+        goto err_nomem_lrt_fused;
+    }
+    for (int g = 0; g < n_grid; g++)
+        lambda_grid[g] = exp(log_l_min + g * step);
+
+    /* Pre-compute hi_eval_grid, logdet_h_grid, and grid_inv (invariant sums) */
+    double *hi_eval_grid = (double *)malloc(
+        (size_t)n_grid * (size_t)n_samples * sizeof(double));
+    double *logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
+    grid_invariant_t *grid_inv = (grid_invariant_t *)malloc(
+        (size_t)n_grid * sizeof(grid_invariant_t));
+    if (!hi_eval_grid || !logdet_h_grid || !grid_inv) {
+        free(lambda_grid);
+        free(hi_eval_grid);
+        free(logdet_h_grid);
+        free(grid_inv);
+        decref_lrt_output(&out);
+        goto err_nomem_lrt_fused;
+    }
+    for (int g = 0; g < n_grid; g++) {
+        double lam = lambda_grid[g];
+        double *hi = hi_eval_grid + (size_t)g * n_samples;
+        double logdet = 0.0;
+        double gs_ww = 0.0, gs_wy = 0.0, gs_yy = 0.0;
+        for (int i = 0; i < n_samples; i++) {
+            double v = lam * eigenvalues[i] + 1.0;
+            double h = 1.0 / v;
+            hi[i] = h;
+            logdet += log(v);
+            gs_ww += h * inv_ww[i];
+            gs_wy += h * inv_wy[i];
+            gs_yy += h * inv_yy[i];
+        }
+        logdet_h_grid[g] = logdet;
+        grid_inv[g].s_ww = gs_ww;
+        grid_inv[g].s_wy = gs_wy;
+        grid_inv[g].s_yy = gs_yy;
+        grid_inv[g].log_s_ww = (gs_ww > 0.0) ? log(gs_ww) : 0.0;
+        grid_inv[g].inv_s_ww = (gs_ww != 0.0) ? 1.0 / gs_ww : 0.0;
+        grid_inv[g].pab1_5 = gs_yy - gs_wy * gs_wy * grid_inv[g].inv_s_ww;
+    }
+
+    /* Pre-allocate per-thread hi_eval buffers and scratch for vwx/vxx/vxy */
+    int actual_threads = 1;
+#ifdef _OPENMP
+    if (n_threads > 0) {
+        actual_threads = (n_threads < n_snps) ? n_threads : n_snps;
+    } else {
+        actual_threads = omp_get_max_threads();
+        if (actual_threads > n_snps) actual_threads = n_snps;
+    }
+    if (actual_threads < 1) actual_threads = 1;
+#else
+    (void)n_threads;
+#endif
+
+    double **thread_bufs = (double **)calloc((size_t)actual_threads, sizeof(double *));
+    double **thread_scratch = (double **)calloc((size_t)actual_threads, sizeof(double *));
+    int alloc_ok = (thread_bufs != NULL && thread_scratch != NULL);
+    if (alloc_ok) {
+        for (int t = 0; t < actual_threads; t++) {
+            thread_bufs[t] = alloc_aligned_doubles((size_t)n_samples);
+            thread_scratch[t] = alloc_aligned_doubles((size_t)3 * n_samples);
+            if (!thread_bufs[t] || !thread_scratch[t]) { alloc_ok = 0; break; }
+        }
+    }
+    if (!alloc_ok) {
+        if (thread_bufs) {
+            for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]);
+            free(thread_bufs);
+        }
+        if (thread_scratch) {
+            for (int t = 0; t < actual_threads; t++) free(thread_scratch[t]);
+            free(thread_scratch);
+        }
+        free(lambda_grid);
+        free(hi_eval_grid);
+        free(logdet_h_grid);
+        free(grid_inv);
+        decref_lrt_output(&out);
+        goto err_nomem_lrt_fused;
+    }
+
+    Py_BEGIN_ALLOW_THREADS
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) num_threads(actual_threads)
+#endif
+    for (int s = 0; s < n_snps; s++) {
+        int tid = 0;
+#ifdef _OPENMP
+        tid = omp_get_thread_num();
+#endif
+        double *hi_eval_local = thread_bufs[tid];
+        double *scratch = thread_scratch[tid];
+        double *vwx_local = scratch;
+        double *vxx_local = scratch + n_samples;
+        double *vxy_local = scratch + 2 * n_samples;
+
+        const double *x = utg_t_data + (size_t)s * n_samples;
+
+        /* Compute vwx/vxx/vxy on-the-fly from utg_t column */
+        for (int i = 0; i < n_samples; i++) {
+            vwx_local[i] = w_data[i] * x[i];
+            vxx_local[i] = x[i] * x[i];
+            vxy_local[i] = Uty_data[i] * x[i];
+        }
+
+        double logl_H1;
+        double lam_mle = golden_section_lambda_mle_ncvt1_split(
+            vwx_local, vxx_local, vxy_local, inv_ww, inv_wy, inv_yy,
+            eigenvalues, n_samples,
+            lambda_grid, hi_eval_grid, logdet_h_grid,
+            grid_inv, log_l_min, step, n_grid, n_refine,
+            mle_const, hi_eval_local, &logl_H1
+        );
+        out_lambdas_mle[s] = lam_mle;
+
+        double lrt_stat = 2.0 * (logl_H1 - logl_H0);
+        if (lrt_stat < 0.0) lrt_stat = 0.0;
+        out_p_lrts[s] = chi2_sf_c(lrt_stat);
+    }
+
+    Py_END_ALLOW_THREADS
+
+    for (int t = 0; t < actual_threads; t++) {
+        free(thread_bufs[t]);
+        free(thread_scratch[t]);
+    }
+    free(thread_bufs);
+    free(thread_scratch);
+
+    free(lambda_grid);
+    free(hi_eval_grid);
+    free(logdet_h_grid);
+    free(grid_inv);
+    Py_DECREF(uab_inv_arr);
+    Py_DECREF(eigenvalues_arr);
+    Py_DECREF(Uty_arr);
+    Py_DECREF(w_arr);
+    Py_DECREF(utg_t_arr);
+
+    return build_lrt_result_dict(&out);
+
+err_nomem_lrt_fused:
+    Py_XDECREF(uab_inv_arr);
+    Py_XDECREF(eigenvalues_arr);
+    Py_XDECREF(Uty_arr);
+    Py_XDECREF(w_arr);
+    Py_XDECREF(utg_t_arr);
+    return PyErr_NoMemory();
+
+err_input_lrt_fused:
+    Py_XDECREF(uab_inv_arr);
+    Py_XDECREF(eigenvalues_arr);
+    Py_XDECREF(Uty_arr);
+    Py_XDECREF(w_arr);
+    Py_XDECREF(utg_t_arr);
     return NULL;
 }
 
@@ -8378,6 +8939,54 @@ static PyMethodDef methods[] = {
         "Compute mode-4 chunk from UtG_T using fused general workspace.\n"
         "\n"
         "Score + Wald + LRT with on-the-fly varying dot products.\n"
+    },
+    {
+        "compute_score_fused_c",
+        (PyCFunction)compute_score_fused_c,
+        METH_VARARGS,
+        "Fused Score test from utg_t (no uab_varying_soa). n_cvt=1 only.\n"
+        "\n"
+        "Computes wx/xx/xy dot products on-the-fly from utg_t columns,\n"
+        "eliminating the (n_snps, 3, n_samples) intermediate buffer.\n"
+        "\n"
+        "Args:\n"
+        "    utg_t:             (n_snps, n_samples) float64 — UtG.T\n"
+        "    w:                 (n_samples,) float64 — UtW[:,0]\n"
+        "    Uty:               (n_samples,) float64 — rotated phenotype\n"
+        "    Hi_eval_null:      (n_samples,) float64 — null-model weights\n"
+        "    uab_invariant_soa: (3, n_samples) float64 — SoA [ww, wy, yy]\n"
+        "    eigenvalues:       (n_samples,) float64\n"
+        "    n_samples:         int\n"
+        "    n_threads:         int\n"
+        "\n"
+        "Returns:\n"
+        "    dict with keys: betas, ses, p_scores — each (n_snps,) float64\n"
+    },
+    {
+        "compute_lrt_fused_c",
+        (PyCFunction)compute_lrt_fused_c,
+        METH_VARARGS,
+        "Fused LRT from utg_t (no uab_varying_soa). n_cvt=1 only.\n"
+        "\n"
+        "Computes wx/xx/xy on-the-fly into per-thread scratch,\n"
+        "then calls golden_section_lambda_mle_ncvt1_split.\n"
+        "\n"
+        "Args:\n"
+        "    utg_t:             (n_snps, n_samples) float64 — UtG.T\n"
+        "    w:                 (n_samples,) float64 — UtW[:,0]\n"
+        "    Uty:               (n_samples,) float64 — rotated phenotype\n"
+        "    eigenvalues:       (n_samples,) float64\n"
+        "    uab_invariant_soa: (3, n_samples) float64 — SoA [ww, wy, yy]\n"
+        "    n_samples:         int\n"
+        "    l_min:             float\n"
+        "    l_max:             float\n"
+        "    n_grid:            int\n"
+        "    n_refine:          int\n"
+        "    logl_H0:           float — null model MLE log-likelihood\n"
+        "    n_threads:         int\n"
+        "\n"
+        "Returns:\n"
+        "    dict with keys: lambdas_mle, p_lrts — each (n_snps,) float64\n"
     },
     {
         "_get_aligned_alloc_test_ptr",

@@ -32,7 +32,7 @@ from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_split_ncvt1_numpy,
 )
 
-_EXPECTED_ABI_VERSION = 9  # Must match ABI_VERSION in _lmm_accel.c
+_EXPECTED_ABI_VERSION = 10  # Must match ABI_VERSION in _lmm_accel.c
 
 
 class AccelImport(NamedTuple):
@@ -61,6 +61,8 @@ class AccelImport(NamedTuple):
     compute_lrt_batch_general_c: object | None
     compute_score_split_c: object | None
     compute_lrt_split_c: object | None
+    compute_score_fused_c: object | None
+    compute_lrt_fused_c: object | None
     create_workspace_fused_c: object | None
     compute_lmm_chunk_fused_c: object | None
     create_workspace_mode4_fused_c: object | None
@@ -91,6 +93,8 @@ _ACCEL_UNAVAILABLE = AccelImport(
     compute_lrt_batch_general_c=None,
     compute_score_split_c=None,
     compute_lrt_split_c=None,
+    compute_score_fused_c=None,
+    compute_lrt_fused_c=None,
     create_workspace_fused_c=None,
     compute_lmm_chunk_fused_c=None,
     create_workspace_mode4_fused_c=None,
@@ -263,6 +267,33 @@ def _try_import_accel() -> AccelImport:
         )
         lrt_split_c = None
 
+    # Fused Score/LRT from utg_t — expected in ABI v10+
+    try:
+        from jamma.lmm._lmm_accel import (
+            compute_score_fused_c as score_fused_c,
+        )
+    except ImportError:
+        from loguru import logger
+
+        logger.warning(
+            "C extension missing compute_score_fused_c. "
+            "Score fused will fall back to split path."
+        )
+        score_fused_c = None
+
+    try:
+        from jamma.lmm._lmm_accel import (
+            compute_lrt_fused_c as lrt_fused_c,
+        )
+    except ImportError:
+        from loguru import logger
+
+        logger.warning(
+            "C extension missing compute_lrt_fused_c. "
+            "LRT fused will fall back to split path."
+        )
+        lrt_fused_c = None
+
     # Fused Uab workspace support — expected in ABI v8+
     try:
         from jamma.lmm._lmm_accel import (
@@ -349,6 +380,8 @@ def _try_import_accel() -> AccelImport:
         compute_lrt_batch_general_c=lrt_batch_general_c,
         compute_score_split_c=score_split_c,
         compute_lrt_split_c=lrt_split_c,
+        compute_score_fused_c=score_fused_c,
+        compute_lrt_fused_c=lrt_fused_c,
         create_workspace_fused_c=ws_fused_create,
         compute_lmm_chunk_fused_c=ws_fused_chunk,
         create_workspace_mode4_fused_c=ws_fused_mode4_create,
@@ -393,6 +426,8 @@ def _auto_recompile() -> bool:
     _compute_lrt_batch_general_c,
     _compute_score_split_c,
     _compute_lrt_split_c,
+    _compute_score_fused_c,
+    _compute_lrt_fused_c,
     _create_workspace_fused_c,
     _compute_lmm_chunk_fused_c,
     _create_workspace_mode4_fused_c,
@@ -426,6 +461,8 @@ if not _C_ACCEL_AVAILABLE:
             _compute_lrt_batch_general_c,
             _compute_score_split_c,
             _compute_lrt_split_c,
+            _compute_score_fused_c,
+            _compute_lrt_fused_c,
             _create_workspace_fused_c,
             _compute_lmm_chunk_fused_c,
             _create_workspace_mode4_fused_c,
@@ -456,6 +493,8 @@ _C_FUSED_GENERAL_AVAILABLE = _create_workspace_fused_general_c is not None
 # Available but intentionally not wired into runners yet — mode-4 fused general
 # produces NaN lambda_mle for n_cvt >= 2. Will be used when that bug is fixed.
 _C_MODE4_FUSED_GENERAL_AVAILABLE = _create_workspace_mode4_fused_general_c is not None
+_C_SCORE_FUSED_AVAILABLE = _compute_score_fused_c is not None
+_C_LRT_FUSED_AVAILABLE = _compute_lrt_fused_c is not None
 
 
 class WaldResult(TypedDict):

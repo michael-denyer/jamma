@@ -14,6 +14,10 @@ import pytest
 
 from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
+from jamma.lmm.compute_numpy import (
+    _C_LRT_FUSED_AVAILABLE,
+    _C_SCORE_FUSED_AVAILABLE,
+)
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.runner_numpy_streaming import (
     get_last_run_timing,
@@ -709,3 +713,151 @@ class TestStreamingPipeline:
                 rtol=1e-8,
                 err_msg=f"{field} seq/pipeline mismatch (mode 4)",
             )
+
+
+# ---------------------------------------------------------------------------
+# SC-07: Fused Score/LRT Streaming Dispatch Tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _C_SCORE_FUSED_AVAILABLE, reason="Fused Score C not available")
+class TestStreamingFusedScoreDispatch:
+    """Streaming runner dispatches fused Score path for mode 3."""
+
+    def test_streaming_fused_score_matches_split(self, synthetic_eigen):
+        """Streaming fused Score matches split Score and calls fused C."""
+        from unittest.mock import patch
+
+        from jamma.lmm.compute_numpy import _compute_score_fused_c
+
+        _plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
+
+        # Fused path — verify C function is called
+        with patch(
+            "jamma.lmm.compute_numpy._compute_score_fused_c",
+            wraps=_compute_score_fused_c,
+        ) as mock_fused:
+            fused_result, n_fused = run_lmm_association_numpy_streaming(
+                bed_path=SYNTHETIC_DATA,
+                phenotypes=phenotypes,
+                kinship=None,
+                eigenvalues=eigenvalues,
+                eigenvectors=eigenvectors.copy(),
+                lmm_mode=3,
+                chunk_size=200,
+                show_progress=False,
+                check_memory=False,
+            )
+        assert mock_fused.called, "Fused Score C function was not called (streaming)"
+
+        # Split path (disable fused)
+        with (
+            patch(
+                "jamma.lmm.compute_numpy._C_SCORE_FUSED_AVAILABLE",
+                False,
+            ),
+            patch(
+                "jamma.lmm.runner_numpy_streaming._C_SCORE_FUSED_AVAILABLE",
+                False,
+            ),
+        ):
+            split_result, n_split = run_lmm_association_numpy_streaming(
+                bed_path=SYNTHETIC_DATA,
+                phenotypes=phenotypes,
+                kinship=None,
+                eigenvalues=eigenvalues,
+                eigenvectors=eigenvectors.copy(),
+                lmm_mode=3,
+                chunk_size=200,
+                show_progress=False,
+                check_memory=False,
+            )
+
+        assert n_fused == n_split, f"Count mismatch: {n_fused} vs {n_split}"
+
+        fused_assoc = fused_result.associations
+        split_assoc = split_result.associations
+        for a_f, a_s in zip(fused_assoc, split_assoc, strict=True):
+            assert a_f.rs == a_s.rs
+            if a_f.p_score is not None and a_s.p_score is not None:
+                np.testing.assert_allclose(
+                    a_f.p_score,
+                    a_s.p_score,
+                    rtol=1e-8,
+                    err_msg=f"p_score mismatch for {a_f.rs} (streaming)",
+                )
+
+
+@pytest.mark.skipif(not _C_LRT_FUSED_AVAILABLE, reason="Fused LRT C not available")
+class TestStreamingFusedLrtDispatch:
+    """Streaming runner dispatches fused LRT path for mode 2."""
+
+    def test_streaming_fused_lrt_matches_split(self, synthetic_eigen):
+        """Streaming fused LRT matches split LRT and calls fused C."""
+        from unittest.mock import patch
+
+        from jamma.lmm.compute_numpy import _compute_lrt_fused_c
+
+        _plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
+
+        # Fused path — verify C function is called
+        with patch(
+            "jamma.lmm.compute_numpy._compute_lrt_fused_c",
+            wraps=_compute_lrt_fused_c,
+        ) as mock_fused:
+            fused_result, n_fused = run_lmm_association_numpy_streaming(
+                bed_path=SYNTHETIC_DATA,
+                phenotypes=phenotypes,
+                kinship=None,
+                eigenvalues=eigenvalues,
+                eigenvectors=eigenvectors.copy(),
+                lmm_mode=2,
+                chunk_size=200,
+                show_progress=False,
+                check_memory=False,
+            )
+        assert mock_fused.called, "Fused LRT C function was not called (streaming)"
+
+        # Split path (disable fused)
+        with (
+            patch(
+                "jamma.lmm.compute_numpy._C_LRT_FUSED_AVAILABLE",
+                False,
+            ),
+            patch(
+                "jamma.lmm.runner_numpy_streaming._C_LRT_FUSED_AVAILABLE",
+                False,
+            ),
+        ):
+            split_result, n_split = run_lmm_association_numpy_streaming(
+                bed_path=SYNTHETIC_DATA,
+                phenotypes=phenotypes,
+                kinship=None,
+                eigenvalues=eigenvalues,
+                eigenvectors=eigenvectors.copy(),
+                lmm_mode=2,
+                chunk_size=200,
+                show_progress=False,
+                check_memory=False,
+            )
+
+        assert n_fused == n_split, f"Count mismatch: {n_fused} vs {n_split}"
+
+        fused_assoc = fused_result.associations
+        split_assoc = split_result.associations
+        for a_f, a_s in zip(fused_assoc, split_assoc, strict=True):
+            assert a_f.rs == a_s.rs
+            if a_f.p_lrt is not None and a_s.p_lrt is not None:
+                np.testing.assert_allclose(
+                    a_f.p_lrt,
+                    a_s.p_lrt,
+                    rtol=5e-5,
+                    err_msg=f"p_lrt mismatch for {a_f.rs} (streaming)",
+                )
+            if a_f.l_mle is not None and a_s.l_mle is not None:
+                np.testing.assert_allclose(
+                    a_f.l_mle,
+                    a_s.l_mle,
+                    rtol=5e-5,
+                    err_msg=f"l_mle mismatch for {a_f.rs} (streaming)",
+                )

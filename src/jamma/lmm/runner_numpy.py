@@ -30,8 +30,10 @@ from jamma.lmm.compute_numpy import (
     _C_FUSED_AVAILABLE,
     _C_FUSED_GENERAL_AVAILABLE,
     _C_GENERAL_AVAILABLE,
+    _C_LRT_FUSED_AVAILABLE,
     _C_MODE4_AVAILABLE,
     _C_MODE4_FUSED_AVAILABLE,
+    _C_SCORE_FUSED_AVAILABLE,
     _C_SPLIT_AVAILABLE,
     LmmMode,
     _compute_lmm_chunk_numpy,
@@ -458,6 +460,12 @@ def _compute_chunk_size_numpy(
             # Mode 4 only uses fused when _C_MODE4_FUSED_AVAILABLE; otherwise
             # it falls back to split SoA which needs 4x buffers.
             bytes_per_snp = n_samples * 8
+        elif lmm_mode == 3 and _C_SCORE_FUSED_AVAILABLE:
+            # Fused Score: utg_t only (1 col), no uab_varying_soa.
+            bytes_per_snp = n_samples * 8
+        elif lmm_mode == 2 and _C_LRT_FUSED_AVAILABLE:
+            # Fused LRT: utg_t only (1 col), no uab_varying_soa.
+            bytes_per_snp = n_samples * 8
         else:
             # SoA split paths (Wald, Score, LRT, mode-4):
             # 3 varying SoA columns + 1 utg_t per SNP, no Uab reconstruction.
@@ -736,6 +744,15 @@ def run_lmm_association_numpy(
     )
     use_fused_general = use_fused and n_cvt >= 2
 
+    # Fused Score/LRT: skip uab_varying_soa for modes 2/3 (n_cvt=1 only).
+    # These are standalone fused paths (not workspace-based like Wald fused).
+    use_fused_score = (
+        use_split and n_cvt == 1 and lmm_mode == 3 and _C_SCORE_FUSED_AVAILABLE
+    )
+    use_fused_lrt = (
+        use_split and n_cvt == 1 and lmm_mode == 2 and _C_LRT_FUSED_AVAILABLE
+    )
+
     if use_fused and not use_fused_general:
         logger.debug(
             "Fused Uab path active: utg_t passed directly to C workspace "
@@ -764,6 +781,17 @@ def run_lmm_association_numpy(
                 else "C split extension unavailable"
             )
             logger.debug(f"Mode-4 dispatch: compose fallback ({reason})")
+
+    if use_fused_score:
+        logger.debug(
+            "Fused Score path active: utg_t passed directly to C "
+            "(eliminates uab_varying_soa buffer for mode 3)"
+        )
+    if use_fused_lrt:
+        logger.debug(
+            "Fused LRT path active: utg_t passed directly to C "
+            "(eliminates uab_varying_soa buffer for mode 2)"
+        )
 
     chunk_size = _compute_chunk_size_numpy(
         n_samples,
@@ -851,7 +879,7 @@ def run_lmm_association_numpy(
     # Pre-allocate SoA varying buffer for sequential path (reuse across chunks).
     # Shape: (chunk_size, n_var, n_samples) where n_var=3 for n_cvt=1.
     # Not needed when fused path is active (no uab_varying_soa computed).
-    if use_split and not use_pipeline and not use_fused:
+    if use_split and not use_pipeline and not use_fused and not use_fused_score and not use_fused_lrt:
         from jamma.lmm.likelihood import classify_uab_columns
 
         n_var = 3 if n_cvt == 1 else len(classify_uab_columns(n_cvt)[1])
@@ -893,6 +921,14 @@ def run_lmm_association_numpy(
     # all chunks and referenced via closure by _prepare_chunk.
     uab_invariant_soa = (
         compute_uab_invariant_soa(UtW, Uty, n_cvt) if use_split else None
+    )
+
+    # Extract w for fused paths that need it (Wald fused extracts inside
+    # workspace creation; Score/LRT fused are stateless so extract here).
+    w = (
+        UtW[:, 0].copy()
+        if (use_fused_score or use_fused_lrt) and not use_fused
+        else None
     )
 
     # Create persistent C workspace once (before chunk loop).
@@ -1019,8 +1055,8 @@ def run_lmm_association_numpy(
 
         actual_len = chunk_end - chunk_start
 
-        if use_fused:
-            # Fused path: pass utg_t directly to C workspace. No uab_varying_soa.
+        if use_fused or use_fused_score or use_fused_lrt:
+            # Fused path: pass utg_t directly to C. No uab_varying_soa.
             return utg_t, actual_len
 
         # Split SoA path: build SNP-varying Uab in SoA layout.
@@ -1061,6 +1097,44 @@ def run_lmm_association_numpy(
                 chunk_data,
                 pipeline_omp_threads,
                 operation=op_label,
+                write_offset=write_offset,
+                n_filtered=n_filtered,
+            )
+        elif use_fused_score:
+            from jamma.lmm.compute_numpy import _compute_score_fused_c
+
+            cr = _guarded_compute(
+                _compute_score_fused_c,
+                chunk_data,  # utg_t
+                w,
+                Uty,
+                Hi_eval_null,
+                uab_invariant_soa,
+                eigenvalues_np,
+                n_samples,
+                pipeline_omp_threads,
+                operation="Fused Score dispatch",
+                write_offset=write_offset,
+                n_filtered=n_filtered,
+            )
+        elif use_fused_lrt:
+            from jamma.lmm.compute_numpy import _compute_lrt_fused_c
+
+            cr = _guarded_compute(
+                _compute_lrt_fused_c,
+                chunk_data,  # utg_t
+                w,
+                Uty,
+                eigenvalues_np,
+                uab_invariant_soa,
+                n_samples,
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+                logl_H0,
+                pipeline_omp_threads,
+                operation="Fused LRT dispatch",
                 write_offset=write_offset,
                 n_filtered=n_filtered,
             )
@@ -1290,6 +1364,48 @@ def run_lmm_association_numpy(
                             utg_t,
                             omp_threads,
                             operation=op_label,
+                            write_offset=write_offset,
+                            n_filtered=n_filtered,
+                        )
+                    del utg_t
+                elif use_fused_score:
+                    from jamma.lmm.compute_numpy import _compute_score_fused_c
+
+                    with blas_threads(1):
+                        cr = _guarded_compute(
+                            _compute_score_fused_c,
+                            utg_t,
+                            w,
+                            Uty,
+                            Hi_eval_null,
+                            uab_invariant_soa,
+                            eigenvalues_np,
+                            n_samples,
+                            omp_threads,
+                            operation="Fused Score dispatch",
+                            write_offset=write_offset,
+                            n_filtered=n_filtered,
+                        )
+                    del utg_t
+                elif use_fused_lrt:
+                    from jamma.lmm.compute_numpy import _compute_lrt_fused_c
+
+                    with blas_threads(1):
+                        cr = _guarded_compute(
+                            _compute_lrt_fused_c,
+                            utg_t,
+                            w,
+                            Uty,
+                            eigenvalues_np,
+                            uab_invariant_soa,
+                            n_samples,
+                            l_min,
+                            l_max,
+                            n_grid,
+                            n_refine,
+                            logl_H0,
+                            omp_threads,
+                            operation="Fused LRT dispatch",
                             write_offset=write_offset,
                             n_filtered=n_filtered,
                         )

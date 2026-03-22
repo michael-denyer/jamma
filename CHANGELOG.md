@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.4.1] - 2026-03-22
+
+### Changed
+
+- Updated benchmark table with best NumPy+C numbers — Wald 879ms (12.5x vs GEMMA), All 16.0x
+
 ## [4.4.0] - 2026-03-21
 
 ### Added

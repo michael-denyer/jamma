@@ -252,8 +252,8 @@ Best-of runs, end-to-end wall clock:
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | JAMMA JAX (batch) | JAMMA JAX (streaming) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-------------------|----------------------|-----------|---------------|------------------|
 | Kinship (`-gk 1`) | 2.1s | 1.7s | 262ms | 262ms | — | — | — | 1.0x | **8.0x** | **6.5x** |
-| LMM Wald (`-lmm 1`) | 11.1s | 7.6s | 3.9s | 989ms | 1.1s | 2.0s | 2.5s | 3.9x | **11.2x** | **7.7x** |
-| LMM All (`-lmm 4`) | 20.5s | 13.9s | 5.9s | 1.3s | 1.4s | 2.8s | 4.1s | 4.5x | **15.8x** | **10.7x** |
+| LMM Wald (`-lmm 1`) | 11.0s | 7.6s | 4.1s | 879ms | 1.1s | 2.0s | 2.5s | 4.7x | **12.5x** | **8.7x** |
+| LMM All (`-lmm 4`) | 20.5s | 13.9s | 6.0s | 1.3s | 1.4s | 2.8s | 4.1s | 4.7x | **16.0x** | **10.9x** |
 | LMM Wald+4cov (`-lmm 1 -c`) | 40.8s | 18.8s | 9.1s | 2.4s | 2.6s | 4.1s | 5.1s | 3.8x | **17.0x** | **7.8x** |
 
 GEMMA (Accelerate) is GEMMA 0.98.5 compiled against Apple's Accelerate framework instead of Homebrew OpenBLAS — **1.3–2.2x faster** due to AMX-accelerated BLAS, with identical numerical results. **NumPy+C** uses a C extension with OpenMP for Wald (`-lmm 1`) — REML optimization is compute-bound and parallelizes well across SNPs. The C speedup grows with covariates because the Pab table recursion is more expensive. NumPy+C is the fastest backend at all modes including all-tests (`-lmm 4`) at mouse scale. **NumPy+C (stream)** reads genotypes from disk in chunks — slightly slower than batch but the production code path for large datasets that don't fit in memory. **JAX (batch)** uses `jax.vmap` batching for MLE optimization. **JAX (streaming)** is the JAX equivalent of disk-streaming. Kinship is always pure NumPy/BLAS regardless of backend.

@@ -243,3 +243,39 @@ def compute_mode4_chunk_fused_general_c(
     utg_t: npt.NDArray[np.float64],
     n_threads: int,
 ) -> dict[str, npt.NDArray[np.float64]]: ...
+
+ScoreFusedWorkspace = NewType("ScoreFusedWorkspace", object)
+LrtFusedWorkspace = NewType("LrtFusedWorkspace", object)
+
+def create_workspace_score_fused_c(
+    w: npt.NDArray[np.float64],
+    Uty: npt.NDArray[np.float64],
+    Hi_eval_null: npt.NDArray[np.float64],
+    eigenvalues: npt.NDArray[np.float64],
+    uab_invariant_soa: npt.NDArray[np.float64],
+    n_samples: int,
+    n_threads: int,
+) -> ScoreFusedWorkspace: ...
+def compute_score_fused_ws_c(
+    workspace: ScoreFusedWorkspace,
+    utg_t: npt.NDArray[np.float64],
+    n_threads: int,
+) -> dict[str, npt.NDArray[np.float64]]: ...
+def create_workspace_lrt_fused_c(
+    w: npt.NDArray[np.float64],
+    Uty: npt.NDArray[np.float64],
+    eigenvalues: npt.NDArray[np.float64],
+    uab_invariant_soa: npt.NDArray[np.float64],
+    n_samples: int,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+    logl_H0: float,
+    n_threads: int,
+) -> LrtFusedWorkspace: ...
+def compute_lrt_fused_ws_c(
+    workspace: LrtFusedWorkspace,
+    utg_t: npt.NDArray[np.float64],
+    n_threads: int,
+) -> dict[str, npt.NDArray[np.float64]]: ...

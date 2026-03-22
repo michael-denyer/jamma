@@ -32,7 +32,7 @@ from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_split_ncvt1_numpy,
 )
 
-_EXPECTED_ABI_VERSION = 10  # Must match ABI_VERSION in _lmm_accel.c
+_EXPECTED_ABI_VERSION = 11  # Must match ABI_VERSION in _lmm_accel.c
 
 
 class AccelImport(NamedTuple):
@@ -71,6 +71,10 @@ class AccelImport(NamedTuple):
     compute_lmm_chunk_fused_general_c: object | None
     create_workspace_mode4_fused_general_c: object | None
     compute_mode4_chunk_fused_general_c: object | None
+    create_workspace_score_fused_c: object | None
+    compute_score_fused_ws_c: object | None
+    create_workspace_lrt_fused_c: object | None
+    compute_lrt_fused_ws_c: object | None
 
 
 _ACCEL_UNAVAILABLE = AccelImport(
@@ -103,6 +107,10 @@ _ACCEL_UNAVAILABLE = AccelImport(
     compute_lmm_chunk_fused_general_c=None,
     create_workspace_mode4_fused_general_c=None,
     compute_mode4_chunk_fused_general_c=None,
+    create_workspace_score_fused_c=None,
+    compute_score_fused_ws_c=None,
+    create_workspace_lrt_fused_c=None,
+    compute_lrt_fused_ws_c=None,
 )
 
 
@@ -294,6 +302,47 @@ def _try_import_accel() -> AccelImport:
         )
         lrt_fused_c = None
 
+    # Persistent Score/LRT workspace support — expected in ABI v11+
+    try:
+        from jamma.lmm._lmm_accel import (
+            create_workspace_score_fused_c as create_score_ws_c,
+        )
+    except ImportError:
+        from loguru import logger
+
+        logger.debug("C extension missing create_workspace_score_fused_c.")
+        create_score_ws_c = None
+
+    try:
+        from jamma.lmm._lmm_accel import (
+            compute_score_fused_ws_c as score_ws_c,
+        )
+    except ImportError:
+        from loguru import logger
+
+        logger.debug("C extension missing compute_score_fused_ws_c.")
+        score_ws_c = None
+
+    try:
+        from jamma.lmm._lmm_accel import (
+            create_workspace_lrt_fused_c as create_lrt_ws_c,
+        )
+    except ImportError:
+        from loguru import logger
+
+        logger.debug("C extension missing create_workspace_lrt_fused_c.")
+        create_lrt_ws_c = None
+
+    try:
+        from jamma.lmm._lmm_accel import (
+            compute_lrt_fused_ws_c as lrt_ws_c,
+        )
+    except ImportError:
+        from loguru import logger
+
+        logger.debug("C extension missing compute_lrt_fused_ws_c.")
+        lrt_ws_c = None
+
     # Fused Uab workspace support — expected in ABI v8+
     try:
         from jamma.lmm._lmm_accel import (
@@ -390,6 +439,10 @@ def _try_import_accel() -> AccelImport:
         compute_lmm_chunk_fused_general_c=ws_fused_gen_chunk,
         create_workspace_mode4_fused_general_c=ws_fused_gen_mode4_create,
         compute_mode4_chunk_fused_general_c=ws_fused_gen_mode4,
+        create_workspace_score_fused_c=create_score_ws_c,
+        compute_score_fused_ws_c=score_ws_c,
+        create_workspace_lrt_fused_c=create_lrt_ws_c,
+        compute_lrt_fused_ws_c=lrt_ws_c,
     )
 
 
@@ -436,6 +489,10 @@ def _auto_recompile() -> bool:
     _compute_lmm_chunk_fused_general_c,
     _create_workspace_mode4_fused_general_c,
     _compute_mode4_chunk_fused_general_c,
+    _create_workspace_score_fused_c,
+    _compute_score_fused_ws_c,
+    _create_workspace_lrt_fused_c,
+    _compute_lrt_fused_ws_c,
 ) = _try_import_accel()
 
 if not _C_ACCEL_AVAILABLE:
@@ -471,6 +528,10 @@ if not _C_ACCEL_AVAILABLE:
             _compute_lmm_chunk_fused_general_c,
             _create_workspace_mode4_fused_general_c,
             _compute_mode4_chunk_fused_general_c,
+            _create_workspace_score_fused_c,
+            _compute_score_fused_ws_c,
+            _create_workspace_lrt_fused_c,
+            _compute_lrt_fused_ws_c,
         ) = _try_import_accel()
 
     if not _C_ACCEL_AVAILABLE:
@@ -495,6 +556,14 @@ _C_FUSED_GENERAL_AVAILABLE = _create_workspace_fused_general_c is not None
 _C_MODE4_FUSED_GENERAL_AVAILABLE = _create_workspace_mode4_fused_general_c is not None
 _C_SCORE_FUSED_AVAILABLE = _compute_score_fused_c is not None
 _C_LRT_FUSED_AVAILABLE = _compute_lrt_fused_c is not None
+_C_SCORE_FUSED_WS_AVAILABLE = (
+    _create_workspace_score_fused_c is not None
+    and _compute_score_fused_ws_c is not None
+)
+_C_LRT_FUSED_WS_AVAILABLE = (
+    _create_workspace_lrt_fused_c is not None
+    and _compute_lrt_fused_ws_c is not None
+)
 
 
 class WaldResult(TypedDict):

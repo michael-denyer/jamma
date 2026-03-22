@@ -725,32 +725,61 @@ class TestStreamingFusedScoreDispatch:
     """Streaming runner dispatches fused Score path for mode 3."""
 
     def test_streaming_fused_score_matches_split(self, synthetic_eigen):
-        """Streaming fused Score matches split Score and calls fused C."""
+        """Streaming fused Score matches split Score and calls fused C.
+
+        Prefers workspace-based dispatch when available; falls back to stateless.
+        """
         from unittest.mock import patch
 
-        from jamma.lmm.compute_numpy import _compute_score_fused_c
+        from jamma.lmm.compute_numpy import (
+            _C_SCORE_FUSED_WS_AVAILABLE,
+            _compute_score_fused_c,
+            _compute_score_fused_ws_c,
+        )
 
         _plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
-        # Fused path — verify C function is called
-        with patch(
-            "jamma.lmm.compute_numpy._compute_score_fused_c",
-            wraps=_compute_score_fused_c,
-        ) as mock_fused:
-            fused_result, n_fused = run_lmm_association_numpy_streaming(
-                bed_path=SYNTHETIC_DATA,
-                phenotypes=phenotypes,
-                kinship=None,
-                eigenvalues=eigenvalues,
-                eigenvectors=eigenvectors.copy(),
-                lmm_mode=3,
-                chunk_size=200,
-                show_progress=False,
-                check_memory=False,
+        # Fused path — verify C function is called (WS preferred, stateless fallback)
+        if _C_SCORE_FUSED_WS_AVAILABLE:
+            with patch(
+                "jamma.lmm.compute_numpy._compute_score_fused_ws_c",
+                wraps=_compute_score_fused_ws_c,
+            ) as mock_fused:
+                fused_result, n_fused = run_lmm_association_numpy_streaming(
+                    bed_path=SYNTHETIC_DATA,
+                    phenotypes=phenotypes,
+                    kinship=None,
+                    eigenvalues=eigenvalues,
+                    eigenvectors=eigenvectors.copy(),
+                    lmm_mode=3,
+                    chunk_size=200,
+                    show_progress=False,
+                    check_memory=False,
+                )
+            assert mock_fused.called, (
+                "Fused Score WS C function was not called (streaming)"
             )
-        assert mock_fused.called, "Fused Score C function was not called (streaming)"
+        else:
+            with patch(
+                "jamma.lmm.compute_numpy._compute_score_fused_c",
+                wraps=_compute_score_fused_c,
+            ) as mock_fused:
+                fused_result, n_fused = run_lmm_association_numpy_streaming(
+                    bed_path=SYNTHETIC_DATA,
+                    phenotypes=phenotypes,
+                    kinship=None,
+                    eigenvalues=eigenvalues,
+                    eigenvectors=eigenvectors.copy(),
+                    lmm_mode=3,
+                    chunk_size=200,
+                    show_progress=False,
+                    check_memory=False,
+                )
+            assert mock_fused.called, (
+                "Fused Score C function was not called (streaming)"
+            )
 
-        # Split path (disable fused)
+        # Split path (disable all fused Score variants)
         with (
             patch(
                 "jamma.lmm.compute_numpy._C_SCORE_FUSED_AVAILABLE",
@@ -758,6 +787,14 @@ class TestStreamingFusedScoreDispatch:
             ),
             patch(
                 "jamma.lmm.runner_numpy_streaming._C_SCORE_FUSED_AVAILABLE",
+                False,
+            ),
+            patch(
+                "jamma.lmm.compute_numpy._C_SCORE_FUSED_WS_AVAILABLE",
+                False,
+            ),
+            patch(
+                "jamma.lmm.runner_numpy_streaming._C_SCORE_FUSED_WS_AVAILABLE",
                 False,
             ),
         ):
@@ -793,32 +830,61 @@ class TestStreamingFusedLrtDispatch:
     """Streaming runner dispatches fused LRT path for mode 2."""
 
     def test_streaming_fused_lrt_matches_split(self, synthetic_eigen):
-        """Streaming fused LRT matches split LRT and calls fused C."""
+        """Streaming fused LRT matches split LRT and calls fused C.
+
+        Prefers workspace-based dispatch when available; falls back to stateless.
+        """
         from unittest.mock import patch
 
-        from jamma.lmm.compute_numpy import _compute_lrt_fused_c
+        from jamma.lmm.compute_numpy import (
+            _C_LRT_FUSED_WS_AVAILABLE,
+            _compute_lrt_fused_c,
+            _compute_lrt_fused_ws_c,
+        )
 
         _plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
-        # Fused path — verify C function is called
-        with patch(
-            "jamma.lmm.compute_numpy._compute_lrt_fused_c",
-            wraps=_compute_lrt_fused_c,
-        ) as mock_fused:
-            fused_result, n_fused = run_lmm_association_numpy_streaming(
-                bed_path=SYNTHETIC_DATA,
-                phenotypes=phenotypes,
-                kinship=None,
-                eigenvalues=eigenvalues,
-                eigenvectors=eigenvectors.copy(),
-                lmm_mode=2,
-                chunk_size=200,
-                show_progress=False,
-                check_memory=False,
+        # Fused path — verify C function is called (WS preferred, stateless fallback)
+        if _C_LRT_FUSED_WS_AVAILABLE:
+            with patch(
+                "jamma.lmm.compute_numpy._compute_lrt_fused_ws_c",
+                wraps=_compute_lrt_fused_ws_c,
+            ) as mock_fused:
+                fused_result, n_fused = run_lmm_association_numpy_streaming(
+                    bed_path=SYNTHETIC_DATA,
+                    phenotypes=phenotypes,
+                    kinship=None,
+                    eigenvalues=eigenvalues,
+                    eigenvectors=eigenvectors.copy(),
+                    lmm_mode=2,
+                    chunk_size=200,
+                    show_progress=False,
+                    check_memory=False,
+                )
+            assert mock_fused.called, (
+                "Fused LRT WS C function was not called (streaming)"
             )
-        assert mock_fused.called, "Fused LRT C function was not called (streaming)"
+        else:
+            with patch(
+                "jamma.lmm.compute_numpy._compute_lrt_fused_c",
+                wraps=_compute_lrt_fused_c,
+            ) as mock_fused:
+                fused_result, n_fused = run_lmm_association_numpy_streaming(
+                    bed_path=SYNTHETIC_DATA,
+                    phenotypes=phenotypes,
+                    kinship=None,
+                    eigenvalues=eigenvalues,
+                    eigenvectors=eigenvectors.copy(),
+                    lmm_mode=2,
+                    chunk_size=200,
+                    show_progress=False,
+                    check_memory=False,
+                )
+            assert mock_fused.called, (
+                "Fused LRT C function was not called (streaming)"
+            )
 
-        # Split path (disable fused)
+        # Split path (disable all fused LRT variants)
         with (
             patch(
                 "jamma.lmm.compute_numpy._C_LRT_FUSED_AVAILABLE",
@@ -826,6 +892,14 @@ class TestStreamingFusedLrtDispatch:
             ),
             patch(
                 "jamma.lmm.runner_numpy_streaming._C_LRT_FUSED_AVAILABLE",
+                False,
+            ),
+            patch(
+                "jamma.lmm.compute_numpy._C_LRT_FUSED_WS_AVAILABLE",
+                False,
+            ),
+            patch(
+                "jamma.lmm.runner_numpy_streaming._C_LRT_FUSED_WS_AVAILABLE",
                 False,
             ),
         ):

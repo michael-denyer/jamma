@@ -879,7 +879,8 @@ def run_lmm_association_numpy(
     # Pre-allocate SoA varying buffer for sequential path (reuse across chunks).
     # Shape: (chunk_size, n_var, n_samples) where n_var=3 for n_cvt=1.
     # Not needed when fused path is active (no uab_varying_soa computed).
-    if use_split and not use_pipeline and not use_fused and not use_fused_score and not use_fused_lrt:
+    no_fused = not use_fused and not use_fused_score and not use_fused_lrt
+    if use_split and not use_pipeline and no_fused:
         from jamma.lmm.likelihood import classify_uab_columns
 
         n_var = 3 if n_cvt == 1 else len(classify_uab_columns(n_cvt)[1])

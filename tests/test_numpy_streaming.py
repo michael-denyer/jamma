@@ -880,9 +880,7 @@ class TestStreamingFusedLrtDispatch:
                     show_progress=False,
                     check_memory=False,
                 )
-            assert mock_fused.called, (
-                "Fused LRT C function was not called (streaming)"
-            )
+            assert mock_fused.called, "Fused LRT C function was not called (streaming)"
 
         # Split path (disable all fused LRT variants)
         with (

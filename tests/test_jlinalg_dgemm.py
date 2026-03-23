@@ -676,6 +676,7 @@ class TestDgemmFallback:
             B: np.ndarray,
             transa: str = "N",
             transb: str = "N",
+            out: np.ndarray | None = None,
         ) -> np.ndarray:
             if A.ndim != 2:
                 raise ValueError(f"dgemm: A must be a 2-D array, got {A.ndim}-D")
@@ -700,6 +701,19 @@ class TestDgemmFallback:
                     f"dgemm: op(A) columns ({_A.shape[1]}) must match "
                     f"op(B) rows ({_B.shape[0]})"
                 )
+            if out is not None:
+                expected = (_A.shape[0], _B.shape[1])
+                if out.ndim != 2 or out.shape != expected:
+                    raise ValueError(
+                        f"dgemm: out shape {out.shape} doesn't match "
+                        f"result shape {expected}"
+                    )
+                _np.matmul(
+                    _A.astype(_np.float64, copy=False),
+                    _B.astype(_np.float64, copy=False),
+                    out=out,
+                )
+                return out
             return _np.asarray(
                 _np.matmul(
                     _A.astype(_np.float64, copy=False),
@@ -765,6 +779,46 @@ class TestDgemmFallback:
         B = np.eye(3, dtype=np.float64)
         with pytest.raises(TypeError, match="transb must be a string"):
             fb(A, B, transb=True)
+
+    def test_fallback_out_parameter(self) -> None:
+        """Fallback dgemm(A, B, out=C) writes into C and returns C."""
+        fb = self._get_fallback_dgemm()
+        rng = np.random.default_rng(2001)
+        A = rng.standard_normal((50, 100))
+        B = rng.standard_normal((100, 80))
+        out_buf = np.empty((50, 80), dtype=np.float64)
+        result = fb(A, B, out=out_buf)
+        assert result is out_buf
+        npt.assert_allclose(result, A @ B, rtol=1e-12)
+
+    def test_fallback_out_none(self) -> None:
+        """Fallback dgemm(A, B, out=None) allocates fresh array."""
+        fb = self._get_fallback_dgemm()
+        rng = np.random.default_rng(2002)
+        A = rng.standard_normal((50, 100))
+        B = rng.standard_normal((100, 80))
+        result = fb(A, B, out=None)
+        assert result.shape == (50, 80)
+        npt.assert_allclose(result, A @ B, rtol=1e-12)
+
+    def test_fallback_out_shape_mismatch(self) -> None:
+        """Fallback dgemm(A, B, out=wrong_shape) raises ValueError."""
+        fb = self._get_fallback_dgemm()
+        rng = np.random.default_rng(2003)
+        A = rng.standard_normal((50, 100))
+        B = rng.standard_normal((100, 80))
+        out_bad = np.empty((10, 10), dtype=np.float64)
+        with pytest.raises(ValueError, match="out shape"):
+            fb(A, B, out=out_bad)
+
+    def test_fallback_out_wrong_ndim(self) -> None:
+        """Fallback dgemm(A, B, out=1d_array) raises ValueError."""
+        fb = self._get_fallback_dgemm()
+        A = np.eye(5, dtype=np.float64)
+        B = np.eye(5, dtype=np.float64)
+        out_1d = np.empty(25, dtype=np.float64)
+        with pytest.raises(ValueError, match="out shape"):
+            fb(A, B, out=out_1d)
 
 
 # ---------------------------------------------------------------------------
@@ -850,3 +904,20 @@ class TestDgemmOutParameter:
         r = dgemm(A_tt, B_tt, transa="T", transb="T", out=out_tt)
         assert r is out_tt
         npt.assert_allclose(r, A_tt.T @ B_tt.T, rtol=1e-12)
+
+    def test_dgemm_out_wrong_ndim(self) -> None:
+        """dgemm(A, B, out=1d_array) raises ValueError."""
+        A = np.eye(5, dtype=np.float64)
+        B = np.eye(5, dtype=np.float64)
+        out_1d = np.empty(25, dtype=np.float64)
+        with pytest.raises((ValueError, TypeError)):
+            dgemm(A, B, out=out_1d)
+
+    def test_dgemm_out_fortran_order(self) -> None:
+        """dgemm with Fortran-order out= still produces correct results."""
+        rng = np.random.default_rng(1006)
+        A = rng.standard_normal((50, 100))
+        B = rng.standard_normal((100, 80))
+        out_f = np.asfortranarray(np.empty((50, 80), dtype=np.float64))
+        result = dgemm(A, B, out=out_f)
+        npt.assert_allclose(result, A @ B, rtol=1e-12)

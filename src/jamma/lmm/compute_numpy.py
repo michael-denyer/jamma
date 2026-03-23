@@ -561,8 +561,7 @@ _C_SCORE_FUSED_WS_AVAILABLE = (
     and _compute_score_fused_ws_c is not None
 )
 _C_LRT_FUSED_WS_AVAILABLE = (
-    _create_workspace_lrt_fused_c is not None
-    and _compute_lrt_fused_ws_c is not None
+    _create_workspace_lrt_fused_c is not None and _compute_lrt_fused_ws_c is not None
 )
 
 

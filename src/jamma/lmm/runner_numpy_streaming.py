@@ -506,12 +506,7 @@ def run_lmm_association_numpy_streaming(
     # Extract w for fused Score/LRT paths (stateless and workspace).
     w = (
         UtW[:, 0].copy()
-        if (
-            use_fused_score
-            or use_fused_lrt
-            or use_fused_score_ws
-            or use_fused_lrt_ws
-        )
+        if (use_fused_score or use_fused_lrt or use_fused_score_ws or use_fused_lrt_ws)
         and not use_fused
         else None
     )
@@ -681,9 +676,10 @@ def run_lmm_association_numpy_streaming(
         write_offset = 0  # Cumulative SNP offset for error diagnostics
 
         # --- Preallocate per-chunk buffers to eliminate malloc/free ---
-        # Streaming chunks come from disk (can't preallocate geno), but
-        # utg_t output is always (actual, n_samples) and can be written
-        # into a preallocated buffer.
+        # Streaming chunks come from disk with per-read allocation (shape
+        # varies after sample filtering), so geno can't be preallocated.
+        # But utg_t output is always (actual, n_samples) and can reuse
+        # a fixed buffer.
         if use_pipeline:
             _utg_bufs = [
                 np.empty((chunk_size, n_samples), dtype=np.float64),
@@ -705,11 +701,18 @@ def run_lmm_association_numpy_streaming(
             from jamma.lmm.likelihood import classify_uab_columns
 
             _n_var = 3 if n_cvt == 1 else len(classify_uab_columns(n_cvt)[1])
-            _uab_var_buf_stream = np.empty(
-                (chunk_size, _n_var, n_samples), dtype=np.float64
-            )
+            if use_pipeline:
+                # Double-buffer: prepare(N+1) and compute(N) run concurrently.
+                _uab_var_bufs_stream = [
+                    np.empty((chunk_size, _n_var, n_samples), dtype=np.float64),
+                    np.empty((chunk_size, _n_var, n_samples), dtype=np.float64),
+                ]
+            else:
+                _uab_var_bufs_stream = [
+                    np.empty((chunk_size, _n_var, n_samples), dtype=np.float64)
+                ]
         else:
-            _uab_var_buf_stream = None
+            _uab_var_bufs_stream = None
 
         def _prepare_chunk() -> tuple | None:
             """Read next chunk from disk, filter, impute, rotate.
@@ -759,9 +762,7 @@ def run_lmm_association_numpy_streaming(
                         or use_split
                     ):
                         utg_out = _utg_bufs[buf_idx][:actual_len, :]
-                        utg_t = jlinalg.dgemm(
-                            chunk, U, transa="T", out=utg_out
-                        )
+                        utg_t = jlinalg.dgemm(chunk, U, transa="T", out=utg_out)
                     else:
                         # Non-split UtG path: (n_samples, actual_len) shape
                         # doesn't match utg_buf layout — allocate fresh.
@@ -783,9 +784,8 @@ def run_lmm_association_numpy_streaming(
             if use_split:
                 # Reuse preallocated buffer when chunk is full-sized.
                 out_var = (
-                    _uab_var_buf_stream[:actual_len, :, :]
-                    if _uab_var_buf_stream is not None
-                    and actual_len == chunk_size
+                    _uab_var_bufs_stream[buf_idx][:actual_len, :, :]
+                    if _uab_var_bufs_stream is not None and actual_len == chunk_size
                     else None
                 )
                 uab_var_soa = batch_compute_uab_varying_soa_numpy(

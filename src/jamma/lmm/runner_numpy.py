@@ -924,7 +924,9 @@ def run_lmm_association_numpy(
         _geno_bufs = [np.empty((n_samples, chunk_size), dtype=np.float64)]
         _utg_bufs = [np.empty((chunk_size, n_samples), dtype=np.float64)]
 
-    _chunk_counter = 0  # For double-buffer index selection
+    _chunk_counter = (
+        0  # Buffer index counter (double-buffer for pipeline, single for sequential)
+    )
 
     # Pre-allocate SoA varying buffer (reuse across chunks).
     # Shape: (chunk_size, n_var, n_samples) where n_var=3 for n_cvt=1.
@@ -940,9 +942,16 @@ def run_lmm_association_numpy(
         from jamma.lmm.likelihood import classify_uab_columns
 
         n_var = 3 if n_cvt == 1 else len(classify_uab_columns(n_cvt)[1])
-        uab_var_buf = np.empty((chunk_size, n_var, n_samples), dtype=np.float64)
+        if use_pipeline:
+            # Double-buffer: prepare(N+1) and compute(N) run concurrently.
+            _uab_var_bufs = [
+                np.empty((chunk_size, n_var, n_samples), dtype=np.float64),
+                np.empty((chunk_size, n_var, n_samples), dtype=np.float64),
+            ]
+        else:
+            _uab_var_bufs = [np.empty((chunk_size, n_var, n_samples), dtype=np.float64)]
     else:
-        uab_var_buf = None
+        _uab_var_bufs = None
 
     # Pipeline thread budget: partition physical cores between concurrent
     # BLAS rotation (background) and C extension compute (foreground) to
@@ -1173,8 +1182,8 @@ def run_lmm_association_numpy(
         # Split SoA path: build SNP-varying Uab in SoA layout.
         # Reuse preallocated buffer when chunk is full-sized.
         out_var = (
-            uab_var_buf[:actual_len, :, :]
-            if uab_var_buf is not None and actual_len == chunk_size
+            _uab_var_bufs[buf_idx][:actual_len, :, :]
+            if _uab_var_bufs is not None and actual_len == chunk_size
             else None
         )
         uab_var_soa = batch_compute_uab_varying_soa_numpy(
@@ -1587,7 +1596,11 @@ def run_lmm_association_numpy(
                 elif use_split:
                     # Build SoA-layout varying Uab only — invariant precomputed.
                     # Reuse pre-allocated buffer when chunk is full-sized.
-                    _out = uab_var_buf if actual_snps == chunk_size else None
+                    _out = (
+                        _uab_var_bufs[0]
+                        if _uab_var_bufs is not None and actual_snps == chunk_size
+                        else None
+                    )
                     uab_var_soa = batch_compute_uab_varying_soa_numpy(
                         n_cvt, UtW, Uty, utg_t, out=_out
                     )

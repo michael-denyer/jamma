@@ -291,9 +291,9 @@ except ImportError as _exc:
             B: Right matrix, float64, C-contiguous.
             transa: 'N' (no transpose) or 'T' (transpose A).
             transb: 'N' (no transpose) or 'T' (transpose B).
-            out: Optional preallocated output array. If provided, result is
-                written into this buffer and returned. Must have shape (M, N)
-                matching the result dimensions.
+            out: Optional preallocated output array. If provided, the result
+                is stored in this buffer and the same array is returned.
+                Must be 2-D with shape (M, N) matching the result dimensions.
 
         Returns:
             Result matrix C = op(A) @ op(B), float64.
@@ -325,22 +325,26 @@ except ImportError as _exc:
                 f"dgemm: op(A) columns ({_A.shape[1]}) must match "
                 f"op(B) rows ({_B.shape[0]})"
             )
-        result = _np.asarray(
+        if out is not None:
+            expected = (_A.shape[0], _B.shape[1])
+            if out.ndim != 2 or out.shape != expected:
+                raise ValueError(
+                    f"dgemm: out shape {out.shape} doesn't match "
+                    f"result shape {expected}"
+                )
+            _np.matmul(
+                _A.astype(_np.float64, copy=False),
+                _B.astype(_np.float64, copy=False),
+                out=out,
+            )
+            return out
+        return _np.asarray(
             _np.matmul(
                 _A.astype(_np.float64, copy=False),
                 _B.astype(_np.float64, copy=False),
             ),
             dtype=_np.float64,
         )
-        if out is not None:
-            if out.shape != result.shape:
-                raise ValueError(
-                    f"dgemm: out shape {out.shape} doesn't match "
-                    f"result shape {result.shape}"
-                )
-            out[:] = result
-            return out
-        return result
 
     def dsyrk(X: _np.ndarray) -> _np.ndarray:
         """Compute symmetric rank-k update: K = X @ X.T.

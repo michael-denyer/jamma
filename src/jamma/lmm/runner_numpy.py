@@ -1181,9 +1181,10 @@ def run_lmm_association_numpy(
 
         # Split SoA path: build SNP-varying Uab in SoA layout.
         # Reuse preallocated buffer when chunk is full-sized.
+        # out= only supported for n_cvt=1; general path allocates internally.
         out_var = (
             _uab_var_bufs[buf_idx][:actual_len, :, :]
-            if _uab_var_bufs is not None and actual_len == chunk_size
+            if _uab_var_bufs is not None and actual_len == chunk_size and n_cvt == 1
             else None
         )
         uab_var_soa = batch_compute_uab_varying_soa_numpy(
@@ -1595,9 +1596,12 @@ def run_lmm_association_numpy(
                 elif use_split:
                     # Build SoA-layout varying Uab only — invariant precomputed.
                     # Reuse pre-allocated buffer when chunk is full-sized.
+                    # out= only for n_cvt=1; general path allocates.
                     _out = (
                         _uab_var_bufs[0]
-                        if _uab_var_bufs is not None and actual_snps == chunk_size
+                        if _uab_var_bufs is not None
+                        and actual_snps == chunk_size
+                        and n_cvt == 1
                         else None
                     )
                     uab_var_soa = batch_compute_uab_varying_soa_numpy(

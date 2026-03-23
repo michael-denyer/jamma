@@ -172,10 +172,16 @@ def _openmp_flags_for_libiomp5(
     lib_dir = libiomp5_path.parent
     link_flags = [str(libiomp5_path), f"-Wl,-rpath,{lib_dir}"]
 
-    # Prefer clang for libiomp5 compatibility — avoids GOMP shim bugs
+    # Prefer clang for libiomp5 compatibility — avoids GOMP shim bugs.
+    # clang with -fopenmp natively generates kmp_* calls; GCC generates
+    # GOMP_* calls that use libiomp5's buggy compatibility shim.
     clang_path = shutil.which("clang")
     if clang_path is not None:
-        # Verify clang can compile with OpenMP against this libiomp5
+        # Minimal test: verify clang accepts -fopenmp and can link against
+        # the specific libiomp5.  We avoid #include <omp.h> because
+        # libomp-dev may not be installed — the actual C sources include
+        # omp.h conditionally and the header is found via -I flags at
+        # compile time, not at detection time.
         result = subprocess.run(
             [
                 clang_path,
@@ -188,7 +194,7 @@ def _openmp_flags_for_libiomp5(
                 str(libiomp5_path),
                 f"-Wl,-rpath,{lib_dir}",
             ],
-            input="#include <omp.h>\nint main(){return omp_get_max_threads();}\n",
+            input="int main(){return 0;}\n",
             capture_output=True,
             text=True,
         )

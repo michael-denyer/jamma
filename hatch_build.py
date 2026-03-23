@@ -350,7 +350,7 @@ class CustomBuildHook(BuildHookInterface):
                     str(libiomp5_path),
                     f"-Wl,-rpath,{lib_dir}",
                 ],
-                input="#include <omp.h>\nint main(){return omp_get_max_threads();}\n",
+                input="int main(){return 0;}\n",
                 capture_output=True,
                 text=True,
             )

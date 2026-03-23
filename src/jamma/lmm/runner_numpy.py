@@ -40,9 +40,9 @@ from jamma.lmm.compute_numpy import (
     _compute_lrt_split_numpy,
     _compute_score_split_numpy,
     compute_mode4_fused_c_ws,
+    compute_mode4_fused_general_c_ws,
     compute_mode4_split_c_ws,
     compute_wald_fused_c_ws,
-    compute_mode4_fused_general_c_ws,
     compute_wald_fused_general_c_ws,
     compute_wald_general_c_ws,
     compute_wald_split_c_ws,
@@ -50,9 +50,9 @@ from jamma.lmm.compute_numpy import (
     create_lmm_workspace_fused,
     create_lmm_workspace_fused_general,
     create_lmm_workspace_general,
-    create_lmm_workspace_mode4_fused_general,
     create_lmm_workspace_mode4,
     create_lmm_workspace_mode4_fused,
+    create_lmm_workspace_mode4_fused_general,
 )
 from jamma.lmm.impute import impute_missing_inplace
 from jamma.lmm.likelihood_numpy import (

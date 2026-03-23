@@ -5407,3 +5407,95 @@ class TestLrtWorkspaceParity:
 
         with pytest.raises(ValueError, match="PyCapsule_GetPointer"):
             _compute_lrt_fused_ws_c(score_ws, utg_t, 1)
+
+
+# ---------------------------------------------------------------------------
+# Identity Pab optimization — logdet_from_row0 helper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+def test_general_wald_identity_pab_optimization(synthetic_covariate_data_ncvt2):
+    """C-GEN-OPT-01: logdet_from_row0 helper produces identical Wald results.
+
+    Verifies the identity Pab prepass optimization (logdet_from_row0 helper)
+    produces numerically identical results to the Python reference. This test
+    specifically targets the logdet_iab computation path which flows through
+    to REML log-likelihood and ultimately to Wald beta/SE/p-values.
+
+    The C extension uses logdet_from_row0 to deduplicate the identity Pab
+    prepass across compute_lmm_chunk_general_c, fused general Wald, and
+    fused general mode-4. If the helper introduces any numerical divergence,
+    it will show up in the Wald results compared to the Python reference.
+    """
+    from jamma.lmm.likelihood import classify_uab_columns
+
+    data = synthetic_covariate_data_ncvt2
+    n_cvt = data["n_cvt"]
+    eigenvalues = data["eigenvalues"]
+    Uab_batch = data["Uab_batch"]
+    n_samples = data["n_samples"]
+
+    # Python reference (force fallback — no C extension)
+    orig = compute_numpy._C_GENERAL_AVAILABLE
+    try:
+        compute_numpy._C_GENERAL_AVAILABLE = False
+        result_py = _compute_wald_numpy(
+            n_cvt,
+            eigenvalues,
+            Uab_batch,
+            n_samples,
+            l_min=1e-5,
+            l_max=1e5,
+            n_grid=50,
+            n_refine=20,
+        )
+    finally:
+        compute_numpy._C_GENERAL_AVAILABLE = orig
+
+    # C extension path (uses logdet_from_row0 helper internally)
+    result_c = _compute_wald_numpy(
+        n_cvt,
+        eigenvalues,
+        Uab_batch,
+        n_samples,
+        l_min=1e-5,
+        l_max=1e5,
+        n_grid=50,
+        n_refine=20,
+        n_threads=1,
+    )
+
+    # logdet_iab affects REML logl which flows to lambda, beta, SE, p-values.
+    # Any divergence from the optimization would show up here.
+    for key in ("lambdas", "logls", "betas", "ses"):
+        np.testing.assert_allclose(
+            result_c[key],
+            result_py[key],
+            rtol=1e-10,
+            atol=1e-14,
+            equal_nan=True,
+            err_msg=(
+                f"{key}: C (logdet_from_row0) vs Python mismatch — "
+                f"identity Pab optimization may have diverged"
+            ),
+        )
+    np.testing.assert_allclose(
+        result_c["pwalds"],
+        result_py["pwalds"],
+        rtol=1e-6,
+        atol=1e-14,
+        equal_nan=True,
+        err_msg=(
+            "pwalds: C (logdet_from_row0) vs Python mismatch — "
+            "identity Pab optimization may have diverged"
+        ),
+    )
+
+    # Verify we actually tested SNPs (not an empty batch)
+    valid = ~np.isnan(result_c["betas"])
+    assert np.sum(valid) > 0, "No valid SNPs — test is vacuous"
+
+    # Cross-check: n_cvt=4 data as well for broader coverage
+    # (handled by test_general_ncvt_reml_wald_ncvt4 separately)

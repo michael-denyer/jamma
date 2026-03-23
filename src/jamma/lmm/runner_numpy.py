@@ -907,7 +907,26 @@ def run_lmm_association_numpy(
 
     chunk_starts = list(range(0, n_filtered, chunk_size))
 
-    # Pre-allocate SoA varying buffer for sequential path (reuse across chunks).
+    # --- Preallocate per-chunk buffers to eliminate malloc/free per iteration ---
+    # Genotype copy buffer: avoids fancy-index allocation each chunk.
+    # Float64 regardless of genotypes.dtype (imputation needs float64).
+    if use_pipeline:
+        # Pipeline overlaps prepare(N+1) with compute(N) — two chunks live.
+        _geno_bufs = [
+            np.empty((n_samples, chunk_size), dtype=np.float64),
+            np.empty((n_samples, chunk_size), dtype=np.float64),
+        ]
+        _utg_bufs = [
+            np.empty((chunk_size, n_samples), dtype=np.float64),
+            np.empty((chunk_size, n_samples), dtype=np.float64),
+        ]
+    else:
+        _geno_bufs = [np.empty((n_samples, chunk_size), dtype=np.float64)]
+        _utg_bufs = [np.empty((chunk_size, n_samples), dtype=np.float64)]
+
+    _chunk_counter = 0  # For double-buffer index selection
+
+    # Pre-allocate SoA varying buffer (reuse across chunks).
     # Shape: (chunk_size, n_var, n_samples) where n_var=3 for n_cvt=1.
     # Not needed when fused path is active (no uab_varying_soa computed).
     no_fused = (
@@ -917,7 +936,7 @@ def run_lmm_association_numpy(
         and not use_fused_score_ws
         and not use_fused_lrt_ws
     )
-    if use_split and not use_pipeline and no_fused:
+    if use_split and no_fused:
         from jamma.lmm.likelihood import classify_uab_columns
 
         n_var = 3 if n_cvt == 1 else len(classify_uab_columns(n_cvt)[1])
@@ -1116,20 +1135,30 @@ def run_lmm_association_numpy(
         BLAS operations release the GIL. Returns either utg_t (fused path)
         or SoA-layout varying Uab (split path). Invariant Uab is precomputed
         once in outer scope (uab_invariant_soa).
+
+        Uses preallocated geno_buf and utg_buf to avoid per-chunk allocation.
+        Pipeline path double-buffers via _chunk_counter % 2.
         """
+        nonlocal _chunk_counter
+
         chunk_end = min(chunk_start + chunk_size, n_filtered)
         chunk_indices = snp_indices[chunk_start:chunk_end]
-        geno_chunk = genotypes[:, chunk_indices]
+        actual_len = chunk_end - chunk_start
+
+        # Copy genotypes into preallocated buffer (avoids fancy-index alloc).
+        buf_idx = _chunk_counter % len(_geno_bufs)
+        _chunk_counter += 1
+        geno_chunk = _geno_bufs[buf_idx][:, :actual_len]
+        geno_chunk[:] = genotypes[:, chunk_indices]
 
         # Mean-impute
         impute_missing_inplace(geno_chunk, col_means[chunk_indices])
 
-        # Rotate — jlinalg.dgemm(chunk, U, transa="T") produces
-        # C-contiguous (n_snps, n_samples) directly, no intermediate UtG.
+        # Rotate into preallocated utg_buf — jlinalg.dgemm(..., out=)
+        # writes directly, no intermediate allocation.
+        utg_out = _utg_bufs[buf_idx][:actual_len, :]
         with blas_threads(pipeline_rot_threads):
-            utg_t = jlinalg.dgemm(geno_chunk, U, transa="T")
-
-        actual_len = chunk_end - chunk_start
+            utg_t = jlinalg.dgemm(geno_chunk, U, transa="T", out=utg_out)
 
         if (
             use_fused
@@ -1142,7 +1171,15 @@ def run_lmm_association_numpy(
             return utg_t, actual_len
 
         # Split SoA path: build SNP-varying Uab in SoA layout.
-        uab_var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t)
+        # Reuse preallocated buffer when chunk is full-sized.
+        out_var = (
+            uab_var_buf[:actual_len, :, :]
+            if uab_var_buf is not None and actual_len == chunk_size
+            else None
+        )
+        uab_var_soa = batch_compute_uab_varying_soa_numpy(
+            n_cvt, UtW, Uty, utg_t, out=out_var
+        )
         return uab_var_soa, actual_len
 
     def _compute_and_write(chunk_data: np.ndarray, actual_len: int) -> None:
@@ -1430,19 +1467,22 @@ def run_lmm_association_numpy(
             for chunk_start in chunk_iterator:
                 chunk_end = min(chunk_start + chunk_size, n_filtered)
                 chunk_indices = snp_indices[chunk_start:chunk_end]
-                geno_chunk = genotypes[:, chunk_indices]
+                actual_snps = chunk_end - chunk_start
+
+                # Copy genotypes into preallocated buffer (avoids fancy-index alloc).
+                geno_chunk = _geno_bufs[0][:, :actual_snps]
+                geno_chunk[:] = genotypes[:, chunk_indices]
 
                 # Mean-impute missing genotypes
                 impute_missing_inplace(geno_chunk, col_means[chunk_indices])
 
-                # Rotate genotypes — jlinalg.dgemm(chunk, U, transa="T")
-                # produces C-contiguous (n_snps, n_samples) directly.
+                # Rotate into preallocated utg_buf — jlinalg.dgemm(..., out=)
+                # writes directly, no intermediate allocation.
                 t_rot_start = time.perf_counter()
-                actual_snps = geno_chunk.shape[1]
+                utg_out = _utg_bufs[0][:actual_snps, :]
                 with blas_threads(rotation_threads):
-                    utg_t = jlinalg.dgemm(geno_chunk, U, transa="T")
+                    utg_t = jlinalg.dgemm(geno_chunk, U, transa="T", out=utg_out)
                 t_rotation_total += time.perf_counter() - t_rot_start
-                del geno_chunk
 
                 # Compute
                 t_compute_start = time.perf_counter()

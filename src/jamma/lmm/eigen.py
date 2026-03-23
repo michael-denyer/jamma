@@ -11,6 +11,7 @@ eigendecomposition of large kinship matrices (46k+) requires ILP64 LAPACK.
 With ILP64 vendor BLAS, matrices up to 200k+ are supported.
 """
 
+import os
 import time
 import warnings
 
@@ -130,9 +131,13 @@ def eigendecompose_kinship(
     # Decide eigendecomp driver: inplace DSYEVD > DSYEVD > DSYEVR.
     # Inplace requires vendor DSYEVD and a C-contiguous writeable float64 K
     # (otherwise PyArray_FROM_OTF copies, defeating memory savings).
+    # JLINALG_NO_VENDOR_LAPACK forces the D&C pipeline which cannot do inplace
+    # (dsytrd overwrites K with Householder vectors that dormtr needs later).
     dsyevd_peak = _dsyevd_peak_gb(n_samples)
+    no_vendor = os.environ.get("JLINALG_NO_VENDOR_LAPACK", "").strip() not in ("", "0")
     use_inplace = (
-        bool(jlinalg.blas_has_dsyevd)
+        not no_vendor
+        and bool(jlinalg.blas_has_dsyevd)
         and K.dtype == np.float64
         and K.flags["C_CONTIGUOUS"]
         and K.flags["WRITEABLE"]
@@ -142,7 +147,7 @@ def eigendecompose_kinship(
 
     margin = _memory_margin_gb(required_gb)
     if required_gb + margin > available_gb:
-        if jlinalg.blas_has_dsyevr:
+        if jlinalg.blas_has_dsyevr and not no_vendor:
             dsyevd_req = required_gb  # capture before overwrite
             required_gb = _dsyevr_peak_gb(n_samples)
             use_inplace = False

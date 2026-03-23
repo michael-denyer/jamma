@@ -2487,7 +2487,7 @@ def test_batch_compute_uab_varying_soa_rejects_wrong_out_shape():
 
 @pytest.mark.tier0
 def test_batch_compute_uab_varying_soa_rejects_wrong_out_shape_general_ncvt():
-    """batch_compute_uab_varying_soa_numpy raises ValueError for wrong out= shape with n_cvt > 1."""
+    """Raises ValueError for wrong out= shape with n_cvt > 1."""
     rng = np.random.default_rng(99)
     n_samples, n_snps, n_cvt = 50, 10, 2
     UtW = rng.standard_normal((n_samples, n_cvt))

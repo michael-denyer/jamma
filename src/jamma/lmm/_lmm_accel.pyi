@@ -243,7 +243,6 @@ def compute_mode4_chunk_fused_general_c(
     utg_t: npt.NDArray[np.float64],
     n_threads: int,
 ) -> dict[str, npt.NDArray[np.float64]]: ...
-
 def compute_score_split_general_c(
     eigenvalues: npt.NDArray[np.float64],
     uab_varying_soa: npt.NDArray[np.float64],

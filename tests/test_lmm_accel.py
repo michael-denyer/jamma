@@ -3104,8 +3104,13 @@ def test_general_score_split_ncvt2(general_score_lrt_ncvt2):
 
     # Reference: reconstruct + batch general C
     ref = compute_score_batch_general_c(
-        eigenvalues, Uab_batch, Hi_eval_null,
-        n_samples, n_cvt, pab_table_dict, 1,
+        eigenvalues,
+        Uab_batch,
+        Hi_eval_null,
+        n_samples,
+        n_cvt,
+        pab_table_dict,
+        1,
     )
 
     # SoA split path
@@ -3113,8 +3118,14 @@ def test_general_score_split_ncvt2(general_score_lrt_ncvt2):
     uab_var = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG.T)
 
     result = compute_score_split_general_c(
-        eigenvalues, uab_var, uab_inv, Hi_eval_null,
-        n_samples, n_cvt, pab_table_dict, 1,
+        eigenvalues,
+        uab_var,
+        uab_inv,
+        Hi_eval_null,
+        n_samples,
+        n_cvt,
+        pab_table_dict,
+        1,
     )
 
     # SoA split accumulates dot products column-by-column (outer loop=column,
@@ -3122,18 +3133,27 @@ def test_general_score_split_ncvt2(general_score_lrt_ncvt2):
     # inner=columns). Different FP accumulation order gives machine-epsilon
     # differences for n_cvt>=2. Use tight allclose instead of bitwise equality.
     np.testing.assert_allclose(
-        result["betas"], ref["betas"],
-        rtol=1e-12, atol=1e-14, equal_nan=True,
+        result["betas"],
+        ref["betas"],
+        rtol=1e-12,
+        atol=1e-14,
+        equal_nan=True,
         err_msg="betas: split general vs batch general mismatch for n_cvt=2",
     )
     np.testing.assert_allclose(
-        result["ses"], ref["ses"],
-        rtol=1e-12, atol=1e-14, equal_nan=True,
+        result["ses"],
+        ref["ses"],
+        rtol=1e-12,
+        atol=1e-14,
+        equal_nan=True,
         err_msg="ses: split general vs batch general mismatch for n_cvt=2",
     )
     np.testing.assert_allclose(
-        result["p_scores"], ref["p_scores"],
-        rtol=1e-12, atol=1e-14, equal_nan=True,
+        result["p_scores"],
+        ref["p_scores"],
+        rtol=1e-12,
+        atol=1e-14,
+        equal_nan=True,
         err_msg="p_scores: split general vs batch general mismatch for n_cvt=2",
     )
 
@@ -3170,8 +3190,17 @@ def test_general_lrt_split_ncvt2(general_score_lrt_ncvt2):
 
     # Reference: reconstruct + batch general C
     ref = compute_lrt_batch_general_c(
-        eigenvalues, Uab_batch, n_samples, n_cvt, pab_table_dict,
-        l_min, l_max, n_grid, n_refine, logl_H0, 1,
+        eigenvalues,
+        Uab_batch,
+        n_samples,
+        n_cvt,
+        pab_table_dict,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        logl_H0,
+        1,
     )
 
     # SoA split path
@@ -3179,18 +3208,34 @@ def test_general_lrt_split_ncvt2(general_score_lrt_ncvt2):
     uab_var = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG.T)
 
     result = compute_lrt_split_general_c(
-        eigenvalues, uab_var, uab_inv, n_samples, n_cvt, pab_table_dict,
-        l_min, l_max, n_grid, n_refine, logl_H0, 1,
+        eigenvalues,
+        uab_var,
+        uab_inv,
+        n_samples,
+        n_cvt,
+        pab_table_dict,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        logl_H0,
+        1,
     )
 
     np.testing.assert_allclose(
-        result["lambdas_mle"], ref["lambdas_mle"],
-        rtol=1e-12, atol=1e-14, equal_nan=True,
+        result["lambdas_mle"],
+        ref["lambdas_mle"],
+        rtol=1e-12,
+        atol=1e-14,
+        equal_nan=True,
         err_msg="lambdas_mle: split general vs batch general mismatch for n_cvt=2",
     )
     np.testing.assert_allclose(
-        result["p_lrts"], ref["p_lrts"],
-        rtol=1e-12, atol=1e-14, equal_nan=True,
+        result["p_lrts"],
+        ref["p_lrts"],
+        rtol=1e-12,
+        atol=1e-14,
+        equal_nan=True,
         err_msg="p_lrts: split general vs batch general mismatch for n_cvt=2",
     )
 
@@ -3225,31 +3270,51 @@ def test_general_score_split_ncvt4(general_score_lrt_ncvt4):
     pab_table_dict = build_pab_table_for_c(n_cvt)
 
     ref = compute_score_batch_general_c(
-        eigenvalues, Uab_batch, Hi_eval_null,
-        n_samples, n_cvt, pab_table_dict, 1,
+        eigenvalues,
+        Uab_batch,
+        Hi_eval_null,
+        n_samples,
+        n_cvt,
+        pab_table_dict,
+        1,
     )
 
     uab_inv = compute_uab_invariant_soa(UtW, Uty, n_cvt=n_cvt)
     uab_var = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG.T)
 
     result = compute_score_split_general_c(
-        eigenvalues, uab_var, uab_inv, Hi_eval_null,
-        n_samples, n_cvt, pab_table_dict, 1,
+        eigenvalues,
+        uab_var,
+        uab_inv,
+        Hi_eval_null,
+        n_samples,
+        n_cvt,
+        pab_table_dict,
+        1,
     )
 
     np.testing.assert_allclose(
-        result["betas"], ref["betas"],
-        rtol=1e-12, atol=1e-14, equal_nan=True,
+        result["betas"],
+        ref["betas"],
+        rtol=1e-12,
+        atol=1e-14,
+        equal_nan=True,
         err_msg="betas: split general vs batch general mismatch for n_cvt=4",
     )
     np.testing.assert_allclose(
-        result["ses"], ref["ses"],
-        rtol=1e-12, atol=1e-14, equal_nan=True,
+        result["ses"],
+        ref["ses"],
+        rtol=1e-12,
+        atol=1e-14,
+        equal_nan=True,
         err_msg="ses: split general vs batch general mismatch for n_cvt=4",
     )
     np.testing.assert_allclose(
-        result["p_scores"], ref["p_scores"],
-        rtol=1e-12, atol=1e-14, equal_nan=True,
+        result["p_scores"],
+        ref["p_scores"],
+        rtol=1e-12,
+        atol=1e-14,
+        equal_nan=True,
         err_msg="p_scores: split general vs batch general mismatch for n_cvt=4",
     )
 
@@ -3285,26 +3350,51 @@ def test_general_lrt_split_ncvt4(general_score_lrt_ncvt4):
     pab_table_dict = build_pab_table_for_c(n_cvt)
 
     ref = compute_lrt_batch_general_c(
-        eigenvalues, Uab_batch, n_samples, n_cvt, pab_table_dict,
-        l_min, l_max, n_grid, n_refine, logl_H0, 1,
+        eigenvalues,
+        Uab_batch,
+        n_samples,
+        n_cvt,
+        pab_table_dict,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        logl_H0,
+        1,
     )
 
     uab_inv = compute_uab_invariant_soa(UtW, Uty, n_cvt=n_cvt)
     uab_var = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG.T)
 
     result = compute_lrt_split_general_c(
-        eigenvalues, uab_var, uab_inv, n_samples, n_cvt, pab_table_dict,
-        l_min, l_max, n_grid, n_refine, logl_H0, 1,
+        eigenvalues,
+        uab_var,
+        uab_inv,
+        n_samples,
+        n_cvt,
+        pab_table_dict,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        logl_H0,
+        1,
     )
 
     np.testing.assert_allclose(
-        result["lambdas_mle"], ref["lambdas_mle"],
-        rtol=1e-12, atol=1e-14, equal_nan=True,
+        result["lambdas_mle"],
+        ref["lambdas_mle"],
+        rtol=1e-12,
+        atol=1e-14,
+        equal_nan=True,
         err_msg="lambdas_mle: split general vs batch general mismatch for n_cvt=4",
     )
     np.testing.assert_allclose(
-        result["p_lrts"], ref["p_lrts"],
-        rtol=1e-12, atol=1e-14, equal_nan=True,
+        result["p_lrts"],
+        ref["p_lrts"],
+        rtol=1e-12,
+        atol=1e-14,
+        equal_nan=True,
         err_msg="p_lrts: split general vs batch general mismatch for n_cvt=4",
     )
 
@@ -3312,7 +3402,7 @@ def test_general_lrt_split_ncvt4(general_score_lrt_ncvt4):
 @pytest.mark.tier0
 @pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
 def test_general_score_lrt_split_dispatch():
-    """C-105-05: Split dispatch for n_cvt>1 Score/LRT avoids reconstruct_uab_from_soa."""
+    """C-105-05: Split dispatch for n_cvt>1 Score/LRT."""
     import inspect
 
     from jamma.lmm.compute_numpy import (
@@ -3325,12 +3415,14 @@ def test_general_score_lrt_split_dispatch():
 
     # When C is available, the n_cvt>1 path should have a C dispatch
     # before the reconstruct_uab_from_soa fallback.
-    assert "_compute_score_split_general_c" in score_src or \
-        "compute_score_split_general_c" in score_src, \
-        "Score split dispatch missing general C path for n_cvt>1"
-    assert "_compute_lrt_split_general_c" in lrt_src or \
-        "compute_lrt_split_general_c" in lrt_src, \
-        "LRT split dispatch missing general C path for n_cvt>1"
+    assert (
+        "_compute_score_split_general_c" in score_src
+        or "compute_score_split_general_c" in score_src
+    ), "Score split dispatch missing general C path for n_cvt>1"
+    assert (
+        "_compute_lrt_split_general_c" in lrt_src
+        or "compute_lrt_split_general_c" in lrt_src
+    ), "LRT split dispatch missing general C path for n_cvt>1"
 
 
 # ---------------------------------------------------------------------------
@@ -5903,7 +5995,6 @@ def test_general_wald_identity_pab_optimization(synthetic_covariate_data_ncvt2):
     fused general mode-4. If the helper introduces any numerical divergence,
     it will show up in the Wald results compared to the Python reference.
     """
-    from jamma.lmm.likelihood import classify_uab_columns
 
     data = synthetic_covariate_data_ncvt2
     n_cvt = data["n_cvt"]

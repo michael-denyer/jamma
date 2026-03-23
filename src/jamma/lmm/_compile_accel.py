@@ -22,73 +22,7 @@ import sys
 import sysconfig
 from pathlib import Path
 
-
-def _detect_linux_openmp_flags(
-    cc_cmd: str, _print: object = print
-) -> tuple[list[str], list[str]]:
-    """Detect the best OpenMP flags for Linux.
-
-    Prefers Intel OpenMP (libiomp5) when available to avoid the libgomp/libiomp5
-    dual-runtime conflict on systems with MKL-backed numpy. MKL uses libiomp5
-    internally; linking _lmm_accel against libgomp creates two OpenMP runtimes
-    in the same process, which can cause thread oversubscription or hangs.
-
-    On GCC, ``-fopenmp`` at link time implicitly adds ``-lgomp``.  When we
-    link libiomp5 by full path, passing ``-fopenmp`` to the linker would load
-    *both* libgomp and libiomp5 into the same process — triggering an Intel
-    OMP assertion failure (``kmp_runtime.cpp``).  We therefore split the
-    return into compile-only and link-only flags.
-
-    Detection order:
-    1. libiomp5 (Intel OpenMP) — found via numpy's MKL libs or system paths
-    2. libgomp (GNU OpenMP) — standard fallback via -fopenmp
-
-    Returns:
-        ``(compile_flags, link_flags)`` for OpenMP, or ``([], [])`` if
-        unavailable.
-    """
-    # Check if numpy bundles MKL (and thus libiomp5)
-    try:
-        import numpy as np
-
-        np_dir = Path(np.__file__).parent
-        # MKL numpy bundles libiomp5 in numpy.libs/ or numpy/_core/.libs/
-        search_dirs = [
-            np_dir / ".libs",
-            np_dir.parent / "numpy.libs",
-            np_dir / "_core" / ".libs",
-        ]
-        for d in search_dirs:
-            if not d.is_dir():
-                continue
-            for lib in d.iterdir():
-                if "libiomp5" in lib.name and ".so" in lib.name:
-                    _print(f"Intel OpenMP found: {lib}")
-                    # Link by full path — numpy bundles versioned names like
-                    # libiomp5-2f035e84.so with no unversioned symlink, so
-                    # -liomp5 fails at link time.  Do NOT pass -fopenmp to
-                    # the linker: GCC would add -lgomp, creating a dual
-                    # OpenMP runtime that aborts at init.
-                    return (
-                        ["-fopenmp"],
-                        [str(lib), f"-Wl,-rpath,{d}"],
-                    )
-    except ImportError:
-        pass
-
-    # Check system-wide libiomp5 (e.g. from intel-openmp package)
-    result = subprocess.run(
-        [cc_cmd, "-liomp5", "-x", "c", "-", "-o", "/dev/null"],
-        input="int main(){return 0;}\n",
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode == 0:
-        _print("Intel OpenMP (system libiomp5) detected")
-        return (["-fopenmp"], ["-liomp5"])
-
-    # Fallback to GNU OpenMP (safe to use -fopenmp for both compile and link)
-    return (["-fopenmp"], ["-fopenmp"])
+from jamma.core.openmp_detect import detect_openmp_flags
 
 
 def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
@@ -172,37 +106,10 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
 
     # Platform flags (GCC/Clang) — split into compile-only and link-only to
     # avoid loading both libgomp (-fopenmp on GCC linker) and libiomp5 (MKL).
-    omp_compile: list[str] = []
-    omp_link: list[str] = []
     ldflags: list[str] = []
+    omp_compile, omp_link = detect_openmp_flags(cc_cmd, platform.system(), _detail)
     if platform.system() == "Darwin":
-        try:
-            prefix = subprocess.check_output(
-                ["brew", "--prefix", "libomp"],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            ).strip()
-            omp_compile = [
-                f"-I{prefix}/include",
-                "-Xpreprocessor",
-                "-fopenmp",
-            ]
-            omp_link = [
-                f"-L{prefix}/lib",
-                "-lomp",
-            ]
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            _print(
-                "OpenMP not available (libomp not found via Homebrew). "
-                "Extension will be single-threaded. "
-                "Install for parallelism: brew install libomp"
-            )
         ldflags = ["-undefined", "dynamic_lookup"]
-    else:
-        # Prefer Intel OpenMP (libiomp5) when available — avoids libgomp/libiomp5
-        # dual-runtime conflict on systems with MKL numpy. libiomp5 ships with
-        # intel-openmp or MKL packages.
-        omp_compile, omp_link = _detect_linux_openmp_flags(cc_cmd, _detail)
 
     # -march=native is safe here: compiles on the user's own machine.
     # hatch_build.py omits this flag for portable wheel builds.

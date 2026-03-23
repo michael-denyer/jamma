@@ -274,6 +274,10 @@ class CustomBuildHook(BuildHookInterface):
     def _detect_linux_openmp_flags(self, cc_cmd: str) -> tuple[list[str], list[str]]:
         """Detect the best OpenMP flags for Linux.
 
+        This is a copy of ``jamma.core.openmp_detect._detect_linux_openmp_flags``.
+        hatch_build.py cannot import from jamma.* at wheel-build time, so we
+        maintain this copy here — keep the two in sync.
+
         Prefers Intel OpenMP (libiomp5) when available to avoid the
         libgomp/libiomp5 dual-runtime conflict on systems with MKL-backed
         numpy. Falls back to GNU OpenMP (-fopenmp → libgomp).

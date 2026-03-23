@@ -4122,6 +4122,191 @@ def test_fused_general_ncvt2_mode4(general_score_lrt_ncvt2):
     not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
     reason="Fused general C not available",
 )
+def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
+    """FGEN-08: Regression test — fused general mode-4 produces finite lambda_mle.
+
+    Previously, fused general mode-4 produced NaN lambda_mle due to missing
+    mle_const in the workspace. This test verifies the fix: all non-degenerate
+    SNPs must have finite lambda_mle values.
+    """
+    from jamma.lmm.compute_numpy import (
+        compute_mode4_fused_general_c_ws,
+        create_lmm_workspace_mode4_fused_general,
+    )
+    from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
+
+    data = general_score_lrt_ncvt2
+    eigenvalues = data["eigenvalues"]
+    n_samples = data["n_samples"]
+    n_cvt = data["n_cvt"]
+    Uab_batch = data["Uab_batch"]
+    UtW = data["UtW"]
+    Uty = data["Uty"]
+    UtG = data["UtG"]
+    Hi_eval_null = data["Hi_eval_null"]
+    logl_H0 = data["logl_H0"]
+
+    inv_indices, _ = classify_uab_columns(n_cvt)
+    uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
+    utg_t = np.ascontiguousarray(UtG.T)
+    pab_c = build_pab_table_for_c(n_cvt)
+    pab_kwargs = {
+        k: pab_c[k]
+        for k in [
+            "invariant_indices",
+            "varying_indices",
+            "logdet_diag_rows",
+            "logdet_diag_cols",
+            "level_offsets",
+            "level_counts",
+            "entries",
+            "idx_xx",
+            "idx_xy",
+            "idx_yy",
+            "var_a_cols",
+            "var_b_cols",
+        ]
+    }
+
+    ws_fused = create_lmm_workspace_mode4_fused_general(
+        eigenvalues,
+        uab_inv_soa,
+        UtW,
+        Uty,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+        n_cvt=n_cvt,
+        **pab_kwargs,
+        hi_eval_null=Hi_eval_null,
+        logl_H0=logl_H0,
+    )
+    result = compute_mode4_fused_general_c_ws(ws_fused, utg_t, 1)
+
+    # All non-degenerate SNPs must have finite lambda_mle
+    lambdas_mle = result["lambdas_mle"]
+    # Degenerate SNPs (constant genotype) may produce NaN — check non-degenerate
+    non_degen = np.isfinite(result["betas"])  # Wald beta finite => non-degenerate
+    assert np.all(np.isfinite(lambdas_mle[non_degen])), (
+        f"NaN lambda_mle found for {np.sum(~np.isfinite(lambdas_mle[non_degen]))} "
+        f"non-degenerate SNPs (regression: mode-4 fused general NaN bug)"
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(
+    not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
+    reason="Fused general C not available",
+)
+def test_fused_general_mode4_lrt_parity_ncvt2(general_score_lrt_ncvt2):
+    """FGEN-09: Fused general mode-4 LRT matches compose fallback.
+
+    Compares fused general mode-4 lambdas_mle and p_lrts against the
+    non-fused batch LRT C path (compute_lrt_batch_general_c).
+    """
+    from jamma.lmm._lmm_accel import compute_lrt_batch_general_c
+    from jamma.lmm.compute_numpy import (
+        compute_mode4_fused_general_c_ws,
+        create_lmm_workspace_mode4_fused_general,
+    )
+    from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
+
+    data = general_score_lrt_ncvt2
+    eigenvalues = data["eigenvalues"]
+    n_samples = data["n_samples"]
+    n_cvt = data["n_cvt"]
+    Uab_batch = data["Uab_batch"]
+    UtW = data["UtW"]
+    Uty = data["Uty"]
+    UtG = data["UtG"]
+    Hi_eval_null = data["Hi_eval_null"]
+    logl_H0 = data["logl_H0"]
+
+    inv_indices, _ = classify_uab_columns(n_cvt)
+    uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
+    utg_t = np.ascontiguousarray(UtG.T)
+    pab_c = build_pab_table_for_c(n_cvt)
+    pab_kwargs = {
+        k: pab_c[k]
+        for k in [
+            "invariant_indices",
+            "varying_indices",
+            "logdet_diag_rows",
+            "logdet_diag_cols",
+            "level_offsets",
+            "level_counts",
+            "entries",
+            "idx_xx",
+            "idx_xy",
+            "idx_yy",
+            "var_a_cols",
+            "var_b_cols",
+        ]
+    }
+
+    # Fused general mode-4 result
+    ws_fused = create_lmm_workspace_mode4_fused_general(
+        eigenvalues,
+        uab_inv_soa,
+        UtW,
+        Uty,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+        n_cvt=n_cvt,
+        **pab_kwargs,
+        hi_eval_null=Hi_eval_null,
+        logl_H0=logl_H0,
+    )
+    result_fused = compute_mode4_fused_general_c_ws(ws_fused, utg_t, 1)
+
+    # Non-fused batch LRT reference
+    result_lrt = compute_lrt_batch_general_c(
+        eigenvalues,
+        Uab_batch,
+        n_samples,
+        n_cvt,
+        pab_c,
+        1e-5,
+        1e5,
+        50,
+        20,
+        logl_H0,
+        1,
+    )
+
+    # lambdas_mle parity (golden section FP tolerance)
+    np.testing.assert_allclose(
+        result_fused["lambdas_mle"],
+        result_lrt["lambdas_mle"],
+        rtol=5e-5,
+        atol=1e-14,
+        equal_nan=True,
+        err_msg="lambdas_mle: fused general mode-4 vs batch LRT mismatch",
+    )
+
+    # p_lrts parity (CDF tolerance)
+    np.testing.assert_allclose(
+        result_fused["p_lrts"],
+        result_lrt["p_lrts"],
+        rtol=1e-4,
+        atol=1e-14,
+        equal_nan=True,
+        err_msg="p_lrts: fused general mode-4 vs batch LRT mismatch",
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(
+    not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
+    reason="Fused general C not available",
+)
 def test_fused_general_workspace_lifecycle(synthetic_covariate_data_ncvt2):
     """FGEN-04: Fused general workspace creates, computes, and destroys cleanly."""
     from jamma.lmm.compute_numpy import (

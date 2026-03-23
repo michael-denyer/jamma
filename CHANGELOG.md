@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.5.0] - 2026-03-23
+
+### Added
+
+- Split general Score/LRT C entry points (`compute_score_split_general_c`,
+  `compute_lrt_split_general_c`) — accept SoA data directly, eliminating
+  `reconstruct_uab_from_soa` for n_cvt>1 (~75 GB saved at n_cvt=2/100k samples)
+- `out=` buffer reuse for general n_cvt in `batch_compute_uab_varying_soa_numpy` —
+  zero per-chunk allocation for varying SoA across all covariate counts
+- `logdet_from_row0` helper — deduplicates 3 inline identity Pab prepass blocks
+- Fused general mode-4 dispatch for n_cvt≥2 — all 8 output arrays (Wald + Score +
+  LRT) computed in a single workspace pass
+
+### Fixed
+
+- Mode-4 fused general availability guard now checks `_C_MODE4_FUSED_GENERAL_AVAILABLE`
+  (previously used Wald-only flag)
+- `out=` buffer validates dtype (float64) and C-contiguity
+- OpenMP compile/link flag split to prevent dual-runtime SIGABRT (libgomp + libiomp5)
+- Chunk-size accounting for n_cvt>1 Score/LRT reflects split C dispatch (no Uab
+  reconstruction overhead)
+
 ## [4.4.2] - 2026-03-23
 
 ### Fixed

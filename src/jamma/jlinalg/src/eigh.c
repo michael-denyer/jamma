@@ -57,6 +57,14 @@ int jlinalg_eigh_c(npy_intp N,
         return 0;
     }
 
+    /* JLINALG_NO_VENDOR_LAPACK: skip MKL/Accelerate dsyevd/dsyevr and use
+     * jlinalg's own dsytrd+dstedc+dormtr pipeline.  This avoids MKL's
+     * internal OpenMP usage which can corrupt the libiomp5 thread pool on
+     * systems where MKL loads a separate libiomp5 instance (causes OMP
+     * Error #13 assertion failure at kmp_runtime.cpp). */
+    const char *no_vendor = getenv("JLINALG_NO_VENDOR_LAPACK");
+    int skip_vendor = (no_vendor && no_vendor[0] != '\0' && no_vendor[0] != '0');
+
     /* --- Vendor dsyevd fast path ---
      * When vendor LAPACK dsyevd is available (Accelerate, MKL), call it
      * directly instead of the three-step dsytrd+dstedc+dormtr pipeline.
@@ -76,7 +84,7 @@ int jlinalg_eigh_c(npy_intp N,
      * ldk/ldz > N cannot be reinterpreted safely as the vendor's packed
      * column-major layout.
      */
-    {
+    if (!skip_vendor) {
         if (ldk == N && ldz == N) {
             if (K != eigenvectors)
                 memcpy(eigenvectors, K, (size_t)N * (size_t)N * sizeof(double));
@@ -152,7 +160,7 @@ int jlinalg_eigh_c(npy_intp N,
      * DSYEVR reads K directly (no work copy needed).  When K != eigenvectors,
      * it writes into the caller's eigenvectors buffer; when K == eigenvectors,
      * jlinalg_dsyevr_ext allocates a temporary Z_col internally. */
-    if (blas_has_dsyevr()) {
+    if (!skip_vendor && blas_has_dsyevr()) {
         int evr_ret = jlinalg_dsyevr_ext(N, K, ldk, eigenvalues, eigenvectors, ldz);
         if (evr_ret == JLINALG_EXT_SUCCESS)
             return 0;

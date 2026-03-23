@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.5.3] - 2026-03-23
+
+### Fixed
+
+- Move `KMP_DUPLICATE_LIB_OK` to `jamma/__init__.py` (earliest import point) —
+  on Databricks, `mkl._mklinit` and scipy are loaded by the kernel before
+  `jlinalg/__init__.py` runs, so the v4.5.2 fix was too late
+
+### Changed
+
+- Consolidate OpenMP detection into `core.openmp_detect` — eliminates 3-way
+  duplication across `_compile_accel.py`, `_compile_jlinalg.py`, and
+  `hatch_build.py` (hatch_build.py keeps its own copy with a sync comment)
+
 ## [4.5.2] - 2026-03-23
 
 ### Fixed

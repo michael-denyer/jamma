@@ -16,6 +16,15 @@ Example:
     >>> print(f"{result.n_snps_tested} SNPs in {result.timing['total_s']:.1f}s")
 """
 
+import os
+
+# Tolerate coexistence of Intel OpenMP (libiomp5, used by MKL numpy and
+# jlinalg) with GNU OpenMP (libgomp, pulled in by scipy or system libs).
+# Must be set before any C extension import triggers OpenMP initialization.
+# On Databricks, both MKL and scipy are pre-loaded by the kernel, so this
+# must happen at the earliest possible import point.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 from importlib.metadata import version
 
 __version__ = version("jamma")

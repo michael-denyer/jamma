@@ -164,8 +164,9 @@ def eigendecompose_kinship(
                 f"Proceeding with {driver}."
             )
 
+    driver = "DSYEVR" if use_dsyevr else ("DSYEVD-inplace" if use_inplace else "DSYEVD")
     logger.info(
-        f"Eigendecomp memory: estimated {required_gb:.1f}GB, "
+        f"Eigendecomp memory ({driver}): estimated {required_gb:.1f}GB, "
         f"available {available_gb:.1f}GB"
     )
 
@@ -189,7 +190,6 @@ def eigendecompose_kinship(
 
     from jamma.core.estimates import estimate_eigendecomp_time
 
-    driver = "DSYEVR" if use_dsyevr else ("DSYEVD-inplace" if use_inplace else "DSYEVD")
     logger.info(f"Eigendecomp: {driver}, threads={n_threads}")
     logger.info(
         f"  Estimated time: "

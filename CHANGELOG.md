@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.5.1] - 2026-03-23
+
+### Fixed
+
+- Two-step compile+link for `_lmm_accel` to prevent dual OpenMP runtime SIGABRT
+  on Linux with MKL numpy — GCC's `-fopenmp` implicitly links libgomp alongside
+  libiomp5, causing `kmp_runtime.cpp` assertion failure
+
 ## [4.5.0] - 2026-03-23
 
 ### Added

@@ -404,12 +404,18 @@ class CustomBuildHook(BuildHookInterface):
         else:
             omp_compile, omp_link = self._detect_linux_openmp_flags(cc_cmd)
 
-        omp_all = omp_compile + omp_link
-
         # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3)
         extra_cflags = os.environ.get("CFLAGS", "").split()
 
-        cmd = [
+        # Two-step compile+link to prevent dual OpenMP runtime.
+        # GCC's -fopenmp implicitly adds -lgomp at link time. When libiomp5
+        # (Intel OpenMP, bundled with MKL numpy) is also linked, both runtimes
+        # initialize and abort: "OMP: Error #13: Assertion failure at
+        # kmp_runtime.cpp". Splitting into compile (.o) then link (.so) lets
+        # us pass -fopenmp only to the compiler and link only libiomp5.
+        obj_path = out_path.with_suffix(".o")
+
+        compile_cmd = [
             cc_cmd,
             *cc_extra,
             "-O3",
@@ -420,55 +426,70 @@ class CustomBuildHook(BuildHookInterface):
             *extra_cflags,
             "-fno-finite-math-only",  # override -Ofast in CFLAGS; isnan() must work
             "-fPIC",
-            "-shared",
             "-std=c11",
             f"-I{python_inc}",
             f"-I{numpy_inc}",
-            *omp_all,
+            *omp_compile,
+            "-c",
             str(src),
             "-o",
-            str(out_path),
-            "-lm",
-            *ldflags,
+            str(obj_path),
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(compile_cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            if omp_all:
+            if omp_compile:
                 # Retry without OpenMP — libgomp may not be installed
-                cmd_no_omp = [x for x in cmd if x not in omp_all]
+                compile_cmd_no_omp = [x for x in compile_cmd if x not in omp_compile]
                 print(
                     "OpenMP compilation failed, retrying without OpenMP "
                     "(single-threaded C extension)...",
                     file=sys.stderr,
                 )
-                result2 = subprocess.run(cmd_no_omp, capture_output=True, text=True)
+                result2 = subprocess.run(
+                    compile_cmd_no_omp, capture_output=True, text=True
+                )
                 if result2.returncode == 0:
+                    omp_link = []  # Don't link OpenMP if compile failed
+                else:
                     print(
-                        f"C extension compiled (single-threaded): {out_path}",
+                        "WARNING: C extension compilation failed "
+                        "(pure-Python fallback will be used):\n"
+                        f"  OpenMP error: {result.stderr[:1000]}\n"
+                        f"  No-OpenMP error: {result2.stderr[:1000]}",
                         file=sys.stderr,
                     )
-                    build_data.setdefault("force_include", {})
-                    dist_path = f"jamma/lmm/{out_name}"
-                    build_data["force_include"][str(out_path)] = dist_path
-                    build_data["pure_python"] = False
-                    build_data["infer_tag"] = True
+                    obj_path.unlink(missing_ok=True)
                     return
-                # Both attempts failed — show both errors for diagnostics
+            else:
                 print(
                     "WARNING: C extension compilation failed "
                     "(pure-Python fallback will be used):\n"
-                    f"  OpenMP command: {' '.join(cmd)}\n"
-                    f"  OpenMP error: {result.stderr[:1000]}\n"
-                    f"  No-OpenMP command: {' '.join(cmd_no_omp)}\n"
-                    f"  No-OpenMP error: {result2.stderr[:1000]}",
+                    f"  Command: {' '.join(compile_cmd)}\n"
+                    f"  Error: {result.stderr[:2000]}",
                     file=sys.stderr,
                 )
                 return
+
+        # Link step: .o -> .so (no -fopenmp here — only libiomp5 link flags)
+        link_cmd = [
+            cc_cmd,
+            "-shared",
+            str(obj_path),
+            "-o",
+            str(out_path),
+            *omp_link,
+            "-lm",
+            *ldflags,
+        ]
+
+        result = subprocess.run(link_cmd, capture_output=True, text=True)
+        obj_path.unlink(missing_ok=True)  # Clean up .o regardless
+        if result.returncode != 0:
             print(
-                "WARNING: C extension compilation failed "
+                "WARNING: C extension link failed "
                 "(pure-Python fallback will be used):\n"
-                f"  Command: {' '.join(cmd)}\n"
+                f"  Command: {' '.join(link_cmd)}\n"
                 f"  Error: {result.stderr[:2000]}",
                 file=sys.stderr,
             )

@@ -204,9 +204,6 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
         # intel-openmp or MKL packages.
         omp_compile, omp_link = _detect_linux_openmp_flags(cc_cmd, _detail)
 
-    # Combined OMP flags for the single compile+link step
-    omp_all = omp_compile + omp_link
-
     # -march=native is safe here: compiles on the user's own machine.
     # hatch_build.py omits this flag for portable wheel builds.
     diag_flags: list[str] = []
@@ -224,7 +221,15 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
         else:
             diag_flags = ["-fopt-info-vec-all"]
 
-    cmd = [
+    # Two-step compile+link to prevent dual OpenMP runtime.
+    # GCC's -fopenmp implicitly adds -lgomp at link time. When libiomp5
+    # (Intel OpenMP, bundled with MKL numpy) is also linked, both runtimes
+    # initialize and abort: "OMP: Error #13: Assertion failure at
+    # kmp_runtime.cpp". Splitting into compile (.o) then link (.so) lets
+    # us pass -fopenmp only to the compiler and link only libiomp5.
+    obj = out.with_suffix(".o")
+
+    compile_cmd = [
         cc_cmd,
         *cc_extra,
         "-O3",
@@ -233,21 +238,19 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
         "-fno-trapping-math",
         "-march=native",
         "-fPIC",
-        "-shared",
         "-std=c99",
         f"-I{python_inc}",
         f"-I{numpy_inc}",
-        *omp_all,
+        *omp_compile,
         *diag_flags,
+        "-c",
         str(src),
         "-o",
-        str(out),
-        "-lm",
-        *ldflags,
+        str(obj),
     ]
 
-    _detail(f"Compiling: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    _detail(f"Compiling: {' '.join(compile_cmd)}")
+    result = subprocess.run(compile_cmd, capture_output=True, text=True)
 
     if diagnose and (result.stderr or result.stdout):
         _print("\n=== Vectorization Report ===")
@@ -258,13 +261,36 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
                 _print(f"  {line}")
         _print("=== End Report ===\n")
 
-    compiled_with_omp = bool(omp_all)
-    if result.returncode != 0 and omp_all:
+    compiled_with_omp = bool(omp_compile)
+    if result.returncode != 0 and omp_compile:
         _print(f"OpenMP compilation failed: {result.stderr.strip()}")
         _print("Retrying without OpenMP (single-threaded)...")
-        cmd_no_omp = [x for x in cmd if x not in omp_all]
-        result = subprocess.run(cmd_no_omp, capture_output=True, text=True)
+        compile_cmd_no_omp = [x for x in compile_cmd if x not in omp_compile]
+        result = subprocess.run(compile_cmd_no_omp, capture_output=True, text=True)
         compiled_with_omp = False
+        omp_link = []  # Don't link OpenMP if compile failed
+
+    if result.returncode != 0:
+        _print(f"ERROR: compilation failed:\n{result.stderr}")
+        # Clean up .o if it exists
+        obj.unlink(missing_ok=True)
+        return False
+
+    # Link step: .o -> .so (no -fopenmp here — only libiomp5 link flags)
+    link_cmd = [
+        cc_cmd,
+        "-shared",
+        str(obj),
+        "-o",
+        str(out),
+        *omp_link,
+        "-lm",
+        *ldflags,
+    ]
+
+    _detail(f"Linking: {' '.join(link_cmd)}")
+    result = subprocess.run(link_cmd, capture_output=True, text=True)
+    obj.unlink(missing_ok=True)  # Clean up .o regardless
 
     if result.returncode != 0:
         _print(f"ERROR: compilation failed:\n{result.stderr}")

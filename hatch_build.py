@@ -271,18 +271,23 @@ class CustomBuildHook(BuildHookInterface):
             file=sys.stderr,
         )
 
-    def _detect_linux_openmp_flags(self, cc_cmd: str) -> list[str]:
+    def _detect_linux_openmp_flags(self, cc_cmd: str) -> tuple[list[str], list[str]]:
         """Detect the best OpenMP flags for Linux.
 
         Prefers Intel OpenMP (libiomp5) when available to avoid the
         libgomp/libiomp5 dual-runtime conflict on systems with MKL-backed
         numpy. Falls back to GNU OpenMP (-fopenmp → libgomp).
 
+        On GCC, ``-fopenmp`` at link time implicitly adds ``-lgomp``.  When
+        we link libiomp5 by full path, passing ``-fopenmp`` to the linker
+        would load *both* libgomp and libiomp5 — triggering an Intel OMP
+        assertion failure (``kmp_runtime.cpp``).
+
         Args:
             cc_cmd: C compiler command name.
 
         Returns:
-            Compiler flags for OpenMP.
+            ``(compile_flags, link_flags)`` for OpenMP.
         """
         try:
             import numpy as np
@@ -303,12 +308,13 @@ class CustomBuildHook(BuildHookInterface):
                         )
                         # Link by full path — numpy bundles versioned names
                         # like libiomp5-2f035e84.so with no unversioned
-                        # symlink, so -liomp5 fails at link time.
-                        return [
-                            str(lib),
-                            f"-Wl,-rpath,{d}",
-                            "-fopenmp",
-                        ]
+                        # symlink, so -liomp5 fails at link time.  Do NOT
+                        # pass -fopenmp to the linker: GCC would add
+                        # -lgomp, creating a dual OpenMP runtime.
+                        return (
+                            ["-fopenmp"],
+                            [str(lib), f"-Wl,-rpath,{d}"],
+                        )
         except ImportError:
             pass
 
@@ -321,9 +327,9 @@ class CustomBuildHook(BuildHookInterface):
         )
         if result.returncode == 0:
             print("Intel OpenMP (system libiomp5) detected", file=sys.stderr)
-            return ["-liomp5", "-fopenmp"]
+            return (["-fopenmp"], ["-liomp5"])
 
-        return ["-fopenmp"]
+        return (["-fopenmp"], ["-fopenmp"])
 
     def _compile_c_extension(self, build_data):
         """Compile _lmm_accel.c -> _lmm_accel{EXT_SUFFIX} if a C compiler is available.
@@ -360,8 +366,10 @@ class CustomBuildHook(BuildHookInterface):
         out_name = f"_lmm_accel{ext_suffix}"
         out_path = Path(self.root) / "src" / "jamma" / "lmm" / out_name
 
-        # Platform-specific OpenMP flags
-        omp_flags = []
+        # Platform-specific OpenMP flags — split compile/link to avoid
+        # loading both libgomp (-fopenmp on GCC linker) and libiomp5 (MKL).
+        omp_compile: list[str] = []
+        omp_link: list[str] = []
         if platform.system() == "Darwin":
             try:
                 prefix = subprocess.check_output(
@@ -370,11 +378,13 @@ class CustomBuildHook(BuildHookInterface):
                     stderr=subprocess.DEVNULL,
                 ).strip()
                 if Path(prefix, "lib").is_dir():
-                    omp_flags = [
+                    omp_compile = [
                         f"-I{prefix}/include",
-                        f"-L{prefix}/lib",
                         "-Xpreprocessor",
                         "-fopenmp",
+                    ]
+                    omp_link = [
+                        f"-L{prefix}/lib",
                         "-lomp",
                     ]
                 else:
@@ -392,7 +402,9 @@ class CustomBuildHook(BuildHookInterface):
                     file=sys.stderr,
                 )
         else:
-            omp_flags = self._detect_linux_openmp_flags(cc_cmd)
+            omp_compile, omp_link = self._detect_linux_openmp_flags(cc_cmd)
+
+        omp_all = omp_compile + omp_link
 
         # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3)
         extra_cflags = os.environ.get("CFLAGS", "").split()
@@ -412,7 +424,7 @@ class CustomBuildHook(BuildHookInterface):
             "-std=c11",
             f"-I{python_inc}",
             f"-I{numpy_inc}",
-            *omp_flags,
+            *omp_all,
             str(src),
             "-o",
             str(out_path),
@@ -422,9 +434,9 @@ class CustomBuildHook(BuildHookInterface):
 
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            if omp_flags:
+            if omp_all:
                 # Retry without OpenMP — libgomp may not be installed
-                cmd_no_omp = [x for x in cmd if x not in omp_flags]
+                cmd_no_omp = [x for x in cmd if x not in omp_all]
                 print(
                     "OpenMP compilation failed, retrying without OpenMP "
                     "(single-threaded C extension)...",
@@ -604,8 +616,10 @@ class CustomBuildHook(BuildHookInterface):
         if machine in ("x86_64", "AMD64"):
             simd_flags = ["-mavx2", "-mfma"]
 
-        # Platform-specific OpenMP flags
-        omp_flags: list[str] = []
+        # Platform-specific OpenMP flags — split compile/link to avoid
+        # loading both libgomp (-fopenmp on GCC linker) and libiomp5 (MKL).
+        omp_compile: list[str] = []
+        omp_link: list[str] = []
         if platform.system() == "Darwin":
             try:
                 prefix = subprocess.check_output(
@@ -614,11 +628,13 @@ class CustomBuildHook(BuildHookInterface):
                     stderr=subprocess.DEVNULL,
                 ).strip()
                 if Path(prefix, "lib").is_dir():
-                    omp_flags = [
+                    omp_compile = [
                         f"-I{prefix}/include",
-                        f"-L{prefix}/lib",
                         "-Xpreprocessor",
                         "-fopenmp",
+                    ]
+                    omp_link = [
+                        f"-L{prefix}/lib",
                         "-lomp",
                     ]
                 else:
@@ -634,7 +650,7 @@ class CustomBuildHook(BuildHookInterface):
                     file=sys.stderr,
                 )
         else:
-            omp_flags = self._detect_linux_openmp_flags(cc_cmd)
+            omp_compile, omp_link = self._detect_linux_openmp_flags(cc_cmd)
 
         # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3)
         extra_cflags = os.environ.get("CFLAGS", "").split()
@@ -655,15 +671,6 @@ class CustomBuildHook(BuildHookInterface):
             f"-I{jlinalg_inc}",
         ]
 
-        # OpenMP flags for compile step: -I/-L/-Xpreprocessor/-fopenmp but not link libs
-        omp_compile: list[str] = []
-        for flag in omp_flags:
-            if flag.startswith("-I") or flag.startswith("-L") or flag.startswith("-Wl"):
-                omp_compile.append(flag)
-            elif flag in ("-Xpreprocessor", "-fopenmp"):
-                omp_compile.append(flag)
-            # -lomp, -liomp5 are link-only; skip for compile step
-
         ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
         out_name = f"_jlinalg{ext_suffix}"
         out_path = Path(self.root) / "src" / "jamma" / "jlinalg" / out_name
@@ -672,7 +679,7 @@ class CustomBuildHook(BuildHookInterface):
         tmp_dir = Path(tempfile.mkdtemp(prefix="jlinalg_build_"))
         obj_files: list[Path] = []
         compile_failed = False
-        use_omp = bool(omp_flags)
+        use_omp = bool(omp_compile)
 
         simd_source_set = set(str(s) for s in simd_sources)
         avx2_kernel_set = set(str(s) for s in avx2_kernel_sources)
@@ -785,7 +792,7 @@ class CustomBuildHook(BuildHookInterface):
                         break
                     obj_files.append(obj_file)
                 # No OMP runtime to link if compile retry dropped OMP flags
-                omp_flags = []
+                omp_link = []
 
             if compile_failed:
                 print(
@@ -809,7 +816,7 @@ class CustomBuildHook(BuildHookInterface):
                 str(out_path),
                 "-lm",
                 *dl_flags,
-                *omp_flags,
+                *omp_link,
                 *ldflags,
             ]
             print(f"jlinalg link: {' '.join(cmd_link)}", file=sys.stderr)

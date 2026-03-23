@@ -29,13 +29,21 @@ import tempfile
 from pathlib import Path
 
 
-def _detect_linux_openmp_flags(cc_cmd: str, _print: object = print) -> list[str]:
+def _detect_linux_openmp_flags(
+    cc_cmd: str, _print: object = print
+) -> tuple[list[str], list[str]]:
     """Detect the best OpenMP flags for Linux.
 
     Prefers Intel OpenMP (libiomp5) when available to avoid the libgomp/libiomp5
     dual-runtime conflict on systems with MKL-backed numpy. MKL uses libiomp5
     internally; linking _jlinalg against libgomp creates two OpenMP runtimes in the
     same process, which can cause thread oversubscription or hangs.
+
+    On GCC, ``-fopenmp`` at link time implicitly adds ``-lgomp``.  When we
+    link libiomp5 by full path, passing ``-fopenmp`` to the linker would load
+    *both* libgomp and libiomp5 into the same process — triggering an Intel
+    OMP assertion failure (``kmp_runtime.cpp``).  We therefore split the
+    return into compile-only and link-only flags.
 
     Detection order:
     1. libiomp5 (Intel OpenMP) — found via numpy's MKL libs or system paths
@@ -46,7 +54,8 @@ def _detect_linux_openmp_flags(cc_cmd: str, _print: object = print) -> list[str]
         _print: Print function (for verbose output).
 
     Returns:
-        Compiler flags for OpenMP, or empty list if unavailable.
+        ``(compile_flags, link_flags)`` for OpenMP, or ``([], [])`` if
+        unavailable.
     """
     # Check if numpy bundles MKL (and thus libiomp5)
     try:
@@ -66,12 +75,13 @@ def _detect_linux_openmp_flags(cc_cmd: str, _print: object = print) -> list[str]
                     _print(f"Intel OpenMP found: {lib}")
                     # Link by full path — numpy bundles versioned names like
                     # libiomp5-2f035e84.so with no unversioned symlink, so
-                    # -liomp5 fails at link time.
-                    return [
-                        str(lib),
-                        f"-Wl,-rpath,{d}",
-                        "-fopenmp",
-                    ]
+                    # -liomp5 fails at link time.  Do NOT pass -fopenmp to
+                    # the linker: GCC would add -lgomp, creating a dual
+                    # OpenMP runtime that aborts at init.
+                    return (
+                        ["-fopenmp"],
+                        [str(lib), f"-Wl,-rpath,{d}"],
+                    )
     except ImportError:
         pass
 
@@ -84,10 +94,10 @@ def _detect_linux_openmp_flags(cc_cmd: str, _print: object = print) -> list[str]
     )
     if result.returncode == 0:
         _print("Intel OpenMP (system libiomp5) detected")
-        return ["-liomp5", "-fopenmp"]
+        return (["-fopenmp"], ["-liomp5"])
 
-    # Fallback to GNU OpenMP
-    return ["-fopenmp"]
+    # Fallback to GNU OpenMP (safe to use -fopenmp for both compile and link)
+    return (["-fopenmp"], ["-fopenmp"])
 
 
 def compile_extension(verbose: bool = False) -> bool:
@@ -261,8 +271,11 @@ def compile_extension(verbose: bool = False) -> bool:
     else:
         _detail(f"ISA: {machine} — no extra SIMD flags")
 
-    # OpenMP detection
-    omp_flags: list[str] = []
+    # OpenMP detection — split into compile-only and link-only flags to avoid
+    # loading both libgomp (-fopenmp on GCC linker) and libiomp5 (MKL) in the
+    # same process, which causes an Intel OMP assertion failure.
+    omp_compile: list[str] = []
+    omp_link: list[str] = []
     ldflags: list[str] = []
     if platform.system() == "Linux":
         ldflags.append("-ldl")  # dlopen/dlsym for blas_dispatch.c
@@ -275,11 +288,13 @@ def compile_extension(verbose: bool = False) -> bool:
             ).strip()
             lib_dir = Path(prefix) / "lib"
             if lib_dir.is_dir():
-                omp_flags = [
+                omp_compile = [
                     f"-I{prefix}/include",
-                    f"-L{prefix}/lib",
                     "-Xpreprocessor",
                     "-fopenmp",
+                ]
+                omp_link = [
+                    f"-L{prefix}/lib",
                     "-lomp",
                 ]
                 _detail(f"OpenMP: Homebrew libomp at {prefix}")
@@ -297,7 +312,7 @@ def compile_extension(verbose: bool = False) -> bool:
             )
         ldflags = ["-undefined", "dynamic_lookup"]
     else:
-        omp_flags = _detect_linux_openmp_flags(cc_cmd, _detail)
+        omp_compile, omp_link = _detect_linux_openmp_flags(cc_cmd, _detail)
 
     # Base compile flags (shared by all source files — no SIMD flags here)
     base_cflags = [
@@ -328,14 +343,6 @@ def compile_extension(verbose: bool = False) -> bool:
         f"-I{numpy_inc}",
         f"-I{jlinalg_inc_dir}",
     ]
-
-    # OpenMP compile-time flags (exclude link-only flags like -lomp/-liomp5)
-    omp_compile: list[str] = []
-    for flag in omp_flags:
-        if flag.startswith("-I") or flag.startswith("-L") or flag.startswith("-Wl"):
-            omp_compile.append(flag)
-        elif flag in ("-Xpreprocessor", "-fopenmp"):
-            omp_compile.append(flag)
 
     def _compile_sources(
         extra_compile: list[str], suffix: str
@@ -388,8 +395,8 @@ def compile_extension(verbose: bool = False) -> bool:
         return obj_files, tmp_dir
 
     # First attempt: with OpenMP
-    use_omp = bool(omp_flags)
-    current_omp = omp_flags
+    use_omp = bool(omp_compile)
+    current_omp_link = omp_link
     compile_result = _compile_sources(omp_compile, "")
     tmp_dir = None
 
@@ -398,7 +405,7 @@ def compile_extension(verbose: bool = False) -> bool:
             "OpenMP compilation failed, retrying without OpenMP (single-threaded)..."
         )
         compile_result = _compile_sources([], "_noomp")
-        current_omp = []  # no OMP runtime to link
+        current_omp_link = []  # no OMP runtime to link
 
     if compile_result is None:
         _print("ERROR: jlinalg compilation failed")
@@ -417,12 +424,12 @@ def compile_extension(verbose: bool = False) -> bool:
             "-o",
             str(out),
             "-lm",
-            *current_omp,
+            *current_omp_link,
             *ldflags,
         ]
         _detail(f"link: {' '.join(cmd_link)}")
         result_link = subprocess.run(cmd_link, capture_output=True, text=True)
-        if result_link.returncode != 0 and current_omp:
+        if result_link.returncode != 0 and current_omp_link:
             _print(
                 f"OpenMP link failed:\n{result_link.stderr}"
                 "\nRetrying link without OpenMP (single-threaded)..."
@@ -586,8 +593,9 @@ def compile_test_harness(verbose: bool = True) -> Path:
     python_libdir = sysconfig.get_config_var("LIBDIR") or ""
     python_version = sysconfig.get_config_var("VERSION") or ""
 
-    # OpenMP detection (same as compile_extension)
-    omp_flags: list[str] = []
+    # OpenMP detection (same as compile_extension — split compile/link)
+    omp_compile: list[str] = []
+    omp_link: list[str] = []
     ldflags: list[str] = ["-lm"]
     if python_libdir:
         ldflags.extend([f"-L{python_libdir}", f"-lpython{python_version}"])
@@ -603,17 +611,19 @@ def compile_test_harness(verbose: bool = True) -> Path:
             ).strip()
             lib_dir = Path(prefix) / "lib"
             if lib_dir.is_dir():
-                omp_flags = [
+                omp_compile = [
                     f"-I{prefix}/include",
-                    f"-L{prefix}/lib",
                     "-Xpreprocessor",
                     "-fopenmp",
+                ]
+                omp_link = [
+                    f"-L{prefix}/lib",
                     "-lomp",
                 ]
         except (FileNotFoundError, subprocess.CalledProcessError):
             pass
     else:
-        omp_flags = _detect_linux_openmp_flags(cc_cmd, _print)
+        omp_compile, omp_link = _detect_linux_openmp_flags(cc_cmd, _print)
 
     # Base compile flags
     base_cflags = [
@@ -642,14 +652,6 @@ def compile_test_harness(verbose: bool = True) -> Path:
     simd_source_set = set(str(s) for s in simd_sources)
     avx2_kernel_set = set(str(s) for s in avx2_kernel_sources)
     lapack_source_set = set(str(s) for s in lapack_sources)
-
-    # OMP compile-only flags
-    omp_compile: list[str] = []
-    for flag in omp_flags:
-        if flag.startswith("-I") or flag.startswith("-L") or flag.startswith("-Wl"):
-            omp_compile.append(flag)
-        elif flag in ("-Xpreprocessor", "-fopenmp"):
-            omp_compile.append(flag)
 
     # Compile each source to .o.  Mirrors compile_extension's OpenMP retry:
     # first attempt with OpenMP, retry single-threaded if compilation fails.
@@ -711,8 +713,8 @@ def compile_test_harness(verbose: bool = True) -> Path:
         return objs
 
     # First attempt: with OpenMP
-    use_omp = bool(omp_flags)
-    current_omp_link = omp_flags
+    use_omp = bool(omp_compile)
+    current_omp_link = omp_link
     obj_files = _compile_all(omp_compile)
 
     if obj_files is None and use_omp:

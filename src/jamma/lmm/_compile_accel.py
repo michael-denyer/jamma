@@ -23,7 +23,9 @@ import sysconfig
 from pathlib import Path
 
 
-def _detect_linux_openmp_flags(cc_cmd: str, _print: object = print) -> list[str]:
+def _detect_linux_openmp_flags(
+    cc_cmd: str, _print: object = print
+) -> tuple[list[str], list[str]]:
     """Detect the best OpenMP flags for Linux.
 
     Prefers Intel OpenMP (libiomp5) when available to avoid the libgomp/libiomp5
@@ -31,12 +33,19 @@ def _detect_linux_openmp_flags(cc_cmd: str, _print: object = print) -> list[str]
     internally; linking _lmm_accel against libgomp creates two OpenMP runtimes
     in the same process, which can cause thread oversubscription or hangs.
 
+    On GCC, ``-fopenmp`` at link time implicitly adds ``-lgomp``.  When we
+    link libiomp5 by full path, passing ``-fopenmp`` to the linker would load
+    *both* libgomp and libiomp5 into the same process — triggering an Intel
+    OMP assertion failure (``kmp_runtime.cpp``).  We therefore split the
+    return into compile-only and link-only flags.
+
     Detection order:
     1. libiomp5 (Intel OpenMP) — found via numpy's MKL libs or system paths
     2. libgomp (GNU OpenMP) — standard fallback via -fopenmp
 
     Returns:
-        Compiler flags for OpenMP, or empty list if unavailable.
+        ``(compile_flags, link_flags)`` for OpenMP, or ``([], [])`` if
+        unavailable.
     """
     # Check if numpy bundles MKL (and thus libiomp5)
     try:
@@ -57,12 +66,13 @@ def _detect_linux_openmp_flags(cc_cmd: str, _print: object = print) -> list[str]
                     _print(f"Intel OpenMP found: {lib}")
                     # Link by full path — numpy bundles versioned names like
                     # libiomp5-2f035e84.so with no unversioned symlink, so
-                    # -liomp5 fails at link time.
-                    return [
-                        str(lib),
-                        f"-Wl,-rpath,{d}",
-                        "-fopenmp",
-                    ]
+                    # -liomp5 fails at link time.  Do NOT pass -fopenmp to
+                    # the linker: GCC would add -lgomp, creating a dual
+                    # OpenMP runtime that aborts at init.
+                    return (
+                        ["-fopenmp"],
+                        [str(lib), f"-Wl,-rpath,{d}"],
+                    )
     except ImportError:
         pass
 
@@ -75,10 +85,10 @@ def _detect_linux_openmp_flags(cc_cmd: str, _print: object = print) -> list[str]
     )
     if result.returncode == 0:
         _print("Intel OpenMP (system libiomp5) detected")
-        return ["-liomp5", "-fopenmp"]
+        return (["-fopenmp"], ["-liomp5"])
 
-    # Fallback to GNU OpenMP
-    return ["-fopenmp"]
+    # Fallback to GNU OpenMP (safe to use -fopenmp for both compile and link)
+    return (["-fopenmp"], ["-fopenmp"])
 
 
 def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
@@ -160,8 +170,10 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
         _print("ERROR: Windows is not supported for C extension compilation")
         return False
 
-    # Platform flags (GCC/Clang)
-    omp_flags: list[str] = []
+    # Platform flags (GCC/Clang) — split into compile-only and link-only to
+    # avoid loading both libgomp (-fopenmp on GCC linker) and libiomp5 (MKL).
+    omp_compile: list[str] = []
+    omp_link: list[str] = []
     ldflags: list[str] = []
     if platform.system() == "Darwin":
         try:
@@ -170,11 +182,13 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
                 text=True,
                 stderr=subprocess.DEVNULL,
             ).strip()
-            omp_flags = [
+            omp_compile = [
                 f"-I{prefix}/include",
-                f"-L{prefix}/lib",
                 "-Xpreprocessor",
                 "-fopenmp",
+            ]
+            omp_link = [
+                f"-L{prefix}/lib",
                 "-lomp",
             ]
         except (FileNotFoundError, subprocess.CalledProcessError):
@@ -188,7 +202,10 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
         # Prefer Intel OpenMP (libiomp5) when available — avoids libgomp/libiomp5
         # dual-runtime conflict on systems with MKL numpy. libiomp5 ships with
         # intel-openmp or MKL packages.
-        omp_flags = _detect_linux_openmp_flags(cc_cmd, _detail)
+        omp_compile, omp_link = _detect_linux_openmp_flags(cc_cmd, _detail)
+
+    # Combined OMP flags for the single compile+link step
+    omp_all = omp_compile + omp_link
 
     # -march=native is safe here: compiles on the user's own machine.
     # hatch_build.py omits this flag for portable wheel builds.
@@ -220,7 +237,7 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
         "-std=c99",
         f"-I{python_inc}",
         f"-I{numpy_inc}",
-        *omp_flags,
+        *omp_all,
         *diag_flags,
         str(src),
         "-o",
@@ -241,11 +258,11 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
                 _print(f"  {line}")
         _print("=== End Report ===\n")
 
-    compiled_with_omp = bool(omp_flags)
-    if result.returncode != 0 and omp_flags:
+    compiled_with_omp = bool(omp_all)
+    if result.returncode != 0 and omp_all:
         _print(f"OpenMP compilation failed: {result.stderr.strip()}")
         _print("Retrying without OpenMP (single-threaded)...")
-        cmd_no_omp = [x for x in cmd if x not in omp_flags]
+        cmd_no_omp = [x for x in cmd if x not in omp_all]
         result = subprocess.run(cmd_no_omp, capture_output=True, text=True)
         compiled_with_omp = False
 

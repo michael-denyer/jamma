@@ -680,6 +680,37 @@ def run_lmm_association_numpy_streaming(
 
         write_offset = 0  # Cumulative SNP offset for error diagnostics
 
+        # --- Preallocate per-chunk buffers to eliminate malloc/free ---
+        # Streaming chunks come from disk (can't preallocate geno), but
+        # utg_t output is always (actual, n_samples) and can be written
+        # into a preallocated buffer.
+        if use_pipeline:
+            _utg_bufs = [
+                np.empty((chunk_size, n_samples), dtype=np.float64),
+                np.empty((chunk_size, n_samples), dtype=np.float64),
+            ]
+        else:
+            _utg_bufs = [np.empty((chunk_size, n_samples), dtype=np.float64)]
+        _stream_chunk_counter = 0
+
+        # Varying SoA buffer reuse for non-fused split path.
+        _no_fused_stream = (
+            not use_fused
+            and not use_fused_score
+            and not use_fused_lrt
+            and not use_fused_score_ws
+            and not use_fused_lrt_ws
+        )
+        if use_split and _no_fused_stream:
+            from jamma.lmm.likelihood import classify_uab_columns
+
+            _n_var = 3 if n_cvt == 1 else len(classify_uab_columns(n_cvt)[1])
+            _uab_var_buf_stream = np.empty(
+                (chunk_size, _n_var, n_samples), dtype=np.float64
+            )
+        else:
+            _uab_var_buf_stream = None
+
         def _prepare_chunk() -> tuple | None:
             """Read next chunk from disk, filter, impute, rotate.
 
@@ -688,7 +719,12 @@ def run_lmm_association_numpy_streaming(
             true parallelism with _compute_and_write's C extension
             compute in the pipeline path. Pre-rotation NumPy work
             (filtering, imputation) is lightweight and GIL-serialized.
+
+            Uses preallocated utg_buf to avoid per-chunk dgemm allocation.
+            Pipeline path double-buffers via _stream_chunk_counter % 2.
             """
+            nonlocal _stream_chunk_counter
+
             try:
                 chunk, filt_start, filt_end = next(chunk_iter)
             except StopIteration:
@@ -704,6 +740,10 @@ def run_lmm_association_numpy_streaming(
             # Mean-impute NaN
             impute_missing_inplace(chunk, filtered_means[filt_start:filt_end])
 
+            actual_len = filt_end - filt_start
+            buf_idx = _stream_chunk_counter % len(_utg_bufs)
+            _stream_chunk_counter += 1
+
             # Rotate — control both external BLAS (via threadpoolctl) and
             # jlinalg-own dgemm (via set_n_threads) to avoid oversubscription
             # when pipeline overlaps rotation with compute.
@@ -718,15 +758,18 @@ def run_lmm_association_numpy_streaming(
                         or use_fused_lrt_ws
                         or use_split
                     ):
-                        utg_t = jlinalg.dgemm(chunk, U, transa="T")
+                        utg_out = _utg_bufs[buf_idx][:actual_len, :]
+                        utg_t = jlinalg.dgemm(
+                            chunk, U, transa="T", out=utg_out
+                        )
                     else:
+                        # Non-split UtG path: (n_samples, actual_len) shape
+                        # doesn't match utg_buf layout — allocate fresh.
                         UtG = jlinalg.dgemm(U, chunk, transa="T")
                         utg_t = None
             finally:
                 jlinalg.set_n_threads(old_jl_threads)
             del chunk
-
-            actual_len = filt_end - filt_start
 
             if (
                 use_fused
@@ -738,8 +781,15 @@ def run_lmm_association_numpy_streaming(
                 return (utg_t, filt_start, filt_end, actual_len)
 
             if use_split:
+                # Reuse preallocated buffer when chunk is full-sized.
+                out_var = (
+                    _uab_var_buf_stream[:actual_len, :, :]
+                    if _uab_var_buf_stream is not None
+                    and actual_len == chunk_size
+                    else None
+                )
                 uab_var_soa = batch_compute_uab_varying_soa_numpy(
-                    n_cvt, UtW, Uty, utg_t
+                    n_cvt, UtW, Uty, utg_t, out=out_var
                 )
                 del utg_t
                 return (uab_var_soa, filt_start, filt_end, actual_len)

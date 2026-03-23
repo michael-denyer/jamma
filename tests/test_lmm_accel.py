@@ -3045,6 +3045,281 @@ def test_lrt_batch_general_degenerate_snps(synthetic_covariate_data_ncvt2):
 
 
 # ---------------------------------------------------------------------------
+# General n_cvt split Score/LRT C kernel tests (Plan 105-01)
+# ---------------------------------------------------------------------------
+
+
+def _score_split_general_c_available() -> bool:
+    """Check if compute_score_split_general_c is available from the C extension."""
+    if not _C_ACCEL_AVAILABLE:
+        return False
+    try:
+        from jamma.lmm._lmm_accel import compute_score_split_general_c  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+def _lrt_split_general_c_available() -> bool:
+    """Check if compute_lrt_split_general_c is available from the C extension."""
+    if not _C_ACCEL_AVAILABLE:
+        return False
+    try:
+        from jamma.lmm._lmm_accel import compute_lrt_split_general_c  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+def test_general_score_split_ncvt2(general_score_lrt_ncvt2):
+    """C-105-01: compute_score_split_general_c matches reconstruct+batch for n_cvt=2."""
+    if not _score_split_general_c_available():
+        pytest.skip("compute_score_split_general_c not compiled yet")
+
+    from jamma.lmm._lmm_accel import (
+        compute_score_batch_general_c,
+        compute_score_split_general_c,
+    )
+    from jamma.lmm.likelihood import build_pab_table_for_c
+    from jamma.lmm.likelihood_numpy import (
+        batch_compute_uab_varying_soa_numpy,
+        compute_uab_invariant_soa,
+    )
+
+    data = general_score_lrt_ncvt2
+    n_cvt = data["n_cvt"]
+    eigenvalues = data["eigenvalues"]
+    Uab_batch = data["Uab_batch"]
+    n_samples = data["n_samples"]
+    Hi_eval_null = data["Hi_eval_null"]
+    UtW = data["UtW"]
+    Uty = data["Uty"]
+    UtG = data["UtG"]
+
+    pab_table_dict = build_pab_table_for_c(n_cvt)
+
+    # Reference: reconstruct + batch general C
+    ref = compute_score_batch_general_c(
+        eigenvalues, Uab_batch, Hi_eval_null,
+        n_samples, n_cvt, pab_table_dict, 1,
+    )
+
+    # SoA split path
+    uab_inv = compute_uab_invariant_soa(UtW, Uty, n_cvt=n_cvt)
+    uab_var = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG.T)
+
+    result = compute_score_split_general_c(
+        eigenvalues, uab_var, uab_inv, Hi_eval_null,
+        n_samples, n_cvt, pab_table_dict, 1,
+    )
+
+    np.testing.assert_array_equal(
+        result["betas"], ref["betas"],
+        err_msg="betas: split general vs batch general mismatch for n_cvt=2",
+    )
+    np.testing.assert_array_equal(
+        result["ses"], ref["ses"],
+        err_msg="ses: split general vs batch general mismatch for n_cvt=2",
+    )
+    np.testing.assert_array_equal(
+        result["p_scores"], ref["p_scores"],
+        err_msg="p_scores: split general vs batch general mismatch for n_cvt=2",
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+def test_general_lrt_split_ncvt2(general_score_lrt_ncvt2):
+    """C-105-02: compute_lrt_split_general_c matches reconstruct+batch for n_cvt=2."""
+    if not _lrt_split_general_c_available():
+        pytest.skip("compute_lrt_split_general_c not compiled yet")
+
+    from jamma.lmm._lmm_accel import (
+        compute_lrt_batch_general_c,
+        compute_lrt_split_general_c,
+    )
+    from jamma.lmm.likelihood import build_pab_table_for_c
+    from jamma.lmm.likelihood_numpy import (
+        batch_compute_uab_varying_soa_numpy,
+        compute_uab_invariant_soa,
+    )
+
+    data = general_score_lrt_ncvt2
+    n_cvt = data["n_cvt"]
+    eigenvalues = data["eigenvalues"]
+    Uab_batch = data["Uab_batch"]
+    n_samples = data["n_samples"]
+    logl_H0 = data["logl_H0"]
+    UtW = data["UtW"]
+    Uty = data["Uty"]
+    UtG = data["UtG"]
+
+    l_min, l_max, n_grid, n_refine = 1e-5, 1e5, 50, 20
+    pab_table_dict = build_pab_table_for_c(n_cvt)
+
+    # Reference: reconstruct + batch general C
+    ref = compute_lrt_batch_general_c(
+        eigenvalues, Uab_batch, n_samples, n_cvt, pab_table_dict,
+        l_min, l_max, n_grid, n_refine, logl_H0, 1,
+    )
+
+    # SoA split path
+    uab_inv = compute_uab_invariant_soa(UtW, Uty, n_cvt=n_cvt)
+    uab_var = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG.T)
+
+    result = compute_lrt_split_general_c(
+        eigenvalues, uab_var, uab_inv, n_samples, n_cvt, pab_table_dict,
+        l_min, l_max, n_grid, n_refine, logl_H0, 1,
+    )
+
+    np.testing.assert_array_equal(
+        result["lambdas_mle"], ref["lambdas_mle"],
+        err_msg="lambdas_mle: split general vs batch general mismatch for n_cvt=2",
+    )
+    np.testing.assert_array_equal(
+        result["p_lrts"], ref["p_lrts"],
+        err_msg="p_lrts: split general vs batch general mismatch for n_cvt=2",
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+def test_general_score_split_ncvt4(general_score_lrt_ncvt4):
+    """C-105-03: compute_score_split_general_c matches reconstruct+batch for n_cvt=4."""
+    if not _score_split_general_c_available():
+        pytest.skip("compute_score_split_general_c not compiled yet")
+
+    from jamma.lmm._lmm_accel import (
+        compute_score_batch_general_c,
+        compute_score_split_general_c,
+    )
+    from jamma.lmm.likelihood import build_pab_table_for_c
+    from jamma.lmm.likelihood_numpy import (
+        batch_compute_uab_varying_soa_numpy,
+        compute_uab_invariant_soa,
+    )
+
+    data = general_score_lrt_ncvt4
+    n_cvt = data["n_cvt"]
+    eigenvalues = data["eigenvalues"]
+    Uab_batch = data["Uab_batch"]
+    n_samples = data["n_samples"]
+    Hi_eval_null = data["Hi_eval_null"]
+    UtW = data["UtW"]
+    Uty = data["Uty"]
+    UtG = data["UtG"]
+
+    pab_table_dict = build_pab_table_for_c(n_cvt)
+
+    ref = compute_score_batch_general_c(
+        eigenvalues, Uab_batch, Hi_eval_null,
+        n_samples, n_cvt, pab_table_dict, 1,
+    )
+
+    uab_inv = compute_uab_invariant_soa(UtW, Uty, n_cvt=n_cvt)
+    uab_var = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG.T)
+
+    result = compute_score_split_general_c(
+        eigenvalues, uab_var, uab_inv, Hi_eval_null,
+        n_samples, n_cvt, pab_table_dict, 1,
+    )
+
+    np.testing.assert_array_equal(
+        result["betas"], ref["betas"],
+        err_msg="betas: split general vs batch general mismatch for n_cvt=4",
+    )
+    np.testing.assert_array_equal(
+        result["ses"], ref["ses"],
+        err_msg="ses: split general vs batch general mismatch for n_cvt=4",
+    )
+    np.testing.assert_array_equal(
+        result["p_scores"], ref["p_scores"],
+        err_msg="p_scores: split general vs batch general mismatch for n_cvt=4",
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+def test_general_lrt_split_ncvt4(general_score_lrt_ncvt4):
+    """C-105-04: compute_lrt_split_general_c matches reconstruct+batch for n_cvt=4."""
+    if not _lrt_split_general_c_available():
+        pytest.skip("compute_lrt_split_general_c not compiled yet")
+
+    from jamma.lmm._lmm_accel import (
+        compute_lrt_batch_general_c,
+        compute_lrt_split_general_c,
+    )
+    from jamma.lmm.likelihood import build_pab_table_for_c
+    from jamma.lmm.likelihood_numpy import (
+        batch_compute_uab_varying_soa_numpy,
+        compute_uab_invariant_soa,
+    )
+
+    data = general_score_lrt_ncvt4
+    n_cvt = data["n_cvt"]
+    eigenvalues = data["eigenvalues"]
+    Uab_batch = data["Uab_batch"]
+    n_samples = data["n_samples"]
+    logl_H0 = data["logl_H0"]
+    UtW = data["UtW"]
+    Uty = data["Uty"]
+    UtG = data["UtG"]
+
+    l_min, l_max, n_grid, n_refine = 1e-5, 1e5, 50, 20
+    pab_table_dict = build_pab_table_for_c(n_cvt)
+
+    ref = compute_lrt_batch_general_c(
+        eigenvalues, Uab_batch, n_samples, n_cvt, pab_table_dict,
+        l_min, l_max, n_grid, n_refine, logl_H0, 1,
+    )
+
+    uab_inv = compute_uab_invariant_soa(UtW, Uty, n_cvt=n_cvt)
+    uab_var = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG.T)
+
+    result = compute_lrt_split_general_c(
+        eigenvalues, uab_var, uab_inv, n_samples, n_cvt, pab_table_dict,
+        l_min, l_max, n_grid, n_refine, logl_H0, 1,
+    )
+
+    np.testing.assert_array_equal(
+        result["lambdas_mle"], ref["lambdas_mle"],
+        err_msg="lambdas_mle: split general vs batch general mismatch for n_cvt=4",
+    )
+    np.testing.assert_array_equal(
+        result["p_lrts"], ref["p_lrts"],
+        err_msg="p_lrts: split general vs batch general mismatch for n_cvt=4",
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+def test_general_score_lrt_split_dispatch():
+    """C-105-05: Split dispatch for n_cvt>1 Score/LRT avoids reconstruct_uab_from_soa."""
+    import inspect
+
+    from jamma.lmm.compute_numpy import (
+        _compute_lrt_split_numpy,
+        _compute_score_split_numpy,
+    )
+
+    score_src = inspect.getsource(_compute_score_split_numpy)
+    lrt_src = inspect.getsource(_compute_lrt_split_numpy)
+
+    # When C is available, the n_cvt>1 path should have a C dispatch
+    # before the reconstruct_uab_from_soa fallback.
+    assert "_compute_score_split_general_c" in score_src or \
+        "compute_score_split_general_c" in score_src, \
+        "Score split dispatch missing general C path for n_cvt>1"
+    assert "_compute_lrt_split_general_c" in lrt_src or \
+        "compute_lrt_split_general_c" in lrt_src, \
+        "LRT split dispatch missing general C path for n_cvt>1"
+
+
+# ---------------------------------------------------------------------------
 # Hi_eval_null positivity guards (Plan 76-01)
 # ---------------------------------------------------------------------------
 

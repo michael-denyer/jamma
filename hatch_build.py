@@ -276,7 +276,9 @@ class CustomBuildHook(BuildHookInterface):
     ) -> tuple[list[str], list[str], str]:
         """Detect the best OpenMP flags for Linux.
 
-        This is a copy of ``jamma.core.openmp_detect._detect_linux_openmp_flags``.
+        This method, along with ``_find_libiomp5`` and ``_openmp_flags_for_libiomp5``
+        below, is a copy of the corresponding functions in
+        ``jamma.core.openmp_detect``.
         hatch_build.py cannot import from jamma.* at wheel-build time, so we
         maintain this copy here — keep the two in sync.
 
@@ -881,7 +883,9 @@ class CustomBuildHook(BuildHookInterface):
                 return
 
             # dlopen/dlsym in blas_dispatch.c needs -ldl on Linux
-            dl_flags = ["-ldl"] if platform.system() == "Linux" else []
+            # -ldl for dlopen/dlsym in blas_dispatch.c
+            # -lpthread for snp_stats.c (uses pthreads directly, not OpenMP)
+            dl_flags = ["-ldl", "-lpthread"] if platform.system() == "Linux" else []
 
             # Link all object files into the shared library
             cmd_link = [

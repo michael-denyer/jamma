@@ -208,8 +208,9 @@ def compile_extension(verbose: bool = False) -> bool:
     ldflags: list[str] = []
     if platform.system() == "Linux":
         ldflags.append("-ldl")  # dlopen/dlsym for blas_dispatch.c
+        ldflags.append("-lpthread")  # snp_stats.c uses pthreads directly
     omp_compile, omp_link, cc_cmd = detect_openmp_flags(
-        cc_cmd, platform.system(), _detail
+        cc_cmd, platform.system(), _detail, _warn=_print
     )
     if platform.system() == "Darwin":
         ldflags = ["-undefined", "dynamic_lookup"]
@@ -500,6 +501,7 @@ def compile_test_harness(verbose: bool = True) -> Path:
         ldflags.append(f"-Wl,-rpath,{python_libdir}")
     if platform.system() == "Linux":
         ldflags.append("-ldl")
+        ldflags.append("-lpthread")  # snp_stats.c uses pthreads directly
     omp_compile, omp_link, cc_cmd = detect_openmp_flags(
         cc_cmd, platform.system(), _print
     )

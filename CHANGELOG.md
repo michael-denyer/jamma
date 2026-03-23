@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   falling back to jlinalg-own LAPACK
 - Respect `JLINALG_NO_VENDOR_LAPACK` in eigendecomp driver selection
 - Replace OpenMP with pthreads in `compute_snp_stats_chunk` to avoid
-  MKL/libiomp5 conflict — SNP stats is I/O-bound, not compute-bound
+  MKL/libiomp5 conflict — SNP stats is memory-bandwidth-bound, not compute-bound
 - Auto-recompile jlinalg C extension on import failure (stale `.so`)
 
 ### Changed

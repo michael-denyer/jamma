@@ -23,6 +23,7 @@
 
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 /* ---- pthread thread pool for snp_stats ---- */
@@ -151,7 +152,12 @@ static void snp_stats_chunk_impl(
         : (pthread_t *)malloc((size_t)n_threads * sizeof(pthread_t));
 
     if (!tasks || !threads) {
-        /* Allocation failed — fall back to single-threaded */
+        /* Allocation failed — fall back to single-threaded.
+         * This should be rare (< 64 threads uses stack), but if it happens
+         * the process is critically low on memory — warn the user. */
+        fprintf(stderr,
+            "snp_stats: malloc failed for %d threads, "
+            "falling back to single-threaded\n", n_threads);
         if (tasks != tasks_stack) free(tasks);
         if (threads != threads_stack) free(threads);
         snp_stats_task_t task = {
@@ -185,12 +191,25 @@ static void snp_stats_chunk_impl(
     }
 
     /* Launch threads 1..n-1, run thread 0 inline */
-    for (int t = 1; t < n_threads; t++)
-        pthread_create(&threads[t], NULL, snp_stats_thread_fn, &tasks[t]);
+    int n_launched = 1;  /* thread 0 runs inline */
+    for (int t = 1; t < n_threads; t++) {
+        int rc = pthread_create(&threads[t], NULL, snp_stats_thread_fn, &tasks[t]);
+        if (rc != 0) {
+            fprintf(stderr,
+                "snp_stats: pthread_create failed for thread %d (rc=%d), "
+                "processing remaining %d columns single-threaded\n",
+                t, rc, n_threads - t);
+            for (int u = t; u < n_threads; u++)
+                snp_stats_range(&tasks[u]);
+            n_launched = t;
+            break;
+        }
+        n_launched = t + 1;
+    }
 
     snp_stats_range(&tasks[0]);
 
-    for (int t = 1; t < n_threads; t++)
+    for (int t = 1; t < n_launched; t++)
         pthread_join(threads[t], NULL);
 
     if (tasks != tasks_stack) free(tasks);

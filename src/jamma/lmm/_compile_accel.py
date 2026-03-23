@@ -108,7 +108,7 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
     # avoid loading both libgomp (-fopenmp on GCC linker) and libiomp5 (MKL).
     ldflags: list[str] = []
     omp_compile, omp_link, cc_cmd = detect_openmp_flags(
-        cc_cmd, platform.system(), _detail
+        cc_cmd, platform.system(), _detail, _warn=_print
     )
     if platform.system() == "Darwin":
         ldflags = ["-undefined", "dynamic_lookup"]
@@ -202,7 +202,7 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
     obj.unlink(missing_ok=True)  # Clean up .o regardless
 
     if result.returncode != 0:
-        _print(f"ERROR: compilation failed:\n{result.stderr}")
+        _print(f"ERROR: link failed:\n{result.stderr}")
         return False
 
     _detail(f"Compiled: {out}")
@@ -228,6 +228,12 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
     except OSError as e:
         _print(f"ERROR: compiled but import failed (OSError): {e}")
         _print("  Check that all shared library dependencies are available.")
+        return False
+    except Exception as e:
+        import traceback
+
+        _print(f"ERROR: compiled but import failed ({type(e).__name__}): {e}")
+        _print(traceback.format_exc())
         return False
 
 

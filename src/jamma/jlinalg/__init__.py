@@ -90,45 +90,54 @@ except ImportError as _exc:
             sys_module_key="jamma.jlinalg._jlinalg",
             label="jlinalg",
         )
-    except Exception:
-        pass
+    except Exception as _recompile_exc:
+        import sys as _sys
+
+        print(
+            f"jlinalg auto-recompile skipped: "
+            f"{type(_recompile_exc).__name__}: {_recompile_exc}",
+            file=_sys.stderr,
+        )
 
     if _recompiled:
         # Retry import after successful recompilation
-        from jamma.jlinalg._jlinalg import (  # noqa: F401, F811
-            ABI_VERSION,
-            HAS_OPENMP,
-            JLINALG_KC,
-            JLINALG_MC,
-            JLINALG_MR,
-            JLINALG_NC,
-            JLINALG_NR,
-            blas_backend,
-            blas_has_dgeqrf,
-            blas_has_dgesvd,
-            blas_has_dsyevd,
-            blas_has_dsyevr,
-            blas_has_dsyrk,
-            blas_has_lapacke_dsyevd,
-            blas_is_ilp64,
-            compute_snp_stats_chunk,
-            daxpy,
-            ddot,
-            dgemm,
-            dgemv,
-            dnrm2,
-            dscal,
-            dsyr2k,
-            dsyrk,
-            eigh,
-            get_n_threads,
-            jlinalg_isa,
-            qr,
-            set_n_threads,
-            svd,
-        )
+        try:
+            from jamma.jlinalg._jlinalg import (  # noqa: F401, F811
+                ABI_VERSION,
+                HAS_OPENMP,
+                JLINALG_KC,
+                JLINALG_MC,
+                JLINALG_MR,
+                JLINALG_NC,
+                JLINALG_NR,
+                blas_backend,
+                blas_has_dgeqrf,
+                blas_has_dgesvd,
+                blas_has_dsyevd,
+                blas_has_dsyevr,
+                blas_has_dsyrk,
+                blas_has_lapacke_dsyevd,
+                blas_is_ilp64,
+                compute_snp_stats_chunk,
+                daxpy,
+                ddot,
+                dgemm,
+                dgemv,
+                dnrm2,
+                dscal,
+                dsyr2k,
+                dsyrk,
+                eigh,
+                get_n_threads,
+                jlinalg_isa,
+                qr,
+                set_n_threads,
+                svd,
+            )
 
-        HAS_C_EXTENSION: bool = True
+            HAS_C_EXTENSION: bool = True
+        except (ImportError, OSError):
+            pass  # Fall through to NumPy fallback below
 
 if not HAS_C_EXTENSION:
     if _so_exists:

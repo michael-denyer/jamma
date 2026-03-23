@@ -144,6 +144,7 @@ def eigendecompose_kinship(
     )
     required_gb = _dsyevd_inplace_peak_gb(n_samples) if use_inplace else dsyevd_peak
     use_dsyevr = False
+    dsyevd_req = required_gb  # track pre-fallback value for logging
 
     margin = _memory_margin_gb(required_gb)
     if required_gb + margin > available_gb:
@@ -175,17 +176,29 @@ def eigendecompose_kinship(
             f"DSYEVR fallback={dsyevr_gb:.1f}GB)"
         )
     elif use_dsyevr:
+        # Explain which driver we fell back from
+        fell_from = "DSYEVD-inplace" if dsyevd_req == inplace_gb else "DSYEVD"
         logger.info(
             f"Eigendecomp memory (DSYEVR): estimated {dsyevr_gb:.1f}GB, "
             f"available {available_gb:.1f}GB "
-            f"(DSYEVD-inplace={inplace_gb:.1f}GB would not fit)"
+            f"({fell_from}={dsyevd_req:.1f}GB would not fit)"
         )
     else:
+        # Determine why inplace was not used
+        if no_vendor:
+            reason = "JLINALG_NO_VENDOR_LAPACK set, using jlinalg D&C pipeline"
+        elif not jlinalg.blas_has_dsyevd:
+            reason = "no vendor DSYEVD available"
+        elif K.dtype != np.float64:
+            reason = f"K dtype is {K.dtype}, not float64"
+        elif not K.flags["C_CONTIGUOUS"]:
+            reason = "K is not C-contiguous"
+        else:
+            reason = "kinship not writeable, cannot use inplace"
         logger.info(
             f"Eigendecomp memory (DSYEVD): estimated {required_gb:.1f}GB, "
             f"available {available_gb:.1f}GB "
-            f"(kinship not writeable, cannot use inplace; "
-            f"DSYEVR fallback={dsyevr_gb:.1f}GB)"
+            f"({reason}; DSYEVR fallback={dsyevr_gb:.1f}GB)"
         )
 
     if check_memory:

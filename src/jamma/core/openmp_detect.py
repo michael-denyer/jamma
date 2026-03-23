@@ -34,6 +34,7 @@ def detect_openmp_flags(
     cc_cmd: str,
     system: str,
     _print: Callable[..., None] = print,
+    _warn: Callable[..., None] | None = None,
 ) -> tuple[list[str], list[str], str]:
     """Detect OpenMP compile and link flags for the current platform.
 
@@ -41,6 +42,8 @@ def detect_openmp_flags(
         cc_cmd: C compiler command name (e.g. "gcc", "cc").
         system: Platform name from ``platform.system()`` ("Linux" or "Darwin").
         _print: Print function for verbose output.
+        _warn: Print function for warnings that must always be shown.
+            Defaults to ``_print`` if not provided.
 
     Returns:
         ``(compile_flags, link_flags, cc_override)`` for OpenMP, or
@@ -48,6 +51,8 @@ def detect_openmp_flags(
         from *cc_cmd* when the detector switches to clang for libiomp5
         compatibility (see ``_detect_linux_openmp_flags``).
     """
+    if _warn is None:
+        _warn = _print
     if os.environ.get("JAMMA_NO_OPENMP", "").strip() not in ("", "0"):
         _print(
             "OpenMP disabled (JAMMA_NO_OPENMP set). "
@@ -57,7 +62,7 @@ def detect_openmp_flags(
     if system == "Darwin":
         cflags, lflags = _detect_darwin_openmp_flags(_print)
         return (cflags, lflags, cc_cmd)
-    return _detect_linux_openmp_flags(cc_cmd, _print)
+    return _detect_linux_openmp_flags(cc_cmd, _print, _warn)
 
 
 def _detect_darwin_openmp_flags(
@@ -92,7 +97,9 @@ def _detect_darwin_openmp_flags(
 
 
 def _detect_linux_openmp_flags(
-    cc_cmd: str, _print: Callable[..., None]
+    cc_cmd: str,
+    _print: Callable[..., None],
+    _warn: Callable[..., None] | None = None,
 ) -> tuple[list[str], list[str], str]:
     """Detect the best OpenMP flags for Linux.
 
@@ -113,9 +120,11 @@ def _detect_linux_openmp_flags(
     2. libiomp5 via system paths → prefer clang, fallback to GCC
     3. libgomp (GNU OpenMP) → standard fallback via -fopenmp
     """
+    if _warn is None:
+        _warn = _print
     libiomp5_path = _find_libiomp5(_print)
     if libiomp5_path is not None:
-        return _openmp_flags_for_libiomp5(cc_cmd, libiomp5_path, _print)
+        return _openmp_flags_for_libiomp5(cc_cmd, libiomp5_path, _print, _warn)
 
     # Fallback to GNU OpenMP (safe to use -fopenmp for both compile and link)
     return (["-fopenmp"], ["-fopenmp"], cc_cmd)
@@ -160,6 +169,7 @@ def _openmp_flags_for_libiomp5(
     cc_cmd: str,
     libiomp5_path: Path,
     _print: Callable[..., None],
+    _warn: Callable[..., None] | None = None,
 ) -> tuple[list[str], list[str], str]:
     """Build OpenMP flags for linking against a specific libiomp5.
 
@@ -212,7 +222,10 @@ def _openmp_flags_for_libiomp5(
     # link against libiomp5 by full path.  This relies on libiomp5's GOMP
     # compatibility shim, which may trigger assertion failures after MKL
     # LAPACK operations on some systems.
-    _print(
+    # Use _warn (always-visible) instead of _print (verbose-only) since
+    # this is a known-crashy configuration.
+    warn_fn = _warn if _warn is not None else _print
+    warn_fn(
         f"WARNING: Using {cc_cmd} with libiomp5 — GCC's GOMP compatibility "
         f"shim may cause assertion failures after MKL LAPACK calls.  "
         f"Install clang to avoid this: apt-get install clang"

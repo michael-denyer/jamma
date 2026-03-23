@@ -483,14 +483,10 @@ def _compute_chunk_size_numpy(
             # Fused general path: jlinalg.dgemm produces utg_t directly.
             # Single buffer, no intermediate allocation or contiguous copy.
             bytes_per_snp = n_samples * 8
-        elif lmm_mode == 1:
-            # Wald: workspace path, no Uab reconstruction
-            bytes_per_snp = n_samples * (n_var + 1) * 8
         else:
-            # Score/LRT/All: reconstruct_uab_from_soa allocates (n_snps,
-            # n_samples, n_index) while varying SoA is still live.
-            n_index = (n_cvt + 3) * (n_cvt + 2) // 2
-            bytes_per_snp = n_samples * (n_var + n_index) * 8
+            # All modes: split C dispatch, no Uab reconstruction.
+            # n_var varying SoA columns + 1 utg_t per SNP.
+            bytes_per_snp = n_samples * (n_var + 1) * 8
     else:
         n_index = (n_cvt + 3) * (n_cvt + 2) // 2
         bytes_per_snp = n_samples * n_index * 8
@@ -717,8 +713,8 @@ def run_lmm_association_numpy(
     # n_cvt=1: split available for all modes — Wald uses C workspace,
     #   LRT/Score use SoA-native C split dispatch, mode-4 uses either
     #   fused kernel or Wald workspace + SoA split Score/LRT.
-    # n_cvt>1: Wald uses general C workspace. LRT/Score/mode-4 fall back
-    #   to reconstruct_uab_from_soa + C general batch dispatch.
+    # n_cvt>1: Wald uses general C workspace. LRT/Score/mode-4 use
+    #   split general C dispatch (no Uab reconstruction).
     use_split = (_C_SPLIT_AVAILABLE and n_cvt == 1) or (
         _C_GENERAL_AVAILABLE and n_cvt > 1
     )

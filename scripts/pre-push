@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Pre-push hook: run ruff format --check on ALL files to catch drift
+# that the pre-commit hook misses (it only checks staged files).
+
+set -e
+
+echo "pre-push: checking ruff format on all files..."
+uv run ruff format --check . 2>/dev/null
+echo "pre-push: ruff format OK"

@@ -167,14 +167,26 @@ def eigendecompose_kinship(
     driver = "DSYEVR" if use_dsyevr else ("DSYEVD-inplace" if use_inplace else "DSYEVD")
     dsyevr_gb = _dsyevr_peak_gb(n_samples)
     inplace_gb = _dsyevd_inplace_peak_gb(n_samples)
-    logger.info(
-        f"Eigendecomp memory ({driver}): estimated {required_gb:.1f}GB, "
-        f"available {available_gb:.1f}GB"
-    )
-    logger.info(
-        f"  Driver options: DSYEVD-inplace={inplace_gb:.1f}GB, "
-        f"DSYEVD={dsyevd_peak:.1f}GB, DSYEVR={dsyevr_gb:.1f}GB"
-    )
+    if use_inplace:
+        logger.info(
+            f"Eigendecomp memory (DSYEVD-inplace): estimated {inplace_gb:.1f}GB, "
+            f"available {available_gb:.1f}GB "
+            f"(kinship in memory, overwriting in place; "
+            f"DSYEVR fallback={dsyevr_gb:.1f}GB)"
+        )
+    elif use_dsyevr:
+        logger.info(
+            f"Eigendecomp memory (DSYEVR): estimated {dsyevr_gb:.1f}GB, "
+            f"available {available_gb:.1f}GB "
+            f"(DSYEVD-inplace={inplace_gb:.1f}GB would not fit)"
+        )
+    else:
+        logger.info(
+            f"Eigendecomp memory (DSYEVD): estimated {required_gb:.1f}GB, "
+            f"available {available_gb:.1f}GB "
+            f"(kinship not writeable, cannot use inplace; "
+            f"DSYEVR fallback={dsyevr_gb:.1f}GB)"
+        )
 
     if check_memory:
         check_memory_available(

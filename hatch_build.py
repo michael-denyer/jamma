@@ -271,28 +271,33 @@ class CustomBuildHook(BuildHookInterface):
             file=sys.stderr,
         )
 
-    def _detect_linux_openmp_flags(self, cc_cmd: str) -> tuple[list[str], list[str]]:
+    def _detect_linux_openmp_flags(
+        self, cc_cmd: str
+    ) -> tuple[list[str], list[str], str]:
         """Detect the best OpenMP flags for Linux.
 
         This is a copy of ``jamma.core.openmp_detect._detect_linux_openmp_flags``.
         hatch_build.py cannot import from jamma.* at wheel-build time, so we
         maintain this copy here — keep the two in sync.
 
-        Prefers Intel OpenMP (libiomp5) when available to avoid the
-        libgomp/libiomp5 dual-runtime conflict on systems with MKL-backed
-        numpy. Falls back to GNU OpenMP (-fopenmp → libgomp).
-
-        On GCC, ``-fopenmp`` at link time implicitly adds ``-lgomp``.  When
-        we link libiomp5 by full path, passing ``-fopenmp`` to the linker
-        would load *both* libgomp and libiomp5 — triggering an Intel OMP
-        assertion failure (``kmp_runtime.cpp``).
+        Prefers clang over GCC when libiomp5 is found. GCC's ``-fopenmp``
+        generates ``GOMP_*`` ABI calls; libiomp5's compatibility shim for
+        these has assertion failures (``kmp_runtime.cpp``) after MKL LAPACK
+        operations. Clang natively generates ``kmp_*`` calls.
 
         Args:
             cc_cmd: C compiler command name.
 
         Returns:
-            ``(compile_flags, link_flags)`` for OpenMP.
+            ``(compile_flags, link_flags, cc_override)`` for OpenMP.
         """
+        libiomp5_path = self._find_libiomp5()
+        if libiomp5_path is not None:
+            return self._openmp_flags_for_libiomp5(cc_cmd, libiomp5_path)
+        return (["-fopenmp"], ["-fopenmp"], cc_cmd)
+
+    def _find_libiomp5(self) -> Path | None:
+        """Locate libiomp5.so in numpy's bundled libs or system paths."""
         try:
             import numpy as np
 
@@ -306,34 +311,66 @@ class CustomBuildHook(BuildHookInterface):
                     continue
                 for lib in d.iterdir():
                     if "libiomp5" in lib.name and ".so" in lib.name:
-                        print(
-                            f"Intel OpenMP found: {lib}",
-                            file=sys.stderr,
-                        )
-                        # Link by full path — numpy bundles versioned names
-                        # like libiomp5-2f035e84.so with no unversioned
-                        # symlink, so -liomp5 fails at link time.  Do NOT
-                        # pass -fopenmp to the linker: GCC would add
-                        # -lgomp, creating a dual OpenMP runtime.
-                        return (
-                            ["-fopenmp"],
-                            [str(lib), f"-Wl,-rpath,{d}"],
-                        )
+                        print(f"Intel OpenMP found: {lib}", file=sys.stderr)
+                        return lib
         except ImportError:
             pass
 
-        # Check system-wide libiomp5
-        result = subprocess.run(
-            [cc_cmd, "-liomp5", "-x", "c", "-", "-o", "/dev/null"],
-            input="int main(){return 0;}\n",
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            print("Intel OpenMP (system libiomp5) detected", file=sys.stderr)
-            return (["-fopenmp"], ["-liomp5"])
+        for search_dir in [
+            Path("/usr/lib"),
+            Path("/usr/lib64"),
+            Path("/usr/local/lib"),
+        ]:
+            if not search_dir.is_dir():
+                continue
+            for lib in search_dir.iterdir():
+                if "libiomp5" in lib.name and ".so" in lib.name:
+                    print(f"Intel OpenMP found (system): {lib}", file=sys.stderr)
+                    return lib
+        return None
 
-        return (["-fopenmp"], ["-fopenmp"])
+    def _openmp_flags_for_libiomp5(
+        self, cc_cmd: str, libiomp5_path: Path
+    ) -> tuple[list[str], list[str], str]:
+        """Build OpenMP flags for linking against libiomp5, preferring clang."""
+        lib_dir = libiomp5_path.parent
+        link_flags = [str(libiomp5_path), f"-Wl,-rpath,{lib_dir}"]
+
+        clang_path = shutil.which("clang")
+        if clang_path is not None:
+            result = subprocess.run(
+                [
+                    clang_path,
+                    "-fopenmp",
+                    "-x",
+                    "c",
+                    "-",
+                    "-o",
+                    "/dev/null",
+                    str(libiomp5_path),
+                    f"-Wl,-rpath,{lib_dir}",
+                ],
+                input="#include <omp.h>\nint main(){return omp_get_max_threads();}\n",
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                print(
+                    f"Using clang ({clang_path}) for libiomp5 compatibility",
+                    file=sys.stderr,
+                )
+                return (["-fopenmp"], link_flags, clang_path)
+            print(
+                f"clang found but OpenMP test failed: {result.stderr.strip()}",
+                file=sys.stderr,
+            )
+
+        print(
+            f"WARNING: Using {cc_cmd} with libiomp5 — GCC's GOMP shim may "
+            f"cause assertion failures. Install clang: apt-get install clang",
+            file=sys.stderr,
+        )
+        return (["-fopenmp"], link_flags, cc_cmd)
 
     def _compile_c_extension(self, build_data):
         """Compile _lmm_accel.c -> _lmm_accel{EXT_SUFFIX} if a C compiler is available.
@@ -413,7 +450,7 @@ class CustomBuildHook(BuildHookInterface):
                     file=sys.stderr,
                 )
         else:
-            omp_compile, omp_link = self._detect_linux_openmp_flags(cc_cmd)
+            omp_compile, omp_link, cc_cmd = self._detect_linux_openmp_flags(cc_cmd)
 
         # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3)
         extra_cflags = os.environ.get("CFLAGS", "").split()
@@ -689,7 +726,7 @@ class CustomBuildHook(BuildHookInterface):
                     file=sys.stderr,
                 )
         else:
-            omp_compile, omp_link = self._detect_linux_openmp_flags(cc_cmd)
+            omp_compile, omp_link, cc_cmd = self._detect_linux_openmp_flags(cc_cmd)
 
         # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3)
         extra_cflags = os.environ.get("CFLAGS", "").split()

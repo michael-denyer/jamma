@@ -202,13 +202,15 @@ def compile_extension(verbose: bool = False) -> bool:
     else:
         _detail(f"ISA: {machine} — no extra SIMD flags")
 
-    # OpenMP detection — split into compile-only and link-only flags to avoid
-    # loading both libgomp (-fopenmp on GCC linker) and libiomp5 (MKL) in the
-    # same process, which causes an Intel OMP assertion failure.
+    # OpenMP detection — may override cc_cmd to use clang when libiomp5 is
+    # found, since GCC's GOMP compatibility shim has assertion failures after
+    # MKL LAPACK operations.
     ldflags: list[str] = []
     if platform.system() == "Linux":
         ldflags.append("-ldl")  # dlopen/dlsym for blas_dispatch.c
-    omp_compile, omp_link = detect_openmp_flags(cc_cmd, platform.system(), _detail)
+    omp_compile, omp_link, cc_cmd = detect_openmp_flags(
+        cc_cmd, platform.system(), _detail
+    )
     if platform.system() == "Darwin":
         ldflags = ["-undefined", "dynamic_lookup"]
 
@@ -498,7 +500,9 @@ def compile_test_harness(verbose: bool = True) -> Path:
         ldflags.append(f"-Wl,-rpath,{python_libdir}")
     if platform.system() == "Linux":
         ldflags.append("-ldl")
-    omp_compile, omp_link = detect_openmp_flags(cc_cmd, platform.system(), _print)
+    omp_compile, omp_link, cc_cmd = detect_openmp_flags(
+        cc_cmd, platform.system(), _print
+    )
 
     # Base compile flags
     base_cflags = [

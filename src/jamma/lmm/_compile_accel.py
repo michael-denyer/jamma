@@ -107,7 +107,9 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
     # Platform flags (GCC/Clang) — split into compile-only and link-only to
     # avoid loading both libgomp (-fopenmp on GCC linker) and libiomp5 (MKL).
     ldflags: list[str] = []
-    omp_compile, omp_link = detect_openmp_flags(cc_cmd, platform.system(), _detail)
+    omp_compile, omp_link, cc_cmd = detect_openmp_flags(
+        cc_cmd, platform.system(), _detail
+    )
     if platform.system() == "Darwin":
         ldflags = ["-undefined", "dynamic_lookup"]
 

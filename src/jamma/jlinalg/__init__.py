@@ -282,6 +282,7 @@ except ImportError as _exc:
         B: _np.ndarray,
         transa: str = "N",
         transb: str = "N",
+        out: _np.ndarray | None = None,
     ) -> _np.ndarray:
         """Compute matrix-matrix product op(A) @ op(B).
 
@@ -290,12 +291,16 @@ except ImportError as _exc:
             B: Right matrix, float64, C-contiguous.
             transa: 'N' (no transpose) or 'T' (transpose A).
             transb: 'N' (no transpose) or 'T' (transpose B).
+            out: Optional preallocated output array. If provided, result is
+                written into this buffer and returned. Must have shape (M, N)
+                matching the result dimensions.
 
         Returns:
             Result matrix C = op(A) @ op(B), float64.
 
         Raises:
-            ValueError: If A or B is not 2-D, or inner dimensions don't match.
+            ValueError: If A or B is not 2-D, inner dimensions don't match,
+                or out has wrong shape.
         """
         if A.ndim != 2:
             raise ValueError(f"dgemm: A must be a 2-D array, got {A.ndim}-D")
@@ -320,13 +325,22 @@ except ImportError as _exc:
                 f"dgemm: op(A) columns ({_A.shape[1]}) must match "
                 f"op(B) rows ({_B.shape[0]})"
             )
-        return _np.asarray(
+        result = _np.asarray(
             _np.matmul(
                 _A.astype(_np.float64, copy=False),
                 _B.astype(_np.float64, copy=False),
             ),
             dtype=_np.float64,
         )
+        if out is not None:
+            if out.shape != result.shape:
+                raise ValueError(
+                    f"dgemm: out shape {out.shape} doesn't match "
+                    f"result shape {result.shape}"
+                )
+            out[:] = result
+            return out
+        return result
 
     def dsyrk(X: _np.ndarray) -> _np.ndarray:
         """Compute symmetric rank-k update: K = X @ X.T.

@@ -267,21 +267,23 @@ py_dgemv(PyObject *self, PyObject *args)
 /* ---------------------------------------------------------------------------
  * py_dgemm — matrix-matrix product C = op(A) @ op(B)
  *
- * Signature: dgemm(A, B, transa='N', transb='N') -> ndarray
+ * Signature: dgemm(A, B, transa='N', transb='N', out=None) -> ndarray
  * A and B are 2-D float64 arrays.  transa/transb: 'N' (no transpose) or
- * 'T' (transpose).  Returns a new 2-D float64 array.
+ * 'T' (transpose).  out: optional preallocated output array (M x N, float64,
+ * C-contiguous).  If None, a new array is allocated.  Returns the output array.
  * ---------------------------------------------------------------------------
  */
 static PyObject *
 py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs)
 {
-    static char *kwlist[] = {"A", "B", "transa", "transb", NULL};
+    static char *kwlist[] = {"A", "B", "transa", "transb", "out", NULL};
     PyObject *oA, *oB;
+    PyObject *oOut = Py_None;
     const char *transa_str = "N";
     const char *transb_str = "N";
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|ss", kwlist,
-            &oA, &oB, &transa_str, &transb_str))
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|ssO", kwlist,
+            &oA, &oB, &transa_str, &transb_str, &oOut))
         return NULL;
 
     /* Validate transpose flags: exactly one char, 'N'/'n' or 'T'/'t'. */
@@ -351,12 +353,32 @@ py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs)
         return NULL;
     }
 
-    /* Allocate output C (M x N), zero-initialised by jlinalg_dgemm_c */
-    npy_intp dims[2] = {M, N};
-    PyArrayObject *aC = (PyArrayObject *)PyArray_SimpleNew(2, dims, NPY_DOUBLE);
-    if (!aC) {
-        Py_DECREF(aA); Py_DECREF(aB);
-        return NULL;
+    /* Output C (M x N): use caller-provided buffer or allocate fresh */
+    PyArrayObject *aC;
+    if (oOut != Py_None) {
+        aC = (PyArrayObject *)PyArray_FROM_OTF(
+            oOut, NPY_DOUBLE,
+            NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_WRITEABLE | NPY_ARRAY_ALIGNED);
+        if (!aC) {
+            Py_DECREF(aA); Py_DECREF(aB);
+            return NULL;
+        }
+        if (PyArray_NDIM(aC) != 2 ||
+            PyArray_DIM(aC, 0) != M || PyArray_DIM(aC, 1) != N) {
+            PyErr_Format(PyExc_ValueError,
+                "dgemm: out shape (%zd, %zd) doesn't match result shape (%zd, %zd)",
+                (Py_ssize_t)PyArray_DIM(aC, 0), (Py_ssize_t)PyArray_DIM(aC, 1),
+                (Py_ssize_t)M, (Py_ssize_t)N);
+            Py_DECREF(aC); Py_DECREF(aA); Py_DECREF(aB);
+            return NULL;
+        }
+    } else {
+        npy_intp dims[2] = {M, N};
+        aC = (PyArrayObject *)PyArray_SimpleNew(2, dims, NPY_DOUBLE);
+        if (!aC) {
+            Py_DECREF(aA); Py_DECREF(aB);
+            return NULL;
+        }
     }
 
     const double *pA = (const double *)PyArray_DATA(aA);

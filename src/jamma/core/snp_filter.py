@@ -12,6 +12,8 @@ from loguru import logger
 
 from jamma.jlinalg import compute_snp_stats_chunk
 
+_SNP_STATS_CHUNK_SIZE = 10_000
+
 # Chi-squared SF with df=1: P(X > x) = erfc(sqrt(x/2))
 # Uses np.vectorize(math.erfc) since numpy has no built-in erfc.
 # HWE runs once per GWAS (not per-chunk), so vectorize overhead is negligible.
@@ -73,8 +75,24 @@ def compute_snp_stats(
     col_means = np.zeros(n_snps, dtype=np.float64)
     miss_counts = np.zeros(n_snps, dtype=np.intp)
     col_vars = np.zeros(n_snps, dtype=np.float64)
-    data = np.ascontiguousarray(genotypes)
-    compute_snp_stats_chunk(data, col_means, miss_counts, col_vars)
+
+    # Large in-memory matrices are processed in bounded SNP slices to avoid
+    # allocating a full contiguous copy of the genotype matrix at once.
+    if n_snps <= _SNP_STATS_CHUNK_SIZE:
+        data = np.ascontiguousarray(genotypes)
+        compute_snp_stats_chunk(data, col_means, miss_counts, col_vars)
+        return col_means, miss_counts, col_vars
+
+    for start in range(0, n_snps, _SNP_STATS_CHUNK_SIZE):
+        end = min(start + _SNP_STATS_CHUNK_SIZE, n_snps)
+        chunk = np.ascontiguousarray(genotypes[:, start:end])
+        compute_snp_stats_chunk(
+            chunk,
+            col_means[start:end],
+            miss_counts[start:end],
+            col_vars[start:end],
+        )
+
     return col_means, miss_counts, col_vars
 
 

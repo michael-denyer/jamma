@@ -766,12 +766,13 @@ class PipelineRunner:
         try:
             from jamma.core.threading import (
                 get_blas_backend,
+                get_c_extension_thread_count,
                 get_physical_core_count,
                 is_blas_controllable,
             )
-            from jamma.lmm._compile_utils import is_c_extension_usable
+            from jamma.lmm._compile_utils import get_c_extension_capabilities
 
-            c_ext = is_c_extension_usable()
+            c_ext, c_has_openmp = get_c_extension_capabilities()
             runner = plan.runner_name
 
             blas = get_blas_backend()
@@ -793,6 +794,17 @@ class PipelineRunner:
                 # (same logic as runner_numpy.py for OpenMP).
                 cores = get_physical_core_count()
                 threads = max(1, cores // 2)
+
+            # A single-threaded _lmm_accel build should not be logged as a
+            # multi-threaded compute kernel.
+            if c_ext and plan.backend == "numpy":
+                threads = min(
+                    threads,
+                    get_c_extension_thread_count(
+                        c_accel_available=c_ext,
+                        c_has_openmp=c_has_openmp,
+                    ),
+                )
 
             jax_devices = 0
             if plan.backend == "jax":

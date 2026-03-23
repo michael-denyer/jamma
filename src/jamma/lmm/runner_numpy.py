@@ -22,14 +22,17 @@ from jamma.core.progress import create_progress_bar, progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.core.threading import (
     blas_threads,
+    get_c_extension_thread_count,
     get_physical_core_count,
     is_blas_controllable,
+    jlinalg_threads,
 )
 from jamma.lmm.compute_numpy import (
     _C_ACCEL_AVAILABLE,
     _C_FUSED_AVAILABLE,
     _C_FUSED_GENERAL_AVAILABLE,
     _C_GENERAL_AVAILABLE,
+    _C_HAS_OPENMP,
     _C_LRT_FUSED_AVAILABLE,
     _C_MODE4_AVAILABLE,
     _C_MODE4_FUSED_AVAILABLE,
@@ -861,16 +864,9 @@ def run_lmm_association_numpy(
         n_chunks = (n_filtered + chunk_size - 1) // chunk_size
         use_pipeline = use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
 
-    # OpenMP thread count for C extension (set once, reused per chunk).
-    # When C extension is active, BLAS threads are set to 1 inside the compute
-    # phase to prevent oversubscription between BLAS and OpenMP.
-    # On macOS/Accelerate, blas_threads(1) is a no-op — Accelerate keeps using
-    # all cores — so we halve OpenMP threads to share cores with BLAS.
-    if _C_ACCEL_AVAILABLE:
-        cores = get_physical_core_count()
-        omp_threads = max(1, cores // 2) if not is_blas_controllable() else cores
-    else:
-        omp_threads = 1
+    # OpenMP thread count for the C extension (set once, reused per chunk).
+    # A serial _lmm_accel build must stay at 1 even when the extension exists.
+    omp_threads = get_c_extension_thread_count(_C_ACCEL_AVAILABLE, _C_HAS_OPENMP)
 
     if show_progress:
         logger.info(f"  Analyzed individuals: {n_samples:,}")
@@ -958,27 +954,24 @@ def run_lmm_association_numpy(
         _uab_var_bufs = None
 
     # Pipeline thread budget: partition physical cores between concurrent
-    # BLAS rotation (background) and C extension compute (foreground) to
-    # prevent oversubscription. Without partitioning, both use all cores
-    # (2N threads on N cores), causing context-switch overhead.
-    # On Accelerate (uncontrollable BLAS), rotation threads are ignored
-    # by blas_threads() and Accelerate uses all cores, so give compute
-    # fewer threads to leave headroom.
+    # jlinalg rotation (background) and C-extension compute (foreground) to
+    # prevent oversubscription. When the C extension is serial, leave all
+    # cores with jlinalg rotation.
     if use_pipeline:
         total_cores = get_physical_core_count()
-        if is_blas_controllable():
-            pipeline_rot_threads, pipeline_omp_threads = compute_pipeline_core_split(
+        if omp_threads == 1:
+            pipeline_rot_threads = total_cores
+            pipeline_omp_threads = 1
+        else:
+            rot_threads, compute_threads = compute_pipeline_core_split(
                 n_samples, total_cores
             )
+            pipeline_omp_threads = min(compute_threads, omp_threads)
+            pipeline_rot_threads = max(1, total_cores - pipeline_omp_threads)
             logger.debug(
                 f"Pipeline core split: {pipeline_rot_threads} rotation, "
                 f"{pipeline_omp_threads} compute (n_samples={n_samples:,})"
             )
-        else:
-            # Accelerate will use all cores for rotation regardless;
-            # give OpenMP half to reduce contention
-            pipeline_omp_threads = max(1, total_cores // 2)
-            pipeline_rot_threads = total_cores  # ignored by blas_threads()
     else:
         pipeline_omp_threads = omp_threads
         pipeline_rot_threads = rotation_threads
@@ -1190,7 +1183,7 @@ def run_lmm_association_numpy(
         # Rotate into preallocated utg_buf — jlinalg.dgemm(..., out=)
         # writes directly, no intermediate allocation.
         utg_out = _utg_bufs[buf_idx][:actual_len, :]
-        with blas_threads(pipeline_rot_threads):
+        with jlinalg_threads(pipeline_rot_threads):
             utg_t = jlinalg.dgemm(geno_chunk, U, transa="T", out=utg_out)
 
         if (
@@ -1511,7 +1504,7 @@ def run_lmm_association_numpy(
                 # writes directly, no intermediate allocation.
                 t_rot_start = time.perf_counter()
                 utg_out = _utg_bufs[0][:actual_snps, :]
-                with blas_threads(rotation_threads):
+                with jlinalg_threads(rotation_threads):
                     utg_t = jlinalg.dgemm(geno_chunk, U, transa="T", out=utg_out)
                 t_rotation_total += time.perf_counter() - t_rot_start
 

@@ -24,8 +24,10 @@ from jamma.core.progress import create_progress_bar, progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask
 from jamma.core.threading import (
     blas_threads,
+    get_c_extension_thread_count,
     get_physical_core_count,
     is_blas_controllable,
+    jlinalg_threads,
 )
 from jamma.io.plink import (
     get_plink_metadata,
@@ -38,6 +40,7 @@ from jamma.lmm.compute_numpy import (
     _C_FUSED_AVAILABLE,
     _C_FUSED_GENERAL_AVAILABLE,
     _C_GENERAL_AVAILABLE,
+    _C_HAS_OPENMP,
     _C_LRT_FUSED_AVAILABLE,
     _C_LRT_FUSED_WS_AVAILABLE,
     _C_MODE4_AVAILABLE,
@@ -475,28 +478,26 @@ def run_lmm_association_numpy_streaming(
     if use_pipeline:
         logger.debug(f"Pipeline mode: overlapping rotation/compute ({n_chunks} chunks)")
 
-    # OpenMP thread count
-    if _C_ACCEL_AVAILABLE:
-        cores = get_physical_core_count()
-        omp_threads = max(1, cores // 2) if not is_blas_controllable() else cores
-    else:
-        omp_threads = 1
+    # OpenMP thread count for the C extension. Serial builds stay at 1.
+    omp_threads = get_c_extension_thread_count(_C_ACCEL_AVAILABLE, _C_HAS_OPENMP)
 
     # Pipeline thread budget: partition physical cores between concurrent
-    # BLAS rotation (background) and C extension compute (foreground).
+    # jlinalg rotation (background) and C-extension compute (foreground).
     if use_pipeline:
         total_cores = get_physical_core_count()
-        if is_blas_controllable():
-            pipeline_rot_threads, pipeline_omp_threads = compute_pipeline_core_split(
+        if omp_threads == 1:
+            pipeline_rot_threads = total_cores
+            pipeline_omp_threads = 1
+        else:
+            rot_threads, compute_threads = compute_pipeline_core_split(
                 n_samples, total_cores
             )
+            pipeline_omp_threads = min(compute_threads, omp_threads)
+            pipeline_rot_threads = max(1, total_cores - pipeline_omp_threads)
             logger.debug(
                 f"Pipeline core split: {pipeline_rot_threads} rotation, "
                 f"{pipeline_omp_threads} compute (n_samples={n_samples:,})"
             )
-        else:
-            pipeline_omp_threads = max(1, total_cores // 2)
-            pipeline_rot_threads = total_cores
     else:
         pipeline_omp_threads = omp_threads
         pipeline_rot_threads = rotation_threads
@@ -771,29 +772,24 @@ def run_lmm_association_numpy_streaming(
             buf_idx = _stream_chunk_counter % len(_utg_bufs)
             _stream_chunk_counter += 1
 
-            # Rotate — control both external BLAS (via threadpoolctl) and
-            # jlinalg-own dgemm (via set_n_threads) to avoid oversubscription
-            # when pipeline overlaps rotation with compute.
-            old_jl_threads = jlinalg.set_n_threads(pipeline_rot_threads)
-            try:
-                with blas_threads(pipeline_rot_threads):
-                    if (
-                        use_fused
-                        or use_fused_score
-                        or use_fused_lrt
-                        or use_fused_score_ws
-                        or use_fused_lrt_ws
-                        or use_split
-                    ):
-                        utg_out = _utg_bufs[buf_idx][:actual_len, :]
-                        utg_t = jlinalg.dgemm(chunk, U, transa="T", out=utg_out)
-                    else:
-                        # Non-split UtG path: (n_samples, actual_len) shape
-                        # doesn't match utg_buf layout — allocate fresh.
-                        UtG = jlinalg.dgemm(U, chunk, transa="T")
-                        utg_t = None
-            finally:
-                jlinalg.set_n_threads(old_jl_threads)
+            # Rotate — jlinalg has its own thread-control API; do not mutate
+            # process-global BLAS limits from the background pipeline thread.
+            with jlinalg_threads(pipeline_rot_threads):
+                if (
+                    use_fused
+                    or use_fused_score
+                    or use_fused_lrt
+                    or use_fused_score_ws
+                    or use_fused_lrt_ws
+                    or use_split
+                ):
+                    utg_out = _utg_bufs[buf_idx][:actual_len, :]
+                    utg_t = jlinalg.dgemm(chunk, U, transa="T", out=utg_out)
+                else:
+                    # Non-split UtG path: (n_samples, actual_len) shape
+                    # doesn't match utg_buf layout — allocate fresh.
+                    UtG = jlinalg.dgemm(U, chunk, transa="T")
+                    utg_t = None
             del chunk
 
             if (

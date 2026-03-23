@@ -259,3 +259,34 @@ class TestComputeSnpStats:
         assert col_means[1] == pytest.approx(2.0)
         assert miss_counts[1] == 0
         assert col_vars[1] == pytest.approx(0.0)
+
+    def test_large_matrix_uses_chunked_stats_path(self, monkeypatch) -> None:
+        """Large matrices are processed in bounded SNP chunks."""
+        import jamma.core.snp_filter as snp_filter
+
+        genotypes = np.array(
+            [
+                [0.0, 1.0, 2.0, np.nan, 1.0],
+                [1.0, 1.0, 0.0, 2.0, np.nan],
+                [2.0, 0.0, 1.0, 1.0, 2.0],
+            ],
+            dtype=np.float32,
+        )
+
+        monkeypatch.setattr(snp_filter, "_SNP_STATS_CHUNK_SIZE", 2)
+
+        calls: list[tuple[int, int]] = []
+        real_kernel = snp_filter.compute_snp_stats_chunk
+
+        def wrapped_kernel(data, means, miss, vari):
+            calls.append(data.shape)
+            return real_kernel(data, means, miss, vari)
+
+        monkeypatch.setattr(snp_filter, "compute_snp_stats_chunk", wrapped_kernel)
+
+        col_means, miss_counts, col_vars = snp_filter.compute_snp_stats(genotypes)
+
+        assert calls == [(3, 2), (3, 2), (3, 1)]
+        np.testing.assert_allclose(col_means, [1.0, 2 / 3, 1.0, 1.5, 1.5])
+        np.testing.assert_array_equal(miss_counts, [0, 0, 0, 1, 1])
+        np.testing.assert_allclose(col_vars, [2 / 3, 2 / 9, 2 / 3, 0.25, 0.25])

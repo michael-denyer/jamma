@@ -19,12 +19,15 @@ from __future__ import annotations
 
 import functools
 import os
+import threading as _py_threading
 from collections.abc import Generator
 from contextlib import contextmanager
 
 import psutil
 from loguru import logger
 from threadpoolctl import threadpool_info, threadpool_limits
+
+_JLINALG_THREAD_LOCK = _py_threading.RLock()
 
 
 def get_blas_backend() -> str:
@@ -174,6 +177,31 @@ def get_loco_worker_count() -> int:
     return 1
 
 
+def get_c_extension_thread_count(
+    c_accel_available: bool,
+    c_has_openmp: bool,
+) -> int:
+    """Return the thread count for `_lmm_accel` compute kernels.
+
+    The LMM C extension only runs in parallel when it was compiled with
+    OpenMP support. When the extension is missing or single-threaded, callers
+    must pass ``1`` so logs and pipeline heuristics do not pretend a serial
+    kernel is running with many worker threads.
+
+    Args:
+        c_accel_available: Whether `_lmm_accel` imported successfully.
+        c_has_openmp: Whether `_lmm_accel` was compiled with OpenMP.
+
+    Returns:
+        Thread count to pass to `_lmm_accel`.
+    """
+    if not c_accel_available or not c_has_openmp:
+        return 1
+
+    cores = get_physical_core_count()
+    return max(1, cores // 2) if not is_blas_controllable() else cores
+
+
 @contextmanager
 def blas_threads(n_threads: int | None = None) -> Generator[None, None, None]:
     """Context manager for scoped BLAS thread control.
@@ -201,6 +229,55 @@ def blas_threads(n_threads: int | None = None) -> Generator[None, None, None]:
 
     with threadpool_limits(limits=n_threads, user_api="blas"):
         yield
+
+
+@contextmanager
+def jlinalg_threads(n_threads: int | None = None) -> Generator[None, None, None]:
+    """Temporarily set jlinalg's internal thread count.
+
+    jlinalg's DGEMM kernels do not use threadpoolctl; they are controlled by
+    ``jlinalg.set_n_threads()``. The setting is process-global, so callers
+    must scope changes carefully. A module-level lock serialises the set +
+    compute window so concurrent pipeline workers cannot race thread-count
+    changes around ``jlinalg.dgemm()``.
+
+    Args:
+        n_threads: jlinalg thread count. None uses all physical cores.
+    """
+    if n_threads is None:
+        n_threads = get_physical_core_count()
+    n_threads = max(1, int(n_threads))
+
+    try:
+        from jamma import jlinalg
+    except ImportError:
+        yield
+        return
+
+    with _JLINALG_THREAD_LOCK:
+        old_threads: int | None = None
+        try:
+            old_threads = jlinalg.set_n_threads(n_threads)
+        except AttributeError:
+            logger.warning(
+                "jlinalg.set_n_threads() not available — build may be stale. "
+                "Thread control disabled; run: python -m jamma.jlinalg._compile_jlinalg"
+            )
+            yield
+            return
+        except ValueError as exc:
+            logger.warning(
+                f"jlinalg.set_n_threads({n_threads}) failed: {exc}. "
+                "Running with default thread count."
+            )
+            yield
+            return
+
+        try:
+            yield
+        finally:
+            if old_threads is not None:
+                jlinalg.set_n_threads(old_threads)
 
 
 @functools.cache

@@ -17,7 +17,7 @@ from jax.sharding import PartitionSpec as P
 from loguru import logger
 
 from jamma import jlinalg
-from jamma.core.threading import blas_threads
+from jamma.core.threading import jlinalg_threads
 from jamma.lmm.likelihood_jax import golden_section_optimize_lambda
 from jamma.lmm.prepare_common import (
     _build_covariate_matrix,  # noqa: F401 — re-exported for existing callers
@@ -208,7 +208,7 @@ def prepare_utg_chunk(
         geno_chunk: Mean-imputed genotype chunk (n_samples, n_snps_actual).
         U: Eigenvector matrix for rotation (n_samples, n_samples).
         placement: Resolved device placement (for device-alignment padding).
-        rotation_threads: BLAS thread count for rotation.
+        rotation_threads: jlinalg thread count for rotation.
 
     Returns:
         Tuple of (utg_t_chunk, actual_len) where utg_t_chunk is
@@ -221,7 +221,7 @@ def prepare_utg_chunk(
     # JAX JIT traces once for the tail shape; cost is negligible vs saved BLAS.
     # Device-count alignment (below) still pads if needed for even shard distribution.
 
-    with blas_threads(rotation_threads):
+    with jlinalg_threads(rotation_threads):
         with jax.profiler.TraceAnnotation("dgemm_rotation"):
             utg_t_chunk = jlinalg.dgemm(geno_chunk, U, transa="T")
 

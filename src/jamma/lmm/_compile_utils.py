@@ -11,16 +11,12 @@ import importlib
 import sys
 
 
-def is_c_extension_usable() -> bool:
-    """Check whether the LMM C extension is importable and has a valid ABI.
-
-    This is the single source of truth for C extension availability checks.
-    Both ``pipeline._auto_select_backend`` and ``compute_numpy._try_import_accel``
-    ultimately depend on import + ABI validation — this function consolidates
-    the lightweight probe used by the auto-backend selector.
+def get_c_extension_capabilities() -> tuple[bool, bool]:
+    """Return `_lmm_accel` availability and OpenMP capability.
 
     Returns:
-        True if _lmm_accel imports successfully and exposes ABI_VERSION.
+        Tuple ``(available, has_openmp)``. ``has_openmp`` is False when the
+        extension is unavailable, stale, or missing the capability flag.
     """
     from loguru import logger
 
@@ -28,22 +24,35 @@ def is_c_extension_usable() -> bool:
         mod = importlib.import_module("jamma.lmm._lmm_accel")
     except ImportError:
         logger.debug("C extension _lmm_accel not importable")
-        return False
+        return False, False
     except (OSError, AttributeError) as e:
         logger.warning(
             f"C extension _lmm_accel not usable: {type(e).__name__}: {e}. "
             "Run: python -m jamma.lmm._compile_accel"
         )
-        return False
+        return False, False
 
     if not hasattr(mod, "ABI_VERSION"):
         logger.debug(
             "C extension imported but missing ABI_VERSION — "
             "likely stale; run: python -m jamma.lmm._compile_accel"
         )
-        return False
+        return False, False
 
-    return True
+    return True, bool(getattr(mod, "HAS_OPENMP", False))
+
+
+def is_c_extension_usable() -> bool:
+    """Convenience wrapper: return only the availability flag.
+
+    Delegates to ``get_c_extension_capabilities()`` and discards the
+    OpenMP flag.
+
+    Returns:
+        True if _lmm_accel imports successfully and exposes ABI_VERSION.
+    """
+    available, _has_openmp = get_c_extension_capabilities()
+    return available
 
 
 def auto_recompile_c_extension(

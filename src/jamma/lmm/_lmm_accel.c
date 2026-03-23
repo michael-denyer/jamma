@@ -1817,6 +1817,40 @@ static void calc_pab_general(
 }
 
 /* -------------------------------------------------------------------------
+ * logdet_from_row0 — compute logdet(Iab) from identity dot products.
+ *
+ * Encapsulates the identity Pab prepass: calls calc_pab_general into the
+ * caller-provided scratch buffer, then extracts diagonal entries for logdet.
+ * Replaces three inline copies of the same pattern in compute_lmm_chunk_general_c,
+ * fused general Wald, and fused general mode-4.
+ *
+ * row0:        n_index identity-weighted dot products
+ * t:           pab_table_t with logdet_diag_rows/cols
+ * n_cvt:       number of covariates
+ * pab_scratch: caller-provided buffer of at least MAX_PAB_SIZE doubles
+ *
+ * Returns logdet value, or NAN if any diagonal <= 0.
+ * ------------------------------------------------------------------------- */
+static inline double logdet_from_row0(
+    const double *row0,
+    const pab_table_t *t,
+    int n_cvt,
+    double *pab_scratch)
+{
+    calc_pab_general(row0, t, pab_scratch);
+
+    int ni = t->n_index;
+    double logdet = 0.0;
+    for (int d = 0; d < n_cvt + 1; d++) {
+        double val = pab_scratch[t->logdet_diag_rows[d] * ni
+                                 + t->logdet_diag_cols[d]];
+        if (val <= 0.0) return (double)NAN;
+        logdet += log(val);
+    }
+    return logdet;
+}
+
+/* -------------------------------------------------------------------------
  * reml_finish_general — REML tail for general n_cvt.
  *
  * logdet_pab from logdet_diag entries, P_yy guard, return full REML formula
@@ -2724,21 +2758,11 @@ static PyObject *compute_lmm_chunk_general_c_py(
             iab_row0[ws->table.varying_indices[c]] = s;
         }
 
-        /* Compute full Iab Pab recursion */
-        double iab_pab[MAX_PAB_SIZE];
-        calc_pab_general(iab_row0, &ws->table, iab_pab);
-
-        /* logdet_iab from diagonal entries.  Non-positive diagonal → NaN
-         * propagates through golden section and REML sentinel. */
-        double logdet_iab = 0.0;
-        int iab_degenerate = 0;
-        for (int d = 0; d < ws->table.n_cvt + 1; d++) {
-            double val = iab_pab[ws->table.logdet_diag_rows[d] * n_index
-                                 + ws->table.logdet_diag_cols[d]];
-            if (val <= 0.0) { iab_degenerate = 1; break; }
-            logdet_iab += log(val);
-        }
-        if (iab_degenerate) logdet_iab = (double)NAN;
+        /* Compute logdet_iab via helper (replaces inline Pab + diagonal
+         * extraction — deduplicates pattern shared with fused kernels). */
+        double iab_scratch[MAX_PAB_SIZE];
+        double logdet_iab = logdet_from_row0(
+            iab_row0, &ws->table, ws->table.n_cvt, iab_scratch);
 
         /* Golden section optimization */
         double logl_opt, beta, se, f_stat;
@@ -6954,18 +6978,9 @@ static PyObject *compute_lmm_chunk_fused_general_c_py(
             iab_row0[ws->table.varying_indices[c]] = s;
         }
 
-        double iab_pab[MAX_PAB_SIZE];
-        calc_pab_general(iab_row0, &ws->table, iab_pab);
-
-        double logdet_iab = 0.0;
-        int iab_degenerate = 0;
-        for (int d = 0; d < ws->table.n_cvt + 1; d++) {
-            double val = iab_pab[ws->table.logdet_diag_rows[d] * n_index
-                                 + ws->table.logdet_diag_cols[d]];
-            if (val <= 0.0) { iab_degenerate = 1; break; }
-            logdet_iab += log(val);
-        }
-        if (iab_degenerate) logdet_iab = (double)NAN;
+        double iab_scratch[MAX_PAB_SIZE];
+        double logdet_iab = logdet_from_row0(
+            iab_row0, &ws->table, ws->table.n_cvt, iab_scratch);
 
         /* Golden section optimization — uses scratch as uab_var */
         double logl_opt, beta, se, f_stat;
@@ -7389,18 +7404,9 @@ static PyObject *compute_mode4_chunk_fused_general_c_py(
             iab_row0[ws->table.varying_indices[c]] = s;
         }
 
-        double iab_pab[MAX_PAB_SIZE];
-        calc_pab_general(iab_row0, &ws->table, iab_pab);
-
-        double logdet_iab = 0.0;
-        int iab_degenerate = 0;
-        for (int d = 0; d < ws->table.n_cvt + 1; d++) {
-            double val = iab_pab[ws->table.logdet_diag_rows[d] * n_index
-                                 + ws->table.logdet_diag_cols[d]];
-            if (val <= 0.0) { iab_degenerate = 1; break; }
-            logdet_iab += log(val);
-        }
-        if (iab_degenerate) logdet_iab = (double)NAN;
+        double iab_scratch[MAX_PAB_SIZE];
+        double logdet_iab = logdet_from_row0(
+            iab_row0, &ws->table, ws->table.n_cvt, iab_scratch);
 
         /* ---- (c) Wald: REML optimization ---- */
         double logl_reml, wald_beta, wald_se, wald_f;

@@ -269,6 +269,15 @@ def _batch_compute_uab_varying_general_numpy(
                 f"batch_compute_uab_varying_soa_numpy: out shape {out.shape} "
                 f"doesn't match expected {expected_shape}"
             )
+        if out.dtype != np.float64:
+            raise ValueError(
+                f"batch_compute_uab_varying_soa_numpy: out dtype {out.dtype} "
+                f"must be float64"
+            )
+        if not out.flags["C_CONTIGUOUS"]:
+            raise ValueError(
+                "batch_compute_uab_varying_soa_numpy: out must be C-contiguous"
+            )
         result = out
     else:
         result = np.empty(expected_shape, dtype=np.float64)

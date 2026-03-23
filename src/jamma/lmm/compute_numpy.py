@@ -586,8 +586,6 @@ if not _C_ACCEL_AVAILABLE:
 _C_FUSED_AVAILABLE = _create_workspace_fused_c is not None
 _C_MODE4_FUSED_AVAILABLE = _create_workspace_mode4_fused_c is not None
 _C_FUSED_GENERAL_AVAILABLE = _create_workspace_fused_general_c is not None
-# Available but intentionally not wired into runners yet — mode-4 fused general
-# produces NaN lambda_mle for n_cvt >= 2. Will be used when that bug is fixed.
 _C_MODE4_FUSED_GENERAL_AVAILABLE = _create_workspace_mode4_fused_general_c is not None
 _C_SCORE_FUSED_AVAILABLE = _compute_score_fused_c is not None
 _C_LRT_FUSED_AVAILABLE = _compute_lrt_fused_c is not None
@@ -1712,8 +1710,8 @@ def _compute_score_split_numpy(
         n_cvt: Number of covariates.
         eigenvalues: Kinship eigenvalues (n_samples,).
         Hi_eval_null: Pre-computed null-model Hi_eval (n_samples,).
-        uab_varying_soa: SNP-varying Uab (n_snps, 3, n_samples) SoA.
-        uab_invariant_soa: SNP-invariant Uab (3, n_samples) SoA.
+        uab_varying_soa: SNP-varying Uab (n_snps, n_var, n_samples) SoA.
+        uab_invariant_soa: SNP-invariant Uab (n_inv, n_samples) SoA.
         n_samples: Number of samples.
         n_threads: OpenMP thread count.
 
@@ -1777,8 +1775,8 @@ def _compute_lrt_split_numpy(
     Args:
         n_cvt: Number of covariates.
         eigenvalues: Kinship eigenvalues (n_samples,).
-        uab_varying_soa: SNP-varying Uab (n_snps, 3, n_samples) SoA.
-        uab_invariant_soa: SNP-invariant Uab (3, n_samples) SoA.
+        uab_varying_soa: SNP-varying Uab (n_snps, n_var, n_samples) SoA.
+        uab_invariant_soa: SNP-invariant Uab (n_inv, n_samples) SoA.
         n_samples: Number of samples.
         l_min: Minimum lambda for optimization.
         l_max: Maximum lambda for optimization.

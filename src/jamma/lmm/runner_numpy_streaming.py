@@ -42,6 +42,7 @@ from jamma.lmm.compute_numpy import (
     _C_LRT_FUSED_WS_AVAILABLE,
     _C_MODE4_AVAILABLE,
     _C_MODE4_FUSED_AVAILABLE,
+    _C_MODE4_FUSED_GENERAL_AVAILABLE,
     _C_SCORE_FUSED_AVAILABLE,
     _C_SCORE_FUSED_WS_AVAILABLE,
     _C_SPLIT_AVAILABLE,
@@ -377,7 +378,8 @@ def run_lmm_association_numpy_streaming(
         or
         # General n_cvt path: Wald (mode 1) and all-tests (mode 4).
         # Modes 2/3 (Score/LRT only) don't use workspace, so no fused benefit.
-        (n_cvt >= 2 and _C_FUSED_GENERAL_AVAILABLE and lmm_mode in (1, 4))
+        (n_cvt >= 2 and _C_FUSED_GENERAL_AVAILABLE and lmm_mode == 1)
+        or (n_cvt >= 2 and _C_MODE4_FUSED_GENERAL_AVAILABLE and lmm_mode == 4)
     )
     use_fused_general = use_fused and n_cvt >= 2
 

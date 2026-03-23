@@ -697,10 +697,11 @@ def run_lmm_association_numpy_streaming(
             and not use_fused_score_ws
             and not use_fused_lrt_ws
         )
-        if use_split and _no_fused_stream and n_cvt == 1:
-            # out= buffer only supported for n_cvt==1 in
-            # batch_compute_uab_varying_soa_numpy; skip allocation otherwise.
-            _n_var = 3
+        if use_split and _no_fused_stream:
+            from jamma.lmm.likelihood import classify_uab_columns
+
+            _inv_cols, _var_cols = classify_uab_columns(n_cvt)
+            _n_var = len(_var_cols)
             if use_pipeline:
                 # Double-buffer: prepare(N+1) and compute(N) run concurrently.
                 _uab_var_bufs_stream = [
@@ -782,13 +783,11 @@ def run_lmm_association_numpy_streaming(
                 return (utg_t, filt_start, filt_end, actual_len)
 
             if use_split:
-                # Reuse preallocated buffer when chunk is full-sized
-                # and n_cvt==1 (out= only supported for n_cvt==1 path).
+                # Reuse preallocated buffer when chunk is full-sized.
                 out_var = (
                     _uab_var_bufs_stream[buf_idx][:actual_len, :, :]
                     if _uab_var_bufs_stream is not None
                     and actual_len == chunk_size
-                    and n_cvt == 1
                     else None
                 )
                 uab_var_soa = batch_compute_uab_varying_soa_numpy(

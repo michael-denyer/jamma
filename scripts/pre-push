@@ -5,5 +5,5 @@
 set -e
 
 echo "pre-push: checking ruff format on all files..."
-uv run ruff format --check . 2>/dev/null
+uv run ruff format --check .
 echo "pre-push: ruff format OK"

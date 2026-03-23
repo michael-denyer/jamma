@@ -332,6 +332,10 @@ except ImportError as _exc:
                     f"dgemm: out shape {out.shape} doesn't match "
                     f"result shape {expected}"
                 )
+            if out.dtype != _np.float64:
+                raise ValueError(f"dgemm: out must be float64, got {out.dtype}")
+            if not out.flags["C_CONTIGUOUS"]:
+                raise ValueError("dgemm: out must be C-contiguous")
             _np.matmul(
                 _A.astype(_np.float64, copy=False),
                 _B.astype(_np.float64, copy=False),

@@ -356,6 +356,26 @@ py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs)
     /* Output C (M x N): use caller-provided buffer or allocate fresh */
     PyArrayObject *aC;
     if (oOut != Py_None) {
+        /* Reject non-C-contiguous out upfront — FROM_OTF would silently copy,
+         * breaking the in-place contract callers depend on. */
+        PyArrayObject *tmp = (PyArrayObject *)oOut;
+        if (!PyArray_Check(oOut)) {
+            PyErr_SetString(PyExc_TypeError, "dgemm: out must be a numpy array");
+            Py_DECREF(aA); Py_DECREF(aB);
+            return NULL;
+        }
+        if (PyArray_TYPE(tmp) != NPY_DOUBLE) {
+            PyErr_Format(PyExc_ValueError,
+                "dgemm: out must be float64, got dtype %d", PyArray_TYPE(tmp));
+            Py_DECREF(aA); Py_DECREF(aB);
+            return NULL;
+        }
+        if (!PyArray_IS_C_CONTIGUOUS(tmp) || !PyArray_ISWRITEABLE(tmp)) {
+            PyErr_SetString(PyExc_ValueError,
+                "dgemm: out must be C-contiguous and writeable");
+            Py_DECREF(aA); Py_DECREF(aB);
+            return NULL;
+        }
         aC = (PyArrayObject *)PyArray_FROM_OTF(
             oOut, NPY_DOUBLE,
             NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_WRITEABLE | NPY_ARRAY_ALIGNED);

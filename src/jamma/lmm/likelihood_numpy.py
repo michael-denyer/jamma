@@ -593,7 +593,12 @@ def batch_compute_uab_varying_soa_numpy(
         w = UtW[:, 0]
 
         expected_shape = (n_snps, 3, n_samples)
-        if out is not None and out.shape == expected_shape:
+        if out is not None:
+            if out.shape != expected_shape:
+                raise ValueError(
+                    f"batch_compute_uab_varying_soa_numpy: out shape {out.shape} "
+                    f"doesn't match expected {expected_shape}"
+                )
             uab_varying_soa = out
         else:
             uab_varying_soa = np.empty(expected_shape, dtype=np.float64)

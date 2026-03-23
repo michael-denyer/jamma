@@ -708,6 +708,10 @@ class TestDgemmFallback:
                         f"dgemm: out shape {out.shape} doesn't match "
                         f"result shape {expected}"
                     )
+                if out.dtype != _np.float64:
+                    raise ValueError(f"dgemm: out must be float64, got {out.dtype}")
+                if not out.flags["C_CONTIGUOUS"]:
+                    raise ValueError("dgemm: out must be C-contiguous")
                 _np.matmul(
                     _A.astype(_np.float64, copy=False),
                     _B.astype(_np.float64, copy=False),
@@ -913,11 +917,19 @@ class TestDgemmOutParameter:
         with pytest.raises((ValueError, TypeError)):
             dgemm(A, B, out=out_1d)
 
-    def test_dgemm_out_fortran_order(self) -> None:
-        """dgemm with Fortran-order out= still produces correct results."""
+    def test_dgemm_out_fortran_order_rejected(self) -> None:
+        """dgemm with Fortran-order out= raises ValueError."""
         rng = np.random.default_rng(1006)
         A = rng.standard_normal((50, 100))
         B = rng.standard_normal((100, 80))
         out_f = np.asfortranarray(np.empty((50, 80), dtype=np.float64))
-        result = dgemm(A, B, out=out_f)
-        npt.assert_allclose(result, A @ B, rtol=1e-12)
+        with pytest.raises(ValueError, match="C-contiguous"):
+            dgemm(A, B, out=out_f)
+
+    def test_dgemm_out_wrong_dtype_rejected(self) -> None:
+        """dgemm with float32 out= raises ValueError."""
+        A = np.eye(5, dtype=np.float64)
+        B = np.eye(5, dtype=np.float64)
+        out_f32 = np.empty((5, 5), dtype=np.float32)
+        with pytest.raises((ValueError, TypeError)):
+            dgemm(A, B, out=out_f32)

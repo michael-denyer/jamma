@@ -1423,10 +1423,9 @@ def run_lmm_association_numpy(
                         raise
                     except Exception as exc:
                         raise RuntimeError(
-                            f"Pipeline chunk preparation failed at SNP offset "
-                            f"{write_offset}/{n_filtered} (chunk starting at "
-                            f"index {chunk_start}). "
-                            f"Processed {write_offset} SNPs before failure."
+                            f"Pipeline chunk preparation failed at prepare "
+                            f"offset {chunk_start}/{n_filtered} "
+                            f"(compute had processed {write_offset} SNPs)."
                         ) from exc
                     t_rotation_total += time.perf_counter() - t_rot_start
 

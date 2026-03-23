@@ -37,7 +37,15 @@ Exports:
 from __future__ import annotations
 
 import importlib.util
+import os
 import warnings
+
+# Tolerate coexistence of Intel OpenMP (libiomp5, used by MKL-backed numpy and
+# jlinalg) with GNU OpenMP (libgomp, pulled in by scipy or other system libs).
+# Without this, the Intel OMP runtime aborts with "Assertion failure at
+# kmp_runtime.cpp" when both are loaded — common on Databricks where scipy is
+# pre-loaded by the kernel.  Must be set before the C extension is imported.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 _so_exists = importlib.util.find_spec("jamma.jlinalg._jlinalg") is not None
 

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.5.2] - 2026-03-23
+
+### Fixed
+
+- Set `KMP_DUPLICATE_LIB_OK=TRUE` before C extension import to prevent dual
+  OpenMP runtime SIGABRT on Databricks — scipy (pre-loaded by kernel) brings
+  libgomp while jlinalg/`_lmm_accel` link against MKL's libiomp5
+
 ## [4.5.1] - 2026-03-23
 
 ### Fixed

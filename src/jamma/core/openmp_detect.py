@@ -16,6 +16,7 @@ from implicitly adding ``-lgomp``.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -37,6 +38,12 @@ def detect_openmp_flags(
         ``(compile_flags, link_flags)`` for OpenMP, or ``([], [])`` if
         unavailable.
     """
+    if os.environ.get("JAMMA_NO_OPENMP", "").strip() not in ("", "0"):
+        _print(
+            "OpenMP disabled (JAMMA_NO_OPENMP set). "
+            "C extensions will be single-threaded."
+        )
+        return ([], [])
     if system == "Darwin":
         return _detect_darwin_openmp_flags(_print)
     return _detect_linux_openmp_flags(cc_cmd, _print)

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.6.0] - 2026-03-23
+
+### Added
+
+- `JAMMA_NO_OPENMP=1` environment variable to compile C extensions without
+  OpenMP — completely avoids dual OpenMP runtime SIGABRT on Databricks where
+  both Intel OMP (MKL) and GNU OMP (scipy) are pre-loaded by the kernel before
+  any user code runs. Single-threaded C extensions are still much faster than
+  pure-Python fallback.
+
 ## [4.5.3] - 2026-03-23
 
 ### Fixed

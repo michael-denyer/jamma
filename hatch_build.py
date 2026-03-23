@@ -374,7 +374,14 @@ class CustomBuildHook(BuildHookInterface):
         # loading both libgomp (-fopenmp on GCC linker) and libiomp5 (MKL).
         omp_compile: list[str] = []
         omp_link: list[str] = []
-        if platform.system() == "Darwin":
+        no_openmp = os.environ.get("JAMMA_NO_OPENMP", "").strip() not in ("", "0")
+        if no_openmp:
+            print(
+                "OpenMP disabled (JAMMA_NO_OPENMP set). "
+                "C extension will be single-threaded.",
+                file=sys.stderr,
+            )
+        elif platform.system() == "Darwin":
             try:
                 prefix = subprocess.check_output(
                     ["brew", "--prefix", "libomp"],
@@ -645,7 +652,14 @@ class CustomBuildHook(BuildHookInterface):
         # loading both libgomp (-fopenmp on GCC linker) and libiomp5 (MKL).
         omp_compile: list[str] = []
         omp_link: list[str] = []
-        if platform.system() == "Darwin":
+        no_openmp = os.environ.get("JAMMA_NO_OPENMP", "").strip() not in ("", "0")
+        if no_openmp:
+            print(
+                "OpenMP disabled (JAMMA_NO_OPENMP set). "
+                "jlinalg C extension will be single-threaded.",
+                file=sys.stderr,
+            )
+        elif platform.system() == "Darwin":
             try:
                 prefix = subprocess.check_output(
                     ["brew", "--prefix", "libomp"],

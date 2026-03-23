@@ -2510,3 +2510,71 @@ def test_batch_compute_uab_varying_soa_rejects_wrong_layout():
 
     with pytest.raises(ValueError, match="Pass \\(n_snps, n_samples\\)"):
         batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
+
+
+# --------------------------------------------------------------------------- #
+# out= buffer support for general n_cvt (n_cvt > 1)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.tier0
+def test_varying_soa_out_buffer_general_ncvt2():
+    """out= buffer works for n_cvt=2 and result is the same buffer object."""
+    from jamma.lmm.likelihood import classify_uab_columns
+
+    rng = np.random.default_rng(42)
+    n_samples, n_snps, n_cvt = 50, 10, 2
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    utg_t = rng.standard_normal((n_snps, n_samples))
+
+    _, var_cols = classify_uab_columns(n_cvt)
+    n_var = len(var_cols)
+
+    # Compute without out= for reference
+    expected = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t)
+
+    # Compute with out= buffer
+    out = np.empty((n_snps, n_var, n_samples), dtype=np.float64)
+    result = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t, out=out)
+
+    assert result is out, "result should be the same buffer object"
+    np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.tier0
+def test_varying_soa_out_buffer_general_ncvt4():
+    """out= buffer works for n_cvt=4 and result is the same buffer object."""
+    from jamma.lmm.likelihood import classify_uab_columns
+
+    rng = np.random.default_rng(77)
+    n_samples, n_snps, n_cvt = 40, 8, 4
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    utg_t = rng.standard_normal((n_snps, n_samples))
+
+    _, var_cols = classify_uab_columns(n_cvt)
+    n_var = len(var_cols)
+
+    expected = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t)
+
+    out = np.empty((n_snps, n_var, n_samples), dtype=np.float64)
+    result = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t, out=out)
+
+    assert result is out, "result should be the same buffer object"
+    np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.tier0
+def test_varying_soa_out_buffer_general_shape_mismatch():
+    """Wrong-shape out= raises ValueError with 'out shape' in message."""
+    rng = np.random.default_rng(99)
+    n_samples, n_snps, n_cvt = 50, 10, 2
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    utg_t = rng.standard_normal((n_snps, n_samples))
+
+    wrong_out = np.empty((n_snps, 99, n_samples), dtype=np.float64)
+
+    with pytest.raises(ValueError, match="out shape"):
+        batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t, out=wrong_out)

@@ -346,7 +346,11 @@ def dispatch_soa_split(
             n_threads,
         )
 
-    raise ValueError(f"Unexpected lmm_mode={lmm_mode} in SoA split dispatch")
+    raise ValueError(
+        f"Unexpected lmm_mode={lmm_mode} in SoA split dispatch "
+        f"(workspace={lmm_workspace is not None}). "
+        f"Valid modes: 1 (Wald), 2 (LRT), 3 (Score), 4 (All, requires workspace)."
+    )
 
 
 def compute_pipeline_core_split(n_samples: int, total_cores: int) -> tuple[int, int]:
@@ -938,10 +942,10 @@ def run_lmm_association_numpy(
         and not use_fused_score_ws
         and not use_fused_lrt_ws
     )
-    if use_split and no_fused:
-        from jamma.lmm.likelihood import classify_uab_columns
-
-        n_var = 3 if n_cvt == 1 else len(classify_uab_columns(n_cvt)[1])
+    if use_split and no_fused and n_cvt == 1:
+        # out= buffer only supported for n_cvt==1 in
+        # batch_compute_uab_varying_soa_numpy; skip allocation otherwise.
+        n_var = 3
         if use_pipeline:
             # Double-buffer: prepare(N+1) and compute(N) run concurrently.
             _uab_var_bufs = [

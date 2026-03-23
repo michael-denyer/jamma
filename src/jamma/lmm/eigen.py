@@ -140,24 +140,23 @@ def eigendecompose_kinship(
     required_gb = _dsyevd_inplace_peak_gb(n_samples) if use_inplace else dsyevd_peak
     use_dsyevr = False
 
-    margin = _memory_margin_gb(dsyevd_peak)
-    if dsyevd_peak + margin > available_gb:
+    margin = _memory_margin_gb(required_gb)
+    if required_gb + margin > available_gb:
         if jlinalg.blas_has_dsyevr:
+            dsyevd_req = required_gb  # capture before overwrite
             required_gb = _dsyevr_peak_gb(n_samples)
             use_inplace = False
             use_dsyevr = True
             logger.info(
-                f"DSYEVD peak ({dsyevd_peak:.1f}GB) exceeds available memory; "
-                f"using DSYEVR estimate ({required_gb:.1f}GB)"
+                f"DSYEVD peak ({dsyevd_req:.1f}GB) exceeds available memory "
+                f"({available_gb:.1f}GB); using DSYEVR ({required_gb:.1f}GB)"
             )
-        elif use_inplace:
-            # No DSYEVR and DSYEVD may not fit — fall back to conservative estimate.
-            use_inplace = False
-            required_gb = dsyevd_peak
+        else:
+            driver = "inplace DSYEVD" if use_inplace else "DSYEVD"
             logger.warning(
-                f"DSYEVD peak ({dsyevd_peak:.1f}GB) may exceed available memory "
+                f"DSYEVD peak ({required_gb:.1f}GB) may exceed available memory "
                 f"({available_gb:.1f}GB) and DSYEVR is not available. "
-                f"Using conservative estimate."
+                f"Proceeding with {driver}."
             )
 
     logger.info(

@@ -40,6 +40,7 @@ import importlib.util
 import warnings
 
 _so_exists = importlib.util.find_spec("jamma.jlinalg._jlinalg") is not None
+HAS_C_EXTENSION: bool = False
 
 try:
     from jamma.jlinalg._jlinalg import (  # noqa: F401
@@ -78,10 +79,61 @@ try:
     HAS_C_EXTENSION: bool = True
 
 except ImportError as _exc:
+    # Auto-recompile: try once before falling back to NumPy.
+    _recompiled = False
+    try:
+        from jamma.lmm._compile_utils import auto_recompile_c_extension
+
+        _recompiled = auto_recompile_c_extension(
+            module_name="_jlinalg",
+            compiler_module="jamma.jlinalg._compile_jlinalg",
+            sys_module_key="jamma.jlinalg._jlinalg",
+            label="jlinalg",
+        )
+    except Exception:
+        pass
+
+    if _recompiled:
+        # Retry import after successful recompilation
+        from jamma.jlinalg._jlinalg import (  # noqa: F401, F811
+            ABI_VERSION,
+            HAS_OPENMP,
+            JLINALG_KC,
+            JLINALG_MC,
+            JLINALG_MR,
+            JLINALG_NC,
+            JLINALG_NR,
+            blas_backend,
+            blas_has_dgeqrf,
+            blas_has_dgesvd,
+            blas_has_dsyevd,
+            blas_has_dsyevr,
+            blas_has_dsyrk,
+            blas_has_lapacke_dsyevd,
+            blas_is_ilp64,
+            compute_snp_stats_chunk,
+            daxpy,
+            ddot,
+            dgemm,
+            dgemv,
+            dnrm2,
+            dscal,
+            dsyr2k,
+            dsyrk,
+            eigh,
+            get_n_threads,
+            jlinalg_isa,
+            qr,
+            set_n_threads,
+            svd,
+        )
+
+        HAS_C_EXTENSION: bool = True
+
+if not HAS_C_EXTENSION:
     if _so_exists:
-        # .so exists but failed to load — ABI mismatch, missing shared lib, etc.
         warnings.warn(
-            f"jlinalg C extension found but failed to load ({_exc}); "
+            "jlinalg C extension found but failed to load; "
             "this usually indicates an ABI mismatch or missing shared library. "
             "Falling back to NumPy (slower). "
             "Reinstall jamma or run 'python -m jamma.jlinalg._compile_jlinalg'.",
@@ -89,7 +141,7 @@ except ImportError as _exc:
         )
     else:
         warnings.warn(
-            f"jlinalg C extension not compiled ({_exc}); "
+            "jlinalg C extension not compiled; "
             "using NumPy fallback (slower). "
             "Run 'python -m jamma.jlinalg._compile_jlinalg' to compile.",
             stacklevel=2,

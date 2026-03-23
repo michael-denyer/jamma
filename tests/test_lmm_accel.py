@@ -3117,16 +3117,23 @@ def test_general_score_split_ncvt2(general_score_lrt_ncvt2):
         n_samples, n_cvt, pab_table_dict, 1,
     )
 
-    np.testing.assert_array_equal(
+    # SoA split accumulates dot products column-by-column (outer loop=column,
+    # inner=samples), while batch general accumulates row-by-row (outer=samples,
+    # inner=columns). Different FP accumulation order gives machine-epsilon
+    # differences for n_cvt>=2. Use tight allclose instead of bitwise equality.
+    np.testing.assert_allclose(
         result["betas"], ref["betas"],
+        rtol=1e-12, atol=1e-14, equal_nan=True,
         err_msg="betas: split general vs batch general mismatch for n_cvt=2",
     )
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         result["ses"], ref["ses"],
+        rtol=1e-12, atol=1e-14, equal_nan=True,
         err_msg="ses: split general vs batch general mismatch for n_cvt=2",
     )
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         result["p_scores"], ref["p_scores"],
+        rtol=1e-12, atol=1e-14, equal_nan=True,
         err_msg="p_scores: split general vs batch general mismatch for n_cvt=2",
     )
 
@@ -3176,12 +3183,14 @@ def test_general_lrt_split_ncvt2(general_score_lrt_ncvt2):
         l_min, l_max, n_grid, n_refine, logl_H0, 1,
     )
 
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         result["lambdas_mle"], ref["lambdas_mle"],
+        rtol=1e-12, atol=1e-14, equal_nan=True,
         err_msg="lambdas_mle: split general vs batch general mismatch for n_cvt=2",
     )
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         result["p_lrts"], ref["p_lrts"],
+        rtol=1e-12, atol=1e-14, equal_nan=True,
         err_msg="p_lrts: split general vs batch general mismatch for n_cvt=2",
     )
 
@@ -3228,16 +3237,19 @@ def test_general_score_split_ncvt4(general_score_lrt_ncvt4):
         n_samples, n_cvt, pab_table_dict, 1,
     )
 
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         result["betas"], ref["betas"],
+        rtol=1e-12, atol=1e-14, equal_nan=True,
         err_msg="betas: split general vs batch general mismatch for n_cvt=4",
     )
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         result["ses"], ref["ses"],
+        rtol=1e-12, atol=1e-14, equal_nan=True,
         err_msg="ses: split general vs batch general mismatch for n_cvt=4",
     )
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         result["p_scores"], ref["p_scores"],
+        rtol=1e-12, atol=1e-14, equal_nan=True,
         err_msg="p_scores: split general vs batch general mismatch for n_cvt=4",
     )
 
@@ -3285,12 +3297,14 @@ def test_general_lrt_split_ncvt4(general_score_lrt_ncvt4):
         l_min, l_max, n_grid, n_refine, logl_H0, 1,
     )
 
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         result["lambdas_mle"], ref["lambdas_mle"],
+        rtol=1e-12, atol=1e-14, equal_nan=True,
         err_msg="lambdas_mle: split general vs batch general mismatch for n_cvt=4",
     )
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         result["p_lrts"], ref["p_lrts"],
+        rtol=1e-12, atol=1e-14, equal_nan=True,
         err_msg="p_lrts: split general vs batch general mismatch for n_cvt=4",
     )
 

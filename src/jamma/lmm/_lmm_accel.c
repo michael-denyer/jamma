@@ -8588,6 +8588,509 @@ err_input_lrt_split:
 }
 
 /* =========================================================================
+ * SoA-NATIVE GENERAL SCORE SPLIT — compute_score_split_general_c
+ *
+ * Score test for arbitrary n_cvt accepting SoA split data
+ * (uab_varying_soa + uab_invariant_soa + pab_table_dict) directly.
+ * Eliminates the need for reconstruct_uab_from_soa + batch dispatch.
+ *
+ * Mirrors the Score section of compute_mode4_chunk_fused_general_c but
+ * reads from pre-computed SoA arrays instead of fused UtW/Uty vectors.
+ * ========================================================================= */
+
+/* -------------------------------------------------------------------------
+ * compute_score_split_general_c
+ *
+ * Args: eigenvalues (n_samples,), uab_varying_soa (n_snps, n_var, n_samples),
+ *       uab_invariant_soa (n_inv, n_samples), Hi_eval_null (n_samples,),
+ *       n_samples, n_cvt, pab_table_dict, n_threads
+ * Returns: dict with keys betas, ses, p_scores (each n_snps,)
+ * ------------------------------------------------------------------------- */
+static PyObject *compute_score_split_general_c(PyObject *self, PyObject *args)
+{
+    PyObject *eigenvalues_obj, *uab_var_obj, *uab_inv_obj, *hi_eval_null_obj;
+    PyObject *pab_table_dict;
+    int n_samples, n_cvt, n_threads;
+    PyArrayObject *eigenvalues_arr = NULL, *uab_var_arr = NULL;
+    PyArrayObject *uab_inv_arr = NULL, *hi_eval_null_arr = NULL;
+
+    if (!PyArg_ParseTuple(args, "OOOOiiOi",
+            &eigenvalues_obj, &uab_var_obj, &uab_inv_obj,
+            &hi_eval_null_obj, &n_samples, &n_cvt,
+            &pab_table_dict, &n_threads))
+        return NULL;
+
+    if (n_samples < 3) {
+        PyErr_SetString(PyExc_ValueError, "n_samples must be >= 3");
+        return NULL;
+    }
+    if (n_cvt < 1 || n_cvt > MAX_N_CVT) {
+        PyErr_Format(PyExc_ValueError, "n_cvt must be 1..%d, got %d", MAX_N_CVT, n_cvt);
+        return NULL;
+    }
+    if (!PyDict_Check(pab_table_dict)) {
+        PyErr_SetString(PyExc_TypeError, "pab_table_dict must be a dict");
+        return NULL;
+    }
+
+    /* Convert inputs to C-contiguous double arrays */
+    eigenvalues_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        eigenvalues_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!eigenvalues_arr) goto err_input_score_split_gen;
+
+    uab_var_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        uab_var_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!uab_var_arr) goto err_input_score_split_gen;
+
+    uab_inv_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        uab_inv_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!uab_inv_arr) goto err_input_score_split_gen;
+
+    hi_eval_null_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        hi_eval_null_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!hi_eval_null_arr) goto err_input_score_split_gen;
+
+    /* Validate shapes */
+    if (PyArray_NDIM(eigenvalues_arr) != 1 ||
+        PyArray_DIM(eigenvalues_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "eigenvalues must be shape (n_samples,)");
+        goto err_input_score_split_gen;
+    }
+    if (PyArray_NDIM(hi_eval_null_arr) != 1 ||
+        PyArray_DIM(hi_eval_null_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError,
+            "Hi_eval_null must be shape (n_samples,)");
+        goto err_input_score_split_gen;
+    }
+
+    /* Parse pab_table first to get n_inv, n_var for shape validation */
+    pab_table_t table;
+    if (parse_pab_table_from_dict(pab_table_dict, &table, n_samples) < 0)
+        goto err_input_score_split_gen;
+
+    /* Validate SoA array shapes against pab_table dimensions */
+    if (PyArray_NDIM(uab_var_arr) != 3 ||
+        PyArray_DIM(uab_var_arr, 1) != table.n_var ||
+        PyArray_DIM(uab_var_arr, 2) != n_samples) {
+        PyErr_Format(PyExc_ValueError,
+            "uab_varying_soa must be shape (n_snps, %d, %d)",
+            table.n_var, n_samples);
+        free_pab_table(&table);
+        goto err_input_score_split_gen;
+    }
+    if (PyArray_NDIM(uab_inv_arr) != 2 ||
+        PyArray_DIM(uab_inv_arr, 0) != table.n_inv ||
+        PyArray_DIM(uab_inv_arr, 1) != n_samples) {
+        PyErr_Format(PyExc_ValueError,
+            "uab_invariant_soa must be shape (%d, %d)",
+            table.n_inv, n_samples);
+        free_pab_table(&table);
+        goto err_input_score_split_gen;
+    }
+
+    {
+        npy_intp n_snps_raw = PyArray_DIM(uab_var_arr, 0);
+        if (n_snps_raw > INT_MAX || n_snps_raw == 0) {
+            PyErr_SetString(PyExc_ValueError, "n_snps must be > 0 and <= INT_MAX");
+            free_pab_table(&table);
+            goto err_input_score_split_gen;
+        }
+        int n_snps = (int)n_snps_raw;
+
+        const double *eigenvalues  = (const double *)PyArray_DATA(eigenvalues_arr);
+        const double *uab_var_data = (const double *)PyArray_DATA(uab_var_arr);
+        const double *uab_inv_data = (const double *)PyArray_DATA(uab_inv_arr);
+        const double *hi_eval_null = (const double *)PyArray_DATA(hi_eval_null_arr);
+
+        if (validate_eigenvalues(eigenvalues, n_samples) < 0) {
+            free_pab_table(&table);
+            goto err_input_score_split_gen;
+        }
+
+        /* Validate Hi_eval_null */
+        for (int i = 0; i < n_samples; i++) {
+            if (!isfinite(hi_eval_null[i]) || hi_eval_null[i] <= 0.0) {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "%g", hi_eval_null[i]);
+                PyErr_Format(PyExc_ValueError,
+                    "Hi_eval_null[%d] = %s is not finite/positive.", i, buf);
+                free_pab_table(&table);
+                goto err_input_score_split_gen;
+            }
+        }
+
+        int n_inv = table.n_inv;
+        int n_var = table.n_var;
+        int n_index = table.n_index;
+
+        /* Pre-compute invariant null-model dot products (shared across SNPs) */
+        double inv_null_sums[MAX_N_INDEX];
+        for (int c = 0; c < n_inv; c++) {
+            double s = 0.0;
+            const double *col = uab_inv_data + (size_t)c * n_samples;
+            for (int i = 0; i < n_samples; i++)
+                s += hi_eval_null[i] * col[i];
+            inv_null_sums[c] = s;
+        }
+
+        /* Allocate outputs */
+        score_output_t out;
+        if (alloc_score_output(&out, (npy_intp)n_snps) < 0) {
+            free_pab_table(&table);
+            PyErr_NoMemory();
+            goto err_input_score_split_gen;
+        }
+
+        double *out_betas    = (double *)PyArray_DATA(out.betas);
+        double *out_ses      = (double *)PyArray_DATA(out.ses);
+        double *out_p_scores = (double *)PyArray_DATA(out.p_scores);
+
+        /* F-distribution constants */
+        int df = table.df;
+        double a = (double)df / 2.0;
+        double b = 0.5;
+        double lbeta_ab = lgamma(a) + lgamma(b) - lgamma(a + b);
+
+        int actual_threads = 1;
+#ifdef _OPENMP
+        if (n_threads > 0) {
+            actual_threads = (n_threads < n_snps) ? n_threads : n_snps;
+        } else {
+            actual_threads = omp_get_max_threads();
+            if (actual_threads > n_snps) actual_threads = n_snps;
+        }
+        if (actual_threads < 1) actual_threads = 1;
+#else
+        (void)n_threads;
+#endif
+
+        Py_BEGIN_ALLOW_THREADS
+
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(static) num_threads(actual_threads)
+#endif
+        for (int s = 0; s < n_snps; s++) {
+            /* Build null_row0 for this SNP */
+            double null_row0[MAX_N_INDEX];
+            for (int c = 0; c < n_index; c++) null_row0[c] = 0.0;
+
+            /* Place invariant null sums at their indices */
+            for (int c = 0; c < n_inv; c++)
+                null_row0[table.invariant_indices[c]] = inv_null_sums[c];
+
+            /* Compute varying null sums: weight varying SoA by hi_eval_null */
+            for (int c = 0; c < n_var; c++) {
+                double sv = 0.0;
+                const double *col = uab_var_data +
+                    (size_t)s * n_var * n_samples +
+                    (size_t)c * n_samples;
+                for (int i = 0; i < n_samples; i++)
+                    sv += hi_eval_null[i] * col[i];
+                null_row0[table.varying_indices[c]] = sv;
+            }
+
+            /* Full Pab via table-driven recursion */
+            double pab[MAX_PAB_SIZE];
+            calc_pab_general(null_row0, &table, pab);
+
+            double beta, se, f_stat;
+            int is_valid = score_from_pab_general(pab, &table, n_samples,
+                                                  &beta, &se, &f_stat);
+
+            out_betas[s]    = beta;
+            out_ses[s]      = se;
+            out_p_scores[s] = f_to_pvalue(f_stat, df, is_valid, a, b, lbeta_ab);
+        }
+
+        Py_END_ALLOW_THREADS
+
+        free_pab_table(&table);
+
+        if (warn_betainc_convergence(out_betas, out_p_scores, n_snps) < 0) {
+            decref_score_output(&out);
+            Py_DECREF(hi_eval_null_arr);
+            Py_DECREF(uab_inv_arr);
+            Py_DECREF(uab_var_arr);
+            Py_DECREF(eigenvalues_arr);
+            return NULL;
+        }
+
+        Py_DECREF(hi_eval_null_arr);
+        Py_DECREF(uab_inv_arr);
+        Py_DECREF(uab_var_arr);
+        Py_DECREF(eigenvalues_arr);
+        return build_score_result_dict(&out);
+    }
+
+err_input_score_split_gen:
+    Py_XDECREF(hi_eval_null_arr);
+    Py_XDECREF(uab_inv_arr);
+    Py_XDECREF(uab_var_arr);
+    Py_XDECREF(eigenvalues_arr);
+    return NULL;
+}
+
+/* =========================================================================
+ * SoA-NATIVE GENERAL LRT SPLIT — compute_lrt_split_general_c
+ *
+ * LRT test for arbitrary n_cvt accepting SoA split data
+ * (uab_varying_soa + uab_invariant_soa + pab_table_dict) directly.
+ * Assembles per-SNP uab_snp in row-major layout for mle_logl_general.
+ * ========================================================================= */
+
+/* -------------------------------------------------------------------------
+ * compute_lrt_split_general_c
+ *
+ * Args: eigenvalues (n_samples,), uab_varying_soa (n_snps, n_var, n_samples),
+ *       uab_invariant_soa (n_inv, n_samples), n_samples, n_cvt,
+ *       pab_table_dict, l_min, l_max, n_grid, n_refine, logl_H0, n_threads
+ * Returns: dict with keys lambdas_mle, p_lrts (each n_snps,)
+ * ------------------------------------------------------------------------- */
+static PyObject *compute_lrt_split_general_c(PyObject *self, PyObject *args)
+{
+    PyObject *eigenvalues_obj, *uab_var_obj, *uab_inv_obj, *pab_table_dict;
+    int n_samples, n_cvt, n_grid, n_refine, n_threads;
+    double l_min, l_max, logl_H0;
+    PyArrayObject *eigenvalues_arr = NULL, *uab_var_arr = NULL, *uab_inv_arr = NULL;
+
+    if (!PyArg_ParseTuple(args, "OOOiiOddiidi",
+            &eigenvalues_obj, &uab_var_obj, &uab_inv_obj,
+            &n_samples, &n_cvt,
+            &pab_table_dict,
+            &l_min, &l_max,
+            &n_grid, &n_refine,
+            &logl_H0, &n_threads))
+        return NULL;
+
+    if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
+        return NULL;
+    if (n_cvt < 1 || n_cvt > MAX_N_CVT) {
+        PyErr_Format(PyExc_ValueError, "n_cvt must be 1..%d, got %d", MAX_N_CVT, n_cvt);
+        return NULL;
+    }
+    if (!isfinite(logl_H0)) {
+        PyErr_SetString(PyExc_ValueError,
+            "logl_H0 must be finite (got NaN or Inf from null model)");
+        return NULL;
+    }
+    if (!PyDict_Check(pab_table_dict)) {
+        PyErr_SetString(PyExc_TypeError, "pab_table_dict must be a dict");
+        return NULL;
+    }
+
+    eigenvalues_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        eigenvalues_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!eigenvalues_arr) goto err_input_lrt_split_gen;
+
+    uab_var_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        uab_var_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!uab_var_arr) goto err_input_lrt_split_gen;
+
+    uab_inv_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        uab_inv_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    if (!uab_inv_arr) goto err_input_lrt_split_gen;
+
+    /* Parse pab_table first for shape validation */
+    pab_table_t table;
+    if (parse_pab_table_from_dict(pab_table_dict, &table, n_samples) < 0)
+        goto err_input_lrt_split_gen;
+
+    /* Validate shapes */
+    if (PyArray_NDIM(eigenvalues_arr) != 1 ||
+        PyArray_DIM(eigenvalues_arr, 0) != n_samples) {
+        PyErr_SetString(PyExc_ValueError, "eigenvalues must be shape (n_samples,)");
+        free_pab_table(&table);
+        goto err_input_lrt_split_gen;
+    }
+    if (PyArray_NDIM(uab_var_arr) != 3 ||
+        PyArray_DIM(uab_var_arr, 1) != table.n_var ||
+        PyArray_DIM(uab_var_arr, 2) != n_samples) {
+        PyErr_Format(PyExc_ValueError,
+            "uab_varying_soa must be shape (n_snps, %d, %d)",
+            table.n_var, n_samples);
+        free_pab_table(&table);
+        goto err_input_lrt_split_gen;
+    }
+    if (PyArray_NDIM(uab_inv_arr) != 2 ||
+        PyArray_DIM(uab_inv_arr, 0) != table.n_inv ||
+        PyArray_DIM(uab_inv_arr, 1) != n_samples) {
+        PyErr_Format(PyExc_ValueError,
+            "uab_invariant_soa must be shape (%d, %d)",
+            table.n_inv, n_samples);
+        free_pab_table(&table);
+        goto err_input_lrt_split_gen;
+    }
+
+    {
+        npy_intp n_snps_raw = PyArray_DIM(uab_var_arr, 0);
+        if (n_snps_raw > INT_MAX || n_snps_raw == 0) {
+            PyErr_SetString(PyExc_ValueError, "n_snps must be > 0 and <= INT_MAX");
+            free_pab_table(&table);
+            goto err_input_lrt_split_gen;
+        }
+        int n_snps = (int)n_snps_raw;
+
+        const double *eigenvalues  = (const double *)PyArray_DATA(eigenvalues_arr);
+        const double *uab_var_data = (const double *)PyArray_DATA(uab_var_arr);
+        const double *uab_inv_data = (const double *)PyArray_DATA(uab_inv_arr);
+
+        if (validate_eigenvalues(eigenvalues, n_samples) < 0) {
+            free_pab_table(&table);
+            goto err_input_lrt_split_gen;
+        }
+
+        int n_inv = table.n_inv;
+        int n_var = table.n_var;
+        int n_index = table.n_index;
+
+        /* Allocate outputs */
+        lrt_output_t out;
+        if (alloc_lrt_output(&out, (npy_intp)n_snps) < 0) {
+            free_pab_table(&table);
+            PyErr_NoMemory();
+            goto err_input_lrt_split_gen;
+        }
+
+        double *out_lambdas_mle = (double *)PyArray_DATA(out.lambdas_mle);
+        double *out_p_lrts      = (double *)PyArray_DATA(out.p_lrts);
+
+        /* Pre-compute MLE constant and lambda grid */
+        double n_d = (double)n_samples;
+        double mle_const = 0.5 * n_d * (log(n_d) - log(2.0 * M_PI) - 1.0);
+
+        double log_l_min = log(l_min);
+        double log_l_max = log(l_max);
+        double step_val = (log_l_max - log_l_min) / (double)(n_grid - 1);
+
+        double *lambda_grid = (double *)malloc((size_t)n_grid * sizeof(double));
+        if (!lambda_grid) {
+            decref_lrt_output(&out);
+            free_pab_table(&table);
+            Py_DECREF(uab_inv_arr); Py_DECREF(uab_var_arr); Py_DECREF(eigenvalues_arr);
+            return PyErr_NoMemory();
+        }
+        for (int g = 0; g < n_grid; g++)
+            lambda_grid[g] = exp(log_l_min + g * step_val);
+
+        /* Pre-compute hi_eval_grid and logdet_h_grid */
+        double *hi_eval_grid = (double *)malloc(
+            (size_t)n_grid * (size_t)n_samples * sizeof(double));
+        double *logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
+        if (!hi_eval_grid || !logdet_h_grid) {
+            free(lambda_grid); free(hi_eval_grid); free(logdet_h_grid);
+            decref_lrt_output(&out);
+            free_pab_table(&table);
+            Py_DECREF(uab_inv_arr); Py_DECREF(uab_var_arr); Py_DECREF(eigenvalues_arr);
+            return PyErr_NoMemory();
+        }
+        for (int g = 0; g < n_grid; g++) {
+            double lam = lambda_grid[g];
+            double *hi = hi_eval_grid + (size_t)g * n_samples;
+            double logdet = 0.0;
+            for (int i = 0; i < n_samples; i++) {
+                double v = lam * eigenvalues[i] + 1.0;
+                hi[i] = 1.0 / v;
+                logdet += log(v);
+            }
+            logdet_h_grid[g] = logdet;
+        }
+
+        int actual_threads = 1;
+#ifdef _OPENMP
+        if (n_threads > 0) {
+            actual_threads = (n_threads < n_snps) ? n_threads : n_snps;
+        } else {
+            actual_threads = omp_get_max_threads();
+            if (actual_threads > n_snps) actual_threads = n_snps;
+        }
+        if (actual_threads < 1) actual_threads = 1;
+#else
+        (void)n_threads;
+#endif
+
+        /* Allocate per-thread uab_snp buffers */
+        double *uab_snp_flat = (double *)malloc(
+            (size_t)actual_threads * (size_t)n_index * (size_t)n_samples * sizeof(double));
+        if (!uab_snp_flat) {
+            free(lambda_grid); free(hi_eval_grid); free(logdet_h_grid);
+            decref_lrt_output(&out);
+            free_pab_table(&table);
+            Py_DECREF(uab_inv_arr); Py_DECREF(uab_var_arr); Py_DECREF(eigenvalues_arr);
+            return PyErr_NoMemory();
+        }
+
+        Py_BEGIN_ALLOW_THREADS
+
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(static) num_threads(actual_threads)
+#endif
+        for (int s = 0; s < n_snps; s++) {
+            int tid = 0;
+#ifdef _OPENMP
+            tid = omp_get_thread_num();
+#endif
+            /* Assemble per-SNP uab_snp in row-major (n_samples, n_index) layout
+             * matching mle_logl_general_cached expectation. */
+            double *uab_snp = uab_snp_flat +
+                (size_t)tid * (size_t)n_index * (size_t)n_samples;
+
+            memset(uab_snp, 0,
+                   (size_t)n_index * (size_t)n_samples * sizeof(double));
+
+            /* Scatter invariant columns */
+            for (int c = 0; c < n_inv; c++) {
+                int idx = table.invariant_indices[c];
+                const double *src = uab_inv_data + (size_t)c * n_samples;
+                for (int i = 0; i < n_samples; i++)
+                    uab_snp[(size_t)i * n_index + idx] = src[i];
+            }
+            /* Scatter varying columns */
+            for (int c = 0; c < n_var; c++) {
+                int idx = table.varying_indices[c];
+                const double *src = uab_var_data +
+                    (size_t)s * n_var * n_samples +
+                    (size_t)c * n_samples;
+                for (int i = 0; i < n_samples; i++)
+                    uab_snp[(size_t)i * n_index + idx] = src[i];
+            }
+
+            double logl_H1;
+            double lam_mle = golden_section_lambda_mle_general(
+                uab_snp, eigenvalues, n_samples,
+                lambda_grid, hi_eval_grid, logdet_h_grid,
+                log_l_min, step_val, n_grid, n_refine,
+                mle_const, &table, &logl_H1
+            );
+            out_lambdas_mle[s] = lam_mle;
+
+            double lrt_stat = 2.0 * (logl_H1 - logl_H0);
+            if (lrt_stat < 0.0) lrt_stat = 0.0;
+            out_p_lrts[s] = chi2_sf_c(lrt_stat);
+        }
+
+        Py_END_ALLOW_THREADS
+
+        free(uab_snp_flat);
+        free(lambda_grid);
+        free(hi_eval_grid);
+        free(logdet_h_grid);
+        free_pab_table(&table);
+
+        Py_DECREF(uab_inv_arr);
+        Py_DECREF(uab_var_arr);
+        Py_DECREF(eigenvalues_arr);
+        return build_lrt_result_dict(&out);
+    }
+
+err_input_lrt_split_gen:
+    Py_XDECREF(uab_inv_arr);
+    Py_XDECREF(uab_var_arr);
+    Py_XDECREF(eigenvalues_arr);
+    return NULL;
+}
+
+/* =========================================================================
  * FUSED LRT — compute_lrt_fused_c
  *
  * LRT test accepting utg_t directly instead of pre-materialized
@@ -9572,6 +10075,54 @@ static PyMethodDef methods[] = {
         "    uab_varying_soa:   (n_snps, 3, n_samples) float64 — SoA [wx, xx, xy]\n"
         "    uab_invariant_soa: (3, n_samples) float64 — SoA [ww, wy, yy]\n"
         "    n_samples:         int\n"
+        "    l_min:             float\n"
+        "    l_max:             float\n"
+        "    n_grid:            int\n"
+        "    n_refine:          int\n"
+        "    logl_H0:           float — null model MLE log-likelihood\n"
+        "    n_threads:         int\n"
+        "\n"
+        "Returns:\n"
+        "    dict with keys: lambdas_mle, p_lrts — each (n_snps,) float64\n"
+    },
+    {
+        "compute_score_split_general_c",
+        (PyCFunction)compute_score_split_general_c,
+        METH_VARARGS,
+        "SoA-native Score test for general n_cvt with optional OpenMP.\n"
+        "\n"
+        "Accepts split SoA data + pab_table_dict instead of full Uab batch.\n"
+        "Eliminates reconstruct_uab_from_soa for n_cvt>1 Score dispatch.\n"
+        "\n"
+        "Args:\n"
+        "    eigenvalues:       (n_samples,) float64\n"
+        "    uab_varying_soa:   (n_snps, n_var, n_samples) float64\n"
+        "    uab_invariant_soa: (n_inv, n_samples) float64\n"
+        "    Hi_eval_null:      (n_samples,) float64 — null-model weights\n"
+        "    n_samples:         int\n"
+        "    n_cvt:             int\n"
+        "    pab_table_dict:    dict — from build_pab_table_for_c(n_cvt)\n"
+        "    n_threads:         int\n"
+        "\n"
+        "Returns:\n"
+        "    dict with keys: betas, ses, p_scores — each (n_snps,) float64\n"
+    },
+    {
+        "compute_lrt_split_general_c",
+        (PyCFunction)compute_lrt_split_general_c,
+        METH_VARARGS,
+        "SoA-native LRT for general n_cvt with optional OpenMP.\n"
+        "\n"
+        "Accepts split SoA data + pab_table_dict instead of full Uab batch.\n"
+        "Eliminates reconstruct_uab_from_soa for n_cvt>1 LRT dispatch.\n"
+        "\n"
+        "Args:\n"
+        "    eigenvalues:       (n_samples,) float64\n"
+        "    uab_varying_soa:   (n_snps, n_var, n_samples) float64\n"
+        "    uab_invariant_soa: (n_inv, n_samples) float64\n"
+        "    n_samples:         int\n"
+        "    n_cvt:             int\n"
+        "    pab_table_dict:    dict — from build_pab_table_for_c(n_cvt)\n"
         "    l_min:             float\n"
         "    l_max:             float\n"
         "    n_grid:            int\n"

@@ -61,6 +61,8 @@ class AccelImport(NamedTuple):
     compute_lrt_batch_general_c: object | None
     compute_score_split_c: object | None
     compute_lrt_split_c: object | None
+    compute_score_split_general_c: object | None
+    compute_lrt_split_general_c: object | None
     compute_score_fused_c: object | None
     compute_lrt_fused_c: object | None
     create_workspace_fused_c: object | None
@@ -97,6 +99,8 @@ _ACCEL_UNAVAILABLE = AccelImport(
     compute_lrt_batch_general_c=None,
     compute_score_split_c=None,
     compute_lrt_split_c=None,
+    compute_score_split_general_c=None,
+    compute_lrt_split_general_c=None,
     compute_score_fused_c=None,
     compute_lrt_fused_c=None,
     create_workspace_fused_c=None,
@@ -275,6 +279,33 @@ def _try_import_accel() -> AccelImport:
         )
         lrt_split_c = None
 
+    # SoA-native general Score/LRT split support — eliminates reconstruct_uab_from_soa
+    try:
+        from jamma.lmm._lmm_accel import (
+            compute_score_split_general_c as score_split_general_c,
+        )
+    except ImportError:
+        from loguru import logger
+
+        logger.debug(
+            "C extension missing compute_score_split_general_c. "
+            "Score split for n_cvt>1 will fall back to reconstruct_uab_from_soa."
+        )
+        score_split_general_c = None
+
+    try:
+        from jamma.lmm._lmm_accel import (
+            compute_lrt_split_general_c as lrt_split_general_c,
+        )
+    except ImportError:
+        from loguru import logger
+
+        logger.debug(
+            "C extension missing compute_lrt_split_general_c. "
+            "LRT split for n_cvt>1 will fall back to reconstruct_uab_from_soa."
+        )
+        lrt_split_general_c = None
+
     # Fused Score/LRT from utg_t — expected in ABI v10+
     try:
         from jamma.lmm._lmm_accel import (
@@ -429,6 +460,8 @@ def _try_import_accel() -> AccelImport:
         compute_lrt_batch_general_c=lrt_batch_general_c,
         compute_score_split_c=score_split_c,
         compute_lrt_split_c=lrt_split_c,
+        compute_score_split_general_c=score_split_general_c,
+        compute_lrt_split_general_c=lrt_split_general_c,
         compute_score_fused_c=score_fused_c,
         compute_lrt_fused_c=lrt_fused_c,
         create_workspace_fused_c=ws_fused_create,
@@ -479,6 +512,8 @@ def _auto_recompile() -> bool:
     _compute_lrt_batch_general_c,
     _compute_score_split_c,
     _compute_lrt_split_c,
+    _compute_score_split_general_c,
+    _compute_lrt_split_general_c,
     _compute_score_fused_c,
     _compute_lrt_fused_c,
     _create_workspace_fused_c,
@@ -1669,9 +1704,9 @@ def _compute_score_split_numpy(
 ) -> dict[str, np.ndarray]:
     """Compute Score test from SoA split data (no full Uab reconstruction).
 
-    Dispatches to C extension when available (n_cvt=1). Falls back to
-    reconstruct_uab_from_soa + _compute_score_numpy when C is unavailable
-    or n_cvt > 1.
+    Dispatches to C extension: compute_score_split_c for n_cvt=1,
+    compute_score_split_general_c for n_cvt>1. Falls back to
+    reconstruct_uab_from_soa + _compute_score_numpy when C is unavailable.
 
     Args:
         n_cvt: Number of covariates.
@@ -1692,6 +1727,20 @@ def _compute_score_split_numpy(
             uab_invariant_soa,
             Hi_eval_null,
             n_samples,
+            n_threads,
+        )
+
+    if _compute_score_split_general_c is not None and n_cvt > 1:
+        from jamma.lmm.likelihood import build_pab_table_for_c
+
+        return _compute_score_split_general_c(
+            eigenvalues,
+            uab_varying_soa,
+            uab_invariant_soa,
+            Hi_eval_null,
+            n_samples,
+            n_cvt,
+            build_pab_table_for_c(n_cvt),
             n_threads,
         )
 
@@ -1721,9 +1770,9 @@ def _compute_lrt_split_numpy(
 ) -> dict[str, np.ndarray]:
     """Compute LRT from SoA split data (no full Uab reconstruction).
 
-    Dispatches to C extension when available (n_cvt=1). Falls back to
-    reconstruct_uab_from_soa + _compute_lrt_numpy when C is unavailable
-    or n_cvt > 1.
+    Dispatches to C extension: compute_lrt_split_c for n_cvt=1,
+    compute_lrt_split_general_c for n_cvt>1. Falls back to
+    reconstruct_uab_from_soa + _compute_lrt_numpy when C is unavailable.
 
     Args:
         n_cvt: Number of covariates.
@@ -1747,6 +1796,24 @@ def _compute_lrt_split_numpy(
             uab_varying_soa,
             uab_invariant_soa,
             n_samples,
+            l_min,
+            l_max,
+            n_grid,
+            n_refine,
+            logl_H0,
+            n_threads,
+        )
+
+    if _compute_lrt_split_general_c is not None and n_cvt > 1:
+        from jamma.lmm.likelihood import build_pab_table_for_c
+
+        return _compute_lrt_split_general_c(
+            eigenvalues,
+            uab_varying_soa,
+            uab_invariant_soa,
+            n_samples,
+            n_cvt,
+            build_pab_table_for_c(n_cvt),
             l_min,
             l_max,
             n_grid,

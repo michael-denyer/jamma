@@ -765,3 +765,88 @@ class TestDgemmFallback:
         B = np.eye(3, dtype=np.float64)
         with pytest.raises(TypeError, match="transb must be a string"):
             fb(A, B, transb=True)
+
+
+# ---------------------------------------------------------------------------
+# TestDgemmOutParameter — out= preallocated buffer support
+# ---------------------------------------------------------------------------
+
+
+class TestDgemmOutParameter:
+    """Tests for dgemm out= parameter: write into caller-provided buffer."""
+
+    def test_dgemm_out_parameter(self) -> None:
+        """dgemm(A, B, out=C) writes into C and returns C."""
+        rng = np.random.default_rng(1001)
+        A = rng.standard_normal((50, 100))
+        B = rng.standard_normal((100, 80))
+        out_buf = np.empty((50, 80), dtype=np.float64)
+        result = dgemm(A, B, out=out_buf)
+        assert result is out_buf
+        npt.assert_allclose(result, A @ B, rtol=1e-12)
+
+    def test_dgemm_out_none_fallback(self) -> None:
+        """dgemm(A, B, out=None) allocates fresh array (backward compatible)."""
+        rng = np.random.default_rng(1002)
+        A = rng.standard_normal((50, 100))
+        B = rng.standard_normal((100, 80))
+        result = dgemm(A, B, out=None)
+        assert result.shape == (50, 80)
+        assert result is not A
+        assert result is not B
+
+    def test_dgemm_out_shape_mismatch(self) -> None:
+        """dgemm(A, B, out=wrong_shape) raises ValueError."""
+        rng = np.random.default_rng(1003)
+        A = rng.standard_normal((50, 100))
+        B = rng.standard_normal((100, 80))
+        out_bad = np.empty((10, 10), dtype=np.float64)
+        with pytest.raises(ValueError, match="out shape"):
+            dgemm(A, B, out=out_bad)
+
+    def test_dgemm_out_subslice(self) -> None:
+        """dgemm with out= as a contiguous sub-slice of a larger buffer."""
+        rng = np.random.default_rng(1004)
+        A_sub = rng.standard_normal((30, 50))
+        B = rng.standard_normal((50, 80))
+        big_buf = np.full((100, 80), 999.0, dtype=np.float64)
+        result = dgemm(A_sub, B, out=big_buf[:30, :])
+        npt.assert_allclose(result, A_sub @ B, rtol=1e-12)
+        # Data beyond the slice must be untouched
+        npt.assert_array_equal(big_buf[30:, :], 999.0)
+
+    def test_dgemm_out_transpose_variants(self) -> None:
+        """out= works for all 4 transpose combos (NN, TN, NT, TT)."""
+        rng = np.random.default_rng(1005)
+
+        # NN: A(50,100) @ B(100,80) -> (50,80)
+        A_nn = rng.standard_normal((50, 100))
+        B_nn = rng.standard_normal((100, 80))
+        out_nn = np.empty((50, 80), dtype=np.float64)
+        r = dgemm(A_nn, B_nn, out=out_nn)
+        assert r is out_nn
+        npt.assert_allclose(r, A_nn @ B_nn, rtol=1e-12)
+
+        # TN: A(100,50).T @ B(100,80) -> (50,80)
+        A_tn = rng.standard_normal((100, 50))
+        B_tn = rng.standard_normal((100, 80))
+        out_tn = np.empty((50, 80), dtype=np.float64)
+        r = dgemm(A_tn, B_tn, transa="T", out=out_tn)
+        assert r is out_tn
+        npt.assert_allclose(r, A_tn.T @ B_tn, rtol=1e-12)
+
+        # NT: A(50,100) @ B(80,100).T -> (50,80)
+        A_nt = rng.standard_normal((50, 100))
+        B_nt = rng.standard_normal((80, 100))
+        out_nt = np.empty((50, 80), dtype=np.float64)
+        r = dgemm(A_nt, B_nt, transb="T", out=out_nt)
+        assert r is out_nt
+        npt.assert_allclose(r, A_nt @ B_nt.T, rtol=1e-12)
+
+        # TT: A(100,50).T @ B(80,100).T -> (50,80)
+        A_tt = rng.standard_normal((100, 50))
+        B_tt = rng.standard_normal((80, 100))
+        out_tt = np.empty((50, 80), dtype=np.float64)
+        r = dgemm(A_tt, B_tt, transa="T", transb="T", out=out_tt)
+        assert r is out_tt
+        npt.assert_allclose(r, A_tt.T @ B_tt.T, rtol=1e-12)

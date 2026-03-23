@@ -2472,6 +2472,34 @@ def test_batch_compute_uab_numpy_rejects_wrong_layout():
 
 
 @pytest.mark.tier0
+def test_batch_compute_uab_varying_soa_rejects_wrong_out_shape():
+    """batch_compute_uab_varying_soa_numpy raises ValueError for wrong out= shape."""
+    rng = np.random.default_rng(99)
+    n_samples, n_snps = 50, 10
+    UtW = rng.standard_normal((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+    utg_t = rng.standard_normal((n_snps, n_samples))
+    wrong_out = np.empty((n_snps + 1, 3, n_samples), dtype=np.float64)
+
+    with pytest.raises(ValueError, match="out shape"):
+        batch_compute_uab_varying_soa_numpy(1, UtW, Uty, utg_t, out=wrong_out)
+
+
+@pytest.mark.tier0
+def test_batch_compute_uab_varying_soa_rejects_out_for_general_ncvt():
+    """batch_compute_uab_varying_soa_numpy raises ValueError for out= with n_cvt > 1."""
+    rng = np.random.default_rng(99)
+    n_samples, n_snps, n_cvt = 50, 10, 2
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    utg_t = rng.standard_normal((n_snps, n_samples))
+    out = np.empty((n_snps, 6, n_samples), dtype=np.float64)
+
+    with pytest.raises(ValueError, match="out= buffer not supported"):
+        batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t, out=out)
+
+
+@pytest.mark.tier0
 def test_batch_compute_uab_varying_soa_rejects_wrong_layout():
     """batch_compute_uab_varying_soa_numpy raises ValueError when given old layout."""
     rng = np.random.default_rng(99)

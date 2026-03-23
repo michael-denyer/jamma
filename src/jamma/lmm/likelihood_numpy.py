@@ -608,6 +608,11 @@ def batch_compute_uab_varying_soa_numpy(
         return uab_varying_soa
 
     # General n_cvt: direct SoA varying without full Uab materialization
+    if out is not None:
+        raise ValueError(
+            "batch_compute_uab_varying_soa_numpy: out= buffer not supported "
+            f"for n_cvt={n_cvt} (only n_cvt=1)"
+        )
     return _batch_compute_uab_varying_general_numpy(n_cvt, UtW, Uty, utg_t)
 
 

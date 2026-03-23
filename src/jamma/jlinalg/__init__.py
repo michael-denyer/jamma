@@ -293,14 +293,15 @@ except ImportError as _exc:
             transb: 'N' (no transpose) or 'T' (transpose B).
             out: Optional preallocated output array. If provided, the result
                 is stored in this buffer and the same array is returned.
-                Must be 2-D with shape (M, N) matching the result dimensions.
+                Must be 2-D float64, C-contiguous, with shape (M, N)
+                matching the result dimensions.
 
         Returns:
             Result matrix C = op(A) @ op(B), float64.
 
         Raises:
             ValueError: If A or B is not 2-D, inner dimensions don't match,
-                or out has wrong shape.
+                or out has wrong shape/dtype/layout.
         """
         if A.ndim != 2:
             raise ValueError(f"dgemm: A must be a 2-D array, got {A.ndim}-D")
@@ -336,6 +337,8 @@ except ImportError as _exc:
                 raise ValueError(f"dgemm: out must be float64, got {out.dtype}")
             if not out.flags["C_CONTIGUOUS"]:
                 raise ValueError("dgemm: out must be C-contiguous")
+            if not out.flags["WRITEABLE"]:
+                raise ValueError("dgemm: out must be writeable")
             _np.matmul(
                 _A.astype(_np.float64, copy=False),
                 _B.astype(_np.float64, copy=False),

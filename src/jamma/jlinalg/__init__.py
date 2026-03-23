@@ -77,6 +77,48 @@ try:
 
     HAS_C_EXTENSION: bool = True
 
+    # On MKL systems, the C snp_stats kernel's OpenMP parallel regions can
+    # conflict with MKL's internal OpenMP (OMP Error #13 assertion failure).
+    # Fall back to the NumPy implementation for snp_stats only — this matches
+    # pre-4.6.0 behavior where snp_stats was always pure NumPy.  All other
+    # jlinalg C functions (dgemm, eigh, etc.) are unaffected.
+    import os as _os
+
+    if HAS_OPENMP and _os.environ.get("JLINALG_NUMPY_SNP_STATS", "").strip() not in (
+        "",
+        "0",
+    ):
+        import warnings as _warnings_mod
+
+        import numpy as _np
+
+        def compute_snp_stats_chunk(  # noqa: F811
+            data: _np.ndarray,
+            means: _np.ndarray,
+            miss_counts: _np.ndarray,
+            variances: _np.ndarray,
+            n_aa: _np.ndarray | None = None,
+            n_ab: _np.ndarray | None = None,
+            n_bb: _np.ndarray | None = None,
+        ) -> None:
+            """NumPy fallback for per-SNP statistics (MKL-safe)."""
+            is_nan = _np.isnan(data)
+            mc = _np.sum(is_nan, axis=0)
+            with _warnings_mod.catch_warnings():
+                _warnings_mod.simplefilter("ignore", RuntimeWarning)
+                m = _np.nanmean(data, axis=0)
+                v = _np.nanvar(data, axis=0)
+            m = _np.nan_to_num(m, nan=0.0)
+            v = _np.nan_to_num(v, nan=0.0)
+            means[:] = m
+            miss_counts[:] = mc
+            variances[:] = v
+            if n_aa is not None and n_ab is not None and n_bb is not None:
+                valid = ~is_nan
+                n_aa[:] = _np.sum((data == 0) & valid, axis=0)
+                n_ab[:] = _np.sum((data == 1) & valid, axis=0)
+                n_bb[:] = _np.sum((data == 2) & valid, axis=0)
+
 except ImportError as _exc:
     if _so_exists:
         # .so exists but failed to load — ABI mismatch, missing shared lib, etc.

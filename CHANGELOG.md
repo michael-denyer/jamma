@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.4.2] - 2026-03-23
+
+### Fixed
+
+- Use actual inplace DSYEVD memory requirement for DSYEVR fallback decision instead
+  of always using the non-inplace peak estimate
+- Guard `out=` buffer allocation behind `n_cvt==1` in batch and streaming NumPy
+  runners — `batch_compute_uab_varying_soa_numpy` only supports it for single-covariate
+- Improve `dispatch_soa_split` error message for unreachable mode-4 path
+- Simplify no-DSYEVR fallback branch — no longer silently downgrades inplace to
+  conservative estimate
+
 ## [4.4.1] - 2026-03-22
 
 ### Changed

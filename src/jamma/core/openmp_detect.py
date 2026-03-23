@@ -188,7 +188,9 @@ def _openmp_flags_for_libiomp5(
                 "-fopenmp",
                 "-x",
                 "c",
-                "-",
+                "-",  # read C source from stdin
+                "-x",
+                "none",  # reset — next args auto-detect by ext
                 "-o",
                 "/dev/null",
                 str(libiomp5_path),

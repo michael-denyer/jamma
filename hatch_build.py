@@ -344,7 +344,9 @@ class CustomBuildHook(BuildHookInterface):
                     "-fopenmp",
                     "-x",
                     "c",
-                    "-",
+                    "-",  # read C source from stdin
+                    "-x",
+                    "none",  # reset — next args auto-detect by ext
                     "-o",
                     "/dev/null",
                     str(libiomp5_path),

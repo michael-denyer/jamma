@@ -2486,16 +2486,17 @@ def test_batch_compute_uab_varying_soa_rejects_wrong_out_shape():
 
 
 @pytest.mark.tier0
-def test_batch_compute_uab_varying_soa_rejects_out_for_general_ncvt():
-    """batch_compute_uab_varying_soa_numpy raises ValueError for out= with n_cvt > 1."""
+def test_batch_compute_uab_varying_soa_rejects_wrong_out_shape_general_ncvt():
+    """batch_compute_uab_varying_soa_numpy raises ValueError for wrong out= shape with n_cvt > 1."""
     rng = np.random.default_rng(99)
     n_samples, n_snps, n_cvt = 50, 10, 2
     UtW = rng.standard_normal((n_samples, n_cvt))
     Uty = rng.standard_normal(n_samples)
     utg_t = rng.standard_normal((n_snps, n_samples))
+    # n_cvt=2 has n_var=4, so 6 is wrong
     out = np.empty((n_snps, 6, n_samples), dtype=np.float64)
 
-    with pytest.raises(ValueError, match="out= buffer not supported"):
+    with pytest.raises(ValueError, match="out shape"):
         batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t, out=out)
 
 

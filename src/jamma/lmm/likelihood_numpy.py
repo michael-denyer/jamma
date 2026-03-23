@@ -223,6 +223,7 @@ def _batch_compute_uab_varying_general_numpy(
     UtW: np.ndarray,
     Uty: np.ndarray,
     utg_t: np.ndarray,
+    out: np.ndarray | None = None,
 ) -> np.ndarray:
     """Direct SoA varying Uab for general n_cvt -- no full Uab materialization.
 
@@ -261,7 +262,16 @@ def _batch_compute_uab_varying_general_numpy(
     # vectors[j] = UtW[:, j] for j < n_cvt, vectors[n_cvt+1] = Uty
     vectors = np.column_stack([UtW, np.zeros(n_samples), Uty])  # (n_samples, n_cvt+2)
 
-    result = np.empty((n_snps, n_var, n_samples), dtype=np.float64)
+    expected_shape = (n_snps, n_var, n_samples)
+    if out is not None:
+        if out.shape != expected_shape:
+            raise ValueError(
+                f"batch_compute_uab_varying_soa_numpy: out shape {out.shape} "
+                f"doesn't match expected {expected_shape}"
+            )
+        result = out
+    else:
+        result = np.empty(expected_shape, dtype=np.float64)
 
     for a_col, b_col, linear_idx in table["uab_pairs"]:
         if linear_idx not in var_index_to_row:
@@ -577,7 +587,7 @@ def batch_compute_uab_varying_soa_numpy(
             from jlinalg.dgemm(chunk, U, transa="T").
         out: Optional pre-allocated output buffer (n_snps, n_var, n_samples).
             When provided and shape matches, writes directly into it to avoid
-            allocation. Only used for n_cvt=1 path.
+            allocation.
 
     Returns:
         Varying array (n_snps, n_var, n_samples) — SoA layout.
@@ -608,12 +618,7 @@ def batch_compute_uab_varying_soa_numpy(
         return uab_varying_soa
 
     # General n_cvt: direct SoA varying without full Uab materialization
-    if out is not None:
-        raise ValueError(
-            "batch_compute_uab_varying_soa_numpy: out= buffer not supported "
-            f"for n_cvt={n_cvt} (only n_cvt=1)"
-        )
-    return _batch_compute_uab_varying_general_numpy(n_cvt, UtW, Uty, utg_t)
+    return _batch_compute_uab_varying_general_numpy(n_cvt, UtW, Uty, utg_t, out=out)
 
 
 def reconstruct_uab_from_soa(

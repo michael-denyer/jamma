@@ -4399,6 +4399,158 @@ def test_fused_general_mode4_lrt_parity_ncvt2(general_score_lrt_ncvt2):
     not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
     reason="Fused general C not available",
 )
+def test_fused_general_mode4_all_statistics_ncvt2(general_score_lrt_ncvt2):
+    """FGEN-10: Fused general mode-4 all 8 output arrays match compose reference.
+
+    Verifies lambdas, logls, betas, ses, pwalds (bitwise Wald parity),
+    p_scores (Score CDF tolerance), lambdas_mle (golden section tolerance),
+    and p_lrts (LRT CDF tolerance) against their respective non-fused references.
+    """
+    from jamma.lmm._lmm_accel import (
+        compute_lrt_batch_general_c,
+        compute_score_batch_general_c,
+    )
+    from jamma.lmm.compute_numpy import (
+        compute_mode4_fused_general_c_ws,
+        compute_wald_general_c_ws,
+        create_lmm_workspace_general,
+        create_lmm_workspace_mode4_fused_general,
+    )
+    from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
+
+    data = general_score_lrt_ncvt2
+    eigenvalues = data["eigenvalues"]
+    n_samples = data["n_samples"]
+    n_cvt = data["n_cvt"]
+    Uab_batch = data["Uab_batch"]
+    UtW = data["UtW"]
+    Uty = data["Uty"]
+    UtG = data["UtG"]
+    Hi_eval_null = data["Hi_eval_null"]
+    logl_H0 = data["logl_H0"]
+
+    inv_indices, var_indices = classify_uab_columns(n_cvt)
+    uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
+    uab_var_soa = np.ascontiguousarray(
+        Uab_batch[:, :, list(var_indices)].transpose(0, 2, 1)
+    )
+    utg_t = np.ascontiguousarray(UtG.T)
+    pab_c = build_pab_table_for_c(n_cvt)
+    pab_kwargs = {
+        k: pab_c[k]
+        for k in [
+            "invariant_indices",
+            "varying_indices",
+            "logdet_diag_rows",
+            "logdet_diag_cols",
+            "level_offsets",
+            "level_counts",
+            "entries",
+            "idx_xx",
+            "idx_xy",
+            "idx_yy",
+            "var_a_cols",
+            "var_b_cols",
+        ]
+    }
+
+    # --- Fused general mode-4 ---
+    ws_fused = create_lmm_workspace_mode4_fused_general(
+        eigenvalues,
+        uab_inv_soa,
+        UtW,
+        Uty,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+        n_cvt=n_cvt,
+        **pab_kwargs,
+        hi_eval_null=Hi_eval_null,
+        logl_H0=logl_H0,
+    )
+    result_fused = compute_mode4_fused_general_c_ws(ws_fused, utg_t, 1)
+
+    # --- Wald reference (non-fused general workspace) ---
+    ws_wald = create_lmm_workspace_general(
+        eigenvalues,
+        uab_inv_soa,
+        n_samples,
+        n_cvt,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+    )
+    wald_ref = compute_wald_general_c_ws(ws_wald, uab_var_soa, 1)
+
+    # Wald: bitwise parity (same workspace, same code path)
+    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
+        np.testing.assert_array_equal(
+            result_fused[key],
+            wald_ref[key],
+            err_msg=f"Mode-4 Wald {key}: fused general vs non-fused mismatch",
+        )
+
+    # --- Score reference (batch C) ---
+    score_ref = compute_score_batch_general_c(
+        eigenvalues,
+        Uab_batch,
+        Hi_eval_null,
+        n_samples,
+        n_cvt,
+        pab_c,
+        1,
+    )
+    np.testing.assert_allclose(
+        result_fused["p_scores"],
+        score_ref["p_scores"],
+        rtol=1e-4,
+        atol=1e-14,
+        equal_nan=True,
+        err_msg="p_scores: fused general mode-4 vs batch Score mismatch",
+    )
+
+    # --- LRT reference (batch C) ---
+    lrt_ref = compute_lrt_batch_general_c(
+        eigenvalues,
+        Uab_batch,
+        n_samples,
+        n_cvt,
+        pab_c,
+        1e-5,
+        1e5,
+        50,
+        20,
+        logl_H0,
+        1,
+    )
+    np.testing.assert_allclose(
+        result_fused["lambdas_mle"],
+        lrt_ref["lambdas_mle"],
+        rtol=5e-5,
+        atol=1e-14,
+        equal_nan=True,
+        err_msg="lambdas_mle: fused general mode-4 vs batch LRT mismatch",
+    )
+    np.testing.assert_allclose(
+        result_fused["p_lrts"],
+        lrt_ref["p_lrts"],
+        rtol=1e-4,
+        atol=1e-14,
+        equal_nan=True,
+        err_msg="p_lrts: fused general mode-4 vs batch LRT mismatch",
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(
+    not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
+    reason="Fused general C not available",
+)
 def test_fused_general_workspace_lifecycle(synthetic_covariate_data_ncvt2):
     """FGEN-04: Fused general workspace creates, computes, and destroys cleanly."""
     from jamma.lmm.compute_numpy import (

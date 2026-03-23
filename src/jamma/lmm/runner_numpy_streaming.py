@@ -786,8 +786,7 @@ def run_lmm_association_numpy_streaming(
                 # Reuse preallocated buffer when chunk is full-sized.
                 out_var = (
                     _uab_var_bufs_stream[buf_idx][:actual_len, :, :]
-                    if _uab_var_bufs_stream is not None
-                    and actual_len == chunk_size
+                    if _uab_var_bufs_stream is not None and actual_len == chunk_size
                     else None
                 )
                 uab_var_soa = batch_compute_uab_varying_soa_numpy(

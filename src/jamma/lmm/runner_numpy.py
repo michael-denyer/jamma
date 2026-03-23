@@ -1598,8 +1598,7 @@ def run_lmm_association_numpy(
                     # Reuse pre-allocated buffer when chunk is full-sized.
                     _out = (
                         _uab_var_bufs[0]
-                        if _uab_var_bufs is not None
-                        and actual_snps == chunk_size
+                        if _uab_var_bufs is not None and actual_snps == chunk_size
                         else None
                     )
                     uab_var_soa = batch_compute_uab_varying_soa_numpy(

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.6.2] - 2026-03-23
+
+### Changed
+
+- Eigendecomp log now shows driver name (DSYEVD-inplace/DSYEVD/DSYEVR) instead
+  of generic `jlinalg.eigh`, explains why that driver was chosen (e.g. "kinship
+  in memory, overwriting in place"), and lists the relevant alternative with its
+  memory cost (e.g. "DSYEVR fallback=126.3GB")
+
 ## [4.6.1] - 2026-03-23
 
 ### Fixed

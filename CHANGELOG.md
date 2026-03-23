@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.6.1] - 2026-03-23
+
+### Fixed
+
+- Prefer clang over GCC when linking libiomp5 — GCC's GOMP compatibility shim
+  triggers assertion failures (`kmp_runtime.cpp` Error #13) after MKL LAPACK
+  operations (e.g. DSYEVR). Clang natively generates `kmp_*` calls that
+  libiomp5 handles correctly.
+- Simplify clang OpenMP detection to avoid `omp.h` dependency and `-x none`
+  parsing issues with libiomp5.so paths
+- Add `JLINALG_NO_VENDOR_LAPACK` env var to skip MKL dsyevd/dsyevr in eigh,
+  falling back to jlinalg-own LAPACK
+- Respect `JLINALG_NO_VENDOR_LAPACK` in eigendecomp driver selection
+- Replace OpenMP with pthreads in `compute_snp_stats_chunk` to avoid
+  MKL/libiomp5 conflict — SNP stats is I/O-bound, not compute-bound
+- Auto-recompile jlinalg C extension on import failure (stale `.so`)
+
+### Changed
+
+- Centralize jlinalg thread control: new `jlinalg_threads()` context manager
+  with RLock for thread-safe `set_n_threads()` scoping (replaces ad-hoc
+  `blas_threads()` calls for jlinalg rotation in runners)
+- Centralize C extension OpenMP detection: `get_c_extension_capabilities()`
+  returns `(available, has_openmp)` tuple; `get_c_extension_thread_count()`
+  consolidates thread sizing logic
+- Chunk `compute_snp_stats()` in 10k-SNP slices to avoid full contiguous
+  copy of large genotype matrices
+- `detect_openmp_flags()` returns `cc_override` as third element when
+  switching to clang for libiomp5 compatibility
+- Fix pipeline thread logging for serial (no-OpenMP) C extension builds
+
 ## [4.6.0] - 2026-03-23
 
 ### Added

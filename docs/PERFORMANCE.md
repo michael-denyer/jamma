@@ -59,16 +59,16 @@ v4.2.0 is 2,098s (35 min) faster than v2.10.1. Kinship is 22% faster (jlinalg DG
 
 Eigendecomp dominates the increase: O(n³) scaling from 90k→125k is ~2.1× (DSYEVR). LMM actually got faster at 125k than 90k was at v2.3 thanks to the C extension replacing JAX. The 126 GB eigenvector matrices exceed L3 cache, making eigendecomp memory-bandwidth bound.
 
-### Full Pipeline Scaling (v4.2.0, 95k SNPs, 48 cores)
+### Full Pipeline Scaling (v4.6.1, 95k SNPs, 48 cores)
 
 | Phase | 5k×95k | 20k×95k | 50k×95k | 75k×95k | 125k×92k (real) |
 |-------|--------|---------|---------|---------|-----------------|
-| Kinship compute | 12s | 73s (1 min) | 298s (5 min) | 510s (9 min) | 1,591s (27 min) |
-| Eigendecomp | 1s | 46s | 481s (8 min) | 1,313s (22 min) | 6,427s (1h 47m)† |
-| LMM (C ext) | 12s | 58s (1 min) | 218s (4 min) | 420s (7 min) | 887s (15 min) |
-| **Total (C ext)** | **26s** | **178s (3 min)** | **1,003s (17 min)** | **2,255s (38 min)** | **8,942s (2h 29m)** |
+| Kinship compute | 10s | 67s (1 min) | 284s (5 min) | 500s (8 min) | 1,591s (27 min)† |
+| Eigendecomp | 1s | 44s | 516s (9 min) | 1,478s (25 min) | 6,427s (1h 47m)†‡ |
+| LMM (C ext) | 8s | 42s | 182s (3 min) | 362s (6 min) | 887s (15 min)† |
+| **Total (C ext)** | **19s** | **155s (3 min)** | **988s (16 min)** | **2,353s (39 min)** | **8,942s (2h 29m)** |
 
-†125k used DSYEVR (memory-constrained fallback); all others used DSYEVD. Eigendecomp scales O(n³): 481s at 50k → 1,313s at 75k (2.7× for 1.5× samples). LMM scales roughly O(n²) due to rotation dominance.
+†125k numbers from v4.2.0 (same hardware, not re-benchmarked). ‡125k used DSYEVR (memory-constrained fallback); all others used DSYEVD. Eigendecomp scales O(n³): 516s at 50k → 1,478s at 75k (2.9× for 1.5× samples). LMM scales roughly O(n²) due to rotation dominance. v4.6.1 LMM is 14–16% faster than v4.2.0 at 50k–75k thanks to centralized jlinalg thread control and pthreads-based SNP stats.
 
 ---
 

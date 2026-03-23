@@ -189,9 +189,8 @@ def eigendecompose_kinship(
 
     from jamma.core.estimates import estimate_eigendecomp_time
 
-    logger.info(
-        f"Eigendecomp: jlinalg.eigh, threads={n_threads}, inplace={use_inplace}"
-    )
+    driver = "DSYEVR" if use_dsyevr else ("DSYEVD-inplace" if use_inplace else "DSYEVD")
+    logger.info(f"Eigendecomp: {driver}, threads={n_threads}")
     logger.info(
         f"  Estimated time: "
         f"{estimate_eigendecomp_time(n_samples, n_threads, use_dsyevr=use_dsyevr)}"

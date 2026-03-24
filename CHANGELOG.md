@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.6.3] - 2026-03-24
+
+### Changed
+
+- Raise maximum covariate limit from 20 to 100 in C extension (MAX_N_CVT)
+
 ## [4.6.2] - 2026-03-23
 
 ### Changed

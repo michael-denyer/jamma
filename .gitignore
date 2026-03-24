@@ -41,8 +41,10 @@ venv/
 output/
 
 # Old logos
-
 logos/old/
+
+# Legacy files from simplification branch
+legacy/
 
 # Planning and claude config (dev-only)
 .planning/

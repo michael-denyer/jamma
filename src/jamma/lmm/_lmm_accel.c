@@ -1754,14 +1754,14 @@ err_input:
  * and passes flat int32 arrays. C code just walks the table — no index
  * computation in C.
  *
- * Memory: Per-SNP Pab uses stack buffers (MAX_N_CVT=20 -> MAX_PAB_SIZE=5566
- * doubles = ~44KB, well within 1MB+ thread stacks).
+ * Memory: Per-SNP Pab uses stack buffers (MAX_N_CVT=100 -> MAX_PAB_SIZE=535806
+ * doubles = ~4.2MB; fits default 8MB thread stacks on Linux/macOS).
  * ========================================================================= */
 
-#define MAX_N_CVT   20
-#define MAX_N_INDEX ((MAX_N_CVT + 3) * (MAX_N_CVT + 2) / 2)  /* 253 for n_cvt=20 */
-#define MAX_N_ROWS  (MAX_N_CVT + 2)                           /* 22 */
-#define MAX_PAB_SIZE (MAX_N_ROWS * MAX_N_INDEX)                /* 5566 */
+#define MAX_N_CVT   100
+#define MAX_N_INDEX ((MAX_N_CVT + 3) * (MAX_N_CVT + 2) / 2)  /* 5253 for n_cvt=100 */
+#define MAX_N_ROWS  (MAX_N_CVT + 2)                           /* 102 */
+#define MAX_PAB_SIZE (MAX_N_ROWS * MAX_N_INDEX)                /* 535806 */
 
 typedef struct {
     int index_ab, index_aw, index_bw, index_ww;

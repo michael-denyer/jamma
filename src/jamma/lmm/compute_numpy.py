@@ -2,8 +2,8 @@
 
 Dispatches to C extension (_lmm_accel) for Wald (batch/workspace/split),
 Score (batch), LRT (batch), and fused mode-4 when available. Supports
-n_cvt=1 (split/batch paths) and n_cvt>1 up to 20 (general workspace path).
-Falls back to NumPy Python path when C functions are unavailable or n_cvt>20.
+n_cvt=1 (split/batch paths) and n_cvt>1 up to 100 (general workspace path).
+Falls back to NumPy Python path when C functions are unavailable or n_cvt>100.
 Also exports split-workspace and general-workspace APIs for direct use
 by runners. No JAX imports.
 

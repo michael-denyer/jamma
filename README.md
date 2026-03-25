@@ -127,8 +127,11 @@ result = gwas("data/my_study", kinship_file="k.txt", covariate_file="covars.txt"
 result = gwas("data/my_study", loco=True)
 
 # LOCO with eigen caching (skip eigendecomp on subsequent runs)
-result = gwas("data/my_study", loco=True, write_eigen=True, eigen_dir="output/eigen")
-result = gwas("data/my_study", loco=True, eigen_dir="output/eigen")  # reuses cache
+result = gwas("data/my_study", loco=True, write_eigen=True)
+# Reuse cached eigen files from a previous run
+result = gwas("data/my_study", loco=True,
+              eigenvalue_file="output/result.eigenD.npy",
+              eigenvector_file="output/result.eigenU.npy")
 
 # Multi-phenotype with eigendecomp reuse (Python API)
 result = gwas("data/my_study", write_eigen=True, phenotype_column=1)

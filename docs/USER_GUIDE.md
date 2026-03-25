@@ -413,7 +413,7 @@ result = gwas(
 
 `gwas()` handles the full pipeline: load data, compute or load kinship,
 eigendecompose, run LMM association, and write results. Returns a `GWASResult`
-with timing breakdown and summary stats. Access `result.pve` for the PVE
+with timing breakdown and summary stats. Access `result.pve_estimate` for the PVE
 (proportion of variance explained) estimate and `result.pve_se` for the
 standard error of PVE computed via the delta method from the REML second
 derivative at the null model optimum.

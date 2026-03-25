@@ -147,7 +147,7 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
         "-fno-trapping-math",
         "-march=native",
         "-fPIC",
-        "-std=c99",
+        "-std=c11",
         f"-I{python_inc}",
         f"-I{numpy_inc}",
         *omp_compile,

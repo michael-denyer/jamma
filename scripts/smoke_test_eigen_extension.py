@@ -24,10 +24,7 @@ print(f"_jlinalg OK, ABI={ABI_VERSION}, backend={blas_backend}")
 print(f"LAPACK: DSYEVD={blas_has_dsyevd}, DSYEVR={blas_has_dsyevr}")
 
 if not blas_has_dsyevd and not blas_has_dsyevr:
-    print(
-        "No vendor LAPACK — skipping eigh test"
-        " (expected in manylinux)"
-    )
+    print("No vendor LAPACK — skipping eigh test (expected in manylinux)")
     print("Eigen extension smoke test passed (import-only)")
     sys.exit(0)
 

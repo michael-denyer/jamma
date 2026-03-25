@@ -137,6 +137,22 @@ def eigendecompose_kinship(
     if not no_vendor and not jlinalg.blas_has_dsyevd and not jlinalg.blas_has_dsyevr:
         no_vendor = True
         logger.info("No vendor LAPACK (DSYEVD/DSYEVR) — using np.linalg.eigh")
+
+    # LP64 overflow safety gate (SAFE-01)
+    # Only warn when the actual eigendecomp path uses LP64 BLAS.
+    # When no_vendor=True, np.linalg.eigh uses numpy's own BLAS which may be
+    # ILP64 even if jlinalg's vendor BLAS is not (or vice versa).
+    if n_samples > 40_000 and not no_vendor and not jlinalg.blas_is_ilp64:
+        warnings.warn(
+            f"LP64 BLAS detected with {n_samples:,} samples. "
+            f"LP64 uses 32-bit integers; matrices larger than ~46,340 x 46,340 "
+            f"(>{2**31 - 1:,} elements) risk int32 overflow in LAPACK workspace "
+            f"calculations, which may cause silent corruption or segfaults. "
+            f"Install ILP64 numpy (see docs/USER_GUIDE.md) or reduce sample size.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
     use_inplace = (
         not no_vendor
         and bool(jlinalg.blas_has_dsyevd)

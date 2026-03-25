@@ -920,9 +920,13 @@ def run_lmm_loco(
         if eigen_cache is not None:
             chr_iterator = ((chr_name, None) for chr_name in unique_chrs)
         else:
-            assert loco_iter is not None, (
-                "loco_iter must be set when eigen_cache is None"
-            )
+            if loco_iter is None:
+                raise RuntimeError(
+                    "LOCO kinship iterator was not initialized. "
+                    "Expected streaming kinship computation when eigen_cache "
+                    "is None, but loco_iter is still None. This is an internal "
+                    "error — please report it."
+                )
             chr_iterator = loco_iter  # type: ignore[assignment]
 
         for chr_idx, (chr_name, K_loco) in enumerate(chr_iterator):

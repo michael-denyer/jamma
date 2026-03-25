@@ -41,6 +41,8 @@ import numpy as _np
 _so_exists = importlib.util.find_spec("jamma.jlinalg._jlinalg") is not None
 HAS_C_EXTENSION: bool = False
 
+_EXPECTED_JLINALG_ABI = 12  # Must match JLINALG_ABI_VERSION in include/jlinalg.h
+
 try:
     from jamma.jlinalg._jlinalg import (  # noqa: F401
         ABI_VERSION,
@@ -63,6 +65,13 @@ try:
         set_n_threads,
         svd,
     )
+
+    if ABI_VERSION != _EXPECTED_JLINALG_ABI:
+        raise ImportError(
+            f"_jlinalg C extension ABI mismatch: "
+            f"compiled={ABI_VERSION}, expected={_EXPECTED_JLINALG_ABI}. "
+            f"Recompile with: python -m jamma.jlinalg._compile_jlinalg"
+        )
 
     HAS_C_EXTENSION: bool = True
 
@@ -166,8 +175,17 @@ except ImportError as _exc:
                 svd,
             )
 
+            if ABI_VERSION != _EXPECTED_JLINALG_ABI:
+                raise ImportError(
+                    f"_jlinalg C extension ABI mismatch after recompile: "
+                    f"compiled={ABI_VERSION}, expected={_EXPECTED_JLINALG_ABI}. "
+                    f"Manual recompile needed: python -m jamma.jlinalg._compile_jlinalg"
+                )
+
             HAS_C_EXTENSION: bool = True
         except (ImportError, OSError) as _retry_exc:
+            import sys as _sys
+
             print(
                 f"jlinalg recompiled but import still failed: "
                 f"{type(_retry_exc).__name__}: {_retry_exc}",

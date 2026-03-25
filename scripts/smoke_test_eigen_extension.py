@@ -2,14 +2,25 @@
 
 Verifies:
 1. The compiled C extension imports successfully (ABI match)
-2. eigh produces correct eigenvalues on a known matrix
+2. eigh produces correct eigenvalues on a known matrix (if vendor LAPACK available)
+
+In manylinux containers without vendor LAPACK, eigh raises RuntimeError.
+This is expected — the wheel still works via numpy.linalg.eigh fallback at runtime.
 """
+
+import sys
 
 import numpy as np
 
-from jamma.jlinalg._jlinalg import ABI_VERSION, blas_backend, eigh
+from jamma.jlinalg._jlinalg import ABI_VERSION, blas_backend, blas_has_dsyevd, blas_has_dsyevr, eigh
 
 print(f"_jlinalg OK, ABI={ABI_VERSION}, backend={blas_backend}")
+print(f"LAPACK: DSYEVD={blas_has_dsyevd}, DSYEVR={blas_has_dsyevr}")
+
+if not blas_has_dsyevd and not blas_has_dsyevr:
+    print("No vendor LAPACK available — skipping eigh numerical test (expected in manylinux)")
+    print("Eigen extension smoke test passed (import-only)")
+    sys.exit(0)
 
 # Test with identity matrix (eigenvalues should be all 1.0)
 n = 100

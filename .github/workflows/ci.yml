@@ -33,29 +33,24 @@ jobs:
         include:
           - os: ubuntu-latest
             python-version: "3.12"
-            install_args: "--extra jax --extra dev"
-            name: "Linux + JAX"
+            install_args: "--extra dev"
+            name: "Linux + NumPy (3.12)"
+          - os: ubuntu-latest
+            python-version: "3.11"
+            install_args: "--extra dev"
+            name: "Linux + NumPy (3.11)"
+          - os: macos-latest
+            python-version: "3.12"
+            install_args: "--extra dev"
+            name: "ARM Mac + NumPy"
           - os: ubuntu-latest
             python-version: "3.12"
             install_args: "--extra dev"
-            name: "Linux + NumPy"
-            pytest_args: "-m 'not tier2 and not tier3 and not slow and not requires_jax and not benchmark'"
-          - os: ubuntu-latest
-            python-version: "3.11"
-            install_args: "--extra jax --extra dev"
-            name: "Linux + JAX (3.11)"
-          - os: macos-latest
-            python-version: "3.12"
-            install_args: "--extra jax --extra dev"
-            name: "ARM Mac + JAX"
-          - os: ubuntu-latest
-            python-version: "3.12"
-            install_args: "--extra jax --extra dev"
             name: "Linux + MKL ILP64"
             ilp64_numpy: true
           - os: ubuntu-latest
             python-version: "3.12"
-            install_args: "--extra jax --extra dev"
+            install_args: "--extra dev"
             name: "Linux + BLIS ILP64"
             blis_ilp64: true
     name: ${{ matrix.name }}
@@ -134,7 +129,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --extra jax --extra dev
+        run: uv sync --extra dev
 
       - name: Compile C extensions
         run: |

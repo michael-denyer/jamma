@@ -3,7 +3,7 @@
 Verifies:
 1. The compiled _jlinalg C extension imports successfully (ABI match)
 2. jlinalg_isa and HAS_OPENMP constants are present and correct type
-3. All 6 operations produce correct results on synthetic data (numerical sanity)
+3. dgemm and dsyrk produce correct results on synthetic data (numerical sanity)
 
 Exit 0 on success, exit 1 on any failure.
 
@@ -21,12 +21,8 @@ try:
         HAS_OPENMP,
         blas_backend,
         blas_is_ilp64,
-        daxpy,
-        ddot,
         dgemm,
-        dgemv,
-        dnrm2,
-        dscal,
+        dsyrk,
         jlinalg_isa,
     )
 except ImportError as exc:
@@ -53,75 +49,30 @@ if not isinstance(HAS_OPENMP, bool):
     print(f"FAIL: HAS_OPENMP is {type(HAS_OPENMP)}, expected bool", file=sys.stderr)
     sys.exit(1)
 
-# Step 3: Numerical sanity checks on all 6 operations.
+# Step 3: Numerical sanity checks on dgemm and dsyrk.
 rng = np.random.default_rng(42)
-n = 10_000
 
 
-def check_close(name, got, expected, rtol=1e-12):
-    """Check relative error and exit on failure."""
-    rel_err = abs(got - expected) / max(abs(expected), 1e-300)
-    if rel_err > rtol:
+def check_close(name, got, expected, atol=1e-10):
+    """Check max absolute error and exit on failure."""
+    max_err = np.max(np.abs(got - expected))
+    if max_err > atol:
         print(
-            f"FAIL: {name} numerical mismatch: got {got}, expected {expected}, "
-            f"rel_err={rel_err:.2e}",
+            f"FAIL: {name} numerical mismatch: max_err={max_err:.2e}",
             file=sys.stderr,
         )
         sys.exit(1)
-    print(f"{name}: OK (rel_err={rel_err:.2e})")
+    print(f"{name}: OK (max_err={max_err:.2e})")
 
-
-# ddot
-x = rng.standard_normal(n)
-y = rng.standard_normal(n)
-check_close("ddot", ddot(x, y), np.dot(x, y))
-
-# dnrm2
-x = rng.standard_normal(n)
-check_close("dnrm2", dnrm2(x), np.linalg.norm(x))
-
-# daxpy (in-place, check result vector)
-x = rng.standard_normal(n)
-y = rng.standard_normal(n)
-y_ref = y + 2.5 * x
-daxpy(2.5, x, y)
-max_err = np.max(np.abs(y - y_ref))
-if max_err > 1e-12:
-    print(f"FAIL: daxpy max_err={max_err:.2e}", file=sys.stderr)
-    sys.exit(1)
-print(f"daxpy: OK (max_err={max_err:.2e})")
-
-# dscal (in-place)
-x = rng.standard_normal(n)
-x_ref = x * 3.14
-dscal(3.14, x)
-max_err = np.max(np.abs(x - x_ref))
-if max_err > 1e-12:
-    print(f"FAIL: dscal max_err={max_err:.2e}", file=sys.stderr)
-    sys.exit(1)
-print(f"dscal: OK (max_err={max_err:.2e})")
-
-# dgemv
-A = rng.standard_normal((100, 50))
-x = rng.standard_normal(50)
-result = dgemv(A, x)
-expected = A @ x
-max_err = np.max(np.abs(result - expected))
-if max_err > 1e-10:
-    print(f"FAIL: dgemv max_err={max_err:.2e}", file=sys.stderr)
-    sys.exit(1)
-print(f"dgemv: OK (max_err={max_err:.2e})")
 
 # dgemm
 A = rng.standard_normal((100, 50))
 B = rng.standard_normal((50, 80))
-result = dgemm(A, B)
-expected = A @ B
-max_err = np.max(np.abs(result - expected))
-if max_err > 1e-10:
-    print(f"FAIL: dgemm max_err={max_err:.2e}", file=sys.stderr)
-    sys.exit(1)
-print(f"dgemm: OK (max_err={max_err:.2e})")
+check_close("dgemm", dgemm(A, B), A @ B)
+
+# dsyrk
+X = rng.standard_normal((60, 40))
+check_close("dsyrk", dsyrk(X), X @ X.T)
 
 print("Smoke test passed")
 sys.exit(0)

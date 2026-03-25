@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.1.0] - 2026-03-25
+
+### Added
+
+- Telemetry transparency: opt-out via `JAMMA_NO_TELEMETRY=1` or `DO_NOT_TRACK=1`,
+  with docs and hardening for privacy-sensitive environments
+- Safety gates for LP64 integer overflow, LOCO chromosome invariant, and ABI
+  validation at import time
+- GEMMA equivalence tests for full validation coverage
+
+### Changed
+
+- Rename pipeline methods to `_run_batch`/`_run_streaming` for clarity
+- Remove dead `lmm_mode` parameter from `select_execution_mode`
+- Remove dead backend dispatch types and simplify consumers
+- Consolidate dev dependencies and clean up CI build matrix
+- Fix incorrect `gwas()` API examples in README and USER_GUIDE
+- Update CODEMAP.md after backend simplification
+
 ## [5.0.1] - 2026-03-25
 
 ### Fixed

@@ -5,6 +5,7 @@ including -bfile, -gk, -lmm, -k, -o, -outdir flags for data loading,
 mode selection, and output configuration.
 """
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -153,6 +154,12 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     help="Compute backend: auto, numpy, or numpy-streaming.",
 )
 @click.option(
+    "--no-telemetry",
+    is_flag=True,
+    default=False,
+    help="Disable benchmark telemetry for this run.",
+)
+@click.option(
     "--legacy-text",
     is_flag=True,
     default=False,
@@ -232,6 +239,7 @@ def main(
     check_memory,
     mem_budget,
     backend,
+    no_telemetry,
     legacy_text,
     cat,
     widv,
@@ -246,6 +254,9 @@ def main(
     A modern Python and C reimplementation of GEMMA for large-scale GWAS.
     """
     setup_logging(verbose=verbose)
+
+    if no_telemetry:
+        os.environ["JAMMA_NO_TELEMETRY"] = "1"
 
     config = OutputConfig(outdir=Path(outdir), prefix=o, verbose=verbose)
 

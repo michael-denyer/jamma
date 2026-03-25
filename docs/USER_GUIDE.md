@@ -549,6 +549,67 @@ typical Databricks / HPC environment for large-scale GWAS:
 3. **Batch processing**: JAMMA automatically batches kinship computation
 4. **Memory**: For very large datasets, the streaming backend (`numpy-streaming`) is auto-selected when batch mode won't fit in memory
 
+## Telemetry
+
+JAMMA collects **local-only** benchmark telemetry to help you track performance
+across runs. No data is ever transmitted to any server.
+
+### What Is Collected
+
+Each `-lmm` run appends one JSON line to `~/.jamma/benchmarks.jsonl` with these fields:
+
+| Field | Description |
+| ----- | ----------- |
+| `timestamp` | ISO 8601 UTC timestamp |
+| `jamma_version` | JAMMA version string |
+| `n_samples` | Number of samples analyzed |
+| `n_snps` | Number of SNPs tested |
+| `backend` | Runner name (e.g. `numpy`, `numpy-streaming`) |
+| `n_cvt` | Number of covariates (optional) |
+| `lmm_mode` | LMM test mode: 1=Wald, 2=LRT, 3=Score, 4=All (optional) |
+| `loco` | Whether LOCO mode was used (optional) |
+| `kinship_s` | Kinship computation time in seconds (optional) |
+| `lmm_s` | LMM computation time in seconds (optional) |
+| `total_s` | Total pipeline time in seconds (optional) |
+| `rotation_s` | Rotation time in seconds (optional) |
+
+Additional optional fields may be present depending on configuration: `n_chunks`,
+`eigendecomp_s`, `peak_memory_gb`, `cpu_model`, `blas_backend`, `blas_threads`,
+`total_ram_gb`, `numpy_version`, `platform`. See `jamma.core.telemetry.BenchmarkRecord`
+for the full schema.
+
+No genotype data, phenotype data, or file paths are recorded.
+
+### Where It Is Stored
+
+Telemetry is written to `~/.jamma/benchmarks.jsonl` as newline-delimited JSON.
+Each line is independently parseable. The file is append-only; JAMMA never reads
+it back. You can safely delete it at any time.
+
+### How to Opt Out
+
+Disable telemetry with either:
+
+1. **CLI flag** (per-run):
+   ```bash
+   jamma --no-telemetry -lmm 1 -bfile data/study -k kinship.cXX.txt
+   ```
+
+2. **Environment variable** (persistent):
+   ```bash
+   # JAMMA-specific
+   export JAMMA_NO_TELEMETRY=1
+
+   # Or use the universal convention (also disables telemetry in other CLI tools)
+   export DO_NOT_TRACK=1
+   ```
+
+`JAMMA_NO_TELEMETRY` disables telemetry for any non-empty value.
+`DO_NOT_TRACK` follows the [Do Not Track convention](https://consoledonottrack.com/):
+only `DO_NOT_TRACK=1` opts out; `DO_NOT_TRACK=0` explicitly opts in.
+
+Kinship-only mode (`-gk`) does not emit telemetry regardless of these settings.
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -556,6 +617,8 @@ typical Databricks / HPC environment for large-scale GWAS:
 | `JAMMA_BACKEND` | auto-detect | Force backend: `auto`, `numpy`, or `numpy-streaming`. Auto-detect prefers C+NumPy, then NumPy fallback. |
 | `JAMMA_BLAS_THREADS` | `physical_cores` | Thread count for NumPy BLAS operations (eigendecomp, matmul). Controls MKL/OpenBLAS via `threadpoolctl`, not OpenMP. **Linux only** — has no effect on macOS Accelerate. |
 | `JAMMA_LOCO_WORKERS` | `1` | Parallel chromosome workers in LOCO mode. Each worker holds a full K_loco matrix (`n_samples^2 x 8` bytes), so increase with caution. |
+| `JAMMA_NO_TELEMETRY` | *(unset)* | Set to any non-empty value to disable benchmark telemetry. See [Telemetry](#telemetry). |
+| `DO_NOT_TRACK` | *(unset)* | Universal telemetry opt-out convention. Set to `1` to disable JAMMA telemetry. See [Telemetry](#telemetry). |
 
 ```bash
 # Example: 4 BLAS threads, 2 LOCO workers

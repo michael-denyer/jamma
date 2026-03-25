@@ -4,8 +4,13 @@ Provides :class:`BenchmarkRecord` and :func:`append_benchmark_record` for
 appending structured run data to ``~/.jamma/benchmarks.jsonl``.
 
 Telemetry is on by default.  Set ``JAMMA_NO_TELEMETRY`` to any non-empty
-value (e.g. ``JAMMA_NO_TELEMETRY=1``) to opt out.  Note that ``"0"`` and
-``"false"`` are non-empty strings, so they also disable telemetry.
+value (e.g. ``JAMMA_NO_TELEMETRY=1``) or ``DO_NOT_TRACK=1`` to opt out.
+
+``JAMMA_NO_TELEMETRY`` uses "any non-empty value" semantics — ``"0"`` and
+``"false"`` also disable telemetry.  ``DO_NOT_TRACK`` follows the
+`consoledonottrack.com <https://consoledonottrack.com/>`_ convention:
+only ``DO_NOT_TRACK=1`` opts out; ``DO_NOT_TRACK=0`` explicitly opts in.
+
 Write failures are logged as warnings and never propagate — telemetry must
 never abort a GWAS run.
 """
@@ -28,7 +33,8 @@ def _default_bench_file() -> Path:
     """Return (and cache) the default benchmark file path.
 
     Deferred so ``Path.home()`` is not evaluated at import time, which
-    would raise ``RuntimeError`` in environments without ``HOME`` set.
+    would raise ``RuntimeError`` (Python 3.12+) or ``KeyError`` (older
+    Pythons) in environments without ``HOME`` set.
     """
     global _DEFAULT_BENCH_FILE
     if _DEFAULT_BENCH_FILE is None:
@@ -82,18 +88,23 @@ def append_benchmark_record(
 
     Never raises.  Write failures are logged as warnings.
 
-    When ``JAMMA_NO_TELEMETRY`` is set to any non-empty value in the
-    environment, this function returns immediately without writing or
-    creating directories.
+    When ``JAMMA_NO_TELEMETRY`` is set to any non-empty value, or
+    ``DO_NOT_TRACK`` is set to ``"1"``, this function returns immediately
+    without writing or creating directories.
 
     Args:
         record: Benchmark data to append.
         path: Override the default file path.  Default: ``~/.jamma/benchmarks.jsonl``.
     """
-    if os.environ.get("JAMMA_NO_TELEMETRY"):
+    if os.environ.get("JAMMA_NO_TELEMETRY") or os.environ.get("DO_NOT_TRACK") == "1":
         return
 
-    dest = path if path is not None else _default_bench_file()
+    try:
+        dest = path if path is not None else _default_bench_file()
+    except (RuntimeError, KeyError) as exc:
+        logger.warning(f"Cannot determine benchmark file path: {exc}")
+        return
+
     try:
         line = json.dumps(record) + "\n"
     except (TypeError, ValueError) as exc:
@@ -110,5 +121,5 @@ def append_benchmark_record(
     except OSError as exc:
         logger.warning(
             f"Could not write benchmark record to {dest}: {exc}. "
-            "Set JAMMA_NO_TELEMETRY=1 to disable telemetry."
+            "Set JAMMA_NO_TELEMETRY=1 or DO_NOT_TRACK=1 to disable telemetry."
         )

@@ -1,6 +1,6 @@
 """Unit tests for jamma.core.telemetry.
 
-Covers TEL-01 through TEL-04 plus edge cases.
+Covers TEL-01 through TEL-06 plus edge cases.
 """
 
 from __future__ import annotations
@@ -141,6 +141,7 @@ def test_opt_out_env_var_skips_write(
     from jamma.core.telemetry import append_benchmark_record
 
     monkeypatch.setenv("JAMMA_NO_TELEMETRY", "1")
+    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
 
     append_benchmark_record({"n_samples": 999}, path=dest)
@@ -151,10 +152,11 @@ def test_opt_out_env_var_skips_write(
 def test_opt_out_env_var_any_truthy_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """TEL-04: Any truthy value for JAMMA_NO_TELEMETRY skips write."""
+    """TEL-04: Any non-empty value for JAMMA_NO_TELEMETRY skips write."""
     from jamma.core.telemetry import append_benchmark_record
 
     monkeypatch.setenv("JAMMA_NO_TELEMETRY", "true")
+    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
 
     append_benchmark_record({"n_samples": 999}, path=dest)
@@ -165,15 +167,138 @@ def test_opt_out_env_var_any_truthy_value(
 def test_opt_out_env_var_not_set_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """TEL-04: Without JAMMA_NO_TELEMETRY, file IS created normally."""
+    """TEL-04: Without JAMMA_NO_TELEMETRY or DO_NOT_TRACK, file IS created normally."""
     from jamma.core.telemetry import append_benchmark_record
 
+    monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
+    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
+    dest = tmp_path / "benchmarks.jsonl"
+
+    append_benchmark_record({"n_samples": 42}, path=dest)
+
+    assert dest.exists()
+
+
+# ---------------------------------------------------------------------------
+# TEL-05: DO_NOT_TRACK=1 skips write entirely
+# ---------------------------------------------------------------------------
+
+
+def test_do_not_track_env_var_skips_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TEL-05: When DO_NOT_TRACK=1, no file is created."""
+    from jamma.core.telemetry import append_benchmark_record
+
+    monkeypatch.setenv("DO_NOT_TRACK", "1")
+    monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
+    dest = tmp_path / "benchmarks.jsonl"
+
+    append_benchmark_record({"n_samples": 999}, path=dest)
+
+    assert not dest.exists()
+
+
+def test_do_not_track_zero_allows_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TEL-05: DO_NOT_TRACK=0 means explicit opt-in per consoledonottrack.com."""
+    from jamma.core.telemetry import append_benchmark_record
+
+    monkeypatch.setenv("DO_NOT_TRACK", "0")
+    monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
+    dest = tmp_path / "benchmarks.jsonl"
+
+    append_benchmark_record({"n_samples": 999}, path=dest)
+
+    assert dest.exists()
+
+
+def test_do_not_track_non_one_allows_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TEL-05: DO_NOT_TRACK values other than '1' do not disable telemetry."""
+    from jamma.core.telemetry import append_benchmark_record
+
+    monkeypatch.setenv("DO_NOT_TRACK", "true")
+    monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
+    dest = tmp_path / "benchmarks.jsonl"
+
+    append_benchmark_record({"n_samples": 999}, path=dest)
+
+    assert dest.exists()
+
+
+def test_do_not_track_unset_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TEL-05: Without DO_NOT_TRACK, file IS created normally."""
+    from jamma.core.telemetry import append_benchmark_record
+
+    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
 
     append_benchmark_record({"n_samples": 42}, path=dest)
 
     assert dest.exists()
+
+
+# ---------------------------------------------------------------------------
+# TEL-06: --no-telemetry CLI flag sets JAMMA_NO_TELEMETRY
+# ---------------------------------------------------------------------------
+
+
+def test_no_telemetry_flag_sets_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TEL-06: --no-telemetry sets JAMMA_NO_TELEMETRY=1 in the environment."""
+    import os
+
+    from click.testing import CliRunner
+
+    from jamma.cli import main
+
+    monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
+
+    env_captured: dict[str, str | None] = {}
+
+    def capture_env(**_kwargs: object) -> None:
+        env_captured["JAMMA_NO_TELEMETRY"] = os.environ.get("JAMMA_NO_TELEMETRY")
+
+    # Patch _run_lmm so we don't need real data files — just need to reach
+    # the point after os.environ is set.
+    with patch("jamma.cli._run_lmm", side_effect=capture_env):
+        runner = CliRunner()
+        runner.invoke(
+            main,
+            ["--no-telemetry", "-lmm", "1", "-bfile", "dummy", "-k", "dummy.cXX.txt"],
+        )
+
+    assert env_captured.get("JAMMA_NO_TELEMETRY") == "1"
+
+
+# ---------------------------------------------------------------------------
+# Edge: _default_bench_file() failure (no HOME)
+# ---------------------------------------------------------------------------
+
+
+def test_no_home_warns_not_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Edge: When Path.home() fails, logs a warning, does not raise."""
+    from loguru import logger
+
+    from jamma.core import telemetry
+    from jamma.core.telemetry import append_benchmark_record
+
+    monkeypatch.setattr(telemetry, "_DEFAULT_BENCH_FILE", None)
+    monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
+    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
+
+    with (
+        patch("pathlib.Path.home", side_effect=RuntimeError("no home dir")),
+        patch.object(logger, "warning") as mock_warning,
+    ):
+        append_benchmark_record({"n_samples": 10})  # no path= override
+        assert mock_warning.call_count == 1
+        assert "path" in str(mock_warning.call_args).lower()
 
 
 # ---------------------------------------------------------------------------

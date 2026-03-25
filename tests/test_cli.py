@@ -34,6 +34,7 @@ EXAMPLE_BFILE = Path(__file__).parent / "fixtures" / "gemma_synthetic" / "test"
         "-hwe",
         "-snps",
         "-ksnps",
+        "--no-telemetry",
     ],
 )
 def test_cli_help_shows_flag(flag: str):

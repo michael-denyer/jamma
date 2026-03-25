@@ -238,7 +238,11 @@ class PipelineRunner:
                 BenchmarkRecord,
                 append_benchmark_record,
             )
+        except ImportError:
+            logger.warning("Telemetry module not available", exc_info=True)
+            return
 
+        try:
             record: BenchmarkRecord = {
                 "timestamp": datetime.now(UTC).isoformat(),
                 "jamma_version": jamma.__version__,
@@ -248,11 +252,11 @@ class PipelineRunner:
                 "backend": plan.runner_name,
                 "lmm_mode": self.config.lmm_mode,
                 "loco": self.config.loco,
-                "kinship_s": result.timing.get("kinship_s"),
-                "lmm_s": result.timing.get("lmm_s"),
-                "total_s": result.timing.get("total_s"),
-                "rotation_s": result.timing.get("rotation_s"),
             }
+            for key in ("kinship_s", "lmm_s", "total_s", "rotation_s"):
+                val = result.timing.get(key)
+                if val is not None:
+                    record[key] = val  # type: ignore[literal-required]
             append_benchmark_record(record)
         except Exception:
             logger.warning("Telemetry emission failed", exc_info=True)

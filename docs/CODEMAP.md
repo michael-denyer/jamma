@@ -213,8 +213,8 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nd | `compute_wald_stats_workspace()` | C extension: OpenMP Wald test with workspace API | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
 | 4Nd | `_compile_accel.py` | Post-install C extension compilation | [_compile_accel.py](../src/jamma/lmm/_compile_accel.py) |
 | 4Ne | `run_lmm_association_numpy_streaming()` | NumPy disk streaming (two-pass, full pipeline support, C extension) | [runner_numpy_streaming.py:103](../src/jamma/lmm/runner_numpy_streaming.py#L103) |
-| 4Nf | `select_execution_mode()` | Unified backend+mode selection | [runner.py:83](../src/jamma/lmm/runner.py#L83) |
-| 4Nf | `run_lmm()` | Unified dispatch to all runners | [runner.py:233](../src/jamma/lmm/runner.py#L233) |
+| 4Nf | `select_execution_mode()` | Batch vs streaming mode selection | [runner.py:74](../src/jamma/lmm/runner.py#L74) |
+| 4Nf | `run_lmm()` | Unified dispatch to all runners | [runner.py:183](../src/jamma/lmm/runner.py#L183) |
 | 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:17](../src/jamma/lmm/schema.py#L17) |
 | 4Nh | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:43](../src/jamma/lmm/schema.py#L43) |
 | 4Ni | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:43](../src/jamma/lmm/results.py#L43) |
@@ -376,33 +376,36 @@ flowchart TD
 
 ## Backend Architecture
 
-`PipelineRunner` selects a backend at startup via `detect_backend()` and routes all LMM computation through that backend. The NumPy backend is the sole production backend; batch or streaming mode is selected based on memory availability.
+`PipelineRunner` always uses the NumPy backend. `select_execution_mode()` chooses batch or streaming mode based on memory availability. `_run_batch` handles in-memory genotypes; `_run_streaming` reads chunks from disk.
 
 ```mermaid
 flowchart TD
     PIPE["PipelineRunner"]
-    DET["detect_backend()"]
+    SEL["select_execution_mode()"]
     PREP["prepare_common.py<br>(covariates, eigen, null model)"]
 
     subgraph NP["NumPy Backend"]
         direction TB
-        RN["runner_numpy / runner_numpy_streaming"]
+        BATCH["_run_batch (runner_numpy)"]
+        STREAM["_run_streaming (runner_numpy_streaming)"]
         CN["compute_numpy.py"]
         LN["likelihood_numpy.py"]
         SP["special.py<br>(stdlib betainc/chi2)"]
     end
 
-    PIPE --> DET
-    DET --> NP
+    PIPE --> SEL
+    SEL -->|"batch"| BATCH
+    SEL -->|"streaming"| STREAM
     PIPE --> PREP
     PREP --> NP
-    RN --> CN --> LN
+    BATCH --> CN --> LN
+    STREAM --> CN
     LN --> SP
 ```
 
 ### Backend Selection
 
-Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto-detect (C+NumPy if C extension available, else NumPy fallback).
+Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch if memory sufficient, streaming otherwise).
 
 ### Feature Support
 
@@ -452,7 +455,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto-detect (
 | NumPy chunk compute | [compute_numpy.py](../src/jamma/lmm/compute_numpy.py) |
 | Shared preparation | [prepare_common.py](../src/jamma/lmm/prepare_common.py) |
 | Special functions | [special.py](../src/jamma/lmm/special.py) |
-| Backend detection | [backend.py](../src/jamma/core/backend.py) |
+| Backend info | [backend.py](../src/jamma/core/backend.py) |
 | LOCO runner | [lmm/loco.py](../src/jamma/lmm/loco.py) |
 | Result writer | [lmm/io.py:99](../src/jamma/lmm/io.py#L99) |
 | Memory estimation | [memory.py:197](../src/jamma/core/memory.py#L197) |

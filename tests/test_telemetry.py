@@ -16,10 +16,12 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def test_append_creates_file(tmp_path: Path) -> None:
+def test_append_creates_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """TEL-01: append_benchmark_record creates the file and writes valid JSONL."""
     from jamma.core.telemetry import append_benchmark_record
 
+    monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
+    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
     assert not dest.exists()
 
@@ -33,10 +35,14 @@ def test_append_creates_file(tmp_path: Path) -> None:
     assert record["backend"] == "numpy-batch"
 
 
-def test_append_creates_parent_dirs(tmp_path: Path) -> None:
+def test_append_creates_parent_dirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """TEL-01: append_benchmark_record creates parent directories if absent."""
     from jamma.core.telemetry import append_benchmark_record
 
+    monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
+    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     dest = tmp_path / "nested" / "dir" / "benchmarks.jsonl"
     assert not dest.parent.exists()
 
@@ -52,12 +58,16 @@ def test_append_creates_parent_dirs(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_write_failure_warns_not_raises(tmp_path: Path) -> None:
+def test_write_failure_warns_not_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """TEL-02: OSError during write logs a warning, does not raise."""
     from loguru import logger
 
     from jamma.core.telemetry import append_benchmark_record
 
+    monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
+    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     # Point to a path where the parent cannot be created (file as parent dir)
     blocker = tmp_path / "blocker"
     blocker.write_text("I am a file, not a directory")
@@ -71,12 +81,16 @@ def test_write_failure_warns_not_raises(tmp_path: Path) -> None:
         assert "benchmark" in warning_msg.lower() or str(dest) in warning_msg
 
 
-def test_write_failure_on_readonly_file(tmp_path: Path) -> None:
+def test_write_failure_on_readonly_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """TEL-02: OSError on read-only file logs a warning, does not raise."""
     from loguru import logger
 
     from jamma.core.telemetry import append_benchmark_record
 
+    monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
+    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
     dest.write_text("")  # create the file
     dest.chmod(0o444)  # read-only
@@ -94,10 +108,14 @@ def test_write_failure_on_readonly_file(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_multiple_records_appended(tmp_path: Path) -> None:
+def test_multiple_records_appended(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """TEL-03: Two sequential calls produce two independently parseable JSON lines."""
     from jamma.core.telemetry import append_benchmark_record
 
+    monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
+    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
 
     append_benchmark_record({"n_samples": 1000, "backend": "numpy-batch"}, path=dest)
@@ -116,10 +134,14 @@ def test_multiple_records_appended(tmp_path: Path) -> None:
     assert rec2["backend"] == "numpy-streaming"
 
 
-def test_each_line_independently_parseable(tmp_path: Path) -> None:
+def test_each_line_independently_parseable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """TEL-03: Each JSONL line must be independently parseable."""
     from jamma.core.telemetry import append_benchmark_record
 
+    monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
+    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
     for i in range(5):
         append_benchmark_record({"n_samples": i * 100, "n_snps": i * 1000}, path=dest)
@@ -306,12 +328,16 @@ def test_no_home_warns_not_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_non_serializable_value_warns_not_raises(tmp_path: Path) -> None:
+def test_non_serializable_value_warns_not_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Edge: Non-serializable value in record logs a warning, does not raise."""
     from loguru import logger
 
     from jamma.core.telemetry import append_benchmark_record
 
+    monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
+    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
     bad_record = {"bad_value": object()}  # type: ignore[dict-item]
 

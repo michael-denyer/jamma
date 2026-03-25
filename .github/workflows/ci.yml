@@ -51,11 +51,6 @@ jobs:
             install_args: "--extra dev"
             name: "Linux + MKL ILP64"
             ilp64_numpy: true
-          - os: ubuntu-latest
-            python-version: "3.12"
-            install_args: "--extra dev"
-            name: "Linux + BLIS ILP64"
-            blis_ilp64: true
     name: ${{ matrix.name }}
     timeout-minutes: 20
     steps:
@@ -82,21 +77,6 @@ jobs:
           blas = cfg.get('Build Dependencies', {}).get('blas', {})
           print(f'numpy BLAS: {blas}')
           "
-
-      - name: Download BLIS ILP64 binary
-        if: matrix.blis_ilp64
-        run: |
-          mkdir -p src/jamma/jlinalg/libs
-          gh release download v0.2.0 \
-            --repo michael-denyer/blis-prebuilt \
-            --pattern "libblis-x86_64.so" \
-            --dir src/jamma/jlinalg/libs/ \
-            --clobber
-          mv src/jamma/jlinalg/libs/libblis-x86_64.so src/jamma/jlinalg/libs/libblis.so
-          echo "BLIS ILP64 binary ready:"
-          ls -lh src/jamma/jlinalg/libs/
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compile C extensions
         run: |

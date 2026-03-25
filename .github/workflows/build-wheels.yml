@@ -17,27 +17,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download BLIS binary
-        continue-on-error: true
-        run: |
-          mkdir -p src/jamma/jlinalg/libs
-          # Download only the platform-appropriate BLIS binary.
-          # The prebuilt libblis-x86_64.so targets glibc 2.39 (Ubuntu 24.04),
-          # which is too recent for manylinux_2_28. auditwheel rejects wheels
-          # containing .so files with too-recent glibc symbols, even with
-          # --exclude. Skip BLIS on Linux — it's dlopen'd at runtime, optional.
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            gh release download v0.2.0 \
-              --repo michael-denyer/blis-prebuilt \
-              --pattern "libblis-firestorm.dylib" \
-              --dir src/jamma/jlinalg/libs/ \
-              || echo "BLIS download failed (expected if repo not ready)"
-          else
-            echo "Skipping BLIS on Linux (glibc version mismatch with manylinux_2_28)"
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.3.1
         env:
@@ -47,19 +26,13 @@ jobs:
           CIBW_SKIP: "*-win* *-manylinux_i686 *-musllinux*"
           # macOS: build arm64 only (Intel Mac is EOL)
           CIBW_ARCHS_MACOS: "arm64"
-          # macOS deployment target: bundled BLIS (blis-prebuilt v0.2.0) was
-          # compiled for macOS 14.0. delocate checks all bundled dylibs against
-          # the wheel's platform tag and rejects mismatches. arm64 requires
-          # 11.0+ anyway; 14.0 is Sonoma (2023), reasonable minimum.
           CIBW_ENVIRONMENT_MACOS: 'MACOSX_DEPLOYMENT_TARGET=14.0'
-          # Linux: x86_64 only. Skip BLIS — prebuilt .so targets glibc 2.39,
-          # incompatible with manylinux_2_28. Linux wheels use jlinalg-own dgemm.
+          # Linux: x86_64 only
           CIBW_ARCHS_LINUX: "x86_64"
-          CIBW_ENVIRONMENT_LINUX: 'JLINALG_SKIP_BLIS=1'
           # Install libgomp in manylinux_2_28 container (AlmaLinux 8, dnf)
           CIBW_BEFORE_BUILD_LINUX: "dnf install -y libgomp"
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel}"
-          CIBW_REPAIR_WHEEL_COMMAND_MACOS: "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v -e libblis {wheel}"
+          CIBW_REPAIR_WHEEL_COMMAND_MACOS: "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
           # Smoke test: import + numerical sanity (catches ABI mismatches)
           CIBW_TEST_COMMAND: >-
             python {project}/scripts/smoke_test_c_extension.py &&
@@ -78,16 +51,7 @@ jobs:
             exit 1
           fi
           for whl in "${wheels[@]}"; do
-            tmpdir=$(mktemp -d)
-            unzip -q "$whl" -d "$tmpdir"
-            # Check for BLIS binary in wheel
-            blis=$(find "$tmpdir" -path '*/jlinalg/libs/libblis*' | head -1)
-            if [ -n "$blis" ]; then
-              echo "OK: BLIS bundled in $(basename "$whl"): $(basename "$blis")"
-            else
-              echo "INFO: No BLIS in $(basename "$whl") (jlinalg own dgemm will be used)"
-            fi
-            rm -rf "$tmpdir"
+            echo "OK: $(basename "$whl")"
           done
 
       - uses: actions/upload-artifact@v4
@@ -101,35 +65,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download BLIS binary
-        continue-on-error: true
-        run: |
-          mkdir -p src/jamma/jlinalg/libs
-          # Download only the platform-appropriate BLIS binary.
-          # The prebuilt libblis-x86_64.so targets glibc 2.39 (Ubuntu 24.04),
-          # which is too recent for manylinux_2_28. auditwheel rejects wheels
-          # containing .so files with too-recent glibc symbols, even with
-          # --exclude. Skip BLIS on Linux — it's dlopen'd at runtime, optional.
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            gh release download v0.2.0 \
-              --repo michael-denyer/blis-prebuilt \
-              --pattern "libblis-firestorm.dylib" \
-              --dir src/jamma/jlinalg/libs/ \
-              || echo "BLIS download failed (expected if repo not ready)"
-          else
-            echo "Skipping BLIS on Linux (glibc version mismatch with manylinux_2_28)"
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Build AVX2-optimized wheels
         uses: pypa/cibuildwheel@v3.3.1
         env:
           # Build for CPython 3.11-3.13, Linux x86_64 only
           CIBW_BUILD: "cp311-manylinux_x86_64 cp312-manylinux_x86_64 cp313-manylinux_x86_64"
-          # AVX2 optimization flags via CFLAGS (picked up by hatch_build.py).
-          # Skip BLIS — prebuilt .so targets glibc 2.39, incompatible with manylinux_2_28.
-          CIBW_ENVIRONMENT_LINUX: 'CFLAGS="-march=x86-64-v3 -mavx2" JLINALG_SKIP_BLIS=1'
+          # AVX2 optimization flags via CFLAGS (picked up by hatch_build.py)
+          CIBW_ENVIRONMENT_LINUX: 'CFLAGS="-march=x86-64-v3 -mavx2"'
           # Install libgomp in manylinux container (AlmaLinux 8, dnf)
           CIBW_BEFORE_BUILD_LINUX: "dnf install -y libgomp"
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel}"

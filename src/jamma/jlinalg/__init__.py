@@ -66,6 +66,62 @@ try:
 
     HAS_C_EXTENSION: bool = True
 
+    # C extension loaded, but vendor BLAS/LAPACK may not be available.
+    # Replace C functions with NumPy fallbacks for unavailable operations.
+    if not blas_has_dsyrk:
+
+        def dsyrk(X: _np.ndarray) -> _np.ndarray:  # type: ignore[misc]
+            """NumPy fallback: K = X @ X.T."""
+            if X.ndim != 2:
+                raise ValueError(f"dsyrk: X must be a 2-D array, got {X.ndim}-D")
+            X64 = _np.ascontiguousarray(X, dtype=_np.float64)
+            result = _np.dot(X64, X64.T)
+            il = _np.tril_indices_from(result, -1)
+            result.T[il] = result[il]
+            return result
+
+    if not blas_has_dsyevd and not blas_has_dsyevr:
+
+        def eigh(  # type: ignore[misc]
+            K: _np.ndarray, inplace: bool = False
+        ) -> tuple[_np.ndarray, _np.ndarray]:
+            """NumPy fallback: eigendecomposition of symmetric matrix."""
+            if K.ndim != 2:
+                raise ValueError(f"eigh: K must be a 2-D array, got {K.ndim}-D")
+            if K.shape[0] != K.shape[1]:
+                raise ValueError(f"eigh: K must be square, got shape {K.shape}")
+            K64 = _np.asarray(K, dtype=_np.float64)
+            w, v = _np.linalg.eigh(K64)
+            if inplace:
+                K[:] = v
+                return w, K
+            return w, v
+
+    if not blas_has_dgeqrf:
+
+        def qr(A: _np.ndarray) -> tuple[_np.ndarray, _np.ndarray]:  # type: ignore[misc]
+            """NumPy fallback: reduced QR factorization."""
+            if A.ndim != 2:
+                raise ValueError(f"qr: A must be a 2-D array, got {A.ndim}-D")
+            return _np.linalg.qr(A.astype(_np.float64, copy=False), mode="reduced")
+
+    if not blas_has_dgesvd:
+
+        def svd(  # type: ignore[misc]
+            A: _np.ndarray, compute_uv: bool = True
+        ) -> tuple[_np.ndarray, _np.ndarray, _np.ndarray] | _np.ndarray:
+            """NumPy fallback: reduced SVD."""
+            if A.ndim != 2:
+                raise ValueError(f"svd: A must be a 2-D array, got {A.ndim}-D")
+            if A.shape[0] < A.shape[1]:
+                raise ValueError(
+                    f"svd: requires m >= n, got shape {A.shape}"
+                )
+            A64 = A.astype(_np.float64, copy=False)
+            if compute_uv:
+                return _np.linalg.svd(A64, full_matrices=False)
+            return _np.linalg.svd(A64, compute_uv=False)
+
 except ImportError as _exc:
     # Auto-recompile: try once before falling back to NumPy.
     _recompiled = False

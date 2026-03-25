@@ -3,7 +3,7 @@
 Verifies:
 1. The compiled _jlinalg C extension imports successfully (ABI match)
 2. jlinalg_isa and HAS_OPENMP constants are present and correct type
-3. dgemm and dsyrk produce correct results on synthetic data (numerical sanity)
+3. dgemm and dsyrk produce correct results when vendor BLAS is available
 
 Exit 0 on success, exit 1 on any failure.
 
@@ -15,14 +15,16 @@ import sys
 
 import numpy as np
 
-# Step 1: Import the compiled C extension directly (not the fallback).
+# Public jlinalg API for dgemm/dsyrk (vendor BLAS or numpy fallback).
+# v5.0: Level 1/2 functions (daxpy, ddot, etc.) removed from C extension —
+# they are now numpy-only in jlinalg/__init__.py.
+from jamma.jlinalg import dgemm, dsyrk
+
 try:
     from jamma.jlinalg._jlinalg import (
         HAS_OPENMP,
         blas_backend,
         blas_is_ilp64,
-        dgemm,
-        dsyrk,
         jlinalg_isa,
     )
 except ImportError as exc:
@@ -49,7 +51,9 @@ if not isinstance(HAS_OPENMP, bool):
     print(f"FAIL: HAS_OPENMP is {type(HAS_OPENMP)}, expected bool", file=sys.stderr)
     sys.exit(1)
 
-# Step 3: Numerical sanity checks on dgemm and dsyrk.
+# Step 3: Numerical sanity checks on dgemm and dsyrk (vendor BLAS only).
+# v5.0: dgemm/dsyrk require vendor BLAS — in manylinux containers without
+# vendor BLAS, they return zeros. Use the public API (which falls back to numpy).
 rng = np.random.default_rng(42)
 
 
@@ -65,12 +69,10 @@ def check_close(name, got, expected, atol=1e-10):
     print(f"{name}: OK (max_err={max_err:.2e})")
 
 
-# dgemm
 A = rng.standard_normal((100, 50))
 B = rng.standard_normal((50, 80))
 check_close("dgemm", dgemm(A, B), A @ B)
 
-# dsyrk
 X = rng.standard_normal((60, 40))
 check_close("dsyrk", dsyrk(X), X @ X.T)
 

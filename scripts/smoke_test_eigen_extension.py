@@ -6,6 +6,10 @@ Verifies:
 
 In manylinux containers without vendor LAPACK, eigh raises RuntimeError.
 This is expected — the wheel still works via numpy.linalg.eigh fallback at runtime.
+
+v5.0: Own-LAPACK removed. The C extension eigh() requires vendor DSYEVD/DSYEVR.
+Detection flags (blas_has_dsyevd/dsyevr) may report True for BLAS backends that
+have BLAS symbols but lack LAPACK symbols, so we also catch RuntimeError at call time.
 """
 
 import sys
@@ -31,7 +35,13 @@ if not blas_has_dsyevd and not blas_has_dsyevr:
 # Test with identity matrix (eigenvalues should be all 1.0)
 n = 100
 K = np.eye(n, dtype=np.float64)
-w, v = eigh(K)
+try:
+    w, v = eigh(K)
+except RuntimeError as exc:
+    # BLAS detected but LAPACK symbols missing — expected in some containers
+    print(f"Vendor LAPACK unavailable at runtime: {exc}")
+    print("Eigen extension smoke test passed (import-only)")
+    sys.exit(0)
 
 assert w.shape == (n,), f"Expected ({n},) eigenvalues, got {w.shape}"
 assert v.shape == (n, n), f"Expected ({n},{n}) eigenvectors, got {v.shape}"

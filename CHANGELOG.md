@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.0.1] - 2026-03-25
+
+### Fixed
+
+- Fix CI smoke tests for v5.0 simplification: remove `daxpy` import from C extension (moved to numpy-only), handle missing vendor LAPACK gracefully in eigh smoke test
+
 ## [5.0.0] - 2026-03-25
 
 ### Changed

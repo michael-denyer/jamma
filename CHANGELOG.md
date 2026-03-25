@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-03-25
+
+### Changed
+
+- **BREAKING**: Remove JAX backend — NumPy+C is now the only compute path
+- Strip own-BLAS/LAPACK C implementations (dgemm, dsyrk, dsytrd, dstedc, dormtr); vendor-only dispatch
+- Archive JAX runners, tests, and scripts to `legacy/`
+- Simplify jlinalg to vendor-BLAS-only dispatch (ILP64 MKL/OpenBLAS/Accelerate → NumPy fallback)
+- Add clang-format and cppcheck pre-commit hooks for C extensions
+- Add SeededETA progress bars with model-predicted initial ETAs
+- Net -21,900 lines removed
+
 ## [4.6.3] - 2026-03-24
 
 ### Changed

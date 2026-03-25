@@ -4,17 +4,17 @@
  * Dispatch priority (consistency with GEMMA over raw speed):
  *   1. ILP64 with LAPACK (dsyevd): MKL-ILP64, Accelerate-ILP64
  *   2. ILP64 BLAS-only: BLIS-ILP64 (no LAPACK)
- *   3. jlinalg own blocking dgemm — consistent, no integer overflow concerns
- *   4. LP64 (detected but not wired for dgemm — different FP accumulation)
+ *   3. numpy fallback (no vendor BLAS found)
+ *   4. LP64 (detected but not wired for dgemm -- different FP accumulation)
  *
  * Discovery model: discover-all-then-select-best.  All three discovery paths
  * (system BLAS, pip-installed MKL, bundled BLIS) run unconditionally.  The
  * best candidate is selected based on capabilities (ILP64 + LAPACK > ILP64
- * BLAS-only > jlinalg-own > LP64).
+ * BLAS-only > numpy-fallback > LP64).
  *
- * When an external dgemm is found, replaces jlinalg_dispatch.dgemm with a
- * wrapper.  CBLAS backends handle row-major natively; Fortran backends
- * use the A/B swap trick for column-major conversion.
+ * When an external dgemm is found, the vendor function pointers are wired.
+ * CBLAS backends handle row-major natively; Fortran backends use the A/B
+ * swap trick for column-major conversion.
  *
  * The dlopen machinery is Unix-only (#if !defined(_WIN32)); on Windows
  * blas_dispatch_init() returns 0 immediately (no external dispatch).
@@ -43,43 +43,43 @@
  * ---------------------------------------------------------------------------
  */
 static int g_is_ilp64 = 0;
-static jlinalg_dgemm_lp64_fn       g_dgemm_lp64       = NULL;
-static jlinalg_dgemm_ilp64_fn      g_dgemm_ilp64      = NULL;
-static jlinalg_cblas_dgemm_fn      g_cblas_dgemm       = NULL;  /* LP64 CBLAS */
-static jlinalg_cblas_dgemm_ilp64_fn g_cblas_dgemm_ilp64 = NULL;  /* ILP64 CBLAS (Accelerate) */
-static const char *g_backend_name = "jlinalg-own";
+static jlinalg_dgemm_lp64_fn g_dgemm_lp64 = NULL;
+static jlinalg_dgemm_ilp64_fn g_dgemm_ilp64 = NULL;
+static jlinalg_cblas_dgemm_fn g_cblas_dgemm = NULL;             /* LP64 CBLAS */
+static jlinalg_cblas_dgemm_ilp64_fn g_cblas_dgemm_ilp64 = NULL; /* ILP64 CBLAS (Accelerate) */
+static const char *g_backend_name = "numpy-fallback";
 static void *g_blas_handle = NULL;
 
 /* dsyrk dispatch pointers — ILP64 only (LP64 not wired, same policy as dgemm) */
 static jlinalg_cblas_dsyrk_ilp64_fn g_cblas_dsyrk_ilp64 = NULL;
-static jlinalg_dsyrk_ilp64_fn       g_dsyrk_ilp64       = NULL;
+static jlinalg_dsyrk_ilp64_fn g_dsyrk_ilp64 = NULL;
 
 /* dsyevd dispatch pointers (Fortran) */
-static jlinalg_dsyevd_lp64_fn       g_dsyevd_lp64       = NULL;
-static jlinalg_dsyevd_ilp64_fn      g_dsyevd_ilp64      = NULL;
+static jlinalg_dsyevd_lp64_fn g_dsyevd_lp64 = NULL;
+static jlinalg_dsyevd_ilp64_fn g_dsyevd_ilp64 = NULL;
 
 /* LAPACKE dsyevd dispatch pointers (C interface, row-major) */
-static jlinalg_lapacke_dsyevd_lp64_fn   g_lapacke_dsyevd_lp64   = NULL;
-static jlinalg_lapacke_dsyevd_ilp64_fn  g_lapacke_dsyevd_ilp64  = NULL;
+static jlinalg_lapacke_dsyevd_lp64_fn g_lapacke_dsyevd_lp64 = NULL;
+static jlinalg_lapacke_dsyevd_ilp64_fn g_lapacke_dsyevd_ilp64 = NULL;
 
 /* dsyevr dispatch pointers (Fortran) — memory-pressure fallback for dsyevd */
-static jlinalg_dsyevr_lp64_fn       g_dsyevr_lp64       = NULL;
-static jlinalg_dsyevr_ilp64_fn      g_dsyevr_ilp64      = NULL;
+static jlinalg_dsyevr_lp64_fn g_dsyevr_lp64 = NULL;
+static jlinalg_dsyevr_ilp64_fn g_dsyevr_ilp64 = NULL;
 
 /* dgeqrf dispatch pointers (Fortran) */
-static jlinalg_dgeqrf_lp64_fn  g_dgeqrf_lp64  = NULL;
+static jlinalg_dgeqrf_lp64_fn g_dgeqrf_lp64 = NULL;
 static jlinalg_dgeqrf_ilp64_fn g_dgeqrf_ilp64 = NULL;
 
 /* dorgqr dispatch pointers (Fortran) */
-static jlinalg_dorgqr_lp64_fn  g_dorgqr_lp64  = NULL;
+static jlinalg_dorgqr_lp64_fn g_dorgqr_lp64 = NULL;
 static jlinalg_dorgqr_ilp64_fn g_dorgqr_ilp64 = NULL;
 
 /* dgesvd dispatch pointers (Fortran) */
-static jlinalg_dgesvd_lp64_fn  g_dgesvd_lp64  = NULL;
+static jlinalg_dgesvd_lp64_fn g_dgesvd_lp64 = NULL;
 static jlinalg_dgesvd_ilp64_fn g_dgesvd_ilp64 = NULL;
 
 /* Capability flags */
-static int g_has_dsyrk  = 0;
+static int g_has_dsyrk = 0;
 static int g_has_dsyevd = 0;
 static int g_has_lapacke_dsyevd = 0;
 static int g_has_dsyevr = 0;
@@ -89,8 +89,8 @@ static int g_has_dgesvd = 0;
 /* LP64 overflow guard: floor(sqrt(2^31 - 1)) */
 #define LP64_DIM_MAX 46340
 
-/* LP64 overflow counter: incremented when dimensions exceed LP64_DIM_MAX
- * and the fallback to jlinalg-own dgemm is used.  Resettable by py_eigh. */
+/* LP64 overflow counter: incremented when dimensions exceed LP64_DIM_MAX.
+ * Resettable by py_eigh. */
 static int g_lp64_overflow_count = 0;
 
 int blas_dispatch_lp64_overflow_count(void) {
@@ -116,10 +116,8 @@ static int _debug_enabled(void) {
  */
 static const char *_detect_backend_name(const char *lib_path, int is_ilp64) {
     if (lib_path) {
-        if (strstr(lib_path, "mkl"))
-            return is_ilp64 ? "MKL-ILP64" : "MKL-LP64";
-        if (strstr(lib_path, "openblas"))
-            return is_ilp64 ? "OpenBLAS-ILP64" : "OpenBLAS-LP64";
+        if (strstr(lib_path, "mkl")) return is_ilp64 ? "MKL-ILP64" : "MKL-LP64";
+        if (strstr(lib_path, "openblas")) return is_ilp64 ? "OpenBLAS-ILP64" : "OpenBLAS-LP64";
     }
 #ifdef __APPLE__
     return is_ilp64 ? "Accelerate-ILP64" : "Accelerate";
@@ -133,70 +131,60 @@ static const char *_detect_backend_name(const char *lib_path, int is_ilp64) {
  * ---------------------------------------------------------------------------
  */
 typedef struct {
-    int     found;
-    int     is_ilp64;
-    int     has_lapack;     /* has LAPACK dsyevd (only routine currently resolved) */
-    int     has_dsyrk;
+    int found;
+    int is_ilp64;
+    int has_lapack; /* has LAPACK dsyevd (only routine currently resolved) */
+    int has_dsyrk;
     const char *name;
-    void   *handle;
+    void *handle;
     /* dgemm */
-    jlinalg_dgemm_lp64_fn        dgemm_lp64;
-    jlinalg_dgemm_ilp64_fn       dgemm_ilp64;
-    jlinalg_cblas_dgemm_fn       cblas_dgemm;
+    jlinalg_dgemm_lp64_fn dgemm_lp64;
+    jlinalg_dgemm_ilp64_fn dgemm_ilp64;
+    jlinalg_cblas_dgemm_fn cblas_dgemm;
     jlinalg_cblas_dgemm_ilp64_fn cblas_dgemm_ilp64;
     /* dsyrk */
-    jlinalg_cblas_dsyrk_fn       cblas_dsyrk;
+    jlinalg_cblas_dsyrk_fn cblas_dsyrk;
     jlinalg_cblas_dsyrk_ilp64_fn cblas_dsyrk_ilp64;
-    jlinalg_dsyrk_lp64_fn        dsyrk_lp64;
-    jlinalg_dsyrk_ilp64_fn       dsyrk_ilp64;
+    jlinalg_dsyrk_lp64_fn dsyrk_lp64;
+    jlinalg_dsyrk_ilp64_fn dsyrk_ilp64;
     /* dsyevd (Fortran) */
-    jlinalg_dsyevd_lp64_fn       dsyevd_lp64;
-    jlinalg_dsyevd_ilp64_fn      dsyevd_ilp64;
+    jlinalg_dsyevd_lp64_fn dsyevd_lp64;
+    jlinalg_dsyevd_ilp64_fn dsyevd_ilp64;
     /* LAPACKE dsyevd (C interface, row-major — no transpose needed) */
-    jlinalg_lapacke_dsyevd_lp64_fn   lapacke_dsyevd_lp64;
-    jlinalg_lapacke_dsyevd_ilp64_fn  lapacke_dsyevd_ilp64;
-    int     has_lapacke_dsyevd;
+    jlinalg_lapacke_dsyevd_lp64_fn lapacke_dsyevd_lp64;
+    jlinalg_lapacke_dsyevd_ilp64_fn lapacke_dsyevd_ilp64;
+    int has_lapacke_dsyevd;
     /* dsyevr (Fortran) — memory-pressure fallback for dsyevd */
-    jlinalg_dsyevr_lp64_fn           dsyevr_lp64;
-    jlinalg_dsyevr_ilp64_fn          dsyevr_ilp64;
-    int     has_dsyevr;
+    jlinalg_dsyevr_lp64_fn dsyevr_lp64;
+    jlinalg_dsyevr_ilp64_fn dsyevr_ilp64;
+    int has_dsyevr;
     /* dgeqrf (Fortran) */
-    jlinalg_dgeqrf_lp64_fn  dgeqrf_lp64;
+    jlinalg_dgeqrf_lp64_fn dgeqrf_lp64;
     jlinalg_dgeqrf_ilp64_fn dgeqrf_ilp64;
-    int     has_dgeqrf;
+    int has_dgeqrf;
     /* dorgqr (Fortran) */
-    jlinalg_dorgqr_lp64_fn  dorgqr_lp64;
+    jlinalg_dorgqr_lp64_fn dorgqr_lp64;
     jlinalg_dorgqr_ilp64_fn dorgqr_ilp64;
     /* dgesvd (Fortran) */
-    jlinalg_dgesvd_lp64_fn  dgesvd_lp64;
+    jlinalg_dgesvd_lp64_fn dgesvd_lp64;
     jlinalg_dgesvd_ilp64_fn dgesvd_ilp64;
-    int     has_dgesvd;
+    int has_dgesvd;
 } blas_candidate_t;
 
 /* ---------------------------------------------------------------------------
  * Symbol resolution — dgemm
  * ---------------------------------------------------------------------------
  */
-static const char *ilp64_dgemm_names[] = {
-    "dgemm_64_",              /* MKL ILP64 */
-    "scipy_dgemm_64_",        /* scipy-openblas64 */
-    "dgemm64_",               /* OpenBLAS INTERFACE64=1, BLIS -b 64 */
-    NULL
-};
+static const char *ilp64_dgemm_names[] = {"dgemm_64_",       /* MKL ILP64 */
+                                          "scipy_dgemm_64_", /* scipy-openblas64 */
+                                          "dgemm64_", /* OpenBLAS INTERFACE64=1, BLIS -b 64 */
+                                          NULL};
 /* Apple Accelerate ILP64 (macOS 13.3+): uses $NEWLAPACK$ILP64 suffix.
  * Fortran interface has no trailing underscore. */
-static const char *accel_ilp64_dgemm_names[] = {
-    "dgemm$NEWLAPACK$ILP64",
-    NULL
-};
-static const char *accel_ilp64_cblas_names[] = {
-    "cblas_dgemm$NEWLAPACK$ILP64",
-    NULL
-};
-static const char *lp64_dgemm_names[] = {
-    "dgemm_",                 /* Standard Fortran / Accelerate */
-    NULL
-};
+static const char *accel_ilp64_dgemm_names[] = {"dgemm$NEWLAPACK$ILP64", NULL};
+static const char *accel_ilp64_cblas_names[] = {"cblas_dgemm$NEWLAPACK$ILP64", NULL};
+static const char *lp64_dgemm_names[] = {"dgemm_", /* Standard Fortran / Accelerate */
+                                         NULL};
 
 /**
  * try_resolve_dgemm_candidate -- Try to resolve dgemm from a dlopen handle.
@@ -205,8 +193,7 @@ static const char *lp64_dgemm_names[] = {
  *
  * lib_path: hint for backend name detection (may be NULL for RTLD_DEFAULT).
  */
-static int try_resolve_dgemm_candidate(void *handle, const char *lib_path,
-                                        blas_candidate_t *c) {
+static int try_resolve_dgemm_candidate(void *handle, const char *lib_path, blas_candidate_t *c) {
     int dbg = _debug_enabled();
 
     /* Try ILP64 symbols first (MKL, OpenBLAS) */
@@ -227,7 +214,9 @@ static int try_resolve_dgemm_candidate(void *handle, const char *lib_path,
     for (const char **name = accel_ilp64_cblas_names; *name; name++) {
         void *sym = dlsym(handle, *name);
         if (sym) {
-            if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved %s (Accelerate ILP64 CBLAS)\n", *name);
+            if (dbg)
+                fprintf(stderr, "jlinalg_dispatch:   resolved %s (Accelerate ILP64 CBLAS)\n",
+                        *name);
             c->cblas_dgemm_ilp64 = (jlinalg_cblas_dgemm_ilp64_fn)sym;
             c->is_ilp64 = 1;
             c->name = "Accelerate-ILP64";
@@ -289,7 +278,8 @@ static void try_resolve_dsyrk(void *handle, blas_candidate_t *c, int is_blis) {
             void *fsym = dlsym(handle, "dsyrk$NEWLAPACK$ILP64");
             if (fsym) {
                 c->dsyrk_ilp64 = (jlinalg_dsyrk_ilp64_fn)fsym;
-                if (dbg) fprintf(stderr, "jlinalg_dispatch:   also resolved dsyrk$NEWLAPACK$ILP64\n");
+                if (dbg)
+                    fprintf(stderr, "jlinalg_dispatch:   also resolved dsyrk$NEWLAPACK$ILP64\n");
             }
             return;
         }
@@ -347,8 +337,7 @@ static void try_resolve_dsyevd(void *handle, blas_candidate_t *c, int is_blis) {
     int dbg = _debug_enabled();
 
     /* BLIS has no LAPACK — skip */
-    if (is_blis)
-        return;
+    if (is_blis) return;
 
     if (c->is_ilp64) {
 #ifdef __APPLE__
@@ -418,8 +407,7 @@ static void try_resolve_dsyevr(void *handle, blas_candidate_t *c, int is_blis) {
     int dbg = _debug_enabled();
 
     /* BLIS has no LAPACK — skip */
-    if (is_blis)
-        return;
+    if (is_blis) return;
 
     if (c->is_ilp64) {
 #ifdef __APPLE__
@@ -468,8 +456,7 @@ static void try_resolve_dgeqrf(void *handle, blas_candidate_t *c, int is_blis) {
     int dbg = _debug_enabled();
 
     /* BLIS has no LAPACK — skip */
-    if (is_blis)
-        return;
+    if (is_blis) return;
 
     if (c->is_ilp64) {
 #ifdef __APPLE__
@@ -514,8 +501,7 @@ static void try_resolve_dgeqrf(void *handle, blas_candidate_t *c, int is_blis) {
 static void try_resolve_dorgqr(void *handle, blas_candidate_t *c, int is_blis) {
     int dbg = _debug_enabled();
 
-    if (is_blis)
-        return;
+    if (is_blis) return;
 
     if (c->is_ilp64) {
 #ifdef __APPLE__
@@ -555,8 +541,7 @@ static void try_resolve_dorgqr(void *handle, blas_candidate_t *c, int is_blis) {
 static void try_resolve_dgesvd(void *handle, blas_candidate_t *c, int is_blis) {
     int dbg = _debug_enabled();
 
-    if (is_blis)
-        return;
+    if (is_blis) return;
 
     if (c->is_ilp64) {
 #ifdef __APPLE__
@@ -614,13 +599,11 @@ static int scan_dir_for_blas_candidate(const char *dirpath, blas_candidate_t *c)
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         /* Look for openblas, mkl, or blis shared libraries */
-        if (!strstr(entry->d_name, "openblas") &&
-            !strstr(entry->d_name, "libmkl") &&
+        if (!strstr(entry->d_name, "openblas") && !strstr(entry->d_name, "libmkl") &&
             !strstr(entry->d_name, "libblis"))
             continue;
         /* Must be a .so or .dylib */
-        if (!strstr(entry->d_name, ".so") && !strstr(entry->d_name, ".dylib"))
-            continue;
+        if (!strstr(entry->d_name, ".so") && !strstr(entry->d_name, ".dylib")) continue;
 
         char fullpath[4096];
         snprintf(fullpath, sizeof(fullpath), "%s/%s", dirpath, entry->d_name);
@@ -633,8 +616,9 @@ static int scan_dir_for_blas_candidate(const char *dirpath, blas_candidate_t *c)
         }
 
         if (try_resolve_dgemm_candidate(handle, fullpath, c)) {
-            if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved dgemm from %s (ilp64=%d)\n",
-                             fullpath, c->is_ilp64);
+            if (dbg)
+                fprintf(stderr, "jlinalg_dispatch:   resolved dgemm from %s (ilp64=%d)\n", fullpath,
+                        c->is_ilp64);
             try_resolve_dsyrk(handle, c, 0);
             try_resolve_dsyevd(handle, c, 0);
             try_resolve_dsyevr(handle, c, 0);
@@ -660,21 +644,27 @@ static void force_numpy_blas_load(void) {
     PyObject *np = PyImport_ImportModule("numpy");
     if (!np) {
         if (dbg) fprintf(stderr, "jlinalg_dispatch: force_numpy_blas_load: numpy import failed\n");
-        PyErr_Clear(); return;
+        PyErr_Clear();
+        return;
     }
 
     PyObject *linalg = PyObject_GetAttrString(np, "linalg");
     if (!linalg) {
-        if (dbg) fprintf(stderr, "jlinalg_dispatch: force_numpy_blas_load: numpy.linalg not found\n");
-        PyErr_Clear(); Py_DECREF(np); return;
+        if (dbg)
+            fprintf(stderr, "jlinalg_dispatch: force_numpy_blas_load: numpy.linalg not found\n");
+        PyErr_Clear();
+        Py_DECREF(np);
+        return;
     }
 
     PyObject *eigh = PyObject_GetAttrString(linalg, "eigh");
     PyObject *eye = PyObject_GetAttrString(np, "eye");
     if (!eigh || !eye) {
         PyErr_Clear();
-        Py_XDECREF(eigh); Py_XDECREF(eye);
-        Py_DECREF(linalg); Py_DECREF(np);
+        Py_XDECREF(eigh);
+        Py_XDECREF(eye);
+        Py_DECREF(linalg);
+        Py_DECREF(np);
         return;
     }
 
@@ -687,7 +677,8 @@ static void force_numpy_blas_load(void) {
         if (eigh_result) {
             Py_DECREF(eigh_result);
         } else {
-            if (dbg) fprintf(stderr, "jlinalg_dispatch: force_numpy_blas_load: eigh(eye(2)) failed\n");
+            if (dbg)
+                fprintf(stderr, "jlinalg_dispatch: force_numpy_blas_load: eigh(eye(2)) failed\n");
             PyErr_Clear();
         }
         Py_DECREF(eye_result);
@@ -696,8 +687,10 @@ static void force_numpy_blas_load(void) {
         PyErr_Clear();
     }
 
-    Py_DECREF(eigh); Py_DECREF(eye);
-    Py_DECREF(linalg); Py_DECREF(np);
+    Py_DECREF(eigh);
+    Py_DECREF(eye);
+    Py_DECREF(linalg);
+    Py_DECREF(np);
 }
 
 /* ---------------------------------------------------------------------------
@@ -725,16 +718,16 @@ static int scan_proc_maps_for_blas_candidate(blas_candidate_t *c) {
         if (!basename) continue;
         basename++;
 
-        if (!strstr(basename, "openblas") && !strstr(basename, "libmkl"))
-            continue;
-        if (!strstr(basename, ".so"))
-            continue;
+        if (!strstr(basename, "openblas") && !strstr(basename, "libmkl")) continue;
+        if (!strstr(basename, ".so")) continue;
 
         if (dbg) fprintf(stderr, "jlinalg_dispatch:   /proc/self/maps candidate: %s\n", path);
 
         void *handle = dlopen(path, RTLD_LAZY | RTLD_NOLOAD);
         if (!handle) {
-            if (dbg) fprintf(stderr, "jlinalg_dispatch:   RTLD_NOLOAD failed, trying full load: %s\n", dlerror());
+            if (dbg)
+                fprintf(stderr, "jlinalg_dispatch:   RTLD_NOLOAD failed, trying full load: %s\n",
+                        dlerror());
             handle = dlopen(path, RTLD_LAZY | RTLD_GLOBAL);
         }
         if (!handle) {
@@ -743,7 +736,10 @@ static int scan_proc_maps_for_blas_candidate(blas_candidate_t *c) {
         }
 
         if (try_resolve_dgemm_candidate(handle, path, c)) {
-            if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved dgemm from /proc/self/maps (ilp64=%d)\n", c->is_ilp64);
+            if (dbg)
+                fprintf(stderr,
+                        "jlinalg_dispatch:   resolved dgemm from /proc/self/maps (ilp64=%d)\n",
+                        c->is_ilp64);
             try_resolve_dsyrk(handle, c, 0);
             try_resolve_dsyevd(handle, c, 0);
             try_resolve_dsyevr(handle, c, 0);
@@ -774,8 +770,9 @@ static void discover_system_blas(blas_candidate_t *c) {
     /* Step 1: RTLD_DEFAULT (catches macOS Accelerate, LD_PRELOAD) */
     if (dbg) fprintf(stderr, "jlinalg_dispatch: step 1 -- RTLD_DEFAULT\n");
     if (try_resolve_dgemm_candidate(RTLD_DEFAULT, NULL, c)) {
-        if (dbg) fprintf(stderr, "jlinalg_dispatch: found via RTLD_DEFAULT (ilp64=%d, backend=%s)\n",
-                         c->is_ilp64, c->name);
+        if (dbg)
+            fprintf(stderr, "jlinalg_dispatch: found via RTLD_DEFAULT (ilp64=%d, backend=%s)\n",
+                    c->is_ilp64, c->name);
         try_resolve_dsyrk(RTLD_DEFAULT, c, 0);
         try_resolve_dsyevd(RTLD_DEFAULT, c, 0);
         try_resolve_dsyevr(RTLD_DEFAULT, c, 0);
@@ -789,8 +786,11 @@ static void discover_system_blas(blas_candidate_t *c) {
     if (dbg) fprintf(stderr, "jlinalg_dispatch: step 2 -- force numpy BLAS load\n");
     force_numpy_blas_load();
     if (try_resolve_dgemm_candidate(RTLD_DEFAULT, NULL, c)) {
-        if (dbg) fprintf(stderr, "jlinalg_dispatch: found via RTLD_DEFAULT after numpy load (ilp64=%d, backend=%s)\n",
-                         c->is_ilp64, c->name);
+        if (dbg)
+            fprintf(stderr,
+                    "jlinalg_dispatch: found via RTLD_DEFAULT after numpy load (ilp64=%d, "
+                    "backend=%s)\n",
+                    c->is_ilp64, c->name);
         try_resolve_dsyrk(RTLD_DEFAULT, c, 0);
         try_resolve_dsyevd(RTLD_DEFAULT, c, 0);
         try_resolve_dsyevr(RTLD_DEFAULT, c, 0);
@@ -803,48 +803,94 @@ static void discover_system_blas(blas_candidate_t *c) {
     /* Step 3: /proc/self/maps scan (Linux only) */
     if (dbg) fprintf(stderr, "jlinalg_dispatch: step 3 -- /proc/self/maps scan\n");
     if (scan_proc_maps_for_blas_candidate(c)) {
-        if (dbg) fprintf(stderr, "jlinalg_dispatch: found via /proc/self/maps (ilp64=%d, backend=%s)\n",
-                         c->is_ilp64, c->name);
+        if (dbg)
+            fprintf(stderr, "jlinalg_dispatch: found via /proc/self/maps (ilp64=%d, backend=%s)\n",
+                    c->is_ilp64, c->name);
         return;
     }
 
     /* Step 4: Scan numpy's lib directories */
     if (dbg) fprintf(stderr, "jlinalg_dispatch: step 4 -- numpy dir scan\n");
     PyObject *np2 = PyImport_ImportModule("numpy");
-    if (!np2) { PyErr_Clear(); return; }
+    if (!np2) {
+        PyErr_Clear();
+        return;
+    }
 
     PyObject *np_file = PyObject_GetAttrString(np2, "__file__");
-    if (!np_file) { PyErr_Clear(); Py_DECREF(np2); return; }
+    if (!np_file) {
+        PyErr_Clear();
+        Py_DECREF(np2);
+        return;
+    }
 
     PyObject *pathlib = PyImport_ImportModule("pathlib");
-    if (!pathlib) { PyErr_Clear(); Py_DECREF(np_file); Py_DECREF(np2); return; }
+    if (!pathlib) {
+        PyErr_Clear();
+        Py_DECREF(np_file);
+        Py_DECREF(np2);
+        return;
+    }
 
     PyObject *Path = PyObject_GetAttrString(pathlib, "Path");
-    if (!Path) { PyErr_Clear(); Py_DECREF(pathlib); Py_DECREF(np_file); Py_DECREF(np2); return; }
+    if (!Path) {
+        PyErr_Clear();
+        Py_DECREF(pathlib);
+        Py_DECREF(np_file);
+        Py_DECREF(np2);
+        return;
+    }
 
     PyObject *p = PyObject_CallFunctionObjArgs(Path, np_file, NULL);
     Py_DECREF(np_file);
-    if (!p) { PyErr_Clear(); Py_DECREF(Path); Py_DECREF(pathlib); Py_DECREF(np2); return; }
+    if (!p) {
+        PyErr_Clear();
+        Py_DECREF(Path);
+        Py_DECREF(pathlib);
+        Py_DECREF(np2);
+        return;
+    }
 
     PyObject *resolved = PyObject_CallMethod(p, "resolve", NULL);
     Py_DECREF(p);
-    if (!resolved) { PyErr_Clear(); Py_DECREF(Path); Py_DECREF(pathlib); Py_DECREF(np2); return; }
+    if (!resolved) {
+        PyErr_Clear();
+        Py_DECREF(Path);
+        Py_DECREF(pathlib);
+        Py_DECREF(np2);
+        return;
+    }
 
     PyObject *np_dir = PyObject_GetAttrString(resolved, "parent");
     Py_DECREF(resolved);
-    if (!np_dir) { PyErr_Clear(); Py_DECREF(Path); Py_DECREF(pathlib); Py_DECREF(np2); return; }
+    if (!np_dir) {
+        PyErr_Clear();
+        Py_DECREF(Path);
+        Py_DECREF(pathlib);
+        Py_DECREF(np2);
+        return;
+    }
 
-    const char *subpaths[] = { ".libs", "_core/.libs", NULL };
+    const char *subpaths[] = {".libs", "_core/.libs", NULL};
     for (int si = 0; subpaths[si]; si++) {
         PyObject *candidate = PyObject_CallMethod(np_dir, "__truediv__", "s", subpaths[si]);
-        if (!candidate) { PyErr_Clear(); continue; }
+        if (!candidate) {
+            PyErr_Clear();
+            continue;
+        }
         PyObject *cstr = PyObject_Str(candidate);
         Py_DECREF(candidate);
-        if (!cstr) { PyErr_Clear(); continue; }
+        if (!cstr) {
+            PyErr_Clear();
+            continue;
+        }
         const char *dirpath = PyUnicode_AsUTF8(cstr);
         if (dirpath && scan_dir_for_blas_candidate(dirpath, c)) {
-            Py_DECREF(cstr); Py_DECREF(np_dir); Py_DECREF(Path);
-            Py_DECREF(pathlib); Py_DECREF(np2);
+            Py_DECREF(cstr);
+            Py_DECREF(np_dir);
+            Py_DECREF(Path);
+            Py_DECREF(pathlib);
+            Py_DECREF(np2);
             return;
         }
         Py_DECREF(cstr);
@@ -860,8 +906,12 @@ static void discover_system_blas(blas_candidate_t *c) {
             if (cstr) {
                 const char *dirpath = PyUnicode_AsUTF8(cstr);
                 if (dirpath && scan_dir_for_blas_candidate(dirpath, c)) {
-                    Py_DECREF(cstr); Py_DECREF(np_parent); Py_DECREF(np_dir);
-                    Py_DECREF(Path); Py_DECREF(pathlib); Py_DECREF(np2);
+                    Py_DECREF(cstr);
+                    Py_DECREF(np_parent);
+                    Py_DECREF(np_dir);
+                    Py_DECREF(Path);
+                    Py_DECREF(pathlib);
+                    Py_DECREF(np2);
                     return;
                 }
                 Py_DECREF(cstr);
@@ -874,7 +924,10 @@ static void discover_system_blas(blas_candidate_t *c) {
         PyErr_Clear();
     }
 
-    Py_DECREF(np_dir); Py_DECREF(Path); Py_DECREF(pathlib); Py_DECREF(np2);
+    Py_DECREF(np_dir);
+    Py_DECREF(Path);
+    Py_DECREF(pathlib);
+    Py_DECREF(np2);
 }
 
 /* ---------------------------------------------------------------------------
@@ -901,46 +954,70 @@ static void discover_pip_mkl(blas_candidate_t *c) {
     }
 
     PyObject *pathlib = PyImport_ImportModule("pathlib");
-    if (!pathlib) { PyErr_Clear(); Py_DECREF(mkl_file); return; }
+    if (!pathlib) {
+        PyErr_Clear();
+        Py_DECREF(mkl_file);
+        return;
+    }
 
     PyObject *Path = PyObject_GetAttrString(pathlib, "Path");
     Py_DECREF(pathlib);
-    if (!Path) { PyErr_Clear(); Py_DECREF(mkl_file); return; }
+    if (!Path) {
+        PyErr_Clear();
+        Py_DECREF(mkl_file);
+        return;
+    }
 
     PyObject *mkl_path = PyObject_CallFunctionObjArgs(Path, mkl_file, NULL);
     Py_DECREF(mkl_file);
-    if (!mkl_path) { PyErr_Clear(); Py_DECREF(Path); return; }
+    if (!mkl_path) {
+        PyErr_Clear();
+        Py_DECREF(Path);
+        return;
+    }
 
     PyObject *mkl_dir = PyObject_GetAttrString(mkl_path, "parent");
     Py_DECREF(mkl_path);
-    if (!mkl_dir) { PyErr_Clear(); Py_DECREF(Path); return; }
+    if (!mkl_dir) {
+        PyErr_Clear();
+        Py_DECREF(Path);
+        return;
+    }
 
     /* Try mkl_dir / 'mkl.libs' and mkl_dir.parent / 'mkl.libs' */
-    const char *mkl_lib_paths[] = { "mkl.libs", NULL };
+    const char *mkl_lib_paths[] = {"mkl.libs", NULL};
 
     for (int attempt = 0; attempt < 2; attempt++) {
         PyObject *base = attempt == 0 ? mkl_dir : PyObject_GetAttrString(mkl_dir, "parent");
-        if (!base) { PyErr_Clear(); continue; }
+        if (!base) {
+            PyErr_Clear();
+            continue;
+        }
 
         for (int pi = 0; mkl_lib_paths[pi]; pi++) {
             PyObject *libs_dir = PyObject_CallMethod(base, "__truediv__", "s", mkl_lib_paths[pi]);
-            if (!libs_dir) { PyErr_Clear(); continue; }
+            if (!libs_dir) {
+                PyErr_Clear();
+                continue;
+            }
             PyObject *libs_str = PyObject_Str(libs_dir);
             Py_DECREF(libs_dir);
-            if (!libs_str) { PyErr_Clear(); continue; }
+            if (!libs_str) {
+                PyErr_Clear();
+                continue;
+            }
             const char *dirpath = PyUnicode_AsUTF8(libs_str);
-            if (!dirpath) { Py_DECREF(libs_str); continue; }
+            if (!dirpath) {
+                Py_DECREF(libs_str);
+                continue;
+            }
 
             if (dbg) fprintf(stderr, "jlinalg_dispatch: pip-mkl -- trying dir: %s\n", dirpath);
 
             /* MKL libraries must be loaded in dependency order:
              * core first, then sequential, then ilp64 */
-            const char *mkl_libs[] = {
-                "libmkl_core",
-                "libmkl_sequential",
-                "libmkl_intel_ilp64",
-                NULL
-            };
+            const char *mkl_libs[] = {"libmkl_core", "libmkl_sequential", "libmkl_intel_ilp64",
+                                      NULL};
             void *last_handle = NULL;
 
             for (int li = 0; mkl_libs[li]; li++) {
@@ -950,10 +1027,8 @@ static void discover_pip_mkl(blas_candidate_t *c) {
 
                 struct dirent *entry;
                 while ((entry = readdir(dir)) != NULL) {
-                    if (!strstr(entry->d_name, mkl_libs[li]))
-                        continue;
-                    if (!strstr(entry->d_name, ".so") && !strstr(entry->d_name, ".dylib"))
-                        continue;
+                    if (!strstr(entry->d_name, mkl_libs[li])) continue;
+                    if (!strstr(entry->d_name, ".so") && !strstr(entry->d_name, ".dylib")) continue;
 
                     char fullpath[4096];
                     snprintf(fullpath, sizeof(fullpath), "%s/%s", dirpath, entry->d_name);
@@ -962,9 +1037,13 @@ static void discover_pip_mkl(blas_candidate_t *c) {
                     void *h = dlopen(fullpath, RTLD_LAZY | RTLD_GLOBAL);
                     if (h) {
                         last_handle = h;
-                        if (dbg) fprintf(stderr, "jlinalg_dispatch: pip-mkl -- loaded %s\n", entry->d_name);
+                        if (dbg)
+                            fprintf(stderr, "jlinalg_dispatch: pip-mkl -- loaded %s\n",
+                                    entry->d_name);
                     } else {
-                        if (dbg) fprintf(stderr, "jlinalg_dispatch: pip-mkl -- dlopen failed: %s\n", dlerror());
+                        if (dbg)
+                            fprintf(stderr, "jlinalg_dispatch: pip-mkl -- dlopen failed: %s\n",
+                                    dlerror());
                     }
                     break;
                 }
@@ -977,12 +1056,15 @@ static void discover_pip_mkl(blas_candidate_t *c) {
                     if (!c->is_ilp64) {
                         /* Loaded ILP64 MKL libs but only resolved LP64 symbols.
                          * Don't label as ILP64 — would cause ABI mismatch. */
-                        if (dbg) fprintf(stderr, "jlinalg_dispatch: pip-mkl -- "
-                                         "WARNING: resolved LP64 dgemm from ILP64 MKL path, skipping\n");
+                        if (dbg)
+                            fprintf(stderr,
+                                    "jlinalg_dispatch: pip-mkl -- "
+                                    "WARNING: resolved LP64 dgemm from ILP64 MKL path, skipping\n");
                         c->found = 0;
                         Py_DECREF(libs_str);
                         if (attempt == 1) Py_DECREF(base);
-                        Py_DECREF(mkl_dir); Py_DECREF(Path);
+                        Py_DECREF(mkl_dir);
+                        Py_DECREF(Path);
                         return;
                     }
                     c->name = "MKL-ILP64";
@@ -992,11 +1074,14 @@ static void discover_pip_mkl(blas_candidate_t *c) {
                     try_resolve_dgeqrf(RTLD_DEFAULT, c, 0);
                     try_resolve_dorgqr(RTLD_DEFAULT, c, 0);
                     try_resolve_dgesvd(RTLD_DEFAULT, c, 0);
-                    if (dbg) fprintf(stderr, "jlinalg_dispatch: pip-mkl -- resolved (ilp64=%d, lapack=%d)\n",
-                                     c->is_ilp64, c->has_lapack);
+                    if (dbg)
+                        fprintf(stderr,
+                                "jlinalg_dispatch: pip-mkl -- resolved (ilp64=%d, lapack=%d)\n",
+                                c->is_ilp64, c->has_lapack);
                     Py_DECREF(libs_str);
                     if (attempt == 1) Py_DECREF(base);
-                    Py_DECREF(mkl_dir); Py_DECREF(Path);
+                    Py_DECREF(mkl_dir);
+                    Py_DECREF(Path);
                     return;
                 }
             }
@@ -1005,7 +1090,8 @@ static void discover_pip_mkl(blas_candidate_t *c) {
         if (attempt == 1) Py_DECREF(base);
     }
 
-    Py_DECREF(mkl_dir); Py_DECREF(Path);
+    Py_DECREF(mkl_dir);
+    Py_DECREF(Path);
     if (dbg) fprintf(stderr, "jlinalg_dispatch: pip-mkl -- not found\n");
 }
 
@@ -1057,9 +1143,12 @@ static void discover_bundled_blis(blas_candidate_t *c) {
         (bli_info_int_size_fn)dlsym(handle, "bli_info_get_int_type_size");
     int blis_is_ilp64 = (get_int_size && get_int_size() == 64);
 
-    if (dbg) fprintf(stderr, "jlinalg_dispatch: BLIS bli_info_get_int_type_size=%s%s\n",
-                     get_int_size ? "" : "(not found)",
-                     blis_is_ilp64 ? "64" : get_int_size ? "32" : "");
+    if (dbg)
+        fprintf(stderr, "jlinalg_dispatch: BLIS bli_info_get_int_type_size=%s%s\n",
+                get_int_size ? "" : "(not found)",
+                blis_is_ilp64  ? "64"
+                : get_int_size ? "32"
+                               : "");
 
     if (blis_is_ilp64) {
         /* BLIS ILP64: dgemm_ takes 64-bit int pointers — resolve as ILP64 */
@@ -1114,41 +1203,49 @@ static void discover_bundled_blis(blas_candidate_t *c) {
  * When invalid, zeros out the candidate (found=0) so it cannot be selected
  * — prevents NULL function pointer dereferences from broken discovery. */
 static int _validate_candidate(blas_candidate_t *c, const char *label) {
-    if (!c->found) return 1;  /* not-found is always valid */
+    if (!c->found) return 1; /* not-found is always valid */
     int valid = 1;
     /* found=1 requires at least one dgemm pointer */
-    if (!c->dgemm_lp64 && !c->dgemm_ilp64 &&
-        !c->cblas_dgemm && !c->cblas_dgemm_ilp64) {
-        fprintf(stderr, "jlinalg_dispatch: WARN: %s found=1 but no dgemm pointers — disabling\n", label);
+    if (!c->dgemm_lp64 && !c->dgemm_ilp64 && !c->cblas_dgemm && !c->cblas_dgemm_ilp64) {
+        fprintf(stderr, "jlinalg_dispatch: WARN: %s found=1 but no dgemm pointers — disabling\n",
+                label);
         valid = 0;
     }
     /* has_lapack requires at least one dsyevd pointer */
-    if (c->has_lapack && !c->dsyevd_lp64 && !c->dsyevd_ilp64 &&
-        !c->lapacke_dsyevd_lp64 && !c->lapacke_dsyevd_ilp64) {
-        fprintf(stderr, "jlinalg_dispatch: WARN: %s has_lapack=1 but no dsyevd pointers — disabling\n", label);
+    if (c->has_lapack && !c->dsyevd_lp64 && !c->dsyevd_ilp64 && !c->lapacke_dsyevd_lp64 &&
+        !c->lapacke_dsyevd_ilp64) {
+        fprintf(stderr,
+                "jlinalg_dispatch: WARN: %s has_lapack=1 but no dsyevd pointers — disabling\n",
+                label);
         valid = 0;
     }
     /* has_lapacke_dsyevd requires has_lapack */
     if (c->has_lapacke_dsyevd && !c->has_lapack) {
-        fprintf(stderr, "jlinalg_dispatch: WARN: %s has_lapacke_dsyevd=1 but has_lapack=0 — disabling\n", label);
+        fprintf(stderr,
+                "jlinalg_dispatch: WARN: %s has_lapacke_dsyevd=1 but has_lapack=0 — disabling\n",
+                label);
         valid = 0;
     }
     /* has_dsyrk requires at least one dsyrk pointer */
-    if (c->has_dsyrk && !c->cblas_dsyrk && !c->cblas_dsyrk_ilp64 &&
-        !c->dsyrk_lp64 && !c->dsyrk_ilp64) {
-        fprintf(stderr, "jlinalg_dispatch: WARN: %s has_dsyrk=1 but no dsyrk pointers — disabling\n", label);
+    if (c->has_dsyrk && !c->cblas_dsyrk && !c->cblas_dsyrk_ilp64 && !c->dsyrk_lp64 &&
+        !c->dsyrk_ilp64) {
+        fprintf(stderr,
+                "jlinalg_dispatch: WARN: %s has_dsyrk=1 but no dsyrk pointers — disabling\n",
+                label);
         valid = 0;
     }
     /* has_dsyevr requires at least one dsyevr pointer */
     if (c->has_dsyevr && !c->dsyevr_lp64 && !c->dsyevr_ilp64) {
-        fprintf(stderr, "jlinalg_dispatch: WARN: %s has_dsyevr=1 but no dsyevr pointers — disabling\n", label);
+        fprintf(stderr,
+                "jlinalg_dispatch: WARN: %s has_dsyevr=1 but no dsyevr pointers — disabling\n",
+                label);
         valid = 0;
     }
     if (!valid) {
         /* Zero out the candidate so it cannot be selected */
         const char *saved_name = c->name;
         memset(c, 0, sizeof(*c));
-        c->name = saved_name;  /* preserve for diagnostic logging */
+        c->name = saved_name; /* preserve for diagnostic logging */
     }
     return valid;
 }
@@ -1157,47 +1254,54 @@ static int _score_candidate(const blas_candidate_t *c) {
     if (!c->found) return 0;
     if (c->is_ilp64 && c->has_lapack) return 4;
     if (c->is_ilp64) return 3;
-    return 1;  /* LP64 */
+    return 1; /* LP64 */
 }
 
-static blas_candidate_t *select_best_backend(blas_candidate_t *system,
-                                              blas_candidate_t *pip_mkl,
-                                              blas_candidate_t *blis) {
-    int s_sys  = _score_candidate(system);
-    int s_pip  = _score_candidate(pip_mkl);
+static blas_candidate_t *select_best_backend(blas_candidate_t *system, blas_candidate_t *pip_mkl,
+                                             blas_candidate_t *blis) {
+    int s_sys = _score_candidate(system);
+    int s_pip = _score_candidate(pip_mkl);
     int s_blis = _score_candidate(blis);
     int dbg = _debug_enabled();
 
-    if (dbg) fprintf(stderr, "jlinalg_dispatch: scores: system=%d pip_mkl=%d blis=%d\n",
-                     s_sys, s_pip, s_blis);
+    if (dbg)
+        fprintf(stderr, "jlinalg_dispatch: scores: system=%d pip_mkl=%d blis=%d\n", s_sys, s_pip,
+                s_blis);
 
     blas_candidate_t *best = NULL;
     int best_score = 0;
 
-    if (s_sys > best_score)  { best = system;  best_score = s_sys; }
-    if (s_pip > best_score)  { best = pip_mkl; best_score = s_pip; }
-    if (s_blis > best_score) { best = blis;    best_score = s_blis; }
+    if (s_sys > best_score) {
+        best = system;
+        best_score = s_sys;
+    }
+    if (s_pip > best_score) {
+        best = pip_mkl;
+        best_score = s_pip;
+    }
+    if (s_blis > best_score) {
+        best = blis;
+        best_score = s_blis;
+    }
 
     /* LP64-only candidates (score=1) are detected but not wired for dgemm */
     if (best_score <= 1 && best && !best->is_ilp64)
-        return best;  /* Return it so blas_dispatch_init can log the LP64 info */
+        return best; /* Return it so blas_dispatch_init can log the LP64 info */
 
     return best;
 }
 
 /* ---------------------------------------------------------------------------
  * LP64 overflow guard — shared by both the simplified and full-signature
- * dispatch wrappers.  Returns 1 if overflow detected (caller must fall back
- * to jlinalg own dgemm), 0 if dimensions fit in int32.
+ * dispatch wrappers.  Returns 1 if overflow detected (LP64 vendor BLAS
+ * cannot handle these dimensions), 0 if dimensions fit in int32.
  * ---------------------------------------------------------------------------
  */
-static int _lp64_overflow_guard(npy_intp M, npy_intp N, npy_intp K,
-                                npy_intp lda, npy_intp ldb, npy_intp ldc)
-{
-    if (g_is_ilp64)
-        return 0;
-    if (M <= LP64_DIM_MAX && N <= LP64_DIM_MAX && K <= LP64_DIM_MAX &&
-        lda <= LP64_DIM_MAX && ldb <= LP64_DIM_MAX && ldc <= LP64_DIM_MAX)
+static int _lp64_overflow_guard(npy_intp M, npy_intp N, npy_intp K, npy_intp lda, npy_intp ldb,
+                                npy_intp ldc) {
+    if (g_is_ilp64) return 0;
+    if (M <= LP64_DIM_MAX && N <= LP64_DIM_MAX && K <= LP64_DIM_MAX && lda <= LP64_DIM_MAX &&
+        ldb <= LP64_DIM_MAX && ldc <= LP64_DIM_MAX)
         return 0;
 
     __atomic_add_fetch(&g_lp64_overflow_count, 1, __ATOMIC_RELAXED);
@@ -1205,70 +1309,15 @@ static int _lp64_overflow_guard(npy_intp M, npy_intp N, npy_intp K,
     if (!warned) {
         warned = 1;
         fprintf(stderr,
-            "jlinalg_dispatch: WARNING: LP64 overflow guard triggered "
-            "(M=%ld N=%ld K=%ld > %d). Falling back to jlinalg own dgemm "
-            "which is much slower. Install ILP64 numpy for large matrices.\n",
-            (long)M, (long)N, (long)K, LP64_DIM_MAX);
+                "jlinalg_dispatch: WARNING: LP64 overflow guard triggered "
+                "(M=%ld N=%ld K=%ld > %d). Result zeroed — install ILP64 numpy "
+                "for large matrices.\n",
+                (long)M, (long)N, (long)K, LP64_DIM_MAX);
     }
     return 1;
 }
 
-/* ---------------------------------------------------------------------------
- * Row-major wrapper: converts C = A * B to Fortran dgemm convention
- * ---------------------------------------------------------------------------
- */
-static void _dgemm_external_wrapper(
-    npy_intp m, npy_intp n, npy_intp k,
-    const double *A,
-    const double *B,
-    double       *C)
-{
-    if (_lp64_overflow_guard(m, n, k, k, n, n)) {
-        jlinalg_dgemm_dispatch_fn(m, n, k, A, B, C);
-        return;
-    }
-
-    const double alpha = 1.0;
-    const double beta  = 0.0;
-
-    /* Prefer CBLAS: row-major native, no swap needed. */
-    if (g_cblas_dgemm_ilp64) {
-        long lk = k > 0 ? (long)k : 1;
-        long ln = n > 0 ? (long)n : 1;
-        g_cblas_dgemm_ilp64(JLINALG_CblasRowMajor,
-                            JLINALG_CblasNoTrans, JLINALG_CblasNoTrans,
-                            (long)m, (long)n, (long)k,
-                            alpha, A, lk, B, ln,
-                            beta,  C, ln);
-        return;
-    }
-    if (g_cblas_dgemm) {
-        int ik = k > 0 ? (int)k : 1;
-        int in_ = n > 0 ? (int)n : 1;
-        g_cblas_dgemm(JLINALG_CblasRowMajor,
-                      JLINALG_CblasNoTrans, JLINALG_CblasNoTrans,
-                      (int)m, (int)n, (int)k,
-                      alpha, A, ik, B, in_,
-                      beta,  C, in_);
-        return;
-    }
-
-    if (g_is_ilp64) {
-        const long long lm = (long long)m;
-        const long long ln = (long long)n;
-        const long long lk = (long long)k;
-        g_dgemm_ilp64("N", "N", &ln, &lm, &lk,
-                       &alpha, B, &ln, A, &lk,
-                       &beta,  C, &ln);
-    } else {
-        const int im = (int)m;
-        const int in_ = (int)n;
-        const int ik = (int)k;
-        g_dgemm_lp64("N", "N", &in_, &im, &ik,
-                      &alpha, B, &in_, A, &ik,
-                      &beta,  C, &in_);
-    }
-}
+static int g_has_vendor_dgemm = 0; /* set to 1 when vendor dgemm is wired */
 
 /* ---------------------------------------------------------------------------
  * Public API — dispatch init (discover-all-then-select-best)
@@ -1278,9 +1327,9 @@ static void _dgemm_external_wrapper(
 int blas_dispatch_init(void) {
     int dbg = _debug_enabled();
 
-    blas_candidate_t system  = {0};
+    blas_candidate_t system = {0};
     blas_candidate_t pip_mkl = {0};
-    blas_candidate_t blis    = {0};
+    blas_candidate_t blis = {0};
 
     /* All three discovery paths run unconditionally */
     discover_system_blas(&system);
@@ -1289,9 +1338,9 @@ int blas_dispatch_init(void) {
 
     /* Validate invariants — invalid candidates are zeroed out (found=0)
      * so they cannot be selected, preventing NULL dereferences. */
-    _validate_candidate(&system,  "system");
+    _validate_candidate(&system, "system");
     _validate_candidate(&pip_mkl, "pip_mkl");
-    _validate_candidate(&blis,    "blis");
+    _validate_candidate(&blis, "blis");
 
     blas_candidate_t *best = select_best_backend(&system, &pip_mkl, &blis);
 
@@ -1305,10 +1354,10 @@ int blas_dispatch_init(void) {
         g_is_ilp64 = 1;
         g_backend_name = best->name;
         g_blas_handle = best->handle;
-        jlinalg_dispatch.dgemm = _dgemm_external_wrapper;
+        g_has_vendor_dgemm = 1;
 
         /* Wire dsyrk — only ILP64 pointers (LP64 dsyrk is not dispatched,
-         * same policy as dgemm: jlinalg-own preferred for LP64 consistency) */
+         * same policy as dgemm: LP64 is not wired for numerical consistency) */
         if (best->has_dsyrk) {
             g_cblas_dsyrk_ilp64 = best->cblas_dsyrk_ilp64;
             g_dsyrk_ilp64 = best->dsyrk_ilp64;
@@ -1325,9 +1374,13 @@ int blas_dispatch_init(void) {
                 g_lapacke_dsyevd_lp64 = best->lapacke_dsyevd_lp64;
                 g_lapacke_dsyevd_ilp64 = best->lapacke_dsyevd_ilp64;
                 g_has_lapacke_dsyevd = 1;
-                if (dbg) fprintf(stderr, "jlinalg_dispatch: vendor LAPACKE dsyevd wired (row-major)\n");
+                if (dbg)
+                    fprintf(stderr, "jlinalg_dispatch: vendor LAPACKE dsyevd wired (row-major)\n");
             } else {
-                if (dbg) fprintf(stderr, "jlinalg_dispatch: vendor dsyevd wired (Fortran, transpose required)\n");
+                if (dbg)
+                    fprintf(
+                        stderr,
+                        "jlinalg_dispatch: vendor dsyevd wired (Fortran, transpose required)\n");
             }
         }
 
@@ -1336,7 +1389,9 @@ int blas_dispatch_init(void) {
             g_dsyevr_lp64 = best->dsyevr_lp64;
             g_dsyevr_ilp64 = best->dsyevr_ilp64;
             g_has_dsyevr = 1;
-            if (dbg) fprintf(stderr, "jlinalg_dispatch: vendor dsyevr wired (memory-pressure fallback)\n");
+            if (dbg)
+                fprintf(stderr,
+                        "jlinalg_dispatch: vendor dsyevr wired (memory-pressure fallback)\n");
         }
 
         /* Wire dgeqrf + dorgqr — only if BOTH are available */
@@ -1361,21 +1416,24 @@ int blas_dispatch_init(void) {
     }
 
     if (best && best->found && !best->is_ilp64) {
-        /* LP64 found but not ILP64 — prefer jlinalg-own for consistency */
-        if (dbg) fprintf(stderr, "jlinalg_dispatch: LP64 %s available but preferring jlinalg-own for consistency\n",
-                         best->name);
+        /* LP64 found but not ILP64 -- prefer numpy fallback for consistency */
+        if (dbg)
+            fprintf(stderr,
+                    "jlinalg_dispatch: LP64 %s available but preferring numpy fallback for "
+                    "consistency\n",
+                    best->name);
         fprintf(stderr,
-            "jlinalg_dispatch: INFO: LP64 BLAS (%s) detected but not used — "
-            "jlinalg own dgemm preferred for numerical consistency with GEMMA. "
-            "Install ILP64 numpy for faster external BLAS dispatch.\n",
-            best->name);
-        /* Reset backend name — LP64 is available but not active */
-        g_backend_name = "jlinalg-own";
+                "jlinalg_dispatch: INFO: LP64 BLAS (%s) detected but not used -- "
+                "numpy fallback preferred for numerical consistency with GEMMA. "
+                "Install ILP64 numpy for faster external BLAS dispatch.\n",
+                best->name);
+        /* Reset backend name -- LP64 is available but not active */
+        g_backend_name = "numpy-fallback";
         return 0;
     }
 
-    /* No external dgemm found — jlinalg own stays */
-    if (dbg) fprintf(stderr, "jlinalg_dispatch: no external dgemm found, using jlinalg-own\n");
+    /* No external dgemm found -- numpy fallback */
+    if (dbg) fprintf(stderr, "jlinalg_dispatch: no external dgemm found, using numpy-fallback\n");
     return 0;
 }
 
@@ -1388,28 +1446,38 @@ int blas_is_ilp64(void) {
 }
 
 int blas_has_external(void) {
-    /* Only true when external BLAS is actually wired into the dispatch table
-     * (i.e., ILP64 found).  LP64-only discovery does not wire dispatch. */
-    return jlinalg_dispatch.dgemm != jlinalg_dgemm_dispatch_fn;
+    /* Only true when external BLAS is actually wired (i.e., ILP64 found).
+     * LP64-only discovery does not wire dispatch. */
+    return g_has_vendor_dgemm;
 }
 
-int blas_has_dsyrk(void)  { return g_has_dsyrk; }
-int blas_has_dsyevd(void) { return g_has_dsyevd; }
-int blas_has_lapacke_dsyevd(void) { return g_has_lapacke_dsyevd; }
-int blas_has_dsyevr(void) { return g_has_dsyevr && g_is_ilp64; }
-int blas_has_dgeqrf(void) { return g_has_dgeqrf && g_is_ilp64; }
-int blas_has_dgesvd(void) { return g_has_dgesvd && g_is_ilp64; }
+int blas_has_dsyrk(void) {
+    return g_has_dsyrk;
+}
+int blas_has_dsyevd(void) {
+    return g_has_dsyevd;
+}
+int blas_has_lapacke_dsyevd(void) {
+    return g_has_lapacke_dsyevd;
+}
+int blas_has_dsyevr(void) {
+    return g_has_dsyevr && g_is_ilp64;
+}
+int blas_has_dgeqrf(void) {
+    return g_has_dgeqrf && g_is_ilp64;
+}
+int blas_has_dgesvd(void) {
+    return g_has_dgesvd && g_is_ilp64;
+}
 
 /* ---------------------------------------------------------------------------
  * jlinalg_dsyrk_ext — Vendor-dispatch dsyrk: C = X @ X.T
  * ---------------------------------------------------------------------------
  */
-void jlinalg_dsyrk_ext(npy_intp N, npy_intp K,
-                     const double *X, npy_intp ldx,
-                     double *C, npy_intp ldc)
-{
+void jlinalg_dsyrk_ext(npy_intp N, npy_intp K, const double *X, npy_intp ldx, double *C,
+                       npy_intp ldc) {
     if (N <= 0 || K <= 0) {
-        /* Zero C for N>0, K==0 case (consistent with jlinalg_dsyrk_c) */
+        /* Zero C for N>0, K==0 case */
         for (npy_intp i = 0; i < N; i++)
             memset(C + i * ldc, 0, (size_t)N * sizeof(double));
         return;
@@ -1417,11 +1485,8 @@ void jlinalg_dsyrk_ext(npy_intp N, npy_intp K,
     if (g_has_dsyrk && g_is_ilp64) {
         if (g_cblas_dsyrk_ilp64) {
             /* Row-major, lower, no-trans: C = 1.0 * X @ X.T + 0.0 * C */
-            g_cblas_dsyrk_ilp64(JLINALG_CblasRowMajor, JLINALG_CblasLower,
-                                JLINALG_CblasNoTrans,
-                                (long)N, (long)K,
-                                1.0, X, (long)ldx,
-                                0.0, C, (long)ldc);
+            g_cblas_dsyrk_ilp64(JLINALG_CblasRowMajor, JLINALG_CblasLower, JLINALG_CblasNoTrans,
+                                (long)N, (long)K, 1.0, X, (long)ldx, 0.0, C, (long)ldc);
             /* Mirror lower to upper (vendor only fills lower) */
             for (npy_intp i = 0; i < N; i++)
                 for (npy_intp j = i + 1; j < N; j++)
@@ -1441,8 +1506,10 @@ void jlinalg_dsyrk_ext(npy_intp N, npy_intp K,
             return;
         }
     }
-    /* Fallback to jlinalg own */
-    jlinalg_dsyrk_c(N, K, X, ldx, C, ldc);
+    /* No vendor dsyrk available -- caller should use numpy fallback. */
+    fprintf(stderr, "FATAL: jlinalg_dsyrk_ext called without vendor BLAS. "
+                    "Results would be silently wrong. Aborting.\n");
+    abort();
 }
 
 /* ---------------------------------------------------------------------------
@@ -1466,18 +1533,16 @@ void jlinalg_dsyrk_ext(npy_intp N, npy_intp K,
 static int _info_to_int(long long info, npy_intp N) {
     if (info > INT_MAX || info < INT_MIN) {
         fprintf(stderr,
-            "jlinalg: LAPACK info=%lld exceeds int range (N=%ld) "
-            "— returning capped value\n", info, (long)N);
+                "jlinalg: LAPACK info=%lld exceeds int range (N=%ld) "
+                "— returning capped value\n",
+                info, (long)N);
         return info > 0 ? INT_MAX : INT_MIN;
     }
     return (int)info;
 }
 
-int jlinalg_dsyevd_ext(npy_intp N, double *K, npy_intp ldk,
-                     double *eigenvalues)
-{
-    if (!g_has_dsyevd || !g_is_ilp64)
-        return JLINALG_EXT_UNAVAILABLE;
+int jlinalg_dsyevd_ext(npy_intp N, double *K, npy_intp ldk, double *eigenvalues) {
+    if (!g_has_dsyevd || !g_is_ilp64) return JLINALG_EXT_UNAVAILABLE;
 
     /* --- LAPACKE path (MKL): row-major natively, no transpose needed.
      * Only used when Fortran ILP64 dsyevd is NOT available.  When both
@@ -1485,9 +1550,8 @@ int jlinalg_dsyevd_ext(npy_intp N, double *K, npy_intp ldk,
      * symbol, whereas LAPACKE_dsyevd is unsuffixed and could resolve to
      * the LP64 variant on systems with mixed LP64/ILP64 MKL. --- */
     if (g_has_lapacke_dsyevd && g_lapacke_dsyevd_ilp64 && !g_dsyevd_ilp64) {
-        long long info = g_lapacke_dsyevd_ilp64(
-            JLINALG_LAPACK_ROW_MAJOR, 'V', 'L',
-            (long long)N, K, (long long)ldk, eigenvalues);
+        long long info = g_lapacke_dsyevd_ilp64(JLINALG_LAPACK_ROW_MAJOR, 'V', 'L', (long long)N, K,
+                                                (long long)ldk, eigenvalues);
         if (info != 0) return _info_to_int(info, N);
         return JLINALG_EXT_SUCCESS;
     }
@@ -1504,17 +1568,17 @@ int jlinalg_dsyevd_ext(npy_intp N, double *K, npy_intp ldk,
         long long lwork = -1, liwork = -1;
         double work_query;
         long long iwork_query;
-        g_dsyevd_ilp64("V", "U", &n, K, &lda, eigenvalues,
-                        &work_query, &lwork, &iwork_query, &liwork, &info);
+        g_dsyevd_ilp64("V", "U", &n, K, &lda, eigenvalues, &work_query, &lwork, &iwork_query,
+                       &liwork, &info);
         if (info != 0) {
             fprintf(stderr,
-                "jlinalg_dsyevd_ext: Fortran dsyevd workspace query failed "
-                "(info=%lld, N=%lld) — likely ABI mismatch or corrupt LAPACK\n",
-                info, n);
+                    "jlinalg_dsyevd_ext: Fortran dsyevd workspace query failed "
+                    "(info=%lld, N=%lld) — likely ABI mismatch or corrupt LAPACK\n",
+                    info, n);
             return (int)info;
         }
 
-        lwork = (long long)work_query + 1;  /* +1 for double→integer rounding */
+        lwork = (long long)work_query + 1; /* +1 for double→integer rounding */
         liwork = iwork_query;
         double *work = (double *)malloc((size_t)lwork * sizeof(double));
         long long *iwork = (long long *)malloc((size_t)liwork * sizeof(long long));
@@ -1522,14 +1586,15 @@ int jlinalg_dsyevd_ext(npy_intp N, double *K, npy_intp ldk,
             /* CRITICAL: ALLOC_FAIL must be returned BEFORE K is modified.
              * eigh.c relies on K being unmodified when K == eigenvectors
              * so it can fall through to DSYEVR with the original data. */
-            free(work); free(iwork); return JLINALG_EXT_ALLOC_FAIL;
+            free(work);
+            free(iwork);
+            return JLINALG_EXT_ALLOC_FAIL;
         }
 
         /* Compute: UPLO='U' because row-major lower = col-major upper.
          * The matrix is symmetric so A = A^T — no input transpose needed,
          * just the UPLO swap. */
-        g_dsyevd_ilp64("V", "U", &n, K, &lda, eigenvalues,
-                        work, &lwork, iwork, &liwork, &info);
+        g_dsyevd_ilp64("V", "U", &n, K, &lda, eigenvalues, work, &lwork, iwork, &liwork, &info);
         free(work);
         free(iwork);
         if (info != 0) return _info_to_int(info, N);
@@ -1563,20 +1628,17 @@ int jlinalg_dsyevd_ext(npy_intp N, double *K, npy_intp ldk,
  *          or positive int for LAPACK error (info capped to INT_MAX for ILP64).
  * ---------------------------------------------------------------------------
  */
-int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk,
-                     double *eigenvalues,
-                     double *eigenvectors, npy_intp ldz)
-{
-    if (!g_has_dsyevr || !g_is_ilp64)
-        return JLINALG_EXT_UNAVAILABLE;
+int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk, double *eigenvalues,
+                       double *eigenvectors, npy_intp ldz) {
+    if (!g_has_dsyevr || !g_is_ilp64) return JLINALG_EXT_UNAVAILABLE;
 
     if (g_dsyevr_ilp64) {
         long long n = (long long)N;
         long long lda = (long long)ldk;
-        long long ldz_f = (long long)N;  /* tightly packed Z for Fortran */
+        long long ldz_f = (long long)N; /* tightly packed Z for Fortran */
         long long info = 0;
-        long long m_out = 0;  /* number of eigenvalues found */
-        double abstol = 0.0;  /* use default (DLAMCH) */
+        long long m_out = 0;       /* number of eigenvalues found */
+        double abstol = 0.0;       /* use default (DLAMCH) */
         long long il = 1, iu = n;  /* all eigenvalues (range='A' ignores these) */
         double vl = 0.0, vu = 0.0; /* unused for range='A' */
 
@@ -1585,15 +1647,12 @@ int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk,
         double work_query;
         long long iwork_query;
         long long isuppz_dummy[2];
-        g_dsyevr_ilp64("V", "A", "U", &n, K, &lda,
-                        &vl, &vu, &il, &iu,
-                        &abstol, &m_out, eigenvalues, eigenvectors, &ldz_f,
-                        isuppz_dummy, &work_query, &lwork,
-                        &iwork_query, &liwork, &info);
+        g_dsyevr_ilp64("V", "A", "U", &n, K, &lda, &vl, &vu, &il, &iu, &abstol, &m_out, eigenvalues,
+                       eigenvectors, &ldz_f, isuppz_dummy, &work_query, &lwork, &iwork_query,
+                       &liwork, &info);
         if (info != 0) {
-            fprintf(stderr,
-                "jlinalg_dsyevr_ext: workspace query failed (info=%lld, N=%lld)\n",
-                info, n);
+            fprintf(stderr, "jlinalg_dsyevr_ext: workspace query failed (info=%lld, N=%lld)\n",
+                    info, n);
             return _info_to_int(info, N);
         }
 
@@ -1604,20 +1663,19 @@ int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk,
         long long *isuppz = (long long *)malloc((size_t)(2 * N) * sizeof(long long));
         /* Reuse the caller's tightly packed output buffer when possible. */
         int use_output_as_z = (ldz == N && eigenvectors != K);
-        double *Z_col = use_output_as_z
-            ? eigenvectors
-            : (double *)malloc((size_t)N * (size_t)N * sizeof(double));
+        double *Z_col = use_output_as_z ? eigenvectors
+                                        : (double *)malloc((size_t)N * (size_t)N * sizeof(double));
         if (!work || !iwork || !isuppz || !Z_col) {
-            free(work); free(iwork); free(isuppz);
+            free(work);
+            free(iwork);
+            free(isuppz);
             if (!use_output_as_z) free(Z_col);
             return JLINALG_EXT_ALLOC_FAIL;
         }
 
         /* Compute: UPLO='U' because row-major lower = col-major upper. */
-        g_dsyevr_ilp64("V", "A", "U", &n, K, &lda,
-                        &vl, &vu, &il, &iu,
-                        &abstol, &m_out, eigenvalues, Z_col, &ldz_f,
-                        isuppz, work, &lwork, iwork, &liwork, &info);
+        g_dsyevr_ilp64("V", "A", "U", &n, K, &lda, &vl, &vu, &il, &iu, &abstol, &m_out, eigenvalues,
+                       Z_col, &ldz_f, isuppz, work, &lwork, iwork, &liwork, &info);
         free(work);
         free(iwork);
         free(isuppz);
@@ -1629,8 +1687,9 @@ int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk,
         /* Verify all eigenvalues were found (range='A' should always give m_out == N) */
         if (m_out != n) {
             fprintf(stderr,
-                "jlinalg_dsyevr_ext: expected %lld eigenvalues but DSYEVR found %lld "
-                "(range='A', N=%lld) — vendor LAPACK ABI mismatch or bug\n", n, m_out, n);
+                    "jlinalg_dsyevr_ext: expected %lld eigenvalues but DSYEVR found %lld "
+                    "(range='A', N=%lld) — vendor LAPACK ABI mismatch or bug\n",
+                    n, m_out, n);
             if (!use_output_as_z) free(Z_col);
             return JLINALG_EXT_COUNT_MISMATCH;
         }
@@ -1664,10 +1723,8 @@ int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk,
  * jlinalg_dgeqrf_ext — Vendor-dispatch QR factorization (dgeqrf)
  * ---------------------------------------------------------------------------
  */
-int jlinalg_dgeqrf_ext(npy_intp m, npy_intp n, double *A_col, npy_intp lda, double *tau)
-{
-    if (!g_has_dgeqrf || !g_is_ilp64)
-        return JLINALG_EXT_UNAVAILABLE;
+int jlinalg_dgeqrf_ext(npy_intp m, npy_intp n, double *A_col, npy_intp lda, double *tau) {
+    if (!g_has_dgeqrf || !g_is_ilp64) return JLINALG_EXT_UNAVAILABLE;
 
     if (g_dgeqrf_ilp64) {
         long long lm = (long long)m, ln = (long long)n;
@@ -1696,10 +1753,8 @@ int jlinalg_dgeqrf_ext(npy_intp m, npy_intp n, double *A_col, npy_intp lda, doub
  * jlinalg_dorgqr_ext — Vendor-dispatch generate Q from Householder (dorgqr)
  * ---------------------------------------------------------------------------
  */
-int jlinalg_dorgqr_ext(npy_intp m, npy_intp n, double *A_col, npy_intp lda, const double *tau)
-{
-    if (!g_has_dgeqrf || !g_is_ilp64)
-        return JLINALG_EXT_UNAVAILABLE;
+int jlinalg_dorgqr_ext(npy_intp m, npy_intp n, double *A_col, npy_intp lda, const double *tau) {
+    if (!g_has_dgeqrf || !g_is_ilp64) return JLINALG_EXT_UNAVAILABLE;
 
     if (g_dorgqr_ilp64) {
         long long lm = (long long)m, ln = (long long)n, lk = (long long)n;
@@ -1728,18 +1783,12 @@ int jlinalg_dorgqr_ext(npy_intp m, npy_intp n, double *A_col, npy_intp lda, cons
  * jlinalg_dgesvd_ext — Vendor-dispatch SVD (dgesvd)
  * ---------------------------------------------------------------------------
  */
-int jlinalg_dgesvd_ext(npy_intp m, npy_intp n,
-                       double *A_col, npy_intp lda,
-                       double *s,
-                       double *U_col, npy_intp ldu,
-                       double *Vt_col, npy_intp ldvt,
-                       int compute_uv)
-{
-    if (!g_has_dgesvd || !g_is_ilp64)
-        return JLINALG_EXT_UNAVAILABLE;
+int jlinalg_dgesvd_ext(npy_intp m, npy_intp n, double *A_col, npy_intp lda, double *s,
+                       double *U_col, npy_intp ldu, double *Vt_col, npy_intp ldvt, int compute_uv) {
+    if (!g_has_dgesvd || !g_is_ilp64) return JLINALG_EXT_UNAVAILABLE;
 
     if (g_dgesvd_ilp64) {
-        const char *jobu  = compute_uv ? "S" : "N";
+        const char *jobu = compute_uv ? "S" : "N";
         const char *jobvt = compute_uv ? "S" : "N";
         long long lm = (long long)m, ln = (long long)n;
         long long llda = (long long)lda;
@@ -1750,18 +1799,16 @@ int jlinalg_dgesvd_ext(npy_intp m, npy_intp n,
         /* Workspace query */
         long long lwork = -1;
         double work_query;
-        g_dgesvd_ilp64(jobu, jobvt, &lm, &ln, A_col, &llda,
-                        s, U_col, &lldu, Vt_col, &lldvt,
-                        &work_query, &lwork, &info);
+        g_dgesvd_ilp64(jobu, jobvt, &lm, &ln, A_col, &llda, s, U_col, &lldu, Vt_col, &lldvt,
+                       &work_query, &lwork, &info);
         if (info != 0) return _info_to_int(info, m);
 
         lwork = (long long)work_query + 1;
         double *work = (double *)malloc((size_t)lwork * sizeof(double));
         if (!work) return JLINALG_EXT_ALLOC_FAIL;
 
-        g_dgesvd_ilp64(jobu, jobvt, &lm, &ln, A_col, &llda,
-                        s, U_col, &lldu, Vt_col, &lldvt,
-                        work, &lwork, &info);
+        g_dgesvd_ilp64(jobu, jobvt, &lm, &ln, A_col, &llda, s, U_col, &lldu, Vt_col, &lldvt, work,
+                       &lwork, &info);
         free(work);
         if (info != 0) return _info_to_int(info, m);
         return JLINALG_EXT_SUCCESS;
@@ -1773,16 +1820,10 @@ int jlinalg_dgesvd_ext(npy_intp m, npy_intp n,
  * Full-signature external dgemm wrapper
  * ---------------------------------------------------------------------------
  */
-static int _dgemm_external_full(
-    npy_intp M, npy_intp N, npy_intp K,
-    const double *A, npy_intp lda,
-    const double *B, npy_intp ldb,
-    double       *C, npy_intp ldc,
-    int transa, int transb,
-    double alpha, double beta)
-{
-    if (_lp64_overflow_guard(M, N, K, lda, ldb, ldc))
-        return 0;
+static int _dgemm_external_full(npy_intp M, npy_intp N, npy_intp K, const double *A, npy_intp lda,
+                                const double *B, npy_intp ldb, double *C, npy_intp ldc, int transa,
+                                int transb, double alpha, double beta) {
+    if (_lp64_overflow_guard(M, N, K, lda, ldb, ldc)) return 0;
 
     if (g_cblas_dgemm_ilp64) {
         int ta = transa ? JLINALG_CblasTrans : JLINALG_CblasNoTrans;
@@ -1790,10 +1831,8 @@ static int _dgemm_external_full(
         long llda = (long)(lda > 0 ? lda : 1);
         long lldb = (long)(ldb > 0 ? ldb : 1);
         long lldc = (long)(ldc > 0 ? ldc : 1);
-        g_cblas_dgemm_ilp64(JLINALG_CblasRowMajor, ta, tb,
-                            (long)M, (long)N, (long)K,
-                            alpha, A, llda, B, lldb,
-                            beta,  C, lldc);
+        g_cblas_dgemm_ilp64(JLINALG_CblasRowMajor, ta, tb, (long)M, (long)N, (long)K, alpha, A,
+                            llda, B, lldb, beta, C, lldc);
         return 1;
     }
     if (g_cblas_dgemm) {
@@ -1802,10 +1841,8 @@ static int _dgemm_external_full(
         int ilda = (int)(lda > 0 ? lda : 1);
         int ildb = (int)(ldb > 0 ? ldb : 1);
         int ildc = (int)(ldc > 0 ? ldc : 1);
-        g_cblas_dgemm(JLINALG_CblasRowMajor, ta, tb,
-                      (int)M, (int)N, (int)K,
-                      alpha, A, ilda, B, ildb,
-                      beta,  C, ildc);
+        g_cblas_dgemm(JLINALG_CblasRowMajor, ta, tb, (int)M, (int)N, (int)K, alpha, A, ilda, B,
+                      ildb, beta, C, ildc);
         return 1;
     }
 
@@ -1817,15 +1854,13 @@ static int _dgemm_external_full(
         const long long lM = (long long)M, lN = (long long)N, lK = (long long)K;
         const long long llda = (long long)lda, lldb = (long long)ldb;
         const long long lldc = (long long)ldc;
-        g_dgemm_ilp64(transa_f, transb_f, &lN, &lM, &lK,
-                       &alpha, B, &lldb, A, &llda,
-                       &beta,  C, &lldc);
+        g_dgemm_ilp64(transa_f, transb_f, &lN, &lM, &lK, &alpha, B, &lldb, A, &llda, &beta, C,
+                      &lldc);
     } else {
         const int iM = (int)M, iN = (int)N, iK = (int)K;
         const int ilda = (int)lda, ildb = (int)ldb, ildc = (int)ldc;
-        g_dgemm_lp64(transa_f, transb_f, &iN, &iM, &iK,
-                      &alpha, B, &ildb, A, &ilda,
-                      &beta,  C, &ildc);
+        g_dgemm_lp64(transa_f, transb_f, &iN, &iM, &iK, &alpha, B, &ildb, A, &ilda, &beta, C,
+                     &ildc);
     }
     return 1;
 }
@@ -1835,47 +1870,42 @@ static int _dgemm_external_full(
  * ---------------------------------------------------------------------------
  */
 
-void jlinalg_dgemm_ext(npy_intp M, npy_intp N, npy_intp K,
-                     const double *A, npy_intp lda,
-                     const double *B, npy_intp ldb,
-                     double *C, npy_intp ldc,
-                     int transa, int transb)
-{
+void jlinalg_dgemm_ext(npy_intp M, npy_intp N, npy_intp K, const double *A, npy_intp lda,
+                       const double *B, npy_intp ldb, double *C, npy_intp ldc, int transa,
+                       int transb) {
     if ((g_dgemm_lp64 || g_dgemm_ilp64) &&
-        _dgemm_external_full(M, N, K, A, lda, B, ldb, C, ldc,
-                             transa, transb, 1.0, 0.0)) {
+        _dgemm_external_full(M, N, K, A, lda, B, ldb, C, ldc, transa, transb, 1.0, 0.0)) {
         return;
     }
-    /* No external BLAS, or LP64 overflow guard triggered */
-    jlinalg_dgemm_c(M, N, K, A, lda, B, ldb, C, ldc, transa, transb);
+    /* No external BLAS, or LP64 overflow guard triggered.
+     * Caller should check blas_has_external() and use numpy fallback. */
+    fprintf(stderr, "FATAL: jlinalg_dgemm_ext called without vendor BLAS. "
+                    "Results would be silently wrong. Aborting.\n");
+    abort();
 }
 
-void jlinalg_dgemm_ext_ws(npy_intp M, npy_intp N, npy_intp K,
-                        const double *A, npy_intp lda,
-                        const double *B, npy_intp ldb,
-                        double *C, npy_intp ldc,
-                        int transa, int transb,
-                        double alpha, double beta,
-                        jlinalg_workspace_t *ws)
-{
+void jlinalg_dgemm_ext_ws(npy_intp M, npy_intp N, npy_intp K, const double *A, npy_intp lda,
+                          const double *B, npy_intp ldb, double *C, npy_intp ldc, int transa,
+                          int transb, double alpha, double beta) {
     if ((g_dgemm_lp64 || g_dgemm_ilp64) &&
-        _dgemm_external_full(M, N, K, A, lda, B, ldb, C, ldc,
-                             transa, transb, alpha, beta)) {
+        _dgemm_external_full(M, N, K, A, lda, B, ldb, C, ldc, transa, transb, alpha, beta)) {
         return;
     }
-    jlinalg_dgemm_ws(M, N, K, A, lda, B, ldb, C, ldc,
-                   transa, transb, alpha, beta, ws);
+    /* No external BLAS -- caller should use numpy fallback. */
+    fprintf(stderr, "FATAL: jlinalg_dgemm_ext_ws called without vendor BLAS. "
+                    "Results would be silently wrong. Aborting.\n");
+    abort();
 }
 
 #else /* _WIN32 */
 
-/* Windows: no external dispatch -- always use jlinalg own */
+/* Windows: no external dispatch -- numpy fallback */
 int blas_dispatch_init(void) {
     return 0;
 }
 
 const char *blas_backend_name(void) {
-    return "jlinalg-own";
+    return "numpy-fallback";
 }
 
 int blas_is_ilp64(void) {
@@ -1911,75 +1941,114 @@ int blas_has_dgesvd(void) {
 }
 
 int jlinalg_dgeqrf_ext(npy_intp m, npy_intp n, double *A_col, npy_intp lda, double *tau) {
-    (void)m; (void)n; (void)A_col; (void)lda; (void)tau;
+    (void)m;
+    (void)n;
+    (void)A_col;
+    (void)lda;
+    (void)tau;
     return JLINALG_EXT_UNAVAILABLE;
 }
 
 int jlinalg_dorgqr_ext(npy_intp m, npy_intp n, double *A_col, npy_intp lda, const double *tau) {
-    (void)m; (void)n; (void)A_col; (void)lda; (void)tau;
+    (void)m;
+    (void)n;
+    (void)A_col;
+    (void)lda;
+    (void)tau;
     return JLINALG_EXT_UNAVAILABLE;
 }
 
-int jlinalg_dgesvd_ext(npy_intp m, npy_intp n,
-                       double *A_col, npy_intp lda,
-                       double *s,
-                       double *U_col, npy_intp ldu,
-                       double *Vt_col, npy_intp ldvt,
-                       int compute_uv) {
-    (void)m; (void)n; (void)A_col; (void)lda; (void)s;
-    (void)U_col; (void)ldu; (void)Vt_col; (void)ldvt; (void)compute_uv;
+int jlinalg_dgesvd_ext(npy_intp m, npy_intp n, double *A_col, npy_intp lda, double *s,
+                       double *U_col, npy_intp ldu, double *Vt_col, npy_intp ldvt, int compute_uv) {
+    (void)m;
+    (void)n;
+    (void)A_col;
+    (void)lda;
+    (void)s;
+    (void)U_col;
+    (void)ldu;
+    (void)Vt_col;
+    (void)ldvt;
+    (void)compute_uv;
     return JLINALG_EXT_UNAVAILABLE;
 }
 
-int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk,
-                     double *eigenvalues,
-                     double *eigenvectors, npy_intp ldz)
-{
-    (void)N; (void)K; (void)ldk; (void)eigenvalues;
-    (void)eigenvectors; (void)ldz;
+int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk, double *eigenvalues,
+                       double *eigenvectors, npy_intp ldz) {
+    (void)N;
+    (void)K;
+    (void)ldk;
+    (void)eigenvalues;
+    (void)eigenvectors;
+    (void)ldz;
     return JLINALG_EXT_UNAVAILABLE;
 }
 
-void jlinalg_dsyrk_ext(npy_intp N, npy_intp K,
-                     const double *X, npy_intp ldx,
-                     double *C, npy_intp ldc)
-{
-    jlinalg_dsyrk_c(N, K, X, ldx, C, ldc);
+void jlinalg_dsyrk_ext(npy_intp N, npy_intp K, const double *X, npy_intp ldx, double *C,
+                       npy_intp ldc) {
+    (void)N;
+    (void)K;
+    (void)X;
+    (void)ldx;
+    (void)C;
+    (void)ldc;
+    fprintf(stderr, "FATAL: jlinalg_dsyrk_ext called without vendor BLAS. "
+                    "Results would be silently wrong. Aborting.\n");
+    abort();
 }
 
-int jlinalg_dsyevd_ext(npy_intp N, double *K, npy_intp ldk,
-                     double *eigenvalues)
-{
-    (void)N; (void)K; (void)ldk; (void)eigenvalues;
+int jlinalg_dsyevd_ext(npy_intp N, double *K, npy_intp ldk, double *eigenvalues) {
+    (void)N;
+    (void)K;
+    (void)ldk;
+    (void)eigenvalues;
     return JLINALG_EXT_UNAVAILABLE;
 }
 
-void jlinalg_dgemm_ext(npy_intp M, npy_intp N, npy_intp K,
-                     const double *A, npy_intp lda,
-                     const double *B, npy_intp ldb,
-                     double *C, npy_intp ldc,
-                     int transa, int transb)
-{
-    jlinalg_dgemm_c(M, N, K, A, lda, B, ldb, C, ldc, transa, transb);
+void jlinalg_dgemm_ext(npy_intp M, npy_intp N, npy_intp K, const double *A, npy_intp lda,
+                       const double *B, npy_intp ldb, double *C, npy_intp ldc, int transa,
+                       int transb) {
+    (void)A;
+    (void)B;
+    (void)K;
+    (void)lda;
+    (void)ldb;
+    (void)transa;
+    (void)transb;
+    (void)M;
+    (void)N;
+    (void)C;
+    (void)ldc;
+    fprintf(stderr, "FATAL: jlinalg_dgemm_ext called without vendor BLAS. "
+                    "Results would be silently wrong. Aborting.\n");
+    abort();
 }
 
-void jlinalg_dgemm_ext_ws(npy_intp M, npy_intp N, npy_intp K,
-                        const double *A, npy_intp lda,
-                        const double *B, npy_intp ldb,
-                        double *C, npy_intp ldc,
-                        int transa, int transb,
-                        double alpha, double beta,
-                        jlinalg_workspace_t *ws)
-{
-    jlinalg_dgemm_ws(M, N, K, A, lda, B, ldb, C, ldc,
-                   transa, transb, alpha, beta, ws);
+void jlinalg_dgemm_ext_ws(npy_intp M, npy_intp N, npy_intp K, const double *A, npy_intp lda,
+                          const double *B, npy_intp ldb, double *C, npy_intp ldc, int transa,
+                          int transb, double alpha, double beta) {
+    (void)M;
+    (void)N;
+    (void)K;
+    (void)A;
+    (void)lda;
+    (void)B;
+    (void)ldb;
+    (void)C;
+    (void)ldc;
+    (void)transa;
+    (void)transb;
+    (void)alpha;
+    (void)beta;
+    fprintf(stderr, "FATAL: jlinalg_dgemm_ext_ws called without vendor BLAS. "
+                    "Results would be silently wrong. Aborting.\n");
+    abort();
 }
 
 int blas_dispatch_lp64_overflow_count(void) {
     return 0;
 }
 
-void blas_dispatch_reset_lp64_overflow(void) {
-}
+void blas_dispatch_reset_lp64_overflow(void) {}
 
 #endif /* !_WIN32 */

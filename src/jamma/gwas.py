@@ -133,13 +133,8 @@ def gwas(
             is for SNP categories in VC mode). Columns are one-hot encoded
             with the first sorted level dropped as reference. Requires
             covariate_file to be set.
-        backend: Compute backend: "auto" (default), "jax", or "numpy". "auto"
-            selects numpy+C for datasets that fit in memory when the C
-            extension is available, JAX streaming for large datasets or when
-            the C extension is absent, and falls back to pure NumPy when
-            neither is present. "jax" requires JAX to be installed
-            (pip install jamma[jax]). "numpy" forces the pure-NumPy backend,
-            which loads all genotypes into memory.
+        backend: Compute backend: "auto" (default) or "numpy". "auto"
+            selects the best available numpy runner.
 
     Returns:
         GWASResult with association results, sample/SNP counts, and timing.

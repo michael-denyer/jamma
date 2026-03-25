@@ -5,7 +5,7 @@ Score (batch), LRT (batch), and fused mode-4 when available. Supports
 n_cvt=1 (split/batch paths) and n_cvt>1 up to 100 (general workspace path).
 Falls back to NumPy Python path when C functions are unavailable or n_cvt>100.
 Also exports split-workspace and general-workspace APIs for direct use
-by runners. No JAX imports.
+by runners.
 
 The caller is responsible for:
 - Computing Uab in the appropriate format: Uab_batch (n_snps, n_samples,
@@ -1428,7 +1428,7 @@ def _compute_wald_numpy(
             n_threads,
         )
 
-    if _C_GENERAL_AVAILABLE and 1 < n_cvt <= 20:
+    if _C_GENERAL_AVAILABLE and 1 < n_cvt <= 75:
         # Use C extension for general n_cvt via split-Uab workspace
         from jamma.lmm.likelihood import classify_uab_columns
 
@@ -1856,8 +1856,8 @@ def _compute_lmm_chunk_numpy(
 ) -> dict[str, np.ndarray | None]:
     """Compute LMM statistics for a chunk of SNPs (NumPy backend).
 
-    Mirrors _compute_lmm_chunk in compute.py but uses NumPy batch functions
-    instead of JAX. No async dispatch — results are immediately available.
+    Computes LMM statistics for a chunk of SNPs using NumPy batch functions.
+    No async dispatch — results are immediately available.
 
     Args:
         lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.

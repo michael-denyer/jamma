@@ -108,7 +108,7 @@ def _collect_chr_snp_stats(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     """Collect per-SNP statistics for one chromosome via chunked BED reads.
 
-    Shared by both JAX and NumPy LOCO chromosome runners (pass-1 logic).
+    Shared by LOCO chromosome runners (pass-1 logic).
 
     Args:
         bed_path: PLINK file prefix (without extension).
@@ -166,7 +166,7 @@ def _filter_chr_snps(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
     """Apply SNP filtering and log warnings. Returns None if no SNPs pass.
 
-    Shared by both JAX and NumPy LOCO chromosome runners.
+    Shared by LOCO chromosome runners.
 
     Args:
         col_means: Per-SNP means from pass-1.
@@ -238,12 +238,11 @@ def _compute_loco_kinship_streaming_numpy(
     _max_batch_chrs: int | None = None,
     _copy_yielded_matrices: bool = True,
 ) -> tuple[Iterator[tuple[str, np.ndarray]], SnpStatsCache]:
-    """Compute LOCO kinship matrices using pure NumPy (no JAX dependency).
+    """Compute LOCO kinship matrices using pure NumPy.
 
     Mirrors compute_loco_kinship_streaming from jamma.kinship but uses
-    np.matmul instead of jnp.matmul. Supports multi-pass chromosome batching
-    when memory is insufficient for all S_chr simultaneously (mirrors the JAX
-    path in jamma.kinship.compute_loco_kinship_streaming).
+    np.matmul for accumulation. Supports multi-pass chromosome batching
+    when memory is insufficient for all S_chr simultaneously.
 
     When valid_indices is provided, kinship matrices are computed at valid-sample
     size (n_valid x n_valid) rather than full n_samples x n_samples, avoiding
@@ -702,7 +701,6 @@ def run_lmm_loco(
     col_chunk_size: int = 5_000,
     l_min: float = 1e-5,
     l_max: float = 1e5,
-    backend: str = "jax",
     write_eigen: bool = False,
     eigen_dir: Path | None = None,
     eigen_prefix: str = "result",
@@ -743,7 +741,6 @@ def run_lmm_loco(
             peak memory: n_valid * col_chunk_size * 8 bytes per chunk.
         l_min: Minimum lambda for optimization (default 1e-5).
         l_max: Maximum lambda for optimization (default 1e5).
-        backend: Compute backend — "jax" (default) or "numpy".
         write_eigen: If True, write per-chromosome eigen files after
             eigendecomp. Raises ValueError if eigen_dir is None.
         eigen_dir: Directory for reading/writing per-chromosome eigen cache.
@@ -757,13 +754,9 @@ def run_lmm_loco(
 
     Raises:
         ValueError: If only one chromosome present, if lmm_mode invalid,
-            if backend is not 'jax' or 'numpy', or when cached eigen
-            files exist in eigen_dir.
+            when cached eigen files exist in eigen_dir.
     """
     start_time = time.perf_counter()
-
-    if backend not in ("jax", "numpy"):
-        raise ValueError(f"backend must be 'jax' or 'numpy', got {backend!r}")
 
     if lmm_mode not in (1, 2, 3, 4):
         raise ValueError(
@@ -802,8 +795,7 @@ def run_lmm_loco(
             f"Found only {len(unique_chrs)} chromosome(s): {unique_chrs}"
         )
 
-    # Log the actual backend being used (not a re-derived plan, which could diverge)
-    logger.info(f"LOCO backend: {backend}")
+    logger.info("LOCO backend: numpy")
 
     if show_progress:
         logger.info("Performing LOCO LMM Association Test")
@@ -845,320 +837,260 @@ def run_lmm_loco(
 
     all_results: list[AssocResult] = []
 
-    try:
-        with contextlib.ExitStack() as stack:
-            writer = None
-            if output_path is not None:
-                writer = stack.enter_context(
-                    IncrementalAssocWriter(output_path, test_type=test_type)
-                )
-
-            # Precompute global SNP membership mask for -snps restriction.
-            # Avoids per-chromosome np.isin on every iteration.
-            if snps_indices is not None:
-                snps_global_mask: np.ndarray | None = np.zeros(n_snps_total, dtype=bool)
-                snps_global_mask[snps_indices] = True
-            else:
-                snps_global_mask = None
-
-            # Check for cached eigen files before computing kinship.
-            # When write_eigen is True the user explicitly asked to
-            # (re)generate files, so skip the cache and recompute.
-            eigen_cache: dict[str, tuple[Path, Path]] | None = None
-            if eigen_dir is not None and not write_eigen:
-                eigen_cache = _find_loco_eigen_cache(
-                    eigen_dir, eigen_prefix, unique_chrs
-                )
-                if eigen_cache is not None:
-                    logger.info(
-                        f"Found complete LOCO eigen cache in {eigen_dir} "
-                        f"({len(eigen_cache)} chromosomes). "
-                        f"Skipping kinship computation and eigendecomp."
-                    )
-                    if save_kinship:
-                        logger.warning(
-                            "save_kinship ignored when using cached eigen "
-                            "files (kinship is not computed)"
-                        )
-                    if backend == "numpy":
-                        logger.warning(
-                            "Using cached eigen with NumPy backend: SNP "
-                            "filtering will use valid-sample-only statistics "
-                            "(not all-sample stats from kinship pass). This "
-                            "may produce slightly different SNP filter sets "
-                            "compared to the original compute run."
-                        )
-
-            # Initialise to None; reassigned inside the compute block when
-            # eigen_cache is None and we actually stream kinship.
-            snp_stats_cache = None
-            loco_iter = None
-            # When save_kinship=False and some samples are invalid, pass
-            # valid_indices so kinship is accumulated at n_valid x n_valid size,
-            # avoiding full n_samples^2 materialisation for post-hoc subsetting
-            # (LOCO-07). Applies to both numpy and JAX backends.
-            kinship_valid_indices = (
-                None if all_samples_valid or save_kinship else np.where(valid_mask)[0]
+    with contextlib.ExitStack() as stack:
+        writer = None
+        if output_path is not None:
+            writer = stack.enter_context(
+                IncrementalAssocWriter(output_path, test_type=test_type)
             )
 
-            if eigen_cache is None:
-                # Stream LOCO kinship matrices one at a time.
-                # NumPy backend uses pure-NumPy kinship (no JAX dependency);
-                # JAX backend uses JAX matmul for GPU acceleration.
-                if backend == "numpy":
-                    loco_iter, snp_stats_cache = _compute_loco_kinship_streaming_numpy(
-                        bed_path,
-                        maf_threshold=maf_threshold,
-                        miss_threshold=miss_threshold,
-                        check_memory=check_memory,
-                        show_progress=show_progress,
-                        ksnps_indices=ksnps_indices,
-                        valid_indices=kinship_valid_indices,
-                        _copy_yielded_matrices=False,
+        # Precompute global SNP membership mask for -snps restriction.
+        # Avoids per-chromosome np.isin on every iteration.
+        if snps_indices is not None:
+            snps_global_mask: np.ndarray | None = np.zeros(n_snps_total, dtype=bool)
+            snps_global_mask[snps_indices] = True
+        else:
+            snps_global_mask = None
+
+        # Check for cached eigen files before computing kinship.
+        # When write_eigen is True the user explicitly asked to
+        # (re)generate files, so skip the cache and recompute.
+        eigen_cache: dict[str, tuple[Path, Path]] | None = None
+        if eigen_dir is not None and not write_eigen:
+            eigen_cache = _find_loco_eigen_cache(eigen_dir, eigen_prefix, unique_chrs)
+            if eigen_cache is not None:
+                logger.info(
+                    f"Found complete LOCO eigen cache in {eigen_dir} "
+                    f"({len(eigen_cache)} chromosomes). "
+                    f"Skipping kinship computation and eigendecomp."
+                )
+                if save_kinship:
+                    logger.warning(
+                        "save_kinship ignored when using cached eigen "
+                        "files (kinship is not computed)"
                     )
-                else:
-                    from jamma.kinship import (  # noqa: PLC0415
-                        compute_loco_kinship_streaming,
+                logger.warning(
+                    "Using cached eigen: SNP filtering will use "
+                    "valid-sample-only statistics (not all-sample stats "
+                    "from kinship pass). This may produce slightly "
+                    "different SNP filter sets compared to the original "
+                    "compute run."
+                )
+
+        # Initialise to None; reassigned inside the compute block when
+        # eigen_cache is None and we actually stream kinship.
+        snp_stats_cache = None
+        loco_iter = None
+        # When save_kinship=False and some samples are invalid, pass
+        # valid_indices so kinship is accumulated at n_valid x n_valid size,
+        # avoiding full n_samples^2 materialisation for post-hoc subsetting
+        # (LOCO-07).
+        kinship_valid_indices = (
+            None if all_samples_valid or save_kinship else np.where(valid_mask)[0]
+        )
+
+        if eigen_cache is None:
+            # Stream LOCO kinship matrices one at a time (pure NumPy).
+            loco_iter, snp_stats_cache = _compute_loco_kinship_streaming_numpy(
+                bed_path,
+                maf_threshold=maf_threshold,
+                miss_threshold=miss_threshold,
+                check_memory=check_memory,
+                show_progress=show_progress,
+                ksnps_indices=ksnps_indices,
+                valid_indices=kinship_valid_indices,
+                _copy_yielded_matrices=False,
+            )
+
+            # Create eigen output directory before the loop (once, not per-chr).
+            # (eigen_dir is guaranteed non-None when write_eigen is True
+            # by the early guard at the top of this function.)
+            if write_eigen:
+                try:
+                    eigen_dir.mkdir(parents=True, exist_ok=True)
+                except OSError as e:
+                    raise OSError(
+                        f"Cannot create eigen cache directory {eigen_dir}: {e}"
+                    ) from e
+
+        first_chr_pve: float | None = None
+        first_chr_pve_se: float | None = None
+
+        # Iterate: either from cached eigen files or kinship stream.
+        if eigen_cache is not None:
+            chr_iterator = ((chr_name, None) for chr_name in unique_chrs)
+        else:
+            assert loco_iter is not None, (
+                "loco_iter must be set when eigen_cache is None"
+            )
+            chr_iterator = loco_iter  # type: ignore[assignment]
+
+        for chr_idx, (chr_name, K_loco) in enumerate(chr_iterator):
+            chr_snp_indices = partitions[chr_name]
+
+            if eigen_cache is not None:
+                # Load cached eigen directly — no kinship or eigendecomp.
+                d_path, u_path = eigen_cache[chr_name]
+                if show_progress:
+                    logger.info(
+                        f"LOCO: chromosome {chr_name} "
+                        f"({chr_idx + 1}/{len(unique_chrs)}), "
+                        f"{len(chr_snp_indices)} SNPs, "
+                        f"loading cached eigen..."
+                    )
+                try:
+                    eigenvalues_np, U = read_eigen_files(
+                        d_path, u_path, n_samples=n_valid
+                    )
+                except (ValueError, FileNotFoundError) as e:
+                    raise type(e)(
+                        f"LOCO eigen cache for chromosome {chr_name}: {e}"
+                    ) from e
+            else:
+                # Standard path: kinship -> eigendecomp
+                if show_progress:
+                    logger.info(
+                        f"LOCO: chromosome {chr_name} "
+                        f"({chr_idx + 1}/{len(unique_chrs)}), "
+                        f"{len(chr_snp_indices)} SNPs, "
+                        f"eigendecomposing..."
                     )
 
-                    loco_iter = compute_loco_kinship_streaming(
-                        bed_path,
-                        maf_threshold=maf_threshold,
-                        miss_threshold=miss_threshold,
-                        check_memory=check_memory,
-                        show_progress=show_progress,
-                        ksnps_indices=ksnps_indices,
-                        valid_indices=kinship_valid_indices,
-                        _copy_yielded_matrices=False,
+                if save_kinship and kinship_output_dir is not None:
+                    kinship_path = (
+                        kinship_output_dir
+                        / f"{kinship_output_prefix}.loco.cXX.chr{chr_name}.npy"
                     )
-
-                # Create eigen output directory before the loop (once, not per-chr).
-                # (eigen_dir is guaranteed non-None when write_eigen is True
-                # by the early guard at the top of this function.)
-                if write_eigen:
                     try:
-                        eigen_dir.mkdir(parents=True, exist_ok=True)
+                        actual_path = write_kinship_matrix(K_loco, kinship_path)
                     except OSError as e:
                         raise OSError(
-                            f"Cannot create eigen cache directory {eigen_dir}: {e}"
+                            f"Failed to save LOCO kinship for chromosome "
+                            f"{chr_name} to {kinship_path}: {e}"
                         ) from e
-
-            first_chr_pve: float | None = None
-            first_chr_pve_se: float | None = None
-
-            # Iterate: either from cached eigen files or kinship stream.
-            if eigen_cache is not None:
-                chr_iterator = ((chr_name, None) for chr_name in unique_chrs)
-            else:
-                assert loco_iter is not None, (
-                    "loco_iter must be set when eigen_cache is None"
-                )
-                chr_iterator = loco_iter  # type: ignore[assignment]
-
-            for chr_idx, (chr_name, K_loco) in enumerate(chr_iterator):
-                chr_snp_indices = partitions[chr_name]
-
-                if eigen_cache is not None:
-                    # Load cached eigen directly — no kinship or eigendecomp.
-                    d_path, u_path = eigen_cache[chr_name]
                     if show_progress:
-                        logger.info(
-                            f"LOCO: chromosome {chr_name} "
-                            f"({chr_idx + 1}/{len(unique_chrs)}), "
-                            f"{len(chr_snp_indices)} SNPs, "
-                            f"loading cached eigen..."
+                        logger.info(f"  Saved LOCO kinship to {actual_path}")
+
+                # K_loco is already n_valid x n_valid from early subsetting
+                # (the numpy backend passes valid_indices to the
+                # kinship streamer) — skip post-hoc np.ix_ copy (LOCO-07).
+                if kinship_valid_indices is not None:
+                    if K_loco.shape != (n_valid, n_valid):
+                        raise RuntimeError(
+                            f"Expected K_loco shape ({n_valid}, {n_valid}) "
+                            f"from early subsetting, got {K_loco.shape}"
                         )
-                    try:
-                        eigenvalues_np, U = read_eigen_files(
-                            d_path, u_path, n_samples=n_valid
-                        )
-                    except (ValueError, FileNotFoundError) as e:
-                        raise type(e)(
-                            f"LOCO eigen cache for chromosome {chr_name}: {e}"
-                        ) from e
+                    K_loco_valid = K_loco
+                    del K_loco
+                elif all_samples_valid:
+                    K_loco_valid = K_loco
+                    del K_loco
                 else:
-                    # Standard path: kinship -> eigendecomp
-                    if show_progress:
-                        logger.info(
-                            f"LOCO: chromosome {chr_name} "
-                            f"({chr_idx + 1}/{len(unique_chrs)}), "
-                            f"{len(chr_snp_indices)} SNPs, "
-                            f"eigendecomposing..."
-                        )
-
-                    if save_kinship and kinship_output_dir is not None:
-                        kinship_path = (
-                            kinship_output_dir
-                            / f"{kinship_output_prefix}.loco.cXX.chr{chr_name}.npy"
-                        )
-                        try:
-                            actual_path = write_kinship_matrix(K_loco, kinship_path)
-                        except OSError as e:
-                            raise OSError(
-                                f"Failed to save LOCO kinship for chromosome "
-                                f"{chr_name} to {kinship_path}: {e}"
-                            ) from e
-                        if show_progress:
-                            logger.info(f"  Saved LOCO kinship to {actual_path}")
-
-                    # K_loco is already n_valid x n_valid from early subsetting
-                    # (both numpy and JAX backends pass valid_indices to the
-                    # kinship streamer) — skip post-hoc np.ix_ copy (LOCO-07).
-                    if kinship_valid_indices is not None:
-                        if K_loco.shape != (n_valid, n_valid):
-                            raise RuntimeError(
-                                f"Expected K_loco shape ({n_valid}, {n_valid}) "
-                                f"from early subsetting, got {K_loco.shape}"
-                            )
-                        K_loco_valid = K_loco
-                        del K_loco
-                    elif all_samples_valid:
-                        K_loco_valid = K_loco
-                        del K_loco
-                    else:
-                        K_loco_valid = K_loco[np.ix_(valid_mask, valid_mask)]
-                        del K_loco
-                        gc.collect()
-
-                    eigenvalues_np, U = eigendecompose_kinship(
-                        K_loco_valid, check_memory=check_memory
-                    )
-                    del K_loco_valid
+                    K_loco_valid = K_loco[np.ix_(valid_mask, valid_mask)]
+                    del K_loco
                     gc.collect()
 
-                # Write eigen files if requested (skip for cache-loaded eigen).
-                if write_eigen and eigen_cache is None:
-                    try:
-                        write_eigen_files(
-                            eigenvalues_np,
-                            U,
-                            eigen_dir,
-                            prefix=f"{eigen_prefix}.loco.chr{chr_name}",
-                        )
-                    except OSError as e:
-                        raise OSError(
-                            f"Failed to write LOCO eigen for chromosome "
-                            f"{chr_name} to {eigen_dir}: {e}"
-                        ) from e
-                    logger.info(f"  Wrote LOCO eigen for chr {chr_name}")
-
-                logger.debug(
-                    f"  chr {chr_name}: {backend} backend, {len(chr_snp_indices)} SNPs"
+                eigenvalues_np, U = eigendecompose_kinship(
+                    K_loco_valid, check_memory=check_memory
                 )
-
-                if backend == "numpy":
-                    chr_results, chr_pve, chr_pve_se = _run_lmm_for_chromosome_numpy(
-                        bed_path=bed_path,
-                        chr_snp_indices=chr_snp_indices,
-                        eigenvalues=eigenvalues_np,
-                        eigenvectors=U,
-                        phenotypes=phenotypes_valid,
-                        covariates=covariates_valid,
-                        snp_info=snp_info,
-                        maf_threshold=maf_threshold,
-                        miss_threshold=miss_threshold,
-                        lmm_mode=lmm_mode,
-                        valid_mask=valid_mask,
-                        show_progress=show_progress,
-                        l_min=l_min,
-                        l_max=l_max,
-                        snps_global_mask=snps_global_mask,
-                        col_chunk_size=col_chunk_size,
-                        writer=writer,
-                        chr_name=chr_name,
-                        snp_stats_cache=snp_stats_cache,
-                        compute_pve=(first_chr_pve is None),
-                    )
-                elif backend == "jax":
-                    # JAX path: always uses streaming internally
-                    # (batch JAX for LOCO is out of scope)
-                    chr_results, chr_pve, chr_pve_se = _run_lmm_for_chromosome(
-                        bed_path=bed_path,
-                        chr_snp_indices=chr_snp_indices,
-                        eigenvalues=eigenvalues_np,
-                        eigenvectors=U,
-                        phenotypes=phenotypes_valid,
-                        covariates=covariates_valid,
-                        snp_info=snp_info,
-                        maf_threshold=maf_threshold,
-                        miss_threshold=miss_threshold,
-                        lmm_mode=lmm_mode,
-                        valid_mask=valid_mask,
-                        show_progress=show_progress,
-                        l_min=l_min,
-                        l_max=l_max,
-                        snps_global_mask=snps_global_mask,
-                        col_chunk_size=col_chunk_size,
-                        writer=writer,
-                        compute_pve=(first_chr_pve is None),
-                    )
-                else:
-                    raise ValueError(
-                        f"Unknown LOCO backend: {backend!r}. Must be 'numpy' or 'jax'."
-                    )
-
-                if writer is None:
-                    all_results.extend(chr_results)
-
-                if first_chr_pve is None and chr_pve is not None:
-                    if chr_idx > 0:
-                        logger.info(
-                            f"PVE computed from chromosome {chr_name} "
-                            f"(earlier chromosomes had all SNPs filtered)"
-                        )
-                    first_chr_pve = chr_pve
-                    first_chr_pve_se = chr_pve_se
-
-                del eigenvalues_np, U
+                del K_loco_valid
                 gc.collect()
 
-            if first_chr_pve is None:
-                logger.warning(
-                    "PVE could not be computed: all chromosomes had all SNPs "
-                    "filtered. Check MAF/missingness thresholds."
-                )
+            # Write eigen files if requested (skip for cache-loaded eigen).
+            if write_eigen and eigen_cache is None:
+                try:
+                    write_eigen_files(
+                        eigenvalues_np,
+                        U,
+                        eigen_dir,
+                        prefix=f"{eigen_prefix}.loco.chr{chr_name}",
+                    )
+                except OSError as e:
+                    raise OSError(
+                        f"Failed to write LOCO eigen for chromosome "
+                        f"{chr_name} to {eigen_dir}: {e}"
+                    ) from e
+                logger.info(f"  Wrote LOCO eigen for chr {chr_name}")
 
-            if writer is not None and show_progress:
-                logger.info(f"Wrote {writer.count:,} results to {output_path}")
-
-            if show_progress:
-                elapsed = time.perf_counter() - start_time
-                pve_str = (
-                    f", pve={first_chr_pve:.6f}" if first_chr_pve is not None else ""
-                )
-                se_str = (
-                    f", se(pve)={first_chr_pve_se:.6g}"
-                    if first_chr_pve_se is not None
-                    else ""
-                )
-                logger.info(
-                    f"LOCO LMM Association completed in {elapsed:.2f}s{pve_str}{se_str}"
-                )
-
-            n_tested = writer.count if writer is not None else len(all_results)
-            return LocoResult(
-                associations=[] if output_path is not None else all_results,
-                n_tested=n_tested,
-                pve=first_chr_pve,
-                pve_se=first_chr_pve_se,
+            logger.debug(
+                f"  chr {chr_name}: numpy backend, {len(chr_snp_indices)} SNPs"
             )
-    finally:
-        if backend == "jax":
-            from jamma.lmm.compute import cleanup_jax_caches  # noqa: PLC0415
 
-            cleanup_jax_caches()
+            chr_results, chr_pve, chr_pve_se = _run_lmm_for_chromosome_numpy(
+                bed_path=bed_path,
+                chr_snp_indices=chr_snp_indices,
+                eigenvalues=eigenvalues_np,
+                eigenvectors=U,
+                phenotypes=phenotypes_valid,
+                covariates=covariates_valid,
+                snp_info=snp_info,
+                maf_threshold=maf_threshold,
+                miss_threshold=miss_threshold,
+                lmm_mode=lmm_mode,
+                valid_mask=valid_mask,
+                show_progress=show_progress,
+                l_min=l_min,
+                l_max=l_max,
+                snps_global_mask=snps_global_mask,
+                col_chunk_size=col_chunk_size,
+                writer=writer,
+                chr_name=chr_name,
+                snp_stats_cache=snp_stats_cache,
+                compute_pve=(first_chr_pve is None),
+            )
+
+            if writer is None:
+                all_results.extend(chr_results)
+
+            if first_chr_pve is None and chr_pve is not None:
+                if chr_idx > 0:
+                    logger.info(
+                        f"PVE computed from chromosome {chr_name} "
+                        f"(earlier chromosomes had all SNPs filtered)"
+                    )
+                first_chr_pve = chr_pve
+                first_chr_pve_se = chr_pve_se
+
+            del eigenvalues_np, U
+            gc.collect()
+
+        if first_chr_pve is None:
+            logger.warning(
+                "PVE could not be computed: all chromosomes had all SNPs "
+                "filtered. Check MAF/missingness thresholds."
+            )
+
+        if writer is not None and show_progress:
+            logger.info(f"Wrote {writer.count:,} results to {output_path}")
+
+        if show_progress:
+            elapsed = time.perf_counter() - start_time
+            pve_str = f", pve={first_chr_pve:.6f}" if first_chr_pve is not None else ""
+            se_str = (
+                f", se(pve)={first_chr_pve_se:.6g}"
+                if first_chr_pve_se is not None
+                else ""
+            )
+            logger.info(
+                f"LOCO LMM Association completed in {elapsed:.2f}s{pve_str}{se_str}"
+            )
+
+        n_tested = writer.count if writer is not None else len(all_results)
+        return LocoResult(
+            associations=[] if output_path is not None else all_results,
+            n_tested=n_tested,
+            pve=first_chr_pve,
+            pve_se=first_chr_pve_se,
+        )
 
 
 @dataclass
 class _LocoChrContext:
     """Shared context from PASS 1 + covariate/rotation setup for a single chromosome.
 
-    Holds the results of the common prefix shared between the JAX and NumPy
-    chromosome runners: SNP statistics collection, filtering, covariate
-    matrix construction, eigenrotation, and optional PVE computation.
-
-    PASS 2 (association compute loop) remains backend-specific and is NOT
-    included here — the null model dispatch differs between JAX and NumPy.
+    Holds the results of the common prefix shared by the NumPy chromosome
+    runner: SNP statistics collection, filtering, covariate matrix
+    construction, eigenrotation, and optional PVE computation.
     """
 
     global_filtered_indices: np.ndarray
@@ -1196,7 +1128,7 @@ def _loco_chr_common(
 ) -> _LocoChrContext | None:
     """Run PASS 1 (SNP stats + filtering) and covariate/rotation setup.
 
-    Extracts the shared prefix from both JAX and NumPy chromosome runners.
+    Extracts the shared prefix for the NumPy chromosome runner.
     Returns None if all SNPs are filtered out (caller should return early).
 
     Args:
@@ -1274,8 +1206,7 @@ def _loco_chr_common(
     # === Covariate matrix + eigenrotation ===
     W, n_cvt = _build_covariate_matrix(covariates, n_samples)
 
-    # Rotation is pure BLAS — use all physical cores, not the JAX-reduced
-    # count from get_blas_thread_count(). JAX isn't running during rotation.
+    # Rotation is pure BLAS — use all physical cores.
     rotation_threads = get_physical_core_count()
 
     with blas_threads(rotation_threads):
@@ -1307,325 +1238,6 @@ def _loco_chr_common(
     )
 
 
-def _run_lmm_for_chromosome_jax_impl(
-    bed_path: Path,
-    chr_snp_indices: np.ndarray,
-    eigenvalues: np.ndarray,
-    eigenvectors: np.ndarray,
-    phenotypes: np.ndarray,
-    covariates: np.ndarray | None,
-    snp_info: list,
-    maf_threshold: float,
-    miss_threshold: float,
-    lmm_mode: int,
-    valid_mask: np.ndarray,
-    show_progress: bool,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    snps_global_mask: np.ndarray | None,
-    col_chunk_size: int,
-    writer: IncrementalAssocWriter | None,
-    compute_pve: bool,
-) -> tuple[list[AssocResult], float | None, float | None]:
-    """Core JAX LOCO per-chromosome implementation without cleanup wrapper."""
-    import jax  # noqa: PLC0415
-
-    from jamma.lmm.chunk import (  # noqa: PLC0415
-        _compute_chunk_size,
-        compute_subchunk_starts,
-    )
-    from jamma.lmm.compute import (  # noqa: PLC0415
-        _compute_lmm_chunk,
-        block_chunk_result,
-        log_jax_error,
-    )
-    from jamma.lmm.likelihood_jax import batch_compute_uab  # noqa: PLC0415
-    from jamma.lmm.prepare import (  # noqa: PLC0415
-        DevicePlacement,
-        _compute_null_model,
-        _select_jax_device,
-        prepare_utg_chunk,
-    )
-    from jamma.lmm.results import _chunk_result_to_numpy  # noqa: PLC0415
-    from jamma.lmm.schema import ACCUM_KEYS  # noqa: PLC0415
-
-    # === Shared PASS 1 + covariate/rotation setup ===
-    ctx = _loco_chr_common(
-        bed_path=bed_path,
-        chr_snp_indices=chr_snp_indices,
-        eigenvalues=eigenvalues,
-        eigenvectors=eigenvectors,
-        phenotypes=phenotypes,
-        covariates=covariates,
-        maf_threshold=maf_threshold,
-        miss_threshold=miss_threshold,
-        valid_mask=valid_mask,
-        show_progress=show_progress,
-        l_min=l_min,
-        l_max=l_max,
-        snps_global_mask=snps_global_mask,
-        col_chunk_size=col_chunk_size,
-        compute_pve=compute_pve,
-    )
-    if ctx is None:
-        return [], None, None
-
-    n_samples = phenotypes.shape[0]
-
-    # === PASS 2: Chunked JAX association ===
-    # LOCO intentionally uses single-device mode — each chromosome's
-    # association pass has fewer SNPs, so multi-device sharding overhead
-    # outweighs the parallelism benefit.
-    device = _select_jax_device(use_gpu=False)
-    placement = DevicePlacement(snp=device, rep=device, n_devices=1)
-
-    logl_H0, lambda_null_mle, Hi_eval_null_jax = _compute_null_model(
-        lmm_mode,
-        eigenvalues,
-        ctx.UtW,
-        ctx.Uty,
-        ctx.n_cvt,
-        placement.rep,
-        show_progress=False,
-        l_min=l_min,
-        l_max=l_max,
-    )
-
-    chr_pve = ctx.chr_pve
-    chr_pve_se = ctx.chr_pve_se
-
-    eigenvalues_jax = jax.device_put(eigenvalues, placement.rep)
-    UtW_jax = jax.device_put(ctx.UtW, placement.rep)
-    Uty_jax = jax.device_put(ctx.Uty, placement.rep)
-
-    jax_chunk_size = _compute_chunk_size(
-        ctx.n_filtered, n_devices=placement.n_devices, n_samples=n_samples
-    )
-
-    def _prepare_jax_chunk(
-        start: int, end: int, geno: np.ndarray
-    ) -> tuple[np.ndarray, int]:
-        """Slice a genotype subset and prepare utg_t for device transfer."""
-        geno_slice = geno[:, start:end]
-        return prepare_utg_chunk(
-            geno_slice, eigenvectors, placement, ctx.rotation_threads
-        )
-
-    total_at_lmin = 0
-    total_at_lmax = 0
-    results: list[AssocResult] = []
-
-    bed_file = Path(f"{bed_path}.bed")
-    with open_bed(bed_file) as bed:
-        for disk_start in range(0, ctx.n_filtered, col_chunk_size):
-            disk_end = min(disk_start + col_chunk_size, ctx.n_filtered)
-            disk_col_indices = ctx.global_filtered_indices[disk_start:disk_end]
-
-            geno_disk_chunk = bed.read(
-                index=np.s_[ctx.valid_indices, disk_col_indices],
-                dtype=np.float64,
-            )
-
-            chunk_filtered_means = ctx.filtered_means_all[disk_start:disk_end]
-            filtered_means_broadcast = chunk_filtered_means.reshape(1, -1)
-            missing_mask = np.isnan(geno_disk_chunk)
-            geno_disk_chunk = np.where(
-                missing_mask, filtered_means_broadcast, geno_disk_chunk
-            )
-
-            n_disk_subset = geno_disk_chunk.shape[1]
-            jax_starts = compute_subchunk_starts(
-                n_disk_subset, jax_chunk_size, placement.n_devices
-            )
-            jax_ends = [
-                jax_starts[i + 1] if i + 1 < len(jax_starts) else n_disk_subset
-                for i in range(len(jax_starts))
-            ]
-
-            utg_t_np, actual_jax_len = _prepare_jax_chunk(
-                jax_starts[0], jax_ends[0], geno_disk_chunk
-            )
-            utg_t_jax = jax.device_put(utg_t_np, placement.snp)
-            del utg_t_np
-
-            for i, _jax_start in enumerate(jax_starts):
-                current_actual_len = actual_jax_len
-                current_utg_t = utg_t_jax
-
-                if i + 1 < len(jax_starts):
-                    utg_t_np, actual_jax_len = _prepare_jax_chunk(
-                        jax_starts[i + 1], jax_ends[i + 1], geno_disk_chunk
-                    )
-                    utg_t_jax = jax.device_put(utg_t_np, placement.snp)
-                    del utg_t_np
-
-                try:
-                    Uab_batch = batch_compute_uab(
-                        ctx.n_cvt, UtW_jax, Uty_jax, current_utg_t
-                    )
-
-                    chunk_result = _compute_lmm_chunk(
-                        lmm_mode,
-                        ctx.n_cvt,
-                        eigenvalues_jax,
-                        Uab_batch,
-                        n_samples,
-                        l_min=l_min,
-                        l_max=l_max,
-                        n_grid=n_grid,
-                        n_refine=n_refine,
-                        Hi_eval_null=Hi_eval_null_jax,
-                        logl_H0=logl_H0,
-                    )
-                    block_chunk_result(chunk_result, lmm_mode)
-                except Exception as e:
-                    log_jax_error(
-                        e,
-                        chunk_label=f"LOCO {i + 1}",
-                        chunk_snps=current_actual_len,
-                        n_samples=n_samples,
-                        n_cvt=ctx.n_cvt,
-                    )
-                    raise
-
-                subchunk_start = disk_start + jax_starts[i]
-                subchunk_end = subchunk_start + current_actual_len
-                arrays = _chunk_result_to_numpy(
-                    chunk_result,
-                    ACCUM_KEYS[lmm_mode],
-                    current_actual_len,
-                )
-                n_lmin, n_lmax = count_lambda_boundary_hits(
-                    lmm_mode, arrays, l_min, l_max
-                )
-                total_at_lmin += n_lmin
-                total_at_lmax += n_lmax
-
-                if writer is not None:
-                    writer.write_arrays_batch(
-                        lmm_mode,
-                        ctx.global_filtered_indices[subchunk_start:subchunk_end],
-                        snp_info,
-                        ctx.filtered_afs[subchunk_start:subchunk_end],
-                        ctx.filtered_miss[subchunk_start:subchunk_end],
-                        arrays,
-                    )
-                else:
-                    subchunk_results = list(
-                        _yield_chunk_results(
-                            lmm_mode,
-                            np.arange(subchunk_start, subchunk_end),
-                            ctx.global_filtered_indices,
-                            ctx.filtered_afs,
-                            ctx.filtered_miss,
-                            snp_info,
-                            arrays,
-                        )
-                    )
-                    results.extend(subchunk_results)
-
-                del arrays, chunk_result, Uab_batch, current_utg_t
-                if i + 1 >= len(jax_starts):
-                    utg_t_jax = None
-
-            del geno_disk_chunk
-
-    log_lambda_boundary_warning(
-        total_at_lmin, total_at_lmax, l_min, l_max, prefix="LOCO "
-    )
-
-    return results, chr_pve, chr_pve_se
-
-
-def _run_lmm_for_chromosome(
-    bed_path: Path,
-    chr_snp_indices: np.ndarray,
-    eigenvalues: np.ndarray,
-    eigenvectors: np.ndarray,
-    phenotypes: np.ndarray,
-    covariates: np.ndarray | None,
-    snp_info: list,
-    maf_threshold: float,
-    miss_threshold: float,
-    lmm_mode: int,
-    valid_mask: np.ndarray,
-    show_progress: bool = True,
-    l_min: float = 1e-5,
-    l_max: float = 1e5,
-    n_grid: int = 50,
-    n_refine: int = 10,
-    snps_global_mask: np.ndarray | None = None,
-    col_chunk_size: int = 5_000,
-    writer: IncrementalAssocWriter | None = None,
-    compute_pve: bool = False,
-) -> tuple[list[AssocResult], float | None, float | None]:
-    """Run JAX LMM association on a single chromosome's SNPs.
-
-    Reads the chromosome's SNPs from the BED file in column chunks
-    (two-pass: statistics, then association), never allocating the full
-    chromosome genotype matrix. Peak per-chunk allocation is
-    (n_valid, col_chunk_size) instead of (n_valid, n_chr_snps).
-
-    Args:
-        bed_path: PLINK file prefix.
-        chr_snp_indices: Column indices for this chromosome's SNPs.
-        eigenvalues: Eigenvalues from LOCO kinship eigendecomp.
-        eigenvectors: Eigenvectors from LOCO kinship eigendecomp.
-        phenotypes: Phenotype vector (n_valid_samples,), already filtered.
-        covariates: Covariate matrix (n_valid_samples, n_cvt) or None.
-        snp_info: Full SNP metadata list (indexed by global SNP index).
-        maf_threshold: Minimum MAF for SNP inclusion.
-        miss_threshold: Maximum missing rate for SNP inclusion.
-        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
-        valid_mask: Boolean mask for valid samples (for genotype subsetting).
-        show_progress: Whether to log progress.
-        l_min: Minimum lambda for optimization.
-        l_max: Maximum lambda for optimization.
-        n_grid: Grid search resolution.
-        n_refine: Golden section iterations.
-        snps_global_mask: Boolean mask over all SNPs (True = included by -snps), or
-            None. Pre-indexed: `snps_global_mask[chr_snp_indices]` gives the
-            per-chromosome mask. Avoids per-chromosome np.isin computation.
-        col_chunk_size: Number of SNP columns per disk read chunk.
-        writer: Optional incremental writer for streaming results to disk.
-            When provided, results are written directly and an empty list
-            is returned. When None, results are accumulated and returned.
-        compute_pve: If True, compute PVE from null model REML lambda.
-            Set for each chromosome until PVE is successfully computed
-            (typically the first chromosome with passing SNPs).
-
-    Returns:
-        Tuple of (results, pve, pve_se) where results is a list of AssocResult
-        (empty if writer used), pve is the PVE estimate (None unless
-        compute_pve=True), and pve_se is the standard error of PVE (None
-        unless compute_pve=True and likelihood surface is not flat).
-    """
-    return _run_lmm_for_chromosome_jax_impl(
-        bed_path,
-        chr_snp_indices,
-        eigenvalues,
-        eigenvectors,
-        phenotypes,
-        covariates,
-        snp_info,
-        maf_threshold,
-        miss_threshold,
-        lmm_mode,
-        valid_mask,
-        show_progress,
-        l_min,
-        l_max,
-        n_grid,
-        n_refine,
-        snps_global_mask,
-        col_chunk_size,
-        writer,
-        compute_pve,
-    )
-
-
 def _run_lmm_for_chromosome_numpy(
     bed_path: Path,
     chr_snp_indices: np.ndarray,
@@ -1652,8 +1264,8 @@ def _run_lmm_for_chromosome_numpy(
 ) -> tuple[list[AssocResult], float | None, float | None]:
     """Run NumPy LMM association on a single chromosome's SNPs.
 
-    Pure-NumPy implementation — no JAX dependency. Mirrors the structure of
-    _run_lmm_for_chromosome but uses NumPy functions throughout.
+    Pure-NumPy implementation. Reads the chromosome's SNPs from the BED
+    file in column chunks (two-pass: statistics, then association).
 
     Reads the chromosome's SNPs from the BED file in column chunks
     (two-pass: statistics, then association), never allocating the full

@@ -131,7 +131,7 @@ class MemoryBreakdown(NamedTuple):
     """
 
     kinship_gb: float  # n^2 * 8 bytes (float64)
-    genotypes_gb: float  # n * p * 8 bytes (float64, JAX copy)
+    genotypes_gb: float  # n * p * 8 bytes (float64)
     eigenvectors_gb: float  # n^2 * 8 bytes (float64)
     eigendecomp_workspace_gb: float  # DSYEVD O(N^2) workspace (conservative)
     lmm_rotated_gb: float  # n * 8 * 3 bytes (Uy, UW, rotated vectors)
@@ -213,10 +213,10 @@ def estimate_workflow_memory(
     """
     # Component sizes
     kinship_gb = _square_matrix_gb(n_samples)
-    # Kinship converts genotypes to float64 via jnp.array(..., dtype=jnp.float64)
+    # Kinship converts genotypes to float64 via np.array(..., dtype=np.float64)
     # Full materialization — streaming path uses chunk_size instead
     # (see estimate_streaming_memory)
-    genotypes_gb = n_samples * n_snps * 8 / 1e9  # float64 (JAX copy)
+    genotypes_gb = n_samples * n_snps * 8 / 1e9  # float64
     eigenvectors_gb = _square_matrix_gb(n_samples)
 
     # Eigendecomp workspace: DSYEVD O(n^2) (default driver).
@@ -225,7 +225,7 @@ def estimate_workflow_memory(
 
     # LMM working memory
     lmm_rotated_gb = n_samples * 8 * 3 / 1e9  # Uy, UW, Ux per SNP
-    # UtG chunk + Uab_batch + Iab_batch (dominant JAX intermediates)
+    # UtG chunk + Uab_batch + Iab_batch (dominant intermediates)
     lmm_batch_gb = (
         n_samples * lmm_batch_size * 8 / 1e9  # UtG chunk
         + _uab_iab_gb(n_samples, lmm_batch_size, n_cvt)  # Uab + Iab
@@ -235,8 +235,8 @@ def estimate_workflow_memory(
     # Workflow: genotypes -> kinship -> eigendecomp -> LMM
     # Kinship can be freed after eigendecomp
 
-    # Phase 1 (kinship): numpy input + JAX device copy coexist during
-    # kinship accumulation in _compute_kinship_inmemory
+    # Phase 1 (kinship): input + working copy coexist during
+    # kinship accumulation
     peak_kinship = genotypes_gb * 2 + kinship_gb
 
     # Phase 2 (eigendecomp): conservative non-inplace estimate (K + U +
@@ -281,7 +281,7 @@ def estimate_lmm_memory(
     phases, this returns only the LMM phase requirement.
 
     Includes Uab_batch (n_chunk, n_samples, n_index) and Iab_batch
-    (n_chunk, n_cvt+2, n_index) which are the dominant JAX intermediates.
+    (n_chunk, n_cvt+2, n_index) which are the dominant intermediates.
 
     Note: The default lmm_batch_size=20_000 is a generic estimate. At runtime,
     auto_tune_chunk_size() in chunk.py computes the actual chunk size based on
@@ -305,10 +305,10 @@ def estimate_lmm_memory(
     eigenvectors_gb = _square_matrix_gb(n_samples)
     # Full materialization — streaming path uses chunk_size instead
     # (see estimate_lmm_streaming_memory)
-    genotypes_gb = n_samples * n_snps * 8 / 1e9  # float64 (JAX copy)
+    genotypes_gb = n_samples * n_snps * 8 / 1e9  # float64
     eigenvalues_gb = n_samples * 8 / 1e9
     lmm_rotated_gb = n_samples * 8 * 3 / 1e9
-    # UtG chunk + Uab_batch + Iab_batch (dominant JAX intermediates)
+    # UtG chunk + Uab_batch + Iab_batch (dominant intermediates)
     lmm_batch_gb = (
         n_samples * lmm_batch_size * 8 / 1e9  # UtG chunk
         + _uab_iab_gb(n_samples, lmm_batch_size, n_cvt)  # Uab + Iab
@@ -360,7 +360,7 @@ def _streaming_component_sizes(
     chunk_size: int,
     n_grid: int,
     pipeline_buffers: int = 1,
-    jax_chunk_size: int | None = None,
+    compute_chunk_size: int | None = None,
 ) -> tuple[float, float, float, float, float, float]:
     """Compute component memory sizes (GB) for streaming estimation.
 
@@ -370,9 +370,9 @@ def _streaming_component_sizes(
         n_grid: Grid points for lambda optimization.
         pipeline_buffers: Number of simultaneous live UtG rotation buffers (default 1).
             Pass 2 when rotation-compute pipelining holds current + next buffers.
-        jax_chunk_size: SNPs per JAX sub-chunk (rotation/Uab/grid buffers).
+        compute_chunk_size: SNPs per compute sub-chunk (rotation/Uab/grid buffers).
             Defaults to chunk_size for backward compatibility. After per-subchunk
-            flush, the actual live JAX buffers are sized by jax_chunk_size, not
+            flush, the actual live compute buffers are sized by compute_chunk_size, not
             the disk chunk_size.
 
     Returns:
@@ -385,14 +385,14 @@ def _streaming_component_sizes(
         )
     if pipeline_buffers < 1:
         raise ValueError(f"pipeline_buffers must be >= 1, got {pipeline_buffers}")
-    if jax_chunk_size is None:
-        jax_chunk_size = chunk_size
+    if compute_chunk_size is None:
+        compute_chunk_size = chunk_size
     kinship_gb = _square_matrix_gb(n_samples)
     eigenvectors_gb = _square_matrix_gb(n_samples)
     eigendecomp_workspace_gb = _eigendecomp_workspace_gb(n_samples)
     chunk_gb = n_samples * chunk_size * 8 / 1e9
-    rotation_buffer_gb = n_samples * jax_chunk_size * 8 / 1e9 * pipeline_buffers
-    grid_reml_gb = n_grid * jax_chunk_size * 8 / 1e9
+    rotation_buffer_gb = n_samples * compute_chunk_size * 8 / 1e9 * pipeline_buffers
+    grid_reml_gb = n_grid * compute_chunk_size * 8 / 1e9
     return (
         kinship_gb,
         eigenvectors_gb,
@@ -409,7 +409,7 @@ def estimate_streaming_memory(
     n_grid: int = 50,
     n_cvt: int = 1,
     pipeline_buffers: int = 1,
-    jax_chunk_size: int | None = None,
+    compute_chunk_size: int | None = None,
 ) -> StreamingMemoryBreakdown:
     """Estimate memory requirements for streaming GWAS workflow.
 
@@ -437,7 +437,7 @@ def estimate_streaming_memory(
         pipeline_buffers: Number of simultaneous live UtG rotation buffers (default 1).
             Pass 2 when rotation-compute pipelining holds current + next buffers
             simultaneously — rotation_buffer_gb is multiplied accordingly.
-        jax_chunk_size: SNPs per JAX sub-chunk for rotation/Uab/grid buffers.
+        compute_chunk_size: SNPs per compute sub-chunk for rotation/Uab/grid buffers.
             Defaults to chunk_size. Pass the value from _compute_chunk_size()
             for accurate LMM phase estimates after per-subchunk flush.
 
@@ -448,8 +448,8 @@ def estimate_streaming_memory(
         >>> est = estimate_streaming_memory(200_000)
         >>> print(f"Peak: {est.total_peak_gb:.0f}GB (eigendecomp)")
     """
-    if jax_chunk_size is None:
-        jax_chunk_size = chunk_size
+    if compute_chunk_size is None:
+        compute_chunk_size = chunk_size
     (
         kinship_gb,
         eigenvectors_gb,
@@ -458,12 +458,12 @@ def estimate_streaming_memory(
         rotation_buffer_gb,
         grid_reml_gb,
     ) = _streaming_component_sizes(
-        n_samples, chunk_size, n_grid, pipeline_buffers, jax_chunk_size
+        n_samples, chunk_size, n_grid, pipeline_buffers, compute_chunk_size
     )
 
     # Don't use fused estimate: callers (pipeline, kinship, check_memory_before_run)
     # don't know the backend or lmm_mode.  Fused only applies to NumPy modes 1/4.
-    uab_iab_gb = _uab_iab_gb(n_samples, jax_chunk_size, n_cvt, use_fused=False)
+    uab_iab_gb = _uab_iab_gb(n_samples, compute_chunk_size, n_cvt, use_fused=False)
 
     # Peak memory calculation by workflow phase
     peak_kinship = kinship_gb + chunk_gb
@@ -499,7 +499,7 @@ def estimate_lmm_streaming_memory(
     n_grid: int = 50,
     n_cvt: int = 1,
     pipeline_buffers: int = 1,
-    jax_chunk_size: int | None = None,
+    compute_chunk_size: int | None = None,
 ) -> StreamingMemoryBreakdown:
     """Estimate memory for the streaming LMM phase only (not the full pipeline).
 
@@ -508,7 +508,7 @@ def estimate_lmm_streaming_memory(
     phases, this returns only the LMM phase requirement.
 
     Includes Uab_batch and Iab_batch intermediates which are the dominant
-    JAX buffers during LMM computation.
+    compute buffers during LMM computation.
 
     Args:
         n_samples: Number of samples (individuals).
@@ -519,7 +519,7 @@ def estimate_lmm_streaming_memory(
         pipeline_buffers: Number of simultaneous live UtG rotation buffers (default 1).
             Pass 2 when rotation-compute pipelining holds current + next buffers
             simultaneously — rotation_buffer_gb is multiplied accordingly.
-        jax_chunk_size: SNPs per JAX sub-chunk for rotation/Uab/grid buffers.
+        compute_chunk_size: SNPs per compute sub-chunk for rotation/Uab/grid buffers.
             Defaults to chunk_size. Pass the value from _compute_chunk_size()
             for accurate LMM phase estimates after per-subchunk flush.
 
@@ -530,8 +530,8 @@ def estimate_lmm_streaming_memory(
         >>> est = estimate_lmm_streaming_memory(100_000, 95_000)
         >>> print(f"LMM needs {est.total_peak_gb:.0f}GB")
     """
-    if jax_chunk_size is None:
-        jax_chunk_size = chunk_size
+    if compute_chunk_size is None:
+        compute_chunk_size = chunk_size
     (
         _kinship_gb,
         eigenvectors_gb,
@@ -540,12 +540,11 @@ def estimate_lmm_streaming_memory(
         rotation_buffer_gb,
         grid_reml_gb,
     ) = _streaming_component_sizes(
-        n_samples, chunk_size, n_grid, pipeline_buffers, jax_chunk_size
+        n_samples, chunk_size, n_grid, pipeline_buffers, compute_chunk_size
     )
 
-    # Don't use fused estimate: this is called by runner_jax_streaming which
-    # never uses the fused path, and doesn't know lmm_mode.
-    uab_iab_gb = _uab_iab_gb(n_samples, jax_chunk_size, n_cvt, use_fused=False)
+    # Don't use fused estimate: callers don't know lmm_mode.
+    uab_iab_gb = _uab_iab_gb(n_samples, compute_chunk_size, n_cvt, use_fused=False)
     total_peak_gb = (
         eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb + uab_iab_gb
     )
@@ -667,7 +666,7 @@ def log_memory_snapshot(label: str = "", level: str = "INFO") -> MemorySnapshot:
     return snap
 
 
-def cleanup_memory(clear_jax: bool = True, verbose: bool = True) -> MemorySnapshot:
+def cleanup_memory(verbose: bool = True) -> MemorySnapshot:
     """Free memory after a computation run.
 
     Call this between benchmark runs or after large computations to
@@ -675,13 +674,10 @@ def cleanup_memory(clear_jax: bool = True, verbose: bool = True) -> MemorySnapsh
 
     This function:
     1. Runs Python garbage collection
-    2. Clears JAX compilation caches (optional, enabled by default)
-    3. Runs a second GC pass to collect objects freed by cache clearing
-    4. Logs memory before/after cleanup if verbose
+    2. Runs a second GC pass
+    3. Logs memory before/after cleanup if verbose
 
     Args:
-        clear_jax: If True (default), clear JAX caches. Set False if JAX
-            not imported or if you want to preserve JIT-compiled functions.
         verbose: If True (default), log memory before and after cleanup.
 
     Returns:
@@ -706,15 +702,6 @@ def cleanup_memory(clear_jax: bool = True, verbose: bool = True) -> MemorySnapsh
         before = get_memory_snapshot()
 
     gc.collect()
-
-    if clear_jax:
-        try:
-            import jax
-
-            jax.clear_caches()
-        except ImportError:
-            logger.debug("JAX not available; skipping cache clearing")
-
     gc.collect()
 
     if verbose:
@@ -770,9 +757,9 @@ def check_memory_before_run(
     """
     from jamma.lmm.chunk import _compute_chunk_size
 
-    jax_chunk = _compute_chunk_size(n_snps, n_samples=n_samples, pipeline_buffers=2)
+    compute_chunk = _compute_chunk_size(n_snps, n_samples=n_samples, pipeline_buffers=2)
     est = estimate_streaming_memory(
-        n_samples, pipeline_buffers=2, jax_chunk_size=jax_chunk
+        n_samples, pipeline_buffers=2, compute_chunk_size=compute_chunk
     )
     snap = get_memory_snapshot()
 
@@ -807,7 +794,7 @@ def check_memory_before_run(
         + est.chunk_gb
         + est.rotation_buffer_gb
         + est.grid_reml_gb
-        + _uab_iab_gb(n_samples, jax_chunk, use_fused=False)
+        + _uab_iab_gb(n_samples, compute_chunk, use_fused=False)
     )
 
     if not dsyevd_fits and _has_dsyevr:

@@ -1,15 +1,9 @@
-"""NumPy LOCO tests that run without JAX.
-
-Kept in a separate file from test_loco.py because test_loco.py has
-``pytest.importorskip("jax")`` at module level, which skips the entire
-module when JAX is not installed. Tests here exercise the NumPy backend
-only and must not import JAX.
+"""NumPy LOCO tests.
 
 Related LOCO test files:
-- test_loco.py: Core LOCO tests (lmm_mode=1, cross-backend parity)
-- test_gemma_loco_integration.py: GEMMA ref (mode 1),
-  cross-backend parity (modes 2/3/4)
 - test_loco_bugs.py: Regression tests for kinship aliasing, ordering, cleanup
+- test_loco_eigen_cache.py: LOCO eigen cache write/read round-trip
+- legacy/tests/test_loco.py: Archived cross-backend parity tests
 """
 
 from __future__ import annotations
@@ -30,10 +24,10 @@ _LOCO_BFILE = _LOCO_FIXTURE_ROOT / "test"
 
 @pytest.mark.tier0
 class TestComputeLocoKinshipNumpy:
-    """Tests for KIN-01: compute_loco_kinship works without JAX."""
+    """Tests for KIN-01: compute_loco_kinship."""
 
-    def test_compute_loco_kinship_no_jax_import(self):
-        """compute_loco_kinship can be imported and called without JAX."""
+    def test_compute_loco_kinship_basic(self):
+        """compute_loco_kinship can be imported and called."""
         from jamma.kinship import compute_loco_kinship
 
         rng = np.random.default_rng(42)
@@ -252,7 +246,6 @@ def test_loco_numpy_no_per_chromosome_bed_reads():
         loco = run_lmm_loco(
             bed_path=_LOCO_BFILE,
             phenotypes=phenotypes,
-            backend="numpy",
             check_memory=False,
             show_progress=False,
         )
@@ -305,7 +298,6 @@ def test_run_lmm_loco_reads_loco_workers_env(monkeypatch):
         loco = run_lmm_loco(
             bed_path=_LOCO_BFILE,
             phenotypes=phenotypes,
-            backend="numpy",
             check_memory=False,
             show_progress=False,
         )
@@ -337,7 +329,6 @@ def test_loco_numpy_multipass_equivalence():
     loco_single = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
-        backend="numpy",
         check_memory=False,
         show_progress=False,
     )
@@ -363,7 +354,6 @@ def test_loco_numpy_multipass_equivalence():
         loco_multi = run_lmm_loco(
             bed_path=_LOCO_BFILE,
             phenotypes=phenotypes,
-            backend="numpy",
             check_memory=False,
             show_progress=False,
         )
@@ -432,7 +422,7 @@ def test_loco_numpy_show_progress_true():
 
     Exercises the tqdm progress bars and logger.info calls in
     _compute_loco_kinship_streaming_numpy and run_lmm_loco.
-    Not marked @requires_jax — runs in NumPy-only CI.
+    Runs in NumPy-only CI.
     """
     if not _LOCO_BFILE.with_suffix(".bed").exists():
         pytest.skip("gemma_loco fixture not available")
@@ -445,7 +435,6 @@ def test_loco_numpy_show_progress_true():
         lmm_mode=1,
         show_progress=True,
         check_memory=False,
-        backend="numpy",
     )
 
     assert loco.n_tested > 0, "Expected at least one SNP to be tested"

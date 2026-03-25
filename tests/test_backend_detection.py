@@ -20,40 +20,27 @@ class TestBackendInfo:
 
         assert isinstance(info, dict)
         assert "selected" in info
-        assert "jax_available" in info
-        assert set(info.keys()) == {"selected", "jax_available"}
+        assert set(info.keys()) == {"selected"}
 
-    def test_selected_is_valid_backend(self):
-        """Selected backend should be 'jax' or 'numpy'."""
+    def test_selected_is_numpy(self):
+        """Selected backend should always be 'numpy'."""
         info = get_backend_info()
-        assert info["selected"] in ("jax", "numpy")
-
-    def test_jax_available_is_bool(self):
-        """jax_available should be a boolean."""
-        info = get_backend_info()
-        assert isinstance(info["jax_available"], bool)
+        assert info["selected"] == "numpy"
 
 
 @pytest.mark.tier0
 class TestDetectBackend:
     """Tests for detect_backend() function."""
 
-    @pytest.mark.requires_jax
-    def test_auto_returns_jax_when_available(self):
-        """detect_backend('auto') returns 'jax' in dev env where JAX is installed."""
+    def test_auto_returns_numpy(self):
+        """detect_backend('auto') returns 'numpy'."""
         result = detect_backend("auto")
-        assert result == "jax"
-
-    def test_numpy_always_returns_numpy(self):
-        """detect_backend('numpy') always returns 'numpy', regardless of JAX."""
-        result = detect_backend("numpy")
         assert result == "numpy"
 
-    @pytest.mark.requires_jax
-    def test_jax_returns_jax_when_available(self):
-        """detect_backend('jax') returns 'jax' in dev env where JAX is installed."""
-        result = detect_backend("jax")
-        assert result == "jax"
+    def test_numpy_always_returns_numpy(self):
+        """detect_backend('numpy') always returns 'numpy'."""
+        result = detect_backend("numpy")
+        assert result == "numpy"
 
     def test_invalid_backend_raises(self):
         """detect_backend with unknown name raises ValueError."""
@@ -61,17 +48,10 @@ class TestDetectBackend:
             detect_backend("invalid")
 
     def test_env_var_overrides_requested(self, monkeypatch):
-        """JAMMA_BACKEND=numpy overrides detect_backend('jax')."""
+        """JAMMA_BACKEND=numpy overrides requested value."""
         monkeypatch.setenv("JAMMA_BACKEND", "numpy")
-        result = detect_backend("jax")
-        assert result == "numpy"
-
-    @pytest.mark.requires_jax
-    def test_env_var_jax_overrides_auto(self, monkeypatch):
-        """JAMMA_BACKEND=jax overrides detect_backend('auto') explicitly."""
-        monkeypatch.setenv("JAMMA_BACKEND", "jax")
         result = detect_backend("auto")
-        assert result == "jax"
+        assert result == "numpy"
 
     def test_env_var_invalid_raises(self, monkeypatch):
         """JAMMA_BACKEND with invalid value raises ValueError."""
@@ -84,47 +64,20 @@ class TestDetectBackend:
         result = detect_backend("numpy-streaming")
         assert result == "numpy"
 
-    def test_compound_jax_streaming_resolves(self):
-        """detect_backend('jax-streaming') resolves to base backend."""
-        # jax-streaming resolves to 'jax' — but JAX may not be installed,
-        # so this may raise ValueError about JAX not installed (which is fine).
-        try:
-            result = detect_backend("jax-streaming")
-            assert result == "jax"
-        except ValueError as e:
-            assert "JAX is not installed" in str(e)
+    def test_jax_raises(self):
+        """detect_backend('jax') raises ValueError (removed backend)."""
+        with pytest.raises(ValueError, match="Unknown backend"):
+            detect_backend("jax")
 
-
-@pytest.mark.tier0
-class TestDetectBackendJaxAbsent:
-    """T1: detect_backend('jax') raises ValueError when JAX is absent."""
-
-    def test_jax_requested_when_absent_raises(self, monkeypatch):
-        """detect_backend('jax') raises ValueError when JAX import fails."""
-        import builtins
-
-        real_import = builtins.__import__
-
-        def mock_import(name, *args, **kwargs):
-            if name == "jax":
-                raise ImportError("mock: jax not installed")
-            return real_import(name, *args, **kwargs)
-
-        monkeypatch.setattr(builtins, "__import__", mock_import)
-        # Clear the has_jax cache so detect_backend re-probes
-        from jamma.core import backend
-
-        backend.has_jax.cache_clear()
-        try:
-            with pytest.raises(ValueError, match="JAX is not installed"):
-                detect_backend("jax")
-        finally:
-            backend.has_jax.cache_clear()
+    def test_jax_streaming_raises(self):
+        """detect_backend('jax-streaming') raises ValueError (removed backend)."""
+        with pytest.raises(ValueError, match="Unknown backend"):
+            detect_backend("jax-streaming")
 
 
 @pytest.mark.tier0
 def test_import_jamma_succeeds():
-    """Smoke test: importing jamma should not raise even if JAX is available."""
+    """Smoke test: importing jamma should not raise."""
     import jamma
 
     assert hasattr(jamma, "__version__")
@@ -162,7 +115,6 @@ class TestExecutionMode:
                 return_value=_make_sufficient_estimate(),
             ),
             patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
-            patch("jamma.lmm.runner.has_jax", return_value=True),
         ):
             plan = select_execution_mode(100, 1000)
         assert plan.backend == "numpy"
@@ -176,63 +128,32 @@ class TestExecutionMode:
                 return_value=_make_insufficient_estimate(),
             ),
             patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
-            patch("jamma.lmm.runner.has_jax", return_value=True),
         ):
             plan = select_execution_mode(200_000, 100_000)
         assert plan.backend == "numpy"
         assert plan.mode == "streaming"
 
-    def test_auto_no_c_ext_memory_insufficient_returns_jax_streaming(self):
-        """auto + no C ext + JAX + memory insufficient -> jax-streaming."""
-        with (
-            patch(
-                "jamma.lmm.runner.estimate_lmm_memory",
-                return_value=_make_insufficient_estimate(),
-            ),
-            patch("jamma.lmm.runner.is_c_extension_usable", return_value=False),
-            patch("jamma.lmm.runner.has_jax", return_value=True),
-        ):
-            plan = select_execution_mode(200_000, 100_000)
-        assert plan.backend == "jax"
-        assert plan.mode == "streaming"
-
-    def test_auto_jax_memory_sufficient_no_c_ext_returns_jax_batch(self):
-        """auto + JAX + memory sufficient + no C ext -> jax-batch."""
+    def test_auto_no_c_ext_returns_numpy_batch(self):
+        """auto + no C ext -> numpy-batch fallback."""
         with (
             patch(
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_sufficient_estimate(),
             ),
             patch("jamma.lmm.runner.is_c_extension_usable", return_value=False),
-            patch("jamma.lmm.runner.has_jax", return_value=True),
-        ):
-            plan = select_execution_mode(100, 1000)
-        assert plan.backend == "jax"
-        assert plan.mode == "batch"
-
-    def test_auto_no_jax_no_c_ext_returns_numpy_batch(self):
-        """auto + no JAX + no C ext -> numpy-batch fallback."""
-        with (
-            patch(
-                "jamma.lmm.runner.estimate_lmm_memory",
-                return_value=_make_sufficient_estimate(),
-            ),
-            patch("jamma.lmm.runner.is_c_extension_usable", return_value=False),
-            patch("jamma.lmm.runner.has_jax", return_value=False),
         ):
             plan = select_execution_mode(100, 1000)
         assert plan.backend == "numpy"
         assert plan.mode == "batch"
 
-    def test_no_c_ext_no_jax_warns_for_large_dataset(self):
-        """No C extension + no JAX + insufficient memory logs warning."""
+    def test_no_c_ext_warns_for_large_dataset(self):
+        """No C extension + insufficient memory logs warning."""
         with (
             patch(
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_insufficient_estimate(),
             ),
             patch("jamma.lmm.runner.is_c_extension_usable", return_value=False),
-            patch("jamma.lmm.runner.has_jax", return_value=False),
             patch("jamma.lmm.runner.logger") as mock_logger,
         ):
             plan = select_execution_mode(n_samples=100, n_snps=1000)
@@ -255,51 +176,12 @@ class TestExecutionMode:
         assert plan.backend == "numpy"
         assert plan.mode == "batch"
 
-    def test_explicit_jax_memory_sufficient_returns_jax_batch(self):
-        """explicit 'jax' + memory sufficient -> jax-batch."""
-        with (
-            patch(
-                "jamma.lmm.runner.estimate_lmm_memory",
-                return_value=_make_sufficient_estimate(),
-            ),
-            patch("jamma.lmm.runner.has_jax", return_value=True),
-        ):
-            plan = select_execution_mode(100, 1000, requested="jax")
-        assert plan.backend == "jax"
-        assert plan.mode == "batch"
-
-    def test_explicit_jax_memory_insufficient_returns_jax_streaming(self):
-        """explicit 'jax' + memory insufficient -> jax-streaming."""
-        with (
-            patch(
-                "jamma.lmm.runner.estimate_lmm_memory",
-                return_value=_make_insufficient_estimate(),
-            ),
-            patch("jamma.lmm.runner.has_jax", return_value=True),
-        ):
-            plan = select_execution_mode(200_000, 100_000, requested="jax")
-        assert plan.backend == "jax"
-        assert plan.mode == "streaming"
-
-    def test_explicit_jax_absent_raises(self):
-        """explicit 'jax' + JAX not installed -> ValueError."""
-        with patch("jamma.lmm.runner.has_jax", return_value=False):
-            with pytest.raises(ValueError, match="JAX is not installed"):
-                select_execution_mode(100, 1000, requested="jax")
-
     def test_explicit_numpy_bypasses_auto(self):
         """Explicit backend='numpy' in PipelineConfig bypasses auto-selection."""
         from jamma.pipeline import PipelineConfig
 
         config = PipelineConfig(bfile="/tmp/test", backend="numpy")
         assert config.backend == "numpy"
-
-    def test_explicit_jax_bypasses_auto(self):
-        """Explicit backend='jax' in PipelineConfig bypasses auto-selection."""
-        from jamma.pipeline import PipelineConfig
-
-        config = PipelineConfig(bfile="/tmp/test", backend="jax")
-        assert config.backend == "jax"
 
     # -- Compound backend requests --
 
@@ -316,19 +198,6 @@ class TestExecutionMode:
             with pytest.raises(ValueError, match="C extension"):
                 select_execution_mode(100, 1000, requested="numpy-streaming")
 
-    def test_explicit_jax_streaming_returns_jax_streaming(self):
-        """explicit 'jax-streaming' -> jax-streaming directly."""
-        with patch("jamma.lmm.runner.has_jax", return_value=True):
-            plan = select_execution_mode(100, 1000, requested="jax-streaming")
-        assert plan.backend == "jax"
-        assert plan.mode == "streaming"
-
-    def test_explicit_jax_streaming_absent_raises(self):
-        """explicit 'jax-streaming' + JAX not installed -> ValueError."""
-        with patch("jamma.lmm.runner.has_jax", return_value=False):
-            with pytest.raises(ValueError, match="JAX is not installed"):
-                select_execution_mode(100, 1000, requested="jax-streaming")
-
     # -- Input validation --
 
     def test_invalid_requested_backend_raises(self):
@@ -336,15 +205,20 @@ class TestExecutionMode:
         with pytest.raises(ValueError, match="Unknown backend"):
             select_execution_mode(100, 1000, requested="gpu")
 
+    def test_jax_requested_raises(self):
+        """Requesting 'jax' backend raises ValueError (removed backend)."""
+        with pytest.raises(ValueError, match="Unknown backend"):
+            select_execution_mode(100, 1000, requested="jax")
+
     # -- ExecutionPlan invariants --
 
     def test_runner_name_property(self):
         """ExecutionPlan.runner_name returns 'backend-mode'."""
-        plan = ExecutionPlan(backend="jax", mode="streaming", reason="test")
-        assert plan.runner_name == "jax-streaming"
+        plan = ExecutionPlan(backend="numpy", mode="batch", reason="test")
+        assert plan.runner_name == "numpy-batch"
 
-        plan2 = ExecutionPlan(backend="numpy", mode="batch", reason="test")
-        assert plan2.runner_name == "numpy-batch"
+        plan2 = ExecutionPlan(backend="numpy", mode="streaming", reason="test")
+        assert plan2.runner_name == "numpy-streaming"
 
     def test_numpy_streaming_is_valid(self):
         """ExecutionPlan accepts numpy-streaming (numpy streaming runner available)."""
@@ -364,22 +238,16 @@ class TestExecutionMode:
         plan_b = ExecutionPlan("numpy", "batch", "reason B")
         assert plan_a == plan_b
 
-    def test_inequality_on_different_backend(self):
-        """Plans with different backends are not equal."""
-        plan_a = ExecutionPlan("numpy", "batch", "test")
-        plan_b = ExecutionPlan("jax", "batch", "test")
-        assert plan_a != plan_b
-
     def test_inequality_on_different_mode(self):
         """Plans with different modes are not equal."""
-        plan_a = ExecutionPlan("jax", "batch", "test")
-        plan_b = ExecutionPlan("jax", "streaming", "test")
+        plan_a = ExecutionPlan("numpy", "batch", "test")
+        plan_b = ExecutionPlan("numpy", "streaming", "test")
         assert plan_a != plan_b
 
     def test_hashable_ignores_reason(self):
         """Plans with same backend/mode hash identically despite different reasons."""
-        plan_a = ExecutionPlan("jax", "batch", "reason A")
-        plan_b = ExecutionPlan("jax", "batch", "reason B")
+        plan_a = ExecutionPlan("numpy", "batch", "reason A")
+        plan_b = ExecutionPlan("numpy", "batch", "reason B")
         assert hash(plan_a) == hash(plan_b)
         assert len({plan_a, plan_b}) == 1
 
@@ -388,48 +256,24 @@ class TestExecutionMode:
         sufficient = _make_sufficient_estimate()
         insufficient = _make_insufficient_estimate()
 
-        # First call returns jax-batch, second returns jax-streaming
+        # First call returns numpy-batch, second returns numpy-streaming
         with (
             patch(
                 "jamma.lmm.runner.estimate_lmm_memory",
                 side_effect=[sufficient, insufficient],
             ),
-            patch("jamma.lmm.runner.is_c_extension_usable", return_value=False),
-            patch("jamma.lmm.runner.has_jax", return_value=True),
+            patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
         ):
             plan1 = select_execution_mode(100, 1000)
             plan2 = select_execution_mode(100, 1000)
-        assert plan1.backend == plan2.backend == "jax"
+        assert plan1.backend == plan2.backend == "numpy"
         assert plan1.mode == "batch"
         assert plan2.mode == "streaming"
-        # Same backend → no RuntimeError from pipeline re-evaluation guard
 
-    def test_plan_reevaluation_backend_change_detected(self):
-        """Backend change during re-evaluation is detectable via != comparison."""
-        sufficient = _make_sufficient_estimate()
-
-        # First call: no C ext → jax-batch; second call: C ext → numpy-batch
-        with (
-            patch(
-                "jamma.lmm.runner.estimate_lmm_memory",
-                return_value=sufficient,
-            ),
-            patch(
-                "jamma.lmm.runner.is_c_extension_usable",
-                side_effect=[False, True],
-            ),
-            patch("jamma.lmm.runner.has_jax", return_value=True),
-        ):
-            plan1 = select_execution_mode(100, 1000)
-            plan2 = select_execution_mode(100, 1000)
-        assert plan1.backend == "jax"
-        assert plan2.backend == "numpy"
-        assert plan1 != plan2  # Pipeline guard would raise RuntimeError
-
-    # -- n_cvt-aware selection (BCKAUTO-01, -02, -03) --
+    # -- n_cvt-aware selection --
 
     def test_n_cvt_affects_memory(self):
-        """BCKAUTO-01: select_execution_mode passes n_cvt to estimate_lmm_memory."""
+        """select_execution_mode passes n_cvt to estimate_lmm_memory."""
         calls = []
 
         def capturing_estimate(n_samples, n_snps, **kwargs):
@@ -446,7 +290,6 @@ class TestExecutionMode:
                 side_effect=capturing_estimate,
             ),
             patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
-            patch("jamma.lmm.runner.has_jax", return_value=True),
         ):
             select_execution_mode(1000, 10000, n_cvt=4)
 
@@ -455,15 +298,14 @@ class TestExecutionMode:
             f"n_cvt=4 not passed to estimate_lmm_memory; calls={calls}"
         )
 
-    def test_no_c_general_prefers_jax_for_n_cvt_gt1(self):
-        """BCKAUTO-02: No C general + n_cvt>1 -> jax-batch (not numpy-batch)."""
+    def test_no_c_general_falls_to_numpy_batch_for_n_cvt_gt1(self):
+        """No C general + n_cvt>1 -> numpy-batch fallback."""
         with (
             patch(
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_sufficient_estimate(),
             ),
             patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
-            patch("jamma.lmm.runner.has_jax", return_value=True),
             patch(
                 "jamma.lmm.compute_numpy._C_GENERAL_AVAILABLE",
                 False,
@@ -473,41 +315,21 @@ class TestExecutionMode:
             plan_n_cvt4 = select_execution_mode(1000, 10000, n_cvt=4)
             plan_n_cvt1 = select_execution_mode(1000, 10000, n_cvt=1)
 
-        # n_cvt=4 without C general -> fall through to JAX
-        assert plan_n_cvt4.backend == "jax"
+        # n_cvt=4 without C general -> falls through to numpy-batch fallback
+        assert plan_n_cvt4.backend == "numpy"
         assert plan_n_cvt4.mode == "batch"
         # n_cvt=1 still uses numpy-batch (C extension handles n_cvt=1)
         assert plan_n_cvt1.backend == "numpy"
         assert plan_n_cvt1.mode == "batch"
 
-    def test_no_c_general_n_cvt_gt1_insufficient_falls_to_jax_streaming(self):
-        """C ext + no C general + n_cvt>1 + insufficient -> jax-streaming."""
-        with (
-            patch(
-                "jamma.lmm.runner.estimate_lmm_memory",
-                return_value=_make_insufficient_estimate(),
-            ),
-            patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
-            patch("jamma.lmm.runner.has_jax", return_value=True),
-            patch(
-                "jamma.lmm.compute_numpy._C_GENERAL_AVAILABLE",
-                False,
-                create=True,
-            ),
-        ):
-            plan = select_execution_mode(200_000, 100_000, n_cvt=3)
-        assert plan.backend == "jax"
-        assert plan.mode == "streaming"
-
     def test_c_general_n_cvt_numpy_batch(self):
-        """BCKAUTO-03: C general available + n_cvt>1 + sufficient -> numpy-batch."""
+        """C general available + n_cvt>1 + sufficient -> numpy-batch."""
         with (
             patch(
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_sufficient_estimate(),
             ),
             patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
-            patch("jamma.lmm.runner.has_jax", return_value=True),
             patch(
                 "jamma.lmm.compute_numpy._C_GENERAL_AVAILABLE",
                 True,
@@ -519,10 +341,10 @@ class TestExecutionMode:
         assert plan.backend == "numpy"
         assert plan.mode == "batch"
 
-    # -- run_lmm n_cvt forwarding (BCKAUTO-05) --
+    # -- run_lmm n_cvt forwarding --
 
     def test_run_lmm_forwards_n_cvt(self):
-        """BCKAUTO-05: run_lmm auto-selection forwards n_cvt from covariates."""
+        """run_lmm auto-selection forwards n_cvt from covariates."""
         from jamma.lmm.runner import run_lmm
 
         calls = []

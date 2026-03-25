@@ -1,7 +1,7 @@
 """Unified output schema for LMM association results.
 
 Single source of truth for the mapping between lmm_mode (int),
-test_type (str), JAX array keys, AssocResult field names, TSV column
+test_type (str), array keys, AssocResult field names, TSV column
 headers, and format specifiers.  All other dispatch tables in the
 LMM subsystem are derived views of MODE_SPECS.
 """
@@ -26,14 +26,12 @@ class RunnerTiming(TypedDict, total=False):
     Attributes:
         rotation_s: Total UT@G rotation time (seconds).
         rotation_exposed_s: Rotation time exposed (not overlapped) by compute.
-        jax_compute_s: Total JAX compute time (seconds).
         numpy_compute_s: Total NumPy/C compute time (seconds).
         result_write_s: Total result write time (seconds).
     """
 
     rotation_s: float
     rotation_exposed_s: float
-    jax_compute_s: float
     numpy_compute_s: float
     result_write_s: float
 
@@ -80,7 +78,7 @@ class GWASTiming(TypedDict, total=False):
 class StatColumn:
     """One statistical output column.
 
-    Maps a JAX output array key to an AssocResult field name, a TSV
+    Maps an output array key to an AssocResult field name, a TSV
     column header, and a format specifier for numeric output.
     """
 
@@ -203,7 +201,6 @@ class LmmConfig:
         n_grid: Grid search resolution for lambda bracketing.
         n_refine: Golden section iterations (clamped to min 20 internally
             for ~1e-5 tolerance).
-        use_gpu: Whether to use GPU acceleration (ignored by NumPy backend).
         check_memory: Check available memory before workflow.
         show_progress: Show progress bars and GEMMA-style logging.
         lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
@@ -215,7 +212,6 @@ class LmmConfig:
     l_max: float = 1e5
     n_grid: int = 50
     n_refine: int = 10
-    use_gpu: bool = False
     check_memory: bool = True
     show_progress: bool = True
     lmm_mode: LmmMode = 1
@@ -259,7 +255,6 @@ class LmmConfig:
             "l_max": self.l_max,
             "n_grid": self.n_grid,
             "n_refine": self.n_refine,
-            "use_gpu": self.use_gpu,
             "check_memory": self.check_memory,
             "show_progress": self.show_progress,
             "lmm_mode": self.lmm_mode,
@@ -280,7 +275,7 @@ class LmmRunResult:
         pve_se: Standard error of PVE from REML second derivative delta method.
             None if not computed or likelihood surface is flat.
         n_tested: Number of SNPs tested. Populated by batch runners
-            (JAX, NumPy) and the streaming runner when output_path is set
+            (batch and streaming runners) when output_path is set
             (associations list is empty). None when associations list is
             populated (backward compat).
     """

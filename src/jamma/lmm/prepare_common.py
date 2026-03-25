@@ -1,9 +1,8 @@
-"""Pure-NumPy setup utilities shared by JAX and NumPy LMM runners.
+"""Pure-NumPy setup utilities shared by NumPy LMM runners.
 
 Provides covariate matrix construction, eigendecomposition handling,
-null model computation, and shared input validation without any JAX
-dependency. Both the JAX runner (via prepare.py) and the NumPy runner
-(runner_numpy.py) import from this module.
+null model computation, and shared input validation. The NumPy runner
+(runner_numpy.py) imports from this module.
 """
 
 from __future__ import annotations
@@ -81,13 +80,12 @@ def validate_runner_inputs(
 ) -> RunnerSetup:
     """Validate LMM runner inputs and apply sample filtering.
 
-    Performs the common validation sequence shared by all three runners
-    (numpy, jax, streaming): eigendecomposition pair check, lmm_mode guard,
+    Performs the common validation sequence shared by both runners
+    (numpy batch, numpy streaming): eigendecomposition pair check, lmm_mode guard,
     kinship/eigenvalue guard, valid-sample mask computation and application,
     empty-sample guard, and eigenpair dimension validation.
 
-    Does NOT include: memory checks (differ between runners), use_gpu
-    warnings (only numpy warns), or any JAX-specific setup.
+    Does NOT include: memory checks (differ between batch/streaming).
 
     Args:
         phenotypes: Phenotype vector (n_samples,), with NaN for missing.
@@ -234,7 +232,7 @@ def _eigendecompose_or_reuse(
         eigenvalues: Pre-computed eigenvalues or None.
         eigenvectors: Pre-computed eigenvectors or None.
         show_progress: Whether to log memory usage.
-        label: Label for memory logging (e.g. "lmm_jax", "lmm_streaming").
+        label: Label for memory logging (e.g. "lmm", "lmm_streaming").
         check_memory: If True (default), check available memory before
             eigendecomposition.
 
@@ -275,8 +273,7 @@ def _compute_null_model_common(
     """Compute null model MLE for Score, LRT, and All-tests modes.
 
     Pure-NumPy version of the null model computation. Returns Hi_eval_null
-    as a plain NumPy array (no JAX device placement). Callers that need a
-    JAX array should wrap the result with jax.device_put.
+    as a plain NumPy array.
 
     GEMMA computes both REML and MLE null lambdas in CalcLambda, but uses
     MLE lambda for Hi_eval in the Score test:

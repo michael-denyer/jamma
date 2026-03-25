@@ -1,105 +1,66 @@
 """Backend detection and information for JAMMA.
 
-JAMMA supports two compute backends:
-- "jax": JAX-accelerated pipeline (GPU/multi-device support, default when JAX installed)
-- "numpy": Pure-NumPy pipeline (works everywhere, no JAX required)
+JAMMA uses a single compute backend:
+- "numpy": Pure-NumPy pipeline with vendor BLAS/LAPACK dispatch.
 
-Backend selection priority:
-1. JAMMA_BACKEND environment variable (overrides all)
-2. `requested` argument to detect_backend()
-3. Auto-detection: JAX if importable, else NumPy
+Backend selection always returns "numpy".
 """
 
 from __future__ import annotations
 
-import functools
 import os
 from typing import Literal
 
 from loguru import logger
 
-BackendRequest = Literal["auto", "jax", "numpy", "numpy-streaming", "jax-streaming"]
-BackendResolved = Literal["jax", "numpy"]
-
-
-@functools.cache
-def has_jax() -> bool:
-    """Check whether JAX is importable.
-
-    Used by __init__.py modules to gate JAX-dependent imports. Cached
-    after the first call (import success/failure won't change at runtime).
-    """
-    try:
-        import jax  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
-    except (RuntimeError, OSError) as e:
-        # JAX installed but broken (e.g. bad CUDA, corrupted install)
-        logger.error(
-            f"JAX installed but failed to import: {type(e).__name__}: {e}. "
-            f"Falling back to NumPy backend. Fix the JAX installation or "
-            f"use --backend numpy to suppress this error."
-        )
-        return False
+BackendRequest = Literal["auto", "numpy", "numpy-streaming"]
+BackendResolved = Literal["numpy"]
 
 
 def detect_backend(requested: BackendRequest = "auto") -> BackendResolved:
     """Detect or validate the compute backend.
 
-    Checks the JAMMA_BACKEND environment variable first; it overrides the
-    `requested` argument.  Validates the final selection and raises ValueError
-    for unknown backend names.
+    Always returns "numpy". The JAMMA_BACKEND environment variable is
+    checked for backward compatibility but only "auto", "numpy", and
+    "numpy-streaming" are accepted.
 
     Args:
-        requested: Requested backend — "auto", "jax", or "numpy".  "auto"
-            returns "jax" when JAX is importable, "numpy" otherwise.
+        requested: Requested backend — "auto" or "numpy".
 
     Returns:
-        "jax" or "numpy".
+        "numpy".
 
     Raises:
-        ValueError: If `requested` (or JAMMA_BACKEND) is not in
-            ("auto", "jax", "numpy"), or if "jax" is explicitly requested
-            but JAX is not installed.
+        ValueError: If `requested` (or JAMMA_BACKEND) is not a valid value.
 
     Example:
         >>> detect_backend("auto")
-        'jax'
+        'numpy'
         >>> detect_backend("numpy")
         'numpy'
     """
     env_override = os.environ.get("JAMMA_BACKEND")
     effective = env_override if env_override is not None else requested
 
-    # Compound requests (e.g. "numpy-streaming") are valid BackendRequest
-    # values but resolve to a base backend here.
-    _compound_map = {"numpy-streaming": "numpy", "jax-streaming": "jax"}
+    # Compound requests resolve to a base backend.
+    _compound_map: dict[str, str] = {"numpy-streaming": "numpy"}
     if effective in _compound_map:
         effective = _compound_map[effective]
 
-    valid = ("auto", "jax", "numpy")
+    valid = ("auto", "numpy")
     if effective not in valid:
+        source = (
+            " (from JAMMA_BACKEND environment variable)"
+            if env_override is not None
+            else ""
+        )
         raise ValueError(
-            f"Unknown backend {effective!r}. Must be one of {valid} "
-            f"(or 'numpy-streaming', 'jax-streaming'). "
-            "Set JAMMA_BACKEND or pass requested= explicitly."
+            f"Unknown backend {effective!r}{source}. "
+            f"Must be one of {valid} (or 'numpy-streaming'). "
+            "JAX backend was removed in v5.0 — use 'numpy' or 'auto'."
         )
 
-    if effective == "numpy":
-        return "numpy"
-
-    if effective == "jax":
-        if not has_jax():
-            raise ValueError(
-                "Backend 'jax' was explicitly requested but JAX is not installed. "
-                "Install JAX with: pip install jamma[jax]"
-            )
-        return "jax"
-
-    # effective == "auto"
-    return "jax" if has_jax() else "numpy"
+    return "numpy"
 
 
 def log_backend_selection(
@@ -110,16 +71,17 @@ def log_backend_selection(
     """Log the selected backend at INFO level.
 
     Args:
-        active: The backend that was selected ("jax" or "numpy").
-        requested: The originally requested backend ("auto", "jax", or "numpy").
+        active: The backend that was selected ("numpy").
+        requested: The originally requested backend
+            ("auto", "numpy", or "numpy-streaming").
         env_override: Value of JAMMA_BACKEND if set, None otherwise.
             Caller passes this so the log reflects what actually drove selection.
 
     Example:
         >>> log_backend_selection("numpy", "auto")
         # logs: "Backend: numpy (auto-selected)"
-        >>> log_backend_selection("jax", "jax")
-        # logs: "Backend: jax (explicitly requested)"
+        >>> log_backend_selection("numpy", "numpy")
+        # logs: "Backend: numpy (explicitly requested)"
     """
     if env_override is not None:
         logger.info(f"Backend: {active} (from JAMMA_BACKEND={env_override})")
@@ -142,7 +104,6 @@ def format_pipeline_banner(
     eigen_driver: str,
     c_ext: bool,
     threads: int,
-    jax_devices: int = 0,
 ) -> str:
     """Build a single-line pipeline startup banner.
 
@@ -150,13 +111,12 @@ def format_pipeline_banner(
     and thread count into one authoritative log line.
 
     Args:
-        runner: Runner name (e.g. "numpy-batch", "jax-streaming").
+        runner: Runner name (e.g. "numpy-batch", "numpy-streaming").
         blas: BLAS backend identifier (e.g. "mkl", "openblas",
             "accelerate").
         eigen_driver: Eigen driver name (e.g. "DSYEVD", "DSYEVR").
         c_ext: Whether the C extension is usable.
         threads: BLAS/OpenMP thread count.
-        jax_devices: Number of JAX CPU devices (0 = not applicable).
 
     Returns:
         Formatted banner string.
@@ -167,10 +127,9 @@ def format_pipeline_banner(
     """
     blas_display = _BLAS_DISPLAY.get(blas, blas.title())
     c_ext_str = "C-ext" if c_ext else "no C-ext"
-    jax_suffix = f", {jax_devices} JAX devices" if jax_devices > 0 else ""
     return (
         f"Pipeline: {runner} | {blas_display} | {eigen_driver}"
-        f" | {c_ext_str} ({threads} threads{jax_suffix})"
+        f" | {c_ext_str} ({threads} threads)"
     )
 
 
@@ -179,10 +138,8 @@ def get_backend_info() -> dict[str, str | bool]:
 
     Returns:
         Dictionary with backend info:
-        - selected: Backend name ("jax" or "numpy")
-        - jax_available: True if JAX is importable
+        - selected: Backend name ("numpy")
     """
     return {
         "selected": detect_backend(),
-        "jax_available": has_jax(),
     }

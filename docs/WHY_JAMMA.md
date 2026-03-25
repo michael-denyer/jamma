@@ -8,11 +8,11 @@ JAMMA delivers the same statistical results as GEMMA while solving practical pro
 |---------|-------|-------|
 | **OOM Handling** | Silent crash (OS kill) | Pre-flight check with clear error |
 | **Large-Scale** | Requires manual tuning | Streaming I/O, pre-flight memory checks (>100k requires ILP64) |
-| **Speed** | 1x baseline | Up to 9x faster (JAX); 11x on LMM-only benchmarks |
+| **Speed** | 1x baseline | Up to 10x faster (C extension + vendor BLAS) |
 | **Installation** | C++ compilation required | `pip install jamma` |
 | **Error Messages** | Segfault or cryptic | Clear, actionable |
 | **Numerical Results** | Reference | Equivalent ([proof](EQUIVALENCE.md)) |
-| **Sample Filtering** | Kinship always n_samples × n_samples | Kinship at n_valid × n_valid when samples are dropped |
+| **Sample Filtering** | Kinship always n_samples x n_samples | Kinship at n_valid x n_valid when samples are dropped |
 
 ---
 
@@ -48,7 +48,7 @@ Suggestion: Use a larger instance or streaming mode.
 - Clear breakdown of where memory goes
 - Actionable suggestions for resolution
 - RSS logging at workflow boundaries for debugging
-- Early sample filtering: when samples are dropped due to phenotype or covariate missingness, kinship is accumulated at (n_valid × n_valid) size directly — the full (n_samples × n_samples) matrix is never allocated
+- Early sample filtering: when samples are dropped due to phenotype or covariate missingness, kinship is accumulated at (n_valid x n_valid) size directly — the full (n_samples x n_samples) matrix is never allocated
 
 ---
 
@@ -56,13 +56,13 @@ Suggestion: Use a larger instance or streaming mode.
 
 ### The GEMMA Problem
 
-GEMMA requires the full n×p genotype matrix in memory. For 90k samples × 90k SNPs:
+GEMMA requires the full n x p genotype matrix in memory. For 90k samples x 90k SNPs:
 
 - Genotype matrix: ~32 GB
 - Kinship matrix: ~65 GB
 - Eigendecomposition workspace: ~130 GB peak
 
-Studies over 100k samples require ILP64 BLAS and 512 GB+ RAM due to O(n³) eigendecomposition memory.
+Studies over 100k samples require ILP64 BLAS and 512 GB+ RAM due to O(n^3) eigendecomposition memory.
 
 ### The JAMMA Solution
 
@@ -72,61 +72,59 @@ JAMMA streams data from disk, never materializing the full matrix:
 # Kinship computed in chunks - never loads full genotype matrix
 kinship = compute_kinship_streaming("large_study", chunk_size=10000)
 
-# LMM also streams - only kinship (n²) kept in memory
-results = run_lmm_association_streaming(
+# LMM also streams - only kinship (n^2) kept in memory
+results = run_lmm_association_numpy_streaming(
     "large_study", phenotypes, kinship, chunk_size=5000
 )
 ```
 
 **Memory profile:**
-- Peak is eigendecomposition: n² × 8 bytes × ~2 (K + workspace)
-- Genotype chunks: chunk_size × n × 8 bytes (transient)
+- Peak is eigendecomposition: n^2 x 8 bytes x ~2 (K + workspace)
+- Genotype chunks: chunk_size x n x 8 bytes (transient)
 - Results written incrementally to disk (no accumulation)
 
 ---
 
-## 3. Speed: JAX Acceleration
+## 3. Speed: C Extension Acceleration
 
-### Benchmark (mouse_hs1940: 1,940 samples × 12,226 SNPs, Apple M2, GEMMA 0.98.5)
+### Benchmark (mouse_hs1940: 1,940 samples x 12,226 SNPs, Apple M2, GEMMA 0.98.5)
 
-| Operation          | GEMMA 0.98.5 | JAMMA (JAX) | JAMMA (NumPy) | JAX Speedup |
-|--------------------|--------------|-------------|---------------|-------------|
-| Kinship (`-gk 1`)  | 2.1s         | 2.3s        | 1.7s          | ~1x         |
-| LMM (`-lmm 1`)     | 11.3s        | 2.8s        | 5.3s          | **4.0x**    |
-| **Total**          | **13.4s**    | **5.1s**    | **7.0s**      | **2.6x**    |
+| Operation          | GEMMA 0.98.5 | JAMMA (NumPy+C) | Speedup |
+|--------------------|--------------|------------------|---------|
+| Kinship (`-gk 1`)  | 2.1s         | 1.7s             | ~1.2x   |
+| LMM (`-lmm 1`)     | 11.3s        | 5.3s             | **2.1x** |
+| **Total**          | **13.4s**    | **7.0s**         | **1.9x** |
 
-Kinship is BLAS-bound (both use OpenBLAS/Accelerate matmul) so times are similar. The LMM speedup comes from batch-parallel SNP processing.
+Kinship is BLAS-bound (both use OpenBLAS/Accelerate matmul) so times are similar. The LMM speedup comes from the OpenMP-parallelized C extension for batch SNP processing.
 
 ### At Scale: 125k Samples (Databricks E96ds_v6, 48 cores, ILP64 MKL)
 
-| Pipeline                      | GEMMA 0.98.5 | JAMMA v2.10.1 | Speedup |
+| Pipeline                      | GEMMA 0.98.5 | JAMMA v4.2.0 | Speedup |
 |-------------------------------|--------------|---------------|---------|
-| Full GWAS (125,632 × 91,586) | ~27 hours    | 3h 4m         | **~9x** |
+| Full GWAS (125,632 x 91,586) | ~27 hours    | 2h 29m        | **~10x** |
 
 **Caveat**: GEMMA was compiled with default OpenBLAS, not MKL. Building GEMMA against MKL is non-trivial (requires patching the Makefile and linking against ILP64 MKL for matrices >46k) and we did not attempt it. The comparison reflects typical deployment: GEMMA as-distributed vs JAMMA with ILP64 numpy-mkl. The speedup would be smaller with an MKL-linked GEMMA, though the batch-parallel LMM architecture would still provide a significant advantage.
 
 ### Why Faster?
 
-The key insight: **GEMMA loops over SNPs sequentially; JAMMA processes all SNPs in parallel.**
+The key insight: **GEMMA loops over SNPs sequentially; JAMMA processes SNPs in parallel batches.**
 
 | Aspect | GEMMA | JAMMA |
 | ------ | ----- | ----- |
-| SNP loop | Sequential C++ `for` loop | Batch parallel via `jax.vmap` |
-| Per-SNP overhead | Function call + memory allocation | Zero (fused kernel) |
+| SNP loop | Sequential C++ `for` loop | Batch parallel via C extension + OpenMP |
+| Per-SNP overhead | Function call + memory allocation | Pre-allocated workspace (zero alloc per SNP) |
 | BLAS utilization | Many small matmuls | Few large batched matmuls |
 | Memory access | Row-by-row, cache-unfriendly | Contiguous, cache-optimized |
 
 **Detailed breakdown:**
 
-1. **Batch vectorization**: JAMMA uses `jax.vmap` to process all SNPs as a single batched operation. GEMMA's C++ loop processes one SNP at a time—even with multithreaded BLAS for individual matrix operations, the outer loop is serial.
+1. **Batch vectorization**: JAMMA's C extension processes all SNPs in a chunk as a single batched operation with OpenMP thread parallelism. GEMMA's C++ loop processes one SNP at a time — even with multithreaded BLAS for individual matrix operations, the outer loop is serial.
 
-2. **JIT fusion**: JAX's XLA compiler fuses the entire Pab → beta → Wald chain into one compiled kernel. GEMMA makes separate BLAS calls with memory round-trips between each step.
+2. **Workspace API**: The C extension pre-allocates per-thread buffers (Pab, workspace arrays) once per chunk. GEMMA allocates and frees per-SNP buffers in its inner loop.
 
-3. **Shared array residency**: Eigenvalues and eigenvectors stay on-device (CPU cache or GPU memory) throughout the SNP loop. No repeated loading from RAM.
+3. **Efficient Pab computation**: The cumulative Uab/Pab structure is computed once per covariate set, then broadcast across SNPs.
 
-4. **Efficient Pab computation**: The cumulative Uab/Pab structure is computed once per covariate set, then broadcast across SNPs.
-
-The "C++ vs Python" framing is misleading—JAX compiles to XLA which generates machine code comparable to optimized C++. The real difference is algorithm design: **data-parallel vs sequential-with-parallel-primitives**.
+The real difference is algorithm design: **data-parallel batch processing vs sequential-with-parallel-primitives**.
 
 ---
 
@@ -148,7 +146,7 @@ make
 pip install jamma
 ```
 
-That's it. Pure Python with JAX handles the numerical heavy lifting.
+That's it. Pure Python with an optional C extension (auto-compiled on first use) handles the numerical heavy lifting.
 
 ---
 
@@ -258,7 +256,7 @@ JAMMA applies contemporary software engineering practices that GEMMA (written in
 
 ```python
 # Type hints for all public APIs
-def run_lmm_association_jax(
+def run_lmm_association_numpy(
     genotypes: np.ndarray,
     phenotypes: np.ndarray,
     kinship: np.ndarray,
@@ -267,7 +265,7 @@ def run_lmm_association_jax(
     maf_threshold: float = 0.01,
     miss_threshold: float = 0.05,
     lmm_mode: int = 1,  # 1=Wald, 2=LRT, 3=Score, 4=All
-) -> list[AssocResult]: ...
+) -> LmmRunResult: ...
 
 # Dataclasses for structured returns
 @dataclass
@@ -309,12 +307,6 @@ dependencies = [
     "click>=8.0.0",
     "loguru>=0.7.0",
     "progressbar2>=4.2.0",
-    # Platform-smart JAX: auto-included on Linux and ARM Mac
-    "jax>=0.5.0; sys_platform == 'linux'",
-    "jaxlib>=0.5.0; sys_platform == 'linux'",
-    "jaxtyping>=0.2.28; sys_platform == 'linux'",
-    "jax>=0.5.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
-    # ... (ARM Mac markers)
 ]
 
 [tool.ruff]
@@ -327,7 +319,7 @@ Every long-running operation can be monitored:
 
 ```python
 # Progress logging (streaming runners)
-results = run_lmm_association_streaming(
+results = run_lmm_association_numpy_streaming(
     bed_path, phenotypes, kinship,
     show_progress=True,  # Progress bar + RSS logging
 )
@@ -358,7 +350,7 @@ JAMMA is not always the right choice:
 |---------|-------|-------|
 | Crashes at scale | Silent OOM | Pre-flight checks |
 | Large samples | Manual tuning | Automatic streaming (>100k requires ILP64) |
-| Speed | Baseline | Up to 9x faster |
+| Speed | Baseline | Up to 10x faster |
 | Installation | C++ build | pip install |
 | Errors | Cryptic | Actionable |
 | Results | Reference | Equivalent |

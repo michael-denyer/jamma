@@ -124,22 +124,18 @@ class TestJlinalgThreads:
 
 @pytest.mark.tier0
 class TestEigendecompThreading:
-    """Eigendecomp uses all physical cores, not get_blas_thread_count().
+    """Eigendecomp uses all physical cores, not a reduced thread count.
 
-    get_blas_thread_count() divides by n_jax_devices, which is correct for
-    LMM association (JAX competing for cores) but wrong for eigendecomp
-    (pure LAPACK, no JAX contention).
+    Eigendecomp is pure LAPACK and should use all available physical cores.
     """
 
     def test_eigendecomp_uses_all_physical_cores(self, monkeypatch):
         """eigendecomp_kinship sets n_threads to physical core count, not reduced.
 
-        On a 48-physical-core machine with 24 JAX devices:
-        - get_blas_thread_count() returns 48 // 24 = 2  (WRONG for eigendecomp)
-        - eigendecomp should use all 48 physical cores
+        On a 48-physical-core machine, eigendecomp should use all 48 cores.
 
-        Regression test for the bug where eigendecomp ran 24x slower than
-        expected on Databricks (2 threads instead of 48).
+        Regression test for a bug where eigendecomp ran with a reduced thread
+        count on Databricks (2 threads instead of 48).
         """
         # Mock get_physical_core_count to report 48 physical cores
         monkeypatch.setattr("jamma.lmm.eigen.get_physical_core_count", lambda: 48)
@@ -171,8 +167,7 @@ class TestEigendecompThreading:
             f"Expected 1 blas_threads call, got {len(captured_threads)}"
         )
         assert captured_threads[0] == 48, (
-            f"Eigendecomp should use all 48 physical cores, got {captured_threads[0]}. "
-            f"If this is 2, it's dividing by JAX device count (the old bug)."
+            f"Eigendecomp should use all 48 physical cores, got {captured_threads[0]}."
         )
 
     def test_eigendecomp_falls_back_to_os_cpu_count(self, monkeypatch):

@@ -17,7 +17,7 @@ from jamma.lmm.likelihood import (
     compute_Uab,
     get_ab_index,
 )
-from jamma.lmm.stats import calc_score_test, calc_wald_test, f_sf
+from jamma.lmm.stats import calc_score_test, f_sf
 
 
 def _create_test_data(n_samples: int = 100, n_cvt: int = 1, seed: int = 42):
@@ -329,48 +329,6 @@ class TestScoreVsWald:
         # All p-values should be valid (computed with same lambda)
         for i, p in enumerate(p_values):
             assert 0.0 <= p <= 1.0, f"SNP {i}: p-value {p} not in [0, 1]"
-
-    @pytest.mark.requires_jax
-    def test_score_and_wald_agree_on_direction(self):
-        """Score and Wald tests should agree on effect direction (beta sign)."""
-        data = _create_test_data(n_samples=100, n_cvt=1, seed=42)
-        n_cvt = data["n_cvt"]
-
-        # Compute null model lambda for Score test
-        lambda_null, _ = compute_null_model_lambda(
-            data["eigenvalues"], data["UtW"], data["Uty"], n_cvt
-        )
-
-        Uab = compute_Uab(data["UtW"], data["Uty"], data["Utx"])
-
-        # Score test with null lambda
-        Hi_eval_score = 1.0 / (lambda_null * data["eigenvalues"] + 1.0)
-        Pab_score = calc_pab(n_cvt, Hi_eval_score, Uab)
-        beta_score, _, _ = calc_score_test(Pab_score, n_cvt, data["n_samples"])
-
-        # Wald test with optimized lambda (per-SNP) -- use JAX optimizer
-        import jax.numpy as jnp
-
-        from jamma.lmm.likelihood_jax import (
-            batch_compute_iab,
-            golden_section_optimize_lambda,
-        )
-
-        Uab_jax = jnp.expand_dims(jnp.array(Uab), 0)
-        Iab_jax = batch_compute_iab(n_cvt, Uab_jax)
-        eigenvalues_jax = jnp.array(data["eigenvalues"])
-        lambdas, _ = golden_section_optimize_lambda(
-            n_cvt, eigenvalues_jax, Uab_jax, Iab_jax
-        )
-        lambda_wald = float(lambdas[0])
-        Hi_eval_wald = 1.0 / (lambda_wald * data["eigenvalues"] + 1.0)
-        Pab_wald = calc_pab(n_cvt, Hi_eval_wald, Uab)
-        beta_wald, _, _ = calc_wald_test(Pab_wald, n_cvt, data["n_samples"])
-
-        # Both should have same sign (effect direction)
-        assert np.sign(beta_score) == np.sign(beta_wald), (
-            f"Score beta={beta_score}, Wald beta={beta_wald} have different signs"
-        )
 
     def test_score_faster_concept(self):
         """Score test reuses lambda (concept test, not timing)."""

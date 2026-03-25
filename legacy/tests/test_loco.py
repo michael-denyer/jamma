@@ -1920,63 +1920,19 @@ _LOCO_FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "gemma_loco"
 _LOCO_BFILE = _LOCO_FIXTURE_ROOT / "test"
 
 
-@pytest.mark.tier1
-def test_loco_cross_backend_parity(tmp_path: Path) -> None:
-    """JAX and NumPy LOCO produce identical results on synthetic data."""
+@pytest.mark.tier0
+def test_loco_rejects_jax_backend() -> None:
+    """run_lmm_loco rejects 'jax' backend after JAX removal."""
     from jamma.lmm.loco import run_lmm_loco
 
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
 
-    # Run JAX backend
-    jax_loco = run_lmm_loco(
-        bed_path=_LOCO_BFILE,
-        phenotypes=phenotypes,
-        lmm_mode=1,
-        show_progress=False,
-        check_memory=False,
-        backend="jax",
-    )
-
-    # Run NumPy backend
-    numpy_loco = run_lmm_loco(
-        bed_path=_LOCO_BFILE,
-        phenotypes=phenotypes,
-        lmm_mode=1,
-        show_progress=False,
-        check_memory=False,
-        backend="numpy",
-    )
-
-    assert jax_loco.n_tested == numpy_loco.n_tested, (
-        f"SNP count mismatch: JAX={jax_loco.n_tested}, NumPy={numpy_loco.n_tested}"
-    )
-    jax_results = jax_loco.associations
-    numpy_results = numpy_loco.associations
-    assert len(jax_results) == len(numpy_results)
-    assert len(jax_results) > 0
-
-    # PVE should be populated and match across backends
-    assert jax_loco.pve is not None, "JAX LOCO should return PVE"
-    assert numpy_loco.pve is not None, "NumPy LOCO should return PVE"
-    assert 0 < jax_loco.pve < 1, f"JAX PVE out of range: {jax_loco.pve}"
-    np.testing.assert_allclose(jax_loco.pve, numpy_loco.pve, rtol=1e-4)
-
-    # Compare result arrays
-    jax_betas = np.array([r.beta for r in jax_results])
-    numpy_betas = np.array([r.beta for r in numpy_results])
-    jax_ses = np.array([r.se for r in jax_results])
-    numpy_ses = np.array([r.se for r in numpy_results])
-    jax_pwalds = np.array([r.p_wald for r in jax_results])
-    numpy_pwalds = np.array([r.p_wald for r in numpy_results])
-    jax_lambdas = np.array([r.l_remle for r in jax_results])
-    numpy_lambdas = np.array([r.l_remle for r in numpy_results])
-
-    np.testing.assert_allclose(jax_betas, numpy_betas, rtol=1e-10, atol=1e-14)
-    np.testing.assert_allclose(jax_ses, numpy_ses, rtol=1e-10, atol=1e-14)
-    np.testing.assert_allclose(jax_pwalds, numpy_pwalds, rtol=1e-10, atol=1e-14)
-    np.testing.assert_allclose(jax_lambdas, numpy_lambdas, rtol=1e-10, atol=1e-14)
-
-    # Verify SNP order is identical
-    jax_rs = [r.rs for r in jax_results]
-    numpy_rs = [r.rs for r in numpy_results]
-    assert jax_rs == numpy_rs, "SNP order differs between backends"
+    with pytest.raises(ValueError, match="backend must be 'numpy'"):
+        run_lmm_loco(
+            bed_path=_LOCO_BFILE,
+            phenotypes=phenotypes,
+            lmm_mode=1,
+            show_progress=False,
+            check_memory=False,
+            backend="jax",
+        )

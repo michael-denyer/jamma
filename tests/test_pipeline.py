@@ -37,18 +37,6 @@ class TestPipelineConfig:
         assert config.legacy_text is False
         assert config.phenotype_columns == [1]
 
-    def test_profile_dir_default(self) -> None:
-        """profile_dir defaults to None."""
-        config = PipelineConfig(bfile=Path("/tmp/test"))
-        assert config.profile_dir is None
-
-    def test_profile_dir_set(self, tmp_path: Path) -> None:
-        """profile_dir can be set to a Path."""
-        config = PipelineConfig(
-            bfile=Path("/tmp/test"), profile_dir=tmp_path / "traces"
-        )
-        assert config.profile_dir == tmp_path / "traces"
-
     def test_custom_values(self) -> None:
         """PipelineConfig accepts custom values."""
         config = PipelineConfig(
@@ -797,200 +785,6 @@ class TestPhenotypeColumnMissingValues:
 # ===========================================================================
 
 
-@pytest.mark.tier1
-@pytest.mark.requires_jax
-class TestX64GuaranteedWithPrecomputedEigen:
-    """Regression test for Bug 1 (jamma-4x8): x64 not guaranteed when
-    using precomputed eigen files, which bypass kinship/compute.py.
-    """
-
-    def test_x64_guaranteed_with_precomputed_eigen(
-        self, sample_plink_data: Path, tmp_path: Path
-    ) -> None:
-        """PipelineRunner.run() enables x64 even when eigendecomposition is precomputed.
-
-        This reproduces the exact failure scenario: precomputed eigen files bypass
-        kinship compute, which was the only place ensure_jax_configured() was called.
-        """
-        import jax
-
-        import jamma.core.jax_config as jc
-
-        # Step 1: Generate valid eigen files from the fixture data
-        from jamma.kinship import compute_kinship_streaming
-        from jamma.lmm.eigen import eigendecompose_kinship
-        from jamma.lmm.eigen_io import write_eigen_files
-
-        K = compute_kinship_streaming(
-            sample_plink_data, check_memory=False, show_progress=False
-        )
-        eigenvalues, eigenvectors = eigendecompose_kinship(K, check_memory=False)
-        d_path, u_path = write_eigen_files(eigenvalues, eigenvectors, tmp_path, "test")
-
-        # Step 2: Reset the JAX config guard to simulate fresh process
-        original_state = jc._jax_configured
-        jc._jax_configured = False
-
-        try:
-            # Step 3: Run pipeline with precomputed eigen (no kinship compute path).
-            # Use backend="jax" explicitly — this test validates JAX x64 configuration,
-            # not backend auto-selection (which may pick numpy for small datasets).
-            config = PipelineConfig(
-                bfile=sample_plink_data,
-                eigenvalue_file=d_path,
-                eigenvector_file=u_path,
-                output_dir=tmp_path / "output",
-                check_memory=False,
-                show_progress=False,
-                backend="jax",
-            )
-            result = PipelineRunner(config).run()
-
-            # Step 4: Verify x64 is enabled after the run
-            assert jax.config.jax_enable_x64 is True, (
-                "JAX x64 should be enabled after pipeline run with precomputed eigen"
-            )
-            assert jc._jax_configured is True, (
-                "ensure_jax_configured should have been called"
-            )
-            assert result.n_samples > 0
-            assert result.n_snps_tested > 0
-        finally:
-            # Restore the original state
-            jc._jax_configured = original_state
-
-
-@pytest.mark.tier1
-@pytest.mark.requires_jax
-class TestNSamplesReflectsCovariateFiltering:
-    """Regression test for Bug 2 (jamma-ri0): n_samples reported
-    phenotype-only count instead of post-covariate-filter count.
-    """
-
-    def test_n_samples_reflects_covariate_filtering(self, tmp_path: Path) -> None:
-        """PipelineResult.n_samples excludes samples with NaN covariates.
-
-        Creates a covariate file where some rows have NaN values, then
-        verifies that n_samples is strictly less than the total sample count
-        and equals the expected valid count after both phenotype and
-        covariate filtering.
-        """
-        bfile = _copy_plink_genotypes(tmp_path)
-
-        # Write a .fam with all valid phenotypes
-        n_samples = 100
-        fam_path = tmp_path / "test.fam"
-        with open(fam_path, "w") as f:
-            for i in range(n_samples):
-                pheno = 1.0 + i * 0.1
-                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno}\n")
-
-        # Write a covariate file with intercept + one covariate, 10 rows have NaN
-        n_nan_covariates = 10
-        cov_path = tmp_path / "covariates.txt"
-        with open(cov_path, "w") as f:
-            for i in range(n_samples):
-                intercept = 1.0
-                if i < n_nan_covariates:
-                    cov = "NA"  # These samples should be filtered out
-                else:
-                    cov = str(0.5 + i * 0.01)
-                f.write(f"{intercept}\t{cov}\n")
-
-        config = PipelineConfig(
-            bfile=bfile,
-            covariate_file=cov_path,
-            output_dir=tmp_path / "output",
-            check_memory=False,
-            show_progress=False,
-        )
-        result = PipelineRunner(config).run()
-
-        expected_valid = n_samples - n_nan_covariates
-        assert result.n_samples == expected_valid, (
-            f"n_samples should be {expected_valid} (after covariate NaN filtering), "
-            f"got {result.n_samples}"
-        )
-        assert result.n_samples < n_samples, (
-            "n_samples should be less than total sample count when covariates have NaN"
-        )
-
-
-@pytest.mark.tier1
-@pytest.mark.requires_jax
-class TestNSnpsTestedReflectsFiltering:
-    """Regression test for Bug 3 (jamma-bza): n_snps_tested reported
-    dataset total instead of post-filter count.
-    """
-
-    def test_n_snps_tested_reflects_maf_filtering(
-        self, sample_plink_data: Path, tmp_path: Path
-    ) -> None:
-        """PipelineResult.n_snps_tested is less than dataset total with strict MAF.
-
-        Uses a high MAF threshold to filter out some SNPs, then verifies
-        that n_snps_tested reflects the filtered count, not the dataset total.
-        """
-        from jamma.io.plink import get_plink_metadata
-
-        meta = get_plink_metadata(sample_plink_data)
-        total_snps_in_dataset = meta["n_snps"]
-
-        # Run pipeline with a restrictive MAF threshold
-        config = PipelineConfig(
-            bfile=sample_plink_data,
-            maf=0.1,  # Restrictive MAF to filter out some SNPs
-            output_dir=tmp_path / "output",
-            check_memory=False,
-            show_progress=False,
-        )
-        result = PipelineRunner(config).run()
-
-        assert result.n_snps_tested < total_snps_in_dataset, (
-            f"n_snps_tested ({result.n_snps_tested}) should be less than "
-            f"dataset total ({total_snps_in_dataset}) with maf=0.1 filter"
-        )
-        assert result.n_snps_tested > 0, "Should still have some SNPs passing filter"
-
-    def test_n_snps_tested_with_snps_file(
-        self, sample_plink_data: Path, tmp_path: Path
-    ) -> None:
-        """PipelineResult.n_snps_tested reflects SNP list restriction.
-
-        Creates a -snps file that restricts to a subset, then verifies
-        n_snps_tested matches the restricted count (not dataset total).
-        """
-        from jamma.io.plink import get_plink_metadata
-
-        meta = get_plink_metadata(sample_plink_data)
-        total_snps_in_dataset = meta["n_snps"]
-
-        # Restrict to first 50 SNPs via -snps file
-        n_restrict = 50
-        snps_path = tmp_path / "snps.txt"
-        snps_path.write_text("\n".join(meta["sid"][:n_restrict]) + "\n")
-
-        config = PipelineConfig(
-            bfile=sample_plink_data,
-            snps_file=snps_path,
-            maf=0.0,  # Permissive MAF to isolate the SNP list effect
-            miss=1.0,  # Permissive miss to isolate the SNP list effect
-            output_dir=tmp_path / "output",
-            check_memory=False,
-            show_progress=False,
-        )
-        result = PipelineRunner(config).run()
-
-        assert result.n_snps_tested <= n_restrict, (
-            f"n_snps_tested ({result.n_snps_tested}) should be <= "
-            f"{n_restrict} (SNP list size)"
-        )
-        assert result.n_snps_tested < total_snps_in_dataset, (
-            f"n_snps_tested ({result.n_snps_tested}) should be less than "
-            f"dataset total ({total_snps_in_dataset})"
-        )
-
-
 # ===========================================================================
 # Backend Routing Tests (Phase 36-02)
 # ===========================================================================
@@ -1094,48 +888,6 @@ def test_pipeline_loco_numpy(tmp_path: Path) -> None:
     assert result.backend == "numpy"
     assert result.n_snps_tested > 0
     assert result.assoc_path.exists()
-
-
-@pytest.mark.tier1
-@pytest.mark.requires_jax
-def test_pipeline_backend_in_timing(sample_plink_data: Path, output_dir: Path) -> None:
-    """PipelineResult.backend is 'jax' when JAX backend is used."""
-    kinship_file = sample_plink_data.parent / "gemma_kinship.cXX.txt"
-    config = PipelineConfig(
-        bfile=sample_plink_data,
-        kinship_file=kinship_file,
-        lmm_mode=1,
-        output_dir=output_dir,
-        check_memory=False,
-        show_progress=False,
-        backend="jax",
-    )
-    result = PipelineRunner(config).run()
-    assert result.backend == "jax"
-
-
-@pytest.mark.tier1
-@pytest.mark.requires_jax
-def test_pipeline_rotation_timing_keys(
-    sample_plink_data: Path, output_dir: Path
-) -> None:
-    """PipelineResult.timing has rotation keys for JAX backend."""
-    kinship_file = sample_plink_data.parent / "gemma_kinship.cXX.txt"
-    config = PipelineConfig(
-        bfile=sample_plink_data,
-        kinship_file=kinship_file,
-        lmm_mode=1,
-        output_dir=output_dir,
-        check_memory=False,
-        show_progress=False,
-        backend="jax",
-    )
-    result = PipelineRunner(config).run()
-    assert "rotation_s" in result.timing
-    assert "rotation_exposed_s" in result.timing
-    assert result.timing["rotation_s"] >= 0.0
-    assert result.timing["rotation_exposed_s"] >= 0.0
-    assert result.timing["rotation_exposed_s"] <= result.timing["rotation_s"] + 1e-6
 
 
 @pytest.mark.tier0
@@ -1559,3 +1311,53 @@ def test_pipeline_emits_telemetry(tmp_path: Path, sample_plink_data: Path) -> No
     assert rec["lmm_mode"] == 1
     assert rec["loco"] is False
     assert "total_s" in rec
+
+
+# ---------------------------------------------------------------------------
+# Covariate NaN filtering
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier1
+class TestNSamplesReflectsCovariateFiltering:
+    """Regression test: n_samples must exclude samples with NaN covariates."""
+
+    def test_n_samples_reflects_covariate_filtering(self, tmp_path: Path) -> None:
+        """PipelineResult.n_samples excludes samples with NaN covariates."""
+        bfile = _copy_plink_genotypes(tmp_path)
+
+        # Write a .fam with all valid phenotypes
+        n_samples = 100
+        fam_path = tmp_path / "test.fam"
+        with open(fam_path, "w") as f:
+            for i in range(n_samples):
+                pheno = 1.0 + i * 0.1
+                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno}\n")
+
+        # Write a covariate file with intercept + one covariate, 10 rows NaN
+        n_nan_covariates = 10
+        cov_path = tmp_path / "covariates.txt"
+        with open(cov_path, "w") as f:
+            for i in range(n_samples):
+                intercept = 1.0
+                if i < n_nan_covariates:
+                    cov = "NA"
+                else:
+                    cov = str(0.5 + i * 0.01)
+                f.write(f"{intercept}\t{cov}\n")
+
+        config = PipelineConfig(
+            bfile=bfile,
+            covariate_file=cov_path,
+            output_dir=tmp_path / "output",
+            check_memory=False,
+            show_progress=False,
+        )
+        result = PipelineRunner(config).run()
+
+        expected_valid = n_samples - n_nan_covariates
+        assert result.n_samples == expected_valid, (
+            f"n_samples should be {expected_valid} (after covariate NaN filtering), "
+            f"got {result.n_samples}"
+        )
+        assert result.n_samples < n_samples

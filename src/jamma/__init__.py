@@ -6,8 +6,8 @@ GEMMA C++ implementation while scaling to modern biobank datasets.
 
 Key features:
 - Exact statistical output match with original GEMMA
-- Cross-platform: NumPy backend works everywhere, JAX optional for GPU acceleration
-- Scalable to 200k+ samples with JAX backend
+- Cross-platform: NumPy backend with optional C extension acceleration
+- Scalable to 200k+ samples with ILP64 vendor BLAS
 - Modern Python packaging and CLI interface
 
 Example:

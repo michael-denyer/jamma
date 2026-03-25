@@ -1,6 +1,6 @@
 """Pure-NumPy batch LMM association runner.
 
-No JAX dependency. Input genotypes must fit in memory.
+Input genotypes must fit in memory.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import psutil
 from loguru import logger
 
 from jamma import jlinalg
+from jamma.core.estimates import estimate_lmm_seconds
 from jamma.core.memory import estimate_lmm_memory
 from jamma.core.progress import create_progress_bar, progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
@@ -83,7 +84,7 @@ from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.schema import LmmConfig, LmmRunResult
 from jamma.utils.logging import log_rss_memory
 
-# NumPy has no int32 buffer constraint — allow larger chunks than JAX runner.
+# Allow large chunks — no int32 buffer constraint.
 _MAX_CHUNK = 200_000
 
 # Memory budget bounds for auto-scaling
@@ -531,19 +532,17 @@ def run_lmm_association_numpy(
     l_max: float = 1e5,
     n_grid: int = 50,
     n_refine: int = 10,
-    use_gpu: bool = False,
     check_memory: bool = True,
     show_progress: bool = True,
     lmm_mode: LmmMode = 1,
     config: LmmConfig | None = None,
     output_path: Path | None = None,
-    clear_caches: bool = True,
 ) -> LmmRunResult:
     """Run LMM association tests using pure-NumPy batch processing.
 
     Processes SNPs in memory-bounded chunks using BLAS-backed NumPy operations.
-    No JAX dependency. Input genotypes must fit in memory; for disk streaming
-    use run_lmm_association_streaming.
+    Input genotypes must fit in memory; for disk streaming
+    use run_lmm_association_numpy_streaming.
 
     Args:
         genotypes: Genotype matrix (n_samples, n_snps) with values 0, 1, 2.
@@ -564,7 +563,6 @@ def run_lmm_association_numpy(
         n_grid: Grid search resolution for lambda bracketing.
         n_refine: Golden section iterations (clamped to min 20
             internally for ~1e-5 tolerance).
-        use_gpu: Accepted but silently ignored — NumPy backend is CPU-only.
         check_memory: Check available memory before workflow.
         show_progress: Show progress bars and GEMMA-style logging.
         lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
@@ -573,9 +571,6 @@ def run_lmm_association_numpy(
         output_path: Path for per-chunk disk streaming. When set, results
             are written incrementally and the returned LmmRunResult has
             empty associations and n_tested populated instead.
-        clear_caches: Accepted for signature parity with JAX runners.
-            No-op — NumPy has no compilation caches.
-
     Returns:
         LmmRunResult with per-SNP associations and PVE from null model.
             When output_path is set, associations is empty (results on
@@ -593,17 +588,11 @@ def run_lmm_association_numpy(
         miss_threshold = kw["miss_threshold"]
         l_min, l_max = kw["l_min"], kw["l_max"]
         n_grid, n_refine = kw["n_grid"], kw["n_refine"]
-        use_gpu, check_memory = kw["use_gpu"], kw["check_memory"]
+        check_memory = kw["check_memory"]
         show_progress, lmm_mode = kw["show_progress"], kw["lmm_mode"]
 
     # Reset per-run warning flags so each run gets its own diagnostics
     reset_p_yy_warned()
-
-    if use_gpu:
-        logger.warning(
-            "use_gpu=True ignored: NumPy backend is CPU-only. "
-            "Install JAX for GPU support: pip install jamma[jax]"
-        )
 
     # Memory check before workflow (uses genotype shape, runner-specific)
     n_samples, n_snps = genotypes.shape
@@ -1414,7 +1403,11 @@ def run_lmm_association_numpy(
             # (profiled), one prepared (rotation only), so initialise at 2.
             pipeline_bar = None
             if show_progress and n_chunks > 1:
-                pipeline_bar = create_progress_bar(n_chunks, "LMM association")
+                pipeline_bar = create_progress_bar(
+                    n_chunks,
+                    "LMM association",
+                    initial_eta_seconds=estimate_lmm_seconds(n_samples, n_filtered),
+                )
                 # profiled chunk + seeded (prepared, not computed)
                 pipeline_bar.update(2)
 
@@ -1460,7 +1453,10 @@ def run_lmm_association_numpy(
             # Sequential path (single chunk or non-pipeline execution)
             if show_progress and n_chunks > 1:
                 chunk_iterator = progress_iterator(
-                    chunk_starts, total=n_chunks, desc="LMM association"
+                    chunk_starts,
+                    total=n_chunks,
+                    desc="LMM association",
+                    initial_eta_seconds=estimate_lmm_seconds(n_samples, n_filtered),
                 )
             else:
                 chunk_iterator = iter(chunk_starts)

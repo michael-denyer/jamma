@@ -1,17 +1,12 @@
-"""Tests for prepare_common.py: import isolation and numerical parity.
+"""Tests for prepare_common.py: numerical correctness and edge cases.
 
 Verifies that:
-- prepare_common.py contains no JAX imports (static AST check)
-- _compute_null_model_common produces numerically identical results to
-  the JAX _compute_null_model wrapper
+- _compute_null_model_common produces numerically correct results
 - _build_covariate_matrix behaves correctly for the intercept-only case
 - _eigendecompose_or_reuse passes through pre-computed values unchanged
 """
 
 from __future__ import annotations
-
-import ast
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -21,90 +16,6 @@ from jamma.lmm.prepare_common import (
     _compute_null_model_common,
     _eigendecompose_or_reuse,
 )
-
-
-@pytest.mark.tier0
-def test_prepare_common_no_jax_imports():
-    """Verify prepare_common.py does not import JAX at module level or anywhere."""
-    source = (
-        Path(__file__).parent.parent / "src" / "jamma" / "lmm" / "prepare_common.py"
-    ).read_text()
-    tree = ast.parse(source)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                assert not alias.name.startswith("jax"), (
-                    f"Direct JAX import in prepare_common.py: {alias.name}"
-                )
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                assert not node.module.startswith("jax"), (
-                    f"From-JAX import in prepare_common.py: {node.module}"
-                )
-
-
-@pytest.mark.tier0
-def test_compute_null_model_common_matches_prepare():
-    """_compute_null_model_common must produce numerically identical results to JAX
-    wrapper _compute_null_model."""
-    jax = pytest.importorskip("jax")
-    from jamma.lmm.prepare import _compute_null_model
-
-    rng = np.random.default_rng(42)
-    n_samples = 100
-
-    # Eigenvalues: sorted positive values (realistic kinship spectrum)
-    eigenvalues_np = np.sort(np.abs(rng.standard_normal(n_samples)) + 0.1)
-
-    # Covariates: intercept-only (ones column)
-    W = np.ones((n_samples, 1))
-    n_cvt = 1
-
-    # Rotated covariates and phenotype: use a random orthogonal rotation
-    Q, _ = np.linalg.qr(rng.standard_normal((n_samples, n_samples)))
-    UtW = Q.T @ W
-    Uty = Q.T @ rng.standard_normal(n_samples)
-
-    # Test mode 4 (All): exercises the full null model path including Hi_eval_null
-    rep_placement = jax.devices("cpu")[0]
-
-    logl_H0_common, lam_common, Hi_eval_np = _compute_null_model_common(
-        lmm_mode=4,
-        eigenvalues_np=eigenvalues_np,
-        UtW=UtW,
-        Uty=Uty,
-        n_cvt=n_cvt,
-        show_progress=False,
-    )
-
-    logl_H0_jax, lam_jax, Hi_eval_jax = _compute_null_model(
-        lmm_mode=4,
-        eigenvalues_np=eigenvalues_np,
-        UtW=UtW,
-        Uty=Uty,
-        n_cvt=n_cvt,
-        rep_placement=rep_placement,
-        show_progress=False,
-    )
-
-    # Scalar values must be identical (same computation path, no rounding differences)
-    assert logl_H0_common == pytest.approx(logl_H0_jax, rel=0, abs=1e-14), (
-        f"logl_H0 mismatch: common={logl_H0_common}, jax={logl_H0_jax}"
-    )
-    assert lam_common == pytest.approx(lam_jax, rel=0, abs=1e-14), (
-        f"lambda_null_mle mismatch: common={lam_common}, jax={lam_jax}"
-    )
-
-    # Hi_eval_null arrays must match after converting JAX to numpy
-    assert Hi_eval_np is not None, "Hi_eval_null_np should not be None for mode=4"
-    assert Hi_eval_jax is not None, "Hi_eval_null_jax should not be None for mode=4"
-    np.testing.assert_allclose(
-        Hi_eval_np,
-        np.asarray(Hi_eval_jax),
-        rtol=0,
-        atol=1e-14,
-        err_msg="Hi_eval_null mismatch between prepare_common and prepare JAX wrapper",
-    )
 
 
 @pytest.mark.tier0
@@ -375,29 +286,6 @@ def test_compute_score_numpy_rejects_negative_hi_eval_null(monkeypatch):
         compute_numpy._compute_score_numpy(
             n_cvt, eigenvalues, hi_bad, Uab_batch, n_samples
         )
-
-
-@pytest.mark.tier0
-@pytest.mark.requires_jax
-def test_compute_score_jax_rejects_negative_hi_eval_null():
-    """JAX Score path rejects non-positive Hi_eval_null."""
-    import jax.numpy as jnp
-
-    from jamma.lmm.compute import _compute_score
-
-    rng = np.random.default_rng(103)
-    n_samples, n_snps, n_cvt = 50, 5, 1
-
-    eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
-    Hi_eval_null = 1.0 / (0.5 * eigenvalues + 1.0)
-    n_uab = (n_cvt + 2) * (n_cvt + 3) // 2
-    Uab_batch = jnp.ones((n_snps, n_samples, n_uab), dtype=jnp.float64)
-
-    hi_bad = Hi_eval_null.copy()
-    hi_bad[2] = -0.5
-
-    with pytest.raises(ValueError, match="non-positive"):
-        _compute_score(n_cvt, jnp.array(hi_bad), Uab_batch, n_samples)
 
 
 @pytest.mark.tier0

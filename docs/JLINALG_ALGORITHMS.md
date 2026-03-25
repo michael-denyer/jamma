@@ -1,9 +1,16 @@
 # jlinalg Algorithm Notes
 
-This document covers the key algorithms implemented in jlinalg's C layer.
+jlinalg delegates all computation to vendor BLAS/LAPACK (MKL, Accelerate,
+OpenBLAS) or NumPy fallback. The algorithms described below document what
+vendor libraries implement internally, retained as reference for understanding
+numerical behavior, performance characteristics, and debugging.
+
 For architecture and file structure, see [JLINALG_ARCHITECTURE.md](JLINALG_ARCHITECTURE.md).
 
-## 1. Goto/BLIS Three-Level Cache Blocking (dgemm)
+## 1. Goto/BLIS Three-Level Cache Blocking (vendor DGEMM/DSYRK)
+
+*This section describes algorithms implemented by vendor BLAS libraries
+(MKL, Accelerate, OpenBLAS, BLIS) that jlinalg dispatches to.*
 
 ### Why Blocking Matters
 
@@ -57,52 +64,21 @@ This layout ensures that the microkernel reads both packed_A and packed_B
 sequentially, maximizing cache-line utilization and enabling hardware
 prefetching.
 
-### Microkernel
+### DSYRK Symmetry Optimization
 
-The microkernel is the innermost loop. It computes:
+Vendor `DSYRK` (K = X @ X.T) exploits symmetry: only the lower triangle is
+computed, saving approximately 50% of floating-point operations compared to a
+full DGEMM. When only the lower triangle is needed (e.g., for the eigensolver),
+the mirror step can be skipped entirely.
 
-```
-C_tile[MR x NR] += packed_A[MR x KC] * packed_B[KC x NR]
-```
+## 2. Divide-and-Conquer Eigendecomposition (vendor DSYEVD)
 
-using SIMD registers as accumulators. The AVX2 6x8 microkernel uses 12 YMM
-(256-bit) registers for accumulators, 2 for B loads, and 1 for A broadcasts
--- 15 of 16 available YMM registers. Each k-step performs 12 FMA instructions
-(6 rows x 2 column groups), achieving 96 FLOPS per k-step.
+*This section describes the algorithm implemented by vendor LAPACK's DSYEVD
+routine. jlinalg dispatches to vendor DSYEVD (MKL, Accelerate) when available,
+falling back to NumPy (`np.linalg.eigh`) otherwise. jlinalg does not contain
+its own eigendecomposition implementation.*
 
-The NEON 8x4 microkernel uses 16 Q-register (128-bit, 2 doubles)
-accumulators, filling 16 of 32 available registers. Each k-step performs 16
-FMA instructions (8 rows x 2 column groups), achieving 64 FLOPS per k-step.
-
-### Tail Handling
-
-When M is not a multiple of MR or N is not a multiple of NR, the outer loops
-in dgemm.c handle boundary tiles:
-
-1. pack_A/pack_B zero-pad the tail strip to a full MR or NR width
-2. The microkernel runs on full MR x NR tiles as usual
-3. For boundary tiles, the result is written to a stack-allocated MR x NR
-   scratch buffer, then only the valid (mr_tail x nr_tail) subblock is
-   copied back to C
-
-This avoids branches in the microkernel hot loop.
-
-### dsyrk Optimization
-
-`dsyrk` (K = X @ X.T) exploits symmetry: since both A and B panels come from
-the same source matrix X, diagonal and upper-triangle tiles in the IC/JR loops
-can be skipped (only the lower triangle is computed, then mirrored). This saves
-approximately 50% of tile iterations compared to a full dgemm.
-
-`dsyrk_lower` further optimizes by skipping the mirror step entirely -- useful
-for callers that only read the lower triangle (e.g., the eigensolver).
-
-## 2. Divide-and-Conquer Eigendecomposition (eigh)
-
-jlinalg's `eigh` implements the LAPACK DSYEVD algorithm for symmetric
-eigendecomposition. When vendor LAPACK is available (MKL, Accelerate), the
-vendor routine is used directly. Otherwise, jlinalg falls back to its own
-D&C pipeline:
+The vendor DSYEVD algorithm uses a divide-and-conquer pipeline:
 
 ```
 K  -->  DSYTRD  -->  (d, e, tau)  -->  DSTEDC  -->  (eigenvalues, Q)  -->  DORMTR  -->  eigenvectors
@@ -123,9 +99,10 @@ K = Q_h * T * Q_h^T
 where Q_h is the product of N-2 Householder reflectors and T has diagonal d
 and off-diagonal e.
 
-jlinalg uses a **blocked algorithm** with block size NB=64. Each block
-applies NB Householder reflectors using an unblocked `dsytd2_panel`, then
-performs a deferred trailing update via `dsyr2k`:
+Vendor DSYTRD uses a **blocked algorithm** with block size NB (typically 64).
+Each block applies NB Householder reflectors using an unblocked panel
+factorization (`DSYTD2`), then performs a deferred trailing update via
+`DSYR2K`:
 
 ```
 A_trail -= V @ W.T + W @ V.T
@@ -239,19 +216,21 @@ U = Q_h * Q_dc
 where Q_dc are the eigenvectors from DSTEDC and Q_h is the product of
 Householder reflectors stored during DSYTRD.
 
-jlinalg uses a blocked DLARFT+DLARFB algorithm, processing reflectors in
-groups of NB=64 from right to left. For each block, DLARFT forms the upper
-triangular factor T encoding the product of reflectors, then DLARFB applies
-the block reflector (I - V \* T \* V^T) to the eigenvector matrix via dgemm.
-This is the same approach used by LAPACK's `dormtr.f`.
+Vendor DORMTR uses a blocked DLARFT+DLARFB algorithm, processing reflectors
+in groups of NB (typically 64) from right to left. For each block, DLARFT
+forms the upper triangular factor T encoding the product of reflectors, then
+DLARFB applies the block reflector (I - V \* T \* V^T) to the eigenvector
+matrix via DGEMM.
 
 **Reference:** LAPACK `dormtr.f`, `dorgtr.f`.
 
-## 3. Golub-Kahan SVD
+## 3. Golub-Kahan SVD (vendor DGESVD)
 
-jlinalg dispatches SVD to vendor LAPACK (DGESVD) when available. The vendor
-routine implements the full Golub-Kahan bidiagonalization + QR iteration
-algorithm.
+*jlinalg dispatches SVD to vendor LAPACK (DGESVD) when available, falling back
+to NumPy (`np.linalg.svd`) otherwise.*
+
+The vendor routine implements the full Golub-Kahan bidiagonalization + QR
+iteration algorithm.
 
 For the JAMMA use case (LOCO eigenvalue update), the input is always
 tall-skinny (m >= n). The computation proceeds:
@@ -273,14 +252,14 @@ values, which is faster when only the spectrum is needed.
 
 ### QR Factorization
 
-jlinalg dispatches QR to vendor LAPACK (DGEQRF + DORGQR). The factorization
-computes A = Q * R where:
+Vendor LAPACK computes QR via DGEQRF + DORGQR. The factorization computes
+A = Q * R where:
 - Q is m x n with orthonormal columns (the "thin" Q)
 - R is n x n upper triangular
 
-`pymodule.c` extracts R from the upper triangle of the DGEQRF output BEFORE
-calling DORGQR, because DORGQR overwrites the Householder vectors stored in
-the lower triangle.
+Note that R must be extracted from the upper triangle of the DGEQRF output
+BEFORE calling DORGQR, because DORGQR overwrites the Householder vectors
+stored in the lower triangle.
 
 When no vendor LAPACK is available, both QR and SVD fall back to NumPy
 (`np.linalg.qr`, `np.linalg.svd`).

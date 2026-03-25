@@ -10,9 +10,8 @@ where X_c is the centered genotype matrix with missing values imputed
 to per-SNP mean, and p is the number of SNPs.
 
 The standard (non-LOCO) kinship computation and in-memory LOCO kinship
-use jlinalg.dsyrk exclusively, so JAX is never initialized during kinship
-or eigendecomp phases. The streaming LOCO function
-(compute_loco_kinship_streaming) uses JAX for GPU-accelerated accumulation.
+use jlinalg.dsyrk exclusively. The streaming LOCO function
+(compute_loco_kinship_streaming) uses NumPy for accumulation.
 
 LOCO (Leave-One-Chromosome-Out) kinship is also supported via the
 subtraction approach: K_loco_c = (S_full - S_c) / (p - p_c), where
@@ -27,16 +26,13 @@ import time
 import warnings
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
-
-if TYPE_CHECKING:
-    import jax.numpy as jnp
 import psutil
 from loguru import logger
 
 from jamma import jlinalg
+from jamma.core.estimates import estimate_kinship_seconds
 from jamma.core.memory import (
     check_memory_available,
     estimate_eigendecomp_memory,
@@ -64,8 +60,7 @@ def _accumulate_kinship(K: np.ndarray, X_centered: np.ndarray) -> np.ndarray:
     """Accumulate kinship contribution from centered SNP batch.
 
     Uses jlinalg.dsyrk (symmetric rank-k update) with in-place accumulation.
-    The non-LOCO kinship path uses this exclusively so that JAX is never
-    initialized during kinship computation.
+    The non-LOCO kinship path uses this exclusively.
 
     Args:
         K: Current kinship matrix accumulator (n_samples, n_samples)
@@ -484,7 +479,10 @@ def _kinship_single_pass(
     if show_progress:
         n_chunks = (n_snps + chunk_size - 1) // chunk_size
         chunk_iter = progress_iterator(
-            chunk_iter, total=n_chunks, desc="Computing kinship (single-pass)"
+            chunk_iter,
+            total=n_chunks,
+            desc="Computing kinship (single-pass)",
+            initial_eta_seconds=estimate_kinship_seconds(n_out, n_snps),
         )
 
     for chunk, _start, _end in chunk_iter:
@@ -708,7 +706,7 @@ def compute_kinship_streaming(
     # Get indices of SNPs that passed filtering
     snp_indices = np.where(snp_mask)[0]
 
-    # Initialize kinship accumulator (numpy — no JAX device memory)
+    # Initialize kinship accumulator
     K = np.zeros((n_out, n_out), dtype=np.float64)
 
     # === PASS 2: Accumulate kinship from filtered SNPs ===
@@ -719,7 +717,10 @@ def compute_kinship_streaming(
 
     if show_progress:
         chunk_iter = progress_iterator(
-            chunk_iter, total=n_chunks, desc="Computing kinship"
+            chunk_iter,
+            total=n_chunks,
+            desc="Computing kinship",
+            initial_eta_seconds=estimate_kinship_seconds(n_out, n_snps),
         )
 
     for chunk, file_start, file_end in chunk_iter:
@@ -796,7 +797,7 @@ def _yield_full_kinship_fallback(
 
 def _yield_loco_matrices(
     S_full_np: np.ndarray,
-    S_chr: dict[str, jnp.ndarray],
+    S_chr: dict[str, np.ndarray],
     n_chr_filtered: dict[str, int],
     n_filtered: int,
     K_loco_buf: np.ndarray | None = None,
@@ -810,7 +811,7 @@ def _yield_loco_matrices(
 
     Args:
         S_full_np: Full kinship numerator as numpy array (n_samples, n_samples).
-        S_chr: Per-chromosome kinship contributions (JAX arrays).
+        S_chr: Per-chromosome kinship contributions.
         n_chr_filtered: Count of filtered SNPs per chromosome.
         n_filtered: Total number of filtered SNPs.
         K_loco_buf: Pre-allocated workspace (n_samples, n_samples) for K_loco.
@@ -860,9 +861,6 @@ def _yield_loco_matrices(
 def _validate_valid_indices(valid_indices: np.ndarray, n_samples: int) -> None:
     """Validate valid_indices for emptiness, bounds, duplicates, and ordering.
 
-    JAX silently clamps OOB indices, so we must validate before any JAX
-    indexing operation.
-
     Args:
         valid_indices: Array of sample indices to keep.
         n_samples: Total number of samples (upper bound for indices).
@@ -900,7 +898,7 @@ def _stream_s_full_and_chr(
     desc: str,
     S_full_accum: bool = True,
     valid_indices: np.ndarray | None = None,
-) -> tuple[jnp.ndarray | None, dict[str, jnp.ndarray]]:
+) -> tuple[np.ndarray | None, dict[str, np.ndarray]]:
     """Stream genotypes and accumulate S_full and/or per-chromosome S_chr.
 
     Args:
@@ -925,17 +923,14 @@ def _stream_s_full_and_chr(
         n_valid x n_valid when valid_indices is provided, otherwise
         n_samples x n_samples.
     """
-    import jax.numpy as jnp
-
-    # Validate here (not just in caller) — JAX silently clamps OOB indices.
     if valid_indices is not None:
         _validate_valid_indices(valid_indices, n_samples)
 
     n_out = len(valid_indices) if valid_indices is not None else n_samples
-    S_full = jnp.zeros((n_out, n_out), dtype=jnp.float64) if S_full_accum else None
+    S_full = np.zeros((n_out, n_out), dtype=np.float64) if S_full_accum else None
     chr_set = set(chr_subset)
-    S_chr: dict[str, jnp.ndarray] = {
-        c: jnp.zeros((n_out, n_out), dtype=jnp.float64) for c in chr_subset
+    S_chr: dict[str, np.ndarray] = {
+        c: np.zeros((n_out, n_out), dtype=np.float64) for c in chr_subset
     }
 
     n_chunks = (n_snps + chunk_size - 1) // chunk_size
@@ -962,23 +957,21 @@ def _stream_s_full_and_chr(
         if S_full is None and not target_chrs_in_chunk:
             continue
 
-        X_chunk = jnp.array(chunk[:, chunk_filtered_local])
+        X_chunk = np.asarray(chunk[:, chunk_filtered_local], dtype=np.float64)
 
         # Subset rows to valid samples before centering.
         # Centering must use the valid-sample mean (not the full-sample mean)
-        # to match the NumPy LOCO backend and GEMMA's behaviour.
+        # to match GEMMA's behaviour.
         if valid_indices is not None:
             X_chunk = X_chunk[valid_indices, :]
         X_centered = impute_and_center(X_chunk)
 
         if S_full is not None:
-            S_full = S_full + jnp.matmul(X_centered, X_centered.T)
-            S_full.block_until_ready()
+            S_full += np.dot(X_centered, X_centered.T)
 
         for chr_name in target_chrs_in_chunk:
             X_chr_part = X_centered[:, chunk_chrs == chr_name]
-            S_chr[chr_name] = S_chr[chr_name] + jnp.matmul(X_chr_part, X_chr_part.T)
-            S_chr[chr_name].block_until_ready()
+            S_chr[chr_name] += np.dot(X_chr_part, X_chr_part.T)
 
     return S_full, S_chr
 
@@ -1035,10 +1028,6 @@ def compute_loco_kinship_streaming(
         ValueError: If no SNPs pass filtering, or if all filtered SNPs are on
             a single chromosome.
     """
-    from jamma.core import ensure_jax_configured
-
-    ensure_jax_configured()
-
     start_time = time.perf_counter()
 
     # Get dimensions and chromosome metadata
@@ -1047,7 +1036,6 @@ def compute_loco_kinship_streaming(
     n_snps = meta["n_snps"]
     chromosomes = meta["chromosome"]
 
-    # Validate valid_indices early — JAX silently clamps OOB indices.
     if valid_indices is not None:
         _validate_valid_indices(valid_indices, n_samples)
 
@@ -1158,9 +1146,8 @@ def compute_loco_kinship_streaming(
     single_pass_gb = matrix_gb * (2 + n_chr_with_snps) + chunk_buffer_gb
     available_gb = psutil.virtual_memory().available / 1e9
     # Minimum: 3 matrices + chunk buffer + eigendecomp workspace.
-    # The 3-matrix floor arises from two bottleneck scenarios:
-    #   - JAX->numpy conversion: S_full (JAX) + S_full (numpy copy) + 1 S_chr
-    #   - Yield phase: S_full (numpy) + K_loco_buf + 1 remaining S_chr
+    # The 3-matrix floor arises from the yield phase bottleneck:
+    #   S_full + K_loco_buf + 1 remaining S_chr
     # In practice, single-pass holds all S_chr simultaneously (handled by
     # single_pass_gb above). This minimum catches the case where even
     # multi-pass with batch_size=1 won't fit.
@@ -1188,7 +1175,7 @@ def compute_loco_kinship_streaming(
                 f"{n_chr_with_snps} chromosomes)"
             )
 
-        S_full_jax, S_chr = _stream_s_full_and_chr(
+        S_full_np, S_chr = _stream_s_full_and_chr(
             bed_path,
             n_samples,
             n_snps,
@@ -1200,10 +1187,6 @@ def compute_loco_kinship_streaming(
             desc="LOCO: kinship accumulation",
             valid_indices=valid_indices,
         )
-
-        S_full_np = np.array(S_full_jax)
-        del S_full_jax
-        gc.collect()
 
         elapsed = time.perf_counter() - start_time
         logger.info(
@@ -1225,9 +1208,8 @@ def compute_loco_kinship_streaming(
         )
     else:
         # === MULTI-PASS: batch chromosomes across disk passes ===
-        # First pass holds JAX S_full + batch S_chr + chunk buffer; after
-        # conversion, numpy S_full replaces JAX S_full (briefly both exist).
-        # Reserve 2x matrix_gb for that transition.
+        # First pass holds S_full + batch S_chr + chunk buffer.
+        # Reserve 2x matrix_gb for safety margin.
         #
         # The consumer eigendecomposes each K_loco while the generator is
         # suspended with remaining S_chr matrices still alive. Reserve
@@ -1253,7 +1235,7 @@ def compute_loco_kinship_streaming(
 
         # First batch: compute S_full + first batch of S_chr
         first_batch = chrs_with_snps[:batch_size]
-        S_full_jax, S_chr = _stream_s_full_and_chr(
+        S_full_np, S_chr = _stream_s_full_and_chr(
             bed_path,
             n_samples,
             n_snps,
@@ -1265,10 +1247,6 @@ def compute_loco_kinship_streaming(
             desc=f"LOCO: pass 1/{n_batches} (S_full + {len(first_batch)} chr)",
             valid_indices=valid_indices,
         )
-
-        S_full_np = np.array(S_full_jax)
-        del S_full_jax
-        gc.collect()
 
         K_loco_buf = np.empty_like(S_full_np)
         yield from _yield_loco_matrices(

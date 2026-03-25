@@ -13,11 +13,11 @@ statistically identical results:
 
 Numerical differences arise from:
 - **GEMMA output precision**: 6 significant figures in scientific notation
-- **Optimization convergence**: GEMMA uses Brent's method; JAMMA JAX uses grid search +
+- **Optimization convergence**: GEMMA uses Brent's method; JAMMA uses grid search +
   golden section. Both converge to within 1e-5 of the true optimum, but on flat
   optimization landscapes (weak-signal SNPs where lambda hits the lower bound 1e-5),
   the two methods can land on slightly different local optima.
-- **CDF implementations**: JAX betainc vs GSL gsl_cdf_fdist_Q
+- **CDF implementations**: Cephes betainc vs GSL gsl_cdf_fdist_Q
 - **Lambda sensitivity**: ~0.35x amplification to beta (1e-5 lambda → 3.5e-6 beta)
 
 Value types and tolerances:
@@ -52,10 +52,10 @@ class ToleranceConfig:
     - Comparing 1e-15 vs 2e-15: atol dominates (both effectively zero)
 
     Tolerance values are calibrated based on empirical comparison between
-    JAMMA (JAX-based) and GEMMA (GSL-based) implementations on the mouse_hs1940
+    JAMMA and GEMMA (GSL-based) implementations on the mouse_hs1940
     reference dataset. The differences arise from:
-    - Different numerical libraries (JAX vs GSL)
-    - Different F-distribution CDF implementations (JAX.scipy vs GSL)
+    - Different numerical libraries (Cephes vs GSL)
+    - Different F-distribution CDF implementations (Cephes betainc vs GSL)
     - Different optimization convergence criteria
     - Different floating-point accumulation order in parallel computations
 
@@ -99,7 +99,7 @@ class ToleranceConfig:
     beta_rtol: float = 1e-2
     # SE: follows beta sensitivity pattern
     se_rtol: float = 1e-5
-    # P-values (Wald/Score): CDF implementation differences (JAX betainc vs GSL)
+    # P-values (Wald/Score): CDF implementation differences (Cephes betainc vs GSL)
     # Max observed: 4.1e-5. Scientific thresholds (0.05, 0.01, etc.) unaffected.
     pvalue_rtol: float = 1e-4
     # LRT p-values: wider than Wald/Score due to chi-squared distribution

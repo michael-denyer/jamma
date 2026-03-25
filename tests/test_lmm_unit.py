@@ -233,57 +233,6 @@ class TestEigendecomposition:
 
 
 @pytest.mark.tier0
-class TestEigendecomposeOrReuse:
-    """Tests for _eigendecompose_or_reuse check_memory propagation."""
-
-    def test_reuse_skips_eigendecomp_entirely(self):
-        """Pre-computed eigen should skip eigendecompose_kinship call."""
-        from unittest.mock import patch
-
-        from jamma.lmm.prepare import _eigendecompose_or_reuse
-
-        eigenvalues = np.array([1.0, 2.0])
-        eigenvectors = np.eye(2)
-
-        with patch("jamma.lmm.prepare_common.eigendecompose_kinship") as mock_eigen:
-            result = _eigendecompose_or_reuse(
-                None, eigenvalues, eigenvectors, False, "test"
-            )
-            mock_eigen.assert_not_called()
-
-        assert np.array_equal(result[0], eigenvalues)
-
-    def test_check_memory_false_propagates_to_eigendecompose(self):
-        """check_memory=False should propagate to eigendecompose_kinship."""
-        from unittest.mock import patch
-
-        from jamma.lmm.prepare import _eigendecompose_or_reuse
-
-        K = np.eye(5)
-
-        with patch(
-            "jamma.lmm.eigen.check_memory_available",
-            side_effect=MemoryError("should not be called"),
-        ) as mock_check:
-            _eigendecompose_or_reuse(K, None, None, False, "test", check_memory=False)
-            mock_check.assert_not_called()
-
-    def test_check_memory_true_propagates_to_eigendecompose(self):
-        """check_memory=True should propagate to eigendecompose_kinship."""
-        from unittest.mock import patch
-
-        from jamma.lmm.prepare import _eigendecompose_or_reuse
-
-        K = np.eye(5)
-
-        with patch(
-            "jamma.lmm.eigen.check_memory_available", return_value=True
-        ) as mock_check:
-            _eigendecompose_or_reuse(K, None, None, False, "test", check_memory=True)
-            mock_check.assert_called_once()
-
-
-@pytest.mark.tier0
 class TestUabComputation:
     """Tests for U'ab matrix computation."""
 

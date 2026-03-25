@@ -79,7 +79,7 @@ uv run pre-commit run --all-files  # All hooks
 2. Write clear commit messages following conventional commits:
    ```
    feat: add multi-pass LOCO kinship batching
-   fix: JAX device array leak on write exception
+   fix: streaming runner chunk boundary handling
    perf: skip impute_and_center when no target chromosomes in chunk
    refactor: extract _yield_loco_matrices helper
    ```
@@ -103,7 +103,7 @@ Key source layout:
 ```
 src/jamma/
 ├── cli.py           # Click CLI entry point
-├── core/            # JAX config, memory estimation, utilities
+├── core/            # Memory estimation, backend selection, utilities
 ├── io/              # PLINK file readers, result writers
 ├── kinship/         # Kinship matrix computation (standard, streaming, LOCO)
 ├── lmm/             # LMM association (likelihood, optimization, runners)

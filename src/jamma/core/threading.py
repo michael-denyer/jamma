@@ -1,12 +1,7 @@
 """BLAS thread management for numpy operations.
 
-JAMMA has two separate BLAS paths:
-- Numpy operations (eigendecomp, UT@G rotation): use system BLAS (MKL on Databricks).
-  Controlled by threadpool_limits.
-- JAX JIT operations (batch_compute_uab, optimize_lambda): use XLA's bundled Eigen.
-  NOT affected by threadpool_limits.
-
-This module provides explicit thread control for the numpy path only.
+This module provides explicit thread control for numpy BLAS operations
+(eigendecomp, UT@G rotation) via threadpool_limits.
 
 On macOS with Apple Accelerate, threadpoolctl cannot control the BLAS thread
 count (Accelerate has no public thread-count API and ignores VECLIB_MAXIMUM_THREADS
@@ -48,9 +43,7 @@ def get_blas_backend() -> str:
 def get_physical_core_count() -> int:
     """Return the number of physical CPU cores.
 
-    Use this for BLAS operations that run without JAX contention
-    (e.g. eigendecomp, U.T @ G rotation when JAX isn't computing).
-    Unlike get_blas_thread_count(), this does NOT divide by n_jax_devices.
+    Use this for BLAS operations (e.g. eigendecomp, U.T @ G rotation).
 
     Returns:
         Physical core count, falling back to os.cpu_count() if psutil
@@ -77,17 +70,10 @@ def get_blas_thread_count() -> int:
 
     Priority:
     1. JAMMA_BLAS_THREADS env var (explicit override for benchmarking)
-    2. JAX device-aware reduction: physical_cores // n_jax_devices
-    3. Physical core count via psutil (avoids hyperthreading oversubscription)
-
-    When JAX is configured with multiple virtual CPU devices, MKL threads are
-    reduced proportionally to avoid oversubscription. Each JAX device manages
-    its own XLA thread pool, so BLAS gets ``physical_cores // n_devices``
-    threads, leaving the rest for XLA.
+    2. Physical core count via psutil (avoids hyperthreading oversubscription)
 
     Returns:
-        Positive integer thread count. Capped at os.cpu_count() for the
-        env var and single-device paths; proportionally reduced for multi-device.
+        Positive integer thread count. Capped at os.cpu_count().
     """
     max_threads = os.cpu_count() or 64
 
@@ -106,38 +92,8 @@ def get_blas_thread_count() -> int:
             return n
 
     physical_cores = psutil.cpu_count(logical=False) or max_threads
-
-    # Lazy import — calling jax.devices() before configure_jax() would
-    # permanently freeze the backend at 1 device.
-    try:
-        import jax
-    except ImportError:
-        # NumPy-only install — no JAX available.
-        n = max(1, min(physical_cores, max_threads))
-        logger.debug(f"BLAS threads: {n} (JAX not installed)")
-        return n
-
-    # JAX is importable — jax_config must also be importable (it's part of
-    # jamma, not an optional dependency).  Let ImportError propagate if broken.
-    from jamma.core.jax_config import is_jax_configured
-
-    if not is_jax_configured():
-        # Don't query jax.devices() — it would freeze the backend at 1 device.
-        # Expected during kinship and eigendecomp phases (JAX deferred until LMM).
-        n = max(1, min(physical_cores, max_threads))
-        logger.debug(f"BLAS threads: {n} (JAX not yet initialized)")
-        return n
-
-    n_jax_devices = len(jax.devices("cpu"))
-    if n_jax_devices > 1:
-        n = max(1, physical_cores // n_jax_devices)
-        logger.debug(
-            f"BLAS threads: {n} ({physical_cores} cores / {n_jax_devices} JAX devices)"
-        )
-    else:
-        n = max(1, min(physical_cores, max_threads))
-        logger.debug(f"BLAS threads: {n} (physical cores)")
-
+    n = max(1, min(physical_cores, max_threads))
+    logger.debug(f"BLAS threads: {n} (physical cores)")
     return n
 
 
@@ -207,8 +163,7 @@ def blas_threads(n_threads: int | None = None) -> Generator[None, None, None]:
     """Context manager for scoped BLAS thread control.
 
     Wraps threadpool_limits to centralise default thread count logic.
-    Use around numpy BLAS operations (eigendecomp, matmul) -- NOT around
-    JAX JIT calls (which use XLA's own thread pool).
+    Use around numpy BLAS operations (eigendecomp, matmul).
 
     Args:
         n_threads: Number of BLAS threads. None uses get_blas_thread_count().
@@ -235,11 +190,11 @@ def blas_threads(n_threads: int | None = None) -> Generator[None, None, None]:
 def jlinalg_threads(n_threads: int | None = None) -> Generator[None, None, None]:
     """Temporarily set jlinalg's internal thread count.
 
-    jlinalg's DGEMM kernels do not use threadpoolctl; they are controlled by
-    ``jlinalg.set_n_threads()``. The setting is process-global, so callers
-    must scope changes carefully. A module-level lock serialises the set +
-    compute window so concurrent pipeline workers cannot race thread-count
-    changes around ``jlinalg.dgemm()``.
+    jlinalg's snp_stats pthread pool does not use threadpoolctl; it is
+    controlled by ``jlinalg.set_n_threads()``. The setting is process-global,
+    so callers must scope changes carefully. A module-level lock serialises
+    the set + compute window so concurrent pipeline workers cannot race
+    thread-count changes.
 
     Args:
         n_threads: jlinalg thread count. None uses all physical cores.

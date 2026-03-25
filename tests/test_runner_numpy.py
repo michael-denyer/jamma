@@ -1,14 +1,12 @@
-"""Validation tests for the pure-NumPy LMM runner against GEMMA reference output.
+"""Validation tests for the NumPy LMM runner against GEMMA reference output.
 
 Validates that run_lmm_association_numpy produces GEMMA-equivalent p-values for all
 four LMM modes (Wald, LRT, Score, All). Tests compare directly against GEMMA reference
-files, not against the JAX runner, because Cephes betainc vs JAX XLA betainc can
-diverge up to ~6e-3 rtol at large sample sizes (see EQUIVALENCE.md).
+files (see EQUIVALENCE.md for tolerance rationale).
 """
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 import numpy as np
@@ -30,13 +28,13 @@ from tests.conftest import load_phenotypes_from_fam
 # ---------------------------------------------------------------------------
 
 # NumPy backend vs GEMMA tolerances.
-# Cephes betainc is more accurate than JAX XLA betainc for large a (n_samples > 1000).
-# Lambda optimization uses identical golden section algorithm → same lambda tolerance.
-# p-value tolerance can be tighter than JAX-vs-GEMMA because Cephes is closer to GSL.
+# Cephes betainc is close to GSL betainc for large a (n_samples > 1000).
+# Lambda optimization uses golden section algorithm.
+# See EQUIVALENCE.md for tolerance derivation.
 NUMPY_GEMMA_TOLERANCES = ToleranceConfig(
-    lambda_rtol=1e-3,  # Golden section vs Brent, same as JAX
-    pvalue_rtol=1e-2,  # Start with same as JAX; may tighten after validation
-    se_rtol=5e-4,  # Same as JAX
+    lambda_rtol=1e-3,  # Golden section vs Brent
+    pvalue_rtol=1e-2,  # Cephes vs GSL betainc
+    se_rtol=5e-4,  # Pab arithmetic propagation
     logl_rtol=5e-3,  # Golden section vs Brent on flat optima
     atol=1e-4,  # Near-zero values
 )
@@ -141,39 +139,6 @@ def mouse_hs1940_data_with_covariates(mouse_hs1940_data):
 # ---------------------------------------------------------------------------
 # Fast unit and structural tests (always run)
 # ---------------------------------------------------------------------------
-
-
-def test_numpy_runner_no_jax_imports():
-    """AST check: runner_numpy.py must not contain any JAX import."""
-    src_path = (
-        Path(__file__).parent.parent / "src" / "jamma" / "lmm" / "runner_numpy.py"
-    )
-    source = src_path.read_text()
-    tree = ast.parse(source)
-    jax_imports = []
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name.startswith("jax"):
-                        jax_imports.append(alias.name)
-            else:
-                if node.module and node.module.startswith("jax"):
-                    jax_imports.append(node.module)
-    assert jax_imports == [], f"runner_numpy.py has JAX imports: {jax_imports}"
-
-
-def test_numpy_runner_signature_matches_jax():
-    """Verify NumPy runner parameter names match JAX runner exactly (RUNR-04)."""
-    import inspect
-
-    jax_mod = pytest.importorskip("jamma.lmm.runner_jax")
-    numpy_sig = inspect.signature(run_lmm_association_numpy)
-    jax_sig = inspect.signature(jax_mod.run_lmm_association_jax)
-    assert list(numpy_sig.parameters.keys()) == list(jax_sig.parameters.keys()), (
-        f"Parameter names differ: "
-        f"{list(numpy_sig.parameters.keys())} vs {list(jax_sig.parameters.keys())}"
-    )
 
 
 def test_numpy_runner_returns_list_of_assoc_result(synthetic_data):

@@ -76,9 +76,8 @@ def _clamp_p_yy(P_yy: float, lambda_val: float) -> float:
 def build_index_table(n_cvt: int) -> dict:
     """Precompute all index mappings for a given n_cvt.
 
-    Pure Python function with zero JAX dependency. Runs at Python level.
-    When called inside a JIT function with n_cvt as a static argument,
-    it executes at trace time, producing compile-time constants.
+    Pure Python function, lru_cached. Runs at Python level to produce
+    compile-time constants for the Pab recursion.
 
     GEMMA convention (1-based):
       Columns 1..n_cvt = covariates (W)
@@ -887,7 +886,7 @@ def _golden_section_minimize(
 ) -> tuple[float, float]:
     """Minimize a scalar function over [l_min, l_max] using golden section search.
 
-    Pure Python implementation matching the JAX batch optimizer algorithm:
+    Pure Python implementation using grid search + golden section refinement:
     1. Log-spaced grid search to bracket the minimum
     2. Golden section refinement within the bracket
 
@@ -974,7 +973,7 @@ def classify_uab_columns(n_cvt: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
     A column is SNP-varying if its (a_col, b_col) pair involves the genotype
     (0-based index = n_cvt). Otherwise it is invariant across SNPs.
 
-    Pure Python, lru_cached. No JAX dependency.
+    Pure Python, lru_cached.
 
     Args:
         n_cvt: Number of covariates.

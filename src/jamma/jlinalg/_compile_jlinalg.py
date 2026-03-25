@@ -13,8 +13,7 @@ Requires: gcc (or cc), Python development headers, numpy >= 2.0.
 OpenMP support is optional — falls back to single-threaded if unavailable.
 
 The jlinalg extension compiles per-file to enable per-source-group compiler flags
-(e.g. -mavx2/-mfma only on SIMD sources to avoid SIGILL on older CPUs).
-Currently the x86_64/aarch64 ISA split is handled by #if guards in C.
+(e.g. strict IEEE 754 for LAPACK sources vs standard optimization for baseline).
 """
 
 from __future__ import annotations
@@ -35,8 +34,8 @@ def compile_extension(verbose: bool = False) -> bool:
     """Compile jlinalg C sources into a shared library in the installed package.
 
     Performs per-file compile-then-link to enable different compiler flags
-    per source group. Currently all sources use the same base flags with
-    an x86_64/aarch64 ISA split for -mavx2/-mfma.
+    per source group (strict IEEE 754 for LAPACK, standard optimization
+    for baseline sources).
 
     Args:
         verbose: Print per-command compile details to stderr. When False
@@ -65,74 +64,24 @@ def compile_extension(verbose: bool = False) -> bool:
         _print("  Package may be incomplete — reinstall from source.")
         return False
 
-    # Source files split into three groups:
-    # - baseline: portable C compiled without SIMD flags (runs on any x86_64)
-    # - simd: files using AVX2 intrinsics, compiled with -mavx2/-mfma
-    # - kernels: ISA-specific microkernel files (required on target platform)
-    # Only SIMD sources and AVX2 kernels get -mavx2/-mfma to avoid SIGILL on
-    # older x86_64 CPUs.  NEON kernels get no extra flags (NEON is baseline on
-    # aarch64).
+    # Source files split into two groups:
+    # - baseline: portable C compiled with standard flags
+    # - lapack: eigh.c compiled with strict IEEE 754 flags (-O2 -fno-fast-math)
     baseline_sources = [
         jlinalg_src_dir / "platform.c",
-        jlinalg_src_dir / "dnrm2.c",
-        jlinalg_src_dir / "dgemv.c",
         jlinalg_src_dir / "pymodule.c",
-        jlinalg_src_dir / "dgemm.c",  # blocking framework
-        jlinalg_src_dir / "dgemm_generic.c",  # generic scalar microkernel
-        jlinalg_src_dir / "blas_dispatch.c",  # external BLAS discovery
-        jlinalg_src_dir / "dsyrk.c",
-        jlinalg_src_dir / "dsyr2k.c",
+        jlinalg_src_dir / "blas_dispatch.c",
         jlinalg_src_dir / "snp_stats.c",
     ]
-    # LAPACK sources: strict IEEE 754 required for secular equation deflation.
+    # LAPACK sources: strict IEEE 754 required for vendor LAPACK dispatch.
     # Compiled with -O2 -fno-fast-math — MUST NOT get -ffast-math or -funroll-loops.
     lapack_sources = [
-        jlinalg_src_dir / "dsytrd.c",
-        jlinalg_src_dir / "dstedc.c",
-        jlinalg_src_dir / "dormtr.c",
         jlinalg_src_dir / "eigh.c",
     ]
-    simd_sources = [
-        jlinalg_src_dir / "ddot.c",
-        jlinalg_src_dir / "daxpy.c",
-        jlinalg_src_dir / "dscal.c",
-    ]
 
-    # Kernel sources — required on the matching platform, optional elsewhere.
-    # Missing a kernel on its target platform produces a linker error later;
-    # fail fast here with a clear message instead.
-    jlinalg_kernels_dir = jlinalg_dir / "kernels"
-    avx2_kernel_sources: list[Path] = []
-    neon_kernel_sources: list[Path] = []
-    if jlinalg_kernels_dir.is_dir():
-        avx2_src = jlinalg_kernels_dir / "dgemm_avx2.c"
-        neon_src = jlinalg_kernels_dir / "dgemm_neon.c"
-        if avx2_src.exists():
-            avx2_kernel_sources.append(avx2_src)
-        elif platform.machine() in ("x86_64", "AMD64"):
-            _print(
-                "ERROR: AVX2 dgemm kernel required on "
-                f"x86_64 but not found at {avx2_src}"
-            )
-            return False
-        if neon_src.exists():
-            neon_kernel_sources.append(neon_src)
-        elif platform.machine() in ("aarch64", "arm64"):
-            _print(
-                "ERROR: NEON dgemm kernel required on "
-                f"{platform.machine()} but not found at {neon_src}"
-            )
-            return False
+    source_files = baseline_sources + lapack_sources
 
-    source_files = (
-        baseline_sources
-        + lapack_sources
-        + simd_sources
-        + avx2_kernel_sources
-        + neon_kernel_sources
-    )
-
-    missing = [str(s) for s in (baseline_sources + simd_sources) if not s.exists()]
+    missing = [str(s) for s in source_files if not s.exists()]
     if missing:
         _print(f"ERROR: jlinalg source files missing: {missing}")
         return False
@@ -188,20 +137,6 @@ def compile_extension(verbose: bool = False) -> bool:
         _print("ERROR: Windows is not supported for C extension compilation")
         return False
 
-    # ISA-specific flags — applied only to SIMD sources (ddot.c, daxpy.c, dscal.c).
-    # Baseline sources (platform.c, pymodule.c, etc.) are compiled without SIMD
-    # flags so the extension runs on any x86_64 CPU; runtime CPUID dispatch in
-    # platform.c selects the appropriate kernels.
-    machine = platform.machine()
-    simd_flags: list[str] = []
-    if machine in ("x86_64", "AMD64"):
-        simd_flags = ["-mavx2", "-mfma"]
-        _detail(f"ISA: x86_64 — SIMD sources get {simd_flags}")
-    elif machine in ("aarch64", "arm64"):
-        _detail("ISA: aarch64/arm64 — NEON is baseline (no extra SIMD flags needed)")
-    else:
-        _detail(f"ISA: {machine} — no extra SIMD flags")
-
     # OpenMP detection — may override cc_cmd to use clang when libiomp5 is
     # found, since GCC's GOMP compatibility shim has assertion failures after
     # MKL LAPACK operations.
@@ -223,6 +158,7 @@ def compile_extension(verbose: bool = False) -> bool:
         "-fno-trapping-math",
         "-funroll-loops",
         "-fno-finite-math-only",  # ensure isnan() works correctly
+        "-Wframe-larger-than=131072",
         "-fPIC",
         "-std=c11",
         f"-I{python_inc}",
@@ -230,14 +166,13 @@ def compile_extension(verbose: bool = False) -> bool:
         f"-I{jlinalg_inc_dir}",
     ]
 
-    simd_source_set = set(str(s) for s in simd_sources)
-    avx2_kernel_set = set(str(s) for s in avx2_kernel_sources)
     lapack_source_set = set(str(s) for s in lapack_sources)
     # LAPACK sources: strict IEEE 754, no -ffast-math, -O2 only.
     lapack_cflags = [
         "-O2",
         "-fno-fast-math",
         "-fno-finite-math-only",
+        "-Wframe-larger-than=131072",
         "-fPIC",
         "-std=c11",
         f"-I{python_inc}",
@@ -259,23 +194,14 @@ def compile_extension(verbose: bool = False) -> bool:
                 obj_file = tmp_dir / f"{src.stem}{suffix}.o"
                 src_str = str(src)
                 if src_str in lapack_source_set:
-                    # LAPACK sources: strict IEEE 754, no SIMD flags.
+                    # LAPACK sources: strict IEEE 754.
                     cflags = lapack_cflags
-                    extra_simd: list[str] = []
                 else:
                     cflags = base_cflags
-                    # SIMD sources and AVX2 kernel files get -mavx2/-mfma;
-                    # NEON kernel files and baseline sources get no SIMD flags.
-                    extra_simd = (
-                        simd_flags
-                        if (src_str in simd_source_set or src_str in avx2_kernel_set)
-                        else []
-                    )
                 cmd = [
                     cc_cmd,
                     *cc_extra,
                     *cflags,
-                    *extra_simd,
                     *extra_compile,
                     "-c",
                     str(src),
@@ -421,38 +347,12 @@ def compile_test_harness(verbose: bool = True) -> Path:
     # plus test_boundaries.c and unity.c
     baseline_sources = [
         jlinalg_src_dir / "platform.c",
-        jlinalg_src_dir / "dnrm2.c",
-        jlinalg_src_dir / "dgemv.c",
-        jlinalg_src_dir / "dgemm.c",
-        jlinalg_src_dir / "dgemm_generic.c",
         jlinalg_src_dir / "blas_dispatch.c",
-        jlinalg_src_dir / "dsyrk.c",
-        jlinalg_src_dir / "dsyr2k.c",
         jlinalg_src_dir / "snp_stats.c",
     ]
     lapack_sources = [
-        jlinalg_src_dir / "dsytrd.c",
-        jlinalg_src_dir / "dstedc.c",
-        jlinalg_src_dir / "dormtr.c",
         jlinalg_src_dir / "eigh.c",
     ]
-    simd_sources = [
-        jlinalg_src_dir / "ddot.c",
-        jlinalg_src_dir / "daxpy.c",
-        jlinalg_src_dir / "dscal.c",
-    ]
-
-    # Kernel sources
-    jlinalg_kernels_dir = jlinalg_dir / "kernels"
-    avx2_kernel_sources: list[Path] = []
-    neon_kernel_sources: list[Path] = []
-    if jlinalg_kernels_dir.is_dir():
-        avx2_src = jlinalg_kernels_dir / "dgemm_avx2.c"
-        neon_src = jlinalg_kernels_dir / "dgemm_neon.c"
-        if avx2_src.exists():
-            avx2_kernel_sources.append(avx2_src)
-        if neon_src.exists():
-            neon_kernel_sources.append(neon_src)
 
     # Test-specific sources
     test_sources = [
@@ -460,14 +360,7 @@ def compile_test_harness(verbose: bool = True) -> Path:
         unity_dir / "unity.c",
     ]
 
-    all_sources = (
-        baseline_sources
-        + lapack_sources
-        + simd_sources
-        + avx2_kernel_sources
-        + neon_kernel_sources
-        + test_sources
-    )
+    all_sources = baseline_sources + lapack_sources + test_sources
 
     # NumPy headers (for npy_intp)
     try:
@@ -482,13 +375,6 @@ def compile_test_harness(verbose: bool = True) -> Path:
     cc_name = os.environ.get("CC") or sysconfig.get_config_var("CC") or "cc"
     cc_cmd = cc_name.split()[0]
     cc_extra = cc_name.split()[1:]
-
-    # ISA-specific flags
-    machine = platform.machine()
-    simd_flags: list[str] = []
-    if machine in ("x86_64", "AMD64"):
-        simd_flags = ["-mavx2", "-mfma"]
-    # aarch64: NEON is baseline, no extra flags needed
 
     # Link against libpython (blas_dispatch.c uses Python C API for numpy discovery)
     python_libdir = sysconfig.get_config_var("LIBDIR") or ""
@@ -530,8 +416,6 @@ def compile_test_harness(verbose: bool = True) -> Path:
         f"-I{jlinalg_inc_dir}",
     ]
 
-    simd_source_set = set(str(s) for s in simd_sources)
-    avx2_kernel_set = set(str(s) for s in avx2_kernel_sources)
     lapack_source_set = set(str(s) for s in lapack_sources)
 
     # Compile each source to .o.  Mirrors compile_extension's OpenMP retry:
@@ -552,14 +436,8 @@ def compile_test_harness(verbose: bool = True) -> Path:
 
                 if src_str in lapack_source_set:
                     cflags = lapack_cflags
-                    extra_simd: list[str] = []
                 else:
                     cflags = base_cflags
-                    extra_simd = (
-                        simd_flags
-                        if (src_str in simd_source_set or src_str in avx2_kernel_set)
-                        else []
-                    )
 
                 # Test sources and Unity need double precision + include path
                 extra_inc: list[str] = []
@@ -572,7 +450,6 @@ def compile_test_harness(verbose: bool = True) -> Path:
                     cc_cmd,
                     *cc_extra,
                     *cflags,
-                    *extra_simd,
                     *current_omp_compile,
                     *extra_inc,
                     "-c",

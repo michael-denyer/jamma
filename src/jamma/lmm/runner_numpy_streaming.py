@@ -6,7 +6,6 @@ Two-pass disk streaming using C extension compute path:
 
 Never allocates the full genotype matrix. Uses jlinalg.dgemm for rotation
 and the _lmm_accel C workspace for golden-section-optimized REML/MLE.
-No JAX dependency.
 """
 
 from __future__ import annotations
@@ -20,6 +19,7 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
+from jamma.core.estimates import estimate_lmm_seconds
 from jamma.core.progress import create_progress_bar, progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask
 from jamma.core.threading import (
@@ -1048,7 +1048,11 @@ def run_lmm_association_numpy_streaming(
 
                 # Progress bar (manual update, not iterator-based)
                 pipeline_bar = (
-                    create_progress_bar(n_chunks, "LMM association (streaming)")
+                    create_progress_bar(
+                        n_chunks,
+                        "LMM association (streaming)",
+                        initial_eta_seconds=estimate_lmm_seconds(n_samples, n_filtered),
+                    )
                     if show_progress and n_chunks > 1
                     else None
                 )
@@ -1101,7 +1105,11 @@ def run_lmm_association_numpy_streaming(
         else:
             # Sequential fallback when too few chunks for pipeline overlap
             seq_bar = (
-                create_progress_bar(n_chunks, "Running LMM (NumPy streaming)")
+                create_progress_bar(
+                    n_chunks,
+                    "Running LMM (NumPy streaming)",
+                    initial_eta_seconds=estimate_lmm_seconds(n_samples, n_filtered),
+                )
                 if show_progress and n_chunks > 1
                 else None
             )

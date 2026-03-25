@@ -141,7 +141,7 @@ if (n_total == 0 || n_aa == n_total || n_bb == n_total) {
 
 **Behavior**: Count genotype classes (AA, AB, BB) and flag as monomorphic if only one class exists.
 
-### JAMMA (kinship/compute.py, lmm/runner_jax.py)
+### JAMMA (kinship/compute.py)
 
 ```python
 # Variance-based detection
@@ -166,20 +166,19 @@ The variance-based approach is simpler and equally robust. A single-sample GWAS 
 
 ---
 
-## 5. JAX Path: Covariate Support
+## 5. Covariate Support
 
 ### GEMMA
 
 Supports arbitrary covariates (n_cvt >= 1).
 
-### JAMMA JAX Path (runner_jax.py)
+### JAMMA
 
 Supports arbitrary covariates (n_cvt >= 1) since v1.2.
 
 ### Status: **Aligned**
 
-The JAX runner generalizes Uab/Pab shapes from hardcoded n_cvt=1 to arbitrary
-n_cvt. All LMM modes (Wald, LRT, Score, all-tests) work with covariates.
+All LMM modes (Wald, LRT, Score, all-tests) work with covariates.
 
 ---
 
@@ -191,12 +190,11 @@ Uses **Brent's method** (GSL `gsl_min_fminimizer_brent`) — a hybrid algorithm
 combining inverse quadratic interpolation with golden section fallback. Variable
 iteration count per SNP; serial execution.
 
-### JAMMA (likelihood_jax.py:624)
+### JAMMA (likelihood_numpy.py)
 
 Uses **grid search (50 log-spaced points) + golden section refinement (20
-iterations)** via `lax.fori_loop`. All SNPs in a chunk are optimized
-simultaneously in lockstep (same bracket operation per iteration, vectorized
-across the SNP batch).
+iterations)**. All SNPs in a chunk are optimized simultaneously in lockstep
+(same bracket operation per iteration, vectorized across the SNP batch).
 
 ### Unimodality Assumption
 
@@ -215,15 +213,10 @@ robust to flat regions due to its inverse quadratic interpolation step.
 
 Brent's method is inherently serial: each SNP follows a different convergence
 path with a variable number of iterations. Golden section processes all SNPs in
-lockstep, enabling:
-
-- **JAX `vmap` vectorization** across the entire SNP batch
-- **`lax.fori_loop`** that stays on-device (no host/device sync per iteration)
-- **Double buffering** of chunk transfer overlapped with compute
-
-Replacing golden section with Brent would require either scalar per-SNP
-optimization (destroying batch vectorization, ~100x slower) or padded vectorized
-Brent (wasteful, complex state machine that diverges per SNP).
+lockstep, enabling batch vectorization across the entire SNP chunk. Replacing
+golden section with Brent would require either scalar per-SNP optimization
+(destroying batch vectorization, ~100x slower) or padded vectorized Brent
+(wasteful, complex state machine that diverges per SNP).
 
 ### Convergence
 
@@ -265,26 +258,22 @@ for full error bounds and empirical validation results.
 
 GEMMA uses GSL (GNU Scientific Library) for eigendecomposition (always DSYEVD).
 JAMMA uses `jlinalg.eigh` which dispatches to vendor DSYEVD/DSYEVR via the
-jlinalg C layer, with a jlinalg D&C fallback when no vendor LAPACK is available.
-JAX's `jnp.linalg.eigh` is not used.
+jlinalg C layer, with a NumPy fallback when no vendor LAPACK is available.
 
-**Rationale:** JAX uses int32 buffer indexing internally, which overflows at ~2.1 billion elements (~46k × 46k matrix). For large-sample GWAS (50k+), the kinship matrix exceeds this limit, causing:
-
-```text
-JaxRuntimeError: INVALID_ARGUMENT: Buffer Definition Event:
-Value (=5000300001) exceeds the maximum representable value of the desired type
-```
-
-jlinalg dispatches to vendor LAPACK (ILP64 when available) and supports large
-matrices without this limitation.
-
-**DSYEVD vs DSYEVR:** JAMMA defaults to DSYEVD (faster, O(N²) workspace) and
+**DSYEVD vs DSYEVR:** JAMMA defaults to DSYEVD (faster, O(N^2) workspace) and
 falls back to DSYEVR (slower, O(N) workspace) when DSYEVD won't fit in memory.
 GEMMA always uses DSYEVD. Both LAPACK drivers produce equivalent results within
 backward error bounds (`O(n * eps_mach * ||K||)`). The DSYEVR fallback can
 increase the maximum sample count by ~40% for a given machine size.
 
-**Performance:** Vendor LAPACK eigh is highly optimized (multi-threaded, vectorized). The eigendecomposition is O(n³) and runs once per dataset, so it's not the performance bottleneck. The JAX-accelerated SNP processing dominates runtime for large datasets.
+**ILP64 requirement:** For large-sample GWAS (50k+), the kinship matrix exceeds
+the int32 element limit (~2.1 billion elements at ~46k x 46k). jlinalg
+dispatches to vendor LAPACK (ILP64 when available) and supports large matrices
+without this limitation.
+
+**Performance:** Vendor LAPACK eigh is highly optimized (multi-threaded,
+vectorized). The eigendecomposition is O(n^3) and runs once per dataset. The
+C extension batch SNP processing dominates runtime for large datasets.
 
 ---
 
@@ -296,7 +285,7 @@ Uses the **Wigginton exact test** — a permutation-based exact test for Hardy-W
 
 ### JAMMA
 
-Uses a **chi-squared goodness-of-fit test** (df=1) computed via `math.erfc` (stdlib) vectorized over SNPs — no JAX or scipy dependency. The chi-squared test compares observed genotype counts to expected counts under HWE. Implementation is in `core/snp_filter.py:compute_hwe_pvalues`.
+Uses a **chi-squared goodness-of-fit test** (df=1) computed via `math.erfc` (stdlib) vectorized over SNPs — no scipy dependency. The chi-squared test compares observed genotype counts to expected counts under HWE. Implementation is in `core/snp_filter.py:compute_hwe_pvalues`.
 
 ### Divergence Impact
 
@@ -448,9 +437,9 @@ the `save_kinship=False` path. This is a memory optimization, not a numerical ch
 | Px_yy clamping | None | 1e-8 floor | Numerical stability |
 | logdet with neg eigenvalues | log(abs(v)) | log(abs(v)) | Aligned |
 | Monomorphic detection | Count-based | Variance-based | Aligned (equivalent) |
-| JAX covariates | n_cvt >= 1 | n_cvt >= 1 | Aligned (since v1.2) |
-| Lambda optimizer | Brent (serial) | Golden section (vectorized, assumes unimodal) | < 1e-4 relative; see §6 |
-| Eigendecomp library | GSL (DSYEVD only) | jlinalg (vendor DSYEVD/DSYEVR dispatch) | Large-sample support (ILP64), DSYEVR fallback |
+| Covariates | n_cvt >= 1 | n_cvt >= 1 | Aligned (since v1.2) |
+| Lambda optimizer | Brent (serial) | Golden section (batch vectorized, assumes unimodal) | < 1e-4 relative; see §6 |
+| Eigendecomp library | GSL (DSYEVD only) | jlinalg vendor dispatch (DSYEVD/DSYEVR) | Large-sample support (ILP64), DSYEVR fallback |
 | HWE test | Wigginton exact | Chi-squared (df=1) | Identical for large n |
 | LOCO kinship | Materialized all | Streaming subtraction | Same math, lower memory |
 | LOCO + external kinship | Silently uses full K | Rejects (mutual exclusion) | Correctness guard |

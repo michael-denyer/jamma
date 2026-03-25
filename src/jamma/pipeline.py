@@ -14,7 +14,6 @@ Example:
 
 from __future__ import annotations
 
-import contextlib
 import os
 import time
 from dataclasses import dataclass, field
@@ -101,13 +100,9 @@ class PipelineConfig:
             categorical. JAMMA-specific feature (not GEMMA's -cat which is
             for SNP categories in VC mode). Columns are one-hot encoded with
             the first sorted level dropped as reference.
-        profile_dir: Directory for JAX XLA profiling traces. None disables
-            profiling. When set, wraps the pipeline in jax.profiler.trace()
-            and annotates stages with TraceAnnotation. View traces with
-            `tensorboard --logdir <profile_dir>`.
-        backend: Compute backend selection: "auto" (default), "jax", or "numpy".
-            "auto" uses JAX when installed, falling back to NumPy. "jax" requires
-            JAX to be installed. "numpy" forces the pure-NumPy backend.
+        backend: Compute backend selection: "auto" (default) or "numpy".
+            "auto" selects based on C extension availability and memory.
+            "numpy" forces the pure-NumPy backend.
         legacy_text: If True, write kinship and eigen files in GEMMA text format
             (.cXX.txt / .eigenD.txt / .eigenU.txt) instead of binary .npy.
             Default False writes binary for performance at scale.
@@ -144,7 +139,6 @@ class PipelineConfig:
     n_refine: int = 10
     weight_file: Path | None = None
     cat_columns: list[int] | None = None
-    profile_dir: Path | None = None
     backend: BackendRequest = "auto"
     legacy_text: bool = False
     phenotype_columns: list[int] | None = None
@@ -155,7 +149,7 @@ class PipelineConfig:
                 f"output_prefix must not contain path separators, "
                 f"got '{self.output_prefix}'. Use output_dir for directory paths."
             )
-        _valid_backends = ("auto", "jax", "numpy", "numpy-streaming", "jax-streaming")
+        _valid_backends = ("auto", "numpy", "numpy-streaming")
         if self.backend not in _valid_backends:
             raise ValueError(
                 f"backend must be one of {_valid_backends}, got {self.backend!r}"
@@ -196,7 +190,7 @@ class PipelineResult:
         assoc_paths: List of all per-phenotype association result paths. For
             single-phenotype runs, this is a single-element list matching assoc_path.
         timing: Timing breakdown by pipeline phase (seconds).
-        backend: The compute backend used ("jax" or "numpy").
+        backend: The compute backend used ("numpy").
         n_covariates: Number of covariate columns (1 = intercept-only).
         pve_estimate: PVE (proportion of variance explained) from null model REML.
             None if not computed (e.g. LOCO with per-chromosome eigendecomp).
@@ -214,12 +208,6 @@ class PipelineResult:
     n_covariates: int = 1
     pve_estimate: float | None = None
     pve_se: float | None = None
-
-    def __post_init__(self) -> None:
-        if self.backend not in ("jax", "numpy"):
-            raise ValueError(
-                f"PipelineResult.backend must be 'jax' or 'numpy', got {self.backend!r}"
-            )
 
 
 class PipelineRunner:
@@ -520,12 +508,14 @@ class PipelineRunner:
             return None
 
         disk_chunk = _compute_chunk_size(n_snps)
-        jax_chunk = _compute_chunk_size(n_snps, n_samples=n_samples, pipeline_buffers=2)
+        compute_chunk = _compute_chunk_size(
+            n_snps, n_samples=n_samples, pipeline_buffers=2
+        )
         est = estimate_streaming_memory(
             n_samples,
             chunk_size=disk_chunk,
             n_cvt=n_cvt,
-            jax_chunk_size=jax_chunk,
+            compute_chunk_size=compute_chunk,
         )
 
         logger.info(
@@ -735,15 +725,10 @@ class PipelineRunner:
 
     def _check_hwe_support(self, plan: ExecutionPlan) -> None:
         """Raise if HWE filtering requested but backend doesn't support it."""
-        if (
-            self.config.hwe_threshold > 0
-            and plan.backend == "numpy"
-            and plan.mode == "batch"
-        ):
+        if self.config.hwe_threshold > 0 and plan.mode == "batch":
             raise ValueError(
                 "HWE filtering (--hwe) is not supported with the NumPy "
-                "batch backend. Use --backend numpy-streaming, the JAX "
-                "backend (pip install jamma[jax]), or set --hwe 0."
+                "batch backend. Use --backend numpy-streaming or set --hwe 0."
             )
 
     @staticmethod
@@ -779,7 +764,7 @@ class PipelineRunner:
 
             # Respect JAMMA_BLAS_THREADS if set, otherwise use physical
             # core count. We avoid get_blas_thread_count() because it
-            # imports jax unconditionally, crashing numpy-only installs.
+            # imports threading module unconditionally.
             max_threads = os.cpu_count() or 64
             env_threads = os.environ.get("JAMMA_BLAS_THREADS")
             if env_threads is not None:
@@ -797,7 +782,7 @@ class PipelineRunner:
 
             # A single-threaded _lmm_accel build should not be logged as a
             # multi-threaded compute kernel.
-            if c_ext and plan.backend == "numpy":
+            if c_ext:
                 threads = min(
                     threads,
                     get_c_extension_thread_count(
@@ -806,22 +791,12 @@ class PipelineRunner:
                     ),
                 )
 
-            jax_devices = 0
-            if plan.backend == "jax":
-                import jax
-
-                from jamma.core.jax_config import is_jax_configured
-
-                if is_jax_configured():
-                    jax_devices = len(jax.devices())
-
             banner = format_pipeline_banner(
                 runner=runner,
                 blas=blas,
                 eigen_driver="pending",
                 c_ext=c_ext,
                 threads=threads,
-                jax_devices=jax_devices,
             )
             logger.info(banner)
         except (ImportError, OSError, RuntimeError, AttributeError) as exc:
@@ -847,7 +822,7 @@ class PipelineRunner:
         """
         t_start = time.perf_counter()
 
-        from jamma.core.backend import detect_backend, log_backend_selection
+        from jamma.core.backend import log_backend_selection
 
         # Resolve env override first: JAMMA_BACKEND takes priority in all paths.
         env_backend = os.environ.get("JAMMA_BACKEND")
@@ -857,68 +832,26 @@ class PipelineRunner:
         if self.config.hwe_threshold > 0 and requested == "numpy":
             raise ValueError(
                 "HWE filtering (--hwe) is not supported with the NumPy "
-                "batch backend. Use --backend numpy-streaming, the JAX "
-                "backend (pip install jamma[jax]), or set --hwe 0."
+                "batch backend. Use --backend numpy-streaming or set --hwe 0."
             )
 
         # PLINK metadata is lightweight (reads .fam/.bim header only) and needed
-        # for memory-based mode selection in both auto and explicit-JAX paths.
+        # for memory-based mode selection in both auto and explicit paths.
         from jamma.io.plink import get_plink_metadata as _get_meta
 
         _meta = _get_meta(self.config.bfile)
 
-        # Compound values (numpy-streaming, jax-streaming) and "auto" all route
-        # through select_execution_mode which handles them directly.
-        if requested in ("auto", "numpy-streaming", "jax-streaming"):
-            plan = select_execution_mode(
-                n_samples=_meta["n_samples"],
-                n_snps=_meta["n_snps"],
-                requested=requested,
-            )
-            active_backend = plan.backend
-        else:
-            active_backend = detect_backend(requested)
-            # Build an ExecutionPlan for explicit backend requests.
-            # NumPy always batch; JAX mode (batch vs streaming) determined by memory.
-            if active_backend == "numpy":
-                plan = ExecutionPlan(
-                    "numpy", "batch", f"Backend '{requested}' explicitly requested"
-                )
-            else:
-                plan = select_execution_mode(
-                    n_samples=_meta["n_samples"],
-                    n_snps=_meta["n_snps"],
-                    requested=requested,
-                )
-                active_backend = plan.backend
+        # Route through select_execution_mode for all backend requests.
+        plan = select_execution_mode(
+            n_samples=_meta["n_samples"],
+            n_snps=_meta["n_snps"],
+            requested=requested,
+        )
 
-        log_backend_selection(active_backend, self.config.backend, env_backend)
+        log_backend_selection("numpy", self.config.backend, env_backend)
         logger.info(f"Execution plan: {plan.runner_name} ({plan.reason})")
 
-        trace_ctx = contextlib.nullcontext()
-        if active_backend == "jax":
-            import jax
-
-            # Enable x64 without initializing the JAX backend — device count is
-            # deferred until LMM phase via ensure_jax_configured().
-            jax.config.update("jax_enable_x64", True)
-
-            # Optional XLA profiling — degrade gracefully so profiling issues
-            # never prevent GWAS results from being produced.
-            if self.config.profile_dir is not None:
-                try:
-                    self.config.profile_dir.mkdir(parents=True, exist_ok=True)
-                    trace_ctx = jax.profiler.trace(
-                        str(self.config.profile_dir), create_perfetto_link=False
-                    )
-                    logger.info(f"XLA profiling enabled: {self.config.profile_dir}")
-                except (OSError, ImportError, AttributeError) as e:
-                    logger.warning(f"Could not enable XLA profiling: {e}")
-        elif self.config.profile_dir is not None:
-            logger.warning("XLA profiling requires JAX backend; ignoring --profile-dir")
-
-        with trace_ctx:
-            return self._run_inner(t_start, plan, requested)
+        return self._run_inner(t_start, plan, requested)
 
     def _run_inner(
         self,
@@ -926,7 +859,7 @@ class PipelineRunner:
         plan: ExecutionPlan,
         requested: BackendRequest = "auto",
     ) -> PipelineResult:
-        """Execute the pipeline body, called within the optional profiling context.
+        """Execute the pipeline body.
 
         Args:
             t_start: Pipeline start time from time.perf_counter().
@@ -987,7 +920,6 @@ class PipelineRunner:
                 ksnps_indices=ksnps_indices,
                 l_min=self.config.l_min,
                 l_max=self.config.l_max,
-                backend=plan.backend,
                 write_eigen=self.config.write_eigen,
                 eigen_dir=self.config.eigen_dir,
                 eigen_prefix=self.config.output_prefix,
@@ -1010,7 +942,7 @@ class PipelineRunner:
                     "lmm_s": loco_s,
                     "total_s": total_s,
                 },
-                backend=plan.backend,
+                backend="numpy",
                 n_covariates=covariates.shape[1] if covariates is not None else 1,
                 pve_estimate=loco.pve,
                 pve_se=loco.pve_se,
@@ -1078,16 +1010,7 @@ class PipelineRunner:
         plan = select_execution_mode(n_valid, n_snps, requested=requested, n_cvt=n_cvt)
         if plan != initial_plan:
             # Mode changes (batch↔streaming) are expected when sample filtering
-            # reduces n_valid. Backend changes (jax↔numpy) are not safe because
-            # run() already configured the trace context for the initial backend.
-            if plan.backend != initial_plan.backend:
-                raise RuntimeError(
-                    f"Backend changed from {initial_plan.backend} to "
-                    f"{plan.backend} after sample filtering ({n_valid} valid "
-                    f"samples). Trace context was configured for "
-                    f"{initial_plan.backend}. Use an explicit --backend to "
-                    f"avoid this."
-                )
+            # reduces n_valid.
             logger.info(
                 f"Execution plan changed after sample filtering: "
                 f"{initial_plan.runner_name} -> {plan.runner_name} ({plan.reason})"
@@ -1101,15 +1024,8 @@ class PipelineRunner:
         # Banner after re-evaluation so it shows the final plan
         self._log_pipeline_banner(plan)
 
-        # Memory preflight: streaming estimate for JAX streaming, in-memory for batch.
-        # NOTE: actual_chunk must be set AFTER re-evaluation — if the plan changed
-        # from batch to streaming, we need a valid chunk size.
+        # Memory preflight: streaming estimate for streaming, in-memory for batch.
         if plan.mode == "streaming":
-            if plan.backend == "jax":
-                actual_chunk = _compute_chunk_size(n_snps)
-            else:
-                # NumPy streaming runner handles its own chunk_size internally
-                actual_chunk = None
             self.check_memory_requirements(n_valid, n_snps, n_cvt=n_cvt)
         else:
             from jamma.core.memory import estimate_lmm_memory
@@ -1138,7 +1054,6 @@ class PipelineRunner:
                         f"have {est.available_gb:.1f}GB. "
                         f"Use --no-check-memory to override."
                     )
-            actual_chunk = None  # Not used by batch runners
 
         # Load/compute eigendecomposition ONCE (shared across phenotypes)
         t_kinship = time.perf_counter()
@@ -1217,12 +1132,10 @@ class PipelineRunner:
         if plan.mode == "batch" and len(pheno_columns) > 1:
             from jamma.io import load_plink_binary
 
-            hint = (
-                " (for large datasets, use JAX streaming: pip install jamma[jax])"
-                if plan.backend == "numpy"
-                else ""
+            logger.info(
+                f"{plan.runner_name}: loading all genotypes into memory"
+                " (for large datasets, use --backend numpy-streaming)"
             )
-            logger.info(f"{plan.runner_name}: loading all genotypes into memory{hint}")
             _plink_data = load_plink_binary(self.config.bfile)
 
         prefix = self.config.output_prefix
@@ -1242,21 +1155,7 @@ class PipelineRunner:
             else:
                 col_path = assoc_path
 
-            if plan.backend == "jax":
-                run_result, n_tested = self._run_jax_backend(
-                    phenotypes_col,
-                    K,
-                    covariates,
-                    eigenvalues,
-                    eigenvectors,
-                    col_path,
-                    snps_indices,
-                    actual_chunk,
-                    plan=plan,
-                    plink_data=_plink_data,
-                    clear_caches=False,
-                )
-            elif plan.backend == "numpy" and plan.mode == "streaming":
+            if plan.mode == "streaming":
                 run_result, n_tested = self._run_numpy_streaming_backend(
                     phenotypes_col,
                     covariates,
@@ -1282,35 +1181,13 @@ class PipelineRunner:
             all_assoc_paths.append(col_path)
             logger.info(f"Phenotype {col}: {n_tested} SNPs tested -> {col_path}")
 
-        # Clear JAX caches once after all phenotypes, not per-phenotype.
-        # Compiled kernels have identical shapes across phenotypes so clearing
-        # inside the loop forces redundant JIT recompilation.
-        if plan.backend == "jax":
-            try:
-                import jax
-
-                jax.clear_caches()
-            except Exception:
-                logger.warning(
-                    "Failed to clear JAX caches after phenotype loop",
-                    exc_info=True,
-                )
-
         lmm_s = time.perf_counter() - t_lmm
         total_s = time.perf_counter() - t_start
         logger.info(f"GWAS complete: {total_tested} SNPs tested in {total_s:.1f}s")
 
         # Pull runner-level rotation timing
         runner_timing: dict[str, float] = {}
-        if plan.backend == "jax" and plan.mode == "streaming":
-            from jamma.lmm.runner_jax_streaming import get_last_run_timing
-
-            runner_timing = get_last_run_timing()
-        elif plan.backend == "jax" and plan.mode == "batch":
-            from jamma.lmm.runner_jax import get_last_run_timing as _jax_timing
-
-            runner_timing = _jax_timing()
-        elif plan.backend == "numpy" and plan.mode == "streaming":
+        if plan.mode == "streaming":
             from jamma.lmm.runner_numpy_streaming import (
                 get_last_run_timing as _np_stream_timing,
             )
@@ -1335,119 +1212,13 @@ class PipelineRunner:
                 "rotation_s": runner_timing.get("rotation_s", 0.0),
                 "rotation_exposed_s": runner_timing.get("rotation_exposed_s", 0.0),
             },
-            backend=plan.backend,
+            backend="numpy",
             n_covariates=(covariates.shape[1] if covariates is not None else 1),
             pve_estimate=pve,
             pve_se=pve_se,
         )
         self._emit_telemetry(result, plan)
         return result
-
-    def _run_jax_backend(
-        self,
-        phenotypes: np.ndarray,
-        K: np.ndarray | None,
-        covariates: np.ndarray | None,
-        eigenvalues: np.ndarray | None,
-        eigenvectors: np.ndarray | None,
-        assoc_path: Path,
-        snps_indices: np.ndarray | None,
-        actual_chunk: int | None,
-        *,
-        plan: ExecutionPlan,
-        plink_data: object | None = None,
-        clear_caches: bool = True,
-    ) -> tuple[LmmRunResult, int]:
-        """Run LMM association using the JAX backend.
-
-        Dispatches to batch or streaming runner based on plan.mode.
-
-        Args:
-            plink_data: Pre-loaded PLINK data for batch mode. If None and
-                batch mode selected, loads from disk.
-            plan: ExecutionPlan determining batch vs streaming mode.
-            clear_caches: Clear JAX caches on exit. False for multi-phenotype
-                loops where compiled kernels are reused across iterations.
-        """
-        from jamma.core.jax_config import ensure_jax_configured
-
-        ensure_jax_configured()
-
-        lmm_config = LmmConfig(
-            maf_threshold=self.config.maf,
-            miss_threshold=self.config.miss,
-            l_min=self.config.l_min,
-            l_max=self.config.l_max,
-            n_grid=self.config.n_grid,
-            n_refine=self.config.n_refine,
-            check_memory=False,  # Already checked above
-            show_progress=self.config.show_progress,
-            lmm_mode=self.config.lmm_mode,
-        )
-
-        if plan.mode == "batch":
-            from jamma.io import load_plink_binary
-            from jamma.lmm import run_lmm_association_jax
-
-            if plink_data is None:
-                plink_data = load_plink_binary(self.config.bfile)
-
-            genotypes = plink_data.genotypes
-            indices = (
-                snps_indices if snps_indices is not None else range(plink_data.n_snps)
-            )
-            if snps_indices is not None:
-                genotypes = genotypes[:, snps_indices]
-            snp_info = [
-                {
-                    "chr": str(plink_data.chromosome[i]),
-                    "rs": plink_data.sid[i],
-                    "pos": int(plink_data.bp_position[i]),
-                    "a1": plink_data.allele_1[i],
-                    "a0": plink_data.allele_2[i],
-                }
-                for i in indices
-            ]
-
-            run_result = run_lmm_association_jax(
-                genotypes=genotypes,
-                phenotypes=phenotypes,
-                kinship=K,
-                snp_info=snp_info,
-                covariates=covariates,
-                eigenvalues=eigenvalues,
-                eigenvectors=eigenvectors,
-                config=lmm_config,
-                output_path=assoc_path,
-                clear_caches=clear_caches,
-            )
-
-            return run_result, run_result.snp_count
-
-        # Streaming mode
-        if actual_chunk is None:
-            raise ValueError(
-                "JAX streaming mode requires a chunk_size, but actual_chunk=None. "
-                "This is a bug — the plan was streaming but no chunk size was "
-                "computed."
-            )
-        from jamma.lmm import run_lmm_association_streaming
-
-        return run_lmm_association_streaming(
-            bed_path=self.config.bfile,
-            phenotypes=phenotypes,
-            kinship=K,
-            snp_info=None,
-            covariates=covariates,
-            eigenvalues=eigenvalues,
-            eigenvectors=eigenvectors,
-            output_path=assoc_path,
-            snps_indices=snps_indices,
-            hwe_threshold=self.config.hwe_threshold,
-            chunk_size=actual_chunk,
-            config=lmm_config,
-            clear_caches=clear_caches,
-        )
 
     def _run_numpy_backend(
         self,
@@ -1472,8 +1243,7 @@ class PipelineRunner:
         if plink_data is None:
             logger.info(
                 "NumPy backend: loading all genotypes into memory "
-                "(for large datasets, use --backend numpy-streaming "
-                "or install JAX: pip install jamma[jax])"
+                "(for large datasets, use --backend numpy-streaming)"
             )
             plink_data = load_plink_binary(self.config.bfile)
 
@@ -1494,18 +1264,6 @@ class PipelineRunner:
             for i in indices
         ]
 
-        lmm_config = LmmConfig(
-            maf_threshold=self.config.maf,
-            miss_threshold=self.config.miss,
-            l_min=self.config.l_min,
-            l_max=self.config.l_max,
-            n_grid=self.config.n_grid,
-            n_refine=self.config.n_refine,
-            check_memory=False,  # Already checked above
-            show_progress=self.config.show_progress,
-            lmm_mode=self.config.lmm_mode,
-        )
-
         run_result = run_lmm_association_numpy(
             genotypes=genotypes,
             phenotypes=phenotypes,
@@ -1514,11 +1272,25 @@ class PipelineRunner:
             covariates=covariates,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            config=lmm_config,
+            config=self._build_lmm_config(),
             output_path=assoc_path,
         )
 
         return run_result, run_result.snp_count
+
+    def _build_lmm_config(self) -> LmmConfig:
+        """Build LmmConfig from pipeline config (shared by batch and streaming)."""
+        return LmmConfig(
+            maf_threshold=self.config.maf,
+            miss_threshold=self.config.miss,
+            l_min=self.config.l_min,
+            l_max=self.config.l_max,
+            n_grid=self.config.n_grid,
+            n_refine=self.config.n_refine,
+            check_memory=False,  # Already checked at pipeline level
+            show_progress=self.config.show_progress,
+            lmm_mode=self.config.lmm_mode,
+        )
 
     def _run_numpy_streaming_backend(
         self,
@@ -1534,18 +1306,6 @@ class PipelineRunner:
             run_lmm_association_numpy_streaming,
         )
 
-        lmm_config = LmmConfig(
-            maf_threshold=self.config.maf,
-            miss_threshold=self.config.miss,
-            l_min=self.config.l_min,
-            l_max=self.config.l_max,
-            n_grid=self.config.n_grid,
-            n_refine=self.config.n_refine,
-            check_memory=False,  # Already checked above
-            show_progress=self.config.show_progress,
-            lmm_mode=self.config.lmm_mode,
-        )
-
         return run_lmm_association_numpy_streaming(
             bed_path=self.config.bfile,
             phenotypes=phenotypes,
@@ -1555,5 +1315,5 @@ class PipelineRunner:
             output_path=assoc_path,
             snps_indices=snps_indices,
             hwe_threshold=self.config.hwe_threshold,
-            config=lmm_config,
+            config=self._build_lmm_config(),
         )

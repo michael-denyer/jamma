@@ -38,7 +38,7 @@ def _opt_path(value: str | None) -> Path | None:
 
 
 def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> None:
-    """Print version, backend info, and JAX availability, then exit."""
+    """Print version and backend info, then exit."""
     if not value or ctx.resilient_parsing:
         return
     from jamma.core.backend import get_backend_info
@@ -46,7 +46,6 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     info = get_backend_info()
     click.echo(f"JAMMA version {jamma.__version__} ({jamma.__release_date__})")
     click.echo(f"Backend: {info['selected']}")
-    click.echo(f"JAX available: {info['jax_available']}")
     ctx.exit()
 
 
@@ -145,19 +144,13 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     help="Show version and exit",
 )
 @click.option(
-    "--profile-dir",
-    type=click.Path(),
-    default=None,
-    help="Directory for XLA profiling traces (view with TensorBoard)",
-)
-@click.option(
     "--backend",
     type=click.Choice(
-        ["auto", "jax", "numpy", "numpy-streaming", "jax-streaming"],
+        ["auto", "numpy", "numpy-streaming"],
         case_sensitive=False,
     ),
     default="auto",
-    help="Compute backend: auto, jax, numpy, numpy-streaming, or jax-streaming.",
+    help="Compute backend: auto, numpy, or numpy-streaming.",
 )
 @click.option(
     "--legacy-text",
@@ -238,7 +231,6 @@ def main(
     verbose,
     check_memory,
     mem_budget,
-    profile_dir,
     backend,
     legacy_text,
     cat,
@@ -356,7 +348,6 @@ def main(
             l_max=lmax,
             weight_file=_opt_path(widv),
             cat_columns=cat_columns,
-            profile_dir=Path(profile_dir) if profile_dir else None,
             backend=backend,
             legacy_text=legacy_text,
         )
@@ -600,7 +591,6 @@ def _run_lmm(
     l_max: float = 1e5,
     weight_file: Path | None = None,
     cat_columns: list[int] | None = None,
-    profile_dir: Path | None = None,
     backend: str = "auto",
     legacy_text: bool = False,
 ) -> None:
@@ -650,7 +640,6 @@ def _run_lmm(
         l_max=l_max,
         weight_file=weight_file,
         cat_columns=cat_columns,
-        profile_dir=profile_dir,
         backend=backend,
         legacy_text=legacy_text,
     )

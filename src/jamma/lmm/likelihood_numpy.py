@@ -1,7 +1,6 @@
 """Pure-NumPy batch LMM likelihood computation.
 
-Replaces JAX vmap/lax.fori_loop with numpy broadcasting and Python loops.
-All functions process a chunk (batch) of SNPs at once without JAX.
+Vectorized numpy broadcasting and Python loops for batch SNP processing.
 
 Design:
 - batch_compute_uab_numpy: vectorized Uab for n_snps SNPs at once
@@ -14,9 +13,7 @@ Design:
     split-Uab REML evaluation (invariant/varying separation for n_cvt=1)
 - batch_calc_wald_stats_numpy / _from_pab / score / lrt: batch test statistics
 
-No JAX imports anywhere in this module. Compatible with JAX-free environments.
-
-Reference: likelihood_jax.py (ported to NumPy in this module).
+All operations are vectorized over SNPs using NumPy broadcasting.
 """
 
 from __future__ import annotations
@@ -112,8 +109,8 @@ def batch_compute_uab_numpy(
 ) -> np.ndarray:
     """Compute Uab matrices for all SNPs in a chunk.
 
-    Direct port of likelihood_jax.py::batch_compute_uab with jnp replaced
-    by np. Shape: (n_snps, n_samples, n_index).
+    Batch computation of Uab matrices using NumPy broadcasting.
+    Shape: (n_snps, n_samples, n_index).
 
     Args:
         n_cvt: Number of covariates. If 1, uses explicit fast-path broadcasting.
@@ -1090,8 +1087,7 @@ def _batch_golden_section_numpy(
 ) -> tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Grid-to-golden-section refinement for lambda optimization.
 
-    Direct translation of likelihood_jax.py::_golden_section_refine
-    with jnp -> np and lax.fori_loop -> Python for loop.
+    Grid-to-golden-section refinement using NumPy broadcasting over SNPs.
 
     All operations are vectorized over SNPs (axis 0).
     After 20 iterations: 0.618^20 ~ 6.6e-5 relative tolerance.
@@ -1154,7 +1150,7 @@ def _batch_golden_section_numpy(
 
     # Evaluate logl at the midpoint to match lambda — ensures the returned
     # (lambda, logl) pair is from the same evaluation point. This matches
-    # the JAX path (likelihood_jax.py line 531) which also evaluates at midpoint.
+    # the batch optimizer which also evaluates at midpoint.
     opt_logl = compute_batch_fn(log_opt)
     return np.exp(log_opt), opt_logl
 
@@ -1172,8 +1168,8 @@ def golden_section_optimize_lambda_numpy(
 ) -> tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Optimize REML lambda using grid search + golden section refinement.
 
-    Port of likelihood_jax.py::golden_section_optimize_lambda. Replaces
-    jnp/vmap with np broadcasting, and lax.fori_loop with Python for loop.
+    Optimize REML lambda using grid search + golden section refinement with
+    NumPy broadcasting over the SNP batch.
 
     Enforces minimum of 20 golden section iterations to guarantee
     lambda relative tolerance < 1e-5 (matching GEMMA Brent tolerance).
@@ -1254,7 +1250,7 @@ def golden_section_optimize_lambda_mle_numpy(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Optimize MLE lambda using grid search + golden section refinement.
 
-    Port of likelihood_jax.py::golden_section_optimize_lambda_mle.
+    Optimize MLE lambda using grid search + golden section refinement.
     No Iab argument needed (MLE has no logdet_hiw term).
 
     Args:
@@ -1698,7 +1694,7 @@ def batch_calc_wald_stats_numpy(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute Wald test statistics for a batch of SNPs.
 
-    Port of likelihood_jax.py::batch_calc_wald_stats. Computes per-SNP
+    Compute batch Wald test statistics. Computes per-SNP
     Hi_eval from optimized lambdas, constructs Pab, then delegates to
     batch_calc_wald_stats_from_pab_numpy for the statistics.
 
@@ -1767,7 +1763,7 @@ def batch_calc_score_stats_numpy(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute Score test statistics for a batch of SNPs.
 
-    Port of likelihood_jax.py::batch_calc_score_stats. Uses fixed null-model
+    Compute batch Score test statistics. Uses fixed null-model
     Hi_eval shared across all SNPs (cheaper than Wald — no per-SNP optimization).
 
     Score F-statistic uses n_samples (not df) in numerator and P_yy*P_xx
@@ -1819,7 +1815,7 @@ def _batch_lrt_pvalues_numpy(
 ) -> np.ndarray:
     """Compute LRT p-values for a batch of SNPs.
 
-    Port of likelihood_jax.py::calc_lrt_pvalue_jax for batch use.
+    Compute LRT p-values for a batch of SNPs.
     LRT statistic = 2 * (logl_H1 - logl_H0), chi2 with df=1.
 
     Uses special.chi2_sf_batch (erfc-based, stdlib-only).

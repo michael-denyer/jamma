@@ -53,7 +53,7 @@ We write `ΔX = X_JAMMA − X_GEMMA` for differences in outputs.
    (where S is the set of valid sample indices)
    directly rather than subsetting the full matrix post-hoc; these are algebraically
    and numerically equivalent, so the bound holds unchanged.
-2. **Float64 everywhere**: JAX is configured with `jax_enable_x64 = True`.
+2. **Float64 everywhere**: All computation uses float64 (IEEE-754 double precision).
 3. **Stable BLAS/LAPACK**: matrix multiplication and eigendecomposition are
    backward stable in the standard IEEE-754 model.
 4. **Well-conditioned eigenspace**: `K` is PSD and the eigenvalue gaps are
@@ -168,7 +168,7 @@ function. If `CDF` is Lipschitz on the relevant domain:
 ```
 
 where `δ_CDF` captures algorithmic differences between GEMMA’s GSL CDF and
-JAX’s `betainc`/`chi2` evaluation.
+JAMMA’s Cephes `betainc`/`chi2` evaluation.
 
 ---
 
@@ -195,7 +195,7 @@ when the linear algebra is well-conditioned.
 
 ## Practical Interpretation
 
-- `τ_opt` is configured at approximately `1e-5` for Brent, and the JAX
+- `τ_opt` is configured at approximately `1e-5` for Brent, and the
   grid + golden-section search is designed to reach a comparable tolerance.
 - `δ_CDF` can be measured empirically; see
   `docs/EQUIVALENCE.md` for observed differences.

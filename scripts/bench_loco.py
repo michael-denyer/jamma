@@ -8,8 +8,6 @@ Usage:
     uv run python scripts/bench_loco.py
     uv run python scripts/bench_loco.py --gemma-path /path/to/gemma
     uv run python scripts/bench_loco.py --runs 3
-    uv run python scripts/bench_loco.py --backend numpy  # numpy only
-    uv run python scripts/bench_loco.py --backend jax    # jax only
 """
 
 from __future__ import annotations
@@ -189,12 +187,6 @@ def main():
         help="Number of runs, report best (default: 1)",
     )
     parser.add_argument(
-        "--backend",
-        choices=["numpy", "jax", "both"],
-        default="both",
-        help="JAMMA backend to benchmark (default: both)",
-    )
-    parser.add_argument(
         "--covariates",
         action="store_true",
         default=False,
@@ -217,11 +209,6 @@ def main():
         print(f"ERROR: mouse_hs1940 data not found at {_MOUSE_DIR}", file=sys.stderr)
         sys.exit(1)
 
-    # Configure JAX
-    from jamma.core.jax_config import ensure_jax_configured
-
-    ensure_jax_configured()
-
     # Print hardware context
     from jamma.core.hardware import get_hardware_context
 
@@ -229,8 +216,6 @@ def main():
     phys, log = ctx["cpu_count_physical"], ctx["cpu_count_logical"]
     print(f"CPU: {ctx['cpu_model']} ({phys}P/{log}L)")
     print(f"BLAS: {ctx['blas_backend']} ({ctx['blas_threads']} threads)")
-    jv, jb, jd = ctx["jax_version"], ctx["jax_backend"], ctx["jax_device_count"]
-    print(f"JAX: {jv} ({jb}, {jd} devices)")
     print(f"NumPy: {ctx['numpy_version']}")
     print(f"Platform: {ctx['platform']}")
     print(f"Runs: {args.runs} (best of)")
@@ -283,15 +268,11 @@ def main():
             results["gemma"] = {"loco_total": None}
             print()
 
-        # JAMMA backends
-        backends_to_run = []
-        if args.backend in ("numpy", "both"):
-            backends_to_run.append("numpy")
-        if args.backend in ("jax", "both"):
-            backends_to_run.append("jax")
+        # JAMMA NumPy+C backend
+        backends_to_run = ["numpy"]
 
         for backend in backends_to_run:
-            label = "NumPy+C" if backend == "numpy" else "JAX"
+            label = "NumPy+C"
             print(f"Benchmarking JAMMA LOCO ({label}) {config_label}...", flush=True)
             jamma_results = bench_jamma_loco(phenotypes, covars, backend, args.runs)
             results[f"jamma_{backend}"] = jamma_results
@@ -327,8 +308,7 @@ def main():
         for backend in backends_to_run:
             key = f"jamma_{backend}"
             jt = results[key]["loco_total"]
-            label = "JAMMA NumPy+C" if backend == "numpy" else "JAMMA JAX"
-            print(f"| {label} | {_fmt(jt)} | {_speedup(gemma_t, jt)} |")
+            print(f"| JAMMA NumPy+C | {_fmt(jt)} | {_speedup(gemma_t, jt)} |")
 
         print()
 

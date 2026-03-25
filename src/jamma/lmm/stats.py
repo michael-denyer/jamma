@@ -140,13 +140,13 @@ def calc_wald_test(
     # After projecting out covariates AND genotype (row index = n_cvt+1, 0-based)
     Px_yy = Pab[n_cvt + 1, index_yy]
 
-    # Guard against degenerate cases (matches JAX path behavior)
+    # Guard against degenerate cases (matches GEMMA behavior)
     # P_xx <= 0 means SNP has no variance after projection
     # Px_yy <= 0 means residual variance is zero or negative (numerical issue)
     if P_xx <= 0.0:
         return float("nan"), float("nan"), float("nan")
 
-    # Clamp Px_yy like JAX path does for P_yy (GEMMA lmm.cpp:854)
+    # Clamp Px_yy to prevent negative variance (GEMMA lmm.cpp:854)
     # Only clamp if >= 0 and < _P_YY_MIN; leave negative values to produce NaN
     if Px_yy >= 0.0 and Px_yy < _P_YY_MIN:
         Px_yy = _P_YY_MIN

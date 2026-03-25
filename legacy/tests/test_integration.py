@@ -133,17 +133,23 @@ class TestFullModuleImports:
 
     def test_core_module_imports(self) -> None:
         """Verify core module imports without errors."""
-        from jamma.core import (
-            OutputConfig,
-            configure_jax,
-            get_jax_info,
-            verify_jax_installation,
-        )
+        from jamma.core import OutputConfig
 
         assert OutputConfig is not None
-        assert configure_jax is not None
-        assert get_jax_info is not None
-        assert verify_jax_installation is not None
+
+        # JAX config functions may be archived (v5.0 simplification)
+        try:
+            from jamma.core import (
+                configure_jax,
+                get_jax_info,
+                verify_jax_installation,
+            )
+
+            assert configure_jax is not None
+            assert get_jax_info is not None
+            assert verify_jax_installation is not None
+        except ImportError:
+            pass  # jax_config archived
 
     def test_utils_module_imports(self) -> None:
         """Verify utils module imports without errors."""
@@ -175,11 +181,16 @@ class TestJaxWithPlinkData:
 
     def test_jax_with_plink_genotypes(self, sample_plink_data: Path) -> None:
         """Load PLINK data, convert to JAX, and run computations."""
-        from jamma.core import configure_jax
-        from jamma.io import load_plink_binary
+        try:
+            from jamma.core import configure_jax
 
-        # Ensure JAX is configured for 64-bit
-        configure_jax(enable_x64=True)
+            configure_jax(enable_x64=True)
+        except ImportError:
+            import jax
+
+            jax.config.update("jax_enable_x64", True)
+
+        from jamma.io import load_plink_binary
 
         # Load PLINK data
         plink_data = load_plink_binary(sample_plink_data)
@@ -210,10 +221,16 @@ class TestJaxWithPlinkData:
 
     def test_jax_matrix_operations_with_plink(self, sample_plink_data: Path) -> None:
         """Verify JAX matrix operations work correctly with real genotype data."""
-        from jamma.core import configure_jax
-        from jamma.io import load_plink_binary
+        try:
+            from jamma.core import configure_jax
 
-        configure_jax(enable_x64=True)
+            configure_jax(enable_x64=True)
+        except ImportError:
+            import jax
+
+            jax.config.update("jax_enable_x64", True)
+
+        from jamma.io import load_plink_binary
 
         # Load and prepare data
         plink_data = load_plink_binary(sample_plink_data)

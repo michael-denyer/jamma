@@ -31,11 +31,9 @@ class TestBlasBackend:
             "OpenBLAS-LP64",
             "Accelerate",
             "Accelerate-ILP64",
-            "BLIS",
-            "BLIS-ILP64",
-            "jlinalg-own",
             "system-BLAS-ILP64",
             "system-BLAS-LP64",
+            "numpy-fallback",
         }
         assert blas_backend in known, f"Unknown blas_backend: {blas_backend}"
 
@@ -107,9 +105,8 @@ class TestLP64OverflowGuard:
         """LP64_DIM_MAX (46340) is the int32 overflow threshold for N*N."""
         # We can't allocate 46340^2 matrices in tests, but we can verify
         # the guard exists structurally by checking that blas_dispatch.c
-        # defines LP64_DIM_MAX. The wrapper function in blas_dispatch.c
-        # falls back to jlinalg own dgemm when any dimension exceeds 46340
-        # and the backend is LP64.
+        # defines LP64_DIM_MAX. LP64 backends are not wired, so dimensions
+        # exceeding 46340 fall back to NumPy.
 
         from jamma.jlinalg import _jlinalg
 
@@ -136,7 +133,7 @@ class TestLP64OverflowGuard:
             )
         else:
             # LP64 or no external BLAS — backend should NOT contain ILP64
-            if blas_backend not in ("jlinalg-own", "Accelerate", "BLIS"):
+            if blas_backend not in ("Accelerate", "numpy-fallback"):
                 assert "LP64" in blas_backend or "ILP64" not in blas_backend, (
                     f"blas_is_ilp64=0 but backend={blas_backend} contains ILP64"
                 )
@@ -189,7 +186,7 @@ class TestILP64Awareness:
             assert blas_backend in ("MKL-ILP64", "MKL-LP64")
         elif "OpenBLAS" in blas_backend:
             assert blas_backend in ("OpenBLAS-ILP64", "OpenBLAS-LP64")
-        # Accelerate, BLIS, jlinalg-own: no ILP64/LP64 suffix expected
+        # Accelerate, numpy-fallback: no ILP64/LP64 suffix expected
 
     def test_blas_is_ilp64_accessible_from_module(self):
         """blas_is_ilp64 is accessible via jamma.jlinalg (public API)."""
@@ -275,50 +272,15 @@ class TestDgemmShapeValidation:
 
 
 # ---------------------------------------------------------------------------
-# Capability-based selection tests (Phase 80.5)
+# Capability-based selection tests
 # ---------------------------------------------------------------------------
 
 
 class TestCapabilityBasedSelection:
     """Verify discover-all-then-select-best dispatch model."""
 
-    def test_discover_all_no_short_circuit(self):
-        """blas_dispatch.c must NOT short-circuit BLIS discovery.
-
-        The old code had `if (!found_system) found_blis = discover_bundled_blis()`
-        which prevented BLIS-ILP64 from being discovered when LP64 Accelerate
-        was found first. The refactored code must discover all three paths
-        unconditionally.
-        """
-        import pathlib
-
-        dispatch_src = (
-            pathlib.Path(__file__).resolve().parent.parent
-            / "src"
-            / "jamma"
-            / "jlinalg"
-            / "src"
-            / "blas_dispatch.c"
-        )
-        source = dispatch_src.read_text()
-
-        # The short-circuit pattern must not appear
-        assert "if (!found_system)" not in source, (
-            "blas_dispatch.c still contains short-circuit pattern "
-            "'if (!found_system)' — BLIS discovery must run unconditionally"
-        )
-
-        # All three discovery calls must appear
-        assert "discover_system_blas(" in source
-        assert "discover_pip_mkl(" in source
-        assert "discover_bundled_blis(" in source
-
-        # The candidate struct must exist
-        assert "blas_candidate_t" in source
-        assert "select_best_backend" in source
-
-    def test_dsyrk_ext_matches_jlinalg_own(self):
-        """dsyrk produces correct results via vendor or jlinalg-own path."""
+    def test_dsyrk_ext_matches_numpy(self):
+        """dsyrk produces correct results via vendor or numpy-fallback path."""
         from jamma.jlinalg import dsyrk
 
         rng = np.random.default_rng(555)
@@ -349,7 +311,7 @@ class TestCapabilityBasedSelection:
 
 
 # ---------------------------------------------------------------------------
-# TestCapabilityFlags — blas_has_dsyrk / blas_has_dsyevd (Phase 80.5)
+# TestCapabilityFlags — blas_has_dsyrk / blas_has_dsyevd
 # ---------------------------------------------------------------------------
 
 
@@ -395,7 +357,7 @@ class TestCapabilityFlags:
                 "Accelerate should not have LAPACKE but "
                 f"blas_has_lapacke_dsyevd={blas_has_lapacke_dsyevd}"
             )
-        if blas_backend in ("BLIS-ILP64", "jlinalg-own"):
+        if blas_backend == "numpy-fallback":
             assert blas_has_lapacke_dsyevd == 0, (
                 f"Backend {blas_backend} should not have LAPACKE"
             )

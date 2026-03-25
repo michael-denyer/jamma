@@ -22,7 +22,12 @@ from jamma.lmm.likelihood import (
     mle_log_likelihood,
     reml_log_likelihood,
 )
-from jamma.lmm.runner_jax import run_lmm_association_jax
+
+try:
+    from jamma.lmm.runner_jax import run_lmm_association_jax
+except ModuleNotFoundError:
+    pytest.skip("JAX runner archived (v5.0 simplification)", allow_module_level=True)
+
 from jamma.lmm.stats import calc_lrt_test
 from tests.conftest import load_phenotypes_from_fam
 

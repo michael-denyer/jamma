@@ -15,7 +15,11 @@ pytest.importorskip("jax")
 
 from jamma.core.memory import estimate_workflow_memory
 from jamma.kinship import compute_centered_kinship
-from jamma.lmm.runner_jax import run_lmm_association_jax
+
+try:
+    from jamma.lmm.runner_jax import run_lmm_association_jax
+except ModuleNotFoundError:
+    pytest.skip("JAX runner archived (v5.0 simplification)", allow_module_level=True)
 
 pytestmark = pytest.mark.requires_jax
 

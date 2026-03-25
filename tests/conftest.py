@@ -70,35 +70,6 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
-def pytest_runtest_setup(item):
-    """Auto-skip tests marked requires_jax when JAX is not installed."""
-    if any(m.name == "requires_jax" for m in item.iter_markers()):
-        try:
-            import jax  # noqa: F401
-        except ImportError:
-            pytest.skip("JAX not installed — install with: pip install jamma[jax]")
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _configure_jax_for_tests():
-    """Ensure JAX 64-bit precision is configured for all tests.
-
-    Previously, importing jamma.kinship.compute triggered module-level
-    configure_jax(). Now that side effects are removed, this fixture
-    provides the same guarantee explicitly.
-
-    When JAX is not installed (NumPy-only environment), this fixture
-    silently passes — tests that need JAX will fail with their own
-    ImportError, providing clear error messages.
-    """
-    try:
-        from jamma.core.jax_config import ensure_jax_configured
-
-        ensure_jax_configured()
-    except ImportError:
-        pass  # JAX not installed; NumPy backend tests run without configuration
-
-
 @pytest.fixture
 def sample_plink_data() -> Path:
     """Return path prefix for sample PLINK data from test fixtures.
@@ -134,85 +105,6 @@ def tolerance_config() -> ToleranceConfig:
     from jamma.validation import ToleranceConfig
 
     return ToleranceConfig()
-
-
-@pytest.fixture(scope="session")
-def validation_pipeline_data():
-    """Run LMM pipeline once on gemma_synthetic data for validation tests.
-
-    Returns dict with keys: jamma_results, reference_results, comparison.
-
-    Session-scoped: all validation tests share one pipeline run, avoiding
-    the cost of running the full association pipeline 3x.
-
-    Returns None if reference data is not available (tests should skip).
-    """
-
-    fixture_root = Path(__file__).parent / "fixtures"
-    example_data = fixture_root / "gemma_synthetic" / "test"
-    reference_assoc = fixture_root / "gemma_synthetic" / "gemma_assoc.assoc.txt"
-
-    if not reference_assoc.exists():
-        return None
-
-    try:
-        import jax  # noqa: F401
-    except ImportError:
-        return None  # JAX not installed; validation tests will skip
-
-    from jamma.io import load_plink_binary
-    from jamma.kinship.io import read_kinship_matrix
-    from jamma.lmm.runner_jax import run_lmm_association_jax
-    from jamma.validation import (
-        ToleranceConfig,
-        compare_assoc_results,
-        load_gemma_assoc,
-    )
-
-    reference_kinship = fixture_root / "gemma_synthetic" / "gemma_kinship.cXX.txt"
-
-    plink_data = load_plink_binary(example_data)
-    kinship = read_kinship_matrix(reference_kinship)
-    reference_results = load_gemma_assoc(reference_assoc)
-
-    phenotypes = load_phenotypes_from_fam(example_data.with_suffix(".fam"))
-
-    # Build SNP info
-    snp_info = [
-        {
-            "chr": str(plink_data.chromosome[i]),
-            "rs": plink_data.sid[i],
-            "pos": plink_data.bp_position[i],
-            "a1": plink_data.allele_1[i],
-            "a0": plink_data.allele_2[i],
-            "maf": 0.0,
-            "n_miss": 0,
-        }
-        for i in range(plink_data.n_snps)
-    ]
-
-    run_result = run_lmm_association_jax(
-        genotypes=plink_data.genotypes,
-        phenotypes=phenotypes,
-        kinship=kinship,
-        snp_info=snp_info,
-        show_progress=False,
-        check_memory=False,
-    )
-    jamma_results = run_result.associations
-
-    jax_tolerances = ToleranceConfig(lambda_rtol=5e-5)
-    comparison = compare_assoc_results(
-        jamma_results, reference_results, config=jax_tolerances
-    )
-
-    result = {
-        "jamma_results": jamma_results,
-        "reference_results": reference_results,
-        "comparison": comparison,
-    }
-
-    return result
 
 
 def _build_synthetic_covariate_data(

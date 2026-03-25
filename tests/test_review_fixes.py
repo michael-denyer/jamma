@@ -186,56 +186,6 @@ class TestBuildResults:
 
 
 # ---------------------------------------------------------------------------
-# ensure_jax_configured reconfig test (#12)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.tier0
-@pytest.mark.requires_jax
-class TestEnsureJaxConfigured:
-    """Test ensure_jax_configured locking behavior."""
-
-    def test_reconfig_with_non_default_args_raises(self) -> None:
-        """Calling with non-default args after config should raise RuntimeError."""
-        from jamma.core import jax_config
-
-        # Save and reset state
-        original = jax_config._jax_configured
-        jax_config._jax_configured = True
-        try:
-            with pytest.raises(RuntimeError, match="non-default args"):
-                jax_config.ensure_jax_configured(enable_x64=False)
-            with pytest.raises(RuntimeError, match="non-default args"):
-                jax_config.ensure_jax_configured(platform="cpu")
-        finally:
-            jax_config._jax_configured = original
-
-    def test_reconfig_with_defaults_is_noop(self) -> None:
-        """Calling with default args after config should silently succeed."""
-        from jamma.core import jax_config
-
-        original = jax_config._jax_configured
-        jax_config._jax_configured = True
-        try:
-            # Should not raise
-            jax_config.ensure_jax_configured()
-        finally:
-            jax_config._jax_configured = original
-
-    def test_configure_jax_sets_configured_flag(self) -> None:
-        """Direct configure_jax() should set _jax_configured so no false warning."""
-        from jamma.core import jax_config
-
-        original = jax_config._jax_configured
-        jax_config._jax_configured = False
-        try:
-            jax_config.configure_jax()
-            assert jax_config._jax_configured is True
-        finally:
-            jax_config._jax_configured = original
-
-
-# ---------------------------------------------------------------------------
 # __main__.py smoke test (#13)
 # ---------------------------------------------------------------------------
 
@@ -441,60 +391,6 @@ class TestBetaincValidation:
 
 
 @pytest.mark.tier0
-class TestCrossBackendMode4:
-    """Cross-backend mode 4 (All) parity test."""
-
-    @pytest.mark.requires_jax
-    def test_mode4_parity(self) -> None:
-        """Mode 4 results from NumPy and JAX backends should match."""
-        from jamma.lmm.compute_numpy import _compute_lmm_chunk_numpy
-        from jamma.lmm.likelihood_numpy import (
-            batch_compute_uab_numpy,
-        )
-
-        pytest.importorskip("jax")
-        from jamma.lmm.prepare_common import _compute_null_model_common
-
-        rng = np.random.default_rng(42)
-        n_samples, n_snps, n_cvt = 50, 10, 1
-
-        eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
-        UtW = rng.standard_normal((n_samples, n_cvt))
-        Uty = rng.standard_normal(n_samples)
-        UtG = rng.standard_normal((n_samples, n_snps))
-
-        Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
-
-        logl_H0, _, Hi_eval_null = _compute_null_model_common(
-            4, eigenvalues, UtW, Uty, n_cvt, show_progress=False
-        )
-
-        result = _compute_lmm_chunk_numpy(
-            lmm_mode=4,
-            n_cvt=n_cvt,
-            eigenvalues=eigenvalues,
-            Uab_batch=Uab,
-            n_samples=n_samples,
-            Hi_eval_null=Hi_eval_null,
-            logl_H0=logl_H0,
-        )
-
-        # Mode 4 should have all keys populated
-        assert result["pwalds"] is not None
-        assert result["p_lrts"] is not None
-        assert result["p_scores"] is not None
-        assert result["betas"] is not None
-        assert result["ses"] is not None
-        assert result["lambdas"] is not None
-        assert result["lambdas_mle"] is not None
-
-        # All p-values should be in [0, 1] or NaN
-        for key in ["pwalds", "p_lrts", "p_scores"]:
-            vals = result[key]
-            finite = vals[np.isfinite(vals)]
-            assert np.all((finite >= 0) & (finite <= 1)), f"{key} has invalid p-values"
-
-
 @pytest.mark.tier0
 class TestMode4WaldOverwritesScore:
     """Mode=4 must use Wald betas/ses, not Score's.

@@ -11,16 +11,16 @@ FROM python:3.11-slim
 # Install uv for fast, reproducible installs
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Equivalent to `pip install jamma[jax]` but layered to preserve ILP64 numpy:
-# 1. ILP64 numpy from custom index (must not be overwritten by later installs)
-# 2. All runtime deps including JAX extras (jax jaxlib jaxtyping)
-# 3. jamma itself (--no-deps to prevent numpy downgrade back to LP64)
+# Install ILP64 numpy from custom index, then runtime deps and jamma:
+# 1. mkl runtime libraries
+# 2. ILP64 numpy from michael-denyer/numpy-mkl (must not be overwritten)
+# 3. Runtime deps (--no-deps on jamma to prevent numpy downgrade back to LP64)
 RUN uv pip install --system --no-cache mkl && \
     uv pip install --system --no-cache numpy \
         --extra-index-url https://michael-denyer.github.io/numpy-mkl \
         --reinstall && \
     uv pip install --system --no-cache \
-        psutil loguru threadpoolctl jax jaxlib jaxtyping click progressbar2 bed-reader && \
+        psutil loguru threadpoolctl click progressbar2 bed-reader && \
     uv pip install --system --no-cache --no-deps jamma
 
 # Verify ILP64 at build time

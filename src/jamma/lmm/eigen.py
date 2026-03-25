@@ -1,13 +1,13 @@
 """Eigendecomposition of kinship matrix.
 
 Provides GEMMA-compatible eigendecomposition with small eigenvalue thresholding.
-Uses jlinalg.eigh which dispatches to vendor DSYEVD/DSYEVR or the jlinalg D&C
-pipeline depending on available BLAS backends.
+Uses jlinalg.eigh which dispatches to vendor DSYEVD/DSYEVR, falling back
+to np.linalg.eigh when no vendor LAPACK is available.
 
 Thread control is handled by jamma.core.threading via threadpool_limits.
 
-Note: Uses jlinalg (backed by vendor LAPACK or jlinalg D&C) instead of JAX because
-eigendecomposition of large kinship matrices (46k+) requires ILP64 LAPACK.
+Note: Uses jlinalg (backed by vendor LAPACK) for eigendecomposition because
+large kinship matrices (46k+) require ILP64 LAPACK.
 With ILP64 vendor BLAS, matrices up to 200k+ are supported.
 """
 
@@ -80,7 +80,7 @@ def eigendecompose_kinship(
     - Warning if >1 zero eigenvalue
     - Warning if negative eigenvalues remain after thresholding
 
-    Uses jlinalg.eigh (vendor DSYEVD/DSYEVR dispatch with jlinalg D&C fallback).
+    Uses jlinalg.eigh (vendor DSYEVD/DSYEVR dispatch, np.linalg.eigh fallback).
     K is consumed (overwritten as scratch) — callers must not reuse K.
 
     Args:
@@ -131,8 +131,7 @@ def eigendecompose_kinship(
     # Decide eigendecomp driver: inplace DSYEVD > DSYEVD > DSYEVR.
     # Inplace requires vendor DSYEVD and a C-contiguous writeable float64 K
     # (otherwise PyArray_FROM_OTF copies, defeating memory savings).
-    # JLINALG_NO_VENDOR_LAPACK forces the D&C pipeline which cannot do inplace
-    # (dsytrd overwrites K with Householder vectors that dormtr needs later).
+    # JLINALG_NO_VENDOR_LAPACK forces np.linalg.eigh instead of vendor LAPACK.
     dsyevd_peak = _dsyevd_peak_gb(n_samples)
     no_vendor = os.environ.get("JLINALG_NO_VENDOR_LAPACK", "").strip() not in ("", "0")
     use_inplace = (
@@ -186,7 +185,7 @@ def eigendecompose_kinship(
     else:
         # Determine why inplace was not used
         if no_vendor:
-            reason = "JLINALG_NO_VENDOR_LAPACK set, using jlinalg D&C pipeline"
+            reason = "JLINALG_NO_VENDOR_LAPACK set, using np.linalg.eigh"
         elif not jlinalg.blas_has_dsyevd:
             reason = "no vendor DSYEVD available"
         elif K.dtype != np.float64:
@@ -212,12 +211,16 @@ def eigendecompose_kinship(
 
     # Use all physical cores for BLAS
     n_threads = get_physical_core_count()
-    for lib in threadpool_info():
-        if lib.get("user_api") == "blas":
-            logger.debug(
-                f"BLAS: {lib.get('internal_api')}, "
-                f"current={lib.get('num_threads')}, target={n_threads}"
-            )
+    blas_libs = [lib for lib in threadpool_info() if lib.get("user_api") == "blas"]
+    if blas_libs:
+        active = jlinalg.blas_backend or "numpy-fallback"
+        detected = ", ".join(
+            f"{lib.get('internal_api')}({lib.get('num_threads')}t)" for lib in blas_libs
+        )
+        logger.debug(
+            f"BLAS active={active}, detected in process: {detected}, "
+            f"target={n_threads}t"
+        )
 
     from jamma.core.estimates import estimate_eigendecomp_time
 
@@ -229,8 +232,12 @@ def eigendecompose_kinship(
 
     start_time = time.perf_counter()
     try:
-        with blas_threads(n_threads):
-            eigenvalues, eigenvectors = jlinalg.eigh(K, inplace=use_inplace)
+        if no_vendor:
+            logger.info("JLINALG_NO_VENDOR_LAPACK set — using np.linalg.eigh")
+            eigenvalues, eigenvectors = np.linalg.eigh(K)
+        else:
+            with blas_threads(n_threads):
+                eigenvalues, eigenvectors = jlinalg.eigh(K, inplace=use_inplace)
     except MemoryError:
         logger.error(
             f"MemoryError during eigendecomposition of "

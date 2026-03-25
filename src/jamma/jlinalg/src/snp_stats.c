@@ -29,7 +29,7 @@
 /* ---- pthread thread pool for snp_stats ---- */
 
 typedef struct {
-    const void *data;       /* float* or double* */
+    const void *data; /* float* or double* */
     npy_intp n_samples;
     npy_intp n_snps_chunk;
     double *means;
@@ -39,13 +39,12 @@ typedef struct {
     int64_t *n_ab;
     int64_t *n_bb;
     int compute_hwe;
-    npy_intp j_start;       /* first column for this thread */
-    npy_intp j_end;         /* one past last column */
-    int is_f32;             /* 1 = float, 0 = double */
+    npy_intp j_start; /* first column for this thread */
+    npy_intp j_end;   /* one past last column */
+    int is_f32;       /* 1 = float, 0 = double */
 } snp_stats_task_t;
 
-static void snp_stats_range(const snp_stats_task_t *t)
-{
+static void snp_stats_range(const snp_stats_task_t *t) {
     for (npy_intp j = t->j_start; j < t->j_end; j++) {
         double sum = 0.0;
         double sum_sq = 0.0;
@@ -61,17 +60,23 @@ static void snp_stats_range(const snp_stats_task_t *t)
                 is_nan = isnan(fval);
                 dval = (double)fval;
                 if (!is_nan && t->compute_hwe) {
-                    if (fval == 0.0f) cnt_aa++;
-                    else if (fval == 1.0f) cnt_ab++;
-                    else if (fval == 2.0f) cnt_bb++;
+                    if (fval == 0.0f)
+                        cnt_aa++;
+                    else if (fval == 1.0f)
+                        cnt_ab++;
+                    else if (fval == 2.0f)
+                        cnt_bb++;
                 }
             } else {
                 dval = ((const double *)t->data)[i * t->n_snps_chunk + j];
                 is_nan = isnan(dval);
                 if (!is_nan && t->compute_hwe) {
-                    if (dval == 0.0) cnt_aa++;
-                    else if (dval == 1.0) cnt_ab++;
-                    else if (dval == 2.0) cnt_bb++;
+                    if (dval == 0.0)
+                        cnt_aa++;
+                    else if (dval == 1.0)
+                        cnt_ab++;
+                    else if (dval == 2.0)
+                        cnt_bb++;
                 }
             }
             if (is_nan) {
@@ -88,7 +93,7 @@ static void snp_stats_range(const snp_stats_task_t *t)
         if (n_valid > 0) {
             double mean = sum / (double)n_valid;
             double var = sum_sq / (double)n_valid - mean * mean;
-            if (var < 0.0) var = 0.0;  /* E[X^2]-E[X]^2 cancellation guard */
+            if (var < 0.0) var = 0.0; /* E[X^2]-E[X]^2 cancellation guard */
             t->means[j] = mean;
             t->variances[j] = var;
         } else {
@@ -104,37 +109,34 @@ static void snp_stats_range(const snp_stats_task_t *t)
     }
 }
 
-static void *snp_stats_thread_fn(void *arg)
-{
+static void *snp_stats_thread_fn(void *arg) {
     snp_stats_range((const snp_stats_task_t *)arg);
     return NULL;
 }
 
 /* ---- Public API (f32 / f64 entry points) ---- */
 
-static void snp_stats_chunk_impl(
-    const void *data,
-    npy_intp n_samples,
-    npy_intp n_snps_chunk,
-    double *means,
-    npy_intp *miss_counts,
-    double *variances,
-    int64_t *n_aa,
-    int64_t *n_ab,
-    int64_t *n_bb,
-    int compute_hwe,
-    int is_f32)
-{
-    int n_threads = jlinalg_n_threads;
+static void snp_stats_chunk_impl(const void *data, npy_intp n_samples, npy_intp n_snps_chunk,
+                                 double *means, npy_intp *miss_counts, double *variances,
+                                 int64_t *n_aa, int64_t *n_ab, int64_t *n_bb, int compute_hwe,
+                                 int is_f32) {
+    int n_threads = jlinalg_get_n_threads();
     if (n_snps_chunk <= 256 || n_threads <= 1) {
         /* Small chunk or single-threaded: run inline */
         snp_stats_task_t task = {
-            .data = data, .n_samples = n_samples,
-            .n_snps_chunk = n_snps_chunk, .means = means,
-            .miss_counts = miss_counts, .variances = variances,
-            .n_aa = n_aa, .n_ab = n_ab, .n_bb = n_bb,
+            .data = data,
+            .n_samples = n_samples,
+            .n_snps_chunk = n_snps_chunk,
+            .means = means,
+            .miss_counts = miss_counts,
+            .variances = variances,
+            .n_aa = n_aa,
+            .n_ab = n_ab,
+            .n_bb = n_bb,
             .compute_hwe = compute_hwe,
-            .j_start = 0, .j_end = n_snps_chunk, .is_f32 = is_f32,
+            .j_start = 0,
+            .j_end = n_snps_chunk,
+            .is_f32 = is_f32,
         };
         snp_stats_range(&task);
         return;
@@ -146,27 +148,37 @@ static void snp_stats_chunk_impl(
     /* Stack-allocate for small thread counts, heap for large */
     snp_stats_task_t tasks_stack[64];
     pthread_t threads_stack[64];
-    snp_stats_task_t *tasks = n_threads <= 64 ? tasks_stack
-        : (snp_stats_task_t *)malloc((size_t)n_threads * sizeof(snp_stats_task_t));
-    pthread_t *threads = n_threads <= 64 ? threads_stack
-        : (pthread_t *)malloc((size_t)n_threads * sizeof(pthread_t));
+    snp_stats_task_t *tasks =
+        n_threads <= 64 ? tasks_stack
+                        : (snp_stats_task_t *)malloc((size_t)n_threads * sizeof(snp_stats_task_t));
+    pthread_t *threads = n_threads <= 64
+                             ? threads_stack
+                             : (pthread_t *)malloc((size_t)n_threads * sizeof(pthread_t));
 
     if (!tasks || !threads) {
         /* Allocation failed — fall back to single-threaded.
          * This should be rare (< 64 threads uses stack), but if it happens
          * the process is critically low on memory — warn the user. */
         fprintf(stderr,
-            "snp_stats: malloc failed for %d threads, "
-            "falling back to single-threaded\n", n_threads);
+                "snp_stats: malloc failed for %d threads, "
+                "falling back to single-threaded\n",
+                n_threads);
         if (tasks != tasks_stack) free(tasks);
         if (threads != threads_stack) free(threads);
         snp_stats_task_t task = {
-            .data = data, .n_samples = n_samples,
-            .n_snps_chunk = n_snps_chunk, .means = means,
-            .miss_counts = miss_counts, .variances = variances,
-            .n_aa = n_aa, .n_ab = n_ab, .n_bb = n_bb,
+            .data = data,
+            .n_samples = n_samples,
+            .n_snps_chunk = n_snps_chunk,
+            .means = means,
+            .miss_counts = miss_counts,
+            .variances = variances,
+            .n_aa = n_aa,
+            .n_ab = n_ab,
+            .n_bb = n_bb,
             .compute_hwe = compute_hwe,
-            .j_start = 0, .j_end = n_snps_chunk, .is_f32 = is_f32,
+            .j_start = 0,
+            .j_end = n_snps_chunk,
+            .is_f32 = is_f32,
         };
         snp_stats_range(&task);
         return;
@@ -180,25 +192,32 @@ static void snp_stats_chunk_impl(
     for (int t = 0; t < n_threads; t++) {
         npy_intp chunk = cols_per_thread + (t < remainder ? 1 : 0);
         tasks[t] = (snp_stats_task_t){
-            .data = data, .n_samples = n_samples,
-            .n_snps_chunk = n_snps_chunk, .means = means,
-            .miss_counts = miss_counts, .variances = variances,
-            .n_aa = n_aa, .n_ab = n_ab, .n_bb = n_bb,
+            .data = data,
+            .n_samples = n_samples,
+            .n_snps_chunk = n_snps_chunk,
+            .means = means,
+            .miss_counts = miss_counts,
+            .variances = variances,
+            .n_aa = n_aa,
+            .n_ab = n_ab,
+            .n_bb = n_bb,
             .compute_hwe = compute_hwe,
-            .j_start = col, .j_end = col + chunk, .is_f32 = is_f32,
+            .j_start = col,
+            .j_end = col + chunk,
+            .is_f32 = is_f32,
         };
         col += chunk;
     }
 
     /* Launch threads 1..n-1, run thread 0 inline */
-    int n_launched = 1;  /* thread 0 runs inline */
+    int n_launched = 1; /* thread 0 runs inline */
     for (int t = 1; t < n_threads; t++) {
         int rc = pthread_create(&threads[t], NULL, snp_stats_thread_fn, &tasks[t]);
         if (rc != 0) {
             fprintf(stderr,
-                "snp_stats: pthread_create failed for thread %d (rc=%d), "
-                "processing remaining %d columns single-threaded\n",
-                t, rc, n_threads - t);
+                    "snp_stats: pthread_create failed for thread %d (rc=%d), "
+                    "processing remaining %d columns single-threaded\n",
+                    t, rc, n_threads - t);
             for (int u = t; u < n_threads; u++)
                 snp_stats_range(&tasks[u]);
             n_launched = t;
@@ -216,20 +235,16 @@ static void snp_stats_chunk_impl(
     if (threads != threads_stack) free(threads);
 }
 
-void snp_stats_chunk_f32(
-    const float *data, npy_intp n_samples, npy_intp n_snps_chunk,
-    double *means, npy_intp *miss_counts, double *variances,
-    int64_t *n_aa, int64_t *n_ab, int64_t *n_bb, int compute_hwe)
-{
-    snp_stats_chunk_impl(data, n_samples, n_snps_chunk, means, miss_counts,
-                         variances, n_aa, n_ab, n_bb, compute_hwe, 1);
+void snp_stats_chunk_f32(const float *data, npy_intp n_samples, npy_intp n_snps_chunk,
+                         double *means, npy_intp *miss_counts, double *variances, int64_t *n_aa,
+                         int64_t *n_ab, int64_t *n_bb, int compute_hwe) {
+    snp_stats_chunk_impl(data, n_samples, n_snps_chunk, means, miss_counts, variances, n_aa, n_ab,
+                         n_bb, compute_hwe, 1);
 }
 
-void snp_stats_chunk_f64(
-    const double *data, npy_intp n_samples, npy_intp n_snps_chunk,
-    double *means, npy_intp *miss_counts, double *variances,
-    int64_t *n_aa, int64_t *n_ab, int64_t *n_bb, int compute_hwe)
-{
-    snp_stats_chunk_impl(data, n_samples, n_snps_chunk, means, miss_counts,
-                         variances, n_aa, n_ab, n_bb, compute_hwe, 0);
+void snp_stats_chunk_f64(const double *data, npy_intp n_samples, npy_intp n_snps_chunk,
+                         double *means, npy_intp *miss_counts, double *variances, int64_t *n_aa,
+                         int64_t *n_ab, int64_t *n_bb, int compute_hwe) {
+    snp_stats_chunk_impl(data, n_samples, n_snps_chunk, means, miss_counts, variances, n_aa, n_ab,
+                         n_bb, compute_hwe, 0);
 }

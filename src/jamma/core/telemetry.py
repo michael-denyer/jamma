@@ -70,7 +70,6 @@ class BenchmarkRecord(_BenchmarkRequired, total=False):
     blas_threads: int
     total_ram_gb: float
     numpy_version: str
-    jax_version: str
     platform: str
 
 

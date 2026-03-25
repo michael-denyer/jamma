@@ -3,7 +3,6 @@
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import psutil
 import pytest
 
 from jamma.core import (
@@ -35,7 +34,7 @@ class TestMemoryEstimation:
             f"Expected ~320GB kinship, got {est.kinship_gb}"
         )
 
-        # Genotypes: 200k * 95k * 8 / 1e9 = 152GB (float64 JAX copy)
+        # Genotypes: 200k * 95k * 8 / 1e9 = 152GB (float64)
         assert 151 < est.genotypes_gb < 153, (
             f"Expected ~152GB genotypes (float64), got {est.genotypes_gb}"
         )
@@ -76,10 +75,10 @@ class TestMemoryEstimation:
         assert isinstance(est.available_gb, float)
         assert isinstance(est.sufficient, bool)
 
-    def test_peak_kinship_accounts_for_numpy_jax_copy(self):
-        """Phase 1 (kinship) accounts for numpy + JAX device copy of genotypes.
+    def test_peak_kinship_accounts_for_genotype_copy(self):
+        """Phase 1 (kinship) accounts for numpy genotype copy during accumulation.
 
-        During kinship accumulation, the numpy input and JAX device copy
+        During kinship accumulation, the numpy input and working copy
         coexist. The estimate must use genotypes_gb * 2, not genotypes_gb.
         """
         # Choose dimensions where kinship phase is large relative to eigendecomp
@@ -92,7 +91,7 @@ class TestMemoryEstimation:
 
         assert est.total_gb >= expected_peak_kinship, (
             f"total_gb ({est.total_gb:.4f}) should be >= peak_kinship "
-            f"({expected_peak_kinship:.4f}) which includes numpy+JAX copy"
+            f"({expected_peak_kinship:.4f}) which includes working copy"
         )
 
     def test_sufficient_flag_correct(self):
@@ -141,57 +140,6 @@ class TestCheckMemoryAvailable:
 @pytest.mark.tier0
 class TestEigendecompMemory:
     """Tests for eigendecomposition memory usage."""
-
-    @pytest.mark.slow
-    @pytest.mark.tier2
-    def test_eigendecomp_memory_reasonable(self):
-        """JAX eigh should use reasonable memory (not O(n^2) workspace).
-
-        Note: This test measures RSS delta which can be affected by JIT caching
-        and garbage collection timing. The threshold is generous to avoid flakiness.
-        """
-        import gc
-
-        import jax.numpy as jnp
-
-        # 3000x3000 symmetric matrix (smaller to reduce variance)
-        n = 3000
-        rng = np.random.default_rng(42)
-        A = rng.standard_normal((n, n))
-        K = (A + A.T) / 2  # Symmetric
-
-        # Force garbage collection before measurement
-        gc.collect()
-
-        # Measure memory before
-        mem_before = psutil.Process().memory_info().rss / 1e9
-
-        # Run eigendecomposition
-        K_jax = jnp.array(K)
-        eigenvalues, eigenvectors = jnp.linalg.eigh(K_jax)
-
-        # Force computation to complete
-        eigenvalues.block_until_ready()
-        eigenvectors.block_until_ready()
-
-        # Measure memory after
-        mem_after = psutil.Process().memory_info().rss / 1e9
-        mem_delta = mem_after - mem_before
-
-        # Matrix itself is 3000^2 * 8 = 72MB
-        # Eigenvectors are another 72MB
-        # Eigenvalues are 3000 * 8 = 24KB
-        # With O(n) workspace, expect ~150-200MB delta
-        # With O(n^2) workspace, would see 300MB+ delta
-        #
-        # Use 500MB threshold - generous for JIT but catches gross O(n^2) issues
-        assert mem_delta < 0.5, (
-            f"Eigendecomp used {mem_delta:.2f}GB - may have O(n^2) workspace"
-        )
-
-        # Sanity check results
-        assert eigenvalues.shape == (n,)
-        assert eigenvectors.shape == (n, n)
 
 
 @pytest.mark.tier0
@@ -274,7 +222,7 @@ class TestCleanupMemory:
 
     def test_cleanup_memory_returns_snapshot(self):
         """cleanup_memory should return MemorySnapshot after cleanup."""
-        snap = cleanup_memory(clear_jax=True, verbose=False)
+        snap = cleanup_memory(verbose=False)
 
         assert isinstance(snap, MemorySnapshot)
         assert snap.rss_gb > 0
@@ -294,7 +242,7 @@ class TestCleanupMemory:
         # Record gc generation-0 count before cleanup
         gen0_before = gc.get_count()[0]
 
-        snap = cleanup_memory(clear_jax=False, verbose=True)
+        snap = cleanup_memory(verbose=True)
 
         # cleanup_memory calls gc.collect() which resets gen-0 counter
         gen0_after = gc.get_count()[0]
@@ -310,25 +258,6 @@ class TestCleanupMemory:
         assert isinstance(snap, MemorySnapshot)
         assert snap.rss_gb > 0, "RSS should be positive after cleanup"
         assert snap.available_gb > 0, "Available memory should be positive"
-
-    def test_cleanup_memory_clears_jax_caches(self):
-        """cleanup_memory with clear_jax=True should clear JAX caches."""
-        import jax
-        import jax.numpy as jnp
-
-        # Create a JIT-compiled function and call it
-        @jax.jit
-        def dummy_fn(x):
-            return x + 1
-
-        dummy_fn(jnp.array([1, 2, 3]))
-
-        # Cleanup should not raise
-        cleanup_memory(clear_jax=True, verbose=False)
-
-        # Function should still work after cleanup (just recompiled)
-        result = dummy_fn(jnp.array([4, 5, 6]))
-        assert list(result) == [5, 6, 7]
 
     def test_cleanup_frees_memory_after_allocation(self):
         """Cleanup completes without error after allocating and deleting arrays.
@@ -349,7 +278,7 @@ class TestCleanupMemory:
         del big_array
         gc.collect()
 
-        after = cleanup_memory(clear_jax=False, verbose=False)
+        after = cleanup_memory(verbose=False)
 
         # Structural assertions: cleanup returned a valid snapshot
         assert after is not None
@@ -418,8 +347,8 @@ class TestLmmMemoryEstimation:
 class TestMemoryEstimateVsActualAllocation:
     """Regression tests: estimates must cover actual runtime tensor shapes.
 
-    These tests verify that memory estimators account for the dominant JAX
-    intermediate buffers (Uab_batch, Iab_batch) that are created during LMM
+    These tests verify that memory estimators account for the dominant
+    intermediate buffers (Uab_batch, Iab_batch) created during LMM
     computation. Without these, the estimate can pass but execution OOMs.
     """
 
@@ -504,7 +433,7 @@ class TestKinshipDtypeAccounting:
         """estimate_workflow_memory must use float64 (8 bytes) for genotypes.
 
         compute_centered_kinship converts genotypes to float64 via
-        jnp.array(genotypes_filtered, dtype=jnp.float64).
+        np.array(genotypes_filtered, dtype=np.float64).
         """
         n_samples = 10_000
         n_snps = 50_000
@@ -530,8 +459,8 @@ class TestKinshipDtypeAccounting:
 
 
 @pytest.mark.tier0
-class TestGateCorrectnessRunnerJax:
-    """Tests that runner_jax.py memory gate correctly blocks/passes."""
+class TestGateCorrectnessLmmMemory:
+    """Tests that LMM batch runner memory gate correctly blocks/passes."""
 
     def test_lmm_gate_passes_with_ample_memory(self):
         """Memory check should pass when plenty of memory is available."""
@@ -588,7 +517,7 @@ class TestGateCorrectnessRunnerJax:
 
 @pytest.mark.tier0
 class TestGateCorrectnessRunnerStreaming:
-    """Tests that runner_jax_streaming.py memory gate correctly blocks/passes."""
+    """Tests that streaming runner memory gate correctly blocks/passes."""
 
     def test_streaming_gate_passes_with_ample_memory(self):
         """Memory check should pass when plenty of memory is available."""

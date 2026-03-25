@@ -56,3 +56,6 @@ docs/plans
 # Beads issue tracker
 .beads/
 AGENTS.md
+
+# Legacy archived code (v5.0 simplification)
+legacy/

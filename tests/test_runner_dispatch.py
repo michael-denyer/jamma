@@ -61,47 +61,6 @@ class TestUnifiedDispatcher:
         assert isinstance(result, LmmRunResult)
         assert n_tested == 5
 
-    def test_jax_batch_calls_jax_runner(self):
-        """jax-batch plan calls run_lmm_association_jax."""
-        plan = ExecutionPlan(backend="jax", mode="batch", reason="test")
-        stub_result = self._stub_run_result(5)
-
-        with patch(
-            "jamma.lmm.runner_jax.run_lmm_association_jax",
-            return_value=stub_result,
-        ) as mock_jax:
-            result, n_tested = run_lmm(
-                execution_plan=plan,
-                genotypes=np.zeros((10, 5)),
-                phenotypes=np.zeros(10),
-                kinship=np.eye(10),
-                snp_info=[{}] * 5,
-            )
-
-        mock_jax.assert_called_once()
-        assert isinstance(result, LmmRunResult)
-        assert n_tested == 5
-
-    def test_jax_streaming_calls_streaming_runner(self):
-        """jax-streaming plan calls run_lmm_association_streaming."""
-        plan = ExecutionPlan(backend="jax", mode="streaming", reason="test")
-        stub_result = self._stub_run_result(3)
-
-        with patch(
-            "jamma.lmm.runner_jax_streaming.run_lmm_association_streaming",
-            return_value=(stub_result, 3),
-        ) as mock_stream:
-            result, n_tested = run_lmm(
-                execution_plan=plan,
-                bed_path=Path("/tmp/test"),
-                phenotypes=np.zeros(10),
-                kinship=np.eye(10),
-            )
-
-        mock_stream.assert_called_once()
-        assert isinstance(result, LmmRunResult)
-        assert n_tested == 3
-
     def test_no_plan_auto_selects(self):
         """No execution_plan -> auto-selects via select_execution_mode."""
         stub_result = self._stub_run_result(5)
@@ -140,31 +99,6 @@ class TestUnifiedDispatcher:
                 snp_info=[{}] * 5,
             )
 
-    def test_jax_batch_but_no_genotypes_raises(self):
-        """jax-batch but genotypes=None -> ValueError."""
-        plan = ExecutionPlan(backend="jax", mode="batch", reason="test")
-
-        with pytest.raises(ValueError, match="genotypes"):
-            run_lmm(
-                execution_plan=plan,
-                genotypes=None,
-                phenotypes=np.zeros(10),
-                kinship=np.eye(10),
-                snp_info=[{}] * 5,
-            )
-
-    def test_jax_streaming_but_no_bed_path_raises(self):
-        """jax-streaming but bed_path=None -> ValueError."""
-        plan = ExecutionPlan(backend="jax", mode="streaming", reason="test")
-
-        with pytest.raises(ValueError, match="bed_path"):
-            run_lmm(
-                execution_plan=plan,
-                bed_path=None,
-                phenotypes=np.zeros(10),
-                kinship=np.eye(10),
-            )
-
     def test_auto_select_bed_path_no_genotypes_raises(self):
         """Auto-select with bed_path but no genotypes gives clear error."""
         with pytest.raises(ValueError, match="ambiguous"):
@@ -193,27 +127,6 @@ class TestUnifiedDispatcher:
         mock_np_stream.assert_called_once()
         assert isinstance(result, LmmRunResult)
         assert n_tested == 3
-
-    def test_numpy_streaming_excludes_use_gpu(self):
-        """numpy-streaming dispatch filters out use_gpu from kwargs."""
-        plan = ExecutionPlan(backend="numpy", mode="streaming", reason="test")
-        stub_result = self._stub_run_result(3)
-
-        with patch(
-            "jamma.lmm.runner_numpy_streaming.run_lmm_association_numpy_streaming",
-            return_value=(stub_result, 3),
-        ) as mock_np_stream:
-            run_lmm(
-                execution_plan=plan,
-                bed_path=Path("/tmp/test"),
-                phenotypes=np.zeros(10),
-                kinship=np.eye(10),
-                use_gpu=True,
-            )
-
-        call_kwargs = mock_np_stream.call_args
-        # use_gpu should not appear in either positional or keyword args
-        assert "use_gpu" not in call_kwargs.kwargs
 
     def test_numpy_streaming_no_bed_path_raises(self):
         """numpy-streaming but bed_path=None -> ValueError."""

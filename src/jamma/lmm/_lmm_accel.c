@@ -1754,8 +1754,11 @@ err_input:
  * and passes flat int32 arrays. C code just walks the table — no index
  * computation in C.
  *
- * Memory: Per-SNP Pab uses stack buffers (MAX_N_CVT=100 -> MAX_PAB_SIZE=535806
- * doubles = ~4.2MB; fits default 8MB thread stacks on Linux/macOS).
+ * Memory: Large per-SNP Pab buffers (pab_scratch, row0_scratch) are heap-
+ * allocated per-thread in workspace structs or before parallel regions.
+ * Only small MAX_N_INDEX arrays remain on the stack.
+ * MAX_N_CVT=100 -> MAX_N_INDEX=5253 (~42KB per array).  Functions with
+ * two such arrays peak at ~84KB, well within OpenMP thread stacks (2-4MB).
  * ========================================================================= */
 
 #define MAX_N_CVT   100
@@ -1904,13 +1907,15 @@ static double reml_logl_general_cached(
     double logdet_h,
     double logdet_iab,
     double reml_const,
-    const pab_table_t *t
+    const pab_table_t *t,
+    double *row0,          /* caller-provided, at least n_index doubles */
+    double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
 )
 {
     int ni = t->n_index;
     int n_var = t->n_var;
 
-    /* Compute varying dot products */
+    /* Compute varying dot products (reuse tail of row0 as temp) */
     double var_sums[MAX_N_INDEX];
     for (int c = 0; c < n_var; c++) var_sums[c] = 0.0;
 
@@ -1921,7 +1926,6 @@ static double reml_logl_general_cached(
     }
 
     /* Reconstruct row 0 */
-    double row0[MAX_N_INDEX];
     for (int i = 0; i < ni; i++) row0[i] = 0.0;
     for (int c = 0; c < t->n_inv; c++)
         row0[t->invariant_indices[c]] = inv_sums_cached[c];
@@ -1929,10 +1933,9 @@ static double reml_logl_general_cached(
         row0[t->varying_indices[c]] = var_sums[c];
 
     /* Full Pab via recursion */
-    double pab[MAX_PAB_SIZE];
-    calc_pab_general(row0, t, pab);
+    calc_pab_general(row0, t, pab_scratch);
 
-    return reml_finish_general(pab, t, logdet_h, logdet_iab, reml_const);
+    return reml_finish_general(pab_scratch, t, logdet_h, logdet_iab, reml_const);
 }
 
 /* -------------------------------------------------------------------------
@@ -1950,7 +1953,9 @@ static double reml_logl_general_fresh(
     double lambda,
     double logdet_iab,
     double reml_const,
-    const pab_table_t *t
+    const pab_table_t *t,
+    double *row0,          /* caller-provided, at least n_index doubles */
+    double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
 )
 {
     int ni = t->n_index;
@@ -1974,7 +1979,6 @@ static double reml_logl_general_fresh(
     }
 
     /* Reconstruct row 0 */
-    double row0[MAX_N_INDEX];
     for (int i = 0; i < ni; i++) row0[i] = 0.0;
     for (int c = 0; c < n_inv; c++)
         row0[t->invariant_indices[c]] = inv_sums[c];
@@ -1982,10 +1986,9 @@ static double reml_logl_general_fresh(
         row0[t->varying_indices[c]] = var_sums[c];
 
     /* Full Pab via recursion */
-    double pab[MAX_PAB_SIZE];
-    calc_pab_general(row0, t, pab);
+    calc_pab_general(row0, t, pab_scratch);
 
-    return reml_finish_general(pab, t, logdet_h, logdet_iab, reml_const);
+    return reml_finish_general(pab_scratch, t, logdet_h, logdet_iab, reml_const);
 }
 
 /* -------------------------------------------------------------------------
@@ -2065,7 +2068,9 @@ static double golden_section_lambda_general(
     const pab_table_t *t,
     double *logl_out,
     double *beta_out, double *se_out, double *f_stat_out,
-    int *is_valid_out
+    int *is_valid_out,
+    double *row0,          /* caller-provided, at least n_index doubles */
+    double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
 )
 {
     const double phi = 0.6180339887498949;
@@ -2083,7 +2088,8 @@ static double golden_section_lambda_general(
             logdet_h_grid[g],
             logdet_iab,
             reml_const,
-            t
+            t,
+            row0, pab_scratch
         );
         if (isnan(logl)) logl = REML_SENTINEL;
         if (logl > best_logl) {
@@ -2113,10 +2119,10 @@ static double golden_section_lambda_general(
     double d = a + phi * (b - a);
     double fc = reml_logl_general_fresh(
         uab_inv, uab_var, eigenvalues, n_samples, exp(c),
-        logdet_iab, reml_const, t);
+        logdet_iab, reml_const, t, row0, pab_scratch);
     double fd = reml_logl_general_fresh(
         uab_inv, uab_var, eigenvalues, n_samples, exp(d),
-        logdet_iab, reml_const, t);
+        logdet_iab, reml_const, t, row0, pab_scratch);
 
     for (int iter = 0; iter < n_refine; iter++) {
         if (fc > fd) {
@@ -2124,13 +2130,13 @@ static double golden_section_lambda_general(
             c = b - phi * (b - a);
             fc = reml_logl_general_fresh(
                 uab_inv, uab_var, eigenvalues, n_samples, exp(c),
-                logdet_iab, reml_const, t);
+                logdet_iab, reml_const, t, row0, pab_scratch);
         } else {
             a = c; c = d; fc = fd;
             d = a + phi * (b - a);
             fd = reml_logl_general_fresh(
                 uab_inv, uab_var, eigenvalues, n_samples, exp(d),
-                logdet_iab, reml_const, t);
+                logdet_iab, reml_const, t, row0, pab_scratch);
         }
     }
 
@@ -2158,19 +2164,17 @@ static double golden_section_lambda_general(
                 var_sums_final[cc] += h * uab_var[cc * n_samples + i];
         }
 
-        double row0[MAX_N_INDEX];
         for (int i = 0; i < ni; i++) row0[i] = 0.0;
         for (int cc = 0; cc < n_inv; cc++)
             row0[t->invariant_indices[cc]] = inv_sums_final[cc];
         for (int cc = 0; cc < n_var; cc++)
             row0[t->varying_indices[cc]] = var_sums_final[cc];
 
-        double pab[MAX_PAB_SIZE];
-        calc_pab_general(row0, t, pab);
+        calc_pab_general(row0, t, pab_scratch);
 
-        *logl_out = reml_finish_general(pab, t, logdet_h, logdet_iab, reml_const);
+        *logl_out = reml_finish_general(pab_scratch, t, logdet_h, logdet_iab, reml_const);
         *is_valid_out = wald_from_pab_general(
-            pab, t, beta_out, se_out, f_stat_out);
+            pab_scratch, t, beta_out, se_out, f_stat_out);
     }
 
     return lambda_opt;
@@ -2208,6 +2212,10 @@ typedef struct {
     int *var_b_cols;            /* (n_var,) 0-based column indices. Owned. */
     double *scratch_flat;       /* (actual_threads * n_var * n_samples) owned */
     int actual_threads;         /* for scratch deallocation sizing */
+    /* Per-thread heap buffers for Pab recursion (replaces stack arrays) */
+    double *pab_per_thread;     /* (actual_threads * pab_size) owned */
+    double *row0_per_thread;    /* (actual_threads * n_index) owned */
+    int pab_size;               /* n_rows * n_index for this workspace */
     PyObject *Uty_ref;          /* keeps Uty array alive */
     /* Mode-4 fused fields (NULL/0 when Wald-only) */
     int mode;                   /* 0=Wald-only, 4=mode-4 */
@@ -2246,6 +2254,8 @@ static void lmm_workspace_general_destructor(PyObject *cap)
     free(ws->var_a_cols);
     free(ws->var_b_cols);
     free(ws->scratch_flat);
+    free(ws->pab_per_thread);
+    free(ws->row0_per_thread);
     Py_XDECREF(ws->Uty_ref);
     /* Mode-4 fused fields */
     free(ws->hi_eval_null);
@@ -2728,6 +2738,20 @@ static PyObject *compute_lmm_chunk_general_c_py(
     if (actual_threads < 1) actual_threads = 1;
 #endif
 
+    /* Allocate per-thread heap buffers for Pab recursion */
+    int pab_size = ws->table.n_rows * n_index;
+    double *pab_heap = (double *)malloc(
+        (size_t)actual_threads * (size_t)pab_size * sizeof(double));
+    double *row0_heap = (double *)malloc(
+        (size_t)actual_threads * (size_t)n_index * sizeof(double));
+    if (!pab_heap || !row0_heap) {
+        free(pab_heap); free(row0_heap);
+        decref_output_arrays(&out);
+        Py_DECREF(uab_var_arr);
+        PyErr_NoMemory();
+        return NULL;
+    }
+
     Py_BEGIN_ALLOW_THREADS
 
 #ifdef _OPENMP
@@ -2736,14 +2760,22 @@ static PyObject *compute_lmm_chunk_general_c_py(
     #pragma omp parallel for schedule(static) num_threads(actual_threads)
 #endif
     for (int snp = 0; snp < n_snps; snp++) {
+        int tid = 0;
+#ifdef _OPENMP
+        tid = omp_get_thread_num();
+#endif
+        double *my_pab = pab_heap + (size_t)tid * pab_size;
+        double *my_row0 = row0_heap + (size_t)tid * n_index;
+
         const double *snp_var = uab_var_data +
             (size_t)snp * n_var * n_samples;
 
         /* Compute per-SNP logdet_iab at identity (lambda=0, hi=1).
          * Row 0: identity-weighted sums = simple column sums.
          * Invariant sums are precomputed in workspace; only varying
-         * sums (genotype-dependent) need per-SNP computation. */
-        double iab_row0[MAX_N_INDEX];
+         * sums (genotype-dependent) need per-SNP computation.
+         * Reuse per-thread heap buffer (consumed before my_row0 needed). */
+        double *iab_row0 = my_row0;
         for (int i = 0; i < n_index; i++) iab_row0[i] = 0.0;
 
         /* Invariant identity sums from precomputed workspace */
@@ -2758,11 +2790,9 @@ static PyObject *compute_lmm_chunk_general_c_py(
             iab_row0[ws->table.varying_indices[c]] = s;
         }
 
-        /* Compute logdet_iab via helper (replaces inline Pab + diagonal
-         * extraction — deduplicates pattern shared with fused kernels). */
-        double iab_scratch[MAX_PAB_SIZE];
+        /* Compute logdet_iab via helper */
         double logdet_iab = logdet_from_row0(
-            iab_row0, &ws->table, ws->table.n_cvt, iab_scratch);
+            iab_row0, &ws->table, ws->table.n_cvt, my_pab);
 
         /* Golden section optimization */
         double logl_opt, beta, se, f_stat;
@@ -2773,7 +2803,8 @@ static PyObject *compute_lmm_chunk_general_c_py(
             ws->inv_sums_grid,
             log_l_min, step, n_grid, n_refine,
             logdet_iab, reml_const, &ws->table,
-            &logl_opt, &beta, &se, &f_stat, &is_valid
+            &logl_opt, &beta, &se, &f_stat, &is_valid,
+            my_row0, my_pab
         );
 
         lambdas[snp] = lambda_opt;
@@ -2786,6 +2817,8 @@ static PyObject *compute_lmm_chunk_general_c_py(
     }
 
     Py_END_ALLOW_THREADS
+    free(pab_heap);
+    free(row0_heap);
 
     if (warn_betainc_convergence(betas, pwalds, n_snps) < 0)
         goto err_output;
@@ -4574,29 +4607,50 @@ static PyObject *compute_score_batch_general_c(PyObject *self, PyObject *args)
         (void)n_threads;
 #endif
 
+        /* Per-thread heap buffers for Pab recursion */
+        int sc_n_index = table.n_index;
+        int sc_pab_size = table.n_rows * sc_n_index;
+        double *sc_pab_heap = (double *)malloc(
+            (size_t)actual_threads * (size_t)sc_pab_size * sizeof(double));
+        double *sc_row0_heap = (double *)malloc(
+            (size_t)actual_threads * (size_t)sc_n_index * sizeof(double));
+        if (!sc_pab_heap || !sc_row0_heap) {
+            free(sc_pab_heap); free(sc_row0_heap);
+            free_pab_table(&table);
+            decref_score_output(&out);
+            Py_DECREF(hi_eval_null_arr);
+            Py_DECREF(uab_arr); Py_DECREF(eigenvalues_arr);
+            return PyErr_NoMemory();
+        }
+
         Py_BEGIN_ALLOW_THREADS
 
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static) num_threads(actual_threads)
 #endif
         for (int s = 0; s < n_snps; s++) {
+            int tid = 0;
+#ifdef _OPENMP
+            tid = omp_get_thread_num();
+#endif
+            double *my_pab = sc_pab_heap + (size_t)tid * sc_pab_size;
+            double *my_row0 = sc_row0_heap + (size_t)tid * sc_n_index;
+
             const double *uab_snp = uab_batch + (size_t)s * n_samples * table.n_index;
 
             /* Compute row0: dot products of Hi_eval_null with each Uab column */
-            double row0[MAX_N_INDEX];
-            for (int c = 0; c < table.n_index; c++) row0[c] = 0.0;
+            for (int c = 0; c < table.n_index; c++) my_row0[c] = 0.0;
             for (int i = 0; i < n_samples; i++) {
                 double h = hi_eval_null[i];
                 for (int c = 0; c < table.n_index; c++)
-                    row0[c] += h * uab_snp[i * table.n_index + c];
+                    my_row0[c] += h * uab_snp[i * table.n_index + c];
             }
 
             /* Full Pab via table-driven recursion */
-            double pab[MAX_PAB_SIZE];
-            calc_pab_general(row0, &table, pab);
+            calc_pab_general(my_row0, &table, my_pab);
 
             double beta, se, f_stat;
-            int is_valid = score_from_pab_general(pab, &table, n_samples,
+            int is_valid = score_from_pab_general(my_pab, &table, n_samples,
                                                   &beta, &se, &f_stat);
 
             out_betas[s]    = beta;
@@ -4605,6 +4659,8 @@ static PyObject *compute_score_batch_general_c(PyObject *self, PyObject *args)
         }
 
         Py_END_ALLOW_THREADS
+        free(sc_pab_heap);
+        free(sc_row0_heap);
 
         free_pab_table(&table);
 
@@ -4650,13 +4706,14 @@ static double mle_logl_general(
     int n_samples,
     double lambda,
     double mle_const,
-    const pab_table_t *t
+    const pab_table_t *t,
+    double *row0,          /* caller-provided, at least n_index doubles */
+    double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
 )
 {
     int ni = t->n_index;
 
     double logdet_h = 0.0;
-    double row0[MAX_N_INDEX];
     for (int c = 0; c < ni; c++) row0[c] = 0.0;
 
     for (int i = 0; i < n_samples; i++) {
@@ -4667,12 +4724,11 @@ static double mle_logl_general(
             row0[c] += h * uab_snp[i * ni + c];
     }
 
-    double pab[MAX_PAB_SIZE];
-    calc_pab_general(row0, t, pab);
+    calc_pab_general(row0, t, pab_scratch);
 
     /* P_yy_full at level n_cvt+1 (fully projected) */
     int nc = t->n_cvt;
-    double P_yy = pab[(nc + 1) * ni + t->idx_yy];
+    double P_yy = pab_scratch[(nc + 1) * ni + t->idx_yy];
     if (P_yy < 0.0) return (double)NAN;
     if (P_yy < P_YY_MIN) P_yy = P_YY_MIN;
 
@@ -4688,12 +4744,13 @@ static double mle_logl_general_cached(
     double cached_logdet_h,
     int n_samples,
     double mle_const,
-    const pab_table_t *t
+    const pab_table_t *t,
+    double *row0,          /* caller-provided, at least n_index doubles */
+    double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
 )
 {
     int ni = t->n_index;
 
-    double row0[MAX_N_INDEX];
     for (int c = 0; c < ni; c++) row0[c] = 0.0;
 
     for (int i = 0; i < n_samples; i++) {
@@ -4702,11 +4759,10 @@ static double mle_logl_general_cached(
             row0[c] += h * uab_snp[i * ni + c];
     }
 
-    double pab[MAX_PAB_SIZE];
-    calc_pab_general(row0, t, pab);
+    calc_pab_general(row0, t, pab_scratch);
 
     int nc = t->n_cvt;
-    double P_yy = pab[(nc + 1) * ni + t->idx_yy];
+    double P_yy = pab_scratch[(nc + 1) * ni + t->idx_yy];
     if (P_yy < 0.0) return (double)NAN;
     if (P_yy < P_YY_MIN) P_yy = P_YY_MIN;
 
@@ -4730,7 +4786,9 @@ static double golden_section_lambda_mle_general(
     int n_grid, int n_refine,
     double mle_const,
     const pab_table_t *t,
-    double *logl_out
+    double *logl_out,
+    double *row0,          /* caller-provided, at least n_index doubles */
+    double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
 )
 {
     const double phi = 0.6180339887498949;
@@ -4743,7 +4801,8 @@ static double golden_section_lambda_mle_general(
             uab_snp,
             hi_eval_grid + (size_t)g * n_samples,
             logdet_h_grid[g],
-            n_samples, mle_const, t
+            n_samples, mle_const, t,
+            row0, pab_scratch
         );
         if (isnan(logl)) logl = REML_SENTINEL;
         if (logl > best_logl) {
@@ -4766,24 +4825,29 @@ static double golden_section_lambda_mle_general(
     /* Stage 2: golden section refinement */
     double c = b - phi * (b - a);
     double d = a + phi * (b - a);
-    double fc = mle_logl_general(uab_snp, eigenvalues, n_samples, exp(c), mle_const, t);
-    double fd = mle_logl_general(uab_snp, eigenvalues, n_samples, exp(d), mle_const, t);
+    double fc = mle_logl_general(uab_snp, eigenvalues, n_samples, exp(c), mle_const, t,
+                                  row0, pab_scratch);
+    double fd = mle_logl_general(uab_snp, eigenvalues, n_samples, exp(d), mle_const, t,
+                                  row0, pab_scratch);
 
     for (int iter = 0; iter < n_refine; iter++) {
         if (fc > fd) {
             b = d; d = c; fd = fc;
             c = b - phi * (b - a);
-            fc = mle_logl_general(uab_snp, eigenvalues, n_samples, exp(c), mle_const, t);
+            fc = mle_logl_general(uab_snp, eigenvalues, n_samples, exp(c), mle_const, t,
+                                   row0, pab_scratch);
         } else {
             a = c; c = d; fc = fd;
             d = a + phi * (b - a);
-            fd = mle_logl_general(uab_snp, eigenvalues, n_samples, exp(d), mle_const, t);
+            fd = mle_logl_general(uab_snp, eigenvalues, n_samples, exp(d), mle_const, t,
+                                   row0, pab_scratch);
         }
     }
 
     double log_opt = (a + b) / 2.0;
     double lambda_opt = exp(log_opt);
-    *logl_out = mle_logl_general(uab_snp, eigenvalues, n_samples, lambda_opt, mle_const, t);
+    *logl_out = mle_logl_general(uab_snp, eigenvalues, n_samples, lambda_opt, mle_const, t,
+                                  row0, pab_scratch);
 
     return lambda_opt;
 }
@@ -4945,12 +5009,35 @@ static PyObject *compute_lrt_batch_general_c(PyObject *self, PyObject *args)
         (void)n_threads;
 #endif
 
+        /* Per-thread heap buffers for Pab recursion */
+        int lrt_n_index = table.n_index;
+        int lrt_pab_size = table.n_rows * lrt_n_index;
+        double *lrt_pab_heap = (double *)malloc(
+            (size_t)actual_threads * (size_t)lrt_pab_size * sizeof(double));
+        double *lrt_row0_heap = (double *)malloc(
+            (size_t)actual_threads * (size_t)lrt_n_index * sizeof(double));
+        if (!lrt_pab_heap || !lrt_row0_heap) {
+            free(lrt_pab_heap); free(lrt_row0_heap);
+            free(lambda_grid); free(hi_eval_grid); free(logdet_h_grid);
+            free_pab_table(&table);
+            decref_lrt_output(&out);
+            Py_DECREF(uab_arr); Py_DECREF(eigenvalues_arr);
+            return PyErr_NoMemory();
+        }
+
         Py_BEGIN_ALLOW_THREADS
 
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static) num_threads(actual_threads)
 #endif
         for (int s = 0; s < n_snps; s++) {
+            int tid = 0;
+#ifdef _OPENMP
+            tid = omp_get_thread_num();
+#endif
+            double *my_pab = lrt_pab_heap + (size_t)tid * lrt_pab_size;
+            double *my_row0 = lrt_row0_heap + (size_t)tid * lrt_n_index;
+
             const double *uab_snp = uab_batch + (size_t)s * n_samples * table.n_index;
 
             double logl_H1;
@@ -4958,7 +5045,8 @@ static PyObject *compute_lrt_batch_general_c(PyObject *self, PyObject *args)
                 uab_snp, eigenvalues, n_samples,
                 lambda_grid, hi_eval_grid, logdet_h_grid,
                 log_l_min, step, n_grid, n_refine,
-                mle_const, &table, &logl_H1
+                mle_const, &table, &logl_H1,
+                my_row0, my_pab
             );
             out_lambdas_mle[s] = lam_mle;
 
@@ -4968,6 +5056,8 @@ static PyObject *compute_lrt_batch_general_c(PyObject *self, PyObject *args)
         }
 
         Py_END_ALLOW_THREADS
+        free(lrt_pab_heap);
+        free(lrt_row0_heap);
 
         free(lambda_grid);
         free(hi_eval_grid);
@@ -6571,6 +6661,16 @@ static int init_fused_general_workspace(
         (size_t)actual_threads * (size_t)n_var * (size_t)n_samples * sizeof(double));
     if (!ws->scratch_flat) { PyErr_NoMemory(); return -1; }
 
+    /* Per-thread heap buffers for Pab recursion (avoids stack overflow) */
+    int pab_size = n_rows * n_index;
+    ws->pab_size = pab_size;
+    ws->pab_per_thread = (double *)malloc(
+        (size_t)actual_threads * (size_t)pab_size * sizeof(double));
+    if (!ws->pab_per_thread) { PyErr_NoMemory(); return -1; }
+    ws->row0_per_thread = (double *)malloc(
+        (size_t)actual_threads * (size_t)n_index * sizeof(double));
+    if (!ws->row0_per_thread) { PyErr_NoMemory(); return -1; }
+
     /* Compute df, reml_const, beta params */
     int df = ws->table.df;
     ws->beta_a = (double)df / 2.0;
@@ -6665,6 +6765,8 @@ static void free_fused_general_workspace(lmm_workspace_general_t *ws)
     free(ws->var_a_cols);
     free(ws->var_b_cols);
     free(ws->scratch_flat);
+    free(ws->pab_per_thread);
+    free(ws->row0_per_thread);
     Py_XDECREF(ws->Uty_ref);
     free(ws->hi_eval_null);
     free(ws->null_inv_sums);
@@ -6953,6 +7055,8 @@ static PyObject *compute_lmm_chunk_fused_general_c_py(
         const double *x = utg_t_data + (size_t)snp * n_samples;
         double *scratch = ws->scratch_flat +
             (size_t)tid * (size_t)n_var * (size_t)n_samples;
+        double *my_pab = ws->pab_per_thread + (size_t)tid * ws->pab_size;
+        double *my_row0 = ws->row0_per_thread + (size_t)tid * n_index;
 
         /* Compute n_var varying columns on-the-fly */
         for (int v = 0; v < n_var; v++) {
@@ -6964,8 +7068,9 @@ static PyObject *compute_lmm_chunk_fused_general_c_py(
                 out_v[i] = a[i] * b[i];
         }
 
-        /* Compute per-SNP logdet_iab at identity (same as non-fused general) */
-        double iab_row0[MAX_N_INDEX];
+        /* Compute per-SNP logdet_iab at identity (same as non-fused general).
+         * Reuse per-thread heap buffer (consumed before my_row0 needed). */
+        double *iab_row0 = my_row0;
         for (int i = 0; i < n_index; i++) iab_row0[i] = 0.0;
 
         for (int c = 0; c < n_inv; c++)
@@ -6978,9 +7083,8 @@ static PyObject *compute_lmm_chunk_fused_general_c_py(
             iab_row0[ws->table.varying_indices[c]] = s;
         }
 
-        double iab_scratch[MAX_PAB_SIZE];
         double logdet_iab = logdet_from_row0(
-            iab_row0, &ws->table, ws->table.n_cvt, iab_scratch);
+            iab_row0, &ws->table, ws->table.n_cvt, my_pab);
 
         /* Golden section optimization — uses scratch as uab_var */
         double logl_opt, beta, se, f_stat;
@@ -6991,7 +7095,8 @@ static PyObject *compute_lmm_chunk_fused_general_c_py(
             ws->inv_sums_grid,
             log_l_min, step, n_grid, n_refine,
             logdet_iab, reml_const, &ws->table,
-            &logl_opt, &beta, &se, &f_stat, &is_valid
+            &logl_opt, &beta, &se, &f_stat, &is_valid,
+            my_row0, my_pab
         );
 
         lambdas[snp] = lambda_opt;
@@ -7350,6 +7455,8 @@ static PyObject *compute_mode4_chunk_fused_general_c_py(
         const double *x = utg_t_data + (size_t)snp * n_samples;
         double *scratch = ws->scratch_flat +
             (size_t)tid * (size_t)n_var * (size_t)n_samples;
+        double *my_pab = ws->pab_per_thread + (size_t)tid * ws->pab_size;
+        double *my_row0 = ws->row0_per_thread + (size_t)tid * n_index;
 
         /* Compute n_var varying columns on-the-fly */
         for (int v = 0; v < n_var; v++) {
@@ -7363,7 +7470,7 @@ static PyObject *compute_mode4_chunk_fused_general_c_py(
 
         /* ---- (a) Score: null-model Pab ---- */
         {
-            double null_row0[MAX_N_INDEX];
+            double *null_row0 = my_row0;  /* reuse per-thread heap buffer */
             for (int i = 0; i < n_index; i++) null_row0[i] = 0.0;
 
             /* Invariant null sums from precomputed workspace */
@@ -7378,12 +7485,11 @@ static PyObject *compute_mode4_chunk_fused_general_c_py(
                 null_row0[ws->table.varying_indices[c]] = s;
             }
 
-            double null_pab[MAX_PAB_SIZE];
-            calc_pab_general(null_row0, &ws->table, null_pab);
+            calc_pab_general(null_row0, &ws->table, my_pab);
 
             double score_beta, score_se, score_f;
             int score_valid = score_from_pab_general(
-                null_pab, &ws->table, n_samples,
+                my_pab, &ws->table, n_samples,
                 &score_beta, &score_se, &score_f);
 
             out_p_scores[snp] = f_to_pvalue(
@@ -7392,7 +7498,7 @@ static PyObject *compute_mode4_chunk_fused_general_c_py(
         }
 
         /* ---- (b) logdet_iab ---- */
-        double iab_row0[MAX_N_INDEX];
+        double *iab_row0 = my_row0;  /* reuse per-thread heap buffer */
         for (int i = 0; i < n_index; i++) iab_row0[i] = 0.0;
 
         for (int c = 0; c < n_inv; c++)
@@ -7404,9 +7510,8 @@ static PyObject *compute_mode4_chunk_fused_general_c_py(
             iab_row0[ws->table.varying_indices[c]] = s;
         }
 
-        double iab_scratch[MAX_PAB_SIZE];
         double logdet_iab = logdet_from_row0(
-            iab_row0, &ws->table, ws->table.n_cvt, iab_scratch);
+            iab_row0, &ws->table, ws->table.n_cvt, my_pab);
 
         /* ---- (c) Wald: REML optimization ---- */
         double logl_reml, wald_beta, wald_se, wald_f;
@@ -7417,7 +7522,8 @@ static PyObject *compute_mode4_chunk_fused_general_c_py(
             ws->inv_sums_grid,
             log_l_min, step, n_grid, n_refine,
             logdet_iab, reml_const, &ws->table,
-            &logl_reml, &wald_beta, &wald_se, &wald_f, &wald_valid
+            &logl_reml, &wald_beta, &wald_se, &wald_f, &wald_valid,
+            my_row0, my_pab
         );
 
         out_lambdas[snp] = lambda_reml;
@@ -7462,7 +7568,8 @@ static PyObject *compute_mode4_chunk_fused_general_c_py(
                 ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
                 log_l_min, step, n_grid, n_refine,
                 ws->mle_const, &ws->table,
-                &logl_H1
+                &logl_H1,
+                my_row0, my_pab
             );
 
             out_lambdas_mle[snp] = lambda_mle;
@@ -8765,14 +8872,37 @@ static PyObject *compute_score_split_general_c(PyObject *self, PyObject *args)
         (void)n_threads;
 #endif
 
+        /* Per-thread heap buffers for Pab recursion and row0 */
+        int ssg_pab_size = table.n_rows * n_index;
+        double *ssg_pab_heap = (double *)malloc(
+            (size_t)actual_threads * (size_t)ssg_pab_size * sizeof(double));
+        double *ssg_row0_heap = (double *)malloc(
+            (size_t)actual_threads * (size_t)n_index * sizeof(double));
+        if (!ssg_pab_heap || !ssg_row0_heap) {
+            free(ssg_pab_heap);
+            free(ssg_row0_heap);
+            free_pab_table(&table);
+            decref_score_output(&out);
+            Py_DECREF(hi_eval_null_arr);
+            Py_DECREF(uab_inv_arr); Py_DECREF(uab_var_arr);
+            Py_DECREF(eigenvalues_arr);
+            return PyErr_NoMemory();
+        }
+
         Py_BEGIN_ALLOW_THREADS
 
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static) num_threads(actual_threads)
 #endif
         for (int s = 0; s < n_snps; s++) {
-            /* Build null_row0 for this SNP */
-            double null_row0[MAX_N_INDEX];
+            int tid = 0;
+#ifdef _OPENMP
+            tid = omp_get_thread_num();
+#endif
+            double *my_pab = ssg_pab_heap + (size_t)tid * ssg_pab_size;
+
+            /* Build null_row0 for this SNP (per-thread heap buffer) */
+            double *null_row0 = ssg_row0_heap + (size_t)tid * n_index;
             for (int c = 0; c < n_index; c++) null_row0[c] = 0.0;
 
             /* Place invariant null sums at their indices */
@@ -8791,11 +8921,10 @@ static PyObject *compute_score_split_general_c(PyObject *self, PyObject *args)
             }
 
             /* Full Pab via table-driven recursion */
-            double pab[MAX_PAB_SIZE];
-            calc_pab_general(null_row0, &table, pab);
+            calc_pab_general(null_row0, &table, my_pab);
 
             double beta, se, f_stat;
-            int is_valid = score_from_pab_general(pab, &table, n_samples,
+            int is_valid = score_from_pab_general(my_pab, &table, n_samples,
                                                   &beta, &se, &f_stat);
 
             out_betas[s]    = beta;
@@ -8804,6 +8933,8 @@ static PyObject *compute_score_split_general_c(PyObject *self, PyObject *args)
         }
 
         Py_END_ALLOW_THREADS
+        free(ssg_pab_heap);
+        free(ssg_row0_heap);
 
         free_pab_table(&table);
 
@@ -9009,10 +9140,16 @@ static PyObject *compute_lrt_split_general_c(PyObject *self, PyObject *args)
         (void)n_threads;
 #endif
 
-        /* Allocate per-thread uab_snp buffers */
+        /* Allocate per-thread uab_snp + Pab recursion buffers */
+        int lsg_pab_size = table.n_rows * n_index;
         double *uab_snp_flat = (double *)malloc(
             (size_t)actual_threads * (size_t)n_index * (size_t)n_samples * sizeof(double));
-        if (!uab_snp_flat) {
+        double *lsg_pab_heap = (double *)malloc(
+            (size_t)actual_threads * (size_t)lsg_pab_size * sizeof(double));
+        double *lsg_row0_heap = (double *)malloc(
+            (size_t)actual_threads * (size_t)n_index * sizeof(double));
+        if (!uab_snp_flat || !lsg_pab_heap || !lsg_row0_heap) {
+            free(uab_snp_flat); free(lsg_pab_heap); free(lsg_row0_heap);
             free(lambda_grid); free(hi_eval_grid); free(logdet_h_grid);
             decref_lrt_output(&out);
             free_pab_table(&table);
@@ -9030,6 +9167,9 @@ static PyObject *compute_lrt_split_general_c(PyObject *self, PyObject *args)
 #ifdef _OPENMP
             tid = omp_get_thread_num();
 #endif
+            double *my_pab = lsg_pab_heap + (size_t)tid * lsg_pab_size;
+            double *my_row0 = lsg_row0_heap + (size_t)tid * n_index;
+
             /* Assemble per-SNP uab_snp in row-major (n_samples, n_index) layout
              * matching mle_logl_general_cached expectation. */
             double *uab_snp = uab_snp_flat +
@@ -9060,7 +9200,8 @@ static PyObject *compute_lrt_split_general_c(PyObject *self, PyObject *args)
                 uab_snp, eigenvalues, n_samples,
                 lambda_grid, hi_eval_grid, logdet_h_grid,
                 log_l_min, step_val, n_grid, n_refine,
-                mle_const, &table, &logl_H1
+                mle_const, &table, &logl_H1,
+                my_row0, my_pab
             );
             out_lambdas_mle[s] = lam_mle;
 
@@ -9072,6 +9213,8 @@ static PyObject *compute_lrt_split_general_c(PyObject *self, PyObject *args)
         Py_END_ALLOW_THREADS
 
         free(uab_snp_flat);
+        free(lsg_pab_heap);
+        free(lsg_row0_heap);
         free(lambda_grid);
         free(hi_eval_grid);
         free(logdet_h_grid);

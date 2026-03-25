@@ -133,7 +133,6 @@ class TestLocoWriteEigen:
 
     def test_write_eigen_produces_correct_per_chr_files(self, tmp_path: Path) -> None:
         """write_eigen=True writes eigenD/eigenU per chromosome with correct dims."""
-        pytest.importorskip("jax")
         from jamma.io.plink import get_plink_metadata, partitions_from_metadata
         from jamma.lmm.loco import run_lmm_loco
         from jamma.lmm.prepare_common import compute_valid_mask
@@ -158,7 +157,6 @@ class TestLocoWriteEigen:
             write_eigen=True,
             eigen_dir=tmp_path,
             eigen_prefix="result",
-            backend="numpy",
         )
         assert result.n_tested > 0
 
@@ -187,7 +185,6 @@ class TestLocoEigenCacheIntegration:
 
     def test_cached_run_produces_identical_results(self, tmp_path: Path) -> None:
         """Write eigen, then read cache: results must be numerically identical."""
-        pytest.importorskip("jax")
         from jamma.lmm.loco import run_lmm_loco
         from jamma.validation.compare import load_gemma_assoc
         from tests.conftest import load_phenotypes_from_fam
@@ -209,7 +206,6 @@ class TestLocoEigenCacheIntegration:
             write_eigen=True,
             eigen_dir=eigen_dir,
             eigen_prefix="result",
-            backend="numpy",
         )
 
         # Run 2: read cache (no kinship/eigendecomp)
@@ -223,25 +219,18 @@ class TestLocoEigenCacheIntegration:
             show_progress=False,
             eigen_dir=eigen_dir,
             eigen_prefix="result",
-            backend="numpy",
         )
 
-        # Compare results (loaded from disk since output_path was set).
-        # When numpy snp_stats_cache is available (non-cached path), SNP
-        # filtering uses all-samples population. Cached path filters on
-        # valid-samples only. Join on rs ID to compare common SNPs.
+        # Compare results — both should produce non-empty output
         results1 = load_gemma_assoc(out1)
         results2 = load_gemma_assoc(out2)
-
-        # Both should produce results
         assert len(results1) > 0
         assert len(results2) > 0
 
         # Build lookup by rs for the cached run
         r2_by_rs = {r.rs: r for r in results2}
 
-        # All SNPs from the non-cached run that also appear in
-        # cached run should have identical statistics.
+        # All common SNPs should have identical statistics
         common_count = 0
         for r1 in results1:
             r2 = r2_by_rs.get(r1.rs)
@@ -249,25 +238,48 @@ class TestLocoEigenCacheIntegration:
                 continue
             common_count += 1
             np.testing.assert_allclose(
-                r1.p_wald,
-                r2.p_wald,
-                rtol=1e-10,
-                err_msg=f"p_wald mismatch for {r1.rs}",
-            )
-            np.testing.assert_allclose(
                 r1.beta,
                 r2.beta,
                 rtol=1e-10,
+                atol=1e-14,
                 err_msg=f"beta mismatch for {r1.rs}",
             )
+            np.testing.assert_allclose(
+                r1.se,
+                r2.se,
+                rtol=1e-10,
+                atol=1e-14,
+                err_msg=f"se mismatch for {r1.rs}",
+            )
+            np.testing.assert_allclose(
+                r1.p_wald,
+                r2.p_wald,
+                rtol=1e-8,
+                atol=1e-14,
+                err_msg=f"p_wald mismatch for {r1.rs}",
+            )
 
-        # At least 99% of SNPs should be common (filtering edge cases
-        # account for the small difference)
-        assert common_count >= 0.99 * min(len(results1), len(results2))
+        min_expected = int(0.99 * min(len(results1), len(results2)))
+        assert common_count >= min_expected, (
+            f"Only {common_count} common SNPs out of "
+            f"{len(results1)}/{len(results2)} — expected >= {min_expected}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# CLI integration test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not available"
+)
+class TestLocoEigenCacheFallback:
+    """Integration tests for LOCO eigen cache fallback behavior."""
 
     def test_empty_eigen_dir_falls_back_to_compute(self, tmp_path: Path) -> None:
         """LOCO with eigen_dir pointing to empty dir runs normally."""
-        pytest.importorskip("jax")
         from jamma.lmm.loco import run_lmm_loco
         from tests.conftest import load_phenotypes_from_fam
 
@@ -285,13 +297,11 @@ class TestLocoEigenCacheIntegration:
             show_progress=False,
             eigen_dir=empty_dir,
             eigen_prefix="result",
-            backend="numpy",
         )
         assert result.n_tested > 0
 
     def test_partial_cache_falls_back_to_compute(self, tmp_path: Path) -> None:
         """Partial cache (some chrs missing) falls back to full compute."""
-        pytest.importorskip("jax")
         from jamma.io.plink import get_plink_metadata, partitions_from_metadata
         from jamma.lmm.loco import run_lmm_loco
         from tests.conftest import load_phenotypes_from_fam
@@ -315,7 +325,6 @@ class TestLocoEigenCacheIntegration:
             write_eigen=True,
             eigen_dir=eigen_dir,
             eigen_prefix="result",
-            backend="numpy",
         )
 
         # Delete one chromosome's files to simulate partial cache
@@ -333,14 +342,8 @@ class TestLocoEigenCacheIntegration:
             show_progress=False,
             eigen_dir=eigen_dir,
             eigen_prefix="result",
-            backend="numpy",
         )
         assert result.n_tested > 0
-
-
-# ---------------------------------------------------------------------------
-# CLI integration test
-# ---------------------------------------------------------------------------
 
 
 class TestLocoEigenCacheValidation:
@@ -348,7 +351,6 @@ class TestLocoEigenCacheValidation:
 
     def test_write_eigen_without_eigen_dir_raises(self) -> None:
         """write_eigen=True with eigen_dir=None raises ValueError."""
-        pytest.importorskip("jax")
         from jamma.lmm.loco import run_lmm_loco
         from tests.conftest import load_phenotypes_from_fam
 
@@ -364,7 +366,6 @@ class TestLocoEigenCacheValidation:
                 lmm_mode=1,
                 write_eigen=True,
                 eigen_dir=None,
-                backend="numpy",
             )
 
     def test_dimension_mismatch_on_cached_eigen_raises(self, tmp_path: Path) -> None:

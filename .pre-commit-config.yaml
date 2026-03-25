@@ -10,6 +10,20 @@ repos:
       - id: ruff
         args: [--fix]
       - id: ruff-format
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v19.1.7
+    hooks:
+      - id: clang-format
+        types_or: [c]
+        files: ^src/jamma/jlinalg/src/
+  - repo: local
+    hooks:
+      - id: cppcheck
+        name: cppcheck
+        entry: cppcheck --std=c11 --suppress=missingIncludeSystem --enable=warning --error-exitcode=1 --quiet
+        language: system
+        types: [c]
+        files: ^src/jamma/jlinalg/src/
   - repo: local
     hooks:
       - id: uv-lock-sync

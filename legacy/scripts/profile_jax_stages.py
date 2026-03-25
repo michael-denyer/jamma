@@ -19,10 +19,17 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 import numpy as np
-
 from jamma.core.jax_config import ensure_jax_configured
 
 ensure_jax_configured()
+
+from jamma.lmm.likelihood_jax import (  # noqa: E402
+    batch_calc_wald_stats,
+    batch_compute_iab,
+    batch_compute_uab,
+)
+from jamma.lmm.prepare import _grid_optimize_lambda_batched  # noqa: E402
+from jamma.lmm.runner_jax import _build_covariate_matrix  # noqa: E402
 
 from jamma.core.snp_filter import (  # noqa: E402
     compute_snp_filter_mask,
@@ -31,13 +38,6 @@ from jamma.core.snp_filter import (  # noqa: E402
 from jamma.io import load_plink_binary  # noqa: E402
 from jamma.kinship.io import read_kinship_matrix  # noqa: E402
 from jamma.lmm.eigen import eigendecompose_kinship  # noqa: E402
-from jamma.lmm.likelihood_jax import (  # noqa: E402
-    batch_calc_wald_stats,
-    batch_compute_iab,
-    batch_compute_uab,
-)
-from jamma.lmm.prepare import _grid_optimize_lambda_batched  # noqa: E402
-from jamma.lmm.runner_jax import _build_covariate_matrix  # noqa: E402
 
 # ---------------------------------------------------------------------------
 _REPO_ROOT = Path(__file__).resolve().parent.parent

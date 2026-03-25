@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """End-to-end backend comparison benchmark on mouse_hs1940.
 
-Runs kinship (-gk 1), LMM Wald (-lmm 1), and LMM All (-lmm 4) across all
-available backends and prints a formatted table matching the README.
+Runs kinship (-gk 1), LMM Wald (-lmm 1), and LMM All (-lmm 4) across
+NumPy backends (batch, streaming, pure-Python) and GEMMA, then prints
+a formatted table matching the README.
 
 Usage:
     uv run python scripts/bench_all_backends.py
@@ -216,125 +217,6 @@ def bench_numpy_pure(
 
 
 # ---------------------------------------------------------------------------
-# JAMMA JAX batch benchmark
-# ---------------------------------------------------------------------------
-def bench_jax_batch(
-    plink, phenotypes, kinship, snp_info, covariates_4, runs: int
-) -> dict[str, float]:
-    """Benchmark JAX batch backend."""
-    from jamma.lmm.runner_jax import run_lmm_association_jax
-
-    results: dict[str, float] = {}
-
-    # Warmup runs (JIT compilation) — each n_cvt produces a distinct trace
-    run_lmm_association_jax(
-        genotypes=plink.genotypes,
-        phenotypes=phenotypes,
-        kinship=kinship.copy(),
-        snp_info=snp_info,
-        show_progress=False,
-        check_memory=False,
-        lmm_mode=1,
-    )
-    if covariates_4 is not None:
-        run_lmm_association_jax(
-            genotypes=plink.genotypes,
-            phenotypes=phenotypes,
-            kinship=kinship.copy(),
-            snp_info=snp_info,
-            covariates=covariates_4,
-            show_progress=False,
-            check_memory=False,
-            lmm_mode=1,
-        )
-
-    ops: list[tuple[str, int, np.ndarray | None]] = [
-        ("lmm_wald", 1, None),
-        ("lmm_all", 4, None),
-    ]
-    if covariates_4 is not None:
-        ops.append(("lmm_wald_c4", 1, covariates_4))
-
-    for op, mode, covars in ops:
-        best = float("inf")
-        for _ in range(runs):
-            t0 = time.perf_counter()
-            run_lmm_association_jax(
-                genotypes=plink.genotypes,
-                phenotypes=phenotypes,
-                kinship=kinship.copy(),
-                snp_info=snp_info,
-                covariates=covars,
-                show_progress=False,
-                check_memory=False,
-                lmm_mode=mode,
-            )
-            elapsed = time.perf_counter() - t0
-            best = min(best, elapsed)
-        results[op] = best
-
-    return results
-
-
-# ---------------------------------------------------------------------------
-# JAMMA JAX streaming benchmark
-# ---------------------------------------------------------------------------
-def bench_jax_streaming(
-    phenotypes, kinship, covariates_4, runs: int
-) -> dict[str, float]:
-    """Benchmark JAX streaming backend."""
-    from jamma.lmm.runner_jax_streaming import run_lmm_association_streaming
-
-    results: dict[str, float] = {}
-
-    # Warmup runs (JIT compilation) — each n_cvt produces a distinct trace
-    run_lmm_association_streaming(
-        bed_path=_MOUSE_PREFIX,
-        phenotypes=phenotypes,
-        kinship=kinship.copy(),
-        show_progress=False,
-        check_memory=False,
-        lmm_mode=1,
-    )
-    if covariates_4 is not None:
-        run_lmm_association_streaming(
-            bed_path=_MOUSE_PREFIX,
-            phenotypes=phenotypes,
-            kinship=kinship.copy(),
-            covariates=covariates_4,
-            show_progress=False,
-            check_memory=False,
-            lmm_mode=1,
-        )
-
-    ops: list[tuple[str, int, np.ndarray | None]] = [
-        ("lmm_wald", 1, None),
-        ("lmm_all", 4, None),
-    ]
-    if covariates_4 is not None:
-        ops.append(("lmm_wald_c4", 1, covariates_4))
-
-    for op, mode, covars in ops:
-        best = float("inf")
-        for _ in range(runs):
-            t0 = time.perf_counter()
-            run_lmm_association_streaming(
-                bed_path=_MOUSE_PREFIX,
-                phenotypes=phenotypes,
-                kinship=kinship.copy(),
-                covariates=covars,
-                show_progress=False,
-                check_memory=False,
-                lmm_mode=mode,
-            )
-            elapsed = time.perf_counter() - t0
-            best = min(best, elapsed)
-        results[op] = best
-
-    return results
-
-
-# ---------------------------------------------------------------------------
 # JAMMA NumPy streaming benchmark
 # ---------------------------------------------------------------------------
 def bench_numpy_streaming(
@@ -376,7 +258,7 @@ def bench_numpy_streaming(
 # Kinship benchmark
 # ---------------------------------------------------------------------------
 def bench_kinship(plink, runs: int) -> dict[str, float]:
-    """Benchmark kinship computation (uses JAX via compute_centered_kinship)."""
+    """Benchmark kinship computation (NumPy/BLAS via compute_centered_kinship)."""
     from jamma.kinship import compute_centered_kinship
 
     # Warmup
@@ -436,11 +318,6 @@ def main():
         print(f"ERROR: mouse_hs1940 data not found at {_MOUSE_DIR}", file=sys.stderr)
         sys.exit(1)
 
-    # Configure JAX
-    from jamma.core.jax_config import ensure_jax_configured
-
-    ensure_jax_configured()
-
     # Print hardware context
     from jamma.core.hardware import get_hardware_context
 
@@ -448,8 +325,6 @@ def main():
     phys, log = ctx["cpu_count_physical"], ctx["cpu_count_logical"]
     print(f"CPU: {ctx['cpu_model']} ({phys}P/{log}L)")
     print(f"BLAS: {ctx['blas_backend']} ({ctx['blas_threads']} threads)")
-    jv, jb, jd = ctx["jax_version"], ctx["jax_backend"], ctx["jax_device_count"]
-    print(f"JAX: {jv} ({jb}, {jd} devices)")
     print(f"NumPy: {ctx['numpy_version']}")
     print(f"Platform: {ctx['platform']}")
     print(f"Runs: {args.runs} (best of)")
@@ -509,13 +384,6 @@ def main():
     )
     timings["numpy"] = numpy_times
 
-    # --- JAX batch ---
-    print("Benchmarking JAX batch...", flush=True)
-    jax_times = bench_jax_batch(
-        plink, phenotypes, kinship, snp_info, covariates_4, args.runs
-    )
-    timings["jax_batch"] = jax_times
-
     # --- NumPy streaming ---
     print("Benchmarking NumPy streaming...", flush=True)
     numpy_streaming_times = bench_numpy_streaming(
@@ -523,12 +391,6 @@ def main():
     )
     numpy_streaming_times["kinship"] = None  # streaming doesn't do kinship
     timings["numpy_streaming"] = numpy_streaming_times
-
-    # --- JAX streaming ---
-    print("Benchmarking JAX streaming...", flush=True)
-    streaming_times = bench_jax_streaming(phenotypes, kinship, covariates_4, args.runs)
-    streaming_times["kinship"] = None  # streaming doesn't do kinship
-    timings["jax_streaming"] = streaming_times
 
     print()
 
@@ -538,8 +400,6 @@ def main():
     npy_pure = timings["numpy_pure"]
     npy = timings["numpy"]
     npy_s = timings["numpy_streaming"]
-    jax_b = timings["jax_batch"]
-    jax_s = timings["jax_streaming"]
 
     def _cell(t: float | None) -> str:
         return _fmt(t) if t is not None else "—"
@@ -564,8 +424,6 @@ def main():
         candidates = [
             npy.get(op),
             npy_s.get(op),
-            jax_b.get(op),
-            jax_s.get(op),
         ]
         valid = [c for c in candidates if c is not None]
         return min(valid) if valid else None
@@ -578,7 +436,7 @@ def main():
     if covariates_4 is not None:
         rows.append(("LMM Wald+4cov (`-lmm 1 -c`)", "lmm_wald_c4"))
 
-    # Kinship is always NumPy/BLAS (no JAX, no C extension).
+    # Kinship is always NumPy/BLAS (no C extension).
     # Inject into both NumPy dicts so it appears in those columns.
     npy_pure["kinship"] = kinship_times["kinship"]
     npy["kinship"] = kinship_times["kinship"]
@@ -587,12 +445,12 @@ def main():
     hdr = (
         "| Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy"
         " | JAMMA NumPy+C"
-        " | JAMMA NumPy+C (stream) | JAMMA JAX (batch) | JAMMA JAX (streaming)"
+        " | JAMMA NumPy+C (stream)"
         " | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |"
     )
     sep = (
         "|-----------|-----------------|-------------------|-------------|--------------|"
-        "------------------------|-------------------|----------------------|"
+        "------------------------|"
         "-----------|---------------|------------------|"
     )
     print(hdr)
@@ -607,7 +465,6 @@ def main():
             f" | {_cell(gemma_a.get(op))}"
             f" | {_cell(npy_pure.get(op))} | {_cell(npy.get(op))}"
             f" | {_cell(npy_s.get(op))}"
-            f" | {_cell(jax_b.get(op))} | {_cell(jax_s.get(op))}"
             f" | {_c_speedup(op)} | {vs_ob} | {vs_ac} |"
         )
 

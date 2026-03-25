@@ -21,7 +21,12 @@ from jamma.io import load_plink_binary
 from jamma.kinship import compute_centered_kinship
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm.io import write_assoc_results
-from jamma.lmm.runner_jax import run_lmm_association_jax
+
+try:
+    from jamma.lmm.runner_jax import run_lmm_association_jax
+except ModuleNotFoundError:
+    pytest.skip("JAX runner archived (v5.0 simplification)", allow_module_level=True)
+
 from jamma.lmm.stats import AssocResult
 from jamma.validation import (
     AssocComparisonResult,

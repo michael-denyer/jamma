@@ -23,7 +23,7 @@ def impute_and_center(X: np.ndarray) -> np.ndarray:
 
     When X is a writable NumPy array, operates in-place for zero-copy
     performance. Falls back to a copy-based path for non-writable or
-    non-NumPy arrays (e.g., JAX arrays in streaming kinship).
+    non-writable or non-NumPy arrays.
 
     Implements GEMMA's PlinkKin algorithm for handling missing data:
     1. Compute mean per SNP excluding missing (NaN)
@@ -63,7 +63,7 @@ def impute_and_center(X: np.ndarray) -> np.ndarray:
         X -= snp_means
         return X
 
-    # Copy-based path for immutable arrays (e.g., JAX arrays in streaming kinship)
+    # Copy-based path for immutable or non-writable arrays
     X_imputed = np.where(np.isnan(X), snp_means, X)
     return X_imputed - snp_means
 

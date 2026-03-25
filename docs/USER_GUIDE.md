@@ -5,8 +5,7 @@
 ### macOS (Intel or ARM)
 
 ```bash
-pip install jamma          # NumPy backend
-pip install 'jamma[jax]'   # + JAX acceleration (ARM Mac only)
+pip install jamma
 ```
 
 That's it. macOS Accelerate BLAS handles large matrices natively.
@@ -16,13 +15,10 @@ That's it. macOS Accelerate BLAS handles large matrices natively.
 For small datasets (<46k samples), the standard install works:
 
 ```bash
-pip install jamma          # NumPy backend
-pip install 'jamma[jax]'   # + JAX acceleration
+pip install jamma
 ```
 
 For large-scale GWAS (>46k samples), install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first — standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. Pre-built ILP64 wheels are available for Python 3.11–3.14:
-
-**NumPy backend only:**
 
 ```bash
 pip install numpy \
@@ -30,17 +26,6 @@ pip install numpy \
   --force-reinstall --upgrade
 pip install jamma --no-deps
 pip install psutil loguru threadpoolctl click progressbar2 bed-reader
-```
-
-**With JAX acceleration:**
-
-```bash
-pip install numpy \
-  --extra-index-url https://michael-denyer.github.io/numpy-mkl \
-  --force-reinstall --upgrade
-pip install 'jamma[jax]' --no-deps
-pip install psutil loguru threadpoolctl click progressbar2 bed-reader \
-  jax jaxlib jaxtyping
 ```
 
 **From Git (latest development version):**
@@ -67,12 +52,12 @@ uv sync
 
 ### Platform Support
 
-| Platform | `pip install jamma` | `pip install jamma[jax]` | Notes |
-|----------|---------------------|--------------------------|-------|
-| Linux x86_64 | JAX (auto-included) | — | Full support; ILP64 for >46k samples |
-| ARM Mac (M1+) | JAX (auto-included) | — | Full support |
-| Intel Mac | NumPy only | Not available | JAX dropped Intel Mac support |
-| Windows | NumPy only | Not available | JAX dropped Windows support |
+| Platform | `pip install jamma` | Notes |
+|----------|---------------------|-------|
+| Linux x86_64 | Full support | ILP64 for >46k samples |
+| ARM Mac (M1+) | Full support | Accelerate BLAS |
+| Intel Mac | Full support | Accelerate / MKL |
+| Windows | Full support | Limited to <46k samples without ILP64 |
 
 ### Backend Selection
 
@@ -86,7 +71,7 @@ jamma -lmm 1 --backend numpy -bfile data/my_study -k kinship.cXX.npy
 export JAMMA_BACKEND=numpy
 ```
 
-Priority: `JAMMA_BACKEND` env var → `--backend` flag → auto-detect (C+NumPy if C extension available, else JAX, else NumPy fallback).
+Priority: `JAMMA_BACKEND` env var > `--backend` flag > auto-detect (C+NumPy if C extension available, else NumPy fallback).
 
 ## Input Data Format
 
@@ -194,8 +179,7 @@ jamma -lmm 1 -bfile data/my_study -k output/kinship.cXX.npy \
 - `--mem-budget GB` — Memory budget in GB (default: available - 10%)
 - `--no-check-memory` — Disable pre-flight memory checks
 - `--legacy-text` — Write kinship and eigen files in GEMMA text format instead of binary `.npy`
-- `--backend auto|jax|numpy|numpy-streaming|jax-streaming` — Force compute backend (default: auto)
-- `--profile-dir DIR` — Directory for XLA profiling traces
+- `--backend auto|numpy|numpy-streaming` — Force compute backend (default: auto)
 - `-v` / `--verbose` — Verbose output
 - `--version` — Show version and exit
 
@@ -340,8 +324,8 @@ jamma -lmm 1 -bfile data/my_study -k kinship.cXX.npy \
 
 **HWE filtering:** JAMMA uses a chi-squared goodness-of-fit test (df=1) via pure NumPy.
 SNPs with p-value below the threshold are excluded from association testing.
-HWE filtering is supported on streaming backends (`numpy-streaming`, `jax-streaming`)
-only; it is not available on batch backends.
+HWE filtering is supported on the streaming backend (`numpy-streaming`) only; it is
+not available on the batch backend.
 See [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md) for differences from GEMMA's
 Wigginton exact test.
 
@@ -374,8 +358,8 @@ ensuring consistent results.
 
 **Early sample filtering:** When samples are excluded due to missing phenotype or
 covariate data, JAMMA filters them before kinship computation (not after). The kinship
-matrix is accumulated at (n_valid × n_valid) size directly, avoiding a full
-(n_samples × n_samples) allocation. This reduces peak memory proportionally to the
+matrix is accumulated at (n_valid x n_valid) size directly, avoiding a full
+(n_samples x n_samples) allocation. This reduces peak memory proportionally to the
 number of excluded samples.
 
 **Note:** LOCO mode (`-loco`) does not support multi-phenotype. Run each phenotype
@@ -451,21 +435,7 @@ data = load_plink_binary("data/my_study")
 K = compute_centered_kinship(data.genotypes)
 ```
 
-#### LMM Association (JAX backend)
-
-```python
-from jamma.lmm import run_lmm_association_streaming
-
-# Streaming runner (genotypes from disk, never loads full matrix)
-results = run_lmm_association_streaming(
-    bed_path="data/my_study",
-    phenotypes=phenotypes,
-    kinship=K,
-    chunk_size=10_000,
-)
-```
-
-#### LMM Association (NumPy backend)
+#### LMM Association
 
 ```python
 from jamma.lmm import run_lmm_association_numpy
@@ -473,7 +443,7 @@ from jamma.lmm.eigen import eigendecompose_kinship
 
 eigenvalues, eigenvectors = eigendecompose_kinship(K)
 
-# Pure-NumPy runner (no JAX required, loads full genotype matrix)
+# NumPy runner (loads full genotype matrix)
 run_result = run_lmm_association_numpy(
     genotypes=data.genotypes,
     phenotypes=phenotypes,
@@ -488,7 +458,7 @@ pve = run_result.pve               # heritability estimate
 pve_se = run_result.pve_se         # SE of PVE via delta method (None if flat likelihood)
 ```
 
-All backends support Wald, LRT, Score, all-tests modes, and LOCO. HWE filtering (`-hwe`) is supported on streaming backends only (`numpy-streaming`, `jax-streaming`).
+The NumPy backend supports Wald, LRT, Score, all-tests modes, and LOCO. HWE filtering (`-hwe`) is supported on the streaming backend only (`numpy-streaming`).
 
 ## Large-Scale Eigendecomposition (>46k samples)
 
@@ -563,8 +533,8 @@ typical Databricks / HPC environment for large-scale GWAS:
 
 - **BLAS/LAPACK**: Tuned for Intel MKL (shipped via `numpy-mkl` wheels).
   OpenBLAS works but is slower and segfaults above ~50k samples.
-- **JAX backend**: Uses XLA's CPU backend. GPU acceleration (`use_gpu=True`)
-  is supported but not yet tuned for production workloads.
+- **C extension**: The OpenMP-parallelized C extension (`_lmm_accel.c`) provides
+  2-3x speedup over pure Python for the LMM compute phase.
 - **ARM / Apple Silicon**: Runs correctly via Accelerate BLAS. Thread control
   (`blas_threads()`) is not available on Accelerate — Apple provides no public
   API and `VECLIB_MAXIMUM_THREADS` is only read at library load time. JAMMA
@@ -572,68 +542,30 @@ typical Databricks / HPC environment for large-scale GWAS:
   avoid oversubscription with Accelerate's uncontrollable thread pool.
   `JAMMA_BLAS_THREADS` has no effect on Accelerate.
 
-### CPU Device Sharding
-
-JAMMA partitions SNP batches across virtual CPU devices using JAX
-`NamedSharding`. This parallelises the per-SNP REML optimisation across
-cores without any code changes.
-
-**Auto-configuration** (no action required):
-
-- Devices: `max(1, physical_cores // 2)`
-- BLAS threads: `physical_cores // n_devices` (avoids oversubscription)
-
-**Environment variable overrides:**
-
-```bash
-# Custom device count (set before running JAMMA)
-export JAMMA_JAX_DEVICES=8
-
-# Custom BLAS thread count for eigendecomp / DGEMM
-export JAMMA_BLAS_THREADS=16
-
-jamma -lmm 1 -bfile data/my_study -k kinship.txt -o output
-```
-
-Tuning guidance (benchmarked on Azure E64ds_v6 — Intel Xeon Platinum
-8573C, 32 physical / 64 logical cores, 541 GB RAM, MKL ILP64, DBR 16.4 LTS):
-
-| Devices | 5K×50K | 10K×100K | 20K×100K |
-| ------- | ------ | -------- | -------- |
-| 1       | 54.4s  | 65.4s    | 93.7s    |
-| 8       | 12.0s  | 34.5s    | 67.7s    |
-| 16      | 8.0s   | 28.8s    | 40.6s    |
-| 32      | 8.3s   | 28.7s    | 55.0s    |
-
-The sweet spot is typically `physical_cores // 2`. Going higher adds
-coordination overhead that outweighs parallelism gains.
-
 ### General Tips
 
-1. **Use JAX backend** for large datasets (>1000 samples) without a C extension — JIT compilation and device sharding provide substantial speedups
-2. **NumPy backend** (batch or streaming) works on all platforms and requires no extra JAX dependencies — the C extension enables streaming for arbitrarily large datasets with full pipeline support (LOCO, multi-phenotype, HWE filtering)
+1. **Use the C extension** for best performance — it is auto-compiled on first use and provides OpenMP-parallelized SNP processing
+2. **Streaming mode** (`numpy-streaming`) works on all platforms and supports arbitrarily large datasets with full pipeline support (LOCO, multi-phenotype, HWE filtering)
 3. **Batch processing**: JAMMA automatically batches kinship computation
-4. **Memory**: For very large datasets, use a streaming backend (`numpy-streaming` or `jax-streaming`) — auto-selected when batch mode won't fit in memory
+4. **Memory**: For very large datasets, the streaming backend (`numpy-streaming`) is auto-selected when batch mode won't fit in memory
 
 ## Environment Variables
 
 | Variable | Default | Description |
 | -------- | ------- | ----------- |
-| `JAMMA_BACKEND` | auto-detect | Force backend: `auto`, `numpy`, `jax`, `numpy-streaming`, or `jax-streaming`. Auto-detect prefers C+NumPy, then JAX, then NumPy fallback. |
-| `JAMMA_JAX_DEVICES` | `physical_cores // 2` | Number of virtual CPU devices for JAX SNP-batch sharding. |
-| `JAMMA_BLAS_THREADS` | `physical_cores // n_devices` | Thread count for NumPy BLAS operations (eigendecomp, matmul). Controls MKL/OpenBLAS via `threadpoolctl`, not OpenMP. **Linux only** — has no effect on macOS Accelerate. |
-| `JAMMA_LOCO_WORKERS` | `1` | Parallel chromosome workers in LOCO mode. Each worker holds a full K_loco matrix (`n_samples² × 8` bytes), so increase with caution. |
+| `JAMMA_BACKEND` | auto-detect | Force backend: `auto`, `numpy`, or `numpy-streaming`. Auto-detect prefers C+NumPy, then NumPy fallback. |
+| `JAMMA_BLAS_THREADS` | `physical_cores` | Thread count for NumPy BLAS operations (eigendecomp, matmul). Controls MKL/OpenBLAS via `threadpoolctl`, not OpenMP. **Linux only** — has no effect on macOS Accelerate. |
+| `JAMMA_LOCO_WORKERS` | `1` | Parallel chromosome workers in LOCO mode. Each worker holds a full K_loco matrix (`n_samples^2 x 8` bytes), so increase with caution. |
 
 ```bash
-# Example: 8 JAX devices, 4 BLAS threads per device, 2 LOCO workers
-export JAMMA_JAX_DEVICES=8
+# Example: 4 BLAS threads, 2 LOCO workers
 export JAMMA_BLAS_THREADS=4
 export JAMMA_LOCO_WORKERS=2
 jamma -lmm 1 -bfile data/my_study -loco -o output
 ```
 
 **Note:** `JAMMA_BLAS_THREADS` scopes thread control to BLAS libraries (MKL, OpenBLAS)
-and does not affect OpenMP (`libgomp`/`libomp`) or JAX's XLA thread pool. It has no
+and does not affect OpenMP (`libgomp`/`libomp`). It has no
 effect on macOS Accelerate (which provides no thread-count API). If you have C
 extensions compiled with `-fopenmp`, use `OMP_NUM_THREADS` separately.
 
@@ -713,22 +645,13 @@ print(f"LMM phase: {lmm.total_gb:.1f}GB")
 
 ## Troubleshooting
 
-### JAX not using GPU
-
-Check JAX backend:
-
-```python
-import jax
-print(jax.devices())  # Should show GPU if available
-```
-
 ### Memory errors on large datasets
 
 JAMMA runs a pre-flight memory check before kinship and eigendecomposition. The
 check estimates peak memory (dominated by eigendecomposition: K + U + workspace)
 and applies a 10% safety margin based on empirical benchmarks. When vendor DSYEVR
 is available (via jlinalg BLAS dispatch), JAMMA automatically falls back from DSYEVD
-(faster, O(N²) workspace) to DSYEVR (slower, O(N) workspace) when DSYEVD won't
+(faster, O(N^2) workspace) to DSYEVR (slower, O(N) workspace) when DSYEVD won't
 fit — this can increase the maximum sample count by ~40% for a given machine size.
 
 **Approximate sample limits by machine size:**

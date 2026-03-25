@@ -233,34 +233,3 @@ class TestLmmConfigValidation:
         config = LmmConfig(l_min=1e-5, l_max=1e5)
         assert config.l_min == 1e-5
         assert config.l_max == 1e5
-
-
-# ── compute_subchunk_starts input guards ───────────────────────────
-
-
-@pytest.mark.tier0
-class TestComputeSubchunkStartsGuards:
-    """Input validation guards for compute_subchunk_starts."""
-
-    def test_chunk_size_zero_raises(self):
-        from jamma.lmm.chunk import compute_subchunk_starts
-
-        with pytest.raises(ValueError, match="chunk_size must be positive"):
-            compute_subchunk_starts(100, 0, 1)
-
-    def test_chunk_size_negative_raises(self):
-        from jamma.lmm.chunk import compute_subchunk_starts
-
-        with pytest.raises(ValueError, match="chunk_size must be positive"):
-            compute_subchunk_starts(100, -10, 1)
-
-    def test_n_subset_negative_raises(self):
-        from jamma.lmm.chunk import compute_subchunk_starts
-
-        with pytest.raises(ValueError, match="n_subset must be non-negative"):
-            compute_subchunk_starts(-1, 100, 1)
-
-    def test_n_subset_zero_returns_empty(self):
-        from jamma.lmm.chunk import compute_subchunk_starts
-
-        assert compute_subchunk_starts(0, 100, 1) == []

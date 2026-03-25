@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 
 from jamma.io.covariate import encode_categorical_covariates, read_covariate_file
-from jamma.pipeline import PipelineConfig, PipelineResult, PipelineRunner
+from jamma.pipeline import PipelineConfig, PipelineRunner
 
 FIXTURES = Path(__file__).parent / "fixtures" / "gemma_synthetic"
 BFILE = FIXTURES / "test"
@@ -135,17 +135,6 @@ class TestPipelineErrorPaths:
         """PipelineConfig raises ValueError when output_prefix has path separators."""
         with pytest.raises(ValueError, match="path separators"):
             PipelineConfig(bfile=Path("test"), output_prefix="dir/prefix")
-
-    def test_pipeline_result_invalid_backend_raises(self) -> None:
-        """PipelineResult raises ValueError for unrecognised backend value."""
-        with pytest.raises(ValueError, match="must be"):
-            PipelineResult(
-                associations=[],
-                n_samples=10,
-                n_snps_tested=5,
-                assoc_path=Path("t.txt"),
-                backend="invalid",  # type: ignore[arg-type]
-            )
 
     def test_pipeline_config_invalid_backend_raises(self) -> None:
         """PipelineConfig raises ValueError for unrecognised backend value."""

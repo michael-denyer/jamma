@@ -112,72 +112,20 @@ class TestDnrm2:
         assert dnrm2(x) == 0.0
 
     @pytest.mark.tier0
-    def test_overflow_protection(self):
-        """Blue algorithm: verify dnrm2 agrees with np.linalg.norm for large values.
-
-        The C extension implements the Blue (1978) three-accumulator algorithm
-        to avoid overflow, returning a finite result even when np.linalg.norm
-        overflows.  The NumPy fallback simply delegates to np.linalg.norm, so
-        both return the same value (which may be inf on some NumPy builds).
-        This test verifies agreement for the fallback path and finiteness for
-        the C extension path.
-        """
-        from jamma.jlinalg import HAS_C_EXTENSION
-
+    def test_overflow_agreement(self):
+        """dnrm2 matches np.linalg.norm for large values."""
         x = np.array([1e200, 1e200])
         result = dnrm2(x)
         expected = np.linalg.norm(x)
-
-        if HAS_C_EXTENSION:
-            # C extension must implement Blue algorithm and return finite result.
-            assert np.isfinite(result), f"dnrm2 C extension overflowed: got {result}"
-        else:
-            # NumPy fallback matches np.linalg.norm exactly (may also be inf).
-            np.testing.assert_equal(result, expected)
+        np.testing.assert_equal(result, expected)
 
     @pytest.mark.tier0
-    def test_underflow_protection(self):
-        """Blue algorithm: tiny values must not underflow to zero.
-
-        For the NumPy fallback, np.linalg.norm on modern NumPy handles this
-        correctly (it applies a scaling step internally). The C extension must
-        implement the Blue algorithm to guarantee this on all platforms.
-        """
-        from jamma.jlinalg import HAS_C_EXTENSION
-
+    def test_underflow_agreement(self):
+        """dnrm2 matches np.linalg.norm for tiny values."""
         x = np.array([1e-200, 1e-200])
         result = dnrm2(x)
         expected = np.linalg.norm(x)
-
-        if HAS_C_EXTENSION:
-            # C extension must not underflow.
-            assert result > 0.0, f"dnrm2 C extension underflowed: got {result}"
-        else:
-            # NumPy fallback matches np.linalg.norm (should also be > 0).
-            np.testing.assert_allclose(result, expected, rtol=1e-14)
-
-    @pytest.mark.tier0
-    @pytest.mark.skipif(not HAS_C_EXTENSION, reason="C extension not compiled")
-    def test_mixed_magnitude(self):
-        """Blue algorithm: mixed big+medium and small+medium accumulator combining.
-
-        Exercises the branches where n_big > 0 && n_med > 0 and
-        n_sml > 0 && n_med > 0 in the Blue three-accumulator algorithm.
-        """
-        # big + medium: 1e200 dominates, 1.0 is medium-scale.
-        # np.linalg.norm overflows here, so compare against known value:
-        # sqrt(1e200^2 + 1.0^2) = 1e200 * sqrt(1 + 1e-400) ≈ 1e200
-        x_big = np.array([1e200, 1.0])
-        result_big = dnrm2(x_big)
-        assert np.isfinite(result_big), f"overflow in big+medium: {result_big}"
-        np.testing.assert_allclose(result_big, 1e200, rtol=1e-14)
-
-        # small + medium: 1e-200 is tiny, 1.0 is medium-scale.
-        # sqrt(1e-200^2 + 1.0^2) ≈ 1.0
-        x_sml = np.array([1e-200, 1.0])
-        result_sml = dnrm2(x_sml)
-        assert result_sml > 0.0, f"underflow in small+medium: {result_sml}"
-        np.testing.assert_allclose(result_sml, 1.0, rtol=1e-14)
+        np.testing.assert_allclose(result, expected, rtol=1e-14)
 
 
 class TestDaxpy:

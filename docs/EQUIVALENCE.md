@@ -68,7 +68,7 @@ filtered SNP count.
 | | GEMMA | JAMMA |
 |-|-------|-------|
 | Function | `CalcKin` (lmm.cpp) | `compute_centered_kinship` (kinship/compute.py) |
-| BLAS | OpenBLAS/MKL `dsyrk` | JAX/XLA `matmul` |
+| BLAS | OpenBLAS/MKL `dsyrk` | Vendor BLAS `dsyrk` (via jlinalg) |
 | Batching | 10,000 SNPs | 10,000 SNPs |
 | Missing | Mean imputation | Mean imputation |
 
@@ -105,8 +105,8 @@ consistent sign flips.
 **Bound**: LAPACK backward error `O(n * eps_mach * ||K||)`, giving eigenvalue
 accuracy of `O(10^-13)`.
 
-**Note**: JAMMA uses jlinalg (not JAX) because JAX's int32 buffer indexing
-overflows at ~46k x 46k matrices. See
+**Note**: JAMMA uses jlinalg for vendor LAPACK dispatch because it supports
+ILP64 for large matrices (>46k x 46k). See
 [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md#7-eigendecomposition-implementation).
 
 ---
@@ -192,7 +192,7 @@ SNPs where P_xx is small, amplifying the division).
 ### F-Distribution CDF
 
 - GEMMA: `gsl_cdf_fdist_Q(F, 1, df)` (GSL incomplete beta)
-- JAMMA: `betainc(df/2, 1/2, df/(df+F))` (JAX regularized incomplete beta)
+- JAMMA: `betainc(df/2, 1/2, df/(df+F))` (Cephes regularized incomplete beta)
 
 Both compute the same `I_z(a,b)` but use different polynomial/continued-fraction
 approximations. **Observed**: max relative p-value difference = 2.20e-6.
@@ -268,7 +268,7 @@ Validated on Databricks with MKL ILP64 numpy:
 ### Production Scale (v2.5): 125,632 real samples x 91,586 SNPs
 
 Validated on Databricks (Azure E96ds_v6, 48 physical cores, 672 GB RAM) with
-MKL ILP64 numpy 2.4.2, JAX 0.9.0:
+MKL ILP64 numpy 2.4.2:
 
 | Metric | Result |
 |--------|--------|
@@ -294,7 +294,7 @@ versus mixed OpenBLAS/MKL at 85k.
 |------------|----------|
 | `TestKinshipValidation` | Kinship matrix vs GEMMA |
 | `TestLmmValidation` | Wald test vs GEMMA (synthetic + mouse_hs1940) |
-| `TestLmmJaxValidation` | Wald test vs GEMMA (JAX runner) |
+| `TestLmmStreamingValidation` | Wald test vs GEMMA (streaming runner) |
 | `TestLmmScoreValidation` | Score test vs GEMMA |
 | `TestLmmAllTestsValidation` | All-tests mode vs GEMMA |
 | `TestLmmCovariateValidation` | Covariates vs GEMMA |
@@ -324,7 +324,7 @@ uv run python scripts/demonstrate_equivalence.py
 | `CalcPab` | `calc_pab` | lmm/likelihood.py |
 | `LogRL_f` | `reml_log_likelihood` | lmm/likelihood.py |
 | `LogL_f` | `mle_log_likelihood` | lmm/likelihood.py |
-| `CalcLambda` | `golden_section_optimize_lambda` | lmm/likelihood_jax.py |
+| `CalcLambda` | `golden_section_optimize_lambda` | lmm/likelihood_numpy.py |
 | `CalcRLWald` | `calc_wald_test` | lmm/stats.py |
 | `CalcRLScore` | `calc_score_test` | lmm/stats.py |
 | `gsl_cdf_fdist_Q` | `f_sf` (via `betainc`) | lmm/stats.py |

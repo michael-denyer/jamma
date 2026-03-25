@@ -20,23 +20,9 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
-import urllib.request
 from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
-
-# BLIS prebuilt binary repository and asset naming convention.
-# The BLIS repo ships ILP64 binaries (built with -b 64 -i 64).
-# BLIS uses same symbol names (dgemm_, cblas_dgemm) but with 64-bit int args.
-# blas_dispatch.c detects ILP64 via bli_info_get_int_type_size().
-BLIS_REPO = "michael-denyer/blis-prebuilt"
-BLIS_VERSION = "v0.2.0"
-BLIS_ASSETS = {
-    ("Linux", "x86_64"): "libblis-x86_64.so",  # haswell config
-    ("Linux", "AMD64"): "libblis-x86_64.so",  # alias
-    ("Darwin", "arm64"): "libblis-firestorm.dylib",  # Apple Silicon
-    # Intel Mac: no BLIS binary — Accelerate provides ILP64 via $NEWLAPACK$ILP64
-}
 
 
 class CustomBuildHook(BuildHookInterface):
@@ -138,138 +124,6 @@ class CustomBuildHook(BuildHookInterface):
             ldflags = ["-undefined", "dynamic_lookup"]
 
         return (cc_cmd, cc_extra, python_inc, numpy_inc, ldflags)
-
-    def _fetch_blis_binary(self, build_data) -> Path | None:
-        """Fetch a prebuilt BLIS shared library from GitHub Release assets.
-
-        Checks for a pre-downloaded binary via JLINALG_BLIS_PATH env var first,
-        then attempts to download from the BLIS prebuilt repo. Returns None
-        (non-fatal) if the binary cannot be obtained.
-
-        Set JLINALG_SKIP_BLIS=1 to skip BLIS entirely (e.g. on Linux CI where
-        the prebuilt .so targets a newer glibc than manylinux_2_28 allows).
-
-        Args:
-            build_data: Hatchling build data dict (unused, kept for API symmetry).
-
-        Returns:
-            Path to the BLIS binary, or None if unavailable.
-        """
-        if os.environ.get("JLINALG_SKIP_BLIS", "").strip() == "1":
-            print(
-                "JLINALG_SKIP_BLIS=1 — skipping BLIS bundling.",
-                file=sys.stderr,
-            )
-            return None
-
-        # Allow CI to provide a pre-downloaded binary
-        env_path = os.environ.get("JLINALG_BLIS_PATH")
-        if env_path:
-            blis = Path(env_path)
-            if blis.is_file():
-                print(f"Using pre-downloaded BLIS: {blis}", file=sys.stderr)
-                return blis
-            print(
-                f"WARNING: JLINALG_BLIS_PATH={env_path} does not exist — "
-                "falling back to download.",
-                file=sys.stderr,
-            )
-
-        key = (platform.system(), platform.machine())
-        asset_name = BLIS_ASSETS.get(key)
-        if asset_name is None:
-            print(
-                f"WARNING: No BLIS binary available for platform {key} — "
-                "jlinalg own dgemm will be used.",
-                file=sys.stderr,
-            )
-            return None
-
-        libs_dir = Path(self.root) / "src" / "jamma" / "jlinalg" / "libs"
-        target = libs_dir / asset_name
-
-        # Skip download if already present (repeated builds)
-        if target.is_file():
-            print(f"BLIS binary already present: {target}", file=sys.stderr)
-            return target
-
-        url = (
-            f"https://github.com/{BLIS_REPO}/releases/download/"
-            f"{BLIS_VERSION}/{asset_name}"
-        )
-        libs_dir.mkdir(parents=True, exist_ok=True)
-
-        try:
-            print(f"Downloading BLIS from {url} ...", file=sys.stderr)
-            urllib.request.urlretrieve(url, target)
-            print(f"BLIS downloaded: {target}", file=sys.stderr)
-            return target
-        except Exception as exc:
-            print(
-                f"WARNING: BLIS download failed ({exc}) — "
-                "jlinalg own dgemm will be used.",
-                file=sys.stderr,
-            )
-            # Clean up partial download
-            if target.exists():
-                target.unlink()
-            return None
-
-    def _bundle_blis(self, build_data) -> None:
-        """Fetch and bundle BLIS shared library into the wheel.
-
-        On macOS, sets @loader_path install_name to prevent delocate from
-        moving the dylib to .dylibs/ (which would break blas_dispatch.c's
-        dlopen path).
-
-        Args:
-            build_data: Hatchling build data dict. Updated with force_include
-                if BLIS binary is available.
-        """
-        blis_path = self._fetch_blis_binary(build_data)
-        if blis_path is None:
-            print(
-                "BLIS not bundled (jlinalg own dgemm will be used).",
-                file=sys.stderr,
-            )
-            return
-
-        # macOS: set @loader_path install_name so delocate leaves it in place.
-        # blas_dispatch.c expects BLIS at <extension_dir>/libs/libblis.dylib.
-        if platform.system() == "Darwin" and blis_path.suffix == ".dylib":
-            install_name = "@loader_path/libs/libblis.dylib"
-            try:
-                subprocess.run(
-                    ["install_name_tool", "-id", install_name, str(blis_path)],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                print(
-                    f"Set BLIS install_name to {install_name}",
-                    file=sys.stderr,
-                )
-            except Exception as exc:
-                print(
-                    f"WARNING: install_name_tool failed ({exc}) — "
-                    "delocate may move the dylib.",
-                    file=sys.stderr,
-                )
-
-        # Register BLIS binary for wheel inclusion.
-        # Use generic name (libblis.so / libblis.dylib) so that
-        # blas_dispatch.c's discover_bundled_blis() can find it at runtime
-        # regardless of the platform-specific asset name.
-        build_data.setdefault("force_include", {})
-        generic_name = (
-            "libblis.dylib" if platform.system() == "Darwin" else "libblis.so"
-        )
-        dist_path = f"jamma/jlinalg/libs/{generic_name}"
-        build_data["force_include"][str(blis_path)] = dist_path
-        print(
-            f"BLIS bundled: {blis_path} -> {dist_path}",
-            file=sys.stderr,
-        )
 
     def _detect_linux_openmp_flags(
         self, cc_cmd: str
@@ -477,6 +331,7 @@ class CustomBuildHook(BuildHookInterface):
             "-funroll-loops",
             *extra_cflags,
             "-fno-finite-math-only",  # override -Ofast in CFLAGS; isnan() must work
+            "-Wframe-larger-than=131072",
             "-fPIC",
             "-std=c11",
             f"-I{python_inc}",
@@ -602,77 +457,25 @@ class CustomBuildHook(BuildHookInterface):
             )
             return
 
-        # jlinalg source files split into three groups:
-        # - baseline: portable C compiled without SIMD flags (runs on any x86_64)
-        # - simd: files using AVX2 intrinsics, compiled with -mavx2 -mfma
-        # - kernels: ISA-specific microkernel files (required on target platform)
-        # This ensures the baseline manylinux_x86_64 wheel doesn't SIGILL on
-        # older CPUs that lack AVX2.  Runtime CPUID dispatch in platform.c
-        # selects the appropriate kernels.
+        # jlinalg source files split into two groups:
+        # - baseline: portable C compiled with standard flags
+        # - lapack: eigh.c compiled with strict IEEE 754 flags
         baseline_sources = [
             jlinalg_src / "platform.c",
-            jlinalg_src / "blas_dispatch.c",
-            jlinalg_src / "dnrm2.c",
-            jlinalg_src / "dgemv.c",
             jlinalg_src / "pymodule.c",
-            jlinalg_src / "dgemm.c",  # blocking framework
-            jlinalg_src / "dgemm_generic.c",  # generic scalar microkernel
-            jlinalg_src / "dsyrk.c",  # symmetric rank-k update
-            jlinalg_src / "dsyr2k.c",  # symmetric rank-2k update
-            jlinalg_src / "snp_stats.c",  # single-pass SNP statistics
+            jlinalg_src / "blas_dispatch.c",
+            jlinalg_src / "snp_stats.c",
         ]
-        simd_sources = [
-            jlinalg_src / "ddot.c",
-            jlinalg_src / "daxpy.c",
-            jlinalg_src / "dscal.c",
-        ]
-        # LAPACK sources: strict IEEE 754 required for secular equation deflation.
+        # LAPACK sources: strict IEEE 754 required for vendor LAPACK dispatch.
         # Compiled with -O2 only — MUST NOT get -ffast-math, -Ofast,
         # -ffinite-math-only, or -funroll-loops.
         lapack_sources = [
-            jlinalg_src / "dsytrd.c",
-            jlinalg_src / "dstedc.c",
-            jlinalg_src / "dormtr.c",
             jlinalg_src / "eigh.c",
         ]
 
-        # Kernel directory — required on the matching platform, optional elsewhere.
-        jlinalg_kernels = Path(self.root) / "src" / "jamma" / "jlinalg" / "kernels"
-        avx2_kernel_sources: list[Path] = []
-        neon_kernel_sources: list[Path] = []
-        machine = platform.machine()
-        if jlinalg_kernels.is_dir():
-            avx2_src = jlinalg_kernels / "dgemm_avx2.c"
-            neon_src = jlinalg_kernels / "dgemm_neon.c"
-            if avx2_src.exists():
-                avx2_kernel_sources.append(avx2_src)
-            elif machine in ("x86_64", "AMD64"):
-                raise SystemExit(
-                    f"ERROR: AVX2 dgemm kernel required on "
-                    f"{machine} but not found at {avx2_src}"
-                )
-            if neon_src.exists():
-                neon_kernel_sources.append(neon_src)
-            elif machine in ("aarch64", "arm64"):
-                raise SystemExit(
-                    f"ERROR: NEON dgemm kernel required on "
-                    f"{machine} but not found at {neon_src}"
-                )
+        source_files = baseline_sources + lapack_sources
 
-        source_files = (
-            baseline_sources
-            + simd_sources
-            + avx2_kernel_sources
-            + neon_kernel_sources
-            + lapack_sources
-        )
-
-        # Only fail on missing baseline + simd + lapack sources; kernels checked above
-        missing = [
-            s
-            for s in (baseline_sources + simd_sources + lapack_sources)
-            if not s.exists()
-        ]
+        missing = [s for s in source_files if not s.exists()]
         if missing:
             print(
                 f"WARNING: jlinalg source files missing: {missing} — "
@@ -680,14 +483,6 @@ class CustomBuildHook(BuildHookInterface):
                 file=sys.stderr,
             )
             return
-
-        # On x86_64: AVX2/FMA flags are applied only to simd_sources (ddot.c,
-        # daxpy.c, dscal.c).  Baseline sources (platform.c, pymodule.c, etc.)
-        # are compiled without SIMD flags so the wheel runs on any x86_64 CPU.
-        machine = platform.machine()
-        simd_flags: list[str] = []
-        if machine in ("x86_64", "AMD64"):
-            simd_flags = ["-mavx2", "-mfma"]
 
         # Platform-specific OpenMP flags — split compile/link to avoid
         # loading both libgomp (-fopenmp on GCC linker) and libiomp5 (MKL).
@@ -744,6 +539,7 @@ class CustomBuildHook(BuildHookInterface):
             "-funroll-loops",
             *extra_cflags,
             "-fno-finite-math-only",  # override -Ofast; isnan() must work
+            "-Wframe-larger-than=131072",
             "-fPIC",
             "-std=c11",
             f"-I{python_inc}",
@@ -761,8 +557,6 @@ class CustomBuildHook(BuildHookInterface):
         compile_failed = False
         use_omp = bool(omp_compile)
 
-        simd_source_set = set(str(s) for s in simd_sources)
-        avx2_kernel_set = set(str(s) for s in avx2_kernel_sources)
         lapack_source_set = set(str(s) for s in lapack_sources)
 
         # Strict IEEE 754 flags for LAPACK sources (secular equation deflation
@@ -771,6 +565,7 @@ class CustomBuildHook(BuildHookInterface):
             "-O2",
             "-fno-fast-math",
             "-fno-finite-math-only",
+            "-Wframe-larger-than=131072",
             "-fPIC",
             "-std=c11",
             f"-I{python_inc}",
@@ -786,7 +581,7 @@ class CustomBuildHook(BuildHookInterface):
             """Build the compile command for a single jlinalg source file.
 
             LAPACK sources get strict IEEE 754 flags (no -ffast-math).
-            SIMD/AVX2 sources get -mavx2 -mfma. Baseline sources get base_cflags.
+            Baseline sources get standard optimization flags.
 
             Args:
                 src: Source file path.
@@ -797,29 +592,13 @@ class CustomBuildHook(BuildHookInterface):
                 Compiler command as a list of strings.
             """
             if str(src) in lapack_source_set:
-                return [
-                    cc_cmd,
-                    *cc_extra,
-                    *lapack_cflags,
-                    *omp_compile_flags,
-                    "-c",
-                    str(src),
-                    "-o",
-                    str(obj_file),
-                ]
-            # SIMD sources (ddot, daxpy, dscal) and AVX2 kernel files get
-            # -mavx2 -mfma; NEON kernel files get no extra flags (NEON is
-            # baseline on aarch64); baseline sources get no SIMD flags.
-            extra_simd = (
-                simd_flags
-                if (str(src) in simd_source_set or str(src) in avx2_kernel_set)
-                else []
-            )
+                cflags = lapack_cflags
+            else:
+                cflags = base_cflags
             return [
                 cc_cmd,
                 *cc_extra,
-                *base_cflags,
-                *extra_simd,
+                *cflags,
                 *omp_compile_flags,
                 "-c",
                 str(src),
@@ -924,6 +703,3 @@ class CustomBuildHook(BuildHookInterface):
         build_data["force_include"][str(out_path)] = f"jamma/jlinalg/{out_name}"
         build_data["pure_python"] = False
         build_data["infer_tag"] = True
-
-        # Bundle BLIS shared library (independent of jlinalg .so compilation)
-        self._bundle_blis(build_data)

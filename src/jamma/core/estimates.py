@@ -5,9 +5,13 @@ Polynomial models fitted to v4.2.0 benchmarks on Azure E96ds_v6
 5k, 20k, 50k, 75k, 125k samples at ~95k SNPs.
 
 Models use n_k = n_samples / 1000 for numerical stability:
-  - Kinship:    a*n_k² + b*n_k  (× m/m_ref × cores_ref/cores)
-  - Eigendecomp: c * n_k^alpha  (× cores_ref/cores)  [power law]
-  - LMM:        a*n_k² + b*n_k  (× m/m_ref × cores_ref/cores)
+  - Kinship:    a*n_k² + b*n_k  (× m/m_ref × (cores_ref/cores)^0.7)
+  - Eigendecomp: c * n_k^alpha  (× (cores_ref/cores)^0.7)  [power law]
+  - LMM:        a*n_k² + b*n_k  (× m/m_ref × (cores_ref/cores)^0.7)
+
+Core scaling uses exponent 0.7 (sub-linear) because BLAS operations are
+memory-bandwidth-bound at large matrix sizes — doubling cores does not
+halve runtime. Empirically, 48→32 core scaling is ~1.3x not 1.5x.
 
 Kinship and LMM coefficients fitted via weighted NNLS (weight=1/actual)
 to equalize relative error across scales. Eigendecomp uses a power law
@@ -32,6 +36,7 @@ from jamma.core.threading import get_physical_core_count
 
 _REF_CORES = 48
 _REF_SNPS = 91_586
+_CORE_SCALING_EXP = 0.7  # Sub-linear: BLAS is memory-BW-bound at large N
 
 # Kinship: a*n_k^2 + b*n_k (SNP-normalized)
 # Weighted NNLS fit (weight=1/actual), no constant term.
@@ -72,19 +77,34 @@ def _format_duration(seconds: float) -> str:
     return f"{hours}h {remaining_min}m"
 
 
+def _resolve_cores(n_cores: int | None) -> int:
+    if n_cores is None:
+        return get_physical_core_count()
+    return n_cores
+
+
+def estimate_kinship_seconds(
+    n_samples: int,
+    n_snps: int,
+    n_cores: int | None = None,
+) -> float:
+    """Estimate kinship computation wall time in seconds.
+
+    Polynomial model: a*n_k² + b*n_k, scaled by SNP ratio and core ratio.
+    """
+    n_cores = _resolve_cores(n_cores)
+    n_k = n_samples / 1000
+    snp_ratio = n_snps / _REF_SNPS
+    core_ratio = (_REF_CORES / n_cores) ** _CORE_SCALING_EXP
+    return (_KINSHIP_A * n_k**2 + _KINSHIP_B * n_k) * snp_ratio * core_ratio
+
+
 def estimate_kinship_time(
     n_samples: int,
     n_snps: int,
     n_cores: int | None = None,
 ) -> str:
-    """Estimate kinship computation wall time.
-
-    Polynomial model: a*n_k² + b*n_k, scaled by SNP ratio and core ratio.
-    The quadratic term captures DGEMM accumulation, the linear term
-    captures SNP statistics and I/O overhead.
-
-    This is a minimum estimate — memory pressure and I/O contention
-    are not accounted for.
+    """Estimate kinship computation wall time as a human-readable string.
 
     Args:
         n_samples: Number of samples.
@@ -92,17 +112,23 @@ def estimate_kinship_time(
         n_cores: Physical core count. None auto-detects.
 
     Returns:
-        Human-readable minimum estimate string like ">=5 min".
+        Minimum estimate string like ">=5 min".
     """
-    if n_cores is None:
-        n_cores = get_physical_core_count()
+    return f">={_format_duration(estimate_kinship_seconds(n_samples, n_snps, n_cores))}"
 
+
+def estimate_eigendecomp_seconds(
+    n_samples: int,
+    n_cores: int | None = None,
+) -> float:
+    """Estimate eigendecomposition wall time in seconds.
+
+    Power law model: c * n_k^alpha, scaled by core ratio.
+    """
+    n_cores = _resolve_cores(n_cores)
     n_k = n_samples / 1000
-    snp_ratio = n_snps / _REF_SNPS
-    core_ratio = _REF_CORES / n_cores
-
-    est = (_KINSHIP_A * n_k**2 + _KINSHIP_B * n_k) * snp_ratio * core_ratio
-    return f">={_format_duration(est)}"
+    core_ratio = (_REF_CORES / n_cores) ** _CORE_SCALING_EXP
+    return _EIGEN_COEFF * n_k**_EIGEN_ALPHA * core_ratio
 
 
 def estimate_eigendecomp_time(
@@ -111,17 +137,7 @@ def estimate_eigendecomp_time(
     *,
     use_dsyevr: bool = False,
 ) -> str:
-    """Estimate eigendecomposition wall time.
-
-    Power law model: c * n_k^alpha, scaled by core ratio. The exponent
-    (~2.72) is sub-cubic because BLAS efficiency varies with matrix size:
-    small matrices are cache-bound (faster per-FLOP), large matrices are
-    memory-bandwidth-bound.
-
-    DSYEVR and DSYEVD perform comparably at these scales — no driver-
-    specific multiplier is applied.
-
-    This is a minimum estimate — memory pressure is not accounted for.
+    """Estimate eigendecomposition wall time as a human-readable string.
 
     Args:
         n_samples: Number of samples.
@@ -129,16 +145,25 @@ def estimate_eigendecomp_time(
         use_dsyevr: Accepted for API compatibility. No multiplier applied.
 
     Returns:
-        Human-readable minimum estimate string like ">=1h 47m".
+        Minimum estimate string like ">=1h 47m".
     """
-    if n_cores is None:
-        n_cores = get_physical_core_count()
+    return f">={_format_duration(estimate_eigendecomp_seconds(n_samples, n_cores))}"
 
+
+def estimate_lmm_seconds(
+    n_samples: int,
+    n_snps: int,
+    n_cores: int | None = None,
+) -> float:
+    """Estimate LMM association wall time in seconds.
+
+    Polynomial model: a*n_k² + b*n_k, scaled by SNP ratio and core ratio.
+    """
+    n_cores = _resolve_cores(n_cores)
     n_k = n_samples / 1000
-    core_ratio = _REF_CORES / n_cores
-
-    est = _EIGEN_COEFF * n_k**_EIGEN_ALPHA * core_ratio
-    return f">={_format_duration(est)}"
+    snp_ratio = n_snps / _REF_SNPS
+    core_ratio = (_REF_CORES / n_cores) ** _CORE_SCALING_EXP
+    return (_LMM_A * n_k**2 + _LMM_B * n_k) * snp_ratio * core_ratio
 
 
 def estimate_lmm_time(
@@ -146,14 +171,7 @@ def estimate_lmm_time(
     n_snps: int,
     n_cores: int | None = None,
 ) -> str:
-    """Estimate LMM association wall time.
-
-    Polynomial model: a*n_k² + b*n_k, scaled by SNP ratio and core ratio.
-    The quadratic term captures UT@G rotation (DGEMM) and eigen/genotype
-    loading. The linear term captures Wald test compute (C extension).
-
-    This is a minimum estimate — covariates increase per-SNP Pab
-    computation cost, and memory pressure adds further overhead.
+    """Estimate LMM association wall time as a human-readable string.
 
     Args:
         n_samples: Number of samples.
@@ -161,14 +179,6 @@ def estimate_lmm_time(
         n_cores: Physical core count. None auto-detects.
 
     Returns:
-        Human-readable minimum estimate string like ">=15 min".
+        Minimum estimate string like ">=15 min".
     """
-    if n_cores is None:
-        n_cores = get_physical_core_count()
-
-    n_k = n_samples / 1000
-    snp_ratio = n_snps / _REF_SNPS
-    core_ratio = _REF_CORES / n_cores
-
-    est = (_LMM_A * n_k**2 + _LMM_B * n_k) * snp_ratio * core_ratio
-    return f">={_format_duration(est)}"
+    return f">={_format_duration(estimate_lmm_seconds(n_samples, n_snps, n_cores))}"

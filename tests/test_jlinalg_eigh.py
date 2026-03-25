@@ -661,15 +661,11 @@ class TestThreadControl:
         # Restore
         set_n_threads(original)
 
-    def test_set_n_threads_clamps_upward(self) -> None:
-        """set_n_threads(9999) clamps to init-time max, not 9999."""
+    def test_set_n_threads_accepts_large(self) -> None:
+        """set_n_threads(9999) stores the value (no clamping after own-BLAS removal)."""
         original = get_n_threads()
         set_n_threads(9999)
-        clamped = get_n_threads()
-        assert clamped <= original, (
-            f"set_n_threads(9999) set {clamped}, expected <= init max {original}"
-        )
-        assert clamped >= 1
+        assert get_n_threads() == 9999
         # Restore
         set_n_threads(original)
 

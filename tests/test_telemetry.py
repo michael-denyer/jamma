@@ -101,7 +101,9 @@ def test_multiple_records_appended(tmp_path: Path) -> None:
     dest = tmp_path / "benchmarks.jsonl"
 
     append_benchmark_record({"n_samples": 1000, "backend": "numpy-batch"}, path=dest)
-    append_benchmark_record({"n_samples": 2000, "backend": "jax-streaming"}, path=dest)
+    append_benchmark_record(
+        {"n_samples": 2000, "backend": "numpy-streaming"}, path=dest
+    )
 
     lines = dest.read_text().splitlines()
     assert len(lines) == 2
@@ -111,7 +113,7 @@ def test_multiple_records_appended(tmp_path: Path) -> None:
     assert rec1["n_samples"] == 1000
     assert rec2["n_samples"] == 2000
     assert rec1["backend"] == "numpy-batch"
-    assert rec2["backend"] == "jax-streaming"
+    assert rec2["backend"] == "numpy-streaming"
 
 
 def test_each_line_independently_parseable(tmp_path: Path) -> None:

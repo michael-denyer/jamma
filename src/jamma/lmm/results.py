@@ -1,11 +1,10 @@
 """Result building functions for LMM association tests.
 
 Constructs AssocResult objects from computed statistics for each
-test mode (Wald, Score, LRT, All). Used by batch runners (JAX and NumPy)
+test mode (Wald, Score, LRT, All). Used by batch runners (NumPy)
 in both in-memory and output_path streaming modes via ``write_streaming_chunk``
 (which wraps ``IncrementalAssocWriter.write_arrays_batch`` with diagnostic
-accumulation). The disk-streaming runner (runner_jax_streaming.py) calls
-``write_arrays_batch`` directly, bypassing this module's write path.
+accumulation).
 """
 
 from collections.abc import Generator
@@ -100,42 +99,6 @@ def _build_results(
     return results
 
 
-def _chunk_result_to_numpy(
-    result: dict[str, object | None],
-    keys: tuple[str, ...],
-    actual_len: int,
-) -> dict[str, np.ndarray]:
-    """Transfer the active slice of a JAX chunk result to host numpy arrays.
-
-    Used by streaming runners to flush each JAX sub-chunk immediately instead of
-    retaining multiple device-resident result arrays until the enclosing disk
-    chunk completes.
-
-    Args:
-        result: Dict returned by ``_compute_lmm_chunk``.
-        keys: Mode-specific array keys to materialize on host.
-        actual_len: Number of real (non-padded) SNPs in this sub-chunk.
-
-    Returns:
-        Dict mapping each requested key to a numpy array of length
-        ``actual_len``.
-    """
-    import jax  # lazy — only when JAX runner path executes
-
-    sliced: dict[str, object] = {}
-    for key in keys:
-        value = result[key]
-        if value is None:
-            raise ValueError(f"Chunk result missing required array {key!r}")
-        if value.shape[0] < actual_len:
-            raise ValueError(
-                f"Array {key!r} has {value.shape[0]} elements, "
-                f"but actual_len={actual_len}"
-            )
-        sliced[key] = value[:actual_len]
-    return jax.device_get(sliced)
-
-
 def _yield_chunk_results(
     lmm_mode: int,
     filtered_indices: list[int],
@@ -148,7 +111,7 @@ def _yield_chunk_results(
     """Yield AssocResult objects for a streaming file chunk.
 
     Builds one result per filtered SNP from the numpy arrays for a single
-    sub-chunk (as returned by ``_chunk_result_to_numpy``).
+    sub-chunk.
 
     Args:
         lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
@@ -253,9 +216,8 @@ def write_streaming_chunk(
 ) -> tuple[int, int]:
     """Write a chunk to disk and accumulate diagnostics.
 
-    Used by the batch JAX and NumPy runners when output_path is set.
-    The disk-streaming runner (runner_jax_streaming.py) handles its own
-    write/diagnostic loop inline.
+    Used by the batch and streaming runners when output_path is set.
+    The disk-streaming runner handles its own write/diagnostic loop inline.
 
     Args:
         writer: IncrementalAssocWriter instance.

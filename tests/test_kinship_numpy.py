@@ -1,9 +1,7 @@
-"""Pure-NumPy tests for kinship computation helpers.
+"""Tests for kinship computation helpers.
 
 These tests exercise impute_and_center, impute_center_and_standardize, and
-compute_centered_kinship without requiring JAX.  They run in JAX-free CI
-environments where test_kinship_compute.py (gated by ``requires_jax``) is
-skipped.
+compute_centered_kinship.
 """
 
 import numpy as np

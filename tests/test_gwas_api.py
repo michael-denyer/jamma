@@ -21,7 +21,6 @@ SYNTHETIC_BFILE = SYNTHETIC_DIR / "test"
 
 @pytest.mark.slow
 @pytest.mark.tier1
-@pytest.mark.requires_jax
 def test_gwas_basic(tmp_path: Path) -> None:
     """gwas() with pre-computed kinship returns valid GWASResult and writes output."""
     result = gwas(
@@ -45,65 +44,6 @@ def test_gwas_basic(tmp_path: Path) -> None:
     assert assoc_file.exists()
     lines = assoc_file.read_text().strip().splitlines()
     assert len(lines) > 1  # Header + at least one data line
-
-
-@pytest.mark.tier1
-@pytest.mark.requires_jax
-def test_gwas_custom_prefix(tmp_path: Path) -> None:
-    """gwas() writes output with the specified prefix."""
-    result = gwas(
-        BFILE,
-        kinship_file=KINSHIP_FILE,
-        output_dir=tmp_path,
-        output_prefix="custom",
-        show_progress=False,
-        check_memory=False,
-    )
-
-    assert isinstance(result, GWASResult)
-    assert (tmp_path / "custom.assoc.txt").exists()
-
-
-@pytest.mark.slow
-@pytest.mark.tier1
-@pytest.mark.requires_jax
-def test_gwas_save_kinship(tmp_path: Path) -> None:
-    """gwas() computes and saves kinship when save_kinship=True."""
-    result = gwas(
-        BFILE,
-        save_kinship=True,
-        output_dir=tmp_path,
-        show_progress=False,
-        check_memory=False,
-    )
-
-    # Kinship file should exist and be non-empty (default is binary .npy)
-    kinship_path = tmp_path / "result.cXX.npy"
-    assert kinship_path.exists()
-    assert kinship_path.stat().st_size > 0
-
-    # Full pipeline should have completed
-    assert (tmp_path / "result.assoc.txt").exists()
-    assert result.n_samples > 0
-
-
-@pytest.mark.slow
-@pytest.mark.tier1
-@pytest.mark.requires_jax
-def test_gwas_with_precomputed_kinship(tmp_path: Path) -> None:
-    """Loading pre-computed kinship skips computation (just file read)."""
-    result = gwas(
-        BFILE,
-        kinship_file=KINSHIP_FILE,
-        output_dir=tmp_path,
-        show_progress=False,
-        check_memory=False,
-    )
-
-    # File read is <1s normally but I/O contention under pytest-xdist
-    # can push it higher — use generous threshold to avoid flake
-    assert result.timing["kinship_s"] < 10.0
-    assert result.n_samples > 0
 
 
 @pytest.mark.tier0

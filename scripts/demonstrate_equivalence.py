@@ -1,6 +1,6 @@
 """Numerical equivalence and performance report: JAMMA vs GEMMA.
 
-Runs JAMMA's JAX runner against GEMMA reference data on two datasets:
+Runs JAMMA's NumPy runner against GEMMA reference data on two datasets:
   1. gemma_synthetic (100 samples, 500 SNPs) — tight tolerances
   2. mouse_hs1940 (1940 samples, 12226 SNPs) — real data, wider tolerances
 
@@ -25,20 +25,17 @@ from scipy.stats import spearmanr
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from jamma.core import configure_jax  # noqa: E402
 from jamma.io import load_plink_binary  # noqa: E402
 from jamma.kinship import compute_centered_kinship  # noqa: E402
 from jamma.kinship.io import read_kinship_matrix  # noqa: E402
-from jamma.lmm.runner_jax import run_lmm_association_jax  # noqa: E402
+from jamma.lmm.runner_numpy import run_lmm_association_numpy  # noqa: E402
 from jamma.validation import (  # noqa: E402
     load_gemma_assoc,
     load_gemma_kinship,
 )
 
-configure_jax(enable_x64=True)
-
-# Common JAX runner kwargs
-JAX_KWARGS = dict(n_grid=50, n_refine=20, show_progress=False, check_memory=False)
+# Common runner kwargs
+RUNNER_KWARGS = dict(n_grid=50, n_refine=20, show_progress=False, check_memory=False)
 
 
 # --- Dataset configurations ---
@@ -444,14 +441,14 @@ def run_dataset(
         covar = covariates if spec.use_covariates else None
 
         t0 = time.perf_counter()
-        run_result = run_lmm_association_jax(
+        run_result = run_lmm_association_numpy(
             genotypes=plink_data.genotypes,
             phenotypes=phenotypes,
             kinship=ref_kinship,
             snp_info=snp_info,
             covariates=covar,
             lmm_mode=spec.lmm_mode,
-            **JAX_KWARGS,
+            **RUNNER_KWARGS,
         )
         jamma_results = run_result.associations
         t_elapsed = time.perf_counter() - t0
@@ -484,7 +481,7 @@ def main():
     print("  JAMMA vs GEMMA: Numerical Equivalence & Performance Report")
     print("=" * 70)
     print(f"  Date: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print("  Runner: JAX (grid search + golden section)")
+    print("  Runner: NumPy (grid search + golden section)")
 
     all_timings: list[SectionTiming] = []
     all_passed = True

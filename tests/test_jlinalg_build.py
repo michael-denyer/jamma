@@ -146,11 +146,6 @@ def test_all_exports_present():
         "jlinalg_isa",
         "HAS_C_EXTENSION",
         "HAS_OPENMP",
-        "JLINALG_MR",
-        "JLINALG_NR",
-        "JLINALG_KC",
-        "JLINALG_MC",
-        "JLINALG_NC",
         "compute_snp_stats_chunk",
     }
     missing = expected - set(jlinalg.__all__)
@@ -159,10 +154,10 @@ def test_all_exports_present():
 
 @pytest.mark.tier0
 def test_abi_version():
-    """ABI_VERSION is 11 (bumped for snp_stats C kernel)."""
+    """ABI_VERSION is 12 (bumped for vendor-only dispatch, own-BLAS removed)."""
     from jamma.jlinalg import ABI_VERSION
 
-    assert ABI_VERSION == 11, f"Expected ABI_VERSION=11, got {ABI_VERSION}"
+    assert ABI_VERSION == 12, f"Expected ABI_VERSION=12, got {ABI_VERSION}"
 
 
 @pytest.mark.tier0

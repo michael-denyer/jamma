@@ -168,7 +168,7 @@ def _numpy_standardized_kinship(genotypes: np.ndarray) -> np.ndarray:
     compute variance on imputed data (E[X^2] - E[X]^2), standardize.
 
     Uses a per-SNP loop for clarity. Note that this produces slightly different
-    floating-point results from JAX's vectorized operations due to different
+    floating-point results from vectorized operations due to different
     reduction order, so comparisons need rtol ~1e-6 not 1e-8.
     """
     n_samples, n_snps = genotypes.shape
@@ -198,8 +198,8 @@ class TestStandardizedKinshipValidation:
     def test_standardized_kinship_matches_numpy_reference(self, mouse_genotypes):
         """JAMMA standardized kinship matches NumPy reference on gemma_synthetic.
 
-        Tolerance is rtol=1e-3 because JAX vectorized nanmean/variance uses
-        different reduction order than NumPy per-SNP scalar loop. The per-element
+        Tolerance is rtol=1e-3 because vectorized nanmean/variance uses
+        different reduction order than the per-SNP scalar loop. The per-element
         Z difference (~1e-6 relative) accumulates through the matrix multiply to
         ~5e-4 relative on K elements. This is normal FP behavior, not a bug.
         """

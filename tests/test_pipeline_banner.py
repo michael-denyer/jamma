@@ -30,34 +30,15 @@ class TestFormatPipelineBanner:
             result == "Pipeline: numpy-batch | OpenBLAS | DSYEVR | no C-ext (8 threads)"
         )
 
-    def test_jax_streaming_with_devices(self) -> None:
+    def test_numpy_streaming(self) -> None:
         result = format_pipeline_banner(
-            runner="jax-streaming",
-            blas="openblas",
-            eigen_driver="DSYEVR",
-            c_ext=False,
-            threads=8,
-            jax_devices=4,
-        )
-        expected = (
-            "Pipeline: jax-streaming | OpenBLAS"
-            " | DSYEVR | no C-ext (8 threads, 4 JAX devices)"
-        )
-        assert result == expected
-
-    def test_jax_batch_with_devices(self) -> None:
-        result = format_pipeline_banner(
-            runner="jax-batch",
+            runner="numpy-streaming",
             blas="mkl",
             eigen_driver="DSYEVD",
-            c_ext=False,
+            c_ext=True,
             threads=16,
-            jax_devices=4,
         )
-        expected = (
-            "Pipeline: jax-batch | MKL | DSYEVD | no C-ext (16 threads, 4 JAX devices)"
-        )
-        assert result == expected
+        assert result == "Pipeline: numpy-streaming | MKL | DSYEVD | C-ext (16 threads)"
 
     def test_unknown_blas_backend(self) -> None:
         result = format_pipeline_banner(
@@ -81,14 +62,16 @@ class TestFormatPipelineBanner:
             result == "Pipeline: numpy-batch | Accelerate | DSYEVD | C-ext (10 threads)"
         )
 
-    def test_jax_without_devices_no_suffix(self) -> None:
-        """JAX runner with jax_devices=0 should not append device count."""
-        result = format_pipeline_banner(
-            runner="jax-batch",
-            blas="mkl",
-            eigen_driver="DSYEVD",
-            c_ext=False,
-            threads=16,
-            jax_devices=0,
-        )
-        assert result == "Pipeline: jax-batch | MKL | DSYEVD | no C-ext (16 threads)"
+    def test_extra_kwargs_rejected(self) -> None:
+        """Extra keyword arguments raise TypeError (fail-fast, no silent swallow)."""
+        import pytest
+
+        with pytest.raises(TypeError):
+            format_pipeline_banner(
+                runner="numpy-batch",
+                blas="mkl",
+                eigen_driver="DSYEVD",
+                c_ext=False,
+                threads=16,
+                some_extra_param=4,
+            )

@@ -134,6 +134,9 @@ def eigendecompose_kinship(
     # JLINALG_NO_VENDOR_LAPACK forces np.linalg.eigh instead of vendor LAPACK.
     dsyevd_peak = _dsyevd_peak_gb(n_samples)
     no_vendor = os.environ.get("JLINALG_NO_VENDOR_LAPACK", "").strip() not in ("", "0")
+    if not no_vendor and not jlinalg.blas_has_dsyevd and not jlinalg.blas_has_dsyevr:
+        no_vendor = True
+        logger.info("No vendor LAPACK (DSYEVD/DSYEVR) — using np.linalg.eigh")
     use_inplace = (
         not no_vendor
         and bool(jlinalg.blas_has_dsyevd)

@@ -114,9 +114,7 @@ try:
             if A.ndim != 2:
                 raise ValueError(f"svd: A must be a 2-D array, got {A.ndim}-D")
             if A.shape[0] < A.shape[1]:
-                raise ValueError(
-                    f"svd: requires m >= n, got shape {A.shape}"
-                )
+                raise ValueError(f"svd: requires m >= n, got shape {A.shape}")
             A64 = A.astype(_np.float64, copy=False)
             if compute_uv:
                 return _np.linalg.svd(A64, full_matrices=False)

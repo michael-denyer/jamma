@@ -77,7 +77,6 @@ def select_execution_mode(
     *,
     requested: Literal["auto", "numpy", "numpy-streaming"] = "auto",
     n_cvt: int = 1,
-    lmm_mode: int = 1,
 ) -> ExecutionPlan:
     """Select the optimal execution backend and mode.
 
@@ -104,8 +103,6 @@ def select_execution_mode(
             accurate memory estimates (Uab is larger with more covariates)
             and to guard against numpy-batch when the C general extension is
             unavailable for n_cvt > 1.
-        lmm_mode: LMM test type (1=Wald, 2=LRT, 3=Score, 4=All). Accepted
-            for API symmetry with ``run_lmm()``; not used in selection logic.
 
     Returns:
         ExecutionPlan with backend, mode, and reason.

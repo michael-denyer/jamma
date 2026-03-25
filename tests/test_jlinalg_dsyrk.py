@@ -819,7 +819,12 @@ class TestDsyrkDsyr2kThreadSafety:
         )
 
     def test_dsyr2k_single_vs_multi_thread(self) -> None:
-        """OMP_NUM_THREADS=1 vs 4 give bitwise-identical dsyr2k results."""
+        """OMP_NUM_THREADS=1 vs 4 give near-identical dsyr2k results.
+
+        dsyr2k is always the NumPy fallback (not from C extension), so
+        different thread counts may produce different FP accumulation order
+        in the underlying BLAS. We allow small differences (atol=1e-13).
+        """
         import os
         import subprocess
         import sys
@@ -866,12 +871,16 @@ class TestDsyrkDsyr2kThreadSafety:
         )
         C_multi = np.frombuffer(result_multi.stdout, dtype=np.float64).reshape(300, 300)
 
-        npt.assert_array_equal(
+        # dsyr2k uses NumPy matmul which dispatches to system BLAS —
+        # different thread counts can produce different FP accumulation order.
+        npt.assert_allclose(
             C_single,
             C_multi,
+            atol=1e-13,
+            rtol=0,
             err_msg=(
-                "dsyr2k results differ between OMP_NUM_THREADS=1 "
-                "and OMP_NUM_THREADS=4 — thread-safety bug."
+                "dsyr2k results differ significantly between OMP_NUM_THREADS=1 "
+                "and OMP_NUM_THREADS=4."
             ),
         )
 

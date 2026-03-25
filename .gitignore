@@ -59,3 +59,8 @@ AGENTS.md
 
 # Legacy archived code (v5.0 simplification)
 legacy/
+
+.code-review-graph/
+
+.uv-cache/
+docs/superpowers/

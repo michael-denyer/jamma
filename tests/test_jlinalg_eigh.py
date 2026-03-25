@@ -27,10 +27,14 @@ import pytest
 from jamma.jlinalg import (
     HAS_C_EXTENSION,
     blas_has_dsyevd,
+    blas_has_dsyevr,
     eigh,
     get_n_threads,
     set_n_threads,
 )
+
+# True when the C extension can actually run eigh (has vendor DSYEVD or DSYEVR).
+_HAS_VENDOR_LAPACK = HAS_C_EXTENSION and (blas_has_dsyevd or blas_has_dsyevr)
 
 # ---------------------------------------------------------------------------
 # Assertion helpers — reconstruction and orthogonality checks
@@ -384,7 +388,7 @@ def test_block_diagonal_stress() -> None:
         block = block / block.max()
         K[start:end, start:end] = block
 
-    if HAS_C_EXTENSION:
+    if _HAS_VENDOR_LAPACK:
         K_copy = K.copy()
         w, v, status = _call_eigh_with_status(K_copy)
         assert status.secular_failures == 0, (
@@ -1007,8 +1011,8 @@ def _call_eigh_with_status(
 
 
 @pytest.mark.skipif(
-    not HAS_C_EXTENSION,
-    reason="C extension required for secular failure detection",
+    not _HAS_VENDOR_LAPACK,
+    reason="Vendor LAPACK (DSYEVD/DSYEVR) required for secular failure detection",
 )
 class TestDstedcNoSecularFailures:
     """Test secular solver convergence and D&C eigenvector quality.
@@ -1089,8 +1093,8 @@ class TestDstedcNoSecularFailures:
 
 
 @pytest.mark.skipif(
-    not HAS_C_EXTENSION,
-    reason="C extension required for dlaed4 convergence tests",
+    not _HAS_VENDOR_LAPACK,
+    reason="Vendor LAPACK (DSYEVD/DSYEVR) required for dlaed4 convergence tests",
 )
 class TestDlaed4Convergence:
     """Test dlaed4 convergence on known-difficult secular equation inputs.

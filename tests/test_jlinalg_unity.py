@@ -16,7 +16,7 @@ import sys
 
 import pytest
 
-from jamma.jlinalg import HAS_C_EXTENSION
+from jamma.jlinalg import HAS_C_EXTENSION, blas_has_dsyevd, blas_has_dsyevr
 
 
 def _python_env() -> dict[str, str]:
@@ -43,6 +43,8 @@ def c_test_binary():
     """Compile and return path to C test binary."""
     if not HAS_C_EXTENSION:
         pytest.skip("jlinalg C extension not compiled")
+    if not blas_has_dsyevd and not blas_has_dsyevr:
+        pytest.skip("No vendor LAPACK — C eigh tests require DSYEVD or DSYEVR")
     from jamma.jlinalg._compile_jlinalg import compile_test_harness
 
     try:

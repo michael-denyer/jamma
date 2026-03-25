@@ -139,6 +139,9 @@ class TestEigendecompThreading:
         """
         # Mock get_physical_core_count to report 48 physical cores
         monkeypatch.setattr("jamma.lmm.eigen.get_physical_core_count", lambda: 48)
+        # Force vendor path so blas_threads is actually called
+        monkeypatch.setattr("jamma.lmm.eigen.jlinalg.blas_has_dsyevd", 1)
+        monkeypatch.setattr("jamma.lmm.eigen.jlinalg.blas_has_dsyevr", 0)
 
         # Track what thread count blas_threads() is called with
         captured_threads = []
@@ -178,6 +181,9 @@ class TestEigendecompThreading:
             "jamma.core.threading.psutil.cpu_count", lambda logical=False: None
         )
         monkeypatch.setattr("jamma.core.threading.os.cpu_count", lambda: 64)
+        # Force vendor path so blas_threads is actually called
+        monkeypatch.setattr("jamma.lmm.eigen.jlinalg.blas_has_dsyevd", 1)
+        monkeypatch.setattr("jamma.lmm.eigen.jlinalg.blas_has_dsyevr", 0)
 
         captured_threads = []
         original_blas_threads = blas_threads

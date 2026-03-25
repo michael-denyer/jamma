@@ -142,9 +142,13 @@ class TestEigendecomposition:
 
         K = np.eye(10)
 
-        with patch(
-            "jamma.lmm.eigen.jlinalg.eigh",
-            side_effect=numpy.linalg.LinAlgError("SVD did not converge"),
+        with (
+            patch(
+                "jamma.lmm.eigen.jlinalg.eigh",
+                side_effect=numpy.linalg.LinAlgError("SVD did not converge"),
+            ),
+            patch("jamma.lmm.eigen.jlinalg.blas_has_dsyevd", 1),
+            patch("jamma.lmm.eigen.jlinalg.blas_has_dsyevr", 0),
         ):
             with pytest.raises(numpy.linalg.LinAlgError, match="SVD did not converge"):
                 eigendecompose_kinship(K, check_memory=False)

@@ -278,6 +278,19 @@ flowchart TD
     CEXT -->|no| PY["Pure Python<br>fallback"]
     C --> RES["AssocResult"]
     PY --> RES
+
+    style CLI fill:#4a90d9,stroke:#2c6faf,color:#fff
+    style PIPE fill:#4a90d9,stroke:#2c6faf,color:#fff
+    style LOAD fill:#5ba55b,stroke:#3d7a3d,color:#fff
+    style KIN fill:#5ba55b,stroke:#3d7a3d,color:#fff
+    style EIG fill:#e88a3a,stroke:#c06a1a,color:#fff
+    style MEM fill:#f5c542,stroke:#d4a520,color:#333
+    style NP fill:#7b68ae,stroke:#5a4d8a,color:#fff
+    style NPS fill:#7b68ae,stroke:#5a4d8a,color:#fff
+    style CEXT fill:#f5c542,stroke:#d4a520,color:#333
+    style C fill:#d95050,stroke:#b33030,color:#fff
+    style PY fill:#6bbfbf,stroke:#4a9e9e,color:#fff
+    style RES fill:#888,stroke:#666,color:#fff
 ```
 
 Core algorithms ([likelihood.py](src/jamma/lmm/likelihood.py), [prepare_common.py](src/jamma/lmm/prepare_common.py)) are shared between batch and streaming runners.
@@ -294,6 +307,14 @@ graph TD
     D -->|Loaded| E["Vendor Dispatch<br/>MKL-ILP64 / Accelerate-ILP64"]
     D -->|Not loaded| G["NumPy Fallback"]
     B --> H["_lmm_accel.c<br/>Wald/Score/LRT"]
+
+    style A fill:#4a90d9,stroke:#2c6faf,color:#fff
+    style B fill:#7b68ae,stroke:#5a4d8a,color:#fff
+    style C fill:#5ba55b,stroke:#3d7a3d,color:#fff
+    style D fill:#f5c542,stroke:#d4a520,color:#333
+    style E fill:#e88a3a,stroke:#c06a1a,color:#fff
+    style G fill:#6bbfbf,stroke:#4a9e9e,color:#fff
+    style H fill:#d95050,stroke:#b33030,color:#fff
 ```
 
 jlinalg provides vendor LAPACK dispatch (DSYEVD/DSYEVR) for eigendecomposition and symmetric BLAS specialization (dsyrk). See the [jlinalg Architecture](docs/JLINALG_ARCHITECTURE.md) doc for layer diagrams and the contributing guide.

@@ -23,7 +23,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync
 
       - name: Lint and format check via pre-commit
         run: uv run pre-commit run --all-files
@@ -36,19 +36,15 @@ jobs:
         include:
           - os: ubuntu-latest
             python-version: "3.12"
-            install_args: "--extra dev"
             name: "Linux + NumPy (3.12)"
           - os: ubuntu-latest
             python-version: "3.11"
-            install_args: "--extra dev"
             name: "Linux + NumPy (3.11)"
           - os: macos-latest
             python-version: "3.12"
-            install_args: "--extra dev"
             name: "ARM Mac + NumPy"
           - os: ubuntu-latest
             python-version: "3.12"
-            install_args: "--extra dev"
             name: "Linux + MKL ILP64"
             ilp64_numpy: true
     name: ${{ matrix.name }}
@@ -63,7 +59,7 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: uv sync ${{ matrix.install_args }}
+        run: uv sync
 
       - name: Install MKL ILP64 numpy
         if: matrix.ilp64_numpy
@@ -96,6 +92,7 @@ jobs:
           "
 
       - name: Run tests
+        # addopts= clears pyproject.toml defaults so CI controls markers and parallelism explicitly
         run: uv run pytest ${{ matrix.pytest_args || '-m "not tier2 and not tier3 and not slow and not benchmark"' }} -v -n 3 -o 'addopts='
 
   coverage:
@@ -112,11 +109,14 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync
 
       - name: Compile C extensions
         run: |
           uv run python -m jamma.lmm._compile_accel
+
+      - name: Compile jlinalg extension
+        run: |
           uv run python -m jamma.jlinalg._compile_jlinalg
 
       - name: Run tests with slipcover

@@ -6,57 +6,57 @@ Architectural overview with bidirectional links between diagram nodes and source
 
 ```mermaid
 flowchart TB
-    subgraph L1["Entry Points [1]"]
-        CLI["CLI (click) [1a]"]
-        GWAS["gwas() API [1b]"]
-        PIPE["PipelineRunner [1c]"]
+    subgraph L1["🚀 Entry Points"]
+        CLI["CLI (click)<br/><small>1a</small>"]
+        GWAS["gwas() API<br/><small>1b</small>"]
+        PIPE["PipelineRunner<br/><small>1c</small>"]
     end
 
-    subgraph L2["I/O Layer [2]"]
-        PLINK["PLINK Reader [2a]"]
-        COVAR["Covariate Reader [2b]"]
-        KIO["Kinship I/O [2c]"]
-        RIO["Result Writer [2d]"]
-        SNPLIST["SNP List I/O [2e]"]
-        EIGIO["Eigen I/O [2f]"]
-        MATIO["Matrix Writer [2g]"]
+    subgraph L2["📂 I/O Layer"]
+        PLINK["PLINK Reader<br/><small>2a</small>"]
+        COVAR["Covariate Reader<br/><small>2b</small>"]
+        KIO["Kinship I/O<br/><small>2c</small>"]
+        RIO["Result Writer<br/><small>2d</small>"]
+        SNPLIST["SNP List I/O<br/><small>2e</small>"]
+        EIGIO["Eigen I/O<br/><small>2f</small>"]
+        MATIO["Matrix Writer<br/><small>2g</small>"]
     end
 
-    subgraph L3["Core Computation [3]"]
-        KINSHIP["Kinship Compute [3a]"]
-        MISSING["Missing Imputation [3b]"]
-        EIGEN["Eigendecomposition [3c]"]
-        JLINALG["jlinalg C Layer [3c']"]
-        LIKE["REML Likelihood [3d]"]
-        OPT["Lambda Optimizer [3e]"]
-        STATS["Test Statistics [3f]"]
-        SNPF["SNP Filters [3g]"]
-        PREPCOM["Shared Preparation [3h]"]
-        SPECIAL["Special Functions [3i]"]
+    subgraph L3["🧮 Core Computation"]
+        KINSHIP["Kinship Compute<br/><small>3a</small>"]
+        MISSING["Missing Imputation<br/><small>3b</small>"]
+        EIGEN["Eigendecomposition<br/><small>3c</small>"]
+        JLINALG["jlinalg C Layer<br/><small>3c'</small>"]
+        LIKE["REML Likelihood<br/><small>3d</small>"]
+        OPT["Lambda Optimizer<br/><small>3e</small>"]
+        STATS["Test Statistics<br/><small>3f</small>"]
+        SNPF["SNP Filters<br/><small>3g</small>"]
+        PREPCOM["Shared Preparation<br/><small>3h</small>"]
+        SPECIAL["Special Functions<br/><small>3i</small>"]
     end
 
-    subgraph L4N["NumPy Backend [4N]"]
-        LIKENP["Batch Likelihood [4Na]"]
-        RUNNERNP["NumPy Runner [4Nb]"]
-        COMPUTENP["Chunk Compute [4Nc]"]
-        CACCEL["C Extension [4Nd]"]
-        SCHEMA["Output Schema [4Nh]"]
-        RESULTS["Result Building [4Ni]"]
-        LOCO["LOCO Runner [4Nj]"]
+    subgraph L4N["⚡ NumPy Backend"]
+        LIKENP["Batch Likelihood<br/><small>4Na</small>"]
+        RUNNERNP["NumPy Runner<br/><small>4Nb</small>"]
+        COMPUTENP["Chunk Compute<br/><small>4Nc</small>"]
+        CACCEL["C Extension<br/><small>4Nd</small>"]
+        SCHEMA["Output Schema<br/><small>4Nh</small>"]
+        RESULTS["Result Building<br/><small>4Ni</small>"]
+        LOCO["LOCO Runner<br/><small>4Nj</small>"]
     end
 
-    subgraph L5["Infrastructure [5]"]
-        CONFIG["Output Config [5a]"]
-        MEM["Memory Manager [5c]"]
-        LOG["Logging [5d]"]
-        THREAD["Threading [5e]"]
-        HW["Hardware Context [5f]"]
-        PROG["Progress [5g]"]
+    subgraph L5["🔧 Infrastructure"]
+        CONFIG["Output Config<br/><small>5a</small>"]
+        MEM["Memory Manager<br/><small>5c</small>"]
+        LOG["Logging<br/><small>5d</small>"]
+        THREAD["Threading<br/><small>5e</small>"]
+        HW["Hardware Context<br/><small>5f</small>"]
+        PROG["Progress<br/><small>5g</small>"]
     end
 
-    subgraph L6["Validation [6]"]
-        TOL["Tolerance Config [6a]"]
-        CMP["GEMMA Comparator [6b]"]
+    subgraph L6["🔬 Validation"]
+        TOL["Tolerance Config<br/><small>6a</small>"]
+        CMP["GEMMA Comparator<br/><small>6b</small>"]
     end
 
     CLI --> PIPE
@@ -112,6 +112,13 @@ flowchart TB
     KIO --> MATIO
 
     CMP --> TOL
+
+    style L1 fill:#e8f4fd,stroke:#2196f3,color:#1565c0
+    style L2 fill:#fff3e0,stroke:#ff9800,color:#e65100
+    style L3 fill:#fce4ec,stroke:#e91e63,color:#880e4f
+    style L4N fill:#e8f5e9,stroke:#4caf50,color:#1b5e20
+    style L5 fill:#f3e5f5,stroke:#9c27b0,color:#6a1b9a
+    style L6 fill:#e0f2f1,stroke:#009688,color:#004d40
 ```
 
 ---
@@ -272,41 +279,65 @@ Tolerance-based comparison infrastructure for GEMMA parity testing.
 
 ```mermaid
 sequenceDiagram
-    participant U as User
-    participant CLI as CLI [1a]
-    participant IO as PLINK I/O [2a]
-    participant K as Kinship [3a]
-    participant E as Eigendecomp [3c]
-    participant L as Likelihood [3d]
-    participant O as Optimizer [3e]
-    participant S as Statistics [3f]
-    participant W as Writer [2d]
+    box rgb(232, 244, 253) Entry
+        participant U as User
+        participant CLI as CLI (1a)
+    end
+    box rgb(255, 243, 224) I/O
+        participant IO as PLINK I/O (2a)
+        participant W as Writer (2d)
+    end
+    box rgb(252, 228, 236) Core Computation
+        participant K as Kinship (3a)
+        participant E as Eigendecomp (3c)
+        participant L as Likelihood (3d)
+        participant O as Optimizer (3e)
+        participant S as Statistics (3f)
+    end
 
     U->>CLI: jamma -lmm 1 -bfile data -k K.txt
+    activate CLI
     CLI->>IO: load_plink_binary()
+    activate IO
     IO-->>CLI: PlinkData (genotypes, metadata)
+    deactivate IO
     CLI->>K: read_kinship_matrix()
+    activate K
     K-->>CLI: K (n x n)
+    deactivate K
     CLI->>E: eigendecompose_kinship(K)
+    activate E
     E-->>CLI: eigenvalues, eigenvectors (U)
+    deactivate E
 
     Note over CLI: Rotate: Uy = U'y, UtW = U'W
 
     loop For each SNP chunk
         CLI->>L: compute_Uab(UtW, Uty, Utx)
+        activate L
         L-->>CLI: Uab matrix
+        deactivate L
         CLI->>O: optimize_lambda(REML, Uab)
+        activate O
         O->>L: reml_log_likelihood(lambda)
+        activate L
         L-->>O: l(lambda)
+        deactivate L
         O-->>CLI: lambda*
+        deactivate O
         CLI->>L: calc_pab(Hi_eval, Uab)
+        activate L
         L-->>CLI: Pab matrix
+        deactivate L
         CLI->>S: calc_wald_test(Pab)
+        activate S
         S-->>CLI: beta, SE, p_wald
+        deactivate S
         CLI->>W: write(AssocResult)
     end
 
     W-->>U: .assoc.txt + .log.txt
+    deactivate CLI
 ```
 
 ---
@@ -315,30 +346,35 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    subgraph Input["Shared Computation"]
-        UAB["Uab [3d]"]
+    subgraph Input["🧮 Shared Computation"]
+        UAB["Uab<br/><small>3d</small>"]
     end
 
     subgraph Wald["-lmm 1: Wald"]
-        REML1["REML lambda* per SNP [3e]"]
-        W1["beta, SE, p_wald [3f]"]
+        REML1["REML lambda* per SNP<br/><small>3e</small>"]
+        W1["beta, SE, p_wald<br/><small>3f</small>"]
     end
 
     subgraph LRT["-lmm 2: LRT"]
-        MLE1["MLE lambda* per SNP [3e]"]
-        MLE0["MLE lambda* null [3d]"]
-        L1["p_lrt = chi2(l1-l0) [3f]"]
+        MLE1["MLE lambda* per SNP<br/><small>3e</small>"]
+        MLE0["MLE lambda* null<br/><small>3d</small>"]
+        L1["p_lrt = chi2(l1-l0)<br/><small>3f</small>"]
     end
 
     subgraph Score["-lmm 3: Score"]
-        NULL["Null REML lambda0 [3d]"]
-        SC["p_score (no per-SNP opt) [3f]"]
+        NULL["Null REML lambda0<br/><small>3d</small>"]
+        SC["p_score (no per-SNP opt)<br/><small>3f</small>"]
     end
 
     UAB --> REML1 --> W1
     UAB --> MLE1 --> L1
     MLE0 --> L1
     UAB --> NULL --> SC
+
+    style Input fill:#fce4ec,stroke:#e91e63,color:#880e4f
+    style Wald fill:#e8f4fd,stroke:#2196f3,color:#1565c0
+    style LRT fill:#e8f5e9,stroke:#4caf50,color:#1b5e20
+    style Score fill:#fff3e0,stroke:#ff9800,color:#e65100
 ```
 
 ---
@@ -347,21 +383,21 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    subgraph Preflight["Pre-flight Check [5c]"]
-        EST["estimate_lmm_memory()"]
-        CHK["check_memory_before_run()"]
+    subgraph Preflight["🔧 Pre-flight Check"]
+        EST["estimate_lmm_memory()<br/><small>5c</small>"]
+        CHK["check_memory_before_run()<br/><small>5c</small>"]
     end
 
-    subgraph Peak["Memory Peak"]
+    subgraph Peak["📊 Memory Peak"]
         KM["K matrix: 8n^2 bytes"]
         UM["U matrix: 8n^2 bytes"]
         WS["LAPACK workspace: ~8n^2 bytes"]
     end
 
-    subgraph Runtime["Runtime Controls"]
-        INC["IncrementalAssocWriter [2d]"]
-        STR["Streaming chunks [4Ne]"]
-        CLN["cleanup_memory() [5c]"]
+    subgraph Runtime["⚡ Runtime Controls"]
+        INC["IncrementalAssocWriter<br/><small>2d</small>"]
+        STR["Streaming chunks<br/><small>4Ne</small>"]
+        CLN["cleanup_memory()<br/><small>5c</small>"]
     end
 
     EST --> CHK
@@ -370,6 +406,10 @@ flowchart TD
     Peak --> Runtime
     INC -->|"per-SNP to disk"| DISK["No list accumulation"]
     STR -->|"O(n x chunk)"| LOW["Bounded memory"]
+
+    style Preflight fill:#f3e5f5,stroke:#9c27b0,color:#6a1b9a
+    style Peak fill:#fce4ec,stroke:#e91e63,color:#880e4f
+    style Runtime fill:#e8f5e9,stroke:#4caf50,color:#1b5e20
 ```
 
 ---
@@ -380,17 +420,17 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    PIPE["PipelineRunner"]
-    SEL["select_execution_mode()"]
-    PREP["prepare_common.py<br>(covariates, eigen, null model)"]
+    PIPE["PipelineRunner<br/><small>1c</small>"]
+    SEL["select_execution_mode()<br/><small>4Nf</small>"]
+    PREP["prepare_common.py<br/><small>3h</small>"]
 
-    subgraph NP["NumPy Backend"]
+    subgraph NP["⚡ NumPy Backend"]
         direction TB
-        BATCH["_run_batch (runner_numpy)"]
-        STREAM["_run_streaming (runner_numpy_streaming)"]
-        CN["compute_numpy.py"]
-        LN["likelihood_numpy.py"]
-        SP["special.py<br>(stdlib betainc/chi2)"]
+        BATCH["_run_batch<br/><small>4Nb</small>"]
+        STREAM["_run_streaming<br/><small>4Ne</small>"]
+        CN["compute_numpy.py<br/><small>4Nc</small>"]
+        LN["likelihood_numpy.py<br/><small>4Na</small>"]
+        SP["special.py<br/><small>3i</small>"]
     end
 
     PIPE --> SEL
@@ -401,6 +441,8 @@ flowchart TD
     BATCH --> CN --> LN
     STREAM --> CN
     LN --> SP
+
+    style NP fill:#e8f5e9,stroke:#4caf50,color:#1b5e20
 ```
 
 ### Backend Selection

@@ -4,14 +4,22 @@ These tests exercise impute_and_center, impute_center_and_standardize, and
 compute_centered_kinship.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
+from jamma.io import load_plink_binary
 from jamma.kinship import (
     compute_centered_kinship,
     impute_and_center,
     impute_center_and_standardize,
 )
+from jamma.validation import compare_kinship_matrices, load_gemma_kinship
+
+_FIXTURE_ROOT = Path(__file__).parent / "fixtures"
+_SYNTHETIC_DATA = _FIXTURE_ROOT / "gemma_synthetic" / "test"
+_REFERENCE_KINSHIP = _FIXTURE_ROOT / "gemma_synthetic" / "gemma_kinship.cXX.txt"
 
 
 @pytest.mark.tier0
@@ -139,3 +147,67 @@ class TestKinshipNoCopy:
 
         # float32 input should produce identical result (both converted to float64)
         np.testing.assert_allclose(K_from_f32, K_from_f64, rtol=1e-10, atol=1e-12)
+
+
+@pytest.mark.tier1
+class TestImputationGemmaEquivalence:
+    """TEST-01: GEMMA equivalence and property tests for imputation functions.
+
+    The centered kinship test proves equivalence transitively: impute genotypes
+    -> compute kinship -> compare to GEMMA reference. Remaining tests validate
+    structural properties of standardized kinship and NaN imputation completeness.
+    """
+
+    def test_impute_and_center_kinship_matches_gemma(self):
+        """Centered kinship from impute_and_center matches GEMMA -gk 1 reference."""
+        if not _SYNTHETIC_DATA.with_suffix(".bed").exists():
+            pytest.skip("gemma_synthetic fixture not available")
+        plink = load_plink_binary(_SYNTHETIC_DATA)
+        X = plink.genotypes.astype(np.float64)
+        X_centered = impute_and_center(X)
+        K_jamma = X_centered @ X_centered.T / X_centered.shape[1]
+        K_gemma = load_gemma_kinship(_REFERENCE_KINSHIP)
+        result = compare_kinship_matrices(K_jamma, K_gemma)
+        assert result.passed, (
+            f"Kinship from impute_and_center does not match GEMMA reference:\n"
+            f"Max abs diff: {result.max_abs_diff:.2e}\n"
+            f"Max rel diff: {result.max_rel_diff:.2e}\n"
+            f"Worst location: {result.worst_location}"
+        )
+
+    def test_impute_center_standardize_produces_valid_standardized_kinship(self):
+        """Standardized kinship has correct structural properties."""
+        if not _SYNTHETIC_DATA.with_suffix(".bed").exists():
+            pytest.skip("gemma_synthetic fixture not available")
+        plink = load_plink_binary(_SYNTHETIC_DATA)
+        X = plink.genotypes.astype(np.float64)
+        X_std = impute_center_and_standardize(X.copy())
+        K_std = X_std @ X_std.T / X_std.shape[1]
+        # Shape and symmetry
+        n = X_std.shape[0]
+        assert K_std.shape == (n, n)
+        np.testing.assert_allclose(K_std, K_std.T, atol=1e-14)
+        # Diagonal positive (each sample has non-zero self-similarity)
+        assert np.all(K_std.diagonal() > 0)
+        # Standardized kinship differs from centered kinship
+        X2 = plink.genotypes.astype(np.float64)
+        X_centered = impute_and_center(X2)
+        K_centered = X_centered @ X_centered.T / X_centered.shape[1]
+        assert not np.allclose(K_std, K_centered, atol=1e-6), (
+            "Standardized and centered kinship should differ"
+        )
+
+    def test_impute_and_center_no_nans_remain(self):
+        """All NaN values imputed after impute_and_center."""
+        if not _SYNTHETIC_DATA.with_suffix(".bed").exists():
+            pytest.skip("gemma_synthetic fixture not available")
+        plink = load_plink_binary(_SYNTHETIC_DATA)
+        X = plink.genotypes.astype(np.float64)
+        # Inject missing values if fixture has none, ensuring imputation is exercised
+        if not np.isnan(X).any():
+            rng = np.random.default_rng(42)
+            mask = rng.random(X.shape) < 0.05
+            X[mask] = np.nan
+        assert np.isnan(X).any(), "Expected NaN values before imputation"
+        result = impute_and_center(X)
+        assert not np.isnan(result).any(), "NaN values remain after impute_and_center"

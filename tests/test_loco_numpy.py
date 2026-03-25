@@ -15,6 +15,8 @@ import pytest
 
 from jamma.io.plink import get_plink_metadata
 from jamma.lmm.loco import run_lmm_loco
+from jamma.validation.compare import compare_assoc_results, load_gemma_assoc
+from jamma.validation.tolerances import ToleranceConfig
 from tests.conftest import load_phenotypes_from_fam
 
 # Fixture with 3 chromosomes — required for LOCO (needs >1 chromosome to leave one out)
@@ -439,3 +441,54 @@ def test_loco_numpy_show_progress_true():
 
     assert loco.n_tested > 0, "Expected at least one SNP to be tested"
     assert len(loco.associations) > 0, "Expected at least one association result"
+
+
+@pytest.mark.tier1
+def test_loco_gemma_equivalence():
+    """LOCO per-chromosome results match GEMMA reference within calibrated tolerances.
+
+    TEST-02: End-to-end integration test. Runs run_lmm_loco on the gemma_loco fixture
+    (100 samples, 500 SNPs, 3 chromosomes) and compares per-chromosome association
+    results against GEMMA reference files (gemma_loco_chr{1,2,3}.assoc.txt).
+
+    Validates all numeric columns (beta, se, p_wald, logl_H1, l_remle, af)
+    per SNP using calibrated tolerances from ToleranceConfig via
+    compare_assoc_results().
+    """
+    if not _LOCO_BFILE.with_suffix(".bed").exists():
+        pytest.skip("gemma_loco fixture not available")
+
+    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+    # LOCO recomputes kinship per chromosome, amplifying Brent optimizer
+    # divergence on lambda. Use 5e-5 (CLAUDE.md calibrated JAMMA-vs-GEMMA bound).
+    tol = ToleranceConfig(lambda_rtol=5e-5)
+
+    loco = run_lmm_loco(
+        bed_path=_LOCO_BFILE,
+        phenotypes=phenotypes,
+        check_memory=False,
+        show_progress=False,
+    )
+
+    assert loco.n_tested > 0, "Expected SNPs to be tested"
+
+    # Group JAMMA results by chromosome
+    by_chr: dict[str, list] = {}
+    for r in loco.associations:
+        by_chr.setdefault(r.chr, []).append(r)
+
+    for chr_name in ["1", "2", "3"]:
+        gemma_ref = load_gemma_assoc(
+            _LOCO_FIXTURE_ROOT / f"gemma_loco_chr{chr_name}.assoc.txt"
+        )
+        jamma_chr = by_chr.get(chr_name, [])
+        result = compare_assoc_results(jamma_chr, gemma_ref, config=tol)
+        assert result.passed, (
+            f"Chr {chr_name} GEMMA equivalence failed:\n"
+            f"  beta: {result.beta.message}\n"
+            f"  se: {result.se.message}\n"
+            f"  p_wald: {result.p_wald.message}\n"
+            f"  logl_H1: {result.logl_H1.message}\n"
+            f"  l_remle: {result.l_remle.message}\n"
+            f"  mismatched_snps: {result.mismatched_snps}"
+        )

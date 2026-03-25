@@ -11,7 +11,7 @@ Components:
   return types to (LmmRunResult, int).
 
 The pipeline (pipeline.py) uses select_execution_mode() for plan selection but
-dispatches via its own _run_numpy_backend/_run_numpy_streaming_backend
+dispatches via its own _run_batch/_run_streaming
 methods, which handle PLINK loading, incremental writing, and timing at a
 higher abstraction level.
 run_lmm() is the public API for programmatic callers with pre-loaded data.

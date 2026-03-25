@@ -1151,7 +1151,7 @@ class PipelineRunner:
                 col_path = assoc_path
 
             if plan.mode == "streaming":
-                run_result, n_tested = self._run_numpy_streaming_backend(
+                run_result, n_tested = self._run_streaming(
                     phenotypes_col,
                     covariates,
                     eigenvalues,
@@ -1160,7 +1160,7 @@ class PipelineRunner:
                     snps_indices,
                 )
             else:
-                run_result, n_tested = self._run_numpy_backend(
+                run_result, n_tested = self._run_batch(
                     phenotypes_col,
                     K,
                     covariates,
@@ -1215,7 +1215,7 @@ class PipelineRunner:
         self._emit_telemetry(result, plan)
         return result
 
-    def _run_numpy_backend(
+    def _run_batch(
         self,
         phenotypes: np.ndarray,
         K: np.ndarray | None,
@@ -1287,7 +1287,7 @@ class PipelineRunner:
             lmm_mode=self.config.lmm_mode,
         )
 
-    def _run_numpy_streaming_backend(
+    def _run_streaming(
         self,
         phenotypes: np.ndarray,
         covariates: np.ndarray | None,

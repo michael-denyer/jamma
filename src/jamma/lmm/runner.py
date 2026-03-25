@@ -26,17 +26,9 @@ from typing import Literal
 import numpy as np
 from loguru import logger
 
-from jamma.core.backend import BackendRequest
 from jamma.core.memory import estimate_lmm_memory
 from jamma.lmm._compile_utils import is_c_extension_usable
 from jamma.lmm.schema import LmmConfig, LmmRunResult
-
-_VALID_PLANS = frozenset(
-    {
-        ("numpy", "batch"),
-        ("numpy", "streaming"),
-    }
-)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -57,10 +49,10 @@ class ExecutionPlan:
     reason: str
 
     def __post_init__(self) -> None:
-        if (self.backend, self.mode) not in _VALID_PLANS:
+        if self.mode not in ("batch", "streaming"):
             raise ValueError(
-                f"Invalid execution plan: {self.backend}-{self.mode}. "
-                f"Valid plans: {', '.join(f'{b}-{m}' for b, m in sorted(_VALID_PLANS))}"
+                f"Invalid execution mode: {self.mode!r}. "
+                f"Must be 'batch' or 'streaming'."
             )
         if not self.reason:
             raise ValueError("ExecutionPlan.reason must be non-empty")
@@ -83,7 +75,7 @@ def select_execution_mode(
     n_samples: int,
     n_snps: int,
     *,
-    requested: BackendRequest = "auto",
+    requested: Literal["auto", "numpy", "numpy-streaming"] = "auto",
     n_cvt: int = 1,
     lmm_mode: int = 1,
 ) -> ExecutionPlan:

@@ -8,64 +8,12 @@ Backend selection always returns "numpy".
 
 from __future__ import annotations
 
-import os
-from typing import Literal
-
 from loguru import logger
-
-BackendRequest = Literal["auto", "numpy", "numpy-streaming"]
-BackendResolved = Literal["numpy"]
-
-
-def detect_backend(requested: BackendRequest = "auto") -> BackendResolved:
-    """Detect or validate the compute backend.
-
-    Always returns "numpy". The JAMMA_BACKEND environment variable is
-    checked for backward compatibility but only "auto", "numpy", and
-    "numpy-streaming" are accepted.
-
-    Args:
-        requested: Requested backend — "auto" or "numpy".
-
-    Returns:
-        "numpy".
-
-    Raises:
-        ValueError: If `requested` (or JAMMA_BACKEND) is not a valid value.
-
-    Example:
-        >>> detect_backend("auto")
-        'numpy'
-        >>> detect_backend("numpy")
-        'numpy'
-    """
-    env_override = os.environ.get("JAMMA_BACKEND")
-    effective = env_override if env_override is not None else requested
-
-    # Compound requests resolve to a base backend.
-    _compound_map: dict[str, str] = {"numpy-streaming": "numpy"}
-    if effective in _compound_map:
-        effective = _compound_map[effective]
-
-    valid = ("auto", "numpy")
-    if effective not in valid:
-        source = (
-            " (from JAMMA_BACKEND environment variable)"
-            if env_override is not None
-            else ""
-        )
-        raise ValueError(
-            f"Unknown backend {effective!r}{source}. "
-            f"Must be one of {valid} (or 'numpy-streaming'). "
-            "JAX backend was removed in v5.0 — use 'numpy' or 'auto'."
-        )
-
-    return "numpy"
 
 
 def log_backend_selection(
-    active: BackendResolved,
-    requested: BackendRequest,
+    active: str,
+    requested: str,
     env_override: str | None = None,
 ) -> None:
     """Log the selected backend at INFO level.
@@ -134,12 +82,5 @@ def format_pipeline_banner(
 
 
 def get_backend_info() -> dict[str, str | bool]:
-    """Get information about the compute backend.
-
-    Returns:
-        Dictionary with backend info:
-        - selected: Backend name ("numpy")
-    """
-    return {
-        "selected": detect_backend(),
-    }
+    """Get information about the compute backend."""
+    return {"selected": "numpy"}

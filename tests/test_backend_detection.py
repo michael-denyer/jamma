@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from jamma.core.backend import detect_backend, get_backend_info
+from jamma.core.backend import get_backend_info
 from jamma.lmm.runner import ExecutionPlan, select_execution_mode
 
 
@@ -26,53 +26,6 @@ class TestBackendInfo:
         """Selected backend should always be 'numpy'."""
         info = get_backend_info()
         assert info["selected"] == "numpy"
-
-
-@pytest.mark.tier0
-class TestDetectBackend:
-    """Tests for detect_backend() function."""
-
-    def test_auto_returns_numpy(self):
-        """detect_backend('auto') returns 'numpy'."""
-        result = detect_backend("auto")
-        assert result == "numpy"
-
-    def test_numpy_always_returns_numpy(self):
-        """detect_backend('numpy') always returns 'numpy'."""
-        result = detect_backend("numpy")
-        assert result == "numpy"
-
-    def test_invalid_backend_raises(self):
-        """detect_backend with unknown name raises ValueError."""
-        with pytest.raises(ValueError, match="Unknown backend"):
-            detect_backend("invalid")
-
-    def test_env_var_overrides_requested(self, monkeypatch):
-        """JAMMA_BACKEND=numpy overrides requested value."""
-        monkeypatch.setenv("JAMMA_BACKEND", "numpy")
-        result = detect_backend("auto")
-        assert result == "numpy"
-
-    def test_env_var_invalid_raises(self, monkeypatch):
-        """JAMMA_BACKEND with invalid value raises ValueError."""
-        monkeypatch.setenv("JAMMA_BACKEND", "spark")
-        with pytest.raises(ValueError, match="Unknown backend"):
-            detect_backend("auto")
-
-    def test_compound_numpy_streaming_resolves(self):
-        """detect_backend('numpy-streaming') resolves to 'numpy'."""
-        result = detect_backend("numpy-streaming")
-        assert result == "numpy"
-
-    def test_jax_raises(self):
-        """detect_backend('jax') raises ValueError (removed backend)."""
-        with pytest.raises(ValueError, match="Unknown backend"):
-            detect_backend("jax")
-
-    def test_jax_streaming_raises(self):
-        """detect_backend('jax-streaming') raises ValueError (removed backend)."""
-        with pytest.raises(ValueError, match="Unknown backend"):
-            detect_backend("jax-streaming")
 
 
 @pytest.mark.tier0

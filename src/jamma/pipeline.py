@@ -19,15 +19,12 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from loguru import logger
 
-from jamma.core.backend import (
-    BackendRequest,
-    BackendResolved,
-    format_pipeline_banner,
-)
+from jamma.core.backend import format_pipeline_banner, log_backend_selection
 from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.core.memory import (
     StreamingMemoryBreakdown,
@@ -139,7 +136,7 @@ class PipelineConfig:
     n_refine: int = 10
     weight_file: Path | None = None
     cat_columns: list[int] | None = None
-    backend: BackendRequest = "auto"
+    backend: Literal["auto", "numpy", "numpy-streaming"] = "auto"
     legacy_text: bool = False
     phenotype_columns: list[int] | None = None
 
@@ -204,7 +201,7 @@ class PipelineResult:
     assoc_path: Path
     assoc_paths: list[Path] = field(default_factory=list)
     timing: PipelineTiming = field(default_factory=dict)
-    backend: BackendResolved = "numpy"  # Set by PipelineRunner.run()
+    backend: Literal["numpy"] = "numpy"  # Set by PipelineRunner.run()
     n_covariates: int = 1
     pve_estimate: float | None = None
     pve_se: float | None = None
@@ -822,8 +819,6 @@ class PipelineRunner:
         """
         t_start = time.perf_counter()
 
-        from jamma.core.backend import log_backend_selection
-
         # Resolve env override first: JAMMA_BACKEND takes priority in all paths.
         env_backend = os.environ.get("JAMMA_BACKEND")
         requested = env_backend if env_backend is not None else self.config.backend
@@ -857,7 +852,7 @@ class PipelineRunner:
         self,
         t_start: float,
         plan: ExecutionPlan,
-        requested: BackendRequest = "auto",
+        requested: Literal["auto", "numpy", "numpy-streaming"] = "auto",
     ) -> PipelineResult:
         """Execute the pipeline body.
 

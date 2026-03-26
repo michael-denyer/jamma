@@ -228,33 +228,14 @@ class TestCleanupMemory:
         assert snap.rss_gb > 0
 
     def test_cleanup_memory_verbose_logs(self):
-        """cleanup_memory with verbose=True runs gc and returns valid snapshot.
+        """cleanup_memory with verbose=True runs gc and returns valid snapshot."""
+        from unittest.mock import patch
 
-        Verifies the function performs garbage collection (gc.collect) and
-        returns a MemorySnapshot with valid data, not just assert True.
-        """
-        import gc
+        with patch("gc.collect", wraps=__import__("gc").collect) as mock_gc:
+            snap = cleanup_memory(verbose=True)
 
-        # Create some garbage to collect
-        _garbage = [object() for _ in range(1000)]
-        del _garbage
+        mock_gc.assert_called()
 
-        # Record gc generation-0 count before cleanup
-        gen0_before = gc.get_count()[0]
-
-        snap = cleanup_memory(verbose=True)
-
-        # cleanup_memory calls gc.collect() which resets gen-0 counter
-        gen0_after = gc.get_count()[0]
-
-        # After gc.collect(), generation-0 count should be lower than before
-        # (gc.collect resets uncollected count for generation 0)
-        assert gen0_after <= gen0_before, (
-            f"gc.collect() should have been called: "
-            f"gen0 before={gen0_before}, after={gen0_after}"
-        )
-
-        # Return value must be a valid MemorySnapshot
         assert isinstance(snap, MemorySnapshot)
         assert snap.rss_gb > 0, "RSS should be positive after cleanup"
         assert snap.available_gb > 0, "Available memory should be positive"

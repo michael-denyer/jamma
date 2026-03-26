@@ -11,10 +11,17 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from scipy.special import betainc as sci_betainc
-from scipy.stats import chi2 as sci_chi2
 
-from jamma.lmm.special import betainc, chi2_sf
+scipy_special = pytest.importorskip(
+    "scipy.special", reason="scipy excluded from pip dev deps to preserve ILP64 numpy"
+)
+scipy_stats = pytest.importorskip(
+    "scipy.stats", reason="scipy excluded from pip dev deps to preserve ILP64 numpy"
+)
+sci_betainc = scipy_special.betainc
+sci_chi2 = scipy_stats.chi2
+
+from jamma.lmm.special import betainc, chi2_sf  # noqa: E402
 
 
 @pytest.mark.tier0

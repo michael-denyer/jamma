@@ -443,7 +443,7 @@ def test_loco_numpy_show_progress_true():
     assert len(loco.associations) > 0, "Expected at least one association result"
 
 
-@pytest.mark.tier1
+@pytest.mark.tier2
 def test_loco_gemma_equivalence():
     """LOCO per-chromosome results match GEMMA reference within calibrated tolerances.
 

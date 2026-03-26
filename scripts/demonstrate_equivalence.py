@@ -19,7 +19,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from scipy.stats import spearmanr
+
+try:
+    from scipy.stats import spearmanr
+except ImportError:
+    sys.exit("scipy required: pip install scipy (may overwrite ILP64 numpy)")
+
 
 # Project root
 ROOT = Path(__file__).resolve().parent.parent

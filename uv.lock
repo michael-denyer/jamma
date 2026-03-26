@@ -263,6 +263,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "hatchling" },
     { name = "hypothesis", extra = ["numpy"] },
     { name = "pandas" },
     { name = "pre-commit" },
@@ -271,8 +272,8 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-randomly" },
     { name = "pytest-xdist" },
+    { name = "pyyaml" },
     { name = "ruff" },
-    { name = "scipy" },
     { name = "slipcover" },
 ]
 
@@ -297,6 +298,7 @@ dev = [
 requires-dist = [
     { name = "bed-reader", specifier = ">=1.0.0" },
     { name = "click", specifier = ">=8.0.0" },
+    { name = "hatchling", marker = "extra == 'dev'", specifier = ">=1.29.0" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100.0" },
     { name = "hypothesis", extras = ["numpy"], marker = "extra == 'dev'", specifier = ">=6.100.0" },
     { name = "loguru", specifier = ">=0.7.0" },
@@ -310,8 +312,8 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "pytest-randomly", marker = "extra == 'dev'", specifier = ">=3.15.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.5.0" },
+    { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.3" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.7" },
-    { name = "scipy", marker = "extra == 'dev'", specifier = ">=1.10.0" },
     { name = "slipcover", marker = "extra == 'dev'", specifier = ">=1.0.17" },
     { name = "threadpoolctl", specifier = ">=3.0.0" },
 ]

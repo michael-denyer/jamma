@@ -211,17 +211,9 @@ Best-of runs, end-to-end wall clock:
 | LMM Wald (`-lmm 1`) | 11.0s | 7.6s | 4.1s | 879ms | 1.1s | 4.7x | **12.5x** | **8.7x** |
 | LMM All (`-lmm 4`) | 20.5s | 13.9s | 6.0s | 1.3s | 1.4s | 4.7x | **16.0x** | **10.9x** |
 | LMM Wald+4cov (`-lmm 1 -c`) | 40.8s | 18.8s | 9.1s | 2.4s | 2.6s | 3.8x | **17.0x** | **7.8x** |
+| LOCO Wald (`-loco`) | 3m30s | 2m26s | — | **7.1s** | — | — | **29.6x** | **20.6x** |
 
-GEMMA (Accelerate) is GEMMA 0.98.5 compiled against Apple's Accelerate framework instead of Homebrew OpenBLAS — **1.3-2.2x faster** due to AMX-accelerated BLAS, with identical numerical results. **NumPy+C** uses a C extension with OpenMP for Wald (`-lmm 1`) — REML optimization is compute-bound and parallelizes well across SNPs. The C speedup grows with covariates because the Pab table recursion is more expensive. NumPy+C is the fastest backend at all modes including all-tests (`-lmm 4`) at mouse scale. **NumPy+C (stream)** reads genotypes from disk in chunks — slightly slower than batch but the production code path for large datasets that don't fit in memory. Kinship is always pure NumPy/BLAS.
-
-### LOCO (Leave-One-Chromosome-Out)
-
-| Backend | LOCO Wald | vs GEMMA |
-|---------|-----------|----------|
-| GEMMA 0.98.5 | 3m31s | 1.0x |
-| JAMMA NumPy+C | **7.3s** | **28.8x** |
-
-The large speedup has two sources: (1) JAMMA computes per-chromosome LOCO kinship via streaming and tests only that chromosome's SNPs, while GEMMA `-loco` tests *all* SNPs against each LOCO kinship (19x redundant work on 19 chromosomes); (2) JAMMA runs all chromosomes in a single process, avoiding 19 cold-start overheads.
+GEMMA (Accelerate) is GEMMA 0.98.5 compiled against Apple's Accelerate framework instead of Homebrew OpenBLAS — **1.3-2.2x faster** due to AMX-accelerated BLAS, with identical numerical results. **NumPy+C** uses a C extension with OpenMP for Wald (`-lmm 1`) — REML optimization is compute-bound and parallelizes well across SNPs. The C speedup grows with covariates because the Pab table recursion is more expensive. NumPy+C is the fastest backend at all modes including all-tests (`-lmm 4`) with this small scale run. **NumPy+C (stream)** reads genotypes from disk in chunks — slightly slower than batch, but the production code path for large datasets that don't fit in memory. Kinship is always pure NumPy/BLAS. The LOCO speedup has two further sources: (1) JAMMA computes per-chromosome LOCO kinship via streaming and tests only that chromosome's SNPs, while GEMMA `-loco` tests *all* SNPs against each LOCO kinship (19x redundant work on 19 chromosomes); (2) JAMMA runs all chromosomes in a single process, avoiding 19 cold-start overheads.
 
 ## Supported Features
 

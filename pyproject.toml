@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "jamma"
 version = "5.1.0"
-description = "High-performance Multi-method Mixed-Model Association for large-scale GWAS"
+description = "Highly-Accelerated Multi-method Mixed-Model Association for large-scale GWAS"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "GPL-3.0-or-later" }

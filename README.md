@@ -12,7 +12,7 @@
   <img src="https://raw.githubusercontent.com/michael-denyer/jamma/master/logos/JAMMA_Large_Logo_v2.png" alt="JAMMA" width="500">
 </p>
 
-**JAMMA** (High-performance Multi-method Mixed-Model Association) -- a modern Python and C reimplementation of [GEMMA](https://github.com/genetics-statistics/GEMMA) for large-scale GWAS.
+**JAMMA** (Highly-Accelerated Multi-method Mixed-model Association) -- a modern Python and C reimplementation of [GEMMA](https://github.com/genetics-statistics/GEMMA) for large-scale GWAS.
 
 - **Drop-in GEMMA replacement**: Same CLI flags, same file formats, same results. Change one word in your pipeline.
 - **Numerical equivalence**: Validated against GEMMA -- 100% significance agreement, 100% effect direction agreement

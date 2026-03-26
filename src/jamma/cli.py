@@ -249,7 +249,7 @@ def main(
     mk,
     mvlmm,
 ):
-    """JAMMA: High-performance Multi-method Mixed-Model Association.
+    """JAMMA: Highly-Accelerated Multi-method Mixed-Model Association.
 
     A modern Python and C reimplementation of GEMMA for large-scale GWAS.
     """

@@ -12,11 +12,11 @@
   <img src="https://raw.githubusercontent.com/michael-denyer/jamma/master/logos/JAMMA_Large_Logo_v2.png" alt="JAMMA" width="500">
 </p>
 
-**JAMMA** (High-performance Multi-method Mixed-Model Association) — a modern Python and C reimplementation of [GEMMA](https://github.com/genetics-statistics/GEMMA) for large-scale GWAS.
+**JAMMA** (High-performance Multi-method Mixed-Model Association) -- a modern Python and C reimplementation of [GEMMA](https://github.com/genetics-statistics/GEMMA) for large-scale GWAS.
 
 - **Drop-in GEMMA replacement**: Same CLI flags, same file formats, same results. Change one word in your pipeline.
-- **Numerical equivalence**: Validated against GEMMA — 100% significance agreement, 100% effect direction agreement
-- **Fast**: Up to 17x faster than GEMMA 0.98.5
+- **Numerical equivalence**: Validated against GEMMA -- 100% significance agreement, 100% effect direction agreement
+- **Fast**: Up to 30x faster than GEMMA 0.98.5 (LOCO mode); 12-17x on single-pass LMM
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
 - **Cross-platform**: Runs on Linux, macOS, and Windows with NumPy and vendor BLAS
 - **Optimized for Intel**: Best performance on Intel CPUs with MKL BLAS. Runs well on Apple Silicon (Accelerate BLAS). Other architectures (AMD, ARM Linux) work correctly but with less BLAS optimization
@@ -41,7 +41,7 @@ For small datasets (<46k samples), the standard install works:
 pip install jamma
 ```
 
-For large-scale GWAS (>46k samples) on **x86_64** (Linux or Intel Mac), install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first — standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. MKL is x86_64-only; Windows users are limited to <46k samples (ARM Mac uses Accelerate-ILP64 natively). Pre-built ILP64 wheels are available for Python 3.11-3.14:
+For large-scale GWAS (>46k samples) on **x86_64** (Linux or Intel Mac), install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first -- standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. MKL is x86_64-only; Windows users are limited to <46k samples (ARM Mac uses Accelerate-ILP64 natively). Pre-built ILP64 wheels are available for Python 3.11-3.14:
 
 ```bash
 pip install numpy \
@@ -103,7 +103,7 @@ The reader auto-detects format, so existing `.cXX.txt` files still work as `-k` 
 
 ## GEMMA CLI Parity
 
-JAMMA uses the same flags as GEMMA. Existing GEMMA commands work by changing `gemma` to `jamma`:
+JAMMA supports GEMMA's core GWAS flags (`-gk`, `-lmm`, `-bfile`, `-k`, `-c`, `-o`, `-n`, `-loco`, `-snps`, `-hwe`) with identical names and semantics. Existing GEMMA commands work by changing `gemma` to `jamma`:
 
 | GEMMA | JAMMA |
 |-------|-------|
@@ -113,7 +113,7 @@ JAMMA uses the same flags as GEMMA. Existing GEMMA commands work by changing `ge
 
 - Reads and writes GEMMA `.assoc.txt` and `.cXX.txt` formats
 - Accepts PLINK binary `.bed/.bim/.fam` files (same as GEMMA)
-- Output columns match GEMMA: chr, rs, ps, n_miss, allele1, allele0, af, beta, se, logl_H1, l_remle, p_wald
+- Output columns match GEMMA (mode-dependent -- see [User Guide](docs/USER_GUIDE.md#output-format))
 - Also supports binary `.npy` format for kinship (faster I/O); use `--legacy-text` for GEMMA text format
 
 ## Python API

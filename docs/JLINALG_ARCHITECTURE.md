@@ -2,7 +2,11 @@
 
 jlinalg is JAMMA's controlled C compute layer, providing BLAS and LAPACK
 operations with vendor dispatch when ILP64 system BLAS is available and
-falling back to NumPy when no suitable vendor library is found.
+falling back to NumPy when no suitable vendor library is found. This
+eliminates numpy BLAS compatibility issues (LP64 integer overflow at >46k
+samples, scipy ILP64 incompatibility) by dispatching directly to vendor
+LAPACK routines (DSYEVD/DSYEVR) for eigendecomposition and symmetric
+BLAS specialization (DSYRK, DGEMM).
 
 ## Layer Diagram
 

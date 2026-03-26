@@ -59,6 +59,8 @@ uv sync
 | Intel Mac | Full support | Accelerate / MKL |
 | Windows | Full support | Limited to <46k samples without ILP64 |
 
+JAMMA's heavy computation (eigendecomposition, matrix multiplication, REML optimization) is BLAS-bound. Intel MKL delivers the best throughput, particularly at scale. Apple Accelerate is a close second on Apple Silicon. OpenBLAS works correctly everywhere but is less tuned for these workloads.
+
 ### Backend Selection
 
 JAMMA auto-detects the best available backend. Force a specific backend with:

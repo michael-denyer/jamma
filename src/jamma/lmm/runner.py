@@ -136,29 +136,21 @@ def select_execution_mode(
     c_ext_available = is_c_extension_usable()
     est = estimate_lmm_memory(n_samples, n_snps, n_cvt=n_cvt)
 
-    # Prefer numpy+C when genotypes fit in memory and C handles the n_cvt case.
-    if c_ext_available and est.sufficient:
+    # Check if C extension handles the covariate count
+    if c_ext_available:
         from jamma.lmm.compute_numpy import (
             _C_GENERAL_AVAILABLE,  # deferred: circular dep
         )
 
         c_handles_n_cvt = n_cvt <= 1 or _C_GENERAL_AVAILABLE
         if c_handles_n_cvt:
-            return ExecutionPlan(
-                "numpy",
-                "batch",
-                f"C extension available, {est.total_gb:.1f}GB fits in "
-                f"{est.available_gb:.1f}GB available",
-            )
-
-    # C extension available but genotypes don't fit -- stream from disk
-    if c_ext_available and not est.sufficient:
-        from jamma.lmm.compute_numpy import (
-            _C_GENERAL_AVAILABLE as _cga,  # deferred: circular dep
-        )
-
-        c_handles_n_cvt = n_cvt <= 1 or _cga
-        if c_handles_n_cvt:
+            if est.sufficient:
+                return ExecutionPlan(
+                    "numpy",
+                    "batch",
+                    f"C extension available, {est.total_gb:.1f}GB fits in "
+                    f"{est.available_gb:.1f}GB available",
+                )
             return ExecutionPlan(
                 "numpy",
                 "streaming",

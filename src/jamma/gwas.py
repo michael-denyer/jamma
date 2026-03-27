@@ -19,6 +19,11 @@ from jamma.lmm.stats import AssocResult
 from jamma.pipeline import PipelineConfig, PipelineRunner
 
 
+def _opt_path(value: str | Path | None) -> Path | None:
+    """Convert optional string or Path to Path."""
+    return Path(value) if value is not None else None
+
+
 @dataclass
 class GWASResult:
     """Result of a GWAS pipeline run.
@@ -153,8 +158,8 @@ def gwas(
     """
     config = PipelineConfig(
         bfile=Path(bfile),
-        kinship_file=Path(kinship_file) if kinship_file is not None else None,
-        covariate_file=(Path(covariate_file) if covariate_file is not None else None),
+        kinship_file=_opt_path(kinship_file),
+        covariate_file=_opt_path(covariate_file),
         lmm_mode=lmm_mode,
         maf=maf,
         miss=miss,
@@ -164,20 +169,16 @@ def gwas(
         check_memory=check_memory,
         show_progress=show_progress,
         loco=loco,
-        eigenvalue_file=(
-            Path(eigenvalue_file) if eigenvalue_file is not None else None
-        ),
-        eigenvector_file=(
-            Path(eigenvector_file) if eigenvector_file is not None else None
-        ),
+        eigenvalue_file=_opt_path(eigenvalue_file),
+        eigenvector_file=_opt_path(eigenvector_file),
         write_eigen=write_eigen,
         phenotype_column=phenotype_column,
-        snps_file=Path(snps_file) if snps_file is not None else None,
-        ksnps_file=Path(ksnps_file) if ksnps_file is not None else None,
+        snps_file=_opt_path(snps_file),
+        ksnps_file=_opt_path(ksnps_file),
         hwe_threshold=hwe,
         l_min=l_min,
         l_max=l_max,
-        weight_file=Path(weight_file) if weight_file is not None else None,
+        weight_file=_opt_path(weight_file),
         cat_columns=cat_columns,
         backend=backend,
     )

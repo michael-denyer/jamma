@@ -138,11 +138,6 @@ class TestCheckMemoryAvailable:
 
 
 @pytest.mark.tier0
-class TestEigendecompMemory:
-    """Tests for eigendecomposition memory usage."""
-
-
-@pytest.mark.tier0
 class TestEigendecompMemoryGate:
     """Integration: eigendecompose_kinship respects check_memory flag."""
 

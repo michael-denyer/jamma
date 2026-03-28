@@ -32,7 +32,7 @@ def test_memory_estimate_uses_computed_chunk():
 def test_check_memory_before_run_uses_computed_chunk():
     """check_memory_before_run calls _compute_chunk_size internally."""
     with patch(
-        "jamma.lmm.chunk._compute_chunk_size", wraps=_compute_chunk_size
+        "jamma.core.chunk._compute_chunk_size", wraps=_compute_chunk_size
     ) as mock:
         try:
             check_memory_before_run(1410, 12_000)

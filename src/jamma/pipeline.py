@@ -25,6 +25,7 @@ import numpy as np
 from loguru import logger
 
 from jamma.core.backend import format_pipeline_banner, log_backend_selection
+from jamma.core.chunk import _compute_chunk_size
 from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.core.memory import (
     StreamingMemoryBreakdown,
@@ -38,7 +39,6 @@ from jamma.kinship import (
     read_kinship_matrix,
     write_kinship_matrix,
 )
-from jamma.lmm.chunk import _compute_chunk_size
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.runner import ExecutionPlan, select_execution_mode

@@ -25,23 +25,17 @@
 
 ## Installation
 
-### macOS (Intel or ARM)
+### Windows / macOS (ARM)
 
 ```bash
 pip install jamma
 ```
 
-That's it. macOS Accelerate BLAS handles large matrices natively.
+That's it. macOS Accelerate BLAS handles large matrices natively. Windows users are limited to <46k samples (ARM Mac uses Accelerate-ILP64 natively).
 
-### Linux / Windows / Intel Mac
+### Linux / macOS (Intel)
 
-For small datasets (<46k samples), the standard install works:
-
-```bash
-pip install jamma
-```
-
-On **x86_64** (Linux or Intel Mac), install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first -- standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. MKL is x86_64-only; Windows users are limited to <46k samples (ARM Mac uses Accelerate-ILP64 natively). Pre-built ILP64 wheels are available for Python 3.11-3.14:
+On **x86_64** (Linux or macOS Intel), install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first -- standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. MKL is x86_64-only. Pre-built ILP64 wheels are available for Python 3.11-3.14:
 
 ```bash
 pip install numpy \

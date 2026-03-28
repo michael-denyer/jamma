@@ -133,7 +133,7 @@ except ImportError as _exc:
     # Auto-recompile: try once before falling back to NumPy.
     _recompiled = False
     try:
-        from jamma.lmm._compile_utils import auto_recompile_c_extension
+        from jamma.core._compile_utils import auto_recompile_c_extension
 
         _recompiled = auto_recompile_c_extension(
             module_name="_jlinalg",

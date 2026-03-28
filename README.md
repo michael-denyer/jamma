@@ -21,7 +21,7 @@
 - **Cross-platform**: Runs on Linux, macOS, and Windows with NumPy and vendor BLAS
 - **Optimized for Intel**: Best performance on Intel CPUs with MKL BLAS. Runs well on Apple Silicon (Accelerate BLAS). Other architectures (AMD, ARM Linux) work correctly but with less BLAS optimization
 - **Pure Python + C extensions (OpenMP SIMD)**: NumPy stack with vendor BLAS dispatch (MKL-ILP64, Accelerate-ILP64) via jlinalg C layer for eigendecomposition and OpenMP-parallel Wald tests
-- **Large-scale ready**: Optional [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) wheels (numpy 2.4.2) for >46k sample eigendecomposition
+- **Large-scale ready**: Optional [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) wheels (numpy 2.4.3) for >46k sample eigendecomposition
 
 ## Installation
 
@@ -198,7 +198,7 @@ See [Performance](docs/PERFORMANCE.md) for benchmark methodology and large-scale
 - [x] Pre-computed kinship input (`-k`)
 - [x] Covariate support (`-c`)
 - [x] PLINK binary format (`.bed/.bim/.fam`) with input dimension validation
-- [x] Large-scale streaming I/O (>100k samples via [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) -- numpy 2.4.2)
+- [x] Large-scale streaming I/O (>100k samples via [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) -- numpy 2.4.3)
 - [x] Lambda optimization bounds (`-lmin`/`-lmax`)
 - [x] Individual weights for kinship (`-widv`)
 - [x] Categorical covariates with one-hot encoding (`-cat`)

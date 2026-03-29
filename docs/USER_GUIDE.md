@@ -56,8 +56,10 @@ uv sync
 |----------|---------------------|-------|
 | Linux x86_64 | Full support | ILP64 for >46k samples |
 | ARM Mac (M1+) | Full support | Accelerate BLAS |
-| Intel Mac | Full support | Accelerate / MKL |
-| Windows | Full support | Limited to <46k samples without ILP64 |
+| ARM Linux | Full support | OpenBLAS |
+| Intel Mac (macOS 13.3+) | Full support | Accelerate BLAS |
+| Windows (10+) | Full support | ILP64 for >46k samples |
+| Windows Server (2016+) | Full support | ILP64 for >46k samples |
 
 JAMMA's heavy computation (eigendecomposition, matrix multiplication, REML optimization) is BLAS-bound. Intel MKL delivers the best throughput, particularly at scale. Apple Accelerate is a close second on Apple Silicon. OpenBLAS works correctly everywhere but is less tuned for these workloads.
 
@@ -468,7 +470,7 @@ JAMMA's LMM requires eigendecomposition of the N×N kinship matrix. The default
 numpy stack uses LP64 BLAS (32-bit integers), which overflows at ~46k samples
 (46k × 46k = 2.1 billion elements > int32 max).
 
-### NumPy with MKL ILP64 (Linux)
+### NumPy with MKL ILP64 (Linux / Windows)
 
 Install numpy-mkl using the commands in [Linux / Windows](#linux--windows) above. Pre-built ILP64 wheels are available for numpy 2.4.3 (Python 3.11–3.14, Linux and Windows).
 

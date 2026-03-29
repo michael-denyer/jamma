@@ -703,7 +703,7 @@ class TestLMMEquivalence:
                 assert np.isnan(loaded_beta)
                 continue
 
-            # Standard tolerances from CLAUDE.md tolerance table
+            # Standard tolerances from EQUIVALENCE.md tolerance table
             np.testing.assert_allclose(
                 loaded_beta,
                 fresh_beta,

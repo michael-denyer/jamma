@@ -25,15 +25,15 @@
 
 ## Installation
 
-### Windows / macOS (13.3+)
+### macOS (13.3+)
 
 ```bash
 pip install jamma
 ```
 
-That's it. macOS Accelerate BLAS handles large matrices natively. Windows users are limited to <46k samples (Mac uses Accelerate-ILP64 natively).
+That's it. macOS Accelerate BLAS handles large matrices natively (Accelerate-ILP64).
 
-### Linux (Intel/AMD)
+### Windows (10+), Windows Server (2016+) and Linux (Intel/AMD)
 
 Install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first -- standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. Pre-built ILP64 wheels are available for Python 3.11-3.14:
 
@@ -63,12 +63,12 @@ See the [User Guide](docs/USER_GUIDE.md#linux--windows) for ILP64 verification s
 
 | Platform | BLAS | ILP64 | Notes |
 |----------|------|-------|-------|
-| Linux x86_64 (Intel) | MKL (optimal) | numpy-mkl | Best performance |
-| Linux x86_64 (AMD) | OpenBLAS | numpy-mkl | Works well |
+| Linux x86_64 | MKL (optimal) | numpy-mkl | Best performance |
 | ARM Mac (M1+) | Accelerate | native | Excellent performance |
 | ARM Linux | OpenBLAS | -- | Works correctly |
-| Intel Mac | Accelerate / MKL | numpy-mkl | Full support |
-| Windows | OpenBLAS | -- | Limited to <46k samples |
+| Intel Mac (MacOS 13.3+) | Accelerate | native | Full support |
+| Windows x86_64  (10+) | MKL (optimal) | numpy-mkl | Best performance |
+| Windows Server x86_64  (2016+) | MKL (optimal) | numpy-mkl | Best performance |
 
 See the [User Guide](docs/USER_GUIDE.md#platform-support) for BLAS backend details.
 

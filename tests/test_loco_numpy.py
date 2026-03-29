@@ -460,7 +460,8 @@ def test_loco_gemma_equivalence():
 
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
     # LOCO recomputes kinship per chromosome, amplifying Brent optimizer
-    # divergence on lambda. Use 5e-5 (CLAUDE.md calibrated JAMMA-vs-GEMMA bound).
+    # divergence on lambda. Use 5e-5 (calibrated JAMMA-vs-GEMMA bound,
+    # see EQUIVALENCE.md).
     tol = ToleranceConfig(lambda_rtol=5e-5)
 
     loco = run_lmm_loco(

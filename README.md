@@ -64,9 +64,9 @@ See the [User Guide](docs/USER_GUIDE.md#linux--windows) for ILP64 verification s
 | Platform | BLAS | ILP64 | Notes |
 |----------|------|-------|-------|
 | Linux x86_64 | MKL (optimal) | numpy-mkl | Best performance |
-| ARM Mac (M1+) | Accelerate | native | Excellent performance |
 | ARM Linux | OpenBLAS | -- | Works correctly |
-
+| ARM Mac (M1+) | Accelerate | native | Excellent performance |
+| Intel Mac (macOS 13.3+) | Accelerate | native | Full support |
 | Windows x86_64 (10+) | MKL (optimal) | numpy-mkl | Best performance |
 | Windows Server x86_64 (2016+) | MKL (optimal) | numpy-mkl | Best performance |
 

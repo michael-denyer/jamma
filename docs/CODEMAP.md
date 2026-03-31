@@ -119,6 +119,47 @@ flowchart TB
     style L4N fill:#0f3460,stroke:#2ecc71,color:#eee,stroke-width:2px
     style L5 fill:#16213e,stroke:#a29bfe,color:#eee,stroke-width:2px
     style L6 fill:#16213e,stroke:#95a5a6,color:#eee,stroke-width:2px
+
+    style CLI fill:#53a8b6,stroke:#3d8a96,color:#fff
+    style GWAS fill:#53a8b6,stroke:#3d8a96,color:#fff
+    style PIPE fill:#53a8b6,stroke:#3d8a96,color:#fff
+
+    style PLINK fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style COVAR fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style KIO fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style RIO fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style SNPLIST fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style EIGIO fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style MATIO fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+
+    style KINSHIP fill:#e94560,stroke:#c73550,color:#fff
+    style MISSING fill:#e94560,stroke:#c73550,color:#fff
+    style EIGEN fill:#e94560,stroke:#c73550,color:#fff
+    style JLINALG fill:#e94560,stroke:#c73550,color:#fff
+    style LIKE fill:#e94560,stroke:#c73550,color:#fff
+    style OPT fill:#e94560,stroke:#c73550,color:#fff
+    style STATS fill:#e94560,stroke:#c73550,color:#fff
+    style SNPF fill:#e94560,stroke:#c73550,color:#fff
+    style PREPCOM fill:#e94560,stroke:#c73550,color:#fff
+    style SPECIAL fill:#e94560,stroke:#c73550,color:#fff
+
+    style LIKENP fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style RUNNERNP fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style COMPUTENP fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style CACCEL fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style SCHEMA fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style RESULTS fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style LOCO fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+
+    style CONFIG fill:#a29bfe,stroke:#7c73d9,color:#fff
+    style MEM fill:#a29bfe,stroke:#7c73d9,color:#fff
+    style LOG fill:#a29bfe,stroke:#7c73d9,color:#fff
+    style THREAD fill:#a29bfe,stroke:#7c73d9,color:#fff
+    style HW fill:#a29bfe,stroke:#7c73d9,color:#fff
+    style PROG fill:#a29bfe,stroke:#7c73d9,color:#fff
+
+    style TOL fill:#95a5a6,stroke:#7f8c8d,color:#1a1a2e
+    style CMP fill:#95a5a6,stroke:#7f8c8d,color:#1a1a2e
 ```
 
 ---
@@ -279,15 +320,15 @@ Tolerance-based comparison infrastructure for GEMMA parity testing.
 
 ```mermaid
 sequenceDiagram
-    box rgb(26, 26, 46) Entry
+    box rgb(178, 223, 219) Entry
         participant U as User
         participant CLI as CLI (1a)
     end
-    box rgb(15, 52, 96) I/O
+    box rgb(255, 224, 178) I/O
         participant IO as PLINK I/O (2a)
         participant W as Writer (2d)
     end
-    box rgb(22, 33, 62) Core Computation
+    box rgb(248, 187, 208) Core Computation
         participant K as Kinship (3a)
         participant E as Eigendecomp (3c)
         participant L as Likelihood (3d)

@@ -814,7 +814,7 @@ def check_memory_before_run(
             f"Run may OOM."
         )
 
-    # BLAS context: warn if estimates assume vendor LAPACK but it's unavailable
+    # BLAS context: warn if active backend differs from calibration reference
     from jamma.core.estimates import get_blas_estimate_context
 
     blas_backend, blas_ilp64, blas_calibrated = get_blas_estimate_context()
@@ -830,9 +830,9 @@ def check_memory_before_run(
     if n_samples > 40_000 and not blas_ilp64:
         logger.warning(
             f"  No ILP64 BLAS detected (active: {blas_backend}). "
-            f"LP64 BLAS overflows at ~46k samples — eigendecomposition of "
-            f"{n_samples:,} samples will use numpy fallback or may crash. "
-            f"Install ILP64 numpy (see docs/USER_GUIDE.md)."
+            f"Eigendecomposition of {n_samples:,} samples will use NumPy "
+            f"fallback, which may be significantly slower. "
+            f"Install ILP64 numpy for best performance (see docs/USER_GUIDE.md)."
         )
     if not blas_calibrated:
         logger.warning(

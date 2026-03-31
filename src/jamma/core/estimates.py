@@ -57,12 +57,17 @@ def _get_blas_context() -> tuple[str, bool]:
         from jamma import jlinalg
 
         return str(jlinalg.blas_backend), bool(jlinalg.blas_is_ilp64)
-    except (ImportError, AttributeError):
+    except (ImportError, AttributeError) as exc:
+        import logging
+
+        logging.getLogger(__name__).debug(
+            "Could not determine BLAS backend from jlinalg: %s", exc
+        )
         return "unknown", False
 
 
 def _blas_is_mkl() -> bool:
-    """True if the active BLAS backend is MKL (LP64 or ILP64)."""
+    """True if the active BLAS backend is MKL."""
     backend, _ = _get_blas_context()
     return "MKL" in backend.upper()
 
@@ -73,10 +78,10 @@ def _blas_caveat() -> str:
     Empty string when on MKL (estimates are calibrated). Otherwise a
     short warning that the estimate may understate actual runtime.
     """
-    backend, is_ilp64 = _get_blas_context()
+    backend, _ = _get_blas_context()
     if "MKL" in backend.upper():
         return ""
-    if backend == "numpy-fallback" or backend == "unknown":
+    if backend in ("numpy-fallback", "unknown"):
         return " [estimates calibrated to MKL — no vendor BLAS detected, expect slower]"
     # Some other vendor BLAS (OpenBLAS, Accelerate, BLIS)
     return f" [estimates calibrated to MKL — {backend} may differ]"

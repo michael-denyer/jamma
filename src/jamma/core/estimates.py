@@ -32,11 +32,66 @@ Benchmark data (E96ds_v6, 48 cores, v4.2.0):
 
 from __future__ import annotations
 
+import functools
+
 from jamma.core.threading import get_physical_core_count
 
 _REF_CORES = 48
 _REF_SNPS = 91_586
 _CORE_SCALING_EXP = 0.7  # Sub-linear: BLAS is memory-BW-bound at large N
+
+# BLAS backend context for time estimates.
+# Estimates are calibrated to MKL ILP64. Without vendor ILP64 BLAS,
+# actual runtimes can be significantly longer — warn users accordingly.
+
+
+@functools.cache
+def _get_blas_context() -> tuple[str, bool]:
+    """Return (blas_backend, is_ilp64) from jlinalg, with safe fallback.
+
+    Returns:
+        Tuple of (backend_name, is_ilp64). Falls back to
+        ("unknown", False) if jlinalg cannot be imported.
+    """
+    try:
+        from jamma import jlinalg
+
+        return str(jlinalg.blas_backend), bool(jlinalg.blas_is_ilp64)
+    except (ImportError, AttributeError):
+        return "unknown", False
+
+
+def _blas_is_mkl() -> bool:
+    """True if the active BLAS backend is MKL (LP64 or ILP64)."""
+    backend, _ = _get_blas_context()
+    return "MKL" in backend.upper()
+
+
+def _blas_caveat() -> str:
+    """Return a caveat suffix for time estimates when not on MKL.
+
+    Empty string when on MKL (estimates are calibrated). Otherwise a
+    short warning that the estimate may understate actual runtime.
+    """
+    backend, is_ilp64 = _get_blas_context()
+    if "MKL" in backend.upper():
+        return ""
+    if backend == "numpy-fallback" or backend == "unknown":
+        return " [estimates calibrated to MKL — no vendor BLAS detected, expect slower]"
+    # Some other vendor BLAS (OpenBLAS, Accelerate, BLIS)
+    return f" [estimates calibrated to MKL — {backend} may differ]"
+
+
+def get_blas_estimate_context() -> tuple[str, bool, bool]:
+    """Return BLAS context relevant to estimate accuracy.
+
+    Returns:
+        Tuple of (backend_name, is_ilp64, estimates_calibrated) where
+        estimates_calibrated is True when on MKL (the reference backend).
+    """
+    backend, is_ilp64 = _get_blas_context()
+    return backend, is_ilp64, _blas_is_mkl()
+
 
 # Kinship: a*n_k^2 + b*n_k (SNP-normalized)
 # Weighted NNLS fit (weight=1/actual), no constant term.
@@ -106,15 +161,19 @@ def estimate_kinship_time(
 ) -> str:
     """Estimate kinship computation wall time as a human-readable string.
 
+    Estimates are calibrated to MKL ILP64 on 48-core Xeon. A caveat is
+    appended when the active BLAS backend differs.
+
     Args:
         n_samples: Number of samples.
         n_snps: Number of SNPs.
         n_cores: Physical core count. None auto-detects.
 
     Returns:
-        Minimum estimate string like ">=5 min".
+        Minimum estimate string like ">=5 min", with BLAS caveat if applicable.
     """
-    return f">={_format_duration(estimate_kinship_seconds(n_samples, n_snps, n_cores))}"
+    duration = _format_duration(estimate_kinship_seconds(n_samples, n_snps, n_cores))
+    return f">={duration}{_blas_caveat()}"
 
 
 def estimate_eigendecomp_seconds(
@@ -139,15 +198,19 @@ def estimate_eigendecomp_time(
 ) -> str:
     """Estimate eigendecomposition wall time as a human-readable string.
 
+    Estimates are calibrated to MKL ILP64 on 48-core Xeon. A caveat is
+    appended when the active BLAS backend differs.
+
     Args:
         n_samples: Number of samples.
         n_cores: Physical core count. None auto-detects.
         use_dsyevr: Accepted for API compatibility. No multiplier applied.
 
     Returns:
-        Minimum estimate string like ">=1h 47m".
+        Minimum estimate string like ">=1h 47m", with BLAS caveat if applicable.
     """
-    return f">={_format_duration(estimate_eigendecomp_seconds(n_samples, n_cores))}"
+    duration = _format_duration(estimate_eigendecomp_seconds(n_samples, n_cores))
+    return f">={duration}{_blas_caveat()}"
 
 
 def estimate_lmm_seconds(
@@ -173,12 +236,16 @@ def estimate_lmm_time(
 ) -> str:
     """Estimate LMM association wall time as a human-readable string.
 
+    Estimates are calibrated to MKL ILP64 on 48-core Xeon. A caveat is
+    appended when the active BLAS backend differs.
+
     Args:
         n_samples: Number of samples.
         n_snps: Number of filtered SNPs.
         n_cores: Physical core count. None auto-detects.
 
     Returns:
-        Minimum estimate string like ">=15 min".
+        Minimum estimate string like ">=15 min", with BLAS caveat if applicable.
     """
-    return f">={_format_duration(estimate_lmm_seconds(n_samples, n_snps, n_cores))}"
+    duration = _format_duration(estimate_lmm_seconds(n_samples, n_snps, n_cores))
+    return f">={duration}{_blas_caveat()}"

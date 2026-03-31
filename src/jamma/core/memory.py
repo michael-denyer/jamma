@@ -814,12 +814,31 @@ def check_memory_before_run(
             f"Run may OOM."
         )
 
+    # BLAS context: warn if estimates assume vendor LAPACK but it's unavailable
+    from jamma.core.estimates import get_blas_estimate_context
+
+    blas_backend, blas_ilp64, blas_calibrated = get_blas_estimate_context()
+
     logger.info(
         f"Memory check for {operation} ({n_samples:,} samples × {n_snps:,} SNPs):"
     )
+    logger.info(f"  BLAS backend: {blas_backend} (ILP64={blas_ilp64})")
     logger.info(f"  Estimated peak: {reported_peak:.1f}GB ({driver_note})")
     logger.info(f"  Process using: {snap.rss_gb:.1f}GB")
     logger.info(f"  Available: {snap.available_gb:.1f}GB")
+
+    if n_samples > 40_000 and not blas_ilp64:
+        logger.warning(
+            f"  No ILP64 BLAS detected (active: {blas_backend}). "
+            f"LP64 BLAS overflows at ~46k samples — eigendecomposition of "
+            f"{n_samples:,} samples will use numpy fallback or may crash. "
+            f"Install ILP64 numpy (see docs/USER_GUIDE.md)."
+        )
+    if not blas_calibrated:
+        logger.warning(
+            f"  Time estimates are calibrated to MKL ILP64. "
+            f"Active BLAS ({blas_backend}) may yield significantly different runtimes."
+        )
 
     # Check if estimated peak exceeds available
     headroom = snap.available_gb - reported_peak

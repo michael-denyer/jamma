@@ -38,21 +38,21 @@ That's it. macOS Accelerate BLAS handles large matrices natively (Accelerate-ILP
 Install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first -- standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. Pre-built ILP64 wheels are available for Python 3.11-3.14:
 
 ```bash
+pip install psutil loguru threadpoolctl click progressbar2 bed-reader
 pip install numpy \
   --extra-index-url https://michael-denyer.github.io/numpy-mkl \
   --force-reinstall --upgrade
 pip install jamma --no-deps
-pip install psutil loguru threadpoolctl click progressbar2 bed-reader
 ```
 
 **From Git (latest development version):**
 
 ```bash
+pip install psutil loguru threadpoolctl click progressbar2 bed-reader
 pip install numpy \
   --extra-index-url https://michael-denyer.github.io/numpy-mkl \
   --force-reinstall --upgrade
 pip install git+https://github.com/michael-denyer/jamma.git --no-deps
-pip install psutil loguru threadpoolctl click progressbar2 bed-reader
 ```
 
 > **Why `--no-deps`?** JAMMA depends on `numpy>=2.0.0`, so a normal `pip install jamma` will pull in standard numpy and overwrite the ILP64 build. `--no-deps` prevents this; you install the runtime dependencies manually instead.
@@ -220,32 +220,64 @@ JAMMA uses NumPy for data loading and kinship. Eigendecomposition uses `jlinalg.
 
 ```mermaid
 flowchart TD
-    CLI["CLI / gwas()"] --> PIPE["PipelineRunner"]
-    PIPE --> LOAD["Load PLINK + Phenotypes<br>(NumPy)"]
-    LOAD --> KIN["Kinship<br>(NumPy matmul)"]
-    KIN --> EIG["Eigendecomposition<br>(jlinalg.eigh - vendor DSYEVD/DSYEVR)"]
-    EIG --> MEM{"memory?"}
-    MEM -->|"fits"| NP["NumPy Batch Runner"]
-    MEM -->|"large"| NPS["NumPy Streaming Runner<br>two-pass disk streaming"]
-    NP --> CEXT{"C extension?"}
-    NPS --> CEXT
-    CEXT -->|yes| C["C Extension<br>OpenMP + SIMD"]
-    CEXT -->|no| PY["Pure Python<br>fallback"]
-    C --> RES["AssocResult"]
+    subgraph ENTRY["ENTRY"]
+        CLI["CLI / gwas()"]
+        PIPE["PipelineRunner"]
+        CLI --> PIPE
+    end
+
+    subgraph IO["DATA LOADING"]
+        LOAD["Load PLINK +\nPhenotypes"]
+    end
+
+    subgraph CORE["CORE COMPUTATION"]
+        KIN["Kinship\n(DGEMM, chunked)"]
+        EIG["Eigendecomposition\n(jlinalg.eigh → DSYEVD/DSYEVR)"]
+        KIN --> EIG
+    end
+
+    subgraph ASSOC["ASSOCIATION TESTING"]
+        MEM{"Memory\nbudget?"}
+        NP["Batch Runner\n(genotypes in RAM)"]
+        NPS["Streaming Runner\n(two-pass disk I/O)"]
+        CEXT{"C extension?"}
+        C["C Extension\nOpenMP + SIMD"]
+        PY["Pure Python\nfallback"]
+        MEM -->|"fits"| NP
+        MEM -->|"large"| NPS
+        NP --> CEXT
+        NPS --> CEXT
+        CEXT -->|"yes"| C
+        CEXT -->|"no"| PY
+    end
+
+    RES["AssocResult\n(.assoc.txt)"]
+
+    PIPE --> LOAD --> CORE
+    EIG --> ASSOC
+    C --> RES
     PY --> RES
 
-    style CLI fill:#4a90d9,stroke:#2c6faf,color:#fff
-    style PIPE fill:#4a90d9,stroke:#2c6faf,color:#fff
-    style LOAD fill:#5ba55b,stroke:#3d7a3d,color:#fff
-    style KIN fill:#5ba55b,stroke:#3d7a3d,color:#fff
-    style EIG fill:#e88a3a,stroke:#c06a1a,color:#fff
-    style MEM fill:#f5c542,stroke:#d4a520,color:#333
+    style ENTRY fill:#1a1a2e,stroke:#53a8b6,color:#eee,stroke-width:2px
+    style IO fill:#1a1a2e,stroke:#53a8b6,color:#eee,stroke-width:2px
+    style CORE fill:#0f3460,stroke:#f5b461,color:#eee,stroke-width:2px
+    style ASSOC fill:#0f3460,stroke:#e94560,color:#eee,stroke-width:2px
+
+    style CLI fill:#53a8b6,stroke:#3d8a96,color:#fff
+    style PIPE fill:#53a8b6,stroke:#3d8a96,color:#fff
+    style LOAD fill:#53a8b6,stroke:#3d8a96,color:#fff
+
+    style KIN fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style EIG fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+
+    style MEM fill:#e94560,stroke:#c73550,color:#fff
     style NP fill:#7b68ae,stroke:#5a4d8a,color:#fff
     style NPS fill:#7b68ae,stroke:#5a4d8a,color:#fff
-    style CEXT fill:#f5c542,stroke:#d4a520,color:#333
-    style C fill:#d95050,stroke:#b33030,color:#fff
-    style PY fill:#6bbfbf,stroke:#4a9e9e,color:#fff
-    style RES fill:#888,stroke:#666,color:#fff
+    style CEXT fill:#e94560,stroke:#c73550,color:#fff
+    style C fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style PY fill:#95a5a6,stroke:#7f8c8d,color:#1a1a2e
+
+    style RES fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
 ```
 
 Core algorithms ([likelihood.py](src/jamma/lmm/likelihood.py), [prepare_common.py](src/jamma/lmm/prepare_common.py)) are shared between batch and streaming runners. See [jlinalg Architecture](docs/JLINALG_ARCHITECTURE.md) for the C vendor BLAS dispatch layer.

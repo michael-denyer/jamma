@@ -113,12 +113,12 @@ flowchart TB
 
     CMP --> TOL
 
-    style L1 fill:#e8f4fd,stroke:#2196f3,color:#1565c0
-    style L2 fill:#fff3e0,stroke:#ff9800,color:#e65100
-    style L3 fill:#fce4ec,stroke:#e91e63,color:#880e4f
-    style L4N fill:#e8f5e9,stroke:#4caf50,color:#1b5e20
-    style L5 fill:#f3e5f5,stroke:#9c27b0,color:#6a1b9a
-    style L6 fill:#e0f2f1,stroke:#009688,color:#004d40
+    style L1 fill:#1a1a2e,stroke:#53a8b6,color:#eee,stroke-width:2px
+    style L2 fill:#1a1a2e,stroke:#f5b461,color:#eee,stroke-width:2px
+    style L3 fill:#0f3460,stroke:#e94560,color:#eee,stroke-width:2px
+    style L4N fill:#0f3460,stroke:#2ecc71,color:#eee,stroke-width:2px
+    style L5 fill:#16213e,stroke:#a29bfe,color:#eee,stroke-width:2px
+    style L6 fill:#16213e,stroke:#95a5a6,color:#eee,stroke-width:2px
 ```
 
 ---
@@ -279,15 +279,15 @@ Tolerance-based comparison infrastructure for GEMMA parity testing.
 
 ```mermaid
 sequenceDiagram
-    box rgb(232, 244, 253) Entry
+    box rgb(26, 26, 46) Entry
         participant U as User
         participant CLI as CLI (1a)
     end
-    box rgb(255, 243, 224) I/O
+    box rgb(15, 52, 96) I/O
         participant IO as PLINK I/O (2a)
         participant W as Writer (2d)
     end
-    box rgb(252, 228, 236) Core Computation
+    box rgb(22, 33, 62) Core Computation
         participant K as Kinship (3a)
         participant E as Eigendecomp (3c)
         participant L as Likelihood (3d)
@@ -371,10 +371,10 @@ flowchart LR
     MLE0 --> L1
     UAB --> NULL --> SC
 
-    style Input fill:#fce4ec,stroke:#e91e63,color:#880e4f
-    style Wald fill:#e8f4fd,stroke:#2196f3,color:#1565c0
-    style LRT fill:#e8f5e9,stroke:#4caf50,color:#1b5e20
-    style Score fill:#fff3e0,stroke:#ff9800,color:#e65100
+    style Input fill:#0f3460,stroke:#e94560,color:#eee,stroke-width:2px
+    style Wald fill:#1a1a2e,stroke:#53a8b6,color:#eee,stroke-width:2px
+    style LRT fill:#1a1a2e,stroke:#2ecc71,color:#eee,stroke-width:2px
+    style Score fill:#1a1a2e,stroke:#f5b461,color:#eee,stroke-width:2px
 ```
 
 ---
@@ -407,9 +407,21 @@ flowchart TD
     INC -->|"per-SNP to disk"| DISK["No list accumulation"]
     STR -->|"O(n x chunk)"| LOW["Bounded memory"]
 
-    style Preflight fill:#f3e5f5,stroke:#9c27b0,color:#6a1b9a
-    style Peak fill:#fce4ec,stroke:#e91e63,color:#880e4f
-    style Runtime fill:#e8f5e9,stroke:#4caf50,color:#1b5e20
+    style Preflight fill:#1a1a2e,stroke:#f5b461,color:#eee,stroke-width:2px
+    style Peak fill:#0f3460,stroke:#e94560,color:#eee,stroke-width:2px
+    style Runtime fill:#16213e,stroke:#2ecc71,color:#eee,stroke-width:2px
+
+    style EST fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style CHK fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style KM fill:#e94560,stroke:#c73550,color:#fff
+    style UM fill:#e94560,stroke:#c73550,color:#fff
+    style WS fill:#e94560,stroke:#c73550,color:#fff
+    style FAIL fill:#e74c3c,stroke:#c0392b,color:#fff
+    style INC fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style STR fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style CLN fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style DISK fill:#53a8b6,stroke:#3d8a96,color:#fff
+    style LOW fill:#53a8b6,stroke:#3d8a96,color:#fff
 ```
 
 ---
@@ -442,7 +454,16 @@ flowchart TD
     STREAM --> CN
     LN --> SP
 
-    style NP fill:#e8f5e9,stroke:#4caf50,color:#1b5e20
+    style NP fill:#0f3460,stroke:#2ecc71,color:#eee,stroke-width:2px
+
+    style PIPE fill:#53a8b6,stroke:#3d8a96,color:#fff
+    style SEL fill:#e94560,stroke:#c73550,color:#fff
+    style PREP fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style BATCH fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style STREAM fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style CN fill:#7b68ae,stroke:#5a4d8a,color:#fff
+    style LN fill:#7b68ae,stroke:#5a4d8a,color:#fff
+    style SP fill:#7b68ae,stroke:#5a4d8a,color:#fff
 ```
 
 ### Backend Selection

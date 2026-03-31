@@ -12,14 +12,43 @@ BLAS specialization (DSYRK, DGEMM).
 
 ```mermaid
 graph TD
-    A[jamma Python code] --> B["jlinalg Python API<br/>__init__.py"]
-    B --> C{C extension loaded?}
-    C -->|Yes| D["pymodule.c<br/>NumPy buffer bridge"]
-    C -->|No| E["NumPy fallback<br/>np.linalg / np.matmul"]
-    D --> F["ISA + Vendor Init<br/>platform.c"]
-    F --> G{Vendor BLAS<br/>available?}
-    G -->|ILP64| H["Vendor Path<br/>MKL / Accelerate"]
-    G -->|No| E
+    subgraph PYTHON["PYTHON LAYER"]
+        A["jamma Python code"]
+        B["jlinalg Python API\n(__init__.py)"]
+        A --> B
+    end
+
+    subgraph BRIDGE["C EXTENSION"]
+        C{"C extension\nloaded?"}
+        D["pymodule.c\nNumPy buffer bridge"]
+        F["ISA + Vendor Init\n(platform.c)"]
+        G{"Vendor BLAS\navailable?"}
+        D --> F --> G
+    end
+
+    subgraph BACKENDS["COMPUTE BACKENDS"]
+        H["Vendor LAPACK\nMKL-ILP64 / Accelerate-ILP64"]
+        E["NumPy fallback\nnp.linalg / np.matmul"]
+    end
+
+    B --> C
+    C -->|"yes"| D
+    C -->|"no"| E
+    G -->|"ILP64"| H
+    G -->|"none"| E
+
+    style PYTHON fill:#1a1a2e,stroke:#53a8b6,color:#eee,stroke-width:2px
+    style BRIDGE fill:#0f3460,stroke:#f5b461,color:#eee,stroke-width:2px
+    style BACKENDS fill:#1a1a2e,stroke:#2ecc71,color:#eee,stroke-width:2px
+
+    style A fill:#53a8b6,stroke:#3d8a96,color:#fff
+    style B fill:#53a8b6,stroke:#3d8a96,color:#fff
+    style C fill:#e94560,stroke:#c73550,color:#fff
+    style D fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style F fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style G fill:#e94560,stroke:#c73550,color:#fff
+    style H fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style E fill:#95a5a6,stroke:#7f8c8d,color:#1a1a2e
 ```
 
 The Python API in `__init__.py` tries to import the `_jlinalg` C extension.
@@ -31,10 +60,29 @@ in `platform.c` detects the CPU ISA and populates the dispatch table.
 
 ```mermaid
 graph LR
-    A["blas_dispatch.c"] --> B["System BLAS<br/>RTLD_DEFAULT + numpy scan"]
-    B --> C["pip-install MKL<br/>site-packages/mkl.libs/"]
-    C --> D["Co-located BLIS<br/>dladdr-relative"]
-    D --> E["NumPy fallback"]
+    subgraph DISCOVER["DISCOVERY (all paths run)"]
+        direction LR
+        A["blas_dispatch.c"]
+        B["System BLAS\nRTLD_DEFAULT +\nnumpy scan"]
+        C["pip-install MKL\nsite-packages/\nmkl.libs/"]
+        D["Co-located BLIS\ndladdr-relative"]
+        A --> B --> C --> D
+    end
+
+    subgraph SELECT["SELECTION (best wins)"]
+        E["NumPy fallback"]
+    end
+
+    D --> E
+
+    style DISCOVER fill:#0f3460,stroke:#f5b461,color:#eee,stroke-width:2px
+    style SELECT fill:#1a1a2e,stroke:#95a5a6,color:#eee,stroke-width:2px
+
+    style A fill:#e94560,stroke:#c73550,color:#fff
+    style B fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style C fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style D fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style E fill:#95a5a6,stroke:#7f8c8d,color:#1a1a2e
 ```
 
 `blas_dispatch.c` uses a discover-all-then-select-best model. All discovery

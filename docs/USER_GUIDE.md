@@ -21,21 +21,21 @@ pip install jamma
 For large-scale GWAS (>46k samples), install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first — standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. Pre-built ILP64 wheels are available for Python 3.11–3.14:
 
 ```bash
+pip install psutil loguru threadpoolctl click progressbar2 bed-reader
 pip install numpy \
   --extra-index-url https://michael-denyer.github.io/numpy-mkl \
   --force-reinstall --upgrade
 pip install jamma --no-deps
-pip install psutil loguru threadpoolctl click progressbar2 bed-reader
 ```
 
 **From Git (latest development version):**
 
 ```bash
+pip install psutil loguru threadpoolctl click progressbar2 bed-reader
 pip install numpy \
   --extra-index-url https://michael-denyer.github.io/numpy-mkl \
   --force-reinstall --upgrade
 pip install git+https://github.com/michael-denyer/jamma.git --no-deps
-pip install psutil loguru threadpoolctl click progressbar2 bed-reader
 ```
 
 > **Why `--no-deps`?** JAMMA depends on `numpy>=2.0.0`, so a normal install will
@@ -76,6 +76,82 @@ export JAMMA_BACKEND=numpy
 ```
 
 Priority: `JAMMA_BACKEND` env var > `--backend` flag > auto-detect (C+NumPy if C extension available, else NumPy fallback).
+
+### Pipeline Overview
+
+```mermaid
+flowchart TD
+    subgraph INPUT["INPUT"]
+        direction LR
+        BED[".bed/.bim/.fam"]
+        COV["Covariates"]
+        KIN_IN["Kinship (optional)"]
+    end
+
+    subgraph COMPUTE["COMPUTE PIPELINE"]
+        direction TB
+
+        subgraph PHASE1["Phase 1 — Kinship"]
+            GK["Kinship Accumulation\nDGEMM (chunked)"]
+        end
+
+        subgraph PHASE2["Phase 2 — Eigendecomposition"]
+            EIG["jlinalg.eigh\nDSYEVD / DSYEVR"]
+        end
+
+        subgraph PHASE3["Phase 3 — Association"]
+            direction TB
+            MEM{"Memory\nbudget?"}
+            BATCH["Batch Runner\n(genotypes in RAM)"]
+            STREAM["Streaming Runner\n(two-pass disk I/O)"]
+            CEXT{"C extension\navailable?"}
+            OMP["OpenMP + SIMD\naccelerated"]
+            PYFALL["Pure Python\nfallback"]
+        end
+    end
+
+    subgraph OUTPUT["OUTPUT"]
+        ASSOC[".assoc.txt"]
+        LOG[".log.txt"]
+    end
+
+    INPUT --> PHASE1
+    KIN_IN -.->|"skip if\npre-computed"| PHASE2
+    PHASE1 --> PHASE2
+    PHASE2 --> PHASE3
+    MEM -->|"fits"| BATCH
+    MEM -->|"large"| STREAM
+    BATCH --> CEXT
+    STREAM --> CEXT
+    CEXT -->|"yes"| OMP
+    CEXT -->|"no"| PYFALL
+    OMP --> OUTPUT
+    PYFALL --> OUTPUT
+
+    style INPUT fill:#1a1a2e,stroke:#e94560,color:#eee,stroke-width:2px
+    style COMPUTE fill:#0f3460,stroke:#e94560,color:#eee,stroke-width:2px
+    style OUTPUT fill:#1a1a2e,stroke:#e94560,color:#eee,stroke-width:2px
+
+    style PHASE1 fill:#16213e,stroke:#53a8b6,color:#eee,stroke-width:2px
+    style PHASE2 fill:#16213e,stroke:#f5b461,color:#eee,stroke-width:2px
+    style PHASE3 fill:#16213e,stroke:#e94560,color:#eee,stroke-width:2px
+
+    style BED fill:#53a8b6,stroke:#3d8a96,color:#fff
+    style COV fill:#53a8b6,stroke:#3d8a96,color:#fff
+    style KIN_IN fill:#53a8b6,stroke:#3d8a96,color:#fff
+
+    style GK fill:#53a8b6,stroke:#3d8a96,color:#fff
+    style EIG fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style MEM fill:#e94560,stroke:#c73550,color:#fff
+    style BATCH fill:#7b68ae,stroke:#5a4d8a,color:#fff
+    style STREAM fill:#7b68ae,stroke:#5a4d8a,color:#fff
+    style CEXT fill:#e94560,stroke:#c73550,color:#fff
+    style OMP fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style PYFALL fill:#95a5a6,stroke:#7f8c8d,color:#1a1a2e
+
+    style ASSOC fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style LOG fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+```
 
 ## Input Data Format
 
@@ -470,6 +546,50 @@ JAMMA's LMM requires eigendecomposition of the N×N kinship matrix. The default
 numpy stack uses LP64 BLAS (32-bit integers), which overflows at ~46k samples
 (46k × 46k = 2.1 billion elements > int32 max).
 
+```mermaid
+flowchart TD
+    subgraph DETECT["BLAS DETECTION (jlinalg)"]
+        direction TB
+        PROBE["Probe process BLAS symbols\ndlsym / numpy scan"]
+        PROBE --> ILP64{"ILP64\nbackend?"}
+    end
+
+    subgraph DISPATCH["EIGENDECOMP DISPATCH"]
+        direction TB
+        ILP64 -->|"MKL-ILP64\nAccelerate-ILP64"| VENDOR["Vendor LAPACK\n(DSYEVD / DSYEVR)"]
+        ILP64 -->|"LP64 only\nor none"| NPFALL["NumPy fallback\n(np.linalg.eigh)"]
+
+        VENDOR --> DSYEVD{"DSYEVD\nfits in RAM?"}
+        DSYEVD -->|"yes"| FAST["DSYEVD in-place\nO(N²) workspace — fast"]
+        DSYEVD -->|"no"| DSYEVR["DSYEVR\nO(N) workspace — slower"]
+    end
+
+    subgraph LIMITS["SAMPLE LIMITS"]
+        direction LR
+        L1["LP64: ~46k max\n(int32 overflow)"]
+        L2["ILP64: 200k+\n(memory-bound)"]
+    end
+
+    FAST --> LIMITS
+    DSYEVR --> LIMITS
+    NPFALL --> LIMITS
+
+    style DETECT fill:#1a1a2e,stroke:#f5b461,color:#eee,stroke-width:2px
+    style DISPATCH fill:#0f3460,stroke:#e94560,color:#eee,stroke-width:2px
+    style LIMITS fill:#1a1a2e,stroke:#53a8b6,color:#eee,stroke-width:2px
+
+    style PROBE fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style ILP64 fill:#e94560,stroke:#c73550,color:#fff
+    style VENDOR fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style NPFALL fill:#95a5a6,stroke:#7f8c8d,color:#1a1a2e
+    style DSYEVD fill:#e94560,stroke:#c73550,color:#fff
+    style FAST fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style DSYEVR fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+
+    style L1 fill:#e74c3c,stroke:#c0392b,color:#fff
+    style L2 fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+```
+
 ### NumPy with MKL ILP64 (Linux / Windows)
 
 Install numpy-mkl using the commands in [Linux / Windows](#linux--windows) above. Pre-built ILP64 wheels are available for numpy 2.4.3 (Python 3.11–3.14, Linux and Windows).
@@ -666,6 +786,55 @@ propagation analysis.
 ## Memory Safety
 
 JAMMA includes pre-flight memory checks that fail fast before OOM instead of crashing silently.
+
+```mermaid
+flowchart TD
+    subgraph PREFLIGHT["PRE-FLIGHT CHECK"]
+        direction TB
+        EST["Estimate peak memory\n(eigendecomp dominates)"]
+        BLAS["Detect BLAS backend\n+ ILP64 status"]
+        EST --> GATE{"Peak + 10%\n≤ available?"}
+        BLAS --> GATE
+    end
+
+    subgraph EIGEN_MEM["EIGENDECOMP MEMORY"]
+        direction TB
+        KM["K matrix\n8N² bytes"]
+        UM["U matrix\n8N² bytes"]
+        WK["DSYEVD workspace\n~8N² bytes"]
+        KM ~~~ UM ~~~ WK
+    end
+
+    subgraph RUNTIME["RUNTIME CONTROLS"]
+        direction TB
+        INPLACE["In-place DSYEVD\n(saves 1× N²)"]
+        FALLBACK["DSYEVR fallback\n(O(N) workspace)"]
+        CHUNK["Streaming chunks\nO(N × chunk_size)"]
+        FLUSH["Per-chunk disk flush\n(no list accumulation)"]
+    end
+
+    GATE -->|"sufficient"| EIGEN_MEM
+    GATE -->|"insufficient"| FAIL["MemoryError\n(fail fast with suggestions)"]
+    EIGEN_MEM --> RUNTIME
+
+    style PREFLIGHT fill:#1a1a2e,stroke:#f5b461,color:#eee,stroke-width:2px
+    style EIGEN_MEM fill:#0f3460,stroke:#e94560,color:#eee,stroke-width:2px
+    style RUNTIME fill:#16213e,stroke:#2ecc71,color:#eee,stroke-width:2px
+
+    style EST fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style BLAS fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style GATE fill:#e94560,stroke:#c73550,color:#fff
+    style FAIL fill:#e74c3c,stroke:#c0392b,color:#fff
+
+    style KM fill:#e94560,stroke:#c73550,color:#fff
+    style UM fill:#e94560,stroke:#c73550,color:#fff
+    style WK fill:#e94560,stroke:#c73550,color:#fff
+
+    style INPLACE fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style FALLBACK fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style CHUNK fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style FLUSH fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+```
 
 ### Pre-flight Checks
 

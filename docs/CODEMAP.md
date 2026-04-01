@@ -333,7 +333,7 @@ sequenceDiagram
     U->>CLI: jamma -lmm 1 -bfile data -k K.txt
     activate CLI
 
-    rect rgba(53, 168, 182, 0.5)
+    rect rgba(53, 168, 182, 0.75)
         CLI->>IO: load_plink_binary()
         activate IO
         IO-->>CLI: PlinkData (genotypes, metadata)
@@ -344,7 +344,7 @@ sequenceDiagram
         deactivate K
     end
 
-    rect rgba(245, 180, 97, 0.5)
+    rect rgba(245, 180, 97, 0.75)
         CLI->>E: eigendecompose_kinship(K)
         activate E
         E-->>CLI: eigenvalues, eigenvectors (U)
@@ -352,7 +352,7 @@ sequenceDiagram
         Note over CLI: Rotate: Uy = U'y, UtW = U'W
     end
 
-    rect rgba(233, 69, 96, 0.5)
+    rect rgba(233, 69, 96, 0.75)
         loop For each SNP chunk
             CLI->>L: compute_Uab(UtW, Uty, Utx)
             activate L

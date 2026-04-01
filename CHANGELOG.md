@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.1.1] - 2026-04-01
+
+### Fixed
+
+- Time estimates now show BLAS backend caveat when not running on MKL
+  (estimates are calibrated to MKL ILP64 on 48-core Xeon)
+- Memory pre-flight check logs active BLAS backend and ILP64 status; warns
+  when >40k samples without ILP64 or when time estimates are uncalibrated
+- Fix pip install order in docs: deps first, numpy-mkl second, jamma --no-deps
+  last to prevent ILP64 overwrite
+
+### Changed
+
+- High contrast mermaid diagrams across all docs (README, CODEMAP,
+  JLINALG_ARCHITECTURE, USER_GUIDE) with dark subgraph backgrounds and
+  bright node fills
+- Add three new diagrams to USER_GUIDE: GWAS pipeline flow, BLAS/eigendecomp
+  dispatch, and memory safety architecture
+
 ## [5.1.0] - 2026-03-25
 
 ### Added
@@ -1756,6 +1775,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
+[5.1.1]: https://github.com/michael-denyer/jamma/compare/v5.1.0...v5.1.1
+[5.1.0]: https://github.com/michael-denyer/jamma/compare/v5.0.1...v5.1.0
+[5.0.1]: https://github.com/michael-denyer/jamma/compare/v5.0.0...v5.0.1
+[5.0.0]: https://github.com/michael-denyer/jamma/compare/v4.1.0...v5.0.0
 [4.1.0]: https://github.com/michael-denyer/jamma/compare/v4.0.3...v4.1.0
 [4.0.3]: https://github.com/michael-denyer/jamma/compare/v4.0.2...v4.0.3
 [4.0.2]: https://github.com/michael-denyer/jamma/compare/v4.0.1...v4.0.2

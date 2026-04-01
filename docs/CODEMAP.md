@@ -320,61 +320,62 @@ Tolerance-based comparison infrastructure for GEMMA parity testing.
 
 ```mermaid
 sequenceDiagram
-    box rgb(26, 26, 46) Entry
-        participant U as User
-        participant CLI as CLI (1a)
-    end
-    box rgb(26, 26, 46) I/O
-        participant IO as PLINK I/O (2a)
-        participant W as Writer (2d)
-    end
-    box rgb(15, 52, 96) Core Computation
-        participant K as Kinship (3a)
-        participant E as Eigendecomp (3c)
-        participant L as Likelihood (3d)
-        participant O as Optimizer (3e)
-        participant S as Statistics (3f)
-    end
+    participant U as User
+    participant CLI as CLI (1a)
+    participant IO as PLINK I/O (2a)
+    participant K as Kinship (3a)
+    participant E as Eigendecomp (3c)
+    participant L as Likelihood (3d)
+    participant O as Optimizer (3e)
+    participant S as Statistics (3f)
+    participant W as Writer (2d)
 
     U->>CLI: jamma -lmm 1 -bfile data -k K.txt
     activate CLI
-    CLI->>IO: load_plink_binary()
-    activate IO
-    IO-->>CLI: PlinkData (genotypes, metadata)
-    deactivate IO
-    CLI->>K: read_kinship_matrix()
-    activate K
-    K-->>CLI: K (n x n)
-    deactivate K
-    CLI->>E: eigendecompose_kinship(K)
-    activate E
-    E-->>CLI: eigenvalues, eigenvectors (U)
-    deactivate E
 
-    Note over CLI: Rotate: Uy = U'y, UtW = U'W
+    rect rgba(83, 168, 182, 0.25)
+        CLI->>IO: load_plink_binary()
+        activate IO
+        IO-->>CLI: PlinkData (genotypes, metadata)
+        deactivate IO
+        CLI->>K: read_kinship_matrix()
+        activate K
+        K-->>CLI: K (n x n)
+        deactivate K
+    end
 
-    loop For each SNP chunk
-        CLI->>L: compute_Uab(UtW, Uty, Utx)
-        activate L
-        L-->>CLI: Uab matrix
-        deactivate L
-        CLI->>O: optimize_lambda(REML, Uab)
-        activate O
-        O->>L: reml_log_likelihood(lambda)
-        activate L
-        L-->>O: l(lambda)
-        deactivate L
-        O-->>CLI: lambda*
-        deactivate O
-        CLI->>L: calc_pab(Hi_eval, Uab)
-        activate L
-        L-->>CLI: Pab matrix
-        deactivate L
-        CLI->>S: calc_wald_test(Pab)
-        activate S
-        S-->>CLI: beta, SE, p_wald
-        deactivate S
-        CLI->>W: write(AssocResult)
+    rect rgba(245, 180, 97, 0.25)
+        CLI->>E: eigendecompose_kinship(K)
+        activate E
+        E-->>CLI: eigenvalues, eigenvectors (U)
+        deactivate E
+        Note over CLI: Rotate: Uy = U'y, UtW = U'W
+    end
+
+    rect rgba(233, 69, 96, 0.25)
+        loop For each SNP chunk
+            CLI->>L: compute_Uab(UtW, Uty, Utx)
+            activate L
+            L-->>CLI: Uab matrix
+            deactivate L
+            CLI->>O: optimize_lambda(REML, Uab)
+            activate O
+            O->>L: reml_log_likelihood(lambda)
+            activate L
+            L-->>O: l(lambda)
+            deactivate L
+            O-->>CLI: lambda*
+            deactivate O
+            CLI->>L: calc_pab(Hi_eval, Uab)
+            activate L
+            L-->>CLI: Pab matrix
+            deactivate L
+            CLI->>S: calc_wald_test(Pab)
+            activate S
+            S-->>CLI: beta, SE, p_wald
+            deactivate S
+            CLI->>W: write(AssocResult)
+        end
     end
 
     W-->>U: .assoc.txt + .log.txt

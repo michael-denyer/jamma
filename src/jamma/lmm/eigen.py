@@ -28,6 +28,7 @@ from jamma.core.memory import (
     check_memory_available,
     log_memory_snapshot,
 )
+from jamma.core.progress import timed_progress
 from jamma.core.threading import blas_threads, get_physical_core_count
 
 # For matrices >= this size, use sampled symmetry check instead of full np.allclose.
@@ -241,8 +242,12 @@ def eigendecompose_kinship(
             f"target={n_threads}t"
         )
 
-    from jamma.core.estimates import estimate_eigendecomp_time
+    from jamma.core.estimates import (
+        estimate_eigendecomp_seconds,
+        estimate_eigendecomp_time,
+    )
 
+    est_seconds = estimate_eigendecomp_seconds(n_samples, n_threads)
     logger.info(f"Eigendecomp: {driver}, threads={n_threads}")
     logger.info(
         f"  Estimated time: "
@@ -253,10 +258,18 @@ def eigendecompose_kinship(
     try:
         if no_vendor:
             logger.info("JLINALG_NO_VENDOR_LAPACK set — using np.linalg.eigh")
-            eigenvalues, eigenvectors = np.linalg.eigh(K)
+            eigenvalues, eigenvectors = timed_progress(
+                lambda: np.linalg.eigh(K),
+                estimated_seconds=est_seconds,
+                desc=f"Eigendecomp {n_samples:,}x{n_samples:,}",
+            )
         else:
             with blas_threads(n_threads):
-                eigenvalues, eigenvectors = jlinalg.eigh(K, inplace=use_inplace)
+                eigenvalues, eigenvectors = timed_progress(
+                    lambda: jlinalg.eigh(K, inplace=use_inplace),
+                    estimated_seconds=est_seconds,
+                    desc=f"Eigendecomp {n_samples:,}x{n_samples:,}",
+                )
     except MemoryError:
         logger.error(
             f"MemoryError during eigendecomposition of "

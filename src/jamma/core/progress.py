@@ -5,9 +5,14 @@ Databricks interactive notebooks and workflow notebooks.
 """
 
 import sys
-from collections.abc import Iterator
+import threading
+import time
+from collections.abc import Callable, Iterator
+from typing import TypeVar
 
 import progressbar
+
+_T = TypeVar("_T")
 
 
 class SeededETA(progressbar.AdaptiveETA):
@@ -44,6 +49,7 @@ def create_progress_bar(
     total: int,
     desc: str = "",
     initial_eta_seconds: float | None = None,
+    poll_interval: float | None = None,
 ) -> progressbar.ProgressBar:
     """Create and start a progressbar with standard JAMMA widgets.
 
@@ -57,6 +63,9 @@ def create_progress_bar(
         initial_eta_seconds: Model-predicted total time in seconds. When
             provided, the ETA widget shows this estimate until the first
             chunk completes, then switches to adaptive smoothing.
+        poll_interval: Minimum seconds between terminal redraws. Lower
+            values make the bar feel more responsive; higher values reduce
+            I/O overhead. Defaults to progressbar2's built-in default.
 
     Returns:
         A started ProgressBar instance. Caller must call ``bar.finish()``.
@@ -73,7 +82,10 @@ def create_progress_bar(
         " ",
         _make_eta_widget(initial_eta_seconds),
     ]
-    bar = progressbar.ProgressBar(max_value=total, widgets=widgets, fd=sys.stdout)
+    kwargs = dict(max_value=total, widgets=widgets, fd=sys.stdout)
+    if poll_interval is not None:
+        kwargs["poll_interval"] = poll_interval
+    bar = progressbar.ProgressBar(**kwargs)
     bar.start()
     return bar
 
@@ -83,6 +95,7 @@ def progress_iterator(
     total: int,
     desc: str = "",
     initial_eta_seconds: float | None = None,
+    poll_interval: float | None = None,
 ) -> Iterator:
     """Wrap iterator with progressbar2 progress display.
 
@@ -100,14 +113,102 @@ def progress_iterator(
         initial_eta_seconds: Model-predicted total time in seconds. When
             provided, the ETA widget shows this estimate until the first
             chunk completes, then switches to adaptive smoothing.
+        poll_interval: Minimum seconds between terminal redraws. Lower
+            values make the bar feel more responsive; higher values reduce
+            I/O overhead. Defaults to progressbar2's built-in default.
 
     Yields:
         Items from the wrapped iterator.
     """
-    bar = create_progress_bar(total, desc, initial_eta_seconds=initial_eta_seconds)
+    bar = create_progress_bar(
+        total,
+        desc,
+        initial_eta_seconds=initial_eta_seconds,
+        poll_interval=poll_interval,
+    )
     try:
         for i, item in enumerate(iterable):
             yield item
             bar.update(i + 1)
     finally:
         bar.finish()
+
+
+def timed_progress(
+    fn: Callable[[], _T],
+    estimated_seconds: float,
+    desc: str = "",
+    poll_interval: float = 1.0,
+) -> _T:
+    """Run a blocking function with a time-based progress bar.
+
+    Designed for opaque operations like LAPACK eigendecomposition that
+    release the GIL but provide no intermediate progress. The bar advances
+    based on elapsed time vs the estimate, capping at 99% until the
+    function actually returns.
+
+    Args:
+        fn: Zero-argument callable to execute. Must release the GIL
+            (numpy/LAPACK calls do this) so the progress thread can run.
+        estimated_seconds: Model-predicted wall time. The bar reaches
+            ~99% at this time, then holds until completion.
+        desc: Optional description prefix.
+        poll_interval: Seconds between bar updates.
+
+    Returns:
+        The return value of *fn*.
+
+    Raises:
+        Any exception raised by *fn* is re-raised after the bar is
+        finalized.
+    """
+    # Use 100 ticks so the bar shows percentage naturally.
+    n_ticks = 100
+    widgets = [
+        f"{desc}: " if desc else "",
+        progressbar.Percentage(),
+        " ",
+        progressbar.Bar(),
+        " ",
+        progressbar.Timer(),
+        " ",
+        progressbar.AdaptiveETA(),
+    ]
+    bar = progressbar.ProgressBar(
+        max_value=n_ticks,
+        widgets=widgets,
+        fd=sys.stdout,
+        poll_interval=poll_interval,
+    )
+    bar.start()
+
+    result: list[_T] = []  # single-element box to avoid None typing issues
+    exception: list[BaseException] = []
+    done = threading.Event()
+
+    def _worker():
+        try:
+            result.append(fn())
+        except BaseException as exc:
+            exception.append(exc)
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+
+    t0 = time.monotonic()
+    try:
+        while not done.wait(timeout=poll_interval):
+            elapsed = time.monotonic() - t0
+            # Cap at 99 so the bar never claims 100% before fn returns.
+            pct = min(int(elapsed / max(estimated_seconds, 0.1) * n_ticks), n_ticks - 1)
+            bar.update(pct)
+        bar.update(n_ticks)
+    finally:
+        bar.finish()
+        thread.join()
+
+    if exception:
+        raise exception[0]
+    return result[0]

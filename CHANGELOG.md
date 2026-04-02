@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.1.2] - 2026-04-02
+
+### Fixed
+
+- Ctrl+C during eigendecomposition now exits immediately instead of blocking
+  until the LAPACK call finishes
+- Progress bar no longer shows 100% before propagating worker exceptions
+  (MemoryError, LinAlgError)
+- Broken pipe on stdout no longer masks eigendecomposition results
+- Remove meaningless AdaptiveETA widget from time-based progress bar
+
+### Added
+
+- Tests for `timed_progress()`: exception propagation, 99% cap, error display,
+  `estimated_seconds=0` edge case
+
 ## [5.1.1] - 2026-04-01
 
 ### Fixed

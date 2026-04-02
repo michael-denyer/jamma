@@ -4,6 +4,7 @@
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) (package manager)
+- [prek](https://prek.j178.dev) (pre-commit hooks)
 - Docker (optional, for running GEMMA validation tests)
 
 ## Development Setup
@@ -12,7 +13,7 @@
 git clone https://github.com/michael-denyer/jamma.git
 cd jamma
 uv sync
-uv run pre-commit install
+prek install
 ```
 
 This installs all runtime and dev dependencies and sets up pre-commit hooks (ruff lint + format).
@@ -58,7 +59,7 @@ Pre-commit hooks run ruff automatically on commit. To run manually:
 ```bash
 uv run ruff check .        # Lint
 uv run ruff format .       # Format
-uv run pre-commit run --all-files  # All hooks
+prek run --all-files       # All hooks
 ```
 
 ### Conventions
@@ -87,7 +88,7 @@ uv run pre-commit run --all-files  # All hooks
 3. Ensure all tests pass before opening a PR:
    ```bash
    uv run pytest tests/ -x
-   uv run pre-commit run --all-files
+   prek run --all-files
    ```
 
 4. PR descriptions should include:

@@ -25,11 +25,16 @@ jobs:
       - name: Set up Python 3.12
         run: uv python install 3.12
 
+      - name: Install prek
+        uses: j178/prek-action@v2
+        with:
+          install-only: true
+
       - name: Install dependencies
         run: uv sync
 
-      - name: Lint and format check via pre-commit
-        run: uv run pre-commit run --all-files
+      - name: Lint and format check
+        run: prek run --all-files
 
   test:
     runs-on: ${{ matrix.os }}

@@ -264,6 +264,8 @@ def eigendecompose_kinship(
                 desc=f"Eigendecomp {n_samples:,}x{n_samples:,}",
             )
         else:
+            # blas_threads sets process-global thread count (not thread-local),
+            # and timed_progress blocks until the worker finishes.
             with blas_threads(n_threads):
                 eigenvalues, eigenvectors = timed_progress(
                     lambda: jlinalg.eigh(K, inplace=use_inplace),

@@ -149,18 +149,16 @@ def timed_progress(
 
     Args:
         fn: Zero-argument callable to execute. Must release the GIL
-            (numpy/LAPACK calls do this) so the progress thread can run.
+            (numpy/LAPACK calls do this) so the main thread can update
+            the progress bar while *fn* runs in a background thread.
         estimated_seconds: Model-predicted wall time. The bar reaches
             ~99% at this time, then holds until completion.
         desc: Optional description prefix.
         poll_interval: Seconds between bar updates.
 
     Returns:
-        The return value of *fn*.
-
-    Raises:
-        Any exception raised by *fn* is re-raised after the bar is
-        finalized.
+        The return value of *fn*.  Any exception raised by *fn* is
+        re-raised after the bar is finalized.
     """
     # Use 100 ticks so the bar shows percentage naturally.
     n_ticks = 100
@@ -171,8 +169,6 @@ def timed_progress(
         progressbar.Bar(),
         " ",
         progressbar.Timer(),
-        " ",
-        progressbar.AdaptiveETA(),
     ]
     bar = progressbar.ProgressBar(
         max_value=n_ticks,
@@ -182,7 +178,7 @@ def timed_progress(
     )
     bar.start()
 
-    result: list[_T] = []  # single-element box to avoid None typing issues
+    result: list[_T] = []  # mutable box for cross-thread result passing
     exception: list[BaseException] = []
     done = threading.Event()
 
@@ -198,16 +194,35 @@ def timed_progress(
     thread.start()
 
     t0 = time.monotonic()
+    cancelled = False
     try:
         while not done.wait(timeout=poll_interval):
             elapsed = time.monotonic() - t0
             # Cap at 99 so the bar never claims 100% before fn returns.
             pct = min(int(elapsed / max(estimated_seconds, 0.1) * n_ticks), n_ticks - 1)
-            bar.update(pct)
-        bar.update(n_ticks)
+            try:
+                bar.update(pct)
+            except OSError:
+                break  # stdout gone; stop updating but still wait for fn
+        if not exception:
+            try:
+                bar.update(n_ticks)
+            except OSError:
+                pass
+    except KeyboardInterrupt:
+        cancelled = True
+        raise
     finally:
-        bar.finish()
-        thread.join()
+        try:
+            bar.finish()
+        except OSError:
+            pass
+        # Join with timeout so KeyboardInterrupt is deliverable between
+        # iterations.  On cancellation the worker is a daemon thread and
+        # will be killed when the process exits — don't block.
+        if not cancelled:
+            while thread.is_alive():
+                thread.join(timeout=0.5)
 
     if exception:
         raise exception[0]

@@ -59,6 +59,10 @@ SYNTHETIC_LRT_REF = _FIXTURE_ROOT / "gemma_synthetic" / "gemma_lrt.assoc.txt"
 SCORE_REF = _FIXTURE_ROOT / "gemma_score" / "gemma_score.assoc.txt"
 ALL_TESTS_REF = _FIXTURE_ROOT / "gemma_all_tests" / "gemma_all.assoc.txt"
 
+COVARIATE_FIXTURE_DIR = _FIXTURE_ROOT / "gemma_covariate"
+COVARIATE_FILE = COVARIATE_FIXTURE_DIR / "covariates.txt"
+COVARIATE_WALD_REFERENCE = COVARIATE_FIXTURE_DIR / "gemma_covariate.assoc.txt"
+
 MOUSE_HS1940_DIR = _FIXTURE_ROOT / "mouse_hs1940"
 MOUSE_HS1940_DATA = MOUSE_HS1940_DIR / "mouse_hs1940"
 MOUSE_HS1940_KINSHIP = MOUSE_HS1940_DIR / "mouse_hs1940_kinship.cXX.txt"
@@ -166,6 +170,25 @@ def synthetic_eigen(synthetic_data):
     kinship_filtered = kinship[np.ix_(valid_mask, valid_mask)]
     eigenvalues, eigenvectors = np.linalg.eigh(kinship_filtered)
     return plink, kinship, phenotypes, eigenvalues, eigenvectors
+
+
+@pytest.fixture
+def synthetic_data_with_covariates(synthetic_data):
+    """Load gemma_synthetic data plus covariates from gemma_covariate fixture.
+
+    The covariates.txt file already includes the intercept column (first column
+    is all 1.0), matching GEMMA's internal representation when -c is used.
+
+    Pre-computes eigendecomposition so callers share identical eigen and avoid
+    the kinship in-place overwrite (DSYEVD-inplace) between sequential runner
+    calls.
+    """
+    plink, kinship, phenotypes = synthetic_data
+    covariates = np.loadtxt(COVARIATE_FILE)
+    valid_mask = ~np.isnan(phenotypes)
+    kinship_filtered = kinship[np.ix_(valid_mask, valid_mask)]
+    eigenvalues, eigenvectors = np.linalg.eigh(kinship_filtered)
+    return plink, phenotypes, covariates, eigenvalues, eigenvectors
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +336,135 @@ class TestBatchEquivalence:
                 rtol=1e-10,
                 err_msg=f"{field} values differ",
             )
+
+
+@pytest.mark.tier1
+class TestStreamingCovariates:
+    """Streaming runner with covariates produces correct results (SC-02b)."""
+
+    def test_streaming_covar_matches_batch_wald(self, synthetic_data_with_covariates):
+        """Streaming + covariates matches batch + covariates (Wald mode)."""
+        plink, phenotypes, covariates, eigenvalues, eigenvectors = (
+            synthetic_data_with_covariates
+        )
+
+        # Batch run (pre-computed eigen for identical path)
+        snp_info = _build_snp_info(plink)
+        batch_result = run_lmm_association_numpy(
+            genotypes=plink.genotypes,
+            phenotypes=phenotypes,
+            kinship=None,
+            snp_info=snp_info,
+            covariates=covariates,
+            eigenvalues=eigenvalues,
+            eigenvectors=eigenvectors,
+            lmm_mode=1,
+            show_progress=False,
+            check_memory=False,
+        )
+        batch_assoc = batch_result.associations
+
+        # Streaming run
+        stream_result, n_tested = run_lmm_association_numpy_streaming(
+            bed_path=SYNTHETIC_DATA,
+            phenotypes=phenotypes,
+            kinship=None,
+            covariates=covariates,
+            eigenvalues=eigenvalues,
+            eigenvectors=eigenvectors,
+            lmm_mode=1,
+            chunk_size=200,
+            show_progress=False,
+            check_memory=False,
+        )
+        stream_assoc = stream_result.associations
+
+        assert len(batch_assoc) == len(stream_assoc), (
+            f"Count mismatch: {len(batch_assoc)} vs {len(stream_assoc)}"
+        )
+
+        for field in ("beta", "se", "p_wald"):
+            batch_vals = np.array([getattr(r, field) for r in batch_assoc])
+            stream_vals = np.array([getattr(r, field) for r in stream_assoc])
+            np.testing.assert_allclose(
+                batch_vals,
+                stream_vals,
+                atol=1e-14,
+                rtol=1e-10,
+                err_msg=f"{field} values differ (covariates)",
+            )
+
+    def test_streaming_covar_matches_gemma_wald(self, synthetic_data):
+        """Streaming + covariates matches GEMMA reference (Wald mode)."""
+        plink, kinship, phenotypes = synthetic_data
+        covariates = np.loadtxt(COVARIATE_FILE)
+
+        stream_result, n_tested = run_lmm_association_numpy_streaming(
+            bed_path=SYNTHETIC_DATA,
+            phenotypes=phenotypes,
+            kinship=kinship.copy(),
+            covariates=covariates,
+            lmm_mode=1,
+            chunk_size=200,
+            show_progress=False,
+            check_memory=False,
+        )
+        results = stream_result.associations
+        assert len(results) > 0, "Expected results"
+        assert n_tested == len(results)
+
+        reference = load_gemma_assoc(COVARIATE_WALD_REFERENCE)
+        tolerances = ToleranceConfig(lambda_rtol=5e-5)
+        comparison = compare_assoc_results(results, reference, tolerances)
+        assert comparison.passed, (
+            f"Streaming covar mode 1 vs GEMMA failed:\n{comparison}"
+        )
+
+    def test_streaming_covar_multi_chunk(self, synthetic_data_with_covariates):
+        """Chunk size independence with covariates."""
+        plink, phenotypes, covariates, eigenvalues, eigenvectors = (
+            synthetic_data_with_covariates
+        )
+
+        # Many small chunks
+        small_result, n_small = run_lmm_association_numpy_streaming(
+            bed_path=SYNTHETIC_DATA,
+            phenotypes=phenotypes,
+            kinship=None,
+            covariates=covariates,
+            eigenvalues=eigenvalues,
+            eigenvectors=eigenvectors,
+            lmm_mode=1,
+            chunk_size=50,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        # Single chunk
+        big_result, n_big = run_lmm_association_numpy_streaming(
+            bed_path=SYNTHETIC_DATA,
+            phenotypes=phenotypes,
+            kinship=None,
+            covariates=covariates,
+            eigenvalues=eigenvalues,
+            eigenvectors=eigenvectors,
+            lmm_mode=1,
+            chunk_size=100_000,
+            show_progress=False,
+            check_memory=False,
+        )
+
+        assert n_small == n_big, f"Count mismatch: {n_small} vs {n_big}"
+
+        small_p = np.array([r.p_wald for r in small_result.associations])
+        big_p = np.array([r.p_wald for r in big_result.associations])
+        np.testing.assert_allclose(
+            small_p,
+            big_p,
+            atol=1e-14,
+            rtol=1e-12,
+            err_msg="p_wald differs across chunk sizes (covariates)",
+        )
 
 
 # ---------------------------------------------------------------------------

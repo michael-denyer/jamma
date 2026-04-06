@@ -363,7 +363,7 @@ JAMMA's LOCO integration tests use a two-step validation: (1) JAMMA computes
 per-chromosome LOCO kinship matrices, (2) GEMMA runs standard LMM with each
 LOCO kinship as external `-k` input. This validates that JAMMA's LOCO kinship
 formula produces results numerically equivalent to GEMMA's LMM expectations.
-See `tests/test_gemma_loco_integration.py`.
+See `legacy/tests/test_gemma_loco_integration.py`.
 
 ---
 

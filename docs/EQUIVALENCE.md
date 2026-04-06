@@ -1,3 +1,4 @@
+<!-- generated-by: gsd-doc-writer -->
 # JAMMA-GEMMA Equivalence Proof
 
 JAMMA implements mathematically identical algorithms to GEMMA. All numerical
@@ -293,17 +294,17 @@ versus mixed OpenBLAS/MKL at 85k.
 | Test Class | Coverage |
 |------------|----------|
 | `TestKinshipValidation` | Kinship matrix vs GEMMA |
-| `TestLmmValidation` | Wald test vs GEMMA (synthetic + mouse_hs1940) |
-| `TestLmmStreamingValidation` | Wald test vs GEMMA (streaming runner) |
-| `TestLmmScoreValidation` | Score test vs GEMMA |
-| `TestLmmAllTestsValidation` | All-tests mode vs GEMMA |
-| `TestLmmCovariateValidation` | Covariates vs GEMMA |
-| `TestMouseHS1940Validation` | All modes x covariate configs vs GEMMA (7 tests) |
+| <!-- VERIFY: TestLmmValidation --> | Wald test vs GEMMA (synthetic + mouse_hs1940) |
+| <!-- VERIFY: TestLmmStreamingValidation --> | Wald test vs GEMMA (streaming runner) |
+| <!-- VERIFY: TestLmmScoreValidation --> | Score test vs GEMMA |
+| <!-- VERIFY: TestLmmAllTestsValidation --> | All-tests mode vs GEMMA |
+| <!-- VERIFY: TestLmmCovariateValidation --> | Covariates vs GEMMA |
+| <!-- VERIFY: TestMouseHS1940Validation --> | All modes x covariate configs vs GEMMA (7 tests) |
 
-All tests in `tests/test_kinship_validation.py` and `tests/test_lmm_validation.py`.
+All tests in `tests/test_kinship_validation.py`.
 
 ```bash
-uv run pytest tests/test_kinship_validation.py tests/test_lmm_validation.py -v
+uv run pytest tests/test_kinship_validation.py -v
 ```
 
 Comprehensive formal validation across all 8 test configurations:
@@ -324,7 +325,7 @@ uv run python scripts/demonstrate_equivalence.py
 | `CalcPab` | `calc_pab` | lmm/likelihood.py |
 | `LogRL_f` | `reml_log_likelihood` | lmm/likelihood.py |
 | `LogL_f` | `mle_log_likelihood` | lmm/likelihood.py |
-| `CalcLambda` | `golden_section_optimize_lambda` | lmm/likelihood_numpy.py |
+| `CalcLambda` | `golden_section_optimize_lambda_numpy` | lmm/likelihood_numpy.py |
 | `CalcRLWald` | `calc_wald_test` | lmm/stats.py |
 | `CalcRLScore` | `calc_score_test` | lmm/stats.py |
 | `gsl_cdf_fdist_Q` | `f_sf` (via `betainc`) | lmm/stats.py |

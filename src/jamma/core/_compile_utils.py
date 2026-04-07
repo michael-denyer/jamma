@@ -28,7 +28,10 @@ def find_c_compiler() -> tuple[str, list[str]] | None:
     candidates: list[str] = []
 
     def _add(candidate: str) -> None:
-        cmd = candidate.split()[0]
+        parts = candidate.split()
+        if not parts:
+            return
+        cmd = parts[0]
         if cmd not in seen_cmds:
             seen_cmds.add(cmd)
             candidates.append(candidate)
@@ -118,13 +121,14 @@ def auto_recompile_c_extension(
 
     try:
         success = compiler.compile_extension(verbose=False)
-    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
+    except Exception as e:
         logger.warning(
             f"Auto-recompilation of {module_name} raised "
             f"{type(e).__name__}: {e}. "
             f"Falling back to pure-Python ({label}). "
             f"To diagnose, run: python -m {compiler_module}"
         )
+        logger.debug("Full traceback:", exc_info=True)
         return False
 
     if not success:

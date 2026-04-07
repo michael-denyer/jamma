@@ -141,7 +141,7 @@ except ImportError as _exc:
             sys_module_key="jamma.jlinalg._jlinalg",
             label="jlinalg",
         )
-    except (ImportError, OSError, RuntimeError) as _recompile_exc:
+    except Exception as _recompile_exc:
         import warnings as _warnings
 
         _warnings.warn(

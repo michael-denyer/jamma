@@ -86,6 +86,13 @@ class CustomBuildHook(BuildHookInterface):
         # Resolve compiler — CC may contain flags (e.g. "gcc -pthread")
         cc = os.environ.get("CC") or sysconfig.get_config_var("CC") or "cc"
         cc_parts = cc.split()
+        if not cc_parts:
+            print(
+                "WARNING: CC is set but empty — "
+                "skipping C extension compilation (pure-Python fallback).",
+                file=sys.stderr,
+            )
+            return None
         cc_cmd = cc_parts[0]
         cc_extra = cc_parts[1:]
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import shutil
+import subprocess
 import sys
 import sysconfig
 
@@ -15,6 +16,9 @@ def find_c_compiler() -> tuple[str, list[str]] | None:
     1. ``$CC`` environment variable (if set)
     2. ``sysconfig`` configured compiler (what Python was built with)
     3. ``cc``, ``clang``, ``gcc`` as fallbacks
+
+    Each candidate must exist on PATH and respond to ``--version``
+    to be considered usable.
 
     Returns:
         Tuple of (compiler_command, extra_flags) if found, None otherwise.
@@ -41,8 +45,15 @@ def find_c_compiler() -> tuple[str, list[str]] | None:
     for candidate in candidates:
         cmd = candidate.split()[0]
         extra = candidate.split()[1:]
-        if shutil.which(cmd):
-            return cmd, extra
+        if not shutil.which(cmd):
+            continue
+        # Verify the compiler can actually execute
+        try:
+            probe = subprocess.run([cmd, "--version"], capture_output=True, timeout=5)
+            if probe.returncode == 0:
+                return cmd, extra
+        except (OSError, subprocess.TimeoutExpired):
+            continue
 
     return None
 

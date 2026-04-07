@@ -374,8 +374,10 @@ def compile_test_harness(verbose: bool = True) -> Path:
 
     result = find_c_compiler()
     if not result:
-        _print("ERROR: No C compiler found on PATH (tried cc, clang, gcc)")
-        return False
+        raise RuntimeError(
+            "No C compiler found on PATH (tried $CC, sysconfig, cc, clang, gcc). "
+            "Install: apt-get install -y gcc (Linux) or xcode-select --install (macOS)"
+        )
     cc_cmd, cc_extra = result
 
     # Link against libpython (blas_dispatch.c uses Python C API for numpy discovery)

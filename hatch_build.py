@@ -48,6 +48,19 @@ class CustomBuildHook(BuildHookInterface):
         self._compile_c_extension(build_data)
         self._compile_jlinalg_extension(build_data)
 
+    @staticmethod
+    def _probe_compiler(cmd: str) -> bool:
+        """Return True if *cmd* responds to ``--version`` with exit 0."""
+        try:
+            return (
+                subprocess.run(
+                    [cmd, "--version"], capture_output=True, timeout=5
+                ).returncode
+                == 0
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
     def _preflight_c_build(self):
         """Verify build prerequisites and return compiler/include information.
 
@@ -83,12 +96,12 @@ class CustomBuildHook(BuildHookInterface):
             )
             return None
 
-        # Resolve compiler — CC may contain flags (e.g. "gcc -pthread").
-        # Note: hatch_build.py cannot import jamma.core._compile_utils (the
-        # package isn't installed yet during wheel builds), so this duplicates
-        # a simpler version of the find_c_compiler() logic. The dev-mode
-        # compile scripts use the shared find_c_compiler() with a full
-        # fallback chain and --version verification.
+        # Resolve compiler — mirrors find_c_compiler() from
+        # jamma.core._compile_utils but inlined here because the package
+        # isn't installed yet during wheel builds.
+        #
+        # $CC is explicit: honour it or fail (no silent fallback).
+        # Otherwise try sysconfig, cc, clang, gcc with --version probing.
         cc_env = os.environ.get("CC")
         if cc_env is not None and not cc_env.strip():
             print(
@@ -97,14 +110,51 @@ class CustomBuildHook(BuildHookInterface):
                 file=sys.stderr,
             )
             return None
-        cc = cc_env or sysconfig.get_config_var("CC") or "cc"
-        cc_cmd = cc.split()[0]
-        cc_extra = cc.split()[1:]
 
-        # Pre-flight: verify compiler is on PATH
-        if not shutil.which(cc_cmd):
+        cc_cmd: str | None = None
+        cc_extra: list[str] = []
+
+        if cc_env:
+            # Explicit $CC — honour or fail, don't fall through.
+            parts = cc_env.split()
+            cmd = parts[0]
+            if shutil.which(cmd) and self._probe_compiler(cmd):
+                cc_cmd, cc_extra = cmd, parts[1:]
+            else:
+                print(
+                    f"WARNING: $CC is set to '{cc_env}' but compiler "
+                    "verification failed — skipping C extension "
+                    "compilation (pure-Python fallback).",
+                    file=sys.stderr,
+                )
+                return None
+        else:
+            # Auto-detect: sysconfig, then common fallbacks.
+            seen: set[str] = set()
+            candidates: list[str] = []
+            for raw in (
+                sysconfig.get_config_var("CC"),
+                "cc",
+                "clang",
+                "gcc",
+            ):
+                if not raw:
+                    continue
+                cmd = raw.split()[0]
+                if cmd not in seen:
+                    seen.add(cmd)
+                    candidates.append(raw)
+
+            for candidate in candidates:
+                parts = candidate.split()
+                cmd = parts[0]
+                if shutil.which(cmd) and self._probe_compiler(cmd):
+                    cc_cmd, cc_extra = cmd, parts[1:]
+                    break
+
+        if cc_cmd is None:
             print(
-                f"WARNING: C compiler '{cc_cmd}' not found on PATH — "
+                "WARNING: no usable C compiler found — "
                 "skipping C extension compilation (pure-Python fallback).\n"
                 "  To enable the C extension, install a C compiler:\n"
                 "    Debian/Ubuntu: apt-get install -y gcc\n"

@@ -3,7 +3,48 @@
 from __future__ import annotations
 
 import importlib
+import shutil
 import sys
+import sysconfig
+
+
+def find_c_compiler() -> tuple[str, list[str]] | None:
+    """Find a usable C compiler, trying multiple candidates.
+
+    Checks in order:
+    1. ``$CC`` environment variable (if set)
+    2. ``sysconfig`` configured compiler (what Python was built with)
+    3. ``cc``, ``clang``, ``gcc`` as fallbacks
+
+    Returns:
+        Tuple of (compiler_command, extra_flags) if found, None otherwise.
+    """
+    import os
+
+    candidates: list[str] = []
+
+    # $CC takes priority
+    cc_env = os.environ.get("CC")
+    if cc_env:
+        candidates.append(cc_env)
+
+    # What Python was built with
+    cc_sysconfig = sysconfig.get_config_var("CC")
+    if cc_sysconfig and cc_sysconfig not in candidates:
+        candidates.append(cc_sysconfig)
+
+    # Common fallbacks
+    for fallback in ("cc", "clang", "gcc"):
+        if fallback not in candidates:
+            candidates.append(fallback)
+
+    for candidate in candidates:
+        cmd = candidate.split()[0]
+        extra = candidate.split()[1:]
+        if shutil.which(cmd):
+            return cmd, extra
+
+    return None
 
 
 def auto_recompile_c_extension(

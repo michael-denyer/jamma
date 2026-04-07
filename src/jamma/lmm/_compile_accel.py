@@ -72,16 +72,16 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
     _detail(f"numpy {np.__version__} OK")
 
     # Compiler
-    cc_name = sysconfig.get_config_var("CC") or "cc"
-    cc_cmd = cc_name.split()[0]
-    cc_extra = cc_name.split()[1:]
+    from jamma.core._compile_utils import find_c_compiler
 
-    cc_path = shutil.which(cc_cmd)
-    if not cc_path:
-        _print(f"ERROR: C compiler '{cc_cmd}' not found on PATH")
-        _print("  Install: apt-get install -y gcc")
+    result = find_c_compiler()
+    if not result:
+        _print("ERROR: No C compiler found on PATH (tried cc, clang, gcc)")
+        _print("  Install: apt-get install -y gcc  (Linux)")
+        _print("  Install: xcode-select --install  (macOS)")
         return False
-    _detail(f"Compiler: {cc_path}")
+    cc_cmd, cc_extra = result
+    _detail(f"Compiler: {shutil.which(cc_cmd)}")
 
     # Python headers
     python_inc = sysconfig.get_config_var("INCLUDEPY") or ""

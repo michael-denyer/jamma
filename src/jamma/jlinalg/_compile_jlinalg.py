@@ -18,7 +18,6 @@ The jlinalg extension compiles per-file to enable per-source-group compiler flag
 
 from __future__ import annotations
 
-import os
 import platform
 import shutil
 import subprocess
@@ -104,17 +103,16 @@ def compile_extension(verbose: bool = False) -> bool:
     _detail(f"numpy {np.__version__} OK")
 
     # Compiler
-    cc_name = os.environ.get("CC") or sysconfig.get_config_var("CC") or "cc"
-    cc_cmd = cc_name.split()[0]
-    cc_extra = cc_name.split()[1:]
+    from jamma.core._compile_utils import find_c_compiler
 
-    cc_path = shutil.which(cc_cmd)
-    if not cc_path:
-        _print(f"ERROR: C compiler '{cc_cmd}' not found on PATH")
+    result = find_c_compiler()
+    if not result:
+        _print("ERROR: No C compiler found on PATH (tried cc, clang, gcc)")
         _print("  Install: apt-get install -y gcc  (Linux)")
         _print("  Install: xcode-select --install  (macOS)")
         return False
-    _detail(f"Compiler: {cc_path}")
+    cc_cmd, cc_extra = result
+    _detail(f"Compiler: {shutil.which(cc_cmd)}")
 
     # Python headers
     python_inc = sysconfig.get_config_var("INCLUDEPY") or ""
@@ -372,9 +370,13 @@ def compile_test_harness(verbose: bool = True) -> Path:
     python_inc = sysconfig.get_config_var("INCLUDEPY") or ""
 
     # Compiler
-    cc_name = os.environ.get("CC") or sysconfig.get_config_var("CC") or "cc"
-    cc_cmd = cc_name.split()[0]
-    cc_extra = cc_name.split()[1:]
+    from jamma.core._compile_utils import find_c_compiler
+
+    result = find_c_compiler()
+    if not result:
+        _print("ERROR: No C compiler found on PATH (tried cc, clang, gcc)")
+        return False
+    cc_cmd, cc_extra = result
 
     # Link against libpython (blas_dispatch.c uses Python C API for numpy discovery)
     python_libdir = sysconfig.get_config_var("LIBDIR") or ""

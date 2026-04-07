@@ -291,20 +291,23 @@ versus mixed OpenBLAS/MKL at 85k.
 
 ## Test Coverage
 
-| Test Class | Coverage |
-|------------|----------|
-| `TestKinshipValidation` | Kinship matrix vs GEMMA |
-| <!-- VERIFY: TestLmmValidation --> | Wald test vs GEMMA (synthetic + mouse_hs1940) |
-| <!-- VERIFY: TestLmmStreamingValidation --> | Wald test vs GEMMA (streaming runner) |
-| <!-- VERIFY: TestLmmScoreValidation --> | Score test vs GEMMA |
-| <!-- VERIFY: TestLmmAllTestsValidation --> | All-tests mode vs GEMMA |
-| <!-- VERIFY: TestLmmCovariateValidation --> | Covariates vs GEMMA |
-| <!-- VERIFY: TestMouseHS1940Validation --> | All modes x covariate configs vs GEMMA (7 tests) |
+| Test Location | Coverage |
+|---------------|----------|
+| `tests/test_kinship_validation.py::TestKinshipValidation` | Kinship matrix vs GEMMA |
+| `tests/test_runner_numpy.py` (tier0/tier1/tier2) | Wald/Score/LRT vs GEMMA (synthetic + mouse_hs1940) |
+| `tests/test_numpy_streaming.py::TestNumpyStreamingGemmaParity` (tier1) | Streaming runner vs GEMMA (all modes + covariates) |
+| `tests/test_lmm_accel.py` (tier0/tier1/tier2) | C extension Wald+covariate vs GEMMA |
 
-All tests in `tests/test_kinship_validation.py`.
+Run kinship validation:
 
 ```bash
 uv run pytest tests/test_kinship_validation.py -v
+```
+
+Run all GEMMA parity tests (spans tier0/tier1/tier2):
+
+```bash
+uv run pytest tests/test_runner_numpy.py tests/test_numpy_streaming.py tests/test_lmm_accel.py -v -n0 -m ''
 ```
 
 Comprehensive formal validation across all 8 test configurations:

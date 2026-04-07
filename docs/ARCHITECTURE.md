@@ -3,7 +3,7 @@
 
 ## System Overview
 
-JAMMA (JAX-Accelerated Mixed Model Association) is a Python reimplementation of GEMMA for large-scale genome-wide association studies (GWAS). It accepts PLINK binary input (.bed/.bim/.fam), computes a kinship matrix (or accepts a pre-computed one), performs eigendecomposition of the kinship matrix, and runs linear mixed model (LMM) association tests to produce per-SNP association statistics. The primary architectural style is a layered pipeline: a Click-based CLI and a `gwas()` Python API both delegate to a shared `PipelineRunner`, which orchestrates I/O, memory estimation, eigendecomposition, and dispatch to the appropriate compute runner.
+JAMMA (Highly-Accelerated Multi-method Mixed-Model Association) is a Python reimplementation of GEMMA for large-scale genome-wide association studies (GWAS). It accepts PLINK binary input (.bed/.bim/.fam), computes a kinship matrix (or accepts a pre-computed one), performs eigendecomposition of the kinship matrix, and runs linear mixed model (LMM) association tests to produce per-SNP association statistics. The primary architectural style is a layered pipeline: a Click-based CLI and a `gwas()` Python API both delegate to a shared `PipelineRunner`, which orchestrates I/O, memory estimation, eigendecomposition, and dispatch to the appropriate compute runner.
 
 ## Component Diagram
 
@@ -146,7 +146,7 @@ Two compiled C extensions accelerate the hot paths:
 | `jamma.jlinalg._jlinalg` | `src/jamma/jlinalg/src/` | BLAS dispatch (DGEMM, DSYRK), LAPACK dispatch (DSYEVD, DSYEVR), single-pass per-SNP statistics |
 | `jamma.lmm._lmm_accel` | `src/jamma/lmm/_lmm_accel.c` | Per-SNP REML Wald pipeline with OpenMP parallelism over SNP chunks |
 
-Both extensions gracefully degrade to NumPy fallbacks if compilation fails or if the ABI version mismatches (checked at import via `ABI_VERSION == 12`). The streaming runner requires `_lmm_accel`; if unavailable it raises `ValueError` with a recompile instruction.
+Both extensions gracefully degrade to NumPy fallbacks if compilation fails or if the ABI version mismatches (each extension checks its own `ABI_VERSION` at import). The streaming runner requires `_lmm_accel`; if unavailable it raises `ValueError` with a recompile instruction.
 
 ## LOCO Mode
 

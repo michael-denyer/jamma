@@ -107,7 +107,9 @@ def compile_extension(verbose: bool = False) -> bool:
 
     result = find_c_compiler()
     if not result:
-        _print("ERROR: No C compiler found on PATH (tried cc, clang, gcc)")
+        _print(
+            "ERROR: No C compiler found on PATH (tried $CC, sysconfig, cc, clang, gcc)"
+        )
         _print("  Install: apt-get install -y gcc  (Linux)")
         _print("  Install: xcode-select --install  (macOS)")
         return False

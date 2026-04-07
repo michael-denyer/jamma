@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import shutil
 import subprocess
 import sys
@@ -23,37 +24,55 @@ def find_c_compiler() -> tuple[str, list[str]] | None:
     Returns:
         Tuple of (compiler_command, extra_flags) if found, None otherwise.
     """
-    import os
-
+    seen_cmds: set[str] = set()
     candidates: list[str] = []
+
+    def _add(candidate: str) -> None:
+        cmd = candidate.split()[0]
+        if cmd not in seen_cmds:
+            seen_cmds.add(cmd)
+            candidates.append(candidate)
 
     # $CC takes priority
     cc_env = os.environ.get("CC")
     if cc_env:
-        candidates.append(cc_env)
+        _add(cc_env)
 
     # What Python was built with
     cc_sysconfig = sysconfig.get_config_var("CC")
-    if cc_sysconfig and cc_sysconfig not in candidates:
-        candidates.append(cc_sysconfig)
+    if cc_sysconfig:
+        _add(cc_sysconfig)
 
     # Common fallbacks
     for fallback in ("cc", "clang", "gcc"):
-        if fallback not in candidates:
-            candidates.append(fallback)
+        _add(fallback)
 
     for candidate in candidates:
-        cmd = candidate.split()[0]
-        extra = candidate.split()[1:]
-        if not shutil.which(cmd):
+        cmd, *extra = candidate.split()
+        path = shutil.which(cmd)
+        if not path:
             continue
         # Verify the compiler can actually execute
         try:
             probe = subprocess.run([cmd, "--version"], capture_output=True, timeout=5)
             if probe.returncode == 0:
                 return cmd, extra
-        except (OSError, subprocess.TimeoutExpired):
-            continue
+            stderr = probe.stderr.decode(errors="replace").strip()[:200]
+            print(
+                f"Compiler '{cmd}' found at {path} but --version "
+                f"returned exit code {probe.returncode}: {stderr}",
+                file=sys.stderr,
+            )
+        except OSError as e:
+            print(
+                f"Compiler '{cmd}' found at {path} but failed to execute: {e}",
+                file=sys.stderr,
+            )
+        except subprocess.TimeoutExpired:
+            print(
+                f"Compiler '{cmd}' found at {path} but --version timed out (5s)",
+                file=sys.stderr,
+            )
 
     return None
 

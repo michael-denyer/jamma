@@ -46,7 +46,7 @@ uv run pytest tests/ -x
 ```
 
 This picks up `addopts` automatically:
-`-n 3 --randomly-seed=last --benchmark-skip -m 'not slow and not tier2 and not tier3 and not benchmark' --no-cov`
+`-n 3 --randomly-seed=last --benchmark-skip -m 'not slow and not tier2 and not tier3' --no-cov`
 
 **Never use `-n auto`** — it spawns too many workers and contaminates BLAS-threaded
 tests. Always use `-n 3` (or `-n0` for benchmarks).

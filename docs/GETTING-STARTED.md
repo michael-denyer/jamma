@@ -1,7 +1,7 @@
 <!-- generated-by: gsd-doc-writer -->
 # Getting Started with JAMMA
 
-**JAMMA** (Highly-Accelerated Multi-method Mixed-model Association) is a Python and C
+**JAMMA** (Highly-Accelerated Multi-method Mixed-Model Association) is a Python and C
 reimplementation of [GEMMA](https://github.com/genetics-statistics/GEMMA) for large-scale
 genome-wide association studies (GWAS).
 

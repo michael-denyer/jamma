@@ -1,0 +1,75 @@
+name: Bug Report
+description: Report a bug in JAMMA
+labels: [bug]
+body:
+  - type: dropdown
+    id: python-version
+    attributes:
+      label: Python version
+      options:
+        - "3.11"
+        - "3.12"
+        - "3.13"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS ARM
+        - macOS Intel
+        - Windows
+        - Databricks
+    validations:
+      required: true
+
+  - type: dropdown
+    id: numpy-config
+    attributes:
+      label: NumPy configuration
+      options:
+        - Standard numpy (PyPI)
+        - ILP64 numpy (michael-denyer/numpy-mkl)
+        - Unknown
+    validations:
+      required: true
+
+  - type: input
+    id: jamma-version
+    attributes:
+      label: JAMMA version
+      placeholder: "e.g. 5.1.2"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: error-output
+    attributes:
+      label: Error output
+      render: shell
+    validations:
+      required: false

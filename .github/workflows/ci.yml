@@ -26,7 +26,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install prek
-        uses: j178/prek-action@b0ae0c600be6176aa296014b4eab1974096ebd69  # v2
+        uses: j178/prek-action@53276d8b0d10f8b6672aa85b4588c6921d0370cc  # v2
         with:
           install-only: true
 

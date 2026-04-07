@@ -146,7 +146,7 @@ Two compiled C extensions accelerate the hot paths:
 | `jamma.jlinalg._jlinalg` | `src/jamma/jlinalg/src/` | BLAS dispatch (DGEMM, DSYRK), LAPACK dispatch (DSYEVD, DSYEVR), single-pass per-SNP statistics |
 | `jamma.lmm._lmm_accel` | `src/jamma/lmm/_lmm_accel.c` | Per-SNP REML Wald pipeline with OpenMP parallelism over SNP chunks |
 
-Both extensions gracefully degrade to NumPy fallbacks if compilation fails or if the ABI version mismatches (each extension checks its own `ABI_VERSION` at import). The streaming runner requires `_lmm_accel`; if unavailable it raises `ValueError` with a recompile instruction.
+Both extensions gracefully degrade to NumPy fallbacks if compilation fails or if the ABI version mismatches (each extension checks its own `ABI_VERSION` at import). The streaming runner benefits from `_lmm_accel` for performance but falls back to the pure-Python compute path with a warning if the extension is unavailable.
 
 ## LOCO Mode
 

@@ -118,7 +118,7 @@ def auto_recompile_c_extension(
 
     try:
         success = compiler.compile_extension(verbose=False)
-    except Exception as e:
+    except (subprocess.CalledProcessError, OSError, FileNotFoundError) as e:
         logger.warning(
             f"Auto-recompilation of {module_name} raised "
             f"{type(e).__name__}: {e}. "

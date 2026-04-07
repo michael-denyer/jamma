@@ -104,7 +104,7 @@ conflict. Instead they are attached to the GitHub Release as additional assets. 
 who want AVX2 can download the `.whl` directly and install with:
 
 ```bash
-pip install jamma-<version>-cp311-cp311-manylinux_x86_64_avx2.whl --force-reinstall
+pip install jamma-<version>-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl --force-reinstall
 ```
 
 ### Source distribution (`build_sdist` job)
@@ -146,26 +146,18 @@ For production Docker runs, the variables most likely to need tuning are:
 
 **PyPI:** PyPI does not support deleting or replacing a published version. To roll back:
 
-1. Yank the bad version on PyPI (<!-- VERIFY: PyPI yank via project settings dashboard -->):
-   ```bash
-   pip install twine
-   # or use the PyPI web UI to yank
-   ```
+1. Yank the bad version via the PyPI web UI (project settings > releases > yank).
 2. Publish a patch release with the fix as `v<X.Y.Z+1>`.
 
-**Docker:** Redeploy using the previous image tag. If using a registry:
+**Docker:** Redeploy using the previous image tag:
 
 ```bash
 docker pull jamma:<previous-tag>
 docker run --platform linux/amd64 jamma:<previous-tag> ...
 ```
 
-<!-- VERIFY: Docker registry URL or image hosting location if images are published to a registry -->
-
 ## Monitoring
 
 No monitoring libraries (`@sentry/*`, `dd-trace`, `newrelic`, `@opentelemetry/*`) are
 included as dependencies. JAMMA logs to stderr via `loguru`. For production deployments,
 capture stderr and route it to your preferred log aggregation platform.
-
-<!-- VERIFY: Any centralised logging or alerting infrastructure for published releases -->

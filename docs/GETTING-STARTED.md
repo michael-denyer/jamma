@@ -146,7 +146,7 @@ uv run python -c "from jamma.jlinalg._compile_jlinalg import compile_extension; 
 **Missing environment variables**
 
 JAMMA has no required environment variables for basic use. The optional `JAMMA_BACKEND`
-variable forces a specific compute backend (`numpy`, `numpy_streaming`). Omit it to use
+variable forces a specific compute backend (`numpy`, `numpy-streaming`). Omit it to use
 auto-detection.
 
 ## Next Steps

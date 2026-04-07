@@ -94,6 +94,7 @@ jobs:
         run: |
           uv run python -c "
           from jamma.jlinalg import blas_backend, blas_is_ilp64, HAS_C_EXTENSION
+          assert HAS_C_EXTENSION, 'C extension failed to load — aborting CI'
           print(f'HAS_C_EXTENSION={HAS_C_EXTENSION}')
           print(f'blas_backend={blas_backend}')
           print(f'blas_is_ilp64={blas_is_ilp64}')
@@ -134,12 +135,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
-
-      - name: Set up Python 3.12
-        run: uv python install 3.12
 
       - name: Run OSV Scanner
         uses: google/osv-scanner-action/osv-scanner-action@c51854704019a247608d928f370c98740469d4b5  # v2.3.5

@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.1.3] - 2026-04-07
+
+### Fixed
+
+- Compiler detection now uses cc/clang/gcc fallback chain instead of failing
+  when `CC` is unset or points to a missing compiler
+- `hatch_build.py` uses the same fallback chain for wheel builds
+- Narrow exception catches in `_compile_jlinalg.py` — no longer swallows
+  unexpected errors during C extension compilation
+- Assert C extension is loaded in CI to catch silent compilation failures
+
+### Added
+
+- Sigstore build provenance attestations on PyPI publish
+- OSV vulnerability scanning on pull requests
+- YAML-form issue templates (bug report, feature request)
+- Streaming covariate integration tests
+
+### Changed
+
+- Replace pre-commit with prek (Rust-based, no Python dependency)
+- Pin all GitHub Actions to commit SHAs (Dependabot keeps them updated)
+- Pin `hatchling==1.29.0` and `numpy==2.4.3` in build-system.requires
+- Use `--index-url` instead of `--extra-index-url` for custom package indexes
+
+### Security
+
+- Harden supply chain: pinned actions, Sigstore attestations, osv-scanner
+- Dependabot configured for GitHub Actions ecosystem (weekly)
+
 ## [5.1.2] - 2026-04-02
 
 ### Fixed
@@ -1791,6 +1821,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
+[5.1.3]: https://github.com/michael-denyer/jamma/compare/v5.1.2...v5.1.3
+[5.1.2]: https://github.com/michael-denyer/jamma/compare/v5.1.1...v5.1.2
 [5.1.1]: https://github.com/michael-denyer/jamma/compare/v5.1.0...v5.1.1
 [5.1.0]: https://github.com/michael-denyer/jamma/compare/v5.0.1...v5.1.0
 [5.0.1]: https://github.com/michael-denyer/jamma/compare/v5.0.0...v5.0.1

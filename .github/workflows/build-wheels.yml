@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@54a71d3375df80d84b6d4537d04614fec04e637f  # v3.4.0
+        uses: pypa/cibuildwheel@ee02a1537ce3071a004a6b08c41e72f0fdc42d9a  # v3.4.0
         env:
           # Build for CPython 3.11-3.13 only
           CIBW_BUILD: "cp311-* cp312-* cp313-*"
@@ -69,7 +69,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
 
       - name: Build AVX2-optimized wheels
-        uses: pypa/cibuildwheel@54a71d3375df80d84b6d4537d04614fec04e637f  # v3.4.0
+        uses: pypa/cibuildwheel@ee02a1537ce3071a004a6b08c41e72f0fdc42d9a  # v3.4.0
         env:
           # Build for CPython 3.11-3.13, Linux x86_64 only
           CIBW_BUILD: "cp311-manylinux_x86_64 cp312-manylinux_x86_64 cp313-manylinux_x86_64"

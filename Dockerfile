@@ -17,7 +17,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # 3. Runtime deps (--no-deps on jamma to prevent numpy downgrade back to LP64)
 RUN uv pip install --system --no-cache mkl && \
     uv pip install --system --no-cache numpy \
-        --extra-index-url https://michael-denyer.github.io/numpy-mkl \
+        --index-url https://michael-denyer.github.io/numpy-mkl \
         --reinstall && \
     uv pip install --system --no-cache \
         psutil loguru threadpoolctl click progressbar2 bed-reader && \

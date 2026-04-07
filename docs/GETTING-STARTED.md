@@ -44,7 +44,7 @@ Install ILP64 numpy first, then JAMMA with `--no-deps` to prevent numpy being ov
 ```bash
 pip install psutil loguru threadpoolctl click progressbar2 bed-reader
 pip install numpy \
-  --extra-index-url https://michael-denyer.github.io/numpy-mkl \
+  --index-url https://michael-denyer.github.io/numpy-mkl \
   --force-reinstall --upgrade
 pip install jamma --no-deps
 ```

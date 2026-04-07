@@ -210,7 +210,7 @@ pip install psutil loguru threadpoolctl click progressbar2 bed-reader
 
 # 2. Install ILP64 numpy (force-reinstall to replace any existing LP64 build)
 pip install numpy \
-  --extra-index-url https://michael-denyer.github.io/numpy-mkl \
+  --index-url https://michael-denyer.github.io/numpy-mkl \
   --force-reinstall --upgrade
 
 # 3. Install JAMMA without deps to preserve the ILP64 numpy
@@ -246,7 +246,7 @@ docker run --platform linux/amd64 \
 
 The Docker build installs dependencies in this order to preserve the ILP64 numpy:
 1. `mkl` — Intel MKL runtime libraries
-2. `numpy` with `--extra-index-url https://michael-denyer.github.io/numpy-mkl` — ILP64 build
+2. `numpy` with `--index-url https://michael-denyer.github.io/numpy-mkl` — ILP64 build
 3. Runtime dependencies (`psutil`, `loguru`, `threadpoolctl`, `click`, `progressbar2`, `bed-reader`)
 4. `jamma --no-deps` — JAMMA without dependency resolution (preserves ILP64 numpy)
 

@@ -40,7 +40,7 @@ Install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first -- standa
 ```bash
 pip install psutil loguru threadpoolctl click progressbar2 bed-reader
 pip install numpy \
-  --extra-index-url https://michael-denyer.github.io/numpy-mkl \
+  --index-url https://michael-denyer.github.io/numpy-mkl \
   --force-reinstall --upgrade
 pip install jamma --no-deps
 ```
@@ -50,7 +50,7 @@ pip install jamma --no-deps
 ```bash
 pip install psutil loguru threadpoolctl click progressbar2 bed-reader
 pip install numpy \
-  --extra-index-url https://michael-denyer.github.io/numpy-mkl \
+  --index-url https://michael-denyer.github.io/numpy-mkl \
   --force-reinstall --upgrade
 pip install git+https://github.com/michael-denyer/jamma.git --no-deps
 ```

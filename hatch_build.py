@@ -83,18 +83,23 @@ class CustomBuildHook(BuildHookInterface):
             )
             return None
 
-        # Resolve compiler — CC may contain flags (e.g. "gcc -pthread")
-        cc = os.environ.get("CC") or sysconfig.get_config_var("CC") or "cc"
-        cc_parts = cc.split()
-        if not cc_parts:
+        # Resolve compiler — CC may contain flags (e.g. "gcc -pthread").
+        # Note: hatch_build.py cannot import jamma.core._compile_utils (the
+        # package isn't installed yet during wheel builds), so this duplicates
+        # a simpler version of the find_c_compiler() logic. The dev-mode
+        # compile scripts use the shared find_c_compiler() with a full
+        # fallback chain and --version verification.
+        cc_env = os.environ.get("CC")
+        if cc_env is not None and not cc_env.strip():
             print(
                 "WARNING: CC is set but empty — "
                 "skipping C extension compilation (pure-Python fallback).",
                 file=sys.stderr,
             )
             return None
-        cc_cmd = cc_parts[0]
-        cc_extra = cc_parts[1:]
+        cc = cc_env or sysconfig.get_config_var("CC") or "cc"
+        cc_cmd = cc.split()[0]
+        cc_extra = cc.split()[1:]
 
         # Pre-flight: verify compiler is on PATH
         if not shutil.which(cc_cmd):

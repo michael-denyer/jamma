@@ -141,13 +141,13 @@ except ImportError as _exc:
             sys_module_key="jamma.jlinalg._jlinalg",
             label="jlinalg",
         )
-    except Exception as _recompile_exc:
-        import warnings as _warnings
+    except (ImportError, OSError) as _recompile_exc:
+        import sys as _sys
 
-        _warnings.warn(
+        print(
             f"jlinalg auto-recompile skipped: "
             f"{type(_recompile_exc).__name__}: {_recompile_exc}",
-            stacklevel=1,
+            file=_sys.stderr,
         )
 
     if _recompiled:

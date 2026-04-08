@@ -1,18 +1,21 @@
 """Tests for safety gates (SAFE-01, SAFE-02, SAFE-03).
 
 Tests observable behavior (warnings emitted, exceptions raised, attribute values)
-rather than inspecting source code strings. Source-inspection tests are brittle —
-they break on refactors even when behavior is preserved.
+wherever possible. Uses real types (MemorySnapshot, numpy arrays) instead of
+MagicMock. For the LP64 threshold tests, np.lib.stride_tricks.as_strided creates
+a 50k x 50k "view" backed by a tiny 4x4 allocation — exercises the real
+shape-checking code path without allocating 20 GB.
 
-Uses real types (MemorySnapshot, numpy arrays) instead of MagicMock. For the LP64
-threshold tests, np.lib.stride_tricks.as_strided creates a 50k x 50k "view" backed
-by a tiny 4x4 allocation — exercises the real shape-checking code path without
-allocating 20 GB.
+SAFE-02 and SAFE-03 use source-reading tests (read file as text + regex) because
+the guards are unreachable at test time: SAFE-02's loco_iter=None is a dead-code
+defensive check, and SAFE-03's ABI check runs at import time before test code
+executes. These follow the same pattern as test_lapack_no_ffast_math (build/config
+verification via text inspection).
 """
 
 import warnings
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 
@@ -30,6 +33,21 @@ def _make_memory_snapshot(available_gb: float = 1000.0) -> MemorySnapshot:
     )
 
 
+def _fake_eigh(
+    return_value: tuple[np.ndarray, np.ndarray],
+):
+    """Build a fake eigh matching the real ``jlinalg.eigh(K, inplace=False)`` signature.
+
+    Unlike MagicMock, this rejects unknown keyword arguments, catching
+    call-site drift between tests and the real interface.
+    """
+
+    def _eigh(K: np.ndarray, inplace: bool = False) -> tuple[np.ndarray, np.ndarray]:
+        return return_value
+
+    return _eigh
+
+
 def _fake_jlinalg(
     *,
     blas_is_ilp64: int = 0,
@@ -42,15 +60,15 @@ def _fake_jlinalg(
 
     Using SimpleNamespace instead of MagicMock ensures that accessing an
     attribute not listed here raises AttributeError, catching drift between
-    the test mock and the real module interface.
+    the test fake and the real module interface.
     """
-    eigh = MagicMock(return_value=eigh_return or (np.ones(100), np.eye(100)))
+    default_return = (np.ones(100), np.eye(100))
     return SimpleNamespace(
         blas_is_ilp64=blas_is_ilp64,
         blas_has_dsyevd=blas_has_dsyevd,
         blas_has_dsyevr=blas_has_dsyevr,
         blas_backend=blas_backend,
-        eigh=eigh,
+        eigh=_fake_eigh(eigh_return or default_return),
     )
 
 
@@ -281,10 +299,13 @@ class TestJlinalgABIValidation:
     def test_abi_mismatch_raises_import_error(self):
         """ABI mismatch guard uses ``raise ImportError``, not silent fallback.
 
-        The ABI check runs at import time and cannot be triggered via reload
-        (the constant is re-initialised before the check). We read __init__.py
-        as text and verify the guard structure, following the same pattern as
-        test_lapack_no_ffast_math.
+        The ABI check runs at import time and cannot be re-triggered via
+        importlib.reload (the constant is re-initialised before the check
+        fires). We read __init__.py as text to verify the guard structure,
+        following the same pattern as test_lapack_no_ffast_math.
+
+        The behavioral counterpart is test_abi_matches_current above, which
+        confirms the check passed at import (ABI_VERSION == expected).
         """
         import re
         from pathlib import Path
@@ -298,8 +319,6 @@ class TestJlinalgABIValidation:
         )
         source = init_src.read_text()
 
-        # Verify: ``if ABI_VERSION != _EXPECTED_JLINALG_ABI:`` followed by
-        # ``raise ImportError(`` — the guard must exist and use ImportError
         pattern = re.compile(
             r"if\s+ABI_VERSION\s*!=\s*_EXPECTED_JLINALG_ABI\s*:\s*\n\s+raise\s+ImportError\(",
         )

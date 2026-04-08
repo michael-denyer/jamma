@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.1.4] - 2026-04-08
+
+### Changed
+
+- Remove 7 `inspect.getsource()` anti-pattern tests and rewrite
+  `test_lapack_no_ffast_math` to parse build config files as text
+- Replace `MagicMock` with real types and fakes across test suite
+- Add pre-commit hook banning `inspect.getsource()` in tests
+- Add test type routing and bug fix workflow sections to TESTING.md
+
 ## [5.1.3] - 2026-04-07
 
 ### Fixed

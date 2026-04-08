@@ -157,6 +157,31 @@ environment variables).
 | Mocking numerical functions | Use small synthetic data with known results |
 | `@patch` on the function under test | Only patch its external dependencies |
 
+### Test type routing
+
+Tiers define **runtime budgets**, not abstraction levels. Two tier1 tests might check
+fundamentally different things — CLI output formatting vs kinship matrix parity. When
+choosing what to test, consider the abstraction level:
+
+| Abstraction level | What to test | Example |
+| ----------------- | ------------ | ------- |
+| Pure computation | Input/output correctness against known values | `_batch_compute_uab_general_numpy` with synthetic data |
+| Numerical parity | Output matches GEMMA reference within tolerance | `test_assoc_matches_gemma` |
+| Build/compile config | Parse config files and verify flags/paths | `test_lapack_no_ffast_math` reads `hatch_build.py` text |
+| CLI/integration | End-to-end invocation with exit codes and output | `test_lmm1_basic` via `CliRunner` |
+| Lifecycle/UI | External library call contracts (finish, update) | Progress bar `finish()` called on exception |
+
+The tier marker determines **when** the test runs (CI vs local). The abstraction level
+determines **how** to write it — pure computation tests never need mocks; lifecycle
+tests mock external libraries at the boundary.
+
+### Bug fix workflow
+
+1. **Reproduce**: write a failing test that demonstrates the bug
+2. **Fix**: change production code to make the test pass
+3. **Keep**: the regression test stays permanently — do not delete it after the fix
+4. **Scope**: only test the specific behavior that was broken, not surrounding code
+
 ### Agent-generated test rules
 
 - Only write tests for code modified in the current task

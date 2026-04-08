@@ -18,7 +18,7 @@ Run with -n0 to avoid interference with OpenMP threading tests:
 from __future__ import annotations
 
 import ctypes
-import inspect
+from pathlib import Path
 
 import numpy as np
 import numpy.testing as npt
@@ -827,46 +827,51 @@ class TestWorkspaceApi:
 
 
 def test_lapack_no_ffast_math() -> None:
-    """LAPACK sources in hatch_build.py must use restricted flags (no -ffast-math).
+    """LAPACK sources in build configs must use strict IEEE 754 flags.
 
-    This is a structural test: it inspects hatch_build.py source to verify
-    that a 'lapack_sources' group exists and that -ffast-math is not applied
-    to LAPACK source files.
-
+    Reads hatch_build.py and _compile_jlinalg.py as text to verify that
+    the lapack_cflags list includes '-fno-fast-math' and excludes '-ffast-math'.
+    The dstedc secular equation uses IEEE 754 infinity arithmetic which
+    -ffast-math breaks.
     """
-    import importlib.util
-    import sys
+    import re
 
-    # Load hatch_build.py as a module for inspection
-    hatch_build_path = (
-        __file__.replace("/tests/test_jlinalg_eigh.py", "/hatch_build.py").replace(
-            "/tests\\test_jlinalg_eigh.py", "/hatch_build.py"
-        )  # Windows
-    )
+    repo_root = Path(__file__).resolve().parent.parent
 
-    spec = importlib.util.spec_from_file_location("hatch_build", hatch_build_path)
-    assert spec is not None, "Could not locate hatch_build.py"
-    hatch_build = importlib.util.module_from_spec(spec)
-    sys.modules["hatch_build"] = hatch_build
-    spec.loader.exec_module(hatch_build)  # type: ignore[union-attr]
+    build_files = {
+        "hatch_build.py": repo_root / "hatch_build.py",
+        "_compile_jlinalg.py": (
+            repo_root / "src" / "jamma" / "jlinalg" / "_compile_jlinalg.py"
+        ),
+    }
 
-    # Get the source of _compile_jlinalg_extension
-    src = inspect.getsource(hatch_build.CustomBuildHook._compile_jlinalg_extension)
+    for name, path in build_files.items():
+        assert path.exists(), f"{name} not found at {path}"
+        text = path.read_text()
 
-    assert "lapack_sources" in src, (
-        "hatch_build.py _compile_jlinalg_extension must define 'lapack_sources' "
-        "for LAPACK files that must not receive -ffast-math. "
-        "Add lapack_sources in Plan 03."
-    )
-    # Verify -ffast-math is not in the lapack compile flags section
-    # (structural check: the lapack_sources block must not contain -ffast-math)
-    lapack_section_start = src.find("lapack_sources")
-    lapack_section = src[lapack_section_start : lapack_section_start + 500]
-    assert "-ffast-math" not in lapack_section, (
-        "LAPACK source files must NOT receive -ffast-math. "
-        "The dstedc secular equation uses IEEE 754 infinity arithmetic "
-        "which -ffast-math breaks. Fix the lapack_sources compile flags."
-    )
+        # Verify lapack_sources group exists
+        assert "lapack_sources" in text, (
+            f"{name} must define 'lapack_sources' for LAPACK files "
+            "that require strict IEEE 754 flags"
+        )
+
+        # Verify lapack_cflags contains -fno-fast-math
+        assert "lapack_cflags" in text, (
+            f"{name} must define 'lapack_cflags' with strict IEEE 754 flags"
+        )
+
+        # Extract the lapack_cflags list content
+        match = re.search(r"lapack_cflags\s*=\s*\[([^\]]+)\]", text, re.DOTALL)
+        assert match is not None, f"Could not parse lapack_cflags list in {name}"
+        cflags_text = match.group(1)
+
+        assert '"-fno-fast-math"' in cflags_text, (
+            f"{name}: lapack_cflags must include '-fno-fast-math' to ensure "
+            "strict IEEE 754 arithmetic for LAPACK secular equation solver"
+        )
+        assert '"-ffast-math"' not in cflags_text.replace("-fno-fast-math", ""), (
+            f"{name}: lapack_cflags must NOT include '-ffast-math'"
+        )
 
 
 # ---------------------------------------------------------------------------

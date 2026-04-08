@@ -1942,36 +1942,6 @@ def test_batch_compute_uab_varying_soa_general_uses_direct_path(n_cvt):
 
 
 @pytest.mark.tier0
-def test_general_uab_no_per_snp_loop():
-    """_batch_compute_uab_general_numpy must not contain per-SNP Python loop."""
-    import inspect
-
-    from jamma.lmm.likelihood_numpy import _batch_compute_uab_general_numpy
-
-    source = inspect.getsource(_batch_compute_uab_general_numpy)
-    assert "vectors_base.copy()" not in source, (
-        "_batch_compute_uab_general_numpy still contains vectors_base.copy()"
-    )
-    assert "for snp_idx in range(n_snps)" not in source, (
-        "_batch_compute_uab_general_numpy still contains per-SNP Python loop"
-    )
-
-
-@pytest.mark.tier0
-def test_varying_soa_general_path_calls_direct():
-    """batch_compute_uab_varying_soa_numpy general path must call direct function."""
-    import inspect
-
-    from jamma.lmm.likelihood_numpy import batch_compute_uab_varying_soa_numpy
-
-    source = inspect.getsource(batch_compute_uab_varying_soa_numpy)
-    assert "_batch_compute_uab_varying_general_numpy" in source, (
-        "batch_compute_uab_varying_soa_numpy does not call "
-        "_batch_compute_uab_varying_general_numpy"
-    )
-
-
-@pytest.mark.tier0
 def test_compute_lrt_numpy_ncvt2_uses_c_path(synthetic_data):
     """_compute_lrt_numpy dispatches to C general path for n_cvt=2.
 

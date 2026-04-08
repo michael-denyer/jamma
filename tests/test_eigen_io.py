@@ -481,19 +481,6 @@ class TestNpyCache:
         )
         np.testing.assert_array_equal(result, arr)
 
-    def test_cache_load_structural_mmap_mode(self) -> None:
-        """_load_npy_cache uses mmap_mode='r' to enable demand-paged OS loading.
-
-        Structural test: inspects source to ensure mmap_mode keyword is present.
-        Catches regressions where someone replaces mmap_mode='r' with eager load.
-        """
-        import inspect
-
-        source = inspect.getsource(_load_npy_cache)
-        assert "mmap_mode" in source, (
-            "_load_npy_cache should use mmap_mode='r' for demand-paged loading"
-        )
-
 
 # =============================================================================
 # Atomic .npy cache write tests
@@ -573,25 +560,6 @@ class TestAtomicCacheWrite:
         # The temp .tmp.npy should be cleaned up
         assert not tmp_npy.exists(), (
             f"Temp file {tmp_npy.name} should be cleaned up after os.replace failure"
-        )
-
-    def test_structural_atomic_write(self) -> None:
-        """_write_npy_cache source contains os.replace and .tmp.npy pattern.
-
-        Structural test: catches regressions where someone replaces the atomic
-        pattern with a direct np.save (which would allow corrupt .npy sidecars
-        on process kill or power loss).
-        """
-        import inspect
-
-        source = inspect.getsource(_write_npy_cache)
-        assert "os.replace" in source, (
-            "_write_npy_cache should use os.replace for atomic rename; "
-            "direct np.save would allow corrupt sidecars on process kill"
-        )
-        assert ".tmp.npy" in source, (
-            "_write_npy_cache should write to a .tmp.npy sibling before rename; "
-            "this pattern was not found in source"
         )
 
 

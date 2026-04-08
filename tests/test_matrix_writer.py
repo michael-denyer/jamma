@@ -4,7 +4,6 @@ Validates that write_matrix_parallel produces byte-identical output to
 np.savetxt for all matrix sizes, including the parallel path (>=500 rows).
 """
 
-import inspect
 from pathlib import Path
 
 import numpy as np
@@ -199,15 +198,6 @@ class TestFailureHandling:
             write_matrix_parallel(matrix, out_path, fmt="%s%s", n_workers=2)
 
         assert not out_path.exists(), "Partial output file should be deleted on failure"
-
-    def test_uses_memmap_not_shared_memory(self) -> None:
-        """Memmap used, not SharedMemory (Docker /dev/shm SIGBUS)."""
-        source = inspect.getsource(write_matrix_parallel)
-        assert "memmap" in source, "write_matrix_parallel should use numpy.memmap"
-        assert "SharedMemory" not in source, (
-            "write_matrix_parallel should not use SharedMemory"
-            " -- Docker /dev/shm is capped at 64 MB"
-        )
 
     def test_temp_files_created_in_output_dir(self, tmp_path: Path) -> None:
         """Temp dir is created adjacent to output, not in system /tmp."""

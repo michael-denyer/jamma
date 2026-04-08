@@ -3398,32 +3398,6 @@ def test_general_lrt_split_ncvt4(general_score_lrt_ncvt4):
     )
 
 
-@pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
-def test_general_score_lrt_split_dispatch():
-    """C-105-05: Split dispatch for n_cvt>1 Score/LRT."""
-    import inspect
-
-    from jamma.lmm.compute_numpy import (
-        _compute_lrt_split_numpy,
-        _compute_score_split_numpy,
-    )
-
-    score_src = inspect.getsource(_compute_score_split_numpy)
-    lrt_src = inspect.getsource(_compute_lrt_split_numpy)
-
-    # When C is available, the n_cvt>1 path should have a C dispatch
-    # before the reconstruct_uab_from_soa fallback.
-    assert (
-        "_compute_score_split_general_c" in score_src
-        or "compute_score_split_general_c" in score_src
-    ), "Score split dispatch missing general C path for n_cvt>1"
-    assert (
-        "_compute_lrt_split_general_c" in lrt_src
-        or "compute_lrt_split_general_c" in lrt_src
-    ), "LRT split dispatch missing general C path for n_cvt>1"
-
-
 # ---------------------------------------------------------------------------
 # Hi_eval_null positivity guards (Plan 76-01)
 # ---------------------------------------------------------------------------

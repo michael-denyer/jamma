@@ -299,28 +299,6 @@ class TestBlockCopyMemmap:
 class TestBoundedMemoryBehavior:
     """Verify memory-bounded parsing: no BytesIO buffer, correct block copy."""
 
-    def test_no_bytesio_buffer_in_worker(self) -> None:
-        """Worker function does NOT use BytesIO (f.read() buffer eliminated).
-
-        Structural test: inspects the source of _parse_chunk_to_memmap to
-        confirm BytesIO is not referenced. Cannot mock BytesIO at runtime
-        because multiprocessing spawn internals use io.BytesIO for IPC.
-        """
-        import inspect
-
-        from jamma.io.matrix_reader import _parse_chunk_to_memmap
-
-        source = inspect.getsource(_parse_chunk_to_memmap)
-        assert "BytesIO" not in source, (
-            "_parse_chunk_to_memmap still references BytesIO — "
-            "memory-bounded parsing requires direct file handle with max_rows"
-        )
-        # Also verify it uses max_rows (the bounded-memory approach)
-        assert "max_rows" in source, (
-            "_parse_chunk_to_memmap should use np.loadtxt(max_rows=...) "
-            "for bounded per-worker memory"
-        )
-
     def test_block_copy_produces_correct_result(self, tmp_path: Path) -> None:
         """Block-by-block memmap-to-dense copy with known values (>1024 rows)."""
         # Use np.arange reshaped so every element is uniquely identifiable

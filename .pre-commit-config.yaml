@@ -32,6 +32,12 @@ repos:
         language: script
         files: ^pyproject\.toml$
         pass_filenames: false
+      - id: no-inspect-getsource
+        name: ban inspect.getsource in tests
+        entry: sh -c '! grep -rn "inspect\.getsource" tests/'
+        language: system
+        files: ^tests/
+        pass_filenames: false
       - id: ruff-format-all
         name: ruff format (all files)
         entry: uv run ruff format --check .

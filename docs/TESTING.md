@@ -107,6 +107,73 @@ JAMMA uses a three-tier system to balance CI speed with thorough validation.
 
 Markers are declared in `pyproject.toml` under `[tool.pytest.ini_options]`.
 
+## Testing Strategy
+
+### Test philosophy
+
+Tests validate **observable behavior** — outputs, exceptions, warnings, state changes —
+not internal implementation details. Never inspect source code with `inspect.getsource()`
+to verify code structure; these tests break on harmless refactors.
+
+### When to mock
+
+Mock only **OS/hardware state** that cannot be controlled in tests:
+
+| Acceptable mocks | Why |
+| ----------------- | --- |
+| `psutil.virtual_memory` | Simulates low-memory conditions without large allocations |
+| `jlinalg.blas_is_ilp64` | Tests LP64/ILP64 code paths without switching BLAS backend |
+| `_check_available` | Controls memory availability without system dependency |
+
+**Never mock numerical computation** (likelihood functions, BLAS routines, matrix
+operations). Use real values and assert against known-good reference output.
+
+**Prefer real types over MagicMock** — construct actual `MemoryBreakdown`,
+`StreamingMemoryBreakdown`, or `ExecutionPlan` instances with test values. MagicMock
+silently accepts any attribute access, hiding schema drift when fields are
+renamed or removed.
+
+### Fakes over mocks
+
+For non-OS dependencies, prefer lightweight fake implementations over `MagicMock`.
+Fakes enforce the real interface contract — accessing a misspelled attribute raises
+`AttributeError` instead of silently returning another `MagicMock`. This catches
+interface drift when fields are renamed or methods change signature.
+
+Example: `FakeAssocWriter` in `test_runner_numpy.py` replaces `MagicMock()` for the
+`IncrementalAssocWriter` interface, capturing `write_arrays_batch` calls in a list.
+
+Reserve `MagicMock` / `@patch` for OS/hardware boundaries only (psutil, BLAS flags,
+environment variables).
+
+### Anti-patterns
+
+| Anti-pattern | Preferred approach |
+| ------------ | ------------------ |
+| `inspect.getsource()` assertions | Assert on warnings emitted, exceptions raised, or return values |
+| `MagicMock()` for data classes | Construct real instances with test values |
+| `MagicMock()` for collaborators | Write a fake class that implements the real interface |
+| `assert "string" in source` | Test the behavior that string enables |
+| Mocking numerical functions | Use small synthetic data with known results |
+| `@patch` on the function under test | Only patch its external dependencies |
+
+### Agent-generated test rules
+
+- Only write tests for code modified in the current task
+- Never modify production code to make a test pass — if a test fails, the test is
+  wrong or there's a real bug
+- Each test must be traceable to a specific behavior change or bug fix
+- Do not write speculative tests for code you did not touch
+
+### Tier selection for new tests
+
+| If the test... | Use tier |
+| -------------- | -------- |
+| Tests pure computation, no I/O, no reference data | `tier0` |
+| Validates output against GEMMA reference fixtures | `tier1` |
+| Needs >1 GB memory or >60s runtime | `tier2` |
+| Heavy scale tests, local-only | `tier3` |
+
 ## Writing New Tests
 
 ### File naming and location

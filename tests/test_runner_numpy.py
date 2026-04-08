@@ -24,6 +24,38 @@ from jamma.validation import (
 from tests.conftest import load_phenotypes_from_fam
 
 # ---------------------------------------------------------------------------
+# Fake infrastructure
+# ---------------------------------------------------------------------------
+
+
+class FakeAssocWriter:
+    """In-memory fake for IncrementalAssocWriter.
+
+    Captures write_arrays_batch calls so tests can assert on call count and
+    arguments without MagicMock.  Unlike MagicMock, accessing an attribute
+    that doesn't exist raises AttributeError — detecting interface drift.
+    """
+
+    def __init__(self) -> None:
+        self.batches: list[tuple] = []
+
+    @property
+    def call_count(self) -> int:
+        return len(self.batches)
+
+    def write_arrays_batch(
+        self,
+        lmm_mode: int,
+        snp_indices: np.ndarray,
+        snp_info: list,
+        afs: np.ndarray,
+        miss_counts: np.ndarray,
+        arrays: dict[str, np.ndarray],
+    ) -> None:
+        self.batches.append((lmm_mode, snp_indices, snp_info, afs, miss_counts, arrays))
+
+
+# ---------------------------------------------------------------------------
 # Tolerance configurations
 # ---------------------------------------------------------------------------
 
@@ -586,11 +618,9 @@ class TestWriteStreamingChunk:
 
     def test_nan_counts_accumulated_across_chunks(self):
         """NaN counts accumulate correctly across multiple chunks."""
-        from unittest.mock import MagicMock
-
         from jamma.lmm.results import write_streaming_chunk
 
-        writer = MagicMock()
+        writer = FakeAssocWriter()
         nan_counts: dict[str, int] = {}
 
         # Chunk 1: 2 NaN betas, 1 NaN p_wald
@@ -652,15 +682,13 @@ class TestWriteStreamingChunk:
         )
 
         assert nan_counts["betas"] == 3  # accumulated across chunks
-        assert writer.write_arrays_batch.call_count == 2
+        assert writer.call_count == 2
 
     def test_lambda_boundary_hits_accumulated(self):
         """Lambda boundary hits accumulate across chunks."""
-        from unittest.mock import MagicMock
-
         from jamma.lmm.results import write_streaming_chunk
 
-        writer = MagicMock()
+        writer = FakeAssocWriter()
         nan_counts: dict[str, int] = {}
 
         # Chunk with lambdas at l_min

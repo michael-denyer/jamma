@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from jamma.core.backend import get_backend_info
+from jamma.core.memory import MemoryBreakdown
 from jamma.lmm.runner import ExecutionPlan, select_execution_mode
 
 
@@ -36,22 +37,34 @@ def test_import_jamma_succeeds():
     assert hasattr(jamma, "__version__")
 
 
-def _make_sufficient_estimate():
-    """Build a MemoryBreakdown-like mock with sufficient=True."""
-    m = MagicMock()
-    m.sufficient = True
-    m.total_gb = 1.0
-    m.available_gb = 100.0
-    return m
+def _make_sufficient_estimate() -> MemoryBreakdown:
+    """Build a MemoryBreakdown with sufficient=True."""
+    return MemoryBreakdown(
+        kinship_gb=0.1,
+        genotypes_gb=0.1,
+        eigenvectors_gb=0.1,
+        eigendecomp_workspace_gb=0.1,
+        lmm_rotated_gb=0.1,
+        lmm_batch_gb=0.1,
+        total_gb=1.0,
+        available_gb=100.0,
+        sufficient=True,
+    )
 
 
-def _make_insufficient_estimate():
-    """Build a MemoryBreakdown-like mock with sufficient=False."""
-    m = MagicMock()
-    m.sufficient = False
-    m.total_gb = 500.0
-    m.available_gb = 10.0
-    return m
+def _make_insufficient_estimate() -> MemoryBreakdown:
+    """Build a MemoryBreakdown with sufficient=False."""
+    return MemoryBreakdown(
+        kinship_gb=100.0,
+        genotypes_gb=100.0,
+        eigenvectors_gb=100.0,
+        eigendecomp_workspace_gb=100.0,
+        lmm_rotated_gb=50.0,
+        lmm_batch_gb=50.0,
+        total_gb=500.0,
+        available_gb=10.0,
+        sufficient=False,
+    )
 
 
 @pytest.mark.tier0
@@ -231,11 +244,7 @@ class TestExecutionMode:
 
         def capturing_estimate(n_samples, n_snps, **kwargs):
             calls.append(kwargs)
-            m = MagicMock()
-            m.sufficient = True
-            m.total_gb = 1.0
-            m.available_gb = 100.0
-            return m
+            return _make_sufficient_estimate()
 
         with (
             patch(

@@ -566,4 +566,4 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Threading | [threading.py:30](../src/jamma/core/threading.py#L30) |
 | Hardware context | [hardware.py:21](../src/jamma/core/hardware.py#L21) |
 | Validation comparison | [compare.py:536](../src/jamma/validation/compare.py#L536) |
-| Equivalence proof | [EQUIVALENCE.md](EQUIVALENCE.md) |
+| Equivalence proof | [GEMMA_EQUIVALENCE.md](GEMMA_EQUIVALENCE.md) |

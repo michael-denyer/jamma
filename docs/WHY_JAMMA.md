@@ -11,7 +11,7 @@ JAMMA delivers the same statistical results as GEMMA while solving practical pro
 | **Speed** | 1x baseline | Up to 10x faster (C extension + vendor BLAS) |
 | **Installation** | C++ compilation required | `pip install jamma` |
 | **Error Messages** | Segfault or cryptic | Clear, actionable |
-| **Numerical Results** | Reference | Equivalent ([proof](EQUIVALENCE.md)) |
+| **Numerical Results** | Reference | Equivalent ([proof](GEMMA_EQUIVALENCE.md)) |
 | **Sample Filtering** | Kinship always n_samples x n_samples | Kinship at n_valid x n_valid when samples are dropped |
 
 ---
@@ -200,7 +200,7 @@ Despite all improvements, JAMMA produces **identical scientific conclusions** to
 | Effect directions | 100% agreement | Sign of beta |
 | SNP rankings | Identical | Spearman correlation = 1.0 |
 
-See [EQUIVALENCE.md](EQUIVALENCE.md) for the formal error propagation analysis.
+See [GEMMA_EQUIVALENCE.md](GEMMA_EQUIVALENCE.md) for the formal error propagation analysis.
 
 The goal is a **drop-in replacement**: same CLI, same output format, same scientific results.
 

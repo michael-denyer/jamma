@@ -2,7 +2,7 @@
 
 Validates that run_lmm_association_numpy produces GEMMA-equivalent p-values for all
 four LMM modes (Wald, LRT, Score, All). Tests compare directly against GEMMA reference
-files (see EQUIVALENCE.md for tolerance rationale).
+files (see GEMMA_EQUIVALENCE.md for tolerance rationale).
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ class FakeAssocWriter:
 # NumPy backend vs GEMMA tolerances.
 # Cephes betainc is close to GSL betainc for large a (n_samples > 1000).
 # Lambda optimization uses golden section algorithm.
-# See EQUIVALENCE.md for tolerance derivation.
+# See GEMMA_EQUIVALENCE.md for tolerance derivation.
 NUMPY_GEMMA_TOLERANCES = ToleranceConfig(
     lambda_rtol=1e-3,  # Golden section vs Brent
     pvalue_rtol=1e-2,  # Cephes vs GSL betainc

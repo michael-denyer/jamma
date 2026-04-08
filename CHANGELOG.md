@@ -1226,7 +1226,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - LOCO warns and uses full kinship for chromosomes with 0 ksnps (was silently skipping them)
 - Out-of-place kinship accumulation (`K = K + matmul(...)`) for deterministic FP rounding
 - Explicit `del chunk` in streaming stats loops to free memory between iterations
-- Test tolerances aligned with EQUIVALENCE.md (kinship 1e-10 → 1e-8)
+- Test tolerances aligned with GEMMA_EQUIVALENCE.md (kinship 1e-10 → 1e-8)
 - CI: `test-slow` job skips coverage threshold (partial test runs can't meet 80%)
 
 ### Changed

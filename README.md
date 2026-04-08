@@ -289,7 +289,7 @@ See [Code Map](docs/CODEMAP.md) for the full architecture diagram with source li
 - [Why JAMMA?](docs/WHY_JAMMA.md) -- Key differentiators from GEMMA
 - [User Guide](docs/USER_GUIDE.md) -- Installation, usage examples, CLI reference
 - [Code Map](docs/CODEMAP.md) -- Architecture diagrams and source navigation
-- [Equivalence Proof](docs/EQUIVALENCE.md) -- Mathematical proofs and empirical validation against GEMMA
+- [Equivalence Proof](docs/GEMMA_EQUIVALENCE.md) -- Mathematical proofs and empirical validation against GEMMA
 - [GEMMA Divergences](docs/GEMMA_DIVERGENCES.md) -- Known differences from GEMMA
 - [Performance](docs/PERFORMANCE.md) -- Bottleneck analysis, scale validation, configuration guide
 - [jlinalg Architecture](docs/JLINALG_ARCHITECTURE.md) -- C vendor BLAS dispatch layer design

@@ -3,7 +3,7 @@
 JAMMA aims for **numerical equivalence** with GEMMA on well-formed inputs, but makes deliberate deviations for robustness in edge cases. This document catalogs each divergence with rationale.
 
 For mathematical proofs of equivalence and empirical validation results, see
-[EQUIVALENCE.md](EQUIVALENCE.md).
+[GEMMA_EQUIVALENCE.md](GEMMA_EQUIVALENCE.md).
 
 ## Philosophy
 
@@ -249,7 +249,7 @@ P-values, effect sizes, and significance calls are unaffected. The flat region
 corresponds to weak-signal SNPs where test statistics are small regardless of
 the exact lambda.
 
-See [EQUIVALENCE.md § Lambda Optimization](EQUIVALENCE.md#5-lambda-optimization)
+See [GEMMA_EQUIVALENCE.md § Lambda Optimization](GEMMA_EQUIVALENCE.md#5-lambda-optimization)
 for full error bounds and empirical validation results.
 
 ---
@@ -476,4 +476,4 @@ represent niche use cases.
 3. **No silent failures**: Divergences produce NaN, not silently wrong values
 
 For full empirical validation results (small-scale and production-scale), see
-[EQUIVALENCE.md § Empirical Results](EQUIVALENCE.md#empirical-results).
+[GEMMA_EQUIVALENCE.md § Empirical Results](GEMMA_EQUIVALENCE.md#empirical-results).

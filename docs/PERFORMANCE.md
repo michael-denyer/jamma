@@ -203,7 +203,7 @@ BED file sample count.
 
 ### Test Suite
 
-Full test suite passing. Kinship tolerance aligned from 1e-10 to 1e-8 in v2.5.7 to match EQUIVALENCE.md bounds. All other tolerance constants in `src/jamma/validation/tolerances.py` unchanged from v1.3.
+Full test suite passing. Kinship tolerance aligned from 1e-10 to 1e-8 in v2.5.7 to match GEMMA_EQUIVALENCE.md bounds. All other tolerance constants in `src/jamma/validation/tolerances.py` unchanged from v1.3.
 
 ---
 

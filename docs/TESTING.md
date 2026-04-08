@@ -166,9 +166,9 @@ choosing what to test, consider the abstraction level:
 | Abstraction level | What to test | Example |
 | ----------------- | ------------ | ------- |
 | Pure computation | Input/output correctness against known values | `_batch_compute_uab_general_numpy` with synthetic data |
-| Numerical parity | Output matches GEMMA reference within tolerance | `test_assoc_matches_gemma` |
+| Numerical parity | Output matches GEMMA reference within tolerance | `test_streaming_matches_gemma` |
 | Build/compile config | Parse config files and verify flags/paths | `test_lapack_no_ffast_math` reads `hatch_build.py` text |
-| CLI/integration | End-to-end invocation with exit codes and output | `test_lmm1_basic` via `CliRunner` |
+| CLI/integration | End-to-end invocation with exit codes and output | `test_lmm_numpy_backend` via `CliRunner` |
 | Lifecycle/UI | External library call contracts (finish, update) | Progress bar `finish()` called on exception |
 
 The tier marker determines **when** the test runs (CI vs local). The abstraction level

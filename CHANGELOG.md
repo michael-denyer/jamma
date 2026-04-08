@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Rename `EQUIVALENCE.md` → `GEMMA_EQUIVALENCE.md` and
+  `NUMERICAL_EQUIVALENCE_BOUND.md` → `GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md`;
+  update all cross-references across docs, tests, README, and CHANGELOG
+- Link previously orphaned `GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md` from README
+
 ## [5.1.4] - 2026-04-08
 
 ### Changed
@@ -1831,6 +1838,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory
 
+[5.1.4]: https://github.com/michael-denyer/jamma/compare/v5.1.3...v5.1.4
 [5.1.3]: https://github.com/michael-denyer/jamma/compare/v5.1.2...v5.1.3
 [5.1.2]: https://github.com/michael-denyer/jamma/compare/v5.1.1...v5.1.2
 [5.1.1]: https://github.com/michael-denyer/jamma/compare/v5.1.0...v5.1.1

@@ -155,17 +155,19 @@ class TestLP64OverflowWarning:
 
 
 class TestLOCOIteratorRuntimeError:
-    """SAFE-02: LOCO iterator None raises RuntimeError, not AssertionError.
+    """SAFE-02: LOCO iterator None raises RuntimeError, not bare assert.
 
     The internal error path (loco_iter=None when eigen_cache=None) is deep in the
-    LOCO pipeline and difficult to trigger without a full dataset. We verify the
-    module uses RuntimeError (not bare assert) by importing and checking the
-    exception type attribute.
+    LOCO pipeline and difficult to trigger without a full dataset. We read loco.py
+    as text to verify the guard uses ``raise RuntimeError`` (not bare ``assert``),
+    following the same pattern as test_lapack_no_ffast_math.
     """
 
     def test_loco_module_importable(self):
         """loco module imports without error."""
-        from jamma.lmm import loco  # noqa: F401
+        from jamma.lmm import loco
+
+        assert loco  # module loaded successfully
 
     def test_run_lmm_loco_requires_bed_path(self):
         """run_lmm_loco raises TypeError when required args missing."""
@@ -173,6 +175,29 @@ class TestLOCOIteratorRuntimeError:
 
         with pytest.raises(TypeError):
             run_lmm_loco()  # type: ignore[call-arg]
+
+    def test_loco_iter_none_raises_runtime_error(self):
+        """loco.py guards loco_iter=None with RuntimeError, not bare assert.
+
+        Bare ``assert`` is stripped by ``python -O``, which would cause a
+        cryptic AttributeError downstream instead of a clear diagnostic.
+        """
+        import re
+        from pathlib import Path
+
+        loco_src = (
+            Path(__file__).resolve().parent.parent / "src" / "jamma" / "lmm" / "loco.py"
+        )
+        source = loco_src.read_text()
+
+        # Find the guard: ``if loco_iter is None:`` followed by ``raise RuntimeError``
+        pattern = re.compile(
+            r"if\s+loco_iter\s+is\s+None\s*:\s*\n\s+raise\s+RuntimeError\(",
+        )
+        assert pattern.search(source), (
+            "loco.py must guard loco_iter=None with 'raise RuntimeError(...)' "
+            "not bare assert — bare assert is stripped by python -O"
+        )
 
 
 class TestJlinalgABIValidation:
@@ -193,17 +218,31 @@ class TestJlinalgABIValidation:
             assert jlinalg.ABI_VERSION == jlinalg._EXPECTED_JLINALG_ABI
 
     def test_abi_mismatch_raises_import_error(self):
-        """Simulated ABI mismatch raises ImportError with diagnostic message."""
-        import jamma.jlinalg as jl
+        """ABI mismatch guard uses ``raise ImportError``, not silent fallback.
 
-        if not jl.HAS_C_EXTENSION:
-            pytest.skip("C extension not available")
+        The ABI check runs at import time and cannot be triggered via reload
+        (the constant is re-initialised before the check). We read __init__.py
+        as text and verify the guard structure, following the same pattern as
+        test_lapack_no_ffast_math.
+        """
+        import re
+        from pathlib import Path
 
-        # Temporarily set an impossible expected ABI to verify the check fires
-        original = jl._EXPECTED_JLINALG_ABI
-        try:
-            jl._EXPECTED_JLINALG_ABI = -999
-            # The check happens at import time, so we verify the values diverge
-            assert jl.ABI_VERSION != jl._EXPECTED_JLINALG_ABI
-        finally:
-            jl._EXPECTED_JLINALG_ABI = original
+        init_src = (
+            Path(__file__).resolve().parent.parent
+            / "src"
+            / "jamma"
+            / "jlinalg"
+            / "__init__.py"
+        )
+        source = init_src.read_text()
+
+        # Verify: ``if ABI_VERSION != _EXPECTED_JLINALG_ABI:`` followed by
+        # ``raise ImportError(`` — the guard must exist and use ImportError
+        pattern = re.compile(
+            r"if\s+ABI_VERSION\s*!=\s*_EXPECTED_JLINALG_ABI\s*:\s*\n\s+raise\s+ImportError\(",
+        )
+        assert pattern.search(source), (
+            "jlinalg/__init__.py must check ABI_VERSION != _EXPECTED_JLINALG_ABI "
+            "and raise ImportError — this guard prevents silent ABI drift"
+        )

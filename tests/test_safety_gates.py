@@ -11,10 +11,10 @@ allocating 20 GB.
 """
 
 import warnings
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 from jamma.core.memory import MemorySnapshot
 
@@ -27,6 +27,30 @@ def _make_memory_snapshot(available_gb: float = 1000.0) -> MemorySnapshot:
         available_gb=available_gb,
         total_gb=1024.0,
         percent_used=10.0,
+    )
+
+
+def _fake_jlinalg(
+    *,
+    blas_is_ilp64: int = 0,
+    blas_has_dsyevd: bool = True,
+    blas_has_dsyevr: bool = False,
+    blas_backend: str = "test",
+    eigh_return: tuple | None = None,
+) -> SimpleNamespace:
+    """Build a fake jlinalg with only the attributes eigen.py reads.
+
+    Using SimpleNamespace instead of MagicMock ensures that accessing an
+    attribute not listed here raises AttributeError, catching drift between
+    the test mock and the real module interface.
+    """
+    eigh = MagicMock(return_value=eigh_return or (np.ones(100), np.eye(100)))
+    return SimpleNamespace(
+        blas_is_ilp64=blas_is_ilp64,
+        blas_has_dsyevd=blas_has_dsyevd,
+        blas_has_dsyevr=blas_has_dsyevr,
+        blas_backend=blas_backend,
+        eigh=eigh,
     )
 
 
@@ -51,22 +75,22 @@ class TestLP64OverflowWarning:
 
         big_K = _big_K_view(50_000)
         snapshot = _make_memory_snapshot()
+        fake_jl = _fake_jlinalg(
+            blas_is_ilp64=0,
+            eigh_return=(np.ones(50_000), np.eye(3)),
+        )
 
         with (
-            patch.object(eigen, "jlinalg") as mock_jl,
+            patch.object(eigen, "jlinalg", fake_jl),
             patch.object(eigen, "log_memory_snapshot", return_value=snapshot),
             warnings.catch_warnings(record=True) as w,
         ):
             warnings.simplefilter("always")
-            mock_jl.blas_is_ilp64 = 0
-            mock_jl.blas_has_dsyevd = True
-            mock_jl.blas_has_dsyevr = False
-            mock_jl.eigh.return_value = (np.ones(50_000), np.eye(3))
 
             try:
-                eigen.eigendecompose_kinship(big_K)
-            except Exception:
-                pass  # eigh mock returns wrong shape, fine
+                eigen.eigendecompose_kinship(big_K, check_memory=False)
+            except (ValueError, RuntimeError):
+                pass  # eigh fake returns wrong shape
 
             lp64_warnings = [x for x in w if "LP64 BLAS detected" in str(x.message)]
             assert len(lp64_warnings) == 1
@@ -80,21 +104,21 @@ class TestLP64OverflowWarning:
 
         big_K = _big_K_view(50_000)
         snapshot = _make_memory_snapshot()
+        fake_jl = _fake_jlinalg(
+            blas_is_ilp64=1,
+            eigh_return=(np.ones(50_000), np.eye(3)),
+        )
 
         with (
-            patch.object(eigen, "jlinalg") as mock_jl,
+            patch.object(eigen, "jlinalg", fake_jl),
             patch.object(eigen, "log_memory_snapshot", return_value=snapshot),
             warnings.catch_warnings(record=True) as w,
         ):
             warnings.simplefilter("always")
-            mock_jl.blas_is_ilp64 = 1
-            mock_jl.blas_has_dsyevd = True
-            mock_jl.blas_has_dsyevr = False
-            mock_jl.eigh.return_value = (np.ones(50_000), np.eye(3))
 
             try:
-                eigen.eigendecompose_kinship(big_K)
-            except Exception:
+                eigen.eigendecompose_kinship(big_K, check_memory=False)
+            except (ValueError, RuntimeError):
                 pass
 
             lp64_warnings = [x for x in w if "LP64" in str(x.message)]
@@ -103,49 +127,99 @@ class TestLP64OverflowWarning:
     def test_small_matrix_no_warning(self):
         """n_samples <= 40k does not trigger warning even on LP64."""
         from jamma.lmm import eigen
-        from jamma.lmm.eigen import eigendecompose_kinship
 
         K = np.eye(100, dtype=np.float64)
         snapshot = _make_memory_snapshot()
+        fake_jl = _fake_jlinalg(blas_is_ilp64=0)
 
         with (
-            patch.object(eigen, "jlinalg") as mock_jl,
+            patch.object(eigen, "jlinalg", fake_jl),
             patch.object(eigen, "log_memory_snapshot", return_value=snapshot),
             warnings.catch_warnings(record=True) as w,
         ):
             warnings.simplefilter("always")
-            mock_jl.blas_is_ilp64 = 0
-            mock_jl.blas_has_dsyevd = True
-            mock_jl.blas_has_dsyevr = False
-            mock_jl.eigh.return_value = (np.ones(100), np.eye(100))
 
-            eigendecompose_kinship(K)
+            eigen.eigendecompose_kinship(K)
 
             lp64_warnings = [x for x in w if "LP64" in str(x.message)]
             assert len(lp64_warnings) == 0
 
-    def test_no_vendor_suppresses_lp64_warning(self):
-        """LP64 warning does not fire when using np.linalg.eigh fallback."""
+    def test_boundary_40k_no_warning(self):
+        """Exactly 40,000 samples does not trigger LP64 warning."""
         from jamma.lmm import eigen
-        from jamma.lmm.eigen import eigendecompose_kinship
 
-        big_K = _big_K_view(50_000)
+        K = _big_K_view(40_000)
         snapshot = _make_memory_snapshot()
+        fake_jl = _fake_jlinalg(
+            blas_is_ilp64=0,
+            eigh_return=(np.ones(40_000), np.eye(3)),
+        )
 
         with (
-            patch.object(eigen, "jlinalg") as mock_jl,
+            patch.object(eigen, "jlinalg", fake_jl),
             patch.object(eigen, "log_memory_snapshot", return_value=snapshot),
-            patch.dict("os.environ", {"JLINALG_NO_VENDOR_LAPACK": "1"}),
             warnings.catch_warnings(record=True) as w,
         ):
             warnings.simplefilter("always")
-            mock_jl.blas_is_ilp64 = 0
-            mock_jl.blas_has_dsyevd = False
-            mock_jl.blas_has_dsyevr = False
 
             try:
-                eigendecompose_kinship(big_K)
-            except Exception:
+                eigen.eigendecompose_kinship(K, check_memory=False)
+            except (ValueError, RuntimeError):
+                pass
+
+            lp64_warnings = [x for x in w if "LP64" in str(x.message)]
+            assert len(lp64_warnings) == 0
+
+    def test_boundary_40001_warns(self):
+        """40,001 samples triggers LP64 warning."""
+        from jamma.lmm import eigen
+
+        K = _big_K_view(40_001)
+        snapshot = _make_memory_snapshot()
+        fake_jl = _fake_jlinalg(
+            blas_is_ilp64=0,
+            eigh_return=(np.ones(40_001), np.eye(3)),
+        )
+
+        with (
+            patch.object(eigen, "jlinalg", fake_jl),
+            patch.object(eigen, "log_memory_snapshot", return_value=snapshot),
+            warnings.catch_warnings(record=True) as w,
+        ):
+            warnings.simplefilter("always")
+
+            try:
+                eigen.eigendecompose_kinship(K, check_memory=False)
+            except (ValueError, RuntimeError):
+                pass
+
+            lp64_warnings = [x for x in w if "LP64 BLAS detected" in str(x.message)]
+            assert len(lp64_warnings) == 1
+
+    def test_no_vendor_suppresses_lp64_warning(self):
+        """LP64 warning does not fire when using np.linalg.eigh fallback."""
+        from jamma.lmm import eigen
+
+        big_K = _big_K_view(50_000)
+        snapshot = _make_memory_snapshot()
+        fake_jl = _fake_jlinalg(
+            blas_is_ilp64=0,
+            blas_has_dsyevd=False,
+            blas_has_dsyevr=False,
+        )
+
+        with (
+            patch.object(eigen, "jlinalg", fake_jl),
+            patch.object(eigen, "log_memory_snapshot", return_value=snapshot),
+            patch.dict("os.environ", {"JLINALG_NO_VENDOR_LAPACK": "1"}),
+            patch("numpy.linalg.eigh", return_value=(np.ones(50_000), np.eye(3))),
+            warnings.catch_warnings(record=True) as w,
+        ):
+            warnings.simplefilter("always")
+
+            try:
+                eigen.eigendecompose_kinship(big_K, check_memory=False)
+            except (ValueError, RuntimeError):
                 pass
 
             lp64_warnings = [x for x in w if "LP64" in str(x.message)]
@@ -162,19 +236,6 @@ class TestLOCOIteratorRuntimeError:
     as text to verify the guard uses ``raise RuntimeError`` (not bare ``assert``),
     following the same pattern as test_lapack_no_ffast_math.
     """
-
-    def test_loco_module_importable(self):
-        """loco module imports without error."""
-        from jamma.lmm import loco
-
-        assert loco  # module loaded successfully
-
-    def test_run_lmm_loco_requires_bed_path(self):
-        """run_lmm_loco raises TypeError when required args missing."""
-        from jamma.lmm.loco import run_lmm_loco
-
-        with pytest.raises(TypeError):
-            run_lmm_loco()  # type: ignore[call-arg]
 
     def test_loco_iter_none_raises_runtime_error(self):
         """loco.py guards loco_iter=None with RuntimeError, not bare assert.

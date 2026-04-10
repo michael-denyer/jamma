@@ -41,7 +41,7 @@ from jamma.kinship import (
 )
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
-from jamma.lmm.runner import ExecutionPlan, select_execution_mode
+from jamma.lmm.runner import ExecutionPlan, select_execution_mode, warn_if_small_sample
 from jamma.lmm.schema import LmmConfig, LmmRunResult, PipelineTiming
 from jamma.lmm.stats import AssocResult
 
@@ -900,6 +900,7 @@ class PipelineRunner:
             n_cvt = covariates.shape[1] if covariates is not None else 1
             self._log_banner(n_samples, n_valid, n_snps, n_covariates=n_cvt)
             self._log_pipeline_banner(plan)
+            warn_if_small_sample(n_valid)
 
             t_loco = time.perf_counter()
             loco = run_lmm_loco(
@@ -1001,6 +1002,7 @@ class PipelineRunner:
             n_covariates=n_cvt,
             n_phenotypes=len(pheno_columns),
         )
+        warn_if_small_sample(n_valid)
 
         # Re-evaluate the plan with actual n_valid (initial plan may have used
         # raw n_samples from PLINK header; valid_mask filtering can reduce it).

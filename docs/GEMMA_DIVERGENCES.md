@@ -209,6 +209,14 @@ The golden section method has no mechanism to detect or recover from
 multimodality. Brent's method also assumes unimodality but is somewhat more
 robust to flat regions due to its inverse quadratic interpolation step.
 
+**Small-sample warning.** When fewer than 50 samples enter the LMM (after
+phenotype and covariate filtering), JAMMA emits a warning via
+`jamma.lmm.runner.warn_if_small_sample()`. LMM-based GWAS has insufficient
+statistical power below this scale regardless of optimizer, and this is
+precisely the regime where the unimodality assumption above is most likely to
+fail. The warning fires once per run from both the `PipelineRunner` (CLI path)
+and `run_lmm()` (programmatic path).
+
 ### Why Not Brent?
 
 Brent's method is inherently serial: each SNP follows a different convergence

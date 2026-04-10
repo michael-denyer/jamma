@@ -71,6 +71,40 @@ class ExecutionPlan:
         return f"{self.backend}-{self.mode}"
 
 
+SMALL_SAMPLE_WARNING_THRESHOLD = 50
+
+
+def warn_if_small_sample(n_samples: int) -> None:
+    """Warn once when sample size is below the practical LMM threshold.
+
+    JAMMA is designed for large-scale GWAS (thousands to hundreds of thousands
+    of samples). Below ~50 samples, two concerns apply:
+
+    1. LMM has insufficient statistical power regardless of optimizer — kinship
+       estimation and variance component inference are unreliable with so few
+       samples.
+    2. JAMMA's batch-vectorized grid+golden-section lambda optimizer assumes
+       the log-likelihood is unimodal in log-lambda space. Very small samples
+       are one of the scenarios where that assumption can fail, and unlike
+       GEMMA's Brent's method JAMMA has no mechanism to detect multimodality.
+       Results may diverge meaningfully from GEMMA on such adversarial inputs.
+
+    See docs/GEMMA_DIVERGENCES.md §6 for full context.
+
+    Args:
+        n_samples: Number of samples actually entering the LMM (post
+            phenotype/covariate filtering, not the raw PLINK header count).
+    """
+    if n_samples < SMALL_SAMPLE_WARNING_THRESHOLD:
+        logger.warning(
+            f"Small sample size ({n_samples} < {SMALL_SAMPLE_WARNING_THRESHOLD}): "
+            "LMM-based GWAS has insufficient statistical power at this scale, "
+            "and JAMMA's batch golden-section lambda optimizer may diverge from "
+            "GEMMA's Brent's method on multimodal likelihoods. "
+            "See docs/GEMMA_DIVERGENCES.md §6."
+        )
+
+
 def select_execution_mode(
     n_samples: int,
     n_snps: int,
@@ -269,6 +303,18 @@ def run_lmm(
     logger.info(
         f"Execution plan: {execution_plan.runner_name} ({execution_plan.reason})"
     )
+
+    # Warn on small sample sizes (n<50). The pipeline already emits this
+    # warning using post-filter n_valid; do it here too for programmatic
+    # callers who bypass the pipeline. Use phenotypes/genotypes shape as the
+    # best available estimate of actual sample count.
+    _n_for_warning: int | None = None
+    if phenotypes is not None:
+        _n_for_warning = phenotypes.shape[0]
+    elif genotypes is not None:
+        _n_for_warning = genotypes.shape[0]
+    if _n_for_warning is not None:
+        warn_if_small_sample(_n_for_warning)
 
     # Build common kwargs from config or flat args
     if config is not None:

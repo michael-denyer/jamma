@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.1.5] - 2026-04-11
+
+### Added
+
+- Warn when fewer than 50 samples enter the LMM (after phenotype/covariate
+  filtering). LMM-based GWAS has insufficient statistical power below this
+  scale, and JAMMA's batch golden-section lambda optimizer assumes unimodal
+  log-likelihoods — an assumption most likely to fail at very small n. The
+  warning fires once per run from both the pipeline (CLI) and `run_lmm()`
+  (programmatic API). See `docs/GEMMA_DIVERGENCES.md` §6.
+
 ### Changed
 
 - Rename `EQUIVALENCE.md` → `GEMMA_EQUIVALENCE.md` and

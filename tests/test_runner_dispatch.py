@@ -9,7 +9,12 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from jamma.lmm.runner import ExecutionPlan, run_lmm
+from jamma.lmm.runner import (
+    SMALL_SAMPLE_WARNING_THRESHOLD,
+    ExecutionPlan,
+    run_lmm,
+    warn_if_small_sample,
+)
 from jamma.lmm.schema import LmmRunResult
 from jamma.lmm.stats import AssocResult
 
@@ -148,3 +153,86 @@ class TestUnifiedDispatcher:
                 phenotypes=None,
                 kinship=np.eye(10),
             )
+
+
+@pytest.mark.tier0
+class TestSmallSampleWarning:
+    """Tests for the n<50 small-sample warning.
+
+    See docs/GEMMA_DIVERGENCES.md §6 for rationale: golden section lambda
+    optimization assumes unimodality, which can break at very small n, and
+    LMM-based GWAS has insufficient power below ~50 samples regardless.
+    """
+
+    def test_threshold_is_fifty(self):
+        """Threshold constant is 50 — document via test."""
+        assert SMALL_SAMPLE_WARNING_THRESHOLD == 50
+
+    def test_below_threshold_warns(self, caplog):
+        """n=30 emits a loguru warning mentioning the threshold."""
+        from loguru import logger
+
+        # loguru isn't captured by caplog by default — bridge to stdlib logging
+        handler_id = logger.add(caplog.handler, format="{message}", level="WARNING")
+        try:
+            with caplog.at_level("WARNING"):
+                warn_if_small_sample(30)
+        finally:
+            logger.remove(handler_id)
+
+        assert any("Small sample size" in rec.message for rec in caplog.records)
+        assert any("30" in rec.message for rec in caplog.records)
+
+    def test_at_threshold_does_not_warn(self, caplog):
+        """n=50 is the threshold boundary — no warning (strict <)."""
+        from loguru import logger
+
+        handler_id = logger.add(caplog.handler, format="{message}", level="WARNING")
+        try:
+            with caplog.at_level("WARNING"):
+                warn_if_small_sample(50)
+        finally:
+            logger.remove(handler_id)
+
+        assert not any("Small sample size" in rec.message for rec in caplog.records)
+
+    def test_large_n_does_not_warn(self, caplog):
+        """Typical GWAS n=1940 produces no small-sample warning."""
+        from loguru import logger
+
+        handler_id = logger.add(caplog.handler, format="{message}", level="WARNING")
+        try:
+            with caplog.at_level("WARNING"):
+                warn_if_small_sample(1940)
+        finally:
+            logger.remove(handler_id)
+
+        assert not any("Small sample size" in rec.message for rec in caplog.records)
+
+    def test_run_lmm_warns_for_small_phenotypes(self, caplog):
+        """run_lmm() with small phenotypes fires the warning before dispatch."""
+        from loguru import logger
+
+        plan = ExecutionPlan(backend="numpy", mode="batch", reason="test")
+        stub_result = LmmRunResult(associations=[], pve=0.0)
+
+        handler_id = logger.add(caplog.handler, format="{message}", level="WARNING")
+        try:
+            with (
+                caplog.at_level("WARNING"),
+                patch(
+                    "jamma.lmm.runner_numpy.run_lmm_association_numpy",
+                    return_value=stub_result,
+                ),
+            ):
+                run_lmm(
+                    execution_plan=plan,
+                    genotypes=np.zeros((25, 3)),
+                    phenotypes=np.zeros(25),
+                    snp_info=[],
+                    kinship=np.eye(25),
+                )
+        finally:
+            logger.remove(handler_id)
+
+        assert any("Small sample size" in rec.message for rec in caplog.records)

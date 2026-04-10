@@ -1,4 +1,3 @@
-<!-- generated-by: gsd-doc-writer -->
 # JAMMA-GEMMA Equivalence Proof
 
 JAMMA implements mathematically identical algorithms to GEMMA. All numerical

@@ -1,4 +1,3 @@
-<!-- generated-by: gsd-doc-writer -->
 # Testing
 
 JAMMA uses pytest with parallel execution (`pytest-xdist`), test randomization

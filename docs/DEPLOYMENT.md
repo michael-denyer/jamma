@@ -1,4 +1,3 @@
-<!-- generated-by: gsd-doc-writer -->
 # JAMMA Deployment
 
 JAMMA is a Python CLI tool distributed as a PyPI package and a Docker image. This document

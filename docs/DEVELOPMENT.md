@@ -1,5 +1,3 @@
-<!-- generated-by: gsd-doc-writer -->
-
 # Development Guide
 
 This guide covers local setup, build commands, code style, and the PR process for contributing to JAMMA.

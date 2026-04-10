@@ -1,4 +1,3 @@
-<!-- generated-by: gsd-doc-writer -->
 # Getting Started with JAMMA
 
 **JAMMA** (Highly-Accelerated Multi-method Mixed-Model Association) is a Python and C

@@ -1,4 +1,3 @@
-<!-- generated-by: gsd-doc-writer -->
 # JAMMA Configuration Reference
 
 This document covers all configuration surfaces in JAMMA: environment variables,

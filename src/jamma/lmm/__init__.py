@@ -29,18 +29,18 @@ from jamma.lmm.schema import LmmConfig, LmmRunResult
 from jamma.lmm.stats import AssocResult
 
 __all__ = [
-    "auto_tune_chunk_size",
+    "AssocResult",
     "ExecutionPlan",
+    "LmmConfig",
+    "LmmRunResult",
+    "auto_tune_chunk_size",
+    "eigendecompose_kinship",
+    "read_eigen_files",
     "run_lmm",
     "run_lmm_association_numpy",
     "run_lmm_association_numpy_streaming",
     "run_lmm_loco",
     "select_execution_mode",
-    "AssocResult",
-    "eigendecompose_kinship",
-    "LmmConfig",
-    "LmmRunResult",
-    "read_eigen_files",
     "write_assoc_results",
     "write_eigen_files",
 ]

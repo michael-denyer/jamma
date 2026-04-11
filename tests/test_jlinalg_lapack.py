@@ -189,13 +189,15 @@ class TestSVD:
         """
         A = np.random.default_rng(42).standard_normal((2000, 100))
         s = jlinalg.svd(A, compute_uv=False)
-        assert isinstance(s, np.ndarray) and s.ndim == 1, (
-            f"compute_uv=False should return plain ndarray, got {type(s)}"
+        assert isinstance(s, np.ndarray), (
+            f"compute_uv=False should return ndarray, got {type(s)}"
         )
+        assert s.ndim == 1, f"expected 1-D singular values, got ndim={s.ndim}"
         result = jlinalg.svd(A, compute_uv=True)
-        assert isinstance(result, tuple) and len(result) == 3, (
-            f"compute_uv=True should return 3-tuple, got {type(result)}"
+        assert isinstance(result, tuple), (
+            f"compute_uv=True should return tuple, got {type(result)}"
         )
+        assert len(result) == 3, f"expected 3-tuple, got len={len(result)}"
 
     def test_tall_skinny_only(self) -> None:
         with pytest.raises(ValueError, match="m >= n"):

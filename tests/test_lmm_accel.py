@@ -351,17 +351,17 @@ def test_c_multithreaded_parity(synthetic_wald_data):
 
     eigenvalues, Uab_batch, n_samples = synthetic_wald_data
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
-    kwargs = dict(
-        n_cvt=1,
-        eigenvalues=eigenvalues,
-        Uab_batch=Uab_batch,
-        n_samples=n_samples,
-        l_min=1e-5,
-        l_max=1e5,
-        n_grid=50,
-        n_refine=20,
-        Iab_batch=Iab_batch,
-    )
+    kwargs = {
+        "n_cvt": 1,
+        "eigenvalues": eigenvalues,
+        "Uab_batch": Uab_batch,
+        "n_samples": n_samples,
+        "l_min": 1e-5,
+        "l_max": 1e5,
+        "n_grid": 50,
+        "n_refine": 20,
+        "Iab_batch": Iab_batch,
+    }
 
     result_1t = _compute_wald_numpy(**kwargs, n_threads=1)
     result_mt = _compute_wald_numpy(**kwargs, n_threads=n_threads)
@@ -464,7 +464,7 @@ def test_c_extension_nonfinite_eigenvalues(bad_value):
     Uab_batch = rng.standard_normal((n_snps, n_samples, 6))
     Uab_batch[:, :, 0] = np.abs(Uab_batch[:, :, 0]) + 0.1
 
-    with pytest.raises(ValueError, match="eigenvalues.*not finite"):
+    with pytest.raises(ValueError, match=r"eigenvalues.*not finite"):
         _compute_wald_numpy(
             n_cvt=1,
             eigenvalues=eigenvalues,
@@ -759,7 +759,7 @@ def test_split_c_nonfinite_eigenvalues(bad_value):
     uab_inv_soa = np.abs(rng.standard_normal((3, n_samples))) + 0.1
     iab = batch_compute_iab_split_ncvt1_soa(uab_var_soa, uab_inv_soa)
 
-    with pytest.raises(ValueError, match="eigenvalues.*not finite"):
+    with pytest.raises(ValueError, match=r"eigenvalues.*not finite"):
         _compute_wald_split_c(
             eigenvalues,
             uab_var_soa,
@@ -928,7 +928,7 @@ def test_workspace_nonfinite_eigenvalues(split_wald_data, bad_value):
     uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
     bad_evals = eigenvalues.copy()
     bad_evals[0] = bad_value
-    with pytest.raises(ValueError, match="eigenvalues.*not finite"):
+    with pytest.raises(ValueError, match=r"eigenvalues.*not finite"):
         create_lmm_workspace(
             bad_evals,
             uab_inv_soa,
@@ -3918,7 +3918,7 @@ class TestFusedParity:
             20,
             1,
         )
-        with pytest.raises(ValueError, match="[Ff]used"):
+        with pytest.raises(ValueError, match=r"[Ff]used"):
             compute_wald_fused_c_ws(ws_split, utg_t, 1)
 
     def test_fused_available_flag(self):

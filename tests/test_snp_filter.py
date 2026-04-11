@@ -103,7 +103,9 @@ class TestApplySnpListMask:
         indices = np.array([2, 5, 7])
         apply_snp_list_mask(snp_mask, indices, 10, "test")
         assert np.sum(snp_mask) == 3
-        assert snp_mask[2] and snp_mask[5] and snp_mask[7]
+        assert snp_mask[2]
+        assert snp_mask[5]
+        assert snp_mask[7]
 
     def test_bounds_check_raises(self):
         """apply_snp_list_mask raises ValueError for out-of-range index."""

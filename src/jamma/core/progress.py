@@ -4,6 +4,7 @@ Provides a cross-platform progress iterator that works in both
 Databricks interactive notebooks and workflow notebooks.
 """
 
+import contextlib
 import sys
 import threading
 import time
@@ -82,7 +83,7 @@ def create_progress_bar(
         " ",
         _make_eta_widget(initial_eta_seconds),
     ]
-    kwargs = dict(max_value=total, widgets=widgets, fd=sys.stdout)
+    kwargs = {"max_value": total, "widgets": widgets, "fd": sys.stdout}
     if poll_interval is not None:
         kwargs["poll_interval"] = poll_interval
     bar = progressbar.ProgressBar(**kwargs)
@@ -205,18 +206,14 @@ def timed_progress(
             except OSError:
                 break  # stdout gone; stop updating but still wait for fn
         if not exception:
-            try:
+            with contextlib.suppress(OSError):
                 bar.update(n_ticks)
-            except OSError:
-                pass
     except KeyboardInterrupt:
         cancelled = True
         raise
     finally:
-        try:
+        with contextlib.suppress(OSError):
             bar.finish()
-        except OSError:
-            pass
         # Join with timeout so KeyboardInterrupt is deliverable between
         # iterations.  On cancellation the worker is a daemon thread and
         # will be killed when the process exits — don't block.

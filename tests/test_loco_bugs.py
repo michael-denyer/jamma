@@ -121,7 +121,7 @@ class TestYieldLocoMatricesOrdering:
         S_full = np.eye(n, dtype=np.float64) * 100
         chr_names = ["1", "10", "2", "X"]
         S_chr = {name: np.eye(n, dtype=np.float64) for name in chr_names}
-        n_chr_filtered = {name: 10 for name in chr_names}
+        n_chr_filtered = dict.fromkeys(chr_names, 10)
 
         results = list(
             _yield_loco_matrices(S_full, S_chr, n_chr_filtered, n_filtered=40)
@@ -137,7 +137,7 @@ def _loco_fixtures(n=10):
     S_chr = {
         name: np.eye(n, dtype=np.float64) * (i + 1) for i, name in enumerate(chr_names)
     }
-    n_chr_filtered = {name: 10 for name in chr_names}
+    n_chr_filtered = dict.fromkeys(chr_names, 10)
     K_loco_buf = np.empty((n, n), dtype=np.float64)
     return S_full, S_chr, n_chr_filtered, K_loco_buf
 

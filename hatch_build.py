@@ -619,7 +619,7 @@ class CustomBuildHook(BuildHookInterface):
         compile_failed = False
         use_omp = bool(omp_compile)
 
-        lapack_source_set = set(str(s) for s in lapack_sources)
+        lapack_source_set = {str(s) for s in lapack_sources}
 
         # Strict IEEE 754 flags for LAPACK sources (secular equation deflation
         # uses infinity arithmetic that -ffast-math breaks).
@@ -653,10 +653,7 @@ class CustomBuildHook(BuildHookInterface):
             Returns:
                 Compiler command as a list of strings.
             """
-            if str(src) in lapack_source_set:
-                cflags = lapack_cflags
-            else:
-                cflags = base_cflags
+            cflags = lapack_cflags if str(src) in lapack_source_set else base_cflags
             return [
                 cc_cmd,
                 *cc_extra,

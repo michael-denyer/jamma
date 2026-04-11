@@ -164,7 +164,8 @@ def write_matrix_parallel(
 
     # Create temp dir on same filesystem as output (avoids filling /tmp)
     tmp_dir = _create_temp_dir(path)
-    memmap_path = os.path.join(tmp_dir, "matrix.dat")
+    tmp_dir_p = Path(tmp_dir)
+    memmap_path = str(tmp_dir_p / "matrix.dat")
     chunk_paths: list[str] = []
 
     try:
@@ -180,7 +181,7 @@ def write_matrix_parallel(
         # Build chunk args — each worker writes to its own temp file
         chunks_args = []
         for idx, start in enumerate(range(0, n_rows, rows_per_chunk)):
-            chunk_out = os.path.join(tmp_dir, f"chunk_{idx:06d}.txt")
+            chunk_out = str(tmp_dir_p / f"chunk_{idx:06d}.txt")
             chunk_paths.append(chunk_out)
             chunks_args.append(
                 (
@@ -211,7 +212,7 @@ def write_matrix_parallel(
 
         # Free memmap before concatenation — at 125k samples this is 126 GB
         try:
-            os.unlink(memmap_path)
+            Path(memmap_path).unlink()
         except OSError as e:
             logger.warning(f"Could not delete memmap {memmap_path}: {e}")
         memmap_path = None  # prevent double-delete in finally
@@ -228,7 +229,7 @@ def write_matrix_parallel(
                             f_out.write(buf)
                     # Eagerly delete — frees disk before writing the next chunk
                     try:
-                        os.unlink(chunk_path)
+                        Path(chunk_path).unlink()
                     except OSError as e:
                         logger.debug(
                             f"Could not eagerly delete chunk {chunk_path}: {e}"
@@ -246,19 +247,19 @@ def write_matrix_parallel(
         # Clean up any remaining temp files (error paths)
         if memmap_path is not None:
             try:
-                os.unlink(memmap_path)
+                Path(memmap_path).unlink()
             except FileNotFoundError:
                 pass
             except OSError as e:
                 logger.warning(f"Failed to clean up temp memmap {memmap_path}: {e}")
         for p in chunk_paths:
             try:
-                os.unlink(p)
+                Path(p).unlink()
             except FileNotFoundError:
                 pass
             except OSError as e:
                 logger.warning(f"Failed to clean up chunk file {p}: {e}")
         try:
-            os.rmdir(tmp_dir)
+            tmp_dir_p.rmdir()
         except OSError as e:
             logger.debug(f"Could not remove temp dir {tmp_dir}: {e}")

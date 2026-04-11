@@ -37,4 +37,4 @@ def chr_sort_key(chrom: str) -> tuple[int, str]:
         return (1000, chrom)
 
 
-__all__ = ["setup_logging", "write_gemma_log", "chr_sort_key"]
+__all__ = ["chr_sort_key", "setup_logging", "write_gemma_log"]

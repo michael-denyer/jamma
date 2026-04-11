@@ -88,5 +88,5 @@ LAPACK sources use strict IEEE 754 flags (`-O2 -fno-fast-math`).
 
 ## Further Reading
 
-- [Architecture and Contributing Guide](../../docs/JLINALG_ARCHITECTURE.md) -- layer diagrams, file structure, benchmarking guide
-- [Algorithm Notes](../../docs/JLINALG_ALGORITHMS.md) -- vendor DSYEVD algorithm notes, Golub-Kahan SVD
+- [Architecture and Contributing Guide](../../../docs/JLINALG_ARCHITECTURE.md) -- layer diagrams, file structure, benchmarking guide
+- [Algorithm Notes](../../../docs/JLINALG_ALGORITHMS.md) -- vendor DSYEVD algorithm notes, Golub-Kahan SVD

@@ -16,6 +16,22 @@ repos:
       - id: clang-format
         types_or: [c]
         files: ^src/jamma/jlinalg/src/
+  # Markdown link checker. Pre-commit runs lychee in --offline mode so it
+  # only verifies file paths and in-repo anchors — fast, deterministic, no
+  # network. CI runs the same binary with the same lychee.toml config but
+  # without --offline, so external links get checked too (see
+  # .github/workflows/ci.yml).
+  #
+  # Consistency: lychee.toml is the single source of truth for which paths
+  # are excluded and which rule set applies. Pre-commit only adds the
+  # --offline flag on top of that shared config.
+  - repo: https://github.com/lycheeverse/lychee
+    rev: lychee-v0.23.0
+    hooks:
+      - id: lychee
+        name: lychee (offline link check)
+        args: [--offline, --no-progress, --config, lychee.toml]
+        files: \.md$
   - repo: local
     hooks:
       - id: cppcheck

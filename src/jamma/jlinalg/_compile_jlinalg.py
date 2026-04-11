@@ -166,7 +166,7 @@ def compile_extension(verbose: bool = False) -> bool:
         f"-I{jlinalg_inc_dir}",
     ]
 
-    lapack_source_set = set(str(s) for s in lapack_sources)
+    lapack_source_set = {str(s) for s in lapack_sources}
     # LAPACK sources: strict IEEE 754, no -ffast-math, -O2 only.
     lapack_cflags = [
         "-O2",
@@ -193,11 +193,8 @@ def compile_extension(verbose: bool = False) -> bool:
             for src in source_files:
                 obj_file = tmp_dir / f"{src.stem}{suffix}.o"
                 src_str = str(src)
-                if src_str in lapack_source_set:
-                    # LAPACK sources: strict IEEE 754.
-                    cflags = lapack_cflags
-                else:
-                    cflags = base_cflags
+                # LAPACK sources: strict IEEE 754; everything else uses base flags.
+                cflags = lapack_cflags if src_str in lapack_source_set else base_cflags
                 cmd = [
                     cc_cmd,
                     *cc_extra,
@@ -290,7 +287,7 @@ def compile_extension(verbose: bool = False) -> bool:
         for k in mods_to_remove:
             del sys.modules[k]
 
-        from jamma.jlinalg._jlinalg import HAS_OPENMP, jlinalg_isa  # noqa: F401
+        from jamma.jlinalg._jlinalg import HAS_OPENMP, jlinalg_isa
 
         omp_status = "OpenMP" if HAS_OPENMP else "single-threaded"
         _print(f"jlinalg compiled OK (ISA={jlinalg_isa}, {omp_status})")
@@ -422,7 +419,7 @@ def compile_test_harness(verbose: bool = True) -> Path:
         f"-I{jlinalg_inc_dir}",
     ]
 
-    lapack_source_set = set(str(s) for s in lapack_sources)
+    lapack_source_set = {str(s) for s in lapack_sources}
 
     # Compile each source to .o.  Mirrors compile_extension's OpenMP retry:
     # first attempt with OpenMP, retry single-threaded if compilation fails.
@@ -440,10 +437,7 @@ def compile_test_harness(verbose: bool = True) -> Path:
                 obj_file = td / f"{src.stem}.o"
                 src_str = str(src)
 
-                if src_str in lapack_source_set:
-                    cflags = lapack_cflags
-                else:
-                    cflags = base_cflags
+                cflags = lapack_cflags if src_str in lapack_source_set else base_cflags
 
                 # Test sources and Unity need double precision + include path
                 extra_inc: list[str] = []

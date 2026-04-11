@@ -14,6 +14,7 @@ compile_commands.json
 # Caches
 .cache/
 .ruff_cache/
+.lycheecache
 
 # Distribution / packaging
 dist/

@@ -295,7 +295,7 @@ def main() -> None:
 
         print(
             f"{'n=' + str(n):<{col_n}}"
-            f"{str(r_eff):<{col_r}}"
+            f"{r_eff!s:<{col_r}}"
             f"{path_label:<{col_path}}"
             "  (generating data)...",
             end="\r",

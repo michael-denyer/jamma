@@ -22,6 +22,7 @@ Mirrors the conventions in matrix_writer.py: spawn context, file-backed memmap,
 top-level picklable functions, temp dir on same filesystem as input.
 """
 
+import contextlib
 import multiprocessing as mp
 import os
 import tempfile
@@ -219,23 +220,19 @@ def _cleanup_temp_memmap(tmp_dir: str, memmap_path: str) -> None:
     during interpreter shutdown when loguru may already be torn down.
     """
     try:
-        os.unlink(memmap_path)
+        Path(memmap_path).unlink()
     except FileNotFoundError:
         pass
     except OSError as e:
-        try:
+        with contextlib.suppress(Exception):
             logger.warning(f"Failed to clean up temp memmap {memmap_path}: {e}")
-        except Exception:
-            pass  # Logger may be torn down during interpreter shutdown
     try:
-        os.rmdir(tmp_dir)
+        Path(tmp_dir).rmdir()
     except FileNotFoundError:
         pass
     except OSError as e:
-        try:
+        with contextlib.suppress(Exception):
             logger.warning(f"Could not remove temp dir {tmp_dir}: {e}")
-        except Exception:
-            pass
 
 
 def read_matrix_parallel(
@@ -313,7 +310,7 @@ def read_matrix_parallel(
     logger.debug(f"Matrix dimensions: {n_rows}x{n_cols}, {len(chunks)} chunks")
 
     tmp_dir = _create_temp_dir(path)
-    memmap_path = os.path.join(tmp_dir, "matrix.dat")
+    memmap_path = str(Path(tmp_dir) / "matrix.dat")
 
     # When copy=False, cleanup happens via weakref.finalize on the returned
     # memmap instead of the finally block. This flag controls which path runs.

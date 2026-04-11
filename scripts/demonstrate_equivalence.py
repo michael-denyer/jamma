@@ -40,7 +40,12 @@ from jamma.validation import (  # noqa: E402
 )
 
 # Common runner kwargs
-RUNNER_KWARGS = dict(n_grid=50, n_refine=20, show_progress=False, check_memory=False)
+RUNNER_KWARGS = {
+    "n_grid": 50,
+    "n_refine": 20,
+    "show_progress": False,
+    "check_memory": False,
+}
 
 
 # --- Dataset configurations ---

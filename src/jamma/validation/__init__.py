@@ -17,12 +17,12 @@ from jamma.validation.compare import (
 from jamma.validation.tolerances import ToleranceConfig
 
 __all__ = [
-    "ToleranceConfig",
-    "ComparisonResult",
     "AssocComparisonResult",
+    "ComparisonResult",
+    "ToleranceConfig",
     "compare_arrays",
-    "compare_kinship_matrices",
     "compare_assoc_results",
-    "load_gemma_kinship",
+    "compare_kinship_matrices",
     "load_gemma_assoc",
+    "load_gemma_kinship",
 ]

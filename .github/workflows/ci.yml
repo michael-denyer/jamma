@@ -141,3 +141,25 @@ jobs:
         with:
           scan-args: |-
             --lockfile=uv.lock
+
+  # Markdown link checker (offline). Runs on every PR and verifies that
+  # every relative link and anchor in every .md file resolves. Does not
+  # hit the network, so PRs can't be blocked by unrelated upstream hiccups.
+  #
+  # Consistency: lychee.toml is the shared source of truth for exclude
+  # rules. The pre-commit hook (.pre-commit-config.yaml) runs the same
+  # binary with the same config and the same --offline flag. If this CI
+  # job passes, the local hook will too.
+  #
+  # External (online) link checking runs separately in link-check-external
+  # on a weekly schedule, to avoid PR-time flakes from third-party servers.
+  link-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+
+      - name: Run lychee (offline)
+        uses: lycheeverse/lychee-action@8646ba30535128ac92d33dfc9133794bfdd9b411  # v2.8.0
+        with:
+          args: --offline --no-progress --config lychee.toml './**/*.md'
+          fail: true

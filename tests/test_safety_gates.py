@@ -13,6 +13,7 @@ executes. These follow the same pattern as test_lapack_no_ffast_math (build/conf
 verification via text inspection).
 """
 
+import contextlib
 import warnings
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -105,10 +106,10 @@ class TestLP64OverflowWarning:
         ):
             warnings.simplefilter("always")
 
-            try:
+            # eigh fake returns wrong shape — we only care about the
+            # LP64-detected warning triggered before the fake is invoked.
+            with contextlib.suppress(ValueError, RuntimeError):
                 eigen.eigendecompose_kinship(big_K, check_memory=False)
-            except (ValueError, RuntimeError):
-                pass  # eigh fake returns wrong shape
 
             lp64_warnings = [x for x in w if "LP64 BLAS detected" in str(x.message)]
             assert len(lp64_warnings) == 1
@@ -134,10 +135,8 @@ class TestLP64OverflowWarning:
         ):
             warnings.simplefilter("always")
 
-            try:
+            with contextlib.suppress(ValueError, RuntimeError):
                 eigen.eigendecompose_kinship(big_K, check_memory=False)
-            except (ValueError, RuntimeError):
-                pass
 
             lp64_warnings = [x for x in w if "LP64" in str(x.message)]
             assert len(lp64_warnings) == 0
@@ -180,10 +179,8 @@ class TestLP64OverflowWarning:
         ):
             warnings.simplefilter("always")
 
-            try:
+            with contextlib.suppress(ValueError, RuntimeError):
                 eigen.eigendecompose_kinship(K, check_memory=False)
-            except (ValueError, RuntimeError):
-                pass
 
             lp64_warnings = [x for x in w if "LP64" in str(x.message)]
             assert len(lp64_warnings) == 0
@@ -206,10 +203,8 @@ class TestLP64OverflowWarning:
         ):
             warnings.simplefilter("always")
 
-            try:
+            with contextlib.suppress(ValueError, RuntimeError):
                 eigen.eigendecompose_kinship(K, check_memory=False)
-            except (ValueError, RuntimeError):
-                pass
 
             lp64_warnings = [x for x in w if "LP64 BLAS detected" in str(x.message)]
             assert len(lp64_warnings) == 1
@@ -235,10 +230,8 @@ class TestLP64OverflowWarning:
         ):
             warnings.simplefilter("always")
 
-            try:
+            with contextlib.suppress(ValueError, RuntimeError):
                 eigen.eigendecompose_kinship(big_K, check_memory=False)
-            except (ValueError, RuntimeError):
-                pass
 
             lp64_warnings = [x for x in w if "LP64" in str(x.message)]
             assert len(lp64_warnings) == 0, (

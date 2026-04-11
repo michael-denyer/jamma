@@ -1,0 +1,56 @@
+# Lychee configuration — single source of truth for both the pre-commit
+# hook and the GitHub Actions workflow. See `.pre-commit-config.yaml` and
+# `.github/workflows/ci.yml` for how each entry point invokes lychee.
+#
+# Consistency rule: any flag that affects *what links are checked* belongs
+# here so that pre-commit and CI behave identically. Flags that affect
+# *execution mode* (`--offline`, `--github-token`, progress output) are
+# passed on the command line by each caller, since they legitimately
+# differ between local hooks and CI.
+
+# Exclude build artifacts, local-only directories, and third-party code.
+exclude_path = [
+    ".venv",
+    ".planning",
+    ".beads",
+    ".code-review-graph",
+    ".claude",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+]
+
+# Skip localhost / loopback addresses — they'd require a running server.
+exclude_loopback = true
+
+# Skip internal-only or rate-limited hosts that regularly 403/429 bots.
+exclude = [
+    # Linux kernel docs and mail archives frequently rate-limit CI.
+    "^https?://lkml\\.org",
+    # Example domains used in docs.
+    "^https?://example\\.(com|org|net)",
+]
+
+# Don't attempt to verify mailto: links — lychee defaults to false but
+# set explicitly for clarity.
+include_mail = false
+
+# Cache results for a day so repeated CI runs don't hammer upstream hosts.
+cache = true
+max_cache_age = "1d"
+
+# Retry transient failures a couple of times — external sites flake.
+max_retries = 2
+retry_wait_time = 2
+
+# Reasonable timeout for external checks. Pre-commit uses --offline so
+# this only applies to the CI (online) job.
+timeout = 20
+
+# Accept 2xx and 3xx as success. 429 (too many requests) is treated as
+# a transient warning, not a hard failure.
+accept = ["200..=299", "429"]
+
+# Inputs: all markdown, excluding the paths above.
+# Callers can override with positional args on the command line.

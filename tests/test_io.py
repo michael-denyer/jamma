@@ -54,7 +54,7 @@ class TestLoadPlinkBinary:
         """Verify FileNotFoundError for nonexistent file."""
         nonexistent = tmp_path / "nonexistent"
 
-        with pytest.raises(FileNotFoundError, match="PLINK .bed file not found"):
+        with pytest.raises(FileNotFoundError, match=r"PLINK .bed file not found"):
             load_plink_binary(nonexistent)
 
 

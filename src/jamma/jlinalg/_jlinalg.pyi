@@ -66,7 +66,6 @@ def dgemm(
     Returns:
         Result matrix C = op(A) @ op(B), float64.
     """
-    ...
 
 def dsyrk(X: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     """Compute symmetric rank-k update: C = X @ X.T.
@@ -77,7 +76,6 @@ def dsyrk(X: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     Returns:
         Symmetric result matrix, shape (N, N), float64.
     """
-    ...
 
 def eigh(
     K: npt.NDArray[np.float64],
@@ -101,7 +99,6 @@ def eigh(
         RuntimeError: If illegal argument detected (internal jlinalg bug).
         MemoryError: If workspace allocation fails.
     """
-    ...
 
 def qr(
     A: npt.NDArray[np.float64],
@@ -114,7 +111,6 @@ def qr(
     Returns:
         Tuple of (Q, R).
     """
-    ...
 
 def svd(
     A: npt.NDArray[np.float64],
@@ -127,7 +123,6 @@ def svd(
     Returns:
         Tuple of (U, S, Vt).
     """
-    ...
 
 def compute_snp_stats_chunk(
     genotypes: npt.NDArray[np.float64],
@@ -142,11 +137,9 @@ def compute_snp_stats_chunk(
     Returns:
         Tuple of (maf, miss_rate, af) arrays, each shape (n_snps,).
     """
-    ...
 
 def get_n_threads() -> int:
     """Get the current jlinalg thread count for Level 3 operations."""
-    ...
 
 def set_n_threads(n: int) -> int:
     """Set the jlinalg thread count for Level 3 operations.
@@ -160,4 +153,3 @@ def set_n_threads(n: int) -> int:
     Raises:
         ValueError: If n < 1.
     """
-    ...

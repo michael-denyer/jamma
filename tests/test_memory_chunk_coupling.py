@@ -1,5 +1,6 @@
 """Regression tests verifying memory estimation uses computed chunk size."""
 
+import contextlib
 from unittest.mock import patch
 
 import pytest
@@ -34,8 +35,8 @@ def test_check_memory_before_run_uses_computed_chunk():
     with patch(
         "jamma.core.chunk._compute_chunk_size", wraps=_compute_chunk_size
     ) as mock:
-        try:
+        # OK if memory insufficient on this machine — we only care that
+        # _compute_chunk_size was called with the expected arguments.
+        with contextlib.suppress(MemoryError):
             check_memory_before_run(1410, 12_000)
-        except MemoryError:
-            pass  # OK if memory insufficient on this machine
         mock.assert_called_once_with(12_000, n_samples=1410, pipeline_buffers=2)

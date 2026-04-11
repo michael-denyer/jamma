@@ -15,14 +15,12 @@ class TestProgressBarLifecycle:
     def test_finish_called_on_normal_completion(self):
         """bar.finish() is called when iteration completes normally."""
         items = list(range(5))
-        collected = []
 
         with patch("jamma.core.progress.progressbar") as mock_pb:
             mock_bar = MagicMock()
             mock_pb.ProgressBar.return_value = mock_bar
 
-            for item in progress_iterator(iter(items), total=5, desc="test"):
-                collected.append(item)
+            collected = list(progress_iterator(iter(items), total=5, desc="test"))
 
             mock_bar.finish.assert_called_once()
             assert collected == items

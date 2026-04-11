@@ -335,17 +335,17 @@ class TestDsyrkValidation:
 
     def test_1d_input_raises(self) -> None:
         """1-D input raises ValueError."""
-        with pytest.raises(ValueError, match="2-D|2D|ndim"):
+        with pytest.raises(ValueError, match=r"2-D|2D|ndim"):
             dsyrk(np.ones(10))
 
     def test_3d_input_raises(self) -> None:
         """3-D input raises ValueError."""
-        with pytest.raises(ValueError, match="2-D|2D|ndim"):
+        with pytest.raises(ValueError, match=r"2-D|2D|ndim"):
             dsyrk(np.ones((2, 3, 4)))
 
     def test_scalar_input_raises(self) -> None:
         """0-D (scalar) input raises ValueError."""
-        with pytest.raises(ValueError, match="2-D|2D|ndim"):
+        with pytest.raises(ValueError, match=r"2-D|2D|ndim"):
             dsyrk(np.array(1.0))
 
 
@@ -396,13 +396,13 @@ class TestDsyrkFallback:
     def test_fallback_1d_raises(self) -> None:
         """Fallback raises ValueError on 1-D input."""
         fb = self._get_fallback_dsyrk()
-        with pytest.raises(ValueError, match="2-D|ndim"):
+        with pytest.raises(ValueError, match=r"2-D|ndim"):
             fb(np.ones(10))
 
     def test_fallback_3d_raises(self) -> None:
         """Fallback raises ValueError on 3-D input."""
         fb = self._get_fallback_dsyrk()
-        with pytest.raises(ValueError, match="2-D|ndim"):
+        with pytest.raises(ValueError, match=r"2-D|ndim"):
             fb(np.ones((2, 3, 4)))
 
     def test_via_jamma_jlinalg(self) -> None:
@@ -598,37 +598,37 @@ class TestDsyr2kValidation:
 
     def test_c_not_2d_raises(self) -> None:
         """1-D C raises ValueError."""
-        with pytest.raises(ValueError, match="2-D|2D|ndim"):
+        with pytest.raises(ValueError, match=r"2-D|2D|ndim"):
             dsyr2k(np.ones(10), np.ones((10, 5)), np.ones((10, 5)))
 
     def test_c_not_square_raises(self) -> None:
         """Non-square C raises ValueError."""
-        with pytest.raises(ValueError, match="square|shape"):
+        with pytest.raises(ValueError, match=r"square|shape"):
             dsyr2k(np.ones((10, 5)), np.ones((10, 3)), np.ones((10, 3)))
 
     def test_a_not_2d_raises(self) -> None:
         """1-D A raises ValueError."""
-        with pytest.raises(ValueError, match="2-D|2D|ndim"):
+        with pytest.raises(ValueError, match=r"2-D|2D|ndim"):
             dsyr2k(np.ones((10, 10)), np.ones(10), np.ones((10, 5)))
 
     def test_b_not_2d_raises(self) -> None:
         """1-D B raises ValueError."""
-        with pytest.raises(ValueError, match="2-D|2D|ndim"):
+        with pytest.raises(ValueError, match=r"2-D|2D|ndim"):
             dsyr2k(np.ones((10, 10)), np.ones((10, 5)), np.ones(10))
 
     def test_a_rows_mismatch_raises(self) -> None:
         """A rows != N raises ValueError."""
-        with pytest.raises(ValueError, match="rows|mismatch|dimension"):
+        with pytest.raises(ValueError, match=r"rows|mismatch|dimension"):
             dsyr2k(np.ones((10, 10)), np.ones((8, 5)), np.ones((10, 5)))
 
     def test_b_rows_mismatch_raises(self) -> None:
         """B rows != N raises ValueError."""
-        with pytest.raises(ValueError, match="rows|mismatch|dimension"):
+        with pytest.raises(ValueError, match=r"rows|mismatch|dimension"):
             dsyr2k(np.ones((10, 10)), np.ones((10, 5)), np.ones((8, 5)))
 
     def test_a_b_columns_mismatch_raises(self) -> None:
         """A columns != B columns raises ValueError."""
-        with pytest.raises(ValueError, match="columns|mismatch"):
+        with pytest.raises(ValueError, match=r"columns|mismatch"):
             dsyr2k(np.ones((10, 10)), np.ones((10, 5)), np.ones((10, 7)))
 
 
@@ -727,13 +727,13 @@ class TestDsyr2kFallback:
     def test_fallback_non_square_c_raises(self) -> None:
         """Fallback raises ValueError on non-square C."""
         fb = self._get_fallback_dsyr2k()
-        with pytest.raises(ValueError, match="square|shape"):
+        with pytest.raises(ValueError, match=r"square|shape"):
             fb(np.ones((10, 5)), np.ones((10, 3)), np.ones((10, 3)))
 
     def test_fallback_mismatched_ab_columns_raises(self) -> None:
         """Fallback raises ValueError when A and B have different column counts."""
         fb = self._get_fallback_dsyr2k()
-        with pytest.raises(ValueError, match="columns|mismatch"):
+        with pytest.raises(ValueError, match=r"columns|mismatch"):
             fb(np.ones((10, 10)), np.ones((10, 5)), np.ones((10, 7)))
 
     def test_via_jamma_jlinalg(self) -> None:

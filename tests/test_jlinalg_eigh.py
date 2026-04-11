@@ -248,13 +248,13 @@ class TestEigh:
     def test_raises_non_square(self) -> None:
         """eigh on (3,4) array raises ValueError."""
         K = np.ones((3, 4))
-        with pytest.raises(ValueError, match="square|shape"):
+        with pytest.raises(ValueError, match=r"square|shape"):
             eigh(K)
 
     def test_raises_1d(self) -> None:
         """eigh on 1-D array raises ValueError."""
         K = np.ones(5)
-        with pytest.raises(ValueError, match="2-D|ndim"):
+        with pytest.raises(ValueError, match=r"2-D|ndim"):
             eigh(K)
 
     def test_empty_matrix(self) -> None:
@@ -434,14 +434,8 @@ def test_vs_mouse_hs1940_kinship() -> None:
       ality error is O(sqrt(N) * eps * cond_sub) where cond_sub is the local
       subproblem condition.
     """
-    import os
-
-    kinship_path = os.path.join(
-        os.path.dirname(__file__),
-        "fixtures",
-        "kinship",
-        "mouse_hs1940.cXX.txt",
-    )
+    fixtures_dir = Path(__file__).parent / "fixtures" / "kinship"
+    kinship_path = fixtures_dir / "mouse_hs1940.cXX.txt"
     K = np.loadtxt(kinship_path)
     assert K.ndim == 2, f"Kinship matrix must be 2-D, got {K.ndim}-D"
     assert K.shape[0] == K.shape[1], f"Kinship matrix must be square, got {K.shape}"
@@ -490,14 +484,8 @@ def test_mouse_hs1940_eigendecomp_strict() -> None:
     dependent error that exceeds this threshold, so this test is gated on
     vendor LAPACK availability.
     """
-    import os
-
-    kinship_path = os.path.join(
-        os.path.dirname(__file__),
-        "fixtures",
-        "kinship",
-        "mouse_hs1940.cXX.txt",
-    )
+    fixtures_dir = Path(__file__).parent / "fixtures" / "kinship"
+    kinship_path = fixtures_dir / "mouse_hs1940.cXX.txt"
     K = np.loadtxt(kinship_path)
     K_copy = K.copy()
 

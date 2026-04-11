@@ -545,21 +545,24 @@ class TestAtomicCacheWrite:
         np.testing.assert_array_equal(loaded, arr)
 
     def test_write_npy_cache_error_cleans_tmp(self, tmp_path: Path) -> None:
-        """_write_npy_cache cleans up .tmp.npy when os.replace fails."""
+        """_write_npy_cache cleans up .tmp.npy when the atomic rename fails."""
         from unittest.mock import patch
 
         arr = np.array([1.0, 2.0, 3.0])
         npy_path = tmp_path / "fail.eigenD.npy"
         tmp_npy = tmp_path / "fail.eigenD.tmp.npy"
 
-        with patch("jamma.lmm.eigen_io.os.replace", side_effect=OSError("mock")):
+        # Patch Path.replace so the atomic rename step fails after the
+        # temp file has been written. _write_npy_cache must then remove
+        # the temp file in its finally block.
+        with patch.object(Path, "replace", side_effect=OSError("mock")):
             _write_npy_cache(arr, npy_path)
 
         # The target .npy should not exist (rename failed)
         assert not npy_path.exists(), "Target .npy should not exist after failed rename"
         # The temp .tmp.npy should be cleaned up
         assert not tmp_npy.exists(), (
-            f"Temp file {tmp_npy.name} should be cleaned up after os.replace failure"
+            f"Temp file {tmp_npy.name} should be cleaned up after rename failure"
         )
 
 
@@ -746,7 +749,7 @@ class TestFlagInteractions:
             eigenvector_file=None,
             check_memory=False,
         )
-        with pytest.raises(ValueError, match="Both -d.*and -u.*must be provided"):
+        with pytest.raises(ValueError, match=r"Both -d.*and -u.*must be provided"):
             PipelineRunner(config).validate_inputs()
 
     def test_validate_u_without_d_raises(self, tmp_path: Path) -> None:
@@ -762,7 +765,7 @@ class TestFlagInteractions:
             eigenvector_file=u_path,
             check_memory=False,
         )
-        with pytest.raises(ValueError, match="Both -d.*and -u.*must be provided"):
+        with pytest.raises(ValueError, match=r"Both -d.*and -u.*must be provided"):
             PipelineRunner(config).validate_inputs()
 
     def test_validate_eigen_with_loco_raises(self, tmp_path: Path) -> None:

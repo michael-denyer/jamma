@@ -22,10 +22,9 @@ from jamma.core.memory import (
 )
 
 __all__ = [
-    "get_backend_info",
-    "OutputConfig",
     "MemoryBreakdown",
     "MemorySnapshot",
+    "OutputConfig",
     "StreamingMemoryBreakdown",
     "check_memory_available",
     "check_memory_before_run",
@@ -34,6 +33,7 @@ __all__ = [
     "estimate_lmm_streaming_memory",
     "estimate_streaming_memory",
     "estimate_workflow_memory",
+    "get_backend_info",
     "get_memory_snapshot",
     "log_memory_snapshot",
 ]

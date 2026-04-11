@@ -18,6 +18,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 import numpy.testing as npt
@@ -309,7 +310,11 @@ class TestDgemmTranspose:
     Uses the real transa/transb kwargs now that the C extension supports them.
     """
 
-    _sizes = [(100, 100, 100), (73, 128, 64), (6, 256, 256)]
+    _sizes: ClassVar[list[tuple[int, int, int]]] = [
+        (100, 100, 100),
+        (73, 128, 64),
+        (6, 256, 256),
+    ]
 
     @pytest.mark.parametrize("m,n,k", _sizes)
     def test_nn(self, m: int, n: int, k: int) -> None:
@@ -366,7 +371,7 @@ class TestDgemmInit:
 
     def test_import_succeeds(self) -> None:
         """Import jamma.jlinalg.dgemm without error."""
-        from jamma.jlinalg import dgemm as _dgemm  # noqa: F401
+        from jamma.jlinalg import dgemm as _dgemm
 
         assert callable(_dgemm)
 
@@ -616,22 +621,22 @@ class TestDgemmValidation:
 
     def test_dimension_mismatch_nn(self) -> None:
         """K dimension mismatch (NN) raises ValueError."""
-        with pytest.raises(ValueError, match="mismatch|dimensions|columns"):
+        with pytest.raises(ValueError, match=r"mismatch|dimensions|columns"):
             dgemm(np.zeros((3, 5)), np.zeros((4, 7)))
 
     def test_dimension_mismatch_tn(self) -> None:
         """K dimension mismatch with transa='T' raises ValueError."""
-        with pytest.raises(ValueError, match="mismatch|dimensions|columns"):
+        with pytest.raises(ValueError, match=r"mismatch|dimensions|columns"):
             dgemm(np.zeros((5, 3)), np.zeros((4, 7)), transa="T")
 
     def test_1d_input_raises(self) -> None:
         """1-D array input raises ValueError."""
-        with pytest.raises(ValueError, match="2-D|2D|ndim"):
+        with pytest.raises(ValueError, match=r"2-D|2D|ndim"):
             dgemm(np.ones(10), np.ones(10))
 
     def test_3d_input_raises(self) -> None:
         """3-D array input raises ValueError."""
-        with pytest.raises(ValueError, match="2-D|2D|ndim"):
+        with pytest.raises(ValueError, match=r"2-D|2D|ndim"):
             dgemm(np.ones((2, 3, 4)), np.ones((4, 5)))
 
     def test_fortran_order_input(self) -> None:

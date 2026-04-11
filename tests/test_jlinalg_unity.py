@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -33,7 +34,7 @@ def _python_env() -> dict[str, str]:
     import sysconfig
 
     site_packages = sysconfig.get_path("purelib")
-    src_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src")
+    src_dir = str(Path(__file__).parent.parent / "src")
     env["PYTHONPATH"] = f"{site_packages}:{src_dir}"
     return env
 

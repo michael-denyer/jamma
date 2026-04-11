@@ -354,12 +354,13 @@ def stream_genotype_chunks(
                 raise ValueError(
                     "snp_indices must be sorted in strictly ascending order"
                 )
-            if len(snp_indices) > 0:
-                if snp_indices[0] < 0 or snp_indices[-1] >= bed.sid_count:
-                    raise ValueError(
-                        f"snp_indices out of bounds: range [{snp_indices[0]}, "
-                        f"{snp_indices[-1]}], BED file has {bed.sid_count} SNPs"
-                    )
+            if len(snp_indices) > 0 and (
+                snp_indices[0] < 0 or snp_indices[-1] >= bed.sid_count
+            ):
+                raise ValueError(
+                    f"snp_indices out of bounds: range [{snp_indices[0]}, "
+                    f"{snp_indices[-1]}], BED file has {bed.sid_count} SNPs"
+                )
             n_total = len(snp_indices)
             label = "filtered SNPs"
 

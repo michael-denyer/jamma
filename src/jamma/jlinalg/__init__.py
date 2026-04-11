@@ -44,7 +44,7 @@ HAS_C_EXTENSION: bool = False
 _EXPECTED_JLINALG_ABI = 12  # Must match JLINALG_ABI_VERSION in include/jlinalg.h
 
 try:
-    from jamma.jlinalg._jlinalg import (  # noqa: F401
+    from jamma.jlinalg._jlinalg import (
         ABI_VERSION,
         HAS_OPENMP,
         blas_backend,
@@ -153,7 +153,7 @@ except ImportError as _exc:
     if _recompiled:
         # Retry import after successful recompilation
         try:
-            from jamma.jlinalg._jlinalg import (  # noqa: F401, F811
+            from jamma.jlinalg._jlinalg import (
                 ABI_VERSION,
                 HAS_OPENMP,
                 blas_backend,
@@ -635,8 +635,9 @@ def dsyr2k(C: _np.ndarray, A: _np.ndarray, B: _np.ndarray) -> _np.ndarray:
 
 __all__ = [
     "ABI_VERSION",
+    "HAS_C_EXTENSION",
+    "HAS_OPENMP",
     "blas_backend",
-    "compute_snp_stats_chunk",
     "blas_has_dgeqrf",
     "blas_has_dgesvd",
     "blas_has_dsyevd",
@@ -644,20 +645,19 @@ __all__ = [
     "blas_has_dsyrk",
     "blas_has_lapacke_dsyevd",
     "blas_is_ilp64",
-    "ddot",
-    "dnrm2",
+    "compute_snp_stats_chunk",
     "daxpy",
-    "dscal",
-    "dgemv",
+    "ddot",
     "dgemm",
-    "dsyrk",
+    "dgemv",
+    "dnrm2",
+    "dscal",
     "dsyr2k",
+    "dsyrk",
     "eigh",
     "get_n_threads",
+    "jlinalg_isa",
     "qr",
     "set_n_threads",
     "svd",
-    "jlinalg_isa",
-    "HAS_C_EXTENSION",
-    "HAS_OPENMP",
 ]

@@ -767,18 +767,18 @@ def test_numpy_multi_chunk_pvalue_equivalence(monkeypatch):
     kinship_filtered = kinship[np.ix_(valid_mask, valid_mask)]
     eigenvalues, eigenvectors = np.linalg.eigh(kinship_filtered)
 
-    common_kwargs = dict(
-        genotypes=plink.genotypes,
-        phenotypes=phenotypes,
-        kinship=None,  # pre-computed eigen supplied; skip internal eigh
-        snp_info=snp_info,
-        eigenvalues=eigenvalues,
-        eigenvectors=eigenvectors,
-        lmm_mode=1,
-        check_memory=False,
-        show_progress=False,
-        output_path=None,
-    )
+    common_kwargs = {
+        "genotypes": plink.genotypes,
+        "phenotypes": phenotypes,
+        "kinship": None,  # pre-computed eigen supplied; skip internal eigh
+        "snp_info": snp_info,
+        "eigenvalues": eigenvalues,
+        "eigenvectors": eigenvectors,
+        "lmm_mode": 1,
+        "check_memory": False,
+        "show_progress": False,
+        "output_path": None,
+    }
 
     # Single-chunk run (no monkeypatching — default chunk_size fits all SNPs)
     result_single = run_lmm_association_numpy(**common_kwargs)
@@ -1110,22 +1110,18 @@ def test_split_uab_all_modes(lmm_mode):
     # Mode-specific output checks
     if lmm_mode in (1, 4):  # Wald or All
         for r in results[:5]:
-            assert hasattr(r, "beta") and np.isfinite(r.beta), (
-                f"Wald beta not finite: {r}"
-            )
-            assert hasattr(r, "p_wald") and np.isfinite(r.p_wald), (
-                f"Wald p not finite: {r}"
-            )
+            assert hasattr(r, "beta"), f"Wald result missing beta: {r}"
+            assert np.isfinite(r.beta), f"Wald beta not finite: {r}"
+            assert hasattr(r, "p_wald"), f"Wald result missing p_wald: {r}"
+            assert np.isfinite(r.p_wald), f"Wald p not finite: {r}"
     if lmm_mode in (2, 4):  # LRT or All
         for r in results[:5]:
-            assert hasattr(r, "p_lrt") and np.isfinite(r.p_lrt), (
-                f"LRT p not finite: {r}"
-            )
+            assert hasattr(r, "p_lrt"), f"LRT result missing p_lrt: {r}"
+            assert np.isfinite(r.p_lrt), f"LRT p not finite: {r}"
     if lmm_mode in (3, 4):  # Score or All
         for r in results[:5]:
-            assert hasattr(r, "p_score") and np.isfinite(r.p_score), (
-                f"Score p not finite: {r}"
-            )
+            assert hasattr(r, "p_score"), f"Score result missing p_score: {r}"
+            assert np.isfinite(r.p_score), f"Score p not finite: {r}"
 
 
 @pytest.mark.tier1
@@ -1177,19 +1173,23 @@ def test_adaptive_core_split():
 
     # Large samples (>10k): rotation-heavy, gets 50% of cores
     rot, omp = compute_pipeline_core_split(50_000, total_cores)
-    assert rot == 4 and omp == 4, f"Large: rot={rot}, omp={omp}"
+    assert rot == 4, f"Large: rot={rot}, omp={omp}"
+    assert omp == 4, f"Large: rot={rot}, omp={omp}"
 
     # Medium samples (1k-10k): balanced, rotation gets 33%
     rot, omp = compute_pipeline_core_split(5_000, total_cores)
-    assert rot == 2 and omp == 6, f"Medium: rot={rot}, omp={omp}"
+    assert rot == 2, f"Medium: rot={rot}, omp={omp}"
+    assert omp == 6, f"Medium: rot={rot}, omp={omp}"
 
     # Small samples (<1k): compute-heavy, rotation gets 25%
     rot, omp = compute_pipeline_core_split(500, total_cores)
-    assert rot == 2 and omp == 6, f"Small: rot={rot}, omp={omp}"
+    assert rot == 2, f"Small: rot={rot}, omp={omp}"
+    assert omp == 6, f"Small: rot={rot}, omp={omp}"
 
     # Edge: 1 core — both get 1
     rot, omp = compute_pipeline_core_split(50_000, 1)
-    assert rot >= 1 and omp >= 1, f"Single core: rot={rot}, omp={omp}"
+    assert rot >= 1, f"Single core: rot={rot}, omp={omp}"
+    assert omp >= 1, f"Single core: rot={rot}, omp={omp}"
 
 
 @pytest.mark.tier1
@@ -1201,41 +1201,45 @@ def test_compute_adaptive_core_split():
     rot, omp = compute_adaptive_core_split(
         rot_time=0.8, compute_time=0.2, total_cores=8
     )
-    assert rot == 6 and omp == 2, f"Rotation-heavy: rot={rot}, omp={omp}"
+    assert rot == 6, f"Rotation-heavy: rot={rot}, omp={omp}"
+    assert omp == 2, f"Rotation-heavy: rot={rot}, omp={omp}"
 
     # Compute-heavy: 20% rotation time -> ~20% of cores for rotation
     rot, omp = compute_adaptive_core_split(
         rot_time=0.2, compute_time=0.8, total_cores=8
     )
-    assert rot == 2 and omp == 6, f"Compute-heavy: rot={rot}, omp={omp}"
+    assert rot == 2, f"Compute-heavy: rot={rot}, omp={omp}"
+    assert omp == 6, f"Compute-heavy: rot={rot}, omp={omp}"
 
     # Balanced: equal times -> 50/50 split
     rot, omp = compute_adaptive_core_split(
         rot_time=0.5, compute_time=0.5, total_cores=8
     )
-    assert rot == 4 and omp == 4, f"Balanced: rot={rot}, omp={omp}"
+    assert rot == 4, f"Balanced: rot={rot}, omp={omp}"
+    assert omp == 4, f"Balanced: rot={rot}, omp={omp}"
 
     # Degenerate: both times near zero -> static fallback
     rot, omp = compute_adaptive_core_split(
         rot_time=0.0, compute_time=0.0, total_cores=8, n_samples=50_000
     )
     # Static fallback for 50k samples: 50% -> (4, 4)
-    assert rot == 4 and omp == 4, f"Degenerate fallback: rot={rot}, omp={omp}"
+    assert rot == 4, f"Degenerate fallback: rot={rot}, omp={omp}"
+    assert omp == 4, f"Degenerate fallback: rot={rot}, omp={omp}"
 
     # Always returns (rot >= 1, compute >= 1)
     for r, c, n in [(0.9, 0.1, 2), (0.1, 0.9, 2), (0.5, 0.5, 2)]:
         rot, omp = compute_adaptive_core_split(
             rot_time=r, compute_time=c, total_cores=n
         )
-        assert rot >= 1 and omp >= 1, (
-            f"Min 1: rot={rot}, omp={omp} (r={r}, c={c}, n={n})"
-        )
+        assert rot >= 1, f"Min 1: rot={rot}, omp={omp} (r={r}, c={c}, n={n})"
+        assert omp >= 1, f"Min 1: rot={rot}, omp={omp} (r={r}, c={c}, n={n})"
 
     # Clamped: 2 cores, rotation-heavy -> (1, 1) since both must be >= 1
     rot, omp = compute_adaptive_core_split(
         rot_time=0.9, compute_time=0.1, total_cores=2
     )
-    assert rot == 1 and omp == 1, f"Clamped 2-core: rot={rot}, omp={omp}"
+    assert rot == 1, f"Clamped 2-core: rot={rot}, omp={omp}"
+    assert omp == 1, f"Clamped 2-core: rot={rot}, omp={omp}"
 
 
 # ---------------------------------------------------------------------------
@@ -1268,17 +1272,17 @@ def test_runner_lrt_mode_c_vs_python():
 
     genotypes, phenotypes, kinship, snp_info = _make_synthetic_data()
 
-    kwargs = dict(
-        genotypes=genotypes,
-        phenotypes=phenotypes,
-        kinship=kinship.copy(),
-        snp_info=snp_info,
-        maf_threshold=0.0,
-        miss_threshold=1.0,
-        check_memory=False,
-        show_progress=False,
-        lmm_mode=2,
-    )
+    kwargs = {
+        "genotypes": genotypes,
+        "phenotypes": phenotypes,
+        "kinship": kinship.copy(),
+        "snp_info": snp_info,
+        "maf_threshold": 0.0,
+        "miss_threshold": 1.0,
+        "check_memory": False,
+        "show_progress": False,
+        "lmm_mode": 2,
+    }
 
     # Run with C extension
     result_c = run_lmm_association_numpy(**kwargs)
@@ -1308,17 +1312,17 @@ def test_runner_score_mode_c_vs_python():
 
     genotypes, phenotypes, kinship, snp_info = _make_synthetic_data()
 
-    kwargs = dict(
-        genotypes=genotypes,
-        phenotypes=phenotypes,
-        kinship=kinship.copy(),
-        snp_info=snp_info,
-        maf_threshold=0.0,
-        miss_threshold=1.0,
-        check_memory=False,
-        show_progress=False,
-        lmm_mode=3,
-    )
+    kwargs = {
+        "genotypes": genotypes,
+        "phenotypes": phenotypes,
+        "kinship": kinship.copy(),
+        "snp_info": snp_info,
+        "maf_threshold": 0.0,
+        "miss_threshold": 1.0,
+        "check_memory": False,
+        "show_progress": False,
+        "lmm_mode": 3,
+    }
 
     # Run with C extension
     result_c = run_lmm_association_numpy(**kwargs)
@@ -1411,16 +1415,16 @@ def test_output_path_streaming_matches_inmemory(lmm_mode, tmp_path):
     """Streaming via output_path produces identical results to in-memory."""
     genotypes, phenotypes, kinship, snp_info = _make_synthetic_data()
 
-    common_kwargs = dict(
-        genotypes=genotypes,
-        phenotypes=phenotypes,
-        snp_info=snp_info,
-        maf_threshold=0.0,
-        miss_threshold=1.0,
-        check_memory=False,
-        show_progress=False,
-        lmm_mode=lmm_mode,
-    )
+    common_kwargs = {
+        "genotypes": genotypes,
+        "phenotypes": phenotypes,
+        "snp_info": snp_info,
+        "maf_threshold": 0.0,
+        "miss_threshold": 1.0,
+        "check_memory": False,
+        "show_progress": False,
+        "lmm_mode": lmm_mode,
+    }
 
     # In-memory run
     result_mem = run_lmm_association_numpy(kinship=kinship.copy(), **common_kwargs)

@@ -34,6 +34,6 @@ try:
 except ImportError:
     __release_date__ = "dev"
 
-from jamma.gwas import GWASResult, gwas  # noqa: E402
+from jamma.gwas import GWASResult, gwas
 
-__all__ = ["gwas", "GWASResult", "__version__", "__release_date__"]
+__all__ = ["GWASResult", "__release_date__", "__version__", "gwas"]

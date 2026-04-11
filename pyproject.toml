@@ -64,6 +64,7 @@ dev = [
     "pytest-randomly>=3.15.0",
     "pytest-cov>=4.0.0",
     "pytest-benchmark>=5.0.0",
+    "pytest-timeout>=2.3.0",
     "hypothesis>=6.100.0",
     "hypothesis[numpy]>=6.100.0",
     "pandas>=2.0.0",
@@ -78,7 +79,12 @@ jamma = "jamma.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-n 3 --randomly-seed=last --benchmark-skip -m 'not slow and not tier2 and not tier3' --no-cov"
+# --timeout=120: kill any test that hangs past 2 minutes. Tier0/tier1 tests
+# should finish in under 60s each; the 120s cap exists to catch accidental
+# BLAS-on-100k-samples calls, deadlocks, and infinite loops. Tests that
+# genuinely need longer should be tagged with @pytest.mark.timeout(N) and
+# almost certainly want a tier2/tier3/slow marker as well.
+addopts = "-n 3 --randomly-seed=last --benchmark-skip --timeout=120 -m 'not slow and not tier2 and not tier3' --no-cov"
 filterwarnings = []
 markers = [
     "tier0: fast unit tests (<5s), no external dependencies, no GEMMA reference",
@@ -96,8 +102,54 @@ line-length = 88
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
-ignore = []
+# Expanded rule set. Additions beyond the original E/F/I/UP/B:
+#   SIM  — flake8-simplify (nested ifs, redundant conditions, dict.get idioms)
+#   RUF  — ruff-specific checks (bugs ruff authors found in real code)
+#   C4   — flake8-comprehensions (list(map(...)) → comprehension, etc.)
+#   PIE  — flake8-pie (no-op removal, startswith/endswith tuples)
+#   PERF — perflint (hot-path perf footguns — relevant for JAMMA's numerics)
+#   NPY  — numpy-specific rules (catches np.bool/np.int deprecations and
+#          numpy 2.x migration footguns; relevant to our pinned numpy 2.4.x)
+#   PT   — flake8-pytest-style (consistent pytest idioms)
+#   PTH  — flake8-use-pathlib (os.path → pathlib migration)
+select = [
+    "E", "F", "I", "UP", "B",
+    "SIM", "RUF", "C4", "PIE", "PERF", "NPY", "PT", "PTH",
+]
+ignore = [
+    # Allow pytest.raises to wrap multiple statements — expressive test setup
+    # is often clearer than single-line `with pytest.raises(...): target()`.
+    "PT012",
+    # perflint try/except-in-loop warning — sometimes the try is the point.
+    "PERF203",
+    # RUF059 flags unused unpacked variables. JAMMA routinely unpacks
+    # long tuples from LMM functions where prefixing every unused return
+    # with an underscore would be noisier than leaving `x, y, z = f()`.
+    # Keep the full unpacking as documentation of what the function returns.
+    "RUF059",
+    # PTH123 rewrites `open(path)` to `Path(path).open()` — idiomatic
+    # open() is perfectly fine and the rewrite just adds verbosity.
+    "PTH123",
+    # JAMMA uses mathematical Unicode intentionally: `n × n` for matrix
+    # dimensions, `–` for en-dash in ranges, `ℓ` for log-likelihood in
+    # documentation. RUF001/002/003 would force us to rewrite these as
+    # ASCII `x`/`-`/`l`, which is actively wrong in a numerical library.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests routinely use magic numbers, long lines for readable tables, and
+# less-strict import organization. Relax the loud rules there.
+"tests/**" = [
+    "PT011",   # pytest.raises without a match — often intentional
+    "PT006",   # parametrize arg style — existing tests use tuple/str mix
+    "PERF401", # explicit loops in tests are clearer than comprehensions
+    "SIM117",  # nested with — clearer step-by-step in tests
+]
+# Scripts are ad-hoc tooling, not library code.
+"scripts/**" = ["PERF401", "SIM117", "PTH"]
 
 [dependency-groups]
 dev = [
@@ -106,6 +158,7 @@ dev = [
     "pytest-randomly>=3.15.0",
     "pytest-cov>=4.0.0",
     "pytest-benchmark>=5.0.0",
+    "pytest-timeout>=2.3.0",
     "hypothesis>=6.100.0",
     "hypothesis[numpy]>=6.100.0",
     "scipy>=1.10.0",

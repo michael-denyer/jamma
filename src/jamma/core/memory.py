@@ -696,10 +696,7 @@ def cleanup_memory(verbose: bool = True) -> MemorySnapshot:
         this function. Python's reference counting means arrays won't
         be freed if references still exist.
     """
-    if verbose:
-        before = log_memory_snapshot("before_cleanup")
-    else:
-        before = get_memory_snapshot()
+    before = log_memory_snapshot("before_cleanup") if verbose else get_memory_snapshot()
 
     gc.collect()
     gc.collect()

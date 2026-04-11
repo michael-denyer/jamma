@@ -1128,10 +1128,10 @@ def run_lmm_association_numpy_streaming(
                         seq_bar.update(i_seq)
             finally:
                 if seq_bar is not None:
-                    try:
+                    # Don't mask the real exception — progress-bar teardown
+                    # failures are swallowed intentionally.
+                    with contextlib.suppress(Exception):
                         seq_bar.finish()
-                    except Exception:
-                        pass  # Don't mask the real exception
 
         if write_offset < n_filtered:
             logger.warning(

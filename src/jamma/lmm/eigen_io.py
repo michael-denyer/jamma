@@ -17,7 +17,6 @@ Format follows GEMMA param.cpp WriteVector/WriteMatrix:
 - No headers in either file
 """
 
-import os
 from pathlib import Path
 
 import numpy as np
@@ -57,7 +56,7 @@ def _write_npy_cache(array: np.ndarray, npy_path: Path) -> None:
     rename_done = False
     try:
         np.save(tmp_path, array)
-        os.replace(tmp_path, npy_path)
+        tmp_path.replace(npy_path)
         rename_done = True
     except OSError as e:
         logger.warning(f"Could not write .npy cache {npy_path}: {e}")

@@ -327,7 +327,7 @@ class LazySnpMeta:
         a0: Major allele (str).
     """
 
-    __slots__ = ("_chr", "_rs", "_pos", "_a1", "_a0")
+    __slots__ = ("_a0", "_a1", "_chr", "_pos", "_rs")
 
     def __init__(self, meta: dict) -> None:
         self._chr = meta["chromosome"]

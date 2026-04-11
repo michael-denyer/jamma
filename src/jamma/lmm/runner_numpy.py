@@ -251,11 +251,9 @@ def _compose_mode4_from_split(
         logl_H0,
         n_threads,
     )
-    cr: dict = {k: None for k in _ALL_RESULT_KEYS}
+    cr: dict = dict.fromkeys(_ALL_RESULT_KEYS)
     for d in (score_cr, lrt_cr, wald_cr):
-        for k, v in d.items():
-            if v is not None:
-                cr[k] = v
+        cr.update({k: v for k, v in d.items() if v is not None})
     return cr
 
 

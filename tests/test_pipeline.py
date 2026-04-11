@@ -69,7 +69,7 @@ class TestValidateInputs:
             check_memory=False,
         )
         runner = PipelineRunner(config)
-        with pytest.raises(FileNotFoundError, match="PLINK .bed file"):
+        with pytest.raises(FileNotFoundError, match=r"PLINK .bed file"):
             runner.validate_inputs()
 
     def test_invalid_lmm_mode(self) -> None:
@@ -533,10 +533,7 @@ def _write_fam(
     """Write a .fam file with optional NaN phenotypes at specified indices."""
     with open(fam_path, "w") as f:
         for i in range(n_samples):
-            if nan_indices and i in nan_indices:
-                pheno = "NA"
-            else:
-                pheno = str(1.0 + i * 0.1)
+            pheno = "NA" if nan_indices and i in nan_indices else str(1.0 + i * 0.1)
             f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno}\n")
 
 
@@ -948,7 +945,7 @@ class TestMultiPhenotypeConfig:
     def test_loco_multi_phenotype_error(self) -> None:
         """PipelineConfig(loco=True, phenotype_columns=[1,2]) raises ValueError."""
         with pytest.raises(
-            ValueError, match="LOCO mode.*does not support multi-phenotype"
+            ValueError, match=r"LOCO mode.*does not support multi-phenotype"
         ):
             PipelineConfig(bfile=Path("test"), loco=True, phenotype_columns=[1, 2])
 
@@ -1340,10 +1337,7 @@ class TestNSamplesReflectsCovariateFiltering:
         with open(cov_path, "w") as f:
             for i in range(n_samples):
                 intercept = 1.0
-                if i < n_nan_covariates:
-                    cov = "NA"
-                else:
-                    cov = str(0.5 + i * 0.01)
+                cov = "NA" if i < n_nan_covariates else str(0.5 + i * 0.01)
                 f.write(f"{intercept}\t{cov}\n")
 
         config = PipelineConfig(

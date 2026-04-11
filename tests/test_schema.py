@@ -72,7 +72,7 @@ class TestDerivedTables:
                 "p_scores": "p_score",
             },
         }
-        assert RESULT_FIELDS == expected
+        assert expected == RESULT_FIELDS
 
     def test_format_columns(self) -> None:
         expected = {
@@ -90,7 +90,7 @@ class TestDerivedTables:
                 "p_score",
             ],
         }
-        assert FORMAT_COLUMNS == expected
+        assert expected == FORMAT_COLUMNS
 
     def test_headers_contain_prefix(self) -> None:
         prefix = "chr\trs\tps\tn_miss\tallele1\tallele0\taf"
@@ -150,7 +150,7 @@ class TestDerivedTables:
     def test_stat_column_empty_header_rejected(self) -> None:
         from jamma.lmm.schema import StatColumn
 
-        with pytest.raises(ValueError, match="StatColumn.header must be a non-empty"):
+        with pytest.raises(ValueError, match=r"StatColumn.header must be a non-empty"):
             StatColumn("x", "x", "")
 
     def test_mode_spec_duplicate_array_key_rejected(self) -> None:

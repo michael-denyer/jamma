@@ -404,7 +404,7 @@ def main():
     def _cell(t: float | None) -> str:
         return _fmt(t) if t is not None else "—"
 
-    def _vs(t: float | None, op: str, *, ref: dict = None) -> str:
+    def _vs(t: float | None, op: str, *, ref: dict | None = None) -> str:
         src = ref if ref is not None else gemma
         g = src.get(op)
         if g is None or t is None:

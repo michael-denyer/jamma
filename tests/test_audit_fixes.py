@@ -80,7 +80,7 @@ class TestClampPyy:
 class TestPyyInLogLikelihood:
     """T2 continued: P_yy clamping produces finite log-likelihood."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def synthetic_eigen(self):
         """Small synthetic eigendecomposition."""
         rng = np.random.default_rng(42)
@@ -91,7 +91,7 @@ class TestPyyInLogLikelihood:
         eigenvalues = np.maximum(eigenvalues, 0.0)
         return eigenvalues, U
 
-    @pytest.fixture()
+    @pytest.fixture
     def synthetic_uab(self, synthetic_eigen):
         """Small synthetic Uab for testing (null model, no genotype)."""
         eigenvalues, U = synthetic_eigen

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from unittest.mock import patch
 
 import pytest
@@ -326,10 +327,10 @@ class TestExecutionMode:
             "jamma.lmm.runner.select_execution_mode",
             side_effect=capturing_sem,
         ):
-            try:
+            # We only care that select_execution_mode is called with n_cvt —
+            # any downstream failure from the fake runner is irrelevant here.
+            with contextlib.suppress(Exception):
                 run_lmm(genotypes=geno, phenotypes=pheno, covariates=cov)
-            except Exception:
-                pass  # We only care about the select_execution_mode call
 
         assert any(c.get("n_cvt") == 3 for c in calls), (
             f"n_cvt=3 not passed to select_execution_mode; calls={calls}"

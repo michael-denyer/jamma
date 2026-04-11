@@ -257,7 +257,7 @@ class TestEdgeCases:
 class TestReaderValidation:
     """Verify individual readers catch parse errors and bad shapes."""
 
-    def test_read_eigenvalues_unparseable_includes_path(self, tmp_path: Path) -> None:
+    def test_read_eigenvalues_unparsable_includes_path(self, tmp_path: Path) -> None:
         """Non-numeric eigenvalue file includes path in error."""
         path = tmp_path / "bad.eigenD.txt"
         path.write_text("1.0\nhello\n3.0\n")
@@ -265,7 +265,7 @@ class TestReaderValidation:
         with pytest.raises(ValueError, match=str(path)):
             read_eigenvalues(path)
 
-    def test_read_eigenvectors_unparseable_includes_path(self, tmp_path: Path) -> None:
+    def test_read_eigenvectors_unparsable_includes_path(self, tmp_path: Path) -> None:
         """Non-numeric eigenvector file includes path in error."""
         path = tmp_path / "bad.eigenU.txt"
         path.write_text("1.0\t2.0\nfoo\tbar\n")

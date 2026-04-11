@@ -243,12 +243,12 @@ flowchart TD
         CEXT{"C extension?"}
         C["C Extension\nOpenMP + SIMD"]
         PY["Pure Python\nfallback"]
-        MEM -->|"fits"| NP
-        MEM -->|"large"| NPS
+        MEM -->|fits| NP
+        MEM -->|large| NPS
         NP --> CEXT
         NPS --> CEXT
-        CEXT -->|"yes"| C
-        CEXT -->|"no"| PY
+        CEXT -->|yes| C
+        CEXT -->|no| PY
     end
 
     RES["AssocResult\n(.assoc.txt)"]

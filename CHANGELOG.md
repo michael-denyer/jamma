@@ -922,7 +922,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - DSYEVR C extension for eigendecomposition — O(N) workspace vs O(N²) for DSYEVD,
   saving ~250GB at 125k samples; auto-compiled on first use with lazy recompilation
 - LAPACK linkage for Linux wheels: auto-detects numpy's bundled OpenBLAS in numpy.libs/
-  for C extension compilation (both hatch_build.py and post-install _compile_eigen.py)
+  for C extension compilation (both hatch_build.py and post-install_compile_eigen.py)
 - Negative n_samples validation in memory estimation functions
 - ABI mismatch test for DSYEVR import probe
 
@@ -1645,6 +1645,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.0.0] - 2026-02-12
 
 ### Added
+
 - **LOCO kinship** (`-loco` flag): Leave-one-chromosome-out kinship via streaming
   subtraction approach — computes per-chromosome K_loco one at a time for memory
   efficiency. Eliminates proximal contamination in LMM association
@@ -1675,6 +1676,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   eigenvalue precision). Total: 42 hypothesis tests (up from 29)
 
 ### Changed
+
 - **Streaming SNP filtering**: Replaced O(n) linear scan with `np.searchsorted` for
   chunk-level SNP range filtering — eliminates per-SNP Python overhead in streaming runners
 - **Memory module comments**: Updated docstrings to reflect streaming architecture
@@ -1684,6 +1686,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silent inf/neginf clobbering
 
 ### Fixed
+
 - **HWE silently ignored in LOCO mode**: `-hwe` parameter was accepted but had no
   effect when `-loco` was active — now rejected with clear error message
 - **CLI gk ksnps errors uncaught**: Missing/invalid ksnps file produced a traceback
@@ -1691,6 +1694,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **HWE threshold >1.0 accepted**: Out-of-range p-value threshold now validated
 
 ### Removed
+
 - **Bioconda recipe**: Removed `bioconda/meta.yaml` and automated bioconda PR submission —
   bioconda's conda-forge numpy is LP64 only, which silently breaks for JAMMA's target
   users (>46k samples require ILP64 MKL). pip is the canonical install path.
@@ -1698,11 +1702,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.5.1] - 2026-02-10
 
 ### Changed
+
 - README logo and badge layout refinements
 
 ## [1.5.0] - 2026-02-10
 
 ### Added
+
 - **PipelineRunner service**: Shared orchestration class eliminates duplicated pipeline
   logic between CLI and Python API — single source of truth for validate, parse, check
   memory, load kinship, load covariates, run LMM
@@ -1714,6 +1720,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Project logo** in README hero section
 
 ### Changed
+
 - CLI `lmm` command delegates to `PipelineRunner` (256 → 78 lines)
 - `gwas()` API delegates to `PipelineRunner` (164 → 28 lines)
 - Removed import-time side effects — `configure_jax()` is now lazy via
@@ -1724,12 +1731,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Publish workflow updated for live PyPI with automated bioconda PR submission
 
 ### Fixed
+
 - Memory estimates used hardcoded chunk size (10,000) instead of the actual computed
   chunk size — could over/underestimate by 2-5x at different scales
 
 ## [1.4.3] - 2026-02-10
 
 ### Added
+
 - **Production-scale GEMMA validation**: 85,000 real samples × 91,613 SNPs — 100%
   significance agreement, 100% effect direction agreement, Spearman rho 1.000000
 - **Compare-only mode** for GEMMA comparison notebook — load pre-computed results
@@ -1749,6 +1758,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Method logging** for kinship computation (in-memory vs streaming)
 
 ### Changed
+
 - LMM runners use phase-specific memory checks instead of total pipeline peak —
   fixes false `MemoryError` when eigendecomp is already complete (e.g., 100k sample
   benchmark: 300GB available, LMM needs ~96GB, was incorrectly demanding 320GB)
@@ -1765,6 +1775,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GEMMA comparison notebook accepts pre-existing GEMMA output files
 
 ### Fixed
+
 - **LMM MemoryError at 100k samples**: LMM phase demanded 320GB (eigendecomp peak)
   against 300GB available, but only needed ~96GB. Now uses `estimate_lmm_memory()`
 - **JAX async dispatch**: `block_until_ready()` in kinship compute loop — progress
@@ -1776,11 +1787,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.3.0] - 2026-02-07
 
 ### Added
+
 - **Golden section optimizer**: Replaced Brent's method (via scipy) with grid search +
   golden section refinement for lambda optimization — removes scipy runtime dependency
 - Auto-select streaming kinship for large datasets (>10k samples)
 
 ### Changed
+
 - **Removed scipy runtime dependency**: scipy is now dev-only (tests use `scipy.stats`).
   JAMMA uses `numpy.linalg.eigh` for eigendecomposition, which correctly uses ILP64
   when numpy is built with ILP64 MKL
@@ -1793,33 +1806,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced list accumulators with pre-allocated numpy arrays (perf)
 
 ### Removed
+
 - `optimize.py` (Brent's method via scipy)
 - Numba dependency in likelihood computation
 - scipy as a runtime dependency
 
 ### Fixed
+
 - `NotImplementedError` for kinship mode 2 (standardized) — now raises explicitly
   instead of producing wrong results
 
 ## [1.2.0] - 2026-02-05
 
 ### Added
+
 - **Databricks benchmark notebook** (`notebooks/databricks_jamma_vs_gemma.py`):
   Widget-parameterized notebook comparing JAMMA vs GEMMA runtime and accuracy
 - **Kinship matrix comparison**: Spearman rho, Frobenius norm, max/mean absolute/relative diff
 - **CPU pinning for GEMMA**: `taskset --cpu-list 0-23` for eigendecomp in benchmark notebook
 
 ### Changed
+
 - Skip JIT warmup for large datasets (>10k samples) to avoid double eigendecomp
 - Auto-select streaming kinship for large datasets (>10k samples) with progress bar
 - Expanded WHY_JAMMA.md with detailed GEMMA vs JAMMA speed comparison
 
 ### Fixed
+
 - Double eigendecomposition in benchmark notebook (warmup was running full pipeline)
 
 ## [1.1.0] - 2026-02-05
 
 ### Added
+
 - **Score test** (`-lmm 3`): Efficient screening test using null model lambda
 - **Likelihood ratio test** (`-lmm 2`): MLE-based chi-square test
 - **All tests mode** (`-lmm 4`): Combined Wald, LRT, and Score output
@@ -1836,15 +1855,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Test tier system**: `tier0` (fast), `tier1` (parity), `tier2` (scale) markers
 
 ### Changed
+
 - Memory now bounded by chunk size, not total SNP count
 - CLI lmm command uses incremental writing by default
 - Eigendecomposition uses numpy LAPACK (not scipy) for large matrix support
 
 ### Removed
+
 - Rust/faer eigendecomposition backend (unreliable at scale, higher memory overhead)
 - Multi-backend infrastructure (Backend type, `JAMMA_BACKEND` env var, `-be` CLI flag)
 
 ### Fixed
+
 - Pre-flight memory check now accounts for full pipeline peak (eigendecomp), not just kinship
 - Pre-flight check accounts for SNP count in non-streaming path (JAX genotype copy)
 - Eigendecomposition memory check prevents OOM
@@ -1852,6 +1874,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.0] - 2026-02-01
 
 ### Added
+
 - **Kinship matrix computation** (`-gk 1`): Centered relatedness matrix XX'/p
 - **LMM Wald test** (`-lmm 1`): Univariate linear mixed model association
 - **Pre-computed kinship input** (`-k`): Load kinship from file
@@ -1862,6 +1885,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Numerical equivalence**: Results match GEMMA (identical significance calls, rankings, directions)
 
 ### Performance
+
 - 7x faster than GEMMA on kinship computation
 - 4x faster than GEMMA on LMM association
 - Streaming kinship for datasets exceeding memory

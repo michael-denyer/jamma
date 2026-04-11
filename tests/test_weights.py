@@ -75,8 +75,8 @@ class TestReadWeightFile:
         with pytest.raises(ValueError, match="1 NaN value"):
             read_weight_file(weight_file)
 
-    def test_read_weight_file_unparseable_includes_path(self, tmp_path: Path) -> None:
-        """Unparseable weight file includes file path in error message."""
+    def test_read_weight_file_unparsable_includes_path(self, tmp_path: Path) -> None:
+        """Unparsable weight file includes file path in error message."""
         weight_file = tmp_path / "weights.txt"
         weight_file.write_text("1.0\nnot_a_number\n3.0\n")
 

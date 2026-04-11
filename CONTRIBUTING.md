@@ -78,7 +78,8 @@ prek run --all-files       # All hooks
    - `refactor/description` for refactoring
 
 2. Write clear commit messages following conventional commits:
-   ```
+
+   ```text
    feat: add multi-pass LOCO kinship batching
    fix: streaming runner chunk boundary handling
    perf: skip impute_and_center when no target chromosomes in chunk
@@ -86,6 +87,7 @@ prek run --all-files       # All hooks
    ```
 
 3. Ensure all tests pass before opening a PR:
+
    ```bash
    uv run pytest tests/ -x
    prek run --all-files
@@ -101,7 +103,7 @@ See [docs/CODEMAP.md](docs/CODEMAP.md) for the project architecture, module resp
 
 Key source layout:
 
-```
+```text
 src/jamma/
 ├── cli.py           # Click CLI entry point
 ├── core/            # Memory estimation, backend selection, utilities

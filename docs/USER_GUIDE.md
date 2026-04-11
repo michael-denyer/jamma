@@ -116,15 +116,15 @@ flowchart TD
     end
 
     INPUT --> PHASE1
-    KIN_IN -.->|"skip if\npre-computed"| PHASE2
+    KIN_IN -.->|skip if pre-computed| PHASE2
     PHASE1 --> PHASE2
     PHASE2 --> PHASE3
-    MEM -->|"fits"| BATCH
-    MEM -->|"large"| STREAM
+    MEM -->|fits| BATCH
+    MEM -->|large| STREAM
     BATCH --> CEXT
     STREAM --> CEXT
-    CEXT -->|"yes"| OMP
-    CEXT -->|"no"| PYFALL
+    CEXT -->|yes| OMP
+    CEXT -->|no| PYFALL
     OMP --> OUTPUT
     PYFALL --> OUTPUT
 
@@ -556,12 +556,12 @@ flowchart TD
 
     subgraph DISPATCH["EIGENDECOMP DISPATCH"]
         direction TB
-        ILP64 -->|"MKL-ILP64\nAccelerate-ILP64"| VENDOR["Vendor LAPACK\n(DSYEVD / DSYEVR)"]
-        ILP64 -->|"LP64 only\nor none"| NPFALL["NumPy fallback\n(np.linalg.eigh)"]
+        ILP64 -->|MKL-ILP64 / Accelerate-ILP64| VENDOR["Vendor LAPACK<br/>(DSYEVD / DSYEVR)"]
+        ILP64 -->|LP64 only or none| NPFALL["NumPy fallback<br/>(np.linalg.eigh)"]
 
-        VENDOR --> DSYEVD{"DSYEVD\nfits in RAM?"}
-        DSYEVD -->|"yes"| FAST["DSYEVD in-place\nO(N²) workspace — fast"]
-        DSYEVD -->|"no"| DSYEVR["DSYEVR\nO(N) workspace — slower"]
+        VENDOR --> DSYEVD{"DSYEVD<br/>fits in RAM?"}
+        DSYEVD -->|yes| FAST["DSYEVD in-place<br/>O(N²) workspace — fast"]
+        DSYEVD -->|no| DSYEVR["DSYEVR<br/>O(N) workspace — slower"]
     end
 
     subgraph LIMITS["SAMPLE LIMITS"]
@@ -715,11 +715,13 @@ it back. You can safely delete it at any time.
 Disable telemetry with either:
 
 1. **CLI flag** (per-run):
+
    ```bash
    jamma --no-telemetry -lmm 1 -bfile data/study -k kinship.cXX.txt
    ```
 
 2. **Environment variable** (persistent):
+
    ```bash
    # JAMMA-specific
    export JAMMA_NO_TELEMETRY=1
@@ -799,10 +801,9 @@ flowchart TD
 
     subgraph EIGEN_MEM["EIGENDECOMP MEMORY"]
         direction TB
-        KM["K matrix\n8N² bytes"]
-        UM["U matrix\n8N² bytes"]
-        WK["DSYEVD workspace\n~8N² bytes"]
-        KM ~~~ UM ~~~ WK
+        KM["K matrix<br/>8N² bytes"]
+        UM["U matrix<br/>8N² bytes"]
+        WK["DSYEVD workspace<br/>~8N² bytes"]
     end
 
     subgraph RUNTIME["RUNTIME CONTROLS"]
@@ -813,8 +814,8 @@ flowchart TD
         FLUSH["Per-chunk disk flush\n(no list accumulation)"]
     end
 
-    GATE -->|"sufficient"| EIGEN_MEM
-    GATE -->|"insufficient"| FAIL["MemoryError\n(fail fast with suggestions)"]
+    GATE -->|sufficient| EIGEN_MEM
+    GATE -->|insufficient| FAIL["MemoryError<br/>(fail fast with suggestions)"]
     EIGEN_MEM --> RUNTIME
 
     style PREFLIGHT fill:#1a1a2e,stroke:#f5b461,color:#eee,stroke-width:2px

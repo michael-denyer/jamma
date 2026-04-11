@@ -32,10 +32,10 @@ graph TD
     end
 
     B --> C
-    C -->|"yes"| D
-    C -->|"no"| E
-    G -->|"ILP64"| H
-    G -->|"none"| E
+    C -->|yes| D
+    C -->|no| E
+    G -->|ILP64| H
+    G -->|none| E
 
     style PYTHON fill:#1a1a2e,stroke:#53a8b6,color:#eee,stroke-width:2px
     style BRIDGE fill:#0f3460,stroke:#f5b461,color:#eee,stroke-width:2px
@@ -199,6 +199,7 @@ uv run pytest tests/ -x
 ### ABI Versioning
 
 `JLINALG_ABI_VERSION` in `jlinalg.h` must be bumped whenever:
+
 - A function pointer or global state variable is added to blas_dispatch.c
 - A function signature changes
 - A new extern is added that pymodule.c exports

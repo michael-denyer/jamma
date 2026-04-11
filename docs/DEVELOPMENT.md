@@ -96,7 +96,7 @@ Branch from `master`. Use the following prefixes:
 
 Commit messages follow conventional commits:
 
-```
+```text
 feat: add multi-pass LOCO kinship batching
 fix: streaming runner chunk boundary handling
 perf: skip impute_and_center when no target chromosomes in chunk
@@ -106,6 +106,7 @@ refactor: extract _yield_loco_matrices helper
 ## PR Process
 
 1. Ensure all tests pass and hooks are clean:
+
    ```bash
    uv run pytest tests/ -x
    prek run --all-files

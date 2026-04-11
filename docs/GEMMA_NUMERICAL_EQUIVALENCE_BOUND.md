@@ -13,6 +13,7 @@ depend on condition numbers and problem scale, which vary by dataset.
 ## Scope
 
 The bound covers:
+
 1. Kinship matrix construction.
 2. Eigendecomposition of the kinship matrix.
 3. REML optimization for `λ` (variance ratio).
@@ -26,6 +27,7 @@ The statement below assumes **identical inputs** and **float64** arithmetic.
 ## Notation
 
 Let:
+
 - `G ∈ R^{n×p}` be the genotype matrix with missing values.
 - `Xc` be the mean-imputed, centered genotype matrix.
 - `K = (1/p) Xc Xcᵀ` be the kinship matrix.
@@ -37,6 +39,7 @@ Let:
 - `p` denotes p-values.
 
 Define:
+
 - `ε = 2^{-52} ≈ 2.22e−16` (IEEE-754 float64 machine epsilon).
 - `γ_k = kε / (1 − kε)` (Higham rounding error factor).
 - `κ(·)` denotes condition number in the spectral norm.
@@ -74,7 +77,7 @@ not be meaningful. See `docs/GEMMA_DIVERGENCES.md` for known edge-case behavior.
 Under the assumptions above, the full pipeline outputs produced by JAMMA and
 GEMMA satisfy:
 
-```
+```text
 ||ΔK||_F        ≤ C_K · γ_p · ||Xc||_F^2 / p
 ||ΔD||_2        ≤ C_E · ε · ||K||_2
 ||ΔU||_2        ≤ C_U · ε · ||K||_2 / gap(K)
@@ -84,6 +87,7 @@ GEMMA satisfy:
 ```
 
 where:
+
 - `C_K, C_E, C_U, L_λ, L_T, L_CDF` are data-dependent constants determined by
   condition numbers and operator norms.
 - `gap(K)` is the minimum eigenvalue separation.
@@ -103,13 +107,13 @@ estimated for a given dataset.
 Each entry of `K` is a length-`p` dot product. For IEEE-754 arithmetic,
 the standard dot-product bound applies:
 
-```
+```text
 |fl(xᵀy) − xᵀy| ≤ γ_p · ||x||_2 ||y||_2
 ```
 
 Summing across rows yields the Frobenius bound:
 
-```
+```text
 ||ΔK||_F ≤ C_K · γ_p · ||Xc||_F^2 / p
 ```
 
@@ -120,13 +124,13 @@ with `C_K` capturing batching and symmetric accumulation effects.
 LAPACK symmetric eigensolvers are backward stable, so the computed
 eigendecomposition satisfies:
 
-```
+```text
 K + E = Û D̂ Ûᵀ,   ||E||_2 ≤ C_E · ε · ||K||_2
 ```
 
 Eigenvector error depends on spectral gaps:
 
-```
+```text
 ||ΔU||_2 ≤ C_U · ε · ||K||_2 / gap(K)
 ```
 
@@ -138,7 +142,7 @@ Let `ℓ(λ)` be the REML log-likelihood and assume strict concavity in `log λ`
 with curvature `m > 0`. If the optimization terminates with a bracket width
 or tolerance `τ_opt`, then:
 
-```
+```text
 |λ̂ − λ*| ≤ τ_opt + L_λ (||ΔK||_2 + ||ΔU||_2 + ||ΔD||_2)
 ```
 
@@ -152,7 +156,7 @@ Wald, score, and LRT statistics are smooth functions of
 `(K, U, D, λ, W, x, y)` under the assumption that denominators are bounded
 away from zero. A first-order perturbation bound yields:
 
-```
+```text
 |ΔT| ≤ L_T (||ΔK||_2 + |Δλ| + ||ΔU||_2 + ||ΔD||_2)
 ```
 
@@ -163,7 +167,7 @@ and similar bounds for `β` and `se`.
 Let `F` be the test statistic and `CDF` the corresponding distribution
 function. If `CDF` is Lipschitz on the relevant domain:
 
-```
+```text
 |Δp| ≤ L_CDF · |ΔF| + δ_CDF
 ```
 
@@ -176,17 +180,18 @@ JAMMA’s Cephes `betainc`/`chi2` evaluation.
 
 Define the linear-algebra propagation term:
 
-```
+```text
 B_lin = L_T (||ΔK||_2 + ||ΔU||_2 + ||ΔD||_2 + τ_opt)
 ```
 
 Then the p-value bound is:
 
-```
+```text
 |Δp| ≤ L_CDF · B_lin + δ_CDF
 ```
 
 This makes explicit that the bound is dominated by:
+
 1. **Optimizer tolerance** (`τ_opt`), and
 2. **CDF implementation differences** (`δ_CDF`),
 when the linear algebra is well-conditioned.

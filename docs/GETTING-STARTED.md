@@ -102,7 +102,7 @@ Expected output columns: `chr rs ps n_miss allele1 allele0 af beta se logl_H1 l_
 
 ## Common Setup Issues
 
-**Wrong Python version**
+### Wrong Python version
 
 JAMMA requires Python 3.11 or newer. Check your version:
 
@@ -113,7 +113,7 @@ python --version
 If you have multiple Python versions installed, use `python3.11 -m pip install jamma` or
 use `uv` which handles version selection automatically.
 
-**NumPy version too old**
+### NumPy version too old
 
 JAMMA requires NumPy 2.0 or newer. If you see import errors about missing symbols, upgrade:
 
@@ -121,7 +121,7 @@ JAMMA requires NumPy 2.0 or newer. If you see import errors about missing symbol
 pip install "numpy>=2.0.0" --upgrade
 ```
 
-**ILP64 overwritten after pip install**
+### ILP64 overwritten after pip install
 
 If you followed the ILP64 install steps and then installed another package that depends on
 numpy, the ILP64 build may have been replaced. Verify with:
@@ -133,7 +133,7 @@ python -c "import numpy as np; cfg = np.show_config(mode='dicts'); print(cfg['Bu
 If the BLAS name does not contain `ilp64`, re-run the ILP64 install steps. Always install
 other packages before ILP64 numpy, and always use `pip install jamma --no-deps`.
 
-**C extension not compiled (development installs)**
+### C extension not compiled (development installs)
 
 After cloning from source, the C extension must be compiled:
 
@@ -142,7 +142,7 @@ uv sync
 uv run python -c "from jamma.jlinalg._compile_jlinalg import compile_extension; compile_extension()"
 ```
 
-**Missing environment variables**
+### Missing environment variables
 
 JAMMA has no required environment variables for basic use. The optional `JAMMA_BACKEND`
 variable forces a specific compute backend (`numpy`, `numpy-streaming`). Omit it to use

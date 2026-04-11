@@ -204,7 +204,7 @@ tests mock external libraries at the boundary.
 
 All tests live in `tests/`. File names follow the pattern `test_<module>.py`.
 
-```
+```text
 tests/
 ├── conftest.py                  # Shared fixtures
 ├── fixtures/                    # Reference data

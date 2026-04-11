@@ -1,0 +1,48 @@
+# typos-cli configuration. Shared by the pre-commit hook and CI so
+# pre-commit and CI cannot drift — same consistency rule as lychee.toml
+# and .markdownlint-cli2.jsonc.
+#
+# Scope: JAMMA is a numerical library with lots of abbreviations, API
+# names, and einsum index labels that look like typos but are not.
+# Allowlist carefully — every entry here should have a reason.
+
+[files]
+extend-exclude = [
+    # Third-party vendored code.
+    "src/jamma/jlinalg/tests/unity/**",
+    # Build artifacts and caches.
+    ".venv/",
+    ".planning/",
+    ".beads/",
+    ".claude/",
+    ".code-review-graph/",
+    ".ruff_cache/",
+    "node_modules/",
+    "dist/",
+    "build/",
+    "target/",
+    "*.lock",
+    # Binary fixtures (PLINK, kinship matrices, eigen outputs).
+    "tests/fixtures/**/*.bed",
+    "tests/fixtures/**/*.bim",
+    "tests/fixtures/**/*.fam",
+]
+
+[default]
+# Domain-specific words that shadow real English words. Keys are the
+# tokens typos flags; values are what typos should accept them as.
+
+[default.extend-words]
+# NumPy C API flag — cannot be renamed without breaking the API.
+writeable = "writeable"
+WRITEABLE = "WRITEABLE"
+# Standard genomics abbreviation for homozygous (hom ref, hom alt).
+hom = "hom"
+# Real macOS tool name for wheel dependency bundling (not "deallocate").
+delocate = "delocate"
+# einsum index labels. "pn" = "SNPs x samples", "lik" = likelihood.
+pn = "pn"
+lik = "lik"
+LIK = "LIK"
+# CODEMAP section IDs (4Nd, 3Nd, etc.)
+Nd = "Nd"

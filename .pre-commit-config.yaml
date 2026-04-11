@@ -4,6 +4,13 @@ repos:
     hooks:
       - id: check-yaml
       - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-added-large-files
+        # 500 KB cap. Binary fixtures live in tests/fixtures/ and are
+        # already checked in; this cap blocks *new* accidental binaries
+        # (stray .npy, .bed, cached compiler outputs) without rejecting
+        # the existing ones.
+        args: [--maxkb=500]
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.7
     hooks:
@@ -32,6 +39,35 @@ repos:
         name: lychee (offline link check)
         args: [--offline, --no-progress, --config, lychee.toml]
         files: \.md$
+  # Markdown formatting linter. Same shared-config consistency rule as
+  # lychee: .markdownlint-cli2.jsonc is the single source of truth for
+  # rule config, and the CI markdown-lint job (.github/workflows/ci.yml)
+  # runs the same binary with the same config so the two cannot drift.
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.18.1
+    hooks:
+      - id: markdownlint-cli2
+        files: \.md$
+  # Mermaid diagram syntax validator. Wraps @probelabs/maid via a local
+  # script (scripts/check-mermaid.sh) so we can gate on parse errors
+  # only — maid flags several warnings as false positives on legitimate
+  # mermaid features (style on subgraph names, sequenceDiagram
+  # deactivate). The wrapper script is also what CI runs, so pre-commit
+  # and CI cannot drift.
+  - repo: local
+    hooks:
+      - id: maid-mermaid
+        name: maid (mermaid diagram syntax)
+        entry: scripts/check-mermaid.sh
+        language: script
+        files: \.md$
+        pass_filenames: false
+  # Spell checker for code and docs. Shared config in _typos.toml, same
+  # consistency rule as lychee/markdownlint/maid.
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.45.0
+    hooks:
+      - id: typos
   - repo: local
     hooks:
       - id: cppcheck

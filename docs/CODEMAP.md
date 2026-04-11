@@ -26,7 +26,7 @@ flowchart TB
         KINSHIP["Kinship Compute<br/><small>3a</small>"]
         MISSING["Missing Imputation<br/><small>3b</small>"]
         EIGEN["Eigendecomposition<br/><small>3c</small>"]
-        JLINALG["jlinalg C Layer<br/><small>3c'</small>"]
+        JLINALG["jlinalg C Layer<br/><small>3c-prime</small>"]
         LIKE["REML Likelihood<br/><small>3d</small>"]
         OPT["Lambda Optimizer<br/><small>3e</small>"]
         STATS["Test Statistics<br/><small>3f</small>"]
@@ -320,14 +320,14 @@ Tolerance-based comparison infrastructure for GEMMA parity testing.
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant CLI as CLI (1a)
-    participant IO as PLINK I/O (2a)
-    participant K as Kinship (3a)
-    participant E as Eigendecomp (3c)
-    participant L as Likelihood (3d)
-    participant O as Optimizer (3e)
-    participant S as Statistics (3f)
-    participant W as Writer (2d)
+    participant CLI as "CLI (1a)"
+    participant IO as "PLINK I/O (2a)"
+    participant K as "Kinship (3a)"
+    participant E as "Eigendecomp (3c)"
+    participant L as "Likelihood (3d)"
+    participant O as "Optimizer (3e)"
+    participant S as "Statistics (3f)"
+    participant W as "Writer (2d)"
 
     U->>CLI: jamma -lmm 1 -bfile data -k K.txt
     activate CLI
@@ -442,11 +442,11 @@ flowchart TD
     end
 
     EST --> CHK
-    CHK -->|"insufficient"| FAIL["MemoryError (fail fast)"]
-    CHK -->|"sufficient"| Peak
+    CHK -->|insufficient| FAIL["MemoryError (fail fast)"]
+    CHK -->|sufficient| Peak
     Peak --> Runtime
-    INC -->|"per-SNP to disk"| DISK["No list accumulation"]
-    STR -->|"O(n x chunk)"| LOW["Bounded memory"]
+    INC -->|per-SNP to disk| DISK["No list accumulation"]
+    STR -->|O n x chunk| LOW["Bounded memory"]
 
     style Preflight fill:#1a1a2e,stroke:#f5b461,color:#eee,stroke-width:2px
     style Peak fill:#0f3460,stroke:#e94560,color:#eee,stroke-width:2px
@@ -487,8 +487,8 @@ flowchart TD
     end
 
     PIPE --> SEL
-    SEL -->|"batch"| BATCH
-    SEL -->|"streaming"| STREAM
+    SEL -->|batch| BATCH
+    SEL -->|streaming| STREAM
     PIPE --> PREP
     PREP --> NP
     BATCH --> CN --> LN

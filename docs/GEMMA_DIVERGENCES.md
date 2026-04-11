@@ -16,6 +16,7 @@ GEMMA is the **reference implementation**, not the specification. Where GEMMA ha
 ## 1. `safe_sqrt` Behavior
 
 ### GEMMA (mathfunc.cpp:122-131)
+
 ```c++
 double safe_sqrt(const double d) {
   double d1 = d;
@@ -30,6 +31,7 @@ double safe_sqrt(const double d) {
 **Bug**: `fabs(d < 0.001)` evaluates the comparison `d < 0.001` as a boolean (0 or 1), then takes `fabs()` of that result. Since `fabs(0)=0` and `fabs(1)=1`, the condition is effectively always true-ish. Result: `safe_sqrt(-5.0)` returns `sqrt(5.0) = 2.236`.
 
 ### JAMMA (stats.py:15-36)
+
 ```python
 def _safe_sqrt(d: float) -> float:
     if abs(d) < 0.001:
@@ -42,6 +44,7 @@ def _safe_sqrt(d: float) -> float:
 **Behavior**: Only applies `abs()` for values in `(-0.001, 0.001)`. Large negatives return NaN.
 
 ### Divergence Impact
+
 | Input | GEMMA | JAMMA |
 |-------|-------|-------|
 | `safe_sqrt(4.0)` | 2.0 | 2.0 |
@@ -49,12 +52,15 @@ def _safe_sqrt(d: float) -> float:
 | `safe_sqrt(-5.0)` | **2.236** | **NaN** |
 
 ### Rationale
+
 - Large negative variance values indicate a bug in upstream computation, not a recoverable condition
 - Returning `sqrt(abs(x))` silently masks errors
 - NaN propagation surfaces problems for investigation
 
 ### When This Matters
+
 Only when `1/(tau * P_xx)` is large and negative due to:
+
 - Degenerate SNPs (P_xx ≈ 0)
 - Numerical instability in projection
 
@@ -63,6 +69,7 @@ Only when `1/(tau * P_xx)` is large and negative due to:
 ## 2. Wald Test Guards (P_xx, Px_yy)
 
 ### GEMMA (lmm.cpp:1153-1161)
+
 ```c++
 beta = P_xy / P_xx;
 double tau = (double)df / Px_yy;
@@ -73,6 +80,7 @@ p_wald = gsl_cdf_fdist_Q((P_yy - Px_yy) * tau, 1.0, df);
 **Behavior**: No guards. Division by zero produces `inf` or `NaN` depending on numerator.
 
 ### JAMMA (`calc_wald_test` in stats.py)
+
 ```python
 if P_xx <= 0.0:
     return float("nan"), float("nan"), float("nan")
@@ -82,21 +90,25 @@ if Px_yy >= 0.0 and Px_yy < 1e-8:
 ```
 
 **Behavior**:
+
 - P_xx ≤ 0: Return NaN for all stats (SNP has no variance)
 - Px_yy clamping: Prevent division by near-zero residual variance
 
 ### Divergence Impact
+
 | Condition | GEMMA | JAMMA |
 |-----------|-------|-------|
 | P_xx = 0 (constant SNP) | beta=NaN, se=inf, p=NaN | beta=NaN, se=NaN, p=NaN |
 | Px_yy = 1e-12 | tau=1e12, se≈0 | tau=1e8, se finite |
 
 ### Rationale
+
 - Constant SNPs (P_xx = 0) have no genetic variance to test
 - Consistent NaN is more useful than mixed inf/NaN
 - Px_yy clamping prevents numerical overflow in downstream calculations
 
 ### When This Matters
+
 - Monomorphic SNPs (all samples have same genotype)
 - SNPs with MAF below filtering threshold that slipped through
 - Numerical edge cases from projection
@@ -106,16 +118,19 @@ if Px_yy >= 0.0 and Px_yy < 1e-8:
 ## 3. REML logdet Computation
 
 ### GEMMA (lmm.cpp:835)
+
 ```c++
 logdet_h += safe_log(fabs(d));
 ```
 
 ### JAMMA (likelihood.py)
+
 ```python
 logdet_h = np.sum(np.log(np.abs(v_temp)))
 ```
 
 ### Status: **ALIGNED**
+
 Both use `log(abs(v))` to handle potential negative eigenvalues from non-PSD kinship matrices.
 
 ---
@@ -238,7 +253,7 @@ When the grid search maximum falls at the first or last grid point, the bracket
 may not contain the true optimum. JAMMA tracks this via
 `count_lambda_boundary_hits()` in `results.py` and emits a warning:
 
-```
+```text
 Lambda bound convergence: 42 SNPs at l_min=1.0e-05
 ```
 

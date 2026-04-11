@@ -38,11 +38,12 @@ effect direction agreement 100%. See [Empirical Results](#empirical-results).
 
 Both JAMMA and GEMMA solve the same linear mixed model:
 
-```
+```text
 y = Wa + xb + u + e
 ```
 
 where:
+
 - `y` (n) = phenotype vector
 - `W` (n x c) = covariate matrix (includes intercept)
 - `x` (n) = genotype vector for a single SNP
@@ -58,7 +59,7 @@ Defining `lambda = s2_g / s2_e`, the covariance is `H = lambda*K + I`.
 
 Both compute the centered relatedness matrix:
 
-```
+```text
 K = (1/p) * Xc * Xc'
 ```
 
@@ -115,7 +116,7 @@ ILP64 for large matrices (>46k x 46k). See
 
 Both compute (GEMMA: `LogRL_f`, JAMMA: `reml_log_likelihood`):
 
-```
+```text
 l_REML(lambda) = c - 1/2 log|H| - 1/2 log|W'H^-1 W| - 1/2(n-c-1) log(P_yy)
 ```
 
@@ -125,7 +126,7 @@ In the eigenspace: `H_i = lambda*d_i + 1`, so `log|H| = sum log(lambda*d_i + 1)`
 
 GEMMA `CalcPab` and JAMMA `calc_pab` implement the same recursion:
 
-```
+```text
 Pab[0, (a,b)] = sum_i h_i * Uab[i, (a,b)]
 
 For p = 1, ..., n_cvt+1:
@@ -175,7 +176,7 @@ corresponds to weak-signal SNPs where test statistics are small.
 
 Both compute (GEMMA: `CalcRLWald`, JAMMA: `calc_wald_test`):
 
-```
+```text
 beta = P_xy / P_xx
 tau  = df / Px_yy
 SE   = sqrt(1 / (tau * P_xx))
@@ -203,7 +204,7 @@ approximations. **Observed**: max relative p-value difference = 2.20e-6.
 
 Both compute (GEMMA: `CalcRLScore`, JAMMA: `calc_score_test`):
 
-```
+```text
 F_score = n * P_xy^2 / (P_yy * P_xx)
 p_score = Pr(F_1,df > F_score)
 ```
@@ -218,7 +219,7 @@ Uses **null model lambda** (computed once, reused for all SNPs).
 
 Both compute (GEMMA: `CalcLRT`, JAMMA: `calc_lrt_test`):
 
-```
+```text
 LRT   = 2 * (l_MLE(H1) - l_MLE(H0))
 p_lrt = Pr(chi2_1 > LRT)
 ```
@@ -342,6 +343,7 @@ eigendecomposition, REML optimization, Wald/Score/LRT statistics — uses
 algebraically identical formulas in both JAMMA and GEMMA.
 
 **Bounded Differences**: All numerical differences arise from:
+
 1. IEEE-754 accumulation order (kinship, Pab)
 2. Optimizer convergence: Brent vs golden section, eps ~ 1e-5
 3. Flat MLE landscapes on weak-signal SNPs (logl_H1 only)
@@ -357,4 +359,4 @@ Reference data: `tests/fixtures/`
 
 ---
 
-*Last updated: 2026-03-19*
+Document last updated: *2026-03-19*.

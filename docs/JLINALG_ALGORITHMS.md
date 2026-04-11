@@ -29,7 +29,7 @@ matrix multiplication", ACM TOMS.
 
 ### Three Blocking Levels
 
-```
+```text
 for jc = 0..N step NC:          # JC loop (L3: packed_B panel)
   for pc = 0..K step KC:        # PC loop (L1: packed_A column)
     Pack B[pc:pc+KC, jc:jc+NC]  # KC x NC -> packed_B (shared, L3-resident)
@@ -80,7 +80,7 @@ its own eigendecomposition implementation.*
 
 The vendor DSYEVD algorithm uses a divide-and-conquer pipeline:
 
-```
+```text
 K  -->  DSYTRD  -->  (d, e, tau)  -->  DSTEDC  -->  (eigenvalues, Q)  -->  DORMTR  -->  eigenvectors
        tridiag       diagonal +        D&C on        eigenvalues of T      apply         eigenvectors
        reduction      off-diag +       tridiag        + eigenvectors       Householder   of original K
@@ -92,7 +92,7 @@ K  -->  DSYTRD  -->  (d, e, tau)  -->  DSTEDC  -->  (eigenvalues, Q)  -->  DORMT
 Reduces the N x N symmetric matrix K to tridiagonal form T using Householder
 reflectors:
 
-```
+```text
 K = Q_h * T * Q_h^T
 ```
 
@@ -104,7 +104,7 @@ Each block applies NB Householder reflectors using an unblocked panel
 factorization (`DSYTD2`), then performs a deferred trailing update via
 `DSYR2K`:
 
-```
+```text
 A_trail -= V @ W.T + W @ V.T
 ```
 
@@ -125,7 +125,7 @@ matrices this is efficient and numerically stable.
 **Recursive case** (N > 64): Split T into two halves T_1 and T_2 plus a
 rank-1 correction:
 
-```
+```text
 T = [[T_1,  0 ],    +  rho * z * z^T
      [0,  T_2]]
 ```
@@ -136,7 +136,7 @@ constructed from the last row of Q_1 and first row of Q_2.
 After recursively solving T_1 and T_2, the merged eigenvalues are found by
 solving the **secular equation**:
 
-```
+```text
 f(lambda) = 1 + rho * sum_k( z_k^2 / (d_k - lambda) ) = 0
 ```
 
@@ -157,7 +157,7 @@ cluster.
 **PSI/PHI split evaluation:** The secular function is split into two sums
 around the target root:
 
-```
+```text
 PSI(lambda) = sum_{k < target} z_k^2 / (d_k - lambda)
 PHI(lambda) = sum_{k >= target} z_k^2 / (d_k - lambda)
 ```
@@ -176,6 +176,7 @@ fallback.
 product formula.
 
 **Special cases:**
+
 - N=1: trivial (single eigenvalue)
 - N=2: `dlaed5` solves the 2x2 secular equation analytically using rho and
   z^2 formulas with a W-test branch for numerical stability
@@ -188,7 +189,7 @@ the symmetric tridiagonal eigenproblem", SIAM J. Matrix Anal. Appl.
 After finding the eigenvalues, eigenvectors of the merged problem are
 computed using the Gu-Eisenstat weight product formula:
 
-```
+```text
 v_j = z_j * product_{k != j}( delta_mat[j][k] / (d[k] - d[j]) )
 ```
 
@@ -199,7 +200,7 @@ catastrophic cancellation when eigenvalues cluster.
 
 ### Deflation
 
-Near-degenerate eigenvalues (|d_i - d_j| < 8 * eps * ||T||_2) are deflated:
+Near-degenerate eigenvalues (|d_i - d_j| < 8 *eps* ||T||_2) are deflated:
 their eigenvectors are determined by Givens rotations rather than the secular
 equation. This prevents the secular solver from encountering near-coincident
 poles.
@@ -209,7 +210,7 @@ poles.
 Applies the Householder reflectors from DSYTRD to transform the eigenvectors
 of T back to eigenvectors of the original K:
 
-```
+```text
 U = Q_h * Q_dc
 ```
 
@@ -254,6 +255,7 @@ values, which is faster when only the spectrum is needed.
 
 Vendor LAPACK computes QR via DGEQRF + DORGQR. The factorization computes
 A = Q * R where:
+
 - Q is m x n with orthonormal columns (the "thin" Q)
 - R is n x n upper triangular
 

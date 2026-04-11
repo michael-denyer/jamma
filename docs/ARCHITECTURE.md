@@ -81,7 +81,7 @@ A typical LMM association run proceeds as follows:
 
 ## Directory Structure Rationale
 
-```
+```text
 src/jamma/
 ├── cli.py                  # Click CLI; maps GEMMA flags to PipelineConfig
 ├── gwas.py                 # Public Python API (gwas() function)

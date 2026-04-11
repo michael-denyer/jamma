@@ -133,6 +133,7 @@ addopts = "-n 3 --randomly-seed=last --benchmark-skip -m 'not slow and not tier2
 ```
 
 Key settings:
+
 - `-n 3` — parallelism capped at 3 workers. Do not override with `-n auto`; it spawns too many workers and contaminates BLAS-threaded tests.
 - `--randomly-seed=last` — repeatable random ordering for debugging.
 - Tests are tiered: `tier0` (fast unit), `tier1` (GEMMA parity), `tier2`/`tier3` (scale tests, excluded from CI by default).
@@ -244,6 +245,7 @@ docker run --platform linux/amd64 \
 ```
 
 The Docker build installs dependencies in this order to preserve the ILP64 numpy:
+
 1. `mkl` — Intel MKL runtime libraries
 2. `numpy` with `--index-url https://michael-denyer.github.io/numpy-mkl` — ILP64 build
 3. Runtime dependencies (`psutil`, `loguru`, `threadpoolctl`, `click`, `progressbar2`, `bed-reader`)

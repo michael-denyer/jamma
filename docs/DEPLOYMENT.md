@@ -122,9 +122,11 @@ the deployment.
 2. Update `CHANGELOG.md` — move Unreleased items into a new version section.
 3. Commit and push to `master`.
 4. Create a GitHub release:
+
    ```bash
    gh release create v<X.Y.Z> --title "v<X.Y.Z>" --notes "..."
    ```
+
 5. The `build-wheels.yml` workflow fires automatically on the published event and
    uploads to PyPI.
 

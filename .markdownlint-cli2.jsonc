@@ -1,0 +1,56 @@
+{
+  // markdownlint-cli2 configuration. Consumed by the pre-commit hook and
+  // the CI markdown-lint job — both run the same binary with the same
+  // config so the two cannot drift (same consistency rule as lychee.toml).
+  //
+  // See https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md
+  // for the full rule list.
+  "config": {
+    // MD013: line length. Disabled because CHANGELOG entries, tables,
+    // and code samples routinely exceed 80 chars; hard-wrapping prose
+    // makes diffs noisier without improving readability.
+    "MD013": false,
+
+    // MD024: multiple headings with the same content. Enable with
+    // siblings_only so CHANGELOG-style "### Added / ### Fixed" under
+    // different version sections is fine, but actual in-section
+    // duplicates still fail.
+    "MD024": { "siblings_only": true },
+
+    // MD033: inline HTML. JAMMA docs use <details>/<summary> and a few
+    // HTML anchors — legitimate usage, don't block.
+    "MD033": false,
+
+    // MD034: bare URLs. Acceptable in CHANGELOG and tables where
+    // shortening to a link would hurt scanability.
+    "MD034": false,
+
+    // MD041: first line in a file should be a top-level heading.
+    // Many section docs (e.g. JLINALG_ALGORITHMS.md) legitimately
+    // start with a "Generated from ..." note or frontmatter-like line.
+    "MD041": false,
+
+    // MD051: link fragments must exist in the target file. Lychee
+    // handles anchor validation more reliably — disable here to avoid
+    // double-reporting noise.
+    "MD051": false
+  },
+  "globs": [
+    "**/*.md"
+  ],
+  "ignores": [
+    ".venv/**",
+    ".planning/**",
+    ".beads/**",
+    ".claude/**",
+    ".code-review-graph/**",
+    "node_modules/**",
+    "dist/**",
+    "build/**",
+    "target/**",
+    // Upstream GPL boilerplate — do not reformat.
+    "LICENSE.md",
+    // Local-only, gitignored. Not shipped in the repo.
+    "CLAUDE.md"
+  ]
+}

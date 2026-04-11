@@ -1,0 +1,41 @@
+name: Security
+
+# OSV vulnerability scanner.
+#
+# Runs on every PR/push AND on a daily cron at 07:00 UTC. The cron is
+# what catches CVEs published between PR activity — without it, a
+# vulnerability disclosed today only gets flagged the next time someone
+# opens a PR. Scanning uv.lock is cheap (~10s) so daily is fine.
+#
+# Kept in its own workflow (not ci.yml) so the cron only runs the
+# scanner, not the full test matrix. Failures are surfaced in the
+# workflow run summary; no auto-issue-opening for now — OSV results
+# include severity and remediation hints that are better read inline.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vuln-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+
+      - name: Run OSV Scanner
+        uses: google/osv-scanner-action/osv-scanner-action@c51854704019a247608d928f370c98740469d4b5  # v2.3.5
+        with:
+          scan-args: |-
+            --lockfile=uv.lock

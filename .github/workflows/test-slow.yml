@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded runs — slow tests take ~20 min each so this is the
+# highest-value cancellation target.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test-slow:
     runs-on: ubuntu-latest

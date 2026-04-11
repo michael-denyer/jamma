@@ -22,7 +22,7 @@ JAMMA delivers the same statistical results as GEMMA while solving practical pro
 
 GEMMA loads everything into memory and lets the OS handle failure:
 
-```
+```bash
 $ gemma -bfile large_study -gk 1
 # ... runs for 20 minutes ...
 Killed
@@ -34,7 +34,7 @@ No warning. No error message. Just `Killed` from the OOM killer. You've lost 20 
 
 JAMMA checks memory requirements BEFORE allocation:
 
-```
+```bash
 $ jamma -bfile large_study -gk 1
 MemoryError: Eigendecomposition requires 640.0 GB but only 512.0 GB available.
   Kinship matrix: 640.0 GB (n=200000 samples)
@@ -44,6 +44,7 @@ Suggestion: Use a larger instance or streaming mode.
 ```
 
 **Key features:**
+
 - Pre-flight memory estimation before any large allocation
 - Clear breakdown of where memory goes
 - Actionable suggestions for resolution
@@ -79,6 +80,7 @@ results = run_lmm_association_numpy_streaming(
 ```
 
 **Memory profile:**
+
 - Peak is eigendecomposition: n^2 x 8 bytes x ~2 (K + workspace)
 - Genotype chunks: chunk_size x n x 8 bytes (transient)
 - Results written incrementally to disk (no accumulation)
@@ -154,19 +156,19 @@ That's it. Pure Python with an optional C extension (auto-compiled on first use)
 
 ### GEMMA Errors
 
-```
+```text
 Segmentation fault (core dumped)
 ```
 
 or
 
-```
+```text
 ERROR: error! number of columns in the kinship matrix
 ```
 
 ### JAMMA Errors
 
-```
+```text
 ValueError: Covariate file row 15, column 3: cannot parse 'NA' as numeric
   Hint: Use 'NA' (case-sensitive) for missing values
 
@@ -179,6 +181,7 @@ MemoryError: LMM association requires 45.2 GB but only 32.0 GB available.
 ```
 
 Every error includes:
+
 - What went wrong
 - Where it happened
 - How to fix it

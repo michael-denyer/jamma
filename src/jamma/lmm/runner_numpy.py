@@ -607,7 +607,13 @@ def run_lmm_association_numpy(
         )
 
     if check_memory:
-        est = estimate_lmm_memory(n_samples, n_snps)
+        # Propagate n_cvt so the preflight correctly sizes Uab/Iab for
+        # multi-covariate runs. Otherwise the estimator silently uses its
+        # n_cvt=1 default and can let a multi-covariate run pass preflight
+        # before OOMing at the real allocation. Intercept column counts as
+        # a covariate, so minimum is 1 when no user covariates are passed.
+        n_cvt = covariates.shape[1] if covariates is not None else 1
+        est = estimate_lmm_memory(n_samples, n_snps, n_cvt=n_cvt)
         logger.info(
             f"LMM memory: estimated {est.total_gb:.1f}GB, "
             f"available {est.available_gb:.1f}GB"

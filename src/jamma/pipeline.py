@@ -1032,7 +1032,7 @@ class PipelineRunner:
             from jamma.core.memory import estimate_lmm_memory
 
             if self.config.check_memory:
-                est = estimate_lmm_memory(n_valid, n_snps)
+                est = estimate_lmm_memory(n_valid, n_snps, n_cvt=n_cvt)
                 logger.info(
                     f"Memory estimate ({plan.runner_name}): "
                     f"{est.total_gb:.1f}GB required, "

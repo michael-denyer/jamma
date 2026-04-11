@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Batch LMM memory preflight now propagates `n_cvt` to `estimate_lmm_memory`
+  at both call sites (`PipelineRunner._run_inner` batch branch and
+  `run_lmm_association_numpy`). Previously these passed only
+  `(n_samples, n_snps)`, silently defaulting `n_cvt=1`, so multi-covariate
+  runs could pass the preflight and then OOM at the real `Uab_batch` /
+  `Iab_batch` allocations (which scale with `n_cvt`). The streaming branch
+  was already correct.
+
+### Known Issues
+
+- Document LOCO + `--legacy-text` gap in `docs/GEMMA_DIVERGENCES.md` §13:
+  `run_lmm_loco()` does not accept `legacy_text`, so LOCO eigen and kinship
+  artifacts are always written as `.npy` regardless of the flag. This is a
+  file-format gap with no numerical impact; tracked for separate fix.
+
 ## [5.1.5] - 2026-04-11
 
 ### Added

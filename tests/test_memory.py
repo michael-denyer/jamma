@@ -433,6 +433,40 @@ class TestKinshipDtypeAccounting:
         expected_gb = n_samples * n_snps * 8 / 1e9
         assert abs(est.genotypes_gb - expected_gb) < 1e-9
 
+    def test_lmm_batch_gb_grows_with_n_cvt(self):
+        """estimate_lmm_memory.lmm_batch_gb must grow with n_cvt.
+
+        Regression: callers that forget to pass n_cvt silently get the
+        default (n_cvt=1) estimate, which underestimates Uab/Iab for
+        multi-covariate runs and lets preflight pass before the real
+        allocation OOMs. The estimator itself correctly scales with
+        n_cvt — this test pins that contract so any fix that re-breaks
+        it fails loudly.
+        """
+        n_samples = 10_000
+        batch_size = 5_000
+
+        est_1 = estimate_lmm_memory(
+            n_samples, 1_000, lmm_batch_size=batch_size, n_cvt=1
+        )
+        est_5 = estimate_lmm_memory(
+            n_samples, 1_000, lmm_batch_size=batch_size, n_cvt=5
+        )
+        est_20 = estimate_lmm_memory(
+            n_samples, 1_000, lmm_batch_size=batch_size, n_cvt=20
+        )
+
+        # lmm_batch_gb is the only component that depends on n_cvt;
+        # all other fields (eigenvectors, genotypes, etc.) are invariant.
+        assert est_5.lmm_batch_gb > est_1.lmm_batch_gb, (
+            f"n_cvt=5 ({est_5.lmm_batch_gb:.4f}GB) should exceed "
+            f"n_cvt=1 ({est_1.lmm_batch_gb:.4f}GB)"
+        )
+        assert est_20.lmm_batch_gb > est_5.lmm_batch_gb, (
+            f"n_cvt=20 ({est_20.lmm_batch_gb:.4f}GB) should exceed "
+            f"n_cvt=5 ({est_5.lmm_batch_gb:.4f}GB)"
+        )
+
 
 @pytest.mark.tier0
 class TestGateCorrectnessLmmMemory:

@@ -740,6 +740,10 @@ def compute_kinship_streaming(
 
         # Extract only filtered columns (fancy indexing produces a copy)
         X_chunk = chunk[:, chunk_filtered_indices]
+        assert X_chunk.dtype == np.float64, (
+            f"kinship accumulation requires float64 chunks (got {X_chunk.dtype}); "
+            "check stream_genotype_chunks dtype arg"
+        )
 
         # Impute and center the chunk
         X_centered = impute_and_center(X_chunk)
@@ -958,6 +962,10 @@ def _stream_s_full_and_chr(
             continue
 
         X_chunk = chunk[:, chunk_filtered_local]
+        assert X_chunk.dtype == np.float64, (
+            f"kinship accumulation requires float64 chunks (got {X_chunk.dtype}); "
+            "check stream_genotype_chunks dtype arg"
+        )
 
         # Subset rows to valid samples before centering.
         # Centering must use the valid-sample mean (not the full-sample mean)

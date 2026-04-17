@@ -51,6 +51,19 @@ def _make_assoc(
     )
 
 
+# Unique per-column sentinel values — a field-offset bug swaps columns, and
+# distinct values make swaps visible. Columns use 0.11, 0.22, 0.33, ...
+_SENTINEL_AF = 0.11
+_SENTINEL_BETA = 0.22
+_SENTINEL_SE = 0.33
+_SENTINEL_LOGL = -100.44  # negative to distinguish from positives
+_SENTINEL_L_REMLE = 0.55
+_SENTINEL_L_MLE = 0.66
+_SENTINEL_P_WALD = 0.0077  # p-values distinct from other floats
+_SENTINEL_P_LRT = 0.0088
+_SENTINEL_P_SCORE = 0.0099
+
+
 def _write_wald_full(path, rows):
     """Write Wald-full format (.assoc.txt) with logl_H1."""
     cols = [
@@ -123,6 +136,26 @@ def _write_lrt(path, rows):
             f.write("\t".join(str(v) for v in r) + "\n")
 
 
+def _write_lrt_full(path, rows):
+    """Write LRT-full format with logl_H1."""
+    cols = [
+        "chr",
+        "rs",
+        "ps",
+        "n_miss",
+        "allele1",
+        "allele0",
+        "af",
+        "logl_H1",
+        "l_mle",
+        "p_lrt",
+    ]
+    with open(path, "w") as f:
+        f.write("\t".join(cols) + "\n")
+        for r in rows:
+            f.write("\t".join(str(v) for v in r) + "\n")
+
+
 def _write_all_tests(path, rows):
     """Write all-tests format (no logl_H1)."""
     cols = [
@@ -135,6 +168,31 @@ def _write_all_tests(path, rows):
         "af",
         "beta",
         "se",
+        "l_remle",
+        "l_mle",
+        "p_wald",
+        "p_lrt",
+        "p_score",
+    ]
+    with open(path, "w") as f:
+        f.write("\t".join(cols) + "\n")
+        for r in rows:
+            f.write("\t".join(str(v) for v in r) + "\n")
+
+
+def _write_all_tests_full(path, rows):
+    """Write all-tests-full format with logl_H1."""
+    cols = [
+        "chr",
+        "rs",
+        "ps",
+        "n_miss",
+        "allele1",
+        "allele0",
+        "af",
+        "beta",
+        "se",
+        "logl_H1",
         "l_remle",
         "l_mle",
         "p_wald",
@@ -169,12 +227,12 @@ class TestLoadGemmaAssoc:
                     "0",
                     "A",
                     "G",
-                    "0.3",
-                    "0.5",
-                    "0.1",
-                    "-100.0",
-                    "0.5",
-                    "0.01",
+                    _SENTINEL_AF,
+                    _SENTINEL_BETA,
+                    _SENTINEL_SE,
+                    _SENTINEL_LOGL,
+                    _SENTINEL_L_REMLE,
+                    _SENTINEL_P_WALD,
                 ],
             ],
         )
@@ -186,12 +244,12 @@ class TestLoadGemmaAssoc:
         assert r.rs == "rs1"
         assert r.ps == 1000
         assert r.n_miss == 0
-        assert r.af == pytest.approx(0.3)
-        assert r.beta == pytest.approx(0.5)
-        assert r.se == pytest.approx(0.1)
-        assert r.logl_H1 == pytest.approx(-100.0)
-        assert r.l_remle == pytest.approx(0.5)
-        assert r.p_wald == pytest.approx(0.01)
+        assert r.af == pytest.approx(_SENTINEL_AF)
+        assert r.beta == pytest.approx(_SENTINEL_BETA)
+        assert r.se == pytest.approx(_SENTINEL_SE)
+        assert r.logl_H1 == pytest.approx(_SENTINEL_LOGL)
+        assert r.l_remle == pytest.approx(_SENTINEL_L_REMLE)
+        assert r.p_wald == pytest.approx(_SENTINEL_P_WALD)
 
     def test_wald_short_format(self, tmp_path):
         """Parse Wald-short format (no logl_H1)."""
@@ -199,15 +257,31 @@ class TestLoadGemmaAssoc:
         _write_wald_short(
             path,
             [
-                ["1", "rs1", "1000", "0", "A", "G", "0.3", "0.5", "0.1", "0.5", "0.01"],
+                [
+                    "1",
+                    "rs1",
+                    "1000",
+                    "0",
+                    "A",
+                    "G",
+                    _SENTINEL_AF,
+                    _SENTINEL_BETA,
+                    _SENTINEL_SE,
+                    _SENTINEL_L_REMLE,
+                    _SENTINEL_P_WALD,
+                ],
             ],
         )
         results = load_gemma_assoc(path)
 
         assert len(results) == 1
-        assert results[0].logl_H1 is None
-        assert results[0].l_remle == pytest.approx(0.5)
-        assert results[0].p_wald == pytest.approx(0.01)
+        r = results[0]
+        assert r.af == pytest.approx(_SENTINEL_AF)
+        assert r.beta == pytest.approx(_SENTINEL_BETA)
+        assert r.se == pytest.approx(_SENTINEL_SE)
+        assert r.logl_H1 is None
+        assert r.l_remle == pytest.approx(_SENTINEL_L_REMLE)
+        assert r.p_wald == pytest.approx(_SENTINEL_P_WALD)
 
     def test_score_format(self, tmp_path):
         """Parse Score test format."""
@@ -215,15 +289,30 @@ class TestLoadGemmaAssoc:
         _write_score(
             path,
             [
-                ["1", "rs1", "1000", "0", "A", "G", "0.3", "0.5", "0.1", "0.05"],
+                [
+                    "1",
+                    "rs1",
+                    "1000",
+                    "0",
+                    "A",
+                    "G",
+                    _SENTINEL_AF,
+                    _SENTINEL_BETA,
+                    _SENTINEL_SE,
+                    _SENTINEL_P_SCORE,
+                ],
             ],
         )
         results = load_gemma_assoc(path)
 
         assert len(results) == 1
-        assert results[0].p_score == pytest.approx(0.05)
-        assert results[0].p_wald is None
-        assert results[0].logl_H1 is None
+        r = results[0]
+        assert r.af == pytest.approx(_SENTINEL_AF)
+        assert r.beta == pytest.approx(_SENTINEL_BETA)
+        assert r.se == pytest.approx(_SENTINEL_SE)
+        assert r.p_score == pytest.approx(_SENTINEL_P_SCORE)
+        assert r.p_wald is None
+        assert r.logl_H1 is None
 
     def test_lrt_format(self, tmp_path):
         """Parse LRT format."""
@@ -231,16 +320,62 @@ class TestLoadGemmaAssoc:
         _write_lrt(
             path,
             [
-                ["1", "rs1", "1000", "0", "A", "G", "0.3", "0.8", "0.02"],
+                [
+                    "1",
+                    "rs1",
+                    "1000",
+                    "0",
+                    "A",
+                    "G",
+                    _SENTINEL_AF,
+                    _SENTINEL_L_MLE,
+                    _SENTINEL_P_LRT,
+                ],
             ],
         )
         results = load_gemma_assoc(path)
 
         assert len(results) == 1
-        assert results[0].l_mle == pytest.approx(0.8)
-        assert results[0].p_lrt == pytest.approx(0.02)
-        assert math.isnan(results[0].beta)
-        assert math.isnan(results[0].se)
+        r = results[0]
+        assert r.af == pytest.approx(_SENTINEL_AF)
+        assert r.l_mle == pytest.approx(_SENTINEL_L_MLE)
+        assert r.p_lrt == pytest.approx(_SENTINEL_P_LRT)
+        assert math.isnan(r.beta)
+        assert math.isnan(r.se)
+        assert r.logl_H1 is None
+
+    def test_lrt_full_format(self, tmp_path):
+        """Parse LRT-full format with logl_H1 column."""
+        path = tmp_path / "result.assoc.txt"
+        _write_lrt_full(
+            path,
+            [
+                [
+                    "1",
+                    "rs1",
+                    "1000",
+                    "0",
+                    "A",
+                    "G",
+                    _SENTINEL_AF,
+                    _SENTINEL_LOGL,
+                    _SENTINEL_L_MLE,
+                    _SENTINEL_P_LRT,
+                ],
+            ],
+        )
+        results = load_gemma_assoc(path)
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.af == pytest.approx(_SENTINEL_AF)
+        assert r.logl_H1 == pytest.approx(_SENTINEL_LOGL)
+        assert r.l_mle == pytest.approx(_SENTINEL_L_MLE)
+        assert r.p_lrt == pytest.approx(_SENTINEL_P_LRT)
+        assert math.isnan(r.beta)
+        assert math.isnan(r.se)
+        assert r.l_remle is None
+        assert r.p_wald is None
 
     def test_all_tests_format(self, tmp_path):
         """Parse all-tests format (-lmm 4)."""
@@ -255,14 +390,14 @@ class TestLoadGemmaAssoc:
                     "0",
                     "A",
                     "G",
-                    "0.3",
-                    "0.5",
-                    "0.1",
-                    "0.5",
-                    "0.8",
-                    "0.01",
-                    "0.02",
-                    "0.05",
+                    _SENTINEL_AF,
+                    _SENTINEL_BETA,
+                    _SENTINEL_SE,
+                    _SENTINEL_L_REMLE,
+                    _SENTINEL_L_MLE,
+                    _SENTINEL_P_WALD,
+                    _SENTINEL_P_LRT,
+                    _SENTINEL_P_SCORE,
                 ],
             ],
         )
@@ -270,12 +405,54 @@ class TestLoadGemmaAssoc:
 
         assert len(results) == 1
         r = results[0]
-        assert r.p_wald == pytest.approx(0.01)
-        assert r.p_lrt == pytest.approx(0.02)
-        assert r.p_score == pytest.approx(0.05)
-        assert r.l_remle == pytest.approx(0.5)
-        assert r.l_mle == pytest.approx(0.8)
+        assert r.af == pytest.approx(_SENTINEL_AF)
+        assert r.beta == pytest.approx(_SENTINEL_BETA)
+        assert r.se == pytest.approx(_SENTINEL_SE)
+        assert r.l_remle == pytest.approx(_SENTINEL_L_REMLE)
+        assert r.l_mle == pytest.approx(_SENTINEL_L_MLE)
+        assert r.p_wald == pytest.approx(_SENTINEL_P_WALD)
+        assert r.p_lrt == pytest.approx(_SENTINEL_P_LRT)
+        assert r.p_score == pytest.approx(_SENTINEL_P_SCORE)
         assert r.logl_H1 is None  # all_tests (not all_tests_full)
+
+    def test_all_tests_full_format(self, tmp_path):
+        """Parse all-tests-full format with logl_H1 column."""
+        path = tmp_path / "result.assoc.txt"
+        _write_all_tests_full(
+            path,
+            [
+                [
+                    "1",
+                    "rs1",
+                    "1000",
+                    "0",
+                    "A",
+                    "G",
+                    _SENTINEL_AF,
+                    _SENTINEL_BETA,
+                    _SENTINEL_SE,
+                    _SENTINEL_LOGL,
+                    _SENTINEL_L_REMLE,
+                    _SENTINEL_L_MLE,
+                    _SENTINEL_P_WALD,
+                    _SENTINEL_P_LRT,
+                    _SENTINEL_P_SCORE,
+                ],
+            ],
+        )
+        results = load_gemma_assoc(path)
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.af == pytest.approx(_SENTINEL_AF)
+        assert r.beta == pytest.approx(_SENTINEL_BETA)
+        assert r.se == pytest.approx(_SENTINEL_SE)
+        assert r.logl_H1 == pytest.approx(_SENTINEL_LOGL)
+        assert r.l_remle == pytest.approx(_SENTINEL_L_REMLE)
+        assert r.l_mle == pytest.approx(_SENTINEL_L_MLE)
+        assert r.p_wald == pytest.approx(_SENTINEL_P_WALD)
+        assert r.p_lrt == pytest.approx(_SENTINEL_P_LRT)
+        assert r.p_score == pytest.approx(_SENTINEL_P_SCORE)
 
     def test_multiple_snps(self, tmp_path):
         """Parse file with multiple SNPs."""
@@ -394,17 +571,60 @@ class TestCompareAssocResults:
         assert comparison.beta.passed is False
 
     def test_snp_count_mismatch(self):
-        """Different number of SNPs should fail."""
+        """Different number of SNPs populates the early-return skip fields."""
         actual = [_make_assoc(rs="rs1")]
         expected = [_make_assoc(rs="rs1"), _make_assoc(rs="rs2")]
 
         comparison = compare_assoc_results(actual, expected)
 
+        # Overall fails; beta carries the mismatch diagnostic
         assert comparison.passed is False
+        assert comparison.n_snps == 1  # reports len(actual)
+        assert comparison.beta.passed is False
         assert "SNP count mismatch" in comparison.beta.message
+        assert comparison.beta.max_abs_diff == float("inf")
 
-    def test_snp_id_mismatch_detected(self):
-        """Mismatched SNP IDs should be reported."""
+        # All other Wald-always-present fields must carry the skip result
+        skip_substr = "Skipped due to SNP count mismatch"
+        for field in (
+            comparison.se,
+            comparison.p_wald,
+            comparison.logl_H1,
+            comparison.l_remle,
+            comparison.af,
+        ):
+            assert field.passed is True  # skipped results pass vacuously
+            assert skip_substr in field.message
+
+        # Wald-test input → score/lrt/mle should be None (not present in test type)
+        assert comparison.p_score is None
+        assert comparison.p_lrt is None
+        assert comparison.l_mle is None
+
+        # No IDs populated because early-return skips the ID-diff loop
+        assert comparison.mismatched_snps == []
+
+    def test_snp_count_mismatch_all_tests_populates_optional_fields(self):
+        """SNP-count-mismatch in all-tests mode populates p_score/p_lrt/l_mle skips."""
+        actual = [_make_assoc(rs="rs1", p_score=0.05, p_lrt=0.02, l_mle=0.8)]
+        expected = [
+            _make_assoc(rs="rs1", p_score=0.05, p_lrt=0.02, l_mle=0.8),
+            _make_assoc(rs="rs2", p_score=0.06, p_lrt=0.03, l_mle=0.9),
+        ]
+
+        comparison = compare_assoc_results(actual, expected)
+
+        assert comparison.passed is False
+        # All-tests detected → optional fields must be skip-results, not None
+        assert comparison.p_score is not None
+        assert comparison.p_lrt is not None
+        assert comparison.l_mle is not None
+        assert "Skipped due to SNP count mismatch" in comparison.p_score.message
+        assert "Skipped due to SNP count mismatch" in comparison.p_lrt.message
+        assert "Skipped due to SNP count mismatch" in comparison.l_mle.message
+
+    def test_snp_id_mismatch_fails_overall(self):
+        """Mismatched SNP IDs populate the list AND fail overall comparison."""
         actual = [_make_assoc(rs="rs1"), _make_assoc(rs="rs_X")]
         expected = [_make_assoc(rs="rs1"), _make_assoc(rs="rs2")]
 
@@ -412,9 +632,39 @@ class TestCompareAssocResults:
 
         assert len(comparison.mismatched_snps) == 1
         assert "rs_X!=rs2" in comparison.mismatched_snps[0]
+        # The mismatched-ID list must force overall failure even if values match
+        assert comparison.passed is False
 
-    def test_score_test_detection(self):
-        """Score test results skip Wald-specific columns."""
+    def test_score_test_with_real_difference_fails(self):
+        """Score-test detection runs the comparison (not a tautological pass)."""
+        actual = [
+            _make_assoc(
+                rs="rs1",
+                p_wald=None,
+                logl_H1=None,
+                l_remle=None,
+                p_score=0.05,
+            ),
+        ]
+        # Large p_score difference (50x): way beyond any reasonable tolerance
+        expected = [
+            _make_assoc(
+                rs="rs1",
+                p_wald=None,
+                logl_H1=None,
+                l_remle=None,
+                p_score=2.5,
+            ),
+        ]
+
+        comparison = compare_assoc_results(actual, expected)
+
+        assert comparison.passed is False
+        assert comparison.p_score is not None
+        assert comparison.p_score.passed is False
+
+    def test_score_test_detection_skips_wald(self):
+        """Score-test detection skips Wald-specific columns with a skip message."""
         results = [
             _make_assoc(
                 rs="rs1",
@@ -430,8 +680,42 @@ class TestCompareAssocResults:
         assert comparison.passed is True
         assert comparison.p_score is not None
         assert comparison.p_score.passed is True
-        assert comparison.p_wald.passed is True  # skipped → passes
+        assert comparison.p_wald.passed is True  # skipped → passes vacuously
         assert "skipped" in comparison.p_wald.message.lower()
+
+    def test_lrt_with_real_difference_fails(self):
+        """LRT detection runs the comparison (not a tautological pass)."""
+        actual = [
+            _make_assoc(
+                rs="rs1",
+                beta=float("nan"),
+                se=float("nan"),
+                p_wald=None,
+                logl_H1=None,
+                l_remle=None,
+                p_lrt=0.02,
+                l_mle=0.8,
+            ),
+        ]
+        # Large p_lrt difference (25x): way beyond p_lrt_rtol (5e-3)
+        expected = [
+            _make_assoc(
+                rs="rs1",
+                beta=float("nan"),
+                se=float("nan"),
+                p_wald=None,
+                logl_H1=None,
+                l_remle=None,
+                p_lrt=0.5,
+                l_mle=0.8,
+            ),
+        ]
+
+        comparison = compare_assoc_results(actual, expected)
+
+        assert comparison.passed is False
+        assert comparison.p_lrt is not None
+        assert comparison.p_lrt.passed is False
 
     def test_lrt_test_detection(self):
         """LRT results compare p_lrt and l_mle, skip Wald columns."""
@@ -455,6 +739,38 @@ class TestCompareAssocResults:
         assert comparison.p_lrt.passed is True
         assert comparison.l_mle is not None
         assert comparison.l_mle.passed is True
+
+    def test_all_tests_with_real_difference_fails(self):
+        """All-tests mode runs the comparison (not a tautological pass)."""
+        actual = [
+            _make_assoc(
+                rs="rs1",
+                p_wald=0.01,
+                p_lrt=0.02,
+                p_score=0.05,
+                l_remle=0.5,
+                l_mle=0.8,
+                logl_H1=-100.0,
+            ),
+        ]
+        # Large p_score difference
+        expected = [
+            _make_assoc(
+                rs="rs1",
+                p_wald=0.01,
+                p_lrt=0.02,
+                p_score=1.5,
+                l_remle=0.5,
+                l_mle=0.8,
+                logl_H1=-100.0,
+            ),
+        ]
+
+        comparison = compare_assoc_results(actual, expected)
+
+        assert comparison.passed is False
+        assert comparison.p_score is not None
+        assert comparison.p_score.passed is False
 
     def test_all_tests_detection(self):
         """All-tests mode (-lmm 4) compares all column types."""
@@ -501,8 +817,8 @@ class TestCompareAssocResults:
 
         assert comparison.af.passed is True
 
-    def test_lambda_boundary_handling(self):
-        """Lambda values at optimization boundary should be excluded."""
+    def test_lambda_boundary_all_at_lower_bound(self):
+        """Lambda values all at REML lower boundary should be skipped."""
         actual = [_make_assoc(rs="rs1", l_remle=1e-5)]
         expected = [_make_assoc(rs="rs1", l_remle=1e-5)]
 
@@ -510,6 +826,81 @@ class TestCompareAssocResults:
 
         assert comparison.passed is True
         assert "boundary" in comparison.l_remle.message.lower()
+
+    def test_lambda_boundary_partial_in_all_tests(self):
+        """Partial boundary lambda values: boundary excluded, rest compared."""
+        # All-tests mode to exercise the boundary branches at compare.py:729-753.
+        # Three SNPs: one at lower boundary (1e-5), two non-boundary (0.5).
+        actual = [
+            _make_assoc(
+                rs="rs1",
+                l_remle=1e-5,
+                l_mle=1e-5,
+                p_wald=0.01,
+                p_lrt=0.02,
+                p_score=0.05,
+            ),
+            _make_assoc(
+                rs="rs2", l_remle=0.5, l_mle=0.5, p_wald=0.01, p_lrt=0.02, p_score=0.05
+            ),
+            _make_assoc(
+                rs="rs3", l_remle=0.5, l_mle=0.5, p_wald=0.01, p_lrt=0.02, p_score=0.05
+            ),
+        ]
+        expected = [
+            _make_assoc(
+                rs="rs1",
+                l_remle=1e-5,
+                l_mle=1e-5,
+                p_wald=0.01,
+                p_lrt=0.02,
+                p_score=0.05,
+            ),
+            _make_assoc(
+                rs="rs2", l_remle=0.5, l_mle=0.5, p_wald=0.01, p_lrt=0.02, p_score=0.05
+            ),
+            _make_assoc(
+                rs="rs3", l_remle=0.5, l_mle=0.5, p_wald=0.01, p_lrt=0.02, p_score=0.05
+            ),
+        ]
+
+        comparison = compare_assoc_results(actual, expected)
+
+        assert comparison.passed is True
+        # Partial-boundary branch emits "excluding N boundary values"
+        assert "excluding 1 boundary values" in comparison.l_remle.message
+        assert comparison.l_mle is not None
+        assert "excluding 1 boundary values" in comparison.l_mle.message
+
+    def test_lambda_boundary_l_mle_upper_bound(self):
+        """l_mle at upper boundary (>= 1e4) is excluded but l_remle is not."""
+        # Upper bound applies only to l_mle (MLE), not l_remle (REML).
+        # This exercises the MLE-specific upper-bound check at compare.py:762-768.
+        # Use two SNPs so the excluded one can be filtered while the other is compared.
+        actual = [
+            _make_assoc(
+                rs="rs1", l_remle=0.5, l_mle=1e5, p_wald=0.01, p_lrt=0.02, p_score=0.05
+            ),
+            _make_assoc(
+                rs="rs2", l_remle=0.5, l_mle=0.5, p_wald=0.01, p_lrt=0.02, p_score=0.05
+            ),
+        ]
+        expected = [
+            _make_assoc(
+                rs="rs1", l_remle=0.5, l_mle=1e5, p_wald=0.01, p_lrt=0.02, p_score=0.05
+            ),
+            _make_assoc(
+                rs="rs2", l_remle=0.5, l_mle=0.5, p_wald=0.01, p_lrt=0.02, p_score=0.05
+            ),
+        ]
+
+        comparison = compare_assoc_results(actual, expected)
+
+        assert comparison.passed is True
+        # l_mle had one boundary value excluded; l_remle had none
+        assert comparison.l_mle is not None
+        assert "excluding 1 boundary values" in comparison.l_mle.message
+        assert "boundary" not in comparison.l_remle.message.lower()
 
     def test_result_dataclass_fields(self):
         """AssocComparisonResult has expected fields."""

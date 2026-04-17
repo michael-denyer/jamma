@@ -65,15 +65,14 @@ graph LR
         A["blas_dispatch.c"]
         B["System BLAS\nRTLD_DEFAULT +\nnumpy scan"]
         C["pip-install MKL\nsite-packages/\nmkl.libs/"]
-        D["Co-located BLIS\ndladdr-relative"]
-        A --> B --> C --> D
+        A --> B --> C
     end
 
     subgraph SELECT["SELECTION (best wins)"]
         E["NumPy fallback"]
     end
 
-    D --> E
+    C --> E
 
     style DISCOVER fill:#0f3460,stroke:#f5b461,color:#eee,stroke-width:2px
     style SELECT fill:#1a1a2e,stroke:#95a5a6,color:#eee,stroke-width:2px
@@ -81,27 +80,23 @@ graph LR
     style A fill:#e94560,stroke:#c73550,color:#fff
     style B fill:#f5b461,stroke:#d4943f,color:#1a1a2e
     style C fill:#f5b461,stroke:#d4943f,color:#1a1a2e
-    style D fill:#f5b461,stroke:#d4943f,color:#1a1a2e
     style E fill:#95a5a6,stroke:#7f8c8d,color:#1a1a2e
 ```
 
-`blas_dispatch.c` uses a discover-all-then-select-best model. All discovery
+`blas_dispatch.c` uses a discover-all-then-select-best model. Both discovery
 paths run unconditionally:
 
 1. **System BLAS** -- `dlsym(RTLD_DEFAULT, ...)` finds BLAS symbols already
-   loaded in the process, then scans numpy's shared libraries for MKL/BLIS
+   loaded in the process, then scans numpy's shared libraries for MKL
    symbols and `/proc/self/maps` on Linux.
 
 2. **pip-installed MKL** -- Searches `site-packages/mkl.libs/` for
    `libmkl_rt` and loads it with `dlopen`.
 
-3. **Co-located BLIS** -- Uses `dladdr` to find jlinalg's `.so` path and
-   looks for a BLIS shared library relative to it.
-
 The best candidate is selected by priority: ILP64 with LAPACK (dsyevd) >
-ILP64 BLAS-only > NumPy fallback > LP64 (detected but not wired). LP64
-backends are excluded from the dispatch table because different FP
-accumulation order produces results that diverge from GEMMA's tolerances.
+NumPy fallback > LP64 (detected but not wired). LP64 backends are excluded
+from the dispatch table because different FP accumulation order produces
+results that diverge from GEMMA's tolerances.
 
 ## File Structure
 

@@ -7,10 +7,11 @@ numerical behavior, performance characteristics, and debugging.
 
 For architecture and file structure, see [JLINALG_ARCHITECTURE.md](JLINALG_ARCHITECTURE.md).
 
-## 1. Goto/BLIS Three-Level Cache Blocking (vendor DGEMM/DSYRK)
+## 1. Goto Three-Level Cache Blocking (vendor DGEMM/DSYRK)
 
-*This section describes algorithms implemented by vendor BLAS libraries
-(MKL, Accelerate, OpenBLAS, BLIS) that jlinalg dispatches to.*
+*This section describes the cache-blocking algorithm (Goto & van de Geijn 2008,
+refined by Van Zee & van de Geijn 2015) that modern vendor BLAS libraries
+(MKL, Accelerate, OpenBLAS) implement in their DGEMM/DSYRK kernels.*
 
 ### Why Blocking Matters
 
@@ -19,13 +20,14 @@ thrashes the CPU cache hierarchy. For an N x N multiply, the working set is
 3N^2 doubles. At N=1000 that is 24 MB -- far exceeding L1 (32-64 KB) and L2
 (256 KB - 1 MB). Cache misses dominate runtime, leaving the FPU idle.
 
-The Goto/BLIS approach partitions the computation into three nested blocking
+The Goto approach partitions the computation into three nested blocking
 levels, each targeting a cache tier. Within each level, matrix data is
 **packed** (copied into contiguous buffers in a microkernel-friendly layout)
 so that the innermost computation accesses memory sequentially.
 
-**Reference:** Goto & van de Geijn (2008), "Anatomy of high-performance
-matrix multiplication", ACM TOMS.
+**References:** Goto & van de Geijn (2008), "Anatomy of high-performance
+matrix multiplication", ACM TOMS. Van Zee & van de Geijn (2015) generalized
+the framework in the paper cited below.
 
 ### Three Blocking Levels
 

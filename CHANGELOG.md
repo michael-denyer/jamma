@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- BLIS dispatch path from `src/jamma/jlinalg/src/blas_dispatch.c`. The
+  `discover_bundled_blis()` discovery routine, the `is_blis` parameter
+  threaded through six resolver functions, and the co-located
+  `libblis-firestorm.dylib` binary (never tracked in git, never shipped
+  in any wheel) are gone. jlinalg now dispatches to vendor ILP64
+  BLAS/LAPACK (Accelerate on macOS 13.3+, MKL-ILP64 on Linux/Windows via
+  the `michael-denyer/numpy-mkl` index) with NumPy fallback otherwise —
+  no middle tier. BLIS was BLAS-only; eigh fell through to NumPy anyway,
+  so the dispatch path offered no net speedup on any active install.
+  Net: `-184 / +49` lines in `blas_dispatch.c`, plus related cleanup
+  across `jlinalg.h`, two tests, and two core docstrings.
+
 ## [5.1.6] - 2026-04-15
 
 ### Fixed

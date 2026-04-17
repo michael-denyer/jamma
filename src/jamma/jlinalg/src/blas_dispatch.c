@@ -1065,14 +1065,15 @@ static void discover_pip_mkl(blas_candidate_t *c) {
 }
 
 /* ---------------------------------------------------------------------------
- * select_best_backend -- Choose the highest-capability candidate.
+ * Candidate validation and selection
  *
- * Scoring: ILP64 + LAPACK = 4, ILP64 BLAS-only = 3, LP64 = 1, not found = 0
- * Returns pointer to highest-scoring candidate, or NULL if no candidates found.
- * LP64 candidates (score=1) are returned for logging but not wired for dgemm
- * by the caller.
+ * _validate_candidate: ensures capability flags match resolved pointers.
+ * _score_candidate:    ILP64 + LAPACK = 4, ILP64 BLAS-only = 3, LP64 = 1.
+ * select_best_backend: returns highest-scoring candidate (NULL if none).
+ *   LP64 candidates are returned for logging but not wired for dgemm.
  * ---------------------------------------------------------------------------
  */
+
 /* Validate candidate invariants.  Returns 1 if valid, 0 if inconsistent.
  * When invalid, zeros out the candidate (found=0) so it cannot be selected
  * — prevents NULL function pointer dereferences from broken discovery. */
@@ -1149,10 +1150,6 @@ static blas_candidate_t *select_best_backend(blas_candidate_t *system, blas_cand
         best = pip_mkl;
         best_score = s_pip;
     }
-
-    /* LP64-only candidates (score=1) are detected but not wired for dgemm */
-    if (best_score <= 1 && best && !best->is_ilp64)
-        return best; /* Return it so blas_dispatch_init can log the LP64 info */
 
     return best;
 }

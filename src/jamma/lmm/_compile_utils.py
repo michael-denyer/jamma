@@ -1,21 +1,14 @@
-"""Shared utilities for C extension detection and auto-recompilation.
+"""Runtime probes for the ``_lmm_accel`` C extension.
 
-Provides ``is_c_extension_usable`` for lightweight availability probes and
-``auto_recompile_c_extension`` for auto-rebuilding stale/missing C extensions
-at runtime.
-
-``auto_recompile_c_extension`` is canonical in :mod:`jamma.core._compile_utils`
-and re-exported here for backwards compatibility.
+Provides lightweight availability checks used by the LMM runners to decide
+between the C-accelerated and pure-NumPy code paths.
 """
 
 from __future__ import annotations
 
 import importlib
 
-from jamma.core._compile_utils import auto_recompile_c_extension
-
 __all__ = [
-    "auto_recompile_c_extension",
     "get_c_extension_capabilities",
     "is_c_extension_usable",
 ]

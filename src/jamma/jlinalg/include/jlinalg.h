@@ -176,15 +176,15 @@ typedef void (*jlinalg_dgesvd_ilp64_fn)(
     double *work, const long long *lwork,
     long long *info);
 
-/* Initialise external BLAS dispatch: discovers system BLAS, pip MKL, and
- * bundled BLIS, then selects the best candidate.
+/* Initialise external BLAS dispatch: discovers system BLAS and pip MKL,
+ * then selects the best candidate.
  * Called from jlinalg_init() after ISA detection.
  * Returns 0 always (discovery failure is not fatal -- falls back to numpy). */
 int blas_dispatch_init(void);
 
 /* Returns a string identifying the active dgemm backend:
  *   "MKL-ILP64", "MKL-LP64", "OpenBLAS-ILP64", "OpenBLAS-LP64",
- *   "Accelerate", "Accelerate-ILP64", "BLIS", "BLIS-ILP64",
+ *   "Accelerate", "Accelerate-ILP64",
  *   "numpy-fallback", "system-BLAS-ILP64", "system-BLAS-LP64"
  * Never returns NULL. */
 const char *blas_backend_name(void);

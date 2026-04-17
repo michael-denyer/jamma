@@ -1381,12 +1381,6 @@ class TestEighBackendReporting:
                 f"Backend {blas_backend} should have LAPACK "
                 f"but blas_has_dsyevd={blas_has_dsyevd}"
             )
-        # BLIS-ILP64 and jlinalg-own should NOT have LAPACK
-        if blas_backend in ("BLIS-ILP64", "jlinalg-own"):
-            assert blas_has_dsyevd == 0, (
-                f"Backend {blas_backend} should not have LAPACK "
-                f"but blas_has_dsyevd={blas_has_dsyevd}"
-            )
 
     def test_has_dsyevr_flag_exposed(self):
         """blas_has_dsyevr is accessible as an int constant."""

@@ -28,7 +28,7 @@ def _random_matrix(shape: tuple[int, ...]) -> np.ndarray:
 
 @pytest.mark.skipif(
     not jlinalg.blas_has_dgeqrf,
-    reason="vendor LAPACK dgeqrf not available (jlinalg-own / BLIS-ILP64 build)",
+    reason="vendor LAPACK dgeqrf not available (numpy-fallback build)",
 )
 class TestQR:
     """Tests for jlinalg.qr() — reduced QR factorization."""
@@ -127,7 +127,7 @@ class TestQR:
 
 @pytest.mark.skipif(
     not jlinalg.blas_has_dgesvd,
-    reason="vendor LAPACK dgesvd not available (jlinalg-own / BLIS-ILP64 build)",
+    reason="vendor LAPACK dgesvd not available (numpy-fallback build)",
 )
 class TestSVD:
     """Tests for jlinalg.svd() — reduced SVD of tall-skinny matrices."""

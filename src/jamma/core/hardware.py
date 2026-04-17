@@ -28,7 +28,7 @@ def get_hardware_context() -> dict[str, str | int | bool]:
             - cpu_count_physical: Physical (non-hyperthreaded) core count.
             - cpu_count_logical: Logical core count (includes hyperthreading).
             - blas_backend: BLAS library name (e.g. "mkl", "openblas",
-              "accelerate", "blis") or "unknown".
+              "accelerate") or "unknown".
             - blas_threads: Current BLAS thread target.
             - numpy_version: NumPy version string.
             - platform: Full platform string from platform.platform().

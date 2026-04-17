@@ -83,7 +83,7 @@ def _blas_caveat() -> str:
         return ""
     if backend in ("numpy-fallback", "unknown"):
         return " [estimates calibrated to MKL — no vendor BLAS detected, expect slower]"
-    # Some other vendor BLAS (OpenBLAS, Accelerate, BLIS)
+    # Some other vendor BLAS (OpenBLAS, Accelerate)
     return f" [estimates calibrated to MKL — {backend} may differ]"
 
 

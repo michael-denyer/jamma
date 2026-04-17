@@ -738,8 +738,8 @@ def compute_kinship_streaming(
         if valid_indices is not None:
             chunk = chunk[valid_indices, :]
 
-        # Extract only filtered columns (float64 for numerical accuracy)
-        X_chunk = np.asarray(chunk[:, chunk_filtered_indices], dtype=np.float64)
+        # Extract only filtered columns (fancy indexing produces a copy)
+        X_chunk = chunk[:, chunk_filtered_indices]
 
         # Impute and center the chunk
         X_centered = impute_and_center(X_chunk)
@@ -957,7 +957,7 @@ def _stream_s_full_and_chr(
         if S_full is None and not target_chrs_in_chunk:
             continue
 
-        X_chunk = np.asarray(chunk[:, chunk_filtered_local], dtype=np.float64)
+        X_chunk = chunk[:, chunk_filtered_local]
 
         # Subset rows to valid samples before centering.
         # Centering must use the valid-sample mean (not the full-sample mean)

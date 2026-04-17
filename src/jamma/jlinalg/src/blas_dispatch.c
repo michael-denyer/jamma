@@ -3,14 +3,12 @@
  *
  * Dispatch priority (consistency with GEMMA over raw speed):
  *   1. ILP64 with LAPACK (dsyevd): MKL-ILP64, Accelerate-ILP64
- *   2. ILP64 BLAS-only: BLIS-ILP64 (no LAPACK)
- *   3. numpy fallback (no vendor BLAS found)
- *   4. LP64 (detected but not wired for dgemm -- different FP accumulation)
+ *   2. numpy fallback (no vendor BLAS found)
+ *   3. LP64 (detected but not wired for dgemm -- different FP accumulation)
  *
- * Discovery model: discover-all-then-select-best.  All three discovery paths
- * (system BLAS, pip-installed MKL, bundled BLIS) run unconditionally.  The
- * best candidate is selected based on capabilities (ILP64 + LAPACK > ILP64
- * BLAS-only > numpy-fallback > LP64).
+ * Discovery model: discover-all-then-select-best.  Both discovery paths
+ * (system BLAS, pip-installed MKL) run unconditionally.  The best candidate
+ * is selected based on capabilities (ILP64 + LAPACK > numpy-fallback > LP64).
  *
  * When an external dgemm is found, the vendor function pointers are wired.
  * CBLAS backends handle row-major natively; Fortran backends use the A/B
@@ -19,10 +17,6 @@
  * The dlopen machinery is Unix-only (#if !defined(_WIN32)); on Windows
  * blas_dispatch_init() returns 0 immediately (no external dispatch).
  */
-
-/* _GNU_SOURCE required on Linux for Dl_info and dladdr (used in
- * discover_bundled_blis).  Must be defined before any includes. */
-#define _GNU_SOURCE
 
 #include <limits.h>
 #include <stdio.h>
@@ -177,7 +171,7 @@ typedef struct {
  */
 static const char *ilp64_dgemm_names[] = {"dgemm_64_",       /* MKL ILP64 */
                                           "scipy_dgemm_64_", /* scipy-openblas64 */
-                                          "dgemm64_", /* OpenBLAS INTERFACE64=1, BLIS -b 64 */
+                                          "dgemm64_",        /* OpenBLAS INTERFACE64=1 */
                                           NULL};
 /* Apple Accelerate ILP64 (macOS 13.3+): uses $NEWLAPACK$ILP64 suffix.
  * Fortran interface has no trailing underscore. */
@@ -262,7 +256,7 @@ static int try_resolve_dgemm_candidate(void *handle, const char *lib_path, blas_
  * Symbol resolution — dsyrk
  * ---------------------------------------------------------------------------
  */
-static void try_resolve_dsyrk(void *handle, blas_candidate_t *c, int is_blis) {
+static void try_resolve_dsyrk(void *handle, blas_candidate_t *c) {
     int dbg = _debug_enabled();
 
     if (c->is_ilp64) {
@@ -300,16 +294,6 @@ static void try_resolve_dsyrk(void *handle, blas_candidate_t *c, int is_blis) {
             if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved dsyrk64_\n");
             return;
         }
-        /* BLIS with ILP64: cblas_dsyrk takes 64-bit int args */
-        if (is_blis) {
-            void *bsym = dlsym(handle, "cblas_dsyrk");
-            if (bsym) {
-                c->cblas_dsyrk_ilp64 = (jlinalg_cblas_dsyrk_ilp64_fn)bsym;
-                c->has_dsyrk = 1;
-                if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved cblas_dsyrk (BLIS ILP64)\n");
-                return;
-            }
-        }
     }
 
     /* LP64 dsyrk symbols */
@@ -333,11 +317,8 @@ static void try_resolve_dsyrk(void *handle, blas_candidate_t *c, int is_blis) {
  * Symbol resolution — dsyevd
  * ---------------------------------------------------------------------------
  */
-static void try_resolve_dsyevd(void *handle, blas_candidate_t *c, int is_blis) {
+static void try_resolve_dsyevd(void *handle, blas_candidate_t *c) {
     int dbg = _debug_enabled();
-
-    /* BLIS has no LAPACK — skip */
-    if (is_blis) return;
 
     if (c->is_ilp64) {
 #ifdef __APPLE__
@@ -403,11 +384,8 @@ static void try_resolve_dsyevd(void *handle, blas_candidate_t *c, int is_blis) {
  * Symbol resolution — dsyevr (memory-pressure fallback for dsyevd)
  * ---------------------------------------------------------------------------
  */
-static void try_resolve_dsyevr(void *handle, blas_candidate_t *c, int is_blis) {
+static void try_resolve_dsyevr(void *handle, blas_candidate_t *c) {
     int dbg = _debug_enabled();
-
-    /* BLIS has no LAPACK — skip */
-    if (is_blis) return;
 
     if (c->is_ilp64) {
 #ifdef __APPLE__
@@ -452,11 +430,8 @@ static void try_resolve_dsyevr(void *handle, blas_candidate_t *c, int is_blis) {
  * Symbol resolution — dgeqrf (QR factorization)
  * ---------------------------------------------------------------------------
  */
-static void try_resolve_dgeqrf(void *handle, blas_candidate_t *c, int is_blis) {
+static void try_resolve_dgeqrf(void *handle, blas_candidate_t *c) {
     int dbg = _debug_enabled();
-
-    /* BLIS has no LAPACK — skip */
-    if (is_blis) return;
 
     if (c->is_ilp64) {
 #ifdef __APPLE__
@@ -498,10 +473,8 @@ static void try_resolve_dgeqrf(void *handle, blas_candidate_t *c, int is_blis) {
  * Symbol resolution — dorgqr (generate Q from Householder reflectors)
  * ---------------------------------------------------------------------------
  */
-static void try_resolve_dorgqr(void *handle, blas_candidate_t *c, int is_blis) {
+static void try_resolve_dorgqr(void *handle, blas_candidate_t *c) {
     int dbg = _debug_enabled();
-
-    if (is_blis) return;
 
     if (c->is_ilp64) {
 #ifdef __APPLE__
@@ -538,10 +511,8 @@ static void try_resolve_dorgqr(void *handle, blas_candidate_t *c, int is_blis) {
  * Symbol resolution — dgesvd (SVD)
  * ---------------------------------------------------------------------------
  */
-static void try_resolve_dgesvd(void *handle, blas_candidate_t *c, int is_blis) {
+static void try_resolve_dgesvd(void *handle, blas_candidate_t *c) {
     int dbg = _debug_enabled();
-
-    if (is_blis) return;
 
     if (c->is_ilp64) {
 #ifdef __APPLE__
@@ -598,10 +569,8 @@ static int scan_dir_for_blas_candidate(const char *dirpath, blas_candidate_t *c)
 
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
-        /* Look for openblas, mkl, or blis shared libraries */
-        if (!strstr(entry->d_name, "openblas") && !strstr(entry->d_name, "libmkl") &&
-            !strstr(entry->d_name, "libblis"))
-            continue;
+        /* Look for openblas or mkl shared libraries */
+        if (!strstr(entry->d_name, "openblas") && !strstr(entry->d_name, "libmkl")) continue;
         /* Must be a .so or .dylib */
         if (!strstr(entry->d_name, ".so") && !strstr(entry->d_name, ".dylib")) continue;
 
@@ -619,12 +588,12 @@ static int scan_dir_for_blas_candidate(const char *dirpath, blas_candidate_t *c)
             if (dbg)
                 fprintf(stderr, "jlinalg_dispatch:   resolved dgemm from %s (ilp64=%d)\n", fullpath,
                         c->is_ilp64);
-            try_resolve_dsyrk(handle, c, 0);
-            try_resolve_dsyevd(handle, c, 0);
-            try_resolve_dsyevr(handle, c, 0);
-            try_resolve_dgeqrf(handle, c, 0);
-            try_resolve_dorgqr(handle, c, 0);
-            try_resolve_dgesvd(handle, c, 0);
+            try_resolve_dsyrk(handle, c);
+            try_resolve_dsyevd(handle, c);
+            try_resolve_dsyevr(handle, c);
+            try_resolve_dgeqrf(handle, c);
+            try_resolve_dorgqr(handle, c);
+            try_resolve_dgesvd(handle, c);
             closedir(dir);
             return 1;
         }
@@ -740,12 +709,12 @@ static int scan_proc_maps_for_blas_candidate(blas_candidate_t *c) {
                 fprintf(stderr,
                         "jlinalg_dispatch:   resolved dgemm from /proc/self/maps (ilp64=%d)\n",
                         c->is_ilp64);
-            try_resolve_dsyrk(handle, c, 0);
-            try_resolve_dsyevd(handle, c, 0);
-            try_resolve_dsyevr(handle, c, 0);
-            try_resolve_dgeqrf(handle, c, 0);
-            try_resolve_dorgqr(handle, c, 0);
-            try_resolve_dgesvd(handle, c, 0);
+            try_resolve_dsyrk(handle, c);
+            try_resolve_dsyevd(handle, c);
+            try_resolve_dsyevr(handle, c);
+            try_resolve_dgeqrf(handle, c);
+            try_resolve_dorgqr(handle, c);
+            try_resolve_dgesvd(handle, c);
             fclose(fp);
             return 1;
         }
@@ -773,12 +742,12 @@ static void discover_system_blas(blas_candidate_t *c) {
         if (dbg)
             fprintf(stderr, "jlinalg_dispatch: found via RTLD_DEFAULT (ilp64=%d, backend=%s)\n",
                     c->is_ilp64, c->name);
-        try_resolve_dsyrk(RTLD_DEFAULT, c, 0);
-        try_resolve_dsyevd(RTLD_DEFAULT, c, 0);
-        try_resolve_dsyevr(RTLD_DEFAULT, c, 0);
-        try_resolve_dgeqrf(RTLD_DEFAULT, c, 0);
-        try_resolve_dorgqr(RTLD_DEFAULT, c, 0);
-        try_resolve_dgesvd(RTLD_DEFAULT, c, 0);
+        try_resolve_dsyrk(RTLD_DEFAULT, c);
+        try_resolve_dsyevd(RTLD_DEFAULT, c);
+        try_resolve_dsyevr(RTLD_DEFAULT, c);
+        try_resolve_dgeqrf(RTLD_DEFAULT, c);
+        try_resolve_dorgqr(RTLD_DEFAULT, c);
+        try_resolve_dgesvd(RTLD_DEFAULT, c);
         return;
     }
 
@@ -791,12 +760,12 @@ static void discover_system_blas(blas_candidate_t *c) {
                     "jlinalg_dispatch: found via RTLD_DEFAULT after numpy load (ilp64=%d, "
                     "backend=%s)\n",
                     c->is_ilp64, c->name);
-        try_resolve_dsyrk(RTLD_DEFAULT, c, 0);
-        try_resolve_dsyevd(RTLD_DEFAULT, c, 0);
-        try_resolve_dsyevr(RTLD_DEFAULT, c, 0);
-        try_resolve_dgeqrf(RTLD_DEFAULT, c, 0);
-        try_resolve_dorgqr(RTLD_DEFAULT, c, 0);
-        try_resolve_dgesvd(RTLD_DEFAULT, c, 0);
+        try_resolve_dsyrk(RTLD_DEFAULT, c);
+        try_resolve_dsyevd(RTLD_DEFAULT, c);
+        try_resolve_dsyevr(RTLD_DEFAULT, c);
+        try_resolve_dgeqrf(RTLD_DEFAULT, c);
+        try_resolve_dorgqr(RTLD_DEFAULT, c);
+        try_resolve_dgesvd(RTLD_DEFAULT, c);
         return;
     }
 
@@ -1068,12 +1037,12 @@ static void discover_pip_mkl(blas_candidate_t *c) {
                         return;
                     }
                     c->name = "MKL-ILP64";
-                    try_resolve_dsyrk(RTLD_DEFAULT, c, 0);
-                    try_resolve_dsyevd(RTLD_DEFAULT, c, 0);
-                    try_resolve_dsyevr(RTLD_DEFAULT, c, 0);
-                    try_resolve_dgeqrf(RTLD_DEFAULT, c, 0);
-                    try_resolve_dorgqr(RTLD_DEFAULT, c, 0);
-                    try_resolve_dgesvd(RTLD_DEFAULT, c, 0);
+                    try_resolve_dsyrk(RTLD_DEFAULT, c);
+                    try_resolve_dsyevd(RTLD_DEFAULT, c);
+                    try_resolve_dsyevr(RTLD_DEFAULT, c);
+                    try_resolve_dgeqrf(RTLD_DEFAULT, c);
+                    try_resolve_dorgqr(RTLD_DEFAULT, c);
+                    try_resolve_dgesvd(RTLD_DEFAULT, c);
                     if (dbg)
                         fprintf(stderr,
                                 "jlinalg_dispatch: pip-mkl -- resolved (ilp64=%d, lapack=%d)\n",
@@ -1093,101 +1062,6 @@ static void discover_pip_mkl(blas_candidate_t *c) {
     Py_DECREF(mkl_dir);
     Py_DECREF(Path);
     if (dbg) fprintf(stderr, "jlinalg_dispatch: pip-mkl -- not found\n");
-}
-
-/* ---------------------------------------------------------------------------
- * discover_bundled_blis -- Look for libblis.{so,dylib} relative to extension
- * Populates a blas_candidate_t instead of setting globals.
- * ---------------------------------------------------------------------------
- */
-static void discover_bundled_blis(blas_candidate_t *c) {
-    int dbg = _debug_enabled();
-
-    /* Use dladdr on blas_dispatch_init to find our own .so path */
-    Dl_info info;
-    if (!dladdr((void *)blas_dispatch_init, &info) || !info.dli_fname) {
-        if (dbg) fprintf(stderr, "jlinalg_dispatch: dladdr failed for blas_dispatch_init\n");
-        return;
-    }
-
-    /* Build path: dirname(extension.so)/libs/libblis.{so,dylib} */
-    char ext_dir[4096];
-    strncpy(ext_dir, info.dli_fname, sizeof(ext_dir) - 1);
-    ext_dir[sizeof(ext_dir) - 1] = '\0';
-    char *last_slash = strrchr(ext_dir, '/');
-    if (!last_slash) return;
-    *last_slash = '\0';
-
-#ifdef __APPLE__
-    const char *blis_name = "libblis.dylib";
-#else
-    const char *blis_name = "libblis.so";
-#endif
-
-    char blis_path[4096];
-    snprintf(blis_path, sizeof(blis_path), "%s/libs/%s", ext_dir, blis_name);
-
-    if (dbg) fprintf(stderr, "jlinalg_dispatch: trying bundled BLIS: %s\n", blis_path);
-
-    /* RTLD_LOCAL: don't pollute global symbol namespace (Pitfall 2 from RESEARCH) */
-    void *handle = dlopen(blis_path, RTLD_LAZY | RTLD_LOCAL);
-    if (!handle) {
-        if (dbg) fprintf(stderr, "jlinalg_dispatch: bundled BLIS not found: %s\n", dlerror());
-        return;
-    }
-
-    /* BLIS with -b 64 exports dgemm_ with 64-bit int args (same symbol name,
-     * different ABI).  Check bli_info_get_int_type_size() to detect. */
-    typedef long (*bli_info_int_size_fn)(void);
-    bli_info_int_size_fn get_int_size =
-        (bli_info_int_size_fn)dlsym(handle, "bli_info_get_int_type_size");
-    int blis_is_ilp64 = (get_int_size && get_int_size() == 64);
-
-    if (dbg)
-        fprintf(stderr, "jlinalg_dispatch: BLIS bli_info_get_int_type_size=%s%s\n",
-                get_int_size ? "" : "(not found)",
-                blis_is_ilp64  ? "64"
-                : get_int_size ? "32"
-                               : "");
-
-    if (blis_is_ilp64) {
-        /* BLIS ILP64: dgemm_ takes 64-bit int pointers — resolve as ILP64 */
-        void *sym = dlsym(handle, "dgemm_");
-        if (sym) {
-            c->dgemm_ilp64 = (jlinalg_dgemm_ilp64_fn)sym;
-            c->dgemm_lp64 = NULL;
-            c->is_ilp64 = 1;
-            c->name = "BLIS-ILP64";
-            c->handle = handle;
-            c->found = 1;
-
-            /* Also resolve cblas_dgemm for row-major native dispatch. */
-            void *cblas_sym = dlsym(handle, "cblas_dgemm");
-            if (cblas_sym) {
-                c->cblas_dgemm_ilp64 = (jlinalg_cblas_dgemm_ilp64_fn)cblas_sym;
-                if (dbg) fprintf(stderr, "jlinalg_dispatch:   also resolved cblas_dgemm (ILP64)\n");
-            }
-
-            /* BLIS has dsyrk but no LAPACK */
-            try_resolve_dsyrk(handle, c, 1);
-            /* BLIS has no LAPACK — skip dsyevd */
-
-            if (dbg) fprintf(stderr, "jlinalg_dispatch: resolved dgemm from bundled BLIS-ILP64\n");
-            return;
-        }
-    }
-
-    /* LP64 BLIS or ILP64 without dgemm_ — try normal resolution */
-    if (try_resolve_dgemm_candidate(handle, blis_path, c)) {
-        c->name = "BLIS";
-        try_resolve_dsyrk(handle, c, 1);
-        /* No dsyevd for BLIS */
-        if (dbg) fprintf(stderr, "jlinalg_dispatch: resolved dgemm from bundled BLIS (LP64)\n");
-        return;
-    }
-
-    if (dbg) fprintf(stderr, "jlinalg_dispatch: dgemm not found in bundled BLIS\n");
-    dlclose(handle);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1257,16 +1131,12 @@ static int _score_candidate(const blas_candidate_t *c) {
     return 1; /* LP64 */
 }
 
-static blas_candidate_t *select_best_backend(blas_candidate_t *system, blas_candidate_t *pip_mkl,
-                                             blas_candidate_t *blis) {
+static blas_candidate_t *select_best_backend(blas_candidate_t *system, blas_candidate_t *pip_mkl) {
     int s_sys = _score_candidate(system);
     int s_pip = _score_candidate(pip_mkl);
-    int s_blis = _score_candidate(blis);
     int dbg = _debug_enabled();
 
-    if (dbg)
-        fprintf(stderr, "jlinalg_dispatch: scores: system=%d pip_mkl=%d blis=%d\n", s_sys, s_pip,
-                s_blis);
+    if (dbg) fprintf(stderr, "jlinalg_dispatch: scores: system=%d pip_mkl=%d\n", s_sys, s_pip);
 
     blas_candidate_t *best = NULL;
     int best_score = 0;
@@ -1278,10 +1148,6 @@ static blas_candidate_t *select_best_backend(blas_candidate_t *system, blas_cand
     if (s_pip > best_score) {
         best = pip_mkl;
         best_score = s_pip;
-    }
-    if (s_blis > best_score) {
-        best = blis;
-        best_score = s_blis;
     }
 
     /* LP64-only candidates (score=1) are detected but not wired for dgemm */
@@ -1329,20 +1195,17 @@ int blas_dispatch_init(void) {
 
     blas_candidate_t system = {0};
     blas_candidate_t pip_mkl = {0};
-    blas_candidate_t blis = {0};
 
-    /* All three discovery paths run unconditionally */
+    /* Both discovery paths run unconditionally */
     discover_system_blas(&system);
     discover_pip_mkl(&pip_mkl);
-    discover_bundled_blis(&blis);
 
     /* Validate invariants — invalid candidates are zeroed out (found=0)
      * so they cannot be selected, preventing NULL dereferences. */
     _validate_candidate(&system, "system");
     _validate_candidate(&pip_mkl, "pip_mkl");
-    _validate_candidate(&blis, "blis");
 
-    blas_candidate_t *best = select_best_backend(&system, &pip_mkl, &blis);
+    blas_candidate_t *best = select_best_backend(&system, &pip_mkl);
 
     if (best && best->is_ilp64) {
         /* ILP64 backend — wire dgemm */

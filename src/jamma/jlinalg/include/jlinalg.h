@@ -328,10 +328,6 @@ int  jlinalg_set_n_threads(int n);
  * ---------------------------------------------------------------------------
  */
 typedef struct {
-    int dstedc_ws_fallback;      /* legacy field, always zero — retained for ABI stability */
-    int dsytrd_mirror_fallback;  /* legacy field, always zero — retained for ABI stability */
-    int secular_failures;        /* legacy field, always zero — retained for ABI stability */
-    int qr_fallback;             /* legacy field, always zero — retained for ABI stability */
     int vendor_lapack_skipped;   /* 1 if vendor LAPACK (dsyevd/dsyevr) alloc failed */
 } jlinalg_eigh_status_t;
 

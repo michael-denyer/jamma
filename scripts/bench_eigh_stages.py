@@ -27,10 +27,7 @@ class _EighStatus(ctypes.Structure):
     """ctypes mirror of jlinalg_eigh_status_t."""
 
     _fields_ = [
-        ("dstedc_ws_fallback", ctypes.c_int),
-        ("dsytrd_mirror_fallback", ctypes.c_int),
-        ("secular_failures", ctypes.c_int),
-        ("qr_fallback", ctypes.c_int),
+        ("vendor_lapack_skipped", ctypes.c_int),
     ]
 
 
@@ -302,8 +299,7 @@ def main() -> None:
             f"{stages['total_staged']:>10.4f}s  "
             f"{ratio:>6.1f}x  "
             f"{bottleneck:>8} ({bottleneck_pct:.0f}%)  "
-            f"sec_fail={status.secular_failures}  "
-            f"qr_fb={status.qr_fallback}"
+            f"vendor_skipped={status.vendor_lapack_skipped}"
         )
 
     # Detailed breakdown from already-collected data

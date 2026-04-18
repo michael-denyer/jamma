@@ -388,19 +388,8 @@ def test_block_diagonal_stress() -> None:
         block = block / block.max()
         K[start:end, start:end] = block
 
-    if _HAS_VENDOR_LAPACK:
-        K_copy = K.copy()
-        w, v, status = _call_eigh_with_status(K_copy)
-        assert status.secular_failures == 0, (
-            f"{status.secular_failures} secular failures on block-diagonal"
-        )
-        assert status.qr_fallback == 0, (
-            f"QR fallback {status.qr_fallback} on block-diagonal -- z-vector "
-            f"sign fix should eliminate QR fallback"
-        )
-    else:
-        K_copy = K.copy()
-        w, v = eigh(K_copy)
+    K_copy = K.copy()
+    w, v = eigh(K_copy)
 
     _assert_reconstruction(K, w, v, 1e-8, "Block-diagonal")
     _assert_orthogonality(v, 1e-8, "Block-diagonal")
@@ -939,10 +928,7 @@ class _EighStatus(ctypes.Structure):
     """ctypes mirror of jlinalg_eigh_status_t."""
 
     _fields_ = [
-        ("dstedc_ws_fallback", ctypes.c_int),
-        ("dsytrd_mirror_fallback", ctypes.c_int),
-        ("secular_failures", ctypes.c_int),
-        ("qr_fallback", ctypes.c_int),
+        ("vendor_lapack_skipped", ctypes.c_int),
     ]
 
 
@@ -1024,58 +1010,34 @@ class TestDstedcNoSecularFailures:
     """
 
     def test_no_secular_failures_n200(self) -> None:
-        """N=200: zero secular failures, zero QR fallback, correct reconstruction."""
+        """N=200: vendor eigh produces correct reconstruction and orthogonality."""
         rng = np.random.default_rng(42)
         N = 200
         K = _random_spd(N, rng)
         K_copy = K.copy()
-        w, v, status = _call_eigh_with_status(K_copy)
-
-        assert status.secular_failures == 0, (
-            f"{status.secular_failures} secular failures at N={N}"
-        )
-        assert status.qr_fallback == 0, (
-            f"QR fallback {status.qr_fallback} at N={N} -- z-vector sign fix "
-            f"should eliminate QR fallback at all sizes"
-        )
+        w, v, _ = _call_eigh_with_status(K_copy)
         _assert_reconstruction(K, w, v, 1e-8, f"SecularSolver N={N}")
         _assert_orthogonality(v, 1e-8, f"SecularSolver N={N}")
 
     @pytest.mark.slow
     def test_no_secular_failures_n500(self) -> None:
-        """N=500: zero secular failures, zero QR fallback, correct reconstruction."""
+        """N=500: vendor eigh produces correct reconstruction and orthogonality."""
         rng = np.random.default_rng(42)
         N = 500
         K = _random_spd(N, rng)
         K_copy = K.copy()
-        w, v, status = _call_eigh_with_status(K_copy)
-
-        assert status.secular_failures == 0, (
-            f"{status.secular_failures} secular failures at N={N}"
-        )
-        assert status.qr_fallback == 0, (
-            f"QR fallback {status.qr_fallback} at N={N} -- z-vector sign fix "
-            f"should eliminate QR fallback at all sizes"
-        )
+        w, v, _ = _call_eigh_with_status(K_copy)
         _assert_reconstruction(K, w, v, 1e-8, f"SecularSolver N={N}")
         _assert_orthogonality(v, 1e-8, f"SecularSolver N={N}")
 
     @pytest.mark.slow
     def test_no_secular_failures_n1000(self) -> None:
-        """N=1000: zero secular failures, zero QR fallback, correct reconstruction."""
+        """N=1000: vendor eigh produces correct reconstruction and orthogonality."""
         rng = np.random.default_rng(42)
         N = 1000
         K = _random_spd(N, rng)
         K_copy = K.copy()
-        w, v, status = _call_eigh_with_status(K_copy)
-
-        assert status.secular_failures == 0, (
-            f"{status.secular_failures} secular failures at N={N}"
-        )
-        assert status.qr_fallback == 0, (
-            f"QR fallback {status.qr_fallback} at N={N} -- z-vector sign fix "
-            f"should eliminate QR fallback at all sizes"
-        )
+        w, v, _ = _call_eigh_with_status(K_copy)
         _assert_reconstruction(K, w, v, 1e-8, f"SecularSolver N={N}")
         _assert_orthogonality(v, 1e-8, f"SecularSolver N={N}")
 
@@ -1124,10 +1086,7 @@ class TestDlaed4Convergence:
         involves 2-pole sub-problems, so dlaed5 correctness is critical.
         """
         K_copy = K.copy()
-        w, v, status = _call_eigh_with_status(K_copy)
-        assert status.secular_failures == 0, (
-            f"{status.secular_failures} secular failures on N=2 matrix"
-        )
+        w, v, _ = _call_eigh_with_status(K_copy)
         _assert_reconstruction(K, w, v, 1e-12, "dlaed5")
         _assert_orthogonality(v, 1e-12, "dlaed5")
         # Eigenvalues ascending
@@ -1147,10 +1106,7 @@ class TestDlaed4Convergence:
         K = np.diag(d) + np.diag(e, 1) + np.diag(e, -1)
         K_copy = K.copy()
 
-        w, v, status = _call_eigh_with_status(K_copy)
-        assert status.secular_failures == 0, (
-            f"{status.secular_failures} secular failures on clustered eigenvalues"
-        )
+        w, v, _ = _call_eigh_with_status(K_copy)
         _assert_reconstruction(K, w, v, 1e-12, "Clustered eigenvalues")
 
     def test_large_gap_ratio(self) -> None:
@@ -1164,10 +1120,7 @@ class TestDlaed4Convergence:
         K = np.diag(d) + np.diag(e, 1) + np.diag(e, -1)
         K_copy = K.copy()
 
-        w, v, status = _call_eigh_with_status(K_copy)
-        assert status.secular_failures == 0, (
-            f"{status.secular_failures} secular failures on large gap ratio"
-        )
+        w, v, _ = _call_eigh_with_status(K_copy)
         _assert_reconstruction(K, w, v, 1e-10, "Large gap ratio")
 
     def test_boundary_eigenvalue(self) -> None:
@@ -1182,10 +1135,7 @@ class TestDlaed4Convergence:
         K = np.diag(d) + np.diag(e, 1) + np.diag(e, -1)
         K_copy = K.copy()
 
-        w, v, status = _call_eigh_with_status(K_copy)
-        assert status.secular_failures == 0, (
-            f"{status.secular_failures} secular failures on boundary eigenvalue"
-        )
+        w, v, _ = _call_eigh_with_status(K_copy)
         _assert_reconstruction(K, w, v, 1e-12, "Boundary eigenvalue")
 
     def test_negative_rho_zvector_sign(self) -> None:
@@ -1207,54 +1157,28 @@ class TestDlaed4Convergence:
         K = np.diag(d) + np.diag(e, 1) + np.diag(e, -1)
         K_copy = K.copy()
 
-        w, v, status = _call_eigh_with_status(K_copy)
-        assert status.secular_failures == 0, (
-            f"{status.secular_failures} secular failures with negative rho"
-        )
-        assert status.qr_fallback == 0, (
-            f"QR fallback {status.qr_fallback} with negative rho — "
-            f"z-vector sign fix should handle this without fallback"
-        )
+        w, v, _ = _call_eigh_with_status(K_copy)
         _assert_reconstruction(K, w, v, 1e-8, "Negative rho z-vector")
         _assert_orthogonality(v, 1e-8, "Negative rho z-vector")
 
     def test_delta_quality_via_reconstruction(self) -> None:
-        """Verify dlaed4 delta precision via reconstruction accuracy.
-
-        With LAPACK-matching z-vector sign handling (sign_rho applied only
-        to right half, matching DLAED2), D&C produces eigenvectors without
-        QR fallback at all sizes.
+        """Verify vendor eigh delivers reconstruction and orthogonality at scale.
 
         Asserts:
-          - qr_fallback==0 at all sizes (z-vector sign fix eliminates QR)
-          - Reconstruction < 1e-8 at all sizes (D&C achieves ~1e-10)
+          - Reconstruction < 1e-8 at all sizes
           - Orthogonality < 1e-8 at all sizes
-          - Zero secular convergence failures
         """
         rng = np.random.default_rng(42)
         for N in [50, 200, 500]:
             A = rng.standard_normal((N, N))
             A = (A + A.T) / 2
-            w, V, status = _call_eigh_with_status(A.copy())
+            w, V, _ = _call_eigh_with_status(A.copy())
 
-            # Reconstruction: D&C achieves ~1e-10 at N=200 without QR fallback
             recon = np.linalg.norm(A - V @ np.diag(w) @ V.T) / np.linalg.norm(A)
             assert recon < 1e-8, f"Reconstruction {recon:.2e} at N={N} (threshold 1e-8)"
 
-            # Orthogonality
             orth = np.linalg.norm(V.T @ V - np.eye(N))
             assert orth < 1e-8, f"Orthogonality {orth:.2e} at N={N} (threshold 1e-8)"
-
-            # Zero secular convergence failures
-            assert status.secular_failures == 0, (
-                f"{status.secular_failures} secular failures at N={N}"
-            )
-
-            # Z-vector sign fix eliminates QR fallback at all sizes
-            assert status.qr_fallback == 0, (
-                f"QR fallback {status.qr_fallback} at N={N} -- z-vector sign fix "
-                f"should eliminate QR fallback at all sizes"
-            )
 
 
 # ---------------------------------------------------------------------------

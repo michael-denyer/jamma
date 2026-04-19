@@ -26,15 +26,58 @@ import sysconfig
 import tempfile
 from pathlib import Path
 
-from jamma.core.openmp_detect import detect_openmp_flags
+# _compile_jlinalg.py runs in two modes:
+#   1. Dev-mode: `python -m jamma.jlinalg._compile_jlinalg` from a source
+#      checkout. build_support/ sits at repo root (sibling to src/).
+#   2. Wheel install: jamma is installed but build_support/ is NOT shipped
+#      with the wheel. On ABI-mismatch recompile at import time,
+#      jamma.core.recompile.auto_recompile_c_extension calls this module's
+#      compile_extension(). That code path should emit a clear error, NOT
+#      a vague ImportError from the top-of-module `from build_support...`.
+#
+# Bootstrap: try the source-checkout path; if build_support/ is absent
+# (wheel install), leave the helper refs as None and guard the public
+# entry points at call time with a RuntimeError that explains the
+# situation. This preserves the existing ABI-mismatch graceful fallback
+# behavior (see 123-PATTERNS.md lines 320-334).
+_repo_root = Path(__file__).resolve().parents[3]
+_build_support_available = (_repo_root / "build_support").is_dir()
+
+if _build_support_available:
+    if str(_repo_root) not in sys.path:
+        sys.path.insert(0, str(_repo_root))
+    from build_support.compile_and_link import (  # noqa: E402
+        BASELINE_SOURCES,
+        LAPACK_SOURCES,
+        LINK_FLAGS_BY_PLATFORM,
+        compile_jlinalg,
+    )
+    from build_support.find_compiler import find_c_compiler  # noqa: E402
+    from build_support.openmp_detect import detect_openmp_flags  # noqa: E402
+else:
+    # Wheel-install path: build_support/ not present. Do NOT raise at
+    # import time — jamma.jlinalg.__init__ imports from this module to
+    # access other helpers and must succeed. Instead, leave the helper
+    # refs as None and guard the public functions with a clear
+    # RuntimeError.
+    BASELINE_SOURCES = None  # type: ignore[assignment]
+    LAPACK_SOURCES = None  # type: ignore[assignment]
+    LINK_FLAGS_BY_PLATFORM = None  # type: ignore[assignment]
+    compile_jlinalg = None  # type: ignore[assignment]
+    find_c_compiler = None  # type: ignore[assignment]
+    detect_openmp_flags = None  # type: ignore[assignment]
 
 
 def compile_extension(verbose: bool = False) -> bool:
     """Compile jlinalg C sources into a shared library in the installed package.
 
-    Performs per-file compile-then-link to enable different compiler flags
-    per source group (strict IEEE 754 for LAPACK, standard optimization
-    for baseline sources).
+    Performs per-file compile-then-link via ``build_support.compile_and_link``
+    to enable different compiler flags per source group (strict IEEE 754 for
+    LAPACK, standard optimization for baseline sources).
+
+    Dev-mode entry point. Called by:
+      - ``python -m jamma.jlinalg._compile_jlinalg`` from a source checkout
+      - ``jamma.core.recompile.auto_recompile_c_extension`` on ABI mismatch
 
     Args:
         verbose: Print per-command compile details to stderr. When False
@@ -43,6 +86,15 @@ def compile_extension(verbose: bool = False) -> bool:
     Returns:
         True if compilation succeeded, False otherwise.
     """
+    if compile_jlinalg is None:
+        raise RuntimeError(
+            "compile_extension() called from a wheel-install environment "
+            "(build_support/ not found at repo root). This function is only "
+            "available in dev-mode or sdist installs. For wheel installs, "
+            "ABI mismatches trigger jamma.core.recompile.auto_recompile_c_extension() "
+            "instead — it uses its own minimal compiler discovery and does not "
+            "require build_support/."
+        )
 
     def _print(*args: object) -> None:
         """Always print (errors, results)."""
@@ -66,19 +118,9 @@ def compile_extension(verbose: bool = False) -> bool:
     # Source files split into two groups:
     # - baseline: portable C compiled with standard flags
     # - lapack: eigh.c compiled with strict IEEE 754 flags (-O2 -fno-fast-math)
-    baseline_sources = [
-        jlinalg_src_dir / "platform.c",
-        jlinalg_src_dir / "pymodule.c",
-        jlinalg_src_dir / "blas_dispatch.c",
-        jlinalg_src_dir / "snp_stats.c",
-    ]
-    # LAPACK sources: strict IEEE 754 required for vendor LAPACK dispatch.
-    # Compiled with -O2 -fno-fast-math — MUST NOT get -ffast-math or -funroll-loops.
-    lapack_sources = [
-        jlinalg_src_dir / "eigh.c",
-    ]
-
-    source_files = baseline_sources + lapack_sources
+    baseline = [jlinalg_src_dir / name for name in BASELINE_SOURCES]
+    lapack = [jlinalg_src_dir / name for name in LAPACK_SOURCES]
+    source_files = baseline + lapack
 
     missing = [str(s) for s in source_files if not s.exists()]
     if missing:
@@ -103,17 +145,15 @@ def compile_extension(verbose: bool = False) -> bool:
     _detail(f"numpy {np.__version__} OK")
 
     # Compiler
-    from jamma.core._compile_utils import find_c_compiler
-
-    result = find_c_compiler()
-    if not result:
+    cc_result = find_c_compiler()
+    if not cc_result:
         _print(
             "ERROR: No C compiler found on PATH (tried $CC, sysconfig, cc, clang, gcc)"
         )
         _print("  Install: apt-get install -y gcc  (Linux)")
         _print("  Install: xcode-select --install  (macOS)")
         return False
-    cc_cmd, cc_extra = result
+    cc_cmd, cc_extra = cc_result
     _detail(f"Compiler: {shutil.which(cc_cmd)}")
 
     # Python headers
@@ -125,6 +165,11 @@ def compile_extension(verbose: bool = False) -> bool:
         return False
     _detail(f"Python.h: {python_h}")
 
+    # Windows is not supported
+    if platform.system() == "Windows":
+        _print("ERROR: Windows is not supported for C extension compilation")
+        return False
+
     # Output path (next to __init__.py in the installed package)
     ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
     out = jlinalg_dir / f"_jlinalg{ext_suffix}"
@@ -132,151 +177,42 @@ def compile_extension(verbose: bool = False) -> bool:
     _detail(f"NumPy include: {numpy_inc}")
     _detail(f"Output: {out}")
 
-    # Windows is not supported
-    if platform.system() == "Windows":
-        _print("ERROR: Windows is not supported for C extension compilation")
-        return False
-
     # OpenMP detection — may override cc_cmd to use clang when libiomp5 is
     # found, since GCC's GOMP compatibility shim has assertion failures after
     # MKL LAPACK operations.
-    ldflags: list[str] = []
-    if platform.system() == "Linux":
-        ldflags.append("-ldl")  # dlopen/dlsym for blas_dispatch.c
-        ldflags.append("-lpthread")  # snp_stats.c uses pthreads directly
     omp_compile, omp_link, cc_cmd = detect_openmp_flags(
         cc_cmd, platform.system(), _detail, _warn=_print
     )
-    if platform.system() == "Darwin":
-        ldflags = ["-undefined", "dynamic_lookup"]
 
-    # Base compile flags (shared by all source files — no SIMD flags here)
-    base_cflags = [
-        "-O3",
-        "-ftree-vectorize",
-        "-fno-math-errno",
-        "-fno-trapping-math",
-        "-funroll-loops",
-        "-fno-finite-math-only",  # ensure isnan() works correctly
-        "-Wframe-larger-than=131072",
-        "-fPIC",
-        "-std=c11",
-        f"-I{python_inc}",
-        f"-I{numpy_inc}",
-        f"-I{jlinalg_inc_dir}",
-    ]
+    # Platform-specific link flags. Helper appends omp_link + extra_link_flags.
+    ldflags = list(LINK_FLAGS_BY_PLATFORM.get(platform.system(), ()))
 
-    lapack_source_set = {str(s) for s in lapack_sources}
-    # LAPACK sources: strict IEEE 754, no -ffast-math, -O2 only.
-    lapack_cflags = [
-        "-O2",
-        "-fno-fast-math",
-        "-fno-finite-math-only",
-        "-Wframe-larger-than=131072",
-        "-fPIC",
-        "-std=c11",
-        f"-I{python_inc}",
-        f"-I{numpy_inc}",
-        f"-I{jlinalg_inc_dir}",
-    ]
-
-    def _compile_sources(
-        extra_compile: list[str], suffix: str
-    ) -> tuple[list[Path], Path] | None:
-        """Compile all source files with the given extra flags.
-
-        Returns list of object files and temp dir path, or None on failure.
-        """
-        tmp_dir = Path(tempfile.mkdtemp(prefix="jlinalg_compile_"))
-        obj_files: list[Path] = []
-        try:
-            for src in source_files:
-                obj_file = tmp_dir / f"{src.stem}{suffix}.o"
-                src_str = str(src)
-                # LAPACK sources: strict IEEE 754; everything else uses base flags.
-                cflags = lapack_cflags if src_str in lapack_source_set else base_cflags
-                cmd = [
-                    cc_cmd,
-                    *cc_extra,
-                    *cflags,
-                    *extra_compile,
-                    "-c",
-                    str(src),
-                    "-o",
-                    str(obj_file),
-                ]
-                _detail(f"compile: {' '.join(cmd)}")
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                if result.returncode != 0:
-                    _print(f"Compile failed for {src.name}:")
-                    _print(result.stderr)
-                    shutil.rmtree(tmp_dir, ignore_errors=True)
-                    return None
-                obj_files.append(obj_file)
-        except Exception:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-            raise
-        return obj_files, tmp_dir
-
-    # First attempt: with OpenMP
-    use_omp = bool(omp_compile)
-    current_omp_link = omp_link
-    compile_result = _compile_sources(omp_compile, "")
-    tmp_dir = None
-
-    if compile_result is None and use_omp:
-        _print(
-            "OpenMP compilation failed, retrying without OpenMP (single-threaded)..."
-        )
-        compile_result = _compile_sources([], "_noomp")
-        current_omp_link = []  # no OMP runtime to link
-
-    if compile_result is None:
-        _print("ERROR: jlinalg compilation failed")
-        return False
-
-    obj_files, tmp_dir = compile_result
-
+    # Compile + link via the shared helper. ``-lm`` goes through
+    # extra_link_flags because it's universal but not encoded in the
+    # per-platform LINK_FLAGS_BY_PLATFORM table.
+    tmp_dir = Path(tempfile.mkdtemp(prefix="jlinalg_compile_"))
     try:
-        # Link all object files into the shared library
-        cmd_link = [
-            cc_cmd,
-            *cc_extra,
-            "-shared",
-            "-fPIC",
-            *[str(o) for o in obj_files],
-            "-o",
-            str(out),
-            "-lm",
-            *current_omp_link,
-            *ldflags,
-        ]
-        _detail(f"link: {' '.join(cmd_link)}")
-        result_link = subprocess.run(cmd_link, capture_output=True, text=True)
-        if result_link.returncode != 0 and current_omp_link:
-            _print(
-                f"OpenMP link failed:\n{result_link.stderr}"
-                "\nRetrying link without OpenMP (single-threaded)..."
-            )
-            cmd_link_noomp = [
-                cc_cmd,
-                *cc_extra,
-                "-shared",
-                "-fPIC",
-                *[str(o) for o in obj_files],
-                "-o",
-                str(out),
-                "-lm",
-                *ldflags,
-            ]
-            _detail(f"link: {' '.join(cmd_link_noomp)}")
-            result_link = subprocess.run(cmd_link_noomp, capture_output=True, text=True)
-        if result_link.returncode != 0:
-            _print(f"ERROR: link failed:\n{result_link.stderr}")
-            return False
+        result = compile_jlinalg(
+            sources=source_files,
+            lapack_sources=lapack,
+            include_dirs=[python_inc, numpy_inc, str(jlinalg_inc_dir)],
+            cc_cmd=cc_cmd,
+            cc_extra=cc_extra,
+            omp_compile=omp_compile,
+            omp_link=omp_link,
+            ldflags=ldflags,
+            output=out,
+            tmp_dir=tmp_dir,
+            extra_link_flags=["-lm"],
+            on_retry=lambda msg: _print(msg),
+            verbose_print=_detail,
+        )
     finally:
-        if tmp_dir is not None:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    if not result.success:
+        _print(f"ERROR: jlinalg compilation failed: {result.error}")
+        return False
 
     _detail(f"Compiled: {out}")
 

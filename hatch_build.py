@@ -29,19 +29,16 @@ from pathlib import Path
 # pyarrow all use this pattern for PEP 517 build helpers.
 sys.path.insert(0, str(Path(__file__).parent))
 
-from build_support.compile_and_link import (  # noqa: E402
-    BASE_CFLAGS,
+from hatchling.builders.hooks.plugin.interface import BuildHookInterface
+
+from build_support.compile_and_link import (
     BASELINE_SOURCES,
-    LAPACK_CFLAGS,
     LAPACK_SOURCES,
     LINK_FLAGS_BY_PLATFORM,
     compile_jlinalg,
-    resolve_cflags_for,
 )
-from build_support.find_compiler import find_c_compiler  # noqa: E402
-from build_support.openmp_detect import detect_openmp_flags  # noqa: E402
-
-from hatchling.builders.hooks.plugin.interface import BuildHookInterface  # noqa: E402
+from build_support.find_compiler import find_c_compiler
+from build_support.openmp_detect import detect_openmp_flags
 
 
 class CustomBuildHook(BuildHookInterface):
@@ -159,15 +156,11 @@ class CustomBuildHook(BuildHookInterface):
         return (cc_cmd, cc_extra, python_inc, numpy_inc, ldflags)
 
     def _compile_c_extension(self, build_data):
-        """Compile _lmm_accel.c -> _lmm_accel{EXT_SUFFIX} if a C compiler is available.
+        """Compile _lmm_accel.c -> _lmm_accel{EXT_SUFFIX} via the shared helper.
 
-        Uses sysconfig to locate Python headers and numpy to locate its include
-        directory. OpenMP support is detected via build_support.openmp_detect
-        (handles Linux and Darwin uniformly).
-
-        On any compilation failure, logs a warning and returns without raising.
-        The compiled .so is written to src/jamma/lmm/ where hatchling's normal
-        package discovery picks it up automatically for wheel inclusion.
+        Single-source compile + link (no LAPACK split) routed through
+        build_support.compile_jlinalg. On any failure, logs a warning and
+        returns without raising — a pure-Python wheel is produced instead.
 
         Args:
             build_data: Hatchling build data dict. Updated with force_include
@@ -201,94 +194,40 @@ class CustomBuildHook(BuildHookInterface):
             _warn=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
         )
 
-        # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3)
-        extra_cflags = os.environ.get("CFLAGS", "").split()
+        # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3 in CI).
+        # Note: hatch_build.py does NOT pass -march=native — that's dev-mode only.
+        extra_cflags = os.environ.get("CFLAGS", "").split() or None
 
-        # Two-step compile+link to prevent dual OpenMP runtime.
-        # GCC's -fopenmp implicitly adds -lgomp at link time. When Intel's
-        # OMP runtime (bundled with MKL numpy) is also linked, both runtimes
-        # initialize and abort: "OMP: Error #13: Assertion failure at
-        # kmp_runtime.cpp". Splitting into compile (.o) then link (.so) lets
-        # us pass -fopenmp only to the compiler and link only the runtime.
-        obj_path = out_path.with_suffix(".o")
+        # Platform link flags (macOS needs -undefined dynamic_lookup; Linux
+        # does not need the sdist/wheel-distinct flags here — -lm is added
+        # via extra_link_flags below).
+        platform_ldflags = list(LINK_FLAGS_BY_PLATFORM.get(platform.system(), ()))
 
-        compile_cmd = [
-            cc_cmd,
-            *cc_extra,
-            "-O3",
-            "-ftree-vectorize",
-            "-fno-math-errno",
-            "-fno-trapping-math",
-            "-funroll-loops",
-            *extra_cflags,
-            "-fno-finite-math-only",  # override -Ofast in CFLAGS; isnan() must work
-            "-Wframe-larger-than=131072",
-            "-fPIC",
-            "-std=c11",
-            f"-I{python_inc}",
-            f"-I{numpy_inc}",
-            *omp_compile,
-            "-c",
-            str(src),
-            "-o",
-            str(obj_path),
-        ]
+        tmp_dir = Path(tempfile.mkdtemp(prefix="lmm_accel_build_"))
+        try:
+            result = compile_jlinalg(
+                sources=[src],
+                lapack_sources=[],  # _lmm_accel has no LAPACK source.
+                include_dirs=[python_inc, numpy_inc],
+                cc_cmd=cc_cmd,
+                cc_extra=cc_extra,
+                omp_compile=omp_compile,
+                omp_link=omp_link,
+                ldflags=[*platform_ldflags, *ldflags],
+                output=out_path,
+                tmp_dir=tmp_dir,
+                extra_cflags=extra_cflags,
+                extra_link_flags=["-lm"],
+                on_retry=lambda msg: print(msg, file=sys.stderr),
+                verbose_print=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
+            )
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
-        result = subprocess.run(compile_cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            if omp_compile:
-                # Retry without OpenMP — libgomp may not be installed
-                compile_cmd_no_omp = [x for x in compile_cmd if x not in omp_compile]
-                print(
-                    "OpenMP compilation failed, retrying without OpenMP "
-                    "(single-threaded C extension)...",
-                    file=sys.stderr,
-                )
-                result2 = subprocess.run(
-                    compile_cmd_no_omp, capture_output=True, text=True
-                )
-                if result2.returncode == 0:
-                    omp_link = []  # Don't link OpenMP if compile failed
-                else:
-                    print(
-                        "WARNING: C extension compilation failed "
-                        "(pure-Python fallback will be used):\n"
-                        f"  OpenMP error: {result.stderr[:1000]}\n"
-                        f"  No-OpenMP error: {result2.stderr[:1000]}",
-                        file=sys.stderr,
-                    )
-                    obj_path.unlink(missing_ok=True)
-                    return
-            else:
-                print(
-                    "WARNING: C extension compilation failed "
-                    "(pure-Python fallback will be used):\n"
-                    f"  Command: {' '.join(compile_cmd)}\n"
-                    f"  Error: {result.stderr[:2000]}",
-                    file=sys.stderr,
-                )
-                return
-
-        # Link step: .o -> .so (no -fopenmp here — only runtime link flags)
-        link_cmd = [
-            cc_cmd,
-            "-shared",
-            str(obj_path),
-            "-o",
-            str(out_path),
-            *omp_link,
-            "-lm",
-            *ldflags,
-        ]
-
-        result = subprocess.run(link_cmd, capture_output=True, text=True)
-        obj_path.unlink(missing_ok=True)  # Clean up .o regardless
-        if result.returncode != 0:
+        if not result.success:
             print(
-                "WARNING: C extension link failed "
-                "(pure-Python fallback will be used):\n"
-                f"  Command: {' '.join(link_cmd)}\n"
-                f"  Error: {result.stderr[:2000]}",
+                f"WARNING: _lmm_accel compilation failed: {result.error}. "
+                "Producing pure-Python wheel as fallback.",
                 file=sys.stderr,
             )
             return
@@ -312,20 +251,11 @@ class CustomBuildHook(BuildHookInterface):
         build_data["infer_tag"] = True
 
     def _compile_jlinalg_extension(self, build_data):
-        """Compile jlinalg C sources -> _jlinalg{EXT_SUFFIX}.
+        """Compile jlinalg C sources -> _jlinalg{EXT_SUFFIX} via the shared helper.
 
-        Per-file compile-then-link.
-
-        Compiles each C source file in src/jamma/jlinalg/src/ individually to a
-        temporary object file, then links them into a single shared library.
-        This enables per-file compiler flag groups (e.g. AVX2 files vs LAPACK files
-        with distinct flag sets in future phases).
-
-        OpenMP support is detected via build_support.openmp_detect
-        (handles Linux and Darwin uniformly).
-
-        On any compilation failure, logs a warning and returns without raising.
-        The compiled .so is written to src/jamma/jlinalg/.
+        Routes through build_support.compile_jlinalg, which handles the
+        baseline-vs-LAPACK per-source flag split, OpenMP compile/link retry,
+        and two-phase compile+link to avoid dual-runtime OMP errors.
 
         Args:
             build_data: Hatchling build data dict. Updated with force_include
@@ -336,43 +266,35 @@ class CustomBuildHook(BuildHookInterface):
             return
         cc_cmd, cc_extra, python_inc, numpy_inc, ldflags = preflight
 
-        jlinalg_src = Path(self.root) / "src" / "jamma" / "jlinalg" / "src"
-        jlinalg_inc = Path(self.root) / "src" / "jamma" / "jlinalg" / "include"
+        jlinalg_src_dir = Path(self.root) / "src" / "jamma" / "jlinalg" / "src"
+        jlinalg_inc_dir = Path(self.root) / "src" / "jamma" / "jlinalg" / "include"
 
-        if not jlinalg_src.is_dir():
+        if not jlinalg_src_dir.is_dir():
             print(
-                f"WARNING: jlinalg source directory {jlinalg_src} not found — "
+                f"WARNING: jlinalg source directory {jlinalg_src_dir} not found — "
                 "skipping jlinalg C extension compilation (NumPy fallback).",
                 file=sys.stderr,
             )
             return
 
-        # jlinalg source files split into two groups:
-        # - baseline: portable C compiled with standard flags
-        # - lapack: eigh.c compiled with strict IEEE 754 flags
-        baseline_sources = [
-            jlinalg_src / "platform.c",
-            jlinalg_src / "pymodule.c",
-            jlinalg_src / "blas_dispatch.c",
-            jlinalg_src / "snp_stats.c",
-        ]
-        # LAPACK sources: strict IEEE 754 required for vendor LAPACK dispatch.
-        # Compiled with -O2 only — MUST NOT get -ffast-math, -Ofast,
-        # -ffinite-math-only, or -funroll-loops.
-        lapack_sources = [
-            jlinalg_src / "eigh.c",
-        ]
+        # Source lists come from the shared helper — single source of truth.
+        baseline = [jlinalg_src_dir / name for name in BASELINE_SOURCES]
+        lapack = [jlinalg_src_dir / name for name in LAPACK_SOURCES]
+        sources = baseline + lapack
 
-        source_files = baseline_sources + lapack_sources
-
-        missing = [s for s in source_files if not s.exists()]
+        # Guard: source files must exist (sdist corruption check).
+        missing = [str(s) for s in sources if not s.exists()]
         if missing:
             print(
-                f"WARNING: jlinalg source files missing: {missing} — "
-                "skipping jlinalg C extension compilation (NumPy fallback).",
+                f"WARNING: jlinalg source files missing: {missing}. "
+                "Producing pure-Python wheel as fallback.",
                 file=sys.stderr,
             )
             return
+
+        ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
+        out_name = f"_jlinalg{ext_suffix}"
+        out_path = Path(self.root) / "src" / "jamma" / "jlinalg" / out_name
 
         # Unified OpenMP detection — same helper the _lmm_accel path uses.
         omp_compile, omp_link, cc_cmd = detect_openmp_flags(
@@ -382,171 +304,41 @@ class CustomBuildHook(BuildHookInterface):
             _warn=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
         )
 
-        # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3)
-        extra_cflags = os.environ.get("CFLAGS", "").split()
+        # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3 in CI).
+        extra_cflags = os.environ.get("CFLAGS", "").split() or None
 
-        # Base compile flags shared by all source files (no SIMD flags here)
-        base_cflags = [
-            "-O3",
-            "-ftree-vectorize",
-            "-fno-math-errno",
-            "-fno-trapping-math",
-            "-funroll-loops",
-            *extra_cflags,
-            "-fno-finite-math-only",  # override -Ofast; isnan() must work
-            "-Wframe-larger-than=131072",
-            "-fPIC",
-            "-std=c11",
-            f"-I{python_inc}",
-            f"-I{numpy_inc}",
-            f"-I{jlinalg_inc}",
-        ]
+        # Platform-default link flags (Linux gets -ldl -lpthread for
+        # blas_dispatch/snp_stats; Darwin gets -undefined dynamic_lookup).
+        platform_ldflags = list(LINK_FLAGS_BY_PLATFORM.get(platform.system(), ()))
 
-        ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
-        out_name = f"_jlinalg{ext_suffix}"
-        out_path = Path(self.root) / "src" / "jamma" / "jlinalg" / out_name
-
-        # Compile each source file to a .o in a temporary directory
         tmp_dir = Path(tempfile.mkdtemp(prefix="jlinalg_build_"))
-        obj_files: list[Path] = []
-        compile_failed = False
-        use_omp = bool(omp_compile)
-
-        lapack_source_set = {str(s) for s in lapack_sources}
-
-        # Strict IEEE 754 flags for LAPACK sources (secular equation deflation
-        # uses infinity arithmetic that -ffast-math breaks).
-        lapack_cflags = [
-            "-O2",
-            "-fno-fast-math",
-            "-fno-finite-math-only",
-            "-Wframe-larger-than=131072",
-            "-fPIC",
-            "-std=c11",
-            f"-I{python_inc}",
-            f"-I{numpy_inc}",
-            f"-I{jlinalg_inc}",
-        ]
-
-        def _jlinalg_compile_cmd(
-            src: Path,
-            obj_file: Path,
-            omp_compile_flags: list[str],
-        ) -> list[str]:
-            """Build the compile command for a single jlinalg source file.
-
-            LAPACK sources get strict IEEE 754 flags (no -ffast-math).
-            Baseline sources get standard optimization flags.
-
-            Args:
-                src: Source file path.
-                obj_file: Output object file path.
-                omp_compile_flags: OpenMP compile-only flags (empty to disable).
-
-            Returns:
-                Compiler command as a list of strings.
-            """
-            cflags = lapack_cflags if str(src) in lapack_source_set else base_cflags
-            return [
-                cc_cmd,
-                *cc_extra,
-                *cflags,
-                *omp_compile_flags,
-                "-c",
-                str(src),
-                "-o",
-                str(obj_file),
-            ]
-
         try:
-            for src in source_files:
-                obj_file = tmp_dir / (src.stem + ".o")
-                cmd_compile = _jlinalg_compile_cmd(src, obj_file, omp_compile)
-                # Print compile command to stderr for build-log assertions (CI grep)
-                print(f"jlinalg compile: {' '.join(cmd_compile)}", file=sys.stderr)
-                result = subprocess.run(cmd_compile, capture_output=True, text=True)
-                if result.returncode != 0:
-                    print(
-                        f"jlinalg compile failed on {src.name}:",
-                        file=sys.stderr,
-                    )
-                    if result.stderr:
-                        print(result.stderr, file=sys.stderr)
-                    compile_failed = True
-                    break
-                obj_files.append(obj_file)
-
-            if compile_failed and use_omp:
-                # Retry without OpenMP compile flags
-                print(
-                    "jlinalg OpenMP compilation failed, retrying without OpenMP...",
-                    file=sys.stderr,
-                )
-                obj_files.clear()
-                compile_failed = False
-                for src in source_files:
-                    obj_file = tmp_dir / (src.stem + "_noomp.o")
-                    cmd_compile = _jlinalg_compile_cmd(src, obj_file, [])
-                    print(
-                        f"jlinalg compile (no OMP): {' '.join(cmd_compile)}",
-                        file=sys.stderr,
-                    )
-                    result = subprocess.run(cmd_compile, capture_output=True, text=True)
-                    if result.returncode != 0:
-                        print(
-                            "WARNING: jlinalg C extension compilation failed on "
-                            f"{src.name} (NumPy fallback will be used):\n"
-                            f"  Error: {result.stderr[:1000]}",
-                            file=sys.stderr,
-                        )
-                        compile_failed = True
-                        break
-                    obj_files.append(obj_file)
-                # No OMP runtime to link if compile retry dropped OMP flags
-                omp_link = []
-
-            if compile_failed:
-                print(
-                    "WARNING: jlinalg C extension compilation failed "
-                    "(NumPy fallback will be used).",
-                    file=sys.stderr,
-                )
-                return
-
-            # dlopen/dlsym in blas_dispatch.c needs -ldl on Linux
-            # -ldl for dlopen/dlsym in blas_dispatch.c
-            # -lpthread for snp_stats.c (uses pthreads directly, not OpenMP)
-            dl_flags = ["-ldl", "-lpthread"] if platform.system() == "Linux" else []
-
-            # Link all object files into the shared library
-            cmd_link = [
-                cc_cmd,
-                *cc_extra,
-                "-shared",
-                "-fPIC",
-                *[str(o) for o in obj_files],
-                "-o",
-                str(out_path),
-                "-lm",
-                *dl_flags,
-                *omp_link,
-                *ldflags,
-            ]
-            print(f"jlinalg link: {' '.join(cmd_link)}", file=sys.stderr)
-            result_link = subprocess.run(cmd_link, capture_output=True, text=True)
-            if result_link.returncode != 0:
-                print(
-                    "WARNING: jlinalg C extension link failed "
-                    "(NumPy fallback will be used):\n"
-                    f"  Command: {' '.join(cmd_link)}\n"
-                    f"  Error: {result_link.stderr[:2000]}",
-                    file=sys.stderr,
-                )
-                return
-
+            result = compile_jlinalg(
+                sources=sources,
+                lapack_sources=lapack,
+                include_dirs=[python_inc, numpy_inc, str(jlinalg_inc_dir)],
+                cc_cmd=cc_cmd,
+                cc_extra=cc_extra,
+                omp_compile=omp_compile,
+                omp_link=omp_link,
+                ldflags=[*platform_ldflags, *ldflags],
+                output=out_path,
+                tmp_dir=tmp_dir,
+                extra_cflags=extra_cflags,
+                extra_link_flags=["-lm"],
+                on_retry=lambda msg: print(msg, file=sys.stderr),
+                verbose_print=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
+            )
         finally:
-            # Clean up temporary object files
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        if not result.success:
+            print(
+                f"WARNING: jlinalg compilation failed: {result.error}. "
+                "Producing pure-Python wheel as fallback.",
+                file=sys.stderr,
+            )
+            return
 
         print(f"jlinalg C extension compiled: {out_path}", file=sys.stderr)
 

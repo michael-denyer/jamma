@@ -481,7 +481,7 @@ def _try_import_accel() -> AccelImport:
 
 def _auto_recompile() -> bool:
     """Auto-recompile the LMM C extension and reimport into sys.modules."""
-    from jamma.core._compile_utils import auto_recompile_c_extension
+    from jamma.core.recompile import auto_recompile_c_extension
 
     return auto_recompile_c_extension(
         module_name="_lmm_accel",

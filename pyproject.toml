@@ -97,6 +97,28 @@ markers = [
 
 [tool.hatch.build.hooks.custom]
 
+[tool.hatch.build.targets.sdist]
+# Source builds need build_support/ at repo root so the hatch build hook
+# can `from build_support import compile_and_link`. build_support/ is NOT
+# shipped in the wheel (below) — wheel installs use jamma.core.recompile
+# for ABI-mismatch runtime recompile.
+include = [
+    "src/jamma/",
+    "build_support/",
+    "hatch_build.py",
+    "pyproject.toml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "tests/",
+]
+
+[tool.hatch.build.targets.wheel]
+# build_support/ is deliberately NOT listed here — it's a PEP 517 build
+# helper only, not runtime code. Runtime C extension recompile uses
+# jamma.core.recompile (which has its own minimal compiler discovery).
+packages = ["src/jamma"]
+
 [tool.ruff]
 line-length = 88
 target-version = "py311"

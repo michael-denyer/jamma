@@ -90,6 +90,12 @@ repos:
         language: system
         files: ^tests/
         pass_filenames: false
+      - id: no-compile-flag-literals-outside-build-support
+        name: ban compile-flag literals outside build_support/
+        entry: scripts/check-compile-flag-literals.py
+        language: system
+        files: ^(hatch_build\.py|src/jamma/(jlinalg/_compile_jlinalg|lmm/_compile_accel|core/recompile)\.py|build_support/)
+        pass_filenames: false
       - id: ruff-format-all
         name: ruff format (all files)
         entry: uv run ruff format --check .

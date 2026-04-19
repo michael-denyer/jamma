@@ -232,6 +232,22 @@ class CustomBuildHook(BuildHookInterface):
             )
             return
 
+        # Surface OMP downgrade explicitly — otherwise a silent serial build
+        # ships and the user sees 1/N the expected parallel speed with no
+        # diagnostic. ``used_openmp`` reflects the compile phase; link phase
+        # is reported separately.
+        if not result.used_openmp:
+            print(
+                "WARNING: _lmm_accel was built WITHOUT OpenMP. Parallel "
+                "LMM association tests will run single-threaded.",
+                file=sys.stderr,
+            )
+        elif not result.used_openmp_link:
+            print(
+                "WARNING: _lmm_accel compiled with OpenMP but linked WITHOUT "
+                "the OpenMP runtime. Threads will not spawn at runtime.",
+                file=sys.stderr,
+            )
         print(f"C extension compiled: {out_path}", file=sys.stderr)
 
         # Register the compiled .so as a forced wheel inclusion.
@@ -340,6 +356,18 @@ class CustomBuildHook(BuildHookInterface):
             )
             return
 
+        if not result.used_openmp:
+            print(
+                "WARNING: jlinalg was built WITHOUT OpenMP. Kinship / "
+                "eigendecomposition will run single-threaded.",
+                file=sys.stderr,
+            )
+        elif not result.used_openmp_link:
+            print(
+                "WARNING: jlinalg compiled with OpenMP but linked WITHOUT "
+                "the OpenMP runtime. Threads will not spawn at runtime.",
+                file=sys.stderr,
+            )
         print(f"jlinalg C extension compiled: {out_path}", file=sys.stderr)
 
         # Register the compiled .so for wheel inclusion

@@ -5,11 +5,18 @@ Single source of truth for compiler flags is `build_support/compile_and_link.py`
 Any flag literal in the four compile entry points means someone duplicated a
 flag again — that's exactly the footgun Phase 123 is preventing.
 
+Scope: this is a drift-catcher for honest copy-paste, NOT defense-in-depth.
+Known bypasses (documented as xfail tests in
+tests/test_check_compile_flag_literals.py): explicit string concat
+(``"-O" + "3"``), f-string interpolation (``f"-O{level}"``), implicit
+adjacent-string concat (``"-O" "3"``). Anyone deliberately evading the lint
+wanted to; that's a code-review problem, not a regex problem.
+
 Target files:
   - hatch_build.py
   - src/jamma/jlinalg/_compile_jlinalg.py
   - src/jamma/lmm/_compile_accel.py
-  - src/jamma/core/recompile.py  (per D-04 — runtime module must stay clean)
+  - src/jamma/core/recompile.py  (runtime module must stay clean)
 
 Flag set (the ones we've actually seen duplicated):
   -O0 / -O1 / -O2 / -O3 / -ftree-vectorize / -fno-fast-math /

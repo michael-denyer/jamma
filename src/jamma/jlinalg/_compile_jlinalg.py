@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import platform
 import shutil
-import subprocess
 import sys
 import sysconfig
 import tempfile
@@ -46,14 +45,14 @@ _build_support_available = (_repo_root / "build_support").is_dir()
 if _build_support_available:
     if str(_repo_root) not in sys.path:
         sys.path.insert(0, str(_repo_root))
-    from build_support.compile_and_link import (  # noqa: E402
+    from build_support.compile_and_link import (
         BASELINE_SOURCES,
         LAPACK_SOURCES,
         LINK_FLAGS_BY_PLATFORM,
         compile_jlinalg,
     )
-    from build_support.find_compiler import find_c_compiler  # noqa: E402
-    from build_support.openmp_detect import detect_openmp_flags  # noqa: E402
+    from build_support.find_compiler import find_c_compiler
+    from build_support.openmp_detect import detect_openmp_flags
 else:
     # Wheel-install path: build_support/ not present. Do NOT raise at
     # import time — jamma.jlinalg.__init__ imports from this module to

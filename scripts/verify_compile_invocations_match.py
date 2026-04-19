@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """Verify wheel-build and dev-mode compile paths share a single source of truth.
 
-Discharges ROADMAP success criterion 2 (byte-identical compiler invocations
-between wheel and dev-mode paths) by STRUCTURAL guarantee rather than
-empirical trace capture: if both paths call the SAME function with the
-SAME constants, their compile invocations differ only by input paths
-(expected — wheel-build writes to build/lib/jamma, dev-mode writes
-in-place).
+Structural guarantee (not empirical trace capture): if the three ENTRY_POINTS
+all call ``build_support.compile_and_link.compile_jlinalg`` with the shared
+constants, their compile invocations differ only by input paths (wheel writes
+to build/lib/jamma, dev-mode writes in-place).
+
+Note on scope: ``src/jamma/core/recompile.py`` is deliberately EXCLUDED from
+ENTRY_POINTS. It ships inside the wheel and must not import ``build_support``
+(build helper lives outside the wheel), so it uses its own minimal dispatch
+path and cannot satisfy the ``compile_jlinalg(`` assertion below. The
+complementary ``check-compile-flag-literals.py`` lint DOES cover recompile.py
+for bare flag literals.
 """
 
 from __future__ import annotations

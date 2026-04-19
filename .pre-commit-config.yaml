@@ -96,6 +96,12 @@ repos:
         language: system
         files: ^(hatch_build\.py|src/jamma/(jlinalg/_compile_jlinalg|lmm/_compile_accel|core/recompile)\.py|build_support/)
         pass_filenames: false
+      - id: verify-compile-invocations-match
+        name: verify compile entry points route through build_support
+        entry: scripts/verify_compile_invocations_match.py
+        language: system
+        files: ^(hatch_build\.py|src/jamma/(jlinalg/_compile_jlinalg|lmm/_compile_accel)\.py|build_support/)
+        pass_filenames: false
       - id: ruff-format-all
         name: ruff format (all files)
         entry: uv run ruff format --check .

@@ -806,49 +806,35 @@ class TestWorkspaceApi:
 def test_lapack_no_ffast_math() -> None:
     """LAPACK sources in build configs must use strict IEEE 754 flags.
 
-    Reads hatch_build.py and _compile_jlinalg.py as text to verify that
-    the lapack_cflags list includes '-fno-fast-math' and excludes '-ffast-math'.
-    The dstedc secular equation uses IEEE 754 infinity arithmetic which
-    -ffast-math breaks.
+    Phase 123-05 consolidated compile flags into build_support/compile_and_link.py.
+    All three entry points (hatch_build.py, _compile_jlinalg.py, _compile_accel.py)
+    route through the helper instead of keeping inline flag lists, so we validate
+    the single source of truth once: LAPACK_CFLAGS must include '-fno-fast-math'
+    and must NOT include '-ffast-math'. The dstedc secular equation uses IEEE 754
+    infinity arithmetic which -ffast-math breaks.
     """
-    import re
+    import sys
 
     repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
 
-    build_files = {
-        "hatch_build.py": repo_root / "hatch_build.py",
-        "_compile_jlinalg.py": (
-            repo_root / "src" / "jamma" / "jlinalg" / "_compile_jlinalg.py"
-        ),
-    }
+    from build_support.compile_and_link import LAPACK_CFLAGS, LAPACK_SOURCES
 
-    for name, path in build_files.items():
-        assert path.exists(), f"{name} not found at {path}"
-        text = path.read_text()
+    # LAPACK_SOURCES identifies the source files that require strict flags.
+    assert LAPACK_SOURCES, (
+        "build_support.compile_and_link.LAPACK_SOURCES must list at least one "
+        "source file (eigh.c) that requires strict IEEE 754 flags"
+    )
 
-        # Verify lapack_sources group exists
-        assert "lapack_sources" in text, (
-            f"{name} must define 'lapack_sources' for LAPACK files "
-            "that require strict IEEE 754 flags"
-        )
-
-        # Verify lapack_cflags contains -fno-fast-math
-        assert "lapack_cflags" in text, (
-            f"{name} must define 'lapack_cflags' with strict IEEE 754 flags"
-        )
-
-        # Extract the lapack_cflags list content
-        match = re.search(r"lapack_cflags\s*=\s*\[([^\]]+)\]", text, re.DOTALL)
-        assert match is not None, f"Could not parse lapack_cflags list in {name}"
-        cflags_text = match.group(1)
-
-        assert '"-fno-fast-math"' in cflags_text, (
-            f"{name}: lapack_cflags must include '-fno-fast-math' to ensure "
-            "strict IEEE 754 arithmetic for LAPACK secular equation solver"
-        )
-        assert '"-ffast-math"' not in cflags_text.replace("-fno-fast-math", ""), (
-            f"{name}: lapack_cflags must NOT include '-ffast-math'"
-        )
+    # LAPACK_CFLAGS is the canonical flag list — must include strict IEEE 754.
+    assert "-fno-fast-math" in LAPACK_CFLAGS, (
+        "LAPACK_CFLAGS must include '-fno-fast-math' to ensure strict IEEE 754 "
+        "arithmetic for the LAPACK secular equation solver"
+    )
+    assert "-ffast-math" not in LAPACK_CFLAGS, (
+        "LAPACK_CFLAGS must NOT include '-ffast-math'"
+    )
 
 
 # ---------------------------------------------------------------------------

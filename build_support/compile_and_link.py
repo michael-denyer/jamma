@@ -189,6 +189,7 @@ def compile_jlinalg(
     extra_cflags: list[str] | None = None,
     extra_link_flags: list[str] | None = None,
     extra_source_includes: dict[str, list[str]] | None = None,
+    link_shared: bool = True,
     on_retry: Callable[[str], None] | None = None,
     verbose_print: Callable[..., None] = print,
 ) -> CompileResult:
@@ -225,7 +226,8 @@ def compile_jlinalg(
             disables OpenMP entirely.
         omp_link: OpenMP link flags (e.g. ``["/path/to/libiomp5.so"]``).
         ldflags: Extra link flags (``-lm``, ``-ldl``, ``-lpthread``, etc.).
-        output: Final shared-library path.
+        output: Final output path (shared library when ``link_shared=True``,
+            executable when ``link_shared=False``).
         tmp_dir: Directory for intermediate .o files. If None, a temp dir
             is created via ``tempfile.mkdtemp(prefix="jamma-build-")``. Caller
             is responsible for cleanup in either case.
@@ -236,6 +238,11 @@ def compile_jlinalg(
         extra_source_includes: Per-source extra ``-I<d>`` flags keyed by
             source filename (``src.name``). Used by compile_test_harness
             to supply tests_dir only to test_*.c sources.
+        link_shared: When True (default), link as a shared library with
+            ``-shared -fPIC``. When False, link as a plain executable (no
+            ``-shared`` / ``-fPIC`` at link time). Used by
+            compile_test_harness to produce the Unity test binary, which
+            must be a runnable executable rather than a .so.
         on_retry: Optional callback invoked with a human-readable reason
             string when a retry path is taken. Intended for warning logs.
         verbose_print: Printer used for non-error progress messages.
@@ -255,6 +262,10 @@ def compile_jlinalg(
     # Precompute LAPACK dispatch set — str() comparison avoids Path.resolve()
     # cross-platform quirks. Pattern lifted from _compile_jlinalg.py:190.
     lapack_source_set = {str(s) for s in lapack_sources}
+
+    # Shared-library link takes -shared -fPIC; executable link takes neither.
+    # (See ``link_shared`` parameter docstring.)
+    link_mode_flags: tuple[str, ...] = ("-shared", "-fPIC") if link_shared else ()
 
     def _compile_sources(
         current_omp_compile: list[str], suffix: str
@@ -316,8 +327,7 @@ def compile_jlinalg(
     link_cmd = [
         cc_cmd,
         *cc_extra,
-        "-shared",
-        "-fPIC",
+        *link_mode_flags,
         *[str(o) for o in compile_objs],
         "-o",
         str(output),
@@ -338,8 +348,7 @@ def compile_jlinalg(
         retry_link_cmd = [
             cc_cmd,
             *cc_extra,
-            "-shared",
-            "-fPIC",
+            *link_mode_flags,
             *[str(o) for o in compile_objs],
             "-o",
             str(output),

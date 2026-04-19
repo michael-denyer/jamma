@@ -245,11 +245,14 @@ def compile_extension(verbose: bool = False) -> bool:
 
 
 def compile_test_harness(verbose: bool = True) -> Path:
-    """Compile the Unity C test harness into a standalone binary.
+    """Compile the Unity C test harness into a standalone executable.
 
-    Compiles test_boundaries.c + unity.c + all jlinalg .c source files into
-    a single test executable (not a shared library).  Uses the same compiler
-    flags and per-file SIMD/LAPACK flag split as the main extension.
+    Routes through ``build_support.compile_and_link.compile_jlinalg`` with
+    ``link_shared=False`` to produce a native executable (not a .so).
+    Compiles test_boundaries.c + unity.c + all jlinalg .c source files
+    (minus pymodule.c, which is Python-module glue and not needed for the
+    standalone binary). Per-source flag split (LAPACK vs baseline) is
+    identical to ``compile_extension``.
 
     Args:
         verbose: Print progress and diagnostics to stderr.
@@ -258,8 +261,13 @@ def compile_test_harness(verbose: bool = True) -> Path:
         Path to the compiled test binary.
 
     Raises:
-        RuntimeError: If compilation fails.
+        RuntimeError: If compilation fails or build_support is not present.
     """
+    if compile_jlinalg is None:
+        raise RuntimeError(
+            "compile_test_harness() called from a wheel-install environment "
+            "(build_support/ not found). This function is dev-mode only."
+        )
 
     def _print(*args: object) -> None:
         if verbose:
@@ -277,23 +285,21 @@ def compile_test_harness(verbose: bool = True) -> Path:
             raise RuntimeError(f"Unity framework file missing: {unity_dir / f}")
 
     # Source files: same as main extension minus pymodule.c (no Python API)
-    # plus test_boundaries.c and unity.c
-    baseline_sources = [
-        jlinalg_src_dir / "platform.c",
-        jlinalg_src_dir / "blas_dispatch.c",
-        jlinalg_src_dir / "snp_stats.c",
-    ]
-    lapack_sources = [
-        jlinalg_src_dir / "eigh.c",
-    ]
+    # plus test_boundaries.c and unity.c. BASELINE_SOURCES from build_support
+    # includes pymodule.c, so filter it out here; the test harness links as
+    # a standalone executable and pymodule.c only exports PyInit symbols.
+    baseline_names = tuple(n for n in BASELINE_SOURCES if n != "pymodule.c")
+    baseline_prod_sources = [jlinalg_src_dir / name for name in baseline_names]
+    lapack_sources = [jlinalg_src_dir / name for name in LAPACK_SOURCES]
 
-    # Test-specific sources
+    # Test-specific sources (excluded from build_support's BASELINE_SOURCES —
+    # they live in jlinalg/tests/, not in jlinalg/src/).
     test_sources = [
         tests_dir / "test_boundaries.c",
         unity_dir / "unity.c",
     ]
 
-    all_sources = baseline_sources + lapack_sources + test_sources
+    all_sources = baseline_prod_sources + lapack_sources + test_sources
 
     # NumPy headers (for npy_intp)
     try:
@@ -305,21 +311,18 @@ def compile_test_harness(verbose: bool = True) -> Path:
     python_inc = sysconfig.get_config_var("INCLUDEPY") or ""
 
     # Compiler
-    from jamma.core._compile_utils import find_c_compiler
-
-    result = find_c_compiler()
-    if not result:
+    cc_result = find_c_compiler()
+    if not cc_result:
         raise RuntimeError(
             "No C compiler found on PATH (tried $CC, sysconfig, cc, clang, gcc). "
             "Install: apt-get install -y gcc (Linux) or xcode-select --install (macOS)"
         )
-    cc_cmd, cc_extra = result
+    cc_cmd, cc_extra = cc_result
 
-    # Link against libpython (blas_dispatch.c uses Python C API for numpy discovery)
+    # Link against libpython (blas_dispatch.c uses Python C API for numpy discovery).
     python_libdir = sysconfig.get_config_var("LIBDIR") or ""
     python_version = sysconfig.get_config_var("VERSION") or ""
 
-    # OpenMP detection (same as compile_extension — split compile/link)
     ldflags: list[str] = ["-lm"]
     if python_libdir:
         ldflags.extend([f"-L{python_libdir}", f"-lpython{python_version}"])
@@ -327,128 +330,58 @@ def compile_test_harness(verbose: bool = True) -> Path:
     if platform.system() == "Linux":
         ldflags.append("-ldl")
         ldflags.append("-lpthread")  # snp_stats.c uses pthreads directly
+
+    # OpenMP detection (same as compile_extension — split compile/link).
     omp_compile, omp_link, cc_cmd = detect_openmp_flags(
         cc_cmd, platform.system(), _print
     )
 
-    # Base compile flags
-    base_cflags = [
-        "-O3",
-        "-ftree-vectorize",
-        "-fno-math-errno",
-        "-fno-trapping-math",
-        "-funroll-loops",
-        "-fno-finite-math-only",
-        "-std=c11",
-        f"-I{python_inc}",
-        f"-I{numpy_inc}",
-        f"-I{jlinalg_inc_dir}",
-    ]
+    # Per-source extra includes: test_boundaries.c needs -I<tests_dir> to
+    # reach unity.h and other test headers. unity.c lives under unity_dir
+    # and already finds its own headers relative to the source path.
+    extra_source_includes: dict[str, list[str]] = {
+        "test_boundaries.c": [str(tests_dir)],
+    }
 
-    lapack_cflags = [
-        "-O2",
-        "-fno-fast-math",
-        "-fno-finite-math-only",
-        "-std=c11",
-        f"-I{python_inc}",
-        f"-I{numpy_inc}",
-        f"-I{jlinalg_inc_dir}",
-    ]
+    # -DUNITY_INCLUDE_DOUBLE tells Unity to enable double-precision
+    # assertions. It's a no-op on non-Unity sources (platform.c, etc.),
+    # so passing it globally via extra_cflags is safe. (extra_cflags is
+    # not applied to LAPACK sources by resolve_cflags_for, which is fine
+    # — eigh.c doesn't use Unity.)
+    extra_cflags = ["-DUNITY_INCLUDE_DOUBLE"]
 
-    lapack_source_set = {str(s) for s in lapack_sources}
+    # Output path — executable under tests_dir.
+    out = tests_dir / "test_boundaries"
+    if platform.system() == "Windows":
+        out = out.with_suffix(".exe")
 
-    # Compile each source to .o.  Mirrors compile_extension's OpenMP retry:
-    # first attempt with OpenMP, retry single-threaded if compilation fails.
-    def _compile_all(
-        current_omp_compile: list[str],
-    ) -> list[Path] | None:
-        """Compile all sources, return obj file list or None on failure."""
-        td = Path(tempfile.mkdtemp(prefix="jlinalg_test_"))
-        objs: list[Path] = []
-        try:
-            for src in all_sources:
-                if not src.exists():
-                    raise RuntimeError(f"Required source file not found: {src}")
-
-                obj_file = td / f"{src.stem}.o"
-                src_str = str(src)
-
-                cflags = lapack_cflags if src_str in lapack_source_set else base_cflags
-
-                # Test sources and Unity need double precision + include path
-                extra_inc: list[str] = []
-                if "test_boundaries.c" in src.name:
-                    extra_inc = [f"-I{tests_dir}", "-DUNITY_INCLUDE_DOUBLE"]
-                elif "unity.c" in src.name:
-                    extra_inc = ["-DUNITY_INCLUDE_DOUBLE"]
-
-                cmd = [
-                    cc_cmd,
-                    *cc_extra,
-                    *cflags,
-                    *current_omp_compile,
-                    *extra_inc,
-                    "-c",
-                    str(src),
-                    "-o",
-                    str(obj_file),
-                ]
-                _print(f"compile: {' '.join(cmd)}")
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                if result.returncode != 0:
-                    _print(f"Compile failed for {src.name}:")
-                    _print(result.stderr)
-                    shutil.rmtree(td, ignore_errors=True)
-                    return None
-                objs.append(obj_file)
-        except Exception:
-            shutil.rmtree(td, ignore_errors=True)
-            raise
-        return objs
-
-    # First attempt: with OpenMP
-    use_omp = bool(omp_compile)
-    current_omp_link = omp_link
-    obj_files = _compile_all(omp_compile)
-
-    if obj_files is None and use_omp:
-        _print(
-            "OpenMP compilation failed, retrying without OpenMP (single-threaded)..."
-        )
-        obj_files = _compile_all([])
-        current_omp_link = []  # no OMP runtime to link
-
-    if obj_files is None:
-        raise RuntimeError("jlinalg test harness compilation failed")
-
+    tmp_dir = Path(tempfile.mkdtemp(prefix="jlinalg_test_"))
     try:
-        # Link into executable
-        out = tests_dir / "test_boundaries"
-        if platform.system() == "Windows":
-            out = out.with_suffix(".exe")
-
-        cmd_link = [
-            cc_cmd,
-            *cc_extra,
-            *[str(o) for o in obj_files],
-            "-o",
-            str(out),
-            *current_omp_link,
-            *ldflags,
-        ]
-        _print(f"link: {' '.join(cmd_link)}")
-        result_link = subprocess.run(cmd_link, capture_output=True, text=True)
-        if result_link.returncode != 0:
-            raise RuntimeError(f"Link failed:\n{result_link.stderr}")
-
-        _print(f"Test harness compiled: {out}")
-        return out
-
+        result = compile_jlinalg(
+            sources=all_sources,
+            lapack_sources=lapack_sources,
+            include_dirs=[python_inc, numpy_inc, str(jlinalg_inc_dir)],
+            cc_cmd=cc_cmd,
+            cc_extra=cc_extra,
+            omp_compile=omp_compile,
+            omp_link=omp_link,
+            ldflags=ldflags,
+            output=out,
+            tmp_dir=tmp_dir,
+            extra_cflags=extra_cflags,
+            extra_source_includes=extra_source_includes,
+            link_shared=False,
+            on_retry=lambda msg: _print(msg),
+            verbose_print=_print,
+        )
     finally:
-        # Clean up obj files (they live in a temp dir from the last _compile_all call)
-        if obj_files:
-            td = obj_files[0].parent
-            shutil.rmtree(td, ignore_errors=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    if not result.success:
+        raise RuntimeError(f"jlinalg test harness compilation failed: {result.error}")
+
+    _print(f"Test harness compiled: {out}")
+    return out
 
 
 if __name__ == "__main__":

@@ -592,7 +592,7 @@ flowchart TD
 
 ### NumPy with MKL ILP64 (Linux / Windows)
 
-Install numpy-mkl using the commands in [Linux / Windows](#linux--windows) above. Pre-built ILP64 wheels are available for numpy 2.4.3 (Python 3.11–3.14, Linux and Windows).
+Install numpy-mkl using the commands in [Linux / Windows](#linux--windows) above. Pre-built ILP64 wheels are available for numpy 2.4.4 (Python 3.11–3.14, Linux and Windows).
 
 > **Note:** scipy does not support ILP64 — it hardcodes `ilp64=False` in
 > `get_lapack_funcs()` ([scipy#23351](https://github.com/scipy/scipy/issues/23351)).

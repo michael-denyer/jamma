@@ -168,8 +168,9 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
     # Dev-mode extras: -march=native unconditionally, diagnose flags optional.
     # These are LOCAL to _compile_accel.py and MUST NOT be moved to
     # BASE_CFLAGS in build_support/ — hatch_build.py (portable wheel path)
-    # must not bake -march=native into the wheel. Per 123-PATTERNS.md:
-    # "This is a deliberate divergence, not duplication."
+    # must not bake -march=native into the wheel. Dev builds target the
+    # local CPU; wheels target the lowest common denominator. Deliberate
+    # divergence, not duplication.
     extra_cflags: list[str] = ["-march=native"]
 
     diag_flags: list[str] = []

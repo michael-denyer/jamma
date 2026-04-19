@@ -37,8 +37,9 @@ from pathlib import Path
 # Bootstrap: try the source-checkout path; if build_support/ is absent
 # (wheel install), leave the helper refs as None and guard the public
 # entry points at call time with a RuntimeError that explains the
-# situation. This preserves the existing ABI-mismatch graceful fallback
-# behavior (see 123-PATTERNS.md lines 320-334).
+# situation. This preserves the ABI-mismatch graceful fallback: the
+# runtime recompile path at jamma.core.recompile catches the RuntimeError
+# and falls back to pure-Python.
 _repo_root = Path(__file__).resolve().parents[3]
 _build_support_available = (_repo_root / "build_support").is_dir()
 

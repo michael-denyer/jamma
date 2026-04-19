@@ -1,11 +1,13 @@
 """Canonical compile flags, source lists, and compile+link driver.
 
 Single source of truth consumed by hatch_build.py (wheel), _compile_jlinalg.py
-(jlinalg dev-mode), and _compile_accel.py (lmm dev-mode). See
-.planning/phases/123-compile-and-link-helper/123-CONTEXT.md for design rationale.
+(jlinalg dev-mode), and _compile_accel.py (lmm dev-mode).
 
-No flag literal belongs outside this module; a pre-commit lint (added in a
-later wave) enforces that.
+No flag literal belongs outside this module; the pre-commit hook
+``no-compile-flag-literals-outside-build-support``
+(scripts/check-compile-flag-literals.py) enforces that, and
+``verify-compile-invocations-match`` confirms the three entry points route
+through ``compile_jlinalg`` below.
 """
 
 from __future__ import annotations
@@ -17,9 +19,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Data constants — lifted verbatim from src/jamma/jlinalg/_compile_jlinalg.py
-# (lines 69-81 for source lists, 154-181 for flag lists). Any change here
-# must propagate to all three entry points in Wave 3.
+# Data constants — THE single source of truth. The three entry points
+# (hatch_build.py, _compile_jlinalg.py, _compile_accel.py) all import from
+# here; no flag literal may live elsewhere.
 # ---------------------------------------------------------------------------
 
 # Default source names — callers supply their own source directory.
@@ -31,7 +33,10 @@ BASELINE_SOURCES: tuple[str, ...] = (
 )
 
 # LAPACK sources require strict IEEE 754 (-O2 -fno-fast-math) — no unrolling,
-# no fast-math — to match vendor LAPACK's numerical guarantees.
+# no fast-math — to match vendor LAPACK's numerical guarantees. Relaxing the
+# split (e.g. moving eigh.c into BASELINE_SOURCES or loosening LAPACK_CFLAGS)
+# breaks JAMMA-vs-GEMMA validation tolerances documented in CLAUDE.md and
+# docs/EQUIVALENCE.md — p-values, effect sizes, and eigenvalues all drift.
 LAPACK_SOURCES: tuple[str, ...] = ("eigh.c",)
 
 # Base compile flags (shared by all non-LAPACK sources — no SIMD flags here).
@@ -50,6 +55,11 @@ BASE_CFLAGS: tuple[str, ...] = (
 )
 
 # LAPACK compile flags: strict IEEE 754, -O2 only, NO unrolling, NO fast-math.
+# Do NOT relax to -O3/-ffast-math: vendor LAPACK (MKL / Accelerate) relies on
+# exact IEEE rounding for eigenvalue/eigenvector accuracy. A relaxed build
+# produces kinship/eigendecomp results that drift beyond JAMMA's validation
+# tolerances vs GEMMA (see CLAUDE.md validation tolerances table,
+# docs/EQUIVALENCE.md).
 LAPACK_CFLAGS: tuple[str, ...] = (
     "-O2",
     "-fno-fast-math",
@@ -92,7 +102,6 @@ def resolve_cflags_for(
     load-bearing: user CFLAGS may contain ``-Ofast`` (which implies
     ``-ffinite-math-only``), and the trailing explicit ``-fno-finite-math-only``
     must override it so isnan() keeps working. DO NOT change this order.
-    See hatch_build.py:592-611 for the equivalent before-image.
 
     The LAPACK path deliberately does NOT splice ``extra_cflags`` — LAPACK
     sources are strict IEEE 754, and a user-supplied ``-Ofast`` would defeat
@@ -207,13 +216,11 @@ def compile_jlinalg(
     path). Extra link flags from the caller (e.g. ``-lm``) are appended.
 
     The two-phase split prevents dual OpenMP runtime (libgomp + libiomp5 →
-    OMP: Error #13). -fopenmp is compile-only; libiomp5 is link-only.
-    # Two-step compile+link to prevent dual OpenMP runtime.
-    # GCC's -fopenmp implicitly adds -lgomp at link time. When libiomp5
-    # (Intel OpenMP, bundled with MKL numpy) is also linked, both runtimes
-    # initialize and abort: "OMP: Error #13: Assertion failure at
-    # kmp_runtime.cpp". Splitting into compile (.o) then link (.so) lets
-    # us pass -fopenmp only to the compiler and link only libiomp5.
+    OMP: Error #13). GCC's -fopenmp implicitly adds -lgomp at link time; when
+    libiomp5 (Intel OpenMP, bundled with MKL numpy) is also linked, both
+    runtimes initialize and abort ("OMP: Error #13: Assertion failure at
+    kmp_runtime.cpp"). Splitting into compile (.o) then link (.so) lets us
+    pass -fopenmp only to the compiler and link only libiomp5.
 
     Args:
         sources: All source files to compile (baseline + LAPACK).

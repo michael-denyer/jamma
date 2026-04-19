@@ -32,7 +32,9 @@ from build_support.compile_and_link import (  # noqa: E402
 )
 
 # ---------------------------------------------------------------------------
-# Constants: exhaustive value checks — any drift breaks Wave 3 entry points.
+# Constants: exhaustive value checks — any drift breaks the three entry
+# points (hatch_build.py, _compile_jlinalg.py, _compile_accel.py) that
+# import these constants.
 # ---------------------------------------------------------------------------
 
 
@@ -140,7 +142,7 @@ def test_resolve_cflags_baseline_source_gets_fast_flags():
 def test_extra_cflags_precede_fno_finite_math_only():
     """Load-bearing ordering: user CFLAGS (-Ofast) must come BEFORE
     -fno-finite-math-only so the trailing explicit flag overrides -Ofast's
-    implicit -ffinite-math-only. See hatch_build.py:592-611 before-image.
+    implicit -ffinite-math-only.
     """
     flags = resolve_cflags_for(
         Path("platform.c"),
@@ -273,13 +275,18 @@ def test_compile_jlinalg_smoke_success(monkeypatch, tmp_path):
 def test_compile_jlinalg_compile_failure_triggers_omp_retry(monkeypatch, tmp_path):
     """When the first compile fails WITH omp_compile active, compile_jlinalg
     should retry once WITHOUT OpenMP and invoke on_retry().
-    """
-    call_count = {"n": 0}
 
-    def _fake_run(cmd, **kwargs):
-        call_count["n"] += 1
+    Also asserts the retry subprocess command actually has ``-fopenmp``
+    stripped and the subsequent link command has ``-liomp5`` stripped —
+    without that, a refactor could fire on_retry() while still passing OMP
+    flags, defeating the whole retry path.
+    """
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, **_kwargs):
+        calls.append(list(cmd))
         # First compile attempt fails (has -fopenmp).
-        if call_count["n"] == 1 and "-fopenmp" in cmd:
+        if len(calls) == 1 and "-fopenmp" in cmd:
             return _FakeCompleted(returncode=1, stderr="omp compile failed")
         return _FakeCompleted(returncode=0)
 
@@ -310,5 +317,15 @@ def test_compile_jlinalg_compile_failure_triggers_omp_retry(monkeypatch, tmp_pat
 
     assert result.success is True
     assert len(retry_reasons) >= 1
-    # Retry cleared omp_link as well (pattern from _compile_jlinalg.py:232).
     assert result.used_openmp_link is False
+
+    # Call pattern: [compile-with-omp (fail), compile-retry-no-omp (ok), link].
+    assert len(calls) >= 3, f"expected >=3 calls, got {len(calls)}: {calls}"
+    assert "-fopenmp" in calls[0], "first compile should have had -fopenmp"
+    assert "-fopenmp" not in calls[1], (
+        f"retry compile must NOT include -fopenmp; got {calls[1]}"
+    )
+    # Link (the last call) must not include the OMP runtime either.
+    assert "-liomp5" not in calls[-1], (
+        f"retry link must NOT include -liomp5; got {calls[-1]}"
+    )

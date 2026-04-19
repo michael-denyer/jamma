@@ -22,7 +22,26 @@ import sysconfig
 import tempfile
 from pathlib import Path
 
-from hatchling.builders.hooks.plugin.interface import BuildHookInterface
+# hatch_build.py is the PEP 517 build backend — runs before jamma is
+# installed, so it cannot `from jamma.* import ...`. build_support/ sits
+# at repo root as a sibling to src/; insert repo root on sys.path so we
+# can import the shared compile helpers. Convention: numpy / scipy /
+# pyarrow all use this pattern for PEP 517 build helpers.
+sys.path.insert(0, str(Path(__file__).parent))
+
+from build_support.compile_and_link import (  # noqa: E402
+    BASE_CFLAGS,
+    BASELINE_SOURCES,
+    LAPACK_CFLAGS,
+    LAPACK_SOURCES,
+    LINK_FLAGS_BY_PLATFORM,
+    compile_jlinalg,
+    resolve_cflags_for,
+)
+from build_support.find_compiler import find_c_compiler  # noqa: E402
+from build_support.openmp_detect import detect_openmp_flags  # noqa: E402
+
+from hatchling.builders.hooks.plugin.interface import BuildHookInterface  # noqa: E402
 
 
 class CustomBuildHook(BuildHookInterface):
@@ -47,19 +66,6 @@ class CustomBuildHook(BuildHookInterface):
         # _lmm_accel is more critical — compile first so its errors are visible.
         self._compile_c_extension(build_data)
         self._compile_jlinalg_extension(build_data)
-
-    @staticmethod
-    def _probe_compiler(cmd: str) -> bool:
-        """Return True if *cmd* responds to ``--version`` with exit 0."""
-        try:
-            return (
-                subprocess.run(
-                    [cmd, "--version"], capture_output=True, timeout=5
-                ).returncode
-                == 0
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return False
 
     def _preflight_c_build(self):
         """Verify build prerequisites and return compiler/include information.
@@ -96,12 +102,8 @@ class CustomBuildHook(BuildHookInterface):
             )
             return None
 
-        # Resolve compiler — mirrors find_c_compiler() from
-        # jamma.core._compile_utils but inlined here because the package
-        # isn't installed yet during wheel builds.
-        #
-        # $CC is explicit: honour it or fail (no silent fallback).
-        # Otherwise try sysconfig, cc, clang, gcc with --version probing.
+        # Compiler discovery delegated to build_support.find_compiler.
+        # Honours $CC, falls back to sysconfig + cc/clang/gcc with probing.
         cc_env = os.environ.get("CC")
         if cc_env is not None and not cc_env.strip():
             print(
@@ -111,57 +113,26 @@ class CustomBuildHook(BuildHookInterface):
             )
             return None
 
-        cc_cmd: str | None = None
-        cc_extra: list[str] = []
-
-        if cc_env:
-            # Explicit $CC — honour or fail, don't fall through.
-            parts = cc_env.split()
-            cmd = parts[0]
-            if shutil.which(cmd) and self._probe_compiler(cmd):
-                cc_cmd, cc_extra = cmd, parts[1:]
-            else:
+        compiler = find_c_compiler()
+        if compiler is None:
+            if cc_env:
                 print(
                     f"WARNING: $CC is set to '{cc_env}' but compiler "
                     "verification failed — skipping C extension "
                     "compilation (pure-Python fallback).",
                     file=sys.stderr,
                 )
-                return None
-        else:
-            # Auto-detect: sysconfig, then common fallbacks.
-            seen: set[str] = set()
-            candidates: list[str] = []
-            for raw in (
-                sysconfig.get_config_var("CC"),
-                "cc",
-                "clang",
-                "gcc",
-            ):
-                if not raw:
-                    continue
-                cmd = raw.split()[0]
-                if cmd not in seen:
-                    seen.add(cmd)
-                    candidates.append(raw)
-
-            for candidate in candidates:
-                parts = candidate.split()
-                cmd = parts[0]
-                if shutil.which(cmd) and self._probe_compiler(cmd):
-                    cc_cmd, cc_extra = cmd, parts[1:]
-                    break
-
-        if cc_cmd is None:
-            print(
-                "WARNING: no usable C compiler found — "
-                "skipping C extension compilation (pure-Python fallback).\n"
-                "  To enable the C extension, install a C compiler:\n"
-                "    Debian/Ubuntu: apt-get install -y gcc\n"
-                "    macOS: xcode-select --install",
-                file=sys.stderr,
-            )
+            else:
+                print(
+                    "WARNING: no usable C compiler found — "
+                    "skipping C extension compilation (pure-Python fallback).\n"
+                    "  To enable the C extension, install a C compiler:\n"
+                    "    Debian/Ubuntu: apt-get install -y gcc\n"
+                    "    macOS: xcode-select --install",
+                    file=sys.stderr,
+                )
             return None
+        cc_cmd, cc_extra = compiler
 
         python_inc = sysconfig.get_config_var("INCLUDEPY")
         numpy_inc = np.get_include()
@@ -187,118 +158,12 @@ class CustomBuildHook(BuildHookInterface):
 
         return (cc_cmd, cc_extra, python_inc, numpy_inc, ldflags)
 
-    def _detect_linux_openmp_flags(
-        self, cc_cmd: str
-    ) -> tuple[list[str], list[str], str]:
-        """Detect the best OpenMP flags for Linux.
-
-        This method, along with ``_find_libiomp5`` and ``_openmp_flags_for_libiomp5``
-        below, is a copy of the corresponding functions in
-        ``jamma.core.openmp_detect``.
-        hatch_build.py cannot import from jamma.* at wheel-build time, so we
-        maintain this copy here — keep the two in sync.
-
-        Prefers clang over GCC when libiomp5 is found. GCC's ``-fopenmp``
-        generates ``GOMP_*`` ABI calls; libiomp5's compatibility shim for
-        these has assertion failures (``kmp_runtime.cpp``) after MKL LAPACK
-        operations. Clang natively generates ``kmp_*`` calls.
-
-        Args:
-            cc_cmd: C compiler command name.
-
-        Returns:
-            ``(compile_flags, link_flags, cc_override)`` for OpenMP.
-        """
-        libiomp5_path = self._find_libiomp5()
-        if libiomp5_path is not None:
-            return self._openmp_flags_for_libiomp5(cc_cmd, libiomp5_path)
-        return (["-fopenmp"], ["-fopenmp"], cc_cmd)
-
-    def _find_libiomp5(self) -> Path | None:
-        """Locate libiomp5.so in numpy's bundled libs or system paths."""
-        try:
-            import numpy as np
-
-            np_dir = Path(np.__file__).parent
-            for d in [
-                np_dir / ".libs",
-                np_dir.parent / "numpy.libs",
-                np_dir / "_core" / ".libs",
-            ]:
-                if not d.is_dir():
-                    continue
-                for lib in d.iterdir():
-                    if "libiomp5" in lib.name and ".so" in lib.name:
-                        print(f"Intel OpenMP found: {lib}", file=sys.stderr)
-                        return lib
-        except ImportError:
-            pass
-
-        for search_dir in [
-            Path("/usr/lib"),
-            Path("/usr/lib64"),
-            Path("/usr/local/lib"),
-        ]:
-            if not search_dir.is_dir():
-                continue
-            for lib in search_dir.iterdir():
-                if "libiomp5" in lib.name and ".so" in lib.name:
-                    print(f"Intel OpenMP found (system): {lib}", file=sys.stderr)
-                    return lib
-        return None
-
-    def _openmp_flags_for_libiomp5(
-        self, cc_cmd: str, libiomp5_path: Path
-    ) -> tuple[list[str], list[str], str]:
-        """Build OpenMP flags for linking against libiomp5, preferring clang."""
-        lib_dir = libiomp5_path.parent
-        link_flags = [str(libiomp5_path), f"-Wl,-rpath,{lib_dir}"]
-
-        clang_path = shutil.which("clang")
-        if clang_path is not None:
-            result = subprocess.run(
-                [
-                    clang_path,
-                    "-fopenmp",
-                    "-x",
-                    "c",
-                    "-",  # read C source from stdin
-                    "-x",
-                    "none",  # reset — next args auto-detect by ext
-                    "-o",
-                    "/dev/null",
-                    str(libiomp5_path),
-                    f"-Wl,-rpath,{lib_dir}",
-                ],
-                input="int main(){return 0;}\n",
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode == 0:
-                print(
-                    f"Using clang ({clang_path}) for libiomp5 compatibility",
-                    file=sys.stderr,
-                )
-                return (["-fopenmp"], link_flags, clang_path)
-            print(
-                f"clang found but OpenMP test failed: {result.stderr.strip()}",
-                file=sys.stderr,
-            )
-
-        print(
-            f"WARNING: Using {cc_cmd} with libiomp5 — GCC's GOMP shim may "
-            f"cause assertion failures. Install clang: apt-get install clang",
-            file=sys.stderr,
-        )
-        return (["-fopenmp"], link_flags, cc_cmd)
-
     def _compile_c_extension(self, build_data):
         """Compile _lmm_accel.c -> _lmm_accel{EXT_SUFFIX} if a C compiler is available.
 
         Uses sysconfig to locate Python headers and numpy to locate its include
-        directory. OpenMP support is attempted:
-          - macOS: -Xpreprocessor -fopenmp via Homebrew libomp
-          - Linux: -fopenmp (GCC/Clang)
+        directory. OpenMP support is detected via build_support.openmp_detect
+        (handles Linux and Darwin uniformly).
 
         On any compilation failure, logs a warning and returns without raising.
         The compiled .so is written to src/jamma/lmm/ where hatchling's normal
@@ -327,60 +192,24 @@ class CustomBuildHook(BuildHookInterface):
         out_name = f"_lmm_accel{ext_suffix}"
         out_path = Path(self.root) / "src" / "jamma" / "lmm" / out_name
 
-        # Platform-specific OpenMP flags — split compile/link to avoid
-        # loading both libgomp (-fopenmp on GCC linker) and libiomp5 (MKL).
-        omp_compile: list[str] = []
-        omp_link: list[str] = []
-        no_openmp = os.environ.get("JAMMA_NO_OPENMP", "").strip() not in ("", "0")
-        if no_openmp:
-            print(
-                "OpenMP disabled (JAMMA_NO_OPENMP set). "
-                "C extension will be single-threaded.",
-                file=sys.stderr,
-            )
-        elif platform.system() == "Darwin":
-            try:
-                prefix = subprocess.check_output(
-                    ["brew", "--prefix", "libomp"],
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                ).strip()
-                if Path(prefix, "lib").is_dir():
-                    omp_compile = [
-                        f"-I{prefix}/include",
-                        "-Xpreprocessor",
-                        "-fopenmp",
-                    ]
-                    omp_link = [
-                        f"-L{prefix}/lib",
-                        "-lomp",
-                    ]
-                else:
-                    print(
-                        f"OpenMP: Homebrew prefix {prefix} exists but lib/ not found. "
-                        "C extension will be single-threaded.",
-                        file=sys.stderr,
-                    )
-            except (FileNotFoundError, subprocess.CalledProcessError):
-                # No Homebrew libomp — compile single-threaded C (still faster
-                # than Python loops; _OPENMP is undefined so #pragma is skipped)
-                print(
-                    "OpenMP not available on macOS (libomp not found). "
-                    "C extension will be single-threaded.",
-                    file=sys.stderr,
-                )
-        else:
-            omp_compile, omp_link, cc_cmd = self._detect_linux_openmp_flags(cc_cmd)
+        # Unified OpenMP detection — handles prefer-clang for libiomp5 on
+        # Linux, Homebrew on Darwin, and the JAMMA_NO_OPENMP escape hatch.
+        omp_compile, omp_link, cc_cmd = detect_openmp_flags(
+            cc_cmd,
+            platform.system(),
+            _print=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
+            _warn=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
+        )
 
         # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3)
         extra_cflags = os.environ.get("CFLAGS", "").split()
 
         # Two-step compile+link to prevent dual OpenMP runtime.
-        # GCC's -fopenmp implicitly adds -lgomp at link time. When libiomp5
-        # (Intel OpenMP, bundled with MKL numpy) is also linked, both runtimes
+        # GCC's -fopenmp implicitly adds -lgomp at link time. When Intel's
+        # OMP runtime (bundled with MKL numpy) is also linked, both runtimes
         # initialize and abort: "OMP: Error #13: Assertion failure at
         # kmp_runtime.cpp". Splitting into compile (.o) then link (.so) lets
-        # us pass -fopenmp only to the compiler and link only libiomp5.
+        # us pass -fopenmp only to the compiler and link only the runtime.
         obj_path = out_path.with_suffix(".o")
 
         compile_cmd = [
@@ -440,7 +269,7 @@ class CustomBuildHook(BuildHookInterface):
                 )
                 return
 
-        # Link step: .o -> .so (no -fopenmp here — only libiomp5 link flags)
+        # Link step: .o -> .so (no -fopenmp here — only runtime link flags)
         link_cmd = [
             cc_cmd,
             "-shared",
@@ -492,9 +321,8 @@ class CustomBuildHook(BuildHookInterface):
         This enables per-file compiler flag groups (e.g. AVX2 files vs LAPACK files
         with distinct flag sets in future phases).
 
-        OpenMP support is attempted:
-          - macOS: -Xpreprocessor -fopenmp via Homebrew libomp
-          - Linux: -fopenmp (libgomp or libiomp5 auto-detected)
+        OpenMP support is detected via build_support.openmp_detect
+        (handles Linux and Darwin uniformly).
 
         On any compilation failure, logs a warning and returns without raising.
         The compiled .so is written to src/jamma/jlinalg/.
@@ -546,48 +374,13 @@ class CustomBuildHook(BuildHookInterface):
             )
             return
 
-        # Platform-specific OpenMP flags — split compile/link to avoid
-        # loading both libgomp (-fopenmp on GCC linker) and libiomp5 (MKL).
-        omp_compile: list[str] = []
-        omp_link: list[str] = []
-        no_openmp = os.environ.get("JAMMA_NO_OPENMP", "").strip() not in ("", "0")
-        if no_openmp:
-            print(
-                "OpenMP disabled (JAMMA_NO_OPENMP set). "
-                "jlinalg C extension will be single-threaded.",
-                file=sys.stderr,
-            )
-        elif platform.system() == "Darwin":
-            try:
-                prefix = subprocess.check_output(
-                    ["brew", "--prefix", "libomp"],
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                ).strip()
-                if Path(prefix, "lib").is_dir():
-                    omp_compile = [
-                        f"-I{prefix}/include",
-                        "-Xpreprocessor",
-                        "-fopenmp",
-                    ]
-                    omp_link = [
-                        f"-L{prefix}/lib",
-                        "-lomp",
-                    ]
-                else:
-                    print(
-                        f"OpenMP: Homebrew prefix {prefix} exists but lib/ not found. "
-                        "jlinalg C extension will be single-threaded.",
-                        file=sys.stderr,
-                    )
-            except (FileNotFoundError, subprocess.CalledProcessError):
-                print(
-                    "OpenMP not available on macOS (libomp not found). "
-                    "jlinalg C extension will be single-threaded.",
-                    file=sys.stderr,
-                )
-        else:
-            omp_compile, omp_link, cc_cmd = self._detect_linux_openmp_flags(cc_cmd)
+        # Unified OpenMP detection — same helper the _lmm_accel path uses.
+        omp_compile, omp_link, cc_cmd = detect_openmp_flags(
+            cc_cmd,
+            platform.system(),
+            _print=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
+            _warn=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
+        )
 
         # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3)
         extra_cflags = os.environ.get("CFLAGS", "").split()

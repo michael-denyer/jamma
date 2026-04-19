@@ -16,9 +16,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-import pytest
+# sys.path must be mutated BEFORE importing build_support, which is not in the
+# installed wheel. Ruff E402 is expected and silenced for the two imports below.
+import pytest  # noqa: E402
 
-from build_support.compile_and_link import (
+from build_support.compile_and_link import (  # noqa: E402
     BASE_CFLAGS,
     BASELINE_SOURCES,
     LAPACK_CFLAGS,
@@ -28,7 +30,6 @@ from build_support.compile_and_link import (
     compile_jlinalg,
     resolve_cflags_for,
 )
-
 
 # ---------------------------------------------------------------------------
 # Constants: exhaustive value checks — any drift breaks Wave 3 entry points.

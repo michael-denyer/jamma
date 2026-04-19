@@ -20,23 +20,77 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import tempfile
 from pathlib import Path
 
-from jamma.core.openmp_detect import detect_openmp_flags
+# _compile_accel.py runs in two modes:
+#   1. Dev-mode: `python -m jamma.lmm._compile_accel` from a source checkout.
+#      build_support/ sits at repo root (sibling to src/).
+#   2. Wheel install: jamma is installed but build_support/ is NOT shipped
+#      with the wheel. On ABI-mismatch recompile at import time,
+#      jamma.core.recompile.auto_recompile_c_extension calls this module's
+#      compile_extension(). That code path should emit a clear error, NOT
+#      a vague ImportError from the top-of-module `from build_support...`.
+#
+# Bootstrap: try the source-checkout path; if build_support/ is absent
+# (wheel install), leave the helper refs as None and guard the public
+# entry point at call time with a RuntimeError that explains the
+# situation. Mirrors _compile_jlinalg.py's bootstrap.
+_repo_root = Path(__file__).resolve().parents[3]
+_build_support_available = (_repo_root / "build_support").is_dir()
+
+if _build_support_available:
+    if str(_repo_root) not in sys.path:
+        sys.path.insert(0, str(_repo_root))
+    from build_support.compile_and_link import (
+        LINK_FLAGS_BY_PLATFORM,
+        compile_jlinalg,
+    )
+    from build_support.find_compiler import find_c_compiler
+    from build_support.openmp_detect import detect_openmp_flags
+else:
+    # Wheel-install path: build_support/ not present. Do NOT raise at
+    # import time — other modules may import this module to reach
+    # compile_extension via ABI-mismatch recompile. Leave the helper
+    # refs as None and guard the public function with a clear RuntimeError.
+    LINK_FLAGS_BY_PLATFORM = None  # type: ignore[assignment]
+    compile_jlinalg = None  # type: ignore[assignment]
+    find_c_compiler = None  # type: ignore[assignment]
+    detect_openmp_flags = None  # type: ignore[assignment]
 
 
 def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
     """Compile _lmm_accel.c into a shared library in the installed package.
 
+    Routes through ``build_support.compile_and_link.compile_jlinalg`` with a
+    single source (``_lmm_accel.c``) and no LAPACK sources. Dev-mode-only
+    flags (``-march=native``, vectorization-report flags) are supplied via
+    ``extra_cflags`` so they do not leak into the portable wheel-build path
+    in ``hatch_build.py``.
+
+    Dev-mode entry point. Called by:
+      - ``python -m jamma.lmm._compile_accel`` from a source checkout
+      - ``jamma.core.recompile.auto_recompile_c_extension`` on ABI mismatch
+
     Args:
         verbose: Print per-command compile details to stdout. When False
             (default), only errors and a one-line summary are printed.
-        diagnose: Print GCC vectorization report showing which loops were
-            SIMD-vectorized. Use to verify AVX-512 codegen on target hardware.
+        diagnose: Emit compiler vectorization reports (clang ``-Rpass``,
+            gcc ``-fopt-info-vec-all``). Use to verify AVX-512 codegen on
+            target hardware.
 
     Returns:
         True if compilation succeeded, False otherwise.
     """
+    if compile_jlinalg is None:
+        raise RuntimeError(
+            "compile_extension() called from a wheel-install environment "
+            "(build_support/ not found at repo root). This function is only "
+            "available in dev-mode or sdist installs. For wheel installs, "
+            "ABI mismatches trigger jamma.core.recompile.auto_recompile_c_extension() "
+            "instead — it uses its own minimal compiler discovery and does not "
+            "require build_support/."
+        )
 
     def _print(*args: object) -> None:
         """Always print (errors, results)."""
@@ -72,17 +126,15 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
     _detail(f"numpy {np.__version__} OK")
 
     # Compiler
-    from jamma.core._compile_utils import find_c_compiler
-
-    result = find_c_compiler()
-    if not result:
+    cc_result = find_c_compiler()
+    if not cc_result:
         _print(
             "ERROR: No C compiler found on PATH (tried $CC, sysconfig, cc, clang, gcc)"
         )
         _print("  Install: apt-get install -y gcc  (Linux)")
         _print("  Install: xcode-select --install  (macOS)")
         return False
-    cc_cmd, cc_extra = result
+    cc_cmd, cc_extra = cc_result
     _detail(f"Compiler: {shutil.which(cc_cmd)}")
 
     # Python headers
@@ -94,6 +146,11 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
         return False
     _detail(f"Python.h: {python_h}")
 
+    # Windows/MSVC is not supported — JAMMA targets Linux/macOS only
+    if platform.system() == "Windows":
+        _print("ERROR: Windows is not supported for C extension compilation")
+        return False
+
     # Output path
     ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
     out = lmm_dir / f"_lmm_accel{ext_suffix}"
@@ -101,25 +158,23 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
     numpy_inc = np.get_include()
     _detail(f"NumPy include: {numpy_inc}")
 
-    # Windows/MSVC is not supported — JAMMA targets Linux/macOS only
-    if platform.system() == "Windows":
-        _print("ERROR: Windows is not supported for C extension compilation")
-        return False
-
-    # Platform flags (GCC/Clang) — split into compile-only and link-only to
-    # avoid loading both libgomp (-fopenmp on GCC linker) and libiomp5 (MKL).
-    ldflags: list[str] = []
+    # OpenMP detection — may override cc_cmd to use clang when libiomp5 is
+    # found, since GCC's GOMP compatibility shim has assertion failures after
+    # MKL LAPACK operations.
     omp_compile, omp_link, cc_cmd = detect_openmp_flags(
         cc_cmd, platform.system(), _detail, _warn=_print
     )
-    if platform.system() == "Darwin":
-        ldflags = ["-undefined", "dynamic_lookup"]
 
-    # -march=native is safe here: compiles on the user's own machine.
-    # hatch_build.py omits this flag for portable wheel builds.
+    # Dev-mode extras: -march=native unconditionally, diagnose flags optional.
+    # These are LOCAL to _compile_accel.py and MUST NOT be moved to
+    # BASE_CFLAGS in build_support/ — hatch_build.py (portable wheel path)
+    # must not bake -march=native into the wheel. Per 123-PATTERNS.md:
+    # "This is a deliberate divergence, not duplication."
+    extra_cflags: list[str] = ["-march=native"]
+
     diag_flags: list[str] = []
     if diagnose:
-        # Detect compiler to use correct vectorization report flags.
+        # Detect compiler to pick the right vectorization-report flag.
         # GCC uses -fopt-info-vec-all; Clang uses -Rpass flags.
         probe = subprocess.run([cc_cmd, "--version"], capture_output=True, text=True)
         compiler_id = probe.stdout.lower() if probe.returncode == 0 else ""
@@ -131,112 +186,48 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
             ]
         else:
             diag_flags = ["-fopt-info-vec-all"]
+    extra_cflags.extend(diag_flags)
 
-    # Two-step compile+link to prevent dual OpenMP runtime.
-    # GCC's -fopenmp implicitly adds -lgomp at link time. When libiomp5
-    # (Intel OpenMP, bundled with MKL numpy) is also linked, both runtimes
-    # initialize and abort: "OMP: Error #13: Assertion failure at
-    # kmp_runtime.cpp". Splitting into compile (.o) then link (.so) lets
-    # us pass -fopenmp only to the compiler and link only libiomp5.
-    obj = out.with_suffix(".o")
+    # Platform-specific link flags. Helper appends omp_link + extra_link_flags.
+    ldflags = list(LINK_FLAGS_BY_PLATFORM.get(platform.system(), ()))
 
-    compile_cmd = [
-        cc_cmd,
-        *cc_extra,
-        "-O3",
-        "-ftree-vectorize",
-        "-fno-math-errno",
-        "-fno-trapping-math",
-        "-march=native",
-        "-fPIC",
-        "-std=c11",
-        f"-I{python_inc}",
-        f"-I{numpy_inc}",
-        *omp_compile,
-        *diag_flags,
-        "-c",
-        str(src),
-        "-o",
-        str(obj),
-    ]
-
-    _detail(f"Compiling: {' '.join(compile_cmd)}")
-    result = subprocess.run(compile_cmd, capture_output=True, text=True)
-
-    if diagnose and (result.stderr or result.stdout):
-        _print("\n=== Vectorization Report ===")
-        diag_text = result.stderr + result.stdout
-        for line in diag_text.splitlines():
-            ll = line.lower()
-            if any(kw in ll for kw in ("vectoriz", "simd", "remark")):
-                _print(f"  {line}")
-        _print("=== End Report ===\n")
-
-    compiled_with_omp = bool(omp_compile)
-    if result.returncode != 0 and omp_compile:
-        _print(f"OpenMP compilation failed: {result.stderr.strip()}")
-        _print("Retrying without OpenMP (single-threaded)...")
-        compile_cmd_no_omp = [x for x in compile_cmd if x not in omp_compile]
-        result = subprocess.run(compile_cmd_no_omp, capture_output=True, text=True)
-        compiled_with_omp = False
-        omp_link = []  # Don't link OpenMP if compile failed
-
-    if result.returncode != 0:
-        _print(f"ERROR: compilation failed:\n{result.stderr}")
-        # Clean up .o if it exists
-        obj.unlink(missing_ok=True)
-        return False
-
-    # Link step: .o -> .so (no -fopenmp here — only libiomp5 link flags)
-    link_cmd = [
-        cc_cmd,
-        "-shared",
-        str(obj),
-        "-o",
-        str(out),
-        *omp_link,
-        "-lm",
-        *ldflags,
-    ]
-
-    _detail(f"Linking: {' '.join(link_cmd)}")
-    result = subprocess.run(link_cmd, capture_output=True, text=True)
-    obj.unlink(missing_ok=True)  # Clean up .o regardless
-
-    if result.returncode != 0:
-        _print(f"ERROR: link failed:\n{result.stderr}")
-        return False
-
-    _detail(f"Compiled: {out}")
-
-    # Verify import
+    # Compile + link via the shared helper. ``_lmm_accel.c`` is a baseline
+    # source (NOT LAPACK) — pass empty lapack_sources=[]. ``-lm`` goes
+    # through extra_link_flags because it's universal but not encoded in
+    # the per-platform LINK_FLAGS_BY_PLATFORM table.
+    tmp_dir = Path(tempfile.mkdtemp(prefix="lmm_accel_compile_"))
     try:
-        # Force re-import by removing cached failure
-        mods_to_remove = [
-            k for k in sys.modules if k.startswith("jamma.lmm._lmm_accel")
-        ]
-        for k in mods_to_remove:
-            del sys.modules[k]
+        result = compile_jlinalg(
+            sources=[src],
+            lapack_sources=[],
+            include_dirs=[python_inc, numpy_inc],
+            cc_cmd=cc_cmd,
+            cc_extra=cc_extra,
+            omp_compile=omp_compile,
+            omp_link=omp_link,
+            ldflags=ldflags,
+            output=out,
+            tmp_dir=tmp_dir,
+            extra_cflags=extra_cflags,
+            extra_link_flags=["-lm"],
+            on_retry=lambda msg: _print(msg),
+            verbose_print=_detail,
+        )
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
-        from jamma.lmm._lmm_accel import compute_lmm_batch_c  # noqa: F401
+    if not result.success:
+        _print(f"ERROR: _lmm_accel compilation failed: {result.error}")
+        return False
 
-        omp_status = "OpenMP" if compiled_with_omp else "single-threaded"
-        _print(f"_lmm_accel compiled OK ({omp_status})")
-        return True
-    except ImportError as e:
-        _print(f"ERROR: compiled but import failed (ImportError): {e}")
-        _print("  This usually means ABI mismatch or missing shared libraries.")
-        return False
-    except OSError as e:
-        _print(f"ERROR: compiled but import failed (OSError): {e}")
-        _print("  Check that all shared library dependencies are available.")
-        return False
-    except Exception as e:
-        import traceback
+    # Evict cached import so a subsequent `from jamma.lmm._lmm_accel import ...`
+    # picks up the freshly compiled extension instead of the stale module.
+    for k in [k for k in sys.modules if k.startswith("jamma.lmm._lmm_accel")]:
+        del sys.modules[k]
 
-        _print(f"ERROR: compiled but import failed ({type(e).__name__}): {e}")
-        _print(traceback.format_exc())
-        return False
+    omp_status = "OpenMP" if result.used_openmp else "single-threaded"
+    _print(f"_lmm_accel extension compiled: {out} ({omp_status})")
+    return True
 
 
 if __name__ == "__main__":

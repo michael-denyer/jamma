@@ -852,6 +852,69 @@ class PipelineRunner:
 
         return self._run_inner(t_start, plan, requested)
 
+    def _load_phenotypes_and_intersect_masks(
+        self,
+        pheno_columns: list[int],
+        covariates: np.ndarray | None,
+    ) -> tuple[dict[int, tuple[np.ndarray, int]], np.ndarray, int]:
+        """Load each phenotype column and intersect their valid-sample masks.
+
+        Reads .fam once, parses each phenotype column, computes the valid
+        mask (non-NaN phenotype + non-NaN covariates) per column, then
+        intersects across columns so eigendecomposition runs on the
+        sample set common to every phenotype.
+
+        Args:
+            pheno_columns: Phenotype column numbers (1-based, as PLINK).
+            covariates: Covariate matrix (n_samples, n_cvt) or None.
+
+        Returns:
+            ``(all_pheno_data, valid_mask, n_valid)`` where
+            ``all_pheno_data[col] = (phenotype_array, n_analyzed)``,
+            ``valid_mask`` is the boolean intersection across all columns,
+            and ``n_valid`` is its sum.
+
+        Raises:
+            ValueError: If the .fam file can't be read, or if no sample is
+                valid across all columns (with per-column counts in the
+                message for diagnosis).
+        """
+        fam_path = f"{self.config.bfile}.fam"
+        try:
+            fam_data = np.loadtxt(fam_path, dtype=str, ndmin=2)
+        except (ValueError, OSError) as e:
+            raise ValueError(f"Failed to read .fam file {fam_path}: {e}") from e
+
+        all_pheno_data: dict[int, tuple[np.ndarray, int]] = {}
+        all_masks: list[np.ndarray] = []
+        for col in pheno_columns:
+            pheno, n_anal = self._parse_phenotype_column(col, fam_data=fam_data)
+            all_pheno_data[col] = (pheno, n_anal)
+            all_masks.append(self._compute_valid_mask(pheno, covariates))
+
+        valid_mask = np.all(all_masks, axis=0)
+        n_valid = int(np.sum(valid_mask))
+
+        if n_valid == 0:
+            per_pheno_counts = {
+                col: int(m.sum())
+                for col, m in zip(pheno_columns, all_masks, strict=True)
+            }
+            raise ValueError(
+                f"No samples have valid values across all {len(pheno_columns)} "
+                f"phenotype columns. Per-column valid counts: {per_pheno_counts}"
+            )
+
+        per_pheno_counts = [int(m.sum()) for m in all_masks]
+        if n_valid < min(per_pheno_counts):
+            logger.warning(
+                f"Sample mask intersection reduced valid samples: "
+                f"per-phenotype counts {per_pheno_counts}, "
+                f"intersection {n_valid}"
+            )
+
+        return all_pheno_data, valid_mask, n_valid
+
     def _run_inner(
         self,
         t_start: float,
@@ -898,46 +961,10 @@ class PipelineRunner:
 
         covariates = self.load_covariates(n_samples)
 
-        # Compute valid mask as intersection across all phenotype columns.
-        # This ensures eigendecomposition uses the same sample set for all
-        # phenotypes. Load .fam data once and extract all columns.
         pheno_columns = self.config.phenotype_columns
-        fam_path = f"{self.config.bfile}.fam"
-        try:
-            fam_data = np.loadtxt(fam_path, dtype=str, ndmin=2)
-        except (ValueError, OSError) as e:
-            raise ValueError(f"Failed to read .fam file {fam_path}: {e}") from e
-
-        all_pheno_data: dict[int, tuple[np.ndarray, int]] = {}
-        all_masks: list[np.ndarray] = []
-        for col in pheno_columns:
-            pheno, n_anal = self._parse_phenotype_column(col, fam_data=fam_data)
-            all_pheno_data[col] = (pheno, n_anal)
-            mask = self._compute_valid_mask(pheno, covariates)
-            all_masks.append(mask)
-
-        # Intersect all masks for shared eigendecomposition
-        valid_mask = np.all(all_masks, axis=0)
-        n_valid = int(np.sum(valid_mask))
-
-        if n_valid == 0:
-            per_pheno_counts = {
-                col: int(m.sum())
-                for col, m in zip(pheno_columns, all_masks, strict=True)
-            }
-            raise ValueError(
-                f"No samples have valid values across all {len(pheno_columns)} "
-                f"phenotype columns. Per-column valid counts: {per_pheno_counts}"
-            )
-
-        # Warn if intersection excludes samples valid in some phenotypes
-        per_pheno_counts = [int(m.sum()) for m in all_masks]
-        if n_valid < min(per_pheno_counts):
-            logger.warning(
-                f"Sample mask intersection reduced valid samples: "
-                f"per-phenotype counts {per_pheno_counts}, "
-                f"intersection {n_valid}"
-            )
+        all_pheno_data, valid_mask, n_valid = self._load_phenotypes_and_intersect_masks(
+            pheno_columns, covariates
+        )
 
         n_cvt = covariates.shape[1] if covariates is not None else 1
         is_multi = len(pheno_columns) > 1

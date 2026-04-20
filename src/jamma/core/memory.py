@@ -725,6 +725,7 @@ def check_memory_before_run(
     n_snps: int,
     operation: str = "GWAS",
     has_kinship: bool = False,
+    n_cvt: int = 1,
 ) -> bool:
     """Pre-flight memory check with helpful diagnostics.
 
@@ -738,6 +739,11 @@ def check_memory_before_run(
         operation: Description for error messages.
         has_kinship: If True, assume kinship is pre-computed (unused,
             kept for backward compatibility).
+        n_cvt: Number of covariate columns (including the intercept).
+            Must match what the runner will pass to the LMM stage —
+            Uab/Iab batch buffers scale with n_cvt, so an underestimate
+            here lets multi-covariate runs pass preflight then OOM at
+            real allocation.
 
     Returns:
         True if sufficient memory available.
@@ -746,7 +752,7 @@ def check_memory_before_run(
         MemoryError: If insufficient memory with suggestions.
 
     Example:
-        >>> check_memory_before_run(100_000, 100_000)
+        >>> check_memory_before_run(100_000, 100_000, n_cvt=4)
         INFO | Memory check for GWAS (100,000 samples x 100,000 SNPs):
         INFO |   Estimated peak: 640.0GB (eigendecomp phase)
         INFO |   Available: 237.4GB
@@ -756,7 +762,10 @@ def check_memory_before_run(
 
     compute_chunk = _compute_chunk_size(n_snps, n_samples=n_samples, pipeline_buffers=2)
     est = estimate_streaming_memory(
-        n_samples, pipeline_buffers=2, compute_chunk_size=compute_chunk
+        n_samples,
+        n_cvt=n_cvt,
+        pipeline_buffers=2,
+        compute_chunk_size=compute_chunk,
     )
     snap = get_memory_snapshot()
 
@@ -791,7 +800,7 @@ def check_memory_before_run(
         + est.chunk_gb
         + est.rotation_buffer_gb
         + est.grid_reml_gb
-        + _uab_iab_gb(n_samples, compute_chunk, use_fused=False)
+        + _uab_iab_gb(n_samples, compute_chunk, n_cvt=n_cvt, use_fused=False)
     )
 
     if not dsyevd_fits and _has_dsyevr:

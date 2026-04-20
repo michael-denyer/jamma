@@ -135,19 +135,15 @@ def resolve_cflags_for(
         return [*LAPACK_CFLAGS, *include_flags]
 
     # Baseline path: splice extra_cflags BEFORE -fno-finite-math-only so the
-    # trailing explicit flag overrides a user -Ofast. Rebuild explicitly
-    # rather than mutate BASE_CFLAGS — BASE_CFLAGS is frozen as a tuple.
+    # trailing explicit flag overrides a user -Ofast. Slice BASE_CFLAGS rather
+    # than re-listing literals — keeps BASE_CFLAGS as the single source of truth
+    # so that adding a flag there (e.g. -fno-plt) doesn't silently drop it on
+    # the extra_cflags path.
+    splice_idx = BASE_CFLAGS.index("-fno-finite-math-only")
     return [
-        "-O3",
-        "-ftree-vectorize",
-        "-fno-math-errno",
-        "-fno-trapping-math",
-        "-funroll-loops",
+        *BASE_CFLAGS[:splice_idx],
         *extra_cflags,
-        "-fno-finite-math-only",
-        "-Wframe-larger-than=131072",
-        "-fPIC",
-        "-std=c11",
+        *BASE_CFLAGS[splice_idx:],
         *include_flags,
     ]
 
@@ -438,10 +434,12 @@ def compile_jlinalg(
     except OSError as e:
         with contextlib.suppress(OSError):
             link_tmp.unlink()
+        # Link succeeded; the rename is what failed. Preserve the real
+        # used_openmp_link value so telemetry doesn't misreport the build.
         return CompileResult(
             success=False,
             used_openmp=used_openmp,
-            used_openmp_link=False,
+            used_openmp_link=used_openmp_link,
             error=f"atomic replace of {output} failed: {e}",
             obj_files=compile_objs,
         )

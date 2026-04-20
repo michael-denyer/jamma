@@ -178,8 +178,15 @@ def auto_recompile_c_extension(
                     f"using existing build."
                 )
                 return True
-            except ImportError:
-                pass  # Still broken — fall through to recompile.
+            except ImportError as e:
+                # Still broken — fall through to recompile. Log at debug so
+                # a post-mortem can distinguish "no sibling rebuild happened"
+                # from "sibling rebuilt but new .so also fails to import"
+                # (e.g. the sibling linked against a different numpy ABI).
+                logger.debug(
+                    f"post-lock re-import of {sys_module_key} failed ({e}); "
+                    f"proceeding with recompile"
+                )
 
         try:
             try:

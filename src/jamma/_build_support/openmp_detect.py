@@ -81,6 +81,7 @@ def _detect_darwin_openmp_flags(
             ["brew", "--prefix", "libomp"],
             capture_output=True,
             text=True,
+            timeout=10,
         )
         if result.returncode != 0:
             stderr = result.stderr.strip()
@@ -109,6 +110,11 @@ def _detect_darwin_openmp_flags(
             "OpenMP not available (brew not found on PATH). "
             "Extension will be single-threaded. "
             "Install for parallelism: brew install libomp"
+        )
+    except subprocess.TimeoutExpired:
+        _print(
+            "OpenMP not available (brew --prefix libomp timed out after 10s — "
+            "stuck brew install?). Extension will be single-threaded."
         )
     return ([], [])
 
@@ -178,8 +184,15 @@ def _find_libiomp5(
                 if "libiomp5" in lib.name and ".so" in lib.name:
                     _print(f"Intel OpenMP found: {lib}")
                     return lib
-    except ImportError:
-        pass
+    except ImportError as e:
+        # numpy failing to import during a probe is itself a signal — an
+        # ILP64 ABI mismatch is exactly what runtime recompile exists to fix,
+        # and silently skipping to the system-path fallback can pick up a
+        # mismatched libiomp5. Log so post-mortems can see the miss.
+        _print(
+            f"libiomp5 probe: numpy import failed ({e}); "
+            "falling through to system paths"
+        )
 
     # Check well-known system paths for libiomp5
     for search_dir in [Path("/usr/lib"), Path("/usr/lib64"), Path("/usr/local/lib")]:
@@ -220,31 +233,43 @@ def _openmp_flags_for_libiomp5(
         # libomp-dev may not be installed — the actual C sources include
         # omp.h conditionally and the header is found via -I flags at
         # compile time, not at detection time.
-        result = subprocess.run(
-            [
-                clang_path,
-                "-fopenmp",
-                "-x",
-                "c",
-                "-",  # read C source from stdin
-                "-x",
-                "none",  # reset — next args auto-detect by ext
-                "-o",
-                "/dev/null",
-                str(libiomp5_path),
-                f"-Wl,-rpath,{lib_dir}",
-            ],
-            input="int main(){return 0;}\n",
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            _print(
-                f"Using clang ({clang_path}) for libiomp5 compatibility "
-                f"(avoids GCC GOMP shim assertion failures)"
+        try:
+            result = subprocess.run(
+                [
+                    clang_path,
+                    "-fopenmp",
+                    "-x",
+                    "c",
+                    "-",  # read C source from stdin
+                    "-x",
+                    "none",  # reset — next args auto-detect by ext
+                    "-o",
+                    "/dev/null",
+                    str(libiomp5_path),
+                    f"-Wl,-rpath,{lib_dir}",
+                ],
+                input="int main(){return 0;}\n",
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
-            return (["-fopenmp"], link_flags, clang_path)
-        _print(f"clang found but OpenMP test failed: {result.stderr.strip()}")
+        except (OSError, subprocess.TimeoutExpired) as e:
+            # Broken clang symlink (OSError/FileNotFoundError) or a wedged
+            # compiler (TimeoutExpired) must not crash detection — the whole
+            # point of this probe is to decide whether to use clang. Fall
+            # through to the GCC+libiomp5 path.
+            _print(
+                f"clang found but probe failed ({type(e).__name__}: {e}); "
+                "falling back to GCC"
+            )
+        else:
+            if result.returncode == 0:
+                _print(
+                    f"Using clang ({clang_path}) for libiomp5 compatibility "
+                    f"(avoids GCC GOMP shim assertion failures)"
+                )
+                return (["-fopenmp"], link_flags, clang_path)
+            _print(f"clang found but OpenMP test failed: {result.stderr.strip()}")
 
     # Fallback to GCC — compile with -fopenmp (generates GOMP_* calls),
     # link against libiomp5 by full path.  This relies on libiomp5's GOMP

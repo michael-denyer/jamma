@@ -77,6 +77,11 @@ def find_c_compiler() -> tuple[str, list[str]] | None:
     if cc_env:
         parts = cc_env.split()
         if not parts:
+            print(
+                f"$CC is set but empty/whitespace-only ({cc_env!r}); "
+                "returning None rather than silently auto-detecting.",
+                file=sys.stderr,
+            )
             return None
         cmd, extra = parts[0], parts[1:]
         if _probe_compiler(cmd):

@@ -246,7 +246,7 @@ def _compute_loco_kinship_streaming_numpy(
 
     When valid_indices is provided, kinship matrices are computed at valid-sample
     size (n_valid x n_valid) rather than full n_samples x n_samples, avoiding
-    full-matrix materialisation when there are missing-phenotype samples (LOCO-07).
+    full-matrix materialisation when there are missing-phenotype samples.
 
     Args:
         bed_path: Path prefix for PLINK files (without extension).
@@ -283,7 +283,7 @@ def _compute_loco_kinship_streaming_numpy(
 
         _validate_valid_indices(valid_indices, n_samples)
 
-    # Derive partitions from already-loaded metadata — avoids re-opening BED (LOCO-04)
+    # Derive partitions from already-loaded metadata — avoids re-opening BED.
     partitions = partitions_from_metadata(meta)
     unique_chrs = sorted(partitions.keys(), key=chr_sort_key)
 
@@ -339,7 +339,7 @@ def _compute_loco_kinship_streaming_numpy(
             f"expected range {{0, 1, 2, NaN}}"
         )
 
-    # Cache global stats for the association pass (LOCO-01).
+    # Cache global stats for the association pass.
     # Must be built BEFORE the del statements below destroy all_means / all_vars.
     # n_samples is the population these stats were computed over (ALL rows).
     snp_stats_cache = SnpStatsCache(
@@ -394,7 +394,7 @@ def _compute_loco_kinship_streaming_numpy(
             f"(nothing to leave out)."
         )
 
-    # Memory strategy: single-pass vs multi-pass chromosome batching (LOCO-02).
+    # Memory strategy: single-pass vs multi-pass chromosome batching.
     from jamma.core.memory import _dsyevr_peak_gb
 
     matrix_gb = n_samples_kinship**2 * 8 / 1e9
@@ -511,7 +511,7 @@ def _compute_loco_kinship_streaming_numpy(
                 continue
 
             X_chunk = chunk[:, chunk_filtered_local].astype(np.float64)
-            # Early valid-sample subsetting (LOCO-07): compute kinship at n_valid size.
+            # Early valid-sample subsetting: compute kinship at n_valid size.
             if valid_indices is not None:
                 X_chunk = X_chunk[valid_indices, :]
             X_centered = impute_and_center(X_chunk)
@@ -579,7 +579,7 @@ def _compute_loco_kinship_streaming_numpy(
             yield from _yield_batch(S_full, batch_data, K_loco_buf)
 
         else:
-            # === MULTI-PASS: batch chromosomes across disk passes (LOCO-02) ===
+            # === MULTI-PASS: batch chromosomes across disk passes ===
             # Pass 0: accumulate S_full + first batch of S_chr (accumulate_s_full=True).
             # Pass k>0: accumulate only batch S_chr (accumulate_s_full=False).
             # CRITICAL: accumulate_s_full=True ONLY for pass 0. Setting it True for
@@ -769,7 +769,7 @@ def run_lmm_loco(
             "Pass eigen_dir or use --eigen-dir on the CLI."
         )
 
-    # Read LOCO worker count and log configuration (LOCO-08)
+    # Read LOCO worker count and log configuration
     loco_workers = get_loco_worker_count()
     if loco_workers > 1:
         logger.warning(
@@ -785,7 +785,7 @@ def run_lmm_loco(
     n_snps_total = meta["n_snps"]
 
     # Chromosome partitions (unfiltered) — derived from already-loaded metadata
-    # to avoid a redundant BIM re-read (LOCO-04)
+    # to avoid a redundant BIM re-read
     partitions = partitions_from_metadata(meta)
     unique_chrs = sorted(partitions.keys(), key=chr_sort_key)
 
@@ -884,7 +884,7 @@ def run_lmm_loco(
         # When save_kinship=False and some samples are invalid, pass
         # valid_indices so kinship is accumulated at n_valid x n_valid size,
         # avoiding full n_samples^2 materialisation for post-hoc subsetting
-        # (LOCO-07).
+        # .
         kinship_valid_indices = (
             None if all_samples_valid or save_kinship else np.where(valid_mask)[0]
         )
@@ -977,7 +977,7 @@ def run_lmm_loco(
 
                 # K_loco is already n_valid x n_valid from early subsetting
                 # (the numpy backend passes valid_indices to the
-                # kinship streamer) — skip post-hoc np.ix_ copy (LOCO-07).
+                # kinship streamer) — skip post-hoc np.ix_ copy.
                 if kinship_valid_indices is not None:
                     if K_loco.shape != (n_valid, n_valid):
                         raise RuntimeError(
@@ -1163,7 +1163,7 @@ def _loco_chr_common(
 
     # === PASS 1: Chunked SNP statistics + filtering ===
     if snp_stats_cache is not None:
-        # Use cached global stats, sliced to this chromosome (LOCO-01).
+        # Use cached global stats, sliced to this chromosome.
         # Stats were computed over ALL samples during kinship PASS 1.
         # Used for filtering only (MAF, missing rate, monomorphism) — the
         # actual genotype data is read fresh in PASS 2 using valid_indices.
@@ -1302,7 +1302,7 @@ def _run_lmm_for_chromosome_numpy(
         compute_pve: If True, compute PVE from null model REML lambda.
             Set for each chromosome until PVE is successfully computed
             (typically the first chromosome with passing SNPs).
-        snp_stats_cache: Global SNP statistics from kinship PASS 1 (LOCO-01).
+        snp_stats_cache: Global SNP statistics from kinship PASS 1.
             When provided, per-chromosome stats are extracted by slicing
             cache.col_means[chr_snp_indices] — eliminates a BED re-read.
             Filtering uses cache.n_samples (all-sample count) as denominator.

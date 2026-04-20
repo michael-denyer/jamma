@@ -8,10 +8,10 @@ Covers the four observable outcomes of the runtime recompile shim:
 
 The shim is a thin import-retry wrapper around the compile_extension()
 entry points in jamma.lmm._compile_accel and jamma.jlinalg._compile_jlinalg.
-Its sibling test, test_wheel_install_recompile.py, verifies end-to-end wheel
-install -> auto_recompile_c_extension -> real compile via a scratch venv.
 Tests here run against the shim's public contract only; no real
-subprocess / compilation ever fires.
+subprocess / compilation ever fires. End-to-end wheel-install ->
+auto_recompile_c_extension -> real compile coverage is tracked as a
+follow-up (tier2, scratch venv) and is not yet implemented.
 """
 
 from __future__ import annotations

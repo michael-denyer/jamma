@@ -159,6 +159,7 @@ def compile_extension(
     # path) must not bake -march=native into the wheel. Dev builds target
     # the local CPU; wheels target the lowest common denominator.
     # Deliberate divergence, not duplication.
+    # allow-compile-flag-literal: dev-only, see rationale above
     extra_cflags: list[str] = ["-march=native"]
 
     diag_flags: list[str] = []

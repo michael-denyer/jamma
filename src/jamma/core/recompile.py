@@ -21,6 +21,7 @@ Called from:
 from __future__ import annotations
 
 import importlib
+import subprocess
 import sys
 
 
@@ -79,7 +80,12 @@ def auto_recompile_c_extension(
             # a partial-upgrade environment doesn't break. Downgrade
             # notices will not surface in this case.
             success = compiler.compile_extension(verbose=False)
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError, ImportError, RuntimeError) as e:
+        # Narrow catch: genuine build-environment failures (missing compiler,
+        # broken subprocess, unimportable helper, compile driver's explicit
+        # RuntimeError). Programming bugs (AttributeError, KeyError, TypeError
+        # other than the on_retry-kwarg one above) propagate so they surface
+        # as real tracebacks instead of a silent pure-Python fallback.
         logger.warning(
             f"Auto-recompilation of {module_name} raised "
             f"{type(e).__name__}: {e}. "

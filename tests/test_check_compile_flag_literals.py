@@ -113,6 +113,76 @@ def test_inline_comment_with_literal_on_code_line_still_flags(tmp_path):
 
 
 @pytest.mark.tier0
+@pytest.mark.parametrize(
+    "flag",
+    ["-march=native", "-mtune=native", "-std=c11", "-shared", "-pthread"],
+)
+def test_widened_flag_set_is_detected(tmp_path, flag):
+    """Portability footguns and link-phase flags beyond the original
+    -O/-f set must trip the lint — particularly -march=native which must
+    stay dev-only per CLAUDE.md."""
+    files = dict(_STUB_EMPTY_TARGETS)
+    files["hatch_build.py"] = f'cflags.append("{flag}")\n'
+    result = _run_with_targets(tmp_path, files)
+    assert result.returncode == 1, result.stderr
+    assert flag in result.stderr
+
+
+@pytest.mark.tier0
+def test_allow_compile_flag_literal_escape_hatch(tmp_path):
+    """A line marked with `# allow-compile-flag-literal` opts out.
+    Reserved for deliberate divergence (e.g. -march=native in _compile_accel.py
+    dev builds) — wheels target the lowest common denominator, dev targets
+    the local CPU, so the flag cannot migrate to BASE_CFLAGS."""
+    files = dict(_STUB_EMPTY_TARGETS)
+    files["src/jamma/lmm/_compile_accel.py"] = (
+        'extra_cflags = ["-march=native"]  # allow-compile-flag-literal: dev-only\n'
+    )
+    result = _run_with_targets(tmp_path, files)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.tier0
+def test_allow_compile_flag_literal_on_preceding_line(tmp_path):
+    """The escape hatch also accepts the marker on the immediately
+    preceding comment line — needed when ruff-format splits an inline
+    comment off a long line, which it does for ``extra_cflags`` with a
+    long inline rationale."""
+    files = dict(_STUB_EMPTY_TARGETS)
+    files["src/jamma/lmm/_compile_accel.py"] = (
+        "# allow-compile-flag-literal: dev-only, see rationale above\n"
+        'extra_cflags = ["-march=native"]\n'
+    )
+    result = _run_with_targets(tmp_path, files)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.tier0
+def test_allow_marker_only_applies_to_next_line(tmp_path):
+    """The preceding-line hatch covers exactly one line — a literal two
+    lines below the marker is still flagged."""
+    files = dict(_STUB_EMPTY_TARGETS)
+    files["hatch_build.py"] = (
+        "# allow-compile-flag-literal\n"
+        "x = 1\n"
+        'cflags = ["-O3"]\n'  # two lines after marker — NOT suppressed
+    )
+    result = _run_with_targets(tmp_path, files)
+    assert result.returncode == 1
+    assert "-O3" in result.stderr
+
+
+@pytest.mark.tier0
+def test_path_like_string_is_not_a_false_positive(tmp_path):
+    """A string like "/usr/lib/-O3-foo" must NOT trip the lint — the
+    regex requires `-` immediately after the opening quote."""
+    files = dict(_STUB_EMPTY_TARGETS)
+    files["hatch_build.py"] = 'path = "/usr/lib/-O3-test/foo"\n'
+    result = _run_with_targets(tmp_path, files)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.tier0
 def test_missing_target_file_is_reported(tmp_path):
     """If a target is absent entirely, that's a cleanup-went-wrong signal
     and must surface as a violation rather than passing silently."""

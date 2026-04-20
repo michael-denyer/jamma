@@ -267,8 +267,23 @@ def test_compile_jlinalg_smoke_success(monkeypatch, tmp_path):
     assert isinstance(result, CompileResult)
     assert result.success is True
     assert result.output_path == out
-    # One subprocess call per source + one link call = 3.
-    assert len(calls) >= 3
+    # One subprocess call per source + one link call = exactly 3.
+    assert len(calls) == 3, f"expected 3 subprocess calls, got {len(calls)}: {calls}"
+
+    # Happy path: OMP-enabled compile must use -fopenmp on each source and
+    # the link step must pull in the Intel runtime (-liomp5) and -lm.
+    assert result.used_openmp is True
+    assert result.used_openmp_link is True
+    assert "-fopenmp" in calls[0], f"platform.c compile missing -fopenmp: {calls[0]}"
+    assert "-fopenmp" in calls[1], f"eigh.c compile missing -fopenmp: {calls[1]}"
+    # eigh.c is in lapack_sources — strict IEEE 754 path must NOT get -O3.
+    assert "-O2" in calls[1], f"eigh.c missing -O2 (LAPACK path): {calls[1]}"
+    assert "-O3" not in calls[1], f"eigh.c must not get -O3: {calls[1]}"
+    assert "-O3" in calls[0], f"platform.c must compile with -O3, got: {calls[0]}"
+    # Link command is the last call; Intel runtime must be present.
+    link_cmd = calls[-1]
+    assert "-liomp5" in link_cmd, f"link missing -liomp5 (Intel runtime): {link_cmd}"
+    assert "-lm" in link_cmd, f"link missing -lm: {link_cmd}"
 
 
 @pytest.mark.tier0

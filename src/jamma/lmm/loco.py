@@ -49,7 +49,7 @@ from jamma.lmm.prepare_common import (
     compute_and_log_pve,
 )
 from jamma.lmm.results import (
-    _yield_chunk_results,
+    _build_results,
     count_lambda_boundary_hits,
     log_lambda_boundary_warning,
 )
@@ -1448,16 +1448,13 @@ def _run_lmm_for_chromosome_numpy(
             arrays_out,
         )
     else:
-        results = list(
-            _yield_chunk_results(
-                lmm_mode,
-                np.arange(ctx.n_filtered),
-                ctx.global_filtered_indices,
-                ctx.filtered_afs,
-                ctx.filtered_miss,
-                snp_info,
-                arrays_out,
-            )
+        results = _build_results(
+            lmm_mode,
+            ctx.global_filtered_indices,
+            ctx.filtered_afs,
+            ctx.filtered_miss,
+            snp_info,
+            arrays_out,
         )
 
     return results, ctx.chr_pve, ctx.chr_pve_se

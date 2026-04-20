@@ -915,6 +915,56 @@ class PipelineRunner:
 
         return all_pheno_data, valid_mask, n_valid
 
+    def _memory_preflight(
+        self,
+        plan: ExecutionPlan,
+        n_valid: int,
+        n_snps: int,
+        n_cvt: int,
+    ) -> None:
+        """Run the memory preflight gate for the chosen execution plan.
+
+        Streaming mode delegates to ``check_memory_requirements`` which
+        uses streaming-specific accounting. Batch mode uses the
+        in-memory estimator and additionally enforces ``mem_budget`` if
+        the user set one. Both raise ``MemoryError`` with actionable
+        messages on failure.
+
+        Args:
+            plan: Resolved ExecutionPlan (mode determines which estimator).
+            n_valid: Sample count after valid-mask intersection.
+            n_snps: Total SNPs from PLINK metadata (pre-MAF/missingness).
+            n_cvt: Covariate count including the intercept.
+        """
+        if plan.mode == "streaming":
+            self.check_memory_requirements(n_valid, n_snps, n_cvt=n_cvt)
+            return
+
+        if not self.config.check_memory:
+            return
+
+        from jamma.core.memory import estimate_lmm_memory
+
+        est = estimate_lmm_memory(n_valid, n_snps, n_cvt=n_cvt)
+        logger.info(
+            f"Memory estimate ({plan.runner_name}): "
+            f"{est.total_gb:.1f}GB required, "
+            f"{est.available_gb:.1f}GB available"
+        )
+        if self.config.mem_budget is not None and est.total_gb > self.config.mem_budget:
+            raise MemoryError(
+                f"Estimated memory ({est.total_gb:.1f}GB) exceeds "
+                f"budget ({self.config.mem_budget}GB). "
+                f"Use --no-check-memory to override."
+            )
+        if not est.sufficient:
+            raise MemoryError(
+                f"Insufficient memory: "
+                f"need {est.total_gb:.1f}GB, "
+                f"have {est.available_gb:.1f}GB. "
+                f"Use --no-check-memory to override."
+            )
+
     def _run_inner(
         self,
         t_start: float,
@@ -998,36 +1048,7 @@ class PipelineRunner:
         # Banner after re-evaluation so it shows the final plan
         self._log_pipeline_banner(plan)
 
-        # Memory preflight: streaming estimate for streaming, in-memory for batch.
-        if plan.mode == "streaming":
-            self.check_memory_requirements(n_valid, n_snps, n_cvt=n_cvt)
-        else:
-            from jamma.core.memory import estimate_lmm_memory
-
-            if self.config.check_memory:
-                est = estimate_lmm_memory(n_valid, n_snps, n_cvt=n_cvt)
-                logger.info(
-                    f"Memory estimate ({plan.runner_name}): "
-                    f"{est.total_gb:.1f}GB required, "
-                    f"{est.available_gb:.1f}GB available"
-                )
-                exceeds_budget = (
-                    self.config.mem_budget is not None
-                    and est.total_gb > self.config.mem_budget
-                )
-                if exceeds_budget:
-                    raise MemoryError(
-                        f"Estimated memory ({est.total_gb:.1f}GB) exceeds "
-                        f"budget ({self.config.mem_budget}GB). "
-                        f"Use --no-check-memory to override."
-                    )
-                if not est.sufficient:
-                    raise MemoryError(
-                        f"Insufficient memory: "
-                        f"need {est.total_gb:.1f}GB, "
-                        f"have {est.available_gb:.1f}GB. "
-                        f"Use --no-check-memory to override."
-                    )
+        self._memory_preflight(plan, n_valid, n_snps, n_cvt)
 
         # Load/compute eigendecomposition ONCE (shared across phenotypes)
         t_kinship = time.perf_counter()

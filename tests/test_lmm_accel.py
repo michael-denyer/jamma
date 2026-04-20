@@ -12,11 +12,11 @@ from jamma.lmm.compute_numpy import (
     _C_ACCEL_AVAILABLE,
     _C_GENERAL_AVAILABLE,
     _C_SPLIT_AVAILABLE,
-    _compute_lmm_chunk_numpy,
     _compute_lrt_batch_c,
     _compute_score_batch_c,
     _compute_wald_numpy,
     _compute_wald_split_c,
+    compute_lmm_chunk_numpy,
     compute_wald_general_c_ws,
     compute_wald_split_c_ws,
     create_lmm_workspace,
@@ -229,7 +229,7 @@ def test_c_fallback_when_extension_unavailable(synthetic_wald_data, monkeypatch)
 
     monkeypatch.setattr(compute_numpy, "_C_ACCEL_AVAILABLE", False)
 
-    result = _compute_lmm_chunk_numpy(
+    result = compute_lmm_chunk_numpy(
         lmm_mode=1,
         n_cvt=1,
         eigenvalues=eigenvalues,
@@ -957,12 +957,12 @@ def test_pipeline_multi_chunk_correctness():
     This catches off-by-one errors in the last-chunk handling, race conditions
     in buffer management, and write_offset accumulation bugs.
     """
-    from jamma.lmm.runner_numpy import _compute_chunk_size_numpy
+    from jamma.lmm.runner_numpy import compute_chunk_size_numpy
 
     rng = np.random.default_rng(42)
     n_samples = 100
     # Use enough SNPs that we get at least 3 chunks
-    chunk_size = _compute_chunk_size_numpy(
+    chunk_size = compute_chunk_size_numpy(
         n_samples,
         1000,
         n_cvt=1,
@@ -1574,7 +1574,7 @@ def test_general_ncvt_gemma_covariate_match():
 def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2):
     """C-GEN-04: All 4 LMM modes produce results with n_cvt=2 covariates.
 
-    Verifies that _compute_lmm_chunk_numpy with lmm_mode=4 produces non-None
+    Verifies that compute_lmm_chunk_numpy with lmm_mode=4 produces non-None
     results for all output fields when covariates are present. Wald results
     use the C extension; LRT/Score use the Python fallback.
     """
@@ -1599,7 +1599,7 @@ def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2):
     )
 
     # Mode 4 (All): exercises Wald (C ext), LRT (Python MLE), Score (Python)
-    result = _compute_lmm_chunk_numpy(
+    result = compute_lmm_chunk_numpy(
         lmm_mode=4,
         n_cvt=n_cvt,
         eigenvalues=eigenvalues,
@@ -1633,7 +1633,7 @@ def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2):
         assert n_finite > n_snps * 0.8, f"{key}: only {n_finite}/{n_snps} finite values"
 
     # Mode 2 (LRT only)
-    result_lrt = _compute_lmm_chunk_numpy(
+    result_lrt = compute_lmm_chunk_numpy(
         lmm_mode=2,
         n_cvt=n_cvt,
         eigenvalues=eigenvalues,
@@ -1647,7 +1647,7 @@ def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2):
     assert result_lrt["lambdas_mle"].shape == (n_snps,)
 
     # Mode 3 (Score only)
-    result_score = _compute_lmm_chunk_numpy(
+    result_score = compute_lmm_chunk_numpy(
         lmm_mode=3,
         n_cvt=n_cvt,
         eigenvalues=eigenvalues,
@@ -2057,7 +2057,7 @@ def test_mode4_all_c_dispatch(score_lrt_data):
     """Mode 4 (All) returns all 8 keys non-None when C extension available."""
     eigenvalues, Uab_batch, n_samples, Hi_eval_null, logl_H0 = score_lrt_data
 
-    result = _compute_lmm_chunk_numpy(
+    result = compute_lmm_chunk_numpy(
         lmm_mode=4,
         n_cvt=1,
         eigenvalues=eigenvalues,
@@ -5572,7 +5572,7 @@ def test_runner_fused_lrt_dispatch():
 @pytest.mark.skipif(not _score_fused_available, reason="Fused Score C not available")
 def test_runner_fused_score_chunk_size():
     """Fused Score uses 1-col accounting (4x larger chunks at same budget)."""
-    from jamma.lmm.runner_numpy import _compute_chunk_size_numpy
+    from jamma.lmm.runner_numpy import compute_chunk_size_numpy
 
     n_samples = 1000
     n_filtered = 200_000
@@ -5581,7 +5581,7 @@ def test_runner_fused_score_chunk_size():
     # At 16 MB: split → 500 SNPs, fused → 2000 SNPs.
     budget = 16_000_000
 
-    chunk_fused = _compute_chunk_size_numpy(
+    chunk_fused = compute_chunk_size_numpy(
         n_samples,
         n_filtered,
         n_cvt=1,
@@ -5593,7 +5593,7 @@ def test_runner_fused_score_chunk_size():
     from unittest.mock import patch
 
     with patch("jamma.lmm.runner_numpy._C_SCORE_FUSED_AVAILABLE", False):
-        chunk_split = _compute_chunk_size_numpy(
+        chunk_split = compute_chunk_size_numpy(
             n_samples,
             n_filtered,
             n_cvt=1,
@@ -5610,13 +5610,13 @@ def test_runner_fused_score_chunk_size():
 @pytest.mark.skipif(not _lrt_fused_available, reason="Fused LRT C not available")
 def test_runner_fused_lrt_chunk_size():
     """Fused LRT uses 1-col accounting (4x larger chunks at same budget)."""
-    from jamma.lmm.runner_numpy import _compute_chunk_size_numpy
+    from jamma.lmm.runner_numpy import compute_chunk_size_numpy
 
     n_samples = 1000
     n_filtered = 200_000
     budget = 16_000_000  # Same budget as Score test
 
-    chunk_fused = _compute_chunk_size_numpy(
+    chunk_fused = compute_chunk_size_numpy(
         n_samples,
         n_filtered,
         n_cvt=1,
@@ -5628,7 +5628,7 @@ def test_runner_fused_lrt_chunk_size():
     from unittest.mock import patch
 
     with patch("jamma.lmm.runner_numpy._C_LRT_FUSED_AVAILABLE", False):
-        chunk_split = _compute_chunk_size_numpy(
+        chunk_split = compute_chunk_size_numpy(
             n_samples,
             n_filtered,
             n_cvt=1,

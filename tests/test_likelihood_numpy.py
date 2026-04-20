@@ -18,7 +18,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from jamma.lmm.compute_numpy import _compute_lmm_chunk_numpy
+from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.likelihood import (
     _golden_section_minimize,
     compute_Uab,
@@ -58,8 +58,8 @@ def synthetic_data():
 
 
 @pytest.mark.tier0
-def test_compute_lmm_chunk_numpy_all_modes(synthetic_data):
-    """_compute_lmm_chunk_numpy must return non-None expected keys for each mode."""
+def testcompute_lmm_chunk_numpy_all_modes(synthetic_data):
+    """compute_lmm_chunk_numpy must return non-None expected keys for each mode."""
     eigenvalues, UtW, Uty, UtG = synthetic_data
     n_samples = eigenvalues.shape[0]
 
@@ -70,7 +70,7 @@ def test_compute_lmm_chunk_numpy_all_modes(synthetic_data):
     Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
 
     # Mode 1: Wald — expects lambdas, logls, betas, ses, pwalds
-    result1 = _compute_lmm_chunk_numpy(1, 1, eigenvalues, Uab_batch, n_samples)
+    result1 = compute_lmm_chunk_numpy(1, 1, eigenvalues, Uab_batch, n_samples)
     for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
         assert result1[key] is not None, f"Mode 1: key '{key}' is None"
     assert result1["lambdas_mle"] is None
@@ -78,7 +78,7 @@ def test_compute_lmm_chunk_numpy_all_modes(synthetic_data):
     assert result1["p_scores"] is None
 
     # Mode 2: LRT — expects lambdas_mle, p_lrts
-    result2 = _compute_lmm_chunk_numpy(
+    result2 = compute_lmm_chunk_numpy(
         2, 1, eigenvalues, Uab_batch, n_samples, logl_H0=logl_H0
     )
     for key in ("lambdas_mle", "p_lrts"):
@@ -91,7 +91,7 @@ def test_compute_lmm_chunk_numpy_all_modes(synthetic_data):
     assert result2["p_scores"] is None
 
     # Mode 3: Score — expects betas, ses, p_scores
-    result3 = _compute_lmm_chunk_numpy(
+    result3 = compute_lmm_chunk_numpy(
         3, 1, eigenvalues, Uab_batch, n_samples, Hi_eval_null=Hi_eval_null
     )
     for key in ("betas", "ses", "p_scores"):
@@ -103,7 +103,7 @@ def test_compute_lmm_chunk_numpy_all_modes(synthetic_data):
     assert result3["p_lrts"] is None
 
     # Mode 4: All — all keys non-None
-    result4 = _compute_lmm_chunk_numpy(
+    result4 = compute_lmm_chunk_numpy(
         4,
         1,
         eigenvalues,
@@ -126,26 +126,26 @@ def test_compute_lmm_chunk_numpy_all_modes(synthetic_data):
 
 
 @pytest.mark.tier0
-def test_compute_lmm_chunk_numpy_missing_args_raise(synthetic_data):
-    """_compute_lmm_chunk_numpy must raise ValueError when required args are absent."""
+def testcompute_lmm_chunk_numpy_missing_args_raise(synthetic_data):
+    """compute_lmm_chunk_numpy must raise ValueError when required args are absent."""
     eigenvalues, UtW, Uty, UtG = synthetic_data
     n_samples = eigenvalues.shape[0]
     Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
 
     with pytest.raises(ValueError, match="logl_H0 is required"):
-        _compute_lmm_chunk_numpy(2, 1, eigenvalues, Uab_batch, n_samples)
+        compute_lmm_chunk_numpy(2, 1, eigenvalues, Uab_batch, n_samples)
 
     with pytest.raises(ValueError, match="Hi_eval_null is required"):
-        _compute_lmm_chunk_numpy(3, 1, eigenvalues, Uab_batch, n_samples)
+        compute_lmm_chunk_numpy(3, 1, eigenvalues, Uab_batch, n_samples)
 
     # Mode 4 (All) requires both logl_H0 and Hi_eval_null.
     # Missing logl_H0 is checked first (line order in source).
     with pytest.raises(ValueError, match="logl_H0 is required"):
-        _compute_lmm_chunk_numpy(4, 1, eigenvalues, Uab_batch, n_samples)
+        compute_lmm_chunk_numpy(4, 1, eigenvalues, Uab_batch, n_samples)
 
     # Providing logl_H0 but omitting Hi_eval_null also raises.
     with pytest.raises(ValueError, match="Hi_eval_null is required"):
-        _compute_lmm_chunk_numpy(4, 1, eigenvalues, Uab_batch, n_samples, logl_H0=-50.0)
+        compute_lmm_chunk_numpy(4, 1, eigenvalues, Uab_batch, n_samples, logl_H0=-50.0)
 
 
 # ---------------------------------------------------------------------------

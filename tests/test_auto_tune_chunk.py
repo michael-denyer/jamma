@@ -330,19 +330,19 @@ class TestStreamingMemoryPipelineBuffers:
     @pytest.mark.parametrize("bad_value", [0, -1, -10])
     def test_numpy_chunk_size_pipeline_buffers_invalid_raises(self, bad_value):
         """pipeline_buffers < 1 raises ValueError in NumPy chunk sizer."""
-        from jamma.lmm.runner_numpy import _compute_chunk_size_numpy
+        from jamma.lmm.runner_numpy import compute_chunk_size_numpy
 
         with pytest.raises(ValueError, match="pipeline_buffers must be >= 1"):
-            _compute_chunk_size_numpy(
+            compute_chunk_size_numpy(
                 n_samples=1000, n_filtered=50_000, pipeline_buffers=bad_value
             )
 
     @pytest.mark.parametrize("bad_value", [1.0, "2", None])
     def test_numpy_chunk_size_pipeline_buffers_type_error(self, bad_value):
         """pipeline_buffers must be int in NumPy chunk sizer."""
-        from jamma.lmm.runner_numpy import _compute_chunk_size_numpy
+        from jamma.lmm.runner_numpy import compute_chunk_size_numpy
 
         with pytest.raises(TypeError, match="pipeline_buffers must be an int"):
-            _compute_chunk_size_numpy(
+            compute_chunk_size_numpy(
                 n_samples=1000, n_filtered=50_000, pipeline_buffers=bad_value
             )

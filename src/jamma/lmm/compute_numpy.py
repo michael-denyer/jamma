@@ -1839,7 +1839,7 @@ def _compute_lrt_split_numpy(
     )
 
 
-def _compute_lmm_chunk_numpy(
+def compute_lmm_chunk_numpy(
     lmm_mode: LmmMode,
     n_cvt: int,
     eigenvalues: np.ndarray,

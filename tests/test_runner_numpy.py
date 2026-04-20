@@ -14,7 +14,7 @@ import pytest
 
 from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
-from jamma.lmm.runner_numpy import _compute_chunk_size_numpy, run_lmm_association_numpy
+from jamma.lmm.runner_numpy import compute_chunk_size_numpy, run_lmm_association_numpy
 from jamma.lmm.stats import AssocResult
 from jamma.validation import (
     ToleranceConfig,
@@ -226,7 +226,7 @@ def test_numpy_runner_empty_after_filter(synthetic_data):
 
 def test_compute_chunk_size_small_dataset():
     """Small dataset: chunk size = n_filtered (everything in one chunk)."""
-    chunk = _compute_chunk_size_numpy(
+    chunk = compute_chunk_size_numpy(
         n_samples=100,
         n_filtered=500,
         n_cvt=1,
@@ -237,7 +237,7 @@ def test_compute_chunk_size_small_dataset():
 
 def test_compute_chunk_size_large_dataset():
     """Large dataset: chunk capped by memory budget or _MAX_CHUNK."""
-    chunk = _compute_chunk_size_numpy(
+    chunk = compute_chunk_size_numpy(
         n_samples=10_000,
         n_filtered=200_000,
         n_cvt=1,
@@ -248,14 +248,14 @@ def test_compute_chunk_size_large_dataset():
 
 def test_compute_chunk_size_zero_bytes():
     """bytes_per_snp=0 (n_samples=0): returns n_filtered directly."""
-    chunk = _compute_chunk_size_numpy(n_samples=0, n_filtered=1000, n_cvt=1)
+    chunk = compute_chunk_size_numpy(n_samples=0, n_filtered=1000, n_cvt=1)
     assert chunk == 1000, f"Expected 1000, got {chunk}"
 
 
 def test_compute_chunk_size_minimum():
     """Chunk size never drops below 100."""
     # Huge n_samples to force small chunk_from_memory, tiny n_filtered to avoid cap
-    chunk = _compute_chunk_size_numpy(
+    chunk = compute_chunk_size_numpy(
         n_samples=1_000_000,
         n_filtered=200,
         n_cvt=10,
@@ -266,13 +266,13 @@ def test_compute_chunk_size_minimum():
 
 def test_chunk_size_split_larger_than_full():
     """Split Uab accounting produces larger chunks than full Uab."""
-    full = _compute_chunk_size_numpy(
+    full = compute_chunk_size_numpy(
         n_samples=50_000,
         n_filtered=100_000,
         n_cvt=1,
         mem_budget_bytes=int(10e9),
     )
-    split = _compute_chunk_size_numpy(
+    split = compute_chunk_size_numpy(
         n_samples=50_000,
         n_filtered=100_000,
         n_cvt=1,
@@ -284,13 +284,13 @@ def test_chunk_size_split_larger_than_full():
 
 def test_chunk_size_explicit_budget():
     """Explicit mem_budget_bytes overrides auto-scaling."""
-    small_budget = _compute_chunk_size_numpy(
+    small_budget = compute_chunk_size_numpy(
         n_samples=50_000,
         n_filtered=100_000,
         n_cvt=1,
         mem_budget_bytes=int(2e9),
     )
-    large_budget = _compute_chunk_size_numpy(
+    large_budget = compute_chunk_size_numpy(
         n_samples=50_000,
         n_filtered=100_000,
         n_cvt=1,
@@ -301,14 +301,14 @@ def test_chunk_size_explicit_budget():
 
 def test_chunk_size_pipeline_halves_budget():
     """pipeline_buffers=2 produces roughly half the chunk size."""
-    single = _compute_chunk_size_numpy(
+    single = compute_chunk_size_numpy(
         n_samples=50_000,
         n_filtered=100_000,
         n_cvt=1,
         use_split=True,
         mem_budget_bytes=int(20e9),
     )
-    double = _compute_chunk_size_numpy(
+    double = compute_chunk_size_numpy(
         n_samples=50_000,
         n_filtered=100_000,
         n_cvt=1,
@@ -329,7 +329,7 @@ def test_chunk_size_auto_scales_with_memory():
     mock_vmem = MagicMock()
     mock_vmem.available = 400_000_000_000
     with patch("jamma.lmm.runner_numpy.psutil.virtual_memory", return_value=mock_vmem):
-        chunk_big = _compute_chunk_size_numpy(
+        chunk_big = compute_chunk_size_numpy(
             n_samples=50_000,
             n_filtered=100_000,
             n_cvt=1,
@@ -339,7 +339,7 @@ def test_chunk_size_auto_scales_with_memory():
     # 10 GB available → 15% = 1.5 GB (hits 2 GB floor)
     mock_vmem.available = 10_000_000_000
     with patch("jamma.lmm.runner_numpy.psutil.virtual_memory", return_value=mock_vmem):
-        chunk_small = _compute_chunk_size_numpy(
+        chunk_small = compute_chunk_size_numpy(
             n_samples=50_000,
             n_filtered=100_000,
             n_cvt=1,
@@ -357,7 +357,7 @@ def test_chunk_size_mode4_fused_uses_4col():
     budget = int(5e9)
 
     # Fused mode-4: 4 cols/SNP
-    fused_chunk = _compute_chunk_size_numpy(
+    fused_chunk = compute_chunk_size_numpy(
         n_samples=n_samples,
         n_filtered=500_000,
         n_cvt=1,
@@ -367,7 +367,7 @@ def test_chunk_size_mode4_fused_uses_4col():
         mem_budget_bytes=budget,
     )
     # Non-fused mode-4 fallback: also 4 cols/SNP (SoA split dispatch)
-    fallback_chunk = _compute_chunk_size_numpy(
+    fallback_chunk = compute_chunk_size_numpy(
         n_samples=n_samples,
         n_filtered=500_000,
         n_cvt=1,
@@ -377,7 +377,7 @@ def test_chunk_size_mode4_fused_uses_4col():
         mem_budget_bytes=budget,
     )
     # Wald (mode 1): 4 cols/SNP — should match all other split paths
-    wald_chunk = _compute_chunk_size_numpy(
+    wald_chunk = compute_chunk_size_numpy(
         n_samples=n_samples,
         n_filtered=500_000,
         n_cvt=1,
@@ -747,7 +747,7 @@ class TestWriteStreamingChunk:
 def test_numpy_multi_chunk_pvalue_equivalence(monkeypatch):
     """p-values are identical regardless of chunk_size (single vs. multi-chunk).
 
-    Forces multi-chunk mode by monkeypatching _compute_chunk_size_numpy to
+    Forces multi-chunk mode by monkeypatching compute_chunk_size_numpy to
     return 50, then compares p_wald against a single-chunk run.  Pre-computed
     eigendecomp is passed to both calls to avoid repeated O(n^3) work and to
     ensure the only difference is the chunking path.
@@ -785,7 +785,7 @@ def test_numpy_multi_chunk_pvalue_equivalence(monkeypatch):
 
     # Multi-chunk run: force chunk_size=50 so the batch loop iterates many times
     monkeypatch.setattr(
-        "jamma.lmm.runner_numpy._compute_chunk_size_numpy",
+        "jamma.lmm.runner_numpy.compute_chunk_size_numpy",
         lambda *args, **kwargs: 50,
     )
     result_multi = run_lmm_association_numpy(**common_kwargs)

@@ -357,14 +357,14 @@ class TestNumpyRunnerValidation:
 
 @pytest.mark.tier0
 class TestComputeNumpyInvalidMode:
-    """_compute_lmm_chunk_numpy must raise on invalid lmm_mode."""
+    """compute_lmm_chunk_numpy must raise on invalid lmm_mode."""
 
     def test_invalid_mode_raises_value_error(self) -> None:
         """lmm_mode=99 should raise ValueError, not return all-None dict."""
-        from jamma.lmm.compute_numpy import _compute_lmm_chunk_numpy
+        from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 
         with pytest.raises(ValueError, match="lmm_mode must be"):
-            _compute_lmm_chunk_numpy(
+            compute_lmm_chunk_numpy(
                 lmm_mode=99,
                 n_cvt=1,
                 eigenvalues=np.ones(10),
@@ -403,7 +403,7 @@ class TestMode4WaldOverwritesScore:
 
     def test_mode4_betas_ses_match_wald_only(self) -> None:
         """Mode=4 betas/ses must equal mode=1 (Wald) betas/ses."""
-        from jamma.lmm.compute_numpy import _compute_lmm_chunk_numpy
+        from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
         from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
         from jamma.lmm.prepare_common import _compute_null_model_common
 
@@ -422,7 +422,7 @@ class TestMode4WaldOverwritesScore:
         )
 
         # Mode 1 — Wald only
-        wald_only = _compute_lmm_chunk_numpy(
+        wald_only = compute_lmm_chunk_numpy(
             lmm_mode=1,
             n_cvt=n_cvt,
             eigenvalues=eigenvalues,
@@ -431,7 +431,7 @@ class TestMode4WaldOverwritesScore:
         )
 
         # Mode 4 — All tests composed
-        all_tests = _compute_lmm_chunk_numpy(
+        all_tests = compute_lmm_chunk_numpy(
             lmm_mode=4,
             n_cvt=n_cvt,
             eigenvalues=eigenvalues,

@@ -41,9 +41,9 @@ from jamma.lmm.compute_numpy import (
     _C_SCORE_FUSED_AVAILABLE,
     _C_SPLIT_AVAILABLE,
     LmmMode,
-    _compute_lmm_chunk_numpy,
     _compute_lrt_split_numpy,
     _compute_score_split_numpy,
+    compute_lmm_chunk_numpy,
     compute_mode4_fused_c_ws,
     compute_mode4_fused_general_c_ws,
     compute_mode4_split_c_ws,
@@ -415,7 +415,7 @@ def compute_adaptive_core_split(
     return rot_threads, compute_threads
 
 
-def _compute_chunk_size_numpy(
+def compute_chunk_size_numpy(
     n_samples: int,
     n_filtered: int,
     n_cvt: int = 1,
@@ -823,7 +823,7 @@ def run_lmm_association_numpy(
             "(eliminates uab_varying_soa buffer for mode 2)"
         )
 
-    chunk_size = _compute_chunk_size_numpy(
+    chunk_size = compute_chunk_size_numpy(
         n_samples,
         n_filtered,
         n_cvt,
@@ -844,7 +844,7 @@ def run_lmm_association_numpy(
 
     if use_pipeline:
         # Pipeline has 2 chunks alive simultaneously — halve the budget
-        chunk_size = _compute_chunk_size_numpy(
+        chunk_size = compute_chunk_size_numpy(
             n_samples,
             n_filtered,
             n_cvt,
@@ -1470,7 +1470,7 @@ def run_lmm_association_numpy(
                 blas_ctx = blas_threads(1) if _C_ACCEL_AVAILABLE else nullcontext()
                 with blas_ctx:
                     return _guarded_compute(
-                        _compute_lmm_chunk_numpy,
+                        compute_lmm_chunk_numpy,
                         lmm_mode,
                         n_cvt,
                         eigenvalues_np,

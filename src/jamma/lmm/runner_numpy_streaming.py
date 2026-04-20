@@ -49,7 +49,7 @@ from jamma.lmm.compute_numpy import (
     _C_SCORE_FUSED_AVAILABLE,
     _C_SCORE_FUSED_WS_AVAILABLE,
     _C_SPLIT_AVAILABLE,
-    _compute_lmm_chunk_numpy,
+    compute_lmm_chunk_numpy,
     compute_mode4_fused_c_ws,
     compute_mode4_fused_general_c_ws,
     compute_wald_fused_c_ws,
@@ -81,10 +81,10 @@ from jamma.lmm.results import (
 )
 from jamma.lmm.runner_numpy import (
     _MIN_PIPELINE_CHUNKS,
-    _compute_chunk_size_numpy,
     _create_wald_workspace_for_ncvt,
     _guarded_compute,
     compute_adaptive_core_split,
+    compute_chunk_size_numpy,
     compute_pipeline_core_split,
     dispatch_soa_split,
 )
@@ -437,7 +437,7 @@ def run_lmm_association_numpy_streaming(
     # After pass-1 we know n_filtered and can compute optimal chunk size.
     auto_scaled = chunk_size == 10_000
     if auto_scaled:
-        chunk_size = _compute_chunk_size_numpy(
+        chunk_size = compute_chunk_size_numpy(
             n_samples,
             n_filtered,
             n_cvt,
@@ -457,7 +457,7 @@ def run_lmm_association_numpy_streaming(
         # Pipeline keeps 2 chunks alive simultaneously -- halve the memory
         # budget to avoid OOM.
         if auto_scaled:
-            chunk_size = _compute_chunk_size_numpy(
+            chunk_size = compute_chunk_size_numpy(
                 n_samples,
                 n_filtered,
                 n_cvt,
@@ -944,7 +944,7 @@ def run_lmm_association_numpy_streaming(
                         n_threads=pipeline_omp_threads,
                     )
             else:
-                cr = _compute_lmm_chunk_numpy(
+                cr = compute_lmm_chunk_numpy(
                     lmm_mode,
                     n_cvt,
                     eigenvalues_np,

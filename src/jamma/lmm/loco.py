@@ -38,7 +38,7 @@ from jamma.io.plink import (
 from jamma.jlinalg import compute_snp_stats_chunk
 from jamma.kinship import write_kinship_matrix
 from jamma.kinship.missing import impute_and_center
-from jamma.lmm.compute_numpy import _compute_lmm_chunk_numpy
+from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.io import IncrementalAssocWriter
@@ -53,7 +53,7 @@ from jamma.lmm.results import (
     count_lambda_boundary_hits,
     log_lambda_boundary_warning,
 )
-from jamma.lmm.runner_numpy import _compute_chunk_size_numpy
+from jamma.lmm.runner_numpy import compute_chunk_size_numpy
 from jamma.lmm.schema import RESULT_FIELDS, TEST_TYPE_MAP, LazySnpMeta, LocoResult
 from jamma.lmm.stats import AssocResult
 from jamma.utils import chr_sort_key
@@ -1352,7 +1352,7 @@ def _run_lmm_for_chromosome_numpy(
     )
 
     # Compute chunk size based on RAM budget
-    chunk_size = _compute_chunk_size_numpy(n_samples, ctx.n_filtered, ctx.n_cvt)
+    chunk_size = compute_chunk_size_numpy(n_samples, ctx.n_filtered, ctx.n_cvt)
 
     # Pre-allocate result arrays
     write_offset = 0
@@ -1396,7 +1396,7 @@ def _run_lmm_for_chromosome_numpy(
 
                 # Mode dispatch
                 try:
-                    cr = _compute_lmm_chunk_numpy(
+                    cr = compute_lmm_chunk_numpy(
                         lmm_mode,
                         ctx.n_cvt,
                         eigenvalues,

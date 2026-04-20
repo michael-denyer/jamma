@@ -20,9 +20,96 @@ Called from:
 
 from __future__ import annotations
 
+import contextlib
 import importlib
+import importlib.util
+import os
 import subprocess
 import sys
+import sysconfig
+import tempfile
+from collections.abc import Iterator
+from pathlib import Path
+
+
+def _lock_path_for(sys_module_key: str) -> Path:
+    """Compute the lock file path for a given extension module.
+
+    Lives next to the .so target so concurrent processes installed against
+    the same site-packages serialize on the same lock. Falls back to a
+    tempdir-based path keyed on the module name if the package directory
+    can't be located (defensive — should not happen in normal installs).
+    """
+    try:
+        package_name, _, mod_name = sys_module_key.rpartition(".")
+        if package_name:
+            spec = importlib.util.find_spec(package_name)
+            if spec is not None and spec.submodule_search_locations:
+                pkg_dir = Path(next(iter(spec.submodule_search_locations)))
+                ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
+                return pkg_dir / f"{mod_name}{ext_suffix}.lock"
+    except (ImportError, ValueError, OSError, StopIteration):
+        pass
+    safe_key = sys_module_key.replace(".", "_").replace("/", "_")
+    return Path(tempfile.gettempdir()) / f"jamma_{safe_key}.lock"
+
+
+@contextlib.contextmanager
+def _file_lock(lock_path: Path) -> Iterator[None]:
+    """Cross-platform exclusive file lock.
+
+    Uses fcntl.flock on POSIX and msvcrt.locking on Windows. Falls back to
+    a no-op if neither is importable (e.g. exotic platforms) — better to
+    risk a rare race than to refuse to recompile at all. The lock file is
+    created if missing and left in place after release; this matches how
+    pip/uv handle their own lockfiles and avoids a TOCTOU between unlink
+    and re-lock by a sibling process.
+    """
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # Read-only site-packages (system Python on locked-down hosts).
+        # Skip locking — a pure-Python fallback is preferable to crashing.
+        yield
+        return
+
+    fd = None
+    try:
+        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError:
+        yield
+        return
+
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            # Blocking exclusive lock on the first byte; the entire file is
+            # zero-length so this is effectively whole-file.
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX)
+    except (ImportError, OSError):
+        # Locking unsupported on this filesystem (some network mounts) —
+        # proceed unlocked. The atomic-replace in compile_and_link still
+        # protects readers from observing a partial .so.
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        yield
+        return
+
+    try:
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            if sys.platform == "win32":
+                import msvcrt
+
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        with contextlib.suppress(OSError):
+            os.close(fd)
 
 
 def auto_recompile_c_extension(
@@ -72,39 +159,61 @@ def auto_recompile_c_extension(
         # gap for ABI-mismatch recompiles on wheel installs.
         logger.warning(f"{module_name} recompile retry: {msg}")
 
-    try:
+    # Serialize concurrent recompiles (pytest-xdist workers, parallel
+    # Databricks jobs, multiple notebook kernels). Without this, two
+    # workers can race on the same .so output path and produce a
+    # corrupted file. The atomic os.replace inside compile_and_link is
+    # the secondary defense for code paths that bypass this shim
+    # (e.g. ``python -m jamma.jlinalg._compile_jlinalg`` invoked twice).
+    lock_path = _lock_path_for(sys_module_key)
+    with _file_lock(lock_path):
+        # Re-check after acquiring the lock — a sibling process may have
+        # already recompiled while we were blocked. If the import now
+        # succeeds, skip the redundant build.
+        if sys_module_key not in sys.modules:
+            try:
+                importlib.import_module(sys_module_key)
+                logger.info(
+                    f"C extension {module_name} was recompiled by another process; "
+                    f"using existing build."
+                )
+                return True
+            except ImportError:
+                pass  # Still broken — fall through to recompile.
+
         try:
-            success = compiler.compile_extension(verbose=False, on_retry=_on_retry)
-        except TypeError:
-            # Older compile_extension without on_retry kwarg — fall back so
-            # a partial-upgrade environment doesn't break. Downgrade
-            # notices will not surface in this case.
-            success = compiler.compile_extension(verbose=False)
-    except (OSError, subprocess.SubprocessError, ImportError, RuntimeError) as e:
-        # Narrow catch: genuine build-environment failures (missing compiler,
-        # broken subprocess, unimportable helper, compile driver's explicit
-        # RuntimeError). Programming bugs (AttributeError, KeyError, TypeError
-        # other than the on_retry-kwarg one above) propagate so they surface
-        # as real tracebacks instead of a silent pure-Python fallback.
-        logger.warning(
-            f"Auto-recompilation of {module_name} raised "
-            f"{type(e).__name__}: {e}. "
-            f"Falling back to pure-Python ({label}). "
-            f"To diagnose, run: python -m {compiler_module}",
-            exc_info=True,
-        )
-        return False
+            try:
+                success = compiler.compile_extension(verbose=False, on_retry=_on_retry)
+            except TypeError:
+                # Older compile_extension without on_retry kwarg — fall back so
+                # a partial-upgrade environment doesn't break. Downgrade
+                # notices will not surface in this case.
+                success = compiler.compile_extension(verbose=False)
+        except (OSError, subprocess.SubprocessError, ImportError, RuntimeError) as e:
+            # Narrow catch: genuine build-environment failures (missing compiler,
+            # broken subprocess, unimportable helper, compile driver's explicit
+            # RuntimeError). Programming bugs (AttributeError, KeyError, TypeError
+            # other than the on_retry-kwarg one above) propagate so they surface
+            # as real tracebacks instead of a silent pure-Python fallback.
+            logger.warning(
+                f"Auto-recompilation of {module_name} raised "
+                f"{type(e).__name__}: {e}. "
+                f"Falling back to pure-Python ({label}). "
+                f"To diagnose, run: python -m {compiler_module}",
+                exc_info=True,
+            )
+            return False
 
-    if not success:
-        logger.warning(
-            f"Auto-recompilation of {module_name} failed. "
-            f"Falling back to pure-Python ({label}). "
-            f"To diagnose, run: python -m {compiler_module}"
-        )
-        return False
+        if not success:
+            logger.warning(
+                f"Auto-recompilation of {module_name} failed. "
+                f"Falling back to pure-Python ({label}). "
+                f"To diagnose, run: python -m {compiler_module}"
+            )
+            return False
 
-    # Evict stale module from sys.modules so re-import picks up the new .so
-    sys.modules.pop(sys_module_key, None)
+        # Evict stale module from sys.modules so re-import picks up the new .so
+        sys.modules.pop(sys_module_key, None)
 
     logger.info(f"C extension {module_name} recompiled successfully.")
     return True

@@ -15,6 +15,8 @@ through ``compile_jlinalg`` below.
 
 from __future__ import annotations
 
+import contextlib
+import os
 import subprocess
 import tempfile
 from collections.abc import Callable
@@ -366,13 +368,19 @@ def compile_jlinalg(
         )
 
     # Phase 2: link.
+    # Link to a sibling temp path then os.replace() onto the final output.
+    # On POSIX and Windows os.replace() is atomic when src and dst are on the
+    # same filesystem — concurrent recompilers (pytest-xdist workers, parallel
+    # Databricks tasks) can never observe a half-written .so. The PID suffix
+    # also guarantees parallel linkers don't clobber each other's tmp file.
+    link_tmp = output.with_name(f"{output.name}.tmp.{os.getpid()}")
     link_cmd = [
         cc_cmd,
         *cc_extra,
         *link_mode_flags,
         *[str(o) for o in compile_objs],
         "-o",
-        str(output),
+        str(link_tmp),
         *ldflags,
         *current_omp_link,
         *extra_link_flags,
@@ -401,7 +409,7 @@ def compile_jlinalg(
             *link_mode_flags,
             *[str(o) for o in compile_objs],
             "-o",
-            str(output),
+            str(link_tmp),
             *ldflags,
             *extra_link_flags,
         ]
@@ -410,11 +418,31 @@ def compile_jlinalg(
         used_openmp_link = False
 
     if link_result.returncode != 0:
+        # Tidy up any partial tmp from the failed link attempt.
+        with contextlib.suppress(OSError):
+            link_tmp.unlink()
         return CompileResult(
             success=False,
             used_openmp=used_openmp,
             used_openmp_link=False,
             error=f"link failed: {link_result.stderr}",
+            obj_files=compile_objs,
+        )
+
+    # Atomic publish — readers see either the old .so or the new one, never
+    # a partially-written file. On Windows os.replace handles in-use targets
+    # less gracefully than POSIX, but a stale .so is still better than a
+    # truncated one, so we let the OSError surface as a link failure.
+    try:
+        link_tmp.replace(output)
+    except OSError as e:
+        with contextlib.suppress(OSError):
+            link_tmp.unlink()
+        return CompileResult(
+            success=False,
+            used_openmp=used_openmp,
+            used_openmp_link=False,
+            error=f"atomic replace of {output} failed: {e}",
             obj_files=compile_objs,
         )
 

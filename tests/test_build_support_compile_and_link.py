@@ -226,6 +226,17 @@ def test_compile_jlinalg_smoke_success(monkeypatch, tmp_path):
 
     def _fake_run(cmd, **kwargs):
         calls.append(list(cmd))
+        # Mirror cc behavior: -o <path> writes a file at <path>. The link
+        # step now writes to a sibling .tmp.<pid> path and the helper
+        # os.replace()s it onto the real output (added in jamma-oy1c so
+        # concurrent recompilers can't observe a half-written .so).
+        # Without creating the file the atomic-replace step would fail.
+        if "-o" in cmd:
+            out_idx = cmd.index("-o") + 1
+            if out_idx < len(cmd):
+                from pathlib import Path
+
+                Path(cmd[out_idx]).write_bytes(b"")
         return _FakeCompleted(returncode=0)
 
     monkeypatch.setattr(
@@ -293,6 +304,14 @@ def test_compile_jlinalg_compile_failure_triggers_omp_retry(monkeypatch, tmp_pat
         # First compile attempt fails (has -fopenmp).
         if len(calls) == 1 and "-fopenmp" in cmd:
             return _FakeCompleted(returncode=1, stderr="omp compile failed")
+        # Materialize the -o target so the link step's atomic os.replace
+        # (jamma-oy1c) can find a real file at the .tmp.<pid> path.
+        if "-o" in cmd:
+            out_idx = cmd.index("-o") + 1
+            if out_idx < len(cmd):
+                from pathlib import Path
+
+                Path(cmd[out_idx]).write_bytes(b"")
         return _FakeCompleted(returncode=0)
 
     monkeypatch.setattr(

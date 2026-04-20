@@ -886,69 +886,15 @@ class PipelineRunner:
         # LOCO branch: skip standard kinship, run LOCO orchestrator
         # (single-phenotype only — guard in __post_init__)
         if self.config.loco:
-            phenotypes, n_analyzed = self.parse_phenotypes()
-            n_filtered = len(phenotypes) - n_analyzed
-            logger.info(
-                f"Analyzing {n_analyzed} samples with valid "
-                f"phenotypes ({n_filtered} filtered)"
-            )
-            from jamma.lmm import run_lmm_loco
-
-            covariates = self.load_covariates(n_samples)
-            valid_mask = self._compute_valid_mask(phenotypes, covariates)
-            n_valid = int(np.sum(valid_mask))
-            n_cvt = covariates.shape[1] if covariates is not None else 1
-            self._log_banner(n_samples, n_valid, n_snps, n_covariates=n_cvt)
-            self._log_pipeline_banner(plan)
-            warn_if_small_sample(n_valid)
-
-            t_loco = time.perf_counter()
-            loco = run_lmm_loco(
-                bed_path=self.config.bfile,
-                phenotypes=phenotypes,
-                covariates=covariates,
-                maf_threshold=self.config.maf,
-                miss_threshold=self.config.miss,
-                lmm_mode=self.config.lmm_mode,
-                output_path=assoc_path,
-                check_memory=self.config.check_memory,
-                show_progress=self.config.show_progress,
-                save_kinship=self.config.save_kinship,
-                kinship_output_dir=self.config.output_dir,
-                kinship_output_prefix=self.config.output_prefix,
+            return self._run_loco(
+                t_start=t_start,
+                plan=plan,
+                n_samples=n_samples,
+                n_snps=n_snps,
+                assoc_path=assoc_path,
                 snps_indices=snps_indices,
                 ksnps_indices=ksnps_indices,
-                l_min=self.config.l_min,
-                l_max=self.config.l_max,
-                write_eigen=self.config.write_eigen,
-                eigen_dir=self.config.eigen_dir,
-                eigen_prefix=self.config.output_prefix,
             )
-            loco_s = time.perf_counter() - t_loco
-            total_s = time.perf_counter() - t_start
-            logger.info(
-                f"LOCO GWAS complete: {loco.n_tested} SNPs tested in {total_s:.1f}s"
-            )
-
-            result = PipelineResult(
-                associations=loco.associations,
-                n_samples=n_valid,
-                n_snps_tested=loco.n_tested,
-                assoc_path=assoc_path,
-                assoc_paths=[assoc_path],
-                timing={
-                    "kinship_s": 0.0,
-                    "load_s": 0.0,
-                    "lmm_s": loco_s,
-                    "total_s": total_s,
-                },
-                backend="numpy",
-                n_covariates=covariates.shape[1] if covariates is not None else 1,
-                pve_estimate=loco.pve,
-                pve_se=loco.pve_se,
-            )
-            self._emit_telemetry(result, plan)
-            return result
 
         covariates = self.load_covariates(n_samples)
 
@@ -1217,6 +1163,92 @@ class PipelineRunner:
             n_covariates=(covariates.shape[1] if covariates is not None else 1),
             pve_estimate=pve,
             pve_se=pve_se,
+        )
+        self._emit_telemetry(result, plan)
+        return result
+
+    def _run_loco(
+        self,
+        *,
+        t_start: float,
+        plan: ExecutionPlan,
+        n_samples: int,
+        n_snps: int,
+        assoc_path: Path,
+        snps_indices: np.ndarray | None,
+        ksnps_indices: np.ndarray | None,
+    ) -> PipelineResult:
+        """LOCO branch of the pipeline.
+
+        Self-contained early return from _run_inner: parses single
+        phenotype, loads covariates, runs the LOCO orchestrator (which
+        owns its own per-chromosome kinship + eigendecomposition), and
+        assembles a PipelineResult.
+
+        Single-phenotype only — multi-phenotype LOCO is rejected at
+        PipelineConfig.__post_init__.
+        """
+        from jamma.lmm import run_lmm_loco
+
+        phenotypes, n_analyzed = self.parse_phenotypes()
+        n_filtered = len(phenotypes) - n_analyzed
+        logger.info(
+            f"Analyzing {n_analyzed} samples with valid "
+            f"phenotypes ({n_filtered} filtered)"
+        )
+
+        covariates = self.load_covariates(n_samples)
+        valid_mask = self._compute_valid_mask(phenotypes, covariates)
+        n_valid = int(np.sum(valid_mask))
+        n_cvt = covariates.shape[1] if covariates is not None else 1
+        self._log_banner(n_samples, n_valid, n_snps, n_covariates=n_cvt)
+        self._log_pipeline_banner(plan)
+        warn_if_small_sample(n_valid)
+
+        t_loco = time.perf_counter()
+        loco = run_lmm_loco(
+            bed_path=self.config.bfile,
+            phenotypes=phenotypes,
+            covariates=covariates,
+            maf_threshold=self.config.maf,
+            miss_threshold=self.config.miss,
+            lmm_mode=self.config.lmm_mode,
+            output_path=assoc_path,
+            check_memory=self.config.check_memory,
+            show_progress=self.config.show_progress,
+            save_kinship=self.config.save_kinship,
+            kinship_output_dir=self.config.output_dir,
+            kinship_output_prefix=self.config.output_prefix,
+            snps_indices=snps_indices,
+            ksnps_indices=ksnps_indices,
+            l_min=self.config.l_min,
+            l_max=self.config.l_max,
+            write_eigen=self.config.write_eigen,
+            eigen_dir=self.config.eigen_dir,
+            eigen_prefix=self.config.output_prefix,
+        )
+        loco_s = time.perf_counter() - t_loco
+        total_s = time.perf_counter() - t_start
+        logger.info(
+            f"LOCO GWAS complete: {loco.n_tested} SNPs tested in {total_s:.1f}s"
+        )
+
+        result = PipelineResult(
+            associations=loco.associations,
+            n_samples=n_valid,
+            n_snps_tested=loco.n_tested,
+            assoc_path=assoc_path,
+            assoc_paths=[assoc_path],
+            timing={
+                "kinship_s": 0.0,
+                "load_s": 0.0,
+                "lmm_s": loco_s,
+                "total_s": total_s,
+            },
+            backend="numpy",
+            n_covariates=covariates.shape[1] if covariates is not None else 1,
+            pve_estimate=loco.pve,
+            pve_se=loco.pve_se,
         )
         self._emit_telemetry(result, plan)
         return result

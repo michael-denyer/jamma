@@ -75,14 +75,27 @@ detect_openmp_flags = _omp.detect_openmp_flags
 
 class CustomBuildHook(BuildHookInterface):
     def initialize(self, version, build_data):
-        # Write _build_meta.py with the git commit date
+        # Write _build_meta.py with the git commit date.
+        # Capture stderr rather than discarding it — silent fallback to
+        # today's date would bake wrong, non-reproducible release metadata
+        # into the wheel with no trace.
         try:
-            date_str = subprocess.check_output(
+            result = subprocess.run(
                 ["git", "log", "-1", "--format=%ci"],
+                capture_output=True,
                 text=True,
-                stderr=subprocess.DEVNULL,
-            ).strip()[:10]
-        except (FileNotFoundError, subprocess.CalledProcessError):
+                check=True,
+            )
+            date_str = result.stdout.strip()[:10]
+        except (FileNotFoundError, OSError, subprocess.CalledProcessError) as e:
+            stderr = getattr(e, "stderr", "") or ""
+            print(
+                f"WARNING: git log failed ({type(e).__name__}: {e}); "
+                f"falling back to today's date for __release_date__. "
+                f"git stderr: {stderr.strip() or '<empty>'}",
+                file=sys.stderr,
+                flush=True,
+            )
             date_str = datetime.date.today().isoformat()
 
         meta_path = Path(self.root) / "src" / "jamma" / "_build_meta.py"

@@ -34,8 +34,8 @@ def _make_fake_compiler(module_name: str, *, outcome):
     """
     mod = types.ModuleType(module_name)
 
-    def compile_extension(verbose: bool = False) -> bool:
-        del verbose
+    def compile_extension(verbose: bool = False, on_retry=None) -> bool:
+        del verbose, on_retry
         if isinstance(outcome, type) and issubclass(outcome, BaseException):
             raise outcome("fake failure")
         return bool(outcome)
@@ -162,6 +162,85 @@ def test_successful_recompile_with_no_prior_sys_modules_entry(monkeypatch):
 
     result = auto_recompile_c_extension(
         module_name="_fake_ext_no_prior",
+        compiler_module=compiler_name,
+        sys_module_key=sys_key,
+        label="fake",
+    )
+
+    assert result is True
+
+
+@pytest.mark.tier0
+def test_on_retry_callback_is_wired_and_emits_warning(monkeypatch, capsys):
+    """The runtime recompile shim must pass a non-None on_retry callback
+    to compile_extension AND invoking it must emit a warning the user
+    can see. Without this, runtime recompile silently falls back to
+    single-threaded with no user-visible signal — the exact gap this
+    test guards.
+    """
+    from loguru import logger as _logger
+
+    compiler_name = "jamma._fake_compiler_retry"
+    sys_key = "jamma._fake_ext_retry"
+
+    mod = types.ModuleType(compiler_name)
+    captured_retry: list[object] = []
+
+    def compile_extension(verbose: bool = False, on_retry=None) -> bool:
+        del verbose
+        captured_retry.append(on_retry)
+        if on_retry is not None:
+            on_retry("OpenMP compilation failed, retrying without OpenMP")
+        return True
+
+    mod.compile_extension = compile_extension  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, compiler_name, mod)
+    monkeypatch.delitem(sys.modules, sys_key, raising=False)
+
+    # Route loguru to stderr so capsys can observe it.
+    sink_id = _logger.add(sys.stderr, level="WARNING")
+    try:
+        result = auto_recompile_c_extension(
+            module_name="_fake_ext_retry",
+            compiler_module=compiler_name,
+            sys_module_key=sys_key,
+            label="fake",
+        )
+    finally:
+        _logger.remove(sink_id)
+
+    assert result is True
+    assert captured_retry, "compile_extension must be called"
+    assert captured_retry[0] is not None, (
+        "auto_recompile_c_extension must pass a non-None on_retry to "
+        "compile_extension so OMP downgrade signals surface"
+    )
+    captured = capsys.readouterr()
+    assert "OpenMP compilation failed" in captured.err, (
+        "on_retry invocation must produce a user-visible warning — "
+        "loguru must emit, not silently discard, retry notices"
+    )
+
+
+@pytest.mark.tier0
+def test_partial_upgrade_fallback_when_compile_extension_lacks_on_retry(monkeypatch):
+    """An older installed compile_extension (no on_retry kwarg) must not
+    break the recompile shim — it falls back to the legacy call.
+    """
+    compiler_name = "jamma._fake_compiler_legacy"
+    sys_key = "jamma._fake_ext_legacy"
+
+    mod = types.ModuleType(compiler_name)
+
+    def compile_extension(verbose: bool = False) -> bool:
+        return True
+
+    mod.compile_extension = compile_extension  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, compiler_name, mod)
+    monkeypatch.delitem(sys.modules, sys_key, raising=False)
+
+    result = auto_recompile_c_extension(
+        module_name="_fake_ext_legacy",
         compiler_module=compiler_name,
         sys_module_key=sys_key,
         label="fake",

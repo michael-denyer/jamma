@@ -21,6 +21,7 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 # jamma._build_support ships inside the installed package, so the same
@@ -38,7 +39,11 @@ from jamma._build_support.find_compiler import find_c_compiler
 from jamma._build_support.openmp_detect import detect_openmp_flags
 
 
-def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
+def compile_extension(
+    verbose: bool = False,
+    diagnose: bool = False,
+    on_retry: Callable[[str], None] | None = None,
+) -> bool:
     """Compile _lmm_accel.c into a shared library in the installed package.
 
     Routes through ``jamma._build_support.compile_and_link.compile_jlinalg``
@@ -57,6 +62,13 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
         diagnose: Emit compiler vectorization reports (clang ``-Rpass``,
             gcc ``-fopt-info-vec-all``). Use to verify AVX-512 codegen on
             target hardware.
+        on_retry: Optional callback invoked with a single string argument
+            when the build retries without OpenMP (compile- or link-phase
+            downgrade). When None, retry notices are routed to ``_print``
+            and surface on stdout. The runtime recompile shim uses this
+            hook to forward downgrade notices to loguru so users whose
+            ABI-mismatch recompile silently loses parallelism still see
+            a warning.
 
     Returns:
         True if compilation succeeded, False otherwise.
@@ -70,6 +82,12 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
         """Print only when verbose."""
         if verbose:
             print(*args, flush=True)
+
+    def _retry(msg: str) -> None:
+        if on_retry is not None:
+            on_retry(msg)
+        else:
+            _print(msg)
 
     # Locate source
     lmm_dir = Path(__file__).parent
@@ -181,7 +199,7 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
             tmp_dir=tmp_dir,
             extra_cflags=extra_cflags,
             extra_link_flags=["-lm"],
-            on_retry=lambda msg: _print(msg),
+            on_retry=_retry,
             verbose_print=_detail,
             error_print=_print,
         )

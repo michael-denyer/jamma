@@ -63,8 +63,22 @@ def auto_recompile_c_extension(
         f"(ABI mismatch or missing). Compiling now..."
     )
 
+    def _on_retry(msg: str) -> None:
+        # Surface OMP downgrade (or other retry notices) as a warning so
+        # users whose runtime recompile silently falls back to
+        # single-threaded execution can see it. The build-time path in
+        # hatch_build.py already warns on OMP downgrade; this closes the
+        # gap for ABI-mismatch recompiles on wheel installs.
+        logger.warning(f"{module_name} recompile retry: {msg}")
+
     try:
-        success = compiler.compile_extension(verbose=False)
+        try:
+            success = compiler.compile_extension(verbose=False, on_retry=_on_retry)
+        except TypeError:
+            # Older compile_extension without on_retry kwarg — fall back so
+            # a partial-upgrade environment doesn't break. Downgrade
+            # notices will not surface in this case.
+            success = compiler.compile_extension(verbose=False)
     except Exception as e:
         logger.warning(
             f"Auto-recompilation of {module_name} raised "

@@ -294,6 +294,11 @@ def compile_jlinalg(
     # (See ``link_shared`` parameter docstring.)
     link_mode_flags: tuple[str, ...] = ("-shared", "-fPIC") if link_shared else ()
 
+    # Mutable box so _compile_sources can report the first failure stderr
+    # back up for inclusion in the retry notice. Without this, an OMP
+    # downgrade on compile masks the real cause (e.g. missing omp.h).
+    first_stderr_holder: list[str] = [""]
+
     def _compile_sources(
         current_omp_compile: list[str], suffix: str
     ) -> list[Path] | None:
@@ -328,6 +333,7 @@ def compile_jlinalg(
                 # "compile failed" with no stderr.
                 error_print(f"Compile failed for {src.name}:")
                 error_print(result.stderr)
+                first_stderr_holder[0] = (result.stderr or "").strip()
                 return None
             objs.append(obj_file)
         return objs
@@ -338,7 +344,12 @@ def compile_jlinalg(
     compile_objs = _compile_sources(omp_compile, "")
 
     if compile_objs is None and used_openmp:
-        msg = "OpenMP compilation failed, retrying without OpenMP (single-threaded)"
+        first_stderr = first_stderr_holder[0]
+        msg = (
+            "OpenMP compilation failed, retrying without OpenMP "
+            f"(single-threaded). first-attempt stderr: "
+            f"{first_stderr or '<empty>'}"
+        )
         if on_retry is not None:
             on_retry(msg)
         verbose_print(msg + "...")

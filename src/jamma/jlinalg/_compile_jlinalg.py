@@ -23,6 +23,7 @@ import shutil
 import sys
 import sysconfig
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 # jamma._build_support ships inside the installed package, so the same
@@ -42,7 +43,10 @@ from jamma._build_support.find_compiler import find_c_compiler
 from jamma._build_support.openmp_detect import detect_openmp_flags
 
 
-def compile_extension(verbose: bool = False) -> bool:
+def compile_extension(
+    verbose: bool = False,
+    on_retry: Callable[[str], None] | None = None,
+) -> bool:
     """Compile jlinalg C sources into a shared library in the installed package.
 
     Performs per-file compile-then-link via
@@ -57,6 +61,12 @@ def compile_extension(verbose: bool = False) -> bool:
     Args:
         verbose: Print per-command compile details to stderr. When False
             (default), only errors and a one-line summary are printed.
+        on_retry: Optional callback invoked with a single string argument
+            when the build retries without OpenMP. When None, retry notices
+            are routed to ``_print`` and surface on stderr. The runtime
+            recompile shim uses this hook to forward downgrade notices to
+            loguru so users whose ABI-mismatch recompile silently loses
+            parallelism still see a warning.
 
     Returns:
         True if compilation succeeded, False otherwise.
@@ -70,6 +80,12 @@ def compile_extension(verbose: bool = False) -> bool:
         """Print only when verbose."""
         if verbose:
             print(*args, file=sys.stderr, flush=True)
+
+    def _retry(msg: str) -> None:
+        if on_retry is not None:
+            on_retry(msg)
+        else:
+            _print(msg)
 
     # Locate jlinalg source directory relative to this file
     jlinalg_dir = Path(__file__).parent
@@ -170,7 +186,7 @@ def compile_extension(verbose: bool = False) -> bool:
             output=out,
             tmp_dir=tmp_dir,
             extra_link_flags=["-lm"],
-            on_retry=lambda msg: _print(msg),
+            on_retry=_retry,
             verbose_print=_detail,
             error_print=_print,
         )

@@ -16,6 +16,7 @@ recompile.py for bare flag literals.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import sys
 from pathlib import Path
@@ -42,13 +43,12 @@ BANNED_LITERALS = [
 ]
 
 
-def _load_compile_and_link():
+def _load_compile_and_link(path: Path):
     """Load compile_and_link by file path so we don't trigger
     jamma/__init__.py (which needs the package installed for its
     importlib.metadata.version("jamma") call — not true under pre-commit's
     isolated Python).
     """
-    path = REPO_ROOT / "src/jamma/_build_support/compile_and_link.py"
     mod_name = "_verify_compile_and_link"
     spec = importlib.util.spec_from_file_location(mod_name, str(path))
     if spec is None or spec.loader is None:
@@ -62,11 +62,51 @@ def _load_compile_and_link():
     return module
 
 
-def main() -> int:
+def _has_compile_jlinalg_call(source: str) -> bool:
+    """Return True iff ``source`` has a real call to ``compile_jlinalg``.
+
+    Uses AST inspection rather than substring matching, so the following
+    do NOT count as calls:
+
+      - a mention inside a comment (e.g. ``# compile_jlinalg(x)``)
+      - a mention inside a string literal or docstring
+      - a local ``def compile_jlinalg(...):`` with the same name
+
+    A call matches if the callee is ``compile_jlinalg`` (bare name) or
+    ``<anything>.compile_jlinalg`` (attribute access, e.g.
+    ``compile_and_link.compile_jlinalg(...)``).
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "compile_jlinalg":
+            return True
+        if isinstance(func, ast.Attribute) and func.attr == "compile_jlinalg":
+            return True
+    return False
+
+
+def check(
+    build_support_path: Path,
+    entry_points: list[Path],
+    banned_literals: list[str] = BANNED_LITERALS,
+) -> tuple[int, list[str]]:
+    """Run the equivalence check. Returns (exit_code, failures).
+
+    Parameterized so tests can point it at synthetic trees.
+    """
     failures: list[str] = []
 
-    # 1. Import and inspect compile_and_link constants.
-    compile_and_link = _load_compile_and_link()
+    # 1. Import and inspect compile_and_link constants. The import must
+    # succeed — if it fails the helper tree is broken and downstream
+    # checks are meaningless.
+    compile_and_link = _load_compile_and_link(build_support_path)
 
     print(
         f"BASE_CFLAGS ({len(compile_and_link.BASE_CFLAGS)} flags): "
@@ -79,25 +119,16 @@ def main() -> int:
     print(f"BASELINE_SOURCES: {compile_and_link.BASELINE_SOURCES}")
     print(f"LAPACK_SOURCES: {compile_and_link.LAPACK_SOURCES}")
 
-    # 2. Scan entry points for banned literals.
-    for ep in ENTRY_POINTS:
+    # 2. Scan entry points for banned literals and confirm a real call.
+    for ep in entry_points:
         if not ep.exists():
             failures.append(f"{ep}: entry point missing")
             continue
         text = ep.read_text()
-        for lit in BANNED_LITERALS:
+        for lit in banned_literals:
             if lit in text:
                 failures.append(f"{ep}: banned literal {lit} found")
-
-    # 3. Confirm both entry points invoke the helper.
-    for ep in ENTRY_POINTS:
-        if not ep.exists():
-            continue
-        text = ep.read_text()
-        has_call = (
-            "compile_and_link.compile_jlinalg" in text or "compile_jlinalg(" in text
-        )
-        if not has_call:
+        if not _has_compile_jlinalg_call(text):
             failures.append(
                 f"{ep}: no compile_jlinalg call found — entry point bypasses helper"
             )
@@ -106,13 +137,19 @@ def main() -> int:
         print("\nCROSS-PATH EQUIVALENCE VIOLATIONS:", file=sys.stderr)
         for f in failures:
             print(f"  {f}", file=sys.stderr)
-        return 1
+        return 1, failures
 
     print(
         "\nStructural equivalence holds. All entry points use "
         "jamma._build_support.compile_and_link as single source of truth."
     )
-    return 0
+    return 0, failures
+
+
+def main() -> int:
+    build_support_path = REPO_ROOT / "src/jamma/_build_support/compile_and_link.py"
+    exit_code, _ = check(build_support_path, ENTRY_POINTS)
+    return exit_code
 
 
 if __name__ == "__main__":

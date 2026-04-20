@@ -23,52 +23,31 @@ import sysconfig
 import tempfile
 from pathlib import Path
 
-# _compile_accel.py runs in two modes:
-#   1. Dev-mode: `python -m jamma.lmm._compile_accel` from a source checkout.
-#      build_support/ sits at repo root (sibling to src/).
-#   2. Wheel install: jamma is installed but build_support/ is NOT shipped
-#      with the wheel. On ABI-mismatch recompile at import time,
-#      jamma.core.recompile.auto_recompile_c_extension calls this module's
-#      compile_extension(). That code path should emit a clear error, NOT
-#      a vague ImportError from the top-of-module `from build_support...`.
-#
-# Bootstrap: try the source-checkout path; if build_support/ is absent
-# (wheel install), leave the helper refs as None and guard the public
-# entry point at call time with a RuntimeError that explains the
-# situation. Mirrors _compile_jlinalg.py's bootstrap.
-_repo_root = Path(__file__).resolve().parents[3]
-_build_support_available = (_repo_root / "build_support").is_dir()
-
-if _build_support_available:
-    if str(_repo_root) not in sys.path:
-        sys.path.insert(0, str(_repo_root))
-    from build_support.compile_and_link import (
-        LINK_FLAGS_BY_PLATFORM,
-        compile_jlinalg,
-    )
-    from build_support.find_compiler import find_c_compiler
-    from build_support.openmp_detect import detect_openmp_flags
-else:
-    # Wheel-install path: build_support/ not present. Do NOT raise at
-    # import time — other modules may import this module to reach
-    # compile_extension via ABI-mismatch recompile. Leave the helper
-    # refs as None and guard the public function with a clear RuntimeError.
-    LINK_FLAGS_BY_PLATFORM = None  # type: ignore[assignment]
-    compile_jlinalg = None  # type: ignore[assignment]
-    find_c_compiler = None  # type: ignore[assignment]
-    detect_openmp_flags = None  # type: ignore[assignment]
+# jamma._build_support ships inside the installed package, so the same
+# import path works in both modes:
+#   1. Dev-mode: ``python -m jamma.lmm._compile_accel`` from a source
+#      checkout.
+#   2. Wheel install: runtime ABI-mismatch recompile via
+#      ``jamma.core.recompile.auto_recompile_c_extension`` calls
+#      ``compile_extension()`` from this module.
+from jamma._build_support.compile_and_link import (
+    LINK_FLAGS_BY_PLATFORM,
+    compile_jlinalg,
+)
+from jamma._build_support.find_compiler import find_c_compiler
+from jamma._build_support.openmp_detect import detect_openmp_flags
 
 
 def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
     """Compile _lmm_accel.c into a shared library in the installed package.
 
-    Routes through ``build_support.compile_and_link.compile_jlinalg`` with a
-    single source (``_lmm_accel.c``) and no LAPACK sources. Dev-mode-only
-    flags (``-march=native``, vectorization-report flags) are supplied via
-    ``extra_cflags`` so they do not leak into the portable wheel-build path
-    in ``hatch_build.py``.
+    Routes through ``jamma._build_support.compile_and_link.compile_jlinalg``
+    with a single source (``_lmm_accel.c``) and no LAPACK sources.
+    Dev-mode-only flags (``-march=native``, vectorization-report flags) are
+    supplied via ``extra_cflags`` so they do not leak into the portable
+    wheel-build path in ``hatch_build.py``.
 
-    Dev-mode entry point. Called by:
+    Called by:
       - ``python -m jamma.lmm._compile_accel`` from a source checkout
       - ``jamma.core.recompile.auto_recompile_c_extension`` on ABI mismatch
 
@@ -82,15 +61,6 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
     Returns:
         True if compilation succeeded, False otherwise.
     """
-    if compile_jlinalg is None:
-        raise RuntimeError(
-            "compile_extension() called from a wheel-install environment "
-            "(build_support/ not found at repo root). This function is only "
-            "available in dev-mode or sdist installs. For wheel installs, "
-            "ABI mismatches trigger jamma.core.recompile.auto_recompile_c_extension() "
-            "instead — it uses its own minimal compiler discovery and does not "
-            "require build_support/."
-        )
 
     def _print(*args: object) -> None:
         """Always print (errors, results)."""
@@ -167,10 +137,10 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
 
     # Dev-mode extras: -march=native unconditionally, diagnose flags optional.
     # These are LOCAL to _compile_accel.py and MUST NOT be moved to
-    # BASE_CFLAGS in build_support/ — hatch_build.py (portable wheel path)
-    # must not bake -march=native into the wheel. Dev builds target the
-    # local CPU; wheels target the lowest common denominator. Deliberate
-    # divergence, not duplication.
+    # BASE_CFLAGS in jamma._build_support — hatch_build.py (portable wheel
+    # path) must not bake -march=native into the wheel. Dev builds target
+    # the local CPU; wheels target the lowest common denominator.
+    # Deliberate divergence, not duplication.
     extra_cflags: list[str] = ["-march=native"]
 
     diag_flags: list[str] = []
@@ -213,6 +183,7 @@ def compile_extension(verbose: bool = False, diagnose: bool = False) -> bool:
             extra_link_flags=["-lm"],
             on_retry=lambda msg: _print(msg),
             verbose_print=_detail,
+            error_print=_print,
         )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

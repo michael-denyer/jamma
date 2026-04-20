@@ -1,14 +1,16 @@
 """Tests for jamma.core.recompile.auto_recompile_c_extension.
 
 Covers the four observable outcomes of the runtime recompile shim:
-  1. Compiler module missing (installed-wheel case) -> False + debug log
+  1. Compiler module import fails -> False + debug log
   2. Compiler module raises during compile -> False + warning log + fallback msg
   3. Compiler module returns False -> False + warning log + fallback msg
   4. Compiler module returns True -> True + sys.modules key evicted
 
-This module is the runtime ABI-mismatch fallback on end-user wheels; it is
-the highest-risk surface in phase 123 because build_support/ is NOT shipped
-in the wheel. Tests run against the shim's public contract only; no real
+The shim is a thin import-retry wrapper around the compile_extension()
+entry points in jamma.lmm._compile_accel and jamma.jlinalg._compile_jlinalg.
+Its sibling test, test_wheel_install_recompile.py, verifies end-to-end wheel
+install -> auto_recompile_c_extension -> real compile via a scratch venv.
+Tests here run against the shim's public contract only; no real
 subprocess / compilation ever fires.
 """
 
@@ -44,7 +46,7 @@ def _make_fake_compiler(module_name: str, *, outcome):
 
 @pytest.mark.tier0
 def test_compiler_module_missing_returns_false(monkeypatch):
-    """Installed-wheel case: build_support/ is absent, compiler import fails."""
+    """Corrupted install case: the compiler module itself is missing."""
     module_name = "jamma._compiler_that_does_not_exist"
     monkeypatch.delitem(sys.modules, module_name, raising=False)
 

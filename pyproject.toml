@@ -98,13 +98,12 @@ markers = [
 [tool.hatch.build.hooks.custom]
 
 [tool.hatch.build.targets.sdist]
-# Source builds need build_support/ at repo root so the hatch build hook
-# can `from build_support import compile_and_link`. build_support/ is NOT
-# shipped in the wheel (below) — wheel installs use jamma.core.recompile
-# for ABI-mismatch runtime recompile.
+# Source builds need src/jamma/_build_support/ for the hatch build hook;
+# it's the single source of truth for compile flags, LAPACK split, and the
+# compile+link driver. Ships inside src/jamma so runtime recompile can
+# reach it (see [tool.hatch.build.targets.wheel] below).
 include = [
     "src/jamma/",
-    "build_support/",
     "hatch_build.py",
     "pyproject.toml",
     "README.md",
@@ -114,9 +113,11 @@ include = [
 ]
 
 [tool.hatch.build.targets.wheel]
-# build_support/ is deliberately NOT listed here — it's a PEP 517 build
-# helper only, not runtime code. Runtime C extension recompile uses
-# jamma.core.recompile (which has its own minimal compiler discovery).
+# jamma._build_support ships inside the installed package so that runtime
+# ABI-mismatch recompile (jamma.core.recompile.auto_recompile_c_extension)
+# can reach the same compile+link helpers the wheel was built with. The
+# underscore prefix marks it as internal/unstable API — third parties must
+# not import from it.
 packages = ["src/jamma"]
 
 [tool.ruff]

@@ -13,6 +13,7 @@ either C extension.
 """
 
 import datetime
+import importlib.util
 import os
 import platform
 import shutil
@@ -22,23 +23,54 @@ import sysconfig
 import tempfile
 from pathlib import Path
 
-# hatch_build.py is the PEP 517 build backend — runs before jamma is
-# installed, so it cannot `from jamma.* import ...`. build_support/ sits
-# at repo root as a sibling to src/; insert repo root on sys.path so we
-# can import the shared compile helpers. Convention: numpy / scipy /
-# pyarrow all use this pattern for PEP 517 build helpers.
-sys.path.insert(0, str(Path(__file__).parent))
-
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
-from build_support.compile_and_link import (
-    BASELINE_SOURCES,
-    LAPACK_SOURCES,
-    LINK_FLAGS_BY_PLATFORM,
-    compile_jlinalg,
+# hatch_build.py is the PEP 517 build backend — runs in an isolated env
+# before jamma is installed. We need the compile helpers from
+# src/jamma/_build_support/, but loading them via a regular import would
+# trigger src/jamma/__init__.py, which pulls in the full runtime
+# (loguru, numpy, jamma.lmm, ...) that is not in the build env.
+#
+# Load the three helper modules by file path instead, register them on
+# sys.modules under "jamma_build_support.*" (a namespace distinct from
+# the real jamma package so there's no collision), then import the
+# symbols we need. This keeps the build backend deps minimal while
+# letting us treat the helpers as reusable, importable modules at build
+# time. The same files ship inside the wheel under their regular
+# jamma._build_support.* name for runtime recompile use.
+
+
+def _load_build_support_module(name: str, filename: str):
+    """Load a _build_support helper module by file path at build time.
+
+    Returns a module object registered on sys.modules under ``name``.
+    """
+    path = Path(__file__).parent / "src" / "jamma" / "_build_support" / filename
+    spec = importlib.util.spec_from_file_location(name, str(path))
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_cal = _load_build_support_module(
+    "jamma_build_support.compile_and_link", "compile_and_link.py"
 )
-from build_support.find_compiler import find_c_compiler
-from build_support.openmp_detect import detect_openmp_flags
+_fc = _load_build_support_module(
+    "jamma_build_support.find_compiler", "find_compiler.py"
+)
+_omp = _load_build_support_module(
+    "jamma_build_support.openmp_detect", "openmp_detect.py"
+)
+
+BASELINE_SOURCES = _cal.BASELINE_SOURCES
+LAPACK_SOURCES = _cal.LAPACK_SOURCES
+LINK_FLAGS_BY_PLATFORM = _cal.LINK_FLAGS_BY_PLATFORM
+compile_jlinalg = _cal.compile_jlinalg
+find_c_compiler = _fc.find_c_compiler
+detect_openmp_flags = _omp.detect_openmp_flags
 
 
 class CustomBuildHook(BuildHookInterface):
@@ -99,7 +131,7 @@ class CustomBuildHook(BuildHookInterface):
             )
             return None
 
-        # Compiler discovery delegated to build_support.find_compiler.
+        # Compiler discovery delegated to jamma._build_support.find_compiler.
         # Honours $CC, falls back to sysconfig + cc/clang/gcc with probing.
         cc_env = os.environ.get("CC")
         if cc_env is not None and not cc_env.strip():
@@ -159,7 +191,7 @@ class CustomBuildHook(BuildHookInterface):
         """Compile _lmm_accel.c -> _lmm_accel{EXT_SUFFIX} via the shared helper.
 
         Single-source compile + link (no LAPACK split) routed through
-        build_support.compile_jlinalg. On any failure, logs a warning and
+        jamma._build_support.compile_jlinalg. On any failure, logs a warning and
         returns without raising — a pure-Python wheel is produced instead.
 
         Args:
@@ -220,6 +252,7 @@ class CustomBuildHook(BuildHookInterface):
                 extra_link_flags=["-lm"],
                 on_retry=lambda msg: print(msg, file=sys.stderr),
                 verbose_print=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
+                error_print=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
             )
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -269,7 +302,7 @@ class CustomBuildHook(BuildHookInterface):
     def _compile_jlinalg_extension(self, build_data):
         """Compile jlinalg C sources -> _jlinalg{EXT_SUFFIX} via the shared helper.
 
-        Routes through build_support.compile_jlinalg, which handles the
+        Routes through jamma._build_support.compile_jlinalg, which handles the
         baseline-vs-LAPACK per-source flag split, OpenMP compile/link retry,
         and two-phase compile+link to avoid dual-runtime OMP errors.
 
@@ -344,6 +377,7 @@ class CustomBuildHook(BuildHookInterface):
                 extra_link_flags=["-lm"],
                 on_retry=lambda msg: print(msg, file=sys.stderr),
                 verbose_print=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
+                error_print=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
             )
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)

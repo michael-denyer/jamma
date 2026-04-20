@@ -91,16 +91,16 @@ repos:
         files: ^tests/
         pass_filenames: false
       - id: no-compile-flag-literals-outside-build-support
-        name: ban compile-flag literals outside build_support/
+        name: ban compile-flag literals outside jamma._build_support
         entry: scripts/check-compile-flag-literals.py
         language: system
-        files: ^(hatch_build\.py|src/jamma/(jlinalg/_compile_jlinalg|lmm/_compile_accel|core/recompile)\.py|build_support/)
+        files: ^(hatch_build\.py|src/jamma/(jlinalg/_compile_jlinalg|lmm/_compile_accel|core/recompile)\.py|src/jamma/_build_support/)
         pass_filenames: false
       - id: verify-compile-invocations-match
-        name: verify compile entry points route through build_support
+        name: verify compile entry points route through jamma._build_support
         entry: scripts/verify_compile_invocations_match.py
         language: system
-        files: ^(hatch_build\.py|src/jamma/(jlinalg/_compile_jlinalg|lmm/_compile_accel)\.py|build_support/)
+        files: ^(hatch_build\.py|src/jamma/(jlinalg/_compile_jlinalg|lmm/_compile_accel)\.py|src/jamma/_build_support/)
         pass_filenames: false
       - id: ruff-format-all
         name: ruff format (all files)

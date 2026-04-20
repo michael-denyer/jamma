@@ -25,55 +25,30 @@ import sysconfig
 import tempfile
 from pathlib import Path
 
-# _compile_jlinalg.py runs in two modes:
-#   1. Dev-mode: `python -m jamma.jlinalg._compile_jlinalg` from a source
-#      checkout. build_support/ sits at repo root (sibling to src/).
-#   2. Wheel install: jamma is installed but build_support/ is NOT shipped
-#      with the wheel. On ABI-mismatch recompile at import time,
-#      jamma.core.recompile.auto_recompile_c_extension calls this module's
-#      compile_extension(). That code path should emit a clear error, NOT
-#      a vague ImportError from the top-of-module `from build_support...`.
-#
-# Bootstrap: try the source-checkout path; if build_support/ is absent
-# (wheel install), leave the helper refs as None and guard the public
-# entry points at call time with a RuntimeError that explains the
-# situation. This preserves the ABI-mismatch graceful fallback: the
-# runtime recompile path at jamma.core.recompile catches the RuntimeError
-# and falls back to pure-Python.
-_repo_root = Path(__file__).resolve().parents[3]
-_build_support_available = (_repo_root / "build_support").is_dir()
-
-if _build_support_available:
-    if str(_repo_root) not in sys.path:
-        sys.path.insert(0, str(_repo_root))
-    from build_support.compile_and_link import (
-        BASELINE_SOURCES,
-        LAPACK_SOURCES,
-        LINK_FLAGS_BY_PLATFORM,
-        compile_jlinalg,
-    )
-    from build_support.find_compiler import find_c_compiler
-    from build_support.openmp_detect import detect_openmp_flags
-else:
-    # Wheel-install path: build_support/ not present. Do NOT raise at
-    # import time — jamma.jlinalg.__init__ imports from this module to
-    # access other helpers and must succeed. Instead, leave the helper
-    # refs as None and guard the public functions with a clear
-    # RuntimeError.
-    BASELINE_SOURCES = None  # type: ignore[assignment]
-    LAPACK_SOURCES = None  # type: ignore[assignment]
-    LINK_FLAGS_BY_PLATFORM = None  # type: ignore[assignment]
-    compile_jlinalg = None  # type: ignore[assignment]
-    find_c_compiler = None  # type: ignore[assignment]
-    detect_openmp_flags = None  # type: ignore[assignment]
+# jamma._build_support ships inside the installed package, so the same
+# import path works in both modes:
+#   1. Dev-mode: ``python -m jamma.jlinalg._compile_jlinalg`` from a source
+#      checkout.
+#   2. Wheel install: runtime ABI-mismatch recompile via
+#      ``jamma.core.recompile.auto_recompile_c_extension`` calls
+#      ``compile_extension()`` from this module.
+from jamma._build_support.compile_and_link import (
+    BASELINE_SOURCES,
+    LAPACK_SOURCES,
+    LINK_FLAGS_BY_PLATFORM,
+    compile_jlinalg,
+)
+from jamma._build_support.find_compiler import find_c_compiler
+from jamma._build_support.openmp_detect import detect_openmp_flags
 
 
 def compile_extension(verbose: bool = False) -> bool:
     """Compile jlinalg C sources into a shared library in the installed package.
 
-    Performs per-file compile-then-link via ``build_support.compile_and_link``
-    to enable different compiler flags per source group (strict IEEE 754 for
-    LAPACK, standard optimization for baseline sources).
+    Performs per-file compile-then-link via
+    ``jamma._build_support.compile_and_link`` to enable different compiler
+    flags per source group (strict IEEE 754 for LAPACK, standard
+    optimization for baseline sources).
 
     Dev-mode entry point. Called by:
       - ``python -m jamma.jlinalg._compile_jlinalg`` from a source checkout
@@ -86,15 +61,6 @@ def compile_extension(verbose: bool = False) -> bool:
     Returns:
         True if compilation succeeded, False otherwise.
     """
-    if compile_jlinalg is None:
-        raise RuntimeError(
-            "compile_extension() called from a wheel-install environment "
-            "(build_support/ not found at repo root). This function is only "
-            "available in dev-mode or sdist installs. For wheel installs, "
-            "ABI mismatches trigger jamma.core.recompile.auto_recompile_c_extension() "
-            "instead — it uses its own minimal compiler discovery and does not "
-            "require build_support/."
-        )
 
     def _print(*args: object) -> None:
         """Always print (errors, results)."""
@@ -206,6 +172,7 @@ def compile_extension(verbose: bool = False) -> bool:
             extra_link_flags=["-lm"],
             on_retry=lambda msg: _print(msg),
             verbose_print=_detail,
+            error_print=_print,
         )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -247,8 +214,8 @@ def compile_extension(verbose: bool = False) -> bool:
 def compile_test_harness(verbose: bool = True) -> Path:
     """Compile the Unity C test harness into a standalone executable.
 
-    Routes through ``build_support.compile_and_link.compile_jlinalg`` with
-    ``link_shared=False`` to produce a native executable (not a .so).
+    Routes through ``jamma._build_support.compile_and_link.compile_jlinalg``
+    with ``link_shared=False`` to produce a native executable (not a .so).
     Compiles test_boundaries.c + unity.c + all jlinalg .c source files
     (minus pymodule.c, which is Python-module glue and not needed for the
     standalone binary). Per-source flag split (LAPACK vs baseline) is
@@ -261,17 +228,16 @@ def compile_test_harness(verbose: bool = True) -> Path:
         Path to the compiled test binary.
 
     Raises:
-        RuntimeError: If compilation fails or build_support is not present.
+        RuntimeError: If compilation fails.
     """
-    if compile_jlinalg is None:
-        raise RuntimeError(
-            "compile_test_harness() called from a wheel-install environment "
-            "(build_support/ not found). This function is dev-mode only."
-        )
 
     def _print(*args: object) -> None:
         if verbose:
             print(*args, file=sys.stderr, flush=True)
+
+    def _warn(*args: object) -> None:
+        """Always visible — used for OMP downgrade + similar warnings."""
+        print(*args, file=sys.stderr, flush=True)
 
     jlinalg_dir = Path(__file__).parent
     jlinalg_src_dir = jlinalg_dir / "src"
@@ -285,15 +251,15 @@ def compile_test_harness(verbose: bool = True) -> Path:
             raise RuntimeError(f"Unity framework file missing: {unity_dir / f}")
 
     # Source files: same as main extension minus pymodule.c (no Python API)
-    # plus test_boundaries.c and unity.c. BASELINE_SOURCES from build_support
-    # includes pymodule.c, so filter it out here; the test harness links as
-    # a standalone executable and pymodule.c only exports PyInit symbols.
+    # plus test_boundaries.c and unity.c. BASELINE_SOURCES includes
+    # pymodule.c, so filter it out here; the test harness links as a
+    # standalone executable and pymodule.c only exports PyInit symbols.
     baseline_names = tuple(n for n in BASELINE_SOURCES if n != "pymodule.c")
     baseline_prod_sources = [jlinalg_src_dir / name for name in baseline_names]
     lapack_sources = [jlinalg_src_dir / name for name in LAPACK_SOURCES]
 
-    # Test-specific sources (excluded from build_support's BASELINE_SOURCES —
-    # they live in jlinalg/tests/, not in jlinalg/src/).
+    # Test-specific sources (excluded from BASELINE_SOURCES — they live
+    # in jlinalg/tests/, not in jlinalg/src/).
     test_sources = [
         tests_dir / "test_boundaries.c",
         unity_dir / "unity.c",
@@ -332,8 +298,10 @@ def compile_test_harness(verbose: bool = True) -> Path:
         ldflags.append("-lpthread")  # snp_stats.c uses pthreads directly
 
     # OpenMP detection (same as compile_extension — split compile/link).
+    # _warn is always-visible so the GCC-libiomp5 downgrade and GNU-libgomp
+    # fallback warnings surface even when verbose=False.
     omp_compile, omp_link, cc_cmd = detect_openmp_flags(
-        cc_cmd, platform.system(), _print
+        cc_cmd, platform.system(), _print, _warn=_warn
     )
 
     # Per-source extra includes: test_boundaries.c needs -I<tests_dir> to
@@ -371,8 +339,9 @@ def compile_test_harness(verbose: bool = True) -> Path:
             extra_cflags=extra_cflags,
             extra_source_includes=extra_source_includes,
             link_shared=False,
-            on_retry=lambda msg: _print(msg),
+            on_retry=lambda msg: _warn(msg),
             verbose_print=_print,
+            error_print=_warn,
         )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

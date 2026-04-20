@@ -1,26 +1,16 @@
-"""Tests for build_support.compile_and_link.
+"""Tests for jamma._build_support.compile_and_link.
 
 Covers the constants, resolve_cflags_for dispatch, and a smoke test for
 compile_jlinalg (subprocess monkeypatched so the test doesn't shell out).
-
-Runs from a source checkout, so we insert the repo root on sys.path to
-pick up the build_support/ package which is not part of the installed wheel.
 """
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+import pytest
 
-# sys.path must be mutated BEFORE importing build_support, which is not in the
-# installed wheel. Ruff E402 is expected and silenced for the two imports below.
-import pytest  # noqa: E402
-
-from build_support.compile_and_link import (  # noqa: E402
+from jamma._build_support.compile_and_link import (
     BASE_CFLAGS,
     BASELINE_SOURCES,
     LAPACK_CFLAGS,
@@ -239,7 +229,7 @@ def test_compile_jlinalg_smoke_success(monkeypatch, tmp_path):
         return _FakeCompleted(returncode=0)
 
     monkeypatch.setattr(
-        "build_support.compile_and_link.subprocess.run",
+        "jamma._build_support.compile_and_link.subprocess.run",
         _fake_run,
     )
 
@@ -306,7 +296,7 @@ def test_compile_jlinalg_compile_failure_triggers_omp_retry(monkeypatch, tmp_pat
         return _FakeCompleted(returncode=0)
 
     monkeypatch.setattr(
-        "build_support.compile_and_link.subprocess.run",
+        "jamma._build_support.compile_and_link.subprocess.run",
         _fake_run,
     )
 

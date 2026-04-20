@@ -806,25 +806,20 @@ class TestWorkspaceApi:
 def test_lapack_no_ffast_math() -> None:
     """LAPACK sources in build configs must use strict IEEE 754 flags.
 
-    Phase 123-05 consolidated compile flags into build_support/compile_and_link.py.
-    All three entry points (hatch_build.py, _compile_jlinalg.py, _compile_accel.py)
-    route through the helper instead of keeping inline flag lists, so we validate
-    the single source of truth once: LAPACK_CFLAGS must include '-fno-fast-math'
-    and must NOT include '-ffast-math'. The dstedc secular equation uses IEEE 754
-    infinity arithmetic which -ffast-math breaks.
+    Phase 123-05 consolidated compile flags into
+    src/jamma/_build_support/compile_and_link.py. All three entry points
+    (hatch_build.py, _compile_jlinalg.py, _compile_accel.py) route through
+    the helper instead of keeping inline flag lists, so we validate the
+    single source of truth once: LAPACK_CFLAGS must include '-fno-fast-math'
+    and must NOT include '-ffast-math'. The dstedc secular equation uses
+    IEEE 754 infinity arithmetic which -ffast-math breaks.
     """
-    import sys
-
-    repo_root = Path(__file__).resolve().parent.parent
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
-
-    from build_support.compile_and_link import LAPACK_CFLAGS, LAPACK_SOURCES
+    from jamma._build_support.compile_and_link import LAPACK_CFLAGS, LAPACK_SOURCES
 
     # LAPACK_SOURCES identifies the source files that require strict flags.
     assert LAPACK_SOURCES, (
-        "build_support.compile_and_link.LAPACK_SOURCES must list at least one "
-        "source file (eigh.c) that requires strict IEEE 754 flags"
+        "jamma._build_support.compile_and_link.LAPACK_SOURCES must list at "
+        "least one source file (eigh.c) that requires strict IEEE 754 flags"
     )
 
     # LAPACK_CFLAGS is the canonical flag list — must include strict IEEE 754.

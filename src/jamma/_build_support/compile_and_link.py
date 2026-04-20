@@ -1,7 +1,10 @@
 """Canonical compile flags, source lists, and compile+link driver.
 
-Single source of truth consumed by hatch_build.py (wheel), _compile_jlinalg.py
-(jlinalg dev-mode), and _compile_accel.py (lmm dev-mode).
+Single source of truth consumed by hatch_build.py (PEP 517 wheel backend),
+_compile_jlinalg.py (dev-mode + runtime recompile), and _compile_accel.py
+(dev-mode + runtime recompile). Ships inside the installed package as
+``jamma._build_support.compile_and_link`` so runtime ABI-mismatch
+recompile reaches the same helpers the wheel was built with.
 
 No flag literal belongs outside this module; the pre-commit hook
 ``no-compile-flag-literals-outside-build-support``
@@ -201,6 +204,7 @@ def compile_jlinalg(
     link_shared: bool = True,
     on_retry: Callable[[str], None] | None = None,
     verbose_print: Callable[..., None] = print,
+    error_print: Callable[..., None] | None = None,
 ) -> CompileResult:
     """Two-phase compile + link with OpenMP retry.
 
@@ -252,7 +256,17 @@ def compile_jlinalg(
             must be a runnable executable rather than a .so.
         on_retry: Optional callback invoked with a human-readable reason
             string when a retry path is taken. Intended for warning logs.
+            For retry paths with underlying compiler output, the first-attempt
+            stderr is included in the message so the root cause surfaces even
+            if the retry succeeds.
         verbose_print: Printer used for non-error progress messages.
+        error_print: Printer used for compile/link failure diagnostics. MUST
+            always be visible — callers that silence verbose_print (e.g.
+            verbose=False in dev-mode compilers) must NOT silence this. If
+            None, defaults to ``verbose_print`` (callers who share a single
+            always-visible printer can ignore this). Per CLAUDE.md "No Quiet
+            Flags Anywhere", compilation stderr on failure must reach the
+            user — a silent "compile failed" is a debugging dead end.
 
     Returns:
         CompileResult. On failure, ``success=False`` and ``error`` describes
@@ -261,6 +275,12 @@ def compile_jlinalg(
     extra_cflags = list(extra_cflags or [])
     extra_link_flags = list(extra_link_flags or [])
     extra_source_includes = dict(extra_source_includes or {})
+
+    # error_print defaults to verbose_print so existing callers keep their
+    # behavior, but callers that silence verbose_print (dev-mode compilers
+    # with verbose=False) should pass an always-visible printer here.
+    if error_print is None:
+        error_print = verbose_print
 
     if tmp_dir is None:
         tmp_dir = Path(tempfile.mkdtemp(prefix="jamma-build-"))
@@ -302,8 +322,12 @@ def compile_jlinalg(
             verbose_print(f"compile: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
-                verbose_print(f"Compile failed for {src.name}:")
-                verbose_print(result.stderr)
+                # Compile failure diagnostics go to error_print (always
+                # visible) so runtime recompile with verbose=False still
+                # surfaces the root cause rather than a bare
+                # "compile failed" with no stderr.
+                error_print(f"Compile failed for {src.name}:")
+                error_print(result.stderr)
                 return None
             objs.append(obj_file)
         return objs
@@ -348,7 +372,15 @@ def compile_jlinalg(
     used_openmp_link = bool(current_omp_link)
 
     if link_result.returncode != 0 and current_omp_link:
-        msg = "link failed, retrying without OpenMP runtime"
+        # Include the first-attempt stderr in the retry notice so the
+        # root cause (missing -lpthread, wrong libiomp5 path, broken
+        # RPATH, etc.) surfaces even if the retry succeeds. Without
+        # this, a silent OMP downgrade masks real link bugs.
+        first_stderr = (link_result.stderr or "").strip()
+        msg = (
+            "link failed, retrying without OpenMP runtime. "
+            f"first-attempt stderr: {first_stderr or '<empty>'}"
+        )
         if on_retry is not None:
             on_retry(msg)
         verbose_print(msg + "...")

@@ -1,10 +1,13 @@
 """OpenMP detection for C extension compilation.
 
-Canonical location: consumed by hatch_build.py (wheel build backend),
-src/jamma/jlinalg/_compile_jlinalg.py (jlinalg dev-mode), and
-src/jamma/lmm/_compile_accel.py (lmm dev-mode). All three import this
-module via `sys.path.insert(repo_root); from build_support.openmp_detect
-import detect_openmp_flags`.
+Canonical location: consumed by hatch_build.py (PEP 517 wheel build
+backend), src/jamma/jlinalg/_compile_jlinalg.py (dev-mode + runtime
+recompile), and src/jamma/lmm/_compile_accel.py (dev-mode + runtime
+recompile). Ships inside the installed package as
+``jamma._build_support.openmp_detect``. hatch_build.py imports via
+``sys.path.insert(src_dir); from jamma._build_support.openmp_detect
+import detect_openmp_flags`` because the package is not yet installed
+at wheel-build time.
 
 The core problem: MKL-backed numpy bundles Intel OpenMP (libiomp5).  Two
 failure modes exist when compiling C extensions with OpenMP on such systems:
@@ -72,11 +75,21 @@ def _detect_darwin_openmp_flags(
 ) -> tuple[list[str], list[str]]:
     """Detect OpenMP via Homebrew libomp on macOS."""
     try:
-        prefix = subprocess.check_output(
+        result = subprocess.run(
             ["brew", "--prefix", "libomp"],
+            capture_output=True,
             text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            _print(
+                "OpenMP not available (brew --prefix libomp failed, "
+                f"exit code {result.returncode}): {stderr or '<no stderr>'}. "
+                "Extension will be single-threaded. "
+                "Install for parallelism: brew install libomp"
+            )
+            return ([], [])
+        prefix = result.stdout.strip()
         lib_dir = Path(prefix) / "lib"
         if lib_dir.is_dir():
             _print(f"OpenMP: Homebrew libomp at {prefix}")
@@ -89,9 +102,9 @@ def _detect_darwin_openmp_flags(
             "Extension will be single-threaded. "
             "Install for parallelism: brew install libomp"
         )
-    except (FileNotFoundError, subprocess.CalledProcessError):
+    except FileNotFoundError:
         _print(
-            "OpenMP not available (libomp not found via Homebrew). "
+            "OpenMP not available (brew not found on PATH). "
             "Extension will be single-threaded. "
             "Install for parallelism: brew install libomp"
         )
@@ -128,7 +141,18 @@ def _detect_linux_openmp_flags(
     if libiomp5_path is not None:
         return _openmp_flags_for_libiomp5(cc_cmd, libiomp5_path, _print, _warn)
 
-    # Fallback to GNU OpenMP (safe to use -fopenmp for both compile and link)
+    # Fallback to GNU OpenMP (libgomp). Safe to use -fopenmp for both
+    # compile and link on systems without libiomp5. Surface this via
+    # _warn, not _print: on an MKL-backed numpy box where libiomp5 was
+    # expected but the detector missed it (unusual install layout),
+    # silently linking libgomp produces dual-runtime crashes at runtime
+    # ("OMP: Error #15"). An always-visible log line lets the user catch
+    # this before they deploy.
+    _warn(
+        f"OpenMP: using GNU libgomp via -fopenmp ({cc_cmd}). If this is "
+        "an MKL-backed numpy environment, libiomp5 should have been "
+        "detected — missing it risks dual OpenMP runtime crashes."
+    )
     return (["-fopenmp"], ["-fopenmp"], cc_cmd)
 
 

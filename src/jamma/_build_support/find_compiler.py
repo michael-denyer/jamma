@@ -1,16 +1,15 @@
-"""Build-time C compiler discovery.
+"""C compiler discovery for build-time AND runtime recompile.
 
-Canonical location for `find_c_compiler` — used by hatch_build.py (wheel
-backend), src/jamma/jlinalg/_compile_jlinalg.py (jlinalg dev-mode), and
-src/jamma/lmm/_compile_accel.py (lmm dev-mode) to resolve the build-time
-C compiler.
+Canonical location for ``find_c_compiler``. Consumers:
 
-The runtime counterpart (auto_recompile_c_extension, used when a C
-extension has an ABI mismatch and needs rebuild at import time) lives
-at src/jamma/core/recompile.py — it uses a minimal shutil.which('cc')
-fallback rather than the full `$CC` / sysconfig / candidate chain here,
-because the wheel-install case can't reach this module (build_support/
-isn't shipped).
+  * hatch_build.py (PEP 517 wheel build backend)
+  * src/jamma/jlinalg/_compile_jlinalg.py (dev-mode + runtime recompile)
+  * src/jamma/lmm/_compile_accel.py (dev-mode + runtime recompile)
+
+Ships inside the installed package as ``jamma._build_support.find_compiler``
+so runtime ABI-mismatch recompile via ``jamma.core.recompile`` reaches the
+same discovery logic the wheel was built with — no separate minimal
+fallback exists or should be added.
 """
 
 from __future__ import annotations

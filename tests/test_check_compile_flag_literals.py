@@ -1,7 +1,7 @@
 """Tests for scripts/check-compile-flag-literals.py.
 
 The script's job is to block bare compile-flag literals (``"-O3"``,
-``"-fopenmp"``, etc.) outside build_support/. These tests exercise the
+``"-fopenmp"``, etc.) outside jamma._build_support. These tests exercise the
 script against synthetic target trees to cover:
 
   (a) Expected positive cases — it must flag obvious drift.

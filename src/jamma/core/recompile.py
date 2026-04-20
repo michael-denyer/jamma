@@ -1,15 +1,17 @@
 """Runtime C extension auto-recompilation.
 
 When a C extension (e.g. _lmm_accel, _jlinalg) fails to import because
-of ABI mismatch or missing .so, `auto_recompile_c_extension` invokes
-the corresponding compile module (jamma.lmm._compile_accel or
-jamma.jlinalg._compile_jlinalg), evicts the stale entry from
-sys.modules, and returns True on success.
+of ABI mismatch or missing .so, ``auto_recompile_c_extension`` invokes
+the corresponding compile module (``jamma.lmm._compile_accel`` or
+``jamma.jlinalg._compile_jlinalg``), evicts the stale entry from
+``sys.modules``, and returns True on success.
 
-This module stays in the wheel. The build-time counterpart
-(find_c_compiler, full $CC/sysconfig discovery) lives at
-build_support/find_compiler.py — that package is NOT shipped in the
-wheel. Runtime-only recompile must not depend on build_support/.
+Both compile modules import their helpers from
+``jamma._build_support`` — which ships inside the installed wheel —
+so ABI-mismatch recompile succeeds on wheel installs just as it does
+from a source checkout. This shim is deliberately thin: it owns only
+the import-retry and error-surfacing contract; all compiler discovery,
+flag selection, and OpenMP detection live in ``jamma._build_support``.
 
 Called from:
     src/jamma/jlinalg/__init__.py  — when _jlinalg import fails

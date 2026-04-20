@@ -2,20 +2,21 @@
 """Verify wheel-build and dev-mode compile paths share a single source of truth.
 
 Structural guarantee (not empirical trace capture): if the three ENTRY_POINTS
-all call ``build_support.compile_and_link.compile_jlinalg`` with the shared
-constants, their compile invocations differ only by input paths (wheel writes
-to build/lib/jamma, dev-mode writes in-place).
+all call ``jamma._build_support.compile_and_link.compile_jlinalg`` with the
+shared constants, their compile invocations differ only by input paths (wheel
+writes to build/lib/jamma, dev-mode writes in-place).
 
 Note on scope: ``src/jamma/core/recompile.py`` is deliberately EXCLUDED from
-ENTRY_POINTS. It ships inside the wheel and must not import ``build_support``
-(build helper lives outside the wheel), so it uses its own minimal dispatch
-path and cannot satisfy the ``compile_jlinalg(`` assertion below. The
-complementary ``check-compile-flag-literals.py`` lint DOES cover recompile.py
-for bare flag literals.
+ENTRY_POINTS. It is a thin import-retry shim that delegates to
+``_compile_jlinalg`` / ``_compile_accel`` rather than invoking the helper
+directly, so it cannot satisfy the ``compile_jlinalg(`` assertion below.
+The complementary ``check-compile-flag-literals.py`` lint DOES cover
+recompile.py for bare flag literals.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -39,15 +40,33 @@ BANNED_LITERALS = [
     "'-fopenmp'",
     '"-fopenmp"',
 ]
-# Ensure sys.path lets us import build_support/
-sys.path.insert(0, str(REPO_ROOT))
+
+
+def _load_compile_and_link():
+    """Load compile_and_link by file path so we don't trigger
+    jamma/__init__.py (which needs the package installed for its
+    importlib.metadata.version("jamma") call — not true under pre-commit's
+    isolated Python).
+    """
+    path = REPO_ROOT / "src/jamma/_build_support/compile_and_link.py"
+    mod_name = "_verify_compile_and_link"
+    spec = importlib.util.spec_from_file_location(mod_name, str(path))
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not load {path}")
+    module = importlib.util.module_from_spec(spec)
+    # Register on sys.modules BEFORE exec_module so @dataclass can look the
+    # module up in sys.modules while the class is being processed (Python
+    # 3.14+ raises AttributeError otherwise).
+    sys.modules[mod_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def main() -> int:
     failures: list[str] = []
 
-    # 1. Import and inspect build_support.compile_and_link constants.
-    from build_support import compile_and_link
+    # 1. Import and inspect compile_and_link constants.
+    compile_and_link = _load_compile_and_link()
 
     print(
         f"BASE_CFLAGS ({len(compile_and_link.BASE_CFLAGS)} flags): "
@@ -91,7 +110,7 @@ def main() -> int:
 
     print(
         "\nStructural equivalence holds. All entry points use "
-        "build_support.compile_and_link as single source of truth."
+        "jamma._build_support.compile_and_link as single source of truth."
     )
     return 0
 

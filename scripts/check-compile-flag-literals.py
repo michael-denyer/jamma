@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Ban bare compile-flag literals outside build_support/.
+"""Ban bare compile-flag literals outside jamma._build_support.
 
-Single source of truth for compiler flags is `build_support/compile_and_link.py`.
+Single source of truth for compiler flags is
+`src/jamma/_build_support/compile_and_link.py`.
 Any flag literal in the four compile entry points means someone duplicated a
 flag again — that's exactly the footgun Phase 123 is preventing.
 
@@ -88,7 +89,8 @@ def main() -> int:
                 if flag in FLAGS:
                     violations.append(
                         f"{target}:{lineno}: bare compile-flag literal {flag!r} — "
-                        f"add flags to build_support/compile_and_link.py instead"
+                        f"add flags to src/jamma/_build_support/"
+                        f"compile_and_link.py instead"
                     )
 
     if violations:

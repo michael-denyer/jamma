@@ -1,13 +1,17 @@
-"""Tests that build_support/ ships in sdist but NOT in wheel.
+"""Tests that jamma._build_support ships in both sdist and wheel.
 
-Contract: build_support/compile_and_link.py is a PEP 517 build helper only.
-Shipping it in the wheel would silently turn jamma.core.recompile (the
-runtime ABI-mismatch recompile path end users depend on) into dead code,
-because installed wheels would then find build_support/ on-disk and skip
-the runtime fallback.
+Contract: jamma._build_support holds the canonical compile flags and the
+compile+link driver. It MUST ship inside the installed wheel so that
+jamma.core.recompile.auto_recompile_c_extension (the runtime ABI-mismatch
+recompile path end users depend on) can reach the same helpers the wheel
+was built with. A wheel that omits jamma._build_support makes
+auto_recompile_c_extension dead code — every ABI mismatch silently falls
+back to pure-Python.
 
 Runs via ``uv build``. Marked tier2 because it shells out to the build
-backend and takes several seconds.
+backend and takes several seconds; the hard contract is also checked
+structurally in test_wheel_contains_build_support_structural below,
+which is tier0 and runs in every CI job.
 """
 
 from __future__ import annotations
@@ -21,6 +25,32 @@ from pathlib import Path
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.tier0
+def test_wheel_contains_build_support_structural():
+    """pyproject.toml must list src/jamma in the wheel-target packages.
+
+    jamma._build_support is a subpackage of jamma, so any config that
+    includes ``src/jamma`` automatically ships it. But we check the config
+    text explicitly: if someone splits the packages list to exclude
+    _build_support, the other (tier2) test will catch it — but tier2 is
+    gated behind ``-m slow`` and excluded from default runs. This tier0
+    check fails instantly in CI so the regression cannot slip through.
+    """
+    pyproject = (_REPO_ROOT / "pyproject.toml").read_text()
+    # Look for the wheel target. We want either packages=["src/jamma"]
+    # (blanket) or an explicit jamma._build_support entry. Anything that
+    # excludes _build_support will fail the literal-match check below.
+    assert "[tool.hatch.build.targets.wheel]" in pyproject, (
+        "pyproject.toml missing [tool.hatch.build.targets.wheel] section"
+    )
+    assert 'packages = ["src/jamma"]' in pyproject, (
+        "pyproject.toml wheel target does not ship src/jamma as a blanket "
+        "package — jamma._build_support may be excluded. If the packages "
+        "list is split, ensure jamma._build_support is listed explicitly "
+        "AND update this assertion."
+    )
 
 
 def _build(tmp_out: Path) -> tuple[Path, Path]:
@@ -37,27 +67,26 @@ def _build(tmp_out: Path) -> tuple[Path, Path]:
         check=False,
     )
     if result.returncode != 0:
-        pytest.skip(
-            f"uv build failed (likely missing C toolchain in test env): "
-            f"{result.stderr[-400:]}"
+        pytest.fail(
+            f"uv build failed — packaging contract cannot be verified. "
+            f"stderr: {result.stderr[-800:]}"
         )
 
     sdists = list(tmp_out.glob("*.tar.gz"))
     wheels = list(tmp_out.glob("*.whl"))
-    if not sdists or not wheels:
-        pytest.skip(
-            f"uv build did not produce both sdist and wheel: "
-            f"sdists={sdists}, wheels={wheels}"
-        )
+    assert sdists, f"uv build did not produce sdist: {tmp_out}"
+    assert wheels, f"uv build did not produce wheel: {tmp_out}"
     return sdists[0], wheels[0]
 
 
 @pytest.mark.tier2
 @pytest.mark.slow
-def test_build_support_ships_in_sdist_not_wheel(tmp_path):
-    """Source builds need build_support/ (hatch hook imports from it).
-    Installed wheels must NOT have build_support/ — runtime recompile
-    uses jamma.core.recompile, which ships inside src/jamma.
+def test_build_support_ships_in_sdist_and_wheel(tmp_path):
+    """jamma._build_support must be present in both distributions.
+
+    sdist: hatch_build.py imports it at wheel-build time via sys.path+src.
+    wheel: jamma.core.recompile calls compile_extension() which imports it
+    as a regular package. Missing from either distribution is a regression.
     """
     sdist_path, wheel_path = _build(tmp_path)
 
@@ -66,23 +95,41 @@ def test_build_support_ships_in_sdist_not_wheel(tmp_path):
     with zipfile.ZipFile(wheel_path) as zf:
         wheel_names = zf.namelist()
 
-    # sdist MUST contain build_support/compile_and_link.py.
+    # sdist MUST contain jamma/_build_support/compile_and_link.py.
     sdist_has_compile_and_link = any(
-        name.endswith("build_support/compile_and_link.py") for name in sdist_names
+        name.endswith("jamma/_build_support/compile_and_link.py")
+        for name in sdist_names
     )
     assert sdist_has_compile_and_link, (
-        f"build_support/compile_and_link.py missing from sdist {sdist_path.name}. "
-        "Source builds will fail: the hatch hook imports from build_support."
+        f"jamma/_build_support/compile_and_link.py missing from sdist "
+        f"{sdist_path.name}. hatch_build.py imports from it at wheel-build "
+        "time; a source build will fail."
     )
 
-    # Wheel MUST NOT contain any build_support/ entry.
-    wheel_has_build_support = any(
-        "build_support/" in name or name.startswith("build_support")
+    # Wheel MUST contain jamma/_build_support/compile_and_link.py.
+    wheel_has_compile_and_link = any(
+        name.endswith("jamma/_build_support/compile_and_link.py")
         for name in wheel_names
     )
-    assert not wheel_has_build_support, (
-        f"build_support/ was shipped in wheel {wheel_path.name}. "
-        "This breaks the runtime-recompile contract: installed wheels must "
-        "use jamma.core.recompile, not build_support/. Files found: "
-        f"{[n for n in wheel_names if 'build_support' in n]}"
+    assert wheel_has_compile_and_link, (
+        f"jamma/_build_support/compile_and_link.py missing from wheel "
+        f"{wheel_path.name}. Runtime ABI-mismatch recompile via "
+        "jamma.core.recompile.auto_recompile_c_extension will raise "
+        "ImportError on every installed wheel. This makes the entire "
+        "auto-recompile feature dead code."
     )
+
+    # And all three submodules — find_compiler, openmp_detect,
+    # compile_and_link — must be present. A partial ship silently breaks
+    # imports at the first submodule lookup.
+    for submodule in (
+        "compile_and_link.py",
+        "find_compiler.py",
+        "openmp_detect.py",
+        "__init__.py",
+    ):
+        target = f"jamma/_build_support/{submodule}"
+        assert any(name.endswith(target) for name in wheel_names), (
+            f"Wheel {wheel_path.name} missing {target}. jamma._build_support "
+            "must ship complete — a partial ship breaks runtime recompile."
+        )

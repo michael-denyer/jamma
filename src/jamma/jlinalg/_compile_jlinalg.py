@@ -219,7 +219,7 @@ def compile_extension(
         _print(f"ERROR: compiled but import failed (OSError): {e}")
         _print("  Check that all shared library dependencies are available.")
         return False
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — last-resort diagnostic: ImportError and OSError are handled above; anything else must still be surfaced with a traceback rather than propagated out of a compile helper
         import traceback
 
         _print(f"ERROR: compiled but import failed ({type(e).__name__}): {e}")

@@ -186,7 +186,7 @@ def timed_progress(
     def _worker():
         try:
             result.append(fn())
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 — worker thread must catch BaseException (KeyboardInterrupt, SystemExit) and route via exception list; otherwise the main thread hangs on done.wait()
             exception.append(exc)
         finally:
             done.set()

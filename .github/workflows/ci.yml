@@ -47,6 +47,22 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      # uv.lock must match pyproject.toml. The pre-commit uv-lock-sync
+      # hook catches this locally, but only if contributors run prek
+      # before pushing. `uv lock --check` fails if the lockfile is stale,
+      # closing the gap for PRs that bypass hooks.
+      - name: uv.lock sync check
+        run: uv lock --check
+
+      # Ruff check and format split into separate steps so a failure
+      # report names the exact rule set that failed (check rules vs
+      # unformatted files) rather than a generic "files were modified".
+      - name: Ruff check (no autofix)
+        run: uv run ruff check --no-fix .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
       - name: Lint and format check
         run: prek run --all-files
 
@@ -117,6 +133,82 @@ jobs:
       - name: Run tests
         # addopts= clears pyproject.toml defaults so CI controls markers and parallelism explicitly
         run: uv run pytest ${{ matrix.pytest_args || '-m "not tier2 and not tier3 and not slow and not benchmark"' }} -v -n 3 -o 'addopts='
+
+  # Package smoke test: catches (a) sdist missing critical files
+  # (e.g. src/jamma/_build_support/*.py needed for runtime recompile),
+  # (b) wheel missing .py/.so files, and (c) wheel that cannot be
+  # installed + imported in a clean venv (the real end-user path).
+  # Runs once per PR rather than per matrix leg — these failures are
+  # platform-independent.
+  package-smoke:
+    name: Package smoke (sdist + wheel import)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      # Both archives must ship _build_support/ — without it, the runtime
+      # ABI-mismatch recompile path (jamma.core.recompile) fails on
+      # end-user machines after a wheel install. This is a structural
+      # check; the wheel import step below exercises the runtime path.
+      - name: Verify _build_support ships in sdist
+        run: |
+          SDIST=$(ls dist/*.tar.gz)
+          echo "Inspecting: $SDIST"
+          tar tzf "$SDIST" | grep -E "_build_support/(compile_and_link|find_compiler|openmp_detect)\.py$" || {
+            echo "::error::sdist is missing _build_support/ modules"
+            tar tzf "$SDIST" | grep _build_support || echo "(no matches)"
+            exit 1
+          }
+
+      - name: Verify _build_support ships in wheel
+        run: |
+          WHEEL=$(ls dist/*.whl)
+          echo "Inspecting: $WHEEL"
+          uv run python -c "
+          import sys, zipfile
+          wheel = sys.argv[1]
+          with zipfile.ZipFile(wheel) as zf:
+              names = zf.namelist()
+          required = [
+              'jamma/_build_support/compile_and_link.py',
+              'jamma/_build_support/find_compiler.py',
+              'jamma/_build_support/openmp_detect.py',
+          ]
+          missing = [r for r in required if r not in names]
+          if missing:
+              print(f'::error::wheel missing _build_support modules: {missing}')
+              sys.exit(1)
+          print(f'wheel contains all required _build_support modules')
+          " "$WHEEL"
+
+      # Real-user path: install the built wheel into a fresh venv (no
+      # source checkout on path) and verify import + CLI entry point.
+      # Catches the exact regression a dev-only flag would produce
+      # (wheel built with -march=native crashes on older CPUs during
+      # import of the C extension — not caught by source-install tests).
+      - name: Import-test wheel in scratch venv
+        run: |
+          WHEEL=$(ls dist/*.whl)
+          python3.12 -m venv /tmp/smoke_venv
+          /tmp/smoke_venv/bin/pip install "$WHEEL"
+          /tmp/smoke_venv/bin/python -c "
+          import jamma
+          print(f'jamma.__version__={jamma.__version__}')
+          # CLI entry point must resolve cleanly.
+          from jamma.cli import main
+          print('CLI entry point imports OK')
+          "
+          /tmp/smoke_venv/bin/jamma --help > /dev/null
 
   coverage:
     name: Coverage (slipcover)

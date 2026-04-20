@@ -4,3 +4,14 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+
+  # Python dependencies in pyproject.toml. Weekly cadence keeps ruff,
+  # hatchling, numpy, and test deps current so CVE exposure doesn't
+  # accumulate silently. Grouped so minor/patch bumps land in one PR.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      python-minor-patch:
+        update-types: ["minor", "patch"]

@@ -52,7 +52,11 @@ def _compute_chunk_size(
             import psutil
 
             device_budget = int(psutil.virtual_memory().available * 0.70)
-        except Exception:
+        except (ImportError, OSError, AttributeError):
+            # ImportError: psutil not installed.
+            # OSError: /proc unreadable inside restrictive containers.
+            # AttributeError: older psutil lacks virtual_memory().available
+            # (seen on ancient Databricks runtimes).
             logger.warning(
                 "Could not query system memory via psutil; "
                 "falling back to MAX_SAFE_CHUNK cap",

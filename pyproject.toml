@@ -135,9 +135,12 @@ target-version = "py311"
 #          numpy 2.x migration footguns; relevant to our pinned numpy 2.4.x)
 #   PT   — flake8-pytest-style (consistent pytest idioms)
 #   PTH  — flake8-use-pathlib (os.path → pathlib migration)
+#   BLE  — flake8-blind-except (bans bare `except:` / `except Exception:`
+#          which masks programming bugs behind fallback paths — the same
+#          class of defect fixed in core/recompile.py review fix C2)
 select = [
     "E", "F", "I", "UP", "B",
-    "SIM", "RUF", "C4", "PIE", "PERF", "NPY", "PT", "PTH",
+    "SIM", "RUF", "C4", "PIE", "PERF", "NPY", "PT", "PTH", "BLE",
 ]
 ignore = [
     # Allow pytest.raises to wrap multiple statements — expressive test setup

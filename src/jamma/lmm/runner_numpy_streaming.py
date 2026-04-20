@@ -1100,8 +1100,8 @@ def run_lmm_association_numpy_streaming(
                         try:
                             pipeline_bar.update(n_chunks)
                             pipeline_bar.finish()
-                        except Exception:
-                            pass  # Don't mask the real exception
+                        except Exception:  # noqa: BLE001 — progress-bar cleanup in finally must never shadow the real exception being unwound
+                            pass
         else:
             # Sequential fallback when too few chunks for pipeline overlap
             seq_bar = (

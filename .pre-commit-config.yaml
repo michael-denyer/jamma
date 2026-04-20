@@ -72,7 +72,7 @@ repos:
     hooks:
       - id: cppcheck
         name: cppcheck
-        entry: cppcheck --std=c11 --suppress=missingIncludeSystem --enable=warning --error-exitcode=1 --quiet
+        entry: cppcheck --std=c11 --suppress=missingIncludeSystem --enable=warning --error-exitcode=1
         language: system
         types: [c]
         files: ^src/jamma/jlinalg/src/
@@ -89,6 +89,21 @@ repos:
         entry: sh -c '! grep -rn "inspect\.getsource" tests/'
         language: system
         files: ^tests/
+        pass_filenames: false
+      - id: no-quiet-flags  # allow-quiet: hook name documents the flags it bans
+        name: ban --quiet/-q/--silent and hook-skip flags (CLAUDE.md)  # allow-quiet
+        entry: scripts/check-quiet-flags.py
+        language: system
+        # Run repo-wide on every invocation (the script sweeps its own
+        # default globs); pass_filenames=false prevents prek from also
+        # passing the filtered file list.
+        pass_filenames: false
+        always_run: true
+      - id: check-test-timeouts
+        name: flag unjustified long @pytest.mark.timeout values
+        entry: scripts/check-test-timeouts.py
+        language: system
+        files: ^tests/.*\.py$
         pass_filenames: false
       - id: no-compile-flag-literals-outside-build-support
         name: ban compile-flag literals outside jamma._build_support

@@ -258,7 +258,7 @@ class PipelineRunner:
                 if val is not None:
                     record[key] = val  # type: ignore[literal-required]
             append_benchmark_record(record)
-        except Exception:
+        except Exception:  # noqa: BLE001 — telemetry must never break the pipeline; log and continue
             logger.warning("Telemetry emission failed", exc_info=True)
 
     @staticmethod

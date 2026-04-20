@@ -7,8 +7,6 @@ in both in-memory and output_path streaming modes via ``write_streaming_chunk``
 accumulation).
 """
 
-from collections.abc import Generator
-
 import numpy as np
 from loguru import logger
 
@@ -97,62 +95,6 @@ def _build_results(
 
         results.append(AssocResult(**meta))
     return results
-
-
-def _yield_chunk_results(
-    lmm_mode: int,
-    filtered_indices: list[int],
-    snp_indices: np.ndarray,
-    filtered_afs: np.ndarray,
-    filtered_miss: np.ndarray,
-    snp_info: list,
-    arrays: dict[str, np.ndarray],
-) -> Generator[AssocResult, None, None]:
-    """Yield AssocResult objects for a streaming file chunk.
-
-    Builds one result per filtered SNP from the numpy arrays for a single
-    sub-chunk.
-
-    Args:
-        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
-        filtered_indices: Indices into snp_indices/filtered_afs/filtered_miss
-            for the SNPs in this sub-chunk.
-        snp_indices: Full array of filtered SNP indices.
-        filtered_afs: Allele frequencies for filtered SNPs (numpy array).
-        filtered_miss: Missing counts for filtered SNPs (numpy int array).
-        snp_info: Full SNP metadata list.
-        arrays: Dict of numpy arrays with per-SNP statistics.
-
-    Yields:
-        AssocResult for each SNP in the chunk.
-    """
-    if lmm_mode not in _RESULT_FIELDS:
-        raise ValueError(
-            f"Unknown lmm_mode={lmm_mode}; expected one of {list(_RESULT_FIELDS)}"
-        )
-    field_map = _RESULT_FIELDS[lmm_mode]
-    missing_keys = set(field_map.keys()) - set(arrays.keys())
-    if missing_keys:
-        raise ValueError(
-            f"Missing arrays for lmm_mode={lmm_mode}: {missing_keys}. "
-            f"Expected keys: {set(field_map.keys())}, got: {set(arrays.keys())}"
-        )
-    for j, local_idx in enumerate(filtered_indices):
-        snp_idx = snp_indices[local_idx]
-        af = float(filtered_afs[local_idx])
-        n_miss = int(filtered_miss[local_idx])
-        meta = _snp_metadata(snp_info[snp_idx], af, n_miss)
-
-        # LRT mode: beta and se are NaN (not computed)
-        if lmm_mode == 2:
-            meta["beta"] = float("nan")
-            meta["se"] = float("nan")
-
-        # Populate stat fields from arrays
-        for array_key, field_name in field_map.items():
-            meta[field_name] = float(arrays[array_key][j])
-
-        yield AssocResult(**meta)
 
 
 def _count_boundary_hits(

@@ -24,6 +24,23 @@ import pytest
 from jamma.core.recompile import auto_recompile_c_extension
 
 
+@pytest.fixture(autouse=True)
+def _isolate_lock_files(monkeypatch, tmp_path):
+    """Redirect every test's lock file into tmp_path.
+
+    Without this, _lock_path_for derives the lock path from the fake
+    sys_module_key (e.g. "jamma._fake_ext_success") and writes a
+    .lock file into the real src/jamma/ source tree on every run.
+    """
+    from jamma.core import recompile as recompile_mod
+
+    monkeypatch.setattr(
+        recompile_mod,
+        "_lock_path_for",
+        lambda key: tmp_path / f"{key.replace('.', '_')}.lock",
+    )
+
+
 def _make_fake_compiler(module_name: str, *, outcome):
     """Build a fake compiler module exposing ``compile_extension(verbose=...)``.
 

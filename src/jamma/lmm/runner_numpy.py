@@ -707,121 +707,38 @@ def run_lmm_association_numpy(
 
     n_filtered = len(snp_indices)
 
-    # Determine split/pipeline eligibility BEFORE chunk sizing so the
-    # budget can use accurate per-SNP accounting (varying cols vs full Uab).
-    # n_cvt=1: split available for all modes — Wald uses C workspace,
-    #   LRT/Score use SoA-native C split dispatch, mode-4 uses either
-    #   fused kernel or Wald workspace + SoA split Score/LRT.
-    # n_cvt>1: Wald uses general C workspace. LRT/Score/mode-4 use
-    #   split general C dispatch (no Uab reconstruction).
-    use_split = (_C_SPLIT_AVAILABLE and n_cvt == 1) or (
-        _C_GENERAL_AVAILABLE and n_cvt > 1
-    )
-
-    # Fused mode-4: single-pass Wald/Score/LRT from SoA data (no Uab
-    # reconstruction).  Only for n_cvt=1 with mode-4 C kernel available.
-    use_fused_mode4 = use_split and lmm_mode == 4 and n_cvt == 1 and _C_MODE4_AVAILABLE
-
-    # Fused Uab path: skip uab_varying_soa entirely, pass utg_t directly to
-    # C workspace which computes wx/xx/xy on-the-fly.
-    # n_cvt=1: uses fused (ABI v8) kernel.
-    # n_cvt>=2: uses fused general (ABI v9) kernel.
-    # Requires use_split (workspace + invariant SoA infrastructure).
-    # Modes 2/3 (Score/LRT only) don't use workspace, so no fused benefit.
-    use_fused = use_split and (
-        # n_cvt=1 fast path (existing)
-        (
-            n_cvt == 1
-            and _C_FUSED_AVAILABLE
-            and (lmm_mode == 1 or (lmm_mode == 4 and _C_MODE4_FUSED_AVAILABLE))
-        )
-        or
-        # General n_cvt path: Wald (mode 1) and all-tests (mode 4).
-        # Modes 2/3 (Score/LRT only) don't use workspace, so no fused benefit.
-        (n_cvt >= 2 and _C_FUSED_GENERAL_AVAILABLE and lmm_mode == 1)
-        or (n_cvt >= 2 and _C_MODE4_FUSED_GENERAL_AVAILABLE and lmm_mode == 4)
-    )
-    use_fused_general = use_fused and n_cvt >= 2
-
-    # Fused Score/LRT: skip uab_varying_soa for modes 2/3 (n_cvt=1 only).
-    # Prefer workspace-based path (persistent across chunks, eliminates per-chunk
-    # malloc/free and redundant precomputation); fall back to stateless if unavailable.
+    # Determine split/fused C kernel dispatch BEFORE chunk sizing so the
+    # budget can use accurate per-SNP accounting. See jamma.lmm.dispatch
+    # for the branching matrix; this used to be 110 lines inline.
     from jamma.lmm.compute_numpy import (
         _C_LRT_FUSED_WS_AVAILABLE,
         _C_SCORE_FUSED_WS_AVAILABLE,
     )
+    from jamma.lmm.dispatch import select_dispatch_path
 
-    use_fused_score_ws = (
-        use_split and n_cvt == 1 and lmm_mode == 3 and _C_SCORE_FUSED_WS_AVAILABLE
+    dispatch = select_dispatch_path(
+        n_cvt,
+        lmm_mode,
+        c_split_available=_C_SPLIT_AVAILABLE,
+        c_general_available=_C_GENERAL_AVAILABLE,
+        c_fused_available=_C_FUSED_AVAILABLE,
+        c_fused_general_available=_C_FUSED_GENERAL_AVAILABLE,
+        c_mode4_available=_C_MODE4_AVAILABLE,
+        c_mode4_fused_available=_C_MODE4_FUSED_AVAILABLE,
+        c_mode4_fused_general_available=_C_MODE4_FUSED_GENERAL_AVAILABLE,
+        c_score_fused_available=_C_SCORE_FUSED_AVAILABLE,
+        c_score_fused_ws_available=_C_SCORE_FUSED_WS_AVAILABLE,
+        c_lrt_fused_available=_C_LRT_FUSED_AVAILABLE,
+        c_lrt_fused_ws_available=_C_LRT_FUSED_WS_AVAILABLE,
     )
-    use_fused_lrt_ws = (
-        use_split and n_cvt == 1 and lmm_mode == 2 and _C_LRT_FUSED_WS_AVAILABLE
-    )
-    # Stateless fallback: only when WS not available
-    use_fused_score = (
-        use_split
-        and n_cvt == 1
-        and lmm_mode == 3
-        and _C_SCORE_FUSED_AVAILABLE
-        and not use_fused_score_ws
-    )
-    use_fused_lrt = (
-        use_split
-        and n_cvt == 1
-        and lmm_mode == 2
-        and _C_LRT_FUSED_AVAILABLE
-        and not use_fused_lrt_ws
-    )
-
-    if use_fused and not use_fused_general:
-        logger.debug(
-            "Fused Uab path active: utg_t passed directly to C workspace "
-            f"(mode={lmm_mode}, eliminates uab_varying_soa buffer)"
-        )
-    elif use_fused_general:
-        logger.debug(
-            "Fused general Uab path active: utg_t passed directly to C workspace "
-            f"(n_cvt={n_cvt}, n_var={n_cvt + 2})"
-        )
-
-    if lmm_mode == 4:
-        if use_fused:
-            variant = "fused general" if use_fused_general else "fused"
-            logger.debug(
-                f"Mode-4 dispatch: {variant} Uab kernel (Wald/Score/LRT single pass)"
-            )
-        elif use_fused_mode4:
-            logger.debug("Mode-4 dispatch: fused kernel (Wald/Score/LRT single pass)")
-        else:
-            reason = (
-                "fused general kernel unavailable"
-                if n_cvt > 1
-                else "fused kernel unavailable"
-                if not _C_MODE4_AVAILABLE
-                else "C split extension unavailable"
-            )
-            logger.debug(f"Mode-4 dispatch: compose fallback ({reason})")
-
-    if use_fused_score_ws:
-        logger.debug(
-            "Fused Score workspace path active: workspace created once, "
-            "utg_t passed per-chunk (eliminates per-chunk malloc)"
-        )
-    elif use_fused_score:
-        logger.debug(
-            "Fused Score path active: utg_t passed directly to C "
-            "(eliminates uab_varying_soa buffer for mode 3)"
-        )
-    if use_fused_lrt_ws:
-        logger.debug(
-            "Fused LRT workspace path active: workspace created once, "
-            "utg_t passed per-chunk (eliminates per-chunk malloc/grid precompute)"
-        )
-    elif use_fused_lrt:
-        logger.debug(
-            "Fused LRT path active: utg_t passed directly to C "
-            "(eliminates uab_varying_soa buffer for mode 2)"
-        )
+    use_split = dispatch.use_split
+    use_fused = dispatch.use_fused
+    use_fused_general = dispatch.use_fused_general
+    use_fused_mode4 = dispatch.use_fused_mode4
+    use_fused_score = dispatch.use_fused_score
+    use_fused_score_ws = dispatch.use_fused_score_ws
+    use_fused_lrt = dispatch.use_fused_lrt
+    use_fused_lrt_ws = dispatch.use_fused_lrt_ws
 
     chunk_size = compute_chunk_size_numpy(
         n_samples,

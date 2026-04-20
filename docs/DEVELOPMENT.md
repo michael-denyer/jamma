@@ -26,7 +26,7 @@ uv run python -m jamma.jlinalg._compile_jlinalg
 
 JAMMA falls back to pure Python if extensions are absent, but compiled extensions are required for meaningful test coverage and performance.
 
-**Important:** Both extensions must be registered in `hatch_build.py` (wheel builds) and their respective compile scripts (`_compile_jlinalg.py`, `_compile_accel`) for dev-mode builds. LAPACK sources inside `jlinalg/src/` must be compiled with strict IEEE 754 flags (`-O2 -fno-fast-math`).
+**Important:** Compile flags, source lists, and link flags are centralised in `src/jamma/_build_support/compile_and_link.py` and consumed by all three entry points — `hatch_build.py` (wheel builds), `_compile_jlinalg.py`, and `_compile_accel.py` (dev-mode and runtime recompile). Add new sources or flags there, not in the entry points. LAPACK sources inside `jlinalg/src/` are compiled with strict IEEE 754 flags (`-O2 -fno-fast-math`); a pre-commit hook (`scripts/check-compile-flag-literals.py`) rejects bare flag literals (`-O3`, `-fno-fast-math`, etc.) outside `_build_support/`.
 
 After modifying C source, recompile in place:
 

@@ -134,7 +134,7 @@ src/jamma/
 
 The `eigh` function dispatches to DSYEVD (divide-and-conquer, faster, O(N²) workspace) and falls back to DSYEVR (MRRR algorithm, O(N) workspace) when DSYEVD workspace would exceed available memory. At 100k samples, DSYEVD requires ~240 GB; DSYEVR requires ~160 GB.
 
-The `_lmm_accel` C extension (`src/jamma/lmm/_lmm_accel.c`) provides the per-SNP REML/Wald inner loop with optional OpenMP parallelism. Both C extensions must be registered in `hatch_build.py` (wheel builds) and `_compile_jlinalg.py` (dev-mode builds). LAPACK sources use strict IEEE 754 flags (`-O2 -fno-fast-math`) to prevent fast-math optimisations from perturbing eigendecomposition results.
+The `_lmm_accel` C extension (`src/jamma/lmm/_lmm_accel.c`) provides the per-SNP REML/Wald inner loop with optional OpenMP parallelism. Compile flags, source lists, and link flags are centralised in `src/jamma/_build_support/compile_and_link.py` and consumed by all three compile entry points (`hatch_build.py` for wheel builds, `_compile_jlinalg.py` and `_compile_accel.py` for dev-mode and runtime recompile). LAPACK sources use strict IEEE 754 flags (`-O2 -fno-fast-math`) to prevent fast-math optimisations from perturbing eigendecomposition results; a pre-commit lint (`scripts/check-compile-flag-literals.py`) rejects bare flag literals outside `_build_support/`.
 
 ## C Extension Architecture
 

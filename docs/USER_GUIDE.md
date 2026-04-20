@@ -92,21 +92,21 @@ flowchart TD
         direction TB
 
         subgraph PHASE1["Phase 1 — Kinship"]
-            GK["Kinship Accumulation\nDGEMM (chunked)"]
+            GK["Kinship Accumulation<br/>DGEMM (chunked)"]
         end
 
         subgraph PHASE2["Phase 2 — Eigendecomposition"]
-            EIG["jlinalg.eigh\nDSYEVD / DSYEVR"]
+            EIG["jlinalg.eigh<br/>DSYEVD / DSYEVR"]
         end
 
         subgraph PHASE3["Phase 3 — Association"]
             direction TB
-            MEM{"Memory\nbudget?"}
-            BATCH["Batch Runner\n(genotypes in RAM)"]
-            STREAM["Streaming Runner\n(two-pass disk I/O)"]
-            CEXT{"C extension\navailable?"}
-            OMP["OpenMP + SIMD\naccelerated"]
-            PYFALL["Pure Python\nfallback"]
+            MEM{"Memory<br/>budget?"}
+            BATCH["Batch Runner<br/>(genotypes in RAM)"]
+            STREAM["Streaming Runner<br/>(two-pass disk I/O)"]
+            CEXT{"C extension<br/>available?"}
+            OMP["OpenMP + SIMD<br/>accelerated"]
+            PYFALL["Pure Python<br/>fallback"]
         end
     end
 
@@ -550,8 +550,8 @@ numpy stack uses LP64 BLAS (32-bit integers), which overflows at ~46k samples
 flowchart TD
     subgraph DETECT["BLAS DETECTION (jlinalg)"]
         direction TB
-        PROBE["Probe process BLAS symbols\ndlsym / numpy scan"]
-        PROBE --> ILP64{"ILP64\nbackend?"}
+        PROBE["Probe process BLAS symbols<br/>dlsym / numpy scan"]
+        PROBE --> ILP64{"ILP64<br/>backend?"}
     end
 
     subgraph DISPATCH["EIGENDECOMP DISPATCH"]
@@ -566,8 +566,8 @@ flowchart TD
 
     subgraph LIMITS["SAMPLE LIMITS"]
         direction LR
-        L1["LP64: ~46k max\n(int32 overflow)"]
-        L2["ILP64: 200k+\n(memory-bound)"]
+        L1["LP64: ~46k max<br/>(int32 overflow)"]
+        L2["ILP64: 200k+<br/>(memory-bound)"]
     end
 
     FAST --> LIMITS
@@ -793,9 +793,9 @@ JAMMA includes pre-flight memory checks that fail fast before OOM instead of cra
 flowchart TD
     subgraph PREFLIGHT["PRE-FLIGHT CHECK"]
         direction TB
-        EST["Estimate peak memory\n(eigendecomp dominates)"]
-        BLAS["Detect BLAS backend\n+ ILP64 status"]
-        EST --> GATE{"Peak + 10%\n≤ available?"}
+        EST["Estimate peak memory<br/>(eigendecomp dominates)"]
+        BLAS["Detect BLAS backend<br/>+ ILP64 status"]
+        EST --> GATE{"Peak + 10%<br/>≤ available?"}
         BLAS --> GATE
     end
 
@@ -808,10 +808,10 @@ flowchart TD
 
     subgraph RUNTIME["RUNTIME CONTROLS"]
         direction TB
-        INPLACE["In-place DSYEVD\n(saves 1× N²)"]
-        FALLBACK["DSYEVR fallback\n(O(N) workspace)"]
-        CHUNK["Streaming chunks\nO(N × chunk_size)"]
-        FLUSH["Per-chunk disk flush\n(no list accumulation)"]
+        INPLACE["In-place DSYEVD<br/>(saves 1× N²)"]
+        FALLBACK["DSYEVR fallback<br/>(O(N) workspace)"]
+        CHUNK["Streaming chunks<br/>O(N × chunk_size)"]
+        FLUSH["Per-chunk disk flush<br/>(no list accumulation)"]
     end
 
     GATE -->|sufficient| EIGEN_MEM

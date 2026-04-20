@@ -14,21 +14,21 @@ BLAS specialization (DSYRK, DGEMM).
 graph TD
     subgraph PYTHON["PYTHON LAYER"]
         A["jamma Python code"]
-        B["jlinalg Python API\n(__init__.py)"]
+        B["jlinalg Python API<br/>(__init__.py)"]
         A --> B
     end
 
     subgraph BRIDGE["C EXTENSION"]
-        C{"C extension\nloaded?"}
-        D["pymodule.c\nNumPy buffer bridge"]
-        F["ISA + Vendor Init\n(platform.c)"]
-        G{"Vendor BLAS\navailable?"}
+        C{"C extension<br/>loaded?"}
+        D["pymodule.c<br/>NumPy buffer bridge"]
+        F["ISA + Vendor Init<br/>(platform.c)"]
+        G{"Vendor BLAS<br/>available?"}
         D --> F --> G
     end
 
     subgraph BACKENDS["COMPUTE BACKENDS"]
-        H["Vendor LAPACK\nMKL-ILP64 / Accelerate-ILP64"]
-        E["NumPy fallback\nnp.linalg / np.matmul"]
+        H["Vendor LAPACK<br/>MKL-ILP64 / Accelerate-ILP64"]
+        E["NumPy fallback<br/>np.linalg / np.matmul"]
     end
 
     B --> C
@@ -63,8 +63,8 @@ graph LR
     subgraph DISCOVER["DISCOVERY (all paths run)"]
         direction LR
         A["blas_dispatch.c"]
-        B["System BLAS\nRTLD_DEFAULT +\nnumpy scan"]
-        C["pip-install MKL\nsite-packages/\nmkl.libs/"]
+        B["System BLAS<br/>RTLD_DEFAULT +<br/>numpy scan"]
+        C["pip-install MKL<br/>site-packages/<br/>mkl.libs/"]
         A --> B --> C
     end
 

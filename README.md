@@ -227,22 +227,22 @@ flowchart TD
     end
 
     subgraph IO["DATA LOADING"]
-        LOAD["Load PLINK +\nPhenotypes"]
+        LOAD["Load PLINK +<br/>Phenotypes"]
     end
 
     subgraph CORE["CORE COMPUTATION"]
-        KIN["Kinship\n(DGEMM, chunked)"]
-        EIG["Eigendecomposition\n(jlinalg.eigh → DSYEVD/DSYEVR)"]
+        KIN["Kinship<br/>(DGEMM, chunked)"]
+        EIG["Eigendecomposition<br/>(jlinalg.eigh → DSYEVD/DSYEVR)"]
         KIN --> EIG
     end
 
     subgraph ASSOC["ASSOCIATION TESTING"]
-        MEM{"Memory\nbudget?"}
-        NP["Batch Runner\n(genotypes in RAM)"]
-        NPS["Streaming Runner\n(two-pass disk I/O)"]
+        MEM{"Memory<br/>budget?"}
+        NP["Batch Runner<br/>(genotypes in RAM)"]
+        NPS["Streaming Runner<br/>(two-pass disk I/O)"]
         CEXT{"C extension?"}
-        C["C Extension\nOpenMP + SIMD"]
-        PY["Pure Python\nfallback"]
+        C["C Extension<br/>OpenMP + SIMD"]
+        PY["Pure Python<br/>fallback"]
         MEM -->|fits| NP
         MEM -->|large| NPS
         NP --> CEXT
@@ -251,7 +251,7 @@ flowchart TD
         CEXT -->|no| PY
     end
 
-    RES["AssocResult\n(.assoc.txt)"]
+    RES["AssocResult<br/>(.assoc.txt)"]
 
     PIPE --> LOAD --> CORE
     EIG --> ASSOC

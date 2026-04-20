@@ -259,7 +259,9 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nb | `run_lmm_association_numpy()` | In-memory batch runner (full genotype load) | [runner_numpy.py](../src/jamma/lmm/runner_numpy.py) |
 | 4Nc | `_compute_lmm_chunk_numpy()` | Per-chunk dispatch for NumPy backend | [compute_numpy.py](../src/jamma/lmm/compute_numpy.py) |
 | 4Nd | `compute_wald_stats_workspace()` | C extension: OpenMP Wald test with workspace API | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
-| 4Nd | `_compile_accel.py` | Post-install C extension compilation | [_compile_accel.py](../src/jamma/lmm/_compile_accel.py) |
+| 4Nd | `_compile_accel.py` | Dev-mode / runtime recompile for `_lmm_accel` | [_compile_accel.py](../src/jamma/lmm/_compile_accel.py) |
+| 4Nd | `_compile_jlinalg.py` | Dev-mode / runtime recompile for jlinalg | [_compile_jlinalg.py](../src/jamma/jlinalg/_compile_jlinalg.py) |
+| 4Nd | `compile_and_link.py` | Shared compile flags, source lists, link flags (single source of truth, consumed by `hatch_build.py` + both `_compile_*.py`) | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
 | 4Ne | `run_lmm_association_numpy_streaming()` | NumPy disk streaming (two-pass, full pipeline support, C extension) | [runner_numpy_streaming.py:103](../src/jamma/lmm/runner_numpy_streaming.py#L103) |
 | 4Nf | `select_execution_mode()` | Batch vs streaming mode selection | [runner.py:74](../src/jamma/lmm/runner.py#L74) |
 | 4Nf | `run_lmm()` | Unified dispatch to all runners | [runner.py:183](../src/jamma/lmm/runner.py#L183) |

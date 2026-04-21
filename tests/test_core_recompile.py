@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -268,59 +269,54 @@ def test_partial_upgrade_fallback_when_compile_extension_lacks_on_retry(monkeypa
 
 @pytest.mark.tier0
 def test_concurrent_recompiles_serialize(monkeypatch, tmp_path):
-    """Regression for jamma-oy1c: two threads triggering auto_recompile must
+    """Regression for jamma-oy1c: N threads triggering auto_recompile must
     not interleave inside compile_extension. The file lock around the
-    compiler call must serialize them, so the inner critical section is
-    only ever entered by one thread at a time.
+    compiler call must serialize them.
+
+    Uses 8 threads with a 100ms critical section and a shared lock path.
+    The timestamp-based overlap check is strict: any two threads whose
+    [enter, exit] intervals intersect are a lock failure. Exit counter
+    plus overlap check together prove mutual exclusion.
     """
     import threading
     import time
 
     from jamma.core import recompile as recompile_mod
 
-    monkeypatch.setattr(
-        recompile_mod, "_lock_path_for", lambda key: tmp_path / f"{key}.lock"
-    )
+    # All threads share one lock file — the invariant under test.
+    shared_lock = tmp_path / "shared.lock"
+    monkeypatch.setattr(recompile_mod, "_lock_path_for", lambda key: shared_lock)
 
     compiler_name = "jamma._fake_compiler_concurrent"
-    sys_key_1 = "jamma._fake_ext_concurrent_1"
-    sys_key_2 = "jamma._fake_ext_concurrent_2"
+    n_workers = 8
+    critical_sleep_s = 0.1
 
-    in_critical_section = threading.Event()
-    overlap_detected = threading.Event()
-    enter_count = [0]
-    enter_lock = threading.Lock()
+    # Record (enter_ns, exit_ns) per call.
+    intervals: list[tuple[int, int]] = []
+    intervals_lock = threading.Lock()
 
     def slow_compile(verbose: bool = False, on_retry=None) -> bool:
         del verbose, on_retry
-        with enter_lock:
-            enter_count[0] += 1
-            if in_critical_section.is_set():
-                # Another thread already in compile_extension — lock failed.
-                overlap_detected.set()
-            in_critical_section.set()
-        try:
-            time.sleep(0.05)
-            return True
-        finally:
-            in_critical_section.clear()
+        enter_ns = time.monotonic_ns()
+        time.sleep(critical_sleep_s)
+        exit_ns = time.monotonic_ns()
+        with intervals_lock:
+            intervals.append((enter_ns, exit_ns))
+        return True
 
     fake_mod = types.ModuleType(compiler_name)
     fake_mod.compile_extension = slow_compile  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, compiler_name, fake_mod)
-    monkeypatch.setitem(sys.modules, sys_key_1, types.ModuleType(sys_key_1))
-    monkeypatch.setitem(sys.modules, sys_key_2, types.ModuleType(sys_key_2))
 
-    # Two threads use the SAME lock path (monkeypatched above) but different
-    # sys_module_keys so the post-lock re-import check doesn't short-circuit
-    # the second call. This isolates the lock's serialization from the
-    # already-built fast-path.
-    def _patch_path(_key):
-        return tmp_path / "shared.lock"
-
-    monkeypatch.setattr(recompile_mod, "_lock_path_for", _patch_path)
+    # Each worker uses a distinct sys_module_key so the post-lock re-import
+    # check cannot short-circuit them — isolates lock serialization from
+    # the already-built fast-path.
+    sys_keys = [f"jamma._fake_ext_concurrent_{i}" for i in range(n_workers)]
+    for k in sys_keys:
+        monkeypatch.setitem(sys.modules, k, types.ModuleType(k))
 
     results: list[bool] = []
+    results_lock = threading.Lock()
 
     def worker(sys_key: str) -> None:
         r = auto_recompile_c_extension(
@@ -329,25 +325,183 @@ def test_concurrent_recompiles_serialize(monkeypatch, tmp_path):
             sys_module_key=sys_key,
             label="fake",
         )
-        results.append(r)
+        with results_lock:
+            results.append(r)
 
-    t1 = threading.Thread(target=worker, args=(sys_key_1,))
-    t2 = threading.Thread(target=worker, args=(sys_key_2,))
-    t1.start()
-    t2.start()
-    t1.join()
-    t2.join()
+    threads = [threading.Thread(target=worker, args=(k,)) for k in sys_keys]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
-    assert results == [True, True] or results == [True, True], (
-        f"both recompiles must succeed, got {results!r}"
+    assert results == [True] * n_workers, (
+        f"all {n_workers} recompiles must succeed, got {results!r}"
     )
-    assert enter_count[0] == 2, (
-        f"compile_extension must run twice (different sys keys), got {enter_count[0]}"
+    assert len(intervals) == n_workers, (
+        f"compile_extension must run {n_workers} times, got {len(intervals)}"
     )
-    assert not overlap_detected.is_set(), (
-        "two threads entered compile_extension concurrently — file lock failed "
-        "to serialize. Concurrent linkers will race on the .so output path."
+
+    # Observable invariant: no two intervals overlap. Sort by enter time
+    # and check each subsequent enter is >= previous exit.
+    intervals.sort()
+    for i in range(1, len(intervals)):
+        prev_exit = intervals[i - 1][1]
+        this_enter = intervals[i][0]
+        assert this_enter >= prev_exit, (
+            f"intervals {intervals[i - 1]} and {intervals[i]} overlap — "
+            f"file lock failed to serialize. Concurrent linkers will race "
+            f"on the .so output path."
+        )
+
+
+@pytest.mark.tier0
+def test_concurrent_recompiles_fail_without_lock(monkeypatch, tmp_path):
+    """Negative control: if the lock is stubbed to a no-op, overlap IS
+    observed. Proves the preceding test would catch a broken lock — it
+    isn't just passing because the scheduler happens to serialize.
+    """
+    import contextlib
+    import threading
+    import time
+
+    from jamma.core import recompile as recompile_mod
+
+    shared_lock = tmp_path / "shared.lock"
+    monkeypatch.setattr(recompile_mod, "_lock_path_for", lambda key: shared_lock)
+
+    # Replace _file_lock with a no-op context manager — simulates a broken
+    # lock implementation.
+    @contextlib.contextmanager
+    def _no_op_lock(_path):
+        yield
+
+    monkeypatch.setattr(recompile_mod, "_file_lock", _no_op_lock)
+
+    compiler_name = "jamma._fake_compiler_no_lock"
+    n_workers = 8
+    critical_sleep_s = 0.1
+
+    intervals: list[tuple[int, int]] = []
+    intervals_lock = threading.Lock()
+
+    def slow_compile(verbose: bool = False, on_retry=None) -> bool:
+        del verbose, on_retry
+        enter_ns = time.monotonic_ns()
+        time.sleep(critical_sleep_s)
+        exit_ns = time.monotonic_ns()
+        with intervals_lock:
+            intervals.append((enter_ns, exit_ns))
+        return True
+
+    fake_mod = types.ModuleType(compiler_name)
+    fake_mod.compile_extension = slow_compile  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, compiler_name, fake_mod)
+
+    sys_keys = [f"jamma._fake_ext_nolock_{i}" for i in range(n_workers)]
+    for k in sys_keys:
+        monkeypatch.setitem(sys.modules, k, types.ModuleType(k))
+
+    def worker(sys_key: str) -> None:
+        auto_recompile_c_extension(
+            module_name="_fake_ext_nolock",
+            compiler_module=compiler_name,
+            sys_module_key=sys_key,
+            label="fake",
+        )
+
+    threads = [threading.Thread(target=worker, args=(k,)) for k in sys_keys]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Without the lock, threads MUST overlap given 8 workers * 100ms sleep
+    # on any modern scheduler. If this assertion ever spuriously fails
+    # (e.g. CI on a single-core VM serializes everything), raise n_workers
+    # or critical_sleep_s — do not relax the assertion.
+    intervals.sort()
+    overlap_found = any(
+        intervals[i][0] < intervals[i - 1][1] for i in range(1, len(intervals))
     )
+    assert overlap_found, (
+        "Negative control did not detect overlap — the positive test above "
+        "may pass whether or not the lock works. Review test timing."
+    )
+
+
+# --- _lock_path_for coverage ---
+#
+# The autouse _isolate_lock_files fixture monkeypatches
+# recompile_mod._lock_path_for for every test. These tests need the REAL
+# function, so they undo the monkeypatch first.
+
+
+@pytest.mark.tier0
+def test_lock_path_for_installed_package_lives_in_package_dir(monkeypatch):
+    """For an installed package, the lock file is placed next to the .so so
+    concurrent interpreters sharing site-packages serialize on it.
+
+    Uses the ``jamma.core`` package — always present in-tree and packaged.
+    """
+    monkeypatch.undo()  # drop the autouse _lock_path_for patch
+
+    from jamma.core.recompile import _lock_path_for
+
+    path = _lock_path_for("jamma.core._fake_ext")
+
+    import jamma.core as jamma_core
+
+    # Resolve both sides for symlink parity (e.g. macOS /var vs /private/var).
+    pkg_dir = Path(next(iter(jamma_core.__path__))).resolve()
+    assert path.resolve().is_relative_to(pkg_dir), (
+        f"lock path {path} must live inside package dir {pkg_dir} "
+        f"so site-packages-shared interpreters serialize on it"
+    )
+    import sysconfig as _sysconfig
+
+    ext_suffix = _sysconfig.get_config_var("EXT_SUFFIX") or ".so"
+    assert path.name.endswith(f"{ext_suffix}.lock"), (
+        f"lock path {path} must end with {ext_suffix}.lock, got {path.name!r}"
+    )
+
+
+@pytest.mark.tier0
+def test_lock_path_for_unknown_package_falls_back_to_tempdir(monkeypatch):
+    """When find_spec returns None (package truly missing), the helper must
+    fall back to tempdir rather than raising.
+    """
+    monkeypatch.undo()
+
+    import tempfile as _tempfile
+
+    from jamma.core.recompile import _lock_path_for
+
+    path = _lock_path_for("jamma_nonexistent_pkg_xyz._x")
+
+    tempdir = Path(_tempfile.gettempdir()).resolve()
+    assert path.resolve().is_relative_to(tempdir), (
+        f"fallback path {path} must live in tempdir {tempdir}"
+    )
+    assert path.name.endswith(".lock")
+
+
+@pytest.mark.tier0
+def test_lock_path_for_toplevel_module_falls_back_to_tempdir(monkeypatch):
+    """A sys_module_key with no dot (no package) must hit the tempdir
+    fallback branch — the ``if package_name:`` check gates the package-dir
+    path and must not raise on top-level names.
+    """
+    monkeypatch.undo()
+
+    import tempfile as _tempfile
+
+    from jamma.core.recompile import _lock_path_for
+
+    path = _lock_path_for("_toplevel_ext")
+
+    tempdir = Path(_tempfile.gettempdir()).resolve()
+    assert path.resolve().is_relative_to(tempdir)
+    assert path.name.endswith(".lock")
 
 
 @pytest.mark.tier0

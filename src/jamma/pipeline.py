@@ -506,6 +506,7 @@ class PipelineRunner:
             MemoryError: If estimated memory exceeds budget or available memory.
         """
         if not self.config.check_memory:
+            logger.info("Memory preflight skipped (streaming): check_memory=False")
             return None
 
         disk_chunk = _compute_chunk_size(n_snps)
@@ -941,6 +942,9 @@ class PipelineRunner:
             return
 
         if not self.config.check_memory:
+            logger.info(
+                f"Memory preflight skipped ({plan.runner_name}): check_memory=False"
+            )
             return
 
         from jamma.core.memory import estimate_lmm_memory

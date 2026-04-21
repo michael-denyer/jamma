@@ -708,8 +708,7 @@ def run_lmm_association_numpy(
     n_filtered = len(snp_indices)
 
     # Determine split/fused C kernel dispatch BEFORE chunk sizing so the
-    # budget can use accurate per-SNP accounting. See jamma.lmm.dispatch
-    # for the branching matrix; this used to be 110 lines inline.
+    # budget can use accurate per-SNP accounting.
     from jamma.lmm.compute_numpy import (
         _C_LRT_FUSED_WS_AVAILABLE,
         _C_SCORE_FUSED_WS_AVAILABLE,

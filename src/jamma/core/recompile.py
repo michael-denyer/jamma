@@ -65,36 +65,75 @@ def _file_lock(lock_path: Path) -> Iterator[None]:
     pip/uv handle their own lockfiles and avoids a TOCTOU between unlink
     and re-lock by a sibling process.
     """
+    from loguru import logger
+
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
+    except OSError as e:
         # Read-only site-packages (system Python on locked-down hosts).
         # Skip locking — a pure-Python fallback is preferable to crashing.
+        logger.debug(
+            f"recompile lock: cannot create {lock_path.parent} "
+            f"(errno={getattr(e, 'errno', '?')}: {e}); proceeding unlocked"
+        )
         yield
         return
 
     fd = None
     try:
         fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
-    except OSError:
+    except OSError as e:
+        logger.debug(
+            f"recompile lock: cannot open {lock_path} "
+            f"(errno={getattr(e, 'errno', '?')}: {e}); proceeding unlocked"
+        )
         yield
         return
 
     try:
         if sys.platform == "win32":
-            import msvcrt
+            try:
+                import msvcrt
+            except ImportError as e:
+                # Broken Python install on Windows — msvcrt is stdlib. Distinct
+                # from filesystem limitation, surface as warning.
+                logger.warning(
+                    f"recompile lock: msvcrt unavailable ({e}); "
+                    f"concurrent recompiles on this interpreter are unserialized"
+                )
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+                yield
+                return
 
             # Blocking exclusive lock on the first byte; the entire file is
             # zero-length so this is effectively whole-file.
             msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
         else:
-            import fcntl
+            try:
+                import fcntl
+            except ImportError as e:
+                # Exotic Python build without fcntl — distinct from filesystem
+                # limitation; surface as warning.
+                logger.warning(
+                    f"recompile lock: fcntl unavailable ({e}); "
+                    f"concurrent recompiles on this interpreter are unserialized"
+                )
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+                yield
+                return
 
             fcntl.flock(fd, fcntl.LOCK_EX)
-    except (ImportError, OSError):
+    except OSError as e:
         # Locking unsupported on this filesystem (some network mounts) —
         # proceed unlocked. The atomic-replace in compile_and_link still
         # protects readers from observing a partial .so.
+        logger.debug(
+            f"recompile lock: flock/locking failed on {lock_path} "
+            f"(errno={getattr(e, 'errno', '?')}: {e}); proceeding unlocked "
+            f"(atomic .so replace is still in effect)"
+        )
         with contextlib.suppress(OSError):
             os.close(fd)
         yield
@@ -189,12 +228,28 @@ def auto_recompile_c_extension(
                 )
 
         try:
+            # Inspect signature to decide whether compile_extension accepts
+            # on_retry — safer than catching TypeError, which would also
+            # swallow genuine TypeErrors raised inside compile_extension
+            # (bad cast, bad subprocess arg, etc.) and mask real bugs.
+            import inspect
+
             try:
+                compile_sig = inspect.signature(compiler.compile_extension)
+                supports_on_retry = "on_retry" in compile_sig.parameters or any(
+                    p.kind is inspect.Parameter.VAR_KEYWORD
+                    for p in compile_sig.parameters.values()
+                )
+            except (TypeError, ValueError):
+                # Signature introspection failed — assume modern API and let
+                # any real TypeError propagate rather than retrying silently.
+                supports_on_retry = True
+
+            if supports_on_retry:
                 success = compiler.compile_extension(verbose=False, on_retry=_on_retry)
-            except TypeError:
-                # Older compile_extension without on_retry kwarg — fall back so
-                # a partial-upgrade environment doesn't break. Downgrade
-                # notices will not surface in this case.
+            else:
+                # Legacy compile_extension without on_retry kwarg — partial
+                # upgrade environment. Downgrade notices will not surface.
                 success = compiler.compile_extension(verbose=False)
         except (OSError, subprocess.SubprocessError, ImportError, RuntimeError) as e:
             # Narrow catch: genuine build-environment failures (missing compiler,

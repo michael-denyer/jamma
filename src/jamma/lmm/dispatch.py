@@ -2,13 +2,7 @@
 
 Pure derivation of which C kernel path the NumPy LMM runner should take,
 based on n_cvt, lmm_mode, and which optional C extension symbols are
-present at import time. Extracted from run_lmm_association_numpy where
-this 110-line block of boolean derivation + debug logging dwarfed the
-surrounding orchestration code.
-
-Keeping this isolated makes the dispatch matrix unit-testable and lets
-the runner body read top-to-bottom without 30 lines of nested
-``use_fused_*`` definitions in the middle.
+present at import time.
 """
 
 from __future__ import annotations
@@ -186,6 +180,9 @@ def _log_dispatch_choices(
                 f"Mode-4 dispatch: {variant} Uab kernel (Wald/Score/LRT single pass)"
             )
         elif use_fused_mode4:
+            # Reached when mode-4 C kernel is available but its fused variant
+            # is not (e.g. partial extension rebuild). Independent from the
+            # use_fused branch above so the log faithfully reports the path.
             logger.debug("Mode-4 dispatch: fused kernel (Wald/Score/LRT single pass)")
         else:
             reason = (

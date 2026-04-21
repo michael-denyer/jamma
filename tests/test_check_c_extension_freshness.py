@@ -183,6 +183,65 @@ def test_discover_extensions_returns_known_targets() -> None:
 
 
 @pytest.mark.tier0
+def test_check_extension_degrades_to_not_stale_on_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``stat()`` / ``glob()`` failures (unreadable .so, raced glob,
+    permission issues on locked-down hosts) must NOT propagate — the
+    freshness check is called unguarded from pytest_configure and an
+    uncaught OSError there aborts the entire test session.
+
+    Contract: any OSError inside _check_extension returns a
+    FreshnessResult with is_stale=False, letting callers treat a
+    transient FS failure as "can't tell; carry on". The pre-push hook
+    re-runs in a clean environment to catch real drift.
+    """
+    freshness = _load_script_module()
+
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "foo.c").write_text("int main(){}")
+    so_path = tmp_path / "foo.so"
+    so_path.write_bytes(b"fake")
+
+    spec = freshness.ExtensionSpec(
+        label="fake",
+        so_path=so_path,
+        source_globs=((src_dir, "*.c"),),
+        rebuild_command="fake-rebuild",
+    )
+
+    real_stat = Path.stat
+
+    def _raise_on_so_stat(self, *args, **kwargs):
+        # Fail only on the .so stat so we prove the except catches it
+        # mid-function rather than just short-circuiting at exists().
+        if self == so_path:
+            raise PermissionError("simulated unreadable .so")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", _raise_on_so_stat)
+
+    result = freshness._check_extension(spec)
+
+    assert result.is_stale is False, (
+        "OSError during stat must degrade to is_stale=False, not propagate — "
+        "the checker is called unguarded from pytest_configure"
+    )
+    # check_all() wraps the same call; verify it also returns a list
+    # rather than raising, preserving the pytest_configure contract.
+    monkeypatch.setattr(
+        freshness,
+        "_discover_extensions",
+        lambda: [spec],
+    )
+    results = freshness.check_all()
+    assert isinstance(results, list)
+    assert len(results) == 1
+    assert results[0].is_stale is False
+
+
+@pytest.mark.tier0
 def test_main_returns_zero_on_real_tree() -> None:
     """The real tree should pass (the dev venv already built .so files).
 

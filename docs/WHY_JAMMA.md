@@ -198,7 +198,7 @@ Despite all improvements, JAMMA produces **identical scientific conclusions** to
 | Beta coefficients | < 1e-2 relative | GEMMA fixture comparison |
 | P-values (Wald/Score) | < 1e-4 relative | GEMMA fixture comparison |
 | P-values (LRT) | < 5e-3 relative | MLE subtraction amplification |
-| Lambda (REML) | < 5e-5 relative | Brent tolerance propagation |
+| Lambda (REML) | < 5e-5 relative | Optimizer tolerance gap (JAMMA golden section vs GEMMA Brent) |
 | Significance calls | 100% agreement | All thresholds (0.05, 0.01, 5e-8) |
 | Effect directions | 100% agreement | Sign of beta |
 | SNP rankings | Identical | Spearman correlation = 1.0 |

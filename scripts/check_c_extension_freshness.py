@@ -93,8 +93,35 @@ class FreshnessResult:
 
 
 def _check_extension(spec: ExtensionSpec) -> FreshnessResult:
-    """Compare a single extension's .so mtime against its newest source."""
-    if not spec.so_path.exists():
+    """Compare a single extension's .so mtime against its newest source.
+
+    Any ``OSError`` (unreadable ``.so``, missing source raced by glob,
+    permission issues on locked-down hosts) degrades to ``is_stale=False``
+    so callers — including pytest_configure — never abort on transient FS
+    failures. The pre-push hook re-runs in a clean environment.
+    """
+    try:
+        if not spec.so_path.exists():
+            return FreshnessResult(
+                spec=spec,
+                so_exists=False,
+                newest_source=None,
+                newest_source_mtime=0.0,
+                so_mtime=0.0,
+                is_stale=False,
+            )
+
+        so_mtime = spec.so_path.stat().st_mtime
+
+        newest_source: Path | None = None
+        newest_mtime = 0.0
+        for base_dir, pattern in spec.source_globs:
+            for src in base_dir.glob(pattern):
+                m = src.stat().st_mtime
+                if m > newest_mtime:
+                    newest_mtime = m
+                    newest_source = src
+    except OSError:
         return FreshnessResult(
             spec=spec,
             so_exists=False,
@@ -103,17 +130,6 @@ def _check_extension(spec: ExtensionSpec) -> FreshnessResult:
             so_mtime=0.0,
             is_stale=False,
         )
-
-    so_mtime = spec.so_path.stat().st_mtime
-
-    newest_source: Path | None = None
-    newest_mtime = 0.0
-    for base_dir, pattern in spec.source_globs:
-        for src in base_dir.glob(pattern):
-            m = src.stat().st_mtime
-            if m > newest_mtime:
-                newest_mtime = m
-                newest_source = src
 
     is_stale = newest_source is not None and newest_mtime > so_mtime
     return FreshnessResult(

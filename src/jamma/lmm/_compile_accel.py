@@ -165,8 +165,17 @@ def compile_extension(
     if diagnose:
         # Detect compiler to pick the right vectorization-report flag.
         # GCC uses -fopt-info-vec-all; Clang uses -Rpass flags.
-        probe = subprocess.run([cc_cmd, "--version"], capture_output=True, text=True)
-        compiler_id = probe.stdout.lower() if probe.returncode == 0 else ""
+        try:
+            probe = subprocess.run(
+                [cc_cmd, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            compiler_id = probe.stdout.lower() if probe.returncode == 0 else ""
+        except (subprocess.TimeoutExpired, OSError):
+            # Wedged compiler or broken symlink; fall back to GCC-style flags.
+            compiler_id = ""
         if "clang" in compiler_id:
             diag_flags = [
                 "-Rpass=loop-vectorize",

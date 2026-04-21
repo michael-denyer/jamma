@@ -883,8 +883,7 @@ def run_lmm_loco(
         loco_iter = None
         # When save_kinship=False and some samples are invalid, pass
         # valid_indices so kinship is accumulated at n_valid x n_valid size,
-        # avoiding full n_samples^2 materialisation for post-hoc subsetting
-        # .
+        # avoiding full n_samples^2 materialisation for post-hoc subsetting.
         kinship_valid_indices = (
             None if all_samples_valid or save_kinship else np.where(valid_mask)[0]
         )

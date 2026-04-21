@@ -353,3 +353,69 @@ def test_compile_jlinalg_compile_failure_triggers_omp_retry(monkeypatch, tmp_pat
     assert "-liomp5" not in calls[-1], (
         f"retry link must NOT include -liomp5; got {calls[-1]}"
     )
+
+
+@pytest.mark.tier0
+def test_atomic_replace_failure_preserves_used_openmp_link(monkeypatch, tmp_path):
+    """When link succeeded but atomic os.replace fails, the returned
+    ``used_openmp_link`` must reflect the REAL link-time state (True here),
+    not be zeroed out. Without this, telemetry misreports the build as
+    "no OMP runtime linked" whenever the final rename races.
+    """
+
+    def _fake_run(cmd, **_kwargs):
+        # Materialize -o targets so the link step reaches the os.replace path.
+        if "-o" in cmd:
+            out_idx = cmd.index("-o") + 1
+            if out_idx < len(cmd):
+                Path(cmd[out_idx]).write_bytes(b"")
+        return _FakeCompleted(returncode=0)
+
+    monkeypatch.setattr(
+        "jamma._build_support.compile_and_link.subprocess.run",
+        _fake_run,
+    )
+
+    # Patch Path.replace on the link_tmp path to raise OSError, exercising
+    # the except branch at compile_and_link.py:434-445.
+    real_replace = Path.replace
+
+    def _raise_replace(self, target):
+        # Only fail for the atomic publish step (target is the .so output).
+        if str(self).endswith(".tmp") or ".tmp." in self.name:
+            raise OSError("simulated atomic replace failure")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", _raise_replace)
+
+    src = tmp_path / "platform.c"
+    src.write_text("// stub\n")
+    out = tmp_path / "out.so"
+
+    result = compile_jlinalg(
+        sources=[src],
+        lapack_sources=[],
+        include_dirs=[],
+        cc_cmd="cc",
+        cc_extra=[],
+        omp_compile=["-fopenmp"],
+        omp_link=["-liomp5"],
+        ldflags=[],
+        output=out,
+        tmp_dir=tmp_path / "objs",
+    )
+
+    assert result.success is False, (
+        "atomic replace failure must surface as a failed build"
+    )
+    assert "atomic replace" in (result.error or ""), (
+        f"error must mention atomic replace; got {result.error!r}"
+    )
+    # The telemetry regression: used_openmp_link must NOT be False.
+    # The link call succeeded with -liomp5 in the flags — the rename is
+    # what failed.
+    assert result.used_openmp_link is True, (
+        "used_openmp_link must reflect the successful link, not be zeroed "
+        "by the os.replace failure"
+    )
+    assert result.used_openmp is True

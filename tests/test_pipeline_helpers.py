@@ -72,6 +72,29 @@ class TestMemoryPreflightStreaming:
 
         assert calls == [(1000, 50_000, 3)]
 
+    def test_streaming_check_memory_false_logs_skip(self, tmp_path: Path) -> None:
+        """Streaming path with check_memory=False must log the skip with the
+        ``(streaming)`` label so the log stream shows why no preflight ran.
+        Paired with the batch counterpart in TestMemoryPreflightBatch.
+        """
+        from loguru import logger
+
+        runner = _make_runner(tmp_path, check_memory=False)
+
+        records: list[str] = []
+        handler_id = logger.add(lambda m: records.append(str(m)), level="INFO")
+        try:
+            result = runner.check_memory_requirements(
+                n_samples=1000, n_snps=50_000, n_cvt=3
+            )
+        finally:
+            logger.remove(handler_id)
+
+        assert result is None
+        assert any("Memory preflight skipped (streaming)" in r for r in records), (
+            f"streaming skip must log the streaming label; got {records!r}"
+        )
+
 
 @pytest.mark.tier0
 class TestMemoryPreflightBatch:
@@ -80,6 +103,13 @@ class TestMemoryPreflightBatch:
     def test_check_memory_false_short_circuits(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """When check_memory=False the estimator must not run AND the skip
+        must be logged — the log is the only observable signal that the
+        preflight was intentionally bypassed (closes the silent-skip
+        asymmetry between batch and streaming).
+        """
+        from loguru import logger
+
         runner = _make_runner(tmp_path, check_memory=False)
         called = False
 
@@ -90,9 +120,21 @@ class TestMemoryPreflightBatch:
         monkeypatch.setattr("jamma.core.memory.estimate_lmm_memory", fake_estimate)
         plan = ExecutionPlan(backend="numpy", mode="batch", reason="test")
 
-        runner._memory_preflight(plan, n_valid=1000, n_snps=100, n_cvt=1)
+        records: list[str] = []
+        handler_id = logger.add(lambda m: records.append(str(m)), level="INFO")
+        try:
+            runner._memory_preflight(plan, n_valid=1000, n_snps=100, n_cvt=1)
+        finally:
+            logger.remove(handler_id)
 
         assert not called, "estimator must not run when check_memory=False"
+        assert any("Memory preflight skipped" in r for r in records), (
+            f"batch skip must log intent; got {records!r}"
+        )
+        # Batch log must include the runner_name, not the literal "streaming".
+        assert any("numpy" in r for r in records if "Memory preflight" in r), (
+            f"batch skip log must include runner name; got {records!r}"
+        )
 
     def test_budget_exceeded_raises_before_sufficiency_check(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -142,12 +142,10 @@ except ImportError as _exc:
             label="jlinalg",
         )
     except (ImportError, OSError) as _recompile_exc:
-        import sys as _sys
-
-        print(
+        warnings.warn(
             f"jlinalg auto-recompile skipped: "
             f"{type(_recompile_exc).__name__}: {_recompile_exc}",
-            file=_sys.stderr,
+            stacklevel=2,
         )
 
     if _recompiled:
@@ -184,12 +182,10 @@ except ImportError as _exc:
 
             HAS_C_EXTENSION: bool = True
         except (ImportError, OSError) as _retry_exc:
-            import sys as _sys
-
-            print(
+            warnings.warn(
                 f"jlinalg recompiled but import still failed: "
                 f"{type(_retry_exc).__name__}: {_retry_exc}",
-                file=_sys.stderr,
+                stacklevel=2,
             )
 
 if not HAS_C_EXTENSION:

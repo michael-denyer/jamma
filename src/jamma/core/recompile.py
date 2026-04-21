@@ -209,6 +209,16 @@ def auto_recompile_c_extension(
         # Re-check after acquiring the lock — a sibling process may have
         # already recompiled while we were blocked. If the import now
         # succeeds, skip the redundant build.
+        #
+        # Gate on ``sys_module_key not in sys.modules`` deliberately:
+        #   * auto-recompile callers got here via ``except ImportError``,
+        #     so the key is NOT in sys.modules and we probe for a fresh
+        #     sibling build.
+        #   * dev-mode callers may have a stale cached module in
+        #     sys.modules (e.g. after a manual ``importlib.reload``
+        #     that failed). A naked ``import_module`` there would return
+        #     the cached stale object and we would skip the rebuild the
+        #     caller explicitly asked for.
         if sys_module_key not in sys.modules:
             try:
                 importlib.import_module(sys_module_key)

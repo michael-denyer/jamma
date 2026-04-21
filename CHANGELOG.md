@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.2.1] - 2026-04-21
+
+### Fixed
+
+- Restore `#define _GNU_SOURCE` at the top of
+  `src/jamma/jlinalg/src/blas_dispatch.c`. The BLIS strip in 5.2.0
+  removed the define along with the `dladdr` scaffolding that
+  originally motivated it, but two surviving `RTLD_DEFAULT` call sites
+  silently relied on it too. `RTLD_DEFAULT` is exposed by glibc's
+  `<dlfcn.h>` only under `_GNU_SOURCE`; the standard manylinux image
+  happens to enable it via default CFLAGS, but the AVX2 manylinux
+  image (gcc-toolset-14) does not — so 5.2.0 wheel builds failed on
+  both Linux jobs and no wheels reached PyPI. 5.2.0 should be
+  considered unreleased; install 5.2.1 directly.
+
 ## [5.2.0] - 2026-04-21
 
 ### Added

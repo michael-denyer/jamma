@@ -18,6 +18,19 @@
  * blas_dispatch_init() returns 0 immediately (no external dispatch).
  */
 
+/* _GNU_SOURCE required on glibc for RTLD_DEFAULT in <dlfcn.h>. Must be
+ * defined before any system headers so feature-test macro selection is
+ * consistent across the translation unit. macOS's <dlfcn.h> exposes
+ * RTLD_DEFAULT unconditionally; the standard manylinux baseline image
+ * happens to enable it via its default CFLAGS, but the AVX2 manylinux
+ * image (gcc-toolset-14) does not — the define here makes the build
+ * portable regardless of base image. (The BLIS strip removed this
+ * define along with the dladdr usage that originally motivated it; the
+ * RTLD_DEFAULT usage remained and silently relied on base-image
+ * defaults.)
+ */
+#define _GNU_SOURCE
+
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>

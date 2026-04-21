@@ -7,19 +7,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.2.0] - 2026-04-21
+
+### Added
+
+- **Build-support consolidation**: new internal `jamma._build_support`
+  package (`compile_and_link.py`, `openmp_detect.py`, `find_compiler.py`)
+  is the single source of truth for compile flags, source lists, and
+  link flags used by `hatch_build.py` (PEP 517 wheel path),
+  `_compile_jlinalg.py` and `_compile_accel.py` (dev-mode and runtime
+  recompile entry points), and the `jamma.core.recompile` ABI-mismatch
+  shim. Every bare compile flag (`-O3`, `-fno-fast-math`, `-fopenmp`,
+  etc.) now lives in one file; two pre-commit hooks
+  (`check-compile-flag-literals.py`, `verify_compile_invocations_match.py`)
+  enforce this.
+- **Runtime recompile hardening**: new `jamma.core.recompile` shim uses
+  a file-lock + atomic `os.replace` to serialize concurrent recompiles
+  (pytest-xdist workers, parallel Databricks jobs, multiple notebook
+  kernels) so they no longer race on the same `.so` path and produce a
+  corrupted file. The `_compile_accel` path now verifies the freshly
+  compiled `.so` actually imports before returning success — a missing
+  export or bad RPATH previously let the recompile report success with
+  an unusable extension.
+- **Stale C extension drift detection**: new `check_c_extension_freshness.py`
+  pre-push hook detects when a committed `.so` is older than its source,
+  preventing pushes that would ship stale binaries.
+- **CI/lint discipline**: new pre-commit hooks `check-quiet-flags.py`
+  (bans `-q` / `--silent` / `--quiet` and pre-commit skip flags in
+  committed code), `check-test-timeouts.py` (flags unjustified long
+  pytest timeouts), and `ruff BLE001` (bans blind `except Exception`).
+  New `package-smoke` CI job inspects sdist + wheel contents to prevent
+  missing `_build_support` files from shipping.
+
+### Changed
+
+- **Pipeline refactor**: `PipelineRunner._run_inner` split into
+  `_memory_preflight`, `_load_phenotypes_and_intersect_masks`, and
+  `_run_loco` helpers. Shared LMM compute helpers promoted to public
+  names (`build_uab_tab`, `_build_results`, etc.) to support the
+  extracted dispatch-path selector.
+- **LMM dispatch extracted** from `run_lmm_association_numpy` into
+  `src/jamma/lmm/dispatch.py` — the ~60-line logic for selecting
+  between fused/split/general kernels by `n_cvt × lmm_mode ×
+  kernel-availability` is now independently unit-testable.
+- **OpenMP downgrade visibility**: runtime recompile retries that fall
+  back to single-threaded execution now surface a `warnings.warn()`
+  rather than disappearing silently (closes the gap between build-time
+  and runtime diagnostics).
+- **Documentation**: WHY_JAMMA tolerance table disambiguates golden-section
+  vs Brent optimizer attribution. Mermaid diagrams across
+  `README.md`/`docs/` migrated from literal `\n` (which renders as
+  backslash-n) to `<br/>` for proper line breaks. Build-plumbing
+  references refreshed to match the `_build_support` consolidation.
+- **CI**: Node runtime bumped from 22 to 24. `michael-denyer/numpy-mkl`
+  references bumped to 2.4.4. Dependabot SHA-pinning now covers
+  `github-actions` ecosystem.
+
+### Fixed
+
+- **AccelImport retry-path drift** (latent bug): the post-auto-recompile
+  unpack in `compute_numpy.py` had 33 targets vs the 35-field
+  `AccelImport` NamedTuple, missing `compute_score_split_general_c` and
+  `compute_lrt_split_general_c`. A successful runtime recompile would
+  have raised `ValueError: too many values to unpack` instead of
+  recovering. Both unpack sites replaced with field-by-field binds so
+  they cannot drift.
+- **`_compile_accel` reported false success** (latent bug): returned
+  True on compile+link without verifying the produced `.so` imports,
+  so bad RPATH / missing runtime lib / ABI mismatch let
+  `python -m jamma.lmm._compile_accel` exit 0 and `auto_recompile`
+  report success while the real `import` still raised. Import
+  verification re-added (mirrors `_compile_jlinalg`).
+- **`jlinalg` recompile diagnostics invisible on Databricks**: replaced
+  two `print(..., file=sys.stderr)` blocks with `warnings.warn()` so
+  recompile-skipped / recompile-but-import-failed messages route
+  through the same channel as the surrounding `warnings` and aren't
+  swallowed by notebook stderr capture.
+- **`_build_support/__init__.py` docstring** described a non-existent
+  `sys.path.insert` loader; rewritten to match the actual
+  `importlib.util.spec_from_file_location` + `jamma_build_support.*`
+  namespace mechanism used by `hatch_build.py`.
+- Runtime recompile lock-file paths (`*.so.lock`) now gitignored to
+  prevent accidental commits.
+- Batch LMM memory preflight threads `n_cvt` through
+  `check_memory_before_run` so multi-covariate runs don't silently pass
+  a single-covariate preflight and OOM at the real allocation.
+
 ### Removed
 
-- BLIS dispatch path from `src/jamma/jlinalg/src/blas_dispatch.c`. The
-  `discover_bundled_blis()` discovery routine, the `is_blis` parameter
-  threaded through six resolver functions, and the co-located
-  `libblis-firestorm.dylib` binary (never tracked in git, never shipped
-  in any wheel) are gone. jlinalg now dispatches to vendor ILP64
-  BLAS/LAPACK (Accelerate on macOS 13.3+, MKL-ILP64 on Linux/Windows via
-  the `michael-denyer/numpy-mkl` index) with NumPy fallback otherwise —
-  no middle tier. BLIS was BLAS-only; eigh fell through to NumPy anyway,
-  so the dispatch path offered no net speedup on any active install.
-  Net: `-184 / +49` lines in `blas_dispatch.c`, plus related cleanup
-  across `jlinalg.h`, two tests, and two core docstrings.
+- **BLIS dispatch path** from `src/jamma/jlinalg/src/blas_dispatch.c`.
+  The `discover_bundled_blis()` discovery routine, the `is_blis`
+  parameter threaded through six resolver functions, and the
+  co-located `libblis-firestorm.dylib` binary (never tracked in git,
+  never shipped in any wheel) are gone. jlinalg now dispatches to
+  vendor ILP64 BLAS/LAPACK (Accelerate on macOS 13.3+, MKL-ILP64 on
+  Linux/Windows via the `michael-denyer/numpy-mkl` index) with NumPy
+  fallback otherwise — no middle tier. BLIS was BLAS-only; eigh fell
+  through to NumPy anyway, so the dispatch path offered no net speedup
+  on any active install. Net: `-184 / +49` lines in `blas_dispatch.c`,
+  plus related cleanup across `jlinalg.h`, two tests, and two core
+  docstrings.
+- Dead LP64 branch in `jlinalg.select_best_backend` and stale legacy
+  fields from `jlinalg_eigh_status_t` — jlinalg was never wiring LP64
+  backends anyway; the dead code inflated the API surface.
+- Orphaned `_compile_utils.py` and legacy `openmp_detect.py` in
+  `jamma.core` (moved to `jamma._build_support`).
+- Redundant `auto_recompile` re-export shim in `jamma.lmm`.
 
 ## [5.1.6] - 2026-04-15
 

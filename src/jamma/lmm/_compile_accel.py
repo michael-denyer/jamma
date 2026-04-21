@@ -224,6 +224,31 @@ def compile_extension(
     for k in [k for k in sys.modules if k.startswith("jamma.lmm._lmm_accel")]:
         del sys.modules[k]
 
+    # Verify the compiled extension actually imports. A successful
+    # compile+link does not guarantee a usable module — bad RPATH,
+    # missing runtime library, ABI mismatch with the host numpy, or a
+    # missing C symbol can let the link pass but the `import` fail.
+    # Without this check, `python -m jamma.lmm._compile_accel` exits 0
+    # and `auto_recompile_c_extension` reports success even though the
+    # subsequent `from jamma.lmm._lmm_accel import ...` still raises.
+    # Mirrors the verification in `jamma.jlinalg._compile_jlinalg`.
+    try:
+        from jamma.lmm._lmm_accel import compute_lmm_batch_c as _probe  # noqa: F401
+    except ImportError as e:
+        _print(f"ERROR: compiled but import failed (ImportError): {e}")
+        _print("  This usually means ABI mismatch or missing shared libraries.")
+        return False
+    except OSError as e:
+        _print(f"ERROR: compiled but import failed (OSError): {e}")
+        _print("  Check that all shared library dependencies are available.")
+        return False
+    except Exception as e:  # noqa: BLE001 — last-resort diagnostic: ImportError and OSError handled above; anything else must surface with a traceback rather than propagate out of a compile helper
+        import traceback
+
+        _print(f"ERROR: compiled but import failed ({type(e).__name__}): {e}")
+        _print(traceback.format_exc())
+        return False
+
     omp_status = "OpenMP" if result.used_openmp else "single-threaded"
     _print(f"_lmm_accel extension compiled: {out} ({omp_status})")
     return True

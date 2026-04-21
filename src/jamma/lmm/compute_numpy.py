@@ -491,83 +491,93 @@ def _auto_recompile() -> bool:
     )
 
 
-# First attempt
-(
-    _C_ACCEL_AVAILABLE,
-    _C_SPLIT_AVAILABLE,
-    _C_GENERAL_AVAILABLE,
-    _C_HAS_OPENMP,
-    _C_MODE4_AVAILABLE,
-    _compute_lmm_batch_c,
-    _compute_lmm_batch_split_c,
-    _create_workspace_split_c,
-    _compute_lmm_chunk_split_c,
-    _create_workspace_general_c,
-    _compute_lmm_chunk_general_c,
-    _compute_score_batch_c,
-    _compute_lrt_batch_c,
-    _create_workspace_mode4_split_c,
-    _compute_mode4_chunk_split_c,
-    _compute_score_batch_general_c,
-    _compute_lrt_batch_general_c,
-    _compute_score_split_c,
-    _compute_lrt_split_c,
-    _compute_score_split_general_c,
-    _compute_lrt_split_general_c,
-    _compute_score_fused_c,
-    _compute_lrt_fused_c,
-    _create_workspace_fused_c,
-    _compute_lmm_chunk_fused_c,
-    _create_workspace_mode4_fused_c,
-    _compute_mode4_chunk_fused_c,
-    _create_workspace_fused_general_c,
-    _compute_lmm_chunk_fused_general_c,
-    _create_workspace_mode4_fused_general_c,
-    _compute_mode4_chunk_fused_general_c,
-    _create_workspace_score_fused_c,
-    _compute_score_fused_ws_c,
-    _create_workspace_lrt_fused_c,
-    _compute_lrt_fused_ws_c,
-) = _try_import_accel()
+# First attempt. Bind via a single assignment from AccelImport fields —
+# duplicating a 35-element positional unpack for the retry path is
+# exactly how the two branches drifted out of sync historically (two
+# fields got dropped from the retry unpack, so a successful auto-recompile
+# raised ValueError instead of recovering).
+_accel = _try_import_accel()
+_C_ACCEL_AVAILABLE = _accel.accel_available
+_C_SPLIT_AVAILABLE = _accel.split_available
+_C_GENERAL_AVAILABLE = _accel.general_available
+_C_HAS_OPENMP = _accel.has_openmp
+_C_MODE4_AVAILABLE = _accel.mode4_available
+_compute_lmm_batch_c = _accel.compute_batch_c
+_compute_lmm_batch_split_c = _accel.compute_batch_split_c
+_create_workspace_split_c = _accel.create_workspace_split_c
+_compute_lmm_chunk_split_c = _accel.compute_lmm_chunk_split_c
+_create_workspace_general_c = _accel.create_workspace_general_c
+_compute_lmm_chunk_general_c = _accel.compute_lmm_chunk_general_c
+_compute_score_batch_c = _accel.compute_score_batch_c
+_compute_lrt_batch_c = _accel.compute_lrt_batch_c
+_create_workspace_mode4_split_c = _accel.create_workspace_mode4_split_c
+_compute_mode4_chunk_split_c = _accel.compute_mode4_chunk_split_c
+_compute_score_batch_general_c = _accel.compute_score_batch_general_c
+_compute_lrt_batch_general_c = _accel.compute_lrt_batch_general_c
+_compute_score_split_c = _accel.compute_score_split_c
+_compute_lrt_split_c = _accel.compute_lrt_split_c
+_compute_score_split_general_c = _accel.compute_score_split_general_c
+_compute_lrt_split_general_c = _accel.compute_lrt_split_general_c
+_compute_score_fused_c = _accel.compute_score_fused_c
+_compute_lrt_fused_c = _accel.compute_lrt_fused_c
+_create_workspace_fused_c = _accel.create_workspace_fused_c
+_compute_lmm_chunk_fused_c = _accel.compute_lmm_chunk_fused_c
+_create_workspace_mode4_fused_c = _accel.create_workspace_mode4_fused_c
+_compute_mode4_chunk_fused_c = _accel.compute_mode4_chunk_fused_c
+_create_workspace_fused_general_c = _accel.create_workspace_fused_general_c
+_compute_lmm_chunk_fused_general_c = _accel.compute_lmm_chunk_fused_general_c
+_create_workspace_mode4_fused_general_c = _accel.create_workspace_mode4_fused_general_c
+_compute_mode4_chunk_fused_general_c = _accel.compute_mode4_chunk_fused_general_c
+_create_workspace_score_fused_c = _accel.create_workspace_score_fused_c
+_compute_score_fused_ws_c = _accel.compute_score_fused_ws_c
+_create_workspace_lrt_fused_c = _accel.create_workspace_lrt_fused_c
+_compute_lrt_fused_ws_c = _accel.compute_lrt_fused_ws_c
 
 if not _C_ACCEL_AVAILABLE:
-    # Auto-recompile and retry once
+    # Auto-recompile and retry once. Re-run the same field-by-field
+    # bind from AccelImport so the retry path cannot drift from the
+    # initial-load path.
     if _auto_recompile():
-        (
-            _C_ACCEL_AVAILABLE,
-            _C_SPLIT_AVAILABLE,
-            _C_GENERAL_AVAILABLE,
-            _C_HAS_OPENMP,
-            _C_MODE4_AVAILABLE,
-            _compute_lmm_batch_c,
-            _compute_lmm_batch_split_c,
-            _create_workspace_split_c,
-            _compute_lmm_chunk_split_c,
-            _create_workspace_general_c,
-            _compute_lmm_chunk_general_c,
-            _compute_score_batch_c,
-            _compute_lrt_batch_c,
-            _create_workspace_mode4_split_c,
-            _compute_mode4_chunk_split_c,
-            _compute_score_batch_general_c,
-            _compute_lrt_batch_general_c,
-            _compute_score_split_c,
-            _compute_lrt_split_c,
-            _compute_score_fused_c,
-            _compute_lrt_fused_c,
-            _create_workspace_fused_c,
-            _compute_lmm_chunk_fused_c,
-            _create_workspace_mode4_fused_c,
-            _compute_mode4_chunk_fused_c,
-            _create_workspace_fused_general_c,
-            _compute_lmm_chunk_fused_general_c,
-            _create_workspace_mode4_fused_general_c,
-            _compute_mode4_chunk_fused_general_c,
-            _create_workspace_score_fused_c,
-            _compute_score_fused_ws_c,
-            _create_workspace_lrt_fused_c,
-            _compute_lrt_fused_ws_c,
-        ) = _try_import_accel()
+        _accel = _try_import_accel()
+        _C_ACCEL_AVAILABLE = _accel.accel_available
+        _C_SPLIT_AVAILABLE = _accel.split_available
+        _C_GENERAL_AVAILABLE = _accel.general_available
+        _C_HAS_OPENMP = _accel.has_openmp
+        _C_MODE4_AVAILABLE = _accel.mode4_available
+        _compute_lmm_batch_c = _accel.compute_batch_c
+        _compute_lmm_batch_split_c = _accel.compute_batch_split_c
+        _create_workspace_split_c = _accel.create_workspace_split_c
+        _compute_lmm_chunk_split_c = _accel.compute_lmm_chunk_split_c
+        _create_workspace_general_c = _accel.create_workspace_general_c
+        _compute_lmm_chunk_general_c = _accel.compute_lmm_chunk_general_c
+        _compute_score_batch_c = _accel.compute_score_batch_c
+        _compute_lrt_batch_c = _accel.compute_lrt_batch_c
+        _create_workspace_mode4_split_c = _accel.create_workspace_mode4_split_c
+        _compute_mode4_chunk_split_c = _accel.compute_mode4_chunk_split_c
+        _compute_score_batch_general_c = _accel.compute_score_batch_general_c
+        _compute_lrt_batch_general_c = _accel.compute_lrt_batch_general_c
+        _compute_score_split_c = _accel.compute_score_split_c
+        _compute_lrt_split_c = _accel.compute_lrt_split_c
+        _compute_score_split_general_c = _accel.compute_score_split_general_c
+        _compute_lrt_split_general_c = _accel.compute_lrt_split_general_c
+        _compute_score_fused_c = _accel.compute_score_fused_c
+        _compute_lrt_fused_c = _accel.compute_lrt_fused_c
+        _create_workspace_fused_c = _accel.create_workspace_fused_c
+        _compute_lmm_chunk_fused_c = _accel.compute_lmm_chunk_fused_c
+        _create_workspace_mode4_fused_c = _accel.create_workspace_mode4_fused_c
+        _compute_mode4_chunk_fused_c = _accel.compute_mode4_chunk_fused_c
+        _create_workspace_fused_general_c = _accel.create_workspace_fused_general_c
+        _compute_lmm_chunk_fused_general_c = _accel.compute_lmm_chunk_fused_general_c
+        _create_workspace_mode4_fused_general_c = (
+            _accel.create_workspace_mode4_fused_general_c
+        )
+        _compute_mode4_chunk_fused_general_c = (
+            _accel.compute_mode4_chunk_fused_general_c
+        )
+        _create_workspace_score_fused_c = _accel.create_workspace_score_fused_c
+        _compute_score_fused_ws_c = _accel.compute_score_fused_ws_c
+        _create_workspace_lrt_fused_c = _accel.create_workspace_lrt_fused_c
+        _compute_lrt_fused_ws_c = _accel.compute_lrt_fused_ws_c
 
     if not _C_ACCEL_AVAILABLE:
         from loguru import logger as _logger

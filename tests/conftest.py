@@ -2,11 +2,56 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Warn at session start if any C extension is stale vs its source.
+
+    The editable install picks up Python source edits automatically, but C
+    source edits require an explicit rebuild. Without this check, an edit
+    to e.g. ``_lmm_accel.c`` would be silently ignored — tests run against
+    the old compiled .so. We warn rather than fail so the session still
+    starts; pre-push hook (scripts/check_c_extension_freshness.py) is the
+    blocking gate.
+    """
+    del config
+    # Import guarded: script lives outside the package and may be missing
+    # in some install layouts (e.g. a sdist-only install). Missing script
+    # is not a test failure — just skip the check.
+    script_dir = Path(__file__).resolve().parent.parent / "scripts"
+    if not (script_dir / "check_c_extension_freshness.py").exists():
+        return
+    sys.path.insert(0, str(script_dir))
+    try:
+        import check_c_extension_freshness as freshness
+    except ImportError:
+        return
+    finally:
+        # Don't pollute sys.path past this function.
+        if sys.path and sys.path[0] == str(script_dir):
+            sys.path.pop(0)
+
+    stale = [r for r in freshness.check_all() if r.is_stale]
+    if not stale:
+        return
+    for r in stale:
+        assert r.newest_source is not None  # guaranteed by is_stale
+        sys.stderr.write(
+            f"\n\033[33m[jamma] WARNING: C extension '{r.spec.label}' is "
+            f"stale relative to {r.newest_source.name} — tests will run "
+            f"against the OLD compiled .so. Rebuild with:\n"
+            f"    {r.spec.rebuild_command}\033[0m\n"
+        )
+    sys.stderr.write(
+        "\033[33m[jamma] If this is unexpected, run "
+        "scripts/check_c_extension_freshness.py for full drift report.\033[0m\n\n"
+    )
 
 
 def load_phenotypes_from_fam(fam_path: Path) -> np.ndarray:

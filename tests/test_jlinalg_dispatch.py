@@ -9,10 +9,13 @@ import pytest
 
 from jamma.jlinalg import HAS_C_EXTENSION, blas_backend, blas_is_ilp64
 
-pytestmark = pytest.mark.skipif(
-    not HAS_C_EXTENSION,
-    reason="jlinalg C extension not compiled",
-)
+pytestmark = [
+    pytest.mark.tier0,
+    pytest.mark.skipif(
+        not HAS_C_EXTENSION,
+        reason="jlinalg C extension not compiled",
+    ),
+]
 
 
 class TestBlasBackend:

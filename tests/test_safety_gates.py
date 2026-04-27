@@ -19,8 +19,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 
 from jamma.core.memory import MemorySnapshot
+
+pytestmark = pytest.mark.tier0
 
 
 def _make_memory_snapshot(available_gb: float = 1000.0) -> MemorySnapshot:
@@ -221,11 +224,17 @@ class TestLP64OverflowWarning:
             blas_has_dsyevr=False,
         )
 
+        # Patch eigh at the jamma import site (not numpy globally) and have
+        # it short-circuit with a RuntimeError. The assertion only checks the
+        # warning-routing branch, so the eigh return value is irrelevant —
+        # short-circuiting is safer than fabricating a fake numerical result.
         with (
             patch.object(eigen, "jlinalg", fake_jl),
             patch.object(eigen, "log_memory_snapshot", return_value=snapshot),
             patch.dict("os.environ", {"JLINALG_NO_VENDOR_LAPACK": "1"}),
-            patch("numpy.linalg.eigh", return_value=(np.ones(50_000), np.eye(3))),
+            patch.object(
+                eigen.np.linalg, "eigh", side_effect=RuntimeError("test stub")
+            ),
             warnings.catch_warnings(record=True) as w,
         ):
             warnings.simplefilter("always")

@@ -9,6 +9,56 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pytest
 
+# Tier markers every test file must declare (per-test or via pytestmark).
+# Mirrors the markers list in pyproject.toml [tool.pytest.ini_options].
+# See docs/TESTING.md §1.6 for the policy.
+_REQUIRED_TIER_MARKERS = frozenset({"tier0", "tier1", "tier2", "slow", "benchmark"})
+
+# Files exempt from the tier-marker requirement. Keep this list empty if
+# possible; the right fix is almost always to add a marker, not an exemption.
+_TIER_MARKER_EXEMPT_FILES: frozenset[str] = frozenset()
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Fail collection if any test file has zero tier/slow/benchmark markers.
+
+    Enforces docs/TESTING.md §1.6: every test file must declare at least
+    one tier marker, either per-test or via module-level ``pytestmark``.
+    This catches files that silently default into the tier0+tier1 CI run
+    without anyone classifying them.
+
+    Skipped on xdist workers — they only see a partition of the items, so
+    a file with markers can appear marker-less from a single worker's view.
+    The controller process sees the full collection and runs the check.
+    """
+    if hasattr(config, "workerinput"):
+        return  # xdist worker: skip, controller will run the check
+    files_with_marker: dict[str, bool] = {}
+    for item in items:
+        path = str(item.path) if hasattr(item, "path") else str(item.fspath)
+        has_required = any(
+            m.name in _REQUIRED_TIER_MARKERS for m in item.iter_markers()
+        )
+        files_with_marker[path] = files_with_marker.get(path, False) or has_required
+
+    missing = [
+        path
+        for path, ok in files_with_marker.items()
+        if not ok and Path(path).name not in _TIER_MARKER_EXEMPT_FILES
+    ]
+    if missing:
+        rel = sorted(Path(p).relative_to(Path(__file__).parent.parent) for p in missing)
+        listing = "\n  ".join(str(p) for p in rel)
+        raise pytest.UsageError(
+            "The following test files have no tier marker "
+            "(tier0/tier1/tier2/slow/benchmark):\n  "
+            f"{listing}\n\n"
+            "Add `pytestmark = pytest.mark.tier0` (or per-test markers). "
+            "See docs/TESTING.md §1.6."
+        )
+
 
 def pytest_configure(config: pytest.Config) -> None:
     """Warn at session start if any C extension is stale vs its source.

@@ -6,6 +6,8 @@ from numpy.testing import assert_allclose
 
 from jamma.jlinalg import HAS_C_EXTENSION, compute_snp_stats_chunk
 
+pytestmark = pytest.mark.tier0
+
 
 def _python_reference(data, compute_hwe=False):
     """Pure-Python reference implementation for validation.

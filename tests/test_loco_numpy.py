@@ -1,7 +1,7 @@
 """NumPy LOCO tests.
 
 Related LOCO test files:
-- test_loco_bugs.py: Regression tests for kinship aliasing, ordering, cleanup
+- test_loco_orchestration.py: Kinship aliasing, biological ordering, cleanup
 - test_loco_eigen_cache.py: LOCO eigen cache write/read round-trip
 - legacy/tests/test_loco.py: Archived cross-backend parity tests
 """

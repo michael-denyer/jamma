@@ -105,6 +105,12 @@ repos:
         language: system
         files: ^tests/.*\.py$
         pass_filenames: false
+      - id: check-forbidden-patches
+        name: ban patching numerical functions and internal jamma collaborators
+        entry: scripts/check-forbidden-patches.py
+        language: system
+        files: ^tests/.*\.py$
+        pass_filenames: false
       - id: no-compile-flag-literals-outside-build-support
         name: ban compile-flag literals outside jamma._build_support
         entry: scripts/check-compile-flag-literals.py

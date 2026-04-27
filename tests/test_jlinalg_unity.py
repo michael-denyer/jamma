@@ -19,6 +19,8 @@ import pytest
 
 from jamma.jlinalg import HAS_C_EXTENSION, blas_has_dsyevd, blas_has_dsyevr
 
+pytestmark = pytest.mark.tier0
+
 
 def _python_env() -> dict[str, str]:
     """Build environment dict with PYTHONHOME/PYTHONPATH for the test binary.

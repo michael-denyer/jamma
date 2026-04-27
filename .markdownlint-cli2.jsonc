@@ -33,7 +33,14 @@
     // MD051: link fragments must exist in the target file. Lychee
     // handles anchor validation more reliably — disable here to avoid
     // double-reporting noise.
-    "MD051": false
+    "MD051": false,
+
+    // MD060: table column style ("compact" requires no spaces around
+    // pipes). Disabled because we use the more readable "leading_and_trailing"
+    // style with spaces — `| col | col |` not `|col|col|`. Both are valid
+    // GitHub-flavored markdown; the rule only enforces consistency with
+    // whichever style appears first in the file.
+    "MD060": false
   },
   "globs": [
     "**/*.md"

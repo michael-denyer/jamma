@@ -26,34 +26,9 @@ from tests.conftest import load_phenotypes_from_fam
 # ---------------------------------------------------------------------------
 # Fake infrastructure
 # ---------------------------------------------------------------------------
-
-
-class FakeAssocWriter:
-    """In-memory fake for IncrementalAssocWriter.
-
-    Captures write_arrays_batch calls so tests can assert on call count and
-    arguments without MagicMock.  Unlike MagicMock, accessing an attribute
-    that doesn't exist raises AttributeError — detecting interface drift.
-    """
-
-    def __init__(self) -> None:
-        self.batches: list[tuple] = []
-
-    @property
-    def call_count(self) -> int:
-        return len(self.batches)
-
-    def write_arrays_batch(
-        self,
-        lmm_mode: int,
-        snp_indices: np.ndarray,
-        snp_info: list,
-        afs: np.ndarray,
-        miss_counts: np.ndarray,
-        arrays: dict[str, np.ndarray],
-    ) -> None:
-        self.batches.append((lmm_mode, snp_indices, snp_info, afs, miss_counts, arrays))
-
+# FakeAssocWriter has moved to tests/fakes/. Re-exported here so existing
+# imports inside this file (and any external imports) keep working.
+from tests.fakes import FakeAssocWriter
 
 # ---------------------------------------------------------------------------
 # Tolerance configurations
@@ -393,7 +368,7 @@ def test_chunk_size_mode4_fused_uses_4col():
     )
 
 
-@pytest.mark.tier1
+@pytest.mark.tier0
 def test_runner_mode4_uses_fused_dispatch():
     """Mode 4 with C extension uses fused dispatch, not compose fallback."""
     from unittest.mock import patch
@@ -440,6 +415,7 @@ _SYNTHETIC_MODE_REFS = [
 ]
 
 
+@pytest.mark.tier1
 @pytest.mark.parametrize("lmm_mode,reference_path", _SYNTHETIC_MODE_REFS)
 def test_numpy_runner_synthetic(synthetic_data, lmm_mode, reference_path):
     """NumPy runner matches GEMMA reference on gemma_synthetic for each mode."""
@@ -515,6 +491,7 @@ _SYNTHETIC_COVAR_MODE_REFS = [
 ]
 
 
+@pytest.mark.tier1
 @pytest.mark.parametrize("lmm_mode,reference_path", _SYNTHETIC_COVAR_MODE_REFS)
 def test_numpy_runner_covar_synthetic(
     synthetic_data_with_covariates, lmm_mode, reference_path

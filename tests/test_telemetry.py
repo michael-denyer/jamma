@@ -11,6 +11,8 @@ from unittest.mock import patch
 
 import pytest
 
+pytestmark = pytest.mark.tier0
+
 # ---------------------------------------------------------------------------
 # TEL-01: append_benchmark_record() creates file and writes valid JSON
 # ---------------------------------------------------------------------------

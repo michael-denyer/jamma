@@ -33,6 +33,9 @@ from jamma.jlinalg import (
     set_n_threads,
 )
 
+# @pytest.mark.slow on individual tests still applies.
+pytestmark = pytest.mark.tier0
+
 # True when the C extension can actually run eigh (has vendor DSYEVD or DSYEVR).
 _HAS_VENDOR_LAPACK = HAS_C_EXTENSION and (blas_has_dsyevd or blas_has_dsyevr)
 

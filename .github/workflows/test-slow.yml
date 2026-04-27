@@ -39,4 +39,4 @@ jobs:
           uv run python -m jamma.jlinalg._compile_jlinalg
 
       - name: Run slow and tier2 tests
-        run: uv run pytest -m "(tier2 or slow) and not tier3" -v -o 'addopts=' --no-cov
+        run: uv run pytest -m "tier2 or slow" -v -o 'addopts=' --no-cov

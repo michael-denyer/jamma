@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
+
 from jamma.core.backend import format_pipeline_banner
+
+pytestmark = pytest.mark.tier0
 
 
 class TestFormatPipelineBanner:

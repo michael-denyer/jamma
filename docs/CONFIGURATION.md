@@ -129,14 +129,14 @@ test use only.
 ```toml
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-n 3 --randomly-seed=last --benchmark-skip -m 'not slow and not tier2 and not tier3' --no-cov"
+addopts = "-n 3 --randomly-seed=last --benchmark-skip --timeout=120 -m 'not slow and not tier2' --no-cov"
 ```
 
 Key settings:
 
 - `-n 3` — parallelism capped at 3 workers. Do not override with `-n auto`; it spawns too many workers and contaminates BLAS-threaded tests.
 - `--randomly-seed=last` — repeatable random ordering for debugging.
-- Tests are tiered: `tier0` (fast unit), `tier1` (GEMMA parity), `tier2`/`tier3` (scale tests, excluded from CI by default).
+- Tests are tiered: `tier0` (fast unit), `tier1` (GEMMA parity), `tier2` (scale, runs in `test-slow.yml`).
 
 ### Ruff linter and formatter
 

@@ -1,284 +1,300 @@
 # Testing
 
-JAMMA uses pytest with parallel execution (`pytest-xdist`), test randomization
-(`pytest-randomly`), and property-based testing (`hypothesis`). Tests are organized
-into tiers to balance CI speed against thorough numerical validation.
+JAMMA's pytest suite balances CI speed against tight numerical parity with
+GEMMA. This document is split into three parts:
 
-## Test Framework and Setup
+1. **[Running tests](#1-running-tests)** — setup, commands, CI workflows.
+2. **[Test design rules](#2-test-design-rules)** — philosophy, mocking
+   policy, anti-patterns, when to skip.
+3. **[Suite map and current state](#3-suite-map-and-current-state)** —
+   what each subsystem's tests cover, plus a list of tests to improve or
+   fold.
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| `pytest` | `>=8.0.0` | Test runner |
-| `pytest-xdist` | `>=3.5.0` | Parallel test execution (`-n 3`) |
-| `pytest-randomly` | `>=3.15.0` | Test randomization to detect order dependencies |
-| `pytest-cov` | `>=4.0.0` | Coverage reporting |
-| `pytest-benchmark` | `>=5.0.0` | Microbenchmarks (run separately) |
-| `hypothesis` | `>=6.100.0` | Property-based tests |
-| `scipy` | `>=1.10.0` | Test-only dependency for `scipy.stats` (dev group only) |
+> **Source of truth.** The marker list, default `addopts`, and timeout live
+> in [`pyproject.toml`](../pyproject.toml) under
+> `[tool.pytest.ini_options]`. If anything here disagrees with that file,
+> `pyproject.toml` wins.
 
-**Important:** `scipy` is a dev-only dependency. It must never be added as a runtime
-dependency — installing scipy overwrites the ILP64 numpy build and breaks large-scale
-eigendecomposition. See `docs/ARCHITECTURE.md` for background.
+---
 
-Install all dev dependencies with:
+## 1. Running Tests
+
+### 1.1 Framework
+
+| Tool | Min version | Purpose |
+|------|-------------|---------|
+| `pytest` | `8.0.0` | Test runner |
+| `pytest-xdist` | `3.5.0` | Parallel execution (`-n 3`) |
+| `pytest-randomly` | `3.15.0` | Order randomization (`--randomly-seed=last`) |
+| `pytest-timeout` | `2.3.0` | Per-test cap (`--timeout=120`) |
+| `pytest-cov` | `4.0.0` | Local coverage (CI uses slipcover) |
+| `pytest-benchmark` | `5.0.0` | Microbenchmarks (run separately, `-n0`) |
+| `hypothesis` | `6.100.0` | Property-based tests |
+| `scipy` | `1.10.0` | **Test-only.** Used by `test_special.py` and `test_lmm_io_validation.py` for `scipy.stats` reference values |
+
+> **Never make `scipy` a runtime dependency.** It overwrites the ILP64
+> numpy build and breaks 100k+ sample eigendecomposition. Production code
+> uses the stdlib-only `jamma.special` module instead. New stat functions
+> go there first; reach for `scipy.stats` only to produce a reference value.
+
+### 1.2 Setup
 
 ```bash
 uv sync
-```
-
-C extensions must be compiled before running tests:
-
-```bash
 uv run python -m jamma.lmm._compile_accel
 uv run python -m jamma.jlinalg._compile_jlinalg
 ```
 
-## Running Tests
+`tests/conftest.py` warns at session start if any C extension is stale
+relative to its source. The pre-push hook
+(`scripts/check_c_extension_freshness.py`) is the blocking gate.
 
-### Default test run (tier0 + tier1, parallel)
-
-The default configuration in `pyproject.toml` runs fast and parity tests in parallel,
-skips benchmarks, and randomizes test order:
+### 1.3 Default test run
 
 ```bash
 uv run pytest tests/ -x
 ```
 
-This picks up `addopts` automatically:
-`-n 3 --randomly-seed=last --benchmark-skip -m 'not slow and not tier2 and not tier3' --no-cov`
+Picks up `addopts` from `pyproject.toml` automatically:
 
-**Never use `-n auto`** — it spawns too many workers and contaminates BLAS-threaded
-tests. Always use `-n 3` (or `-n0` for benchmarks).
-
-### Run by tier
-
-```bash
-# Fast unit tests only (~30s total)
-uv run pytest -m tier0 -x
-
-# Fast + GEMMA parity tests
-uv run pytest -m "tier0 or tier1" -x
-
-# Exclude slow/memory tests explicitly
-uv run pytest -m "not tier2" -x
-
-# Scale tests (run locally — requires large memory)
-uv run pytest -m tier2 -v -o 'addopts='
+```text
+-n 3 --randomly-seed=last --benchmark-skip --timeout=120
+-m 'not slow and not tier2' --no-cov
 ```
 
-### Run a single file or test
+**Never `-n auto`** — it spawns too many workers and contaminates
+BLAS-threaded tests. Use `-n 3` (or `-n0` for benchmarks).
 
-```bash
-uv run pytest tests/test_likelihood_numpy.py -x
-uv run pytest tests/test_kinship_validation.py -k "test_kinship_matches_gemma" -x
+### 1.4 The 120-second timeout
+
+Every test is killed at 120 seconds. Tier0 should finish in <5s, tier1 in
+<60s — the cap exists to catch accidental BLAS-on-100k-samples calls,
+deadlocks, and infinite loops.
+
+If a test legitimately needs longer:
+
+```python
+@pytest.mark.tier2
+@pytest.mark.timeout(600)
+def test_streaming_100k_samples(): ...
 ```
 
-### Reproduce a specific random order
+A test that needs `@pytest.mark.timeout(N)` for `N > 120` almost always
+needs `tier2`/`slow` too — it should not run under the default filter.
 
-```bash
-# --randomly-seed=last reuses the seed from the previous run (pyproject.toml default)
-uv run pytest tests/ -x
-
-# Specify an explicit seed
-uv run pytest tests/ --randomly-seed=12345
-
-# Disable randomization temporarily
-uv run pytest tests/ -p no:randomly
-```
-
-### Watch mode
-
-pytest-xdist does not include a built-in watch mode. Use `pytest-watch` or re-run
-manually during development.
-
-## Test Tier System
-
-JAMMA uses a three-tier system to balance CI speed with thorough validation.
+### 1.5 Tier system
 
 | Marker | Speed | Description | Runs in CI |
 |--------|-------|-------------|-----------|
-| `tier0` | < 5s each | Pure computation, no I/O, no GEMMA reference | Every push/PR |
-| `tier1` | < 60s each | Numerical parity against GEMMA reference fixtures | Every push/PR |
-| `tier2` | Minutes | Large sample counts (10k+), memory-constrained scenarios | On push to master (Slow Tests workflow) |
-| `tier3` | > 60s | Heavy scale tests, local only | Never in CI |
-| `slow` | — | Alias for tier2 | On push to master |
+| `tier0` | <5s each | Pure computation, no I/O, no GEMMA reference | Every push/PR |
+| `tier1` | <60s each | Numerical parity against GEMMA reference fixtures | Every push/PR |
+| `tier2` | Minutes | Large samples (10k+), memory-constrained scenarios | Slow Tests workflow |
+| `slow` | — | Independent slow marker — long but not memory-bound | Slow Tests workflow |
 | `benchmark` | — | `pytest-benchmark` microbenchmarks | Manually only |
 
-Markers are declared in `pyproject.toml` under `[tool.pytest.ini_options]`.
+> **`slow` is independent of `tier2`.** Earlier docs called it an alias; it
+> is not. The Slow Tests workflow runs `tier2 or slow`. Use `slow` when a
+> test is too long for the default suite but does not need the large-memory
+> CI runner that `tier2` implies.
 
-## Testing Strategy
+### 1.6 Mandatory tier marker
 
-### Test philosophy
-
-Tests validate **observable behavior** — outputs, exceptions, warnings, state changes —
-not internal implementation details. Never inspect source code with `inspect.getsource()`
-to verify code structure; these tests break on harmless refactors.
-
-### When to mock
-
-Mock only **OS/hardware state** that cannot be controlled in tests:
-
-| Acceptable mocks | Why |
-| ----------------- | --- |
-| `psutil.virtual_memory` | Simulates low-memory conditions without large allocations |
-| `jlinalg.blas_is_ilp64` | Tests LP64/ILP64 code paths without switching BLAS backend |
-| `_check_available` | Controls memory availability without system dependency |
-
-**Never mock numerical computation** (likelihood functions, BLAS routines, matrix
-operations). Use real values and assert against known-good reference output.
-
-**Prefer real types over MagicMock** — construct actual `MemoryBreakdown`,
-`StreamingMemoryBreakdown`, or `ExecutionPlan` instances with test values. MagicMock
-silently accepts any attribute access, hiding schema drift when fields are
-renamed or removed.
-
-### Fakes over mocks
-
-For non-OS dependencies, prefer lightweight fake implementations over `MagicMock`.
-Fakes enforce the real interface contract — accessing a misspelled attribute raises
-`AttributeError` instead of silently returning another `MagicMock`. This catches
-interface drift when fields are renamed or methods change signature.
-
-Example: `FakeAssocWriter` in `test_runner_numpy.py` replaces `MagicMock()` for the
-`IncrementalAssocWriter` interface, capturing `write_arrays_batch` calls in a list.
-
-Reserve `MagicMock` / `@patch` for OS/hardware boundaries only (psutil, BLAS flags,
-environment variables).
-
-### Anti-patterns
-
-| Anti-pattern | Preferred approach |
-| ------------ | ------------------ |
-| `inspect.getsource()` assertions | Assert on warnings emitted, exceptions raised, or return values |
-| `MagicMock()` for data classes | Construct real instances with test values |
-| `MagicMock()` for collaborators | Write a fake class that implements the real interface |
-| `assert "string" in source` | Test the behavior that string enables |
-| Mocking numerical functions | Use small synthetic data with known results |
-| `@patch` on the function under test | Only patch its external dependencies |
-
-### Test type routing
-
-Tiers define **runtime budgets**, not abstraction levels. Two tier1 tests might check
-fundamentally different things — CLI output formatting vs kinship matrix parity. When
-choosing what to test, consider the abstraction level:
-
-| Abstraction level | What to test | Example |
-| ----------------- | ------------ | ------- |
-| Pure computation | Input/output correctness against known values | `_batch_compute_uab_general_numpy` with synthetic data |
-| Numerical parity | Output matches GEMMA reference within tolerance | `test_streaming_matches_gemma` |
-| Build/compile config | Parse config files and verify flags/paths | `test_lapack_no_ffast_math` reads `hatch_build.py` text |
-| CLI/integration | End-to-end invocation with exit codes and output | `test_lmm_numpy_backend` via `CliRunner` |
-| Lifecycle/UI | External library call contracts (finish, update) | Progress bar `finish()` called on exception |
-
-The tier marker determines **when** the test runs (CI vs local). The abstraction level
-determines **how** to write it — pure computation tests never need mocks; lifecycle
-tests mock external libraries at the boundary.
-
-### Bug fix workflow
-
-1. **Reproduce**: write a failing test that demonstrates the bug
-2. **Fix**: change production code to make the test pass
-3. **Keep**: the regression test stays permanently — do not delete it after the fix
-4. **Scope**: only test the specific behavior that was broken, not surrounding code
-
-### Agent-generated test rules
-
-- Only write tests for code modified in the current task
-- Never modify production code to make a test pass — if a test fails, the test is
-  wrong or there's a real bug
-- Each test must be traceable to a specific behavior change or bug fix
-- Do not write speculative tests for code you did not touch
-
-### Tier selection for new tests
-
-| If the test... | Use tier |
-| -------------- | -------- |
-| Tests pure computation, no I/O, no reference data | `tier0` |
-| Validates output against GEMMA reference fixtures | `tier1` |
-| Needs >1 GB memory or >60s runtime | `tier2` |
-| Heavy scale tests, local-only | `tier3` |
-
-## Writing New Tests
-
-### File naming and location
-
-All tests live in `tests/`. File names follow the pattern `test_<module>.py`.
-
-```text
-tests/
-├── conftest.py                  # Shared fixtures
-├── fixtures/                    # Reference data
-│   ├── gemma_synthetic/         # Synthetic PLINK data + GEMMA reference output
-│   ├── gemma_all_tests/
-│   ├── gemma_covariate/
-│   ├── gemma_loco/
-│   ├── gemma_score/
-│   ├── kinship/
-│   ├── lmm/
-│   └── mouse_hs1940/            # Real mouse dataset
-├── test_likelihood_numpy.py
-├── test_kinship_validation.py
-├── test_hypothesis.py           # Hypothesis property tests
-└── ...
-```
-
-### Shared fixtures (`conftest.py`)
-
-Key fixtures available to all tests:
-
-| Fixture | Description |
-|---------|-------------|
-| `sample_plink_data` | Path prefix for synthetic PLINK files (`tests/fixtures/gemma_synthetic/test`) |
-| `output_dir` | Temporary output directory (wraps `tmp_path`) |
-| `tolerance_config` | Default `ToleranceConfig` for numerical comparisons |
-| `synthetic_covariate_data_ncvt2` | Rotated data with 2 covariates (200 samples, 50 SNPs) |
-| `synthetic_covariate_data_ncvt4` | Rotated data with 4 covariates (200 samples, 50 SNPs) |
-
-### Marking tests
-
-Always mark tests with an appropriate tier. Unmarked tests run under the default filter:
+Every test file must declare at least one tier marker — per-test or
+module-level:
 
 ```python
 import pytest
-
-@pytest.mark.tier0
-def test_pab_computation():
-    ...
-
-@pytest.mark.tier1
-def test_assoc_matches_gemma(sample_plink_data, tolerance_config):
-    ...
-
-@pytest.mark.tier2
-def test_streaming_large_dataset():
-    ...
+pytestmark = pytest.mark.tier0
 ```
 
-### Property-based tests (Hypothesis)
+A collection-time hook in `tests/conftest.py` aborts the run with
+`tests/<name>.py: missing tier marker` when this is missing. Promote the
+file to its correct tier rather than silencing the check.
 
-Property tests live in `tests/test_hypothesis.py`. Use `@given` with custom strategies
-for genetic data:
-
-```python
-from hypothesis import given, settings
-from hypothesis import strategies as st
-
-@given(st.integers(min_value=10, max_value=100))
-def test_kinship_symmetry(n_samples):
-    ...
-```
-
-Run hypothesis tests specifically:
+### 1.7 Common commands
 
 ```bash
-uv run pytest tests/test_hypothesis.py -x
+# By tier
+uv run pytest -m tier0 -x
+uv run pytest -m "tier0 or tier1" -x
+uv run pytest -m tier2 -v -o 'addopts='        # local, large memory
+
+# Single file / test
+uv run pytest tests/test_likelihood_numpy.py -x
+uv run pytest tests/test_kinship_validation.py -k "matches_gemma" -x
+
+# Reproduce a random order
+uv run pytest tests/ -x                          # reuse last seed
+uv run pytest tests/ --randomly-seed=12345
+uv run pytest tests/ -p no:randomly              # disable
+
+# Coverage (matches CI)
+uv run slipcover --source src/jamma --fail-under 80 -m pytest \
+  -m "not tier2 and not slow and not benchmark" -v -n0 -o 'addopts='
 ```
 
-### Numerical comparison tolerances
+### 1.8 Benchmarks
 
-Use `ToleranceConfig` from `src/jamma/validation/tolerances.py` for all comparisons
-against GEMMA reference output. The default configuration is calibrated from formal
-error propagation analysis:
+Always `-n0` to avoid cross-test timing interference.
+
+```bash
+# Microbenchmarks
+uv run pytest tests/test_jlinalg_dgemm.py tests/test_jlinalg_dsyrk.py tests/test_lmm_accel.py \
+  -v -n0 --benchmark-only -m benchmark
+
+# End-to-end backend comparison (vs GEMMA on mouse_hs1940)
+uv run python scripts/bench_all_backends.py
+```
+
+Update the Performance table in `README.md` after any change to runner
+logic, chunk sizing, BLAS threading, C extensions, or likelihood
+computation.
+
+### 1.9 CI workflows
+
+| Workflow | Trigger | Test command |
+|----------|---------|-------------|
+| `ci.yml` → `lint` | push/PR | `prek run --all-files` |
+| `ci.yml` → `test` (Linux 3.11/3.12, ARM Mac 3.12, Linux MKL ILP64) | push/PR | `pytest -m "not tier2 and not slow and not benchmark" -v -n 3` |
+| `ci.yml` → `coverage` | push/PR | `slipcover --fail-under 80 -m pytest ... -n0` |
+| `test-slow.yml` | push to master | `pytest -m "tier2 or slow" -v -o 'addopts=' --no-cov` |
+
+CI overrides `addopts` via `-o 'addopts='` so markers and parallelism are
+controlled per-job, independent of the local default.
+
+---
+
+## 2. Test Design Rules
+
+### 2.1 Test philosophy
+
+Tests validate **observable behavior** — return values, exceptions,
+warnings, files written, DataFrame columns. Default to no comments;
+default to no source inspection. If you find yourself reaching for
+`inspect.getsource()`, you are testing the wrong layer.
+
+### 2.2 Boundary catalogue (where mocking is allowed)
+
+`@patch` and `MagicMock` are allowed **only** at OS/hardware/process
+boundaries. Everywhere else, write a fake.
+
+| Allowed mock target | Why it qualifies |
+|---|---|
+| `psutil.virtual_memory`, `psutil.Process(...).memory_info` | OS state; cannot be set without large allocations |
+| `gc.collect` | Process-level side effect |
+| `jamma.core.memory._check_available` | Thin wrapper around OS memory probe |
+| `jlinalg.blas_is_ilp64` | Library detection that cannot be flipped at runtime |
+| `os.environ` setters | Process state |
+| `subprocess.run` / `subprocess.Popen` | Spawns external processes |
+| `progressbar.ProgressBar` | External UI library — see §2.4 |
+
+If your patch target is not on this list, you are mocking the wrong
+layer. Either justify the addition in PR review or write a fake.
+
+### 2.3 Fakes over mocks
+
+For non-boundary collaborators, write a fake class implementing the real
+interface. Fakes catch interface drift; `MagicMock()` silently accepts
+any attribute access and hides renames.
+
+The canonical example is `FakeAssocWriter` in
+[`tests/test_runner_numpy.py:31`](../tests/test_runner_numpy.py#L31). It
+replaces `MagicMock()` for the `IncrementalAssocWriter` interface and
+captures `write_arrays_batch` calls in a list. Reuse the pattern for new
+fakes — over time, shared fakes will move to a `tests/fakes/` package.
+
+### 2.4 Structural source tests (narrow exception)
+
+Most "read source code and grep" tests are anti-patterns, but a few are
+legitimate **build/assembly guardrails** that no behavioral test can
+catch. The carve-out is:
+
+| Allowed structural test | Why behavior tests can't replace it |
+|---|---|
+| `_mm256_zeroupper()` / `vzeroupper` present in AVX2 kernel source ([`tests/test_jlinalg_dgemm.py:562`](../tests/test_jlinalg_dgemm.py#L562)) | Missing this corrupts SSE registers in *callers'* code, not in our test |
+| No `abort()` calls in translated LAPACK C ([`tests/test_jlinalg_eigh.py:1489`](../tests/test_jlinalg_eigh.py#L1489)) | An `abort()` SIGKILLs the process; pytest cannot catch it as a failure |
+| `loco.py` uses `raise RuntimeError`, not bare `assert` ([`tests/test_safety_gates.py:263`](../tests/test_safety_gates.py#L263)) | `python -O` strips bare `assert`; behavior-only test passes in dev and silently breaks in prod |
+| Compile-flag literals not in three forbidden entry points ([`scripts/check-compile-flag-literals.py`](../scripts/check-compile-flag-literals.py)) | Drift between `hatch_build.py` and runtime recompile produces ABI mismatch at runtime |
+
+**Rules for adding a new structural source test:**
+
+1. The thing being checked must be uncatchable by behavioral tests (a
+   process abort, a compiler-stripped check, a build-time flag, an
+   ABI-relevant directive).
+2. Include a comment explaining *why* a behavior test cannot replace it.
+3. Mark `tier0` so it runs everywhere — these are guardrails, not parity.
+
+If the rule is "X function should call Y", that is a behavior test, not
+a structural test. Test the behavior.
+
+### 2.5 Anti-patterns
+
+| Anti-pattern | Preferred approach |
+|---|---|
+| `inspect.getsource()` assertions | Assert on warnings, exceptions, return values |
+| `MagicMock()` for data classes (`MemoryBreakdown`, `ExecutionPlan`, `Path`) | Construct real instances with test values |
+| `MagicMock(spec=Path)` to stand in for a path | Use `tmp_path` or `Path("/tmp/x")` |
+| `@patch` on a non-boundary collaborator (`PipelineRunner`, `numpy.linalg.eigh`) | Inject a fake; or test against real values |
+| Mocking numerical functions (eigh, BLAS, likelihood) | Use small synthetic data with known results |
+| `@patch` on the function under test | Patch only its external dependencies |
+| `assert mock.call_count == N` for internal functions | Assert on observable output |
+| Performance assertions in pass/fail tests (`assert c_time < py_time / 2`) | Use `pytest-benchmark`, track over time |
+
+`assert_called_once_with` is acceptable at boundaries — external APIs,
+subprocess calls, dispatch routers where delegation IS the observable
+behavior. Not for internal functions.
+
+### 2.6 When `pytest.skip` is acceptable
+
+The suite has ~180 skip/xfail calls. Three categories — only the first
+two are acceptable:
+
+1. **Hardware/library availability** — vendor LAPACK absent, ILP64 not
+   active, BLAS backend mismatch. Use module-level
+   `pytestmark = pytest.mark.skipif(...)` so the file skips at collection
+   time. Example: [`tests/test_jlinalg_dispatch.py:12`](../tests/test_jlinalg_dispatch.py#L12).
+2. **Optional fixture absent** — large datasets shipped out-of-band
+   (e.g. `gemma_loco`). Skip with a message naming the missing fixture path.
+3. **Test is broken / commented-out** — *not acceptable*. Either fix or
+   delete.
+
+`@pytest.mark.xfail` is only for known bugs with an open beads/GitHub
+issue. Include the issue ID in the reason string.
+
+### 2.7 Bug fix workflow
+
+1. **Reproduce**: write a failing test that demonstrates the bug.
+2. **Fix**: change production code to make the test pass.
+3. **Keep**: the regression test stays permanently. Fold it into the
+   canonical module test file (e.g. `test_loco_numpy.py`) or, if the
+   bug class warrants its own file, name it after the *behavior*
+   (`test_loco_orchestration.py`) — never after the trigger
+   (`test_loco_bugs.py`, `test_review_fixes.py`).
+4. **Scope**: only test the broken behavior, not surrounding code.
+
+### 2.8 Agent-generated test rules
+
+- Only write tests for code modified in the current task.
+- Never modify production code to make a test pass — if a test fails,
+  the test is wrong or there's a real bug.
+- Each test must be traceable to a specific behavior change or bug fix.
+- Do not write speculative tests for code you did not touch.
+
+### 2.9 Tier selection for new tests
+
+| If the test... | Use tier |
+|---|---|
+| Pure computation, no I/O, no reference data | `tier0` |
+| Validates output against GEMMA reference fixtures | `tier1` |
+| Needs >1 GB memory or runtime >60s | `tier2` |
+| Long but not memory-bound | `slow` |
+
+### 2.10 Numerical comparison tolerances
+
+Use `ToleranceConfig` from
+[`src/jamma/validation/tolerances.py`](../src/jamma/validation/tolerances.py).
+The defaults are calibrated from formal error propagation analysis (see
+`docs/EQUIVALENCE.md`):
 
 ```python
 from jamma.validation import ToleranceConfig
@@ -287,68 +303,94 @@ config = ToleranceConfig()
 np.testing.assert_allclose(result, reference, rtol=config.pvalue_rtol, atol=config.atol)
 ```
 
-## Coverage Requirements
+Do not relax tolerances to make tests pass. If a tolerance is too tight,
+either fix the algorithm or update `docs/EQUIVALENCE.md` *and*
+`ToleranceConfig` in one PR.
 
-Coverage is measured with `slipcover` (not `pytest-cov`) in CI. The threshold is
-enforced in the coverage workflow:
+### 2.11 Shared fixtures
 
-```bash
-uv run slipcover --source src/jamma --fail-under 80 -m pytest \
-  -m "not tier2 and not tier3 and not slow and not benchmark" -v -n0 -o 'addopts='
+Defined in [`tests/conftest.py`](../tests/conftest.py):
+
+| Fixture | Description |
+|---------|-------------|
+| `sample_plink_data` | Path prefix for synthetic PLINK files (`tests/fixtures/gemma_synthetic/test`) |
+| `output_dir` | Temporary output directory wrapping `tmp_path` |
+| `tolerance_config` | `ToleranceConfig()` for numerical comparisons |
+| `synthetic_covariate_data_ncvt2` | Rotated data with 2 covariates (200 samples, 50 SNPs) |
+| `synthetic_covariate_data_ncvt4` | Rotated data with 4 covariates (200 samples, 50 SNPs) |
+
+If you add a fixture, also add a row here.
+
+### 2.12 Property-based tests
+
+Live in [`tests/test_hypothesis.py`](../tests/test_hypothesis.py):
+
+```python
+from hypothesis import given, strategies as st
+
+@given(st.integers(min_value=10, max_value=100))
+def test_kinship_symmetry(n_samples): ...
 ```
 
-No per-module thresholds are configured — only the overall 80% line coverage threshold
-is enforced.
+Run with `uv run pytest tests/test_hypothesis.py -x`.
 
-## Benchmarks
+---
 
-Benchmarks use `pytest-benchmark` and must be run separately from the normal suite,
-always with `-n0` (no parallelism) to avoid cross-test timing interference.
+## 3. Suite Map and Current State
 
-### Microbenchmarks (per-stage)
+### 3.1 Suite map by subsystem
 
-```bash
-uv run pytest tests/test_jlinalg_dgemm.py tests/test_jlinalg_dsyrk.py tests/test_lmm_accel.py \
-  -v -n0 --benchmark-only -m benchmark
-```
+| Subsystem | Test files | What's covered |
+|---|---|---|
+| **LMM core** | `test_lmm_accel.py`, `test_lmm_unit.py`, `test_lmm_score.py`, `test_lmm_dispatch.py`, `test_lmm_audit.py`, `test_lmm_io_validation.py`, `test_likelihood_numpy.py`, `test_likelihood_derivatives.py` | C accelerator parity vs NumPy reference; Pab/Uab math; Wald/score/LRT statistics; dispatch routing; numerical guards; assoc-line/dispatch-table validation; REML 2nd/3rd derivatives |
+| **LMM runners** | `test_runner_numpy.py`, `test_runner_dispatch.py`, `test_numpy_streaming.py`, `test_compute_numpy.py`, `test_pipeline.py`, `test_pipeline_helpers.py`, `test_pipeline_banner.py` | Batch + streaming runners; backend selection; pipeline orchestration; CLI banner |
+| **Kinship** | `test_kinship_numpy.py`, `test_kinship_io.py`, `test_kinship_validation.py` | DSYRK-based kinship computation; .cXX.txt I/O; GEMMA parity |
+| **jlinalg (BLAS dispatch)** | `test_jlinalg_dgemm.py`, `test_jlinalg_dsyrk.py`, `test_jlinalg_eigh.py`, `test_jlinalg_lapack.py`, `test_jlinalg_level1.py`, `test_jlinalg_dispatch.py`, `test_jlinalg_unity.py`, `test_jlinalg_build.py`, `test_eigh_inplace.py` | DGEMM/DSYRK/eigh wrappers; LP64 vs ILP64 dispatch; AVX2 microkernel guards; build artefact sanity |
+| **LOCO** | `test_loco_numpy.py`, `test_loco_eigen_cache.py`, `test_loco_orchestration.py` | Leave-one-chromosome-out orchestration; per-chromosome eigen cache |
+| **I/O** | `test_io.py`, `test_io_error_paths.py`, `test_eigen_io.py`, `test_matrix_reader.py`, `test_matrix_writer.py`, `test_incremental_writer.py`, `test_kinship_io.py`, `test_snp_list.py`, `test_plink_validation.py` | PLINK reader; eigenvector cache I/O; incremental .assoc.txt writer; SNP filters |
+| **Memory & gates** | `test_memory.py`, `test_memory_gates.py`, `test_memory_chunk_coupling.py`, `test_eigendecomp_memory.py`, `test_safety_gates.py`, `test_auto_tune_chunk.py`, `test_rss_logging.py` | Memory estimation; OOM gates; chunk-size auto-tuning; RSS telemetry |
+| **CLI / API** | `test_cli.py`, `test_cli_memory.py`, `test_gwas_api.py` | Click entry point; `-lmm` flag handling; programmatic GWAS API |
+| **Backend / hardware** | `test_backend_detection.py`, `test_hardware_context.py`, `test_threading.py`, `test_jlinalg_dispatch.py` | Backend autodetection; physical core count; threading limits |
+| **Build support** | `test_build_support_compile_and_link.py`, `test_build_support_openmp_detect.py`, `test_build_support_packaging.py`, `test_check_c_extension_freshness.py`, `test_check_compile_flag_literals.py`, `test_check_quiet_flags.py`, `test_check_test_timeouts.py`, `test_verify_compile_invocations_match.py`, `test_c_extensions_ci.py`, `test_core_recompile.py` | Compile-flag invariants; OpenMP detection; wheel packaging; runtime recompile |
+| **Validation / parity** | `test_validation.py`, `test_validation_assoc.py`, `test_validate_runner_inputs.py`, `test_kinship_validation.py` | GEMMA parity machinery; tolerance config; assoc file diff |
+| **Numerics / utilities** | `test_special.py`, `test_schema.py`, `test_snp_filter.py`, `test_snp_filter_perf.py`, `test_snp_stats.py`, `test_categorical.py`, `test_missingness.py`, `test_weights.py`, `test_prepare_common.py`, `test_telemetry.py`, `test_progress.py`, `test_hypothesis.py` | Cephes betainc / chi2_sf; data-class schemas; SNP filtering; phenotype prep; progress bars |
 
-### End-to-end backend comparison
+### 3.2 Tests to improve
 
-```bash
-uv run python scripts/bench_all_backends.py
-```
+| Test | Issue | Action |
+|---|---|---|
+| [`test_runner_numpy.py:443`](../tests/test_runner_numpy.py#L443) `test_numpy_runner_synthetic` | Unmarked GEMMA parity test | Add `@pytest.mark.tier1` |
+| [`test_runner_numpy.py:518`](../tests/test_runner_numpy.py#L518) `test_numpy_runner_covar_synthetic` | Unmarked GEMMA parity test | Add `@pytest.mark.tier1` |
+| [`test_runner_numpy.py:396`](../tests/test_runner_numpy.py#L396) `test_runner_mode4_uses_fused_dispatch` | Marked `tier1` but it's an internal dispatch assertion | Reclassify to `tier0` |
+| [`test_progress.py:19`](../tests/test_progress.py#L19) and 9 sibling patches | Mocks `progressbar.ProgressBar` 10×; allowed under boundary catalogue but a `FakeProgressBar` would catch interface drift | Replace with a tiny fake; promote to `tests/fakes/progress.py` |
+| [`test_cli.py:303`](../tests/test_cli.py#L303), :332, :361, :600 | `@patch("jamma.cli.PipelineRunner")` patches an internal collaborator | Inject a `FakePipelineRunner` via factory parameter |
+| [`test_safety_gates.py:228`](../tests/test_safety_gates.py#L228) | `patch("numpy.linalg.eigh", return_value=...)` mocks a numerical function | Either downsize to a real 50-sample eigendecomp, or move to a clearly-named "gate plumbing" suite |
+| `test_jlinalg_dgemm.py`, `test_jlinalg_dsyrk.py`, `test_jlinalg_eigh.py` (mostly unmarked) | Heavy parametrised boundary coverage runs by default | Mark a representative fast set `tier0`; move expensive cases to `tier2`; consider hypothesis property tests for shape/transpose invariants |
+| [`test_lmm_accel.py:1081`](../tests/test_lmm_accel.py#L1081) `TestCExtensionPerformance` | Already marked `tier2` + `slow` + `benchmark`, but contains pass/fail performance assertions | Move all `assert c_time < ...` assertions out; track as `pytest-benchmark` data instead. Hardware-sensitive correctness tests are flaky |
+| 8 unmarked test files (see §1.6) | Currently run by default-tier filter accidentally | Add explicit `pytestmark` |
 
-This benchmarks GEMMA and the NumPy+C backend on the `mouse_hs1940` dataset. Use
-`--runs N` for best-of-N averaging. Results should be compared against the Performance
-table in `README.md` after any change to runner logic, chunk sizing, BLAS threading,
-C extensions, or likelihood computation.
+### 3.3 Tests / markers to remove
 
-## CI Integration
+| Item | Reason |
+|---|---|
+| `tier3` marker | **Removed.** Was defined and excluded everywhere but never used. Add it back when a real local-only scale test exists. |
+| `slow: alias for tier2` (old wording) | Removed — they are independent (this doc reflects the corrected meaning) |
+| `tolerance_config` row in old fixture table | Already corrected — was previously documented but the conftest definition is real (kept) |
 
-### CI workflow (`ci.yml`)
+### 3.4 Tests / files to fold
 
-Trigger: push and pull requests to `main` / `master`.
+| Files | Action |
+|---|---|
+| `test_jlinalg_lapack.py` lines [47](../tests/test_jlinalg_lapack.py#L47), [66](../tests/test_jlinalg_lapack.py#L66), [146](../tests/test_jlinalg_lapack.py#L146) | Duplicate large QR/SVD reconstruction-and-orthogonality checks (5000×200 each, all `slow`). Fold into one parametrised tier2 case per decomposition |
+| ~~`test_audit_fixes.py`~~ → `test_lmm_audit.py` | Renamed via `git mv` (history preserved). Content unchanged — still an LMM-numerical-guard suite, but the name no longer reads as a one-shot scratch bin |
+| ~~`test_review_fixes.py`~~ → `test_lmm_io_validation.py` | Renamed. Heterogeneous (assoc format, build_results, erfc parity, degenerate-SNP NaN); bound together by being I/O- and dispatch-validation-shaped |
+| ~~`test_loco_bugs.py`~~ → `test_loco_orchestration.py` | Renamed |
+| ~~`test_lmm_likelihood_dev2.py`~~ → `test_likelihood_derivatives.py` | Renamed. `dev2` is GEMMA jargon for "second derivative" (`LogRL_dev2`); the file's symbols inherit it but the file itself is named for the *behavior* (REML 2nd/3rd derivatives wrt lambda, used for `se(pve)`) |
 
-| Job | Matrix | Test command |
-|-----|--------|-------------|
-| `lint` | ubuntu/Python 3.12 | `prek run --all-files` |
-| `test` | Linux 3.11, Linux 3.12, ARM Mac 3.12, Linux MKL ILP64 | `pytest -m "not tier2 and not tier3 and not slow and not benchmark" -v -n 3` |
-| `coverage` | ubuntu/Python 3.12 | `slipcover --fail-under 80 -m pytest ... -n0` |
+### 3.5 Suite-wide stats (snapshot)
 
-The test job overrides `addopts` via `-o 'addopts='` so CI controls markers and
-parallelism explicitly, independent of `pyproject.toml` defaults.
-
-### Slow Tests workflow (`test-slow.yml`)
-
-Trigger: push to `main` / `master`, or manual dispatch.
-
-Runs tier2 and `slow`-marked tests (excluding tier3):
-
-```bash
-uv run pytest -m "(tier2 or slow) and not tier3" -v -o 'addopts=' --no-cov
-```
-
-### MKL ILP64 matrix variant
-
-One CI matrix entry installs MKL ILP64 numpy from `michael-denyer/numpy-mkl` before
-running the standard test suite, verifying BLAS dispatch correctness under ILP64.
+- 81 test files, ~38.5k lines.
+- Largest: `test_lmm_accel.py` (6,271 lines) — should be split by tier and concern.
+- ~178 `skip`/`skipif`/`xfail` calls — most legitimate (vendor LAPACK, optional fixtures).
+- 8 files use `@patch`/`MagicMock` (~31 occurrences). Most are at allowed boundaries; the violations called out in §3.2 are the exceptions.
+- `inspect.getsource()`: zero uses. The ban holds.

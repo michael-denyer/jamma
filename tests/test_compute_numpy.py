@@ -26,6 +26,8 @@ from jamma.lmm.likelihood_numpy import (
     compute_uab_invariant_soa,
 )
 
+pytestmark = pytest.mark.tier0
+
 # ---------------------------------------------------------------------------
 # Fixture paths
 # ---------------------------------------------------------------------------

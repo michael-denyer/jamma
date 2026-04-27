@@ -23,12 +23,23 @@ from typing import Any
 
 
 class FakeProgressBar:
-    """Records update / finish calls. Mirrors progressbar.ProgressBar."""
+    """Records start / update / finish calls. Mirrors progressbar.ProgressBar.
+
+    The full real surface is much larger; this fake declares only the
+    methods jamma.core.progress actually calls. If production code starts
+    calling another method, the test will fail with AttributeError —
+    that is the whole point of using a fake instead of MagicMock.
+    """
 
     def __init__(self, **kwargs: Any) -> None:
         self.kwargs = kwargs
+        self.start_calls = 0
         self.update_calls: list[int] = []
         self.finish_calls = 0
+
+    def start(self) -> FakeProgressBar:
+        self.start_calls += 1
+        return self
 
     def update(self, value: int) -> None:
         self.update_calls.append(value)

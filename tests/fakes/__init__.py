@@ -9,6 +9,13 @@ See docs/TESTING.md §2.3 for the policy.
 """
 
 from tests.fakes.assoc_writer import FakeAssocWriter
+from tests.fakes.pipeline import FakePipelineRunner, FakePipelineRunnerFactory
 from tests.fakes.progress import FakeProgressBar, FakeProgressbarModule
 
-__all__ = ["FakeAssocWriter", "FakeProgressBar", "FakeProgressbarModule"]
+__all__ = [
+    "FakeAssocWriter",
+    "FakePipelineRunner",
+    "FakePipelineRunnerFactory",
+    "FakeProgressBar",
+    "FakeProgressbarModule",
+]

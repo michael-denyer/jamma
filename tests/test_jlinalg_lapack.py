@@ -44,13 +44,6 @@ class TestQR:
         rel_err = np.linalg.norm(A - Q @ R) / np.linalg.norm(A)
         assert rel_err < 1e-14, f"QR reconstruction error {rel_err:.2e} for {shape}"
 
-    @pytest.mark.slow
-    def test_reconstruction_accuracy_large(self) -> None:
-        A = np.random.default_rng(42).standard_normal((5000, 200))
-        Q, R = jlinalg.qr(A)
-        rel_err = np.linalg.norm(A - Q @ R) / np.linalg.norm(A)
-        assert rel_err < 1e-14, f"QR reconstruction error {rel_err:.2e} for (5000, 200)"
-
     @pytest.mark.parametrize(
         "shape",
         [(10, 5), (100, 20), (2, 1), (1, 1)],
@@ -64,11 +57,23 @@ class TestQR:
         assert orth_err < 1e-14, f"Orthogonality error {orth_err:.2e} for {shape}"
 
     @pytest.mark.slow
-    def test_orthogonality_large(self) -> None:
+    def test_large_5000x200_reconstruction_and_orthogonality(self) -> None:
+        """Single 5000x200 decomposition, both reconstruction and orthogonality.
+
+        Folded from two separate slow tests that each ran jlinalg.qr() on the
+        same matrix — wasted ~2x the runtime. One decomposition is enough.
+        """
         A = np.random.default_rng(42).standard_normal((5000, 200))
-        Q, _ = jlinalg.qr(A)
+        Q, R = jlinalg.qr(A)
+
+        rel_err = np.linalg.norm(A - Q @ R) / np.linalg.norm(A)
+        assert rel_err < 1e-14, f"QR reconstruction error {rel_err:.2e} for (5000, 200)"
+
+        # Q.T @ Q accumulates 5000 dot products per cell; theoretical FP
+        # floor is ~sqrt(5000) * eps ≈ 1.6e-14, so the small-shape 1e-14
+        # threshold is too tight here. 1e-13 is conservative for n=5000.
         orth_err = np.linalg.norm(Q.T @ Q - np.eye(200))
-        assert orth_err < 1e-14, f"Orthogonality error {orth_err:.2e} for (5000, 200)"
+        assert orth_err < 1e-13, f"Orthogonality error {orth_err:.2e} for (5000, 200)"
 
     def test_shapes(self) -> None:
         A = np.random.default_rng(42).standard_normal((100, 20))

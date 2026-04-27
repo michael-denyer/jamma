@@ -6,6 +6,7 @@ import pytest
 from click.testing import CliRunner
 
 from jamma.cli import main
+from tests.fakes import FakePipelineRunnerFactory
 
 runner = CliRunner()
 
@@ -295,92 +296,86 @@ KINSHIP_FILE = (
 class TestMultiNParsing:
     """Tests for CLI -n multi-value parsing."""
 
-    def test_multi_n_space_separated(self, tmp_path: Path) -> None:
+    def test_multi_n_space_separated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """CLI -n '1 2 3' parses to phenotype_columns=[1, 2, 3]."""
-        from unittest.mock import patch
-
         outdir = tmp_path / "output"
-        with patch("jamma.cli.PipelineRunner") as mock_runner_cls:
-            mock_runner_cls.return_value.run.return_value = _mock_pipeline_result(
-                outdir
-            )
-            result = runner.invoke(
-                main,
-                [
-                    "-bfile",
-                    str(EXAMPLE_BFILE),
-                    "-lmm",
-                    "1",
-                    "-k",
-                    str(KINSHIP_FILE),
-                    "-n",
-                    "1 2 3",
-                    "-outdir",
-                    str(outdir),
-                    "--no-check-memory",
-                ],
-            )
-            assert result.exit_code == 0, result.output
-            config = mock_runner_cls.call_args[0][0]
-            assert config.phenotype_columns == [1, 2, 3]
+        factory = FakePipelineRunnerFactory(result=_mock_pipeline_result(outdir))
+        monkeypatch.setattr("jamma.cli.PipelineRunner", factory)
 
-    def test_multi_n_comma_separated(self, tmp_path: Path) -> None:
+        result = runner.invoke(
+            main,
+            [
+                "-bfile",
+                str(EXAMPLE_BFILE),
+                "-lmm",
+                "1",
+                "-k",
+                str(KINSHIP_FILE),
+                "-n",
+                "1 2 3",
+                "-outdir",
+                str(outdir),
+                "--no-check-memory",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert factory.last_config.phenotype_columns == [1, 2, 3]
+
+    def test_multi_n_comma_separated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """CLI -n '1,2,3' parses to phenotype_columns=[1, 2, 3]."""
-        from unittest.mock import patch
-
         outdir = tmp_path / "output"
-        with patch("jamma.cli.PipelineRunner") as mock_runner_cls:
-            mock_runner_cls.return_value.run.return_value = _mock_pipeline_result(
-                outdir
-            )
-            result = runner.invoke(
-                main,
-                [
-                    "-bfile",
-                    str(EXAMPLE_BFILE),
-                    "-lmm",
-                    "1",
-                    "-k",
-                    str(KINSHIP_FILE),
-                    "-n",
-                    "1,2,3",
-                    "-outdir",
-                    str(outdir),
-                    "--no-check-memory",
-                ],
-            )
-            assert result.exit_code == 0, result.output
-            config = mock_runner_cls.call_args[0][0]
-            assert config.phenotype_columns == [1, 2, 3]
+        factory = FakePipelineRunnerFactory(result=_mock_pipeline_result(outdir))
+        monkeypatch.setattr("jamma.cli.PipelineRunner", factory)
 
-    def test_single_n_backward_compat(self, tmp_path: Path) -> None:
+        result = runner.invoke(
+            main,
+            [
+                "-bfile",
+                str(EXAMPLE_BFILE),
+                "-lmm",
+                "1",
+                "-k",
+                str(KINSHIP_FILE),
+                "-n",
+                "1,2,3",
+                "-outdir",
+                str(outdir),
+                "--no-check-memory",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert factory.last_config.phenotype_columns == [1, 2, 3]
+
+    def test_single_n_backward_compat(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """CLI -n 1 still works as before."""
-        from unittest.mock import patch
-
         outdir = tmp_path / "output"
-        with patch("jamma.cli.PipelineRunner") as mock_runner_cls:
-            mock_runner_cls.return_value.run.return_value = _mock_pipeline_result(
-                outdir
-            )
-            result = runner.invoke(
-                main,
-                [
-                    "-bfile",
-                    str(EXAMPLE_BFILE),
-                    "-lmm",
-                    "1",
-                    "-k",
-                    str(KINSHIP_FILE),
-                    "-n",
-                    "1",
-                    "-outdir",
-                    str(outdir),
-                    "--no-check-memory",
-                ],
-            )
-            assert result.exit_code == 0, result.output
-            config = mock_runner_cls.call_args[0][0]
-            assert config.phenotype_columns == [1]
+        factory = FakePipelineRunnerFactory(result=_mock_pipeline_result(outdir))
+        monkeypatch.setattr("jamma.cli.PipelineRunner", factory)
+
+        result = runner.invoke(
+            main,
+            [
+                "-bfile",
+                str(EXAMPLE_BFILE),
+                "-lmm",
+                "1",
+                "-k",
+                str(KINSHIP_FILE),
+                "-n",
+                "1",
+                "-outdir",
+                str(outdir),
+                "--no-check-memory",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert factory.last_config.phenotype_columns == [1]
 
     def test_duplicate_n_error(self) -> None:
         """CLI -n '1 1 3' produces a clear error about duplicates."""
@@ -584,34 +579,27 @@ def test_cli_backend_numpy_streaming_accepted():
 
 
 @pytest.mark.tier1
-def test_cli_backend_numpy_streaming_wires_to_pipeline():
+def test_cli_backend_numpy_streaming_wires_to_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     """--backend numpy-streaming is passed through to PipelineConfig."""
-    from unittest.mock import MagicMock, patch
+    factory = FakePipelineRunnerFactory(result=_mock_pipeline_result(tmp_path / "out"))
+    monkeypatch.setattr("jamma.cli.PipelineRunner", factory)
 
-    mock_result = _mock_pipeline_result(MagicMock(spec=Path))
-    captured_configs = []
+    runner.invoke(
+        main,
+        [
+            "-lmm",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-k",
+            str(KINSHIP_FILE),
+            "--backend",
+            "numpy-streaming",
+            "--no-check-memory",
+        ],
+    )
 
-    def _capture_config(config):
-        captured_configs.append(config)
-        mock = MagicMock()
-        mock.run.return_value = mock_result
-        return mock
-
-    with patch("jamma.cli.PipelineRunner", side_effect=_capture_config):
-        runner.invoke(
-            main,
-            [
-                "-lmm",
-                "1",
-                "-bfile",
-                str(EXAMPLE_BFILE),
-                "-k",
-                str(KINSHIP_FILE),
-                "--backend",
-                "numpy-streaming",
-                "--no-check-memory",
-            ],
-        )
-
-    assert len(captured_configs) == 1
-    assert captured_configs[0].backend == "numpy-streaming"
+    assert factory.call_count == 1
+    assert factory.last_config.backend == "numpy-streaming"

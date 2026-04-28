@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ast
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -192,98 +193,54 @@ class TestEnforceTierMarkersInProcess:
 
 
 class TestGateUnderXdist:
-    """End-to-end regression: the gate must fire under ``-n N`` (xdist).
+    """End-to-end regression: the real gate must fire under ``-n N`` (xdist).
 
     The previous collection-based gate silently no-op'd because xdist's
-    controller hook receives an empty ``items`` list. Running this under
-    ``-n 2`` proves the source-parse approach is xdist-safe.
+    controller hook receives an empty ``items`` list. This test imports
+    the *real* ``_enforce_tier_markers`` from ``tests.conftest`` into a
+    pytester sub-session and runs it under ``-n 2`` — so a regression
+    that re-introduces the xdist hole would make this test fail rather
+    than pass against a parallel stub.
     """
 
+    # Stub conftest delegating to the real gate. Pytester runs in a
+    # tmpdir without our pyproject, so `tests.conftest` won't import as
+    # a package — instead we point the conftest at the real module file
+    # via importlib.util.
     _GATE_CONFTEST = textwrap.dedent(
-        '''
-        """Stub conftest mirroring the real source-parse gate.
-
-        Kept in-line so the self-test does not depend on importing from
-        the parent conftest (which would pull in fixtures unrelated to
-        the gate).
-        """
+        f'''
+        """Stub conftest delegating to the real ``_enforce_tier_markers``."""
         from __future__ import annotations
 
-        import ast
+        import importlib.util
         from pathlib import Path
 
         import pytest
 
-        _REQUIRED = frozenset({"tier0", "tier1", "tier2", "slow", "benchmark"})
+        _REAL_CONFTEST = Path({str(Path(__file__).parent / "conftest.py")!r})
 
 
-        def _module_marks(tree):
-            names = set()
-            for node in tree.body:
-                if not isinstance(node, ast.Assign):
-                    continue
-                if not (
-                    len(node.targets) == 1
-                    and isinstance(node.targets[0], ast.Name)
-                    and node.targets[0].id == "pytestmark"
-                ):
-                    continue
-                cs = (
-                    node.value.elts
-                    if isinstance(node.value, (ast.List, ast.Tuple))
-                    else [node.value]
-                )
-                for c in cs:
-                    t = c.func if isinstance(c, ast.Call) else c
-                    if (
-                        isinstance(t, ast.Attribute)
-                        and isinstance(t.value, ast.Attribute)
-                        and isinstance(t.value.value, ast.Name)
-                        and t.value.value.id == "pytest"
-                        and t.value.attr == "mark"
-                    ):
-                        names.add(t.attr)
-            return names
-
-
-        def _per_test_marks(tree):
-            names = set()
-            for node in ast.walk(tree):
-                if not isinstance(
-                    node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-                ):
-                    continue
-                for d in node.decorator_list:
-                    t = d.func if isinstance(d, ast.Call) else d
-                    if (
-                        isinstance(t, ast.Attribute)
-                        and isinstance(t.value, ast.Attribute)
-                        and isinstance(t.value.value, ast.Name)
-                        and t.value.value.id == "pytest"
-                        and t.value.attr == "mark"
-                    ):
-                        names.add(t.attr)
-            return names
+        def _load_real_conftest():
+            spec = importlib.util.spec_from_file_location(
+                "_jamma_real_conftest", _REAL_CONFTEST
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
 
 
         def pytest_configure(config):
+            # Mirror the real conftest's worker guard.
             if hasattr(config, "workerinput"):
                 return
-            tests_dir = Path(str(config.rootpath))
-            missing = []
-            for path in sorted(tests_dir.rglob("test_*.py")):
-                try:
-                    tree = ast.parse(path.read_text())
-                except (SyntaxError, OSError):
-                    missing.append(path.name)
-                    continue
-                if (_module_marks(tree) | _per_test_marks(tree)) & _REQUIRED:
-                    continue
-                missing.append(path.name)
-            if missing:
-                raise pytest.UsageError(
-                    "no tier marker: " + ", ".join(sorted(set(missing)))
-                )
+            real = _load_real_conftest()
+            # The real ``_enforce_tier_markers`` walks ``_TESTS_DIR``
+            # (the directory containing the real conftest). For this
+            # self-test we want it to walk the pytester rootpath so the
+            # synthetic test files we just created are what's audited.
+            # Repoint it temporarily.
+            real._TESTS_DIR = Path(str(config.rootpath))
+            real._enforce_tier_markers()
         '''
     )
 

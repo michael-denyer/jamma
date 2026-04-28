@@ -111,6 +111,12 @@ repos:
         language: system
         files: ^tests/.*\.py$
         pass_filenames: false
+      - id: check-fixture-manifest
+        name: GEMMA fixture sha256 manifest matches tests/fixtures/
+        entry: uv run python scripts/check_fixture_manifest.py
+        language: system
+        files: ^tests/fixtures/
+        pass_filenames: false
       - id: no-compile-flag-literals-outside-build-support
         name: ban compile-flag literals outside jamma._build_support
         entry: scripts/check-compile-flag-literals.py

@@ -1,0 +1,109 @@
+name: Flaky-Test Detection
+
+# Rotate the pytest-randomly seed across multiple weekly runs and report any
+# tests that fail under one seed but pass under another. This catches:
+#
+#   * Order-dependent tests (ones that rely on a previous test's side effect).
+#   * Hypothesis-driven tests with hidden seed-dependent flakes.
+#   * RNG-seeded synthetic fixtures whose tolerance bounds are tight under
+#     unlucky seeds but pass under the default ``--randomly-seed=last``.
+#
+# Non-blocking: scheduled only, never on PR. Failures here open a triage
+# task — not a merge gate.
+
+on:
+  schedule:
+    # Sundays 06:00 UTC. Earlier than CI to avoid contending for runners
+    # with weekday push traffic.
+    - cron: '0 6 * * 0'
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: 'Comma-separated seeds (default rotates 5)'
+        default: ''
+        required: false
+
+permissions:
+  contents: read
+  issues: write  # to file a triage issue on flake detection
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  rotate-seeds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Five distinct seeds. Keep small until we measure flake rate;
+        # bumping is cheap once the workflow is established.
+        seed: [11, 41867, 2718281, 31415926, 1234567890]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Compile C extensions
+        run: |
+          uv run python -m jamma.lmm._compile_accel
+          uv run python -m jamma.jlinalg._compile_jlinalg
+
+      - name: Run default suite under seed ${{ matrix.seed }}
+        run: |
+          uv run pytest \
+            --randomly-seed=${{ matrix.seed }} \
+            --no-cov \
+            -o 'addopts=-n 3 --timeout=120'
+
+  flake-summary:
+    needs: rotate-seeds
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open or update flake-triage issue on failure
+        if: needs.rotate-seeds.result != 'success'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v8.0.0
+        with:
+          script: |
+            const title = 'Flaky-test detection: weekly seed rotation failed';
+            const body = [
+              `Weekly seed-rotation run [#${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              `failed for at least one seed. Inspect the matrix run logs to find which seed surfaced the flake.`,
+              ``,
+              `This is a non-blocking triage signal — not a merge regression.`,
+              `Reproduce locally with: \`uv run pytest --randomly-seed=<seed>\`.`,
+            ].join('\n');
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'flaky-test',
+              per_page: 10,
+            });
+            const existing = issues.find(i => i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['flaky-test', 'triage'],
+              });
+            }

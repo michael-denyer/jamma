@@ -239,7 +239,11 @@ class TestLP64OverflowWarning:
         ):
             warnings.simplefilter("always")
 
-            with contextlib.suppress(ValueError, RuntimeError):
+            # Lock down two invariants:
+            # 1. The RuntimeError from the patched np.linalg.eigh PROPAGATES
+            #    to the caller (no silent catch returning a default result).
+            # 2. The LP64 warning is NOT emitted on this routing branch.
+            with pytest.raises(RuntimeError, match="test stub"):
                 eigen.eigendecompose_kinship(big_K, check_memory=False)
 
             lp64_warnings = [x for x in w if "LP64" in str(x.message)]

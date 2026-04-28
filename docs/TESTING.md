@@ -197,11 +197,18 @@ For non-boundary collaborators, write a fake class implementing the real
 interface. Fakes catch interface drift; `MagicMock()` silently accepts
 any attribute access and hides renames.
 
-The canonical example is `FakeAssocWriter` in
-[`tests/test_runner_numpy.py:31`](../tests/test_runner_numpy.py#L31). It
-replaces `MagicMock()` for the `IncrementalAssocWriter` interface and
-captures `write_arrays_batch` calls in a list. Reuse the pattern for new
-fakes — over time, shared fakes will move to a `tests/fakes/` package.
+Shared fakes live in the
+[`tests/fakes/`](../tests/fakes/) package. The canonical example is
+[`FakeAssocWriter`](../tests/fakes/assoc_writer.py): it replaces
+`MagicMock()` for the `IncrementalAssocWriter` interface and captures
+`write_arrays_batch` calls in a list. The package also ships
+`FakeProgressBar`/`FakeProgressbarModule`
+([`progress.py`](../tests/fakes/progress.py)) and
+`FakePipelineRunnerFactory`
+([`pipeline.py`](../tests/fakes/pipeline.py)). Each fake's self-tests are
+in [`tests/fakes/test_fakes.py`](../tests/fakes/test_fakes.py); accessing
+an undeclared attribute raises `AttributeError` (the contract that
+distinguishes a fake from `MagicMock`).
 
 ### 2.4 Structural source tests (narrow exception)
 
@@ -359,15 +366,7 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 
 | Test | Issue | Action |
 |---|---|---|
-| [`test_runner_numpy.py:443`](../tests/test_runner_numpy.py#L443) `test_numpy_runner_synthetic` | Unmarked GEMMA parity test | Add `@pytest.mark.tier1` |
-| [`test_runner_numpy.py:518`](../tests/test_runner_numpy.py#L518) `test_numpy_runner_covar_synthetic` | Unmarked GEMMA parity test | Add `@pytest.mark.tier1` |
-| [`test_runner_numpy.py:396`](../tests/test_runner_numpy.py#L396) `test_runner_mode4_uses_fused_dispatch` | Marked `tier1` but it's an internal dispatch assertion | Reclassify to `tier0` |
-| [`test_progress.py:19`](../tests/test_progress.py#L19) and 9 sibling patches | Mocks `progressbar.ProgressBar` 10×; allowed under boundary catalogue but a `FakeProgressBar` would catch interface drift | Replace with a tiny fake; promote to `tests/fakes/progress.py` |
-| [`test_cli.py:303`](../tests/test_cli.py#L303), :332, :361, :600 | `@patch("jamma.cli.PipelineRunner")` patches an internal collaborator | Inject a `FakePipelineRunner` via factory parameter |
-| [`test_safety_gates.py:228`](../tests/test_safety_gates.py#L228) | `patch("numpy.linalg.eigh", return_value=...)` mocks a numerical function | Either downsize to a real 50-sample eigendecomp, or move to a clearly-named "gate plumbing" suite |
-| `test_jlinalg_dgemm.py`, `test_jlinalg_dsyrk.py`, `test_jlinalg_eigh.py` (mostly unmarked) | Heavy parametrised boundary coverage runs by default | Mark a representative fast set `tier0`; move expensive cases to `tier2`; consider hypothesis property tests for shape/transpose invariants |
-| [`test_lmm_accel.py:1081`](../tests/test_lmm_accel.py#L1081) `TestCExtensionPerformance` | Already marked `tier2` + `slow` + `benchmark`, but contains pass/fail performance assertions | Move all `assert c_time < ...` assertions out; track as `pytest-benchmark` data instead. Hardware-sensitive correctness tests are flaky |
-| 8 unmarked test files (see §1.6) | Currently run by default-tier filter accidentally | Add explicit `pytestmark` |
+| `test_jlinalg_dgemm.py`, `test_jlinalg_dsyrk.py`, `test_jlinalg_eigh.py` | Heavy parametrised boundary coverage runs by default (currently `tier0` at the module level with `@slow`/`@benchmark` carving out the expensive cases) | Consider hypothesis property tests for shape/transpose invariants |
 
 ### 3.3 Tests / markers to remove
 

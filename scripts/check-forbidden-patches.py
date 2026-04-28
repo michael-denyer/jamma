@@ -87,13 +87,26 @@ def _iter_target_files(args: list[str]) -> list[Path]:
     return sorted(files)
 
 
+class _ScanError(Exception):
+    """Raised when a target file cannot be read.
+
+    The gate must surface this — silently treating a read failure as
+    "no findings" would hide both the broken file and the fact that the
+    gate skipped it.
+    """
+
+
 def _scan_file(path: Path) -> list[tuple[int, str, str]]:
-    """Return [(line_number, matched_text, reason), ...] for forbidden patches."""
+    """Return [(line_number, matched_text, reason), ...] for forbidden patches.
+
+    Raises ``_ScanError`` if the file cannot be read. Callers must surface
+    this — see class docstring.
+    """
     findings: list[tuple[int, str, str]] = []
     try:
         text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return findings
+    except (OSError, UnicodeDecodeError) as exc:
+        raise _ScanError(f"{path}: {exc}") from exc
     for lineno, line in enumerate(text.splitlines(), start=1):
         if ALLOW_RE.search(line):
             continue
@@ -107,14 +120,41 @@ def _scan_file(path: Path) -> list[tuple[int, str, str]]:
 def main(argv: list[str]) -> int:
     files = _iter_target_files(argv)
     repo_root = Path(__file__).resolve().parent.parent
+
+    # If args were passed but none had a .py suffix, fall back to repo-wide
+    # scanning rather than passing vacuously. Pre-commit can hand the hook a
+    # non-.py-only batch (e.g. only docs staged); we'd rather scan the tree
+    # than silently green-light it.
+    if argv and not files:
+        sys.stderr.write(
+            "[check-forbidden-patches] no .py files in args; "
+            "falling back to repo-wide scan.\n"
+        )
+        files = _iter_target_files([])
+
     failures: list[str] = []
+    read_errors: list[str] = []
     for path in files:
-        for lineno, snippet, reason in _scan_file(path):
+        try:
+            scan_results = _scan_file(path)
+        except _ScanError as exc:
+            read_errors.append(str(exc))
+            continue
+        for lineno, snippet, reason in scan_results:
             try:
                 rel = path.relative_to(repo_root)
             except ValueError:
                 rel = path
             failures.append(f"{rel}:{lineno}: {snippet!r}\n    -> {reason}")
+
+    if read_errors:
+        sys.stderr.write(
+            "Forbidden-patches gate could not read the following files. "
+            "The gate is non-functional until these are resolved:\n\n"
+        )
+        sys.stderr.write("\n".join(read_errors))
+        sys.stderr.write("\n")
+        return 1
 
     if failures:
         sys.stderr.write(

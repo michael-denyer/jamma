@@ -19,6 +19,7 @@ Usage::
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 
@@ -96,8 +97,6 @@ class FakeProgressbarModule:
         self.last_bar = bar
         return bar
 
-    # ``progressbar.widgets`` is referenced by the type annotation in
-    # jamma.core.progress; provide a placeholder so attribute access
-    # doesn't blow up.
-    class widgets:
-        WidgetBase = _FakeWidget
+    # ``progressbar.widgets`` is a submodule on the real package; mimic
+    # it as a namespace so ``progressbar.widgets.WidgetBase`` resolves.
+    widgets = SimpleNamespace(WidgetBase=_FakeWidget)

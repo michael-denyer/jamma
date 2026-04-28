@@ -7,16 +7,29 @@ boundaries. Patching ``numpy.linalg.*``, BLAS routines, or jamma's own
 internal functions hides interface drift and silently masks real numerical
 behaviour.
 
-This hook scans tests/ for forbidden patch targets and fails with a list
-of offending sites.
+The gate covers four invocation forms (the regexes that follow are anchored
+on the literal call prefix):
 
-Exceptions (lines with ``# allow-patch: <reason>`` are skipped) exist for
-the rare legitimate case — e.g. patching at the jamma import site of a
-numpy function for short-circuit testing of warning routing.
+* ``patch("dotted.path.to.target")``                — ``unittest.mock.patch``
+* ``patch.object(<module-or-class>, "<attr>")``     — module-attribute form
+* ``mocker.patch("dotted.path.to.target")``         — pytest-mock
+* ``monkeypatch.setattr("dotted.path.to.target")``  — string-target form
 
-Usage:
-  python3 scripts/check-forbidden-patches.py        # repo-wide
-  python3 scripts/check-forbidden-patches.py f1 f2  # specific files
+The module-form ``monkeypatch.setattr(<module>, "<attr>", ...)`` is *not*
+flagged because tests legitimately use it to toggle internal feature-flag
+constants (e.g. ``_C_ACCEL_AVAILABLE``) — those are dispatch booleans, not
+numerical functions. Use ``patch.object(<module>, "<func>", ...)`` to do
+the same and you'll trip the gate, which is the desired behaviour.
+
+Exceptions: a line carrying ``# allow-patch: <reason>`` is skipped. The
+comment may appear on the line of the matched call or on any continuation
+line up to the matching close paren — multi-line patch calls work the same
+way single-line ones do.
+
+Usage::
+
+    python3 scripts/check-forbidden-patches.py        # repo-wide
+    python3 scripts/check-forbidden-patches.py f1 f2  # specific files
 """
 
 from __future__ import annotations
@@ -25,51 +38,100 @@ import re
 import sys
 from pathlib import Path
 
-# Patch targets that should never appear in test code. The boundary
-# catalogue in docs/TESTING.md §2.2 lists what IS allowed; anything else
-# is an interface-drift hazard.
-FORBIDDEN_PATTERNS: tuple[tuple[str, str], ...] = (
+# Forbidden targets: each entry is (target_regex_after_open_paren, reason).
+# Each target is paired with every invocation prefix to build the full
+# pattern table below.
+TARGETS: tuple[tuple[str, str], ...] = (
     (
-        r'patch\(\s*["\']numpy\.linalg\.',
+        r'["\']numpy\.linalg\.',
         "Patches a NumPy numerical function. Use real synthetic data, or "
         "patch at the jamma import site (jamma.lmm.eigen.np.linalg.eigh) "
         "if testing routing logic.",
     ),
     (
-        r'patch\(\s*["\']numpy\.matmul',
+        r'["\']numpy\.matmul',
         "Patches a NumPy numerical function. Use real synthetic data.",
     ),
     (
-        r'patch\(\s*["\']scipy\.',
+        r'["\']scipy\.',
         "Patches scipy. scipy is a test-only reference; patching it makes "
         "the reference circular. Use real scipy.stats values.",
     ),
-    # Patches against jamma's own compute / likelihood / kinship modules.
-    # Exclude feature-flag constants (anything ending in _AVAILABLE /
-    # _ENABLED / _DISABLED) — those are dispatch booleans, legitimate to
-    # toggle in tests. The negative lookahead ``(?![A-Z_]*_AVAILABLE)`` etc.
-    # only fires when the patched symbol is a function (lowercase first
-    # char or underscore + lowercase).
     (
-        r'patch\(\s*["\']jamma\.lmm\.likelihood\.(?![A-Z_]+\b)[a-z_]',
+        # Functions in jamma.lmm.likelihood (not feature-flag constants).
+        r'["\']jamma\.lmm\.likelihood\.(?![A-Z_]+\b)[a-z_]',
         "Patches a jamma LMM likelihood function. Use small synthetic data "
         "with known expected values.",
     ),
     (
-        r'patch\(\s*["\']jamma\.lmm\.compute_numpy\.(?![A-Z_]+\b)[_a-z][a-z_]*\b(?<!_AVAILABLE)(?<!_ENABLED)',
+        # Functions in jamma.lmm.compute_numpy (not _AVAILABLE/_ENABLED flags).
+        r'["\']jamma\.lmm\.compute_numpy\.(?![A-Z_]+\b)'
+        r"[_a-z][a-z_]*\b(?<!_AVAILABLE)(?<!_ENABLED)",
         "Patches a jamma compute function. Use real synthetic data. "
         "(Toggling _C_*_AVAILABLE flags is allowed — those are dispatch "
         "booleans, not functions.)",
     ),
     (
-        r'patch\(\s*["\']jamma\.jlinalg\.(eigh|dgemm|dsyrk)\b',
+        r'["\']jamma\.jlinalg\.(eigh|dgemm|dsyrk)\b',
         "Patches a jlinalg numerical wrapper. Use real synthetic data.",
     ),
     (
-        r'patch\(\s*["\']jamma\.kinship\.compute\.(?![A-Z_]+\b)[a-z_]',
+        r'["\']jamma\.kinship\.compute\.(?![A-Z_]+\b)[a-z_]',
         "Patches kinship computation. Use real small synthetic data.",
     ),
 )
+
+# Invocation prefixes for STRING-target forms. Each is paired with every
+# TARGETS entry to build the cartesian-product pattern table.
+STRING_INVOCATIONS: tuple[str, ...] = (
+    r"patch\(\s*",
+    r"mocker\.patch\(\s*",
+    r"monkeypatch\.setattr\(\s*",
+)
+
+# patch.object(<module>, "<attr>") forms — first arg is a module reference,
+# not a string. We match common module-reference paths to forbidden targets.
+# Each entry is (full_pattern, reason).
+PATCH_OBJECT_PATTERNS: tuple[tuple[str, str], ...] = (
+    (
+        r"patch\.object\(\s*(?:np|numpy)\.linalg\b",
+        "patch.object on numpy.linalg — patches a NumPy numerical function.",
+    ),
+    (
+        r"patch\.object\(\s*scipy\b",
+        "patch.object on scipy — circular reference, use real scipy.stats.",
+    ),
+    (
+        r"patch\.object\(\s*jamma\.lmm\.likelihood\b",
+        "patch.object on jamma.lmm.likelihood — use synthetic data.",
+    ),
+    (
+        r"patch\.object\(\s*jamma\.lmm\.compute_numpy\s*,\s*"
+        r'["\'](?![A-Z_]+\b)[_a-z]',
+        "patch.object on a jamma.lmm.compute_numpy function (not a flag).",
+    ),
+    (
+        r'patch\.object\(\s*jamma\.jlinalg\b\s*,\s*["\'](eigh|dgemm|dsyrk)\b',
+        "patch.object on a jlinalg numerical wrapper.",
+    ),
+    (
+        r"patch\.object\(\s*jamma\.kinship\.compute\b",
+        "patch.object on kinship.compute — use synthetic data.",
+    ),
+)
+
+
+def _build_patterns() -> tuple[tuple[re.Pattern[str], str], ...]:
+    items: list[tuple[re.Pattern[str], str]] = []
+    for target_re, reason in TARGETS:
+        for invocation in STRING_INVOCATIONS:
+            items.append((re.compile(invocation + target_re), reason))
+    for full, reason in PATCH_OBJECT_PATTERNS:
+        items.append((re.compile(full), reason))
+    return tuple(items)
+
+
+FORBIDDEN_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = _build_patterns()
 
 # Allow-list comment marker. A line carrying this comment is skipped.
 ALLOW_RE = re.compile(r"#\s*allow-patch\s*:\s*\S")
@@ -96,24 +158,47 @@ class _ScanError(Exception):
     """
 
 
+def _allow_window_for_match(lines: list[str], match_line: int) -> range:
+    """Return the range of physical lines on which an allow-patch comment
+    applies to a match starting at ``match_line``.
+
+    Multi-line ``patch(...)`` calls span a paren-balanced region; the
+    comment may appear on any line in that region. We approximate by
+    counting parens until we close the open call (or hit EOF).
+
+    The paren counter is naive about parens inside string literals — that
+    would only matter if a forbidden target string contained a stray ``(``
+    or ``)``, which they don't.
+    """
+    line = lines[match_line]
+    depth = line.count("(") - line.count(")")
+    end = match_line
+    while depth > 0 and end + 1 < len(lines):
+        end += 1
+        depth += lines[end].count("(") - lines[end].count(")")
+    return range(match_line, end + 1)
+
+
 def _scan_file(path: Path) -> list[tuple[int, str, str]]:
     """Return [(line_number, matched_text, reason), ...] for forbidden patches.
 
-    Raises ``_ScanError`` if the file cannot be read. Callers must surface
-    this — see class docstring.
+    Raises ``_ScanError`` if the file cannot be read.
     """
     findings: list[tuple[int, str, str]] = []
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         raise _ScanError(f"{path}: {exc}") from exc
-    for lineno, line in enumerate(text.splitlines(), start=1):
-        if ALLOW_RE.search(line):
-            continue
+    lines = text.splitlines()
+    for lineno, line in enumerate(lines):
         for pattern, reason in FORBIDDEN_PATTERNS:
-            match = re.search(pattern, line)
-            if match:
-                findings.append((lineno, match.group(0), reason))
+            match = pattern.search(line)
+            if not match:
+                continue
+            allow_window = _allow_window_for_match(lines, lineno)
+            if any(ALLOW_RE.search(lines[i]) for i in allow_window):
+                continue
+            findings.append((lineno + 1, match.group(0), reason))
     return findings
 
 

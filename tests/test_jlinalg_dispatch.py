@@ -175,21 +175,40 @@ class TestILP64Awareness:
         assert isinstance(blas_is_ilp64, int)
         assert blas_is_ilp64 in (0, 1)
 
-    def test_blas_backend_includes_ilp64_info(self):
-        """Backend string distinguishes ILP64 from LP64 for MKL/OpenBLAS.
+    def test_blas_backend_string_has_known_value(self):
+        """Backend string is one of the documented values.
 
-        This test is informational -- it documents the current system's
-        configuration. On macOS with Accelerate, the backend is 'Accelerate'
-        (neither ILP64 nor LP64). On Linux with MKL, it should be
-        'MKL-ILP64' or 'MKL-LP64'.
+        MKL and OpenBLAS backends MUST advertise their ILP64/LP64 split
+        in the suffix. Accelerate is ILP64-only on macOS 13.3+ and is
+        reported without a suffix. ``numpy-fallback`` is the catch-all
+        when no vendor BLAS is wired in.
         """
-        print(f"Current blas_backend: {blas_backend}")
-        print(f"Current blas_is_ilp64: {blas_is_ilp64}")
-        if "MKL" in blas_backend:
-            assert blas_backend in ("MKL-ILP64", "MKL-LP64")
-        elif "OpenBLAS" in blas_backend:
-            assert blas_backend in ("OpenBLAS-ILP64", "OpenBLAS-LP64")
-        # Accelerate, numpy-fallback: no ILP64/LP64 suffix expected
+        known_backends = {
+            "MKL-ILP64",
+            "MKL-LP64",
+            "OpenBLAS-ILP64",
+            "OpenBLAS-LP64",
+            "Accelerate",
+            "Accelerate-ILP64",
+            "numpy-fallback",
+        }
+        assert blas_backend in known_backends, (
+            f"Unknown blas_backend {blas_backend!r}; expected one of "
+            f"{sorted(known_backends)}. Update this list and "
+            f"jlinalg/__init__.py if a new backend was added."
+        )
+
+    def test_blas_backend_ilp64_flag_consistent_with_string(self):
+        """``blas_is_ilp64`` value matches the backend-string suffix."""
+        if "ILP64" in blas_backend:
+            assert blas_is_ilp64 == 1, (
+                f"backend={blas_backend!r} but blas_is_ilp64={blas_is_ilp64}"
+            )
+        elif "LP64" in blas_backend:
+            assert blas_is_ilp64 == 0, (
+                f"backend={blas_backend!r} but blas_is_ilp64={blas_is_ilp64}"
+            )
+        # Accelerate / numpy-fallback: no LP64/ILP64 suffix to cross-check.
 
     def test_blas_is_ilp64_accessible_from_module(self):
         """blas_is_ilp64 is accessible via jamma.jlinalg (public API)."""

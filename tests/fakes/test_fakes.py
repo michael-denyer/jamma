@@ -2,16 +2,26 @@
 
 If a fake breaks, every test that uses it fails with a confusing message.
 These tests fail with a clear message so the regression is obvious.
+
+The ``TestFakeProductionDrift`` class compares each fake method's
+signature against the real production method it shadows. This catches
+the failure mode the rest of the package can't: when production *adds* a
+parameter to a method the fake also implements, calling the fake with
+the new arg works only because the fake doesn't declare it — tests that
+exercise the new parameter would silently call into a stale stub. The
+signature check fails loudly in that case.
 """
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from jamma.pipeline import PipelineConfig, PipelineResult
+from jamma.lmm.io import IncrementalAssocWriter
+from jamma.pipeline import PipelineConfig, PipelineResult, PipelineRunner
 from tests.fakes import (
     FakeAssocWriter,
     FakePipelineRunner,
@@ -160,3 +170,59 @@ class TestFakePipelineRunnerFactory:
         factory(config)
         # Adding a required field to PipelineConfig must break this line:
         assert isinstance(factory.last_config, PipelineConfig)
+
+
+class TestFakeProductionDrift:
+    """Compare fake method signatures to the real production methods.
+
+    These tests catch the failure mode an ``AttributeError`` check can't:
+    a method's *parameter list* diverging between fake and real. If
+    production adds a parameter, the fake's stale signature would silently
+    accept old call sites and miss the new arg entirely.
+
+    Allowed delta: a fake's ``__init__`` may take *more* parameters than
+    the real one (the test seam, e.g. ``result=`` for the fake runner).
+    Methods called by production code must match exactly.
+    """
+
+    @staticmethod
+    def _param_names(callable_obj: object) -> list[str]:
+        return [
+            p.name
+            for p in inspect.signature(callable_obj).parameters.values()
+            if p.name != "self"
+        ]
+
+    def test_fake_assoc_writer_write_arrays_batch_matches(self) -> None:
+        real = self._param_names(IncrementalAssocWriter.write_arrays_batch)
+        fake = self._param_names(FakeAssocWriter.write_arrays_batch)
+        assert fake == real, (
+            f"FakeAssocWriter.write_arrays_batch drift:\n"
+            f"  real: {real}\n  fake: {fake}\n"
+            f"Production added or renamed a parameter; update the fake."
+        )
+
+    def test_fake_pipeline_runner_run_matches(self) -> None:
+        real = self._param_names(PipelineRunner.run)
+        fake = self._param_names(FakePipelineRunner.run)
+        assert fake == real, (
+            f"FakePipelineRunner.run drift:\n  real: {real}\n  fake: {fake}"
+        )
+
+    def test_fake_pipeline_runner_init_accepts_real_config(self) -> None:
+        """FakePipelineRunner.__init__ must accept what production accepts.
+
+        The real ``PipelineRunner.__init__`` parameter set must be a
+        prefix of the fake's (the fake adds ``result=`` for test setup).
+        If production adds a new positional parameter to ``__init__``,
+        every consumer of the fake will still work but the new parameter
+        won't be captured — fail here so it's caught.
+        """
+        real = self._param_names(PipelineRunner.__init__)
+        fake = self._param_names(FakePipelineRunner.__init__)
+        assert real == fake[: len(real)], (
+            f"FakePipelineRunner.__init__ drift:\n"
+            f"  real prefix: {real}\n  fake: {fake}\n"
+            f"The fake must accept every real __init__ parameter "
+            f"(extra trailing test-seam params like 'result' are fine)."
+        )

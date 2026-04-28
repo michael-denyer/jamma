@@ -26,9 +26,6 @@ import pytest
 
 from jamma.jlinalg import HAS_C_EXTENSION, dgemm
 
-# Module-level default tier. Individual tests with @pytest.mark.slow or
-# @pytest.mark.benchmark keep their existing markers (pytest applies all marks
-# from both the module and the test).
 pytestmark = pytest.mark.tier0
 
 # ---------------------------------------------------------------------------

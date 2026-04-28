@@ -27,7 +27,6 @@ import pytest
 
 from jamma.jlinalg import HAS_C_EXTENSION, dsyr2k, dsyrk
 
-# @pytest.mark.slow / .benchmark on individual tests still applies.
 pytestmark = pytest.mark.tier0
 
 # ---------------------------------------------------------------------------

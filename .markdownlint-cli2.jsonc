@@ -35,11 +35,14 @@
     // double-reporting noise.
     "MD051": false,
 
-    // MD060: table column style ("compact" requires no spaces around
-    // pipes). Disabled because we use the more readable "leading_and_trailing"
-    // style with spaces — `| col | col |` not `|col|col|`. Both are valid
-    // GitHub-flavored markdown; the rule only enforces consistency with
-    // whichever style appears first in the file.
+    // MD060 (table-column-style): enforces a single style across tables —
+    // `aligned` (vertically padded), `compact` (one space each side of the
+    // pipe), `tight` (no padding), or `any` (each table independently must
+    // satisfy one of the three). Disabled here because mixing aligned and
+    // compact tables across long-lived docs is ergonomic — diffs stay
+    // small when one column gains a long entry and the rest of the table
+    // doesn't have to be re-aligned. See
+    // https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md#md060
     "MD060": false
   },
   "globs": [

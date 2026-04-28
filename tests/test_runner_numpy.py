@@ -22,12 +22,6 @@ from jamma.validation import (
     load_gemma_assoc,
 )
 from tests.conftest import load_phenotypes_from_fam
-
-# ---------------------------------------------------------------------------
-# Fake infrastructure
-# ---------------------------------------------------------------------------
-# FakeAssocWriter has moved to tests/fakes/. Re-exported here so existing
-# imports inside this file (and any external imports) keep working.
 from tests.fakes import FakeAssocWriter
 
 # ---------------------------------------------------------------------------

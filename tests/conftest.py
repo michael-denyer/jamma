@@ -32,6 +32,15 @@ def pytest_collection_modifyitems(
     Skipped on xdist workers — they only see a partition of the items, so
     a file with markers can appear marker-less from a single worker's view.
     The controller process sees the full collection and runs the check.
+
+    Filter caveat: when ``items`` has been narrowed by ``-m <expr>`` or
+    ``-k <expr>`` (e.g. ``-m tier2``), files whose tests are all filtered
+    out vanish from this list. The gate then can't see those files and
+    won't flag them as marker-less. In default-suite runs (the addopts
+    excludes only ``slow`` and ``tier2``) every other file is collected
+    so the gate fires correctly; ``test-slow.yml`` runs the inverse.
+    For full-coverage enforcement, ``ci.yml`` runs an unfiltered collect
+    pass that exercises this gate against the entire tree.
     """
     if hasattr(config, "workerinput"):
         return  # xdist worker: skip, controller will run the check
@@ -80,7 +89,16 @@ def pytest_configure(config: pytest.Config) -> None:
     sys.path.insert(0, str(script_dir))
     try:
         import check_c_extension_freshness as freshness
-    except ImportError:
+    except ImportError as exc:
+        # The script exists on disk (we checked above) but failed to import.
+        # That's a real bug — syntax error, broken refactor, missing dep.
+        # We don't want to fail the whole session, but a silent return would
+        # mask the bug indefinitely. Surface it instead.
+        sys.stderr.write(
+            f"\n\033[33m[jamma] WARNING: c-extension freshness check "
+            f"could not be loaded ({type(exc).__name__}: {exc}). "
+            f"Stale .so files will not be detected this session.\033[0m\n"
+        )
         return
     finally:
         # Don't pollute sys.path past this function.

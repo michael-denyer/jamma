@@ -88,6 +88,15 @@ def _big_K_view(n: int = 50_000) -> np.ndarray:
     memory.  The result is square, 2-D, float64, and symmetric (all
     elements equal) — satisfying eigendecompose_kinship's validation
     without a real allocation.
+
+    CAVEAT: Tests in TestLP64OverflowWarning depend on
+    ``eigendecompose_kinship`` not materialising the matrix before the
+    LP64 overflow check fires (otherwise the strided view would be
+    forced into a real ~20 GB allocation). If anyone adds a defensive
+    ``np.allclose(K, K.T)`` symmetry check or copies ``K`` to ensure
+    contiguity *before* the overflow guard, every test in this class
+    will fail with an OOM-shaped traceback that looks unrelated. Move
+    such validation steps after the overflow check.
     """
     backing = np.ones((4, 4), dtype=np.float64)
     return np.lib.stride_tricks.as_strided(backing, shape=(n, n), strides=(0, 0))

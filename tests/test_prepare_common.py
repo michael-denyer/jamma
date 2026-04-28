@@ -279,8 +279,12 @@ def test_compute_score_numpy_rejects_negative_hi_eval_null(monkeypatch):
     hi_bad[2] = -0.5
 
     # Force Python fallback by hiding C extension
-    monkeypatch.setattr(compute_numpy, "_compute_score_batch_c", None)
-    monkeypatch.setattr(compute_numpy, "_compute_score_batch_general_c", None)
+    monkeypatch.setattr(
+        compute_numpy, "_compute_score_batch_c", None
+    )  # allow-patch: =None forces NumPy path (same as toggling _C_*_AVAILABLE)
+    monkeypatch.setattr(
+        compute_numpy, "_compute_score_batch_general_c", None
+    )  # allow-patch: =None forces NumPy path (same as toggling _C_*_AVAILABLE)
 
     with pytest.raises(ValueError, match="non-positive"):
         compute_numpy._compute_score_numpy(
@@ -305,8 +309,12 @@ def test_compute_score_numpy_rejects_nan_hi_eval_null(monkeypatch):
     hi_bad[0] = np.nan
 
     # Force Python fallback by hiding C extension
-    monkeypatch.setattr(compute_numpy, "_compute_score_batch_c", None)
-    monkeypatch.setattr(compute_numpy, "_compute_score_batch_general_c", None)
+    monkeypatch.setattr(
+        compute_numpy, "_compute_score_batch_c", None
+    )  # allow-patch: =None forces NumPy path (same as toggling _C_*_AVAILABLE)
+    monkeypatch.setattr(
+        compute_numpy, "_compute_score_batch_general_c", None
+    )  # allow-patch: =None forces NumPy path (same as toggling _C_*_AVAILABLE)
 
     with pytest.raises(ValueError, match="non-finite"):
         compute_numpy._compute_score_numpy(

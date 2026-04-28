@@ -15,11 +15,16 @@ on the literal call prefix):
 * ``mocker.patch("dotted.path.to.target")``         — pytest-mock
 * ``monkeypatch.setattr("dotted.path.to.target")``  — string-target form
 
-The module-form ``monkeypatch.setattr(<module>, "<attr>", ...)`` is *not*
-flagged because tests legitimately use it to toggle internal feature-flag
-constants (e.g. ``_C_ACCEL_AVAILABLE``) — those are dispatch booleans, not
-numerical functions. Use ``patch.object(<module>, "<func>", ...)`` to do
-the same and you'll trip the gate, which is the desired behaviour.
+The module-form ``monkeypatch.setattr(<module>, "<attr>", ...)`` is also
+covered when the module reference is one of the documented forbidden
+aliases (``compute_numpy``, ``cn``, ``likelihood``, ``jlinalg``, ``jl``,
+``kinship_compute``, ``kc``) and the attribute name is a lowercase
+function-shaped identifier. Feature-flag constants (``_AVAILABLE`` /
+``_ENABLED`` suffixes) remain allowed because tests legitimately toggle
+them to drive dispatch paths. Add ``# allow-patch: <reason>`` for the
+rare case where patching the function reference itself (e.g. setting it
+to ``None`` to force the NumPy fallback, or to a sentinel that asserts
+on call) is the right test design.
 
 Exceptions: a line carrying ``# allow-patch: <reason>`` is skipped. The
 comment may appear on the line of the matched call or on any continuation
@@ -117,6 +122,40 @@ PATCH_OBJECT_PATTERNS: tuple[tuple[str, str], ...] = (
     (
         r"patch\.object\(\s*jamma\.kinship\.compute\b",
         "patch.object on kinship.compute — use synthetic data.",
+    ),
+)
+
+# Aliases tests use to refer to forbidden modules. Used by the
+# ``monkeypatch.setattr(<alias>, "<attr>", ...)`` rule below.
+_FORBIDDEN_MODULE_ALIASES: tuple[str, ...] = (
+    "compute_numpy",  # `import jamma.lmm.compute_numpy as compute_numpy`
+    "cn",  # `import jamma.lmm.compute_numpy as cn`
+    "likelihood",  # `from jamma.lmm import likelihood`
+    "lik",  # alias
+    "jlinalg",  # `from jamma import jlinalg`
+    "jl",  # alias
+    "kinship_compute",  # `from jamma.kinship import compute as kinship_compute`
+    "kc",  # alias
+)
+
+# monkeypatch.setattr(<alias>, "<func_name>", ...) — module-form bypass.
+# Function-shaped attribute names are flagged. Excludes _AVAILABLE and
+# _ENABLED feature-flag constants (which legitimately drive dispatch paths
+# in tests). For the rare legitimate function-form patch (e.g. forcing the
+# NumPy fallback by setting ``_compute_score_batch_c = None``), add an
+# ``# allow-patch: <reason>`` comment on the call.
+_MODULE_FORM_PATTERN = (
+    r"monkeypatch\.setattr\(\s*(?:" + "|".join(_FORBIDDEN_MODULE_ALIASES) + r")"
+    r'\s*,\s*["\'](?![A-Z_]+\b)_?[a-z][a-z_0-9]*\b(?<!_AVAILABLE)(?<!_ENABLED)'
+)
+PATCH_OBJECT_PATTERNS = (
+    *PATCH_OBJECT_PATTERNS,
+    (
+        _MODULE_FORM_PATTERN,
+        "monkeypatch.setattr on a function attribute of a forbidden module "
+        "(jamma.lmm.compute_numpy / likelihood / jlinalg / kinship.compute). "
+        "Toggle _C_*_AVAILABLE flags instead, or add `# allow-patch: <reason>` "
+        "if forcing dispatch fallback or sentinel-on-call is intentional.",
     ),
 )
 

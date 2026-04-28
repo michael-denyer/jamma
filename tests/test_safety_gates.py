@@ -7,17 +7,20 @@ a 50k x 50k "view" backed by a tiny 4x4 allocation — exercises the real
 shape-checking code path without allocating 20 GB.
 
 SAFE-02 and SAFE-03 inspect source via the ``ast`` module (structural — not a
-regex) and exercise the guards at runtime where possible: SAFE-02 uses a
-``python -O`` subprocess to verify the guard's ``RuntimeError`` survives bytecode
-optimisation (a bare ``assert`` would not), and SAFE-03 re-executes the ABI check
-in-process with a monkey-patched expected constant to confirm the guard actually
-raises ``ImportError``.
+regex) and exercise the guards at runtime: SAFE-02 uses a ``python -O``
+subprocess to verify the guard's ``RuntimeError`` survives bytecode
+optimisation (a bare ``assert`` would not), and SAFE-03 stubs the C extension
+in ``sys.modules`` with a wrong ``ABI_VERSION`` *before* importing
+``jamma.jlinalg`` so the production import-time guard fires; auto-recompile is
+also stubbed out so the test observes the warn-and-fallback path rather than a
+silent rebuild.
 """
 
 import ast
 import contextlib
 import subprocess
 import sys
+import textwrap
 import warnings
 from pathlib import Path
 from types import SimpleNamespace
@@ -422,35 +425,96 @@ class TestJlinalgABIValidation:
                 f"ABI guard raises {exc.func.id!r}, expected 'ImportError'"
             )
 
-    def test_abi_mismatch_raises_import_error_at_runtime(self) -> None:
-        """Runtime check: the ABI guard actually raises when values differ.
+    def test_abi_mismatch_triggers_production_guard_at_runtime(self) -> None:
+        """Production guard fires when ``_jlinalg.ABI_VERSION`` is wrong.
 
         The C extension's ``ABI_VERSION`` is fixed at compile time and can't
-        be perturbed without rebuilding. Instead we re-run the equivalent
-        comparison from a clean subprocess with ``_EXPECTED_JLINALG_ABI``
-        monkey-patched to a wrong value before import. This exercises the
-        guard end-to-end (import → compare → raise) with no source-text
-        inspection.
+        be perturbed without rebuilding. Instead, the subprocess installs a
+        fake ``jamma.jlinalg._jlinalg`` module into ``sys.modules`` BEFORE
+        importing ``jamma.jlinalg``, so the production import block in
+        ``jlinalg/__init__.py`` reads the fake's wrong ABI_VERSION and the
+        production guard fires.
+
+        Auto-recompile is also stubbed out (returns False) — otherwise the
+        production fallback path would try to rebuild the real extension
+        and the test would observe the rebuilt-good module instead of the
+        guard's drift-handling. With recompile disabled, the fallback
+        emits a deterministic warning and ``HAS_C_EXTENSION`` becomes
+        ``False``. We assert on those observable side-effects.
         """
         from jamma import jlinalg as jl
 
         if not jl.HAS_C_EXTENSION:
             pytest.skip("C extension not available; ABI guard is bypassed")
 
-        actual_abi = jl.ABI_VERSION
-        wrong_abi = actual_abi + 1
-        program = (
-            "import sys\n"
-            "import jamma.jlinalg as jl\n"
-            f"jl._EXPECTED_JLINALG_ABI = {wrong_abi}\n"
-            # Re-run the comparison the import block would have made.
-            "if jl.ABI_VERSION != jl._EXPECTED_JLINALG_ABI:\n"
-            "    raise ImportError(\n"
-            "        f'_jlinalg C extension ABI mismatch: '\n"
-            "        f'compiled={jl.ABI_VERSION}, "
-            "expected={jl._EXPECTED_JLINALG_ABI}.'\n"
-            "    )\n"
-            "sys.exit(0)\n"
+        wrong_abi = jl._EXPECTED_JLINALG_ABI - 1
+        program = textwrap.dedent(
+            f"""
+            import sys
+            import types
+            import warnings
+            from importlib.machinery import ModuleSpec
+
+            # Stub the C extension before jamma.jlinalg is imported. Production
+            # code at jamma/jlinalg/__init__.py reads ABI_VERSION from this
+            # module; we plant the wrong value to drive the guard.
+            fake = types.ModuleType("jamma.jlinalg._jlinalg")
+            # ``importlib.util.find_spec`` requires a ModuleSpec on the
+            # module object — production code calls ``find_spec`` early
+            # to decide whether the .so exists.
+            fake.__spec__ = ModuleSpec("jamma.jlinalg._jlinalg", loader=None)
+            fake.ABI_VERSION = {wrong_abi}
+            fake.HAS_OPENMP = False
+            fake.blas_backend = "fake"
+            fake.blas_has_dgeqrf = 0
+            fake.blas_has_dgesvd = 0
+            fake.blas_has_dsyevd = 0
+            fake.blas_has_dsyevr = 0
+            fake.blas_has_dsyrk = 0
+            fake.blas_has_lapacke_dsyevd = 0
+            fake.blas_is_ilp64 = 0
+            fake.compute_snp_stats_chunk = lambda *a, **k: None
+            fake.dgemm = lambda *a, **k: None
+            fake.dsyrk = lambda *a, **k: None
+            fake.eigh = lambda *a, **k: None
+            fake.get_n_threads = lambda *a, **k: 1
+            fake.jlinalg_isa = "fake"
+            fake.qr = lambda *a, **k: None
+            fake.set_n_threads = lambda *a, **k: None
+            fake.svd = lambda *a, **k: None
+            sys.modules["jamma.jlinalg._jlinalg"] = fake
+
+            # Stub auto-recompile so the production fallback can not paper
+            # over the simulated ABI mismatch by actually rebuilding.
+            recompile_mod = types.ModuleType("jamma.core.recompile")
+            recompile_mod.auto_recompile_c_extension = (
+                lambda module_name, compiler_module, sys_module_key, label: False
+            )
+            sys.modules["jamma.core.recompile"] = recompile_mod
+
+            with warnings.catch_warnings(record=True) as captured:
+                warnings.simplefilter("always")
+                import jamma.jlinalg as jl
+
+            assert jl.HAS_C_EXTENSION is False, (
+                "ABI mismatch should drive HAS_C_EXTENSION to False; "
+                f"got HAS_C_EXTENSION={{jl.HAS_C_EXTENSION!r}}"
+            )
+            assert jl.ABI_VERSION == 0, (
+                "fallback should reset ABI_VERSION to 0; "
+                f"got ABI_VERSION={{jl.ABI_VERSION!r}}"
+            )
+            warning_text = "\\n".join(str(w.message) for w in captured)
+            assert "ABI mismatch" in warning_text, (
+                "production fallback warning must mention 'ABI mismatch'; "
+                f"got warnings: {{warning_text!r}}"
+            )
+            assert "Falling back to NumPy" in warning_text, (
+                "production fallback warning must announce NumPy fallback; "
+                f"got warnings: {{warning_text!r}}"
+            )
+            print("PASS")
+            """
         )
         result = subprocess.run(
             [sys.executable, "-c", program],
@@ -458,9 +522,10 @@ class TestJlinalgABIValidation:
             text=True,
             timeout=30,
         )
-        assert result.returncode != 0, (
-            "ABI mismatch should raise ImportError; subprocess exited 0 instead"
+        assert result.returncode == 0, (
+            f"ABI guard runtime test failed (exit={result.returncode}):\n"
+            f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
         )
-        assert "ABI mismatch" in result.stderr, (
-            f"Expected 'ABI mismatch' in stderr, got: {result.stderr!r}"
+        assert "PASS" in result.stdout, (
+            f"Subprocess did not print PASS; stdout={result.stdout!r}"
         )

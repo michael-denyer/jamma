@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -18,48 +19,111 @@ _REQUIRED_TIER_MARKERS = frozenset({"tier0", "tier1", "tier2", "slow", "benchmar
 # possible; the right fix is almost always to add a marker, not an exemption.
 _TIER_MARKER_EXEMPT_FILES: frozenset[str] = frozenset()
 
+_TESTS_DIR = Path(__file__).resolve().parent
 
-def pytest_collection_modifyitems(
-    config: pytest.Config, items: list[pytest.Item]
-) -> None:
-    """Fail collection if any test file has zero tier/slow/benchmark markers.
 
-    Enforces docs/TESTING.md §1.6: every test file must declare at least
-    one tier marker, either per-test or via module-level ``pytestmark``.
-    This catches files that silently default into the tier0+tier1 CI run
-    without anyone classifying them.
+def _module_level_marker_names(tree: ast.Module) -> set[str]:
+    """Return the set of marker names assigned to ``pytestmark`` at module level.
 
-    Skipped on xdist workers — they only see a partition of the items, so
-    a file with markers can appear marker-less from a single worker's view.
-    The controller process sees the full collection and runs the check.
-
-    Filter caveat: when ``items`` has been narrowed by ``-m <expr>`` or
-    ``-k <expr>`` (e.g. ``-m tier2``), files whose tests are all filtered
-    out vanish from this list. The gate then can't see those files and
-    won't flag them as marker-less. In default-suite runs (the addopts
-    excludes only ``slow`` and ``tier2``) every other file is collected
-    so the gate fires correctly; ``test-slow.yml`` runs the inverse.
-    For full-coverage enforcement, ``ci.yml`` runs an unfiltered collect
-    pass that exercises this gate against the entire tree.
+    Recognises both single-mark (``pytestmark = pytest.mark.tier0``) and
+    list-of-marks (``pytestmark = [pytest.mark.tier0, pytest.mark.slow]``)
+    forms. Anything else (computed expressions, function calls) is
+    conservatively treated as no markers — the file should declare its
+    classification statically.
     """
-    if hasattr(config, "workerinput"):
-        return  # xdist worker: skip, controller will run the check
-    files_with_marker: dict[str, bool] = {}
-    for item in items:
-        path = str(item.path) if hasattr(item, "path") else str(item.fspath)
-        has_required = any(
-            m.name in _REQUIRED_TIER_MARKERS for m in item.iter_markers()
-        )
-        files_with_marker[path] = files_with_marker.get(path, False) or has_required
+    names: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "pytestmark"
+        ):
+            continue
+        candidates: list[ast.expr] = []
+        if isinstance(node.value, ast.List | ast.Tuple):
+            candidates.extend(node.value.elts)
+        else:
+            candidates.append(node.value)
+        for c in candidates:
+            # pytest.mark.<name>
+            if (
+                isinstance(c, ast.Attribute)
+                and isinstance(c.value, ast.Attribute)
+                and isinstance(c.value.value, ast.Name)
+                and c.value.value.id == "pytest"
+                and c.value.attr == "mark"
+            ):
+                names.add(c.attr)
+            # pytest.mark.<name>(...)
+            elif (
+                isinstance(c, ast.Call)
+                and isinstance(c.func, ast.Attribute)
+                and isinstance(c.func.value, ast.Attribute)
+                and isinstance(c.func.value.value, ast.Name)
+                and c.func.value.value.id == "pytest"
+                and c.func.value.attr == "mark"
+            ):
+                names.add(c.func.attr)
+    return names
 
-    missing = [
-        path
-        for path, ok in files_with_marker.items()
-        if not ok and Path(path).name not in _TIER_MARKER_EXEMPT_FILES
-    ]
+
+def _per_test_marker_names(tree: ast.Module) -> set[str]:
+    """Return the set of @pytest.mark.<name> decorators on any function or class."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            continue
+        for dec in node.decorator_list:
+            target = dec.func if isinstance(dec, ast.Call) else dec
+            if (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Attribute)
+                and isinstance(target.value.value, ast.Name)
+                and target.value.value.id == "pytest"
+                and target.value.attr == "mark"
+            ):
+                names.add(target.attr)
+    return names
+
+
+def _file_declares_tier_marker(path: Path) -> bool:
+    """Return True if ``path`` has at least one tier/slow/benchmark marker.
+
+    Source-parsed (not collection-based) so the check is invariant under
+    xdist, ``-k``, ``-m`` filters, and any other collection-time filtering.
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (SyntaxError, OSError, UnicodeDecodeError):
+        # Treat unparsable test files as marker-less so the gate flags
+        # them; surfacing via the same channel keeps diagnostics together.
+        return False
+    if _module_level_marker_names(tree) & _REQUIRED_TIER_MARKERS:
+        return True
+    return bool(_per_test_marker_names(tree) & _REQUIRED_TIER_MARKERS)
+
+
+def _enforce_tier_markers() -> None:
+    """Source-parse every test file under ``tests/`` and fail on missing markers.
+
+    Called from ``pytest_configure`` (before xdist forks workers) so the
+    enforcement runs exactly once per session, regardless of distribution
+    mode or CLI filters. The previous implementation used
+    ``pytest_collection_modifyitems`` and was empirically a no-op under
+    ``-n`` (xdist's controller hook receives an empty items list — see
+    tests/test_conftest_tier_gate.py for the regression tests).
+    """
+    missing: list[Path] = []
+    for path in sorted(_TESTS_DIR.rglob("test_*.py")):
+        if path.name in _TIER_MARKER_EXEMPT_FILES:
+            continue
+        if not _file_declares_tier_marker(path):
+            missing.append(path)
     if missing:
-        rel = sorted(Path(p).relative_to(Path(__file__).parent.parent) for p in missing)
-        listing = "\n  ".join(str(p) for p in rel)
+        repo_root = _TESTS_DIR.parent
+        listing = "\n  ".join(str(p.relative_to(repo_root)) for p in missing)
         raise pytest.UsageError(
             "The following test files have no tier marker "
             "(tier0/tier1/tier2/slow/benchmark):\n  "
@@ -70,16 +134,27 @@ def pytest_collection_modifyitems(
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Warn at session start if any C extension is stale vs its source.
+    """Run session-start checks: tier-marker gate and stale-C-extension warn.
 
-    The editable install picks up Python source edits automatically, but C
-    source edits require an explicit rebuild. Without this check, an edit
-    to e.g. ``_lmm_accel.c`` would be silently ignored — tests run against
-    the old compiled .so. We warn rather than fail so the session still
-    starts; pre-push hook (scripts/check_c_extension_freshness.py) is the
+    The tier-marker gate runs in ``pytest_configure`` (not
+    ``pytest_collection_modifyitems``) because xdist forks workers AFTER
+    ``pytest_configure``; running the check here means it fires exactly
+    once on the controller, before any partitioning. The previous
+    collection-based hook silently no-op'd under xdist (controller's
+    items list is empty; workers were skipped via ``workerinput`` guard).
+
+    The stale-C-extension check is advisory: editable install picks up
+    Python edits automatically, but C source edits require explicit
+    rebuild. We warn rather than fail so the session still starts;
+    pre-push hook (scripts/check_c_extension_freshness.py) is the
     blocking gate.
     """
-    del config
+    # xdist worker processes inherit ``pytest_configure`` invocations too.
+    # Skip on workers — the controller already ran the gate, and a worker
+    # raising UsageError mid-session would crash xdist.
+    if not hasattr(config, "workerinput"):
+        _enforce_tier_markers()
+
     # Import guarded: script lives outside the package and may be missing
     # in some install layouts (e.g. a sdist-only install). Missing script
     # is not a test failure — just skip the check.

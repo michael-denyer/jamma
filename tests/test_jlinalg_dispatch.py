@@ -190,6 +190,12 @@ class TestILP64Awareness:
             "OpenBLAS-LP64",
             "Accelerate",
             "Accelerate-ILP64",
+            # ``system-BLAS-{I,}LP64`` is returned by blas_dispatch.c when
+            # a vendor library is loaded but path-string detection fails to
+            # identify it (typically Linux distributions linking against an
+            # alias-only libblas.so).
+            "system-BLAS-ILP64",
+            "system-BLAS-LP64",
             "numpy-fallback",
         }
         assert blas_backend in known_backends, (

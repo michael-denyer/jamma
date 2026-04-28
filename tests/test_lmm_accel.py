@@ -204,7 +204,11 @@ def test_c_fallback_ncvt_gt1_when_general_unavailable(synthetic_wald_data, monke
             "n_cvt=1 batch C function should not be called for n_cvt > 1"
         )
 
-    monkeypatch.setattr(compute_numpy, "_compute_lmm_batch_c", should_not_be_called)
+    monkeypatch.setattr(
+        compute_numpy,
+        "_compute_lmm_batch_c",
+        should_not_be_called,
+    )  # allow-patch: sentinel asserts n_cvt=1 C kernel is NOT taken when n_cvt>1
     monkeypatch.setattr(compute_numpy, "_C_GENERAL_AVAILABLE", False)
 
     # Should succeed via the Python path without calling any C function

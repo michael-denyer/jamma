@@ -13,7 +13,7 @@ Usage::
         fake = FakeProgressbarModule()
         monkeypatch.setattr("jamma.core.progress.progressbar", fake)
         # ... exercise code that uses progress bar ...
-        assert fake.last_bar.finish_calls == 1
+        assert fake.last_bar.finished
         assert fake.last_bar.update_calls == [1, 2, 3]
 """
 
@@ -29,23 +29,33 @@ class FakeProgressBar:
     methods jamma.core.progress actually calls. If production code starts
     calling another method, the test will fail with AttributeError —
     that is the whole point of using a fake instead of MagicMock.
+
+    Lifecycle invariants (real ``progressbar.ProgressBar`` behaves the same
+    way in normal use): ``start()`` is called once before the first
+    ``update()``, and ``finish()`` is called once at the end. Calling
+    ``start()`` or ``finish()`` twice raises ``AssertionError`` so a
+    misuse fails loudly instead of being silently absorbed.
     """
 
     def __init__(self, **kwargs: Any) -> None:
         self.kwargs = kwargs
-        self.start_calls = 0
+        self.started = False
         self.update_calls: list[int] = []
-        self.finish_calls = 0
+        self.finished = False
 
     def start(self) -> FakeProgressBar:
-        self.start_calls += 1
+        if self.started:
+            raise AssertionError("FakeProgressBar.start() called twice")
+        self.started = True
         return self
 
     def update(self, value: int) -> None:
         self.update_calls.append(value)
 
     def finish(self) -> None:
-        self.finish_calls += 1
+        if self.finished:
+            raise AssertionError("FakeProgressBar.finish() called twice")
+        self.finished = True
 
 
 class _FakeWidget:

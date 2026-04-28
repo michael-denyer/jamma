@@ -368,15 +368,7 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 |---|---|---|
 | `test_jlinalg_dgemm.py`, `test_jlinalg_dsyrk.py`, `test_jlinalg_eigh.py` | Heavy parametrised boundary coverage runs by default (currently `tier0` at the module level with `@slow`/`@benchmark` carving out the expensive cases) | Consider hypothesis property tests for shape/transpose invariants |
 
-### 3.3 Tests / markers to remove
-
-| Item | Reason |
-|---|---|
-| `tier3` marker | **Removed.** Was defined and excluded everywhere but never used. Add it back when a real local-only scale test exists. |
-| `slow: alias for tier2` (old wording) | Removed — they are independent (this doc reflects the corrected meaning) |
-| `tolerance_config` row in old fixture table | Already corrected — was previously documented but the conftest definition is real (kept) |
-
-### 3.4 Tests / files to fold
+### 3.3 Tests / files to fold
 
 | Files | Action |
 |---|---|
@@ -386,7 +378,7 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 | ~~`test_loco_bugs.py`~~ → `test_loco_orchestration.py` | Renamed |
 | ~~`test_lmm_likelihood_dev2.py`~~ → `test_likelihood_derivatives.py` | Renamed. `dev2` is GEMMA jargon for "second derivative" (`LogRL_dev2`); the file's symbols inherit it but the file itself is named for the *behavior* (REML 2nd/3rd derivatives wrt lambda, used for `se(pve)`) |
 
-### 3.5 Suite-wide stats (snapshot)
+### 3.4 Suite-wide stats (snapshot)
 
 - 81 test files, ~38.5k lines.
 - Largest: `test_lmm_accel.py` (6,271 lines) — should be split by tier and concern.

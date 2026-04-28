@@ -8,19 +8,23 @@ constructor or ``run`` that ``MagicMock`` would absorb silently.
 
 from __future__ import annotations
 
-from typing import Any
+from jamma.pipeline import PipelineConfig, PipelineResult
 
 
 class FakePipelineRunner:
     """Single-call recorder. ``run()`` returns a pre-set result."""
 
-    def __init__(self, config: Any, result: Any) -> None:
+    def __init__(self, config: PipelineConfig, result: PipelineResult) -> None:
         self.config = config
         self._result = result
-        self.run_calls = 0
+        self.ran_at_least_once = False
 
-    def run(self) -> Any:
-        self.run_calls += 1
+    def run(self) -> PipelineResult:
+        if self.ran_at_least_once:
+            raise AssertionError(
+                "FakePipelineRunner.run() called twice; PipelineRunner is single-use"
+            )
+        self.ran_at_least_once = True
         return self._result
 
 
@@ -36,23 +40,22 @@ class FakePipelineRunnerFactory:
 
     Records every constructed runner on ``self.runners`` and exposes the
     most recent config on ``self.last_config`` for ergonomic assertions.
+    Tests check ``len(factory.runners)`` for the number of constructions
+    rather than asserting on a separate counter (project rule: assert on
+    observable outputs, not internal call counts).
     """
 
-    def __init__(self, result: Any) -> None:
+    def __init__(self, result: PipelineResult) -> None:
         self._result = result
         self.runners: list[FakePipelineRunner] = []
 
-    def __call__(self, config: Any) -> FakePipelineRunner:
+    def __call__(self, config: PipelineConfig) -> FakePipelineRunner:
         runner = FakePipelineRunner(config, self._result)
         self.runners.append(runner)
         return runner
 
     @property
-    def last_config(self) -> Any:
+    def last_config(self) -> PipelineConfig:
         if not self.runners:
             raise AssertionError("FakePipelineRunner was never constructed")
         return self.runners[-1].config
-
-    @property
-    def call_count(self) -> int:
-        return len(self.runners)

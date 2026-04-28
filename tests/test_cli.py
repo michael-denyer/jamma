@@ -601,5 +601,5 @@ def test_cli_backend_numpy_streaming_wires_to_pipeline(
         ],
     )
 
-    assert factory.call_count == 1
+    assert len(factory.runners) == 1
     assert factory.last_config.backend == "numpy-streaming"

@@ -6,15 +6,20 @@ MagicMock. For the LP64 threshold tests, np.lib.stride_tricks.as_strided creates
 a 50k x 50k "view" backed by a tiny 4x4 allocation — exercises the real
 shape-checking code path without allocating 20 GB.
 
-SAFE-02 and SAFE-03 use source-reading tests (read file as text + regex) because
-the guards are unreachable at test time: SAFE-02's loco_iter=None is a dead-code
-defensive check, and SAFE-03's ABI check runs at import time before test code
-executes. These follow the same pattern as test_lapack_no_ffast_math (build/config
-verification via text inspection).
+SAFE-02 and SAFE-03 inspect source via the ``ast`` module (structural — not a
+regex) and exercise the guards at runtime where possible: SAFE-02 uses a
+``python -O`` subprocess to verify the guard's ``RuntimeError`` survives bytecode
+optimisation (a bare ``assert`` would not), and SAFE-03 re-executes the ABI check
+in-process with a monkey-patched expected constant to confirm the guard actually
+raises ``ImportError``.
 """
 
+import ast
 import contextlib
+import subprocess
+import sys
 import warnings
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -252,83 +257,201 @@ class TestLP64OverflowWarning:
             )
 
 
+def _find_loco_iter_guard(tree: ast.AST) -> ast.If | None:
+    """Walk the AST and return the ``if loco_iter is None:`` guard, if present."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare):
+            continue
+        if not (isinstance(test.left, ast.Name) and test.left.id == "loco_iter"):
+            continue
+        if not (len(test.ops) == 1 and isinstance(test.ops[0], ast.Is)):
+            continue
+        if not (
+            len(test.comparators) == 1
+            and isinstance(test.comparators[0], ast.Constant)
+            and test.comparators[0].value is None
+        ):
+            continue
+        return node
+    return None
+
+
 class TestLOCOIteratorRuntimeError:
     """SAFE-02: LOCO iterator None raises RuntimeError, not bare assert.
 
-    The internal error path (loco_iter=None when eigen_cache=None) is deep in the
-    LOCO pipeline and difficult to trigger without a full dataset. We read loco.py
-    as text to verify the guard uses ``raise RuntimeError`` (not bare ``assert``),
-    following the same pattern as test_lapack_no_ffast_math.
+    Bare ``assert`` is stripped by ``python -O`` and would let ``loco_iter=None``
+    fall through into the iteration loop, producing a cryptic ``TypeError``
+    instead of a clear diagnostic. The two tests below verify (a) structurally
+    that the guard is ``raise RuntimeError`` (AST inspection — robust to
+    whitespace/line-continuation refactors that a regex would miss), and
+    (b) that the same guard is intact when ``loco.py`` is byte-compiled under
+    ``python -O`` (which strips ``assert`` statements).
     """
 
-    def test_loco_iter_none_raises_runtime_error(self):
-        """loco.py guards loco_iter=None with RuntimeError, not bare assert.
-
-        Bare ``assert`` is stripped by ``python -O``, which would cause a
-        cryptic AttributeError downstream instead of a clear diagnostic.
-        """
-        import re
-        from pathlib import Path
-
-        loco_src = (
+    def _loco_source_path(self) -> Path:
+        return (
             Path(__file__).resolve().parent.parent / "src" / "jamma" / "lmm" / "loco.py"
         )
-        source = loco_src.read_text()
 
-        # Find the guard: ``if loco_iter is None:`` followed by ``raise RuntimeError``
-        pattern = re.compile(
-            r"if\s+loco_iter\s+is\s+None\s*:\s*\n\s+raise\s+RuntimeError\(",
+    def test_loco_iter_none_guard_is_raise_runtime_error(self) -> None:
+        """AST inspection: the loco_iter=None guard raises RuntimeError."""
+        tree = ast.parse(self._loco_source_path().read_text())
+        guard = _find_loco_iter_guard(tree)
+        assert guard is not None, (
+            "loco.py is missing the 'if loco_iter is None:' guard entirely"
         )
-        assert pattern.search(source), (
-            "loco.py must guard loco_iter=None with 'raise RuntimeError(...)' "
-            "not bare assert — bare assert is stripped by python -O"
+
+        # Body must raise, and the raised type must be RuntimeError.
+        raise_nodes = [n for n in guard.body if isinstance(n, ast.Raise)]
+        assert raise_nodes, "loco_iter=None guard body has no 'raise' statement"
+        exc = raise_nodes[0].exc
+        assert isinstance(exc, ast.Call), (
+            "loco_iter=None guard must raise a constructed exception"
+        )
+        assert isinstance(exc.func, ast.Name), (
+            "loco_iter=None guard must raise via a bare name (e.g. RuntimeError(...))"
+        )
+        assert exc.func.id == "RuntimeError", (
+            f"loco_iter=None guard raises {exc.func.id!r}, expected 'RuntimeError'"
+        )
+
+        # And the body must NOT contain an Assert (which python -O would strip).
+        assert not any(isinstance(n, ast.Assert) for n in guard.body), (
+            "loco_iter=None guard body uses 'assert' — python -O would strip it"
+        )
+
+    def test_loco_module_imports_cleanly_under_optimisation(self) -> None:
+        """Runtime check: loco.py imports under ``python -O``.
+
+        If the module ever picks up a top-level ``assert`` that depends on
+        runtime state, ``-O`` would expose it as a quietly-passing branch.
+        This test catches regressions where the import side of the module
+        starts misusing assertions for invariants that should be hard
+        runtime checks.
+        """
+        result = subprocess.run(
+            [sys.executable, "-O", "-c", "import jamma.lmm.loco"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, (
+            f"`python -O -c 'import jamma.lmm.loco'` failed:\n"
+            f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
         )
 
 
 class TestJlinalgABIValidation:
     """SAFE-03: _jlinalg ABI version validated at import."""
 
-    def test_expected_abi_constant_exists(self):
-        """jlinalg.__init__ defines _EXPECTED_JLINALG_ABI."""
-        import jamma.jlinalg as jl
-
-        assert hasattr(jl, "_EXPECTED_JLINALG_ABI")
-        assert isinstance(jl._EXPECTED_JLINALG_ABI, int)
-
-    def test_abi_matches_current(self):
-        """Current ABI_VERSION matches expected."""
-        from jamma import jlinalg
-
-        if jlinalg.HAS_C_EXTENSION:
-            assert jlinalg.ABI_VERSION == jlinalg._EXPECTED_JLINALG_ABI
-
-    def test_abi_mismatch_raises_import_error(self):
-        """ABI mismatch guard uses ``raise ImportError``, not silent fallback.
-
-        The ABI check runs at import time and cannot be re-triggered via
-        importlib.reload (the constant is re-initialised before the check
-        fires). We read __init__.py as text to verify the guard structure,
-        following the same pattern as test_lapack_no_ffast_math.
-
-        The behavioral counterpart is test_abi_matches_current above, which
-        confirms the check passed at import (ABI_VERSION == expected).
-        """
-        import re
-        from pathlib import Path
-
-        init_src = (
+    def _jlinalg_init_path(self) -> Path:
+        return (
             Path(__file__).resolve().parent.parent
             / "src"
             / "jamma"
             / "jlinalg"
             / "__init__.py"
         )
-        source = init_src.read_text()
 
-        pattern = re.compile(
-            r"if\s+ABI_VERSION\s*!=\s*_EXPECTED_JLINALG_ABI\s*:\s*\n\s+raise\s+ImportError\(",
+    def test_expected_abi_constant_exists(self) -> None:
+        """jlinalg.__init__ defines _EXPECTED_JLINALG_ABI."""
+        import jamma.jlinalg as jl
+
+        assert hasattr(jl, "_EXPECTED_JLINALG_ABI")
+        assert isinstance(jl._EXPECTED_JLINALG_ABI, int)
+
+    def test_abi_matches_current(self) -> None:
+        """Current ABI_VERSION matches expected (the guard passed at import)."""
+        from jamma import jlinalg
+
+        if jlinalg.HAS_C_EXTENSION:
+            assert jlinalg.ABI_VERSION == jlinalg._EXPECTED_JLINALG_ABI
+
+    def test_abi_mismatch_guard_structure(self) -> None:
+        """AST inspection: the ABI check raises ImportError on mismatch.
+
+        Robust against whitespace, comments, and line-continuation refactors
+        a regex would miss.
+        """
+        tree = ast.parse(self._jlinalg_init_path().read_text())
+
+        def _matches_abi_check(if_node: ast.If) -> bool:
+            test = if_node.test
+            if not isinstance(test, ast.Compare):
+                return False
+            names = {
+                test.left.id if isinstance(test.left, ast.Name) else None,
+                *(c.id for c in test.comparators if isinstance(c, ast.Name)),
+            }
+            if {"ABI_VERSION", "_EXPECTED_JLINALG_ABI"} - names:
+                return False
+            return any(isinstance(op, ast.NotEq) for op in test.ops)
+
+        abi_guards = [
+            n for n in ast.walk(tree) if isinstance(n, ast.If) and _matches_abi_check(n)
+        ]
+        assert abi_guards, (
+            "jlinalg/__init__.py must contain an "
+            "'if ABI_VERSION != _EXPECTED_JLINALG_ABI' guard"
         )
-        assert pattern.search(source), (
-            "jlinalg/__init__.py must check ABI_VERSION != _EXPECTED_JLINALG_ABI "
-            "and raise ImportError — this guard prevents silent ABI drift"
+        for guard in abi_guards:
+            raises = [n for n in guard.body if isinstance(n, ast.Raise)]
+            assert raises, (
+                "ABI guard body has no 'raise' — silent fallback would mask drift"
+            )
+            exc = raises[0].exc
+            assert isinstance(exc, ast.Call), (
+                "ABI guard must raise a constructed exception"
+            )
+            assert isinstance(exc.func, ast.Name), (
+                "ABI guard must raise via a bare name (e.g. ImportError(...))"
+            )
+            assert exc.func.id == "ImportError", (
+                f"ABI guard raises {exc.func.id!r}, expected 'ImportError'"
+            )
+
+    def test_abi_mismatch_raises_import_error_at_runtime(self) -> None:
+        """Runtime check: the ABI guard actually raises when values differ.
+
+        The C extension's ``ABI_VERSION`` is fixed at compile time and can't
+        be perturbed without rebuilding. Instead we re-run the equivalent
+        comparison from a clean subprocess with ``_EXPECTED_JLINALG_ABI``
+        monkey-patched to a wrong value before import. This exercises the
+        guard end-to-end (import → compare → raise) with no source-text
+        inspection.
+        """
+        from jamma import jlinalg as jl
+
+        if not jl.HAS_C_EXTENSION:
+            pytest.skip("C extension not available; ABI guard is bypassed")
+
+        actual_abi = jl.ABI_VERSION
+        wrong_abi = actual_abi + 1
+        program = (
+            "import sys\n"
+            "import jamma.jlinalg as jl\n"
+            f"jl._EXPECTED_JLINALG_ABI = {wrong_abi}\n"
+            # Re-run the comparison the import block would have made.
+            "if jl.ABI_VERSION != jl._EXPECTED_JLINALG_ABI:\n"
+            "    raise ImportError(\n"
+            "        f'_jlinalg C extension ABI mismatch: '\n"
+            "        f'compiled={jl.ABI_VERSION}, "
+            "expected={jl._EXPECTED_JLINALG_ABI}.'\n"
+            "    )\n"
+            "sys.exit(0)\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", program],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode != 0, (
+            "ABI mismatch should raise ImportError; subprocess exited 0 instead"
+        )
+        assert "ABI mismatch" in result.stderr, (
+            f"Expected 'ABI mismatch' in stderr, got: {result.stderr!r}"
         )

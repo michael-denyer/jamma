@@ -659,7 +659,7 @@ class TestWriteStreamingChunk:
         )
 
         assert nan_counts["betas"] == 3  # accumulated across chunks
-        assert writer.call_count == 2
+        assert len(writer.batches) == 2
 
     def test_lambda_boundary_hits_accumulated(self):
         """Lambda boundary hits accumulate across chunks."""

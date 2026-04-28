@@ -8,18 +8,19 @@ import numpy as np
 class FakeAssocWriter:
     """In-memory stand-in for ``IncrementalAssocWriter``.
 
-    Captures ``write_arrays_batch`` calls so tests can assert on call count
-    and arguments without ``MagicMock``. Accessing an attribute that does
-    not exist raises ``AttributeError`` — detecting interface drift the
-    moment a method is renamed.
+    Captures ``write_arrays_batch`` arguments on ``self.batches`` so tests
+    can assert on the recorded payload (per-batch tuple of all positional
+    args). Accessing an attribute that does not exist raises
+    ``AttributeError`` — detecting interface drift the moment a method is
+    renamed. Tests should assert on ``len(writer.batches)`` and the tuple
+    contents, not on a separate counter — the real
+    ``IncrementalAssocWriter.count`` tracks rows written, not batches, so
+    a ``call_count`` property here would shadow the production name with
+    different semantics.
     """
 
     def __init__(self) -> None:
         self.batches: list[tuple] = []
-
-    @property
-    def call_count(self) -> int:
-        return len(self.batches)
 
     def write_arrays_batch(
         self,

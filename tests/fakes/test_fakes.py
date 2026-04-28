@@ -6,9 +6,12 @@ These tests fail with a clear message so the regression is obvious.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
+from jamma.pipeline import PipelineConfig, PipelineResult
 from tests.fakes import (
     FakeAssocWriter,
     FakePipelineRunner,
@@ -18,6 +21,26 @@ from tests.fakes import (
 )
 
 pytestmark = pytest.mark.tier0
+
+
+def _make_config(phenotype_columns: list[int]) -> PipelineConfig:
+    return PipelineConfig(
+        bfile=Path("/tmp/jamma_fake_bfile"),
+        phenotype_columns=phenotype_columns,
+    )
+
+
+def _make_result() -> PipelineResult:
+    return PipelineResult(
+        associations=[],
+        n_samples=0,
+        n_snps_tested=0,
+        assoc_path=Path("/tmp/jamma_fake.assoc.txt"),
+        assoc_paths=[Path("/tmp/jamma_fake.assoc.txt")],
+        timing={"total_s": 0.0},
+        backend="numpy",
+        n_covariates=1,
+    )
 
 
 class TestFakeAssocWriter:
@@ -32,7 +55,6 @@ class TestFakeAssocWriter:
         writer.write_arrays_batch(1, snp_indices, snp_info, afs, miss, arrays)
         writer.write_arrays_batch(2, snp_indices, snp_info, afs, miss, arrays)
 
-        assert writer.call_count == 2
         assert len(writer.batches) == 2
         assert writer.batches[0][0] == 1
         assert writer.batches[1][0] == 2
@@ -54,9 +76,21 @@ class TestFakeProgressBar:
         bar.finish()
 
         assert bar.kwargs == {"max_value": 10}
-        assert bar.start_calls == 1
+        assert bar.started
         assert bar.update_calls == [1, 5]
-        assert bar.finish_calls == 1
+        assert bar.finished
+
+    def test_double_start_raises(self) -> None:
+        bar = FakeProgressBar()
+        bar.start()
+        with pytest.raises(AssertionError, match=r"start.*twice"):
+            bar.start()
+
+    def test_double_finish_raises(self) -> None:
+        bar = FakeProgressBar()
+        bar.finish()
+        with pytest.raises(AssertionError, match=r"finish.*twice"):
+            bar.finish()
 
     def test_unknown_attribute_raises(self) -> None:
         bar = FakeProgressBar()
@@ -85,30 +119,44 @@ class TestFakeProgressbarModule:
 
 class TestFakePipelineRunnerFactory:
     def test_captures_config_and_returns_result(self) -> None:
-        sentinel_result = object()
-        factory = FakePipelineRunnerFactory(result=sentinel_result)
+        result = _make_result()
+        factory = FakePipelineRunnerFactory(result=result)
 
-        config = {"phenotype_columns": [1, 2, 3]}
+        config = _make_config([1, 2, 3])
         runner = factory(config)
 
         assert runner.config is config
-        assert runner.run() is sentinel_result
-        assert runner.run_calls == 1
+        assert runner.run() is result
+        assert runner.ran_at_least_once
 
     def test_last_config_tracks_most_recent_call(self) -> None:
-        factory = FakePipelineRunnerFactory(result=None)
-        factory({"phenotype_columns": [1]})
-        factory({"phenotype_columns": [2, 3]})
+        factory = FakePipelineRunnerFactory(result=_make_result())
+        factory(_make_config([1]))
+        last = _make_config([2, 3])
+        factory(last)
 
-        assert factory.call_count == 2
-        assert factory.last_config == {"phenotype_columns": [2, 3]}
+        assert len(factory.runners) == 2
+        assert factory.last_config is last
+        assert factory.last_config.phenotype_columns == [2, 3]
 
     def test_last_config_before_any_call_raises(self) -> None:
-        factory = FakePipelineRunnerFactory(result=None)
+        factory = FakePipelineRunnerFactory(result=_make_result())
         with pytest.raises(AssertionError, match="never constructed"):
-            _ = factory.last_config
+            factory.last_config  # noqa: B018 — property access raises
 
     def test_runner_unknown_attribute_raises(self) -> None:
-        runner = FakePipelineRunner(config={}, result=None)
+        runner = FakePipelineRunner(config=_make_config([1]), result=_make_result())
         with pytest.raises(AttributeError):
             runner.cancel()  # type: ignore[attr-defined]
+
+    def test_dict_config_rejected_by_type_checker(self) -> None:
+        """Real PipelineConfig only — dicts would silently accept stale fields.
+
+        This test documents the contract; dict construction now causes a
+        type error at the call site (Pyrefly / mypy will flag it).
+        """
+        factory = FakePipelineRunnerFactory(result=_make_result())
+        config = _make_config([1])
+        factory(config)
+        # Adding a required field to PipelineConfig must break this line:
+        assert isinstance(factory.last_config, PipelineConfig)

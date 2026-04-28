@@ -30,7 +30,7 @@ class TestProgressBarLifecycle:
 
         collected = list(progress_iterator(iter(items), total=5, desc="test"))
 
-        assert fake_progressbar.last_bar.finish_calls == 1
+        assert fake_progressbar.last_bar.finished
         assert collected == items
 
     def test_finish_called_on_early_break(self, fake_progressbar):
@@ -41,7 +41,7 @@ class TestProgressBarLifecycle:
             if i == 2:
                 break
 
-        assert fake_progressbar.last_bar.finish_calls == 1
+        assert fake_progressbar.last_bar.finished
 
     def test_finish_called_on_exception(self, fake_progressbar):
         """bar.finish() is called when loop body raises an exception."""
@@ -55,7 +55,7 @@ class TestProgressBarLifecycle:
             for _ in progress_iterator(exploding_items(), total=5, desc="test"):
                 pass
 
-        assert fake_progressbar.last_bar.finish_calls == 1
+        assert fake_progressbar.last_bar.finished
 
     def test_finish_called_on_caller_exception(self, fake_progressbar):
         """bar.finish() is called when exception occurs in caller's loop body."""
@@ -66,7 +66,7 @@ class TestProgressBarLifecycle:
                 if i == 3:
                     raise ValueError("test error")
 
-        assert fake_progressbar.last_bar.finish_calls == 1
+        assert fake_progressbar.last_bar.finished
 
     def test_update_called_for_each_item(self, fake_progressbar):
         """bar.update() is called once per yielded item with 1-based indices."""
@@ -123,7 +123,7 @@ class TestTimedProgress:
         """bar.finish() is called on normal completion."""
         timed_progress(lambda: 1, estimated_seconds=10.0, poll_interval=0.01)
 
-        assert fake_progressbar.last_bar.finish_calls == 1
+        assert fake_progressbar.last_bar.finished
 
     def test_bar_finish_called_on_exception(self, fake_progressbar):
         """bar.finish() is called even when fn raises."""
@@ -134,7 +134,7 @@ class TestTimedProgress:
         with pytest.raises(RuntimeError):
             timed_progress(boom, estimated_seconds=10.0, poll_interval=0.01)
 
-        assert fake_progressbar.last_bar.finish_calls == 1
+        assert fake_progressbar.last_bar.finished
 
     def test_bar_not_set_to_100_on_error(self, fake_progressbar):
         """Bar should not show 100% when fn fails."""

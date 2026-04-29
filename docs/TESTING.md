@@ -107,9 +107,14 @@ import pytest
 pytestmark = pytest.mark.tier0
 ```
 
-A collection-time hook in `tests/conftest.py` aborts the run with
-`tests/<name>.py: missing tier marker` when this is missing. Promote the
-file to its correct tier rather than silencing the check.
+A `pytest_configure` hook in `tests/conftest.py` aborts the run with
+`tests/<name>.py: file is missing a tier marker (tier0/tier1/tier2/slow/benchmark)`
+when this is missing. The gate runs once on the controller before xdist
+forks workers (a previous collection-based gate failed open under `-n N`
+because xdist controllers skip collection of the worker test files).
+Recognises parametrised markers (`@pytest.mark.skipif(...)`) and list-form
+`pytestmark`. Promote the file to its correct tier rather than silencing
+the check.
 
 ### 1.7 Common commands
 
@@ -156,9 +161,10 @@ computation.
 |----------|---------|-------------|
 | `ci.yml` → `lint` | push/PR | `prek run --all-files` |
 | `ci.yml` → `test` (Linux 3.11/3.12, ARM Mac 3.12, Linux MKL ILP64) | push/PR | `pytest -m "not tier2 and not slow and not benchmark" -v -n 3` |
-| `ci.yml` → `coverage` | push/PR | `slipcover --fail-under 80 -m pytest ... -n0` |
+| `ci.yml` → `coverage` | push/PR | `slipcover --fail-under 80 -m pytest ... -n0` plus per-subsystem floors via `scripts/check_subsystem_coverage.py` (jlinalg 18%, lmm/io/core all 80%) |
 | `test-slow.yml` | push to master | `pytest -m "tier2 or slow" -v -o 'addopts=' --no-cov` |
 | `sanitizers.yml` | Wednesday cron + dispatch | `pytest -m "not benchmark and not slow" -n 0 -p no:randomly` (under ASAN/UBSAN) |
+| `flaky-detect.yml` | Sunday 06:00 UTC + dispatch | `pytest` under five distinct `--randomly-seed` values, opens an issue on disagreement |
 
 CI overrides `addopts` via `-o 'addopts='` so markers and parallelism are
 controlled per-job, independent of the local default.
@@ -322,6 +328,18 @@ a structural test. Test the behavior.
 subprocess calls, dispatch routers where delegation IS the observable
 behavior. Not for internal functions.
 
+The "mocking numerical functions" anti-pattern is enforced by
+[`scripts/check-forbidden-patches.py`](../scripts/check-forbidden-patches.py),
+an AST-based pre-commit hook. It bans patching `numpy.linalg.*`,
+`scipy.*`, and JAMMA's own numerical modules
+(`compute_numpy`/`cn`, `likelihood`, `jlinalg`/`jl`,
+`kinship_compute`/`kc`). Feature-flag constants (`_C_*_AVAILABLE`,
+`_*_ENABLED`) are excluded. If you have a legitimate reason to patch one
+of these (typically toggling a dispatch boundary in a test that exists
+specifically to verify dispatch), add an inline `# allow-patch:` comment
+explaining why. Read failures (`OSError`, `UnicodeDecodeError`) exit
+non-zero rather than passing vacuously.
+
 ### 2.6 When `pytest.skip` is acceptable
 
 The suite has ~180 skip/xfail calls. Three categories — only the first
@@ -456,3 +474,28 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 - ~178 `skip`/`skipif`/`xfail` calls — most legitimate (vendor LAPACK, optional fixtures).
 - 8 files use `@patch`/`MagicMock` (~31 occurrences). Most are at allowed boundaries; the violations called out in §3.2 are the exceptions.
 - `inspect.getsource()`: zero uses. The ban holds.
+
+### 3.5 Fixture manifest
+
+[`tests/fixtures/MANIFEST.toml`](../tests/fixtures/MANIFEST.toml) tracks the
+SHA-256 of every git-tracked fixture (55 entries). The manifest is enforced
+by two gates:
+
+1. **Pre-commit hook** (fast):
+   [`scripts/check_fixture_manifest.py`](../scripts/check_fixture_manifest.py)
+   verifies on-disk hashes match, flags untracked additions, and flags
+   manifest-without-disk entries.
+2. **Tier0 self-test** (slow):
+   [`tests/test_fixture_manifest.py`](../tests/test_fixture_manifest.py)
+   runs the same check inside the test suite.
+
+After intentionally regenerating fixtures (e.g. updating the GEMMA
+reference assoc files, regenerating the kinship reference matrix), run
+[`scripts/regenerate_fixture_manifest.py`](../scripts/regenerate_fixture_manifest.py)
+to rebuild the manifest. The regen script auto-extracts `GEMMA Version`
+and `Command Line Input` from `.log.txt` headers, so the manifest also
+serves as a provenance record.
+
+Editing or adding a fixture without updating the manifest will fail the
+pre-commit gate with a `sha256 drift` message that points at the stale
+hash and tells you exactly which command to run.

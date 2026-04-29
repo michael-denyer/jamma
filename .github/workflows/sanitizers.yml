@@ -1,0 +1,212 @@
+name: Sanitizers (ASAN + UBSAN)
+
+# Weekly ASAN/UBSAN run rebuilds the C extensions with -fsanitize=address,
+# undefined and runs the test suite under instrumentation. Catches:
+#
+#   * Heap/stack buffer overflows in _lmm_accel.c and _jlinalg.so
+#   * Use-after-free in workspace lifecycle
+#   * Signed/unsigned integer overflow (UBSAN)
+#   * Genuine memory leaks not covered by interpreter-noise suppressions
+#
+# Non-blocking: scheduled only, never on PR. Failures here open a triage
+# task — not a merge gate. See docs/TESTING.md §1.10 for local repro and
+# scripts/asan-suppressions.txt for the third-party-noise suppression list.
+
+on:
+  schedule:
+    # Wednesday 06:00 UTC. Offset from flaky-detect (Sunday) and
+    # link-check-external (Monday) to spread runner load across the week.
+    - cron: '0 6 * * 3'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write  # to file a triage issue on sanitizer detection (mirrors flaky-detect)
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false  # don't cancel a long-running sanitizer job
+
+jobs:
+  asan-ubsan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CC: gcc  # explicit — matches LD_PRELOAD path; see RESEARCH §"Open Questions Q1"
+      JAMMA_SANITIZE: "address,undefined"
+      JAMMA_FORCE_NUMPY_FALLBACK: "1"
+      # ASAN options (RESEARCH §"Pitfall 8" — `>-` folded scalar escapes ':' YAML mapping char):
+      #   detect_leaks=1            — leak detection on (with suppressions for noise)
+      #   abort_on_error=1          — exit non-zero immediately on first finding
+      #   strict_string_checks=1    — strcmp/strcpy bounds-strict
+      #   allocator_may_return_null=1 — NumPy intentionally tests OOM paths
+      #   suppressions=...          — third-party noise only
+      #   symbolize=1, print_stacktrace=1 — readable traces in CI logs
+      ASAN_OPTIONS: >-
+        detect_leaks=1:abort_on_error=1:strict_string_checks=1:allocator_may_return_null=1:suppressions=${{ github.workspace }}/scripts/asan-suppressions.txt:symbolize=1:print_stacktrace=1
+      UBSAN_OPTIONS: >-
+        halt_on_error=1:print_stacktrace=1:symbolize=1
+      LSAN_OPTIONS: >-
+        suppressions=${{ github.workspace }}/scripts/asan-suppressions.txt:print_suppressions=0
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Compile C extensions with sanitizers
+        # JAMMA_SANITIZE flows through apply_sanitizer_overrides() in
+        # _build_support/compile_and_link.py — see Phase 116.1 plan 01 + plan 05.
+        run: |
+          uv run python -m jamma.lmm._compile_accel
+          uv run python -m jamma.jlinalg._compile_jlinalg
+
+      - name: Run pytest under ASAN/UBSAN
+        run: |
+          # LD_PRELOAD libasan so the ASAN runtime is loaded BEFORE Python
+          # starts and the instrumented .so files can find their interceptors.
+          # Must use the same compiler that built the .so files (CC=gcc above).
+          export LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
+          echo "LD_PRELOAD=$LD_PRELOAD"
+          echo "ASAN_OPTIONS=$ASAN_OPTIONS"
+          uv run pytest \
+            -m "not benchmark and not slow" \
+            -v -n 0 -p no:randomly \
+            -o 'addopts=--timeout=300' \
+            --ignore=tests/test_sanitizer_sentinel.py \
+            2>&1 | tee sanitizer-run.log
+
+      - name: Upload sanitizer logs
+        if: always()  # success AND failure
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: sanitizer-logs-${{ github.run_id }}
+          path: sanitizer-run.log
+          retention-days: 30
+
+  asan-sentinel-meta-test:
+    # Proves the sanitizer is wired by deliberately seeding a heap-OOB and
+    # asserting ASAN catches it. If this job exits 0 silently, the
+    # sanitizer is NOT engaged — that is itself a workflow failure.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CC: gcc
+      JAMMA_SANITIZE: "address,undefined"
+      JAMMA_FORCE_NUMPY_FALLBACK: "1"
+      JAMMA_SENTINEL_UB: "1"  # opts the heap-OOB function into the .so
+      JAMMA_SANITIZE_EXPECT_FAIL: "1"  # opts in the sentinel pytest
+      ASAN_OPTIONS: >-
+        detect_leaks=0:abort_on_error=1:symbolize=1:print_stacktrace=1
+      UBSAN_OPTIONS: >-
+        halt_on_error=1:print_stacktrace=1:symbolize=1
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+      - run: uv python install 3.12
+      - run: uv sync
+
+      - name: Compile _lmm_accel with -DJAMMA_SENTINEL_UB
+        # JAMMA_SENTINEL_UB env var causes _compile_accel.py to inject
+        # -DJAMMA_SENTINEL_UB into extra_cflags (plan 04). Combined with
+        # JAMMA_SANITIZE above, the .so is also instrumented.
+        run: uv run python -m jamma.lmm._compile_accel
+
+      - name: Run sentinel — MUST fail with heap-buffer-overflow
+        # continue-on-error: true lets the workflow continue past the
+        # expected pytest failure so we can grep the log and assert the
+        # right kind of failure happened. Without this, an actual sentinel
+        # hit would fail the WORKFLOW, but we want the workflow to be GREEN
+        # when the sentinel fires correctly (proving sanitizer wiring works)
+        # and RED when the sentinel returns silently (sanitizer broken).
+        continue-on-error: true
+        id: sentinel
+        run: |
+          export LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
+          uv run pytest \
+            tests/test_sanitizer_sentinel.py \
+            -v -n 0 -p no:randomly \
+            2>&1 | tee sentinel-run.log
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Assert ASAN heap-buffer-overflow trace was captured
+        # If the previous step exited 0, the sentinel did NOT abort — that
+        # means ASAN is not wired and the workflow is silently passing
+        # broken builds. Fail the workflow now.
+        run: |
+          if grep -q "AddressSanitizer:.*heap-buffer-overflow" sentinel-run.log; then
+            echo "OK: heap-buffer-overflow trace captured — sanitizer is wired"
+            # Bonus: assert the trace points at _lmm_accel.c (SC-4 source-line attribution)
+            if grep -q "_lmm_accel.c" sentinel-run.log; then
+              echo "OK: trace mentions _lmm_accel.c — source-line attribution works"
+              exit 0
+            else
+              echo "FAIL: heap-buffer-overflow caught but trace does not mention _lmm_accel.c"
+              echo "Sentinel may be running but stack-trace symbolization is broken."
+              exit 1
+            fi
+          else
+            echo "FAIL: sentinel did not produce a heap-buffer-overflow trace"
+            echo "Sanitizer may not be wired. Inspect sentinel-run.log:"
+            tail -100 sentinel-run.log
+            exit 1
+          fi
+
+      - name: Upload sentinel logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: sentinel-logs-${{ github.run_id }}
+          path: sentinel-run.log
+          retention-days: 30
+
+  issue-on-failure:
+    # Open or update a triage issue when the main asan-ubsan job fails.
+    # Mirrors flaky-detect.yml's pattern.
+    needs: asan-ubsan
+    if: always() && needs.asan-ubsan.result == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open or update sanitizer-triage issue
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v8.0.0
+        with:
+          script: |
+            const title = 'Sanitizers (ASAN/UBSAN): weekly run failed';
+            const body = [
+              `Sanitizer run [#${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) failed.`,
+              ``,
+              `Inspect the workflow logs and the uploaded sanitizer-logs-${context.runId} artifact.`,
+              ``,
+              `Reproduce locally with the steps in docs/TESTING.md §1.10.`,
+              `This is a non-blocking triage signal — not a merge regression.`,
+            ].join('\n');
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'sanitizer',
+              per_page: 10,
+            });
+            const existing = issues.find(i => i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['sanitizer', 'triage'],
+              });
+            }

@@ -119,16 +119,27 @@ def test_sentinel_meta_test_job_exists_and_sets_sentinel_macro(workflow):
     assert job["env"]["JAMMA_SANITIZE_EXPECT_FAIL"] == "1"
 
 
-def test_sentinel_assert_step_greps_for_heap_overflow(workflow):
-    """The asserter step body must look for AddressSanitizer:.*heap-buffer-overflow."""
+def test_sentinel_assert_step_greps_for_sanitizer_signature(workflow):
+    """The asserter step body must look for at least one ASan/UBSAN
+    out-of-bounds signature. Either sanitizer can catch the deliberate
+    sentinel OOB — UBSAN's bounds check (`runtime error: ... out of
+    bounds` / `insufficient space`) typically fires before ASan's
+    redzone check (`AddressSanitizer:.*heap-buffer-overflow`) for the
+    `buf[5] on malloc(4)` construct used by jamma_sentinel_oob (run
+    25109515712). Both count as "sanitizer wired".
+    """
     job = workflow["jobs"]["asan-sentinel-meta-test"]
     assertion_steps = [
         s
         for s in job["steps"]
-        if "AddressSanitizer:.*heap-buffer-overflow" in str(s.get("run", ""))
+        if (
+            "AddressSanitizer:.*heap-buffer-overflow" in str(s.get("run", ""))
+            or "runtime error:" in str(s.get("run", ""))
+        )
     ]
     assert assertion_steps, (
-        "no step asserts on AddressSanitizer:.*heap-buffer-overflow trace"
+        "no step asserts on a sanitizer out-of-bounds signature "
+        "(ASan heap-buffer-overflow or UBSAN runtime error)"
     )
 
 

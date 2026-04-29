@@ -161,16 +161,18 @@ jobs:
           # cat it later for grep purposes.
           cat sentinel-run.log
 
-      - name: Assert ASAN heap-buffer-overflow trace was captured
-        # If the previous step exited 0, the sentinel did NOT abort — that
-        # means ASAN is not wired and the workflow is silently passing
-        # broken builds. Fail the workflow now.
+      - name: Assert sanitizer caught the deliberate OOB
+        # The sentinel function reads buf[5] on a malloc(4) buffer. Either
+        # sanitizer can catch this — ASan reports "heap-buffer-overflow",
+        # UBSAN reports "runtime error: load of address ... with insufficient
+        # space for an object". Both signatures count as "wired"; we accept
+        # whichever fires first. Run 25109515712 confirmed UBSAN's bounds
+        # check fires before ASan's redzone check on this construct.
         #
-        # ASan writes its trace to ASAN_OPTIONS:log_path=<path>.<pid> via
-        # direct file write (survives SIGABRT). Cat all asan-trace.* files
-        # into one combined stream we can grep — and ALSO grep the pytest
-        # log as a belt-and-braces fallback in case ASan also wrote to
-        # stderr before aborting.
+        # The asserter compiles all available trace sources — the
+        # log_path-targeted asan-trace.* files (direct write, survives
+        # SIGABRT) plus the redirected sentinel-run.log — into a combined
+        # stream and greps that.
         run: |
           shopt -s nullglob
           combined_trace=$(mktemp)
@@ -180,22 +182,30 @@ jobs:
               cat "$f" >> "$combined_trace"
             fi
           done
-          if grep -q "AddressSanitizer:.*heap-buffer-overflow" "$combined_trace"; then
-            echo "OK: heap-buffer-overflow trace captured — sanitizer is wired"
-            # Bonus: assert the trace points at _lmm_accel.c (SC-4 source-line attribution)
+          # Either sanitizer signature is accepted.
+          if grep -E -q "AddressSanitizer:.*heap-buffer-overflow|runtime error:.*(load|store|index).*out of bounds|runtime error:.*insufficient space" "$combined_trace"; then
+            echo "OK: sanitizer caught the deliberate OOB — wiring is live"
+            # SC-4 source-line attribution: trace must point at _lmm_accel.c.
             if grep -q "_lmm_accel.c" "$combined_trace"; then
               echo "OK: trace mentions _lmm_accel.c — source-line attribution works"
+              # Identify which sanitizer fired (informational).
+              if grep -q "AddressSanitizer:.*heap-buffer-overflow" "$combined_trace"; then
+                echo "  (sanitizer: ASan heap-buffer-overflow)"
+              else
+                echo "  (sanitizer: UBSAN out-of-bounds)"
+              fi
               exit 0
             else
-              echo "FAIL: heap-buffer-overflow caught but trace does not mention _lmm_accel.c"
+              echo "FAIL: OOB caught but trace does not mention _lmm_accel.c"
               echo "Sentinel may be running but stack-trace symbolization is broken."
               echo "----- combined trace -----"
               tail -200 "$combined_trace"
               exit 1
             fi
           else
-            echo "FAIL: sentinel did not produce a heap-buffer-overflow trace"
-            echo "Sanitizer may not be wired. Combined trace contents:"
+            echo "FAIL: sentinel did not produce any sanitizer trace"
+            echo "Neither ASan heap-buffer-overflow nor UBSAN out-of-bounds matched."
+            echo "Combined trace contents:"
             tail -200 "$combined_trace"
             exit 1
           fi

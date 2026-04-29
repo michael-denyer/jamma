@@ -30,6 +30,13 @@ exclude = [
     "^https?://lkml\\.org",
     # Example domains used in docs.
     "^https?://example\\.(com|org|net)",
+    # Intel rate-limits / requires JS for license-FAQ pages — gives 403 to bots.
+    "^https?://www\\.intel\\.com/content/www/.*onemkl-license-faq",
+    # Verbatim GPL canonical URLs in LICENSE.md (FSF-authored boilerplate).
+    # http:// is what the GPL text specifies; TLS upgrade and the FSF host's
+    # legacy cert chain frequently 5xx or HandshakeFailure for CI bots.
+    "^http://fsf\\.org/?$",
+    "^http://www\\.gnu\\.org/philosophy/why-not-lgpl",
 ]
 
 # Don't attempt to verify mailto: links — lychee defaults to false but

@@ -11,10 +11,22 @@ Or from a Databricks/Jupyter notebook cell:
 
 Requires: gcc (or cc), Python development headers, numpy >= 2.0.
 OpenMP support is optional — falls back to single-threaded if unavailable.
+
+Env vars:
+    JAMMA_SENTINEL_UB: when truthy (anything other than "" or "0"),
+        injects ``-DJAMMA_SENTINEL_UB`` into ``extra_cflags`` so the
+        gated ``jamma_sentinel_oob`` heap-OOB function in
+        ``_lmm_accel.c`` is compiled in. Used exclusively by the
+        sanitizer workflow's sentinel-meta-test job to prove ASAN
+        actually catches a deliberate bug. Orthogonal to
+        ``JAMMA_SANITIZE`` — either, both, or neither may be set.
+        Wheel builds NEVER set it (hatch_build.py is a separate path
+        that does not read this env var).
 """
 
 from __future__ import annotations
 
+import os
 import platform
 import shutil
 import subprocess
@@ -37,6 +49,20 @@ from jamma._build_support.compile_and_link import (
 )
 from jamma._build_support.find_compiler import find_c_compiler
 from jamma._build_support.openmp_detect import detect_openmp_flags
+
+# Phase 116.1: dev-mode + sanitizer-workflow sentinel macro. Toggled by the
+# JAMMA_SENTINEL_UB env var; when set, _lmm_accel.c's gated heap-OOB function
+# `jamma_sentinel_oob` is exposed. The sanitizer workflow's
+# asan-sentinel-meta-test job sets this to verify that ASAN actually catches
+# a deliberate bug. Wheel builds NEVER set it (the macro never reaches
+# hatch_build.py — that path has its own extra_cflags assembly).
+#
+# The literal lives here (not in jamma._build_support.compile_and_link)
+# because it's a -D preprocessor macro, not a compile-optimization flag.
+# The compile-flag-literal lint regex covers -O/-f/-W/-m/-s/-p prefixes,
+# not -D, so this assignment is naturally lint-clean. The named constant
+# makes the literal greppable.
+_SENTINEL_UB_DEFINE = "-DJAMMA_SENTINEL_UB"
 
 
 def compile_extension(
@@ -185,6 +211,15 @@ def compile_extension(
         else:
             diag_flags = ["-fopt-info-vec-all"]
     extra_cflags.extend(diag_flags)
+
+    # Phase 116.1: opt-in sentinel macro for the sanitizer-workflow self-test.
+    # See _SENTINEL_UB_DEFINE comment at module top. Truthy convention mirrors
+    # JAMMA_FORCE_NUMPY_FALLBACK (plan 02): "" and "0" are off, anything else
+    # is on. Orthogonal to JAMMA_SANITIZE — either, both, or neither can
+    # be set.
+    if os.environ.get("JAMMA_SENTINEL_UB", "").strip() not in ("", "0"):
+        extra_cflags.append(_SENTINEL_UB_DEFINE)
+        _detail(f"sentinel: appended {_SENTINEL_UB_DEFINE} (JAMMA_SENTINEL_UB env set)")
 
     # Platform-specific link flags. Helper appends omp_link + extra_link_flags.
     ldflags = list(LINK_FLAGS_BY_PLATFORM.get(platform.system(), ()))

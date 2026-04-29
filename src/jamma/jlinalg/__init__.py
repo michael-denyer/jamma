@@ -29,11 +29,19 @@ Exports:
     HAS_OPENMP: True if the C extension was compiled with OpenMP support.
     compute_snp_stats_chunk: Single-pass per-SNP statistics (mean, variance,
         miss count, optional HWE genotype counts).
+
+Env vars:
+    JAMMA_FORCE_NUMPY_FALLBACK: when truthy (anything other than "" or "0"),
+        skips the _jlinalg.so import entirely. blas_backend is set to
+        "numpy-fallback-forced" so the sanitizer workflow can confirm the
+        gate engaged (distinguishable from the natural "numpy-fallback"
+        value used when the .so genuinely failed to import). See Phase 116.1.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import os
 import warnings
 
 import numpy as _np
@@ -43,174 +51,203 @@ HAS_C_EXTENSION: bool = False
 
 _EXPECTED_JLINALG_ABI = 12  # Must match JLINALG_ABI_VERSION in include/jlinalg.h
 
-try:
-    from jamma.jlinalg._jlinalg import (
-        ABI_VERSION,
-        HAS_OPENMP,
-        blas_backend,
-        blas_has_dgeqrf,
-        blas_has_dgesvd,
-        blas_has_dsyevd,
-        blas_has_dsyevr,
-        blas_has_dsyrk,
-        blas_has_lapacke_dsyevd,
-        blas_is_ilp64,
-        compute_snp_stats_chunk,
-        dgemm,
-        dsyrk,
-        eigh,
-        get_n_threads,
-        jlinalg_isa,
-        qr,
-        set_n_threads,
-        svd,
-    )
+# Phase 116.1: ASAN/UBSAN sanitizer workflow needs a way to skip the
+# _jlinalg.so import entirely. RESEARCH §"Pitfall 4" — ASAN + dlopen(...,
+# RTLD_LAZY) inside blas_dispatch.c can produce false-positive
+# heap-buffer-overflow reports. Forcing the import to be skipped (rather
+# than disabling downstream calls) means dlopen never runs, so ASAN's
+# interceptors never see the unowned BLAS-internal pointers. Truthy
+# values: anything other than "", "0".
+_FORCE_NUMPY = os.environ.get("JAMMA_FORCE_NUMPY_FALLBACK", "").strip() not in (
+    "",
+    "0",
+)
 
-    if ABI_VERSION != _EXPECTED_JLINALG_ABI:
-        raise ImportError(
-            f"_jlinalg C extension ABI mismatch: "
-            f"compiled={ABI_VERSION}, expected={_EXPECTED_JLINALG_ABI}. "
-            f"Recompile with: python -m jamma.jlinalg._compile_jlinalg"
-        )
-
-    HAS_C_EXTENSION: bool = True
-
-    # C extension loaded, but vendor BLAS/LAPACK may not be available.
-    # Replace C functions with NumPy fallbacks for unavailable operations.
-    if not blas_has_dsyrk:
-
-        def dsyrk(X: _np.ndarray) -> _np.ndarray:  # type: ignore[misc]
-            """NumPy fallback: K = X @ X.T."""
-            if X.ndim != 2:
-                raise ValueError(f"dsyrk: X must be a 2-D array, got {X.ndim}-D")
-            X64 = _np.ascontiguousarray(X, dtype=_np.float64)
-            result = _np.dot(X64, X64.T)
-            il = _np.tril_indices_from(result, -1)
-            result.T[il] = result[il]
-            return result
-
-    if not blas_has_dsyevd and not blas_has_dsyevr:
-
-        def eigh(  # type: ignore[misc]
-            K: _np.ndarray, inplace: bool = False
-        ) -> tuple[_np.ndarray, _np.ndarray]:
-            """NumPy fallback: eigendecomposition of symmetric matrix."""
-            if K.ndim != 2:
-                raise ValueError(f"eigh: K must be a 2-D array, got {K.ndim}-D")
-            if K.shape[0] != K.shape[1]:
-                raise ValueError(f"eigh: K must be square, got shape {K.shape}")
-            K64 = _np.asarray(K, dtype=_np.float64)
-            w, v = _np.linalg.eigh(K64)
-            if inplace:
-                K[:] = v
-                return w, K
-            return w, v
-
-    if not blas_has_dgeqrf:
-
-        def qr(A: _np.ndarray) -> tuple[_np.ndarray, _np.ndarray]:  # type: ignore[misc]
-            """NumPy fallback: reduced QR factorization."""
-            if A.ndim != 2:
-                raise ValueError(f"qr: A must be a 2-D array, got {A.ndim}-D")
-            return _np.linalg.qr(A.astype(_np.float64, copy=False), mode="reduced")
-
-    if not blas_has_dgesvd:
-
-        def svd(  # type: ignore[misc]
-            A: _np.ndarray, compute_uv: bool = True
-        ) -> tuple[_np.ndarray, _np.ndarray, _np.ndarray] | _np.ndarray:
-            """NumPy fallback: reduced SVD."""
-            if A.ndim != 2:
-                raise ValueError(f"svd: A must be a 2-D array, got {A.ndim}-D")
-            if A.shape[0] < A.shape[1]:
-                raise ValueError(f"svd: requires m >= n, got shape {A.shape}")
-            A64 = A.astype(_np.float64, copy=False)
-            if compute_uv:
-                return _np.linalg.svd(A64, full_matrices=False)
-            return _np.linalg.svd(A64, compute_uv=False)
-
-except ImportError as _exc:
-    # Auto-recompile: try once before falling back to NumPy.
-    _recompiled = False
+if _FORCE_NUMPY:
+    # Skip the _jlinalg.so import entirely. HAS_C_EXTENSION stays False; the
+    # `if not HAS_C_EXTENSION:` block below defines the rest of the fallback
+    # state. The "numpy-fallback-forced" value is the discoverable telemetry
+    # signal the sanitizer workflow log greps for.
+    blas_backend = "numpy-fallback-forced"
+    blas_is_ilp64 = 0
+else:
     try:
-        from jamma.core.recompile import auto_recompile_c_extension
-
-        _recompiled = auto_recompile_c_extension(
-            module_name="_jlinalg",
-            compiler_module="jamma.jlinalg._compile_jlinalg",
-            sys_module_key="jamma.jlinalg._jlinalg",
-            label="jlinalg",
+        from jamma.jlinalg._jlinalg import (
+            ABI_VERSION,
+            HAS_OPENMP,
+            blas_backend,
+            blas_has_dgeqrf,
+            blas_has_dgesvd,
+            blas_has_dsyevd,
+            blas_has_dsyevr,
+            blas_has_dsyrk,
+            blas_has_lapacke_dsyevd,
+            blas_is_ilp64,
+            compute_snp_stats_chunk,
+            dgemm,
+            dsyrk,
+            eigh,
+            get_n_threads,
+            jlinalg_isa,
+            qr,
+            set_n_threads,
+            svd,
         )
-    except (ImportError, OSError) as _recompile_exc:
-        warnings.warn(
-            f"jlinalg auto-recompile skipped: "
-            f"{type(_recompile_exc).__name__}: {_recompile_exc}",
-            stacklevel=2,
-        )
 
-    if _recompiled:
-        # Retry import after successful recompilation
-        try:
-            from jamma.jlinalg._jlinalg import (
-                ABI_VERSION,
-                HAS_OPENMP,
-                blas_backend,
-                blas_has_dgeqrf,
-                blas_has_dgesvd,
-                blas_has_dsyevd,
-                blas_has_dsyevr,
-                blas_has_dsyrk,
-                blas_has_lapacke_dsyevd,
-                blas_is_ilp64,
-                compute_snp_stats_chunk,
-                dgemm,
-                dsyrk,
-                eigh,
-                get_n_threads,
-                jlinalg_isa,
-                qr,
-                set_n_threads,
-                svd,
+        if ABI_VERSION != _EXPECTED_JLINALG_ABI:
+            raise ImportError(
+                f"_jlinalg C extension ABI mismatch: "
+                f"compiled={ABI_VERSION}, expected={_EXPECTED_JLINALG_ABI}. "
+                f"Recompile with: python -m jamma.jlinalg._compile_jlinalg"
             )
 
-            if ABI_VERSION != _EXPECTED_JLINALG_ABI:
-                raise ImportError(
-                    f"_jlinalg C extension ABI mismatch after recompile: "
-                    f"compiled={ABI_VERSION}, expected={_EXPECTED_JLINALG_ABI}. "
-                    f"Manual recompile needed: python -m jamma.jlinalg._compile_jlinalg"
-                )
+        HAS_C_EXTENSION: bool = True
 
-            HAS_C_EXTENSION: bool = True
-        except (ImportError, OSError) as _retry_exc:
+        # C extension loaded, but vendor BLAS/LAPACK may not be available.
+        # Replace C functions with NumPy fallbacks for unavailable operations.
+        if not blas_has_dsyrk:
+
+            def dsyrk(X: _np.ndarray) -> _np.ndarray:  # type: ignore[misc]
+                """NumPy fallback: K = X @ X.T."""
+                if X.ndim != 2:
+                    raise ValueError(f"dsyrk: X must be a 2-D array, got {X.ndim}-D")
+                X64 = _np.ascontiguousarray(X, dtype=_np.float64)
+                result = _np.dot(X64, X64.T)
+                il = _np.tril_indices_from(result, -1)
+                result.T[il] = result[il]
+                return result
+
+        if not blas_has_dsyevd and not blas_has_dsyevr:
+
+            def eigh(  # type: ignore[misc]
+                K: _np.ndarray, inplace: bool = False
+            ) -> tuple[_np.ndarray, _np.ndarray]:
+                """NumPy fallback: eigendecomposition of symmetric matrix."""
+                if K.ndim != 2:
+                    raise ValueError(f"eigh: K must be a 2-D array, got {K.ndim}-D")
+                if K.shape[0] != K.shape[1]:
+                    raise ValueError(f"eigh: K must be square, got shape {K.shape}")
+                K64 = _np.asarray(K, dtype=_np.float64)
+                w, v = _np.linalg.eigh(K64)
+                if inplace:
+                    K[:] = v
+                    return w, K
+                return w, v
+
+        if not blas_has_dgeqrf:
+
+            def qr(A: _np.ndarray) -> tuple[_np.ndarray, _np.ndarray]:  # type: ignore[misc]
+                """NumPy fallback: reduced QR factorization."""
+                if A.ndim != 2:
+                    raise ValueError(f"qr: A must be a 2-D array, got {A.ndim}-D")
+                return _np.linalg.qr(A.astype(_np.float64, copy=False), mode="reduced")
+
+        if not blas_has_dgesvd:
+
+            def svd(  # type: ignore[misc]
+                A: _np.ndarray, compute_uv: bool = True
+            ) -> tuple[_np.ndarray, _np.ndarray, _np.ndarray] | _np.ndarray:
+                """NumPy fallback: reduced SVD."""
+                if A.ndim != 2:
+                    raise ValueError(f"svd: A must be a 2-D array, got {A.ndim}-D")
+                if A.shape[0] < A.shape[1]:
+                    raise ValueError(f"svd: requires m >= n, got shape {A.shape}")
+                A64 = A.astype(_np.float64, copy=False)
+                if compute_uv:
+                    return _np.linalg.svd(A64, full_matrices=False)
+                return _np.linalg.svd(A64, compute_uv=False)
+
+    except ImportError as _exc:
+        # Auto-recompile: try once before falling back to NumPy.
+        _recompiled = False
+        try:
+            from jamma.core.recompile import auto_recompile_c_extension
+
+            _recompiled = auto_recompile_c_extension(
+                module_name="_jlinalg",
+                compiler_module="jamma.jlinalg._compile_jlinalg",
+                sys_module_key="jamma.jlinalg._jlinalg",
+                label="jlinalg",
+            )
+        except (ImportError, OSError) as _recompile_exc:
             warnings.warn(
-                f"jlinalg recompiled but import still failed: "
-                f"{type(_retry_exc).__name__}: {_retry_exc}",
+                f"jlinalg auto-recompile skipped: "
+                f"{type(_recompile_exc).__name__}: {_recompile_exc}",
                 stacklevel=2,
             )
 
+        if _recompiled:
+            # Retry import after successful recompilation
+            try:
+                from jamma.jlinalg._jlinalg import (
+                    ABI_VERSION,
+                    HAS_OPENMP,
+                    blas_backend,
+                    blas_has_dgeqrf,
+                    blas_has_dgesvd,
+                    blas_has_dsyevd,
+                    blas_has_dsyevr,
+                    blas_has_dsyrk,
+                    blas_has_lapacke_dsyevd,
+                    blas_is_ilp64,
+                    compute_snp_stats_chunk,
+                    dgemm,
+                    dsyrk,
+                    eigh,
+                    get_n_threads,
+                    jlinalg_isa,
+                    qr,
+                    set_n_threads,
+                    svd,
+                )
+
+                if ABI_VERSION != _EXPECTED_JLINALG_ABI:
+                    raise ImportError(
+                        f"_jlinalg C extension ABI mismatch after recompile: "
+                        f"compiled={ABI_VERSION}, expected={_EXPECTED_JLINALG_ABI}. "
+                        "Manual recompile needed: "
+                        "python -m jamma.jlinalg._compile_jlinalg"
+                    )
+
+                HAS_C_EXTENSION: bool = True
+            except (ImportError, OSError) as _retry_exc:
+                warnings.warn(
+                    f"jlinalg recompiled but import still failed: "
+                    f"{type(_retry_exc).__name__}: {_retry_exc}",
+                    stacklevel=2,
+                )
+
 if not HAS_C_EXTENSION:
-    if _so_exists:
-        warnings.warn(
-            "jlinalg C extension found but failed to load; "
-            "this usually indicates an ABI mismatch or missing shared library. "
-            "Falling back to NumPy (slower). "
-            "Reinstall jamma or run 'python -m jamma.jlinalg._compile_jlinalg'.",
-            stacklevel=2,
-        )
-    else:
-        warnings.warn(
-            "jlinalg C extension not compiled; "
-            "using NumPy fallback (slower). "
-            "Run 'python -m jamma.jlinalg._compile_jlinalg' to compile.",
-            stacklevel=2,
-        )
+    if not _FORCE_NUMPY:
+        # Only warn on natural fallback — forced fallback is a deliberate
+        # choice (sanitizer workflow, dependency-free environments), not a
+        # degradation. The "numpy-fallback-forced" telemetry value below is
+        # the discoverable signal for forced runs.
+        if _so_exists:
+            warnings.warn(
+                "jlinalg C extension found but failed to load; "
+                "this usually indicates an ABI mismatch or missing shared library. "
+                "Falling back to NumPy (slower). "
+                "Reinstall jamma or run 'python -m jamma.jlinalg._compile_jlinalg'.",
+                stacklevel=2,
+            )
+        else:
+            warnings.warn(
+                "jlinalg C extension not compiled; "
+                "using NumPy fallback (slower). "
+                "Run 'python -m jamma.jlinalg._compile_jlinalg' to compile.",
+                stacklevel=2,
+            )
     # C extension not available -- use NumPy-backed fallback with identical signatures.
     ABI_VERSION: int = 0
     HAS_C_EXTENSION = False
     HAS_OPENMP: bool = False
     jlinalg_isa: str = "numpy-fallback"
-    blas_backend: str = "numpy-fallback"
-    blas_is_ilp64: int = 0
+    # Use globals().setdefault so a previously-set "numpy-fallback-forced" value
+    # (from the _FORCE_NUMPY branch above) is preserved. This is the ONLY
+    # acceptable form — a `dir()` check is order-dependent and unreliable.
+    globals().setdefault("blas_backend", "numpy-fallback")
+    globals().setdefault("blas_is_ilp64", 0)
     blas_has_dsyrk: int = 0
     blas_has_dsyevd: int = 0
     blas_has_dsyevr: int = 0

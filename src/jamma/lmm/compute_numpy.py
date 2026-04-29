@@ -17,6 +17,7 @@ The caller is responsible for:
 
 from __future__ import annotations
 
+import os
 from typing import Literal, NamedTuple, TypedDict
 
 import numpy as np
@@ -121,10 +122,21 @@ _ACCEL_UNAVAILABLE = AccelImport(
 def _try_import_accel() -> AccelImport:
     """Attempt to import the C extension and validate ABI version.
 
+    Honours ``JAMMA_FORCE_NUMPY_FALLBACK`` (Phase 116.1) — when truthy
+    (anything other than "" or "0"), returns ``_ACCEL_UNAVAILABLE``
+    without attempting the .so import. The ASAN/UBSAN sanitizer workflow
+    sets this so ``dlopen`` never runs (RESEARCH §"Pitfall 4": ASAN +
+    dlopen interaction can produce false-positive heap-buffer-overflow
+    reports inside dispatched BLAS calls).
+
     Returns:
         AccelImport with availability flags and C function references
         (None when unavailable).
     """
+    # Phase 116.1: same convention as jamma.jlinalg.__init__ — truthy values
+    # are anything other than "", "0".
+    if os.environ.get("JAMMA_FORCE_NUMPY_FALLBACK", "").strip() not in ("", "0"):
+        return _ACCEL_UNAVAILABLE
     try:
         from jamma.lmm._lmm_accel import ABI_VERSION as abi
         from jamma.lmm._lmm_accel import HAS_OPENMP as has_omp
@@ -533,10 +545,19 @@ _compute_score_fused_ws_c = _accel.compute_score_fused_ws_c
 _create_workspace_lrt_fused_c = _accel.create_workspace_lrt_fused_c
 _compute_lrt_fused_ws_c = _accel.compute_lrt_fused_ws_c
 
-if not _C_ACCEL_AVAILABLE:
+_FORCE_NUMPY_FALLBACK = os.environ.get(
+    "JAMMA_FORCE_NUMPY_FALLBACK", ""
+).strip() not in ("", "0")
+
+if not _C_ACCEL_AVAILABLE and not _FORCE_NUMPY_FALLBACK:
     # Auto-recompile and retry once. Re-run the same field-by-field
     # bind from AccelImport so the retry path cannot drift from the
     # initial-load path.
+    #
+    # Phase 116.1: when JAMMA_FORCE_NUMPY_FALLBACK is set, skip the retry
+    # entirely — auto_recompile_c_extension would compile the .so and
+    # import it into sys.modules, defeating the gate's purpose
+    # (RESEARCH §"Pitfall 4": ASAN must never see the .so loaded).
     if _auto_recompile():
         _accel = _try_import_accel()
         _C_ACCEL_AVAILABLE = _accel.accel_available

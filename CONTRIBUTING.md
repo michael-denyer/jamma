@@ -2,10 +2,11 @@
 
 ## Prerequisites
 
-- Python 3.11+
+- Python 3.11+ (3.11 -- 3.14 supported)
 - [uv](https://docs.astral.sh/uv/) (package manager)
-- [prek](https://prek.j178.dev) (pre-commit hooks)
-- Docker (optional, for running GEMMA validation tests)
+- [prek](https://prek.j178.dev) (pre-commit hooks; v0.3.8+)
+- A C compiler with OpenMP support (gcc, clang)
+- A local [GEMMA 0.98.5](https://github.com/genetics-statistics/GEMMA) binary (optional, only needed for GEMMA-parity tests that compare against fresh GEMMA output)
 
 ## Development Setup
 
@@ -16,39 +17,67 @@ uv sync
 prek install
 ```
 
-This installs all runtime and dev dependencies and sets up pre-commit hooks (ruff lint + format).
+This installs all runtime and dev dependencies and sets up the
+[prek](https://prek.j178.dev/)-managed git hooks. Hooks include ruff (lint + format),
+clang-format, cppcheck, markdownlint, mermaid syntax (`maid`), lychee link
+check, actionlint (workflow lint), zizmor (workflow security), shellcheck,
+vulture (dead-code), refurb (refactor suggestions), plus JAMMA-specific
+gates -- fixture-manifest verification, forbidden-patches AST check,
+compile-flag-literal lint, route-through-`_build_support` enforcement,
+and a pre-push C-extension freshness check.
 
 ## Running Tests
 
 ```bash
-# Full suite (parallel by default via pytest-xdist)
+# Default suite -- excludes slow + tier2 + benchmark per pyproject addopts.
+# Implicit pytest-xdist (-n 3) and pytest-timeout (--timeout=120).
 uv run pytest tests/ -x
 
 # Filter by keyword
 uv run pytest tests/ -x -k lmm
 uv run pytest tests/ -x -k hypothesis
 
-# Skip slow tests
-uv run pytest tests/ -x -m "not slow"
+# Run slow + tier2 too (override addopts)
+uv run pytest tests/ -x -o 'addopts='
 ```
 
 ### Test Tiers
 
-| Marker | Description | Typical Runtime |
-|--------|-------------|-----------------|
-| `tier0` | Fast unit tests, no external dependencies | <5s |
-| `tier1` | Parity tests against GEMMA reference data | <60s |
-| `tier2` / `slow` | Scale tests, requires large memory or long runtime | Minutes+ |
+Every test file must declare a tier marker (or `slow`/`benchmark`) at module
+or function level. A `pytest_configure` gate aborts the run if a file is
+missing one. The `tier3` marker was removed in v5.3.0 -- if you are porting
+an older plan, retag those tests to `tier2`.
 
-Tests run with `pytest-randomly` for order randomization. Use `--randomly-seed=<n>` to reproduce a specific ordering.
+| Marker | Description | Typical Runtime | Default suite |
+|--------|-------------|-----------------|---------------|
+| `tier0` | Fast unit tests, no external dependencies | <5s | run |
+| `tier1` | Parity tests against GEMMA reference data | <60s | run |
+| `tier2` / `slow` | Scale tests, large memory or long runtime | Minutes+ | excluded |
+| `benchmark` | pytest-benchmark microbenchmarks | varies | excluded |
+
+Tests run with `pytest-randomly` for order randomization. Use
+`--randomly-seed=<n>` to reproduce a specific ordering.
+`pytest-rerunfailures` is installed for marking known-flaky tests with
+`@pytest.mark.flaky(reruns=N)`; the weekly `flaky-detect.yml` workflow
+runs the suite under five distinct seeds and opens an issue on disagreement.
+
+For full test guidance (mocking boundaries, fakes vs mocks, fixture
+manifest, forbidden-patches gate), see [`docs/TESTING.md`](docs/TESTING.md).
 
 ### GEMMA Validation
 
-Some tests compare JAMMA output against GEMMA reference data in `tests/fixtures/`. To regenerate reference data or run GEMMA directly:
+Some tests compare JAMMA output against GEMMA reference data in
+`tests/fixtures/`. Build [GEMMA 0.98.5](https://github.com/genetics-statistics/GEMMA)
+locally (or use a prebuilt binary) and run it directly against the same
+PLINK fixtures -- no Docker workflow is maintained in-tree. After
+regenerating any fixture, refresh the manifest:
 
 ```bash
-docker run -v $(pwd):/data gemma -h
+uv run python scripts/regenerate_fixture_manifest.py
 ```
+
+`tests/fixtures/MANIFEST.toml` SHA-256-tracks all 55 fixtures; a stale
+manifest fails the pre-commit gate.
 
 ## Code Style
 
@@ -109,7 +138,12 @@ src/jamma/
 ├── core/            # Memory estimation, backend selection, utilities
 ├── io/              # PLINK file readers, result writers
 ├── kinship/         # Kinship matrix computation (standard, streaming, LOCO)
-├── lmm/             # LMM association (likelihood, optimization, runners)
+├── lmm/             # LMM association (likelihood, optimization, runners,
+│                    # and the _lmm_accel.c C extension)
+├── jlinalg/         # Vendor BLAS/LAPACK dispatch C layer + NumPy fallback
+├── _build_support/  # Single source of truth for compile flags, sources,
+│                    # link flags. Imported by all three compile entry points
+│                    # (hatch_build.py, _compile_jlinalg.py, _compile_accel.py).
 ├── utils/           # Shared utilities
 └── validation/      # GEMMA comparison, tolerance config
 ```

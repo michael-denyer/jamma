@@ -17,7 +17,7 @@ bugs), see [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md).
 | Eigenvalues | Yes | LAPACK backward error | O(n * eps_mach) | ~1e-13 |
 | REML log-likelihood | Yes | FP accumulation in Pab | O(n * eps_mach) | 3.23e-7 |
 | MLE logl_H1 | Yes | Optimizer on flat landscapes | O(eps * flatness) | 1.35e-3* |
-| Lambda (REML) | Yes | Convergence tolerance | O(1e-5) | 3.80e-5 |
+| Lambda (REML) | Yes | Convergence tolerance | O(5e-5) | 3.80e-5 |
 | Beta (effect) | Yes | Lambda propagation / Pab | O(eps * sensitivity) | 7.0e-5 |
 | SE | Yes | Lambda propagation / sqrt | O(eps * sensitivity) | ~2e-6 |
 | p_wald | Yes | CDF implementation | O(1e-5) | 2.20e-6 |
@@ -151,10 +151,15 @@ beta/SE differences.
 | Bounds | [1e-5, 1e5] | [1e-5, 1e5] |
 | Tolerance | 1e-5 | ~6.6e-5 per grid cell (0.618^20 * cell width) |
 
-**Bound**: Both converge to within 1e-5 of the true optimum.
-`|lambda_JAMMA - lambda_GEMMA| <= O(1e-5)`.
+**Bound**: GEMMA Brent converges to within 1e-5; JAMMA golden section
+converges to ~6.6e-5 relative (one bracket of 0.618^20). The two algorithms
+agree to within `O(5e-5)` in practice on unimodal REML surfaces.
+`|lambda_JAMMA - lambda_GEMMA| <= O(5e-5)`.
 
-**Observed (REML)**: max relative difference = 3.80e-5.
+**Observed (REML, mouse_hs1940)**: max relative difference = 3.80e-5
+(within the bound above). `lambda_rtol` in `validation/tolerances.py` is
+set to `2e-5` for synthetic data and `5e-5` (`mouse_hs1940_rtol`) for the
+real-data parity tests.
 
 ### Flat Landscapes (Weak-Signal SNPs)
 

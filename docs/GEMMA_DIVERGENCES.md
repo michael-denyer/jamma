@@ -244,8 +244,14 @@ golden section with Brent would require either scalar per-SNP optimization
 ### Convergence
 
 After grid bracketing to ±1 cell, 20 golden section iterations reduce the
-bracket by `0.618^20 ≈ 6.6e-5`, giving relative tolerance < 1e-5 for typical
-lambda values. This matches Brent's 1e-5 tolerance in practice.
+bracket by `0.618^20 ≈ 6.6e-5` of the cell width. With a 50-point log-spaced
+grid over `[1e-5, 1e5]`, that bracket shrinkage gives a relative lambda
+tolerance bounded by `~6.6e-5`. GEMMA's Brent uses `1e-5` per its GSL
+configuration. The two converge to the same optimum to within `O(5e-5)`
+relative on unimodal REML surfaces -- max observed is `3.80e-5` on
+mouse_hs1940. The validation tolerance config (`validation/tolerances.py`)
+sets `lambda_rtol = 2e-5` for synthetic data and `5e-5` for real-data
+parity tests.
 
 ### Boundary Diagnostic
 
@@ -266,7 +272,7 @@ bound — normal behavior that also occurs in GEMMA.
 |-----------------|-------------------|-------------------|
 | Strong signal | < 1e-4 relative | Negligible |
 | Moderate signal | < 1e-4 relative | Negligible |
-| Weak signal (flat MLE surface) | up to ~9e-4 relative | Affects only MLE logl_H1 diagnostic |
+| Weak signal (flat MLE surface) | up to ~1.35e-3 relative on mouse_hs1940 | Affects only MLE logl_H1 diagnostic |
 
 P-values, effect sizes, and significance calls are unaffected. The flat region
 corresponds to weak-signal SNPs where test statistics are small regardless of

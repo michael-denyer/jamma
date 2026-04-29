@@ -24,7 +24,7 @@ All functions accept and return `numpy.ndarray` (float64, C-contiguous).
 | `daxpy` | `(alpha, x, y) -> None` | y += alpha * x (in-place) |
 | `dscal` | `(alpha, x) -> None` | x *= alpha (in-place) |
 | `dgemv` | `(A, x) -> ndarray` | Matrix-vector product A @ x |
-| `dsyr2k` | `(C, A, B) -> ndarray` | Symmetric rank-2k update C - A @ B.T - B @ A.T |
+| `dsyr2k` | `(C, A, B) -> ndarray` | Symmetric rank-2k update C -= A @ B.T + B @ A.T |
 
 ### Level 3 BLAS (vendor dispatch)
 
@@ -83,8 +83,24 @@ uv run python -c "from jamma.jlinalg._compile_jlinalg import compile_extension; 
 
 **Wheel builds:** `hatch_build.py` handles compilation automatically.
 
-Both `_compile_jlinalg.py` and `hatch_build.py` must list every C source file.
-LAPACK sources use strict IEEE 754 flags (`-O2 -fno-fast-math`).
+C sources, compile flags, and link flags are owned by
+`src/jamma/_build_support/compile_and_link.py` (`BASELINE_SOURCES`,
+`LAPACK_SOURCES`, `BASE_CFLAGS`, `LAPACK_CFLAGS`). Three compile entry
+points (`hatch_build.py`, `_compile_jlinalg.py`,
+`src/jamma/lmm/_compile_accel.py`) all import from `_build_support` so
+they stay in sync. Bare flag literals outside `_build_support/` fail
+the `check-compile-flag-literals.py` pre-commit hook. LAPACK sources
+(`eigh.c`) use strict IEEE 754 flags (`-O2 -fno-fast-math`); other
+sources use `BASE_CFLAGS` (`-O3 -ftree-vectorize ...`).
+
+## Debugging
+
+Set `JAMMA_FORCE_NUMPY_FALLBACK=1` to force the entire jlinalg layer
+onto the NumPy fallback even when vendor BLAS is loaded -- useful for
+isolating numerical differences between vendor LAPACK and NumPy, and
+required by the weekly sanitizer workflow. The narrower
+`JLINALG_NO_VENDOR_LAPACK` only affects eigendecomposition (in
+`lmm/eigen.py`), not the BLAS primitives.
 
 ## Further Reading
 

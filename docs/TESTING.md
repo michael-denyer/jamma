@@ -158,9 +158,75 @@ computation.
 | `ci.yml` → `test` (Linux 3.11/3.12, ARM Mac 3.12, Linux MKL ILP64) | push/PR | `pytest -m "not tier2 and not slow and not benchmark" -v -n 3` |
 | `ci.yml` → `coverage` | push/PR | `slipcover --fail-under 80 -m pytest ... -n0` |
 | `test-slow.yml` | push to master | `pytest -m "tier2 or slow" -v -o 'addopts=' --no-cov` |
+| `sanitizers.yml` | Wednesday cron + dispatch | `pytest -m "not benchmark and not slow" -n 0 -p no:randomly` (under ASAN/UBSAN) |
 
 CI overrides `addopts` via `-o 'addopts='` so markers and parallelism are
 controlled per-job, independent of the local default.
+
+### 1.10 Running under sanitizers (local repro of CI)
+
+The weekly `Sanitizers (ASAN + UBSAN)` workflow rebuilds the C extensions
+with `-fsanitize=address,undefined` and runs the test suite under ASAN.
+Linux is the supported repro target — macOS works for UBSAN-only, but
+ASAN on macOS requires Xcode's clang and a runtime libasan that is not
+typically on the default `LD_PRELOAD` path.
+
+```bash
+# Force the NumPy fallback so MKL / dlopen don't confuse ASAN's
+# interceptors (RESEARCH §"Pitfall 4": ASAN + dlopen interaction can
+# produce false-positive heap-buffer-overflow reports inside
+# dispatched BLAS calls).
+export JAMMA_FORCE_NUMPY_FALLBACK=1
+
+# Tell the build helpers to inject sanitizer flags via
+# apply_sanitizer_overrides.
+export JAMMA_SANITIZE=address,undefined
+
+# Use gcc to match the LD_PRELOAD libasan path (mixing gcc-built .so
+# and clang's libasan crashes ASAN at startup).
+export CC=gcc
+
+# Rebuild both extensions with sanitizers.
+uv run python -m jamma.jlinalg._compile_jlinalg
+uv run python -m jamma.lmm._compile_accel
+
+# Preload libasan from the SAME compiler used to build the .so files.
+export LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
+export ASAN_OPTIONS="detect_leaks=1:abort_on_error=1:strict_string_checks=1:allocator_may_return_null=1:suppressions=$PWD/scripts/asan-suppressions.txt:symbolize=1:print_stacktrace=1"
+export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1:symbolize=1"
+
+uv run pytest -m "not benchmark and not slow" -n 0 -p no:randomly
+```
+
+To restore your local environment to the default (non-sanitizer) build
+after testing, unset the env vars and recompile:
+
+```bash
+unset JAMMA_SANITIZE JAMMA_FORCE_NUMPY_FALLBACK LD_PRELOAD ASAN_OPTIONS UBSAN_OPTIONS
+uv run python -m jamma.jlinalg._compile_jlinalg
+uv run python -m jamma.lmm._compile_accel
+```
+
+#### Interpreting failures
+
+| Output | Meaning | Action |
+|--------|---------|--------|
+| `AddressSanitizer: heap-buffer-overflow` in `_lmm_accel.c:NNN` or `_jlinalg/<file>.c:NNN` | Real bug in JAMMA C code | Fix the bug — file/line and stack trace point at the offending site |
+| `LeakSanitizer: detected memory leaks` with frames in `_PyImport_LoadDynamic`, `PyType_Ready`, `PyArray_API`, `OPENSSL_init_crypto`, etc. | Expected interpreter / NumPy / OpenSSL init noise | Verify the symbol is covered in `scripts/asan-suppressions.txt`; if not, add it with an upstream-issue citation per the file's header. NEVER add a `leak:jamma_*` suppression — that defeats the workflow. |
+| `runtime error: signed integer overflow` (UBSAN) | Real bug — usually arithmetic on int sizes/strides | Fix or add an explicit cast with a comment explaining the safety argument |
+| Workflow exits 0 with no `AddressSanitizer:` lines anywhere in the asan-ubsan log | Either (a) clean run (good) or (b) ASAN not actually wired (BAD) | The `asan-sentinel-meta-test` job exists exactly to distinguish these cases — if it's also green, ASAN is wired and the asan-ubsan green is real |
+
+> **Note:** The sanitizer workflow uses `JAMMA_FORCE_NUMPY_FALLBACK=1`,
+> so the C BLAS dispatch in `_jlinalg.so` and the C compute path in
+> `_lmm_accel.so` are SKIPPED at import time. The sanitizer therefore
+> exercises the NumPy fallback paths under instrumentation — not the
+> vendor-BLAS dispatch. This is intentional; BLAS-allocator interactions
+> with ASAN are too noisy to catch genuine bugs in our own code.
+
+See also: [`.github/workflows/sanitizers.yml`](../.github/workflows/sanitizers.yml),
+[`scripts/asan-suppressions.txt`](../scripts/asan-suppressions.txt),
+[`src/jamma/_build_support/compile_and_link.py`](../src/jamma/_build_support/compile_and_link.py)
+(the `apply_sanitizer_overrides` helper).
 
 ---
 

@@ -102,20 +102,25 @@ LP64 backends (plain MKL, OpenBLAS, Accelerate) are detected during discovery
 but are **not wired** into the dispatch table -- the NumPy fallback is used
 instead, for FP-accumulation consistency with GEMMA validation tolerances.
 
-`blas_dispatch.c` uses a discover-all-then-select-best model. Both discovery
+`blas_dispatch.c` uses a discover-all-then-select-best model. The discovery
 paths run unconditionally:
 
 1. **System BLAS** -- `dlsym(RTLD_DEFAULT, ...)` finds BLAS symbols already
-   loaded in the process, then scans numpy's shared libraries for MKL
-   symbols and `/proc/self/maps` on Linux.
+   loaded in the process, then scans numpy's shared libraries (`numpy.libs/`,
+   `numpy/.dylibs/`) for ILP64 MKL or OpenBLAS symbols and `/proc/self/maps`
+   on Linux.
 
 2. **pip-installed MKL** -- Searches `site-packages/mkl.libs/` for
    `libmkl_rt` and loads it with `dlopen`.
 
-The best candidate is selected by priority: ILP64 with LAPACK (dsyevd) >
-NumPy fallback > LP64 (detected but not wired). LP64 backends are excluded
+3. **macOS Accelerate-ILP64** -- On macOS 13.3+, looks up the
+   `$NEWLAPACK$ILP64`-suffixed symbols (`dsyevd_$NEWLAPACK$ILP64` etc.) that
+   ship in the system Accelerate framework.
+
+The best candidate is selected by priority: **vendor ILP64 LAPACK (dsyevd) >
+NumPy fallback > LP64 (detected but not wired)**. LP64 backends are excluded
 from the dispatch table because different FP accumulation order produces
-results that diverge from GEMMA's tolerances.
+results that diverge from GEMMA's validation tolerances.
 
 ## File Structure
 
@@ -134,6 +139,15 @@ results that diverge from GEMMA's tolerances.
 | `src/pymodule.c` | Python/NumPy bridge (buffer extraction, GIL release, error translation) |
 | `src/platform.c` | ISA detection (CPUID/hwcap), vendor BLAS dispatch init |
 | `src/blas_dispatch.c` | Vendor BLAS/LAPACK discovery via dlopen/dlsym, dispatch wrappers |
+| `src/eigh.c` | Eigendecomposition dispatcher: vendor DSYEVD then DSYEVR, then `JLINALG_EXT_UNAVAILABLE` for NumPy fallback. Only LAPACK-related C source. |
+| `src/snp_stats.c` | SNP statistics kernel (chunked mean/variance/MAF) |
+
+There are no hand-rolled LAPACK implementations in the tree. As of commit
+`663a22b` (`refactor: strip JAX and own-BLAS`), the architectural commitment
+is **vendor ILP64 LAPACK > NumPy fallback** with nothing in between -- if
+vendor LAPACK is unavailable on a target platform, jlinalg falls through to
+NumPy, never to a translated C routine. The `STRICT_IEEE_SOURCES` tuple in
+`_build_support/compile_and_link.py` is empty for this reason.
 
 ### Test Infrastructure
 
@@ -199,16 +213,46 @@ uv run pytest tests/ -x
    error code to exception translation)
 4. **Add fallback** in `__init__.py` (NumPy implementation in the
    `except ImportError` block)
-5. **Register source files** in BOTH `_compile_jlinalg.py` AND `hatch_build.py`
-   -- missing from either causes undefined symbol errors
+5. **Register source files** in `src/jamma/_build_support/compile_and_link.py`
+   -- add to `BASELINE_SOURCES` for routines that should compile with the
+   default flags, or `LAPACK_SOURCES` for LAPACK routines that need strict
+   IEEE 754. The three compile entry points (`hatch_build.py`,
+   `_compile_jlinalg.py`, `_compile_accel.py`) all import from
+   `_build_support` and stay in sync automatically.
 6. **Write tests** in `tests/test_jlinalg_new_op.py`
 
 ### Compilation Flags
 
-- **Baseline sources** (`src/*.c`): `-O2 -fno-fast-math` (strict IEEE 754)
-- All C extensions must be registered in BOTH `hatch_build.py` (wheel builds)
-  AND `_compile_jlinalg.py` (dev-mode compile). Missing from either causes
-  undefined symbol errors at different stages.
+Compile flags are owned by `src/jamma/_build_support/compile_and_link.py`
+(`BASE_CFLAGS`, `LAPACK_CFLAGS`, `BASELINE_SOURCES`, `LAPACK_SOURCES`,
+`LINK_FLAGS_BY_PLATFORM`). The strict-IEEE-754 split is the central
+invariant:
+
+- **`BASELINE_SOURCES`** (everything except `eigh.c`): `BASE_CFLAGS` --
+  `-O3 -ftree-vectorize -fno-math-errno -fno-trapping-math -funroll-loops
+  -fno-finite-math-only`. Optimised for throughput.
+- **`LAPACK_SOURCES`** (`eigh.c`): `LAPACK_CFLAGS` -- `-O2 -fno-fast-math`.
+  LAPACK dispatch and any future LAPACK-related C must keep strict IEEE 754
+  semantics so vendor-LAPACK error bounds stay valid.
+
+The pre-commit hook `scripts/check-compile-flag-literals.py` bans bare
+`-O3`/`-fno-fast-math`/`-fopenmp` literals anywhere outside
+`_build_support/` (with one explicit exception for the `-march=native`
+dev-mode flag in `_compile_accel.py`). A second hook
+(`scripts/verify_compile_invocations_match.py`) enforces that the three
+compile entry points all import from `_build_support` rather than
+duplicating flag/source lists.
+
+### Debugging
+
+- Set `JAMMA_FORCE_NUMPY_FALLBACK=1` to force the NumPy fallback path even
+  when vendor BLAS/LAPACK is available. Used by the weekly sanitizer
+  workflow to exercise the pure-Python paths and during numerical-divergence
+  debugging when vendor-LAPACK output needs to be cross-checked against the
+  NumPy reference.
+- Set `JAMMA_SANITIZE=address,undefined` (or any subset) at build time to
+  rebuild C extensions with `-fsanitize=...`. Used by
+  `.github/workflows/sanitizers.yml`. See `docs/TESTING.md` §1.10.
 
 ### ABI Versioning
 

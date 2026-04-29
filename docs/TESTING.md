@@ -192,7 +192,12 @@ uv run python -m jamma.lmm._compile_accel
 
 # Preload libasan from the SAME compiler used to build the .so files.
 export LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
-export ASAN_OPTIONS="detect_leaks=1:abort_on_error=1:strict_string_checks=1:allocator_may_return_null=1:suppressions=$PWD/scripts/asan-suppressions.txt:symbolize=1:print_stacktrace=1"
+# scripts/asan-suppressions.txt is in LSAN-format (`leak:<symbol>` lines);
+# it must be referenced via LSAN_OPTIONS, NOT ASAN_OPTIONS — ASan aborts
+# at startup with "failed to parse suppressions" if it tries to read leak:
+# patterns as ASan-format ones.
+export ASAN_OPTIONS="detect_leaks=1:abort_on_error=1:strict_string_checks=1:allocator_may_return_null=1:symbolize=1:print_stacktrace=1"
+export LSAN_OPTIONS="suppressions=$PWD/scripts/asan-suppressions.txt:print_suppressions=0"
 export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1:symbolize=1"
 
 uv run pytest -m "not benchmark and not slow" -n 0 -p no:randomly
@@ -202,7 +207,7 @@ To restore your local environment to the default (non-sanitizer) build
 after testing, unset the env vars and recompile:
 
 ```bash
-unset JAMMA_SANITIZE JAMMA_FORCE_NUMPY_FALLBACK LD_PRELOAD ASAN_OPTIONS UBSAN_OPTIONS
+unset JAMMA_SANITIZE JAMMA_FORCE_NUMPY_FALLBACK LD_PRELOAD ASAN_OPTIONS LSAN_OPTIONS UBSAN_OPTIONS
 uv run python -m jamma.jlinalg._compile_jlinalg
 uv run python -m jamma.lmm._compile_accel
 ```

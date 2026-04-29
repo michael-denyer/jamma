@@ -150,3 +150,49 @@ def test_sentinel_asserter_checks_source_line_attribution(workflow):
         s for s in job["steps"] if "_lmm_accel.c" in str(s.get("run", ""))
     ]
     assert assertion_steps, "no step checks for _lmm_accel.c source-line attribution"
+
+
+def test_pytest_step_uses_bash_for_pipefail(workflow):
+    """The asan-ubsan pytest step must explicitly request `shell: bash`.
+
+    GitHub's default Linux shell is `bash -e {0}` which does NOT enable
+    pipefail. The pytest invocation pipes through `tee`, so without
+    pipefail a pytest crash (sanitizer abort, segfault) would propagate
+    only tee's exit code (0) and the step would silently pass even on
+    an actual ASan finding. The explicit `shell: bash` adds
+    `-eo pipefail` per GitHub's docs, restoring fail-on-pipe-error.
+    """
+    job = workflow["jobs"]["asan-ubsan"]
+    pytest_steps = [
+        s
+        for s in job["steps"]
+        if "uv run pytest" in str(s.get("run", "")) and "tee" in str(s.get("run", ""))
+    ]
+    assert pytest_steps, "no pytest step uses tee — test premise broken"
+    for step in pytest_steps:
+        assert step.get("shell") == "bash", (
+            f"step {step.get('name')!r} pipes pytest output through tee but "
+            "does not set shell: bash — pipefail is not enabled by default, "
+            "so a pytest crash would silently pass the step"
+        )
+
+
+def test_issue_on_failure_covers_both_jobs(workflow):
+    """The triage-issue step must trigger when EITHER asan-ubsan OR
+    asan-sentinel-meta-test fails. The sentinel failing means the
+    sanitizer-wiring proof is broken — exactly the condition the triage
+    path exists to surface.
+    """
+    job = workflow["jobs"]["issue-on-failure"]
+    needs = job["needs"]
+    if isinstance(needs, str):
+        needs = [needs]
+    assert "asan-ubsan" in needs, "issue-on-failure must depend on asan-ubsan"
+    assert "asan-sentinel-meta-test" in needs, (
+        "issue-on-failure must also depend on asan-sentinel-meta-test — "
+        "without this, a sentinel-only failure would go red but no triage "
+        "issue would open"
+    )
+    if_expr = job["if"]
+    assert "asan-ubsan.result" in if_expr
+    assert "asan-sentinel-meta-test.result" in if_expr

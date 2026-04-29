@@ -82,6 +82,49 @@ LINK_FLAGS_BY_PLATFORM: dict[str, tuple[str, ...]] = {
 
 
 # ---------------------------------------------------------------------------
+# apply_sanitizer_overrides — env-var driven sanitizer flag injection seam
+# ---------------------------------------------------------------------------
+
+
+def apply_sanitizer_overrides(
+    extra_cflags: list[str] | None,
+    extra_link_flags: list[str] | None,
+) -> tuple[list[str], list[str], list[str]]:
+    """Augment compile/link flags with sanitizer flags when JAMMA_SANITIZE is set.
+
+    Returns ``(cflags, link_flags, lapack_cflags)``. When ``JAMMA_SANITIZE`` is
+    unset or empty, returns the inputs unchanged plus an empty
+    ``lapack_cflags``. Reads ``os.environ`` ONCE per call; the four compile
+    entry points (``hatch_build.py``, ``_compile_jlinalg.py``,
+    ``_compile_accel.py``, plus runtime recompile in ``core/recompile.py``)
+    MUST NOT duplicate the env-var read — that would defeat the Phase 123
+    single-source-of-truth invariant for compile flags.
+
+    JAMMA_SANITIZE format: comma-separated ``-fsanitize`` values, e.g.
+    ``"address,undefined"`` or ``"address"`` alone. Trailing ``-O1`` wins
+    over BASE_CFLAGS' ``-O3`` and LAPACK_CFLAGS' ``-O2`` because gcc/clang
+    honour the LAST ``-O`` flag on the command line — so the sanitizer
+    build is debuggable without a separate -O override path.
+    """
+    extra_cflags = list(extra_cflags or [])
+    extra_link_flags = list(extra_link_flags or [])
+    sanitizers = os.environ.get("JAMMA_SANITIZE", "").strip()
+    if not sanitizers:
+        return extra_cflags, extra_link_flags, []
+    san_cflags = [
+        f"-fsanitize={sanitizers}",
+        "-fno-omit-frame-pointer",
+        "-O1",
+    ]
+    san_link = [f"-fsanitize={sanitizers}"]
+    return (
+        [*extra_cflags, *san_cflags],
+        [*extra_link_flags, *san_link],
+        list(san_cflags),
+    )
+
+
+# ---------------------------------------------------------------------------
 # resolve_cflags_for — pure dispatch function
 # ---------------------------------------------------------------------------
 
@@ -92,6 +135,7 @@ def resolve_cflags_for(
     include_dirs: list[str],
     extra_cflags: list[str] | None = None,
     extra_source_includes: list[str] | None = None,
+    extra_lapack_cflags: list[str] | None = None,
 ) -> list[str]:
     """Return compile flags for a single source.
 
@@ -108,10 +152,14 @@ def resolve_cflags_for(
     ``-ffinite-math-only``), and the trailing explicit ``-fno-finite-math-only``
     must override it so isnan() keeps working. DO NOT change this order.
 
-    The LAPACK path deliberately does NOT splice ``extra_cflags`` — LAPACK
-    sources are strict IEEE 754, and a user-supplied ``-Ofast`` would defeat
-    that split. If a future caller legitimately needs extra LAPACK flags, add
-    a separate ``extra_lapack_cflags`` parameter.
+    LAPACK path: deliberately does NOT splice ``extra_cflags`` — LAPACK sources
+    are strict IEEE 754, and a user-supplied ``-Ofast`` would defeat that split.
+    For the sanitizer use case (Phase 116.1), a separate ``extra_lapack_cflags``
+    parameter is forwarded by ``compile_jlinalg`` from the
+    ``apply_sanitizer_overrides()`` triple, so ``eigh.c`` is also instrumented
+    when ``JAMMA_SANITIZE`` is set. The trailing ``-O1`` from the sanitizer
+    flags wins over LAPACK_CFLAGS' ``-O2`` (last ``-O`` on the command line
+    wins) without needing a separate override path.
 
     NOTE on extra_source_includes signature:
       * Here in ``resolve_cflags_for`` it is ``list[str]`` (paths for THIS one
@@ -124,6 +172,7 @@ def resolve_cflags_for(
     """
     extra_cflags = list(extra_cflags or [])
     extra_source_includes = list(extra_source_includes or [])
+    extra_lapack_cflags = list(extra_lapack_cflags or [])
     include_flags = [f"-I{d}" for d in include_dirs] + [
         f"-I{d}" for d in extra_source_includes
     ]
@@ -131,8 +180,12 @@ def resolve_cflags_for(
     if str(source_path) in lapack_source_set:
         # LAPACK sources: strict IEEE 754. Caller-supplied extra_cflags (e.g.
         # -Ofast from a user CFLAGS env) would defeat the IEEE 754 split, so
-        # they are deliberately NOT merged here.
-        return [*LAPACK_CFLAGS, *include_flags]
+        # they are deliberately NOT merged here. extra_lapack_cflags IS spliced
+        # — it is reserved for the sanitizer flow where the caller has already
+        # asserted the flags are IEEE-safe (apply_sanitizer_overrides only adds
+        # -fsanitize=..., -fno-omit-frame-pointer, -O1, none of which break
+        # IEEE 754 rounding).
+        return [*LAPACK_CFLAGS, *extra_lapack_cflags, *include_flags]
 
     # Baseline path: splice extra_cflags BEFORE -fno-finite-math-only so the
     # trailing explicit flag overrides a user -Ofast. Slice BASE_CFLAGS rather
@@ -198,6 +251,7 @@ def compile_jlinalg(
     tmp_dir: Path | None = None,
     extra_cflags: list[str] | None = None,
     extra_link_flags: list[str] | None = None,
+    extra_lapack_cflags: list[str] | None = None,
     extra_source_includes: dict[str, list[str]] | None = None,
     link_shared: bool = True,
     on_retry: Callable[[str], None] | None = None,
@@ -244,6 +298,13 @@ def compile_jlinalg(
             ``resolve_cflags_for``). Not applied to LAPACK sources.
         extra_link_flags: Extra flags for the link command line (after
             ``ldflags``, before ``-o``).
+        extra_lapack_cflags: Extra flags appended to LAPACK_CFLAGS for LAPACK
+            sources (forwarded to ``resolve_cflags_for``). Used exclusively
+            by the sanitizer instrumentation flow (Phase 116.1) — assembled by
+            ``apply_sanitizer_overrides()`` so ``eigh.c`` is also instrumented
+            when ``JAMMA_SANITIZE`` is set. LAPACK sources stay
+            ``-O2 -fno-fast-math`` baseline; the trailing ``-O1`` from the
+            sanitizer override wins because gcc/clang honour the last ``-O``.
         extra_source_includes: Per-source extra ``-I<d>`` flags keyed by
             source filename (``src.name``). Used by compile_test_harness
             to supply tests_dir only to test_*.c sources.
@@ -272,6 +333,7 @@ def compile_jlinalg(
     """
     extra_cflags = list(extra_cflags or [])
     extra_link_flags = list(extra_link_flags or [])
+    extra_lapack_cflags = list(extra_lapack_cflags or [])
     extra_source_includes = dict(extra_source_includes or {})
 
     # error_print defaults to verbose_print so existing callers keep their
@@ -311,6 +373,7 @@ def compile_jlinalg(
                 include_dirs,
                 extra_cflags=extra_cflags,
                 extra_source_includes=per_source_includes,
+                extra_lapack_cflags=extra_lapack_cflags,
             )
             cmd = [
                 cc_cmd,

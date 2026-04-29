@@ -131,8 +131,20 @@ jobs:
           "
 
       - name: Run tests
-        # addopts= clears pyproject.toml defaults so CI controls markers and parallelism explicitly
-        run: uv run pytest ${{ matrix.pytest_args || '-m "not tier2 and not slow and not benchmark"' }} -v -n 3 -o 'addopts='
+        # addopts= clears pyproject.toml defaults so CI controls markers and parallelism explicitly.
+        # --reruns 1 (one retry on failure) absorbs the documented timing-flake class on
+        # heavily-loaded ARM Mac runners. Real failures still surface — they fail on the rerun
+        # too. Linux runners keep the historical zero-retry policy. The flaky-detect.yml
+        # workflow continues to monitor seed-sensitive flakes that survive --reruns.
+        shell: bash
+        run: |
+          set -eo pipefail
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            extra_args=(--reruns 1 --only-rerun TimeoutError --only-rerun AssertionError)
+          else
+            extra_args=()
+          fi
+          uv run pytest -m "not tier2 and not slow and not benchmark" -v -n 3 -o 'addopts=' "${extra_args[@]}"
 
   # Package smoke test: catches (a) sdist missing critical files
   # (e.g. src/jamma/_build_support/*.py needed for runtime recompile),

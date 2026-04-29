@@ -58,7 +58,10 @@ def test_main_job_sets_force_numpy_fallback(workflow):
 def test_main_job_asan_options_include_required_flags(workflow):
     opts = workflow["jobs"]["asan-ubsan"]["env"]["ASAN_OPTIONS"]
     for required in [
-        "detect_leaks=1",
+        # detect_leaks is *intentionally* off — leak detection on Python
+        # interpreter teardown produces too much noise to maintain
+        # suppressions for. ASan still catches OOB / UAF / double-free.
+        "detect_leaks=0",
         "abort_on_error=1",
         "strict_string_checks=1",
         "allocator_may_return_null=1",

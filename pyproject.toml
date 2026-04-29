@@ -65,6 +65,7 @@ dev = [
     "pytest-cov>=4.0.0",
     "pytest-benchmark>=5.0.0",
     "pytest-timeout>=2.3.0",
+    "pytest-rerunfailures>=15.0",
     "hypothesis>=6.100.0",
     "hypothesis[numpy]>=6.100.0",
     "pandas>=2.0.0",
@@ -122,6 +123,10 @@ packages = ["src/jamma"]
 [tool.ruff]
 line-length = 88
 target-version = "py311"
+# .vulture-allowlist.py uses vulture's pseudo-Python `_.<name>` syntax
+# (see jendrikseipp/vulture#147 for the convention). It is config data,
+# not source — ruff would flag every line as F821 "undefined name `_`".
+extend-exclude = [".vulture-allowlist.py"]
 
 [tool.ruff.lint]
 # Expanded rule set. Additions beyond the original E/F/I/UP/B:
@@ -184,6 +189,7 @@ dev = [
     "pytest-cov>=4.0.0",
     "pytest-benchmark>=5.0.0",
     "pytest-timeout>=2.3.0",
+    "pytest-rerunfailures>=15.0",
     "hypothesis>=6.100.0",
     "hypothesis[numpy]>=6.100.0",
     "scipy>=1.10.0",

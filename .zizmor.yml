@@ -1,0 +1,23 @@
+# zizmor (GitHub Actions security audit) configuration.
+#
+# Rule: zizmor runs in pre-commit and CI. The current ruleset is HIGH
+# severity only — that's small enough (3 findings as of the introduction
+# commit) to fix in a follow-up PR while still catching the most
+# dangerous patterns in new workflow files.
+#
+# When the existing high-severity findings are addressed, drop
+# `--min-severity high` from the pre-commit invocation so MEDIUM and
+# LOW findings are caught on every PR. Per CLAUDE.md "CI/CD Hardening",
+# defence-in-depth on workflow security is a stated goal.
+
+rules:
+  excessive-permissions:
+    # Workflow-level `issues: write` granted in flaky-detect.yml,
+    # link-check-external.yml, and sanitizers.yml. The narrow fix is to
+    # move the permission to the specific job that opens the triage
+    # issue. Tracked as a follow-up — not blocking the introduction of
+    # the zizmor hook itself.
+    ignore:
+      - flaky-detect.yml
+      - link-check-external.yml
+      - sanitizers.yml

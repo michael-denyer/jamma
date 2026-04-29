@@ -23,6 +23,64 @@ repos:
       - id: clang-format
         types_or: [c]
         files: ^src/jamma/jlinalg/src/
+  # GitHub Actions workflow linter. Catches missing pipefail / shell mode,
+  # bad expression syntax, deprecated action versions, and ${{}} injection
+  # patterns. Phase 116.1's verification cycle would have lost ~6 cycles
+  # to remote dispatch had this run locally first (review HIGH finding,
+  # commit cbd7127). Includes shellcheck integration for `run:` blocks.
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+  # Workflow security audit. Catches privilege escalation paths, SHA-pin
+  # drift across workflows, untrusted-input expansion in `run:`, and
+  # pull_request_target misuse. Defence-in-depth for the SHA-pinned
+  # posture this repo already takes per CLAUDE.md "CI/CD Hardening".
+  - repo: https://github.com/woodruffw/zizmor-pre-commit
+    rev: v1.24.1
+    hooks:
+      - id: zizmor
+        # Start with high-severity only; lower bars come once the
+        # existing low/medium findings are triaged. See .zizmor.yml.
+        args: ["--min-severity", "high", "--config", ".zizmor.yml"]
+  # Standalone shellcheck for shell scripts under scripts/. The
+  # actionlint integration above covers `run:` blocks inside workflow
+  # YAML; this hook catches `scripts/*.sh` files that aren't part of
+  # any workflow. Together they reach all shell logic in the repo.
+  # shellcheck-py wraps the binary so no Docker daemon is required.
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+        files: ^scripts/.*\.sh$
+  # Dead-code detector. Surfaces unreachable functions, unused imports,
+  # and stale test fixtures. Run with high confidence (95%) to keep
+  # false-positive noise low — flags only obvious dead code, not
+  # speculative `_unused` arg parameters.
+  - repo: https://github.com/jendrikseipp/vulture
+    rev: v2.16
+    hooks:
+      - id: vulture
+        args:
+          - "--min-confidence"
+          - "95"
+          - ".vulture-allowlist.py"
+          - "src/"
+          - "scripts/"
+  # Modernization hints. Catches Python idioms ruff doesn't fully cover
+  # (e.g. `pathlib` over `os.path`, modern type-hint forms, replaceable
+  # comprehensions). Manual mode: pre-commit does NOT run this on every
+  # commit (would block on ~23 pre-existing findings); developers run
+  # `prek run refurb --all-files` opportunistically when working on a
+  # file refurb has flagged. CI never blocks on refurb. Once the
+  # pre-existing findings are cleaned up, drop `stages: [manual]` to
+  # gate every commit.
+  - repo: https://github.com/dosisod/refurb
+    rev: v2.3.1
+    hooks:
+      - id: refurb
+        files: ^src/.*\.py$
+        stages: [manual]
   # Markdown link checker. Pre-commit runs lychee in --offline mode so it
   # only verifies file paths and in-repo anchors — fast, deterministic, no
   # network. CI runs the same binary with the same lychee.toml config but

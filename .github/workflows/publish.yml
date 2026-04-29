@@ -22,6 +22,13 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+        with:
+          # Disable setup-uv's default cache: zizmor flags it as
+          # cache-poisoning risk on a job that publishes signed
+          # release artifacts. Cache contents are user-controlled
+          # across runs; disabling eliminates the replacement attack
+          # surface on a publish job.
+          enable-cache: false
 
       - name: Set up Python
         run: uv python install 3.11

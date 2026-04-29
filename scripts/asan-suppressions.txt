@@ -1,0 +1,37 @@
+# scripts/asan-suppressions.txt
+#
+# LSAN/ASAN suppressions for documented third-party noise ONLY.
+# Adding a suppression that matches `jamma_*` defeats the entire workflow.
+# Each entry MUST cite the upstream issue or doc that confirms it's a known
+# false positive, not a bug in JAMMA. The companion test
+# tests/test_asan_suppressions.py asserts no in-repo prefix appears.
+#
+# Format: leak:<substring-of-symbolized-stack-frame>
+# Reference: https://github.com/google/sanitizers/wiki/AddressSanitizerLeakSanitizer
+
+# CPython 3.12 interpreter init/shutdown leaks (intentional, never freed)
+# Ref: https://github.com/python/cpython/issues/113190
+leak:_PyImport_LoadDynamic
+leak:_PyImport_FixupExtensionObject
+leak:PyType_Ready
+leak:_PyObject_Init
+leak:Py_InitializeFromConfig
+leak:_PyMem_RawMalloc
+
+# NumPy initialization (PyArray_API table, ufunc registration)
+# Ref: https://github.com/numpy/numpy/issues/18271
+leak:PyArray_API
+leak:initumath
+leak:_multiarray_umath
+
+# OpenSSL library init (transitively imported by Python ssl module)
+# Ref: https://docs.openssl.org/master/man3/OPENSSL_init_crypto/
+leak:OPENSSL_init_crypto
+leak:CRYPTO_zalloc
+
+# loguru atexit handler — known to leak its sink registry on shutdown.
+# Ref: TODO confirm with loguru maintainers; first sanitizer-workflow run
+# will reveal whether this is actually triggered. If no upstream issue
+# exists when first observed, file one and replace this comment with the
+# link before the next phase commits any change to this file.
+leak:loguru

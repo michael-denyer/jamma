@@ -11,6 +11,13 @@
  *                     compute_score_split_c, compute_lrt_split_c,
  *                     compute_score_fused_c, compute_lrt_fused_c
  *
+ * Phase 116.1: -DJAMMA_SENTINEL_UB enables a heap-OOB sentinel function
+ * (jamma_sentinel_oob) for sanitizer-workflow self-test. See
+ * scripts/asan-suppressions.txt and .github/workflows/sanitizers.yml.
+ * Never set in wheel builds — the macro is opt-in via apply_sanitizer_overrides
+ * machinery and only the sanitizer workflow's separate sentinel-meta-test
+ * job ever defines it.
+ *
  * Translates the Python/NumPy golden-section REML/MLE optimizer + Wald/Score/LRT
  * test pipelines (likelihood_numpy.py) to C with optional OpenMP parallelism.
  *
@@ -9957,6 +9964,32 @@ static PyObject *_get_aligned_alloc_test_ptr(PyObject *self, PyObject *args)
 /* -------------------------------------------------------------------------
  * Module definition
  * ------------------------------------------------------------------------- */
+
+#ifdef JAMMA_SENTINEL_UB
+/* Phase 116.1 sanitizer sentinel: deliberately reads 1 byte past a 4-byte
+ * heap allocation. Under -fsanitize=address this MUST abort with a
+ * heap-buffer-overflow trace pointing at this source line. Without ASAN,
+ * returns garbage from past the buffer end. Compile with
+ * -DJAMMA_SENTINEL_UB to enable; the asan-sentinel-meta-test workflow
+ * job sets that macro and asserts the workflow exits non-zero with the
+ * expected ASAN frame. Do NOT enable in any other build path.
+ */
+static PyObject *jamma_sentinel_oob(PyObject *self, PyObject *args)
+{
+    (void)self;
+    (void)args;
+    char *buf = (char *)malloc(4);
+    if (!buf) {
+        PyErr_NoMemory();
+        return NULL;
+    }
+    /* 1-byte heap OOB — ASAN must catch this. */
+    char x = buf[5];
+    free(buf);
+    return PyLong_FromLong((long)x);
+}
+#endif
+
 static PyMethodDef methods[] = {
     {
         "compute_lmm_batch_c",
@@ -10523,6 +10556,17 @@ static PyMethodDef methods[] = {
         "Returns:\n"
         "    dict with keys: lambdas_mle, p_lrts — each (n_snps,) float64\n"
     },
+#ifdef JAMMA_SENTINEL_UB
+    {
+        "jamma_sentinel_oob",
+        (PyCFunction)jamma_sentinel_oob,
+        METH_NOARGS,
+        "Phase 116.1 sanitizer sentinel — deliberately reads past a heap "
+        "allocation. Under ASAN this aborts with heap-buffer-overflow; "
+        "without ASAN it returns garbage. Only compiled when "
+        "-DJAMMA_SENTINEL_UB is set at build time."
+    },
+#endif
     {NULL, NULL, 0, NULL}
 };
 

@@ -62,9 +62,26 @@ def test_main_job_asan_options_include_required_flags(workflow):
         "abort_on_error=1",
         "strict_string_checks=1",
         "allocator_may_return_null=1",
-        "suppressions=",
     ]:
         assert required in opts, f"{required} missing from ASAN_OPTIONS"
+
+
+def test_lsan_options_carries_suppressions_path(workflow):
+    """The leak-suppressions file is LSAN-format; only LSAN_OPTIONS may
+    reference it. ASAN_OPTIONS aborts with 'failed to parse suppressions'
+    if it tries to read leak: lines as ASan patterns (Pitfall-9, run
+    25108053479)."""
+    asan_opts = workflow["jobs"]["asan-ubsan"]["env"]["ASAN_OPTIONS"]
+    lsan_opts = workflow["jobs"]["asan-ubsan"]["env"]["LSAN_OPTIONS"]
+    assert "suppressions=" not in asan_opts, (
+        "ASAN_OPTIONS must NOT carry suppressions=... — file is LSAN-format "
+        "and ASan aborts when parsing it as ASan suppressions"
+    )
+    assert "suppressions=" in lsan_opts, (
+        "LSAN_OPTIONS missing the suppressions=... pointer to "
+        "scripts/asan-suppressions.txt"
+    )
+    assert "asan-suppressions.txt" in lsan_opts
 
 
 def test_main_job_ubsan_options_halt_and_stacktrace(workflow):

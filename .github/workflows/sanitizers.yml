@@ -42,8 +42,13 @@ jobs:
       #   allocator_may_return_null=1 — NumPy intentionally tests OOM paths
       #   suppressions=...          — third-party noise only
       #   symbolize=1, print_stacktrace=1 — readable traces in CI logs
+      # ASAN_OPTIONS does NOT carry suppressions — the file is in LSAN-suppression
+      # format (`leak:<symbol>` lines), and ASan aborts with "failed to parse
+      # suppressions" if it tries to read those as ASan-format patterns. The
+      # leak suppressions belong to LSAN_OPTIONS below. Confirmed by Pitfall-9
+      # in run 25108053479.
       ASAN_OPTIONS: >-
-        detect_leaks=1:abort_on_error=1:strict_string_checks=1:allocator_may_return_null=1:suppressions=${{ github.workspace }}/scripts/asan-suppressions.txt:symbolize=1:print_stacktrace=1
+        detect_leaks=1:abort_on_error=1:strict_string_checks=1:allocator_may_return_null=1:symbolize=1:print_stacktrace=1
       UBSAN_OPTIONS: >-
         halt_on_error=1:print_stacktrace=1:symbolize=1
       LSAN_OPTIONS: >-
@@ -129,9 +134,15 @@ jobs:
         id: sentinel
         run: |
           export LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
+          # Override addopts: the project's pyproject.toml addopts pins
+          # pytest-randomly options (--randomly-seed=...) AND xdist
+          # parallelism (-n 3). With -p no:randomly we disable the plugin,
+          # so the addopts entry becomes "unrecognized arguments". The -o
+          # override below ablates the project addopts and we set our own.
           uv run pytest \
             tests/test_sanitizer_sentinel.py \
             -v -n 0 -p no:randomly \
+            -o 'addopts=--timeout=120' \
             2>&1 | tee sentinel-run.log
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
 

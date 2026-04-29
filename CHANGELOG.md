@@ -7,8 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.3.0] - 2026-04-29
+
 ### Added
 
+- **Weekly ASAN/UBSAN sanitizer workflow** (`.github/workflows/sanitizer.yml`):
+  rebuilds C extensions with `-fsanitize=address,undefined` and runs the test
+  suite under both sanitizers every Sunday. Uses a sentinel meta-test
+  (`JAMMA_SENTINEL_UB=1` injects `-DJAMMA_SENTINEL_UB`, triggering a known
+  heap-OOB) to verify the sanitizer harness is actually catching bugs and not
+  silently passing. CI workflow runs with `set -o pipefail`, ASAN traces are
+  written to a file rather than piped, and the sentinel asserter accepts both
+  ASan heap-OOB and UBSan out-of-bounds signatures.
+- **`JAMMA_SANITIZE` build seam** in `_build_support/compile_and_link.py`:
+  appends `-fsanitize=...` flags and disables the post-link import probe so
+  sanitized builds don't crash the wheel-build subprocess. Wired into all
+  three compile entry points (`hatch_build.py`, `_compile_jlinalg.py`,
+  `_compile_accel.py`). `check-compile-flag-literals.py` extended to recognise
+  sanitizer flag literals so they are not flagged by the lint hook.
+- **`JAMMA_FORCE_NUMPY_FALLBACK` env-var gate** for `jlinalg` and `lmm`:
+  forces the NumPy fallback path even when vendor BLAS is available. Used by
+  the sanitizer workflow to exercise the pure-Python paths and by debugging
+  workflows where vendor-LAPACK output needs to be cross-checked against
+  NumPy reference. Documented in `docs/TESTING.md` §1.10.
+- **Sanitizer suppression file** for ASan and the heap-OOB sentinel
+  (`-DJAMMA_SENTINEL_UB`). Documented in `docs/TESTING.md` §1.10 "Running
+  under sanitizers (local repro of CI)".
+- **New pre-commit hooks** (commit `2745846`): actionlint (GitHub Actions
+  workflow lint), zizmor (workflow security audit), shellcheck (shell-script
+  lint), vulture (dead-code detection), refurb (Python refactor suggestions),
+  and `pytest-rerunfailures` (test re-run on transient failure). Three
+  categories of pre-existing findings are deferred — see project notes for
+  triage status and tightening conditions for each hook. (`.github/workflows/sanitizer.yml`):
+  rebuilds C extensions with `-fsanitize=address,undefined` and runs the test
+  suite under both sanitizers every Sunday. Uses a sentinel meta-test
+  (`JAMMA_SENTINEL_UB=1` injects `-DJAMMA_SENTINEL_UB`, triggering a known
+  heap-OOB) to verify the sanitizer harness is actually catching bugs and not
+  silently passing. CI workflow runs with `set -o pipefail`, ASAN traces are
+  written to a file rather than piped, and the sentinel asserter accepts both
+  ASan heap-OOB and UBSan out-of-bounds signatures.
+- **`JAMMA_SANITIZE` build seam** in `_build_support/compile_and_link.py`:
+  appends `-fsanitize=...` flags and disables the post-link import probe so
+  sanitized builds don't crash the wheel-build subprocess. Wired into all
+  three compile entry points (`hatch_build.py`, `_compile_jlinalg.py`,
+  `_compile_accel.py`). `check-compile-flag-literals.py` extended to recognise
+  sanitizer flag literals so they are not flagged by the lint hook.
+- **`JAMMA_FORCE_NUMPY_FALLBACK` env-var gate** for `jlinalg` and `lmm`:
+  forces the NumPy fallback path even when vendor BLAS is available. Used by
+  the sanitizer workflow to exercise the pure-Python paths and by debugging
+  workflows where vendor-LAPACK output needs to be cross-checked against
+  NumPy reference. Documented in `docs/TESTING.md` §1.10.
+- **Sanitizer suppression file** for ASan and the heap-OOB sentinel
+  (`-DJAMMA_SENTINEL_UB`). Documented in `docs/TESTING.md` §1.10 "Running
+  under sanitizers (local repro of CI)".
+- **New pre-commit hooks** (commit `2745846`): actionlint (GitHub Actions
+  workflow lint), zizmor (workflow security audit), shellcheck (shell-script
+  lint), vulture (dead-code detection), refurb (Python refactor suggestions),
+  and `pytest-rerunfailures` (test re-run on transient failure). Three
+  categories of pre-existing findings are deferred — see project notes for
+  triage status and tightening conditions for each hook.
 - **Tier-marker enforcement gate**: `tests/conftest.py` now AST-parses every
   collected test file in `pytest_configure` and fails the run when any file
   lacks a tier (`tier0`/`tier1`/`tier2`), `slow`, or `benchmark` marker. The

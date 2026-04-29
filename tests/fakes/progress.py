@@ -45,9 +45,13 @@ class FakeProgressBar:
         self.finished = False
         # Optional hook fired after each ``update()`` call. Set by tests
         # that need a deterministic synchronisation point against the
-        # real polling loop in ``timed_progress``. The callable receives
-        # the value that was just recorded; tests that only need a
-        # "tick happened" signal can pass ``threading.Event().set``.
+        # real polling loop in ``timed_progress``. The hook is invoked
+        # as ``on_update(value)`` — it receives the value that was just
+        # recorded. Tests that only need a "tick happened" signal must
+        # wrap a no-arg setter in a lambda, e.g.
+        # ``bar.on_update = lambda _value: ticked.set()`` — passing
+        # ``threading.Event.set`` directly raises TypeError because
+        # ``Event.set()`` takes zero positional args.
         self.on_update: Any = None
 
     def start(self) -> FakeProgressBar:

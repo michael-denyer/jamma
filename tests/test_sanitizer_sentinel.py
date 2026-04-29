@@ -37,26 +37,49 @@ import pytest
 )
 @pytest.mark.tier0
 def test_sentinel_heap_oob_under_asan() -> None:
-    """Calls jamma_sentinel_oob() — under ASAN this aborts the process."""
+    """Calls jamma_sentinel_oob() — under ASAN this aborts the process.
+
+    Prints checkpoint markers to stderr with explicit flushes so that if
+    the process aborts mid-test, the workflow log still shows how far we
+    got. ASan's own trace (heap-buffer-overflow, frame in _lmm_accel.c)
+    is the success signal the asan-sentinel-meta-test job greps for.
+    """
+    import sys
+
+    print("CHECKPOINT-1: about to import _lmm_accel", file=sys.stderr, flush=True)
     from jamma.lmm import _lmm_accel
 
-    # If JAMMA_SENTINEL_UB was NOT set at compile time, the symbol won't
-    # exist — that's a configuration error in the workflow YAML.
-    assert hasattr(_lmm_accel, "jamma_sentinel_oob"), (
+    print(
+        f"CHECKPOINT-2: _lmm_accel imported from {_lmm_accel.__file__!r}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+    has_sentinel = hasattr(_lmm_accel, "jamma_sentinel_oob")
+    print(
+        f"CHECKPOINT-3: hasattr(_lmm_accel, 'jamma_sentinel_oob') = {has_sentinel}",
+        file=sys.stderr,
+        flush=True,
+    )
+    assert has_sentinel, (
         "jamma_sentinel_oob symbol missing — _lmm_accel was built without "
         "-DJAMMA_SENTINEL_UB. Check the workflow's compile step env."
     )
 
-    # This call performs a deliberate one-byte heap-OOB read. Under ASAN
-    # the process aborts here with a heap-buffer-overflow trace pointing
-    # at _lmm_accel.c. Without ASAN, the call may or may not crash
-    # depending on heap layout — but the workflow always sets
-    # JAMMA_SANITIZE=address, so ASAN is always active when this runs.
-    _lmm_accel.jamma_sentinel_oob()
+    print(
+        "CHECKPOINT-4: about to call jamma_sentinel_oob() — ASan must abort",
+        file=sys.stderr,
+        flush=True,
+    )
+    # Deliberate one-byte heap-OOB read. Under ASAN the process aborts
+    # here with a heap-buffer-overflow trace pointing at _lmm_accel.c.
+    result = _lmm_accel.jamma_sentinel_oob()
 
-    # If we reach this line, ASAN did NOT catch the OOB. The asserter
-    # step in the workflow (`grep heap-buffer-overflow sentinel-run.log`)
-    # will fail and surface the issue.
+    print(
+        f"CHECKPOINT-5: jamma_sentinel_oob returned {result!r} — ASan did NOT catch",
+        file=sys.stderr,
+        flush=True,
+    )
     pytest.fail(
         "jamma_sentinel_oob() returned normally — ASAN did not catch the "
         "out-of-bounds read. Sanitizer wiring may be broken."

@@ -138,17 +138,28 @@ jobs:
         id: sentinel
         run: |
           export LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
-          # Override addopts: the project's pyproject.toml addopts pins
-          # pytest-randomly options (--randomly-seed=...) AND xdist
-          # parallelism (-n 3). With -p no:randomly we disable the plugin,
-          # so the addopts entry becomes "unrecognized arguments". The -o
-          # override below ablates the project addopts and we set our own.
+          # Use `> file 2>&1` (not `| tee`): the tee pipeline can lose
+          # buffered output when ASan's abort_on_error=1 SIGABRTs the
+          # process before the kernel flushes the pipe to tee. Direct
+          # file redirection survives SIGABRT. -s disables pytest's
+          # stdout capture so test-internal CHECKPOINT prints land in
+          # the file immediately. Override addopts because the project's
+          # pyproject.toml pins pytest-randomly args that conflict with
+          # -p no:randomly.
+          set +e
           uv run pytest \
             tests/test_sanitizer_sentinel.py \
-            -v -n 0 -p no:randomly \
+            -v -s -n 0 -p no:randomly \
             -o 'addopts=--timeout=120' \
-            2>&1 | tee sentinel-run.log
-          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+            > sentinel-run.log 2>&1
+          pytest_exit=$?
+          set -e
+          echo "pytest exit code: $pytest_exit"
+          echo "exit_code=$pytest_exit" >> "$GITHUB_OUTPUT"
+          # Display the captured output so the workflow log mirrors what
+          # CI used to show under | tee — the asserter step will also
+          # cat it later for grep purposes.
+          cat sentinel-run.log
 
       - name: Assert ASAN heap-buffer-overflow trace was captured
         # If the previous step exited 0, the sentinel did NOT abort — that

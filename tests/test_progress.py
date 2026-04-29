@@ -1,5 +1,6 @@
 """Tests for progress bar lifecycle management."""
 
+import threading
 import time
 
 import pytest
@@ -137,14 +138,25 @@ class TestTimedProgress:
         assert fake_progressbar.last_bar.finished
 
     def test_bar_not_set_to_100_on_error(self, fake_progressbar):
-        """Bar should not show 100% when fn fails."""
+        """Bar should not show 100% when fn fails.
 
-        def slow_boom():
-            time.sleep(0.05)
+        Uses a deterministic synchronisation point: the worker waits until
+        the polling loop has ticked at least once (a tick callback on the
+        FakeProgressBar sets ``ticked``), then raises. This removes the
+        wall-clock dependency that previously flaked on heavily-loaded
+        ARM Mac CI runners (runs 25083824976, 25109702331).
+        """
+        ticked = threading.Event()
+        fake_progressbar.on_update = lambda _value: ticked.set()
+
+        def boom_after_tick():
+            assert ticked.wait(timeout=10.0), (
+                "polling loop never ticked within 10s — progress is broken"
+            )
             raise RuntimeError("boom")
 
         with pytest.raises(RuntimeError):
-            timed_progress(slow_boom, estimated_seconds=10.0, poll_interval=0.01)
+            timed_progress(boom_after_tick, estimated_seconds=10.0, poll_interval=0.01)
 
         bar = fake_progressbar.last_bar
         assert len(bar.update_calls) > 0, "progress loop must have ticked"

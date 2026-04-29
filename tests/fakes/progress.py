@@ -43,6 +43,12 @@ class FakeProgressBar:
         self.started = False
         self.update_calls: list[int] = []
         self.finished = False
+        # Optional hook fired after each ``update()`` call. Set by tests
+        # that need a deterministic synchronisation point against the
+        # real polling loop in ``timed_progress``. The callable receives
+        # the value that was just recorded; tests that only need a
+        # "tick happened" signal can pass ``threading.Event().set``.
+        self.on_update: Any = None
 
     def start(self) -> FakeProgressBar:
         if self.started:
@@ -52,6 +58,8 @@ class FakeProgressBar:
 
     def update(self, value: int) -> None:
         self.update_calls.append(value)
+        if self.on_update is not None:
+            self.on_update(value)
 
     def finish(self) -> None:
         if self.finished:
@@ -84,6 +92,12 @@ class FakeProgressbarModule:
 
     def __init__(self) -> None:
         self.last_bar: FakeProgressBar | None = None
+        # Optional hook applied to every ``FakeProgressBar`` constructed by
+        # this module fake. Tests set this BEFORE the work starts (the bar
+        # is constructed inside ``timed_progress``, so per-bar attribute
+        # setting is impossible). See ``test_bar_not_set_to_100_on_error``
+        # for the deterministic-sync use case.
+        self.on_update: Any = None
         # Widget classes return a sentinel; jamma.core.progress passes them
         # positionally into ProgressBar(**kwargs) and never inspects them.
         self.Counter = lambda *a, **kw: _FakeWidget("Counter")
@@ -94,6 +108,7 @@ class FakeProgressbarModule:
 
     def ProgressBar(self, **kwargs: Any) -> FakeProgressBar:
         bar = FakeProgressBar(**kwargs)
+        bar.on_update = self.on_update
         self.last_bar = bar
         return bar
 

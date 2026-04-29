@@ -32,7 +32,9 @@ CLAUDE.md):
   -O0 / -O1 / -O2 / -O3 / -ftree-vectorize / -fno-fast-math /
   -fno-math-errno / -fno-trapping-math / -fno-finite-math-only /
   -funroll-loops / -fopenmp / -march=native / -mtune=native /
-  -std=c99 / -std=c11 / -std=c17 / -shared / -pthread
+  -std=c99 / -std=c11 / -std=c17 / -shared / -pthread /
+  -fsanitize=address / -fsanitize=undefined /
+  -fsanitize=address,undefined / -fno-omit-frame-pointer / -shared-libasan
 
 Usage:
   python3 scripts/check-compile-flag-literals.py
@@ -67,6 +69,19 @@ FLAGS: set[str] = {
     # Link-step flags that belong in LINK_FLAGS_BY_PLATFORM.
     "-shared",
     "-pthread",
+    # Sanitizer flags — Phase 116.1. Must NEVER appear in the four entry
+    # points; they are assembled by
+    # jamma._build_support.compile_and_link.apply_sanitizer_overrides()
+    # and reach hatch_build.py / _compile_jlinalg.py / _compile_accel.py /
+    # core/recompile.py via the existing extra_cflags / extra_link_flags /
+    # extra_lapack_cflags machinery.
+    # The FLAG_PATTERN regex above already covers -f and -s prefixes, so no
+    # regex change is needed for these additions — only the FLAGS set.
+    "-fsanitize=address",
+    "-fsanitize=undefined",
+    "-fsanitize=address,undefined",  # combined form — most-likely copy-paste shape
+    "-fno-omit-frame-pointer",
+    "-shared-libasan",  # only used if someone switches to clang for ASAN
 }
 
 TARGETS: list[str] = [
@@ -82,7 +97,9 @@ TARGETS: list[str] = [
 # real filter — this pattern is just a cheap pre-filter to skip
 # obviously-not-a-flag strings. The leading `-` immediately after the
 # opening quote keeps paths like "/usr/lib/-O3-test/foo" from matching.
-FLAG_PATTERN = re.compile(r"""["'](-[OfWmsp][A-Za-z0-9_=-]*)["']""")
+# Comma is in the body class so the combined sanitizer form
+# "-fsanitize=address,undefined" matches as a single flag (Phase 116.1).
+FLAG_PATTERN = re.compile(r"""["'](-[OfWmsp][A-Za-z0-9_=,-]*)["']""")
 
 
 def main() -> int:

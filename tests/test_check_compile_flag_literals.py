@@ -115,17 +115,49 @@ def test_inline_comment_with_literal_on_code_line_still_flags(tmp_path):
 @pytest.mark.tier0
 @pytest.mark.parametrize(
     "flag",
-    ["-march=native", "-mtune=native", "-std=c11", "-shared", "-pthread"],
+    [
+        "-march=native",
+        "-mtune=native",
+        "-std=c11",
+        "-shared",
+        "-pthread",
+        # Sanitizer additions — Phase 116.1. Hardcoding any of these in an
+        # entry point bypasses apply_sanitizer_overrides() and breaks the
+        # single-source-of-truth invariant.
+        "-fsanitize=address",
+        "-fsanitize=undefined",
+        "-fsanitize=address,undefined",
+        "-fno-omit-frame-pointer",
+        "-shared-libasan",
+    ],
 )
 def test_widened_flag_set_is_detected(tmp_path, flag):
-    """Portability footguns and link-phase flags beyond the original
-    -O/-f set must trip the lint — particularly -march=native which must
-    stay dev-only per CLAUDE.md."""
+    """Portability footguns, link-phase flags, and sanitizer flags beyond
+    the original -O/-f set must trip the lint — particularly -march=native
+    which must stay dev-only per CLAUDE.md, and the Phase 116.1 sanitizer
+    flags that must flow through apply_sanitizer_overrides()."""
     files = dict(_STUB_EMPTY_TARGETS)
     files["hatch_build.py"] = f'cflags.append("{flag}")\n'
     result = _run_with_targets(tmp_path, files)
     assert result.returncode == 1, result.stderr
     assert flag in result.stderr
+
+
+@pytest.mark.tier0
+def test_sanitizer_flags_in_helper_file_are_not_lint_targets(tmp_path):
+    """The lint inspects the four entry points only — apply_sanitizer_overrides()
+    in src/jamma/_build_support/compile_and_link.py legitimately holds the
+    sanitizer flag literals. The TARGETS list does NOT include _build_support,
+    so even if the helper file existed in the synthetic tree it would be
+    ignored. This regression-guards against someone widening TARGETS to cover
+    the helper, which would create a chicken-and-egg lint failure."""
+    files = dict(_STUB_EMPTY_TARGETS)
+    # Drop a sanitizer literal in a path that is NOT in TARGETS — must pass.
+    files["src/jamma/_build_support/compile_and_link.py"] = (
+        'san = ["-fsanitize=address", "-fno-omit-frame-pointer", "-O1"]\n'
+    )
+    result = _run_with_targets(tmp_path, files)
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.tier0

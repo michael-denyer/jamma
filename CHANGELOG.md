@@ -7,6 +7,155 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Tier-marker enforcement gate**: `tests/conftest.py` now AST-parses every
+  collected test file in `pytest_configure` and fails the run when any file
+  lacks a tier (`tier0`/`tier1`/`tier2`), `slow`, or `benchmark` marker. The
+  gate runs once on the controller before xdist forks workers, fixing the
+  silent fail-open under `-n N` that the previous collection-based gate had.
+  Recognises parametrised markers (`@pytest.mark.skipif(...)`) and list-form
+  `pytestmark`. Regression test `test_gate_fires_under_xdist` asserts the
+  gate fires under `-n 2`.
+- **Forbidden-patches gate**: new `scripts/check-forbidden-patches.py` +
+  pre-commit hook bans patching `numpy.linalg.*`, `scipy.*`, and JAMMA's own
+  numerical functions in tests. Feature-flag constants (`_C_*_AVAILABLE`)
+  are excluded; `# allow-patch:` escape hatch documented. Now uses AST
+  scanning rather than regex, covers `patch.object(<module>, ...)`,
+  `mocker.patch(...)`, and `monkeypatch.setattr("dotted.path"...)`. Module-
+  arg `monkeypatch.setattr(<module>, "<func>")` is also caught (closes a
+  hole where two test files set callables on numerical modules and slipped
+  past the previous gate). Read failures raise `_ScanError` and exit
+  non-zero rather than passing vacuously on docs-only batches.
+- **AST + runtime safety gates**: replaced regex source-greps in
+  `TestLOCOIteratorRuntimeError` and `TestJlinalgABIValidation` with
+  `ast.parse` structural checks plus runtime tests that exercise the
+  guards (`python -O` subprocess for `loco_iter`; in-subprocess monkey-
+  patched `_EXPECTED_JLINALG_ABI` for ABI drift, asserting on exit code
+  and stderr).
+- **Fakes package**: `tests/fakes/` provides `FakePipelineRunner`,
+  `FakePipelineRunnerFactory`, `FakeAssocWriter`, `FakeProgressbarModule`,
+  and `FakeProgressBar`. Type-narrowed to real `PipelineConfig` /
+  `PipelineResult` so adding a required field actually breaks tests.
+  `TestFakeProductionDrift` compares `inspect.signature` of each fake
+  method to the real production method and fails with a specific drift
+  message instead of silently masking new args. Adopted by `test_progress.py`
+  (10 nested `patch(...) + MagicMock` blocks → one `fake_progressbar`
+  fixture) and `test_cli.py` (4 `MagicMock` chains → one factory).
+- **GEMMA fixture manifest**: `tests/fixtures/MANIFEST.toml` (55 entries)
+  with SHA-256 of every git-tracked fixture. `scripts/check_fixture_manifest.py`
+  verifies on-disk hashes match, flags untracked additions, and flags
+  manifest-without-disk entries. `scripts/regenerate_fixture_manifest.py`
+  rebuilds the manifest after intentional updates and auto-extracts
+  `GEMMA Version` and `Command Line Input` from `.log.txt` headers.
+  Pre-commit hook (fast) + tier0 self-test `tests/test_fixture_manifest.py`
+  (slow) gate it.
+- **Scheduled flaky-test detection**: `.github/workflows/flaky-detect.yml`
+  runs the default suite under five distinct `pytest-randomly` seeds every
+  Sunday 06:00 UTC. Non-blocking; opens an issue on disagreement.
+- **Subsystem coverage gates**: per-subsystem coverage floors enforced in
+  CI (`src/jamma/jlinalg/` floor at 18% to accommodate the Linux-vs-macOS
+  vendor-LAPACK fallback delta — Linux measured 21.8% without MKL-ILP64,
+  macOS-Accelerate measured 33.6%; both reference numbers documented in
+  the threshold comment).
+
+### Changed
+
+- **Tier marker hygiene**: 8 previously-unmarked test files now have
+  module-level `pytestmark`. `test_jlinalg_dispatch.py` converts
+  `pytestmark = skipif(...)` to a list combining `tier0` + the existing
+  `skipif`. `test_runner_numpy.py`: `:443`/`:518` GEMMA-parity tests
+  promoted to tier1; `:396` internal dispatch test reclassified tier1 →
+  tier0.
+- **Tier3 marker removed** from `pyproject.toml`, both CI workflows,
+  `conftest.py`, and both docs — defined and excluded everywhere but
+  never used.
+- **Scratch-bin renames** (git mv preserves history):
+  `test_audit_fixes.py` → `test_lmm_audit.py`,
+  `test_review_fixes.py` → `test_lmm_io_validation.py`,
+  `test_loco_bugs.py` → `test_loco_orchestration.py`,
+  `test_lmm_likelihood_dev2.py` → `test_likelihood_derivatives.py`.
+- **Fakes drop call-count integers**: `FakeAssocWriter.call_count`,
+  `FakePipelineRunner.run_calls`, `FakePipelineRunnerFactory.call_count`,
+  `FakeProgressBar.start_calls`/`finish_calls` replaced with state
+  booleans and lifecycle-violation `AssertionError`s. `update_calls:
+  list[int]` retained because it records observable values, not counts.
+- **`FakeProgressbarModule.widgets`** simplified from nested class to
+  `SimpleNamespace(WidgetBase=_FakeWidget)`.
+- **`test_jlinalg_lapack.py`**: folded `test_reconstruction_accuracy_large`
+  and `test_orthogonality_large` into one
+  `test_large_5000x200_reconstruction_and_orthogonality` (both checked
+  the same 5000×200 QR — running it twice wasted CI minutes). Loosened
+  orthogonality bound for the large case from 1e-14 to 1e-13 (theoretical
+  floor for sqrt(5000) accumulation is ~1.6e-14).
+- **`blas_backend` known-backends set** extended with `system-BLAS-ILP64`
+  and `system-BLAS-LP64` (returned by `blas_dispatch.c:132` when a vendor
+  library is loaded but path-string detection cannot identify it — typical
+  on Linux distros linking against alias-only `libblas.so`).
+- **`test_blas_backend_string_has_known_value`** asserts membership in a
+  documented set (incl. `Accelerate-ILP64`) instead of printing.
+
+### Fixed
+
+- **Tier-marker gate failed open under xdist**: collection-based gate
+  silently no-op'd whenever `-n N` was active (default `-n 3`). Empirically
+  reproduced — an unmarked file ran cleanly under `-n 2`. Switched the
+  gate to source-parsing in `pytest_configure` (runs once on the controller
+  before xdist forks workers).
+- **`monkeypatch.setattr(<module>, "<func>")`** previously bypassed the
+  forbidden-patches policy. `test_lmm_accel.py:207` set
+  `_compute_lmm_batch_c` to a sentinel and `test_prepare_common.py:282`
+  set `_compute_score_batch_c` to `None` — both exited 0 under the old
+  gate. Added a module-form rule keyed off the documented forbidden-module
+  aliases (`compute_numpy`, `cn`, `likelihood`, `jlinalg`, `jl`,
+  `kinship_compute`, `kc`), still allowing `_AVAILABLE`/`_ENABLED` flags.
+  Audited the existing call sites and added `# allow-patch:` comments to
+  the 5 legitimate dispatch toggles.
+- **`scripts/check-forbidden-patches.py`** no longer swallows `OSError` /
+  `UnicodeDecodeError`. Read failures now exit non-zero rather than silently
+  producing zero findings (the silent-failure mode the gate is meant to
+  prevent). Detects "argv passed but no `.py` among them" and falls back
+  to a repo-wide scan with a stderr note instead of passing vacuously when
+  pre-commit hands the hook a docs-only batch.
+- **`tests/conftest.py`**: replaced silent `except ImportError: return` in
+  `pytest_configure` with a stderr warning so a broken freshness script
+  is visible.
+- **`TestEigendecompLP64Threshold`**: replaced
+  `contextlib.suppress(...)` with `pytest.raises(RuntimeError, match="test
+  stub")`. The previous form could not distinguish "RuntimeError propagated
+  to caller" from "caller silently caught and returned a default" — both
+  passed the warning-routing assertion.
+- **`.github/workflows/ci.yml`**: dropped `not tier3` from the default
+  pytest filter (the marker was removed from `pyproject` / `conftest` /
+  docs in `6d9ab15` but this one workflow line was missed).
+- **`git mv` rename deletes**: the renames in `6d9ab15` staged the new
+  files but the matching `D` entries for the old files were never added
+  to the index, so the new files shipped alongside the old ones. Staged
+  the deletes for `test_audit_fixes.py`, `test_review_fixes.py`,
+  `test_loco_bugs.py`, and `test_lmm_likelihood_dev2.py`.
+- **`tests/test_conftest_tier_gate.py`**: previously embedded a parallel
+  stub of the old collection-based gate; after the xdist fail-open fix it
+  was no longer testing the implementation it claimed to. Rewired the
+  stub conftest to `importlib`-load the real `_enforce_tier_markers` from
+  `tests/conftest.py`.
+- **Removed dead `scripts/pre-push`**: standalone bash hook duplicated
+  the `.pre-commit-config.yaml`'s `ruff-format-all` pre-push entry and
+  was never wired into any git hook (`.git/hooks/pre-push` is prek-managed).
+
+### Removed
+
+- `tier3` pytest marker (defined but never used).
+- `scripts/pre-push` (dead code; functionality lives in pre-commit).
+- `docs/TESTING.md` §3.3 "Tests / markers to remove" (all rows were
+  already done); subsequent sections renumbered.
+- Stale 35-line "Test Tier System" block from `conftest.py` (claimed
+  three tiers, listed nonexistent example tests, duplicated TESTING.md
+  §1.5); replaced with a pointer to the source-of-truth doc.
+- Three near-identical "@pytest.mark.slow on individual tests still
+  applies" comments (restated standard pytest semantics).
+- Transitional `FakeAssocWriter` re-export comment in
+  `test_runner_numpy.py`.
+
 ## [5.2.1] - 2026-04-21
 
 ### Fixed

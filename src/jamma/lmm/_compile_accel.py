@@ -272,6 +272,17 @@ def compile_extension(
     for k in [k for k in sys.modules if k.startswith("jamma.lmm._lmm_accel")]:
         del sys.modules[k]
 
+    # Phase 116.1: skip the post-link import probe when JAMMA_SANITIZE is set.
+    # Importing an ASan-instrumented .so requires LD_PRELOAD=libasan.so; the
+    # sanitizer workflow only exports LD_PRELOAD for the pytest step, not the
+    # compile step, so the probe would abort with
+    # "ASan runtime does not come first in initial library list" (exit 134).
+    # The pytest step exercises the .so under the correct LD_PRELOAD anyway,
+    # so the probe adds no coverage on a sanitizer build.
+    if os.environ.get("JAMMA_SANITIZE", "").strip():
+        _detail("skipping post-link import probe — JAMMA_SANITIZE is set")
+        return True
+
     # Verify the compiled extension actually imports. A successful
     # compile+link does not guarantee a usable module — bad RPATH,
     # missing runtime library, ABI mismatch with the host numpy, or a

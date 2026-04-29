@@ -18,6 +18,7 @@ The jlinalg extension compiles per-file to enable per-source-group compiler flag
 
 from __future__ import annotations
 
+import os
 import platform
 import shutil
 import sys
@@ -209,6 +210,16 @@ def compile_extension(
         return False
 
     _detail(f"Compiled: {out}")
+
+    # Phase 116.1: skip the post-link import probe when JAMMA_SANITIZE is set.
+    # Importing an ASan-instrumented .so requires LD_PRELOAD=libasan.so; the
+    # sanitizer workflow only exports LD_PRELOAD for the pytest step, not the
+    # compile step, so the probe would abort with
+    # "ASan runtime does not come first in initial library list" (exit 134).
+    # The pytest step exercises the .so under the correct LD_PRELOAD anyway.
+    if os.environ.get("JAMMA_SANITIZE", "").strip():
+        _print("jlinalg compiled (skipping import probe — JAMMA_SANITIZE set)")
+        return True
 
     # Verify import — evict both _jlinalg and the parent jamma.jlinalg package
     # so the freshly compiled extension is loaded instead of the cached fallback.

@@ -87,11 +87,44 @@ jobs:
           export LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
           echo "LD_PRELOAD=$LD_PRELOAD"
           echo "ASAN_OPTIONS=$ASAN_OPTIONS"
+          # Exclude two classes of tests that are not meaningful under
+          # the sanitizer harness:
+          #
+          # 1. Subprocess-LD_PRELOAD pollution (RESEARCH §"Pitfall 6"):
+          #    LD_PRELOAD=libasan.so propagates to every subprocess pytest
+          #    forks. Build-tooling probes (gcc --version, python -O ...,
+          #    python -m jamma ...) abort with LSAN-detected internal leaks
+          #    or interpreter-init noise at shutdown (exit -6 / SIGABRT).
+          #    Those tests exercise build-time correctness, not runtime
+          #    behaviour we want sanitizer coverage on.
+          #
+          # 2. C-extension-required tests under JAMMA_FORCE_NUMPY_FALLBACK=1:
+          #    The fallback gate skips the .so import (intentional, so
+          #    ASan + dlopen + BLAS interactions don't drown real findings).
+          #    Tests asserting "the C extension IS loaded" obviously fail
+          #    here — they belong in the regular CI matrix.
+          #
+          # Long-term fix: tag affected tests with a
+          # @pytest.mark.requires_c_extension marker and use -m to filter.
+          # Short-term: explicit --ignore / --deselect of the known set.
           uv run pytest \
             -m "not benchmark and not slow" \
             -v -n 0 -p no:randomly \
             -o 'addopts=--timeout=300' \
             --ignore=tests/test_sanitizer_sentinel.py \
+            --ignore=tests/test_c_extensions_ci.py \
+            --ignore=tests/test_compile_accel_sentinel_injection.py \
+            --deselect tests/test_conftest_tier_gate.py::TestGateUnderXdist::test_gate_passes_when_marked_under_xdist \
+            --deselect tests/test_jlinalg_dgemm.py::TestDgemmThreadSafety::test_single_vs_multi_thread \
+            --deselect tests/test_jlinalg_eigh.py::TestThreadControl::test_set_n_threads_accepts_large \
+            --deselect tests/test_lmm_io_validation.py::test_python_m_jamma_help \
+            --deselect tests/test_numpy_streaming.py::TestStreamingPipeline::test_streaming_pipeline_activates \
+            --deselect tests/test_safety_gates.py::TestJlinalgABIValidation::test_abi_mismatch_triggers_production_guard_at_runtime \
+            --deselect tests/test_safety_gates.py::TestLOCOIteratorRuntimeError::test_loco_module_imports_cleanly_under_optimisation \
+            --deselect tests/test_snp_stats.py::TestSnpStatsC::test_c_extension_loaded \
+            --deselect tests/test_snp_stats.py::TestSnpStatsC::test_dtype_parity \
+            --deselect tests/test_snp_stats.py::TestSnpStatsC::test_float32_parity \
+            --deselect tests/test_snp_stats.py::TestSnpStatsC::test_rectangular_chunk \
             2>&1 | tee sanitizer-run.log
 
       - name: Upload sanitizer logs

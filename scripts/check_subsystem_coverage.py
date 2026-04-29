@@ -26,22 +26,23 @@ from pathlib import Path
 
 # Per-subsystem floor (percent line coverage).
 #
-# Floors, not ratchets: set BELOW the current measured coverage so the gate
-# alarms when a subsystem regresses, not after every measurement. Calibrated
-# from a slipcover run on 2026-04-29 (macOS-Accelerate; line coverage):
+# Floors, not ratchets: set BELOW the LOWEST observed coverage across both
+# CI (Linux) and dev (macOS) so the gate alarms on regressions without
+# false-failing on platform-specific BLAS-path differences.
 #
-#   src/jamma/lmm/      82.3%
-#   src/jamma/jlinalg/  33.6%   (low: LP64/MKL fallbacks don't fire on macOS-ILP64)
-#   src/jamma/kinship/  52.7%
-#   src/jamma/io/       84.5%
+# Reference measurements (2026-04-29):
+#                       Linux-CI   macOS-Accelerate
+#   src/jamma/lmm/      84.2%      82.3%
+#   src/jamma/jlinalg/  21.8%      33.6%   (vendor-LAPACK paths differ by platform)
+#   src/jamma/kinship/  55.8%      52.7%
+#   src/jamma/io/       84.5%      84.5%
 #
-# Bumping a floor is a deliberate decision after meaningful test additions —
-# not after every measurement.
+# Floors are set below the minimum of each pair. Bumping is deliberate.
 SUBSYSTEM_THRESHOLDS: tuple[tuple[str, float], ...] = (
     # ``prefix`` is matched against file paths reported by slipcover
     # (relative to the project root, forward slashes).
     ("src/jamma/lmm/", 80.0),
-    ("src/jamma/jlinalg/", 30.0),
+    ("src/jamma/jlinalg/", 18.0),
     ("src/jamma/kinship/", 50.0),
     ("src/jamma/io/", 80.0),
 )

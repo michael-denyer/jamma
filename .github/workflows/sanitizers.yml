@@ -107,8 +107,12 @@ jobs:
       JAMMA_FORCE_NUMPY_FALLBACK: "1"
       JAMMA_SENTINEL_UB: "1"  # opts the heap-OOB function into the .so
       JAMMA_SANITIZE_EXPECT_FAIL: "1"  # opts in the sentinel pytest
+      # log_path writes ASan's trace to <path>.<pid> via direct file write —
+      # survives the SIGABRT that abort_on_error=1 triggers, where a piped
+      # `tee` can lose the trace because the child process dies before
+      # buffered stderr is flushed (run 25108167688 symptom).
       ASAN_OPTIONS: >-
-        detect_leaks=0:abort_on_error=1:symbolize=1:print_stacktrace=1
+        detect_leaks=0:abort_on_error=1:symbolize=1:print_stacktrace=1:log_path=${{ github.workspace }}/asan-trace
       UBSAN_OPTIONS: >-
         halt_on_error=1:print_stacktrace=1:symbolize=1
     steps:
@@ -150,22 +154,38 @@ jobs:
         # If the previous step exited 0, the sentinel did NOT abort — that
         # means ASAN is not wired and the workflow is silently passing
         # broken builds. Fail the workflow now.
+        #
+        # ASan writes its trace to ASAN_OPTIONS:log_path=<path>.<pid> via
+        # direct file write (survives SIGABRT). Cat all asan-trace.* files
+        # into one combined stream we can grep — and ALSO grep the pytest
+        # log as a belt-and-braces fallback in case ASan also wrote to
+        # stderr before aborting.
         run: |
-          if grep -q "AddressSanitizer:.*heap-buffer-overflow" sentinel-run.log; then
+          shopt -s nullglob
+          combined_trace=$(mktemp)
+          for f in "$GITHUB_WORKSPACE"/asan-trace.* sentinel-run.log; do
+            if [ -f "$f" ]; then
+              echo "===== $f =====" >> "$combined_trace"
+              cat "$f" >> "$combined_trace"
+            fi
+          done
+          if grep -q "AddressSanitizer:.*heap-buffer-overflow" "$combined_trace"; then
             echo "OK: heap-buffer-overflow trace captured — sanitizer is wired"
             # Bonus: assert the trace points at _lmm_accel.c (SC-4 source-line attribution)
-            if grep -q "_lmm_accel.c" sentinel-run.log; then
+            if grep -q "_lmm_accel.c" "$combined_trace"; then
               echo "OK: trace mentions _lmm_accel.c — source-line attribution works"
               exit 0
             else
               echo "FAIL: heap-buffer-overflow caught but trace does not mention _lmm_accel.c"
               echo "Sentinel may be running but stack-trace symbolization is broken."
+              echo "----- combined trace -----"
+              tail -200 "$combined_trace"
               exit 1
             fi
           else
             echo "FAIL: sentinel did not produce a heap-buffer-overflow trace"
-            echo "Sanitizer may not be wired. Inspect sentinel-run.log:"
-            tail -100 sentinel-run.log
+            echo "Sanitizer may not be wired. Combined trace contents:"
+            tail -200 "$combined_trace"
             exit 1
           fi
 
@@ -174,7 +194,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
           name: sentinel-logs-${{ github.run_id }}
-          path: sentinel-run.log
+          path: |
+            sentinel-run.log
+            asan-trace.*
           retention-days: 30
 
   issue-on-failure:

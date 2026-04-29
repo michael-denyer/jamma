@@ -1,6 +1,17 @@
 # Performance Summary
 
-## v4.2.0 — 125k Scale (Latest)
+> **Currency note.** Headline numbers are historical benchmarks from each
+> noted version. The most recent end-to-end large-scale benchmark
+> (125,632 samples) is from v4.2.0; v4.6.1 added partial scaling data at
+> smaller sizes. The v5.x line (current: v5.3.0) has not been re-benchmarked
+> at full scale -- v5.0–v5.3 changes were CI/test-infrastructure and
+> sanitizer hardening with **no expected runtime perf delta**. The
+> kinship, eigendecomp, and LMM hot paths are unchanged from v4.6.1 in
+> v5.3.0. JAX and BLIS were stripped in v5.0 (commit `663a22b`) -- the
+> backend set is now `numpy` and `numpy-streaming` only, both routing
+> through jlinalg with vendor LAPACK > NumPy fallback.
+
+## v4.2.0 — 125k Scale (most recent full-scale benchmark)
 
 v4.2.0 at 125,632 samples on 91,586 real SNPs. **~10x faster than GEMMA** (2h 29m vs ~27h). 19% faster than v2.10.1 thanks to jlinalg eigendecomp and C extension LMM improvements. Eigendecomp used DSYEVR (memory-constrained fallback from DSYEVD).
 
@@ -38,7 +49,7 @@ Throughput: 12.5 SNPs/sec (eigen+LMM), 10.2 SNPs/sec end-to-end. Peak RSS: 380.6
 
 All runs on the same hardware (E96ds_v6) and dataset (125,632 x 91,586).
 
-| Phase | v4.2.0 (latest) | v2.10.1 | v2.5.6 (1 dev) | v4.2 vs v2.10 |
+| Phase | v4.2.0 | v2.10.1 | v2.5.6 (1 dev) | v4.2 vs v2.10 |
 |-------|----------------|---------|----------------|---------------|
 | Kinship compute | 1,591s | 2,047s | 2,068s | **-22%** |
 | Eigendecomp | 6,427s | — | — | — |
@@ -212,4 +223,5 @@ Full test suite passing. Kinship tolerance aligned from 1e-10 to 1e-8 in v2.5.7 
 GEMMA (Accelerate) is GEMMA 0.98.5 compiled against Apple's Accelerate framework instead of Homebrew OpenBLAS — **1.3-2.2x faster** due to AMX-accelerated BLAS, with identical numerical results. **NumPy+C** uses a C extension with OpenMP for Wald (`-lmm 1`) — REML optimization is compute-bound and parallelizes well across SNPs. The C speedup grows with covariates because the Pab table recursion is more expensive. NumPy+C is the fastest backend at all modes including all-tests (`-lmm 4`) with this small scale run. **NumPy+C (stream)** reads genotypes from disk in chunks — slightly slower than batch, but the production code path for large datasets that don't fit in memory. Kinship is always pure NumPy/BLAS. The LOCO speedup has two further sources: (1) JAMMA computes per-chromosome LOCO kinship via streaming and tests only that chromosome's SNPs, while GEMMA `-loco` tests *all* SNPs against each LOCO kinship (19x redundant work on 19 chromosomes); (2) JAMMA runs all chromosomes in a single process, avoiding 19 cold-start overheads.
 
 ---
-Document last updated: *2026-03-26*.
+Document last updated: *2026-04-29* (currency review for v5.3.0; no full-scale
+re-benchmark performed -- hot paths unchanged from v4.6.1).

@@ -64,8 +64,8 @@ All functions accept and return `numpy.ndarray` (float64, C-contiguous).
 | Platform | ISA | Vendor Dispatch |
 |----------|-----|-----------------|
 | Linux x86_64 | AVX2 | MKL-ILP64, OpenBLAS-ILP64 |
-| macOS ARM (M1+) | NEON | Accelerate-ILP64 |
-| macOS x86_64 | AVX2 | Accelerate |
+| macOS ARM (M1+) | NEON | Accelerate-ILP64 (macOS 13.3+) |
+| macOS x86_64 | AVX2 | NumPy fallback (LP64 Accelerate not wired) |
 | Other / fallback | generic | NumPy fallback |
 
 Vendor dispatch is ILP64-only. LP64 backends are detected but not wired

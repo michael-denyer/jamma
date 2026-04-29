@@ -63,16 +63,27 @@ graph LR
     subgraph DISCOVER["DISCOVERY (all paths run)"]
         direction LR
         A["blas_dispatch.c"]
-        B["System BLAS<br/>RTLD_DEFAULT +<br/>numpy scan"]
+        B["System BLAS<br/>RTLD_DEFAULT +<br/>numpy.libs scan"]
         C["pip-install MKL<br/>site-packages/<br/>mkl.libs/"]
-        A --> B --> C
+        D["macOS Accelerate<br/>$NEWLAPACK$ILP64<br/>symbols"]
+        A --> B
+        A --> C
+        A --> D
     end
 
-    subgraph SELECT["SELECTION (best wins)"]
-        E["NumPy fallback"]
+    subgraph SELECT["SELECTION (best ILP64 wins)"]
+        direction TB
+        S1["MKL-ILP64"]
+        S2["OpenBLAS-ILP64"]
+        S3["Accelerate-ILP64"]
+        S4["NumPy fallback<br/>(no ILP64 vendor found,<br/>or JAMMA_FORCE_NUMPY_FALLBACK=1)"]
     end
 
-    C --> E
+    B --> S1
+    B --> S2
+    C --> S1
+    D --> S3
+    A -.-> S4
 
     style DISCOVER fill:#0f3460,stroke:#f5b461,color:#eee,stroke-width:2px
     style SELECT fill:#1a1a2e,stroke:#95a5a6,color:#eee,stroke-width:2px
@@ -80,8 +91,16 @@ graph LR
     style A fill:#e94560,stroke:#c73550,color:#fff
     style B fill:#f5b461,stroke:#d4943f,color:#1a1a2e
     style C fill:#f5b461,stroke:#d4943f,color:#1a1a2e
-    style E fill:#95a5a6,stroke:#7f8c8d,color:#1a1a2e
+    style D fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style S1 fill:#27ae60,stroke:#1e8449,color:#fff
+    style S2 fill:#27ae60,stroke:#1e8449,color:#fff
+    style S3 fill:#27ae60,stroke:#1e8449,color:#fff
+    style S4 fill:#95a5a6,stroke:#7f8c8d,color:#1a1a2e
 ```
+
+LP64 backends (plain MKL, OpenBLAS, Accelerate) are detected during discovery
+but are **not wired** into the dispatch table -- the NumPy fallback is used
+instead, for FP-accumulation consistency with GEMMA validation tolerances.
 
 `blas_dispatch.c` uses a discover-all-then-select-best model. Both discovery
 paths run unconditionally:

@@ -75,10 +75,16 @@ the mirror step can be skipped entirely.
 
 ## 2. Divide-and-Conquer Eigendecomposition (vendor DSYEVD)
 
-*This section describes the algorithm implemented by vendor LAPACK's DSYEVD
-routine. jlinalg dispatches to vendor DSYEVD (MKL, Accelerate) when available,
-falling back to NumPy (`np.linalg.eigh`) otherwise. jlinalg does not contain
-its own eigendecomposition implementation.*
+> **Reference section, not implementation.** Everything below describes the
+> algorithm that vendor LAPACK's DSYEVD routine implements internally.
+> jlinalg dispatches to vendor DSYEVD (MKL, Accelerate) when available and
+> otherwise falls back to `np.linalg.eigh` -- it does **not** contain its
+> own eigendecomposition implementation. The detail here exists so JAMMA
+> contributors can reason about why vendor DSYEVD output looks the way it
+> does (e.g. why eigenvalues cluster slightly differently between MKL and
+> Accelerate). For LAPACK-internal routine names (`dlaed3`, `dlaed4`,
+> `dlaed5`, `dlaed6`) below, see the LAPACK Reference Guide -- they are
+> **not** symbols in the JAMMA tree.
 
 The vendor DSYEVD algorithm uses a divide-and-conquer pipeline:
 
@@ -145,7 +151,7 @@ f(lambda) = 1 + rho * sum_k( z_k^2 / (d_k - lambda) ) = 0
 where d_k are the eigenvalues of the two subproblems and z_k are the
 corresponding components of the rank-1 update vector.
 
-### Secular Equation Solver (dlaed4)
+### Secular Equation Solver (LAPACK `dlaed4`)
 
 The secular equation has exactly one root between each pair of consecutive
 poles d_k. The solver uses the Gu-Eisenstat algorithm with several
@@ -186,7 +192,7 @@ product formula.
 **Reference:** Gu & Eisenstat (1995), "A divide-and-conquer algorithm for
 the symmetric tridiagonal eigenproblem", SIAM J. Matrix Anal. Appl.
 
-### Eigenvector Computation (dlaed3 Weight Product)
+### Eigenvector Computation (LAPACK `dlaed3` Weight Product)
 
 After finding the eigenvalues, eigenvectors of the merged problem are
 computed using the Gu-Eisenstat weight product formula:

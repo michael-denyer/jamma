@@ -306,4 +306,4 @@ See [Code Map](docs/CODEMAP.md) for the full architecture diagram with source li
 
 ## License
 
-GPL-3.0 (same as GEMMA)
+[GPL-3.0](LICENSE.md) (same as GEMMA).

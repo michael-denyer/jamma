@@ -596,6 +596,7 @@ Install numpy-mkl using the commands in [Linux / Windows](#linux--windows) above
 
 > **Note:** scipy does not support ILP64 — it hardcodes `ilp64=False` in
 > `get_lapack_funcs()` ([scipy#23351](https://github.com/scipy/scipy/issues/23351)).
+> JAMMA does not use scipy at runtime (it is a dev-only dependency for tests).
 > JAMMA uses `jlinalg.eigh` which dispatches to vendor DSYEVD/DSYEVR via the jlinalg
 > C layer, correctly using ILP64 when an ILP64 BLAS backend is available.
 

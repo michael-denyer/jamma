@@ -517,7 +517,6 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 
 | Feature | NumPy |
 |---------|-------|
-
 | Wald test (`-lmm 1`) | Yes |
 | LRT (`-lmm 2`) | Yes |
 | Score test (`-lmm 3`) | Yes |

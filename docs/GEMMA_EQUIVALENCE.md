@@ -312,7 +312,8 @@ uv run pytest tests/test_kinship_validation.py -v
 Run all GEMMA parity tests (spans tier0/tier1/tier2):
 
 ```bash
-uv run pytest tests/test_runner_numpy.py tests/test_numpy_streaming.py tests/test_lmm_accel.py -v -n0 -m ''  # -m '' overrides the default tier filter from addopts
+# -m '' overrides the default tier filter from addopts
+uv run pytest tests/test_runner_numpy.py tests/test_numpy_streaming.py tests/test_lmm_accel.py -v -n0 -m ''
 ```
 
 Comprehensive formal validation across all 8 test configurations:
@@ -364,4 +365,4 @@ Reference data: `tests/fixtures/`
 
 ---
 
-Document last updated: *2026-03-19*.
+Document last updated: *2026-04-29*.

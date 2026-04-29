@@ -11,7 +11,7 @@ Terms and abbreviations used in JAMMA documentation.
 | **Eigendecomposition** | Factoring the kinship matrix K = U D U^T into eigenvectors (U) and eigenvalues (D). The most memory-intensive step in LMM GWAS. |
 | **GWAS** | Genome-Wide Association Study -- testing each SNP for association with a phenotype while controlling for population structure. |
 | **HWE** | Hardy-Weinberg Equilibrium -- a QC filter (`-hwe`) that removes SNPs deviating from expected genotype frequencies, indicating genotyping errors. |
-| **ILP64** | Integer, Long, Pointer all 64-bit -- BLAS/LAPACK compiled with 64-bit integers. Required for matrices larger than ~46k x 46k (>2.1 billion elements overflow 32-bit int). |
+| **ILP64** | Integer, Long, Pointer all 64-bit -- BLAS/LAPACK compiled with 64-bit integers. Required for matrices larger than ~46,000 × 46,000, since 46,000² ≈ 2.12 × 10⁹ elements overflows a 32-bit signed integer. |
 | **Kinship matrix** | An N x N matrix measuring genetic relatedness between all pairs of N samples. Used by LMM to correct for population structure. |
 | **LMM** | Linear Mixed Model -- a statistical model that accounts for both fixed effects (SNP, covariates) and random effects (kinship/relatedness) when testing for association. |
 | **LOCO** | Leave-One-Chromosome-Out -- computing a separate kinship matrix for each chromosome, excluding that chromosome's SNPs. Avoids proximal contamination (the tested SNP influencing the kinship correction). |

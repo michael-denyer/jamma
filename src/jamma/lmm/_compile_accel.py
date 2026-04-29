@@ -45,6 +45,7 @@ from pathlib import Path
 #      ``compile_extension()`` from this module.
 from jamma._build_support.compile_and_link import (
     LINK_FLAGS_BY_PLATFORM,
+    apply_sanitizer_overrides,
     compile_jlinalg,
 )
 from jamma._build_support.find_compiler import find_c_compiler
@@ -224,10 +225,21 @@ def compile_extension(
     # Platform-specific link flags. Helper appends omp_link + extra_link_flags.
     ldflags = list(LINK_FLAGS_BY_PLATFORM.get(platform.system(), ()))
 
+    # Phase 116.1: route through apply_sanitizer_overrides so JAMMA_SANITIZE
+    # env var (set by .github/workflows/sanitizers.yml) injects sanitizer
+    # flags into BOTH extra_cflags AND extra_lapack_cflags. The helper is a
+    # no-op when JAMMA_SANITIZE is unset, so this call is safe in every
+    # invocation. macOS note: -fsanitize=address requires Xcode clang +
+    # findable libasan; the workflow targets ubuntu-latest, so the macOS
+    # dev rebuild may fail under JAMMA_SANITIZE — that's expected.
+    extra_cflags, extra_link_flags_for_call, extra_lapack_cflags = (
+        apply_sanitizer_overrides(extra_cflags, ["-lm"])
+    )
+
     # Compile + link via the shared helper. ``_lmm_accel.c`` is a baseline
-    # source (NOT LAPACK) — pass empty lapack_sources=[]. ``-lm`` goes
-    # through extra_link_flags because it's universal but not encoded in
-    # the per-platform LINK_FLAGS_BY_PLATFORM table.
+    # source (NOT LAPACK) — pass empty lapack_sources=[]. ``-lm`` was
+    # already routed through apply_sanitizer_overrides above so the
+    # sanitizer link flags can land alongside it.
     tmp_dir = Path(tempfile.mkdtemp(prefix="lmm_accel_compile_"))
     try:
         result = compile_jlinalg(
@@ -242,7 +254,8 @@ def compile_extension(
             output=out,
             tmp_dir=tmp_dir,
             extra_cflags=extra_cflags,
-            extra_link_flags=["-lm"],
+            extra_link_flags=extra_link_flags_for_call,
+            extra_lapack_cflags=extra_lapack_cflags,
             on_retry=_retry,
             verbose_print=_detail,
             error_print=_print,

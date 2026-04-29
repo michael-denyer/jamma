@@ -106,22 +106,35 @@ def test_sentinel_off_values(monkeypatch, captured_compile_call, tmp_path, value
 
 def test_sentinel_orthogonal_to_sanitize(monkeypatch, captured_compile_call, tmp_path):
     """JAMMA_SENTINEL_UB=1 AND JAMMA_SANITIZE=address,undefined:
-    -DJAMMA_SENTINEL_UB present in extra_cflags; sanitizer flags are NOT
-    here (they reach compile_jlinalg via apply_sanitizer_overrides at the
-    helper level — see plan 05 — NOT through _compile_accel.py).
+    BOTH flags reach compile_jlinalg's extra_cflags. The two env vars are
+    truly orthogonal — setting one does not suppress the other, and the
+    sentinel-define gate (plan 04) is independent of the sanitizer-override
+    helper (plan 01 + plan 05).
+
+    Post-plan-05 wiring: apply_sanitizer_overrides() runs inside
+    compile_extension() and appends -fsanitize=..., -fno-omit-frame-pointer,
+    -O1 to extra_cflags. The sentinel append happens BEFORE that helper, so
+    -DJAMMA_SENTINEL_UB lands earlier in the list than the sanitizer flags.
     """
     monkeypatch.setenv("JAMMA_SENTINEL_UB", "1")
     monkeypatch.setenv("JAMMA_SANITIZE", "address,undefined")
     _run_compile_extension(monkeypatch, tmp_path)
     extra_cflags = captured_compile_call["kwargs"]["extra_cflags"]
+    # Sentinel macro present (plan 04 wiring).
     assert "-DJAMMA_SENTINEL_UB" in extra_cflags, extra_cflags
-    # Sanitizer flags must NOT have been spliced here — that wiring lands
-    # in plan 05 via apply_sanitizer_overrides at the entry-point level.
-    # (After plan 05, _compile_accel.py WILL forward sanitizer flags too,
-    # but that goes via extra_lapack_cflags / extra_link_flags — at the
-    # extra_cflags level, no -fsanitize=... should appear here yet.)
-    assert "-fsanitize=address,undefined" not in extra_cflags, extra_cflags
-    assert "-fno-omit-frame-pointer" not in extra_cflags, extra_cflags
+    # Sanitizer flags also present (plan 05 wiring of apply_sanitizer_overrides).
+    assert "-fsanitize=address,undefined" in extra_cflags, extra_cflags
+    assert "-fno-omit-frame-pointer" in extra_cflags, extra_cflags
+    # Sentinel must precede sanitizer flags (plan 04 appends BEFORE
+    # apply_sanitizer_overrides runs).
+    sentinel_idx = extra_cflags.index("-DJAMMA_SENTINEL_UB")
+    sanitize_idx = extra_cflags.index("-fsanitize=address,undefined")
+    assert sentinel_idx < sanitize_idx, extra_cflags
+    # extra_lapack_cflags should ALSO carry the sanitizer flags (plan 05's
+    # full wiring instruments LAPACK sources too — no LAPACK source in
+    # _lmm_accel, so this is a defensive check that the wiring is uniform).
+    extra_lapack = captured_compile_call["kwargs"]["extra_lapack_cflags"]
+    assert "-fsanitize=address,undefined" in extra_lapack, extra_lapack
 
 
 def test_sentinel_truthy_values_engage(monkeypatch, captured_compile_call, tmp_path):

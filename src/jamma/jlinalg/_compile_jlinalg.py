@@ -37,6 +37,7 @@ from jamma._build_support.compile_and_link import (
     BASELINE_SOURCES,
     LAPACK_SOURCES,
     LINK_FLAGS_BY_PLATFORM,
+    apply_sanitizer_overrides,
     compile_jlinalg,
 )
 from jamma._build_support.find_compiler import find_c_compiler
@@ -169,9 +170,17 @@ def compile_extension(
     # Platform-specific link flags. Helper appends omp_link + extra_link_flags.
     ldflags = list(LINK_FLAGS_BY_PLATFORM.get(platform.system(), ()))
 
-    # Compile + link via the shared helper. ``-lm`` goes through
-    # extra_link_flags because it's universal but not encoded in the
-    # per-platform LINK_FLAGS_BY_PLATFORM table.
+    # Phase 116.1: route through apply_sanitizer_overrides so JAMMA_SANITIZE
+    # env var injects sanitizer flags into BOTH extra_cflags AND
+    # extra_lapack_cflags (the latter ensures eigh.c — the LAPACK source —
+    # is also instrumented). Helper is a no-op when JAMMA_SANITIZE is unset.
+    san_extra_cflags, extra_link_flags_for_call, extra_lapack_cflags = (
+        apply_sanitizer_overrides(None, ["-lm"])
+    )
+
+    # Compile + link via the shared helper. ``-lm`` was already routed
+    # through apply_sanitizer_overrides above so the sanitizer link flags
+    # can land alongside it.
     tmp_dir = Path(tempfile.mkdtemp(prefix="jlinalg_compile_"))
     try:
         result = compile_jlinalg(
@@ -185,7 +194,9 @@ def compile_extension(
             ldflags=ldflags,
             output=out,
             tmp_dir=tmp_dir,
-            extra_link_flags=["-lm"],
+            extra_cflags=san_extra_cflags,
+            extra_link_flags=extra_link_flags_for_call,
+            extra_lapack_cflags=extra_lapack_cflags,
             on_retry=_retry,
             verbose_print=_detail,
             error_print=_print,
@@ -334,6 +345,15 @@ def compile_test_harness(verbose: bool = True) -> Path:
     # — eigh.c doesn't use Unity.)
     extra_cflags = ["-DUNITY_INCLUDE_DOUBLE"]
 
+    # Phase 116.1: harness builds run under JAMMA_SANITIZE too — the .o
+    # files for the test binary need the same instrumentation as the
+    # production .so so the harness exercises the sanitizer-instrumented
+    # code path. Pass extra_cflags as the first arg so -DUNITY_INCLUDE_DOUBLE
+    # is preserved alongside any -fsanitize=... appended by the helper.
+    extra_cflags, extra_link_flags_for_call, extra_lapack_cflags = (
+        apply_sanitizer_overrides(extra_cflags, [])
+    )
+
     # Output path — executable under tests_dir.
     out = tests_dir / "test_boundaries"
     if platform.system() == "Windows":
@@ -353,6 +373,8 @@ def compile_test_harness(verbose: bool = True) -> Path:
             output=out,
             tmp_dir=tmp_dir,
             extra_cflags=extra_cflags,
+            extra_link_flags=extra_link_flags_for_call,
+            extra_lapack_cflags=extra_lapack_cflags,
             extra_source_includes=extra_source_includes,
             link_shared=False,
             on_retry=lambda msg: _warn(msg),

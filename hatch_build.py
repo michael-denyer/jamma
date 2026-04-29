@@ -69,6 +69,12 @@ BASELINE_SOURCES = _cal.BASELINE_SOURCES
 LAPACK_SOURCES = _cal.LAPACK_SOURCES
 LINK_FLAGS_BY_PLATFORM = _cal.LINK_FLAGS_BY_PLATFORM
 compile_jlinalg = _cal.compile_jlinalg
+# Phase 116.1: sanitizer flag injection seam. Wheel builds normally have
+# JAMMA_SANITIZE unset (apply_sanitizer_overrides returns inputs unchanged),
+# so wiring this here is a no-op on the production wheel path. Keeps the
+# three compile entry points uniform — every call to compile_jlinalg in the
+# codebase now flows through apply_sanitizer_overrides first.
+apply_sanitizer_overrides = _cal.apply_sanitizer_overrides
 find_c_compiler = _fc.find_c_compiler
 detect_openmp_flags = _omp.detect_openmp_flags
 
@@ -243,9 +249,15 @@ class CustomBuildHook(BuildHookInterface):
         # Note: hatch_build.py does NOT pass -march=native — that's dev-mode only.
         extra_cflags = os.environ.get("CFLAGS", "").split() or None
 
+        # Phase 116.1: sanitizer flag injection. Helper is a no-op when
+        # JAMMA_SANITIZE is unset (the typical wheel-build state).
+        extra_cflags, extra_link_flags_for_call, extra_lapack_cflags = (
+            apply_sanitizer_overrides(extra_cflags, ["-lm"])
+        )
+
         # Platform link flags (macOS needs -undefined dynamic_lookup; Linux
-        # does not need the sdist/wheel-distinct flags here — -lm is added
-        # via extra_link_flags below).
+        # does not need the sdist/wheel-distinct flags here — -lm was already
+        # routed through apply_sanitizer_overrides above).
         platform_ldflags = list(LINK_FLAGS_BY_PLATFORM.get(platform.system(), ()))
 
         tmp_dir = Path(tempfile.mkdtemp(prefix="lmm_accel_build_"))
@@ -262,7 +274,8 @@ class CustomBuildHook(BuildHookInterface):
                 output=out_path,
                 tmp_dir=tmp_dir,
                 extra_cflags=extra_cflags,
-                extra_link_flags=["-lm"],
+                extra_link_flags=extra_link_flags_for_call,
+                extra_lapack_cflags=extra_lapack_cflags,
                 on_retry=lambda msg: print(msg, file=sys.stderr),
                 verbose_print=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
                 error_print=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
@@ -369,6 +382,13 @@ class CustomBuildHook(BuildHookInterface):
         # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3 in CI).
         extra_cflags = os.environ.get("CFLAGS", "").split() or None
 
+        # Phase 116.1: sanitizer flag injection. No-op on the typical wheel
+        # build (JAMMA_SANITIZE unset). When set, eigh.c also gets
+        # -fsanitize=... via extra_lapack_cflags (LAPACK source dispatch).
+        extra_cflags, extra_link_flags_for_call, extra_lapack_cflags = (
+            apply_sanitizer_overrides(extra_cflags, ["-lm"])
+        )
+
         # Platform-default link flags (Linux gets -ldl -lpthread for
         # blas_dispatch/snp_stats; Darwin gets -undefined dynamic_lookup).
         platform_ldflags = list(LINK_FLAGS_BY_PLATFORM.get(platform.system(), ()))
@@ -387,7 +407,8 @@ class CustomBuildHook(BuildHookInterface):
                 output=out_path,
                 tmp_dir=tmp_dir,
                 extra_cflags=extra_cflags,
-                extra_link_flags=["-lm"],
+                extra_link_flags=extra_link_flags_for_call,
+                extra_lapack_cflags=extra_lapack_cflags,
                 on_retry=lambda msg: print(msg, file=sys.stderr),
                 verbose_print=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
                 error_print=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),

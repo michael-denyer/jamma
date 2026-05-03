@@ -488,7 +488,18 @@ def test_dgemm_throughput() -> None:
     """
     import time
 
+    from jamma.jlinalg import blas_backend as _blas_backend
     from jamma.jlinalg import jlinalg_isa as _isa
+
+    if _blas_backend == "numpy-fallback":
+        pytest.skip(
+            "vendor BLAS dgemm not wired (stock LP64 numpy or no ILP64 BLAS); "
+            "jlinalg.dgemm forwards directly to np.matmul in this configuration, "
+            "so the 0.9x throughput target is dominated by wrapper overhead and "
+            "single-iteration timing variance on shared CI runners. "
+            "Install ILP64 numpy-mkl (Linux/Windows) or run on macOS with "
+            "Accelerate-ILP64 to exercise this assertion."
+        )
 
     rng = np.random.default_rng(42)
     # N=1410: mouse_hs1940 rotation size (primary jamma workload)

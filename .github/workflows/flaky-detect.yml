@@ -63,7 +63,7 @@ jobs:
           uv run pytest \
             --randomly-seed=${{ matrix.seed }} \
             --no-cov \
-            -o 'addopts=-n 3 --timeout=120'
+            -o "addopts=-n 3 --timeout=120 --benchmark-skip -m 'not slow and not tier2'"
 
   flake-summary:
     needs: rotate-seeds

@@ -910,16 +910,32 @@ def test_dsyrk_throughput() -> None:
     """
     import time
 
+    from jamma.jlinalg import blas_backend as _blas_backend
     from jamma.jlinalg import blas_has_dsyrk as _has_vendor_dsyrk
     from jamma.jlinalg import jlinalg_isa as _isa
 
     if not _has_vendor_dsyrk:
         pytest.skip(
-            "vendor BLAS dsyrk not wired (stock LP64 numpy or no ILP64 BLAS); "
-            "jlinalg.dsyrk falls back to np.dot in this configuration, so "
-            "the >1.2x throughput target is unreachable by construction. "
-            "Install ILP64 numpy-mkl (Linux/Windows) or run on macOS with "
-            "Accelerate-ILP64 to exercise this assertion."
+            "vendor BLAS dsyrk not wired (no ILP64 BLAS detected); "
+            "jlinalg.dsyrk falls back to np.dot, so the >1.2x throughput "
+            "target is unreachable by construction. Install ILP64 numpy-mkl "
+            "(Linux/Windows) or run on macOS with Accelerate-ILP64."
+        )
+
+    # The 1.2x speedup comes from the lower-triangle skip in vendor dsyrk plus
+    # microkernel efficiency. When both jlinalg.dsyrk and np.matmul resolve to
+    # the SAME OpenBLAS library (the case on stock numpy >=2.x which ships
+    # scipy-openblas64 with INTERFACE64=1), there's no implementation
+    # difference left for jlinalg to exploit — both paths call the same
+    # symbols at the same threading level. The assertion only makes sense
+    # when jlinalg routes to MKL or Accelerate (a different library than
+    # numpy's BLAS) where the per-call dispatch and symmetric kernel win
+    # actually pay off.
+    if _blas_backend.startswith("OpenBLAS"):
+        pytest.skip(
+            f"backend={_blas_backend}: jlinalg and np.matmul both call the "
+            "same OpenBLAS symbols, so dsyrk's lower-triangle-skip win "
+            "vanishes. Assertion is meaningful only against MKL or Accelerate."
         )
 
     rng = np.random.default_rng(42)

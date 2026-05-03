@@ -910,7 +910,17 @@ def test_dsyrk_throughput() -> None:
     """
     import time
 
+    from jamma.jlinalg import blas_has_dsyrk as _has_vendor_dsyrk
     from jamma.jlinalg import jlinalg_isa as _isa
+
+    if not _has_vendor_dsyrk:
+        pytest.skip(
+            "vendor BLAS dsyrk not wired (stock LP64 numpy or no ILP64 BLAS); "
+            "jlinalg.dsyrk falls back to np.dot in this configuration, so "
+            "the >1.2x throughput target is unreachable by construction. "
+            "Install ILP64 numpy-mkl (Linux/Windows) or run on macOS with "
+            "Accelerate-ILP64 to exercise this assertion."
+        )
 
     rng = np.random.default_rng(42)
     # N=4000, K=2000: CI-runnable proxy for kinship workload

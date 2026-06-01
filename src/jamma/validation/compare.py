@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 from numpy.testing import assert_allclose
 
+from jamma.lmm.schema import HEADERS, MODE_SPECS
 from jamma.lmm.stats import AssocResult
 from jamma.validation.tolerances import ToleranceConfig
 
@@ -202,6 +203,50 @@ def load_gemma_kinship(path: Path) -> np.ndarray:
     return np.loadtxt(path)
 
 
+# GEMMA .assoc.txt column headers are identical to AssocResult field names,
+# so parsing is a generic header->field map keyed by column name rather than a
+# per-format positional unpack. Only the field *type* varies by column.
+_ASSOC_INT_FIELDS = frozenset({"ps", "n_miss"})
+_ASSOC_STR_FIELDS = frozenset({"chr", "rs", "allele1", "allele0"})
+
+
+def _assoc_header_layouts() -> frozenset[tuple[str, ...]]:
+    """Build the accepted .assoc.txt header layouts from the output schema.
+
+    The four canonical layouts are ``schema.HEADERS`` (one per LMM mode). Three
+    extra layouts are GEMMA-version quirks the schema does not model: they differ
+    only by an optional ``logl_H1`` column that some versions emit for Wald/all
+    tests and others emit for LRT.
+    """
+    cols = {tt: tuple(h.split("\t")) for tt, h in HEADERS.items()}
+    # Number of leading metadata columns (chr..af), derived rather than hardcoded.
+    n_prefix = len(cols["lrt"]) - len(MODE_SPECS[2].stat_columns)
+    wald, lrt, all_tests = cols["wald"], cols["lrt"], cols["all"]
+    return frozenset(
+        {
+            wald,  # Wald with logl_H1
+            tuple(c for c in wald if c != "logl_H1"),  # Wald without logl_H1
+            cols["score"],
+            lrt,  # LRT without logl_H1
+            (*lrt[:n_prefix], "logl_H1", *lrt[n_prefix:]),  # LRT with logl_H1
+            all_tests,  # all-tests with logl_H1
+            tuple(c for c in all_tests if c != "logl_H1"),  # all-tests without
+        }
+    )
+
+
+_ASSOC_HEADER_LAYOUTS = _assoc_header_layouts()
+
+
+def _parse_assoc_field(name: str, raw: str) -> str | int | float:
+    """Cast one .assoc.txt cell to the type of its AssocResult field."""
+    if name in _ASSOC_STR_FIELDS:
+        return raw
+    if name in _ASSOC_INT_FIELDS:
+        return int(raw)
+    return float(raw)
+
+
 def load_gemma_assoc(path: Path) -> list[AssocResult]:
     """Load GEMMA association results from .assoc.txt format.
 
@@ -210,6 +255,10 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
     - LRT (-lmm 2): Has l_mle, p_lrt columns (no beta/se)
     - Score test (-lmm 3): Has p_score column (no logl_H1, l_remle, p_wald)
     - All tests (-lmm 4): Has l_remle, l_mle, p_wald, p_lrt, p_score columns
+
+    The header is matched against the layouts derived from the shared output
+    schema; each cell is then mapped to the AssocResult field with the matching
+    column name. LRT formats omit beta/se, which are filled with NaN.
 
     Args:
         path: Path to the association results file (.assoc.txt).
@@ -228,272 +277,26 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
     """
     results = []
     with open(path) as f:
-        header = f.readline().strip()
-        actual_cols = header.split("\t")
-
-        # Support multiple GEMMA output formats:
-        # Format 1: Wald test with logl_H1 (full output)
-        expected_cols_wald_full = [
-            "chr",
-            "rs",
-            "ps",
-            "n_miss",
-            "allele1",
-            "allele0",
-            "af",
-            "beta",
-            "se",
-            "logl_H1",
-            "l_remle",
-            "p_wald",
-        ]
-        # Format 2: Wald test without logl_H1 (some GEMMA versions)
-        expected_cols_wald_short = [
-            "chr",
-            "rs",
-            "ps",
-            "n_miss",
-            "allele1",
-            "allele0",
-            "af",
-            "beta",
-            "se",
-            "l_remle",
-            "p_wald",
-        ]
-        # Format 3: Score test (-lmm 3)
-        expected_cols_score = [
-            "chr",
-            "rs",
-            "ps",
-            "n_miss",
-            "allele1",
-            "allele0",
-            "af",
-            "beta",
-            "se",
-            "p_score",
-        ]
-        # Format 4: LRT (-lmm 2)
-        expected_cols_lrt = [
-            "chr",
-            "rs",
-            "ps",
-            "n_miss",
-            "allele1",
-            "allele0",
-            "af",
-            "l_mle",
-            "p_lrt",
-        ]
-        # Format 4b: LRT with logl_H1 (-lmm 2, some GEMMA versions)
-        expected_cols_lrt_full = [
-            "chr",
-            "rs",
-            "ps",
-            "n_miss",
-            "allele1",
-            "allele0",
-            "af",
-            "logl_H1",
-            "l_mle",
-            "p_lrt",
-        ]
-        # Format 5: All tests (-lmm 4) without logl_H1
-        expected_cols_all = [
-            "chr",
-            "rs",
-            "ps",
-            "n_miss",
-            "allele1",
-            "allele0",
-            "af",
-            "beta",
-            "se",
-            "l_remle",
-            "l_mle",
-            "p_wald",
-            "p_lrt",
-            "p_score",
-        ]
-        # Format 5b: All tests (-lmm 4) with logl_H1 (some GEMMA versions)
-        expected_cols_all_full = [
-            "chr",
-            "rs",
-            "ps",
-            "n_miss",
-            "allele1",
-            "allele0",
-            "af",
-            "beta",
-            "se",
-            "logl_H1",
-            "l_remle",
-            "l_mle",
-            "p_wald",
-            "p_lrt",
-            "p_score",
-        ]
-
-        if actual_cols == expected_cols_wald_full:
-            format_type = "wald_full"
-        elif actual_cols == expected_cols_wald_short:
-            format_type = "wald_short"
-        elif actual_cols == expected_cols_score:
-            format_type = "score"
-        elif actual_cols == expected_cols_lrt:
-            format_type = "lrt"
-        elif actual_cols == expected_cols_lrt_full:
-            format_type = "lrt_full"
-        elif actual_cols == expected_cols_all:
-            format_type = "all_tests"
-        elif actual_cols == expected_cols_all_full:
-            format_type = "all_tests_full"
-        else:
+        cols = tuple(f.readline().strip().split("\t"))
+        if cols not in _ASSOC_HEADER_LAYOUTS:
+            expected = "\n".join(
+                "  " + "\t".join(layout) for layout in sorted(_ASSOC_HEADER_LAYOUTS)
+            )
             raise ValueError(
-                f"Unexpected header format. Expected one of:\n"
-                f"  {expected_cols_wald_full}\n"
-                f"  {expected_cols_wald_short}\n"
-                f"  {expected_cols_score}\n"
-                f"  {expected_cols_lrt}\n"
-                f"  {expected_cols_lrt_full}\n"
-                f"  {expected_cols_all}\n"
-                f"  {expected_cols_all_full}\n"
-                f"Got: {actual_cols}"
+                f"Unexpected header format. Expected one of:\n{expected}\n"
+                f"Got: {list(cols)}"
             )
 
         for line in f:
             fields = line.strip().split("\t")
-            if format_type == "wald_full":
-                results.append(
-                    AssocResult(
-                        chr=fields[0],
-                        rs=fields[1],
-                        ps=int(fields[2]),
-                        n_miss=int(fields[3]),
-                        allele1=fields[4],
-                        allele0=fields[5],
-                        af=float(fields[6]),
-                        beta=float(fields[7]),
-                        se=float(fields[8]),
-                        logl_H1=float(fields[9]),
-                        l_remle=float(fields[10]),
-                        p_wald=float(fields[11]),
-                    )
-                )
-            elif format_type == "wald_short":
-                results.append(
-                    AssocResult(
-                        chr=fields[0],
-                        rs=fields[1],
-                        ps=int(fields[2]),
-                        n_miss=int(fields[3]),
-                        allele1=fields[4],
-                        allele0=fields[5],
-                        af=float(fields[6]),
-                        beta=float(fields[7]),
-                        se=float(fields[8]),
-                        logl_H1=None,
-                        l_remle=float(fields[9]),
-                        p_wald=float(fields[10]),
-                    )
-                )
-            elif format_type == "score":
-                results.append(
-                    AssocResult(
-                        chr=fields[0],
-                        rs=fields[1],
-                        ps=int(fields[2]),
-                        n_miss=int(fields[3]),
-                        allele1=fields[4],
-                        allele0=fields[5],
-                        af=float(fields[6]),
-                        beta=float(fields[7]),
-                        se=float(fields[8]),
-                        logl_H1=None,
-                        l_remle=None,
-                        p_wald=None,
-                        p_score=float(fields[9]),
-                    )
-                )
-            elif format_type == "all_tests":
-                results.append(
-                    AssocResult(
-                        chr=fields[0],
-                        rs=fields[1],
-                        ps=int(fields[2]),
-                        n_miss=int(fields[3]),
-                        allele1=fields[4],
-                        allele0=fields[5],
-                        af=float(fields[6]),
-                        beta=float(fields[7]),
-                        se=float(fields[8]),
-                        logl_H1=None,
-                        l_remle=float(fields[9]),
-                        l_mle=float(fields[10]),
-                        p_wald=float(fields[11]),
-                        p_lrt=float(fields[12]),
-                        p_score=float(fields[13]),
-                    )
-                )
-            elif format_type == "all_tests_full":
-                results.append(
-                    AssocResult(
-                        chr=fields[0],
-                        rs=fields[1],
-                        ps=int(fields[2]),
-                        n_miss=int(fields[3]),
-                        allele1=fields[4],
-                        allele0=fields[5],
-                        af=float(fields[6]),
-                        beta=float(fields[7]),
-                        se=float(fields[8]),
-                        logl_H1=float(fields[9]),
-                        l_remle=float(fields[10]),
-                        l_mle=float(fields[11]),
-                        p_wald=float(fields[12]),
-                        p_lrt=float(fields[13]),
-                        p_score=float(fields[14]),
-                    )
-                )
-            elif format_type == "lrt_full":
-                results.append(
-                    AssocResult(
-                        chr=fields[0],
-                        rs=fields[1],
-                        ps=int(fields[2]),
-                        n_miss=int(fields[3]),
-                        allele1=fields[4],
-                        allele0=fields[5],
-                        af=float(fields[6]),
-                        beta=float("nan"),  # LRT format has no beta
-                        se=float("nan"),  # LRT format has no se
-                        logl_H1=float(fields[7]),
-                        l_remle=None,
-                        p_wald=None,
-                        l_mle=float(fields[8]),
-                        p_lrt=float(fields[9]),
-                    )
-                )
-            else:  # lrt
-                results.append(
-                    AssocResult(
-                        chr=fields[0],
-                        rs=fields[1],
-                        ps=int(fields[2]),
-                        n_miss=int(fields[3]),
-                        allele1=fields[4],
-                        allele0=fields[5],
-                        af=float(fields[6]),
-                        beta=float("nan"),  # LRT format has no beta
-                        se=float("nan"),  # LRT format has no se
-                        logl_H1=None,
-                        l_remle=None,
-                        p_wald=None,
-                        l_mle=float(fields[7]),
-                        p_lrt=float(fields[8]),
-                    )
-                )
+            row = {
+                name: _parse_assoc_field(name, val)
+                for name, val in zip(cols, fields, strict=True)
+            }
+            # GEMMA LRT formats omit beta/se; AssocResult requires them.
+            row.setdefault("beta", float("nan"))
+            row.setdefault("se", float("nan"))
+            results.append(AssocResult(**row))
     return results
 
 
@@ -533,6 +336,58 @@ class AssocComparisonResult:
     l_mle: ComparisonResult | None = None  # Only for LRT (-lmm 2)
 
 
+_LAMBDA_LOWER_BOUND = 1e-4
+_LAMBDA_UPPER_BOUND = 1e4
+
+
+def _skipped_result(message: str) -> ComparisonResult:
+    """A vacuously-passing result for a column not applicable to the test type."""
+    return ComparisonResult(
+        passed=True,
+        max_abs_diff=0.0,
+        max_rel_diff=0.0,
+        worst_location=None,
+        message=message,
+    )
+
+
+def _column(field: str, rows: list[AssocResult], default: float) -> np.ndarray:
+    """Extract one AssocResult field across rows, substituting default for None."""
+    return np.array(
+        [getattr(r, field) if getattr(r, field) is not None else default for r in rows]
+    )
+
+
+def _compare_with_boundary(
+    actual_arr: np.ndarray,
+    expected_arr: np.ndarray,
+    boundary_mask: np.ndarray,
+    rtol: float,
+    atol: float,
+    name: str,
+) -> ComparisonResult:
+    """Compare lambda arrays, excluding values pinned at the optimizer boundary.
+
+    Lambda converges at the optimization bounds for weak-signal SNPs; JAMMA's
+    golden-section and GEMMA's Brent agree on *whether* a value is at the bound
+    but not on its exact pinned magnitude, so boundary values are excluded.
+    """
+    if np.all(boundary_mask):
+        return _skipped_result(
+            f"{name} comparison skipped (all values at optimization boundary)"
+        )
+    if np.any(boundary_mask):
+        keep = ~boundary_mask
+        return compare_arrays(
+            actual_arr[keep],
+            expected_arr[keep],
+            rtol,
+            atol,
+            f"{name} (excluding {int(np.sum(boundary_mask))} boundary values)",
+        )
+    return compare_arrays(actual_arr, expected_arr, rtol, atol, name)
+
+
 def compare_assoc_results(
     actual: list[AssocResult],
     expected: list[AssocResult],
@@ -546,7 +401,7 @@ def compare_assoc_results(
     - se: se_rtol (standard errors with sqrt operations)
     - p_wald: pvalue_rtol (CDF computations may differ) - Wald test only
     - p_score: pvalue_rtol (CDF computations may differ) - Score test only
-    - p_lrt: pvalue_rtol (CDF computations may differ) - LRT only
+    - p_lrt: p_lrt_rtol (chi-squared magnifies logl differences) - LRT only
     - logl_H1: logl_rtol (log-likelihood values) - Wald test only
     - l_remle: lambda_rtol (variance ratio estimates) - Wald test only
     - l_mle: lambda_rtol (MLE lambda values) - LRT only
@@ -592,16 +447,6 @@ def compare_assoc_results(
         and all(r.p_wald is None for r in sample)
     )
 
-    # Helper to create skipped comparison result
-    def _skipped_result(msg: str) -> ComparisonResult:
-        return ComparisonResult(
-            passed=True,
-            max_abs_diff=0.0,
-            max_rel_diff=0.0,
-            worst_location=None,
-            message=msg,
-        )
-
     # Check for SNP count mismatch
     if len(actual) != len(expected):
         mismatch_result = ComparisonResult(
@@ -633,20 +478,17 @@ def compare_assoc_results(
         if a.rs != e.rs:
             mismatched.append(f"{i}:{a.rs}!={e.rs}")
 
-    # Extract arrays for comparison (always present)
+    # Always-present columns. AF is normalized to MAF (<= 0.5) first because
+    # JAMMA reports MAF while GEMMA's AF can exceed 0.5 for the same allele.
     actual_beta = np.array([r.beta for r in actual])
     expected_beta = np.array([r.beta for r in expected])
     actual_se = np.array([r.se for r in actual])
     expected_se = np.array([r.se for r in expected])
     actual_af = np.array([r.af for r in actual])
     expected_af = np.array([r.af for r in expected])
-
-    # Normalize to MAF (minor allele freq <= 0.5) before comparison.
-    # JAMMA reports MAF, GEMMA reports AF which can be > 0.5.
     actual_maf = np.minimum(actual_af, 1.0 - actual_af)
     expected_maf = np.minimum(expected_af, 1.0 - expected_af)
 
-    # Compare always-present columns
     beta_result = compare_arrays(
         actual_beta, expected_beta, config.beta_rtol, config.atol, "beta"
     )
@@ -657,268 +499,79 @@ def compare_assoc_results(
         actual_maf, expected_maf, config.af_rtol, config.atol, "af"
     )
 
-    # Handle test-type specific columns
-    p_score_result = None
-    p_lrt_result = None
-    l_mle_result = None
+    # Test-type-specific columns. Each closure computes one column's comparison
+    # with the right tolerance and boundary/skip rule; columns inactive for the
+    # detected mode get a skip-result (always-present output slots) or stay None
+    # (optional output slots).
+    def _pvalue(field: str, rtol: float) -> ComparisonResult:
+        return compare_arrays(
+            _column(field, actual, np.nan),
+            _column(field, expected, np.nan),
+            rtol,
+            config.atol,
+            field,
+        )
+
+    def _logl(skip_message: str) -> ComparisonResult:
+        expected_logl = _column("logl_H1", expected, 0.0)
+        if np.allclose(expected_logl, 0.0):
+            return _skipped_result(skip_message)
+        return compare_arrays(
+            _column("logl_H1", actual, 0.0),
+            expected_logl,
+            config.logl_rtol,
+            config.atol,
+            "logl_H1",
+        )
+
+    def _lambda(field: str, *, check_upper: bool) -> ComparisonResult:
+        actual_arr = _column(field, actual, np.nan)
+        expected_arr = _column(field, expected, np.nan)
+        mask = (expected_arr <= _LAMBDA_LOWER_BOUND) | (
+            actual_arr <= _LAMBDA_LOWER_BOUND
+        )
+        if check_upper:
+            mask = (
+                mask
+                | (expected_arr >= _LAMBDA_UPPER_BOUND)
+                | (actual_arr >= _LAMBDA_UPPER_BOUND)
+            )
+        return _compare_with_boundary(
+            actual_arr, expected_arr, mask, config.lambda_rtol, config.atol, field
+        )
+
+    p_score_result: ComparisonResult | None = None
+    p_lrt_result: ComparisonResult | None = None
+    l_mle_result: ComparisonResult | None = None
+
     if is_all_tests:
-        # All-tests mode: compare ALL columns with per-column tolerances
-        actual_pwald = np.array(
-            [r.p_wald if r.p_wald is not None else np.nan for r in actual]
-        )
-        expected_pwald = np.array(
-            [r.p_wald if r.p_wald is not None else np.nan for r in expected]
-        )
-        pwald_result = compare_arrays(
-            actual_pwald, expected_pwald, config.pvalue_rtol, config.atol, "p_wald"
-        )
-
-        # Score test p-values
-        actual_pscore = np.array(
-            [r.p_score if r.p_score is not None else np.nan for r in actual]
-        )
-        expected_pscore = np.array(
-            [r.p_score if r.p_score is not None else np.nan for r in expected]
-        )
-        p_score_result = compare_arrays(
-            actual_pscore, expected_pscore, config.pvalue_rtol, config.atol, "p_score"
-        )
-
-        # LRT p-values use wider tolerance from config (default 5e-3).
-        # Chi-squared distribution magnifies small log-likelihood differences.
-        actual_plrt = np.array(
-            [r.p_lrt if r.p_lrt is not None else np.nan for r in actual]
-        )
-        expected_plrt = np.array(
-            [r.p_lrt if r.p_lrt is not None else np.nan for r in expected]
-        )
-        p_lrt_result = compare_arrays(
-            actual_plrt, expected_plrt, config.p_lrt_rtol, config.atol, "p_lrt"
-        )
-
-        # logl_H1: compare if present in reference (all_tests_full format)
-        expected_logl_all = np.array(
-            [r.logl_H1 if r.logl_H1 is not None else 0.0 for r in expected]
-        )
-        if np.allclose(expected_logl_all, 0.0) or all(
-            r.logl_H1 is None for r in expected
-        ):
-            logl_result = _skipped_result(
-                "logl_H1 skipped (not in GEMMA -lmm 4 format)"
-            )
-        else:
-            actual_logl_all = np.array(
-                [r.logl_H1 if r.logl_H1 is not None else 0.0 for r in actual]
-            )
-            logl_result = compare_arrays(
-                actual_logl_all,
-                expected_logl_all,
-                config.logl_rtol,
-                config.atol,
-                "logl_H1",
-            )
-
-        # l_remle with boundary handling
-        actual_lambda = np.array(
-            [r.l_remle if r.l_remle is not None else np.nan for r in actual]
-        )
-        expected_lambda = np.array(
-            [r.l_remle if r.l_remle is not None else np.nan for r in expected]
-        )
-        lambda_lower_bound = 1e-4
-        boundary_mask = (expected_lambda <= lambda_lower_bound) | (
-            actual_lambda <= lambda_lower_bound
-        )
-        if np.all(boundary_mask):
-            lambda_result = _skipped_result(
-                "l_remle comparison skipped (all values at optimization boundary)"
-            )
-        elif np.any(boundary_mask):
-            non_boundary_actual = actual_lambda[~boundary_mask]
-            non_boundary_expected = expected_lambda[~boundary_mask]
-            lambda_result = compare_arrays(
-                non_boundary_actual,
-                non_boundary_expected,
-                config.lambda_rtol,
-                config.atol,
-                f"l_remle (excluding {np.sum(boundary_mask)} boundary values)",
-            )
-        else:
-            lambda_result = compare_arrays(
-                actual_lambda,
-                expected_lambda,
-                config.lambda_rtol,
-                config.atol,
-                "l_remle",
-            )
-
-        # l_mle with boundary handling
-        actual_lmle = np.array(
-            [r.l_mle if r.l_mle is not None else np.nan for r in actual]
-        )
-        expected_lmle = np.array(
-            [r.l_mle if r.l_mle is not None else np.nan for r in expected]
-        )
-        lambda_upper_bound = 1e4
-        boundary_mask_mle = (
-            (expected_lmle <= lambda_lower_bound)
-            | (actual_lmle <= lambda_lower_bound)
-            | (expected_lmle >= lambda_upper_bound)
-            | (actual_lmle >= lambda_upper_bound)
-        )
-        if np.all(boundary_mask_mle):
-            l_mle_result = _skipped_result(
-                "l_mle comparison skipped (all values at optimization boundary)"
-            )
-        elif np.any(boundary_mask_mle):
-            non_boundary_actual_mle = actual_lmle[~boundary_mask_mle]
-            non_boundary_expected_mle = expected_lmle[~boundary_mask_mle]
-            l_mle_result = compare_arrays(
-                non_boundary_actual_mle,
-                non_boundary_expected_mle,
-                config.lambda_rtol,
-                config.atol,
-                f"l_mle (excluding {np.sum(boundary_mask_mle)} boundary values)",
-            )
-        else:
-            l_mle_result = compare_arrays(
-                actual_lmle,
-                expected_lmle,
-                config.lambda_rtol,
-                config.atol,
-                "l_mle",
-            )
-
+        pwald_result = _pvalue("p_wald", config.pvalue_rtol)
+        p_score_result = _pvalue("p_score", config.pvalue_rtol)
+        p_lrt_result = _pvalue("p_lrt", config.p_lrt_rtol)
+        logl_result = _logl("logl_H1 skipped (not in GEMMA -lmm 4 format)")
+        lambda_result = _lambda("l_remle", check_upper=False)
+        l_mle_result = _lambda("l_mle", check_upper=True)
     elif is_score_test:
-        # Score test: compare p_score, skip Wald-specific columns
-        actual_pscore = np.array([r.p_score for r in actual])
-        expected_pscore = np.array([r.p_score for r in expected])
-        p_score_result = compare_arrays(
-            actual_pscore, expected_pscore, config.pvalue_rtol, config.atol, "p_score"
-        )
+        p_score_result = _pvalue("p_score", config.pvalue_rtol)
         pwald_result = _skipped_result("p_wald skipped (Score test)")
         logl_result = _skipped_result("logl_H1 skipped (Score test)")
         lambda_result = _skipped_result("l_remle skipped (Score test)")
     elif is_lrt_test:
-        # LRT: compare p_lrt and l_mle, skip Wald-specific columns
-        actual_plrt = np.array([r.p_lrt for r in actual])
-        expected_plrt = np.array([r.p_lrt for r in expected])
-        p_lrt_result = compare_arrays(
-            actual_plrt, expected_plrt, config.p_lrt_rtol, config.atol, "p_lrt"
-        )
-
-        actual_lmle = np.array(
-            [r.l_mle if r.l_mle is not None else np.nan for r in actual]
-        )
-        expected_lmle = np.array(
-            [r.l_mle if r.l_mle is not None else np.nan for r in expected]
-        )
-
-        # Lambda MLE comparison with boundary handling (same as REML)
-        lambda_lower_bound = 1e-4
-        lambda_upper_bound = 1e4  # Also check upper bound for MLE
-        boundary_mask = (
-            (expected_lmle <= lambda_lower_bound)
-            | (actual_lmle <= lambda_lower_bound)
-            | (expected_lmle >= lambda_upper_bound)
-            | (actual_lmle >= lambda_upper_bound)
-        )
-
-        if np.all(boundary_mask):
-            l_mle_result = _skipped_result(
-                "l_mle comparison skipped (all values at optimization boundary)"
-            )
-        elif np.any(boundary_mask):
-            non_boundary_actual = actual_lmle[~boundary_mask]
-            non_boundary_expected = expected_lmle[~boundary_mask]
-            l_mle_result = compare_arrays(
-                non_boundary_actual,
-                non_boundary_expected,
-                config.lambda_rtol,
-                config.atol,
-                f"l_mle (excluding {np.sum(boundary_mask)} boundary values)",
-            )
-        else:
-            l_mle_result = compare_arrays(
-                actual_lmle,
-                expected_lmle,
-                config.lambda_rtol,
-                config.atol,
-                "l_mle",
-            )
-
+        p_lrt_result = _pvalue("p_lrt", config.p_lrt_rtol)
+        l_mle_result = _lambda("l_mle", check_upper=True)
         pwald_result = _skipped_result("p_wald skipped (LRT)")
         logl_result = _skipped_result("logl_H1 skipped (LRT)")
         lambda_result = _skipped_result("l_remle skipped (LRT)")
-    else:
-        # Wald test: compare Wald-specific columns
-        actual_pwald = np.array(
-            [r.p_wald if r.p_wald is not None else np.nan for r in actual]
-        )
-        expected_pwald = np.array(
-            [r.p_wald if r.p_wald is not None else np.nan for r in expected]
-        )
-        pwald_result = compare_arrays(
-            actual_pwald, expected_pwald, config.pvalue_rtol, config.atol, "p_wald"
-        )
+    else:  # Wald
+        pwald_result = _pvalue("p_wald", config.pvalue_rtol)
+        logl_result = _logl("logl_H1 skipped (reference missing logl_H1 column)")
+        lambda_result = _lambda("l_remle", check_upper=False)
 
-        actual_logl = np.array(
-            [r.logl_H1 if r.logl_H1 is not None else 0.0 for r in actual]
-        )
-        expected_logl = np.array(
-            [r.logl_H1 if r.logl_H1 is not None else 0.0 for r in expected]
-        )
-
-        # Skip logl_H1 comparison if reference is all zeros (short format)
-        if np.allclose(expected_logl, 0.0):
-            logl_result = _skipped_result(
-                "logl_H1 skipped (reference missing logl_H1 column)"
-            )
-        else:
-            logl_result = compare_arrays(
-                actual_logl, expected_logl, config.logl_rtol, config.atol, "logl_H1"
-            )
-
-        actual_lambda = np.array(
-            [r.l_remle if r.l_remle is not None else np.nan for r in actual]
-        )
-        expected_lambda = np.array(
-            [r.l_remle if r.l_remle is not None else np.nan for r in expected]
-        )
-
-        # Lambda comparison with boundary handling
-        lambda_lower_bound = 1e-4
-        boundary_mask = (expected_lambda <= lambda_lower_bound) | (
-            actual_lambda <= lambda_lower_bound
-        )
-
-        if np.all(boundary_mask):
-            lambda_result = _skipped_result(
-                "l_remle comparison skipped (all values at optimization boundary)"
-            )
-        elif np.any(boundary_mask):
-            non_boundary_actual = actual_lambda[~boundary_mask]
-            non_boundary_expected = expected_lambda[~boundary_mask]
-            lambda_result = compare_arrays(
-                non_boundary_actual,
-                non_boundary_expected,
-                config.lambda_rtol,
-                config.atol,
-                f"l_remle (excluding {np.sum(boundary_mask)} boundary values)",
-            )
-        else:
-            lambda_result = compare_arrays(
-                actual_lambda,
-                expected_lambda,
-                config.lambda_rtol,
-                config.atol,
-                "l_remle",
-            )
-
-    # Overall pass if all relevant columns pass and no mismatched SNPs
-    # Note: For LRT, beta/se are NaN so we skip those checks
+    # Overall pass: every column active for the test type must pass and SNP IDs
+    # must line up. LRT has NaN beta/se by construction, so it verifies both
+    # sides are all-NaN rather than checking the (meaningless) compare result.
+    no_id_mismatch = len(mismatched) == 0
     if is_all_tests:
-        # All-tests: ALL column comparisons must pass
         all_passed = (
             beta_result.passed
             and se_result.passed
@@ -929,37 +582,37 @@ def compare_assoc_results(
             and p_score_result.passed
             and p_lrt_result.passed
             and l_mle_result.passed
-            and len(mismatched) == 0
+            and no_id_mismatch
         )
     elif is_lrt_test:
-        # LRT beta/se are NaN by construction — verify both sides are all-NaN
         beta_all_nan = np.all(np.isnan(actual_beta)) and np.all(np.isnan(expected_beta))
         se_all_nan = np.all(np.isnan(actual_se)) and np.all(np.isnan(expected_se))
         all_passed = (
             af_result.passed
             and beta_all_nan
             and se_all_nan
-            and len(mismatched) == 0
             and p_lrt_result.passed
             and l_mle_result.passed
+            and no_id_mismatch
         )
-    else:
+    elif is_score_test:
         all_passed = (
             beta_result.passed
             and se_result.passed
             and af_result.passed
-            and len(mismatched) == 0
+            and p_score_result.passed
+            and no_id_mismatch
         )
-        # Add test-type specific checks
-        if is_score_test:
-            all_passed = all_passed and p_score_result.passed
-        else:
-            all_passed = (
-                all_passed
-                and pwald_result.passed
-                and logl_result.passed
-                and lambda_result.passed
-            )
+    else:  # Wald
+        all_passed = (
+            beta_result.passed
+            and se_result.passed
+            and af_result.passed
+            and pwald_result.passed
+            and logl_result.passed
+            and lambda_result.passed
+            and no_id_mismatch
+        )
 
     return AssocComparisonResult(
         passed=all_passed,

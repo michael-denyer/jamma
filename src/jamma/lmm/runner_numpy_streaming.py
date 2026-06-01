@@ -54,11 +54,6 @@ from jamma.lmm.compute_numpy import (
     compute_mode4_fused_general_c_ws,
     compute_wald_fused_c_ws,
     compute_wald_fused_general_c_ws,
-    create_lmm_workspace_fused,
-    create_lmm_workspace_fused_general,
-    create_lmm_workspace_mode4,
-    create_lmm_workspace_mode4_fused,
-    create_lmm_workspace_mode4_fused_general,
 )
 from jamma.lmm.dispatch import select_dispatch_path
 from jamma.lmm.impute import impute_missing_inplace
@@ -82,7 +77,7 @@ from jamma.lmm.results import (
 )
 from jamma.lmm.runner_numpy import (
     _MIN_PIPELINE_CHUNKS,
-    _create_wald_workspace_for_ncvt,
+    _create_workspaces,
     _guarded_compute,
     compute_adaptive_core_split,
     compute_chunk_size_numpy,
@@ -497,154 +492,26 @@ def run_lmm_association_numpy_streaming(
         else None
     )
 
-    # Create persistent C workspace (fused or split)
-    if use_split and lmm_mode in (1, 4):
-        if use_fused_general:
-            # Fused general workspace: UtW + Uty for on-the-fly dot products.
-            # Mode 4 extends with null-model fields for MLE/LRT.
-            from jamma.lmm.likelihood import build_pab_table_for_c
-
-            pab_c = build_pab_table_for_c(n_cvt)
-            pab_kwargs = {
-                k: pab_c[k]
-                for k in [
-                    "invariant_indices",
-                    "varying_indices",
-                    "logdet_diag_rows",
-                    "logdet_diag_cols",
-                    "level_offsets",
-                    "level_counts",
-                    "entries",
-                    "idx_xx",
-                    "idx_xy",
-                    "idx_yy",
-                    "var_a_cols",
-                    "var_b_cols",
-                ]
-            }
-            if lmm_mode == 4:
-                lmm_workspace = create_lmm_workspace_mode4_fused_general(
-                    eigenvalues_np,
-                    uab_invariant_soa,
-                    UtW,
-                    Uty,
-                    n_samples,
-                    l_min,
-                    l_max,
-                    n_grid,
-                    n_refine,
-                    pipeline_omp_threads,
-                    n_cvt=n_cvt,
-                    **pab_kwargs,
-                    hi_eval_null=Hi_eval_null,
-                    logl_H0=logl_H0,
-                )
-            else:
-                lmm_workspace = create_lmm_workspace_fused_general(
-                    eigenvalues_np,
-                    uab_invariant_soa,
-                    UtW,
-                    Uty,
-                    n_samples,
-                    l_min,
-                    l_max,
-                    n_grid,
-                    n_refine,
-                    pipeline_omp_threads,
-                    n_cvt=n_cvt,
-                    **pab_kwargs,
-                )
-        elif use_fused and lmm_mode == 4:
-            w = UtW[:, 0].copy()
-            lmm_workspace = create_lmm_workspace_mode4_fused(
-                eigenvalues_np,
-                uab_invariant_soa,
-                w,
-                Uty,
-                n_samples,
-                l_min,
-                l_max,
-                n_grid,
-                n_refine,
-                pipeline_omp_threads,
-                hi_eval_null=Hi_eval_null,
-                logl_H0=logl_H0,
-            )
-        elif use_fused:
-            w = UtW[:, 0].copy()
-            lmm_workspace = create_lmm_workspace_fused(
-                eigenvalues_np,
-                uab_invariant_soa,
-                w,
-                Uty,
-                n_samples,
-                l_min,
-                l_max,
-                n_grid,
-                n_refine,
-                pipeline_omp_threads,
-            )
-        elif use_fused_mode4:
-            lmm_workspace = create_lmm_workspace_mode4(
-                eigenvalues_np,
-                uab_invariant_soa,
-                n_samples,
-                l_min,
-                l_max,
-                n_grid,
-                n_refine,
-                pipeline_omp_threads,
-                Hi_eval_null,
-                logl_H0,
-            )
-        else:
-            lmm_workspace = _create_wald_workspace_for_ncvt(
-                n_cvt,
-                eigenvalues_np,
-                uab_invariant_soa,
-                n_samples,
-                l_min,
-                l_max,
-                n_grid,
-                n_refine,
-                pipeline_omp_threads,
-            )
-    else:
-        lmm_workspace = None
-
-    # Create Score/LRT workspaces (persistent across all chunks).
-    score_fused_workspace = None
-    lrt_fused_workspace = None
-
-    if use_fused_score_ws:
-        from jamma.lmm.compute_numpy import _create_workspace_score_fused_c
-
-        score_fused_workspace = _create_workspace_score_fused_c(
-            w,
-            Uty,
-            Hi_eval_null,
-            eigenvalues_np,
-            uab_invariant_soa,
-            n_samples,
-            pipeline_omp_threads,
-        )
-
-    if use_fused_lrt_ws:
-        from jamma.lmm.compute_numpy import _create_workspace_lrt_fused_c
-
-        lrt_fused_workspace = _create_workspace_lrt_fused_c(
-            w,
-            Uty,
-            eigenvalues_np,
-            uab_invariant_soa,
-            n_samples,
-            l_min,
-            l_max,
-            n_grid,
-            n_refine,
-            logl_H0,
-            pipeline_omp_threads,
-        )
+    # Create persistent C workspaces once, before the chunk loop (shared with
+    # the batch runner — see _create_workspaces).
+    lmm_workspace, score_fused_workspace, lrt_fused_workspace = _create_workspaces(
+        dispatch,
+        lmm_mode,
+        n_cvt,
+        eigenvalues_np,
+        uab_invariant_soa,
+        UtW,
+        Uty,
+        w,
+        Hi_eval_null,
+        logl_H0,
+        n_samples,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        pipeline_omp_threads,
+    )
 
     # === Timing accumulators ===
     last_run_timing.clear()

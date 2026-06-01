@@ -323,7 +323,7 @@ def test_loco_numpy_multipass_equivalence():
     if not _LOCO_BFILE.with_suffix(".bed").exists():
         pytest.skip("gemma_loco fixture not available")
 
-    from jamma.lmm.loco import _compute_loco_kinship_streaming_numpy
+    from jamma.kinship import compute_loco_kinship_streaming
 
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
 
@@ -337,8 +337,9 @@ def test_loco_numpy_multipass_equivalence():
 
     # Multi-pass: force batch_size_chrs=1 via debug override (_max_batch_chrs).
     # The fixture has 3 chromosomes, so this triggers 3 disk passes.
-    # We patch _compute_loco_kinship_streaming_numpy to inject _max_batch_chrs=1.
-    original_fn = _compute_loco_kinship_streaming_numpy
+    # We patch compute_loco_kinship_streaming (as imported into loco) to inject
+    # _max_batch_chrs=1.
+    original_fn = compute_loco_kinship_streaming
 
     def patched_fn(*args, **kwargs):
         kwargs["_max_batch_chrs"] = 1
@@ -350,7 +351,7 @@ def test_loco_numpy_multipass_equivalence():
 
     with patch.object(
         loco_module,
-        "_compute_loco_kinship_streaming_numpy",
+        "compute_loco_kinship_streaming",
         side_effect=patched_fn,
     ):
         loco_multi = run_lmm_loco(
@@ -384,13 +385,13 @@ def test_loco_numpy_multipass_equivalence():
 def test_loco_numpy_valid_sample_subsetting():
     """K_loco is computed at valid-sample size when valid_indices is provided.
 
-    Verifies LOCO-07: _compute_loco_kinship_streaming_numpy returns n_valid x n_valid
+    Verifies LOCO-07: compute_loco_kinship_streaming returns n_valid x n_valid
     kinship matrices when valid_indices is provided, rather than n_samples x n_samples.
     """
     if not _LOCO_BFILE.with_suffix(".bed").exists():
         pytest.skip("gemma_loco fixture not available")
 
-    from jamma.lmm.loco import _compute_loco_kinship_streaming_numpy
+    from jamma.kinship import compute_loco_kinship_streaming
 
     meta = get_plink_metadata(_LOCO_BFILE)
     n_samples = meta["n_samples"]
@@ -399,11 +400,12 @@ def test_loco_numpy_valid_sample_subsetting():
     valid_indices = np.arange(0, n_samples - 5)
     n_valid = len(valid_indices)
 
-    loco_iter, cache = _compute_loco_kinship_streaming_numpy(
+    loco_iter, cache = compute_loco_kinship_streaming(
         _LOCO_BFILE,
         check_memory=False,
         show_progress=False,
         valid_indices=valid_indices,
+        return_snp_stats=True,
     )
 
     for chr_name, K_loco in loco_iter:
@@ -423,7 +425,7 @@ def test_loco_numpy_show_progress_true():
     """NumPy LOCO with show_progress=True completes without error.
 
     Exercises the tqdm progress bars and logger.info calls in
-    _compute_loco_kinship_streaming_numpy and run_lmm_loco.
+    compute_loco_kinship_streaming and run_lmm_loco.
     Runs in NumPy-only CI.
     """
     if not _LOCO_BFILE.with_suffix(".bed").exists():

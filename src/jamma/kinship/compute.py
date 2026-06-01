@@ -25,6 +25,7 @@ import gc
 import time
 import warnings
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -45,10 +46,54 @@ from jamma.io.plink import (
     get_plink_metadata,
     partitions_from_metadata,
     stream_genotype_chunks,
+    validate_genotype_values,
 )
 from jamma.jlinalg import compute_snp_stats_chunk
 from jamma.kinship.missing import impute_and_center, impute_center_and_standardize
 from jamma.utils import chr_sort_key
+
+
+@dataclass(frozen=True)
+class SnpStatsCache:
+    """Global SNP statistics from kinship streaming PASS 1.
+
+    Stores per-SNP means, missing counts, and variances for ALL SNPs in the
+    BIM file (unfiltered), computed over ALL samples (including those with
+    missing phenotypes). Per-chromosome stats are extracted by indexing
+    with chr_snp_indices: cache.col_means[chr_snp_indices].
+
+    The all-samples population matters: ``n_samples`` is the denominator for
+    miss_rate and the basis for col_means / col_vars. When filtering in the
+    association pass, use ``cache.n_samples`` — NOT n_valid — to match the
+    population the stats were computed from.
+
+    Returned by ``compute_loco_kinship_streaming(return_snp_stats=True)`` so the
+    association pass can reuse PASS-1 statistics instead of re-reading the BED
+    once per chromosome.
+    """
+
+    col_means: np.ndarray  # shape (n_snps_total,), float64
+    miss_counts: np.ndarray  # shape (n_snps_total,), intp
+    col_vars: np.ndarray  # shape (n_snps_total,), float64
+    n_samples: int  # sample count stats were computed over (ALL samples)
+
+    def __post_init__(self) -> None:
+        """Validate array shapes and freeze array contents."""
+        if not (self.col_means.shape == self.miss_counts.shape == self.col_vars.shape):
+            raise ValueError(
+                f"Array shape mismatch: col_means={self.col_means.shape}, "
+                f"miss_counts={self.miss_counts.shape}, "
+                f"col_vars={self.col_vars.shape}"
+            )
+        if self.col_means.ndim != 1:
+            raise ValueError(f"Expected 1-D arrays, got ndim={self.col_means.ndim}")
+        for arr in (self.col_means, self.miss_counts, self.col_vars):
+            arr.flags.writeable = False
+
+    @property
+    def n_snps(self) -> int:
+        """Number of SNPs in the cache (unfiltered BIM count)."""
+        return self.col_means.shape[0]
 
 
 def _ensure_float64(arr: np.ndarray) -> np.ndarray:
@@ -994,7 +1039,12 @@ def compute_loco_kinship_streaming(
     ksnps_indices: np.ndarray | None = None,
     valid_indices: np.ndarray | None = None,
     _copy_yielded_matrices: bool = True,
-) -> Iterator[tuple[str, np.ndarray]]:
+    return_snp_stats: bool = False,
+    _max_batch_chrs: int | None = None,
+) -> (
+    Iterator[tuple[str, np.ndarray]]
+    | tuple[Iterator[tuple[str, np.ndarray]], SnpStatsCache]
+):
     """Compute LOCO kinship matrices from disk-streamed genotypes.
 
     Two-pass streaming approach that accumulates both S_full and per-chromosome
@@ -1022,12 +1072,21 @@ def compute_loco_kinship_streaming(
             (n_valid, n_valid) where n_valid = len(valid_indices), eliminating
             the post-hoc np.ix_ copy. When None, K_loco has shape
             (n_samples, n_samples) (default, backward-compatible).
+        return_snp_stats: If True, also return the PASS-1 SnpStatsCache (global
+            per-SNP means/miss-counts/variances over all samples) so callers
+            (the LOCO LMM pass) can reuse it instead of re-reading the BED per
+            chromosome. Changes the return type from an iterator to
+            ``(iterator, SnpStatsCache)``.
+        _max_batch_chrs: Debug override forcing a fixed chromosomes-per-pass
+            batch size (bypasses memory-based sizing). Used by tests to exercise
+            multi-pass without mocking psutil.
 
-    Yields:
-        Tuple of (chr_name, K_loco) where chr_name is the chromosome being
-        excluded and K_loco is the LOCO kinship matrix. Shape is
-        (n_valid, n_valid) when valid_indices is provided, otherwise
-        (n_samples, n_samples).
+    Returns:
+        An iterator of (chr_name, K_loco) pairs, where chr_name is the
+        chromosome being excluded and K_loco is the LOCO kinship matrix with
+        shape (n_valid, n_valid) when valid_indices is provided, else
+        (n_samples, n_samples). When ``return_snp_stats`` is True, returns
+        ``(iterator, SnpStatsCache)`` instead.
 
     Raises:
         MemoryError: If check_memory=True and insufficient memory for even
@@ -1079,7 +1138,9 @@ def compute_loco_kinship_streaming(
             stats_iterator, total=n_chunks, desc="LOCO: SNP statistics"
         )
 
+    n_unexpected_total = 0
     for chunk, start, end in stats_iterator:
+        n_unexpected_total += validate_genotype_values(chunk)
         chunk = np.ascontiguousarray(chunk)
         compute_snp_stats_chunk(
             chunk,
@@ -1088,6 +1149,26 @@ def compute_loco_kinship_streaming(
             all_vars[start:end],
         )
         del chunk  # Free ~1.6GB per chunk at scale before next iteration
+
+    if n_unexpected_total > 0:
+        logger.warning(
+            f"LOCO kinship genotype validation: {n_unexpected_total} values outside "
+            f"expected range {{0, 1, 2, NaN}}"
+        )
+
+    # Cache global PASS-1 stats (computed over ALL samples) for the association
+    # pass when requested. Must be built BEFORE the del statements below free
+    # all_means / all_vars. n_samples is the population the stats span.
+    snp_stats_cache = (
+        SnpStatsCache(
+            col_means=all_means.copy(),
+            miss_counts=all_miss_counts.copy(),
+            col_vars=all_vars.copy(),
+            n_samples=n_samples,
+        )
+        if return_snp_stats
+        else None
+    )
 
     # Compute filters
     miss_rates = all_miss_counts / n_samples
@@ -1173,122 +1254,97 @@ def compute_loco_kinship_streaming(
             f"available {available_gb:.1f}GB"
         )
 
-    single_pass = single_pass_gb <= available_gb * 0.9
-
-    if single_pass:
-        # === SINGLE-PASS: accumulate S_full and all S_chr together ===
-        if single_pass_gb > 10:
-            logger.info(
-                f"LOCO streaming: single-pass ({single_pass_gb:.1f}GB for "
-                f"{n_chr_with_snps} chromosomes)"
-            )
-
-        S_full_np, S_chr = _stream_s_full_and_chr(
-            bed_path,
-            n_samples,
-            n_snps,
-            snp_indices,
-            chromosomes,
-            chrs_with_snps,
-            chunk_size,
-            show_progress,
-            desc="LOCO: kinship accumulation",
-            valid_indices=valid_indices,
-        )
-
-        elapsed = time.perf_counter() - start_time
-        logger.info(
-            f"LOCO streaming accumulation complete in {elapsed:.2f}s, "
-            f"computing {len(S_chr)} LOCO matrices"
-        )
-
-        K_loco_buf = np.empty_like(S_full_np)
-        yield from _yield_loco_matrices(
-            S_full_np,
-            S_chr,
-            n_chr_filtered,
-            n_filtered,
-            K_loco_buf,
-            copy_output=_copy_yielded_matrices,
-        )
-        yield from _yield_full_kinship_fallback(
-            S_full_np, chrs_without_snps, n_filtered
-        )
+    # Single-pass vs multi-pass decision and the chromosomes-per-pass batch
+    # size, decided up front so the test override (_max_batch_chrs) and the
+    # memory-based sizing share one place.
+    if _max_batch_chrs is not None:
+        batch_size = _max_batch_chrs
+        single_pass = n_chr_with_snps <= batch_size
     else:
-        # === MULTI-PASS: batch chromosomes across disk passes ===
-        # First pass holds S_full + batch S_chr + chunk buffer.
-        # Reserve 2x matrix_gb for safety margin.
-        #
-        # The consumer eigendecomposes each K_loco while the generator is
-        # suspended with remaining S_chr matrices still alive. Reserve
-        # eigendecomp workspace so the batch doesn't exhaust memory before
-        # eigendecomp can run. The reservation covers the full DSYEVR peak:
-        #   - K_loco (yielded to consumer) + Z (eigenvectors) = 2 matrices
-        #   - DSYEVR workspace = O(N) additional
-        eigendecomp_reserve_gb = _dsyevr_peak_gb(n_samples)
-        usable_gb = (
-            available_gb * 0.9
-            - 2 * matrix_gb
-            - chunk_buffer_gb
-            - eigendecomp_reserve_gb
-        )
-        batch_size = max(1, int(usable_gb / matrix_gb))
+        single_pass = single_pass_gb <= available_gb * 0.9
+        if single_pass:
+            batch_size = n_chr_with_snps  # unused in the single-pass branch
+        else:
+            # The consumer eigendecomposes each K_loco while the generator is
+            # suspended with remaining S_chr matrices still alive. Reserve
+            # eigendecomp workspace (full DSYEVR peak: K_loco + Z + O(N)) so the
+            # batch doesn't exhaust memory before eigendecomp can run.
+            eigendecomp_reserve_gb = _dsyevr_peak_gb(n_samples)
+            usable_gb = (
+                available_gb * 0.9
+                - 2 * matrix_gb
+                - chunk_buffer_gb
+                - eigendecomp_reserve_gb
+            )
+            batch_size = max(1, int(usable_gb / matrix_gb))
 
-        n_batches = (n_chr_with_snps + batch_size - 1) // batch_size
-        logger.warning(
-            f"LOCO streaming: multi-pass mode ({n_batches} passes, "
-            f"{batch_size} chromosomes/pass). Single-pass would need "
-            f"{single_pass_gb:.1f}GB, available {available_gb:.1f}GB."
-        )
+    def _generate() -> Iterator[tuple[str, np.ndarray]]:
+        if single_pass:
+            # === SINGLE-PASS: accumulate S_full and all S_chr together ===
+            if single_pass_gb > 10:
+                logger.info(
+                    f"LOCO streaming: single-pass ({single_pass_gb:.1f}GB for "
+                    f"{n_chr_with_snps} chromosomes)"
+                )
 
-        # First batch: compute S_full + first batch of S_chr
-        first_batch = chrs_with_snps[:batch_size]
-        S_full_np, S_chr = _stream_s_full_and_chr(
-            bed_path,
-            n_samples,
-            n_snps,
-            snp_indices,
-            chromosomes,
-            first_batch,
-            chunk_size,
-            show_progress,
-            desc=f"LOCO: pass 1/{n_batches} (S_full + {len(first_batch)} chr)",
-            valid_indices=valid_indices,
-        )
-
-        K_loco_buf = np.empty_like(S_full_np)
-        yield from _yield_loco_matrices(
-            S_full_np,
-            S_chr,
-            n_chr_filtered,
-            n_filtered,
-            K_loco_buf,
-            copy_output=_copy_yielded_matrices,
-        )
-        del S_chr
-        gc.collect()
-
-        # Subsequent batches: only accumulate S_chr (S_full already computed)
-        for batch_idx in range(1, n_batches):
-            batch_start = batch_idx * batch_size
-            batch_chrs = chrs_with_snps[batch_start : batch_start + batch_size]
-
-            _, S_chr = _stream_s_full_and_chr(
+            S_full_np, S_chr = _stream_s_full_and_chr(
                 bed_path,
                 n_samples,
                 n_snps,
                 snp_indices,
                 chromosomes,
-                batch_chrs,
+                chrs_with_snps,
                 chunk_size,
                 show_progress,
-                desc=(
-                    f"LOCO: pass {batch_idx + 1}/{n_batches} ({len(batch_chrs)} chr)"
-                ),
-                S_full_accum=False,
+                desc="LOCO: kinship accumulation",
                 valid_indices=valid_indices,
             )
 
+            elapsed = time.perf_counter() - start_time
+            logger.info(
+                f"LOCO streaming accumulation complete in {elapsed:.2f}s, "
+                f"computing {len(S_chr)} LOCO matrices"
+            )
+
+            K_loco_buf = np.empty_like(S_full_np)
+            yield from _yield_loco_matrices(
+                S_full_np,
+                S_chr,
+                n_chr_filtered,
+                n_filtered,
+                K_loco_buf,
+                copy_output=_copy_yielded_matrices,
+            )
+            yield from _yield_full_kinship_fallback(
+                S_full_np, chrs_without_snps, n_filtered
+            )
+        else:
+            # === MULTI-PASS: batch chromosomes across disk passes ===
+            # S_full is computed once in pass 1; later passes accumulate only
+            # their batch's S_chr. batch_size was decided above.
+            n_batches = (n_chr_with_snps + batch_size - 1) // batch_size
+            logger.warning(
+                f"LOCO streaming: multi-pass mode ({n_batches} passes, "
+                f"{batch_size} chromosomes/pass). Single-pass would need "
+                f"{single_pass_gb:.1f}GB, available {available_gb:.1f}GB."
+            )
+
+            # First batch: compute S_full + first batch of S_chr
+            first_batch = chrs_with_snps[:batch_size]
+            S_full_np, S_chr = _stream_s_full_and_chr(
+                bed_path,
+                n_samples,
+                n_snps,
+                snp_indices,
+                chromosomes,
+                first_batch,
+                chunk_size,
+                show_progress,
+                desc=f"LOCO: pass 1/{n_batches} (S_full + {len(first_batch)} chr)",
+                valid_indices=valid_indices,
+            )
+
+            K_loco_buf = np.empty_like(S_full_np)
             yield from _yield_loco_matrices(
                 S_full_np,
                 S_chr,
@@ -1300,12 +1356,49 @@ def compute_loco_kinship_streaming(
             del S_chr
             gc.collect()
 
-        yield from _yield_full_kinship_fallback(
-            S_full_np, chrs_without_snps, n_filtered
-        )
+            # Subsequent batches: only accumulate S_chr (S_full already computed)
+            for batch_idx in range(1, n_batches):
+                batch_start = batch_idx * batch_size
+                batch_chrs = chrs_with_snps[batch_start : batch_start + batch_size]
 
-        elapsed = time.perf_counter() - start_time
-        logger.info(
-            f"LOCO multi-pass complete in {elapsed:.2f}s, "
-            f"{n_batches} passes over {n_chr_with_snps} chromosomes"
-        )
+                _, S_chr = _stream_s_full_and_chr(
+                    bed_path,
+                    n_samples,
+                    n_snps,
+                    snp_indices,
+                    chromosomes,
+                    batch_chrs,
+                    chunk_size,
+                    show_progress,
+                    desc=(
+                        f"LOCO: pass {batch_idx + 1}/{n_batches} "
+                        f"({len(batch_chrs)} chr)"
+                    ),
+                    S_full_accum=False,
+                    valid_indices=valid_indices,
+                )
+
+                yield from _yield_loco_matrices(
+                    S_full_np,
+                    S_chr,
+                    n_chr_filtered,
+                    n_filtered,
+                    K_loco_buf,
+                    copy_output=_copy_yielded_matrices,
+                )
+                del S_chr
+                gc.collect()
+
+            yield from _yield_full_kinship_fallback(
+                S_full_np, chrs_without_snps, n_filtered
+            )
+
+            elapsed = time.perf_counter() - start_time
+            logger.info(
+                f"LOCO multi-pass complete in {elapsed:.2f}s, "
+                f"{n_batches} passes over {n_chr_with_snps} chromosomes"
+            )
+
+    if return_snp_stats:
+        return _generate(), snp_stats_cache
+    return _generate()

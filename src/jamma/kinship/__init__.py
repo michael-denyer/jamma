@@ -15,6 +15,7 @@ Key functions:
 
 from jamma.io.plink import get_chromosome_partitions
 from jamma.kinship.compute import (
+    SnpStatsCache,
     compute_centered_kinship,
     compute_kinship_streaming,
     compute_loco_kinship,
@@ -29,6 +30,7 @@ from jamma.kinship.io import (
 from jamma.kinship.missing import impute_and_center, impute_center_and_standardize
 
 __all__ = [
+    "SnpStatsCache",
     "compute_centered_kinship",
     "compute_kinship_streaming",
     "compute_loco_kinship",

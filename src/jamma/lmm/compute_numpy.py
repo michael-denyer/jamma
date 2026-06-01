@@ -80,42 +80,165 @@ class AccelImport(NamedTuple):
     compute_lrt_fused_ws_c: object | None
 
 
+# The five availability flags vs the thirty object-valued symbol fields. Both
+# the all-unavailable sentinel and the loader fill object fields with None and
+# flags with False, derived from AccelImport._fields so a new field can't be
+# forgotten in one place.
+_FLAG_FIELDS = (
+    "accel_available",
+    "split_available",
+    "general_available",
+    "has_openmp",
+    "mode4_available",
+)
+_OBJECT_FIELDS = tuple(f for f in AccelImport._fields if f not in _FLAG_FIELDS)
+
 _ACCEL_UNAVAILABLE = AccelImport(
-    accel_available=False,
-    split_available=False,
-    general_available=False,
-    has_openmp=False,
-    mode4_available=False,
-    compute_batch_c=None,
-    compute_batch_split_c=None,
-    create_workspace_split_c=None,
-    compute_lmm_chunk_split_c=None,
-    create_workspace_general_c=None,
-    compute_lmm_chunk_general_c=None,
-    compute_score_batch_c=None,
-    compute_lrt_batch_c=None,
-    create_workspace_mode4_split_c=None,
-    compute_mode4_chunk_split_c=None,
-    compute_score_batch_general_c=None,
-    compute_lrt_batch_general_c=None,
-    compute_score_split_c=None,
-    compute_lrt_split_c=None,
-    compute_score_split_general_c=None,
-    compute_lrt_split_general_c=None,
-    compute_score_fused_c=None,
-    compute_lrt_fused_c=None,
-    create_workspace_fused_c=None,
-    compute_lmm_chunk_fused_c=None,
-    create_workspace_mode4_fused_c=None,
-    compute_mode4_chunk_fused_c=None,
-    create_workspace_fused_general_c=None,
-    compute_lmm_chunk_fused_general_c=None,
-    create_workspace_mode4_fused_general_c=None,
-    compute_mode4_chunk_fused_general_c=None,
-    create_workspace_score_fused_c=None,
-    compute_score_fused_ws_c=None,
-    create_workspace_lrt_fused_c=None,
-    compute_lrt_fused_ws_c=None,
+    **dict.fromkeys(_FLAG_FIELDS, False),
+    **dict.fromkeys(_OBJECT_FIELDS, None),
+)
+
+# Core split symbols a valid ABI build always exports. Maps AccelImport field
+# name -> C symbol name (they differ only for the two "batch" entries).
+_CORE_SYMBOLS = {
+    "compute_batch_c": "compute_lmm_batch_c",
+    "compute_batch_split_c": "compute_lmm_batch_split_c",
+    "create_workspace_split_c": "create_workspace_split_c",
+    "compute_lmm_chunk_split_c": "compute_lmm_chunk_split_c",
+}
+
+
+class _OptionalGroup(NamedTuple):
+    """One optional C-symbol group loaded after the ABI-validated core import.
+
+    Every optional symbol shares its AccelImport field name with its C symbol
+    name, so a group is just the field names plus how to report it missing. A
+    group loads as a unit (the build exports them together per ABI level); if
+    any member is absent the whole group stays unbound and is logged once.
+    ``level`` "error" marks symbols a valid ABI v11 build must export, so their
+    absence signals a corrupt build.
+    """
+
+    fields: tuple[str, ...]
+    level: str  # "warning", "debug", or "error"
+    message: str
+
+
+# Optional capabilities in ABI order (matches the historical load sequence).
+_OPTIONAL_GROUPS: tuple[_OptionalGroup, ...] = (
+    _OptionalGroup(
+        ("create_workspace_general_c", "compute_lmm_chunk_general_c"),
+        "warning",
+        "C extension missing general n_cvt symbols "
+        "(create_workspace_general_c / compute_lmm_chunk_general_c). "
+        "Falling back to Python path for n_cvt > 1.",
+    ),
+    _OptionalGroup(
+        ("compute_score_batch_c",),
+        "warning",
+        "C extension missing compute_score_batch_c. Score will use Python path.",
+    ),
+    _OptionalGroup(
+        ("compute_lrt_batch_c",),
+        "warning",
+        "C extension missing compute_lrt_batch_c. LRT will use Python path.",
+    ),
+    _OptionalGroup(
+        ("create_workspace_mode4_split_c", "compute_mode4_chunk_split_c"),
+        "warning",
+        "C extension missing mode-4 fused functions. "
+        "Mode 4 will use reconstruct+compose fallback.",
+    ),
+    _OptionalGroup(
+        ("compute_score_batch_general_c",),
+        "warning",
+        "C extension missing compute_score_batch_general_c. "
+        "Score for n_cvt>1 will use Python path.",
+    ),
+    _OptionalGroup(
+        ("compute_lrt_batch_general_c",),
+        "warning",
+        "C extension missing compute_lrt_batch_general_c. "
+        "LRT for n_cvt>1 will use Python path.",
+    ),
+    _OptionalGroup(
+        ("compute_score_split_c",),
+        "warning",
+        "C extension missing compute_score_split_c. "
+        "Score split will fall back to reconstruct_uab_from_soa.",
+    ),
+    _OptionalGroup(
+        ("compute_lrt_split_c",),
+        "warning",
+        "C extension missing compute_lrt_split_c. "
+        "LRT split will fall back to reconstruct_uab_from_soa.",
+    ),
+    _OptionalGroup(
+        ("compute_score_split_general_c",),
+        "debug",
+        "C extension missing compute_score_split_general_c. "
+        "Score split for n_cvt>1 will fall back to reconstruct_uab_from_soa.",
+    ),
+    _OptionalGroup(
+        ("compute_lrt_split_general_c",),
+        "debug",
+        "C extension missing compute_lrt_split_general_c. "
+        "LRT split for n_cvt>1 will fall back to reconstruct_uab_from_soa.",
+    ),
+    _OptionalGroup(
+        ("compute_score_fused_c",),
+        "warning",
+        "C extension missing compute_score_fused_c. "
+        "Score fused will fall back to split path.",
+    ),
+    _OptionalGroup(
+        ("compute_lrt_fused_c",),
+        "warning",
+        "C extension missing compute_lrt_fused_c. "
+        "LRT fused will fall back to split path.",
+    ),
+    _OptionalGroup(
+        ("create_workspace_score_fused_c",),
+        "debug",
+        "C extension missing create_workspace_score_fused_c.",
+    ),
+    _OptionalGroup(
+        ("compute_score_fused_ws_c",),
+        "debug",
+        "C extension missing compute_score_fused_ws_c.",
+    ),
+    _OptionalGroup(
+        ("create_workspace_lrt_fused_c",),
+        "debug",
+        "C extension missing create_workspace_lrt_fused_c.",
+    ),
+    _OptionalGroup(
+        ("compute_lrt_fused_ws_c",),
+        "debug",
+        "C extension missing compute_lrt_fused_ws_c.",
+    ),
+    _OptionalGroup(
+        (
+            "create_workspace_fused_c",
+            "compute_lmm_chunk_fused_c",
+            "create_workspace_mode4_fused_c",
+            "compute_mode4_chunk_fused_c",
+        ),
+        "error",
+        "C extension ABI validated but fused Uab symbols missing. This indicates "
+        "build corruption — recompile: python -m jamma.lmm._compile_accel",
+    ),
+    _OptionalGroup(
+        (
+            "create_workspace_fused_general_c",
+            "compute_lmm_chunk_fused_general_c",
+            "create_workspace_mode4_fused_general_c",
+            "compute_mode4_chunk_fused_general_c",
+        ),
+        "error",
+        "C extension ABI validated but fused general symbols missing. This "
+        "indicates build corruption — recompile: python -m jamma.lmm._compile_accel",
+    ),
 )
 
 
@@ -137,23 +260,24 @@ def _try_import_accel() -> AccelImport:
     # are anything other than "", "0".
     if os.environ.get("JAMMA_FORCE_NUMPY_FALLBACK", "").strip() not in ("", "0"):
         return _ACCEL_UNAVAILABLE
+
     try:
-        from jamma.lmm._lmm_accel import ABI_VERSION as abi
-        from jamma.lmm._lmm_accel import HAS_OPENMP as has_omp
-        from jamma.lmm._lmm_accel import compute_lmm_batch_c as batch_c
-        from jamma.lmm._lmm_accel import (
-            compute_lmm_batch_split_c as batch_split_c,
-        )
-        from jamma.lmm._lmm_accel import (
-            compute_lmm_chunk_split_c as ws_chunk,
-        )
-        from jamma.lmm._lmm_accel import (
-            create_workspace_split_c as ws_create,
-        )
+        import jamma.lmm._lmm_accel as mod
     except ImportError as e:
         from loguru import logger
 
         logger.debug(f"C extension import failed: {e}")
+        return _ACCEL_UNAVAILABLE
+
+    # The ABI-validated core: version, OpenMP flag, and the split symbols a
+    # valid build always exports. Their absence is treated as an import failure.
+    abi = getattr(mod, "ABI_VERSION", None)
+    has_omp = getattr(mod, "HAS_OPENMP", None)
+    core = {field: getattr(mod, csym, None) for field, csym in _CORE_SYMBOLS.items()}
+    if abi is None or has_omp is None or any(v is None for v in core.values()):
+        from loguru import logger
+
+        logger.debug("C extension import failed: ABI/core symbols missing")
         return _ACCEL_UNAVAILABLE
 
     if abi != _EXPECTED_ABI_VERSION:
@@ -166,328 +290,32 @@ def _try_import_accel() -> AccelImport:
         )
         return _ACCEL_UNAVAILABLE
 
-    # General n_cvt support — expected since ABI v4
-    try:
-        from jamma.lmm._lmm_accel import (
-            compute_lmm_chunk_general_c as ws_gen_chunk,
-        )
-        from jamma.lmm._lmm_accel import (
-            create_workspace_general_c as ws_gen_create,
-        )
+    from loguru import logger
 
-        general_available = True
-    except ImportError:
-        from loguru import logger
-
-        logger.warning(
-            f"C extension ABI v{abi} but "
-            "create_workspace_general_c / compute_lmm_chunk_general_c "
-            "not found. Extension may be partially compiled. "
-            "Falling back to Python path for n_cvt > 1."
-        )
-        ws_gen_create = None
-        ws_gen_chunk = None
-        general_available = False
-
-    # Score and LRT batch support — expected in ABI v5+
-    # Import independently so a partial build (one present, one missing)
-    # doesn't disable both.
-    try:
-        from jamma.lmm._lmm_accel import (
-            compute_score_batch_c as score_batch_c,
-        )
-    except ImportError:
-        from loguru import logger
-
-        logger.warning(
-            "C extension missing compute_score_batch_c. Score will use Python path."
-        )
-        score_batch_c = None
-
-    try:
-        from jamma.lmm._lmm_accel import (
-            compute_lrt_batch_c as lrt_batch_c,
-        )
-    except ImportError:
-        from loguru import logger
-
-        logger.warning(
-            "C extension missing compute_lrt_batch_c. LRT will use Python path."
-        )
-        lrt_batch_c = None
-
-    # Fused mode-4 workspace support — expected in ABI v6+
-    try:
-        from jamma.lmm._lmm_accel import (
-            compute_mode4_chunk_split_c as mode4_chunk_c,
-        )
-        from jamma.lmm._lmm_accel import (
-            create_workspace_mode4_split_c as mode4_ws_create,
-        )
-
-        mode4_available = True
-    except ImportError:
-        from loguru import logger
-
-        logger.warning(
-            "C extension missing mode-4 fused functions. "
-            "Mode 4 will use reconstruct+compose fallback."
-        )
-        mode4_ws_create = None
-        mode4_chunk_c = None
-        mode4_available = False
-
-    # General n_cvt Score/LRT batch support — expected in ABI v7+
-    try:
-        from jamma.lmm._lmm_accel import (
-            compute_score_batch_general_c as score_batch_general_c,
-        )
-    except ImportError:
-        from loguru import logger
-
-        logger.warning(
-            "C extension missing compute_score_batch_general_c. "
-            "Score for n_cvt>1 will use Python path."
-        )
-        score_batch_general_c = None
-
-    try:
-        from jamma.lmm._lmm_accel import (
-            compute_lrt_batch_general_c as lrt_batch_general_c,
-        )
-    except ImportError:
-        from loguru import logger
-
-        logger.warning(
-            "C extension missing compute_lrt_batch_general_c. "
-            "LRT for n_cvt>1 will use Python path."
-        )
-        lrt_batch_general_c = None
-
-    # SoA-native Score/LRT split support — additive, ABI_VERSION unchanged
-    try:
-        from jamma.lmm._lmm_accel import (
-            compute_score_split_c as score_split_c,
-        )
-    except ImportError:
-        from loguru import logger
-
-        logger.warning(
-            "C extension missing compute_score_split_c. "
-            "Score split will fall back to reconstruct_uab_from_soa."
-        )
-        score_split_c = None
-
-    try:
-        from jamma.lmm._lmm_accel import (
-            compute_lrt_split_c as lrt_split_c,
-        )
-    except ImportError:
-        from loguru import logger
-
-        logger.warning(
-            "C extension missing compute_lrt_split_c. "
-            "LRT split will fall back to reconstruct_uab_from_soa."
-        )
-        lrt_split_c = None
-
-    # SoA-native general Score/LRT split support — eliminates reconstruct_uab_from_soa
-    try:
-        from jamma.lmm._lmm_accel import (
-            compute_score_split_general_c as score_split_general_c,
-        )
-    except ImportError:
-        from loguru import logger
-
-        logger.debug(
-            "C extension missing compute_score_split_general_c. "
-            "Score split for n_cvt>1 will fall back to reconstruct_uab_from_soa."
-        )
-        score_split_general_c = None
-
-    try:
-        from jamma.lmm._lmm_accel import (
-            compute_lrt_split_general_c as lrt_split_general_c,
-        )
-    except ImportError:
-        from loguru import logger
-
-        logger.debug(
-            "C extension missing compute_lrt_split_general_c. "
-            "LRT split for n_cvt>1 will fall back to reconstruct_uab_from_soa."
-        )
-        lrt_split_general_c = None
-
-    # Fused Score/LRT from utg_t — expected in ABI v10+
-    try:
-        from jamma.lmm._lmm_accel import (
-            compute_score_fused_c as score_fused_c,
-        )
-    except ImportError:
-        from loguru import logger
-
-        logger.warning(
-            "C extension missing compute_score_fused_c. "
-            "Score fused will fall back to split path."
-        )
-        score_fused_c = None
-
-    try:
-        from jamma.lmm._lmm_accel import (
-            compute_lrt_fused_c as lrt_fused_c,
-        )
-    except ImportError:
-        from loguru import logger
-
-        logger.warning(
-            "C extension missing compute_lrt_fused_c. "
-            "LRT fused will fall back to split path."
-        )
-        lrt_fused_c = None
-
-    # Persistent Score/LRT workspace support — expected in ABI v11+
-    try:
-        from jamma.lmm._lmm_accel import (
-            create_workspace_score_fused_c as create_score_ws_c,
-        )
-    except ImportError:
-        from loguru import logger
-
-        logger.debug("C extension missing create_workspace_score_fused_c.")
-        create_score_ws_c = None
-
-    try:
-        from jamma.lmm._lmm_accel import (
-            compute_score_fused_ws_c as score_ws_c,
-        )
-    except ImportError:
-        from loguru import logger
-
-        logger.debug("C extension missing compute_score_fused_ws_c.")
-        score_ws_c = None
-
-    try:
-        from jamma.lmm._lmm_accel import (
-            create_workspace_lrt_fused_c as create_lrt_ws_c,
-        )
-    except ImportError:
-        from loguru import logger
-
-        logger.debug("C extension missing create_workspace_lrt_fused_c.")
-        create_lrt_ws_c = None
-
-    try:
-        from jamma.lmm._lmm_accel import (
-            compute_lrt_fused_ws_c as lrt_ws_c,
-        )
-    except ImportError:
-        from loguru import logger
-
-        logger.debug("C extension missing compute_lrt_fused_ws_c.")
-        lrt_ws_c = None
-
-    # Fused Uab workspace support — expected in ABI v8+
-    try:
-        from jamma.lmm._lmm_accel import (
-            compute_lmm_chunk_fused_c as ws_fused_chunk,
-        )
-        from jamma.lmm._lmm_accel import (
-            compute_mode4_chunk_fused_c as ws_fused_mode4,
-        )
-        from jamma.lmm._lmm_accel import (
-            create_workspace_fused_c as ws_fused_create,
-        )
-        from jamma.lmm._lmm_accel import (
-            create_workspace_mode4_fused_c as ws_fused_mode4_create,
-        )
-    except ImportError:
-        from loguru import logger
-
-        if abi >= 8:
-            logger.error(
-                f"C extension ABI v{abi} validated but fused Uab symbols missing. "
-                "This indicates build corruption — recompile: "
-                "python -m jamma.lmm._compile_accel"
-            )
+    # Load each optional group by name; bind it only if every member is present,
+    # else leave the fields None and log once at the group's level.
+    symbols = dict.fromkeys(_OBJECT_FIELDS, None)
+    symbols.update(core)
+    for group in _OPTIONAL_GROUPS:
+        loaded = {field: getattr(mod, field, None) for field in group.fields}
+        if all(v is not None for v in loaded.values()):
+            symbols.update(loaded)
+        elif group.level == "error":
+            logger.error(group.message)
+        elif group.level == "warning":
+            logger.warning(group.message)
         else:
-            logger.debug(
-                f"C extension ABI v{abi} < 8: fused Uab not available, "
-                "falling back to SoA path."
-            )
-        ws_fused_create = None
-        ws_fused_chunk = None
-        ws_fused_mode4_create = None
-        ws_fused_mode4 = None
-
-    # Fused general Uab workspace support — expected in ABI v9+
-    try:
-        from jamma.lmm._lmm_accel import (
-            compute_lmm_chunk_fused_general_c as ws_fused_gen_chunk,
-        )
-        from jamma.lmm._lmm_accel import (
-            compute_mode4_chunk_fused_general_c as ws_fused_gen_mode4,
-        )
-        from jamma.lmm._lmm_accel import (
-            create_workspace_fused_general_c as ws_fused_gen_create,
-        )
-        from jamma.lmm._lmm_accel import (
-            create_workspace_mode4_fused_general_c as ws_fused_gen_mode4_create,
-        )
-    except ImportError:
-        from loguru import logger
-
-        if abi >= 9:
-            logger.error(
-                f"C extension ABI v{abi} validated but fused general symbols missing. "
-                "This indicates build corruption — recompile: "
-                "python -m jamma.lmm._compile_accel"
-            )
-        else:
-            logger.debug(
-                f"C extension ABI v{abi} < 9: fused general Uab not available, "
-                "falling back to non-fused general path."
-            )
-        ws_fused_gen_create = None
-        ws_fused_gen_chunk = None
-        ws_fused_gen_mode4_create = None
-        ws_fused_gen_mode4 = None
+            logger.debug(group.message)
 
     return AccelImport(
         accel_available=True,
         split_available=True,
-        general_available=general_available,
+        general_available=symbols["create_workspace_general_c"] is not None
+        and symbols["compute_lmm_chunk_general_c"] is not None,
         has_openmp=has_omp,
-        mode4_available=mode4_available,
-        compute_batch_c=batch_c,
-        compute_batch_split_c=batch_split_c,
-        create_workspace_split_c=ws_create,
-        compute_lmm_chunk_split_c=ws_chunk,
-        create_workspace_general_c=ws_gen_create,
-        compute_lmm_chunk_general_c=ws_gen_chunk,
-        compute_score_batch_c=score_batch_c,
-        compute_lrt_batch_c=lrt_batch_c,
-        create_workspace_mode4_split_c=mode4_ws_create,
-        compute_mode4_chunk_split_c=mode4_chunk_c,
-        compute_score_batch_general_c=score_batch_general_c,
-        compute_lrt_batch_general_c=lrt_batch_general_c,
-        compute_score_split_c=score_split_c,
-        compute_lrt_split_c=lrt_split_c,
-        compute_score_split_general_c=score_split_general_c,
-        compute_lrt_split_general_c=lrt_split_general_c,
-        compute_score_fused_c=score_fused_c,
-        compute_lrt_fused_c=lrt_fused_c,
-        create_workspace_fused_c=ws_fused_create,
-        compute_lmm_chunk_fused_c=ws_fused_chunk,
-        create_workspace_mode4_fused_c=ws_fused_mode4_create,
-        compute_mode4_chunk_fused_c=ws_fused_mode4,
-        create_workspace_fused_general_c=ws_fused_gen_create,
-        compute_lmm_chunk_fused_general_c=ws_fused_gen_chunk,
-        create_workspace_mode4_fused_general_c=ws_fused_gen_mode4_create,
-        compute_mode4_chunk_fused_general_c=ws_fused_gen_mode4,
-        create_workspace_score_fused_c=create_score_ws_c,
-        compute_score_fused_ws_c=score_ws_c,
-        create_workspace_lrt_fused_c=create_lrt_ws_c,
-        compute_lrt_fused_ws_c=lrt_ws_c,
+        mode4_available=symbols["create_workspace_mode4_split_c"] is not None
+        and symbols["compute_mode4_chunk_split_c"] is not None,
+        **symbols,
     )
 
 
@@ -503,12 +331,21 @@ def _auto_recompile() -> bool:
     )
 
 
-# First attempt. Bind via a single assignment from AccelImport fields —
-# duplicating a 35-element positional unpack for the retry path is
-# exactly how the two branches drifted out of sync historically (two
-# fields got dropped from the retry unpack, so a successful auto-recompile
-# raised ValueError instead of recovering).
+_FORCE_NUMPY_FALLBACK = os.environ.get(
+    "JAMMA_FORCE_NUMPY_FALLBACK", ""
+).strip() not in ("", "0")
+
+# Auto-recompile and retry once if the C extension is unavailable. Phase 116.1:
+# when JAMMA_FORCE_NUMPY_FALLBACK is set, skip the retry — auto_recompile would
+# compile the .so and import it into sys.modules, defeating the gate's purpose
+# (RESEARCH §"Pitfall 4": ASAN must never see the .so loaded).
 _accel = _try_import_accel()
+if not _accel.accel_available and not _FORCE_NUMPY_FALLBACK and _auto_recompile():
+    _accel = _try_import_accel()
+
+# Bind module-level names from the (possibly retried) AccelImport exactly once.
+# A single bind point means the initial-load and retry paths cannot drift —
+# adding a C symbol touches only AccelImport and this block.
 _C_ACCEL_AVAILABLE = _accel.accel_available
 _C_SPLIT_AVAILABLE = _accel.split_available
 _C_GENERAL_AVAILABLE = _accel.general_available
@@ -545,74 +382,19 @@ _compute_score_fused_ws_c = _accel.compute_score_fused_ws_c
 _create_workspace_lrt_fused_c = _accel.create_workspace_lrt_fused_c
 _compute_lrt_fused_ws_c = _accel.compute_lrt_fused_ws_c
 
-_FORCE_NUMPY_FALLBACK = os.environ.get(
-    "JAMMA_FORCE_NUMPY_FALLBACK", ""
-).strip() not in ("", "0")
-
 if not _C_ACCEL_AVAILABLE and not _FORCE_NUMPY_FALLBACK:
-    # Auto-recompile and retry once. Re-run the same field-by-field
-    # bind from AccelImport so the retry path cannot drift from the
-    # initial-load path.
-    #
-    # Phase 116.1: when JAMMA_FORCE_NUMPY_FALLBACK is set, skip the retry
-    # entirely — auto_recompile_c_extension would compile the .so and
-    # import it into sys.modules, defeating the gate's purpose
-    # (RESEARCH §"Pitfall 4": ASAN must never see the .so loaded).
-    if _auto_recompile():
-        _accel = _try_import_accel()
-        _C_ACCEL_AVAILABLE = _accel.accel_available
-        _C_SPLIT_AVAILABLE = _accel.split_available
-        _C_GENERAL_AVAILABLE = _accel.general_available
-        _C_HAS_OPENMP = _accel.has_openmp
-        _C_MODE4_AVAILABLE = _accel.mode4_available
-        _compute_lmm_batch_c = _accel.compute_batch_c
-        _compute_lmm_batch_split_c = _accel.compute_batch_split_c
-        _create_workspace_split_c = _accel.create_workspace_split_c
-        _compute_lmm_chunk_split_c = _accel.compute_lmm_chunk_split_c
-        _create_workspace_general_c = _accel.create_workspace_general_c
-        _compute_lmm_chunk_general_c = _accel.compute_lmm_chunk_general_c
-        _compute_score_batch_c = _accel.compute_score_batch_c
-        _compute_lrt_batch_c = _accel.compute_lrt_batch_c
-        _create_workspace_mode4_split_c = _accel.create_workspace_mode4_split_c
-        _compute_mode4_chunk_split_c = _accel.compute_mode4_chunk_split_c
-        _compute_score_batch_general_c = _accel.compute_score_batch_general_c
-        _compute_lrt_batch_general_c = _accel.compute_lrt_batch_general_c
-        _compute_score_split_c = _accel.compute_score_split_c
-        _compute_lrt_split_c = _accel.compute_lrt_split_c
-        _compute_score_split_general_c = _accel.compute_score_split_general_c
-        _compute_lrt_split_general_c = _accel.compute_lrt_split_general_c
-        _compute_score_fused_c = _accel.compute_score_fused_c
-        _compute_lrt_fused_c = _accel.compute_lrt_fused_c
-        _create_workspace_fused_c = _accel.create_workspace_fused_c
-        _compute_lmm_chunk_fused_c = _accel.compute_lmm_chunk_fused_c
-        _create_workspace_mode4_fused_c = _accel.create_workspace_mode4_fused_c
-        _compute_mode4_chunk_fused_c = _accel.compute_mode4_chunk_fused_c
-        _create_workspace_fused_general_c = _accel.create_workspace_fused_general_c
-        _compute_lmm_chunk_fused_general_c = _accel.compute_lmm_chunk_fused_general_c
-        _create_workspace_mode4_fused_general_c = (
-            _accel.create_workspace_mode4_fused_general_c
-        )
-        _compute_mode4_chunk_fused_general_c = (
-            _accel.compute_mode4_chunk_fused_general_c
-        )
-        _create_workspace_score_fused_c = _accel.create_workspace_score_fused_c
-        _compute_score_fused_ws_c = _accel.compute_score_fused_ws_c
-        _create_workspace_lrt_fused_c = _accel.create_workspace_lrt_fused_c
-        _compute_lrt_fused_ws_c = _accel.compute_lrt_fused_ws_c
+    from loguru import logger as _logger
 
-    if not _C_ACCEL_AVAILABLE:
-        from loguru import logger as _logger
-
-        _logger.warning(
-            "C extension _lmm_accel not available — using pure-Python path "
-            "(LMM may be slower without C extension; magnitude depends on "
-            "dataset size and core count). To compile, run: "
-            "python -m jamma.lmm._compile_accel"
-        )
-        del _logger
-        _C_HAS_OPENMP = False
-        _C_GENERAL_AVAILABLE = False
-        _C_MODE4_AVAILABLE = False
+    _logger.warning(
+        "C extension _lmm_accel not available — using pure-Python path "
+        "(LMM may be slower without C extension; magnitude depends on "
+        "dataset size and core count). To compile, run: "
+        "python -m jamma.lmm._compile_accel"
+    )
+    del _logger
+    _C_HAS_OPENMP = False
+    _C_GENERAL_AVAILABLE = False
+    _C_MODE4_AVAILABLE = False
 
 _C_FUSED_AVAILABLE = _create_workspace_fused_c is not None
 _C_MODE4_FUSED_AVAILABLE = _create_workspace_mode4_fused_c is not None

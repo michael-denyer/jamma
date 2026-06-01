@@ -60,6 +60,7 @@ from jamma.lmm.compute_numpy import (
     create_lmm_workspace_mode4_fused,
     create_lmm_workspace_mode4_fused_general,
 )
+from jamma.lmm.dispatch import select_dispatch_path
 from jamma.lmm.impute import impute_missing_inplace
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.likelihood_numpy import (
@@ -363,53 +364,34 @@ def run_lmm_association_numpy_streaming(
     # Enforce minimum 20 golden section iterations for ~1e-5 lambda tolerance
     n_refine = max(n_refine, 20)
 
-    # Determine split/pipeline eligibility
-    use_split = (_C_SPLIT_AVAILABLE and n_cvt == 1) or (
-        _C_GENERAL_AVAILABLE and n_cvt > 1
+    # Determine split/fused C kernel dispatch via the shared pure selector
+    # (single source of truth — see dispatch.py; the batch runner uses the same
+    # call). log_choices=False because streaming keeps its own streaming-specific
+    # debug logging below.
+    dispatch = select_dispatch_path(
+        n_cvt,
+        lmm_mode,
+        c_split_available=_C_SPLIT_AVAILABLE,
+        c_general_available=_C_GENERAL_AVAILABLE,
+        c_fused_available=_C_FUSED_AVAILABLE,
+        c_fused_general_available=_C_FUSED_GENERAL_AVAILABLE,
+        c_mode4_available=_C_MODE4_AVAILABLE,
+        c_mode4_fused_available=_C_MODE4_FUSED_AVAILABLE,
+        c_mode4_fused_general_available=_C_MODE4_FUSED_GENERAL_AVAILABLE,
+        c_score_fused_available=_C_SCORE_FUSED_AVAILABLE,
+        c_score_fused_ws_available=_C_SCORE_FUSED_WS_AVAILABLE,
+        c_lrt_fused_available=_C_LRT_FUSED_AVAILABLE,
+        c_lrt_fused_ws_available=_C_LRT_FUSED_WS_AVAILABLE,
+        log_choices=False,
     )
-    use_fused_mode4 = use_split and lmm_mode == 4 and n_cvt == 1 and _C_MODE4_AVAILABLE
-
-    # Fused Uab path: skip uab_varying_soa, pass utg_t directly to C workspace.
-    # Requires use_split (workspace + invariant SoA infrastructure).
-    use_fused = use_split and (
-        # n_cvt=1 fast path (existing)
-        (
-            n_cvt == 1
-            and _C_FUSED_AVAILABLE
-            and (lmm_mode == 1 or (lmm_mode == 4 and _C_MODE4_FUSED_AVAILABLE))
-        )
-        or
-        # General n_cvt path: Wald (mode 1) and all-tests (mode 4).
-        # Modes 2/3 (Score/LRT only) don't use workspace, so no fused benefit.
-        (n_cvt >= 2 and _C_FUSED_GENERAL_AVAILABLE and lmm_mode == 1)
-        or (n_cvt >= 2 and _C_MODE4_FUSED_GENERAL_AVAILABLE and lmm_mode == 4)
-    )
-    use_fused_general = use_fused and n_cvt >= 2
-
-    # Fused Score/LRT: skip uab_varying_soa for modes 2/3 (n_cvt=1 only).
-    # Prefer workspace-based path (persistent across chunks, eliminates per-chunk
-    # malloc/free and redundant precomputation); fall back to stateless if unavailable.
-    use_fused_score_ws = (
-        use_split and n_cvt == 1 and lmm_mode == 3 and _C_SCORE_FUSED_WS_AVAILABLE
-    )
-    use_fused_lrt_ws = (
-        use_split and n_cvt == 1 and lmm_mode == 2 and _C_LRT_FUSED_WS_AVAILABLE
-    )
-    # Stateless fallback: only when WS not available
-    use_fused_score = (
-        use_split
-        and n_cvt == 1
-        and lmm_mode == 3
-        and _C_SCORE_FUSED_AVAILABLE
-        and not use_fused_score_ws
-    )
-    use_fused_lrt = (
-        use_split
-        and n_cvt == 1
-        and lmm_mode == 2
-        and _C_LRT_FUSED_AVAILABLE
-        and not use_fused_lrt_ws
-    )
+    use_split = dispatch.use_split
+    use_fused = dispatch.use_fused
+    use_fused_general = dispatch.use_fused_general
+    use_fused_mode4 = dispatch.use_fused_mode4
+    use_fused_score = dispatch.use_fused_score
+    use_fused_score_ws = dispatch.use_fused_score_ws
+    use_fused_lrt = dispatch.use_fused_lrt
+    use_fused_lrt_ws = dispatch.use_fused_lrt_ws
 
     if use_fused_score_ws:
         logger.debug(

@@ -50,10 +50,6 @@ from jamma.lmm.compute_numpy import (
     _C_SCORE_FUSED_WS_AVAILABLE,
     _C_SPLIT_AVAILABLE,
     compute_lmm_chunk_numpy,
-    compute_mode4_fused_c_ws,
-    compute_mode4_fused_general_c_ws,
-    compute_wald_fused_c_ws,
-    compute_wald_fused_general_c_ws,
 )
 from jamma.lmm.dispatch import select_dispatch_path
 from jamma.lmm.impute import impute_missing_inplace
@@ -77,12 +73,12 @@ from jamma.lmm.results import (
 )
 from jamma.lmm.runner_numpy import (
     _MIN_PIPELINE_CHUNKS,
+    _ComputeContext,
     _create_workspaces,
-    _guarded_compute,
+    _dispatch_compute,
     compute_adaptive_core_split,
     compute_chunk_size_numpy,
     compute_pipeline_core_split,
-    dispatch_soa_split,
 )
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
@@ -513,6 +509,29 @@ def run_lmm_association_numpy_streaming(
         pipeline_omp_threads,
     )
 
+    # Loop-invariant context for the per-chunk C dispatch (shared with the batch
+    # runner — see _dispatch_compute).
+    compute_ctx = _ComputeContext(
+        dispatch,
+        lmm_mode,
+        n_cvt,
+        lmm_workspace,
+        score_fused_workspace,
+        lrt_fused_workspace,
+        w,
+        Uty,
+        Hi_eval_null,
+        uab_invariant_soa,
+        eigenvalues_np,
+        n_samples,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        logl_H0,
+        n_filtered,
+    )
+
     # === Timing accumulators ===
     last_run_timing.clear()
     t_rotation_total = 0.0
@@ -682,115 +701,17 @@ def run_lmm_association_numpy_streaming(
 
             t_compute_start = time.perf_counter()
 
-            if use_fused:
-                if use_fused_general:
-                    if lmm_mode == 4:
-                        fused_fn = compute_mode4_fused_general_c_ws
-                        op_label = "Fused general mode-4 Uab dispatch (streaming)"
-                    else:
-                        fused_fn = compute_wald_fused_general_c_ws
-                        op_label = "Fused general Uab dispatch (streaming)"
-                else:
-                    fused_fn = (
-                        compute_mode4_fused_c_ws
-                        if lmm_mode == 4
-                        else compute_wald_fused_c_ws
-                    )
-                    op_label = "Fused Uab dispatch (streaming)"
+            if (
+                use_fused
+                or use_fused_score_ws
+                or use_fused_lrt_ws
+                or use_fused_score
+                or use_fused_lrt
+                or use_split
+            ):
                 with blas_threads(1):
-                    cr = _guarded_compute(
-                        fused_fn,
-                        lmm_workspace,
-                        chunk_data,
-                        pipeline_omp_threads,
-                        operation=op_label,
-                        write_offset=write_offset,
-                        n_filtered=n_filtered,
-                    )
-            elif use_fused_score_ws:
-                from jamma.lmm.compute_numpy import _compute_score_fused_ws_c
-
-                with blas_threads(1):
-                    cr = _guarded_compute(
-                        _compute_score_fused_ws_c,
-                        score_fused_workspace,
-                        chunk_data,  # utg_t
-                        pipeline_omp_threads,
-                        operation="Fused Score WS dispatch (streaming)",
-                        write_offset=write_offset,
-                        n_filtered=n_filtered,
-                    )
-            elif use_fused_lrt_ws:
-                from jamma.lmm.compute_numpy import _compute_lrt_fused_ws_c
-
-                with blas_threads(1):
-                    cr = _guarded_compute(
-                        _compute_lrt_fused_ws_c,
-                        lrt_fused_workspace,
-                        chunk_data,  # utg_t
-                        pipeline_omp_threads,
-                        operation="Fused LRT WS dispatch (streaming)",
-                        write_offset=write_offset,
-                        n_filtered=n_filtered,
-                    )
-            elif use_fused_score:
-                from jamma.lmm.compute_numpy import _compute_score_fused_c
-
-                with blas_threads(1):
-                    cr = _guarded_compute(
-                        _compute_score_fused_c,
-                        chunk_data,  # utg_t
-                        w,
-                        Uty,
-                        Hi_eval_null,
-                        uab_invariant_soa,
-                        eigenvalues_np,
-                        n_samples,
-                        pipeline_omp_threads,
-                        operation="Fused Score dispatch (streaming)",
-                        write_offset=write_offset,
-                        n_filtered=n_filtered,
-                    )
-            elif use_fused_lrt:
-                from jamma.lmm.compute_numpy import _compute_lrt_fused_c
-
-                with blas_threads(1):
-                    cr = _guarded_compute(
-                        _compute_lrt_fused_c,
-                        chunk_data,  # utg_t
-                        w,
-                        Uty,
-                        eigenvalues_np,
-                        uab_invariant_soa,
-                        n_samples,
-                        l_min,
-                        l_max,
-                        n_grid,
-                        n_refine,
-                        logl_H0,
-                        pipeline_omp_threads,
-                        operation="Fused LRT dispatch (streaming)",
-                        write_offset=write_offset,
-                        n_filtered=n_filtered,
-                    )
-            elif use_split:
-                with blas_threads(1):
-                    cr = dispatch_soa_split(
-                        lmm_mode,
-                        use_fused_mode4,
-                        lmm_workspace,
-                        n_cvt,
-                        eigenvalues_np,
-                        chunk_data,
-                        uab_invariant_soa,
-                        n_samples,
-                        Hi_eval_null=Hi_eval_null,
-                        l_min=l_min,
-                        l_max=l_max,
-                        n_grid=n_grid,
-                        n_refine=n_refine,
-                        logl_H0=logl_H0,
-                        n_threads=pipeline_omp_threads,
+                    cr = _dispatch_compute(
+                        compute_ctx, chunk_data, pipeline_omp_threads, write_offset
                     )
             else:
                 cr = compute_lmm_chunk_numpy(

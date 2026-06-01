@@ -555,6 +555,160 @@ def dispatch_soa_split(
     )
 
 
+class _ComputeContext(NamedTuple):
+    """Loop-invariant inputs for the per-chunk C dispatch.
+
+    Built once before the chunk loop and passed to _dispatch_compute for every
+    chunk, so the 6-way kernel-selection ladder lives in exactly one place
+    (previously duplicated across the batch pipeline, batch sequential, and
+    streaming compute paths).
+    """
+
+    dispatch: LmmDispatch
+    lmm_mode: LmmMode
+    n_cvt: int
+    lmm_workspace: object | None
+    score_fused_workspace: object | None
+    lrt_fused_workspace: object | None
+    w: np.ndarray | None
+    Uty: np.ndarray
+    Hi_eval_null: np.ndarray
+    uab_invariant_soa: np.ndarray | None
+    eigenvalues_np: np.ndarray
+    n_samples: int
+    l_min: float
+    l_max: float
+    n_grid: int
+    n_refine: int
+    logl_H0: float
+    n_filtered: int
+
+
+def _dispatch_compute(
+    ctx: _ComputeContext,
+    chunk_input: np.ndarray,
+    n_threads: int,
+    write_offset: int,
+) -> dict:
+    """Dispatch one prepared chunk to the active C kernel and return its result.
+
+    The 6-way kernel-selection ladder: fused-general / fused / fused-Score-WS /
+    fused-LRT-WS / fused-Score / fused-LRT / SoA-split. ``chunk_input`` is utg_t
+    for the fused paths and the varying-Uab SoA array for the split path; the
+    active path is fixed by ``ctx.dispatch``. The caller owns BLAS-thread scoping,
+    input preparation, and the non-split NumPy fallback.
+    """
+    d = ctx.dispatch
+    if d.use_fused:
+        if d.use_fused_general:
+            if ctx.lmm_mode == 4:
+                fused_fn = compute_mode4_fused_general_c_ws
+                op_label = "Fused general mode-4 Uab dispatch"
+            else:
+                fused_fn = compute_wald_fused_general_c_ws
+                op_label = "Fused general Uab dispatch"
+        else:
+            fused_fn = (
+                compute_mode4_fused_c_ws
+                if ctx.lmm_mode == 4
+                else compute_wald_fused_c_ws
+            )
+            op_label = "Fused Uab dispatch"
+        return _guarded_compute(
+            fused_fn,
+            ctx.lmm_workspace,
+            chunk_input,
+            n_threads,
+            operation=op_label,
+            write_offset=write_offset,
+            n_filtered=ctx.n_filtered,
+        )
+    if d.use_fused_score_ws:
+        from jamma.lmm.compute_numpy import _compute_score_fused_ws_c
+
+        return _guarded_compute(
+            _compute_score_fused_ws_c,
+            ctx.score_fused_workspace,
+            chunk_input,
+            n_threads,
+            operation="Fused Score WS dispatch",
+            write_offset=write_offset,
+            n_filtered=ctx.n_filtered,
+        )
+    if d.use_fused_lrt_ws:
+        from jamma.lmm.compute_numpy import _compute_lrt_fused_ws_c
+
+        return _guarded_compute(
+            _compute_lrt_fused_ws_c,
+            ctx.lrt_fused_workspace,
+            chunk_input,
+            n_threads,
+            operation="Fused LRT WS dispatch",
+            write_offset=write_offset,
+            n_filtered=ctx.n_filtered,
+        )
+    if d.use_fused_score:
+        from jamma.lmm.compute_numpy import _compute_score_fused_c
+
+        return _guarded_compute(
+            _compute_score_fused_c,
+            chunk_input,
+            ctx.w,
+            ctx.Uty,
+            ctx.Hi_eval_null,
+            ctx.uab_invariant_soa,
+            ctx.eigenvalues_np,
+            ctx.n_samples,
+            n_threads,
+            operation="Fused Score dispatch",
+            write_offset=write_offset,
+            n_filtered=ctx.n_filtered,
+        )
+    if d.use_fused_lrt:
+        from jamma.lmm.compute_numpy import _compute_lrt_fused_c
+
+        return _guarded_compute(
+            _compute_lrt_fused_c,
+            chunk_input,
+            ctx.w,
+            ctx.Uty,
+            ctx.eigenvalues_np,
+            ctx.uab_invariant_soa,
+            ctx.n_samples,
+            ctx.l_min,
+            ctx.l_max,
+            ctx.n_grid,
+            ctx.n_refine,
+            ctx.logl_H0,
+            n_threads,
+            operation="Fused LRT dispatch",
+            write_offset=write_offset,
+            n_filtered=ctx.n_filtered,
+        )
+    # SoA split: chunk_input is the varying-Uab SoA array.
+    return _guarded_compute(
+        dispatch_soa_split,
+        ctx.lmm_mode,
+        d.use_fused_mode4,
+        ctx.lmm_workspace,
+        ctx.n_cvt,
+        ctx.eigenvalues_np,
+        chunk_input,
+        ctx.uab_invariant_soa,
+        ctx.n_samples,
+        Hi_eval_null=ctx.Hi_eval_null,
+        l_min=ctx.l_min,
+        l_max=ctx.l_max,
+        n_grid=ctx.n_grid,
+        n_refine=ctx.n_refine,
+        logl_H0=ctx.logl_H0,
+        n_threads=n_threads,
+        operation="SoA split dispatch",
+        write_offset=write_offset,
+        n_filtered=ctx.n_filtered,
+    )
+
+
 def compute_pipeline_core_split(n_samples: int, total_cores: int) -> tuple[int, int]:
     """Compute rotation/compute thread split for the pipeline path.
 
@@ -1122,6 +1276,29 @@ def run_lmm_association_numpy(
         pipeline_omp_threads,
     )
 
+    # Loop-invariant context for the per-chunk C dispatch (shared with both the
+    # pipeline and sequential paths, and with the streaming runner).
+    compute_ctx = _ComputeContext(
+        dispatch,
+        lmm_mode,
+        n_cvt,
+        lmm_workspace,
+        score_fused_workspace,
+        lrt_fused_workspace,
+        w,
+        Uty,
+        Hi_eval_null,
+        uab_invariant_soa,
+        eigenvalues_np,
+        n_samples,
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        logl_H0,
+        n_filtered,
+    )
+
     def _prepare_chunk(chunk_start: int) -> tuple:
         """Slice, impute, rotate, build chunk data for compute dispatch.
 
@@ -1187,114 +1364,9 @@ def run_lmm_association_numpy(
 
         t_compute_start = time.perf_counter()
 
-        if use_fused:
-            if use_fused_general:
-                if lmm_mode == 4:
-                    fused_fn = compute_mode4_fused_general_c_ws
-                    op_label = "Fused general mode-4 Uab dispatch"
-                else:
-                    fused_fn = compute_wald_fused_general_c_ws
-                    op_label = "Fused general Uab dispatch"
-            else:
-                fused_fn = (
-                    compute_mode4_fused_c_ws
-                    if lmm_mode == 4
-                    else compute_wald_fused_c_ws
-                )
-                op_label = "Fused Uab dispatch"
-            cr = _guarded_compute(
-                fused_fn,
-                lmm_workspace,
-                chunk_data,
-                pipeline_omp_threads,
-                operation=op_label,
-                write_offset=write_offset,
-                n_filtered=n_filtered,
-            )
-        elif use_fused_score_ws:
-            from jamma.lmm.compute_numpy import _compute_score_fused_ws_c
-
-            cr = _guarded_compute(
-                _compute_score_fused_ws_c,
-                score_fused_workspace,
-                chunk_data,  # utg_t
-                pipeline_omp_threads,
-                operation="Fused Score WS dispatch",
-                write_offset=write_offset,
-                n_filtered=n_filtered,
-            )
-        elif use_fused_lrt_ws:
-            from jamma.lmm.compute_numpy import _compute_lrt_fused_ws_c
-
-            cr = _guarded_compute(
-                _compute_lrt_fused_ws_c,
-                lrt_fused_workspace,
-                chunk_data,  # utg_t
-                pipeline_omp_threads,
-                operation="Fused LRT WS dispatch",
-                write_offset=write_offset,
-                n_filtered=n_filtered,
-            )
-        elif use_fused_score:
-            from jamma.lmm.compute_numpy import _compute_score_fused_c
-
-            cr = _guarded_compute(
-                _compute_score_fused_c,
-                chunk_data,  # utg_t
-                w,
-                Uty,
-                Hi_eval_null,
-                uab_invariant_soa,
-                eigenvalues_np,
-                n_samples,
-                pipeline_omp_threads,
-                operation="Fused Score dispatch",
-                write_offset=write_offset,
-                n_filtered=n_filtered,
-            )
-        elif use_fused_lrt:
-            from jamma.lmm.compute_numpy import _compute_lrt_fused_c
-
-            cr = _guarded_compute(
-                _compute_lrt_fused_c,
-                chunk_data,  # utg_t
-                w,
-                Uty,
-                eigenvalues_np,
-                uab_invariant_soa,
-                n_samples,
-                l_min,
-                l_max,
-                n_grid,
-                n_refine,
-                logl_H0,
-                pipeline_omp_threads,
-                operation="Fused LRT dispatch",
-                write_offset=write_offset,
-                n_filtered=n_filtered,
-            )
-        else:
-            cr = _guarded_compute(
-                dispatch_soa_split,
-                lmm_mode,
-                use_fused_mode4,
-                lmm_workspace,
-                n_cvt,
-                eigenvalues_np,
-                chunk_data,
-                uab_invariant_soa,
-                n_samples,
-                Hi_eval_null=Hi_eval_null,
-                l_min=l_min,
-                l_max=l_max,
-                n_grid=n_grid,
-                n_refine=n_refine,
-                logl_H0=logl_H0,
-                n_threads=pipeline_omp_threads,
-                operation="SoA split dispatch",
-                write_offset=write_offset,
-                n_filtered=n_filtered,
-            )
+        cr = _dispatch_compute(
+            compute_ctx, chunk_data, pipeline_omp_threads, write_offset
+        )
 
         t_numpy_compute_total += time.perf_counter() - t_compute_start
 
@@ -1484,101 +1556,17 @@ def run_lmm_association_numpy(
 
                 # Compute
                 t_compute_start = time.perf_counter()
-                if use_fused:
-                    # Fused path: utg_t already in correct layout.
-                    if use_fused_general:
-                        if lmm_mode == 4:
-                            fused_fn = compute_mode4_fused_general_c_ws
-                            op_label = "Fused general mode-4 Uab dispatch"
-                        else:
-                            fused_fn = compute_wald_fused_general_c_ws
-                            op_label = "Fused general Uab dispatch"
-                    else:
-                        fused_fn = (
-                            compute_mode4_fused_c_ws
-                            if lmm_mode == 4
-                            else compute_wald_fused_c_ws
-                        )
-                        op_label = "Fused Uab dispatch"
+                if (
+                    use_fused
+                    or use_fused_score_ws
+                    or use_fused_lrt_ws
+                    or use_fused_score
+                    or use_fused_lrt
+                ):
+                    # Fused paths: utg_t already in the correct layout.
                     with blas_threads(1):
-                        cr = _guarded_compute(
-                            fused_fn,
-                            lmm_workspace,
-                            utg_t,
-                            omp_threads,
-                            operation=op_label,
-                            write_offset=write_offset,
-                            n_filtered=n_filtered,
-                        )
-                    del utg_t
-                elif use_fused_score_ws:
-                    from jamma.lmm.compute_numpy import _compute_score_fused_ws_c
-
-                    with blas_threads(1):
-                        cr = _guarded_compute(
-                            _compute_score_fused_ws_c,
-                            score_fused_workspace,
-                            utg_t,
-                            omp_threads,
-                            operation="Fused Score WS dispatch",
-                            write_offset=write_offset,
-                            n_filtered=n_filtered,
-                        )
-                    del utg_t
-                elif use_fused_lrt_ws:
-                    from jamma.lmm.compute_numpy import _compute_lrt_fused_ws_c
-
-                    with blas_threads(1):
-                        cr = _guarded_compute(
-                            _compute_lrt_fused_ws_c,
-                            lrt_fused_workspace,
-                            utg_t,
-                            omp_threads,
-                            operation="Fused LRT WS dispatch",
-                            write_offset=write_offset,
-                            n_filtered=n_filtered,
-                        )
-                    del utg_t
-                elif use_fused_score:
-                    from jamma.lmm.compute_numpy import _compute_score_fused_c
-
-                    with blas_threads(1):
-                        cr = _guarded_compute(
-                            _compute_score_fused_c,
-                            utg_t,
-                            w,
-                            Uty,
-                            Hi_eval_null,
-                            uab_invariant_soa,
-                            eigenvalues_np,
-                            n_samples,
-                            omp_threads,
-                            operation="Fused Score dispatch",
-                            write_offset=write_offset,
-                            n_filtered=n_filtered,
-                        )
-                    del utg_t
-                elif use_fused_lrt:
-                    from jamma.lmm.compute_numpy import _compute_lrt_fused_c
-
-                    with blas_threads(1):
-                        cr = _guarded_compute(
-                            _compute_lrt_fused_c,
-                            utg_t,
-                            w,
-                            Uty,
-                            eigenvalues_np,
-                            uab_invariant_soa,
-                            n_samples,
-                            l_min,
-                            l_max,
-                            n_grid,
-                            n_refine,
-                            logl_H0,
-                            omp_threads,
-                            operation="Fused LRT dispatch",
-                            write_offset=write_offset,
-                            n_filtered=n_filtered,
+                        cr = _dispatch_compute(
+                            compute_ctx, utg_t, omp_threads, write_offset
                         )
                     del utg_t
                 elif use_split:
@@ -1594,26 +1582,8 @@ def run_lmm_association_numpy(
                     )
                     del utg_t
                     with blas_threads(1):
-                        cr = _guarded_compute(
-                            dispatch_soa_split,
-                            lmm_mode,
-                            use_fused_mode4,
-                            lmm_workspace,
-                            n_cvt,
-                            eigenvalues_np,
-                            uab_var_soa,
-                            uab_invariant_soa,
-                            n_samples,
-                            Hi_eval_null=Hi_eval_null,
-                            l_min=l_min,
-                            l_max=l_max,
-                            n_grid=n_grid,
-                            n_refine=n_refine,
-                            logl_H0=logl_H0,
-                            n_threads=omp_threads,
-                            operation="SoA split dispatch",
-                            write_offset=write_offset,
-                            n_filtered=n_filtered,
+                        cr = _dispatch_compute(
+                            compute_ctx, uab_var_soa, omp_threads, write_offset
                         )
                     del uab_var_soa
                 else:

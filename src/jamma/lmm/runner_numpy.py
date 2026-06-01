@@ -9,7 +9,7 @@ import gc
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from pathlib import Path
 from typing import NamedTuple
 
@@ -766,6 +766,152 @@ def compute_adaptive_core_split(
     return rot_threads, compute_threads
 
 
+class _ThreadBudget:
+    """Mutable rotation/compute core split shared with the pipeline callbacks.
+
+    The pipeline driver re-derives the split from the profiled first chunk and
+    rebinds these fields. Because the prepare/compute callbacks live in the
+    runner's scope while the driver lives here, a bare-int ``nonlocal`` cannot
+    carry the update across the boundary — the callbacks would keep reading the
+    pre-profile values. A shared mutable object does: the callbacks read
+    ``budget.rot`` / ``budget.omp`` and the driver mutates them in place.
+    """
+
+    __slots__ = ("omp", "rot")
+
+    def __init__(self, rot: int, omp: int) -> None:
+        self.rot = rot
+        self.omp = omp
+
+
+def _drive_pipeline(
+    prepare: Callable[[], object | None],
+    compute: Callable[[object], None],
+    budget: _ThreadBudget,
+    *,
+    n_chunks: int,
+    total_cores: int,
+    n_samples: int,
+    n_filtered: int,
+    show_progress: bool,
+    progress_label: str,
+) -> float:
+    """Drive the overlapped chunk pipeline shared by both NumPy runners.
+
+    Profiles the first chunk, re-derives the rotation/compute core split from
+    its measured stage durations, then overlaps rotation of chunk N+1 (a
+    background ``prepare``) with C compute of chunk N (a foreground ``compute``)
+    via a single-worker executor. Both stages release the GIL, so they run
+    concurrently.
+
+    Only the chunk source (in-memory fancy-index vs. disk stream) and the result
+    sink differ between runners; those are supplied as ``prepare`` and
+    ``compute`` callbacks. ``prepare`` returns an opaque prepared-chunk object,
+    or None at exhaustion; the driver passes it straight to ``compute`` and
+    never inspects it. Both callbacks read the live core split from ``budget``,
+    which this function mutates after profiling.
+
+    Args:
+        prepare: Zero-arg callback that prepares the next chunk (slice/impute/
+            rotate), returning an opaque object or None when no chunks remain.
+        compute: Callback that runs C compute on a prepared chunk and writes its
+            results. Owns its own compute/write timing and diagnostics.
+        budget: Shared mutable core split; rebound from the profiled first chunk.
+        n_chunks: Expected chunk count (progress total; adaptive-split guard).
+        total_cores: Physical core count for the adaptive split.
+        n_samples: Sample count (adaptive-split static fallback; ETA estimate).
+        n_filtered: Filtered SNP count (ETA estimate; error diagnostics).
+        show_progress: Whether to render a progress bar.
+        progress_label: Progress-bar label.
+
+    Returns:
+        Total rotation wall-time (seconds) measured around the prepare calls,
+        for the caller's timing breakdown. Compute/write time is accumulated by
+        the ``compute`` callback itself.
+    """
+    rotation_s = 0.0
+
+    # Profile the first chunk: prepare (rotation) then compute, timing each
+    # stage so the adaptive split below uses empirically measured durations.
+    t = time.perf_counter()
+    first = prepare()
+    t_first_rot = time.perf_counter() - t
+    rotation_s += t_first_rot
+    if first is None:
+        return rotation_s
+
+    t = time.perf_counter()
+    compute(first)
+    t_first_compute = time.perf_counter() - t
+    del first
+
+    # Re-derive the core split from measured times (only when chunks remain and
+    # BLAS is controllable). Mutating the shared budget rebinds what the
+    # prepare/compute callbacks read on every subsequent call.
+    if n_chunks > 2 and is_blas_controllable():
+        old_rot, old_omp = budget.rot, budget.omp
+        budget.rot, budget.omp = compute_adaptive_core_split(
+            t_first_rot, t_first_compute, total_cores, n_samples=n_samples
+        )
+        if (budget.rot, budget.omp) != (old_rot, old_omp):
+            logger.debug(
+                f"Adaptive core split: {old_rot}/{old_omp} -> "
+                f"{budget.rot}/{budget.omp} "
+                f"(rot={t_first_rot:.3f}s, compute={t_first_compute:.3f}s)"
+            )
+
+    # Seed the pipeline with the next chunk (uses the updated split).
+    t = time.perf_counter()
+    current = prepare()
+    rotation_s += time.perf_counter() - t
+
+    # Progress: profiled chunk + seeded chunk already accounted, so start at 2.
+    bar = (
+        create_progress_bar(
+            n_chunks,
+            progress_label,
+            initial_eta_seconds=estimate_lmm_seconds(n_samples, n_filtered),
+        )
+        if show_progress and n_chunks > 1
+        else None
+    )
+    if bar is not None:
+        bar.update(2)
+
+    i = 2
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            while current is not None:
+                # Prepare chunk N+1 in the background while computing chunk N;
+                # both release the GIL, so rotation and compute overlap.
+                future = executor.submit(prepare)
+                compute(current)
+
+                t = time.perf_counter()
+                try:
+                    current = future.result()
+                except (MemoryError, ValueError, TypeError, OverflowError, OSError):
+                    raise
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Pipeline chunk preparation failed at chunk {i} of "
+                        f"{n_chunks} during overlapped rotation "
+                        f"({n_filtered} SNPs total)."
+                    ) from exc
+                rotation_s += time.perf_counter() - t
+
+                i += 1
+                if bar is not None:
+                    bar.update(i)
+    finally:
+        if bar is not None:
+            with suppress(Exception):
+                bar.update(n_chunks)
+                bar.finish()
+
+    return rotation_s
+
+
 def compute_chunk_size_numpy(
     n_samples: int,
     n_filtered: int,
@@ -1236,6 +1382,10 @@ def run_lmm_association_numpy(
         pipeline_omp_threads = omp_threads
         pipeline_rot_threads = rotation_threads
 
+    # Shared mutable core split read by _prepare_chunk/_compute_and_write. The
+    # pipeline driver rebinds it from the profiled first chunk (see _ThreadBudget).
+    budget = _ThreadBudget(pipeline_rot_threads, pipeline_omp_threads)
+
     # Enforce minimum 20 golden section iterations for ~1e-5 lambda tolerance
     n_refine = max(n_refine, 20)
 
@@ -1299,17 +1449,26 @@ def run_lmm_association_numpy(
         n_filtered,
     )
 
-    def _prepare_chunk(chunk_start: int) -> tuple:
+    _chunk_starts_iter = iter(chunk_starts)
+
+    def _prepare_chunk() -> tuple | None:
         """Slice, impute, rotate, build chunk data for compute dispatch.
 
-        BLAS operations release the GIL. Returns either utg_t (fused path)
-        or SoA-layout varying Uab (split path). Invariant Uab is precomputed
-        once in outer scope (uab_invariant_soa).
+        Pulls the next chunk start from chunk_starts, returning None once the
+        list is exhausted (the pipeline driver's exhaustion signal). BLAS
+        operations release the GIL. Returns either utg_t (fused path) or
+        SoA-layout varying Uab (split path) with its actual length; invariant
+        Uab is precomputed once in outer scope (uab_invariant_soa).
 
         Uses preallocated geno_buf and utg_buf to avoid per-chunk allocation.
         Pipeline path double-buffers via _chunk_counter % 2.
         """
         nonlocal _chunk_counter
+
+        try:
+            chunk_start = next(_chunk_starts_iter)
+        except StopIteration:
+            return None
 
         chunk_end = min(chunk_start + chunk_size, n_filtered)
         chunk_indices = snp_indices[chunk_start:chunk_end]
@@ -1327,7 +1486,7 @@ def run_lmm_association_numpy(
         # Rotate into preallocated utg_buf — jlinalg.dgemm(..., out=)
         # writes directly, no intermediate allocation.
         utg_out = _utg_bufs[buf_idx][:actual_len, :]
-        with jlinalg_threads(pipeline_rot_threads):
+        with jlinalg_threads(budget.rot):
             utg_t = jlinalg.dgemm(geno_chunk, U, transa="T", out=utg_out)
 
         if (
@@ -1352,9 +1511,10 @@ def run_lmm_association_numpy(
         )
         return uab_var_soa, actual_len
 
-    def _compute_and_write(chunk_data: np.ndarray, actual_len: int) -> None:
-        """Run C extension compute on a chunk and write results.
+    def _compute_and_write(prepared: tuple) -> None:
+        """Run C extension compute on a prepared chunk and write results.
 
+        ``prepared`` is the (chunk_data, actual_len) tuple from _prepare_chunk.
         Dispatches by path:
         - Fused (use_fused): chunk_data is utg_t, dispatched to fused C workspace
         - SoA split: chunk_data is uab_var_soa, dispatched to dispatch_soa_split
@@ -1362,11 +1522,11 @@ def run_lmm_association_numpy(
         nonlocal write_offset, t_numpy_compute_total, t_result_write_total
         nonlocal n_at_lmin_accum, n_at_lmax_accum
 
+        chunk_data, actual_len = prepared
+
         t_compute_start = time.perf_counter()
 
-        cr = _dispatch_compute(
-            compute_ctx, chunk_data, pipeline_omp_threads, write_offset
-        )
+        cr = _dispatch_compute(compute_ctx, chunk_data, budget.omp, write_offset)
 
         t_numpy_compute_total += time.perf_counter() - t_compute_start
 
@@ -1400,105 +1560,20 @@ def run_lmm_association_numpy(
 
     with writer_cm as writer:
         if use_pipeline:
-            # Pipelined: overlap rotation of chunk N+1 with C compute of chunk N.
-            # Both operations release the GIL so they run concurrently.
-
-            # --- Profile first chunk for adaptive core split ---
-            # Prepare chunk 0 (rotation) and compute it inline to measure both
-            # stage durations. Re-derive thread split from measured times so
-            # remaining chunks use an empirically correct allocation.
-            t_rot_start = time.perf_counter()
-            chunk_data_first, actual_len_first = _prepare_chunk(chunk_starts[0])
-            t_first_rot = time.perf_counter() - t_rot_start
-            t_rotation_total += t_first_rot
-
-            t_compute_start = time.perf_counter()
-            _compute_and_write(chunk_data_first, actual_len_first)
-            t_first_compute = time.perf_counter() - t_compute_start
-            del chunk_data_first
-
-            # Re-derive core split from measured times (only if chunks remain and
-            # BLAS is controllable — uncontrollable BLAS ignores thread settings).
-            if n_chunks > 2 and is_blas_controllable():
-                old_rot = pipeline_rot_threads
-                old_omp = pipeline_omp_threads
-                pipeline_rot_threads, pipeline_omp_threads = (
-                    compute_adaptive_core_split(
-                        t_first_rot,
-                        t_first_compute,
-                        total_cores,
-                        n_samples=n_samples,
-                    )
-                )
-                if (pipeline_rot_threads, pipeline_omp_threads) != (old_rot, old_omp):
-                    logger.debug(
-                        f"Adaptive core split: {old_rot}/{old_omp} -> "
-                        f"{pipeline_rot_threads}/{pipeline_omp_threads} "
-                        f"(rot={t_first_rot:.3f}s, compute={t_first_compute:.3f}s)"
-                    )
-
-            # Process remaining chunks with the (possibly updated) adaptive split.
-            # remaining_starts is always non-empty: use_pipeline requires
-            # n_chunks >= _MIN_PIPELINE_CHUNKS (8), so at least 7 remain.
-            remaining_starts = chunk_starts[1:]
-
-            # Seed the pipeline by preparing the first remaining chunk.
-            # _prepare_chunk reads pipeline_rot_threads from this scope, so it
-            # uses the updated adaptive split from this point onward.
-            t_rot_start = time.perf_counter()
-            current = _prepare_chunk(remaining_starts[0])
-            t_rotation_total += time.perf_counter() - t_rot_start
-
-            # Progress tracking for the pipeline loop. One chunk fully computed
-            # (profiled), one prepared (rotation only), so initialise at 2.
-            pipeline_bar = None
-            if show_progress and n_chunks > 1:
-                pipeline_bar = create_progress_bar(
-                    n_chunks,
-                    "LMM association",
-                    initial_eta_seconds=estimate_lmm_seconds(n_samples, n_filtered),
-                )
-                # profiled chunk + seeded (prepared, not computed)
-                pipeline_bar.update(2)
-
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                for i_chunk, chunk_start in enumerate(remaining_starts[1:], start=3):
-                    chunk_data, actual_len = current
-
-                    # Submit next chunk preparation (runs in background thread)
-                    future = executor.submit(_prepare_chunk, chunk_start)
-
-                    # C extension compute on current chunk (releases GIL).
-                    # Cores are partitioned: rotation gets pipeline_rot_threads,
-                    # compute gets pipeline_omp_threads.
-                    _compute_and_write(chunk_data, actual_len)
-                    del chunk_data
-
-                    # Wait for background preparation to complete
-                    t_rot_start = time.perf_counter()
-                    try:
-                        current = future.result()
-                    except (MemoryError, ValueError, TypeError, OverflowError):
-                        raise
-                    except Exception as exc:
-                        raise RuntimeError(
-                            f"Pipeline chunk preparation failed at prepare "
-                            f"offset {chunk_start}/{n_filtered} "
-                            f"(compute had processed {write_offset} SNPs)."
-                        ) from exc
-                    t_rotation_total += time.perf_counter() - t_rot_start
-
-                    if pipeline_bar is not None:
-                        pipeline_bar.update(i_chunk)
-
-                # Process last chunk (no next chunk to overlap with)
-                chunk_data, actual_len = current
-                _compute_and_write(chunk_data, actual_len)
-                del chunk_data
-
-            if pipeline_bar is not None:
-                pipeline_bar.update(n_chunks)
-                pipeline_bar.finish()
+            # Overlap rotation of chunk N+1 with C compute of chunk N via the
+            # shared driver. Chunk source is the in-memory fancy-index slice
+            # (_prepare_chunk); the sink is _compute_and_write.
+            t_rotation_total += _drive_pipeline(
+                _prepare_chunk,
+                _compute_and_write,
+                budget,
+                n_chunks=n_chunks,
+                total_cores=total_cores,
+                n_samples=n_samples,
+                n_filtered=n_filtered,
+                show_progress=show_progress,
+                progress_label="LMM association",
+            )
         else:
             # Sequential path (single chunk or non-pipeline execution)
             if show_progress and n_chunks > 1:

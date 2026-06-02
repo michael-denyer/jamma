@@ -414,3 +414,150 @@ class TestEigenDirCLI:
             lmm_mode=1,
         )
         assert config.eigen_dir is None
+
+
+class TestLocoWriteEigenAutoDefault:
+    """PipelineConfig defaults eigen_dir for LOCO write_eigen (Python API parity).
+
+    The CLI defaults --eigen-dir to the output directory when -loco -eigen
+    is set; the Python API (gwas / PipelineConfig) must do the same so that
+    ``gwas(..., loco=True, write_eigen=True)`` does not raise. Regression
+    test for the broken eigen-cache API.
+    """
+
+    def test_loco_write_eigen_defaults_eigen_dir_to_output_dir(self) -> None:
+        """loco + write_eigen + no eigen_dir → eigen_dir becomes output_dir."""
+        from jamma.pipeline import PipelineConfig
+
+        config = PipelineConfig(
+            bfile=Path("dummy"),
+            lmm_mode=1,
+            loco=True,
+            write_eigen=True,
+            output_dir=Path("out"),
+        )
+        assert config.eigen_dir == Path("out")
+
+    def test_explicit_eigen_dir_not_overridden(self) -> None:
+        """An explicitly supplied eigen_dir is preserved, not defaulted."""
+        from jamma.pipeline import PipelineConfig
+
+        config = PipelineConfig(
+            bfile=Path("dummy"),
+            lmm_mode=1,
+            loco=True,
+            write_eigen=True,
+            output_dir=Path("out"),
+            eigen_dir=Path("custom_eigen"),
+        )
+        assert config.eigen_dir == Path("custom_eigen")
+
+    def test_non_loco_write_eigen_does_not_default_eigen_dir(self) -> None:
+        """Standard (non-LOCO) write_eigen leaves eigen_dir as None.
+
+        The non-LOCO path writes eigen files to output_dir directly and never
+        consults eigen_dir, so it must stay None.
+        """
+        from jamma.pipeline import PipelineConfig
+
+        config = PipelineConfig(
+            bfile=Path("dummy"),
+            lmm_mode=1,
+            loco=False,
+            write_eigen=True,
+            output_dir=Path("out"),
+        )
+        assert config.eigen_dir is None
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not available"
+)
+class TestGwasLocoWriteEigen:
+    """End-to-end: gwas(loco=True, write_eigen=True) without eigen_dir works.
+
+    Regression for the broken Python eigen-cache API: this call previously
+    raised ``ValueError: write_eigen=True requires eigen_dir to be set``
+    because the API never defaulted eigen_dir the way the CLI does.
+    """
+
+    def test_gwas_loco_write_eigen_writes_eigen_to_output_dir(
+        self, tmp_path: Path
+    ) -> None:
+        """No eigen_dir given: per-chr eigen files land in output_dir."""
+        from jamma import gwas
+        from jamma.io.plink import get_plink_metadata, partitions_from_metadata
+
+        out_dir = tmp_path / "out"
+        result = gwas(
+            str(MOUSE_HS1940_BFILE),
+            loco=True,
+            write_eigen=True,
+            output_dir=str(out_dir),
+            check_memory=False,
+            show_progress=False,
+        )
+        assert result.n_snps_tested > 0
+
+        meta = get_plink_metadata(MOUSE_HS1940_BFILE)
+        unique_chrs = sorted(partitions_from_metadata(meta).keys())
+        for ch in unique_chrs:
+            assert (out_dir / f"result.loco.chr{ch}.eigenD.npy").exists(), (
+                f"Missing eigenD for chr {ch} in output_dir"
+            )
+            assert (out_dir / f"result.loco.chr{ch}.eigenU.npy").exists(), (
+                f"Missing eigenU for chr {ch} in output_dir"
+            )
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not available"
+)
+class TestLocoLegacyText:
+    """LOCO honors legacy_text for kinship and eigen artifacts.
+
+    Regression test for GEMMA_DIVERGENCES §13: --legacy-text was ignored on
+    the LOCO path, producing .npy instead of GEMMA-compatible .txt files.
+    """
+
+    def test_run_lmm_loco_legacy_text_writes_txt_artifacts(
+        self, tmp_path: Path
+    ) -> None:
+        """legacy_text=True writes .txt eigen and kinship files."""
+        from jamma.io.plink import get_plink_metadata, partitions_from_metadata
+        from jamma.lmm.loco import run_lmm_loco
+        from tests.conftest import load_phenotypes_from_fam
+
+        fam_path = MOUSE_HS1940_BFILE.with_suffix(".fam")
+        phenotypes = load_phenotypes_from_fam(fam_path)
+        meta = get_plink_metadata(MOUSE_HS1940_BFILE)
+        unique_chrs = sorted(partitions_from_metadata(meta).keys())
+
+        run_lmm_loco(
+            bed_path=MOUSE_HS1940_BFILE,
+            phenotypes=phenotypes,
+            lmm_mode=1,
+            output_path=tmp_path / "result.assoc.txt",
+            check_memory=False,
+            show_progress=False,
+            save_kinship=True,
+            kinship_output_dir=tmp_path,
+            kinship_output_prefix="result",
+            write_eigen=True,
+            eigen_dir=tmp_path,
+            eigen_prefix="result",
+            legacy_text=True,
+        )
+
+        for ch in unique_chrs:
+            assert (tmp_path / f"result.loco.chr{ch}.eigenD.txt").exists(), (
+                f"Missing .txt eigenD for chr {ch}"
+            )
+            assert (tmp_path / f"result.loco.chr{ch}.eigenU.txt").exists(), (
+                f"Missing .txt eigenU for chr {ch}"
+            )
+            assert (tmp_path / f"result.loco.cXX.chr{ch}.txt").exists(), (
+                f"Missing .txt kinship for chr {ch}"
+            )

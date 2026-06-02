@@ -260,6 +260,7 @@ def run_lmm_loco(
     write_eigen: bool = False,
     eigen_dir: Path | None = None,
     eigen_prefix: str = "result",
+    legacy_text: bool = False,
 ) -> LocoResult:
     """Run LOCO LMM association: per-chromosome eigendecomp and association.
 
@@ -303,6 +304,9 @@ def run_lmm_loco(
             When set, checks for cached files before computing. Combined
             with write_eigen, writes new files here.
         eigen_prefix: Prefix for eigen filenames (default "result").
+        legacy_text: If True, write (and look up) per-chromosome kinship and
+            eigen artifacts as GEMMA-compatible text files (.cXX.txt,
+            .eigenD.txt, .eigenU.txt) instead of binary .npy.
     Returns:
         LocoResult with associations in biological chromosome order
         (1-22, X, Y, XY, MT). Associations list is empty if output_path
@@ -413,7 +417,9 @@ def run_lmm_loco(
         # (re)generate files, so skip the cache and recompute.
         eigen_cache: dict[str, tuple[Path, Path]] | None = None
         if eigen_dir is not None and not write_eigen:
-            eigen_cache = _find_loco_eigen_cache(eigen_dir, eigen_prefix, unique_chrs)
+            eigen_cache = _find_loco_eigen_cache(
+                eigen_dir, eigen_prefix, unique_chrs, legacy_text=legacy_text
+            )
             if eigen_cache is not None:
                 logger.info(
                     f"Found complete LOCO eigen cache in {eigen_dir} "
@@ -518,12 +524,15 @@ def run_lmm_loco(
                     )
 
                 if save_kinship and kinship_output_dir is not None:
+                    kinship_suffix = ".txt" if legacy_text else ".npy"
+                    kinship_stem = f"{kinship_output_prefix}.loco.cXX.chr{chr_name}"
                     kinship_path = (
-                        kinship_output_dir
-                        / f"{kinship_output_prefix}.loco.cXX.chr{chr_name}.npy"
+                        kinship_output_dir / f"{kinship_stem}{kinship_suffix}"
                     )
                     try:
-                        actual_path = write_kinship_matrix(K_loco, kinship_path)
+                        actual_path = write_kinship_matrix(
+                            K_loco, kinship_path, legacy_text=legacy_text
+                        )
                     except OSError as e:
                         raise OSError(
                             f"Failed to save LOCO kinship for chromosome "
@@ -565,6 +574,7 @@ def run_lmm_loco(
                         U,
                         eigen_dir,
                         prefix=f"{eigen_prefix}.loco.chr{chr_name}",
+                        legacy_text=legacy_text,
                     )
                 except OSError as e:
                     raise OSError(

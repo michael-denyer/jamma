@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import numpy as np
 from loguru import logger
@@ -205,6 +205,22 @@ class PipelineResult:
     n_covariates: int = 1
     pve_estimate: float | None = None
     pve_se: float | None = None
+
+
+class _PhenoLoopOutcome(NamedTuple):
+    """Aggregated results of the per-phenotype LMM loop.
+
+    Returned by ``PipelineRunner._run_phenotype_loop`` so ``_run_inner`` can
+    assemble the final ``PipelineResult`` without holding the loop's locals.
+    """
+
+    associations: list[AssocResult]
+    n_tested: int
+    assoc_paths: list[Path]
+    lmm_s: float
+    runner_timing: dict[str, float]
+    pve: float | None
+    pve_se: float | None
 
 
 class PipelineRunner:
@@ -1021,7 +1037,6 @@ class PipelineRunner:
         )
 
         n_cvt = covariates.shape[1] if covariates is not None else 1
-        is_multi = len(pheno_columns) > 1
         self._log_banner(
             n_samples,
             n_valid,
@@ -1031,14 +1046,85 @@ class PipelineRunner:
         )
         warn_if_small_sample(n_valid)
 
-        # Re-evaluate the plan with actual n_valid (initial plan may have used
-        # raw n_samples from PLINK header; valid_mask filtering can reduce it).
-        # Pass n_cvt so memory estimates account for larger Uab at n_cvt>1.
-        initial_plan = plan
+        # Re-evaluate the plan with the post-filter sample count (valid_mask
+        # intersection can reduce n_valid below the PLINK-header n_samples, and
+        # may flip batch<->streaming). Banner after, so it shows the final plan.
+        plan = self._reselect_plan_after_filtering(
+            plan, n_valid, n_snps, n_cvt, requested
+        )
+        self._log_pipeline_banner(plan)
+
+        self._memory_preflight(plan, n_valid, n_snps, n_cvt)
+
+        # Load/compute eigendecomposition ONCE (shared across phenotypes). The
+        # kinship matrix is consumed here; runners use the eigen arrays directly.
+        eigenvalues, eigenvectors, kinship_s = self._acquire_eigendecomposition(
+            n_samples, n_valid, valid_mask, ksnps_indices
+        )
+        K = None
+        load_s = time.perf_counter() - t_start
+
+        outcome = self._run_phenotype_loop(
+            plan,
+            all_pheno_data,
+            valid_mask,
+            K,
+            covariates,
+            eigenvalues,
+            eigenvectors,
+            assoc_path,
+            snps_indices,
+        )
+
+        total_s = time.perf_counter() - t_start
+        logger.info(f"GWAS complete: {outcome.n_tested} SNPs tested in {total_s:.1f}s")
+
+        result = PipelineResult(
+            associations=outcome.associations,
+            n_samples=n_valid,
+            n_snps_tested=outcome.n_tested,
+            assoc_path=outcome.assoc_paths[-1],
+            assoc_paths=outcome.assoc_paths,
+            timing={
+                "kinship_s": kinship_s,
+                "load_s": load_s,
+                "lmm_s": outcome.lmm_s,
+                "total_s": total_s,
+                "rotation_s": outcome.runner_timing.get("rotation_s", 0.0),
+                "rotation_exposed_s": outcome.runner_timing.get(
+                    "rotation_exposed_s", 0.0
+                ),
+            },
+            backend="numpy",
+            n_covariates=(covariates.shape[1] if covariates is not None else 1),
+            pve_estimate=outcome.pve,
+            pve_se=outcome.pve_se,
+        )
+        self._emit_telemetry(result, plan)
+        return result
+
+    def _reselect_plan_after_filtering(
+        self,
+        initial_plan: ExecutionPlan,
+        n_valid: int,
+        n_snps: int,
+        n_cvt: int,
+        requested: Literal["auto", "numpy", "numpy-streaming"],
+    ) -> ExecutionPlan:
+        """Re-select the execution plan using the post-filter sample count.
+
+        The initial plan used raw ``n_samples`` from the PLINK header; the
+        valid-mask intersection can reduce it (and flip batch<->streaming).
+        Re-selects with ``n_valid`` and ``n_cvt`` (so memory estimates account
+        for a larger Uab at n_cvt>1), logs any change, and re-checks HWE support
+        when the runner changes.
+
+        Returns:
+            The post-filter ExecutionPlan (unchanged when filtering had no
+            effect on mode selection).
+        """
         plan = select_execution_mode(n_valid, n_snps, requested=requested, n_cvt=n_cvt)
         if plan != initial_plan:
-            # Mode changes (batch↔streaming) are expected when sample filtering
-            # reduces n_valid.
             logger.info(
                 f"Execution plan changed after sample filtering: "
                 f"{initial_plan.runner_name} -> {plan.runner_name} ({plan.reason})"
@@ -1048,16 +1134,27 @@ class PipelineRunner:
             logger.debug(
                 f"Execution plan (post-filter): {plan.runner_name} ({plan.reason})"
             )
+        return plan
 
-        # Banner after re-evaluation so it shows the final plan
-        self._log_pipeline_banner(plan)
+    def _acquire_eigendecomposition(
+        self,
+        n_samples: int,
+        n_valid: int,
+        valid_mask: np.ndarray,
+        ksnps_indices: np.ndarray | None,
+    ) -> tuple[np.ndarray, np.ndarray, float]:
+        """Load or compute the shared eigendecomposition (once for all phenotypes).
 
-        self._memory_preflight(plan, n_valid, n_snps, n_cvt)
+        Either reads pre-computed eigen files (-d/-u), or loads/computes the
+        kinship matrix, subsets it to the valid samples, and eigendecomposes it
+        (optionally writing the eigen files). The kinship matrix is consumed
+        here — the runners use the eigenvalues/eigenvectors directly.
 
-        # Load/compute eigendecomposition ONCE (shared across phenotypes)
+        Returns:
+            ``(eigenvalues, eigenvectors, kinship_s)`` where ``kinship_s`` is the
+            wall time spent acquiring the eigendecomposition.
+        """
         t_kinship = time.perf_counter()
-        eigenvalues = None
-        eigenvectors = None
 
         if self.config.eigenvalue_file and self.config.eigenvector_file:
             eigenvalues, eigenvectors = read_eigen_files(
@@ -1075,7 +1172,6 @@ class PipelineRunner:
                     "provided. Using eigen files; kinship will "
                     "be ignored."
                 )
-            K = None
         else:
             # Early sample filtering: when save_kinship=False and some
             # samples are invalid, pass valid_indices so kinship is
@@ -1115,12 +1211,37 @@ class PipelineRunner:
                 )
                 logger.info(f"Wrote eigenvalues to {d_path}")
                 logger.info(f"Wrote eigenvectors to {u_path}")
-            K = None  # Runner uses eigen directly
 
         kinship_s = time.perf_counter() - t_kinship
-        load_s = time.perf_counter() - t_start
+        return eigenvalues, eigenvectors, kinship_s
 
-        # Per-phenotype LMM loop
+    def _run_phenotype_loop(
+        self,
+        plan: ExecutionPlan,
+        all_pheno_data: dict[int, tuple[np.ndarray, int]],
+        valid_mask: np.ndarray,
+        K: np.ndarray | None,
+        covariates: np.ndarray | None,
+        eigenvalues: np.ndarray | None,
+        eigenvectors: np.ndarray | None,
+        assoc_path: Path,
+        snps_indices: np.ndarray | None,
+    ) -> _PhenoLoopOutcome:
+        """Run the per-phenotype LMM loop and aggregate its results.
+
+        Iterates the configured phenotype columns, masking each to the shared
+        valid-sample intersection, dispatching to the batch or streaming runner
+        per the plan, and collecting associations, counts, and output paths.
+        Captures PVE and runner rotation timing from the final phenotype.
+
+        Returns:
+            A _PhenoLoopOutcome bundling associations, total SNPs tested, the
+            per-phenotype output paths, the loop wall time, runner timing, and
+            the PVE estimate.
+        """
+        pheno_columns = self.config.phenotype_columns
+        is_multi = len(pheno_columns) > 1
+
         t_lmm = time.perf_counter()
         all_results: list[AssocResult] = []
         total_tested = 0
@@ -1128,7 +1249,7 @@ class PipelineRunner:
 
         # Pre-load PLINK data once for batch multi-phenotype runs
         _plink_data = None
-        if plan.mode == "batch" and len(pheno_columns) > 1:
+        if plan.mode == "batch" and is_multi:
             from jamma.io import load_plink_binary
 
             logger.info(
@@ -1138,6 +1259,7 @@ class PipelineRunner:
             _plink_data = load_plink_binary(self.config.bfile)
 
         prefix = self.config.output_prefix
+        run_result = None
         for col in pheno_columns:
             if is_multi:
                 logger.info(f"Starting LMM for phenotype column {col}")
@@ -1181,10 +1303,8 @@ class PipelineRunner:
             logger.info(f"Phenotype {col}: {n_tested} SNPs tested -> {col_path}")
 
         lmm_s = time.perf_counter() - t_lmm
-        total_s = time.perf_counter() - t_start
-        logger.info(f"GWAS complete: {total_tested} SNPs tested in {total_s:.1f}s")
 
-        # Pull runner-level rotation timing
+        # Pull runner-level rotation timing from the most recent runner call.
         runner_timing: dict[str, float] = {}
         if plan.mode == "streaming":
             from jamma.lmm.runner_numpy_streaming import (
@@ -1193,31 +1313,15 @@ class PipelineRunner:
 
             runner_timing = _np_stream_timing()
 
-        # Capture PVE from the most recent runner call
-        pve = run_result.pve
-        pve_se = run_result.pve_se
-
-        result = PipelineResult(
+        return _PhenoLoopOutcome(
             associations=all_results,
-            n_samples=n_valid,
-            n_snps_tested=total_tested,
-            assoc_path=all_assoc_paths[-1],
+            n_tested=total_tested,
             assoc_paths=all_assoc_paths,
-            timing={
-                "kinship_s": kinship_s,
-                "load_s": load_s,
-                "lmm_s": lmm_s,
-                "total_s": total_s,
-                "rotation_s": runner_timing.get("rotation_s", 0.0),
-                "rotation_exposed_s": runner_timing.get("rotation_exposed_s", 0.0),
-            },
-            backend="numpy",
-            n_covariates=(covariates.shape[1] if covariates is not None else 1),
-            pve_estimate=pve,
-            pve_se=pve_se,
+            lmm_s=lmm_s,
+            runner_timing=runner_timing,
+            pve=run_result.pve,
+            pve_se=run_result.pve_se,
         )
-        self._emit_telemetry(result, plan)
-        return result
 
     def _run_loco(
         self,

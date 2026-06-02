@@ -133,12 +133,11 @@ result = gwas("data/my_study", kinship_file="k.txt", covariate_file="covars.txt"
 # LOCO analysis (leave-one-chromosome-out)
 result = gwas("data/my_study", loco=True)
 
-# LOCO with eigen caching (skip eigendecomp on subsequent runs)
-result = gwas("data/my_study", loco=True, write_eigen=True)
-# Reuse cached eigen files from a previous run
-result = gwas("data/my_study", loco=True,
-              eigenvalue_file="output/result.eigenD.npy",
-              eigenvector_file="output/result.eigenU.npy")
+# LOCO with eigen caching: writes a per-chromosome eigen cache to output_dir
+result = gwas("data/my_study", loco=True, write_eigen=True, output_dir="output")
+# Reusing a LOCO eigen cache on a later run is CLI-only — the cache is a set of
+# per-chromosome files keyed by directory, so point --eigen-dir at the same dir:
+#   jamma -lmm 1 -bfile data/my_study -loco --eigen-dir output -o result
 
 # Multi-phenotype with eigendecomp reuse (Python API)
 result = gwas("data/my_study", write_eigen=True, phenotype_column=1)

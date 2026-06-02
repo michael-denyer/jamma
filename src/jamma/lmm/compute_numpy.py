@@ -120,7 +120,7 @@ class _OptionalGroup(NamedTuple):
     """
 
     fields: tuple[str, ...]
-    level: str  # "warning", "debug", or "error"
+    level: Literal["warning", "debug", "error"]
     message: str
 
 

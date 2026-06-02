@@ -176,7 +176,7 @@ Two user-facing entry points: the `gwas()` API for programmatic use and the CLI 
 | 1b | `gwas()` | One-call GWAS pipeline (load -> kinship -> LMM -> results) | [gwas.py:40](../src/jamma/gwas.py#L40) |
 | 1b | `GWASResult` | Pipeline result dataclass (associations, timing, counts) | [gwas.py:22](../src/jamma/gwas.py#L22) |
 | 1c | `PipelineRunner` | Shared orchestration (validate -> parse -> memory -> kinship -> LMM); passes `valid_indices` for early sample filtering when `save_kinship=False` | [pipeline.py](../src/jamma/pipeline.py) |
-| 1c | `PipelineRunner.compute_kinship()` | `-gk` kinship orchestration (compute + write), returns `KinshipResult` | [pipeline.py:904](../src/jamma/pipeline.py#L904) |
+| 1c | `PipelineRunner.compute_kinship()` | `-gk` kinship orchestration (compute + write), returns `KinshipResult` | [pipeline.py:911](../src/jamma/pipeline.py#L911) |
 | 1c | `PipelineConfig` | Pipeline configuration dataclass (all CLI flags) | [pipeline.py](../src/jamma/pipeline.py) |
 
 ---

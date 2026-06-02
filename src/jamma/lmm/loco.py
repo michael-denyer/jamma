@@ -313,8 +313,9 @@ def run_lmm_loco(
         is set (results written to disk).
 
     Raises:
-        ValueError: If only one chromosome present, if lmm_mode invalid,
-            when cached eigen files exist in eigen_dir.
+        ValueError: If fewer than two chromosomes are present, if lmm_mode is
+            not in {1, 2, 3, 4}, if no samples have valid phenotypes, or if
+            write_eigen=True but eigen_dir is None.
     """
     start_time = time.perf_counter()
 

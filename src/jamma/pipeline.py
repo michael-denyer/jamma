@@ -36,8 +36,11 @@ from jamma.io.plink import get_plink_metadata, validate_plink_dimensions
 from jamma.io.snp_list import read_snp_list_file, resolve_snp_list_to_indices
 from jamma.kinship import (
     compute_kinship_streaming,
+    compute_loco_kinship_streaming,
+    compute_standardized_kinship,
     read_kinship_matrix,
     write_kinship_matrix,
+    write_loco_kinship_matrices,
 )
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
@@ -205,6 +208,35 @@ class PipelineResult:
     n_covariates: int = 1
     pve_estimate: float | None = None
     pve_se: float | None = None
+
+
+@dataclass
+class KinshipResult:
+    """Outcome of a kinship computation (the ``-gk`` path).
+
+    Returned by ``PipelineRunner.compute_kinship`` so the CLI can write its
+    GEMMA log and summary without owning the compute/write orchestration.
+
+    Attributes:
+        kinship_paths: Written kinship matrix paths. One entry for a standard
+            run; one per chromosome for LOCO.
+        eigen_paths: ``(eigenvalue_path, eigenvector_path)`` when ``write_eigen``
+            was set, else None. Always None for LOCO.
+        n_samples: Sample count of the computed kinship matrix.
+        n_snps: Total SNP count from PLINK metadata.
+        mode: Kinship mode (1=centered, 2=standardized).
+        is_loco: True when per-chromosome LOCO matrices were written.
+        kinship_s: Wall time spent computing (and, for LOCO, writing) the
+            kinship matrix.
+    """
+
+    kinship_paths: list[Path]
+    eigen_paths: tuple[Path, Path] | None
+    n_samples: int
+    n_snps: int
+    mode: int
+    is_loco: bool
+    kinship_s: float
 
 
 class _PhenoLoopOutcome(NamedTuple):
@@ -868,6 +900,137 @@ class PipelineRunner:
         logger.info(f"Execution plan: {plan.runner_name} ({plan.reason})")
 
         return self._run_inner(t_start, plan, requested)
+
+    def compute_kinship(self, mode: int) -> KinshipResult:
+        """Compute and write the kinship matrix (the ``-gk`` path).
+
+        Orchestrates kinship computation end-to-end so the CLI is a thin shell
+        (like ``run()`` for the ``-lmm`` path). Honours ``config.loco`` (writes
+        per-chromosome LOCO matrices), ``config.write_eigen`` (eigendecomposes
+        and writes the eigen files), and ``config.ksnps_file`` (restricts the
+        SNPs used). Caller-facing validation (mode range, file existence,
+        flag-combination guards) stays in the CLI.
+
+        Args:
+            mode: Kinship mode — 1 (centered, streaming) or 2 (standardized,
+                in-memory).
+
+        Returns:
+            A KinshipResult with the written paths, dimensions, and timing.
+        """
+        meta = get_plink_metadata(self.config.bfile)
+        n_samples = meta["n_samples"]
+        n_snps = meta["n_snps"]
+
+        # GEMMA-style banner — kinship uses all samples (n_analyzed == n_total).
+        self._log_banner(n_total=n_samples, n_analyzed=n_samples, n_snps=n_snps)
+
+        ksnps_indices = self._resolve_snp_list(
+            self.config.ksnps_file, meta["sid"], "-ksnps"
+        )
+
+        t_kinship = time.perf_counter()
+
+        if self.config.loco:
+            logger.info(f"Computing LOCO kinship matrices from {self.config.bfile}")
+            loco_iter = compute_loco_kinship_streaming(
+                self.config.bfile,
+                maf_threshold=self.config.maf,
+                miss_threshold=self.config.miss,
+                check_memory=self.config.check_memory,
+                show_progress=self.config.show_progress,
+                ksnps_indices=ksnps_indices,
+                _copy_yielded_matrices=False,
+            )
+            written_paths = write_loco_kinship_matrices(
+                loco_iter,
+                output_dir=self.config.output_dir,
+                prefix=self.config.output_prefix,
+                legacy_text=self.config.legacy_text,
+            )
+            kinship_s = time.perf_counter() - t_kinship
+            logger.info(
+                f"Wrote {len(written_paths)} LOCO kinship matrices in {kinship_s:.2f}s"
+            )
+            return KinshipResult(
+                kinship_paths=written_paths,
+                eigen_paths=None,
+                n_samples=n_samples,
+                n_snps=n_snps,
+                mode=mode,
+                is_loco=True,
+                kinship_s=kinship_s,
+            )
+
+        if self.config.maf > 0.0 or self.config.miss < 1.0:
+            logger.info(
+                f"Filtering: MAF >= {self.config.maf}, "
+                f"missing rate <= {self.config.miss}"
+            )
+
+        if mode == 1:
+            logger.info("Computing centered kinship matrix (streaming)")
+            K = compute_kinship_streaming(
+                self.config.bfile,
+                maf_threshold=self.config.maf,
+                miss_threshold=self.config.miss,
+                check_memory=self.config.check_memory,
+                show_progress=self.config.show_progress,
+                ksnps_indices=ksnps_indices,
+            )
+        else:
+            # Standardized kinship needs the full genotype matrix (no streaming).
+            from jamma.io import load_plink_binary
+
+            logger.info(f"Loading PLINK data from {self.config.bfile}")
+            plink_data = load_plink_binary(self.config.bfile)
+            genotypes = plink_data.genotypes
+            if ksnps_indices is not None:
+                genotypes = genotypes[:, ksnps_indices]
+                logger.info(f"Using {genotypes.shape[1]} SNPs for kinship computation")
+            logger.info("Computing standardized kinship matrix")
+            K = compute_standardized_kinship(
+                genotypes,
+                maf_threshold=self.config.maf,
+                miss_threshold=self.config.miss,
+                check_memory=self.config.check_memory,
+            )
+
+        kinship_s = time.perf_counter() - t_kinship
+
+        kinship_base = self.config.output_dir / f"{self.config.output_prefix}.cXX.txt"
+        kinship_path = write_kinship_matrix(
+            K, kinship_base, legacy_text=self.config.legacy_text
+        )
+        logger.info(f"Kinship matrix written to {kinship_path}")
+        n_out = K.shape[0]
+
+        eigen_paths: tuple[Path, Path] | None = None
+        if self.config.write_eigen:
+            eigenvalues, eigenvectors = eigendecompose_kinship(
+                K, check_memory=self.config.check_memory
+            )
+            del K  # K may be overwritten by eigendecomp; prevent accidental reuse
+            d_path, u_path = write_eigen_files(
+                eigenvalues,
+                eigenvectors,
+                self.config.output_dir,
+                self.config.output_prefix,
+                legacy_text=self.config.legacy_text,
+            )
+            eigen_paths = (d_path, u_path)
+            logger.info(f"Eigenvalues written to {d_path}")
+            logger.info(f"Eigenvectors written to {u_path}")
+
+        return KinshipResult(
+            kinship_paths=[kinship_path],
+            eigen_paths=eigen_paths,
+            n_samples=n_out,
+            n_snps=n_snps,
+            mode=mode,
+            is_loco=False,
+            kinship_s=kinship_s,
+        )
 
     def _load_phenotypes_and_intersect_masks(
         self,

@@ -16,13 +16,6 @@ from loguru import logger
 
 import jamma
 from jamma.core import OutputConfig
-from jamma.io import load_plink_binary
-from jamma.kinship import (
-    compute_kinship_streaming,
-    compute_standardized_kinship,
-    write_kinship_matrix,
-    write_loco_kinship_matrices,
-)
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.utils import setup_logging, write_gemma_log
 
@@ -378,7 +371,7 @@ def _run_gk(
     ksnps_file: Path | None,
     legacy_text: bool = False,
 ) -> None:
-    """Run kinship matrix computation."""
+    """Run kinship matrix computation (thin shell over compute_kinship)."""
     if mode not in (1, 2):
         _cli_error(f"invalid kinship mode {mode}. Use -gk 1 or -gk 2.")
 
@@ -414,166 +407,58 @@ def _run_gk(
             "Use 'jamma -gk 2 -bfile X' without -loco for standardized kinship."
         )
 
-    # Log startup banner (kinship uses all samples, so n_analyzed == n_total)
-    from jamma.io.plink import get_plink_metadata as _get_meta
-
-    _meta = _get_meta(bfile)
-    PipelineRunner._log_banner(
-        n_total=_meta["n_samples"],
-        n_analyzed=_meta["n_samples"],
-        n_snps=_meta["n_snps"],
+    # Delegate the compute/write orchestration to the pipeline, mirroring how
+    # _run_lmm delegates to PipelineRunner.run().
+    pipeline_config = PipelineConfig(
+        bfile=bfile,
+        maf=maf,
+        miss=miss,
+        output_dir=config.outdir,
+        output_prefix=config.prefix,
+        check_memory=check_memory,
+        show_progress=True,
+        loco=loco,
+        write_eigen=write_eigen,
+        ksnps_file=ksnps_file,
+        legacy_text=legacy_text,
     )
 
-    # Resolve ksnps_file to indices if provided
-    ksnps_indices = None
-    if ksnps_file is not None:
-        try:
-            from jamma.io.plink import get_plink_metadata
-            from jamma.io.snp_list import (
-                read_snp_list_file,
-                resolve_snp_list_to_indices,
-            )
+    try:
+        result = PipelineRunner(pipeline_config).compute_kinship(mode)
+    except (FileNotFoundError, ValueError, MemoryError, OSError) as e:
+        logger.debug("Kinship computation failed with traceback:", exc_info=True)
+        _cli_error(str(e))
 
-            meta = get_plink_metadata(bfile)
-            ksnp_ids = read_snp_list_file(ksnps_file)
-            ksnps_indices = resolve_snp_list_to_indices(ksnp_ids, meta["sid"])
-        except (FileNotFoundError, ValueError) as e:
-            logger.debug("CLI operation failed with traceback:", exc_info=True)
-            _cli_error(str(e))
-        click.echo(
-            f"Kinship SNP list (-ksnps): {len(ksnps_indices)} of "
-            f"{meta['n_snps']} SNPs selected"
-        )
-
-    if loco:
-        # LOCO kinship mode: compute per-chromosome LOCO kinship matrices
-        from jamma.kinship import compute_loco_kinship_streaming
-
-        click.echo(f"Computing LOCO kinship matrices from {bfile}...")
-        kinship_start = time.perf_counter()
-
-        loco_iter = compute_loco_kinship_streaming(
-            bfile,
-            maf_threshold=maf,
-            miss_threshold=miss,
-            check_memory=check_memory,
-            show_progress=True,
-            ksnps_indices=ksnps_indices,
-            _copy_yielded_matrices=False,
-        )
-        written_paths = write_loco_kinship_matrices(
-            loco_iter,
-            output_dir=config.outdir,
-            prefix=config.prefix,
-            legacy_text=legacy_text,
-        )
-        kinship_time = time.perf_counter() - kinship_start
-
-        click.echo(
-            f"Wrote {len(written_paths)} LOCO kinship matrices in {kinship_time:.2f}s"
-        )
-        for p in written_paths:
+    # Summary (CLI-facing)
+    if result.is_loco:
+        click.echo(f"Wrote {len(result.kinship_paths)} LOCO kinship matrices")
+        for p in result.kinship_paths:
             click.echo(f"  {p}")
+    else:
+        click.echo(f"Kinship matrix written to {result.kinship_paths[0]}")
+        if result.eigen_paths is not None:
+            click.echo(f"Eigenvalues written to {result.eigen_paths[0]}")
+            click.echo(f"Eigenvectors written to {result.eigen_paths[1]}")
 
-        # Write log file
-        elapsed = time.perf_counter() - start_time
+    # Write GEMMA log file (CLI-only)
+    elapsed = time.perf_counter() - start_time
+    if result.is_loco:
         params = {
             "kinship_mode": "loco",
-            "n_chromosomes": len(written_paths),
+            "n_chromosomes": len(result.kinship_paths),
             "maf_threshold": maf,
             "miss_threshold": miss,
         }
-        timing = {"total": elapsed, "kinship": kinship_time}
-        log_path = write_gemma_log(config, params, timing, command_line)
-        click.echo(f"Log written to {log_path}")
-        return
-
-    # Standard kinship mode
-    kinship_start = time.perf_counter()
-
-    if mode == 1:
-        # Centered kinship: use streaming to avoid loading full genotype matrix
-        kinship_label = "centered"
-        click.echo(f"Computing {kinship_label} kinship matrix (streaming)...")
-        if maf > 0.0 or miss < 1.0:
-            click.echo(f"Filtering: MAF >= {maf}, missing rate <= {miss}")
-
-        K = compute_kinship_streaming(
-            bfile,
-            maf_threshold=maf,
-            miss_threshold=miss,
-            check_memory=check_memory,
-            show_progress=True,
-            ksnps_indices=ksnps_indices,
-        )
     else:
-        # Standardized kinship: requires full genotype matrix (no streaming variant)
-        kinship_label = "standardized"
-        click.echo(f"Loading PLINK data from {bfile}...")
-        try:
-            plink_data = load_plink_binary(bfile)
-        except (FileNotFoundError, ValueError, OSError) as e:
-            logger.debug("Loading PLINK data failed with traceback:", exc_info=True)
-            _cli_error(f"loading PLINK data: {e}")
-
-        click.echo(f"Loaded {plink_data.n_samples} samples, {plink_data.n_snps} SNPs")
-        click.echo(f"Computing {kinship_label} kinship matrix...")
-        if maf > 0.0 or miss < 1.0:
-            click.echo(f"Filtering: MAF >= {maf}, missing rate <= {miss}")
-
-        genotypes = plink_data.genotypes
-        if ksnps_indices is not None:
-            genotypes = genotypes[:, ksnps_indices]
-            click.echo(f"Using {genotypes.shape[1]} SNPs for kinship computation")
-
-        K = compute_standardized_kinship(
-            genotypes,
-            maf_threshold=maf,
-            miss_threshold=miss,
-            check_memory=check_memory,
-        )
-
-    kinship_time = time.perf_counter() - kinship_start
-    click.echo(f"{kinship_label.capitalize()} kinship computed in {kinship_time:.2f}s")
-
-    # Write kinship matrix
-    kinship_base = config.outdir / f"{config.prefix}.cXX.txt"
-    kinship_path = write_kinship_matrix(K, kinship_base, legacy_text=legacy_text)
-    click.echo(f"Kinship matrix written to {kinship_path}")
-
-    n_samples = K.shape[0]
-
-    # Eigendecompose and write if -eigen flag
-    if write_eigen:
-        from jamma.lmm.eigen import eigendecompose_kinship
-        from jamma.lmm.eigen_io import write_eigen_files
-
-        eigenvalues, eigenvectors = eigendecompose_kinship(K, check_memory=check_memory)
-        del K  # K may be overwritten by eigendecomp; prevent accidental reuse
-        d_path, u_path = write_eigen_files(
-            eigenvalues,
-            eigenvectors,
-            config.outdir,
-            config.prefix,
-            legacy_text=legacy_text,
-        )
-        click.echo(f"Eigenvalues written to {d_path}")
-        click.echo(f"Eigenvectors written to {u_path}")
-
-    # Calculate timing
-    end_time = time.perf_counter()
-    elapsed = end_time - start_time
-    n_snps = _meta["n_snps"]
-    params = {
-        "n_samples": n_samples,
-        "n_snps": n_snps,
-        "kinship_mode": mode,
-        "kinship_file": str(kinship_path),
-        "maf_threshold": maf,
-        "miss_threshold": miss,
-    }
-    timing = {"total": elapsed, "kinship": kinship_time}
-
+        params = {
+            "n_samples": result.n_samples,
+            "n_snps": result.n_snps,
+            "kinship_mode": mode,
+            "kinship_file": str(result.kinship_paths[0]),
+            "maf_threshold": maf,
+            "miss_threshold": miss,
+        }
+    timing = {"total": elapsed, "kinship": result.kinship_s}
     log_path = write_gemma_log(config, params, timing, command_line)
     click.echo(f"Log written to {log_path}")
 

@@ -27,6 +27,7 @@ import warnings
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import psutil
@@ -1029,6 +1030,97 @@ def _stream_s_full_and_chr(
     return S_full, S_chr
 
 
+class _LocoPassPlan(NamedTuple):
+    """Memory-sizing decision for streaming LOCO kinship.
+
+    single_pass: accumulate S_full and every per-chromosome S_chr together.
+    batch_size: chromosomes processed per disk pass when multi-pass.
+    single_pass_gb / min_required_gb: peak estimates surfaced for logging and
+        the memory-preflight guard.
+    """
+
+    single_pass: bool
+    batch_size: int
+    single_pass_gb: float
+    min_required_gb: float
+    eigendecomp_min_gb: float
+
+
+def _decide_loco_passes(
+    n_mat: int,
+    n_samples: int,
+    n_chr_with_snps: int,
+    chunk_size: int,
+    available_gb: float,
+    *,
+    max_batch_chrs: int | None,
+) -> _LocoPassPlan:
+    """Decide single-pass vs multi-pass and the chromosomes-per-pass batch size.
+
+    Pure sizing math (no I/O), so it can be unit-tested at scale. The live
+    matrices are ``n_mat x n_mat`` — ``n_mat`` is ``len(valid_indices)`` when
+    sample filtering is active, else ``n_samples`` — while the disk chunk buffer
+    is always ``n_samples`` wide (subsetting happens after the full read). The
+    eigendecomposition runs on the ``n_mat``-sized K_loco, so its workspace
+    reserve is sized by ``n_mat`` too (NOT ``n_samples``); using ``n_samples``
+    over-reserves on filtered datasets and can collapse ``batch_size`` to 1,
+    forcing many redundant BED passes.
+
+    Args:
+        n_mat: Live matrix dimension (valid-sample count, or n_samples).
+        n_samples: Total sample count (disk chunk-buffer width).
+        n_chr_with_snps: Number of chromosomes that retain SNPs after filtering.
+        chunk_size: SNPs per disk read.
+        available_gb: Available RAM in GB (caller reads psutil and passes it in).
+        max_batch_chrs: Test override forcing the chromosomes-per-pass count;
+            None for memory-based sizing.
+
+    Returns:
+        A _LocoPassPlan with the decision and the peak estimates.
+    """
+    from jamma.core.memory import _dsyevr_peak_gb
+
+    matrix_gb = n_mat**2 * 8 / 1e9
+    # Chunk buffer is n_samples (full disk read) regardless of valid_indices;
+    # subsetting happens after load.
+    chunk_buffer_gb = n_samples * chunk_size * 8 / 1e9
+    # S_full + K_loco_buf + all S_chr + chunk buffer
+    single_pass_gb = matrix_gb * (2 + n_chr_with_snps) + chunk_buffer_gb
+    # Minimum: 3 matrices (S_full + K_loco_buf + 1 remaining S_chr) + chunk
+    # buffer + eigendecomp workspace (DSYEVR peak on the n_mat-sized K_loco).
+    eigendecomp_min_gb = _dsyevr_peak_gb(n_mat)
+    min_required_gb = matrix_gb * 3 + chunk_buffer_gb + eigendecomp_min_gb
+
+    if max_batch_chrs is not None:
+        batch_size = max_batch_chrs
+        single_pass = n_chr_with_snps <= batch_size
+    else:
+        single_pass = single_pass_gb <= available_gb * 0.9
+        if single_pass:
+            batch_size = n_chr_with_snps  # unused in the single-pass branch
+        else:
+            # The consumer eigendecomposes each K_loco while the generator is
+            # suspended with remaining S_chr matrices still alive. Reserve
+            # eigendecomp workspace (DSYEVR peak on the n_mat-sized K_loco) so
+            # the batch doesn't exhaust memory before eigendecomp can run.
+            eigendecomp_reserve_gb = _dsyevr_peak_gb(n_mat)
+            usable_gb = (
+                available_gb * 0.9
+                - 2 * matrix_gb
+                - chunk_buffer_gb
+                - eigendecomp_reserve_gb
+            )
+            batch_size = max(1, int(usable_gb / matrix_gb))
+
+    return _LocoPassPlan(
+        single_pass=single_pass,
+        batch_size=batch_size,
+        single_pass_gb=single_pass_gb,
+        min_required_gb=min_required_gb,
+        eigendecomp_min_gb=eigendecomp_min_gb,
+    )
+
+
 def compute_loco_kinship_streaming(
     bed_path: Path,
     chunk_size: int = 10_000,
@@ -1222,61 +1314,31 @@ def compute_loco_kinship_streaming(
         )
     n_chr_with_snps = len(chrs_with_snps)
 
-    # Determine memory strategy: single-pass vs multi-pass batching
-    from jamma.core.memory import _dsyevr_peak_gb
-
-    # When valid_indices is provided, matrices are n_valid x n_valid (not n_samples).
+    # Determine memory strategy: single-pass vs multi-pass batching.
+    # When valid_indices is provided, matrices are n_valid x n_valid (not
+    # n_samples); the chromosomes-per-pass sizing lives in _decide_loco_passes.
     n_mat = len(valid_indices) if valid_indices is not None else n_samples
-    matrix_gb = n_mat**2 * 8 / 1e9
-    # Chunk buffer is n_samples (full disk read) regardless of valid_indices;
-    # subsetting happens after load.
-    chunk_buffer_gb = n_samples * chunk_size * 8 / 1e9
-    # S_full + K_loco_buf + all S_chr + chunk buffer
-    single_pass_gb = matrix_gb * (2 + n_chr_with_snps) + chunk_buffer_gb
     available_gb = psutil.virtual_memory().available / 1e9
-    # Minimum: 3 matrices + chunk buffer + eigendecomp workspace.
-    # The 3-matrix floor arises from the yield phase bottleneck:
-    #   S_full + K_loco_buf + 1 remaining S_chr
-    # In practice, single-pass holds all S_chr simultaneously (handled by
-    # single_pass_gb above). This minimum catches the case where even
-    # multi-pass with batch_size=1 won't fit.
-    # Eigendecomp runs while the generator is suspended with S_chr still alive.
-    # Uses DSYEVR peak (smaller driver) — eigendecompose_kinship() falls back
-    # from DSYEVD to DSYEVR under memory pressure, making this self-consistent.
-    eigendecomp_min_gb = _dsyevr_peak_gb(n_mat)
-    min_required_gb = matrix_gb * 3 + chunk_buffer_gb + eigendecomp_min_gb
+    plan = _decide_loco_passes(
+        n_mat,
+        n_samples,
+        n_chr_with_snps,
+        chunk_size,
+        available_gb,
+        max_batch_chrs=_max_batch_chrs,
+    )
 
-    if check_memory and min_required_gb > available_gb * 0.9:
+    if check_memory and plan.min_required_gb > available_gb * 0.9:
         raise MemoryError(
             f"Insufficient memory for LOCO kinship: need at least "
-            f"{min_required_gb:.1f}GB for S_full + K_loco_buf + one S_chr + "
-            f"eigendecomp ({eigendecomp_min_gb:.1f}GB), "
+            f"{plan.min_required_gb:.1f}GB for S_full + K_loco_buf + one S_chr + "
+            f"eigendecomp ({plan.eigendecomp_min_gb:.1f}GB), "
             f"available {available_gb:.1f}GB"
         )
 
-    # Single-pass vs multi-pass decision and the chromosomes-per-pass batch
-    # size, decided up front so the test override (_max_batch_chrs) and the
-    # memory-based sizing share one place.
-    if _max_batch_chrs is not None:
-        batch_size = _max_batch_chrs
-        single_pass = n_chr_with_snps <= batch_size
-    else:
-        single_pass = single_pass_gb <= available_gb * 0.9
-        if single_pass:
-            batch_size = n_chr_with_snps  # unused in the single-pass branch
-        else:
-            # The consumer eigendecomposes each K_loco while the generator is
-            # suspended with remaining S_chr matrices still alive. Reserve
-            # eigendecomp workspace (full DSYEVR peak: K_loco + Z + O(N)) so the
-            # batch doesn't exhaust memory before eigendecomp can run.
-            eigendecomp_reserve_gb = _dsyevr_peak_gb(n_samples)
-            usable_gb = (
-                available_gb * 0.9
-                - 2 * matrix_gb
-                - chunk_buffer_gb
-                - eigendecomp_reserve_gb
-            )
-            batch_size = max(1, int(usable_gb / matrix_gb))
+    single_pass = plan.single_pass
+    batch_size = plan.batch_size
+    single_pass_gb = plan.single_pass_gb
 
     def _generate() -> Iterator[tuple[str, np.ndarray]]:
         if single_pass:

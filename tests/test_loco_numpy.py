@@ -420,6 +420,60 @@ def test_loco_numpy_valid_sample_subsetting():
         )
 
 
+@pytest.mark.tier0
+def test_decide_loco_passes_reserves_eigendecomp_at_valid_size():
+    """Multi-pass batch sizing reserves eigendecomp memory at n_mat, not n_samples.
+
+    Regression: the multi-pass branch sized its eigendecomp workspace reserve
+    with the full n_samples instead of n_mat (the valid-sample matrix size).
+    On datasets with invalid samples that over-reservation shrinks usable RAM
+    and can collapse batch_size to 1, forcing many redundant BED passes even
+    though the live K_loco matrices are only n_valid x n_valid.
+
+    Pure sizing math, so we drive it at realistic scale (no genotype data) where
+    the n_mat-vs-n_samples reserve difference is material.
+    """
+    from jamma.core.memory import _dsyevr_peak_gb
+    from jamma.kinship.compute import _decide_loco_passes
+
+    n_samples = 100_000
+    n_mat = 70_000  # 30k samples filtered out
+    n_chr = 22
+    chunk_size = 10_000
+    available_gb = 300.0  # forces multi-pass (single-pass needs ~950GB)
+
+    plan = _decide_loco_passes(
+        n_mat, n_samples, n_chr, chunk_size, available_gb, max_batch_chrs=None
+    )
+
+    assert not plan.single_pass, "scenario must exercise the multi-pass branch"
+
+    # Re-derive both candidate batch sizes from the same public peak estimator.
+    matrix_gb = n_mat**2 * 8 / 1e9
+    chunk_buffer_gb = n_samples * chunk_size * 8 / 1e9
+    budget = available_gb * 0.9 - 2 * matrix_gb - chunk_buffer_gb
+
+    fixed_batch = max(1, int((budget - _dsyevr_peak_gb(n_mat)) / matrix_gb))
+    buggy_batch = max(1, int((budget - _dsyevr_peak_gb(n_samples)) / matrix_gb))
+
+    # The scenario must genuinely distinguish the two reserves, and the fix must
+    # pick the (larger) n_mat-based batch size rather than collapsing to 1.
+    assert buggy_batch < fixed_batch, "test scenario does not exercise the bug"
+    assert buggy_batch == 1, "buggy n_samples reserve should collapse to batch_size=1"
+    assert plan.batch_size == fixed_batch
+    assert plan.batch_size > 1
+
+
+@pytest.mark.tier0
+def test_decide_loco_passes_unfiltered_matches_full_size():
+    """With no sample filtering (n_mat == n_samples) the reserve fix is a no-op."""
+    from jamma.kinship.compute import _decide_loco_passes
+
+    plan = _decide_loco_passes(100_000, 100_000, 22, 10_000, 300.0, max_batch_chrs=None)
+    assert not plan.single_pass
+    assert plan.batch_size >= 1
+
+
 @pytest.mark.tier1
 def test_loco_numpy_show_progress_true():
     """NumPy LOCO with show_progress=True completes without error.

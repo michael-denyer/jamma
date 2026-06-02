@@ -7,38 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Internal refactors (no behavior change)**: extracted shared helpers and
+  decomposed large methods across the LMM runners and pipeline. None of these
+  alter CLI flags, output, or numerical results:
+  - `validation/compare.py`: `.assoc.txt` parsing and comparison now derived
+    from the output schema rather than hand-maintained column lists (434549f).
+  - `lmm`: data-driven accel-symbol loader + shared streaming dispatch (#26);
+    LOCO kinship streaming merged into the canonical kinship function (#27);
+    shared `_create_workspaces` (#28), `_dispatch_compute` (#29), and
+    `_drive_pipeline` (#30) extracted from both batch and streaming runners;
+    per-thread scratch alloc/free helpers extracted in `_lmm_accel.c` (#33).
+  - `pipeline.py`: `PipelineRunner._run_inner` god-method decomposed (#31);
+    `-gk` kinship orchestration moved into `pipeline.compute_kinship` (#32).
+- **Dependencies**: bump build-system `numpy` pin 2.4.4 → 2.4.5 (#24);
+  bump `j178/prek-action` 2.0.3 → 2.0.4 (#23) and
+  `google/osv-scanner-action` 2.3.5 → 2.3.8 (#22).
+
+### Fixed
+
+- **LOCO multi-pass eigendecomp reserve sizing**: size the eigendecomposition
+  workspace reserve by valid-sample count rather than the unfiltered sample
+  count, so multi-pass LOCO batch sizing reflects the post-filter matrix
+  dimension (#34).
+- **Link check**: exclude canonical `gnu.org` license URLs from the lychee
+  link check (`lychee.toml`) — gnu.org regularly times out for CI bots,
+  producing spurious failures in the weekly external link check (#35).
+
 ## [5.3.0] - 2026-04-29
 
 ### Added
 
 - **Weekly ASAN/UBSAN sanitizer workflow** (`.github/workflows/sanitizer.yml`):
-  rebuilds C extensions with `-fsanitize=address,undefined` and runs the test
-  suite under both sanitizers every Sunday. Uses a sentinel meta-test
-  (`JAMMA_SENTINEL_UB=1` injects `-DJAMMA_SENTINEL_UB`, triggering a known
-  heap-OOB) to verify the sanitizer harness is actually catching bugs and not
-  silently passing. CI workflow runs with `set -o pipefail`, ASAN traces are
-  written to a file rather than piped, and the sentinel asserter accepts both
-  ASan heap-OOB and UBSan out-of-bounds signatures.
-- **`JAMMA_SANITIZE` build seam** in `_build_support/compile_and_link.py`:
-  appends `-fsanitize=...` flags and disables the post-link import probe so
-  sanitized builds don't crash the wheel-build subprocess. Wired into all
-  three compile entry points (`hatch_build.py`, `_compile_jlinalg.py`,
-  `_compile_accel.py`). `check-compile-flag-literals.py` extended to recognise
-  sanitizer flag literals so they are not flagged by the lint hook.
-- **`JAMMA_FORCE_NUMPY_FALLBACK` env-var gate** for `jlinalg` and `lmm`:
-  forces the NumPy fallback path even when vendor BLAS is available. Used by
-  the sanitizer workflow to exercise the pure-Python paths and by debugging
-  workflows where vendor-LAPACK output needs to be cross-checked against
-  NumPy reference. Documented in `docs/TESTING.md` §1.10.
-- **Sanitizer suppression file** for ASan and the heap-OOB sentinel
-  (`-DJAMMA_SENTINEL_UB`). Documented in `docs/TESTING.md` §1.10 "Running
-  under sanitizers (local repro of CI)".
-- **New pre-commit hooks** (commit `2745846`): actionlint (GitHub Actions
-  workflow lint), zizmor (workflow security audit), shellcheck (shell-script
-  lint), vulture (dead-code detection), refurb (Python refactor suggestions),
-  and `pytest-rerunfailures` (test re-run on transient failure). Three
-  categories of pre-existing findings are deferred — see project notes for
-  triage status and tightening conditions for each hook. (`.github/workflows/sanitizer.yml`):
   rebuilds C extensions with `-fsanitize=address,undefined` and runs the test
   suite under both sanitizers every Sunday. Uses a sentinel meta-test
   (`JAMMA_SENTINEL_UB=1` injects `-DJAMMA_SENTINEL_UB`, triggering a known

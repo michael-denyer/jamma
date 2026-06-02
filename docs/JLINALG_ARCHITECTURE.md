@@ -146,8 +146,9 @@ There are no hand-rolled LAPACK implementations in the tree. As of commit
 `663a22b` (`refactor: strip JAX and own-BLAS`), the architectural commitment
 is **vendor ILP64 LAPACK > NumPy fallback** with nothing in between -- if
 vendor LAPACK is unavailable on a target platform, jlinalg falls through to
-NumPy, never to a translated C routine. The `STRICT_IEEE_SOURCES` tuple in
-`_build_support/compile_and_link.py` is empty for this reason.
+NumPy, never to a translated C routine. The `LAPACK_SOURCES` tuple in
+`_build_support/compile_and_link.py` holds only the `eigh.c` dispatcher (it
+gets strict IEEE 754 flags) -- no translated LAPACK routines are listed.
 
 ### Test Infrastructure
 

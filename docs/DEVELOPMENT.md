@@ -61,10 +61,13 @@ line-length = 88
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = [
+    "E", "F", "I", "UP", "B",
+    "SIM", "RUF", "C4", "PIE", "PERF", "NPY", "PT", "PTH", "BLE",
+]
 ```
 
-This covers pyflakes (`F`), pycodestyle (`E`), isort import sorting (`I`), pyupgrade (`UP`), and flake8-bugbear (`B`).
+This covers pyflakes (`F`), pycodestyle (`E`), isort import sorting (`I`), pyupgrade (`UP`), flake8-bugbear (`B`), flake8-simplify (`SIM`), ruff-specific checks (`RUF`), flake8-comprehensions (`C4`), flake8-pie (`PIE`), perflint (`PERF`), numpy-specific rules (`NPY`), flake8-pytest-style (`PT`), flake8-use-pathlib (`PTH`), and flake8-blind-except (`BLE`). See `pyproject.toml` for the per-rule `ignore` list.
 
 Pre-commit hooks run ruff on staged files automatically. A pre-push hook runs `ruff format --check .` across all files to catch drift in unstaged files. To fix locally before pushing:
 

@@ -172,6 +172,13 @@ class PipelineConfig:
                 "(-n with multiple columns). "
                 "Run each phenotype separately."
             )
+        # LOCO writes a per-chromosome eigen cache keyed by eigen_dir. When the
+        # caller asks to write eigen but gives no directory, default it to
+        # output_dir so the Python API matches the CLI (which applies the same
+        # default) instead of raising in run_lmm_loco. The non-LOCO write_eigen
+        # path writes to output_dir directly and never consults eigen_dir.
+        if self.loco and self.write_eigen and self.eigen_dir is None:
+            self.eigen_dir = self.output_dir
 
 
 @dataclass
@@ -1545,6 +1552,7 @@ class PipelineRunner:
             write_eigen=self.config.write_eigen,
             eigen_dir=self.config.eigen_dir,
             eigen_prefix=self.config.output_prefix,
+            legacy_text=self.config.legacy_text,
         )
         loco_s = time.perf_counter() - t_loco
         total_s = time.perf_counter() - t_start

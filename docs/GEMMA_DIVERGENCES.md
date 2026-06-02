@@ -457,51 +457,20 @@ the `save_kinship=False` path. This is a memory optimization, not a numerical ch
 
 ---
 
-## 13. LOCO Ignores `--legacy-text` for Eigen and Kinship Artifacts
+## 13. LOCO `--legacy-text` Support (Resolved)
 
-Section 11 documents JAMMA's contract: `--legacy-text` produces GEMMA-compatible
-text files (`.cXX.txt`, `.eigenD.txt`, `.eigenU.txt`). That contract holds on the
-standard (non-LOCO) code path but **does not currently hold on the LOCO path**.
+This was previously a divergence: `--legacy-text` was honored on the standard
+code path but ignored on the LOCO path, so `--loco --legacy-text --write-eigen`
+silently produced binary `.npy` artifacts instead of the GEMMA-compatible
+`.cXX.txt` / `.eigenD.txt` / `.eigenU.txt` files the user asked for.
 
-### Observed behaviour
-
-When `--loco` is combined with `--legacy-text`, LOCO eigen and kinship artifacts are
-still written as binary `.npy` only:
-
-- `run_lmm_loco()` does not accept a `legacy_text` parameter
-  ([src/jamma/lmm/loco.py](../src/jamma/lmm/loco.py)).
-- LOCO eigen cache lookup hard-codes the binary default
-  ([loco.py](../src/jamma/lmm/loco.py), `_find_loco_eigen_cache`).
-- LOCO eigen writes call `write_eigen_files(...)` without `legacy_text=True`
-  ([loco.py](../src/jamma/lmm/loco.py), eigen write block).
-- LOCO kinship saves are hard-coded to `.loco.cXX.chr{chr}.npy`
-  ([loco.py](../src/jamma/lmm/loco.py), `save_kinship` block).
-- `PipelineRunner._run_inner` forwards every relevant LOCO option to
-  `run_lmm_loco` except `legacy_text`
-  ([src/jamma/pipeline.py](../src/jamma/pipeline.py), LOCO dispatch block).
-
-### Impact
-
-A user who passes `--loco --legacy-text --write-eigen` will receive `.npy` files
-instead of the `.eigenD.txt` / `.eigenU.txt` files they asked for. The same holds
-for per-chromosome LOCO kinship saves. No error is raised; the binary files are
-simply not GEMMA-compatible. Downstream GEMMA-driven consumers of those artifacts
-will fail.
-
-Numerical results (associations, p-values) are unaffected — this is a file-format
-divergence only.
-
-### Status
-
-Documented here as a known gap rather than fixed in the same patch, because the fix
-requires threading `legacy_text` through four call sites and adding LOCO-specific
-cache-lookup logic for `.txt` siblings. Tracked separately.
-
-### Workaround
-
-Run the standard (non-LOCO) path with `--legacy-text --write-eigen` if you need
-GEMMA-compatible text artifacts. Use `--loco` only when binary `.npy` artifacts are
-acceptable, or consume the LOCO `.npy` files via `numpy.load`.
+**Fixed.** `run_lmm_loco()` now accepts a `legacy_text` parameter and threads it
+through the per-chromosome eigen-cache lookup (`_find_loco_eigen_cache`), the
+kinship save (filename suffix + `write_kinship_matrix`), and the eigen write
+(`write_eigen_files`). `PipelineRunner._run_loco` forwards
+`config.legacy_text`, so `--loco --legacy-text` now writes GEMMA text artifacts
+on the LOCO path identically to the standard path. As with the non-LOCO path,
+text mode writes the `.txt` files plus `.npy` sidecars for fast reload.
 
 ---
 
@@ -522,7 +491,7 @@ acceptable, or consume the LOCO `.npy` files via `numpy.load`.
 | LOCO + external kinship | Silently uses full K | Rejects (mutual exclusion) | Correctness guard |
 | Default file format | Text (`.cXX.txt`, `.eigenD.txt`) | Binary `.npy` (`--legacy-text` for text) | GEMMA files read natively |
 | Early sample filtering | Kinship always n × n | Kinship at n_valid × n_valid when save_kinship=False | Memory saving only; values identical |
-| LOCO + `--legacy-text` | N/A (GEMMA has no LOCO) | Ignored on LOCO path — eigen/kinship still written as `.npy`; see §13 | File-format only, no numerical impact |
+| LOCO + `--legacy-text` | N/A (GEMMA has no LOCO) | Honored on LOCO path — writes `.cXX.txt` / `.eigenD.txt` / `.eigenU.txt` (see §13) | Parity with standard path |
 
 ---
 

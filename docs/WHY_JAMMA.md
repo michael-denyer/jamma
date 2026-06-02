@@ -218,7 +218,7 @@ The goal is a **drop-in replacement**: same CLI, same output format, same scient
 from jamma.utils.logging import log_rss_memory
 
 log_rss_memory("kinship", "before")  # Logs current RSS in GB
-kinship = compute_kinship(genotypes)
+kinship = compute_centered_kinship(genotypes)
 log_rss_memory("kinship", "after")
 ```
 

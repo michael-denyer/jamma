@@ -113,6 +113,40 @@ static double *alloc_aligned_doubles(size_t n)
 }
 
 /* ---------------------------------------------------------------------------
+ * Per-thread scratch buffers.
+ *
+ * Compute kernels pre-allocate one reusable buffer per OpenMP thread OUTSIDE
+ * the parallel region, so the hot per-SNP loop never calls malloc/free (which
+ * caused heap-lock contention at high thread counts). alloc_thread_scratch
+ * returns a length-`n_threads` array of `n`-double, 32-byte-aligned buffers;
+ * the pointer array is calloc'd so a partial failure leaves unfilled slots
+ * NULL. On any allocation failure it frees everything and returns NULL — the
+ * caller reports PyErr_NoMemory(). free_thread_scratch is the symmetric teardown
+ * (NULL-safe, so it can run on every cleanup path).
+ * ------------------------------------------------------------------------- */
+static double **alloc_thread_scratch(int n_threads, size_t n)
+{
+    double **bufs = (double **)calloc((size_t)n_threads, sizeof(double *));
+    if (!bufs) return NULL;
+    for (int t = 0; t < n_threads; t++) {
+        bufs[t] = alloc_aligned_doubles(n);
+        if (!bufs[t]) {
+            for (int u = 0; u < n_threads; u++) free(bufs[u]);
+            free(bufs);
+            return NULL;
+        }
+    }
+    return bufs;
+}
+
+static void free_thread_scratch(double **bufs, int n_threads)
+{
+    if (!bufs) return;
+    for (int t = 0; t < n_threads; t++) free(bufs[t]);
+    free(bufs);
+}
+
+/* ---------------------------------------------------------------------------
  * validate_eigenvalues — reject NaN/Inf before entering the compute loop.
  *
  * Without this check, non-finite eigenvalues silently propagate through the
@@ -3286,16 +3320,8 @@ static PyObject *compute_lmm_batch_c(PyObject *self, PyObject *args, PyObject *k
     if (actual_threads < 1) actual_threads = 1;
 #endif
 
-    thread_bufs = (double **)calloc((size_t)actual_threads, sizeof(double *));
-    int alloc_ok = (thread_bufs != NULL);
-    if (alloc_ok) {
-        for (int t = 0; t < actual_threads; t++) {
-            thread_bufs[t] = alloc_aligned_doubles((size_t)n_samples);
-            if (!thread_bufs[t]) { alloc_ok = 0; break; }
-        }
-    }
-
-    if (!alloc_ok) {
+    thread_bufs = alloc_thread_scratch(actual_threads, (size_t)n_samples);
+    if (!thread_bufs) {
         PyErr_NoMemory();
         goto err_output;
     }
@@ -3342,16 +3368,12 @@ static PyObject *compute_lmm_batch_c(PyObject *self, PyObject *args, PyObject *k
     Py_END_ALLOW_THREADS
 
     if (warn_betainc_convergence(betas, pwalds, n_snps) < 0) {
-        /* Free per-thread buffers before going to error path */
-        for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]);
-        free(thread_bufs);
+        free_thread_scratch(thread_bufs, actual_threads);
         thread_bufs = NULL;
         goto err_output;
     }
 
-    /* Free per-thread buffers */
-    for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]);
-    free(thread_bufs);
+    free_thread_scratch(thread_bufs, actual_threads);
     thread_bufs = NULL;
 
     result = build_result_dict(&out);
@@ -3368,10 +3390,7 @@ static PyObject *compute_lmm_batch_c(PyObject *self, PyObject *args, PyObject *k
 err_output:
     decref_output_arrays(&out);
 err_input:
-    if (thread_bufs) {
-        for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]);
-        free(thread_bufs);
-    }
+    free_thread_scratch(thread_bufs, actual_threads);
     Py_XDECREF(eigenvalues_arr);
     Py_XDECREF(uab_arr);
     Py_XDECREF(iab_arr);
@@ -3939,19 +3958,8 @@ static PyObject *compute_lrt_batch_c(PyObject *self, PyObject *args)
     (void)n_threads;
 #endif
 
-    double **thread_bufs = (double **)calloc((size_t)actual_threads, sizeof(double *));
-    int alloc_ok = (thread_bufs != NULL);
-    if (alloc_ok) {
-        for (int t = 0; t < actual_threads; t++) {
-            thread_bufs[t] = alloc_aligned_doubles((size_t)n_samples);
-            if (!thread_bufs[t]) { alloc_ok = 0; break; }
-        }
-    }
-    if (!alloc_ok) {
-        if (thread_bufs) {
-            for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]);
-            free(thread_bufs);
-        }
+    double **thread_bufs = alloc_thread_scratch(actual_threads, (size_t)n_samples);
+    if (!thread_bufs) {
         free(lambda_grid);
         free(hi_eval_grid);
         free(logdet_h_grid);
@@ -3993,8 +4001,7 @@ static PyObject *compute_lrt_batch_c(PyObject *self, PyObject *args)
 
     Py_END_ALLOW_THREADS
 
-    for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]);
-    free(thread_bufs);
+    free_thread_scratch(thread_bufs, actual_threads);
 
     free(lambda_grid);
     free(hi_eval_grid);
@@ -5264,19 +5271,8 @@ static PyObject *compute_mode4_chunk_split_c_py(
 #endif
 
     /* Per-thread scratch buffers for MLE golden section refinement */
-    double **thread_bufs = (double **)calloc((size_t)actual_threads, sizeof(double *));
-    int alloc_ok = (thread_bufs != NULL);
-    if (alloc_ok) {
-        for (int t = 0; t < actual_threads; t++) {
-            thread_bufs[t] = alloc_aligned_doubles((size_t)n_samples);
-            if (!thread_bufs[t]) { alloc_ok = 0; break; }
-        }
-    }
-    if (!alloc_ok) {
-        if (thread_bufs) {
-            for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]);
-            free(thread_bufs);
-        }
+    double **thread_bufs = alloc_thread_scratch(actual_threads, (size_t)n_samples);
+    if (!thread_bufs) {
         decref_mode4_output(&out);
         PyErr_NoMemory();
         goto err_input;
@@ -5378,8 +5374,7 @@ static PyObject *compute_mode4_chunk_split_c_py(
     /* Free per-thread scratch buffers before any Python calls that might
      * raise (warn_betainc_convergence can raise if warnings are errors).
      * Buffers are only used inside the GIL-released compute loop above. */
-    for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]);
-    free(thread_bufs);
+    free_thread_scratch(thread_bufs, actual_threads);
     thread_bufs = NULL;
 
     if (warn_betainc_convergence(out_betas, out_pwalds, n_snps) < 0)
@@ -5724,25 +5719,13 @@ static PyObject *compute_lmm_chunk_fused_c_py(
 #endif
 
     /* Per-thread scratch buffers for on-the-fly wx/xx/xy computation */
-    double **scratch_wx = (double **)calloc((size_t)actual_threads, sizeof(double *));
-    double **scratch_xx = (double **)calloc((size_t)actual_threads, sizeof(double *));
-    double **scratch_xy = (double **)calloc((size_t)actual_threads, sizeof(double *));
-    int alloc_ok = (scratch_wx != NULL && scratch_xx != NULL && scratch_xy != NULL);
-    if (alloc_ok) {
-        for (int t = 0; t < actual_threads; t++) {
-            scratch_wx[t] = alloc_aligned_doubles((size_t)n_samples);
-            scratch_xx[t] = alloc_aligned_doubles((size_t)n_samples);
-            scratch_xy[t] = alloc_aligned_doubles((size_t)n_samples);
-            if (!scratch_wx[t] || !scratch_xx[t] || !scratch_xy[t]) {
-                alloc_ok = 0;
-                break;
-            }
-        }
-    }
-    if (!alloc_ok) {
-        if (scratch_wx) { for (int t = 0; t < actual_threads; t++) free(scratch_wx[t]); free(scratch_wx); }
-        if (scratch_xx) { for (int t = 0; t < actual_threads; t++) free(scratch_xx[t]); free(scratch_xx); }
-        if (scratch_xy) { for (int t = 0; t < actual_threads; t++) free(scratch_xy[t]); free(scratch_xy); }
+    double **scratch_wx = alloc_thread_scratch(actual_threads, (size_t)n_samples);
+    double **scratch_xx = alloc_thread_scratch(actual_threads, (size_t)n_samples);
+    double **scratch_xy = alloc_thread_scratch(actual_threads, (size_t)n_samples);
+    if (!scratch_wx || !scratch_xx || !scratch_xy) {
+        free_thread_scratch(scratch_wx, actual_threads);
+        free_thread_scratch(scratch_xx, actual_threads);
+        free_thread_scratch(scratch_xy, actual_threads);
         decref_output_arrays(&out);
         PyErr_NoMemory();
         goto err_input;
@@ -5806,14 +5789,9 @@ static PyObject *compute_lmm_chunk_fused_c_py(
     Py_END_ALLOW_THREADS
 
     /* Free scratch buffers */
-    for (int t = 0; t < actual_threads; t++) {
-        free(scratch_wx[t]);
-        free(scratch_xx[t]);
-        free(scratch_xy[t]);
-    }
-    free(scratch_wx);
-    free(scratch_xx);
-    free(scratch_xy);
+    free_thread_scratch(scratch_wx, actual_threads);
+    free_thread_scratch(scratch_xx, actual_threads);
+    free_thread_scratch(scratch_xy, actual_threads);
 
     if (warn_betainc_convergence(betas, pwalds, n_snps) < 0)
         goto err_output;
@@ -6235,29 +6213,15 @@ static PyObject *compute_mode4_chunk_fused_c_py(
     /* Per-thread scratch buffers:
      * - 3 for wx/xx/xy on-the-fly computation
      * - 1 for MLE golden section refinement (hi_eval_local) */
-    double **scratch_wx = (double **)calloc((size_t)actual_threads, sizeof(double *));
-    double **scratch_xx = (double **)calloc((size_t)actual_threads, sizeof(double *));
-    double **scratch_xy = (double **)calloc((size_t)actual_threads, sizeof(double *));
-    double **thread_bufs = (double **)calloc((size_t)actual_threads, sizeof(double *));
-    int alloc_ok = (scratch_wx != NULL && scratch_xx != NULL &&
-                    scratch_xy != NULL && thread_bufs != NULL);
-    if (alloc_ok) {
-        for (int t = 0; t < actual_threads; t++) {
-            scratch_wx[t] = alloc_aligned_doubles((size_t)n_samples);
-            scratch_xx[t] = alloc_aligned_doubles((size_t)n_samples);
-            scratch_xy[t] = alloc_aligned_doubles((size_t)n_samples);
-            thread_bufs[t] = alloc_aligned_doubles((size_t)n_samples);
-            if (!scratch_wx[t] || !scratch_xx[t] || !scratch_xy[t] || !thread_bufs[t]) {
-                alloc_ok = 0;
-                break;
-            }
-        }
-    }
-    if (!alloc_ok) {
-        if (scratch_wx) { for (int t = 0; t < actual_threads; t++) free(scratch_wx[t]); free(scratch_wx); }
-        if (scratch_xx) { for (int t = 0; t < actual_threads; t++) free(scratch_xx[t]); free(scratch_xx); }
-        if (scratch_xy) { for (int t = 0; t < actual_threads; t++) free(scratch_xy[t]); free(scratch_xy); }
-        if (thread_bufs) { for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]); free(thread_bufs); }
+    double **scratch_wx = alloc_thread_scratch(actual_threads, (size_t)n_samples);
+    double **scratch_xx = alloc_thread_scratch(actual_threads, (size_t)n_samples);
+    double **scratch_xy = alloc_thread_scratch(actual_threads, (size_t)n_samples);
+    double **thread_bufs = alloc_thread_scratch(actual_threads, (size_t)n_samples);
+    if (!scratch_wx || !scratch_xx || !scratch_xy || !thread_bufs) {
+        free_thread_scratch(scratch_wx, actual_threads);
+        free_thread_scratch(scratch_xx, actual_threads);
+        free_thread_scratch(scratch_xy, actual_threads);
+        free_thread_scratch(thread_bufs, actual_threads);
         decref_mode4_output(&out);
         PyErr_NoMemory();
         goto err_input;
@@ -6363,16 +6327,10 @@ static PyObject *compute_mode4_chunk_fused_c_py(
     Py_END_ALLOW_THREADS
 
     /* Free per-thread scratch buffers */
-    for (int t = 0; t < actual_threads; t++) {
-        free(scratch_wx[t]);
-        free(scratch_xx[t]);
-        free(scratch_xy[t]);
-        free(thread_bufs[t]);
-    }
-    free(scratch_wx);
-    free(scratch_xx);
-    free(scratch_xy);
-    free(thread_bufs);
+    free_thread_scratch(scratch_wx, actual_threads);
+    free_thread_scratch(scratch_xx, actual_threads);
+    free_thread_scratch(scratch_xy, actual_threads);
+    free_thread_scratch(thread_bufs, actual_threads);
 
     if (warn_betainc_convergence(out_betas, out_pwalds, n_snps) < 0)
         goto err_output;
@@ -8620,19 +8578,8 @@ static PyObject *compute_lrt_split_c(PyObject *self, PyObject *args)
     (void)n_threads;
 #endif
 
-    double **thread_bufs = (double **)calloc((size_t)actual_threads, sizeof(double *));
-    int alloc_ok = (thread_bufs != NULL);
-    if (alloc_ok) {
-        for (int t = 0; t < actual_threads; t++) {
-            thread_bufs[t] = alloc_aligned_doubles((size_t)n_samples);
-            if (!thread_bufs[t]) { alloc_ok = 0; break; }
-        }
-    }
-    if (!alloc_ok) {
-        if (thread_bufs) {
-            for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]);
-            free(thread_bufs);
-        }
+    double **thread_bufs = alloc_thread_scratch(actual_threads, (size_t)n_samples);
+    if (!thread_bufs) {
         free(lambda_grid);
         free(hi_eval_grid);
         free(logdet_h_grid);
@@ -8675,8 +8622,7 @@ static PyObject *compute_lrt_split_c(PyObject *self, PyObject *args)
 
     Py_END_ALLOW_THREADS
 
-    for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]);
-    free(thread_bufs);
+    free_thread_scratch(thread_bufs, actual_threads);
 
     free(lambda_grid);
     free(hi_eval_grid);
@@ -9434,25 +9380,12 @@ static PyObject *compute_lrt_fused_c(PyObject *self, PyObject *args)
     (void)n_threads;
 #endif
 
-    double **thread_bufs = (double **)calloc((size_t)actual_threads, sizeof(double *));
-    double **thread_scratch = (double **)calloc((size_t)actual_threads, sizeof(double *));
-    int alloc_ok = (thread_bufs != NULL && thread_scratch != NULL);
-    if (alloc_ok) {
-        for (int t = 0; t < actual_threads; t++) {
-            thread_bufs[t] = alloc_aligned_doubles((size_t)n_samples);
-            thread_scratch[t] = alloc_aligned_doubles((size_t)3 * n_samples);
-            if (!thread_bufs[t] || !thread_scratch[t]) { alloc_ok = 0; break; }
-        }
-    }
-    if (!alloc_ok) {
-        if (thread_bufs) {
-            for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]);
-            free(thread_bufs);
-        }
-        if (thread_scratch) {
-            for (int t = 0; t < actual_threads; t++) free(thread_scratch[t]);
-            free(thread_scratch);
-        }
+    double **thread_bufs = alloc_thread_scratch(actual_threads, (size_t)n_samples);
+    double **thread_scratch =
+        alloc_thread_scratch(actual_threads, (size_t)3 * n_samples);
+    if (!thread_bufs || !thread_scratch) {
+        free_thread_scratch(thread_bufs, actual_threads);
+        free_thread_scratch(thread_scratch, actual_threads);
         free(lambda_grid);
         free(hi_eval_grid);
         free(logdet_h_grid);
@@ -9503,12 +9436,8 @@ static PyObject *compute_lrt_fused_c(PyObject *self, PyObject *args)
 
     Py_END_ALLOW_THREADS
 
-    for (int t = 0; t < actual_threads; t++) {
-        free(thread_bufs[t]);
-        free(thread_scratch[t]);
-    }
-    free(thread_bufs);
-    free(thread_scratch);
+    free_thread_scratch(thread_bufs, actual_threads);
+    free_thread_scratch(thread_scratch, actual_threads);
 
     free(lambda_grid);
     free(hi_eval_grid);
@@ -9856,29 +9785,12 @@ static PyObject *compute_lrt_fused_ws_c_py(PyObject *self, PyObject *args)
 #endif
 
     /* Allocate per-thread scratch buffers (thread-safe, adapts to retuned n_threads) */
-    double **thread_bufs = (double **)calloc((size_t)actual_threads, sizeof(double *));
-    double **thread_scratch = (double **)calloc((size_t)actual_threads, sizeof(double *));
-    int alloc_ok = (thread_bufs != NULL && thread_scratch != NULL);
-    if (alloc_ok) {
-        for (int t = 0; t < actual_threads; t++) {
-            thread_bufs[t] = alloc_aligned_doubles((size_t)n_samples);
-            thread_scratch[t] = alloc_aligned_doubles((size_t)3 * n_samples);
-            if (!thread_bufs[t] || !thread_scratch[t]) {
-                alloc_ok = 0;
-                break;
-            }
-        }
-    }
-    if (!alloc_ok) {
-        /* Clean up partial allocation */
-        if (thread_bufs) {
-            for (int t = 0; t < actual_threads; t++) free(thread_bufs[t]);
-            free(thread_bufs);
-        }
-        if (thread_scratch) {
-            for (int t = 0; t < actual_threads; t++) free(thread_scratch[t]);
-            free(thread_scratch);
-        }
+    double **thread_bufs = alloc_thread_scratch(actual_threads, (size_t)n_samples);
+    double **thread_scratch =
+        alloc_thread_scratch(actual_threads, (size_t)3 * n_samples);
+    if (!thread_bufs || !thread_scratch) {
+        free_thread_scratch(thread_bufs, actual_threads);
+        free_thread_scratch(thread_scratch, actual_threads);
         decref_lrt_output(&out);
         Py_DECREF(utg_t_arr);
         return PyErr_NoMemory();
@@ -9929,12 +9841,8 @@ static PyObject *compute_lrt_fused_ws_c_py(PyObject *self, PyObject *args)
     Py_END_ALLOW_THREADS
 
     /* Free per-call scratch */
-    for (int t = 0; t < actual_threads; t++) {
-        free(thread_bufs[t]);
-        free(thread_scratch[t]);
-    }
-    free(thread_bufs);
-    free(thread_scratch);
+    free_thread_scratch(thread_bufs, actual_threads);
+    free_thread_scratch(thread_scratch, actual_threads);
 
     Py_DECREF(utg_t_arr);
     return build_lrt_result_dict(&out);

@@ -1,0 +1,92 @@
+name: CodeQL
+
+# Static analysis (SAST) for both languages in the tree:
+#
+#   * python  — taint/security queries over src/jamma and scripts
+#   * c-cpp   — the real untrusted-input surface: the PLINK .bed/.bim/.fam
+#               readers and _lmm_accel.c / _jlinalg.so. A malformed or
+#               hostile genotype file is the one attacker-controlled path
+#               into a numerical library, so the C extensions get static
+#               taint analysis here.
+#
+# Complements, not duplicates, the existing posture:
+#   * zizmor / actionlint   — workflow-level audit (not source code)
+#   * Sanitizers (ASAN/UBSAN) — runtime memory bugs, but only on paths the
+#                               test suite exercises; CodeQL reaches every
+#                               C path statically.
+#   * OSV scanner           — known-CVE dependency scanning, not first-party code
+#
+# Runs on PR/push to the default branches plus a weekly cron so queries
+# updated by GitHub between PRs still get applied to the tree. Results
+# land in the repo Security tab (Code scanning alerts).
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      # required for CodeQL to upload results
+      security-events: write
+      # required to read the Actions workflow run for the analysis
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: python
+            build-mode: none
+          - language: c-cpp
+            build-mode: manual
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@84498526a009a99c875e83ef4821a8ba52de7c22  # codeql-bundle-v2.25.5
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      # The c-cpp analysis runs in manual build mode: CodeQL traces the
+      # actual compiler invocations, so we reproduce CI's two compile
+      # entry points exactly (see CLAUDE.md "_build_support" gotcha).
+      # python uses build-mode: none and skips this block.
+      - name: Install uv
+        if: matrix.language == 'c-cpp'
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+
+      - name: Set up Python 3.12
+        if: matrix.language == 'c-cpp'
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        if: matrix.language == 'c-cpp'
+        run: uv sync
+
+      - name: Compile C extensions (_lmm_accel + jlinalg)
+        if: matrix.language == 'c-cpp'
+        run: |
+          uv run python -m jamma.lmm._compile_accel
+          uv run python -m jamma.jlinalg._compile_jlinalg
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@84498526a009a99c875e83ef4821a8ba52de7c22  # codeql-bundle-v2.25.5
+        with:
+          category: "/language:${{ matrix.language }}"

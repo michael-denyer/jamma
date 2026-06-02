@@ -37,6 +37,10 @@ exclude = [
     # legacy cert chain frequently 5xx or HandshakeFailure for CI bots.
     "^http://fsf\\.org/?$",
     "^http://www\\.gnu\\.org/philosophy/why-not-lgpl",
+    # Canonical GPL/FSF license URLs in LICENSE.md and the README badge.
+    # gnu.org regularly times out for CI bots; these are well-known
+    # boilerplate links with no value in verifying.
+    "^https?://www\\.gnu\\.org/licenses",
 ]
 
 # Don't attempt to verify mailto: links — lychee defaults to false but

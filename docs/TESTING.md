@@ -161,7 +161,7 @@ computation.
 |----------|---------|-------------|
 | `ci.yml` → `lint` | push/PR | `prek run --all-files` |
 | `ci.yml` → `test` (Linux 3.11/3.12, ARM Mac 3.12, Linux MKL ILP64) | push/PR | `pytest -m "not tier2 and not slow and not benchmark" -v -n 3` |
-| `ci.yml` → `coverage` | push/PR | `slipcover --fail-under 80 -m pytest ... -n0` plus per-subsystem floors via `scripts/check_subsystem_coverage.py` (jlinalg 18%, lmm/io/core all 80%) |
+| `ci.yml` → `coverage` | push/PR | `slipcover --fail-under 80 -m pytest ... -n0` plus per-subsystem floors via `scripts/check_subsystem_coverage.py` (lmm 80%, jlinalg 18%, kinship 50%, io 80%) |
 | `test-slow.yml` | push to master | `pytest -m "tier2 or slow" -v -o 'addopts=' --no-cov` |
 | `sanitizers.yml` | Wednesday cron + dispatch | `pytest -m "not benchmark and not slow" -n 0 -p no:randomly` (under ASAN/UBSAN) |
 | `flaky-detect.yml` | Sunday 06:00 UTC + dispatch | `pytest` under five distinct `--randomly-seed` values, opens an issue on disagreement |
@@ -295,9 +295,8 @@ catch. The carve-out is:
 
 | Allowed structural test | Why behavior tests can't replace it |
 |---|---|
-| `_mm256_zeroupper()` / `vzeroupper` present in AVX2 kernel source ([`tests/test_jlinalg_dgemm.py:562`](../tests/test_jlinalg_dgemm.py#L562)) | Missing this corrupts SSE registers in *callers'* code, not in our test |
-| No `abort()` calls in translated LAPACK C ([`tests/test_jlinalg_eigh.py:1489`](../tests/test_jlinalg_eigh.py#L1489)) | An `abort()` SIGKILLs the process; pytest cannot catch it as a failure |
-| `loco.py` uses `raise RuntimeError`, not bare `assert` ([`tests/test_safety_gates.py:263`](../tests/test_safety_gates.py#L263)) | `python -O` strips bare `assert`; behavior-only test passes in dev and silently breaks in prod |
+| `_mm256_zeroupper()` / `vzeroupper` present in AVX2 kernel source ([`tests/test_jlinalg_dgemm.py:568`](../tests/test_jlinalg_dgemm.py#L568)) | Missing this corrupts SSE registers in *callers'* code, not in our test |
+| LOCO iterator-None guard uses `raise RuntimeError`, not bare `assert` ([`tests/test_safety_gates.py:311`](../tests/test_safety_gates.py#L311)) | `python -O` strips bare `assert`; behavior-only test passes in dev and silently breaks in prod |
 | Compile-flag literals not in three forbidden entry points ([`scripts/check-compile-flag-literals.py`](../scripts/check-compile-flag-literals.py)) | Drift between `hatch_build.py` and runtime recompile produces ABI mismatch at runtime |
 
 **Rules for adding a new structural source test:**
@@ -469,8 +468,8 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 
 ### 3.4 Suite-wide stats (snapshot)
 
-- 81 test files, ~38.5k lines.
-- Largest: `test_lmm_accel.py` (6,271 lines) — should be split by tier and concern.
+- 85 test files, ~39k lines.
+- Largest: `test_lmm_accel.py` (~6,240 lines) — should be split by tier and concern.
 - ~178 `skip`/`skipif`/`xfail` calls — most legitimate (vendor LAPACK, optional fixtures).
 - 8 files use `@patch`/`MagicMock` (~31 occurrences). Most are at allowed boundaries; the violations called out in §3.2 are the exceptions.
 - `inspect.getsource()`: zero uses. The ban holds.

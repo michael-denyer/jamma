@@ -476,9 +476,9 @@ still written as binary `.npy` only:
   ([loco.py](../src/jamma/lmm/loco.py), eigen write block).
 - LOCO kinship saves are hard-coded to `.loco.cXX.chr{chr}.npy`
   ([loco.py](../src/jamma/lmm/loco.py), `save_kinship` block).
-- `PipelineRunner._run_inner` forwards every relevant LOCO option to
+- `PipelineRunner._run_loco` forwards every relevant LOCO option to
   `run_lmm_loco` except `legacy_text`
-  ([src/jamma/pipeline.py](../src/jamma/pipeline.py), LOCO dispatch block).
+  ([src/jamma/pipeline.py](../src/jamma/pipeline.py), `_run_loco` LOCO dispatch block).
 
 ### Impact
 

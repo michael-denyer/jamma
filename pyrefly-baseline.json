@@ -244,6 +244,366 @@
       "line": 98,
       "column": 5,
       "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_batch_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_batch_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_batch_split_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_batch_split_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `create_workspace_split_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `create_workspace_split_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lmm_chunk_split_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lmm_chunk_split_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `create_workspace_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `create_workspace_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lmm_chunk_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lmm_chunk_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_score_batch_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_score_batch_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lrt_batch_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lrt_batch_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `create_workspace_mode4_split_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `create_workspace_mode4_split_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_mode4_chunk_split_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_mode4_chunk_split_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_score_batch_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_score_batch_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lrt_batch_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lrt_batch_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_score_split_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_score_split_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lrt_split_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lrt_split_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_score_split_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_score_split_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lrt_split_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lrt_split_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_score_fused_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_score_fused_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lrt_fused_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lrt_fused_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `create_workspace_fused_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `create_workspace_fused_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lmm_chunk_fused_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lmm_chunk_fused_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `create_workspace_mode4_fused_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `create_workspace_mode4_fused_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_mode4_chunk_fused_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_mode4_chunk_fused_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `create_workspace_fused_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `create_workspace_fused_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lmm_chunk_fused_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lmm_chunk_fused_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `create_workspace_mode4_fused_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `create_workspace_mode4_fused_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_mode4_chunk_fused_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_mode4_chunk_fused_general_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `create_workspace_score_fused_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `create_workspace_score_fused_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_score_fused_ws_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_score_fused_ws_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `create_workspace_lrt_fused_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `create_workspace_lrt_fused_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 98,
+      "column": 5,
+      "stop_line": 98,
+      "stop_column": 41,
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "code": -2,
+      "name": "bad-argument-type",
+      "description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lrt_fused_ws_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "concise_description": "Unpacked keyword argument `bool` is not assignable to parameter `compute_lrt_fused_ws_c` with type `((...) -> Any) | None` in function `AccelImport.__new__`",
+      "severity": "error"
+    },
+    {
+      "line": 99,
+      "column": 5,
+      "stop_line": 99,
       "stop_column": 42,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -253,9 +613,9 @@
       "severity": "error"
     },
     {
-      "line": 98,
+      "line": 99,
       "column": 5,
-      "stop_line": 98,
+      "stop_line": 99,
       "stop_column": 42,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -265,9 +625,9 @@
       "severity": "error"
     },
     {
-      "line": 98,
+      "line": 99,
       "column": 5,
-      "stop_line": 98,
+      "stop_line": 99,
       "stop_column": 42,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -277,9 +637,9 @@
       "severity": "error"
     },
     {
-      "line": 98,
+      "line": 99,
       "column": 5,
-      "stop_line": 98,
+      "stop_line": 99,
       "stop_column": 42,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -289,9 +649,9 @@
       "severity": "error"
     },
     {
-      "line": 98,
+      "line": 99,
       "column": 5,
-      "stop_line": 98,
+      "stop_line": 99,
       "stop_column": 42,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -301,21 +661,9 @@
       "severity": "error"
     },
     {
-      "line": 454,
+      "line": 455,
       "column": 12,
-      "stop_line": 454,
-      "stop_column": 32,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 454,
-      "column": 12,
-      "stop_line": 454,
+      "stop_line": 455,
       "stop_column": 32,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -325,21 +673,9 @@
       "severity": "error"
     },
     {
-      "line": 500,
+      "line": 501,
       "column": 12,
-      "stop_line": 500,
-      "stop_column": 38,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 500,
-      "column": 12,
-      "stop_line": 500,
+      "stop_line": 501,
       "stop_column": 38,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -349,21 +685,9 @@
       "severity": "error"
     },
     {
-      "line": 545,
+      "line": 546,
       "column": 12,
-      "stop_line": 545,
-      "stop_column": 37,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 545,
-      "column": 12,
-      "stop_line": 545,
+      "stop_line": 546,
       "stop_column": 37,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -373,21 +697,9 @@
       "severity": "error"
     },
     {
-      "line": 576,
+      "line": 577,
       "column": 12,
-      "stop_line": 576,
-      "stop_column": 38,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 576,
-      "column": 12,
-      "stop_line": 576,
+      "stop_line": 577,
       "stop_column": 38,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -397,165 +709,9 @@
       "severity": "error"
     },
     {
-      "line": 617,
+      "line": 1146,
       "column": 12,
-      "stop_line": 617,
-      "stop_column": 43,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 655,
-      "column": 12,
-      "stop_line": 655,
-      "stop_column": 40,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 692,
-      "column": 12,
-      "stop_line": 692,
-      "stop_column": 37,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 726,
-      "column": 12,
-      "stop_line": 726,
-      "stop_column": 38,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 768,
-      "column": 12,
-      "stop_line": 768,
-      "stop_column": 43,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 805,
-      "column": 12,
-      "stop_line": 805,
-      "stop_column": 40,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 872,
-      "column": 12,
-      "stop_line": 872,
-      "stop_column": 45,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 919,
-      "column": 12,
-      "stop_line": 919,
-      "stop_column": 46,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 987,
-      "column": 12,
-      "stop_line": 987,
-      "stop_column": 51,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 1037,
-      "column": 12,
-      "stop_line": 1037,
-      "stop_column": 48,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 1080,
-      "column": 12,
-      "stop_line": 1080,
-      "stop_column": 39,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 1123,
-      "column": 12,
-      "stop_line": 1123,
-      "stop_column": 40,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 1145,
-      "column": 12,
-      "stop_line": 1145,
-      "stop_column": 34,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 1145,
-      "column": 12,
-      "stop_line": 1145,
+      "stop_line": 1146,
       "stop_column": 34,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -565,21 +721,9 @@
       "severity": "error"
     },
     {
-      "line": 1181,
+      "line": 1182,
       "column": 12,
-      "stop_line": 1181,
-      "stop_column": 32,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 1181,
-      "column": 12,
-      "stop_line": 1181,
+      "stop_line": 1182,
       "stop_column": 32,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -589,9 +733,9 @@
       "severity": "error"
     },
     {
-      "line": 1301,
+      "line": 1302,
       "column": 9,
-      "stop_line": 1301,
+      "stop_line": 1302,
       "stop_column": 34,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -601,9 +745,9 @@
       "severity": "error"
     },
     {
-      "line": 1319,
+      "line": 1320,
       "column": 9,
-      "stop_line": 1319,
+      "stop_line": 1320,
       "stop_column": 34,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -613,81 +757,9 @@
       "severity": "error"
     },
     {
-      "line": 1393,
-      "column": 16,
-      "stop_line": 1393,
-      "stop_column": 44,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 1469,
-      "column": 16,
-      "stop_line": 1469,
-      "stop_column": 46,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 1535,
-      "column": 16,
-      "stop_line": 1535,
-      "stop_column": 38,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 1547,
-      "column": 16,
-      "stop_line": 1547,
-      "stop_column": 46,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 1605,
-      "column": 16,
-      "stop_line": 1605,
-      "stop_column": 36,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 1621,
-      "column": 16,
-      "stop_line": 1621,
-      "stop_column": 44,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 1713,
+      "line": 1714,
       "column": 22,
-      "stop_line": 1725,
+      "stop_line": 1726,
       "stop_column": 10,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -697,9 +769,9 @@
       "severity": "error"
     },
     {
-      "line": 1737,
+      "line": 1738,
       "column": 17,
-      "stop_line": 1737,
+      "stop_line": 1738,
       "stop_column": 24,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -709,9 +781,9 @@
       "severity": "error"
     },
     {
-      "line": 1747,
+      "line": 1748,
       "column": 17,
-      "stop_line": 1747,
+      "stop_line": 1748,
       "stop_column": 29,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -721,9 +793,9 @@
       "severity": "error"
     },
     {
-      "line": 1760,
+      "line": 1761,
       "column": 13,
-      "stop_line": 1760,
+      "stop_line": 1761,
       "stop_column": 25,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -733,9 +805,9 @@
       "severity": "error"
     },
     {
-      "line": 1775,
+      "line": 1776,
       "column": 17,
-      "stop_line": 1775,
+      "stop_line": 1776,
       "stop_column": 24,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -745,9 +817,9 @@
       "severity": "error"
     },
     {
-      "line": 1781,
+      "line": 1782,
       "column": 22,
-      "stop_line": 1794,
+      "stop_line": 1795,
       "stop_column": 10,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -1304,32 +1376,8 @@
       "path": "src/jamma/lmm/runner_numpy.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 349,
-      "column": 33,
-      "stop_line": 349,
-      "stop_column": 64,
-      "path": "src/jamma/lmm/runner_numpy.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 362,
-      "column": 31,
-      "stop_line": 362,
-      "stop_column": 60,
-      "path": "src/jamma/lmm/runner_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -1388,8 +1436,8 @@
       "path": "src/jamma/lmm/runner_numpy.py",
       "code": -2,
       "name": "bad-argument-type",
-      "description": "Argument `object | None` is not assignable to parameter `fn` with type `(...) -> dict[Unknown, Unknown]` in function `_guarded_compute`",
-      "concise_description": "Argument `object | None` is not assignable to parameter `fn` with type `(...) -> dict[Unknown, Unknown]` in function `_guarded_compute`",
+      "description": "Argument `((...) -> Any) | None` is not assignable to parameter `fn` with type `(...) -> dict[Unknown, Unknown]` in function `_guarded_compute`",
+      "concise_description": "Argument `((...) -> Any) | None` is not assignable to parameter `fn` with type `(...) -> dict[Unknown, Unknown]` in function `_guarded_compute`",
       "severity": "error"
     },
     {
@@ -1400,8 +1448,8 @@
       "path": "src/jamma/lmm/runner_numpy.py",
       "code": -2,
       "name": "bad-argument-type",
-      "description": "Argument `object | None` is not assignable to parameter `fn` with type `(...) -> dict[Unknown, Unknown]` in function `_guarded_compute`",
-      "concise_description": "Argument `object | None` is not assignable to parameter `fn` with type `(...) -> dict[Unknown, Unknown]` in function `_guarded_compute`",
+      "description": "Argument `((...) -> Any) | None` is not assignable to parameter `fn` with type `(...) -> dict[Unknown, Unknown]` in function `_guarded_compute`",
+      "concise_description": "Argument `((...) -> Any) | None` is not assignable to parameter `fn` with type `(...) -> dict[Unknown, Unknown]` in function `_guarded_compute`",
       "severity": "error"
     },
     {
@@ -1412,8 +1460,8 @@
       "path": "src/jamma/lmm/runner_numpy.py",
       "code": -2,
       "name": "bad-argument-type",
-      "description": "Argument `object | None` is not assignable to parameter `fn` with type `(...) -> dict[Unknown, Unknown]` in function `_guarded_compute`",
-      "concise_description": "Argument `object | None` is not assignable to parameter `fn` with type `(...) -> dict[Unknown, Unknown]` in function `_guarded_compute`",
+      "description": "Argument `((...) -> Any) | None` is not assignable to parameter `fn` with type `(...) -> dict[Unknown, Unknown]` in function `_guarded_compute`",
+      "concise_description": "Argument `((...) -> Any) | None` is not assignable to parameter `fn` with type `(...) -> dict[Unknown, Unknown]` in function `_guarded_compute`",
       "severity": "error"
     },
     {
@@ -1424,8 +1472,8 @@
       "path": "src/jamma/lmm/runner_numpy.py",
       "code": -2,
       "name": "bad-argument-type",
-      "description": "Argument `object | None` is not assignable to parameter `fn` with type `(...) -> dict[Unknown, Unknown]` in function `_guarded_compute`",
-      "concise_description": "Argument `object | None` is not assignable to parameter `fn` with type `(...) -> dict[Unknown, Unknown]` in function `_guarded_compute`",
+      "description": "Argument `((...) -> Any) | None` is not assignable to parameter `fn` with type `(...) -> dict[Unknown, Unknown]` in function `_guarded_compute`",
+      "concise_description": "Argument `((...) -> Any) | None` is not assignable to parameter `fn` with type `(...) -> dict[Unknown, Unknown]` in function `_guarded_compute`",
       "severity": "error"
     },
     {
@@ -3361,30 +3409,6 @@
       "severity": "error"
     },
     {
-      "line": 1802,
-      "column": 16,
-      "stop_line": 1802,
-      "stop_column": 27,
-      "path": "tests/test_likelihood_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 1971,
-      "column": 16,
-      "stop_line": 1971,
-      "stop_column": 27,
-      "path": "tests/test_likelihood_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
       "line": 111,
       "column": 5,
       "stop_line": 111,
@@ -3452,32 +3476,8 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 1825,
-      "column": 16,
-      "stop_line": 1825,
-      "stop_column": 38,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 1857,
-      "column": 16,
-      "stop_line": 1857,
-      "stop_column": 36,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -3500,32 +3500,8 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 1907,
-      "column": 14,
-      "stop_line": 1907,
-      "stop_column": 36,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 1938,
-      "column": 14,
-      "stop_line": 1938,
-      "stop_column": 34,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -3548,32 +3524,8 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 1967,
-      "column": 17,
-      "stop_line": 1967,
-      "stop_column": 39,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 1974,
-      "column": 17,
-      "stop_line": 1974,
-      "stop_column": 39,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -3596,32 +3548,8 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 1993,
-      "column": 17,
-      "stop_line": 1993,
-      "stop_column": 37,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 2004,
-      "column": 17,
-      "stop_line": 2004,
-      "stop_column": 37,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -3673,42 +3601,6 @@
       "severity": "error"
     },
     {
-      "line": 2294,
-      "column": 24,
-      "stop_line": 2294,
-      "stop_column": 46,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 2336,
-      "column": 22,
-      "stop_line": 2336,
-      "stop_column": 42,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 4950,
-      "column": 24,
-      "stop_line": 4950,
-      "stop_column": 46,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
       "line": 4950,
       "column": 24,
       "stop_line": 4950,
@@ -3718,18 +3610,6 @@
       "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 4960,
-      "column": 24,
-      "stop_line": 4960,
-      "stop_column": 46,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -3752,32 +3632,8 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 5004,
-      "column": 18,
-      "stop_line": 5004,
-      "stop_column": 40,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 5048,
-      "column": 24,
-      "stop_line": 5048,
-      "stop_column": 46,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -3800,32 +3656,8 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 5057,
-      "column": 24,
-      "stop_line": 5057,
-      "stop_column": 46,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 5129,
-      "column": 24,
-      "stop_line": 5129,
-      "stop_column": 44,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -3848,32 +3680,8 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 5143,
-      "column": 24,
-      "stop_line": 5143,
-      "stop_column": 44,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 5197,
-      "column": 18,
-      "stop_line": 5197,
-      "stop_column": 38,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -3896,32 +3704,8 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 5247,
-      "column": 24,
-      "stop_line": 5247,
-      "stop_column": 44,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 5260,
-      "column": 24,
-      "stop_line": 5260,
-      "stop_column": 44,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -3944,32 +3728,8 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 5668,
-      "column": 14,
-      "stop_line": 5668,
-      "stop_column": 45,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 5697,
-      "column": 15,
-      "stop_line": 5697,
-      "stop_column": 37,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -3992,32 +3752,8 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 5709,
-      "column": 14,
-      "stop_line": 5709,
-      "stop_column": 45,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 5718,
-      "column": 18,
-      "stop_line": 5718,
-      "stop_column": 43,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -4040,32 +3776,8 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 5746,
-      "column": 14,
-      "stop_line": 5746,
-      "stop_column": 45,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 5757,
-      "column": 16,
-      "stop_line": 5757,
-      "stop_column": 38,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -4088,32 +3800,8 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 5767,
-      "column": 19,
-      "stop_line": 5767,
-      "stop_column": 44,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 5780,
-      "column": 16,
-      "stop_line": 5780,
-      "stop_column": 38,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -4136,32 +3824,8 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 5790,
-      "column": 19,
-      "stop_line": 5790,
-      "stop_column": 44,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 5829,
-      "column": 13,
-      "stop_line": 5829,
-      "stop_column": 38,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -4184,32 +3848,8 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 5882,
-      "column": 14,
-      "stop_line": 5882,
-      "stop_column": 43,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 5915,
-      "column": 15,
-      "stop_line": 5915,
-      "stop_column": 35,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -4232,32 +3872,8 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 5931,
-      "column": 14,
-      "stop_line": 5931,
-      "stop_column": 43,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 5944,
-      "column": 18,
-      "stop_line": 5944,
-      "stop_column": 41,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -4280,32 +3896,8 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 5971,
-      "column": 14,
-      "stop_line": 5971,
-      "stop_column": 43,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 5986,
-      "column": 16,
-      "stop_line": 5986,
-      "stop_column": 36,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -4328,32 +3920,8 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 6000,
-      "column": 19,
-      "stop_line": 6000,
-      "stop_column": 42,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 6013,
-      "column": 16,
-      "stop_line": 6013,
-      "stop_column": 36,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {
@@ -4376,18 +3944,6 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 6027,
-      "column": 19,
-      "stop_line": 6027,
-      "stop_column": 42,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
       "severity": "error"
@@ -4400,32 +3956,8 @@
       "path": "tests/test_lmm_accel.py",
       "code": -2,
       "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
-      "severity": "error"
-    },
-    {
-      "line": 6055,
-      "column": 20,
-      "stop_line": 6055,
-      "stop_column": 51,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
       "description": "Expected a callable, got `None`",
       "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 6066,
-      "column": 13,
-      "stop_line": 6066,
-      "stop_column": 36,
-      "path": "tests/test_lmm_accel.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `object`",
-      "concise_description": "Expected a callable, got `object`",
       "severity": "error"
     },
     {

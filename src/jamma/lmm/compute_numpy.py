@@ -18,7 +18,8 @@ The caller is responsible for:
 from __future__ import annotations
 
 import os
-from typing import Literal, NamedTuple, TypedDict
+from collections.abc import Callable
+from typing import Any, Literal, NamedTuple, TypedDict
 
 import numpy as np
 
@@ -48,36 +49,36 @@ class AccelImport(NamedTuple):
     general_available: bool
     has_openmp: bool
     mode4_available: bool
-    compute_batch_c: object | None
-    compute_batch_split_c: object | None
-    create_workspace_split_c: object | None
-    compute_lmm_chunk_split_c: object | None
-    create_workspace_general_c: object | None
-    compute_lmm_chunk_general_c: object | None
-    compute_score_batch_c: object | None
-    compute_lrt_batch_c: object | None
-    create_workspace_mode4_split_c: object | None
-    compute_mode4_chunk_split_c: object | None
-    compute_score_batch_general_c: object | None
-    compute_lrt_batch_general_c: object | None
-    compute_score_split_c: object | None
-    compute_lrt_split_c: object | None
-    compute_score_split_general_c: object | None
-    compute_lrt_split_general_c: object | None
-    compute_score_fused_c: object | None
-    compute_lrt_fused_c: object | None
-    create_workspace_fused_c: object | None
-    compute_lmm_chunk_fused_c: object | None
-    create_workspace_mode4_fused_c: object | None
-    compute_mode4_chunk_fused_c: object | None
-    create_workspace_fused_general_c: object | None
-    compute_lmm_chunk_fused_general_c: object | None
-    create_workspace_mode4_fused_general_c: object | None
-    compute_mode4_chunk_fused_general_c: object | None
-    create_workspace_score_fused_c: object | None
-    compute_score_fused_ws_c: object | None
-    create_workspace_lrt_fused_c: object | None
-    compute_lrt_fused_ws_c: object | None
+    compute_batch_c: Callable[..., Any] | None
+    compute_batch_split_c: Callable[..., Any] | None
+    create_workspace_split_c: Callable[..., Any] | None
+    compute_lmm_chunk_split_c: Callable[..., Any] | None
+    create_workspace_general_c: Callable[..., Any] | None
+    compute_lmm_chunk_general_c: Callable[..., Any] | None
+    compute_score_batch_c: Callable[..., Any] | None
+    compute_lrt_batch_c: Callable[..., Any] | None
+    create_workspace_mode4_split_c: Callable[..., Any] | None
+    compute_mode4_chunk_split_c: Callable[..., Any] | None
+    compute_score_batch_general_c: Callable[..., Any] | None
+    compute_lrt_batch_general_c: Callable[..., Any] | None
+    compute_score_split_c: Callable[..., Any] | None
+    compute_lrt_split_c: Callable[..., Any] | None
+    compute_score_split_general_c: Callable[..., Any] | None
+    compute_lrt_split_general_c: Callable[..., Any] | None
+    compute_score_fused_c: Callable[..., Any] | None
+    compute_lrt_fused_c: Callable[..., Any] | None
+    create_workspace_fused_c: Callable[..., Any] | None
+    compute_lmm_chunk_fused_c: Callable[..., Any] | None
+    create_workspace_mode4_fused_c: Callable[..., Any] | None
+    compute_mode4_chunk_fused_c: Callable[..., Any] | None
+    create_workspace_fused_general_c: Callable[..., Any] | None
+    compute_lmm_chunk_fused_general_c: Callable[..., Any] | None
+    create_workspace_mode4_fused_general_c: Callable[..., Any] | None
+    compute_mode4_chunk_fused_general_c: Callable[..., Any] | None
+    create_workspace_score_fused_c: Callable[..., Any] | None
+    compute_score_fused_ws_c: Callable[..., Any] | None
+    create_workspace_lrt_fused_c: Callable[..., Any] | None
+    compute_lrt_fused_ws_c: Callable[..., Any] | None
 
 
 # The five availability flags vs the thirty object-valued symbol fields. Both

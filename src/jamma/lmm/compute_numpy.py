@@ -94,10 +94,17 @@ _FLAG_FIELDS = (
 )
 _OBJECT_FIELDS = tuple(f for f in AccelImport._fields if f not in _FLAG_FIELDS)
 
-_ACCEL_UNAVAILABLE = AccelImport(
+# Build the sentinel from the field split (flags False, symbols None) so a new
+# field can't be forgotten. The intermediate is typed dict[str, Any] so the **
+# spread type-checks: pyrefly can't map spread keys to params, so a narrowly
+# typed dict (e.g. dict[str, bool] from fromkeys(..., False)) would flag False
+# against the Callable symbol fields. Any keeps the runtime values exact while
+# letting the unpack pass — mirroring the loader's **symbols spread below.
+_unavailable_fields: dict[str, Any] = {
     **dict.fromkeys(_FLAG_FIELDS, False),
     **dict.fromkeys(_OBJECT_FIELDS, None),
-)
+}
+_ACCEL_UNAVAILABLE = AccelImport(**_unavailable_fields)
 
 # Core split symbols a valid ABI build always exports. Maps AccelImport field
 # name -> C symbol name (they differ only for the two "batch" entries).

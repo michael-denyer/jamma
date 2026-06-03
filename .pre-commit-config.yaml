@@ -200,7 +200,11 @@ repos:
         name: pyrefly type check (new errors vs baseline)
         entry: uv run pyrefly check --baseline pyrefly-baseline.json
         language: system
-        files: \.pyi?$
+        # always_run (not a files filter) so config/baseline-only edits —
+        # pyproject.toml [tool.pyrefly], pyrefly-baseline.json — also trigger
+        # the whole-project gate, not just .py/.pyi changes. Mirrors the
+        # no-quiet-flags hook. pass_filenames stays false (project-mode).
+        always_run: true
         pass_filenames: false
       - id: ruff-format-all
         name: ruff format (all files)

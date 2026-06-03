@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`uv run pyrefly check --baseline pyrefly-baseline.json --update-baseline`).
   Config lives in `[tool.pyrefly]` (pyproject.toml).
 
+### Changed
+
+- **Pyrefly gate hardening** (review follow-ups): `pyrefly` is now exact-pinned
+  (`==1.0.0`) since the baseline is version-specific; the prek hook uses
+  `always_run` so config/baseline-only edits also trigger it; the six C-ext-only
+  Wald/Score/LRT wrappers now `assert <symbol> is not None` so pyrefly narrows
+  them instead of suppressing via baseline (baseline 380 → 374); and a test pins
+  the `_ACCEL_UNAVAILABLE` all-False/all-None invariant the `dict[str, Any]`
+  sentinel build can no longer check statically.
+
 ### Fixed
 
 - **Stale `_jlinalg.pyi` stub**: `dgemm` now declares its `out=` buffer

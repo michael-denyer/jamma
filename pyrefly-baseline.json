@@ -241,81 +241,9 @@
       "severity": "error"
     },
     {
-      "line": 462,
-      "column": 12,
-      "stop_line": 462,
-      "stop_column": 32,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `None`",
-      "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 508,
-      "column": 12,
-      "stop_line": 508,
-      "stop_column": 38,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `None`",
-      "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 553,
-      "column": 12,
-      "stop_line": 553,
-      "stop_column": 37,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `None`",
-      "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 584,
-      "column": 12,
-      "stop_line": 584,
-      "stop_column": 38,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `None`",
-      "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 1153,
-      "column": 12,
-      "stop_line": 1153,
-      "stop_column": 34,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `None`",
-      "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 1189,
-      "column": 12,
-      "stop_line": 1189,
-      "stop_column": 32,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `None`",
-      "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 1309,
+      "line": 1315,
       "column": 9,
-      "stop_line": 1309,
+      "stop_line": 1315,
       "stop_column": 34,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -325,9 +253,9 @@
       "severity": "error"
     },
     {
-      "line": 1327,
+      "line": 1333,
       "column": 9,
-      "stop_line": 1327,
+      "stop_line": 1333,
       "stop_column": 34,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -337,9 +265,9 @@
       "severity": "error"
     },
     {
-      "line": 1721,
+      "line": 1727,
       "column": 22,
-      "stop_line": 1733,
+      "stop_line": 1739,
       "stop_column": 10,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -349,9 +277,9 @@
       "severity": "error"
     },
     {
-      "line": 1745,
+      "line": 1751,
       "column": 17,
-      "stop_line": 1745,
+      "stop_line": 1751,
       "stop_column": 24,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -361,9 +289,9 @@
       "severity": "error"
     },
     {
-      "line": 1755,
+      "line": 1761,
       "column": 17,
-      "stop_line": 1755,
+      "stop_line": 1761,
       "stop_column": 29,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -373,9 +301,9 @@
       "severity": "error"
     },
     {
-      "line": 1768,
+      "line": 1774,
       "column": 13,
-      "stop_line": 1768,
+      "stop_line": 1774,
       "stop_column": 25,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -385,9 +313,9 @@
       "severity": "error"
     },
     {
-      "line": 1783,
+      "line": 1789,
       "column": 17,
-      "stop_line": 1783,
+      "stop_line": 1789,
       "stop_column": 24,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,
@@ -397,9 +325,9 @@
       "severity": "error"
     },
     {
-      "line": 1789,
+      "line": 1795,
       "column": 22,
-      "stop_line": 1802,
+      "stop_line": 1808,
       "stop_column": 10,
       "path": "src/jamma/lmm/compute_numpy.py",
       "code": -2,

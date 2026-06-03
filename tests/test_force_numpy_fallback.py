@@ -248,3 +248,26 @@ class TestForceNumpyLmmAccel:
             assert result == _ACCEL_UNAVAILABLE, (
                 f"value={value!r} did not engage the gate"
             )
+
+
+def test_accel_unavailable_sentinel_invariant():
+    """The all-unavailable sentinel is every flag False and every symbol None.
+
+    The sentinel is built from a ``dict[str, Any]`` spread so its ``**`` unpack
+    type-checks against the callable symbol fields — which erases the static
+    field-completeness/type check the type checker would otherwise give. Pin
+    the invariant here: all flags ``False``, all symbols ``None``, and the
+    flag/symbol split covers every ``AccelImport`` field. A misclassified field
+    (e.g. a flag landing in ``_OBJECT_FIELDS``) would otherwise pass the type
+    checker and the equality-based fallback tests silently.
+    """
+    from jamma.lmm.compute_numpy import (
+        _ACCEL_UNAVAILABLE,
+        _FLAG_FIELDS,
+        _OBJECT_FIELDS,
+        AccelImport,
+    )
+
+    assert all(getattr(_ACCEL_UNAVAILABLE, f) is False for f in _FLAG_FIELDS)
+    assert all(getattr(_ACCEL_UNAVAILABLE, f) is None for f in _OBJECT_FIELDS)
+    assert set(_FLAG_FIELDS) | set(_OBJECT_FIELDS) == set(AccelImport._fields)

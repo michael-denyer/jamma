@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.3.2] - 2026-06-03
+
 ### Added
 
 - **Pyrefly type-check gate**: CI lint job and a prek hook now run

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.3.1] - 2026-06-03
+
+### Added
+
+- **CodeQL SAST**: weekly CodeQL static analysis workflow covering the C
+  extensions and Python sources (#38).
+
 ### Changed
 
 - **Internal refactors (no behavior change)**: extracted shared helpers and
@@ -24,9 +31,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Dependencies**: bump build-system `numpy` pin 2.4.4 → 2.4.5 (#24);
   bump `j178/prek-action` 2.0.3 → 2.0.4 (#23) and
   `google/osv-scanner-action` 2.3.5 → 2.3.8 (#22).
+- **Test/CI hygiene (no behavior change)**: docstring, static-typing, and
+  test-coverage follow-ups from the post-refactor review (#39); the
+  batch/streaming FP-parity equivalence tests — bitwise-identical in optimized
+  builds — now widen their tolerance only under the ASAN/UBSAN build, whose
+  uninstrumented FP codegen drifts ~2e-10 on isolated elements (keyed on
+  `JAMMA_SANITIZE`) (#39).
 
 ### Fixed
 
+- **LOCO Python eigen-cache API**: `gwas(loco=True, write_eigen=True)` raised
+  "write_eigen=True requires eigen_dir to be set" because the Python API never
+  defaulted `eigen_dir` the way the CLI does. `PipelineConfig.__post_init__`
+  now defaults `eigen_dir` to `output_dir` when `loco` and `write_eigen` are
+  set; the README LOCO eigen-reuse example is corrected to the per-chromosome
+  cache it actually produces (#37).
+- **LOCO `--legacy-text`**: `--loco --legacy-text` silently wrote binary `.npy`
+  instead of GEMMA-compatible `.txt`. `legacy_text` is now threaded through
+  `run_lmm_loco` to the per-chromosome eigen-cache lookup, kinship save, and
+  eigen write. Resolves `GEMMA_DIVERGENCES` §13 (#37).
 - **LOCO multi-pass eigendecomp reserve sizing**: size the eigendecomposition
   workspace reserve by valid-sample count rather than the unfiltered sample
   count, so multi-pass LOCO batch sizing reflects the post-filter matrix

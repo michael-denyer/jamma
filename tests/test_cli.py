@@ -603,3 +603,82 @@ def test_cli_backend_numpy_streaming_wires_to_pipeline(
 
     assert len(factory.runners) == 1
     assert factory.last_config.backend == "numpy-streaming"
+
+
+@pytest.mark.tier1
+def test_cli_eigen_dir_without_loco_errors():
+    """--eigen-dir is rejected outside -loco mode."""
+    result = runner.invoke(
+        main,
+        [
+            "-lmm",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-k",
+            str(KINSHIP_FILE),
+            "--eigen-dir",
+            "some/dir",
+            "--no-check-memory",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--eigen-dir is only supported with -loco mode" in result.output
+
+
+@pytest.mark.tier1
+def test_cli_loco_eigen_defaults_eigen_dir_to_outdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """-loco -eigen without --eigen-dir defaults eigen_dir to the output dir."""
+    factory = FakePipelineRunnerFactory(result=_mock_pipeline_result(tmp_path / "out"))
+    monkeypatch.setattr("jamma.cli.PipelineRunner", factory)
+
+    runner.invoke(
+        main,
+        [
+            "-outdir",
+            str(tmp_path / "out"),
+            "-lmm",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-loco",
+            "-eigen",
+            "--no-check-memory",
+        ],
+    )
+
+    assert len(factory.runners) == 1
+    # CLI default fired: without --eigen-dir, eigen_dir tracks the output dir
+    # (it would be None if the default never ran).
+    assert factory.last_config.eigen_dir is not None
+    assert factory.last_config.eigen_dir == factory.last_config.output_dir
+
+
+@pytest.mark.tier1
+def test_cli_legacy_text_wires_to_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """--legacy-text is forwarded through to PipelineConfig."""
+    factory = FakePipelineRunnerFactory(result=_mock_pipeline_result(tmp_path / "out"))
+    monkeypatch.setattr("jamma.cli.PipelineRunner", factory)
+
+    runner.invoke(
+        main,
+        [
+            "-outdir",
+            str(tmp_path / "out"),
+            "-lmm",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-loco",
+            "--legacy-text",
+            "--no-check-memory",
+        ],
+    )
+
+    assert len(factory.runners) == 1
+    assert factory.last_config.legacy_text is True

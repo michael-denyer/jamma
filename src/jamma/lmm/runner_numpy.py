@@ -390,8 +390,9 @@ def _guarded_compute(
     *operation*, *write_offset*, and *n_filtered* are consumed by the wrapper.
 
     MemoryError, ValueError, TypeError, and OverflowError propagate unchanged.
-    All other exceptions are wrapped in a RuntimeError whose message includes
-    the *operation* label, *write_offset*, and *n_filtered* for diagnosis.
+    All other exceptions (including OSError, used here to model a C-kernel
+    segfault) are wrapped in a RuntimeError whose message includes the
+    *operation* label, *write_offset*, and *n_filtered* for diagnosis.
     """
     try:
         return fn(*args, **kwargs)

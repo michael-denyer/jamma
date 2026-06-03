@@ -18,7 +18,8 @@ The caller is responsible for:
 from __future__ import annotations
 
 import os
-from typing import Literal, NamedTuple, TypedDict
+from collections.abc import Callable
+from typing import Any, Literal, NamedTuple, TypedDict
 
 import numpy as np
 
@@ -48,36 +49,36 @@ class AccelImport(NamedTuple):
     general_available: bool
     has_openmp: bool
     mode4_available: bool
-    compute_batch_c: object | None
-    compute_batch_split_c: object | None
-    create_workspace_split_c: object | None
-    compute_lmm_chunk_split_c: object | None
-    create_workspace_general_c: object | None
-    compute_lmm_chunk_general_c: object | None
-    compute_score_batch_c: object | None
-    compute_lrt_batch_c: object | None
-    create_workspace_mode4_split_c: object | None
-    compute_mode4_chunk_split_c: object | None
-    compute_score_batch_general_c: object | None
-    compute_lrt_batch_general_c: object | None
-    compute_score_split_c: object | None
-    compute_lrt_split_c: object | None
-    compute_score_split_general_c: object | None
-    compute_lrt_split_general_c: object | None
-    compute_score_fused_c: object | None
-    compute_lrt_fused_c: object | None
-    create_workspace_fused_c: object | None
-    compute_lmm_chunk_fused_c: object | None
-    create_workspace_mode4_fused_c: object | None
-    compute_mode4_chunk_fused_c: object | None
-    create_workspace_fused_general_c: object | None
-    compute_lmm_chunk_fused_general_c: object | None
-    create_workspace_mode4_fused_general_c: object | None
-    compute_mode4_chunk_fused_general_c: object | None
-    create_workspace_score_fused_c: object | None
-    compute_score_fused_ws_c: object | None
-    create_workspace_lrt_fused_c: object | None
-    compute_lrt_fused_ws_c: object | None
+    compute_batch_c: Callable[..., Any] | None
+    compute_batch_split_c: Callable[..., Any] | None
+    create_workspace_split_c: Callable[..., Any] | None
+    compute_lmm_chunk_split_c: Callable[..., Any] | None
+    create_workspace_general_c: Callable[..., Any] | None
+    compute_lmm_chunk_general_c: Callable[..., Any] | None
+    compute_score_batch_c: Callable[..., Any] | None
+    compute_lrt_batch_c: Callable[..., Any] | None
+    create_workspace_mode4_split_c: Callable[..., Any] | None
+    compute_mode4_chunk_split_c: Callable[..., Any] | None
+    compute_score_batch_general_c: Callable[..., Any] | None
+    compute_lrt_batch_general_c: Callable[..., Any] | None
+    compute_score_split_c: Callable[..., Any] | None
+    compute_lrt_split_c: Callable[..., Any] | None
+    compute_score_split_general_c: Callable[..., Any] | None
+    compute_lrt_split_general_c: Callable[..., Any] | None
+    compute_score_fused_c: Callable[..., Any] | None
+    compute_lrt_fused_c: Callable[..., Any] | None
+    create_workspace_fused_c: Callable[..., Any] | None
+    compute_lmm_chunk_fused_c: Callable[..., Any] | None
+    create_workspace_mode4_fused_c: Callable[..., Any] | None
+    compute_mode4_chunk_fused_c: Callable[..., Any] | None
+    create_workspace_fused_general_c: Callable[..., Any] | None
+    compute_lmm_chunk_fused_general_c: Callable[..., Any] | None
+    create_workspace_mode4_fused_general_c: Callable[..., Any] | None
+    compute_mode4_chunk_fused_general_c: Callable[..., Any] | None
+    create_workspace_score_fused_c: Callable[..., Any] | None
+    compute_score_fused_ws_c: Callable[..., Any] | None
+    create_workspace_lrt_fused_c: Callable[..., Any] | None
+    compute_lrt_fused_ws_c: Callable[..., Any] | None
 
 
 # The five availability flags vs the thirty object-valued symbol fields. Both
@@ -93,10 +94,17 @@ _FLAG_FIELDS = (
 )
 _OBJECT_FIELDS = tuple(f for f in AccelImport._fields if f not in _FLAG_FIELDS)
 
-_ACCEL_UNAVAILABLE = AccelImport(
+# Build the sentinel from the field split (flags False, symbols None) so a new
+# field can't be forgotten. The intermediate is typed dict[str, Any] so the **
+# spread type-checks: pyrefly can't map spread keys to params, so a narrowly
+# typed dict (e.g. dict[str, bool] from fromkeys(..., False)) would flag False
+# against the Callable symbol fields. Any keeps the runtime values exact while
+# letting the unpack pass — mirroring the loader's **symbols spread below.
+_unavailable_fields: dict[str, Any] = {
     **dict.fromkeys(_FLAG_FIELDS, False),
     **dict.fromkeys(_OBJECT_FIELDS, None),
-)
+}
+_ACCEL_UNAVAILABLE = AccelImport(**_unavailable_fields)
 
 # Core split symbols a valid ABI build always exports. Maps AccelImport field
 # name -> C symbol name (they differ only for the two "batch" entries).

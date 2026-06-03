@@ -30,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `compute_score_split_c`, `compute_lrt_split_c`), verified against the
   compiled signatures and call sites. Drops the pyrefly baseline from 487 to
   454 errors.
+- **`AccelImport` symbol typing**: the 30 C-function fields were typed
+  `object | None`, so every guarded call site read as "not callable". Typed
+  them `Callable[..., Any] | None`; the existing `is not None` guards now
+  narrow to a callable. The all-unavailable sentinel is now built through a
+  `dict[str, Any]` intermediate so its `**` spread type-checks against the
+  callable fields (otherwise `dict.fromkeys(..., False)` flags `False` against
+  them). Net clears 104 false-positive errors (baseline 454 to 380). Type-only
+  change — annotations are PEP-563 strings, no runtime effect.
 
 ### Removed
 

@@ -459,6 +459,7 @@ def _compute_wald_c(
     Returns:
         WaldResult with keys: lambdas, logls, betas, ses, pwalds.
     """
+    assert _compute_lmm_batch_c is not None  # guarded at dispatch site
     return _compute_lmm_batch_c(
         eigenvalues,
         Uab_batch,
@@ -505,6 +506,7 @@ def _compute_wald_split_c(
     Returns:
         WaldResult with keys: lambdas, logls, betas, ses, pwalds.
     """
+    assert _compute_lmm_batch_split_c is not None  # guarded at dispatch site
     return _compute_lmm_batch_split_c(
         eigenvalues,
         uab_varying_soa,
@@ -550,6 +552,7 @@ def create_lmm_workspace(
     Returns:
         PyCapsule wrapping lmm_workspace_t (opaque; pass to compute_wald_split_c_ws).
     """
+    assert _create_workspace_split_c is not None  # guarded at dispatch site
     return _create_workspace_split_c(
         eigenvalues,
         uab_invariant_soa,
@@ -581,6 +584,7 @@ def compute_wald_split_c_ws(
     Returns:
         WaldResult with keys: lambdas, logls, betas, ses, pwalds.
     """
+    assert _compute_lmm_chunk_split_c is not None  # guarded at dispatch site
     return _compute_lmm_chunk_split_c(workspace, uab_varying_soa, n_threads)
 
 
@@ -1150,6 +1154,7 @@ def _compute_score_c(
     Returns:
         Dict with keys: betas, ses, p_scores.
     """
+    assert _compute_score_batch_c is not None  # guarded at dispatch site
     return _compute_score_batch_c(
         eigenvalues,
         Uab_batch,
@@ -1186,6 +1191,7 @@ def _compute_lrt_c(
     Returns:
         Dict with keys: lambdas_mle, p_lrts.
     """
+    assert _compute_lrt_batch_c is not None  # guarded at dispatch site
     return _compute_lrt_batch_c(
         eigenvalues,
         Uab_batch,

@@ -70,7 +70,11 @@ dev = [
     "hypothesis[numpy]>=6.100.0",
     "pandas>=2.0.0",
     "ruff>=0.15.7",
-    "pyrefly>=1.0.0",
+    # Exact-pinned: pyrefly-baseline.json is a snapshot of a specific pyrefly
+    # version's diagnostics. A minor bump can rename/restructure messages and
+    # break the baseline match (spurious gate failures). Bump deliberately,
+    # then regenerate the baseline. Keep in sync with [dependency-groups].
+    "pyrefly==1.0.0",
     "pyyaml>=6.0.3",
     "slipcover>=1.0.17",
     "hatchling>=1.29.0",
@@ -212,7 +216,8 @@ dev = [
     "scipy>=1.10.0",
     "pandas>=2.0.0",
     "ruff>=0.15.7",
-    "pyrefly>=1.0.0",
+    # Exact-pinned — see the note in [project.optional-dependencies].dev.
+    "pyrefly==1.0.0",
     "pyyaml>=6.0.3",
     "slipcover>=1.0.17",
     "hatchling>=1.29.0",

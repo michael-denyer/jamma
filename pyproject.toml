@@ -70,6 +70,7 @@ dev = [
     "hypothesis[numpy]>=6.100.0",
     "pandas>=2.0.0",
     "ruff>=0.15.7",
+    "pyrefly>=1.0.0",
     "pyyaml>=6.0.3",
     "slipcover>=1.0.17",
     "hatchling>=1.29.0",
@@ -119,6 +120,22 @@ include = [
 # underscore prefix marks it as internal/unstable API — third parties must
 # not import from it.
 packages = ["src/jamma"]
+
+[tool.pyrefly]
+# Static type checking (run in CI lint job + prek hook).
+# project-includes: the source trees we type-check. Generated/vendored
+# files are left to pyrefly's default excludes (.venv, build, __pycache__).
+project-includes = ["src", "tests", "scripts"]
+# search-path: import roots so cross-tree imports resolve.
+#   src      → the `jamma` package (inferred, but listed explicitly).
+#   scripts  → top-level script modules imported by tests via sys.path
+#              insertion (e.g. `import check_c_extension_freshness`).
+#   .        → the repo root, so the `tests` package (tests/__init__.py)
+#              resolves for `from tests.conftest import ...`.
+search-path = ["src", "scripts", "."]
+# Check against the floor of requires-python (>=3.11), not the CI runner's
+# 3.12, so usage of 3.12-only syntax/stdlib is caught.
+python-version = "3.11"
 
 [tool.ruff]
 line-length = 88
@@ -195,6 +212,7 @@ dev = [
     "scipy>=1.10.0",
     "pandas>=2.0.0",
     "ruff>=0.15.7",
+    "pyrefly>=1.0.0",
     "pyyaml>=6.0.3",
     "slipcover>=1.0.17",
     "hatchling>=1.29.0",

@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameter and `svd` its `compute_uv=` argument (via `@overload`), matching
   the compiled extension. Fixes false-positive type errors and IDE
   autocomplete for both hot-path BLAS calls.
+- **Completed C-extension stubs**: `_jlinalg.pyi`'s `compute_snp_stats_chunk`
+  had a stale 2-arg signature returning a tuple; corrected to the real
+  preallocated-output form `(data, means, miss_counts, variances[, n_aa,
+  n_ab, n_bb]) -> None`. Added the four `_lmm_accel.pyi` functions the stub
+  omitted (`compute_score_batch_general_c`, `compute_lrt_batch_general_c`,
+  `compute_score_split_c`, `compute_lrt_split_c`), verified against the
+  compiled signatures and call sites. Drops the pyrefly baseline from 487 to
+  454 errors.
 
 ### Removed
 

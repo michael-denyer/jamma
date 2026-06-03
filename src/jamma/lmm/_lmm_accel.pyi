@@ -268,6 +268,56 @@ def compute_lrt_split_general_c(
     n_threads: int,
 ) -> dict[str, npt.NDArray[np.float64]]: ...
 
+# Batch Score/LRT for arbitrary n_cvt (table-driven Pab recursion). The
+# *_general_c variants take n_cvt + a pab_table_dict from
+# build_pab_table_for_c(n_cvt); the non-general batch siblings above are
+# the n_cvt=1 fast path.
+def compute_score_batch_general_c(
+    eigenvalues: npt.NDArray[np.float64],
+    Uab_batch: npt.NDArray[np.float64],
+    Hi_eval_null: npt.NDArray[np.float64],
+    n_samples: int,
+    n_cvt: int,
+    pab_table_dict: dict,
+    n_threads: int,
+) -> dict[str, npt.NDArray[np.float64]]: ...
+def compute_lrt_batch_general_c(
+    eigenvalues: npt.NDArray[np.float64],
+    Uab_batch: npt.NDArray[np.float64],
+    n_samples: int,
+    n_cvt: int,
+    pab_table_dict: dict,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+    logl_H0: float,
+    n_threads: int,
+) -> dict[str, npt.NDArray[np.float64]]: ...
+
+# SoA-native Score/LRT for n_cvt=1 — accept split SoA data (varying
+# [wx, xx, xy] + invariant [ww, wy, yy]) instead of a full Uab batch.
+def compute_score_split_c(
+    eigenvalues: npt.NDArray[np.float64],
+    uab_varying_soa: npt.NDArray[np.float64],
+    uab_invariant_soa: npt.NDArray[np.float64],
+    Hi_eval_null: npt.NDArray[np.float64],
+    n_samples: int,
+    n_threads: int,
+) -> dict[str, npt.NDArray[np.float64]]: ...
+def compute_lrt_split_c(
+    eigenvalues: npt.NDArray[np.float64],
+    uab_varying_soa: npt.NDArray[np.float64],
+    uab_invariant_soa: npt.NDArray[np.float64],
+    n_samples: int,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+    logl_H0: float,
+    n_threads: int,
+) -> dict[str, npt.NDArray[np.float64]]: ...
+
 ScoreFusedWorkspace = NewType("ScoreFusedWorkspace", object)
 LrtFusedWorkspace = NewType("LrtFusedWorkspace", object)
 

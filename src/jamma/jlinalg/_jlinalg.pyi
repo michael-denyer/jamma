@@ -142,17 +142,27 @@ def svd(
     """
 
 def compute_snp_stats_chunk(
-    genotypes: npt.NDArray[np.float64],
-    n_samples: int,
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-    """Compute per-SNP MAF, missingness, and allele frequencies.
+    data: npt.NDArray[np.float32] | npt.NDArray[np.float64],
+    means: npt.NDArray[np.float64],
+    miss_counts: npt.NDArray[np.intp],
+    variances: npt.NDArray[np.float64],
+    n_aa: npt.NDArray[np.int64] | None = ...,
+    n_ab: npt.NDArray[np.int64] | None = ...,
+    n_bb: npt.NDArray[np.int64] | None = ...,
+) -> None:
+    """Compute per-SNP mean, variance, and missing count into preallocated arrays.
+
+    Single-pass per-column statistics. Optionally counts genotype values
+    (0, 1, 2) for HWE testing when n_aa/n_ab/n_bb are all provided.
 
     Args:
-        genotypes: Genotype matrix chunk, shape (n_samples, n_snps), float64.
-        n_samples: Number of samples.
-
-    Returns:
-        Tuple of (maf, miss_rate, af) arrays, each shape (n_snps,).
+        data: Genotype matrix (n_samples, n_snps), float32 or float64, C-contiguous.
+        means: Output (n_snps,) float64 — per-SNP mean.
+        miss_counts: Output (n_snps,) intp — per-SNP NaN count.
+        variances: Output (n_snps,) float64 — per-SNP population variance.
+        n_aa: Optional output (n_snps,) int64 — count of genotype 0 (None skips HWE).
+        n_ab: Optional output (n_snps,) int64 — count of genotype 1 (None skips HWE).
+        n_bb: Optional output (n_snps,) int64 — count of genotype 2 (None skips HWE).
     """
 
 def get_n_threads() -> int:

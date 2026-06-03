@@ -8,7 +8,7 @@ ABI 12: Level 1/2 BLAS (ddot, dnrm2, daxpy, dscal, dgemv) and dsyr2k were
 removed from the C extension. They are NumPy-only in __init__.py.
 """
 
-from typing import Final, Literal
+from typing import Final, Literal, overload
 
 import numpy as np
 import numpy.typing as npt
@@ -54,6 +54,7 @@ def dgemm(
     B: npt.NDArray[np.float64],
     transa: Literal["N", "T", "n", "t"] = ...,
     transb: Literal["N", "T", "n", "t"] = ...,
+    out: npt.NDArray[np.float64] | None = ...,
 ) -> npt.NDArray[np.float64]:
     """Compute matrix-matrix product with optional transpose.
 
@@ -62,6 +63,8 @@ def dgemm(
         B: Right matrix, float64, C-contiguous.
         transa: 'N' (no transpose) or 'T' (transpose A).
         transb: 'N' (no transpose) or 'T' (transpose B).
+        out: Optional preallocated (M, N) float64 C-contiguous buffer. When
+            given, the result is written into it and the same array returned.
 
     Returns:
         Result matrix C = op(A) @ op(B), float64.
@@ -112,16 +115,30 @@ def qr(
         Tuple of (Q, R).
     """
 
+@overload
 def svd(
-    A: npt.NDArray[np.float64],
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-    """Compute SVD decomposition of a matrix.
+    A: npt.NDArray[np.float64], compute_uv: Literal[True] = ...
+) -> tuple[
+    npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]
+]: ...
+@overload
+def svd(
+    A: npt.NDArray[np.float64], compute_uv: Literal[False]
+) -> npt.NDArray[np.float64]: ...
+def svd(
+    A: npt.NDArray[np.float64], compute_uv: bool = ...
+) -> (
+    tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]
+    | npt.NDArray[np.float64]
+):
+    """Compute reduced SVD of a tall-skinny matrix (m >= n).
 
     Args:
-        A: Input matrix, shape (M, N), float64, C-contiguous.
+        A: Input matrix, shape (M, N) with M >= N, float64, C-contiguous.
+        compute_uv: If True (default), return (U, S, Vt). If False, return S only.
 
     Returns:
-        Tuple of (U, S, Vt).
+        (U, S, Vt) when compute_uv is True, else the singular values S.
     """
 
 def compute_snp_stats_chunk(

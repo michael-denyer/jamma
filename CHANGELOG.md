@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Pyrefly type-check gate**: CI lint job and a prek hook now run
+  `pyrefly check` against a committed baseline (`pyrefly-baseline.json`).
+  The gate fails only on *new* type errors; the pre-existing backlog is
+  snapshotted in the baseline and burns down over time
+  (`uv run pyrefly check --baseline pyrefly-baseline.json --update-baseline`).
+  Config lives in `[tool.pyrefly]` (pyproject.toml).
+
+### Fixed
+
+- **Stale `_jlinalg.pyi` stub**: `dgemm` now declares its `out=` buffer
+  parameter and `svd` its `compute_uv=` argument (via `@overload`), matching
+  the compiled extension. Fixes false-positive type errors and IDE
+  autocomplete for both hot-path BLAS calls.
+
+### Removed
+
+- **`scripts/bench_secular.py`**: orphaned benchmark importing
+  `jamma.lmm.loco_eigen_update`, a module removed with the secular solver in
+  #68. The script could not run.
+
 ## [5.3.1] - 2026-06-03
 
 ### Added

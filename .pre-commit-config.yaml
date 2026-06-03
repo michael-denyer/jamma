@@ -187,6 +187,21 @@ repos:
         language: system
         files: ^(hatch_build\.py|src/jamma/(jlinalg/_compile_jlinalg|lmm/_compile_accel)\.py|src/jamma/_build_support/)
         pass_filenames: false
+      # Static type checker. Runs whole-project (not per-file) so the
+      # baseline comparison works — pass_filenames must stay false. The
+      # committed pyrefly-baseline.json snapshots the pre-existing errors;
+      # this hook fails only on NEW type errors. CI runs the same command
+      # as an explicit "Pyrefly type check" step (.github/workflows/ci.yml)
+      # so local and CI cannot drift. Config lives in [tool.pyrefly]
+      # (pyproject.toml). Reads .pyi stubs, so no compiled C extension
+      # needed. Burn the baseline down with: uv run pyrefly check
+      # --baseline pyrefly-baseline.json --update-baseline.
+      - id: pyrefly
+        name: pyrefly type check (new errors vs baseline)
+        entry: uv run pyrefly check --baseline pyrefly-baseline.json
+        language: system
+        files: \.pyi?$
+        pass_filenames: false
       - id: ruff-format-all
         name: ruff format (all files)
         entry: uv run ruff format --check .

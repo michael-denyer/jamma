@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.4.1] - 2026-06-10
+
 ### Changed
 
 - **LOCO eigen-cache invalidation diagnostics**: `eigen_cache_is_valid` now

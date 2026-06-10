@@ -130,6 +130,18 @@ def eigen_cache_manifest_path(eigen_dir: Path, prefix: str) -> Path:
     return eigen_dir / f"{prefix}.loco.cache_manifest.json"
 
 
+def invalidate_eigen_cache_manifest(eigen_dir: Path, prefix: str) -> None:
+    """Remove the cache manifest if present; no-op if absent.
+
+    Called before a write_eigen rewrite so a stale manifest cannot validate a
+    half-rewritten eigen cache: the fresh manifest is written only after all
+    per-chromosome eigen files succeed, so an interrupted rewrite leaves no
+    manifest and the next read recomputes.
+    """
+    with suppress(FileNotFoundError):
+        eigen_cache_manifest_path(eigen_dir, prefix).unlink()
+
+
 def write_eigen_cache_manifest(
     eigen_dir: Path,
     prefix: str,

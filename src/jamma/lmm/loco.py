@@ -44,6 +44,7 @@ from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_cache import (
     compute_eigen_cache_key,
     eigen_cache_is_valid,
+    invalidate_eigen_cache_manifest,
     write_eigen_cache_manifest,
 )
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
@@ -504,12 +505,19 @@ def run_lmm_loco(
             # (eigen_dir is guaranteed non-None when write_eigen is True
             # by the early guard at the top of this function.)
             if write_eigen:
+                # write_eigen guarantees eigen_dir (entry guard at top of function).
+                assert eigen_dir is not None
                 try:
                     eigen_dir.mkdir(parents=True, exist_ok=True)
                 except OSError as e:
                     raise OSError(
                         f"Cannot create eigen cache directory {eigen_dir}: {e}"
                     ) from e
+                # Invalidate any stale manifest before rewriting eigen files. The fresh
+                # manifest is written only after the loop completes, so an interrupted
+                # rewrite leaves no manifest and the next read recomputes rather than
+                # trusting a half-rewritten cache.
+                invalidate_eigen_cache_manifest(eigen_dir, eigen_prefix)
 
         first_chr_pve: float | None = None
         first_chr_pve_se: float | None = None

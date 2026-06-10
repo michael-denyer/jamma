@@ -42,6 +42,7 @@ from jamma.kinship import (
 from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_cache import (
+    EigenCacheComponents,
     compute_eigen_cache_key,
     eigen_cache_is_valid,
     invalidate_eigen_cache_manifest,
@@ -425,7 +426,7 @@ def run_lmm_loco(
         # paths below. Those paths are mutually exclusive at runtime but key off
         # the same inputs.
         eigen_cache_key: str | None = None
-        eigen_cache_components: dict | None = None
+        eigen_cache_components: EigenCacheComponents | None = None
         if eigen_dir is not None:
             eigen_cache_key, eigen_cache_components = compute_eigen_cache_key(
                 bed_path,

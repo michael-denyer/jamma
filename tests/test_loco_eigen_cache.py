@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.lmm.eigen_cache import EigenCacheComponents
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.loco import _find_loco_eigen_cache
 
@@ -29,6 +30,24 @@ MOUSE_HS1940_BFILE = MOUSE_HS1940_DIR / "mouse_hs1940"
 
 def _mouse_hs1940_exists() -> bool:
     return MOUSE_HS1940_BFILE.with_suffix(".bed").exists()
+
+
+def _dummy_components(maf_threshold: float = 0.01) -> EigenCacheComponents:
+    """Build a complete EigenCacheComponents for manifest write tests.
+
+    The manifest tests care about the cache_key, not the components payload,
+    so a valid fully-populated default keeps the call sites type-clean.
+    maf_threshold is exposed because the roundtrip test asserts on it.
+    """
+    return {
+        "schema_version": 1,
+        "bed_fingerprint": "data.bed:64:1",
+        "bim_sha256": "0" * 64,
+        "maf_threshold": maf_threshold,
+        "miss_threshold": 0.05,
+        "valid_mask_sha256": "1" * 64,
+        "ksnps": "none",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -737,7 +756,9 @@ class TestEigenCacheManifest:
             write_eigen_cache_manifest,
         )
 
-        write_eigen_cache_manifest(tmp_path, "result", "KEY123", components={})
+        write_eigen_cache_manifest(
+            tmp_path, "result", "KEY123", components=_dummy_components()
+        )
         ok, _reason = eigen_cache_is_valid(tmp_path, "result", "KEY123")
         assert ok is True
 
@@ -747,7 +768,9 @@ class TestEigenCacheManifest:
             write_eigen_cache_manifest,
         )
 
-        write_eigen_cache_manifest(tmp_path, "result", "KEY123", components={})
+        write_eigen_cache_manifest(
+            tmp_path, "result", "KEY123", components=_dummy_components()
+        )
         ok, reason = eigen_cache_is_valid(tmp_path, "result", "DIFFERENT")
         assert ok is False
         assert reason
@@ -758,14 +781,15 @@ class TestEigenCacheManifest:
             write_eigen_cache_manifest,
         )
 
+        components = _dummy_components(maf_threshold=0.01)
         path = write_eigen_cache_manifest(
-            tmp_path, "result", "KEY123", components={"maf_threshold": 0.01}
+            tmp_path, "result", "KEY123", components=components
         )
         assert path.exists()
         manifest = read_eigen_cache_manifest(tmp_path, "result")
         assert manifest is not None
         assert manifest["cache_key"] == "KEY123"
-        assert manifest["components"] == {"maf_threshold": 0.01}
+        assert manifest["components"] == components
 
     def test_corrupt_manifest_is_invalid(self, tmp_path: Path) -> None:
         from jamma.lmm.eigen_cache import (
@@ -787,7 +811,9 @@ class TestEigenCacheManifest:
             write_eigen_cache_manifest,
         )
 
-        write_eigen_cache_manifest(tmp_path, "result", "KEY", components={})
+        write_eigen_cache_manifest(
+            tmp_path, "result", "KEY", components=_dummy_components()
+        )
         manifest = eigen_cache_manifest_path(tmp_path, "result")
         assert manifest.exists()
 

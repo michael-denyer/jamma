@@ -606,13 +606,14 @@ def _compute_key(
 
     if valid_mask is None:
         valid_mask = np.ones(20, dtype=bool)
-    return compute_eigen_cache_key(
+    key, _components = compute_eigen_cache_key(
         prefix,
         maf_threshold=maf_threshold,
         miss_threshold=miss_threshold,
         valid_mask=valid_mask,
         ksnps_indices=ksnps_indices,
     )
+    return key
 
 
 class TestEigenCacheKey:
@@ -697,6 +698,28 @@ class TestEigenCacheKey:
         assert k_none != k_b
         assert k_a != k_b
 
+    def test_returns_canonical_components(self, tmp_path: Path) -> None:
+        """Second return value is the exact hashed payload (for the manifest)."""
+        import hashlib
+        import json
+
+        from jamma.lmm.eigen_cache import compute_eigen_cache_key
+
+        prefix = tmp_path / "data"
+        _write_dummy_plink(prefix)
+        key, components = compute_eigen_cache_key(
+            prefix,
+            maf_threshold=0.01,
+            miss_threshold=0.05,
+            valid_mask=np.ones(20, dtype=bool),
+        )
+        assert isinstance(components, dict)
+        hashed_keys = {"bed_fingerprint", "bim_sha256", "valid_mask_sha256"}
+        assert hashed_keys <= components.keys()
+        canonical = json.dumps(components, sort_keys=True, separators=(",", ":"))
+        expected = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        assert key == expected
+
 
 class TestEigenCacheManifest:
     """Manifest read/write/validate behavior for stale-cache detection."""
@@ -714,7 +737,7 @@ class TestEigenCacheManifest:
             write_eigen_cache_manifest,
         )
 
-        write_eigen_cache_manifest(tmp_path, "result", "KEY123")
+        write_eigen_cache_manifest(tmp_path, "result", "KEY123", components={})
         ok, _reason = eigen_cache_is_valid(tmp_path, "result", "KEY123")
         assert ok is True
 
@@ -724,7 +747,7 @@ class TestEigenCacheManifest:
             write_eigen_cache_manifest,
         )
 
-        write_eigen_cache_manifest(tmp_path, "result", "KEY123")
+        write_eigen_cache_manifest(tmp_path, "result", "KEY123", components={})
         ok, reason = eigen_cache_is_valid(tmp_path, "result", "DIFFERENT")
         assert ok is False
         assert reason
@@ -735,11 +758,14 @@ class TestEigenCacheManifest:
             write_eigen_cache_manifest,
         )
 
-        path = write_eigen_cache_manifest(tmp_path, "result", "KEY123")
+        path = write_eigen_cache_manifest(
+            tmp_path, "result", "KEY123", components={"maf_threshold": 0.01}
+        )
         assert path.exists()
         manifest = read_eigen_cache_manifest(tmp_path, "result")
         assert manifest is not None
         assert manifest["cache_key"] == "KEY123"
+        assert manifest["components"] == {"maf_threshold": 0.01}
 
     def test_corrupt_manifest_is_invalid(self, tmp_path: Path) -> None:
         from jamma.lmm.eigen_cache import (

@@ -44,6 +44,7 @@ from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_cache import (
     compute_eigen_cache_key,
     eigen_cache_is_valid,
+    invalidate_eigen_cache_manifest,
     write_eigen_cache_manifest,
 )
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
@@ -418,6 +419,22 @@ def run_lmm_loco(
         else:
             snps_global_mask = None
 
+        # Content + parameter key over every determinant of the eigendecomposition
+        # (genotype files, filter thresholds, -ksnps set, analysed-sample mask).
+        # Computed once and reused on both the read (validate) and write (persist)
+        # paths below. Those paths are mutually exclusive at runtime but key off
+        # the same inputs.
+        eigen_cache_key: str | None = None
+        eigen_cache_components: dict | None = None
+        if eigen_dir is not None:
+            eigen_cache_key, eigen_cache_components = compute_eigen_cache_key(
+                bed_path,
+                maf_threshold=maf_threshold,
+                miss_threshold=miss_threshold,
+                valid_mask=valid_mask,
+                ksnps_indices=ksnps_indices,
+            )
+
         # Check for cached eigen files before computing kinship.
         # When write_eigen is True the user explicitly asked to
         # (re)generate files, so skip the cache and recompute.
@@ -427,14 +444,11 @@ def run_lmm_loco(
                 eigen_dir, eigen_prefix, unique_chrs, legacy_text=legacy_text
             )
             if eigen_cache is not None:
-                current_key = compute_eigen_cache_key(
-                    bed_path,
-                    maf_threshold=maf_threshold,
-                    miss_threshold=miss_threshold,
-                    valid_mask=valid_mask,
-                    ksnps_indices=ksnps_indices,
+                # eigen_cache_key is set whenever eigen_dir is not None.
+                assert eigen_cache_key is not None
+                ok, reason = eigen_cache_is_valid(
+                    eigen_dir, eigen_prefix, eigen_cache_key
                 )
-                ok, reason = eigen_cache_is_valid(eigen_dir, eigen_prefix, current_key)
                 if not ok:
                     logger.warning(
                         f"LOCO eigen cache in {eigen_dir} is stale or unverifiable "
@@ -491,12 +505,19 @@ def run_lmm_loco(
             # (eigen_dir is guaranteed non-None when write_eigen is True
             # by the early guard at the top of this function.)
             if write_eigen:
+                # write_eigen guarantees eigen_dir (entry guard at top of function).
+                assert eigen_dir is not None
                 try:
                     eigen_dir.mkdir(parents=True, exist_ok=True)
                 except OSError as e:
                     raise OSError(
                         f"Cannot create eigen cache directory {eigen_dir}: {e}"
                     ) from e
+                # Invalidate any stale manifest before rewriting eigen files. The fresh
+                # manifest is written only after the loop completes, so an interrupted
+                # rewrite leaves no manifest and the next read recomputes rather than
+                # trusting a half-rewritten cache.
+                invalidate_eigen_cache_manifest(eigen_dir, eigen_prefix)
 
         first_chr_pve: float | None = None
         first_chr_pve_se: float | None = None
@@ -648,26 +669,16 @@ def run_lmm_loco(
             gc.collect()
 
         if write_eigen and eigen_cache is None:
-            key = compute_eigen_cache_key(
-                bed_path,
-                maf_threshold=maf_threshold,
-                miss_threshold=miss_threshold,
-                valid_mask=valid_mask,
-                ksnps_indices=ksnps_indices,
-            )
+            # write_eigen guarantees eigen_dir (entry guard), and the key block
+            # above ran because eigen_dir is not None, so all three are set.
+            assert eigen_dir is not None
+            assert eigen_cache_key is not None
+            assert eigen_cache_components is not None
             write_eigen_cache_manifest(
-                eigen_dir,  # type: ignore[arg-type]  # guaranteed non-None when write_eigen
+                eigen_dir,
                 eigen_prefix,
-                key,
-                components={
-                    "maf_threshold": maf_threshold,
-                    "miss_threshold": miss_threshold,
-                    "n_samples_total": int(valid_mask.shape[0]),
-                    "n_valid": int(np.sum(valid_mask)),
-                    "ksnps_indices": "none"
-                    if ksnps_indices is None
-                    else len(ksnps_indices),
-                },
+                eigen_cache_key,
+                components=eigen_cache_components,
             )
             logger.info(f"Wrote LOCO eigen cache manifest to {eigen_dir}")
 

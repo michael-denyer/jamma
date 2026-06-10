@@ -86,7 +86,7 @@ def compute_eigen_cache_key(
     miss_threshold: float,
     valid_mask: np.ndarray,
     ksnps_indices: np.ndarray | None = None,
-) -> str:
+) -> tuple[str, dict]:
     """Compute a SHA-256 cache key over all eigendecomposition determinants.
 
     Args:
@@ -101,7 +101,9 @@ def compute_eigen_cache_key(
             before hashing.
 
     Returns:
-        Hex SHA-256 digest string.
+        Tuple of (key, components). key is the hex SHA-256 digest. components is
+        the exact canonical payload that was hashed, returned so the caller can
+        persist it in the manifest and diff it against a future mismatch.
     """
     components = _build_components(
         bed_path,
@@ -111,7 +113,8 @@ def compute_eigen_cache_key(
         ksnps_indices=ksnps_indices,
     )
     canonical = json.dumps(components, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    key = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return key, components
 
 
 def eigen_cache_manifest_path(eigen_dir: Path, prefix: str) -> Path:
@@ -127,12 +130,24 @@ def eigen_cache_manifest_path(eigen_dir: Path, prefix: str) -> Path:
     return eigen_dir / f"{prefix}.loco.cache_manifest.json"
 
 
+def invalidate_eigen_cache_manifest(eigen_dir: Path, prefix: str) -> None:
+    """Remove the cache manifest if present; no-op if absent.
+
+    Called before a write_eigen rewrite so a stale manifest cannot validate a
+    half-rewritten eigen cache: the fresh manifest is written only after all
+    per-chromosome eigen files succeed, so an interrupted rewrite leaves no
+    manifest and the next read recomputes.
+    """
+    with suppress(FileNotFoundError):
+        eigen_cache_manifest_path(eigen_dir, prefix).unlink()
+
+
 def write_eigen_cache_manifest(
     eigen_dir: Path,
     prefix: str,
     key: str,
     *,
-    components: dict | None = None,
+    components: dict,
 ) -> Path:
     """Write a cache manifest JSON atomically.
 
@@ -140,7 +155,8 @@ def write_eigen_cache_manifest(
         eigen_dir: Directory containing eigen files.
         prefix: Filename prefix (e.g. "result").
         key: Hex SHA-256 cache key string.
-        components: Optional dict of key components for debuggability.
+        components: Dict of key components (the payload that was hashed) for
+            debuggability.
 
     Returns:
         Path to the written manifest file.
@@ -148,7 +164,7 @@ def write_eigen_cache_manifest(
     manifest = {
         "schema_version": EIGEN_CACHE_SCHEMA_VERSION,
         "cache_key": key,
-        "components": components or {},
+        "components": components,
     }
     target = eigen_cache_manifest_path(eigen_dir, prefix)
     fd, tmp_name = tempfile.mkstemp(dir=eigen_dir, suffix=".json")

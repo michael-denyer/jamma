@@ -41,6 +41,11 @@ from jamma.kinship import (
 )
 from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.eigen import eigendecompose_kinship
+from jamma.lmm.eigen_cache import (
+    compute_eigen_cache_key,
+    eigen_cache_is_valid,
+    write_eigen_cache_manifest,
+)
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
@@ -422,6 +427,22 @@ def run_lmm_loco(
                 eigen_dir, eigen_prefix, unique_chrs, legacy_text=legacy_text
             )
             if eigen_cache is not None:
+                current_key = compute_eigen_cache_key(
+                    bed_path,
+                    maf_threshold=maf_threshold,
+                    miss_threshold=miss_threshold,
+                    valid_mask=valid_mask,
+                    ksnps_indices=ksnps_indices,
+                )
+                ok, reason = eigen_cache_is_valid(eigen_dir, eigen_prefix, current_key)
+                if not ok:
+                    logger.warning(
+                        f"LOCO eigen cache in {eigen_dir} is stale or unverifiable "
+                        f"({reason}). Kinship and eigendecomposition will be "
+                        f"recomputed."
+                    )
+                    eigen_cache = None
+            if eigen_cache is not None:
                 logger.info(
                     f"Found complete LOCO eigen cache in {eigen_dir} "
                     f"({len(eigen_cache)} chromosomes). "
@@ -625,6 +646,30 @@ def run_lmm_loco(
 
             del eigenvalues_np, U
             gc.collect()
+
+        if write_eigen and eigen_cache is None:
+            key = compute_eigen_cache_key(
+                bed_path,
+                maf_threshold=maf_threshold,
+                miss_threshold=miss_threshold,
+                valid_mask=valid_mask,
+                ksnps_indices=ksnps_indices,
+            )
+            write_eigen_cache_manifest(
+                eigen_dir,  # type: ignore[arg-type]  # guaranteed non-None when write_eigen
+                eigen_prefix,
+                key,
+                components={
+                    "maf_threshold": maf_threshold,
+                    "miss_threshold": miss_threshold,
+                    "n_samples_total": int(valid_mask.shape[0]),
+                    "n_valid": int(np.sum(valid_mask)),
+                    "ksnps_indices": "none"
+                    if ksnps_indices is None
+                    else len(ksnps_indices),
+                },
+            )
+            logger.info(f"Wrote LOCO eigen cache manifest to {eigen_dir}")
 
         if first_chr_pve is None:
             logger.warning(

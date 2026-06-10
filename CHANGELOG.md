@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **LOCO eigen-cache content hash**: per-chromosome eigen caches now carry a
+  `<prefix>.loco.cache_manifest.json` manifest keyed by a SHA-256 over the
+  inputs that determine the eigendecomposition (genotype `.bed`/`.bim`, MAF and
+  missingness thresholds, `-ksnps` restriction, and the analysed-sample mask).
+  On read, the key is recomputed and compared; a mismatch forces a full
+  recompute. New module `jamma.lmm.eigen_cache`.
+
+### Fixed
+
+- **Silent stale LOCO eigen cache**: a cached eigendecomposition was reused
+  whenever the per-chromosome files existed and matched on sample count, even
+  if the SNP filters, `-ksnps` set, or analysed-sample subset had changed
+  (same sample count, different missingness pattern). Those runs now detect the
+  changed inputs via the manifest and recompute. A cache written before the
+  manifest existed has no key and is recomputed once.
+
 ## [5.3.2] - 2026-06-03
 
 ### Added

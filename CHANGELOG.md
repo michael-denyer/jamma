@@ -9,12 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **LOCO eigen-cache content hash**: per-chromosome eigen caches now carry a
+- **LOCO eigen-cache manifest**: per-chromosome eigen caches now carry a
   `<prefix>.loco.cache_manifest.json` manifest keyed by a SHA-256 over the
-  inputs that determine the eigendecomposition (genotype `.bed`/`.bim`, MAF and
-  missingness thresholds, `-ksnps` restriction, and the analysed-sample mask).
-  On read, the key is recomputed and compared; a mismatch forces a full
-  recompute. New module `jamma.lmm.eigen_cache`.
+  inputs that determine the eigendecomposition: the `.bim` is content-hashed,
+  the `.bed` is fingerprinted by size + modification time (not content-hashed,
+  to avoid re-reading large genotype files), plus the MAF and missingness
+  thresholds, `-ksnps` restriction, and the analysed-sample mask. On read, the
+  key is recomputed and compared; a mismatch forces a full recompute. New
+  module `jamma.lmm.eigen_cache`.
 
 ### Fixed
 

@@ -561,3 +561,263 @@ class TestLocoLegacyText:
             assert (tmp_path / f"result.loco.cXX.chr{ch}.txt").exists(), (
                 f"Missing .txt kinship for chr {ch}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Content + parameter cache-key tests (manifest-based stale-cache detection)
+# ---------------------------------------------------------------------------
+
+
+def _write_dummy_plink(
+    prefix: Path,
+    *,
+    bed_size: int = 64,
+    bim_lines: list[str] | None = None,
+    bed_fill: int = 0,
+) -> None:
+    """Write minimal .bed/.bim files at ``prefix`` for cache-key unit tests.
+
+    The cache-key function only stats .bed (name + size + mtime) and hashes
+    .bim content, so these need not be valid PLINK binaries.
+    """
+    if bim_lines is None:
+        bim_lines = [
+            "1\trs1\t0\t100\tA\tG",
+            "1\trs2\t0\t200\tC\tT",
+            "2\trs3\t0\t300\tA\tT",
+        ]
+    prefix.with_suffix(".bed").write_bytes(bytes([bed_fill]) * bed_size)
+    prefix.with_suffix(".bim").write_text("\n".join(bim_lines) + "\n")
+
+
+def _compute_key(
+    prefix: Path,
+    *,
+    maf_threshold: float = 0.01,
+    miss_threshold: float = 0.05,
+    valid_mask: np.ndarray | None = None,
+    ksnps_indices: np.ndarray | None = None,
+) -> str:
+    """Call compute_eigen_cache_key with per-test overrides over fixed defaults.
+
+    Explicit keyword forwarding (not dict-unpacking) keeps the call type-clean.
+    """
+    from jamma.lmm.eigen_cache import compute_eigen_cache_key
+
+    if valid_mask is None:
+        valid_mask = np.ones(20, dtype=bool)
+    return compute_eigen_cache_key(
+        prefix,
+        maf_threshold=maf_threshold,
+        miss_threshold=miss_threshold,
+        valid_mask=valid_mask,
+        ksnps_indices=ksnps_indices,
+    )
+
+
+class TestEigenCacheKey:
+    """compute_eigen_cache_key changes iff a real eigen-pair determinant changes."""
+
+    def test_key_is_stable_for_identical_inputs(self, tmp_path: Path) -> None:
+        prefix = tmp_path / "data"
+        _write_dummy_plink(prefix)
+        k1 = _compute_key(prefix)
+        k2 = _compute_key(prefix)
+        assert isinstance(k1, str)
+        assert len(k1) > 0
+        assert k1 == k2
+
+    def test_key_changes_when_maf_threshold_changes(self, tmp_path: Path) -> None:
+        prefix = tmp_path / "data"
+        _write_dummy_plink(prefix)
+        assert _compute_key(prefix) != _compute_key(prefix, maf_threshold=0.05)
+
+    def test_key_changes_when_miss_threshold_changes(self, tmp_path: Path) -> None:
+        prefix = tmp_path / "data"
+        _write_dummy_plink(prefix)
+        assert _compute_key(prefix) != _compute_key(prefix, miss_threshold=0.10)
+
+    def test_key_changes_when_valid_mask_positions_change(self, tmp_path: Path) -> None:
+        """Same valid COUNT, different valid POSITIONS -> different key.
+
+        This is the silent-stale hole the manifest closes: two phenotypes with
+        the same number of non-missing samples but a different missingness
+        pattern select a different sample subset, hence a different K.
+        """
+        prefix = tmp_path / "data"
+        _write_dummy_plink(prefix)
+        m1 = np.ones(20, dtype=bool)
+        m1[0] = False
+        m2 = np.ones(20, dtype=bool)
+        m2[1] = False
+        assert int(m1.sum()) == int(m2.sum())  # same count
+        k1 = _compute_key(prefix, valid_mask=m1)
+        k2 = _compute_key(prefix, valid_mask=m2)
+        assert k1 != k2
+
+    def test_key_changes_when_valid_mask_length_changes(self, tmp_path: Path) -> None:
+        """Different total sample count (.fam size) -> different key."""
+        prefix = tmp_path / "data"
+        _write_dummy_plink(prefix)
+        k1 = _compute_key(prefix, valid_mask=np.ones(20, dtype=bool))
+        k2 = _compute_key(prefix, valid_mask=np.ones(19, dtype=bool))
+        assert k1 != k2
+
+    def test_key_changes_when_bim_content_changes(self, tmp_path: Path) -> None:
+        """Re-annotating a SNP's chromosome changes the LOCO partition -> key."""
+        prefix = tmp_path / "data"
+        _write_dummy_plink(prefix)
+        k1 = _compute_key(prefix)
+        _write_dummy_plink(
+            prefix,
+            bim_lines=[
+                "1\trs1\t0\t100\tA\tG",
+                "1\trs2\t0\t200\tC\tT",
+                "3\trs3\t0\t300\tA\tT",  # chr 2 -> 3
+            ],
+        )
+        assert k1 != _compute_key(prefix)
+
+    def test_key_changes_when_bed_content_changes(self, tmp_path: Path) -> None:
+        """A different .bed (here: different size) -> different key."""
+        prefix = tmp_path / "data"
+        _write_dummy_plink(prefix, bed_size=64)
+        k1 = _compute_key(prefix)
+        _write_dummy_plink(prefix, bed_size=128)
+        assert k1 != _compute_key(prefix)
+
+    def test_key_changes_when_ksnps_changes(self, tmp_path: Path) -> None:
+        """Different kinship-SNP restriction -> different key; None differs too."""
+        prefix = tmp_path / "data"
+        _write_dummy_plink(prefix)
+        k_none = _compute_key(prefix)
+        k_a = _compute_key(prefix, ksnps_indices=np.array([0, 1]))
+        k_b = _compute_key(prefix, ksnps_indices=np.array([0, 2]))
+        assert k_none != k_a
+        assert k_none != k_b
+        assert k_a != k_b
+
+
+class TestEigenCacheManifest:
+    """Manifest read/write/validate behavior for stale-cache detection."""
+
+    def test_absent_manifest_is_invalid(self, tmp_path: Path) -> None:
+        from jamma.lmm.eigen_cache import eigen_cache_is_valid
+
+        ok, reason = eigen_cache_is_valid(tmp_path, "result", "somekey")
+        assert ok is False
+        assert "manifest" in reason.lower()
+
+    def test_matching_key_is_valid(self, tmp_path: Path) -> None:
+        from jamma.lmm.eigen_cache import (
+            eigen_cache_is_valid,
+            write_eigen_cache_manifest,
+        )
+
+        write_eigen_cache_manifest(tmp_path, "result", "KEY123")
+        ok, _reason = eigen_cache_is_valid(tmp_path, "result", "KEY123")
+        assert ok is True
+
+    def test_mismatched_key_is_invalid(self, tmp_path: Path) -> None:
+        from jamma.lmm.eigen_cache import (
+            eigen_cache_is_valid,
+            write_eigen_cache_manifest,
+        )
+
+        write_eigen_cache_manifest(tmp_path, "result", "KEY123")
+        ok, reason = eigen_cache_is_valid(tmp_path, "result", "DIFFERENT")
+        assert ok is False
+        assert reason
+
+    def test_manifest_roundtrip(self, tmp_path: Path) -> None:
+        from jamma.lmm.eigen_cache import (
+            read_eigen_cache_manifest,
+            write_eigen_cache_manifest,
+        )
+
+        path = write_eigen_cache_manifest(tmp_path, "result", "KEY123")
+        assert path.exists()
+        manifest = read_eigen_cache_manifest(tmp_path, "result")
+        assert manifest is not None
+        assert manifest["cache_key"] == "KEY123"
+
+    def test_corrupt_manifest_is_invalid(self, tmp_path: Path) -> None:
+        from jamma.lmm.eigen_cache import (
+            eigen_cache_is_valid,
+            eigen_cache_manifest_path,
+        )
+
+        eigen_cache_manifest_path(tmp_path, "result").write_text("{ not json")
+        ok, reason = eigen_cache_is_valid(tmp_path, "result", "KEY")
+        assert ok is False
+        assert reason
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not available"
+)
+class TestLocoEigenCacheStaleDetection:
+    """End-to-end: a cache whose inputs changed must NOT be silently reused."""
+
+    def test_changed_filter_invalidates_cache(self, tmp_path: Path) -> None:
+        """Cache written at maf=0.01, then read with maf=0.05, must recompute.
+
+        Proven by equality to a from-scratch maf=0.05 run: if the stale maf=0.01
+        eigen cache were silently reused, results would differ.
+        """
+        from jamma.lmm.loco import run_lmm_loco
+        from jamma.validation.compare import load_gemma_assoc
+        from tests.conftest import load_phenotypes_from_fam
+
+        fam_path = MOUSE_HS1940_BFILE.with_suffix(".fam")
+        phenotypes = load_phenotypes_from_fam(fam_path)
+        eigen_dir = tmp_path / "eigen_cache"
+        eigen_dir.mkdir()
+
+        common = {
+            "bed_path": MOUSE_HS1940_BFILE,
+            "phenotypes": phenotypes,
+            "lmm_mode": 1,
+            "check_memory": False,
+            "show_progress": False,
+            "miss_threshold": 0.05,
+        }
+
+        out_fresh = tmp_path / "fresh.assoc.txt"
+        run_lmm_loco(**common, maf_threshold=0.05, output_path=out_fresh)
+
+        run_lmm_loco(
+            **common,
+            maf_threshold=0.01,
+            output_path=tmp_path / "populate.assoc.txt",
+            write_eigen=True,
+            eigen_dir=eigen_dir,
+        )
+
+        out_cached = tmp_path / "cached.assoc.txt"
+        run_lmm_loco(
+            **common,
+            maf_threshold=0.05,
+            output_path=out_cached,
+            eigen_dir=eigen_dir,
+        )
+
+        fresh = {r.rs: r for r in load_gemma_assoc(out_fresh)}
+        cached = {r.rs: r for r in load_gemma_assoc(out_cached)}
+        assert fresh
+        assert cached
+        common_rs = set(fresh) & set(cached)
+        assert common_rs
+        for rs in common_rs:
+            b_fresh = fresh[rs].beta
+            b_cached = cached[rs].beta
+            assert b_fresh is not None
+            assert b_cached is not None
+            np.testing.assert_allclose(
+                b_cached,
+                b_fresh,
+                rtol=1e-8,
+                atol=1e-14,
+                err_msg=f"beta {rs}: stale maf=0.01 cache silently reused",
+            )

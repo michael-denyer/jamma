@@ -87,6 +87,13 @@ or `-lmm` is required.
 | `-eigen` | flag | off | Write eigendecomposition files alongside kinship output |
 | `--eigen-dir` | path | — | Directory for LOCO per-chromosome eigen cache. With `-lmm -loco`, reads cached files to skip re-computation. With `-eigen`, writes them here. Only valid with `-loco`. |
 
+> **Cache validation.** The eigen cache is keyed by a content + parameter hash
+> over its determinants (the genotype files, MAF and missingness thresholds, any
+> `-ksnps` restriction, and the analysed-sample set), stored in
+> `<prefix>.loco.cache_manifest.json`. When any determinant changes the cache is
+> recomputed rather than silently reused. A cache written before the manifest
+> existed has no key and is recomputed once.
+
 ### Analysis modes
 
 | Flag | Type | Default | Description |

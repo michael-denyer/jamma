@@ -203,7 +203,16 @@ class TestLocoEigenCacheIntegration:
     """End-to-end tests for LOCO eigen cache write/read cycle."""
 
     def test_cached_run_produces_identical_results(self, tmp_path: Path) -> None:
-        """Write eigen, then read cache: results must be numerically identical."""
+        """Write eigen, then read cache: results must be numerically identical.
+
+        Also pins that the cache is actually reused: a regression that silently
+        recomputes instead of loading would emit no cache-found line, which the
+        log-sink assertion below catches. (loguru does not propagate to pytest's
+        caplog without wiring, so we capture via a logger sink, the project's
+        established pattern.)
+        """
+        from loguru import logger
+
         from jamma.lmm.loco import run_lmm_loco
         from jamma.validation.compare import load_gemma_assoc
         from tests.conftest import load_phenotypes_from_fam
@@ -227,17 +236,31 @@ class TestLocoEigenCacheIntegration:
             eigen_prefix="result",
         )
 
-        # Run 2: read cache (no kinship/eigendecomp)
+        # Run 2: read cache (no kinship/eigendecomp). Capture INFO so we can
+        # prove the cache was loaded rather than silently recomputed.
         out2 = tmp_path / "run2.assoc.txt"
-        run_lmm_loco(
-            bed_path=MOUSE_HS1940_BFILE,
-            phenotypes=phenotypes,
-            lmm_mode=1,
-            output_path=out2,
-            check_memory=False,
-            show_progress=False,
-            eigen_dir=eigen_dir,
-            eigen_prefix="result",
+        cache_messages: list[str] = []
+        handler_id = logger.add(
+            lambda msg: cache_messages.append(msg),
+            level="INFO",
+            format="{message}",
+        )
+        try:
+            run_lmm_loco(
+                bed_path=MOUSE_HS1940_BFILE,
+                phenotypes=phenotypes,
+                lmm_mode=1,
+                output_path=out2,
+                check_memory=False,
+                show_progress=False,
+                eigen_dir=eigen_dir,
+                eigen_prefix="result",
+            )
+        finally:
+            logger.remove(handler_id)
+
+        assert any("Found complete LOCO eigen cache" in m for m in cache_messages), (
+            f"cache was not reused (no cache-found log line): {cache_messages!r}"
         )
 
         # Compare results — both should produce non-empty output
@@ -801,6 +824,97 @@ class TestEigenCacheManifest:
         ok, reason = eigen_cache_is_valid(tmp_path, "result", "KEY")
         assert ok is False
         assert reason
+
+    def test_missing_cache_key_reports_malformed_not_input_change(
+        self, tmp_path: Path
+    ) -> None:
+        """A manifest that parses but lacks cache_key is malformed, not stale.
+
+        Mislabeling it 'inputs changed' misdirects anyone debugging an
+        unexpected invalidation, so the reason must name the malformed manifest.
+        """
+        import json
+
+        from jamma.lmm.eigen_cache import (
+            EIGEN_CACHE_SCHEMA_VERSION,
+            eigen_cache_is_valid,
+            eigen_cache_manifest_path,
+        )
+
+        path = eigen_cache_manifest_path(tmp_path, "result")
+        # Valid schema_version so the schema gate passes and we reach the
+        # missing-cache_key branch; no cache_key field.
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": EIGEN_CACHE_SCHEMA_VERSION,
+                    "components": {},
+                }
+            )
+        )
+        ok, reason = eigen_cache_is_valid(tmp_path, "result", "KEY")
+        assert ok is False
+        assert "malformed" in reason.lower()
+        assert "cache_key" in reason
+        assert "inputs changed" not in reason
+
+    def test_schema_version_mismatch_reports_schema_reason(
+        self, tmp_path: Path
+    ) -> None:
+        """A manifest with a stale schema_version is rejected explicitly.
+
+        The cache_key matches, so only the explicit schema gate (not the
+        implicit hash coupling) can produce this rejection.
+        """
+        import json
+
+        from jamma.lmm.eigen_cache import (
+            EIGEN_CACHE_SCHEMA_VERSION,
+            eigen_cache_is_valid,
+            eigen_cache_manifest_path,
+        )
+
+        path = eigen_cache_manifest_path(tmp_path, "result")
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": EIGEN_CACHE_SCHEMA_VERSION + 1,
+                    "cache_key": "KEY",
+                    "components": {},
+                }
+            )
+        )
+        ok, reason = eigen_cache_is_valid(tmp_path, "result", "KEY")
+        assert ok is False
+        assert "schema_version" in reason
+
+    def test_write_failure_leaves_no_temp_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A serialisation failure mid-write must leave no half-written artifact.
+
+        json.dump is an I/O boundary, safe to patch; the guarantee under test is
+        that the temp file is cleaned up and no manifest is left behind.
+        """
+        import json as json_mod
+
+        from jamma.lmm.eigen_cache import (
+            eigen_cache_manifest_path,
+            write_eigen_cache_manifest,
+        )
+
+        def boom(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("simulated serialisation failure")
+
+        monkeypatch.setattr(json_mod, "dump", boom)
+
+        with pytest.raises(RuntimeError, match="simulated serialisation failure"):
+            write_eigen_cache_manifest(
+                tmp_path, "result", "KEY", components=_dummy_components()
+            )
+
+        assert list(tmp_path.glob("*.json")) == []
+        assert not eigen_cache_manifest_path(tmp_path, "result").exists()
 
     def test_invalidate_removes_present_manifest_and_no_ops_when_absent(
         self, tmp_path: Path

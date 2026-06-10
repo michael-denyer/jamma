@@ -90,13 +90,15 @@ or `-lmm` is required.
 > **Cache validation.** The eigen cache is keyed by a SHA-256 over its
 > determinants: the `.bim` is content-hashed, the `.bed` is fingerprinted by
 > size + modification time, plus the MAF and missingness thresholds, any
-> `-ksnps` restriction, and the analysed-sample set, stored in
+> `-ksnps` restriction, the analysed-sample set, and the manifest
+> `schema_version` (bumping it invalidates all prior caches), stored in
 > `<prefix>.loco.cache_manifest.json`. The `.bed` is fingerprinted rather than
 > fully hashed to avoid re-reading large genotype files every run; regenerating
 > genotypes changes the `.bed` size or timestamp and invalidates the cache.
 > When any determinant changes the cache is recomputed rather than silently
-> reused. A cache written before the manifest existed has no key and is
-> recomputed once.
+> reused. A cache written before the manifest existed has no key; it is
+> rejected and recomputed on every read run until regenerated with `-eigen`,
+> which writes a manifest.
 
 ### Analysis modes
 

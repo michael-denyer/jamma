@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **LOCO eigen-cache invalidation diagnostics**: `eigen_cache_is_valid` now
+  reports a malformed manifest (parses but has no `cache_key`, e.g. an
+  old-schema or truncated file) distinctly from a real input change, and
+  enforces the manifest `schema_version` explicitly before the key compare
+  instead of relying only on its presence in the hashed payload. A
+  schema-version bump now invalidates all prior caches with a clear log reason.
+  The manifest is `fsync`'d before its atomic rename so a crash cannot leave a
+  parseable-but-garbage manifest, and corrupt-vs-unreadable manifests log
+  distinct warnings. Manifest and components payloads are now typed via
+  `TypedDict` (`EigenCacheComponents`, `EigenCacheManifest`).
+
 ## [5.4.0] - 2026-06-10
 
 ### Added
@@ -27,7 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   if the SNP filters, `-ksnps` set, or analysed-sample subset had changed
   (same sample count, different missingness pattern). Those runs now detect the
   changed inputs via the manifest and recompute. A cache written before the
-  manifest existed has no key and is recomputed once.
+  manifest existed has no key; it is rejected and recomputed on every read run
+  until regenerated with `-eigen`, which writes a manifest.
 
 ## [5.3.2] - 2026-06-03
 

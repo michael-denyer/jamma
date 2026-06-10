@@ -4,7 +4,9 @@ A manifest file written alongside eigen files records a SHA-256 digest of
 all inputs that determine the eigendecomposition (file identity, filter
 thresholds, sample mask, SNP restriction).  On the next run the digest is
 recomputed and compared; a mismatch forces a full recompute rather than
-silently reusing stale eigen files.
+silently reusing stale eigen files. The genotype `.bed` is fingerprinted by
+size + mtime while the `.bim` is fingerprinted by content hash, since a
+re-annotated `.bim` can change the LOCO partition without changing `.bed`.
 """
 
 from __future__ import annotations
@@ -15,11 +17,38 @@ import os
 import tempfile
 from contextlib import suppress
 from pathlib import Path
+from typing import TypedDict
 
 import numpy as np
 from loguru import logger
 
 EIGEN_CACHE_SCHEMA_VERSION: int = 1
+
+
+class EigenCacheComponents(TypedDict):
+    """Canonical, JSON-serialisable payload hashed into the cache key.
+
+    All values are plain JSON scalars: a TypedDict gives static shape
+    checking without the runtime cost or rigidity of a dataclass. JSON
+    decode yields a plain dict at runtime, so consumers that read this back
+    off disk must still guard field access defensively.
+    """
+
+    schema_version: int
+    bed_fingerprint: str
+    bim_sha256: str
+    maf_threshold: float
+    miss_threshold: float
+    valid_mask_sha256: str
+    ksnps: str
+
+
+class EigenCacheManifest(TypedDict):
+    """On-disk manifest wrapping the cache key and its hashed components."""
+
+    schema_version: int
+    cache_key: str
+    components: EigenCacheComponents
 
 
 def _sha256_file(path: Path) -> str:
@@ -38,7 +67,7 @@ def _build_components(
     miss_threshold: float,
     valid_mask: np.ndarray,
     ksnps_indices: np.ndarray | None,
-) -> dict:
+) -> EigenCacheComponents:
     """Assemble the canonical dict of cache-key components.
 
     Args:
@@ -86,7 +115,7 @@ def compute_eigen_cache_key(
     miss_threshold: float,
     valid_mask: np.ndarray,
     ksnps_indices: np.ndarray | None = None,
-) -> tuple[str, dict]:
+) -> tuple[str, EigenCacheComponents]:
     """Compute a SHA-256 cache key over all eigendecomposition determinants.
 
     Args:
@@ -147,7 +176,7 @@ def write_eigen_cache_manifest(
     prefix: str,
     key: str,
     *,
-    components: dict,
+    components: EigenCacheComponents,
 ) -> Path:
     """Write a cache manifest JSON atomically.
 
@@ -155,13 +184,13 @@ def write_eigen_cache_manifest(
         eigen_dir: Directory containing eigen files.
         prefix: Filename prefix (e.g. "result").
         key: Hex SHA-256 cache key string.
-        components: Dict of key components (the payload that was hashed) for
+        components: Key components (the payload that was hashed) for
             debuggability.
 
     Returns:
         Path to the written manifest file.
     """
-    manifest = {
+    manifest: EigenCacheManifest = {
         "schema_version": EIGEN_CACHE_SCHEMA_VERSION,
         "cache_key": key,
         "components": components,
@@ -172,6 +201,8 @@ def write_eigen_cache_manifest(
     try:
         with os.fdopen(fd, "w") as fh:
             json.dump(manifest, fh)
+            fh.flush()
+            os.fsync(fh.fileno())
         tmp_path.replace(target)
     except Exception:
         with suppress(OSError):
@@ -180,7 +211,9 @@ def write_eigen_cache_manifest(
     return target
 
 
-def read_eigen_cache_manifest(eigen_dir: Path, prefix: str) -> dict | None:
+def read_eigen_cache_manifest(
+    eigen_dir: Path, prefix: str
+) -> EigenCacheManifest | None:
     """Read and parse the cache manifest.
 
     Args:
@@ -188,7 +221,7 @@ def read_eigen_cache_manifest(eigen_dir: Path, prefix: str) -> dict | None:
         prefix: Filename prefix.
 
     Returns:
-        Parsed manifest dict, or None if absent or corrupt.
+        Parsed manifest dict, or None if absent, corrupt, or unreadable.
     """
     path = eigen_cache_manifest_path(eigen_dir, prefix)
     try:
@@ -196,8 +229,11 @@ def read_eigen_cache_manifest(eigen_dir: Path, prefix: str) -> dict | None:
             return json.load(fh)
     except FileNotFoundError:
         return None
-    except (json.JSONDecodeError, OSError) as exc:
+    except json.JSONDecodeError as exc:
         logger.warning(f"Corrupt eigen cache manifest {path}: {exc}")
+        return None
+    except OSError as exc:
+        logger.warning(f"Could not read eigen cache manifest {path}: {exc}")
         return None
 
 
@@ -215,9 +251,22 @@ def eigen_cache_is_valid(
         Tuple of (is_valid, reason). reason is always a non-empty string.
     """
     manifest = read_eigen_cache_manifest(eigen_dir, prefix)
+    path = eigen_cache_manifest_path(eigen_dir, prefix)
     if manifest is None:
-        path = eigen_cache_manifest_path(eigen_dir, prefix)
         return False, f"no valid cache manifest found at {path}"
-    if manifest.get("cache_key") == current_key:
+    got_version = manifest.get("schema_version")
+    if got_version != EIGEN_CACHE_SCHEMA_VERSION:
+        return (
+            False,
+            f"manifest schema_version {got_version} != current "
+            f"{EIGEN_CACHE_SCHEMA_VERSION}; recomputing",
+        )
+    if "cache_key" not in manifest:
+        return (
+            False,
+            f"malformed eigen cache manifest at {path}: no cache_key "
+            f"(old-schema or truncated manifest)",
+        )
+    if manifest["cache_key"] == current_key:
         return True, "cache key matches"
     return False, "cache key mismatch: inputs changed since the eigen cache was written"

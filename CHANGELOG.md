@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.4.0] - 2026-06-10
+
 ### Added
 
 - **LOCO eigen-cache manifest**: per-chromosome eigen caches now carry a

@@ -23,7 +23,12 @@ import numpy as np
 from bed_reader import open_bed
 from loguru import logger
 
-from jamma.core.snp_filter import compute_snp_filter_mask
+from jamma.core.snp_stats import (
+    SnpFilterSpec,
+    SnpStats,
+    collect_snp_stats_from_chunks,
+    filter_snp_stats,
+)
 from jamma.core.threading import (
     blas_threads,
     get_loco_worker_count,
@@ -32,9 +37,7 @@ from jamma.core.threading import (
 from jamma.io.plink import (
     get_plink_metadata,
     partitions_from_metadata,
-    validate_genotype_values,
 )
-from jamma.jlinalg import compute_snp_stats_chunk
 from jamma.kinship import (
     SnpStatsCache,
     compute_loco_kinship_streaming,
@@ -68,7 +71,7 @@ def _collect_chr_snp_stats(
     chr_snp_indices: np.ndarray,
     valid_indices: np.ndarray,
     col_chunk_size: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+) -> SnpStats:
     """Collect per-SNP statistics for one chromosome via chunked BED reads.
 
     Shared by LOCO chromosome runners (pass-1 logic).
@@ -80,113 +83,40 @@ def _collect_chr_snp_stats(
         col_chunk_size: Number of SNP columns per disk read chunk.
 
     Returns:
-        Tuple of (col_means, miss_counts, col_vars, n_unexpected) where
-        arrays are of length len(chr_snp_indices).
+        SnpStats with arrays of length len(chr_snp_indices). Stats are computed
+        over valid_indices rows, so the denominator is len(valid_indices).
     """
     n_chr_snps = len(chr_snp_indices)
-    col_means = np.zeros(n_chr_snps, dtype=np.float64)
-    miss_counts = np.zeros(n_chr_snps, dtype=np.intp)
-    col_vars = np.zeros(n_chr_snps, dtype=np.float64)
-    n_unexpected_total = 0
 
     bed_file = Path(f"{bed_path}.bed")
-    with open_bed(bed_file) as bed:
-        for chunk_start in range(0, n_chr_snps, col_chunk_size):
-            chunk_end = min(chunk_start + col_chunk_size, n_chr_snps)
-            chunk_col_indices = chr_snp_indices[chunk_start:chunk_end]
 
-            geno_chunk = bed.read(
-                index=np.s_[valid_indices, chunk_col_indices],
-                dtype=np.float64,
-            )
+    def _chunks():
+        with open_bed(bed_file) as bed:
+            for chunk_start in range(0, n_chr_snps, col_chunk_size):
+                chunk_end = min(chunk_start + col_chunk_size, n_chr_snps)
+                chunk_col_indices = chr_snp_indices[chunk_start:chunk_end]
+                geno_chunk = bed.read(
+                    index=np.s_[valid_indices, chunk_col_indices],
+                    dtype=np.float64,
+                )
+                yield geno_chunk, chunk_start, chunk_end
 
-            n_unexpected_total += validate_genotype_values(geno_chunk)
-
-            geno_chunk = np.ascontiguousarray(geno_chunk)
-            compute_snp_stats_chunk(
-                geno_chunk,
-                col_means[chunk_start:chunk_end],
-                miss_counts[chunk_start:chunk_end],
-                col_vars[chunk_start:chunk_end],
-            )
-
-            del geno_chunk
-
-    return col_means, miss_counts, col_vars, n_unexpected_total
+    return collect_snp_stats_from_chunks(
+        _chunks(),
+        n_snps=n_chr_snps,
+        n_samples=len(valid_indices),
+        global_indices=chr_snp_indices,
+        validate_genotypes=True,
+        sample_scope="valid_samples",
+    )
 
 
-def _filter_chr_snps(
-    col_means: np.ndarray,
-    miss_counts: np.ndarray,
-    col_vars: np.ndarray,
-    n_samples: int,
-    maf_threshold: float,
-    miss_threshold: float,
-    chr_snp_indices: np.ndarray,
-    snps_global_mask: np.ndarray | None,
-    n_unexpected_total: int,
-    show_progress: bool,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
-    """Apply SNP filtering and log warnings. Returns None if no SNPs pass.
-
-    Shared by LOCO chromosome runners.
-
-    Args:
-        col_means: Per-SNP means from pass-1.
-        miss_counts: Per-SNP missing counts from pass-1.
-        col_vars: Per-SNP variances from pass-1.
-        n_samples: Number of valid samples.
-        maf_threshold: Minimum MAF.
-        miss_threshold: Maximum missing rate.
-        chr_snp_indices: Global column indices for this chromosome.
-        snps_global_mask: Boolean mask for -snps restriction, or None.
-        n_unexpected_total: Count of unexpected genotype values from pass-1.
-        show_progress: Whether to log progress.
-
-    Returns:
-        Tuple of (local_filtered_indices, global_filtered_indices,
-        filtered_afs, filtered_miss, filtered_means) or None if empty.
-    """
-    if n_unexpected_total > 0:
+def _warn_if_loco_stats_invalid(stats: SnpStats) -> None:
+    if stats.n_unexpected > 0:
         logger.warning(
-            f"LOCO chr genotype validation: {n_unexpected_total} values outside "
+            f"LOCO chr genotype validation: {stats.n_unexpected} values outside "
             f"expected range {{0, 1, 2, NaN}}"
         )
-
-    snp_mask, allele_freqs, _mafs = compute_snp_filter_mask(
-        col_means, miss_counts, col_vars, n_samples, maf_threshold, miss_threshold
-    )
-
-    if snps_global_mask is not None:
-        snp_mask &= snps_global_mask[chr_snp_indices]
-
-    local_filtered_indices = np.where(snp_mask)[0]
-    n_filtered = len(local_filtered_indices)
-
-    if show_progress:
-        logger.debug(
-            f"  Chromosome SNPs: {len(chr_snp_indices)}, after filter: {n_filtered}"
-        )
-
-    if n_filtered == 0:
-        logger.warning(
-            f"  Chromosome ({len(chr_snp_indices)} SNPs) has no SNPs after "
-            f"filtering, skipping"
-        )
-        return None
-
-    global_filtered_indices = chr_snp_indices[local_filtered_indices]
-    filtered_afs = allele_freqs[local_filtered_indices]
-    filtered_miss = miss_counts[local_filtered_indices].astype(int)
-    filtered_means = col_means[local_filtered_indices]
-
-    return (
-        local_filtered_indices,
-        global_filtered_indices,
-        filtered_afs,
-        filtered_miss,
-        filtered_means,
-    )
 
 
 def _find_loco_eigen_cache(
@@ -786,47 +716,41 @@ def _loco_chr_common(
     if snp_stats_cache is not None:
         # Use cached global stats, sliced to this chromosome.
         # Stats were computed over ALL samples during kinship PASS 1.
-        # Used for filtering only (MAF, missing rate, monomorphism) — the
+        # Used for filtering only (MAF, missing rate, monomorphism) -- the
         # actual genotype data is read fresh in PASS 2 using valid_indices.
-        col_means = snp_stats_cache.col_means[chr_snp_indices]
-        miss_counts = snp_stats_cache.miss_counts[chr_snp_indices]
-        col_vars = snp_stats_cache.col_vars[chr_snp_indices]
-        # Use the cache's sample count as denominator — stats were computed
-        # over this population. Using n_valid would inflate miss_rates.
-        filter_n_samples = snp_stats_cache.n_samples
-        # Suppress per-chr n_unexpected warning: already logged in PASS 1.
-        n_unexpected = 0
+        chr_stats = snp_stats_cache.take(chr_snp_indices)
     else:
-        col_means, miss_counts, col_vars, n_unexpected = _collect_chr_snp_stats(
+        chr_stats = _collect_chr_snp_stats(
             bed_path, chr_snp_indices, valid_indices, col_chunk_size
         )
-        # Fallback stats are computed over valid_indices rows only,
-        # so n_samples (= n_valid = phenotypes.shape[0]) is the correct denominator.
-        filter_n_samples = n_samples
 
-    filter_result = _filter_chr_snps(
-        col_means,
-        miss_counts,
-        col_vars,
-        filter_n_samples,
-        maf_threshold,
-        miss_threshold,
-        chr_snp_indices,
-        snps_global_mask,
-        n_unexpected,
-        show_progress,
+    _warn_if_loco_stats_invalid(chr_stats)
+    snp_selection = filter_snp_stats(
+        chr_stats,
+        SnpFilterSpec(
+            maf_threshold=maf_threshold,
+            miss_threshold=miss_threshold,
+            restrict_global_mask=snps_global_mask,
+        ),
     )
-    if filter_result is None:
+    n_filtered = len(snp_selection.indices)
+
+    if show_progress:
+        logger.debug(
+            f"  Chromosome SNPs: {len(chr_snp_indices)}, after filter: {n_filtered}"
+        )
+
+    if n_filtered == 0:
+        logger.warning(
+            f"  Chromosome ({len(chr_snp_indices)} SNPs) has no SNPs after "
+            f"filtering, skipping"
+        )
         return None
 
-    (
-        _local_filtered_indices,
-        global_filtered_indices,
-        filtered_afs,
-        filtered_miss,
-        filtered_means_all,
-    ) = filter_result
-    n_filtered = len(global_filtered_indices)
+    global_filtered_indices = snp_selection.indices
+    filtered_afs = snp_selection.filtered_afs
+    filtered_miss = snp_selection.filtered_miss
+    filtered_means_all = snp_selection.filtered_means
 
     # === Covariate matrix + eigenrotation ===
     W, n_cvt = _build_covariate_matrix(covariates, n_samples)

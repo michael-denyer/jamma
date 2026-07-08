@@ -19,35 +19,15 @@ from typing import cast
 import numpy as np
 from loguru import logger
 
-from jamma.core.estimates import estimate_lmm_seconds
-from jamma.core.progress import create_progress_bar, progress_iterator
-from jamma.core.snp_filter import compute_snp_filter_mask
-from jamma.core.threading import (
-    blas_threads,
-    get_c_extension_thread_count,
-    get_physical_core_count,
-    jlinalg_threads,
+from jamma.core.snp_stats import (
+    SnpFilterSpec,
+    collect_streamed_snp_stats,
+    filter_snp_stats,
 )
-from jamma.io.plink import (
-    get_plink_metadata,
-    stream_genotype_chunks,
-    validate_genotype_values,
-)
-from jamma.jlinalg import compute_snp_stats_chunk
-from jamma.lmm.compute_numpy import (
-    _C_ACCEL_AVAILABLE,
-    _C_HAS_OPENMP,
-    LmmMode,
-    compute_lmm_chunk_numpy,
-    select_current_dispatch_path,
-)
-from jamma.lmm.impute import impute_missing_inplace
+from jamma.core.threading import blas_threads, get_physical_core_count
+from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
+from jamma.lmm.compute_numpy import LmmMode
 from jamma.lmm.io import IncrementalAssocWriter
-from jamma.lmm.likelihood_numpy import (
-    batch_compute_uab_numpy,
-    batch_compute_uab_varying_soa_numpy,
-    compute_uab_invariant_soa,
-)
 from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
     _compute_null_model_common,
@@ -55,22 +35,8 @@ from jamma.lmm.prepare_common import (
     compute_and_log_pve,
     validate_runner_inputs,
 )
-from jamma.lmm.results import (
-    _build_results,
-    count_lambda_boundary_hits,
-    log_lambda_boundary_warning,
-)
-from jamma.lmm.runner_numpy import (
-    _MIN_PIPELINE_CHUNKS,
-    _ComputeContext,
-    _create_workspaces,
-    _dispatch_compute,
-    _drive_pipeline,
-    _ThreadBudget,
-    compute_chunk_size_numpy,
-    compute_pipeline_core_split,
-)
-from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
+from jamma.lmm.results import _build_results
+from jamma.lmm.runner_numpy import RawLmmChunk, run_lmm_chunk_source_numpy
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.schema import LazySnpMeta as _LazySnpMeta
 from jamma.lmm.schema import LmmConfig, LmmRunResult, RunnerTiming
@@ -200,51 +166,23 @@ def run_lmm_association_numpy_streaming(
 
     # === PASS 1: SNP statistics (single-pass C kernel) ===
     t_io_start = time.perf_counter()
-    all_means = np.zeros(n_snps, dtype=np.float64)
-    all_miss_counts = np.zeros(n_snps, dtype=np.intp)
-    all_vars = np.zeros(n_snps, dtype=np.float64)
-
-    # HWE genotype count accumulators (only when threshold > 0)
-    if hwe_threshold > 0:
-        all_n_aa = np.zeros(n_snps, dtype=np.int64)
-        all_n_ab = np.zeros(n_snps, dtype=np.int64)
-        all_n_bb = np.zeros(n_snps, dtype=np.int64)
-
-    # Genotype validation accumulator
-    n_unexpected_total = 0
-
-    stats_iterator = stream_genotype_chunks(
-        bed_path, chunk_size=chunk_size, dtype=np.float32, show_progress=False
+    stats_sample_indices = np.where(valid_mask)[0] if needs_sample_filter else None
+    stats = collect_streamed_snp_stats(
+        bed_path,
+        n_snps=n_snps,
+        n_samples=n_samples_total,
+        chunk_size=chunk_size,
+        sample_indices=stats_sample_indices,
+        include_hwe=hwe_threshold > 0,
+        validate_genotypes=validate_genotypes,
+        show_progress=show_progress,
+        progress_label="Computing SNP statistics",
+        dtype=np.float32,
+        sample_scope="valid_samples" if needs_sample_filter else "all_samples",
     )
-    if show_progress:
-        n_chunks_p1 = (n_snps + chunk_size - 1) // chunk_size
-        stats_iterator = progress_iterator(
-            stats_iterator, total=n_chunks_p1, desc="Computing SNP statistics"
-        )
-
-    for chunk, start, end in stats_iterator:
-        # Apply sample filtering
-        if needs_sample_filter:
-            chunk = chunk[valid_mask, :]
-
-        # Single-pass SNP stats: mean, miss_count, variance, optional HWE counts
-        chunk = np.ascontiguousarray(chunk)
-        compute_snp_stats_chunk(
-            chunk,
-            all_means[start:end],
-            all_miss_counts[start:end],
-            all_vars[start:end],
-            all_n_aa[start:end] if hwe_threshold > 0 else None,
-            all_n_ab[start:end] if hwe_threshold > 0 else None,
-            all_n_bb[start:end] if hwe_threshold > 0 else None,
-        )
-
-        if validate_genotypes:
-            n_unexpected_total += validate_genotype_values(chunk)
-
-    if validate_genotypes and n_unexpected_total > 0:
+    if validate_genotypes and stats.n_unexpected > 0:
         logger.warning(
-            f"Genotype validation: {n_unexpected_total} values outside "
+            f"Genotype validation: {stats.n_unexpected} values outside "
             f"expected range {{0, 1, 2, NaN}}"
         )
 
@@ -252,28 +190,17 @@ def run_lmm_association_numpy_streaming(
 
     # === SNP statistics: filtering + stats construction ===
     t_snp_start = time.perf_counter()
-    snp_mask, allele_freqs, _mafs = compute_snp_filter_mask(
-        all_means, all_miss_counts, all_vars, n_samples, maf_threshold, miss_threshold
+    snp_selection = filter_snp_stats(
+        stats,
+        SnpFilterSpec(
+            maf_threshold=maf_threshold,
+            miss_threshold=miss_threshold,
+            restrict_indices=snps_indices,
+            hwe_threshold=hwe_threshold,
+            restrict_label="SNP list filter",
+        ),
     )
-    del all_vars
-
-    # Apply SNP list restriction (if -snps provided)
-    if snps_indices is not None:
-        from jamma.core.snp_filter import apply_snp_list_mask
-
-        apply_snp_list_mask(snp_mask, snps_indices, n_snps, "SNP list filter")
-
-    # Apply HWE filter (if -hwe threshold > 0)
-    if hwe_threshold > 0:
-        from jamma.core.snp_filter import compute_hwe_pvalues
-
-        hwe_pvalues = compute_hwe_pvalues(all_n_aa, all_n_ab, all_n_bb)
-        hwe_pass = hwe_pvalues >= hwe_threshold
-        n_hwe_fail = int(np.sum(~hwe_pass & snp_mask))
-        snp_mask &= hwe_pass
-        logger.info(f"HWE filter: {n_hwe_fail} SNPs removed (p < {hwe_threshold})")
-
-    snp_indices = np.where(snp_mask)[0]
+    snp_indices = snp_selection.indices
     n_filtered = len(snp_indices)
 
     if show_progress:
@@ -292,13 +219,10 @@ def run_lmm_association_numpy_streaming(
             )
         return LmmRunResult(associations=[]), 0
 
-    filtered_afs = allele_freqs[snp_indices]
-    filtered_miss = all_miss_counts[snp_indices].astype(int)
-    del all_miss_counts, allele_freqs
-    filtered_means = all_means[snp_indices]
-    del all_means
-    if hwe_threshold > 0:
-        del all_n_aa, all_n_ab, all_n_bb
+    filtered_afs = snp_selection.filtered_afs
+    filtered_miss = snp_selection.filtered_miss
+    filtered_means = snp_selection.filtered_means
+    del stats, snp_selection
 
     t_snp_end = time.perf_counter()
 
@@ -342,191 +266,33 @@ def run_lmm_association_numpy_streaming(
 
     pve, pve_se = compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
 
-    # === C workspace creation ===
-    # Enforce minimum 20 golden section iterations for ~1e-5 lambda tolerance
-    n_refine = max(n_refine, 20)
-
-    # Determine split/fused C kernel dispatch via the shared pure selector
-    # (single source of truth — see dispatch.py; the batch runner uses the same
-    # call). log_choices=False because streaming keeps its own streaming-specific
-    # debug logging below.
-    dispatch = select_current_dispatch_path(n_cvt, lmm_mode, log_choices=False)
-    use_split = dispatch.use_split
-    use_fused = dispatch.use_fused
-    use_fused_general = dispatch.use_fused_general
-    use_fused_mode4 = dispatch.use_fused_mode4
-    use_fused_score = dispatch.use_fused_score
-    use_fused_score_ws = dispatch.use_fused_score_ws
-    use_fused_lrt = dispatch.use_fused_lrt
-    use_fused_lrt_ws = dispatch.use_fused_lrt_ws
-
-    if use_fused_score_ws:
-        logger.debug(
-            "Fused Score workspace path active: workspace created once, "
-            "utg_t passed per-chunk (eliminates per-chunk malloc, streaming)"
-        )
-    elif use_fused_score:
-        logger.debug(
-            "Fused Score path active: utg_t passed directly to C "
-            "(eliminates uab_varying_soa buffer for mode 3, streaming)"
-        )
-    if use_fused_lrt_ws:
-        logger.debug(
-            "Fused LRT workspace path active: workspace created once, "
-            "utg_t passed per-chunk "
-            "(eliminates per-chunk malloc/grid precompute, streaming)"
-        )
-    elif use_fused_lrt:
-        logger.debug(
-            "Fused LRT path active: utg_t passed directly to C "
-            "(eliminates uab_varying_soa buffer for mode 2, streaming)"
-        )
-
-    # Auto-scale chunk_size from RAM when user provided default (10_000).
-    # After pass-1 we know n_filtered and can compute optimal chunk size.
-    auto_scaled = chunk_size == 10_000
-    if auto_scaled:
-        chunk_size = compute_chunk_size_numpy(
-            n_samples,
-            n_filtered,
-            n_cvt,
-            use_split=use_split,
-            lmm_mode=lmm_mode,
-            fused_mode4=use_fused_mode4,
-            use_fused_general=use_fused_general,
-        )
-
-    n_chunks = (n_filtered + chunk_size - 1) // chunk_size
-
-    # Pipeline overlaps rotation(N+1) with compute(N) using an adaptive core
-    # split. Only enable when enough chunks exist for overlap to matter.
-    use_pipeline = use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
-
-    if use_pipeline:
-        # Pipeline keeps 2 chunks alive simultaneously -- halve the memory
-        # budget to avoid OOM.
-        if auto_scaled:
-            chunk_size = compute_chunk_size_numpy(
-                n_samples,
-                n_filtered,
-                n_cvt,
-                use_split=use_split,
-                lmm_mode=lmm_mode,
-                fused_mode4=use_fused_mode4,
-                use_fused_general=use_fused_general,
-                pipeline_buffers=2,
-            )
-        else:
-            # User-specified chunk_size: halve it to account for double-
-            # buffering rather than recomputing from RAM (which would
-            # discard the user's sizing intent).
-            chunk_size = max(1, chunk_size // 2)
-        n_chunks = (n_filtered + chunk_size - 1) // chunk_size
-        use_pipeline = use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
-
-    if use_pipeline:
-        logger.debug(f"Pipeline mode: overlapping rotation/compute ({n_chunks} chunks)")
-
-    # OpenMP thread count for the C extension. Serial builds stay at 1.
-    omp_threads = get_c_extension_thread_count(_C_ACCEL_AVAILABLE, _C_HAS_OPENMP)
-
-    # Pipeline thread budget: partition physical cores between concurrent
-    # jlinalg rotation (background) and C-extension compute (foreground).
-    if use_pipeline:
-        total_cores = get_physical_core_count()
-        if omp_threads == 1:
-            pipeline_rot_threads = total_cores
-            pipeline_omp_threads = 1
-        else:
-            rot_threads, compute_threads = compute_pipeline_core_split(
-                n_samples, total_cores
-            )
-            pipeline_omp_threads = min(compute_threads, omp_threads)
-            pipeline_rot_threads = max(1, total_cores - pipeline_omp_threads)
-            logger.debug(
-                f"Pipeline core split: {pipeline_rot_threads} rotation, "
-                f"{pipeline_omp_threads} compute (n_samples={n_samples:,})"
-            )
-    else:
-        pipeline_omp_threads = omp_threads
-        pipeline_rot_threads = rotation_threads
-
-    # Shared mutable core split read by _prepare_chunk/_compute_and_write. The
-    # pipeline driver rebinds it from the profiled first chunk (see _ThreadBudget).
-    budget = _ThreadBudget(pipeline_rot_threads, pipeline_omp_threads)
-
-    # Precompute SNP-invariant Uab columns once
-    uab_invariant_soa = (
-        compute_uab_invariant_soa(UtW, Uty, n_cvt) if use_split else None
-    )
-
-    # Extract w for fused Score/LRT paths (stateless and workspace).
-    w = (
-        UtW[:, 0].copy()
-        if (use_fused_score or use_fused_lrt or use_fused_score_ws or use_fused_lrt_ws)
-        and not use_fused
-        else None
-    )
-
-    # Create persistent C workspaces once, before the chunk loop (shared with
-    # the batch runner — see _create_workspaces).
-    lmm_workspace, score_fused_workspace, lrt_fused_workspace = _create_workspaces(
-        dispatch,
-        lmm_mode,
-        n_cvt,
-        eigenvalues_np,
-        uab_invariant_soa,
-        UtW,
-        Uty,
-        w,
-        Hi_eval_null,
-        logl_H0,
-        n_samples,
-        l_min,
-        l_max,
-        n_grid,
-        n_refine,
-        pipeline_omp_threads,
-    )
-
-    # Loop-invariant context for the per-chunk C dispatch (shared with the batch
-    # runner — see _dispatch_compute).
-    compute_ctx = _ComputeContext(
-        dispatch,
-        lmm_mode,
-        n_cvt,
-        lmm_workspace,
-        score_fused_workspace,
-        lrt_fused_workspace,
-        w,
-        Uty,
-        Hi_eval_null,
-        uab_invariant_soa,
-        eigenvalues_np,
-        n_samples,
-        l_min,
-        l_max,
-        n_grid,
-        n_refine,
-        logl_H0,
-        n_filtered,
-    )
-
-    # === Timing accumulators ===
+    # === PASS 2: Compute per chunk (float64) ===
     last_run_timing.clear()
-    t_rotation_total = 0.0
-    t_numpy_compute_total = 0.0
-    t_result_write_total = 0.0
-
-    # Diagnostic accumulators
-    nan_counts: dict[str, int] = {}
-    n_at_lmin = 0
-    n_at_lmax = 0
-
     all_results: list[AssocResult] = []
 
-    # === PASS 2: Compute per chunk (float64) ===
-    from jamma import jlinalg
+    def _make_stream_source(source_chunk_size: int):
+        chunk_iter = iter(
+            stream_genotype_chunks(
+                bed_path,
+                chunk_size=source_chunk_size,
+                dtype=np.float64,
+                show_progress=False,
+                snp_indices=snp_indices,
+            )
+        )
+
+        def _next_chunk() -> RawLmmChunk | None:
+            try:
+                chunk, filt_start, filt_end = next(chunk_iter)
+            except StopIteration:
+                return None
+
+            if needs_sample_filter:
+                chunk = chunk[valid_mask, :]
+
+            return RawLmmChunk(np.ascontiguousarray(chunk), filt_start, filt_end)
+
+        return _next_chunk
 
     with contextlib.ExitStack() as stack:
         writer = None
@@ -535,288 +301,59 @@ def run_lmm_association_numpy_streaming(
                 IncrementalAssocWriter(output_path, test_type=_TEST_TYPE_MAP[lmm_mode])
             )
 
-        chunk_iter = iter(
-            stream_genotype_chunks(
-                bed_path,
-                chunk_size=chunk_size,
-                dtype=np.float64,
-                show_progress=False,
-                snp_indices=snp_indices,
-            )
-        )
-
-        write_offset = 0  # Cumulative SNP offset for error diagnostics
-
-        # --- Preallocate per-chunk buffers to eliminate malloc/free ---
-        # Streaming chunks come from disk with per-read allocation (shape
-        # varies after sample filtering), so geno can't be preallocated.
-        # But utg_t output is always (actual, n_samples) and can reuse
-        # a fixed buffer.
-        if use_pipeline:
-            _utg_bufs = [
-                np.empty((chunk_size, n_samples), dtype=np.float64),
-                np.empty((chunk_size, n_samples), dtype=np.float64),
-            ]
-        else:
-            _utg_bufs = [np.empty((chunk_size, n_samples), dtype=np.float64)]
-        _stream_chunk_counter = 0
-
-        # Varying SoA buffer reuse for non-fused split path.
-        _no_fused_stream = (
-            not use_fused
-            and not use_fused_score
-            and not use_fused_lrt
-            and not use_fused_score_ws
-            and not use_fused_lrt_ws
-        )
-        if use_split and _no_fused_stream:
-            from jamma.lmm.likelihood import classify_uab_columns
-
-            _inv_cols, _var_cols = classify_uab_columns(n_cvt)
-            _n_var = len(_var_cols)
-            if use_pipeline:
-                # Double-buffer: prepare(N+1) and compute(N) run concurrently.
-                _uab_var_bufs_stream = [
-                    np.empty((chunk_size, _n_var, n_samples), dtype=np.float64),
-                    np.empty((chunk_size, _n_var, n_samples), dtype=np.float64),
-                ]
-            else:
-                _uab_var_bufs_stream = [
-                    np.empty((chunk_size, _n_var, n_samples), dtype=np.float64)
-                ]
-        else:
-            _uab_var_bufs_stream = None
-
-        def _prepare_chunk() -> tuple | None:
-            """Read next chunk from disk, filter, impute, rotate.
-
-            Returns (data, filt_start, filt_end, actual_len) or None at
-            exhaustion. The dgemm rotation releases the GIL, enabling
-            true parallelism with _compute_and_write's C extension
-            compute in the pipeline path. Pre-rotation NumPy work
-            (filtering, imputation) is lightweight and GIL-serialized.
-
-            Uses preallocated utg_buf to avoid per-chunk dgemm allocation.
-            Pipeline path double-buffers via _stream_chunk_counter % 2.
-            """
-            nonlocal _stream_chunk_counter
-
-            try:
-                chunk, filt_start, filt_end = next(chunk_iter)
-            except StopIteration:
-                return None
-
-            if filt_end <= filt_start:
-                return (None, filt_start, filt_end, 0)
-
-            # Apply sample filtering
-            if needs_sample_filter:
-                chunk = chunk[valid_mask, :]
-
-            # Mean-impute NaN
-            impute_missing_inplace(chunk, filtered_means[filt_start:filt_end])
-
-            actual_len = filt_end - filt_start
-            buf_idx = _stream_chunk_counter % len(_utg_bufs)
-            _stream_chunk_counter += 1
-
-            # Rotate — jlinalg has its own thread-control API; do not mutate
-            # process-global BLAS limits from the background pipeline thread.
-            with jlinalg_threads(budget.rot):
-                if (
-                    use_fused
-                    or use_fused_score
-                    or use_fused_lrt
-                    or use_fused_score_ws
-                    or use_fused_lrt_ws
-                    or use_split
-                ):
-                    utg_out = _utg_bufs[buf_idx][:actual_len, :]
-                    utg_t = jlinalg.dgemm(chunk, U, transa="T", out=utg_out)
-                else:
-                    # Non-split UtG path: (n_samples, actual_len) shape
-                    # doesn't match utg_buf layout — allocate fresh.
-                    UtG = jlinalg.dgemm(U, chunk, transa="T")
-                    utg_t = None
-            del chunk
-
-            if (
-                use_fused
-                or use_fused_score
-                or use_fused_lrt
-                or use_fused_score_ws
-                or use_fused_lrt_ws
-            ):
-                return (utg_t, filt_start, filt_end, actual_len)
-
-            if use_split:
-                # Reuse preallocated buffer when chunk is full-sized.
-                out_var = (
-                    _uab_var_bufs_stream[buf_idx][:actual_len, :, :]
-                    if _uab_var_bufs_stream is not None and actual_len == chunk_size
-                    else None
-                )
-                uab_var_soa = batch_compute_uab_varying_soa_numpy(
-                    n_cvt, UtW, Uty, utg_t, out=out_var
-                )
-                del utg_t
-                return (uab_var_soa, filt_start, filt_end, actual_len)
-
-            # Non-split full Uab
-            Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
-            return (Uab_batch, filt_start, filt_end, actual_len)
-
-        def _compute_and_write(prepared: tuple) -> None:
-            """Run C extension compute on prepared chunk data and write results.
-
-            Dispatches by path (fused / split SoA / full Uab) and accumulates
-            diagnostics and timing.
-            """
-            nonlocal write_offset, t_numpy_compute_total, t_result_write_total
-            nonlocal n_at_lmin, n_at_lmax
-
-            chunk_data, filt_start, filt_end, actual_len = prepared
-            if chunk_data is None:
-                return
-
-            t_compute_start = time.perf_counter()
-
-            if (
-                use_fused
-                or use_fused_score_ws
-                or use_fused_lrt_ws
-                or use_fused_score
-                or use_fused_lrt
-                or use_split
-            ):
-                with blas_threads(1):
-                    cr = _dispatch_compute(
-                        compute_ctx, chunk_data, budget.omp, write_offset
-                    )
-            else:
-                cr = compute_lmm_chunk_numpy(
-                    lmm_mode,
-                    n_cvt,
-                    eigenvalues_np,
-                    chunk_data,
-                    n_samples,
-                    l_min=l_min,
-                    l_max=l_max,
-                    n_grid=n_grid,
-                    n_refine=n_refine,
-                    Hi_eval_null=Hi_eval_null,
-                    logl_H0=logl_H0,
-                    n_threads=budget.omp,
-                )
-
-            t_numpy_compute_total += time.perf_counter() - t_compute_start
-
-            # Build result arrays and accumulate diagnostics
-            t_write_start = time.perf_counter()
-            chunk_arrays = {
-                key: cr[key][:actual_len] for key in _RESULT_FIELDS[lmm_mode]
-            }
-
-            chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
-                lmm_mode, chunk_arrays, l_min, l_max
-            )
-            n_at_lmin += chunk_lmin
-            n_at_lmax += chunk_lmax
-
-            for key, arr in chunk_arrays.items():
-                if arr.dtype.kind != "f":
-                    continue
-                n_nan = int(np.count_nonzero(np.isnan(arr)))
-                if n_nan > 0:
-                    nan_counts[key] = nan_counts.get(key, 0) + n_nan
-
+        def _sink(
+            chunk_arrays: dict[str, np.ndarray], filtered_start: int, filtered_end: int
+        ) -> None:
             if writer is not None:
                 writer.write_arrays_batch(
                     lmm_mode,
-                    snp_indices[filt_start:filt_end],
+                    snp_indices[filtered_start:filtered_end],
                     snp_info,
-                    filtered_afs[filt_start:filt_end],
-                    filtered_miss[filt_start:filt_end],
+                    filtered_afs[filtered_start:filtered_end],
+                    filtered_miss[filtered_start:filtered_end],
                     chunk_arrays,
                 )
             else:
                 chunk_results = _build_results(
                     lmm_mode,
-                    snp_indices[filt_start:filt_end],
-                    filtered_afs[filt_start:filt_end],
-                    filtered_miss[filt_start:filt_end],
+                    snp_indices[filtered_start:filtered_end],
+                    filtered_afs[filtered_start:filtered_end],
+                    filtered_miss[filtered_start:filtered_end],
                     snp_info,
                     chunk_arrays,
                 )
                 all_results.extend(chunk_results)
 
-            write_offset += actual_len
-            t_result_write_total += time.perf_counter() - t_write_start
-
-        if use_pipeline:
-            # Overlap rotation of chunk N+1 with C compute of chunk N via the
-            # shared driver. Chunk source is the disk stream (_prepare_chunk);
-            # the sink is _compute_and_write.
-            t_rotation_total += _drive_pipeline(
-                _prepare_chunk,
-                _compute_and_write,
-                budget,
-                n_chunks=n_chunks,
-                total_cores=total_cores,
-                n_samples=n_samples,
-                n_filtered=n_filtered,
-                show_progress=show_progress,
-                progress_label="LMM association (streaming)",
-            )
-        else:
-            # Sequential fallback when too few chunks for pipeline overlap
-            seq_bar = (
-                create_progress_bar(
-                    n_chunks,
-                    "Running LMM (NumPy streaming)",
-                    initial_eta_seconds=estimate_lmm_seconds(n_samples, n_filtered),
-                )
-                if show_progress and n_chunks > 1
-                else None
-            )
-
-            try:
-                i_seq = 0
-                while True:
-                    t_rot_start = time.perf_counter()
-                    prepared = _prepare_chunk()
-                    t_rotation_total += time.perf_counter() - t_rot_start
-                    if prepared is None:
-                        break
-                    _compute_and_write(prepared)
-                    i_seq += 1
-                    if seq_bar is not None:
-                        seq_bar.update(i_seq)
-            finally:
-                if seq_bar is not None:
-                    # Don't mask the real exception — progress-bar teardown
-                    # failures are swallowed intentionally.
-                    with contextlib.suppress(Exception):
-                        seq_bar.finish()
-
-        if write_offset < n_filtered:
-            logger.warning(
-                f"Processed {write_offset}/{n_filtered} SNPs -- "
-                f"stream exhausted early (expected {n_filtered})"
-            )
+        auto_scaled_chunk_size = chunk_size == 10_000
+        requested_chunk_size = None if auto_scaled_chunk_size else chunk_size
+        chunk_stats = run_lmm_chunk_source_numpy(
+            raw_chunk_source_factory=_make_stream_source,
+            chunk_sink=_sink,
+            U=U,
+            eigenvalues_np=eigenvalues_np,
+            UtW=UtW,
+            Uty=Uty,
+            Hi_eval_null=Hi_eval_null,
+            logl_H0=logl_H0,
+            n_samples=n_samples,
+            n_filtered=n_filtered,
+            n_cvt=n_cvt,
+            lmm_mode=lmm_mode,
+            filtered_means=filtered_means,
+            l_min=l_min,
+            l_max=l_max,
+            n_grid=n_grid,
+            n_refine=n_refine,
+            requested_chunk_size=requested_chunk_size,
+            auto_scale_chunk_size=auto_scaled_chunk_size,
+            show_progress=show_progress,
+            progress_label="LMM association (streaming)",
+            log_dispatch_choices=False,
+        )
 
         # === Post-loop diagnostics ===
         if show_progress:
             log_rss_memory("lmm_numpy_streaming", "after_association")
-
-        for key, n_nan in nan_counts.items():
-            logger.warning(
-                f"{n_nan}/{n_filtered} SNPs have NaN {key} -- "
-                "check for degenerate (constant) genotypes "
-                "and kinship matrix quality"
-            )
-
-        log_lambda_boundary_warning(n_at_lmin, n_at_lmax, l_min, l_max)
 
         if show_progress:
             elapsed = time.perf_counter() - start_time
@@ -827,17 +364,17 @@ def run_lmm_association_numpy_streaming(
                 t_io
                 + t_snp
                 + t_eigen
-                + t_rotation_total
-                + t_numpy_compute_total
-                + t_result_write_total
+                + chunk_stats.rotation_s
+                + chunk_stats.compute_s
+                + chunk_stats.result_write_s
             )
             logger.info("Timing breakdown:")
             logger.info(f"  I/O read (pass 1):   {t_io:.2f}s")
             logger.info(f"  SNP statistics:      {t_snp:.2f}s")
             logger.info(f"  Setup (eigen+null):  {t_eigen:.2f}s")
-            logger.info(f"  UT@G rotation:       {t_rotation_total:.2f}s")
-            logger.info(f"  NumPy compute:       {t_numpy_compute_total:.2f}s")
-            logger.info(f"  Result write:        {t_result_write_total:.2f}s")
+            logger.info(f"  UT@G rotation:       {chunk_stats.rotation_s:.2f}s")
+            logger.info(f"  NumPy compute:       {chunk_stats.compute_s:.2f}s")
+            logger.info(f"  Result write:        {chunk_stats.result_write_s:.2f}s")
             logger.info("  ----")
             logger.info(f"  Accounted:           {accounted:.2f}s")
             logger.info(f"  Total:               {elapsed:.2f}s")
@@ -852,9 +389,9 @@ def run_lmm_association_numpy_streaming(
         last_run_timing.clear()
         last_run_timing.update(
             {
-                "rotation_s": t_rotation_total,
-                "numpy_compute_s": t_numpy_compute_total,
-                "result_write_s": t_result_write_total,
+                "rotation_s": chunk_stats.rotation_s,
+                "numpy_compute_s": chunk_stats.compute_s,
+                "result_write_s": chunk_stats.result_write_s,
             }
         )
 

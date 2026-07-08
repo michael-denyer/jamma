@@ -25,7 +25,6 @@ import gc
 import time
 import warnings
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
@@ -43,58 +42,19 @@ from jamma.core.memory import (
 )
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
+from jamma.core.snp_stats import (
+    SnpFilterSpec,
+    SnpStatsCache,
+    collect_streamed_snp_stats,
+    filter_snp_stats,
+)
 from jamma.io.plink import (
     get_plink_metadata,
     partitions_from_metadata,
     stream_genotype_chunks,
-    validate_genotype_values,
 )
-from jamma.jlinalg import compute_snp_stats_chunk
 from jamma.kinship.missing import impute_and_center, impute_center_and_standardize
 from jamma.utils import chr_sort_key
-
-
-@dataclass(frozen=True)
-class SnpStatsCache:
-    """Global SNP statistics from kinship streaming PASS 1.
-
-    Stores per-SNP means, missing counts, and variances for ALL SNPs in the
-    BIM file (unfiltered), computed over ALL samples (including those with
-    missing phenotypes). Per-chromosome stats are extracted by indexing
-    with chr_snp_indices: cache.col_means[chr_snp_indices].
-
-    The all-samples population matters: ``n_samples`` is the denominator for
-    miss_rate and the basis for col_means / col_vars. When filtering in the
-    association pass, use ``cache.n_samples`` — NOT n_valid — to match the
-    population the stats were computed from.
-
-    Returned by ``compute_loco_kinship_streaming(return_snp_stats=True)`` so the
-    association pass can reuse PASS-1 statistics instead of re-reading the BED
-    once per chromosome.
-    """
-
-    col_means: np.ndarray  # shape (n_snps_total,), float64
-    miss_counts: np.ndarray  # shape (n_snps_total,), intp
-    col_vars: np.ndarray  # shape (n_snps_total,), float64
-    n_samples: int  # sample count stats were computed over (ALL samples)
-
-    def __post_init__(self) -> None:
-        """Validate array shapes and freeze array contents."""
-        if not (self.col_means.shape == self.miss_counts.shape == self.col_vars.shape):
-            raise ValueError(
-                f"Array shape mismatch: col_means={self.col_means.shape}, "
-                f"miss_counts={self.miss_counts.shape}, "
-                f"col_vars={self.col_vars.shape}"
-            )
-        if self.col_means.ndim != 1:
-            raise ValueError(f"Expected 1-D arrays, got ndim={self.col_means.ndim}")
-        for arr in (self.col_means, self.miss_counts, self.col_vars):
-            arr.flags.writeable = False
-
-    @property
-    def n_snps(self) -> int:
-        """Number of SNPs in the cache (unfiltered BIM count)."""
-        return self.col_means.shape[0]
 
 
 def _ensure_float64(arr: np.ndarray) -> np.ndarray:
@@ -685,53 +645,29 @@ def compute_kinship_streaming(
         return K
 
     # === PASS 1: Compute per-SNP statistics for filtering ===
-    # Always compute stats for monomorphic filtering (GEMMA behavior)
-    all_means = np.zeros(n_snps, dtype=np.float64)
-    all_miss_counts = np.zeros(n_snps, dtype=np.intp)
-    all_vars = np.zeros(n_snps, dtype=np.float64)
-
-    stats_iterator = stream_genotype_chunks(
-        bed_path, chunk_size=chunk_size, dtype=np.float32, show_progress=False
+    # Always compute stats for monomorphic filtering (GEMMA behavior).
+    stats = collect_streamed_snp_stats(
+        bed_path,
+        n_snps=n_snps,
+        n_samples=n_samples,
+        chunk_size=chunk_size,
+        sample_indices=valid_indices,
+        validate_genotypes=False,
+        show_progress=show_progress,
+        progress_label="Computing SNP statistics",
+        dtype=np.float32,
+        sample_scope="valid_samples" if valid_indices is not None else "all_samples",
     )
-    if show_progress:
-        n_chunks = (n_snps + chunk_size - 1) // chunk_size
-        stats_iterator = progress_iterator(
-            stats_iterator, total=n_chunks, desc="Computing SNP statistics"
-        )
-
-    for chunk, start, end in stats_iterator:
-        # Early valid-sample subsetting: compute stats on valid samples only.
-        if valid_indices is not None:
-            chunk = chunk[valid_indices, :]
-        chunk = np.ascontiguousarray(chunk)
-        compute_snp_stats_chunk(
-            chunk,
-            all_means[start:end],
-            all_miss_counts[start:end],
-            all_vars[start:end],
-        )
-        del chunk  # Free ~1.6GB per chunk at scale before next iteration
-
-    # Compute filters (free source arrays immediately after deriving values)
-    n_denom = len(valid_indices) if valid_indices is not None else n_samples
-    miss_rates = all_miss_counts / n_denom
-    del all_miss_counts
-    allele_freqs = all_means / 2.0
-    del all_means
-    mafs = np.minimum(allele_freqs, 1.0 - allele_freqs)
-    is_polymorphic = all_vars > 0
-    del all_vars
-
-    # Combined filter: MAF, missing rate, and monomorphism (always applied)
-    snp_mask = (mafs >= maf_threshold) & (miss_rates <= miss_threshold) & is_polymorphic
-
-    # Apply kinship SNP list restriction (if -ksnps provided)
-    if ksnps_indices is not None:
-        from jamma.core.snp_filter import apply_snp_list_mask
-
-        apply_snp_list_mask(snp_mask, ksnps_indices, n_snps, "Kinship SNP list")
-
-    n_filtered = int(np.sum(snp_mask))
+    snp_selection = filter_snp_stats(
+        stats,
+        SnpFilterSpec(
+            maf_threshold=maf_threshold,
+            miss_threshold=miss_threshold,
+            restrict_indices=ksnps_indices,
+            restrict_label="Kinship SNP list",
+        ),
+    )
+    n_filtered = len(snp_selection.indices)
 
     if n_filtered == 0:
         raise ValueError(
@@ -749,8 +685,9 @@ def compute_kinship_streaming(
     else:
         logger.info(f"  Analyzed SNPs: {n_filtered:,}")
 
-    # Get indices of SNPs that passed filtering
-    snp_indices = np.where(snp_mask)[0]
+    # Get indices of SNPs that passed filtering.
+    snp_indices = snp_selection.indices
+    del stats, snp_selection
 
     # Initialize kinship accumulator
     K = np.zeros((n_out, n_out), dtype=np.float64)
@@ -1217,68 +1154,38 @@ def compute_loco_kinship_streaming(
     # intentional: SNP filter decisions (MAF, missingness) should use the full
     # population to match GEMMA's behaviour. valid_indices only affects PASS 2
     # kinship accumulation, not which SNPs are included.
-    all_means = np.zeros(n_snps, dtype=np.float64)
-    all_miss_counts = np.zeros(n_snps, dtype=np.intp)
-    all_vars = np.zeros(n_snps, dtype=np.float64)
-
-    stats_iterator = stream_genotype_chunks(
-        bed_path, chunk_size=chunk_size, dtype=np.float32, show_progress=False
+    stats = collect_streamed_snp_stats(
+        bed_path,
+        n_snps=n_snps,
+        n_samples=n_samples,
+        chunk_size=chunk_size,
+        validate_genotypes=True,
+        show_progress=show_progress,
+        progress_label="LOCO: SNP statistics",
+        dtype=np.float32,
+        sample_scope="all_samples",
     )
-    if show_progress:
-        n_chunks = (n_snps + chunk_size - 1) // chunk_size
-        stats_iterator = progress_iterator(
-            stats_iterator, total=n_chunks, desc="LOCO: SNP statistics"
-        )
 
-    n_unexpected_total = 0
-    for chunk, start, end in stats_iterator:
-        n_unexpected_total += validate_genotype_values(chunk)
-        chunk = np.ascontiguousarray(chunk)
-        compute_snp_stats_chunk(
-            chunk,
-            all_means[start:end],
-            all_miss_counts[start:end],
-            all_vars[start:end],
-        )
-        del chunk  # Free ~1.6GB per chunk at scale before next iteration
-
-    if n_unexpected_total > 0:
+    if stats.n_unexpected > 0:
         logger.warning(
-            f"LOCO kinship genotype validation: {n_unexpected_total} values outside "
+            f"LOCO kinship genotype validation: {stats.n_unexpected} values outside "
             f"expected range {{0, 1, 2, NaN}}"
         )
 
     # Cache global PASS-1 stats (computed over ALL samples) for the association
-    # pass when requested. Must be built BEFORE the del statements below free
-    # all_means / all_vars. n_samples is the population the stats span.
-    snp_stats_cache = (
-        SnpStatsCache(
-            col_means=all_means.copy(),
-            miss_counts=all_miss_counts.copy(),
-            col_vars=all_vars.copy(),
-            n_samples=n_samples,
-        )
-        if return_snp_stats
-        else None
+    # pass when requested. n_samples is the population the stats span.
+    snp_stats_cache = stats if return_snp_stats else None
+
+    snp_selection = filter_snp_stats(
+        stats,
+        SnpFilterSpec(
+            maf_threshold=maf_threshold,
+            miss_threshold=miss_threshold,
+            restrict_indices=ksnps_indices,
+            restrict_label="Kinship SNP list",
+        ),
     )
-
-    # Compute filters
-    miss_rates = all_miss_counts / n_samples
-    del all_miss_counts
-    allele_freqs = all_means / 2.0
-    del all_means
-    mafs = np.minimum(allele_freqs, 1.0 - allele_freqs)
-    is_polymorphic = all_vars > 0
-    del all_vars
-    snp_mask = (mafs >= maf_threshold) & (miss_rates <= miss_threshold) & is_polymorphic
-
-    # Apply kinship SNP list restriction (if -ksnps provided)
-    if ksnps_indices is not None:
-        from jamma.core.snp_filter import apply_snp_list_mask
-
-        apply_snp_list_mask(snp_mask, ksnps_indices, n_snps, "Kinship SNP list")
-
-    n_filtered = int(np.sum(snp_mask))
+    n_filtered = len(snp_selection.indices)
 
     if n_filtered == 0:
         raise ValueError(
@@ -1294,8 +1201,11 @@ def compute_loco_kinship_streaming(
             f"{n_removed:,} removed (MAF/missing/monomorphic)"
         )
 
-    # Build SNP-to-chromosome mapping for filtered SNPs
-    snp_indices = np.where(snp_mask)[0]
+    # Build SNP-to-chromosome mapping for filtered SNPs.
+    snp_indices = snp_selection.indices
+    del snp_selection
+    if not return_snp_stats:
+        del stats
 
     # Map each filtered SNP index to its chromosome
     chr_for_filtered = chromosomes[snp_indices]

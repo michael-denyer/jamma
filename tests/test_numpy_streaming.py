@@ -98,19 +98,15 @@ NUMPY_GEMMA_TOLERANCES = ToleranceConfig(
 
 
 @pytest.mark.tier1
-def test_streaming_runner_avoids_transposed_u_copy_in_jlinalg_dgemm():
+def test_shared_lmm_chunk_runner_avoids_transposed_u_copy_in_jlinalg_dgemm():
     """Hot path must use transa='T', not pass U.T into jlinalg.dgemm.
 
     jlinalg's C binding copies non-contiguous inputs to C-contiguous buffers.
     Passing U.T would therefore materialize an O(n^2) copy of the eigenvector
-    matrix inside the streaming chunk loop.
+    matrix inside the shared LMM chunk loop used by batch, streaming, and LOCO.
     """
     source = (
-        Path(__file__).parent.parent
-        / "src"
-        / "jamma"
-        / "lmm"
-        / "runner_numpy_streaming.py"
+        Path(__file__).parent.parent / "src" / "jamma" / "lmm" / "runner_numpy.py"
     ).read_text()
     tree = ast.parse(source)
 
@@ -133,13 +129,7 @@ def test_streaming_runner_avoids_transposed_u_copy_in_jlinalg_dgemm():
                     and node.args[0].value.id == "U"
                     and node.args[0].attr == "T"
                 ), "streaming runner must not pass U.T directly into jlinalg.dgemm"
-            if (
-                len(node.args) >= 2
-                and isinstance(node.args[0], ast.Name)
-                and node.args[0].id == "U"
-                and isinstance(node.args[1], ast.Name)
-                and node.args[1].id == "chunk"
-            ):
+            if len(node.args) >= 2 and isinstance(node.args[1], ast.Name):
                 for kw in node.keywords:
                     if (
                         kw.arg == "transa"
@@ -164,6 +154,26 @@ def test_streaming_runner_avoids_transposed_u_copy_in_jlinalg_dgemm():
             )
 
     assert saw_transa_t
+
+
+@pytest.mark.tier1
+def test_streaming_runner_imports_only_shared_runner_api():
+    """Streaming orchestration must not reach into runner_numpy private helpers."""
+    source = (
+        Path(__file__).parent.parent
+        / "src"
+        / "jamma"
+        / "lmm"
+        / "runner_numpy_streaming.py"
+    ).read_text()
+    tree = ast.parse(source)
+
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "jamma.lmm.runner_numpy":
+            imported.update(alias.name for alias in node.names)
+
+    assert imported == {"RawLmmChunk", "run_lmm_chunk_source_numpy"}
 
 
 @pytest.fixture

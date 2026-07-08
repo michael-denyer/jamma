@@ -1160,6 +1160,7 @@ def run_lmm_chunk_source_numpy(
     omp_threads = get_c_extension_thread_count(_C_ACCEL_AVAILABLE, _C_HAS_OPENMP)
 
     if use_pipeline:
+        logger.debug(f"Pipeline mode: overlapping rotation/compute ({n_chunks} chunks)")
         total_cores = get_physical_core_count()
         if omp_threads == 1:
             pipeline_rot_threads = total_cores

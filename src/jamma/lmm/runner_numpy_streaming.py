@@ -14,6 +14,7 @@ import contextlib
 import gc
 import time
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 from loguru import logger
@@ -35,21 +36,11 @@ from jamma.io.plink import (
 from jamma.jlinalg import compute_snp_stats_chunk
 from jamma.lmm.compute_numpy import (
     _C_ACCEL_AVAILABLE,
-    _C_FUSED_AVAILABLE,
-    _C_FUSED_GENERAL_AVAILABLE,
-    _C_GENERAL_AVAILABLE,
     _C_HAS_OPENMP,
-    _C_LRT_FUSED_AVAILABLE,
-    _C_LRT_FUSED_WS_AVAILABLE,
-    _C_MODE4_AVAILABLE,
-    _C_MODE4_FUSED_AVAILABLE,
-    _C_MODE4_FUSED_GENERAL_AVAILABLE,
-    _C_SCORE_FUSED_AVAILABLE,
-    _C_SCORE_FUSED_WS_AVAILABLE,
-    _C_SPLIT_AVAILABLE,
+    LmmMode,
     compute_lmm_chunk_numpy,
+    select_current_dispatch_path,
 )
-from jamma.lmm.dispatch import select_dispatch_path
 from jamma.lmm.impute import impute_missing_inplace
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.likelihood_numpy import (
@@ -194,6 +185,7 @@ def run_lmm_association_numpy_streaming(
     eigenvectors = setup.eigenvectors
     n_valid = setup.n_samples
     valid_mask = setup.valid_mask
+    lmm_mode = cast(LmmMode, lmm_mode)
 
     n_samples = phenotypes.shape[0]
 
@@ -358,22 +350,7 @@ def run_lmm_association_numpy_streaming(
     # (single source of truth — see dispatch.py; the batch runner uses the same
     # call). log_choices=False because streaming keeps its own streaming-specific
     # debug logging below.
-    dispatch = select_dispatch_path(
-        n_cvt,
-        lmm_mode,
-        c_split_available=_C_SPLIT_AVAILABLE,
-        c_general_available=_C_GENERAL_AVAILABLE,
-        c_fused_available=_C_FUSED_AVAILABLE,
-        c_fused_general_available=_C_FUSED_GENERAL_AVAILABLE,
-        c_mode4_available=_C_MODE4_AVAILABLE,
-        c_mode4_fused_available=_C_MODE4_FUSED_AVAILABLE,
-        c_mode4_fused_general_available=_C_MODE4_FUSED_GENERAL_AVAILABLE,
-        c_score_fused_available=_C_SCORE_FUSED_AVAILABLE,
-        c_score_fused_ws_available=_C_SCORE_FUSED_WS_AVAILABLE,
-        c_lrt_fused_available=_C_LRT_FUSED_AVAILABLE,
-        c_lrt_fused_ws_available=_C_LRT_FUSED_WS_AVAILABLE,
-        log_choices=False,
-    )
+    dispatch = select_current_dispatch_path(n_cvt, lmm_mode, log_choices=False)
     use_split = dispatch.use_split
     use_fused = dispatch.use_fused
     use_fused_general = dispatch.use_fused_general

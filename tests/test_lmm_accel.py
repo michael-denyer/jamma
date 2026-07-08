@@ -4802,15 +4802,10 @@ def test_runner_fused_general_ncvt2_dispatch():
     )
 
     # Run with fused general disabled → falls back to non-fused general path.
-    # Patch the source module (compute_numpy) so the runner's `from` import
-    # also sees the change. Using unittest.mock.patch ensures cleanup and is
-    # robust against future refactors of the import structure.
+    # Patch the source module (compute_numpy), which owns dispatch capability flags.
     from unittest.mock import patch
 
-    with (
-        patch("jamma.lmm.compute_numpy._C_FUSED_GENERAL_AVAILABLE", False),
-        patch("jamma.lmm.runner_numpy._C_FUSED_GENERAL_AVAILABLE", False),
-    ):
+    with patch("jamma.lmm.compute_numpy._C_FUSED_GENERAL_AVAILABLE", False):
         result_nonfused = run_lmm_association_numpy(
             genotypes=genotypes,
             phenotypes=phenotypes,

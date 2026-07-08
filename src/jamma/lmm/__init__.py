@@ -6,7 +6,11 @@ Core algorithm follows Zhou & Stephens (2012) Nature Genetics.
 Modules:
 - runner_numpy: Pure-NumPy batch runner
 - runner_numpy_streaming: Disk streaming with C extension
-- chunk_runner_numpy: Shared NumPy chunk sizing, rotation, and dispatch
+- chunk_runner_numpy: Shared NumPy chunk loop (orchestrator) for batch/streaming/LOCO
+- chunk_sizing: RAM-budgeted chunk-size computation
+- chunk_workspaces: Persistent C-workspace lifecycle
+- chunk_dispatch: Per-chunk C/Python kernel dispatch ladder
+- chunk_pipeline: Rotation/compute thread split and overlapped pipeline driver
 - chunk: Chunk size computation
 - prepare_common: Shared setup (covariates, eigendecomp, null model)
 - compute_numpy: NumPy mode dispatch for chunk computation

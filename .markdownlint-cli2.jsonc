@@ -61,6 +61,7 @@
     // Upstream GPL boilerplate — do not reformat.
     "LICENSE.md",
     // Local-only, gitignored. Not shipped in the repo.
-    "CLAUDE.md"
+    "CLAUDE.md",
+    "AGENTS.md"
   ]
 }

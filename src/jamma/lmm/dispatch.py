@@ -33,6 +33,31 @@ class LmmDispatch:
     use_fused_lrt: bool
     use_fused_lrt_ws: bool
 
+    @property
+    def uses_fused_score_or_lrt(self) -> bool:
+        """True when a fused Score/LRT path (mode 2/3) is active.
+
+        These paths take the null-model ``w`` vector as a separate argument
+        rather than packing it into a Wald workspace, so the chunk runner
+        materializes ``w = UtW[:, 0]`` only for this family.
+        """
+        return (
+            self.use_fused_score
+            or self.use_fused_score_ws
+            or self.use_fused_lrt
+            or self.use_fused_lrt_ws
+        )
+
+    @property
+    def feeds_raw_utg(self) -> bool:
+        """True when chunk preparation hands raw ``utg_t`` straight to the kernel.
+
+        The whole fused family (Wald/mode-4 fused plus the fused Score/LRT
+        variants) consumes ``utg_t`` directly, so no ``uab_varying_soa`` buffer
+        is built. The negation selects the SoA-split path, which does build it.
+        """
+        return self.use_fused or self.uses_fused_score_or_lrt
+
 
 def select_dispatch_path(
     n_cvt: int,

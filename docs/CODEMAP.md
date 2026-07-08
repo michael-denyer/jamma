@@ -259,8 +259,11 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null lambda -> p_score | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 4Nb | `run_lmm_association_numpy()` | In-memory batch runner (full genotype load) | [runner_numpy.py:51](../src/jamma/lmm/runner_numpy.py#L51) |
-| 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk runner for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:1078](../src/jamma/lmm/chunk_runner_numpy.py#L1078) |
-| 4Nb | `_create_workspaces()` / `_dispatch_compute()` / `_drive_pipeline()` | Shared chunk-engine helpers (workspace allocation, C/Python dispatch, rotate-and-compute pipeline) | [chunk_runner_numpy.py:176](../src/jamma/lmm/chunk_runner_numpy.py#L176) |
+| 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:132](../src/jamma/lmm/chunk_runner_numpy.py#L132) |
+| 4Nb | `_create_workspaces()` | Persistent C-workspace lifecycle | [chunk_workspaces.py:103](../src/jamma/lmm/chunk_workspaces.py#L103) |
+| 4Nb | `_dispatch_compute()` | Per-chunk C/Python kernel-selection ladder | [chunk_dispatch.py:266](../src/jamma/lmm/chunk_dispatch.py#L266) |
+| 4Nb | `_drive_pipeline()` | Overlapped rotate-and-compute pipeline + adaptive thread split | [chunk_pipeline.py:99](../src/jamma/lmm/chunk_pipeline.py#L99) |
+| 4Nb | `compute_chunk_size_numpy()` | RAM-budgeted chunk-size computation | [chunk_sizing.py:28](../src/jamma/lmm/chunk_sizing.py#L28) |
 | 4Nc | `create_lmm_workspace()` | Allocate reusable per-chunk Wald workspace (split C path) | [compute_numpy.py:514](../src/jamma/lmm/compute_numpy.py#L514) |
 | 4Nc | `compute_wald_split_c_ws()` | Workspace-based Wald compute dispatch to C extension | [compute_numpy.py:557](../src/jamma/lmm/compute_numpy.py#L557) |
 | 4Nd | `compute_lmm_batch_c()` | C extension: batch REML Wald pipeline for n_cvt=1 with OpenMP | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
@@ -562,7 +565,8 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Output schema | [lmm/schema.py:17](../src/jamma/lmm/schema.py#L17) |
 | NumPy batch runner | [runner_numpy.py](../src/jamma/lmm/runner_numpy.py) |
 | NumPy streaming runner | [runner_numpy_streaming.py](../src/jamma/lmm/runner_numpy_streaming.py) |
-| Shared NumPy chunk runner | [chunk_runner_numpy.py](../src/jamma/lmm/chunk_runner_numpy.py) |
+| Shared NumPy chunk-loop orchestrator | [chunk_runner_numpy.py](../src/jamma/lmm/chunk_runner_numpy.py) |
+| Chunk sizing / workspaces / dispatch / pipeline | [chunk_sizing.py](../src/jamma/lmm/chunk_sizing.py), [chunk_workspaces.py](../src/jamma/lmm/chunk_workspaces.py), [chunk_dispatch.py](../src/jamma/lmm/chunk_dispatch.py), [chunk_pipeline.py](../src/jamma/lmm/chunk_pipeline.py) |
 | NumPy likelihood | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | NumPy chunk compute | [compute_numpy.py](../src/jamma/lmm/compute_numpy.py) |
 | Shared preparation | [prepare_common.py](../src/jamma/lmm/prepare_common.py) |

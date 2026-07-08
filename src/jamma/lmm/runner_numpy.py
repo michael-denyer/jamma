@@ -17,7 +17,12 @@ from loguru import logger
 from jamma.core.memory import estimate_lmm_memory
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.core.threading import blas_threads, get_physical_core_count
-from jamma.lmm import chunk_runner_numpy as _chunk_runner_numpy
+from jamma.lmm.chunk_runner_numpy import (
+    _MIN_PIPELINE_CHUNKS,
+    RawLmmChunk,
+    run_lmm_chunk_source_numpy,
+)
+from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
 from jamma.lmm.compute_numpy import LmmMode
 from jamma.lmm.likelihood_numpy import reset_p_yy_warned
 from jamma.lmm.prepare_common import (
@@ -27,25 +32,11 @@ from jamma.lmm.prepare_common import (
     compute_and_log_pve,
     validate_runner_inputs,
 )
-from jamma.lmm.results import _build_results
+from jamma.lmm.results import _build_results, make_writer_sink
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.schema import LmmConfig, LmmRunResult
 from jamma.utils.logging import log_rss_memory
-
-# Compatibility re-exports for existing tests/callers. New shared chunk-engine
-# code should import from jamma.lmm.chunk_runner_numpy directly.
-_MIN_PIPELINE_CHUNKS = _chunk_runner_numpy._MIN_PIPELINE_CHUNKS
-_compose_mode4_from_split = _chunk_runner_numpy._compose_mode4_from_split
-_guarded_compute = _chunk_runner_numpy._guarded_compute
-compute_adaptive_core_split = _chunk_runner_numpy.compute_adaptive_core_split
-compute_chunk_size_numpy = _chunk_runner_numpy.compute_chunk_size_numpy
-compute_pipeline_core_split = _chunk_runner_numpy.compute_pipeline_core_split
-dispatch_soa_split = _chunk_runner_numpy.dispatch_soa_split
-LmmChunkRange = _chunk_runner_numpy.LmmChunkRange
-LmmChunkRunStats = _chunk_runner_numpy.LmmChunkRunStats
-RawLmmChunk = _chunk_runner_numpy.RawLmmChunk
-run_lmm_chunk_source_numpy = _chunk_runner_numpy.run_lmm_chunk_source_numpy
 
 
 def run_lmm_association_numpy(
@@ -251,7 +242,7 @@ def run_lmm_association_numpy(
         )
         arrays_out = None
     else:
-        writer_ctx = None
+        writer_ctx = nullcontext()
         arrays_out = {
             key: np.empty(n_filtered, dtype=np.float64)
             for key in _RESULT_FIELDS[lmm_mode]
@@ -277,27 +268,22 @@ def run_lmm_association_numpy(
 
         return _next_chunk
 
-    writer_cm = writer_ctx if streaming else nullcontext()
-    with writer_cm as writer:
+    def _fill_arrays_sink(
+        chunk_arrays: dict[str, np.ndarray], filtered_start: int, filtered_end: int
+    ) -> None:
+        assert arrays_out is not None
+        s = slice(filtered_start, filtered_end)
+        for key in arrays_out:
+            arrays_out[key][s] = chunk_arrays[key]
 
-        def _sink(
-            chunk_arrays: dict[str, np.ndarray], filtered_start: int, filtered_end: int
-        ) -> None:
-            if streaming:
-                assert writer is not None
-                writer.write_arrays_batch(
-                    lmm_mode,
-                    snp_indices[filtered_start:filtered_end],
-                    snp_info,
-                    filtered_afs[filtered_start:filtered_end],
-                    filtered_miss[filtered_start:filtered_end],
-                    chunk_arrays,
-                )
-            else:
-                assert arrays_out is not None
-                s = slice(filtered_start, filtered_end)
-                for key in arrays_out:
-                    arrays_out[key][s] = chunk_arrays[key]
+    with writer_ctx as writer:
+        if streaming:
+            assert writer is not None
+            _sink = make_writer_sink(
+                writer, lmm_mode, snp_info, snp_indices, filtered_afs, filtered_miss
+            )
+        else:
+            _sink = _fill_arrays_sink
 
         chunk_stats = run_lmm_chunk_source_numpy(
             raw_chunk_source_factory=_make_batch_source,

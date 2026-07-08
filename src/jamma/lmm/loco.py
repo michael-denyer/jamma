@@ -17,6 +17,7 @@ import gc
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 from bed_reader import open_bed
@@ -39,7 +40,7 @@ from jamma.kinship import (
     compute_loco_kinship_streaming,
     write_kinship_matrix,
 )
-from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
+from jamma.lmm.compute_numpy import LmmMode
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_cache import (
     EigenCacheComponents,
@@ -50,19 +51,14 @@ from jamma.lmm.eigen_cache import (
 )
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.io import IncrementalAssocWriter
-from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
 from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
     _compute_null_model_common,
     compute_and_log_pve,
 )
-from jamma.lmm.results import (
-    _build_results,
-    count_lambda_boundary_hits,
-    log_lambda_boundary_warning,
-)
-from jamma.lmm.runner_numpy import compute_chunk_size_numpy
-from jamma.lmm.schema import RESULT_FIELDS, TEST_TYPE_MAP, LazySnpMeta, LocoResult
+from jamma.lmm.results import _build_results
+from jamma.lmm.runner_numpy import RawLmmChunk, run_lmm_chunk_source_numpy
+from jamma.lmm.schema import TEST_TYPE_MAP, LazySnpMeta, LocoResult
 from jamma.lmm.stats import AssocResult
 from jamma.utils import chr_sort_key
 
@@ -976,110 +972,78 @@ def _run_lmm_for_chromosome_numpy(
         l_max=l_max,
     )
 
-    # Compute chunk size based on RAM budget
-    chunk_size = compute_chunk_size_numpy(n_samples, ctx.n_filtered, ctx.n_cvt)
-
-    # Pre-allocate result arrays
-    write_offset = 0
-    arrays_out: dict[str, np.ndarray] = {
-        key: np.empty(ctx.n_filtered, dtype=np.float64)
-        for key in RESULT_FIELDS[lmm_mode]
-    }
     results: list[AssocResult] = []
-
     bed_file = Path(f"{bed_path}.bed")
     with open_bed(bed_file) as bed:
-        for disk_start in range(0, ctx.n_filtered, col_chunk_size):
-            disk_end = min(disk_start + col_chunk_size, ctx.n_filtered)
-            disk_col_indices = ctx.global_filtered_indices[disk_start:disk_end]
 
-            geno_disk_chunk = bed.read(
-                index=np.s_[ctx.valid_indices, disk_col_indices],
-                dtype=np.float64,
-            )
+        def _make_loco_source(source_chunk_size: int):
+            chunk_offsets = iter(range(0, ctx.n_filtered, source_chunk_size))
 
-            # Impute missing values with column means
-            chunk_filtered_means = ctx.filtered_means_all[disk_start:disk_end]
-            missing_mask = np.isnan(geno_disk_chunk)
-            geno_disk_chunk = np.where(
-                missing_mask, chunk_filtered_means.reshape(1, -1), geno_disk_chunk
-            )
-
-            # Process disk chunk in numpy sub-chunks
-            n_disk_subset = geno_disk_chunk.shape[1]
-
-            for sub_start in range(0, n_disk_subset, chunk_size):
-                sub_end = min(sub_start + chunk_size, n_disk_subset)
-                geno_sub = geno_disk_chunk[:, sub_start:sub_end]
-
-                # Rotate genotypes
-                with blas_threads(ctx.rotation_threads):
-                    UtG = eigenvectors.T @ geno_sub
-
-                # Compute Uab batch
-                Uab_batch = batch_compute_uab_numpy(ctx.n_cvt, ctx.UtW, ctx.Uty, UtG)
-
-                # Mode dispatch
+            def _next_chunk() -> RawLmmChunk | None:
                 try:
-                    cr = compute_lmm_chunk_numpy(
+                    chunk_start = next(chunk_offsets)
+                except StopIteration:
+                    return None
+
+                chunk_end = min(chunk_start + source_chunk_size, ctx.n_filtered)
+                disk_col_indices = ctx.global_filtered_indices[chunk_start:chunk_end]
+                geno_chunk = bed.read(
+                    index=np.s_[ctx.valid_indices, disk_col_indices],
+                    dtype=np.float64,
+                )
+                return RawLmmChunk(
+                    np.ascontiguousarray(geno_chunk), chunk_start, chunk_end
+                )
+
+            return _next_chunk
+
+        def _sink(
+            chunk_arrays: dict[str, np.ndarray], filtered_start: int, filtered_end: int
+        ) -> None:
+            if writer is not None:
+                writer.write_arrays_batch(
+                    lmm_mode,
+                    ctx.global_filtered_indices[filtered_start:filtered_end],
+                    snp_info,
+                    ctx.filtered_afs[filtered_start:filtered_end],
+                    ctx.filtered_miss[filtered_start:filtered_end],
+                    chunk_arrays,
+                )
+            else:
+                results.extend(
+                    _build_results(
                         lmm_mode,
-                        ctx.n_cvt,
-                        eigenvalues,
-                        Uab_batch,
-                        n_samples,
-                        l_min=l_min,
-                        l_max=l_max,
-                        n_grid=n_grid,
-                        n_refine=n_refine,
-                        Hi_eval_null=Hi_eval_null,
-                        logl_H0=logl_H0,
+                        ctx.global_filtered_indices[filtered_start:filtered_end],
+                        ctx.filtered_afs[filtered_start:filtered_end],
+                        ctx.filtered_miss[filtered_start:filtered_end],
+                        snp_info,
+                        chunk_arrays,
                     )
-                except Exception as e:
-                    logger.error(
-                        f"NumPy LMM computation failed on chr {chr_name}, "
-                        f"sub-chunk [{sub_start}:{sub_end}] "
-                        f"({sub_end - sub_start} SNPs), "
-                        f"n_samples={n_samples}, n_cvt={ctx.n_cvt}: {e}"
-                    )
-                    raise
+                )
 
-                # Write sub-chunk results to pre-allocated arrays
-                actual_len = sub_end - sub_start
-                s = slice(write_offset, write_offset + actual_len)
-                for key in arrays_out:
-                    arrays_out[key][s] = cr[key][:actual_len]
-                write_offset += actual_len
-
-            del geno_disk_chunk
-
-    if write_offset != ctx.n_filtered:
-        raise RuntimeError(
-            f"Pre-allocated array size mismatch: wrote {write_offset} results, "
-            f"expected {ctx.n_filtered}. This is an internal error."
-        )
-
-    # Count lambda boundary hits and log warnings
-    n_lmin, n_lmax = count_lambda_boundary_hits(lmm_mode, arrays_out, l_min, l_max)
-    log_lambda_boundary_warning(n_lmin, n_lmax, l_min, l_max, prefix="LOCO ")
-
-    # Flush results
-    if writer is not None:
-        writer.write_arrays_batch(
-            lmm_mode,
-            ctx.global_filtered_indices,
-            snp_info,
-            ctx.filtered_afs,
-            ctx.filtered_miss,
-            arrays_out,
-        )
-    else:
-        results = _build_results(
-            lmm_mode,
-            ctx.global_filtered_indices,
-            ctx.filtered_afs,
-            ctx.filtered_miss,
-            snp_info,
-            arrays_out,
+        run_lmm_chunk_source_numpy(
+            raw_chunk_source_factory=_make_loco_source,
+            chunk_sink=_sink,
+            U=eigenvectors,
+            eigenvalues_np=eigenvalues,
+            UtW=ctx.UtW,
+            Uty=ctx.Uty,
+            Hi_eval_null=Hi_eval_null,
+            logl_H0=logl_H0,
+            n_samples=n_samples,
+            n_filtered=ctx.n_filtered,
+            n_cvt=ctx.n_cvt,
+            lmm_mode=cast(LmmMode, lmm_mode),
+            filtered_means=ctx.filtered_means_all,
+            l_min=l_min,
+            l_max=l_max,
+            n_grid=n_grid,
+            n_refine=n_refine,
+            requested_chunk_size=col_chunk_size,
+            auto_scale_chunk_size=True,
+            show_progress=False,
+            progress_label=f"LOCO chr {chr_name} association",
+            lambda_warning_prefix="LOCO ",
         )
 
     return results, ctx.chr_pve, ctx.chr_pve_se

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Shared NumPy LMM chunk runner**: batch, streaming, and LOCO paths now use
+  `jamma.lmm.chunk_runner_numpy` for chunk sizing, rotation, C/Python dispatch,
+  diagnostics, and per-chunk result writes. The batch runner keeps compatibility
+  re-exports for existing callers, but docs and benchmark tooling now point at
+  the shared chunk engine as the canonical owner.
+
 ## [5.4.1] - 2026-06-10
 
 ### Changed

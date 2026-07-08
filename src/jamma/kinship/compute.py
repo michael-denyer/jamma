@@ -1174,7 +1174,20 @@ def compute_loco_kinship_streaming(
 
     # Cache global PASS-1 stats (computed over ALL samples) for the association
     # pass when requested. n_samples is the population the stats span.
-    snp_stats_cache = stats if return_snp_stats else None
+    snp_stats_cache = (
+        SnpStatsCache(
+            col_means=stats.col_means,
+            miss_counts=stats.miss_counts,
+            col_vars=stats.col_vars,
+            n_samples=stats.n_samples,
+            n_unexpected=stats.n_unexpected,
+            hwe_counts=stats.hwe_counts,
+            global_indices=stats.global_indices,
+            sample_scope=stats.sample_scope,
+        )
+        if return_snp_stats
+        else None
+    )
 
     snp_selection = filter_snp_stats(
         stats,

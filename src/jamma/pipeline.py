@@ -833,7 +833,7 @@ class PipelineRunner:
                 threads = get_physical_core_count()
             else:
                 # Accelerate or no BLAS — use halved core count
-                # (same logic as runner_numpy.py for OpenMP).
+                # (same fallback used by the NumPy LMM chunk runner).
                 cores = get_physical_core_count()
                 threads = max(1, cores // 2)
 

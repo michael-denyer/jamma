@@ -140,7 +140,17 @@ class SnpStats:
         )
 
 
-SnpStatsCache = SnpStats
+@dataclass(frozen=True, slots=True)
+class SnpStatsCache(SnpStats):
+    """Global all-sample SNP statistics cache for LOCO association reuse."""
+
+    def __post_init__(self) -> None:
+        SnpStats.__post_init__(self)
+        if self.sample_scope != "all_samples":
+            raise ValueError(
+                "SnpStatsCache must contain all-sample statistics; "
+                f"got sample_scope={self.sample_scope!r}"
+            )
 
 
 @dataclass(frozen=True, slots=True)

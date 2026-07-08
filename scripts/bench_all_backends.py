@@ -147,23 +147,23 @@ def _bench_numpy_inner(
     plink, phenotypes, kinship, snp_info, covariates_4, runs: int, *, disable_c: bool
 ) -> dict[str, float]:
     """Benchmark NumPy backend with or without C acceleration."""
+    import jamma.lmm.chunk_runner_numpy as crn
     import jamma.lmm.compute_numpy as cn
-    import jamma.lmm.runner_numpy as rn
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
 
     results: dict[str, float] = {}
 
     # Optionally disable C extension for pure-Python comparison.
-    # Must patch compute_numpy for dispatch flags and runner_numpy for the
-    # runner-owned accelerator flags it still reads directly.
+    # Must patch compute_numpy for dispatch flags and the shared chunk runner
+    # for the accelerator flags it reads directly.
     cn_saved = (cn._C_ACCEL_AVAILABLE, cn._C_SPLIT_AVAILABLE, cn._C_GENERAL_AVAILABLE)
-    rn_saved = (rn._C_ACCEL_AVAILABLE, rn._C_GENERAL_AVAILABLE)
+    crn_saved = (crn._C_ACCEL_AVAILABLE, crn._C_GENERAL_AVAILABLE)
     if disable_c:
         cn._C_ACCEL_AVAILABLE = False
         cn._C_SPLIT_AVAILABLE = False
         cn._C_GENERAL_AVAILABLE = False
-        rn._C_ACCEL_AVAILABLE = False
-        rn._C_GENERAL_AVAILABLE = False
+        crn._C_ACCEL_AVAILABLE = False
+        crn._C_GENERAL_AVAILABLE = False
 
     try:
         ops: list[tuple[str, int, np.ndarray | None]] = [
@@ -192,7 +192,7 @@ def _bench_numpy_inner(
             results[op] = best
     finally:
         cn._C_ACCEL_AVAILABLE, cn._C_SPLIT_AVAILABLE, cn._C_GENERAL_AVAILABLE = cn_saved
-        rn._C_ACCEL_AVAILABLE, rn._C_GENERAL_AVAILABLE = rn_saved
+        crn._C_ACCEL_AVAILABLE, crn._C_GENERAL_AVAILABLE = crn_saved
 
     return results
 

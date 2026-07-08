@@ -17,6 +17,7 @@ graph TD
     Runner["lmm/runner.py (Dispatch)"]
     BatchRunner["lmm/runner_numpy.py (Batch)"]
     StreamRunner["lmm/runner_numpy_streaming.py (Streaming)"]
+    ChunkRunner["lmm/chunk_runner_numpy.py (Shared chunk engine)"]
     Likelihood["lmm/likelihood.py / likelihood_numpy.py"]
     Stats["lmm/stats.py (Wald/LRT/Score)"]
     LOCO["lmm/loco.py (LOCO orchestrator)"]
@@ -31,15 +32,15 @@ graph TD
     Pipeline --> Runner
     Runner --> BatchRunner
     Runner --> StreamRunner
-    BatchRunner --> Likelihood
-    StreamRunner --> Likelihood
+    BatchRunner --> ChunkRunner
+    StreamRunner --> ChunkRunner
+    ChunkRunner --> Likelihood
     Likelihood --> Stats
     LOCO --> Eigen
-    LOCO --> BatchRunner
+    LOCO --> ChunkRunner
     Kinship --> jlinalg
     Eigen --> jlinalg
-    BatchRunner --> jlinalg
-    StreamRunner --> jlinalg
+    ChunkRunner --> jlinalg
     Pipeline --> Core
     Runner --> Core
 ```
@@ -60,7 +61,7 @@ A typical LMM association run proceeds as follows:
 
 6. **Null model** — The rotated data `U.T @ Y` and covariates are used to optimize the variance component `lambda` via a 50-point grid search followed by golden section refinement (`lmm/likelihood.py` REML path).
 
-7. **Per-SNP association** — For each SNP (or chunk of SNPs), `lmm/compute_numpy.py` rotates genotypes via `U.T @ G` using `jlinalg.dgemm`, builds the Pab projection matrices, and computes Wald/LRT/Score statistics via `lmm/stats.py`. The `_lmm_accel` C extension accelerates the per-SNP REML/Wald inner loop.
+7. **Per-SNP association** — `lmm/chunk_runner_numpy.py` owns chunk sizing, missing-value imputation, genotype rotation via `jlinalg.dgemm`, C/Python dispatch, and result writing for batch, streaming, and LOCO paths. The compute kernels in `lmm/compute_numpy.py` build the Pab projection matrices and compute Wald/LRT/Score statistics via `lmm/stats.py`. The `_lmm_accel` C extension accelerates the per-SNP REML/Wald inner loop.
 
 8. **Output** — `AssocResult` records are written to a GEMMA-compatible `.assoc.txt` file via `lmm/io.py:IncrementalAssocWriter`. When `output_path` is set, results stream to disk per chunk to avoid accumulating a large in-memory list.
 
@@ -112,6 +113,7 @@ src/jamma/
 │   ├── runner.py           # ExecutionPlan; select_execution_mode(); run_lmm() dispatch
 │   ├── runner_numpy.py     # Batch runner: full genotype matrix in RAM + C extension
 │   ├── runner_numpy_streaming.py  # Streaming runner: two-pass disk I/O + C extension
+│   ├── chunk_runner_numpy.py  # Shared NumPy chunk sizing, rotation, dispatch, and diagnostics
 │   ├── loco.py             # LOCO orchestrator: per-chromosome eigen + LMM loop
 │   ├── compute_numpy.py    # Per-chunk LMM compute kernels and C workspace wrappers
 │   ├── special.py          # Pure-stdlib betainc (Cephes CF) and chi2_sf (erfc)

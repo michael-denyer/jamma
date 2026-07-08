@@ -1,8 +1,8 @@
 """Pure-NumPy setup utilities shared by NumPy LMM runners.
 
 Provides covariate matrix construction, eigendecomposition handling,
-null model computation, and shared input validation. The NumPy runner
-(runner_numpy.py) imports from this module.
+null model computation, and shared input validation. NumPy LMM runners
+import from this module.
 """
 
 from __future__ import annotations

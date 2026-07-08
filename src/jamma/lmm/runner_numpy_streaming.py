@@ -26,6 +26,7 @@ from jamma.core.snp_stats import (
 )
 from jamma.core.threading import blas_threads, get_physical_core_count
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
+from jamma.lmm.chunk_runner_numpy import RawLmmChunk, run_lmm_chunk_source_numpy
 from jamma.lmm.compute_numpy import LmmMode
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.prepare_common import (
@@ -36,7 +37,6 @@ from jamma.lmm.prepare_common import (
     validate_runner_inputs,
 )
 from jamma.lmm.results import _build_results
-from jamma.lmm.runner_numpy import RawLmmChunk, run_lmm_chunk_source_numpy
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.schema import LazySnpMeta as _LazySnpMeta
 from jamma.lmm.schema import LmmConfig, LmmRunResult, RunnerTiming

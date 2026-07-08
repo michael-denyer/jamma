@@ -106,7 +106,7 @@ def test_shared_lmm_chunk_runner_avoids_transposed_u_copy_in_jlinalg_dgemm():
     matrix inside the shared LMM chunk loop used by batch, streaming, and LOCO.
     """
     source = (
-        Path(__file__).parent.parent / "src" / "jamma" / "lmm" / "runner_numpy.py"
+        Path(__file__).parent.parent / "src" / "jamma" / "lmm" / "chunk_runner_numpy.py"
     ).read_text()
     tree = ast.parse(source)
 
@@ -168,12 +168,18 @@ def test_streaming_runner_imports_only_shared_runner_api():
     ).read_text()
     tree = ast.parse(source)
 
-    imported = set()
+    shared_imports = set()
+    runner_numpy_imports = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "jamma.lmm.runner_numpy":
-            imported.update(alias.name for alias in node.names)
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.module == "jamma.lmm.chunk_runner_numpy":
+            shared_imports.update(alias.name for alias in node.names)
+        if node.module == "jamma.lmm.runner_numpy":
+            runner_numpy_imports.update(alias.name for alias in node.names)
 
-    assert imported == {"RawLmmChunk", "run_lmm_chunk_source_numpy"}
+    assert shared_imports == {"RawLmmChunk", "run_lmm_chunk_source_numpy"}
+    assert runner_numpy_imports == set()
 
 
 @pytest.fixture

@@ -297,7 +297,9 @@ def test_chunk_size_auto_scales_with_memory():
     # 400 GB available → 15% = 60 GB (hits 40 GB ceiling)
     mock_vmem = MagicMock()
     mock_vmem.available = 400_000_000_000
-    with patch("jamma.lmm.runner_numpy.psutil.virtual_memory", return_value=mock_vmem):
+    with patch(
+        "jamma.lmm.chunk_runner_numpy.psutil.virtual_memory", return_value=mock_vmem
+    ):
         chunk_big = compute_chunk_size_numpy(
             n_samples=50_000,
             n_filtered=100_000,
@@ -307,7 +309,9 @@ def test_chunk_size_auto_scales_with_memory():
 
     # 10 GB available → 15% = 1.5 GB (hits 2 GB floor)
     mock_vmem.available = 10_000_000_000
-    with patch("jamma.lmm.runner_numpy.psutil.virtual_memory", return_value=mock_vmem):
+    with patch(
+        "jamma.lmm.chunk_runner_numpy.psutil.virtual_memory", return_value=mock_vmem
+    ):
         chunk_small = compute_chunk_size_numpy(
             n_samples=50_000,
             n_filtered=100_000,
@@ -367,7 +371,7 @@ def test_runner_mode4_uses_fused_dispatch():
     """Mode 4 with C extension uses fused dispatch, not compose fallback."""
     from unittest.mock import patch
 
-    from jamma.lmm import runner_numpy
+    from jamma.lmm import chunk_runner_numpy
     from jamma.lmm.compute_numpy import _C_MODE4_AVAILABLE
 
     if not _C_MODE4_AVAILABLE:
@@ -376,9 +380,9 @@ def test_runner_mode4_uses_fused_dispatch():
     genotypes, phenotypes, kinship, snp_info = _make_synthetic_data()
 
     with patch.object(
-        runner_numpy,
+        chunk_runner_numpy,
         "_compose_mode4_from_split",
-        wraps=runner_numpy._compose_mode4_from_split,
+        wraps=chunk_runner_numpy._compose_mode4_from_split,
     ) as mock_compose:
         run_lmm_association_numpy(
             genotypes=genotypes,

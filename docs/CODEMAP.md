@@ -251,15 +251,16 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 
 ### [4N] NumPy Backend
 
-Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux). Uses `np.vectorize` for batch operations and stdlib-only special functions for p-value computation. Optional C extension (`_lmm_accel.c`) provides OpenMP-parallelized Wald test with workspace API for n_cvt=1, with automatic fallback to pure Python. The disk-streaming runner (`runner_numpy_streaming.py`) is a full pipeline-capable runner supporting all LMM modes, HWE filtering, SNP lists, in-place mean imputation, and early sample filtering.
+Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux). Uses `np.vectorize` for batch operations and stdlib-only special functions for p-value computation. Optional C extension (`_lmm_accel.c`) provides OpenMP-parallelized Wald test with workspace API for n_cvt=1, with automatic fallback to pure Python. Batch, disk-streaming, and LOCO runners share `chunk_runner_numpy.py` for chunk sizing, rotation, C/Python dispatch, diagnostics, and per-chunk result writes.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
 | 4Na | `batch_calc_wald_stats_numpy()` | Vectorized Wald: REML optimize -> beta, SE, p_wald | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null lambda -> p_score | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
-| 4Nb | `run_lmm_association_numpy()` | In-memory batch runner (full genotype load) | [runner_numpy.py:1016](../src/jamma/lmm/runner_numpy.py#L1016) |
-| 4Nb | `_create_workspaces()` / `_dispatch_compute()` / `_drive_pipeline()` | Shared runner helpers (workspace alloc, chunk dispatch, rotate-and-compute loop); used by both batch and streaming runners | [runner_numpy.py:196](../src/jamma/lmm/runner_numpy.py#L196) |
+| 4Nb | `run_lmm_association_numpy()` | In-memory batch runner (full genotype load) | [runner_numpy.py:51](../src/jamma/lmm/runner_numpy.py#L51) |
+| 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk runner for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:1078](../src/jamma/lmm/chunk_runner_numpy.py#L1078) |
+| 4Nb | `_create_workspaces()` / `_dispatch_compute()` / `_drive_pipeline()` | Shared chunk-engine helpers (workspace allocation, C/Python dispatch, rotate-and-compute pipeline) | [chunk_runner_numpy.py:176](../src/jamma/lmm/chunk_runner_numpy.py#L176) |
 | 4Nc | `create_lmm_workspace()` | Allocate reusable per-chunk Wald workspace (split C path) | [compute_numpy.py:514](../src/jamma/lmm/compute_numpy.py#L514) |
 | 4Nc | `compute_wald_split_c_ws()` | Workspace-based Wald compute dispatch to C extension | [compute_numpy.py:557](../src/jamma/lmm/compute_numpy.py#L557) |
 | 4Nd | `compute_lmm_batch_c()` | C extension: batch REML Wald pipeline for n_cvt=1 with OpenMP | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
@@ -267,7 +268,7 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nd | `_compile_accel.py` | Dev-mode / runtime recompile for `_lmm_accel` | [_compile_accel.py](../src/jamma/lmm/_compile_accel.py) |
 | 4Nd | `_compile_jlinalg.py` | Dev-mode / runtime recompile for jlinalg | [_compile_jlinalg.py](../src/jamma/jlinalg/_compile_jlinalg.py) |
 | 4Nd | `compile_and_link.py` | Shared compile flags, source lists, link flags (single source of truth, consumed by `hatch_build.py` + both `_compile_*.py`) | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
-| 4Ne | `run_lmm_association_numpy_streaming()` | NumPy disk streaming (two-pass, full pipeline support, C extension) | [runner_numpy_streaming.py:104](../src/jamma/lmm/runner_numpy_streaming.py#L104) |
+| 4Ne | `run_lmm_association_numpy_streaming()` | NumPy disk streaming (two-pass, full pipeline support, C extension) | [runner_numpy_streaming.py:61](../src/jamma/lmm/runner_numpy_streaming.py#L61) |
 | 4Nf | `select_execution_mode()` | Batch vs streaming mode selection | [runner.py:108](../src/jamma/lmm/runner.py#L108) |
 | 4Nf | `run_lmm()` | Unified dispatch to all runners | [runner.py:209](../src/jamma/lmm/runner.py#L209) |
 | 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:17](../src/jamma/lmm/schema.py#L17) |
@@ -535,7 +536,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 
 | Pattern | Purpose | Examples |
 |---------|---------|---------|
-| `*_numpy.py` | NumPy implementation | `likelihood_numpy.py`, `runner_numpy.py`, `compute_numpy.py` |
+| `*_numpy.py` | NumPy implementation | `likelihood_numpy.py`, `runner_numpy.py`, `chunk_runner_numpy.py`, `compute_numpy.py` |
 | `*_common.py` | Shared preparation code | `prepare_common.py` |
 | No suffix | Base algorithms or shared code | `likelihood.py`, `stats.py`, `eigen.py` |
 
@@ -561,6 +562,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Output schema | [lmm/schema.py:17](../src/jamma/lmm/schema.py#L17) |
 | NumPy batch runner | [runner_numpy.py](../src/jamma/lmm/runner_numpy.py) |
 | NumPy streaming runner | [runner_numpy_streaming.py](../src/jamma/lmm/runner_numpy_streaming.py) |
+| Shared NumPy chunk runner | [chunk_runner_numpy.py](../src/jamma/lmm/chunk_runner_numpy.py) |
 | NumPy likelihood | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | NumPy chunk compute | [compute_numpy.py](../src/jamma/lmm/compute_numpy.py) |
 | Shared preparation | [prepare_common.py](../src/jamma/lmm/prepare_common.py) |

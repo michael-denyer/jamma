@@ -43,6 +43,7 @@ from jamma.kinship import (
     compute_loco_kinship_streaming,
     write_kinship_matrix,
 )
+from jamma.lmm.chunk_runner_numpy import RawLmmChunk, run_lmm_chunk_source_numpy
 from jamma.lmm.compute_numpy import LmmMode
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_cache import (
@@ -60,7 +61,6 @@ from jamma.lmm.prepare_common import (
     compute_and_log_pve,
 )
 from jamma.lmm.results import _build_results
-from jamma.lmm.runner_numpy import RawLmmChunk, run_lmm_chunk_source_numpy
 from jamma.lmm.schema import TEST_TYPE_MAP, LazySnpMeta, LocoResult
 from jamma.lmm.stats import AssocResult
 from jamma.utils import chr_sort_key
@@ -714,6 +714,11 @@ def _loco_chr_common(
 
     # === PASS 1: Chunked SNP statistics + filtering ===
     if snp_stats_cache is not None:
+        if snp_stats_cache.sample_scope != "all_samples":
+            raise ValueError(
+                "LOCO SNP stats cache must use all-sample statistics; "
+                f"got sample_scope={snp_stats_cache.sample_scope!r}"
+            )
         # Use cached global stats, sliced to this chromosome.
         # Stats were computed over ALL samples during kinship PASS 1.
         # Used for filtering only (MAF, missing rate, monomorphism) -- the

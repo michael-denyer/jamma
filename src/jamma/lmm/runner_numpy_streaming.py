@@ -36,7 +36,7 @@ from jamma.lmm.prepare_common import (
     compute_and_log_pve,
     validate_runner_inputs,
 )
-from jamma.lmm.results import _build_results
+from jamma.lmm.results import make_result_list_sink, make_writer_sink
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.schema import LazySnpMeta as _LazySnpMeta
 from jamma.lmm.schema import LmmConfig, LmmRunResult, RunnerTiming
@@ -139,6 +139,7 @@ def run_lmm_association_numpy_streaming(
 
     if snp_info is None:
         snp_info = _LazySnpMeta(meta)
+    assert snp_info is not None  # resolved above: caller list or LazySnpMeta view
 
     # Validate inputs and apply sample filtering
     setup = validate_runner_inputs(
@@ -301,28 +302,19 @@ def run_lmm_association_numpy_streaming(
                 IncrementalAssocWriter(output_path, test_type=_TEST_TYPE_MAP[lmm_mode])
             )
 
-        def _sink(
-            chunk_arrays: dict[str, np.ndarray], filtered_start: int, filtered_end: int
-        ) -> None:
-            if writer is not None:
-                writer.write_arrays_batch(
-                    lmm_mode,
-                    snp_indices[filtered_start:filtered_end],
-                    snp_info,
-                    filtered_afs[filtered_start:filtered_end],
-                    filtered_miss[filtered_start:filtered_end],
-                    chunk_arrays,
-                )
-            else:
-                chunk_results = _build_results(
-                    lmm_mode,
-                    snp_indices[filtered_start:filtered_end],
-                    filtered_afs[filtered_start:filtered_end],
-                    filtered_miss[filtered_start:filtered_end],
-                    snp_info,
-                    chunk_arrays,
-                )
-                all_results.extend(chunk_results)
+        if writer is not None:
+            _sink = make_writer_sink(
+                writer, lmm_mode, snp_info, snp_indices, filtered_afs, filtered_miss
+            )
+        else:
+            _sink = make_result_list_sink(
+                all_results,
+                lmm_mode,
+                snp_info,
+                snp_indices,
+                filtered_afs,
+                filtered_miss,
+            )
 
         auto_scaled_chunk_size = chunk_size == 10_000
         requested_chunk_size = None if auto_scaled_chunk_size else chunk_size

@@ -7,11 +7,23 @@ in both in-memory and output_path streaming modes via ``write_streaming_chunk``
 accumulation).
 """
 
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import TYPE_CHECKING
+
 import numpy as np
 from loguru import logger
 
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
 from jamma.lmm.stats import AssocResult
+
+if TYPE_CHECKING:
+    from jamma.lmm.io import IncrementalAssocWriter
+
+# Per-chunk result sink handed to the shared NumPy LMM chunk runner:
+# (chunk_arrays, filtered_start, filtered_end) -> None.
+ChunkSink = Callable[[dict[str, np.ndarray], int, int], None]
 
 # Relative tolerance for detecting lambda convergence at optimization bounds
 LAMBDA_BOUND_TOL = 1e-3
@@ -95,6 +107,69 @@ def _build_results(
 
         results.append(AssocResult(**meta))
     return results
+
+
+def make_writer_sink(
+    writer: IncrementalAssocWriter,
+    lmm_mode: int,
+    snp_info: list,
+    snp_indices: np.ndarray,
+    filtered_afs: np.ndarray,
+    filtered_miss: np.ndarray,
+) -> ChunkSink:
+    """Build a chunk sink that streams each result chunk to disk.
+
+    Shared by the batch, streaming, and LOCO NumPy runners, which previously
+    each inlined a byte-identical ``writer.write_arrays_batch`` call. The
+    ``snp_indices`` / ``filtered_afs`` / ``filtered_miss`` arrays are the full
+    filtered-order arrays; the returned sink slices them by the
+    ``[filtered_start, filtered_end)`` range it receives per chunk.
+    """
+
+    def _sink(
+        chunk_arrays: dict[str, np.ndarray], filtered_start: int, filtered_end: int
+    ) -> None:
+        writer.write_arrays_batch(
+            lmm_mode,
+            snp_indices[filtered_start:filtered_end],
+            snp_info,
+            filtered_afs[filtered_start:filtered_end],
+            filtered_miss[filtered_start:filtered_end],
+            chunk_arrays,
+        )
+
+    return _sink
+
+
+def make_result_list_sink(
+    results: list[AssocResult],
+    lmm_mode: int,
+    snp_info: list,
+    snp_indices: np.ndarray,
+    filtered_afs: np.ndarray,
+    filtered_miss: np.ndarray,
+) -> ChunkSink:
+    """Build a chunk sink that appends built ``AssocResult`` objects to ``results``.
+
+    Shared by the streaming and LOCO NumPy runners on their in-memory
+    (no ``output_path``) path.
+    """
+
+    def _sink(
+        chunk_arrays: dict[str, np.ndarray], filtered_start: int, filtered_end: int
+    ) -> None:
+        results.extend(
+            _build_results(
+                lmm_mode,
+                snp_indices[filtered_start:filtered_end],
+                filtered_afs[filtered_start:filtered_end],
+                filtered_miss[filtered_start:filtered_end],
+                snp_info,
+                chunk_arrays,
+            )
+        )
+
+    return _sink
 
 
 def _count_boundary_hits(

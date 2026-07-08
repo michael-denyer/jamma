@@ -11,9 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Shared NumPy LMM chunk runner**: batch, streaming, and LOCO paths now use
   `jamma.lmm.chunk_runner_numpy` for chunk sizing, rotation, C/Python dispatch,
-  diagnostics, and per-chunk result writes. The batch runner keeps compatibility
-  re-exports for existing callers, but docs and benchmark tooling now point at
-  the shared chunk engine as the canonical owner.
+  diagnostics, and per-chunk result writes.
+- **Decomposed the shared chunk engine**: the former 1502-line
+  `chunk_runner_numpy.py` is now a ~530-line orchestrator plus four focused
+  sibling modules — `chunk_sizing.py` (RAM-budgeted chunk size),
+  `chunk_workspaces.py` (persistent C-workspace lifecycle), `chunk_dispatch.py`
+  (the C/Python kernel-selection ladder), and `chunk_pipeline.py` (thread split
+  and overlapped pipeline). Each file is now well under 1000 lines. The batch
+  runner's compatibility re-export shim was removed; callers and tests import
+  each symbol from its canonical module.
+- **`LmmDispatch` predicates**: added `feeds_raw_utg` and
+  `uses_fused_score_or_lrt` properties so the chunk runner asks one semantic
+  question instead of recomputing the same five-way boolean OR in three places.
+- **Deduplicated result sinks**: batch, streaming, and LOCO now build their
+  per-chunk sinks via shared `make_writer_sink` / `make_result_list_sink`
+  factories in `jamma.lmm.results` instead of inlining byte-identical closures.
+- Removed the dead `fused_mode4` parameter from `compute_chunk_size_numpy`
+  (the body never read it).
 
 ## [5.4.1] - 2026-06-10
 

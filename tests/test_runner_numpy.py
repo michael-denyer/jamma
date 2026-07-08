@@ -14,7 +14,8 @@ import pytest
 
 from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
-from jamma.lmm.runner_numpy import compute_chunk_size_numpy, run_lmm_association_numpy
+from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
+from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.stats import AssocResult
 from jamma.validation import (
     ToleranceConfig,
@@ -297,9 +298,7 @@ def test_chunk_size_auto_scales_with_memory():
     # 400 GB available → 15% = 60 GB (hits 40 GB ceiling)
     mock_vmem = MagicMock()
     mock_vmem.available = 400_000_000_000
-    with patch(
-        "jamma.lmm.chunk_runner_numpy.psutil.virtual_memory", return_value=mock_vmem
-    ):
+    with patch("jamma.lmm.chunk_sizing.psutil.virtual_memory", return_value=mock_vmem):
         chunk_big = compute_chunk_size_numpy(
             n_samples=50_000,
             n_filtered=100_000,
@@ -309,9 +308,7 @@ def test_chunk_size_auto_scales_with_memory():
 
     # 10 GB available → 15% = 1.5 GB (hits 2 GB floor)
     mock_vmem.available = 10_000_000_000
-    with patch(
-        "jamma.lmm.chunk_runner_numpy.psutil.virtual_memory", return_value=mock_vmem
-    ):
+    with patch("jamma.lmm.chunk_sizing.psutil.virtual_memory", return_value=mock_vmem):
         chunk_small = compute_chunk_size_numpy(
             n_samples=50_000,
             n_filtered=100_000,
@@ -336,7 +333,6 @@ def test_chunk_size_mode4_fused_uses_4col():
         n_cvt=1,
         use_split=True,
         lmm_mode=4,
-        fused_mode4=True,
         mem_budget_bytes=budget,
     )
     # Non-fused mode-4 fallback: also 4 cols/SNP (SoA split dispatch)
@@ -346,7 +342,6 @@ def test_chunk_size_mode4_fused_uses_4col():
         n_cvt=1,
         use_split=True,
         lmm_mode=4,
-        fused_mode4=False,
         mem_budget_bytes=budget,
     )
     # Wald (mode 1): 4 cols/SNP — should match all other split paths
@@ -371,7 +366,7 @@ def test_runner_mode4_uses_fused_dispatch():
     """Mode 4 with C extension uses fused dispatch, not compose fallback."""
     from unittest.mock import patch
 
-    from jamma.lmm import chunk_runner_numpy
+    from jamma.lmm import chunk_dispatch
     from jamma.lmm.compute_numpy import _C_MODE4_AVAILABLE
 
     if not _C_MODE4_AVAILABLE:
@@ -380,9 +375,9 @@ def test_runner_mode4_uses_fused_dispatch():
     genotypes, phenotypes, kinship, snp_info = _make_synthetic_data()
 
     with patch.object(
-        chunk_runner_numpy,
+        chunk_dispatch,
         "_compose_mode4_from_split",
-        wraps=chunk_runner_numpy._compose_mode4_from_split,
+        wraps=chunk_dispatch._compose_mode4_from_split,
     ) as mock_compose:
         run_lmm_association_numpy(
             genotypes=genotypes,
@@ -1142,7 +1137,7 @@ def test_reconstruct_uab_from_soa_matches_direct():
 @pytest.mark.tier1
 def test_adaptive_core_split():
     """Core split adapts rotation/compute ratio based on n_samples (RUN-05)."""
-    from jamma.lmm.runner_numpy import compute_pipeline_core_split
+    from jamma.lmm.chunk_pipeline import compute_pipeline_core_split
 
     total_cores = 8
 
@@ -1170,7 +1165,7 @@ def test_adaptive_core_split():
 @pytest.mark.tier1
 def test_compute_adaptive_core_split():
     """compute_adaptive_core_split allocates threads proportional to measured times."""
-    from jamma.lmm.runner_numpy import compute_adaptive_core_split
+    from jamma.lmm.chunk_pipeline import compute_adaptive_core_split
 
     # Rotation-heavy: 80% rotation time -> ~80% of cores for rotation
     rot, omp = compute_adaptive_core_split(
@@ -1517,7 +1512,7 @@ class TestErrorMessageDifferentiation:
 
     def test_fused_mode4_label(self):
         """Fused mode-4 failure includes 'Fused mode-4' in the message."""
-        from jamma.lmm.runner_numpy import _guarded_compute
+        from jamma.lmm.chunk_dispatch import _guarded_compute
 
         def _boom(*a, **kw):
             raise OSError("segfault simulation")
@@ -1532,7 +1527,7 @@ class TestErrorMessageDifferentiation:
 
     def test_wald_label(self):
         """Wald workspace failure includes 'Wald' in the message."""
-        from jamma.lmm.runner_numpy import _guarded_compute
+        from jamma.lmm.chunk_dispatch import _guarded_compute
 
         def _boom(*a, **kw):
             raise OSError("segfault simulation")
@@ -1547,7 +1542,7 @@ class TestErrorMessageDifferentiation:
 
     def test_score_lrt_label(self):
         """Score/LRT dispatch failure includes 'Score/LRT' in the message."""
-        from jamma.lmm.runner_numpy import _guarded_compute
+        from jamma.lmm.chunk_dispatch import _guarded_compute
 
         def _boom(*a, **kw):
             raise OSError("segfault simulation")
@@ -1562,7 +1557,7 @@ class TestErrorMessageDifferentiation:
 
     def test_error_includes_snp_offset(self):
         """Error message includes SNP offset and total count."""
-        from jamma.lmm.runner_numpy import _guarded_compute
+        from jamma.lmm.chunk_dispatch import _guarded_compute
 
         def _boom(*a, **kw):
             raise OSError("kaboom")
@@ -1578,7 +1573,7 @@ class TestErrorMessageDifferentiation:
 
     def test_memory_error_passes_through(self):
         """MemoryError is not wrapped in RuntimeError."""
-        from jamma.lmm.runner_numpy import _guarded_compute
+        from jamma.lmm.chunk_dispatch import _guarded_compute
 
         def _oom(*a, **kw):
             raise MemoryError("out of memory")
@@ -1593,7 +1588,7 @@ class TestErrorMessageDifferentiation:
 
     def test_value_error_passes_through(self):
         """ValueError is not wrapped in RuntimeError."""
-        from jamma.lmm.runner_numpy import _guarded_compute
+        from jamma.lmm.chunk_dispatch import _guarded_compute
 
         def _bad(*a, **kw):
             raise ValueError("bad value")
@@ -1608,7 +1603,7 @@ class TestErrorMessageDifferentiation:
 
     def test_type_error_passes_through(self):
         """TypeError is not wrapped in RuntimeError."""
-        from jamma.lmm.runner_numpy import _guarded_compute
+        from jamma.lmm.chunk_dispatch import _guarded_compute
 
         def _bad(*a, **kw):
             raise TypeError("wrong type")
@@ -1623,7 +1618,7 @@ class TestErrorMessageDifferentiation:
 
     def test_overflow_error_passes_through(self):
         """OverflowError is not wrapped in RuntimeError."""
-        from jamma.lmm.runner_numpy import _guarded_compute
+        from jamma.lmm.chunk_dispatch import _guarded_compute
 
         def _bad(*a, **kw):
             raise OverflowError("overflow")
@@ -1638,7 +1633,7 @@ class TestErrorMessageDifferentiation:
 
     def test_exception_chaining_preserved(self):
         """The original exception is chained via 'from exc'."""
-        from jamma.lmm.runner_numpy import _guarded_compute
+        from jamma.lmm.chunk_dispatch import _guarded_compute
 
         def _boom(*a, **kw):
             raise OSError("root cause")
@@ -1656,7 +1651,7 @@ class TestErrorMessageDifferentiation:
 
     def test_successful_call_returns_result(self):
         """Successful function call returns result without wrapping."""
-        from jamma.lmm.runner_numpy import _guarded_compute
+        from jamma.lmm.chunk_dispatch import _guarded_compute
 
         def _ok(*a, **kw):
             return {"betas": [1.0], "ses": [0.1]}

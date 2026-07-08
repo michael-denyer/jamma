@@ -961,7 +961,7 @@ def test_pipeline_multi_chunk_correctness():
     This catches off-by-one errors in the last-chunk handling, race conditions
     in buffer management, and write_offset accumulation bugs.
     """
-    from jamma.lmm.runner_numpy import compute_chunk_size_numpy
+    from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
 
     rng = np.random.default_rng(42)
     n_samples = 100
@@ -2153,7 +2153,7 @@ def _build_mode4_soa_and_fused(score_lrt_data):
     fused_cr = compute_mode4_split_c_ws(ws_mode4, uab_var_soa, 1)
 
     # Compose path: Wald workspace + SoA split Score/LRT
-    from jamma.lmm.runner_numpy import _compose_mode4_from_split
+    from jamma.lmm.chunk_dispatch import _compose_mode4_from_split
 
     ws_wald = create_lmm_workspace(
         eigenvalues,
@@ -5531,7 +5531,7 @@ def test_runner_fused_lrt_dispatch():
 @pytest.mark.skipif(not _score_fused_available, reason="Fused Score C not available")
 def test_runner_fused_score_chunk_size():
     """Fused Score uses 1-col accounting (4x larger chunks at same budget)."""
-    from jamma.lmm.runner_numpy import compute_chunk_size_numpy
+    from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
 
     n_samples = 1000
     n_filtered = 200_000
@@ -5551,7 +5551,7 @@ def test_runner_fused_score_chunk_size():
 
     from unittest.mock import patch
 
-    with patch("jamma.lmm.chunk_runner_numpy._C_SCORE_FUSED_AVAILABLE", False):
+    with patch("jamma.lmm.chunk_sizing._C_SCORE_FUSED_AVAILABLE", False):
         chunk_split = compute_chunk_size_numpy(
             n_samples,
             n_filtered,
@@ -5569,7 +5569,7 @@ def test_runner_fused_score_chunk_size():
 @pytest.mark.skipif(not _lrt_fused_available, reason="Fused LRT C not available")
 def test_runner_fused_lrt_chunk_size():
     """Fused LRT uses 1-col accounting (4x larger chunks at same budget)."""
-    from jamma.lmm.runner_numpy import compute_chunk_size_numpy
+    from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
 
     n_samples = 1000
     n_filtered = 200_000
@@ -5586,7 +5586,7 @@ def test_runner_fused_lrt_chunk_size():
 
     from unittest.mock import patch
 
-    with patch("jamma.lmm.chunk_runner_numpy._C_LRT_FUSED_AVAILABLE", False):
+    with patch("jamma.lmm.chunk_sizing._C_LRT_FUSED_AVAILABLE", False):
         chunk_split = compute_chunk_size_numpy(
             n_samples,
             n_filtered,

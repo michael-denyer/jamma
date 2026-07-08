@@ -61,7 +61,7 @@ A typical LMM association run proceeds as follows:
 
 6. **Null model** — The rotated data `U.T @ Y` and covariates are used to optimize the variance component `lambda` via a 50-point grid search followed by golden section refinement (`lmm/likelihood.py` REML path).
 
-7. **Per-SNP association** — `lmm/chunk_runner_numpy.py` owns chunk sizing, missing-value imputation, genotype rotation via `jlinalg.dgemm`, C/Python dispatch, and result writing for batch, streaming, and LOCO paths. The compute kernels in `lmm/compute_numpy.py` build the Pab projection matrices and compute Wald/LRT/Score statistics via `lmm/stats.py`. The `_lmm_accel` C extension accelerates the per-SNP REML/Wald inner loop.
+7. **Per-SNP association** — `lmm/chunk_runner_numpy.py` orchestrates the shared chunk loop (missing-value imputation, genotype rotation via `jlinalg.dgemm`, per-chunk compute, and diagnostics) for the batch, streaming, and LOCO paths. Its concerns are split across focused sibling modules: `lmm/chunk_sizing.py` (RAM-budgeted chunk size), `lmm/chunk_workspaces.py` (persistent C-workspace lifecycle), `lmm/chunk_dispatch.py` (the C/Python kernel-selection ladder), and `lmm/chunk_pipeline.py` (rotation/compute thread split and the overlapped pipeline). Result writing goes through the sink factories in `lmm/results.py`. The compute kernels in `lmm/compute_numpy.py` build the Pab projection matrices and compute Wald/LRT/Score statistics via `lmm/stats.py`. The `_lmm_accel` C extension accelerates the per-SNP REML/Wald inner loop.
 
 8. **Output** — `AssocResult` records are written to a GEMMA-compatible `.assoc.txt` file via `lmm/io.py:IncrementalAssocWriter`. When `output_path` is set, results stream to disk per chunk to avoid accumulating a large in-memory list.
 
@@ -113,7 +113,11 @@ src/jamma/
 │   ├── runner.py           # ExecutionPlan; select_execution_mode(); run_lmm() dispatch
 │   ├── runner_numpy.py     # Batch runner: full genotype matrix in RAM + C extension
 │   ├── runner_numpy_streaming.py  # Streaming runner: two-pass disk I/O + C extension
-│   ├── chunk_runner_numpy.py  # Shared NumPy chunk sizing, rotation, dispatch, and diagnostics
+│   ├── chunk_runner_numpy.py  # Shared NumPy chunk loop (orchestrator) for batch/streaming/LOCO
+│   ├── chunk_sizing.py     # RAM-budgeted chunk-size computation
+│   ├── chunk_workspaces.py # Persistent C-workspace lifecycle
+│   ├── chunk_dispatch.py   # Per-chunk C/Python kernel dispatch ladder
+│   ├── chunk_pipeline.py   # Rotation/compute thread split + overlapped pipeline driver
 │   ├── loco.py             # LOCO orchestrator: per-chromosome eigen + LMM loop
 │   ├── compute_numpy.py    # Per-chunk LMM compute kernels and C workspace wrappers
 │   ├── special.py          # Pure-stdlib betainc (Cephes CF) and chi2_sf (erfc)

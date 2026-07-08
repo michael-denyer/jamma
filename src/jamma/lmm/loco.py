@@ -60,7 +60,7 @@ from jamma.lmm.prepare_common import (
     _compute_null_model_common,
     compute_and_log_pve,
 )
-from jamma.lmm.results import _build_results
+from jamma.lmm.results import make_result_list_sink, make_writer_sink
 from jamma.lmm.schema import TEST_TYPE_MAP, LazySnpMeta, LocoResult
 from jamma.lmm.stats import AssocResult
 from jamma.utils import chr_sort_key
@@ -926,29 +926,24 @@ def _run_lmm_for_chromosome_numpy(
 
             return _next_chunk
 
-        def _sink(
-            chunk_arrays: dict[str, np.ndarray], filtered_start: int, filtered_end: int
-        ) -> None:
-            if writer is not None:
-                writer.write_arrays_batch(
-                    lmm_mode,
-                    ctx.global_filtered_indices[filtered_start:filtered_end],
-                    snp_info,
-                    ctx.filtered_afs[filtered_start:filtered_end],
-                    ctx.filtered_miss[filtered_start:filtered_end],
-                    chunk_arrays,
-                )
-            else:
-                results.extend(
-                    _build_results(
-                        lmm_mode,
-                        ctx.global_filtered_indices[filtered_start:filtered_end],
-                        ctx.filtered_afs[filtered_start:filtered_end],
-                        ctx.filtered_miss[filtered_start:filtered_end],
-                        snp_info,
-                        chunk_arrays,
-                    )
-                )
+        if writer is not None:
+            _sink = make_writer_sink(
+                writer,
+                lmm_mode,
+                snp_info,
+                ctx.global_filtered_indices,
+                ctx.filtered_afs,
+                ctx.filtered_miss,
+            )
+        else:
+            _sink = make_result_list_sink(
+                results,
+                lmm_mode,
+                snp_info,
+                ctx.global_filtered_indices,
+                ctx.filtered_afs,
+                ctx.filtered_miss,
+            )
 
         run_lmm_chunk_source_numpy(
             raw_chunk_source_factory=_make_loco_source,

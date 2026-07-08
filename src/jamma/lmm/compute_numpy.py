@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from typing import Any, Literal, NamedTuple, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypedDict
 
 import numpy as np
 
@@ -34,7 +34,11 @@ from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_split_ncvt1_numpy,
 )
 
+if TYPE_CHECKING:
+    from jamma.lmm.dispatch import LmmDispatch
+
 _EXPECTED_ABI_VERSION = 11  # Must match ABI_VERSION in _lmm_accel.c
+MAX_C_N_CVT = 100  # Must match MAX_N_CVT in _lmm_accel.c
 
 
 class AccelImport(NamedTuple):
@@ -417,6 +421,33 @@ _C_SCORE_FUSED_WS_AVAILABLE = (
 _C_LRT_FUSED_WS_AVAILABLE = (
     _create_workspace_lrt_fused_c is not None and _compute_lrt_fused_ws_c is not None
 )
+
+
+def select_current_dispatch_path(
+    n_cvt: int,
+    lmm_mode: LmmMode,
+    *,
+    log_choices: bool = True,
+) -> LmmDispatch:
+    """Select the dispatch path from the currently loaded C capabilities."""
+    from jamma.lmm.dispatch import select_dispatch_path
+
+    return select_dispatch_path(
+        n_cvt,
+        lmm_mode,
+        c_split_available=_C_SPLIT_AVAILABLE,
+        c_general_available=_C_GENERAL_AVAILABLE,
+        c_fused_available=_C_FUSED_AVAILABLE,
+        c_fused_general_available=_C_FUSED_GENERAL_AVAILABLE,
+        c_mode4_available=_C_MODE4_AVAILABLE,
+        c_mode4_fused_available=_C_MODE4_FUSED_AVAILABLE,
+        c_mode4_fused_general_available=_C_MODE4_FUSED_GENERAL_AVAILABLE,
+        c_score_fused_available=_C_SCORE_FUSED_AVAILABLE,
+        c_score_fused_ws_available=_C_SCORE_FUSED_WS_AVAILABLE,
+        c_lrt_fused_available=_C_LRT_FUSED_AVAILABLE,
+        c_lrt_fused_ws_available=_C_LRT_FUSED_WS_AVAILABLE,
+        log_choices=log_choices,
+    )
 
 
 class WaldResult(TypedDict):
@@ -1255,7 +1286,7 @@ def _compute_wald_numpy(
             n_threads,
         )
 
-    if _C_GENERAL_AVAILABLE and 1 < n_cvt <= 75:
+    if _C_GENERAL_AVAILABLE and 1 < n_cvt <= MAX_C_N_CVT:
         # Use C extension for general n_cvt via split-Uab workspace
         from jamma.lmm.likelihood import classify_uab_columns
 

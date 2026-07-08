@@ -956,15 +956,7 @@ class TestStreamingFusedScoreDispatch:
                 False,
             ),
             patch(
-                "jamma.lmm.runner_numpy_streaming._C_SCORE_FUSED_AVAILABLE",
-                False,
-            ),
-            patch(
                 "jamma.lmm.compute_numpy._C_SCORE_FUSED_WS_AVAILABLE",
-                False,
-            ),
-            patch(
-                "jamma.lmm.runner_numpy_streaming._C_SCORE_FUSED_WS_AVAILABLE",
                 False,
             ),
         ):
@@ -1059,15 +1051,7 @@ class TestStreamingFusedLrtDispatch:
                 False,
             ),
             patch(
-                "jamma.lmm.runner_numpy_streaming._C_LRT_FUSED_AVAILABLE",
-                False,
-            ),
-            patch(
                 "jamma.lmm.compute_numpy._C_LRT_FUSED_WS_AVAILABLE",
-                False,
-            ),
-            patch(
-                "jamma.lmm.runner_numpy_streaming._C_LRT_FUSED_WS_AVAILABLE",
                 False,
             ),
         ):

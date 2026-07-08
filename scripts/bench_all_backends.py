@@ -154,16 +154,15 @@ def _bench_numpy_inner(
     results: dict[str, float] = {}
 
     # Optionally disable C extension for pure-Python comparison.
-    # Must patch both compute_numpy (where _compute_wald_numpy checks flags)
-    # AND runner_numpy (which imports copies of the flags at module level).
+    # Must patch compute_numpy for dispatch flags and runner_numpy for the
+    # runner-owned accelerator flags it still reads directly.
     cn_saved = (cn._C_ACCEL_AVAILABLE, cn._C_SPLIT_AVAILABLE, cn._C_GENERAL_AVAILABLE)
-    rn_saved = (rn._C_ACCEL_AVAILABLE, rn._C_SPLIT_AVAILABLE, rn._C_GENERAL_AVAILABLE)
+    rn_saved = (rn._C_ACCEL_AVAILABLE, rn._C_GENERAL_AVAILABLE)
     if disable_c:
         cn._C_ACCEL_AVAILABLE = False
         cn._C_SPLIT_AVAILABLE = False
         cn._C_GENERAL_AVAILABLE = False
         rn._C_ACCEL_AVAILABLE = False
-        rn._C_SPLIT_AVAILABLE = False
         rn._C_GENERAL_AVAILABLE = False
 
     try:
@@ -193,7 +192,7 @@ def _bench_numpy_inner(
             results[op] = best
     finally:
         cn._C_ACCEL_AVAILABLE, cn._C_SPLIT_AVAILABLE, cn._C_GENERAL_AVAILABLE = cn_saved
-        rn._C_ACCEL_AVAILABLE, rn._C_SPLIT_AVAILABLE, rn._C_GENERAL_AVAILABLE = rn_saved
+        rn._C_ACCEL_AVAILABLE, rn._C_GENERAL_AVAILABLE = rn_saved
 
     return results
 

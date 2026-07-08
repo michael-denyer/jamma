@@ -1012,12 +1012,12 @@ def test_pipeline_multi_chunk_correctness():
     )
 
     # Run with pipeline disabled: force single chunk by using sequential path
-    # We do this by monkeypatching _C_SPLIT_AVAILABLE to False
-    import jamma.lmm.runner_numpy as runner_mod
+    # We do this by monkeypatching the canonical dispatch flag to False.
+    import jamma.lmm.compute_numpy as compute_mod
 
-    orig_split = runner_mod._C_SPLIT_AVAILABLE
+    orig_split = compute_mod._C_SPLIT_AVAILABLE
     try:
-        runner_mod._C_SPLIT_AVAILABLE = False
+        compute_mod._C_SPLIT_AVAILABLE = False
         run_result = run_lmm_association_numpy(
             genotypes=genotypes,
             phenotypes=phenotypes,
@@ -1034,7 +1034,7 @@ def test_pipeline_multi_chunk_correctness():
         )
         results_sequential = run_result.associations
     finally:
-        runner_mod._C_SPLIT_AVAILABLE = orig_split
+        compute_mod._C_SPLIT_AVAILABLE = orig_split
 
     # Same number of results
     assert len(results_pipeline) == len(results_sequential), (

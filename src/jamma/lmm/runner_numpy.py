@@ -32,15 +32,11 @@ from jamma.core.threading import (
 from jamma.lmm.compute_numpy import (
     _C_ACCEL_AVAILABLE,
     _C_FUSED_AVAILABLE,
-    _C_FUSED_GENERAL_AVAILABLE,
     _C_GENERAL_AVAILABLE,
     _C_HAS_OPENMP,
     _C_LRT_FUSED_AVAILABLE,
-    _C_MODE4_AVAILABLE,
     _C_MODE4_FUSED_AVAILABLE,
-    _C_MODE4_FUSED_GENERAL_AVAILABLE,
     _C_SCORE_FUSED_AVAILABLE,
-    _C_SPLIT_AVAILABLE,
     LmmMode,
     _compute_lrt_split_numpy,
     _compute_score_split_numpy,
@@ -59,6 +55,7 @@ from jamma.lmm.compute_numpy import (
     create_lmm_workspace_mode4,
     create_lmm_workspace_mode4_fused,
     create_lmm_workspace_mode4_fused_general,
+    select_current_dispatch_path,
 )
 from jamma.lmm.dispatch import LmmDispatch
 from jamma.lmm.impute import impute_missing_inplace
@@ -1207,27 +1204,7 @@ def run_lmm_association_numpy(
 
     # Determine split/fused C kernel dispatch BEFORE chunk sizing so the
     # budget can use accurate per-SNP accounting.
-    from jamma.lmm.compute_numpy import (
-        _C_LRT_FUSED_WS_AVAILABLE,
-        _C_SCORE_FUSED_WS_AVAILABLE,
-    )
-    from jamma.lmm.dispatch import select_dispatch_path
-
-    dispatch = select_dispatch_path(
-        n_cvt,
-        lmm_mode,
-        c_split_available=_C_SPLIT_AVAILABLE,
-        c_general_available=_C_GENERAL_AVAILABLE,
-        c_fused_available=_C_FUSED_AVAILABLE,
-        c_fused_general_available=_C_FUSED_GENERAL_AVAILABLE,
-        c_mode4_available=_C_MODE4_AVAILABLE,
-        c_mode4_fused_available=_C_MODE4_FUSED_AVAILABLE,
-        c_mode4_fused_general_available=_C_MODE4_FUSED_GENERAL_AVAILABLE,
-        c_score_fused_available=_C_SCORE_FUSED_AVAILABLE,
-        c_score_fused_ws_available=_C_SCORE_FUSED_WS_AVAILABLE,
-        c_lrt_fused_available=_C_LRT_FUSED_AVAILABLE,
-        c_lrt_fused_ws_available=_C_LRT_FUSED_WS_AVAILABLE,
-    )
+    dispatch = select_current_dispatch_path(n_cvt, lmm_mode)
     use_split = dispatch.use_split
     use_fused = dispatch.use_fused
     use_fused_general = dispatch.use_fused_general
@@ -1457,9 +1434,10 @@ def run_lmm_association_numpy(
 
         Pulls the next chunk start from chunk_starts, returning None once the
         list is exhausted (the pipeline driver's exhaustion signal). BLAS
-        operations release the GIL. Returns either utg_t (fused path) or
-        SoA-layout varying Uab (split path) with its actual length; invariant
-        Uab is precomputed once in outer scope (uab_invariant_soa).
+        operations release the GIL. Returns utg_t (fused path), SoA-layout
+        varying Uab (split path), or full Uab (non-split fallback) with its
+        actual length; invariant Uab is precomputed once in outer scope
+        (uab_invariant_soa).
 
         Uses preallocated geno_buf and utg_buf to avoid per-chunk allocation.
         Pipeline path double-buffers via _chunk_counter % 2.
@@ -1500,25 +1478,32 @@ def run_lmm_association_numpy(
             # Fused path: pass utg_t directly to C. No uab_varying_soa.
             return utg_t, actual_len
 
-        # Split SoA path: build SNP-varying Uab in SoA layout.
-        # Reuse preallocated buffer when chunk is full-sized.
-        out_var = (
-            _uab_var_bufs[buf_idx][:actual_len, :, :]
-            if _uab_var_bufs is not None and actual_len == chunk_size
-            else None
-        )
-        uab_var_soa = batch_compute_uab_varying_soa_numpy(
-            n_cvt, UtW, Uty, utg_t, out=out_var
-        )
-        return uab_var_soa, actual_len
+        if use_split:
+            # Split SoA path: build SNP-varying Uab in SoA layout.
+            # Reuse preallocated buffer when chunk is full-sized.
+            out_var = (
+                _uab_var_bufs[buf_idx][:actual_len, :, :]
+                if _uab_var_bufs is not None and actual_len == chunk_size
+                else None
+            )
+            uab_var_soa = batch_compute_uab_varying_soa_numpy(
+                n_cvt, UtW, Uty, utg_t, out=out_var
+            )
+            return uab_var_soa, actual_len
+
+        # Non-split fallback: build the full Uab batch. This path is rare in
+        # production but keeps sequential execution on the same callback driver.
+        uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, utg_t.T)
+        return uab_batch, actual_len
 
     def _compute_and_write(prepared: tuple) -> None:
         """Run C extension compute on a prepared chunk and write results.
 
         ``prepared`` is the (chunk_data, actual_len) tuple from _prepare_chunk.
         Dispatches by path:
-        - Fused (use_fused): chunk_data is utg_t, dispatched to fused C workspace
+        - Fused: chunk_data is utg_t, dispatched to fused C workspace
         - SoA split: chunk_data is uab_var_soa, dispatched to dispatch_soa_split
+        - Non-split: chunk_data is full Uab, dispatched to compute_lmm_chunk_numpy
         """
         nonlocal write_offset, t_numpy_compute_total, t_result_write_total
         nonlocal n_at_lmin_accum, n_at_lmax_accum
@@ -1527,7 +1512,29 @@ def run_lmm_association_numpy(
 
         t_compute_start = time.perf_counter()
 
-        cr = _dispatch_compute(compute_ctx, chunk_data, budget.omp, write_offset)
+        if use_split:
+            cr = _dispatch_compute(compute_ctx, chunk_data, budget.omp, write_offset)
+        else:
+            blas_ctx = blas_threads(1) if _C_ACCEL_AVAILABLE else nullcontext()
+            with blas_ctx:
+                cr = _guarded_compute(
+                    compute_lmm_chunk_numpy,
+                    lmm_mode,
+                    n_cvt,
+                    eigenvalues_np,
+                    chunk_data,
+                    n_samples,
+                    l_min=l_min,
+                    l_max=l_max,
+                    n_grid=n_grid,
+                    n_refine=n_refine,
+                    Hi_eval_null=Hi_eval_null,
+                    logl_H0=logl_H0,
+                    n_threads=budget.omp,
+                    operation="LMM chunk compute",
+                    write_offset=write_offset,
+                    n_filtered=n_filtered,
+                )
 
         t_numpy_compute_total += time.perf_counter() - t_compute_start
 
@@ -1576,128 +1583,26 @@ def run_lmm_association_numpy(
                 progress_label="LMM association",
             )
         else:
-            # Sequential path (single chunk or non-pipeline execution)
+            # Sequential path (single chunk or non-pipeline execution). Reuses
+            # the same callbacks as the pipeline path so chunk preparation,
+            # dispatch, and writing cannot drift.
             if show_progress and n_chunks > 1:
                 chunk_iterator = progress_iterator(
-                    chunk_starts,
+                    range(n_chunks),
                     total=n_chunks,
                     desc="LMM association",
                     initial_eta_seconds=estimate_lmm_seconds(n_samples, n_filtered),
                 )
             else:
-                chunk_iterator = iter(chunk_starts)
+                chunk_iterator = range(n_chunks)
 
-            def _run_lmm_chunk(Uab_batch: np.ndarray) -> dict:
-                """Run LMM compute on a Uab batch with BLAS thread control."""
-                blas_ctx = blas_threads(1) if _C_ACCEL_AVAILABLE else nullcontext()
-                with blas_ctx:
-                    return _guarded_compute(
-                        compute_lmm_chunk_numpy,
-                        lmm_mode,
-                        n_cvt,
-                        eigenvalues_np,
-                        Uab_batch,
-                        n_samples,
-                        l_min=l_min,
-                        l_max=l_max,
-                        n_grid=n_grid,
-                        n_refine=n_refine,
-                        Hi_eval_null=Hi_eval_null,
-                        logl_H0=logl_H0,
-                        n_threads=omp_threads,
-                        operation="LMM chunk compute",
-                        write_offset=write_offset,
-                        n_filtered=n_filtered,
-                    )
-
-            for chunk_start in chunk_iterator:
-                chunk_end = min(chunk_start + chunk_size, n_filtered)
-                chunk_indices = snp_indices[chunk_start:chunk_end]
-                actual_snps = chunk_end - chunk_start
-
-                # Copy genotypes into preallocated buffer (avoids fancy-index alloc).
-                geno_chunk = _geno_bufs[0][:, :actual_snps]
-                geno_chunk[:] = genotypes[:, chunk_indices]
-
-                # Mean-impute missing genotypes
-                impute_missing_inplace(geno_chunk, col_means[chunk_indices])
-
-                # Rotate into preallocated utg_buf — jlinalg.dgemm(..., out=)
-                # writes directly, no intermediate allocation.
+            for _chunk_idx in chunk_iterator:
                 t_rot_start = time.perf_counter()
-                utg_out = _utg_bufs[0][:actual_snps, :]
-                with jlinalg_threads(rotation_threads):
-                    utg_t = jlinalg.dgemm(geno_chunk, U, transa="T", out=utg_out)
+                prepared = _prepare_chunk()
                 t_rotation_total += time.perf_counter() - t_rot_start
-
-                # Compute
-                t_compute_start = time.perf_counter()
-                if (
-                    use_fused
-                    or use_fused_score_ws
-                    or use_fused_lrt_ws
-                    or use_fused_score
-                    or use_fused_lrt
-                ):
-                    # Fused paths: utg_t already in the correct layout.
-                    with blas_threads(1):
-                        cr = _dispatch_compute(
-                            compute_ctx, utg_t, omp_threads, write_offset
-                        )
-                    del utg_t
-                elif use_split:
-                    # Build SoA-layout varying Uab only — invariant precomputed.
-                    # Reuse pre-allocated buffer when chunk is full-sized.
-                    _out = (
-                        _uab_var_bufs[0]
-                        if _uab_var_bufs is not None and actual_snps == chunk_size
-                        else None
-                    )
-                    uab_var_soa = batch_compute_uab_varying_soa_numpy(
-                        n_cvt, UtW, Uty, utg_t, out=_out
-                    )
-                    del utg_t
-                    with blas_threads(1):
-                        cr = _dispatch_compute(
-                            compute_ctx, uab_var_soa, omp_threads, write_offset
-                        )
-                    del uab_var_soa
-                else:
-                    # Non-split full Uab path: utg_t.T gives (n_samples, n_snps) view
-                    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, utg_t.T)
-                    del utg_t
-                    cr = _run_lmm_chunk(Uab_batch)
-                    del Uab_batch
-                t_numpy_compute_total += time.perf_counter() - t_compute_start
-
-                # Write results
-                t_write_start = time.perf_counter()
-                actual_len = chunk_end - chunk_start
-                if streaming:
-                    chunk_arrays = {
-                        key: cr[key][:actual_len] for key in _RESULT_FIELDS[lmm_mode]
-                    }
-                    n_at_lmin_accum, n_at_lmax_accum = write_streaming_chunk(
-                        writer,
-                        lmm_mode,
-                        snp_indices[write_offset : write_offset + actual_len],
-                        snp_info,
-                        filtered_afs[write_offset : write_offset + actual_len],
-                        filtered_miss[write_offset : write_offset + actual_len],
-                        chunk_arrays,
-                        l_min,
-                        l_max,
-                        nan_counts,
-                        n_at_lmin_accum,
-                        n_at_lmax_accum,
-                    )
-                else:
-                    s = slice(write_offset, write_offset + actual_len)
-                    for key in arrays_out:
-                        arrays_out[key][s] = cr[key][:actual_len]
-                write_offset += actual_len
-                t_result_write_total += time.perf_counter() - t_write_start
-                del cr
+                if prepared is None:
+                    break
+                _compute_and_write(prepared)
 
     # Validate all results were written
     if write_offset != n_filtered:

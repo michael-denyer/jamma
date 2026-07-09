@@ -40,6 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **LOCO SNP statistics basis with missing phenotypes**: when some
+  phenotypes/covariates are missing (analysed != all samples), LOCO now computes
+  each chromosome's SNP mean/MAF, reported allele frequency, and missing-genotype
+  imputation over the *analysed* samples — matching GEMMA (`src/lmm.cpp`, which
+  averages and imputes over analysed individuals only) — instead of reusing the
+  all-sample statistics cached during the kinship pass. The all-sample cache is
+  still reused when every sample is analysed (identical result, no BED re-read).
+  Previously the cached path and the non-cache / eigen-cache path could report
+  different allele frequencies for the same run (and, with missing genotypes,
+  different effect estimates).
 - **Systemic-NaN runs now fail loudly**: the shared NumPy chunk runner raises
   instead of writing an all-NaN `.assoc.txt` when a result column is entirely NaN
   (e.g. a non-PSD kinship matrix or an all-missing phenotype), rather than

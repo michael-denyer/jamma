@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.4.2] - 2026-07-09
+
 ### Changed
 
 - **Shared NumPy LMM chunk runner**: batch, streaming, and LOCO paths now use
@@ -20,9 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and overlapped pipeline). Each file is now well under 1000 lines. The batch
   runner's compatibility re-export shim was removed; callers and tests import
   each symbol from its canonical module.
-- **`LmmDispatch` predicates**: added `feeds_raw_utg` and
-  `uses_fused_score_or_lrt` properties so the chunk runner asks one semantic
-  question instead of recomputing the same five-way boolean OR in three places.
+- **Typed LMM dispatch path**: the per-run C-kernel choice is now a single
+  `DispatchPath` enum (`jamma.lmm.dispatch`) instead of a bag of eight
+  interdependent booleans on the former `LmmDispatch` dataclass. The chunk
+  compute ladder and the persistent-workspace allocator now select the kernel
+  with exhaustive `match` statements over one value, and the chunk runner's
+  `feeds_raw_utg` / `uses_fused_score_or_lrt` predicates are properties on the
+  enum. Illegal dispatch combinations are unrepresentable by construction, so
+  the previous per-field validation is gone.
 - **Deduplicated result sinks**: batch, streaming, and LOCO now build their
   per-chunk sinks via shared `make_writer_sink` / `make_result_list_sink`
   factories in `jamma.lmm.results` instead of inlining byte-identical closures.
@@ -50,9 +57,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Previously the cached path and the non-cache / eigen-cache path could report
   different allele frequencies for the same run (and, with missing genotypes,
   different effect estimates).
-- **`LmmDispatch` rejects impossible flag combinations** at construction, so an
-  invalid dispatch state fails fast instead of silently dispatching to the wrong
-  kernel.
 
 ### Removed
 

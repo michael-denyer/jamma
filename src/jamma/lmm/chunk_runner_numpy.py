@@ -137,32 +137,6 @@ class LmmChunkRunStats(NamedTuple):
     used_pipeline: bool
 
 
-def _raise_if_systemic_nan(
-    nan_counts: dict[str, int], n_filtered: int, nan_abort_fraction: float
-) -> None:
-    """Abort when a result column is essentially all NaN.
-
-    Degenerate (monomorphic) SNPs are filtered before compute, so a result field
-    that is NaN for at least ``nan_abort_fraction`` of the ``n_filtered`` tested
-    SNPs signals a systemic failure — a non-PSD kinship matrix or an all-missing
-    phenotype — not per-SNP degeneracy. Raising here stops an all-NaN result set
-    from being written to disk and reported as a successful run.
-    """
-    if not nan_counts:
-        return
-    worst_field, worst_nan = max(nan_counts.items(), key=lambda kv: kv[1])
-    if worst_nan >= n_filtered * nan_abort_fraction:
-        raise RuntimeError(
-            f"{worst_nan}/{n_filtered} tested SNPs produced NaN {worst_field} "
-            f"(>= {nan_abort_fraction:.0%} abort threshold). This indicates a "
-            "systemic failure — a non-PSD kinship matrix or an all-missing "
-            "phenotype — not per-SNP degeneracy, since monomorphic SNPs are "
-            "filtered before compute. Refusing to emit an essentially all-NaN "
-            "result set; check kinship matrix quality and phenotype/covariate "
-            "inputs."
-        )
-
-
 def run_lmm_chunk_source_numpy(
     *,
     raw_chunk_source_factory: Callable[[int], Callable[[], RawLmmChunk | None]],
@@ -190,7 +164,6 @@ def run_lmm_chunk_source_numpy(
     progress_label: str = "LMM association",
     lambda_warning_prefix: str = "",
     log_dispatch_choices: bool = True,
-    nan_abort_fraction: float = 1.0,
 ) -> LmmChunkRunStats:
     """Run LMM association over caller-provided raw genotype chunks.
 
@@ -201,10 +174,11 @@ def run_lmm_chunk_source_numpy(
     timing. Batch and LOCO use this path so their chunk compute behavior cannot
     drift.
 
-    Raises RuntimeError if a result field is NaN for at least
-    ``nan_abort_fraction`` of tested SNPs (default 1.0 = only an entirely-NaN
-    column aborts), so a systemic failure such as a non-PSD kinship matrix
-    surfaces loudly instead of silently writing an all-NaN result file.
+    A result field that is all NaN (e.g. a non-PSD kinship matrix, or a phenotype
+    made degenerate by collinear covariates) is surfaced via ``logger.warning``
+    per field, not raised: an all-NaN result is a legitimate GEMMA-equivalent
+    outcome for degenerate inputs, and a fatal abort would be both wrong there and
+    sensitive to platform floating-point (the NaN fraction can differ by BLAS).
     """
     if n_filtered == 0:
         return LmmChunkRunStats(
@@ -556,7 +530,6 @@ def run_lmm_chunk_source_numpy(
             f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
             "check for degenerate (constant) genotypes and kinship matrix quality"
         )
-    _raise_if_systemic_nan(nan_counts, n_filtered, nan_abort_fraction)
     log_lambda_boundary_warning(
         n_at_lmin, n_at_lmax, l_min, l_max, prefix=lambda_warning_prefix
     )

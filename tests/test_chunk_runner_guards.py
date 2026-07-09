@@ -1,8 +1,8 @@
 """Guard/precondition tests for the shared NumPy LMM chunk runner.
 
 These cover the cheap, isolated failure paths that the end-to-end parity suites
-never exercise: the systemic-NaN abort, the ``run_lmm_chunk_source_numpy``
-argument preconditions, and the ``dispatch_soa_split`` mode guard.
+never exercise: the ``run_lmm_chunk_source_numpy`` argument preconditions and the
+``dispatch_soa_split`` mode guard.
 """
 
 from __future__ import annotations
@@ -11,44 +11,7 @@ import numpy as np
 import pytest
 
 from jamma.lmm.chunk_dispatch import dispatch_soa_split
-from jamma.lmm.chunk_runner_numpy import (
-    _raise_if_systemic_nan,
-    run_lmm_chunk_source_numpy,
-)
-
-# ---------------------------------------------------------------------------
-# _raise_if_systemic_nan
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.tier0
-def test_systemic_nan_noop_when_no_nans():
-    _raise_if_systemic_nan({}, n_filtered=100, nan_abort_fraction=1.0)
-
-
-@pytest.mark.tier0
-def test_systemic_nan_noop_for_partial_column():
-    # A handful of per-SNP NaNs (e.g. P_xx <= 0 after projection) must not abort.
-    _raise_if_systemic_nan(
-        {"betas": 3, "pwalds": 1}, n_filtered=100, nan_abort_fraction=1.0
-    )
-
-
-@pytest.mark.tier0
-def test_systemic_nan_aborts_on_fully_nan_column():
-    with pytest.raises(RuntimeError, match="systemic failure"):
-        _raise_if_systemic_nan(
-            {"betas": 100, "pwalds": 40}, n_filtered=100, nan_abort_fraction=1.0
-        )
-
-
-@pytest.mark.tier0
-def test_systemic_nan_respects_custom_fraction():
-    # 60/100 NaN with a 0.5 threshold aborts; 40/100 does not.
-    with pytest.raises(RuntimeError, match="abort threshold"):
-        _raise_if_systemic_nan({"betas": 60}, n_filtered=100, nan_abort_fraction=0.5)
-    _raise_if_systemic_nan({"betas": 40}, n_filtered=100, nan_abort_fraction=0.5)
-
+from jamma.lmm.chunk_runner_numpy import run_lmm_chunk_source_numpy
 
 # ---------------------------------------------------------------------------
 # run_lmm_chunk_source_numpy preconditions

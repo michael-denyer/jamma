@@ -50,10 +50,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Previously the cached path and the non-cache / eigen-cache path could report
   different allele frequencies for the same run (and, with missing genotypes,
   different effect estimates).
-- **Systemic-NaN runs now fail loudly**: the shared NumPy chunk runner raises
-  instead of writing an all-NaN `.assoc.txt` when a result column is entirely NaN
-  (e.g. a non-PSD kinship matrix or an all-missing phenotype), rather than
-  exiting 0 with only a warning.
 - **`LmmDispatch` rejects impossible flag combinations** at construction, so an
   invalid dispatch state fails fast instead of silently dispatching to the wrong
   kernel.

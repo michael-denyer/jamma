@@ -1150,10 +1150,15 @@ def compute_loco_kinship_streaming(
     logger.info(f"  Chunk size: {chunk_size:,}")
 
     # === PASS 1: Compute per-SNP statistics for filtering ===
-    # Stats are computed on ALL samples (not valid_indices subset). This is
-    # intentional: SNP filter decisions (MAF, missingness) should use the full
-    # population to match GEMMA's behaviour. valid_indices only affects PASS 2
-    # kinship accumulation, not which SNPs are included.
+    # Stats are computed on ALL samples (not the valid_indices subset), so the
+    # kinship SNP filter (MAF, missingness) and the exported cache both span the
+    # full population; valid_indices only affects PASS 2 kinship accumulation, not
+    # which SNPs are included. This all-sample basis is NOT GEMMA's basis for the
+    # per-SNP association statistics: GEMMA computes MAF/AF and imputes missing
+    # genotypes over the analysed individuals only. The LOCO association pass
+    # therefore reuses this cache only when every sample is analysed and
+    # re-derives analysed-sample stats otherwise -- see _chr_snp_stats_for_loco
+    # in lmm/loco.py.
     stats = collect_streamed_snp_stats(
         bed_path,
         n_snps=n_snps,

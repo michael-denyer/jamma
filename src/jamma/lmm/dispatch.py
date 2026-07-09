@@ -7,54 +7,51 @@ present at import time.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from enum import Enum
 
 from loguru import logger
 
 from jamma.lmm.schema import LmmMode
 
 
-@dataclass(frozen=True)
-class LmmDispatch:
-    """Per-run C kernel dispatch flags.
+class DispatchPath(Enum):
+    """The one authoritative C-kernel dispatch decision for an LMM run.
 
-    Each ``use_*`` flag answers "should this chunk loop take the C kernel
-    fast path for this feature?" — derived once before the chunk loop and
-    consulted per chunk. Flags are not independent: the docstrings on
-    ``select_dispatch_path`` document the precedence rules.
+    Derived once by ``select_dispatch_path`` from ``(n_cvt, lmm_mode, C-kernel
+    availability)`` and consulted per chunk. Exactly one member is active, so the
+    contradictory flag combinations the old 8-boolean form admitted are
+    unrepresentable and need no runtime guard. Wald-vs-mode-4 for the FUSED and
+    SOA_SPLIT families is resolved from ``lmm_mode`` at the call site;
+    ``SOA_SPLIT_MODE4`` is the one mode-4 kernel not recoverable from ``lmm_mode``
+    (a distinct split entrypoint and workspace), so it is its own member. The
+    properties reproduce the old ``LmmDispatch`` fields/properties by the same
+    names, so consumer read sites are unchanged.
     """
 
-    use_split: bool
-    use_fused: bool
-    use_fused_general: bool
-    use_fused_mode4: bool
-    use_fused_score: bool
-    use_fused_score_ws: bool
-    use_fused_lrt: bool
-    use_fused_lrt_ws: bool
+    NUMPY_FALLBACK = "numpy_fallback"  # not split: pure-NumPy full-Uab path
+    FUSED = "fused"  # n_cvt==1 fused Uab (Wald/mode-4 by lmm_mode)
+    FUSED_GENERAL = "fused_general"  # n_cvt>=2 fused Uab (Wald/mode-4 by lmm_mode)
+    FUSED_SCORE = "fused_score"  # mode 3 stateless
+    FUSED_SCORE_WS = "fused_score_ws"  # mode 3 workspace-based
+    FUSED_LRT = "fused_lrt"  # mode 2 stateless
+    FUSED_LRT_WS = "fused_lrt_ws"  # mode 2 workspace-based
+    SOA_SPLIT = "soa_split"  # SoA split; Wald+compose / score / lrt by lmm_mode
+    SOA_SPLIT_MODE4 = "soa_split_mode4"  # SoA split single-pass mode-4 kernel
 
-    def __post_init__(self) -> None:
-        """Enforce the flag implications ``select_dispatch_path`` guarantees.
+    @property
+    def use_split(self) -> bool:
+        """False only for the NumPy fallback (was the ``use_split`` flag)."""
+        return self is not DispatchPath.NUMPY_FALLBACK
 
-        The sanctioned producer never emits an impossible combination, but a
-        hand-constructed instance could; the per-chunk dispatch then trusts these
-        flags, so reject illegal states at construction rather than dispatch
-        incorrectly.
-        """
-        if self.use_fused and not self.use_split:
-            raise ValueError("use_fused requires use_split")
-        if self.use_fused_general and not self.use_fused:
-            raise ValueError("use_fused_general requires use_fused")
-        if self.use_fused_mode4 and not self.use_split:
-            raise ValueError("use_fused_mode4 requires use_split")
-        if (self.use_fused_score or self.use_fused_score_ws) and not self.use_split:
-            raise ValueError("fused Score paths require use_split")
-        if (self.use_fused_lrt or self.use_fused_lrt_ws) and not self.use_split:
-            raise ValueError("fused LRT paths require use_split")
-        if self.use_fused_score and self.use_fused_score_ws:
-            raise ValueError("use_fused_score excludes use_fused_score_ws")
-        if self.use_fused_lrt and self.use_fused_lrt_ws:
-            raise ValueError("use_fused_lrt excludes use_fused_lrt_ws")
+    @property
+    def use_fused(self) -> bool:
+        """True for the fused-Uab Wald family (was the ``use_fused`` flag)."""
+        return self in _FUSED_FAMILY
+
+    @property
+    def use_fused_general(self) -> bool:
+        """True for the n_cvt>=2 fused path (was the ``use_fused_general`` flag)."""
+        return self is DispatchPath.FUSED_GENERAL
 
     @property
     def uses_fused_score_or_lrt(self) -> bool:
@@ -64,12 +61,7 @@ class LmmDispatch:
         rather than packing it into a Wald workspace, so the chunk runner
         materializes ``w = UtW[:, 0]`` only for this family.
         """
-        return (
-            self.use_fused_score
-            or self.use_fused_score_ws
-            or self.use_fused_lrt
-            or self.use_fused_lrt_ws
-        )
+        return self in _SCORE_LRT_FAMILY
 
     @property
     def feeds_raw_utg(self) -> bool:
@@ -79,7 +71,18 @@ class LmmDispatch:
         variants) consumes ``utg_t`` directly, so no ``uab_varying_soa`` buffer
         is built. The negation selects the SoA-split path, which does build it.
         """
-        return self.use_fused or self.uses_fused_score_or_lrt
+        return self in _FUSED_FAMILY or self in _SCORE_LRT_FAMILY
+
+
+_FUSED_FAMILY = frozenset({DispatchPath.FUSED, DispatchPath.FUSED_GENERAL})
+_SCORE_LRT_FAMILY = frozenset(
+    {
+        DispatchPath.FUSED_SCORE,
+        DispatchPath.FUSED_SCORE_WS,
+        DispatchPath.FUSED_LRT,
+        DispatchPath.FUSED_LRT_WS,
+    }
+)
 
 
 def select_dispatch_path(
@@ -98,7 +101,7 @@ def select_dispatch_path(
     c_lrt_fused_available: bool,
     c_lrt_fused_ws_available: bool,
     log_choices: bool = True,
-) -> LmmDispatch:
+) -> DispatchPath:
     """Derive the C kernel dispatch flags for this run.
 
     The branching matrix:
@@ -130,7 +133,7 @@ def select_dispatch_path(
             were chosen. Off in unit tests to keep output clean.
 
     Returns:
-        Populated LmmDispatch with all 8 ``use_*`` flags.
+        The single active ``DispatchPath`` for this run.
     """
     use_split = (c_split_available and n_cvt == 1) or (
         c_general_available and n_cvt > 1
@@ -184,16 +187,26 @@ def select_dispatch_path(
             c_mode4_available=c_mode4_available,
         )
 
-    return LmmDispatch(
-        use_split=use_split,
-        use_fused=use_fused,
-        use_fused_general=use_fused_general,
-        use_fused_mode4=use_fused_mode4,
-        use_fused_score=use_fused_score,
-        use_fused_score_ws=use_fused_score_ws,
-        use_fused_lrt=use_fused_lrt,
-        use_fused_lrt_ws=use_fused_lrt_ws,
-    )
+    # Resolve to the single active path in the consumer priority order (the
+    # _dispatch_compute ladder in chunk_dispatch.py): fused-general, fused,
+    # score-WS, lrt-WS, score, lrt, then SoA-split. use_fused wins over
+    # use_fused_mode4 (matching that ladder), so the mode-4 split path is
+    # reached only when use_fused is False.
+    if not use_split:
+        return DispatchPath.NUMPY_FALLBACK
+    if use_fused:
+        return DispatchPath.FUSED_GENERAL if use_fused_general else DispatchPath.FUSED
+    if use_fused_score_ws:
+        return DispatchPath.FUSED_SCORE_WS
+    if use_fused_lrt_ws:
+        return DispatchPath.FUSED_LRT_WS
+    if use_fused_score:
+        return DispatchPath.FUSED_SCORE
+    if use_fused_lrt:
+        return DispatchPath.FUSED_LRT
+    if use_fused_mode4:
+        return DispatchPath.SOA_SPLIT_MODE4
+    return DispatchPath.SOA_SPLIT
 
 
 def _log_dispatch_choices(

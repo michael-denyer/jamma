@@ -35,7 +35,7 @@ from jamma.lmm.likelihood_numpy import (
 )
 
 if TYPE_CHECKING:
-    from jamma.lmm.dispatch import LmmDispatch
+    from jamma.lmm.dispatch import DispatchPath
 
 _EXPECTED_ABI_VERSION = 11  # Must match ABI_VERSION in _lmm_accel.c
 MAX_C_N_CVT = 100  # Must match MAX_N_CVT in _lmm_accel.c
@@ -428,7 +428,7 @@ def select_current_dispatch_path(
     lmm_mode: LmmMode,
     *,
     log_choices: bool = True,
-) -> LmmDispatch:
+) -> DispatchPath:
     """Select the dispatch path from the currently loaded C capabilities."""
     from jamma.lmm.dispatch import select_dispatch_path
 

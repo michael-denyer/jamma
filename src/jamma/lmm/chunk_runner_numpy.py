@@ -217,7 +217,6 @@ def run_lmm_chunk_source_numpy(
         n_cvt, lmm_mode, log_choices=log_dispatch_choices
     )
     use_split = dispatch.use_split
-    use_fused = dispatch.use_fused
     use_fused_general = dispatch.use_fused_general
 
     def _compute_engine_chunk_size(*, pipeline_buffers: int = 1) -> int:
@@ -289,7 +288,7 @@ def run_lmm_chunk_source_numpy(
     uab_invariant_soa = (
         compute_uab_invariant_soa(UtW, Uty, n_cvt) if use_split else None
     )
-    w = UtW[:, 0].copy() if dispatch.uses_fused_score_or_lrt and not use_fused else None
+    w = UtW[:, 0].copy() if dispatch.uses_fused_score_or_lrt else None
 
     lmm_workspace, score_fused_workspace, lrt_fused_workspace = _create_workspaces(
         dispatch,

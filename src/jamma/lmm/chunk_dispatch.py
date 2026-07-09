@@ -238,7 +238,7 @@ class _ComputeContext(NamedTuple):
     """Loop-invariant inputs for the per-chunk C dispatch.
 
     Built once before the chunk loop and passed to _dispatch_compute for every
-    chunk, so the 6-way kernel-selection ladder lives in exactly one place
+    chunk, so the kernel-selection ladder lives in exactly one place
     (previously duplicated across the batch pipeline, batch sequential, and
     streaming compute paths).
     """
@@ -271,8 +271,9 @@ def _dispatch_compute(
 ) -> dict[str, Any]:
     """Dispatch one prepared chunk to the active C kernel and return its result.
 
-    The 6-way kernel-selection ladder: fused-general / fused / fused-Score-WS /
-    fused-LRT-WS / fused-Score / fused-LRT / SoA-split. ``chunk_input`` is utg_t
+    The kernel-selection ladder (6 branches, 7 named paths): fused-general /
+    fused / fused-Score-WS / fused-LRT-WS / fused-Score / fused-LRT / SoA-split.
+    ``chunk_input`` is utg_t
     for the fused paths and the varying-Uab SoA array for the split path; the
     active path is fixed by ``ctx.dispatch``. The caller owns BLAS-thread scoping,
     input preparation, and the non-split NumPy fallback.

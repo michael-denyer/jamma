@@ -14,8 +14,8 @@ from typing import NamedTuple, cast
 import numpy as np
 from loguru import logger
 
+from jamma.lmm import compute_numpy
 from jamma.lmm.compute_numpy import (
-    _C_GENERAL_AVAILABLE,
     LmmMode,
     create_lmm_workspace,
     create_lmm_workspace_fused,
@@ -70,7 +70,7 @@ def _create_wald_workspace_for_ncvt(
             n_refine,
             n_threads,
         )
-    if _C_GENERAL_AVAILABLE:
+    if compute_numpy._C_GENERAL_AVAILABLE:
         return create_lmm_workspace_general(
             eigenvalues,
             uab_invariant_soa,

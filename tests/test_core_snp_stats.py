@@ -123,3 +123,40 @@ def test_filter_snp_stats_applies_hwe_counts():
 
     np.testing.assert_array_equal(selection.indices, [0])
     assert selection.n_hwe_removed == 1
+
+
+@pytest.mark.tier0
+def test_filter_snp_stats_rejects_short_global_mask():
+    stats = SnpStats(
+        col_means=np.ones(4),
+        miss_counts=np.zeros(4, dtype=np.intp),
+        col_vars=np.ones(4),
+        n_samples=10,
+        global_indices=np.array([0, 1, 2, 5]),
+    )
+
+    with pytest.raises(ValueError, match="restrict_global_mask is too short"):
+        filter_snp_stats(
+            stats,
+            SnpFilterSpec(
+                maf_threshold=0.0,
+                miss_threshold=1.0,
+                restrict_global_mask=np.ones(3, dtype=bool),
+            ),
+        )
+
+
+@pytest.mark.tier0
+def test_filter_snp_stats_hwe_threshold_requires_hwe_counts():
+    stats = SnpStats(
+        col_means=np.array([1.0, 1.0]),
+        miss_counts=np.array([0, 0]),
+        col_vars=np.array([1.0, 1.0]),
+        n_samples=100,
+    )
+
+    with pytest.raises(ValueError, match="hwe_threshold requires HWE counts"):
+        filter_snp_stats(
+            stats,
+            SnpFilterSpec(maf_threshold=0.0, miss_threshold=1.0, hwe_threshold=0.001),
+        )

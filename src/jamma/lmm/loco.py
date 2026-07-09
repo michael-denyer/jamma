@@ -111,6 +111,41 @@ def _collect_chr_snp_stats(
     )
 
 
+def _chr_snp_stats_for_loco(
+    snp_stats_cache: SnpStatsCache | None,
+    bed_path: Path,
+    chr_snp_indices: np.ndarray,
+    valid_indices: np.ndarray,
+    *,
+    all_samples_valid: bool,
+    col_chunk_size: int,
+) -> SnpStats:
+    """Return per-chromosome SNP stats on the basis GEMMA uses.
+
+    GEMMA computes each SNP's genotype mean/MAF and imputes missing genotypes over
+    the *analysed* individuals only (``src/lmm.cpp`` ``AnalyzePlink``:
+    ``x_mean /= (ni_test - n_miss)``, then missing genotype ``-> x_mean``). The
+    all-sample statistics cached during kinship PASS 1 therefore match GEMMA only
+    when every sample is analysed; when some phenotypes/covariates are missing the
+    all-sample mean differs from the analysed-sample mean and would bias both the
+    filter/AF and the missing-genotype imputation in PASS 2.
+
+    So reuse the cache only when ``all_samples_valid`` (a free, exact match that
+    avoids a per-chromosome BED re-read); otherwise recompute over
+    ``valid_indices``, which is exactly what the non-cache / eigen-cache path does.
+    """
+    if snp_stats_cache is not None and all_samples_valid:
+        if snp_stats_cache.sample_scope != "all_samples":
+            raise ValueError(
+                "LOCO SNP stats cache must use all-sample statistics; "
+                f"got sample_scope={snp_stats_cache.sample_scope!r}"
+            )
+        return snp_stats_cache.take(chr_snp_indices)
+    return _collect_chr_snp_stats(
+        bed_path, chr_snp_indices, valid_indices, col_chunk_size
+    )
+
+
 def _warn_if_loco_stats_invalid(stats: SnpStats) -> None:
     if stats.n_unexpected > 0:
         logger.warning(
@@ -713,21 +748,17 @@ def _loco_chr_common(
     valid_indices = np.where(valid_mask)[0]
 
     # === PASS 1: Chunked SNP statistics + filtering ===
-    if snp_stats_cache is not None:
-        if snp_stats_cache.sample_scope != "all_samples":
-            raise ValueError(
-                "LOCO SNP stats cache must use all-sample statistics; "
-                f"got sample_scope={snp_stats_cache.sample_scope!r}"
-            )
-        # Use cached global stats, sliced to this chromosome.
-        # Stats were computed over ALL samples during kinship PASS 1.
-        # Used for filtering only (MAF, missing rate, monomorphism) -- the
-        # actual genotype data is read fresh in PASS 2 using valid_indices.
-        chr_stats = snp_stats_cache.take(chr_snp_indices)
-    else:
-        chr_stats = _collect_chr_snp_stats(
-            bed_path, chr_snp_indices, valid_indices, col_chunk_size
-        )
+    # Reuse the all-sample kinship-PASS-1 cache only when every sample is analysed;
+    # otherwise recompute over the analysed samples to match GEMMA (which computes
+    # SNP mean/MAF and imputes missing genotypes over analysed individuals only).
+    chr_stats = _chr_snp_stats_for_loco(
+        snp_stats_cache,
+        bed_path,
+        chr_snp_indices,
+        valid_indices,
+        all_samples_valid=bool(valid_mask.all()),
+        col_chunk_size=col_chunk_size,
+    )
 
     _warn_if_loco_stats_invalid(chr_stats)
     snp_selection = filter_snp_stats(

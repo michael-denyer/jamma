@@ -97,13 +97,18 @@ NUMPY_GEMMA_TOLERANCES = ToleranceConfig(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier1
+@pytest.mark.tier0
 def test_shared_lmm_chunk_runner_avoids_transposed_u_copy_in_jlinalg_dgemm():
     """Hot path must use transa='T', not pass U.T into jlinalg.dgemm.
 
     jlinalg's C binding copies non-contiguous inputs to C-contiguous buffers.
     Passing U.T would therefore materialize an O(n^2) copy of the eigenvector
     matrix inside the shared LMM chunk loop used by batch, streaming, and LOCO.
+
+    Structural (AST) guard, kept at tier0 per TESTING.md §2.4: it pins a
+    performance invariant that no behavior test can catch — a transposed copy
+    changes speed, not results — by asserting on parsed source, so it stays a
+    fast, dependency-free check.
     """
     source = (
         Path(__file__).parent.parent / "src" / "jamma" / "lmm" / "chunk_runner_numpy.py"
@@ -154,32 +159,6 @@ def test_shared_lmm_chunk_runner_avoids_transposed_u_copy_in_jlinalg_dgemm():
             )
 
     assert saw_transa_t
-
-
-@pytest.mark.tier1
-def test_streaming_runner_imports_only_shared_runner_api():
-    """Streaming orchestration must not reach into runner_numpy private helpers."""
-    source = (
-        Path(__file__).parent.parent
-        / "src"
-        / "jamma"
-        / "lmm"
-        / "runner_numpy_streaming.py"
-    ).read_text()
-    tree = ast.parse(source)
-
-    shared_imports = set()
-    runner_numpy_imports = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom):
-            continue
-        if node.module == "jamma.lmm.chunk_runner_numpy":
-            shared_imports.update(alias.name for alias in node.names)
-        if node.module == "jamma.lmm.runner_numpy":
-            runner_numpy_imports.update(alias.name for alias in node.names)
-
-    assert shared_imports == {"RawLmmChunk", "run_lmm_chunk_source_numpy"}
-    assert runner_numpy_imports == set()
 
 
 @pytest.fixture

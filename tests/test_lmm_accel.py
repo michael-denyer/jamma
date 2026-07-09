@@ -5551,7 +5551,7 @@ def test_runner_fused_score_chunk_size():
 
     from unittest.mock import patch
 
-    with patch("jamma.lmm.chunk_sizing._C_SCORE_FUSED_AVAILABLE", False):
+    with patch("jamma.lmm.compute_numpy._C_SCORE_FUSED_AVAILABLE", False):
         chunk_split = compute_chunk_size_numpy(
             n_samples,
             n_filtered,
@@ -5586,7 +5586,7 @@ def test_runner_fused_lrt_chunk_size():
 
     from unittest.mock import patch
 
-    with patch("jamma.lmm.chunk_sizing._C_LRT_FUSED_AVAILABLE", False):
+    with patch("jamma.lmm.compute_numpy._C_LRT_FUSED_AVAILABLE", False):
         chunk_split = compute_chunk_size_numpy(
             n_samples,
             n_filtered,

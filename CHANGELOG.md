@@ -28,6 +28,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   factories in `jamma.lmm.results` instead of inlining byte-identical closures.
 - Removed the dead `fused_mode4` parameter from `compute_chunk_size_numpy`
   (the body never read it).
+- **LOCO now runs through the shared C kernels at `n_refine=20`** (previously
+  pure-NumPy at `n_refine=10`). Per-SNP `logl_H1`/`lambda` diagnostics shift
+  slightly versus 5.4.1 as a result; p-values, effect sizes, and significance
+  calls are unchanged, and GEMMA parity holds within the calibrated lambda
+  tolerance.
+- **Single source of truth for C-availability flags**: `chunk_sizing`,
+  `chunk_workspaces`, and `chunk_runner_numpy` read the `_C_*` capability flags
+  live from `compute_numpy` instead of snapshotting them at import, so
+  sizing/workspace decisions cannot drift from the dispatch decision.
+
+### Fixed
+
+- **LOCO SNP statistics basis with missing phenotypes**: when some
+  phenotypes/covariates are missing (analysed != all samples), LOCO now computes
+  each chromosome's SNP mean/MAF, reported allele frequency, and missing-genotype
+  imputation over the *analysed* samples — matching GEMMA (`src/lmm.cpp`, which
+  averages and imputes over analysed individuals only) — instead of reusing the
+  all-sample statistics cached during the kinship pass. The all-sample cache is
+  still reused when every sample is analysed (identical result, no BED re-read).
+  Previously the cached path and the non-cache / eigen-cache path could report
+  different allele frequencies for the same run (and, with missing genotypes,
+  different effect estimates).
+- **`LmmDispatch` rejects impossible flag combinations** at construction, so an
+  invalid dispatch state fails fast instead of silently dispatching to the wrong
+  kernel.
+
+### Removed
+
+- Deleted the unused `write_streaming_chunk` helper from `jamma.lmm.results`
+  (superseded by the shared per-chunk sink and inline diagnostics; only tests
+  referenced it).
 
 ## [5.4.1] - 2026-06-10
 

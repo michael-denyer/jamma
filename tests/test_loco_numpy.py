@@ -382,6 +382,220 @@ def test_loco_numpy_multipass_equivalence():
 
 
 @pytest.mark.tier1
+def test_loco_numpy_covariates_threaded_and_effective():
+    """LOCO threads a covariate matrix (n_cvt=2) through per-chromosome UtW.
+
+    No GEMMA covariate-LOCO reference exists, so this is a wiring/behavioural
+    check rather than exact parity: adding a real covariate column must
+    (a) leave the tested SNP set unchanged (covariates don't affect
+    genotype-based filtering), (b) yield finite beta/se/p for every SNP, and
+    (c) change the fit versus the intercept-only run — a covariate that was
+    silently dropped or wrongly subset in LOCO's per-chromosome covariate handling
+    would otherwise leave results identical.
+    """
+    if not _LOCO_BFILE.with_suffix(".bed").exists():
+        pytest.skip("gemma_loco fixture not available")
+
+    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+    n = phenotypes.shape[0]
+    rng = np.random.default_rng(0)
+    # First column is the intercept (required); second is a real covariate.
+    covariates = np.column_stack([np.ones(n), rng.standard_normal(n)])
+
+    baseline = run_lmm_loco(
+        bed_path=_LOCO_BFILE,
+        phenotypes=phenotypes,
+        check_memory=False,
+        show_progress=False,
+    )
+    with_covar = run_lmm_loco(
+        bed_path=_LOCO_BFILE,
+        phenotypes=phenotypes,
+        covariates=covariates,
+        check_memory=False,
+        show_progress=False,
+    )
+
+    assert with_covar.n_tested == baseline.n_tested > 0
+    assert len(with_covar.associations) == len(baseline.associations)
+
+    any_beta_differs = False
+    for base_r, cov_r in zip(
+        baseline.associations, with_covar.associations, strict=True
+    ):
+        assert base_r.rs == cov_r.rs  # same SNP set and order
+        assert np.isfinite(cov_r.beta)
+        assert np.isfinite(cov_r.se)
+        assert cov_r.se > 0
+        assert np.isfinite(cov_r.p_wald)
+        if abs(cov_r.beta - base_r.beta) > 1e-8:
+            any_beta_differs = True
+
+    assert any_beta_differs, (
+        "covariate had no effect on any SNP — it was likely dropped or "
+        "wrongly wired in LOCO's per-chromosome covariate handling"
+    )
+
+
+def _all_sample_cache(bed_path):
+    """Build an all-sample SnpStatsCache over every SNP, like kinship PASS 1."""
+    from bed_reader import open_bed
+
+    from jamma.core.snp_stats import SnpStatsCache, collect_snp_stats_from_chunks
+
+    meta = get_plink_metadata(bed_path)
+    n_total, n_snps = meta["n_samples"], meta["n_snps"]
+    with open_bed(Path(f"{bed_path}.bed")) as bed:
+        geno_all = bed.read(index=np.s_[:, :], dtype=np.float64)
+    stats = collect_snp_stats_from_chunks(
+        [(geno_all, 0, n_snps)],
+        n_snps=n_snps,
+        n_samples=n_total,
+        global_indices=np.arange(n_snps),
+        sample_scope="all_samples",
+    )
+    return SnpStatsCache(
+        col_means=stats.col_means,
+        miss_counts=stats.miss_counts,
+        col_vars=stats.col_vars,
+        n_samples=n_total,
+        n_unexpected=stats.n_unexpected,
+        hwe_counts=stats.hwe_counts,
+        global_indices=stats.global_indices,
+        sample_scope="all_samples",
+    )
+
+
+@pytest.mark.tier1
+def test_chr_snp_stats_for_loco_bypasses_all_sample_cache_when_analyzed_subset():
+    """With a missing phenotype (analyzed != all), LOCO must recompute SNP stats
+    over the analyzed samples and NOT reuse the all-sample kinship-pass cache.
+
+    GEMMA computes each SNP's mean/MAF and imputes over analyzed individuals only,
+    so the all-sample cache is the wrong basis here. Guards both approaches: the
+    cached approach must fall through to the valid-sample recompute, and the
+    non-cache approach must already use it.
+    """
+    if not _LOCO_BFILE.with_suffix(".bed").exists():
+        pytest.skip("gemma_loco fixture not available")
+
+    from jamma.lmm.loco import _chr_snp_stats_for_loco, _collect_chr_snp_stats
+
+    meta = get_plink_metadata(_LOCO_BFILE)
+    n_total = meta["n_samples"]
+    chrs = np.asarray(meta["chromosome"])
+    chr1 = np.where(chrs == chrs[0])[0]  # first chromosome's global SNP indices
+
+    cache = _all_sample_cache(_LOCO_BFILE)
+
+    # Drop 30 samples -> analyzed != all.
+    valid_mask = np.ones(n_total, dtype=bool)
+    valid_mask[:30] = False
+    valid_indices = np.where(valid_mask)[0]
+
+    valid_stats = _collect_chr_snp_stats(_LOCO_BFILE, chr1, valid_indices, 5000)
+    all_sample_chr1 = cache.take(chr1)
+
+    # Cached approach, analyzed != all: must return the valid-sample recompute...
+    got = _chr_snp_stats_for_loco(
+        cache,
+        _LOCO_BFILE,
+        chr1,
+        valid_indices,
+        all_samples_valid=False,
+        col_chunk_size=5000,
+    )
+    np.testing.assert_allclose(got.col_means, valid_stats.col_means)
+    # ...and that must differ from the all-sample cache (the bypass matters).
+    assert np.max(np.abs(got.col_means - all_sample_chr1.col_means)) > 1e-6
+
+    # Cached approach, analyzed == all: reuse the cache (free, exact match).
+    got_all = _chr_snp_stats_for_loco(
+        cache,
+        _LOCO_BFILE,
+        chr1,
+        np.arange(n_total),
+        all_samples_valid=True,
+        col_chunk_size=5000,
+    )
+    np.testing.assert_allclose(got_all.col_means, all_sample_chr1.col_means)
+
+    # Non-cache approach always uses the analyzed samples.
+    got_none = _chr_snp_stats_for_loco(
+        None,
+        _LOCO_BFILE,
+        chr1,
+        valid_indices,
+        all_samples_valid=False,
+        col_chunk_size=5000,
+    )
+    np.testing.assert_allclose(got_none.col_means, valid_stats.col_means)
+
+
+@pytest.mark.tier1
+def test_loco_missing_phenotype_cache_and_noncache_agree():
+    """With missing phenotypes, the cached and non-cache LOCO paths must produce
+    identical association results — both on the analyzed-sample basis (GEMMA's).
+
+    Before the cache was gated to analyzed==all, the cache path used all-sample
+    stats and diverged from the non-cache path; this pins them together so the
+    divergence cannot return in either approach.
+    """
+    if not _LOCO_BFILE.with_suffix(".bed").exists():
+        pytest.skip("gemma_loco fixture not available")
+
+    from unittest.mock import patch
+
+    import jamma.lmm.loco as loco_module
+    from jamma.kinship import compute_loco_kinship_streaming
+
+    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+    pheno = phenotypes.copy()
+    pheno[::9] = np.nan  # drop ~12 samples -> analyzed != all
+
+    loco_cache = run_lmm_loco(
+        bed_path=_LOCO_BFILE,
+        phenotypes=pheno,
+        check_memory=False,
+        show_progress=False,
+    )
+
+    original = compute_loco_kinship_streaming
+
+    def _null_cache(*args, **kwargs):
+        # Force the non-cache path: keep the kinship iterator, drop the cache.
+        result = original(*args, **kwargs)
+        if isinstance(result, tuple):
+            loco_iter, _cache = result
+            return loco_iter, None
+        return result
+
+    with patch.object(
+        loco_module, "compute_loco_kinship_streaming", side_effect=_null_cache
+    ):
+        loco_nocache = run_lmm_loco(
+            bed_path=_LOCO_BFILE,
+            phenotypes=pheno,
+            check_memory=False,
+            show_progress=False,
+        )
+
+    assert loco_cache.n_tested == loco_nocache.n_tested > 0
+    for r_cache, r_nocache in zip(
+        loco_cache.associations, loco_nocache.associations, strict=True
+    ):
+        assert r_cache.rs == r_nocache.rs
+        # af is the direct fingerprint of the stats basis (all-sample vs analysed);
+        # on a fixture with no missing genotypes it is where the bug shows.
+        np.testing.assert_allclose(r_cache.af, r_nocache.af, rtol=1e-9, atol=1e-12)
+        np.testing.assert_allclose(r_cache.beta, r_nocache.beta, rtol=1e-9, atol=1e-12)
+        np.testing.assert_allclose(r_cache.se, r_nocache.se, rtol=1e-9, atol=1e-12)
+        np.testing.assert_allclose(
+            r_cache.p_wald, r_nocache.p_wald, rtol=1e-9, atol=1e-12
+        )
+
+
+@pytest.mark.tier1
 def test_loco_numpy_valid_sample_subsetting():
     """K_loco is computed at valid-sample size when valid_indices is provided.
 

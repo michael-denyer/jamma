@@ -33,6 +33,29 @@ class LmmDispatch:
     use_fused_lrt: bool
     use_fused_lrt_ws: bool
 
+    def __post_init__(self) -> None:
+        """Enforce the flag implications ``select_dispatch_path`` guarantees.
+
+        The sanctioned producer never emits an impossible combination, but a
+        hand-constructed instance could; the per-chunk dispatch then trusts these
+        flags, so reject illegal states at construction rather than dispatch
+        incorrectly.
+        """
+        if self.use_fused and not self.use_split:
+            raise ValueError("use_fused requires use_split")
+        if self.use_fused_general and not self.use_fused:
+            raise ValueError("use_fused_general requires use_fused")
+        if self.use_fused_mode4 and not self.use_split:
+            raise ValueError("use_fused_mode4 requires use_split")
+        if (self.use_fused_score or self.use_fused_score_ws) and not self.use_split:
+            raise ValueError("fused Score paths require use_split")
+        if (self.use_fused_lrt or self.use_fused_lrt_ws) and not self.use_split:
+            raise ValueError("fused LRT paths require use_split")
+        if self.use_fused_score and self.use_fused_score_ws:
+            raise ValueError("use_fused_score excludes use_fused_score_ws")
+        if self.use_fused_lrt and self.use_fused_lrt_ws:
+            raise ValueError("use_fused_lrt excludes use_fused_lrt_ws")
+
     @property
     def uses_fused_score_or_lrt(self) -> bool:
         """True when a fused Score/LRT path (mode 2/3) is active.

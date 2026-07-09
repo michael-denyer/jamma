@@ -10,7 +10,7 @@ before the chunk loop and consulted per chunk. Split out from
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, NamedTuple, cast
+from typing import Any, NamedTuple, assert_never, cast
 
 import numpy as np
 
@@ -26,7 +26,7 @@ from jamma.lmm.compute_numpy import (
     compute_wald_general_c_ws,
     compute_wald_split_c_ws,
 )
-from jamma.lmm.dispatch import LmmDispatch
+from jamma.lmm.dispatch import DispatchPath
 
 _ALL_RESULT_KEYS = (
     "lambdas",
@@ -243,7 +243,7 @@ class _ComputeContext(NamedTuple):
     streaming compute paths).
     """
 
-    dispatch: LmmDispatch
+    dispatch: DispatchPath
     lmm_mode: LmmMode
     n_cvt: int
     lmm_workspace: object | None
@@ -271,127 +271,133 @@ def _dispatch_compute(
 ) -> dict[str, Any]:
     """Dispatch one prepared chunk to the active C kernel and return its result.
 
-    The kernel-selection ladder (6 branches, 7 named paths): fused-general /
-    fused / fused-Score-WS / fused-LRT-WS / fused-Score / fused-LRT / SoA-split.
-    ``chunk_input`` is utg_t
-    for the fused paths and the varying-Uab SoA array for the split path; the
-    active path is fixed by ``ctx.dispatch``. The caller owns BLAS-thread scoping,
-    input preparation, and the non-split NumPy fallback.
+    Matches on ``ctx.dispatch`` (a ``DispatchPath``) to select the C kernel.
+    ``chunk_input`` is utg_t for the fused paths and the varying-Uab SoA array
+    for the split paths. The caller owns BLAS-thread scoping, input preparation,
+    and the non-split NumPy fallback (``NUMPY_FALLBACK`` never reaches here).
     """
-    d = ctx.dispatch
-    if d.use_fused:
-        if d.use_fused_general:
-            if ctx.lmm_mode == 4:
-                fused_fn = compute_mode4_fused_general_c_ws
-                op_label = "Fused general mode-4 Uab dispatch"
+    match ctx.dispatch:
+        case DispatchPath.FUSED | DispatchPath.FUSED_GENERAL:
+            if ctx.dispatch is DispatchPath.FUSED_GENERAL:
+                if ctx.lmm_mode == 4:
+                    fused_fn = compute_mode4_fused_general_c_ws
+                    op_label = "Fused general mode-4 Uab dispatch"
+                else:
+                    fused_fn = compute_wald_fused_general_c_ws
+                    op_label = "Fused general Uab dispatch"
             else:
-                fused_fn = compute_wald_fused_general_c_ws
-                op_label = "Fused general Uab dispatch"
-        else:
-            fused_fn = (
-                compute_mode4_fused_c_ws
-                if ctx.lmm_mode == 4
-                else compute_wald_fused_c_ws
+                fused_fn = (
+                    compute_mode4_fused_c_ws
+                    if ctx.lmm_mode == 4
+                    else compute_wald_fused_c_ws
+                )
+                op_label = "Fused Uab dispatch"
+            return _guarded_compute(
+                fused_fn,
+                ctx.lmm_workspace,
+                chunk_input,
+                n_threads,
+                operation=op_label,
+                write_offset=write_offset,
+                n_filtered=ctx.n_filtered,
             )
-            op_label = "Fused Uab dispatch"
-        return _guarded_compute(
-            fused_fn,
-            ctx.lmm_workspace,
-            chunk_input,
-            n_threads,
-            operation=op_label,
-            write_offset=write_offset,
-            n_filtered=ctx.n_filtered,
-        )
-    if d.use_fused_score_ws:
-        from jamma.lmm.compute_numpy import _compute_score_fused_ws_c
+        case DispatchPath.FUSED_SCORE_WS:
+            from jamma.lmm.compute_numpy import _compute_score_fused_ws_c
 
-        if _compute_score_fused_ws_c is None:
-            raise RuntimeError("fused Score workspace dispatch requires C support")
-        return _guarded_compute(
-            _compute_score_fused_ws_c,
-            ctx.score_fused_workspace,
-            chunk_input,
-            n_threads,
-            operation="Fused Score WS dispatch",
-            write_offset=write_offset,
-            n_filtered=ctx.n_filtered,
-        )
-    if d.use_fused_lrt_ws:
-        from jamma.lmm.compute_numpy import _compute_lrt_fused_ws_c
+            if _compute_score_fused_ws_c is None:
+                raise RuntimeError("fused Score workspace dispatch requires C support")
+            return _guarded_compute(
+                _compute_score_fused_ws_c,
+                ctx.score_fused_workspace,
+                chunk_input,
+                n_threads,
+                operation="Fused Score WS dispatch",
+                write_offset=write_offset,
+                n_filtered=ctx.n_filtered,
+            )
+        case DispatchPath.FUSED_LRT_WS:
+            from jamma.lmm.compute_numpy import _compute_lrt_fused_ws_c
 
-        if _compute_lrt_fused_ws_c is None:
-            raise RuntimeError("fused LRT workspace dispatch requires C support")
-        return _guarded_compute(
-            _compute_lrt_fused_ws_c,
-            ctx.lrt_fused_workspace,
-            chunk_input,
-            n_threads,
-            operation="Fused LRT WS dispatch",
-            write_offset=write_offset,
-            n_filtered=ctx.n_filtered,
-        )
-    if d.use_fused_score:
-        from jamma.lmm.compute_numpy import _compute_score_fused_c
+            if _compute_lrt_fused_ws_c is None:
+                raise RuntimeError("fused LRT workspace dispatch requires C support")
+            return _guarded_compute(
+                _compute_lrt_fused_ws_c,
+                ctx.lrt_fused_workspace,
+                chunk_input,
+                n_threads,
+                operation="Fused LRT WS dispatch",
+                write_offset=write_offset,
+                n_filtered=ctx.n_filtered,
+            )
+        case DispatchPath.FUSED_SCORE:
+            from jamma.lmm.compute_numpy import _compute_score_fused_c
 
-        if _compute_score_fused_c is None:
-            raise RuntimeError("fused Score dispatch requires C support")
-        return _guarded_compute(
-            _compute_score_fused_c,
-            chunk_input,
-            ctx.w,
-            ctx.Uty,
-            ctx.Hi_eval_null,
-            ctx.uab_invariant_soa,
-            ctx.eigenvalues_np,
-            ctx.n_samples,
-            n_threads,
-            operation="Fused Score dispatch",
-            write_offset=write_offset,
-            n_filtered=ctx.n_filtered,
-        )
-    if d.use_fused_lrt:
-        from jamma.lmm.compute_numpy import _compute_lrt_fused_c
+            if _compute_score_fused_c is None:
+                raise RuntimeError("fused Score dispatch requires C support")
+            return _guarded_compute(
+                _compute_score_fused_c,
+                chunk_input,
+                ctx.w,
+                ctx.Uty,
+                ctx.Hi_eval_null,
+                ctx.uab_invariant_soa,
+                ctx.eigenvalues_np,
+                ctx.n_samples,
+                n_threads,
+                operation="Fused Score dispatch",
+                write_offset=write_offset,
+                n_filtered=ctx.n_filtered,
+            )
+        case DispatchPath.FUSED_LRT:
+            from jamma.lmm.compute_numpy import _compute_lrt_fused_c
 
-        if _compute_lrt_fused_c is None:
-            raise RuntimeError("fused LRT dispatch requires C support")
-        return _guarded_compute(
-            _compute_lrt_fused_c,
-            chunk_input,
-            ctx.w,
-            ctx.Uty,
-            ctx.eigenvalues_np,
-            ctx.uab_invariant_soa,
-            ctx.n_samples,
-            ctx.l_min,
-            ctx.l_max,
-            ctx.n_grid,
-            ctx.n_refine,
-            ctx.logl_H0,
-            n_threads,
-            operation="Fused LRT dispatch",
-            write_offset=write_offset,
-            n_filtered=ctx.n_filtered,
-        )
-    # SoA split: chunk_input is the varying-Uab SoA array.
-    return _guarded_compute(
-        dispatch_soa_split,
-        ctx.lmm_mode,
-        d.use_fused_mode4,
-        ctx.lmm_workspace,
-        ctx.n_cvt,
-        ctx.eigenvalues_np,
-        chunk_input,
-        ctx.uab_invariant_soa,
-        ctx.n_samples,
-        Hi_eval_null=ctx.Hi_eval_null,
-        l_min=ctx.l_min,
-        l_max=ctx.l_max,
-        n_grid=ctx.n_grid,
-        n_refine=ctx.n_refine,
-        logl_H0=ctx.logl_H0,
-        n_threads=n_threads,
-        operation="SoA split dispatch",
-        write_offset=write_offset,
-        n_filtered=ctx.n_filtered,
-    )
+            if _compute_lrt_fused_c is None:
+                raise RuntimeError("fused LRT dispatch requires C support")
+            return _guarded_compute(
+                _compute_lrt_fused_c,
+                chunk_input,
+                ctx.w,
+                ctx.Uty,
+                ctx.eigenvalues_np,
+                ctx.uab_invariant_soa,
+                ctx.n_samples,
+                ctx.l_min,
+                ctx.l_max,
+                ctx.n_grid,
+                ctx.n_refine,
+                ctx.logl_H0,
+                n_threads,
+                operation="Fused LRT dispatch",
+                write_offset=write_offset,
+                n_filtered=ctx.n_filtered,
+            )
+        case DispatchPath.SOA_SPLIT | DispatchPath.SOA_SPLIT_MODE4:
+            # chunk_input is the varying-Uab SoA array.
+            return _guarded_compute(
+                dispatch_soa_split,
+                ctx.lmm_mode,
+                ctx.dispatch is DispatchPath.SOA_SPLIT_MODE4,
+                ctx.lmm_workspace,
+                ctx.n_cvt,
+                ctx.eigenvalues_np,
+                chunk_input,
+                ctx.uab_invariant_soa,
+                ctx.n_samples,
+                Hi_eval_null=ctx.Hi_eval_null,
+                l_min=ctx.l_min,
+                l_max=ctx.l_max,
+                n_grid=ctx.n_grid,
+                n_refine=ctx.n_refine,
+                logl_H0=ctx.logl_H0,
+                n_threads=n_threads,
+                operation="SoA split dispatch",
+                write_offset=write_offset,
+                n_filtered=ctx.n_filtered,
+            )
+        case DispatchPath.NUMPY_FALLBACK:
+            raise AssertionError(
+                "_dispatch_compute must not be called for NUMPY_FALLBACK; "
+                "the chunk runner gates on use_split before calling this."
+            )
+        case _:
+            assert_never(ctx.dispatch)

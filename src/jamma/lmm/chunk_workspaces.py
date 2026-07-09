@@ -9,7 +9,7 @@ per-chunk dispatch and the loop driver.
 
 from __future__ import annotations
 
-from typing import NamedTuple, cast
+from typing import NamedTuple, assert_never, cast
 
 import numpy as np
 from loguru import logger
@@ -25,7 +25,7 @@ from jamma.lmm.compute_numpy import (
     create_lmm_workspace_mode4_fused,
     create_lmm_workspace_mode4_fused_general,
 )
-from jamma.lmm.dispatch import LmmDispatch
+from jamma.lmm.dispatch import DispatchPath
 
 
 def _create_wald_workspace_for_ncvt(
@@ -101,7 +101,7 @@ class _Workspaces(NamedTuple):
 
 
 def _create_workspaces(
-    dispatch: LmmDispatch,
+    dispatch: DispatchPath,
     lmm_mode: LmmMode,
     n_cvt: int,
     eigenvalues_np: np.ndarray,
@@ -134,8 +134,17 @@ def _create_workspaces(
         raise RuntimeError("split LMM dispatch requires invariant Uab columns")
     uab_invariant = cast(np.ndarray, uab_invariant_soa)
 
-    if dispatch.use_split and lmm_mode in (1, 4):
-        if dispatch.use_fused_general:
+    # One authoritative decode. The Wald-family workspace (modes 1/4) and the
+    # Score/LRT workspaces (modes 3/2) are mutually exclusive by mode, so each
+    # path builds at most one. Score: null-model dot products and F-distribution
+    # constants. LRT: lambda grids and per-thread scratch. All persist across
+    # every chunk, eliminating per-chunk malloc/free and precomputation.
+    lmm_workspace = None
+    score_fused_workspace = None
+    lrt_fused_workspace = None
+
+    match dispatch:
+        case DispatchPath.FUSED_GENERAL:
             # Fused general workspace: UtW + Uty for on-the-fly dot products.
             # Mode 4 extends with null-model fields for MLE/LRT.
             from jamma.lmm.likelihood import build_pab_table_for_c
@@ -190,37 +199,37 @@ def _create_workspaces(
                     n_cvt=n_cvt,
                     **pab_kwargs,
                 )
-        elif dispatch.use_fused and lmm_mode == 4:
+        case DispatchPath.FUSED:
             w_fused = UtW[:, 0].copy()
-            lmm_workspace = create_lmm_workspace_mode4_fused(
-                eigenvalues_np,
-                uab_invariant,
-                w_fused,
-                Uty,
-                n_samples,
-                l_min,
-                l_max,
-                n_grid,
-                n_refine,
-                n_threads,
-                hi_eval_null=Hi_eval_null,
-                logl_H0=logl_H0,
-            )
-        elif dispatch.use_fused:
-            w_fused = UtW[:, 0].copy()
-            lmm_workspace = create_lmm_workspace_fused(
-                eigenvalues_np,
-                uab_invariant,
-                w_fused,
-                Uty,
-                n_samples,
-                l_min,
-                l_max,
-                n_grid,
-                n_refine,
-                n_threads,
-            )
-        elif dispatch.use_fused_mode4:
+            if lmm_mode == 4:
+                lmm_workspace = create_lmm_workspace_mode4_fused(
+                    eigenvalues_np,
+                    uab_invariant,
+                    w_fused,
+                    Uty,
+                    n_samples,
+                    l_min,
+                    l_max,
+                    n_grid,
+                    n_refine,
+                    n_threads,
+                    hi_eval_null=Hi_eval_null,
+                    logl_H0=logl_H0,
+                )
+            else:
+                lmm_workspace = create_lmm_workspace_fused(
+                    eigenvalues_np,
+                    uab_invariant,
+                    w_fused,
+                    Uty,
+                    n_samples,
+                    l_min,
+                    l_max,
+                    n_grid,
+                    n_refine,
+                    n_threads,
+                )
+        case DispatchPath.SOA_SPLIT_MODE4:
             lmm_workspace = create_lmm_workspace_mode4(
                 eigenvalues_np,
                 uab_invariant,
@@ -233,9 +242,41 @@ def _create_workspaces(
                 Hi_eval_null,
                 logl_H0,
             )
-        else:
-            lmm_workspace = _create_wald_workspace_for_ncvt(
-                n_cvt,
+        case DispatchPath.SOA_SPLIT:
+            if lmm_mode in (1, 4):
+                lmm_workspace = _create_wald_workspace_for_ncvt(
+                    n_cvt,
+                    eigenvalues_np,
+                    uab_invariant,
+                    n_samples,
+                    l_min,
+                    l_max,
+                    n_grid,
+                    n_refine,
+                    n_threads,
+                )
+        case DispatchPath.FUSED_SCORE_WS:
+            from jamma.lmm.compute_numpy import _create_workspace_score_fused_c
+
+            if _create_workspace_score_fused_c is None:
+                raise RuntimeError("fused Score workspace dispatch requires C support")
+            score_fused_workspace = _create_workspace_score_fused_c(
+                w,
+                Uty,
+                Hi_eval_null,
+                eigenvalues_np,
+                uab_invariant,
+                n_samples,
+                n_threads,
+            )
+        case DispatchPath.FUSED_LRT_WS:
+            from jamma.lmm.compute_numpy import _create_workspace_lrt_fused_c
+
+            if _create_workspace_lrt_fused_c is None:
+                raise RuntimeError("fused LRT workspace dispatch requires C support")
+            lrt_fused_workspace = _create_workspace_lrt_fused_c(
+                w,
+                Uty,
                 eigenvalues_np,
                 uab_invariant,
                 n_samples,
@@ -243,49 +284,18 @@ def _create_workspaces(
                 l_max,
                 n_grid,
                 n_refine,
+                logl_H0,
                 n_threads,
             )
-    else:
-        lmm_workspace = None
-
-    # Score/LRT workspaces (persistent across all chunks). Score: null-model dot
-    # products and F-distribution constants. LRT: lambda grids and per-thread
-    # scratch buffers. Both eliminate per-chunk malloc/free and precomputation.
-    score_fused_workspace = None
-    lrt_fused_workspace = None
-
-    if dispatch.use_fused_score_ws:
-        from jamma.lmm.compute_numpy import _create_workspace_score_fused_c
-
-        if _create_workspace_score_fused_c is None:
-            raise RuntimeError("fused Score workspace dispatch requires C support")
-        score_fused_workspace = _create_workspace_score_fused_c(
-            w,
-            Uty,
-            Hi_eval_null,
-            eigenvalues_np,
-            uab_invariant,
-            n_samples,
-            n_threads,
-        )
-
-    if dispatch.use_fused_lrt_ws:
-        from jamma.lmm.compute_numpy import _create_workspace_lrt_fused_c
-
-        if _create_workspace_lrt_fused_c is None:
-            raise RuntimeError("fused LRT workspace dispatch requires C support")
-        lrt_fused_workspace = _create_workspace_lrt_fused_c(
-            w,
-            Uty,
-            eigenvalues_np,
-            uab_invariant,
-            n_samples,
-            l_min,
-            l_max,
-            n_grid,
-            n_refine,
-            logl_H0,
-            n_threads,
-        )
+        case (
+            DispatchPath.FUSED_SCORE
+            | DispatchPath.FUSED_LRT
+            | DispatchPath.NUMPY_FALLBACK
+        ):
+            # Stateless fused Score/LRT and the NumPy fallback hold no persistent
+            # workspace.
+            pass
+        case _:
+            assert_never(dispatch)
 
     return _Workspaces(lmm_workspace, score_fused_workspace, lrt_fused_workspace)

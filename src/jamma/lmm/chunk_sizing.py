@@ -10,12 +10,7 @@ from __future__ import annotations
 
 import psutil
 
-from jamma.lmm.compute_numpy import (
-    _C_FUSED_AVAILABLE,
-    _C_LRT_FUSED_AVAILABLE,
-    _C_MODE4_FUSED_AVAILABLE,
-    _C_SCORE_FUSED_AVAILABLE,
-)
+from jamma.lmm import compute_numpy
 
 # Allow large chunks — no int32 buffer constraint.
 _MAX_CHUNK = 200_000
@@ -47,8 +42,11 @@ def compute_chunk_size_numpy(
         n_cvt: Number of covariates.
         use_split: If True, use split Uab accounting instead of full Uab.
         lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All). Affects
-            memory accounting: Wald uses 4 cols/SNP (3 varying + 1 utg_t),
-            non-Wald uses 9 cols/SNP (3 varying + 6 reconstructed Uab peak).
+            memory accounting only via the fused-vs-split branch: fused paths
+            (Wald, fused Score/LRT, and mode 4 when the fused mode-4 kernel is
+            present) allocate 1 col/SNP (utg_t only); SoA-split paths allocate
+            4 cols/SNP (3 varying + 1 utg_t), with no Uab reconstruction. The
+            non-split full-Uab fallback allocates (n_cvt+3)(n_cvt+2)/2 cols/SNP.
         use_fused_general: If True, fused general path is active (n_cvt>=2);
             only utg_t is allocated (single buffer, no uab_varying_soa).
         mem_budget_bytes: Explicit per-chunk memory budget in bytes.
@@ -67,8 +65,8 @@ def compute_chunk_size_numpy(
         raise ValueError(f"pipeline_buffers must be >= 1, got {pipeline_buffers}")
 
     if use_split and n_cvt == 1:
-        if _C_FUSED_AVAILABLE and (
-            lmm_mode == 1 or (lmm_mode == 4 and _C_MODE4_FUSED_AVAILABLE)
+        if compute_numpy._C_FUSED_AVAILABLE and (
+            lmm_mode == 1 or (lmm_mode == 4 and compute_numpy._C_MODE4_FUSED_AVAILABLE)
         ):
             # Fused path: jlinalg.dgemm(chunk, U, transa="T") produces
             # C-contiguous utg_t (n_snps, n_samples) directly — single buffer.
@@ -76,10 +74,10 @@ def compute_chunk_size_numpy(
             # Mode 4 only uses fused when _C_MODE4_FUSED_AVAILABLE; otherwise
             # it falls back to split SoA which needs 4x buffers.
             bytes_per_snp = n_samples * 8
-        elif lmm_mode == 3 and _C_SCORE_FUSED_AVAILABLE:
+        elif lmm_mode == 3 and compute_numpy._C_SCORE_FUSED_AVAILABLE:
             # Fused Score: utg_t only (1 col), no uab_varying_soa.
             bytes_per_snp = n_samples * 8
-        elif lmm_mode == 2 and _C_LRT_FUSED_AVAILABLE:
+        elif lmm_mode == 2 and compute_numpy._C_LRT_FUSED_AVAILABLE:
             # Fused LRT: utg_t only (1 col), no uab_varying_soa.
             bytes_per_snp = n_samples * 8
         else:

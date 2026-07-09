@@ -382,6 +382,62 @@ def test_loco_numpy_multipass_equivalence():
 
 
 @pytest.mark.tier1
+def test_loco_numpy_covariates_threaded_and_effective():
+    """LOCO threads a covariate matrix (n_cvt=2) through per-chromosome UtW.
+
+    No GEMMA covariate-LOCO reference exists, so this is a wiring/behavioural
+    check rather than exact parity: adding a real covariate column must
+    (a) leave the tested SNP set unchanged (covariates don't affect
+    genotype-based filtering), (b) yield finite beta/se/p for every SNP, and
+    (c) change the fit versus the intercept-only run — a covariate that was
+    silently dropped or wrongly subset in LOCO's per-chromosome covariate handling
+    would otherwise leave results identical.
+    """
+    if not _LOCO_BFILE.with_suffix(".bed").exists():
+        pytest.skip("gemma_loco fixture not available")
+
+    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+    n = phenotypes.shape[0]
+    rng = np.random.default_rng(0)
+    # First column is the intercept (required); second is a real covariate.
+    covariates = np.column_stack([np.ones(n), rng.standard_normal(n)])
+
+    baseline = run_lmm_loco(
+        bed_path=_LOCO_BFILE,
+        phenotypes=phenotypes,
+        check_memory=False,
+        show_progress=False,
+    )
+    with_covar = run_lmm_loco(
+        bed_path=_LOCO_BFILE,
+        phenotypes=phenotypes,
+        covariates=covariates,
+        check_memory=False,
+        show_progress=False,
+    )
+
+    assert with_covar.n_tested == baseline.n_tested > 0
+    assert len(with_covar.associations) == len(baseline.associations)
+
+    any_beta_differs = False
+    for base_r, cov_r in zip(
+        baseline.associations, with_covar.associations, strict=True
+    ):
+        assert base_r.rs == cov_r.rs  # same SNP set and order
+        assert np.isfinite(cov_r.beta)
+        assert np.isfinite(cov_r.se)
+        assert cov_r.se > 0
+        assert np.isfinite(cov_r.p_wald)
+        if abs(cov_r.beta - base_r.beta) > 1e-8:
+            any_beta_differs = True
+
+    assert any_beta_differs, (
+        "covariate had no effect on any SNP — it was likely dropped or "
+        "wrongly wired in LOCO's per-chromosome covariate handling"
+    )
+
+
+@pytest.mark.tier1
 def test_loco_numpy_valid_sample_subsetting():
     """K_loco is computed at valid-sample size when valid_indices is provided.
 

@@ -32,6 +32,7 @@ from jamma.core.threading import (
     get_physical_core_count,
     jlinalg_threads,
 )
+from jamma.lmm import compute_numpy
 from jamma.lmm.chunk_dispatch import (
     _ComputeContext,
     _dispatch_compute,
@@ -45,8 +46,6 @@ from jamma.lmm.chunk_pipeline import (
 from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
 from jamma.lmm.chunk_workspaces import _create_workspaces
 from jamma.lmm.compute_numpy import (
-    _C_ACCEL_AVAILABLE,
-    _C_HAS_OPENMP,
     LmmMode,
     compute_lmm_chunk_numpy,
     select_current_dispatch_path,
@@ -110,6 +109,15 @@ class RawLmmChunk(NamedTuple):
 
 
 class _PreparedLmmChunk(NamedTuple):
+    """A rotated chunk ready for compute, tagged with its filtered SNP range.
+
+    ``data`` is polymorphic by dispatch path: 2-D ``utg_t`` of shape
+    ``(n_snps, n_samples)`` when ``dispatch.feeds_raw_utg`` (the fused family),
+    otherwise the 3-D varying-Uab SoA of shape ``(n_snps, n_var, n_samples)`` for
+    the SoA-split path. ``_compute_and_write`` selects the matching kernel via the
+    same ``dispatch`` flags that produced the data, so the two never disagree.
+    """
+
     data: np.ndarray
     filtered_range: LmmChunkRange
 
@@ -127,6 +135,32 @@ class LmmChunkRunStats(NamedTuple):
     chunk_size: int
     n_chunks: int
     used_pipeline: bool
+
+
+def _raise_if_systemic_nan(
+    nan_counts: dict[str, int], n_filtered: int, nan_abort_fraction: float
+) -> None:
+    """Abort when a result column is essentially all NaN.
+
+    Degenerate (monomorphic) SNPs are filtered before compute, so a result field
+    that is NaN for at least ``nan_abort_fraction`` of the ``n_filtered`` tested
+    SNPs signals a systemic failure — a non-PSD kinship matrix or an all-missing
+    phenotype — not per-SNP degeneracy. Raising here stops an all-NaN result set
+    from being written to disk and reported as a successful run.
+    """
+    if not nan_counts:
+        return
+    worst_field, worst_nan = max(nan_counts.items(), key=lambda kv: kv[1])
+    if worst_nan >= n_filtered * nan_abort_fraction:
+        raise RuntimeError(
+            f"{worst_nan}/{n_filtered} tested SNPs produced NaN {worst_field} "
+            f"(>= {nan_abort_fraction:.0%} abort threshold). This indicates a "
+            "systemic failure — a non-PSD kinship matrix or an all-missing "
+            "phenotype — not per-SNP degeneracy, since monomorphic SNPs are "
+            "filtered before compute. Refusing to emit an essentially all-NaN "
+            "result set; check kinship matrix quality and phenotype/covariate "
+            "inputs."
+        )
 
 
 def run_lmm_chunk_source_numpy(
@@ -156,6 +190,7 @@ def run_lmm_chunk_source_numpy(
     progress_label: str = "LMM association",
     lambda_warning_prefix: str = "",
     log_dispatch_choices: bool = True,
+    nan_abort_fraction: float = 1.0,
 ) -> LmmChunkRunStats:
     """Run LMM association over caller-provided raw genotype chunks.
 
@@ -165,6 +200,11 @@ def run_lmm_chunk_source_numpy(
     eigen-rotation, Uab preparation, C/Python compute dispatch, diagnostics, and
     timing. Batch and LOCO use this path so their chunk compute behavior cannot
     drift.
+
+    Raises RuntimeError if a result field is NaN for at least
+    ``nan_abort_fraction`` of tested SNPs (default 1.0 = only an entirely-NaN
+    column aborts), so a systemic failure such as a non-PSD kinship matrix
+    surfaces loudly instead of silently writing an all-NaN result file.
     """
     if n_filtered == 0:
         return LmmChunkRunStats(
@@ -244,7 +284,9 @@ def run_lmm_chunk_source_numpy(
                 f"  Processing in {n_chunks} chunks ({chunk_size:,} SNPs/chunk)"
             )
 
-    omp_threads = get_c_extension_thread_count(_C_ACCEL_AVAILABLE, _C_HAS_OPENMP)
+    omp_threads = get_c_extension_thread_count(
+        compute_numpy._C_ACCEL_AVAILABLE, compute_numpy._C_HAS_OPENMP
+    )
 
     if use_pipeline:
         logger.debug(f"Pipeline mode: overlapping rotation/compute ({n_chunks} chunks)")
@@ -294,24 +336,24 @@ def run_lmm_chunk_source_numpy(
         pipeline_omp_threads,
     )
     compute_ctx = _ComputeContext(
-        dispatch,
-        lmm_mode,
-        n_cvt,
-        lmm_workspace,
-        score_fused_workspace,
-        lrt_fused_workspace,
-        w,
-        Uty,
-        hi_eval_for_compute,
-        uab_invariant_soa,
-        eigenvalues_np,
-        n_samples,
-        l_min,
-        l_max,
-        n_grid,
-        n_refine,
-        logl_H0_for_compute,
-        n_filtered,
+        dispatch=dispatch,
+        lmm_mode=lmm_mode,
+        n_cvt=n_cvt,
+        lmm_workspace=lmm_workspace,
+        score_fused_workspace=score_fused_workspace,
+        lrt_fused_workspace=lrt_fused_workspace,
+        w=w,
+        Uty=Uty,
+        Hi_eval_null=hi_eval_for_compute,
+        uab_invariant_soa=uab_invariant_soa,
+        eigenvalues_np=eigenvalues_np,
+        n_samples=n_samples,
+        l_min=l_min,
+        l_max=l_max,
+        n_grid=n_grid,
+        n_refine=n_refine,
+        logl_H0=logl_H0_for_compute,
+        n_filtered=n_filtered,
     )
 
     raw_chunk_source = raw_chunk_source_factory(chunk_size)
@@ -424,7 +466,9 @@ def run_lmm_chunk_source_numpy(
             )
 
         t_compute_start = time.perf_counter()
-        blas_ctx = blas_threads(1) if _C_ACCEL_AVAILABLE else nullcontext()
+        blas_ctx = (
+            blas_threads(1) if compute_numpy._C_ACCEL_AVAILABLE else nullcontext()
+        )
         with blas_ctx:
             if use_split:
                 cr = _dispatch_compute(compute_ctx, chunk_data, budget.omp, processed)
@@ -512,6 +556,7 @@ def run_lmm_chunk_source_numpy(
             f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
             "check for degenerate (constant) genotypes and kinship matrix quality"
         )
+    _raise_if_systemic_nan(nan_counts, n_filtered, nan_abort_fraction)
     log_lambda_boundary_warning(
         n_at_lmin, n_at_lmax, l_min, l_max, prefix=lambda_warning_prefix
     )

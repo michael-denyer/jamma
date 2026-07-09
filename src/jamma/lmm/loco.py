@@ -719,10 +719,18 @@ def _loco_chr_common(
                 "LOCO SNP stats cache must use all-sample statistics; "
                 f"got sample_scope={snp_stats_cache.sample_scope!r}"
             )
-        # Use cached global stats, sliced to this chromosome.
-        # Stats were computed over ALL samples during kinship PASS 1.
-        # Used for filtering only (MAF, missing rate, monomorphism) -- the
-        # actual genotype data is read fresh in PASS 2 using valid_indices.
+        # Use cached global stats, sliced to this chromosome. Stats were
+        # computed over ALL samples during kinship PASS 1 (kinship/compute.py
+        # intentionally uses all-sample stats for SNP filtering to match GEMMA).
+        # The cached col_means also seed missing-genotype imputation in PASS 2
+        # (they flow out as ctx.filtered_means_all -> run_lmm_chunk_source_numpy).
+        # When some phenotypes are missing (valid != all), that imputation uses
+        # the all-sample mean rather than the analysed-sample mean: a small,
+        # deliberate skew that keeps imputation, the reported AF, and the filter
+        # set on one consistent all-sample basis. The non-cache path
+        # (_collect_chr_snp_stats) reads over valid_indices and so uses
+        # valid-sample stats instead. Changing this needs a GEMMA missing-
+        # phenotype LOCO reference to confirm which basis is closer to parity.
         chr_stats = snp_stats_cache.take(chr_snp_indices)
     else:
         chr_stats = _collect_chr_snp_stats(

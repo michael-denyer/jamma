@@ -1,10 +1,11 @@
-"""Result building functions for LMM association tests.
+"""Result building and per-chunk sinks for LMM association tests.
 
-Constructs AssocResult objects from computed statistics for each
-test mode (Wald, Score, LRT, All). Used by batch runners (NumPy)
-in both in-memory and output_path streaming modes via ``write_streaming_chunk``
-(which wraps ``IncrementalAssocWriter.write_arrays_batch`` with diagnostic
-accumulation).
+Builds ``AssocResult`` objects from computed statistics for each test mode
+(Wald, Score, LRT, All) via ``_build_results``, and exposes the per-chunk sink
+factories (``make_writer_sink``, ``make_result_list_sink``) that the batch,
+streaming, and LOCO NumPy runners share to route each result chunk to disk or an
+in-memory list. Per-chunk NaN and lambda-boundary diagnostics are accumulated by
+the shared chunk runner itself (``chunk_runner_numpy``), not here.
 """
 
 from __future__ import annotations
@@ -215,55 +216,6 @@ def count_lambda_boundary_hits(
         n_at_lmin += lmin
         n_at_lmax += lmax
     return n_at_lmin, n_at_lmax
-
-
-def write_streaming_chunk(
-    writer,
-    lmm_mode: int,
-    snp_indices: np.ndarray,
-    snp_info: list,
-    filtered_afs: np.ndarray,
-    filtered_miss: np.ndarray,
-    chunk_arrays: dict[str, np.ndarray],
-    l_min: float,
-    l_max: float,
-    nan_counts: dict[str, int],
-    n_at_lmin_accum: int,
-    n_at_lmax_accum: int,
-) -> tuple[int, int]:
-    """Write a chunk to disk and accumulate diagnostics.
-
-    Used by the batch and streaming runners when output_path is set.
-    The disk-streaming runner handles its own write/diagnostic loop inline.
-
-    Args:
-        writer: IncrementalAssocWriter instance.
-        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
-        snp_indices: SNP column indices for this chunk.
-        snp_info: Full SNP metadata list.
-        filtered_afs: Allele frequencies for this chunk.
-        filtered_miss: Missing counts for this chunk.
-        chunk_arrays: Dict of per-SNP statistic arrays for this chunk.
-        l_min: Lower lambda bound.
-        l_max: Upper lambda bound.
-        nan_counts: Mutable dict accumulating NaN counts per field.
-        n_at_lmin_accum: Running count of SNPs at lower lambda bound.
-        n_at_lmax_accum: Running count of SNPs at upper lambda bound.
-
-    Returns:
-        Updated (n_at_lmin_accum, n_at_lmax_accum).
-    """
-    writer.write_arrays_batch(
-        lmm_mode, snp_indices, snp_info, filtered_afs, filtered_miss, chunk_arrays
-    )
-    chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
-        lmm_mode, chunk_arrays, l_min, l_max
-    )
-    for key, arr in chunk_arrays.items():
-        n_nan = int(np.sum(np.isnan(arr)))
-        if n_nan > 0:
-            nan_counts[key] = nan_counts.get(key, 0) + n_nan
-    return n_at_lmin_accum + chunk_lmin, n_at_lmax_accum + chunk_lmax
 
 
 def log_lambda_boundary_warning(

@@ -235,12 +235,12 @@ def run_lmm_loco(
     col_chunk_size: int = 5_000,
     l_min: float = DEFAULT_L_MIN,
     l_max: float = DEFAULT_L_MAX,
-    n_grid: int = DEFAULT_N_GRID,
-    n_refine: int = DEFAULT_N_REFINE,
     write_eigen: bool = False,
     eigen_dir: Path | None = None,
     eigen_prefix: str = "result",
     legacy_text: bool = False,
+    n_grid: int = DEFAULT_N_GRID,
+    n_refine: int = DEFAULT_N_REFINE,
 ) -> LocoResult:
     """Run LOCO LMM association: per-chromosome eigendecomp and association.
 
@@ -278,8 +278,6 @@ def run_lmm_loco(
             peak memory: n_valid * col_chunk_size * 8 bytes per chunk.
         l_min: Minimum lambda for optimization (default 1e-5).
         l_max: Maximum lambda for optimization (default 1e5).
-        n_grid: Grid search resolution for lambda bracketing.
-        n_refine: Golden section iterations for lambda refinement.
         write_eigen: If True, write per-chromosome eigen files after
             eigendecomp. Raises ValueError if eigen_dir is None.
         eigen_dir: Directory for reading/writing per-chromosome eigen cache.
@@ -289,6 +287,8 @@ def run_lmm_loco(
         legacy_text: If True, write (and look up) per-chromosome kinship and
             eigen artifacts as GEMMA-compatible text files (.cXX.txt,
             .eigenD.txt, .eigenU.txt) instead of binary .npy.
+        n_grid: Grid search resolution for lambda bracketing.
+        n_refine: Golden section iterations for lambda refinement.
     Returns:
         LocoResult with associations in biological chromosome order
         (1-22, X, Y, XY, MT). Associations list is empty if output_path

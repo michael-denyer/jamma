@@ -21,12 +21,10 @@ from threadpoolctl import threadpool_info
 
 from jamma import jlinalg
 from jamma.core.memory import (
-    _dsyevd_inplace_peak_gb,
-    _dsyevd_peak_gb,
-    _dsyevr_peak_gb,
     _memory_margin_gb,
     check_memory_available,
     log_memory_snapshot,
+    plan_eigen_driver,
 )
 from jamma.core.progress import timed_progress
 from jamma.core.threading import blas_threads, get_physical_core_count
@@ -133,10 +131,23 @@ def eigendecompose_kinship(
     # Inplace requires vendor DSYEVD and a C-contiguous writeable float64 K
     # (otherwise PyArray_FROM_OTF copies, defeating memory savings).
     # JLINALG_NO_VENDOR_LAPACK forces np.linalg.eigh instead of vendor LAPACK.
-    dsyevd_peak = _dsyevd_peak_gb(n_samples)
-    no_vendor = os.environ.get("JLINALG_NO_VENDOR_LAPACK", "").strip() not in ("", "0")
-    if not no_vendor and not jlinalg.blas_has_dsyevd and not jlinalg.blas_has_dsyevr:
-        no_vendor = True
+    no_vendor_env = os.environ.get("JLINALG_NO_VENDOR_LAPACK", "").strip() not in (
+        "",
+        "0",
+    )
+    inplace_eligible = (
+        K.dtype == np.float64 and K.flags["C_CONTIGUOUS"] and K.flags["WRITEABLE"]
+    )
+    plan = plan_eigen_driver(
+        n_samples,
+        available_gb,
+        has_dsyevd=bool(jlinalg.blas_has_dsyevd),
+        has_dsyevr=bool(jlinalg.blas_has_dsyevr),
+        no_vendor=no_vendor_env,
+        inplace_eligible=inplace_eligible,
+    )
+    no_vendor = plan.no_vendor
+    if no_vendor and not no_vendor_env:
         logger.info("No vendor LAPACK (DSYEVD/DSYEVR) — using np.linalg.eigh")
 
     # LP64 overflow safety gate (SAFE-01)
@@ -154,39 +165,26 @@ def eigendecompose_kinship(
             stacklevel=2,
         )
 
-    use_inplace = (
+    use_inplace = plan.use_inplace
+    use_dsyevr = plan.use_dsyevr
+    required_gb = plan.required_gb
+    driver = plan.driver
+    dsyevd_req = plan.pre_fallback_gb  # pre-fallback peak, for logging
+    dsyevr_gb = plan.dsyevr_peak_gb
+    inplace_gb = plan.inplace_peak_gb
+
+    # Warn when the chosen DSYEVD peak may exceed available memory and no DSYEVR
+    # fallback exists (potential OOM at the real allocation).
+    if (
         not no_vendor
-        and bool(jlinalg.blas_has_dsyevd)
-        and K.dtype == np.float64
-        and K.flags["C_CONTIGUOUS"]
-        and K.flags["WRITEABLE"]
-    )
-    required_gb = _dsyevd_inplace_peak_gb(n_samples) if use_inplace else dsyevd_peak
-    use_dsyevr = False
-    dsyevd_req = required_gb  # track pre-fallback value for logging
-
-    margin = _memory_margin_gb(required_gb)
-    if required_gb + margin > available_gb:
-        if jlinalg.blas_has_dsyevr and not no_vendor:
-            dsyevd_req = required_gb  # capture before overwrite
-            required_gb = _dsyevr_peak_gb(n_samples)
-            use_inplace = False
-            use_dsyevr = True
-            logger.info(
-                f"DSYEVD peak ({dsyevd_req:.1f}GB) exceeds available memory "
-                f"({available_gb:.1f}GB); using DSYEVR ({required_gb:.1f}GB)"
-            )
-        else:
-            driver = "inplace DSYEVD" if use_inplace else "DSYEVD"
-            logger.warning(
-                f"DSYEVD peak ({required_gb:.1f}GB) may exceed available memory "
-                f"({available_gb:.1f}GB) and DSYEVR is not available. "
-                f"Proceeding with {driver}."
-            )
-
-    driver = "DSYEVR" if use_dsyevr else ("DSYEVD-inplace" if use_inplace else "DSYEVD")
-    dsyevr_gb = _dsyevr_peak_gb(n_samples)
-    inplace_gb = _dsyevd_inplace_peak_gb(n_samples)
+        and not use_dsyevr
+        and required_gb + _memory_margin_gb(required_gb) > available_gb
+    ):
+        logger.warning(
+            f"DSYEVD peak ({required_gb:.1f}GB) may exceed available memory "
+            f"({available_gb:.1f}GB) and DSYEVR is not available. "
+            f"Proceeding with {driver}."
+        )
     if use_inplace:
         logger.info(
             f"Eigendecomp memory (DSYEVD-inplace): estimated {inplace_gb:.1f}GB, "

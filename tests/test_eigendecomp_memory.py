@@ -6,14 +6,134 @@ import numpy as np
 import pytest
 
 from jamma.core.memory import (
+    _dsyevd_inplace_peak_gb,
     _dsyevd_peak_gb,
     _dsyevd_workspace_gb,
     _dsyevr_peak_gb,
     _dsyevr_workspace_gb,
     check_memory_before_run,
     estimate_eigendecomp_memory,
+    plan_eigen_driver,
 )
 from jamma.lmm.eigen import eigendecompose_kinship
+
+
+@pytest.mark.tier0
+class TestPlanEigenDriver:
+    """Tests for plan_eigen_driver — the shared driver-selection decision.
+
+    This pure function is the single source of truth for the
+    DSYEVD-inplace -> DSYEVD -> DSYEVR -> numpy choice used by both the runtime
+    path (eigendecompose_kinship) and the pre-flight estimator
+    (check_memory_before_run), so the two cannot drift.
+    """
+
+    N = 100_000
+
+    def test_inplace_when_ample_and_eligible(self):
+        """Ample memory + in-place eligible K -> in-place DSYEVD."""
+        plan = plan_eigen_driver(
+            self.N,
+            available_gb=1e6,
+            has_dsyevd=True,
+            has_dsyevr=True,
+            no_vendor=False,
+            inplace_eligible=True,
+        )
+        assert plan.driver == "DSYEVD-inplace"
+        assert plan.use_inplace is True
+        assert plan.use_dsyevr is False
+        assert plan.no_vendor is False
+        assert plan.required_gb == pytest.approx(_dsyevd_inplace_peak_gb(self.N))
+
+    def test_non_inplace_when_not_eligible(self):
+        """Ample memory but K not in-place eligible -> non-inplace DSYEVD."""
+        plan = plan_eigen_driver(
+            self.N,
+            available_gb=1e6,
+            has_dsyevd=True,
+            has_dsyevr=True,
+            no_vendor=False,
+            inplace_eligible=False,
+        )
+        assert plan.driver == "DSYEVD"
+        assert plan.use_inplace is False
+        assert plan.required_gb == pytest.approx(_dsyevd_peak_gb(self.N))
+
+    def test_dsyevr_fallback_when_inplace_wont_fit(self):
+        """Memory below the in-place peak but above DSYEVR -> DSYEVR fallback."""
+        # available sits between DSYEVR peak (+margin) and in-place peak (+margin).
+        available = (_dsyevr_peak_gb(self.N) + _dsyevd_inplace_peak_gb(self.N)) / 2
+        plan = plan_eigen_driver(
+            self.N,
+            available_gb=available,
+            has_dsyevd=True,
+            has_dsyevr=True,
+            no_vendor=False,
+            inplace_eligible=True,
+        )
+        assert plan.driver == "DSYEVR"
+        assert plan.use_dsyevr is True
+        assert plan.use_inplace is False
+        assert plan.required_gb == pytest.approx(_dsyevr_peak_gb(self.N))
+        # pre_fallback_gb records the in-place peak we fell back from.
+        assert plan.pre_fallback_gb == pytest.approx(_dsyevd_inplace_peak_gb(self.N))
+
+    def test_no_dsyevr_stays_on_dsyevd_when_tight(self):
+        """Tight memory, no DSYEVR available -> stay on DSYEVD (no fallback)."""
+        available = _dsyevr_peak_gb(self.N)  # below in-place peak
+        plan = plan_eigen_driver(
+            self.N,
+            available_gb=available,
+            has_dsyevd=True,
+            has_dsyevr=False,
+            no_vendor=False,
+            inplace_eligible=True,
+        )
+        assert plan.driver == "DSYEVD-inplace"
+        assert plan.use_dsyevr is False
+        assert plan.use_inplace is True
+
+    def test_no_vendor_forces_numpy(self):
+        """no_vendor -> numpy fallback with conservative DSYEVD footprint."""
+        plan = plan_eigen_driver(
+            self.N,
+            available_gb=1e6,
+            has_dsyevd=True,
+            has_dsyevr=True,
+            no_vendor=True,
+            inplace_eligible=True,
+        )
+        assert plan.driver == "numpy"
+        assert plan.no_vendor is True
+        assert plan.use_inplace is False
+        assert plan.use_dsyevr is False
+        assert plan.required_gb == pytest.approx(_dsyevd_peak_gb(self.N))
+
+    def test_no_drivers_auto_numpy(self):
+        """No vendor DSYEVD and no DSYEVR -> numpy fallback even if not forced."""
+        plan = plan_eigen_driver(
+            self.N,
+            available_gb=1e6,
+            has_dsyevd=False,
+            has_dsyevr=False,
+            no_vendor=False,
+            inplace_eligible=True,
+        )
+        assert plan.driver == "numpy"
+        assert plan.no_vendor is True
+
+    def test_deterministic_no_drift(self):
+        """Same inputs -> identical plan (pre-flight and runtime cannot diverge)."""
+        args = {
+            "has_dsyevd": True,
+            "has_dsyevr": True,
+            "no_vendor": False,
+            "inplace_eligible": True,
+        }
+        assert plan_eigen_driver(self.N, 1e6, **args) == plan_eigen_driver(
+            self.N, 1e6, **args
+        )
 
 
 @pytest.mark.tier0

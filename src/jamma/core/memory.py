@@ -96,6 +96,120 @@ def _dsyevr_peak_gb(n: int) -> float:
     return kinship_gb + _eigendecomp_eigvec_gb(kinship_gb) + _dsyevr_workspace_gb(n)
 
 
+class EigenDriverPlan(NamedTuple):
+    """Chosen eigendecomposition driver and its peak-memory estimate.
+
+    Single source of truth for the DSYEVD-inplace -> DSYEVD -> DSYEVR -> numpy
+    driver decision. Both the runtime path (``eigendecompose_kinship``) and the
+    pre-flight estimator (``check_memory_before_run``) build a plan from the same
+    logic, so their driver choice and peak estimate cannot drift.
+
+    Attributes:
+        driver: Human-readable driver name: "DSYEVD-inplace", "DSYEVD",
+            "DSYEVR", or "numpy".
+        use_inplace: Pass ``inplace=True`` to ``jlinalg.eigh`` (K reused as the
+            eigenvector output buffer).
+        use_dsyevr: The DSYEVR fallback was selected under memory pressure.
+        no_vendor: No vendor LAPACK will run (``np.linalg.eigh`` fallback).
+        required_gb: Peak memory (GB) for the chosen driver.
+        pre_fallback_gb: ``required_gb`` before any DSYEVR fallback (used to log
+            which driver we fell back from).
+        dsyevd_peak_gb: Non-inplace DSYEVD peak (GB).
+        dsyevr_peak_gb: DSYEVR peak (GB).
+        inplace_peak_gb: In-place DSYEVD peak (GB).
+    """
+
+    driver: str
+    use_inplace: bool
+    use_dsyevr: bool
+    no_vendor: bool
+    required_gb: float
+    pre_fallback_gb: float
+    dsyevd_peak_gb: float
+    dsyevr_peak_gb: float
+    inplace_peak_gb: float
+
+
+def plan_eigen_driver(
+    n_samples: int,
+    available_gb: float,
+    *,
+    has_dsyevd: bool,
+    has_dsyevr: bool,
+    no_vendor: bool,
+    inplace_eligible: bool,
+) -> EigenDriverPlan:
+    """Select the eigendecomposition driver from memory and capability flags.
+
+    Prefers in-place DSYEVD (smallest footprint), falls back to non-inplace
+    DSYEVD, then to DSYEVR (O(N) workspace) when the DSYEVD peak plus safety
+    margin would not fit. With no vendor DSYEVD/DSYEVR (or a caller-forced
+    ``no_vendor``), reports the numpy fallback and its conservative
+    DSYEVD-sized footprint.
+
+    Pure function — takes flags, returns a plan, performs no I/O. The runtime
+    caller passes the real ``inplace_eligible`` (K is float64, C-contiguous,
+    writeable); the pre-flight estimator passes ``inplace_eligible=True`` because
+    the kinship matrix is not built yet and will normally be in-place eligible.
+
+    Args:
+        n_samples: Kinship matrix dimension.
+        available_gb: Available memory (GB).
+        has_dsyevd: Vendor DSYEVD available.
+        has_dsyevr: Vendor DSYEVR available.
+        no_vendor: Force the numpy fallback (e.g. JLINALG_NO_VENDOR_LAPACK set).
+        inplace_eligible: K can be overwritten in place (float64, C-contiguous,
+            writeable).
+
+    Returns:
+        EigenDriverPlan with the chosen driver, flags, and peak estimates.
+    """
+    dsyevd_peak = _dsyevd_peak_gb(n_samples)
+    dsyevr_peak = _dsyevr_peak_gb(n_samples)
+    inplace_peak = _dsyevd_inplace_peak_gb(n_samples)
+
+    # No vendor DSYEVD *and* no vendor DSYEVR -> numpy fallback.
+    if not no_vendor and not has_dsyevd and not has_dsyevr:
+        no_vendor = True
+
+    if no_vendor:
+        return EigenDriverPlan(
+            driver="numpy",
+            use_inplace=False,
+            use_dsyevr=False,
+            no_vendor=True,
+            required_gb=dsyevd_peak,
+            pre_fallback_gb=dsyevd_peak,
+            dsyevd_peak_gb=dsyevd_peak,
+            dsyevr_peak_gb=dsyevr_peak,
+            inplace_peak_gb=inplace_peak,
+        )
+
+    use_inplace = has_dsyevd and inplace_eligible
+    required_gb = inplace_peak if use_inplace else dsyevd_peak
+    pre_fallback_gb = required_gb
+    use_dsyevr = False
+
+    if required_gb + _memory_margin_gb(required_gb) > available_gb and has_dsyevr:
+        pre_fallback_gb = required_gb
+        required_gb = dsyevr_peak
+        use_inplace = False
+        use_dsyevr = True
+
+    driver = "DSYEVR" if use_dsyevr else ("DSYEVD-inplace" if use_inplace else "DSYEVD")
+    return EigenDriverPlan(
+        driver=driver,
+        use_inplace=use_inplace,
+        use_dsyevr=use_dsyevr,
+        no_vendor=False,
+        required_gb=required_gb,
+        pre_fallback_gb=pre_fallback_gb,
+        dsyevd_peak_gb=dsyevd_peak,
+        dsyevr_peak_gb=dsyevr_peak,
+        inplace_peak_gb=inplace_peak,
+    )
+
+
 def estimate_eigendecomp_memory(n_samples: int) -> float:
     """Estimate peak memory (GB) for eigendecomposition of kinship matrix.
 
@@ -769,10 +883,11 @@ def check_memory_before_run(
     )
     snap = get_memory_snapshot()
 
-    # EIGEN-01: Mirror eigendecompose_kinship()'s driver selection to report
-    # the correct peak estimate and prevent spurious OOM aborts.
-    reported_peak = est.total_peak_gb
-    driver_note = "eigendecomp phase"
+    # Report the eigendecomp peak for the driver that will actually run, using
+    # the same plan_eigen_driver() logic as eigendecompose_kinship() so the
+    # pre-flight estimate cannot drift from the runtime path. The kinship matrix
+    # is not built yet, so assume it will be in-place eligible (the common case:
+    # float64, C-contiguous, writeable).
     _has_dsyevr = False
     _has_dsyevd = False
     try:
@@ -786,9 +901,14 @@ def check_memory_before_run(
             "pre-flight check will use conservative DSYEVD estimate."
         )
 
-    dsyevd_peak = _dsyevd_peak_gb(n_samples)
-    margin = _memory_margin_gb(dsyevd_peak)
-    dsyevd_fits = dsyevd_peak + margin <= snap.available_gb
+    plan = plan_eigen_driver(
+        n_samples,
+        snap.available_gb,
+        has_dsyevd=_has_dsyevd,
+        has_dsyevr=_has_dsyevr,
+        no_vendor=False,
+        inplace_eligible=True,
+    )
 
     # Shared non-eigendecomp phase peaks (kinship build, LMM association).
     # Don't use fused estimate here: we don't know lmm_mode, and fused only
@@ -803,19 +923,15 @@ def check_memory_before_run(
         + _uab_iab_gb(n_samples, compute_chunk, n_cvt=n_cvt, use_fused=False)
     )
 
-    if not dsyevd_fits and _has_dsyevr:
-        dsyevr_peak = _dsyevr_peak_gb(n_samples)
-        reported_peak = max(peak_kinship, dsyevr_peak, peak_lmm)
-        driver_note = "eigendecomp phase, DSYEVR selected"
-    elif dsyevd_fits and _has_dsyevd:
-        inplace_peak = _dsyevd_inplace_peak_gb(n_samples)
-        reported_peak = max(peak_kinship, inplace_peak, peak_lmm)
-        driver_note = "eigendecomp phase, DSYEVD in-place"
-    elif not dsyevd_fits:
-        reported_peak = dsyevd_peak
-        driver_note = "eigendecomp phase, DSYEVD (DSYEVR unavailable, memory tight)"
+    reported_peak = max(peak_kinship, plan.required_gb, peak_lmm)
+    driver_note = f"eigendecomp phase, {plan.driver}"
+    if (
+        not plan.use_dsyevr
+        and not plan.no_vendor
+        and plan.required_gb + _memory_margin_gb(plan.required_gb) > snap.available_gb
+    ):
         logger.warning(
-            f"DSYEVD peak ({dsyevd_peak:.1f}GB) may exceed available memory "
+            f"DSYEVD peak ({plan.required_gb:.1f}GB) may exceed available memory "
             f"({snap.available_gb:.1f}GB) and DSYEVR is not available. "
             f"Run may OOM."
         )

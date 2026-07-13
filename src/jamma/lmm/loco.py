@@ -235,6 +235,8 @@ def run_lmm_loco(
     col_chunk_size: int = 5_000,
     l_min: float = DEFAULT_L_MIN,
     l_max: float = DEFAULT_L_MAX,
+    n_grid: int = DEFAULT_N_GRID,
+    n_refine: int = DEFAULT_N_REFINE,
     write_eigen: bool = False,
     eigen_dir: Path | None = None,
     eigen_prefix: str = "result",
@@ -276,6 +278,8 @@ def run_lmm_loco(
             peak memory: n_valid * col_chunk_size * 8 bytes per chunk.
         l_min: Minimum lambda for optimization (default 1e-5).
         l_max: Maximum lambda for optimization (default 1e5).
+        n_grid: Grid search resolution for lambda bracketing.
+        n_refine: Golden section iterations for lambda refinement.
         write_eigen: If True, write per-chromosome eigen files after
             eigendecomp. Raises ValueError if eigen_dir is None.
         eigen_dir: Directory for reading/writing per-chromosome eigen cache.
@@ -620,6 +624,8 @@ def run_lmm_loco(
                 show_progress=show_progress,
                 l_min=l_min,
                 l_max=l_max,
+                n_grid=n_grid,
+                n_refine=n_refine,
                 snps_global_mask=snps_global_mask,
                 col_chunk_size=col_chunk_size,
                 writer=writer,

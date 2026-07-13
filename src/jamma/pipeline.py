@@ -1559,6 +1559,8 @@ class PipelineRunner:
             ksnps_indices=ksnps_indices,
             l_min=self.config.l_min,
             l_max=self.config.l_max,
+            n_grid=self.config.n_grid,
+            n_refine=self.config.n_refine,
             write_eigen=self.config.write_eigen,
             eigen_dir=self.config.eigen_dir,
             eigen_prefix=self.config.output_prefix,

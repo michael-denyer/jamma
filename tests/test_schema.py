@@ -12,6 +12,12 @@ import pytest
 
 from jamma.lmm.schema import (
     ACCUM_KEYS,
+    DEFAULT_L_MAX,
+    DEFAULT_L_MIN,
+    DEFAULT_MAF,
+    DEFAULT_MISS,
+    DEFAULT_N_GRID,
+    DEFAULT_N_REFINE,
     FORMAT_COLUMNS,
     HEADERS,
     MODE_SPECS,
@@ -19,6 +25,32 @@ from jamma.lmm.schema import (
     TEST_TYPE_MAP,
     get_spec,
 )
+
+# ── Default LMM knobs: pin the single-source-of-truth constants ────
+
+
+@pytest.mark.tier0
+class TestDefaultKnobs:
+    """Pin the DEFAULT_* LMM knobs so a default cannot silently drift.
+
+    These constants are the single source of truth threaded through LmmConfig,
+    PipelineConfig, the CLI/gwas() maf/miss/l_min/l_max options, and every runner
+    dispatch entry point. A one-character edit here would change GWAS behaviour
+    everywhere with no other test failing — this test locks the values.
+    """
+
+    def test_gemma_cli_defaults(self) -> None:
+        # maf/miss/l_min/l_max match GEMMA v0.98.5 CLI defaults.
+        assert DEFAULT_MAF == 0.01
+        assert DEFAULT_MISS == 0.05
+        assert DEFAULT_L_MIN == 1e-5
+        assert DEFAULT_L_MAX == 1e5
+
+    def test_golden_section_knobs(self) -> None:
+        # JAMMA's lambda-optimizer knobs — no GEMMA equivalent (GEMMA uses Brent).
+        assert DEFAULT_N_GRID == 50
+        assert DEFAULT_N_REFINE == 10
+
 
 # ── Schema correctness: derived tables match old hardcoded values ────
 

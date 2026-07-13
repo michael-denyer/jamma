@@ -270,7 +270,7 @@ def run_lmm(
         l_min: Minimum lambda for optimization.
         l_max: Maximum lambda for optimization.
         n_grid: Grid search resolution.
-        n_refine: Golden section iterations.
+        n_refine: Golden section iterations (clamped to min 20 internally).
         check_memory: Check available memory before workflow.
         show_progress: Show progress bars.
         lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.

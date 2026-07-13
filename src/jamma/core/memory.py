@@ -6,7 +6,7 @@ Also provides cleanup utilities for freeing memory between benchmark runs.
 
 import gc
 import os
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 import psutil
 from loguru import logger
@@ -14,6 +14,13 @@ from loguru import logger
 
 def forced_numpy_fallback() -> bool:
     """Return True if JLINALG_NO_VENDOR_LAPACK forces the numpy eigendecomp path.
+
+    Presence-based, matching ``docs/CONFIGURATION.md`` and the sibling
+    ``JAMMA_FORCE_NUMPY_FALLBACK``: *any* value other than unset/``""``/``"0"``
+    forces numpy — including ``"false"``, ``"no"``, and ``"off"``. Set the var to
+    ``0`` (or leave it unset) to keep vendor LAPACK; do not expect ``"false"`` to
+    mean off. The resolved decision is logged at runtime in
+    ``eigendecompose_kinship``.
 
     Shared by the runtime path (``eigendecompose_kinship``) and the pre-flight
     estimator (``check_memory_before_run``) so both agree on whether vendor
@@ -114,31 +121,32 @@ class EigenDriverPlan(NamedTuple):
     Single source of truth for the DSYEVD-inplace -> DSYEVD -> DSYEVR -> numpy
     driver decision. Both the runtime path (``eigendecompose_kinship``) and the
     pre-flight estimator (``check_memory_before_run``) build a plan from the same
-    logic, so their driver choice and peak estimate cannot drift.
+    ``plan_eigen_driver`` logic, so the *selection logic* cannot drift between
+    them. The chosen driver can still differ per caller when they pass different
+    ``inplace_eligible`` inputs (pre-flight assumes True; see that parameter).
 
     Attributes:
-        driver: Human-readable driver name: "DSYEVD-inplace", "DSYEVD",
-            "DSYEVR", or "numpy".
+        driver: Chosen driver name (one of the four ``Literal`` values).
         use_inplace: Pass ``inplace=True`` to ``jlinalg.eigh`` (K reused as the
             eigenvector output buffer).
         use_dsyevr: DSYEVR was selected — either as the memory-pressure fallback
             from DSYEVD, or because it is the only available vendor driver.
         no_vendor: No vendor LAPACK will run (``np.linalg.eigh`` fallback).
-        required_gb: Peak memory (GB) for the chosen driver.
+        required_gb: Peak memory (GB) for the chosen driver. For the ``numpy``
+            fallback this is a conservative DSYEVD-sized proxy, not numpy's exact
+            peak.
         pre_fallback_gb: ``required_gb`` before any DSYEVR fallback (used to log
             which driver we fell back from).
-        dsyevd_peak_gb: Non-inplace DSYEVD peak (GB).
         dsyevr_peak_gb: DSYEVR peak (GB).
         inplace_peak_gb: In-place DSYEVD peak (GB).
     """
 
-    driver: str
+    driver: Literal["DSYEVD-inplace", "DSYEVD", "DSYEVR", "numpy"]
     use_inplace: bool
     use_dsyevr: bool
     no_vendor: bool
     required_gb: float
     pre_fallback_gb: float
-    dsyevd_peak_gb: float
     dsyevr_peak_gb: float
     inplace_peak_gb: float
 
@@ -193,7 +201,6 @@ def plan_eigen_driver(
             no_vendor=True,
             required_gb=dsyevd_peak,
             pre_fallback_gb=dsyevd_peak,
-            dsyevd_peak_gb=dsyevd_peak,
             dsyevr_peak_gb=dsyevr_peak,
             inplace_peak_gb=inplace_peak,
         )
@@ -209,7 +216,6 @@ def plan_eigen_driver(
             no_vendor=False,
             required_gb=dsyevr_peak,
             pre_fallback_gb=dsyevr_peak,
-            dsyevd_peak_gb=dsyevd_peak,
             dsyevr_peak_gb=dsyevr_peak,
             inplace_peak_gb=inplace_peak,
         )
@@ -233,7 +239,6 @@ def plan_eigen_driver(
         no_vendor=False,
         required_gb=required_gb,
         pre_fallback_gb=pre_fallback_gb,
-        dsyevd_peak_gb=dsyevd_peak,
         dsyevr_peak_gb=dsyevr_peak,
         inplace_peak_gb=inplace_peak,
     )

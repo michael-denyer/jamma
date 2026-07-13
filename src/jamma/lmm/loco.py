@@ -288,7 +288,9 @@ def run_lmm_loco(
             eigen artifacts as GEMMA-compatible text files (.cXX.txt,
             .eigenD.txt, .eigenU.txt) instead of binary .npy.
         n_grid: Grid search resolution for lambda bracketing.
-        n_refine: Golden section iterations for lambda refinement.
+        n_refine: Golden section iterations for lambda refinement (clamped to
+            min 20 internally for ~1e-5 tolerance).
+
     Returns:
         LocoResult with associations in biological chromosome order
         (1-22, X, Y, XY, MT). Associations list is empty if output_path
@@ -891,7 +893,7 @@ def _run_lmm_for_chromosome_numpy(
         l_min: Minimum lambda for optimization.
         l_max: Maximum lambda for optimization.
         n_grid: Grid search resolution.
-        n_refine: Golden section iterations.
+        n_refine: Golden section iterations (clamped to min 20 internally).
         snps_global_mask: Boolean mask over all SNPs (True = included by -snps), or
             None. Pre-indexed: `snps_global_mask[chr_snp_indices]` gives the
             per-chromosome mask. Avoids per-chromosome np.isin computation.

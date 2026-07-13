@@ -271,27 +271,47 @@ def test_loco_numpy_no_per_chromosome_bed_reads():
 
 
 @pytest.mark.tier1
-def test_run_lmm_loco_accepts_grid_params():
-    """run_lmm_loco accepts and forwards n_grid/n_refine to the optimizer.
+def test_run_lmm_loco_forwards_grid_params(monkeypatch):
+    """run_lmm_loco forwards n_grid/n_refine all the way to the chunk optimizer.
 
     Regression: run_lmm_loco had no n_grid/n_refine parameters, so the pipeline
     could not configure LOCO's lambda grid — every LOCO run silently used the
-    hard-coded defaults regardless of PipelineConfig.n_grid/n_refine. Before the
-    fix, passing n_grid/n_refine here raised TypeError (unexpected keyword).
+    hard-coded defaults regardless of PipelineConfig.n_grid/n_refine.
+
+    Asserting only n_tested > 0 would pass even if the values were dropped (a
+    no-op body still tests SNPs). Instead, spy on run_lmm_chunk_source_numpy —
+    the boundary where n_grid/n_refine are consumed, captured pre-clamp — and
+    assert the configured non-default values actually arrive there.
     """
     if not _LOCO_BFILE.with_suffix(".bed").exists():
         pytest.skip("gemma_loco fixture not available")
+
+    import jamma.lmm.loco as loco_mod
+
+    real_chunk_runner = loco_mod.run_lmm_chunk_source_numpy
+    captured: list[dict[str, int]] = []
+
+    def spy(*args, **kwargs):
+        captured.append({"n_grid": kwargs["n_grid"], "n_refine": kwargs["n_refine"]})
+        return real_chunk_runner(*args, **kwargs)
+
+    monkeypatch.setattr(loco_mod, "run_lmm_chunk_source_numpy", spy)
 
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
     loco = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
-        n_grid=3,
-        n_refine=1,
+        n_grid=7,
+        n_refine=25,
         check_memory=False,
         show_progress=False,
     )
     assert loco.n_tested > 0, "Expected SNPs to be tested with an explicit grid"
+    assert captured, "chunk runner was never called — cannot verify forwarding"
+    # Every per-chromosome chunk call must receive the configured (non-default)
+    # grid params, not the hard-coded 50/10 defaults the bug produced.
+    assert all(c["n_grid"] == 7 for c in captured)
+    assert all(c["n_refine"] == 25 for c in captured)
 
 
 @pytest.mark.tier1

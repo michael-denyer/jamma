@@ -184,9 +184,12 @@ HEADERS: dict[str, str] = {
     tt: _HEADER_PREFIX + "\t" + "\t".join(cols) for tt, cols in FORMAT_COLUMNS.items()
 }
 
-# Default LMM knobs — single source of truth for the config surface (CLI,
-# gwas(), PipelineConfig, LmmConfig) and the runner dispatch entry points, so a
-# default cannot silently drift between them. Values match GEMMA v0.98.5.
+# Default LMM knobs — single source of truth for the config surface
+# (PipelineConfig, LmmConfig, and the CLI/gwas() maf/miss/l_min/l_max options)
+# and the runner dispatch entry points, so a default cannot silently drift
+# between them. maf/miss/l_min/l_max match GEMMA v0.98.5 CLI defaults; n_grid and
+# n_refine are JAMMA's golden-section knobs with no GEMMA equivalent (GEMMA uses
+# Brent — see docs/GEMMA_DIVERGENCES.md §6; never "align" these toward GEMMA).
 DEFAULT_MAF = 0.01
 DEFAULT_MISS = 0.05
 DEFAULT_L_MIN = 1e-5

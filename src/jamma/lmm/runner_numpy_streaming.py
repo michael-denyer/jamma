@@ -112,7 +112,8 @@ def run_lmm_association_numpy_streaming(
         l_min: Minimum lambda for optimization.
         l_max: Maximum lambda for optimization.
         n_grid: Grid search resolution for lambda bracketing.
-        n_refine: Golden section iterations for lambda refinement.
+        n_refine: Golden section iterations for lambda refinement (clamped to
+            min 20 internally for ~1e-5 tolerance).
         chunk_size: Number of SNPs per disk chunk (default: 10,000).
         check_memory: Check available memory before workflow.
         show_progress: Show progress bars and GEMMA-style logging.

@@ -144,8 +144,17 @@ class TestPlanEigenDriver:
         assert plan.no_vendor is False
         assert plan.required_gb == pytest.approx(_dsyevr_peak_gb(self.N))
 
-    def test_deterministic_no_drift(self):
-        """Same inputs -> identical plan (pre-flight and runtime cannot diverge)."""
+    def test_pure_function_is_deterministic(self):
+        """Same inputs -> identical plan.
+
+        Guards against accidental global state or nondeterminism in the shared
+        constructor — this is what lets pre-flight and runtime reuse one plan
+        function. It does NOT by itself prove the two call sites pass identical
+        inputs: pre-flight hard-codes inplace_eligible=True while the runtime
+        passes the real K eligibility, so their chosen driver can legitimately
+        differ (see test_forced_numpy_uses_conservative_estimate and
+        plan_eigen_driver's docstring for that boundary).
+        """
         args = {
             "has_dsyevd": True,
             "has_dsyevr": True,

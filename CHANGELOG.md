@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Bump `click` 8.3.1 → 8.4.2 in `uv.lock` to resolve PYSEC-2026-2132
+  (CVSS 7.2, High), which the scheduled OSV Scanner flagged. No source
+  changes; `click>=8.0.0` already permits the fixed release.
+
 ## [5.4.2] - 2026-07-09
 
 ### Changed

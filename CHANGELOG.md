@@ -7,11 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.4.3] - 2026-07-13
+
 ### Security
 
 - Bump `click` 8.3.1 → 8.4.2 in `uv.lock` to resolve PYSEC-2026-2132
   (CVSS 7.2, High), which the scheduled OSV Scanner flagged. No source
   changes; `click>=8.0.0` already permits the fixed release.
+
+### Changed
+
+- **Single source of truth for the eigen driver plan and LMM knobs.** The
+  DSYEVD-inplace → DSYEVD → DSYEVR → numpy decision is centralised in
+  `plan_eigen_driver`, shared by the runtime path and the pre-flight memory
+  estimator so the two cannot drift; `run_lmm_loco` now honours the configured
+  `n_grid`/`n_refine` instead of silently using hard-coded defaults; and the
+  `DEFAULT_*` LMM knobs are defined once in `jamma.lmm.schema`. No API or
+  numerical-result change.
+
+### Fixed
+
+- Corrected an inaccurate `DEFAULT_*` comment that claimed all knobs "match
+  GEMMA v0.98.5" — `n_grid`/`n_refine` are JAMMA's golden-section parameters
+  with no GEMMA equivalent (GEMMA uses Brent). Tidied the `EigenDriverPlan`
+  type (dropped a dead field, typed `driver` as a `Literal`) and documented the
+  `JLINALG_NO_VENDOR_LAPACK` presence-based contract and the `n_refine` min-20
+  clamp. Internal only.
 
 ## [5.4.2] - 2026-07-09
 

@@ -61,7 +61,17 @@ from jamma.lmm.prepare_common import (
     compute_and_log_pve,
 )
 from jamma.lmm.results import make_result_list_sink, make_writer_sink
-from jamma.lmm.schema import TEST_TYPE_MAP, LazySnpMeta, LocoResult
+from jamma.lmm.schema import (
+    DEFAULT_L_MAX,
+    DEFAULT_L_MIN,
+    DEFAULT_MAF,
+    DEFAULT_MISS,
+    DEFAULT_N_GRID,
+    DEFAULT_N_REFINE,
+    TEST_TYPE_MAP,
+    LazySnpMeta,
+    LocoResult,
+)
 from jamma.lmm.stats import AssocResult
 from jamma.utils import chr_sort_key
 
@@ -211,8 +221,8 @@ def run_lmm_loco(
     bed_path: Path,
     phenotypes: np.ndarray,
     covariates: np.ndarray | None = None,
-    maf_threshold: float = 0.01,
-    miss_threshold: float = 0.05,
+    maf_threshold: float = DEFAULT_MAF,
+    miss_threshold: float = DEFAULT_MISS,
     lmm_mode: int = 1,
     output_path: Path | None = None,
     check_memory: bool = True,
@@ -223,12 +233,14 @@ def run_lmm_loco(
     snps_indices: np.ndarray | None = None,
     ksnps_indices: np.ndarray | None = None,
     col_chunk_size: int = 5_000,
-    l_min: float = 1e-5,
-    l_max: float = 1e5,
+    l_min: float = DEFAULT_L_MIN,
+    l_max: float = DEFAULT_L_MAX,
     write_eigen: bool = False,
     eigen_dir: Path | None = None,
     eigen_prefix: str = "result",
     legacy_text: bool = False,
+    n_grid: int = DEFAULT_N_GRID,
+    n_refine: int = DEFAULT_N_REFINE,
 ) -> LocoResult:
     """Run LOCO LMM association: per-chromosome eigendecomp and association.
 
@@ -275,6 +287,8 @@ def run_lmm_loco(
         legacy_text: If True, write (and look up) per-chromosome kinship and
             eigen artifacts as GEMMA-compatible text files (.cXX.txt,
             .eigenD.txt, .eigenU.txt) instead of binary .npy.
+        n_grid: Grid search resolution for lambda bracketing.
+        n_refine: Golden section iterations for lambda refinement.
     Returns:
         LocoResult with associations in biological chromosome order
         (1-22, X, Y, XY, MT). Associations list is empty if output_path
@@ -610,6 +624,8 @@ def run_lmm_loco(
                 show_progress=show_progress,
                 l_min=l_min,
                 l_max=l_max,
+                n_grid=n_grid,
+                n_refine=n_refine,
                 snps_global_mask=snps_global_mask,
                 col_chunk_size=col_chunk_size,
                 writer=writer,
@@ -839,10 +855,10 @@ def _run_lmm_for_chromosome_numpy(
     lmm_mode: int,
     valid_mask: np.ndarray,
     show_progress: bool = True,
-    l_min: float = 1e-5,
-    l_max: float = 1e5,
-    n_grid: int = 50,
-    n_refine: int = 10,
+    l_min: float = DEFAULT_L_MIN,
+    l_max: float = DEFAULT_L_MAX,
+    n_grid: int = DEFAULT_N_GRID,
+    n_refine: int = DEFAULT_N_REFINE,
     snps_global_mask: np.ndarray | None = None,
     col_chunk_size: int = 5_000,
     writer: IncrementalAssocWriter | None = None,

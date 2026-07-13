@@ -28,7 +28,16 @@ from loguru import logger
 
 from jamma.core.memory import estimate_lmm_memory
 from jamma.lmm._compile_utils import is_c_extension_usable
-from jamma.lmm.schema import LmmConfig, LmmRunResult
+from jamma.lmm.schema import (
+    DEFAULT_L_MAX,
+    DEFAULT_L_MIN,
+    DEFAULT_MAF,
+    DEFAULT_MISS,
+    DEFAULT_N_GRID,
+    DEFAULT_N_REFINE,
+    LmmConfig,
+    LmmRunResult,
+)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -224,12 +233,12 @@ def run_lmm(
     validate_genotypes: bool = True,
     config: LmmConfig | None = None,
     # Flat config overrides (used when config is None):
-    maf_threshold: float = 0.01,
-    miss_threshold: float = 0.05,
-    l_min: float = 1e-5,
-    l_max: float = 1e5,
-    n_grid: int = 50,
-    n_refine: int = 10,
+    maf_threshold: float = DEFAULT_MAF,
+    miss_threshold: float = DEFAULT_MISS,
+    l_min: float = DEFAULT_L_MIN,
+    l_max: float = DEFAULT_L_MAX,
+    n_grid: int = DEFAULT_N_GRID,
+    n_refine: int = DEFAULT_N_REFINE,
     check_memory: bool = True,
     show_progress: bool = True,
     lmm_mode: int = 1,

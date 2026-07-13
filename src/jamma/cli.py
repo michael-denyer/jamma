@@ -16,6 +16,7 @@ from loguru import logger
 
 import jamma
 from jamma.core import OutputConfig
+from jamma.lmm.schema import DEFAULT_L_MAX, DEFAULT_L_MIN, DEFAULT_MAF, DEFAULT_MISS
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.utils import setup_logging, write_gemma_log
 
@@ -66,8 +67,10 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
 @click.option(
     "-outdir", type=click.Path(), default="output", help="Output directory path"
 )
-@click.option("-maf", type=float, default=0.01, help="MAF threshold for SNP filtering")
-@click.option("-miss", type=float, default=0.05, help="Missing rate threshold")
+@click.option(
+    "-maf", type=float, default=DEFAULT_MAF, help="MAF threshold for SNP filtering"
+)
+@click.option("-miss", type=float, default=DEFAULT_MISS, help="Missing rate threshold")
 @click.option(
     "-loco",
     is_flag=True,
@@ -107,13 +110,13 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
 @click.option(
     "-lmin",
     type=float,
-    default=1e-5,
+    default=DEFAULT_L_MIN,
     help="Minimum lambda for optimization (default: 1e-5)",
 )
 @click.option(
     "-lmax",
     type=float,
-    default=1e5,
+    default=DEFAULT_L_MAX,
     help="Maximum lambda for optimization (default: 1e5)",
 )
 @click.option(
@@ -483,8 +486,8 @@ def _run_lmm(
     snps_file: Path | None,
     ksnps_file: Path | None,
     hwe_threshold: float,
-    l_min: float = 1e-5,
-    l_max: float = 1e5,
+    l_min: float = DEFAULT_L_MIN,
+    l_max: float = DEFAULT_L_MAX,
     weight_file: Path | None = None,
     cat_columns: list[int] | None = None,
     backend: str = "auto",

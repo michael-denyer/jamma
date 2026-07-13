@@ -37,9 +37,19 @@ from jamma.lmm.prepare_common import (
     validate_runner_inputs,
 )
 from jamma.lmm.results import make_result_list_sink, make_writer_sink
+from jamma.lmm.schema import (
+    DEFAULT_L_MAX,
+    DEFAULT_L_MIN,
+    DEFAULT_MAF,
+    DEFAULT_MISS,
+    DEFAULT_N_GRID,
+    DEFAULT_N_REFINE,
+    LmmConfig,
+    LmmRunResult,
+    RunnerTiming,
+)
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.schema import LazySnpMeta as _LazySnpMeta
-from jamma.lmm.schema import LmmConfig, LmmRunResult, RunnerTiming
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
 
@@ -66,12 +76,12 @@ def run_lmm_association_numpy_streaming(
     covariates: np.ndarray | None = None,
     eigenvalues: np.ndarray | None = None,
     eigenvectors: np.ndarray | None = None,
-    maf_threshold: float = 0.01,
-    miss_threshold: float = 0.05,
-    l_min: float = 1e-5,
-    l_max: float = 1e5,
-    n_grid: int = 50,
-    n_refine: int = 10,
+    maf_threshold: float = DEFAULT_MAF,
+    miss_threshold: float = DEFAULT_MISS,
+    l_min: float = DEFAULT_L_MIN,
+    l_max: float = DEFAULT_L_MAX,
+    n_grid: int = DEFAULT_N_GRID,
+    n_refine: int = DEFAULT_N_REFINE,
     chunk_size: int = 10_000,
     check_memory: bool = True,
     show_progress: bool = True,

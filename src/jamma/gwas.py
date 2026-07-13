@@ -14,7 +14,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from jamma.lmm.schema import GWASTiming
+from jamma.lmm.schema import (
+    DEFAULT_L_MAX,
+    DEFAULT_L_MIN,
+    DEFAULT_MAF,
+    DEFAULT_MISS,
+    GWASTiming,
+)
 from jamma.lmm.stats import AssocResult
 from jamma.pipeline import PipelineConfig, PipelineRunner
 
@@ -54,8 +60,8 @@ def gwas(
     kinship_file: str | Path | None = None,
     covariate_file: str | Path | None = None,
     lmm_mode: int = 1,
-    maf: float = 0.01,
-    miss: float = 0.05,
+    maf: float = DEFAULT_MAF,
+    miss: float = DEFAULT_MISS,
     output_dir: str | Path = "output",
     output_prefix: str = "result",
     save_kinship: bool = False,
@@ -69,8 +75,8 @@ def gwas(
     snps_file: str | Path | None = None,
     ksnps_file: str | Path | None = None,
     hwe: float = 0.0,
-    l_min: float = 1e-5,
-    l_max: float = 1e5,
+    l_min: float = DEFAULT_L_MIN,
+    l_max: float = DEFAULT_L_MAX,
     weight_file: str | Path | None = None,
     cat_columns: list[int] | None = None,
     backend: str = "auto",

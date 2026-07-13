@@ -271,6 +271,30 @@ def test_loco_numpy_no_per_chromosome_bed_reads():
 
 
 @pytest.mark.tier1
+def test_run_lmm_loco_accepts_grid_params():
+    """run_lmm_loco accepts and forwards n_grid/n_refine to the optimizer.
+
+    Regression: run_lmm_loco had no n_grid/n_refine parameters, so the pipeline
+    could not configure LOCO's lambda grid — every LOCO run silently used the
+    hard-coded defaults regardless of PipelineConfig.n_grid/n_refine. Before the
+    fix, passing n_grid/n_refine here raised TypeError (unexpected keyword).
+    """
+    if not _LOCO_BFILE.with_suffix(".bed").exists():
+        pytest.skip("gemma_loco fixture not available")
+
+    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+    loco = run_lmm_loco(
+        bed_path=_LOCO_BFILE,
+        phenotypes=phenotypes,
+        n_grid=3,
+        n_refine=1,
+        check_memory=False,
+        show_progress=False,
+    )
+    assert loco.n_tested > 0, "Expected SNPs to be tested with an explicit grid"
+
+
+@pytest.mark.tier1
 def test_run_lmm_loco_reads_loco_workers_env(monkeypatch):
     """run_lmm_loco reads JAMMA_LOCO_WORKERS and logs a WARNING when workers > 1.
 

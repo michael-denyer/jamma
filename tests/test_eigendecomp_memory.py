@@ -6,14 +6,155 @@ import numpy as np
 import pytest
 
 from jamma.core.memory import (
+    _dsyevd_inplace_peak_gb,
     _dsyevd_peak_gb,
     _dsyevd_workspace_gb,
     _dsyevr_peak_gb,
     _dsyevr_workspace_gb,
     check_memory_before_run,
     estimate_eigendecomp_memory,
+    plan_eigen_driver,
 )
 from jamma.lmm.eigen import eigendecompose_kinship
+
+
+@pytest.mark.tier0
+class TestPlanEigenDriver:
+    """Tests for plan_eigen_driver — the shared driver-selection decision.
+
+    This pure function is the single source of truth for the
+    DSYEVD-inplace -> DSYEVD -> DSYEVR -> numpy choice used by both the runtime
+    path (eigendecompose_kinship) and the pre-flight estimator
+    (check_memory_before_run), so the two cannot drift.
+    """
+
+    N = 100_000
+
+    def test_inplace_when_ample_and_eligible(self):
+        """Ample memory + in-place eligible K -> in-place DSYEVD."""
+        plan = plan_eigen_driver(
+            self.N,
+            available_gb=1e6,
+            has_dsyevd=True,
+            has_dsyevr=True,
+            no_vendor=False,
+            inplace_eligible=True,
+        )
+        assert plan.driver == "DSYEVD-inplace"
+        assert plan.use_inplace is True
+        assert plan.use_dsyevr is False
+        assert plan.no_vendor is False
+        assert plan.required_gb == pytest.approx(_dsyevd_inplace_peak_gb(self.N))
+
+    def test_non_inplace_when_not_eligible(self):
+        """Ample memory but K not in-place eligible -> non-inplace DSYEVD."""
+        plan = plan_eigen_driver(
+            self.N,
+            available_gb=1e6,
+            has_dsyevd=True,
+            has_dsyevr=True,
+            no_vendor=False,
+            inplace_eligible=False,
+        )
+        assert plan.driver == "DSYEVD"
+        assert plan.use_inplace is False
+        assert plan.required_gb == pytest.approx(_dsyevd_peak_gb(self.N))
+
+    def test_dsyevr_fallback_when_inplace_wont_fit(self):
+        """Memory below the in-place peak but above DSYEVR -> DSYEVR fallback."""
+        # available sits between DSYEVR peak (+margin) and in-place peak (+margin).
+        available = (_dsyevr_peak_gb(self.N) + _dsyevd_inplace_peak_gb(self.N)) / 2
+        plan = plan_eigen_driver(
+            self.N,
+            available_gb=available,
+            has_dsyevd=True,
+            has_dsyevr=True,
+            no_vendor=False,
+            inplace_eligible=True,
+        )
+        assert plan.driver == "DSYEVR"
+        assert plan.use_dsyevr is True
+        assert plan.use_inplace is False
+        assert plan.required_gb == pytest.approx(_dsyevr_peak_gb(self.N))
+        # pre_fallback_gb records the in-place peak we fell back from.
+        assert plan.pre_fallback_gb == pytest.approx(_dsyevd_inplace_peak_gb(self.N))
+
+    def test_no_dsyevr_stays_on_dsyevd_when_tight(self):
+        """Tight memory, no DSYEVR available -> stay on DSYEVD (no fallback)."""
+        available = _dsyevr_peak_gb(self.N)  # below in-place peak
+        plan = plan_eigen_driver(
+            self.N,
+            available_gb=available,
+            has_dsyevd=True,
+            has_dsyevr=False,
+            no_vendor=False,
+            inplace_eligible=True,
+        )
+        assert plan.driver == "DSYEVD-inplace"
+        assert plan.use_dsyevr is False
+        assert plan.use_inplace is True
+
+    def test_no_vendor_forces_numpy(self):
+        """no_vendor -> numpy fallback with conservative DSYEVD footprint."""
+        plan = plan_eigen_driver(
+            self.N,
+            available_gb=1e6,
+            has_dsyevd=True,
+            has_dsyevr=True,
+            no_vendor=True,
+            inplace_eligible=True,
+        )
+        assert plan.driver == "numpy"
+        assert plan.no_vendor is True
+        assert plan.use_inplace is False
+        assert plan.use_dsyevr is False
+        assert plan.required_gb == pytest.approx(_dsyevd_peak_gb(self.N))
+
+    def test_no_drivers_auto_numpy(self):
+        """No vendor DSYEVD and no DSYEVR -> numpy fallback even if not forced."""
+        plan = plan_eigen_driver(
+            self.N,
+            available_gb=1e6,
+            has_dsyevd=False,
+            has_dsyevr=False,
+            no_vendor=False,
+            inplace_eligible=True,
+        )
+        assert plan.driver == "numpy"
+        assert plan.no_vendor is True
+
+    def test_dsyevr_only_when_no_dsyevd(self):
+        """Only vendor DSYEVR available -> plan DSYEVR, not DSYEVD.
+
+        jlinalg.eigh dispatches to DSYEVR directly when DSYEVD is absent, so the
+        plan must label DSYEVR and reserve its (smaller) footprint — not report
+        DSYEVD with the larger DSYEVD peak.
+        """
+        plan = plan_eigen_driver(
+            self.N,
+            available_gb=1e6,
+            has_dsyevd=False,
+            has_dsyevr=True,
+            no_vendor=False,
+            inplace_eligible=True,
+        )
+        assert plan.driver == "DSYEVR"
+        assert plan.use_dsyevr is True
+        assert plan.use_inplace is False
+        assert plan.no_vendor is False
+        assert plan.required_gb == pytest.approx(_dsyevr_peak_gb(self.N))
+
+    def test_deterministic_no_drift(self):
+        """Same inputs -> identical plan (pre-flight and runtime cannot diverge)."""
+        args = {
+            "has_dsyevd": True,
+            "has_dsyevr": True,
+            "no_vendor": False,
+            "inplace_eligible": True,
+        }
+        assert plan_eigen_driver(self.N, 1e6, **args) == plan_eigen_driver(
+            self.N, 1e6, **args
+        )
 
 
 @pytest.mark.tier0
@@ -402,3 +543,37 @@ class TestPreFlightDsyevrAware:
             mock_proc.return_value.memory_info.return_value.vms = 0
             result = check_memory_before_run(n_samples, n_snps)
             assert result is True
+
+    def test_forced_numpy_uses_conservative_estimate(self, monkeypatch):
+        """JLINALG_NO_VENDOR_LAPACK makes pre-flight use the numpy (DSYEVD) peak.
+
+        Regression: pre-flight hard-coded no_vendor=False, so a forced-numpy run
+        could pass the check on the smaller in-place vendor estimate and then OOM
+        (np.linalg.eigh uses the larger non-inplace DSYEVD footprint). With the
+        env var set, the check must use the conservative DSYEVD estimate.
+        """
+        n_samples = 100_000
+        n_snps = 10_000
+        inplace_peak = _dsyevd_inplace_peak_gb(n_samples)
+        dsyevd_peak = _dsyevd_peak_gb(n_samples)
+        # Memory fits the in-place vendor path but not the full numpy path.
+        available_gb = (inplace_peak + dsyevd_peak) / 2
+        with (
+            patch("jamma.jlinalg.blas_has_dsyevd", 1),
+            patch("jamma.jlinalg.blas_has_dsyevr", 1),
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_proc,
+        ):
+            mock_vm.return_value.available = available_gb * 1e9
+            mock_vm.return_value.total = available_gb * 1e9
+            mock_proc.return_value.memory_info.return_value.rss = 0
+            mock_proc.return_value.memory_info.return_value.vms = 0
+
+            # Vendor path (env unset): the in-place estimate fits -> passes.
+            monkeypatch.delenv("JLINALG_NO_VENDOR_LAPACK", raising=False)
+            assert check_memory_before_run(n_samples, n_snps) is True
+
+            # Forced numpy: the conservative DSYEVD estimate does not fit.
+            monkeypatch.setenv("JLINALG_NO_VENDOR_LAPACK", "1")
+            with pytest.raises(MemoryError):
+                check_memory_before_run(n_samples, n_snps)

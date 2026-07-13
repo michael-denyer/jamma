@@ -11,7 +11,6 @@ large kinship matrices (46k+) require ILP64 LAPACK.
 With ILP64 vendor BLAS, matrices up to 200k+ are supported.
 """
 
-import os
 import time
 import warnings
 
@@ -23,6 +22,7 @@ from jamma import jlinalg
 from jamma.core.memory import (
     _memory_margin_gb,
     check_memory_available,
+    forced_numpy_fallback,
     log_memory_snapshot,
     plan_eigen_driver,
 )
@@ -131,10 +131,7 @@ def eigendecompose_kinship(
     # Inplace requires vendor DSYEVD and a C-contiguous writeable float64 K
     # (otherwise PyArray_FROM_OTF copies, defeating memory savings).
     # JLINALG_NO_VENDOR_LAPACK forces np.linalg.eigh instead of vendor LAPACK.
-    no_vendor_env = os.environ.get("JLINALG_NO_VENDOR_LAPACK", "").strip() not in (
-        "",
-        "0",
-    )
+    no_vendor_env = forced_numpy_fallback()
     inplace_eligible = (
         K.dtype == np.float64 and K.flags["C_CONTIGUOUS"] and K.flags["WRITEABLE"]
     )
@@ -193,12 +190,17 @@ def eigendecompose_kinship(
             f"DSYEVR fallback={dsyevr_gb:.1f}GB)"
         )
     elif use_dsyevr:
-        # Explain which driver we fell back from
-        fell_from = "DSYEVD-inplace" if dsyevd_req == inplace_gb else "DSYEVD"
+        if dsyevd_req > required_gb:
+            # Fell back from DSYEVD/inplace under memory pressure
+            fell_from = "DSYEVD-inplace" if dsyevd_req == inplace_gb else "DSYEVD"
+            detail = f"{fell_from}={dsyevd_req:.1f}GB would not fit"
+        else:
+            # DSYEVR is the only available vendor driver
+            detail = "vendor DSYEVD unavailable"
         logger.info(
             f"Eigendecomp memory (DSYEVR): estimated {dsyevr_gb:.1f}GB, "
             f"available {available_gb:.1f}GB "
-            f"({fell_from}={dsyevd_req:.1f}GB would not fit)"
+            f"({detail})"
         )
     else:
         # Determine why inplace was not used

@@ -5,10 +5,22 @@ Also provides cleanup utilities for freeing memory between benchmark runs.
 """
 
 import gc
+import os
 from typing import NamedTuple
 
 import psutil
 from loguru import logger
+
+
+def forced_numpy_fallback() -> bool:
+    """Return True if JLINALG_NO_VENDOR_LAPACK forces the numpy eigendecomp path.
+
+    Shared by the runtime path (``eigendecompose_kinship``) and the pre-flight
+    estimator (``check_memory_before_run``) so both agree on whether vendor
+    LAPACK is bypassed — otherwise a forced-numpy run could pass pre-flight on a
+    smaller vendor estimate and then OOM.
+    """
+    return os.environ.get("JLINALG_NO_VENDOR_LAPACK", "").strip() not in ("", "0")
 
 
 def _dsyevd_workspace_gb(n: int) -> float:
@@ -109,7 +121,8 @@ class EigenDriverPlan(NamedTuple):
             "DSYEVR", or "numpy".
         use_inplace: Pass ``inplace=True`` to ``jlinalg.eigh`` (K reused as the
             eigenvector output buffer).
-        use_dsyevr: The DSYEVR fallback was selected under memory pressure.
+        use_dsyevr: DSYEVR was selected — either as the memory-pressure fallback
+            from DSYEVD, or because it is the only available vendor driver.
         no_vendor: No vendor LAPACK will run (``np.linalg.eigh`` fallback).
         required_gb: Peak memory (GB) for the chosen driver.
         pre_fallback_gb: ``required_gb`` before any DSYEVR fallback (used to log
@@ -143,9 +156,9 @@ def plan_eigen_driver(
 
     Prefers in-place DSYEVD (smallest footprint), falls back to non-inplace
     DSYEVD, then to DSYEVR (O(N) workspace) when the DSYEVD peak plus safety
-    margin would not fit. With no vendor DSYEVD/DSYEVR (or a caller-forced
-    ``no_vendor``), reports the numpy fallback and its conservative
-    DSYEVD-sized footprint.
+    margin would not fit. When only vendor DSYEVR is available, plans DSYEVR
+    directly. With no vendor DSYEVD/DSYEVR (or a caller-forced ``no_vendor``),
+    reports the numpy fallback and its conservative DSYEVD-sized footprint.
 
     Pure function — takes flags, returns a plan, performs no I/O. The runtime
     caller passes the real ``inplace_eligible`` (K is float64, C-contiguous,
@@ -185,7 +198,23 @@ def plan_eigen_driver(
             inplace_peak_gb=inplace_peak,
         )
 
-    use_inplace = has_dsyevd and inplace_eligible
+    # Only vendor DSYEVR is available (has_dsyevd is False, but the no-vendor
+    # check above means has_dsyevr is True): jlinalg.eigh dispatches to DSYEVR
+    # directly — there is no in-place path and no DSYEVD peak to reserve.
+    if not has_dsyevd:
+        return EigenDriverPlan(
+            driver="DSYEVR",
+            use_inplace=False,
+            use_dsyevr=True,
+            no_vendor=False,
+            required_gb=dsyevr_peak,
+            pre_fallback_gb=dsyevr_peak,
+            dsyevd_peak_gb=dsyevd_peak,
+            dsyevr_peak_gb=dsyevr_peak,
+            inplace_peak_gb=inplace_peak,
+        )
+
+    use_inplace = inplace_eligible
     required_gb = inplace_peak if use_inplace else dsyevd_peak
     pre_fallback_gb = required_gb
     use_dsyevr = False
@@ -906,7 +935,7 @@ def check_memory_before_run(
         snap.available_gb,
         has_dsyevd=_has_dsyevd,
         has_dsyevr=_has_dsyevr,
-        no_vendor=False,
+        no_vendor=forced_numpy_fallback(),
         inplace_eligible=True,
     )
 

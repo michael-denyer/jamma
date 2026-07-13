@@ -123,6 +123,27 @@ class TestPlanEigenDriver:
         assert plan.driver == "numpy"
         assert plan.no_vendor is True
 
+    def test_dsyevr_only_when_no_dsyevd(self):
+        """Only vendor DSYEVR available -> plan DSYEVR, not DSYEVD.
+
+        jlinalg.eigh dispatches to DSYEVR directly when DSYEVD is absent, so the
+        plan must label DSYEVR and reserve its (smaller) footprint — not report
+        DSYEVD with the larger DSYEVD peak.
+        """
+        plan = plan_eigen_driver(
+            self.N,
+            available_gb=1e6,
+            has_dsyevd=False,
+            has_dsyevr=True,
+            no_vendor=False,
+            inplace_eligible=True,
+        )
+        assert plan.driver == "DSYEVR"
+        assert plan.use_dsyevr is True
+        assert plan.use_inplace is False
+        assert plan.no_vendor is False
+        assert plan.required_gb == pytest.approx(_dsyevr_peak_gb(self.N))
+
     def test_deterministic_no_drift(self):
         """Same inputs -> identical plan (pre-flight and runtime cannot diverge)."""
         args = {
@@ -522,3 +543,37 @@ class TestPreFlightDsyevrAware:
             mock_proc.return_value.memory_info.return_value.vms = 0
             result = check_memory_before_run(n_samples, n_snps)
             assert result is True
+
+    def test_forced_numpy_uses_conservative_estimate(self, monkeypatch):
+        """JLINALG_NO_VENDOR_LAPACK makes pre-flight use the numpy (DSYEVD) peak.
+
+        Regression: pre-flight hard-coded no_vendor=False, so a forced-numpy run
+        could pass the check on the smaller in-place vendor estimate and then OOM
+        (np.linalg.eigh uses the larger non-inplace DSYEVD footprint). With the
+        env var set, the check must use the conservative DSYEVD estimate.
+        """
+        n_samples = 100_000
+        n_snps = 10_000
+        inplace_peak = _dsyevd_inplace_peak_gb(n_samples)
+        dsyevd_peak = _dsyevd_peak_gb(n_samples)
+        # Memory fits the in-place vendor path but not the full numpy path.
+        available_gb = (inplace_peak + dsyevd_peak) / 2
+        with (
+            patch("jamma.jlinalg.blas_has_dsyevd", 1),
+            patch("jamma.jlinalg.blas_has_dsyevr", 1),
+            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
+            patch("jamma.core.memory.psutil.Process") as mock_proc,
+        ):
+            mock_vm.return_value.available = available_gb * 1e9
+            mock_vm.return_value.total = available_gb * 1e9
+            mock_proc.return_value.memory_info.return_value.rss = 0
+            mock_proc.return_value.memory_info.return_value.vms = 0
+
+            # Vendor path (env unset): the in-place estimate fits -> passes.
+            monkeypatch.delenv("JLINALG_NO_VENDOR_LAPACK", raising=False)
+            assert check_memory_before_run(n_samples, n_snps) is True
+
+            # Forced numpy: the conservative DSYEVD estimate does not fit.
+            monkeypatch.setenv("JLINALG_NO_VENDOR_LAPACK", "1")
+            with pytest.raises(MemoryError):
+                check_memory_before_run(n_samples, n_snps)

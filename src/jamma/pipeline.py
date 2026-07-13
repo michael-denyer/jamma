@@ -45,7 +45,17 @@ from jamma.kinship import (
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.runner import ExecutionPlan, select_execution_mode, warn_if_small_sample
-from jamma.lmm.schema import LmmConfig, LmmRunResult, PipelineTiming
+from jamma.lmm.schema import (
+    DEFAULT_L_MAX,
+    DEFAULT_L_MIN,
+    DEFAULT_MAF,
+    DEFAULT_MISS,
+    DEFAULT_N_GRID,
+    DEFAULT_N_REFINE,
+    LmmConfig,
+    LmmRunResult,
+    PipelineTiming,
+)
 from jamma.lmm.stats import AssocResult
 
 
@@ -116,8 +126,8 @@ class PipelineConfig:
     kinship_file: Path | None = None
     covariate_file: Path | None = None
     lmm_mode: int = 1
-    maf: float = 0.01
-    miss: float = 0.05
+    maf: float = DEFAULT_MAF
+    miss: float = DEFAULT_MISS
     output_dir: Path = field(default_factory=lambda: Path("output"))
     output_prefix: str = "result"
     save_kinship: bool = False
@@ -133,10 +143,10 @@ class PipelineConfig:
     snps_file: Path | None = None
     ksnps_file: Path | None = None
     hwe_threshold: float = 0.0
-    l_min: float = 1e-5
-    l_max: float = 1e5
-    n_grid: int = 50
-    n_refine: int = 10
+    l_min: float = DEFAULT_L_MIN
+    l_max: float = DEFAULT_L_MAX
+    n_grid: int = DEFAULT_N_GRID
+    n_refine: int = DEFAULT_N_REFINE
     weight_file: Path | None = None
     cat_columns: list[int] | None = None
     backend: Literal["auto", "numpy", "numpy-streaming"] = "auto"

@@ -184,6 +184,16 @@ HEADERS: dict[str, str] = {
     tt: _HEADER_PREFIX + "\t" + "\t".join(cols) for tt, cols in FORMAT_COLUMNS.items()
 }
 
+# Default LMM knobs — single source of truth for the config surface (CLI,
+# gwas(), PipelineConfig, LmmConfig) and the runner dispatch entry points, so a
+# default cannot silently drift between them. Values match GEMMA v0.98.5.
+DEFAULT_MAF = 0.01
+DEFAULT_MISS = 0.05
+DEFAULT_L_MIN = 1e-5
+DEFAULT_L_MAX = 1e5
+DEFAULT_N_GRID = 50
+DEFAULT_N_REFINE = 10
+
 
 @dataclass(frozen=True)
 class LmmConfig:
@@ -206,12 +216,12 @@ class LmmConfig:
         lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
     """
 
-    maf_threshold: float = 0.01
-    miss_threshold: float = 0.05
-    l_min: float = 1e-5
-    l_max: float = 1e5
-    n_grid: int = 50
-    n_refine: int = 10
+    maf_threshold: float = DEFAULT_MAF
+    miss_threshold: float = DEFAULT_MISS
+    l_min: float = DEFAULT_L_MIN
+    l_max: float = DEFAULT_L_MAX
+    n_grid: int = DEFAULT_N_GRID
+    n_refine: int = DEFAULT_N_REFINE
     check_memory: bool = True
     show_progress: bool = True
     lmm_mode: LmmMode = 1

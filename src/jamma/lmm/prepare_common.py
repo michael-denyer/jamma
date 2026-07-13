@@ -21,6 +21,7 @@ from jamma.lmm.likelihood import (
     compute_Uab,
     finite_difference_dev2,
 )
+from jamma.lmm.schema import DEFAULT_L_MAX, DEFAULT_L_MIN
 from jamma.utils.logging import log_rss_memory
 
 
@@ -267,8 +268,8 @@ def _compute_null_model_common(
     Uty: np.ndarray,
     n_cvt: int,
     show_progress: bool,
-    l_min: float = 1e-5,
-    l_max: float = 1e5,
+    l_min: float = DEFAULT_L_MIN,
+    l_max: float = DEFAULT_L_MAX,
 ) -> tuple[float | None, float | None, np.ndarray | None]:
     """Compute null model MLE for Score, LRT, and All-tests modes.
 
@@ -338,8 +339,8 @@ def compute_and_log_pve(
     UtW: np.ndarray,
     Uty: np.ndarray,
     n_cvt: int,
-    l_min: float = 1e-5,
-    l_max: float = 1e5,
+    l_min: float = DEFAULT_L_MIN,
+    l_max: float = DEFAULT_L_MAX,
 ) -> tuple[float, float | None]:
     """Compute PVE and se(PVE) from null model REML lambda.
 

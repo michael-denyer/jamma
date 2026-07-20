@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.4.4] - 2026-07-20
+
+### Fixed
+
+- **Preflight false-OOM on multi-covariate runs.** The streaming memory
+  preflight sized its compute chunk without `n_cvt`, then estimated Uab/Iab at
+  the real `n_cvt`. Because Uab scales with `n_index = (n_cvt+3)(n_cvt+2)/2`,
+  the estimated peak was inflated up to ~60× and rejected runs the runtime
+  handles comfortably — a 25-covariate conditional analysis on 3,048 samples was
+  estimated at ~467 GB and raised `MemoryError`, though the streaming runtime
+  auto-sizes its chunk to `n_cvt` and completes in ~13 GB. Both preflight gates
+  (`check_memory_requirements`, `check_memory_before_run`) now thread `n_cvt`
+  into chunk sizing so the estimate uses the same chunk the runtime will (#74).
+
+### Changed
+
+- Dependency and CI-action bumps (Dependabot): `actions/checkout` 6 → 7,
+  `pypa/cibuildwheel` 3 → 4, `actions/attest-build-provenance` 4.1.0 → 4.1.1,
+  `j178/prek-action` 2.0.4 → 2.0.5, `astral-sh/setup-uv` 8.2.0 → 8.3.0, and dev
+  dependencies `pyrefly` 1.0.0 → 1.1.1 and `hatchling` 1.30.1 → 1.31.0. No source
+  or numerical-result change.
+
 ## [5.4.3] - 2026-07-13
 
 ### Security

@@ -113,3 +113,39 @@ def test_check_memory_before_run_succeeds_at_low_n_cvt():
     """
     # 100 samples x 1000 SNPs is negligible — must fit everywhere.
     assert check_memory_before_run(100, 1000, n_cvt=1) is True
+
+
+@pytest.mark.tier0
+def test_check_memory_before_run_accepts_moderate_n_cvt(monkeypatch):
+    """Regression (false-OOM): the preflight must size its compute chunk with the
+    SAME n_cvt it estimates Uab with.
+
+    The bug sized ``compute_chunk`` via ``_compute_chunk_size`` without n_cvt (so
+    it defaulted to n_cvt=1 and capped at MAX_SAFE_CHUNK=50k), then estimated Uab
+    at the real n_cvt. For 25 covariates that inflated the peak ~60x (~467GB) and
+    raised MemoryError on a run the streaming runtime sizes down (chunk ~1.3k) and
+    completes in ~13GB — e.g. a conditional analysis conditioning on a locus.
+
+    The inflate-and-raise test above passes even with the bug, because the bug
+    also over-estimates; only threading n_cvt into the chunk fixes this direction.
+    """
+    import psutil
+
+    from jamma.core import memory as memory_mod
+
+    # Pin available RAM at 100GB for both the chunk sizer (psutil) and the gate's
+    # sufficiency snapshot, so the pass/raise boundary is deterministic. With an
+    # n_cvt-aware chunk the peak is ~0.35x available (~35GB); the buggy n_cvt-blind
+    # chunk estimates ~467GB and exceeds 100GB.
+    class _Vm:
+        available = 100 * 1000**3
+
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: _Vm())
+
+    class _Snap:
+        rss_gb = 1.0
+        available_gb = 100.0
+
+    monkeypatch.setattr(memory_mod, "get_memory_snapshot", lambda: _Snap())
+
+    assert check_memory_before_run(3048, 88_268, n_cvt=25) is True

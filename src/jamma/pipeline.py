@@ -576,7 +576,7 @@ class PipelineRunner:
 
         disk_chunk = _compute_chunk_size(n_snps)
         compute_chunk = _compute_chunk_size(
-            n_snps, n_samples=n_samples, pipeline_buffers=2
+            n_snps, n_samples=n_samples, n_cvt=n_cvt, pipeline_buffers=2
         )
         est = estimate_streaming_memory(
             n_samples,

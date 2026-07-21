@@ -55,6 +55,7 @@ from jamma.lmm.schema import (
     LmmConfig,
     LmmRunResult,
     PipelineTiming,
+    validate_n_grid,
 )
 from jamma.lmm.stats import AssocResult
 
@@ -101,7 +102,9 @@ class PipelineConfig:
         l_min: Minimum lambda for optimization (default 1e-5, matches GEMMA).
         l_max: Maximum lambda for optimization (default 1e5, matches GEMMA).
         n_grid: Grid search resolution for lambda bracketing (default 50).
-        n_refine: Golden section refinement iterations (default 10).
+            Must be >= 2 — a one-point grid has no bracket to refine.
+        n_refine: Golden section refinement iterations (default 10). Clamped
+            to a minimum of 20 by the runners rather than rejected here.
         weight_file: Individual weight file for kinship pre-transformation.
             One weight per line, matching sample order. Applies
             K[i,j] /= sqrt(w_i * w_j) before eigendecomposition.
@@ -164,6 +167,9 @@ class PipelineConfig:
             raise ValueError(
                 f"backend must be one of {_valid_backends}, got {self.backend!r}"
             )
+        # The LOCO branch forwards n_grid to run_lmm_loco without building an
+        # LmmConfig, so LmmConfig's check alone would leave that path unguarded.
+        validate_n_grid(self.n_grid)
         # Derive phenotype_columns from phenotype_column if not set
         if self.phenotype_columns is None:
             self.phenotype_columns = [self.phenotype_column]

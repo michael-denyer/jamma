@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Single-point lambda grids are rejected at the config boundary.** `LmmConfig`
+  and `PipelineConfig` both accepted `n_grid=1`, though a one-point grid has no
+  bracket to refine. The C kernel rejects it in `validate_batch_params`, but only
+  once the run reaches the kernel — after kinship and eigendecomposition have
+  been paid for — and the NumPy fallback has no such check, so it silently
+  returned `lambda = l_min` for every SNP instead of its optimum. Both configs
+  now raise `ValueError` on construction (`n_grid must be >= 2`), which also
+  covers the LOCO branch, where `n_grid` is forwarded to `run_lmm_loco` without
+  an `LmmConfig` ever being built (#78).
+
 ## [5.4.4] - 2026-07-20
 
 ### Fixed

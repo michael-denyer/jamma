@@ -197,6 +197,32 @@ DEFAULT_L_MAX = 1e5
 DEFAULT_N_GRID = 50
 DEFAULT_N_REFINE = 10
 
+# Minimum coarse-grid resolution. A one-point grid has no bracket: the
+# golden-section stage collapses (idx_low == idx_high, so a == b) and every SNP
+# silently returns lambda = l_min instead of its optimum. This is a correctness
+# bound, not a quality preference. The C kernel enforces the same minimum in
+# validate_batch_params (src/jamma/lmm/_lmm_accel.c) — keep the two in step.
+MIN_N_GRID = 2
+
+
+def validate_n_grid(n_grid: int) -> None:
+    """Reject grid resolutions too coarse to bracket the lambda optimum.
+
+    Both config objects that carry n_grid call this. LmmConfig alone is not
+    enough: PipelineConfig's LOCO branch forwards its knobs to run_lmm_loco
+    without ever building an LmmConfig, so the value would otherwise reach the
+    kernel only after kinship and eigendecomposition had already been paid for
+    — or, on the NumPy fallback, produce a silent lambda = l_min for every SNP.
+
+    Args:
+        n_grid: Coarse grid resolution for lambda bracketing.
+
+    Raises:
+        ValueError: If n_grid is below MIN_N_GRID.
+    """
+    if n_grid < MIN_N_GRID:
+        raise ValueError(f"n_grid must be >= {MIN_N_GRID}, got {n_grid}")
+
 
 @dataclass(frozen=True)
 class LmmConfig:
@@ -211,9 +237,11 @@ class LmmConfig:
         miss_threshold: Maximum missing rate for SNP inclusion.
         l_min: Minimum lambda for optimization.
         l_max: Maximum lambda for optimization.
-        n_grid: Grid search resolution for lambda bracketing.
+        n_grid: Grid search resolution for lambda bracketing. Must be >= 2 —
+            a one-point grid has no bracket to refine (see MIN_N_GRID).
         n_refine: Golden section iterations (clamped to min 20 internally
-            for ~1e-5 tolerance).
+            for ~1e-5 tolerance, so low values are raised rather than
+            rejected).
         check_memory: Check available memory before workflow.
         show_progress: Show progress bars and GEMMA-style logging.
         lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
@@ -249,8 +277,7 @@ class LmmConfig:
             raise ValueError(
                 f"l_max ({self.l_max}) must be greater than l_min ({self.l_min})"
             )
-        if self.n_grid < 2:
-            raise ValueError(f"n_grid must be >= 2, got {self.n_grid}")
+        validate_n_grid(self.n_grid)
 
     def as_kwargs(self) -> dict:
         """Return config fields as a dict suitable for unpacking into runner kwargs.

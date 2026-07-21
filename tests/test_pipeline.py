@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from jamma.lmm.eigen import eigendecompose_kinship
+from jamma.lmm.schema import MIN_N_GRID
 from jamma.pipeline import PipelineConfig, PipelineRunner
 
 # Fixture paths for gemma_synthetic dataset
@@ -426,6 +427,29 @@ class TestPipelineConfigLambdaBounds:
         runner = PipelineRunner(config)
         with pytest.raises(ValueError, match="l_max must be > l_min"):
             runner.validate_inputs()
+
+
+@pytest.mark.tier1
+class TestPipelineConfigGridResolution:
+    """Tests for PipelineConfig n_grid validation.
+
+    Regression: LmmConfig rejected n_grid < 2, but the LOCO branch forwards
+    PipelineConfig.n_grid to run_lmm_loco without ever building an LmmConfig,
+    so a one-point grid reached the kernel — after kinship and eigendecomposition
+    on the C path, and silently as lambda = l_min on the NumPy path.
+    """
+
+    @pytest.mark.parametrize("n_grid", [-5, 0, 1])
+    @pytest.mark.parametrize("loco", [False, True], ids=["batch", "loco"])
+    def test_n_grid_below_two_raises(self, n_grid: int, loco: bool) -> None:
+        """Construction fails for both branches, before any compute happens."""
+        with pytest.raises(ValueError, match="n_grid must be >= 2"):
+            PipelineConfig(bfile=Path("test"), n_grid=n_grid, loco=loco)
+
+    def test_minimum_grid_accepted(self) -> None:
+        """n_grid == MIN_N_GRID is the smallest grid that still brackets."""
+        config = PipelineConfig(bfile=Path("test"), n_grid=MIN_N_GRID)
+        assert config.n_grid == 2
 
 
 @pytest.mark.tier1

@@ -249,8 +249,8 @@ class LmmConfig:
             raise ValueError(
                 f"l_max ({self.l_max}) must be greater than l_min ({self.l_min})"
             )
-        if self.n_grid < 1:
-            raise ValueError(f"n_grid must be >= 1, got {self.n_grid}")
+        if self.n_grid < 2:
+            raise ValueError(f"n_grid must be >= 2, got {self.n_grid}")
 
     def as_kwargs(self) -> dict:
         """Return config fields as a dict suitable for unpacking into runner kwargs.

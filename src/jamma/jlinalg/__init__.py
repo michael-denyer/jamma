@@ -62,17 +62,21 @@ def _dsyrk_numpy(
         if beta != 0.0:
             raise ValueError("dsyrk: beta requires out")
     else:
-        expected = (X.shape[0], X.shape[0])
-        if out.ndim != 2 or out.shape != expected:
-            raise ValueError(
-                f"dsyrk: out shape {out.shape} doesn't match result shape {expected}"
-            )
+        if not isinstance(out, _np.ndarray):
+            raise TypeError("dsyrk: out must be a numpy array")
         if out.dtype != _np.float64:
             raise ValueError(f"dsyrk: out must be float64, got {out.dtype}")
         if not out.flags["C_CONTIGUOUS"]:
             raise ValueError("dsyrk: out must be C-contiguous")
         if not out.flags["WRITEABLE"]:
             raise ValueError("dsyrk: out must be writeable")
+        if out.ndim != 2:
+            raise ValueError(f"dsyrk: out must be 2-D, got {out.ndim}-D")
+        expected = (X.shape[0], X.shape[0])
+        if out.shape != expected:
+            raise ValueError(
+                f"dsyrk: out shape {out.shape} doesn't match result shape {expected}"
+            )
 
     X64 = _np.ascontiguousarray(X, dtype=_np.float64)
     if out is None:

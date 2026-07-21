@@ -481,6 +481,20 @@ class TestDsyrkFallback:
         expected = _reference_dsyrk(X)
         npt.assert_allclose(result, expected, rtol=1e-12)
 
+    def test_fallback_rejects_non_array_output(self) -> None:
+        """Fallback matches the native output type contract."""
+        from jamma.jlinalg import _dsyrk_numpy
+
+        with pytest.raises(TypeError, match="numpy array"):
+            _dsyrk_numpy(np.ones((3, 2)), out=[[0.0] * 3] * 3)  # type: ignore[arg-type]
+
+    def test_fallback_rejects_non_2d_output(self) -> None:
+        """Fallback reports dimensionality before shape mismatch."""
+        from jamma.jlinalg import _dsyrk_numpy
+
+        with pytest.raises(ValueError, match="2-D"):
+            _dsyrk_numpy(np.ones((3, 2)), out=np.empty(3, dtype=np.float64))
+
 
 # ---------------------------------------------------------------------------
 # TestDsyr2kCorrectness — BL3-07

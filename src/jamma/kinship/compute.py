@@ -36,7 +36,6 @@ from jamma import jlinalg
 from jamma.core.estimates import estimate_kinship_seconds
 from jamma.core.memory import (
     check_memory_available,
-    estimate_eigendecomp_memory,
     estimate_streaming_memory,
     log_memory_snapshot,
 )
@@ -75,6 +74,30 @@ def _accumulate_kinship(K: np.ndarray, X_centered: np.ndarray) -> None:
     The accumulator is mutated in place.
     """
     jlinalg.dsyrk(X_centered, out=K, beta=1.0)
+
+
+def _preflight_kinship_memory(n_samples: int, chunk_size: int) -> None:
+    """Gate a kinship computation on the memory that phase actually needs.
+
+    Sizes the kinship phase alone — the accumulator plus one genotype chunk.
+    Callers that go on to eigendecompose are gated separately by
+    ``eigendecompose_kinship``, and whole-workflow planning happens in
+    ``PipelineRunner``, so charging kinship for those phases here would refuse
+    ``-gk`` runs that fit comfortably.
+
+    Args:
+        n_samples: Number of samples in the kinship matrix.
+        chunk_size: SNPs per genotype chunk held during accumulation.
+
+    Raises:
+        MemoryError: If the kinship phase will not fit in available memory.
+    """
+    est = estimate_streaming_memory(n_samples, chunk_size=chunk_size)
+    check_memory_available(
+        est.peak_kinship_gb,
+        safety_margin=0.1,
+        operation=f"kinship accumulation (peak: {est.peak_kinship_gb:.1f}GB)",
+    )
 
 
 def _filter_snps(
@@ -162,13 +185,13 @@ def _compute_kinship_inmemory(
         )
 
     if check_memory:
-        eigendecomp_peak_gb = estimate_eigendecomp_memory(n_samples)
-        kinship_peak_gb = n_samples**2 * 8 / 1e9 + n_samples * n_snps * 8 / 1e9
-        required_gb = max(eigendecomp_peak_gb, kinship_peak_gb)
+        # Kinship phase only: the accumulator plus the float64 genotype matrix.
+        # Callers that eigendecompose are gated by eigendecompose_kinship.
+        required_gb = n_samples**2 * 8 / 1e9 + n_samples * n_snps * 8 / 1e9
         check_memory_available(
             required_gb,
             safety_margin=0.1,
-            operation=f"GWAS pipeline (peak: {required_gb:.1f}GB)",
+            operation=f"kinship accumulation (peak: {required_gb:.1f}GB)",
         )
 
     log_memory_snapshot(f"before_{label.lower().replace(' ', '_')}_{n_samples}samples")
@@ -610,15 +633,10 @@ def compute_kinship_streaming(
     # Memory check before allocation.
     # Use n_samples (not n_out): stream_genotype_chunks reads full BED rows
     # at (n_samples, chunk_size), subsetting to valid_indices happens after
-    # allocation. Eigendecomp and kinship accumulator use n_out, but passing
-    # n_samples is conservative and safe.
+    # allocation. The kinship accumulator uses n_out, but passing n_samples is
+    # conservative and safe.
     if check_memory:
-        est = estimate_streaming_memory(n_samples, chunk_size=chunk_size)
-        check_memory_available(
-            est.total_peak_gb,
-            safety_margin=0.1,
-            operation=f"GWAS pipeline (eigendecomp peak: {est.total_peak_gb:.1f}GB)",
-        )
+        _preflight_kinship_memory(n_samples, chunk_size)
 
     # Single-pass optimization: when no MAF/missing filters are active and
     # no ksnps restriction, monomorphism filtering can be done inline per-chunk.

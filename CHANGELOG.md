@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.6.0] - 2026-07-21
+
+### Added
+
+- **`jlinalg.dsyrk` accepts a caller-owned output buffer.** The signature is now
+  `dsyrk(X, *, out=None, beta=0.0)`, computing `out = X @ X.T + beta * out`. The
+  existing one-argument call is unchanged. Batch, streaming, and LOCO kinship
+  accumulation use `dsyrk(X, out=K, beta=1.0)` in place of `K += dsyrk(X)`,
+  which removes the `n_samples x n_samples` temporary that the old pattern
+  allocated on every batch.
+
+### Changed
+
+- **Mode 4 computes its REML and MLE coarse-grid brackets in one pass.** The two
+  likelihoods share the same three SNP-varying reductions at each grid lambda
+  and differ only in their tail, so the one-covariate split/SoA kernel now
+  derives one canonical Pab per grid point and selects both brackets from it.
+  Golden-section refinement and final evaluation remain independent per
+  likelihood. Mode-4 output is bitwise unchanged. The general-covariate kernel
+  is not affected.
+- **`jlinalg` ABI version is 13.** The bump is internal to the C extension;
+  ABI mismatches trigger the existing automatic recompile.
+
+### Fixed
+
+- **`dsyrk` no longer reads its output buffer when `beta` is zero.** BLAS
+  defines `beta == 0` as "C is not read", precisely so the caller may pass
+  uninitialized memory. For a zero-width `X` the native path scaled the freshly
+  allocated output instead of zeroing it, and because `NaN * 0.0` is `NaN`, a
+  reused allocation leaked its previous contents into the result. It is zeroed
+  again.
+- **`dsyrk` rejects an unaligned `out` instead of silently ignoring it.** An
+  unaligned but otherwise valid buffer was converted to an aligned copy, so the
+  result was written to the copy and the caller's array left untouched.
+  `dsyrk(X, out=K) is K` now holds by construction.
+
 ## [5.5.0] - 2026-07-21
 
 ### Changed

@@ -184,7 +184,7 @@ static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
  *
  * Signature: dsyrk(X: ndarray, *, out=None, beta=0.0) -> ndarray
  * X must be 2-D C-contiguous float64 of shape (N, K).
- * out, when provided, must be writable C-contiguous float64 of shape (N, N).
+ * out, when provided, must be writable, aligned, C-contiguous float64 of shape (N, N).
  * Computes out = X @ X.T + beta*out and returns the output, bitwise symmetric.
  * ---------------------------------------------------------------------------
  */
@@ -237,6 +237,11 @@ static PyObject *py_dsyrk(PyObject *self, PyObject *args, PyObject *kwargs) {
             Py_DECREF(aX);
             return NULL;
         }
+        if (!PyArray_ISALIGNED(out)) {
+            PyErr_SetString(PyExc_ValueError, "dsyrk: out must be aligned");
+            Py_DECREF(aX);
+            return NULL;
+        }
         if (!PyArray_ISWRITEABLE(out)) {
             PyErr_SetString(PyExc_ValueError, "dsyrk: out must be writeable");
             Py_DECREF(aX);
@@ -255,12 +260,8 @@ static PyObject *py_dsyrk(PyObject *self, PyObject *args, PyObject *kwargs) {
             Py_DECREF(aX);
             return NULL;
         }
-        aC = (PyArrayObject *)PyArray_FROM_OTF(
-            oOut, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_WRITEABLE | NPY_ARRAY_ALIGNED);
-        if (!aC) {
-            Py_DECREF(aX);
-            return NULL;
-        }
+        Py_INCREF(oOut);
+        aC = (PyArrayObject *)oOut;
     } else {
         npy_intp dims[2] = {N, N};
         aC = (PyArrayObject *)PyArray_SimpleNew(2, dims, NPY_DOUBLE);

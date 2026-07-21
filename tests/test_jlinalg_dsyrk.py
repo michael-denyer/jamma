@@ -326,6 +326,26 @@ class TestDsyrkZero:
         assert result.dtype == np.float64
         npt.assert_array_equal(result, np.zeros((5, 5)))
 
+    @pytest.mark.skipif(
+        not HAS_C_EXTENSION, reason="C extension required for allocator regression"
+    )
+    def test_native_k_zero_does_not_read_fresh_output_memory(self) -> None:
+        """A fresh native output for K=0 is initialized, even after heap churn."""
+        from jamma.jlinalg import _jlinalg
+
+        if not _jlinalg.blas_has_dsyrk:
+            pytest.skip("vendor DSYRK required for native-path regression")
+
+        n = 23
+        X = np.empty((n, 0), dtype=np.float64)
+        expected = np.zeros((n, n), dtype=np.float64)
+        for _ in range(32):
+            dirty = np.full((n, n), np.nan, dtype=np.float64)
+            del dirty
+            result = _jlinalg.dsyrk(X)
+            npt.assert_array_equal(result, expected)
+            del result
+
 
 # ---------------------------------------------------------------------------
 # TestDsyrkValidation — input validation
@@ -376,6 +396,27 @@ class TestDsyrkOutput:
 
         assert result is out
         npt.assert_allclose(out, X @ X.T, rtol=1e-12, atol=1e-14)
+
+    @pytest.mark.skipif(
+        not HAS_C_EXTENSION, reason="C extension required for native out regression"
+    )
+    def test_native_unaligned_out_is_rejected(self) -> None:
+        """Native dsyrk must not replace an unaligned out array with a copy."""
+        from jamma.jlinalg import _jlinalg
+
+        if not _jlinalg.blas_has_dsyrk:
+            pytest.skip("vendor DSYRK required for native-path regression")
+
+        X = np.arange(12, dtype=np.float64).reshape(4, 3)
+        storage = bytearray(4 + 4 * 4 * np.dtype(np.float64).itemsize)
+        out = np.frombuffer(storage, dtype=np.float64, count=16, offset=4).reshape(4, 4)
+        assert not out.flags["ALIGNED"]
+
+        with pytest.raises(ValueError, match="aligned"):
+            _jlinalg.dsyrk(X, out=out)
+
+        with pytest.raises(ValueError, match="aligned"):
+            dsyrk(X, out=out)
 
     def test_zero_width_input_scales_output(self) -> None:
         X = np.empty((6, 0), dtype=np.float64)
@@ -460,6 +501,19 @@ class TestDsyrkFallback:
         X = rng.standard_normal((50, 30))
         result = fb(X)
         npt.assert_array_equal(result, result.T)
+
+    def test_production_fallback_accumulates_into_output(self) -> None:
+        """The production NumPy backend preserves the validated out contract."""
+        from jamma.jlinalg import _dsyrk_numpy
+
+        X = np.arange(12, dtype=np.float64).reshape(4, 3)
+        initial = np.eye(4, dtype=np.float64)
+        out = initial.copy()
+
+        result = _dsyrk_numpy(X, out=out, beta=0.5)
+
+        assert result is out
+        npt.assert_allclose(out, X @ X.T + 0.5 * initial, rtol=1e-14, atol=0.0)
 
     def test_fallback_1d_raises(self) -> None:
         """Fallback raises ValueError on 1-D input."""

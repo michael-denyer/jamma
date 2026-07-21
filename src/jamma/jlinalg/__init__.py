@@ -52,10 +52,8 @@ HAS_C_EXTENSION: bool = False
 _EXPECTED_JLINALG_ABI = 13  # Must match JLINALG_ABI_VERSION in include/jlinalg.h
 
 
-def _dsyrk_numpy(
-    X: _np.ndarray, *, out: _np.ndarray | None = None, beta: float = 0.0
-) -> _np.ndarray:
-    """NumPy implementation of C = X @ X.T + beta*C."""
+def _validate_dsyrk(X: _np.ndarray, out: _np.ndarray | None, beta: float) -> None:
+    """Validate the public dsyrk contract before backend dispatch."""
     if X.ndim != 2:
         raise ValueError(f"dsyrk: X must be a 2-D array, got {X.ndim}-D")
     if out is None:
@@ -68,6 +66,8 @@ def _dsyrk_numpy(
             raise ValueError(f"dsyrk: out must be float64, got {out.dtype}")
         if not out.flags["C_CONTIGUOUS"]:
             raise ValueError("dsyrk: out must be C-contiguous")
+        if not out.flags["ALIGNED"]:
+            raise ValueError("dsyrk: out must be aligned")
         if not out.flags["WRITEABLE"]:
             raise ValueError("dsyrk: out must be writeable")
         if out.ndim != 2:
@@ -78,6 +78,11 @@ def _dsyrk_numpy(
                 f"dsyrk: out shape {out.shape} doesn't match result shape {expected}"
             )
 
+
+def _dsyrk_numpy_impl(
+    X: _np.ndarray, *, out: _np.ndarray | None = None, beta: float = 0.0
+) -> _np.ndarray:
+    """Unchecked NumPy implementation of C = X @ X.T + beta*C."""
     X64 = _np.ascontiguousarray(X, dtype=_np.float64)
     if out is None:
         result = _np.dot(X64, X64.T)
@@ -91,6 +96,18 @@ def _dsyrk_numpy(
     il = _np.tril_indices_from(result, -1)
     result.T[il] = result[il]
     return result
+
+
+def _dsyrk_numpy(
+    X: _np.ndarray, *, out: _np.ndarray | None = None, beta: float = 0.0
+) -> _np.ndarray:
+    """Validated NumPy implementation, exposed for backend-specific tests."""
+    _validate_dsyrk(X, out, beta)
+    return _dsyrk_numpy_impl(X, out=out, beta=beta)
+
+
+# Default binding; a usable native implementation replaces it during import.
+dsyrk = _dsyrk_numpy_impl
 
 
 # Phase 116.1: ASAN/UBSAN sanitizer workflow needs a way to skip the
@@ -148,7 +165,7 @@ else:
         # C extension loaded, but vendor BLAS/LAPACK may not be available.
         # Replace C functions with NumPy fallbacks for unavailable operations.
         if not blas_has_dsyrk:
-            dsyrk = _dsyrk_numpy  # type: ignore[misc]
+            dsyrk = _dsyrk_numpy_impl  # type: ignore[misc]
 
         if not blas_has_dsyevd and not blas_has_dsyevr:
 
@@ -408,7 +425,7 @@ if not HAS_C_EXTENSION:
             dtype=_np.float64,
         )
 
-    dsyrk = _dsyrk_numpy
+    dsyrk = _dsyrk_numpy_impl
 
     def eigh(K: _np.ndarray, inplace: bool = False) -> tuple[_np.ndarray, _np.ndarray]:
         """Compute eigenvalues and eigenvectors of a symmetric matrix.
@@ -510,6 +527,21 @@ if not HAS_C_EXTENSION:
         max_threads = _os.cpu_count() or 1
         _fallback_thread_state[0] = min(n, max_threads)
         return old
+
+
+# Capture the selected implementation, then expose one validated public
+# boundary for both the native and NumPy paths. The C extension retains
+# defensive checks because its internal module remains directly importable.
+_dsyrk_backend = dsyrk
+
+
+def dsyrk(
+    X: _np.ndarray, *, out: _np.ndarray | None = None, beta: float = 0.0
+) -> _np.ndarray:
+    """Compute ``X @ X.T + beta * out`` with a shared backend contract."""
+    _validate_dsyrk(X, out, beta)
+    return _dsyrk_backend(X, out=out, beta=beta)
+
 
 # ---------------------------------------------------------------------------
 # NumPy-only BLAS functions (always use NumPy, never from C extension)

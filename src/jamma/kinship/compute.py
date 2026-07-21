@@ -62,7 +62,7 @@ def _ensure_float64(arr: np.ndarray) -> np.ndarray:
     return arr if arr.dtype == np.float64 else arr.astype(np.float64)
 
 
-def _accumulate_kinship(K: np.ndarray, X_centered: np.ndarray) -> np.ndarray:
+def _accumulate_kinship(K: np.ndarray, X_centered: np.ndarray) -> None:
     """Accumulate kinship contribution from centered SNP batch.
 
     Uses jlinalg.dsyrk (symmetric rank-k update) with in-place accumulation.
@@ -72,11 +72,9 @@ def _accumulate_kinship(K: np.ndarray, X_centered: np.ndarray) -> np.ndarray:
         K: Current kinship matrix accumulator (n_samples, n_samples)
         X_centered: Centered genotype batch (n_samples, batch_snps)
 
-    Returns:
-        Updated kinship matrix with batch contribution added.
+    The accumulator is mutated in place.
     """
     jlinalg.dsyrk(X_centered, out=K, beta=1.0)
-    return K
 
 
 def _filter_snps(
@@ -195,7 +193,7 @@ def _compute_kinship_inmemory(
     for _, start in batch_iter:
         end = min(start + batch_size, n_snps)
         X_transformed = transform_fn(X[:, start:end])
-        K = _accumulate_kinship(K, X_transformed)
+        _accumulate_kinship(K, X_transformed)
 
     K = K / n_snps
 
@@ -508,7 +506,7 @@ def _kinship_single_pass(
 
         X_chunk = chunk[:, poly_mask]
         X_centered = impute_and_center(X_chunk)
-        K = _accumulate_kinship(K, X_centered)
+        _accumulate_kinship(K, X_centered)
         n_filtered += n_poly
         del chunk, X_chunk, X_centered
 
@@ -731,8 +729,8 @@ def compute_kinship_streaming(
         # Impute and center the chunk
         X_centered = impute_and_center(X_chunk)
 
-        # Accumulate kinship contribution (in-place numpy matmul)
-        K = _accumulate_kinship(K, X_centered)
+        # Accumulate the symmetric rank-k contribution in place.
+        _accumulate_kinship(K, X_centered)
 
     # Scale by number of filtered SNPs
     K = K / n_filtered

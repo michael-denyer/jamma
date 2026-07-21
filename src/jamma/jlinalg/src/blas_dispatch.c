@@ -1351,9 +1351,13 @@ void jlinalg_dsyrk_ext(npy_intp N, npy_intp K, const double *X, npy_intp ldx, do
                        npy_intp ldc, double beta) {
     if (N <= 0) return;
     if (K <= 0) {
-        for (npy_intp i = 0; i < N; i++)
-            for (npy_intp j = 0; j <= i; j++)
-                C[i * ldc + j] *= beta;
+        if (beta == 0.0) {
+            memset(C, 0, (size_t)N * (size_t)ldc * sizeof(*C));
+        } else {
+            for (npy_intp i = 0; i < N; i++)
+                for (npy_intp j = 0; j <= i; j++)
+                    C[i * ldc + j] *= beta;
+        }
         for (npy_intp i = 0; i < N; i++)
             for (npy_intp j = i + 1; j < N; j++)
                 C[i * ldc + j] = C[j * ldc + i];

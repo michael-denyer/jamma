@@ -825,6 +825,72 @@ typedef struct {
     double pab1_5;     /* s_yy - s_wy^2/s_ww — completely SNP-invariant */
 } grid_invariant_t;
 
+/* Find the REML and MLE coarse-grid brackets in one pass over each cached
+ * weight vector. Both likelihoods use the same three SNP-varying reductions;
+ * only their likelihood tails differ. A result of -1 means every grid point
+ * was degenerate for that likelihood. */
+static void coarse_grid_mode4_ncvt1_split(
+    const double * restrict var_wx,
+    const double * restrict var_xx,
+    const double * restrict var_xy,
+    int n_samples,
+    const double *hi_eval_grid,
+    const double *logdet_h_grid,
+    const grid_invariant_t *grid_inv,
+    int n_grid,
+    double logdet_iab,
+    int df,
+    double reml_const,
+    double mle_const,
+    int *best_reml_idx,
+    int *best_mle_idx
+)
+{
+    double best_reml = REML_SENTINEL;
+    double best_mle = REML_SENTINEL;
+    *best_reml_idx = -1;
+    *best_mle_idx = -1;
+
+    for (int g = 0; g < n_grid; g++) {
+        const double *h_grid = hi_eval_grid + (size_t)g * n_samples;
+        double s_wx = 0.0, s_xx = 0.0, s_xy = 0.0;
+        #pragma omp simd reduction(+:s_wx,s_xx,s_xy)
+        for (int i = 0; i < n_samples; i++) {
+            double h = h_grid[i];
+            s_wx += h * var_wx[i];
+            s_xx += h * var_xx[i];
+            s_xy += h * var_xy[i];
+        }
+
+        const grid_invariant_t *ginv = &grid_inv[g];
+        double p1_xx = s_xx - s_wx * s_wx * ginv->inv_s_ww;
+        double p1_xy = s_xy - s_wx * ginv->s_wy * ginv->inv_s_ww;
+        double inv_xx = (p1_xx != 0.0) ? 1.0 / p1_xx : 0.0;
+        double p_yy = ginv->pab1_5 - p1_xy * p1_xy * inv_xx;
+
+        if (p_yy >= 0.0) {
+            if (p_yy < P_YY_MIN) p_yy = P_YY_MIN;
+
+            double logdet_pab = ginv->log_s_ww;
+            if (p1_xx > 0.0) logdet_pab += log(p1_xx);
+            double logdet_hiw = logdet_pab - logdet_iab;
+            double reml_logl = reml_const - 0.5 * logdet_h_grid[g]
+                                - 0.5 * logdet_hiw - 0.5 * df * log(p_yy);
+            double mle_logl = mle_const - 0.5 * logdet_h_grid[g]
+                              - 0.5 * n_samples * log(p_yy);
+
+            if (reml_logl > best_reml) {
+                best_reml = reml_logl;
+                *best_reml_idx = g;
+            }
+            if (mle_logl > best_mle) {
+                best_mle = mle_logl;
+                *best_mle_idx = g;
+            }
+        }
+    }
+}
+
 /* -------------------------------------------------------------------------
  * calc_pab_ncvt1_split
  *
@@ -1011,6 +1077,7 @@ static double golden_section_lambda_ncvt1_split(
     const grid_invariant_t *grid_inv,
     double log_l_min, double step,
     int n_grid, int n_refine,
+    const int *coarse_best_idx,
     int df, double reml_const,
     double *logl_out,
     double *beta_out, double *se_out, double *f_stat_out,
@@ -1022,26 +1089,31 @@ static double golden_section_lambda_ncvt1_split(
     /* Stage 1: coarse grid search using cached split.
      * Degenerate grid points return NaN from reml_logl_ncvt1_cached_split
      * (P_yy < 0); map NaN → REML_SENTINEL so > comparison skips them. */
-    double best_logl = REML_SENTINEL;
     int best_idx = 0;
-    for (int g = 0; g < n_grid; g++) {
-        double logl = reml_logl_ncvt1_cached_split(
-            var_wx, var_xx, var_xy,
-            hi_eval_grid + (size_t)g * n_samples,
-            logdet_h_grid[g],
-            logdet_iab,
-            &grid_inv[g],
-            n_samples, df, reml_const
-        );
-        if (isnan(logl)) logl = REML_SENTINEL;
-        if (logl > best_logl) {
-            best_logl = logl;
-            best_idx = g;
+    if (coarse_best_idx != NULL) {
+        best_idx = *coarse_best_idx;
+    } else {
+        double best_logl = REML_SENTINEL;
+        for (int g = 0; g < n_grid; g++) {
+            double logl = reml_logl_ncvt1_cached_split(
+                var_wx, var_xx, var_xy,
+                hi_eval_grid + (size_t)g * n_samples,
+                logdet_h_grid[g],
+                logdet_iab,
+                &grid_inv[g],
+                n_samples, df, reml_const
+            );
+            if (isnan(logl)) logl = REML_SENTINEL;
+            if (logl > best_logl) {
+                best_logl = logl;
+                best_idx = g;
+            }
         }
+        if (best_logl == REML_SENTINEL) best_idx = -1;
     }
 
     /* Every grid point produced NaN — fully degenerate SNP. */
-    if (best_logl == REML_SENTINEL) {
+    if (best_idx < 0) {
         *logl_out    = (double)NAN;
         *beta_out    = (double)NAN;
         *se_out      = (double)NAN;
@@ -1753,7 +1825,7 @@ static PyObject *compute_lmm_chunk_split_c_py(
             ws->eigenvalues, logdet_iab,
             n_samples, ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
             ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
-            df, reml_const, &logl_opt, &beta, &se, &f_stat, &is_valid
+            NULL, df, reml_const, &logl_opt, &beta, &se, &f_stat, &is_valid
         );
 
         lambdas[snp] = lambda_opt;
@@ -3103,7 +3175,7 @@ static PyObject *compute_lmm_batch_split_c(
             eigenvalues_data, logdet_iab,
             n_samples, lambda_grid, hi_eval_grid, logdet_h_grid,
             grid_inv, log_l_min, step, n_grid, n_refine,
-            df, reml_const, &logl_opt,
+            NULL, df, reml_const, &logl_opt,
             &beta, &se, &f_stat, &is_valid
         );
 
@@ -3692,6 +3764,7 @@ static double golden_section_lambda_mle_ncvt1_split(
     const grid_invariant_t *grid_inv,
     double log_l_min, double step,
     int n_grid, int n_refine,
+    const int *coarse_best_idx,
     double mle_const,
     double * restrict hi_eval,
     double *logl_out
@@ -3700,25 +3773,30 @@ static double golden_section_lambda_mle_ncvt1_split(
     const double phi = 0.6180339887498949;
 
     /* Stage 1: coarse grid search using cached split */
-    double best_logl = REML_SENTINEL;
     int best_idx = 0;
-    for (int g = 0; g < n_grid; g++) {
-        double logl = mle_logl_ncvt1_cached_split(
-            var_wx, var_xx, var_xy,
-            hi_eval_grid + (size_t)g * n_samples,
-            logdet_h_grid[g],
-            &grid_inv[g],
-            n_samples, mle_const
-        );
-        if (isnan(logl)) logl = REML_SENTINEL;
-        if (logl > best_logl) {
-            best_logl = logl;
-            best_idx = g;
+    if (coarse_best_idx != NULL) {
+        best_idx = *coarse_best_idx;
+    } else {
+        double best_logl = REML_SENTINEL;
+        for (int g = 0; g < n_grid; g++) {
+            double logl = mle_logl_ncvt1_cached_split(
+                var_wx, var_xx, var_xy,
+                hi_eval_grid + (size_t)g * n_samples,
+                logdet_h_grid[g],
+                &grid_inv[g],
+                n_samples, mle_const
+            );
+            if (isnan(logl)) logl = REML_SENTINEL;
+            if (logl > best_logl) {
+                best_logl = logl;
+                best_idx = g;
+            }
         }
+        if (best_logl == REML_SENTINEL) best_idx = -1;
     }
 
     /* Fully degenerate SNP */
-    if (best_logl == REML_SENTINEL) {
+    if (best_idx < 0) {
         *logl_out = (double)NAN;
         return (double)NAN;
     }
@@ -5331,7 +5409,15 @@ static PyObject *compute_mode4_chunk_split_c_py(
         double logdet_iab = ws->iab_log_ww
                             + ((iab_p1_xx > 0.0) ? log(iab_p1_xx) : 0.0);
 
-        /* ---- (c) Wald: REML optimization ---- */
+        int best_reml_idx, best_mle_idx;
+        coarse_grid_mode4_ncvt1_split(
+            vwx, vxx, vxy, n_samples,
+            ws->hi_eval_grid, ws->logdet_h_grid, ws->grid_inv, n_grid,
+            logdet_iab, df, reml_const, ws->mle_const,
+            &best_reml_idx, &best_mle_idx
+        );
+
+        /* ---- (c) Wald: REML refinement from the shared coarse grid ---- */
         double logl_reml, wald_beta, wald_se, wald_f;
         int wald_valid;
         double lambda_reml = golden_section_lambda_ncvt1_split(
@@ -5339,7 +5425,7 @@ static PyObject *compute_mode4_chunk_split_c_py(
             ws->eigenvalues, logdet_iab,
             n_samples, ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
             ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
-            df, reml_const, &logl_reml, &wald_beta, &wald_se, &wald_f,
+            &best_reml_idx, df, reml_const, &logl_reml, &wald_beta, &wald_se, &wald_f,
             &wald_valid
         );
 
@@ -5358,7 +5444,7 @@ static PyObject *compute_mode4_chunk_split_c_py(
             ws->eigenvalues, n_samples,
             ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
             ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
-            ws->mle_const, hi_eval_local, &logl_H1
+            &best_mle_idx, ws->mle_const, hi_eval_local, &logl_H1
         );
 
         out_lambdas_mle[snp] = lambda_mle;
@@ -5773,7 +5859,7 @@ static PyObject *compute_lmm_chunk_fused_c_py(
             ws->eigenvalues, logdet_iab,
             n_samples, ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
             ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
-            df, reml_const, &logl_opt, &beta, &se, &f_stat, &is_valid
+            NULL, df, reml_const, &logl_opt, &beta, &se, &f_stat, &is_valid
         );
 
         lambdas[snp] = lambda_opt;
@@ -6287,7 +6373,15 @@ static PyObject *compute_mode4_chunk_fused_c_py(
         double logdet_iab = ws->iab_log_ww
                             + ((iab_p1_xx > 0.0) ? log(iab_p1_xx) : 0.0);
 
-        /* ---- (c) Wald: REML optimization ---- */
+        int best_reml_idx, best_mle_idx;
+        coarse_grid_mode4_ncvt1_split(
+            vwx, vxx, vxy, n_samples,
+            ws->hi_eval_grid, ws->logdet_h_grid, ws->grid_inv, n_grid,
+            logdet_iab, df, reml_const, ws->mle_const,
+            &best_reml_idx, &best_mle_idx
+        );
+
+        /* ---- (c) Wald: REML refinement from the shared coarse grid ---- */
         double logl_reml, wald_beta, wald_se, wald_f;
         int wald_valid;
         double lambda_reml = golden_section_lambda_ncvt1_split(
@@ -6295,7 +6389,7 @@ static PyObject *compute_mode4_chunk_fused_c_py(
             ws->eigenvalues, logdet_iab,
             n_samples, ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
             ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
-            df, reml_const, &logl_reml, &wald_beta, &wald_se, &wald_f,
+            &best_reml_idx, df, reml_const, &logl_reml, &wald_beta, &wald_se, &wald_f,
             &wald_valid
         );
 
@@ -6314,7 +6408,7 @@ static PyObject *compute_mode4_chunk_fused_c_py(
             ws->eigenvalues, n_samples,
             ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
             ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
-            ws->mle_const, hi_eval_local, &logl_H1
+            &best_mle_idx, ws->mle_const, hi_eval_local, &logl_H1
         );
 
         out_lambdas_mle[snp] = lambda_mle;
@@ -8611,7 +8705,7 @@ static PyObject *compute_lrt_split_c(PyObject *self, PyObject *args)
             eigenvalues, n_samples,
             lambda_grid, hi_eval_grid, logdet_h_grid,
             grid_inv, log_l_min, step, n_grid, n_refine,
-            mle_const, hi_eval_local, &logl_H1
+            NULL, mle_const, hi_eval_local, &logl_H1
         );
         out_lambdas_mle[s] = lam_mle;
 
@@ -9425,7 +9519,7 @@ static PyObject *compute_lrt_fused_c(PyObject *self, PyObject *args)
             eigenvalues, n_samples,
             lambda_grid, hi_eval_grid, logdet_h_grid,
             grid_inv, log_l_min, step, n_grid, n_refine,
-            mle_const, hi_eval_local, &logl_H1
+            NULL, mle_const, hi_eval_local, &logl_H1
         );
         out_lambdas_mle[s] = lam_mle;
 
@@ -9829,7 +9923,7 @@ static PyObject *compute_lrt_fused_ws_c_py(PyObject *self, PyObject *args)
             ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
             ws->grid_inv, ws->log_l_min, ws->step,
             ws->n_grid, ws->n_refine,
-            ws->mle_const, hi_eval_local, &logl_H1
+            NULL, ws->mle_const, hi_eval_local, &logl_H1
         );
         out_lambdas_mle[s] = lam_mle;
 

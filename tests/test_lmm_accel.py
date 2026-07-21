@@ -2259,6 +2259,37 @@ def test_mode4_fused_split_parity(score_lrt_data):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+def test_mode4_shared_grid_preserves_distinct_reml_mle_brackets(score_lrt_data):
+    """Shared reductions retain independent REML and MLE coarse brackets."""
+    fused_cr, compose_cr, *_ = _build_mode4_soa_and_fused(score_lrt_data)
+    grid_step = (np.log(1e5) - np.log(1e-5)) / 49
+    log_separation = np.abs(
+        np.log(fused_cr["lambdas"]) - np.log(fused_cr["lambdas_mle"])
+    )
+
+    assert np.any(log_separation > 2 * grid_step)
+    for key in (
+        "lambdas",
+        "logls",
+        "betas",
+        "ses",
+        "pwalds",
+        "p_scores",
+        "lambdas_mle",
+        "p_lrts",
+    ):
+        np.testing.assert_allclose(
+            fused_cr[key],
+            compose_cr[key],
+            rtol=1e-4,
+            atol=1e-14,
+            equal_nan=True,
+            err_msg=f"{key}: shared-grid vs independent compose mismatch",
+        )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
 def test_mode4_fused_score_matches_standalone(score_lrt_data):
     """Fused p_scores match standalone compute_score_batch_c on reconstructed Uab.
 

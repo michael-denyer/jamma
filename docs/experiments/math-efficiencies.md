@@ -41,6 +41,54 @@ passes. The focused Python fallback report covers every line in the new helper.
 The final DSYRK gate passed 190 focused tests with coverage and 2,162 repository
 tests, with 10 skips and 3 expected failures.
 
+### Shared all-tests coarse grid
+
+Verdict: `VERIFIED` for the one-covariate split/SoA mode-4 kernel.
+
+REML and MLE use the same weighted `wx`, `xx`, and `xy` reductions at each
+coarse-grid lambda. The experimental kernel now performs those reductions once,
+selects both brackets, then runs the existing independent golden-section
+refinements unchanged.
+
+A same-machine A/B used the same compiled flags and deterministic arrays with
+1,410 samples and 10,768 SNPs. Across 15 runs, the pre-change median was
+156.870 ms and the shared-grid median was 141.287 ms, a 9.9% reduction. Best
+times were 146.682 ms and 136.823 ms, a 6.7% reduction. Every output array had
+the same SHA-256 digest in both implementations. The raw timing samples and
+digest are committed in `mode4-shared-grid-benchmark.tsv`.
+
+The full best-of-five benchmark measured the NumPy+C all-tests path at 634 ms.
+Because Wald timing also varied between full runs, the focused A/B is the
+primary attribution evidence. Thirty-four native mode-4 and LRT parity tests
+passed before the full-suite gate, including bitwise split-versus-fused checks,
+multithreading, and degenerate SNPs.
+
+A focused regression also proves that the fixture contains REML and MLE optima
+separated by more than two grid steps, then compares all eight shared-grid
+outputs with the independent composed path. This exercises independent bracket
+selection rather than only cases where both likelihoods could choose the same
+grid point.
+
+The final repository gate passed 2,166 tests, with 10 skips and 3 expected
+failures. All repository hooks passed.
+
+The general-covariate kernel is not changed by this experiment. Its packed Pab
+work grows cubically with covariate count, so sharing only the outer weighted
+scan needs a separate cost and scratch-memory design before it can claim a
+useful end-to-end win.
+
+### Block Gram and thin spectral probes
+
+Verdict: `VERIFIED` for the isolated exactness identities and `INCONCLUSIVE` for
+runner integration.
+
+The block Gram/Schur formulation matches packed Pab across 1, 2, 4, 8, and 16
+covariates. The exact thin spectral inverse matches a dense solve at both lambda
+endpoints, `1e-5` and `1e5`, plus random interior values, using rank-deficient
+genotype matrices. These probes now run in pytest as well as the standalone
+audit. Neither candidate changes a production runner on this branch because an
+end-to-end memory layout and performance gate has not yet been cleared.
+
 ## Units
 
 1. Add an output buffer and `beta` to DSYRK so batched kinship calculation does

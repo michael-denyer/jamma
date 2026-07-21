@@ -1344,22 +1344,26 @@ int blas_has_dgesvd(void) {
 }
 
 /* ---------------------------------------------------------------------------
- * jlinalg_dsyrk_ext — Vendor-dispatch dsyrk: C = X @ X.T
+ * jlinalg_dsyrk_ext — Vendor-dispatch dsyrk: C = X @ X.T + beta*C
  * ---------------------------------------------------------------------------
  */
 void jlinalg_dsyrk_ext(npy_intp N, npy_intp K, const double *X, npy_intp ldx, double *C,
-                       npy_intp ldc) {
-    if (N <= 0 || K <= 0) {
-        /* Zero C for N>0, K==0 case */
+                       npy_intp ldc, double beta) {
+    if (N <= 0) return;
+    if (K <= 0) {
         for (npy_intp i = 0; i < N; i++)
-            memset(C + i * ldc, 0, (size_t)N * sizeof(double));
+            for (npy_intp j = 0; j <= i; j++)
+                C[i * ldc + j] *= beta;
+        for (npy_intp i = 0; i < N; i++)
+            for (npy_intp j = i + 1; j < N; j++)
+                C[i * ldc + j] = C[j * ldc + i];
         return;
     }
     if (g_has_dsyrk && g_is_ilp64) {
         if (g_cblas_dsyrk_ilp64) {
-            /* Row-major, lower, no-trans: C = 1.0 * X @ X.T + 0.0 * C */
+            /* Row-major, lower, no-trans: C = X @ X.T + beta * C */
             g_cblas_dsyrk_ilp64(JLINALG_CblasRowMajor, JLINALG_CblasLower, JLINALG_CblasNoTrans,
-                                (long)N, (long)K, 1.0, X, (long)ldx, 0.0, C, (long)ldc);
+                                (long)N, (long)K, 1.0, X, (long)ldx, beta, C, (long)ldc);
             /* Mirror lower to upper (vendor only fills lower) */
             for (npy_intp i = 0; i < N; i++)
                 for (npy_intp j = i + 1; j < N; j++)
@@ -1370,7 +1374,7 @@ void jlinalg_dsyrk_ext(npy_intp N, npy_intp K, const double *X, npy_intp ldx, do
         if (g_dsyrk_ilp64) {
             const long long n = (long long)N, k = (long long)K;
             const long long lda = (long long)ldx, ldc_f = (long long)ldc;
-            const double alpha = 1.0, beta = 0.0;
+            const double alpha = 1.0;
             g_dsyrk_ilp64("U", "T", &n, &k, &alpha, X, &lda, &beta, C, &ldc_f);
             /* Fortran col-major upper = row-major lower; mirror lower to upper */
             for (npy_intp i = 0; i < N; i++)
@@ -1858,13 +1862,14 @@ int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk, double *eigenvalues,
 }
 
 void jlinalg_dsyrk_ext(npy_intp N, npy_intp K, const double *X, npy_intp ldx, double *C,
-                       npy_intp ldc) {
+                       npy_intp ldc, double beta) {
     (void)N;
     (void)K;
     (void)X;
     (void)ldx;
     (void)C;
     (void)ldc;
+    (void)beta;
     fprintf(stderr, "FATAL: jlinalg_dsyrk_ext called without vendor BLAS. "
                     "Results would be silently wrong. Aborting.\n");
     abort();

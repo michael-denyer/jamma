@@ -351,6 +351,72 @@ class TestDsyrkValidation:
             dsyrk(np.array(1.0))
 
 
+class TestDsyrkOutput:
+    """dsyrk can update a caller-owned symmetric output buffer."""
+
+    def test_accumulates_into_output(self) -> None:
+        rng = np.random.default_rng(314)
+        X = rng.standard_normal((12, 7))
+        initial = rng.standard_normal((12, 12))
+        initial = initial @ initial.T
+        out = initial.copy()
+
+        result = dsyrk(X, out=out, beta=1.0)
+
+        assert result is out
+        npt.assert_allclose(out, initial + X @ X.T, rtol=1e-12, atol=1e-14)
+        npt.assert_array_equal(out, out.T)
+
+    def test_beta_zero_overwrites_output(self) -> None:
+        rng = np.random.default_rng(315)
+        X = rng.standard_normal((8, 5))
+        out = np.full((8, 8), np.nan)
+
+        result = dsyrk(X, out=out)
+
+        assert result is out
+        npt.assert_allclose(out, X @ X.T, rtol=1e-12, atol=1e-14)
+
+    def test_zero_width_input_scales_output(self) -> None:
+        X = np.empty((6, 0), dtype=np.float64)
+        out = np.eye(6, dtype=np.float64) * 4.0
+
+        dsyrk(X, out=out, beta=0.25)
+
+        npt.assert_array_equal(out, np.eye(6))
+
+    def test_beta_without_output_raises(self) -> None:
+        with pytest.raises(ValueError, match="beta requires out"):
+            dsyrk(np.ones((3, 2)), beta=1.0)
+
+    @pytest.mark.parametrize(
+        ("out", "message"),
+        [
+            (np.empty(3, dtype=np.float64), "2-D"),
+            (np.empty((3, 4), dtype=np.float64), "shape"),
+            (np.empty((3, 3), dtype=np.float32), "float64"),
+            (np.empty((3, 6), dtype=np.float64)[:, ::2], "C-contiguous"),
+        ],
+    )
+    def test_invalid_output_raises(self, out: np.ndarray, message: str) -> None:
+        with pytest.raises(ValueError, match=message):
+            dsyrk(np.ones((3, 2)), out=out)
+
+    def test_readonly_output_raises(self) -> None:
+        out = np.empty((3, 3), dtype=np.float64)
+        out.flags.writeable = False
+        with pytest.raises(ValueError, match="writeable"):
+            dsyrk(np.ones((3, 2)), out=out)
+
+    def test_non_array_output_raises(self) -> None:
+        with pytest.raises(TypeError, match="numpy array"):
+            dsyrk(np.ones((3, 2)), out=[[0.0] * 3] * 3)  # type: ignore[arg-type]
+
+    def test_output_is_keyword_only(self) -> None:
+        with pytest.raises(TypeError):
+            dsyrk(np.ones((3, 2)), np.empty((3, 3)))  # type: ignore[call-arg]
+
+
 # ---------------------------------------------------------------------------
 # TestDsyrkFallback — explicit fallback path tests
 # ---------------------------------------------------------------------------

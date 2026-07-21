@@ -75,7 +75,7 @@ def _accumulate_kinship(K: np.ndarray, X_centered: np.ndarray) -> np.ndarray:
     Returns:
         Updated kinship matrix with batch contribution added.
     """
-    K += jlinalg.dsyrk(X_centered)
+    jlinalg.dsyrk(X_centered, out=K, beta=1.0)
     return K
 
 
@@ -409,7 +409,7 @@ def compute_loco_kinship(
     for _, start in batch_iter:
         end = min(start + batch_size, n_filtered)
         batch = X_centered[:, start:end]
-        S_full += jlinalg.dsyrk(batch)
+        _accumulate_kinship(S_full, batch)
 
     # Compute per-chromosome LOCO kinship via subtraction
     unique_chrs = sorted(set(chr_filtered))
@@ -958,11 +958,11 @@ def _stream_s_full_and_chr(
         X_centered = impute_and_center(X_chunk)
 
         if S_full is not None:
-            S_full += np.dot(X_centered, X_centered.T)
+            _accumulate_kinship(S_full, X_centered)
 
         for chr_name in target_chrs_in_chunk:
             X_chr_part = X_centered[:, chunk_chrs == chr_name]
-            S_chr[chr_name] += np.dot(X_chr_part, X_chr_part.T)
+            _accumulate_kinship(S_chr[chr_name], X_chr_part)
 
     return S_full, S_chr
 

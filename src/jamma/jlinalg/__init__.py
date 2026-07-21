@@ -49,7 +49,45 @@ import numpy as _np
 _so_exists = importlib.util.find_spec("jamma.jlinalg._jlinalg") is not None
 HAS_C_EXTENSION: bool = False
 
-_EXPECTED_JLINALG_ABI = 12  # Must match JLINALG_ABI_VERSION in include/jlinalg.h
+_EXPECTED_JLINALG_ABI = 13  # Must match JLINALG_ABI_VERSION in include/jlinalg.h
+
+
+def _dsyrk_numpy(
+    X: _np.ndarray, *, out: _np.ndarray | None = None, beta: float = 0.0
+) -> _np.ndarray:
+    """NumPy implementation of C = X @ X.T + beta*C."""
+    if X.ndim != 2:
+        raise ValueError(f"dsyrk: X must be a 2-D array, got {X.ndim}-D")
+    if out is None:
+        if beta != 0.0:
+            raise ValueError("dsyrk: beta requires out")
+    else:
+        expected = (X.shape[0], X.shape[0])
+        if out.ndim != 2 or out.shape != expected:
+            raise ValueError(
+                f"dsyrk: out shape {out.shape} doesn't match result shape {expected}"
+            )
+        if out.dtype != _np.float64:
+            raise ValueError(f"dsyrk: out must be float64, got {out.dtype}")
+        if not out.flags["C_CONTIGUOUS"]:
+            raise ValueError("dsyrk: out must be C-contiguous")
+        if not out.flags["WRITEABLE"]:
+            raise ValueError("dsyrk: out must be writeable")
+
+    X64 = _np.ascontiguousarray(X, dtype=_np.float64)
+    if out is None:
+        result = _np.dot(X64, X64.T)
+    else:
+        result = out
+        if beta == 0.0:
+            _np.dot(X64, X64.T, out=result)
+        else:
+            result *= beta
+            result += _np.dot(X64, X64.T)
+    il = _np.tril_indices_from(result, -1)
+    result.T[il] = result[il]
+    return result
+
 
 # Phase 116.1: ASAN/UBSAN sanitizer workflow needs a way to skip the
 # _jlinalg.so import entirely. RESEARCH §"Pitfall 4" — ASAN + dlopen(...,
@@ -106,16 +144,7 @@ else:
         # C extension loaded, but vendor BLAS/LAPACK may not be available.
         # Replace C functions with NumPy fallbacks for unavailable operations.
         if not blas_has_dsyrk:
-
-            def dsyrk(X: _np.ndarray) -> _np.ndarray:  # type: ignore[misc]
-                """NumPy fallback: K = X @ X.T."""
-                if X.ndim != 2:
-                    raise ValueError(f"dsyrk: X must be a 2-D array, got {X.ndim}-D")
-                X64 = _np.ascontiguousarray(X, dtype=_np.float64)
-                result = _np.dot(X64, X64.T)
-                il = _np.tril_indices_from(result, -1)
-                result.T[il] = result[il]
-                return result
+            dsyrk = _dsyrk_numpy  # type: ignore[misc]
 
         if not blas_has_dsyevd and not blas_has_dsyevr:
 
@@ -375,25 +404,7 @@ if not HAS_C_EXTENSION:
             dtype=_np.float64,
         )
 
-    def dsyrk(X: _np.ndarray) -> _np.ndarray:
-        """Compute symmetric rank-k update: K = X @ X.T.
-
-        Args:
-            X: Input matrix, shape (N, K), float64.
-
-        Returns:
-            Symmetric result matrix K, shape (N, N), float64.
-
-        Raises:
-            ValueError: If X is not 2-D.
-        """
-        if X.ndim != 2:
-            raise ValueError(f"dsyrk: X must be a 2-D array, got {X.ndim}-D")
-        X64 = _np.ascontiguousarray(X, dtype=_np.float64)
-        result = _np.dot(X64, X64.T)
-        il = _np.tril_indices_from(result, -1)
-        result.T[il] = result[il]
-        return result
+    dsyrk = _dsyrk_numpy
 
     def eigh(K: _np.ndarray, inplace: bool = False) -> tuple[_np.ndarray, _np.ndarray]:
         """Compute eigenvalues and eigenvectors of a symmetric matrix.

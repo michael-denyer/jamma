@@ -70,11 +70,18 @@ def dgemm(
         Result matrix C = op(A) @ op(B), float64.
     """
 
-def dsyrk(X: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-    """Compute symmetric rank-k update: C = X @ X.T.
+def dsyrk(
+    X: npt.NDArray[np.float64],
+    *,
+    out: npt.NDArray[np.float64] | None = None,
+    beta: float = 0.0,
+) -> npt.NDArray[np.float64]:
+    """Compute symmetric rank-k update: C = X @ X.T + beta*C.
 
     Args:
         X: Input matrix, shape (N, K), float64, C-contiguous.
+        out: Optional writable output buffer, shape (N, N), float64.
+        beta: Scale applied to the existing output. Requires out when nonzero.
 
     Returns:
         Symmetric result matrix, shape (N, N), float64.

@@ -13,10 +13,14 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Install ILP64 numpy from custom index, then runtime deps and jamma:
 # 1. mkl runtime libraries
-# 2. ILP64 numpy from michael-denyer/numpy-mkl (must not be overwritten)
+# 2. ILP64 numpy from michael-denyer/numpy-mkl (must not be overwritten).
+#    Capped <2.5: the index also serves 2.5.x, and numba (via shap) in the
+#    downstream Databricks stack requires numpy<2.5. On this py3.11 base pip
+#    already falls back to 2.4.x (2.5.x needs >=3.12), but the explicit cap
+#    keeps that guarantee if the base image ever moves to Python 3.12+.
 # 3. Runtime deps (--no-deps on jamma to prevent numpy downgrade back to LP64)
 RUN uv pip install --system --no-cache mkl && \
-    uv pip install --system --no-cache numpy \
+    uv pip install --system --no-cache 'numpy<2.5' \
         --index-url https://michael-denyer.github.io/numpy-mkl \
         --reinstall && \
     uv pip install --system --no-cache \

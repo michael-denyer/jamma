@@ -101,7 +101,9 @@ class PipelineConfig:
         l_min: Minimum lambda for optimization (default 1e-5, matches GEMMA).
         l_max: Maximum lambda for optimization (default 1e5, matches GEMMA).
         n_grid: Grid search resolution for lambda bracketing (default 50).
-        n_refine: Golden section refinement iterations (default 10).
+            Must be >= 2 — a one-point grid has no bracket to refine.
+        n_refine: Golden section refinement iterations (default 10). Clamped
+            to a minimum of 20 by the runners rather than rejected here.
         weight_file: Individual weight file for kinship pre-transformation.
             One weight per line, matching sample order. Applies
             K[i,j] /= sqrt(w_i * w_j) before eigendecomposition.
@@ -164,6 +166,12 @@ class PipelineConfig:
             raise ValueError(
                 f"backend must be one of {_valid_backends}, got {self.backend!r}"
             )
+        # Build the LmmConfig now and discard it: its __post_init__ owns every
+        # rule for the knobs this config carries, and the LOCO branch reaches
+        # the runners without building one. Constructing it here is what makes
+        # an invalid knob fail at config time instead of after kinship and
+        # eigendecomposition — or, on the NumPy fallback, not at all.
+        self.lmm_config()
         # Derive phenotype_columns from phenotype_column if not set
         if self.phenotype_columns is None:
             self.phenotype_columns = [self.phenotype_column]
@@ -189,6 +197,31 @@ class PipelineConfig:
         # path writes to output_dir directly and never consults eigen_dir.
         if self.loco and self.write_eigen and self.eigen_dir is None:
             self.eigen_dir = self.output_dir
+
+    def lmm_config(self) -> LmmConfig:
+        """Project the LMM knobs onto the config the runners take.
+
+        Built fresh on each call so a field edited after construction is still
+        picked up. check_memory is forced off: the pipeline runs its own memory
+        gate before dispatch, and re-checking inside the runner would double-count.
+
+        Returns:
+            LmmConfig carrying this config's optimizer and filter knobs.
+
+        Raises:
+            ValueError: If any knob falls outside its supported range.
+        """
+        return LmmConfig(
+            maf_threshold=self.maf,
+            miss_threshold=self.miss,
+            l_min=self.l_min,
+            l_max=self.l_max,
+            n_grid=self.n_grid,
+            n_refine=self.n_refine,
+            check_memory=False,
+            show_progress=self.show_progress,
+            lmm_mode=self.lmm_mode,
+        )
 
 
 @dataclass
@@ -336,12 +369,16 @@ class PipelineRunner:
         return compute_valid_mask(phenotypes, covariates)
 
     def validate_inputs(self) -> None:
-        """Validate that all required input files exist and parameters are valid.
+        """Validate that required input files exist and combine legally.
+
+        Only checks that need the filesystem or span several fields live here.
+        The LMM knobs (lmm_mode, maf, miss, l_min, l_max, n_grid) are already
+        guaranteed by PipelineConfig.__post_init__, which builds an LmmConfig.
 
         Raises:
             FileNotFoundError: If PLINK files (.bed, .bim, .fam) are missing,
                 or if kinship_file/covariate_file is specified but missing.
-            ValueError: If lmm_mode is not in (1, 2, 3, 4).
+            ValueError: If mutually exclusive options are combined.
         """
         bfile = self.config.bfile
         for ext in (".bed", ".bim", ".fam"):
@@ -356,12 +393,6 @@ class PipelineRunner:
             raise ValueError(
                 f"phenotype_column must be >= 1 (1-based), "
                 f"got {self.config.phenotype_column}"
-            )
-
-        if self.config.lmm_mode not in (1, 2, 3, 4):
-            raise ValueError(
-                f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), "
-                f"got {self.config.lmm_mode}"
             )
 
         if self.config.loco and self.config.kinship_file is not None:
@@ -416,14 +447,6 @@ class PipelineRunner:
         if self.config.ksnps_file is not None and not self.config.ksnps_file.exists():
             raise FileNotFoundError(
                 f"Kinship SNP list file not found: {self.config.ksnps_file}"
-            )
-
-        # Lambda bounds validation
-        if self.config.l_min <= 0:
-            raise ValueError(f"l_min must be > 0, got {self.config.l_min}")
-        if self.config.l_max <= self.config.l_min:
-            raise ValueError(
-                f"l_max must be > l_min ({self.config.l_min}), got {self.config.l_max}"
             )
 
         # Weight file validation
@@ -1644,25 +1667,11 @@ class PipelineRunner:
             covariates=covariates,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            config=self._build_lmm_config(),
+            config=self.config.lmm_config(),
             output_path=assoc_path,
         )
 
         return run_result, run_result.snp_count
-
-    def _build_lmm_config(self) -> LmmConfig:
-        """Build LmmConfig from pipeline config (shared by batch and streaming)."""
-        return LmmConfig(
-            maf_threshold=self.config.maf,
-            miss_threshold=self.config.miss,
-            l_min=self.config.l_min,
-            l_max=self.config.l_max,
-            n_grid=self.config.n_grid,
-            n_refine=self.config.n_refine,
-            check_memory=False,  # Already checked at pipeline level
-            show_progress=self.config.show_progress,
-            lmm_mode=self.config.lmm_mode,
-        )
 
     def _run_streaming(
         self,
@@ -1687,5 +1696,5 @@ class PipelineRunner:
             output_path=assoc_path,
             snps_indices=snps_indices,
             hwe_threshold=self.config.hwe_threshold,
-            config=self._build_lmm_config(),
+            config=self.config.lmm_config(),
         )

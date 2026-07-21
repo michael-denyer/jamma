@@ -34,6 +34,7 @@ from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_mle_numpy,
     golden_section_optimize_lambda_numpy,
 )
+from jamma.lmm.schema import MIN_N_GRID
 
 
 @pytest.fixture
@@ -443,9 +444,14 @@ class TestCExtensionScalarValidation:
             fn(eigenvalues, Uab, Iab, n, 1.0, 1.0, 50, 20, 1)
 
     def test_n_grid_too_small(self):
+        """The kernel enforces the same minimum the config layer does.
+
+        Anchored on MIN_N_GRID so the Python bound and the C bound in
+        validate_batch_params cannot drift apart silently.
+        """
         fn, eigenvalues, Uab, Iab, n = _make_valid_c_inputs()
         with pytest.raises(ValueError, match="n_grid"):
-            fn(eigenvalues, Uab, Iab, n, 1e-5, 1e5, 1, 20, 1)
+            fn(eigenvalues, Uab, Iab, n, 1e-5, 1e5, MIN_N_GRID - 1, 20, 1)
 
     def test_n_refine_too_small(self):
         fn, eigenvalues, Uab, Iab, n = _make_valid_c_inputs()

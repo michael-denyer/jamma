@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.5.0] - 2026-07-21
+
+### Changed
+
+- **LMM knob validation happens when `PipelineConfig` is constructed, not when
+  the runner starts.** `PipelineConfig` re-declared the knobs `LmmConfig`
+  already owned, so the rules for `lmm_mode`, `maf`, `miss`, `l_min` and
+  `l_max` existed in three places and only fired part-way into a run.
+  `PipelineConfig` now builds the `LmmConfig` its knobs imply — in
+  `__post_init__` to validate, and via `lmm_config()` where the runners need
+  it — so an invalid value raises immediately. Errors carry `LmmConfig`'s
+  wording (`l_min must be positive` rather than `l_min must be > 0`). The
+  CLI's own `-lmin`/`-lmax` messages are unchanged.
+
+## [5.4.5] - 2026-07-21
+
+### Fixed
+
+- **Single-point lambda grids are rejected at the config boundary.** `LmmConfig`
+  and `PipelineConfig` both accepted `n_grid=1`, though a one-point grid has no
+  bracket to refine. The C kernel rejects it in `validate_batch_params`, but only
+  once the run reaches the kernel — after kinship and eigendecomposition have
+  been paid for — and the NumPy fallback has no such check, so it silently
+  returned `lambda = l_min` for every SNP instead of its optimum. Both configs
+  now raise `ValueError` on construction (`n_grid must be >= 2`), which also
+  covers the LOCO branch, where `n_grid` is forwarded to `run_lmm_loco` without
+  an `LmmConfig` ever being built (#78).
+
 ## [5.4.4] - 2026-07-20
 
 ### Fixed

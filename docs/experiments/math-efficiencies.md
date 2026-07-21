@@ -69,7 +69,7 @@ outputs with the independent composed path. This exercises independent bracket
 selection rather than only cases where both likelihoods could choose the same
 grid point.
 
-The final repository gate passed 2,166 tests, with 10 skips and 3 expected
+The final repository gate passed 2,174 tests, with 10 skips and 3 expected
 failures. All repository hooks passed.
 
 The general-covariate kernel is not changed by this experiment. Its packed Pab

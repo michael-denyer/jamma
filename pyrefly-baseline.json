@@ -109,10 +109,10 @@
       "severity": "error"
     },
     {
-      "line": 539,
-      "column": 17,
-      "stop_line": 539,
-      "stop_column": 24,
+      "line": 547,
+      "column": 21,
+      "stop_line": 547,
+      "stop_column": 28,
       "path": "src/jamma/cli.py",
       "code": -2,
       "name": "bad-argument-type",

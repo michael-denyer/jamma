@@ -74,15 +74,9 @@ class TestValidateInputs:
             runner.validate_inputs()
 
     def test_invalid_lmm_mode(self) -> None:
-        """validate_inputs raises ValueError for invalid lmm_mode."""
-        config = PipelineConfig(
-            bfile=BFILE,
-            lmm_mode=99,
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
+        """Construction raises ValueError for invalid lmm_mode."""
         with pytest.raises(ValueError, match="lmm_mode must be"):
-            runner.validate_inputs()
+            PipelineConfig(bfile=BFILE, lmm_mode=99, check_memory=False)
 
     def test_valid_lmm_modes(self) -> None:
         """validate_inputs accepts all valid lmm_mode values."""
@@ -382,51 +376,21 @@ class TestPipelineConfigLambdaBounds:
         assert config.l_min == 1e-3
         assert config.l_max == 1e3
 
-    def test_lambda_lmin_zero_raises(self) -> None:
-        """validate_inputs raises ValueError for l_min=0."""
-        config = PipelineConfig(
-            bfile=BFILE,
-            l_min=0,
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
-        with pytest.raises(ValueError, match="l_min must be > 0"):
-            runner.validate_inputs()
+    @pytest.mark.parametrize("l_min", [0, -1e-5], ids=["zero", "negative"])
+    def test_lambda_lmin_not_positive_raises(self, l_min: float) -> None:
+        """Construction rejects a non-positive l_min."""
+        with pytest.raises(ValueError, match="l_min must be positive"):
+            PipelineConfig(bfile=BFILE, l_min=l_min, check_memory=False)
 
-    def test_lambda_lmin_negative_raises(self) -> None:
-        """validate_inputs raises ValueError for negative l_min."""
-        config = PipelineConfig(
-            bfile=BFILE,
-            l_min=-1e-5,
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
-        with pytest.raises(ValueError, match="l_min must be > 0"):
-            runner.validate_inputs()
-
-    def test_lambda_lmax_less_than_lmin_raises(self) -> None:
-        """validate_inputs raises ValueError when l_max <= l_min."""
-        config = PipelineConfig(
-            bfile=BFILE,
-            l_min=1e-3,
-            l_max=1e-4,
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
-        with pytest.raises(ValueError, match="l_max must be > l_min"):
-            runner.validate_inputs()
-
-    def test_lambda_lmax_equals_lmin_raises(self) -> None:
-        """validate_inputs raises ValueError when l_max == l_min."""
-        config = PipelineConfig(
-            bfile=BFILE,
-            l_min=1.0,
-            l_max=1.0,
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
-        with pytest.raises(ValueError, match="l_max must be > l_min"):
-            runner.validate_inputs()
+    @pytest.mark.parametrize(
+        ("l_min", "l_max"), [(1e-3, 1e-4), (1.0, 1.0)], ids=["less", "equal"]
+    )
+    def test_lambda_lmax_not_above_lmin_raises(
+        self, l_min: float, l_max: float
+    ) -> None:
+        """Construction rejects l_max <= l_min."""
+        with pytest.raises(ValueError, match="must be greater than l_min"):
+            PipelineConfig(bfile=BFILE, l_min=l_min, l_max=l_max, check_memory=False)
 
 
 @pytest.mark.tier1

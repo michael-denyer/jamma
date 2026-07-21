@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **LMM knob validation happens when `PipelineConfig` is constructed, not when
+  the runner starts.** `PipelineConfig` re-declared the knobs `LmmConfig`
+  already owned, so the rules for `lmm_mode`, `maf`, `miss`, `l_min` and
+  `l_max` existed in three places and only fired part-way into a run.
+  `PipelineConfig` now builds the `LmmConfig` its knobs imply — in
+  `__post_init__` to validate, and via `lmm_config()` where the runners need
+  it — so an invalid value raises immediately. Errors carry `LmmConfig`'s
+  wording (`l_min must be positive` rather than `l_min must be > 0`). The
+  CLI's own `-lmin`/`-lmax` messages are unchanged.
+
 ## [5.4.5] - 2026-07-21
 
 ### Fixed

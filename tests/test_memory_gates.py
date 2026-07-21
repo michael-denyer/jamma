@@ -262,3 +262,56 @@ class TestBatchPreflightThreadsNcvt:
                 f"n_cvt={n_cvt_arg!r}, expected {expected_n_cvt}. "
                 f"Full call: args={args}, kwargs={kwargs}"
             )
+
+
+@pytest.mark.tier0
+class TestKinshipOnlyPreflight:
+    """The kinship gate must size the kinship phase, not the whole workflow.
+
+    ``-gk`` writes a kinship matrix and never eigendecomposes, but the gate
+    inside ``compute_kinship_streaming`` charged callers for
+    ``max(kinship, eigendecomp, lmm)``. That refused kinship-only runs on
+    machines with ample room for the kinship phase itself.
+    """
+
+    def test_streaming_breakdown_exposes_kinship_phase_peak(self):
+        """The per-phase kinship peak is reported, not just the workflow max."""
+        from jamma.core.memory import estimate_streaming_memory
+
+        est = estimate_streaming_memory(50_000, chunk_size=10_000)
+
+        assert est.peak_kinship_gb == pytest.approx(est.kinship_gb + est.chunk_gb)
+        assert est.peak_kinship_gb < est.total_peak_gb, (
+            "eigendecomp phase should dominate the workflow max at this scale"
+        )
+
+    def test_kinship_only_run_not_blocked_by_eigendecomp_budget(self):
+        """Memory that fits the kinship phase but not eigendecomp must pass.
+
+        50,000 samples: kinship phase needs ~24 GB, the full workflow max is
+        ~80 GB. With 40 GB available a kinship-only run fits and must proceed.
+        """
+        from jamma.core.memory import estimate_streaming_memory
+        from jamma.kinship.compute import _preflight_kinship_memory
+
+        est = estimate_streaming_memory(50_000, chunk_size=10_000)
+        assert est.peak_kinship_gb < 40.0 < est.total_peak_gb, (
+            "test fixture no longer straddles the two budgets"
+        )
+
+        mock_vmem = MagicMock()
+        mock_vmem.available = 40 * 10**9
+
+        with patch("jamma.core.memory.psutil.virtual_memory", return_value=mock_vmem):
+            _preflight_kinship_memory(n_samples=50_000, chunk_size=10_000)
+
+    def test_kinship_only_run_still_blocked_when_kinship_does_not_fit(self):
+        """The gate still refuses when the kinship phase itself will not fit."""
+        from jamma.kinship.compute import _preflight_kinship_memory
+
+        mock_vmem = MagicMock()
+        mock_vmem.available = 1 * 10**9  # 1 GB
+
+        with patch("jamma.core.memory.psutil.virtual_memory", return_value=mock_vmem):
+            with pytest.raises(MemoryError, match="Insufficient memory"):
+                _preflight_kinship_memory(n_samples=50_000, chunk_size=10_000)

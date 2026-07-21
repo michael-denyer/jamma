@@ -498,6 +498,7 @@ class StreamingMemoryBreakdown(NamedTuple):
     chunk_gb: float  # n * chunk_size * 8 bytes (float64 for precision)
     rotation_buffer_gb: float  # n * chunk_size * 8 * pipeline_buffers bytes for UtG
     grid_reml_gb: float  # n_grid * chunk_size * 8 bytes for Grid REML intermediate
+    peak_kinship_gb: float  # Kinship phase alone (accumulator + genotype chunk)
     total_peak_gb: float  # Max of phases (eigendecomp typically peak)
     available_gb: float  # Current available system memory
     sufficient: bool  # Whether available exceeds total plus margin (10% capped at 10GB)
@@ -634,6 +635,7 @@ def estimate_streaming_memory(
         chunk_gb=chunk_gb,
         rotation_buffer_gb=rotation_buffer_gb,
         grid_reml_gb=grid_reml_gb,
+        peak_kinship_gb=peak_kinship,
         total_peak_gb=total_peak_gb,
         available_gb=available_gb,
         sufficient=sufficient,
@@ -705,6 +707,7 @@ def estimate_lmm_streaming_memory(
         chunk_gb=chunk_gb,
         rotation_buffer_gb=rotation_buffer_gb,
         grid_reml_gb=grid_reml_gb,
+        peak_kinship_gb=0.0,  # kinship supplied by the caller; no kinship phase
         total_peak_gb=total_peak_gb,
         available_gb=available_gb,
         sufficient=sufficient,

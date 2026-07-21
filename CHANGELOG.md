@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Kinship-only runs are no longer refused for memory an eigendecomposition
+  would have needed.** `-gk 1`/`-gk 2` write a kinship matrix and never
+  eigendecompose, but their memory gate charged for
+  `max(kinship, eigendecomp, lmm)` — roughly 3.7x the kinship phase's own
+  footprint. A 50,000-sample kinship run needs ~24 GB and was rejected below
+  80 GB; at 125,632 samples it needs ~136 GB and was rejected below 505 GB.
+  The gate now sizes the kinship phase alone, matching how
+  `eigendecompose_kinship` already gates its own allocation and how
+  `PipelineRunner` already plans the whole workflow. Runs that genuinely do not
+  fit are still refused. `StreamingMemoryBreakdown` gained `peak_kinship_gb`,
+  which `estimate_streaming_memory` previously computed and discarded.
+
 ## [5.6.0] - 2026-07-21
 
 ### Added
